@@ -22,6 +22,21 @@ codex --version
 kimi --version
 ```
 
+## Ask Codex to install it
+
+The recommended path is to send this message to Codex:
+
+```text
+Install Kimi K3 from https://github.com/duolahypercho/codex-router.
+Follow the repository's AGENTS.md installation instructions, preserve my
+existing Codex defaults, and verify the installation. Do not quit Codex for me;
+tell me when it is ready to restart.
+```
+
+Codex should clone the project to `~/.local/share/codex-router`, run the root
+`install.sh`, and finish with `bin/doctor`. With an existing Kimi OAuth login,
+the user only needs to restart Codex after the agent reports success.
+
 ## 1. Prepare Kimi authentication
 
 For Kimi Code OAuth, install the official Kimi CLI and run:
@@ -44,11 +59,22 @@ Platform API use different account systems and base URLs.
 ## 2. Install the router
 
 Keep the cloned repository in a stable location because the LaunchAgent stores
-its absolute path. From the repository root:
+its absolute path. From the repository root, run the convenience installer:
 
 ```sh
-./bin/install
+./install.sh
 ```
+
+It delegates to `bin/install`, then runs `bin/doctor`. The same script can
+bootstrap a stable checkout when fetched directly:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/duolahypercho/codex-router/main/install.sh | sh
+```
+
+Pass `--api-key` to invoke the hidden Kimi Platform API-key prompt immediately
+after installation, or `--prepare-only` to install dependencies without
+changing Codex. Run `./install.sh --help` for all options.
 
 If another Codex proxy or an earlier prototype already owns ports `4100` to
 `4103`, disable that service first. The installer verifies the health endpoint's
@@ -70,7 +96,7 @@ If you only want to prepare dependencies and inspect the files without changing
 Codex or installing a service:
 
 ```sh
-./bin/install --prepare-only
+./install.sh --prepare-only
 ```
 
 ## 3. Configure the optional API key
@@ -130,7 +156,7 @@ After updating the repository:
 
 ```sh
 git pull --ff-only
-./bin/install
+./install.sh
 ```
 
 After a Codex App update, refresh its native model entries and restart Codex:

@@ -12,7 +12,26 @@ This is a macOS-first, local community integration inspired by
 [opencodex](https://github.com/lidge-jun/opencodex). It is not affiliated with
 OpenAI, Moonshot AI, or the Kimi Code team.
 
-## Quick start
+## Install with Codex (easiest)
+
+Give Codex this message:
+
+```text
+Install Kimi K3 from https://github.com/duolahypercho/codex-router.
+Follow the repository's AGENTS.md installation instructions, preserve my
+existing Codex defaults, and verify the installation. Do not quit Codex for me;
+tell me when it is ready to restart.
+```
+
+Codex will clone the repository to a stable location, run the installer, and
+check the result. If you have already run `kimi login`, the only manual step
+afterward is to fully quit Codex with `Command-Q`, reopen it, and start a new
+task.
+
+Do not paste OAuth tokens or API keys into the Codex chat. If you want the Kimi
+Platform API route, tell Codex to run the repository's secure API-key prompt.
+
+## Install from Terminal
 
 Prerequisites: the Codex App, Node.js 22.19+, `uv` or Python 3.10+, and either a
 Kimi Code OAuth login or Kimi Platform API key.
@@ -21,9 +40,12 @@ Kimi Code OAuth login or Kimi Platform API key.
 # OAuth users: install Kimi Code CLI first, then authenticate once.
 kimi login
 
-# From this repository:
-./bin/install
+# Download to a stable location and install.
+curl -fsSL https://raw.githubusercontent.com/duolahypercho/codex-router/main/install.sh | sh
 ```
+
+For an auditable install, clone the repository and run `./install.sh` instead
+of piping it directly to a shell.
 
 Fully quit Codex with `Command-Q`, reopen it, and start a new task. Select
 `Kimi K3 (OAuth)` in the model picker.
@@ -31,8 +53,10 @@ Fully quit Codex with `Command-Q`, reopen it, and start a new task. Select
 To enable the separately billed API route:
 
 ```sh
-./bin/api-key set
+"$HOME/.local/share/codex-router/bin/api-key" set
 ```
+
+If you installed from a different checkout, run `./bin/api-key set` there.
 
 The API entry is always visible, but returns a clear setup error until a real
 API key is configured. OAuth credentials are not reused as API keys because

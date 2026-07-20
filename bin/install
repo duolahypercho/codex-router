@@ -29,7 +29,9 @@ cd "$repo_dir"
 npm ci --omit=dev
 
 if command -v uv >/dev/null 2>&1; then
-  uv venv --python 3.12 .venv
+  if [ ! -x .venv/bin/python ]; then
+    uv venv --python 3.12 .venv
+  fi
   uv pip install --python .venv/bin/python 'litellm[proxy]==1.93.0'
 else
   if ! command -v python3 >/dev/null 2>&1; then
