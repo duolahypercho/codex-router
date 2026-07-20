@@ -41,7 +41,10 @@ export function privateFileIsProtected(target) {
   if (!existsSync(target)) return false;
   if (process.platform !== "win32") return (statSync(target).mode & 0o777) === 0o600;
   const script = [
-    "$acl = Get-Acl -LiteralPath $env:CODEX_ROUTER_PRIVATE_FILE",
+    // Get-Acl lazy-loads Microsoft.PowerShell.Security, which can fail under
+    // concurrent Windows processes. The .NET API returns the same FileSecurity
+    // object without importing a PowerShell module.
+    "$acl = [System.IO.File]::GetAccessControl($env:CODEX_ROUTER_PRIVATE_FILE)",
     "$identity = [Security.Principal.WindowsIdentity]::GetCurrent()",
     "$sid = $identity.User.Value",
     "$name = $identity.Name",

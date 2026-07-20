@@ -29,7 +29,7 @@ test(
     try {
       protectPrivateFile(target);
       const script = [
-        "$acl = Get-Acl -LiteralPath $env:CODEX_ROUTER_PRIVATE_FILE",
+        "$acl = [System.IO.File]::GetAccessControl($env:CODEX_ROUTER_PRIVATE_FILE)",
         "$identity = [Security.Principal.WindowsIdentity]::GetCurrent()",
         "$rules = @($acl.Access | ForEach-Object { [pscustomobject]@{ identity = $_.IdentityReference.Value; type = $_.AccessControlType.ToString(); inherited = $_.IsInherited } })",
         "[pscustomobject]@{ protected = $acl.AreAccessRulesProtected; currentSid = $identity.User.Value; currentName = $identity.Name; rules = $rules } | ConvertTo-Json -Compress -Depth 4",
