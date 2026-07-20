@@ -1,51 +1,92 @@
 # Development guide
 
-## Repository layout
+## Architecture
 
-- `src/router.mjs` dispatches native and namespaced Kimi models.
+- `config/providers.json` is the provider and model registry.
+- `src/model-registry.mjs` validates and indexes that registry.
+- `src/catalog.mjs` merges listed registry models with native Codex models.
+- `src/litellm-config.mjs` generates every Responses-to-Chat-Completions route.
+- `src/router.mjs` dispatches native and namespaced external model IDs.
 - `src/oauth-forwarder.mjs` owns Kimi CLI OAuth loading and refresh.
-- `src/api-forwarder.mjs` owns Kimi Platform API-key injection.
-- `src/start.mjs` supervises the four loopback processes.
-- `src/catalog.mjs` builds the merged Codex model catalog.
-- `src/config-manager.mjs` owns the marked Codex config block.
-- `src/service-macos.mjs` owns the launchd integration.
-- `litellm.yaml` defines Responses-to-Chat-Completions model adapters.
+- `src/api-forwarder.mjs` is shared by all API-key providers.
+- `src/provider-credentials.mjs` isolates environment, file, and Keychain lookup.
+- `src/provider-selection.mjs` controls which tested models enter the picker.
+- `src/start.mjs` supervises the loopback processes.
+- `src/service-*.mjs` install per-user services for macOS, Linux, and Windows.
 
-## Local checks
+## Add an OpenAI-compatible provider
+
+1. Add a provider object to `config/providers.json` with a unique lowercase ID,
+   API base URL, environment variable, protected key filename, and optional
+   Keychain service.
+2. Add one model object per upstream model. Public slugs should be namespaced as
+   `provider/model`, and internal `gatewayModel` values must be unique.
+3. Supply picker metadata for listed models: label, description, reasoning
+   levels, context window, compaction limit, modalities, and compatibility hash.
+4. Use an existing request profile or add a narrowly scoped profile to
+   `src/api-forwarder.mjs` when the upstream needs parameter normalization.
+5. Add routing, credential-isolation, and request-normalization tests.
+6. Run `bin/discover-models PROVIDER` against the official model endpoint.
+7. Install in isolated state and run
+   `bin/test-model provider/model --live --yes`; verify text, streaming, tool
+   calls, and compaction before setting `listed: true`.
+8. Update the README model table and provider-specific setup documentation.
+
+The shared forwarder strips Codex/ChatGPT authentication before injecting the
+selected provider key. Do not create a new listener merely to add another
+standard OpenAI-compatible provider.
+
+OAuth schemes usually need a dedicated adapter because refresh and identity
+rules are provider-specific. Never infer that an API key can replace an OAuth
+credential or vice versa.
+
+## Registry rules
+
+The registry is intentionally declarative. `src/model-registry.mjs` rejects
+unknown provider kinds, duplicate provider IDs, duplicate public slugs,
+duplicate gateway model IDs, missing credential metadata, and incomplete picker
+metadata.
+
+Set `listed: false` for compatibility aliases that must remain routable but
+should not appear in the app picker. Every model, listed or hidden, receives a
+generated LiteLLM route.
+
+An alternate registry can be tested in a development process with
+`CODEX_ROUTER_REGISTRY=/path/file.json`. Installed background services use the
+checked-in registry.
+
+## Tests
 
 ```sh
 npm ci
 npm run check
 npm test
+sh -n install.sh
 for file in bin/*; do sh -n "$file"; done
+npm audit --omit=dev
 ```
 
-The automated tests use local mock servers and synthetic credentials. They
-verify Zstandard request decoding, native header forwarding, Kimi credential
-isolation, API model/effort rewriting, and both Codex compaction formats.
+The test suite verifies native header forwarding, external credential
+isolation, Kimi and DeepSeek rewriting, registry-generated gateway routes,
+Zstandard request decoding, both Codex compaction formats, legacy migration,
+provider selection, setup isolation, discovery comparison, and service rendering
+for all three supported platforms.
 
-## Prepare without changing Codex
+CI runs the Node suite on macOS, Linux, and Windows. Tagged releases are built
+only after the suite passes and include checksums plus GitHub provenance
+attestations.
+
+Prepare an isolated state directory without touching the live Codex config:
 
 ```sh
-./bin/install --prepare-only
+test_root=$(mktemp -d)
+CODEX_HOME="$test_root/codex" \
+CODEX_ROUTER_STATE_DIR="$test_root/state" \
+CODEX_BIN=/Applications/ChatGPT.app/Contents/Resources/codex \
+./install.sh --prepare-only
 ```
 
-For an isolated state directory:
-
-```sh
-test_home=$(mktemp -d)
-CODEX_HOME="$test_home" \
-KIMI_CODEX_STATE_DIR="$test_home/kimi-router" \
-./bin/install --prepare-only
-```
-
-Do not point a test instance at the production ports while the LaunchAgent is
-running. Override all four `KIMI_*_PORT` values together.
-
-## Full API-chain mock
-
-`test/mock-kimi-api.mjs` is a strict local Chat Completions endpoint. It rejects
-the request unless the API forwarder removed Codex headers, installed the test
-API key, selected `kimi-k3`, and forced maximum reasoning.
-
-Never use a real API key in a test fixture, command history, or committed file.
+Never use a real provider key in a fixture, command argument, shell history, or
+committed file. Strict mock endpoints should assert the expected upstream model,
+normalized request parameters, internal-auth replacement, and absence of Codex
+identity headers.

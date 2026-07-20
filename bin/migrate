@@ -1,0 +1,11 @@
+#!/bin/sh
+set -eu
+
+repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+command=${1:-detect}
+case "$command" in
+  detect) exec node "$repo_dir/src/legacy-migration.mjs" detect ;;
+  apply) exec node "$repo_dir/src/legacy-migration.mjs" apply --yes ;;
+  rollback) exec node "$repo_dir/src/legacy-migration.mjs" rollback --yes ;;
+  *) echo "Usage: $0 detect|apply|rollback" >&2; exit 2 ;;
+esac

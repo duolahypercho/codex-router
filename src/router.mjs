@@ -16,28 +16,45 @@ import {
   writeJson,
 } from "./http-utils.mjs";
 import { MERGED_CATALOG_PATH, PORTS, loopback } from "./paths.mjs";
+import { MODEL_BY_SLUG, providerForModel } from "./model-registry.mjs";
+import { readProviderSelection } from "./provider-selection.mjs";
+import { VERSION } from "./version.mjs";
 
-const VERSION = "0.1.0";
-const LISTEN_HOST = process.env.KIMI_ROUTER_HOST || "127.0.0.1";
-const LISTEN_PORT = Number(process.env.KIMI_ROUTER_PORT || PORTS.router);
+const LISTEN_HOST =
+  process.env.CODEX_ROUTER_HOST || process.env.KIMI_ROUTER_HOST || "127.0.0.1";
+const LISTEN_PORT = Number(
+  process.env.CODEX_ROUTER_PORT || process.env.KIMI_ROUTER_PORT || PORTS.router,
+);
 const NATIVE_BASE = (
   process.env.CODEX_NATIVE_BASE_URL || "https://chatgpt.com/backend-api/codex"
 ).replace(/\/+$/, "");
-const KIMI_GATEWAY_BASE = (
-  process.env.KIMI_GATEWAY_BASE_URL || loopback(PORTS.gateway, "/v1")
+const GATEWAY_BASE = (
+  process.env.CODEX_ROUTER_GATEWAY_BASE_URL ||
+  process.env.KIMI_GATEWAY_BASE_URL ||
+  loopback(PORTS.gateway, "/v1")
 ).replace(/\/+$/, "");
 const OAUTH_HEALTH =
-  process.env.KIMI_OAUTH_HEALTH_URL || loopback(PORTS.oauth, "/health");
+  process.env.CODEX_ROUTER_OAUTH_HEALTH_URL ||
+  process.env.KIMI_OAUTH_HEALTH_URL ||
+  loopback(PORTS.oauth, "/health");
 const API_HEALTH =
-  process.env.KIMI_API_HEALTH_URL || loopback(PORTS.api, "/health");
+  process.env.CODEX_ROUTER_API_HEALTH_URL ||
+  process.env.KIMI_API_HEALTH_URL ||
+  loopback(PORTS.api, "/health");
 const GATEWAY_HEALTH =
-  process.env.KIMI_GATEWAY_HEALTH_URL || loopback(PORTS.gateway, "/health/liveliness");
-const CATALOG_PATH = process.env.KIMI_ROUTER_CATALOG || MERGED_CATALOG_PATH;
-const INTERNAL_KEY = process.env.KIMI_INTERNAL_KEY;
-const REQUIRE_CALLER_AUTH = process.env.KIMI_ROUTER_REQUIRE_AUTH !== "0";
-const QUIET = process.env.KIMI_PROXY_QUIET === "1";
+  process.env.CODEX_ROUTER_GATEWAY_HEALTH_URL ||
+  process.env.KIMI_GATEWAY_HEALTH_URL ||
+  loopback(PORTS.gateway, "/health/liveliness");
+const CATALOG_PATH =
+  process.env.CODEX_ROUTER_CATALOG || process.env.KIMI_ROUTER_CATALOG || MERGED_CATALOG_PATH;
+const INTERNAL_KEY =
+  process.env.CODEX_ROUTER_INTERNAL_KEY || process.env.KIMI_INTERNAL_KEY;
+const REQUIRE_CALLER_AUTH =
+  (process.env.CODEX_ROUTER_REQUIRE_AUTH || process.env.KIMI_ROUTER_REQUIRE_AUTH) !== "0";
+const QUIET =
+  process.env.CODEX_ROUTER_QUIET === "1" || process.env.KIMI_PROXY_QUIET === "1";
 
-if (!INTERNAL_KEY) throw new Error("KIMI_INTERNAL_KEY is required.");
+if (!INTERNAL_KEY) throw new Error("CODEX_ROUTER_INTERNAL_KEY is required.");
 
 const FORWARD_HEADERS = new Set([
   "authorization",
@@ -57,11 +74,6 @@ const FORWARD_HEADERS = new Set([
   "x-oai-attestation",
   "x-openai-subagent",
   "x-responsesapi-include-timing-metrics",
-]);
-
-const KIMI_MODELS = new Map([
-  ["kimi-oauth/k3", { route: "oauth", upstreamModel: "k3" }],
-  ["kimi-api/kimi-k3", { route: "api", upstreamModel: "kimi-api-k3" }],
 ]);
 
 const COMPACT_PROMPT = `You are performing a CONTEXT CHECKPOINT COMPACTION. Create a handoff summary for another language model that will resume the task.
@@ -141,12 +153,12 @@ function nativeHeaders(request) {
   return headers;
 }
 
-function kimiHeaders() {
+function routedHeaders() {
   return {
     Authorization: `Bearer ${INTERNAL_KEY}`,
     "Content-Type": "application/json",
     "Accept-Encoding": "identity",
-    "User-Agent": `kimi-codex-router/${VERSION}`,
+    "User-Agent": `codex-router/${VERSION}`,
   };
 }
 
@@ -182,8 +194,8 @@ async function healthPayload() {
     serviceHealth(GATEWAY_HEALTH),
   ]);
   return {
-    ok: oauth.reachable && gateway.reachable,
-    service: "kimi-codex-router",
+    ok: oauth.reachable && api.reachable && gateway.reachable,
+    service: "codex-router",
     version: VERSION,
     router: "ready",
     oauth,
@@ -213,7 +225,7 @@ function messageItem(text) {
   };
 }
 
-function normalizeKimiInput(input) {
+function normalizeRoutedInput(input) {
   if (!Array.isArray(input)) return input;
   return input
     .filter((item) => item?.type !== "compaction_trigger")
@@ -291,23 +303,23 @@ function extractResponseText(payload) {
   return text.join("\n");
 }
 
-async function summarize(payload, kimi, signal) {
+async function summarize(payload, route, signal) {
   const originalInput = Array.isArray(payload.input) ? payload.input : [];
   const body = {
     ...payload,
-    model: kimi.upstreamModel,
+    model: route.gatewayModel,
     stream: false,
     tools: [],
     tool_choice: "none",
     input: [
-      ...normalizeKimiInput(originalInput),
+      ...normalizeRoutedInput(originalInput),
       messageItem(COMPACT_PROMPT),
     ],
   };
   delete body.previous_response_id;
-  const upstream = await fetch(`${KIMI_GATEWAY_BASE}/responses`, {
+  const upstream = await fetch(`${GATEWAY_BASE}/responses`, {
     method: "POST",
-    headers: kimiHeaders(),
+    headers: routedHeaders(),
     body: JSON.stringify(body),
     signal,
   });
@@ -358,8 +370,8 @@ function writeCompactionSse(response, model, summary) {
   response.end("data: [DONE]\n\n");
 }
 
-async function handleKimiCompaction(response, payload, kimi, signal, v2) {
-  const result = await summarize(payload, kimi, signal);
+async function handleRoutedCompaction(response, payload, route, signal, v2) {
+  const result = await summarize(payload, route, signal);
   if (!result.ok) {
     writeJson(response, result.status, result.payload);
     return;
@@ -384,7 +396,9 @@ async function handleModels(response) {
   const data = catalogModels().map((model) => ({
     id: model.slug,
     object: "model",
-    owned_by: model.slug?.startsWith("kimi-") ? "kimi" : "openai",
+    owned_by: MODEL_BY_SLUG.has(model.slug)
+      ? providerForModel(MODEL_BY_SLUG.get(model.slug)).ownedBy
+      : "openai",
   }));
   writeJson(response, 200, { object: "list", data });
 }
@@ -403,10 +417,23 @@ async function handleResponses(request, response, requestUrl) {
   const body = decodeBody(encoded, request.headers["content-encoding"]);
   const payload = parseBody(body);
   const requestedModel = typeof payload.model === "string" ? payload.model : "";
-  const kimi = KIMI_MODELS.get(requestedModel);
+  const registeredRoute = MODEL_BY_SLUG.get(requestedModel);
+  const route = registeredRoute && readProviderSelection().includes(registeredRoute.provider)
+    ? registeredRoute
+    : undefined;
+  if (registeredRoute && !route) {
+    writeJson(response, 409, {
+      error: {
+        type: "provider_not_enabled",
+        provider: registeredRoute.provider,
+        message: `Provider ${registeredRoute.provider} is hidden. Run ./bin/providers enable ${registeredRoute.provider}.`,
+      },
+    });
+    return;
+  }
   const compactV1 = /\/responses\/compact$/.test(requestUrl.pathname);
   const compactV2 =
-    kimi &&
+    route &&
     Array.isArray(payload.input) &&
     payload.input.at(-1)?.type === "compaction_trigger";
 
@@ -416,22 +443,22 @@ async function handleResponses(request, response, requestUrl) {
     if (!response.writableEnded) controller.abort();
   });
 
-  if (kimi && (compactV1 || compactV2)) {
-    await handleKimiCompaction(response, payload, kimi, controller.signal, compactV2);
+  if (route && (compactV1 || compactV2)) {
+    await handleRoutedCompaction(response, payload, route, controller.signal, compactV2);
     return;
   }
 
   let target;
   let headers;
   let routedBody;
-  if (kimi) {
+  if (route) {
     const routed = {
       ...payload,
-      model: kimi.upstreamModel,
-      input: normalizeKimiInput(payload.input),
+      model: route.gatewayModel,
+      input: normalizeRoutedInput(payload.input),
     };
-    target = `${KIMI_GATEWAY_BASE}/responses`;
-    headers = kimiHeaders();
+    target = `${GATEWAY_BASE}/responses`;
+    headers = routedHeaders();
     routedBody = Buffer.from(JSON.stringify(routed), "utf8");
   } else {
     const native = { ...payload };
@@ -450,7 +477,7 @@ async function handleResponses(request, response, requestUrl) {
   await pipeResponse(upstream, response, HOP_BY_HOP_HEADERS);
   if (!QUIET) {
     console.error(
-      `[kimi-router] model=${requestedModel || "unknown"} route=${kimi?.route || "openai"} status=${upstream.status}`,
+      `[codex-router] model=${requestedModel || "unknown"} provider=${route?.provider || "openai"} status=${upstream.status}`,
     );
   }
 }
@@ -492,7 +519,7 @@ const server = http.createServer((request, response) => {
   handleRequest(request, response).catch((error) => {
     const status = Number(error?.status) || 502;
     console.error(
-      `[kimi-router] request failed: ${error instanceof Error ? error.message : String(error)}`,
+      `[codex-router] request failed: ${error instanceof Error ? error.message : String(error)}`,
     );
     if (!response.headersSent) {
       writeJson(response, status, {
@@ -515,7 +542,7 @@ server.on("upgrade", (_request, socket) => {
 server.requestTimeout = 0;
 server.headersTimeout = 65_000;
 server.listen(LISTEN_PORT, LISTEN_HOST, () => {
-  console.error(`[kimi-router] listening on http://${LISTEN_HOST}:${LISTEN_PORT}`);
+  console.error(`[codex-router] listening on http://${LISTEN_HOST}:${LISTEN_PORT}`);
 });
 
 for (const signal of ["SIGINT", "SIGTERM"]) {

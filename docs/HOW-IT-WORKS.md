@@ -1,122 +1,120 @@
-# How it works
+# How Codex Router works
 
 ## Why a router is needed
 
-Codex can point its built-in OpenAI provider at a custom base URL, but the App
-still expects the Responses API and a Codex-shaped model catalog. Kimi's coding
-and platform endpoints are OpenAI-compatible Chat Completions services.
+The Codex App expects the Responses API and a Codex-shaped model catalog.
+Kimi and DeepSeek expose OpenAI-compatible Chat Completions APIs with different
+authentication and request details. Codex Router bridges those contracts while
+leaving native GPT traffic on the normal ChatGPT Codex backend.
 
-This project bridges those two differences without replacing the built-in
-provider:
+Four pieces make the integration work:
 
-- A merged catalog makes the Kimi entries visible beside native GPT models.
-- A dispatcher routes by namespaced model ID.
-- LiteLLM translates Responses requests and streams to Chat Completions.
-- Dedicated forwarders supply either Kimi OAuth or a Kimi Platform API key.
+- A generated catalog places external models beside native GPT models.
+- A dispatcher chooses native or external routing by namespaced model ID.
+- LiteLLM translates Responses requests, streams, and tool calls.
+- Credential forwarders inject only the selected provider's authentication.
 
 ## Request flow
 
 ```mermaid
 sequenceDiagram
-  participant C as Codex App
+  participant C as Codex
   participant R as Router :4102
   participant L as LiteLLM :4100
-  participant O as OAuth forwarder :4101
+  participant O as Kimi OAuth :4101
   participant A as API forwarder :4103
   participant G as ChatGPT Codex
-  participant K as Kimi
+  participant P as External provider
 
   alt Native GPT model
     C->>R: Responses request + Codex auth
-    R->>G: Allow-listed Codex headers + unchanged GPT model
+    R->>G: Allow-listed Codex headers + native model
     G-->>R: Responses stream
     R-->>C: Responses stream
-  else Kimi K3 OAuth
-    C->>R: model = kimi-oauth/k3
-    R->>L: model = k3 + internal key
-    L->>O: Chat Completions + internal key
-    O->>K: Chat Completions + refreshed OAuth bearer
-    K-->>C: Stream translated back through L and R
-  else Kimi K3 API
-    C->>R: model = kimi-api/kimi-k3
-    R->>L: model = kimi-api-k3 + internal key
-    L->>A: Chat Completions + internal key
-    A->>K: model = kimi-k3 + Kimi Platform API key
-    K-->>C: Stream translated back through L and R
+  else Registry model
+    C->>R: Responses request + namespaced model
+    R->>L: Gateway model + internal key
+    L->>L: Responses to Chat Completions
+    alt Kimi Code OAuth
+      L->>O: Chat request + internal key
+      O->>P: Kimi model + refreshed OAuth bearer
+    else API-key provider
+      L->>A: Chat request + internal key
+      A->>P: Upstream model + selected provider key
+    end
+    P-->>L: Chat Completions stream
+    L-->>C: Responses events through router
   end
 ```
 
-## Model catalog integration
+## One registry, multiple consumers
 
-`src/catalog.mjs` asks the installed Codex binary for its current model catalog,
-stores that native snapshot, and adds two entries:
+`config/providers.json` supplies the model mapping used by the catalog, router,
+gateway generator, API forwarder, and doctor.
 
-| Picker label | Public model ID | Internal LiteLLM model |
-|---|---|---|
-| Kimi K3 (OAuth) | `kimi-oauth/k3` | `k3` |
-| Kimi K3 (API) | `kimi-api/kimi-k3` | `kimi-api-k3` |
+`enabled-providers.json` is a separate local policy. It controls both picker
+visibility and dispatcher access. A known namespaced model whose provider is
+hidden receives a local `provider_not_enabled` error; it is never mistaken for a
+native model or forwarded with Codex authentication. The policy is read on each
+external request, so provider visibility can change without restarting the
+service (Codex itself still needs a restart to reload the picker catalog).
 
-The native objects are preserved rather than recreated, so current GPT model
-metadata, availability, and reasoning controls remain whatever the installed
-Codex build supplied.
+| Picker model | Public slug | Gateway model | Upstream model |
+| --- | --- | --- | --- |
+| Kimi K3 OAuth | `kimi-oauth/k3` | `kimi-oauth-k3` | `k3` |
+| Kimi K3 API | `kimi-api/kimi-k3` | `kimi-api-k3` | `kimi-k3` |
+| DeepSeek V4 Flash | `deepseek/deepseek-v4-flash` | `deepseek-v4-flash` | `deepseek-v4-flash` |
+| DeepSeek V4 Pro | `deepseek/deepseek-v4-pro` | `deepseek-v4-pro` | `deepseek-v4-pro` |
 
-The installer deliberately does not create a custom `model_provider`. It keeps
-the built-in `openai` provider and sets only `openai_base_url`, matching Codex's
-documented proxy configuration. This is why the picker contains named Kimi
-models instead of only `Custom`.
+The native catalog objects are preserved rather than reconstructed, which keeps
+current instructions and capability metadata from the installed Codex build.
+Registry models clone a current native schema and replace picker-specific
+metadata.
 
-## Authentication boundaries
+The integration deliberately keeps the built-in `openai` provider and points
+it at a loopback `openai_base_url`. This makes named models appear in the normal
+picker instead of replacing the provider with a generic `Custom` entry.
 
-| Route | Credential received from Codex | Credential sent upstream |
-|---|---|---|
-| Native GPT | Codex/ChatGPT bearer and selected allow-listed session headers | Same Codex credential to the ChatGPT Codex backend |
-| Kimi OAuth | Discarded at the dispatcher | Kimi CLI OAuth bearer from `~/.kimi-code` |
-| Kimi API | Discarded at the dispatcher | Kimi Platform API key |
+## Credential boundaries
 
-The internal router-to-LiteLLM and LiteLLM-to-forwarder hops use a random key
-generated during installation. Functional forwarder routes reject requests
-without that key. Health endpoints reveal only availability and whether a
-credential exists.
+| Route | Incoming Codex credential | Upstream credential |
+| --- | --- | --- |
+| Native GPT | Allow-listed and forwarded | Existing ChatGPT/Codex authentication |
+| Kimi OAuth | Discarded | Kimi CLI OAuth bearer from `~/.kimi-code` |
+| Kimi API | Discarded | Kimi Platform API key |
+| DeepSeek | Discarded | DeepSeek API key |
 
-## OAuth refresh
+The router-to-LiteLLM and LiteLLM-to-forwarder hops use a random internal key
+stored with mode `600` or a current-user Windows ACL. It is not a provider credential. Each external
+forwarder removes Codex account, installation, attestation, and private headers
+before sending a request upstream.
 
-The OAuth adapter reads the credential created by `kimi login`. Before a Kimi
-request it checks expiry metadata and refreshes when necessary. Refresh writes
-use an atomic temporary-file rename and mode `600`.
+## Provider normalization
 
-A cross-process lock prevents the router and Kimi CLI from refreshing the same
-credential concurrently. Tokens and refresh responses are never included in
-logs or health output.
+Kimi K3 API requests select `kimi-k3` and force maximum reasoning. Kimi Code
+OAuth retains its own refresh and device-identity behavior.
 
-## Request compression and WebSockets
+DeepSeek V4 requests select the exact official upstream model, enable thinking,
+and map Codex reasoning levels to DeepSeek's supported `high` and `max` values.
+Sampling parameters that DeepSeek documents as ineffective in thinking mode are
+removed. Both current V4 models use the same shared forwarder and credential.
 
-Current Codex builds first try a Responses WebSocket. The router returns HTTP
-`426`, which makes Codex use its normal HTTP fallback. Codex may Zstandard-
-compress that fallback body, so the dispatcher supports bounded Zstandard,
-gzip, deflate, and Brotli decompression before inspecting the model ID.
+The retired DeepSeek alias routes remain hidden registry entries. This keeps
+old CLI commands working only as long as DeepSeek continues serving those
+upstream aliases without advertising them to new users.
 
-Native and Kimi upstream requests are then reserialized as plain JSON. Incoming
-content encoding and length headers are never forwarded blindly.
+## Transport and compaction
 
-## Tools and streaming
+Current Codex builds first attempt a Responses WebSocket. The router responds
+with HTTP 426, and Codex falls back to HTTP. Request bodies may use Zstandard,
+gzip, deflate, or Brotli; the router safely decompresses them before inspecting
+the model ID.
 
-LiteLLM converts Codex Responses input, function declarations, function calls,
-tool outputs, image inputs, and streaming events to and from Kimi's Chat
-Completions representation. The OAuth adapter also repairs an edge case where
-translated assistant text can appear between a tool call and its required tool
-result.
+Codex can compact history through `/responses/compact` or a
+`compaction_trigger`. External Chat Completions providers cannot create OpenAI's
+opaque encrypted compaction payload, so the router asks the selected external
+model for a continuation summary and wraps it in a router-owned `kcr1:` payload.
+On replay, it converts that payload back to a plain continuation message.
 
-Codex remains the agent runtime. It still owns approvals, sandboxing, shell
-commands, MCP tools, skills, and task history; only model inference is routed.
-
-## Context compaction
-
-Because the built-in OpenAI provider advertises remote compaction, Codex can
-send either `/responses/compact` or a `compaction_trigger` item. Kimi cannot
-produce OpenAI's opaque encrypted compaction payload, so the router asks Kimi
-for a concise continuation summary and returns a Codex-compatible replacement
-history.
-
-For v2 compaction, the summary is wrapped in a local `kcr1:` base64 envelope.
-On replay, only this router decodes it back into a plain continuation message.
-The envelope is encoding, not encryption, and never contains credentials.
+Commands, permissions, MCP tools, skills, and task state remain in Codex. Only
+model inference and external-model compaction are routed.

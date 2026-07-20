@@ -1,30 +1,97 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
-import os from "node:os";
 import path from "node:path";
 
+import { findCodexBinary } from "./codex-binary.mjs";
+import { privateFileIsProtected } from "./file-security.mjs";
+import { detectLegacyInstallations } from "./legacy-migration.mjs";
+import { PROVIDERS } from "./model-registry.mjs";
+import { kimiOAuthStatus } from "./oauth-status.mjs";
 import {
-  API_KEY_PATH,
   CONFIG_PATH,
   INTERNAL_SECRET_PATH,
+  LITELLM_CONFIG_PATH,
   MERGED_CATALOG_PATH,
   PORTS,
-  SERVICE_LABEL,
+  SOURCE_ROOT,
   loopback,
 } from "./paths.mjs";
+import { credentialStatus } from "./provider-credentials.mjs";
+import {
+  providerSelectionStatus,
+  selectedListedModels,
+} from "./provider-selection.mjs";
 
 const checks = [];
-const add = (status, name, detail) => checks.push({ status, name, detail });
+const add = (status, name, detail, fix) => checks.push({ status, name, detail, fix });
+const jsonOutput = process.argv.includes("--json");
 
-function codexBinary() {
-  const candidates = [
-    process.env.CODEX_BIN,
-    "/Applications/ChatGPT.app/Contents/Resources/codex",
-    "/Applications/Codex.app/Contents/Resources/codex",
-    "/opt/homebrew/bin/codex",
-    "/usr/local/bin/codex",
-  ].filter(Boolean);
-  return candidates.find(existsSync);
+function childJson(script, args = []) {
+  return JSON.parse(
+    execFileSync(process.execPath, [path.join(SOURCE_ROOT, "src", script), ...args], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }),
+  );
+}
+
+function repair() {
+  const legacy = detectLegacyInstallations();
+  if (legacy.unknownConflict) {
+    throw new Error(
+      `Another router owns ${legacy.config.modelCatalogJson}; repair will not overwrite it.`,
+    );
+  }
+  if (legacy.installations.length && !process.argv.includes("--migrate-known")) {
+    throw new Error(
+      `A known older router (${legacy.installations.map((item) => item.id).join(", ")}) was found. Re-run with --fix --migrate-known to snapshot and migrate it.`,
+    );
+  }
+  if (legacy.installations.length) {
+    childJson("legacy-migration.mjs", ["apply", "--yes"]);
+  }
+  const repairStdio = jsonOutput ? ["inherit", "ignore", "inherit"] : "inherit";
+  const result = process.platform === "win32"
+    ? spawnSync(
+        "powershell.exe",
+        [
+          "-NoLogo",
+          "-NoProfile",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-File",
+          path.join(SOURCE_ROOT, "install.ps1"),
+          "-CheckoutInstall",
+        ],
+        { cwd: SOURCE_ROOT, env: process.env, stdio: repairStdio },
+      )
+    : spawnSync(path.join(SOURCE_ROOT, "bin", "install"), [], {
+        cwd: SOURCE_ROOT,
+        env: process.env,
+        stdio: repairStdio,
+      });
+  if (result.error) throw result.error;
+  if (result.status !== 0) throw new Error(`Repair installer exited with ${result.status}.`);
+}
+
+if (process.argv.includes("--help")) {
+  process.stdout.write(`Usage: doctor [--json] [--fix [--migrate-known]]
+
+Checks the complete Codex Router installation without printing credentials.
+--fix reinstalls generated files, configuration, and the background service.
+Known older routers are migrated only with the explicit --migrate-known flag.
+`);
+  process.exit(0);
+}
+
+if (process.argv.includes("--fix")) {
+  try {
+    repair();
+    if (!jsonOutput) process.stdout.write("Repair completed; verifying the result.\n\n");
+  } catch (error) {
+    console.error(`codex-router repair: ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(1);
+  }
 }
 
 const [major, minor] = process.versions.node.split(".").map(Number);
@@ -32,75 +99,154 @@ add(
   major > 22 || (major === 22 && minor >= 19) ? "ok" : "fail",
   "Node.js",
   `${process.version}; 22.19 or newer required`,
+  "Install Node.js 24 LTS, then run ./bin/doctor --fix.",
 );
-add(process.platform === "darwin" ? "ok" : "warn", "Platform", process.platform);
+add(
+  ["darwin", "linux", "win32"].includes(process.platform) ? "ok" : "fail",
+  "Platform",
+  process.platform,
+  "Use macOS, Windows, or Linux with the Codex CLI.",
+);
 
-const codex = codexBinary();
-add(codex ? "ok" : "fail", "Codex binary", codex || "not found");
-add(existsSync(CONFIG_PATH) ? "ok" : "fail", "Codex config", CONFIG_PATH);
+const codex = findCodexBinary();
+add(
+  codex ? "ok" : "fail",
+  "Codex binary",
+  codex || "not found",
+  "Install Codex or set CODEX_BIN to the Codex CLI binary.",
+);
+add(
+  existsSync(CONFIG_PATH) ? "ok" : "fail",
+  "Codex config",
+  CONFIG_PATH,
+  "Start Codex once, then run ./bin/doctor --fix.",
+);
+
+let selection = { providers: [], explicit: false };
+let requiredModels = new Set();
+try {
+  selection = providerSelectionStatus();
+  requiredModels = new Set(selectedListedModels().map((model) => model.slug));
+  add(
+    selection.providers.length ? "ok" : "fail",
+    "Enabled providers",
+    selection.providers.length
+      ? `${selection.providers.join(", ")}${selection.explicit ? "" : " (legacy show-all mode)"}`
+      : "none",
+    "Run ./bin/setup --guided and choose at least one provider.",
+  );
+} catch (error) {
+  add(
+    "fail",
+    "Enabled providers",
+    error instanceof Error ? error.message : String(error),
+    "Run ./bin/setup --guided to replace the invalid provider selection.",
+  );
+}
 
 let catalogModels = [];
 try {
   const catalog = JSON.parse(readFileSync(MERGED_CATALOG_PATH, "utf8"));
   catalogModels = Array.isArray(catalog.models) ? catalog.models : [];
 } catch {
-  // Reported below.
+  // Reported as a failed catalog check below.
 }
-const requiredModels = new Set(["kimi-oauth/k3", "kimi-api/kimi-k3"]);
-const catalogOk = [...requiredModels].every((slug) =>
-  catalogModels.some((model) => model.slug === slug),
+const catalogOk =
+  requiredModels.size > 0 &&
+  [...requiredModels].every((slug) => catalogModels.some((model) => model.slug === slug));
+add(
+  catalogOk ? "ok" : "fail",
+  "Merged catalog",
+  catalogOk ? `${requiredModels.size} routed models` : MERGED_CATALOG_PATH,
+  "Run ./bin/refresh-catalog, or ./bin/doctor --fix if files are missing.",
 );
-add(catalogOk ? "ok" : "fail", "Merged catalog", MERGED_CATALOG_PATH);
+add(
+  existsSync(LITELLM_CONFIG_PATH) ? "ok" : "fail",
+  "Generated gateway config",
+  LITELLM_CONFIG_PATH,
+  "Run ./bin/doctor --fix.",
+);
 
 const secretMode = existsSync(INTERNAL_SECRET_PATH)
   ? statSync(INTERNAL_SECRET_PATH).mode & 0o777
   : undefined;
+const secretProtected = privateFileIsProtected(INTERNAL_SECRET_PATH);
 add(
-  secretMode === 0o600 ? "ok" : "fail",
+  secretProtected ? "ok" : "fail",
   "Internal service key",
-  secretMode === undefined ? "missing" : `mode ${secretMode.toString(8)}`,
+  secretMode === undefined
+    ? "missing"
+    : process.platform === "win32"
+      ? "current-user Windows ACL"
+      : `mode ${secretMode.toString(8)}`,
+  "Run ./bin/doctor --fix; this key is generated locally and is not a provider key.",
 );
 
-const kimiHome = process.env.KIMI_CODE_HOME || path.join(os.homedir(), ".kimi-code");
-const credentials = path.join(kimiHome, "credentials", "kimi-code.json");
-let oauthValid = false;
+const oauth = kimiOAuthStatus();
+add(
+  oauth.configured ? "ok" : selection.providers.includes("kimi-oauth") ? "fail" : "warn",
+  "Kimi OAuth",
+  oauth.configured ? "credential present" : `not configured; ${oauth.setup}`,
+  "Run kimi login, then rerun the doctor.",
+);
+
+for (const provider of PROVIDERS.values()) {
+  if (provider.kind !== "openai-compatible") continue;
+  const status = credentialStatus(provider, { persistent: true });
+  add(
+    status.configured ? "ok" : selection.providers.includes(provider.id) ? "fail" : "warn",
+    `${provider.displayName} key`,
+    status.configured ? status.source : "not configured",
+    `Run ./bin/provider-key ${provider.id} set.`,
+  );
+}
+
 try {
-  const value = JSON.parse(readFileSync(credentials, "utf8"));
-  oauthValid = Boolean(value.access_token && value.refresh_token);
-} catch {
-  // Optional when the API-key route is used alone.
+  const config = childJson("config-manager.mjs", ["status"]);
+  add(
+    config.mode === "router" ? "ok" : "fail",
+    "Codex routing config",
+    config.mode,
+    "Run ./bin/enable or ./bin/doctor --fix.",
+  );
+} catch (error) {
+  add(
+    "fail",
+    "Codex routing config",
+    error instanceof Error ? error.message : String(error),
+    "Inspect ~/.codex/config.toml, then run ./bin/doctor --fix.",
+  );
 }
-add(oauthValid ? "ok" : "warn", "Kimi OAuth", oauthValid ? "credential present" : "run `kimi login`");
 
-let apiSource;
-if (process.env.KIMI_API_KEY || process.env.MOONSHOT_API_KEY) apiSource = "environment";
-else if (existsSync(API_KEY_PATH) && statSync(API_KEY_PATH).size > 0) apiSource = "protected file";
-else if (process.platform === "darwin") {
-  try {
-    execFileSync(
-      "/usr/bin/security",
-      ["find-generic-password", "-s", "kimi-codex-api", "-a", "default"],
-      { stdio: "ignore", timeout: 2_000 },
-    );
-    apiSource = "macOS Keychain";
-  } catch {
-    // Optional credential.
-  }
-}
-add(apiSource ? "ok" : "warn", "Kimi API key", apiSource || "optional; run `./bin/api-key set`");
+const legacy = detectLegacyInstallations();
+add(
+  legacy.unknownConflict ? "fail" : legacy.installations.length ? "fail" : "ok",
+  "Router ownership",
+  legacy.unknownConflict
+    ? `unknown catalog: ${legacy.config.modelCatalogJson}`
+    : legacy.installations.length
+      ? `older router: ${legacy.installations.map((item) => item.id).join(", ")}`
+      : "no conflicting router detected",
+  legacy.installations.length
+    ? "Run ./bin/doctor --fix --migrate-known."
+    : "Disable the other router manually; Codex Router will not overwrite it.",
+);
 
-if (process.platform === "darwin") {
-  try {
-    const service = execFileSync(
-      "/bin/launchctl",
-      ["print", `gui/${process.getuid()}/${SERVICE_LABEL}`],
-      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
-    );
-    const state = service.match(/state = ([^\n]+)/)?.[1]?.trim() || "loaded";
-    add(state === "running" ? "ok" : "warn", "Background service", state);
-  } catch {
-    add("warn", "Background service", "not loaded");
-  }
+try {
+  const service = childJson("service.mjs", ["status"]);
+  add(
+    service.loaded ? "ok" : "fail",
+    "Background service",
+    service.state || "stopped",
+    "Run ./bin/enable or ./bin/doctor --fix.",
+  );
+} catch (error) {
+  add(
+    "fail",
+    "Background service",
+    error instanceof Error ? error.message : "not available",
+    "Run ./bin/doctor --fix.",
+  );
 }
 
 try {
@@ -108,14 +254,20 @@ try {
     signal: AbortSignal.timeout(2_000),
   });
   const payload = await response.json().catch(() => ({}));
-  const healthy = response.ok && payload.service === "kimi-codex-router";
+  const healthy = response.ok && payload.service === "codex-router";
   add(
     healthy ? "ok" : "fail",
     "Router health",
     healthy ? `version ${payload.version}` : `unexpected service or HTTP ${response.status}`,
+    "Run ./bin/doctor --fix. If it still fails, create a support bundle.",
   );
 } catch {
-  add("warn", "Router health", "not running");
+  add(
+    "fail",
+    "Router health",
+    `not reachable on 127.0.0.1:${PORTS.router}`,
+    "Run ./bin/doctor --fix, then inspect the support bundle if needed.",
+  );
 }
 
 if (codex && catalogOk) {
@@ -129,17 +281,28 @@ if (codex && catalogOk) {
     );
     const slugs = new Set((parsed.models || []).map((model) => model.slug));
     const visible = [...requiredModels].every((slug) => slugs.has(slug));
-    add(visible ? "ok" : "fail", "Codex model catalog", visible ? "both Kimi entries visible" : "restart/re-enable required");
+    add(
+      visible ? "ok" : "fail",
+      "Codex model catalog",
+      visible ? `${requiredModels.size} routed entries visible` : "startup catalog is stale",
+      "Fully quit Codex, reopen it, and create a new task.",
+    );
   } catch (error) {
-    add("warn", "Codex model catalog", error instanceof Error ? error.message : String(error));
+    add(
+      "warn",
+      "Codex model catalog",
+      error instanceof Error ? error.message : String(error),
+      "Set CODEX_BIN if Codex is installed in a nonstandard location.",
+    );
   }
 }
 
-if (process.argv.includes("--json")) {
-  process.stdout.write(`${JSON.stringify({ checks }, null, 2)}\n`);
+if (jsonOutput) {
+  process.stdout.write(`${JSON.stringify({ ok: !checks.some((check) => check.status === "fail"), checks }, null, 2)}\n`);
 } else {
   for (const check of checks) {
     process.stdout.write(`${check.status.toUpperCase().padEnd(5)} ${check.name}: ${check.detail}\n`);
+    if (check.status === "fail" && check.fix) process.stdout.write(`      Fix: ${check.fix}\n`);
   }
 }
 if (checks.some((check) => check.status === "fail")) process.exitCode = 1;

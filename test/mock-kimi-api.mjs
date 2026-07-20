@@ -4,6 +4,9 @@ import http from "node:http";
 const host = "127.0.0.1";
 const port = Number(process.env.KIMI_TEST_MOCK_PORT || "45110");
 const expectedKey = process.env.KIMI_TEST_EXPECTED_KEY || "TEST_KIMI_API_KEY";
+const expectedModel = process.env.KIMI_TEST_EXPECTED_MODEL || "kimi-k3";
+const expectedEffort = process.env.KIMI_TEST_EXPECTED_EFFORT || "max";
+const expectThinking = process.env.KIMI_TEST_EXPECT_THINKING === "1";
 
 async function readJson(request) {
   const chunks = [];
@@ -25,7 +28,7 @@ function chunk(id, delta, finishReason = null) {
     id,
     object: "chat.completion.chunk",
     created: Math.floor(Date.now() / 1_000),
-    model: "kimi-k3",
+    model: expectedModel,
     choices: [{ index: 0, delta, finish_reason: finishReason }],
   };
 }
@@ -44,16 +47,18 @@ const server = http.createServer(async (request, response) => {
     assert.equal(request.headers.authorization, `Bearer ${expectedKey}`);
     assert.equal(request.headers["chatgpt-account-id"], undefined);
     assert.equal(request.headers["x-codex-installation-id"], undefined);
-    assert.equal(body.model, "kimi-k3");
-    assert.equal(body.reasoning_effort, "max");
-    console.error("[mock-kimi-api] validated isolated request");
+    assert.equal(body.model, expectedModel);
+    if (expectedEffort === "none") assert.equal(body.reasoning_effort, undefined);
+    else assert.equal(body.reasoning_effort, expectedEffort);
+    if (expectThinking) assert.deepEqual(body.thinking, { type: "enabled" });
+    console.error(`[mock-kimi-api] validated isolated ${expectedModel} request`);
 
     if (!body.stream) {
       json(response, 200, {
         id: "chatcmpl-kimi-test",
         object: "chat.completion",
         created: Math.floor(Date.now() / 1_000),
-        model: "kimi-k3",
+        model: expectedModel,
         choices: [
           {
             index: 0,

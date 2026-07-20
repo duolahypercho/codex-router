@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import http from "node:http";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import net from "node:net";
+import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -52,7 +54,13 @@ async function mockServer(handler) {
 function run(script, env) {
   const child = spawn(process.execPath, [path.join(root, "src", script)], {
     cwd: root,
-    env: { ...process.env, KIMI_INTERNAL_KEY: INTERNAL_KEY, ...env },
+    env: {
+      ...process.env,
+      CODEX_ROUTER_INTERNAL_KEY: INTERNAL_KEY,
+      KIMI_INTERNAL_KEY: INTERNAL_KEY,
+      CODEX_ROUTER_SHOW_ALL_MODELS: "1",
+      ...env,
+    },
     stdio: ["ignore", "ignore", "pipe"],
   });
   child.stderr.setEncoding("utf8");
@@ -91,16 +99,58 @@ async function closeServer(server) {
   await new Promise((resolve) => server.close(resolve));
 }
 
-test("router preserves native auth and isolates both Kimi routes", async () => {
+test("router refuses a known model whose provider is hidden", async () => {
+  const gatewayRequests = [];
+  const gateway = await mockServer(async (request, response) => {
+    gatewayRequests.push(await bodyJson(request));
+    json(response, 200, { route: "external" });
+  });
+  const routerPort = await openPort();
+  const testRoot = mkdtempSync(path.join(os.tmpdir(), "codex-router-hidden-provider-"));
+  const stateDir = path.join(testRoot, "state");
+  mkdirSync(stateDir, { recursive: true });
+  writeFileSync(
+    path.join(stateDir, "enabled-providers.json"),
+    `${JSON.stringify({ version: 1, providers: ["kimi-oauth"] })}\n`,
+  );
+  const router = run("router.mjs", {
+    CODEX_ROUTER_PORT: String(routerPort),
+    CODEX_ROUTER_GATEWAY_BASE_URL: `http://127.0.0.1:${gateway.port}/v1`,
+    CODEX_ROUTER_STATE_DIR: stateDir,
+    CODEX_ROUTER_SHOW_ALL_MODELS: "0",
+    CODEX_ROUTER_QUIET: "1",
+  });
+
+  try {
+    await waitFor(`http://127.0.0.1:${routerPort}/v1/models`, router);
+    const response = await fetch(`http://127.0.0.1:${routerPort}/v1/responses`, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer CODEX_CALLER_SECRET",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ model: "deepseek/deepseek-v4-pro", input: "test" }),
+    });
+    assert.equal(response.status, 409);
+    assert.equal((await response.json()).error.type, "provider_not_enabled");
+    assert.equal(gatewayRequests.length, 0);
+  } finally {
+    await stopChild(router);
+    await closeServer(gateway.server);
+    rmSync(testRoot, { recursive: true, force: true });
+  }
+});
+
+test("router preserves native auth and isolates every external route", async () => {
   const nativeRequests = [];
-  const kimiRequests = [];
+  const routedRequests = [];
   const native = await mockServer(async (request, response) => {
     nativeRequests.push({ url: request.url, headers: request.headers, body: await bodyJson(request) });
     json(response, 200, { route: "native" });
   });
   const gateway = await mockServer(async (request, response) => {
     const body = await bodyJson(request);
-    kimiRequests.push({ url: request.url, headers: request.headers, body });
+    routedRequests.push({ url: request.url, headers: request.headers, body });
     if (body.stream === false && Array.isArray(body.input)) {
       json(response, 200, {
         id: "resp-summary",
@@ -113,15 +163,15 @@ test("router preserves native auth and isolates both Kimi routes", async () => {
         ],
       });
     } else {
-      json(response, 200, { route: "kimi" });
+      json(response, 200, { route: "external" });
     }
   });
   const routerPort = await openPort();
   const router = run("router.mjs", {
-    KIMI_ROUTER_PORT: String(routerPort),
+    CODEX_ROUTER_PORT: String(routerPort),
     CODEX_NATIVE_BASE_URL: `http://127.0.0.1:${native.port}/backend-api/codex`,
-    KIMI_GATEWAY_BASE_URL: `http://127.0.0.1:${gateway.port}/v1`,
-    KIMI_PROXY_QUIET: "1",
+    CODEX_ROUTER_GATEWAY_BASE_URL: `http://127.0.0.1:${gateway.port}/v1`,
+    CODEX_ROUTER_QUIET: "1",
   });
 
   try {
@@ -149,24 +199,26 @@ test("router preserves native auth and isolates both Kimi routes", async () => {
     });
     assert.equal(nativeResponse.status, 200);
 
-    for (const [model, upstreamModel] of [
-      ["kimi-oauth/k3", "k3"],
+    for (const [model, gatewayModel] of [
+      ["kimi-oauth/k3", "kimi-oauth-k3"],
       ["kimi-api/kimi-k3", "kimi-api-k3"],
+      ["deepseek/deepseek-v4-flash", "deepseek-v4-flash"],
+      ["deepseek/deepseek-v4-pro", "deepseek-v4-pro"],
     ]) {
       const response = await fetch(`http://127.0.0.1:${routerPort}/v1/responses`, {
         method: "POST",
         headers: callerHeaders,
-        body: JSON.stringify({ model, input: "kimi test" }),
+        body: JSON.stringify({ model, input: "external test" }),
       });
       assert.equal(response.status, 200);
-      assert.equal(kimiRequests.at(-1).body.model, upstreamModel);
+      assert.equal(routedRequests.at(-1).body.model, gatewayModel);
     }
 
     assert.equal(nativeRequests[0].headers.authorization, "Bearer CODEX_CALLER_SECRET");
     assert.equal(nativeRequests[0].headers["chatgpt-account-id"], "account-secret");
     assert.equal(nativeRequests[0].headers["x-private-header"], undefined);
     assert.equal(nativeRequests[0].body.previous_response_id, undefined);
-    for (const request of kimiRequests) {
+    for (const request of routedRequests) {
       assert.equal(request.headers.authorization, `Bearer ${INTERNAL_KEY}`);
       assert.equal(request.headers["chatgpt-account-id"], undefined);
       assert.equal(request.headers["x-codex-installation-id"], undefined);
@@ -178,7 +230,7 @@ test("router preserves native auth and isolates both Kimi routes", async () => {
   }
 });
 
-test("router synthesizes v1 and v2 Kimi compaction", async () => {
+test("router synthesizes v1 and v2 compaction for registry models", async () => {
   const gatewayRequests = [];
   const gateway = await mockServer(async (request, response) => {
     gatewayRequests.push({ headers: request.headers, body: await bodyJson(request) });
@@ -195,9 +247,9 @@ test("router synthesizes v1 and v2 Kimi compaction", async () => {
   });
   const routerPort = await openPort();
   const router = run("router.mjs", {
-    KIMI_ROUTER_PORT: String(routerPort),
-    KIMI_GATEWAY_BASE_URL: `http://127.0.0.1:${gateway.port}/v1`,
-    KIMI_PROXY_QUIET: "1",
+    CODEX_ROUTER_PORT: String(routerPort),
+    CODEX_ROUTER_GATEWAY_BASE_URL: `http://127.0.0.1:${gateway.port}/v1`,
+    CODEX_ROUTER_QUIET: "1",
   });
   const headers = {
     Authorization: "Bearer CODEX_CALLER_SECRET",
@@ -212,7 +264,7 @@ test("router synthesizes v1 and v2 Kimi compaction", async () => {
     const v1 = await fetch(`http://127.0.0.1:${routerPort}/v1/responses/compact`, {
       method: "POST",
       headers,
-      body: JSON.stringify({ model: "kimi-oauth/k3", input }),
+      body: JSON.stringify({ model: "deepseek/deepseek-v4-pro", input }),
     });
     assert.equal(v1.status, 200);
     const v1Body = await v1.json();
@@ -223,7 +275,7 @@ test("router synthesizes v1 and v2 Kimi compaction", async () => {
       method: "POST",
       headers,
       body: JSON.stringify({
-        model: "kimi-oauth/k3",
+        model: "deepseek/deepseek-v4-pro",
         stream: false,
         input: [...input, { type: "compaction_trigger" }],
       }),
@@ -237,7 +289,7 @@ test("router synthesizes v1 and v2 Kimi compaction", async () => {
       method: "POST",
       headers,
       body: JSON.stringify({
-        model: "kimi-oauth/k3",
+        model: "deepseek/deepseek-v4-pro",
         input: [v2Body.output[0], ...input],
       }),
     });
@@ -287,7 +339,7 @@ test("API forwarder replaces caller auth and enforces Kimi K3 API parameters", a
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          model: "wrong-model",
+          model: "kimi-api-k3",
           reasoning_effort: "low",
           messages: [{ role: "user", content: "test" }],
         }),
@@ -300,6 +352,60 @@ test("API forwarder replaces caller auth and enforces Kimi K3 API parameters", a
     assert.equal(request.headers["x-codex-installation-id"], undefined);
     assert.equal(request.body.model, "kimi-k3");
     assert.equal(request.body.reasoning_effort, "max");
+  } finally {
+    await stopChild(forwarder);
+    await closeServer(upstream.server);
+  }
+});
+
+test("API forwarder supports all DeepSeek V4 models and normalizes thinking", async () => {
+  const upstreamRequests = [];
+  const upstream = await mockServer(async (request, response) => {
+    upstreamRequests.push({ headers: request.headers, body: await bodyJson(request) });
+    json(response, 200, { choices: [] });
+  });
+  const forwarderPort = await openPort();
+  const forwarder = run("api-forwarder.mjs", {
+    CODEX_ROUTER_API_PORT: String(forwarderPort),
+    DEEPSEEK_API_BASE_URL: `http://127.0.0.1:${upstream.port}`,
+    DEEPSEEK_API_KEY: "TEST_DEEPSEEK_API_KEY",
+    CODEX_ROUTER_QUIET: "1",
+  });
+
+  try {
+    await waitFor(`http://127.0.0.1:${forwarderPort}/health`, forwarder);
+    for (const [gatewayModel, upstreamModel, effort] of [
+      ["deepseek-v4-flash", "deepseek-v4-flash", "high"],
+      ["deepseek-v4-pro", "deepseek-v4-pro", "max"],
+    ]) {
+      const response = await fetch(
+        `http://127.0.0.1:${forwarderPort}/v1/chat/completions`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${INTERNAL_KEY}`,
+            "ChatGPT-Account-Id": "must-not-forward",
+            "X-Codex-Installation-Id": "must-not-forward",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model: gatewayModel,
+            reasoning_effort: effort === "max" ? "xhigh" : "low",
+            temperature: 0.7,
+            messages: [{ role: "user", content: "test" }],
+          }),
+        },
+      );
+      assert.equal(response.status, 200);
+      const request = upstreamRequests.at(-1);
+      assert.equal(request.headers.authorization, "Bearer TEST_DEEPSEEK_API_KEY");
+      assert.equal(request.headers["chatgpt-account-id"], undefined);
+      assert.equal(request.headers["x-codex-installation-id"], undefined);
+      assert.equal(request.body.model, upstreamModel);
+      assert.deepEqual(request.body.thinking, { type: "enabled" });
+      assert.equal(request.body.reasoning_effort, effort);
+      assert.equal(request.body.temperature, undefined);
+    }
   } finally {
     await stopChild(forwarder);
     await closeServer(upstream.server);

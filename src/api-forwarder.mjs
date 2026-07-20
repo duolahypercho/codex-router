@@ -1,5 +1,3 @@
-import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
 import http from "node:http";
 
 import {
@@ -9,56 +7,75 @@ import {
   requireInternalAuth,
   writeJson,
 } from "./http-utils.mjs";
-import { API_KEY_PATH, PORTS } from "./paths.mjs";
+import { PORTS } from "./paths.mjs";
+import {
+  API_MODELS,
+  MODEL_BY_GATEWAY_ID,
+  PROVIDERS,
+  providerForModel,
+} from "./model-registry.mjs";
+import {
+  credentialStatus,
+  resolveProviderCredential,
+} from "./provider-credentials.mjs";
+import { VERSION } from "./version.mjs";
 
-const VERSION = "0.1.0";
-const LISTEN_HOST = process.env.KIMI_API_FORWARD_HOST || "127.0.0.1";
-const LISTEN_PORT = Number(process.env.KIMI_API_FORWARD_PORT || PORTS.api);
-const API_BASE = (
-  process.env.KIMI_API_BASE_URL || "https://api.moonshot.cn/v1"
-).replace(/\/+$/, "");
-const API_KEY_FILE = process.env.KIMI_API_KEY_FILE || API_KEY_PATH;
-const INTERNAL_KEY = process.env.KIMI_INTERNAL_KEY;
-const QUIET = process.env.KIMI_PROXY_QUIET === "1";
+const LISTEN_HOST =
+  process.env.CODEX_ROUTER_API_HOST || process.env.KIMI_API_FORWARD_HOST || "127.0.0.1";
+const LISTEN_PORT = Number(
+  process.env.CODEX_ROUTER_API_PORT || process.env.KIMI_API_FORWARD_PORT || PORTS.api,
+);
+const INTERNAL_KEY =
+  process.env.CODEX_ROUTER_INTERNAL_KEY || process.env.KIMI_INTERNAL_KEY;
+const QUIET =
+  process.env.CODEX_ROUTER_QUIET === "1" || process.env.KIMI_PROXY_QUIET === "1";
 
-if (!INTERNAL_KEY) throw new Error("KIMI_INTERNAL_KEY is required.");
+if (!INTERNAL_KEY) throw new Error("CODEX_ROUTER_INTERNAL_KEY is required.");
 
-function keyFromKeychain() {
-  if (process.platform !== "darwin") return undefined;
-  try {
-    const value = execFileSync(
-      "/usr/bin/security",
-      ["find-generic-password", "-s", "kimi-codex-api", "-a", "default", "-w"],
-      { encoding: "utf8", timeout: 2_000, stdio: ["ignore", "pipe", "ignore"] },
-    ).trim();
-    return value || undefined;
-  } catch {
-    return undefined;
-  }
+function providerBaseUrl(provider) {
+  return String(process.env[provider.baseUrlEnv] || provider.baseUrl).replace(/\/+$/, "");
 }
 
-function resolveApiKey() {
-  const environment =
-    process.env.KIMI_API_KEY?.trim() || process.env.MOONSHOT_API_KEY?.trim();
-  if (environment) return { value: environment, source: "environment" };
-  if (existsSync(API_KEY_FILE)) {
-    const value = readFileSync(API_KEY_FILE, "utf8").trim();
-    if (value) return { value, source: "file" };
-  }
-  const keychain = keyFromKeychain();
-  return keychain ? { value: keychain, source: "keychain" } : undefined;
+function deepSeekEffort(value) {
+  return ["xhigh", "max", "ultra"].includes(value) ? "max" : "high";
 }
 
 function normalizeBody(buffer, contentType) {
   if (!buffer.length || !String(contentType || "").includes("application/json")) {
-    return buffer;
+    const error = new Error("API-provider requests require a JSON body.");
+    error.status = 400;
+    throw error;
   }
   const payload = JSON.parse(buffer.toString("utf8"));
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return buffer;
-  payload.model = "kimi-k3";
-  payload.reasoning_effort = "max";
-  delete payload.thinking;
-  return Buffer.from(JSON.stringify(payload), "utf8");
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    const error = new Error("Request JSON must be an object.");
+    error.status = 400;
+    throw error;
+  }
+  const model = MODEL_BY_GATEWAY_ID.get(payload.model);
+  const provider = model && providerForModel(model);
+  if (!model || provider?.kind !== "openai-compatible") {
+    const error = new Error(`Unknown API gateway model: ${String(payload.model || "missing")}`);
+    error.status = 400;
+    throw error;
+  }
+
+  payload.model = model.upstreamModel;
+  if (model.requestProfile === "kimi-k3") {
+    payload.reasoning_effort = "max";
+    delete payload.thinking;
+  } else if (model.requestProfile === "deepseek-thinking") {
+    payload.thinking = { type: "enabled" };
+    payload.reasoning_effort = deepSeekEffort(payload.reasoning_effort);
+    delete payload.temperature;
+    delete payload.top_p;
+    delete payload.presence_penalty;
+    delete payload.frequency_penalty;
+  } else if (model.requestProfile === "deepseek-nonthinking") {
+    payload.thinking = { type: "disabled" };
+    delete payload.reasoning_effort;
+  }
+  return { body: Buffer.from(JSON.stringify(payload), "utf8"), model, provider };
 }
 
 function upstreamHeaders(requestHeaders, body, apiKey) {
@@ -68,24 +85,42 @@ function upstreamHeaders(requestHeaders, body, apiKey) {
     if (HOP_BY_HOP_HEADERS.has(lower) || lower === "authorization") continue;
     if (lower.startsWith("x-msh-") || lower.startsWith("x-codex-")) continue;
     if (lower.startsWith("x-openai-") || lower === "chatgpt-account-id") continue;
-    if (lower === "originator" || lower === "user-agent" || lower === "accept-encoding") continue;
+    if (lower === "originator" || lower === "user-agent" || lower === "accept-encoding") {
+      continue;
+    }
     if (value !== undefined) headers[name] = Array.isArray(value) ? value.join(", ") : value;
   }
   headers.Authorization = `Bearer ${apiKey}`;
-  headers["User-Agent"] = `kimi-codex-router/${VERSION}`;
+  headers["User-Agent"] = `codex-router/${VERSION}`;
   headers["Accept-Encoding"] = "identity";
   if (body.length) headers["Content-Length"] = String(body.length);
   return headers;
 }
 
-function credentialHealth() {
-  const credential = resolveApiKey();
-  return credential
-    ? { credential_present: true, credential_source: credential.source }
-    : {
-        credential_present: false,
-        setup: "Run ./bin/api-key set from the kimi-codex-router repository.",
-      };
+function healthPayload() {
+  const providers = {};
+  for (const provider of PROVIDERS.values()) {
+    if (provider.kind !== "openai-compatible") continue;
+    const status = credentialStatus(provider);
+    providers[provider.id] = {
+      credential_present: status.configured,
+      ...(status.configured
+        ? { credential_source: status.source }
+        : { setup: status.setup }),
+    };
+  }
+  return { ok: true, service: "codex-router-api-forwarder", providers };
+}
+
+function localModels(response) {
+  writeJson(response, 200, {
+    object: "list",
+    data: API_MODELS.map((model) => ({
+      id: model.gatewayModel,
+      object: "model",
+      owned_by: providerForModel(model).ownedBy,
+    })),
+  });
 }
 
 async function handleRequest(request, response) {
@@ -95,30 +130,32 @@ async function handleRequest(request, response) {
     `http://${request.headers.host || LISTEN_HOST}`,
   );
   if (request.method === "GET" && requestUrl.pathname === "/health") {
-    writeJson(response, 200, { ok: true, ...credentialHealth() });
+    writeJson(response, 200, healthPayload());
     return;
   }
   if (!requireInternalAuth(request, response, INTERNAL_KEY)) return;
 
   const route = requestUrl.pathname.replace(/^\/v1(?=\/|$)/, "");
-  if (
-    !(
-      (request.method === "POST" && route === "/chat/completions") ||
-      (request.method === "GET" && route === "/models")
-    )
-  ) {
+  if (request.method === "GET" && route === "/models") {
+    localModels(response);
+    return;
+  }
+  if (request.method !== "POST" || route !== "/chat/completions") {
     writeJson(response, 404, {
-      error: { type: "proxy_route_not_found", message: "Unsupported API-key route." },
+      error: { type: "proxy_route_not_found", message: "Unsupported API-provider route." },
     });
     return;
   }
 
-  const credential = resolveApiKey();
+  const original = await readRequestBody(request);
+  const normalized = normalizeBody(original, request.headers["content-type"]);
+  const credential = resolveProviderCredential(normalized.provider);
   if (!credential) {
     writeJson(response, 503, {
       error: {
-        type: "kimi_api_key_missing",
-        message: "Kimi API key is not configured. Run ./bin/api-key set.",
+        type: "provider_api_key_missing",
+        provider: normalized.provider.id,
+        message: `${normalized.provider.displayName} key is not configured. Run ./bin/provider-key ${normalized.provider.id} set.`,
       },
     });
     return;
@@ -129,20 +166,17 @@ async function handleRequest(request, response) {
   response.once("close", () => {
     if (!response.writableEnded) controller.abort();
   });
-  let body = await readRequestBody(request);
-  if (route === "/chat/completions") {
-    body = normalizeBody(body, request.headers["content-type"]);
-  }
-  const upstream = await fetch(`${API_BASE}${route}${requestUrl.search}`, {
+  const target = `${providerBaseUrl(normalized.provider)}${route}${requestUrl.search}`;
+  const upstream = await fetch(target, {
     method: request.method,
-    headers: upstreamHeaders(request.headers, body, credential.value),
-    body: body.length ? body : undefined,
+    headers: upstreamHeaders(request.headers, normalized.body, credential.value),
+    body: normalized.body,
     signal: controller.signal,
   });
   await pipeResponse(upstream, response);
   if (!QUIET) {
     console.error(
-      `[kimi-api] ${request.method} ${route} -> ${upstream.status} ${Date.now() - startedAt}ms`,
+      `[api-forwarder] provider=${normalized.provider.id} model=${normalized.model.upstreamModel} status=${upstream.status} duration_ms=${Date.now() - startedAt}`,
     );
   }
 }
@@ -151,12 +185,12 @@ const server = http.createServer((request, response) => {
   handleRequest(request, response).catch((error) => {
     const status = Number(error?.status) || 502;
     console.error(
-      `[kimi-api] request failed: ${error instanceof Error ? error.message : String(error)}`,
+      `[api-forwarder] request failed: ${error instanceof Error ? error.message : String(error)}`,
     );
     if (!response.headersSent) {
       writeJson(response, status, {
         error: {
-          type: "kimi_api_proxy_error",
+          type: "provider_api_proxy_error",
           message: error instanceof Error ? error.message : String(error),
         },
       });
@@ -167,7 +201,7 @@ const server = http.createServer((request, response) => {
 });
 
 server.listen(LISTEN_PORT, LISTEN_HOST, () => {
-  console.error(`[kimi-api] listening on http://${LISTEN_HOST}:${LISTEN_PORT}`);
+  console.error(`[api-forwarder] listening on http://${LISTEN_HOST}:${LISTEN_PORT}`);
 });
 
 for (const signal of ["SIGINT", "SIGTERM"]) {

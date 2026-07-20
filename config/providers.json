@@ -1,0 +1,140 @@
+{
+  "version": 1,
+  "providers": [
+    {
+      "id": "kimi-oauth",
+      "displayName": "Kimi Code OAuth",
+      "kind": "oauth",
+      "ownedBy": "kimi",
+      "proxyBaseEnv": "KIMI_OAUTH_FORWARD_BASE_URL"
+    },
+    {
+      "id": "kimi-api",
+      "displayName": "Kimi Platform API",
+      "kind": "openai-compatible",
+      "ownedBy": "kimi",
+      "baseUrl": "https://api.moonshot.cn/v1",
+      "baseUrlEnv": "KIMI_API_BASE_URL",
+      "credential": {
+        "environment": ["KIMI_API_KEY", "MOONSHOT_API_KEY"],
+        "file": "kimi-api-key.secret",
+        "legacyFiles": ["api-key.secret"],
+        "keychainServices": ["codex-router-kimi-api", "kimi-codex-api"],
+        "prompt": "Kimi Platform API key"
+      }
+    },
+    {
+      "id": "deepseek",
+      "displayName": "DeepSeek API",
+      "kind": "openai-compatible",
+      "ownedBy": "deepseek",
+      "baseUrl": "https://api.deepseek.com",
+      "baseUrlEnv": "DEEPSEEK_API_BASE_URL",
+      "credential": {
+        "environment": ["DEEPSEEK_API_KEY"],
+        "file": "deepseek-api-key.secret",
+        "legacyFiles": [],
+        "keychainServices": ["codex-router-deepseek-api"],
+        "prompt": "DeepSeek API key"
+      }
+    }
+  ],
+  "models": [
+    {
+      "slug": "kimi-oauth/k3",
+      "gatewayModel": "kimi-oauth-k3",
+      "upstreamModel": "k3",
+      "provider": "kimi-oauth",
+      "listed": true,
+      "displayName": "Kimi K3 (OAuth)",
+      "description": "Kimi K3 using the existing Kimi Code CLI OAuth session.",
+      "priority": 4,
+      "defaultEffort": "high",
+      "reasoningLevels": [
+        { "effort": "low", "description": "Faster reasoning" },
+        { "effort": "high", "description": "Balanced deep reasoning" },
+        { "effort": "max", "description": "Maximum reasoning depth" }
+      ],
+      "contextWindow": 262144,
+      "autoCompact": 235000,
+      "inputModalities": ["text", "image"],
+      "requestProfile": "kimi-oauth",
+      "compHash": "kimi-oauth-k3-v2"
+    },
+    {
+      "slug": "kimi-api/kimi-k3",
+      "gatewayModel": "kimi-api-k3",
+      "upstreamModel": "kimi-k3",
+      "provider": "kimi-api",
+      "listed": true,
+      "displayName": "Kimi K3 (API)",
+      "description": "Kimi K3 using a separately billed Kimi Platform API key.",
+      "priority": 5,
+      "defaultEffort": "max",
+      "reasoningLevels": [
+        { "effort": "max", "description": "Maximum reasoning required by the Kimi K3 API" }
+      ],
+      "contextWindow": 1048576,
+      "autoCompact": 900000,
+      "inputModalities": ["text", "image"],
+      "requestProfile": "kimi-k3",
+      "compHash": "kimi-api-k3-v2"
+    },
+    {
+      "slug": "deepseek/deepseek-v4-flash",
+      "gatewayModel": "deepseek-v4-flash",
+      "upstreamModel": "deepseek-v4-flash",
+      "provider": "deepseek",
+      "listed": true,
+      "displayName": "DeepSeek V4 Flash (API)",
+      "description": "DeepSeek V4 Flash via the DeepSeek API; fast reasoning, tool calls, and a 1M context window.",
+      "priority": 6,
+      "defaultEffort": "high",
+      "reasoningLevels": [
+        { "effort": "high", "description": "Deep reasoning" },
+        { "effort": "max", "description": "Maximum reasoning for complex agent work" }
+      ],
+      "contextWindow": 1048576,
+      "autoCompact": 900000,
+      "inputModalities": ["text"],
+      "requestProfile": "deepseek-thinking",
+      "compHash": "deepseek-v4-flash-v1"
+    },
+    {
+      "slug": "deepseek/deepseek-v4-pro",
+      "gatewayModel": "deepseek-v4-pro",
+      "upstreamModel": "deepseek-v4-pro",
+      "provider": "deepseek",
+      "listed": true,
+      "displayName": "DeepSeek V4 Pro (API)",
+      "description": "DeepSeek V4 Pro via the DeepSeek API with reasoning, coding, tool calls, and a 1M context window.",
+      "priority": 7,
+      "defaultEffort": "high",
+      "reasoningLevels": [
+        { "effort": "high", "description": "Deep reasoning" },
+        { "effort": "max", "description": "Maximum reasoning for complex agent work" }
+      ],
+      "contextWindow": 1048576,
+      "autoCompact": 900000,
+      "inputModalities": ["text"],
+      "requestProfile": "deepseek-thinking",
+      "compHash": "deepseek-v4-pro-v1"
+    },
+    {
+      "slug": "deepseek/deepseek-chat",
+      "gatewayModel": "deepseek-legacy-chat",
+      "upstreamModel": "deepseek-chat",
+      "provider": "deepseek",
+      "listed": false,
+      "requestProfile": "deepseek-nonthinking"
+    },
+    {
+      "slug": "deepseek/deepseek-reasoner",
+      "gatewayModel": "deepseek-legacy-reasoner",
+      "upstreamModel": "deepseek-reasoner",
+      "provider": "deepseek",
+      "listed": false,
+      "requestProfile": "deepseek-thinking"
+    }
+  ]
+}

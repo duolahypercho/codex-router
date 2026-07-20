@@ -1,0 +1,44 @@
+name: Provider model discovery
+
+"on":
+  workflow_dispatch:
+    inputs:
+      provider:
+        description: API-key provider to inspect
+        required: true
+        type: choice
+        options:
+          - deepseek
+          - kimi-api
+
+permissions:
+  contents: read
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+      - run: npm ci
+      - name: Compare official model list with the registry
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
+          PROVIDER: ${{ inputs.provider }}
+        shell: bash
+        run: |
+          if [ "$PROVIDER" = deepseek ] && [ -z "$DEEPSEEK_API_KEY" ]; then
+            echo "Configure the DEEPSEEK_API_KEY repository secret before running discovery." >&2
+            exit 1
+          fi
+          if [ "$PROVIDER" = kimi-api ] && [ -z "$KIMI_API_KEY" ]; then
+            echo "Configure the KIMI_API_KEY repository secret before running discovery." >&2
+            exit 1
+          fi
+          node src/model-discovery.mjs "$PROVIDER" --json | tee discovery.json
+          summary=$(node -e 'const x=require("./discovery.json"); console.log(`New candidates: ${x.unregistered.join(", ")||"none"}\nUnavailable: ${x.unavailable.join(", ")||"none"}`)')
+          printf '## %s model discovery\n\n%s\n' "$PROVIDER" "$summary" >> "$GITHUB_STEP_SUMMARY"

@@ -1,9 +1,9 @@
 {
-  "name": "kimi-codex-router",
-  "version": "0.1.0",
+  "name": "codex-model-router",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
-  "description": "Local Kimi K3 OAuth and API routes for the Codex App model picker",
+  "description": "Extensible local model router for the Codex App with Kimi and DeepSeek",
   "engines": {
     "node": ">=22.19.0"
   },

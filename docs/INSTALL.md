@@ -1,167 +1,236 @@
-# Installation guide
+# Installation, migration, and upgrades
 
-## Supported setup
+## Supported hosts
 
-The automatic installer currently targets the Codex desktop app on macOS. The
-runtime itself is plain Node.js plus LiteLLM, but Linux and Windows service
-installers are not included yet.
+| Host | Codex surface | Background service |
+| --- | --- | --- |
+| macOS | Codex App or CLI | Per-user launchd agent |
+| Windows | Codex App or CLI | Per-user Task Scheduler task |
+| Linux | Codex CLI | systemd user service |
 
 Required software:
 
-- Codex App or Codex CLI, already signed into ChatGPT.
-- Node.js 22.19 or newer. Node 24 LTS is recommended.
-- `uv`, or Python 3.10+ with the standard `venv` module.
-- Kimi Code CLI for OAuth, or a Kimi Platform API key for API billing.
+- Node.js 22.19+ (Node.js 24 LTS recommended)
+- `uv`, or Python 3.10+ with `venv`
+- Git for managed one-command installation and rollback
+- At least one Kimi OAuth, Kimi API, or DeepSeek API credential
 
-Check the local tools:
+The installer does not silently install a system package manager or runtime.
+When a prerequisite is missing, install it from its official source and rerun
+the same command.
 
-```sh
-node --version
-python3 --version
-codex --version
-kimi --version
+## Ask Codex to install it
+
+```text
+Install Codex Router from:
+https://github.com/duolahypercho/codex-router
+
+Follow AGENTS.md. Preserve all of my existing Codex settings and ChatGPT login.
+Use only the provider authentication I choose, safely migrate recognized older
+versions with a rollback snapshot, run the doctor, and do not quit Codex for me.
+Never ask me to paste a token or API key into chat.
 ```
 
-## 1. Prepare Kimi authentication
+Codex should use a stable checkout, not a temporary directory. The service
+definition stores the checkout's absolute path.
 
-For Kimi Code OAuth, install the official Kimi CLI and run:
+## Guided terminal install
+
+macOS or Linux:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/duolahypercho/codex-router/main/install.sh | sh -s -- --guided
+```
+
+Windows PowerShell:
+
+```powershell
+$installer = Join-Path $env:TEMP "codex-router-install.ps1"
+Invoke-WebRequest https://raw.githubusercontent.com/duolahypercho/codex-router/main/install.ps1 -OutFile $installer
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File $installer -Guided
+```
+
+Clone-and-review installation is also supported:
+
+```sh
+git clone https://github.com/duolahypercho/codex-router.git
+cd codex-router
+./install.sh --guided
+```
+
+```powershell
+git clone https://github.com/duolahypercho/codex-router.git
+Set-Location codex-router
+./install.ps1 -Guided
+```
+
+## Authentication choices
+
+Kimi Code OAuth reuses the official CLI session. Guided setup offers to run the
+login command when the CLI exists:
 
 ```sh
 kimi login
 ```
 
-The official CLI uses a device-code OAuth flow and stores its state under
-`~/.kimi-code` by default. The router reads and refreshes that same session; it
-does not ask you to paste the OAuth token.
-
-For the Kimi Platform API, you may skip `kimi login`. Obtain an API key from
-the Kimi Platform console, then configure it after installation with
-`./bin/api-key set`.
-
-Do not interchange these credentials. The Kimi Code managed service and Kimi
-Platform API use different account systems and base URLs.
-
-## 2. Install the router
-
-Keep the cloned repository in a stable location because the LaunchAgent stores
-its absolute path. From the repository root:
+API-key providers use hidden prompts:
 
 ```sh
-./bin/install
+./bin/provider-key kimi-api set
+./bin/provider-key deepseek set
 ```
 
-If another Codex proxy or an earlier prototype already owns ports `4100` to
-`4103`, disable that service first. The installer verifies the health endpoint's
-service identity and rolls back its config block if a different process owns the
-router port.
+Windows:
 
-The installer performs these operations:
+```powershell
+./codex-router.ps1 provider-key kimi-api set
+./codex-router.ps1 provider-key deepseek set
+```
 
-1. Installs the small Node dependency set with `npm ci`.
-2. Creates `.venv` and installs `litellm[proxy]`.
-3. Generates a random internal service key with mode `600`.
-4. Captures the current native Codex model catalog.
-5. Adds the two Kimi catalog entries without removing native models.
-6. Adds a marked `openai_base_url` and `model_catalog_json` block to Codex.
-7. Registers `io.github.kimi-codex-router` as a user LaunchAgent.
-8. Waits until the complete router stack reports healthy.
+Kimi OAuth, Kimi Platform, and DeepSeek are separate account and billing
+systems. Never put a credential in chat, a command argument, shell history, the
+provider registry, or a tracked file.
 
-If you only want to prepare dependencies and inspect the files without changing
-Codex or installing a service:
+Noninteractive setup can reuse already configured credentials:
 
 ```sh
-./bin/install --prepare-only
+./install.sh --auto --providers configured --migrate-known
 ```
 
-## 3. Configure the optional API key
-
-The recommended path is an interactive, protected local file:
+Or choose an exact set:
 
 ```sh
-./bin/api-key set
-./bin/api-key status
+./install.sh --auto --providers kimi-oauth
+./install.sh --kimi-api-key --auto
+./install.sh --deepseek-api-key --auto
+./install.sh --auto --providers kimi-oauth,kimi-api,deepseek
 ```
 
-Input is hidden, the file is written with mode `600`, and the key is never
-printed. The running service reads the file on every request, so no restart is
-needed.
+`--smoke-test` makes one small live request per provider and may use paid quota;
+it is never enabled by default.
 
-Credential lookup order is:
+An API key found only in the installer's shell environment is valid for
+foreground commands but is not copied into launchd, systemd, or Task Scheduler.
+Use `provider-key ... set` so the per-user background service has persistent,
+protected access.
 
-1. `KIMI_API_KEY` or `MOONSHOT_API_KEY` in the service environment.
-2. `$CODEX_HOME/kimi-router/api-key.secret`.
-3. macOS Keychain service `kimi-codex-api`, account `default`.
+## Installer transaction
 
-The helper uses option 2 because shell environment variables are not normally
-inherited by GUI LaunchAgents.
+Setup performs these operations in order:
 
-## 4. Restart Codex
+1. Validates provider selection and credential presence.
+2. Detects other model-catalog owners and earlier Codex Router variants.
+3. With approval, snapshots and stops only recognized older variants.
+4. Installs locked Node dependencies and pinned LiteLLM in `.venv`.
+5. Generates a random internal loopback service key.
+6. Captures the native Codex model catalog and adds only selected provider models.
+7. Generates gateway routes from `config/providers.json`.
+8. Adds the marked base-URL and catalog block to the root Codex config.
+9. Installs the platform's per-user background service.
+10. Waits for every local layer to report its expected service identity.
+11. Records the installed commit and provider selection.
+12. Runs the doctor.
 
-`model_catalog_json` is a startup-only setting. Fully quit Codex with
-`Command-Q`, reopen it, and create a new task. The picker should contain:
+If config or service installation fails, the new service and marked config block
+are removed. If a legacy migration was part of the transaction, its exact config
+and service definition are restored as well.
 
-- `Kimi K3 (OAuth)`
-- `Kimi K3 (API)`
+The installer does not kill an unknown process on ports 4100–4103 and does not
+replace an unmarked user-owned `openai_base_url` or `model_catalog_json`.
 
-The model that was already configured as your default remains selected.
+## Recognized older installations
 
-## Verify
+Read-only detection:
+
+```sh
+./bin/migrate detect
+```
+
+The migration engine recognizes:
+
+- `io.github.kimi-codex-router` with `~/.codex/kimi-router`
+- `com.ziwenxu.kimi-codex-proxy` with `~/.codex/kimi-proxy`
+- complete or malformed start-only Kimi managed config markers
+
+Approved migration stops only those services, retains their state directories,
+moves their service definitions into `$CODEX_HOME/codex-router/migrations`, and
+stores the original config with protected permissions. Restore it with:
+
+```sh
+./bin/migrate rollback
+```
+
+An unknown catalog owner requires a manual decision; automatic setup stops
+without changing it.
+
+## Restart and verify
+
+`model_catalog_json` is loaded at Codex startup. Fully quit the app, reopen it,
+and create a new task. On macOS use Command-Q; on Windows use the app's Quit
+command or end it from the tray if present.
 
 ```sh
 ./bin/doctor
-codex debug models | jq -r '.models[] | select(.slug | startswith("kimi-")) | .display_name'
+./bin/providers
+codex debug models
 ```
 
-OAuth smoke test:
+The doctor reports exact remediation beneath each failed layer. Safe managed
+state can be rebuilt with:
 
 ```sh
-codex exec --model 'kimi-oauth/k3' 'Reply with exactly OAUTH_OK'
+./bin/doctor --fix
 ```
 
-API smoke test after setting a key:
+Live quota-consuming verification is separate:
 
 ```sh
-codex exec --model 'kimi-api/kimi-k3' 'Reply with exactly API_OK'
+./bin/smoke-test
+./bin/test-model 'kimi-oauth/k3' --live --yes
 ```
 
-## Upgrades
-
-After updating the repository:
+## Update and rollback
 
 ```sh
-git pull --ff-only
-./bin/install
+./bin/update
+./bin/rollback
 ```
 
-After a Codex App update, refresh its native model entries and restart Codex:
+Windows:
 
-```sh
-./bin/refresh-catalog
+```powershell
+./codex-router.ps1 update
+./codex-router.ps1 rollback
 ```
 
-The refresh command temporarily removes only the marked router block while it
-captures the native catalog, then restores the integration.
+The updater requires a clean checkout on the recognized GitHub origin. It
+fetches `origin/main`, retains the current revision under
+`refs/codex-router/rollback`, fast-forwards, and reinstalls. A failed install
+automatically checks out and reinstalls the previous revision.
 
-## Disable or uninstall
+`./bin/rollback` switches to the cached previous revision and reinstalls it. A
+later `./bin/update` returns the managed checkout to `main` before updating.
 
-Temporarily disable routing:
+For a source archive without `.git`, download and install a newer tagged archive
+instead. Release pages provide SHA-256 checksums and provenance attestations.
+
+## Disable and uninstall
 
 ```sh
 ./bin/disable
-```
-
-Restore it:
-
-```sh
 ./bin/enable
-```
-
-Remove the configuration block and LaunchAgent:
-
-```sh
 ./bin/uninstall
 ```
 
-Uninstall intentionally retains the repository, logs, cached native catalog,
-internal key, and optional Kimi API key. This prevents a routine uninstall from
-silently destroying credentials or diagnostic data.
+Windows:
+
+```powershell
+./codex-router.ps1 disable
+./codex-router.ps1 enable
+./codex-router.ps1 uninstall
+```
+
+Uninstall removes the marked integration config and current background service.
+It intentionally retains the checkout, native catalog cache, logs, backups,
+migration snapshots, internal key, and provider credentials. This prevents a
+routine uninstall from silently destroying authentication or recovery data.

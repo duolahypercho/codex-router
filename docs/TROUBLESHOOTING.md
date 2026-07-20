@@ -4,129 +4,200 @@ Start with:
 
 ```sh
 ./bin/doctor
-./bin/status
 ```
 
-## Kimi is missing from the picker
-
-The catalog is loaded only when Codex starts.
-
-1. Fully quit Codex with `Command-Q` rather than closing its window.
-2. Run `./bin/enable`.
-3. Reopen Codex and create a new task.
-4. Confirm the entries with `codex debug models`.
-
-After updating Codex, run `./bin/refresh-catalog` and restart the app.
-
-## The picker says only Custom
-
-This project must not set a custom provider as the active provider. Check the
-root of `~/.codex/config.toml` for a leftover `model_provider` or an older Kimi
-profile that is selected globally.
-
-The expected integration uses the built-in provider with only:
-
-```toml
-openai_base_url = "http://127.0.0.1:4102/v1"
-model_catalog_json = "/.../kimi-router/merged-models.json"
-```
-
-`./bin/disable` removes this project's block without touching unrelated
-provider or profile settings.
-
-## OAuth says authentication is missing
-
-Run:
+Every `FAIL` includes a targeted fix. To rebuild only repository-managed files,
+config, and service state:
 
 ```sh
-kimi login
+./bin/doctor --fix
+```
+
+If a recognized older Kimi router is reported:
+
+```sh
+./bin/doctor --fix --migrate-known
+```
+
+Neither command prints credential values. Repair refuses unknown router owners.
+
+## External models are missing from the picker
+
+```sh
+./bin/providers
+./bin/refresh-catalog
 ./bin/doctor
 ```
 
-If you configured a custom `KIMI_CODE_HOME`, use the same value when running
-the installer so launchd can find it:
+The intended provider must say both `SHOW` and `ready`. Enable a configured
+provider with `./bin/providers enable PROVIDER`.
+
+Then fully quit Codex, reopen it, and create a new task. Closing only a window
+does not reload `model_catalog_json`.
+
+Inspect Codex's startup catalog directly:
 
 ```sh
-KIMI_CODE_HOME="/your/path" ./bin/install
+codex debug models
 ```
 
-If refresh was rejected, authenticate again with `kimi login`; do not paste or
-manually edit refresh tokens.
+The config root should contain exactly one `codex-router-managed` block with the
+loopback base URL on port 4102 and a catalog under
+`$CODEX_HOME/codex-router/merged-models.json`.
 
-## API model says the key is missing
-
-Configure and verify it:
+## Kimi OAuth is not ready
 
 ```sh
-./bin/api-key set
-./bin/api-key status
+kimi login
+./bin/providers enable kimi-oauth
+./bin/doctor
 ```
 
-No service restart is necessary. Make sure the key belongs to Kimi Platform,
-not the separate Kimi Code managed service.
+Codex Router reads the official Kimi CLI credential under `$KIMI_CODE_HOME` or
+`~/.kimi-code` and refreshes it under a cross-process lock. Do not copy the OAuth
+token into Codex config, an API-key file, or an environment variable.
+
+## An API key is missing or invalid
+
+```sh
+./bin/provider-key kimi-api set
+./bin/provider-key deepseek set
+./bin/provider-key kimi-api status
+./bin/provider-key deepseek status
+```
+
+Input is hidden. A key written by the helper is protected for the current user.
+Setting or rotating it takes effect on the next request; the background service
+does not need a restart.
+
+Confirm the key belongs to the named system. Kimi Code OAuth, Kimi Platform,
+and DeepSeek do not share credentials or billing.
+
+## A provider changed its model IDs
+
+Compare the provider's official model-list endpoint with the registry:
+
+```sh
+./bin/discover-models deepseek
+./bin/discover-models kimi-api
+```
+
+Discovery does not edit the registry. A new ID still needs official capability
+metadata and an explicitly billed compatibility run covering text, streaming,
+tools, and compaction:
+
+```sh
+./bin/test-model 'provider/model' --live --yes
+```
+
+Open a provider request with the official documentation and test results. Do
+not add an untested model directly to every user's picker.
 
 ## Native GPT models stopped working
 
-The dispatcher must be running because native GPT traffic also passes through
-it while the integration is enabled.
-
-```sh
-./bin/status
-./bin/enable
-```
-
-If recovery is more important than diagnosis, immediately restore direct Codex
-routing:
+Temporarily return Codex to its native base URL:
 
 ```sh
 ./bin/disable
 ```
 
-Then fully quit and reopen Codex.
+This removes only the marked block and current service; it preserves the
+selected model, profiles, provider credentials, and ChatGPT login. If native
+models work again, inspect router health and create a support bundle.
 
-## A port is already in use
+## Another process owns ports 4100–4103
 
-Find the process:
+macOS/Linux:
 
 ```sh
 lsof -nP -iTCP:4100 -iTCP:4101 -iTCP:4102 -iTCP:4103 -sTCP:LISTEN
 ```
 
-Stop the older router installation before installing this one. Do not run two
-installations on the same ports.
+Windows PowerShell:
 
-## Background service does not start
-
-Inspect launchd and the router log:
-
-```sh
-launchctl print "gui/$(id -u)/io.github.kimi-codex-router"
-tail -n 200 "${CODEX_HOME:-$HOME/.codex}/kimi-router/router.log"
+```powershell
+Get-NetTCPConnection -LocalPort 4100,4101,4102,4103 -State Listen |
+  Select-Object LocalAddress,LocalPort,OwningProcess
 ```
 
-Common causes are moving the repository after installation, deleting `.venv`,
-using an older Node binary, or port conflicts. Re-run `./bin/install` from the
-repository's permanent location after fixing the cause.
+Do not kill the process until its owner and purpose are known. The installer
+migrates only recognized earlier repository services and otherwise stops with a
+conflict.
 
-## WebSocket 426 appears in Codex CLI logs
+## The background service is stopped
 
-This is expected. The router declines the optional Responses WebSocket and
-Codex immediately falls back to HTTP. A successful task after that warning is
-not degraded functionally.
-
-## Installer refuses an existing base URL or catalog
-
-The refusal is intentional: replacing an unrelated proxy or custom catalog
-would be destructive. Decide which integration should own those root config
-keys, disable it explicitly, and then rerun the installer.
-
-## Reset only this integration
+macOS:
 
 ```sh
-./bin/uninstall
-./bin/install
+launchctl print "gui/$(id -u)/io.github.codex-router"
+./bin/doctor --fix
 ```
 
-This retains credentials and cached state. If the remaining state itself is
-suspect, inspect `$CODEX_HOME/kimi-router` manually before removing anything;
-the uninstaller deliberately does not delete secrets.
+Linux:
+
+```sh
+systemctl --user status codex-router.service
+journalctl --user -u codex-router.service --since today
+./bin/doctor --fix
+```
+
+Windows PowerShell:
+
+```powershell
+Get-ScheduledTask -TaskName "Codex Router"
+./codex-router.ps1 doctor --fix
+```
+
+Keep the repository at the absolute path used during installation. Rerun setup
+from the new path if it was moved.
+
+## An update failed
+
+The updater normally reinstalls its cached previous revision automatically.
+Manual rollback is:
+
+```sh
+./bin/rollback
+```
+
+Updates refuse dirty checkouts, non-`main` development branches, and unknown
+origin URLs rather than overwriting local work.
+
+Legacy migration rollback is separate:
+
+```sh
+./bin/migrate rollback
+```
+
+## Create a support bundle
+
+```sh
+./bin/support-bundle
+```
+
+The generated mode-`600` JSON includes versions, doctor checks, service state,
+provider presence, config ownership, and file metadata. It excludes credential
+values, prompts, responses, and log contents.
+
+Only when log context is necessary:
+
+```sh
+./bin/support-bundle --include-logs
+```
+
+The log tail is mechanically redacted but may still contain private prompt or
+response text. Inspect it before uploading or attaching it anywhere. The tool
+never uploads a bundle automatically.
+
+## WebSocket warning followed by HTTP fallback
+
+This is expected. Codex Router declines the optional Responses WebSocket
+upgrade, and current Codex falls back to compressed HTTP. A warning alone is not
+a failed model request.
+
+## Uninstall retained files
+
+This is intentional. `./bin/uninstall` removes only the active integration and
+background service. The state directory may contain credentials, logs, catalog
+caches, install history, and rollback snapshots. Inspect it manually before
+deleting anything.

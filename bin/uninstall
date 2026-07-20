@@ -4,6 +4,6 @@ set -eu
 repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$repo_dir"
 node src/config-manager.mjs disable
-node src/service-macos.mjs uninstall
+node src/service.mjs uninstall
 echo "The Codex integration and background service were removed."
-echo "The repository, cached native catalog, logs, and optional API key were retained."
+echo "The repository, cached native catalog, logs, and provider credentials were retained."

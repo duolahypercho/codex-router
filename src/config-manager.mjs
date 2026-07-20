@@ -13,23 +13,31 @@ import path from "node:path";
 import {
   BACKUP_PATH,
   CONFIG_PATH,
+  LEGACY_STATE_DIRS,
   MERGED_CATALOG_PATH,
   PORTS,
   loopback,
 } from "./paths.mjs";
 
 const routerBaseUrl = loopback(PORTS.router, "/v1");
-const startMarker = "# BEGIN kimi-codex-router-managed";
-const endMarker = "# END kimi-codex-router-managed";
+const startMarker = "# BEGIN codex-router-managed";
+const endMarker = "# END codex-router-managed";
+const markerPairs = [
+  [startMarker, endMarker],
+  ["# BEGIN kimi-codex-router-managed", "# END kimi-codex-router-managed"],
+  ["# BEGIN kimi-codex-proxy-managed", "# END kimi-codex-proxy-managed"],
+];
 const command = process.argv[2] || "status";
 
 function removeMarkedBlock(input) {
-  const escapedStart = startMarker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const escapedEnd = endMarker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return input.replace(
-    new RegExp(`(?:^|\\n)${escapedStart}\\n[\\s\\S]*?\\n${escapedEnd}(?:\\n|$)`, "g"),
-    "\n",
-  );
+  return markerPairs.reduce((contents, [start, end]) => {
+    const escapedStart = start.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const escapedEnd = end.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return contents.replace(
+      new RegExp(`(?:^|\\n)${escapedStart}\\n[\\s\\S]*?\\n${escapedEnd}(?:\\n|$)`, "g"),
+      "\n",
+    );
+  }, input);
 }
 
 function splitRoot(input) {
@@ -53,17 +61,28 @@ function rootValue(lines, key) {
   return match.split("=").slice(1).join("=").trim().replace(/^["']|["']$/g, "");
 }
 
+function assignmentValue(line) {
+  return line.split("=").slice(1).join("=").trim().replace(/^(["'])|(["'])$/g, "");
+}
+
 function clean(contents) {
+  const knownCatalogPaths = [
+    MERGED_CATALOG_PATH,
+    ...LEGACY_STATE_DIRS.map((directory) => path.join(directory, "merged-models.json")),
+  ];
+  const knownManaged =
+    markerPairs.some(([start]) => contents.includes(start)) ||
+    knownCatalogPaths.some((catalogPath) => contents.includes(catalogPath));
   const withoutBlock = removeMarkedBlock(contents);
   const { rootLines, tableLines } = splitRoot(withoutBlock);
   const filtered = rootLines.filter((line) => {
     if (/^\s*openai_base_url\s*=/.test(line)) {
-      return !line.includes(JSON.stringify(routerBaseUrl));
+      return !(knownManaged && assignmentValue(line) === routerBaseUrl);
     }
     if (/^\s*model_catalog_json\s*=/.test(line)) {
-      return !line.includes(JSON.stringify(MERGED_CATALOG_PATH));
+      return !knownCatalogPaths.includes(assignmentValue(line));
     }
-    return line !== startMarker && line !== endMarker;
+    return !markerPairs.flat().includes(line.trim());
   });
   return { rootLines: filtered, tableLines };
 }

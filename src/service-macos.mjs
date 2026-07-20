@@ -7,7 +7,6 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import os from "node:os";
 import path from "node:path";
 
 import {
@@ -20,12 +19,13 @@ import {
   STATE_DIR,
 } from "./paths.mjs";
 
-if (process.platform !== "darwin") {
-  throw new Error("The bundled service manager currently supports macOS launchd only.");
-}
-
 const command = process.argv[2] || "status";
-const domain = `gui/${process.getuid()}`;
+const effectivePlatform = process.env.CODEX_ROUTER_SERVICE_PLATFORM || process.platform;
+if (effectivePlatform !== "darwin" && command !== "render") {
+  throw new Error("The launchd service manager runs on macOS only.");
+}
+const userId = typeof process.getuid === "function" ? process.getuid() : 501;
+const domain = `gui/${userId}`;
 const service = `${domain}/${SERVICE_LABEL}`;
 const launchctl = "/bin/launchctl";
 
@@ -41,12 +41,14 @@ function xml(value) {
 function environmentEntries() {
   const values = {
     CODEX_HOME,
+    CODEX_ROUTER_STATE_DIR: STATE_DIR,
     KIMI_CODEX_STATE_DIR: STATE_DIR,
+    CODEX_ROUTER_QUIET: "1",
     KIMI_PROXY_QUIET: "1",
-    KIMI_GATEWAY_PORT: String(PORTS.gateway),
-    KIMI_OAUTH_FORWARD_PORT: String(PORTS.oauth),
-    KIMI_ROUTER_PORT: String(PORTS.router),
-    KIMI_API_FORWARD_PORT: String(PORTS.api),
+    CODEX_ROUTER_GATEWAY_PORT: String(PORTS.gateway),
+    CODEX_ROUTER_OAUTH_PORT: String(PORTS.oauth),
+    CODEX_ROUTER_PORT: String(PORTS.router),
+    CODEX_ROUTER_API_PORT: String(PORTS.api),
   };
   if (process.env.KIMI_CODE_HOME) values.KIMI_CODE_HOME = process.env.KIMI_CODE_HOME;
   return Object.entries(values)
@@ -99,20 +101,20 @@ function run(args, options = {}) {
   });
 }
 
-function loaded() {
+function loaded(targetService = service) {
   try {
-    const description = run(["print", service]);
+    const description = run(["print", targetService]);
     return /(?:state|path|type) =/.test(description) ? description : undefined;
   } catch {
     return undefined;
   }
 }
 
-function bootout() {
-  const description = loaded();
+function bootout(targetService = service) {
+  const description = loaded(targetService);
   if (!description || /state = (?:SIGTERM|exited|stopped)/i.test(description)) return;
   try {
-    run(["bootout", service], { quiet: true });
+    run(["bootout", targetService], { quiet: true });
   } catch {
     // The process may already have exited.
   }
