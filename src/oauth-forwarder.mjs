@@ -459,7 +459,7 @@ const server = http.createServer((request, response) => {
 });
 
 server.listen(LISTEN_PORT, LISTEN_HOST, () => {
-  console.error(`[kimi-oauth] listening on http://${LISTEN_HOST}:${LISTEN_PORT}`);
+  console.error("[kimi-oauth] listening");
 });
 
 for (const signal of ["SIGINT", "SIGTERM"]) {

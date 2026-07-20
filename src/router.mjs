@@ -591,7 +591,7 @@ server.on("upgrade", (_request, socket) => {
 server.requestTimeout = 0;
 server.headersTimeout = 65_000;
 server.listen(LISTEN_PORT, LISTEN_HOST, () => {
-  console.error(`[codex-router] listening on http://${LISTEN_HOST}:${LISTEN_PORT}`);
+  console.error("[codex-router] listening");
 });
 
 for (const signal of ["SIGINT", "SIGTERM"]) {
