@@ -18,6 +18,7 @@ export const NATIVE_CATALOG_PATH = path.join(STATE_DIR, "native-models.json");
 export const MERGED_CATALOG_PATH = path.join(STATE_DIR, "merged-models.json");
 export const LITELLM_CONFIG_PATH = path.join(STATE_DIR, "litellm.yaml");
 export const INTERNAL_SECRET_PATH = path.join(STATE_DIR, "internal-secret");
+export const CALLER_SECRET_PATH = path.join(STATE_DIR, "caller-secret");
 export const PROVIDER_SELECTION_PATH = path.join(STATE_DIR, "enabled-providers.json");
 export const INSTALL_MANIFEST_PATH = path.join(STATE_DIR, "install-manifest.json");
 export const MIGRATIONS_DIR = path.join(STATE_DIR, "migrations");

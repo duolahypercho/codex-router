@@ -20,6 +20,7 @@ import lockfile from "proper-lockfile";
 import { protectPrivateFile } from "./file-security.mjs";
 import {
   HOP_BY_HOP_HEADERS,
+  httpErrorStatus,
   pipeResponse,
   readRequestBody,
   requireInternalAuth,
@@ -366,10 +367,10 @@ function tokenHealth() {
         token.expires_at - Math.floor(Date.now() / 1_000),
       ),
     };
-  } catch (error) {
+  } catch {
     return {
       credential_present: false,
-      error: error instanceof Error ? error.message : String(error),
+      error: "Kimi OAuth credential is unavailable; run `kimi login`.",
     };
   }
 }
@@ -392,11 +393,15 @@ async function handleRequest(request, response) {
     request.url || "/",
     `http://${request.headers.host || LISTEN_HOST}`,
   );
+  if (!requireInternalAuth(request, response, INTERNAL_KEY)) return;
   if (request.method === "GET" && requestUrl.pathname === "/health") {
-    writeJson(response, 200, { ok: true, ...tokenHealth() });
+    writeJson(response, 200, {
+      ok: true,
+      service: "codex-router-oauth-forwarder",
+      ...tokenHealth(),
+    });
     return;
   }
-  if (!requireInternalAuth(request, response, INTERNAL_KEY)) return;
 
   const route = requestUrl.pathname.replace(/^\/v1(?=\/|$)/, "");
   if (
@@ -438,19 +443,17 @@ async function handleRequest(request, response) {
 
 const server = http.createServer((request, response) => {
   handleRequest(request, response).catch((error) => {
-    const status = Number(error?.status) || 502;
-    console.error(
-      `[kimi-oauth] request failed: ${error instanceof Error ? error.message : String(error)}`,
-    );
+    const status = httpErrorStatus(error);
+    console.error("[kimi-oauth] request failed");
     if (!response.headersSent) {
       writeJson(response, status, {
         error: {
           type: "kimi_oauth_proxy_error",
-          message: error instanceof Error ? error.message : String(error),
+          message: "The Kimi OAuth forwarder could not complete the request.",
         },
       });
     } else if (!response.writableEnded) {
-      response.destroy(error instanceof Error ? error : undefined);
+      response.destroy();
     }
   });
 });

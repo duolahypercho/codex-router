@@ -1,9 +1,12 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { redactCallerUrl } from "./caller-auth.mjs";
 import { MODEL_BY_SLUG } from "./model-registry.mjs";
-import { PORTS, loopback } from "./paths.mjs";
-import { smokeTestModel } from "./smoke-test.mjs";
+import {
+  installedRouterBaseUrl,
+  smokeTestModel,
+} from "./smoke-test.mjs";
 
 function responseText(payload) {
   if (typeof payload?.output_text === "string") return payload.output_text;
@@ -15,7 +18,7 @@ function responseText(payload) {
 }
 
 async function request(suffix, body, timeoutMs = 180_000) {
-  const response = await fetch(`${loopback(PORTS.router, "/v1")}${suffix}`, {
+  const response = await fetch(`${installedRouterBaseUrl()}${suffix}`, {
     method: "POST",
     headers: {
       Authorization: "Bearer codex-router-local-compatibility-test",
@@ -67,7 +70,7 @@ async function toolCall(model) {
 
 async function streaming(model) {
   const marker = "CODEX_ROUTER_STREAM_OK";
-  const response = await fetch(`${loopback(PORTS.router, "/v1/responses")}`, {
+  const response = await fetch(`${installedRouterBaseUrl()}/responses`, {
     method: "POST",
     headers: {
       Authorization: "Bearer codex-router-local-compatibility-test",
@@ -163,7 +166,9 @@ provider charges. --quick runs only the basic response check.
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   main().catch((error) => {
-    console.error(error instanceof Error ? error.message : String(error));
+    console.error(
+      redactCallerUrl(error instanceof Error ? error.message : String(error)),
+    );
     process.exit(1);
   });
 }

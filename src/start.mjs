@@ -2,7 +2,9 @@ import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 
+import { assertCallerSecret } from "./caller-auth.mjs";
 import {
+  CALLER_SECRET_PATH,
   INTERNAL_SECRET_PATH,
   LITELLM_CONFIG_PATH,
   MERGED_CATALOG_PATH,
@@ -27,11 +29,18 @@ if (!existsSync(litellm)) {
 if (!existsSync(INTERNAL_SECRET_PATH)) {
   throw new Error(`Internal service key is missing; run ./bin/install.`);
 }
+if (!existsSync(CALLER_SECRET_PATH)) {
+  throw new Error(`Router caller key is missing; run ./bin/install.`);
+}
 const internalKey = readFileSync(INTERNAL_SECRET_PATH, "utf8").trim();
 if (!internalKey) throw new Error("Internal service key is empty.");
+const callerKey = assertCallerSecret(
+  readFileSync(CALLER_SECRET_PATH, "utf8").trim(),
+);
 writeLiteLlmConfig();
 
 const commonEnv = {
+  CODEX_ROUTER_CALLER_KEY: callerKey,
   CODEX_ROUTER_INTERNAL_KEY: internalKey,
   KIMI_INTERNAL_KEY: internalKey,
   KIMI_OAUTH_FORWARD_BASE_URL: loopback(PORTS.oauth, "/v1"),
@@ -110,10 +119,14 @@ function stopChildren() {
 for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, stopChildren);
 
 const oauth = run(process.execPath, [path.join(SOURCE_ROOT, "src", "oauth-forwarder.mjs")]);
-await waitForHealth(loopback(PORTS.oauth, "/health"));
+await waitForHealth(loopback(PORTS.oauth, "/health"), {
+  Authorization: `Bearer ${internalKey}`,
+});
 
 const api = run(process.execPath, [path.join(SOURCE_ROOT, "src", "api-forwarder.mjs")]);
-await waitForHealth(loopback(PORTS.api, "/health"));
+await waitForHealth(loopback(PORTS.api, "/health"), {
+  Authorization: `Bearer ${internalKey}`,
+});
 
 const gateway = run(litellm, [
   "--config",
@@ -136,7 +149,7 @@ await waitForHealth(
   "codex-router",
 );
 
-console.error(`[codex-router] ready at ${loopback(PORTS.router, "/v1")}`);
+console.error(`[codex-router] ready on ${loopback(PORTS.router)} (authenticated endpoint)`);
 
 const result = await Promise.race([
   waitForExit(oauth, "OAuth forwarder"),

@@ -6,12 +6,12 @@ import {
   mkdirSync,
   readFileSync,
   renameSync,
-  statSync,
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { redactCallerUrl } from "./caller-auth.mjs";
 import { protectPrivateFile } from "./file-security.mjs";
 import {
   CODEX_HOME,
@@ -101,7 +101,9 @@ export function detectLegacyInstallations() {
     installations,
     unknownConflict,
     config: {
-      openaiBaseUrl: openaiBaseUrls[0] || null,
+      openaiBaseUrl: openaiBaseUrls[0]
+        ? redactCallerUrl(openaiBaseUrls[0])
+        : null,
       modelCatalogJson: unknownCatalog || modelCatalogs[0] || null,
     },
   };
@@ -153,8 +155,7 @@ export function applyKnownMigrations() {
   if (existsSync(CONFIG_PATH)) {
     configBackup = path.join(snapshotDir, "config.toml.before-migration");
     copyFileSync(CONFIG_PATH, configBackup);
-    chmodSync(configBackup, statSync(CONFIG_PATH).mode & 0o777);
-    if (process.platform === "win32") protectPrivateFile(configBackup);
+    protectPrivateFile(configBackup);
   }
 
   const services = detected.installations.map((installation) => {
@@ -243,7 +244,7 @@ export function rollbackLatestMigration(options = {}) {
   }
   if (snapshot.configBackup && existsSync(snapshot.configBackup)) {
     copyFileSync(snapshot.configBackup, CONFIG_PATH);
-    chmodSync(CONFIG_PATH, statSync(snapshot.configBackup).mode & 0o777);
+    protectPrivateFile(CONFIG_PATH);
   }
   for (const service of snapshot.services || []) {
     if (service.plistBackup && existsSync(service.plistBackup)) {

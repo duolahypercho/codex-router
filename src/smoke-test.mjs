@@ -1,8 +1,14 @@
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import {
+  assertCallerSecret,
+  callerBaseUrl,
+  redactCallerUrl,
+} from "./caller-auth.mjs";
 import { selectedListedModels } from "./provider-selection.mjs";
-import { PORTS, loopback } from "./paths.mjs";
+import { CALLER_SECRET_PATH, PORTS } from "./paths.mjs";
 
 function responseText(payload) {
   if (typeof payload?.output_text === "string") return payload.output_text;
@@ -15,10 +21,20 @@ function responseText(payload) {
   return values.join("\n");
 }
 
+export function installedRouterBaseUrl(override) {
+  const supplied = override || process.env.CODEX_ROUTER_BASE_URL;
+  if (supplied) return String(supplied).replace(/\/+$/, "");
+  if (!existsSync(CALLER_SECRET_PATH)) {
+    throw new Error("The local router caller key is missing; run ./bin/doctor --fix.");
+  }
+  const callerKey = assertCallerSecret(
+    readFileSync(CALLER_SECRET_PATH, "utf8").trim(),
+  );
+  return callerBaseUrl(PORTS.router, callerKey);
+}
+
 export async function smokeTestModel(model, options = {}) {
-  const baseUrl = String(
-    options.baseUrl || process.env.CODEX_ROUTER_BASE_URL || loopback(PORTS.router, "/v1"),
-  ).replace(/\/+$/, "");
+  const baseUrl = installedRouterBaseUrl(options.baseUrl);
   const marker = options.marker || "CODEX_ROUTER_SMOKE_OK";
   const response = await fetch(`${baseUrl}/responses`, {
     method: "POST",
@@ -68,7 +84,9 @@ async function main() {
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   main().catch((error) => {
-    console.error(error instanceof Error ? error.message : String(error));
+    console.error(
+      redactCallerUrl(error instanceof Error ? error.message : String(error)),
+    );
     process.exit(1);
   });
 }

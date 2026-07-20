@@ -1,17 +1,27 @@
 import {
-  chmodSync,
   copyFileSync,
   existsSync,
   mkdirSync,
   readFileSync,
   renameSync,
-  statSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
 
 import {
+  assertCallerSecret,
+  callerBaseUrl,
+  isManagedCallerBaseUrl,
+  redactCallerUrl,
+} from "./caller-auth.mjs";
+import {
+  privateFileIsProtected,
+  protectPrivateFile,
+} from "./file-security.mjs";
+import {
   BACKUP_PATH,
+  CALLER_SECRET_PATH,
   CONFIG_PATH,
   LEGACY_STATE_DIRS,
   MERGED_CATALOG_PATH,
@@ -19,7 +29,7 @@ import {
   loopback,
 } from "./paths.mjs";
 
-const routerBaseUrl = loopback(PORTS.router, "/v1");
+const legacyRouterBaseUrl = loopback(PORTS.router, "/v1");
 const startMarker = "# BEGIN codex-router-managed";
 const endMarker = "# END codex-router-managed";
 const markerPairs = [
@@ -28,6 +38,39 @@ const markerPairs = [
   ["# BEGIN kimi-codex-proxy-managed", "# END kimi-codex-proxy-managed"],
 ];
 const command = process.argv[2] || "status";
+
+function configuredRouterBaseUrl() {
+  if (!existsSync(CALLER_SECRET_PATH)) {
+    throw new Error("The local router caller key is missing; run ./bin/doctor --fix.");
+  }
+  const secret = assertCallerSecret(readFileSync(CALLER_SECRET_PATH, "utf8").trim());
+  return callerBaseUrl(PORTS.router, secret);
+}
+
+function isManagedRouterBaseUrl(value) {
+  return (
+    value === legacyRouterBaseUrl ||
+    isManagedCallerBaseUrl(value, PORTS.router)
+  );
+}
+
+function isRecognizedRouterBaseUrl(value) {
+  if (isManagedRouterBaseUrl(value) || isManagedCallerBaseUrl(value)) return true;
+  try {
+    const url = new URL(value);
+    return (
+      url.protocol === "http:" &&
+      url.hostname === "127.0.0.1" &&
+      !url.username &&
+      !url.password &&
+      !url.search &&
+      !url.hash &&
+      /^\/v1\/?$/.test(url.pathname)
+    );
+  } catch {
+    return false;
+  }
+}
 
 function removeMarkedBlock(input) {
   return markerPairs.reduce((contents, [start, end]) => {
@@ -86,7 +129,7 @@ function clean(contents) {
   const { rootLines, tableLines } = splitRoot(withoutBlock);
   const filtered = rootLines.filter((line) => {
     if (/^\s*openai_base_url\s*=/.test(line)) {
-      return !(knownManaged && assignmentValue(line) === routerBaseUrl);
+      return !(knownManaged && isRecognizedRouterBaseUrl(assignmentValue(line)));
     }
     if (/^\s*model_catalog_json\s*=/.test(line)) {
       return !knownCatalogPaths.includes(assignmentValue(line));
@@ -101,21 +144,30 @@ function snapshot(contents) {
   const baseUrl = rootValue(rootLines, "openai_base_url");
   const catalog = rootValue(rootLines, "model_catalog_json");
   return {
-    mode: baseUrl === routerBaseUrl && catalog === MERGED_CATALOG_PATH ? "router" : "native",
+    mode:
+      isManagedRouterBaseUrl(baseUrl) && catalog === MERGED_CATALOG_PATH
+        ? "router"
+        : "native",
     model: rootValue(rootLines, "model") || null,
     model_provider: rootValue(rootLines, "model_provider") || "openai",
-    openai_base_url: baseUrl || null,
+    openai_base_url: baseUrl ? redactCallerUrl(baseUrl) : null,
     model_catalog_json: catalog || null,
+    config_protected: privateFileIsProtected(CONFIG_PATH),
   };
 }
 
 function atomicWrite(contents) {
   mkdirSync(path.dirname(CONFIG_PATH), { recursive: true, mode: 0o700 });
-  const permissions = existsSync(CONFIG_PATH) ? statSync(CONFIG_PATH).mode & 0o777 : 0o600;
   const temporary = `${CONFIG_PATH}.tmp.${process.pid}`;
-  writeFileSync(temporary, contents, { encoding: "utf8", mode: permissions });
-  chmodSync(temporary, permissions);
-  renameSync(temporary, CONFIG_PATH);
+  writeFileSync(temporary, contents, { encoding: "utf8", mode: 0o600 });
+  try {
+    protectPrivateFile(temporary);
+    renameSync(temporary, CONFIG_PATH);
+    protectPrivateFile(CONFIG_PATH);
+  } catch (error) {
+    if (existsSync(temporary)) unlinkSync(temporary);
+    throw error;
+  }
 }
 
 if (!new Set(["enable", "disable", "status"]).has(command)) {
@@ -129,10 +181,11 @@ if (command === "status") {
   process.exit(0);
 }
 
+const routerBaseUrl = command === "enable" ? configuredRouterBaseUrl() : undefined;
 if (existsSync(CONFIG_PATH) && !existsSync(BACKUP_PATH)) {
   copyFileSync(CONFIG_PATH, BACKUP_PATH);
-  chmodSync(BACKUP_PATH, statSync(CONFIG_PATH).mode & 0o777);
 }
+if (existsSync(BACKUP_PATH)) protectPrivateFile(BACKUP_PATH);
 
 const cleaned = clean(current);
 const rootLines = trimBlankEdges(cleaned.rootLines);
@@ -140,7 +193,9 @@ if (command === "enable") {
   const existingBase = rootValue(rootLines, "openai_base_url");
   const existingCatalog = rootValue(rootLines, "model_catalog_json");
   if (existingBase && existingBase !== routerBaseUrl) {
-    throw new Error(`Refusing to replace user-owned openai_base_url: ${existingBase}`);
+    throw new Error(
+      `Refusing to replace user-owned openai_base_url: ${redactCallerUrl(existingBase)}`,
+    );
   }
   if (existingCatalog && existingCatalog !== MERGED_CATALOG_PATH) {
     throw new Error(`Refusing to replace user-owned model_catalog_json: ${existingCatalog}`);

@@ -27,12 +27,12 @@ sequenceDiagram
   participant P as External provider
 
   alt Native GPT model
-    C->>R: Responses request + Codex auth
+    C->>R: Capability URL + Responses request + Codex auth
     R->>G: Allow-listed Codex headers + native model
     G-->>R: Responses stream
     R-->>C: Responses stream
   else Registry model
-    C->>R: Responses request + namespaced model
+    C->>R: Capability URL + Responses request + namespaced model
     R->>L: Gateway model + internal key
     L->>L: Responses to Chat Completions
     alt Kimi Code OAuth
@@ -75,6 +75,14 @@ The integration deliberately keeps the built-in `openai` provider and points
 it at a loopback `openai_base_url`. This makes named models appear in the normal
 picker instead of replacing the provider with a generic `Custom` entry.
 
+The managed base URL contains a separate random caller capability. The router
+validates it before reading a model request or contacting any upstream. Codex
+cannot attach an arbitrary router-specific header to the built-in provider, so
+the capability is carried in the URL path. Status, migration, and support tools
+redact it, while Codex config and all snapshots are current-user-only files.
+The router additionally requires JSON content, rejects browser-origin headers,
+and never grants CORS access.
+
 ## Credential boundaries
 
 | Route | Incoming Codex credential | Upstream credential |
@@ -84,10 +92,10 @@ picker instead of replacing the provider with a generic `Custom` entry.
 | Kimi API | Discarded | Kimi Platform API key |
 | DeepSeek | Discarded | DeepSeek API key |
 
-The router-to-LiteLLM and LiteLLM-to-forwarder hops use a random internal key
-stored with mode `600` or a current-user Windows ACL. It is not a provider credential. Each external
-forwarder removes Codex account, installation, attestation, and private headers
-before sending a request upstream.
+The Codex-to-router and internal-service trust boundaries use two different
+random keys, each stored with mode `600` or a current-user Windows ACL. Neither
+is a provider credential. Each external forwarder removes Codex account,
+installation, attestation, and private headers before sending a request upstream.
 
 ## Provider normalization
 

@@ -15,8 +15,11 @@ attestation headers, or the caller's authorization header. The loopback gateway
 uses a random internal key, which the final forwarder replaces with exactly one
 provider credential.
 
-No credential value is written to the model registry, catalog, Codex config,
-generated LiteLLM config, logs, or health responses.
+No provider credential is written to the model registry, catalog, Codex config,
+generated LiteLLM config, logs, or health responses. Codex config does contain a
+random, local-only caller capability as part of the managed loopback URL. The
+config, its backup, migration snapshots, and diagnostic output are therefore
+protected or redacted.
 
 ## Local secret storage
 
@@ -25,6 +28,7 @@ Sensitive state lives under `$CODEX_HOME/codex-router` by default:
 | File | Purpose | Mode |
 | --- | --- | --- |
 | `internal-secret` | Random loopback service key | `600` |
+| `caller-secret` | Random capability used only by Codex-to-router requests | `600` |
 | `kimi-api-key.secret` | Optional Kimi Platform key | `600` |
 | `deepseek-api-key.secret` | Optional DeepSeek key | `600` |
 | `native-models.json` | Cached native Codex catalog | `600` |
@@ -56,9 +60,23 @@ a generated config from a live installation.
 ## Network boundary
 
 The router, LiteLLM gateway, OAuth forwarder, and API forwarder bind only to
-`127.0.0.1`. Do not change them to `0.0.0.0`, tunnel the ports, or expose them on
-a shared network. The internal key is defense in depth for local process
-separation, not an internet-facing authentication system.
+`127.0.0.1`. Every model route requires the random capability embedded in the
+managed Codex base URL. Internal gateway and forwarder routes require a separate
+random service key, and credential-detail health responses are authenticated.
+Model requests must use JSON, requests with browser-origin headers are rejected,
+and the router sends no CORS permission headers. This remains compatible with
+Codex API-key sessions that do not attach a bearer header to the loopback hop.
+
+This blocks drive-by browser requests and processes running without access to
+the user's protected files. It does not create a security boundary against
+malicious code already running as the same OS user, which can generally read
+that user's Codex config and process state. Do not change listeners to
+`0.0.0.0`, tunnel the ports, or expose them on a shared network. These controls
+are not internet-facing authentication.
+
+Codex may include the request URL in its own error output. Treat the full URL as
+sensitive even though it is loopback-only; redact the generated path before
+sharing screenshots or logs.
 
 API base URL overrides are trusted-user configuration. A malicious override can
 send the matching provider credential to another server. Inspect background
@@ -73,7 +91,7 @@ The config manager:
   authentication.
 - Refuses to replace an unmarked user-owned base URL or catalog.
 - Creates `~/.codex/config.toml.pre-codex-router` before its first change.
-- Atomically rewrites the config while preserving file permissions.
+- Atomically rewrites the config and restricts it to the current user.
 - Recognizes and removes the earlier Kimi-specific managed block during upgrade.
 - Snapshots recognized old service definitions and exact config before migration.
 - Refuses unknown router catalogs and unrecognized origin URLs during update.
@@ -104,8 +122,13 @@ Support bundles exclude logs by default and are never uploaded automatically.
 The optional redacted log tail can still contain private prompt or response text
 and must be inspected before sharing.
 
+Network-facing error handlers do not return or log raw exception text. Detailed
+credential state is available only through authenticated local health checks and
+the redacted doctor/support workflows.
+
 ## Reporting a vulnerability
 
-Open a private GitHub security advisory for the repository when available. Do
-not include access tokens, API keys, credential files, full prompts, response
-bodies, or unredacted logs in an issue.
+Use [GitHub Private Vulnerability Reporting](https://github.com/duolahypercho/codex-router/security/advisories/new).
+Do not include technical vulnerability details, access tokens, API keys,
+credential files, full prompts, response bodies, or unredacted logs in a public
+issue.

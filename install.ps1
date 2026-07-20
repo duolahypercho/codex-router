@@ -154,7 +154,7 @@ try {
   if ($LASTEXITCODE -ne 0) { throw "LiteLLM installation failed." }
 
   & node src/secret.mjs ensure
-  if ($LASTEXITCODE -ne 0) { throw "Internal service-key setup failed." }
+  if ($LASTEXITCODE -ne 0) { throw "Local router-key setup failed." }
   $StateRoot = if ($env:CODEX_ROUTER_STATE_DIR) { $env:CODEX_ROUTER_STATE_DIR }
     elseif ($env:CODEX_HOME) { Join-Path $env:CODEX_HOME "codex-router" }
     else { Join-Path $HOME ".codex\codex-router" }

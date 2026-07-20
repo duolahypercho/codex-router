@@ -42,8 +42,11 @@ codex debug models
 ```
 
 The config root should contain exactly one `codex-router-managed` block with the
-loopback base URL on port 4102 and a catalog under
+loopback base URL on port 4102, a generated `/_codex-router/.../v1` path, and a catalog under
 `$CODEX_HOME/codex-router/merged-models.json`.
+
+The generated path is a local caller capability. Use `./bin/status`, which
+redacts it, when sharing diagnostics. Never paste the complete URL into an issue.
 
 ## Kimi OAuth is not ready
 

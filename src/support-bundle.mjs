@@ -11,17 +11,23 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { redactCallerUrl } from "./caller-auth.mjs";
 import { readInstallManifest } from "./install-manifest.mjs";
 import { protectPrivateFile } from "./file-security.mjs";
 import { detectLegacyInstallations } from "./legacy-migration.mjs";
 import { PROVIDERS } from "./model-registry.mjs";
 import {
+  CALLER_SECRET_PATH,
   CONFIG_PATH,
+  INTERNAL_SECRET_PATH,
   LOG_PATH,
   SOURCE_ROOT,
   SUPPORT_DIR,
 } from "./paths.mjs";
-import { credentialStatus } from "./provider-credentials.mjs";
+import {
+  credentialPaths,
+  credentialStatus,
+} from "./provider-credentials.mjs";
 import { providerSelectionStatus } from "./provider-selection.mjs";
 
 function runJson(script, args = []) {
@@ -62,7 +68,7 @@ function fileMetadata(target) {
 }
 
 function redactLogs(contents) {
-  return contents
+  return redactCallerUrl(contents)
     .replace(/(authorization\s*[:=]\s*bearer\s+)[^\s"']+/gi, "$1[REDACTED]")
     .replace(/("(?:api[_-]?key|access[_-]?token|refresh[_-]?token)"\s*:\s*")[^"]+/gi, "$1[REDACTED]")
     .replace(/((?:api[_-]?key|access[_-]?token|refresh[_-]?token)\s*[=:]\s*["']?)[^\s"',}]+/gi, "$1[REDACTED]")
@@ -73,6 +79,33 @@ function logTail() {
   if (!existsSync(LOG_PATH)) return null;
   const lines = readFileSync(LOG_PATH, "utf8").split(/\r?\n/);
   return redactLogs(lines.slice(-200).join("\n"));
+}
+
+function knownLocalSecrets() {
+  const values = new Set();
+  const files = [CALLER_SECRET_PATH, INTERNAL_SECRET_PATH];
+  for (const provider of PROVIDERS.values()) {
+    if (provider.kind !== "openai-compatible") continue;
+    files.push(...credentialPaths(provider));
+    for (const name of provider.credential.environment) {
+      const value = process.env[name]?.trim();
+      if (value) values.add(value);
+    }
+  }
+  for (const target of files) {
+    if (!existsSync(target)) continue;
+    const value = readFileSync(target, "utf8").trim();
+    if (value) values.add(value);
+  }
+  return [...values].filter((value) => value.length >= 8);
+}
+
+function redactBundle(contents) {
+  let redacted = redactCallerUrl(contents);
+  for (const secret of knownLocalSecrets()) {
+    redacted = redacted.replaceAll(secret, "[REDACTED]");
+  }
+  return redacted;
 }
 
 function outputOption() {
@@ -143,7 +176,8 @@ export function createSupportBundle(options = {}) {
     options.output || path.join(SUPPORT_DIR, `codex-router-support-${timestamp}.json`),
   );
   mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
-  writeFileSync(target, `${JSON.stringify(bundle, null, 2)}\n`, {
+  const serialized = redactBundle(`${JSON.stringify(bundle, null, 2)}\n`);
+  writeFileSync(target, serialized, {
     encoding: "utf8",
     mode: 0o600,
   });

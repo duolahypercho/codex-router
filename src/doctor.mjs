@@ -2,12 +2,14 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 
+import { validCallerSecret } from "./caller-auth.mjs";
 import { findCodexBinary } from "./codex-binary.mjs";
 import { privateFileIsProtected } from "./file-security.mjs";
 import { detectLegacyInstallations } from "./legacy-migration.mjs";
 import { PROVIDERS } from "./model-registry.mjs";
 import { kimiOAuthStatus } from "./oauth-status.mjs";
 import {
+  CALLER_SECRET_PATH,
   CONFIG_PATH,
   INTERNAL_SECRET_PATH,
   LITELLM_CONFIG_PATH,
@@ -25,6 +27,15 @@ import {
 const checks = [];
 const add = (status, name, detail, fix) => checks.push({ status, name, detail, fix });
 const jsonOutput = process.argv.includes("--json");
+
+function readableSecret(target, validator) {
+  if (!existsSync(target)) return false;
+  try {
+    return validator(readFileSync(target, "utf8").trim());
+  } catch {
+    return false;
+  }
+}
 
 function childJson(script, args = []) {
   return JSON.parse(
@@ -121,6 +132,20 @@ add(
   CONFIG_PATH,
   "Start Codex once, then run ./bin/doctor --fix.",
 );
+const configMode = existsSync(CONFIG_PATH)
+  ? statSync(CONFIG_PATH).mode & 0o777
+  : undefined;
+const configProtected = privateFileIsProtected(CONFIG_PATH);
+add(
+  configProtected ? "ok" : "fail",
+  "Codex config privacy",
+  configMode === undefined
+    ? "missing"
+    : process.platform === "win32"
+      ? "current-user Windows ACL"
+      : `mode ${configMode.toString(8)}`,
+  "Run ./bin/doctor --fix; the managed router URL contains a local caller capability.",
+);
 
 let selection = { providers: [], explicit: false };
 let requiredModels = new Set();
@@ -170,16 +195,42 @@ add(
 const secretMode = existsSync(INTERNAL_SECRET_PATH)
   ? statSync(INTERNAL_SECRET_PATH).mode & 0o777
   : undefined;
-const secretProtected = privateFileIsProtected(INTERNAL_SECRET_PATH);
+const internalSecretValid = readableSecret(
+  INTERNAL_SECRET_PATH,
+  (value) => /^[A-Za-z0-9_-]{32,}$/.test(value),
+);
+const secretProtected =
+  internalSecretValid && privateFileIsProtected(INTERNAL_SECRET_PATH);
 add(
   secretProtected ? "ok" : "fail",
   "Internal service key",
   secretMode === undefined
     ? "missing"
-    : process.platform === "win32"
-      ? "current-user Windows ACL"
-      : `mode ${secretMode.toString(8)}`,
+    : !internalSecretValid
+      ? "invalid"
+      : process.platform === "win32"
+        ? "current-user Windows ACL"
+        : `mode ${secretMode.toString(8)}`,
   "Run ./bin/doctor --fix; this key is generated locally and is not a provider key.",
+);
+
+const callerSecretMode = existsSync(CALLER_SECRET_PATH)
+  ? statSync(CALLER_SECRET_PATH).mode & 0o777
+  : undefined;
+const callerSecretValid = readableSecret(CALLER_SECRET_PATH, validCallerSecret);
+const callerSecretProtected =
+  callerSecretValid && privateFileIsProtected(CALLER_SECRET_PATH);
+add(
+  callerSecretProtected ? "ok" : "fail",
+  "Router caller key",
+  callerSecretMode === undefined
+    ? "missing"
+    : !callerSecretValid
+      ? "invalid"
+      : process.platform === "win32"
+        ? "current-user Windows ACL"
+        : `mode ${callerSecretMode.toString(8)}`,
+  "Run ./bin/doctor --fix; this capability is generated locally and is not a provider key.",
 );
 
 const oauth = kimiOAuthStatus();

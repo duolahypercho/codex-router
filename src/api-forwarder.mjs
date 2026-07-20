@@ -2,6 +2,7 @@ import http from "node:http";
 
 import {
   HOP_BY_HOP_HEADERS,
+  httpErrorStatus,
   pipeResponse,
   readRequestBody,
   requireInternalAuth,
@@ -129,11 +130,11 @@ async function handleRequest(request, response) {
     request.url || "/",
     `http://${request.headers.host || LISTEN_HOST}`,
   );
+  if (!requireInternalAuth(request, response, INTERNAL_KEY)) return;
   if (request.method === "GET" && requestUrl.pathname === "/health") {
     writeJson(response, 200, healthPayload());
     return;
   }
-  if (!requireInternalAuth(request, response, INTERNAL_KEY)) return;
 
   const route = requestUrl.pathname.replace(/^\/v1(?=\/|$)/, "");
   if (request.method === "GET" && route === "/models") {
@@ -183,19 +184,17 @@ async function handleRequest(request, response) {
 
 const server = http.createServer((request, response) => {
   handleRequest(request, response).catch((error) => {
-    const status = Number(error?.status) || 502;
-    console.error(
-      `[api-forwarder] request failed: ${error instanceof Error ? error.message : String(error)}`,
-    );
+    const status = httpErrorStatus(error);
+    console.error("[api-forwarder] request failed");
     if (!response.headersSent) {
       writeJson(response, status, {
         error: {
           type: "provider_api_proxy_error",
-          message: error instanceof Error ? error.message : String(error),
+          message: "The API-provider forwarder could not complete the request.",
         },
       });
     } else if (!response.writableEnded) {
-      response.destroy(error instanceof Error ? error : undefined);
+      response.destroy();
     }
   });
 });

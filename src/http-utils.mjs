@@ -1,5 +1,7 @@
 import { Readable } from "node:stream";
 
+import { secretEqual } from "./caller-auth.mjs";
+
 export const MAX_BODY_BYTES = Number(
   process.env.CODEX_ROUTER_MAX_BODY_BYTES ||
     process.env.KIMI_PROXY_MAX_BODY_BYTES ||
@@ -45,6 +47,13 @@ export function writeJson(response, status, payload) {
   response.end(body);
 }
 
+export function httpErrorStatus(error, fallback = 502) {
+  const status = Number(error?.status);
+  return Number.isInteger(status) && status >= 400 && status <= 599
+    ? status
+    : fallback;
+}
+
 export function copyResponseHeaders(upstream, response, denylist = HOP_BY_HOP_HEADERS) {
   for (const [name, value] of upstream.headers.entries()) {
     if (!denylist.has(name.toLowerCase())) response.setHeader(name, value);
@@ -68,7 +77,10 @@ export async function pipeResponse(upstream, response, denylist) {
 }
 
 export function requireInternalAuth(request, response, secret) {
-  const authorized = request.headers.authorization === `Bearer ${secret}`;
+  const authorized = secretEqual(
+    request.headers.authorization,
+    `Bearer ${secret}`,
+  );
   if (!authorized) {
     writeJson(response, 401, {
       error: {

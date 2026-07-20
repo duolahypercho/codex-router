@@ -161,7 +161,7 @@ The installer adds only this marked root block to `~/.codex/config.toml` (or
 
 ```toml
 # BEGIN codex-router-managed
-openai_base_url = "http://127.0.0.1:4102/v1"
+openai_base_url = "http://127.0.0.1:4102/_codex-router/<generated-capability>/v1"
 model_catalog_json = "/absolute/path/to/.codex/codex-router/merged-models.json"
 # END codex-router-managed
 ```
@@ -169,6 +169,10 @@ model_catalog_json = "/absolute/path/to/.codex/codex-router/merged-models.json"
 It does not set or replace `model`, `model_provider`, reasoning effort,
 profiles, project trust, MCP settings, or ChatGPT authentication. The first
 config change is backed up as `config.toml.pre-codex-router`.
+
+The generated capability is local authentication, not a provider API key. The
+installer protects the config and backup for the current OS user. Commands and
+support bundles redact it; do not paste the complete managed URL into an issue.
 
 Codex supports `openai_base_url` for the built-in OpenAI provider and
 `model_catalog_json` as a startup model-catalog override. Keeping the built-in
@@ -194,7 +198,8 @@ Chat Completions APIs, so the pinned LiteLLM adapter translates responses,
 streaming, tool calls, and compaction traffic. All listeners bind to
 `127.0.0.1`.
 
-Codex authentication headers are allow-listed only for native requests.
+Every model request first presents the random capability in Codex's managed
+loopback URL. Codex authentication headers are allow-listed only for native requests.
 External routes receive a random internal loopback key; the final forwarder
 discards it and injects only the selected provider credential.
 

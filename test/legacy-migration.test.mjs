@@ -43,7 +43,7 @@ model_catalog_json = "${prototypeCatalog}"
 [profiles.work]
 model_reasoning_effort = "xhigh"
 `;
-  writeFileSync(configPath, original, { mode: 0o600 });
+  writeFileSync(configPath, original, { mode: 0o644 });
   writeFileSync(plistPath, "prototype plist\n", { mode: 0o644 });
 
   try {
@@ -55,6 +55,7 @@ model_reasoning_effort = "xhigh"
     assert.equal(migration.migrated, true);
     assert.equal(existsSync(plistPath), false);
     assert.equal(privateFileIsProtected(migration.manifestPath), true);
+    assert.equal(privateFileIsProtected(migration.snapshot.configBackup), true);
     const cleaned = readFileSync(configPath, "utf8");
     assert.doesNotMatch(cleaned, /openai_base_url|model_catalog_json|kimi-codex-router-managed/);
     assert.match(cleaned, /model = "kimi-oauth\/k3"/);
@@ -62,6 +63,7 @@ model_reasoning_effort = "xhigh"
 
     rollbackLatestMigration();
     assert.equal(readFileSync(configPath, "utf8"), original);
+    assert.equal(privateFileIsProtected(configPath), true);
     assert.equal(readFileSync(plistPath, "utf8"), "prototype plist\n");
   } finally {
     rmSync(testRoot, { recursive: true, force: true });

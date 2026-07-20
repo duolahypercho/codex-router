@@ -77,7 +77,7 @@ fi
 node src/litellm-config.mjs
 
 if [ "$prepare_only" = true ]; then
-  echo "Dependencies, service key, and model catalog are prepared. Codex config was not changed."
+  echo "Dependencies, local router keys, and model catalog are prepared. Codex config was not changed."
   exit 0
 fi
 

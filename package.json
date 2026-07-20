@@ -1,6 +1,6 @@
 {
   "name": "codex-model-router",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "type": "module",
   "description": "Extensible local model router for the Codex App with Kimi and DeepSeek",

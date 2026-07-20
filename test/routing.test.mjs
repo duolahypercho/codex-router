@@ -9,8 +9,15 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { zstdCompressSync } from "node:zlib";
 
+import { callerBaseUrl } from "../src/caller-auth.mjs";
+
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const INTERNAL_KEY = "test-internal-service-key-with-sufficient-length";
+const CALLER_KEY = "test-router-caller-capability-with-sufficient-length";
+
+function routerBase(port) {
+  return callerBaseUrl(port, CALLER_KEY);
+}
 
 function json(response, status, payload) {
   const body = Buffer.from(JSON.stringify(payload), "utf8");
@@ -56,6 +63,7 @@ function run(script, env) {
     cwd: root,
     env: {
       ...process.env,
+      CODEX_ROUTER_CALLER_KEY: CALLER_KEY,
       CODEX_ROUTER_INTERNAL_KEY: INTERNAL_KEY,
       KIMI_INTERNAL_KEY: INTERNAL_KEY,
       CODEX_ROUTER_SHOW_ALL_MODELS: "1",
@@ -72,14 +80,14 @@ function run(script, env) {
   return child;
 }
 
-async function waitFor(url, child) {
+async function waitFor(url, child, headers = {}) {
   const deadline = Date.now() + 5_000;
   while (Date.now() < deadline) {
     if (child.exitCode !== null) {
       throw new Error(`Child exited early (${child.exitCode}): ${child.testErrors()}`);
     }
     try {
-      const response = await fetch(url);
+      const response = await fetch(url, { headers });
       if (response.ok) return;
     } catch {
       // The child has not bound its port yet.
@@ -98,6 +106,121 @@ async function stopChild(child) {
 async function closeServer(server) {
   await new Promise((resolve) => server.close(resolve));
 }
+
+test("router requires the configured path capability before any model route", async () => {
+  const gatewayRequests = [];
+  const healthAuth = [];
+  const gateway = await mockServer(async (request, response) => {
+    if (request.method === "GET" && request.url === "/health") {
+      healthAuth.push(request.headers.authorization);
+      json(response, 200, {
+        ok: true,
+        credential_present: true,
+        credential_source: "protected-test-state",
+      });
+      return;
+    }
+    gatewayRequests.push({
+      headers: request.headers,
+      body: await bodyJson(request),
+    });
+    json(response, 200, { route: "external" });
+  });
+  const routerPort = await openPort();
+  const router = run("router.mjs", {
+    CODEX_ROUTER_PORT: String(routerPort),
+    CODEX_ROUTER_GATEWAY_BASE_URL: `http://127.0.0.1:${gateway.port}/v1`,
+    CODEX_ROUTER_OAUTH_HEALTH_URL: `http://127.0.0.1:${gateway.port}/health`,
+    CODEX_ROUTER_API_HEALTH_URL: `http://127.0.0.1:${gateway.port}/health`,
+    CODEX_ROUTER_GATEWAY_HEALTH_URL: `http://127.0.0.1:${gateway.port}/health`,
+    CODEX_ROUTER_QUIET: "1",
+  });
+
+  try {
+    await waitFor(`${routerBase(routerPort)}/models`, router);
+
+    const oldRoute = await fetch(`http://127.0.0.1:${routerPort}/v1/responses`, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer any-local-value",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ model: "deepseek/deepseek-v4-pro", input: "blocked" }),
+    });
+    assert.equal(oldRoute.status, 401);
+
+    const wrongCapability = await fetch(
+      `http://127.0.0.1:${routerPort}/_codex-router/wrong-caller-capability-with-sufficient-length/v1/models`,
+    );
+    assert.equal(wrongCapability.status, 401);
+
+    const unauthenticatedPreflight = await fetch(
+      `http://127.0.0.1:${routerPort}/v1/responses`,
+      { method: "OPTIONS" },
+    );
+    assert.equal(unauthenticatedPreflight.status, 401);
+    assert.equal(gatewayRequests.length, 0);
+
+    const simpleBrowserTransport = await fetch(`${routerBase(routerPort)}/responses`, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer codex-caller-auth",
+        "Content-Type": "text/plain",
+      },
+      body: JSON.stringify({ model: "deepseek/deepseek-v4-pro", input: "blocked" }),
+    });
+    assert.equal(simpleBrowserTransport.status, 415);
+
+    const browserOrigin = await fetch(`${routerBase(routerPort)}/responses`, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer codex-caller-auth",
+        "Content-Type": "application/json",
+        Origin: "https://attacker.invalid",
+      },
+      body: JSON.stringify({ model: "deepseek/deepseek-v4-pro", input: "blocked" }),
+    });
+    assert.equal(browserOrigin.status, 403);
+    assert.equal(gatewayRequests.length, 0);
+
+    const authorized = await fetch(`${routerBase(routerPort)}/responses`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "deepseek/deepseek-v4-pro", input: "allowed" }),
+    });
+    assert.equal(authorized.status, 200);
+    assert.equal(gatewayRequests.length, 1);
+    assert.equal(gatewayRequests[0].headers.authorization, `Bearer ${INTERNAL_KEY}`);
+
+    const errorSentinel = "SENSITIVE_ERROR_DETAIL_MUST_NOT_ESCAPE";
+    const invalidEncoding = await fetch(`${routerBase(routerPort)}/responses`, {
+      method: "POST",
+      headers: {
+        "Content-Encoding": errorSentinel,
+        "Content-Type": "application/json",
+      },
+      body: "{}",
+    });
+    assert.equal(invalidEncoding.status, 415);
+    assert.doesNotMatch(await invalidEncoding.text(), new RegExp(errorSentinel));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.doesNotMatch(router.testErrors(), new RegExp(errorSentinel));
+
+    const publicHealth = await fetch(`http://127.0.0.1:${routerPort}/health`);
+    assert.equal(publicHealth.status, 200);
+    const publicPayload = await publicHealth.json();
+    assert.deepEqual(Object.keys(publicPayload).sort(), ["ok", "service", "version"]);
+
+    const protectedHealth = await fetch(`${routerBase(routerPort)}/health`);
+    assert.equal(protectedHealth.status, 200);
+    const protectedPayload = await protectedHealth.json();
+    assert.equal(protectedPayload.oauth.credential_present, true);
+    assert.ok(healthAuth.every((value) => value === `Bearer ${INTERNAL_KEY}`));
+  } finally {
+    await stopChild(router);
+    await closeServer(gateway.server);
+  }
+});
 
 test("router refuses a known model whose provider is hidden", async () => {
   const gatewayRequests = [];
@@ -122,8 +245,8 @@ test("router refuses a known model whose provider is hidden", async () => {
   });
 
   try {
-    await waitFor(`http://127.0.0.1:${routerPort}/v1/models`, router);
-    const response = await fetch(`http://127.0.0.1:${routerPort}/v1/responses`, {
+    await waitFor(`${routerBase(routerPort)}/models`, router);
+    const response = await fetch(`${routerBase(routerPort)}/responses`, {
       method: "POST",
       headers: {
         Authorization: "Bearer CODEX_CALLER_SECRET",
@@ -175,7 +298,7 @@ test("router preserves native auth and isolates every external route", async () 
   });
 
   try {
-    await waitFor(`http://127.0.0.1:${routerPort}/v1/models`, router);
+    await waitFor(`${routerBase(routerPort)}/models`, router);
     const callerHeaders = {
       Authorization: "Bearer CODEX_CALLER_SECRET",
       "ChatGPT-Account-Id": "account-secret",
@@ -192,7 +315,7 @@ test("router preserves native auth and isolates every external route", async () 
         }),
       ),
     );
-    const nativeResponse = await fetch(`http://127.0.0.1:${routerPort}/v1/responses`, {
+    const nativeResponse = await fetch(`${routerBase(routerPort)}/responses`, {
       method: "POST",
       headers: { ...callerHeaders, "Content-Encoding": "zstd" },
       body: nativePayload,
@@ -205,7 +328,7 @@ test("router preserves native auth and isolates every external route", async () 
       ["deepseek/deepseek-v4-flash", "deepseek-v4-flash"],
       ["deepseek/deepseek-v4-pro", "deepseek-v4-pro"],
     ]) {
-      const response = await fetch(`http://127.0.0.1:${routerPort}/v1/responses`, {
+      const response = await fetch(`${routerBase(routerPort)}/responses`, {
         method: "POST",
         headers: callerHeaders,
         body: JSON.stringify({ model, input: "external test" }),
@@ -257,11 +380,11 @@ test("router synthesizes v1 and v2 compaction for registry models", async () => 
   };
 
   try {
-    await waitFor(`http://127.0.0.1:${routerPort}/v1/models`, router);
+    await waitFor(`${routerBase(routerPort)}/models`, router);
     const input = [
       { type: "message", role: "user", content: [{ type: "input_text", text: "keep me" }] },
     ];
-    const v1 = await fetch(`http://127.0.0.1:${routerPort}/v1/responses/compact`, {
+    const v1 = await fetch(`${routerBase(routerPort)}/responses/compact`, {
       method: "POST",
       headers,
       body: JSON.stringify({ model: "deepseek/deepseek-v4-pro", input }),
@@ -271,7 +394,7 @@ test("router synthesizes v1 and v2 compaction for registry models", async () => 
     assert.equal(v1Body.output.at(-1).role, "user");
     assert.match(v1Body.output.at(-1).content[0].text, /compact summary/);
 
-    const v2 = await fetch(`http://127.0.0.1:${routerPort}/v1/responses`, {
+    const v2 = await fetch(`${routerBase(routerPort)}/responses`, {
       method: "POST",
       headers,
       body: JSON.stringify({
@@ -285,7 +408,7 @@ test("router synthesizes v1 and v2 compaction for registry models", async () => 
     assert.equal(v2Body.output[0].type, "compaction");
     assert.match(v2Body.output[0].encrypted_content, /^kcr1:/);
 
-    const replay = await fetch(`http://127.0.0.1:${routerPort}/v1/responses`, {
+    const replay = await fetch(`${routerBase(routerPort)}/responses`, {
       method: "POST",
       headers,
       body: JSON.stringify({
@@ -317,7 +440,13 @@ test("API forwarder replaces caller auth and enforces Kimi K3 API parameters", a
   });
 
   try {
-    await waitFor(`http://127.0.0.1:${forwarderPort}/health`, forwarder);
+    await waitFor(`http://127.0.0.1:${forwarderPort}/health`, forwarder, {
+      Authorization: `Bearer ${INTERNAL_KEY}`,
+    });
+    const unauthorizedHealth = await fetch(
+      `http://127.0.0.1:${forwarderPort}/health`,
+    );
+    assert.equal(unauthorizedHealth.status, 401);
     const unauthorized = await fetch(
       `http://127.0.0.1:${forwarderPort}/v1/chat/completions`,
       {
@@ -373,7 +502,9 @@ test("API forwarder supports all DeepSeek V4 models and normalizes thinking", as
   });
 
   try {
-    await waitFor(`http://127.0.0.1:${forwarderPort}/health`, forwarder);
+    await waitFor(`http://127.0.0.1:${forwarderPort}/health`, forwarder, {
+      Authorization: `Bearer ${INTERNAL_KEY}`,
+    });
     for (const [gatewayModel, upstreamModel, effort] of [
       ["deepseek-v4-flash", "deepseek-v4-flash", "high"],
       ["deepseek-v4-pro", "deepseek-v4-pro", "max"],

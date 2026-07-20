@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Hardened local caller authentication with a separate per-install capability,
+  exact internal-key checks, authenticated credential-detail health endpoints,
+  browser-request rejection, and fail-closed routing before request bodies or
+  provider quota are touched.
+- Protected Codex config and all config snapshots for the current user, and
+  redacted the caller capability from status, migration, and support output.
+- Replaced raw exception text in HTTP responses and service logs with bounded,
+  non-sensitive errors.
 - Fixed Windows private-file ACL grants for numeric user SIDs and corrected
   router-status detection for escaped Windows catalog paths.
 

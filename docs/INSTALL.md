@@ -122,10 +122,11 @@ Setup performs these operations in order:
 2. Detects other model-catalog owners and earlier Codex Router variants.
 3. With approval, snapshots and stops only recognized older variants.
 4. Installs locked Node dependencies and pinned LiteLLM in `.venv`.
-5. Generates a random internal loopback service key.
+5. Generates separate random Codex caller and internal-service keys.
 6. Captures the native Codex model catalog and adds only selected provider models.
 7. Generates gateway routes from `config/providers.json`.
-8. Adds the marked base-URL and catalog block to the root Codex config.
+8. Adds the marked capability-bearing base URL and catalog block, then protects
+   the Codex config and its backup for the current user.
 9. Installs the platform's per-user background service.
 10. Waits for every local layer to report its expected service identity.
 11. Records the installed commit and provider selection.
@@ -207,6 +208,11 @@ The updater requires a clean checkout on the recognized GitHub origin. It
 fetches `origin/main`, retains the current revision under
 `refs/codex-router/rollback`, fast-forwards, and reinstalls. A failed install
 automatically checks out and reinstalls the previous revision.
+
+When upgrading from a release without caller capabilities, the installer
+generates one, replaces only the marked managed URL, tightens config permissions,
+and restarts the per-user router service. Fully quit and reopen Codex afterward
+so it reloads the new URL.
 
 `./bin/rollback` switches to the cached previous revision and reinstalls it. A
 later `./bin/update` returns the managed checkout to `main` before updating.

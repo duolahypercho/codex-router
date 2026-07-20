@@ -36,8 +36,9 @@ user.
    when detection found nothing. Do not enable `--smoke-test` unless the user
    agrees to a quota-consuming request.
 8. Run `bin/doctor` (or `./codex-router.ps1 doctor` on Windows). Core config,
-   catalog, internal key, service, router health, and selected credentials must
-   be `OK`. Unselected credentials may be `WARN`.
+   config privacy, catalog, caller capability, internal key, service, router
+   health, and selected credentials must be `OK`. Unselected credentials may be
+   `WARN`.
 9. If a managed layer fails, use `bin/doctor --fix`; add `--migrate-known` only
    for a recognized older installation. If repair still fails, create
    `bin/support-bundle` and report its path without automatically uploading it.
@@ -53,6 +54,9 @@ user.
 - Do not kill unknown processes on ports 4100–4103.
 - Do not print or read credential-file contents. Status commands report presence
   and source only.
+- Treat the generated `/_codex-router/.../v1` config path as sensitive local
+  authentication. Never paste the complete managed base URL into chat or a
+  public issue; use the redacted status or support-bundle output.
 - Do not delete retained keys, logs, backups, snapshots, or old state
   directories.
 - Do not restart or quit the Codex App from the installation task.

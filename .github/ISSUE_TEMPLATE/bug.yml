@@ -6,7 +6,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Never paste API keys, OAuth files, full prompts, or unredacted logs. Run `./bin/support-bundle` and attach the generated JSON if you are comfortable sharing its metadata.
+        Never paste API keys, OAuth files, the full managed `openai_base_url`, full prompts, or unredacted logs. Run `./bin/support-bundle` and attach the generated JSON if you are comfortable sharing its metadata. Report security issues through [Private Vulnerability Reporting](https://github.com/duolahypercho/codex-router/security/advisories/new), not a public issue.
   - type: textarea
     id: problem
     attributes:

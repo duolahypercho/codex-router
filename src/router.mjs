@@ -9,7 +9,12 @@ import {
 } from "node:zlib";
 
 import {
+  assertCallerSecret,
+  authenticatedRoute,
+} from "./caller-auth.mjs";
+import {
   HOP_BY_HOP_HEADERS,
+  httpErrorStatus,
   MAX_BODY_BYTES,
   pipeResponse,
   readRequestBody,
@@ -49,12 +54,12 @@ const CATALOG_PATH =
   process.env.CODEX_ROUTER_CATALOG || process.env.KIMI_ROUTER_CATALOG || MERGED_CATALOG_PATH;
 const INTERNAL_KEY =
   process.env.CODEX_ROUTER_INTERNAL_KEY || process.env.KIMI_INTERNAL_KEY;
-const REQUIRE_CALLER_AUTH =
-  (process.env.CODEX_ROUTER_REQUIRE_AUTH || process.env.KIMI_ROUTER_REQUIRE_AUTH) !== "0";
+const CALLER_KEY = process.env.CODEX_ROUTER_CALLER_KEY;
 const QUIET =
   process.env.CODEX_ROUTER_QUIET === "1" || process.env.KIMI_PROXY_QUIET === "1";
 
 if (!INTERNAL_KEY) throw new Error("CODEX_ROUTER_INTERNAL_KEY is required.");
+assertCallerSecret(CALLER_KEY);
 
 const FORWARD_HEADERS = new Set([
   "authorization",
@@ -178,10 +183,13 @@ function catalogModels() {
 
 async function serviceHealth(url) {
   try {
-    const response = await fetch(url, { signal: AbortSignal.timeout(1_000) });
+    const response = await fetch(url, {
+      headers: { Authorization: `Bearer ${INTERNAL_KEY}` },
+      signal: AbortSignal.timeout(1_000),
+    });
     const raw = await response.json().catch(() => undefined);
     const payload = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
-    return { reachable: response.ok, ...payload };
+    return { ...payload, reachable: response.ok };
   } catch {
     return { reachable: false };
   }
@@ -403,16 +411,34 @@ async function handleModels(response) {
   writeJson(response, 200, { object: "list", data });
 }
 
-async function handleResponses(request, response, requestUrl) {
-  if (REQUIRE_CALLER_AUTH && !request.headers.authorization) {
-    writeJson(response, 401, {
+function requireCodexTransport(request, response) {
+  if (request.headers.origin || request.headers["sec-fetch-site"]) {
+    writeJson(response, 403, {
       error: {
-        type: "authentication_error",
-        message: "The local router requires Codex caller authentication.",
+        type: "browser_request_rejected",
+        message: "Browser-originated requests are not accepted by the local model router.",
       },
     });
-    return;
+    return false;
   }
+  const contentType = String(request.headers["content-type"] || "")
+    .split(";", 1)[0]
+    .trim()
+    .toLowerCase();
+  if (contentType !== "application/json") {
+    writeJson(response, 415, {
+      error: {
+        type: "unsupported_media_type",
+        message: "Codex router requests require Content-Type: application/json.",
+      },
+    });
+    return false;
+  }
+  return true;
+}
+
+async function handleResponses(request, response, requestUrl) {
+  if (!requireCodexTransport(request, response)) return;
   const encoded = await readRequestBody(request);
   const body = decodeBody(encoded, request.headers["content-encoding"]);
   const payload = parseBody(body);
@@ -489,6 +515,31 @@ async function handleRequest(request, response) {
   );
   if (request.method === "GET" && requestUrl.pathname === "/health") {
     const health = await healthPayload();
+    writeJson(response, health.ok ? 200 : 503, {
+      ok: health.ok,
+      service: health.service,
+      version: health.version,
+    });
+    return;
+  }
+
+  const route = authenticatedRoute(requestUrl.pathname, CALLER_KEY);
+  if (!route) {
+    writeJson(response, 401, {
+      error: {
+        type: "authentication_error",
+        message: "This local router endpoint requires its configured caller capability.",
+      },
+    });
+    return;
+  }
+  requestUrl.pathname = route;
+
+  if (
+    request.method === "GET" &&
+    ["/health", "/v1/health"].includes(requestUrl.pathname)
+  ) {
+    const health = await healthPayload();
     writeJson(response, health.ok ? 200 : 503, health);
     return;
   }
@@ -517,19 +568,17 @@ async function handleRequest(request, response) {
 
 const server = http.createServer((request, response) => {
   handleRequest(request, response).catch((error) => {
-    const status = Number(error?.status) || 502;
-    console.error(
-      `[codex-router] request failed: ${error instanceof Error ? error.message : String(error)}`,
-    );
+    const status = httpErrorStatus(error);
+    console.error("[codex-router] request failed");
     if (!response.headersSent) {
       writeJson(response, status, {
         error: {
           type: "local_router_error",
-          message: error instanceof Error ? error.message : String(error),
+          message: "The local router could not complete the request.",
         },
       });
     } else if (!response.writableEnded) {
-      response.destroy(error instanceof Error ? error : undefined);
+      response.destroy();
     }
   });
 });
