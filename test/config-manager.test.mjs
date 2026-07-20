@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const manager = path.join(root, "src", "config-manager.mjs");
 
-function run(command, codexHome) {
+function run(command, codexHome, stateDir = path.join(codexHome, "router-state")) {
   return JSON.parse(
     execFileSync(process.execPath, [manager, command], {
       cwd: root,
@@ -22,7 +22,7 @@ function run(command, codexHome) {
       env: {
         ...process.env,
         CODEX_HOME: codexHome,
-        CODEX_ROUTER_STATE_DIR: path.join(codexHome, "router-state"),
+        CODEX_ROUTER_STATE_DIR: stateDir,
         CODEX_ROUTER_PORT: "46192",
       },
     }),
@@ -67,6 +67,20 @@ approval_policy = "never"
     assert.match(restored, /model_provider = "openai"/);
     assert.match(restored, /model_reasoning_effort = "xhigh"/);
     assert.match(restored, /\[profiles\.work\]/);
+  } finally {
+    rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
+test("config manager decodes escaped catalog paths", () => {
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), "codex-router-escaped-path-"));
+  const stateDir = path.join(codexHome, "router\\state");
+
+  try {
+    const enabled = run("enable", codexHome, stateDir);
+    assert.equal(enabled.mode, "router");
+    assert.equal(enabled.model_catalog_json, path.join(stateDir, "merged-models.json"));
+    assert.equal(run("status", codexHome, stateDir).mode, "router");
   } finally {
     rmSync(codexHome, { recursive: true, force: true });
   }

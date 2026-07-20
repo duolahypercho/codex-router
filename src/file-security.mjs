@@ -16,13 +16,22 @@ function currentWindowsSid() {
   return windowsSid;
 }
 
+export function windowsFullControlGrant(sid) {
+  if (!/^S-\d+(?:-\d+)+$/i.test(sid)) {
+    throw new Error("Could not format an invalid Windows user SID.");
+  }
+  // icacls requires an asterisk before a numeric SID so it is not resolved as
+  // an account name. Without it, hosted runners fail with system error 1332.
+  return `*${sid}:(F)`;
+}
+
 export function protectPrivateFile(target) {
   chmodSync(target, 0o600);
   if (process.platform !== "win32") return target;
   const sid = currentWindowsSid();
   execFileSync(
     "icacls.exe",
-    [target, "/inheritance:r", "/grant:r", `${sid}:(F)`],
+    [target, "/inheritance:r", "/grant:r", windowsFullControlGrant(sid)],
     { stdio: "ignore" },
   );
   return target;

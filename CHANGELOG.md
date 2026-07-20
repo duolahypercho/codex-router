@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Fixed Windows private-file ACL grants for numeric user SIDs and corrected
+  router-status detection for escaped Windows catalog paths.
+
 ## 0.3.0
 
 - Added guided, provider-aware setup for Kimi OAuth, Kimi API, and DeepSeek API.

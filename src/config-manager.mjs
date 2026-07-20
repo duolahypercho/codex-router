@@ -55,14 +55,23 @@ function trimBlankEdges(lines) {
   return copy;
 }
 
-function rootValue(lines, key) {
-  const match = lines.find((line) => new RegExp(`^\\s*${key}\\s*=`).test(line));
-  if (!match) return undefined;
-  return match.split("=").slice(1).join("=").trim().replace(/^["']|["']$/g, "");
+function assignmentValue(line) {
+  const raw = line.split("=").slice(1).join("=").trim();
+  if (raw.startsWith('"') && raw.endsWith('"')) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (typeof parsed === "string") return parsed;
+    } catch {
+      // Preserve the previous best-effort behavior for malformed user config.
+    }
+  }
+  if (raw.startsWith("'") && raw.endsWith("'")) return raw.slice(1, -1);
+  return raw.replace(/^(["'])|(["'])$/g, "");
 }
 
-function assignmentValue(line) {
-  return line.split("=").slice(1).join("=").trim().replace(/^(["'])|(["'])$/g, "");
+function rootValue(lines, key) {
+  const match = lines.find((line) => new RegExp(`^\\s*${key}\\s*=`).test(line));
+  return match ? assignmentValue(match) : undefined;
 }
 
 function clean(contents) {
