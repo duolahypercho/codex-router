@@ -17,6 +17,7 @@ import path from "node:path";
 
 import lockfile from "proper-lockfile";
 
+import { protectPrivateFile } from "./file-security.mjs";
 import {
   HOP_BY_HOP_HEADERS,
   pipeResponse,
@@ -25,8 +26,8 @@ import {
   writeJson,
 } from "./http-utils.mjs";
 import { PORTS } from "./paths.mjs";
+import { VERSION } from "./version.mjs";
 
-const VERSION = "0.2.0";
 const KIMI_CLIENT_ID = "17e5f671-d194-4dfb-9706-5516cb48c098";
 const KIMI_CODE_HOME =
   process.env.KIMI_CODE_HOME || path.join(os.homedir(), ".kimi-code");
@@ -161,8 +162,9 @@ function atomicSaveToken(token) {
     closeSync(descriptor);
   }
   try {
-    chmodSync(temporary, 0o600);
+    protectPrivateFile(temporary);
     renameSync(temporary, CREDENTIALS_PATH);
+    protectPrivateFile(CREDENTIALS_PATH);
   } catch (error) {
     try {
       unlinkSync(temporary);

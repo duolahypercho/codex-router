@@ -1,0 +1,28 @@
+name: Provider or model request
+description: Propose a new OpenAI-compatible provider or model route.
+title: "[Provider]: "
+labels: [provider]
+body:
+  - type: input
+    id: provider
+    attributes:
+      label: Provider and model ID
+      placeholder: provider-name/model-id
+    validations:
+      required: true
+  - type: input
+    id: docs
+    attributes:
+      label: Official API documentation
+      description: Link to the provider's model and API compatibility documentation.
+    validations:
+      required: true
+  - type: checkboxes
+    id: compatibility
+    attributes:
+      label: Codex compatibility evidence
+      options:
+        - label: Streaming Responses translation works.
+        - label: Function/tool calls and JSON arguments work.
+        - label: Long-running requests and compaction work.
+        - label: The proposed context window and modalities come from official documentation.

@@ -13,7 +13,7 @@ import path from "node:path";
 import {
   BACKUP_PATH,
   CONFIG_PATH,
-  LEGACY_STATE_DIR,
+  LEGACY_STATE_DIRS,
   MERGED_CATALOG_PATH,
   PORTS,
   loopback,
@@ -25,6 +25,7 @@ const endMarker = "# END codex-router-managed";
 const markerPairs = [
   [startMarker, endMarker],
   ["# BEGIN kimi-codex-router-managed", "# END kimi-codex-router-managed"],
+  ["# BEGIN kimi-codex-proxy-managed", "# END kimi-codex-proxy-managed"],
 ];
 const command = process.argv[2] || "status";
 
@@ -60,20 +61,28 @@ function rootValue(lines, key) {
   return match.split("=").slice(1).join("=").trim().replace(/^["']|["']$/g, "");
 }
 
+function assignmentValue(line) {
+  return line.split("=").slice(1).join("=").trim().replace(/^(["'])|(["'])$/g, "");
+}
+
 function clean(contents) {
+  const knownCatalogPaths = [
+    MERGED_CATALOG_PATH,
+    ...LEGACY_STATE_DIRS.map((directory) => path.join(directory, "merged-models.json")),
+  ];
+  const knownManaged =
+    markerPairs.some(([start]) => contents.includes(start)) ||
+    knownCatalogPaths.some((catalogPath) => contents.includes(catalogPath));
   const withoutBlock = removeMarkedBlock(contents);
   const { rootLines, tableLines } = splitRoot(withoutBlock);
   const filtered = rootLines.filter((line) => {
     if (/^\s*openai_base_url\s*=/.test(line)) {
-      return !line.includes(JSON.stringify(routerBaseUrl));
+      return !(knownManaged && assignmentValue(line) === routerBaseUrl);
     }
     if (/^\s*model_catalog_json\s*=/.test(line)) {
-      return ![
-        MERGED_CATALOG_PATH,
-        path.join(LEGACY_STATE_DIR, "merged-models.json"),
-      ].some((catalogPath) => line.includes(JSON.stringify(catalogPath)));
+      return !knownCatalogPaths.includes(assignmentValue(line));
     }
-    return !markerPairs.flat().includes(line);
+    return !markerPairs.flat().includes(line.trim());
   });
   return { rootLines: filtered, tableLines };
 }

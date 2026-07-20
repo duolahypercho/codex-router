@@ -95,8 +95,45 @@ model_reasoning_effort = "high"
     const configured = readFileSync(configPath, "utf8");
     assert.doesNotMatch(configured, /kimi-codex-router-managed|kimi-router/);
     assert.match(configured, /# BEGIN codex-router-managed/);
-    assert.match(configured, /router-state\/merged-models\.json/);
+    assert.ok(
+      configured.includes(
+        JSON.stringify(path.join(codexHome, "router-state", "merged-models.json")),
+      ),
+    );
     assert.match(configured, /\[profiles\.personal\]/);
+  } finally {
+    rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
+test("config manager repairs a malformed prototype block without touching tables", () => {
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), "codex-router-prototype-"));
+  const configPath = path.join(codexHome, "config.toml");
+  const prototypeCatalog = path.join(codexHome, "kimi-proxy", "merged-models.json");
+  writeFileSync(
+    configPath,
+    `model = "kimi-oauth/k3"
+model_reasoning_effort = "high"
+
+# BEGIN kimi-codex-router-managed
+openai_base_url = "http://127.0.0.1:46192/v1"
+model_catalog_json = "${prototypeCatalog}"
+
+[projects."/important/project"]
+trust_level = "trusted"
+`,
+    { mode: 0o600 },
+  );
+
+  try {
+    run("enable", codexHome);
+    const configured = readFileSync(configPath, "utf8");
+    assert.doesNotMatch(configured, /kimi-proxy|BEGIN kimi-codex-router/);
+    assert.match(configured, /# BEGIN codex-router-managed/);
+    assert.match(configured, /model = "kimi-oauth\/k3"/);
+    assert.match(configured, /model_reasoning_effort = "high"/);
+    assert.match(configured, /\[projects\."\/important\/project"\]/);
+    assert.match(configured, /trust_level = "trusted"/);
   } finally {
     rmSync(codexHome, { recursive: true, force: true });
   }

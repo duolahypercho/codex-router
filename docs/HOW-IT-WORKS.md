@@ -52,6 +52,13 @@ sequenceDiagram
 `config/providers.json` supplies the model mapping used by the catalog, router,
 gateway generator, API forwarder, and doctor.
 
+`enabled-providers.json` is a separate local policy. It controls both picker
+visibility and dispatcher access. A known namespaced model whose provider is
+hidden receives a local `provider_not_enabled` error; it is never mistaken for a
+native model or forwarded with Codex authentication. The policy is read on each
+external request, so provider visibility can change without restarting the
+service (Codex itself still needs a restart to reload the picker catalog).
+
 | Picker model | Public slug | Gateway model | Upstream model |
 | --- | --- | --- | --- |
 | Kimi K3 OAuth | `kimi-oauth/k3` | `kimi-oauth-k3` | `k3` |
@@ -78,7 +85,7 @@ picker instead of replacing the provider with a generic `Custom` entry.
 | DeepSeek | Discarded | DeepSeek API key |
 
 The router-to-LiteLLM and LiteLLM-to-forwarder hops use a random internal key
-stored with mode `600`. It is not a provider credential. Each external
+stored with mode `600` or a current-user Windows ACL. It is not a provider credential. Each external
 forwarder removes Codex account, installation, attestation, and private headers
 before sending a request upstream.
 

@@ -1,157 +1,218 @@
-# Installation guide
+# Installation, migration, and upgrades
 
-## Supported setup
+## Supported hosts
 
-The automatic installer targets the Codex desktop app on macOS. The runtime is
-Node.js plus LiteLLM; Linux and Windows background-service installers are not
-included yet.
+| Host | Codex surface | Background service |
+| --- | --- | --- |
+| macOS | Codex App or CLI | Per-user launchd agent |
+| Windows | Codex App or CLI | Per-user Task Scheduler task |
+| Linux | Codex CLI | systemd user service |
 
 Required software:
 
-- Codex App or Codex CLI, already signed into ChatGPT.
-- Node.js 22.19 or newer. Node 24 LTS is recommended.
-- `uv`, or Python 3.10+ with the standard `venv` module.
-- At least one configured external-provider credential.
+- Node.js 22.19+ (Node.js 24 LTS recommended)
+- `uv`, or Python 3.10+ with `venv`
+- Git for managed one-command installation and rollback
+- At least one Kimi OAuth, Kimi API, or DeepSeek API credential
+
+The installer does not silently install a system package manager or runtime.
+When a prerequisite is missing, install it from its official source and rerun
+the same command.
 
 ## Ask Codex to install it
 
-Send this message to Codex:
-
 ```text
-Install this model router in my Codex App:
+Install Codex Router from:
 https://github.com/duolahypercho/codex-router
 
-Follow AGENTS.md, preserve my existing Codex defaults and ChatGPT login,
-configure only the credentials I request, run the doctor, and tell me when it
-is ready to restart. Do not quit Codex for me.
+Follow AGENTS.md. Preserve all of my existing Codex settings and ChatGPT login.
+Use only the provider authentication I choose, safely migrate recognized older
+versions with a rollback snapshot, run the doctor, and do not quit Codex for me.
+Never ask me to paste a token or API key into chat.
 ```
 
-Codex should clone to `~/.local/share/codex-router`, run `./install.sh`,
-configure requested credentials through hidden prompts, and finish with
-`./bin/doctor`.
+Codex should use a stable checkout, not a temporary directory. The service
+definition stores the checkout's absolute path.
 
-## 1. Choose authentication
+## Guided terminal install
 
-Kimi Code OAuth reuses the official CLI session:
+macOS or Linux:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/duolahypercho/codex-router/main/install.sh | sh -s -- --guided
+```
+
+Windows PowerShell:
+
+```powershell
+$installer = Join-Path $env:TEMP "codex-router-install.ps1"
+Invoke-WebRequest https://raw.githubusercontent.com/duolahypercho/codex-router/main/install.ps1 -OutFile $installer
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File $installer -Guided
+```
+
+Clone-and-review installation is also supported:
+
+```sh
+git clone https://github.com/duolahypercho/codex-router.git
+cd codex-router
+./install.sh --guided
+```
+
+```powershell
+git clone https://github.com/duolahypercho/codex-router.git
+Set-Location codex-router
+./install.ps1 -Guided
+```
+
+## Authentication choices
+
+Kimi Code OAuth reuses the official CLI session. Guided setup offers to run the
+login command when the CLI exists:
 
 ```sh
 kimi login
 ```
 
-Kimi Platform and Kimi Code are separate services. For Kimi Platform billing,
-configure its API key after installation:
+API-key providers use hidden prompts:
 
 ```sh
 ./bin/provider-key kimi-api set
-```
-
-For DeepSeek API access:
-
-```sh
 ./bin/provider-key deepseek set
 ```
 
-The key prompts disable terminal echo and write mode-`600` files. Never put a
-credential in chat, shell history, `config/providers.json`, or a tracked file.
+Windows:
 
-## 2. Install
-
-Keep the checkout in a stable location because the LaunchAgent stores its
-absolute path. From the repository root:
-
-```sh
-./install.sh
+```powershell
+./codex-router.ps1 provider-key kimi-api set
+./codex-router.ps1 provider-key deepseek set
 ```
 
-Or bootstrap the stable checkout directly:
+Kimi OAuth, Kimi Platform, and DeepSeek are separate account and billing
+systems. Never put a credential in chat, a command argument, shell history, the
+provider registry, or a tracked file.
+
+Noninteractive setup can reuse already configured credentials:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/duolahypercho/codex-router/main/install.sh | sh
+./install.sh --auto --providers configured --migrate-known
 ```
 
-Useful installer options:
+Or choose an exact set:
 
 ```sh
-./install.sh --deepseek-api-key
-./install.sh --kimi-api-key
-./install.sh --prepare-only
-./install.sh --help
+./install.sh --auto --providers kimi-oauth
+./install.sh --kimi-api-key --auto
+./install.sh --deepseek-api-key --auto
+./install.sh --auto --providers kimi-oauth,kimi-api,deepseek
 ```
 
-The installer:
+`--smoke-test` makes one small live request per provider and may use paid quota;
+it is never enabled by default.
 
-1. Installs Node and LiteLLM dependencies.
-2. Generates a random loopback-only internal service key.
-3. Captures the current native Codex model catalog.
-4. Adds every listed model from `config/providers.json`.
-5. Generates the LiteLLM gateway configuration from the same registry.
-6. Adds the marked `openai_base_url` and `model_catalog_json` block.
-7. Registers `io.github.codex-router` as a user LaunchAgent.
-8. Waits for the complete router stack to report healthy.
+An API key found only in the installer's shell environment is valid for
+foreground commands but is not copied into launchd, systemd, or Task Scheduler.
+Use `provider-key ... set` so the per-user background service has persistent,
+protected access.
 
-If another proxy owns ports 4100 through 4103, the health identity check fails
-and the installer rolls back its config change. It does not kill unknown
-processes.
+## Installer transaction
 
-## 3. Restart Codex
+Setup performs these operations in order:
 
-`model_catalog_json` is loaded at app startup. Fully quit with `Command-Q`,
-reopen Codex, and create a new task. The picker should contain:
+1. Validates provider selection and credential presence.
+2. Detects other model-catalog owners and earlier Codex Router variants.
+3. With approval, snapshots and stops only recognized older variants.
+4. Installs locked Node dependencies and pinned LiteLLM in `.venv`.
+5. Generates a random internal loopback service key.
+6. Captures the native Codex model catalog and adds only selected provider models.
+7. Generates gateway routes from `config/providers.json`.
+8. Adds the marked base-URL and catalog block to the root Codex config.
+9. Installs the platform's per-user background service.
+10. Waits for every local layer to report its expected service identity.
+11. Records the installed commit and provider selection.
+12. Runs the doctor.
 
-- `Kimi K3 (OAuth)`
-- `Kimi K3 (API)`
-- `DeepSeek V4 Flash (API)`
-- `DeepSeek V4 Pro (API)`
+If config or service installation fails, the new service and marked config block
+are removed. If a legacy migration was part of the transaction, its exact config
+and service definition are restored as well.
 
-Native GPT models and the previously selected default remain intact.
+The installer does not kill an unknown process on ports 4100–4103 and does not
+replace an unmarked user-owned `openai_base_url` or `model_catalog_json`.
 
-## Verify
+## Recognized older installations
+
+Read-only detection:
+
+```sh
+./bin/migrate detect
+```
+
+The migration engine recognizes:
+
+- `io.github.kimi-codex-router` with `~/.codex/kimi-router`
+- `com.ziwenxu.kimi-codex-proxy` with `~/.codex/kimi-proxy`
+- complete or malformed start-only Kimi managed config markers
+
+Approved migration stops only those services, retains their state directories,
+moves their service definitions into `$CODEX_HOME/codex-router/migrations`, and
+stores the original config with protected permissions. Restore it with:
+
+```sh
+./bin/migrate rollback
+```
+
+An unknown catalog owner requires a manual decision; automatic setup stops
+without changing it.
+
+## Restart and verify
+
+`model_catalog_json` is loaded at Codex startup. Fully quit the app, reopen it,
+and create a new task. On macOS use Command-Q; on Windows use the app's Quit
+command or end it from the tray if present.
 
 ```sh
 ./bin/doctor
-codex debug models | jq -r '.models[] | select(.slug | contains("/")) | .display_name'
+./bin/providers
+codex debug models
 ```
 
-Provider smoke tests:
+The doctor reports exact remediation beneath each failed layer. Safe managed
+state can be rebuilt with:
 
 ```sh
-codex exec --model 'kimi-oauth/k3' 'Reply with exactly OAUTH_OK'
-codex exec --model 'kimi-api/kimi-k3' 'Reply with exactly KIMI_API_OK'
-codex exec --model 'deepseek/deepseek-v4-flash' 'Reply with exactly FLASH_OK'
-codex exec --model 'deepseek/deepseek-v4-pro' 'Reply with exactly PRO_OK'
+./bin/doctor --fix
 ```
 
-Only run tests for credentials you configured; each call may consume provider
-quota.
-
-## DeepSeek model lifecycle
-
-DeepSeek's official `/models` documentation currently lists
-`deepseek-v4-flash` and `deepseek-v4-pro`. Both support 1M context, tools, and
-thinking/non-thinking modes. The router lists both.
-
-The older `deepseek-chat` and `deepseek-reasoner` aliases are hidden but remain
-CLI-routable as `deepseek/deepseek-chat` and
-`deepseek/deepseek-reasoner`. DeepSeek states that those aliases stop working
-on July 24, 2026 at 15:59 UTC.
-
-## Upgrades
-
-For the managed stable checkout, running the bootstrap command again performs a
-fast-forward update and reinstall. From an existing checkout:
+Live quota-consuming verification is separate:
 
 ```sh
-git pull --ff-only
-./install.sh
+./bin/smoke-test
+./bin/test-model 'kimi-oauth/k3' --live --yes
 ```
 
-After a Codex App update or provider-registry change:
+## Update and rollback
 
 ```sh
-./bin/refresh-catalog
+./bin/update
+./bin/rollback
 ```
 
-Then restart Codex so it reloads the generated catalog.
+Windows:
+
+```powershell
+./codex-router.ps1 update
+./codex-router.ps1 rollback
+```
+
+The updater requires a clean checkout on the recognized GitHub origin. It
+fetches `origin/main`, retains the current revision under
+`refs/codex-router/rollback`, fast-forwards, and reinstalls. A failed install
+automatically checks out and reinstalls the previous revision.
+
+`./bin/rollback` switches to the cached previous revision and reinstalls it. A
+later `./bin/update` returns the managed checkout to `main` before updating.
+
+For a source archive without `.git`, download and install a newer tagged archive
+instead. Release pages provide SHA-256 checksums and provenance attestations.
 
 ## Disable and uninstall
 
@@ -161,7 +222,15 @@ Then restart Codex so it reloads the generated catalog.
 ./bin/uninstall
 ```
 
-Uninstall removes the marked config block and LaunchAgent. It intentionally
-retains the checkout, logs, cached catalogs, backups, internal key, and
-provider API keys so routine uninstall cannot silently destroy credentials or
-diagnostic data.
+Windows:
+
+```powershell
+./codex-router.ps1 disable
+./codex-router.ps1 enable
+./codex-router.ps1 uninstall
+```
+
+Uninstall removes the marked integration config and current background service.
+It intentionally retains the checkout, native catalog cache, logs, backups,
+migration snapshots, internal key, and provider credentials. This prevents a
+routine uninstall from silently destroying authentication or recovery data.

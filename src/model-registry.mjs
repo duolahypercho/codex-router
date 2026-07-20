@@ -34,6 +34,11 @@ function loadRegistry() {
     if (!["oauth", "openai-compatible"].includes(provider.kind)) {
       fail(`unsupported provider kind ${provider.kind} for ${provider.id}`);
     }
+    for (const field of ["displayName", "ownedBy"]) {
+      if (typeof provider[field] !== "string" || !provider[field]) {
+        fail(`provider ${provider.id} requires ${field}`);
+      }
+    }
     if (provider.kind === "oauth" && !provider.proxyBaseEnv) {
       fail(`OAuth provider ${provider.id} requires proxyBaseEnv`);
     }
@@ -62,6 +67,12 @@ function loadRegistry() {
     if (!providers.has(model.provider)) {
       fail(`model ${model.slug} references unknown provider ${model.provider}`);
     }
+    if (!model.slug.startsWith(`${model.provider}/`)) {
+      fail(`model ${model.slug} must be namespaced under ${model.provider}/`);
+    }
+    if (model.requestProfile !== undefined && typeof model.requestProfile !== "string") {
+      fail(`model ${model.slug} has an invalid requestProfile`);
+    }
     if (slugs.has(model.slug)) fail(`duplicate model slug ${model.slug}`);
     if (gatewayModels.has(model.gatewayModel)) {
       fail(`duplicate gateway model ${model.gatewayModel}`);
@@ -77,6 +88,36 @@ function loadRegistry() {
       }
       if (!Number.isInteger(model.contextWindow) || model.contextWindow < 1) {
         fail(`listed model ${model.slug} requires contextWindow`);
+      }
+      if (!Number.isInteger(model.priority)) {
+        fail(`listed model ${model.slug} requires an integer priority`);
+      }
+      if (
+        !Number.isInteger(model.autoCompact) ||
+        model.autoCompact < 1 ||
+        model.autoCompact > model.contextWindow
+      ) {
+        fail(`listed model ${model.slug} requires a valid autoCompact limit`);
+      }
+      if (
+        !Array.isArray(model.inputModalities) ||
+        model.inputModalities.length === 0 ||
+        model.inputModalities.some((value) => !["text", "image"].includes(value))
+      ) {
+        fail(`listed model ${model.slug} requires supported inputModalities`);
+      }
+      if (
+        model.reasoningLevels.some(
+          (level) =>
+            !level ||
+            typeof level.effort !== "string" ||
+            !level.effort ||
+            typeof level.description !== "string" ||
+            !level.description,
+        ) ||
+        !model.reasoningLevels.some((level) => level.effort === model.defaultEffort)
+      ) {
+        fail(`listed model ${model.slug} has invalid reasoningLevels`);
       }
     }
     slugs.add(model.slug);

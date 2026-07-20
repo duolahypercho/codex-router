@@ -6,9 +6,11 @@ import {
   readFileSync,
   renameSync,
   statSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 
+import { protectPrivateFile } from "./file-security.mjs";
 import { INTERNAL_SECRET_PATH, STATE_DIR } from "./paths.mjs";
 
 const command = process.argv[2] || "status";
@@ -26,15 +28,21 @@ if (command === "ensure") {
       encoding: "utf8",
       mode: 0o600,
     });
-    chmodSync(temporary, 0o600);
-    renameSync(temporary, INTERNAL_SECRET_PATH);
+    try {
+      protectPrivateFile(temporary);
+      renameSync(temporary, INTERNAL_SECRET_PATH);
+      protectPrivateFile(INTERNAL_SECRET_PATH);
+    } catch (error) {
+      if (existsSync(temporary)) unlinkSync(temporary);
+      throw error;
+    }
   }
 }
 
 const valid =
   existsSync(INTERNAL_SECRET_PATH) &&
   readFileSync(INTERNAL_SECRET_PATH, "utf8").trim().length >= 32;
-if (valid) chmodSync(INTERNAL_SECRET_PATH, 0o600);
+if (valid) protectPrivateFile(INTERNAL_SECRET_PATH);
 process.stdout.write(
   `${JSON.stringify({ present: valid, mode: valid ? statSync(INTERNAL_SECRET_PATH).mode & 0o777 : null })}\n`,
 );

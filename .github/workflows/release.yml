@@ -1,0 +1,47 @@
+name: Release
+
+"on":
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - run: npm test
+      - name: Verify tag matches package version
+        shell: bash
+        run: |
+          package_version=$(node -p 'require("./package.json").version')
+          test "v$package_version" = "$GITHUB_REF_NAME"
+      - name: Build source archives and checksums
+        shell: bash
+        run: |
+          mkdir -p dist
+          prefix="codex-router-${GITHUB_REF_NAME#v}/"
+          git archive --format=tar.gz --prefix="$prefix" -o "dist/codex-router-${GITHUB_REF_NAME#v}.tar.gz" "$GITHUB_REF_NAME"
+          git archive --format=zip --prefix="$prefix" -o "dist/codex-router-${GITHUB_REF_NAME#v}.zip" "$GITHUB_REF_NAME"
+          cd dist
+          sha256sum codex-router-* > SHA256SUMS
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: "dist/*"
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --generate-notes

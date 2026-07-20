@@ -1,0 +1,28 @@
+name: Bug report
+description: Report an installation or routing problem without sharing credentials.
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Never paste API keys, OAuth files, full prompts, or unredacted logs. Run `./bin/support-bundle` and attach the generated JSON if you are comfortable sharing its metadata.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened?
+      description: Include the expected behavior and the exact step that failed.
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options: [macOS, Windows, Linux]
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Doctor output or support bundle
+      description: Remove anything private before posting.

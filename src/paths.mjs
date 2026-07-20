@@ -18,16 +18,23 @@ export const NATIVE_CATALOG_PATH = path.join(STATE_DIR, "native-models.json");
 export const MERGED_CATALOG_PATH = path.join(STATE_DIR, "merged-models.json");
 export const LITELLM_CONFIG_PATH = path.join(STATE_DIR, "litellm.yaml");
 export const INTERNAL_SECRET_PATH = path.join(STATE_DIR, "internal-secret");
+export const PROVIDER_SELECTION_PATH = path.join(STATE_DIR, "enabled-providers.json");
+export const INSTALL_MANIFEST_PATH = path.join(STATE_DIR, "install-manifest.json");
+export const MIGRATIONS_DIR = path.join(STATE_DIR, "migrations");
+export const SUPPORT_DIR = path.join(STATE_DIR, "support");
 export const LOG_PATH = path.join(STATE_DIR, "router.log");
 export const BACKUP_PATH = path.join(CODEX_HOME, "config.toml.pre-codex-router");
 export const SERVICE_LABEL = "io.github.codex-router";
 export const LEGACY_SERVICE_LABEL = "io.github.kimi-codex-router";
-export const LAUNCH_AGENT_PATH = path.join(
-  os.homedir(),
-  "Library",
-  "LaunchAgents",
-  `${SERVICE_LABEL}.plist`,
-);
+export const PROTOTYPE_SERVICE_LABEL = "com.ziwenxu.kimi-codex-proxy";
+export const LEGACY_STATE_DIRS = Object.freeze([
+  LEGACY_STATE_DIR,
+  path.join(CODEX_HOME, "kimi-proxy"),
+]);
+export const LAUNCH_AGENTS_DIR =
+  process.env.CODEX_ROUTER_LAUNCH_AGENTS_DIR ||
+  path.join(os.homedir(), "Library", "LaunchAgents");
+export const LAUNCH_AGENT_PATH = path.join(LAUNCH_AGENTS_DIR, `${SERVICE_LABEL}.plist`);
 
 function port(name, fallback) {
   const value = Number(process.env[name] || fallback);

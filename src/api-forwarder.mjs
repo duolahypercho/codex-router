@@ -18,8 +18,8 @@ import {
   credentialStatus,
   resolveProviderCredential,
 } from "./provider-credentials.mjs";
+import { VERSION } from "./version.mjs";
 
-const VERSION = "0.2.0";
 const LISTEN_HOST =
   process.env.CODEX_ROUTER_API_HOST || process.env.KIMI_API_FORWARD_HOST || "127.0.0.1";
 const LISTEN_PORT = Number(

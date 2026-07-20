@@ -7,13 +7,11 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import os from "node:os";
 import path from "node:path";
 
 import {
   CODEX_HOME,
   LAUNCH_AGENT_PATH,
-  LEGACY_SERVICE_LABEL,
   LOG_PATH,
   PORTS,
   SERVICE_LABEL,
@@ -21,20 +19,14 @@ import {
   STATE_DIR,
 } from "./paths.mjs";
 
-if (process.platform !== "darwin") {
-  throw new Error("The bundled service manager currently supports macOS launchd only.");
-}
-
 const command = process.argv[2] || "status";
-const domain = `gui/${process.getuid()}`;
+const effectivePlatform = process.env.CODEX_ROUTER_SERVICE_PLATFORM || process.platform;
+if (effectivePlatform !== "darwin" && command !== "render") {
+  throw new Error("The launchd service manager runs on macOS only.");
+}
+const userId = typeof process.getuid === "function" ? process.getuid() : 501;
+const domain = `gui/${userId}`;
 const service = `${domain}/${SERVICE_LABEL}`;
-const legacyService = `${domain}/${LEGACY_SERVICE_LABEL}`;
-const legacyLaunchAgentPath = path.join(
-  os.homedir(),
-  "Library",
-  "LaunchAgents",
-  `${LEGACY_SERVICE_LABEL}.plist`,
-);
 const launchctl = "/bin/launchctl";
 
 function xml(value) {
@@ -128,16 +120,6 @@ function bootout(targetService = service) {
   }
 }
 
-function removeLegacyService() {
-  bootout(legacyService);
-  try {
-    run(["disable", legacyService], { quiet: true });
-  } catch {
-    // The legacy service may never have been enabled.
-  }
-  if (existsSync(legacyLaunchAgentPath)) unlinkSync(legacyLaunchAgentPath);
-}
-
 function writePlist() {
   mkdirSync(path.dirname(LAUNCH_AGENT_PATH), { recursive: true });
   mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 });
@@ -177,14 +159,12 @@ if (command === "render") {
     })}\n`,
   );
 } else if (command === "install") {
-  removeLegacyService();
   bootout();
   writePlist();
   bootstrap();
   process.stdout.write(`${JSON.stringify({ installed: true, path: LAUNCH_AGENT_PATH })}\n`);
 } else if (command === "uninstall") {
   bootout();
-  removeLegacyService();
   try {
     run(["disable", service], { quiet: true });
   } catch {

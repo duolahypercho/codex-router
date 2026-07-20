@@ -1,0 +1,54 @@
+import { execFileSync } from "node:child_process";
+import { chmodSync, existsSync, statSync } from "node:fs";
+
+let windowsSid;
+
+function currentWindowsSid() {
+  if (windowsSid) return windowsSid;
+  const script =
+    "[Console]::Out.Write([Security.Principal.WindowsIdentity]::GetCurrent().User.Value)";
+  windowsSid = execFileSync(
+    "powershell.exe",
+    ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
+    { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
+  ).trim();
+  if (!windowsSid) throw new Error("Could not resolve the current Windows user SID.");
+  return windowsSid;
+}
+
+export function protectPrivateFile(target) {
+  chmodSync(target, 0o600);
+  if (process.platform !== "win32") return target;
+  const sid = currentWindowsSid();
+  execFileSync(
+    "icacls.exe",
+    [target, "/inheritance:r", "/grant:r", `${sid}:(F)`],
+    { stdio: "ignore" },
+  );
+  return target;
+}
+
+export function privateFileIsProtected(target) {
+  if (!existsSync(target)) return false;
+  if (process.platform !== "win32") return (statSync(target).mode & 0o777) === 0o600;
+  const script = [
+    "$acl = Get-Acl -LiteralPath $env:CODEX_ROUTER_PRIVATE_FILE",
+    "$sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value",
+    "$allowed = $false",
+    "foreach ($rule in $acl.Access) { try { $ruleSid = $rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value } catch { continue }; if ($ruleSid -eq $sid -and $rule.AccessControlType -eq 'Allow') { $allowed = $true } }",
+    "[Console]::Out.Write(($acl.AreAccessRulesProtected -and $allowed).ToString())",
+  ].join("; ");
+  try {
+    return execFileSync(
+      "powershell.exe",
+      ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
+      {
+        encoding: "utf8",
+        env: { ...process.env, CODEX_ROUTER_PRIVATE_FILE: target },
+        stdio: ["ignore", "pipe", "ignore"],
+      },
+    ).trim().toLowerCase() === "true";
+  } catch {
+    return false;
+  }
+}

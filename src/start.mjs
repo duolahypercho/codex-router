@@ -15,7 +15,12 @@ import { writeLiteLlmConfig } from "./litellm-config.mjs";
 const litellm =
   process.env.CODEX_ROUTER_LITELLM_BIN ||
   process.env.KIMI_LITELLM_BIN ||
-  path.join(SOURCE_ROOT, ".venv", "bin", "litellm");
+  path.join(
+    SOURCE_ROOT,
+    ".venv",
+    process.platform === "win32" ? "Scripts" : "bin",
+    process.platform === "win32" ? "litellm.exe" : "litellm",
+  );
 if (!existsSync(litellm)) {
   throw new Error(`LiteLLM is not installed at ${litellm}; run ./bin/install.`);
 }

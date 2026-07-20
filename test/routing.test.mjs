@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import http from "node:http";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import net from "node:net";
+import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -56,6 +58,7 @@ function run(script, env) {
       ...process.env,
       CODEX_ROUTER_INTERNAL_KEY: INTERNAL_KEY,
       KIMI_INTERNAL_KEY: INTERNAL_KEY,
+      CODEX_ROUTER_SHOW_ALL_MODELS: "1",
       ...env,
     },
     stdio: ["ignore", "ignore", "pipe"],
@@ -95,6 +98,48 @@ async function stopChild(child) {
 async function closeServer(server) {
   await new Promise((resolve) => server.close(resolve));
 }
+
+test("router refuses a known model whose provider is hidden", async () => {
+  const gatewayRequests = [];
+  const gateway = await mockServer(async (request, response) => {
+    gatewayRequests.push(await bodyJson(request));
+    json(response, 200, { route: "external" });
+  });
+  const routerPort = await openPort();
+  const testRoot = mkdtempSync(path.join(os.tmpdir(), "codex-router-hidden-provider-"));
+  const stateDir = path.join(testRoot, "state");
+  mkdirSync(stateDir, { recursive: true });
+  writeFileSync(
+    path.join(stateDir, "enabled-providers.json"),
+    `${JSON.stringify({ version: 1, providers: ["kimi-oauth"] })}\n`,
+  );
+  const router = run("router.mjs", {
+    CODEX_ROUTER_PORT: String(routerPort),
+    CODEX_ROUTER_GATEWAY_BASE_URL: `http://127.0.0.1:${gateway.port}/v1`,
+    CODEX_ROUTER_STATE_DIR: stateDir,
+    CODEX_ROUTER_SHOW_ALL_MODELS: "0",
+    CODEX_ROUTER_QUIET: "1",
+  });
+
+  try {
+    await waitFor(`http://127.0.0.1:${routerPort}/v1/models`, router);
+    const response = await fetch(`http://127.0.0.1:${routerPort}/v1/responses`, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer CODEX_CALLER_SECRET",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ model: "deepseek/deepseek-v4-pro", input: "test" }),
+    });
+    assert.equal(response.status, 409);
+    assert.equal((await response.json()).error.type, "provider_not_enabled");
+    assert.equal(gatewayRequests.length, 0);
+  } finally {
+    await stopChild(router);
+    await closeServer(gateway.server);
+    rmSync(testRoot, { recursive: true, force: true });
+  }
+});
 
 test("router preserves native auth and isolates every external route", async () => {
   const nativeRequests = [];

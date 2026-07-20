@@ -10,7 +10,11 @@ permissions:
 
 jobs:
   test:
-    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -20,7 +24,23 @@ jobs:
       - run: npm ci
       - run: npm run check
       - run: npm test
+      - run: npm audit --omit=dev --audit-level=high
       - name: Check shell syntax
+        if: runner.os != 'Windows'
         run: for file in install.sh bin/*; do sh -n "$file"; done
       - name: Check installer help
+        if: runner.os != 'Windows'
         run: ./install.sh --help
+      - name: Parse PowerShell installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          foreach ($file in @("install.ps1", "codex-router.ps1")) {
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $file),
+              [ref]$null,
+              [ref]$errors
+            ) | Out-Null
+            if ($errors.Count) { $errors | ForEach-Object { Write-Error $_ }; exit 1 }
+          }

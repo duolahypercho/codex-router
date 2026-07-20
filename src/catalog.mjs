@@ -1,6 +1,5 @@
 import { execFileSync } from "node:child_process";
 import {
-  chmodSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -9,27 +8,20 @@ import {
 } from "node:fs";
 import path from "node:path";
 
+import { protectPrivateFile } from "./file-security.mjs";
 import {
   CONFIG_PATH,
   MERGED_CATALOG_PATH,
   NATIVE_CATALOG_PATH,
   STATE_DIR,
 } from "./paths.mjs";
-import { LISTED_MODELS, MODEL_BY_SLUG } from "./model-registry.mjs";
+import { requireCodexBinary } from "./codex-binary.mjs";
+import { MODEL_BY_SLUG } from "./model-registry.mjs";
+import { selectedListedModels } from "./provider-selection.mjs";
 
 const refresh = process.argv.includes("--refresh-native");
 const bundled = process.argv.includes("--bundled-native");
-
-function codexBinary() {
-  const candidates = [
-    process.env.CODEX_BIN,
-    "/Applications/ChatGPT.app/Contents/Resources/codex",
-    "/Applications/Codex.app/Contents/Resources/codex",
-    "/opt/homebrew/bin/codex",
-    "/usr/local/bin/codex",
-  ].filter(Boolean);
-  return candidates.find(existsSync) || "codex";
-}
+const routedModels = selectedListedModels();
 
 function atomicJson(target, value) {
   mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
@@ -38,8 +30,9 @@ function atomicJson(target, value) {
     encoding: "utf8",
     mode: 0o600,
   });
-  chmodSync(temporary, 0o600);
+  protectPrivateFile(temporary);
   renameSync(temporary, target);
+  protectPrivateFile(target);
 }
 
 function captureNative() {
@@ -47,14 +40,14 @@ function captureNative() {
   if (bundled) args.push("--bundled");
   let output;
   try {
-    output = execFileSync(codexBinary(), args, {
+    output = execFileSync(requireCodexBinary(), args, {
       encoding: "utf8",
       timeout: 30_000,
       maxBuffer: 32 * 1024 * 1024,
     });
   } catch (error) {
     if (bundled) throw error;
-    output = execFileSync(codexBinary(), ["debug", "models", "--bundled"], {
+    output = execFileSync(requireCodexBinary(), ["debug", "models", "--bundled"], {
       encoding: "utf8",
       timeout: 30_000,
       maxBuffer: 32 * 1024 * 1024,
@@ -129,7 +122,7 @@ const template =
   native.models[0];
 const models = new Map(native.models.map((model) => [model.slug, model]));
 
-for (const model of LISTED_MODELS) {
+for (const model of routedModels) {
   models.set(model.slug, routedModel(template, model));
 }
 
@@ -142,7 +135,7 @@ process.stdout.write(
   `${JSON.stringify({
     path: MERGED_CATALOG_PATH,
     models: merged.length,
-    routed_models: LISTED_MODELS.length,
+    routed_models: routedModels.length,
     selected_model: selectedModel() || null,
   })}\n`,
 );

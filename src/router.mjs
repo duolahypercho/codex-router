@@ -17,8 +17,9 @@ import {
 } from "./http-utils.mjs";
 import { MERGED_CATALOG_PATH, PORTS, loopback } from "./paths.mjs";
 import { MODEL_BY_SLUG, providerForModel } from "./model-registry.mjs";
+import { readProviderSelection } from "./provider-selection.mjs";
+import { VERSION } from "./version.mjs";
 
-const VERSION = "0.2.0";
 const LISTEN_HOST =
   process.env.CODEX_ROUTER_HOST || process.env.KIMI_ROUTER_HOST || "127.0.0.1";
 const LISTEN_PORT = Number(
@@ -416,7 +417,20 @@ async function handleResponses(request, response, requestUrl) {
   const body = decodeBody(encoded, request.headers["content-encoding"]);
   const payload = parseBody(body);
   const requestedModel = typeof payload.model === "string" ? payload.model : "";
-  const route = MODEL_BY_SLUG.get(requestedModel);
+  const registeredRoute = MODEL_BY_SLUG.get(requestedModel);
+  const route = registeredRoute && readProviderSelection().includes(registeredRoute.provider)
+    ? registeredRoute
+    : undefined;
+  if (registeredRoute && !route) {
+    writeJson(response, 409, {
+      error: {
+        type: "provider_not_enabled",
+        provider: registeredRoute.provider,
+        message: `Provider ${registeredRoute.provider} is hidden. Run ./bin/providers enable ${registeredRoute.provider}.`,
+      },
+    });
+    return;
+  }
   const compactV1 = /\/responses\/compact$/.test(requestUrl.pathname);
   const compactV2 =
     route &&

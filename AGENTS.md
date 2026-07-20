@@ -2,47 +2,57 @@
 
 These instructions apply when a user asks Codex to install this repository.
 
-## Goal
+## Outcome
 
-Install Codex Router for the current macOS user, preserve their existing Codex
-defaults, configure only the external-provider credentials they request,
-verify the result, and leave the user with only the final Codex restart when
-authentication is already configured.
+Install Codex Router for the current user, preserve every unrelated Codex
+setting and ChatGPT authentication artifact, expose only the external providers
+the user wants, verify the integration, and leave the final Codex restart to the
+user.
 
 ## Procedure
 
-1. Confirm the host is macOS and that the Codex App is installed. Do not install
-   missing system package managers or runtimes without the user's permission.
-2. If the repository is not already in a stable checkout, clone it to
-   `~/.local/share/codex-router`. The LaunchAgent retains the checkout's absolute
-   path, so do not use a temporary directory.
-3. Never ask the user to paste an OAuth token or API key into chat, command-line
-   arguments, logs, or a tracked file.
-4. Run `./install.sh` from the stable checkout. It installs every listed model
-   from `config/providers.json` and reuses an existing Kimi Code CLI OAuth
-   session automatically.
-5. If the user requests an API-key provider, run the matching secure command in
-   an interactive terminal after installation: `./bin/provider-key kimi-api set`
-   or `./bin/provider-key deepseek set`. Input must remain hidden. OAuth and API
-   credentials are separate.
-6. Run `./bin/doctor`. Installation is successful when its core catalog,
-   service-key, background-service, router-health, and Codex-catalog checks are
-   `OK`. At least one authentication method the user intends to use should also
-   be `OK`; unused providers may be `WARN`.
-7. Do not terminate the Codex App from the installation task. Tell the user to
-   fully quit with Command-Q, reopen Codex, and create a new task.
+1. Read the host platform and check for Codex, Git, Node.js 22.19+, and `uv` or
+   Python 3.10+. Read-only checks are allowed. Do not install a package manager
+   or system runtime without the user's permission.
+2. Use a stable checkout: `~/.local/share/codex-router` on macOS/Linux, or
+   `%LOCALAPPDATA%\codex-router` on Windows. Do not install the service from a
+   temporary clone.
+3. Never ask the user to paste OAuth tokens or API keys into chat, command
+   arguments, logs, environment snippets, or tracked files.
+4. Determine which provider IDs the user requested: `kimi-oauth`, `kimi-api`,
+   and/or `deepseek`. If they did not specify and credentials already exist, use
+   `configured` rather than showing providers that cannot authenticate.
+5. For Kimi OAuth, reuse a valid `kimi login` session. If login is needed, run
+   the official CLI only in an interactive terminal. For API providers, invoke
+   `bin/provider-key PROVIDER set` in a PTY so the repository's hidden prompt
+   receives the value directly; do not relay it through chat.
+6. Run read-only legacy detection. It is safe to pass `--migrate-known` when the
+   detector identifies a repository-recognized older Codex Router: migration is
+   scoped, snapshotted, and reversible. Never migrate, stop, delete, or replace
+   an unknown router automatically.
+7. On macOS/Linux, run `./install.sh --auto --providers IDS --migrate-known`
+   from the stable checkout. On Windows, run
+   `./install.ps1 -Auto -Providers IDS -MigrateKnown`. Omit `-MigrateKnown` only
+   when detection found nothing. Do not enable `--smoke-test` unless the user
+   agrees to a quota-consuming request.
+8. Run `bin/doctor` (or `./codex-router.ps1 doctor` on Windows). Core config,
+   catalog, internal key, service, router health, and selected credentials must
+   be `OK`. Unselected credentials may be `WARN`.
+9. If a managed layer fails, use `bin/doctor --fix`; add `--migrate-known` only
+   for a recognized older installation. If repair still fails, create
+   `bin/support-bundle` and report its path without automatically uploading it.
+10. Do not terminate Codex. Tell the user to fully quit it, reopen it, create a
+    new task, and choose the new model.
 
 ## Safety boundaries
 
-- The installer may add only its marked `openai_base_url` and
-  `model_catalog_json` block to `~/.codex/config.toml`.
-- Do not change `model`, `model_provider`, `model_reasoning_effort`, profiles, or
-  the user's ChatGPT authentication.
-- Do not kill an unknown process occupying ports 4100 through 4103. Report the
-  conflicting process or proxy and ask the user whether it should be disabled.
-- Do not delete retained credentials, logs, backups, or another proxy's files.
-- If Kimi OAuth is not configured, run `kimi login` only in an interactive
-  terminal. If the Kimi CLI is missing, report that prerequisite with the
-  official setup link from the README.
-- If an API provider is not configured, use `bin/provider-key`; never write a
-  key directly or print credential-file contents.
+- The config manager may change only its marked root `openai_base_url` and
+  `model_catalog_json` block.
+- Preserve `model`, `model_provider`, reasoning settings, profiles, projects,
+  trust, MCP configuration, features, and ChatGPT authentication.
+- Do not kill unknown processes on ports 4100–4103.
+- Do not print or read credential-file contents. Status commands report presence
+  and source only.
+- Do not delete retained keys, logs, backups, snapshots, or old state
+  directories.
+- Do not restart or quit the Codex App from the installation task.

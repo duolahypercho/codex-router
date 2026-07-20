@@ -24,12 +24,16 @@ const {
   resolveProviderCredential,
   writeProviderCredential,
 } = await import("../src/provider-credentials.mjs");
+const { privateFileIsProtected } = await import("../src/file-security.mjs");
 
 test("provider credentials use protected files and remove legacy managed keys", () => {
   try {
     const deepSeekPath = writeProviderCredential("deepseek", "TEST_DEEPSEEK_FILE_KEY");
-    assert.equal(statSync(deepSeekPath).mode & 0o777, 0o600);
-    assert.equal(credentialFileMode("deepseek"), 0o600);
+    assert.equal(privateFileIsProtected(deepSeekPath), true);
+    if (process.platform !== "win32") {
+      assert.equal(statSync(deepSeekPath).mode & 0o777, 0o600);
+      assert.equal(credentialFileMode("deepseek"), 0o600);
+    }
     assert.equal(resolveProviderCredential("deepseek")?.value, "TEST_DEEPSEEK_FILE_KEY");
 
     const legacyDirectory = path.join(process.env.CODEX_HOME, "kimi-router");

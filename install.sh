@@ -6,6 +6,11 @@ default_data_dir=${XDG_DATA_HOME:-$HOME/.local/share}
 install_dir=$default_data_dir/codex-router
 prepare_only=false
 configure_provider_keys=
+guided=auto
+providers=
+migrate_known=false
+smoke_test=false
+previous_revision=
 
 usage() {
   cat <<'EOF'
@@ -19,6 +24,11 @@ Options:
   --api-key           Alias for --kimi-api-key
   --kimi-api-key      Prompt securely for a Kimi Platform API key
   --deepseek-api-key  Prompt securely for a DeepSeek API key
+  --guided           Walk through provider selection and authentication
+  --auto             Use configured credentials without questions
+  --providers LIST   Enable comma-separated provider ids (or "configured")
+  --migrate-known    Snapshot and replace recognized earlier router installs
+  --smoke-test       Make one small billed request per enabled provider
   -h, --help          Show this help
 
 When run from a checkout, this script installs that checkout. When piped from
@@ -52,6 +62,28 @@ while [ "$#" -gt 0 ]; do
       ;;
     --deepseek-api-key)
       configure_provider_keys="$configure_provider_keys deepseek"
+      shift
+      ;;
+    --guided)
+      guided=true
+      shift
+      ;;
+    --auto)
+      guided=false
+      shift
+      ;;
+    --providers)
+      [ "$#" -ge 2 ] || die "--providers requires a comma-separated list"
+      providers=$2
+      guided=false
+      shift 2
+      ;;
+    --migrate-known)
+      migrate_known=true
+      shift
+      ;;
+    --smoke-test)
+      smoke_test=true
       shift
       ;;
     -h|--help)
@@ -96,6 +128,8 @@ if [ -z "$repo_dir" ]; then
     [ "$current_branch" = "main" ] ||
       die "$install_dir must be on its main branch before updating"
     printf 'Updating %s...\n' "$install_dir"
+    previous_revision=$(git -C "$install_dir" rev-parse HEAD)
+    git -C "$install_dir" update-ref refs/codex-router/rollback "$previous_revision"
     git -C "$install_dir" pull --ff-only origin main
   elif [ -e "$install_dir" ]; then
     die "$install_dir already exists and is not a codex-router checkout"
@@ -112,18 +146,39 @@ if [ "$prepare_only" = true ]; then
   exit 0
 fi
 
-"$repo_dir/bin/install"
+command -v node >/dev/null 2>&1 ||
+  die "Node.js 22.19+ is required; install Node.js 24 LTS from https://nodejs.org/"
+command -v npm >/dev/null 2>&1 ||
+  die "npm is required and is normally included with Node.js"
 
 for provider_id in $configure_provider_keys; do
   "$repo_dir/bin/provider-key" "$provider_id" set
 done
 
-printf '\nVerifying installation...\n'
-"$repo_dir/bin/doctor"
+if [ "$guided" = auto ]; then
+  if [ -t 1 ] && [ -r /dev/tty ] && [ -w /dev/tty ]; then
+    guided=true
+  else
+    guided=false
+  fi
+fi
+
+set --
+if [ "$guided" = true ]; then set -- "$@" --guided; fi
+if [ -n "$providers" ]; then set -- "$@" --providers "$providers"; fi
+if [ "$migrate_known" = true ]; then set -- "$@" --migrate-known; fi
+if [ "$smoke_test" = true ]; then set -- "$@" --smoke-test; fi
+if ! "$repo_dir/bin/setup" "$@"; then
+  if [ -n "$previous_revision" ]; then
+    git -C "$repo_dir" switch --detach "$previous_revision" >/dev/null 2>&1 || true
+    die "setup failed; the managed source checkout was restored to $previous_revision"
+  fi
+  die "setup failed"
+fi
 
 cat <<'EOF'
 
-Codex Router is installed. Fully quit Codex with Command-Q, reopen it, and
-start a new task. The model picker will show the configured Kimi and DeepSeek
-models while preserving native GPT models.
+Codex Router is installed. Fully quit Codex, reopen it, and start a new task.
+The model picker will show only the providers you enabled while preserving
+native GPT models.
 EOF
