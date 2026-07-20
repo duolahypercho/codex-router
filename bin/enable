@@ -5,6 +5,7 @@ repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$repo_dir"
 node src/secret.mjs ensure
 node src/catalog.mjs
+node src/litellm-config.mjs
 node src/config-manager.mjs enable
 rollback() {
   node src/service-macos.mjs uninstall >/dev/null 2>&1 || true
@@ -14,4 +15,4 @@ trap rollback EXIT HUP INT TERM
 node src/service-macos.mjs install
 node src/wait-health.mjs
 trap - EXIT HUP INT TERM
-echo "Kimi routes enabled. Fully quit and reopen Codex."
+echo "External model routes enabled. Fully quit and reopen Codex."

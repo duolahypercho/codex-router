@@ -1,77 +1,88 @@
 # Security model
 
-## Credential handling
+## Credential separation
 
-The router handles three different credential classes and keeps them separate:
+Codex Router handles four credential classes and keeps them on distinct paths:
 
-- Codex/ChatGPT authorization is accepted only on the dispatcher and forwarded
-  only for native GPT model IDs.
-- Kimi Code OAuth is read from the Kimi CLI data directory and sent only to the
-  configured Kimi Code managed endpoint.
-- Kimi Platform API keys are read from a protected file, process environment,
-  or macOS Keychain and sent only to the configured Kimi Platform endpoint.
+- ChatGPT/Codex authentication is allow-listed only for native GPT requests.
+- Kimi Code OAuth is read from the official Kimi CLI directory and sent only to
+  the Kimi Code managed endpoint.
+- Kimi Platform API keys are sent only to the configured Kimi Platform endpoint.
+- DeepSeek API keys are sent only to the configured DeepSeek endpoint.
 
-No credential value is written to the model catalog, Codex configuration,
-health responses, or normal logs.
+External requests never receive ChatGPT account IDs, Codex installation IDs,
+attestation headers, or the caller's authorization header. The loopback gateway
+uses a random internal key, which the final forwarder replaces with exactly one
+provider credential.
 
-## Local files
+No credential value is written to the model registry, catalog, Codex config,
+generated LiteLLM config, logs, or health responses.
 
-Sensitive state lives under `$CODEX_HOME/kimi-router`:
+## Local secret storage
+
+Sensitive state lives under `$CODEX_HOME/codex-router` by default:
 
 | File | Purpose | Mode |
-|---|---|---|
-| `internal-secret` | Authenticates internal loopback hops | `600` |
-| `api-key.secret` | Optional Kimi Platform API key | `600` |
+| --- | --- | --- |
+| `internal-secret` | Random loopback service key | `600` |
+| `kimi-api-key.secret` | Optional Kimi Platform key | `600` |
+| `deepseek-api-key.secret` | Optional DeepSeek key | `600` |
 | `native-models.json` | Cached native Codex catalog | `600` |
-| `merged-models.json` | Native plus Kimi catalog | `600` |
+| `merged-models.json` | Native plus registry model catalog | `600` |
+| `litellm.yaml` | Generated routes with environment references only | `600` |
 
-Kimi OAuth credentials remain under `$KIMI_CODE_HOME` or `~/.kimi-code`; the
-project does not copy them into its own state directory.
+The router can read provider keys from process environment or compatible macOS
+Keychain services, but the interactive helper writes protected local files so a
+GUI LaunchAgent can access them without copying secrets into its plist.
 
-Never commit either state directory, an API key, a Kimi credential file, or a
-Codex authentication file to Git.
+Kimi OAuth remains under `$KIMI_CODE_HOME` or `~/.kimi-code`; Codex Router does
+not copy it into its own state directory.
 
-## Network exposure
+Never commit either state directory, a provider key, a Kimi credential file, or
+a generated config from a live installation.
 
-All listeners bind to `127.0.0.1`. Do not change them to `0.0.0.0`, expose them
-through a tunnel, or place them on a shared network. The router is intended for
-one user's local workstation.
+## Network boundary
 
-The generated internal key protects component ports from accidental direct
-use. It is not a strong boundary against malicious software already running as
-the same operating-system user, because same-user processes may be able to read
-the service environment or protected files.
+The router, LiteLLM gateway, OAuth forwarder, and API forwarder bind only to
+`127.0.0.1`. Do not change them to `0.0.0.0`, tunnel the ports, or expose them on
+a shared network. The internal key is defense in depth for local process
+separation, not an internet-facing authentication system.
 
-## Config safety
+API base URL overrides are trusted-user configuration. A malicious override can
+send the matching provider credential to another server. Inspect LaunchAgent
+environment changes and never accept an untrusted `config/providers.json`.
+
+## Configuration safety
 
 The config manager:
 
-- Creates a one-time backup before its first edit.
-- Owns a clearly marked block.
-- Refuses to overwrite a different user-owned `openai_base_url` or
-  `model_catalog_json` value.
-- Preserves `model`, `model_provider`, reasoning settings, and profiles.
-- Removes only its own block during disable or uninstall.
+- Writes only a marked `openai_base_url` and `model_catalog_json` block.
+- Preserves `model`, `model_provider`, reasoning settings, profiles, and ChatGPT
+  authentication.
+- Refuses to replace an unmarked user-owned base URL or catalog.
+- Creates `~/.codex/config.toml.pre-codex-router` before its first change.
+- Atomically rewrites the config while preserving file permissions.
+- Recognizes and removes the earlier Kimi-specific managed block during upgrade.
 
-Review the exact change at any time:
+Review the scoped difference with:
 
 ```sh
-diff -u ~/.codex/config.toml.pre-kimi-router ~/.codex/config.toml
+diff -u ~/.codex/config.toml.pre-codex-router ~/.codex/config.toml
 ```
 
-## Dependency and endpoint trust
+## Dependency and release hygiene
 
-The runtime depends on LiteLLM and `proper-lockfile`. Review
-`package-lock.json`, the Python environment, and release changes before using
-this project in a high-trust environment.
+LiteLLM is version-pinned because it processes prompts, tool calls, streams, and
+provider responses. Node dependencies are locked by `package-lock.json`. Run
+the syntax suite, route tests, `npm audit --omit=dev`, and isolated installer
+checks before publishing.
 
-Endpoint overrides such as `KIMI_CODE_BASE_URL`, `KIMI_API_BASE_URL`, and
-`CODEX_NATIVE_BASE_URL` receive the corresponding credentials. Set them only to
-hosts you control and trust.
+The convenience `curl | sh` command tracks the repository's default branch.
+Users who need a fully reviewable or pinned install should clone a tagged commit,
+inspect it, and run `./install.sh` from that checkout.
 
 ## Reporting a vulnerability
 
-Do not include access tokens, API keys, credential files, or full request logs
-in a public issue. After this repository is published, use a private security
-advisory when available; otherwise report the smallest credential-free
-reproduction possible.
+Open a private GitHub security advisory for the repository when available. Do
+not include access tokens, API keys, credential files, full prompts, response
+bodies, or unredacted logs in an issue.

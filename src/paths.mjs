@@ -9,15 +9,19 @@ export const SOURCE_ROOT = path.resolve(
 export const CODEX_HOME =
   process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
 export const STATE_DIR =
-  process.env.KIMI_CODEX_STATE_DIR || path.join(CODEX_HOME, "kimi-router");
+  process.env.CODEX_ROUTER_STATE_DIR ||
+  process.env.KIMI_CODEX_STATE_DIR ||
+  path.join(CODEX_HOME, "codex-router");
+export const LEGACY_STATE_DIR = path.join(CODEX_HOME, "kimi-router");
 export const CONFIG_PATH = path.join(CODEX_HOME, "config.toml");
 export const NATIVE_CATALOG_PATH = path.join(STATE_DIR, "native-models.json");
 export const MERGED_CATALOG_PATH = path.join(STATE_DIR, "merged-models.json");
+export const LITELLM_CONFIG_PATH = path.join(STATE_DIR, "litellm.yaml");
 export const INTERNAL_SECRET_PATH = path.join(STATE_DIR, "internal-secret");
-export const API_KEY_PATH = path.join(STATE_DIR, "api-key.secret");
 export const LOG_PATH = path.join(STATE_DIR, "router.log");
-export const BACKUP_PATH = path.join(CODEX_HOME, "config.toml.pre-kimi-router");
-export const SERVICE_LABEL = "io.github.kimi-codex-router";
+export const BACKUP_PATH = path.join(CODEX_HOME, "config.toml.pre-codex-router");
+export const SERVICE_LABEL = "io.github.codex-router";
+export const LEGACY_SERVICE_LABEL = "io.github.kimi-codex-router";
 export const LAUNCH_AGENT_PATH = path.join(
   os.homedir(),
   "Library",
@@ -34,10 +38,10 @@ function port(name, fallback) {
 }
 
 export const PORTS = {
-  gateway: port("KIMI_GATEWAY_PORT", 4100),
-  oauth: port("KIMI_OAUTH_FORWARD_PORT", 4101),
-  router: port("KIMI_ROUTER_PORT", 4102),
-  api: port("KIMI_API_FORWARD_PORT", 4103),
+  gateway: port("CODEX_ROUTER_GATEWAY_PORT", process.env.KIMI_GATEWAY_PORT || 4100),
+  oauth: port("CODEX_ROUTER_OAUTH_PORT", process.env.KIMI_OAUTH_FORWARD_PORT || 4101),
+  router: port("CODEX_ROUTER_PORT", process.env.KIMI_ROUTER_PORT || 4102),
+  api: port("CODEX_ROUTER_API_PORT", process.env.KIMI_API_FORWARD_PORT || 4103),
 };
 
 export function loopback(portNumber, suffix = "") {

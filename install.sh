@@ -5,18 +5,20 @@ repository_url=${CODEX_ROUTER_REPOSITORY_URL:-https://github.com/duolahypercho/c
 default_data_dir=${XDG_DATA_HOME:-$HOME/.local/share}
 install_dir=$default_data_dir/codex-router
 prepare_only=false
-configure_api_key=false
+configure_provider_keys=
 
 usage() {
   cat <<'EOF'
 Usage: install.sh [options]
 
-Install Kimi K3 routes for the Codex App.
+Install external model routes for the Codex App.
 
 Options:
   --install-dir PATH  Stable checkout used by the background service
   --prepare-only      Install dependencies without changing Codex
-  --api-key           Prompt securely for a Kimi Platform API key after install
+  --api-key           Alias for --kimi-api-key
+  --kimi-api-key      Prompt securely for a Kimi Platform API key
+  --deepseek-api-key  Prompt securely for a DeepSeek API key
   -h, --help          Show this help
 
 When run from a checkout, this script installs that checkout. When piped from
@@ -41,7 +43,15 @@ while [ "$#" -gt 0 ]; do
       shift
       ;;
     --api-key)
-      configure_api_key=true
+      configure_provider_keys="$configure_provider_keys kimi-api"
+      shift
+      ;;
+    --kimi-api-key)
+      configure_provider_keys="$configure_provider_keys kimi-api"
+      shift
+      ;;
+    --deepseek-api-key)
+      configure_provider_keys="$configure_provider_keys deepseek"
       shift
       ;;
     -h|--help)
@@ -61,7 +71,7 @@ case "$0" in
     if [ -n "$candidate_dir" ] &&
       [ -x "$candidate_dir/bin/install" ] &&
       [ -f "$candidate_dir/package.json" ] &&
-      grep -q '"name": "kimi-codex-router"' "$candidate_dir/package.json"; then
+      grep -q '"name": "codex-model-router"' "$candidate_dir/package.json"; then
       repo_dir=$candidate_dir
     fi
     ;;
@@ -104,15 +114,16 @@ fi
 
 "$repo_dir/bin/install"
 
-if [ "$configure_api_key" = true ]; then
-  "$repo_dir/bin/api-key" set
-fi
+for provider_id in $configure_provider_keys; do
+  "$repo_dir/bin/provider-key" "$provider_id" set
+done
 
 printf '\nVerifying installation...\n'
 "$repo_dir/bin/doctor"
 
 cat <<'EOF'
 
-Kimi K3 is installed. Fully quit Codex with Command-Q, reopen it, and start a
-new task. The model picker will show Kimi K3 (OAuth) and Kimi K3 (API).
+Codex Router is installed. Fully quit Codex with Command-Q, reopen it, and
+start a new task. The model picker will show the configured Kimi and DeepSeek
+models while preserving native GPT models.
 EOF

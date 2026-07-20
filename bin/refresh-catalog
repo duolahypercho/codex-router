@@ -17,4 +17,4 @@ node src/catalog.mjs --refresh-native
 restore_config
 restore=false
 trap - EXIT HUP INT TERM
-echo "Native and Kimi model catalogs refreshed. Fully quit and reopen Codex."
+echo "Native and external model catalogs refreshed. Fully quit and reopen Codex."

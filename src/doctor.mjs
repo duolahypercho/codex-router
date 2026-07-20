@@ -4,14 +4,16 @@ import os from "node:os";
 import path from "node:path";
 
 import {
-  API_KEY_PATH,
   CONFIG_PATH,
   INTERNAL_SECRET_PATH,
+  LITELLM_CONFIG_PATH,
   MERGED_CATALOG_PATH,
   PORTS,
   SERVICE_LABEL,
   loopback,
 } from "./paths.mjs";
+import { LISTED_MODELS, PROVIDERS } from "./model-registry.mjs";
+import { credentialStatus } from "./provider-credentials.mjs";
 
 const checks = [];
 const add = (status, name, detail) => checks.push({ status, name, detail });
@@ -46,11 +48,20 @@ try {
 } catch {
   // Reported below.
 }
-const requiredModels = new Set(["kimi-oauth/k3", "kimi-api/kimi-k3"]);
+const requiredModels = new Set(LISTED_MODELS.map((model) => model.slug));
 const catalogOk = [...requiredModels].every((slug) =>
   catalogModels.some((model) => model.slug === slug),
 );
-add(catalogOk ? "ok" : "fail", "Merged catalog", MERGED_CATALOG_PATH);
+add(
+  catalogOk ? "ok" : "fail",
+  "Merged catalog",
+  catalogOk ? `${requiredModels.size} routed models` : MERGED_CATALOG_PATH,
+);
+add(
+  existsSync(LITELLM_CONFIG_PATH) ? "ok" : "fail",
+  "Generated gateway config",
+  LITELLM_CONFIG_PATH,
+);
 
 const secretMode = existsSync(INTERNAL_SECRET_PATH)
   ? statSync(INTERNAL_SECRET_PATH).mode & 0o777
@@ -68,26 +79,23 @@ try {
   const value = JSON.parse(readFileSync(credentials, "utf8"));
   oauthValid = Boolean(value.access_token && value.refresh_token);
 } catch {
-  // Optional when the API-key route is used alone.
+  // Optional when an API-key provider is used alone.
 }
-add(oauthValid ? "ok" : "warn", "Kimi OAuth", oauthValid ? "credential present" : "run `kimi login`");
+add(
+  oauthValid ? "ok" : "warn",
+  "Kimi OAuth",
+  oauthValid ? "credential present" : "optional; run `kimi login`",
+);
 
-let apiSource;
-if (process.env.KIMI_API_KEY || process.env.MOONSHOT_API_KEY) apiSource = "environment";
-else if (existsSync(API_KEY_PATH) && statSync(API_KEY_PATH).size > 0) apiSource = "protected file";
-else if (process.platform === "darwin") {
-  try {
-    execFileSync(
-      "/usr/bin/security",
-      ["find-generic-password", "-s", "kimi-codex-api", "-a", "default"],
-      { stdio: "ignore", timeout: 2_000 },
-    );
-    apiSource = "macOS Keychain";
-  } catch {
-    // Optional credential.
-  }
+for (const provider of PROVIDERS.values()) {
+  if (provider.kind !== "openai-compatible") continue;
+  const status = credentialStatus(provider);
+  add(
+    status.configured ? "ok" : "warn",
+    `${provider.displayName} key`,
+    status.configured ? status.source : `optional; ${status.setup}`,
+  );
 }
-add(apiSource ? "ok" : "warn", "Kimi API key", apiSource || "optional; run `./bin/api-key set`");
 
 if (process.platform === "darwin") {
   try {
@@ -108,7 +116,7 @@ try {
     signal: AbortSignal.timeout(2_000),
   });
   const payload = await response.json().catch(() => ({}));
-  const healthy = response.ok && payload.service === "kimi-codex-router";
+  const healthy = response.ok && payload.service === "codex-router";
   add(
     healthy ? "ok" : "fail",
     "Router health",
@@ -129,7 +137,11 @@ if (codex && catalogOk) {
     );
     const slugs = new Set((parsed.models || []).map((model) => model.slug));
     const visible = [...requiredModels].every((slug) => slugs.has(slug));
-    add(visible ? "ok" : "fail", "Codex model catalog", visible ? "both Kimi entries visible" : "restart/re-enable required");
+    add(
+      visible ? "ok" : "fail",
+      "Codex model catalog",
+      visible ? `${requiredModels.size} routed entries visible` : "restart/re-enable required",
+    );
   } catch (error) {
     add("warn", "Codex model catalog", error instanceof Error ? error.message : String(error));
   }

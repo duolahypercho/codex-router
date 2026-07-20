@@ -7,126 +7,105 @@ Start with:
 ./bin/status
 ```
 
-## Kimi is missing from the picker
+Neither command prints credential values.
 
-The catalog is loaded only when Codex starts.
+## External models are missing from the picker
 
-1. Fully quit Codex with `Command-Q` rather than closing its window.
-2. Run `./bin/enable`.
-3. Reopen Codex and create a new task.
-4. Confirm the entries with `codex debug models`.
+1. Run `./bin/doctor` and fix any `FAIL` result.
+2. Run `./bin/refresh-catalog` after a Codex App or registry update.
+3. Fully quit Codex with `Command-Q`; closing the window is not enough.
+4. Reopen Codex and create a new task.
+5. Confirm the generated entries:
 
-After updating Codex, run `./bin/refresh-catalog` and restart the app.
-
-## The picker says only Custom
-
-This project must not set a custom provider as the active provider. Check the
-root of `~/.codex/config.toml` for a leftover `model_provider` or an older Kimi
-profile that is selected globally.
-
-The expected integration uses the built-in provider with only:
-
-```toml
-openai_base_url = "http://127.0.0.1:4102/v1"
-model_catalog_json = "/.../kimi-router/merged-models.json"
+```sh
+codex debug models | jq -r '.models[] | select(.slug | contains("/")) | [.slug, .display_name] | @tsv'
 ```
 
-`./bin/disable` removes this project's block without touching unrelated
-provider or profile settings.
+The config root should contain the `codex-router-managed` block with
+`openai_base_url` on port 4102 and a catalog under
+`~/.codex/codex-router/merged-models.json`.
 
-## OAuth says authentication is missing
-
-Run:
+## Kimi OAuth fails
 
 ```sh
 kimi login
 ./bin/doctor
 ```
 
-If you configured a custom `KIMI_CODE_HOME`, use the same value when running
-the installer so launchd can find it:
+The router reads the official Kimi CLI credential in `~/.kimi-code` and refreshes
+it under a cross-process lock. Do not paste the OAuth token into Codex or an
+environment variable.
+
+## Kimi or DeepSeek says the API key is missing
 
 ```sh
-KIMI_CODE_HOME="/your/path" ./bin/install
+./bin/provider-key kimi-api set
+./bin/provider-key deepseek set
+./bin/provider-key kimi-api status
+./bin/provider-key deepseek status
 ```
 
-If refresh was rejected, authenticate again with `kimi login`; do not paste or
-manually edit refresh tokens.
+The prompts hide input. No service restart is needed after setting or rotating a
+key. Confirm the key belongs to the named provider; Kimi Code OAuth, Kimi
+Platform, and DeepSeek are separate account systems.
 
-## API model says the key is missing
+## A DeepSeek model returns an upstream model error
 
-Configure and verify it:
+DeepSeek's primary API model IDs are `deepseek-v4-flash` and
+`deepseek-v4-pro`. Run `git pull --ff-only`, reinstall, refresh the catalog, and
+retry. The hidden `deepseek-chat` and `deepseek-reasoner` compatibility aliases
+are scheduled to stop working on July 24, 2026.
+
+Inspect the provider response without exposing your key:
 
 ```sh
-./bin/api-key set
-./bin/api-key status
+tail -n 200 "${CODEX_HOME:-$HOME/.codex}/codex-router/router.log"
 ```
 
-No service restart is necessary. Make sure the key belongs to Kimi Platform,
-not the separate Kimi Code managed service.
+Redact prompts and provider response bodies before sharing logs.
 
 ## Native GPT models stopped working
 
-The dispatcher must be running because native GPT traffic also passes through
-it while the integration is enabled.
-
-```sh
-./bin/status
-./bin/enable
-```
-
-If recovery is more important than diagnosis, immediately restore direct Codex
-routing:
+Temporarily restore native routing:
 
 ```sh
 ./bin/disable
 ```
 
-Then fully quit and reopen Codex.
+If native models work again, inspect router health and the log. The native route
+forwards only an allow-list of Codex headers and removes
+`previous_response_id` on normal requests to avoid stale backend state.
 
-## A port is already in use
-
-Find the process:
+## Another proxy owns the ports
 
 ```sh
 lsof -nP -iTCP:4100 -iTCP:4101 -iTCP:4102 -iTCP:4103 -sTCP:LISTEN
 ```
 
-Stop the older router installation before installing this one. Do not run two
-installations on the same ports.
+Stop the older proxy before installing this one. Do not kill an unknown process
+until its owner and purpose are clear. The installer migrates the earlier
+`io.github.kimi-codex-router` LaunchAgent, but it does not remove unrelated
+third-party proxies.
 
-## Background service does not start
-
-Inspect launchd and the router log:
-
-```sh
-launchctl print "gui/$(id -u)/io.github.kimi-codex-router"
-tail -n 200 "${CODEX_HOME:-$HOME/.codex}/kimi-router/router.log"
-```
-
-Common causes are moving the repository after installation, deleting `.venv`,
-using an older Node binary, or port conflicts. Re-run `./bin/install` from the
-repository's permanent location after fixing the cause.
-
-## WebSocket 426 appears in Codex CLI logs
-
-This is expected. The router declines the optional Responses WebSocket and
-Codex immediately falls back to HTTP. A successful task after that warning is
-not degraded functionally.
-
-## Installer refuses an existing base URL or catalog
-
-The refusal is intentional: replacing an unrelated proxy or custom catalog
-would be destructive. Decide which integration should own those root config
-keys, disable it explicitly, and then rerun the installer.
-
-## Reset only this integration
+## The LaunchAgent is not running
 
 ```sh
-./bin/uninstall
-./bin/install
+launchctl print "gui/$(id -u)/io.github.codex-router"
+tail -n 200 "${CODEX_HOME:-$HOME/.codex}/codex-router/router.log"
+./bin/enable
 ```
 
-This retains credentials and cached state. If the remaining state itself is
-suspect, inspect `$CODEX_HOME/kimi-router` manually before removing anything;
-the uninstaller deliberately does not delete secrets.
+Keep the repository at the same absolute path used during installation. If it
+was moved, rerun `./install.sh` from the new stable location.
+
+## WebSocket warning followed by HTTP fallback
+
+This is expected. The router declines the optional Responses WebSocket upgrade,
+and current Codex retries with compressed HTTP. A warning alone is not a failed
+request.
+
+## Uninstall did not delete credentials or logs
+
+This is intentional. `./bin/uninstall` removes only the integration config and
+LaunchAgent. Inspect `~/.codex/codex-router` manually before deleting retained
+state; it can contain API keys, logs, catalogs, and the internal service key.

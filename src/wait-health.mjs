@@ -11,7 +11,7 @@ while (Date.now() < deadline) {
     if (response.ok) {
       const body = await response.text();
       const payload = JSON.parse(body);
-      if (payload.service === "kimi-codex-router") {
+      if (payload.service === "codex-router") {
         process.stdout.write(`${body}\n`);
         process.exit(0);
       }

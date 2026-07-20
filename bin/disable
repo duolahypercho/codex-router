@@ -5,5 +5,5 @@ repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$repo_dir"
 node src/config-manager.mjs disable
 node src/service-macos.mjs uninstall
-echo "Kimi routes disabled. Your model, provider, and profile settings were preserved."
+echo "External model routes disabled. Your model, provider, and profile settings were preserved."
 echo "Fully quit and reopen Codex."

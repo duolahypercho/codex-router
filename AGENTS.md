@@ -1,12 +1,13 @@
-# Codex installation instructions
+# Codex Router installation instructions
 
 These instructions apply when a user asks Codex to install this repository.
 
 ## Goal
 
-Install the local Kimi K3 router for the current macOS user, preserve their
-existing Codex defaults, verify the result, and leave the user with only the
-final Codex restart when Kimi authentication is already configured.
+Install Codex Router for the current macOS user, preserve their existing Codex
+defaults, configure only the external-provider credentials they request,
+verify the result, and leave the user with only the final Codex restart when
+authentication is already configured.
 
 ## Procedure
 
@@ -17,15 +18,17 @@ final Codex restart when Kimi authentication is already configured.
    path, so do not use a temporary directory.
 3. Never ask the user to paste an OAuth token or API key into chat, command-line
    arguments, logs, or a tracked file.
-4. Run `./install.sh` from the stable checkout. It installs both picker entries
-   and reuses an existing Kimi Code CLI OAuth session automatically.
-5. If the user explicitly wants Kimi Platform API billing, run
-   `./bin/api-key set` in an interactive terminal after installation so input is
-   hidden. OAuth and API credentials are separate.
+4. Run `./install.sh` from the stable checkout. It installs every listed model
+   from `config/providers.json` and reuses an existing Kimi Code CLI OAuth
+   session automatically.
+5. If the user requests an API-key provider, run the matching secure command in
+   an interactive terminal after installation: `./bin/provider-key kimi-api set`
+   or `./bin/provider-key deepseek set`. Input must remain hidden. OAuth and API
+   credentials are separate.
 6. Run `./bin/doctor`. Installation is successful when its core catalog,
    service-key, background-service, router-health, and Codex-catalog checks are
-   `OK`. One authentication method should also be `OK`; the unused method may be
-   `WARN`.
+   `OK`. At least one authentication method the user intends to use should also
+   be `OK`; unused providers may be `WARN`.
 7. Do not terminate the Codex App from the installation task. Tell the user to
    fully quit with Command-Q, reopen Codex, and create a new task.
 
@@ -41,3 +44,5 @@ final Codex restart when Kimi authentication is already configured.
 - If Kimi OAuth is not configured, run `kimi login` only in an interactive
   terminal. If the Kimi CLI is missing, report that prerequisite with the
   official setup link from the README.
+- If an API provider is not configured, use `bin/provider-key`; never write a
+  key directly or print credential-file contents.

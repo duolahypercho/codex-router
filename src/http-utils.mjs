@@ -1,7 +1,9 @@
 import { Readable } from "node:stream";
 
 export const MAX_BODY_BYTES = Number(
-  process.env.KIMI_PROXY_MAX_BODY_BYTES || 64 * 1024 * 1024,
+  process.env.CODEX_ROUTER_MAX_BODY_BYTES ||
+    process.env.KIMI_PROXY_MAX_BODY_BYTES ||
+    64 * 1024 * 1024,
 );
 
 export const HOP_BY_HOP_HEADERS = new Set([

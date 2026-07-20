@@ -2,4 +2,4 @@
 set -eu
 
 repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-exec "$repo_dir/bin/provider-key" kimi-api "$@"
+exec node "$repo_dir/src/provider-key.mjs" "$@"

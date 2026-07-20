@@ -15,6 +15,7 @@ import {
   NATIVE_CATALOG_PATH,
   STATE_DIR,
 } from "./paths.mjs";
+import { LISTED_MODELS, MODEL_BY_SLUG } from "./model-registry.mjs";
 
 const refresh = process.argv.includes("--refresh-native");
 const bundled = process.argv.includes("--bundled-native");
@@ -63,7 +64,7 @@ function captureNative() {
   if (!parsed || !Array.isArray(parsed.models) || parsed.models.length === 0) {
     throw new Error("Codex returned an empty or invalid model catalog.");
   }
-  if (parsed.models.some((model) => String(model.slug).startsWith("kimi-"))) {
+  if (parsed.models.some((model) => MODEL_BY_SLUG.has(String(model.slug)))) {
     throw new Error(
       "Refusing to capture an already-merged catalog. Disable the router before refreshing native models.",
     );
@@ -89,27 +90,23 @@ function selectedModel() {
   return root.match(/^\s*model\s*=\s*["']([^"']+)["']/m)?.[1];
 }
 
-function reasoning(effort, description) {
-  return { effort, description };
-}
-
-function routedModel(template, options) {
+function routedModel(template, model) {
   return {
     ...template,
-    slug: options.slug,
-    display_name: options.displayName,
-    description: options.description,
-    priority: options.priority,
+    slug: model.slug,
+    display_name: model.displayName,
+    description: model.description,
+    priority: model.priority,
     visibility: "list",
     supported_in_api: true,
-    default_reasoning_level: options.defaultEffort,
-    supported_reasoning_levels: options.reasoningLevels,
-    context_window: options.contextWindow,
-    max_context_window: options.contextWindow,
+    default_reasoning_level: model.defaultEffort,
+    supported_reasoning_levels: model.reasoningLevels,
+    context_window: model.contextWindow,
+    max_context_window: model.contextWindow,
     effective_context_window_percent: 95,
-    auto_compact_token_limit: options.autoCompact,
-    input_modalities: ["text", "image"],
-    comp_hash: options.compHash,
+    auto_compact_token_limit: model.autoCompact,
+    input_modalities: model.inputModalities,
+    comp_hash: model.compHash,
     additional_speed_tiers: [],
     service_tiers: [],
     availability_nux: null,
@@ -132,41 +129,9 @@ const template =
   native.models[0];
 const models = new Map(native.models.map((model) => [model.slug, model]));
 
-models.set(
-  "kimi-oauth/k3",
-  routedModel(template, {
-    slug: "kimi-oauth/k3",
-    displayName: "Kimi K3 (OAuth)",
-    description: "Kimi K3 using the existing Kimi Code CLI OAuth session.",
-    priority: 4,
-    defaultEffort: "high",
-    reasoningLevels: [
-      reasoning("low", "Faster reasoning"),
-      reasoning("high", "Balanced deep reasoning"),
-      reasoning("max", "Maximum reasoning depth"),
-    ],
-    contextWindow: 262_144,
-    autoCompact: 235_000,
-    compHash: "kimi-oauth-k3-v1",
-  }),
-);
-
-models.set(
-  "kimi-api/kimi-k3",
-  routedModel(template, {
-    slug: "kimi-api/kimi-k3",
-    displayName: "Kimi K3 (API)",
-    description: "Kimi K3 using a separately billed Kimi Platform API key.",
-    priority: 5,
-    defaultEffort: "max",
-    reasoningLevels: [
-      reasoning("max", "Maximum reasoning required by the Kimi K3 API"),
-    ],
-    contextWindow: 1_048_576,
-    autoCompact: 900_000,
-    compHash: "kimi-api-k3-v1",
-  }),
-);
+for (const model of LISTED_MODELS) {
+  models.set(model.slug, routedModel(template, model));
+}
 
 const merged = [...models.values()].sort((left, right) => {
   const priority = Number(left.priority ?? 999) - Number(right.priority ?? 999);
@@ -177,6 +142,7 @@ process.stdout.write(
   `${JSON.stringify({
     path: MERGED_CATALOG_PATH,
     models: merged.length,
+    routed_models: LISTED_MODELS.length,
     selected_model: selectedModel() || null,
   })}\n`,
 );

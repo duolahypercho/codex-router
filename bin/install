@@ -45,12 +45,13 @@ else
 fi
 
 node src/secret.mjs ensure
-state_dir=${KIMI_CODEX_STATE_DIR:-${CODEX_HOME:-$HOME/.codex}/kimi-router}
+state_dir=${CODEX_ROUTER_STATE_DIR:-${KIMI_CODEX_STATE_DIR:-${CODEX_HOME:-$HOME/.codex}/codex-router}}
 if [ -s "$state_dir/native-models.json" ]; then
   node src/catalog.mjs
 else
   node src/catalog.mjs --refresh-native
 fi
+node src/litellm-config.mjs
 
 if [ "$prepare_only" = true ]; then
   echo "Dependencies, service key, and model catalog are prepared. Codex config was not changed."
@@ -78,6 +79,7 @@ config_enabled=false
 service_installed=false
 trap - EXIT HUP INT TERM
 
-echo "Installed Kimi K3 (OAuth) and Kimi K3 (API) for Codex."
+echo "Installed Kimi K3 and DeepSeek V4 routes for Codex."
 echo "Fully quit and reopen Codex, then start a new task."
-echo "For API-key access, run: $repo_dir/bin/api-key set"
+echo "Kimi API key: $repo_dir/bin/provider-key kimi-api set"
+echo "DeepSeek API key: $repo_dir/bin/provider-key deepseek set"

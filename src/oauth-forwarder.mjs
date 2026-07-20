@@ -26,7 +26,7 @@ import {
 } from "./http-utils.mjs";
 import { PORTS } from "./paths.mjs";
 
-const VERSION = "0.1.0";
+const VERSION = "0.2.0";
 const KIMI_CLIENT_ID = "17e5f671-d194-4dfb-9706-5516cb48c098";
 const KIMI_CODE_HOME =
   process.env.KIMI_CODE_HOME || path.join(os.homedir(), ".kimi-code");
@@ -38,12 +38,17 @@ const OAUTH_HOST = (
   process.env.KIMI_OAUTH_HOST ||
   "https://auth.kimi.com"
 ).replace(/\/+$/, "");
-const LISTEN_HOST = process.env.KIMI_FORWARD_HOST || "127.0.0.1";
-const LISTEN_PORT = Number(process.env.KIMI_FORWARD_PORT || PORTS.oauth);
-const INTERNAL_KEY = process.env.KIMI_INTERNAL_KEY;
-const QUIET = process.env.KIMI_PROXY_QUIET === "1";
+const LISTEN_HOST =
+  process.env.CODEX_ROUTER_OAUTH_HOST || process.env.KIMI_FORWARD_HOST || "127.0.0.1";
+const LISTEN_PORT = Number(
+  process.env.CODEX_ROUTER_OAUTH_PORT || process.env.KIMI_FORWARD_PORT || PORTS.oauth,
+);
+const INTERNAL_KEY =
+  process.env.CODEX_ROUTER_INTERNAL_KEY || process.env.KIMI_INTERNAL_KEY;
+const QUIET =
+  process.env.CODEX_ROUTER_QUIET === "1" || process.env.KIMI_PROXY_QUIET === "1";
 
-if (!INTERNAL_KEY) throw new Error("KIMI_INTERNAL_KEY is required.");
+if (!INTERNAL_KEY) throw new Error("CODEX_ROUTER_INTERNAL_KEY is required.");
 
 const CREDENTIALS_PATH = path.join(
   KIMI_CODE_HOME,
@@ -85,7 +90,7 @@ function identityHeaders() {
       ? `macOS ${macOSProductVersion() || os.release()} ${os.arch()}`
       : `${os.type()} ${os.release()} ${os.arch()}`;
   return {
-    "User-Agent": `kimi-codex-router/${VERSION}`,
+    "User-Agent": `codex-router/${VERSION}`,
     "X-Msh-Platform": "codex",
     "X-Msh-Version": VERSION,
     "X-Msh-Device-Name": asciiHeader(os.hostname()),

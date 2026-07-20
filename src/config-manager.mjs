@@ -13,23 +13,30 @@ import path from "node:path";
 import {
   BACKUP_PATH,
   CONFIG_PATH,
+  LEGACY_STATE_DIR,
   MERGED_CATALOG_PATH,
   PORTS,
   loopback,
 } from "./paths.mjs";
 
 const routerBaseUrl = loopback(PORTS.router, "/v1");
-const startMarker = "# BEGIN kimi-codex-router-managed";
-const endMarker = "# END kimi-codex-router-managed";
+const startMarker = "# BEGIN codex-router-managed";
+const endMarker = "# END codex-router-managed";
+const markerPairs = [
+  [startMarker, endMarker],
+  ["# BEGIN kimi-codex-router-managed", "# END kimi-codex-router-managed"],
+];
 const command = process.argv[2] || "status";
 
 function removeMarkedBlock(input) {
-  const escapedStart = startMarker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const escapedEnd = endMarker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return input.replace(
-    new RegExp(`(?:^|\\n)${escapedStart}\\n[\\s\\S]*?\\n${escapedEnd}(?:\\n|$)`, "g"),
-    "\n",
-  );
+  return markerPairs.reduce((contents, [start, end]) => {
+    const escapedStart = start.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const escapedEnd = end.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return contents.replace(
+      new RegExp(`(?:^|\\n)${escapedStart}\\n[\\s\\S]*?\\n${escapedEnd}(?:\\n|$)`, "g"),
+      "\n",
+    );
+  }, input);
 }
 
 function splitRoot(input) {
@@ -61,9 +68,12 @@ function clean(contents) {
       return !line.includes(JSON.stringify(routerBaseUrl));
     }
     if (/^\s*model_catalog_json\s*=/.test(line)) {
-      return !line.includes(JSON.stringify(MERGED_CATALOG_PATH));
+      return ![
+        MERGED_CATALOG_PATH,
+        path.join(LEGACY_STATE_DIR, "merged-models.json"),
+      ].some((catalogPath) => line.includes(JSON.stringify(catalogPath)));
     }
-    return line !== startMarker && line !== endMarker;
+    return !markerPairs.flat().includes(line);
   });
   return { rootLines: filtered, tableLines };
 }

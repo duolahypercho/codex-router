@@ -1,153 +1,197 @@
-# Kimi K3 for the Codex App
+# Codex Router
 
-Add Kimi K3 to the normal Codex model picker while keeping native OpenAI models,
-your existing Codex login, default model, provider, and profiles intact.
+Add external models to the normal Codex App model picker while preserving
+native GPT models, ChatGPT sign-in, the selected default model, provider, and
+profiles.
 
-The picker gains two entries:
+Codex Router is a local, OpenRouter-style routing layer built specifically for
+Codex. Its provider registry currently includes Kimi and DeepSeek, and is
+designed so future OpenAI-compatible providers and models are data additions
+instead of new proxy implementations.
 
-- `Kimi K3 (OAuth)` uses the existing Kimi Code CLI OAuth session.
-- `Kimi K3 (API)` uses a separately billed Kimi Platform API key.
+This is an independent community project. It is not affiliated with OpenAI,
+Moonshot AI, DeepSeek, or OpenRouter.
 
-This is a macOS-first, local community integration inspired by
-[opencodex](https://github.com/lidge-jun/opencodex). It is not affiliated with
-OpenAI, Moonshot AI, or the Kimi Code team.
+## Models
+
+| Picker label | Model ID | Authentication | Description |
+| --- | --- | --- | --- |
+| Kimi K3 (OAuth) | `kimi-oauth/k3` | Kimi Code CLI OAuth | Reuses an existing `kimi login` session. |
+| Kimi K3 (API) | `kimi-api/kimi-k3` | Kimi Platform API key | Separately billed Kimi API access with maximum reasoning. |
+| DeepSeek V4 Flash (API) | `deepseek/deepseek-v4-flash` | DeepSeek API key | Fast V4 reasoning, tool calls, and a 1M context window. |
+| DeepSeek V4 Pro (API) | `deepseek/deepseek-v4-pro` | DeepSeek API key | V4 reasoning, coding, tool calls, and a 1M context window. |
+
+The two V4 entries are every primary model currently returned by DeepSeek's
+official `/models` API. The deprecated `deepseek-chat` and
+`deepseek-reasoner` aliases remain routable from the CLI for compatibility but
+are hidden from the picker because DeepSeek retires them on July 24, 2026.
 
 ## Install with Codex (easiest)
 
-Give Codex this message:
+Give Codex this message and the repository link:
 
 ```text
-Install Kimi K3 from https://github.com/duolahypercho/codex-router.
-Follow the repository's AGENTS.md installation instructions, preserve my
-existing Codex defaults, and verify the installation. Do not quit Codex for me;
-tell me when it is ready to restart.
+Install this model router in my Codex App:
+https://github.com/duolahypercho/codex-router
+
+Follow the repository's AGENTS.md instructions, preserve my existing Codex
+defaults and ChatGPT login, configure only the credentials I request, run the
+doctor, and tell me when it is ready to restart. Do not quit Codex for me.
 ```
 
-Codex will clone the repository to a stable location, run the installer, and
-check the result. If you have already run `kimi login`, the only manual step
-afterward is to fully quit Codex with `Command-Q`, reopen it, and start a new
-task.
+Codex clones the repository to a stable location, installs the background
+router, and verifies every picker entry. If the requested authentication is
+already configured, the user's only manual step is to fully quit Codex with
+`Command-Q`, reopen it, and start a new task.
 
-Do not paste OAuth tokens or API keys into the Codex chat. If you want the Kimi
-Platform API route, tell Codex to run the repository's secure API-key prompt.
+Never paste an OAuth token or API key into Codex chat. Codex should invoke the
+hidden terminal prompt when a key is needed.
 
 ## Install from Terminal
 
-Prerequisites: the Codex App, Node.js 22.19+, `uv` or Python 3.10+, and either a
-Kimi Code OAuth login or Kimi Platform API key.
+Prerequisites: macOS, the Codex App, Node.js 22.19+, and `uv` or Python 3.10+.
 
 ```sh
-# OAuth users: install Kimi Code CLI first, then authenticate once.
-kimi login
-
-# Download to a stable location and install.
 curl -fsSL https://raw.githubusercontent.com/duolahypercho/codex-router/main/install.sh | sh
 ```
 
-For an auditable install, clone the repository and run `./install.sh` instead
-of piping it directly to a shell.
+For an auditable install, clone the repository into a stable directory and run
+`./install.sh`. The LaunchAgent stores the checkout's absolute path.
 
-Fully quit Codex with `Command-Q`, reopen it, and start a new task. Select
-`Kimi K3 (OAuth)` in the model picker.
-
-To enable the separately billed API route:
+After installation, configure any credentials you want to use:
 
 ```sh
-"$HOME/.local/share/codex-router/bin/api-key" set
+# Kimi Code OAuth
+kimi login
+
+# Kimi Platform API
+"$HOME/.local/share/codex-router/bin/provider-key" kimi-api set
+
+# DeepSeek API
+"$HOME/.local/share/codex-router/bin/provider-key" deepseek set
 ```
 
-If you installed from a different checkout, run `./bin/api-key set` there.
+Input from `provider-key ... set` is hidden and stored in a mode-`600` local
+file. The running service reads credentials on every request, so setting or
+rotating a key does not require a service restart.
 
-The API entry is always visible, but returns a clear setup error until a real
-API key is configured. OAuth credentials are not reused as API keys because
-the two Kimi services have separate authentication and billing.
+Finally, fully quit Codex with `Command-Q`, reopen it, and start a new task.
 
 ## What the installer changes
 
-The installer adds only this managed block to the root of
+The installer adds only this marked block to the root of
 `~/.codex/config.toml`:
 
 ```toml
-# BEGIN kimi-codex-router-managed
+# BEGIN codex-router-managed
 openai_base_url = "http://127.0.0.1:4102/v1"
-model_catalog_json = "/absolute/path/to/.codex/kimi-router/merged-models.json"
-# END kimi-codex-router-managed
+model_catalog_json = "/absolute/path/to/.codex/codex-router/merged-models.json"
+# END codex-router-managed
 ```
 
-It does not set `model`, `model_provider`, `model_reasoning_effort`, or any
-profile. A backup is created at `~/.codex/config.toml.pre-kimi-router` the first
-time configuration is changed.
+It does not set `model`, `model_provider`, `model_reasoning_effort`, profiles,
+or ChatGPT authentication. A backup is created at
+`~/.codex/config.toml.pre-codex-router` before the first change.
 
-Codex officially supports `openai_base_url` for pointing the built-in OpenAI
-provider at a proxy and `model_catalog_json` as a startup model-catalog
-override. Keeping the built-in provider is what makes Kimi appear as named
-models instead of replacing the picker with a generic `Custom` provider.
-
-## Commands
-
-```sh
-./bin/status             # concise config, service, and health state
-./bin/doctor             # layered diagnostics
-./bin/api-key status     # API-key presence only; never prints the key
-./bin/refresh-catalog    # refresh native models after a Codex update
-./bin/disable            # remove integration and stop the service
-./bin/enable             # restore integration and service
-./bin/uninstall          # remove integration/service; retain secrets and logs
-```
-
-CLI model IDs work after installation too:
-
-```sh
-codex --model 'kimi-oauth/k3'
-codex --model 'kimi-api/kimi-k3'
-```
+Codex supports `openai_base_url` for routing its built-in OpenAI provider and
+`model_catalog_json` for a startup model-catalog override. Keeping the built-in
+provider is what lets named external models coexist with native GPT models
+instead of appearing as one generic `Custom` provider.
 
 ## How it works
 
 ```mermaid
 flowchart LR
-  C["Codex App / CLI"] --> R["Loopback router :4102"]
+  C["Codex App / CLI"] --> R["Codex Router :4102"]
   R -->|"native GPT + Codex auth"| O["ChatGPT Codex backend"]
-  R -->|"Kimi model + internal key"| L["LiteLLM translator :4100"]
-  L --> OA["OAuth forwarder :4101"]
-  L --> AK["API-key forwarder :4103"]
-  OA --> KC["Kimi Code managed API"]
-  AK --> KP["Kimi Platform API"]
+  R -->|"registry model + internal key"| L["LiteLLM Responses adapter :4100"]
+  L --> KO["Kimi OAuth forwarder :4101"]
+  L --> A["API provider forwarder :4103"]
+  KO --> KC["Kimi Code managed API"]
+  A --> KA["Kimi Platform API"]
+  A --> D["DeepSeek API"]
 ```
 
-Codex speaks the Responses API, while Kimi exposes an OpenAI-compatible Chat
-Completions interface. LiteLLM performs the protocol translation. The router
-keeps native GPT traffic on the normal ChatGPT Codex path and sends only the
-two namespaced Kimi model IDs through the translator.
+Codex speaks the Responses API. The external providers currently expose
+OpenAI-compatible Chat Completions APIs, so LiteLLM translates protocol events,
+streaming output, tool calls, and compaction traffic. The dispatcher routes by
+namespaced model ID.
 
-Codex authentication headers are allow-listed only for the native route. Kimi
-routes receive a generated internal service key instead, and each forwarder
-replaces that key with its own Kimi credential. All four listeners bind only to
-`127.0.0.1`.
+Codex authentication headers are allow-listed only for the native route.
+External routes receive a random internal service key; the final provider
+forwarder discards that key and injects only the selected provider credential.
+All listeners bind to `127.0.0.1`.
 
-See [How it works](docs/HOW-IT-WORKS.md) for request flow, model catalogs,
-compression, tool calls, and compaction.
+## Provider registry
+
+[`config/providers.json`](config/providers.json) is the single source of truth
+for providers and models. It drives:
+
+- picker labels and descriptions;
+- public and internal model IDs;
+- context windows and reasoning levels;
+- LiteLLM gateway generation;
+- API base URLs and credential sources;
+- request normalization and diagnostics.
+
+An additional OpenAI-compatible Chat Completions provider normally requires a
+provider object, one or more model objects, and tests. The shared API forwarder
+handles authentication isolation and routing without adding another process or
+port. Provider-specific request quirks can use a named request profile.
+
+See [Development](docs/DEVELOPMENT.md) for the registry contract and extension
+checklist. The router intentionally does not claim that every arbitrary model
+will work without compatibility testing; Codex depends heavily on streaming,
+tool calling, and long-running agent behavior.
+
+## Commands
+
+```sh
+./bin/status                         # config, service, provider health
+./bin/doctor                         # layered diagnostics
+./bin/provider-key kimi-api status  # credential presence only
+./bin/provider-key deepseek status  # never prints the key
+./bin/refresh-catalog                # refresh after Codex/model changes
+./bin/disable                        # stop routing, retain settings
+./bin/enable                         # restore routing
+./bin/uninstall                      # remove config/service, retain secrets
+```
+
+CLI model selection works after installation:
+
+```sh
+codex --model 'kimi-oauth/k3'
+codex --model 'kimi-api/kimi-k3'
+codex --model 'deepseek/deepseek-v4-flash'
+codex --model 'deepseek/deepseek-v4-pro'
+```
 
 ## Guides
 
-- [Installation and upgrades](docs/INSTALL.md)
+- [Installation, authentication, and upgrades](docs/INSTALL.md)
 - [Architecture and request flow](docs/HOW-IT-WORKS.md)
 - [Security and credential handling](SECURITY.md)
 - [Troubleshooting](docs/TROUBLESHOOTING.md)
-- [Development and tests](docs/DEVELOPMENT.md)
+- [Provider development and tests](docs/DEVELOPMENT.md)
 
 ## Current scope
 
-- Automatic service installation supports macOS `launchd`.
-- The router intentionally declines Responses WebSocket upgrades; current Codex
-  falls back to compressed HTTP automatically.
-- Kimi CLI OAuth credential storage is an implementation detail of Kimi Code.
-  A future CLI release can require an adapter update.
-- Kimi K3 API requests are forced to `reasoning_effort = "max"`, matching the
-  current K3 API requirement.
+- Automatic background-service installation currently targets macOS
+  `launchd`.
+- Responses WebSocket upgrades are declined; current Codex falls back to
+  compressed HTTP.
+- Kimi CLI OAuth storage is an implementation detail of Kimi Code and may need
+  adaptation after a future CLI change.
+- DeepSeek thinking mode is enabled for V4 models. Codex `high` maps to
+  DeepSeek `high`; Codex `xhigh`, `max`, and `ultra` map to DeepSeek `max`.
+- Codex documents Chat Completions provider support as deprecated. This project
+  may need to adapt when Codex or an upstream provider changes protocols.
 
 ## References
 
+- [DeepSeek models and pricing](https://api-docs.deepseek.com/quick_start/pricing)
+- [DeepSeek model-list API](https://api-docs.deepseek.com/api/list-models)
+- [DeepSeek thinking mode](https://api-docs.deepseek.com/guides/thinking_mode)
 - [Kimi Code CLI setup and OAuth login](https://www.kimi.com/help/kimi-code/cli-getting-started)
 - [Kimi K3 API quickstart](https://platform.kimi.com/docs/guide/kimi-k3-quickstart)
 - [Codex advanced configuration](https://learn.chatgpt.com/docs/config-file/config-advanced)
