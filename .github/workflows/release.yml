@@ -38,7 +38,7 @@ jobs:
           git archive --format=zip --prefix="$prefix" -o "dist/codex-router-${GITHUB_REF_NAME#v}.zip" "$GITHUB_REF_NAME"
           cd dist
           sha256sum codex-router-* > SHA256SUMS
-      - uses: actions/attest-build-provenance@v2
+      - uses: actions/attest-build-provenance@v4
         with:
           subject-path: "dist/*"
       - name: Publish GitHub release
