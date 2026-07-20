@@ -42,9 +42,11 @@ export function privateFileIsProtected(target) {
   if (process.platform !== "win32") return (statSync(target).mode & 0o777) === 0o600;
   const script = [
     "$acl = Get-Acl -LiteralPath $env:CODEX_ROUTER_PRIVATE_FILE",
-    "$sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value",
+    "$identity = [Security.Principal.WindowsIdentity]::GetCurrent()",
+    "$sid = $identity.User.Value",
+    "$name = $identity.Name",
     "$allowed = $false",
-    "foreach ($rule in $acl.Access) { try { $ruleSid = $rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value } catch { continue }; if ($ruleSid -eq $sid -and $rule.AccessControlType -eq 'Allow') { $allowed = $true } }",
+    "foreach ($rule in $acl.Access) { $ruleIdentity = $rule.IdentityReference.Value; $matches = $ruleIdentity -eq $sid -or $ruleIdentity -eq $name; if (-not $matches) { try { $matches = $rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value -eq $sid } catch { $matches = $false } }; if ($matches -and $rule.AccessControlType -eq 'Allow') { $allowed = $true } }",
     "[Console]::Out.Write(($acl.AreAccessRulesProtected -and $allowed).ToString())",
   ].join("; ");
   try {
