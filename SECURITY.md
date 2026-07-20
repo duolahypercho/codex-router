@@ -1,5 +1,11 @@
 # Security model
 
+Codex and Claude targets share source code but not their trust roots. Each has a
+separate caller key, internal key, state directory, provider selection, API-key
+files, service identity, and port range. Kimi OAuth is the intentional
+exception: both targets may reuse the official Kimi CLI session under
+`~/.kimi-code`.
+
 ## Credential separation
 
 Codex Router handles four credential classes and keeps them on distinct paths:
@@ -23,12 +29,15 @@ protected or redacted.
 
 ## Local secret storage
 
-Sensitive state lives under `$CODEX_HOME/codex-router` by default:
+Codex state lives under `$CODEX_HOME/codex-router` by default. Claude state uses
+`~/.local/state/model-router/claude` on POSIX or
+`%LOCALAPPDATA%\model-router\claude` on Windows. Each target has its own copy of
+the applicable files below; the native/merged catalogs exist only for Codex:
 
 | File | Purpose | Mode |
 | --- | --- | --- |
 | `internal-secret` | Random loopback service key | `600` |
-| `caller-secret` | Random capability used only by Codex-to-router requests | `600` |
+| `caller-secret` | Random capability used by that app target's router requests | `600` |
 | `kimi-api-key.secret` | Optional Kimi Platform key | `600` |
 | `deepseek-api-key.secret` | Optional DeepSeek key | `600` |
 | `native-models.json` | Cached native Codex catalog | `600` |
@@ -39,17 +48,19 @@ Sensitive state lives under `$CODEX_HOME/codex-router` by default:
 | `migrations/` | Protected config/service rollback snapshots | private |
 | `support/` | Locally generated diagnostic bundles | `600` files |
 
-The router can read provider keys from process environment or compatible macOS
-Keychain services. The interactive helper writes protected local files so the
-per-user background service can access them without copying secrets into its
-service definition. Files use mode `600` on POSIX systems. On Windows, the
-helper removes inherited ACL entries and grants access only to the current user
-SID.
+The Codex target can read provider keys from process environment or compatible
+legacy macOS Keychain services; the Claude target does not reuse those Codex
+Keychain entries. The interactive helper writes target-specific protected local
+files so the per-user background service can access them without copying
+secrets into its service definition. Files use mode `600` on POSIX systems. On
+Windows, the helper removes inherited ACL entries and grants access only to the
+current user SID.
 
 Installers deliberately do not copy API-key environment variables into launchd,
 systemd, or Task Scheduler definitions. Environment-only credentials work for a
-foreground router process, but background setup requires a protected file or a
-compatible Keychain entry.
+foreground router process, but background setup requires a target-specific
+protected file. Compatible legacy Keychain lookup is a Codex-only migration
+path.
 
 Kimi OAuth remains under `$KIMI_CODE_HOME` or `~/.kimi-code`; Codex Router does
 not copy it into its own state directory.
@@ -60,9 +71,10 @@ a generated config from a live installation.
 ## Network boundary
 
 The router, LiteLLM gateway, OAuth forwarder, and API forwarder bind only to
-`127.0.0.1`. Every model route requires the random capability embedded in the
-managed Codex base URL. Internal gateway and forwarder routes require a separate
-random service key, and credential-detail health responses are authenticated.
+`127.0.0.1`. Every model route requires a random caller capability: Codex carries
+it in the managed URL and Claude sends it as the configured gateway credential.
+Internal gateway and forwarder routes require a separate random service key,
+and credential-detail health responses are authenticated.
 Model requests must use JSON, requests with browser-origin headers are rejected,
 and the router sends no CORS permission headers. This remains compatible with
 Codex API-key sessions that do not attach a bearer header to the loopback hop.
@@ -101,6 +113,16 @@ Review the scoped difference with:
 ```sh
 diff -u ~/.codex/config.toml.pre-codex-router ~/.codex/config.toml
 ```
+
+For Claude, the config manager creates one UUID-named entry in the current
+user's `Claude-3p/configLibrary`, preserves all unrelated entries, records the
+previously applied entry, and restores it on disable. It fails closed on
+malformed library metadata and retains a protected pre-router metadata copy.
+Standard Claude user data and Anthropic authentication are not edited. Because
+the local library layout is not a documented public API, this integration is
+experimental and the in-app third-party configuration window is the manual
+fallback. The owned Claude entry contains its target-specific caller key, so it
+is protected for the current user and must not be posted with bug reports.
 
 ## Dependency and release hygiene
 

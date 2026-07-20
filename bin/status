@@ -3,6 +3,11 @@ set -eu
 
 repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$repo_dir"
-node src/config-manager.mjs status
+target=${MODEL_ROUTER_TARGET:-codex}
+case "$target" in
+  codex) node src/config-manager.mjs status ;;
+  claude) node src/claude-config-manager.mjs status ;;
+  *) echo "MODEL_ROUTER_TARGET must be codex or claude." >&2; exit 2 ;;
+esac
 node src/service.mjs status
-node -e 'const port=Number(process.env.CODEX_ROUTER_PORT||process.env.KIMI_ROUTER_PORT||4102); fetch(`http://127.0.0.1:${port}/health`).then(async r=>{console.log(await r.text()); process.exitCode=r.ok?0:1}).catch(()=>{console.log(JSON.stringify({ok:false,router:"unavailable"})); process.exitCode=1})'
+node --input-type=module -e 'import { PORTS } from "./src/paths.mjs"; fetch(`http://127.0.0.1:${PORTS.router}/health`).then(async r=>{console.log(await r.text()); process.exitCode=r.ok?0:1}).catch(()=>{console.log(JSON.stringify({ok:false,router:"unavailable"})); process.exitCode=1})'

@@ -8,7 +8,7 @@ import {
   requireInternalAuth,
   writeJson,
 } from "./http-utils.mjs";
-import { PORTS } from "./paths.mjs";
+import { PORTS, TARGET } from "./paths.mjs";
 import {
   API_MODELS,
   MODEL_BY_GATEWAY_ID,
@@ -22,16 +22,29 @@ import {
 import { VERSION } from "./version.mjs";
 
 const LISTEN_HOST =
-  process.env.CODEX_ROUTER_API_HOST || process.env.KIMI_API_FORWARD_HOST || "127.0.0.1";
+  process.env.MODEL_ROUTER_API_HOST ||
+  (TARGET === "codex"
+    ? process.env.CODEX_ROUTER_API_HOST || process.env.KIMI_API_FORWARD_HOST
+    : undefined) ||
+  "127.0.0.1";
 const LISTEN_PORT = Number(
-  process.env.CODEX_ROUTER_API_PORT || process.env.KIMI_API_FORWARD_PORT || PORTS.api,
+  process.env.MODEL_ROUTER_API_PORT ||
+    (TARGET === "codex"
+      ? process.env.CODEX_ROUTER_API_PORT || process.env.KIMI_API_FORWARD_PORT
+      : undefined) ||
+    PORTS.api,
 );
 const INTERNAL_KEY =
-  process.env.CODEX_ROUTER_INTERNAL_KEY || process.env.KIMI_INTERNAL_KEY;
+  process.env.MODEL_ROUTER_INTERNAL_KEY ||
+  (TARGET === "codex"
+    ? process.env.CODEX_ROUTER_INTERNAL_KEY || process.env.KIMI_INTERNAL_KEY
+    : undefined);
 const QUIET =
-  process.env.CODEX_ROUTER_QUIET === "1" || process.env.KIMI_PROXY_QUIET === "1";
+  process.env.MODEL_ROUTER_QUIET === "1" ||
+  (TARGET === "codex" &&
+    (process.env.CODEX_ROUTER_QUIET === "1" || process.env.KIMI_PROXY_QUIET === "1"));
 
-if (!INTERNAL_KEY) throw new Error("CODEX_ROUTER_INTERNAL_KEY is required.");
+if (!INTERNAL_KEY) throw new Error("MODEL_ROUTER_INTERNAL_KEY is required.");
 
 function providerBaseUrl(provider) {
   return String(process.env[provider.baseUrlEnv] || provider.baseUrl).replace(/\/+$/, "");
@@ -152,11 +165,12 @@ async function handleRequest(request, response) {
   const normalized = normalizeBody(original, request.headers["content-type"]);
   const credential = resolveProviderCredential(normalized.provider);
   if (!credential) {
+    const setup = credentialStatus(normalized.provider).setup;
     writeJson(response, 503, {
       error: {
         type: "provider_api_key_missing",
         provider: normalized.provider.id,
-        message: `${normalized.provider.displayName} key is not configured. Run ./bin/provider-key ${normalized.provider.id} set.`,
+        message: `${normalized.provider.displayName} key is not configured. ${setup}.`,
       },
     });
     return;

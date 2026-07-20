@@ -14,12 +14,16 @@ import {
   PORTS,
   SOURCE_ROOT,
   STATE_DIR,
+  TARGET,
 } from "./paths.mjs";
 
 const effectivePlatform = process.env.CODEX_ROUTER_SERVICE_PLATFORM || process.platform;
 const command = process.argv[2] || "status";
-const taskName = "Codex Router";
-const wrapperPath = path.join(STATE_DIR, "start-codex-router.cmd");
+const taskName = TARGET === "claude" ? "Codex Router - Claude" : "Codex Router";
+const wrapperPath = path.join(
+  STATE_DIR,
+  TARGET === "claude" ? "start-claude-router.cmd" : "start-codex-router.cmd",
+);
 
 if (effectivePlatform !== "win32" && command !== "render") {
   throw new Error("The Task Scheduler service manager runs on Windows only.");
@@ -32,6 +36,13 @@ function cmdEscape(value) {
 function wrapper() {
   const start = path.join(SOURCE_ROOT, "src", "start.mjs");
   const variables = {
+    MODEL_ROUTER_TARGET: TARGET,
+    MODEL_ROUTER_STATE_DIR: STATE_DIR,
+    MODEL_ROUTER_QUIET: "1",
+    MODEL_ROUTER_GATEWAY_PORT: String(PORTS.gateway),
+    MODEL_ROUTER_OAUTH_PORT: String(PORTS.oauth),
+    MODEL_ROUTER_PORT: String(PORTS.router),
+    MODEL_ROUTER_API_PORT: String(PORTS.api),
     CODEX_HOME,
     CODEX_ROUTER_STATE_DIR: STATE_DIR,
     CODEX_ROUTER_QUIET: "1",

@@ -15,6 +15,13 @@ body:
     validations:
       required: true
   - type: dropdown
+    id: target
+    attributes:
+      label: App target
+      options: [Codex, Claude Desktop experimental]
+    validations:
+      required: true
+  - type: dropdown
     id: platform
     attributes:
       label: Platform

@@ -1,12 +1,23 @@
 # Installation, migration, and upgrades
 
+This page covers the stable Codex target. The same checkout also contains an
+isolated experimental Claude Desktop target; see [Claude Desktop target](CLAUDE.md)
+for its one-command install, compatibility boundary, and rollback behavior.
+
+Use the target-qualified command when both integrations may be present:
+
+```sh
+./bin/model-router codex doctor
+./bin/model-router claude doctor
+```
+
 ## Supported hosts
 
-| Host | Codex surface | Background service |
+| Host | Stable Codex surface | Experimental Claude surface |
 | --- | --- | --- |
-| macOS | Codex App or CLI | Per-user launchd agent |
-| Windows | Codex App or CLI | Per-user Task Scheduler task |
-| Linux | Codex CLI | systemd user service |
+| macOS | Codex App or CLI | Claude Desktop |
+| Windows | Codex App or CLI | Claude Desktop |
+| Linux | Codex CLI | Router development only |
 
 Required software:
 

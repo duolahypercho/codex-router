@@ -1,10 +1,13 @@
 import { Readable } from "node:stream";
 
 import { secretEqual } from "./caller-auth.mjs";
+import { TARGET } from "./paths.mjs";
 
 export const MAX_BODY_BYTES = Number(
-  process.env.CODEX_ROUTER_MAX_BODY_BYTES ||
-    process.env.KIMI_PROXY_MAX_BODY_BYTES ||
+  process.env.MODEL_ROUTER_MAX_BODY_BYTES ||
+    (TARGET === "codex"
+      ? process.env.CODEX_ROUTER_MAX_BODY_BYTES || process.env.KIMI_PROXY_MAX_BODY_BYTES
+      : undefined) ||
     64 * 1024 * 1024,
 );
 
@@ -60,7 +63,7 @@ export function copyResponseHeaders(upstream, response, denylist = HOP_BY_HOP_HE
   }
 }
 
-export async function pipeResponse(upstream, response, denylist) {
+export async function pipeResponse(upstream, response, denylist, transform) {
   response.statusCode = upstream.status;
   copyResponseHeaders(upstream, response, denylist);
   if (!upstream.body) {
@@ -70,9 +73,11 @@ export async function pipeResponse(upstream, response, denylist) {
   await new Promise((resolve, reject) => {
     const stream = Readable.fromWeb(upstream.body);
     stream.once("error", reject);
+    if (transform) transform.once("error", reject);
     response.once("finish", resolve);
     response.once("error", reject);
-    stream.pipe(response);
+    if (transform) stream.pipe(transform).pipe(response);
+    else stream.pipe(response);
   });
 }
 

@@ -26,7 +26,7 @@ import {
   requireInternalAuth,
   writeJson,
 } from "./http-utils.mjs";
-import { PORTS } from "./paths.mjs";
+import { PORTS, TARGET } from "./paths.mjs";
 import { VERSION } from "./version.mjs";
 
 const KIMI_CLIENT_ID = "17e5f671-d194-4dfb-9706-5516cb48c098";
@@ -41,16 +41,29 @@ const OAUTH_HOST = (
   "https://auth.kimi.com"
 ).replace(/\/+$/, "");
 const LISTEN_HOST =
-  process.env.CODEX_ROUTER_OAUTH_HOST || process.env.KIMI_FORWARD_HOST || "127.0.0.1";
+  process.env.MODEL_ROUTER_OAUTH_HOST ||
+  (TARGET === "codex"
+    ? process.env.CODEX_ROUTER_OAUTH_HOST || process.env.KIMI_FORWARD_HOST
+    : undefined) ||
+  "127.0.0.1";
 const LISTEN_PORT = Number(
-  process.env.CODEX_ROUTER_OAUTH_PORT || process.env.KIMI_FORWARD_PORT || PORTS.oauth,
+  process.env.MODEL_ROUTER_OAUTH_PORT ||
+    (TARGET === "codex"
+      ? process.env.CODEX_ROUTER_OAUTH_PORT || process.env.KIMI_FORWARD_PORT
+      : undefined) ||
+    PORTS.oauth,
 );
 const INTERNAL_KEY =
-  process.env.CODEX_ROUTER_INTERNAL_KEY || process.env.KIMI_INTERNAL_KEY;
+  process.env.MODEL_ROUTER_INTERNAL_KEY ||
+  (TARGET === "codex"
+    ? process.env.CODEX_ROUTER_INTERNAL_KEY || process.env.KIMI_INTERNAL_KEY
+    : undefined);
 const QUIET =
-  process.env.CODEX_ROUTER_QUIET === "1" || process.env.KIMI_PROXY_QUIET === "1";
+  process.env.MODEL_ROUTER_QUIET === "1" ||
+  (TARGET === "codex" &&
+    (process.env.CODEX_ROUTER_QUIET === "1" || process.env.KIMI_PROXY_QUIET === "1"));
 
-if (!INTERNAL_KEY) throw new Error("CODEX_ROUTER_INTERNAL_KEY is required.");
+if (!INTERNAL_KEY) throw new Error("MODEL_ROUTER_INTERNAL_KEY is required.");
 
 const CREDENTIALS_PATH = path.join(
   KIMI_CODE_HOME,

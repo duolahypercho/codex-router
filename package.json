@@ -1,9 +1,9 @@
 {
   "name": "codex-model-router",
-  "version": "0.3.1",
+  "version": "0.4.0-beta.1",
   "private": true,
   "type": "module",
-  "description": "Extensible local model router for the Codex App with Kimi and DeepSeek",
+  "description": "Extensible local model router for Codex and experimental Claude Desktop targets",
   "engines": {
     "node": ">=22.19.0"
   },

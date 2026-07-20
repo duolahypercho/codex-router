@@ -2,6 +2,8 @@
 param(
   [switch]$CheckoutInstall,
   [switch]$PrepareOnly,
+  [ValidateSet("codex", "claude")]
+  [string]$Target = "codex",
   [switch]$Guided,
   [switch]$Auto,
   [string]$Providers,
@@ -14,6 +16,10 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$env:MODEL_ROUTER_TARGET = $Target
+if ($Target -eq "claude" -and $MigrateKnown) {
+  throw "-MigrateKnown applies only to the Codex target."
+}
 $PreviousRevision = $null
 $RepositoryUrl = if ($env:CODEX_ROUTER_REPOSITORY_URL) {
   $env:CODEX_ROUTER_REPOSITORY_URL
@@ -82,11 +88,12 @@ if (-not $CheckoutInstall) {
   }
 
   if ($PrepareOnly) {
-    & (Join-Path $Repository "install.ps1") -CheckoutInstall -PrepareOnly
+    & (Join-Path $Repository "install.ps1") -CheckoutInstall -PrepareOnly -Target $Target
     exit $LASTEXITCODE
   }
 
-  $SetupArguments = @((Join-Path $Repository "src\setup.mjs"))
+  $SetupScript = if ($Target -eq "claude") { "src\claude-setup.mjs" } else { "src\setup.mjs" }
+  $SetupArguments = @((Join-Path $Repository $SetupScript))
   $UseGuided = $Guided -or (-not $Auto -and [Environment]::UserInteractive)
   if ($UseGuided) { $SetupArguments += "--guided" }
   if ($Providers) { $SetupArguments += @("--providers", $Providers) }
@@ -115,10 +122,12 @@ if ([int]$VersionParts[0] -lt 22 -or
 
 Push-Location $ScriptDirectory
 try {
-  $CodexHome = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $HOME ".codex" }
-  New-Item -ItemType Directory -Force -Path $CodexHome | Out-Null
-  & node src/legacy-migration.mjs assert-clear | Out-Null
-  if ($LASTEXITCODE -ne 0) { throw "Resolve the detected older router before installing." }
+  if ($Target -eq "codex") {
+    $CodexHome = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $HOME ".codex" }
+    New-Item -ItemType Directory -Force -Path $CodexHome | Out-Null
+    & node src/legacy-migration.mjs assert-clear | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "Resolve the detected older router before installing." }
+  }
   if (-not $PrepareOnly) {
     & node src/provider-selection.mjs ensure-configured | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "Configure at least one provider before installing." }
@@ -155,29 +164,33 @@ try {
 
   & node src/secret.mjs ensure
   if ($LASTEXITCODE -ne 0) { throw "Local router-key setup failed." }
-  $StateRoot = if ($env:CODEX_ROUTER_STATE_DIR) { $env:CODEX_ROUTER_STATE_DIR }
-    elseif ($env:CODEX_HOME) { Join-Path $env:CODEX_HOME "codex-router" }
-    else { Join-Path $HOME ".codex\codex-router" }
-  if (Test-Path (Join-Path $StateRoot "native-models.json")) {
-    & node src/catalog.mjs
-  } else {
-    & node src/catalog.mjs --refresh-native
+  if ($Target -eq "codex") {
+    $StateRoot = if ($env:MODEL_ROUTER_STATE_DIR) { $env:MODEL_ROUTER_STATE_DIR }
+      elseif ($env:CODEX_ROUTER_STATE_DIR) { $env:CODEX_ROUTER_STATE_DIR }
+      elseif ($env:CODEX_HOME) { Join-Path $env:CODEX_HOME "codex-router" }
+      else { Join-Path $HOME ".codex\codex-router" }
+    if (Test-Path (Join-Path $StateRoot "native-models.json")) {
+      & node src/catalog.mjs
+    } else {
+      & node src/catalog.mjs --refresh-native
+    }
+    if ($LASTEXITCODE -ne 0) { throw "Codex model-catalog generation failed." }
   }
-  if ($LASTEXITCODE -ne 0) { throw "Codex model-catalog generation failed." }
   & node src/litellm-config.mjs
   if ($LASTEXITCODE -ne 0) { throw "Gateway configuration generation failed." }
 
   if ($PrepareOnly) {
-    Write-Host "Dependencies and generated files are prepared; Codex configuration was not changed."
+    Write-Host "Dependencies and generated files are prepared; application configuration was not changed."
     exit 0
   }
 
+  $ConfigManager = if ($Target -eq "claude") { "src\claude-config-manager.mjs" } else { "src\config-manager.mjs" }
   $ConfigEnabled = $false
   $ServiceInstalled = $false
   try {
     $ConfigEnabled = $true
-    & node src/config-manager.mjs enable
-    if ($LASTEXITCODE -ne 0) { throw "Codex configuration update failed." }
+    & node $ConfigManager enable
+    if ($LASTEXITCODE -ne 0) { throw "$Target configuration update failed." }
     $ServiceInstalled = $true
     & node src/service.mjs install
     if ($LASTEXITCODE -ne 0) { throw "Background-service installation failed." }
@@ -187,10 +200,14 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "Install-manifest recording failed." }
   } catch {
     if ($ServiceInstalled) { & node src/service.mjs uninstall 2>$null | Out-Null }
-    if ($ConfigEnabled) { & node src/config-manager.mjs disable 2>$null | Out-Null }
+    if ($ConfigEnabled) { & node $ConfigManager disable 2>$null | Out-Null }
     throw
   }
-  Write-Host "Installed the selected external model routes. Fully quit and reopen Codex."
+  if ($Target -eq "claude") {
+    Write-Host "Installed the selected external model routes. Fully quit and reopen Claude Desktop."
+  } else {
+    Write-Host "Installed the selected external model routes. Fully quit and reopen Codex."
+  }
 } finally {
   Pop-Location
 }

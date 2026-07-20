@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Added an isolated, experimental Claude Desktop target using the official
+  third-party gateway contract: authenticated Anthropic Messages routing,
+  streaming, explicit model lists, and preserved tool/image message payloads.
+- Added reversible per-user Claude configuration management, separate ports,
+  state, caller keys, provider selection, and background-service identities so
+  Codex and Claude can be installed from one checkout without configuration
+  overlap.
+- Added the cross-target `model-router` command, Claude guided setup, doctor,
+  smoke test, agent installation guidance, and dedicated compatibility docs.
 - Hardened local caller authentication with a separate per-install capability,
   exact internal-key checks, authenticated credential-detail health endpoints,
   browser-request rejection, and fail-closed routing before request bodies or

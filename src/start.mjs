@@ -10,13 +10,17 @@ import {
   MERGED_CATALOG_PATH,
   PORTS,
   SOURCE_ROOT,
+  STATE_DIR,
+  TARGET,
   loopback,
 } from "./paths.mjs";
 import { writeLiteLlmConfig } from "./litellm-config.mjs";
 
 const litellm =
-  process.env.CODEX_ROUTER_LITELLM_BIN ||
-  process.env.KIMI_LITELLM_BIN ||
+  process.env.MODEL_ROUTER_LITELLM_BIN ||
+  (TARGET === "codex"
+    ? process.env.CODEX_ROUTER_LITELLM_BIN || process.env.KIMI_LITELLM_BIN
+    : undefined) ||
   path.join(
     SOURCE_ROOT,
     ".venv",
@@ -40,6 +44,19 @@ const callerKey = assertCallerSecret(
 writeLiteLlmConfig();
 
 const commonEnv = {
+  MODEL_ROUTER_TARGET: TARGET,
+  MODEL_ROUTER_STATE_DIR: STATE_DIR,
+  MODEL_ROUTER_CALLER_KEY: callerKey,
+  MODEL_ROUTER_INTERNAL_KEY: internalKey,
+  MODEL_ROUTER_GATEWAY_BASE_URL: loopback(PORTS.gateway, "/v1"),
+  MODEL_ROUTER_OAUTH_HEALTH_URL: loopback(PORTS.oauth, "/health"),
+  MODEL_ROUTER_API_HEALTH_URL: loopback(PORTS.api, "/health"),
+  MODEL_ROUTER_GATEWAY_HEALTH_URL: loopback(PORTS.gateway, "/health/liveliness"),
+  MODEL_ROUTER_GATEWAY_PORT: String(PORTS.gateway),
+  MODEL_ROUTER_OAUTH_PORT: String(PORTS.oauth),
+  MODEL_ROUTER_API_PORT: String(PORTS.api),
+  MODEL_ROUTER_PORT: String(PORTS.router),
+  MODEL_ROUTER_QUIET: "1",
   CODEX_ROUTER_CALLER_KEY: callerKey,
   CODEX_ROUTER_INTERNAL_KEY: internalKey,
   KIMI_INTERNAL_KEY: internalKey,
@@ -141,25 +158,27 @@ await waitForHealth(
   { Authorization: `Bearer ${internalKey}` },
 );
 
-const router = run(process.execPath, [path.join(SOURCE_ROOT, "src", "router.mjs")]);
+const frontendScript = TARGET === "claude" ? "claude-router.mjs" : "router.mjs";
+const frontendService = TARGET === "claude" ? "claude-router" : "codex-router";
+const router = run(process.execPath, [path.join(SOURCE_ROOT, "src", frontendScript)]);
 await waitForHealth(
   loopback(PORTS.router, "/health"),
   {},
   30_000,
-  "codex-router",
+  frontendService,
 );
 
-console.error(`[codex-router] ready on ${loopback(PORTS.router)} (authenticated endpoint)`);
+console.error(`[${frontendService}] ready (authenticated loopback endpoint)`);
 
 const result = await Promise.race([
   waitForExit(oauth, "OAuth forwarder"),
   waitForExit(api, "API forwarder"),
   waitForExit(gateway, "LiteLLM gateway"),
-  waitForExit(router, "Codex router"),
+  waitForExit(router, TARGET === "claude" ? "Claude router" : "Codex router"),
 ]);
 if (!shuttingDown) {
   console.error(
-    `[codex-router] ${result.label} exited (code=${String(result.code)}, signal=${String(result.signal)}).`,
+    `[${frontendService}] ${result.label} exited (code=${String(result.code)}, signal=${String(result.signal)}).`,
   );
 }
 stopChildren();

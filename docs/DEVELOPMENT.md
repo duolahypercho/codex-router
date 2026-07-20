@@ -7,12 +7,15 @@
 - `src/catalog.mjs` merges listed registry models with native Codex models.
 - `src/litellm-config.mjs` generates every Responses-to-Chat-Completions route.
 - `src/router.mjs` dispatches native and namespaced external model IDs.
+- `src/claude-router.mjs` exposes the authenticated Anthropic Messages target.
+- `src/claude-config-manager.mjs` owns one reversible local Claude config entry.
 - `src/oauth-forwarder.mjs` owns Kimi CLI OAuth loading and refresh.
 - `src/api-forwarder.mjs` is shared by all API-key providers.
 - `src/provider-credentials.mjs` isolates environment, file, and Keychain lookup.
 - `src/provider-selection.mjs` controls which tested models enter the picker.
 - `src/start.mjs` supervises the loopback processes.
 - `src/service-*.mjs` install per-user services for macOS, Linux, and Windows.
+- `src/paths.mjs` isolates app targets, state roots, ports, and service names.
 
 ## Add an OpenAI-compatible provider
 
@@ -30,7 +33,9 @@
 7. Install in isolated state and run
    `bin/test-model provider/model --live --yes`; verify text, streaming, tool
    calls, and compaction before setting `listed: true`.
-8. Update the README model table and provider-specific setup documentation.
+8. Verify the Claude Messages target separately: basic and streamed messages,
+   image input, tool calls/results, context behavior, and sanitized failures.
+9. Update the README model table and provider-specific setup documentation.
 
 The shared forwarder strips Codex/ChatGPT authentication before injecting the
 selected provider key. Do not create a new listener merely to add another
@@ -69,8 +74,9 @@ npm audit --omit=dev
 The test suite verifies native header forwarding, external credential
 isolation, Kimi and DeepSeek rewriting, registry-generated gateway routes,
 Zstandard request decoding, both Codex compaction formats, legacy migration,
-provider selection, setup isolation, discovery comparison, and service rendering
-for all three supported platforms.
+provider selection, target isolation, Claude Messages translation, reversible
+Claude config management, discovery comparison, and service rendering for all
+three service platforms.
 
 CI runs the Node suite on macOS, Linux, and Windows. Tagged releases are built
 only after the suite passes and include checksums plus GitHub provenance
@@ -84,6 +90,16 @@ CODEX_HOME="$test_root/codex" \
 CODEX_ROUTER_STATE_DIR="$test_root/state" \
 CODEX_BIN=/Applications/ChatGPT.app/Contents/Resources/codex \
 ./install.sh --prepare-only
+```
+
+Prepare the Claude target without touching either real app configuration:
+
+```sh
+test_root=$(mktemp -d)
+MODEL_ROUTER_TARGET=claude \
+MODEL_ROUTER_STATE_DIR="$test_root/state" \
+CLAUDE_ROUTER_CONFIG_LIBRARY="$test_root/claude-config" \
+./install.sh --target claude --prepare-only
 ```
 
 Never use a real provider key in a fixture, command argument, shell history, or

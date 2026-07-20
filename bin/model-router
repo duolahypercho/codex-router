@@ -1,0 +1,42 @@
+#!/bin/sh
+set -eu
+
+repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+
+usage() {
+  cat <<'EOF'
+Usage: model-router codex|claude COMMAND [arguments]
+
+Commands:
+  setup, install, doctor, status, provider-key, providers, enable, disable,
+  uninstall, smoke-test, start, update, rollback
+
+Examples:
+  ./bin/model-router claude setup --guided
+  ./bin/model-router claude doctor
+  ./bin/model-router codex status
+EOF
+}
+
+if [ "$#" -lt 2 ]; then
+  usage >&2
+  exit 2
+fi
+
+target=$1
+command=$2
+shift 2
+
+case "$target" in
+  codex|claude) ;;
+  *) echo "Unknown target: $target" >&2; usage >&2; exit 2 ;;
+esac
+
+case "$command" in
+  setup|install|doctor|status|provider-key|providers|enable|disable|uninstall|smoke-test|start|update|rollback) ;;
+  *) echo "Unknown command: $command" >&2; usage >&2; exit 2 ;;
+esac
+
+MODEL_ROUTER_TARGET=$target
+export MODEL_ROUTER_TARGET
+exec "$repo_dir/bin/$command" "$@"

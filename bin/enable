@@ -3,18 +3,27 @@ set -eu
 
 repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$repo_dir"
-node src/legacy-migration.mjs assert-clear >/dev/null
+target=${MODEL_ROUTER_TARGET:-codex}
+if [ "$target" = codex ]; then
+  node src/legacy-migration.mjs assert-clear >/dev/null
+  config_manager=src/config-manager.mjs
+elif [ "$target" = claude ]; then
+  config_manager=src/claude-config-manager.mjs
+else
+  echo "MODEL_ROUTER_TARGET must be codex or claude." >&2
+  exit 2
+fi
 node src/provider-selection.mjs ensure-configured >/dev/null
 node src/secret.mjs ensure
-node src/catalog.mjs
+if [ "$target" = codex ]; then node src/catalog.mjs; fi
 node src/litellm-config.mjs
-node src/config-manager.mjs enable
 rollback() {
   node src/service.mjs uninstall >/dev/null 2>&1 || true
-  node src/config-manager.mjs disable >/dev/null 2>&1 || true
+  node "$config_manager" disable >/dev/null 2>&1 || true
 }
 trap rollback EXIT HUP INT TERM
+node "$config_manager" enable
 node src/service.mjs install
 node src/wait-health.mjs
 trap - EXIT HUP INT TERM
-echo "External model routes enabled. Fully quit and reopen Codex."
+echo "External model routes enabled. Fully quit and reopen $target."

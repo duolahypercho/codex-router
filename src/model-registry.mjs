@@ -4,7 +4,9 @@ import path from "node:path";
 import { SOURCE_ROOT } from "./paths.mjs";
 
 export const REGISTRY_PATH =
-  process.env.CODEX_ROUTER_REGISTRY || path.join(SOURCE_ROOT, "config", "providers.json");
+  process.env.MODEL_ROUTER_REGISTRY ||
+  process.env.CODEX_ROUTER_REGISTRY ||
+  path.join(SOURCE_ROOT, "config", "providers.json");
 
 function fail(message) {
   throw new Error(`Invalid provider registry ${REGISTRY_PATH}: ${message}`);

@@ -1,9 +1,10 @@
-import { PORTS, loopback } from "./paths.mjs";
+import { PORTS, TARGET, loopback } from "./paths.mjs";
 
 const url = process.argv[2] || loopback(PORTS.router, "/health");
 const timeoutMs = Number(process.argv[3] || 30_000);
 const deadline = Date.now() + timeoutMs;
 let lastError = "service unavailable";
+const expectedService = TARGET === "claude" ? "claude-router" : "codex-router";
 
 while (Date.now() < deadline) {
   try {
@@ -11,7 +12,7 @@ while (Date.now() < deadline) {
     if (response.ok) {
       const body = await response.text();
       const payload = JSON.parse(body);
-      if (payload.service === "codex-router") {
+      if (payload.service === expectedService) {
         process.stdout.write(`${body}\n`);
         process.exit(0);
       }

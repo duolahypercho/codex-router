@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { readInstallManifest } from "./install-manifest.mjs";
-import { SOURCE_ROOT } from "./paths.mjs";
+import { SOURCE_ROOT, TARGET } from "./paths.mjs";
 
 function git(args, options = {}) {
   return execFileSync("git", ["-C", SOURCE_ROOT, ...args], {
@@ -35,11 +35,11 @@ function requireManagedCheckout() {
   }
 }
 
-function installCurrentCheckout() {
-  const result = process.platform === "win32"
-    ? spawnSync(
-        "powershell.exe",
-        [
+export function currentCheckoutInstaller(platform = process.platform, target = TARGET) {
+  return platform === "win32"
+    ? {
+        command: "powershell.exe",
+        args: [
           "-NoLogo",
           "-NoProfile",
           "-ExecutionPolicy",
@@ -47,14 +47,20 @@ function installCurrentCheckout() {
           "-File",
           path.join(SOURCE_ROOT, "install.ps1"),
           "-CheckoutInstall",
+          "-Target",
+          target,
         ],
-        { cwd: SOURCE_ROOT, stdio: "inherit", env: process.env },
-      )
-    : spawnSync(path.join(SOURCE_ROOT, "bin", "install"), [], {
-        cwd: SOURCE_ROOT,
-        stdio: "inherit",
-        env: process.env,
-      });
+      }
+    : { command: path.join(SOURCE_ROOT, "bin", "install"), args: [] };
+}
+
+function installCurrentCheckout() {
+  const installer = currentCheckoutInstaller();
+  const result = spawnSync(installer.command, installer.args, {
+    cwd: SOURCE_ROOT,
+    stdio: "inherit",
+    env: { ...process.env, MODEL_ROUTER_TARGET: TARGET },
+  });
   if (result.error) throw result.error;
   if (result.status !== 0) {
     throw new Error(`Installer exited with status ${result.status}.`);
