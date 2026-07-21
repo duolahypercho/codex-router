@@ -483,14 +483,20 @@ final class RouterStore: ObservableObject {
       task.standardError = errors
       task.standardInput = input
       try task.run()
+      let stdoutReader = Task.detached {
+        output.fileHandleForReading.readDataToEndOfFile()
+      }
+      let stderrReader = Task.detached {
+        errors.fileHandleForReading.readDataToEndOfFile()
+      }
       if let stdin, let input {
         input.fileHandleForWriting.write(stdin)
         try? input.fileHandleForWriting.close()
       }
       task.waitUntilExit()
-      let stdout = output.fileHandleForReading.readDataToEndOfFile()
+      let stdout = await stdoutReader.value
+      let stderr = await stderrReader.value
       guard task.terminationStatus == 0 else {
-        let stderr = errors.fileHandleForReading.readDataToEndOfFile()
         let detail = String(data: stderr, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
         throw RouterError(detail?.isEmpty == false ? detail! : "Model Router control command failed.")
       }
