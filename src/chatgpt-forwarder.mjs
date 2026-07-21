@@ -1,0 +1,396 @@
+import { readFileSync } from "node:fs";
+import http from "node:http";
+import { randomUUID } from "node:crypto";
+
+import {
+  httpErrorStatus,
+  readRequestBody,
+  requireInternalAuth,
+  writeJson,
+} from "./http-utils.mjs";
+import { PORTS } from "./paths.mjs";
+import { codexAuthPath } from "./chatgpt-oauth-status.mjs";
+import { VERSION } from "./version.mjs";
+
+// Forwarder for the ChatGPT/Codex OAuth provider. LiteLLM speaks OpenAI Chat
+// Completions to it; it reuses the Codex CLI's OAuth session and translates to
+// ChatGPT's Codex Responses API (verified shapes: response.output_text.delta for
+// content, response.completed for usage, function_call items for tools).
+
+const LISTEN_HOST = process.env.MODEL_ROUTER_CHATGPT_HOST || "127.0.0.1";
+const LISTEN_PORT = Number(process.env.MODEL_ROUTER_CHATGPT_PORT || PORTS.chatgpt);
+const NATIVE_BASE = (
+  process.env.CODEX_NATIVE_BASE_URL || "https://chatgpt.com/backend-api/codex"
+).replace(/\/+$/, "");
+const INTERNAL_KEY = process.env.MODEL_ROUTER_INTERNAL_KEY;
+const QUIET = process.env.MODEL_ROUTER_QUIET === "1";
+
+if (!INTERNAL_KEY) throw new Error("MODEL_ROUTER_INTERNAL_KEY is required.");
+
+function noSessionError() {
+  const error = new Error("No usable Codex OAuth session; run `codex login`.");
+  error.status = 401;
+  return error;
+}
+
+function readSession() {
+  let auth;
+  try {
+    auth = JSON.parse(readFileSync(codexAuthPath(), "utf8"));
+  } catch {
+    throw noSessionError();
+  }
+  const accessToken = auth?.tokens?.access_token;
+  const accountId = auth?.tokens?.account_id;
+  if (!accessToken || !accountId) throw noSessionError();
+  return { accessToken, accountId };
+}
+
+function contentToText(content) {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .filter((part) => part && (part.type === "text" || typeof part.text === "string"))
+    .map((part) => part.text || "")
+    .join("");
+}
+
+function messageContentParts(content, textType) {
+  if (typeof content === "string") return [{ type: textType, text: content }];
+  if (!Array.isArray(content)) return [{ type: textType, text: "" }];
+  const parts = [];
+  for (const part of content) {
+    if (part?.type === "image_url" && part.image_url?.url) {
+      parts.push({ type: "input_image", image_url: part.image_url.url });
+    } else if (typeof part?.text === "string") {
+      parts.push({ type: textType, text: part.text });
+    }
+  }
+  return parts.length ? parts : [{ type: textType, text: "" }];
+}
+
+function mapEffort(effort) {
+  const value = { minimal: "low", low: "low", medium: "medium", high: "high", max: "high" }[effort];
+  return value;
+}
+
+// Chat Completions request -> Codex Responses request.
+function toResponsesRequest(chat) {
+  const input = [];
+  let instructions;
+  for (const message of chat.messages || []) {
+    const role = message.role;
+    if (role === "system" || role === "developer") {
+      const text = contentToText(message.content);
+      instructions = instructions ? `${instructions}\n\n${text}` : text;
+    } else if (role === "tool") {
+      input.push({
+        type: "function_call_output",
+        call_id: message.tool_call_id,
+        output:
+          typeof message.content === "string"
+            ? message.content
+            : JSON.stringify(message.content ?? ""),
+      });
+    } else if (role === "assistant" && Array.isArray(message.tool_calls)) {
+      const text = contentToText(message.content);
+      if (text) {
+        input.push({ type: "message", role: "assistant", content: [{ type: "output_text", text }] });
+      }
+      for (const call of message.tool_calls) {
+        input.push({
+          type: "function_call",
+          call_id: call.id,
+          name: call.function?.name,
+          arguments: call.function?.arguments || "{}",
+        });
+      }
+    } else {
+      const textType = role === "assistant" ? "output_text" : "input_text";
+      input.push({ type: "message", role, content: messageContentParts(message.content, textType) });
+    }
+  }
+
+  const request = { model: chat.model, input, stream: true, store: false };
+  if (instructions) request.instructions = instructions;
+  const effort = mapEffort(chat.reasoning_effort);
+  if (effort) request.reasoning = { effort };
+  const tools = Array.isArray(chat.tools)
+    ? chat.tools
+        .filter((tool) => tool?.type === "function" && tool.function?.name)
+        .map((tool) => ({
+          type: "function",
+          name: tool.function.name,
+          description: tool.function.description,
+          parameters: tool.function.parameters || { type: "object", properties: {} },
+          strict: false,
+        }))
+    : [];
+  if (tools.length) {
+    request.tools = tools;
+    if (chat.tool_choice) request.tool_choice = chat.tool_choice;
+  }
+  return request;
+}
+
+function upstreamHeaders(session) {
+  return {
+    Authorization: `Bearer ${session.accessToken}`,
+    "chatgpt-account-id": session.accountId,
+    "Content-Type": "application/json",
+    Accept: "text/event-stream",
+    "OpenAI-Beta": "responses=experimental",
+    originator: "codex_cli_rs",
+    session_id: randomUUID(),
+    "User-Agent": `codex-router/${VERSION}`,
+  };
+}
+
+// Parse the upstream Responses SSE and invoke callbacks per normalized event.
+async function consumeResponsesStream(upstreamBody, handlers) {
+  const reader = upstreamBody.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let boundary;
+    while ((boundary = buffer.indexOf("\n\n")) !== -1) {
+      const rawEvent = buffer.slice(0, boundary);
+      buffer = buffer.slice(boundary + 2);
+      const dataLine = rawEvent
+        .split("\n")
+        .find((line) => line.startsWith("data:"));
+      if (!dataLine) continue;
+      const data = dataLine.slice(5).trim();
+      if (!data || data === "[DONE]") continue;
+      let event;
+      try {
+        event = JSON.parse(data);
+      } catch {
+        continue;
+      }
+      handlers(event);
+    }
+  }
+}
+
+const OPENAI_ROLE_CHUNK = (id, created, model, delta, finishReason = null) =>
+  `data: ${JSON.stringify({
+    id,
+    object: "chat.completion.chunk",
+    created,
+    model,
+    choices: [{ index: 0, delta, finish_reason: finishReason }],
+  })}\n\n`;
+
+async function handleChatCompletions(request, response) {
+  const chat = JSON.parse((await readRequestBody(request)).toString("utf8"));
+  const wantsStream = chat.stream === true;
+  const model = typeof chat.model === "string" ? chat.model : "";
+  const session = readSession();
+  const responsesRequest = toResponsesRequest(chat);
+
+  const controller = new AbortController();
+  request.once("aborted", () => controller.abort());
+  response.once("close", () => {
+    if (!response.writableEnded) controller.abort();
+  });
+
+  const upstream = await fetch(`${NATIVE_BASE}/responses`, {
+    method: "POST",
+    headers: upstreamHeaders(session),
+    body: JSON.stringify(responsesRequest),
+    signal: controller.signal,
+  });
+
+  if (!upstream.ok || !upstream.body) {
+    const detail = await upstream.text().catch(() => "");
+    writeJson(response, upstream.status === 401 ? 401 : 502, {
+      error: {
+        message:
+          upstream.status === 401
+            ? "ChatGPT rejected the Codex OAuth session; run `codex login`."
+            : `ChatGPT Codex backend error (HTTP ${upstream.status}).`,
+        type: upstream.status === 401 ? "authentication_error" : "api_error",
+        code: null,
+        detail: detail.slice(0, 500) || undefined,
+      },
+    });
+    return;
+  }
+
+  const id = `chatcmpl-${randomUUID()}`;
+  const created = Math.floor(Date.now() / 1_000);
+  const toolIndex = new Map();
+  let contentText = "";
+  let finishReason = "stop";
+  let usage;
+
+  if (wantsStream) {
+    response.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+    });
+    response.write(OPENAI_ROLE_CHUNK(id, created, model, { role: "assistant", content: "" }));
+  }
+
+  const onEvent = (event) => {
+    switch (event.type) {
+      case "response.output_text.delta": {
+        contentText += event.delta || "";
+        if (wantsStream && event.delta) {
+          response.write(OPENAI_ROLE_CHUNK(id, created, model, { content: event.delta }));
+        }
+        break;
+      }
+      case "response.output_item.added": {
+        const item = event.item;
+        if (item?.type === "function_call") {
+          const index = toolIndex.size;
+          toolIndex.set(item.id, index);
+          finishReason = "tool_calls";
+          if (wantsStream) {
+            response.write(
+              OPENAI_ROLE_CHUNK(id, created, model, {
+                tool_calls: [
+                  {
+                    index,
+                    id: item.call_id || item.id,
+                    type: "function",
+                    function: { name: item.name || "", arguments: "" },
+                  },
+                ],
+              }),
+            );
+          }
+        }
+        break;
+      }
+      case "response.function_call_arguments.delta": {
+        const index = toolIndex.get(event.item_id) ?? 0;
+        if (wantsStream && event.delta) {
+          response.write(
+            OPENAI_ROLE_CHUNK(id, created, model, {
+              tool_calls: [{ index, function: { arguments: event.delta } }],
+            }),
+          );
+        }
+        break;
+      }
+      case "response.completed": {
+        const u = event.response?.usage;
+        if (u) {
+          usage = {
+            prompt_tokens: u.input_tokens ?? 0,
+            completion_tokens: u.output_tokens ?? 0,
+            total_tokens: (u.input_tokens ?? 0) + (u.output_tokens ?? 0),
+          };
+        }
+        break;
+      }
+      default:
+        break;
+    }
+  };
+
+  // For a non-streaming client we still need the tool-call structure, so collect
+  // the full output items from the completed event.
+  const collectedToolCalls = [];
+  const onEventCollecting = (event) => {
+    onEvent(event);
+    if (event.type === "response.output_item.done" && event.item?.type === "function_call") {
+      collectedToolCalls.push({
+        id: event.item.call_id || event.item.id,
+        type: "function",
+        function: { name: event.item.name, arguments: event.item.arguments || "" },
+      });
+    }
+  };
+
+  await consumeResponsesStream(upstream.body, wantsStream ? onEvent : onEventCollecting);
+
+  if (wantsStream) {
+    response.write(OPENAI_ROLE_CHUNK(id, created, model, {}, finishReason));
+    if (usage) {
+      response.write(
+        `data: ${JSON.stringify({ id, object: "chat.completion.chunk", created, model, choices: [], usage })}\n\n`,
+      );
+    }
+    response.write("data: [DONE]\n\n");
+    response.end();
+  } else {
+    const message = { role: "assistant", content: contentText || null };
+    if (collectedToolCalls.length) {
+      message.tool_calls = collectedToolCalls;
+      finishReason = "tool_calls";
+    }
+    writeJson(response, 200, {
+      id,
+      object: "chat.completion",
+      created,
+      model,
+      choices: [{ index: 0, message, finish_reason: finishReason }],
+      usage: usage || { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+    });
+  }
+
+  if (!QUIET) {
+    console.error(`[chatgpt-oauth] model=${model} status=${upstream.status}`);
+  }
+}
+
+async function handleRequest(request, response) {
+  const requestUrl = new URL(request.url || "/", `http://${request.headers.host || LISTEN_HOST}`);
+  if (!requireInternalAuth(request, response, INTERNAL_KEY)) return;
+  if (request.method === "GET" && requestUrl.pathname === "/health") {
+    let credentialPresent = false;
+    try {
+      readSession();
+      credentialPresent = true;
+    } catch {
+      credentialPresent = false;
+    }
+    writeJson(response, 200, {
+      ok: true,
+      service: "codex-router-chatgpt-forwarder",
+      credential_present: credentialPresent,
+    });
+    return;
+  }
+  const route = requestUrl.pathname.replace(/^\/v1(?=\/|$)/, "");
+  if (request.method === "POST" && route === "/chat/completions") {
+    await handleChatCompletions(request, response);
+    return;
+  }
+  writeJson(response, 404, {
+    error: { type: "proxy_route_not_found", message: "Unsupported ChatGPT route." },
+  });
+}
+
+const server = http.createServer((request, response) => {
+  handleRequest(request, response).catch((error) => {
+    const status = httpErrorStatus(error);
+    console.error("[chatgpt-oauth] request failed");
+    if (!response.headersSent) {
+      writeJson(response, status, {
+        error: {
+          type: status >= 500 ? "api_error" : "invalid_request_error",
+          message: "The ChatGPT OAuth forwarder could not complete the request.",
+        },
+      });
+    } else if (!response.writableEnded) {
+      response.destroy();
+    }
+  });
+});
+
+server.listen(LISTEN_PORT, LISTEN_HOST, () => {
+  console.error("[chatgpt-oauth] listening");
+});
+
+for (const signal of ["SIGINT", "SIGTERM"]) {
+  process.on(signal, () => server.close(() => process.exit(0)));
+}
