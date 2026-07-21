@@ -158,8 +158,14 @@ await waitForHealth(
   { Authorization: `Bearer ${internalKey}` },
 );
 
-const frontendScript = TARGET === "claude" ? "claude-router.mjs" : "router.mjs";
-const frontendService = TARGET === "claude" ? "claude-router" : "codex-router";
+const FRONTENDS = {
+  codex: { script: "router.mjs", service: "codex-router", label: "Codex router" },
+  claude: { script: "claude-router.mjs", service: "claude-router", label: "Claude router" },
+  cursor: { script: "cursor-router.mjs", service: "cursor-router", label: "Cursor router" },
+};
+const frontend = FRONTENDS[TARGET];
+const frontendScript = frontend.script;
+const frontendService = frontend.service;
 const router = run(process.execPath, [path.join(SOURCE_ROOT, "src", frontendScript)]);
 await waitForHealth(
   loopback(PORTS.router, "/health"),
@@ -174,7 +180,7 @@ const result = await Promise.race([
   waitForExit(oauth, "OAuth forwarder"),
   waitForExit(api, "API forwarder"),
   waitForExit(gateway, "LiteLLM gateway"),
-  waitForExit(router, TARGET === "claude" ? "Claude router" : "Codex router"),
+  waitForExit(router, frontend.label),
 ]);
 if (!shuttingDown) {
   console.error(

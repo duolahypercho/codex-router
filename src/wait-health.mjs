@@ -4,7 +4,12 @@ const url = process.argv[2] || loopback(PORTS.router, "/health");
 const timeoutMs = Number(process.argv[3] || 30_000);
 const deadline = Date.now() + timeoutMs;
 let lastError = "service unavailable";
-const expectedService = TARGET === "claude" ? "claude-router" : "codex-router";
+const SERVICE_BY_TARGET = {
+  codex: "codex-router",
+  claude: "claude-router",
+  cursor: "cursor-router",
+};
+const expectedService = SERVICE_BY_TARGET[TARGET];
 
 while (Date.now() < deadline) {
   try {
