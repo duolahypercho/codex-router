@@ -189,13 +189,15 @@ On macOS, build and open the native menu-bar control panel with:
 ./bin/model-router-tray
 ```
 
-It shows Codex health, a pinned model with live usage, routed models, and
-staged provider controls in a native glass macOS interface. See the
+It shows Codex health, detailed usage for the active provider, a seven-day
+overview of every configured or previously used provider, and auto-applied
+provider controls in a native glass macOS interface. See the
 [macOS tray guide](docs/MACOS-TRAY.md) for behavior and rebuild notes.
 
 The app also places a Dynamic-Island-style overlay at the top center of the
-active display. It shows the pinned model at rest, reveals usage on hover, and
-expands on click. The menu-bar panel remains available for configuration.
+active display. It follows the provider handling the latest request, reveals
+usage on hover, and expands on click. The menu-bar panel remains available for
+the all-provider overview and configuration.
 
 ## Common commands
 

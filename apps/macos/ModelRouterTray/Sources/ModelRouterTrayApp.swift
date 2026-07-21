@@ -133,11 +133,24 @@ final class RouterStore: ObservableObject {
   }
 
   var selectedProviderUsage: RouterProviderUsage? {
-    providerUsage?.providers.first(where: { $0.id == selectedUsageProviderID })
+    providerUsage(for: selectedUsageProviderID)
   }
 
   var selectedAccountMetric: ProviderAccountMetric? {
     selectedProviderUsage?.account.metrics.first
+  }
+
+  var visibleUsageProviders: [UsageProviderChoice] {
+    usageProviderChoices.filter { provider in
+      provider.id == "openai" ||
+        provider.isEnabled ||
+        providerSetup[provider.id]?.configured == true ||
+        (providerUsage(for: provider.id)?.requests ?? 0) > 0
+    }
+  }
+
+  func providerUsage(for providerID: String) -> RouterProviderUsage? {
+    providerUsage?.providers.first(where: { $0.id == providerID })
   }
 
   func startPolling() async {
@@ -325,7 +338,11 @@ final class RouterStore: ObservableObject {
   }
 
   func localUsageTotals(days: Int) -> (tokens: Double, requests: Int) {
-    guard !selectedUsageUsesChatGPT, let usage = selectedProviderUsage else { return (0, 0) }
+    localUsageTotals(for: selectedUsageProviderID, days: days)
+  }
+
+  func localUsageTotals(for providerID: String, days: Int) -> (tokens: Double, requests: Int) {
+    guard providerID != "openai", let usage = providerUsage(for: providerID) else { return (0, 0) }
     let calendar = Calendar.current
     let today = calendar.startOfDay(for: .now)
     let firstDay = calendar.date(byAdding: .day, value: -(days - 1), to: today) ?? today
@@ -758,6 +775,8 @@ private struct TrayView: View {
         sectionLabel("Current usage", detail: store.selectedUsageProvider.displayName)
         ProviderUsageSection(store: store)
           .id(store.selectedUsageProviderID)
+        sectionLabel("All usage", detail: "7-day snapshot")
+        AllProviderUsageGrid(store: store)
         settingRow(
           title: "Dynamic Island",
           detail: "Show provider usage and activity status",
@@ -1176,6 +1195,119 @@ private struct ProviderUsageSection: View {
 
   private func metricRemainingFraction(_ metric: ProviderAccountMetric) -> CGFloat {
     CGFloat(max(0, min(100, metric.remainingPercent ?? 0))) / 100
+  }
+}
+
+private struct AllProviderUsageGrid: View {
+  @ObservedObject var store: RouterStore
+
+  private let columns = [
+    GridItem(.flexible(), spacing: 8),
+    GridItem(.flexible(), spacing: 8),
+  ]
+
+  var body: some View {
+    LazyVGrid(columns: columns, spacing: 8) {
+      ForEach(store.visibleUsageProviders) { provider in
+        AllProviderUsageCard(store: store, provider: provider)
+      }
+    }
+  }
+}
+
+private struct AllProviderUsageCard: View {
+  @ObservedObject var store: RouterStore
+  let provider: UsageProviderChoice
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 7) {
+      HStack(spacing: 6) {
+        Circle()
+          .fill(provider.id == store.selectedUsageProviderID ? store.activityState.tint : statusTint)
+          .frame(width: 6, height: 6)
+        Text(provider.displayName)
+          .font(.system(size: 10, weight: .medium))
+          .lineLimit(1)
+        Spacer(minLength: 4)
+      }
+
+      Text(metricText)
+        .font(.system(size: 16, weight: .semibold))
+        .monospacedDigit()
+
+      if let remainingFraction {
+        GeometryReader { geometry in
+          ZStack(alignment: .leading) {
+            Capsule().fill(Color.primary.opacity(0.09))
+            Capsule()
+              .fill(routerAccent.opacity(0.84))
+              .frame(width: geometry.size.width * remainingFraction)
+          }
+        }
+        .frame(height: 4)
+      }
+
+      Text(detailText)
+        .font(.system(size: 8.5))
+        .foregroundStyle(routerMuted)
+        .lineLimit(1)
+    }
+    .padding(10)
+    .frame(maxWidth: .infinity, minHeight: 82, alignment: .leading)
+    .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+    .overlay(
+      RoundedRectangle(cornerRadius: 10, style: .continuous)
+        .stroke(
+          provider.id == store.selectedUsageProviderID ? routerAccent.opacity(0.45) : Color.clear,
+          lineWidth: 0.75
+        )
+    )
+  }
+
+  private var accountMetric: ProviderAccountMetric? {
+    store.providerUsage(for: provider.id)?.account.metrics.first
+  }
+
+  private var localTotals: (tokens: Double, requests: Int) {
+    store.localUsageTotals(for: provider.id, days: 7)
+  }
+
+  private var metricText: String {
+    if provider.id == "openai" {
+      guard let remaining = store.accountUsage?.primary?.remainingPercent else { return "—" }
+      return "\(remaining)% left"
+    }
+    if let accountMetric { return formattedAccountMetric(accountMetric) }
+    return localTotals.tokens > 0 ? "\(compactTokenCount(localTotals.tokens)) tok" : "No use"
+  }
+
+  private var detailText: String {
+    if provider.id == "openai" {
+      return store.accountUsage?.primary?.durationLabel ?? "ChatGPT subscription"
+    }
+    if let accountMetric { return accountMetric.label }
+    if localTotals.requests > 0 {
+      return "7D local · \(localTotals.requests) requests"
+    }
+    if provider.isEnabled { return "7D local traffic"
+    }
+    return "Configured · currently hidden"
+  }
+
+  private var remainingFraction: CGFloat? {
+    if provider.id == "openai" {
+      guard let remaining = store.accountUsage?.primary?.remainingPercent else { return nil }
+      return CGFloat(max(0, min(100, remaining))) / 100
+    }
+    guard accountMetric?.kind == "quota", let remaining = accountMetric?.remainingPercent else {
+      return nil
+    }
+    return CGFloat(max(0, min(100, remaining))) / 100
+  }
+
+  private var statusTint: Color {
+    if provider.id == "openai" || provider.isEnabled { return routerMint }
+    return Color.secondary.opacity(0.42)
   }
 }
 
