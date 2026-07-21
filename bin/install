@@ -97,7 +97,7 @@ node src/config-manager.mjs enable
 config_enabled=true
 service_installed=true
 node src/service.mjs install
-node src/wait-health.mjs
+node src/wait-health.mjs '' 90000
 node src/install-manifest.mjs record >/dev/null
 config_enabled=false
 service_installed=false

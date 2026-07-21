@@ -15,6 +15,6 @@ rollback() {
 }
 trap rollback EXIT HUP INT TERM
 node src/service.mjs install
-node src/wait-health.mjs
+node src/wait-health.mjs '' 90000
 trap - EXIT HUP INT TERM
 echo "External model routes enabled. Fully quit and reopen Codex."
