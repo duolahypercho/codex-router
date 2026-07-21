@@ -40,6 +40,7 @@ the applicable files below; the native/merged catalogs exist only for Codex:
 | `caller-secret` | Random capability used by that app target's router requests | `600` |
 | `kimi-api-key.secret` | Optional Kimi Platform key | `600` |
 | `deepseek-api-key.secret` | Optional DeepSeek key | `600` |
+| `xai-api-key.secret` | Optional xAI key | `600` |
 | `native-models.json` | Cached native Codex catalog | `600` |
 | `merged-models.json` | Native plus registry model catalog | `600` |
 | `litellm.yaml` | Generated routes with environment references only | `600` |

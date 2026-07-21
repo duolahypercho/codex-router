@@ -88,6 +88,13 @@ function normalizeBody(buffer, contentType) {
   } else if (model.requestProfile === "deepseek-nonthinking") {
     payload.thinking = { type: "disabled" };
     delete payload.reasoning_effort;
+  } else if (model.requestProfile === "xai-reasoning") {
+    if (!["low", "medium", "high"].includes(payload.reasoning_effort)) {
+      payload.reasoning_effort = "high";
+    }
+    delete payload.presence_penalty;
+    delete payload.frequency_penalty;
+    delete payload.stop;
   }
   return { body: Buffer.from(JSON.stringify(payload), "utf8"), model, provider };
 }

@@ -89,18 +89,23 @@ API-key providers use hidden prompts:
 ```sh
 ./bin/provider-key kimi-api set
 ./bin/provider-key deepseek set
+./bin/provider-key grok-api set
 ```
+
+xAI documents API keys for third-party inference. Grok Build browser OAuth
+remains scoped to the official Grok CLI and is not imported by this router.
 
 Windows:
 
 ```powershell
 ./codex-router.ps1 provider-key kimi-api set
 ./codex-router.ps1 provider-key deepseek set
+./codex-router.ps1 provider-key grok-api set
 ```
 
-Kimi OAuth, Kimi Platform, and DeepSeek are separate account and billing
-systems. Never put a credential in chat, a command argument, shell history, the
-provider registry, or a tracked file.
+Kimi OAuth, Kimi Platform, DeepSeek, and xAI are separate account and billing
+systems. Never put a credential in chat, a command argument, shell history,
+the provider registry, or a tracked file.
 
 Noninteractive setup can reuse already configured credentials:
 

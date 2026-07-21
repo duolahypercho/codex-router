@@ -1,8 +1,10 @@
 # macOS tray app
 
-Model Router Tray is a native macOS menu-bar control panel for the local Codex
-router. It shows Codex service state, models exposed by the router, and the
-provider selections shared with the existing command-line control plane.
+Model Router Tray is a native macOS Dynamic-Island-style overlay plus menu-bar
+control panel for the local Codex router. The top-center island shows the
+pinned model at rest, reveals live usage on hover, and expands on click. The
+tray shows Codex service state, models exposed by the router, and provider
+selections shared with the existing command-line control plane.
 
 The tray currently focuses on Codex. Claude and Cursor do not appear in this
 interface, and the app does not disable, uninstall, or change their existing
@@ -23,10 +25,12 @@ in the menu bar. Hover the pinned-model card to reveal its recent graph.
 - Graph history is sampled locally and becomes richer while the router and tray
   continue running. Provider APIs do not supply a historical time series.
 
-The interaction is inspired by
+The overlay interaction is inspired by
 [CodexIsland](https://github.com/ericjypark/codex-island): compact information
-at rest, with richer usage detail on hover. This tray remains a standard
-menu-bar app rather than taking over the MacBook notch.
+at rest, richer usage detail on hover, and a full panel on click. On a notched
+Mac it sits flush with the screen edge; on other displays it behaves as a
+top-center floating island. The menu-bar item remains available as a fallback
+and configuration surface.
 
 Run it from a stable checkout on macOS:
 

@@ -26,7 +26,7 @@ final Claude Desktop restart to the user.
 4. Never ask the user to paste OAuth tokens or API keys into chat, command
    arguments, logs, environment snippets, or tracked files.
 5. Determine which provider IDs the user requested: `kimi-oauth`, `kimi-api`,
-   and/or `deepseek`. If unspecified, use `configured` only when a credential is
+   `deepseek`, and/or `grok-api`. If unspecified, use `configured` only when a credential is
    already available for the Claude target. Otherwise use guided setup.
 6. For Kimi OAuth, reuse a valid official `kimi login` session. If login is
    needed, run the official CLI in an interactive terminal. For API providers,

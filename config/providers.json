@@ -39,6 +39,21 @@
       }
     },
     {
+      "id": "grok-api",
+      "displayName": "xAI Grok API",
+      "kind": "openai-compatible",
+      "ownedBy": "xai",
+      "baseUrl": "https://api.x.ai/v1",
+      "baseUrlEnv": "XAI_API_BASE_URL",
+      "credential": {
+        "environment": ["XAI_API_KEY", "GROK_API_KEY"],
+        "file": "xai-api-key.secret",
+        "legacyFiles": [],
+        "keychainServices": ["codex-router-xai-api"],
+        "prompt": "xAI API key"
+      }
+    },
+    {
       "id": "chatgpt-oauth",
       "displayName": "ChatGPT Codex OAuth",
       "kind": "oauth",
@@ -142,6 +157,27 @@
       "provider": "deepseek",
       "listed": false,
       "requestProfile": "deepseek-thinking"
+    },
+    {
+      "slug": "grok-api/grok-4.5",
+      "gatewayModel": "grok-api-grok-4-5",
+      "upstreamModel": "grok-4.5",
+      "provider": "grok-api",
+      "listed": true,
+      "displayName": "Grok 4.5 (API)",
+      "description": "Grok 4.5 through the separately billed xAI API with agentic coding, tools, and a 500k context window.",
+      "priority": 8,
+      "defaultEffort": "high",
+      "reasoningLevels": [
+        { "effort": "low", "description": "Faster reasoning" },
+        { "effort": "medium", "description": "Balanced reasoning" },
+        { "effort": "high", "description": "Deep reasoning" }
+      ],
+      "contextWindow": 500000,
+      "autoCompact": 440000,
+      "inputModalities": ["text", "image"],
+      "requestProfile": "xai-reasoning",
+      "compHash": "grok-api-grok-4-5-v1"
     },
     {
       "slug": "chatgpt-oauth/gpt-5.6-sol",

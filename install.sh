@@ -26,6 +26,7 @@ Options:
   --api-key           Alias for --kimi-api-key
   --kimi-api-key      Prompt securely for a Kimi Platform API key
   --deepseek-api-key  Prompt securely for a DeepSeek API key
+  --grok-api-key      Prompt securely for an xAI API key
   --guided           Walk through provider selection and authentication
   --auto             Use configured credentials without questions
   --providers LIST   Enable comma-separated provider ids (or "configured")
@@ -69,6 +70,10 @@ while [ "$#" -gt 0 ]; do
       ;;
     --deepseek-api-key)
       configure_provider_keys="$configure_provider_keys deepseek"
+      shift
+      ;;
+    --grok-api-key)
+      configure_provider_keys="$configure_provider_keys grok-api"
       shift
       ;;
     --guided)

@@ -2,37 +2,42 @@ import AppKit
 import Foundation
 import SwiftUI
 
-private let routerAccent = Color(red: 0.38, green: 0.74, blue: 1.00)
-private let routerMint = Color(red: 0.38, green: 0.96, blue: 0.80)
-private let routerInk = Color(red: 0.025, green: 0.045, blue: 0.075)
-private let routerMuted = Color.white.opacity(0.56)
+let routerAccent = Color(red: 0.38, green: 0.74, blue: 1.00)
+let routerMint = Color(red: 0.38, green: 0.96, blue: 0.80)
+let routerInk = Color(red: 0.025, green: 0.045, blue: 0.075)
+let routerMuted = Color.white.opacity(0.56)
 
 @main
 struct ModelRouterTrayApp: App {
   @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
-  @StateObject private var store = RouterStore()
 
   var body: some Scene {
     MenuBarExtra {
-      TrayView(store: store)
+      TrayView(store: appDelegate.store)
         .frame(width: 404, height: 594)
         .preferredColorScheme(.dark)
     } label: {
-      StatusItemLabel(store: store)
-        .task { await store.startPolling() }
+      StatusItemLabel(store: appDelegate.store)
     }
     .menuBarExtraStyle(.window)
   }
 }
 
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+  let store = RouterStore()
+  private var islandController: IslandWindowController?
+
   func applicationDidFinishLaunching(_ notification: Notification) {
     NSApp.setActivationPolicy(.accessory)
+    islandController = IslandWindowController(store: store)
+    islandController?.show()
+    Task { await store.startPolling() }
   }
 }
 
 @MainActor
-private final class RouterStore: ObservableObject {
+final class RouterStore: ObservableObject {
   @Published private(set) var snapshot = RouterSnapshot.empty
   @Published private(set) var isRefreshing = false
   @Published private(set) var pendingApply = false
@@ -68,7 +73,7 @@ private final class RouterStore: ObservableObject {
 
   var pinnedShortName: String? {
     guard let model = pinnedModel else { return nil }
-    for name in ["Sol", "Terra", "Luna", "K3", "V4 Pro", "V4 Flash"]
+    for name in ["Sol", "Terra", "Luna", "Grok 4.5", "K3", "V4 Pro", "V4 Flash"]
     where model.displayName.localizedCaseInsensitiveContains(name) {
       return name
     }
@@ -216,12 +221,12 @@ private struct RouterError: LocalizedError {
   var errorDescription: String? { message }
 }
 
-private struct RouterSnapshot: Decodable {
+struct RouterSnapshot: Decodable {
   let targets: [String: RouterTarget]
   static let empty = RouterSnapshot(targets: [:])
 }
 
-private struct RouterTarget: Decodable {
+struct RouterTarget: Decodable {
   let target: String
   let configured: Bool
   let active: Bool
@@ -230,7 +235,7 @@ private struct RouterTarget: Decodable {
   let usageEvents: [RouterUsageEvent]?
 }
 
-private struct RouterModel: Decodable, Identifiable {
+struct RouterModel: Decodable, Identifiable {
   let slug: String
   let displayName: String
   let provider: String
@@ -238,7 +243,7 @@ private struct RouterModel: Decodable, Identifiable {
   var id: String { slug }
 }
 
-private struct RouterUsageEvent: Decodable, Identifiable {
+struct RouterUsageEvent: Decodable, Identifiable {
   let at: Date
   let model: String
   let provider: String
@@ -266,18 +271,18 @@ private struct RouterUsageEvent: Decodable, Identifiable {
   }
 }
 
-private struct QuotaSample: Codable, Identifiable {
+struct QuotaSample: Codable, Identifiable {
   let at: Date
   let usedFraction: Double
   var id: Date { at }
 }
 
-private struct QuotaWindow {
+struct QuotaWindow {
   let usedFraction: Double
   let resetAt: Date?
 }
 
-private struct CodexQuota {
+struct CodexQuota {
   let primary: QuotaWindow?
   let weekly: QuotaWindow?
   let plan: String?
@@ -583,6 +588,7 @@ private struct TrayView: View {
       "kimi-oauth": "Kimi Code OAuth",
       "kimi-api": "Kimi Platform API",
       "deepseek": "DeepSeek API",
+      "grok-api": "xAI Grok API",
     ][provider] ?? provider
   }
 
@@ -746,7 +752,7 @@ private struct PinnedModelIsland: View {
   }
 }
 
-private struct UsageSparkline: View {
+struct UsageSparkline: View {
   let values: [Double]
   let tint: Color
 

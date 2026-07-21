@@ -66,7 +66,7 @@ config/providers.json. Credential values are never printed or written.
     return;
   }
   const providerId = process.argv.slice(2).find((value) => !value.startsWith("--") && value !== option("--fixture"));
-  if (!providerId) throw new Error("Pass a provider id, such as deepseek or kimi-api.");
+  if (!providerId) throw new Error("Pass a provider id, such as deepseek, grok-api, or kimi-api.");
   const result = await discoverProviderModels(providerId);
   if (process.argv.includes("--json")) {
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);

@@ -74,6 +74,7 @@ service (Codex itself still needs a restart to reload the picker catalog).
 | Kimi K3 API | `kimi-api/kimi-k3` | `kimi-api-k3` | `kimi-k3` |
 | DeepSeek V4 Flash | `deepseek/deepseek-v4-flash` | `deepseek-v4-flash` | `deepseek-v4-flash` |
 | DeepSeek V4 Pro | `deepseek/deepseek-v4-pro` | `deepseek-v4-pro` | `deepseek-v4-pro` |
+| Grok 4.5 | `grok-api/grok-4.5` | `grok-api-grok-4-5` | `grok-4.5` |
 
 The native catalog objects are preserved rather than reconstructed, which keeps
 current instructions and capability metadata from the installed Codex build.

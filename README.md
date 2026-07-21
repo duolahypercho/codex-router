@@ -95,6 +95,12 @@ Desktop distribution.
 | Kimi K3 (API) | `kimi-api/kimi-k3` | Separately billed Kimi Platform API key |
 | DeepSeek V4 Flash (API) | `deepseek/deepseek-v4-flash` | DeepSeek API key |
 | DeepSeek V4 Pro (API) | `deepseek/deepseek-v4-pro` | DeepSeek API key |
+| Grok 4.5 (API) | `grok-api/grok-4.5` | Separately billed xAI API key |
+
+xAI's Grok Build CLI supports browser OAuth for the CLI itself, but xAI does
+not document that session as an inference API credential for third-party
+routers. Codex Router therefore supports the official `XAI_API_KEY` flow and
+does not extract or repurpose the Grok Build login session.
 
 Kimi Code OAuth and Kimi Platform API access are separate authentication and
 billing systems. The two Kimi entries intentionally coexist. Older DeepSeek
@@ -178,6 +184,10 @@ On macOS, build and open the native menu-bar control panel with:
 It shows Codex health, a pinned model with live usage, routed models, and
 staged provider controls in a native glass macOS interface. See the
 [macOS tray guide](docs/MACOS-TRAY.md) for behavior and rebuild notes.
+
+The app also places a Dynamic-Island-style overlay at the top center of the
+active display. It shows the pinned model at rest, reveals usage on hover, and
+expands on click. The menu-bar panel remains available for configuration.
 
 ## Common commands
 

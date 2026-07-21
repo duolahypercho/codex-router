@@ -10,7 +10,7 @@ import {
   PROVIDERS,
 } from "../src/model-registry.mjs";
 
-test("provider registry exposes Kimi and every current DeepSeek API model", () => {
+test("provider registry exposes configured API and OAuth model families", () => {
   assert.deepEqual(
     LISTED_MODELS.map((model) => model.slug),
     [
@@ -18,12 +18,18 @@ test("provider registry exposes Kimi and every current DeepSeek API model", () =
       "kimi-api/kimi-k3",
       "deepseek/deepseek-v4-flash",
       "deepseek/deepseek-v4-pro",
+      "grok-api/grok-4.5",
       "chatgpt-oauth/gpt-5.6-sol",
       "chatgpt-oauth/gpt-5.6-terra",
       "chatgpt-oauth/gpt-5.6-luna",
     ],
   );
   assert.equal(PROVIDERS.get("deepseek").baseUrl, "https://api.deepseek.com");
+  assert.equal(PROVIDERS.get("grok-api").baseUrl, "https://api.x.ai/v1");
+  const grok = MODEL_BY_SLUG.get("grok-api/grok-4.5");
+  assert.equal(grok.contextWindow, 500_000);
+  assert.deepEqual(grok.reasoningLevels.map((level) => level.effort), ["low", "medium", "high"]);
+  assert.deepEqual(grok.inputModalities, ["text", "image"]);
   for (const slug of [
     "deepseek/deepseek-v4-flash",
     "deepseek/deepseek-v4-pro",

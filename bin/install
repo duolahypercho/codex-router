@@ -133,15 +133,18 @@ if [ "$target" = claude ]; then
   echo "Fully quit and reopen Claude Desktop. It will start in third-party inference mode."
   echo "Kimi API key: $repo_dir/bin/model-router claude provider-key kimi-api set"
   echo "DeepSeek API key: $repo_dir/bin/model-router claude provider-key deepseek set"
+  echo "xAI API key: $repo_dir/bin/model-router claude provider-key grok-api set"
 elif [ "$target" = cursor ]; then
   echo "Installed the local OpenAI-compatible gateway for Cursor."
   echo "Run '$repo_dir/bin/model-router cursor setup' for the Base URL, key, and model"
   echo "ids to paste into Cursor -> Settings -> Models. Cursor's own settings are untouched."
   echo "Kimi API key: $repo_dir/bin/model-router cursor provider-key kimi-api set"
   echo "DeepSeek API key: $repo_dir/bin/model-router cursor provider-key deepseek set"
+  echo "xAI API key: $repo_dir/bin/model-router cursor provider-key grok-api set"
 else
   echo "Installed the selected external model routes for Codex."
   echo "Fully quit and reopen Codex, then start a new task."
   echo "Kimi API key: $repo_dir/bin/provider-key kimi-api set"
   echo "DeepSeek API key: $repo_dir/bin/provider-key deepseek set"
+  echo "xAI API key: $repo_dir/bin/provider-key grok-api set"
 fi

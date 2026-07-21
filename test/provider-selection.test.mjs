@@ -8,7 +8,7 @@ const testRoot = mkdtempSync(path.join(os.tmpdir(), "codex-router-selection-"));
 process.env.CODEX_HOME = path.join(testRoot, "codex");
 process.env.CODEX_ROUTER_STATE_DIR = path.join(testRoot, "state");
 process.env.KIMI_CODE_HOME = path.join(testRoot, "kimi-code");
-for (const name of ["DEEPSEEK_API_KEY", "KIMI_API_KEY", "MOONSHOT_API_KEY"]) {
+for (const name of ["DEEPSEEK_API_KEY", "KIMI_API_KEY", "MOONSHOT_API_KEY", "XAI_API_KEY", "GROK_API_KEY"]) {
   delete process.env[name];
 }
 
@@ -30,6 +30,7 @@ test("provider selection keeps backward compatibility and can hide the final pro
       "kimi-oauth",
       "kimi-api",
       "deepseek",
+      "grok-api",
       "chatgpt-oauth",
     ]);
     process.env.KIMI_API_KEY = "TEST_ENVIRONMENT_ONLY_KEY";

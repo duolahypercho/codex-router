@@ -327,6 +327,7 @@ test("router preserves native auth and isolates every external route", async () 
       ["kimi-api/kimi-k3", "kimi-api-k3"],
       ["deepseek/deepseek-v4-flash", "deepseek-v4-flash"],
       ["deepseek/deepseek-v4-pro", "deepseek-v4-pro"],
+      ["grok-api/grok-4.5", "grok-api-grok-4-5"],
     ]) {
       const response = await fetch(`${routerBase(routerPort)}/responses`, {
         method: "POST",
@@ -537,6 +538,56 @@ test("API forwarder supports all DeepSeek V4 models and normalizes thinking", as
       assert.equal(request.body.reasoning_effort, effort);
       assert.equal(request.body.temperature, undefined);
     }
+  } finally {
+    await stopChild(forwarder);
+    await closeServer(upstream.server);
+  }
+});
+
+test("API forwarder routes Grok 4.5 with supported xAI reasoning effort", async () => {
+  const upstreamRequests = [];
+  const upstream = await mockServer(async (request, response) => {
+    upstreamRequests.push({ headers: request.headers, body: await bodyJson(request) });
+    json(response, 200, { choices: [] });
+  });
+  const forwarderPort = await openPort();
+  const forwarder = run("api-forwarder.mjs", {
+    CODEX_ROUTER_API_PORT: String(forwarderPort),
+    XAI_API_BASE_URL: `http://127.0.0.1:${upstream.port}/v1`,
+    XAI_API_KEY: "TEST_XAI_API_KEY",
+    CODEX_ROUTER_QUIET: "1",
+  });
+
+  try {
+    await waitFor(`http://127.0.0.1:${forwarderPort}/health`, forwarder, {
+      Authorization: `Bearer ${INTERNAL_KEY}`,
+    });
+    const response = await fetch(
+      `http://127.0.0.1:${forwarderPort}/v1/chat/completions`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${INTERNAL_KEY}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "grok-api-grok-4-5",
+          reasoning_effort: "ultra",
+          presence_penalty: 0.2,
+          frequency_penalty: 0.1,
+          stop: ["done"],
+          messages: [{ role: "user", content: "test" }],
+        }),
+      },
+    );
+    assert.equal(response.status, 200);
+    const request = upstreamRequests[0];
+    assert.equal(request.headers.authorization, "Bearer TEST_XAI_API_KEY");
+    assert.equal(request.body.model, "grok-4.5");
+    assert.equal(request.body.reasoning_effort, "high");
+    assert.equal(request.body.presence_penalty, undefined);
+    assert.equal(request.body.frequency_penalty, undefined);
+    assert.equal(request.body.stop, undefined);
   } finally {
     await stopChild(forwarder);
     await closeServer(upstream.server);
