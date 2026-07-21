@@ -163,7 +163,7 @@ private struct IslandOverlayView: View {
             IslandSilhouette()
               .fill(
                 LinearGradient(
-                  colors: [store.activityState.tint.opacity(0.16), .clear, store.activityState.tint.opacity(0.06)],
+                  colors: [Color.white.opacity(0.045), .clear, Color.white.opacity(0.018)],
                   startPoint: .topLeading,
                   endPoint: .bottomTrailing
                 )
@@ -326,6 +326,7 @@ private struct IslandOverlayView: View {
 
   private var glow: some View {
     StatusGlow(state: store.activityState)
+      .id(store.activityState)
   }
 
   private var enabledModels: [RouterModel] {
@@ -453,36 +454,69 @@ private struct LiveOrb: View {
 
 private struct StatusGlow: View {
   let state: RouterActivityState
-  @State private var pulsing = false
 
   var body: some View {
-    ZStack {
-      IslandSilhouette()
-        .strokeBorder(state.tint.opacity(0.28), lineWidth: 5)
-        .blur(radius: 2.5)
-      IslandSilhouette()
-        .inset(by: 1)
-        .strokeBorder(state.tint.opacity(0.96), lineWidth: state == .generating ? 2.4 : 1.7)
-        .shadow(
-          color: state.tint.opacity(state == .generating && pulsing ? 0.68 : 0.38),
-          radius: state == .generating && pulsing ? 10 : 6
-        )
-      IslandSilhouette()
-        .inset(by: 3)
-        .strokeBorder(Color.white.opacity(0.14), lineWidth: 0.6)
+    TimelineView(.animation(minimumInterval: 1 / 30, paused: false)) { timeline in
+      let elapsed = timeline.date.timeIntervalSinceReferenceDate
+      let angle = Angle.degrees(
+        (elapsed / sweepDuration).truncatingRemainder(dividingBy: 1) * 360
+      )
+      let wave = (sin(elapsed * 2 * .pi / flashDuration) + 1) / 2
+      ZStack {
+        IslandSilhouette()
+          .inset(by: 1)
+          .strokeBorder(state.tint.opacity(0.14), lineWidth: 1)
+        IslandSilhouette()
+          .inset(by: 1)
+          .strokeBorder(
+            sweepGradient(angle: angle),
+            lineWidth: state == .generating ? 7 : 5
+          )
+          .blur(radius: state == .error ? 4.5 : 3.5)
+          .opacity(0.34 + wave * 0.48)
+        IslandSilhouette()
+          .inset(by: 1.5)
+          .strokeBorder(
+            sweepGradient(angle: angle),
+            lineWidth: state == .generating ? 2.5 : 2
+          )
+          .opacity(0.58 + wave * 0.42)
+        IslandSilhouette()
+          .inset(by: 3.5)
+          .strokeBorder(Color.white.opacity(0.09), lineWidth: 0.55)
+      }
     }
-    .opacity(state == .generating && pulsing ? 1 : 0.9)
     .animation(.easeInOut(duration: 0.25), value: state)
-    .onAppear { animate() }
-    .onChange(of: state) { _ in animate() }
   }
 
-  private func animate() {
-    pulsing = false
-    guard state == .generating else { return }
-    withAnimation(.easeInOut(duration: 0.72).repeatForever(autoreverses: true)) {
-      pulsing = true
+  private func sweepGradient(angle: Angle) -> AngularGradient {
+    AngularGradient(
+      gradient: Gradient(stops: [
+        .init(color: .clear, location: 0),
+        .init(color: .clear, location: 0.55),
+        .init(color: state.tint.opacity(0.12), location: 0.66),
+        .init(color: state.tint.opacity(0.88), location: 0.74),
+        .init(color: Color.white.opacity(0.98), location: 0.79),
+        .init(color: state.tint.opacity(0.82), location: 0.84),
+        .init(color: .clear, location: 0.96),
+        .init(color: .clear, location: 1),
+      ]),
+      center: .center,
+      startAngle: angle,
+      endAngle: .degrees(angle.degrees + 360)
+    )
+  }
+
+  private var sweepDuration: Double {
+    switch state {
+    case .idle: return 2.6
+    case .generating: return 1.15
+    case .error: return 0.82
     }
+  }
+
+  private var flashDuration: Double {
+    state == .idle ? 1.25 : 0.62
   }
 }
 
