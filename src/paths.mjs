@@ -2,7 +2,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const supportedTargets = new Set(["codex", "claude"]);
+const supportedTargets = new Set(["codex", "claude", "cursor"]);
 
 export const TARGET = process.env.MODEL_ROUTER_TARGET || "codex";
 if (!supportedTargets.has(TARGET)) {
@@ -11,7 +11,12 @@ if (!supportedTargets.has(TARGET)) {
   );
 }
 
-export const TARGET_DISPLAY_NAME = TARGET === "claude" ? "Claude Router" : "Codex Router";
+const TARGET_DISPLAY_NAMES = {
+  codex: "Codex Router",
+  claude: "Claude Router",
+  cursor: "Cursor Router",
+};
+export const TARGET_DISPLAY_NAME = TARGET_DISPLAY_NAMES[TARGET];
 export const SOURCE_ROOT = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "..",
@@ -19,26 +24,35 @@ export const SOURCE_ROOT = path.resolve(
 export const CODEX_HOME =
   process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
 
-const defaultClaudeStateDir =
-  process.platform === "win32"
+function defaultManagedStateDir(targetName) {
+  return process.platform === "win32"
     ? path.join(
         process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local"),
         "model-router",
-        "claude",
+        targetName,
       )
     : path.join(
         process.env.XDG_STATE_HOME || path.join(os.homedir(), ".local", "state"),
         "model-router",
-        "claude",
+        targetName,
       );
+}
 
-export const STATE_DIR =
-  process.env.MODEL_ROUTER_STATE_DIR ||
-  (TARGET === "claude"
-    ? process.env.CLAUDE_ROUTER_STATE_DIR || defaultClaudeStateDir
-    : process.env.CODEX_ROUTER_STATE_DIR ||
-      process.env.KIMI_CODEX_STATE_DIR ||
-      path.join(CODEX_HOME, "codex-router"));
+function managedStateDir() {
+  if (TARGET === "claude") {
+    return process.env.CLAUDE_ROUTER_STATE_DIR || defaultManagedStateDir("claude");
+  }
+  if (TARGET === "cursor") {
+    return process.env.CURSOR_ROUTER_STATE_DIR || defaultManagedStateDir("cursor");
+  }
+  return (
+    process.env.CODEX_ROUTER_STATE_DIR ||
+    process.env.KIMI_CODEX_STATE_DIR ||
+    path.join(CODEX_HOME, "codex-router")
+  );
+}
+
+export const STATE_DIR = process.env.MODEL_ROUTER_STATE_DIR || managedStateDir();
 export const LEGACY_STATE_DIR = path.join(CODEX_HOME, "kimi-router");
 export const CONFIG_PATH = path.join(CODEX_HOME, "config.toml");
 export const NATIVE_CATALOG_PATH = path.join(STATE_DIR, "native-models.json");
@@ -52,14 +66,18 @@ export const MIGRATIONS_DIR = path.join(STATE_DIR, "migrations");
 export const SUPPORT_DIR = path.join(STATE_DIR, "support");
 export const LOG_PATH = path.join(STATE_DIR, "router.log");
 export const BACKUP_PATH = path.join(CODEX_HOME, "config.toml.pre-codex-router");
-export const SERVICE_LABEL =
-  TARGET === "claude" ? "io.github.codex-router.claude" : "io.github.codex-router";
+const SERVICE_LABELS = {
+  codex: "io.github.codex-router",
+  claude: "io.github.codex-router.claude",
+  cursor: "io.github.codex-router.cursor",
+};
+export const SERVICE_LABEL = SERVICE_LABELS[TARGET];
 export const LEGACY_SERVICE_LABEL = "io.github.kimi-codex-router";
 export const PROTOTYPE_SERVICE_LABEL = "com.ziwenxu.kimi-codex-proxy";
 export const LEGACY_STATE_DIRS = Object.freeze(
-  TARGET === "claude"
-    ? []
-    : [LEGACY_STATE_DIR, path.join(CODEX_HOME, "kimi-proxy")],
+  TARGET === "codex"
+    ? [LEGACY_STATE_DIR, path.join(CODEX_HOME, "kimi-proxy")]
+    : [],
 );
 export const LAUNCH_AGENTS_DIR =
   process.env.MODEL_ROUTER_LAUNCH_AGENTS_DIR ||
@@ -103,10 +121,12 @@ function port(name, fallback) {
   return value;
 }
 
-const targetPortDefaults =
-  TARGET === "claude"
-    ? { gateway: 4111, oauth: 4112, router: 4110, api: 4113 }
-    : { gateway: 4100, oauth: 4101, router: 4102, api: 4103 };
+const TARGET_PORT_DEFAULTS = {
+  codex: { gateway: 4100, oauth: 4101, router: 4102, api: 4103 },
+  claude: { gateway: 4111, oauth: 4112, router: 4110, api: 4113 },
+  cursor: { gateway: 4105, oauth: 4106, router: 4104, api: 4107 },
+};
+const targetPortDefaults = TARGET_PORT_DEFAULTS[TARGET];
 
 export const PORTS = {
   gateway: port(
