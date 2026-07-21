@@ -1,23 +1,5 @@
-import { execFileSync } from "node:child_process";
-import {
-  chmodSync,
-  closeSync,
-  existsSync,
-  fsyncSync,
-  mkdirSync,
-  openSync,
-  readFileSync,
-  renameSync,
-  unlinkSync,
-  writeFileSync,
-} from "node:fs";
 import http from "node:http";
-import os from "node:os";
-import path from "node:path";
 
-import lockfile from "proper-lockfile";
-
-import { protectPrivateFile } from "./file-security.mjs";
 import {
   HOP_BY_HOP_HEADERS,
   httpErrorStatus,
@@ -26,19 +8,15 @@ import {
   requireInternalAuth,
   writeJson,
 } from "./http-utils.mjs";
+import {
+  ensureFreshKimiOAuthToken,
+  kimiIdentityHeaders,
+  readKimiOAuthToken,
+} from "./kimi-oauth-session.mjs";
 import { PORTS, TARGET } from "./paths.mjs";
-import { VERSION } from "./version.mjs";
 
-const KIMI_CLIENT_ID = "17e5f671-d194-4dfb-9706-5516cb48c098";
-const KIMI_CODE_HOME =
-  process.env.KIMI_CODE_HOME || path.join(os.homedir(), ".kimi-code");
 const API_BASE = (
   process.env.KIMI_CODE_BASE_URL || "https://api.kimi.com/coding/v1"
-).replace(/\/+$/, "");
-const OAUTH_HOST = (
-  process.env.KIMI_CODE_OAUTH_HOST ||
-  process.env.KIMI_OAUTH_HOST ||
-  "https://auth.kimi.com"
 ).replace(/\/+$/, "");
 const LISTEN_HOST =
   process.env.MODEL_ROUTER_OAUTH_HOST ||
@@ -64,232 +42,6 @@ const QUIET =
     (process.env.CODEX_ROUTER_QUIET === "1" || process.env.KIMI_PROXY_QUIET === "1"));
 
 if (!INTERNAL_KEY) throw new Error("MODEL_ROUTER_INTERNAL_KEY is required.");
-
-const CREDENTIALS_PATH = path.join(
-  KIMI_CODE_HOME,
-  "credentials",
-  "kimi-code.json",
-);
-const OAUTH_LOCK_TARGET = path.join(KIMI_CODE_HOME, "oauth", "kimi-code");
-const DEVICE_ID_PATH = path.join(KIMI_CODE_HOME, "device_id");
-let refreshInFlight;
-
-function asciiHeader(value, fallback = "unknown") {
-  const cleaned = String(value).replace(/[^\u0020-\u007e]/g, "").trim();
-  return cleaned || fallback;
-}
-
-function macOSProductVersion() {
-  if (os.type() !== "Darwin") return undefined;
-  try {
-    return execFileSync("/usr/bin/sw_vers", ["-productVersion"], {
-      encoding: "utf8",
-      timeout: 1_000,
-    }).trim();
-  } catch {
-    return undefined;
-  }
-}
-
-function readDeviceId() {
-  const value = readFileSync(DEVICE_ID_PATH, "utf8").trim();
-  if (!value) {
-    throw new Error(`Kimi device id is missing; run \`kimi login\` first.`);
-  }
-  return value;
-}
-
-function identityHeaders() {
-  const platform =
-    os.type() === "Darwin"
-      ? `macOS ${macOSProductVersion() || os.release()} ${os.arch()}`
-      : `${os.type()} ${os.release()} ${os.arch()}`;
-  return {
-    "User-Agent": `codex-router/${VERSION}`,
-    "X-Msh-Platform": "codex",
-    "X-Msh-Version": VERSION,
-    "X-Msh-Device-Name": asciiHeader(os.hostname()),
-    "X-Msh-Device-Model": asciiHeader(platform),
-    "X-Msh-Os-Version": asciiHeader(os.release()),
-    "X-Msh-Device-Id": asciiHeader(readDeviceId()),
-  };
-}
-
-function validateToken(value) {
-  if (!value || typeof value !== "object") {
-    throw new Error("Kimi OAuth credential file is not a JSON object.");
-  }
-  if (typeof value.access_token !== "string" || !value.access_token) {
-    throw new Error("Kimi OAuth credential is missing; run `kimi login`.");
-  }
-  if (typeof value.refresh_token !== "string" || !value.refresh_token) {
-    throw new Error("Kimi OAuth refresh credential is missing; run `kimi login`.");
-  }
-  const expiresAt = Number(value.expires_at);
-  const expiresIn = Number(value.expires_in);
-  if (!Number.isFinite(expiresAt) || !Number.isFinite(expiresIn)) {
-    throw new Error("Kimi OAuth credential has invalid expiry metadata.");
-  }
-  return {
-    access_token: value.access_token,
-    refresh_token: value.refresh_token,
-    expires_at: expiresAt,
-    expires_in: expiresIn,
-    scope: typeof value.scope === "string" ? value.scope : "kimi-code",
-    token_type: typeof value.token_type === "string" ? value.token_type : "Bearer",
-  };
-}
-
-function readToken() {
-  if (!existsSync(CREDENTIALS_PATH)) {
-    throw new Error(`Kimi OAuth credentials were not found; run \`kimi login\`.`);
-  }
-  return validateToken(JSON.parse(readFileSync(CREDENTIALS_PATH, "utf8")));
-}
-
-function shouldRefresh(token) {
-  const threshold = Math.max(
-    300,
-    token.expires_in > 0 ? token.expires_in * 0.5 : 0,
-  );
-  return Math.floor(Date.now() / 1_000) >= token.expires_at - threshold;
-}
-
-function sameToken(left, right) {
-  return (
-    left.access_token === right.access_token &&
-    left.refresh_token === right.refresh_token &&
-    left.expires_at === right.expires_at
-  );
-}
-
-function atomicSaveToken(token) {
-  const directory = path.dirname(CREDENTIALS_PATH);
-  mkdirSync(directory, { recursive: true, mode: 0o700 });
-  chmodSync(directory, 0o700);
-  const temporary = `${CREDENTIALS_PATH}.tmp.${process.pid}`;
-  const descriptor = openSync(temporary, "w", 0o600);
-  try {
-    writeFileSync(descriptor, `${JSON.stringify(token, null, 2)}\n`, "utf8");
-    fsyncSync(descriptor);
-  } finally {
-    closeSync(descriptor);
-  }
-  try {
-    protectPrivateFile(temporary);
-    renameSync(temporary, CREDENTIALS_PATH);
-    protectPrivateFile(CREDENTIALS_PATH);
-  } catch (error) {
-    try {
-      unlinkSync(temporary);
-    } catch {
-      // Best-effort cleanup only.
-    }
-    throw error;
-  }
-}
-
-function delay(milliseconds) {
-  return new Promise((resolve) => setTimeout(resolve, milliseconds));
-}
-
-async function refreshToken(refreshTokenValue) {
-  const retryable = new Set([429, 500, 502, 503, 504]);
-  let lastError;
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    try {
-      const response = await fetch(`${OAUTH_HOST}/api/oauth/token`, {
-        method: "POST",
-        headers: {
-          ...identityHeaders(),
-          Accept: "application/json",
-          "Content-Type": "application/x-www-form-urlencoded",
-        },
-        body: new URLSearchParams({
-          client_id: KIMI_CLIENT_ID,
-          grant_type: "refresh_token",
-          refresh_token: refreshTokenValue,
-        }),
-        signal: AbortSignal.timeout(30_000),
-      });
-      const payload = await response.json().catch(() => ({}));
-      if (response.ok) {
-        const expiresIn = Number(payload.expires_in);
-        if (
-          typeof payload.access_token !== "string" ||
-          typeof payload.refresh_token !== "string" ||
-          !Number.isFinite(expiresIn) ||
-          expiresIn <= 0
-        ) {
-          throw new Error("Kimi OAuth refresh returned an incomplete response.");
-        }
-        return {
-          access_token: payload.access_token,
-          refresh_token: payload.refresh_token,
-          expires_at: Math.floor(Date.now() / 1_000) + expiresIn,
-          expires_in: expiresIn,
-          scope: typeof payload.scope === "string" ? payload.scope : "kimi-code",
-          token_type: typeof payload.token_type === "string" ? payload.token_type : "Bearer",
-        };
-      }
-      const code = typeof payload.error === "string" ? payload.error : "oauth_error";
-      if (response.status === 401 || response.status === 403 || code === "invalid_grant") {
-        const error = new Error("Kimi OAuth refresh was rejected; run `kimi login` again.");
-        error.code = "oauth_unauthorized";
-        throw error;
-      }
-      if (!retryable.has(response.status)) {
-        throw new Error(`Kimi OAuth refresh failed with HTTP ${response.status}.`);
-      }
-      lastError = new Error(`Temporary Kimi OAuth error: HTTP ${response.status}.`);
-    } catch (error) {
-      if (error?.code === "oauth_unauthorized") throw error;
-      lastError = error instanceof Error ? error : new Error(String(error));
-    }
-    if (attempt < 2) await delay(2 ** attempt * 1_000);
-  }
-  throw lastError || new Error("Kimi OAuth refresh failed.");
-}
-
-async function ensureFreshToken({ force = false } = {}) {
-  if (refreshInFlight) return refreshInFlight;
-  refreshInFlight = (async () => {
-    const initial = readToken();
-    if (!force && !shouldRefresh(initial)) return initial.access_token;
-
-    mkdirSync(path.dirname(OAUTH_LOCK_TARGET), { recursive: true, mode: 0o700 });
-    writeFileSync(OAUTH_LOCK_TARGET, "", { flag: "a", mode: 0o600 });
-    const release = await lockfile.lock(OAUTH_LOCK_TARGET, {
-      retries: { retries: 120, factor: 1, minTimeout: 500, maxTimeout: 1_000 },
-      stale: 5_000,
-      realpath: false,
-    });
-    try {
-      const latest = readToken();
-      if (!force && !shouldRefresh(latest)) return latest.access_token;
-      if (force && !sameToken(initial, latest)) return latest.access_token;
-      try {
-        const refreshed = await refreshToken(latest.refresh_token);
-        atomicSaveToken(refreshed);
-        return refreshed.access_token;
-      } catch (error) {
-        if (error?.code === "oauth_unauthorized") {
-          await delay(100);
-          const recovered = readToken();
-          if (recovered.refresh_token !== latest.refresh_token) {
-            return recovered.access_token;
-          }
-        }
-        throw error;
-      }
-    } finally {
-      await release();
-    }
-  })().finally(() => {
-    refreshInFlight = undefined;
-  });
-  return refreshInFlight;
-}
 
 function foldInterveningAssistantMessages(messages) {
   if (!Array.isArray(messages)) return;
@@ -363,7 +115,7 @@ function upstreamHeaders(requestHeaders, body) {
     if (lower === "originator" || lower === "user-agent" || lower === "accept-encoding") continue;
     if (value !== undefined) headers[name] = Array.isArray(value) ? value.join(", ") : value;
   }
-  Object.assign(headers, identityHeaders());
+  Object.assign(headers, kimiIdentityHeaders());
   headers["Accept-Encoding"] = "identity";
   if (body.length) headers["Content-Length"] = String(body.length);
   return headers;
@@ -371,7 +123,7 @@ function upstreamHeaders(requestHeaders, body) {
 
 function tokenHealth() {
   try {
-    const token = readToken();
+    const token = readKimiOAuthToken();
     return {
       credential_present: true,
       scope: token.scope,
@@ -439,11 +191,11 @@ async function handleRequest(request, response) {
     body = normalizeKimiBody(body, request.headers["content-type"]);
   }
   const target = `${API_BASE}${route}${requestUrl.search}`;
-  let token = await ensureFreshToken();
+  let token = await ensureFreshKimiOAuthToken();
   let upstream = await requestUpstream(request, target, body, token, controller.signal);
   if (upstream.status === 401) {
     await upstream.arrayBuffer();
-    token = await ensureFreshToken({ force: true });
+    token = await ensureFreshKimiOAuthToken({ force: true });
     upstream = await requestUpstream(request, target, body, token, controller.signal);
   }
   await pipeResponse(upstream, response);

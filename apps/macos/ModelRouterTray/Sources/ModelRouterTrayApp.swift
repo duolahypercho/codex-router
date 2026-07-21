@@ -88,7 +88,10 @@ final class RouterStore: ObservableObject {
   private var providerPolling = false
   private let defaults = UserDefaults.standard
   private let islandVisibilityKey = "ModelRouterTray.islandVisible"
+  private var accountUsageResolved = false
+  private var hasResolvedInitialUsageProvider = false
   private var hasObservedActiveProvider = false
+  private var manuallySelectedUsageProvider = false
 
   init() {
     selectedUsageProviderID = "openai"
@@ -148,7 +151,7 @@ final class RouterStore: ObservableObject {
 
   var visibleUsageProviders: [UsageProviderChoice] {
     usageProviderChoices.filter { provider in
-      provider.id == "openai" ||
+      (provider.id == "openai" && (!accountUsageResolved || accountUsage != nil)) ||
         provider.isEnabled ||
         providerSetup[provider.id]?.configured == true ||
         (providerUsage(for: provider.id)?.requests ?? 0) > 0
@@ -243,6 +246,8 @@ final class RouterStore: ObservableObject {
     } catch {
       accountUsageError = error.localizedDescription
     }
+    accountUsageResolved = true
+    resolveInitialUsageProvider()
   }
 
   func refreshProviderUsage() async {
@@ -250,6 +255,7 @@ final class RouterStore: ObservableObject {
       let output = try await runControl(arguments: ["provider-usage", "--json"])
       providerUsage = try JSONDecoder().decode(ProviderUsageSnapshot.self, from: output)
       providerUsageError = nil
+      resolveInitialUsageProvider()
     } catch {
       providerUsageError = error.localizedDescription
     }
@@ -274,9 +280,15 @@ final class RouterStore: ObservableObject {
       let output = try await runControl(arguments: ["providers", "--json"])
       let snapshot = try JSONDecoder().decode(ProviderSetupSnapshot.self, from: output)
       providerSetup = Dictionary(uniqueKeysWithValues: snapshot.providers.map { ($0.id, $0) })
+      resolveInitialUsageProvider()
     } catch {
       message = error.localizedDescription
     }
+  }
+
+  func selectUsageProvider(_ providerID: String) {
+    manuallySelectedUsageProvider = true
+    focusUsageProvider(providerID)
   }
 
   func installProviderCLI(_ provider: String) async {
@@ -440,8 +452,10 @@ final class RouterStore: ObservableObject {
       let (data, _) = try await URLSession.shared.data(for: request)
       let health = try JSONDecoder().decode(RouterHealth.self, from: data)
       activityState = health.activity.state
-      if let provider = health.activity.provider {
+      if health.activity.state == .generating,
+         let provider = health.activity.provider {
         hasObservedActiveProvider = true
+        manuallySelectedUsageProvider = false
         focusUsageProvider(provider)
       }
     } catch {
@@ -450,11 +464,36 @@ final class RouterStore: ObservableObject {
   }
 
   private func resolveInitialUsageProvider() {
-    guard !hasObservedActiveProvider,
-          let selectedModel = snapshot.targets["codex"]?.selectedModel,
-          let provider = snapshot.targets["codex"]?.models.first(where: { $0.slug == selectedModel })?.provider
+    guard accountUsageResolved,
+          !hasResolvedInitialUsageProvider,
+          !hasObservedActiveProvider
     else { return }
+
+    let provider: String?
+    if accountUsage != nil {
+      provider = "openai"
+    } else {
+      let selectedModelProvider = snapshot.targets["codex"]?.selectedModel.flatMap { selectedModel in
+        snapshot.targets["codex"]?.models.first(where: { $0.slug == selectedModel })?.provider
+      }
+      provider = [selectedModelProvider]
+        .compactMap { $0 }
+        .first(where: { $0 != "openai" && usageProviderIsAvailable($0) })
+        ?? usageProviderChoices.first(where: {
+          $0.id != "openai" && usageProviderIsAvailable($0.id)
+        })?.id
+    }
+
+    guard let provider else { return }
+    hasResolvedInitialUsageProvider = true
     focusUsageProvider(provider)
+  }
+
+  private func usageProviderIsAvailable(_ providerID: String) -> Bool {
+    usageProviderChoices.first(where: { $0.id == providerID })?.isEnabled == true ||
+      providerSetup[providerID]?.configured == true ||
+      providerUsage(for: providerID)?.account.status == "available" ||
+      (providerUsage(for: providerID)?.requests ?? 0) > 0
   }
 
   private func providerDetail(_ providerID: String, enabled: Set<String>) -> String {
@@ -1256,48 +1295,69 @@ private struct AllProviderUsageCard: View {
   let provider: UsageProviderChoice
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 7) {
-      HStack(spacing: 6) {
-        Circle()
-          .fill(provider.id == store.selectedUsageProviderID ? store.activityState.tint : statusTint)
-          .frame(width: 6, height: 6)
-        Text(provider.displayName)
-          .font(.system(size: 10, weight: .medium))
+    Button {
+      store.selectUsageProvider(provider.id)
+    } label: {
+      VStack(alignment: .leading, spacing: 7) {
+        HStack(spacing: 6) {
+          Circle()
+            .fill(provider.id == store.selectedUsageProviderID ? store.activityState.tint : statusTint)
+            .frame(width: 6, height: 6)
+          Text(provider.displayName)
+            .font(.system(size: 10, weight: .medium))
+            .lineLimit(1)
+          Spacer(minLength: 4)
+        }
+
+        Text(metricText)
+          .font(.system(size: 16, weight: .semibold))
+          .monospacedDigit()
+
+        if let remainingFraction {
+          GeometryReader { geometry in
+            ZStack(alignment: .leading) {
+              Capsule().fill(Color.primary.opacity(0.09))
+              Capsule()
+                .fill(routerAccent.opacity(0.84))
+                .frame(width: geometry.size.width * remainingFraction)
+            }
+          }
+          .frame(height: 4)
+        }
+
+        Text(detailText)
+          .font(.system(size: 8.5))
+          .foregroundStyle(routerMuted)
           .lineLimit(1)
-        Spacer(minLength: 4)
-      }
 
-      Text(metricText)
-        .font(.system(size: 16, weight: .semibold))
-        .monospacedDigit()
-
-      if let remainingFraction {
-        GeometryReader { geometry in
-          ZStack(alignment: .leading) {
-            Capsule().fill(Color.primary.opacity(0.09))
-            Capsule()
-              .fill(routerAccent.opacity(0.84))
-              .frame(width: geometry.size.width * remainingFraction)
+        if resetLines.isEmpty {
+          Text("No reset reported")
+            .font(.system(size: 8))
+            .foregroundStyle(routerMuted)
+            .lineLimit(1)
+        } else {
+          ForEach(Array(resetLines.enumerated()), id: \.offset) { _, line in
+            Text(line)
+              .font(.system(size: 8))
+              .foregroundStyle(routerMuted)
+              .lineLimit(1)
           }
         }
-        .frame(height: 4)
       }
-
-      Text(detailText)
-        .font(.system(size: 8.5))
-        .foregroundStyle(routerMuted)
-        .lineLimit(1)
+      .padding(10)
+      .frame(maxWidth: .infinity, minHeight: 98, alignment: .leading)
+      .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+      .overlay(
+        RoundedRectangle(cornerRadius: 10, style: .continuous)
+          .stroke(
+            provider.id == store.selectedUsageProviderID ? routerAccent.opacity(0.45) : Color.clear,
+            lineWidth: 0.75
+          )
+      )
     }
-    .padding(10)
-    .frame(maxWidth: .infinity, minHeight: 82, alignment: .leading)
-    .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-    .overlay(
-      RoundedRectangle(cornerRadius: 10, style: .continuous)
-        .stroke(
-          provider.id == store.selectedUsageProviderID ? routerAccent.opacity(0.45) : Color.clear,
-          lineWidth: 0.75
-        )
-    )
+    .buttonStyle(.plain)
+    .help("Show \(provider.displayName) usage")
+    .accessibilityLabel("Show \(provider.displayName) usage")
   }
 
   private var accountMetric: ProviderAccountMetric? {
@@ -1339,6 +1399,20 @@ private struct AllProviderUsageCard: View {
     if provider.isEnabled { return "7D local traffic"
     }
     return "Configured · currently hidden"
+  }
+
+  private var resetLines: [String] {
+    if provider.id == "openai" {
+      return [store.accountUsage?.primary, store.accountUsage?.secondary]
+        .compactMap { window in
+          guard let window, let reset = window.resetDate else { return nil }
+          return "\(window.durationLabel) · \(usageResetCaption(reset))"
+        }
+    }
+    return (account?.metrics ?? []).compactMap { metric in
+      guard let reset = metric.resetDate else { return nil }
+      return "\(metric.label) · \(usageResetCaption(reset))"
+    }
   }
 
   private var remainingFraction: CGFloat? {

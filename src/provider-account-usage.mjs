@@ -1,8 +1,8 @@
-import { existsSync, readFileSync } from "node:fs";
-import os from "node:os";
-import path from "node:path";
+import { readFileSync } from "node:fs";
 
 import { grokOAuthStatus, grokSessionEntry } from "./grok-oauth-status.mjs";
+import { ensureFreshGrokOAuthToken } from "./grok-oauth-session.mjs";
+import { ensureFreshKimiOAuthToken, kimiIdentityHeaders } from "./kimi-oauth-session.mjs";
 import { kimiOAuthStatus } from "./oauth-status.mjs";
 import { PROVIDERS } from "./model-registry.mjs";
 import { resolveProviderCredential } from "./provider-credentials.mjs";
@@ -177,7 +177,11 @@ async function requestJson(url, key, headers = {}, fetchImpl = fetch) {
     },
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  if (!response.ok) {
+    const error = new Error(`HTTP ${response.status}`);
+    error.status = response.status;
+    throw error;
+  }
   return response.json();
 }
 
@@ -215,36 +219,14 @@ async function kimiApiAccount(fetchImpl) {
   return { status: "available", source: "official-api", metrics };
 }
 
-function asciiHeader(value, fallback) {
-  const cleaned = String(value || "").replace(/[^\u0020-\u007e]/g, "").trim();
-  return cleaned || fallback;
-}
-
 async function kimiOAuthAccount(fetchImpl) {
   const status = kimiOAuthStatus();
   if (!status.configured) return { status: "not-configured", source: "official-api", metrics: [] };
-  const credential = JSON.parse(readFileSync(status.credentialsPath, "utf8"));
-  const accessToken = typeof credential.access_token === "string" ? credential.access_token : "";
-  if (!accessToken) throw new Error("Kimi CLI session is incomplete");
-  const expiresAt = numberValue(credential.expires_at);
-  if (Number.isFinite(expiresAt) && expiresAt <= Date.now() / 1_000) {
-    throw new Error("Kimi CLI session has expired; run `kimi login`");
-  }
-  const home = path.dirname(path.dirname(status.credentialsPath));
-  const devicePath = path.join(home, "device_id");
-  const deviceId = existsSync(devicePath) ? readFileSync(devicePath, "utf8").trim() : "";
+  const accessToken = await ensureFreshKimiOAuthToken();
   const payload = await requestJson(
     "https://api.kimi.com/coding/v1/usages",
     accessToken,
-    {
-      "User-Agent": `codex-router/${VERSION}`,
-      "X-Msh-Platform": "codex",
-      "X-Msh-Version": VERSION,
-      "X-Msh-Device-Name": asciiHeader(os.hostname(), "Mac"),
-      "X-Msh-Device-Model": asciiHeader(`${os.type()} ${os.arch()}`, "Mac"),
-      "X-Msh-Os-Version": asciiHeader(os.release(), "unknown"),
-      ...(deviceId ? { "X-Msh-Device-Id": asciiHeader(deviceId, "unknown") } : {}),
-    },
+    kimiIdentityHeaders(),
     fetchImpl,
   );
   const metrics = kimiQuotaMetrics(payload);
@@ -259,20 +241,7 @@ async function grokOAuthAccount(fetchImpl) {
     return { status: "not-configured", source: "official-cli", metrics: [] };
   }
 
-  let auth;
-  try {
-    auth = JSON.parse(readFileSync(status.authPath, "utf8"));
-  } catch {
-    throw new Error("Grok CLI session file is invalid; run `grok login --oauth`");
-  }
-  const session = grokSessionEntry(auth);
-  const accessToken = typeof session?.key === "string" ? session.key : "";
-  if (!accessToken) throw new Error("Grok CLI session is incomplete; run `grok login --oauth`");
-
-  const expiresAt = Date.parse(session.expires_at || "");
-  if (Number.isFinite(expiresAt) && expiresAt <= Date.now()) {
-    throw new Error("Grok CLI session has expired; run `grok login --oauth`");
-  }
+  let accessToken = await ensureFreshGrokOAuthToken();
 
   const baseURL = (
     process.env.GROK_CLI_CHAT_PROXY_BASE_URL || "https://cli-chat-proxy.grok.com/v1"
@@ -282,20 +251,29 @@ async function grokOAuthAccount(fetchImpl) {
     return localOnly("Account billing is unavailable for a custom Grok proxy endpoint");
   }
 
-  const payload = await requestJson(
-    `${baseURL}/billing?format=credits`,
-    accessToken,
-    {
-      "X-XAI-Token-Auth": "xai-grok-cli",
-      ...(typeof session.user_id === "string" && session.user_id
-        ? { "x-userid": session.user_id }
-        : {}),
-      "x-grok-client-version": VERSION,
-      "x-grok-client-mode": "headless",
-      "User-Agent": `codex-router/${VERSION}`,
-    },
-    fetchImpl,
-  );
+  const auth = JSON.parse(readFileSync(status.authPath, "utf8"));
+  const session = grokSessionEntry(auth);
+  const headers = {
+    "X-XAI-Token-Auth": "xai-grok-cli",
+    ...(typeof session?.user_id === "string" && session.user_id
+      ? { "x-userid": session.user_id }
+      : {}),
+    "x-grok-client-version": VERSION,
+    "x-grok-client-mode": "headless",
+    "User-Agent": `codex-router/${VERSION}`,
+  };
+  let payload;
+  try {
+    payload = await requestJson(
+      `${baseURL}/billing?format=credits`, accessToken, headers, fetchImpl,
+    );
+  } catch (error) {
+    if (error?.status !== 401) throw error;
+    accessToken = await ensureFreshGrokOAuthToken({ force: true });
+    payload = await requestJson(
+      `${baseURL}/billing?format=credits`, accessToken, headers, fetchImpl,
+    );
+  }
   const metrics = grokCreditsMetrics(payload);
   if (!metrics.length) throw new Error("Grok billing response was incomplete");
   return { status: "available", source: "official-cli", metrics };

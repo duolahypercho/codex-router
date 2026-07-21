@@ -1,5 +1,4 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -12,7 +11,8 @@ import {
   writeJson,
 } from "./http-utils.mjs";
 import { PORTS } from "./paths.mjs";
-import { grokAuthPath, grokSessionEntry } from "./grok-oauth-status.mjs";
+import { ensureFreshGrokOAuthToken } from "./grok-oauth-session.mjs";
+import { grokOAuthStatus } from "./grok-oauth-status.mjs";
 import { VERSION } from "./version.mjs";
 
 // LiteLLM speaks OpenAI Chat Completions to this forwarder. It reuses the
@@ -27,24 +27,6 @@ const INTERNAL_KEY = process.env.MODEL_ROUTER_INTERNAL_KEY;
 const QUIET = process.env.MODEL_ROUTER_QUIET === "1";
 
 if (!INTERNAL_KEY) throw new Error("MODEL_ROUTER_INTERNAL_KEY is required.");
-
-function noSessionError() {
-  const error = new Error("No usable Grok OAuth session; run `grok login --oauth`.");
-  error.status = 401;
-  return error;
-}
-
-function readSession() {
-  let auth;
-  try {
-    auth = JSON.parse(readFileSync(grokAuthPath(), "utf8"));
-  } catch {
-    throw noSessionError();
-  }
-  const accessToken = grokSessionEntry(auth)?.key;
-  if (!accessToken) throw noSessionError();
-  return accessToken;
-}
 
 function grokClientVersion() {
   const fallbackVersion = VERSION.match(/\b(\d+\.\d+\.\d+)\b/)?.[1] || "0.0.0";
@@ -223,7 +205,6 @@ async function handleChatCompletions(request, response) {
   const chat = JSON.parse((await readRequestBody(request)).toString("utf8"));
   const wantsStream = chat.stream === true;
   const model = typeof chat.model === "string" ? chat.model : "";
-  const accessToken = readSession();
   const responsesRequest = toResponsesRequest(chat);
 
   const controller = new AbortController();
@@ -232,12 +213,42 @@ async function handleChatCompletions(request, response) {
     if (!response.writableEnded) controller.abort();
   });
 
-  const upstream = await fetch(`${GROK_BASE}/responses`, {
+  const requestUpstream = (accessToken) => fetch(`${GROK_BASE}/responses`, {
     method: "POST",
     headers: upstreamHeaders(accessToken, model),
     body: JSON.stringify(responsesRequest),
     signal: controller.signal,
   });
+  let accessToken;
+  try {
+    accessToken = await ensureFreshGrokOAuthToken();
+  } catch {
+    writeJson(response, 401, {
+      error: {
+        message: "Grok OAuth could not be refreshed; run `grok login --oauth`.",
+        type: "authentication_error",
+        code: null,
+      },
+    });
+    return;
+  }
+  let upstream = await requestUpstream(accessToken);
+  if (upstream.status === 401) {
+    await upstream.arrayBuffer();
+    try {
+      accessToken = await ensureFreshGrokOAuthToken({ force: true });
+      upstream = await requestUpstream(accessToken);
+    } catch {
+      writeJson(response, 401, {
+        error: {
+          message: "Grok OAuth could not be refreshed; run `grok login --oauth`.",
+          type: "authentication_error",
+          code: null,
+        },
+      });
+      return;
+    }
+  }
 
   if (!upstream.ok || !upstream.body) {
     const detail = await upstream.text().catch(() => "");
@@ -380,13 +391,7 @@ async function handleRequest(request, response) {
   const requestUrl = new URL(request.url || "/", `http://${request.headers.host || LISTEN_HOST}`);
   if (!requireInternalAuth(request, response, INTERNAL_KEY)) return;
   if (request.method === "GET" && requestUrl.pathname === "/health") {
-    let credentialPresent = false;
-    try {
-      readSession();
-      credentialPresent = true;
-    } catch {
-      credentialPresent = false;
-    }
+    const credentialPresent = grokOAuthStatus().configured;
     writeJson(response, 200, {
       ok: true,
       service: "codex-router-grok-oauth-forwarder",

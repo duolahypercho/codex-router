@@ -7,6 +7,9 @@
   tray controls, and a real LiteLLM-to-mock-Anthropic Codex integration test.
 - Added the macOS menu-bar control panel, all-provider usage grid, and optional
   Dynamic-Island-style activity overlay with secure provider onboarding.
+- Made tray usage selection account-aware, added quota reset times to provider
+  cards, and kept Kimi and Grok OAuth sessions fresh during usage polling and
+  routed requests.
 - Added the isolated Cursor target and corrected its PowerShell installer path.
 - Fixed partial startup failures so already-running forwarders are terminated,
   and isolated all six ports in the real LiteLLM integration test.

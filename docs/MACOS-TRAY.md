@@ -16,9 +16,13 @@ router configuration.
 The tray's **All usage** grid shows ChatGPT plus every configured, enabled, or
 previously used external provider at once. Each card shows official account
 quota or balance when available; otherwise it shows clearly labeled seven-day
-traffic measured by this router. The detailed **Current usage** view and the
-Island automatically follow the provider handling the latest Codex request.
-Hover the Island for a quick view or click it for expanded account usage.
+traffic measured by this router. Provider cards also show every quota reset
+reported by the provider and can be clicked to inspect that provider. ChatGPT
+is the initial detail view only when native ChatGPT usage is available;
+otherwise the tray starts with an existing external provider. The detailed
+view and the Island automatically return to the provider handling the next
+Codex request. Hover the Island for a quick view or click it for expanded
+account usage.
 
 - ChatGPT shows the subscription limit and daily buckets reported by the
   installed Codex app-server; the tray never reads or copies the ChatGPT
@@ -27,10 +31,12 @@ Hover the Island for a quick view or click it for expanded account usage.
   traffic graphs. Kimi Code OAuth reads weekly and five-hour quota from Kimi's
   usage API with the existing CLI session. Grok OAuth reads weekly or monthly
   credit usage from the official Grok CLI chat-proxy billing endpoint with the
-  existing `~/.grok/auth.json` session. DeepSeek and Kimi Platform API show
-  balance from their official API-key endpoints. Anthropic and xAI API keys
-  use the clearly labeled local-router traffic fallback because those account
-  balances are not exposed here. The app does not silently import browser cookies.
+  existing `~/.grok/auth.json` session. Near expiry, or after one rejected
+  request, the router asks the installed official Grok CLI to refresh its own
+  OAuth session and retries once. DeepSeek and Kimi Platform API show balance
+  from their official API-key endpoints. Anthropic and xAI API keys use the
+  clearly labeled local-router traffic fallback because those account balances
+  are not exposed here. The app does not silently import browser cookies.
 - Local graphs cover only traffic sent through this router on this Mac and are
   labeled that way. A local graph is never presented as provider-wide billing
   or remaining subscription quota.
