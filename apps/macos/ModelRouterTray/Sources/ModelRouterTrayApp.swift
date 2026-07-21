@@ -797,6 +797,7 @@ private struct TrayView: View {
             ProviderSetupRow(
               provider: provider,
               setup: store.providerSetup[provider.id],
+              account: store.providerUsage(for: provider.id)?.account,
               isBusy: store.providerOperation == provider.id,
               controlsDisabled: store.providerOperation != nil,
               onToggle: { enabled in
@@ -904,6 +905,7 @@ private struct TrayView: View {
 private struct ProviderSetupRow: View {
   let provider: (id: String, enabled: Bool)
   let setup: ProviderSetupState?
+  let account: ProviderAccountUsage?
   let isBusy: Bool
   let controlsDisabled: Bool
   let onToggle: (Bool) -> Void
@@ -965,6 +967,9 @@ private struct ProviderSetupRow: View {
 
   private var detail: String {
     guard let setup else { return "Checking setup…" }
+    if oauthNeedsReconnect {
+      return "Session expired · reconnect for account usage"
+    }
     if setup.configured {
       return provider.enabled ? "Ready · Available in Codex" : "Ready · Hidden from Codex"
     }
@@ -986,15 +991,23 @@ private struct ProviderSetupRow: View {
     } else if setup?.configured == true {
       HStack(spacing: 8) {
         if setup?.kind == "oauth" {
-          Button(action: onLogin) {
-            Image(systemName: "arrow.triangle.2.circlepath")
-              .font(.system(size: 10, weight: .semibold))
-              .frame(width: 20, height: 20)
+          if oauthNeedsReconnect {
+            Button("Reconnect", action: onLogin)
+              .buttonStyle(.plain)
+              .font(.system(size: 10, weight: .medium))
+              .foregroundStyle(routerYellow)
+              .disabled(controlsDisabled)
+          } else {
+            Button(action: onLogin) {
+              Image(systemName: "arrow.triangle.2.circlepath")
+                .font(.system(size: 10, weight: .semibold))
+                .frame(width: 20, height: 20)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(routerAccent)
+            .help("Reconnect OAuth")
+            .disabled(controlsDisabled)
           }
-          .buttonStyle(.plain)
-          .foregroundStyle(routerAccent)
-          .help("Reconnect OAuth")
-          .disabled(controlsDisabled)
         }
         Toggle("", isOn: Binding(get: { provider.enabled }, set: onToggle))
           .labelsHidden()
@@ -1019,6 +1032,11 @@ private struct ProviderSetupRow: View {
     case "add-key": return showingKeyField ? "Cancel" : "Add Key"
     default: return "Checking…"
     }
+  }
+
+  private var oauthNeedsReconnect: Bool {
+    guard setup?.kind == "oauth", account?.status == "unavailable" else { return false }
+    return account?.message?.localizedCaseInsensitiveContains("login") == true
   }
 
   private func performAction() {
@@ -1274,6 +1292,15 @@ private struct AllProviderUsageCard: View {
     store.providerUsage(for: provider.id)?.account.metrics.first
   }
 
+  private var account: ProviderAccountUsage? {
+    store.providerUsage(for: provider.id)?.account
+  }
+
+  private var oauthNeedsReconnect: Bool {
+    guard account?.status == "unavailable" else { return false }
+    return account?.message?.localizedCaseInsensitiveContains("login") == true
+  }
+
   private var localTotals: (tokens: Double, requests: Int) {
     store.localUsageTotals(for: provider.id, days: 7)
   }
@@ -1283,6 +1310,7 @@ private struct AllProviderUsageCard: View {
       guard let remaining = store.accountUsage?.primary?.remainingPercent else { return "—" }
       return "\(remaining)% left"
     }
+    if oauthNeedsReconnect { return "Reconnect" }
     if let accountMetric { return formattedAccountMetric(accountMetric) }
     return localTotals.tokens > 0 ? "\(compactTokenCount(localTotals.tokens)) tok" : "No use"
   }
@@ -1291,6 +1319,7 @@ private struct AllProviderUsageCard: View {
     if provider.id == "openai" {
       return store.accountUsage?.primary?.durationLabel ?? "ChatGPT subscription"
     }
+    if oauthNeedsReconnect { return "OAuth expired · reconnect below" }
     if let accountMetric { return accountMetric.label }
     if localTotals.requests > 0 {
       return "7D local · \(localTotals.requests) requests"
