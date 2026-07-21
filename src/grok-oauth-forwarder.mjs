@@ -29,7 +29,7 @@ const QUIET = process.env.MODEL_ROUTER_QUIET === "1";
 if (!INTERNAL_KEY) throw new Error("MODEL_ROUTER_INTERNAL_KEY is required.");
 
 function noSessionError() {
-  const error = new Error("No usable Grok OAuth session; run `grok login`.");
+  const error = new Error("No usable Grok OAuth session; run `grok login --oauth`.");
   error.status = 401;
   return error;
 }
@@ -62,6 +62,12 @@ function grokClientVersion() {
 }
 
 const GROK_CLIENT_VERSION = grokClientVersion();
+
+function grokUserAgent() {
+  const platform = { darwin: "macos", win32: "windows" }[process.platform] || process.platform;
+  const architecture = { arm64: "aarch64", x64: "x86_64" }[process.arch] || process.arch;
+  return `grok-shell/${GROK_CLIENT_VERSION} (${platform}; ${architecture})`;
+}
 
 function contentToText(content) {
   if (typeof content === "string") return content;
@@ -152,15 +158,24 @@ function toResponsesRequest(chat) {
   return request;
 }
 
-function upstreamHeaders(accessToken) {
+function upstreamHeaders(accessToken, model) {
+  const sessionId = randomUUID();
   return {
     Authorization: `Bearer ${accessToken}`,
     "Content-Type": "application/json",
     Accept: "text/event-stream",
     "X-XAI-Token-Auth": "xai-grok-cli",
+    "x-authenticateresponse": "authenticate-response",
     "x-grok-client-version": GROK_CLIENT_VERSION,
-    "x-grok-conv-id": randomUUID(),
-    "User-Agent": `xai-grok-workspace/${GROK_CLIENT_VERSION}`,
+    "x-grok-client-identifier": "grok-shell",
+    "x-grok-client-mode": "headless",
+    "x-grok-conv-id": sessionId,
+    "x-grok-req-id": randomUUID(),
+    "x-grok-model-override": model,
+    "x-grok-session-id": sessionId,
+    "x-grok-agent-id": randomUUID(),
+    "x-grok-turn-idx": "1",
+    "User-Agent": grokUserAgent(),
   };
 }
 
@@ -218,7 +233,7 @@ async function handleChatCompletions(request, response) {
 
   const upstream = await fetch(`${GROK_BASE}/responses`, {
     method: "POST",
-    headers: upstreamHeaders(accessToken),
+    headers: upstreamHeaders(accessToken, model),
     body: JSON.stringify(responsesRequest),
     signal: controller.signal,
   });
@@ -229,7 +244,7 @@ async function handleChatCompletions(request, response) {
       error: {
         message:
           upstream.status === 401
-            ? "xAI rejected the Grok OAuth session; run `grok login`."
+            ? "xAI rejected the Grok OAuth session; run `grok login --oauth`."
             : `Grok OAuth proxy error (HTTP ${upstream.status}).`,
         type: upstream.status === 401 ? "authentication_error" : "api_error",
         code: null,

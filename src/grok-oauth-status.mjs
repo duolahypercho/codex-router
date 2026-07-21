@@ -31,7 +31,7 @@ export function grokOAuthStatus() {
     return {
       configured: false,
       authPath,
-      setup: "Run `grok login` in an interactive terminal",
+      setup: "Run `grok login --oauth` in an interactive terminal",
     };
   }
   try {
@@ -41,7 +41,7 @@ export function grokOAuthStatus() {
       return {
         configured: false,
         authPath,
-        setup: "Run `grok login` again; the Grok session is incomplete",
+        setup: "Run `grok login --oauth` again; the Grok session is incomplete",
       };
     }
     return {
@@ -53,7 +53,7 @@ export function grokOAuthStatus() {
     return {
       configured: false,
       authPath,
-      setup: "Run `grok login` again; the Grok session file is invalid",
+      setup: "Run `grok login --oauth` again; the Grok session file is invalid",
     };
   }
 }

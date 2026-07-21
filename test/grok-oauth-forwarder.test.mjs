@@ -154,7 +154,16 @@ test("translates Chat Completions to Grok Responses and back (text + tools)", as
     assert.equal(captured.input.at(-1).content[0].type, "input_text");
     assert.equal(capturedHeaders.authorization, "Bearer fake-access");
     assert.equal(capturedHeaders["x-xai-token-auth"], "xai-grok-cli");
+    assert.equal(capturedHeaders["x-authenticateresponse"], "authenticate-response");
     assert.match(capturedHeaders["x-grok-client-version"], /^\d+\.\d+\.\d+$/);
+    assert.equal(capturedHeaders["x-grok-client-identifier"], "grok-shell");
+    assert.equal(capturedHeaders["x-grok-client-mode"], "headless");
+    assert.equal(capturedHeaders["x-grok-model-override"], "grok-4.5");
+    assert.equal(capturedHeaders["x-grok-turn-idx"], "1");
+    assert.equal(capturedHeaders["x-grok-conv-id"], capturedHeaders["x-grok-session-id"]);
+    assert.match(capturedHeaders["x-grok-req-id"], /^[0-9a-f-]{36}$/);
+    assert.match(capturedHeaders["x-grok-agent-id"], /^[0-9a-f-]{36}$/);
+    assert.match(capturedHeaders["user-agent"], /^grok-shell\/\d+\.\d+\.\d+ \(.+; .+\)$/);
 
     for (const [effort, expected] of [["none", "low"], ["low", "low"], ["medium", "medium"], ["high", "high"], ["xhigh", "high"], ["max", "high"]]) {
       const effortResponse = await fetch(`${base}/v1/chat/completions`, {

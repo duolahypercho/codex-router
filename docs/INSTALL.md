@@ -96,7 +96,7 @@ Grok OAuth uses the official Grok CLI session:
 
 ```sh
 npm install -g @xai-official/grok
-grok login
+grok login --oauth
 ./bin/model-router codex providers enable grok-oauth
 ```
 

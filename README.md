@@ -104,7 +104,7 @@ and authenticate before enabling the route:
 
 ```sh
 npm install -g @xai-official/grok
-grok login
+grok login --oauth
 ```
 
 Native GPT models continue to use Codex directly. There is no separate GPT or

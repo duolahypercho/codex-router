@@ -122,7 +122,7 @@ export function providerConfigured(provider) {
 // Per-provider hint for a selected-but-unconfigured OAuth provider.
 function oauthSetupHint(provider) {
   return provider.id === "grok-oauth"
-    ? "install the official Grok CLI and run `grok login`"
+    ? "install the official Grok CLI and run `grok login --oauth`"
     : `run \`kimi login\` (install the Kimi Code CLI from ${KIMI_CLI_INSTALL_URL} first if needed)`;
 }
 
@@ -259,8 +259,10 @@ function onboardGrokOauth() {
   }
   if (!grok) throw new Error("The official Grok CLI was installed but could not be located.");
   for (let attempt = 0; attempt < MAX_LOGIN_ATTEMPTS; attempt += 1) {
-    if (!confirm("Run `grok login` now?")) throw new Error("Grok OAuth setup was cancelled.");
-    tryRun(grok, ["login"]);
+    if (!confirm("Run `grok login --oauth` now?")) {
+      throw new Error("Grok OAuth setup was cancelled.");
+    }
+    tryRun(grok, ["login", "--oauth"]);
     if (grokOAuthStatus().configured) return;
     process.stdout.write("Grok login did not produce a usable OAuth credential yet.\n");
   }

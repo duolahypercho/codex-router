@@ -13,11 +13,13 @@ const OAUTH_CLIS = Object.freeze({
   "kimi-oauth": {
     executable: "kimi",
     npmPackage: KIMI_CLI_NPM_PACKAGE,
+    loginArgs: ["login"],
     candidates: [path.join(os.homedir(), ".npm-global", "bin", "kimi")],
   },
   "grok-oauth": {
     executable: "grok",
     npmPackage: "@xai-official/grok",
+    loginArgs: ["login", "--oauth"],
     candidates: [
       path.join(os.homedir(), ".npm-global", "bin", "grok"),
       path.join(process.env.GROK_HOME || path.join(os.homedir(), ".grok"), "bin", "grok"),
@@ -45,6 +47,12 @@ export function oauthCliPath(providerId) {
   const discovered = commandPath(cli.executable);
   if (discovered) return discovered;
   return cli.candidates.find((candidate) => existsSync(candidate));
+}
+
+export function oauthLoginArgs(providerId) {
+  const cli = OAUTH_CLIS[providerId];
+  if (!cli) throw new Error(`Unknown OAuth provider: ${providerId}`);
+  return [...cli.loginArgs];
 }
 
 function oauthConfigured(providerId) {
@@ -113,7 +121,7 @@ export function installOauthCli(providerId) {
 export function loginOauthProvider(providerId) {
   const executable = oauthCliPath(providerId);
   if (!executable) throw new Error("Install the provider CLI before signing in.");
-  const result = spawnSync(executable, ["login"], {
+  const result = spawnSync(executable, oauthLoginArgs(providerId), {
     encoding: "utf8",
     env: process.env,
   });

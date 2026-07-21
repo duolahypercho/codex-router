@@ -57,7 +57,7 @@ function main() {
   if (command === "enable" && !configured(provider)) {
     const setup = provider.kind === "oauth"
       ? provider.id === "grok-oauth"
-        ? "run `grok login`"
+        ? "run `grok login --oauth`"
         : "run `kimi login`"
       : `run \`${targetCli(`provider-key ${provider.id} set`)}\``;
     throw new Error(`${provider.displayName} is not configured; ${setup} first.`);
