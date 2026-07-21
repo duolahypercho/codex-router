@@ -38,10 +38,11 @@ test("Cursor path defaults are its own dedicated ports", () => {
     oauth: 4106,
     router: 4104,
     api: 4107,
+    chatgpt: 4116,
   });
 });
 
-test("every target's four ports are pairwise disjoint across all targets", () => {
+test("every target's five ports are pairwise disjoint across all targets", () => {
   const targets = ["codex", "claude", "cursor"];
   const seen = new Map();
   for (const target of targets) {
@@ -86,6 +87,7 @@ test("Claude path defaults ignore legacy Codex-only port overrides", () => {
     oauth: 4112,
     router: 4110,
     api: 4113,
+    chatgpt: 4114,
   });
 });
 
