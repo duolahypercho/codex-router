@@ -167,6 +167,17 @@ Claude Desktop's **Developer → Configure Third-Party Inference…** window. Se
 [the Claude target guide](docs/CLAUDE.md) for exact fields, rollback behavior,
 tool support, and troubleshooting.
 
+## macOS tray control panel
+
+On macOS, build and open the native menu-bar control panel with:
+
+```sh
+./bin/model-router-tray
+```
+
+It shows target health, routed models, and staged provider controls. See the
+[macOS tray guide](docs/MACOS-TRAY.md) for behavior and rebuild notes.
+
 ## Common commands
 
 ```sh

@@ -1,0 +1,6 @@
+#!/bin/sh
+set -eu
+
+repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+bundle_dir=$("$repo_dir/scripts/build-macos-tray-app.sh")
+open "$bundle_dir"

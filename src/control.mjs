@@ -58,6 +58,7 @@ async function emitProbe() {
     JSON.stringify({
       target: TARGET,
       configured: existsSync(PROVIDER_SELECTION_PATH),
+      active: targetIsActive(TARGET),
       enabledProviders,
       models,
     }),
