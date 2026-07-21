@@ -58,7 +58,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=${systemdQuote(SOURCE_ROOT)}
+WorkingDirectory=${SOURCE_ROOT}
 ExecStart=${systemdQuote(process.execPath)} ${systemdQuote(start)}
 Restart=always
 RestartSec=5
