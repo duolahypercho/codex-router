@@ -45,6 +45,9 @@ async function emitProbe() {
   }
 
   const enabledProviders = readProviderSelection();
+  const usageEvents = TARGET === "codex"
+    ? (await import("./usage-events.mjs")).recentUsageEvents()
+    : [];
   const models = LISTED_MODELS.map((model) => ({
     slug: model.slug,
     displayName: model.displayName,
@@ -61,6 +64,7 @@ async function emitProbe() {
       active: targetIsActive(TARGET),
       enabledProviders,
       models,
+      ...(TARGET === "codex" ? { usageEvents } : {}),
     }),
   );
 }

@@ -23,6 +23,7 @@ import {
 import { MERGED_CATALOG_PATH, PORTS, loopback } from "./paths.mjs";
 import { MODEL_BY_SLUG, providerForModel } from "./model-registry.mjs";
 import { readProviderSelection } from "./provider-selection.mjs";
+import { recordUsageEvent } from "./usage-events.mjs";
 import { VERSION } from "./version.mjs";
 
 const LISTEN_HOST =
@@ -438,6 +439,7 @@ function requireCodexTransport(request, response) {
 }
 
 async function handleResponses(request, response, requestUrl) {
+  const startedAt = Date.now();
   if (!requireCodexTransport(request, response)) return;
   const encoded = await readRequestBody(request);
   const body = decodeBody(encoded, request.headers["content-encoding"]);
@@ -501,6 +503,12 @@ async function handleResponses(request, response, requestUrl) {
     signal: controller.signal,
   });
   await pipeResponse(upstream, response, HOP_BY_HOP_HEADERS);
+  recordUsageEvent({
+    model: requestedModel,
+    provider: route?.provider || "openai",
+    status: upstream.status,
+    durationMs: Date.now() - startedAt,
+  });
   if (!QUIET) {
     console.error(
       `[codex-router] model=${requestedModel || "unknown"} provider=${route?.provider || "openai"} status=${upstream.status}`,

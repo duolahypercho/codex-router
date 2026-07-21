@@ -8,13 +8,20 @@ import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
-function probe(target, providers) {
+function probe(target, providers, usageEvents = []) {
   const stateDir = mkdtempSync(path.join(os.tmpdir(), "control-probe-"));
   writeFileSync(
     path.join(stateDir, "enabled-providers.json"),
     `${JSON.stringify({ version: 1, providers })}\n`,
     { mode: 0o600 },
   );
+  if (usageEvents.length) {
+    writeFileSync(
+      path.join(stateDir, "usage-events.jsonl"),
+      `${usageEvents.map((event) => JSON.stringify(event)).join("\n")}\n`,
+      { mode: 0o600 },
+    );
+  }
   try {
     const output = execFileSync(process.execPath, [path.join(root, "src", "control.mjs"), "--probe"], {
       cwd: root,
@@ -46,6 +53,27 @@ test("cursor probe reports enabled models without claude roles", () => {
   const deepseek = slice.models.filter((m) => m.provider === "deepseek");
   assert.ok(deepseek.length > 0 && deepseek.every((m) => m.enabled));
   assert.ok(slice.models.every((m) => m.claudeRole === undefined));
+});
+
+test("codex probe exposes only privacy-safe recent usage events", () => {
+  const event = {
+    at: new Date().toISOString(),
+    model: "chatgpt-oauth/gpt-5.6-sol",
+    provider: "chatgpt-oauth",
+    status: 200,
+    durationMs: 1234,
+    prompt: "must not escape the private event store",
+  };
+  const slice = probe("codex", ["chatgpt-oauth"], [event]);
+  assert.deepEqual(slice.usageEvents, [{
+    at: event.at,
+    model: event.model,
+    provider: event.provider,
+    status: event.status,
+    durationMs: event.durationMs,
+  }]);
+  assert.equal("prompt" in slice.usageEvents[0], false);
+  assert.equal("response" in slice.usageEvents[0], false);
 });
 
 function probeSet(target, providers, provider, desired) {

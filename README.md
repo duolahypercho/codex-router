@@ -175,9 +175,9 @@ On macOS, build and open the native menu-bar control panel with:
 ./bin/model-router-tray
 ```
 
-It shows Codex health, routed models, and staged provider controls in a native
-glass macOS interface. See the [macOS tray guide](docs/MACOS-TRAY.md) for
-behavior and rebuild notes.
+It shows Codex health, a pinned model with live usage, routed models, and
+staged provider controls in a native glass macOS interface. See the
+[macOS tray guide](docs/MACOS-TRAY.md) for behavior and rebuild notes.
 
 ## Common commands
 
