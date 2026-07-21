@@ -151,8 +151,6 @@ private struct IslandOverlayView: View {
   @ObservedObject var display: IslandDisplayModel
   @State private var range: UsageRange = .week
 
-  private var model: RouterModel? { store.pinnedModel }
-
   var body: some View {
     VStack(spacing: 0) {
       ZStack {
@@ -209,11 +207,11 @@ private struct IslandOverlayView: View {
         .foregroundStyle(store.activityState.tint)
       Text("·")
         .foregroundStyle(routerMuted)
-      Text(store.pinnedShortName ?? "Codex")
+      Text(store.selectedUsageProvider.shortName)
         .font(.system(size: 11, weight: .medium, design: .rounded))
         .lineLimit(1)
       Spacer(minLength: 6)
-      Text(store.pinnedUsageText ?? "Usage —")
+      Text(store.selectedUsageText ?? "Usage —")
         .font(.system(size: 10, weight: .medium, design: .monospaced))
         .foregroundStyle(.white.opacity(0.78))
     }
@@ -225,7 +223,7 @@ private struct IslandOverlayView: View {
       HStack(spacing: 9) {
         LiveOrb(state: store.activityState)
         VStack(alignment: .leading, spacing: 1) {
-          Text(islandModelName)
+          Text(store.selectedUsageProvider.displayName)
             .font(.system(size: 12, weight: .semibold, design: .rounded))
             .lineLimit(1)
           Text("\(store.activityState.label) · \(sourceLabel)")
@@ -244,7 +242,7 @@ private struct IslandOverlayView: View {
         }
       }
       UsageBarChart(points: store.dailyUsage(days: 7), tint: graphTint)
-        .id("\(store.pinnedUsageProviderID)-peek")
+        .id("\(store.selectedUsageProviderID)-peek")
         .frame(height: 43)
     }
     .padding(.horizontal, 15)
@@ -257,7 +255,7 @@ private struct IslandOverlayView: View {
       HStack(spacing: 10) {
         LiveOrb(state: store.activityState)
         VStack(alignment: .leading, spacing: 2) {
-          Text(islandModelName)
+          Text(store.selectedUsageProvider.displayName)
             .font(.system(size: 15, weight: .semibold, design: .rounded))
           Text("\(store.activityState.label) · \(sourceLabel)")
             .font(.system(size: 9, weight: .medium, design: .rounded))
@@ -288,40 +286,49 @@ private struct IslandOverlayView: View {
       }
 
       UsageBarChart(points: graphPoints, tint: graphTint)
-        .id("\(store.pinnedUsageProviderID)-\(range.rawValue)-expanded")
+        .id("\(store.selectedUsageProviderID)-\(range.rawValue)-expanded")
         .frame(height: 78)
 
       HStack {
-        Text("PINNED MODEL")
+        Text("USAGE PROVIDER")
           .font(.system(size: 8, weight: .semibold, design: .monospaced))
           .tracking(0.8)
           .foregroundStyle(routerMuted)
         Spacer()
-        Text("Manage the Island from the tray")
+        Text("Account and traffic are provider-scoped")
           .font(.system(size: 9, design: .rounded))
           .foregroundStyle(routerMuted)
       }
 
-      ScrollView(.horizontal, showsIndicators: false) {
-        HStack(spacing: 7) {
-          ForEach(enabledModels) { candidate in
-            Button {
-              store.pin(candidate)
-            } label: {
-              Text(shortName(candidate))
-                .font(.system(size: 10, weight: .medium, design: .rounded))
-              .foregroundStyle(candidate.slug == store.pinnedModelSlug ? Color.white : Color.white.opacity(0.62))
-              .padding(.horizontal, 10)
-              .padding(.vertical, 7)
-              .background(
-                candidate.slug == store.pinnedModelSlug ? Color.white.opacity(0.13) : Color.white.opacity(0.045),
-                in: Capsule()
-              )
-            }
-            .buttonStyle(.plain)
+      HStack {
+        VStack(alignment: .leading, spacing: 2) {
+          Text(store.selectedUsageProvider.displayName)
+            .font(.system(size: 10, weight: .semibold, design: .rounded))
+          Text(store.selectedUsageProvider.detail)
+            .font(.system(size: 8, design: .rounded))
+            .foregroundStyle(routerMuted)
+        }
+        Spacer()
+        Picker(
+          "Usage provider",
+          selection: Binding(
+            get: { store.selectedUsageProviderID },
+            set: { store.selectUsageProvider($0) }
+          )
+        ) {
+          ForEach(store.usageProviderChoices) { provider in
+            Text(provider.displayName).tag(provider.id)
           }
         }
+        .labelsHidden()
+        .pickerStyle(.menu)
+        .controlSize(.small)
+        .tint(.white)
+        .frame(maxWidth: 150)
       }
+      .padding(.horizontal, 10)
+      .padding(.vertical, 7)
+      .background(Color.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
     .padding(.horizontal, 17)
     .padding(.top, 13)
@@ -333,61 +340,50 @@ private struct IslandOverlayView: View {
       .id(store.activityState)
   }
 
-  private var enabledModels: [RouterModel] {
-    store.snapshot.targets["codex"]?.models.filter(\.enabled) ?? []
-  }
-
   private var sourceLabel: String {
-    guard let model else { return "LOCAL MODEL BRIDGE" }
-    if model.provider == "openai" { return "CHATGPT • NATIVE" }
-    if model.provider == "grok-oauth" { return "XAI • OAUTH SESSION" }
-    if model.provider == "grok-api" { return "XAI • METERED API" }
-    if model.provider.hasSuffix("-api") || model.provider == "deepseek" { return "METERED API" }
+    let provider = store.selectedUsageProviderID
+    if provider == "openai" { return "CHATGPT • NATIVE" }
+    if provider == "grok-oauth" { return "XAI • OAUTH SESSION" }
+    if provider == "grok-api" { return "XAI • METERED API" }
+    if provider.hasSuffix("-api") || provider == "deepseek" { return "METERED API" }
     return "OAUTH ROUTE"
   }
 
-  private var islandModelName: String {
-    guard let name = model?.displayName else { return "Codex Router" }
-    return name.split(separator: "(", maxSplits: 1).first
-      .map(String.init)?
-      .trimmingCharacters(in: .whitespacesAndNewlines) ?? name
-  }
-
   private var primaryMetric: String {
-    if store.pinnedUsesChatGPTUsage {
+    if store.selectedUsageUsesChatGPT {
       guard let remaining = store.accountUsage?.primary?.remainingPercent else { return "—" }
       return "\(remaining)%"
     }
     guard store.providerUsage != nil else { return "—" }
-    if let metric = store.pinnedAccountMetric { return formattedAccountMetric(metric) }
+    if let metric = store.selectedAccountMetric { return formattedAccountMetric(metric) }
     return compactTokenCount(store.localUsageTotals(days: range.rawValue).tokens)
   }
 
   private var primaryLabel: String {
-    if store.pinnedUsesChatGPTUsage { return "SUBSCRIPTION LEFT" }
-    return store.pinnedAccountMetric?.label.uppercased() ?? "\(range.rawValue)D LOCAL TOKENS"
+    if store.selectedUsageUsesChatGPT { return "SUBSCRIPTION LEFT" }
+    return store.selectedAccountMetric?.label.uppercased() ?? "\(range.rawValue)D LOCAL TOKENS"
   }
 
   private var primaryTitle: String {
-    if store.pinnedUsesChatGPTUsage {
+    if store.selectedUsageUsesChatGPT {
       return store.accountUsage?.primary?.durationLabel.uppercased() ?? "CHATGPT LIMIT"
     }
-    if let metric = store.pinnedAccountMetric { return metric.label.uppercased() }
+    if let metric = store.selectedAccountMetric { return metric.label.uppercased() }
     return "\(range.rawValue)-DAY REQUESTS"
   }
 
   private var primaryTileMetric: String {
-    if store.pinnedUsesChatGPTUsage { return primaryMetric }
-    if let metric = store.pinnedAccountMetric { return formattedAccountMetric(metric) }
+    if store.selectedUsageUsesChatGPT { return primaryMetric }
+    if let metric = store.selectedAccountMetric { return formattedAccountMetric(metric) }
     return "\(store.localUsageTotals(days: range.rawValue).requests)"
   }
 
   private var primaryDetail: String {
-    if store.pinnedUsesChatGPTUsage {
+    if store.selectedUsageUsesChatGPT {
       guard let reset = store.accountUsage?.primary?.resetDate else { return "Native Codex subscription" }
       return "Resets \(reset.formatted(date: .abbreviated, time: .shortened))"
     }
-    if let metric = store.pinnedAccountMetric {
+    if let metric = store.selectedAccountMetric {
       if let reset = metric.resetDate {
         return "Resets \(reset.formatted(date: .abbreviated, time: .shortened))"
       }
@@ -419,14 +415,6 @@ private struct IslandOverlayView: View {
 
   private var graphTint: Color {
     routerAccent
-  }
-
-  private func shortName(_ model: RouterModel) -> String {
-    for name in ["Sol", "Terra", "Luna", "Grok 4.5", "K3", "V4 Pro", "V4 Flash"]
-    where model.displayName.localizedCaseInsensitiveContains(name) {
-      return name
-    }
-    return model.displayName.split(separator: " ").first.map(String.init) ?? model.slug
   }
 
 }

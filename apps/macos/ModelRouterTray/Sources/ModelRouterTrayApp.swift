@@ -73,7 +73,7 @@ final class RouterStore: ObservableObject {
   @Published private(set) var pendingApply = false
   @Published private(set) var message: String?
   @Published private(set) var lastUpdated: Date?
-  @Published private(set) var pinnedModelSlug: String?
+  @Published private(set) var selectedUsageProviderID: String
   @Published private(set) var activityState: RouterActivityState = .idle
   @Published private(set) var accountUsage: CodexAccountUsage?
   @Published private(set) var accountUsageError: String?
@@ -89,9 +89,13 @@ final class RouterStore: ObservableObject {
   private var providerPolling = false
   private let defaults = UserDefaults.standard
   private let islandVisibilityKey = "ModelRouterTray.islandVisible"
+  private let usageProviderKey = "ModelRouterTray.usageProvider"
+  private var shouldMigratePinnedModel: Bool
 
   init() {
-    pinnedModelSlug = defaults.string(forKey: "ModelRouterTray.pinnedModel")
+    let savedUsageProvider = UserDefaults.standard.string(forKey: "ModelRouterTray.usageProvider")
+    selectedUsageProviderID = savedUsageProvider ?? "openai"
+    shouldMigratePinnedModel = savedUsageProvider == nil
     islandVisible = defaults.object(forKey: islandVisibilityKey) == nil
       ? true
       : defaults.bool(forKey: islandVisibilityKey)
@@ -101,48 +105,43 @@ final class RouterStore: ObservableObject {
     snapshot.targets["codex"]?.active == true
   }
 
-  var pinnedModel: RouterModel? {
-    guard let models = snapshot.targets["codex"]?.models.filter(\.enabled), !models.isEmpty else {
-      return nil
-    }
-    return models.first(where: { $0.slug == pinnedModelSlug }) ?? preferredModel(in: models)
+  var usageProviderChoices: [UsageProviderChoice] {
+    let enabled = Set(snapshot.targets["codex"]?.enabledProviders ?? [])
+    return [
+      UsageProviderChoice(id: "openai", displayName: "ChatGPT", shortName: "ChatGPT", detail: "Codex subscription", isEnabled: true),
+      UsageProviderChoice(id: "grok-oauth", displayName: "Grok OAuth", shortName: "Grok", detail: providerDetail("grok-oauth", enabled: enabled), isEnabled: enabled.contains("grok-oauth")),
+      UsageProviderChoice(id: "kimi-oauth", displayName: "Kimi OAuth", shortName: "Kimi", detail: providerDetail("kimi-oauth", enabled: enabled), isEnabled: enabled.contains("kimi-oauth")),
+      UsageProviderChoice(id: "deepseek", displayName: "DeepSeek API", shortName: "DeepSeek", detail: providerDetail("deepseek", enabled: enabled), isEnabled: enabled.contains("deepseek")),
+      UsageProviderChoice(id: "grok-api", displayName: "Grok API", shortName: "Grok API", detail: providerDetail("grok-api", enabled: enabled), isEnabled: enabled.contains("grok-api")),
+      UsageProviderChoice(id: "kimi-api", displayName: "Kimi API", shortName: "Kimi API", detail: providerDetail("kimi-api", enabled: enabled), isEnabled: enabled.contains("kimi-api")),
+    ]
   }
 
-  var pinnedShortName: String? {
-    guard let model = pinnedModel else { return nil }
-    for name in ["Sol", "Terra", "Luna", "Grok 4.5", "K3", "V4 Pro", "V4 Flash"]
-    where model.displayName.localizedCaseInsensitiveContains(name) {
-      return name
-    }
-    return model.displayName.split(separator: " ").first.map(String.init)
+  var selectedUsageProvider: UsageProviderChoice {
+    usageProviderChoices.first(where: { $0.id == selectedUsageProviderID }) ?? usageProviderChoices[0]
   }
 
-  var pinnedUsageText: String? {
-    if pinnedUsesChatGPTUsage {
+  var selectedUsageText: String? {
+    if selectedUsageUsesChatGPT {
       guard let primary = accountUsage?.primary else { return nil }
       return "\(primary.remainingPercent)% left"
     }
     guard providerUsage != nil else { return nil }
-    if let metric = pinnedAccountMetric { return formattedAccountMetric(metric) }
+    if let metric = selectedAccountMetric { return formattedAccountMetric(metric) }
     let total = localUsageTotals(days: 7).tokens
     return total > 0 ? "\(compactTokenCount(total)) tok" : "No use"
   }
 
-  var pinnedUsesChatGPTUsage: Bool {
-    pinnedModel?.provider == "openai"
+  var selectedUsageUsesChatGPT: Bool {
+    selectedUsageProviderID == "openai"
   }
 
-  var pinnedProviderUsage: RouterProviderUsage? {
-    guard let provider = pinnedModel?.provider else { return nil }
-    return providerUsage?.providers.first(where: { $0.id == provider })
+  var selectedProviderUsage: RouterProviderUsage? {
+    providerUsage?.providers.first(where: { $0.id == selectedUsageProviderID })
   }
 
-  var pinnedUsageProviderID: String {
-    pinnedModel?.provider ?? "openai"
-  }
-
-  var pinnedAccountMetric: ProviderAccountMetric? {
-    pinnedProviderUsage?.account.metrics.first
+  var selectedAccountMetric: ProviderAccountMetric? {
+    selectedProviderUsage?.account.metrics.first
   }
 
   func startPolling() async {
@@ -165,7 +164,7 @@ final class RouterStore: ObservableObject {
     do {
       let output = try await runControl(arguments: ["--json"])
       snapshot = try JSONDecoder().decode(RouterSnapshot.self, from: output)
-      resolvePinnedModel()
+      resolveSelectedUsageProvider()
       lastUpdated = .now
       message = nil
     } catch {
@@ -187,13 +186,15 @@ final class RouterStore: ObservableObject {
     }
   }
 
-  func pin(_ model: RouterModel) {
-    let previousProvider = pinnedModel?.provider
-    pinnedModelSlug = model.slug
-    defaults.set(model.slug, forKey: "ModelRouterTray.pinnedModel")
-    guard previousProvider != model.provider else { return }
+  func selectUsageProvider(_ providerID: String) {
+    guard usageProviderChoices.contains(where: { $0.id == providerID }) else { return }
+    let previousProvider = selectedUsageProviderID
+    selectedUsageProviderID = providerID
+    defaults.set(providerID, forKey: usageProviderKey)
+    shouldMigratePinnedModel = false
+    guard previousProvider != providerID else { return }
     Task {
-      if model.provider == "openai" {
+      if providerID == "openai" {
         await refreshAccountUsage()
       } else {
         await refreshProviderUsage()
@@ -301,13 +302,13 @@ final class RouterStore: ObservableObject {
 
   func dailyUsage(days: Int) -> [DailyUsagePoint] {
     let indexed: [String: Double]
-    if pinnedUsesChatGPTUsage {
+    if selectedUsageUsesChatGPT {
       guard let accountUsage else { return placeholderDailyUsage(days: days) }
       indexed = Dictionary(uniqueKeysWithValues: accountUsage.dailyUsageBuckets.map {
         ($0.startDate, Double($0.tokens))
       })
     } else {
-      guard let usage = pinnedProviderUsage else { return placeholderDailyUsage(days: days) }
+      guard let usage = selectedProviderUsage else { return placeholderDailyUsage(days: days) }
       indexed = Dictionary(uniqueKeysWithValues: usage.dailyUsageBuckets.map {
         ($0.startDate, Double($0.tokens))
       })
@@ -325,7 +326,7 @@ final class RouterStore: ObservableObject {
   }
 
   func localUsageTotals(days: Int) -> (tokens: Double, requests: Int) {
-    guard !pinnedUsesChatGPTUsage, let usage = pinnedProviderUsage else { return (0, 0) }
+    guard !selectedUsageUsesChatGPT, let usage = selectedProviderUsage else { return (0, 0) }
     let calendar = Calendar.current
     let today = calendar.startOfDay(for: .now)
     let firstDay = calendar.date(byAdding: .day, value: -(days - 1), to: today) ?? today
@@ -413,20 +414,30 @@ final class RouterStore: ObservableObject {
     }
   }
 
-  private func resolvePinnedModel() {
-    guard let models = snapshot.targets["codex"]?.models.filter(\.enabled), !models.isEmpty else { return }
-    if let pinnedModelSlug, models.contains(where: { $0.slug == pinnedModelSlug }) { return }
-    let model = preferredModel(in: models)
-    pinnedModelSlug = model.slug
-    defaults.set(model.slug, forKey: "ModelRouterTray.pinnedModel")
+  private func resolveSelectedUsageProvider() {
+    if shouldMigratePinnedModel,
+       let pinnedSlug = defaults.string(forKey: "ModelRouterTray.pinnedModel"),
+       let provider = snapshot.targets["codex"]?.models.first(where: { $0.slug == pinnedSlug })?.provider,
+       usageProviderChoices.contains(where: { $0.id == provider }) {
+      selectedUsageProviderID = provider
+      defaults.set(provider, forKey: usageProviderKey)
+      shouldMigratePinnedModel = false
+      return
+    }
+    guard usageProviderChoices.contains(where: { $0.id == selectedUsageProviderID }) else {
+      selectedUsageProviderID = "openai"
+      defaults.set("openai", forKey: usageProviderKey)
+      return
+    }
+    shouldMigratePinnedModel = false
   }
 
-  private func preferredModel(in models: [RouterModel]) -> RouterModel {
-    if let selected = snapshot.targets["codex"]?.selectedModel,
-       let model = models.first(where: { $0.slug == selected }) {
-      return model
+  private func providerDetail(_ providerID: String, enabled: Set<String>) -> String {
+    if enabled.contains(providerID) {
+      return providerID.hasSuffix("-oauth") ? "OAuth · enabled" : "API · enabled"
     }
-    return models.first(where: { $0.slug == "gpt-5.6-terra" }) ?? models[0]
+    if providerSetup[providerID]?.configured == true { return "Ready to enable" }
+    return "Needs setup"
   }
 
   private func runControl(arguments: [String], stdin: Data? = nil) async throws -> Data {
@@ -638,6 +649,14 @@ struct RouterModel: Decodable, Identifiable {
   var id: String { slug }
 }
 
+struct UsageProviderChoice: Identifiable {
+  let id: String
+  let displayName: String
+  let shortName: String
+  let detail: String
+  let isEnabled: Bool
+}
+
 struct ProviderSetupSnapshot: Decodable {
   let providers: [ProviderSetupState]
 }
@@ -659,9 +678,9 @@ private struct StatusItemLabel: View {
       Circle()
         .fill(store.activityState.tint)
         .frame(width: 6, height: 6)
-      Text(store.pinnedShortName ?? "Codex")
+      Text(store.selectedUsageProvider.shortName)
         .font(.system(size: 11, weight: .medium, design: .rounded))
-      if let usage = store.pinnedUsageText {
+      if let usage = store.selectedUsageText {
         Text(usage)
           .font(.system(size: 10, weight: .medium, design: .monospaced))
           .foregroundStyle(.secondary)
@@ -722,8 +741,8 @@ private struct TrayView: View {
   }
 
   private var accountLabel: String {
-    if !store.pinnedUsesChatGPTUsage {
-      guard let provider = store.pinnedProviderUsage else { return "Provider usage" }
+    if !store.selectedUsageUsesChatGPT {
+      guard let provider = store.selectedProviderUsage else { return store.selectedUsageProvider.detail }
       return "\(provider.displayName) · \(provider.credentialType.uppercased())"
     }
     guard let plan = store.accountUsage?.planType else { return "Codex account" }
@@ -733,34 +752,18 @@ private struct TrayView: View {
   private func content(for target: RouterTarget) -> some View {
     ScrollView(showsIndicators: false) {
       VStack(alignment: .leading, spacing: 14) {
+        sectionLabel("Usage provider", detail: store.selectedUsageProvider.displayName)
+        ProviderUsagePicker(store: store)
         ProviderUsageSection(store: store)
-          .id(store.pinnedUsageProviderID)
+          .id(store.selectedUsageProviderID)
         settingRow(
           title: "Dynamic Island",
-          detail: "Show live model, limit, and activity status",
+          detail: "Show provider usage and activity status",
           isOn: Binding(
             get: { store.islandVisible },
             set: { store.setIslandVisible($0) }
           )
         )
-        sectionLabel(
-          "Island model",
-          detail: store.pinnedShortName.map { "Pinned: \($0)" } ?? "Uses Codex default"
-        )
-        VStack(spacing: 0) {
-          ForEach(target.models.filter(\.enabled)) { model in
-            SimpleModelRow(
-              model: model,
-              isPinned: store.pinnedModelSlug == model.slug,
-              isDefault: target.selectedModel == model.slug
-            ) {
-              store.pin(model)
-            }
-            if model.id != target.models.filter(\.enabled).last?.id {
-              Divider()
-            }
-          }
-        }
         sectionLabel("Providers", detail: store.pendingApply ? "Apply required" : "Synced")
         VStack(spacing: 0) {
           ForEach(providers, id: \.id) { provider in
@@ -996,6 +999,46 @@ private struct ProviderSetupRow: View {
   }
 }
 
+private struct ProviderUsagePicker: View {
+  @ObservedObject var store: RouterStore
+
+  var body: some View {
+    HStack(spacing: 10) {
+      VStack(alignment: .leading, spacing: 3) {
+        Text(store.selectedUsageProvider.displayName)
+          .font(.system(size: 11, weight: .semibold, design: .rounded))
+        HStack(spacing: 5) {
+          Circle()
+            .fill(store.selectedUsageProvider.isEnabled ? routerMint : Color.secondary.opacity(0.42))
+            .frame(width: 5, height: 5)
+          Text(store.selectedUsageProvider.detail)
+            .font(.system(size: 9))
+            .foregroundStyle(routerMuted)
+        }
+      }
+      Spacer()
+      Picker(
+        "Usage provider",
+        selection: Binding(
+          get: { store.selectedUsageProviderID },
+          set: { store.selectUsageProvider($0) }
+        )
+      ) {
+        ForEach(store.usageProviderChoices) { provider in
+          Text(provider.displayName).tag(provider.id)
+        }
+      }
+      .labelsHidden()
+      .pickerStyle(.menu)
+      .controlSize(.small)
+      .frame(maxWidth: 138)
+    }
+    .padding(.horizontal, 10)
+    .padding(.vertical, 8)
+    .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+  }
+}
+
 private struct ProviderUsageSection: View {
   @ObservedObject var store: RouterStore
   @State private var range: UsageRange = .week
@@ -1048,7 +1091,7 @@ private struct ProviderUsageSection: View {
       }
 
       HStack {
-        Text(store.pinnedUsesChatGPTUsage ? "Daily token usage" : "Router traffic")
+        Text(store.selectedUsageUsesChatGPT ? "Daily token usage" : "Router traffic")
           .font(.system(size: 10, weight: .medium))
           .foregroundStyle(routerMuted)
         Spacer()
@@ -1056,13 +1099,13 @@ private struct ProviderUsageSection: View {
       }
 
       UsageBarChart(points: store.dailyUsage(days: range.rawValue), tint: routerAccent)
-        .id("\(store.pinnedUsageProviderID)-\(range.rawValue)")
+        .id("\(store.selectedUsageProviderID)-\(range.rawValue)")
         .frame(height: 88)
 
       HStack {
         Text(rangeCaption)
         Spacer()
-        if store.pinnedUsesChatGPTUsage,
+        if store.selectedUsageUsesChatGPT,
            let streak = store.accountUsage?.summary.currentStreakDays {
           Text("\(streak)-day streak")
         }
@@ -1088,22 +1131,22 @@ private struct ProviderUsageSection: View {
   }
 
   private var sectionTitle: String {
-    if store.pinnedUsesChatGPTUsage { return "ChatGPT subscription" }
-    return store.pinnedProviderUsage?.displayName ?? "Provider usage"
+    if store.selectedUsageUsesChatGPT { return "ChatGPT subscription" }
+    return store.selectedProviderUsage?.displayName ?? store.selectedUsageProvider.displayName
   }
 
   private var primaryMetric: String {
-    if store.pinnedUsesChatGPTUsage {
+    if store.selectedUsageUsesChatGPT {
       guard let value = store.accountUsage?.primary?.remainingPercent else { return "—" }
       return "\(value)% left"
     }
     guard store.providerUsage != nil else { return "—" }
-    if let metric = store.pinnedAccountMetric { return formattedAccountMetric(metric) }
+    if let metric = store.selectedAccountMetric { return formattedAccountMetric(metric) }
     return compactTokenCount(store.localUsageTotals(days: range.rawValue).tokens)
   }
 
   private var remainingFraction: CGFloat {
-    if let metric = store.pinnedAccountMetric,
+    if let metric = store.selectedAccountMetric,
        let remaining = metric.remainingPercent {
       return CGFloat(max(0, min(100, remaining))) / 100
     }
@@ -1111,12 +1154,13 @@ private struct ProviderUsageSection: View {
   }
 
   private var showsProgressBar: Bool {
-    store.pinnedUsesChatGPTUsage || store.pinnedAccountMetric?.kind == "quota"
+    store.selectedUsageUsesChatGPT || store.selectedAccountMetric?.kind == "quota"
   }
 
   private var limitDetail: String {
-    if !store.pinnedUsesChatGPTUsage {
-      guard let usage = store.pinnedProviderUsage else { return "Loading provider usage…" }
+    if !store.selectedUsageUsesChatGPT {
+      guard store.selectedUsageProvider.isEnabled else { return store.selectedUsageProvider.detail }
+      guard let usage = store.selectedProviderUsage else { return "Loading provider usage…" }
       if let metric = usage.account.metrics.first {
         if let reset = metric.resetDate {
           return "\(metric.label) · resets \(reset.formatted(date: .abbreviated, time: .shortened))"
@@ -1133,7 +1177,7 @@ private struct ProviderUsageSection: View {
 
   private var rangeCaption: String {
     let total = store.dailyTokens(days: range.rawValue).reduce(0, +)
-    if !store.pinnedUsesChatGPTUsage {
+    if !store.selectedUsageUsesChatGPT {
       let requests = store.localUsageTotals(days: range.rawValue).requests
       return "\(compactTokenCount(total)) tokens · \(requests) requests over \(range.rawValue) days"
     }
@@ -1141,21 +1185,24 @@ private struct ProviderUsageSection: View {
   }
 
   private var usageError: String? {
-    if store.pinnedUsesChatGPTUsage {
+    if store.selectedUsageUsesChatGPT {
       return store.accountUsage == nil ? store.accountUsageError : nil
     }
     return store.providerUsage == nil ? store.providerUsageError : nil
   }
 
   private var secondaryAccountMetric: ProviderAccountMetric? {
-    guard !store.pinnedUsesChatGPTUsage else { return nil }
-    return store.pinnedProviderUsage?.account.metrics.dropFirst().first
+    guard !store.selectedUsageUsesChatGPT else { return nil }
+    return store.selectedProviderUsage?.account.metrics.dropFirst().first
   }
 
   private var accountMessage: String? {
-    guard !store.pinnedUsesChatGPTUsage,
-          store.pinnedProviderUsage?.account.metrics.isEmpty == true else { return nil }
-    return store.pinnedProviderUsage?.account.message
+    guard !store.selectedUsageUsesChatGPT else { return nil }
+    guard store.selectedUsageProvider.isEnabled else {
+      return "Set up this provider below to fetch its account usage."
+    }
+    guard store.selectedProviderUsage?.account.metrics.isEmpty == true else { return nil }
+    return store.selectedProviderUsage?.account.message
   }
 
   private func metricRemainingFraction(_ metric: ProviderAccountMetric) -> CGFloat {
@@ -1183,40 +1230,6 @@ struct UsageRangePicker: View {
     }
     .padding(2)
     .background(Color.primary.opacity(0.045), in: Capsule())
-  }
-}
-
-private struct SimpleModelRow: View {
-  let model: RouterModel
-  let isPinned: Bool
-  let isDefault: Bool
-  let onPin: () -> Void
-
-  var body: some View {
-    HStack(spacing: 10) {
-      VStack(alignment: .leading, spacing: 2) {
-        Text(model.displayName)
-          .font(.system(size: 12, weight: .medium))
-          .lineLimit(1)
-        Text(modelDetail)
-          .font(.system(size: 9))
-          .foregroundStyle(routerMuted)
-      }
-      Spacer()
-      Button(isPinned ? "Pinned" : "Pin") { onPin() }
-        .buttonStyle(.plain)
-        .font(.system(size: 10, weight: .medium))
-        .foregroundStyle(isPinned ? routerMint : routerAccent)
-    }
-    .padding(.vertical, 7)
-  }
-
-  private var modelDetail: String {
-    if model.provider == "openai" {
-      return isDefault ? "ChatGPT · Codex default" : "ChatGPT"
-    }
-    if model.provider == "grok-oauth" { return "xAI OAuth" }
-    return model.provider
   }
 }
 

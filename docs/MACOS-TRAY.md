@@ -2,25 +2,25 @@
 
 Model Router Tray is a native macOS Dynamic-Island-style overlay plus menu-bar
 control panel for the local Codex router. The top-center island shows the
-pinned model at rest, reveals live usage on hover, and expands on click. The
-tray shows Codex service state, models exposed by the router, and provider
-selections shared with the existing command-line control plane.
+selected usage provider at rest, reveals live usage on hover, and expands on
+click. The tray shows Codex service state, provider usage, and provider setup
+shared with the existing command-line control plane.
 
 The tray currently focuses on Codex. Claude and Cursor do not appear in this
 interface, and the app does not disable, uninstall, or change their existing
 router configuration.
 
-## Pinned model and live usage
+## Provider usage
 
-Select **Pin** beside any native GPT or enabled external model to keep its short
-name in the menu bar and Island. The tray marks the model saved as the Codex
-default; pinning changes only the Island display, not the model selected inside
-an existing Codex task. Hover the Island for a quick view or click it for
-account usage.
+Choose ChatGPT, Grok, Kimi, or DeepSeek from the native **Usage provider**
+dropdown. The selection changes the account meter and traffic graph in the menu
+bar, tray, and Island; it never changes the model selected inside Codex.
+Providers that still need credentials remain visible and point to their setup
+row below. Hover the Island for a quick view or click it for account usage.
 
-- Usage follows the provider of the pinned model. Native GPT models show the
-  ChatGPT subscription limit and daily buckets reported by the installed Codex
-  app-server; the tray never reads or copies the ChatGPT credential file.
+- ChatGPT shows the subscription limit and daily buckets reported by the
+  installed Codex app-server; the tray never reads or copies the ChatGPT
+  credential file.
 - External OAuth and API providers have separate account meters and local
   traffic graphs. Kimi Code OAuth reads weekly and five-hour quota from Kimi's
   usage API with the existing CLI session. DeepSeek and Kimi Platform API show
@@ -33,7 +33,7 @@ account usage.
 - Daily token bars can show 7, 30, or 90 days. Seven-day charts label every
   weekday; longer ranges use spaced date ticks while retaining one bar per day.
   Hover any bar for its full date and exact token count. Usage refreshes every
-  30 seconds and switches immediately when a different provider is pinned.
+  30 seconds and switches immediately when a different provider is selected.
 - The Island uses green for idle, amber while generating, and red after an
   error. It is shown by default and can be toggled from the tray.
 - Local routed-model events record timestamp, model, provider, HTTP status,
