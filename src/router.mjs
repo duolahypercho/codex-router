@@ -58,9 +58,35 @@ const INTERNAL_KEY =
 const CALLER_KEY = process.env.CODEX_ROUTER_CALLER_KEY;
 const QUIET =
   process.env.CODEX_ROUTER_QUIET === "1" || process.env.KIMI_PROXY_QUIET === "1";
+const ERROR_STATUS_DURATION_MS = 8_000;
+
+let inFlightRequests = 0;
+let errorStatusUntil = 0;
 
 if (!INTERNAL_KEY) throw new Error("CODEX_ROUTER_INTERNAL_KEY is required.");
 assertCallerSecret(CALLER_KEY);
+
+function activityPayload() {
+  return {
+    state:
+      inFlightRequests > 0
+        ? "generating"
+        : Date.now() < errorStatusUntil
+          ? "error"
+          : "idle",
+  };
+}
+
+function beginRequestActivity() {
+  inFlightRequests += 1;
+  let finished = false;
+  return (status) => {
+    if (finished) return;
+    finished = true;
+    inFlightRequests = Math.max(0, inFlightRequests - 1);
+    if (status >= 400) errorStatusUntil = Date.now() + ERROR_STATUS_DURATION_MS;
+  };
+}
 
 const FORWARD_HEADERS = new Set([
   "authorization",
@@ -207,6 +233,7 @@ async function healthPayload() {
     service: "codex-router",
     version: VERSION,
     router: "ready",
+    activity: activityPayload(),
     oauth,
     api,
     gateway,
@@ -440,79 +467,87 @@ function requireCodexTransport(request, response) {
 
 async function handleResponses(request, response, requestUrl) {
   const startedAt = Date.now();
-  if (!requireCodexTransport(request, response)) return;
-  const encoded = await readRequestBody(request);
-  const body = decodeBody(encoded, request.headers["content-encoding"]);
-  const payload = parseBody(body);
-  const requestedModel = typeof payload.model === "string" ? payload.model : "";
-  const registeredRoute = MODEL_BY_SLUG.get(requestedModel);
-  const route = registeredRoute && readProviderSelection().includes(registeredRoute.provider)
-    ? registeredRoute
-    : undefined;
-  if (registeredRoute && !route) {
-    writeJson(response, 409, {
-      error: {
-        type: "provider_not_enabled",
-        provider: registeredRoute.provider,
-        message: `Provider ${registeredRoute.provider} is hidden. Run ./bin/providers enable ${registeredRoute.provider}.`,
-      },
+  const finishActivity = beginRequestActivity();
+  try {
+    if (!requireCodexTransport(request, response)) return;
+    const encoded = await readRequestBody(request);
+    const body = decodeBody(encoded, request.headers["content-encoding"]);
+    const payload = parseBody(body);
+    const requestedModel = typeof payload.model === "string" ? payload.model : "";
+    const registeredRoute = MODEL_BY_SLUG.get(requestedModel);
+    const route = registeredRoute && readProviderSelection().includes(registeredRoute.provider)
+      ? registeredRoute
+      : undefined;
+    if (registeredRoute && !route) {
+      writeJson(response, 409, {
+        error: {
+          type: "provider_not_enabled",
+          provider: registeredRoute.provider,
+          message: `Provider ${registeredRoute.provider} is hidden. Run ./bin/providers enable ${registeredRoute.provider}.`,
+        },
+      });
+      return;
+    }
+    const compactV1 = /\/responses\/compact$/.test(requestUrl.pathname);
+    const compactV2 =
+      route &&
+      Array.isArray(payload.input) &&
+      payload.input.at(-1)?.type === "compaction_trigger";
+
+    const controller = new AbortController();
+    request.once("aborted", () => controller.abort());
+    response.once("close", () => {
+      if (!response.writableEnded) controller.abort();
     });
-    return;
-  }
-  const compactV1 = /\/responses\/compact$/.test(requestUrl.pathname);
-  const compactV2 =
-    route &&
-    Array.isArray(payload.input) &&
-    payload.input.at(-1)?.type === "compaction_trigger";
 
-  const controller = new AbortController();
-  request.once("aborted", () => controller.abort());
-  response.once("close", () => {
-    if (!response.writableEnded) controller.abort();
-  });
+    if (route && (compactV1 || compactV2)) {
+      await handleRoutedCompaction(response, payload, route, controller.signal, compactV2);
+      return;
+    }
 
-  if (route && (compactV1 || compactV2)) {
-    await handleRoutedCompaction(response, payload, route, controller.signal, compactV2);
-    return;
-  }
+    let target;
+    let headers;
+    let routedBody;
+    if (route) {
+      const routed = {
+        ...payload,
+        model: route.gatewayModel,
+        input: normalizeRoutedInput(payload.input),
+      };
+      target = `${GATEWAY_BASE}/responses`;
+      headers = routedHeaders();
+      routedBody = Buffer.from(JSON.stringify(routed), "utf8");
+    } else {
+      const native = { ...payload };
+      if (!compactV1) delete native.previous_response_id;
+      target = nativeTarget(requestUrl.pathname, requestUrl.search);
+      headers = nativeHeaders(request);
+      routedBody = Buffer.from(JSON.stringify(native), "utf8");
+    }
 
-  let target;
-  let headers;
-  let routedBody;
-  if (route) {
-    const routed = {
-      ...payload,
-      model: route.gatewayModel,
-      input: normalizeRoutedInput(payload.input),
-    };
-    target = `${GATEWAY_BASE}/responses`;
-    headers = routedHeaders();
-    routedBody = Buffer.from(JSON.stringify(routed), "utf8");
-  } else {
-    const native = { ...payload };
-    if (!compactV1) delete native.previous_response_id;
-    target = nativeTarget(requestUrl.pathname, requestUrl.search);
-    headers = nativeHeaders(request);
-    routedBody = Buffer.from(JSON.stringify(native), "utf8");
-  }
-
-  const upstream = await fetch(target, {
-    method: "POST",
-    headers,
-    body: routedBody,
-    signal: controller.signal,
-  });
-  await pipeResponse(upstream, response, HOP_BY_HOP_HEADERS);
-  recordUsageEvent({
-    model: requestedModel,
-    provider: route?.provider || "openai",
-    status: upstream.status,
-    durationMs: Date.now() - startedAt,
-  });
-  if (!QUIET) {
-    console.error(
-      `[codex-router] model=${requestedModel || "unknown"} provider=${route?.provider || "openai"} status=${upstream.status}`,
-    );
+    const upstream = await fetch(target, {
+      method: "POST",
+      headers,
+      body: routedBody,
+      signal: controller.signal,
+    });
+    await pipeResponse(upstream, response, HOP_BY_HOP_HEADERS);
+    recordUsageEvent({
+      model: requestedModel,
+      provider: route?.provider || "openai",
+      status: upstream.status,
+      durationMs: Date.now() - startedAt,
+    });
+    if (!QUIET) {
+      console.error(
+        `[codex-router] model=${requestedModel || "unknown"} provider=${route?.provider || "openai"} status=${upstream.status}`,
+      );
+    }
+  } catch (error) {
+    finishActivity(500);
+    throw error;
+  } finally {
+    finishActivity(response.statusCode);
   }
 }
 
@@ -527,6 +562,7 @@ async function handleRequest(request, response) {
       ok: health.ok,
       service: health.service,
       version: health.version,
+      activity: health.activity,
     });
     return;
   }

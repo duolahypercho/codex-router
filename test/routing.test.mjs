@@ -120,10 +120,11 @@ test("router requires the configured path capability before any model route", as
       });
       return;
     }
-    gatewayRequests.push({
-      headers: request.headers,
-      body: await bodyJson(request),
-    });
+    const body = await bodyJson(request);
+    gatewayRequests.push({ headers: request.headers, body });
+    if (body.input === "hold") {
+      await new Promise((resolve) => setTimeout(resolve, 120));
+    }
     json(response, 200, { route: "external" });
   });
   const routerPort = await openPort();
@@ -192,6 +193,16 @@ test("router requires the configured path capability before any model route", as
     assert.equal(gatewayRequests.length, 1);
     assert.equal(gatewayRequests[0].headers.authorization, `Bearer ${INTERNAL_KEY}`);
 
+    const heldRequest = fetch(`${routerBase(routerPort)}/responses`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "deepseek/deepseek-v4-pro", input: "hold" }),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    const generatingHealth = await fetch(`http://127.0.0.1:${routerPort}/health`);
+    assert.equal((await generatingHealth.json()).activity.state, "generating");
+    assert.equal((await heldRequest).status, 200);
+
     const errorSentinel = "SENSITIVE_ERROR_DETAIL_MUST_NOT_ESCAPE";
     const invalidEncoding = await fetch(`${routerBase(routerPort)}/responses`, {
       method: "POST",
@@ -209,7 +220,8 @@ test("router requires the configured path capability before any model route", as
     const publicHealth = await fetch(`http://127.0.0.1:${routerPort}/health`);
     assert.equal(publicHealth.status, 200);
     const publicPayload = await publicHealth.json();
-    assert.deepEqual(Object.keys(publicPayload).sort(), ["ok", "service", "version"]);
+    assert.deepEqual(Object.keys(publicPayload).sort(), ["activity", "ok", "service", "version"]);
+    assert.equal(publicPayload.activity.state, "error");
 
     const protectedHealth = await fetch(`${routerBase(routerPort)}/health`);
     assert.equal(protectedHealth.status, 200);

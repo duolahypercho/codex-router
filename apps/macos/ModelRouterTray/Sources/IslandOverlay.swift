@@ -191,7 +191,7 @@ private struct IslandOverlayView: View {
 
   private var compactContent: some View {
     HStack(spacing: 8) {
-      LiveOrb(active: store.codexActive)
+      LiveOrb(state: store.activityState)
       Text(store.pinnedShortName ?? "Codex")
         .font(.system(size: 12, weight: .semibold, design: .rounded))
         .lineLimit(1)
@@ -206,7 +206,7 @@ private struct IslandOverlayView: View {
   private var peekContent: some View {
     VStack(spacing: 7) {
       HStack(spacing: 9) {
-        LiveOrb(active: store.codexActive)
+        LiveOrb(state: store.activityState)
         VStack(alignment: .leading, spacing: 1) {
           Text(islandModelName)
             .font(.system(size: 12, weight: .semibold, design: .rounded))
@@ -232,7 +232,7 @@ private struct IslandOverlayView: View {
   private var expandedContent: some View {
     VStack(spacing: 12) {
       HStack(spacing: 10) {
-        LiveOrb(active: store.codexActive)
+        LiveOrb(state: store.activityState)
         VStack(alignment: .leading, spacing: 2) {
           Text(islandModelName)
             .font(.system(size: 15, weight: .semibold, design: .rounded))
@@ -304,18 +304,7 @@ private struct IslandOverlayView: View {
   }
 
   private var glow: some View {
-    IslandSilhouette()
-      .stroke(
-        AngularGradient(
-          colors: [.clear, routerAccent.opacity(0.15), routerAccent, .white.opacity(0.8), .clear],
-          center: .center
-        ),
-        lineWidth: store.isRefreshing ? 3 : 1.4
-      )
-      .blur(radius: store.isRefreshing ? 4 : 2)
-      .shadow(color: routerAccent.opacity(store.isRefreshing ? 0.52 : 0.25), radius: 14)
-      .opacity(store.codexActive ? 1 : 0.45)
-      .animation(.easeInOut(duration: 0.3), value: store.isRefreshing)
+    StatusGlow(state: store.activityState)
   }
 
   private var enabledModels: [RouterModel] {
@@ -456,24 +445,60 @@ private struct IslandSilhouette: InsettableShape {
 }
 
 private struct LiveOrb: View {
-  let active: Bool
+  let state: RouterActivityState
   @State private var pulsing = false
 
   var body: some View {
     ZStack {
       Circle()
-        .fill((active ? routerMint : routerMuted).opacity(0.18))
+        .fill(state.tint.opacity(0.2))
         .frame(width: 16, height: 16)
-        .scaleEffect(active && pulsing ? 1.32 : 0.82)
+        .scaleEffect(state == .generating && pulsing ? 1.36 : 0.88)
       Circle()
-        .fill(active ? routerMint : routerMuted)
+        .fill(state.tint)
         .frame(width: 6, height: 6)
+        .shadow(color: state.tint.opacity(0.8), radius: 4)
     }
-    .onAppear {
-      guard active else { return }
-      withAnimation(.easeInOut(duration: 1.4).repeatForever(autoreverses: true)) {
-        pulsing = true
-      }
+    .onAppear { animate() }
+    .onChange(of: state) { _ in animate() }
+  }
+
+  private func animate() {
+    pulsing = false
+    guard state == .generating else { return }
+    withAnimation(.easeInOut(duration: 0.72).repeatForever(autoreverses: true)) {
+      pulsing = true
+    }
+  }
+}
+
+private struct StatusGlow: View {
+  let state: RouterActivityState
+  @State private var pulsing = false
+
+  var body: some View {
+    ZStack {
+      IslandSilhouette()
+        .strokeBorder(state.tint.opacity(0.34), lineWidth: 4)
+        .blur(radius: 3)
+      IslandSilhouette()
+        .strokeBorder(state.tint.opacity(0.96), lineWidth: state == .generating ? 2.2 : 1.5)
+        .shadow(
+          color: state.tint.opacity(state == .generating && pulsing ? 0.9 : 0.55),
+          radius: state == .generating && pulsing ? 16 : 10
+        )
+    }
+    .opacity(state == .generating && pulsing ? 1 : 0.86)
+    .animation(.easeInOut(duration: 0.25), value: state)
+    .onAppear { animate() }
+    .onChange(of: state) { _ in animate() }
+  }
+
+  private func animate() {
+    pulsing = false
+    guard state == .generating else { return }
+    withAnimation(.easeInOut(duration: 0.72).repeatForever(autoreverses: true)) {
+      pulsing = true
     }
   }
 }

@@ -4,8 +4,32 @@ import SwiftUI
 
 let routerAccent = Color(red: 0.38, green: 0.74, blue: 1.00)
 let routerMint = Color(red: 0.38, green: 0.96, blue: 0.80)
+let routerYellow = Color(red: 1.00, green: 0.78, blue: 0.22)
+let routerRed = Color(red: 1.00, green: 0.32, blue: 0.29)
 let routerInk = Color(red: 0.025, green: 0.045, blue: 0.075)
 let routerMuted = Color.white.opacity(0.56)
+
+enum RouterActivityState: String, Decodable {
+  case idle
+  case generating
+  case error
+
+  var tint: Color {
+    switch self {
+    case .idle: return routerMint
+    case .generating: return routerYellow
+    case .error: return routerRed
+    }
+  }
+
+  var label: String {
+    switch self {
+    case .idle: return "IDLE"
+    case .generating: return "WORKING"
+    case .error: return "ERROR"
+    }
+  }
+}
 
 @main
 struct ModelRouterTrayApp: App {
@@ -33,6 +57,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     islandController = IslandWindowController(store: store)
     islandController?.show()
     Task { await store.startPolling() }
+    Task { await store.startActivityPolling() }
   }
 }
 
@@ -46,8 +71,10 @@ final class RouterStore: ObservableObject {
   @Published private(set) var quota = CodexQuota.empty
   @Published private(set) var quotaHistory: [QuotaSample]
   @Published private(set) var pinnedModelSlug: String?
+  @Published private(set) var activityState: RouterActivityState = .idle
 
   private var polling = false
+  private var activityPolling = false
   private let defaults = UserDefaults.standard
 
   init() {
@@ -119,6 +146,20 @@ final class RouterStore: ObservableObject {
     await refreshQuota()
   }
 
+  func startActivityPolling() async {
+    guard !activityPolling else { return }
+    activityPolling = true
+    defer { activityPolling = false }
+    while !Task.isCancelled {
+      await refreshActivity()
+      do {
+        try await Task.sleep(nanoseconds: 750_000_000)
+      } catch {
+        return
+      }
+    }
+  }
+
   func pin(_ model: RouterModel) {
     pinnedModelSlug = model.slug
     defaults.set(model.slug, forKey: "ModelRouterTray.pinnedModel")
@@ -160,6 +201,23 @@ final class RouterStore: ObservableObject {
       if let data = try? JSONEncoder().encode(quotaHistory) {
         defaults.set(data, forKey: "ModelRouterTray.quotaHistory")
       }
+    }
+  }
+
+  private func refreshActivity() async {
+    let configuredPort = ProcessInfo.processInfo.environment["MODEL_ROUTER_PORT"] ?? "4102"
+    guard let url = URL(string: "http://127.0.0.1:\(configuredPort)/health") else {
+      activityState = .error
+      return
+    }
+    var request = URLRequest(url: url)
+    request.timeoutInterval = 2
+    do {
+      let (data, _) = try await URLSession.shared.data(for: request)
+      let health = try JSONDecoder().decode(RouterHealth.self, from: data)
+      activityState = health.activity.state
+    } catch {
+      activityState = .error
     }
   }
 
@@ -213,6 +271,14 @@ final class RouterStore: ObservableObject {
     }
     return root
   }
+}
+
+private struct RouterHealth: Decodable {
+  let activity: RouterActivity
+}
+
+private struct RouterActivity: Decodable {
+  let state: RouterActivityState
 }
 
 private struct RouterError: LocalizedError {
@@ -454,7 +520,7 @@ private struct TrayView: View {
           .foregroundStyle(routerMuted)
       }
       Spacer()
-      StatusBeacon(active: store.codexActive)
+      StatusBeacon(state: store.activityState)
     }
     .padding(.bottom, 15)
   }
@@ -619,7 +685,7 @@ private struct PinnedModelIsland: View {
               .lineLimit(1)
             HStack(spacing: 5) {
               Circle()
-                .fill(target.active ? routerMint : routerMuted)
+                .fill(store.activityState.tint)
                 .frame(width: 5, height: 5)
               Text(sourceLabel(for: model))
                 .font(.system(size: 8, weight: .bold, design: .monospaced))
@@ -865,37 +931,37 @@ private struct ModelRow: View {
 }
 
 private struct StatusBeacon: View {
-  let active: Bool
+  let state: RouterActivityState
   @State private var breathing = false
 
   var body: some View {
     HStack(spacing: 6) {
       ZStack {
         Circle()
-          .fill(active ? routerMint.opacity(0.2) : Color.white.opacity(0.08))
+          .fill(state.tint.opacity(0.2))
           .frame(width: 16, height: 16)
-          .scaleEffect(active && breathing ? 1.3 : 0.88)
+          .scaleEffect(state == .generating && breathing ? 1.3 : 0.88)
         Circle()
-          .fill(active ? routerMint : routerMuted)
+          .fill(state.tint)
           .frame(width: 6, height: 6)
       }
-      Text(active ? "LIVE" : "IDLE")
+      Text(state.label)
         .font(.system(size: 9, weight: .bold, design: .monospaced))
         .tracking(1)
     }
-    .foregroundStyle(active ? routerMint : routerMuted)
+    .foregroundStyle(state.tint)
     .padding(.horizontal, 9)
     .padding(.vertical, 6)
     .background(.ultraThinMaterial, in: Capsule())
     .overlay(Capsule().stroke(Color.white.opacity(0.12), lineWidth: 0.7))
     .onAppear { animate() }
-    .onChange(of: active) { _ in animate() }
+    .onChange(of: state) { _ in animate() }
   }
 
   private func animate() {
     breathing = false
-    guard active else { return }
-    withAnimation(.easeInOut(duration: 1.45).repeatForever(autoreverses: true)) {
+    guard state == .generating else { return }
+    withAnimation(.easeInOut(duration: 0.72).repeatForever(autoreverses: true)) {
       breathing = true
     }
   }
