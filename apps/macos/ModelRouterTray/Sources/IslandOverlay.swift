@@ -211,7 +211,7 @@ private struct IslandOverlayView: View {
         .font(.system(size: 11, weight: .medium, design: .rounded))
         .lineLimit(1)
       Spacer(minLength: 6)
-      Text(store.pinnedUsageText.map { "\($0) left" } ?? "Limit —")
+      Text(store.pinnedUsageText ?? "Usage —")
         .font(.system(size: 10, weight: .medium, design: .monospaced))
         .foregroundStyle(.white.opacity(0.78))
     }
@@ -235,7 +235,7 @@ private struct IslandOverlayView: View {
           Text(primaryMetric)
             .font(.system(size: 18, weight: .semibold, design: .rounded))
             .monospacedDigit()
-          Text("CHATGPT LEFT")
+          Text(primaryLabel)
             .font(.system(size: 7, weight: .semibold, design: .monospaced))
             .tracking(0.7)
             .foregroundStyle(routerMuted)
@@ -271,7 +271,7 @@ private struct IslandOverlayView: View {
       }
 
       HStack(spacing: 8) {
-        MetricTile(title: primaryTitle, value: primaryMetric, detail: primaryDetail, tint: routerAccent)
+        MetricTile(title: primaryTitle, value: primaryTileMetric, detail: primaryDetail, tint: routerAccent)
         MetricTile(title: secondaryTitle, value: secondaryMetric, detail: secondaryDetail, tint: .white.opacity(0.82))
       }
 
@@ -350,17 +350,36 @@ private struct IslandOverlayView: View {
   }
 
   private var primaryMetric: String {
-    guard let remaining = store.accountUsage?.primary?.remainingPercent else { return "—" }
-    return "\(remaining)%"
+    if store.pinnedUsesChatGPTUsage {
+      guard let remaining = store.accountUsage?.primary?.remainingPercent else { return "—" }
+      return "\(remaining)%"
+    }
+    guard store.providerUsage != nil else { return "—" }
+    return compactTokenCount(store.localUsageTotals(days: range.rawValue).tokens)
+  }
+
+  private var primaryLabel: String {
+    store.pinnedUsesChatGPTUsage ? "SUBSCRIPTION LEFT" : "\(range.rawValue)D LOCAL TOKENS"
   }
 
   private var primaryTitle: String {
-    store.accountUsage?.primary?.durationLabel.uppercased() ?? "CHATGPT LIMIT"
+    if store.pinnedUsesChatGPTUsage {
+      return store.accountUsage?.primary?.durationLabel.uppercased() ?? "CHATGPT LIMIT"
+    }
+    return "\(range.rawValue)-DAY REQUESTS"
+  }
+
+  private var primaryTileMetric: String {
+    if store.pinnedUsesChatGPTUsage { return primaryMetric }
+    return "\(store.localUsageTotals(days: range.rawValue).requests)"
   }
 
   private var primaryDetail: String {
-    guard let reset = store.accountUsage?.primary?.resetDate else { return "Native Codex subscription" }
-    return "Resets \(reset.formatted(date: .abbreviated, time: .shortened))"
+    if store.pinnedUsesChatGPTUsage {
+      guard let reset = store.accountUsage?.primary?.resetDate else { return "Native Codex subscription" }
+      return "Resets \(reset.formatted(date: .abbreviated, time: .shortened))"
+    }
+    return "Measured on this Mac"
   }
 
   private var secondaryTitle: String {

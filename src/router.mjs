@@ -23,6 +23,7 @@ import {
 import { MERGED_CATALOG_PATH, PORTS, loopback } from "./paths.mjs";
 import { MODEL_BY_SLUG, providerForModel } from "./model-registry.mjs";
 import { readProviderSelection } from "./provider-selection.mjs";
+import { ResponseUsageTransform } from "./response-usage.mjs";
 import { recordUsageEvent } from "./usage-events.mjs";
 import { VERSION } from "./version.mjs";
 
@@ -531,12 +532,17 @@ async function handleResponses(request, response, requestUrl) {
       body: routedBody,
       signal: controller.signal,
     });
-    await pipeResponse(upstream, response, HOP_BY_HOP_HEADERS);
+    const usageTransform = route
+      ? new ResponseUsageTransform(upstream.headers.get("content-type") || "")
+      : undefined;
+    await pipeResponse(upstream, response, HOP_BY_HOP_HEADERS, usageTransform);
+    const usage = usageTransform?.tokenUsage();
     recordUsageEvent({
       model: requestedModel,
       provider: route?.provider || "openai",
       status: upstream.status,
       durationMs: Date.now() - startedAt,
+      ...usage,
     });
     if (!QUIET) {
       console.error(

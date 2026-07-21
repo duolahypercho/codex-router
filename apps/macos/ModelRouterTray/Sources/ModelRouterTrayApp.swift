@@ -77,6 +77,8 @@ final class RouterStore: ObservableObject {
   @Published private(set) var activityState: RouterActivityState = .idle
   @Published private(set) var accountUsage: CodexAccountUsage?
   @Published private(set) var accountUsageError: String?
+  @Published private(set) var providerUsage: ProviderUsageSnapshot?
+  @Published private(set) var providerUsageError: String?
   @Published private(set) var providerSetup: [String: ProviderSetupState] = [:]
   @Published private(set) var providerOperation: String?
   @Published private(set) var islandVisible: Bool
@@ -116,8 +118,22 @@ final class RouterStore: ObservableObject {
   }
 
   var pinnedUsageText: String? {
-    guard let primary = accountUsage?.primary else { return nil }
-    return "\(primary.remainingPercent)%"
+    if pinnedUsesChatGPTUsage {
+      guard let primary = accountUsage?.primary else { return nil }
+      return "\(primary.remainingPercent)% left"
+    }
+    guard providerUsage != nil else { return nil }
+    let total = localUsageTotals(days: 7).tokens
+    return total > 0 ? "\(compactTokenCount(total)) tok" : "No use"
+  }
+
+  var pinnedUsesChatGPTUsage: Bool {
+    pinnedModel?.provider == "openai"
+  }
+
+  var pinnedProviderUsage: RouterProviderUsage? {
+    guard let provider = pinnedModel?.provider else { return nil }
+    return providerUsage?.providers.first(where: { $0.id == provider })
   }
 
   func startPolling() async {
@@ -178,6 +194,7 @@ final class RouterStore: ObservableObject {
     defer { accountUsagePolling = false }
     while !Task.isCancelled {
       await refreshAccountUsage()
+      await refreshProviderUsage()
       do {
         try await Task.sleep(nanoseconds: 30 * 1_000_000_000)
       } catch {
@@ -193,6 +210,16 @@ final class RouterStore: ObservableObject {
       accountUsageError = nil
     } catch {
       accountUsageError = error.localizedDescription
+    }
+  }
+
+  func refreshProviderUsage() async {
+    do {
+      let output = try await runControl(arguments: ["provider-usage", "--json"])
+      providerUsage = try JSONDecoder().decode(ProviderUsageSnapshot.self, from: output)
+      providerUsageError = nil
+    } catch {
+      providerUsageError = error.localizedDescription
     }
   }
 
@@ -255,10 +282,18 @@ final class RouterStore: ObservableObject {
   }
 
   func dailyUsage(days: Int) -> [DailyUsagePoint] {
-    guard let accountUsage else { return placeholderDailyUsage(days: days) }
-    let indexed = Dictionary(uniqueKeysWithValues: accountUsage.dailyUsageBuckets.map {
-      ($0.startDate, Double($0.tokens))
-    })
+    let indexed: [String: Double]
+    if pinnedUsesChatGPTUsage {
+      guard let accountUsage else { return placeholderDailyUsage(days: days) }
+      indexed = Dictionary(uniqueKeysWithValues: accountUsage.dailyUsageBuckets.map {
+        ($0.startDate, Double($0.tokens))
+      })
+    } else {
+      guard let usage = pinnedProviderUsage else { return placeholderDailyUsage(days: days) }
+      indexed = Dictionary(uniqueKeysWithValues: usage.dailyUsageBuckets.map {
+        ($0.startDate, Double($0.tokens))
+      })
+    }
     let formatter = DateFormatter()
     formatter.locale = Locale(identifier: "en_US_POSIX")
     formatter.calendar = Calendar(identifier: .gregorian)
@@ -268,6 +303,22 @@ final class RouterStore: ObservableObject {
     return (0..<days).map { offset in
       let date = calendar.date(byAdding: .day, value: offset - (days - 1), to: today) ?? today
       return DailyUsagePoint(date: date, tokens: indexed[formatter.string(from: date)] ?? 0)
+    }
+  }
+
+  func localUsageTotals(days: Int) -> (tokens: Double, requests: Int) {
+    guard !pinnedUsesChatGPTUsage, let usage = pinnedProviderUsage else { return (0, 0) }
+    let calendar = Calendar.current
+    let today = calendar.startOfDay(for: .now)
+    let firstDay = calendar.date(byAdding: .day, value: -(days - 1), to: today) ?? today
+    let formatter = DateFormatter()
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.calendar = Calendar(identifier: .gregorian)
+    formatter.dateFormat = "yyyy-MM-dd"
+    return usage.dailyUsageBuckets.reduce(into: (tokens: 0.0, requests: 0)) { totals, bucket in
+      guard let date = formatter.date(from: bucket.startDate), date >= firstDay, date <= today else { return }
+      totals.tokens += Double(bucket.tokens)
+      totals.requests += bucket.requests
     }
   }
 
@@ -500,6 +551,32 @@ struct CodexUsageSummary: Decodable {
   let currentStreakDays: Int?
 }
 
+struct ProviderUsageSnapshot: Decodable {
+  let fetchedAt: String
+  let scope: String
+  let providers: [RouterProviderUsage]
+}
+
+struct RouterProviderUsage: Decodable, Identifiable {
+  let id: String
+  let displayName: String
+  let credentialType: String
+  let scope: String
+  let requests: Int
+  let successfulRequests: Int
+  let meteredRequests: Int
+  let inputTokens: Int64
+  let outputTokens: Int64
+  let totalTokens: Int64
+  let dailyUsageBuckets: [ProviderDailyUsageBucket]
+}
+
+struct ProviderDailyUsageBucket: Decodable {
+  let startDate: String
+  let tokens: Int64
+  let requests: Int
+}
+
 struct RouterTarget: Decodable {
   let target: String
   let configured: Bool
@@ -601,6 +678,10 @@ private struct TrayView: View {
   }
 
   private var accountLabel: String {
+    if !store.pinnedUsesChatGPTUsage {
+      guard let provider = store.pinnedProviderUsage else { return "Provider usage" }
+      return "\(provider.displayName) · \(provider.credentialType.uppercased())"
+    }
     guard let plan = store.accountUsage?.planType else { return "Codex account" }
     return "ChatGPT \(plan.capitalized)"
   }
@@ -608,7 +689,7 @@ private struct TrayView: View {
   private func content(for target: RouterTarget) -> some View {
     ScrollView(showsIndicators: false) {
       VStack(alignment: .leading, spacing: 14) {
-        AccountUsageSection(store: store)
+        ProviderUsageSection(store: store)
         settingRow(
           title: "Dynamic Island",
           detail: "Show live model, limit, and activity status",
@@ -720,6 +801,7 @@ private struct TrayView: View {
         Task {
           await store.refresh()
           await store.refreshAccountUsage()
+          await store.refreshProviderUsage()
           await store.refreshProviderSetup()
         }
       }
@@ -869,7 +951,7 @@ private struct ProviderSetupRow: View {
   }
 }
 
-private struct AccountUsageSection: View {
+private struct ProviderUsageSection: View {
   @ObservedObject var store: RouterStore
   @State private var range: UsageRange = .week
 
@@ -877,27 +959,29 @@ private struct AccountUsageSection: View {
     VStack(alignment: .leading, spacing: 12) {
       HStack(alignment: .firstTextBaseline) {
         VStack(alignment: .leading, spacing: 3) {
-          Text("ChatGPT limit")
+          Text(sectionTitle)
             .font(.system(size: 12, weight: .medium))
           Text(limitDetail)
             .font(.system(size: 9))
             .foregroundStyle(routerMuted)
         }
         Spacer()
-        Text(remainingText)
+        Text(primaryMetric)
           .font(.system(size: 20, weight: .semibold))
           .monospacedDigit()
       }
 
-      GeometryReader { geometry in
-        ZStack(alignment: .leading) {
-          Capsule().fill(Color.primary.opacity(0.10))
-          Capsule()
-            .fill(routerAccent)
-            .frame(width: geometry.size.width * remainingFraction)
+      if store.pinnedUsesChatGPTUsage {
+        GeometryReader { geometry in
+          ZStack(alignment: .leading) {
+            Capsule().fill(Color.primary.opacity(0.10))
+            Capsule()
+              .fill(routerAccent)
+              .frame(width: geometry.size.width * remainingFraction)
+          }
         }
+        .frame(height: 5)
       }
-      .frame(height: 5)
 
       HStack {
         Text("Daily token usage")
@@ -913,14 +997,15 @@ private struct AccountUsageSection: View {
       HStack {
         Text(rangeCaption)
         Spacer()
-        if let streak = store.accountUsage?.summary.currentStreakDays {
+        if store.pinnedUsesChatGPTUsage,
+           let streak = store.accountUsage?.summary.currentStreakDays {
           Text("\(streak)-day streak")
         }
       }
       .font(.system(size: 9))
       .foregroundStyle(routerMuted)
 
-      if let error = store.accountUsageError, store.accountUsage == nil {
+      if let error = usageError {
         Text(error)
           .font(.system(size: 10))
           .foregroundStyle(routerRed)
@@ -930,9 +1015,18 @@ private struct AccountUsageSection: View {
     .padding(.vertical, 2)
   }
 
-  private var remainingText: String {
-    guard let value = store.accountUsage?.primary?.remainingPercent else { return "—" }
-    return "\(value)% left"
+  private var sectionTitle: String {
+    if store.pinnedUsesChatGPTUsage { return "ChatGPT subscription" }
+    return store.pinnedProviderUsage?.displayName ?? "Provider usage"
+  }
+
+  private var primaryMetric: String {
+    if store.pinnedUsesChatGPTUsage {
+      guard let value = store.accountUsage?.primary?.remainingPercent else { return "—" }
+      return "\(value)% left"
+    }
+    guard store.providerUsage != nil else { return "—" }
+    return compactTokenCount(store.localUsageTotals(days: range.rawValue).tokens)
   }
 
   private var remainingFraction: CGFloat {
@@ -940,6 +1034,10 @@ private struct AccountUsageSection: View {
   }
 
   private var limitDetail: String {
+    if !store.pinnedUsesChatGPTUsage {
+      guard let usage = store.pinnedProviderUsage else { return "Loading provider usage…" }
+      return "\(usage.credentialType.uppercased()) usage · measured on this Mac"
+    }
     guard let limit = store.accountUsage?.primary else { return "Loading native Codex usage…" }
     guard let reset = limit.resetDate else { return limit.durationLabel }
     return "\(limit.durationLabel) · resets \(reset.formatted(date: .abbreviated, time: .shortened))"
@@ -947,7 +1045,18 @@ private struct AccountUsageSection: View {
 
   private var rangeCaption: String {
     let total = store.dailyTokens(days: range.rawValue).reduce(0, +)
+    if !store.pinnedUsesChatGPTUsage {
+      let requests = store.localUsageTotals(days: range.rawValue).requests
+      return "\(compactTokenCount(total)) tokens · \(requests) requests over \(range.rawValue) days"
+    }
     return "\(compactTokenCount(total)) tokens over \(range.rawValue) days"
+  }
+
+  private var usageError: String? {
+    if store.pinnedUsesChatGPTUsage {
+      return store.accountUsage == nil ? store.accountUsageError : nil
+    }
+    return store.providerUsage == nil ? store.providerUsageError : nil
   }
 }
 

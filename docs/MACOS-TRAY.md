@@ -18,17 +18,23 @@ default; pinning changes only the Island display, not the model selected inside
 an existing Codex task. Hover the Island for a quick view or click it for
 account usage.
 
-- Native ChatGPT/Codex limits come from the installed Codex app-server. The tray
-  requests only the rate-limit snapshot and daily token buckets; it never reads
-  or copies the ChatGPT credential file.
+- Usage follows the provider of the pinned model. Native GPT models show the
+  ChatGPT subscription limit and daily buckets reported by the installed Codex
+  app-server; the tray never reads or copies the ChatGPT credential file.
+- External OAuth and API providers have separate token and request graphs. They
+  cover only traffic sent through this router on this Mac and are labeled that
+  way; they are not presented as provider-wide billing balances or remaining
+  subscription quotas.
 - Daily token bars can show 7, 30, or 90 days. Seven-day charts label every
   weekday; longer ranges use spaced date ticks while retaining one bar per day.
-  Hover any bar for its full date and exact token count. Account limits refresh
-  every 30 seconds independently of the external provider pinned in the Island.
+  Hover any bar for its full date and exact token count. Usage refreshes every
+  30 seconds and switches immediately when a different provider is pinned.
 - The Island uses green for idle, amber while generating, and red after an
   error. It is shown by default and can be toggled from the tray.
-- Local routed-model events still record only timestamp, model, provider, HTTP
-  status, and duration. Prompts, responses, API keys, and tokens are excluded.
+- Local routed-model events record timestamp, model, provider, HTTP status,
+  duration, and the input/output/total token counts reported by the provider.
+  Prompts, responses, and API keys are never stored. Provider metering begins
+  after installing this version; older events are not guessed or reassigned.
 
 The overlay interaction is inspired by
 [CodexIsland](https://github.com/ericjypark/codex-island): compact information

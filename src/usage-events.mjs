@@ -10,13 +10,37 @@ function safeText(value, fallback) {
   return (text || fallback).slice(0, 160);
 }
 
-export function recordUsageEvent({ model, provider, status, durationMs, at = Date.now() }) {
+function safeTokenCount(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 ? Math.round(number) : undefined;
+}
+
+export function recordUsageEvent({
+  model,
+  provider,
+  status,
+  durationMs,
+  inputTokens,
+  outputTokens,
+  totalTokens,
+  at = Date.now(),
+}) {
   const event = {
+    meteringVersion: 1,
     at: new Date(at).toISOString(),
     model: safeText(model, "unknown"),
     provider: safeText(provider, "unknown"),
     status: Number.isInteger(status) ? status : 0,
     durationMs: Number.isFinite(durationMs) ? Math.max(0, Math.round(durationMs)) : 0,
+    ...(safeTokenCount(inputTokens) !== undefined
+      ? { inputTokens: safeTokenCount(inputTokens) }
+      : {}),
+    ...(safeTokenCount(outputTokens) !== undefined
+      ? { outputTokens: safeTokenCount(outputTokens) }
+      : {}),
+    ...(safeTokenCount(totalTokens) !== undefined
+      ? { totalTokens: safeTokenCount(totalTokens) }
+      : {}),
   };
   try {
     mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 });
@@ -53,13 +77,24 @@ export function recentUsageEvents({ sinceMs = 24 * 60 * 60 * 1000, limit = 1_000
           typeof event.model === "string" &&
           typeof event.provider === "string",
       )
-      .map((event) => ({
-        at: event.at,
-        model: safeText(event.model, "unknown"),
-        provider: safeText(event.provider, "unknown"),
-        status: Number.isInteger(event.status) ? event.status : 0,
-        durationMs: Number.isFinite(event.durationMs) ? Math.max(0, Math.round(event.durationMs)) : 0,
-      }));
+      .map((event) => {
+        const inputTokens = safeTokenCount(event.inputTokens);
+        const outputTokens = safeTokenCount(event.outputTokens);
+        const totalTokens = safeTokenCount(event.totalTokens);
+        return {
+          ...(event.meteringVersion === 1 ? { meteringVersion: 1 } : {}),
+          at: event.at,
+          model: safeText(event.model, "unknown"),
+          provider: safeText(event.provider, "unknown"),
+          status: Number.isInteger(event.status) ? event.status : 0,
+          durationMs: Number.isFinite(event.durationMs)
+            ? Math.max(0, Math.round(event.durationMs))
+            : 0,
+          ...(inputTokens !== undefined ? { inputTokens } : {}),
+          ...(outputTokens !== undefined ? { outputTokens } : {}),
+          ...(totalTokens !== undefined ? { totalTokens } : {}),
+        };
+      });
   } catch {
     return [];
   }

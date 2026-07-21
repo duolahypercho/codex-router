@@ -15,15 +15,22 @@ test("usage events persist only bounded request metadata in a private file", asy
       provider: "grok-oauth",
       status: 200,
       durationMs: 321,
+      inputTokens: 120,
+      outputTokens: 35,
+      totalTokens: 155,
       prompt: "never persisted",
     });
     assert.deepEqual(usage.recentUsageEvents(), [
       {
+        meteringVersion: 1,
         at: usage.recentUsageEvents()[0].at,
         model: "grok-oauth/grok-4.5",
         provider: "grok-oauth",
         status: 200,
         durationMs: 321,
+        inputTokens: 120,
+        outputTokens: 35,
+        totalTokens: 155,
       },
     ]);
     if (process.platform !== "win32") {

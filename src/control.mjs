@@ -212,6 +212,11 @@ async function printAccountUsage() {
   process.stdout.write(`${JSON.stringify(await readCodexAccountUsage(), null, 2)}\n`);
 }
 
+async function printProviderUsage() {
+  const { providerUsageSnapshot } = await import("./provider-usage.mjs");
+  process.stdout.write(`${JSON.stringify(providerUsageSnapshot(), null, 2)}\n`);
+}
+
 async function printProviderOnboarding() {
   const { providerOnboardingSnapshot } = await import("./provider-onboarding.mjs");
   process.stdout.write(`${JSON.stringify(providerOnboardingSnapshot(), null, 2)}\n`);
@@ -259,6 +264,8 @@ if (args.includes("--probe")) {
   runApply();
 } else if (args[0] === "account") {
   await printAccountUsage();
+} else if (args[0] === "provider-usage") {
+  await printProviderUsage();
 } else if (args[0] === "providers") {
   await printProviderOnboarding();
 } else if (args[0] === "install-cli") {
