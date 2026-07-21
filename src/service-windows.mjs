@@ -19,11 +19,18 @@ import {
 
 const effectivePlatform = process.env.CODEX_ROUTER_SERVICE_PLATFORM || process.platform;
 const command = process.argv[2] || "status";
-const taskName = TARGET === "claude" ? "Codex Router - Claude" : "Codex Router";
-const wrapperPath = path.join(
-  STATE_DIR,
-  TARGET === "claude" ? "start-claude-router.cmd" : "start-codex-router.cmd",
-);
+const TASK_NAMES = {
+  codex: "Codex Router",
+  claude: "Codex Router - Claude",
+  cursor: "Codex Router - Cursor",
+};
+const WRAPPER_NAMES = {
+  codex: "start-codex-router.cmd",
+  claude: "start-claude-router.cmd",
+  cursor: "start-cursor-router.cmd",
+};
+const taskName = TASK_NAMES[TARGET];
+const wrapperPath = path.join(STATE_DIR, WRAPPER_NAMES[TARGET]);
 
 if (effectivePlatform !== "win32" && command !== "render") {
   throw new Error("The Task Scheduler service manager runs on Windows only.");

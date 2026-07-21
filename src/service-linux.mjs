@@ -22,7 +22,12 @@ import {
 
 const effectivePlatform = process.env.CODEX_ROUTER_SERVICE_PLATFORM || process.platform;
 const command = process.argv[2] || "status";
-const unitName = TARGET === "claude" ? "codex-router-claude.service" : "codex-router.service";
+const UNIT_NAMES = {
+  codex: "codex-router.service",
+  claude: "codex-router-claude.service",
+  cursor: "codex-router-cursor.service",
+};
+const unitName = UNIT_NAMES[TARGET];
 const unitPath = path.join(
   process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config"),
   "systemd",
