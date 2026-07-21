@@ -26,7 +26,12 @@ const { privateFileIsProtected } = await import("../src/file-security.mjs");
 
 test("provider selection keeps backward compatibility and can hide the final provider", () => {
   try {
-    assert.deepEqual(readProviderSelection(), ["kimi-oauth", "kimi-api", "deepseek"]);
+    assert.deepEqual(readProviderSelection(), [
+      "kimi-oauth",
+      "kimi-api",
+      "deepseek",
+      "chatgpt-oauth",
+    ]);
     process.env.KIMI_API_KEY = "TEST_ENVIRONMENT_ONLY_KEY";
     assert.deepEqual(configuredProviderIds(), []);
     delete process.env.KIMI_API_KEY;

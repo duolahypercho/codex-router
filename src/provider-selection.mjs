@@ -13,6 +13,7 @@ import { protectPrivateFile } from "./file-security.mjs";
 import { PROVIDER_SELECTION_PATH, STATE_DIR, TARGET } from "./paths.mjs";
 import { LISTED_MODELS, PROVIDERS } from "./model-registry.mjs";
 import { kimiOAuthStatus } from "./oauth-status.mjs";
+import { chatgptOAuthStatus } from "./chatgpt-oauth-status.mjs";
 import { credentialStatus } from "./provider-credentials.mjs";
 
 function providerIds() {
@@ -32,6 +33,8 @@ export function configuredProviderIds() {
   for (const provider of PROVIDERS.values()) {
     if (provider.kind === "oauth") {
       if (provider.id === "kimi-oauth" && kimiOAuthStatus().configured) {
+        configured.push(provider.id);
+      } else if (provider.id === "chatgpt-oauth" && chatgptOAuthStatus().configured) {
         configured.push(provider.id);
       }
     } else if (credentialStatus(provider, { persistent: true }).configured) {

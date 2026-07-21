@@ -56,6 +56,8 @@ const commonEnv = {
   MODEL_ROUTER_OAUTH_PORT: String(PORTS.oauth),
   MODEL_ROUTER_API_PORT: String(PORTS.api),
   MODEL_ROUTER_PORT: String(PORTS.router),
+  MODEL_ROUTER_CHATGPT_PORT: String(PORTS.chatgpt),
+  CHATGPT_OAUTH_FORWARD_BASE_URL: loopback(PORTS.chatgpt, "/v1"),
   MODEL_ROUTER_QUIET: "1",
   CODEX_ROUTER_CALLER_KEY: callerKey,
   CODEX_ROUTER_INTERNAL_KEY: internalKey,
@@ -145,6 +147,11 @@ await waitForHealth(loopback(PORTS.api, "/health"), {
   Authorization: `Bearer ${internalKey}`,
 });
 
+const chatgpt = run(process.execPath, [path.join(SOURCE_ROOT, "src", "chatgpt-forwarder.mjs")]);
+await waitForHealth(loopback(PORTS.chatgpt, "/health"), {
+  Authorization: `Bearer ${internalKey}`,
+});
+
 const gateway = run(litellm, [
   "--config",
   LITELLM_CONFIG_PATH,
@@ -179,6 +186,7 @@ console.error(`[${frontendService}] ready (authenticated loopback endpoint)`);
 const result = await Promise.race([
   waitForExit(oauth, "OAuth forwarder"),
   waitForExit(api, "API forwarder"),
+  waitForExit(chatgpt, "ChatGPT forwarder"),
   waitForExit(gateway, "LiteLLM gateway"),
   waitForExit(router, frontend.label),
 ]);
