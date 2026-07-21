@@ -70,8 +70,10 @@ function messageContentParts(content, textType) {
 }
 
 function mapEffort(effort) {
-  const value = { minimal: "low", low: "low", medium: "medium", high: "high", max: "high" }[effort];
-  return value;
+  if (effort === "minimal") return "low";
+  return ["none", "low", "medium", "high", "xhigh", "max"].includes(effort)
+    ? effort
+    : undefined;
 }
 
 // Chat Completions request -> Codex Responses request.

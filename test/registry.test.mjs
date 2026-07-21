@@ -18,7 +18,9 @@ test("provider registry exposes Kimi and every current DeepSeek API model", () =
       "kimi-api/kimi-k3",
       "deepseek/deepseek-v4-flash",
       "deepseek/deepseek-v4-pro",
-      "chatgpt-oauth/gpt-5.6",
+      "chatgpt-oauth/gpt-5.6-sol",
+      "chatgpt-oauth/gpt-5.6-terra",
+      "chatgpt-oauth/gpt-5.6-luna",
     ],
   );
   assert.equal(PROVIDERS.get("deepseek").baseUrl, "https://api.deepseek.com");

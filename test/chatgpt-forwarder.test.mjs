@@ -151,6 +151,21 @@ test("translates Chat Completions to Codex Responses and back (text + tools)", a
     assert.equal(captured.input.at(-1).role, "user");
     assert.equal(captured.input.at(-1).content[0].type, "input_text");
 
+    for (const effort of ["none", "low", "medium", "high", "xhigh", "max"]) {
+      const effortResponse = await fetch(`${base}/v1/chat/completions`, {
+        method: "POST",
+        headers: auth,
+        body: JSON.stringify({
+          model: "gpt-5.6-terra",
+          messages: [{ role: "user", content: "ping" }],
+          reasoning_effort: effort,
+        }),
+      });
+      assert.equal(effortResponse.status, 200);
+      await effortResponse.json();
+      assert.equal(captured.reasoning?.effort, effort);
+    }
+
     // Streaming text.
     const streamResp = await fetch(`${base}/v1/chat/completions`, {
       method: "POST",
