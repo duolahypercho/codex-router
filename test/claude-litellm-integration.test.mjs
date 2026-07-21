@@ -8,6 +8,8 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
+import { callerBaseUrl } from "../src/caller-auth.mjs";
+
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const litellm = path.join(
   root,
@@ -105,7 +107,7 @@ test(
     timeout: 90_000,
   },
   async () => {
-    const [mockPort, routerPort, gatewayPort, oauthPort, apiPort] = await freePorts(5);
+    const [mockPort, routerPort, gatewayPort, oauthPort, apiPort, grokOauthPort] = await freePorts(6);
     const rootDir = mkdtempSync(path.join(os.tmpdir(), "claude-litellm-e2e-"));
     const stateDir = path.join(rootDir, "state");
     mkdirSync(stateDir, { recursive: true, mode: 0o700 });
@@ -254,6 +256,7 @@ test(
         MODEL_ROUTER_GATEWAY_PORT: String(gatewayPort),
         MODEL_ROUTER_OAUTH_PORT: String(oauthPort),
         MODEL_ROUTER_API_PORT: String(apiPort),
+        MODEL_ROUTER_GROK_OAUTH_PORT: String(grokOauthPort),
         KIMI_API_BASE_URL: `http://127.0.0.1:${mockPort}/v1`,
       },
       stdio: ["ignore", "pipe", "pipe"],
@@ -384,6 +387,181 @@ test(
           (message) => message.role === "tool" && message.tool_call_id === "call_inspect",
         ),
       );
+      assert.equal(mockFailure, undefined, mockFailure?.stack);
+    } finally {
+      await stopProcess(stack);
+      await new Promise((resolve) => mock.close(resolve));
+      rmSync(rootDir, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "Codex Responses reaches Anthropic Messages through the real LiteLLM adapter",
+  {
+    skip: !enabled
+      ? "set MODEL_ROUTER_LITELLM_INTEGRATION=1 for the pinned-adapter integration test"
+      : !existsSync(litellm)
+        ? "run ./install.sh --target codex --prepare-only first"
+        : false,
+    timeout: 90_000,
+  },
+  async () => {
+    const [mockPort, routerPort, gatewayPort, oauthPort, apiPort, grokOauthPort] = await freePorts(6);
+    const rootDir = mkdtempSync(path.join(os.tmpdir(), "codex-anthropic-e2e-"));
+    const stateDir = path.join(rootDir, "state");
+    mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+    writeFileSync(path.join(stateDir, "internal-secret"), `${INTERNAL_KEY}\n`, { mode: 0o600 });
+    writeFileSync(path.join(stateDir, "caller-secret"), `${CALLER_KEY}\n`, { mode: 0o600 });
+    writeFileSync(path.join(stateDir, "anthropic-api-key.secret"), `${PROVIDER_KEY}\n`, {
+      mode: 0o600,
+    });
+    writeFileSync(
+      path.join(stateDir, "enabled-providers.json"),
+      `${JSON.stringify({ version: 1, providers: ["anthropic-api"] })}\n`,
+      { mode: 0o600 },
+    );
+
+    const received = [];
+    let mockFailure;
+    const mock = http.createServer(async (request, response) => {
+      try {
+        assert.equal(request.method, "POST");
+        assert.equal(request.url, "/v1/messages");
+        assert.equal(request.headers["x-api-key"], PROVIDER_KEY);
+        assert.equal(request.headers.authorization, undefined);
+        assert.equal(request.headers["anthropic-version"], "2023-06-01");
+        assert.equal(request.headers["chatgpt-account-id"], undefined);
+        const body = await requestJson(request);
+        received.push(body);
+        assert.equal(body.model, "claude-opus-4-8");
+        assert.deepEqual(body.thinking, { type: "adaptive" });
+        assert.deepEqual(body.output_config, { effort: "high" });
+        assert.ok(body.messages.some((message) => message.role === "user"));
+        if (body.stream) {
+          response.writeHead(200, {
+            "Content-Type": "text/event-stream; charset=utf-8",
+            "Cache-Control": "no-cache",
+          });
+          const events = [
+            ["message_start", {
+              type: "message_start",
+              message: {
+                id: "msg_anthropic_codex_stream",
+                type: "message",
+                role: "assistant",
+                model: "claude-opus-4-8",
+                content: [],
+                stop_reason: null,
+                stop_sequence: null,
+                usage: { input_tokens: 8, output_tokens: 0 },
+              },
+            }],
+            ["content_block_start", {
+              type: "content_block_start",
+              index: 0,
+              content_block: { type: "text", text: "" },
+            }],
+            ["content_block_delta", {
+              type: "content_block_delta",
+              index: 0,
+              delta: { type: "text_delta", text: "ANTHROPIC_CODEX_STREAM_OK" },
+            }],
+            ["content_block_stop", { type: "content_block_stop", index: 0 }],
+            ["message_delta", {
+              type: "message_delta",
+              delta: { stop_reason: "end_turn", stop_sequence: null },
+              usage: { output_tokens: 5 },
+            }],
+            ["message_stop", { type: "message_stop" }],
+          ];
+          for (const [event, data] of events) {
+            response.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+          }
+          response.end();
+          return;
+        }
+        sendJson(response, 200, {
+          id: "msg_anthropic_codex_e2e",
+          type: "message",
+          role: "assistant",
+          model: "claude-opus-4-8",
+          content: [{ type: "text", text: "ANTHROPIC_CODEX_REPO_OK" }],
+          stop_reason: "end_turn",
+          stop_sequence: null,
+          usage: { input_tokens: 8, output_tokens: 5 },
+        });
+      } catch (error) {
+        mockFailure = error instanceof Error ? error : new Error(String(error));
+        if (!response.headersSent) {
+          sendJson(response, 400, { error: { message: "mock validation failed" } });
+        } else if (!response.writableEnded) {
+          response.destroy();
+        }
+      }
+    });
+    await new Promise((resolve, reject) => {
+      mock.once("error", reject);
+      mock.listen(mockPort, "127.0.0.1", resolve);
+    });
+
+    const stack = spawn(process.execPath, [path.join(root, "src", "start.mjs")], {
+      cwd: root,
+      env: {
+        ...process.env,
+        MODEL_ROUTER_TARGET: "codex",
+        MODEL_ROUTER_STATE_DIR: stateDir,
+        MODEL_ROUTER_PORT: String(routerPort),
+        MODEL_ROUTER_GATEWAY_PORT: String(gatewayPort),
+        MODEL_ROUTER_OAUTH_PORT: String(oauthPort),
+        MODEL_ROUTER_API_PORT: String(apiPort),
+        MODEL_ROUTER_GROK_OAUTH_PORT: String(grokOauthPort),
+        ANTHROPIC_API_BASE_URL: `http://127.0.0.1:${mockPort}/v1`,
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stackOutput = "";
+    stack.stdout.setEncoding("utf8");
+    stack.stderr.setEncoding("utf8");
+    stack.stdout.on("data", (chunk) => {
+      stackOutput += chunk;
+    });
+    stack.stderr.on("data", (chunk) => {
+      stackOutput += chunk;
+    });
+
+    try {
+      await waitForRouter(routerPort, stack, () => stackOutput);
+      const response = await fetch(`${callerBaseUrl(routerPort, CALLER_KEY)}/responses`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "anthropic-api/claude-opus-4.8",
+          input: "Reply with the repository marker.",
+          reasoning: { effort: "high", summary: "auto" },
+          stream: false,
+        }),
+      });
+      const body = await response.text();
+      assert.equal(response.status, 200, `${mockFailure?.stack || body}\n${stackOutput}`);
+      assert.match(body, /ANTHROPIC_CODEX_REPO_OK/);
+
+      const streamed = await fetch(`${callerBaseUrl(routerPort, CALLER_KEY)}/responses`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "anthropic-api/claude-opus-4.8",
+          input: "Stream the repository marker.",
+          reasoning: { effort: "high", summary: "auto" },
+          stream: true,
+        }),
+      });
+      const streamedBody = await streamed.text();
+      assert.equal(streamed.status, 200, `${mockFailure?.stack || streamedBody}\n${stackOutput}`);
+      assert.match(streamedBody, /"type":"response\.created"/);
+      assert.match(streamedBody, /ANTHROPIC_CODEX_STREAM_OK/);
+      assert.match(streamedBody, /"type":"response\.completed"/);
+      assert.equal(received.length, 2);
       assert.equal(mockFailure, undefined, mockFailure?.stack);
     } finally {
       await stopProcess(stack);

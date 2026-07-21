@@ -342,6 +342,7 @@ test("router preserves native auth and isolates every external route", async () 
       ["deepseek/deepseek-v4-flash", "deepseek-v4-flash"],
       ["deepseek/deepseek-v4-pro", "deepseek-v4-pro"],
       ["grok-api/grok-4.5", "grok-api-grok-4-5"],
+      ["anthropic-api/claude-opus-4.8", "anthropic-api-claude-opus-4-8"],
     ]) {
       const response = await fetch(`${routerBase(routerPort)}/responses`, {
         method: "POST",
@@ -602,6 +603,72 @@ test("API forwarder routes Grok 4.5 with supported xAI reasoning effort", async 
     assert.equal(request.body.presence_penalty, undefined);
     assert.equal(request.body.frequency_penalty, undefined);
     assert.equal(request.body.stop, undefined);
+  } finally {
+    await stopChild(forwarder);
+    await closeServer(upstream.server);
+  }
+});
+
+test("API forwarder isolates Anthropic credentials on the native Messages route", async () => {
+  const upstreamRequests = [];
+  const upstream = await mockServer(async (request, response) => {
+    upstreamRequests.push({
+      url: request.url,
+      headers: request.headers,
+      body: await bodyJson(request),
+    });
+    json(response, 200, {
+      id: "msg_test",
+      type: "message",
+      role: "assistant",
+      model: "claude-opus-4-8",
+      content: [{ type: "text", text: "ANTHROPIC_ROUTE_OK" }],
+      stop_reason: "end_turn",
+      stop_sequence: null,
+      usage: { input_tokens: 4, output_tokens: 3 },
+    });
+  });
+  const forwarderPort = await openPort();
+  const forwarder = run("api-forwarder.mjs", {
+    CODEX_ROUTER_API_PORT: String(forwarderPort),
+    ANTHROPIC_API_BASE_URL: `http://127.0.0.1:${upstream.port}/v1`,
+    ANTHROPIC_API_KEY: "TEST_ANTHROPIC_API_KEY",
+    CODEX_ROUTER_QUIET: "1",
+  });
+
+  try {
+    await waitFor(`http://127.0.0.1:${forwarderPort}/health`, forwarder, {
+      Authorization: `Bearer ${INTERNAL_KEY}`,
+    });
+    const response = await fetch(
+      `http://127.0.0.1:${forwarderPort}/v1/messages`,
+      {
+        method: "POST",
+        headers: {
+          "x-api-key": INTERNAL_KEY,
+          "anthropic-version": "2023-06-01",
+          "ChatGPT-Account-Id": "must-not-forward",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "anthropic-api-claude-opus-4-8",
+          max_tokens: 64,
+          reasoning_effort: "high",
+          messages: [{ role: "user", content: "test" }],
+        }),
+      },
+    );
+    assert.equal(response.status, 200);
+    const request = upstreamRequests[0];
+    assert.equal(request.url, "/v1/messages");
+    assert.equal(request.headers.authorization, undefined);
+    assert.equal(request.headers["x-api-key"], "TEST_ANTHROPIC_API_KEY");
+    assert.equal(request.headers["anthropic-version"], "2023-06-01");
+    assert.equal(request.headers["chatgpt-account-id"], undefined);
+    assert.equal(request.body.model, "claude-opus-4-8");
+    assert.equal(request.body.reasoning_effort, undefined);
+    assert.deepEqual(request.body.thinking, { type: "adaptive" });
+    assert.deepEqual(request.body.output_config, { effort: "high" });
   } finally {
     await stopChild(forwarder);
     await closeServer(upstream.server);

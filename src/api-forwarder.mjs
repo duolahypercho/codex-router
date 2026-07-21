@@ -54,7 +54,7 @@ function deepSeekEffort(value) {
   return ["xhigh", "max", "ultra"].includes(value) ? "max" : "high";
 }
 
-function normalizeBody(buffer, contentType) {
+function normalizeBody(buffer, contentType, route) {
   if (!buffer.length || !String(contentType || "").includes("application/json")) {
     const error = new Error("API-provider requests require a JSON body.");
     error.status = 400;
@@ -70,6 +70,12 @@ function normalizeBody(buffer, contentType) {
   const provider = model && providerForModel(model);
   if (!model || provider?.kind !== "openai-compatible") {
     const error = new Error(`Unknown API gateway model: ${String(payload.model || "missing")}`);
+    error.status = 400;
+    throw error;
+  }
+  const expectedRoute = provider.protocol === "anthropic" ? "/messages" : "/chat/completions";
+  if (route !== expectedRoute) {
+    const error = new Error(`Model ${model.gatewayModel} does not support ${route}.`);
     error.status = 400;
     throw error;
   }
@@ -95,15 +101,19 @@ function normalizeBody(buffer, contentType) {
     delete payload.presence_penalty;
     delete payload.frequency_penalty;
     delete payload.stop;
+  } else if (model.requestProfile === "anthropic-reasoning") {
+    delete payload.reasoning_effort;
+    payload.thinking = { type: "adaptive" };
+    payload.output_config = { effort: "high" };
   }
   return { body: Buffer.from(JSON.stringify(payload), "utf8"), model, provider };
 }
 
-function upstreamHeaders(requestHeaders, body, apiKey) {
+function upstreamHeaders(requestHeaders, body, apiKey, provider) {
   const headers = {};
   for (const [name, value] of Object.entries(requestHeaders)) {
     const lower = name.toLowerCase();
-    if (HOP_BY_HOP_HEADERS.has(lower) || lower === "authorization") continue;
+    if (HOP_BY_HOP_HEADERS.has(lower) || lower === "authorization" || lower === "x-api-key") continue;
     if (lower.startsWith("x-msh-") || lower.startsWith("x-codex-")) continue;
     if (lower.startsWith("x-openai-") || lower === "chatgpt-account-id") continue;
     if (lower === "originator" || lower === "user-agent" || lower === "accept-encoding") {
@@ -111,7 +121,12 @@ function upstreamHeaders(requestHeaders, body, apiKey) {
     }
     if (value !== undefined) headers[name] = Array.isArray(value) ? value.join(", ") : value;
   }
-  headers.Authorization = `Bearer ${apiKey}`;
+  if (provider.protocol === "anthropic") {
+    headers["x-api-key"] = apiKey;
+    headers["anthropic-version"] ||= "2023-06-01";
+  } else {
+    headers.Authorization = `Bearer ${apiKey}`;
+  }
   headers["User-Agent"] = `codex-router/${VERSION}`;
   headers["Accept-Encoding"] = "identity";
   if (body.length) headers["Content-Length"] = String(body.length);
@@ -161,7 +176,7 @@ async function handleRequest(request, response) {
     localModels(response);
     return;
   }
-  if (request.method !== "POST" || route !== "/chat/completions") {
+  if (request.method !== "POST" || !["/chat/completions", "/messages"].includes(route)) {
     writeJson(response, 404, {
       error: { type: "proxy_route_not_found", message: "Unsupported API-provider route." },
     });
@@ -169,7 +184,7 @@ async function handleRequest(request, response) {
   }
 
   const original = await readRequestBody(request);
-  const normalized = normalizeBody(original, request.headers["content-type"]);
+  const normalized = normalizeBody(original, request.headers["content-type"], route);
   const credential = resolveProviderCredential(normalized.provider);
   if (!credential) {
     const setup = credentialStatus(normalized.provider).setup;
@@ -191,7 +206,7 @@ async function handleRequest(request, response) {
   const target = `${providerBaseUrl(normalized.provider)}${route}${requestUrl.search}`;
   const upstream = await fetch(target, {
     method: request.method,
-    headers: upstreamHeaders(request.headers, normalized.body, credential.value),
+    headers: upstreamHeaders(request.headers, normalized.body, credential.value, normalized.provider),
     body: normalized.body,
     signal: controller.signal,
   });

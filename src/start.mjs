@@ -64,6 +64,7 @@ const commonEnv = {
   KIMI_INTERNAL_KEY: internalKey,
   KIMI_OAUTH_FORWARD_BASE_URL: loopback(PORTS.oauth, "/v1"),
   CODEX_ROUTER_API_FORWARD_BASE_URL: loopback(PORTS.api, "/v1"),
+  CODEX_ROUTER_ANTHROPIC_FORWARD_BASE_URL: loopback(PORTS.api),
   CODEX_ROUTER_GATEWAY_BASE_URL: loopback(PORTS.gateway, "/v1"),
   CODEX_ROUTER_OAUTH_HEALTH_URL: loopback(PORTS.oauth, "/health"),
   CODEX_ROUTER_API_HEALTH_URL: loopback(PORTS.api, "/health"),
@@ -101,9 +102,13 @@ function waitForExit(child, label) {
   });
 }
 
-async function waitForHealth(url, headers = {}, timeoutMs = 30_000, expectedService) {
+async function waitForHealth(url, headers = {}, timeoutMs = 30_000, expectedService, child) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
+    if (child && (child.exitCode !== null || child.signalCode !== null)) {
+      throw new Error(`Service exited before becoming healthy at ${url}`);
+    }
+    if (shuttingDown) throw new Error("Service startup was interrupted.");
     try {
       const response = await fetch(url, {
         headers,
@@ -135,66 +140,82 @@ function stopChildren() {
   }, 3_000).unref();
 }
 
-for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, stopChildren);
-
-const oauth = run(process.execPath, [path.join(SOURCE_ROOT, "src", "oauth-forwarder.mjs")]);
-await waitForHealth(loopback(PORTS.oauth, "/health"), {
-  Authorization: `Bearer ${internalKey}`,
-});
-
-const api = run(process.execPath, [path.join(SOURCE_ROOT, "src", "api-forwarder.mjs")]);
-await waitForHealth(loopback(PORTS.api, "/health"), {
-  Authorization: `Bearer ${internalKey}`,
-});
-
-const grokOauth = run(process.execPath, [path.join(SOURCE_ROOT, "src", "grok-oauth-forwarder.mjs")]);
-await waitForHealth(loopback(PORTS.grokOauth, "/health"), {
-  Authorization: `Bearer ${internalKey}`,
-});
-
-const gateway = run(litellm, [
-  "--config",
-  LITELLM_CONFIG_PATH,
-  "--host",
-  "127.0.0.1",
-  "--port",
-  String(PORTS.gateway),
-]);
-await waitForHealth(
-  loopback(PORTS.gateway, "/health/liveliness"),
-  { Authorization: `Bearer ${internalKey}` },
-);
-
 const FRONTENDS = {
   codex: { script: "router.mjs", service: "codex-router", label: "Codex router" },
   claude: { script: "claude-router.mjs", service: "claude-router", label: "Claude router" },
   cursor: { script: "cursor-router.mjs", service: "cursor-router", label: "Cursor router" },
 };
-const frontend = FRONTENDS[TARGET];
-const frontendScript = frontend.script;
-const frontendService = frontend.service;
-const router = run(process.execPath, [path.join(SOURCE_ROOT, "src", frontendScript)]);
-await waitForHealth(
-  loopback(PORTS.router, "/health"),
-  {},
-  30_000,
-  frontendService,
-);
+for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, stopChildren);
 
-console.error(`[${frontendService}] ready (authenticated loopback endpoint)`);
+async function main() {
+  const oauth = run(process.execPath, [path.join(SOURCE_ROOT, "src", "oauth-forwarder.mjs")]);
+  await waitForHealth(loopback(PORTS.oauth, "/health"), {
+    Authorization: `Bearer ${internalKey}`,
+  }, 30_000, undefined, oauth);
 
-const result = await Promise.race([
-  waitForExit(oauth, "OAuth forwarder"),
-  waitForExit(api, "API forwarder"),
-  waitForExit(grokOauth, "Grok OAuth forwarder"),
-  waitForExit(gateway, "LiteLLM gateway"),
-  waitForExit(router, frontend.label),
-]);
-if (!shuttingDown) {
-  console.error(
-    `[${frontendService}] ${result.label} exited (code=${String(result.code)}, signal=${String(result.signal)}).`,
+  const api = run(process.execPath, [path.join(SOURCE_ROOT, "src", "api-forwarder.mjs")]);
+  await waitForHealth(loopback(PORTS.api, "/health"), {
+    Authorization: `Bearer ${internalKey}`,
+  }, 30_000, undefined, api);
+
+  const grokOauth = run(process.execPath, [path.join(SOURCE_ROOT, "src", "grok-oauth-forwarder.mjs")]);
+  await waitForHealth(loopback(PORTS.grokOauth, "/health"), {
+    Authorization: `Bearer ${internalKey}`,
+  }, 30_000, undefined, grokOauth);
+
+  const gateway = run(litellm, [
+    "--config",
+    LITELLM_CONFIG_PATH,
+    "--host",
+    "127.0.0.1",
+    "--port",
+    String(PORTS.gateway),
+  ]);
+  await waitForHealth(
+    loopback(PORTS.gateway, "/health/liveliness"),
+    { Authorization: `Bearer ${internalKey}` },
+    30_000,
+    undefined,
+    gateway,
   );
+
+  const frontend = FRONTENDS[TARGET];
+  const frontendService = frontend.service;
+  const router = run(process.execPath, [path.join(SOURCE_ROOT, "src", frontend.script)]);
+  await waitForHealth(
+    loopback(PORTS.router, "/health"),
+    {},
+    30_000,
+    frontendService,
+    router,
+  );
+
+  console.error(`[${frontendService}] ready (authenticated loopback endpoint)`);
+  const result = await Promise.race([
+    waitForExit(oauth, "OAuth forwarder"),
+    waitForExit(api, "API forwarder"),
+    waitForExit(grokOauth, "Grok OAuth forwarder"),
+    waitForExit(gateway, "LiteLLM gateway"),
+    waitForExit(router, frontend.label),
+  ]);
+  if (!shuttingDown) {
+    console.error(
+      `[${frontendService}] ${result.label} exited (code=${String(result.code)}, signal=${String(result.signal)}).`,
+    );
+  }
+  return result.code || 0;
 }
-stopChildren();
-await Promise.all(children.map((child) => waitForExit(child, "child")));
-process.exit(result.code || 0);
+
+let exitCode = 0;
+try {
+  exitCode = await main();
+} catch (error) {
+  if (!shuttingDown) {
+    console.error(`[model-router] ${error instanceof Error ? error.message : String(error)}`);
+    exitCode = 1;
+  }
+} finally {
+  stopChildren();
+  await Promise.all(children.map((child) => waitForExit(child, "child")));
+}
+process.exit(exitCode);

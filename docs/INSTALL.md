@@ -90,6 +90,7 @@ API-key providers use hidden prompts:
 ./bin/provider-key kimi-api set
 ./bin/provider-key deepseek set
 ./bin/provider-key grok-api set
+./bin/provider-key anthropic-api set
 ```
 
 Grok OAuth uses the official Grok CLI session:
@@ -110,9 +111,10 @@ Windows:
 ./codex-router.ps1 provider-key kimi-api set
 ./codex-router.ps1 provider-key deepseek set
 ./codex-router.ps1 provider-key grok-api set
+./codex-router.ps1 provider-key anthropic-api set
 ```
 
-Kimi OAuth, Kimi Platform, DeepSeek, and xAI are separate account and billing
+Kimi OAuth, Kimi Platform, DeepSeek, xAI, and Anthropic are separate account and billing
 systems. Never put a credential in chat, a command argument, shell history,
 the provider registry, or a tracked file.
 
@@ -128,6 +130,7 @@ Or choose an exact set:
 ./install.sh --auto --providers kimi-oauth
 ./install.sh --kimi-api-key --auto
 ./install.sh --deepseek-api-key --auto
+./install.sh --anthropic-api-key --auto
 ./install.sh --auto --providers kimi-oauth,kimi-api,deepseek
 ```
 

@@ -134,6 +134,7 @@ if [ "$target" = claude ]; then
   echo "Kimi API key: $repo_dir/bin/model-router claude provider-key kimi-api set"
   echo "DeepSeek API key: $repo_dir/bin/model-router claude provider-key deepseek set"
   echo "xAI API key: $repo_dir/bin/model-router claude provider-key grok-api set"
+  echo "Anthropic API key: $repo_dir/bin/model-router claude provider-key anthropic-api set"
 elif [ "$target" = cursor ]; then
   echo "Installed the local OpenAI-compatible gateway for Cursor."
   echo "Run '$repo_dir/bin/model-router cursor setup' for the Base URL, key, and model"
@@ -141,10 +142,12 @@ elif [ "$target" = cursor ]; then
   echo "Kimi API key: $repo_dir/bin/model-router cursor provider-key kimi-api set"
   echo "DeepSeek API key: $repo_dir/bin/model-router cursor provider-key deepseek set"
   echo "xAI API key: $repo_dir/bin/model-router cursor provider-key grok-api set"
+  echo "Anthropic API key: $repo_dir/bin/model-router cursor provider-key anthropic-api set"
 else
   echo "Installed the selected external model routes for Codex."
   echo "Fully quit and reopen Codex, then start a new task."
   echo "Kimi API key: $repo_dir/bin/provider-key kimi-api set"
   echo "DeepSeek API key: $repo_dir/bin/provider-key deepseek set"
   echo "xAI API key: $repo_dir/bin/provider-key grok-api set"
+  echo "Anthropic API key: $repo_dir/bin/provider-key anthropic-api set"
 fi

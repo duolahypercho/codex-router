@@ -316,6 +316,11 @@ async function accountUsageFor(providerId, fetchImpl) {
         ? localOnly("xAI API account balance is unavailable; showing router traffic")
         : { status: "not-configured", source: "official-api", metrics: [] };
     }
+    if (providerId === "anthropic-api") {
+      return resolveProviderCredential("anthropic-api")
+        ? localOnly("Anthropic API account balance is unavailable; showing router traffic")
+        : { status: "not-configured", source: "official-api", metrics: [] };
+    }
     return localOnly("Showing router traffic");
   } catch (error) {
     return {

@@ -37,7 +37,6 @@ test("normalizes Kimi weekly and five-hour quota windows", () => {
     },
   ]);
 });
-
 test("normalizes DeepSeek paid and granted API balance", () => {
   assert.deepEqual(deepSeekBalanceMetrics({
     is_available: true,
@@ -151,4 +150,3 @@ test("normalizes Grok prepaid credits and pay-as-you-go balance", () => {
     },
   ]);
 });
-

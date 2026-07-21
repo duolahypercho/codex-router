@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Added a credential-isolated Anthropic API provider with Claude Opus 4.8 in
+  the Codex picker, native Anthropic Messages forwarding, secure key setup,
+  tray controls, and a real LiteLLM-to-mock-Anthropic Codex integration test.
+- Added the macOS menu-bar control panel, all-provider usage grid, and optional
+  Dynamic-Island-style activity overlay with secure provider onboarding.
+- Added the isolated Cursor target and corrected its PowerShell installer path.
+- Fixed partial startup failures so already-running forwarders are terminated,
+  and isolated all six ports in the real LiteLLM integration test.
 - Grok OAuth account usage now reads weekly/monthly credit limits from the official Grok CLI billing endpoint.
 - Rewrote routed-model catalog identity text so external models no longer
   claim to be based on GPT-5 in Codex `base_instructions`.

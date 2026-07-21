@@ -1,12 +1,13 @@
 # Codex Router
 
-Use Kimi, DeepSeek, and future OpenAI-compatible models inside supported AI
-desktop apps through one local, credential-isolating router.
+Use Anthropic, Kimi, DeepSeek, xAI, and future external models inside supported
+AI desktop apps through one local, credential-isolating router.
 
 | Target | Integration | Status |
 | --- | --- | --- |
 | Codex App and CLI | Responses API plus native model-catalog merge | Stable |
 | Claude Desktop | Third-party Anthropic Messages gateway | Experimental |
+| Cursor | Manual OpenAI-compatible base URL | Experimental |
 
 The targets share a provider registry and translation layer, but keep separate
 ports, state, caller keys, provider selection, services, and app configuration.
@@ -97,6 +98,7 @@ Desktop distribution.
 | DeepSeek V4 Pro (API) | `deepseek/deepseek-v4-pro` | DeepSeek API key |
 | Grok 4.5 (OAuth) | `grok-oauth/grok-4.5` | Official Grok CLI OAuth session |
 | Grok 4.5 (API) | `grok-api/grok-4.5` | Separately billed xAI API key |
+| Claude Opus 4.8 (API) | `anthropic-api/claude-opus-4.8` | Separately billed Anthropic API key |
 
 Grok OAuth reuses the official CLI credential at `~/.grok/auth.json` and sends
 it only to xAI's documented Grok CLI inference proxy. Install the official CLI
@@ -122,6 +124,7 @@ selection and API-key files:
 ./bin/model-router claude providers
 ./bin/model-router claude providers enable deepseek
 ./bin/model-router claude provider-key deepseek set
+./bin/model-router codex provider-key anthropic-api set
 ```
 
 On Windows, use `./model-router.ps1` with the same target and command.
@@ -209,6 +212,8 @@ the all-provider overview and configuration.
 ./bin/model-router claude disable
 ./bin/model-router claude enable
 ./bin/model-router claude uninstall
+./bin/model-router cursor setup --guided
+./bin/model-router cursor doctor
 ```
 
 The optional live check makes one small request per selected provider and may
@@ -259,9 +264,9 @@ flowchart LR
 ```
 
 Codex sends the Responses API; Claude sends the Anthropic Messages API.
-LiteLLM translates either contract to the providers' OpenAI-compatible Chat
-Completions APIs, including streaming and tool-call shapes. Every listener binds
-to `127.0.0.1`.
+LiteLLM translates either contract to each provider's native protocol,
+including OpenAI-compatible Chat Completions and Anthropic Messages, with
+streaming and tool-call shapes preserved. Every listener binds to `127.0.0.1`.
 
 Both frontends authenticate the caller before reading model traffic. They pass
 only a different random internal key to LiteLLM. The final forwarder discards
@@ -277,9 +282,9 @@ provider does not implement.
 ## Add future providers and models
 
 [`config/providers.json`](config/providers.json) is the validated registry for
-provider metadata, picker entries, upstream IDs, context limits, request
-profiles, modalities, and credential sources. Standard OpenAI-compatible
-providers share one credential-isolating forwarder and automatically become
+provider metadata, picker entries, upstream IDs, API protocols, context limits, request
+profiles, modalities, and credential sources. Tested OpenAI-compatible and
+Anthropic API providers share one credential-isolating forwarder and become
 available to every implemented app target after compatibility tests pass.
 
 Discovery does not publish every upstream model blindly:
@@ -308,6 +313,8 @@ target. See [Development](docs/DEVELOPMENT.md) for the registry contract.
 References: [Kimi Code CLI OAuth](https://www.kimi.com/help/kimi-code/cli-getting-started),
 [Kimi K3 API](https://platform.kimi.com/docs/guide/kimi-k3-quickstart),
 [DeepSeek model API](https://api-docs.deepseek.com/api/list-models),
+[Anthropic models](https://platform.claude.com/docs/en/about-claude/models/overview),
+[Anthropic Messages API](https://platform.claude.com/docs/en/api/messages),
 [Codex advanced configuration](https://learn.chatgpt.com/docs/config-file/config-advanced),
 [Claude Desktop third-party gateway](https://claude.com/docs/third-party/claude-desktop/gateway),
 and [opencodex](https://github.com/lidge-jun/opencodex).

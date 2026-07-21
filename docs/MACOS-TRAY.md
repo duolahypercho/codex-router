@@ -28,8 +28,9 @@ Hover the Island for a quick view or click it for expanded account usage.
   usage API with the existing CLI session. Grok OAuth reads weekly or monthly
   credit usage from the official Grok CLI chat-proxy billing endpoint with the
   existing `~/.grok/auth.json` session. DeepSeek and Kimi Platform API show
-  balance from their official API-key endpoints. The app does not silently
-  import browser cookies.
+  balance from their official API-key endpoints. Anthropic and xAI API keys
+  use the clearly labeled local-router traffic fallback because those account
+  balances are not exposed here. The app does not silently import browser cookies.
 - Local graphs cover only traffic sent through this router on this Mac and are
   labeled that way. A local graph is never presented as provider-wide billing
   or remaining subscription quota.

@@ -5,7 +5,7 @@
 - `config/providers.json` is the provider and model registry.
 - `src/model-registry.mjs` validates and indexes that registry.
 - `src/catalog.mjs` merges listed registry models with native Codex models.
-- `src/litellm-config.mjs` generates every Responses-to-Chat-Completions route.
+- `src/litellm-config.mjs` generates every provider translation route.
 - `src/router.mjs` dispatches native and namespaced external model IDs.
 - `src/claude-router.mjs` exposes the authenticated Anthropic Messages target.
 - `src/claude-config-manager.mjs` owns one reversible local Claude config entry.
@@ -18,10 +18,10 @@
 - `src/service-*.mjs` install per-user services for macOS, Linux, and Windows.
 - `src/paths.mjs` isolates app targets, state roots, ports, and service names.
 
-## Add an OpenAI-compatible provider
+## Add an API-key provider
 
 1. Add a provider object to `config/providers.json` with a unique lowercase ID,
-   API base URL, environment variable, protected key filename, and optional
+   API base URL, protocol when it is not OpenAI-compatible, environment variable, protected key filename, and optional
    Keychain service.
 2. Add one model object per upstream model. Public slugs should be namespaced as
    `provider/model`, and internal `gatewayModel` values must be unique.
@@ -38,9 +38,10 @@
    image input, tool calls/results, context behavior, and sanitized failures.
 9. Update the README model table and provider-specific setup documentation.
 
-The shared API forwarder strips Codex authentication before injecting the
-selected provider key. Do not create a new listener merely to add another
-standard OpenAI-compatible provider.
+The shared API forwarder strips host and internal authentication before
+injecting the selected provider key. It supports the registry's tested
+OpenAI-compatible and Anthropic protocols; do not create a new listener merely
+to add another provider using one of those protocols.
 
 OAuth schemes usually need a dedicated adapter because refresh and identity
 rules are provider-specific. Never infer that an API key can replace an OAuth

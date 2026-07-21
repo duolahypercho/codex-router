@@ -2,7 +2,7 @@
 param(
   [switch]$CheckoutInstall,
   [switch]$PrepareOnly,
-  [ValidateSet("codex", "claude")]
+  [ValidateSet("codex", "claude", "cursor")]
   [string]$Target = "codex",
   [switch]$Guided,
   [switch]$Auto,
@@ -17,7 +17,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $env:MODEL_ROUTER_TARGET = $Target
-if ($Target -eq "claude" -and $MigrateKnown) {
+if ($Target -ne "codex" -and $MigrateKnown) {
   throw "-MigrateKnown applies only to the Codex target."
 }
 $PreviousRevision = $null
@@ -92,7 +92,11 @@ if (-not $CheckoutInstall) {
     exit $LASTEXITCODE
   }
 
-  $SetupScript = if ($Target -eq "claude") { "src\claude-setup.mjs" } else { "src\setup.mjs" }
+  $SetupScript = switch ($Target) {
+    "claude" { "src\claude-setup.mjs" }
+    "cursor" { "src\cursor-setup.mjs" }
+    default { "src\setup.mjs" }
+  }
   $SetupArguments = @((Join-Path $Repository $SetupScript))
   $UseGuided = $Guided -or (-not $Auto -and [Environment]::UserInteractive)
   if ($UseGuided) { $SetupArguments += "--guided" }

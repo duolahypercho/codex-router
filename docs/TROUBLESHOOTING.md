@@ -73,8 +73,10 @@ token into Codex config, an API-key file, or an environment variable.
 ```sh
 ./bin/provider-key kimi-api set
 ./bin/provider-key deepseek set
+./bin/provider-key anthropic-api set
 ./bin/provider-key kimi-api status
 ./bin/provider-key deepseek status
+./bin/provider-key anthropic-api status
 ```
 
 Input is hidden. A key written by the helper is protected for the current user.
@@ -82,7 +84,7 @@ Setting or rotating it takes effect on the next request; the background service
 does not need a restart.
 
 Confirm the key belongs to the named system. Kimi Code OAuth, Kimi Platform,
-and DeepSeek do not share credentials or billing.
+DeepSeek, and Anthropic do not share credentials or billing.
 
 ## A provider changed its model IDs
 

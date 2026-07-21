@@ -14,16 +14,18 @@ export function renderLiteLlmConfig() {
   const lines = ["model_list:"];
   for (const model of MODELS) {
     const provider = providerForModel(model);
-    const apiBaseEnv =
-      provider.kind === "oauth"
-        ? provider.proxyBaseEnv
+    const apiBaseEnv = provider.kind === "oauth"
+      ? provider.proxyBaseEnv
+      : provider.protocol === "anthropic"
+        ? "CODEX_ROUTER_ANTHROPIC_FORWARD_BASE_URL"
         : "CODEX_ROUTER_API_FORWARD_BASE_URL";
     const translatedModel =
       provider.kind === "oauth" ? model.upstreamModel : model.gatewayModel;
+    const protocol = provider.protocol === "anthropic" ? "anthropic" : "openai";
     lines.push(
       `  - model_name: ${yamlString(model.gatewayModel)}`,
       "    litellm_params:",
-      `      model: ${yamlString(`openai/${translatedModel}`)}`,
+      `      model: ${yamlString(`${protocol}/${translatedModel}`)}`,
       `      api_base: ${yamlString(`os.environ/${apiBaseEnv}`)}`,
       '      api_key: "os.environ/CODEX_ROUTER_INTERNAL_KEY"',
       "      use_chat_completions_api: true",

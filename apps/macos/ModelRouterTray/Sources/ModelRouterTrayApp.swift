@@ -110,6 +110,7 @@ final class RouterStore: ObservableObject {
       UsageProviderChoice(id: "deepseek", displayName: "DeepSeek API", shortName: "DeepSeek", detail: providerDetail("deepseek", enabled: enabled), isEnabled: enabled.contains("deepseek")),
       UsageProviderChoice(id: "grok-api", displayName: "Grok API", shortName: "Grok API", detail: providerDetail("grok-api", enabled: enabled), isEnabled: enabled.contains("grok-api")),
       UsageProviderChoice(id: "kimi-api", displayName: "Kimi API", shortName: "Kimi API", detail: providerDetail("kimi-api", enabled: enabled), isEnabled: enabled.contains("kimi-api")),
+      UsageProviderChoice(id: "anthropic-api", displayName: "Anthropic API", shortName: "Claude", detail: providerDetail("anthropic-api", enabled: enabled), isEnabled: enabled.contains("anthropic-api")),
     ]
   }
 

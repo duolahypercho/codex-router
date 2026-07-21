@@ -51,6 +51,9 @@ function loadRegistry() {
       if (!provider.credential?.file || !Array.isArray(provider.credential.environment)) {
         fail(`provider ${provider.id} requires credential metadata`);
       }
+      if (provider.protocol !== undefined && !["openai", "anthropic"].includes(provider.protocol)) {
+        fail(`provider ${provider.id} has an unsupported API protocol`);
+      }
     }
     providers.set(provider.id, Object.freeze(provider));
   }

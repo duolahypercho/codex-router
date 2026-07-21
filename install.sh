@@ -17,16 +17,17 @@ usage() {
   cat <<'EOF'
 Usage: install.sh [options]
 
-Install external model routes for Codex or Claude Desktop.
+Install external model routes for Codex, Claude Desktop, or Cursor.
 
 Options:
   --install-dir PATH  Stable checkout used by the background service
-  --target APP        Install for "codex" (default) or "claude"
+  --target APP        Install for "codex" (default), "claude", or "cursor"
   --prepare-only      Install dependencies without changing either app
   --api-key           Alias for --kimi-api-key
   --kimi-api-key      Prompt securely for a Kimi Platform API key
   --deepseek-api-key  Prompt securely for a DeepSeek API key
   --grok-api-key      Prompt securely for an xAI API key
+  --anthropic-api-key Prompt securely for an Anthropic API key
   --guided           Walk through provider selection and authentication
   --auto             Use configured credentials without questions
   --providers LIST   Enable comma-separated provider ids (or "configured")
@@ -74,6 +75,10 @@ while [ "$#" -gt 0 ]; do
       ;;
     --grok-api-key)
       configure_provider_keys="$configure_provider_keys grok-api"
+      shift
+      ;;
+    --anthropic-api-key)
+      configure_provider_keys="$configure_provider_keys anthropic-api"
       shift
       ;;
     --guided)

@@ -1,6 +1,6 @@
 # Claude Desktop target
 
-The Claude target connects the same Kimi and DeepSeek registry to Claude
+The Claude target connects the same external-provider registry to Claude
 Desktop's third-party inference mode through a local Anthropic Messages API
 gateway. It is isolated from the existing Codex integration and can be enabled,
 disabled, or removed independently.
@@ -78,6 +78,7 @@ supported Linux Claude Desktop distribution.
 ./bin/model-router claude doctor
 ./bin/model-router claude providers
 ./bin/model-router claude provider-key deepseek set
+./bin/model-router claude provider-key anthropic-api set
 ./bin/model-router claude disable
 ./bin/model-router claude enable
 ./bin/model-router claude uninstall

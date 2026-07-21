@@ -1,6 +1,6 @@
 # Cursor target
 
-The Cursor target exposes the same Kimi and DeepSeek registry to Cursor through
+The Cursor target exposes the same external-provider registry to Cursor through
 a local, credential-isolating **OpenAI-compatible** gateway. It is isolated from
 the Codex and Claude integrations and can be enabled, disabled, or removed
 independently.
@@ -77,6 +77,7 @@ models remain available.
 ./bin/model-router cursor doctor
 ./bin/model-router cursor providers
 ./bin/model-router cursor provider-key deepseek set
+./bin/model-router cursor provider-key anthropic-api set
 ./bin/model-router cursor disable
 ./bin/model-router cursor enable
 ./bin/model-router cursor uninstall
