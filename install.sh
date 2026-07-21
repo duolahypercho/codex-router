@@ -104,10 +104,10 @@ while [ "$#" -gt 0 ]; do
 done
 
 case "$target" in
-  codex|claude) ;;
-  *) die "--target must be codex or claude" ;;
+  codex|claude|cursor) ;;
+  *) die "--target must be codex, claude, or cursor" ;;
 esac
-if [ "$target" = claude ] && [ "$migrate_known" = true ]; then
+if [ "$target" != codex ] && [ "$migrate_known" = true ]; then
   die "--migrate-known applies only to the Codex target"
 fi
 host_platform=$(uname -s 2>/dev/null || true)

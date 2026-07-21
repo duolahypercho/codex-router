@@ -7,7 +7,8 @@ target=${MODEL_ROUTER_TARGET:-codex}
 case "$target" in
   codex) config_manager=src/config-manager.mjs ;;
   claude) config_manager=src/claude-config-manager.mjs ;;
-  *) echo "MODEL_ROUTER_TARGET must be codex or claude." >&2; exit 2 ;;
+  cursor) config_manager=src/cursor-config-manager.mjs ;;
+  *) echo "MODEL_ROUTER_TARGET must be codex, claude, or cursor." >&2; exit 2 ;;
 esac
 node "$config_manager" disable
 node src/service.mjs uninstall
