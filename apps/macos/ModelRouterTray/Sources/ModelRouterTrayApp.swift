@@ -137,6 +137,10 @@ final class RouterStore: ObservableObject {
     return providerUsage?.providers.first(where: { $0.id == provider })
   }
 
+  var pinnedUsageProviderID: String {
+    pinnedModel?.provider ?? "openai"
+  }
+
   var pinnedAccountMetric: ProviderAccountMetric? {
     pinnedProviderUsage?.account.metrics.first
   }
@@ -184,8 +188,17 @@ final class RouterStore: ObservableObject {
   }
 
   func pin(_ model: RouterModel) {
+    let previousProvider = pinnedModel?.provider
     pinnedModelSlug = model.slug
     defaults.set(model.slug, forKey: "ModelRouterTray.pinnedModel")
+    guard previousProvider != model.provider else { return }
+    Task {
+      if model.provider == "openai" {
+        await refreshAccountUsage()
+      } else {
+        await refreshProviderUsage()
+      }
+    }
   }
 
   func setIslandVisible(_ visible: Bool) {
@@ -721,6 +734,7 @@ private struct TrayView: View {
     ScrollView(showsIndicators: false) {
       VStack(alignment: .leading, spacing: 14) {
         ProviderUsageSection(store: store)
+          .id(store.pinnedUsageProviderID)
         settingRow(
           title: "Dynamic Island",
           detail: "Show live model, limit, and activity status",
@@ -1042,6 +1056,7 @@ private struct ProviderUsageSection: View {
       }
 
       UsageBarChart(points: store.dailyUsage(days: range.rawValue), tint: routerAccent)
+        .id("\(store.pinnedUsageProviderID)-\(range.rawValue)")
         .frame(height: 88)
 
       HStack {

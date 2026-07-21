@@ -244,6 +244,7 @@ private struct IslandOverlayView: View {
         }
       }
       UsageBarChart(points: store.dailyUsage(days: 7), tint: graphTint)
+        .id("\(store.pinnedUsageProviderID)-peek")
         .frame(height: 43)
     }
     .padding(.horizontal, 15)
@@ -287,6 +288,7 @@ private struct IslandOverlayView: View {
       }
 
       UsageBarChart(points: graphPoints, tint: graphTint)
+        .id("\(store.pinnedUsageProviderID)-\(range.rawValue)-expanded")
         .frame(height: 78)
 
       HStack {
