@@ -108,6 +108,7 @@ export const CLAUDE_CONFIG_LIBRARY_DIR =
         ));
 export const CLAUDE_CONFIG_META_PATH = path.join(CLAUDE_CONFIG_LIBRARY_DIR, "_meta.json");
 export const CLAUDE_CONFIG_STATE_PATH = path.join(STATE_DIR, "claude-config-state.json");
+export const CURSOR_CONFIG_STATE_PATH = path.join(STATE_DIR, "cursor-config-state.json");
 export const CLAUDE_CONFIG_BACKUP_PATH = path.join(
   STATE_DIR,
   "claude-config-meta.pre-router.json",
