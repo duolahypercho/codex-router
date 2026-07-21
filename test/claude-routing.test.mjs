@@ -192,6 +192,7 @@ test("Claude router authenticates discovery and maps Messages requests without l
     const payload = {
       model: "kimi-api/kimi-k3",
       max_tokens: 64,
+      effort: "xhigh",
       stream: false,
       system: "Use tools when needed.",
       messages: [
@@ -231,6 +232,7 @@ test("Claude router authenticates discovery and maps Messages requests without l
     assert.equal(requests[0].url, "/v1/messages");
     assert.equal(requests[0].body.model, "kimi-api-k3");
     assert.equal(requests[0].body.stream, true);
+    assert.equal(requests[0].body.effort, "xhigh");
     assert.deepEqual(requests[0].body.messages, payload.messages);
     assert.deepEqual(requests[0].body.tools, payload.tools);
     assert.equal(requests[0].headers.authorization, `Bearer ${INTERNAL_KEY}`);
