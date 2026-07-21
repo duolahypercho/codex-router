@@ -141,6 +141,11 @@ final class RouterStore: ObservableObject {
     selectedProviderUsage?.account.metrics.first
   }
 
+  var selectedUsageResetDate: Date? {
+    if selectedUsageUsesChatGPT { return accountUsage?.primary?.resetDate }
+    return selectedAccountMetric?.resetDate
+  }
+
   var visibleUsageProviders: [UsageProviderChoice] {
     usageProviderChoices.filter { provider in
       provider.id == "openai" ||
@@ -1103,10 +1108,16 @@ private struct ProviderUsageSection: View {
         }
       }
 
-      HStack {
+      HStack(alignment: .firstTextBaseline, spacing: 6) {
         Text(store.selectedUsageUsesChatGPT ? "Daily token usage" : "Router traffic")
           .font(.system(size: 10, weight: .medium))
           .foregroundStyle(routerMuted)
+        if let reset = store.selectedUsageResetDate {
+          Text("· \(usageResetCaption(reset))")
+            .font(.system(size: 9))
+            .foregroundStyle(routerMuted)
+            .lineLimit(1)
+        }
         Spacer()
         UsageRangePicker(selection: $range)
       }
@@ -1499,6 +1510,10 @@ func compactTokenCount(_ value: Double) -> String {
     return String(format: "%.1fK", value / 1_000)
   }
   return String(Int(value))
+}
+
+func usageResetCaption(_ date: Date) -> String {
+  "Resets \(date.formatted(.dateTime.month(.abbreviated).day().hour().minute()))"
 }
 
 private struct StatusBeacon: View {

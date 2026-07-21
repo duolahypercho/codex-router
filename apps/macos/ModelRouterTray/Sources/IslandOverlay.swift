@@ -276,11 +276,17 @@ private struct IslandOverlayView: View {
         MetricTile(title: secondaryTitle, value: secondaryMetric, detail: secondaryDetail, tint: .white.opacity(0.82))
       }
 
-      HStack {
+      HStack(alignment: .firstTextBaseline, spacing: 6) {
         Text("DAILY TOKEN USAGE")
           .font(.system(size: 8, weight: .semibold, design: .monospaced))
           .tracking(0.8)
           .foregroundStyle(routerMuted)
+        if let reset = store.selectedUsageResetDate {
+          Text("· \(usageResetCaption(reset))")
+            .font(.system(size: 8, design: .rounded))
+            .foregroundStyle(routerMuted)
+            .lineLimit(1)
+        }
         Spacer()
         UsageRangePicker(selection: $range)
       }

@@ -36,9 +36,10 @@ Hover the Island for a quick view or click it for expanded account usage.
   or remaining subscription quota.
 - Daily token bars can show 7, 30, or 90 days. Seven-day charts label every
   weekday; longer ranges use spaced date ticks while retaining one bar per day.
-  Hover any bar for its full date and exact token count. Usage refreshes every
-  30 seconds, and the detailed view switches when a request uses a different
-  provider.
+  Hover any bar for its full date and exact token count. When the provider
+  reports a quota reset, its local reset date and time appear beside the chart
+  title. Usage refreshes every 30 seconds, and the detailed view switches when
+  a request uses a different provider.
 - The Island uses green for idle, amber while generating, and red after an
   error. It is shown by default and can be toggled from the tray.
 - Local routed-model events record timestamp, model, provider, HTTP status,
