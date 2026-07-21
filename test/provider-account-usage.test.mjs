@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   deepSeekBalanceMetrics,
+  grokCreditsMetrics,
   kimiApiBalanceMetrics,
   kimiQuotaMetrics,
   providerAccountUsageSnapshot,
@@ -80,3 +81,74 @@ test("does not poll account endpoints for disabled providers", async () => {
   });
   assert.ok(Object.values(snapshot).every((account) => account.status === "disabled"));
 });
+
+test("normalizes Grok weekly credits usage from billing proxy", () => {
+  assert.deepEqual(grokCreditsMetrics({
+    config: {
+      creditUsagePercent: 6,
+      currentPeriod: {
+        type: "USAGE_PERIOD_TYPE_WEEKLY",
+        start: "2026-07-15T04:11:10.883403+00:00",
+        end: "2026-07-22T04:11:10.883403+00:00",
+      },
+      prepaidBalance: { val: 0 },
+      onDemandCap: { val: 0 },
+      onDemandUsed: { val: 0 },
+      isUnifiedBillingUser: true,
+    },
+  }), [{
+    kind: "quota",
+    label: "Weekly limit",
+    usedPercent: 6,
+    remainingPercent: 94,
+    used: 6,
+    limit: 100,
+    remaining: 94,
+    unit: "percent",
+    resetAt: 1784693470.883,
+  }]);
+});
+
+test("normalizes Grok prepaid credits and pay-as-you-go balance", () => {
+  assert.deepEqual(grokCreditsMetrics({
+    config: {
+      creditUsagePercent: 100,
+      currentPeriod: {
+        type: "USAGE_PERIOD_TYPE_MONTHLY",
+        end: "2026-08-01T00:00:00Z",
+      },
+      prepaidBalance: { val: -1250 },
+      onDemandCap: { val: 5000 },
+      onDemandUsed: { val: 355 },
+    },
+  }), [
+    {
+      kind: "quota",
+      label: "Monthly limit",
+      usedPercent: 100,
+      remainingPercent: 0,
+      used: 100,
+      limit: 100,
+      remaining: 0,
+      unit: "percent",
+      resetAt: 1785542400,
+    },
+    {
+      kind: "balance",
+      label: "Prepaid credits",
+      value: 12.5,
+      currency: "USD",
+      detail: "Purchased credits remaining",
+      available: true,
+    },
+    {
+      kind: "balance",
+      label: "Pay-as-you-go",
+      value: 46.45,
+      currency: "USD",
+      detail: "$3.55 used of $50.00 limit",
+      available: true,
+    },
+  ]);
+});
+

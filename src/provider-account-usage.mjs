@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { grokOAuthStatus } from "./grok-oauth-status.mjs";
+import { grokOAuthStatus, grokSessionEntry } from "./grok-oauth-status.mjs";
 import { kimiOAuthStatus } from "./oauth-status.mjs";
 import { PROVIDERS } from "./model-registry.mjs";
 import { resolveProviderCredential } from "./provider-credentials.mjs";
@@ -97,6 +97,76 @@ export function kimiApiBalanceMetrics(payload, currency = "USD") {
   }];
 }
 
+
+export function grokCreditsMetrics(payload) {
+  const config = payload?.config;
+  if (!config || typeof config !== "object") return [];
+
+  const metrics = [];
+  const usagePct = numberValue(config.creditUsagePercent ?? config.credit_usage_percent);
+  const period = config.currentPeriod || config.current_period || {};
+  const periodType = String(period.type || period.period_type || "");
+  const periodEnd = period.end || config.billingPeriodEnd || config.billing_period_end;
+  const label = periodType.includes("WEEKLY")
+    ? "Weekly limit"
+    : periodType.includes("MONTHLY")
+      ? "Monthly limit"
+      : "Usage limit";
+
+  if (Number.isFinite(usagePct)) {
+    const usedPercent = Math.max(0, Math.min(100, usagePct));
+    metrics.push({
+      kind: "quota",
+      label,
+      usedPercent,
+      remainingPercent: 100 - usedPercent,
+      used: usedPercent,
+      limit: 100,
+      remaining: Math.max(0, 100 - usedPercent),
+      unit: "percent",
+      ...(resetTimestamp(periodEnd) !== undefined ? { resetAt: resetTimestamp(periodEnd) } : {}),
+    });
+  }
+
+  const prepaidRaw = numberValue(
+    config.prepaidBalance?.val ??
+      config.prepaid_balance?.val ??
+      config.prepaidBalance ??
+      config.prepaid_balance,
+  );
+  if (Number.isFinite(prepaidRaw) && Math.abs(prepaidRaw) > 0) {
+    metrics.push({
+      kind: "balance",
+      label: "Prepaid credits",
+      value: Math.abs(prepaidRaw) / 100,
+      currency: "USD",
+      detail: "Purchased credits remaining",
+      available: true,
+    });
+  }
+
+  const onDemandCap = numberValue(
+    config.onDemandCap?.val ?? config.on_demand_cap?.val ?? config.onDemandCap ?? config.on_demand_cap,
+  );
+  const onDemandUsed = numberValue(
+    config.onDemandUsed?.val ?? config.on_demand_used?.val ?? config.onDemandUsed ?? config.on_demand_used,
+  );
+  if (Number.isFinite(onDemandCap) && Math.abs(onDemandCap) > 0) {
+    const cap = Math.abs(onDemandCap) / 100;
+    const used = Number.isFinite(onDemandUsed) ? Math.abs(onDemandUsed) / 100 : 0;
+    metrics.push({
+      kind: "balance",
+      label: "Pay-as-you-go",
+      value: Math.max(0, cap - used),
+      currency: "USD",
+      detail: `$${used.toFixed(2)} used of $${cap.toFixed(2)} limit`,
+      available: true,
+    });
+  }
+
+  return metrics;
+}
+
 async function requestJson(url, key, headers = {}, fetchImpl = fetch) {
   const response = await fetchImpl(url, {
     method: "GET",
@@ -182,6 +252,55 @@ async function kimiOAuthAccount(fetchImpl) {
   return { status: "available", source: "official-api", metrics };
 }
 
+
+async function grokOAuthAccount(fetchImpl) {
+  const status = grokOAuthStatus();
+  if (!status.configured) {
+    return { status: "not-configured", source: "official-cli", metrics: [] };
+  }
+
+  let auth;
+  try {
+    auth = JSON.parse(readFileSync(status.authPath, "utf8"));
+  } catch {
+    throw new Error("Grok CLI session file is invalid; run `grok login --oauth`");
+  }
+  const session = grokSessionEntry(auth);
+  const accessToken = typeof session?.key === "string" ? session.key : "";
+  if (!accessToken) throw new Error("Grok CLI session is incomplete; run `grok login --oauth`");
+
+  const expiresAt = Date.parse(session.expires_at || "");
+  if (Number.isFinite(expiresAt) && expiresAt <= Date.now()) {
+    throw new Error("Grok CLI session has expired; run `grok login --oauth`");
+  }
+
+  const baseURL = (
+    process.env.GROK_CLI_CHAT_PROXY_BASE_URL || "https://cli-chat-proxy.grok.com/v1"
+  ).replace(/\/+$/, "");
+  const host = new URL(baseURL).hostname;
+  if (host !== "cli-chat-proxy.grok.com") {
+    return localOnly("Account billing is unavailable for a custom Grok proxy endpoint");
+  }
+
+  const payload = await requestJson(
+    `${baseURL}/billing?format=credits`,
+    accessToken,
+    {
+      "X-XAI-Token-Auth": "xai-grok-cli",
+      ...(typeof session.user_id === "string" && session.user_id
+        ? { "x-userid": session.user_id }
+        : {}),
+      "x-grok-client-version": VERSION,
+      "x-grok-client-mode": "headless",
+      "User-Agent": `codex-router/${VERSION}`,
+    },
+    fetchImpl,
+  );
+  const metrics = grokCreditsMetrics(payload);
+  if (!metrics.length) throw new Error("Grok billing response was incomplete");
+  return { status: "available", source: "official-cli", metrics };
+}
+
 function localOnly(message) {
   return { status: "local-only", source: "local-router", metrics: [], message };
 }
@@ -191,11 +310,7 @@ async function accountUsageFor(providerId, fetchImpl) {
     if (providerId === "deepseek") return await deepSeekAccount(fetchImpl);
     if (providerId === "kimi-api") return await kimiApiAccount(fetchImpl);
     if (providerId === "kimi-oauth") return await kimiOAuthAccount(fetchImpl);
-    if (providerId === "grok-oauth") {
-      return grokOAuthStatus().configured
-        ? localOnly("Official Grok CLI billing is unavailable; showing router traffic")
-        : { status: "not-configured", source: "official-cli", metrics: [] };
-    }
+    if (providerId === "grok-oauth") return await grokOAuthAccount(fetchImpl);
     if (providerId === "grok-api") {
       return resolveProviderCredential("grok-api")
         ? localOnly("xAI API account balance is unavailable; showing router traffic")

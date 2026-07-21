@@ -23,10 +23,11 @@ row below. Hover the Island for a quick view or click it for account usage.
   credential file.
 - External OAuth and API providers have separate account meters and local
   traffic graphs. Kimi Code OAuth reads weekly and five-hour quota from Kimi's
-  usage API with the existing CLI session. DeepSeek and Kimi Platform API show
-  balance from their official API-key endpoints. Grok falls back to local
-  traffic while the installed Grok CLI does not expose its billing RPC; the app
-  does not silently import browser cookies.
+  usage API with the existing CLI session. Grok OAuth reads weekly or monthly
+  credit usage from the official Grok CLI chat-proxy billing endpoint with the
+  existing `~/.grok/auth.json` session. DeepSeek and Kimi Platform API show
+  balance from their official API-key endpoints. The app does not silently
+  import browser cookies.
 - Local graphs cover only traffic sent through this router on this Mac and are
   labeled that way. A local graph is never presented as provider-wide billing
   or remaining subscription quota.

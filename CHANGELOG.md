@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Grok OAuth account usage now reads weekly/monthly credit limits from the official Grok CLI billing endpoint.
 - Rewrote routed-model catalog identity text so external models no longer
   claim to be based on GPT-5 in Codex `base_instructions`.
 - Added an isolated, experimental Claude Desktop target using the official
