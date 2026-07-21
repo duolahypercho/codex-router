@@ -7,6 +7,7 @@ import { validCallerSecret } from "./caller-auth.mjs";
 import { privateFileIsProtected } from "./file-security.mjs";
 import { PROVIDERS } from "./model-registry.mjs";
 import { kimiOAuthStatus } from "./oauth-status.mjs";
+import { chatgptOAuthStatus } from "./chatgpt-oauth-status.mjs";
 import {
   CALLER_SECRET_PATH,
   CLAUDE_CONFIG_LIBRARY_DIR,
@@ -196,6 +197,13 @@ add(
   "Kimi OAuth",
   oauth.configured ? "credential present" : `not configured; ${oauth.setup}`,
   "Run kimi login, then rerun the doctor.",
+);
+const chatgpt = chatgptOAuthStatus();
+add(
+  chatgpt.configured ? "ok" : selection.providers.includes("chatgpt-oauth") ? "fail" : "warn",
+  "ChatGPT Codex OAuth",
+  chatgpt.configured ? "Codex session present" : `not configured; ${chatgpt.setup}`,
+  "Run codex login, then rerun the doctor.",
 );
 for (const provider of PROVIDERS.values()) {
   if (provider.kind !== "openai-compatible") continue;

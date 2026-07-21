@@ -11,6 +11,7 @@ import {
 } from "./kimi-oauth-onboarding.mjs";
 import { PROVIDERS } from "./model-registry.mjs";
 import { kimiOAuthStatus } from "./oauth-status.mjs";
+import { chatgptOAuthStatus } from "./chatgpt-oauth-status.mjs";
 import { SOURCE_ROOT } from "./paths.mjs";
 import { credentialStatus } from "./provider-credentials.mjs";
 import { configuredProviderIds, validateProviderIds } from "./provider-selection.mjs";
@@ -109,9 +110,19 @@ export function confirm(label, defaultYes = true) {
 }
 
 export function providerConfigured(provider) {
-  return provider.kind === "oauth"
-    ? provider.id === "kimi-oauth" && kimiOAuthStatus().configured
-    : credentialStatus(provider, { persistent: true }).configured;
+  if (provider.kind === "oauth") {
+    if (provider.id === "kimi-oauth") return kimiOAuthStatus().configured;
+    if (provider.id === "chatgpt-oauth") return chatgptOAuthStatus().configured;
+    return false;
+  }
+  return credentialStatus(provider, { persistent: true }).configured;
+}
+
+// Per-provider hint for a selected-but-unconfigured OAuth provider.
+function oauthSetupHint(provider) {
+  return provider.id === "chatgpt-oauth"
+    ? "run `codex login`"
+    : `run \`kimi login\` (install the Kimi Code CLI from ${KIMI_CLI_INSTALL_URL} first if needed)`;
 }
 
 function executable(name) {
@@ -233,11 +244,16 @@ export function configureProvider(provider, { guided, providerKeyCommand }) {
   if (!guided) {
     const setup =
       provider.kind === "oauth"
-        ? `run \`kimi login\` (install the Kimi Code CLI from ${KIMI_CLI_INSTALL_URL} first if needed)`
+        ? oauthSetupHint(provider)
         : `run \`${providerKeyCommand(provider.id)}\``;
     throw new Error(`${provider.displayName} is selected but not configured; ${setup} first.`);
   }
   if (provider.kind === "oauth") {
+    if (provider.id === "chatgpt-oauth") {
+      throw new Error(
+        `${provider.displayName} is selected but not configured; run \`codex login\`, then run setup again.`,
+      );
+    }
     onboardKimiOauth();
   } else {
     if (!confirm(`Enter a ${provider.displayName} key securely now?`)) {
