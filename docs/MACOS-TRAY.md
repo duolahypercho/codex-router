@@ -68,9 +68,10 @@ The app builds a local `dist/Model Router.app` bundle and opens it. The bundle
 records the checkout path used at build time, so rebuild it after moving the
 repository.
 
-Provider changes are intentionally staged. Select **Apply Changes** to apply a
-changed provider selection to Codex; this is the same explicit action as
-`bin/control apply --targets codex`.
+Provider changes apply automatically. Enabling, disabling, signing in, or
+adding an API key updates Codex immediately; the provider row shows progress
+while the router configuration and service are refreshed. If applying fails,
+the tray restores the previous provider selection and shows the error.
 
 ## Adding providers and models
 
@@ -84,5 +85,5 @@ missing and **Sign In** when the CLI has no usable session. API providers show
 - API keys are sent to the control process over standard input, written to the
   router's protected credential file, and never placed in process arguments or
   command output.
-- Completing sign-in or adding a key stages that provider for Codex. Select
-  **Apply Changes** to expose its models to new Codex tasks.
+- Completing sign-in or adding a key automatically enables that provider and
+  exposes its models to new Codex tasks.

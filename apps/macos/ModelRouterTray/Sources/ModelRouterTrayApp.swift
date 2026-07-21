@@ -70,7 +70,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 final class RouterStore: ObservableObject {
   @Published private(set) var snapshot = RouterSnapshot.empty
   @Published private(set) var isRefreshing = false
-  @Published private(set) var pendingApply = false
   @Published private(set) var message: String?
   @Published private(set) var lastUpdated: Date?
   @Published private(set) var selectedUsageProviderID: String
@@ -278,10 +277,10 @@ final class RouterStore: ObservableObject {
   func loginProvider(_ provider: String) async {
     await performProviderOperation(
       provider,
-      successMessage: "Provider connected. Apply Changes to add its models to Codex."
+      successMessage: "Provider connected. Restart Codex to refresh its model picker."
     ) {
       _ = try await runControl(arguments: ["login", provider])
-      try await stageProvider(provider)
+      try await updateProviderSelection(provider, enabled: true)
     }
   }
 
@@ -289,10 +288,10 @@ final class RouterStore: ObservableObject {
     let secret = Data(key.utf8)
     await performProviderOperation(
       provider,
-      successMessage: "API key saved. Apply Changes to add its models to Codex."
+      successMessage: "API key saved. Restart Codex to refresh its model picker."
     ) {
       _ = try await runControl(arguments: ["credential", provider], stdin: secret)
-      try await stageProvider(provider)
+      try await updateProviderSelection(provider, enabled: true)
     }
   }
 
@@ -353,22 +352,19 @@ final class RouterStore: ObservableObject {
   }
 
   func setProvider(_ provider: String, enabled: Bool) async {
+    guard providerOperation == nil else { return }
+    providerOperation = provider
+    defer { providerOperation = nil }
     do {
-      _ = try await runControl(arguments: ["set", provider, enabled ? "on" : "off", "--targets", "codex"])
-      pendingApply = true
+      try await updateProviderSelection(provider, enabled: enabled)
       await refresh()
+      await refreshProviderUsage()
+      message = enabled
+        ? "Provider added. Restart Codex to refresh its model picker."
+        : "Provider hidden. Restart Codex to refresh its model picker."
     } catch {
       message = error.localizedDescription
-    }
-  }
-
-  func apply() async {
-    do {
-      _ = try await runControl(arguments: ["apply", "--targets", "codex"])
-      pendingApply = false
       await refresh()
-    } catch {
-      message = error.localizedDescription
     }
   }
 
@@ -384,6 +380,7 @@ final class RouterStore: ObservableObject {
       try await operation()
       await refreshProviderSetup()
       await refresh()
+      await refreshProviderUsage()
       message = successMessage
     } catch {
       message = error.localizedDescription
@@ -391,9 +388,20 @@ final class RouterStore: ObservableObject {
     }
   }
 
-  private func stageProvider(_ provider: String) async throws {
-    _ = try await runControl(arguments: ["set", provider, "on", "--targets", "codex"])
-    pendingApply = true
+  private func updateProviderSelection(_ provider: String, enabled: Bool) async throws {
+    let wasEnabled = snapshot.targets["codex"]?.enabledProviders.contains(provider) == true
+    _ = try await runControl(
+      arguments: ["set", provider, enabled ? "on" : "off", "--targets", "codex"]
+    )
+    do {
+      _ = try await runControl(arguments: ["apply", "--targets", "codex", "--activate"])
+    } catch {
+      _ = try? await runControl(
+        arguments: ["set", provider, wasEnabled ? "on" : "off", "--targets", "codex"]
+      )
+      _ = try? await runControl(arguments: ["apply", "--targets", "codex", "--activate"])
+      throw error
+    }
   }
 
   private func refreshActivity() async {
@@ -764,7 +772,7 @@ private struct TrayView: View {
             set: { store.setIslandVisible($0) }
           )
         )
-        sectionLabel("Providers", detail: store.pendingApply ? "Apply required" : "Synced")
+        sectionLabel("Providers", detail: store.providerOperation == nil ? "Auto-saved" : "Applying…")
         VStack(spacing: 0) {
           ForEach(providers, id: \.id) { provider in
             ProviderSetupRow(
@@ -787,7 +795,6 @@ private struct TrayView: View {
       }
       .padding(.vertical, 1)
     }
-    .animation(.spring(response: 0.36, dampingFraction: 0.84), value: store.pendingApply)
   }
 
   private func sectionLabel(_ title: String, detail: String) -> some View {
@@ -798,7 +805,7 @@ private struct TrayView: View {
       Spacer()
       Text(detail)
         .font(.system(size: 9, weight: .regular))
-        .foregroundStyle(store.pendingApply ? routerAccent : routerMuted)
+        .foregroundStyle(routerMuted)
     }
     .padding(.horizontal, 2)
     .padding(.top, 1)
@@ -840,11 +847,6 @@ private struct TrayView: View {
 
   private var footer: some View {
     HStack(spacing: 9) {
-      if store.pendingApply {
-        Button("Apply Changes") { Task { await store.apply() } }
-          .buttonStyle(AccentButtonStyle())
-          .transition(.move(edge: .leading).combined(with: .opacity))
-      }
       Button(store.isRefreshing ? "Refreshing…" : "Refresh") {
         Task {
           await store.refresh()

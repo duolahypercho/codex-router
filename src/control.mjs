@@ -182,16 +182,18 @@ function runSet(provider, desired) {
   printOverview(args.includes("--json"));
 }
 
-// Re-apply pending selection changes, but only to targets that are already
-// active (installed service). Never installs a target that isn't set up.
+// Re-apply pending selection changes. CLI callers keep the existing safety
+// boundary and skip inactive targets; trusted local UI callers can explicitly
+// activate the selected target after the user changes a provider.
 function runApply() {
   const requested = optionValue("--targets");
   const selected = requested ? requested.split(",").map((value) => value.trim()) : TARGETS;
+  const activate = args.includes("--activate");
   const applied = [];
   const skipped = [];
   for (const target of selected) {
     if (!TARGETS.includes(target)) throw new Error(`Unknown target: ${target}`);
-    if (!targetIsActive(target)) {
+    if (!targetIsActive(target) && !activate) {
       skipped.push(target);
       continue;
     }
