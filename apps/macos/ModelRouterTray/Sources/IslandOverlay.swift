@@ -290,7 +290,7 @@ private struct IslandOverlayView: View {
         .frame(height: 78)
 
       HStack {
-        Text("USAGE PROVIDER")
+        Text("ACTIVE PROVIDER")
           .font(.system(size: 8, weight: .semibold, design: .monospaced))
           .tracking(0.8)
           .foregroundStyle(routerMuted)
@@ -309,22 +309,9 @@ private struct IslandOverlayView: View {
             .foregroundStyle(routerMuted)
         }
         Spacer()
-        Picker(
-          "Usage provider",
-          selection: Binding(
-            get: { store.selectedUsageProviderID },
-            set: { store.selectUsageProvider($0) }
-          )
-        ) {
-          ForEach(store.usageProviderChoices) { provider in
-            Text(provider.displayName).tag(provider.id)
-          }
-        }
-        .labelsHidden()
-        .pickerStyle(.menu)
-        .controlSize(.small)
-        .tint(.white)
-        .frame(maxWidth: 150)
+        Text(store.activityState == .generating ? "Live" : "Last used")
+          .font(.system(size: 9, weight: .medium, design: .rounded))
+          .foregroundStyle(store.activityState.tint)
       }
       .padding(.horizontal, 10)
       .padding(.vertical, 7)

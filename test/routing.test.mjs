@@ -200,7 +200,9 @@ test("router requires the configured path capability before any model route", as
     });
     await new Promise((resolve) => setTimeout(resolve, 25));
     const generatingHealth = await fetch(`http://127.0.0.1:${routerPort}/health`);
-    assert.equal((await generatingHealth.json()).activity.state, "generating");
+    const generatingActivity = (await generatingHealth.json()).activity;
+    assert.equal(generatingActivity.state, "generating");
+    assert.equal(generatingActivity.provider, "deepseek");
     assert.equal((await heldRequest).status, 200);
 
     const errorSentinel = "SENSITIVE_ERROR_DETAIL_MUST_NOT_ESCAPE";

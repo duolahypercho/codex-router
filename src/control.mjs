@@ -182,9 +182,23 @@ function runSet(provider, desired) {
   printOverview(args.includes("--json"));
 }
 
-// Re-apply pending selection changes. CLI callers keep the existing safety
-// boundary and skip inactive targets; trusted local UI callers can explicitly
-// activate the selected target after the user changes a provider.
+function refreshActiveTarget(target) {
+  const command =
+    target === "codex"
+      ? [process.execPath, [path.join(REPO_ROOT, "src", "catalog.mjs")]]
+      : target === "claude"
+        ? [process.execPath, [path.join(REPO_ROOT, "src", "claude-config-manager.mjs"), "refresh"]]
+        : undefined;
+  if (!command) return;
+  const result = spawnSync(command[0], command[1], {
+    env: { ...process.env, MODEL_ROUTER_TARGET: target },
+    stdio: "inherit",
+  });
+  if (result.status !== 0) throw new Error(`${target}: refresh failed`);
+}
+
+// Active routers read provider selection on each request, so only their picker
+// catalog needs refreshing. The full enable path is reserved for inactive targets.
 function runApply() {
   const requested = optionValue("--targets");
   const selected = requested ? requested.split(",").map((value) => value.trim()) : TARGETS;
@@ -197,11 +211,15 @@ function runApply() {
       skipped.push(target);
       continue;
     }
-    const result = spawnSync(path.join(REPO_ROOT, "bin", "enable"), [], {
-      env: { ...process.env, MODEL_ROUTER_TARGET: target },
-      stdio: "inherit",
-    });
-    if (result.status !== 0) throw new Error(`${target}: apply failed`);
+    if (targetIsActive(target)) {
+      refreshActiveTarget(target);
+    } else {
+      const result = spawnSync(path.join(REPO_ROOT, "bin", "enable"), [], {
+        env: { ...process.env, MODEL_ROUTER_TARGET: target },
+        stdio: "inherit",
+      });
+      if (result.status !== 0) throw new Error(`${target}: apply failed`);
+    }
     applied.push(target);
   }
   process.stderr.write(

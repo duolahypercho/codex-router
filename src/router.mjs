@@ -61,31 +61,44 @@ const QUIET =
   process.env.CODEX_ROUTER_QUIET === "1" || process.env.KIMI_PROXY_QUIET === "1";
 const ERROR_STATUS_DURATION_MS = 8_000;
 
-let inFlightRequests = 0;
+let requestSequence = 0;
+const activeRequests = new Map();
+let lastUsedProvider;
 let errorStatusUntil = 0;
 
 if (!INTERNAL_KEY) throw new Error("CODEX_ROUTER_INTERNAL_KEY is required.");
 assertCallerSecret(CALLER_KEY);
 
 function activityPayload() {
+  const activeProvider = [...activeRequests.values()].findLast(Boolean);
   return {
     state:
-      inFlightRequests > 0
+      activeRequests.size > 0
         ? "generating"
         : Date.now() < errorStatusUntil
           ? "error"
           : "idle",
+    ...(activeProvider || lastUsedProvider
+      ? { provider: activeProvider || lastUsedProvider }
+      : {}),
   };
 }
 
 function beginRequestActivity() {
-  inFlightRequests += 1;
+  const requestId = ++requestSequence;
+  activeRequests.set(requestId, undefined);
   let finished = false;
-  return (status) => {
-    if (finished) return;
-    finished = true;
-    inFlightRequests = Math.max(0, inFlightRequests - 1);
-    if (status >= 400) errorStatusUntil = Date.now() + ERROR_STATUS_DURATION_MS;
+  return {
+    setProvider(provider) {
+      activeRequests.set(requestId, provider);
+      lastUsedProvider = provider;
+    },
+    finish(status) {
+      if (finished) return;
+      finished = true;
+      activeRequests.delete(requestId);
+      if (status >= 400) errorStatusUntil = Date.now() + ERROR_STATUS_DURATION_MS;
+    },
   };
 }
 
@@ -468,7 +481,7 @@ function requireCodexTransport(request, response) {
 
 async function handleResponses(request, response, requestUrl) {
   const startedAt = Date.now();
-  const finishActivity = beginRequestActivity();
+  const activity = beginRequestActivity();
   try {
     if (!requireCodexTransport(request, response)) return;
     const encoded = await readRequestBody(request);
@@ -489,6 +502,7 @@ async function handleResponses(request, response, requestUrl) {
       });
       return;
     }
+    activity.setProvider(route?.provider || "openai");
     const compactV1 = /\/responses\/compact$/.test(requestUrl.pathname);
     const compactV2 =
       route &&
@@ -550,10 +564,10 @@ async function handleResponses(request, response, requestUrl) {
       );
     }
   } catch (error) {
-    finishActivity(500);
+    activity.finish(500);
     throw error;
   } finally {
-    finishActivity(response.statusCode);
+    activity.finish(response.statusCode);
   }
 }
 

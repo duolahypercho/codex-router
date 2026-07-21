@@ -88,13 +88,10 @@ final class RouterStore: ObservableObject {
   private var providerPolling = false
   private let defaults = UserDefaults.standard
   private let islandVisibilityKey = "ModelRouterTray.islandVisible"
-  private let usageProviderKey = "ModelRouterTray.usageProvider"
-  private var shouldMigratePinnedModel: Bool
+  private var hasObservedActiveProvider = false
 
   init() {
-    let savedUsageProvider = UserDefaults.standard.string(forKey: "ModelRouterTray.usageProvider")
-    selectedUsageProviderID = savedUsageProvider ?? "openai"
-    shouldMigratePinnedModel = savedUsageProvider == nil
+    selectedUsageProviderID = "openai"
     islandVisible = defaults.object(forKey: islandVisibilityKey) == nil
       ? true
       : defaults.bool(forKey: islandVisibilityKey)
@@ -163,7 +160,7 @@ final class RouterStore: ObservableObject {
     do {
       let output = try await runControl(arguments: ["--json"])
       snapshot = try JSONDecoder().decode(RouterSnapshot.self, from: output)
-      resolveSelectedUsageProvider()
+      resolveInitialUsageProvider()
       lastUpdated = .now
       message = nil
     } catch {
@@ -185,12 +182,10 @@ final class RouterStore: ObservableObject {
     }
   }
 
-  func selectUsageProvider(_ providerID: String) {
+  private func focusUsageProvider(_ providerID: String) {
     guard usageProviderChoices.contains(where: { $0.id == providerID }) else { return }
     let previousProvider = selectedUsageProviderID
     selectedUsageProviderID = providerID
-    defaults.set(providerID, forKey: usageProviderKey)
-    shouldMigratePinnedModel = false
     guard previousProvider != providerID else { return }
     Task {
       if providerID == "openai" {
@@ -275,12 +270,17 @@ final class RouterStore: ObservableObject {
   }
 
   func loginProvider(_ provider: String) async {
+    let reconnecting = providerSetup[provider]?.configured == true
     await performProviderOperation(
       provider,
-      successMessage: "Provider connected. Restart Codex to refresh its model picker."
+      successMessage: reconnecting
+        ? "Provider reconnected."
+        : "Provider connected. Restart Codex to refresh its model picker."
     ) {
       _ = try await runControl(arguments: ["login", provider])
-      try await updateProviderSelection(provider, enabled: true)
+      if !reconnecting {
+        try await updateProviderSelection(provider, enabled: true)
+      }
     }
   }
 
@@ -417,27 +417,21 @@ final class RouterStore: ObservableObject {
       let (data, _) = try await URLSession.shared.data(for: request)
       let health = try JSONDecoder().decode(RouterHealth.self, from: data)
       activityState = health.activity.state
+      if let provider = health.activity.provider {
+        hasObservedActiveProvider = true
+        focusUsageProvider(provider)
+      }
     } catch {
       activityState = .error
     }
   }
 
-  private func resolveSelectedUsageProvider() {
-    if shouldMigratePinnedModel,
-       let pinnedSlug = defaults.string(forKey: "ModelRouterTray.pinnedModel"),
-       let provider = snapshot.targets["codex"]?.models.first(where: { $0.slug == pinnedSlug })?.provider,
-       usageProviderChoices.contains(where: { $0.id == provider }) {
-      selectedUsageProviderID = provider
-      defaults.set(provider, forKey: usageProviderKey)
-      shouldMigratePinnedModel = false
-      return
-    }
-    guard usageProviderChoices.contains(where: { $0.id == selectedUsageProviderID }) else {
-      selectedUsageProviderID = "openai"
-      defaults.set("openai", forKey: usageProviderKey)
-      return
-    }
-    shouldMigratePinnedModel = false
+  private func resolveInitialUsageProvider() {
+    guard !hasObservedActiveProvider,
+          let selectedModel = snapshot.targets["codex"]?.selectedModel,
+          let provider = snapshot.targets["codex"]?.models.first(where: { $0.slug == selectedModel })?.provider
+    else { return }
+    focusUsageProvider(provider)
   }
 
   private func providerDetail(_ providerID: String, enabled: Set<String>) -> String {
@@ -512,6 +506,7 @@ private struct RouterHealth: Decodable {
 
 private struct RouterActivity: Decodable {
   let state: RouterActivityState
+  let provider: String?
 }
 
 private struct RouterError: LocalizedError {
@@ -760,8 +755,7 @@ private struct TrayView: View {
   private func content(for target: RouterTarget) -> some View {
     ScrollView(showsIndicators: false) {
       VStack(alignment: .leading, spacing: 14) {
-        sectionLabel("Usage provider", detail: store.selectedUsageProvider.displayName)
-        ProviderUsagePicker(store: store)
+        sectionLabel("Current usage", detail: store.selectedUsageProvider.displayName)
         ProviderUsageSection(store: store)
           .id(store.selectedUsageProviderID)
         settingRow(
@@ -965,12 +959,25 @@ private struct ProviderSetupRow: View {
         .tint(routerAccent)
         .frame(width: 42)
     } else if setup?.configured == true {
-      Toggle("", isOn: Binding(get: { provider.enabled }, set: onToggle))
-        .labelsHidden()
-        .toggleStyle(.switch)
-        .controlSize(.mini)
-        .tint(routerMint)
-        .disabled(controlsDisabled)
+      HStack(spacing: 8) {
+        if setup?.kind == "oauth" {
+          Button(action: onLogin) {
+            Image(systemName: "arrow.triangle.2.circlepath")
+              .font(.system(size: 10, weight: .semibold))
+              .frame(width: 20, height: 20)
+          }
+          .buttonStyle(.plain)
+          .foregroundStyle(routerAccent)
+          .help("Reconnect OAuth")
+          .disabled(controlsDisabled)
+        }
+        Toggle("", isOn: Binding(get: { provider.enabled }, set: onToggle))
+          .labelsHidden()
+          .toggleStyle(.switch)
+          .controlSize(.mini)
+          .tint(routerMint)
+          .disabled(controlsDisabled)
+      }
     } else {
       Button(actionTitle) { performAction() }
         .buttonStyle(.plain)
@@ -998,46 +1005,6 @@ private struct ProviderSetupRow: View {
       showingKeyField.toggle()
     default: break
     }
-  }
-}
-
-private struct ProviderUsagePicker: View {
-  @ObservedObject var store: RouterStore
-
-  var body: some View {
-    HStack(spacing: 10) {
-      VStack(alignment: .leading, spacing: 3) {
-        Text(store.selectedUsageProvider.displayName)
-          .font(.system(size: 11, weight: .semibold, design: .rounded))
-        HStack(spacing: 5) {
-          Circle()
-            .fill(store.selectedUsageProvider.isEnabled ? routerMint : Color.secondary.opacity(0.42))
-            .frame(width: 5, height: 5)
-          Text(store.selectedUsageProvider.detail)
-            .font(.system(size: 9))
-            .foregroundStyle(routerMuted)
-        }
-      }
-      Spacer()
-      Picker(
-        "Usage provider",
-        selection: Binding(
-          get: { store.selectedUsageProviderID },
-          set: { store.selectUsageProvider($0) }
-        )
-      ) {
-        ForEach(store.usageProviderChoices) { provider in
-          Text(provider.displayName).tag(provider.id)
-        }
-      }
-      .labelsHidden()
-      .pickerStyle(.menu)
-      .controlSize(.small)
-      .frame(maxWidth: 138)
-    }
-    .padding(.horizontal, 10)
-    .padding(.vertical, 8)
-    .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
   }
 }
 
