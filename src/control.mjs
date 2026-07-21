@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -31,10 +31,42 @@ function optionValue(name) {
   return index === -1 ? undefined : args[index + 1];
 }
 
+function configuredDefaultModel(configPath) {
+  if (!existsSync(configPath)) return undefined;
+  const config = readFileSync(configPath, "utf8");
+  const firstTable = config.search(/^\s*\[/m);
+  const root = firstTable === -1 ? config : config.slice(0, firstTable);
+  return root.match(/^\s*model\s*=\s*["']([^"']+)["']/m)?.[1];
+}
+
+function nativeCodexModels(catalogPath) {
+  if (!existsSync(catalogPath)) return [];
+  try {
+    const parsed = JSON.parse(readFileSync(catalogPath, "utf8"));
+    return (Array.isArray(parsed.models) ? parsed.models : [])
+      .filter((model) => model.visibility === "list" && typeof model.slug === "string")
+      .map((model) => ({
+        slug: model.slug,
+        displayName: model.display_name || model.slug,
+        provider: "openai",
+        gatewayModel: model.slug,
+        enabled: true,
+        native: true,
+      }));
+  } catch {
+    return [];
+  }
+}
+
 // --- per-target probes (run with MODEL_ROUTER_TARGET set) -------------------
 
 async function emitProbe() {
-  const { TARGET, PROVIDER_SELECTION_PATH } = await import("./paths.mjs");
+  const {
+    CONFIG_PATH,
+    NATIVE_CATALOG_PATH,
+    TARGET,
+    PROVIDER_SELECTION_PATH,
+  } = await import("./paths.mjs");
   const { readProviderSelection } = await import("./provider-selection.mjs");
   const { LISTED_MODELS } = await import("./model-registry.mjs");
 
@@ -48,7 +80,7 @@ async function emitProbe() {
   const usageEvents = TARGET === "codex"
     ? (await import("./usage-events.mjs")).recentUsageEvents()
     : [];
-  const models = LISTED_MODELS.map((model) => ({
+  const routedModels = LISTED_MODELS.map((model) => ({
     slug: model.slug,
     displayName: model.displayName,
     provider: model.provider,
@@ -56,6 +88,10 @@ async function emitProbe() {
     enabled: enabledProviders.includes(model.provider),
     ...(roleBySlug[model.slug] ? { claudeRole: roleBySlug[model.slug] } : {}),
   }));
+  const models = TARGET === "codex"
+    ? [...nativeCodexModels(NATIVE_CATALOG_PATH), ...routedModels]
+    : routedModels;
+  const selectedModel = TARGET === "codex" ? configuredDefaultModel(CONFIG_PATH) : undefined;
 
   process.stdout.write(
     JSON.stringify({
@@ -64,6 +100,7 @@ async function emitProbe() {
       active: targetIsActive(TARGET),
       enabledProviders,
       models,
+      ...(selectedModel ? { selectedModel } : {}),
       ...(TARGET === "codex" ? { usageEvents } : {}),
     }),
   );

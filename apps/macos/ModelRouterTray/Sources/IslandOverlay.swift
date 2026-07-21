@@ -335,6 +335,7 @@ private struct IslandOverlayView: View {
 
   private var sourceLabel: String {
     guard let model else { return "LOCAL MODEL BRIDGE" }
+    if model.provider == "openai" { return "CHATGPT • NATIVE" }
     if model.provider == "grok-oauth" { return "XAI • OAUTH SESSION" }
     if model.provider == "grok-api" { return "XAI • METERED API" }
     if model.provider.hasSuffix("-api") || model.provider == "deepseek" { return "METERED API" }

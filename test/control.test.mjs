@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
-function probe(target, providers, usageEvents = []) {
+function probe(target, providers, usageEvents = [], options = {}) {
   const stateDir = mkdtempSync(path.join(os.tmpdir(), "control-probe-"));
   writeFileSync(
     path.join(stateDir, "enabled-providers.json"),
@@ -22,11 +22,30 @@ function probe(target, providers, usageEvents = []) {
       { mode: 0o600 },
     );
   }
+  if (options.nativeModels) {
+    writeFileSync(
+      path.join(stateDir, "native-models.json"),
+      `${JSON.stringify({ models: options.nativeModels })}\n`,
+      { mode: 0o600 },
+    );
+  }
+  if (options.selectedModel) {
+    writeFileSync(
+      path.join(stateDir, "config.toml"),
+      `model = ${JSON.stringify(options.selectedModel)}\n`,
+      { mode: 0o600 },
+    );
+  }
   try {
     const output = execFileSync(process.execPath, [path.join(root, "src", "control.mjs"), "--probe"], {
       cwd: root,
       encoding: "utf8",
-      env: { ...process.env, MODEL_ROUTER_TARGET: target, MODEL_ROUTER_STATE_DIR: stateDir },
+      env: {
+        ...process.env,
+        CODEX_HOME: stateDir,
+        MODEL_ROUTER_TARGET: target,
+        MODEL_ROUTER_STATE_DIR: stateDir,
+      },
     });
     return JSON.parse(output);
   } finally {
@@ -74,6 +93,38 @@ test("codex probe exposes only privacy-safe recent usage events", () => {
   }]);
   assert.equal("prompt" in slice.usageEvents[0], false);
   assert.equal("response" in slice.usageEvents[0], false);
+});
+
+test("codex probe includes native GPT models and the configured default", () => {
+  const slice = probe("codex", ["grok-oauth"], [], {
+    selectedModel: "gpt-5.6-terra",
+    nativeModels: [
+      {
+        slug: "gpt-5.6-terra",
+        display_name: "GPT-5.6-Terra",
+        visibility: "list",
+      },
+      {
+        slug: "codex-auto-review",
+        display_name: "Codex Auto Review",
+        visibility: "hide",
+      },
+    ],
+  });
+
+  assert.equal(slice.selectedModel, "gpt-5.6-terra");
+  assert.deepEqual(
+    slice.models.find((model) => model.slug === "gpt-5.6-terra"),
+    {
+      slug: "gpt-5.6-terra",
+      displayName: "GPT-5.6-Terra",
+      provider: "openai",
+      gatewayModel: "gpt-5.6-terra",
+      enabled: true,
+      native: true,
+    },
+  );
+  assert.equal(slice.models.some((model) => model.slug === "codex-auto-review"), false);
 });
 
 function probeSet(target, providers, provider, desired) {

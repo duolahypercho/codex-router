@@ -12,8 +12,11 @@ router configuration.
 
 ## Pinned model and live usage
 
-Select **Pin** beside any exposed model to keep its short name in the menu bar
-and Island. Hover the Island for a quick view or click it for account usage.
+Select **Pin** beside any native GPT or enabled external model to keep its short
+name in the menu bar and Island. The tray marks the model saved as the Codex
+default; pinning changes only the Island display, not the model selected inside
+an existing Codex task. Hover the Island for a quick view or click it for
+account usage.
 
 - Native ChatGPT/Codex limits come from the installed Codex app-server. The tray
   requests only the rate-limit snapshot and daily token buckets; it never reads

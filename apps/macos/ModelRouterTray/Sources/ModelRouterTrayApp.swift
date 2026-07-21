@@ -353,7 +353,11 @@ final class RouterStore: ObservableObject {
   }
 
   private func preferredModel(in models: [RouterModel]) -> RouterModel {
-    models.first(where: { $0.slug == "grok-oauth/grok-4.5" }) ?? models[0]
+    if let selected = snapshot.targets["codex"]?.selectedModel,
+       let model = models.first(where: { $0.slug == selected }) {
+      return model
+    }
+    return models.first(where: { $0.slug == "gpt-5.6-terra" }) ?? models[0]
   }
 
   private func runControl(arguments: [String], stdin: Data? = nil) async throws -> Data {
@@ -502,6 +506,7 @@ struct RouterTarget: Decodable {
   let active: Bool
   let enabledProviders: [String]
   let models: [RouterModel]
+  let selectedModel: String?
 }
 
 struct RouterModel: Decodable, Identifiable {
@@ -550,7 +555,7 @@ private struct TrayView: View {
   private var target: RouterTarget? { store.snapshot.targets["codex"] }
   private var providers: [(id: String, enabled: Bool)] {
     guard let target else { return [] }
-    return Dictionary(grouping: target.models, by: \.provider)
+    return Dictionary(grouping: target.models.filter { $0.provider != "openai" }, by: \.provider)
       .map { (id: $0.key, enabled: $0.value.contains(where: \.enabled)) }
       .sorted { $0.id < $1.id }
   }
@@ -612,10 +617,17 @@ private struct TrayView: View {
             set: { store.setIslandVisible($0) }
           )
         )
-        sectionLabel("Models", detail: store.pinnedShortName.map { "Pinned: \($0)" } ?? "None pinned")
+        sectionLabel(
+          "Island model",
+          detail: store.pinnedShortName.map { "Pinned: \($0)" } ?? "Uses Codex default"
+        )
         VStack(spacing: 0) {
           ForEach(target.models.filter(\.enabled)) { model in
-            SimpleModelRow(model: model, isPinned: store.pinnedModelSlug == model.slug) {
+            SimpleModelRow(
+              model: model,
+              isPinned: store.pinnedModelSlug == model.slug,
+              isDefault: target.selectedModel == model.slug
+            ) {
               store.pin(model)
             }
             if model.id != target.models.filter(\.enabled).last?.id {
@@ -965,6 +977,7 @@ struct UsageRangePicker: View {
 private struct SimpleModelRow: View {
   let model: RouterModel
   let isPinned: Bool
+  let isDefault: Bool
   let onPin: () -> Void
 
   var body: some View {
@@ -973,7 +986,7 @@ private struct SimpleModelRow: View {
         Text(model.displayName)
           .font(.system(size: 12, weight: .medium))
           .lineLimit(1)
-        Text(model.provider == "grok-oauth" ? "xAI OAuth" : model.provider)
+        Text(modelDetail)
           .font(.system(size: 9))
           .foregroundStyle(routerMuted)
       }
@@ -984,6 +997,14 @@ private struct SimpleModelRow: View {
         .foregroundStyle(isPinned ? routerMint : routerAccent)
     }
     .padding(.vertical, 7)
+  }
+
+  private var modelDetail: String {
+    if model.provider == "openai" {
+      return isDefault ? "ChatGPT · Codex default" : "ChatGPT"
+    }
+    if model.provider == "grok-oauth" { return "xAI OAuth" }
+    return model.provider
   }
 }
 
