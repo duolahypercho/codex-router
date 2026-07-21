@@ -257,6 +257,20 @@ test("Claude router authenticates discovery and maps Messages requests without l
     assert.match(streamedBody, /deepseek\/deepseek-v4-pro/);
     assert.doesNotMatch(streamedBody, /"model":"deepseek-v4-pro"/);
 
+    // Desktop apps (Claude Desktop) send a null/loopback Origin plus Sec-Fetch-*
+    // headers; those are first-party and must be allowed.
+    const desktop = await fetch(`http://127.0.0.1:${routerPort}/v1/messages`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${CALLER_KEY}`,
+        Origin: "null",
+        "Sec-Fetch-Site": "cross-site",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+    assert.equal(desktop.status, 200);
+
     const browser = await fetch(`http://127.0.0.1:${routerPort}/v1/messages`, {
       method: "POST",
       headers: {
@@ -267,7 +281,7 @@ test("Claude router authenticates discovery and maps Messages requests without l
       body: JSON.stringify(payload),
     });
     assert.equal(browser.status, 403);
-    assert.equal(requests.length, 2);
+    assert.equal(requests.length, 3);
     assert.ok(healthAuth.every((value) => value === `Bearer ${INTERNAL_KEY}`));
   } finally {
     await stopChild(router);

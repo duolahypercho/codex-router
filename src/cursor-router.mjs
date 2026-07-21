@@ -87,8 +87,25 @@ function requireCallerAuth(request, response) {
   return false;
 }
 
+// See claude-router: only a real remote web page (http/https, non-loopback host)
+// is the threat. Electron apps like Cursor send app-scheme/null/loopback origins
+// plus Sec-Fetch-* headers legitimately; the caller key is the real auth.
+function isRemoteWebOrigin(origin) {
+  if (!origin || origin === "null") return false;
+  let url;
+  try {
+    url = new URL(origin);
+  } catch {
+    return false;
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return false;
+  return !["127.0.0.1", "localhost", "::1", "[::1]"].includes(url.hostname);
+}
+
 function requireDesktopTransport(request, response) {
-  if (request.headers.origin || request.headers["sec-fetch-site"]) {
+  const origin = request.headers.origin;
+  if (isRemoteWebOrigin(origin)) {
+    if (!QUIET) console.error(`[cursor-router] rejected remote web origin ${origin}`);
     openAiError(
       response,
       403,

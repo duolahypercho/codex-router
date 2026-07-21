@@ -87,8 +87,28 @@ function requireCallerAuth(request, response) {
   return false;
 }
 
+// Only a real remote web page (http/https on a non-loopback host) is the
+// CSRF / DNS-rebinding threat worth blocking. Desktop apps like Claude Desktop
+// are Chromium-based and legitimately send an app-scheme, "null", or loopback
+// Origin plus Sec-Fetch-* headers — those are first-party. The caller key is the
+// actual auth boundary (a web page cannot obtain it), so we must not reject the
+// host app merely for carrying browser headers.
+function isRemoteWebOrigin(origin) {
+  if (!origin || origin === "null") return false;
+  let url;
+  try {
+    url = new URL(origin);
+  } catch {
+    return false;
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return false;
+  return !["127.0.0.1", "localhost", "::1", "[::1]"].includes(url.hostname);
+}
+
 function requireDesktopTransport(request, response) {
-  if (request.headers.origin || request.headers["sec-fetch-site"]) {
+  const origin = request.headers.origin;
+  if (isRemoteWebOrigin(origin)) {
+    if (!QUIET) console.error(`[claude-router] rejected remote web origin ${origin}`);
     writeJson(response, 403, {
       type: "error",
       error: {
