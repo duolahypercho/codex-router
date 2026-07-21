@@ -44,6 +44,7 @@ function startForwarder(port, backendPort, authPath) {
       MODEL_ROUTER_INTERNAL_KEY: INTERNAL_KEY,
       MODEL_ROUTER_GROK_OAUTH_PORT: String(port),
       GROK_CLI_CHAT_PROXY_BASE_URL: `http://127.0.0.1:${backendPort}`,
+      GROK_CLI: path.join(root, "test", "fixtures", "missing-grok-cli"),
       GROK_AUTH_PATH: authPath,
       MODEL_ROUTER_QUIET: "1",
     },

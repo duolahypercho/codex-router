@@ -47,6 +47,7 @@ function readSession() {
 }
 
 function grokClientVersion() {
+  const fallbackVersion = VERSION.match(/\b(\d+\.\d+\.\d+)\b/)?.[1] || "0.0.0";
   const executable =
     process.env.GROK_CLI || path.join(process.env.GROK_HOME || path.join(os.homedir(), ".grok"), "bin", "grok");
   try {
@@ -55,9 +56,9 @@ function grokClientVersion() {
       timeout: 2_000,
       stdio: ["ignore", "pipe", "ignore"],
     });
-    return output.match(/\b(\d+\.\d+\.\d+)\b/)?.[1] || VERSION;
+    return output.match(/\b(\d+\.\d+\.\d+)\b/)?.[1] || fallbackVersion;
   } catch {
-    return VERSION;
+    return fallbackVersion;
   }
 }
 
