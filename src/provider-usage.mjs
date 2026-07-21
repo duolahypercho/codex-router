@@ -1,4 +1,6 @@
 import { PROVIDERS } from "./model-registry.mjs";
+import { providerAccountUsageSnapshot } from "./provider-account-usage.mjs";
+import { readProviderSelection } from "./provider-selection.mjs";
 import { recentUsageEvents } from "./usage-events.mjs";
 
 function dateKey(value) {
@@ -83,10 +85,21 @@ export function aggregateProviderUsage(events, { days = 90, now = Date.now() } =
   };
 }
 
-export function providerUsageSnapshot(options = {}) {
+export async function providerUsageSnapshot(options = {}) {
   const days = options.days || 90;
-  return aggregateProviderUsage(
+  const snapshot = aggregateProviderUsage(
     recentUsageEvents({ sinceMs: days * 24 * 60 * 60 * 1_000, limit: 100_000 }),
     { ...options, days },
   );
+  const accounts = await providerAccountUsageSnapshot({
+    ...options,
+    providerIds: readProviderSelection(),
+  });
+  return {
+    ...snapshot,
+    providers: snapshot.providers.map((provider) => ({
+      ...provider,
+      account: accounts[provider.id],
+    })),
+  };
 }

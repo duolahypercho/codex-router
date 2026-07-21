@@ -21,10 +21,15 @@ account usage.
 - Usage follows the provider of the pinned model. Native GPT models show the
   ChatGPT subscription limit and daily buckets reported by the installed Codex
   app-server; the tray never reads or copies the ChatGPT credential file.
-- External OAuth and API providers have separate token and request graphs. They
-  cover only traffic sent through this router on this Mac and are labeled that
-  way; they are not presented as provider-wide billing balances or remaining
-  subscription quotas.
+- External OAuth and API providers have separate account meters and local
+  traffic graphs. Kimi Code OAuth reads weekly and five-hour quota from Kimi's
+  usage API with the existing CLI session. DeepSeek and Kimi Platform API show
+  balance from their official API-key endpoints. Grok falls back to local
+  traffic while the installed Grok CLI does not expose its billing RPC; the app
+  does not silently import browser cookies.
+- Local graphs cover only traffic sent through this router on this Mac and are
+  labeled that way. A local graph is never presented as provider-wide billing
+  or remaining subscription quota.
 - Daily token bars can show 7, 30, or 90 days. Seven-day charts label every
   weekday; longer ranges use spaced date ticks while retaining one bar per day.
   Hover any bar for its full date and exact token count. Usage refreshes every
@@ -42,6 +47,11 @@ at rest, richer usage detail on hover, and a full panel on click. On a notched
 Mac it sits flush with the screen edge; on other displays it behaves as a
 top-center floating island. The menu-bar item remains available as a fallback
 and configuration surface.
+
+The provider-meter hierarchy follows the privacy-first pattern demonstrated by
+[CodexBar](https://github.com/steipete/CodexBar): show quota, balance, or spend
+only when that provider exposes an appropriate source, and keep local traffic
+as a distinct fallback.
 
 The tray uses the native macOS popover material and follows the current system
 appearance. It intentionally uses standard system typography, controls, and

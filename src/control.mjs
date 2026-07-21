@@ -214,7 +214,7 @@ async function printAccountUsage() {
 
 async function printProviderUsage() {
   const { providerUsageSnapshot } = await import("./provider-usage.mjs");
-  process.stdout.write(`${JSON.stringify(providerUsageSnapshot(), null, 2)}\n`);
+  process.stdout.write(`${JSON.stringify(await providerUsageSnapshot(), null, 2)}\n`);
 }
 
 async function printProviderOnboarding() {

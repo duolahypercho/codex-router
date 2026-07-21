@@ -123,6 +123,7 @@ final class RouterStore: ObservableObject {
       return "\(primary.remainingPercent)% left"
     }
     guard providerUsage != nil else { return nil }
+    if let metric = pinnedAccountMetric { return formattedAccountMetric(metric) }
     let total = localUsageTotals(days: 7).tokens
     return total > 0 ? "\(compactTokenCount(total)) tok" : "No use"
   }
@@ -134,6 +135,10 @@ final class RouterStore: ObservableObject {
   var pinnedProviderUsage: RouterProviderUsage? {
     guard let provider = pinnedModel?.provider else { return nil }
     return providerUsage?.providers.first(where: { $0.id == provider })
+  }
+
+  var pinnedAccountMetric: ProviderAccountMetric? {
+    pinnedProviderUsage?.account.metrics.first
   }
 
   func startPolling() async {
@@ -569,6 +574,32 @@ struct RouterProviderUsage: Decodable, Identifiable {
   let outputTokens: Int64
   let totalTokens: Int64
   let dailyUsageBuckets: [ProviderDailyUsageBucket]
+  let account: ProviderAccountUsage
+}
+
+struct ProviderAccountUsage: Decodable {
+  let status: String
+  let source: String
+  let metrics: [ProviderAccountMetric]
+  let message: String?
+}
+
+struct ProviderAccountMetric: Decodable {
+  let kind: String
+  let label: String
+  let usedPercent: Double?
+  let remainingPercent: Double?
+  let used: Double?
+  let limit: Double?
+  let remaining: Double?
+  let unit: String?
+  let resetAt: TimeInterval?
+  let value: Double?
+  let currency: String?
+  let detail: String?
+  let available: Bool?
+
+  var resetDate: Date? { resetAt.map(Date.init(timeIntervalSince1970:)) }
 }
 
 struct ProviderDailyUsageBucket: Decodable {
@@ -971,7 +1002,7 @@ private struct ProviderUsageSection: View {
           .monospacedDigit()
       }
 
-      if store.pinnedUsesChatGPTUsage {
+      if showsProgressBar {
         GeometryReader { geometry in
           ZStack(alignment: .leading) {
             Capsule().fill(Color.primary.opacity(0.10))
@@ -983,8 +1014,27 @@ private struct ProviderUsageSection: View {
         .frame(height: 5)
       }
 
+      if let secondaryAccountMetric {
+        HStack(spacing: 8) {
+          Text(secondaryAccountMetric.label)
+            .font(.system(size: 9, weight: .medium))
+            .foregroundStyle(routerMuted)
+          GeometryReader { geometry in
+            ZStack(alignment: .leading) {
+              Capsule().fill(Color.primary.opacity(0.08))
+              Capsule()
+                .fill(routerAccent.opacity(0.72))
+                .frame(width: geometry.size.width * metricRemainingFraction(secondaryAccountMetric))
+            }
+          }
+          .frame(height: 4)
+          Text(formattedAccountMetric(secondaryAccountMetric))
+            .font(.system(size: 9, weight: .medium, design: .monospaced))
+        }
+      }
+
       HStack {
-        Text("Daily token usage")
+        Text(store.pinnedUsesChatGPTUsage ? "Daily token usage" : "Router traffic")
           .font(.system(size: 10, weight: .medium))
           .foregroundStyle(routerMuted)
         Spacer()
@@ -1011,6 +1061,13 @@ private struct ProviderUsageSection: View {
           .foregroundStyle(routerRed)
           .lineLimit(2)
       }
+
+      if let accountMessage {
+        Text(accountMessage)
+          .font(.system(size: 9))
+          .foregroundStyle(routerMuted)
+          .lineLimit(2)
+      }
     }
     .padding(.vertical, 2)
   }
@@ -1026,17 +1083,33 @@ private struct ProviderUsageSection: View {
       return "\(value)% left"
     }
     guard store.providerUsage != nil else { return "—" }
+    if let metric = store.pinnedAccountMetric { return formattedAccountMetric(metric) }
     return compactTokenCount(store.localUsageTotals(days: range.rawValue).tokens)
   }
 
   private var remainingFraction: CGFloat {
-    CGFloat(store.accountUsage?.primary?.remainingPercent ?? 0) / 100
+    if let metric = store.pinnedAccountMetric,
+       let remaining = metric.remainingPercent {
+      return CGFloat(max(0, min(100, remaining))) / 100
+    }
+    return CGFloat(store.accountUsage?.primary?.remainingPercent ?? 0) / 100
+  }
+
+  private var showsProgressBar: Bool {
+    store.pinnedUsesChatGPTUsage || store.pinnedAccountMetric?.kind == "quota"
   }
 
   private var limitDetail: String {
     if !store.pinnedUsesChatGPTUsage {
       guard let usage = store.pinnedProviderUsage else { return "Loading provider usage…" }
-      return "\(usage.credentialType.uppercased()) usage · measured on this Mac"
+      if let metric = usage.account.metrics.first {
+        if let reset = metric.resetDate {
+          return "\(metric.label) · resets \(reset.formatted(date: .abbreviated, time: .shortened))"
+        }
+        if let detail = metric.detail, !detail.isEmpty { return detail }
+        return "Official provider account"
+      }
+      return "\(usage.credentialType.uppercased()) traffic · measured on this Mac"
     }
     guard let limit = store.accountUsage?.primary else { return "Loading native Codex usage…" }
     guard let reset = limit.resetDate else { return limit.durationLabel }
@@ -1057,6 +1130,21 @@ private struct ProviderUsageSection: View {
       return store.accountUsage == nil ? store.accountUsageError : nil
     }
     return store.providerUsage == nil ? store.providerUsageError : nil
+  }
+
+  private var secondaryAccountMetric: ProviderAccountMetric? {
+    guard !store.pinnedUsesChatGPTUsage else { return nil }
+    return store.pinnedProviderUsage?.account.metrics.dropFirst().first
+  }
+
+  private var accountMessage: String? {
+    guard !store.pinnedUsesChatGPTUsage,
+          store.pinnedProviderUsage?.account.metrics.isEmpty == true else { return nil }
+    return store.pinnedProviderUsage?.account.message
+  }
+
+  private func metricRemainingFraction(_ metric: ProviderAccountMetric) -> CGFloat {
+    CGFloat(max(0, min(100, metric.remainingPercent ?? 0))) / 100
   }
 }
 
@@ -1220,6 +1308,21 @@ struct UsageBarChart: View {
   }
 }
 
+func formattedAccountMetric(_ metric: ProviderAccountMetric) -> String {
+  if metric.kind == "quota", let remaining = metric.remainingPercent {
+    return "\(Int(remaining.rounded()))% left"
+  }
+  if metric.kind == "balance", let value = metric.value {
+    let formatter = NumberFormatter()
+    formatter.numberStyle = .currency
+    formatter.currencyCode = metric.currency ?? "USD"
+    formatter.minimumFractionDigits = 2
+    formatter.maximumFractionDigits = 2
+    return formatter.string(from: NSNumber(value: value)) ?? String(format: "%.2f", value)
+  }
+  return "—"
+}
+
 func compactTokenCount(_ value: Double) -> String {
   if value >= 1_000_000_000 {
     return String(format: "%.1fB", value / 1_000_000_000)
@@ -1234,6 +1337,7 @@ func compactTokenCount(_ value: Double) -> String {
 }
 
 private struct StatusBeacon: View {
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   let state: RouterActivityState
   @State private var breathing = false
 
@@ -1258,7 +1362,7 @@ private struct StatusBeacon: View {
 
   private func animate() {
     breathing = false
-    guard state == .generating else { return }
+    guard state == .generating, !reduceMotion else { return }
     withAnimation(.easeInOut(duration: 0.72).repeatForever(autoreverses: true)) {
       breathing = true
     }

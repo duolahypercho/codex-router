@@ -21,9 +21,7 @@ final class IslandDisplayModel: ObservableObject {
 
   func setState(_ next: State) {
     guard state != next else { return }
-    withAnimation(.spring(response: 0.42, dampingFraction: 0.82)) {
-      state = next
-    }
+    state = next
   }
 }
 
@@ -148,6 +146,7 @@ final class IslandWindowController {
 }
 
 private struct IslandOverlayView: View {
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @ObservedObject var store: RouterStore
   @ObservedObject var display: IslandDisplayModel
   @State private var range: UsageRange = .week
@@ -177,7 +176,10 @@ private struct IslandOverlayView: View {
       .onTapGesture {
         if display.state != .expanded { display.setState(.expanded) }
       }
-      .animation(.spring(response: 0.42, dampingFraction: 0.82), value: display.state)
+      .animation(
+        reduceMotion ? nil : .spring(response: 0.42, dampingFraction: 0.82),
+        value: display.state
+      )
       Spacer(minLength: 0)
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -355,22 +357,26 @@ private struct IslandOverlayView: View {
       return "\(remaining)%"
     }
     guard store.providerUsage != nil else { return "—" }
+    if let metric = store.pinnedAccountMetric { return formattedAccountMetric(metric) }
     return compactTokenCount(store.localUsageTotals(days: range.rawValue).tokens)
   }
 
   private var primaryLabel: String {
-    store.pinnedUsesChatGPTUsage ? "SUBSCRIPTION LEFT" : "\(range.rawValue)D LOCAL TOKENS"
+    if store.pinnedUsesChatGPTUsage { return "SUBSCRIPTION LEFT" }
+    return store.pinnedAccountMetric?.label.uppercased() ?? "\(range.rawValue)D LOCAL TOKENS"
   }
 
   private var primaryTitle: String {
     if store.pinnedUsesChatGPTUsage {
       return store.accountUsage?.primary?.durationLabel.uppercased() ?? "CHATGPT LIMIT"
     }
+    if let metric = store.pinnedAccountMetric { return metric.label.uppercased() }
     return "\(range.rawValue)-DAY REQUESTS"
   }
 
   private var primaryTileMetric: String {
     if store.pinnedUsesChatGPTUsage { return primaryMetric }
+    if let metric = store.pinnedAccountMetric { return formattedAccountMetric(metric) }
     return "\(store.localUsageTotals(days: range.rawValue).requests)"
   }
 
@@ -378,6 +384,13 @@ private struct IslandOverlayView: View {
     if store.pinnedUsesChatGPTUsage {
       guard let reset = store.accountUsage?.primary?.resetDate else { return "Native Codex subscription" }
       return "Resets \(reset.formatted(date: .abbreviated, time: .shortened))"
+    }
+    if let metric = store.pinnedAccountMetric {
+      if let reset = metric.resetDate {
+        return "Resets \(reset.formatted(date: .abbreviated, time: .shortened))"
+      }
+      if let detail = metric.detail, !detail.isEmpty { return detail }
+      return "Official provider account"
     }
     return "Measured on this Mac"
   }
@@ -449,6 +462,7 @@ private struct IslandSilhouette: InsettableShape {
 }
 
 private struct LiveOrb: View {
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   let state: RouterActivityState
   @State private var pulsing = false
 
@@ -469,7 +483,7 @@ private struct LiveOrb: View {
 
   private func animate() {
     pulsing = false
-    guard state == .generating else { return }
+    guard state == .generating, !reduceMotion else { return }
     withAnimation(.easeInOut(duration: 0.72).repeatForever(autoreverses: true)) {
       pulsing = true
     }
@@ -477,15 +491,16 @@ private struct LiveOrb: View {
 }
 
 private struct StatusGlow: View {
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   let state: RouterActivityState
 
   var body: some View {
-    TimelineView(.animation(minimumInterval: 1 / 30, paused: false)) { timeline in
+    TimelineView(.animation(minimumInterval: 1 / 30, paused: reduceMotion)) { timeline in
       let elapsed = timeline.date.timeIntervalSinceReferenceDate
       let angle = Angle.degrees(
-        (elapsed / sweepDuration).truncatingRemainder(dividingBy: 1) * 360
+        reduceMotion ? 0 : (elapsed / sweepDuration).truncatingRemainder(dividingBy: 1) * 360
       )
-      let wave = (sin(elapsed * 2 * .pi / flashDuration) + 1) / 2
+      let wave = reduceMotion ? 0.5 : (sin(elapsed * 2 * .pi / flashDuration) + 1) / 2
       ZStack {
         IslandSilhouette()
           .inset(by: 1)
