@@ -24,7 +24,7 @@ import {
   TARGET,
   loopback,
 } from "./paths.mjs";
-import { selectedListedModels } from "./provider-selection.mjs";
+import { claudeRoleAssignments } from "./claude-role-map.mjs";
 
 const command = process.argv[2] || "status";
 const allowedCommands = new Set(["enable", "disable", "refresh", "status"]);
@@ -131,8 +131,8 @@ function routerConfiguration(callerKey) {
     inferenceGatewayApiKey: callerKey,
     inferenceGatewayAuthScheme: "bearer",
     modelDiscoveryEnabled: false,
-    inferenceModels: selectedListedModels().map((model) => ({
-      name: model.slug,
+    inferenceModels: claudeRoleAssignments().map(({ roleId, model }) => ({
+      name: roleId,
       labelOverride: model.displayName,
       ...(model.contextWindow >= 1_000_000 ? { supports1m: true } : {}),
     })),
@@ -152,7 +152,7 @@ function configurationMatches(configuration, callerKey) {
           return [];
         }
       })();
-  const requiredModels = new Set(selectedListedModels().map((model) => model.slug));
+  const requiredModels = new Set(claudeRoleAssignments().map(({ roleId }) => roleId));
   const configuredModels = new Set(
     models.map((model) => (typeof model === "string" ? model : model?.name)).filter(Boolean),
   );

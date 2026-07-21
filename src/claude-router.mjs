@@ -26,6 +26,7 @@ import {
   MODEL_BY_SLUG,
   providerForModel,
 } from "./model-registry.mjs";
+import { modelForRoleId } from "./claude-role-map.mjs";
 import {
   readProviderSelection,
   selectedListedModels,
@@ -143,7 +144,9 @@ function parsePayload(buffer) {
 }
 
 function enabledRoute(modelId) {
-  const registered = MODEL_BY_SLUG.get(modelId);
+  // Claude Desktop sends a Claude role id (e.g. claude-sonnet-5); map it back to
+  // the assigned registry model. Fall back to a raw slug for direct callers.
+  const registered = modelForRoleId(modelId) || MODEL_BY_SLUG.get(modelId);
   if (!registered) return { error: "unknown" };
   if (!readProviderSelection().includes(registered.provider)) {
     return { error: "disabled", model: registered };

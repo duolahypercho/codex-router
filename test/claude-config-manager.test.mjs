@@ -98,10 +98,13 @@ test("Claude config manager adds one owned entry and restores the previous selec
     assert.equal(config.inferenceGatewayAuthScheme, "bearer");
     assert.equal(config.modelDiscoveryEnabled, false);
     assert.equal(config.toolSearchEnabled, false);
+    // Models are presented under Claude role ids (so Claude Desktop accepts
+    // them) with a labelOverride carrying the real name.
     assert.deepEqual(
       config.inferenceModels.map((model) => model.name),
-      ["kimi-oauth/k3", "deepseek/deepseek-v4-flash", "deepseek/deepseek-v4-pro"],
+      ["claude-sonnet-5", "claude-opus-4-8", "claude-haiku-4-5"],
     );
+    assert.equal(config.inferenceModels[0].labelOverride, "Kimi K3 (OAuth)");
     assert.equal(config.inferenceModels[0].supports1m, undefined);
     assert.equal(config.inferenceModels[1].supports1m, true);
     assert.equal(config.inferenceModels[2].supports1m, true);
@@ -132,7 +135,7 @@ test("Claude config manager adds one owned entry and restores the previous selec
     const refreshedConfig = JSON.parse(readFileSync(configPath, "utf8"));
     assert.deepEqual(
       refreshedConfig.inferenceModels.map((model) => model.name),
-      ["deepseek/deepseek-v4-flash", "deepseek/deepseek-v4-pro"],
+      ["claude-sonnet-5", "claude-opus-4-8"],
     );
 
     const disabled = run("disable", env);
