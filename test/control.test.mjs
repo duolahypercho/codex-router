@@ -48,6 +48,41 @@ test("cursor probe reports enabled models without claude roles", () => {
   assert.ok(slice.models.every((m) => m.claudeRole === undefined));
 });
 
+function probeSet(target, providers, provider, desired) {
+  const stateDir = mkdtempSync(path.join(os.tmpdir(), "control-set-"));
+  writeFileSync(
+    path.join(stateDir, "enabled-providers.json"),
+    `${JSON.stringify({ version: 1, providers })}\n`,
+    { mode: 0o600 },
+  );
+  try {
+    const output = execFileSync(
+      process.execPath,
+      [path.join(root, "src", "control.mjs"), "--probe-set", provider, desired],
+      {
+        cwd: root,
+        encoding: "utf8",
+        env: { ...process.env, MODEL_ROUTER_TARGET: target, MODEL_ROUTER_STATE_DIR: stateDir },
+      },
+    );
+    return JSON.parse(output);
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+}
+
+test("toggle on adds a provider; toggle off removes it", () => {
+  const added = probeSet("cursor", ["deepseek"], "chatgpt-oauth", "on");
+  assert.deepEqual(added.enabledProviders, ["deepseek", "chatgpt-oauth"]);
+
+  const removed = probeSet("cursor", ["chatgpt-oauth", "deepseek"], "deepseek", "off");
+  assert.deepEqual(removed.enabledProviders, ["chatgpt-oauth"]);
+});
+
+test("toggle rejects an unknown provider", () => {
+  assert.throws(() => probeSet("cursor", ["deepseek"], "not-a-provider", "on"));
+});
+
 test("aggregate overview covers every target", () => {
   const output = execFileSync(process.execPath, [path.join(root, "src", "control.mjs"), "--json"], {
     cwd: root,

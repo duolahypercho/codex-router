@@ -2,18 +2,23 @@ import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-// Cross-target control plane for a tray/UI (e.g. the pane fork). It reports, for
-// every target, which registry models exist and whether each is enabled — the
-// data a model-toggle UI needs. Read-only for now; toggle/apply comes next.
+// Cross-target control plane for a tray/UI (e.g. the planned pane fork). It
+// reads which registry models are enabled per target and toggles them. Toggling
+// only rewrites each target's provider selection; making it live is a separate
+// explicit `apply`, so a toggle never silently restarts a running target.
 
 const TARGETS = ["codex", "claude", "cursor"];
+const SELF = fileURLToPath(import.meta.url);
 const args = process.argv.slice(2);
-const asJson = args.includes("--json");
 
-// Probe mode: run per-target (with MODEL_ROUTER_TARGET set) and emit that
-// target's slice. Kept in one file that re-spawns itself so paths.mjs resolves
-// each target's own state directory.
-if (args.includes("--probe")) {
+function optionValue(name) {
+  const index = args.indexOf(name);
+  return index === -1 ? undefined : args[index + 1];
+}
+
+// --- per-target probes (run with MODEL_ROUTER_TARGET set) -------------------
+
+async function emitProbe() {
   const { TARGET, PROVIDER_SELECTION_PATH } = await import("./paths.mjs");
   const { readProviderSelection } = await import("./provider-selection.mjs");
   const { LISTED_MODELS } = await import("./model-registry.mjs");
@@ -42,30 +47,50 @@ if (args.includes("--probe")) {
       models,
     }),
   );
-  process.exit(0);
 }
 
-const self = fileURLToPath(import.meta.url);
-const targets = {};
-for (const target of TARGETS) {
-  const result = spawnSync(process.execPath, [self, "--probe"], {
-    env: { ...process.env, MODEL_ROUTER_TARGET: target },
-    encoding: "utf8",
-  });
-  if (result.status === 0) {
+async function emitProbeSet(provider, desired) {
+  const { TARGET } = await import("./paths.mjs");
+  const { readProviderSelection, writeProviderSelection } = await import("./provider-selection.mjs");
+  const { PROVIDERS } = await import("./model-registry.mjs");
+  if (!PROVIDERS.has(provider)) throw new Error(`Unknown provider: ${provider}`);
+  if (desired !== "on" && desired !== "off") throw new Error("state must be on or off");
+
+  const current = readProviderSelection();
+  const next =
+    desired === "on"
+      ? current.includes(provider)
+        ? current
+        : [...current, provider]
+      : current.filter((id) => id !== provider);
+  writeProviderSelection(next);
+  process.stdout.write(JSON.stringify({ target: TARGET, enabledProviders: next }));
+}
+
+// --- aggregate over all targets --------------------------------------------
+
+function probeTargets() {
+  const targets = {};
+  for (const target of TARGETS) {
+    const result = spawnSync(process.execPath, [SELF, "--probe"], {
+      env: { ...process.env, MODEL_ROUTER_TARGET: target },
+      encoding: "utf8",
+    });
     try {
-      targets[target] = JSON.parse(result.stdout);
+      targets[target] = result.status === 0 ? JSON.parse(result.stdout) : { target, error: (result.stderr || "").trim() || "probe failed" };
     } catch {
       targets[target] = { target, error: "probe returned invalid JSON" };
     }
-  } else {
-    targets[target] = { target, error: (result.stderr || "").trim() || "probe failed" };
   }
+  return targets;
 }
 
-if (asJson) {
-  process.stdout.write(`${JSON.stringify({ targets }, null, 2)}\n`);
-} else {
+function printOverview(asJson) {
+  const targets = probeTargets();
+  if (asJson) {
+    process.stdout.write(`${JSON.stringify({ targets }, null, 2)}\n`);
+    return;
+  }
   for (const target of TARGETS) {
     const slice = targets[target];
     if (slice.error) {
@@ -79,4 +104,36 @@ if (asJson) {
       process.stdout.write(`  [${mark}] ${model.displayName}${role}\n`);
     }
   }
+}
+
+function runSet(provider, desired) {
+  const requested = optionValue("--targets");
+  const selected = requested ? requested.split(",").map((value) => value.trim()) : TARGETS;
+  for (const target of selected) {
+    if (!TARGETS.includes(target)) throw new Error(`Unknown target: ${target}`);
+    const result = spawnSync(process.execPath, [SELF, "--probe-set", provider, desired], {
+      env: { ...process.env, MODEL_ROUTER_TARGET: target },
+      encoding: "utf8",
+    });
+    if (result.status !== 0) {
+      throw new Error(`${target}: ${(result.stderr || "").trim() || "toggle failed"}`);
+    }
+  }
+  process.stderr.write(
+    `Set ${provider} ${desired} for: ${selected.join(", ")}. Run \`bin/control apply\` to make it live.\n`,
+  );
+  printOverview(args.includes("--json"));
+}
+
+// --- dispatch ---------------------------------------------------------------
+
+if (args.includes("--probe")) {
+  await emitProbe();
+} else if (args[0] === "--probe-set") {
+  await emitProbeSet(args[1], args[2]);
+} else if (args[0] === "set") {
+  if (!args[1] || !args[2]) throw new Error("Usage: control set <provider> <on|off> [--targets ...]");
+  runSet(args[1], args[2]);
+} else {
+  printOverview(args.includes("--json"));
 }
