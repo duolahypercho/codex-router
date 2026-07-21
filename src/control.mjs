@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 // Cross-target control plane for a tray/UI (e.g. the planned pane fork). It
@@ -9,7 +10,21 @@ import { fileURLToPath } from "node:url";
 
 const TARGETS = ["codex", "claude", "cursor"];
 const SELF = fileURLToPath(import.meta.url);
+const REPO_ROOT = path.resolve(path.dirname(SELF), "..");
 const args = process.argv.slice(2);
+
+function targetIsActive(target) {
+  const result = spawnSync(process.execPath, [path.join(REPO_ROOT, "src", "service.mjs"), "status"], {
+    env: { ...process.env, MODEL_ROUTER_TARGET: target },
+    encoding: "utf8",
+  });
+  try {
+    const status = JSON.parse(result.stdout);
+    return Boolean(status.installed || status.loaded);
+  } catch {
+    return false;
+  }
+}
 
 function optionValue(name) {
   const index = args.indexOf(name);
@@ -125,6 +140,31 @@ function runSet(provider, desired) {
   printOverview(args.includes("--json"));
 }
 
+// Re-apply pending selection changes, but only to targets that are already
+// active (installed service). Never installs a target that isn't set up.
+function runApply() {
+  const requested = optionValue("--targets");
+  const selected = requested ? requested.split(",").map((value) => value.trim()) : TARGETS;
+  const applied = [];
+  const skipped = [];
+  for (const target of selected) {
+    if (!TARGETS.includes(target)) throw new Error(`Unknown target: ${target}`);
+    if (!targetIsActive(target)) {
+      skipped.push(target);
+      continue;
+    }
+    const result = spawnSync(path.join(REPO_ROOT, "bin", "enable"), [], {
+      env: { ...process.env, MODEL_ROUTER_TARGET: target },
+      stdio: "inherit",
+    });
+    if (result.status !== 0) throw new Error(`${target}: apply failed`);
+    applied.push(target);
+  }
+  process.stderr.write(
+    `Applied: ${applied.join(", ") || "none"}. Skipped (not active): ${skipped.join(", ") || "none"}.\n`,
+  );
+}
+
 // --- dispatch ---------------------------------------------------------------
 
 if (args.includes("--probe")) {
@@ -134,6 +174,8 @@ if (args.includes("--probe")) {
 } else if (args[0] === "set") {
   if (!args[1] || !args[2]) throw new Error("Usage: control set <provider> <on|off> [--targets ...]");
   runSet(args[1], args[2]);
+} else if (args[0] === "apply") {
+  runApply();
 } else {
   printOverview(args.includes("--json"));
 }
