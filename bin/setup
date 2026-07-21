@@ -5,5 +5,6 @@ repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 case "${MODEL_ROUTER_TARGET:-codex}" in
   codex) exec node "$repo_dir/src/setup.mjs" "$@" ;;
   claude) exec node "$repo_dir/src/claude-setup.mjs" "$@" ;;
-  *) echo "MODEL_ROUTER_TARGET must be codex or claude." >&2; exit 2 ;;
+  cursor) exec node "$repo_dir/src/cursor-setup.mjs" "$@" ;;
+  *) echo "MODEL_ROUTER_TARGET must be codex, claude, or cursor." >&2; exit 2 ;;
 esac
