@@ -265,6 +265,7 @@ target. See [Development](docs/DEVELOPMENT.md) for the registry contract.
 
 - [Installation, migration, and upgrades](docs/INSTALL.md)
 - [Claude Desktop target](docs/CLAUDE.md)
+- [Cursor target](docs/CURSOR.md)
 - [Troubleshooting](docs/TROUBLESHOOTING.md)
 - [Architecture and request flow](docs/HOW-IT-WORKS.md)
 - [Security and credential handling](SECURITY.md)
