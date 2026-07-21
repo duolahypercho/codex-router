@@ -13,9 +13,9 @@ final class IslandDisplayModel: ObservableObject {
 
   var size: CGSize {
     switch state {
-    case .compact: return CGSize(width: 244, height: 38)
-    case .peek: return CGSize(width: 350, height: 88)
-    case .expanded: return CGSize(width: 500, height: 272)
+    case .compact: return CGSize(width: 286, height: 40)
+    case .peek: return CGSize(width: 382, height: 104)
+    case .expanded: return CGSize(width: 520, height: 310)
     }
   }
 
@@ -29,7 +29,7 @@ final class IslandDisplayModel: ObservableObject {
 
 @MainActor
 final class IslandWindowController {
-  static let windowSize = CGSize(width: 700, height: 360)
+  static let windowSize = CGSize(width: 720, height: 400)
 
   private let window: NSPanel
   private let display = IslandDisplayModel()
@@ -37,6 +37,7 @@ final class IslandWindowController {
   private var localMouseMonitor: Any?
   private var initialTrackingTimer: Timer?
   private var screenObserver: NSObjectProtocol?
+  private var trackingInstalled = false
 
   init(store: RouterStore) {
     window = NSPanel(
@@ -59,16 +60,25 @@ final class IslandWindowController {
     )
   }
 
-  func show() {
-    reposition()
-    window.orderFrontRegardless()
-    installMouseTracking()
-    screenObserver = NotificationCenter.default.addObserver(
-      forName: NSApplication.didChangeScreenParametersNotification,
-      object: nil,
-      queue: .main
-    ) { [weak self] _ in
-      Task { @MainActor in self?.reposition() }
+  func setVisible(_ visible: Bool) {
+    if visible {
+      reposition()
+      window.orderFrontRegardless()
+      if !trackingInstalled {
+        installMouseTracking()
+        trackingInstalled = true
+      }
+      if screenObserver == nil {
+        screenObserver = NotificationCenter.default.addObserver(
+          forName: NSApplication.didChangeScreenParametersNotification,
+          object: nil,
+          queue: .main
+        ) { [weak self] _ in
+          Task { @MainActor in self?.reposition() }
+        }
+      }
+    } else {
+      window.orderOut(nil)
     }
   }
 
@@ -140,26 +150,26 @@ final class IslandWindowController {
 private struct IslandOverlayView: View {
   @ObservedObject var store: RouterStore
   @ObservedObject var display: IslandDisplayModel
+  @State private var range: UsageRange = .week
 
   private var model: RouterModel? { store.pinnedModel }
 
   var body: some View {
     VStack(spacing: 0) {
       ZStack {
-        glow
         IslandSilhouette()
-          .fill(Color.black.opacity(0.97))
+          .fill(routerInk.opacity(0.985))
           .overlay {
             IslandSilhouette()
-              .strokeBorder(
+              .fill(
                 LinearGradient(
-                  colors: [Color.white.opacity(0.18), routerAccent.opacity(0.18), .clear],
+                  colors: [store.activityState.tint.opacity(0.16), .clear, store.activityState.tint.opacity(0.06)],
                   startPoint: .topLeading,
                   endPoint: .bottomTrailing
-                ),
-                lineWidth: 0.7
+                )
               )
           }
+        glow
         content
       }
       .frame(width: display.size.width, height: display.size.height)
@@ -190,39 +200,49 @@ private struct IslandOverlayView: View {
   }
 
   private var compactContent: some View {
-    HStack(spacing: 8) {
+    HStack(spacing: 7) {
       LiveOrb(state: store.activityState)
+      Text(store.activityState.label)
+        .font(.system(size: 10, weight: .semibold, design: .rounded))
+        .foregroundStyle(store.activityState.tint)
+      Text("·")
+        .foregroundStyle(routerMuted)
       Text(store.pinnedShortName ?? "Codex")
-        .font(.system(size: 12, weight: .semibold, design: .rounded))
+        .font(.system(size: 11, weight: .medium, design: .rounded))
         .lineLimit(1)
       Spacer(minLength: 6)
-      Text(store.pinnedUsageText ?? "LIVE")
-        .font(.system(size: 10, weight: .bold, design: .monospaced))
-        .foregroundStyle(store.pinnedUsageText == nil ? routerMint : routerAccent)
+      Text(store.pinnedUsageText.map { "\($0) left" } ?? "Limit —")
+        .font(.system(size: 10, weight: .medium, design: .monospaced))
+        .foregroundStyle(.white.opacity(0.78))
     }
     .padding(.horizontal, 14)
   }
 
   private var peekContent: some View {
-    VStack(spacing: 7) {
+    VStack(spacing: 9) {
       HStack(spacing: 9) {
         LiveOrb(state: store.activityState)
         VStack(alignment: .leading, spacing: 1) {
           Text(islandModelName)
             .font(.system(size: 12, weight: .semibold, design: .rounded))
             .lineLimit(1)
-          Text(sourceLabel)
-            .font(.system(size: 8, weight: .bold, design: .monospaced))
+          Text("\(store.activityState.label) · \(sourceLabel)")
+            .font(.system(size: 9, weight: .medium, design: .rounded))
+            .foregroundStyle(store.activityState.tint.opacity(0.92))
+        }
+        Spacer()
+        VStack(alignment: .trailing, spacing: 1) {
+          Text(primaryMetric)
+            .font(.system(size: 18, weight: .semibold, design: .rounded))
+            .monospacedDigit()
+          Text("CHATGPT LEFT")
+            .font(.system(size: 7, weight: .semibold, design: .monospaced))
             .tracking(0.7)
             .foregroundStyle(routerMuted)
         }
-        Spacer()
-        Text(primaryMetric)
-          .font(.system(size: 18, weight: .semibold, design: .rounded))
-          .monospacedDigit()
       }
-      UsageSparkline(values: graphValues, tint: graphTint)
-        .frame(height: 27)
+      UsageBarChart(values: store.dailyTokens(days: 7), tint: graphTint)
+        .frame(height: 32)
     }
     .padding(.horizontal, 15)
     .padding(.top, 10)
@@ -230,45 +250,50 @@ private struct IslandOverlayView: View {
   }
 
   private var expandedContent: some View {
-    VStack(spacing: 12) {
+    VStack(spacing: 13) {
       HStack(spacing: 10) {
         LiveOrb(state: store.activityState)
         VStack(alignment: .leading, spacing: 2) {
           Text(islandModelName)
             .font(.system(size: 15, weight: .semibold, design: .rounded))
-          Text(sourceLabel)
-            .font(.system(size: 8, weight: .bold, design: .monospaced))
-            .tracking(0.9)
-            .foregroundStyle(routerMuted)
+          Text("\(store.activityState.label) · \(sourceLabel)")
+            .font(.system(size: 9, weight: .medium, design: .rounded))
+            .foregroundStyle(store.activityState.tint)
         }
         Spacer()
         Text(primaryMetric)
           .font(.system(size: 25, weight: .semibold, design: .rounded))
           .monospacedDigit()
-        Button { display.setState(.peek) } label: {
-          Image(systemName: "chevron.up")
-            .font(.system(size: 10, weight: .bold))
-            .frame(width: 25, height: 25)
-            .background(Color.white.opacity(0.08), in: Circle())
-        }
+        Button("Collapse") { display.setState(.peek) }
         .buttonStyle(.plain)
+        .font(.system(size: 9, weight: .medium, design: .rounded))
+        .foregroundStyle(routerMuted)
       }
 
       HStack(spacing: 8) {
         MetricTile(title: primaryTitle, value: primaryMetric, detail: primaryDetail, tint: routerAccent)
-        MetricTile(title: secondaryTitle, value: secondaryMetric, detail: secondaryDetail, tint: routerMint)
+        MetricTile(title: secondaryTitle, value: secondaryMetric, detail: secondaryDetail, tint: .white.opacity(0.82))
       }
 
-      UsageSparkline(values: graphValues, tint: graphTint)
-        .frame(height: 58)
-
       HStack {
-        Text("PIN A MODEL")
-          .font(.system(size: 8, weight: .bold, design: .monospaced))
-          .tracking(1.1)
+        Text("DAILY TOKEN USAGE")
+          .font(.system(size: 8, weight: .semibold, design: .monospaced))
+          .tracking(0.8)
           .foregroundStyle(routerMuted)
         Spacer()
-        Text("Settings live in the tray")
+        UsageRangePicker(selection: $range)
+      }
+
+      UsageBarChart(values: graphValues, tint: graphTint)
+        .frame(height: 64)
+
+      HStack {
+        Text("PINNED MODEL")
+          .font(.system(size: 8, weight: .semibold, design: .monospaced))
+          .tracking(0.8)
+          .foregroundStyle(routerMuted)
+        Spacer()
+        Text("Manage the Island from the tray")
           .font(.system(size: 9, design: .rounded))
           .foregroundStyle(routerMuted)
       }
@@ -279,17 +304,13 @@ private struct IslandOverlayView: View {
             Button {
               store.pin(candidate)
             } label: {
-              HStack(spacing: 5) {
-                Image(systemName: candidate.slug == store.pinnedModelSlug ? "pin.fill" : "circle.fill")
-                  .font(.system(size: candidate.slug == store.pinnedModelSlug ? 8 : 4))
-                Text(shortName(candidate))
-                  .font(.system(size: 10, weight: .semibold, design: .rounded))
-              }
-              .foregroundStyle(candidate.slug == store.pinnedModelSlug ? Color.black : Color.white.opacity(0.72))
+              Text(shortName(candidate))
+                .font(.system(size: 10, weight: .medium, design: .rounded))
+              .foregroundStyle(candidate.slug == store.pinnedModelSlug ? Color.white : Color.white.opacity(0.62))
               .padding(.horizontal, 10)
               .padding(.vertical, 7)
               .background(
-                candidate.slug == store.pinnedModelSlug ? routerAccent : Color.white.opacity(0.075),
+                candidate.slug == store.pinnedModelSlug ? Color.white.opacity(0.13) : Color.white.opacity(0.045),
                 in: Capsule()
               )
             }
@@ -327,51 +348,37 @@ private struct IslandOverlayView: View {
   }
 
   private var primaryMetric: String {
-    guard model != nil else { return "—" }
-    return "\(recentEvents(hours: 1).count)"
+    guard let remaining = store.accountUsage?.primary?.remainingPercent else { return "—" }
+    return "\(remaining)%"
   }
 
   private var primaryTitle: String {
-    "LAST HOUR"
+    store.accountUsage?.primary?.durationLabel.uppercased() ?? "CHATGPT LIMIT"
   }
 
   private var primaryDetail: String {
-    return "routed requests"
+    guard let reset = store.accountUsage?.primary?.resetDate else { return "Native Codex subscription" }
+    return "Resets \(reset.formatted(date: .abbreviated, time: .shortened))"
   }
 
   private var secondaryTitle: String {
-    "LAST 24H"
+    "\(range.rawValue)-DAY USAGE"
   }
 
   private var secondaryMetric: String {
-    return "\(recentEvents(hours: 24).count)"
+    compactTokenCount(graphValues.reduce(0, +))
   }
 
   private var secondaryDetail: String {
-    return "private local count"
+    return "tokens by day"
   }
 
   private var graphValues: [Double] {
-    guard let model else { return [0, 0] }
-    let bucketCount = 24
-    let bucketDuration: TimeInterval = 15 * 60
-    let start = Date().addingTimeInterval(-Double(bucketCount) * bucketDuration)
-    var buckets = Array(repeating: 0.0, count: bucketCount)
-    for event in store.usageEvents(for: model) where event.at >= start {
-      let index = Int(event.at.timeIntervalSince(start) / bucketDuration)
-      if buckets.indices.contains(index) { buckets[index] += 1 }
-    }
-    return buckets
+    store.dailyTokens(days: range.rawValue)
   }
 
   private var graphTint: Color {
-    model?.provider == "grok-oauth" ? routerAccent : routerMint
-  }
-
-  private func recentEvents(hours: Double) -> [RouterUsageEvent] {
-    guard let model else { return [] }
-    let cutoff = Date().addingTimeInterval(-hours * 60 * 60)
-    return store.usageEvents(for: model).filter { $0.at >= cutoff }
+    routerAccent
   }
 
   private func shortName(_ model: RouterModel) -> String {
@@ -424,12 +431,12 @@ private struct LiveOrb: View {
     ZStack {
       Circle()
         .fill(state.tint.opacity(0.2))
-        .frame(width: 16, height: 16)
-        .scaleEffect(state == .generating && pulsing ? 1.36 : 0.88)
+        .frame(width: 18, height: 18)
+        .scaleEffect(state == .generating && pulsing ? 1.34 : 0.94)
       Circle()
         .fill(state.tint)
-        .frame(width: 6, height: 6)
-        .shadow(color: state.tint.opacity(0.8), radius: 4)
+        .frame(width: 8, height: 8)
+        .overlay(Circle().stroke(Color.white.opacity(0.42), lineWidth: 0.6))
     }
     .onAppear { animate() }
     .onChange(of: state) { _ in animate() }
@@ -451,16 +458,20 @@ private struct StatusGlow: View {
   var body: some View {
     ZStack {
       IslandSilhouette()
-        .strokeBorder(state.tint.opacity(0.34), lineWidth: 4)
-        .blur(radius: 3)
+        .strokeBorder(state.tint.opacity(0.28), lineWidth: 5)
+        .blur(radius: 2.5)
       IslandSilhouette()
-        .strokeBorder(state.tint.opacity(0.96), lineWidth: state == .generating ? 2.2 : 1.5)
+        .inset(by: 1)
+        .strokeBorder(state.tint.opacity(0.96), lineWidth: state == .generating ? 2.4 : 1.7)
         .shadow(
-          color: state.tint.opacity(state == .generating && pulsing ? 0.9 : 0.55),
-          radius: state == .generating && pulsing ? 16 : 10
+          color: state.tint.opacity(state == .generating && pulsing ? 0.68 : 0.38),
+          radius: state == .generating && pulsing ? 10 : 6
         )
+      IslandSilhouette()
+        .inset(by: 3)
+        .strokeBorder(Color.white.opacity(0.14), lineWidth: 0.6)
     }
-    .opacity(state == .generating && pulsing ? 1 : 0.86)
+    .opacity(state == .generating && pulsing ? 1 : 0.9)
     .animation(.easeInOut(duration: 0.25), value: state)
     .onAppear { animate() }
     .onChange(of: state) { _ in animate() }

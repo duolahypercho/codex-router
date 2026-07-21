@@ -170,6 +170,11 @@ function runApply() {
   );
 }
 
+async function printAccountUsage() {
+  const { readCodexAccountUsage } = await import("./codex-account-usage.mjs");
+  process.stdout.write(`${JSON.stringify(await readCodexAccountUsage(), null, 2)}\n`);
+}
+
 // --- dispatch ---------------------------------------------------------------
 
 if (args.includes("--probe")) {
@@ -181,6 +186,8 @@ if (args.includes("--probe")) {
   runSet(args[1], args[2]);
 } else if (args[0] === "apply") {
   runApply();
+} else if (args[0] === "account") {
+  await printAccountUsage();
 } else {
   printOverview(args.includes("--json"));
 }

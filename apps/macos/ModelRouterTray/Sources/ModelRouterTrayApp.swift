@@ -1,13 +1,14 @@
 import AppKit
+import Combine
 import Foundation
 import SwiftUI
 
-let routerAccent = Color(red: 0.38, green: 0.74, blue: 1.00)
-let routerMint = Color(red: 0.38, green: 0.96, blue: 0.80)
-let routerYellow = Color(red: 1.00, green: 0.78, blue: 0.22)
-let routerRed = Color(red: 1.00, green: 0.32, blue: 0.29)
-let routerInk = Color(red: 0.025, green: 0.045, blue: 0.075)
-let routerMuted = Color.white.opacity(0.56)
+let routerAccent = Color(red: 0.36, green: 0.66, blue: 0.91)
+let routerMint = Color(red: 0.38, green: 0.82, blue: 0.61)
+let routerYellow = Color(red: 0.94, green: 0.68, blue: 0.25)
+let routerRed = Color(red: 0.91, green: 0.35, blue: 0.32)
+let routerInk = Color(red: 0.035, green: 0.043, blue: 0.055)
+let routerMuted = Color.white.opacity(0.52)
 
 enum RouterActivityState: String, Decodable {
   case idle
@@ -24,9 +25,9 @@ enum RouterActivityState: String, Decodable {
 
   var label: String {
     switch self {
-    case .idle: return "IDLE"
-    case .generating: return "WORKING"
-    case .error: return "ERROR"
+    case .idle: return "Idle"
+    case .generating: return "Generating"
+    case .error: return "Error"
     }
   }
 }
@@ -51,13 +52,17 @@ struct ModelRouterTrayApp: App {
 final class AppDelegate: NSObject, NSApplicationDelegate {
   let store = RouterStore()
   private var islandController: IslandWindowController?
+  private var islandVisibility: AnyCancellable?
 
   func applicationDidFinishLaunching(_ notification: Notification) {
     NSApp.setActivationPolicy(.accessory)
     islandController = IslandWindowController(store: store)
-    islandController?.show()
+    islandVisibility = store.$islandVisible
+      .removeDuplicates()
+      .sink { [weak self] visible in self?.islandController?.setVisible(visible) }
     Task { await store.startPolling() }
     Task { await store.startActivityPolling() }
+    Task { await store.startAccountUsagePolling() }
   }
 }
 
@@ -70,13 +75,21 @@ final class RouterStore: ObservableObject {
   @Published private(set) var lastUpdated: Date?
   @Published private(set) var pinnedModelSlug: String?
   @Published private(set) var activityState: RouterActivityState = .idle
+  @Published private(set) var accountUsage: CodexAccountUsage?
+  @Published private(set) var accountUsageError: String?
+  @Published private(set) var islandVisible: Bool
 
   private var polling = false
   private var activityPolling = false
+  private var accountUsagePolling = false
   private let defaults = UserDefaults.standard
+  private let islandVisibilityKey = "ModelRouterTray.islandVisible"
 
   init() {
     pinnedModelSlug = defaults.string(forKey: "ModelRouterTray.pinnedModel")
+    islandVisible = defaults.object(forKey: islandVisibilityKey) == nil
+      ? true
+      : defaults.bool(forKey: islandVisibilityKey)
   }
 
   var codexActive: Bool {
@@ -100,10 +113,8 @@ final class RouterStore: ObservableObject {
   }
 
   var pinnedUsageText: String? {
-    guard let model = pinnedModel else { return nil }
-    let cutoff = Date().addingTimeInterval(-60 * 60)
-    let count = usageEvents(for: model).filter { $0.at >= cutoff }.count
-    return count > 0 ? "\(count)×" : nil
+    guard let primary = accountUsage?.primary else { return nil }
+    return "\(primary.remainingPercent)%"
   }
 
   func startPolling() async {
@@ -124,7 +135,7 @@ final class RouterStore: ObservableObject {
     isRefreshing = true
     defer { isRefreshing = false }
     do {
-      let output = try runControl(arguments: ["--json"])
+      let output = try await runControl(arguments: ["--json"])
       snapshot = try JSONDecoder().decode(RouterSnapshot.self, from: output)
       resolvePinnedModel()
       lastUpdated = .now
@@ -141,7 +152,7 @@ final class RouterStore: ObservableObject {
     while !Task.isCancelled {
       await refreshActivity()
       do {
-        try await Task.sleep(nanoseconds: 750_000_000)
+        try await Task.sleep(nanoseconds: 350_000_000)
       } catch {
         return
       }
@@ -153,13 +164,55 @@ final class RouterStore: ObservableObject {
     defaults.set(model.slug, forKey: "ModelRouterTray.pinnedModel")
   }
 
-  func usageEvents(for model: RouterModel) -> [RouterUsageEvent] {
-    (snapshot.targets["codex"]?.usageEvents ?? []).filter { $0.model == model.slug }
+  func setIslandVisible(_ visible: Bool) {
+    islandVisible = visible
+    defaults.set(visible, forKey: islandVisibilityKey)
+  }
+
+  func startAccountUsagePolling() async {
+    guard !accountUsagePolling else { return }
+    accountUsagePolling = true
+    defer { accountUsagePolling = false }
+    while !Task.isCancelled {
+      await refreshAccountUsage()
+      do {
+        try await Task.sleep(nanoseconds: 30 * 1_000_000_000)
+      } catch {
+        return
+      }
+    }
+  }
+
+  func refreshAccountUsage() async {
+    do {
+      let output = try await runControl(arguments: ["account", "--json"])
+      accountUsage = try JSONDecoder().decode(CodexAccountUsage.self, from: output)
+      accountUsageError = nil
+    } catch {
+      accountUsageError = error.localizedDescription
+    }
+  }
+
+  func dailyTokens(days: Int) -> [Double] {
+    guard let accountUsage else { return Array(repeating: 0, count: days) }
+    let indexed = Dictionary(uniqueKeysWithValues: accountUsage.dailyUsageBuckets.map {
+      ($0.startDate, Double($0.tokens))
+    })
+    let formatter = DateFormatter()
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.calendar = Calendar(identifier: .gregorian)
+    formatter.dateFormat = "yyyy-MM-dd"
+    let calendar = Calendar.current
+    let today = calendar.startOfDay(for: .now)
+    return (0..<days).map { offset in
+      let date = calendar.date(byAdding: .day, value: offset - (days - 1), to: today) ?? today
+      return indexed[formatter.string(from: date)] ?? 0
+    }
   }
 
   func setProvider(_ provider: String, enabled: Bool) async {
     do {
-      _ = try runControl(arguments: ["set", provider, enabled ? "on" : "off", "--targets", "codex"])
+      _ = try await runControl(arguments: ["set", provider, enabled ? "on" : "off", "--targets", "codex"])
       pendingApply = true
       await refresh()
     } catch {
@@ -169,7 +222,7 @@ final class RouterStore: ObservableObject {
 
   func apply() async {
     do {
-      _ = try runControl(arguments: ["apply", "--targets", "codex"])
+      _ = try await runControl(arguments: ["apply", "--targets", "codex"])
       pendingApply = false
       await refresh()
     } catch {
@@ -184,6 +237,7 @@ final class RouterStore: ObservableObject {
       return
     }
     var request = URLRequest(url: url)
+    request.cachePolicy = .reloadIgnoringLocalCacheData
     request.timeoutInterval = 2
     do {
       let (data, _) = try await URLSession.shared.data(for: request)
@@ -206,25 +260,27 @@ final class RouterStore: ObservableObject {
     models.first(where: { $0.slug == "grok-oauth/grok-4.5" }) ?? models[0]
   }
 
-  private func runControl(arguments: [String]) throws -> Data {
+  private func runControl(arguments: [String]) async throws -> Data {
     let root = try sourceRoot()
-    let task = Process()
-    task.executableURL = root.appendingPathComponent("bin/control")
-    task.arguments = arguments
-    task.currentDirectoryURL = root
-    let output = Pipe()
-    let errors = Pipe()
-    task.standardOutput = output
-    task.standardError = errors
-    try task.run()
-    task.waitUntilExit()
-    let stdout = output.fileHandleForReading.readDataToEndOfFile()
-    guard task.terminationStatus == 0 else {
-      let stderr = errors.fileHandleForReading.readDataToEndOfFile()
-      let detail = String(data: stderr, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
-      throw RouterError(detail?.isEmpty == false ? detail! : "Model Router control command failed.")
-    }
-    return stdout
+    return try await Task.detached {
+      let task = Process()
+      task.executableURL = root.appendingPathComponent("bin/control")
+      task.arguments = arguments
+      task.currentDirectoryURL = root
+      let output = Pipe()
+      let errors = Pipe()
+      task.standardOutput = output
+      task.standardError = errors
+      try task.run()
+      task.waitUntilExit()
+      let stdout = output.fileHandleForReading.readDataToEndOfFile()
+      guard task.terminationStatus == 0 else {
+        let stderr = errors.fileHandleForReading.readDataToEndOfFile()
+        let detail = String(data: stderr, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        throw RouterError(detail?.isEmpty == false ? detail! : "Model Router control command failed.")
+      }
+      return stdout
+    }.value
   }
 
   private func sourceRoot() throws -> URL {
@@ -265,13 +321,69 @@ struct RouterSnapshot: Decodable {
   static let empty = RouterSnapshot(targets: [:])
 }
 
+enum UsageRange: Int, CaseIterable, Identifiable {
+  case week = 7
+  case month = 30
+  case quarter = 90
+
+  var id: Int { rawValue }
+  var label: String {
+    switch self {
+    case .week: return "7D"
+    case .month: return "30D"
+    case .quarter: return "90D"
+    }
+  }
+}
+
+struct CodexAccountUsage: Decodable {
+  let fetchedAt: String
+  let planType: String?
+  let limitId: String?
+  let primary: CodexRateLimitWindow?
+  let secondary: CodexRateLimitWindow?
+  let dailyUsageBuckets: [CodexDailyUsageBucket]
+  let summary: CodexUsageSummary
+}
+
+struct CodexRateLimitWindow: Decodable {
+  let usedPercent: Int
+  let remainingPercent: Int
+  let windowDurationMins: Int?
+  let resetsAt: TimeInterval?
+
+  var resetDate: Date? { resetsAt.map(Date.init(timeIntervalSince1970:)) }
+
+  var durationLabel: String {
+    guard let minutes = windowDurationMins else { return "Current limit" }
+    if minutes >= 1_440, minutes.isMultiple(of: 1_440) {
+      let days = minutes / 1_440
+      return days == 1 ? "Daily limit" : "\(days)-day limit"
+    }
+    if minutes >= 60, minutes.isMultiple(of: 60) {
+      return "\(minutes / 60)-hour limit"
+    }
+    return "\(minutes)-minute limit"
+  }
+}
+
+struct CodexDailyUsageBucket: Decodable {
+  let startDate: String
+  let tokens: Int64
+}
+
+struct CodexUsageSummary: Decodable {
+  let lifetimeTokens: Int64?
+  let peakDailyTokens: Int64?
+  let currentStreakDays: Int?
+}
+
 struct RouterTarget: Decodable {
   let target: String
   let configured: Bool
   let active: Bool
   let enabledProviders: [String]
   let models: [RouterModel]
-  let usageEvents: [RouterUsageEvent]?
 }
 
 struct RouterModel: Decodable, Identifiable {
@@ -282,47 +394,20 @@ struct RouterModel: Decodable, Identifiable {
   var id: String { slug }
 }
 
-struct RouterUsageEvent: Decodable, Identifiable {
-  let at: Date
-  let model: String
-  let provider: String
-  let status: Int
-  let durationMs: Int
-  var id: String { "\(at.timeIntervalSince1970)-\(model)-\(durationMs)" }
-
-  private enum CodingKeys: String, CodingKey {
-    case at, model, provider, status, durationMs
-  }
-
-  init(from decoder: Decoder) throws {
-    let values = try decoder.container(keyedBy: CodingKeys.self)
-    let rawDate = try values.decode(String.self, forKey: .at)
-    let fractional = ISO8601DateFormatter()
-    fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-    guard let parsedDate = fractional.date(from: rawDate) ?? ISO8601DateFormatter().date(from: rawDate) else {
-      throw DecodingError.dataCorruptedError(forKey: .at, in: values, debugDescription: "Invalid usage event date")
-    }
-    at = parsedDate
-    model = try values.decode(String.self, forKey: .model)
-    provider = try values.decode(String.self, forKey: .provider)
-    status = try values.decode(Int.self, forKey: .status)
-    durationMs = try values.decode(Int.self, forKey: .durationMs)
-  }
-}
-
 private struct StatusItemLabel: View {
   @ObservedObject var store: RouterStore
 
   var body: some View {
-    HStack(spacing: 4) {
-      Image(systemName: store.codexActive ? "point.3.connected.trianglepath.dotted" : "point.3.filled.connected.trianglepath")
-      if let model = store.pinnedShortName {
-        Text(model)
-          .font(.system(size: 11, weight: .semibold, design: .rounded))
-        if let usage = store.pinnedUsageText {
-          Text(usage)
-            .font(.system(size: 10, weight: .medium, design: .monospaced))
-        }
+    HStack(spacing: 5) {
+      Circle()
+        .fill(store.activityState.tint)
+        .frame(width: 6, height: 6)
+      Text(store.pinnedShortName ?? "Codex")
+        .font(.system(size: 11, weight: .medium, design: .rounded))
+      if let usage = store.pinnedUsageText {
+        Text(usage)
+          .font(.system(size: 10, weight: .medium, design: .monospaced))
+          .foregroundStyle(.secondary)
       }
     }
   }
@@ -342,7 +427,7 @@ private struct TrayView: View {
   var body: some View {
     ZStack {
       VisualEffectBlur()
-      ambientLight
+      Color(red: 0.045, green: 0.052, blue: 0.064).opacity(0.88)
       VStack(spacing: 0) {
         header
         if let target {
@@ -363,49 +448,14 @@ private struct TrayView: View {
     .task { await store.refresh() }
   }
 
-  private var ambientLight: some View {
-    ZStack {
-      Circle()
-        .fill(routerAccent.opacity(0.22))
-        .frame(width: 250, height: 250)
-        .blur(radius: 70)
-        .offset(x: -150, y: -260)
-      Circle()
-        .fill(routerMint.opacity(0.13))
-        .frame(width: 220, height: 220)
-        .blur(radius: 76)
-        .offset(x: 175, y: 235)
-      LinearGradient(
-        colors: [Color.white.opacity(0.07), routerInk.opacity(0.78)],
-        startPoint: .topLeading,
-        endPoint: .bottomTrailing
-      )
-    }
-    .allowsHitTesting(false)
-  }
 
   private var header: some View {
-    HStack(spacing: 12) {
-      ZStack {
-        RoundedRectangle(cornerRadius: 12, style: .continuous)
-          .fill(.ultraThinMaterial)
-        RoundedRectangle(cornerRadius: 12, style: .continuous)
-          .stroke(Color.white.opacity(0.16), lineWidth: 0.7)
-        Image(systemName: "point.3.connected.trianglepath.dotted")
-          .font(.system(size: 18, weight: .medium))
-          .foregroundStyle(
-            LinearGradient(colors: [Color.white, routerAccent], startPoint: .top, endPoint: .bottom)
-          )
-      }
-      .frame(width: 42, height: 42)
-      .shadow(color: routerAccent.opacity(0.2), radius: 10, y: 5)
-
+    HStack(alignment: .center, spacing: 12) {
       VStack(alignment: .leading, spacing: 3) {
-        Text("Codex Router")
+        Text("Model Router")
           .font(.system(size: 18, weight: .semibold, design: .rounded))
-        Text("LOCAL MODEL BRIDGE")
-          .font(.system(size: 9, weight: .semibold, design: .monospaced))
-          .tracking(1.5)
+        Text(accountLabel)
+          .font(.system(size: 10, weight: .regular, design: .rounded))
           .foregroundStyle(routerMuted)
       }
       Spacer()
@@ -414,24 +464,41 @@ private struct TrayView: View {
     .padding(.bottom, 15)
   }
 
+  private var accountLabel: String {
+    guard let plan = store.accountUsage?.planType else { return "Codex account" }
+    return "ChatGPT \(plan.capitalized)"
+  }
+
   private func content(for target: RouterTarget) -> some View {
     ScrollView(showsIndicators: false) {
-      VStack(alignment: .leading, spacing: 14) {
-        PinnedModelIsland(store: store, target: target)
-        sectionLabel("Exposed models", detail: "\(target.models.filter(\.enabled).count) available")
-        VStack(spacing: 7) {
+      VStack(alignment: .leading, spacing: 18) {
+        AccountUsageSection(store: store)
+        settingRow(
+          title: "Dynamic Island",
+          detail: "Show live model, limit, and activity status",
+          isOn: Binding(
+            get: { store.islandVisible },
+            set: { store.setIslandVisible($0) }
+          )
+        )
+        sectionLabel("Models", detail: store.pinnedShortName.map { "Pinned: \($0)" } ?? "None pinned")
+        VStack(spacing: 0) {
           ForEach(target.models.filter(\.enabled)) { model in
-            ModelRow(
-              model: model,
-              isPinned: store.pinnedModelSlug == model.slug,
-              onPin: { store.pin(model) }
-            )
+            SimpleModelRow(model: model, isPinned: store.pinnedModelSlug == model.slug) {
+              store.pin(model)
+            }
+            if model.id != target.models.filter(\.enabled).last?.id {
+              Divider().overlay(Color.white.opacity(0.08))
+            }
           }
         }
-        sectionLabel("Providers", detail: store.pendingApply ? "Changes ready" : "Synced")
-        VStack(spacing: 7) {
+        sectionLabel("Providers", detail: store.pendingApply ? "Apply required" : "Synced")
+        VStack(spacing: 0) {
           ForEach(providers, id: \.id) { provider in
             providerRow(provider)
+            if provider.id != providers.last?.id {
+              Divider().overlay(Color.white.opacity(0.08))
+            }
           }
         }
       }
@@ -454,16 +521,12 @@ private struct TrayView: View {
   }
 
   private func providerRow(_ provider: (id: String, enabled: Bool)) -> some View {
-    HStack(spacing: 12) {
-      Image(systemName: provider.enabled ? "network.badge.shield.half.filled" : "network.slash")
-        .font(.system(size: 14, weight: .medium))
-        .foregroundStyle(provider.enabled ? routerMint : routerMuted)
-        .frame(width: 24)
+    HStack(spacing: 10) {
       VStack(alignment: .leading, spacing: 2) {
         Text(providerTitle(provider.id))
-          .font(.system(size: 12, weight: .semibold, design: .rounded))
-        Text(provider.id)
-          .font(.system(size: 9, weight: .regular, design: .monospaced))
+          .font(.system(size: 12, weight: .medium, design: .rounded))
+        Text(provider.enabled ? "Available in Codex" : "Hidden from Codex")
+          .font(.system(size: 9, weight: .regular, design: .rounded))
           .foregroundStyle(routerMuted)
       }
       Spacer()
@@ -474,19 +537,37 @@ private struct TrayView: View {
       .labelsHidden()
       .toggleStyle(.switch)
       .controlSize(.mini)
-      .tint(routerAccent)
+      .tint(routerMint)
     }
-    .padding(.horizontal, 12)
     .padding(.vertical, 9)
-    .glassCard(cornerRadius: 14)
+  }
+
+  private func settingRow(
+    title: String,
+    detail: String,
+    isOn: Binding<Bool>
+  ) -> some View {
+    HStack(spacing: 12) {
+      VStack(alignment: .leading, spacing: 3) {
+        Text(title)
+          .font(.system(size: 13, weight: .medium, design: .rounded))
+        Text(detail)
+          .font(.system(size: 10, design: .rounded))
+          .foregroundStyle(routerMuted)
+      }
+      Spacer()
+      Toggle("", isOn: isOn)
+        .labelsHidden()
+        .toggleStyle(.switch)
+        .controlSize(.small)
+        .tint(routerMint)
+    }
+    .padding(.vertical, 2)
   }
 
   private var emptyState: some View {
     VStack(spacing: 10) {
-      Image(systemName: "sparkles.rectangle.stack")
-        .font(.system(size: 28, weight: .light))
-        .foregroundStyle(routerAccent)
-      Text("Codex router is waiting")
+      Text("Router unavailable")
         .font(.system(size: 14, weight: .semibold, design: .rounded))
       Text("Run setup, then refresh this panel.")
         .font(.system(size: 11, design: .rounded))
@@ -502,19 +583,15 @@ private struct TrayView: View {
           .buttonStyle(AccentButtonStyle())
           .transition(.move(edge: .leading).combined(with: .opacity))
       }
-      Button {
-        Task { await store.refresh() }
-      } label: {
-        Image(systemName: "arrow.clockwise")
-          .rotationEffect(.degrees(store.isRefreshing ? 360 : 0))
-          .animation(
-            store.isRefreshing
-              ? .linear(duration: 0.9).repeatForever(autoreverses: false)
-              : .default,
-            value: store.isRefreshing
-          )
+      Button(store.isRefreshing ? "Refreshing…" : "Refresh") {
+        Task {
+          await store.refresh()
+          await store.refreshAccountUsage()
+        }
       }
-      .buttonStyle(GlassIconButtonStyle())
+      .buttonStyle(.plain)
+      .font(.system(size: 11, weight: .medium, design: .rounded))
+      .foregroundStyle(routerAccent)
       .disabled(store.isRefreshing)
 
       if let message = store.message {
@@ -549,248 +626,169 @@ private struct TrayView: View {
 
 }
 
-private struct PinnedModelIsland: View {
+private struct AccountUsageSection: View {
   @ObservedObject var store: RouterStore
-  let target: RouterTarget
-  @State private var hovering = false
-
-  private var model: RouterModel? { store.pinnedModel }
+  @State private var range: UsageRange = .week
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 0) {
-      if let model {
-        HStack(spacing: 12) {
-          ZStack {
-            Circle()
-              .fill(routerAccent.opacity(0.15))
-              .frame(width: 44, height: 44)
-            Image(systemName: "pin.fill")
-              .font(.system(size: 15, weight: .semibold))
-              .foregroundStyle(routerAccent)
-          }
-          VStack(alignment: .leading, spacing: 4) {
-            Text(model.displayName)
-              .font(.system(size: 15, weight: .semibold, design: .rounded))
-              .lineLimit(1)
-            HStack(spacing: 5) {
-              Circle()
-                .fill(store.activityState.tint)
-                .frame(width: 5, height: 5)
-              Text(sourceLabel(for: model))
-                .font(.system(size: 8, weight: .bold, design: .monospaced))
-                .tracking(0.8)
-                .foregroundStyle(routerMuted)
-            }
-          }
-          Spacer(minLength: 8)
-          VStack(alignment: .trailing, spacing: 3) {
-            Text(metricText(for: model))
-              .font(.system(size: 22, weight: .semibold, design: .rounded))
-              .monospacedDigit()
-            Text(metricCaption(for: model))
-              .font(.system(size: 8, weight: .bold, design: .monospaced))
-              .tracking(0.7)
-              .foregroundStyle(routerMuted)
-          }
+    VStack(alignment: .leading, spacing: 12) {
+      HStack(alignment: .firstTextBaseline) {
+        VStack(alignment: .leading, spacing: 3) {
+          Text("ChatGPT limit")
+            .font(.system(size: 13, weight: .medium, design: .rounded))
+          Text(limitDetail)
+            .font(.system(size: 10, design: .rounded))
+            .foregroundStyle(routerMuted)
         }
+        Spacer()
+        Text(remainingText)
+          .font(.system(size: 22, weight: .semibold, design: .rounded))
+          .monospacedDigit()
+      }
 
-        if hovering {
-          VStack(spacing: 8) {
-            Divider().overlay(Color.white.opacity(0.09))
-              .padding(.top, 12)
-            HStack {
-              VStack(alignment: .leading, spacing: 2) {
-                Text(graphTitle(for: model))
-                  .font(.system(size: 10, weight: .semibold, design: .rounded))
-                Text(graphDetail(for: model))
-                  .font(.system(size: 9, design: .rounded))
-                  .foregroundStyle(routerMuted)
-              }
-              Spacer()
-              Text("LIVE")
-                .font(.system(size: 8, weight: .bold, design: .monospaced))
-                .tracking(1)
-                .foregroundStyle(routerMint)
-            }
-            UsageSparkline(values: graphValues(for: model), tint: graphTint(for: model))
-              .frame(height: 54)
-          }
-          .transition(.opacity.combined(with: .move(edge: .top)))
-        } else {
-          HStack(spacing: 5) {
-            Image(systemName: "waveform.path.ecg")
-            Text("Hover for live usage")
-          }
-          .font(.system(size: 9, weight: .medium, design: .rounded))
+      GeometryReader { geometry in
+        ZStack(alignment: .leading) {
+          Capsule().fill(Color.white.opacity(0.09))
+          Capsule()
+            .fill(routerAccent)
+            .frame(width: geometry.size.width * remainingFraction)
+        }
+      }
+      .frame(height: 5)
+
+      HStack {
+        Text("Daily token usage")
+          .font(.system(size: 10, weight: .medium, design: .rounded))
           .foregroundStyle(routerMuted)
-          .padding(.top, 10)
+        Spacer()
+        UsageRangePicker(selection: $range)
+      }
+
+      UsageBarChart(values: store.dailyTokens(days: range.rawValue), tint: routerAccent)
+        .frame(height: 74)
+
+      HStack {
+        Text(rangeCaption)
+        Spacer()
+        if let streak = store.accountUsage?.summary.currentStreakDays {
+          Text("\(streak)-day streak")
         }
       }
-    }
-    .padding(14)
-    .glassCard(cornerRadius: 20, accent: routerAccent)
-    .contentShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-    .onHover { isHovering in
-      withAnimation(.spring(response: 0.34, dampingFraction: 0.86)) {
-        hovering = isHovering
+      .font(.system(size: 9, design: .rounded))
+      .foregroundStyle(routerMuted)
+
+      if let error = store.accountUsageError, store.accountUsage == nil {
+        Text(error)
+          .font(.system(size: 10, design: .rounded))
+          .foregroundStyle(routerRed)
+          .lineLimit(2)
       }
     }
-    .accessibilityElement(children: .contain)
-    .accessibilityLabel("Pinned model live usage")
+    .padding(.vertical, 2)
   }
 
-  private func sourceLabel(for model: RouterModel) -> String {
-    if model.provider == "grok-oauth" { return "XAI • OAUTH SESSION" }
-    if model.provider.hasSuffix("-api") || model.provider == "deepseek" {
-      return "METERED API"
-    }
-    return "OAUTH ROUTE"
+  private var remainingText: String {
+    guard let value = store.accountUsage?.primary?.remainingPercent else { return "—" }
+    return "\(value)% left"
   }
 
-  private func metricText(for model: RouterModel) -> String {
-    let cutoff = Date().addingTimeInterval(-60 * 60)
-    return "\(store.usageEvents(for: model).filter { $0.at >= cutoff }.count)"
+  private var remainingFraction: CGFloat {
+    CGFloat(store.accountUsage?.primary?.remainingPercent ?? 0) / 100
   }
 
-  private func metricCaption(for model: RouterModel) -> String {
-    "REQUESTS / H"
+  private var limitDetail: String {
+    guard let limit = store.accountUsage?.primary else { return "Loading native Codex usage…" }
+    guard let reset = limit.resetDate else { return limit.durationLabel }
+    return "\(limit.durationLabel) · resets \(reset.formatted(date: .abbreviated, time: .shortened))"
   }
 
-  private func graphTitle(for model: RouterModel) -> String {
-    "Local route activity"
-  }
-
-  private func graphDetail(for model: RouterModel) -> String {
-    return "Five-hour request history • no prompts recorded"
-  }
-
-  private func graphValues(for model: RouterModel) -> [Double] {
-    let bucketCount = 20
-    let bucketDuration: TimeInterval = 15 * 60
-    let start = Date().addingTimeInterval(-Double(bucketCount) * bucketDuration)
-    var buckets = Array(repeating: 0.0, count: bucketCount)
-    for event in store.usageEvents(for: model) where event.at >= start {
-      let index = Int(event.at.timeIntervalSince(start) / bucketDuration)
-      if buckets.indices.contains(index) { buckets[index] += 1 }
-    }
-    return buckets
-  }
-
-  private func graphTint(for model: RouterModel) -> Color {
-    model.provider == "grok-oauth" ? routerAccent : routerMint
+  private var rangeCaption: String {
+    let total = store.dailyTokens(days: range.rawValue).reduce(0, +)
+    return "\(compactTokenCount(total)) tokens over \(range.rawValue) days"
   }
 }
 
-struct UsageSparkline: View {
+struct UsageRangePicker: View {
+  @Binding var selection: UsageRange
+
+  var body: some View {
+    HStack(spacing: 2) {
+      ForEach(UsageRange.allCases) { range in
+        Button(range.label) { selection = range }
+          .buttonStyle(.plain)
+          .font(.system(size: 9, weight: .medium, design: .rounded))
+          .foregroundStyle(selection == range ? Color.white : routerMuted)
+          .padding(.horizontal, 7)
+          .padding(.vertical, 4)
+          .background(
+            selection == range ? Color.white.opacity(0.12) : Color.clear,
+            in: Capsule()
+          )
+      }
+    }
+    .padding(2)
+    .background(Color.white.opacity(0.045), in: Capsule())
+  }
+}
+
+private struct SimpleModelRow: View {
+  let model: RouterModel
+  let isPinned: Bool
+  let onPin: () -> Void
+
+  var body: some View {
+    HStack(spacing: 10) {
+      VStack(alignment: .leading, spacing: 2) {
+        Text(model.displayName)
+          .font(.system(size: 12, weight: .medium, design: .rounded))
+          .lineLimit(1)
+        Text(model.provider == "grok-oauth" ? "xAI OAuth" : model.provider)
+          .font(.system(size: 9, design: .rounded))
+          .foregroundStyle(routerMuted)
+      }
+      Spacer()
+      Button(isPinned ? "Pinned" : "Pin") { onPin() }
+        .buttonStyle(.plain)
+        .font(.system(size: 10, weight: .medium, design: .rounded))
+        .foregroundStyle(isPinned ? routerMint : routerAccent)
+    }
+    .padding(.vertical, 9)
+  }
+}
+
+struct UsageBarChart: View {
   let values: [Double]
   let tint: Color
 
   var body: some View {
     GeometryReader { geometry in
-      let points = normalizedPoints(in: geometry.size)
-      ZStack {
-        Path { path in
-          guard let first = points.first, let last = points.last else { return }
-          path.move(to: CGPoint(x: first.x, y: geometry.size.height))
-          points.forEach { path.addLine(to: $0) }
-          path.addLine(to: CGPoint(x: last.x, y: geometry.size.height))
-          path.closeSubpath()
-        }
-        .fill(
-          LinearGradient(
-            colors: [tint.opacity(0.26), tint.opacity(0.01)],
-            startPoint: .top,
-            endPoint: .bottom
-          )
-        )
-
-        Path { path in
-          guard let first = points.first else { return }
-          path.move(to: first)
-          points.dropFirst().forEach { path.addLine(to: $0) }
-        }
-        .stroke(tint, style: StrokeStyle(lineWidth: 1.8, lineCap: .round, lineJoin: .round))
-
-        if let last = points.last {
-          Circle()
-            .fill(tint)
-            .frame(width: 6, height: 6)
-            .shadow(color: tint, radius: 5)
-            .position(last)
+      let maximum = max(values.max() ?? 0, 1)
+      let spacing: CGFloat = values.count > 45 ? 1 : values.count > 14 ? 2 : 4
+      let width = max(1, (geometry.size.width - spacing * CGFloat(max(0, values.count - 1))) / CGFloat(max(values.count, 1)))
+      HStack(alignment: .bottom, spacing: spacing) {
+        ForEach(Array(values.enumerated()), id: \.offset) { _, value in
+          RoundedRectangle(cornerRadius: min(2, width / 2), style: .continuous)
+            .fill(value == 0 ? Color.white.opacity(0.055) : tint.opacity(0.82))
+            .frame(width: width, height: max(2, geometry.size.height * CGFloat(value / maximum)))
         }
       }
-      .overlay(alignment: .bottom) {
-        Rectangle().fill(Color.white.opacity(0.08)).frame(height: 0.5)
-      }
+      .frame(maxHeight: .infinity, alignment: .bottom)
     }
-    .accessibilityHidden(true)
-  }
-
-  private func normalizedPoints(in size: CGSize) -> [CGPoint] {
-    guard !values.isEmpty else { return [] }
-    let minimum = values.min() ?? 0
-    let maximum = values.max() ?? 1
-    let span = max(0.08, maximum - minimum)
-    let step = values.count > 1 ? size.width / CGFloat(values.count - 1) : 0
-    return values.enumerated().map { index, value in
-      let normalized = (value - minimum) / span
-      return CGPoint(
-        x: CGFloat(index) * step,
-        y: size.height - (CGFloat(normalized) * (size.height - 8) + 4)
-      )
-    }
+    .accessibilityLabel("Daily token usage chart")
   }
 }
 
-private struct ModelRow: View {
-  let model: RouterModel
-  let isPinned: Bool
-  let onPin: () -> Void
-  @State private var arrived = false
-
-  var body: some View {
-    HStack(spacing: 11) {
-      ZStack {
-        Circle().fill(routerAccent.opacity(0.14)).frame(width: 27, height: 27)
-        Circle().fill(routerAccent).frame(width: 6, height: 6)
-      }
-      VStack(alignment: .leading, spacing: 2) {
-        Text(model.displayName)
-          .font(.system(size: 12, weight: .semibold, design: .rounded))
-        Text(model.slug)
-          .font(.system(size: 9, weight: .regular, design: .monospaced))
-          .foregroundStyle(routerMuted)
-      }
-      Spacer()
-      Text("READY")
-        .font(.system(size: 8, weight: .bold, design: .monospaced))
-        .tracking(0.8)
-        .foregroundStyle(routerMint)
-        .padding(.horizontal, 7)
-        .padding(.vertical, 4)
-        .background(routerMint.opacity(0.09))
-        .clipShape(Capsule())
-      Button(action: onPin) {
-        Image(systemName: isPinned ? "pin.fill" : "pin")
-          .font(.system(size: 10, weight: .semibold))
-          .foregroundStyle(isPinned ? routerAccent : routerMuted)
-          .frame(width: 24, height: 24)
-          .background(Color.white.opacity(isPinned ? 0.09 : 0.04), in: Circle())
-      }
-      .buttonStyle(.plain)
-      .help(isPinned ? "Pinned to the menu bar" : "Pin this model to the menu bar")
-    }
-    .padding(.horizontal, 11)
-    .padding(.vertical, 8)
-    .glassCard(cornerRadius: 14)
-    .opacity(arrived ? 1 : 0)
-    .offset(y: arrived ? 0 : 6)
-    .onAppear {
-      withAnimation(.spring(response: 0.4, dampingFraction: 0.82)) {
-        arrived = true
-      }
-    }
+func compactTokenCount(_ value: Double) -> String {
+  if value >= 1_000_000_000 {
+    return String(format: "%.1fB", value / 1_000_000_000)
   }
+  if value >= 1_000_000 {
+    return String(format: "%.1fM", value / 1_000_000)
+  }
+  if value >= 1_000 {
+    return String(format: "%.1fK", value / 1_000)
+  }
+  return String(Int(value))
 }
 
 private struct StatusBeacon: View {
@@ -801,22 +799,17 @@ private struct StatusBeacon: View {
     HStack(spacing: 6) {
       ZStack {
         Circle()
-          .fill(state.tint.opacity(0.2))
-          .frame(width: 16, height: 16)
-          .scaleEffect(state == .generating && breathing ? 1.3 : 0.88)
+          .fill(state.tint.opacity(0.18))
+          .frame(width: 14, height: 14)
+          .scaleEffect(state == .generating && breathing ? 1.28 : 0.9)
         Circle()
           .fill(state.tint)
-          .frame(width: 6, height: 6)
+          .frame(width: 7, height: 7)
       }
       Text(state.label)
-        .font(.system(size: 9, weight: .bold, design: .monospaced))
-        .tracking(1)
+        .font(.system(size: 10, weight: .medium, design: .rounded))
     }
     .foregroundStyle(state.tint)
-    .padding(.horizontal, 9)
-    .padding(.vertical, 6)
-    .background(.ultraThinMaterial, in: Capsule())
-    .overlay(Capsule().stroke(Color.white.opacity(0.12), lineWidth: 0.7))
     .onAppear { animate() }
     .onChange(of: state) { _ in animate() }
   }
@@ -827,42 +820,6 @@ private struct StatusBeacon: View {
     withAnimation(.easeInOut(duration: 0.72).repeatForever(autoreverses: true)) {
       breathing = true
     }
-  }
-}
-
-private struct GlassCardModifier: ViewModifier {
-  let cornerRadius: CGFloat
-  let accent: Color
-
-  func body(content: Content) -> some View {
-    content
-      .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-      .background(
-        LinearGradient(
-          colors: [Color.white.opacity(0.07), Color.white.opacity(0.015)],
-          startPoint: .topLeading,
-          endPoint: .bottomTrailing
-        ),
-        in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-      )
-      .overlay(
-        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-          .stroke(
-            LinearGradient(
-              colors: [Color.white.opacity(0.22), accent.opacity(0.17), Color.white.opacity(0.04)],
-              startPoint: .topLeading,
-              endPoint: .bottomTrailing
-            ),
-            lineWidth: 0.7
-          )
-      )
-      .shadow(color: Color.black.opacity(0.19), radius: 14, y: 8)
-  }
-}
-
-private extension View {
-  func glassCard(cornerRadius: CGFloat, accent: Color = routerAccent) -> some View {
-    modifier(GlassCardModifier(cornerRadius: cornerRadius, accent: accent))
   }
 }
 
@@ -883,18 +840,6 @@ private struct AccentButtonStyle: ButtonStyle {
       )
       .clipShape(Capsule())
       .shadow(color: routerAccent.opacity(0.26), radius: 9, y: 4)
-  }
-}
-
-private struct GlassIconButtonStyle: ButtonStyle {
-  func makeBody(configuration: Configuration) -> some View {
-    configuration.label
-      .font(.system(size: 12, weight: .semibold))
-      .foregroundStyle(routerAccent)
-      .frame(width: 30, height: 30)
-      .background(.ultraThinMaterial, in: Circle())
-      .overlay(Circle().stroke(Color.white.opacity(0.14), lineWidth: 0.7))
-      .scaleEffect(configuration.isPressed ? 0.92 : 1)
   }
 }
 

@@ -12,14 +12,18 @@ router configuration.
 
 ## Pinned model and live usage
 
-Select the pin beside any exposed model to keep its short name and live metric
-in the menu bar. Hover the pinned-model card to reveal its recent graph.
+Select **Pin** beside any exposed model to keep its short name in the menu bar
+and Island. Hover the Island for a quick view or click it for account usage.
 
-- API and OAuth models show local request activity for that specific
-  routed model. The router records only the timestamp, model, provider, HTTP
-  status, and duration. It never puts prompts, responses, API keys, OAuth
-  tokens, or token contents in the usage event file.
-- Graph history becomes richer while the router and tray continue running.
+- Native ChatGPT/Codex limits come from the installed Codex app-server. The tray
+  requests only the rate-limit snapshot and daily token buckets; it never reads
+  or copies the ChatGPT credential file.
+- Daily token bars can show 7, 30, or 90 days. Account limits refresh every 30
+  seconds independently of the external provider pinned in the Island.
+- The Island uses green for idle, amber while generating, and red after an
+  error. It is shown by default and can be toggled from the tray.
+- Local routed-model events still record only timestamp, model, provider, HTTP
+  status, and duration. Prompts, responses, API keys, and tokens are excluded.
 
 The overlay interaction is inspired by
 [CodexIsland](https://github.com/ericjypark/codex-island): compact information
