@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Rewrote routed-model catalog identity text so external models no longer
+  claim to be based on GPT-5 in Codex `base_instructions`.
 - Added an isolated, experimental Claude Desktop target using the official
   third-party gateway contract: authenticated Anthropic Messages routing,
   streaming, explicit model lists, and preserved tool/image message payloads.

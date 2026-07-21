@@ -80,7 +80,9 @@ service (Codex itself still needs a restart to reload the picker catalog).
 The native catalog objects are preserved rather than reconstructed, which keeps
 current instructions and capability metadata from the installed Codex build.
 Registry models clone a current native schema and replace picker-specific
-metadata.
+metadata. They also rewrite the cloned GPT identity line in
+`base_instructions` / `model_messages.instructions_template` so external models
+do not claim to be based on GPT-5.
 
 The integration deliberately keeps the built-in `openai` provider and points
 it at a loopback `openai_base_url`. This makes named models appear in the normal
