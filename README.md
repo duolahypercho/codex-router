@@ -266,6 +266,7 @@ target. See [Development](docs/DEVELOPMENT.md) for the registry contract.
 - [Installation, migration, and upgrades](docs/INSTALL.md)
 - [Claude Desktop target](docs/CLAUDE.md)
 - [Cursor target](docs/CURSOR.md)
+- [Compatible apps: T3 Code and opencode](docs/COMPATIBLE-APPS.md)
 - [Troubleshooting](docs/TROUBLESHOOTING.md)
 - [Architecture and request flow](docs/HOW-IT-WORKS.md)
 - [Security and credential handling](SECURITY.md)
