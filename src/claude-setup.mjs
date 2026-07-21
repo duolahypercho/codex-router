@@ -2,6 +2,13 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { closeSync, openSync, readSync, writeSync } from "node:fs";
 import path from "node:path";
 
+import {
+  KIMI_CLI_INSTALL_URL,
+  KIMI_CLI_NPM_PACKAGE,
+  MAX_CLI_WAIT_ATTEMPTS,
+  MAX_LOGIN_ATTEMPTS,
+  kimiCliInstallGuidance,
+} from "./kimi-oauth-onboarding.mjs";
 import { PROVIDERS } from "./model-registry.mjs";
 import { kimiOAuthStatus } from "./oauth-status.mjs";
 import { SOURCE_ROOT, TARGET } from "./paths.mjs";
@@ -132,6 +139,9 @@ function guidedSelection() {
       }\n`,
     );
   });
+  process.stdout.write(
+    "\nOAuth entries reuse an existing Kimi Code CLI login; API entries use a provider key.\n",
+  );
   const readyIndexes = providers
     .map((provider, index) => (providerConfigured(provider) ? String(index + 1) : undefined))
     .filter(Boolean)
@@ -180,25 +190,74 @@ function run(command, commandArgs) {
   }
 }
 
+// Like run(), but reports success instead of throwing on a non-zero exit so
+// the caller can offer a retry (e.g. a cancelled `kimi login`).
+function tryRun(command, commandArgs) {
+  const result = spawnSync(command, commandArgs, {
+    cwd: SOURCE_ROOT,
+    env: process.env,
+    stdio: "inherit",
+  });
+  if (result.error) throw result.error;
+  return result.status === 0;
+}
+
+// Guide the user through installing the Kimi Code CLI when it is missing. When
+// npm is available it offers to run the global install directly; otherwise it
+// re-checks PATH between attempts so the user can install by hand. Returns the
+// resolved `kimi` path or undefined if the user gave up.
+function locateKimiCli() {
+  let kimi = executable("kimi");
+  if (kimi) return kimi;
+  process.stdout.write(`\n${kimiCliInstallGuidance()}\n\n`);
+  for (let attempt = 0; attempt < MAX_CLI_WAIT_ATTEMPTS && !kimi; attempt += 1) {
+    const npm = executable("npm");
+    if (npm && confirm(`Install it now with \`npm install -g ${KIMI_CLI_NPM_PACKAGE}\`?`)) {
+      tryRun(npm, ["install", "-g", KIMI_CLI_NPM_PACKAGE]);
+    } else if (!confirm("Have you installed the Kimi Code CLI and want to continue?")) {
+      break;
+    }
+    kimi = executable("kimi");
+    if (!kimi) {
+      process.stdout.write(
+        "Still can't find `kimi` on PATH. Open a new terminal after installing, then continue.\n",
+      );
+    }
+  }
+  return kimi;
+}
+
+// Interactive Kimi OAuth login with bounded retries on both CLI discovery and
+// the login itself.
+function onboardKimiOauth() {
+  const kimi = locateKimiCli();
+  if (!kimi) {
+    throw new Error(
+      `Kimi Code CLI is required for OAuth. Install it from ${KIMI_CLI_INSTALL_URL}, then run setup again.`,
+    );
+  }
+  for (let attempt = 0; attempt < MAX_LOGIN_ATTEMPTS; attempt += 1) {
+    if (!confirm("Run `kimi login` now?")) {
+      throw new Error("Kimi OAuth setup was cancelled.");
+    }
+    tryRun(kimi, ["login"]);
+    if (kimiOAuthStatus().configured) return;
+    process.stdout.write("Kimi login did not produce a usable OAuth credential yet.\n");
+  }
+  throw new Error("Kimi OAuth login did not produce a usable credential after several attempts.");
+}
+
 function configureProvider(provider) {
   if (providerConfigured(provider)) return;
   if (!guided) {
     const setup =
       provider.kind === "oauth"
-        ? "run `kimi login`"
+        ? `run \`kimi login\` (install the Kimi Code CLI from ${KIMI_CLI_INSTALL_URL} first if needed)`
         : `run \`./bin/model-router claude provider-key ${provider.id} set\``;
     throw new Error(`${provider.displayName} is selected but not configured; ${setup} first.`);
   }
   if (provider.kind === "oauth") {
-    const kimi = executable("kimi");
-    if (!kimi) {
-      throw new Error("Kimi Code CLI is required for OAuth. Install it, then run setup again.");
-    }
-    if (!confirm("Run `kimi login` now?")) throw new Error("Kimi OAuth setup was cancelled.");
-    run(kimi, ["login"]);
-    if (!kimiOAuthStatus().configured) {
-      throw new Error("Kimi OAuth login did not produce a usable credential.");
-    }
+    onboardKimiOauth();
   } else {
     if (!confirm(`Enter a ${provider.displayName} key securely now?`)) {
       throw new Error(`${provider.displayName} setup was cancelled.`);
