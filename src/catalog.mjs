@@ -14,7 +14,6 @@ import {
   CONFIG_PATH,
   MERGED_CATALOG_PATH,
   NATIVE_CATALOG_PATH,
-  STATE_DIR,
 } from "./paths.mjs";
 import { requireCodexBinary } from "./codex-binary.mjs";
 import { MODEL_BY_SLUG } from "./model-registry.mjs";
