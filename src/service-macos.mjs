@@ -29,6 +29,7 @@ const userId = typeof process.getuid === "function" ? process.getuid() : 501;
 const domain = `gui/${userId}`;
 const service = `${domain}/${SERVICE_LABEL}`;
 const launchctl = "/bin/launchctl";
+const launchctlRetryWait = new Int32Array(new SharedArrayBuffer(4));
 
 function xml(value) {
   return String(value)
@@ -123,8 +124,16 @@ function bootout(targetService = service) {
   if (!description) return;
   try {
     run(["bootout", targetService], { quiet: true });
-  } catch {
-    // The process may already have exited.
+  } catch (error) {
+    if (loaded(targetService)) throw error;
+    return;
+  }
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (!loaded(targetService)) return;
+    Atomics.wait(launchctlRetryWait, 0, 0, 100);
+  }
+  if (loaded(targetService)) {
+    throw new Error(`Timed out waiting for ${targetService} to stop.`);
   }
 }
 
@@ -142,7 +151,17 @@ function bootstrap() {
     throw new Error(`LaunchAgent is not installed at ${LAUNCH_AGENT_PATH}.`);
   }
   run(["enable", service], { quiet: true });
-  run(["bootstrap", domain, LAUNCH_AGENT_PATH], { quiet: true });
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    try {
+      run(["bootstrap", domain, LAUNCH_AGENT_PATH], { quiet: true });
+      return;
+    } catch (error) {
+      const description = loaded();
+      if (description && !/state = SIGTERM/.test(description)) return;
+      if (error?.status !== 5 || attempt === 19) throw error;
+      Atomics.wait(launchctlRetryWait, 0, 0, 100);
+    }
+  }
 }
 
 if (!new Set(["install", "uninstall", "start", "stop", "restart", "status", "render"]).has(command)) {
@@ -187,7 +206,10 @@ if (command === "render") {
   if (!loaded()) bootstrap();
   process.stdout.write(`${JSON.stringify({ state: "running" })}\n`);
 } else if (command === "restart") {
-  bootout();
-  bootstrap();
+  if (loaded()) {
+    run(["kickstart", "-k", service], { quiet: true });
+  } else {
+    bootstrap();
+  }
   process.stdout.write(`${JSON.stringify({ state: "running" })}\n`);
 }

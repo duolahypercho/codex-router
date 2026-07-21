@@ -10,6 +10,8 @@
 - Made tray usage selection account-aware, added quota reset times to provider
   cards, and kept Kimi and Grok OAuth sessions fresh during usage polling and
   routed requests.
+- Made macOS service reinstalls wait for launchd to finish unloading and use an
+  in-place restart, preventing transient bootstrap status-5 failures.
 - Added the isolated Cursor target and corrected its PowerShell installer path.
 - Fixed partial startup failures so already-running forwarders are terminated,
   and isolated all six ports in the real LiteLLM integration test.
