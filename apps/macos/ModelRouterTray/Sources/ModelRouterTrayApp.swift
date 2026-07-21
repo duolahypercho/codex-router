@@ -8,7 +8,7 @@ let routerMint = Color(red: 0.38, green: 0.82, blue: 0.61)
 let routerYellow = Color(red: 0.94, green: 0.68, blue: 0.25)
 let routerRed = Color(red: 0.91, green: 0.35, blue: 0.32)
 let routerInk = Color(red: 0.035, green: 0.043, blue: 0.055)
-let routerMuted = Color.white.opacity(0.52)
+let routerMuted = Color.secondary.opacity(0.72)
 
 enum RouterActivityState: String, Decodable {
   case idle
@@ -39,8 +39,7 @@ struct ModelRouterTrayApp: App {
   var body: some Scene {
     MenuBarExtra {
       TrayView(store: appDelegate.store)
-        .frame(width: 404, height: 594)
-        .preferredColorScheme(.dark)
+        .frame(width: 352, height: 560)
     } label: {
       StatusItemLabel(store: appDelegate.store)
     }
@@ -252,7 +251,11 @@ final class RouterStore: ObservableObject {
   }
 
   func dailyTokens(days: Int) -> [Double] {
-    guard let accountUsage else { return Array(repeating: 0, count: days) }
+    dailyUsage(days: days).map(\.tokens)
+  }
+
+  func dailyUsage(days: Int) -> [DailyUsagePoint] {
+    guard let accountUsage else { return placeholderDailyUsage(days: days) }
     let indexed = Dictionary(uniqueKeysWithValues: accountUsage.dailyUsageBuckets.map {
       ($0.startDate, Double($0.tokens))
     })
@@ -264,7 +267,18 @@ final class RouterStore: ObservableObject {
     let today = calendar.startOfDay(for: .now)
     return (0..<days).map { offset in
       let date = calendar.date(byAdding: .day, value: offset - (days - 1), to: today) ?? today
-      return indexed[formatter.string(from: date)] ?? 0
+      return DailyUsagePoint(date: date, tokens: indexed[formatter.string(from: date)] ?? 0)
+    }
+  }
+
+  private func placeholderDailyUsage(days: Int) -> [DailyUsagePoint] {
+    let calendar = Calendar.current
+    let today = calendar.startOfDay(for: .now)
+    return (0..<days).map { offset in
+      DailyUsagePoint(
+        date: calendar.date(byAdding: .day, value: offset - (days - 1), to: today) ?? today,
+        tokens: 0
+      )
     }
   }
 
@@ -470,6 +484,12 @@ struct CodexDailyUsageBucket: Decodable {
   let tokens: Int64
 }
 
+struct DailyUsagePoint: Identifiable {
+  let date: Date
+  let tokens: Double
+  var id: Date { date }
+}
+
 struct CodexUsageSummary: Decodable {
   let lifetimeTokens: Int64?
   let peakDailyTokens: Int64?
@@ -538,7 +558,7 @@ private struct TrayView: View {
   var body: some View {
     ZStack {
       VisualEffectBlur()
-      Color(red: 0.045, green: 0.052, blue: 0.064).opacity(0.88)
+        .ignoresSafeArea()
       VStack(spacing: 0) {
         header
         if let target {
@@ -553,9 +573,9 @@ private struct TrayView: View {
         }
         footer
       }
-      .padding(16)
+      .padding(14)
     }
-    .foregroundStyle(.white)
+    .foregroundStyle(.primary)
     .task { await store.refresh() }
   }
 
@@ -564,15 +584,15 @@ private struct TrayView: View {
     HStack(alignment: .center, spacing: 12) {
       VStack(alignment: .leading, spacing: 3) {
         Text("Model Router")
-          .font(.system(size: 18, weight: .semibold, design: .rounded))
+          .font(.system(size: 15, weight: .semibold))
         Text(accountLabel)
-          .font(.system(size: 10, weight: .regular, design: .rounded))
+          .font(.system(size: 10, weight: .regular))
           .foregroundStyle(routerMuted)
       }
       Spacer()
       StatusBeacon(state: store.activityState)
     }
-    .padding(.bottom, 15)
+    .padding(.bottom, 12)
   }
 
   private var accountLabel: String {
@@ -582,7 +602,7 @@ private struct TrayView: View {
 
   private func content(for target: RouterTarget) -> some View {
     ScrollView(showsIndicators: false) {
-      VStack(alignment: .leading, spacing: 18) {
+      VStack(alignment: .leading, spacing: 14) {
         AccountUsageSection(store: store)
         settingRow(
           title: "Dynamic Island",
@@ -599,7 +619,7 @@ private struct TrayView: View {
               store.pin(model)
             }
             if model.id != target.models.filter(\.enabled).last?.id {
-              Divider().overlay(Color.white.opacity(0.08))
+              Divider()
             }
           }
         }
@@ -619,7 +639,7 @@ private struct TrayView: View {
               onSaveKey: { key in Task { await store.saveProviderKey(provider.id, key: key) } }
             )
             if provider.id != providers.last?.id {
-              Divider().overlay(Color.white.opacity(0.08))
+              Divider()
             }
           }
         }
@@ -632,10 +652,11 @@ private struct TrayView: View {
   private func sectionLabel(_ title: String, detail: String) -> some View {
     HStack {
       Text(title)
-        .font(.system(size: 12, weight: .semibold, design: .rounded))
+        .font(.system(size: 11, weight: .medium))
+        .foregroundStyle(.secondary)
       Spacer()
       Text(detail)
-        .font(.system(size: 10, weight: .medium, design: .rounded))
+        .font(.system(size: 9, weight: .regular))
         .foregroundStyle(store.pendingApply ? routerAccent : routerMuted)
     }
     .padding(.horizontal, 2)
@@ -650,9 +671,9 @@ private struct TrayView: View {
     HStack(spacing: 12) {
       VStack(alignment: .leading, spacing: 3) {
         Text(title)
-          .font(.system(size: 13, weight: .medium, design: .rounded))
+          .font(.system(size: 12, weight: .medium))
         Text(detail)
-          .font(.system(size: 10, design: .rounded))
+          .font(.system(size: 9))
           .foregroundStyle(routerMuted)
       }
       Spacer()
@@ -662,15 +683,15 @@ private struct TrayView: View {
         .controlSize(.small)
         .tint(routerMint)
     }
-    .padding(.vertical, 2)
+    .padding(.vertical, 1)
   }
 
   private var emptyState: some View {
     VStack(spacing: 10) {
       Text("Router unavailable")
-        .font(.system(size: 14, weight: .semibold, design: .rounded))
+        .font(.system(size: 13, weight: .semibold))
       Text("Run setup, then refresh this panel.")
-        .font(.system(size: 11, design: .rounded))
+        .font(.system(size: 11))
         .foregroundStyle(routerMuted)
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -691,28 +712,28 @@ private struct TrayView: View {
         }
       }
       .buttonStyle(.plain)
-      .font(.system(size: 11, weight: .medium, design: .rounded))
+      .font(.system(size: 11, weight: .medium))
       .foregroundStyle(routerAccent)
       .disabled(store.isRefreshing)
 
       if let message = store.message {
         Text(message)
           .lineLimit(1)
-          .font(.system(size: 10, design: .rounded))
+          .font(.system(size: 10))
           .foregroundStyle(Color(red: 1, green: 0.61, blue: 0.52))
       } else {
         Spacer()
         Text(store.lastUpdated.map { "Updated \($0.formatted(date: .omitted, time: .shortened))" } ?? "Awaiting data")
-          .font(.system(size: 10, weight: .medium, design: .rounded))
+          .font(.system(size: 10, weight: .regular))
           .foregroundStyle(routerMuted)
       }
 
       Button("Quit") { NSApp.terminate(nil) }
         .buttonStyle(.plain)
-        .font(.system(size: 11, weight: .medium, design: .rounded))
+        .font(.system(size: 11, weight: .medium))
         .foregroundStyle(routerMuted)
     }
-    .padding(.top, 13)
+    .padding(.top, 10)
   }
 
 }
@@ -735,9 +756,9 @@ private struct ProviderSetupRow: View {
       HStack(spacing: 10) {
         VStack(alignment: .leading, spacing: 2) {
           Text(setup?.displayName ?? provider.id)
-            .font(.system(size: 12, weight: .medium, design: .rounded))
+            .font(.system(size: 12, weight: .medium))
           Text(detail)
-            .font(.system(size: 9, weight: .regular, design: .rounded))
+            .font(.system(size: 9, weight: .regular))
             .foregroundStyle(setup?.configured == true ? routerMuted : routerYellow.opacity(0.9))
         }
         Spacer()
@@ -747,7 +768,7 @@ private struct ProviderSetupRow: View {
       if showingKeyField, setup?.action == "add-key" {
         VStack(alignment: .leading, spacing: 5) {
           Text("API key")
-            .font(.system(size: 9, weight: .medium, design: .rounded))
+            .font(.system(size: 9, weight: .medium))
             .foregroundStyle(routerMuted)
           HStack(spacing: 7) {
             SecureField("Paste key", text: $apiKey)
@@ -755,7 +776,7 @@ private struct ProviderSetupRow: View {
               .font(.system(size: 11, design: .monospaced))
               .padding(.horizontal, 9)
               .padding(.vertical, 7)
-              .background(Color.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 7))
+              .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 6))
             Button("Save") {
               let key = apiKey
               apiKey = ""
@@ -769,7 +790,7 @@ private struct ProviderSetupRow: View {
         .transition(.opacity.combined(with: .move(edge: .top)))
       }
     }
-    .padding(.vertical, 9)
+    .padding(.vertical, 7)
     .animation(.easeOut(duration: 0.18), value: showingKeyField)
     .onChange(of: setup?.configured) { configured in
       if configured == true {
@@ -809,7 +830,7 @@ private struct ProviderSetupRow: View {
     } else {
       Button(actionTitle) { performAction() }
         .buttonStyle(.plain)
-        .font(.system(size: 10, weight: .medium, design: .rounded))
+        .font(.system(size: 10, weight: .medium))
         .foregroundStyle(routerAccent)
         .disabled(controlsDisabled || setup == nil)
     }
@@ -845,20 +866,20 @@ private struct AccountUsageSection: View {
       HStack(alignment: .firstTextBaseline) {
         VStack(alignment: .leading, spacing: 3) {
           Text("ChatGPT limit")
-            .font(.system(size: 13, weight: .medium, design: .rounded))
+            .font(.system(size: 12, weight: .medium))
           Text(limitDetail)
-            .font(.system(size: 10, design: .rounded))
+            .font(.system(size: 9))
             .foregroundStyle(routerMuted)
         }
         Spacer()
         Text(remainingText)
-          .font(.system(size: 22, weight: .semibold, design: .rounded))
+          .font(.system(size: 20, weight: .semibold))
           .monospacedDigit()
       }
 
       GeometryReader { geometry in
         ZStack(alignment: .leading) {
-          Capsule().fill(Color.white.opacity(0.09))
+          Capsule().fill(Color.primary.opacity(0.10))
           Capsule()
             .fill(routerAccent)
             .frame(width: geometry.size.width * remainingFraction)
@@ -868,14 +889,14 @@ private struct AccountUsageSection: View {
 
       HStack {
         Text("Daily token usage")
-          .font(.system(size: 10, weight: .medium, design: .rounded))
+          .font(.system(size: 10, weight: .medium))
           .foregroundStyle(routerMuted)
         Spacer()
         UsageRangePicker(selection: $range)
       }
 
-      UsageBarChart(values: store.dailyTokens(days: range.rawValue), tint: routerAccent)
-        .frame(height: 74)
+      UsageBarChart(points: store.dailyUsage(days: range.rawValue), tint: routerAccent)
+        .frame(height: 88)
 
       HStack {
         Text(rangeCaption)
@@ -884,12 +905,12 @@ private struct AccountUsageSection: View {
           Text("\(streak)-day streak")
         }
       }
-      .font(.system(size: 9, design: .rounded))
+      .font(.system(size: 9))
       .foregroundStyle(routerMuted)
 
       if let error = store.accountUsageError, store.accountUsage == nil {
         Text(error)
-          .font(.system(size: 10, design: .rounded))
+          .font(.system(size: 10))
           .foregroundStyle(routerRed)
           .lineLimit(2)
       }
@@ -926,18 +947,18 @@ struct UsageRangePicker: View {
       ForEach(UsageRange.allCases) { range in
         Button(range.label) { selection = range }
           .buttonStyle(.plain)
-          .font(.system(size: 9, weight: .medium, design: .rounded))
-          .foregroundStyle(selection == range ? Color.white : routerMuted)
+          .font(.system(size: 9, weight: .medium))
+          .foregroundStyle(selection == range ? Color.primary : routerMuted)
           .padding(.horizontal, 7)
           .padding(.vertical, 4)
           .background(
-            selection == range ? Color.white.opacity(0.12) : Color.clear,
+            selection == range ? Color.primary.opacity(0.10) : Color.clear,
             in: Capsule()
           )
       }
     }
     .padding(2)
-    .background(Color.white.opacity(0.045), in: Capsule())
+    .background(Color.primary.opacity(0.045), in: Capsule())
   }
 }
 
@@ -950,41 +971,122 @@ private struct SimpleModelRow: View {
     HStack(spacing: 10) {
       VStack(alignment: .leading, spacing: 2) {
         Text(model.displayName)
-          .font(.system(size: 12, weight: .medium, design: .rounded))
+          .font(.system(size: 12, weight: .medium))
           .lineLimit(1)
         Text(model.provider == "grok-oauth" ? "xAI OAuth" : model.provider)
-          .font(.system(size: 9, design: .rounded))
+          .font(.system(size: 9))
           .foregroundStyle(routerMuted)
       }
       Spacer()
       Button(isPinned ? "Pinned" : "Pin") { onPin() }
         .buttonStyle(.plain)
-        .font(.system(size: 10, weight: .medium, design: .rounded))
+        .font(.system(size: 10, weight: .medium))
         .foregroundStyle(isPinned ? routerMint : routerAccent)
     }
-    .padding(.vertical, 9)
+    .padding(.vertical, 7)
   }
 }
 
 struct UsageBarChart: View {
-  let values: [Double]
+  let points: [DailyUsagePoint]
   let tint: Color
+  var showsAxis = true
+
+  @State private var hoveredDate: Date?
 
   var body: some View {
     GeometryReader { geometry in
-      let maximum = max(values.max() ?? 0, 1)
-      let spacing: CGFloat = values.count > 45 ? 1 : values.count > 14 ? 2 : 4
-      let width = max(1, (geometry.size.width - spacing * CGFloat(max(0, values.count - 1))) / CGFloat(max(values.count, 1)))
-      HStack(alignment: .bottom, spacing: spacing) {
-        ForEach(Array(values.enumerated()), id: \.offset) { _, value in
-          RoundedRectangle(cornerRadius: min(2, width / 2), style: .continuous)
-            .fill(value == 0 ? Color.white.opacity(0.055) : tint.opacity(0.82))
-            .frame(width: width, height: max(2, geometry.size.height * CGFloat(value / maximum)))
+      let maximum = max(points.map(\.tokens).max() ?? 0, 1)
+      let spacing: CGFloat = points.count > 45 ? 1 : points.count > 14 ? 2 : 4
+      let width = max(
+        1,
+        (geometry.size.width - spacing * CGFloat(max(0, points.count - 1))) /
+          CGFloat(max(points.count, 1))
+      )
+      let axisHeight: CGFloat = showsAxis ? 14 : 0
+      let chartHeight = max(1, geometry.size.height - axisHeight)
+
+      ZStack(alignment: .top) {
+        VStack(spacing: 2) {
+          HStack(alignment: .bottom, spacing: spacing) {
+            ForEach(points) { point in
+              VStack(spacing: 0) {
+                Spacer(minLength: 0)
+                RoundedRectangle(cornerRadius: min(2.5, width / 2), style: .continuous)
+                  .fill(point.tokens == 0 ? Color.primary.opacity(0.07) : tint.opacity(0.86))
+                  .frame(height: max(2, chartHeight * CGFloat(point.tokens / maximum)))
+              }
+              .frame(width: width, height: chartHeight)
+              .contentShape(Rectangle())
+              .onHover { hovering in
+                if hovering {
+                  hoveredDate = point.date
+                } else if hoveredDate == point.date {
+                  hoveredDate = nil
+                }
+              }
+              .help(hoverText(for: point))
+            }
+          }
+
+          if showsAxis {
+            ZStack(alignment: .leading) {
+              ForEach(Array(points.enumerated()), id: \.element.id) { index, point in
+                if shouldLabel(index: index) {
+                  Text(axisLabel(for: point))
+                    .font(.system(size: 7.5, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .fixedSize()
+                    .position(
+                      x: min(
+                        geometry.size.width - 8,
+                        max(8, width / 2 + CGFloat(index) * (width + spacing))
+                      ),
+                      y: 5
+                    )
+                }
+              }
+            }
+            .frame(height: 12)
+          }
+        }
+
+        if let point = hoveredPoint {
+          Text(hoverText(for: point))
+            .font(.system(size: 9, weight: .medium, design: .monospaced))
+            .foregroundStyle(.primary)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(.regularMaterial, in: Capsule())
+            .overlay(Capsule().stroke(Color.primary.opacity(0.12), lineWidth: 0.5))
+            .allowsHitTesting(false)
         }
       }
-      .frame(maxHeight: .infinity, alignment: .bottom)
     }
-    .accessibilityLabel("Daily token usage chart")
+    .accessibilityLabel("Daily token usage chart. Hover a day for its exact token count.")
+  }
+
+  private var hoveredPoint: DailyUsagePoint? {
+    guard let hoveredDate else { return nil }
+    return points.first(where: { $0.date == hoveredDate })
+  }
+
+  private func shouldLabel(index: Int) -> Bool {
+    let stride = points.count <= 7 ? 1 : points.count <= 31 ? 5 : 15
+    return index.isMultiple(of: stride) || index == points.count - 1
+  }
+
+  private func axisLabel(for point: DailyUsagePoint) -> String {
+    if points.count <= 7 {
+      return point.date.formatted(.dateTime.weekday(.abbreviated))
+    }
+    return point.date.formatted(.dateTime.month(.defaultDigits).day())
+  }
+
+  private func hoverText(for point: DailyUsagePoint) -> String {
+    let date = point.date.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day())
+    let tokens = Int64(point.tokens).formatted(.number.grouping(.automatic))
+    return "\(date) · \(tokens) tokens"
   }
 }
 
@@ -1017,7 +1119,7 @@ private struct StatusBeacon: View {
           .frame(width: 7, height: 7)
       }
       Text(state.label)
-        .font(.system(size: 10, weight: .medium, design: .rounded))
+        .font(.system(size: 10, weight: .medium))
     }
     .foregroundStyle(state.tint)
     .onAppear { animate() }
@@ -1036,20 +1138,12 @@ private struct StatusBeacon: View {
 private struct AccentButtonStyle: ButtonStyle {
   func makeBody(configuration: Configuration) -> some View {
     configuration.label
-      .font(.system(size: 11, weight: .semibold, design: .rounded))
-      .foregroundStyle(routerInk)
-      .padding(.horizontal, 13)
-      .padding(.vertical, 8)
-      .background(
-        LinearGradient(
-          colors: [Color.white.opacity(0.95), routerAccent],
-          startPoint: .topLeading,
-          endPoint: .bottomTrailing
-        )
-        .opacity(configuration.isPressed ? 0.76 : 1)
-      )
-      .clipShape(Capsule())
-      .shadow(color: routerAccent.opacity(0.26), radius: 9, y: 4)
+      .font(.system(size: 11, weight: .semibold))
+      .foregroundStyle(.white)
+      .padding(.horizontal, 12)
+      .padding(.vertical, 7)
+      .background(routerAccent.opacity(configuration.isPressed ? 0.74 : 1), in: Capsule())
+      .scaleEffect(configuration.isPressed ? 0.98 : 1)
   }
 }
 

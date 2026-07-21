@@ -14,8 +14,8 @@ final class IslandDisplayModel: ObservableObject {
   var size: CGSize {
     switch state {
     case .compact: return CGSize(width: 286, height: 40)
-    case .peek: return CGSize(width: 382, height: 104)
-    case .expanded: return CGSize(width: 520, height: 310)
+    case .peek: return CGSize(width: 382, height: 116)
+    case .expanded: return CGSize(width: 520, height: 334)
     }
   }
 
@@ -241,8 +241,8 @@ private struct IslandOverlayView: View {
             .foregroundStyle(routerMuted)
         }
       }
-      UsageBarChart(values: store.dailyTokens(days: 7), tint: graphTint)
-        .frame(height: 32)
+      UsageBarChart(points: store.dailyUsage(days: 7), tint: graphTint)
+        .frame(height: 43)
     }
     .padding(.horizontal, 15)
     .padding(.top, 10)
@@ -284,8 +284,8 @@ private struct IslandOverlayView: View {
         UsageRangePicker(selection: $range)
       }
 
-      UsageBarChart(values: graphValues, tint: graphTint)
-        .frame(height: 64)
+      UsageBarChart(points: graphPoints, tint: graphTint)
+        .frame(height: 78)
 
       HStack {
         Text("PINNED MODEL")
@@ -375,7 +375,11 @@ private struct IslandOverlayView: View {
   }
 
   private var graphValues: [Double] {
-    store.dailyTokens(days: range.rawValue)
+    graphPoints.map(\.tokens)
+  }
+
+  private var graphPoints: [DailyUsagePoint] {
+    store.dailyUsage(days: range.rawValue)
   }
 
   private var graphTint: Color {

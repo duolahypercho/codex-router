@@ -18,8 +18,10 @@ and Island. Hover the Island for a quick view or click it for account usage.
 - Native ChatGPT/Codex limits come from the installed Codex app-server. The tray
   requests only the rate-limit snapshot and daily token buckets; it never reads
   or copies the ChatGPT credential file.
-- Daily token bars can show 7, 30, or 90 days. Account limits refresh every 30
-  seconds independently of the external provider pinned in the Island.
+- Daily token bars can show 7, 30, or 90 days. Seven-day charts label every
+  weekday; longer ranges use spaced date ticks while retaining one bar per day.
+  Hover any bar for its full date and exact token count. Account limits refresh
+  every 30 seconds independently of the external provider pinned in the Island.
 - The Island uses green for idle, amber while generating, and red after an
   error. It is shown by default and can be toggled from the tray.
 - Local routed-model events still record only timestamp, model, provider, HTTP
@@ -31,6 +33,11 @@ at rest, richer usage detail on hover, and a full panel on click. On a notched
 Mac it sits flush with the screen edge; on other displays it behaves as a
 top-center floating island. The menu-bar item remains available as a fallback
 and configuration surface.
+
+The tray uses the native macOS popover material and follows the current system
+appearance. It intentionally uses standard system typography, controls, and
+separators rather than applying a second opaque dashboard skin inside the
+popover.
 
 Run it from a stable checkout on macOS:
 
