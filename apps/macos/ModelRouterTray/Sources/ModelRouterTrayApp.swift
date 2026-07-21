@@ -63,6 +63,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     Task { await store.startPolling() }
     Task { await store.startActivityPolling() }
     Task { await store.startAccountUsagePolling() }
+    Task { await store.startProviderPolling() }
   }
 }
 
@@ -77,11 +78,14 @@ final class RouterStore: ObservableObject {
   @Published private(set) var activityState: RouterActivityState = .idle
   @Published private(set) var accountUsage: CodexAccountUsage?
   @Published private(set) var accountUsageError: String?
+  @Published private(set) var providerSetup: [String: ProviderSetupState] = [:]
+  @Published private(set) var providerOperation: String?
   @Published private(set) var islandVisible: Bool
 
   private var polling = false
   private var activityPolling = false
   private var accountUsagePolling = false
+  private var providerPolling = false
   private let defaults = UserDefaults.standard
   private let islandVisibilityKey = "ModelRouterTray.islandVisible"
 
@@ -193,6 +197,60 @@ final class RouterStore: ObservableObject {
     }
   }
 
+  func startProviderPolling() async {
+    guard !providerPolling else { return }
+    providerPolling = true
+    defer { providerPolling = false }
+    while !Task.isCancelled {
+      await refreshProviderSetup()
+      do {
+        try await Task.sleep(nanoseconds: 60 * 1_000_000_000)
+      } catch {
+        return
+      }
+    }
+  }
+
+  func refreshProviderSetup() async {
+    do {
+      let output = try await runControl(arguments: ["providers", "--json"])
+      let snapshot = try JSONDecoder().decode(ProviderSetupSnapshot.self, from: output)
+      providerSetup = Dictionary(uniqueKeysWithValues: snapshot.providers.map { ($0.id, $0) })
+    } catch {
+      message = error.localizedDescription
+    }
+  }
+
+  func installProviderCLI(_ provider: String) async {
+    await performProviderOperation(
+      provider,
+      successMessage: "Official provider CLI installed. Sign in to continue."
+    ) {
+      _ = try await runControl(arguments: ["install-cli", provider])
+    }
+  }
+
+  func loginProvider(_ provider: String) async {
+    await performProviderOperation(
+      provider,
+      successMessage: "Provider connected. Apply Changes to add its models to Codex."
+    ) {
+      _ = try await runControl(arguments: ["login", provider])
+      try await stageProvider(provider)
+    }
+  }
+
+  func saveProviderKey(_ provider: String, key: String) async {
+    let secret = Data(key.utf8)
+    await performProviderOperation(
+      provider,
+      successMessage: "API key saved. Apply Changes to add its models to Codex."
+    ) {
+      _ = try await runControl(arguments: ["credential", provider], stdin: secret)
+      try await stageProvider(provider)
+    }
+  }
+
   func dailyTokens(days: Int) -> [Double] {
     guard let accountUsage else { return Array(repeating: 0, count: days) }
     let indexed = Dictionary(uniqueKeysWithValues: accountUsage.dailyUsageBuckets.map {
@@ -230,6 +288,30 @@ final class RouterStore: ObservableObject {
     }
   }
 
+  private func performProviderOperation(
+    _ provider: String,
+    successMessage: String,
+    operation: () async throws -> Void
+  ) async {
+    guard providerOperation == nil else { return }
+    providerOperation = provider
+    defer { providerOperation = nil }
+    do {
+      try await operation()
+      await refreshProviderSetup()
+      await refresh()
+      message = successMessage
+    } catch {
+      message = error.localizedDescription
+      await refreshProviderSetup()
+    }
+  }
+
+  private func stageProvider(_ provider: String) async throws {
+    _ = try await runControl(arguments: ["set", provider, "on", "--targets", "codex"])
+    pendingApply = true
+  }
+
   private func refreshActivity() async {
     let configuredPort = ProcessInfo.processInfo.environment["MODEL_ROUTER_PORT"] ?? "4102"
     guard let url = URL(string: "http://127.0.0.1:\(configuredPort)/health") else {
@@ -260,18 +342,34 @@ final class RouterStore: ObservableObject {
     models.first(where: { $0.slug == "grok-oauth/grok-4.5" }) ?? models[0]
   }
 
-  private func runControl(arguments: [String]) async throws -> Data {
+  private func runControl(arguments: [String], stdin: Data? = nil) async throws -> Data {
     let root = try sourceRoot()
     return try await Task.detached {
       let task = Process()
       task.executableURL = root.appendingPathComponent("bin/control")
       task.arguments = arguments
       task.currentDirectoryURL = root
+      var environment = ProcessInfo.processInfo.environment
+      let home = FileManager.default.homeDirectoryForCurrentUser.path
+      let preferredPaths = [
+        "\(home)/.npm-global/bin",
+        "\(home)/.local/bin",
+        "/opt/homebrew/bin",
+        "/usr/local/bin",
+      ]
+      environment["PATH"] = (preferredPaths + [environment["PATH"] ?? ""]).joined(separator: ":")
+      task.environment = environment
       let output = Pipe()
       let errors = Pipe()
+      let input = stdin.map { _ in Pipe() }
       task.standardOutput = output
       task.standardError = errors
+      task.standardInput = input
       try task.run()
+      if let stdin, let input {
+        input.fileHandleForWriting.write(stdin)
+        try? input.fileHandleForWriting.close()
+      }
       task.waitUntilExit()
       let stdout = output.fileHandleForReading.readDataToEndOfFile()
       guard task.terminationStatus == 0 else {
@@ -394,6 +492,19 @@ struct RouterModel: Decodable, Identifiable {
   var id: String { slug }
 }
 
+struct ProviderSetupSnapshot: Decodable {
+  let providers: [ProviderSetupState]
+}
+
+struct ProviderSetupState: Decodable, Identifiable {
+  let id: String
+  let displayName: String
+  let kind: String
+  let configured: Bool
+  let cliInstalled: Bool?
+  let action: String
+}
+
 private struct StatusItemLabel: View {
   @ObservedObject var store: RouterStore
 
@@ -495,7 +606,18 @@ private struct TrayView: View {
         sectionLabel("Providers", detail: store.pendingApply ? "Apply required" : "Synced")
         VStack(spacing: 0) {
           ForEach(providers, id: \.id) { provider in
-            providerRow(provider)
+            ProviderSetupRow(
+              provider: provider,
+              setup: store.providerSetup[provider.id],
+              isBusy: store.providerOperation == provider.id,
+              controlsDisabled: store.providerOperation != nil,
+              onToggle: { enabled in
+                Task { await store.setProvider(provider.id, enabled: enabled) }
+              },
+              onInstall: { Task { await store.installProviderCLI(provider.id) } },
+              onLogin: { Task { await store.loginProvider(provider.id) } },
+              onSaveKey: { key in Task { await store.saveProviderKey(provider.id, key: key) } }
+            )
             if provider.id != providers.last?.id {
               Divider().overlay(Color.white.opacity(0.08))
             }
@@ -518,28 +640,6 @@ private struct TrayView: View {
     }
     .padding(.horizontal, 2)
     .padding(.top, 1)
-  }
-
-  private func providerRow(_ provider: (id: String, enabled: Bool)) -> some View {
-    HStack(spacing: 10) {
-      VStack(alignment: .leading, spacing: 2) {
-        Text(providerTitle(provider.id))
-          .font(.system(size: 12, weight: .medium, design: .rounded))
-        Text(provider.enabled ? "Available in Codex" : "Hidden from Codex")
-          .font(.system(size: 9, weight: .regular, design: .rounded))
-          .foregroundStyle(routerMuted)
-      }
-      Spacer()
-      Toggle("", isOn: Binding(
-        get: { provider.enabled },
-        set: { enabled in Task { await store.setProvider(provider.id, enabled: enabled) } }
-      ))
-      .labelsHidden()
-      .toggleStyle(.switch)
-      .controlSize(.mini)
-      .tint(routerMint)
-    }
-    .padding(.vertical, 9)
   }
 
   private func settingRow(
@@ -587,6 +687,7 @@ private struct TrayView: View {
         Task {
           await store.refresh()
           await store.refreshAccountUsage()
+          await store.refreshProviderSetup()
         }
       }
       .buttonStyle(.plain)
@@ -614,16 +715,125 @@ private struct TrayView: View {
     .padding(.top, 13)
   }
 
-  private func providerTitle(_ provider: String) -> String {
-    [
-      "grok-oauth": "xAI Grok OAuth",
-      "kimi-oauth": "Kimi Code OAuth",
-      "kimi-api": "Kimi Platform API",
-      "deepseek": "DeepSeek API",
-      "grok-api": "xAI Grok API",
-    ][provider] ?? provider
+}
+
+private struct ProviderSetupRow: View {
+  let provider: (id: String, enabled: Bool)
+  let setup: ProviderSetupState?
+  let isBusy: Bool
+  let controlsDisabled: Bool
+  let onToggle: (Bool) -> Void
+  let onInstall: () -> Void
+  let onLogin: () -> Void
+  let onSaveKey: (String) -> Void
+
+  @State private var showingKeyField = false
+  @State private var apiKey = ""
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 9) {
+      HStack(spacing: 10) {
+        VStack(alignment: .leading, spacing: 2) {
+          Text(setup?.displayName ?? provider.id)
+            .font(.system(size: 12, weight: .medium, design: .rounded))
+          Text(detail)
+            .font(.system(size: 9, weight: .regular, design: .rounded))
+            .foregroundStyle(setup?.configured == true ? routerMuted : routerYellow.opacity(0.9))
+        }
+        Spacer()
+        actionControl
+      }
+
+      if showingKeyField, setup?.action == "add-key" {
+        VStack(alignment: .leading, spacing: 5) {
+          Text("API key")
+            .font(.system(size: 9, weight: .medium, design: .rounded))
+            .foregroundStyle(routerMuted)
+          HStack(spacing: 7) {
+            SecureField("Paste key", text: $apiKey)
+              .textFieldStyle(.plain)
+              .font(.system(size: 11, design: .monospaced))
+              .padding(.horizontal, 9)
+              .padding(.vertical, 7)
+              .background(Color.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 7))
+            Button("Save") {
+              let key = apiKey
+              apiKey = ""
+              showingKeyField = false
+              onSaveKey(key)
+            }
+            .buttonStyle(AccentButtonStyle())
+            .disabled(apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+          }
+        }
+        .transition(.opacity.combined(with: .move(edge: .top)))
+      }
+    }
+    .padding(.vertical, 9)
+    .animation(.easeOut(duration: 0.18), value: showingKeyField)
+    .onChange(of: setup?.configured) { configured in
+      if configured == true {
+        apiKey = ""
+        showingKeyField = false
+      }
+    }
   }
 
+  private var detail: String {
+    guard let setup else { return "Checking setup…" }
+    if setup.configured {
+      return provider.enabled ? "Ready · Available in Codex" : "Ready · Hidden from Codex"
+    }
+    switch setup.action {
+    case "install": return "Official CLI required"
+    case "login": return "Sign in with the official CLI"
+    case "add-key": return "API key required"
+    default: return "Setup required"
+    }
+  }
+
+  @ViewBuilder
+  private var actionControl: some View {
+    if isBusy {
+      ProgressView()
+        .controlSize(.small)
+        .tint(routerAccent)
+        .frame(width: 42)
+    } else if setup?.configured == true {
+      Toggle("", isOn: Binding(get: { provider.enabled }, set: onToggle))
+        .labelsHidden()
+        .toggleStyle(.switch)
+        .controlSize(.mini)
+        .tint(routerMint)
+        .disabled(controlsDisabled)
+    } else {
+      Button(actionTitle) { performAction() }
+        .buttonStyle(.plain)
+        .font(.system(size: 10, weight: .medium, design: .rounded))
+        .foregroundStyle(routerAccent)
+        .disabled(controlsDisabled || setup == nil)
+    }
+  }
+
+  private var actionTitle: String {
+    switch setup?.action {
+    case "install": return "Install"
+    case "login": return "Sign In"
+    case "add-key": return showingKeyField ? "Cancel" : "Add Key"
+    default: return "Checking…"
+    }
+  }
+
+  private func performAction() {
+    switch setup?.action {
+    case "install": onInstall()
+    case "login": onLogin()
+    case "add-key":
+      apiKey = ""
+      showingKeyField.toggle()
+    default: break
+    }
+  }
 }
 
 private struct AccountUsageSection: View {

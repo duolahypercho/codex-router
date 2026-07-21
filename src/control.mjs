@@ -175,6 +175,40 @@ async function printAccountUsage() {
   process.stdout.write(`${JSON.stringify(await readCodexAccountUsage(), null, 2)}\n`);
 }
 
+async function printProviderOnboarding() {
+  const { providerOnboardingSnapshot } = await import("./provider-onboarding.mjs");
+  process.stdout.write(`${JSON.stringify(providerOnboardingSnapshot(), null, 2)}\n`);
+}
+
+async function installProviderCli(providerId) {
+  const { installOauthCli, providerOnboardingSnapshot } = await import("./provider-onboarding.mjs");
+  installOauthCli(providerId);
+  process.stdout.write(`${JSON.stringify(providerOnboardingSnapshot())}\n`);
+}
+
+async function loginProvider(providerId) {
+  const { loginOauthProvider, providerOnboardingSnapshot } = await import("./provider-onboarding.mjs");
+  loginOauthProvider(providerId);
+  process.stdout.write(`${JSON.stringify(providerOnboardingSnapshot())}\n`);
+}
+
+async function readSecretFromStdin() {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of process.stdin) {
+    size += chunk.length;
+    if (size > 16 * 1024) throw new Error("The API key is too large.");
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+async function saveProviderCredential(providerId) {
+  const { providerOnboardingSnapshot, saveApiCredential } = await import("./provider-onboarding.mjs");
+  saveApiCredential(providerId, await readSecretFromStdin());
+  process.stdout.write(`${JSON.stringify(providerOnboardingSnapshot())}\n`);
+}
+
 // --- dispatch ---------------------------------------------------------------
 
 if (args.includes("--probe")) {
@@ -188,6 +222,17 @@ if (args.includes("--probe")) {
   runApply();
 } else if (args[0] === "account") {
   await printAccountUsage();
+} else if (args[0] === "providers") {
+  await printProviderOnboarding();
+} else if (args[0] === "install-cli") {
+  if (!args[1]) throw new Error("Usage: control install-cli <oauth-provider>");
+  await installProviderCli(args[1]);
+} else if (args[0] === "login") {
+  if (!args[1]) throw new Error("Usage: control login <oauth-provider>");
+  await loginProvider(args[1]);
+} else if (args[0] === "credential") {
+  if (!args[1]) throw new Error("Usage: control credential <api-provider>");
+  await saveProviderCredential(args[1]);
 } else {
   printOverview(args.includes("--json"));
 }
