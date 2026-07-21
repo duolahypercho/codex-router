@@ -313,9 +313,7 @@ private struct IslandOverlayView: View {
 
   private var sourceLabel: String {
     guard let model else { return "LOCAL MODEL BRIDGE" }
-    if model.provider == "chatgpt-oauth" {
-      return "CODEX \(store.quota.plan?.uppercased() ?? "SUBSCRIPTION")"
-    }
+    if model.provider == "grok-oauth" { return "XAI • OAUTH SESSION" }
     if model.provider == "grok-api" { return "XAI • METERED API" }
     if model.provider.hasSuffix("-api") || model.provider == "deepseek" { return "METERED API" }
     return "OAUTH ROUTE"
@@ -329,52 +327,32 @@ private struct IslandOverlayView: View {
   }
 
   private var primaryMetric: String {
-    guard let model else { return "—" }
-    if model.provider == "chatgpt-oauth", let used = store.quota.primary?.usedFraction {
-      return "\(Int((used * 100).rounded()))%"
-    }
+    guard model != nil else { return "—" }
     return "\(recentEvents(hours: 1).count)"
   }
 
   private var primaryTitle: String {
-    model?.provider == "chatgpt-oauth" ? "5H WINDOW" : "LAST HOUR"
+    "LAST HOUR"
   }
 
   private var primaryDetail: String {
-    if let reset = store.quota.primary?.resetAt, model?.provider == "chatgpt-oauth" {
-      return "resets \(relativeTime(to: reset))"
-    }
     return "routed requests"
   }
 
   private var secondaryTitle: String {
-    model?.provider == "chatgpt-oauth" ? "WEEKLY" : "LAST 24H"
+    "LAST 24H"
   }
 
   private var secondaryMetric: String {
-    if model?.provider == "chatgpt-oauth" {
-      guard let used = store.quota.weekly?.usedFraction else { return "—" }
-      return "\(Int((used * 100).rounded()))%"
-    }
     return "\(recentEvents(hours: 24).count)"
   }
 
   private var secondaryDetail: String {
-    if model?.provider == "chatgpt-oauth" {
-      guard let reset = store.quota.weekly?.resetAt else { return "window unavailable" }
-      return "resets \(relativeTime(to: reset))"
-    }
     return "private local count"
   }
 
   private var graphValues: [Double] {
     guard let model else { return [0, 0] }
-    if model.provider == "chatgpt-oauth" {
-      let values = store.quotaHistory.suffix(40).map(\.usedFraction)
-      let current = store.quota.primary.map { [$0.usedFraction] } ?? []
-      let combined = Array(values) + current
-      return combined.count > 1 ? combined : [0, combined.first ?? 0]
-    }
     let bucketCount = 24
     let bucketDuration: TimeInterval = 15 * 60
     let start = Date().addingTimeInterval(-Double(bucketCount) * bucketDuration)
@@ -387,7 +365,7 @@ private struct IslandOverlayView: View {
   }
 
   private var graphTint: Color {
-    model?.provider == "chatgpt-oauth" ? routerAccent : routerMint
+    model?.provider == "grok-oauth" ? routerAccent : routerMint
   }
 
   private func recentEvents(hours: Double) -> [RouterUsageEvent] {
@@ -404,12 +382,6 @@ private struct IslandOverlayView: View {
     return model.displayName.split(separator: " ").first.map(String.init) ?? model.slug
   }
 
-  private func relativeTime(to date: Date) -> String {
-    let seconds = max(0, date.timeIntervalSinceNow)
-    if seconds < 3600 { return "in \(max(1, Int(seconds / 60)))m" }
-    if seconds < 86_400 { return "in \(Int(seconds / 3600))h" }
-    return "in \(Int(seconds / 86_400))d"
-  }
 }
 
 private struct IslandSilhouette: InsettableShape {

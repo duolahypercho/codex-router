@@ -26,6 +26,7 @@ function portsForTarget(target) {
         MODEL_ROUTER_OAUTH_PORT: "",
         MODEL_ROUTER_PORT: "",
         MODEL_ROUTER_API_PORT: "",
+        MODEL_ROUTER_GROK_OAUTH_PORT: "",
       },
     },
   );
@@ -38,7 +39,7 @@ test("Cursor path defaults are its own dedicated ports", () => {
     oauth: 4106,
     router: 4104,
     api: 4107,
-    chatgpt: 4116,
+    grokOauth: 4116,
   });
 });
 
@@ -74,6 +75,7 @@ test("Claude path defaults ignore legacy Codex-only port overrides", () => {
         MODEL_ROUTER_OAUTH_PORT: "",
         MODEL_ROUTER_PORT: "",
         MODEL_ROUTER_API_PORT: "",
+        MODEL_ROUTER_GROK_OAUTH_PORT: "",
         CODEX_ROUTER_GATEWAY_PORT: "49991",
         CODEX_ROUTER_OAUTH_PORT: "49992",
         CODEX_ROUTER_PORT: "49993",
@@ -87,7 +89,7 @@ test("Claude path defaults ignore legacy Codex-only port overrides", () => {
     oauth: 4112,
     router: 4110,
     api: 4113,
-    chatgpt: 4114,
+    grokOauth: 4114,
   });
 });
 

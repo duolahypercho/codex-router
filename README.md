@@ -95,12 +95,20 @@ Desktop distribution.
 | Kimi K3 (API) | `kimi-api/kimi-k3` | Separately billed Kimi Platform API key |
 | DeepSeek V4 Flash (API) | `deepseek/deepseek-v4-flash` | DeepSeek API key |
 | DeepSeek V4 Pro (API) | `deepseek/deepseek-v4-pro` | DeepSeek API key |
+| Grok 4.5 (OAuth) | `grok-oauth/grok-4.5` | Official Grok CLI OAuth session |
 | Grok 4.5 (API) | `grok-api/grok-4.5` | Separately billed xAI API key |
 
-xAI's Grok Build CLI supports browser OAuth for the CLI itself, but xAI does
-not document that session as an inference API credential for third-party
-routers. Codex Router therefore supports the official `XAI_API_KEY` flow and
-does not extract or repurpose the Grok Build login session.
+Grok OAuth reuses the official CLI credential at `~/.grok/auth.json` and sends
+it only to xAI's documented Grok CLI inference proxy. Install the official CLI
+and authenticate before enabling the route:
+
+```sh
+npm install -g @xai-official/grok
+grok login
+```
+
+Native GPT models continue to use Codex directly. There is no separate GPT or
+ChatGPT OAuth provider in the router.
 
 Kimi Code OAuth and Kimi Platform API access are separate authentication and
 billing systems. The two Kimi entries intentionally coexist. Older DeepSeek

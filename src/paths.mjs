@@ -123,11 +123,11 @@ function port(name, fallback) {
 }
 
 // Each target owns a disjoint block. gateway/oauth/router/api are the original
-// four; chatgpt is a fifth forwarder port for the ChatGPT/Codex OAuth provider.
+// four; grokOauth is a fifth forwarder port for the Grok OAuth provider.
 const TARGET_PORT_DEFAULTS = {
-  codex: { gateway: 4100, oauth: 4101, router: 4102, api: 4103, chatgpt: 4108 },
-  claude: { gateway: 4111, oauth: 4112, router: 4110, api: 4113, chatgpt: 4114 },
-  cursor: { gateway: 4105, oauth: 4106, router: 4104, api: 4107, chatgpt: 4116 },
+  codex: { gateway: 4100, oauth: 4101, router: 4102, api: 4103, grokOauth: 4108 },
+  claude: { gateway: 4111, oauth: 4112, router: 4110, api: 4113, grokOauth: 4114 },
+  cursor: { gateway: 4105, oauth: 4106, router: 4104, api: 4107, grokOauth: 4116 },
 };
 const targetPortDefaults = TARGET_PORT_DEFAULTS[TARGET];
 
@@ -160,7 +160,7 @@ export const PORTS = {
       : undefined) ||
       targetPortDefaults.api,
   ),
-  chatgpt: port("MODEL_ROUTER_CHATGPT_PORT", targetPortDefaults.chatgpt),
+  grokOauth: port("MODEL_ROUTER_GROK_OAUTH_PORT", targetPortDefaults.grokOauth),
 };
 
 export function loopback(portNumber, suffix = "") {

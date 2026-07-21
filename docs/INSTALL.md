@@ -92,8 +92,17 @@ API-key providers use hidden prompts:
 ./bin/provider-key grok-api set
 ```
 
-xAI documents API keys for third-party inference. Grok Build browser OAuth
-remains scoped to the official Grok CLI and is not imported by this router.
+Grok OAuth uses the official Grok CLI session:
+
+```sh
+npm install -g @xai-official/grok
+grok login
+./bin/model-router codex providers enable grok-oauth
+```
+
+The OAuth token remains in `~/.grok/auth.json` and is sent only to xAI's Grok
+CLI inference proxy. The separate `grok-api` provider continues to use a
+separately billed xAI API key.
 
 Windows:
 

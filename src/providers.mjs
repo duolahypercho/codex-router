@@ -2,6 +2,7 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 import { PROVIDERS } from "./model-registry.mjs";
+import { grokOAuthStatus } from "./grok-oauth-status.mjs";
 import { kimiOAuthStatus } from "./oauth-status.mjs";
 import { credentialStatus } from "./provider-credentials.mjs";
 import {
@@ -17,7 +18,9 @@ import {
 
 function configured(provider) {
   return provider.kind === "oauth"
-    ? provider.id === "kimi-oauth" && kimiOAuthStatus().configured
+    ? provider.id === "kimi-oauth"
+      ? kimiOAuthStatus().configured
+      : provider.id === "grok-oauth" && grokOAuthStatus().configured
     : credentialStatus(provider, { persistent: true }).configured;
 }
 
@@ -53,7 +56,9 @@ function main() {
   }
   if (command === "enable" && !configured(provider)) {
     const setup = provider.kind === "oauth"
-      ? "run `kimi login`"
+      ? provider.id === "grok-oauth"
+        ? "run `grok login`"
+        : "run `kimi login`"
       : `run \`${targetCli(`provider-key ${provider.id} set`)}\``;
     throw new Error(`${provider.displayName} is not configured; ${setup} first.`);
   }

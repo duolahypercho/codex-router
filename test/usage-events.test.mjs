@@ -11,8 +11,8 @@ test("usage events persist only bounded request metadata in a private file", asy
   try {
     const usage = await import(`../src/usage-events.mjs?test=${Date.now()}`);
     usage.recordUsageEvent({
-      model: "chatgpt-oauth/gpt-5.6-sol",
-      provider: "chatgpt-oauth",
+      model: "grok-oauth/grok-4.5",
+      provider: "grok-oauth",
       status: 200,
       durationMs: 321,
       prompt: "never persisted",
@@ -20,8 +20,8 @@ test("usage events persist only bounded request metadata in a private file", asy
     assert.deepEqual(usage.recentUsageEvents(), [
       {
         at: usage.recentUsageEvents()[0].at,
-        model: "chatgpt-oauth/gpt-5.6-sol",
-        provider: "chatgpt-oauth",
+        model: "grok-oauth/grok-4.5",
+        provider: "grok-oauth",
         status: 200,
         durationMs: 321,
       },

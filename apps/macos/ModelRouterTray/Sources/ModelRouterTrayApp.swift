@@ -68,8 +68,6 @@ final class RouterStore: ObservableObject {
   @Published private(set) var pendingApply = false
   @Published private(set) var message: String?
   @Published private(set) var lastUpdated: Date?
-  @Published private(set) var quota = CodexQuota.empty
-  @Published private(set) var quotaHistory: [QuotaSample]
   @Published private(set) var pinnedModelSlug: String?
   @Published private(set) var activityState: RouterActivityState = .idle
 
@@ -79,12 +77,6 @@ final class RouterStore: ObservableObject {
 
   init() {
     pinnedModelSlug = defaults.string(forKey: "ModelRouterTray.pinnedModel")
-    if let data = defaults.data(forKey: "ModelRouterTray.quotaHistory"),
-       let history = try? JSONDecoder().decode([QuotaSample].self, from: data) {
-      quotaHistory = history
-    } else {
-      quotaHistory = []
-    }
   }
 
   var codexActive: Bool {
@@ -109,9 +101,6 @@ final class RouterStore: ObservableObject {
 
   var pinnedUsageText: String? {
     guard let model = pinnedModel else { return nil }
-    if model.provider == "chatgpt-oauth", let used = quota.primary?.usedFraction {
-      return "\(Int((used * 100).rounded()))%"
-    }
     let cutoff = Date().addingTimeInterval(-60 * 60)
     let count = usageEvents(for: model).filter { $0.at >= cutoff }.count
     return count > 0 ? "\(count)×" : nil
@@ -143,7 +132,6 @@ final class RouterStore: ObservableObject {
     } catch {
       message = error.localizedDescription
     }
-    await refreshQuota()
   }
 
   func startActivityPolling() async {
@@ -189,21 +177,6 @@ final class RouterStore: ObservableObject {
     }
   }
 
-  private func refreshQuota() async {
-    let fetched = await CodexQuotaFetcher.fetch()
-    quota = fetched
-    guard let used = fetched.primary?.usedFraction, fetched.error == nil else { return }
-    let now = Date()
-    if quotaHistory.last.map({ now.timeIntervalSince($0.at) >= 60 }) != false {
-      quotaHistory.append(QuotaSample(at: now, usedFraction: used))
-      let cutoff = now.addingTimeInterval(-7 * 24 * 60 * 60)
-      quotaHistory = Array(quotaHistory.filter { $0.at >= cutoff }.suffix(1_000))
-      if let data = try? JSONEncoder().encode(quotaHistory) {
-        defaults.set(data, forKey: "ModelRouterTray.quotaHistory")
-      }
-    }
-  }
-
   private func refreshActivity() async {
     let configuredPort = ProcessInfo.processInfo.environment["MODEL_ROUTER_PORT"] ?? "4102"
     guard let url = URL(string: "http://127.0.0.1:\(configuredPort)/health") else {
@@ -230,7 +203,7 @@ final class RouterStore: ObservableObject {
   }
 
   private func preferredModel(in models: [RouterModel]) -> RouterModel {
-    models.first(where: { $0.slug.contains("gpt-5.6-sol") }) ?? models[0]
+    models.first(where: { $0.slug == "grok-oauth/grok-4.5" }) ?? models[0]
   }
 
   private func runControl(arguments: [String]) throws -> Data {
@@ -334,90 +307,6 @@ struct RouterUsageEvent: Decodable, Identifiable {
     provider = try values.decode(String.self, forKey: .provider)
     status = try values.decode(Int.self, forKey: .status)
     durationMs = try values.decode(Int.self, forKey: .durationMs)
-  }
-}
-
-struct QuotaSample: Codable, Identifiable {
-  let at: Date
-  let usedFraction: Double
-  var id: Date { at }
-}
-
-struct QuotaWindow {
-  let usedFraction: Double
-  let resetAt: Date?
-}
-
-struct CodexQuota {
-  let primary: QuotaWindow?
-  let weekly: QuotaWindow?
-  let plan: String?
-  let error: String?
-
-  static let empty = CodexQuota(primary: nil, weekly: nil, plan: nil, error: nil)
-}
-
-private enum CodexQuotaFetcher {
-  static func fetch() async -> CodexQuota {
-    guard let token = accessToken() else {
-      return CodexQuota(primary: nil, weekly: nil, plan: nil, error: "Codex sign-in required")
-    }
-    var request = URLRequest(url: URL(string: "https://chatgpt.com/backend-api/wham/usage")!)
-    request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-    request.setValue("application/json", forHTTPHeaderField: "Accept")
-    do {
-      let (data, response) = try await URLSession.shared.data(for: request)
-      let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-      guard status == 200 else {
-        return CodexQuota(
-          primary: nil,
-          weekly: nil,
-          plan: nil,
-          error: status == 401 ? "Run codex login to refresh usage" : "Usage service returned \(status)"
-        )
-      }
-      guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-            let rateLimit = object["rate_limit"] as? [String: Any] else {
-        return CodexQuota(primary: nil, weekly: nil, plan: nil, error: "Usage response was not recognized")
-      }
-      return CodexQuota(
-        primary: parseWindow(rateLimit["primary_window"]),
-        weekly: parseWindow(rateLimit["secondary_window"]),
-        plan: object["plan_type"] as? String,
-        error: nil
-      )
-    } catch {
-      return CodexQuota(primary: nil, weekly: nil, plan: nil, error: "Usage is temporarily unavailable")
-    }
-  }
-
-  private static func accessToken() -> String? {
-    let environment = ProcessInfo.processInfo.environment
-    let codexHome = environment["CODEX_HOME"].map { URL(fileURLWithPath: $0, isDirectory: true) }
-      ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex", isDirectory: true)
-    let authURL = codexHome.appendingPathComponent("auth.json")
-    guard let data = try? Data(contentsOf: authURL),
-          let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-          let tokens = object["tokens"] as? [String: Any],
-          let token = tokens["access_token"] as? String,
-          !token.isEmpty else {
-      return nil
-    }
-    return token
-  }
-
-  private static func parseWindow(_ value: Any?) -> QuotaWindow? {
-    guard let object = value as? [String: Any],
-          let usedPercent = object["used_percent"] as? NSNumber else {
-      return nil
-    }
-    let resetAt = (object["reset_at"] as? NSNumber).map {
-      Date(timeIntervalSince1970: $0.doubleValue)
-    }
-    return QuotaWindow(
-      usedFraction: min(1, max(0, usedPercent.doubleValue / 100)),
-      resetAt: resetAt
-    )
   }
 }
 
@@ -650,7 +539,7 @@ private struct TrayView: View {
 
   private func providerTitle(_ provider: String) -> String {
     [
-      "chatgpt-oauth": "ChatGPT Codex OAuth",
+      "grok-oauth": "xAI Grok OAuth",
       "kimi-oauth": "Kimi Code OAuth",
       "kimi-api": "Kimi Platform API",
       "deepseek": "DeepSeek API",
@@ -751,10 +640,7 @@ private struct PinnedModelIsland: View {
   }
 
   private func sourceLabel(for model: RouterModel) -> String {
-    if model.provider == "chatgpt-oauth" {
-      let plan = store.quota.plan?.uppercased() ?? "SUBSCRIPTION"
-      return "CODEX \(plan)"
-    }
+    if model.provider == "grok-oauth" { return "XAI • OAUTH SESSION" }
     if model.provider.hasSuffix("-api") || model.provider == "deepseek" {
       return "METERED API"
     }
@@ -762,39 +648,23 @@ private struct PinnedModelIsland: View {
   }
 
   private func metricText(for model: RouterModel) -> String {
-    if model.provider == "chatgpt-oauth" {
-      guard let used = store.quota.primary?.usedFraction else { return "—" }
-      return "\(Int((used * 100).rounded()))%"
-    }
     let cutoff = Date().addingTimeInterval(-60 * 60)
     return "\(store.usageEvents(for: model).filter { $0.at >= cutoff }.count)"
   }
 
   private func metricCaption(for model: RouterModel) -> String {
-    model.provider == "chatgpt-oauth" ? "5H USED" : "REQUESTS / H"
+    "REQUESTS / H"
   }
 
   private func graphTitle(for model: RouterModel) -> String {
-    model.provider == "chatgpt-oauth" ? "Subscription usage" : "Local route activity"
+    "Local route activity"
   }
 
   private func graphDetail(for model: RouterModel) -> String {
-    if model.provider == "chatgpt-oauth" {
-      if let error = store.quota.error { return error }
-      let weekly = store.quota.weekly.map { "Weekly \(Int(($0.usedFraction * 100).rounded()))%" }
-      let reset = store.quota.primary?.resetAt.map { "resets \(relativeTime(to: $0))" }
-      return [weekly, reset].compactMap { $0 }.joined(separator: " • ")
-    }
     return "Five-hour request history • no prompts recorded"
   }
 
   private func graphValues(for model: RouterModel) -> [Double] {
-    if model.provider == "chatgpt-oauth" {
-      let history = store.quotaHistory.suffix(30).map(\.usedFraction)
-      let current = store.quota.primary.map { [$0.usedFraction] } ?? []
-      let values = Array(history) + current
-      return values.count > 1 ? values : [0, values.first ?? 0]
-    }
     let bucketCount = 20
     let bucketDuration: TimeInterval = 15 * 60
     let start = Date().addingTimeInterval(-Double(bucketCount) * bucketDuration)
@@ -807,14 +677,7 @@ private struct PinnedModelIsland: View {
   }
 
   private func graphTint(for model: RouterModel) -> Color {
-    model.provider == "chatgpt-oauth" ? routerAccent : routerMint
-  }
-
-  private func relativeTime(to date: Date) -> String {
-    let seconds = max(0, date.timeIntervalSinceNow)
-    if seconds < 60 * 60 { return "in \(max(1, Int(seconds / 60)))m" }
-    if seconds < 24 * 60 * 60 { return "in \(Int(seconds / 3600))h" }
-    return "in \(Int(seconds / 86_400))d"
+    model.provider == "grok-oauth" ? routerAccent : routerMint
   }
 }
 

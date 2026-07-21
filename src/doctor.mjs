@@ -7,6 +7,7 @@ import { findCodexBinary } from "./codex-binary.mjs";
 import { privateFileIsProtected } from "./file-security.mjs";
 import { detectLegacyInstallations } from "./legacy-migration.mjs";
 import { PROVIDERS } from "./model-registry.mjs";
+import { grokOAuthStatus } from "./grok-oauth-status.mjs";
 import { kimiOAuthStatus } from "./oauth-status.mjs";
 import {
   CALLER_SECRET_PATH,
@@ -239,6 +240,13 @@ add(
   "Kimi OAuth",
   oauth.configured ? "credential present" : `not configured; ${oauth.setup}`,
   "Run kimi login, then rerun the doctor.",
+);
+const grokOauth = grokOAuthStatus();
+add(
+  grokOauth.configured ? "ok" : selection.providers.includes("grok-oauth") ? "fail" : "warn",
+  "Grok OAuth",
+  grokOauth.configured ? grokOauth.source : `not configured; ${grokOauth.setup}`,
+  "Run grok login, then rerun the doctor.",
 );
 
 for (const provider of PROVIDERS.values()) {

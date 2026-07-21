@@ -15,15 +15,11 @@ router configuration.
 Select the pin beside any exposed model to keep its short name and live metric
 in the menu bar. Hover the pinned-model card to reveal its recent graph.
 
-- ChatGPT/Codex OAuth models show the account's current five-hour usage window,
-  weekly percentage, plan label, and reset time. The app reads the existing
-  Codex sign-in locally and sends it only to ChatGPT's usage endpoint.
-- API and other OAuth models show local request activity for that specific
+- API and OAuth models show local request activity for that specific
   routed model. The router records only the timestamp, model, provider, HTTP
   status, and duration. It never puts prompts, responses, API keys, OAuth
   tokens, or token contents in the usage event file.
-- Graph history is sampled locally and becomes richer while the router and tray
-  continue running. Provider APIs do not supply a historical time series.
+- Graph history becomes richer while the router and tray continue running.
 
 The overlay interaction is inspired by
 [CodexIsland](https://github.com/ericjypark/codex-island): compact information

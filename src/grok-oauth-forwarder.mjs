@@ -1,5 +1,8 @@
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import http from "node:http";
+import os from "node:os";
+import path from "node:path";
 import { randomUUID } from "node:crypto";
 
 import {
@@ -9,18 +12,16 @@ import {
   writeJson,
 } from "./http-utils.mjs";
 import { PORTS } from "./paths.mjs";
-import { codexAuthPath } from "./chatgpt-oauth-status.mjs";
+import { grokAuthPath, grokSessionEntry } from "./grok-oauth-status.mjs";
 import { VERSION } from "./version.mjs";
 
-// Forwarder for the ChatGPT/Codex OAuth provider. LiteLLM speaks OpenAI Chat
-// Completions to it; it reuses the Codex CLI's OAuth session and translates to
-// ChatGPT's Codex Responses API (verified shapes: response.output_text.delta for
-// content, response.completed for usage, function_call items for tools).
+// LiteLLM speaks OpenAI Chat Completions to this forwarder. It reuses the
+// official Grok CLI OAuth session and translates to xAI's Responses proxy.
 
-const LISTEN_HOST = process.env.MODEL_ROUTER_CHATGPT_HOST || "127.0.0.1";
-const LISTEN_PORT = Number(process.env.MODEL_ROUTER_CHATGPT_PORT || PORTS.chatgpt);
-const NATIVE_BASE = (
-  process.env.CODEX_NATIVE_BASE_URL || "https://chatgpt.com/backend-api/codex"
+const LISTEN_HOST = process.env.MODEL_ROUTER_GROK_OAUTH_HOST || "127.0.0.1";
+const LISTEN_PORT = Number(process.env.MODEL_ROUTER_GROK_OAUTH_PORT || PORTS.grokOauth);
+const GROK_BASE = (
+  process.env.GROK_CLI_CHAT_PROXY_BASE_URL || "https://cli-chat-proxy.grok.com/v1"
 ).replace(/\/+$/, "");
 const INTERNAL_KEY = process.env.MODEL_ROUTER_INTERNAL_KEY;
 const QUIET = process.env.MODEL_ROUTER_QUIET === "1";
@@ -28,7 +29,7 @@ const QUIET = process.env.MODEL_ROUTER_QUIET === "1";
 if (!INTERNAL_KEY) throw new Error("MODEL_ROUTER_INTERNAL_KEY is required.");
 
 function noSessionError() {
-  const error = new Error("No usable Codex OAuth session; run `codex login`.");
+  const error = new Error("No usable Grok OAuth session; run `grok login`.");
   error.status = 401;
   return error;
 }
@@ -36,15 +37,31 @@ function noSessionError() {
 function readSession() {
   let auth;
   try {
-    auth = JSON.parse(readFileSync(codexAuthPath(), "utf8"));
+    auth = JSON.parse(readFileSync(grokAuthPath(), "utf8"));
   } catch {
     throw noSessionError();
   }
-  const accessToken = auth?.tokens?.access_token;
-  const accountId = auth?.tokens?.account_id;
-  if (!accessToken || !accountId) throw noSessionError();
-  return { accessToken, accountId };
+  const accessToken = grokSessionEntry(auth)?.key;
+  if (!accessToken) throw noSessionError();
+  return accessToken;
 }
+
+function grokClientVersion() {
+  const executable =
+    process.env.GROK_CLI || path.join(process.env.GROK_HOME || path.join(os.homedir(), ".grok"), "bin", "grok");
+  try {
+    const output = execFileSync(executable, ["version"], {
+      encoding: "utf8",
+      timeout: 2_000,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    return output.match(/\b(\d+\.\d+\.\d+)\b/)?.[1] || VERSION;
+  } catch {
+    return VERSION;
+  }
+}
+
+const GROK_CLIENT_VERSION = grokClientVersion();
 
 function contentToText(content) {
   if (typeof content === "string") return content;
@@ -71,9 +88,9 @@ function messageContentParts(content, textType) {
 
 function mapEffort(effort) {
   if (effort === "minimal") return "low";
-  return ["none", "low", "medium", "high", "xhigh", "max"].includes(effort)
-    ? effort
-    : undefined;
+  if (["none", "low"].includes(effort)) return "low";
+  if (["xhigh", "max"].includes(effort)) return "high";
+  return ["medium", "high"].includes(effort) ? effort : undefined;
 }
 
 // Chat Completions request -> Codex Responses request.
@@ -135,16 +152,15 @@ function toResponsesRequest(chat) {
   return request;
 }
 
-function upstreamHeaders(session) {
+function upstreamHeaders(accessToken) {
   return {
-    Authorization: `Bearer ${session.accessToken}`,
-    "chatgpt-account-id": session.accountId,
+    Authorization: `Bearer ${accessToken}`,
     "Content-Type": "application/json",
     Accept: "text/event-stream",
-    "OpenAI-Beta": "responses=experimental",
-    originator: "codex_cli_rs",
-    session_id: randomUUID(),
-    "User-Agent": `codex-router/${VERSION}`,
+    "X-XAI-Token-Auth": "xai-grok-cli",
+    "x-grok-client-version": GROK_CLIENT_VERSION,
+    "x-grok-conv-id": randomUUID(),
+    "User-Agent": `xai-grok-workspace/${GROK_CLIENT_VERSION}`,
   };
 }
 
@@ -191,7 +207,7 @@ async function handleChatCompletions(request, response) {
   const chat = JSON.parse((await readRequestBody(request)).toString("utf8"));
   const wantsStream = chat.stream === true;
   const model = typeof chat.model === "string" ? chat.model : "";
-  const session = readSession();
+  const accessToken = readSession();
   const responsesRequest = toResponsesRequest(chat);
 
   const controller = new AbortController();
@@ -200,9 +216,9 @@ async function handleChatCompletions(request, response) {
     if (!response.writableEnded) controller.abort();
   });
 
-  const upstream = await fetch(`${NATIVE_BASE}/responses`, {
+  const upstream = await fetch(`${GROK_BASE}/responses`, {
     method: "POST",
-    headers: upstreamHeaders(session),
+    headers: upstreamHeaders(accessToken),
     body: JSON.stringify(responsesRequest),
     signal: controller.signal,
   });
@@ -213,8 +229,8 @@ async function handleChatCompletions(request, response) {
       error: {
         message:
           upstream.status === 401
-            ? "ChatGPT rejected the Codex OAuth session; run `codex login`."
-            : `ChatGPT Codex backend error (HTTP ${upstream.status}).`,
+            ? "xAI rejected the Grok OAuth session; run `grok login`."
+            : `Grok OAuth proxy error (HTTP ${upstream.status}).`,
         type: upstream.status === 401 ? "authentication_error" : "api_error",
         code: null,
         detail: detail.slice(0, 500) || undefined,
@@ -340,7 +356,7 @@ async function handleChatCompletions(request, response) {
   }
 
   if (!QUIET) {
-    console.error(`[chatgpt-oauth] model=${model} status=${upstream.status}`);
+    console.error(`[grok-oauth] model=${model} status=${upstream.status}`);
   }
 }
 
@@ -357,7 +373,7 @@ async function handleRequest(request, response) {
     }
     writeJson(response, 200, {
       ok: true,
-      service: "codex-router-chatgpt-forwarder",
+      service: "codex-router-grok-oauth-forwarder",
       credential_present: credentialPresent,
     });
     return;
@@ -368,19 +384,19 @@ async function handleRequest(request, response) {
     return;
   }
   writeJson(response, 404, {
-    error: { type: "proxy_route_not_found", message: "Unsupported ChatGPT route." },
+    error: { type: "proxy_route_not_found", message: "Unsupported Grok OAuth route." },
   });
 }
 
 const server = http.createServer((request, response) => {
   handleRequest(request, response).catch((error) => {
     const status = httpErrorStatus(error);
-    console.error("[chatgpt-oauth] request failed");
+    console.error("[grok-oauth] request failed");
     if (!response.headersSent) {
       writeJson(response, status, {
         error: {
           type: status >= 500 ? "api_error" : "invalid_request_error",
-          message: "The ChatGPT OAuth forwarder could not complete the request.",
+          message: "The Grok OAuth forwarder could not complete the request.",
         },
       });
     } else if (!response.writableEnded) {
@@ -390,7 +406,7 @@ const server = http.createServer((request, response) => {
 });
 
 server.listen(LISTEN_PORT, LISTEN_HOST, () => {
-  console.error("[chatgpt-oauth] listening");
+  console.error("[grok-oauth] listening");
 });
 
 for (const signal of ["SIGINT", "SIGTERM"]) {

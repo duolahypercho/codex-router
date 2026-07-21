@@ -1,5 +1,6 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { closeSync, openSync, readSync, writeSync } from "node:fs";
+import { closeSync, existsSync, openSync, readSync, writeSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 import {
@@ -11,7 +12,7 @@ import {
 } from "./kimi-oauth-onboarding.mjs";
 import { PROVIDERS } from "./model-registry.mjs";
 import { kimiOAuthStatus } from "./oauth-status.mjs";
-import { chatgptOAuthStatus } from "./chatgpt-oauth-status.mjs";
+import { grokOAuthStatus } from "./grok-oauth-status.mjs";
 import { SOURCE_ROOT } from "./paths.mjs";
 import { credentialStatus } from "./provider-credentials.mjs";
 import { configuredProviderIds, validateProviderIds } from "./provider-selection.mjs";
@@ -112,7 +113,7 @@ export function confirm(label, defaultYes = true) {
 export function providerConfigured(provider) {
   if (provider.kind === "oauth") {
     if (provider.id === "kimi-oauth") return kimiOAuthStatus().configured;
-    if (provider.id === "chatgpt-oauth") return chatgptOAuthStatus().configured;
+    if (provider.id === "grok-oauth") return grokOAuthStatus().configured;
     return false;
   }
   return credentialStatus(provider, { persistent: true }).configured;
@@ -120,8 +121,8 @@ export function providerConfigured(provider) {
 
 // Per-provider hint for a selected-but-unconfigured OAuth provider.
 function oauthSetupHint(provider) {
-  return provider.id === "chatgpt-oauth"
-    ? "run `codex login`"
+  return provider.id === "grok-oauth"
+    ? "install the official Grok CLI and run `grok login`"
     : `run \`kimi login\` (install the Kimi Code CLI from ${KIMI_CLI_INSTALL_URL} first if needed)`;
 }
 
@@ -174,7 +175,7 @@ function guidedSelection(appName) {
     );
   });
   process.stdout.write(
-    "\nOAuth entries reuse an existing Kimi Code CLI login; API entries use a provider key.\n",
+    "\nOAuth entries reuse official Kimi or Grok CLI sessions; API entries use a provider key.\n",
   );
   const readyIndexes = providers
     .map((provider, index) => (providerConfigured(provider) ? String(index + 1) : undefined))
@@ -237,6 +238,35 @@ function onboardKimiOauth() {
   throw new Error("Kimi OAuth login did not produce a usable credential after several attempts.");
 }
 
+function onboardGrokOauth() {
+  let grok = executable("grok");
+  const installed = path.join(
+    process.env.GROK_HOME || path.join(os.homedir(), ".grok"),
+    "bin",
+    "grok",
+  );
+  if (!grok && existsSync(installed)) grok = installed;
+  if (!grok) {
+    const npm = executable("npm");
+    if (!npm || !confirm("Install the official Grok CLI with `npm install -g @xai-official/grok`?")) {
+      throw new Error(
+        "The official Grok CLI is required for OAuth. Install `@xai-official/grok`, then run setup again.",
+      );
+    }
+    tryRun(npm, ["install", "-g", "@xai-official/grok"]);
+    grok = executable("grok");
+    if (!grok && existsSync(installed)) grok = installed;
+  }
+  if (!grok) throw new Error("The official Grok CLI was installed but could not be located.");
+  for (let attempt = 0; attempt < MAX_LOGIN_ATTEMPTS; attempt += 1) {
+    if (!confirm("Run `grok login` now?")) throw new Error("Grok OAuth setup was cancelled.");
+    tryRun(grok, ["login"]);
+    if (grokOAuthStatus().configured) return;
+    process.stdout.write("Grok login did not produce a usable OAuth credential yet.\n");
+  }
+  throw new Error("Grok OAuth login did not produce a usable credential after several attempts.");
+}
+
 // Ensure a selected provider has a usable credential, onboarding it when guided.
 // providerKeyCommand(id) yields the target-specific hint for the non-guided path.
 export function configureProvider(provider, { guided, providerKeyCommand }) {
@@ -249,12 +279,8 @@ export function configureProvider(provider, { guided, providerKeyCommand }) {
     throw new Error(`${provider.displayName} is selected but not configured; ${setup} first.`);
   }
   if (provider.kind === "oauth") {
-    if (provider.id === "chatgpt-oauth") {
-      throw new Error(
-        `${provider.displayName} is selected but not configured; run \`codex login\`, then run setup again.`,
-      );
-    }
-    onboardKimiOauth();
+    if (provider.id === "grok-oauth") onboardGrokOauth();
+    else onboardKimiOauth();
   } else {
     if (!confirm(`Enter a ${provider.displayName} key securely now?`)) {
       throw new Error(`${provider.displayName} setup was cancelled.`);

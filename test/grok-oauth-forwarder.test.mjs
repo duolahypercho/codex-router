@@ -9,7 +9,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const INTERNAL_KEY = "test-chatgpt-internal-service-key-with-sufficient-length";
+const INTERNAL_KEY = "test-grok-internal-service-key-with-sufficient-length";
 
 function sse(events) {
   return `${events.map((e) => `event: ${e.type}\ndata: ${JSON.stringify(e)}`).join("\n\n")}\n\n`;
@@ -36,15 +36,15 @@ async function mockBackend(handler) {
 }
 
 function startForwarder(port, backendPort, authPath) {
-  const child = spawn(process.execPath, [path.join(root, "src", "chatgpt-forwarder.mjs")], {
+  const child = spawn(process.execPath, [path.join(root, "src", "grok-oauth-forwarder.mjs")], {
     cwd: root,
     env: {
       ...process.env,
       MODEL_ROUTER_TARGET: "cursor",
       MODEL_ROUTER_INTERNAL_KEY: INTERNAL_KEY,
-      MODEL_ROUTER_CHATGPT_PORT: String(port),
-      CODEX_NATIVE_BASE_URL: `http://127.0.0.1:${backendPort}`,
-      CHATGPT_AUTH_PATH: authPath,
+      MODEL_ROUTER_GROK_OAUTH_PORT: String(port),
+      GROK_CLI_CHAT_PROXY_BASE_URL: `http://127.0.0.1:${backendPort}`,
+      GROK_AUTH_PATH: authPath,
       MODEL_ROUTER_QUIET: "1",
     },
     stdio: ["ignore", "ignore", "pipe"],
@@ -81,15 +81,17 @@ function writeSession(dir) {
   const authPath = path.join(dir, "auth.json");
   writeFileSync(
     authPath,
-    JSON.stringify({ tokens: { access_token: "fake-access", account_id: "acct_fake" } }),
+    JSON.stringify({ "https://auth.x.ai::test-client-id": { key: "fake-access" } }),
     { mode: 0o600 },
   );
   return authPath;
 }
 
-test("translates Chat Completions to Codex Responses and back (text + tools)", async () => {
+test("translates Chat Completions to Grok Responses and back (text + tools)", async () => {
   let captured;
+  let capturedHeaders;
   const backend = await mockBackend(async (req, res) => {
+    capturedHeaders = req.headers;
     const chunks = [];
     for await (const c of req) chunks.push(c);
     captured = JSON.parse(Buffer.concat(chunks).toString("utf8"));
@@ -115,7 +117,7 @@ test("translates Chat Completions to Codex Responses and back (text + tools)", a
     }
   });
   const port = await openPort();
-  const dir = mkdtempSync(path.join(os.tmpdir(), "chatgpt-fwd-"));
+  const dir = mkdtempSync(path.join(os.tmpdir(), "grok-oauth-fwd-"));
   const child = startForwarder(port, backend.port, writeSession(dir));
   const base = `http://127.0.0.1:${port}`;
 
@@ -130,7 +132,7 @@ test("translates Chat Completions to Codex Responses and back (text + tools)", a
       method: "POST",
       headers: auth,
       body: JSON.stringify({
-        model: "gpt-5.6-terra",
+        model: "grok-4.5",
         messages: [
           { role: "system", content: "Be terse." },
           { role: "user", content: "ping" },
@@ -145,25 +147,28 @@ test("translates Chat Completions to Codex Responses and back (text + tools)", a
     assert.equal(text.usage.prompt_tokens, 13);
     assert.equal(text.usage.completion_tokens, 5);
     // Request translation: system -> instructions, user -> input message, stream forced true.
-    assert.equal(captured.model, "gpt-5.6-terra");
+    assert.equal(captured.model, "grok-4.5");
     assert.equal(captured.instructions, "Be terse.");
     assert.equal(captured.stream, true);
     assert.equal(captured.input.at(-1).role, "user");
     assert.equal(captured.input.at(-1).content[0].type, "input_text");
+    assert.equal(capturedHeaders.authorization, "Bearer fake-access");
+    assert.equal(capturedHeaders["x-xai-token-auth"], "xai-grok-cli");
+    assert.match(capturedHeaders["x-grok-client-version"], /^\d+\.\d+\.\d+$/);
 
-    for (const effort of ["none", "low", "medium", "high", "xhigh", "max"]) {
+    for (const [effort, expected] of [["none", "low"], ["low", "low"], ["medium", "medium"], ["high", "high"], ["xhigh", "high"], ["max", "high"]]) {
       const effortResponse = await fetch(`${base}/v1/chat/completions`, {
         method: "POST",
         headers: auth,
         body: JSON.stringify({
-          model: "gpt-5.6-terra",
+          model: "grok-4.5",
           messages: [{ role: "user", content: "ping" }],
           reasoning_effort: effort,
         }),
       });
       assert.equal(effortResponse.status, 200);
       await effortResponse.json();
-      assert.equal(captured.reasoning?.effort, effort);
+      assert.equal(captured.reasoning?.effort, expected);
     }
 
     // Streaming text.
@@ -171,7 +176,7 @@ test("translates Chat Completions to Codex Responses and back (text + tools)", a
       method: "POST",
       headers: auth,
       body: JSON.stringify({
-        model: "gpt-5.6-terra",
+        model: "grok-4.5",
         messages: [{ role: "user", content: "ping" }],
         stream: true,
       }),
@@ -188,7 +193,7 @@ test("translates Chat Completions to Codex Responses and back (text + tools)", a
       method: "POST",
       headers: auth,
       body: JSON.stringify({
-        model: "gpt-5.6-terra",
+        model: "grok-4.5",
         messages: [{ role: "user", content: "weather in SF?" }],
         tools: [
           { type: "function", function: { name: "get_weather", parameters: { type: "object" } } },
@@ -209,10 +214,10 @@ test("translates Chat Completions to Codex Responses and back (text + tools)", a
   }
 });
 
-test("returns 401 when the Codex session is missing", async () => {
+test("returns 401 when the Grok session is missing", async () => {
   const backend = await mockBackend((req, res) => res.end(""));
   const port = await openPort();
-  const dir = mkdtempSync(path.join(os.tmpdir(), "chatgpt-fwd-nosession-"));
+  const dir = mkdtempSync(path.join(os.tmpdir(), "grok-fwd-nosession-"));
   const child = startForwarder(port, backend.port, path.join(dir, "auth.json"));
   const base = `http://127.0.0.1:${port}`;
   try {
@@ -220,7 +225,7 @@ test("returns 401 when the Codex session is missing", async () => {
     const resp = await fetch(`${base}/v1/chat/completions`, {
       method: "POST",
       headers: auth,
-      body: JSON.stringify({ model: "gpt-5.6-terra", messages: [{ role: "user", content: "hi" }] }),
+      body: JSON.stringify({ model: "grok-4.5", messages: [{ role: "user", content: "hi" }] }),
     });
     assert.equal(resp.status, 401);
   } finally {

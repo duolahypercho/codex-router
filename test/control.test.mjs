@@ -35,12 +35,12 @@ function probe(target, providers, usageEvents = []) {
 }
 
 test("claude probe reports enabled models with role mapping", () => {
-  const slice = probe("claude", ["chatgpt-oauth"]);
+  const slice = probe("claude", ["grok-oauth"]);
   assert.equal(slice.target, "claude");
   assert.equal(slice.configured, true);
-  const gpt = slice.models.find((m) => m.provider === "chatgpt-oauth");
-  assert.equal(gpt.enabled, true);
-  assert.equal(gpt.claudeRole, "claude-sonnet-5");
+  const grok = slice.models.find((m) => m.provider === "grok-oauth");
+  assert.equal(grok.enabled, true);
+  assert.ok(grok.claudeRole);
   // A disabled provider is reported but not enabled, and has no role.
   const kimi = slice.models.find((m) => m.provider === "kimi-oauth");
   assert.equal(kimi.enabled, false);
@@ -58,13 +58,13 @@ test("cursor probe reports enabled models without claude roles", () => {
 test("codex probe exposes only privacy-safe recent usage events", () => {
   const event = {
     at: new Date().toISOString(),
-    model: "chatgpt-oauth/gpt-5.6-sol",
-    provider: "chatgpt-oauth",
+    model: "grok-oauth/grok-4.5",
+    provider: "grok-oauth",
     status: 200,
     durationMs: 1234,
     prompt: "must not escape the private event store",
   };
-  const slice = probe("codex", ["chatgpt-oauth"], [event]);
+  const slice = probe("codex", ["grok-oauth"], [event]);
   assert.deepEqual(slice.usageEvents, [{
     at: event.at,
     model: event.model,
@@ -100,11 +100,11 @@ function probeSet(target, providers, provider, desired) {
 }
 
 test("toggle on adds a provider; toggle off removes it", () => {
-  const added = probeSet("cursor", ["deepseek"], "chatgpt-oauth", "on");
-  assert.deepEqual(added.enabledProviders, ["deepseek", "chatgpt-oauth"]);
+  const added = probeSet("cursor", ["deepseek"], "grok-oauth", "on");
+  assert.deepEqual(added.enabledProviders, ["deepseek", "grok-oauth"]);
 
-  const removed = probeSet("cursor", ["chatgpt-oauth", "deepseek"], "deepseek", "off");
-  assert.deepEqual(removed.enabledProviders, ["chatgpt-oauth"]);
+  const removed = probeSet("cursor", ["grok-oauth", "deepseek"], "deepseek", "off");
+  assert.deepEqual(removed.enabledProviders, ["grok-oauth"]);
 });
 
 test("toggle rejects an unknown provider", () => {

@@ -10,6 +10,7 @@
 - `src/claude-router.mjs` exposes the authenticated Anthropic Messages target.
 - `src/claude-config-manager.mjs` owns one reversible local Claude config entry.
 - `src/oauth-forwarder.mjs` owns Kimi CLI OAuth loading and refresh.
+- `src/grok-oauth-forwarder.mjs` adapts Grok CLI OAuth to OpenAI-compatible chat.
 - `src/api-forwarder.mjs` is shared by all API-key providers.
 - `src/provider-credentials.mjs` isolates environment, file, and Keychain lookup.
 - `src/provider-selection.mjs` controls which tested models enter the picker.
@@ -37,7 +38,7 @@
    image input, tool calls/results, context behavior, and sanitized failures.
 9. Update the README model table and provider-specific setup documentation.
 
-The shared forwarder strips Codex/ChatGPT authentication before injecting the
+The shared API forwarder strips Codex authentication before injecting the
 selected provider key. Do not create a new listener merely to add another
 standard OpenAI-compatible provider.
 

@@ -39,6 +39,13 @@
       }
     },
     {
+      "id": "grok-oauth",
+      "displayName": "xAI Grok OAuth",
+      "kind": "oauth",
+      "ownedBy": "xai",
+      "proxyBaseEnv": "GROK_OAUTH_FORWARD_BASE_URL"
+    },
+    {
       "id": "grok-api",
       "displayName": "xAI Grok API",
       "kind": "openai-compatible",
@@ -52,13 +59,6 @@
         "keychainServices": ["codex-router-xai-api"],
         "prompt": "xAI API key"
       }
-    },
-    {
-      "id": "chatgpt-oauth",
-      "displayName": "ChatGPT Codex OAuth",
-      "kind": "oauth",
-      "ownedBy": "openai",
-      "proxyBaseEnv": "CHATGPT_OAUTH_FORWARD_BASE_URL"
     }
   ],
   "models": [
@@ -159,6 +159,27 @@
       "requestProfile": "deepseek-thinking"
     },
     {
+      "slug": "grok-oauth/grok-4.5",
+      "gatewayModel": "grok-oauth-grok-4-5",
+      "upstreamModel": "grok-4.5",
+      "provider": "grok-oauth",
+      "listed": true,
+      "displayName": "Grok 4.5 (OAuth)",
+      "description": "Grok 4.5 through the official Grok CLI OAuth session with agentic coding and tool calls.",
+      "priority": 1,
+      "defaultEffort": "high",
+      "reasoningLevels": [
+        { "effort": "low", "description": "Faster reasoning" },
+        { "effort": "medium", "description": "Balanced reasoning" },
+        { "effort": "high", "description": "Deep reasoning" }
+      ],
+      "contextWindow": 500000,
+      "autoCompact": 440000,
+      "inputModalities": ["text", "image"],
+      "requestProfile": "xai-reasoning",
+      "compHash": "grok-oauth-grok-4-5-v1"
+    },
+    {
       "slug": "grok-api/grok-4.5",
       "gatewayModel": "grok-api-grok-4-5",
       "upstreamModel": "grok-4.5",
@@ -178,75 +199,6 @@
       "inputModalities": ["text", "image"],
       "requestProfile": "xai-reasoning",
       "compHash": "grok-api-grok-4-5-v1"
-    },
-    {
-      "slug": "chatgpt-oauth/gpt-5.6-sol",
-      "gatewayModel": "chatgpt-gpt-5-6-sol",
-      "upstreamModel": "gpt-5.6-sol",
-      "provider": "chatgpt-oauth",
-      "listed": true,
-      "displayName": "GPT-5.6 Sol (ChatGPT OAuth)",
-      "description": "GPT-5.6's flagship tier through the ChatGPT Codex OAuth session; reuses the Codex CLI login.",
-      "priority": 1,
-      "defaultEffort": "xhigh",
-      "reasoningLevels": [
-        { "effort": "none", "description": "No reasoning" },
-        { "effort": "low", "description": "Faster reasoning" },
-        { "effort": "medium", "description": "Balanced reasoning" },
-        { "effort": "high", "description": "Deep reasoning" },
-        { "effort": "xhigh", "description": "Extended reasoning for agentic work" },
-        { "effort": "max", "description": "Maximum reasoning depth" }
-      ],
-      "contextWindow": 400000,
-      "autoCompact": 350000,
-      "inputModalities": ["text", "image"],
-      "compHash": "chatgpt-gpt-5-6-sol-v1"
-    },
-    {
-      "slug": "chatgpt-oauth/gpt-5.6-terra",
-      "gatewayModel": "chatgpt-gpt-5-6-terra",
-      "upstreamModel": "gpt-5.6-terra",
-      "provider": "chatgpt-oauth",
-      "listed": true,
-      "displayName": "GPT-5.6 Terra (ChatGPT OAuth)",
-      "description": "GPT-5.6's balanced tier through the ChatGPT Codex OAuth session; reuses the Codex CLI login.",
-      "priority": 2,
-      "defaultEffort": "high",
-      "reasoningLevels": [
-        { "effort": "none", "description": "No reasoning" },
-        { "effort": "low", "description": "Faster reasoning" },
-        { "effort": "medium", "description": "Balanced reasoning" },
-        { "effort": "high", "description": "Deep reasoning" },
-        { "effort": "xhigh", "description": "Extended reasoning for agentic work" },
-        { "effort": "max", "description": "Maximum reasoning depth" }
-      ],
-      "contextWindow": 400000,
-      "autoCompact": 350000,
-      "inputModalities": ["text", "image"],
-      "compHash": "chatgpt-gpt-5-6-terra-v1"
-    },
-    {
-      "slug": "chatgpt-oauth/gpt-5.6-luna",
-      "gatewayModel": "chatgpt-gpt-5-6-luna",
-      "upstreamModel": "gpt-5.6-luna",
-      "provider": "chatgpt-oauth",
-      "listed": true,
-      "displayName": "GPT-5.6 Luna (ChatGPT OAuth)",
-      "description": "GPT-5.6's fastest, most cost-efficient tier through the ChatGPT Codex OAuth session; reuses the Codex CLI login.",
-      "priority": 3,
-      "defaultEffort": "medium",
-      "reasoningLevels": [
-        { "effort": "none", "description": "No reasoning" },
-        { "effort": "low", "description": "Faster reasoning" },
-        { "effort": "medium", "description": "Balanced reasoning" },
-        { "effort": "high", "description": "Deep reasoning" },
-        { "effort": "xhigh", "description": "Extended reasoning for agentic work" },
-        { "effort": "max", "description": "Maximum reasoning depth" }
-      ],
-      "contextWindow": 400000,
-      "autoCompact": 350000,
-      "inputModalities": ["text", "image"],
-      "compHash": "chatgpt-gpt-5-6-luna-v1"
     }
   ]
 }

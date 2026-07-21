@@ -13,15 +13,24 @@ import { protectPrivateFile } from "./file-security.mjs";
 import { PROVIDER_SELECTION_PATH, STATE_DIR, TARGET } from "./paths.mjs";
 import { LISTED_MODELS, PROVIDERS } from "./model-registry.mjs";
 import { kimiOAuthStatus } from "./oauth-status.mjs";
-import { chatgptOAuthStatus } from "./chatgpt-oauth-status.mjs";
+import { grokOAuthStatus } from "./grok-oauth-status.mjs";
 import { credentialStatus } from "./provider-credentials.mjs";
+
+const RETIRED_PROVIDER_ALIASES = new Map([["chatgpt-oauth", "grok-oauth"]]);
 
 function providerIds() {
   return [...PROVIDERS.keys()];
 }
 
 export function validateProviderIds(values) {
-  const ids = [...new Set(values.map((value) => String(value).trim()).filter(Boolean))];
+  const ids = [
+    ...new Set(
+      values
+        .map((value) => String(value).trim())
+        .filter(Boolean)
+        .map((value) => RETIRED_PROVIDER_ALIASES.get(value) || value),
+    ),
+  ];
   for (const id of ids) {
     if (!PROVIDERS.has(id)) throw new Error(`Unknown provider: ${id}`);
   }
@@ -34,7 +43,7 @@ export function configuredProviderIds() {
     if (provider.kind === "oauth") {
       if (provider.id === "kimi-oauth" && kimiOAuthStatus().configured) {
         configured.push(provider.id);
-      } else if (provider.id === "chatgpt-oauth" && chatgptOAuthStatus().configured) {
+      } else if (provider.id === "grok-oauth" && grokOAuthStatus().configured) {
         configured.push(provider.id);
       }
     } else if (credentialStatus(provider, { persistent: true }).configured) {

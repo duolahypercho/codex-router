@@ -18,14 +18,13 @@ test("provider registry exposes configured API and OAuth model families", () => 
       "kimi-api/kimi-k3",
       "deepseek/deepseek-v4-flash",
       "deepseek/deepseek-v4-pro",
+      "grok-oauth/grok-4.5",
       "grok-api/grok-4.5",
-      "chatgpt-oauth/gpt-5.6-sol",
-      "chatgpt-oauth/gpt-5.6-terra",
-      "chatgpt-oauth/gpt-5.6-luna",
     ],
   );
   assert.equal(PROVIDERS.get("deepseek").baseUrl, "https://api.deepseek.com");
   assert.equal(PROVIDERS.get("grok-api").baseUrl, "https://api.x.ai/v1");
+  assert.equal(PROVIDERS.get("grok-oauth").proxyBaseEnv, "GROK_OAUTH_FORWARD_BASE_URL");
   const grok = MODEL_BY_SLUG.get("grok-api/grok-4.5");
   assert.equal(grok.contextWindow, 500_000);
   assert.deepEqual(grok.reasoningLevels.map((level) => level.effort), ["low", "medium", "high"]);
@@ -59,6 +58,7 @@ test("LiteLLM configuration is generated from every registry route", () => {
     assert.match(rendered, new RegExp(`model_name: "${model.gatewayModel}"`));
   }
   assert.match(rendered, /os\.environ\/CODEX_ROUTER_API_FORWARD_BASE_URL/);
+  assert.match(rendered, /os\.environ\/GROK_OAUTH_FORWARD_BASE_URL/);
   assert.match(rendered, /os\.environ\/CODEX_ROUTER_INTERNAL_KEY/);
   assert.doesNotMatch(rendered, /DEEPSEEK_API_KEY|KIMI_API_KEY/);
 });

@@ -120,7 +120,7 @@ function loaded(targetService = service) {
 
 function bootout(targetService = service) {
   const description = loaded(targetService);
-  if (!description || /state = (?:SIGTERM|exited|stopped)/i.test(description)) return;
+  if (!description) return;
   try {
     run(["bootout", targetService], { quiet: true });
   } catch {
