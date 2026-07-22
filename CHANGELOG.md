@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Calmed the Dynamic Island by replacing its continuous perimeter orbit with
+  state-triggered lighting and a localized slow pulse, while reducing chart
+  fill, grid lines, and persistent markers.
 - Restored the Dynamic Island's daily line graph with today's token total and
   provider quota percentage, while leaving longer-range controls in the tray.
 - Hide tray usage cards until the corresponding OAuth session or API key is

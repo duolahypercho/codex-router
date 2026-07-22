@@ -497,20 +497,18 @@ private struct IslandUsageLineChart: View {
       )
 
       ZStack(alignment: .topLeading) {
-        ForEach(1..<4, id: \.self) { index in
-          Path { path in
-            let y = plotHeight * CGFloat(index) / 4
-            path.move(to: CGPoint(x: 0, y: y))
-            path.addLine(to: CGPoint(x: geometry.size.width, y: y))
-          }
-          .stroke(Color.white.opacity(0.055), style: StrokeStyle(lineWidth: 0.5, dash: [2, 3]))
+        Path { path in
+          let y = plotHeight * 0.5
+          path.move(to: CGPoint(x: 0, y: y))
+          path.addLine(to: CGPoint(x: geometry.size.width, y: y))
         }
+        .stroke(Color.white.opacity(0.035), style: StrokeStyle(lineWidth: 0.45, dash: [2, 4]))
 
         if !coordinates.isEmpty {
           areaPath(coordinates, baseline: plotHeight - 2)
             .fill(
               LinearGradient(
-                colors: [tint.opacity(0.22), tint.opacity(0.015)],
+                colors: [tint.opacity(0.10), tint.opacity(0.006)],
                 startPoint: .top,
                 endPoint: .bottom
               )
@@ -518,17 +516,9 @@ private struct IslandUsageLineChart: View {
 
           linePath(coordinates)
             .stroke(
-              tint.opacity(0.95),
-              style: StrokeStyle(lineWidth: 1.8, lineCap: .round, lineJoin: .round)
+              tint.opacity(0.78),
+              style: StrokeStyle(lineWidth: 1.25, lineCap: .round, lineJoin: .round)
             )
-
-          if let last = coordinates.last {
-            Circle()
-              .fill(tint)
-              .frame(width: 5, height: 5)
-              .overlay(Circle().stroke(Color.white.opacity(0.72), lineWidth: 0.7))
-              .position(last)
-          }
         }
 
         if showsAxis {
@@ -557,12 +547,12 @@ private struct IslandUsageLineChart: View {
             path.move(to: CGPoint(x: coordinate.x, y: 2))
             path.addLine(to: CGPoint(x: coordinate.x, y: plotHeight - 2))
           }
-          .stroke(Color.white.opacity(0.22), lineWidth: 0.6)
+          .stroke(Color.white.opacity(0.14), lineWidth: 0.5)
 
           Circle()
             .fill(tint)
-            .frame(width: 7, height: 7)
-            .overlay(Circle().stroke(Color.white.opacity(0.9), lineWidth: 1))
+            .frame(width: 6, height: 6)
+            .overlay(Circle().stroke(Color.white.opacity(0.65), lineWidth: 0.7))
             .position(coordinate)
 
           Text(hoverText(for: points[hoveredIndex]))
@@ -756,9 +746,9 @@ private struct LiveOrb: View {
     ZStack(alignment: .topTrailing) {
       ZStack {
         Circle()
-          .fill(state.tint.opacity(0.2))
+          .fill(state.tint.opacity(state == .idle ? 0.11 : 0.15))
           .frame(width: 18, height: 18)
-          .scaleEffect((state == .generating || state == .starting) && pulsing ? 1.34 : 0.94)
+          .scaleEffect((state == .generating || state == .starting) && pulsing ? 1.15 : 0.96)
         Circle()
           .fill(state.tint)
           .frame(width: 8, height: 8)
@@ -777,12 +767,13 @@ private struct LiveOrb: View {
     .onAppear { animate() }
     .onChange(of: state) { _ in animate() }
     .onChange(of: count) { _ in animate() }
+    .onChange(of: reduceMotion) { _ in animate() }
   }
 
   private func animate() {
-    pulsing = false
+    withAnimation(nil) { pulsing = false }
     guard state == .generating || state == .starting, !reduceMotion else { return }
-    withAnimation(.easeInOut(duration: 0.72).repeatForever(autoreverses: true)) {
+    withAnimation(.easeInOut(duration: 1.8).repeatForever(autoreverses: true)) {
       pulsing = true
     }
   }
@@ -792,50 +783,105 @@ private struct StatusGlow: View {
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   let state: RouterActivityState
 
+  @State private var sweepAngle = -120.0
+  @State private var sweepOpacity = 0.0
+  @State private var breathing = false
+  @State private var errorPulse = false
+  @State private var effectTask: Task<Void, Never>?
+
   var body: some View {
-    TimelineView(.animation(minimumInterval: 1 / 30, paused: reduceMotion)) { timeline in
-      let elapsed = timeline.date.timeIntervalSinceReferenceDate
-      let angle = Angle.degrees(
-        reduceMotion ? 0 : (elapsed / sweepDuration).truncatingRemainder(dividingBy: 1) * 360
-      )
-      let wave = reduceMotion ? 0.5 : (sin(elapsed * 2 * .pi / flashDuration) + 1) / 2
-      ZStack {
+    ZStack(alignment: .topLeading) {
+      IslandSilhouette()
+        .inset(by: 1)
+        .strokeBorder(Color.white.opacity(0.065), lineWidth: 0.7)
+
+      if state != .idle {
         IslandSilhouette()
           .inset(by: 1)
-          .strokeBorder(state.tint.opacity(0.14), lineWidth: 1)
+          .strokeBorder(state.tint.opacity(edgeOpacity * 0.55), lineWidth: 2.4)
+          .blur(radius: 2.2)
         IslandSilhouette()
           .inset(by: 1)
-          .strokeBorder(
-            sweepGradient(angle: angle),
-            lineWidth: state == .generating ? 7 : 5
-          )
-          .blur(radius: state == .error ? 4.5 : 3.5)
-          .opacity(0.34 + wave * 0.48)
-        IslandSilhouette()
-          .inset(by: 1.5)
-          .strokeBorder(
-            sweepGradient(angle: angle),
-            lineWidth: state == .generating ? 2.5 : 2
-          )
-          .opacity(0.58 + wave * 0.42)
-        IslandSilhouette()
-          .inset(by: 3.5)
-          .strokeBorder(Color.white.opacity(0.09), lineWidth: 0.55)
+          .strokeBorder(state.tint.opacity(edgeOpacity), lineWidth: edgeLineWidth)
       }
+
+      Circle()
+        .fill(
+          RadialGradient(
+            colors: [state.tint.opacity(0.9), state.tint.opacity(0.18), .clear],
+            center: .center,
+            startRadius: 0,
+            endRadius: 22
+          )
+        )
+        .frame(width: 44, height: 44)
+        .offset(x: 1, y: -2)
+        .opacity(localHaloOpacity)
+
+      if sweepOpacity > 0.001 {
+        IslandSilhouette()
+          .inset(by: 1)
+          .strokeBorder(sweepGradient(angle: .degrees(sweepAngle)), lineWidth: 3)
+          .blur(radius: 2.4)
+          .opacity(sweepOpacity * 0.35)
+        IslandSilhouette()
+          .inset(by: 1)
+          .strokeBorder(sweepGradient(angle: .degrees(sweepAngle)), lineWidth: 1.15)
+          .opacity(sweepOpacity)
+      }
+
+      IslandSilhouette()
+        .inset(by: 3.5)
+        .strokeBorder(Color.white.opacity(0.035), lineWidth: 0.45)
     }
+    .onAppear { restartEffects() }
+    .onChange(of: state) { _ in restartEffects() }
+    .onChange(of: reduceMotion) { _ in restartEffects() }
+    .onDisappear { effectTask?.cancel() }
     .animation(.easeInOut(duration: 0.25), value: state)
+    .accessibilityHidden(true)
+  }
+
+  private var edgeOpacity: Double {
+    switch state {
+    case .idle:
+      return 0
+    case .starting:
+      return 0.065
+    case .generating:
+      return 0.075
+    case .error:
+      return errorPulse ? 0.22 : 0.12
+    }
+  }
+
+  private var edgeLineWidth: Double {
+    state == .error && errorPulse ? 1.3 : 0.8
+  }
+
+  private var localHaloOpacity: Double {
+    switch state {
+    case .idle:
+      return 0.065
+    case .starting:
+      return breathing ? 0.13 : 0.09
+    case .generating:
+      return breathing ? 0.15 : 0.10
+    case .error:
+      return errorPulse ? 0.20 : 0.12
+    }
   }
 
   private func sweepGradient(angle: Angle) -> AngularGradient {
     AngularGradient(
       gradient: Gradient(stops: [
         .init(color: .clear, location: 0),
-        .init(color: .clear, location: 0.55),
-        .init(color: state.tint.opacity(0.12), location: 0.66),
-        .init(color: state.tint.opacity(0.88), location: 0.74),
-        .init(color: Color.white.opacity(0.98), location: 0.79),
-        .init(color: state.tint.opacity(0.82), location: 0.84),
-        .init(color: .clear, location: 0.96),
+        .init(color: .clear, location: 0.64),
+        .init(color: state.tint.opacity(0.16), location: 0.69),
+        .init(color: state.tint.opacity(0.72), location: 0.76),
+        .init(color: Color.white.opacity(0.42), location: 0.79),
+        .init(color: state.tint.opacity(0.48), location: 0.83),
+        .init(color: .clear, location: 0.90),
         .init(color: .clear, location: 1),
       ]),
       center: .center,
@@ -844,20 +890,48 @@ private struct StatusGlow: View {
     )
   }
 
-  private var sweepDuration: Double {
-    switch state {
-    case .idle: return 2.6
-    case .starting: return 1.7
-    case .generating: return 1.15
-    case .error: return 0.82
+  private func restartEffects() {
+    effectTask?.cancel()
+    withAnimation(nil) {
+      sweepAngle = -120
+      sweepOpacity = 0
+      breathing = false
+      errorPulse = false
     }
-  }
+    guard !reduceMotion else { return }
 
-  private var flashDuration: Double {
-    switch state {
-    case .idle: return 1.25
-    case .starting: return 0.9
-    case .generating, .error: return 0.62
+    let nextState = state
+    effectTask = Task { @MainActor in
+      await Task<Never, Never>.yield()
+      guard !Task.isCancelled else { return }
+
+      switch nextState {
+      case .idle:
+        return
+      case .starting:
+        withAnimation(.easeInOut(duration: 2.2).repeatForever(autoreverses: true)) {
+          breathing = true
+        }
+      case .generating:
+        withAnimation(nil) {
+          sweepAngle = -120
+          sweepOpacity = 0.48
+        }
+        await Task<Never, Never>.yield()
+        guard !Task.isCancelled else { return }
+        withAnimation(.easeOut(duration: 0.65)) {
+          sweepAngle = 240
+          sweepOpacity = 0
+        }
+        withAnimation(.easeInOut(duration: 1.8).repeatForever(autoreverses: true)) {
+          breathing = true
+        }
+      case .error:
+        withAnimation(nil) { errorPulse = true }
+        await Task<Never, Never>.yield()
+        guard !Task.isCancelled else { return }
+        withAnimation(.easeOut(duration: 0.8)) { errorPulse = false }
+      }
     }
   }
 }

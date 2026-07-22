@@ -55,7 +55,10 @@ active count and lists each live model request.
   date and time appear beside the chart title. Usage refreshes every 30 seconds,
   and the detailed view switches when a request uses a different provider.
 - The Island uses green for idle, amber while generating, and red after an
-  error. It is shown by default and can be toggled from the tray.
+  error. Idle lighting is static; generation uses one brief edge sweep followed
+  by a localized slow pulse, and errors pulse once before settling. Reduce
+  Motion disables decorative movement. The Island is shown by default and can
+  be toggled from the tray.
 - When multiple Codex model requests run at the same time, the Island shows an
   active count, stacks concurrent providers or models in compact form, and
   lists each live request with elapsed time on hover and expand. The focused
