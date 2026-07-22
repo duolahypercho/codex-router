@@ -102,43 +102,10 @@ Desktop distribution.
 
 Grok OAuth reuses the official CLI credential at `~/.grok/auth.json` and sends
 it only to xAI's documented Grok CLI inference proxy. On that path the router
-also attaches hosted `web_search` and `x_search` tools so xAI can run realtime
-web/X search server-side within the account's included Grok CLI quota. Set
-`GROK_OAUTH_HOSTED_SEARCH=0` to disable those tools.
-
-Optional hosted-search parameters can be set with
-`GROK_OAUTH_SEARCH_PARAMETERS` (JSON) or the focused env vars below. These map
-to xAI's current Responses tool fields:
-
-```sh
-# JSON form
-export GROK_OAUTH_SEARCH_PARAMETERS='{
-  "x_search": {
-    "allowed_x_handles": ["elonmusk", "xai"],
-    "from_date": "2026-07-01",
-    "enable_image_understanding": true
-  },
-  "web_search": {
-    "allowed_domains": ["x.ai", "docs.x.ai"]
-  }
-}'
-
-# Or individual vars
-export GROK_OAUTH_X_SEARCH_ALLOWED_HANDLES=elonmusk,xai
-export GROK_OAUTH_X_SEARCH_FROM_DATE=2026-07-01
-export GROK_OAUTH_WEB_SEARCH_ALLOWED_DOMAINS=x.ai,docs.x.ai
-```
-
-Supported fields:
-
-- `x_search`: `allowed_x_handles`, `excluded_x_handles`, `from_date`, `to_date`,
-  `enable_image_understanding`, `enable_video_understanding`
-- `web_search`: `allowed_domains`, `excluded_domains`,
-  `enable_image_understanding`, `enable_image_search`
-
-Legacy chat-style `search_parameters.sources` is also accepted and mapped onto
-those tool fields where possible. Install the official CLI and authenticate
-before enabling the route:
+also attaches bare hosted `web_search` and `x_search` tools, the same agentic
+surface Grok Build uses. xAI's backend chooses when to search and how to filter
+results; the router does not take search env knobs or request-side filter
+config. Install the official CLI and authenticate before enabling the route:
 
 ```sh
 npm install -g @xai-official/grok

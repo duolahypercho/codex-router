@@ -2,14 +2,9 @@
 
 ## Unreleased
 
-- Grok OAuth now injects hosted `web_search` and `x_search` tools on every
-  Responses request so free/included Grok CLI quota can use xAI server-side
-  realtime search the same way Grok Build does. Disable with
-  `GROK_OAUTH_HOSTED_SEARCH=0`.
-- Grok OAuth hosted search now accepts xAI tool parameters
-  (`allowed_x_handles`, date range, domain filters, media understanding) via
-  request body fields, `GROK_OAUTH_SEARCH_PARAMETERS`, or focused env vars.
-  Legacy `search_parameters.sources` is mapped when provided.
+- Grok OAuth injects bare hosted `web_search` and `x_search` tools so xAI can
+  run server-side realtime search agentically, matching Grok Build. Router-side
+  search env filters and request search-parameter mapping were removed.
 - Use Thinking Orbs `Shaping` while idle, `Composing` while generating, and
   `Solving` for the Island's error indicator.
 - Replace compact provider names with the providers' published marks and Codex
