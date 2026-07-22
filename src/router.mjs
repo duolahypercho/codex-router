@@ -564,9 +564,7 @@ async function handleResponses(request, response, requestUrl) {
       body: routedBody,
       signal: controller.signal,
     });
-    const usageTransform = route
-      ? new ResponseUsageTransform(upstream.headers.get("content-type") || "")
-      : undefined;
+    const usageTransform = new ResponseUsageTransform(upstream.headers.get("content-type") || "");
     await pipeResponse(upstream, response, HOP_BY_HOP_HEADERS, usageTransform);
     const usage = usageTransform?.tokenUsage();
     recordUsageEvent({
