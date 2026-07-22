@@ -764,9 +764,14 @@ private struct LiveOrb: View {
   var body: some View {
     ZStack(alignment: .topTrailing) {
       Group {
-        if state == .generating {
-          ThinkingOrbView(active: true, reduceMotion: reduceMotion, size: 18)
+        if state == .idle || state == .generating {
+          ThinkingOrbView(
+            active: state == .generating,
+            reduceMotion: reduceMotion,
+            size: 18
+          )
             .frame(width: 18, height: 18)
+            .opacity(state == .idle ? 0.68 : 1)
         } else {
           ZStack {
             Circle()

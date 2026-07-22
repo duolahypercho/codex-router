@@ -31,9 +31,10 @@ and disables its activity-pill switch; router monitoring continues normally.
 - Provider cards are absent until that provider has a usable OAuth session or
   API key. Unconnected providers remain available only in **Connections**.
 
-The status dot has a slow idle breath, a localized working pulse while a model
-is generating, and a fixed error state. A low-contrast edge signal appears only
-while generating. The app honors the system's reduced-motion preference.
+The status mark is a still dotted Thinking Orbs-style orb while idle and
+animates while a model is generating. Starting and error states retain their
+colored status dots. A low-contrast edge signal appears only while generating.
+The app honors the system's reduced-motion preference.
 
 ## Build prerequisites
 

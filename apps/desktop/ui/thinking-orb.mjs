@@ -149,7 +149,7 @@ export function createThinkingOrb(host, options = {}) {
       destroy() {
         canvas.remove();
       },
-      setRunning() {},
+      setMode() {},
     };
   }
 
@@ -157,7 +157,7 @@ export function createThinkingOrb(host, options = {}) {
   let running = false;
   let visible = true;
   let destroyed = false;
-  let desired = false;
+  let mode = "hidden";
 
   const draw = (t) => {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -186,11 +186,15 @@ export function createThinkingOrb(host, options = {}) {
     cancelAnimationFrame(frame);
   };
 
-  const setRunning = (value) => {
-    desired = Boolean(value);
-    canvas.hidden = !desired;
-    if (desired && visible && document.visibilityState !== "hidden") start();
-    else stop();
+  const setMode = (value) => {
+    mode = ["idle", "active"].includes(value) ? value : "hidden";
+    canvas.hidden = mode === "hidden";
+    if (mode === "active" && visible && document.visibilityState !== "hidden") {
+      start();
+      return;
+    }
+    stop();
+    if (mode === "idle") draw(0.6);
   };
 
   const onVisibility = () => {
@@ -198,7 +202,7 @@ export function createThinkingOrb(host, options = {}) {
       stop();
       return;
     }
-    if (desired && visible) start();
+    if (mode === "active" && visible) start();
   };
 
   document.addEventListener("visibilitychange", onVisibility);
@@ -206,7 +210,7 @@ export function createThinkingOrb(host, options = {}) {
     typeof IntersectionObserver !== "undefined"
       ? new IntersectionObserver(([entry]) => {
           visible = entry.isIntersecting;
-          if (desired && visible && document.visibilityState !== "hidden") start();
+          if (mode === "active" && visible && document.visibilityState !== "hidden") start();
           else stop();
         })
       : null;
@@ -215,7 +219,7 @@ export function createThinkingOrb(host, options = {}) {
   return {
     start,
     stop,
-    setRunning,
+    setMode,
     destroy() {
       destroyed = true;
       stop();

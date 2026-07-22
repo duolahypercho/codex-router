@@ -234,7 +234,7 @@ final class ThinkingOrbNSView: NSView {
   override func draw(_ dirtyRect: NSRect) {
     guard let ctx = NSGraphicsContext.current?.cgContext else { return }
     let elapsed = CGFloat(CACurrentMediaTime() - startTime)
-    let time = reduceMotion ? 0.6 : elapsed * rendererSpeed
+    let time = reduceMotion || !running ? 0.6 : elapsed * rendererSpeed
     renderer.draw(in: ctx, time: time)
   }
 

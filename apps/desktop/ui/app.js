@@ -468,9 +468,12 @@ function startIsland() {
     elements.root.dataset.state = activityState;
     elements.state.textContent = labels[activityState] || "Idle";
     if (elements.orbit) {
-      const thinking = activityState === "generating";
-      elements.orbit.classList.toggle("is-thinking", thinking);
-      thinkingOrb?.setRunning(thinking);
+      const thinkingMode = activityState === "generating"
+        ? "active"
+        : activityState === "idle" ? "idle" : "hidden";
+      elements.orbit.classList.toggle("is-thinking", thinkingMode !== "hidden");
+      elements.orbit.classList.toggle("is-idle", thinkingMode === "idle");
+      thinkingOrb?.setMode(thinkingMode);
     }
 
     const options = sourceOptions(state);
