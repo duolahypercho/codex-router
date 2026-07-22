@@ -751,9 +751,7 @@ private struct ProviderIcon: View {
   let size: CGFloat
 
   var body: some View {
-    ZStack {
-      RoundedRectangle(cornerRadius: max(3, size * 0.24), style: .continuous)
-        .fill(Color.white.opacity(0.08))
+    Group {
       if let providerImage {
         Image(nsImage: providerImage)
           .resizable()
@@ -766,11 +764,6 @@ private struct ProviderIcon: View {
       }
     }
     .frame(width: size, height: size)
-    .clipShape(RoundedRectangle(cornerRadius: max(3, size * 0.24), style: .continuous))
-    .overlay {
-      RoundedRectangle(cornerRadius: max(3, size * 0.24), style: .continuous)
-        .stroke(Color.white.opacity(0.1), lineWidth: 0.5)
-    }
     .help(providerName)
     .accessibilityLabel(providerName)
   }
