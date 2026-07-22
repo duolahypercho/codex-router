@@ -19,6 +19,7 @@ const {
   disableProvider,
   enableProvider,
   readProviderSelection,
+  selectedConfiguredListedModels,
   selectedListedModels,
   writeProviderSelection,
 } = await import("../src/provider-selection.mjs");
@@ -51,6 +52,10 @@ test("provider selection keeps backward compatibility and can hide the final pro
     }
     assert.deepEqual(
       selectedListedModels().map((model) => model.slug),
+      ["deepseek/deepseek-v4-flash", "deepseek/deepseek-v4-pro"],
+    );
+    assert.deepEqual(
+      selectedConfiguredListedModels().map((model) => model.slug),
       ["deepseek/deepseek-v4-flash", "deepseek/deepseek-v4-pro"],
     );
 

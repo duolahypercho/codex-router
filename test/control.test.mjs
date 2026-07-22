@@ -216,6 +216,7 @@ test("login-free control selects a ready external model and restores Codex defau
           env: {
             ...process.env,
             CODEX_HOME: stateDir,
+            CODEX_BIN: process.execPath,
             MODEL_ROUTER_TARGET: "codex",
             MODEL_ROUTER_STATE_DIR: stateDir,
           },
@@ -229,6 +230,7 @@ test("login-free control selects a ready external model and restores Codex defau
     assert.match(enabled.model, /^deepseek\//);
     assert.equal(enabled.model_provider, "codex-router");
     const catalog = JSON.parse(readFileSync(path.join(stateDir, "merged-models.json"), "utf8"));
+    assert.equal(catalog.models.some((model) => model.slug === "gpt-5.6-sol"), false);
     assert.deepEqual(
       catalog.models.filter((model) => model.slug.startsWith("deepseek/")).map((model) => model.slug),
       ["deepseek/deepseek-v4-flash", "deepseek/deepseek-v4-pro"],
@@ -238,6 +240,10 @@ test("login-free control selects a ready external model and restores Codex defau
     assert.equal(disabled.login_free, false);
     assert.equal(disabled.model, "gpt-5.6-sol");
     assert.equal(disabled.model_provider, "openai");
+    const signedOutCatalog = JSON.parse(
+      readFileSync(path.join(stateDir, "merged-models.json"), "utf8"),
+    );
+    assert.equal(signedOutCatalog.models.some((model) => model.slug === "gpt-5.6-sol"), false);
   } finally {
     rmSync(stateDir, { recursive: true, force: true });
   }

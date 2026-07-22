@@ -22,7 +22,7 @@ import {
 import { credentialStatus } from "./provider-credentials.mjs";
 import {
   providerSelectionStatus,
-  selectedListedModels,
+  selectedConfiguredListedModels,
 } from "./provider-selection.mjs";
 
 const checks = [];
@@ -152,7 +152,7 @@ let selection = { providers: [], explicit: false };
 let requiredModels = new Set();
 try {
   selection = providerSelectionStatus();
-  requiredModels = new Set(selectedListedModels().map((model) => model.slug));
+  requiredModels = new Set(selectedConfiguredListedModels().map((model) => model.slug));
   add(
     selection.providers.length ? "ok" : "fail",
     "Enabled providers",

@@ -80,6 +80,10 @@ Linux installations support the Codex CLI and the Cursor target's local gateway.
 | Grok 4.5 (API) | `grok-api/grok-4.5` | Separately billed xAI API key |
 | Claude Opus 4.8 (API) | `anthropic-api/claude-opus-4.8` | Separately billed Anthropic API key |
 
+The Codex catalog is credential-aware. It includes models only from enabled
+external providers with a stored API key or valid OAuth session. Native GPT
+models are included only when `codex login status` confirms an OpenAI login.
+
 Grok OAuth reuses the official CLI credential at `~/.grok/auth.json` and sends
 it only to xAI's documented Grok CLI inference proxy. On that path the router
 also attaches bare hosted `web_search` and `x_search` tools, the same agentic

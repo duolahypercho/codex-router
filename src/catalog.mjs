@@ -15,9 +15,9 @@ import {
   MERGED_CATALOG_PATH,
   NATIVE_CATALOG_PATH,
 } from "./paths.mjs";
-import { requireCodexBinary } from "./codex-binary.mjs";
+import { codexIsAuthenticated, requireCodexBinary } from "./codex-binary.mjs";
 import { MODEL_BY_SLUG } from "./model-registry.mjs";
-import { selectedListedModels } from "./provider-selection.mjs";
+import { selectedConfiguredListedModels } from "./provider-selection.mjs";
 
 const refresh = process.argv.includes("--refresh-native");
 const bundled = process.argv.includes("--bundled-native");
@@ -153,7 +153,7 @@ export function routedModel(template, model) {
   return next;
 }
 
-export function buildMergedCatalog(native, routedModelsList) {
+export function buildMergedCatalog(native, routedModelsList, { includeNative = true } = {}) {
   const template =
     native.models.find((model) => model.slug === "gpt-5.5") ||
     native.models.find((model) => model.visibility === "list") ||
@@ -161,7 +161,9 @@ export function buildMergedCatalog(native, routedModelsList) {
   if (!template) {
     throw new Error("Native model catalog is empty.");
   }
-  const models = new Map(native.models.map((model) => [model.slug, model]));
+  const models = new Map(
+    includeNative ? native.models.map((model) => [model.slug, model]) : [],
+  );
   for (const model of routedModelsList) {
     models.set(model.slug, routedModel(template, model));
   }
@@ -172,15 +174,22 @@ export function buildMergedCatalog(native, routedModelsList) {
 }
 
 function main() {
-  const routedModels = selectedListedModels();
+  const routedModels = selectedConfiguredListedModels();
   const native = nativeCatalog();
-  const merged = buildMergedCatalog(native, routedModels);
+  const openaiAuthenticated = codexIsAuthenticated();
+  const merged = buildMergedCatalog(native, routedModels, {
+    includeNative: openaiAuthenticated,
+  });
   atomicJson(MERGED_CATALOG_PATH, { models: merged });
   process.stdout.write(
     `${JSON.stringify({
       path: MERGED_CATALOG_PATH,
       models: merged.length,
       routed_models: routedModels.length,
+      native_models: openaiAuthenticated
+        ? merged.filter((model) => !MODEL_BY_SLUG.has(String(model.slug))).length
+        : 0,
+      openai_authenticated: openaiAuthenticated,
       selected_model: selectedModel() || null,
     })}\n`,
   );

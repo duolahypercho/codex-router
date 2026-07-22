@@ -62,6 +62,10 @@ hidden receives a local `provider_not_enabled` error; it is never mistaken for a
 native model or forwarded with Codex authentication. The policy is read on each
 external request, so provider visibility can change without restarting the
 service (Codex itself still needs a restart to reload the picker catalog).
+Catalog generation also requires a stored credential or valid OAuth session for
+each enabled external provider. Native GPT entries are included only when
+`codex login status` confirms an OpenAI login, so signed-out login-free users see
+only their authenticated external models.
 
 | Picker model | Public slug | Gateway model | Upstream model |
 | --- | --- | --- | --- |

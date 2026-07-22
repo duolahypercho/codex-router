@@ -46,3 +46,17 @@ export function requireCodexBinary() {
   }
   return binary;
 }
+
+export function codexIsAuthenticated() {
+  const binary = findCodexBinary();
+  if (!binary) return false;
+  try {
+    execFileSync(binary, ["login", "status"], {
+      timeout: 10_000,
+      stdio: "ignore",
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
