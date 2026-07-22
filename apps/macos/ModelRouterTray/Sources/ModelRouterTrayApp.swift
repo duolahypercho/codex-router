@@ -798,7 +798,9 @@ struct CodexRateLimitWindow: Decodable {
     guard let minutes = windowDurationMins else { return "Current limit" }
     if minutes >= 1_440, minutes.isMultiple(of: 1_440) {
       let days = minutes / 1_440
-      return days == 1 ? "Daily limit" : "\(days)-day limit"
+      if days == 1 { return "Daily limit" }
+      if days == 7 { return "Weekly limit" }
+      return "\(days)-day limit"
     }
     if minutes >= 60, minutes.isMultiple(of: 60) {
       return "\(minutes / 60)-hour limit"
@@ -1291,61 +1293,32 @@ private struct ProviderUsageSection: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
+      if quotaCards.isEmpty {
+        HStack(alignment: .firstTextBaseline) {
+          VStack(alignment: .leading, spacing: 3) {
+            Text(sectionTitle)
+              .font(.system(size: 12, weight: .medium))
+            Text(limitDetail)
+              .font(.system(size: 9))
+              .foregroundStyle(routerMuted)
+          }
+          Spacer()
+          Text(primaryMetric)
+            .font(.system(size: 20, weight: .semibold))
+            .monospacedDigit()
+        }
+      } else {
+        HStack(alignment: .top, spacing: 8) {
+          ForEach(quotaCards) { card in
+            CurrentUsageLimitCard(card: card)
+          }
+        }
+      }
+
       HStack(alignment: .firstTextBaseline) {
-        VStack(alignment: .leading, spacing: 3) {
-          Text(sectionTitle)
-            .font(.system(size: 12, weight: .medium))
-          Text(limitDetail)
-            .font(.system(size: 9))
-            .foregroundStyle(routerMuted)
-        }
-        Spacer()
-        Text(primaryMetric)
-          .font(.system(size: 20, weight: .semibold))
-          .monospacedDigit()
-      }
-
-      if showsProgressBar {
-        GeometryReader { geometry in
-          ZStack(alignment: .leading) {
-            Capsule().fill(Color.primary.opacity(0.10))
-            Capsule()
-              .fill(routerAccent)
-              .frame(width: geometry.size.width * remainingFraction)
-          }
-        }
-        .frame(height: 5)
-      }
-
-      if let secondaryAccountMetric {
-        HStack(spacing: 8) {
-          Text(secondaryAccountMetric.label)
-            .font(.system(size: 9, weight: .medium))
-            .foregroundStyle(routerMuted)
-          GeometryReader { geometry in
-            ZStack(alignment: .leading) {
-              Capsule().fill(Color.primary.opacity(0.08))
-              Capsule()
-                .fill(routerAccent.opacity(0.72))
-                .frame(width: geometry.size.width * metricRemainingFraction(secondaryAccountMetric))
-            }
-          }
-          .frame(height: 4)
-          Text(formattedAccountMetric(secondaryAccountMetric))
-            .font(.system(size: 9, weight: .medium, design: .monospaced))
-        }
-      }
-
-      HStack(alignment: .firstTextBaseline, spacing: 6) {
         Text(store.selectedUsageUsesChatGPT ? "Daily token usage" : "Router traffic")
           .font(.system(size: 10, weight: .medium))
           .foregroundStyle(routerMuted)
-        if let reset = store.selectedUsageResetDate {
-          Text("· \(usageResetCaption(reset))")
-            .font(.system(size: 9))
-            .foregroundStyle(routerMuted)
-            .lineLimit(1)
-        }
         Spacer()
         UsageRangePicker(selection: $range)
       }
@@ -1397,16 +1370,13 @@ private struct ProviderUsageSection: View {
     return compactTokenCount(store.localUsageTotals(days: range.rawValue).tokens)
   }
 
-  private var remainingFraction: CGFloat {
-    if let metric = store.selectedAccountMetric,
-       let remaining = metric.remainingPercent {
-      return CGFloat(max(0, min(100, remaining))) / 100
+  private var quotaCards: [UsageOverviewCard] {
+    store.usageCards(for: store.selectedUsageProvider).filter { card in
+      if store.selectedUsageUsesChatGPT {
+        return card.remainingPercent != nil
+      }
+      return card.metric?.kind == "quota"
     }
-    return CGFloat(store.accountUsage?.primary?.remainingPercent ?? 0) / 100
-  }
-
-  private var showsProgressBar: Bool {
-    store.selectedUsageUsesChatGPT || store.selectedAccountMetric?.kind == "quota"
   }
 
   private var limitDetail: String {
@@ -1414,18 +1384,12 @@ private struct ProviderUsageSection: View {
       guard store.selectedUsageProvider.isEnabled else { return store.selectedUsageProvider.detail }
       guard let usage = store.selectedProviderUsage else { return "Loading provider usage…" }
       if let metric = usage.account.metrics.first {
-        let label = standardizedLimitLabel(metric.label)
-        if let reset = metric.resetDate {
-          return "\(label) · \(usageResetCaption(reset))"
-        }
         if let detail = metric.detail, !detail.isEmpty { return detail }
-        return label
+        return standardizedLimitLabel(metric.label)
       }
       return "\(usage.credentialType.uppercased()) traffic · measured on this Mac"
     }
-    guard let limit = store.accountUsage?.primary else { return "Loading native Codex usage…" }
-    guard let reset = limit.resetDate else { return limit.durationLabel }
-    return "\(limit.durationLabel) · resets \(reset.formatted(date: .abbreviated, time: .shortened))"
+    return "Loading native Codex usage…"
   }
 
   private var rangeCaption: String {
@@ -1444,11 +1408,6 @@ private struct ProviderUsageSection: View {
     return store.providerUsage == nil ? store.providerUsageError : nil
   }
 
-  private var secondaryAccountMetric: ProviderAccountMetric? {
-    guard !store.selectedUsageUsesChatGPT else { return nil }
-    return store.selectedProviderUsage?.account.metrics.dropFirst().first
-  }
-
   private var accountMessage: String? {
     guard !store.selectedUsageUsesChatGPT else { return nil }
     guard store.selectedUsageProvider.isEnabled else {
@@ -1457,9 +1416,59 @@ private struct ProviderUsageSection: View {
     guard store.selectedProviderUsage?.account.metrics.isEmpty == true else { return nil }
     return store.selectedProviderUsage?.account.message
   }
+}
 
-  private func metricRemainingFraction(_ metric: ProviderAccountMetric) -> CGFloat {
-    CGFloat(max(0, min(100, metric.remainingPercent ?? 0))) / 100
+private struct CurrentUsageLimitCard: View {
+  let card: UsageOverviewCard
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 7) {
+      HStack(alignment: .firstTextBaseline, spacing: 6) {
+        Text(card.kindLabel ?? "Usage limit")
+          .font(.system(size: 10, weight: .medium))
+          .lineLimit(1)
+        Spacer(minLength: 4)
+        Text(metricText)
+          .font(.system(size: 14, weight: .semibold))
+          .monospacedDigit()
+      }
+
+      if let remainingFraction {
+        GeometryReader { geometry in
+          ZStack(alignment: .leading) {
+            Capsule().fill(Color.primary.opacity(0.09))
+            Capsule()
+              .fill(routerAccent.opacity(0.84))
+              .frame(width: geometry.size.width * remainingFraction)
+          }
+        }
+        .frame(height: 4)
+      }
+
+      Text(resetText)
+        .font(.system(size: 8.5))
+        .foregroundStyle(routerMuted)
+        .lineLimit(1)
+    }
+    .padding(10)
+    .frame(maxWidth: .infinity, minHeight: 65, alignment: .leading)
+    .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+  }
+
+  private var metricText: String {
+    if let metric = card.metric { return formattedAccountMetric(metric) }
+    guard let remaining = card.remainingPercent else { return "—" }
+    return "\(Int(remaining.rounded()))% left"
+  }
+
+  private var resetText: String {
+    guard let reset = card.resetDate else { return "No reset reported" }
+    return usageResetCaption(reset)
+  }
+
+  private var remainingFraction: CGFloat? {
+    guard let remaining = card.remainingPercent else { return nil }
+    return CGFloat(max(0, min(100, remaining))) / 100
   }
 }
 
@@ -1737,6 +1746,9 @@ func standardizedLimitLabel(_ label: String) -> String {
   let lowered = label.lowercased()
   if lowered.contains("5-hour") || lowered.contains("5 hour") {
     return "5-hour limit"
+  }
+  if lowered.contains("7-day") || lowered.contains("7 day") {
+    return "Weekly limit"
   }
   if lowered.contains("weekly") {
     return "Weekly limit"
