@@ -302,10 +302,7 @@ async fn set_provider_enabled(
 }
 
 #[tauri::command]
-async fn set_login_free(
-    state: State<'_, RouterState>,
-    enabled: bool,
-) -> Result<Value, String> {
+async fn set_login_free(state: State<'_, RouterState>, enabled: bool) -> Result<Value, String> {
     let router = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         run_control(
