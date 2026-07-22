@@ -135,8 +135,7 @@ final class RouterStore: ObservableObject {
     }
     guard providerUsage != nil else { return nil }
     if let metric = selectedAccountMetric { return formattedAccountMetric(metric) }
-    let total = localUsageTotals(days: 7).tokens
-    return total > 0 ? "\(compactTokenCount(total)) tok" : "No use"
+    return localUsageSummary(for: selectedUsageProviderID, days: 7)
   }
 
   var selectedUsageUsesChatGPT: Bool {
@@ -432,6 +431,18 @@ final class RouterStore: ObservableObject {
       totals.requests += bucket.requests
     }
   }
+
+  func localUsageSummary(for providerID: String, days: Int = 7) -> String {
+    let totals = localUsageTotals(for: providerID, days: days)
+    if totals.tokens > 0 {
+      return "\(compactTokenCount(totals.tokens)) tok"
+    }
+    if totals.requests > 0 {
+      return "\(totals.requests) req"
+    }
+    return "No traffic"
+  }
+
 
   private func placeholderDailyUsage(days: Int) -> [DailyUsagePoint] {
     let calendar = Calendar.current
@@ -1422,18 +1433,23 @@ private struct AllProviderUsageCard: View {
           .foregroundStyle(routerMuted)
           .lineLimit(1)
 
-        if resetLines.isEmpty {
-          Text("No reset reported")
-            .font(.system(size: 8))
-            .foregroundStyle(routerMuted)
-            .lineLimit(1)
-        } else {
+        if !resetLines.isEmpty {
           ForEach(Array(resetLines.enumerated()), id: \.offset) { _, line in
             Text(line)
               .font(.system(size: 8))
               .foregroundStyle(routerMuted)
               .lineLimit(1)
           }
+        } else if showsResetPlaceholder {
+          Text("No reset reported")
+            .font(.system(size: 8))
+            .foregroundStyle(routerMuted)
+            .lineLimit(1)
+        } else {
+          Text("Local router traffic")
+            .font(.system(size: 8))
+            .foregroundStyle(routerMuted)
+            .lineLimit(1)
         }
       }
       .padding(10)
@@ -1476,7 +1492,7 @@ private struct AllProviderUsageCard: View {
     }
     if oauthNeedsReconnect { return "Reconnect" }
     if let accountMetric { return formattedAccountMetric(accountMetric) }
-    return localTotals.tokens > 0 ? "\(compactTokenCount(localTotals.tokens)) tok" : "No use"
+    return store.localUsageSummary(for: provider.id, days: 7)
   }
 
   private var detailText: String {
@@ -1484,12 +1500,22 @@ private struct AllProviderUsageCard: View {
       return store.accountUsage?.primary?.durationLabel ?? "ChatGPT subscription"
     }
     if oauthNeedsReconnect { return "OAuth expired · reconnect below" }
-    if let accountMetric { return accountMetric.label }
-    if localTotals.requests > 0 {
-      return "7D local · \(localTotals.requests) requests"
+    if let accountMetric {
+      if localTotals.requests > 0 {
+        return "\(accountMetric.label) · \(localTotals.requests) local req"
+      }
+      return accountMetric.label
     }
-    if provider.isEnabled { return "7D local traffic"
+    if localTotals.requests > 0 || localTotals.tokens > 0 {
+      if localTotals.tokens > 0, localTotals.requests > 0 {
+        return "7D local · \(localTotals.requests) requests"
+      }
+      if localTotals.requests > 0 {
+        return "7D local · tokens not reported"
+      }
+      return "7D local traffic"
     }
+    if provider.isEnabled { return "No router traffic yet" }
     return "Configured · currently hidden"
   }
 
@@ -1516,6 +1542,10 @@ private struct AllProviderUsageCard: View {
       return nil
     }
     return CGFloat(max(0, min(100, remaining))) / 100
+  }
+
+  private var showsResetPlaceholder: Bool {
+    provider.id == "openai" || accountMetric != nil
   }
 
   private var statusTint: Color {
