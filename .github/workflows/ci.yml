@@ -28,7 +28,7 @@ jobs:
       - run: npm audit --omit=dev --audit-level=high
       - name: Check shell syntax
         if: runner.os != 'Windows'
-        run: for file in install.sh bin/*; do sh -n "$file"; done
+        run: for file in install.sh bin/* scripts/build-desktop-tray.sh; do sh -n "$file"; done
       - name: Check installer help
         if: runner.os != 'Windows'
         run: ./install.sh --help
@@ -36,7 +36,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          foreach ($file in @("install.ps1", "codex-router.ps1", "model-router.ps1")) {
+          foreach ($file in @("install.ps1", "codex-router.ps1", "model-router.ps1", "scripts/build-desktop-tray.ps1")) {
             $errors = $null
             [System.Management.Automation.Language.Parser]::ParseFile(
               (Resolve-Path $file),
@@ -45,3 +45,29 @@ jobs:
             ) | Out-Null
             if ($errors.Count) { $errors | ForEach-Object { Write-Error $_ }; exit 1 }
           }
+
+  desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+      - name: Select stable Rust
+        run: |
+          rustup update stable
+          rustup default stable
+      - name: Install Linux desktop libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+      - run: npm ci --prefix apps/desktop
+      - run: npm run check --prefix apps/desktop
+      - run: npm run build:binary --prefix apps/desktop

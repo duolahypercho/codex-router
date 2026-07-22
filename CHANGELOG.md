@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Added a native Windows and Linux tray companion with a seven-day token graph,
+  connected-provider quota cards, secure onboarding, an animated top-center
+  activity pill on Windows/X11, and an explicit tray-only Wayland fallback.
 - Balanced the Dynamic Island with an animated status dot and slow idle
   heartbeat, a clearer localized pulse and edge comet during generation, and a
   one-shot line-chart draw while preserving Reduce Motion behavior.

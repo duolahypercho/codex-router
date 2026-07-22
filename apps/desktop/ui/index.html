@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <title>Codex Model Router</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main id="panel" class="panel" hidden>
+      <header class="panel-header">
+        <div class="brand" data-tauri-drag-region>
+          <span class="brand-mark" aria-hidden="true"><i></i></span>
+          <span data-tauri-drag-region>
+            <strong>Model Router</strong>
+            <small id="router-status">Checking router…</small>
+          </span>
+        </div>
+        <button id="close-panel" class="icon-button" type="button" aria-label="Close panel">×</button>
+      </header>
+
+      <nav class="tabs" aria-label="Model Router sections">
+        <button class="tab is-active" type="button" data-tab="usage">Usage</button>
+        <button class="tab" type="button" data-tab="connections">Connections</button>
+      </nav>
+
+      <section id="usage-view" class="view">
+        <div class="usage-heading">
+          <div>
+            <p class="eyebrow">Token activity</p>
+            <select id="usage-source" aria-label="Usage source"></select>
+          </div>
+          <span id="live-state" class="live-state" data-state="idle"><i></i><span>Idle</span></span>
+        </div>
+
+        <article class="usage-hero">
+          <div class="usage-numbers">
+            <div>
+              <span class="metric-label">Today</span>
+              <strong id="today-tokens">—</strong>
+              <small>tokens</small>
+            </div>
+            <div class="secondary-metric">
+              <span class="metric-label">Last 7 days</span>
+              <strong id="week-tokens">—</strong>
+              <small>tokens</small>
+            </div>
+          </div>
+          <div id="chart-wrap" class="chart-wrap" tabindex="0" aria-label="Daily token usage for the last seven days">
+            <svg id="usage-chart" viewBox="0 0 328 112" role="img" aria-label="Seven-day token usage line chart">
+              <defs>
+                <linearGradient id="chart-area" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0" stop-color="#70a4ff" stop-opacity="0.28" />
+                  <stop offset="1" stop-color="#70a4ff" stop-opacity="0" />
+                </linearGradient>
+                <linearGradient id="chart-line" x1="0" y1="0" x2="1" y2="0">
+                  <stop offset="0" stop-color="#638cff" />
+                  <stop offset="1" stop-color="#7be0ff" />
+                </linearGradient>
+              </defs>
+              <path id="chart-area-path" class="chart-area" />
+              <path id="chart-line-path" class="chart-line" />
+              <g id="chart-points"></g>
+            </svg>
+            <div id="chart-tooltip" class="chart-tooltip" hidden>
+              <span></span><strong></strong>
+            </div>
+          </div>
+          <div id="chart-days" class="chart-days" aria-hidden="true"></div>
+        </article>
+
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Allowance</p>
+            <h2>Limits</h2>
+          </div>
+          <button id="refresh-data" class="text-button" type="button">Refresh</button>
+        </div>
+        <div id="quota-cards" class="quota-grid" aria-live="polite"></div>
+      </section>
+
+      <section id="connections-view" class="view" hidden>
+        <div class="connections-intro">
+          <p class="eyebrow">Providers</p>
+          <h2>Connections</h2>
+          <p>Only connected providers appear in Usage.</p>
+        </div>
+        <div id="provider-list" class="provider-list"></div>
+      </section>
+
+      <footer class="panel-footer">
+        <div>
+          <strong>Activity pill</strong>
+          <small id="island-note">Top-center live activity</small>
+        </div>
+        <label class="switch" id="island-switch-label">
+          <input id="island-switch" type="checkbox" />
+          <span aria-hidden="true"></span>
+          <span class="sr-only">Show activity pill</span>
+        </label>
+      </footer>
+
+      <div id="toast" class="toast" role="status" hidden></div>
+
+      <dialog id="key-dialog" class="key-dialog">
+        <form id="key-form" method="dialog">
+          <div class="dialog-heading">
+            <div>
+              <p class="eyebrow">Secure connection</p>
+              <h2 id="key-dialog-title">Add API key</h2>
+            </div>
+            <button id="close-dialog" class="icon-button" type="button" aria-label="Close">×</button>
+          </div>
+          <p>The key is sent directly to the local router over standard input. It is never shown again.</p>
+          <input id="api-key" type="password" autocomplete="off" spellcheck="false" placeholder="Paste API key" required />
+          <div class="dialog-actions">
+            <button id="cancel-key" class="button secondary" type="button">Cancel</button>
+            <button class="button primary" type="submit">Save key</button>
+          </div>
+        </form>
+      </dialog>
+    </main>
+
+    <main id="island" class="island" data-state="idle" hidden>
+      <div class="island-compact">
+        <span class="activity-orbit" aria-hidden="true"><i></i></span>
+        <div class="island-status">
+          <strong id="island-state">Idle</strong>
+          <small id="island-provider">Model Router</small>
+        </div>
+        <div class="island-metric">
+          <strong id="island-tokens">—</strong>
+          <small>today</small>
+        </div>
+        <div class="island-divider" aria-hidden="true"></div>
+        <div class="island-metric island-percent">
+          <strong id="island-percent">—</strong>
+          <small>weekly</small>
+        </div>
+      </div>
+      <div class="island-expanded" aria-hidden="true">
+        <div>
+          <span>Last 7 days</span>
+          <strong id="island-week">— tokens</strong>
+        </div>
+        <svg viewBox="0 0 368 42" preserveAspectRatio="none">
+          <path id="island-area-path" class="island-chart-area" />
+          <path id="island-line-path" class="island-chart-line" />
+        </svg>
+      </div>
+    </main>
+
+    <script type="module" src="app.js"></script>
+  </body>
+</html>

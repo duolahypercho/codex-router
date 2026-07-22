@@ -2,5 +2,18 @@
 set -eu
 
 repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-bundle_dir=$("$repo_dir/scripts/build-macos-tray-app.sh")
-open "$bundle_dir"
+
+case $(uname -s) in
+  Darwin)
+    bundle_dir=$("$repo_dir/scripts/build-macos-tray-app.sh")
+    open "$bundle_dir"
+    ;;
+  Linux)
+    binary_path=$("$repo_dir/scripts/build-desktop-tray.sh" --binary-only | tail -n 1)
+    nohup "$binary_path" >/dev/null 2>&1 &
+    ;;
+  *)
+    printf 'codex-router: use scripts/build-desktop-tray.ps1 on Windows.\n' >&2
+    exit 1
+    ;;
+esac

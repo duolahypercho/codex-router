@@ -1,0 +1,19 @@
+[package]
+name = "codex-router-desktop"
+version = "0.4.0-beta.1"
+description = "Windows and Linux tray companion for Codex Model Router"
+authors = ["Codex Model Router contributors"]
+edition = "2021"
+rust-version = "1.77.2"
+
+[[bin]]
+name = "codex-router-desktop"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2.6.3", features = [] }
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2.11.5", features = ["tray-icon"] }

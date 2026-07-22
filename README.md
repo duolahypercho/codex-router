@@ -202,6 +202,30 @@ active display. It follows the provider handling the latest request, reveals
 usage on hover, and expands on click. The menu-bar panel remains available for
 the all-provider overview and configuration.
 
+## Windows and Linux tray control panel
+
+Windows and Linux use the shared Tauri tray companion in `apps/desktop`. It
+provides the same connected-provider filtering, normalized quota cards, daily
+token graph, secure provider setup, and animated activity status as the macOS
+surface.
+
+```sh
+# Linux
+./bin/model-router-tray
+```
+
+```powershell
+# Windows PowerShell
+.\scripts\build-desktop-tray.ps1 -BinaryOnly
+Start-Process .\apps\desktop\src-tauri\target\release\codex-router-desktop.exe
+```
+
+Windows and Linux on X11 receive the floating top-center activity pill. Linux
+on Wayland uses the tray panel without the pill because the compositor owns
+absolute window placement. See the
+[Windows and Linux tray guide](docs/DESKTOP-TRAY.md) for prerequisites,
+packaging, and the platform behavior matrix.
+
 ## Common commands
 
 ```sh
