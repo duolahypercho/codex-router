@@ -80,6 +80,7 @@ final class RouterStore: ObservableObject {
   @Published private(set) var activeRequests: [RouterActiveRequest] = []
   @Published private(set) var activeRequestCount: Int = 0
   @Published private(set) var activeModel: String?
+  @Published private(set) var activitySessionName: String?
   @Published private(set) var accountUsage: CodexAccountUsage?
   @Published private(set) var accountUsageError: String?
   @Published private(set) var providerUsage: ProviderUsageSnapshot?
@@ -208,6 +209,13 @@ final class RouterStore: ObservableObject {
       return String(model[model.index(after: slash)...])
     }
     return model
+  }
+
+  func sessionName(for request: RouterActiveRequest) -> String {
+    guard let sessionName = request.sessionName?.trimmingCharacters(in: .whitespacesAndNewlines),
+          !sessionName.isEmpty
+    else { return "Active session" }
+    return sessionName
   }
 
   var visibleUsageProviders: [UsageProviderChoice] {
@@ -601,6 +609,9 @@ final class RouterStore: ObservableObject {
       activeRequests = health.activity.active ?? []
       activeRequestCount = health.activity.activeCount ?? activeRequests.count
       activeModel = health.activity.model
+      if let sessionName = health.activity.sessionName, !sessionName.isEmpty {
+        activitySessionName = sessionName
+      }
       if health.activity.state == .generating,
          let provider = health.activity.provider {
         hasObservedActiveProvider = true
@@ -740,6 +751,7 @@ private struct RouterActivity: Decodable {
   let state: RouterActivityState
   let provider: String?
   let model: String?
+  let sessionName: String?
   let activeCount: Int?
   let active: [RouterActiveRequest]?
 }
@@ -748,6 +760,7 @@ struct RouterActiveRequest: Decodable, Identifiable, Equatable {
   let id: String
   let provider: String
   let model: String?
+  let sessionName: String?
   let startedAt: Double
 }
 

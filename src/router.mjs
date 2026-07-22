@@ -24,6 +24,7 @@ import { MERGED_CATALOG_PATH, PORTS, loopback } from "./paths.mjs";
 import { MODEL_BY_SLUG, providerForModel } from "./model-registry.mjs";
 import { readProviderSelection } from "./provider-selection.mjs";
 import { ResponseUsageTransform } from "./response-usage.mjs";
+import { sessionNameFromHeaders } from "./codex-session-names.mjs";
 import { recordUsageEvent } from "./usage-events.mjs";
 import { VERSION } from "./version.mjs";
 
@@ -65,6 +66,7 @@ let requestSequence = 0;
 const activeRequests = new Map();
 let lastUsedProvider;
 let lastUsedModel;
+let lastUsedSessionName;
 let errorStatusUntil = 0;
 
 if (!INTERNAL_KEY) throw new Error("CODEX_ROUTER_INTERNAL_KEY is required.");
@@ -77,6 +79,7 @@ function activityPayload() {
   const latest = active.at(-1);
   const provider = latest?.provider || lastUsedProvider;
   const model = latest?.model || lastUsedModel;
+  const sessionName = latest?.sessionName || lastUsedSessionName;
   return {
     state:
       activeRequests.size > 0
@@ -88,6 +91,7 @@ function activityPayload() {
     active,
     ...(provider ? { provider } : {}),
     ...(model ? { model } : {}),
+    ...(sessionName ? { sessionName } : {}),
   };
 }
 
@@ -96,17 +100,19 @@ function beginRequestActivity() {
   activeRequests.set(requestId, null);
   let finished = false;
   return {
-    setRoute({ provider, model } = {}) {
+    setRoute({ provider, model, sessionName } = {}) {
       if (!provider) return;
       const entry = {
         id: String(requestId),
         provider,
         ...(model ? { model } : {}),
+        ...(sessionName ? { sessionName } : {}),
         startedAt: Date.now(),
       };
       activeRequests.set(requestId, entry);
       lastUsedProvider = provider;
       if (model) lastUsedModel = model;
+      if (sessionName) lastUsedSessionName = sessionName;
     },
     finish(status) {
       if (finished) return;
@@ -531,6 +537,7 @@ async function handleResponses(request, response, requestUrl) {
     activity.setRoute({
       provider: route?.provider || "openai",
       model: requestedModel || undefined,
+      sessionName: sessionNameFromHeaders(request.headers),
     });
     const compactV1 = /\/responses\/compact$/.test(requestUrl.pathname);
     const compactV2 =

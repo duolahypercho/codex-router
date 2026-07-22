@@ -1,6 +1,8 @@
 import AppKit
 import SwiftUI
 
+private let islandBezel = Color(red: 0.004, green: 0.005, blue: 0.007)
+
 @MainActor
 final class IslandDisplayModel: ObservableObject {
   enum State: Equatable {
@@ -10,11 +12,14 @@ final class IslandDisplayModel: ObservableObject {
   }
 
   @Published private(set) var state: State = .compact
+  @Published private(set) var activeRequestCount = 0
 
   var size: CGSize {
     switch state {
     case .compact: return CGSize(width: 320, height: 40)
-    case .peek: return CGSize(width: 404, height: 148)
+    case .peek:
+      let activityHeight = min(312, 68 + CGFloat(activeRequestCount) * 40)
+      return CGSize(width: 404, height: activeRequestCount > 0 ? activityHeight : 148)
     case .expanded: return CGSize(width: 520, height: 372)
     }
   }
@@ -22,6 +27,10 @@ final class IslandDisplayModel: ObservableObject {
   func setState(_ next: State) {
     guard state != next else { return }
     state = next
+  }
+
+  func setActiveRequestCount(_ count: Int) {
+    activeRequestCount = max(0, count)
   }
 }
 
@@ -154,12 +163,12 @@ private struct IslandOverlayView: View {
     VStack(spacing: 0) {
       ZStack {
         IslandSilhouette()
-          .fill(routerInk.opacity(0.985))
+          .fill(islandBezel.opacity(0.998))
           .overlay {
             IslandSilhouette()
               .fill(
                 LinearGradient(
-                  colors: [Color.white.opacity(0.045), .clear, Color.white.opacity(0.018)],
+                  colors: [Color.white.opacity(0.018), .clear, Color.white.opacity(0.008)],
                   startPoint: .topLeading,
                   endPoint: .bottomTrailing
                 )
@@ -181,6 +190,10 @@ private struct IslandOverlayView: View {
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .foregroundStyle(.white)
+    .onAppear { display.setActiveRequestCount(store.activeRequests.count) }
+    .onChange(of: store.activeRequests.count) { count in
+      display.setActiveRequestCount(count)
+    }
   }
 
   @ViewBuilder
@@ -200,22 +213,27 @@ private struct IslandOverlayView: View {
 
   private var compactContent: some View {
     HStack(spacing: 7) {
-      LiveOrb(state: store.activityState, count: store.activeRequestCount)
-      Text(store.activitySummaryLabel)
+      LiveOrb(state: store.activityState)
+      Text(store.activityState.label)
         .font(.system(size: 10, weight: .semibold, design: .rounded))
         .foregroundStyle(store.activityState.tint)
+        .fixedSize()
       Text("·")
         .foregroundStyle(routerMuted)
-      Text(store.compactActivityProvidersLabel)
-        .font(.system(size: 11, weight: .medium, design: .rounded))
-        .lineLimit(1)
-      Spacer(minLength: 6)
-      if store.hasConcurrentActivity {
-        Text(compactActiveModelsLabel)
-          .font(.system(size: 10, weight: .medium, design: .rounded))
-          .foregroundStyle(.white.opacity(0.78))
-          .lineLimit(1)
-      } else {
+        .fixedSize()
+      ProviderIcon(providerID: compactProviderID, size: 18)
+      BouncingSessionName(text: compactSessionName, fontSize: 10.5, weight: .medium)
+        .frame(maxWidth: .infinity)
+        .layoutPriority(1)
+      if hiddenActiveCount > 0 {
+        Text("+\(hiddenActiveCount)")
+          .font(.system(size: 9, weight: .bold, design: .rounded))
+          .foregroundStyle(.black.opacity(0.88))
+          .padding(.horizontal, 6)
+          .frame(height: 18)
+          .background(store.activityState.tint, in: Capsule())
+          .fixedSize()
+      } else if store.activeRequests.isEmpty {
         Text(compactUsageSummary)
           .font(.system(size: 10, weight: .medium, design: .monospaced))
           .foregroundStyle(.white.opacity(0.78))
@@ -226,7 +244,16 @@ private struct IslandOverlayView: View {
     .padding(.horizontal, 14)
   }
 
+  @ViewBuilder
   private var peekContent: some View {
+    if store.activeRequests.isEmpty {
+      usagePeekContent
+    } else {
+      activityPeekContent
+    }
+  }
+
+  private var usagePeekContent: some View {
     VStack(spacing: 9) {
       HStack(spacing: 9) {
         LiveOrb(state: store.activityState, count: store.activeRequestCount)
@@ -253,6 +280,34 @@ private struct IslandOverlayView: View {
     .padding(.horizontal, 15)
     .padding(.top, 10)
     .padding(.bottom, 8)
+  }
+
+  private var activityPeekContent: some View {
+    VStack(spacing: 8) {
+      HStack(spacing: 9) {
+        LiveOrb(state: store.activityState)
+        VStack(alignment: .leading, spacing: 1) {
+          Text("ACTIVE SESSIONS")
+            .font(.system(size: 9, weight: .semibold, design: .monospaced))
+            .tracking(0.7)
+            .foregroundStyle(routerMuted)
+          Text("\(store.activeRequestCount) composing")
+            .font(.system(size: 11, weight: .semibold, design: .rounded))
+            .foregroundStyle(store.activityState.tint)
+        }
+        Spacer()
+        Text("Hover to inspect")
+          .font(.system(size: 8.5, weight: .medium, design: .rounded))
+          .foregroundStyle(routerMuted)
+      }
+      ScrollView(.vertical) {
+        ActiveRequestList(store: store, limit: store.activeRequests.count, compact: true)
+      }
+      .scrollIndicators(.hidden)
+    }
+    .padding(.horizontal, 14)
+    .padding(.top, 10)
+    .padding(.bottom, 10)
   }
 
   private var expandedContent: some View {
@@ -349,19 +404,23 @@ private struct IslandOverlayView: View {
   }
 
   private var peekTitle: String {
-    if store.hasConcurrentActivity {
-      return store.compactActivityProvidersLabel
-    }
-    return store.selectedUsageProvider.displayName
+    store.activeRequests.first.map(store.sessionName(for:))
+      ?? store.activitySessionName
+      ?? "Router overview"
   }
 
-  private var compactActiveModelsLabel: String {
-    let models = store.activeRequests.prefix(2).map(store.modelLabel(for:))
-    if models.isEmpty { return "Live" }
-    if store.activeRequests.count > 2 {
-      return "\(models.joined(separator: " · ")) +\(store.activeRequests.count - 2)"
-    }
-    return models.joined(separator: " · ")
+  private var compactProviderID: String {
+    store.activeRequests.first?.provider ?? store.selectedUsageProviderID
+  }
+
+  private var compactSessionName: String {
+    store.activeRequests.first.map(store.sessionName(for:))
+      ?? store.activitySessionName
+      ?? "Ready"
+  }
+
+  private var hiddenActiveCount: Int {
+    max(0, store.activeRequestCount - 1)
   }
 
   private var sourceLabel: String {
@@ -671,6 +730,127 @@ private struct IslandUsageLineChart: View {
 }
 
 
+private struct ProviderIcon: View {
+  let providerID: String
+  let size: CGFloat
+
+  var body: some View {
+    ZStack {
+      RoundedRectangle(cornerRadius: max(3, size * 0.24), style: .continuous)
+        .fill(iconTint.opacity(0.16))
+      Image(systemName: symbolName)
+        .font(.system(size: size * 0.5, weight: .semibold))
+        .foregroundStyle(iconTint)
+    }
+    .frame(width: size, height: size)
+    .overlay {
+      RoundedRectangle(cornerRadius: max(3, size * 0.24), style: .continuous)
+        .stroke(Color.white.opacity(0.1), lineWidth: 0.5)
+    }
+    .help(providerName)
+    .accessibilityLabel(providerName)
+  }
+
+  private var symbolName: String {
+    if providerID == "openai" { return "sparkles" }
+    if providerID.hasPrefix("grok") { return "xmark" }
+    if providerID.hasPrefix("kimi") { return "moon.fill" }
+    if providerID == "deepseek" { return "wave.3.right" }
+    if providerID == "anthropic-api" { return "a.circle.fill" }
+    return "cpu"
+  }
+
+  private var iconTint: Color {
+    if providerID == "openai" { return .white.opacity(0.92) }
+    if providerID.hasPrefix("grok") { return Color(red: 0.77, green: 0.88, blue: 1) }
+    if providerID.hasPrefix("kimi") { return Color(red: 0.49, green: 0.88, blue: 0.78) }
+    if providerID == "deepseek" { return Color(red: 0.42, green: 0.69, blue: 1) }
+    if providerID == "anthropic-api" { return Color(red: 0.94, green: 0.64, blue: 0.46) }
+    return routerMuted
+  }
+
+  private var providerName: String {
+    if providerID == "openai" { return "ChatGPT" }
+    if providerID.hasPrefix("grok") { return "Grok" }
+    if providerID.hasPrefix("kimi") { return "Kimi" }
+    if providerID == "deepseek" { return "DeepSeek" }
+    if providerID == "anthropic-api" { return "Anthropic" }
+    return "Model provider"
+  }
+}
+
+private struct SessionTextWidthKey: PreferenceKey {
+  static var defaultValue: CGFloat = 0
+  static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+    value = max(value, nextValue())
+  }
+}
+
+private struct BouncingSessionName: View {
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  let text: String
+  let fontSize: CGFloat
+  let weight: Font.Weight
+
+  @State private var containerWidth: CGFloat = 0
+  @State private var textWidth: CGFloat = 0
+  @State private var offset: CGFloat = 0
+  @State private var animationTask: Task<Void, Never>?
+
+  var body: some View {
+    GeometryReader { geometry in
+      Text(text)
+        .font(.system(size: fontSize, weight: weight, design: .rounded))
+        .foregroundStyle(.white.opacity(0.92))
+        .fixedSize(horizontal: true, vertical: false)
+        .background {
+          GeometryReader { textGeometry in
+            Color.clear.preference(key: SessionTextWidthKey.self, value: textGeometry.size.width)
+          }
+        }
+        .offset(x: offset)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .onAppear { updateContainerWidth(geometry.size.width) }
+        .onChange(of: geometry.size.width) { updateContainerWidth($0) }
+    }
+    .frame(height: max(14, fontSize + 4))
+    .clipped()
+    .onPreferenceChange(SessionTextWidthKey.self) { width in
+      textWidth = width
+      restartAnimation()
+    }
+    .onChange(of: text) { _ in restartAnimation() }
+    .onChange(of: reduceMotion) { _ in restartAnimation() }
+    .onDisappear { animationTask?.cancel() }
+    .accessibilityLabel(text)
+  }
+
+  private func updateContainerWidth(_ width: CGFloat) {
+    guard abs(containerWidth - width) > 0.5 else { return }
+    containerWidth = width
+    restartAnimation()
+  }
+
+  private func restartAnimation() {
+    animationTask?.cancel()
+    withAnimation(nil) { offset = 0 }
+    let overflow = max(0, textWidth - containerWidth)
+    guard !reduceMotion, containerWidth > 0, overflow > 2 else { return }
+    animationTask = Task { @MainActor in
+      try? await Task.sleep(nanoseconds: 850_000_000)
+      guard !Task.isCancelled else { return }
+      let travelDuration = max(2.8, Double(overflow / 18))
+      while !Task.isCancelled {
+        withAnimation(.easeInOut(duration: travelDuration)) { offset = -overflow }
+        try? await Task.sleep(nanoseconds: UInt64((travelDuration + 0.7) * 1_000_000_000))
+        guard !Task.isCancelled else { return }
+        withAnimation(.easeInOut(duration: travelDuration)) { offset = 0 }
+        try? await Task.sleep(nanoseconds: UInt64((travelDuration + 0.7) * 1_000_000_000))
+      }
+    }
+  }
+}
+
 private struct ActiveRequestList: View {
   @ObservedObject var store: RouterStore
   let limit: Int
@@ -680,27 +860,28 @@ private struct ActiveRequestList: View {
     VStack(spacing: compact ? 5 : 6) {
       ForEach(Array(store.activeRequests.prefix(limit))) { request in
         HStack(spacing: 8) {
-          Circle()
-            .fill(routerYellow)
-            .frame(width: 6, height: 6)
-          VStack(alignment: .leading, spacing: 1) {
-            Text(store.modelLabel(for: request))
-              .font(.system(size: compact ? 10 : 11, weight: .semibold, design: .rounded))
-              .lineLimit(1)
-            Text(store.displayName(forProvider: request.provider))
-              .font(.system(size: compact ? 8 : 9, weight: .medium, design: .rounded))
-              .foregroundStyle(routerMuted)
-              .lineLimit(1)
+          ProviderIcon(providerID: request.provider, size: compact ? 22 : 24)
+          BouncingSessionName(
+            text: store.sessionName(for: request),
+            fontSize: compact ? 10.5 : 11,
+            weight: .semibold
+          )
+          .frame(maxWidth: .infinity)
+          TimelineView(.periodic(from: .now, by: 1)) { context in
+            Text("Composing · \(elapsedLabel(for: request, now: context.date))")
+              .font(.system(size: compact ? 8.5 : 9, weight: .medium, design: .rounded))
+              .foregroundStyle(routerYellow.opacity(0.95))
+              .monospacedDigit()
+              .fixedSize()
           }
-          Spacer(minLength: 6)
-          Text(elapsedLabel(for: request))
-            .font(.system(size: compact ? 9 : 10, weight: .medium, design: .monospaced))
-            .foregroundStyle(routerYellow.opacity(0.95))
-            .monospacedDigit()
         }
         .padding(.horizontal, compact ? 8 : 10)
         .padding(.vertical, compact ? 5 : 7)
-        .background(Color.white.opacity(0.045), in: RoundedRectangle(cornerRadius: compact ? 8 : 10, style: .continuous))
+        .background(Color.white.opacity(0.038), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .overlay {
+          RoundedRectangle(cornerRadius: 7, style: .continuous)
+            .stroke(Color.white.opacity(0.055), lineWidth: 0.5)
+        }
       }
       if store.activeRequests.count > limit {
         Text("+\(store.activeRequests.count - limit) more")
@@ -711,9 +892,9 @@ private struct ActiveRequestList: View {
     }
   }
 
-  private func elapsedLabel(for request: RouterActiveRequest) -> String {
+  private func elapsedLabel(for request: RouterActiveRequest, now: Date) -> String {
     let started = Date(timeIntervalSince1970: request.startedAt / 1000)
-    let seconds = max(0, Int(Date().timeIntervalSince(started)))
+    let seconds = max(0, Int(now.timeIntervalSince(started)))
     if seconds < 60 { return "\(seconds)s" }
     let minutes = seconds / 60
     let rem = seconds % 60

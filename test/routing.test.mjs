@@ -108,6 +108,14 @@ async function closeServer(server) {
 }
 
 test("router requires the configured path capability before any model route", async () => {
+  const sessionDirectory = mkdtempSync(path.join(os.tmpdir(), "model-router-session-"));
+  const sessionIndex = path.join(sessionDirectory, "session_index.jsonl");
+  const firstThread = "019f8821-881a-7582-9e60-633bff68789f";
+  const secondThread = "019f8832-71e2-7670-87d9-9ff140e78585";
+  writeFileSync(sessionIndex, [
+    JSON.stringify({ id: firstThread, thread_name: "Checkout release" }),
+    JSON.stringify({ id: secondThread, thread_name: "Audit telemetry" }),
+  ].join("\n"));
   const gatewayRequests = [];
   const healthAuth = [];
   const gateway = await mockServer(async (request, response) => {
@@ -134,6 +142,7 @@ test("router requires the configured path capability before any model route", as
     CODEX_ROUTER_OAUTH_HEALTH_URL: `http://127.0.0.1:${gateway.port}/health`,
     CODEX_ROUTER_API_HEALTH_URL: `http://127.0.0.1:${gateway.port}/health`,
     CODEX_ROUTER_GATEWAY_HEALTH_URL: `http://127.0.0.1:${gateway.port}/health`,
+    CODEX_ROUTER_SESSION_INDEX: sessionIndex,
     CODEX_ROUTER_QUIET: "1",
   });
 
@@ -186,7 +195,7 @@ test("router requires the configured path capability before any model route", as
 
     const authorized = await fetch(`${routerBase(routerPort)}/responses`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "Thread-Id": firstThread },
       body: JSON.stringify({ model: "deepseek/deepseek-v4-pro", input: "allowed" }),
     });
     assert.equal(authorized.status, 200);
@@ -195,12 +204,12 @@ test("router requires the configured path capability before any model route", as
 
     const heldRequest = fetch(`${routerBase(routerPort)}/responses`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "Thread-Id": firstThread },
       body: JSON.stringify({ model: "deepseek/deepseek-v4-pro", input: "hold" }),
     });
     const secondHeldRequest = fetch(`${routerBase(routerPort)}/responses`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "Thread-Id": secondThread },
       body: JSON.stringify({ model: "deepseek/deepseek-v4-flash", input: "hold" }),
     });
     let generatingActivity;
@@ -223,6 +232,10 @@ test("router requires the configured path capability before any model route", as
     assert.deepEqual(
       new Set(generatingActivity.active.map((entry) => entry.model)),
       new Set(["deepseek/deepseek-v4-pro", "deepseek/deepseek-v4-flash"]),
+    );
+    assert.deepEqual(
+      new Set(generatingActivity.active.map((entry) => entry.sessionName)),
+      new Set(["Checkout release", "Audit telemetry"]),
     );
     assert.ok(
       ["deepseek/deepseek-v4-pro", "deepseek/deepseek-v4-flash"].includes(

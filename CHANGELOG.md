@@ -8,6 +8,9 @@
   `GROK_OAUTH_HOSTED_SEARCH=0`.
 - Use Thinking Orbs `Shaping` while idle, `Composing` while generating, and
   `Solving` for the Island's error indicator.
+- Replace compact provider names with provider glyphs and Codex session titles,
+  add a `+N` concurrent-session indicator, and show dark hover rows with live
+  status, elapsed time, and ping-pong overflow for long titles.
 - Added a native Windows and Linux tray companion with a seven-day token graph,
   connected-provider quota cards, secure onboarding, an animated top-center
   activity pill on Windows/X11, and an explicit tray-only Wayland fallback.

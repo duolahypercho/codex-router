@@ -26,8 +26,10 @@ ChatGPT is the initial detail view only when native ChatGPT usage is available;
 otherwise the tray starts with an existing external provider. The detailed
 view and the Island automatically return to the provider handling the next
 Codex request. Hover the Island for a quick view or click it for expanded
-account usage. When multiple Codex requests run at once, the Island shows the
-active count and lists each live model request.
+account usage. During activity, the compact Island shows a provider glyph and
+the Codex session title instead of repeating the provider name. Additional
+concurrent requests appear as `+N`; hover lists every live routed session with
+its status and elapsed time.
 
 - ChatGPT shows the subscription limit and daily buckets reported by the
   installed Codex app-server; the tray never reads or copies the ChatGPT
@@ -60,10 +62,13 @@ active count and lists each live model request.
   daily line draws in once when opened or refreshed. Reduce Motion disables
   decorative movement. The Island is shown by default and can be toggled from
   the tray.
-- When multiple Codex model requests run at the same time, the Island shows an
-  active count, stacks concurrent providers or models in compact form, and
-  lists each live request with elapsed time on hover and expand. The focused
-  usage view still follows the newest active request.
+- When multiple Codex model requests run at the same time, the Island shows the
+  first provider glyph and session title plus `+N` for the remaining requests.
+  Hover and expand list each live request with its provider glyph, session
+  title, Composing status, and elapsed time. Long titles pan to the end and
+  bounce back; Reduce Motion leaves them clipped. Session titles are resolved
+  from Codex's local session index and are not copied into usage history. The
+  focused usage view still follows the newest active request.
 - Local routed-model events record timestamp, model, provider, HTTP status,
   duration, and the input/output/total token counts reported by the provider.
   Prompts, responses, and API keys are never stored. Provider metering begins
