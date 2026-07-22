@@ -181,7 +181,7 @@
       "provider": "grok-oauth",
       "listed": true,
       "displayName": "Grok 4.5 (OAuth)",
-      "description": "Grok 4.5 through the official Grok CLI OAuth session with agentic coding and tool calls.",
+      "description": "Grok 4.5 through the official Grok CLI OAuth session with agentic coding, tool calls, and hosted web/X search.",
       "priority": 1,
       "defaultEffort": "high",
       "reasoningLevels": [

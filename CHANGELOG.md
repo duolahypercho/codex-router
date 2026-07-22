@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Grok OAuth now injects hosted `web_search` and `x_search` tools on every
+  Responses request so free/included Grok CLI quota can use xAI server-side
+  realtime search the same way Grok Build does. Disable with
+  `GROK_OAUTH_HOSTED_SEARCH=0`.
 - Use Thinking Orbs `Shaping` while idle, `Composing` while generating, and
   `Solving` for the Island's error indicator.
 - Added a native Windows and Linux tray companion with a seven-day token graph,

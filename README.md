@@ -101,7 +101,10 @@ Desktop distribution.
 | Claude Opus 4.8 (API) | `anthropic-api/claude-opus-4.8` | Separately billed Anthropic API key |
 
 Grok OAuth reuses the official CLI credential at `~/.grok/auth.json` and sends
-it only to xAI's documented Grok CLI inference proxy. Install the official CLI
+it only to xAI's documented Grok CLI inference proxy. On that path the router
+also attaches hosted `web_search` and `x_search` tools so xAI can run realtime
+web/X search server-side within the account's included Grok CLI quota. Set
+`GROK_OAUTH_HOSTED_SEARCH=0` to disable those tools. Install the official CLI
 and authenticate before enabling the route:
 
 ```sh

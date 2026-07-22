@@ -3,6 +3,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { fileURLToPath } from "node:url";
 
 import {
   httpErrorStatus,
@@ -26,7 +27,17 @@ const GROK_BASE = (
 const INTERNAL_KEY = process.env.MODEL_ROUTER_INTERNAL_KEY;
 const QUIET = process.env.MODEL_ROUTER_QUIET === "1";
 
-if (!INTERNAL_KEY) throw new Error("MODEL_ROUTER_INTERNAL_KEY is required.");
+// Hosted search tools run on xAI's Responses backend (same surface Grok Build
+// uses). They are free only to the extent the Grok OAuth account includes them.
+// Set GROK_OAUTH_HOSTED_SEARCH=0 to disable injection.
+const HOSTED_SEARCH_ENABLED = !["0", "false", "off", "no"].includes(
+  String(process.env.GROK_OAUTH_HOSTED_SEARCH || "1").toLowerCase(),
+);
+const HOSTED_SEARCH_TOOLS = Object.freeze([
+  { type: "web_search" },
+  { type: "x_search" },
+]);
+const HOSTED_SEARCH_FUNCTION_NAMES = new Set(["web_search", "x_search"]);
 
 function grokClientVersion() {
   const fallbackVersion = VERSION.match(/\b(\d+\.\d+\.\d+)\b/)?.[1] || "0.0.0";
@@ -82,8 +93,22 @@ function mapEffort(effort) {
   return ["medium", "high"].includes(effort) ? effort : undefined;
 }
 
+// Merge client function tools with xAI hosted search tools.
+// Hosted tools are type-tagged (web_search / x_search), not function tools.
+// Drop any client function with the same name so the backend owns search.
+export function mergeHostedSearchTools(clientTools = [], { enabled = HOSTED_SEARCH_ENABLED } = {}) {
+  const functions = (Array.isArray(clientTools) ? clientTools : []).filter(
+    (tool) => tool?.type === "function" && !HOSTED_SEARCH_FUNCTION_NAMES.has(tool.name),
+  );
+  if (!enabled) return functions;
+  const hosted = HOSTED_SEARCH_TOOLS.filter(
+    (hostedTool) => !functions.some((tool) => tool.type === hostedTool.type),
+  );
+  return [...functions, ...hosted];
+}
+
 // Chat Completions request -> Codex Responses request.
-function toResponsesRequest(chat) {
+export function toResponsesRequest(chat, options = {}) {
   const input = [];
   let instructions;
   for (const message of chat.messages || []) {
@@ -123,7 +148,7 @@ function toResponsesRequest(chat) {
   if (instructions) request.instructions = instructions;
   const effort = mapEffort(chat.reasoning_effort);
   if (effort) request.reasoning = { effort };
-  const tools = Array.isArray(chat.tools)
+  const clientTools = Array.isArray(chat.tools)
     ? chat.tools
         .filter((tool) => tool?.type === "function" && tool.function?.name)
         .map((tool) => ({
@@ -134,6 +159,9 @@ function toResponsesRequest(chat) {
           strict: false,
         }))
     : [];
+  const tools = mergeHostedSearchTools(clientTools, {
+    enabled: options.hostedSearchEnabled ?? HOSTED_SEARCH_ENABLED,
+  });
   if (tools.length) {
     request.tools = tools;
     if (chat.tool_choice) request.tool_choice = chat.tool_choice;
@@ -388,6 +416,15 @@ async function handleChatCompletions(request, response) {
 }
 
 async function handleRequest(request, response) {
+  if (!INTERNAL_KEY) {
+    writeJson(response, 500, {
+      error: {
+        type: "api_error",
+        message: "MODEL_ROUTER_INTERNAL_KEY is required.",
+      },
+    });
+    return;
+  }
   const requestUrl = new URL(request.url || "/", `http://${request.headers.host || LISTEN_HOST}`);
   if (!requireInternalAuth(request, response, INTERNAL_KEY)) return;
   if (request.method === "GET" && requestUrl.pathname === "/health") {
@@ -409,27 +446,32 @@ async function handleRequest(request, response) {
   });
 }
 
-const server = http.createServer((request, response) => {
-  handleRequest(request, response).catch((error) => {
-    const status = httpErrorStatus(error);
-    console.error("[grok-oauth] request failed");
-    if (!response.headersSent) {
-      writeJson(response, status, {
-        error: {
-          type: status >= 500 ? "api_error" : "invalid_request_error",
-          message: "The Grok OAuth forwarder could not complete the request.",
-        },
-      });
-    } else if (!response.writableEnded) {
-      response.destroy();
-    }
+const isMain = process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url));
+
+if (isMain) {
+  if (!INTERNAL_KEY) throw new Error("MODEL_ROUTER_INTERNAL_KEY is required.");
+  const server = http.createServer((request, response) => {
+    handleRequest(request, response).catch((error) => {
+      const status = httpErrorStatus(error);
+      console.error("[grok-oauth] request failed");
+      if (!response.headersSent) {
+        writeJson(response, status, {
+          error: {
+            type: status >= 500 ? "api_error" : "invalid_request_error",
+            message: "The Grok OAuth forwarder could not complete the request.",
+          },
+        });
+      } else if (!response.writableEnded) {
+        response.destroy();
+      }
+    });
   });
-});
 
-server.listen(LISTEN_PORT, LISTEN_HOST, () => {
-  console.error("[grok-oauth] listening");
-});
+  server.listen(LISTEN_PORT, LISTEN_HOST, () => {
+    console.error("[grok-oauth] listening");
+  });
 
-for (const signal of ["SIGINT", "SIGTERM"]) {
-  process.on(signal, () => server.close(() => process.exit(0)));
+  for (const signal of ["SIGINT", "SIGTERM"]) {
+    process.on(signal, () => server.close(() => process.exit(0)));
+  }
 }

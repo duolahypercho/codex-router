@@ -8,6 +8,11 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
+import {
+  mergeHostedSearchTools,
+  toResponsesRequest,
+} from "../src/grok-oauth-forwarder.mjs";
+
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const INTERNAL_KEY = "test-grok-internal-service-key-with-sufficient-length";
 
@@ -97,7 +102,11 @@ test("translates Chat Completions to Grok Responses and back (text + tools)", as
     for await (const c of req) chunks.push(c);
     captured = JSON.parse(Buffer.concat(chunks).toString("utf8"));
     res.writeHead(200, { "Content-Type": "text/event-stream" });
-    if (Array.isArray(captured.tools) && captured.tools.length) {
+    // Hosted search tools are always present; only emit client function-call
+    // events when the request includes a client function tool.
+    const hasClientFunction = Array.isArray(captured.tools)
+      && captured.tools.some((tool) => tool.type === "function");
+    if (hasClientFunction) {
       res.end(
         sse([
           { type: "response.output_item.added", item: { type: "function_call", id: "fc_1", call_id: "call_1", name: "get_weather" } },
@@ -153,6 +162,11 @@ test("translates Chat Completions to Grok Responses and back (text + tools)", as
     assert.equal(captured.stream, true);
     assert.equal(captured.input.at(-1).role, "user");
     assert.equal(captured.input.at(-1).content[0].type, "input_text");
+    // Free Grok OAuth path injects hosted web_search + x_search like Grok Build.
+    assert.deepEqual(
+      captured.tools.filter((tool) => tool.type === "web_search" || tool.type === "x_search"),
+      [{ type: "web_search" }, { type: "x_search" }],
+    );
     assert.equal(capturedHeaders.authorization, "Bearer fake-access");
     assert.equal(capturedHeaders["x-xai-token-auth"], "xai-grok-cli");
     assert.equal(capturedHeaders["x-authenticateresponse"], "authenticate-response");
@@ -215,8 +229,12 @@ test("translates Chat Completions to Grok Responses and back (text + tools)", as
     assert.equal(tool.choices[0].finish_reason, "tool_calls");
     assert.equal(tool.choices[0].message.tool_calls[0].function.name, "get_weather");
     assert.equal(tool.choices[0].message.tool_calls[0].function.arguments, '{"city":"SF"}');
-    // Request translation carried the tool definition through.
+    // Request translation carried the tool definition through and kept hosted search.
     assert.equal(captured.tools[0].name, "get_weather");
+    assert.deepEqual(
+      captured.tools.filter((tool) => tool.type !== "function"),
+      [{ type: "web_search" }, { type: "x_search" }],
+    );
   } finally {
     await stop(child);
     await new Promise((r) => backend.server.close(r));
@@ -243,4 +261,63 @@ test("returns 401 when the Grok session is missing", async () => {
     await new Promise((r) => backend.server.close(r));
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("mergeHostedSearchTools injects x_search and web_search by default", () => {
+  assert.deepEqual(mergeHostedSearchTools([]), [
+    { type: "web_search" },
+    { type: "x_search" },
+  ]);
+  assert.deepEqual(
+    mergeHostedSearchTools([
+      {
+        type: "function",
+        name: "read_file",
+        description: "read",
+        parameters: { type: "object" },
+        strict: false,
+      },
+      {
+        type: "function",
+        name: "web_search",
+        description: "local",
+        parameters: { type: "object" },
+        strict: false,
+      },
+    ]),
+    [
+      {
+        type: "function",
+        name: "read_file",
+        description: "read",
+        parameters: { type: "object" },
+        strict: false,
+      },
+      { type: "web_search" },
+      { type: "x_search" },
+    ],
+  );
+});
+
+test("mergeHostedSearchTools can be disabled", () => {
+  assert.deepEqual(
+    mergeHostedSearchTools(
+      [{ type: "function", name: "read_file", parameters: { type: "object" }, strict: false }],
+      { enabled: false },
+    ),
+    [{ type: "function", name: "read_file", parameters: { type: "object" }, strict: false }],
+  );
+});
+
+test("toResponsesRequest always includes hosted search tools when enabled", () => {
+  const request = toResponsesRequest({
+    model: "grok-4.5",
+    messages: [{ role: "user", content: "latest from X?" }],
+    tools: [
+      { type: "function", function: { name: "bash", parameters: { type: "object" } } },
+    ],
+  });
+  assert.equal(request.tools.some((tool) => tool.type === "x_search"), true);
+  assert.equal(request.tools.some((tool) => tool.type === "web_search"), true);
+  assert.equal(request.tools.some((tool) => tool.name === "bash"), true);
 });
