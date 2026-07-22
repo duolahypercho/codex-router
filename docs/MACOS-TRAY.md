@@ -31,7 +31,9 @@ published mark and the Codex session title instead of repeating the provider
 name. Additional
 concurrent requests appear as a muted, unframed `+N`; hover lists every live
 routed session with its status and elapsed time while retaining the seven-day
-usage graph and today's usage metrics.
+usage graph and today's usage metrics. When the selected provider reports a
+weekly quota, its percentage used stays pinned to the compact Island's trailing
+edge during both idle and active sessions.
 
 - ChatGPT shows the subscription limit and daily buckets reported by the
   installed Codex app-server; the tray never reads or copies the ChatGPT

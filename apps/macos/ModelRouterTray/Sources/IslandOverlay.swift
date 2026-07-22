@@ -230,12 +230,25 @@ private struct IslandOverlayView: View {
           .font(.system(size: 9.5, weight: .semibold, design: .rounded))
           .foregroundStyle(.white.opacity(0.56))
           .fixedSize()
-      } else if store.activeRequests.isEmpty {
+      }
+      if store.activeRequests.isEmpty {
         Text(compactUsageSummary)
           .font(.system(size: 10, weight: .medium, design: .monospaced))
           .foregroundStyle(.white.opacity(0.78))
           .lineLimit(1)
           .minimumScaleFactor(0.75)
+      }
+      if let weeklyUsedPercent {
+        VStack(alignment: .trailing, spacing: 0) {
+          Text("\(Int(weeklyUsedPercent.rounded()))%")
+            .font(.system(size: 10, weight: .semibold, design: .monospaced))
+            .foregroundStyle(.white.opacity(0.9))
+            .monospacedDigit()
+          Text("WEEKLY USED")
+            .font(.system(size: 6.5, weight: .semibold, design: .monospaced))
+            .foregroundStyle(routerMuted)
+        }
+        .fixedSize()
       }
     }
     .padding(.horizontal, 14)
@@ -449,9 +462,7 @@ private struct IslandOverlayView: View {
   }
 
   private var compactUsageSummary: String {
-    let tokens = "\(todayTokenValue) today"
-    guard let accountCompactValue else { return tokens }
-    return "\(tokens) · \(accountCompactValue)"
+    "\(todayTokenValue) today"
   }
 
   private var todayTokenValue: String {
@@ -474,6 +485,22 @@ private struct IslandOverlayView: View {
     guard store.selectedAccountMetric?.kind == "quota",
           let used = store.selectedAccountMetric?.usedPercent
     else { return nil }
+    return max(0, min(100, used))
+  }
+
+  private var weeklyUsedPercent: Double? {
+    if store.selectedUsageUsesChatGPT {
+      let windows = [store.accountUsage?.primary, store.accountUsage?.secondary].compactMap { $0 }
+      guard let weekly = windows.first(where: { $0.durationLabel == "Weekly limit" }) else {
+        return nil
+      }
+      return Double(max(0, min(100, weekly.usedPercent)))
+    }
+    guard let weekly = store.selectedProviderUsage?.account.metrics.first(where: {
+      $0.kind == "quota" && standardizedLimitLabel($0.label) == "Weekly limit"
+    }), let used = weekly.usedPercent else {
+      return nil
+    }
     return max(0, min(100, used))
   }
 
@@ -503,12 +530,6 @@ private struct IslandOverlayView: View {
       return "\(window.uppercased()) USED"
     }
     return accountUsageLabel.uppercased()
-  }
-
-  private var accountCompactValue: String? {
-    if let quotaUsedPercent { return "\(Int(quotaUsedPercent.rounded()))% used" }
-    guard let metric = store.selectedAccountMetric, metric.kind == "balance" else { return nil }
-    return formattedAccountMetric(metric)
   }
 
   private var accountTileTitle: String {
