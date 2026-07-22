@@ -213,6 +213,60 @@ wire_api = "responses"
   }
 });
 
+test("config manager adopts the exact legacy router-owned provider table", () => {
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), "codex-router-provider-legacy-"));
+  const stateDir = path.join(codexHome, "router-state");
+  const configPath = path.join(codexHome, "config.toml");
+
+  try {
+    run("enable", codexHome, stateDir);
+    const current = readFileSync(configPath, "utf8");
+    const legacy = current
+      .replace("# BEGIN codex-router-provider-managed\n", "")
+      .replace("\n# END codex-router-provider-managed", "")
+      .replace(
+        'name = "Codex Router (external models)"',
+        'name = "Codex Router (extra providers)"',
+      )
+      .replace('wire_api = "responses"', 'wire_api = "responses"\nrequires_openai_auth = true');
+    writeFileSync(configPath, legacy, { mode: 0o600 });
+
+    const enabled = run("login-free-enable", codexHome, stateDir, ["kimi-oauth/kimi-k2.5"]);
+    assert.equal(enabled.login_free, true);
+    assert.equal(enabled.login_free_managed, true);
+    assert.equal(enabled.model, "kimi-oauth/kimi-k2.5");
+    const migrated = readFileSync(configPath, "utf8");
+    assert.equal((migrated.match(/\[model_providers\.codex-router\]/g) || []).length, 1);
+    assert.match(migrated, /# BEGIN codex-router-provider-managed/);
+    assert.match(migrated, /name = "Codex Router \(external models\)"/);
+    assert.doesNotMatch(migrated, /extra providers|requires_openai_auth/);
+  } finally {
+    rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
+test("config manager refuses a modified legacy router provider table", () => {
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), "codex-router-provider-modified-"));
+  const stateDir = path.join(codexHome, "router-state");
+  const configPath = path.join(codexHome, "config.toml");
+
+  try {
+    run("enable", codexHome, stateDir);
+    const modified = readFileSync(configPath, "utf8")
+      .replace("# BEGIN codex-router-provider-managed\n", "")
+      .replace("\n# END codex-router-provider-managed", "")
+      .replace('wire_api = "responses"', 'wire_api = "responses"\ncustom_setting = true');
+    writeFileSync(configPath, modified, { mode: 0o600 });
+
+    assert.throws(
+      () => run("enable", codexHome, stateDir),
+      /Refusing to replace user-owned model provider codex-router/,
+    );
+  } finally {
+    rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
 test("config manager decodes escaped catalog paths", () => {
   const codexHome = mkdtempSync(path.join(os.tmpdir(), "codex-router-escaped-path-"));
   const stateDir = path.join(codexHome, "router\\state");

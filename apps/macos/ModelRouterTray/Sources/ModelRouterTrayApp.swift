@@ -564,8 +564,9 @@ final class RouterStore: ObservableObject {
     do {
       _ = try await runControl(arguments: ["auth-mode", enabled ? "on" : "off"])
     } catch {
-      message = error.localizedDescription
+      let errorMessage = error.localizedDescription
       await refresh()
+      message = errorMessage
       return
     }
 

@@ -79,6 +79,44 @@
   ],
   "models": [
     {
+      "slug": "kimi-oauth/kimi-for-coding",
+      "gatewayModel": "kimi-oauth-kimi-for-coding",
+      "upstreamModel": "kimi-for-coding",
+      "provider": "kimi-oauth",
+      "listed": true,
+      "displayName": "K2.7 Coding (OAuth)",
+      "description": "Kimi K2.7 Coding using the existing Kimi Code CLI OAuth session.",
+      "priority": 2,
+      "defaultEffort": "high",
+      "reasoningLevels": [
+        { "effort": "high", "description": "Always-on coding reasoning" }
+      ],
+      "contextWindow": 262144,
+      "autoCompact": 235000,
+      "inputModalities": ["text", "image"],
+      "requestProfile": "kimi-oauth",
+      "compHash": "kimi-oauth-kimi-for-coding-v1"
+    },
+    {
+      "slug": "kimi-oauth/kimi-for-coding-highspeed",
+      "gatewayModel": "kimi-oauth-kimi-for-coding-highspeed",
+      "upstreamModel": "kimi-for-coding-highspeed",
+      "provider": "kimi-oauth",
+      "listed": true,
+      "displayName": "K2.7 Coding Highspeed (OAuth)",
+      "description": "Kimi K2.7 Coding Highspeed using the existing Kimi Code CLI OAuth session.",
+      "priority": 3,
+      "defaultEffort": "high",
+      "reasoningLevels": [
+        { "effort": "high", "description": "Always-on coding reasoning" }
+      ],
+      "contextWindow": 262144,
+      "autoCompact": 235000,
+      "inputModalities": ["text", "image"],
+      "requestProfile": "kimi-oauth",
+      "compHash": "kimi-oauth-kimi-for-coding-highspeed-v1"
+    },
+    {
       "slug": "kimi-oauth/k3",
       "gatewayModel": "kimi-oauth-k3",
       "upstreamModel": "k3",

@@ -168,7 +168,14 @@ test("Cursor router authenticates, lists OpenAI models, and proxies chat complet
     assert.equal(models.object, "list");
     assert.deepEqual(
       models.data.map((model) => model.id),
-      ["kimi-oauth-k3", "kimi-api-k3", "deepseek-v4-flash", "deepseek-v4-pro"],
+      [
+        "kimi-oauth-kimi-for-coding",
+        "kimi-oauth-kimi-for-coding-highspeed",
+        "kimi-oauth-k3",
+        "kimi-api-k3",
+        "deepseek-v4-flash",
+        "deepseek-v4-pro",
+      ],
     );
     assert.equal(models.data[0].object, "model");
 

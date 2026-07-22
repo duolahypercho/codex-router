@@ -312,6 +312,20 @@ async function setLoginFreeMode(desired) {
       throw new Error("No enabled model is available for the connected external providers.");
     }
   }
+  if (desired === "on") {
+    const catalog = spawnSync(
+      process.execPath,
+      [path.join(REPO_ROOT, "src", "catalog.mjs")],
+      {
+        cwd: REPO_ROOT,
+        env: { ...process.env, MODEL_ROUTER_TARGET: "codex" },
+        encoding: "utf8",
+      },
+    );
+    if (catalog.status !== 0) {
+      throw new Error((catalog.stderr || "Codex model catalog could not be refreshed.").trim());
+    }
+  }
   const command = desired === "on" ? "login-free-enable" : "login-free-disable";
   const commandArgs = [path.join(REPO_ROOT, "src", "config-manager.mjs"), command];
   if (loginFreeModel) commandArgs.push(loginFreeModel);

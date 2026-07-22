@@ -91,17 +91,21 @@ function normalizeKimiBody(buffer, contentType) {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return buffer;
   foldInterveningAssistantMessages(payload.messages);
   payload.thinking = { type: "enabled" };
-  const effort = {
-    minimal: "low",
-    low: "low",
-    medium: "high",
-    high: "high",
-    xhigh: "max",
-    max: "max",
-    ultra: "max",
-  }[payload.reasoning_effort];
-  if (effort) payload.reasoning_effort = effort;
-  else delete payload.reasoning_effort;
+  if (payload.model === "k3") {
+    const effort = {
+      minimal: "low",
+      low: "low",
+      medium: "high",
+      high: "high",
+      xhigh: "max",
+      max: "max",
+      ultra: "max",
+    }[payload.reasoning_effort];
+    if (effort) payload.reasoning_effort = effort;
+    else delete payload.reasoning_effort;
+  } else {
+    delete payload.reasoning_effort;
+  }
   return Buffer.from(JSON.stringify(payload), "utf8");
 }
 

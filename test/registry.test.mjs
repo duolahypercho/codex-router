@@ -14,6 +14,8 @@ test("provider registry exposes configured API and OAuth model families", () => 
   assert.deepEqual(
     LISTED_MODELS.map((model) => model.slug),
     [
+      "kimi-oauth/kimi-for-coding",
+      "kimi-oauth/kimi-for-coding-highspeed",
       "kimi-oauth/k3",
       "kimi-api/kimi-k3",
       "deepseek/deepseek-v4-flash",
@@ -27,6 +29,16 @@ test("provider registry exposes configured API and OAuth model families", () => 
   assert.equal(PROVIDERS.get("grok-api").baseUrl, "https://api.x.ai/v1");
   assert.equal(PROVIDERS.get("grok-oauth").proxyBaseEnv, "GROK_OAUTH_FORWARD_BASE_URL");
   assert.equal(PROVIDERS.get("anthropic-api").protocol, "anthropic");
+  for (const slug of [
+    "kimi-oauth/kimi-for-coding-highspeed",
+    "kimi-oauth/kimi-for-coding",
+  ]) {
+    const model = MODEL_BY_SLUG.get(slug);
+    assert.equal(model.contextWindow, 262_144);
+    assert.deepEqual(model.reasoningLevels, [
+      { effort: "high", description: "Always-on coding reasoning" },
+    ]);
+  }
   assert.deepEqual(
     MODEL_BY_SLUG.get("anthropic-api/claude-opus-4.8").reasoningLevels,
     [{ effort: "high", description: "Adaptive deep reasoning for agentic work" }],

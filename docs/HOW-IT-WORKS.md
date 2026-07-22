@@ -65,6 +65,8 @@ service (Codex itself still needs a restart to reload the picker catalog).
 
 | Picker model | Public slug | Gateway model | Upstream model |
 | --- | --- | --- | --- |
+| K2.7 Coding Highspeed OAuth | `kimi-oauth/kimi-for-coding-highspeed` | `kimi-oauth-kimi-for-coding-highspeed` | `kimi-for-coding-highspeed` |
+| K2.7 Coding OAuth | `kimi-oauth/kimi-for-coding` | `kimi-oauth-kimi-for-coding` | `kimi-for-coding` |
 | Kimi K3 OAuth | `kimi-oauth/k3` | `kimi-oauth-k3` | `k3` |
 | Kimi K3 API | `kimi-api/kimi-k3` | `kimi-api-k3` | `kimi-k3` |
 | DeepSeek V4 Flash | `deepseek/deepseek-v4-flash` | `deepseek-v4-flash` | `deepseek-v4-flash` |

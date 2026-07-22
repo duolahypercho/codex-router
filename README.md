@@ -70,6 +70,8 @@ Linux installations support the Codex CLI and the Cursor target's local gateway.
 
 | Picker label | Model ID | Authentication |
 | --- | --- | --- |
+| K2.7 Coding Highspeed (OAuth) | `kimi-oauth/kimi-for-coding-highspeed` | Existing Kimi Code CLI OAuth session |
+| K2.7 Coding (OAuth) | `kimi-oauth/kimi-for-coding` | Existing Kimi Code CLI OAuth session |
 | Kimi K3 (OAuth) | `kimi-oauth/k3` | Existing Kimi Code CLI OAuth session |
 | Kimi K3 (API) | `kimi-api/kimi-k3` | Separately billed Kimi Platform API key |
 | DeepSeek V4 Flash (API) | `deepseek/deepseek-v4-flash` | DeepSeek API key |

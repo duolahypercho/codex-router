@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -191,6 +191,20 @@ test("login-free control selects a ready external model and restores Codex defau
     "test-control-caller-capability-with-sufficient-length\n",
     { mode: 0o600 },
   );
+  writeFileSync(
+    path.join(stateDir, "native-models.json"),
+    `${JSON.stringify({
+      models: [
+        {
+          slug: "gpt-5.6-sol",
+          display_name: "GPT-5.6-Sol",
+          visibility: "list",
+          priority: 10,
+        },
+      ],
+    })}\n`,
+    { mode: 0o600 },
+  );
   const runMode = (desired) =>
     JSON.parse(
       execFileSync(
@@ -214,6 +228,11 @@ test("login-free control selects a ready external model and restores Codex defau
     assert.equal(enabled.login_free, true);
     assert.match(enabled.model, /^deepseek\//);
     assert.equal(enabled.model_provider, "codex-router");
+    const catalog = JSON.parse(readFileSync(path.join(stateDir, "merged-models.json"), "utf8"));
+    assert.deepEqual(
+      catalog.models.filter((model) => model.slug.startsWith("deepseek/")).map((model) => model.slug),
+      ["deepseek/deepseek-v4-flash", "deepseek/deepseek-v4-pro"],
+    );
 
     const disabled = runMode("off");
     assert.equal(disabled.login_free, false);

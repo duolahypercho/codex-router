@@ -192,6 +192,56 @@ function hasUnmanagedRouterProvider(contents) {
   ).test(withoutManagedBlock);
 }
 
+function legacyManagedRouterProvider(contents) {
+  if (!contents.includes(startMarker) || !contents.includes(endMarker)) {
+    return undefined;
+  }
+  const lines = contents.split("\n");
+  const headers = lines
+    .map((line, index) =>
+      /^\s*\[model_providers\.codex-router\]\s*$/.test(line) ? index : -1,
+    )
+    .filter((index) => index !== -1);
+  if (headers.length !== 1) return undefined;
+
+  const start = headers[0];
+  let end = start + 1;
+  while (end < lines.length && !/^\s*\[/.test(lines[end])) end += 1;
+
+  const fields = new Map();
+  for (const line of lines.slice(start + 1, end)) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const match = trimmed.match(/^([A-Za-z0-9_-]+)\s*=/);
+    if (!match || fields.has(match[1])) return undefined;
+    fields.set(match[1], assignmentValue(trimmed));
+  }
+
+  const { rootLines } = splitRoot(contents);
+  const rootBaseUrl = rootValue(rootLines, "openai_base_url");
+  const commonFieldsMatch =
+    fields.get("base_url") === rootBaseUrl &&
+    isManagedRouterBaseUrl(rootBaseUrl) &&
+    fields.get("wire_api") === "responses";
+  const currentShape =
+    fields.size === 3 &&
+    fields.get("name") === "Codex Router (external models)";
+  const prototypeShape =
+    fields.size === 4 &&
+    fields.get("name") === "Codex Router (extra providers)" &&
+    fields.get("requires_openai_auth") === "true";
+  return commonFieldsMatch && (currentShape || prototypeShape)
+    ? { lines, start, end }
+    : undefined;
+}
+
+function removeLegacyManagedRouterProvider(contents, provider) {
+  return [
+    ...provider.lines.slice(0, provider.start),
+    ...provider.lines.slice(provider.end),
+  ].join("\n");
+}
+
 function clean(contents) {
   const knownCatalogPaths = [
     MERGED_CATALOG_PATH,
@@ -239,8 +289,12 @@ function snapshot(contents) {
 function enabledContents(contents) {
   const { rootLines: currentRoot } = splitRoot(contents);
   const currentProvider = rootValue(currentRoot, "model_provider");
+  const legacyProvider = legacyManagedRouterProvider(contents);
+  const contentsWithoutLegacyProvider = legacyProvider
+    ? removeLegacyManagedRouterProvider(contents, legacyProvider)
+    : contents;
   if (
-    hasUnmanagedRouterProvider(contents) ||
+    hasUnmanagedRouterProvider(contentsWithoutLegacyProvider) ||
     (currentProvider === routerProviderId && !existsSync(CODEX_PROVIDER_MODE_PATH))
   ) {
     throw new Error(
@@ -248,7 +302,7 @@ function enabledContents(contents) {
     );
   }
   const routerBaseUrl = configuredRouterBaseUrl();
-  const cleaned = clean(contents);
+  const cleaned = clean(contentsWithoutLegacyProvider);
   const rootLines = trimBlankEdges(cleaned.rootLines);
   const existingBase = rootValue(rootLines, "openai_base_url");
   const existingCatalog = rootValue(rootLines, "model_catalog_json");
