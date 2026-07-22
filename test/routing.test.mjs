@@ -120,10 +120,11 @@ test("router requires the configured path capability before any model route", as
       });
       return;
     }
-    gatewayRequests.push({
-      headers: request.headers,
-      body: await bodyJson(request),
-    });
+    const body = await bodyJson(request);
+    gatewayRequests.push({ headers: request.headers, body });
+    if (body.input === "hold") {
+      await new Promise((resolve) => setTimeout(resolve, 120));
+    }
     json(response, 200, { route: "external" });
   });
   const routerPort = await openPort();
@@ -192,6 +193,50 @@ test("router requires the configured path capability before any model route", as
     assert.equal(gatewayRequests.length, 1);
     assert.equal(gatewayRequests[0].headers.authorization, `Bearer ${INTERNAL_KEY}`);
 
+    const heldRequest = fetch(`${routerBase(routerPort)}/responses`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "deepseek/deepseek-v4-pro", input: "hold" }),
+    });
+    const secondHeldRequest = fetch(`${routerBase(routerPort)}/responses`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "deepseek/deepseek-v4-flash", input: "hold" }),
+    });
+    let generatingActivity;
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      const generatingHealth = await fetch(`http://127.0.0.1:${routerPort}/health`);
+      generatingActivity = (await generatingHealth.json()).activity;
+      if (
+        generatingActivity.state === "generating" &&
+        generatingActivity.activeCount === 2 &&
+        generatingActivity.active?.length === 2
+      ) {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    assert.equal(generatingActivity.state, "generating");
+    assert.equal(generatingActivity.provider, "deepseek");
+    assert.equal(generatingActivity.activeCount, 2);
+    assert.equal(generatingActivity.active.length, 2);
+    assert.deepEqual(
+      new Set(generatingActivity.active.map((entry) => entry.model)),
+      new Set(["deepseek/deepseek-v4-pro", "deepseek/deepseek-v4-flash"]),
+    );
+    assert.ok(
+      ["deepseek/deepseek-v4-pro", "deepseek/deepseek-v4-flash"].includes(
+        generatingActivity.model,
+      ),
+    );
+    for (const entry of generatingActivity.active) {
+      assert.equal(entry.provider, "deepseek");
+      assert.equal(typeof entry.id, "string");
+      assert.equal(typeof entry.startedAt, "number");
+    }
+    assert.equal((await heldRequest).status, 200);
+    assert.equal((await secondHeldRequest).status, 200);
+
     const errorSentinel = "SENSITIVE_ERROR_DETAIL_MUST_NOT_ESCAPE";
     const invalidEncoding = await fetch(`${routerBase(routerPort)}/responses`, {
       method: "POST",
@@ -209,7 +254,8 @@ test("router requires the configured path capability before any model route", as
     const publicHealth = await fetch(`http://127.0.0.1:${routerPort}/health`);
     assert.equal(publicHealth.status, 200);
     const publicPayload = await publicHealth.json();
-    assert.deepEqual(Object.keys(publicPayload).sort(), ["ok", "service", "version"]);
+    assert.deepEqual(Object.keys(publicPayload).sort(), ["activity", "ok", "service", "version"]);
+    assert.equal(publicPayload.activity.state, "error");
 
     const protectedHealth = await fetch(`${routerBase(routerPort)}/health`);
     assert.equal(protectedHealth.status, 200);
@@ -327,6 +373,8 @@ test("router preserves native auth and isolates every external route", async () 
       ["kimi-api/kimi-k3", "kimi-api-k3"],
       ["deepseek/deepseek-v4-flash", "deepseek-v4-flash"],
       ["deepseek/deepseek-v4-pro", "deepseek-v4-pro"],
+      ["grok-api/grok-4.5", "grok-api-grok-4-5"],
+      ["anthropic-api/claude-opus-4.8", "anthropic-api-claude-opus-4-8"],
     ]) {
       const response = await fetch(`${routerBase(routerPort)}/responses`, {
         method: "POST",
@@ -537,6 +585,122 @@ test("API forwarder supports all DeepSeek V4 models and normalizes thinking", as
       assert.equal(request.body.reasoning_effort, effort);
       assert.equal(request.body.temperature, undefined);
     }
+  } finally {
+    await stopChild(forwarder);
+    await closeServer(upstream.server);
+  }
+});
+
+test("API forwarder routes Grok 4.5 with supported xAI reasoning effort", async () => {
+  const upstreamRequests = [];
+  const upstream = await mockServer(async (request, response) => {
+    upstreamRequests.push({ headers: request.headers, body: await bodyJson(request) });
+    json(response, 200, { choices: [] });
+  });
+  const forwarderPort = await openPort();
+  const forwarder = run("api-forwarder.mjs", {
+    CODEX_ROUTER_API_PORT: String(forwarderPort),
+    XAI_API_BASE_URL: `http://127.0.0.1:${upstream.port}/v1`,
+    XAI_API_KEY: "TEST_XAI_API_KEY",
+    CODEX_ROUTER_QUIET: "1",
+  });
+
+  try {
+    await waitFor(`http://127.0.0.1:${forwarderPort}/health`, forwarder, {
+      Authorization: `Bearer ${INTERNAL_KEY}`,
+    });
+    const response = await fetch(
+      `http://127.0.0.1:${forwarderPort}/v1/chat/completions`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${INTERNAL_KEY}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "grok-api-grok-4-5",
+          reasoning_effort: "ultra",
+          presence_penalty: 0.2,
+          frequency_penalty: 0.1,
+          stop: ["done"],
+          messages: [{ role: "user", content: "test" }],
+        }),
+      },
+    );
+    assert.equal(response.status, 200);
+    const request = upstreamRequests[0];
+    assert.equal(request.headers.authorization, "Bearer TEST_XAI_API_KEY");
+    assert.equal(request.body.model, "grok-4.5");
+    assert.equal(request.body.reasoning_effort, "high");
+    assert.equal(request.body.presence_penalty, undefined);
+    assert.equal(request.body.frequency_penalty, undefined);
+    assert.equal(request.body.stop, undefined);
+  } finally {
+    await stopChild(forwarder);
+    await closeServer(upstream.server);
+  }
+});
+
+test("API forwarder isolates Anthropic credentials on the native Messages route", async () => {
+  const upstreamRequests = [];
+  const upstream = await mockServer(async (request, response) => {
+    upstreamRequests.push({
+      url: request.url,
+      headers: request.headers,
+      body: await bodyJson(request),
+    });
+    json(response, 200, {
+      id: "msg_test",
+      type: "message",
+      role: "assistant",
+      model: "claude-opus-4-8",
+      content: [{ type: "text", text: "ANTHROPIC_ROUTE_OK" }],
+      stop_reason: "end_turn",
+      stop_sequence: null,
+      usage: { input_tokens: 4, output_tokens: 3 },
+    });
+  });
+  const forwarderPort = await openPort();
+  const forwarder = run("api-forwarder.mjs", {
+    CODEX_ROUTER_API_PORT: String(forwarderPort),
+    ANTHROPIC_API_BASE_URL: `http://127.0.0.1:${upstream.port}/v1`,
+    ANTHROPIC_API_KEY: "TEST_ANTHROPIC_API_KEY",
+    CODEX_ROUTER_QUIET: "1",
+  });
+
+  try {
+    await waitFor(`http://127.0.0.1:${forwarderPort}/health`, forwarder, {
+      Authorization: `Bearer ${INTERNAL_KEY}`,
+    });
+    const response = await fetch(
+      `http://127.0.0.1:${forwarderPort}/v1/messages`,
+      {
+        method: "POST",
+        headers: {
+          "x-api-key": INTERNAL_KEY,
+          "anthropic-version": "2023-06-01",
+          "ChatGPT-Account-Id": "must-not-forward",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "anthropic-api-claude-opus-4-8",
+          max_tokens: 64,
+          reasoning_effort: "high",
+          messages: [{ role: "user", content: "test" }],
+        }),
+      },
+    );
+    assert.equal(response.status, 200);
+    const request = upstreamRequests[0];
+    assert.equal(request.url, "/v1/messages");
+    assert.equal(request.headers.authorization, undefined);
+    assert.equal(request.headers["x-api-key"], "TEST_ANTHROPIC_API_KEY");
+    assert.equal(request.headers["anthropic-version"], "2023-06-01");
+    assert.equal(request.headers["chatgpt-account-id"], undefined);
+    assert.equal(request.body.model, "claude-opus-4-8");
+    assert.equal(request.body.reasoning_effort, undefined);
+    assert.deepEqual(request.body.thinking, { type: "adaptive" });
+    assert.deepEqual(request.body.output_config, { effort: "high" });
   } finally {
     await stopChild(forwarder);
     await closeServer(upstream.server);

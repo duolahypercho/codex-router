@@ -8,7 +8,7 @@ import {
   requireInternalAuth,
   writeJson,
 } from "./http-utils.mjs";
-import { PORTS } from "./paths.mjs";
+import { PORTS, TARGET } from "./paths.mjs";
 import {
   API_MODELS,
   MODEL_BY_GATEWAY_ID,
@@ -22,16 +22,29 @@ import {
 import { VERSION } from "./version.mjs";
 
 const LISTEN_HOST =
-  process.env.CODEX_ROUTER_API_HOST || process.env.KIMI_API_FORWARD_HOST || "127.0.0.1";
+  process.env.MODEL_ROUTER_API_HOST ||
+  (TARGET === "codex"
+    ? process.env.CODEX_ROUTER_API_HOST || process.env.KIMI_API_FORWARD_HOST
+    : undefined) ||
+  "127.0.0.1";
 const LISTEN_PORT = Number(
-  process.env.CODEX_ROUTER_API_PORT || process.env.KIMI_API_FORWARD_PORT || PORTS.api,
+  process.env.MODEL_ROUTER_API_PORT ||
+    (TARGET === "codex"
+      ? process.env.CODEX_ROUTER_API_PORT || process.env.KIMI_API_FORWARD_PORT
+      : undefined) ||
+    PORTS.api,
 );
 const INTERNAL_KEY =
-  process.env.CODEX_ROUTER_INTERNAL_KEY || process.env.KIMI_INTERNAL_KEY;
+  process.env.MODEL_ROUTER_INTERNAL_KEY ||
+  (TARGET === "codex"
+    ? process.env.CODEX_ROUTER_INTERNAL_KEY || process.env.KIMI_INTERNAL_KEY
+    : undefined);
 const QUIET =
-  process.env.CODEX_ROUTER_QUIET === "1" || process.env.KIMI_PROXY_QUIET === "1";
+  process.env.MODEL_ROUTER_QUIET === "1" ||
+  (TARGET === "codex" &&
+    (process.env.CODEX_ROUTER_QUIET === "1" || process.env.KIMI_PROXY_QUIET === "1"));
 
-if (!INTERNAL_KEY) throw new Error("CODEX_ROUTER_INTERNAL_KEY is required.");
+if (!INTERNAL_KEY) throw new Error("MODEL_ROUTER_INTERNAL_KEY is required.");
 
 function providerBaseUrl(provider) {
   return String(process.env[provider.baseUrlEnv] || provider.baseUrl).replace(/\/+$/, "");
@@ -41,7 +54,7 @@ function deepSeekEffort(value) {
   return ["xhigh", "max", "ultra"].includes(value) ? "max" : "high";
 }
 
-function normalizeBody(buffer, contentType) {
+function normalizeBody(buffer, contentType, route) {
   if (!buffer.length || !String(contentType || "").includes("application/json")) {
     const error = new Error("API-provider requests require a JSON body.");
     error.status = 400;
@@ -60,6 +73,12 @@ function normalizeBody(buffer, contentType) {
     error.status = 400;
     throw error;
   }
+  const expectedRoute = provider.protocol === "anthropic" ? "/messages" : "/chat/completions";
+  if (route !== expectedRoute) {
+    const error = new Error(`Model ${model.gatewayModel} does not support ${route}.`);
+    error.status = 400;
+    throw error;
+  }
 
   payload.model = model.upstreamModel;
   if (model.requestProfile === "kimi-k3") {
@@ -75,15 +94,26 @@ function normalizeBody(buffer, contentType) {
   } else if (model.requestProfile === "deepseek-nonthinking") {
     payload.thinking = { type: "disabled" };
     delete payload.reasoning_effort;
+  } else if (model.requestProfile === "xai-reasoning") {
+    if (!["low", "medium", "high"].includes(payload.reasoning_effort)) {
+      payload.reasoning_effort = "high";
+    }
+    delete payload.presence_penalty;
+    delete payload.frequency_penalty;
+    delete payload.stop;
+  } else if (model.requestProfile === "anthropic-reasoning") {
+    delete payload.reasoning_effort;
+    payload.thinking = { type: "adaptive" };
+    payload.output_config = { effort: "high" };
   }
   return { body: Buffer.from(JSON.stringify(payload), "utf8"), model, provider };
 }
 
-function upstreamHeaders(requestHeaders, body, apiKey) {
+function upstreamHeaders(requestHeaders, body, apiKey, provider) {
   const headers = {};
   for (const [name, value] of Object.entries(requestHeaders)) {
     const lower = name.toLowerCase();
-    if (HOP_BY_HOP_HEADERS.has(lower) || lower === "authorization") continue;
+    if (HOP_BY_HOP_HEADERS.has(lower) || lower === "authorization" || lower === "x-api-key") continue;
     if (lower.startsWith("x-msh-") || lower.startsWith("x-codex-")) continue;
     if (lower.startsWith("x-openai-") || lower === "chatgpt-account-id") continue;
     if (lower === "originator" || lower === "user-agent" || lower === "accept-encoding") {
@@ -91,7 +121,12 @@ function upstreamHeaders(requestHeaders, body, apiKey) {
     }
     if (value !== undefined) headers[name] = Array.isArray(value) ? value.join(", ") : value;
   }
-  headers.Authorization = `Bearer ${apiKey}`;
+  if (provider.protocol === "anthropic") {
+    headers["x-api-key"] = apiKey;
+    headers["anthropic-version"] ||= "2023-06-01";
+  } else {
+    headers.Authorization = `Bearer ${apiKey}`;
+  }
   headers["User-Agent"] = `codex-router/${VERSION}`;
   headers["Accept-Encoding"] = "identity";
   if (body.length) headers["Content-Length"] = String(body.length);
@@ -141,7 +176,7 @@ async function handleRequest(request, response) {
     localModels(response);
     return;
   }
-  if (request.method !== "POST" || route !== "/chat/completions") {
+  if (request.method !== "POST" || !["/chat/completions", "/messages"].includes(route)) {
     writeJson(response, 404, {
       error: { type: "proxy_route_not_found", message: "Unsupported API-provider route." },
     });
@@ -149,14 +184,15 @@ async function handleRequest(request, response) {
   }
 
   const original = await readRequestBody(request);
-  const normalized = normalizeBody(original, request.headers["content-type"]);
+  const normalized = normalizeBody(original, request.headers["content-type"], route);
   const credential = resolveProviderCredential(normalized.provider);
   if (!credential) {
+    const setup = credentialStatus(normalized.provider).setup;
     writeJson(response, 503, {
       error: {
         type: "provider_api_key_missing",
         provider: normalized.provider.id,
-        message: `${normalized.provider.displayName} key is not configured. Run ./bin/provider-key ${normalized.provider.id} set.`,
+        message: `${normalized.provider.displayName} key is not configured. ${setup}.`,
       },
     });
     return;
@@ -170,7 +206,7 @@ async function handleRequest(request, response) {
   const target = `${providerBaseUrl(normalized.provider)}${route}${requestUrl.search}`;
   const upstream = await fetch(target, {
     method: request.method,
-    headers: upstreamHeaders(request.headers, normalized.body, credential.value),
+    headers: upstreamHeaders(request.headers, normalized.body, credential.value, normalized.provider),
     body: normalized.body,
     signal: controller.signal,
   });

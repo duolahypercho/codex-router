@@ -10,7 +10,7 @@ import {
   PROVIDERS,
 } from "../src/model-registry.mjs";
 
-test("provider registry exposes Kimi and every current DeepSeek API model", () => {
+test("provider registry exposes configured API and OAuth model families", () => {
   assert.deepEqual(
     LISTED_MODELS.map((model) => model.slug),
     [
@@ -18,9 +18,23 @@ test("provider registry exposes Kimi and every current DeepSeek API model", () =
       "kimi-api/kimi-k3",
       "deepseek/deepseek-v4-flash",
       "deepseek/deepseek-v4-pro",
+      "grok-oauth/grok-4.5",
+      "grok-api/grok-4.5",
+      "anthropic-api/claude-opus-4.8",
     ],
   );
   assert.equal(PROVIDERS.get("deepseek").baseUrl, "https://api.deepseek.com");
+  assert.equal(PROVIDERS.get("grok-api").baseUrl, "https://api.x.ai/v1");
+  assert.equal(PROVIDERS.get("grok-oauth").proxyBaseEnv, "GROK_OAUTH_FORWARD_BASE_URL");
+  assert.equal(PROVIDERS.get("anthropic-api").protocol, "anthropic");
+  assert.deepEqual(
+    MODEL_BY_SLUG.get("anthropic-api/claude-opus-4.8").reasoningLevels,
+    [{ effort: "high", description: "Adaptive deep reasoning for agentic work" }],
+  );
+  const grok = MODEL_BY_SLUG.get("grok-api/grok-4.5");
+  assert.equal(grok.contextWindow, 500_000);
+  assert.deepEqual(grok.reasoningLevels.map((level) => level.effort), ["low", "medium", "high"]);
+  assert.deepEqual(grok.inputModalities, ["text", "image"]);
   for (const slug of [
     "deepseek/deepseek-v4-flash",
     "deepseek/deepseek-v4-pro",
@@ -50,6 +64,9 @@ test("LiteLLM configuration is generated from every registry route", () => {
     assert.match(rendered, new RegExp(`model_name: "${model.gatewayModel}"`));
   }
   assert.match(rendered, /os\.environ\/CODEX_ROUTER_API_FORWARD_BASE_URL/);
+  assert.match(rendered, /os\.environ\/CODEX_ROUTER_ANTHROPIC_FORWARD_BASE_URL/);
+  assert.match(rendered, /os\.environ\/GROK_OAUTH_FORWARD_BASE_URL/);
   assert.match(rendered, /os\.environ\/CODEX_ROUTER_INTERNAL_KEY/);
-  assert.doesNotMatch(rendered, /DEEPSEEK_API_KEY|KIMI_API_KEY/);
+  assert.match(rendered, /model: "anthropic\/anthropic-api-claude-opus-4-8"/);
+  assert.doesNotMatch(rendered, /ANTHROPIC_API_KEY|DEEPSEEK_API_KEY|KIMI_API_KEY/);
 });

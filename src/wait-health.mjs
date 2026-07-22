@@ -1,29 +1,12 @@
 import { PORTS, loopback } from "./paths.mjs";
+import { waitForRouterHealth } from "./router-health.mjs";
 
 const url = process.argv[2] || loopback(PORTS.router, "/health");
 const timeoutMs = Number(process.argv[3] || 30_000);
-const deadline = Date.now() + timeoutMs;
-let lastError = "service unavailable";
-
-while (Date.now() < deadline) {
-  try {
-    const response = await fetch(url, { signal: AbortSignal.timeout(1_000) });
-    if (response.ok) {
-      const body = await response.text();
-      const payload = JSON.parse(body);
-      if (payload.service === "codex-router") {
-        process.stdout.write(`${body}\n`);
-        process.exit(0);
-      }
-      lastError = "a different service is listening on the router port";
-    } else {
-      lastError = `HTTP ${response.status}`;
-    }
-  } catch (error) {
-    lastError = error instanceof Error ? error.message : String(error);
-  }
-  await new Promise((resolve) => setTimeout(resolve, 250));
+const health = await waitForRouterHealth({ url, timeoutMs });
+if (health.ok) {
+  process.stdout.write(`${JSON.stringify(health.payload)}\n`);
+  process.exit(0);
 }
-
-console.error(`Timed out waiting for ${url}: ${lastError}`);
+console.error(`Timed out waiting for ${url}: ${health.error}`);
 process.exit(1);

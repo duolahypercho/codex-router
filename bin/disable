@@ -3,7 +3,14 @@ set -eu
 
 repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$repo_dir"
-node src/config-manager.mjs disable
+target=${MODEL_ROUTER_TARGET:-codex}
+case "$target" in
+  codex) config_manager=src/config-manager.mjs ;;
+  claude) config_manager=src/claude-config-manager.mjs ;;
+  cursor) config_manager=src/cursor-config-manager.mjs ;;
+  *) echo "MODEL_ROUTER_TARGET must be codex, claude, or cursor." >&2; exit 2 ;;
+esac
+node "$config_manager" disable
 node src/service.mjs uninstall
 echo "External model routes disabled. Your model, provider, and profile settings were preserved."
-echo "Fully quit and reopen Codex."
+echo "Fully quit and reopen $target."

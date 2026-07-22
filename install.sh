@@ -11,19 +11,23 @@ providers=
 migrate_known=false
 smoke_test=false
 previous_revision=
+target=codex
 
 usage() {
   cat <<'EOF'
 Usage: install.sh [options]
 
-Install external model routes for the Codex App.
+Install external model routes for Codex, Claude Desktop, or Cursor.
 
 Options:
   --install-dir PATH  Stable checkout used by the background service
-  --prepare-only      Install dependencies without changing Codex
+  --target APP        Install for "codex" (default), "claude", or "cursor"
+  --prepare-only      Install dependencies without changing either app
   --api-key           Alias for --kimi-api-key
   --kimi-api-key      Prompt securely for a Kimi Platform API key
   --deepseek-api-key  Prompt securely for a DeepSeek API key
+  --grok-api-key      Prompt securely for an xAI API key
+  --anthropic-api-key Prompt securely for an Anthropic API key
   --guided           Walk through provider selection and authentication
   --auto             Use configured credentials without questions
   --providers LIST   Enable comma-separated provider ids (or "configured")
@@ -43,6 +47,11 @@ die() {
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
+    --target)
+      [ "$#" -ge 2 ] || die "--target requires codex or claude"
+      target=$2
+      shift 2
+      ;;
     --install-dir)
       [ "$#" -ge 2 ] || die "--install-dir requires a path"
       install_dir=$2
@@ -62,6 +71,14 @@ while [ "$#" -gt 0 ]; do
       ;;
     --deepseek-api-key)
       configure_provider_keys="$configure_provider_keys deepseek"
+      shift
+      ;;
+    --grok-api-key)
+      configure_provider_keys="$configure_provider_keys grok-api"
+      shift
+      ;;
+    --anthropic-api-key)
+      configure_provider_keys="$configure_provider_keys anthropic-api"
       shift
       ;;
     --guided)
@@ -95,6 +112,20 @@ while [ "$#" -gt 0 ]; do
       ;;
   esac
 done
+
+case "$target" in
+  codex|claude|cursor) ;;
+  *) die "--target must be codex, claude, or cursor" ;;
+esac
+if [ "$target" != codex ] && [ "$migrate_known" = true ]; then
+  die "--migrate-known applies only to the Codex target"
+fi
+host_platform=$(uname -s 2>/dev/null || true)
+if [ "$target" = claude ] && [ "$host_platform" = Linux ] && [ "$prepare_only" != true ]; then
+  die "Claude Desktop third-party mode is supported on macOS and Windows; use --prepare-only for Linux development"
+fi
+MODEL_ROUTER_TARGET=$target
+export MODEL_ROUTER_TARGET
 
 repo_dir=
 case "$0" in
@@ -176,9 +207,17 @@ if ! "$repo_dir/bin/setup" "$@"; then
   die "setup failed"
 fi
 
-cat <<'EOF'
+if [ "$target" = claude ]; then
+  cat <<'EOF'
+
+Claude Router is installed. Fully quit and reopen Claude Desktop. The app will
+use its local third-party inference configuration and show the enabled routes.
+EOF
+else
+  cat <<'EOF'
 
 Codex Router is installed. Fully quit Codex, reopen it, and start a new task.
 The model picker will show only the providers you enabled while preserving
 native GPT models.
 EOF
+fi

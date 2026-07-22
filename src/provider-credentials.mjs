@@ -12,7 +12,7 @@ import {
 import path from "node:path";
 
 import { protectPrivateFile } from "./file-security.mjs";
-import { LEGACY_STATE_DIRS, STATE_DIR } from "./paths.mjs";
+import { LEGACY_STATE_DIRS, STATE_DIR, TARGET } from "./paths.mjs";
 import { PROVIDERS } from "./model-registry.mjs";
 
 export function apiProvider(providerId) {
@@ -37,7 +37,7 @@ export function credentialPaths(provider) {
 }
 
 function keyFromKeychain(provider) {
-  if (process.platform !== "darwin") return undefined;
+  if (process.platform !== "darwin" || TARGET !== "codex") return undefined;
   for (const service of provider.credential.keychainServices || []) {
     try {
       const value = execFileSync(
@@ -81,7 +81,10 @@ export function credentialStatus(providerOrId, options = {}) {
     ? { configured: true, source: credential.source, persistent: credential.persistent }
     : {
         configured: false,
-        setup: `Run ./bin/provider-key ${provider.id} set`,
+        setup:
+          TARGET === "claude"
+            ? `Run ./bin/model-router claude provider-key ${provider.id} set`
+            : `Run ./bin/provider-key ${provider.id} set`,
       };
 }
 

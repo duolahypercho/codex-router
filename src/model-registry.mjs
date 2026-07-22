@@ -4,7 +4,9 @@ import path from "node:path";
 import { SOURCE_ROOT } from "./paths.mjs";
 
 export const REGISTRY_PATH =
-  process.env.CODEX_ROUTER_REGISTRY || path.join(SOURCE_ROOT, "config", "providers.json");
+  process.env.MODEL_ROUTER_REGISTRY ||
+  process.env.CODEX_ROUTER_REGISTRY ||
+  path.join(SOURCE_ROOT, "config", "providers.json");
 
 function fail(message) {
   throw new Error(`Invalid provider registry ${REGISTRY_PATH}: ${message}`);
@@ -48,6 +50,9 @@ function loadRegistry() {
       }
       if (!provider.credential?.file || !Array.isArray(provider.credential.environment)) {
         fail(`provider ${provider.id} requires credential metadata`);
+      }
+      if (provider.protocol !== undefined && !["openai", "anthropic"].includes(provider.protocol)) {
+        fail(`provider ${provider.id} has an unsupported API protocol`);
       }
     }
     providers.set(provider.id, Object.freeze(provider));

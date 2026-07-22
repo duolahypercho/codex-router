@@ -15,6 +15,7 @@ import {
   INSTALL_MANIFEST_PATH,
   SOURCE_ROOT,
   STATE_DIR,
+  TARGET,
 } from "./paths.mjs";
 import { providerSelectionStatus } from "./provider-selection.mjs";
 
@@ -70,6 +71,7 @@ export function recordInstall() {
     packageVersion: packageVersion(),
     installedAt: new Date().toISOString(),
     sourceRoot: SOURCE_ROOT,
+    target: TARGET,
     platform: process.platform,
     providers: providerSelectionStatus().providers,
   };

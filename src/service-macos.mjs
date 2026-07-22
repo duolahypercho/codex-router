@@ -17,6 +17,7 @@ import {
   SERVICE_LABEL,
   SOURCE_ROOT,
   STATE_DIR,
+  TARGET,
 } from "./paths.mjs";
 
 const command = process.argv[2] || "status";
@@ -28,6 +29,7 @@ const userId = typeof process.getuid === "function" ? process.getuid() : 501;
 const domain = `gui/${userId}`;
 const service = `${domain}/${SERVICE_LABEL}`;
 const launchctl = "/bin/launchctl";
+const launchctlRetryWait = new Int32Array(new SharedArrayBuffer(4));
 
 function xml(value) {
   return String(value)
@@ -40,6 +42,13 @@ function xml(value) {
 
 function environmentEntries() {
   const values = {
+    MODEL_ROUTER_TARGET: TARGET,
+    MODEL_ROUTER_STATE_DIR: STATE_DIR,
+    MODEL_ROUTER_QUIET: "1",
+    MODEL_ROUTER_GATEWAY_PORT: String(PORTS.gateway),
+    MODEL_ROUTER_OAUTH_PORT: String(PORTS.oauth),
+    MODEL_ROUTER_PORT: String(PORTS.router),
+    MODEL_ROUTER_API_PORT: String(PORTS.api),
     CODEX_HOME,
     CODEX_ROUTER_STATE_DIR: STATE_DIR,
     KIMI_CODEX_STATE_DIR: STATE_DIR,
@@ -95,6 +104,7 @@ ${environmentEntries()}
 function run(args, options = {}) {
   return execFileSync(launchctl, args, {
     encoding: "utf8",
+    timeout: 15_000,
     stdio: options.quiet
       ? ["ignore", "ignore", "ignore"]
       : ["ignore", "pipe", "pipe"],
@@ -112,11 +122,19 @@ function loaded(targetService = service) {
 
 function bootout(targetService = service) {
   const description = loaded(targetService);
-  if (!description || /state = (?:SIGTERM|exited|stopped)/i.test(description)) return;
+  if (!description) return;
   try {
     run(["bootout", targetService], { quiet: true });
-  } catch {
-    // The process may already have exited.
+  } catch (error) {
+    if (loaded(targetService)) throw error;
+    return;
+  }
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (!loaded(targetService)) return;
+    Atomics.wait(launchctlRetryWait, 0, 0, 100);
+  }
+  if (loaded(targetService)) {
+    throw new Error(`Timed out waiting for ${targetService} to stop.`);
   }
 }
 
@@ -134,7 +152,17 @@ function bootstrap() {
     throw new Error(`LaunchAgent is not installed at ${LAUNCH_AGENT_PATH}.`);
   }
   run(["enable", service], { quiet: true });
-  run(["bootstrap", domain, LAUNCH_AGENT_PATH], { quiet: true });
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    try {
+      run(["bootstrap", domain, LAUNCH_AGENT_PATH], { quiet: true });
+      return;
+    } catch (error) {
+      const description = loaded();
+      if (description && !/state = SIGTERM/.test(description)) return;
+      if (error?.status !== 5 || attempt === 19) throw error;
+      Atomics.wait(launchctlRetryWait, 0, 0, 100);
+    }
+  }
 }
 
 if (!new Set(["install", "uninstall", "start", "stop", "restart", "status", "render"]).has(command)) {
@@ -179,7 +207,10 @@ if (command === "render") {
   if (!loaded()) bootstrap();
   process.stdout.write(`${JSON.stringify({ state: "running" })}\n`);
 } else if (command === "restart") {
-  bootout();
-  bootstrap();
+  if (loaded()) {
+    run(["kickstart", "-k", service], { quiet: true });
+  } else {
+    bootstrap();
+  }
   process.stdout.write(`${JSON.stringify({ state: "running" })}\n`);
 }

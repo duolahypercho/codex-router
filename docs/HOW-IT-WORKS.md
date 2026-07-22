@@ -1,5 +1,9 @@
 # How Codex Router works
 
+The provider core has two isolated app frontends. Codex uses the Responses API
+and a merged native catalog; the experimental Claude Desktop target uses the
+Anthropic Messages API and an explicit third-party model list.
+
 ## Why a router is needed
 
 The Codex App expects the Responses API and a Codex-shaped model catalog.
@@ -13,6 +17,11 @@ Four pieces make the integration work:
 - A dispatcher chooses native or external routing by namespaced model ID.
 - LiteLLM translates Responses requests, streams, and tool calls.
 - Credential forwarders inject only the selected provider's authentication.
+
+Claude uses the same registry, LiteLLM translation, and credential forwarders
+on ports 4110-4113. Its frontend authenticates the per-user caller key, maps the
+public picker slug to the internal gateway model, and forwards Messages streams
+without touching Codex state or native traffic.
 
 ## Request flow
 
@@ -65,11 +74,16 @@ service (Codex itself still needs a restart to reload the picker catalog).
 | Kimi K3 API | `kimi-api/kimi-k3` | `kimi-api-k3` | `kimi-k3` |
 | DeepSeek V4 Flash | `deepseek/deepseek-v4-flash` | `deepseek-v4-flash` | `deepseek-v4-flash` |
 | DeepSeek V4 Pro | `deepseek/deepseek-v4-pro` | `deepseek-v4-pro` | `deepseek-v4-pro` |
+| Grok 4.5 OAuth | `grok-oauth/grok-4.5` | `grok-oauth-grok-4-5` | `grok-4.5` |
+| Grok 4.5 | `grok-api/grok-4.5` | `grok-api-grok-4-5` | `grok-4.5` |
+| Claude Opus 4.8 | `anthropic-api/claude-opus-4.8` | `anthropic-api-claude-opus-4-8` | `claude-opus-4-8` |
 
 The native catalog objects are preserved rather than reconstructed, which keeps
 current instructions and capability metadata from the installed Codex build.
 Registry models clone a current native schema and replace picker-specific
-metadata.
+metadata. They also rewrite the cloned GPT identity line in
+`base_instructions` / `model_messages.instructions_template` so external models
+do not claim to be based on GPT-5.
 
 The integration deliberately keeps the built-in `openai` provider and points
 it at a loopback `openai_base_url`. This makes named models appear in the normal
@@ -126,3 +140,8 @@ On replay, it converts that payload back to a plain continuation message.
 
 Commands, permissions, MCP tools, skills, and task state remain in Codex. Only
 model inference and external-model compaction are routed.
+
+For Claude, the desktop host likewise retains conversation storage, the agent
+loop, workspace, tools, MCP servers, plugins, skills, hooks, and permissions.
+Messages, tool schemas/results, and image content cross the model gateway;
+actual tool execution remains local to Claude Desktop.

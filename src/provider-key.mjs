@@ -1,6 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { closeSync, existsSync, openSync, readSync, writeSync } from "node:fs";
-import path from "node:path";
+import { closeSync, openSync, readSync, writeSync } from "node:fs";
 
 import {
   apiProvider,
@@ -9,8 +8,11 @@ import {
   removeProviderCredential,
   writeProviderCredential,
 } from "./provider-credentials.mjs";
-import { NATIVE_CATALOG_PATH, SOURCE_ROOT } from "./paths.mjs";
 import { disableProvider, enableProvider } from "./provider-selection.mjs";
+import {
+  refreshTargetPickerIfInstalled,
+  targetPickerName,
+} from "./target-integration.mjs";
 
 const providerId = process.argv[2];
 const command = process.argv[3] || "status";
@@ -21,14 +23,6 @@ if (!providerId || !new Set(["status", "set", "remove"]).has(command)) {
 }
 
 const provider = apiProvider(providerId);
-
-function refreshCatalogIfPrepared() {
-  if (!existsSync(NATIVE_CATALOG_PATH)) return false;
-  execFileSync(process.execPath, [path.join(SOURCE_ROOT, "src", "catalog.mjs")], {
-    stdio: "inherit",
-  });
-  return true;
-}
 
 function hiddenPrompt(label) {
   if (process.platform === "win32") {
@@ -136,20 +130,20 @@ if (command === "status") {
   const value = hiddenPrompt(provider.credential.prompt || `${provider.displayName} API key`);
   const target = writeProviderCredential(provider, value);
   enableProvider(provider.id);
-  const refreshed = refreshCatalogIfPrepared();
+  const refreshed = refreshTargetPickerIfInstalled();
   process.stdout.write(
     `${provider.displayName} key saved to protected local storage at ${target}. The provider is enabled.${
-      refreshed ? " Restart Codex to refresh the model picker." : ""
+      refreshed ? ` Fully quit and reopen ${targetPickerName()} to refresh the model picker.` : ""
     }\n`,
   );
 } else {
   const removedCount = removeProviderCredential(provider);
   if (removedCount) disableProvider(provider.id);
-  const refreshed = removedCount ? refreshCatalogIfPrepared() : false;
+  const refreshed = removedCount ? refreshTargetPickerIfInstalled() : false;
   process.stdout.write(
     removedCount
       ? `Removed ${removedCount} managed ${provider.displayName} key file${removedCount === 1 ? "" : "s"} and disabled the provider.${
-          refreshed ? " Restart Codex to refresh the model picker." : ""
+          refreshed ? ` Fully quit and reopen ${targetPickerName()} to refresh the model picker.` : ""
         }\n`
       : `No managed ${provider.displayName} key file exists.\n`,
   );

@@ -1,12 +1,23 @@
 # Installation, migration, and upgrades
 
+This page covers the stable Codex target. The same checkout also contains an
+isolated experimental Claude Desktop target; see [Claude Desktop target](CLAUDE.md)
+for its one-command install, compatibility boundary, and rollback behavior.
+
+Use the target-qualified command when both integrations may be present:
+
+```sh
+./bin/model-router codex doctor
+./bin/model-router claude doctor
+```
+
 ## Supported hosts
 
-| Host | Codex surface | Background service |
+| Host | Stable Codex surface | Experimental Claude surface |
 | --- | --- | --- |
-| macOS | Codex App or CLI | Per-user launchd agent |
-| Windows | Codex App or CLI | Per-user Task Scheduler task |
-| Linux | Codex CLI | systemd user service |
+| macOS | Codex App or CLI | Claude Desktop |
+| Windows | Codex App or CLI | Claude Desktop |
+| Linux | Codex CLI | Router development only |
 
 Required software:
 
@@ -78,18 +89,34 @@ API-key providers use hidden prompts:
 ```sh
 ./bin/provider-key kimi-api set
 ./bin/provider-key deepseek set
+./bin/provider-key grok-api set
+./bin/provider-key anthropic-api set
 ```
+
+Grok OAuth uses the official Grok CLI session:
+
+```sh
+npm install -g @xai-official/grok
+grok login --oauth
+./bin/model-router codex providers enable grok-oauth
+```
+
+The OAuth token remains in `~/.grok/auth.json` and is sent only to xAI's Grok
+CLI inference proxy. The separate `grok-api` provider continues to use a
+separately billed xAI API key.
 
 Windows:
 
 ```powershell
 ./codex-router.ps1 provider-key kimi-api set
 ./codex-router.ps1 provider-key deepseek set
+./codex-router.ps1 provider-key grok-api set
+./codex-router.ps1 provider-key anthropic-api set
 ```
 
-Kimi OAuth, Kimi Platform, and DeepSeek are separate account and billing
-systems. Never put a credential in chat, a command argument, shell history, the
-provider registry, or a tracked file.
+Kimi OAuth, Kimi Platform, DeepSeek, xAI, and Anthropic are separate account and billing
+systems. Never put a credential in chat, a command argument, shell history,
+the provider registry, or a tracked file.
 
 Noninteractive setup can reuse already configured credentials:
 
@@ -103,6 +130,7 @@ Or choose an exact set:
 ./install.sh --auto --providers kimi-oauth
 ./install.sh --kimi-api-key --auto
 ./install.sh --deepseek-api-key --auto
+./install.sh --anthropic-api-key --auto
 ./install.sh --auto --providers kimi-oauth,kimi-api,deepseek
 ```
 

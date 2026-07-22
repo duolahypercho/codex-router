@@ -1,30 +1,27 @@
-import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
-import path from "node:path";
 import { fileURLToPath } from "node:url";
+import path from "node:path";
 
 import { PROVIDERS } from "./model-registry.mjs";
+import { grokOAuthStatus } from "./grok-oauth-status.mjs";
 import { kimiOAuthStatus } from "./oauth-status.mjs";
-import { NATIVE_CATALOG_PATH, SOURCE_ROOT } from "./paths.mjs";
 import { credentialStatus } from "./provider-credentials.mjs";
 import {
   disableProvider,
   enableProvider,
   readProviderSelection,
 } from "./provider-selection.mjs";
+import {
+  refreshTargetPickerIfInstalled,
+  targetCli,
+  targetPickerName,
+} from "./target-integration.mjs";
 
 function configured(provider) {
   return provider.kind === "oauth"
-    ? provider.id === "kimi-oauth" && kimiOAuthStatus().configured
+    ? provider.id === "kimi-oauth"
+      ? kimiOAuthStatus().configured
+      : provider.id === "grok-oauth" && grokOAuthStatus().configured
     : credentialStatus(provider, { persistent: true }).configured;
-}
-
-function refreshCatalog() {
-  if (!existsSync(NATIVE_CATALOG_PATH)) return false;
-  execFileSync(process.execPath, [path.join(SOURCE_ROOT, "src", "catalog.mjs")], {
-    stdio: "inherit",
-  });
-  return true;
 }
 
 function list() {
@@ -59,16 +56,18 @@ function main() {
   }
   if (command === "enable" && !configured(provider)) {
     const setup = provider.kind === "oauth"
-      ? "run `kimi login`"
-      : `run \`./bin/provider-key ${provider.id} set\``;
+      ? provider.id === "grok-oauth"
+        ? "run `grok login --oauth`"
+        : "run `kimi login`"
+      : `run \`${targetCli(`provider-key ${provider.id} set`)}\``;
     throw new Error(`${provider.displayName} is not configured; ${setup} first.`);
   }
   const providers = command === "enable"
     ? enableProvider(providerId)
     : disableProvider(providerId);
-  const refreshed = refreshCatalog();
+  const refreshed = refreshTargetPickerIfInstalled();
   process.stdout.write(
-    `${provider.displayName} is now ${command === "enable" ? "shown" : "hidden"} in the Codex model picker. Enabled providers: ${providers.join(", ") || "none"}.${refreshed ? " Fully quit and reopen Codex." : ""}\n`,
+    `${provider.displayName} is now ${command === "enable" ? "shown" : "hidden"} in the ${targetPickerName()} model picker. Enabled providers: ${providers.join(", ") || "none"}.${refreshed ? ` Fully quit and reopen ${targetPickerName()}.` : ""}\n`,
   );
 }
 

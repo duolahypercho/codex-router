@@ -2,4 +2,9 @@
 set -eu
 
 repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-exec node "$repo_dir/src/setup.mjs" "$@"
+case "${MODEL_ROUTER_TARGET:-codex}" in
+  codex) exec node "$repo_dir/src/setup.mjs" "$@" ;;
+  claude) exec node "$repo_dir/src/claude-setup.mjs" "$@" ;;
+  cursor) exec node "$repo_dir/src/cursor-setup.mjs" "$@" ;;
+  *) echo "MODEL_ROUTER_TARGET must be codex, claude, or cursor." >&2; exit 2 ;;
+esac

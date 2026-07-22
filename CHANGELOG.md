@@ -2,6 +2,46 @@
 
 ## Unreleased
 
+- Hide tray usage cards until the corresponding OAuth session or API key is
+  configured; enabled providers and historical local traffic no longer create
+  disconnected-account cards.
+- Cleaned up tray quota cards so each window has one standardized limit label
+  and one reset line, with five-hour windows shown separately from weekly
+  limits in both current and all-provider usage.
+- Fixed All usage cards so local traffic with request counts no longer shows
+  "No use", and local-only providers show "Local router traffic" instead of
+  "No reset reported".
+- Surface concurrent Codex model requests on the Dynamic Island: active count,
+  multi-provider compact labels, and live request rows with elapsed time.
+- Added a credential-isolated Anthropic API provider with Claude Opus 4.8 in
+  the Codex picker, native Anthropic Messages forwarding, secure key setup,
+  tray controls, and a real LiteLLM-to-mock-Anthropic Codex integration test.
+- Added the macOS menu-bar control panel, all-provider usage grid, and optional
+  Dynamic-Island-style activity overlay with secure provider onboarding.
+- Made tray usage selection account-aware, added quota reset times to provider
+  cards, and kept Kimi and Grok OAuth sessions fresh during usage polling and
+  routed requests.
+- Made macOS service reinstalls wait for launchd to finish unloading and use an
+  in-place restart, preventing transient bootstrap status-5 failures.
+- Serialized background-service changes and added bounded readiness checks so
+  repairs cannot overlap or report failure while a healthy router is starting.
+- Added a 30-second `Starting` grace state to the macOS tray so routine router
+  recovery does not appear as an immediate failure.
+- Added the isolated Cursor target and corrected its PowerShell installer path.
+- Fixed partial startup failures so already-running forwarders are terminated,
+  and isolated all six ports in the real LiteLLM integration test.
+- Grok OAuth account usage now reads weekly/monthly credit limits from the official Grok CLI billing endpoint.
+- Rewrote routed-model catalog identity text so external models no longer
+  claim to be based on GPT-5 in Codex `base_instructions`.
+- Added an isolated, experimental Claude Desktop target using the official
+  third-party gateway contract: authenticated Anthropic Messages routing,
+  streaming, explicit model lists, and preserved tool/image message payloads.
+- Added reversible per-user Claude configuration management, separate ports,
+  state, caller keys, provider selection, and background-service identities so
+  Codex and Claude can be installed from one checkout without configuration
+  overlap.
+- Added the cross-target `model-router` command, Claude guided setup, doctor,
+  smoke test, agent installation guidance, and dedicated compatibility docs.
 - Hardened local caller authentication with a separate per-install capability,
   exact internal-key checks, authenticated credential-detail health endpoints,
   browser-request rejection, and fail-closed routing before request bodies or
