@@ -9,7 +9,9 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import {
+  buildHostedSearchTools,
   mergeHostedSearchTools,
+  resolveHostedSearchConfig,
   toResponsesRequest,
 } from "../src/grok-oauth-forwarder.mjs";
 
@@ -320,4 +322,122 @@ test("toResponsesRequest always includes hosted search tools when enabled", () =
   assert.equal(request.tools.some((tool) => tool.type === "x_search"), true);
   assert.equal(request.tools.some((tool) => tool.type === "web_search"), true);
   assert.equal(request.tools.some((tool) => tool.name === "bash"), true);
+});
+
+test("resolveHostedSearchConfig maps x/web tool parameters", () => {
+  const config = resolveHostedSearchConfig(
+    {
+      x_search: {
+        allowed_x_handles: ["elonmusk", "@xai"],
+        from_date: "2026-07-01",
+        enable_image_understanding: true,
+      },
+      web_search: {
+        allowed_domains: ["x.ai", "docs.x.ai", "extra.example"],
+        enable_image_search: true,
+      },
+    },
+    { GROK_OAUTH_HOSTED_SEARCH: "1" },
+  );
+  assert.equal(config.enabled, true);
+  assert.deepEqual(config.xSearch, {
+    allowed_x_handles: ["elonmusk", "xai"],
+    from_date: "2026-07-01",
+    enable_image_understanding: true,
+  });
+  assert.deepEqual(config.webSearch, {
+    allowed_domains: ["x.ai", "docs.x.ai", "extra.example"],
+    enable_image_search: true,
+  });
+  assert.deepEqual(buildHostedSearchTools(config), [
+    {
+      type: "web_search",
+      allowed_domains: ["x.ai", "docs.x.ai", "extra.example"],
+      enable_image_search: true,
+    },
+    {
+      type: "x_search",
+      allowed_x_handles: ["elonmusk", "xai"],
+      from_date: "2026-07-01",
+      enable_image_understanding: true,
+    },
+  ]);
+});
+
+test("resolveHostedSearchConfig accepts legacy search_parameters sources", () => {
+  const config = resolveHostedSearchConfig(
+    {
+      search_parameters: {
+        mode: "on",
+        from_date: "2026-06-01",
+        to_date: "2026-07-01",
+        sources: [
+          {
+            type: "x",
+            included_x_handles: ["openai", "xai"],
+            excluded_x_handles: ["spam"],
+            post_favorite_count: 10,
+          },
+        ],
+      },
+    },
+    {},
+  );
+  assert.equal(config.includeX, true);
+  assert.equal(config.includeWeb, false);
+  // allowed wins when both present.
+  assert.deepEqual(config.xSearch, {
+    allowed_x_handles: ["openai", "xai"],
+    from_date: "2026-06-01",
+    to_date: "2026-07-01",
+  });
+  assert.deepEqual(config.ignoredLegacyFields, ["post_favorite_count"]);
+  assert.deepEqual(buildHostedSearchTools(config), [
+    {
+      type: "x_search",
+      allowed_x_handles: ["openai", "xai"],
+      from_date: "2026-06-01",
+      to_date: "2026-07-01",
+    },
+  ]);
+});
+
+test("toResponsesRequest applies env-configured search parameters", () => {
+  const request = toResponsesRequest(
+    {
+      model: "grok-4.5",
+      messages: [{ role: "user", content: "latest from X?" }],
+    },
+    {
+      env: {
+        GROK_OAUTH_HOSTED_SEARCH: "1",
+        GROK_OAUTH_X_SEARCH_ALLOWED_HANDLES: "elonmusk,xai",
+        GROK_OAUTH_X_SEARCH_FROM_DATE: "2026-07-01",
+        GROK_OAUTH_WEB_SEARCH_ALLOWED_DOMAINS: "x.ai",
+      },
+    },
+  );
+  const x = request.tools.find((tool) => tool.type === "x_search");
+  const web = request.tools.find((tool) => tool.type === "web_search");
+  assert.deepEqual(x, {
+    type: "x_search",
+    allowed_x_handles: ["elonmusk", "xai"],
+    from_date: "2026-07-01",
+  });
+  assert.deepEqual(web, {
+    type: "web_search",
+    allowed_domains: ["x.ai"],
+  });
+});
+
+test("search mode off disables hosted tools", () => {
+  const request = toResponsesRequest(
+    {
+      model: "grok-4.5",
+      messages: [{ role: "user", content: "no search" }],
+      search_parameters: { mode: "off" },
+    },
+    { env: { GROK_OAUTH_HOSTED_SEARCH: "1" } },
+  );
+  assert.equal(request.tools, undefined);
 });

@@ -30,13 +30,17 @@ const QUIET = process.env.MODEL_ROUTER_QUIET === "1";
 // Hosted search tools run on xAI's Responses backend (same surface Grok Build
 // uses). They are free only to the extent the Grok OAuth account includes them.
 // Set GROK_OAUTH_HOSTED_SEARCH=0 to disable injection.
+//
+// Tool parameters follow current xAI docs:
+//   x_search: allowed_x_handles, excluded_x_handles, from_date, to_date,
+//             enable_image_understanding, enable_video_understanding
+//   web_search: allowed_domains, excluded_domains,
+//               enable_image_understanding, enable_image_search
+// Configure via GROK_OAUTH_SEARCH_PARAMETERS JSON, request-body fields, or
+// the individual GROK_OAUTH_* env vars documented in README.
 const HOSTED_SEARCH_ENABLED = !["0", "false", "off", "no"].includes(
   String(process.env.GROK_OAUTH_HOSTED_SEARCH || "1").toLowerCase(),
 );
-const HOSTED_SEARCH_TOOLS = Object.freeze([
-  { type: "web_search" },
-  { type: "x_search" },
-]);
 const HOSTED_SEARCH_FUNCTION_NAMES = new Set(["web_search", "x_search"]);
 
 function grokClientVersion() {
@@ -93,18 +97,241 @@ function mapEffort(effort) {
   return ["medium", "high"].includes(effort) ? effort : undefined;
 }
 
+function truthyEnv(value, fallback = false) {
+  if (value == null || value === "") return fallback;
+  return !["0", "false", "off", "no"].includes(String(value).toLowerCase());
+}
+
+function splitList(value, { max } = {}) {
+  if (value == null || value === "") return undefined;
+  const items = (Array.isArray(value) ? value : String(value).split(/[\s,]+/))
+    .map((item) => String(item).trim().replace(/^@/, ""))
+    .filter(Boolean);
+  if (!items.length) return undefined;
+  return max ? items.slice(0, max) : items;
+}
+
+function isoDate(value) {
+  if (value == null || value === "") return undefined;
+  const text = String(value).trim();
+  if (!text) return undefined;
+  // Accept YYYY-MM-DD or full ISO8601; pass through if parseable.
+  if (Number.isNaN(Date.parse(text))) return undefined;
+  return text;
+}
+
+function parseJsonEnv(name) {
+  const raw = process.env[name];
+  if (!raw) return undefined;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return undefined;
+  }
+}
+
+function compactObject(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const out = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (item == null || item === "") continue;
+    if (Array.isArray(item) && item.length === 0) continue;
+    out[key] = item;
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
+// Map current xAI tool params plus the older chat-completions SearchParameters
+// shape (sources/mode/from_date/...) onto hosted tool objects.
+export function resolveHostedSearchConfig(input = {}, env = process.env) {
+  const body = input && typeof input === "object" ? input : {};
+  const envJson = parseJsonEnv("GROK_OAUTH_SEARCH_PARAMETERS") || {};
+  const legacy =
+    body.search_parameters && typeof body.search_parameters === "object"
+      ? body.search_parameters
+      : envJson.search_parameters && typeof envJson.search_parameters === "object"
+        ? envJson.search_parameters
+        : {};
+
+  const mode = String(legacy.mode || body.search_mode || env.GROK_OAUTH_SEARCH_MODE || "on").toLowerCase();
+  let enabled = truthyEnv(env.GROK_OAUTH_HOSTED_SEARCH, true);
+  if (mode === "off") enabled = false;
+  if (body.hosted_search === false || body.hostedSearch === false) enabled = false;
+
+  // Which tools to include. Default both; legacy sources can narrow this.
+  let includeWeb = true;
+  let includeX = true;
+  const sources = Array.isArray(legacy.sources)
+    ? legacy.sources
+    : Array.isArray(body.sources)
+      ? body.sources
+      : Array.isArray(envJson.sources)
+        ? envJson.sources
+        : undefined;
+  if (sources) {
+    const types = new Set(
+      sources
+        .map((source) => (typeof source === "string" ? source : source?.type))
+        .filter(Boolean)
+        .map((type) => String(type).toLowerCase()),
+    );
+    if (types.size) {
+      includeWeb = types.has("web") || types.has("news") || types.has("rss");
+      includeX = types.has("x");
+      // Empty/unknown source list still keeps defaults only when no typed sources.
+      if (!includeWeb && !includeX) {
+        includeWeb = true;
+        includeX = true;
+      }
+    }
+  }
+
+  const xSource = Array.isArray(sources)
+    ? sources.find((source) => (typeof source === "object" && source?.type === "x"))
+    : undefined;
+  const webSource = Array.isArray(sources)
+    ? sources.find((source) => (typeof source === "object" && (source?.type === "web" || source?.type === "news")))
+    : undefined;
+
+  const xBody = body.x_search && typeof body.x_search === "object" ? body.x_search : {};
+  const webBody = body.web_search && typeof body.web_search === "object" ? body.web_search : {};
+  const xEnv = envJson.x_search && typeof envJson.x_search === "object" ? envJson.x_search : {};
+  const webEnv = envJson.web_search && typeof envJson.web_search === "object" ? envJson.web_search : {};
+
+  const fromDate =
+    isoDate(xBody.from_date) ||
+    isoDate(body.from_date) ||
+    isoDate(legacy.from_date) ||
+    isoDate(xEnv.from_date) ||
+    isoDate(env.GROK_OAUTH_X_SEARCH_FROM_DATE) ||
+    isoDate(env.GROK_OAUTH_SEARCH_FROM_DATE);
+  const toDate =
+    isoDate(xBody.to_date) ||
+    isoDate(body.to_date) ||
+    isoDate(legacy.to_date) ||
+    isoDate(xEnv.to_date) ||
+    isoDate(env.GROK_OAUTH_X_SEARCH_TO_DATE) ||
+    isoDate(env.GROK_OAUTH_SEARCH_TO_DATE);
+
+  const xSearch = compactObject({
+    allowed_x_handles: splitList(
+      xBody.allowed_x_handles ??
+        xBody.included_x_handles ??
+        xSource?.included_x_handles ??
+        xSource?.x_handles ??
+        xEnv.allowed_x_handles ??
+        xEnv.included_x_handles ??
+        env.GROK_OAUTH_X_SEARCH_ALLOWED_HANDLES,
+      { max: 20 },
+    ),
+    excluded_x_handles: splitList(
+      xBody.excluded_x_handles ??
+        xSource?.excluded_x_handles ??
+        xEnv.excluded_x_handles ??
+        env.GROK_OAUTH_X_SEARCH_EXCLUDED_HANDLES,
+      { max: 20 },
+    ),
+    from_date: fromDate,
+    to_date: toDate,
+    enable_image_understanding:
+      xBody.enable_image_understanding ??
+      xEnv.enable_image_understanding ??
+      (env.GROK_OAUTH_X_SEARCH_ENABLE_IMAGE_UNDERSTANDING == null
+        ? undefined
+        : truthyEnv(env.GROK_OAUTH_X_SEARCH_ENABLE_IMAGE_UNDERSTANDING)),
+    enable_video_understanding:
+      xBody.enable_video_understanding ??
+      xEnv.enable_video_understanding ??
+      (env.GROK_OAUTH_X_SEARCH_ENABLE_VIDEO_UNDERSTANDING == null
+        ? undefined
+        : truthyEnv(env.GROK_OAUTH_X_SEARCH_ENABLE_VIDEO_UNDERSTANDING)),
+  });
+
+  // Mutually exclusive handle filters per xAI docs.
+  if (xSearch?.allowed_x_handles && xSearch?.excluded_x_handles) {
+    delete xSearch.excluded_x_handles;
+  }
+
+  const webSearch = compactObject({
+    allowed_domains: splitList(
+      webBody.allowed_domains ??
+        webSource?.allowed_websites ??
+        webEnv.allowed_domains ??
+        env.GROK_OAUTH_WEB_SEARCH_ALLOWED_DOMAINS,
+      { max: 5 },
+    ),
+    excluded_domains: splitList(
+      webBody.excluded_domains ??
+        webSource?.excluded_websites ??
+        webEnv.excluded_domains ??
+        env.GROK_OAUTH_WEB_SEARCH_EXCLUDED_DOMAINS,
+      { max: 5 },
+    ),
+    enable_image_understanding:
+      webBody.enable_image_understanding ??
+      webEnv.enable_image_understanding ??
+      (env.GROK_OAUTH_WEB_SEARCH_ENABLE_IMAGE_UNDERSTANDING == null
+        ? undefined
+        : truthyEnv(env.GROK_OAUTH_WEB_SEARCH_ENABLE_IMAGE_UNDERSTANDING)),
+    enable_image_search:
+      webBody.enable_image_search ??
+      webEnv.enable_image_search ??
+      (env.GROK_OAUTH_WEB_SEARCH_ENABLE_IMAGE_SEARCH == null
+        ? undefined
+        : truthyEnv(env.GROK_OAUTH_WEB_SEARCH_ENABLE_IMAGE_SEARCH)),
+  });
+
+  if (webSearch?.allowed_domains && webSearch?.excluded_domains) {
+    delete webSearch.excluded_domains;
+  }
+
+  return {
+    enabled,
+    includeWeb,
+    includeX,
+    xSearch,
+    webSearch,
+    // Older chat field names that do not map to Responses tool params today.
+    ignoredLegacyFields: [
+      legacy.max_search_results != null ? "max_search_results" : null,
+      legacy.return_citations != null ? "return_citations" : null,
+      xSource?.post_favorite_count != null ? "post_favorite_count" : null,
+      xSource?.post_view_count != null ? "post_view_count" : null,
+    ].filter(Boolean),
+  };
+}
+
+export function buildHostedSearchTools(config = resolveHostedSearchConfig()) {
+  if (!config.enabled) return [];
+  const tools = [];
+  if (config.includeWeb) {
+    tools.push(config.webSearch ? { type: "web_search", ...config.webSearch } : { type: "web_search" });
+  }
+  if (config.includeX) {
+    tools.push(config.xSearch ? { type: "x_search", ...config.xSearch } : { type: "x_search" });
+  }
+  return tools;
+}
+
 // Merge client function tools with xAI hosted search tools.
 // Hosted tools are type-tagged (web_search / x_search), not function tools.
 // Drop any client function with the same name so the backend owns search.
-export function mergeHostedSearchTools(clientTools = [], { enabled = HOSTED_SEARCH_ENABLED } = {}) {
+export function mergeHostedSearchTools(
+  clientTools = [],
+  { enabled = HOSTED_SEARCH_ENABLED, hostedTools, searchConfig } = {},
+) {
   const functions = (Array.isArray(clientTools) ? clientTools : []).filter(
     (tool) => tool?.type === "function" && !HOSTED_SEARCH_FUNCTION_NAMES.has(tool.name),
   );
   if (!enabled) return functions;
-  const hosted = HOSTED_SEARCH_TOOLS.filter(
+  const hosted =
+    hostedTools ||
+    buildHostedSearchTools(searchConfig || resolveHostedSearchConfig());
+  // Avoid duplicating a hosted type if a client already sent one.
+  const filteredHosted = hosted.filter(
     (hostedTool) => !functions.some((tool) => tool.type === hostedTool.type),
   );
-  return [...functions, ...hosted];
+  return [...functions, ...filteredHosted];
 }
 
 // Chat Completions request -> Codex Responses request.
@@ -159,8 +386,26 @@ export function toResponsesRequest(chat, options = {}) {
           strict: false,
         }))
     : [];
+  const searchConfig = resolveHostedSearchConfig(
+    {
+      search_parameters: chat.search_parameters,
+      search_mode: chat.search_mode,
+      sources: chat.sources,
+      from_date: chat.from_date,
+      to_date: chat.to_date,
+      x_search: chat.x_search,
+      web_search: chat.web_search,
+      hosted_search: chat.hosted_search ?? chat.hostedSearch,
+      ...(options.search || {}),
+    },
+    options.env || process.env,
+  );
+  if (options.hostedSearchEnabled === false) searchConfig.enabled = false;
+  if (options.hostedSearchEnabled === true) searchConfig.enabled = true;
+
   const tools = mergeHostedSearchTools(clientTools, {
-    enabled: options.hostedSearchEnabled ?? HOSTED_SEARCH_ENABLED,
+    enabled: searchConfig.enabled,
+    searchConfig,
   });
   if (tools.length) {
     request.tools = tools;
