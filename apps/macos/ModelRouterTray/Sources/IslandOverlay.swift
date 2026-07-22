@@ -479,11 +479,13 @@ private struct IslandHeaderMetric: View {
 }
 
 private struct IslandUsageLineChart: View {
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   let points: [DailyUsagePoint]
   let tint: Color
   var showsAxis = true
 
   @State private var hoveredIndex: Int?
+  @State private var revealProgress: CGFloat = 0
 
   var body: some View {
     GeometryReader { geometry in
@@ -495,6 +497,7 @@ private struct IslandUsageLineChart: View {
         height: plotHeight,
         maximum: maximum
       )
+      let visibleProgress = reduceMotion ? 1 : revealProgress
 
       ZStack(alignment: .topLeading) {
         Path { path in
@@ -513,8 +516,10 @@ private struct IslandUsageLineChart: View {
                 endPoint: .bottom
               )
             )
+            .opacity(Double(visibleProgress))
 
           linePath(coordinates)
+            .trim(from: 0, to: visibleProgress)
             .stroke(
               tint.opacity(0.78),
               style: StrokeStyle(lineWidth: 1.25, lineCap: .round, lineJoin: .round)
@@ -579,9 +584,21 @@ private struct IslandUsageLineChart: View {
         }
       }
     }
+    .onAppear { animateReveal() }
+    .onChange(of: points.map(\.tokens)) { _ in animateReveal() }
+    .onChange(of: reduceMotion) { _ in animateReveal() }
     .accessibilityElement(children: .ignore)
     .accessibilityLabel("Daily token usage line chart")
     .accessibilityValue("\(formattedTotalTokens) tokens over \(points.count) days")
+  }
+
+  private func animateReveal() {
+    withAnimation(nil) { revealProgress = reduceMotion ? 1 : 0 }
+    guard !reduceMotion else { return }
+    Task { @MainActor in
+      await Task<Never, Never>.yield()
+      withAnimation(.easeOut(duration: 0.72)) { revealProgress = 1 }
+    }
   }
 
   private var formattedTotalTokens: String {
@@ -741,18 +758,28 @@ private struct LiveOrb: View {
   let state: RouterActivityState
   var count: Int = 0
   @State private var pulsing = false
+  @State private var rippling = false
 
   var body: some View {
     ZStack(alignment: .topTrailing) {
       ZStack {
         Circle()
-          .fill(state.tint.opacity(state == .idle ? 0.11 : 0.18))
+          .stroke(state.tint.opacity(0.38), lineWidth: 0.7)
+          .frame(width: 11, height: 11)
+          .scaleEffect(rippling ? (state == .idle ? 2.0 : 2.3) : 0.72)
+          .opacity(rippling ? 0 : (state == .idle ? 0.24 : 0.38))
+        Circle()
+          .fill(state.tint.opacity(orbHaloOpacity))
           .frame(width: 18, height: 18)
-          .scaleEffect((state == .generating || state == .starting) && pulsing ? 1.22 : 0.96)
+          .scaleEffect(orbHaloScale)
         Circle()
           .fill(state.tint)
           .frame(width: 8, height: 8)
           .overlay(Circle().stroke(Color.white.opacity(0.42), lineWidth: 0.6))
+          .shadow(
+            color: state.tint.opacity(pulsing ? 0.42 : 0.16),
+            radius: pulsing ? 3.5 : 1.2
+          )
       }
       if count > 1 {
         Text("\(min(count, 9))")
@@ -770,11 +797,39 @@ private struct LiveOrb: View {
     .onChange(of: reduceMotion) { _ in animate() }
   }
 
+  private var orbHaloOpacity: Double {
+    if state == .idle { return pulsing ? 0.16 : 0.08 }
+    return pulsing ? 0.24 : 0.13
+  }
+
+  private var orbHaloScale: CGFloat {
+    if state == .idle { return pulsing ? 1.14 : 0.94 }
+    if state == .error { return 1 }
+    return pulsing ? 1.28 : 0.92
+  }
+
   private func animate() {
-    withAnimation(nil) { pulsing = false }
-    guard state == .generating || state == .starting, !reduceMotion else { return }
-    withAnimation(.easeInOut(duration: 1.5).repeatForever(autoreverses: true)) {
+    withAnimation(nil) {
+      pulsing = false
+      rippling = false
+    }
+    guard !reduceMotion else { return }
+
+    if state == .error {
+      withAnimation(.easeOut(duration: 0.8)) {
+        pulsing = true
+        rippling = true
+      }
+      return
+    }
+
+    let pulseDuration = state == .idle ? 2.6 : 1.35
+    withAnimation(.easeInOut(duration: pulseDuration).repeatForever(autoreverses: true)) {
       pulsing = true
+    }
+    let rippleDuration = state == .idle ? 3.2 : 1.9
+    withAnimation(.easeOut(duration: rippleDuration).repeatForever(autoreverses: false)) {
+      rippling = true
     }
   }
 }
@@ -862,11 +917,11 @@ private struct StatusGlow: View {
   private var localHaloOpacity: Double {
     switch state {
     case .idle:
-      return 0.065
+      return breathing ? 0.11 : 0.045
     case .starting:
-      return breathing ? 0.16 : 0.10
+      return breathing ? 0.20 : 0.09
     case .generating:
-      return breathing ? 0.19 : 0.12
+      return breathing ? 0.24 : 0.11
     case .error:
       return errorPulse ? 0.20 : 0.12
     }
@@ -907,22 +962,24 @@ private struct StatusGlow: View {
 
       switch nextState {
       case .idle:
-        return
+        withAnimation(.easeInOut(duration: 3.2).repeatForever(autoreverses: true)) {
+          breathing = true
+        }
       case .starting:
-        withAnimation(.easeInOut(duration: 2.2).repeatForever(autoreverses: true)) {
+        withAnimation(.easeInOut(duration: 1.8).repeatForever(autoreverses: true)) {
           breathing = true
         }
       case .generating:
         withAnimation(nil) {
           sweepAngle = -120
-          sweepOpacity = 0.42
+          sweepOpacity = 0.52
         }
         await Task<Never, Never>.yield()
         guard !Task.isCancelled else { return }
-        withAnimation(.linear(duration: 3.8).repeatForever(autoreverses: false)) {
+        withAnimation(.linear(duration: 3.2).repeatForever(autoreverses: false)) {
           sweepAngle = 240
         }
-        withAnimation(.easeInOut(duration: 1.5).repeatForever(autoreverses: true)) {
+        withAnimation(.easeInOut(duration: 1.35).repeatForever(autoreverses: true)) {
           breathing = true
         }
       case .error:
