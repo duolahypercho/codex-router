@@ -15,11 +15,21 @@ test("Grok tray sign-in explicitly starts the OAuth flow", () => {
   assert.deepEqual(oauthLoginArgs("kimi-oauth"), ["login"]);
 });
 
+function isolatedPath() {
+  if (process.platform !== "win32") return "/usr/bin:/bin";
+  const windowsRoot = process.env.SystemRoot ?? process.env.WINDIR;
+  assert.ok(windowsRoot, "Windows system root is required for isolated provider tests");
+  return [
+    path.join(windowsRoot, "System32"),
+    path.join(windowsRoot, "System32", "WindowsPowerShell", "v1.0"),
+  ].join(path.delimiter);
+}
+
 function isolatedEnvironment(testRoot) {
   return {
     ...process.env,
     HOME: testRoot,
-    PATH: "/usr/bin:/bin",
+    PATH: isolatedPath(),
     MODEL_ROUTER_TARGET: "cursor",
     MODEL_ROUTER_STATE_DIR: path.join(testRoot, "state"),
     KIMI_CODE_HOME: path.join(testRoot, "kimi"),
