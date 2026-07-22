@@ -33,9 +33,9 @@ active count and lists each live model request.
   installed Codex app-server; the tray never reads or copies the ChatGPT
   credential file.
 - External OAuth and API providers have separate account meters and local
-  traffic graphs. The Island focuses on the active request, then shows the last
-  request's input/output/total tokens beside the provider-reported quota
-  percentage used. Kimi Code OAuth reads weekly and five-hour quota from Kimi's
+  traffic graphs. The Island shows today's token total and a fixed seven-day
+  daily line graph beside the provider-reported quota percentage used. Kimi
+  Code OAuth reads weekly and five-hour quota from Kimi's
   usage API with the existing CLI session. Grok OAuth reads weekly or monthly
   credit usage from the official Grok CLI chat-proxy billing endpoint with the
   existing `~/.grok/auth.json` session. Near expiry, or after one rejected
@@ -49,12 +49,11 @@ active count and lists each live model request.
   or remaining subscription quota.
 - Daily token charts in the tray can show 7, 30, or 90 days. Seven-day charts
   label every weekday; longer ranges use spaced date ticks while retaining one
-  point per day. Hover any mark for its date and exact token count. The Island
-  instead shows live request activity and the last metered request, falling
-  back to today's provider total before a request breakdown is available. When
-  the provider reports a quota reset, its local reset date and time appear
-  beside the chart title. Usage refreshes every 30 seconds, and the detailed
-  view switches when a request uses a different provider.
+  point per day. The Island uses a fixed seven-day line graph so hover remains
+  quick and the longer ranges stay in the tray. Hover any mark for its date and
+  exact token count. When the provider reports a quota reset, its local reset
+  date and time appear beside the chart title. Usage refreshes every 30 seconds,
+  and the detailed view switches when a request uses a different provider.
 - The Island uses green for idle, amber while generating, and red after an
   error. It is shown by default and can be toggled from the tray.
 - When multiple Codex model requests run at the same time, the Island shows an

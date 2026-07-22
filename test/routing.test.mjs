@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import http from "node:http";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -315,10 +315,7 @@ test("router preserves native auth and isolates every external route", async () 
   const routedRequests = [];
   const native = await mockServer(async (request, response) => {
     nativeRequests.push({ url: request.url, headers: request.headers, body: await bodyJson(request) });
-    json(response, 200, {
-      route: "native",
-      usage: { input_tokens: 31, output_tokens: 11, total_tokens: 42 },
-    });
+    json(response, 200, { route: "native" });
   });
   const gateway = await mockServer(async (request, response) => {
     const body = await bodyJson(request);
@@ -339,14 +336,10 @@ test("router preserves native auth and isolates every external route", async () 
     }
   });
   const routerPort = await openPort();
-  const testRoot = mkdtempSync(path.join(os.tmpdir(), "codex-router-native-usage-"));
-  const stateDir = path.join(testRoot, "state");
-  mkdirSync(stateDir, { recursive: true });
   const router = run("router.mjs", {
     CODEX_ROUTER_PORT: String(routerPort),
     CODEX_NATIVE_BASE_URL: `http://127.0.0.1:${native.port}/backend-api/codex`,
     CODEX_ROUTER_GATEWAY_BASE_URL: `http://127.0.0.1:${gateway.port}/v1`,
-    CODEX_ROUTER_STATE_DIR: stateDir,
     CODEX_ROUTER_QUIET: "1",
   });
 
@@ -402,23 +395,9 @@ test("router preserves native auth and isolates every external route", async () 
       assert.equal(request.headers["x-codex-installation-id"], undefined);
       assert.equal(request.headers["x-private-header"], undefined);
     }
-    const usageEvents = readFileSync(path.join(stateDir, "usage-events.jsonl"), "utf8")
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line));
-    const nativeUsage = usageEvents.find((event) => event.provider === "openai");
-    assert.deepEqual(
-      {
-        inputTokens: nativeUsage?.inputTokens,
-        outputTokens: nativeUsage?.outputTokens,
-        totalTokens: nativeUsage?.totalTokens,
-      },
-      { inputTokens: 31, outputTokens: 11, totalTokens: 42 },
-    );
   } finally {
     await stopChild(router);
     await Promise.all([closeServer(native.server), closeServer(gateway.server)]);
-    rmSync(testRoot, { recursive: true, force: true });
   }
 });
 

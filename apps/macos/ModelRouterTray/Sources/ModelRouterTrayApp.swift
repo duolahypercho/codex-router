@@ -150,12 +150,6 @@ final class RouterStore: ObservableObject {
     selectedProviderUsage?.account.metrics.first
   }
 
-  var selectedLastUsageEvent: RouterUsageEvent? {
-    snapshot.targets["codex"]?.usageEvents?.reversed().first(where: { event in
-      event.provider == selectedUsageProviderID && event.totalTokenCount != nil
-    })
-  }
-
   var selectedTodayTokens: Double {
     dailyUsage(days: 1).last?.tokens ?? 0
   }
@@ -602,7 +596,6 @@ final class RouterStore: ObservableObject {
         throw RouterError("Router health check failed.")
       }
       let health = try JSONDecoder().decode(RouterHealth.self, from: data)
-      let previousActivityState = activityState
       activityHealthFailureStartedAt = nil
       activityState = health.activity.state
       activeRequests = health.activity.active ?? []
@@ -613,9 +606,6 @@ final class RouterStore: ObservableObject {
         hasObservedActiveProvider = true
         manuallySelectedUsageProvider = false
         focusUsageProvider(provider)
-      }
-      if previousActivityState == .generating, health.activity.state != .generating {
-        await refresh()
       }
     } catch {
       recordActivityHealthFailure()
@@ -896,35 +886,6 @@ struct RouterTarget: Decodable {
   let enabledProviders: [String]
   let models: [RouterModel]
   let selectedModel: String?
-  let usageEvents: [RouterUsageEvent]?
-}
-
-struct RouterUsageEvent: Decodable {
-  let at: String
-  let model: String
-  let provider: String
-  let status: Int
-  let durationMs: Int
-  let inputTokens: Int64?
-  let outputTokens: Int64?
-  let totalTokens: Int64?
-
-  var totalTokenCount: Int64? {
-    if let totalTokens { return totalTokens }
-    guard inputTokens != nil || outputTokens != nil else { return nil }
-    return (inputTokens ?? 0) + (outputTokens ?? 0)
-  }
-
-  var displayModel: String {
-    guard let slash = model.lastIndex(of: "/") else { return model }
-    return String(model[model.index(after: slash)...])
-  }
-
-  var completedAt: Date? {
-    let fractional = ISO8601DateFormatter()
-    fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-    return fractional.date(from: at) ?? ISO8601DateFormatter().date(from: at)
-  }
 }
 
 struct RouterModel: Decodable, Identifiable {

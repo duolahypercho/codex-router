@@ -2,9 +2,8 @@
 
 ## Unreleased
 
-- Focused the Dynamic Island on the current request: it shows live activity
-  while generating, then exact input/output/total tokens for the last metered
-  request, with today as a fallback and provider quota percentage alongside.
+- Restored the Dynamic Island's daily line graph with today's token total and
+  provider quota percentage, while leaving longer-range controls in the tray.
 - Hide tray usage cards until the corresponding OAuth session or API key is
   configured; enabled providers and historical local traffic no longer create
   disconnected-account cards.

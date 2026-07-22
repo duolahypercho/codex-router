@@ -240,23 +240,15 @@ private struct IslandOverlayView: View {
         }
         Spacer()
         HStack(spacing: 12) {
-          IslandHeaderMetric(value: tokenMetricValue, label: tokenMetricLabel)
+          IslandHeaderMetric(value: todayTokenValue, label: "TODAY TOKENS")
           if let accountHeaderValue {
             IslandHeaderMetric(value: accountHeaderValue, label: accountHeaderLabel)
           }
         }
       }
-      if isMeasuringTokens, !store.activeRequests.isEmpty {
-        ActiveRequestList(store: store, limit: 2, compact: true)
-      } else if isMeasuringTokens {
-        PendingTokenPanel(compact: true)
-      } else {
-        TokenBreakdownPanel(
-          event: lastUsageEvent,
-          todayTokens: displayedTokenCount,
-          compact: true
-        )
-      }
+      IslandUsageLineChart(points: dailyGraphPoints, tint: graphTint, showsAxis: false)
+        .id("\(store.selectedUsageProviderID)-daily-peek")
+        .frame(height: 43)
     }
     .padding(.horizontal, 15)
     .padding(.top, 10)
@@ -283,9 +275,9 @@ private struct IslandOverlayView: View {
 
       HStack(spacing: 8) {
         MetricTile(
-          title: tokenMetricLabel,
-          value: tokenMetricValue,
-          detail: tokenTileDetail,
+          title: "TODAY'S TOKENS",
+          value: todayTokenValue,
+          detail: tokenSourceDetail,
           tint: .white.opacity(0.88)
         )
         MetricTile(
@@ -297,56 +289,54 @@ private struct IslandOverlayView: View {
       }
 
       HStack(alignment: .firstTextBaseline) {
-        Text(tokenBreakdownTitle)
+        Text("DAILY TOKEN TREND")
           .font(.system(size: 8, weight: .semibold, design: .monospaced))
           .tracking(0.8)
           .foregroundStyle(routerMuted)
         Spacer()
-        Text(tokenBreakdownDetail)
-          .font(.system(size: 8, design: .rounded))
+        Text("LAST 7 DAYS")
+          .font(.system(size: 8, weight: .semibold, design: .monospaced))
+          .tracking(0.6)
           .foregroundStyle(routerMuted)
-          .lineLimit(1)
       }
 
-      if isMeasuringTokens, !store.activeRequests.isEmpty {
-        ActiveRequestList(store: store, limit: 2, compact: false)
-      } else if isMeasuringTokens {
-        PendingTokenPanel(compact: false)
-      } else {
-        TokenBreakdownPanel(
-          event: lastUsageEvent,
-          todayTokens: displayedTokenCount,
-          compact: false
-        )
-      }
+      IslandUsageLineChart(points: dailyGraphPoints, tint: graphTint)
+        .id("\(store.selectedUsageProviderID)-daily-expanded")
+        .frame(height: 78)
 
       HStack {
-        Text("ACTIVE PROVIDER")
+        Text(store.hasConcurrentActivity ? "ACTIVE NOW" : "ACTIVE PROVIDER")
           .font(.system(size: 8, weight: .semibold, design: .monospaced))
           .tracking(0.8)
           .foregroundStyle(routerMuted)
         Spacer()
-        Text("Account and traffic are provider-scoped")
+        Text(store.hasConcurrentActivity
+          ? "\(store.activeRequestCount) concurrent model requests"
+          : "Account and traffic are provider-scoped")
           .font(.system(size: 9, design: .rounded))
           .foregroundStyle(routerMuted)
       }
 
-      HStack {
-        VStack(alignment: .leading, spacing: 2) {
-          Text(store.selectedUsageProvider.displayName)
-            .font(.system(size: 10, weight: .semibold, design: .rounded))
-          Text(store.selectedUsageProvider.detail)
-            .font(.system(size: 8, design: .rounded))
-            .foregroundStyle(routerMuted)
+      if store.hasConcurrentActivity {
+        ActiveRequestList(store: store, limit: 4, compact: false)
+      } else {
+        HStack {
+          VStack(alignment: .leading, spacing: 2) {
+            Text(store.selectedUsageProvider.displayName)
+              .font(.system(size: 10, weight: .semibold, design: .rounded))
+            Text(store.selectedUsageProvider.detail)
+              .font(.system(size: 8, design: .rounded))
+              .foregroundStyle(routerMuted)
+          }
+          Spacer()
+          Text(store.activityState == .generating ? "Live" : "Last used")
+            .font(.system(size: 9, weight: .medium, design: .rounded))
+            .foregroundStyle(store.activityState.tint)
         }
-        Spacer()
-        Text(store.activityState == .generating ? "Live" : "Last used")
-          .font(.system(size: 9, weight: .medium, design: .rounded))
-          .foregroundStyle(store.activityState.tint)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(Color.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
       }
-      .padding(.horizontal, 10)
-      .padding(.vertical, 7)
-      .background(Color.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
     .padding(.horizontal, 17)
     .padding(.top, 13)
@@ -384,57 +374,21 @@ private struct IslandOverlayView: View {
   }
 
   private var compactUsageSummary: String {
-    if isMeasuringTokens { return "tokens pending" }
-    let scope = lastUsageEvent == nil ? "today" : "last"
-    let tokens = "\(compactTokenCount(Double(displayedTokenCount))) \(scope)"
+    let tokens = "\(todayTokenValue) today"
     guard let accountCompactValue else { return tokens }
     return "\(tokens) · \(accountCompactValue)"
   }
 
-  private var isMeasuringTokens: Bool {
-    store.activityState == .generating
+  private var todayTokenValue: String {
+    compactTokenCount(store.selectedTodayTokens)
   }
 
-  private var lastUsageEvent: RouterUsageEvent? {
-    store.selectedLastUsageEvent
+  private var dailyGraphPoints: [DailyUsagePoint] {
+    store.dailyUsage(days: 7)
   }
 
-  private var displayedTokenCount: Int64 {
-    if let total = lastUsageEvent?.totalTokenCount { return total }
-    return Int64(max(0, store.selectedTodayTokens.rounded()))
-  }
-
-  private var tokenMetricValue: String {
-    isMeasuringTokens ? "—" : compactTokenCount(Double(displayedTokenCount))
-  }
-
-  private var tokenMetricLabel: String {
-    if isMeasuringTokens { return "TOKENS PENDING" }
-    return lastUsageEvent == nil ? "TODAY'S TOKENS" : "LAST REQUEST"
-  }
-
-  private var tokenTileDetail: String {
-    if isMeasuringTokens { return "Final total after response" }
-    guard let event = lastUsageEvent else { return tokenSourceDetail }
-    return "\(event.displayModel) · \(durationLabel(event.durationMs))"
-  }
-
-  private var tokenBreakdownTitle: String {
-    if isMeasuringTokens { return "CURRENT ACTIVITY" }
-    return lastUsageEvent == nil ? "DAILY FALLBACK" : "TOKEN BREAKDOWN"
-  }
-
-  private var tokenBreakdownDetail: String {
-    if isMeasuringTokens { return "Exact tokens appear on completion" }
-    guard let event = lastUsageEvent else { return "No metered request yet" }
-    guard let completedAt = event.completedAt else { return event.displayModel }
-    return completedAt.formatted(date: .omitted, time: .shortened)
-  }
-
-  private func durationLabel(_ durationMs: Int) -> String {
-    let seconds = max(0, durationMs) / 1_000
-    if seconds < 60 { return "\(seconds)s" }
-    return "\(seconds / 60)m \(seconds % 60)s"
+  private var graphTint: Color {
+    routerAccent
   }
 
   private var quotaUsedPercent: Double? {
@@ -524,129 +478,188 @@ private struct IslandHeaderMetric: View {
   }
 }
 
-private struct TokenBreakdownPanel: View {
-  let event: RouterUsageEvent?
-  let todayTokens: Int64
-  let compact: Bool
+private struct IslandUsageLineChart: View {
+  let points: [DailyUsagePoint]
+  let tint: Color
+  var showsAxis = true
+
+  @State private var hoveredIndex: Int?
 
   var body: some View {
-    Group {
-      if let event {
-        VStack(alignment: .leading, spacing: compact ? 5 : 7) {
-          HStack(spacing: 8) {
-            TokenBreakdownMetric(
-              label: "INPUT",
-              value: formattedTokens(event.inputTokens),
-              compact: compact
-            )
-            TokenBreakdownMetric(
-              label: "OUTPUT",
-              value: formattedTokens(event.outputTokens),
-              compact: compact
-            )
-            TokenBreakdownMetric(
-              label: "TOTAL",
-              value: formattedTokens(event.totalTokenCount),
-              compact: compact,
-              tint: routerAccent
-            )
+    GeometryReader { geometry in
+      let axisHeight: CGFloat = showsAxis ? 14 : 0
+      let plotHeight = max(1, geometry.size.height - axisHeight)
+      let maximum = max(points.map(\.tokens).max() ?? 0, 1)
+      let coordinates = chartCoordinates(
+        width: geometry.size.width,
+        height: plotHeight,
+        maximum: maximum
+      )
+
+      ZStack(alignment: .topLeading) {
+        ForEach(1..<4, id: \.self) { index in
+          Path { path in
+            let y = plotHeight * CGFloat(index) / 4
+            path.move(to: CGPoint(x: 0, y: y))
+            path.addLine(to: CGPoint(x: geometry.size.width, y: y))
           }
-          HStack {
-            Text(event.displayModel)
-            Spacer()
-            Text(completedLabel(event))
-          }
-          .font(.system(size: compact ? 7.5 : 8.5, design: .rounded))
-          .foregroundStyle(routerMuted)
+          .stroke(Color.white.opacity(0.055), style: StrokeStyle(lineWidth: 0.5, dash: [2, 3]))
         }
-      } else {
-        HStack(spacing: 10) {
-          VStack(alignment: .leading, spacing: 2) {
-            Text("Today’s provider usage")
-              .font(.system(size: compact ? 9 : 10, weight: .semibold, design: .rounded))
-            Text("No completed request breakdown yet")
-              .font(.system(size: compact ? 7.5 : 8.5, design: .rounded))
-              .foregroundStyle(routerMuted)
+
+        if !coordinates.isEmpty {
+          areaPath(coordinates, baseline: plotHeight - 2)
+            .fill(
+              LinearGradient(
+                colors: [tint.opacity(0.22), tint.opacity(0.015)],
+                startPoint: .top,
+                endPoint: .bottom
+              )
+            )
+
+          linePath(coordinates)
+            .stroke(
+              tint.opacity(0.95),
+              style: StrokeStyle(lineWidth: 1.8, lineCap: .round, lineJoin: .round)
+            )
+
+          if let last = coordinates.last {
+            Circle()
+              .fill(tint)
+              .frame(width: 5, height: 5)
+              .overlay(Circle().stroke(Color.white.opacity(0.72), lineWidth: 0.7))
+              .position(last)
           }
-          Spacer()
-          Text(formattedTokens(todayTokens))
-            .font(.system(size: compact ? 14 : 17, weight: .semibold, design: .rounded))
-            .foregroundStyle(routerAccent)
-            .monospacedDigit()
+        }
+
+        if showsAxis {
+          ForEach(Array(points.enumerated()), id: \.element.id) { index, point in
+            if shouldLabel(index: index), coordinates.indices.contains(index) {
+              Text(axisLabel(for: point))
+                .font(.system(size: 7.5, weight: .medium, design: .rounded))
+                .foregroundStyle(routerMuted)
+                .fixedSize()
+                .position(
+                  x: min(
+                    geometry.size.width - 10,
+                    max(10, coordinates[index].x)
+                  ),
+                  y: plotHeight + 6
+                )
+            }
+          }
+        }
+
+        if let hoveredIndex,
+           points.indices.contains(hoveredIndex),
+           coordinates.indices.contains(hoveredIndex) {
+          let coordinate = coordinates[hoveredIndex]
+          Path { path in
+            path.move(to: CGPoint(x: coordinate.x, y: 2))
+            path.addLine(to: CGPoint(x: coordinate.x, y: plotHeight - 2))
+          }
+          .stroke(Color.white.opacity(0.22), lineWidth: 0.6)
+
+          Circle()
+            .fill(tint)
+            .frame(width: 7, height: 7)
+            .overlay(Circle().stroke(Color.white.opacity(0.9), lineWidth: 1))
+            .position(coordinate)
+
+          Text(hoverText(for: points[hoveredIndex]))
+            .font(.system(size: 8, weight: .medium, design: .monospaced))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 4)
+            .background(routerInk.opacity(0.92), in: Capsule())
+            .overlay(Capsule().stroke(Color.white.opacity(0.12), lineWidth: 0.5))
+            .fixedSize()
+            .position(
+              x: min(geometry.size.width - 66, max(66, coordinate.x)),
+              y: 11
+            )
+        }
+      }
+      .contentShape(Rectangle())
+      .onContinuousHover { phase in
+        switch phase {
+        case .active(let location):
+          hoveredIndex = nearestIndex(to: location.x, width: geometry.size.width)
+        case .ended:
+          hoveredIndex = nil
         }
       }
     }
-    .padding(.horizontal, compact ? 9 : 11)
-    .padding(.vertical, compact ? 7 : 9)
-    .background(
-      Color.white.opacity(0.05),
-      in: RoundedRectangle(cornerRadius: compact ? 9 : 11, style: .continuous)
-    )
-    .overlay(
-      RoundedRectangle(cornerRadius: compact ? 9 : 11, style: .continuous)
-        .stroke(Color.white.opacity(0.075), lineWidth: 0.6)
-    )
-    .accessibilityElement(children: .combine)
-    .accessibilityLabel(event == nil ? "Today’s token usage" : "Last request token breakdown")
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel("Daily token usage line chart")
+    .accessibilityValue("\(formattedTotalTokens) tokens over \(points.count) days")
   }
 
-  private func formattedTokens(_ value: Int64?) -> String {
-    guard let value else { return "—" }
-    return compactTokenCount(Double(value))
+  private var formattedTotalTokens: String {
+    Int64(points.reduce(0) { $0 + $1.tokens }).formatted(.number.grouping(.automatic))
   }
 
-  private func completedLabel(_ event: RouterUsageEvent) -> String {
-    guard let date = event.completedAt else { return "Completed" }
-    return date.formatted(date: .omitted, time: .shortened)
-  }
-}
-
-private struct TokenBreakdownMetric: View {
-  let label: String
-  let value: String
-  let compact: Bool
-  var tint: Color = .white.opacity(0.88)
-
-  var body: some View {
-    VStack(alignment: .leading, spacing: 1) {
-      Text(label)
-        .font(.system(size: compact ? 6.5 : 7.5, weight: .semibold, design: .monospaced))
-        .tracking(0.65)
-        .foregroundStyle(routerMuted)
-      Text(value)
-        .font(.system(size: compact ? 12 : 15, weight: .semibold, design: .rounded))
-        .foregroundStyle(tint)
-        .monospacedDigit()
+  private func chartCoordinates(width: CGFloat, height: CGFloat, maximum: Double) -> [CGPoint] {
+    let horizontalInset: CGFloat = 3
+    let topInset: CGFloat = 5
+    let bottomInset: CGFloat = 3
+    let usableWidth = max(1, width - horizontalInset * 2)
+    let usableHeight = max(1, height - topInset - bottomInset)
+    return points.enumerated().map { index, point in
+      let x = points.count > 1
+        ? horizontalInset + usableWidth * CGFloat(index) / CGFloat(points.count - 1)
+        : width / 2
+      let normalized = max(0, min(1, point.tokens / maximum))
+      let y = topInset + usableHeight * (1 - CGFloat(normalized))
+      return CGPoint(x: x, y: y)
     }
-    .frame(maxWidth: .infinity, alignment: .leading)
   }
-}
 
-private struct PendingTokenPanel: View {
-  let compact: Bool
-
-  var body: some View {
-    HStack(spacing: 9) {
-      ProgressView()
-        .controlSize(.small)
-        .tint(routerYellow)
-      VStack(alignment: .leading, spacing: 2) {
-        Text("Measuring current request")
-          .font(.system(size: compact ? 9 : 10, weight: .semibold, design: .rounded))
-        Text("Exact tokens appear when the response completes")
-          .font(.system(size: compact ? 7.5 : 8.5, design: .rounded))
-          .foregroundStyle(routerMuted)
+  private func linePath(_ coordinates: [CGPoint]) -> Path {
+    Path { path in
+      guard let first = coordinates.first else { return }
+      path.move(to: first)
+      for coordinate in coordinates.dropFirst() {
+        path.addLine(to: coordinate)
       }
-      Spacer()
     }
-    .padding(.horizontal, compact ? 9 : 11)
-    .padding(.vertical, compact ? 8 : 10)
-    .background(
-      Color.white.opacity(0.05),
-      in: RoundedRectangle(cornerRadius: compact ? 9 : 11, style: .continuous)
-    )
-    .accessibilityElement(children: .combine)
-    .accessibilityLabel("Measuring current request tokens")
+  }
+
+  private func areaPath(_ coordinates: [CGPoint], baseline: CGFloat) -> Path {
+    Path { path in
+      guard let first = coordinates.first, let last = coordinates.last else { return }
+      path.move(to: CGPoint(x: first.x, y: baseline))
+      path.addLine(to: first)
+      for coordinate in coordinates.dropFirst() {
+        path.addLine(to: coordinate)
+      }
+      path.addLine(to: CGPoint(x: last.x, y: baseline))
+      path.closeSubpath()
+    }
+  }
+
+  private func nearestIndex(to x: CGFloat, width: CGFloat) -> Int? {
+    guard !points.isEmpty else { return nil }
+    guard points.count > 1, width > 0 else { return 0 }
+    let fraction = max(0, min(1, x / width))
+    return Int((fraction * CGFloat(points.count - 1)).rounded())
+  }
+
+  private func shouldLabel(index: Int) -> Bool {
+    let stride = points.count <= 7 ? 1 : points.count <= 31 ? 5 : 15
+    return index.isMultiple(of: stride) || index == points.count - 1
+  }
+
+  private func axisLabel(for point: DailyUsagePoint) -> String {
+    if points.count <= 7 {
+      return point.date.formatted(.dateTime.weekday(.abbreviated))
+    }
+    return point.date.formatted(.dateTime.month(.defaultDigits).day())
+  }
+
+  private func hoverText(for point: DailyUsagePoint) -> String {
+    let date = point.date.formatted(.dateTime.month(.abbreviated).day())
+    let tokens = Int64(point.tokens).formatted(.number.grouping(.automatic))
+    return "\(date) · \(tokens) tok"
   }
 }
 
