@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Hide tray usage cards until the corresponding OAuth session or API key is
+  configured; enabled providers and historical local traffic no longer create
+  disconnected-account cards.
 - Cleaned up tray quota cards so each window has one standardized limit label
   and one reset line, with five-hour windows shown separately from weekly
   limits in both current and all-provider usage.

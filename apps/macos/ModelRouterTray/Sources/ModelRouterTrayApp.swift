@@ -207,12 +207,7 @@ final class RouterStore: ObservableObject {
   }
 
   var visibleUsageProviders: [UsageProviderChoice] {
-    usageProviderChoices.filter { provider in
-      (provider.id == "openai" && (!accountUsageResolved || accountUsage != nil)) ||
-        provider.isEnabled ||
-        providerSetup[provider.id]?.configured == true ||
-        (providerUsage(for: provider.id)?.requests ?? 0) > 0
-    }
+    usageProviderChoices.filter { usageProviderHasCredentials($0.id) }
   }
 
   var visibleUsageCards: [UsageOverviewCard] {
@@ -653,10 +648,12 @@ final class RouterStore: ObservableObject {
   }
 
   private func usageProviderIsAvailable(_ providerID: String) -> Bool {
-    usageProviderChoices.first(where: { $0.id == providerID })?.isEnabled == true ||
-      providerSetup[providerID]?.configured == true ||
-      providerUsage(for: providerID)?.account.status == "available" ||
-      (providerUsage(for: providerID)?.requests ?? 0) > 0
+    usageProviderHasCredentials(providerID)
+  }
+
+  private func usageProviderHasCredentials(_ providerID: String) -> Bool {
+    if providerID == "openai" { return accountUsage != nil }
+    return providerSetup[providerID]?.configured == true
   }
 
   private func providerDetail(_ providerID: String, enabled: Set<String>) -> String {
@@ -1014,11 +1011,13 @@ private struct TrayView: View {
   private func content(for target: RouterTarget) -> some View {
     ScrollView(showsIndicators: false) {
       VStack(alignment: .leading, spacing: 14) {
-        sectionLabel("Current usage", detail: store.selectedUsageProvider.displayName)
-        ProviderUsageSection(store: store)
-          .id(store.selectedUsageProviderID)
-        sectionLabel("All usage", detail: "7-day snapshot")
-        AllProviderUsageGrid(store: store)
+        if !store.visibleUsageProviders.isEmpty {
+          sectionLabel("Current usage", detail: store.selectedUsageProvider.displayName)
+          ProviderUsageSection(store: store)
+            .id(store.selectedUsageProviderID)
+          sectionLabel("All usage", detail: "7-day snapshot")
+          AllProviderUsageGrid(store: store)
+        }
         settingRow(
           title: "Dynamic Island",
           detail: "Show provider usage and activity status",

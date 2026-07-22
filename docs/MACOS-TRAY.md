@@ -14,11 +14,14 @@ router configuration.
 
 ## Provider usage
 
-The tray's **All usage** grid shows ChatGPT plus every configured, enabled, or
-previously used external provider at once. Each quota window gets its own card
+The tray's **All usage** grid shows only connected accounts: ChatGPT when native
+account usage is available, and external providers with a configured OAuth
+session or API key. Enabling a provider or retaining historical local traffic
+does not create a card without credentials. Each quota window gets its own card
 with a short limit label and a single reset line. Official account balance is
-shown when available; otherwise a card falls back to clearly labeled seven-day
-traffic measured by this router. Cards can be clicked to inspect that provider.
+shown when available; otherwise a connected account falls back to clearly
+labeled seven-day traffic measured by this router. Cards can be clicked to
+inspect that provider.
 ChatGPT is the initial detail view only when native ChatGPT usage is available;
 otherwise the tray starts with an existing external provider. The detailed
 view and the Island automatically return to the provider handling the next
