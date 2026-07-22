@@ -39,6 +39,20 @@ function configuredDefaultModel(configPath) {
   return root.match(/^\s*model\s*=\s*["']([^"']+)["']/m)?.[1];
 }
 
+function codexConfigSnapshot() {
+  const result = spawnSync(
+    process.execPath,
+    [path.join(REPO_ROOT, "src", "config-manager.mjs"), "status"],
+    { env: { ...process.env, MODEL_ROUTER_TARGET: "codex" }, encoding: "utf8" },
+  );
+  if (result.status !== 0) return undefined;
+  try {
+    return JSON.parse(result.stdout);
+  } catch {
+    return undefined;
+  }
+}
+
 function nativeCodexModels(catalogPath) {
   if (!existsSync(catalogPath)) return [];
   try {
@@ -92,6 +106,7 @@ async function emitProbe() {
     ? [...nativeCodexModels(NATIVE_CATALOG_PATH), ...routedModels]
     : routedModels;
   const selectedModel = TARGET === "codex" ? configuredDefaultModel(CONFIG_PATH) : undefined;
+  const codexConfig = TARGET === "codex" ? codexConfigSnapshot() : undefined;
 
   process.stdout.write(
     JSON.stringify({
@@ -101,6 +116,12 @@ async function emitProbe() {
       enabledProviders,
       models,
       ...(selectedModel ? { selectedModel } : {}),
+      ...(codexConfig
+        ? {
+            loginFree: Boolean(codexConfig.login_free),
+            loginFreeManaged: Boolean(codexConfig.login_free_managed),
+          }
+        : {}),
       ...(TARGET === "codex" ? { usageEvents } : {}),
     }),
   );
@@ -271,6 +292,54 @@ async function saveProviderCredential(providerId) {
   process.stdout.write(`${JSON.stringify(providerOnboardingSnapshot())}\n`);
 }
 
+async function setLoginFreeMode(desired) {
+  if (desired !== "on" && desired !== "off") {
+    throw new Error("Usage: control auth-mode <on|off>");
+  }
+  let loginFreeModel;
+  if (desired === "on") {
+    const { providerOnboardingSnapshot } = await import("./provider-onboarding.mjs");
+    const { readProviderSelection, selectedListedModels } = await import("./provider-selection.mjs");
+    const { MODEL_BY_SLUG } = await import("./model-registry.mjs");
+    const selected = new Set(readProviderSelection());
+    const readyProviders = new Set(
+      providerOnboardingSnapshot().providers
+        .filter((provider) => selected.has(provider.id) && provider.configured)
+        .map((provider) => provider.id),
+    );
+    if (readyProviders.size === 0) {
+      throw new Error(
+        "Connect and enable at least one external provider before turning on login-free mode.",
+      );
+    }
+    const currentModel = codexConfigSnapshot()?.model;
+    const currentRoute = MODEL_BY_SLUG.get(currentModel);
+    loginFreeModel =
+      currentRoute && readyProviders.has(currentRoute.provider)
+        ? currentModel
+        : selectedListedModels().find((model) => readyProviders.has(model.provider))?.slug;
+    if (!loginFreeModel) {
+      throw new Error("No enabled model is available for the connected external providers.");
+    }
+  }
+  const command = desired === "on" ? "login-free-enable" : "login-free-disable";
+  const commandArgs = [path.join(REPO_ROOT, "src", "config-manager.mjs"), command];
+  if (loginFreeModel) commandArgs.push(loginFreeModel);
+  const result = spawnSync(
+    process.execPath,
+    commandArgs,
+    {
+      cwd: REPO_ROOT,
+      env: { ...process.env, MODEL_ROUTER_TARGET: "codex" },
+      encoding: "utf8",
+    },
+  );
+  if (result.status !== 0) {
+    throw new Error((result.stderr || "Codex provider mode could not be changed.").trim());
+  }
+  process.stdout.write(result.stdout);
+}
+
 // --- dispatch ---------------------------------------------------------------
 
 if (args.includes("--probe")) {
@@ -297,6 +366,8 @@ if (args.includes("--probe")) {
 } else if (args[0] === "credential") {
   if (!args[1]) throw new Error("Usage: control credential <api-provider>");
   await saveProviderCredential(args[1]);
+} else if (args[0] === "auth-mode") {
+  await setLoginFreeMode(args[1]);
 } else {
   printOverview(args.includes("--json"));
 }

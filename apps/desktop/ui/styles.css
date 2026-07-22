@@ -593,6 +593,35 @@ h2 {
   gap: 8px;
 }
 
+.mode-setting {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 58px;
+  margin-bottom: 8px;
+  padding: 10px 11px;
+  border: 1px solid rgba(103, 147, 235, 0.22);
+  border-radius: 11px;
+  background: rgba(82, 128, 222, 0.07);
+}
+
+.mode-setting strong,
+.mode-setting small {
+  display: block;
+}
+
+.mode-setting strong {
+  font-size: 11.5px;
+  font-weight: 610;
+}
+
+.mode-setting small {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 8.5px;
+}
+
 .provider-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;

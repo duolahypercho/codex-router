@@ -73,6 +73,7 @@ fn main() {
             connect_oauth,
             save_api_key,
             set_provider_enabled,
+            set_login_free,
             set_island_enabled,
             set_island_expanded,
             show_panel,
@@ -298,6 +299,24 @@ async fn set_provider_enabled(
     })
     .await
     .map_err(|_| "The provider change did not finish.".to_string())?
+}
+
+#[tauri::command]
+async fn set_login_free(
+    state: State<'_, RouterState>,
+    enabled: bool,
+) -> Result<Value, String> {
+    let router = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        run_control(
+            &router,
+            &["auth-mode", if enabled { "on" } else { "off" }],
+            None,
+        )?;
+        run_control_json(&router, &["--json"], None)
+    })
+    .await
+    .map_err(|_| "The Codex login mode change did not finish.".to_string())?
 }
 
 #[tauri::command]

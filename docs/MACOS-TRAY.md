@@ -110,6 +110,14 @@ adding an API key updates Codex immediately; the provider row shows progress
 while the router configuration and service are refreshed. If applying fails,
 the tray restores the previous provider selection and shows the error.
 
+The **Use without OpenAI login** switch changes new Codex sessions to the
+managed custom router provider. At least one external provider must be connected
+and enabled. Fully quit and reopen Codex after changing the switch. Turning it
+off restores the previous root model-provider setting; neither direction reads,
+changes, or deletes ChatGPT credentials. The mode keeps the current external
+model when possible, otherwise selects the first model from a connected,
+enabled provider, and restores the previous model when switched off.
+
 ## Adding providers and models
 
 The Providers section is also the onboarding surface for every model source in

@@ -34,6 +34,7 @@ function startPanel() {
     selectedSource: null,
     sourceWasChosen: false,
     busyProvider: null,
+    loginFreeBusy: false,
     keyProvider: null,
     toastTimer: null,
   };
@@ -56,6 +57,9 @@ function startPanel() {
     chartTooltip: document.getElementById("chart-tooltip"),
     quotaCards: document.getElementById("quota-cards"),
     providers: document.getElementById("provider-list"),
+    loginFreeSwitch: document.getElementById("login-free-switch"),
+    loginFreeSwitchLabel: document.getElementById("login-free-switch-label"),
+    loginFreeNote: document.getElementById("login-free-note"),
     refresh: document.getElementById("refresh-data"),
     islandSwitch: document.getElementById("island-switch"),
     islandSwitchLabel: document.getElementById("island-switch-label"),
@@ -81,6 +85,7 @@ function startPanel() {
   });
   elements.providers.addEventListener("click", handleProviderClick);
   elements.providers.addEventListener("change", handleProviderToggle);
+  elements.loginFreeSwitch.addEventListener("change", handleLoginFreeToggle);
   elements.islandSwitch.addEventListener("change", handleIslandToggle);
   elements.keyForm.addEventListener("submit", saveKey);
   elements.closeDialog.addEventListener("click", closeKeyDialog);
@@ -156,6 +161,7 @@ function startPanel() {
     renderUsage();
     renderQuotas();
     renderProviders();
+    renderLoginFreeSetting();
     renderIslandSetting();
   }
 
@@ -233,6 +239,18 @@ function startPanel() {
     elements.providers.innerHTML = providers.length
       ? providers.map((provider) => providerRow(provider, enabled.has(provider.id))).join("")
       : '<div class="empty-state">Provider setup is unavailable while the router files cannot be found.</div>';
+  }
+
+  function renderLoginFreeSetting() {
+    const enabled = state.snapshot?.targets?.codex?.loginFree === true;
+    elements.loginFreeSwitch.checked = enabled;
+    elements.loginFreeSwitch.disabled = state.loginFreeBusy || state.busyProvider !== null;
+    elements.loginFreeSwitchLabel.title = enabled
+      ? "External-provider mode is active for new Codex sessions."
+      : "Use the local router without signing in to OpenAI.";
+    elements.loginFreeNote.textContent = enabled
+      ? "External providers · restart Codex to apply"
+      : "Use connected external models in new Codex sessions";
   }
 
   function providerRow(provider, enabled) {
@@ -338,6 +356,26 @@ function startPanel() {
       showToast(errorMessage(error), true);
     } finally {
       renderIslandSetting();
+    }
+  }
+
+  async function handleLoginFreeToggle() {
+    const enabled = elements.loginFreeSwitch.checked;
+    state.loginFreeBusy = true;
+    renderLoginFreeSetting();
+    try {
+      state.snapshot = await call("set_login_free", { enabled });
+      showToast(
+        enabled
+          ? "OpenAI login disabled for new Codex sessions. Restart Codex to apply."
+          : "OpenAI login restored for new Codex sessions. Restart Codex to apply.",
+      );
+    } catch (error) {
+      elements.loginFreeSwitch.checked = !enabled;
+      showToast(errorMessage(error), true);
+    } finally {
+      state.loginFreeBusy = false;
+      renderLoginFreeSetting();
     }
   }
 

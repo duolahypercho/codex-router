@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Added a reversible tray toggle that lets signed-out Codex CLI/App sessions
+  use connected external providers through a managed custom model provider,
+  while preserving ChatGPT credentials and restoring the prior provider mode.
 - Grok OAuth injects bare hosted `web_search` and `x_search` tools so xAI can
   run server-side realtime search agentically, matching Grok Build. Router-side
   search env filters and request search-parameter mapping were removed.

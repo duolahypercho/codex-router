@@ -30,6 +30,9 @@ and disables its activity-pill switch; router monitoring continues normally.
   five-hour window appears as its own **5-hour limit** card.
 - Provider cards are absent until that provider has a usable OAuth session or
   API key. Unconnected providers remain available only in **Connections**.
+- **Connections** includes a **Use without OpenAI login** switch for new Codex
+  sessions. It requires a connected, enabled external provider and restores the
+  prior model-provider setting when switched off.
 
 The status mark uses Thinking Orbs **Shaping** while idle, **Thinking** while a
 model is generating, and **Solving** for errors. Starting retains its colored

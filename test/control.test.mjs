@@ -36,6 +36,22 @@ function probe(target, providers, usageEvents = [], options = {}) {
       { mode: 0o600 },
     );
   }
+  if (options.loginFree) {
+    writeFileSync(
+      path.join(stateDir, "config.toml"),
+      `model = ${JSON.stringify(options.selectedModel || "deepseek/deepseek-v4-pro")}\nmodel_provider = "codex-router"\n`,
+      { mode: 0o600 },
+    );
+    writeFileSync(
+      path.join(stateDir, "codex-provider-mode.json"),
+      `${JSON.stringify({
+        version: 1,
+        previousPresent: false,
+        previousModelPresent: false,
+      })}\n`,
+      { mode: 0o600 },
+    );
+  }
   try {
     const output = execFileSync(process.execPath, [path.join(root, "src", "control.mjs"), "--probe"], {
       cwd: root,
@@ -125,6 +141,15 @@ test("codex probe includes native GPT models and the configured default", () => 
     },
   );
   assert.equal(slice.models.some((model) => model.slug === "codex-auto-review"), false);
+  assert.equal(slice.loginFree, false);
+  assert.equal(slice.loginFreeManaged, false);
+});
+
+test("codex probe exposes managed login-free mode without credential details", () => {
+  const slice = probe("codex", ["deepseek"], [], { loginFree: true });
+  assert.equal(slice.loginFree, true);
+  assert.equal(slice.loginFreeManaged, true);
+  assert.equal(JSON.stringify(slice).includes("previousModelProvider"), false);
 });
 
 function probeSet(target, providers, provider, desired) {
@@ -160,6 +185,57 @@ test("toggle on adds a provider; toggle off removes it", () => {
 
 test("toggle rejects an unknown provider", () => {
   assert.throws(() => probeSet("cursor", ["deepseek"], "not-a-provider", "on"));
+});
+
+test("login-free control selects a ready external model and restores Codex defaults", () => {
+  const stateDir = mkdtempSync(path.join(os.tmpdir(), "control-login-free-"));
+  writeFileSync(path.join(stateDir, "config.toml"), `model = "gpt-5.6-sol"\n`, {
+    mode: 0o600,
+  });
+  writeFileSync(
+    path.join(stateDir, "enabled-providers.json"),
+    `${JSON.stringify({ version: 1, providers: ["deepseek"] })}\n`,
+    { mode: 0o600 },
+  );
+  writeFileSync(path.join(stateDir, "deepseek-api-key.secret"), "test-provider-key\n", {
+    mode: 0o600,
+  });
+  writeFileSync(
+    path.join(stateDir, "caller-secret"),
+    "test-control-caller-capability-with-sufficient-length\n",
+    { mode: 0o600 },
+  );
+  const runMode = (desired) =>
+    JSON.parse(
+      execFileSync(
+        process.execPath,
+        [path.join(root, "src", "control.mjs"), "auth-mode", desired],
+        {
+          cwd: root,
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            CODEX_HOME: stateDir,
+            MODEL_ROUTER_TARGET: "codex",
+            MODEL_ROUTER_STATE_DIR: stateDir,
+          },
+        },
+      ),
+    );
+
+  try {
+    const enabled = runMode("on");
+    assert.equal(enabled.login_free, true);
+    assert.match(enabled.model, /^deepseek\//);
+    assert.equal(enabled.model_provider, "codex-router");
+
+    const disabled = runMode("off");
+    assert.equal(disabled.login_free, false);
+    assert.equal(disabled.model, "gpt-5.6-sol");
+    assert.equal(disabled.model_provider, "openai");
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true });
+  }
 });
 
 test("aggregate overview covers every target", () => {

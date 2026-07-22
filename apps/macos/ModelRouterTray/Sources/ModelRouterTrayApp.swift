@@ -112,6 +112,10 @@ final class RouterStore: ObservableObject {
     snapshot.targets["codex"]?.active == true
   }
 
+  var loginFree: Bool {
+    snapshot.targets["codex"]?.loginFree == true
+  }
+
   var usageProviderChoices: [UsageProviderChoice] {
     let enabled = Set(snapshot.targets["codex"]?.enabledProviders ?? [])
     return [
@@ -553,6 +557,22 @@ final class RouterStore: ObservableObject {
     }
   }
 
+  func setLoginFree(_ enabled: Bool) async {
+    guard providerOperation == nil else { return }
+    providerOperation = "auth-mode"
+    defer { providerOperation = nil }
+    do {
+      _ = try await runControl(arguments: ["auth-mode", enabled ? "on" : "off"])
+      await refresh()
+      message = enabled
+        ? "OpenAI login disabled for new Codex sessions."
+        : "OpenAI login restored for new Codex sessions."
+    } catch {
+      message = error.localizedDescription
+      await refresh()
+    }
+  }
+
   private func performProviderOperation(
     _ provider: String,
     successMessage: String,
@@ -899,6 +919,8 @@ struct RouterTarget: Decodable {
   let enabledProviders: [String]
   let models: [RouterModel]
   let selectedModel: String?
+  let loginFree: Bool?
+  let loginFreeManaged: Bool?
 }
 
 struct RouterModel: Decodable, Identifiable {
@@ -1043,6 +1065,17 @@ private struct TrayView: View {
             set: { store.setIslandVisible($0) }
           )
         )
+        settingRow(
+          title: "Use without OpenAI login",
+          detail: store.loginFree
+            ? "External providers · restart Codex to apply"
+            : "Use connected external models in new sessions",
+          isOn: Binding(
+            get: { store.loginFree },
+            set: { enabled in Task { await store.setLoginFree(enabled) } }
+          ),
+          isDisabled: store.providerOperation != nil
+        )
         sectionLabel("Providers", detail: store.providerOperation == nil ? "Auto-saved" : "Applying…")
         VStack(spacing: 0) {
           ForEach(providers, id: \.id) { provider in
@@ -1086,7 +1119,8 @@ private struct TrayView: View {
   private func settingRow(
     title: String,
     detail: String,
-    isOn: Binding<Bool>
+    isOn: Binding<Bool>,
+    isDisabled: Bool = false
   ) -> some View {
     HStack(spacing: 12) {
       VStack(alignment: .leading, spacing: 3) {
@@ -1102,6 +1136,7 @@ private struct TrayView: View {
         .toggleStyle(.switch)
         .controlSize(.small)
         .tint(routerMint)
+        .disabled(isDisabled)
     }
     .padding(.vertical, 1)
   }

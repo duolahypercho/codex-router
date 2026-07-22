@@ -57,10 +57,15 @@ user.
 
 ## Codex safety boundaries
 
-- The config manager may change only its marked root `openai_base_url` and
-  `model_catalog_json` block.
-- Preserve `model`, `model_provider`, reasoning settings, profiles, projects,
-  trust, MCP configuration, features, and ChatGPT authentication.
+- The config manager owns its marked root `openai_base_url` and
+  `model_catalog_json` block plus its marked `model_providers.codex-router`
+  table. It may change the root `model_provider` only when the user explicitly
+  enables the tray's login-free mode. In that mode it may also select an
+  enabled external `model`; snapshot both previous values in protected router
+  state and restore them exactly when the mode is disabled.
+- Preserve reasoning settings, profiles, projects, trust, MCP configuration,
+  features, and ChatGPT authentication. Preserve `model` and `model_provider`
+  outside the explicitly enabled login-free mode.
 - Do not kill unknown processes on ports 4100-4103.
 - Do not print or read credential-file contents. Status commands report presence
   and source only.

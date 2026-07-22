@@ -89,6 +89,16 @@ The integration deliberately keeps the built-in `openai` provider and points
 it at a loopback `openai_base_url`. This makes named models appear in the normal
 picker instead of replacing the provider with a generic `Custom` entry.
 
+The same managed config also defines an inert `codex-router` custom provider.
+The tray's login-free switch selects that provider for new Codex sessions, so
+Codex can send Responses requests to the local router without first acquiring
+OpenAI authentication. The switch snapshots the previous root
+`model_provider` in protected state and restores it when disabled. It never
+changes any ChatGPT credential. It keeps an already selected external model or
+selects the first model from a connected, enabled provider, snapshots the prior
+root model, and restores that model when disabled. External routes continue to
+replace incoming authentication with only the chosen provider's credential.
+
 The managed base URL contains a separate random caller capability. The router
 validates it before reading a model request or contacting any upstream. Codex
 cannot attach an arbitrary router-specific header to the built-in provider, so

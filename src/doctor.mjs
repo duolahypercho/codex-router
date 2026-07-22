@@ -268,6 +268,21 @@ try {
     config.mode,
     "Run ./bin/enable or ./bin/doctor --fix.",
   );
+  const providerModeOk = config.login_free
+    ? config.login_free_managed
+    : !config.provider_mode_state_present;
+  add(
+    providerModeOk ? "ok" : "fail",
+    "Codex login mode",
+    config.login_free
+      ? config.login_free_managed
+        ? "external providers; OpenAI login not required"
+        : "unmanaged custom provider"
+      : config.provider_mode_state_present
+        ? "stale provider-mode restore state"
+        : "OpenAI login available",
+    "Use the tray toggle to switch modes, or run ./bin/doctor --fix.",
+  );
 } catch (error) {
   add(
     "fail",

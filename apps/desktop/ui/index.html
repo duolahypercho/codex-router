@@ -86,6 +86,17 @@
           <h2>Connections</h2>
           <p>Only connected providers appear in Usage.</p>
         </div>
+        <div class="mode-setting">
+          <div>
+            <strong>Use without OpenAI login</strong>
+            <small id="login-free-note">Use connected external models in new Codex sessions</small>
+          </div>
+          <label class="switch" id="login-free-switch-label">
+            <input id="login-free-switch" type="checkbox" />
+            <span aria-hidden="true"></span>
+            <span class="sr-only">Use Codex without OpenAI login</span>
+          </label>
+        </div>
         <div id="provider-list" class="provider-list"></div>
       </section>
 
