@@ -902,10 +902,6 @@ h2 {
   background: transparent;
 }
 
-.activity-orbit.is-thinking.is-idle .thinking-orb-canvas {
-  opacity: 0.68;
-}
-
 .activity-orbit.is-thinking i,
 .activity-orbit.is-thinking::after {
   display: none;

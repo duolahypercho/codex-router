@@ -1,5 +1,5 @@
-// Compact dotted thinking orb (orbits mode) adapted from
-// https://orbs.jakubantalik.com/ for the Dynamic Island generating state.
+// Compact dotted Thinking Orbs renderers adapted from
+// https://orbs.jakubantalik.com/ for the Dynamic Island.
 
 function hash(seed, salt) {
   const n = Math.sin(seed * 12.9898 + salt * 78.233) * 43758.5453;
@@ -36,6 +36,116 @@ function paintDots(ctx, dots, dark, minRadius = 0.3) {
 
 function radiusScale(size, power = 0.6) {
   return (size / 300) ** power;
+}
+
+function smoothStep(value) {
+  return value * value * (3 - 2 * value);
+}
+
+function samplePerimeter(points) {
+  const lengths = [];
+  let total = 0;
+  for (let index = 0; index < points.length; index += 1) {
+    const current = points[index];
+    const next = points[(index + 1) % points.length];
+    const length = Math.hypot(next[0] - current[0], next[1] - current[1]);
+    lengths.push(length);
+    total += length;
+  }
+  return (amount) => {
+    let distance = amount * total;
+    let index = 0;
+    while (distance > lengths[index] && index < points.length - 1) {
+      distance -= lengths[index];
+      index += 1;
+    }
+    const current = points[index];
+    const next = points[(index + 1) % points.length];
+    const progress = lengths[index] ? Math.min(1, distance / lengths[index]) : 0;
+    return [
+      current[0] + (next[0] - current[0]) * progress,
+      current[1] + (next[1] - current[1]) * progress,
+    ];
+  };
+}
+
+const morphShapes = [
+  (amount) => {
+    const angle = -Math.PI / 2 + amount * 2 * Math.PI;
+    return [Math.cos(angle) * 0.24, Math.sin(angle) * 0.24];
+  },
+  samplePerimeter([[0, -0.26], [0.24, 0.16], [-0.24, 0.16]]),
+  samplePerimeter([[0, -0.2], [0.2, -0.2], [0.2, 0.2], [-0.2, 0.2], [-0.2, -0.2]]),
+];
+
+// Morph / "shaping" mode using the Thinking Orbs 20px preset.
+function drawMorph(ctx, size, time, dark) {
+  const hold = 1.4;
+  const transition = 0.9;
+  const segmentDuration = hold + transition;
+  const cycle = time % (segmentDuration * morphShapes.length);
+  const shapeIndex = Math.floor(cycle / segmentDuration);
+  const segmentTime = cycle - shapeIndex * segmentDuration;
+  const blend = segmentTime > hold
+    ? smoothStep((segmentTime - hold) / transition)
+    : 0;
+  const currentShape = morphShapes[shapeIndex];
+  const nextShape = morphShapes[(shapeIndex + 1) % morphShapes.length];
+  const spread = 1.45;
+  const pathCount = 160;
+  const path = [];
+
+  for (let index = 0; index < pathCount; index += 1) {
+    const amount = index / pathCount;
+    const current = currentShape(amount);
+    const next = nextShape(amount);
+    path.push([
+      (current[0] + (next[0] - current[0]) * blend) * spread,
+      (current[1] + (next[1] - current[1]) * blend) * spread,
+    ]);
+  }
+
+  const lengths = [];
+  let total = 0;
+  for (let index = 0; index < pathCount; index += 1) {
+    const current = path[index];
+    const next = path[(index + 1) % pathCount];
+    const length = Math.hypot(next[0] - current[0], next[1] - current[1]);
+    lengths.push(length);
+    total += length;
+  }
+
+  const pointCount = 18;
+  const dotRadius = 0.021 * 1.011 * 1.35 * spread * size;
+  const breathe = 1 + 0.02 * Math.sin(segmentTime * 3.1);
+  const center = size / 2;
+  const dots = [];
+  let pathIndex = 0;
+  let traversed = 0;
+
+  for (let index = 0; index < pointCount; index += 1) {
+    const target = (index / pointCount) * total;
+    while (traversed + lengths[pathIndex] < target && pathIndex < pathCount - 1) {
+      traversed += lengths[pathIndex];
+      pathIndex += 1;
+    }
+    const current = path[pathIndex];
+    const next = path[(pathIndex + 1) % pathCount];
+    const progress = lengths[pathIndex]
+      ? Math.min(1, (target - traversed) / lengths[pathIndex])
+      : 0;
+    const x = (current[0] + (next[0] - current[0]) * progress) * breathe;
+    const y = (current[1] + (next[1] - current[1]) * progress) * breathe;
+    dots.push({
+      x: center + x * size,
+      y: center + y * size,
+      z: 0,
+      r: Math.max(0.35, dotRadius),
+      white: 0.1,
+    });
+  }
+
+  paintDots(ctx, dots, dark, 0.25);
 }
 
 // Orbits / "working" mode from Thinking Orbs, sized for a 20px island slot.
@@ -158,16 +268,19 @@ export function createThinkingOrb(host, options = {}) {
   let visible = true;
   let destroyed = false;
   let mode = "hidden";
+  let modeStartedAt = performance.now();
 
   const draw = (t) => {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, size, size);
-    drawOrbits(ctx, size, t, dark);
+    if (mode === "shaping") drawMorph(ctx, size, t, dark);
+    else drawOrbits(ctx, size, t, dark);
   };
 
   const tick = () => {
     if (!running || destroyed) return;
-    draw((performance.now() / 1000) * speed);
+    const modeSpeed = mode === "shaping" ? 2.08 : speed;
+    draw(((performance.now() - modeStartedAt) / 1000) * modeSpeed);
     frame = requestAnimationFrame(tick);
   };
 
@@ -187,14 +300,17 @@ export function createThinkingOrb(host, options = {}) {
   };
 
   const setMode = (value) => {
-    mode = ["idle", "active"].includes(value) ? value : "hidden";
+    const nextMode = ["shaping", "thinking"].includes(value) ? value : "hidden";
+    if (nextMode !== mode) {
+      mode = nextMode;
+      modeStartedAt = performance.now();
+    }
     canvas.hidden = mode === "hidden";
-    if (mode === "active" && visible && document.visibilityState !== "hidden") {
+    if (mode !== "hidden" && visible && document.visibilityState !== "hidden") {
       start();
       return;
     }
     stop();
-    if (mode === "idle") draw(0.6);
   };
 
   const onVisibility = () => {
@@ -202,7 +318,7 @@ export function createThinkingOrb(host, options = {}) {
       stop();
       return;
     }
-    if (mode === "active" && visible) start();
+    if (mode !== "hidden" && visible) start();
   };
 
   document.addEventListener("visibilitychange", onVisibility);
@@ -210,7 +326,7 @@ export function createThinkingOrb(host, options = {}) {
     typeof IntersectionObserver !== "undefined"
       ? new IntersectionObserver(([entry]) => {
           visible = entry.isIntersecting;
-          if (mode === "active" && visible && document.visibilityState !== "hidden") start();
+          if (mode !== "hidden" && visible && document.visibilityState !== "hidden") start();
           else stop();
         })
       : null;

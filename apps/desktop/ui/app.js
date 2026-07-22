@@ -469,10 +469,9 @@ function startIsland() {
     elements.state.textContent = labels[activityState] || "Idle";
     if (elements.orbit) {
       const thinkingMode = activityState === "generating"
-        ? "active"
-        : activityState === "idle" ? "idle" : "hidden";
+        ? "thinking"
+        : activityState === "idle" ? "shaping" : "hidden";
       elements.orbit.classList.toggle("is-thinking", thinkingMode !== "hidden");
-      elements.orbit.classList.toggle("is-idle", thinkingMode === "idle");
       thinkingOrb?.setMode(thinkingMode);
     }
 

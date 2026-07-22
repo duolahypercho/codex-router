@@ -54,9 +54,10 @@ active count and lists each live model request.
   exact token count. When the provider reports a quota reset, its local reset
   date and time appear beside the chart title. Usage refreshes every 30 seconds,
   and the detailed view switches when a request uses a different provider.
-- The Island status mark is a still dotted Thinking Orbs-style orb while idle
-  and animates beside a **Thinking** label while generating. Starting uses
-  amber, and errors use a red status dot that pulses once before settling. The
+- The Island status mark uses the Thinking Orbs **Shaping** morph while idle,
+  then switches to the dotted working orb beside a **Thinking** label while
+  generating. Starting uses amber, and errors use a red status dot that pulses
+  once before settling. The
   daily line draws in once when opened or refreshed. Reduce Motion disables
   decorative movement. The Island is shown by default and can be toggled from
   the tray.

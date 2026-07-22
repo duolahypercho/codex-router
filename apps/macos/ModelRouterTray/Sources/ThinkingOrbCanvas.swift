@@ -3,22 +3,30 @@ import CoreVideo
 import QuartzCore
 import SwiftUI
 
-/// Compact dotted "working" thinking orb adapted from https://orbs.jakubantalik.com/
-/// for the Dynamic Island generating state.
+enum ThinkingOrbMode {
+  case shaping
+  case thinking
+}
+
+/// Compact dotted Thinking Orbs renderers adapted from https://orbs.jakubantalik.com/
+/// for the Dynamic Island.
 final class ThinkingOrbRenderer {
   private let size: CGFloat
-  private let speed: CGFloat
   private let dark: Bool
 
-  init(size: CGFloat = 18, speed: CGFloat = 3.9, dark: Bool = true) {
+  init(size: CGFloat = 18, dark: Bool = true) {
     self.size = size
-    self.speed = speed
     self.dark = dark
   }
 
-  func draw(in ctx: CGContext, time: CGFloat) {
+  func draw(in ctx: CGContext, time: CGFloat, mode: ThinkingOrbMode) {
     ctx.clear(CGRect(x: 0, y: 0, width: size, height: size))
-    drawOrbits(in: ctx, time: time)
+    switch mode {
+    case .shaping:
+      drawMorph(in: ctx, time: time)
+    case .thinking:
+      drawOrbits(in: ctx, time: time)
+    }
   }
 
   private func hash(_ seed: Int, _ salt: CGFloat) -> CGFloat {
@@ -56,6 +64,146 @@ final class ThinkingOrbRenderer {
     var r: CGFloat
     var white: CGFloat
     var a: CGFloat
+  }
+
+  private struct Perimeter {
+    let points: [CGPoint]
+    let lengths: [CGFloat]
+    let total: CGFloat
+
+    init(_ points: [CGPoint]) {
+      self.points = points
+      var lengths: [CGFloat] = []
+      var total: CGFloat = 0
+      for index in points.indices {
+        let current = points[index]
+        let next = points[(index + 1) % points.count]
+        let length = hypot(next.x - current.x, next.y - current.y)
+        lengths.append(length)
+        total += length
+      }
+      self.lengths = lengths
+      self.total = total
+    }
+
+    func sample(_ amount: CGFloat) -> CGPoint {
+      var distance = amount * total
+      var index = 0
+      while distance > lengths[index], index < points.count - 1 {
+        distance -= lengths[index]
+        index += 1
+      }
+      let current = points[index]
+      let next = points[(index + 1) % points.count]
+      let progress = lengths[index] > 0 ? min(1, distance / lengths[index]) : 0
+      return CGPoint(
+        x: current.x + (next.x - current.x) * progress,
+        y: current.y + (next.y - current.y) * progress
+      )
+    }
+  }
+
+  private static let triangle = Perimeter(
+    [CGPoint(x: 0, y: -0.26), CGPoint(x: 0.24, y: 0.16), CGPoint(x: -0.24, y: 0.16)]
+  )
+  private static let square = Perimeter(
+    [
+      CGPoint(x: 0, y: -0.2),
+      CGPoint(x: 0.2, y: -0.2),
+      CGPoint(x: 0.2, y: 0.2),
+      CGPoint(x: -0.2, y: 0.2),
+      CGPoint(x: -0.2, y: -0.2),
+    ]
+  )
+
+  private func smoothStep(_ value: CGFloat) -> CGFloat {
+    value * value * (3 - 2 * value)
+  }
+
+  private func morphShapePoint(_ index: Int, amount: CGFloat) -> CGPoint {
+    switch index {
+    case 0:
+      let angle = -.pi / 2 + amount * 2 * .pi
+      return CGPoint(x: cos(angle) * 0.24, y: sin(angle) * 0.24)
+    case 1:
+      return Self.triangle.sample(amount)
+    default:
+      return Self.square.sample(amount)
+    }
+  }
+
+  private func drawMorph(in ctx: CGContext, time: CGFloat) {
+    let hold: CGFloat = 1.4
+    let transition: CGFloat = 0.9
+    let segmentDuration = hold + transition
+    let shapeCount = 3
+    let cycle = time.truncatingRemainder(dividingBy: segmentDuration * CGFloat(shapeCount))
+    let shapeIndex = Int(floor(cycle / segmentDuration))
+    let segmentTime = cycle - CGFloat(shapeIndex) * segmentDuration
+    let blend = segmentTime > hold
+      ? smoothStep((segmentTime - hold) / transition)
+      : 0
+    let nextShapeIndex = (shapeIndex + 1) % shapeCount
+    let spread: CGFloat = 1.45
+    let pathCount = 160
+    var path: [CGPoint] = []
+
+    for index in 0..<pathCount {
+      let amount = CGFloat(index) / CGFloat(pathCount)
+      let current = morphShapePoint(shapeIndex, amount: amount)
+      let next = morphShapePoint(nextShapeIndex, amount: amount)
+      path.append(
+        CGPoint(
+          x: (current.x + (next.x - current.x) * blend) * spread,
+          y: (current.y + (next.y - current.y) * blend) * spread
+        )
+      )
+    }
+
+    var lengths: [CGFloat] = []
+    var total: CGFloat = 0
+    for index in 0..<pathCount {
+      let current = path[index]
+      let next = path[(index + 1) % pathCount]
+      let length = hypot(next.x - current.x, next.y - current.y)
+      lengths.append(length)
+      total += length
+    }
+
+    let pointCount = 18
+    let dotRadius = 0.021 * 1.011 * 1.35 * spread * size
+    let breathe = 1 + 0.02 * sin(segmentTime * 3.1)
+    let center = size / 2
+    var dots: [Dot] = []
+    var pathIndex = 0
+    var traversed: CGFloat = 0
+
+    for index in 0..<pointCount {
+      let target = CGFloat(index) / CGFloat(pointCount) * total
+      while traversed + lengths[pathIndex] < target, pathIndex < pathCount - 1 {
+        traversed += lengths[pathIndex]
+        pathIndex += 1
+      }
+      let current = path[pathIndex]
+      let next = path[(pathIndex + 1) % pathCount]
+      let progress = lengths[pathIndex] > 0
+        ? min(1, (target - traversed) / lengths[pathIndex])
+        : 0
+      let x = (current.x + (next.x - current.x) * progress) * breathe
+      let y = (current.y + (next.y - current.y) * progress) * breathe
+      dots.append(
+        Dot(
+          x: center + x * size,
+          y: center + y * size,
+          z: 0,
+          r: max(0.35, dotRadius),
+          white: 0.1,
+          a: 1
+        )
+      )
+    }
+
+    paintDots(in: ctx, dots: dots, minRadius: 0.25)
   }
 
   private func drawOrbits(in ctx: CGContext, time: CGFloat) {
@@ -135,8 +283,12 @@ final class ThinkingOrbRenderer {
       }
     }
 
-    dots.sort { $0.z < $1.z }
-    for dot in dots {
+    paintDots(in: ctx, dots: dots, minRadius: minRadius)
+  }
+
+  private func paintDots(in ctx: CGContext, dots: [Dot], minRadius: CGFloat) {
+    let sortedDots = dots.sorted { $0.z < $1.z }
+    for dot in sortedDots {
       if dot.a < 0.02 { continue }
       let white = min(1, max(0, dot.white))
       let tone = (dark ? 1 - white : white)
@@ -155,6 +307,7 @@ final class ThinkingOrbNSView: NSView {
   private var displayLink: CVDisplayLink?
   private var startTime = CACurrentMediaTime()
   private var running = false
+  private var mode: ThinkingOrbMode = .shaping
   var reduceMotion = false {
     didSet { setNeedsDisplay(bounds) }
   }
@@ -195,9 +348,20 @@ final class ThinkingOrbNSView: NSView {
     }
   }
 
+  func setMode(_ value: ThinkingOrbMode) {
+    guard mode != value else { return }
+    mode = value
+    startTime = CACurrentMediaTime()
+    setNeedsDisplay(bounds)
+  }
+
   private func start() {
     running = true
     guard !reduceMotion else {
+      if let displayLink {
+        CVDisplayLinkStop(displayLink)
+        self.displayLink = nil
+      }
       setNeedsDisplay(bounds)
       return
     }
@@ -235,26 +399,33 @@ final class ThinkingOrbNSView: NSView {
     guard let ctx = NSGraphicsContext.current?.cgContext else { return }
     let elapsed = CGFloat(CACurrentMediaTime() - startTime)
     let time = reduceMotion || !running ? 0.6 : elapsed * rendererSpeed
-    renderer.draw(in: ctx, time: time)
+    renderer.draw(in: ctx, time: time, mode: mode)
   }
 
-  private var rendererSpeed: CGFloat { 3.9 }
+  private var rendererSpeed: CGFloat {
+    switch mode {
+    case .shaping: return 2.08
+    case .thinking: return 3.9
+    }
+  }
 }
 
 struct ThinkingOrbView: NSViewRepresentable {
-  var active: Bool
+  var mode: ThinkingOrbMode
   var reduceMotion: Bool
   var size: CGFloat = 18
 
   func makeNSView(context: Context) -> ThinkingOrbNSView {
     let view = ThinkingOrbNSView(size: size)
+    view.setMode(mode)
     view.reduceMotion = reduceMotion
-    view.setRunning(active)
+    view.setRunning(true)
     return view
   }
 
   func updateNSView(_ nsView: ThinkingOrbNSView, context: Context) {
+    nsView.setMode(mode)
     nsView.reduceMotion = reduceMotion
-    nsView.setRunning(active)
+    nsView.setRunning(true)
   }
 }
