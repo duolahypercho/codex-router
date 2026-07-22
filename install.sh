@@ -17,11 +17,11 @@ usage() {
   cat <<'EOF'
 Usage: install.sh [options]
 
-Install external model routes for Codex, Claude Desktop, or Cursor.
+Install external model routes for Codex or Cursor.
 
 Options:
   --install-dir PATH  Stable checkout used by the background service
-  --target APP        Install for "codex" (default), "claude", or "cursor"
+  --target APP        Install for "codex" (default) or "cursor"
   --prepare-only      Install dependencies without changing either app
   --api-key           Alias for --kimi-api-key
   --kimi-api-key      Prompt securely for a Kimi Platform API key
@@ -48,7 +48,7 @@ die() {
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --target)
-      [ "$#" -ge 2 ] || die "--target requires codex or claude"
+      [ "$#" -ge 2 ] || die "--target requires codex or cursor"
       target=$2
       shift 2
       ;;
@@ -114,15 +114,11 @@ while [ "$#" -gt 0 ]; do
 done
 
 case "$target" in
-  codex|claude|cursor) ;;
-  *) die "--target must be codex, claude, or cursor" ;;
+  codex|cursor) ;;
+  *) die "--target must be codex or cursor" ;;
 esac
 if [ "$target" != codex ] && [ "$migrate_known" = true ]; then
   die "--migrate-known applies only to the Codex target"
-fi
-host_platform=$(uname -s 2>/dev/null || true)
-if [ "$target" = claude ] && [ "$host_platform" = Linux ] && [ "$prepare_only" != true ]; then
-  die "Claude Desktop third-party mode is supported on macOS and Windows; use --prepare-only for Linux development"
 fi
 MODEL_ROUTER_TARGET=$target
 export MODEL_ROUTER_TARGET
@@ -207,11 +203,11 @@ if ! "$repo_dir/bin/setup" "$@"; then
   die "setup failed"
 fi
 
-if [ "$target" = claude ]; then
+if [ "$target" = cursor ]; then
   cat <<'EOF'
 
-Claude Router is installed. Fully quit and reopen Claude Desktop. The app will
-use its local third-party inference configuration and show the enabled routes.
+Cursor Router is installed. Run `./bin/model-router cursor setup` for the Base
+URL, key, and model IDs to paste into Cursor's model settings.
 EOF
 else
   cat <<'EOF'

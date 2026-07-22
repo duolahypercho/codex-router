@@ -5,8 +5,8 @@ These instructions apply when a user asks an agent to install this repository.
 ## Choose the target
 
 - Use `codex` when the user says Codex or does not name an app.
-- Use `claude` only when the user explicitly asks for Claude Desktop. Read and
-  follow [CLAUDE.md](CLAUDE.md) before changing anything.
+- Use `cursor` only when the user explicitly asks for Cursor. Read and follow
+  [docs/CURSOR.md](docs/CURSOR.md) before changing anything.
 - If the user explicitly requests both, install them sequentially. They share
   source code but use separate state, ports, services, keys, provider
   selections, and application configuration.

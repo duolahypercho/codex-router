@@ -7,12 +7,10 @@ target=${MODEL_ROUTER_TARGET:-codex}
 if [ "$target" = codex ]; then
   node src/legacy-migration.mjs assert-clear >/dev/null
   config_manager=src/config-manager.mjs
-elif [ "$target" = claude ]; then
-  config_manager=src/claude-config-manager.mjs
 elif [ "$target" = cursor ]; then
   config_manager=src/cursor-config-manager.mjs
 else
-  echo "MODEL_ROUTER_TARGET must be codex, claude, or cursor." >&2
+  echo "MODEL_ROUTER_TARGET must be codex or cursor." >&2
   exit 2
 fi
 node src/provider-selection.mjs ensure-configured >/dev/null

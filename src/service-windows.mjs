@@ -21,12 +21,10 @@ const effectivePlatform = process.env.CODEX_ROUTER_SERVICE_PLATFORM || process.p
 const command = process.argv[2] || "status";
 const TASK_NAMES = {
   codex: "Codex Router",
-  claude: "Codex Router - Claude",
   cursor: "Codex Router - Cursor",
 };
 const WRAPPER_NAMES = {
   codex: "start-codex-router.cmd",
-  claude: "start-claude-router.cmd",
   cursor: "start-cursor-router.cmd",
 };
 const taskName = TASK_NAMES[TARGET];

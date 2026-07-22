@@ -9,14 +9,13 @@ additive model configuration you choose.
 ## T3 Code
 
 [T3 Code](https://betterstack.com/community/guides/ai/t3-code/) is a GUI that
-drives the official coding CLIs (Codex CLI, Claude Code) through adapters rather
+drives official coding CLIs through adapters rather
 than talking to models directly. Because of that, **you integrate the underlying
 CLI, and T3 Code inherits the added models** — there is no T3 Code target to
 install.
 
 1. Install the target for the CLI T3 Code drives:
    - Codex adapter → install the **codex** target (`./install.sh --target codex --guided`).
-   - Claude adapter → install the **claude** target (`./install.sh --target claude --guided`).
 2. Fully quit and reopen T3 Code so its adapter reloads the model list.
 3. Pick the added model in T3 Code's model selector; project context and thread
    history are preserved by T3 Code as usual.

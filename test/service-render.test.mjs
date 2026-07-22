@@ -42,21 +42,6 @@ test("background service definitions render for macOS, Linux, and Windows", () =
     assert.match(windows, /set "CODEX_ROUTER_STATE_DIR=/);
     assert.match(windows, /litellm|start\.mjs/);
 
-    const claudeLaunchd = render("service-macos.mjs", "darwin", testRoot, "claude");
-    assert.match(claudeLaunchd, /<string>io\.github\.codex-router\.claude<\/string>/);
-    assert.match(claudeLaunchd, /MODEL_ROUTER_TARGET/);
-    assert.match(claudeLaunchd, /<string>claude<\/string>/);
-    assert.match(claudeLaunchd, /<string>4110<\/string>/);
-
-    const claudeSystemd = render("service-linux.mjs", "linux", testRoot, "claude");
-    assert.match(claudeSystemd, /Description=Claude Router/);
-    assert.match(claudeSystemd, /Environment="MODEL_ROUTER_TARGET=claude"/);
-    assert.match(claudeSystemd, /MODEL_ROUTER_PORT=4110/);
-
-    const claudeWindows = render("service-windows.mjs", "win32", testRoot, "claude");
-    assert.match(claudeWindows, /set "MODEL_ROUTER_TARGET=claude"/);
-    assert.match(claudeWindows, /set "MODEL_ROUTER_PORT=4110"/);
-
     const cursorLaunchd = render("service-macos.mjs", "darwin", testRoot, "cursor");
     assert.match(cursorLaunchd, /<string>io\.github\.codex-router\.cursor<\/string>/);
     assert.match(cursorLaunchd, /<string>cursor<\/string>/);

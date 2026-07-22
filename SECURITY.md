@@ -1,6 +1,6 @@
 # Security model
 
-Codex and Claude targets share source code but not their trust roots. Each has a
+Codex and Cursor targets share source code but not their trust roots. Each has a
 separate caller key, internal key, state directory, provider selection, API-key
 files, service identity, and port range. Kimi OAuth is the intentional
 exception: both targets may reuse the official Kimi CLI session under
@@ -29,9 +29,9 @@ protected or redacted.
 
 ## Local secret storage
 
-Codex state lives under `$CODEX_HOME/codex-router` by default. Claude state uses
-`~/.local/state/model-router/claude` on POSIX or
-`%LOCALAPPDATA%\model-router\claude` on Windows. Each target has its own copy of
+Codex state lives under `$CODEX_HOME/codex-router` by default. Cursor state uses
+`~/.local/state/model-router/cursor` on POSIX or
+`%LOCALAPPDATA%\model-router\cursor` on Windows. Each target has its own copy of
 the applicable files below; the native/merged catalogs exist only for Codex:
 
 | File | Purpose | Mode |
@@ -51,7 +51,7 @@ the applicable files below; the native/merged catalogs exist only for Codex:
 | `support/` | Locally generated diagnostic bundles | `600` files |
 
 The Codex target can read provider keys from process environment or compatible
-legacy macOS Keychain services; the Claude target does not reuse those Codex
+legacy macOS Keychain services; the Cursor target does not reuse those Codex
 Keychain entries. The interactive helper writes target-specific protected local
 files so the per-user background service can access them without copying
 secrets into its service definition. Files use mode `600` on POSIX systems. On
@@ -74,7 +74,7 @@ a generated config from a live installation.
 
 The router, LiteLLM gateway, OAuth forwarder, and API forwarder bind only to
 `127.0.0.1`. Every model route requires a random caller capability: Codex carries
-it in the managed URL and Claude sends it as the configured gateway credential.
+it in the managed URL and Cursor sends it as the configured gateway credential.
 Internal gateway and forwarder routes require a separate random service key,
 and credential-detail health responses are authenticated.
 Model requests must use JSON, requests with browser-origin headers are rejected,
@@ -115,16 +115,6 @@ Review the scoped difference with:
 ```sh
 diff -u ~/.codex/config.toml.pre-codex-router ~/.codex/config.toml
 ```
-
-For Claude, the config manager creates one UUID-named entry in the current
-user's `Claude-3p/configLibrary`, preserves all unrelated entries, records the
-previously applied entry, and restores it on disable. It fails closed on
-malformed library metadata and retains a protected pre-router metadata copy.
-Standard Claude user data and Anthropic authentication are not edited. Because
-the local library layout is not a documented public API, this integration is
-experimental and the in-app third-party configuration window is the manual
-fallback. The owned Claude entry contains its target-specific caller key, so it
-is protected for the current user and must not be posted with bug reports.
 
 ## Dependency and release hygiene
 

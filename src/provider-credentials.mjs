@@ -81,10 +81,9 @@ export function credentialStatus(providerOrId, options = {}) {
     ? { configured: true, source: credential.source, persistent: credential.persistent }
     : {
         configured: false,
-        setup:
-          TARGET === "claude"
-            ? `Run ./bin/model-router claude provider-key ${provider.id} set`
-            : `Run ./bin/provider-key ${provider.id} set`,
+        setup: TARGET === "cursor"
+          ? `Run ./bin/model-router cursor provider-key ${provider.id} set`
+          : `Run ./bin/provider-key ${provider.id} set`,
       };
 }
 

@@ -2,7 +2,7 @@
 param(
   [switch]$CheckoutInstall,
   [switch]$PrepareOnly,
-  [ValidateSet("codex", "claude", "cursor")]
+  [ValidateSet("codex", "cursor")]
   [string]$Target = "codex",
   [switch]$Guided,
   [switch]$Auto,
@@ -93,7 +93,6 @@ if (-not $CheckoutInstall) {
   }
 
   $SetupScript = switch ($Target) {
-    "claude" { "src\claude-setup.mjs" }
     "cursor" { "src\cursor-setup.mjs" }
     default { "src\setup.mjs" }
   }
@@ -188,7 +187,7 @@ try {
     exit 0
   }
 
-  $ConfigManager = if ($Target -eq "claude") { "src\claude-config-manager.mjs" } else { "src\config-manager.mjs" }
+  $ConfigManager = if ($Target -eq "cursor") { "src\cursor-config-manager.mjs" } else { "src\config-manager.mjs" }
   $ConfigEnabled = $false
   $ServiceInstalled = $false
   try {
@@ -207,8 +206,8 @@ try {
     if ($ConfigEnabled) { & node $ConfigManager disable 2>$null | Out-Null }
     throw
   }
-  if ($Target -eq "claude") {
-    Write-Host "Installed the selected external model routes. Fully quit and reopen Claude Desktop."
+  if ($Target -eq "cursor") {
+    Write-Host "Installed the local OpenAI-compatible gateway for Cursor. Run model-router cursor setup for the connection details."
   } else {
     Write-Host "Installed the selected external model routes. Fully quit and reopen Codex."
   }

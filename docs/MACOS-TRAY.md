@@ -8,9 +8,9 @@ active. The tray shows Codex service state, an all-provider usage overview,
 active-provider detail, and provider setup shared with the existing
 command-line control plane.
 
-The tray currently focuses on Codex. Claude and Cursor do not appear in this
-interface, and the app does not disable, uninstall, or change their existing
-router configuration.
+The tray currently focuses on Codex. Cursor does not appear in this interface,
+and the app does not disable, uninstall, or change its existing router
+configuration.
 
 ## Provider usage
 

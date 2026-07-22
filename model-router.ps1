@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
   [Parameter(Position = 0, Mandatory = $true)]
-  [ValidateSet("codex", "claude")]
+  [ValidateSet("codex", "cursor")]
   [string]$Target,
 
   [Parameter(Position = 1, Mandatory = $true)]

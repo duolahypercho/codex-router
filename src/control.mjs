@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 // only rewrites each target's provider selection; making it live is a separate
 // explicit `apply`, so a toggle never silently restarts a running target.
 
-const TARGETS = ["codex", "claude", "cursor"];
+const TARGETS = ["codex", "cursor"];
 const SELF = fileURLToPath(import.meta.url);
 const REPO_ROOT = path.resolve(path.dirname(SELF), "..");
 const args = process.argv.slice(2);
@@ -84,12 +84,6 @@ async function emitProbe() {
   const { readProviderSelection } = await import("./provider-selection.mjs");
   const { LISTED_MODELS } = await import("./model-registry.mjs");
 
-  const roleBySlug = {};
-  if (TARGET === "claude") {
-    const { claudeRoleAssignments } = await import("./claude-role-map.mjs");
-    for (const { roleId, model } of claudeRoleAssignments()) roleBySlug[model.slug] = roleId;
-  }
-
   const enabledProviders = readProviderSelection();
   const usageEvents = TARGET === "codex"
     ? (await import("./usage-events.mjs")).recentUsageEvents()
@@ -100,7 +94,6 @@ async function emitProbe() {
     provider: model.provider,
     gatewayModel: model.gatewayModel,
     enabled: enabledProviders.includes(model.provider),
-    ...(roleBySlug[model.slug] ? { claudeRole: roleBySlug[model.slug] } : {}),
   }));
   const models = TARGET === "codex"
     ? [...nativeCodexModels(NATIVE_CATALOG_PATH), ...routedModels]
@@ -178,8 +171,7 @@ function printOverview(asJson) {
     process.stdout.write(`\n${target}${slice.configured ? "" : " (not set up)"}:\n`);
     for (const model of slice.models) {
       const mark = model.enabled ? "x" : " ";
-      const role = model.claudeRole ? ` -> ${model.claudeRole}` : "";
-      process.stdout.write(`  [${mark}] ${model.displayName}${role}\n`);
+      process.stdout.write(`  [${mark}] ${model.displayName}\n`);
     }
   }
 }
@@ -207,9 +199,7 @@ function refreshActiveTarget(target) {
   const command =
     target === "codex"
       ? [process.execPath, [path.join(REPO_ROOT, "src", "catalog.mjs")]]
-      : target === "claude"
-        ? [process.execPath, [path.join(REPO_ROOT, "src", "claude-config-manager.mjs"), "refresh"]]
-        : undefined;
+      : undefined;
   if (!command) return;
   const result = spawnSync(command[0], command[1], {
     env: { ...process.env, MODEL_ROUTER_TARGET: target },

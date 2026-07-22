@@ -87,8 +87,8 @@ function requireCallerAuth(request, response) {
   return false;
 }
 
-// See claude-router: only a real remote web page (http/https, non-loopback host)
-// is the threat. Electron apps like Cursor send app-scheme/null/loopback origins
+// Only a real remote web page (http/https, non-loopback host) is the threat.
+// Electron apps like Cursor send app-scheme/null/loopback origins
 // plus Sec-Fetch-* headers legitimately; the caller key is the real auth.
 function isRemoteWebOrigin(origin) {
   if (!origin || origin === "null") return false;

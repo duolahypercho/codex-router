@@ -1,23 +1,20 @@
 # Installation, migration, and upgrades
 
-This page covers the stable Codex target. The same checkout also contains an
-isolated experimental Claude Desktop target; see [Claude Desktop target](CLAUDE.md)
-for its one-command install, compatibility boundary, and rollback behavior.
-
-Use the target-qualified command when both integrations may be present:
+This page covers the stable Codex target. Use the target-qualified command when
+the Cursor integration may also be present:
 
 ```sh
 ./bin/model-router codex doctor
-./bin/model-router claude doctor
+./bin/model-router cursor doctor
 ```
 
 ## Supported hosts
 
-| Host | Stable Codex surface | Experimental Claude surface |
+| Host | Stable Codex surface | Experimental Cursor surface |
 | --- | --- | --- |
-| macOS | Codex App or CLI | Claude Desktop |
-| Windows | Codex App or CLI | Claude Desktop |
-| Linux | Codex CLI | Router development only |
+| macOS | Codex App or CLI | Cursor local gateway |
+| Windows | Codex App or CLI | Cursor local gateway |
+| Linux | Codex CLI | Cursor local gateway |
 
 Required software:
 

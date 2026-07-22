@@ -3,7 +3,7 @@
   "version": "0.4.0-beta.1",
   "private": true,
   "type": "module",
-  "description": "Extensible local model router for Codex and experimental Claude Desktop targets",
+  "description": "Extensible local model router for Codex and Cursor",
   "engines": {
     "node": ">=22.19.0"
   },

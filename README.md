@@ -6,13 +6,12 @@ AI desktop apps through one local, credential-isolating router.
 | Target | Integration | Status |
 | --- | --- | --- |
 | Codex App and CLI | Responses API plus native model-catalog merge | Stable |
-| Claude Desktop | Third-party Anthropic Messages gateway | Experimental |
 | Cursor | Manual OpenAI-compatible base URL | Experimental |
 
 The targets share a provider registry and translation layer, but keep separate
 ports, state, caller keys, provider selection, services, and app configuration.
-Installing the Claude target does not edit Codex, and installing Codex does not
-edit Claude.
+Installing the Cursor target does not edit Codex, and installing Codex does not
+edit Cursor.
 
 Codex Router is an independent community project. It is not affiliated with or
 endorsed by OpenAI, Anthropic, Moonshot AI, DeepSeek, OpenRouter, or the
@@ -32,18 +31,6 @@ only recognized older versions, run the Codex doctor, and leave the final app
 restart to me. Never ask me to paste a token or API key into chat.
 ```
 
-For Claude, paste this into Claude Desktop Code/Cowork or Claude Code:
-
-```text
-Install the experimental Claude Desktop target from this public repository:
-https://github.com/duolahypercho/codex-router
-
-Follow CLAUDE.md. Preserve my existing Claude configurations, Anthropic account
-data, tools, plugins, MCP servers, and Codex setup. Use only the provider
-authentication I choose, run the Claude doctor, and leave the final Claude
-Desktop restart to me. Never ask me to paste a token or API key into chat.
-```
-
 If compatible authentication already exists, an agent can finish everything
 except the final app restart. API keys are entered only through a hidden local
 terminal prompt.
@@ -57,14 +44,7 @@ curl -fsSL https://raw.githubusercontent.com/duolahypercho/codex-router/main/ins
   | sh -s -- --target codex --guided
 ```
 
-Claude Desktop on macOS:
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/duolahypercho/codex-router/main/install.sh \
-  | sh -s -- --target claude --guided
-```
-
-Windows PowerShell, changing `codex` to `claude` for the Claude target:
+Windows PowerShell:
 
 ```powershell
 $installer = Join-Path $env:TEMP "codex-router-install.ps1"
@@ -79,14 +59,12 @@ request unless `--smoke-test` is explicitly selected.
 
 Requirements:
 
-- The target app: Codex App/CLI, or the latest Claude Desktop on macOS/Windows.
+- The target app: Codex App/CLI or Cursor.
 - Node.js 22.19 or newer; Node.js 24 LTS is recommended.
 - `uv`, or Python 3.10+ with `venv`.
 - Git for the managed one-command checkout and rollback.
 
-Linux installations support the Codex CLI. The Claude router can run on Linux
-for development, but this project does not claim support for a Linux Claude
-Desktop distribution.
+Linux installations support the Codex CLI and the Cursor target's local gateway.
 
 ## Models and authentication
 
@@ -124,9 +102,9 @@ selection and API-key files:
 
 ```sh
 ./bin/model-router codex providers
-./bin/model-router claude providers
-./bin/model-router claude providers enable deepseek
-./bin/model-router claude provider-key deepseek set
+./bin/model-router cursor providers
+./bin/model-router cursor providers enable deepseek
+./bin/model-router cursor provider-key deepseek set
 ./bin/model-router codex provider-key anthropic-api set
 ```
 
@@ -190,31 +168,6 @@ and are not available while signed out. The equivalent local control command is
 `./bin/control auth-mode on` or `./bin/control auth-mode off`; when using the
 command directly, restart Codex yourself.
 
-## Make models appear in Claude Desktop
-
-The Claude target uses Claude Desktop's third-party inference gateway mode. Run:
-
-```sh
-./bin/model-router claude doctor
-```
-
-Then fully quit and reopen Claude Desktop and choose the local third-party
-deployment when prompted. The installer creates one owned entry in the current
-user's `Claude-3p/configLibrary`, preserves all other entries, and restores the
-previous selection when disabled.
-
-Anthropic documents gateway mode for Claude models. Kimi and DeepSeek through
-that interface are an experimental community compatibility path, not an
-Anthropic-supported model configuration. Standard Claude data and Anthropic
-sign-in are not replaced, but third-party mode uses provider authentication and
-billing rather than a Claude subscription.
-
-The automated config-library integration is also experimental because its
-on-disk layout is not a documented public API. The supported manual fallback is
-Claude Desktop's **Developer → Configure Third-Party Inference…** window. See
-[the Claude target guide](docs/CLAUDE.md) for exact fields, rollback behavior,
-tool support, and troubleshooting.
-
 ## macOS tray control panel
 
 On macOS, build and open the native menu-bar control panel with:
@@ -261,21 +214,19 @@ packaging, and the platform behavior matrix.
 
 ```sh
 ./bin/model-router codex setup --guided
-./bin/model-router claude setup --guided
-./bin/model-router claude status
-./bin/model-router claude doctor --fix
-./bin/model-router claude disable
-./bin/model-router claude enable
-./bin/model-router claude uninstall
 ./bin/model-router cursor setup --guided
 ./bin/model-router cursor doctor
+./bin/model-router cursor status
+./bin/model-router cursor disable
+./bin/model-router cursor enable
+./bin/model-router cursor uninstall
 ```
 
 The optional live check makes one small request per selected provider and may
 consume paid quota:
 
 ```sh
-./bin/model-router claude smoke-test --yes
+./bin/model-router codex smoke-test --yes
 ```
 
 `disable` removes only the selected app integration and its current service.
@@ -289,8 +240,8 @@ For a managed Git checkout:
 
 ```sh
 ./bin/model-router codex update
-./bin/model-router claude update
-./bin/model-router claude rollback
+./bin/model-router cursor update
+./bin/model-router cursor rollback
 ```
 
 Updates require a clean `main` checkout and a recognized repository origin.
@@ -307,18 +258,18 @@ and GitHub build-provenance attestations.
 ```mermaid
 flowchart LR
   C["Codex Responses :4102"] --> L1["LiteLLM :4100"]
-  H["Claude Messages :4110"] --> L2["LiteLLM :4111"]
+  U["Cursor Chat Completions :4104"] --> L2["LiteLLM :4105"]
   L1 --> K1["Kimi OAuth :4101"]
   L1 --> A1["API keys :4103"]
-  L2 --> K2["Kimi OAuth :4112"]
-  L2 --> A2["API keys :4113"]
+  L2 --> K2["Kimi OAuth :4106"]
+  L2 --> A2["API keys :4107"]
   K1 --> P["External providers"]
   A1 --> P
   K2 --> P
   A2 --> P
 ```
 
-Codex sends the Responses API; Claude sends the Anthropic Messages API.
+Codex sends the Responses API; Cursor sends OpenAI-compatible Chat Completions.
 LiteLLM translates either contract to each provider's native protocol,
 including OpenAI-compatible Chat Completions and Anthropic Messages, with
 streaming and tool-call shapes preserved. Every listener binds to `127.0.0.1`.
@@ -356,7 +307,6 @@ target. See [Development](docs/DEVELOPMENT.md) for the registry contract.
 ## Documentation
 
 - [Installation, migration, and upgrades](docs/INSTALL.md)
-- [Claude Desktop target](docs/CLAUDE.md)
 - [Cursor target](docs/CURSOR.md)
 - [Compatible apps: T3 Code and opencode](docs/COMPATIBLE-APPS.md)
 - [Troubleshooting](docs/TROUBLESHOOTING.md)
@@ -371,7 +321,6 @@ References: [Kimi Code CLI OAuth](https://www.kimi.com/help/kimi-code/cli-gettin
 [Anthropic models](https://platform.claude.com/docs/en/about-claude/models/overview),
 [Anthropic Messages API](https://platform.claude.com/docs/en/api/messages),
 [Codex advanced configuration](https://learn.chatgpt.com/docs/config-file/config-advanced),
-[Claude Desktop third-party gateway](https://claude.com/docs/third-party/claude-desktop/gateway),
 and [opencodex](https://github.com/lidge-jun/opencodex).
 
 MIT licensed. See [LICENSE](LICENSE) and [NOTICE.md](NOTICE.md).

@@ -4,14 +4,14 @@ import test from "node:test";
 import { currentCheckoutInstaller } from "../src/update.mjs";
 
 test("checkout updates preserve the selected app target on every platform", () => {
-  const windowsClaude = currentCheckoutInstaller("win32", "claude");
-  assert.equal(windowsClaude.command, "powershell.exe");
-  assert.deepEqual(windowsClaude.args.slice(-2), ["-Target", "claude"]);
-
   const windowsCodex = currentCheckoutInstaller("win32", "codex");
   assert.deepEqual(windowsCodex.args.slice(-2), ["-Target", "codex"]);
 
-  const posixClaude = currentCheckoutInstaller("darwin", "claude");
-  assert.match(posixClaude.command, /bin[\\/]install$/);
-  assert.deepEqual(posixClaude.args, []);
+  const windowsCursor = currentCheckoutInstaller("win32", "cursor");
+  assert.equal(windowsCursor.command, "powershell.exe");
+  assert.deepEqual(windowsCursor.args.slice(-2), ["-Target", "cursor"]);
+
+  const posixCursor = currentCheckoutInstaller("darwin", "cursor");
+  assert.match(posixCursor.command, /bin[\\/]install$/);
+  assert.deepEqual(posixCursor.args, []);
 });

@@ -7,8 +7,6 @@
 - `src/catalog.mjs` merges listed registry models with native Codex models.
 - `src/litellm-config.mjs` generates every provider translation route.
 - `src/router.mjs` dispatches native and namespaced external model IDs.
-- `src/claude-router.mjs` exposes the authenticated Anthropic Messages target.
-- `src/claude-config-manager.mjs` owns one reversible local Claude config entry.
 - `src/oauth-forwarder.mjs` owns Kimi CLI OAuth loading and refresh.
 - `src/grok-oauth-forwarder.mjs` adapts Grok CLI OAuth to OpenAI-compatible chat.
 - `src/api-forwarder.mjs` is shared by all API-key providers.
@@ -34,9 +32,7 @@
 7. Install in isolated state and run
    `bin/test-model provider/model --live --yes`; verify text, streaming, tool
    calls, and compaction before setting `listed: true`.
-8. Verify the Claude Messages target separately: basic and streamed messages,
-   image input, tool calls/results, context behavior, and sanitized failures.
-9. Update the README model table and provider-specific setup documentation.
+8. Update the README model table and provider-specific setup documentation.
 
 The shared API forwarder strips host and internal authentication before
 injecting the selected provider key. It supports the registry's tested
@@ -76,9 +72,8 @@ npm audit --omit=dev
 The test suite verifies native header forwarding, external credential
 isolation, Kimi and DeepSeek rewriting, registry-generated gateway routes,
 Zstandard request decoding, both Codex compaction formats, legacy migration,
-provider selection, target isolation, Claude Messages translation, reversible
-Claude config management, discovery comparison, and service rendering for all
-three service platforms.
+provider selection, target isolation, Anthropic API forwarding, discovery
+comparison, and service rendering for all three service platforms.
 
 CI runs the Node suite on macOS, Linux, and Windows. Tagged releases are built
 only after the suite passes and include checksums plus GitHub provenance
@@ -92,16 +87,6 @@ CODEX_HOME="$test_root/codex" \
 CODEX_ROUTER_STATE_DIR="$test_root/state" \
 CODEX_BIN=/Applications/ChatGPT.app/Contents/Resources/codex \
 ./install.sh --prepare-only
-```
-
-Prepare the Claude target without touching either real app configuration:
-
-```sh
-test_root=$(mktemp -d)
-MODEL_ROUTER_TARGET=claude \
-MODEL_ROUTER_STATE_DIR="$test_root/state" \
-CLAUDE_ROUTER_CONFIG_LIBRARY="$test_root/claude-config" \
-./install.sh --target claude --prepare-only
 ```
 
 Never use a real provider key in a fixture, command argument, shell history, or

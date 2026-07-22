@@ -69,25 +69,11 @@ function probe(target, providers, usageEvents = [], options = {}) {
   }
 }
 
-test("claude probe reports enabled models with role mapping", () => {
-  const slice = probe("claude", ["grok-oauth"]);
-  assert.equal(slice.target, "claude");
-  assert.equal(slice.configured, true);
-  const grok = slice.models.find((m) => m.provider === "grok-oauth");
-  assert.equal(grok.enabled, true);
-  assert.ok(grok.claudeRole);
-  // A disabled provider is reported but not enabled, and has no role.
-  const kimi = slice.models.find((m) => m.provider === "kimi-oauth");
-  assert.equal(kimi.enabled, false);
-  assert.equal(kimi.claudeRole, undefined);
-});
-
-test("cursor probe reports enabled models without claude roles", () => {
+test("cursor probe reports enabled models", () => {
   const slice = probe("cursor", ["deepseek"]);
   assert.equal(slice.target, "cursor");
   const deepseek = slice.models.filter((m) => m.provider === "deepseek");
   assert.ok(deepseek.length > 0 && deepseek.every((m) => m.enabled));
-  assert.ok(slice.models.every((m) => m.claudeRole === undefined));
 });
 
 test("codex probe exposes only privacy-safe recent usage events", () => {
@@ -244,5 +230,5 @@ test("aggregate overview covers every target", () => {
     encoding: "utf8",
   });
   const overview = JSON.parse(output);
-  assert.deepEqual(Object.keys(overview.targets).sort(), ["claude", "codex", "cursor"]);
+  assert.deepEqual(Object.keys(overview.targets).sort(), ["codex", "cursor"]);
 });

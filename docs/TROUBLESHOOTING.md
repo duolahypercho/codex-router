@@ -4,11 +4,8 @@ Start with:
 
 ```sh
 ./bin/model-router codex doctor
-./bin/model-router claude doctor
+./bin/model-router cursor doctor
 ```
-
-Use only the command for the installed target. Claude-specific recovery is in
-[the Claude target guide](CLAUDE.md#troubleshooting).
 
 Every `FAIL` includes a targeted fix. To rebuild only repository-managed files,
 config, and service state:
@@ -27,9 +24,9 @@ Neither command prints credential values. Repair refuses unknown router owners.
 
 ## External models are missing from the picker
 
-The steps below are for Codex. For Claude Desktop, use
-`./bin/model-router claude doctor`, fully restart Claude, and check the Managed
-Configuration Report described in the Claude guide.
+The steps below are for Codex. For Cursor, use
+`./bin/model-router cursor doctor` and verify the manually configured connection
+values described in the Cursor guide.
 
 ```sh
 ./bin/providers

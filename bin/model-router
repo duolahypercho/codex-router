@@ -5,14 +5,13 @@ repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 
 usage() {
   cat <<'EOF'
-Usage: model-router codex|claude|cursor COMMAND [arguments]
+Usage: model-router codex|cursor COMMAND [arguments]
 
 Commands:
   setup, install, doctor, status, provider-key, providers, enable, disable,
   uninstall, smoke-test, start, update, rollback
 
 Examples:
-  ./bin/model-router claude setup --guided
   ./bin/model-router cursor doctor
   ./bin/model-router codex status
 EOF
@@ -28,7 +27,7 @@ command=$2
 shift 2
 
 case "$target" in
-  codex|claude|cursor) ;;
+  codex|cursor) ;;
   *) echo "Unknown target: $target" >&2; usage >&2; exit 2 ;;
 esac
 

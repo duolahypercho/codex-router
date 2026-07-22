@@ -2,7 +2,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const supportedTargets = new Set(["codex", "claude", "cursor"]);
+const supportedTargets = new Set(["codex", "cursor"]);
 
 export const TARGET = process.env.MODEL_ROUTER_TARGET || "codex";
 if (!supportedTargets.has(TARGET)) {
@@ -13,7 +13,6 @@ if (!supportedTargets.has(TARGET)) {
 
 const TARGET_DISPLAY_NAMES = {
   codex: "Codex Router",
-  claude: "Claude Router",
   cursor: "Cursor Router",
 };
 export const TARGET_DISPLAY_NAME = TARGET_DISPLAY_NAMES[TARGET];
@@ -39,9 +38,6 @@ function defaultManagedStateDir(targetName) {
 }
 
 function managedStateDir() {
-  if (TARGET === "claude") {
-    return process.env.CLAUDE_ROUTER_STATE_DIR || defaultManagedStateDir("claude");
-  }
   if (TARGET === "cursor") {
     return process.env.CURSOR_ROUTER_STATE_DIR || defaultManagedStateDir("cursor");
   }
@@ -69,7 +65,6 @@ export const LOG_PATH = path.join(STATE_DIR, "router.log");
 export const BACKUP_PATH = path.join(CODEX_HOME, "config.toml.pre-codex-router");
 const SERVICE_LABELS = {
   codex: "io.github.codex-router",
-  claude: "io.github.codex-router.claude",
   cursor: "io.github.codex-router.cursor",
 };
 export const SERVICE_LABEL = SERVICE_LABELS[TARGET];
@@ -86,34 +81,7 @@ export const LAUNCH_AGENTS_DIR =
   path.join(os.homedir(), "Library", "LaunchAgents");
 export const LAUNCH_AGENT_PATH = path.join(LAUNCH_AGENTS_DIR, `${SERVICE_LABEL}.plist`);
 
-export const CLAUDE_CONFIG_LIBRARY_DIR =
-  process.env.CLAUDE_ROUTER_CONFIG_LIBRARY ||
-  (process.platform === "win32"
-    ? path.join(
-        process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local"),
-        "Claude-3p",
-        "configLibrary",
-      )
-    : process.platform === "darwin"
-      ? path.join(
-          os.homedir(),
-          "Library",
-          "Application Support",
-          "Claude-3p",
-          "configLibrary",
-        )
-      : path.join(
-          process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config"),
-          "Claude-3p",
-          "configLibrary",
-        ));
-export const CLAUDE_CONFIG_META_PATH = path.join(CLAUDE_CONFIG_LIBRARY_DIR, "_meta.json");
-export const CLAUDE_CONFIG_STATE_PATH = path.join(STATE_DIR, "claude-config-state.json");
 export const CURSOR_CONFIG_STATE_PATH = path.join(STATE_DIR, "cursor-config-state.json");
-export const CLAUDE_CONFIG_BACKUP_PATH = path.join(
-  STATE_DIR,
-  "claude-config-meta.pre-router.json",
-);
 
 function port(name, fallback) {
   const value = Number(process.env[name] || fallback);
@@ -127,7 +95,6 @@ function port(name, fallback) {
 // four; grokOauth is a fifth forwarder port for the Grok OAuth provider.
 const TARGET_PORT_DEFAULTS = {
   codex: { gateway: 4100, oauth: 4101, router: 4102, api: 4103, grokOauth: 4108 },
-  claude: { gateway: 4111, oauth: 4112, router: 4110, api: 4113, grokOauth: 4114 },
   cursor: { gateway: 4105, oauth: 4106, router: 4104, api: 4107, grokOauth: 4116 },
 };
 const targetPortDefaults = TARGET_PORT_DEFAULTS[TARGET];

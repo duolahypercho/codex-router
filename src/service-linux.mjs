@@ -24,7 +24,6 @@ const effectivePlatform = process.env.CODEX_ROUTER_SERVICE_PLATFORM || process.p
 const command = process.argv[2] || "status";
 const UNIT_NAMES = {
   codex: "codex-router.service",
-  claude: "codex-router-claude.service",
   cursor: "codex-router-cursor.service",
 };
 const unitName = UNIT_NAMES[TARGET];

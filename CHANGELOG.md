@@ -50,20 +50,13 @@
 - Added a 30-second `Starting` grace state to the macOS tray so routine router
   recovery does not appear as an immediate failure.
 - Added the isolated Cursor target and corrected its PowerShell installer path.
+- Removed the experimental Claude Desktop router target while retaining the
+  direct, credential-isolated Anthropic API provider for Codex and Cursor.
 - Fixed partial startup failures so already-running forwarders are terminated,
   and isolated all six ports in the real LiteLLM integration test.
 - Grok OAuth account usage now reads weekly/monthly credit limits from the official Grok CLI billing endpoint.
 - Rewrote routed-model catalog identity text so external models no longer
   claim to be based on GPT-5 in Codex `base_instructions`.
-- Added an isolated, experimental Claude Desktop target using the official
-  third-party gateway contract: authenticated Anthropic Messages routing,
-  streaming, explicit model lists, and preserved tool/image message payloads.
-- Added reversible per-user Claude configuration management, separate ports,
-  state, caller keys, provider selection, and background-service identities so
-  Codex and Claude can be installed from one checkout without configuration
-  overlap.
-- Added the cross-target `model-router` command, Claude guided setup, doctor,
-  smoke test, agent installation guidance, and dedicated compatibility docs.
 - Hardened local caller authentication with a separate per-install capability,
   exact internal-key checks, authenticated credential-detail health endpoints,
   browser-request rejection, and fail-closed routing before request bodies or

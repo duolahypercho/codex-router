@@ -4,6 +4,5 @@ set -eu
 repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 case "${MODEL_ROUTER_TARGET:-codex}" in
   codex) exec node "$repo_dir/src/smoke-test.mjs" "$@" ;;
-  claude) exec node "$repo_dir/src/claude-smoke-test.mjs" "$@" ;;
-  *) echo "MODEL_ROUTER_TARGET must be codex or claude." >&2; exit 2 ;;
+  *) echo "Smoke tests are available only for the Codex target." >&2; exit 2 ;;
 esac

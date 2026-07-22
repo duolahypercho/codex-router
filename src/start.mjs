@@ -142,7 +142,6 @@ function stopChildren() {
 
 const FRONTENDS = {
   codex: { script: "router.mjs", service: "codex-router", label: "Codex router" },
-  claude: { script: "claude-router.mjs", service: "claude-router", label: "Claude router" },
   cursor: { script: "cursor-router.mjs", service: "cursor-router", label: "Cursor router" },
 };
 for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, stopChildren);

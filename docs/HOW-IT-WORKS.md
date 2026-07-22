@@ -1,8 +1,8 @@
 # How Codex Router works
 
 The provider core has two isolated app frontends. Codex uses the Responses API
-and a merged native catalog; the experimental Claude Desktop target uses the
-Anthropic Messages API and an explicit third-party model list.
+and a merged native catalog; the experimental Cursor target uses an
+OpenAI-compatible Chat Completions gateway configured manually in Cursor.
 
 ## Why a router is needed
 
@@ -17,11 +17,6 @@ Four pieces make the integration work:
 - A dispatcher chooses native or external routing by namespaced model ID.
 - LiteLLM translates Responses requests, streams, and tool calls.
 - Credential forwarders inject only the selected provider's authentication.
-
-Claude uses the same registry, LiteLLM translation, and credential forwarders
-on ports 4110-4113. Its frontend authenticates the per-user caller key, maps the
-public picker slug to the internal gateway model, and forwards Messages streams
-without touching Codex state or native traffic.
 
 ## Request flow
 
@@ -150,8 +145,3 @@ On replay, it converts that payload back to a plain continuation message.
 
 Commands, permissions, MCP tools, skills, and task state remain in Codex. Only
 model inference and external-model compaction are routed.
-
-For Claude, the desktop host likewise retains conversation storage, the agent
-loop, workspace, tools, MCP servers, plugins, skills, hooks, and permissions.
-Messages, tool schemas/results, and image content cross the model gateway;
-actual tool execution remains local to Claude Desktop.

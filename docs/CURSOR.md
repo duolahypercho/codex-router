@@ -2,7 +2,7 @@
 
 The Cursor target exposes the same external-provider registry to Cursor through
 a local, credential-isolating **OpenAI-compatible** gateway. It is isolated from
-the Codex and Claude integrations and can be enabled, disabled, or removed
+the Codex integration and can be enabled, disabled, or removed
 independently.
 
 > [!IMPORTANT]
@@ -20,8 +20,8 @@ independently.
   configuration in an application state database that the router does not touch,
   so your existing Cursor models, subscription, history, and preferences are not
   modified. You paste the router's values into Cursor yourself.
-- Codex and Claude config, services, ports, credentials, and provider selection
-  are not touched.
+- Codex config, services, ports, credentials, and provider selection are not
+  touched.
 - Cursor keeps ownership of its agent loop, editor features, and workspace.
 
 Provider billing and terms still apply; the gateway forwards requests to the

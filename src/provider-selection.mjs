@@ -137,8 +137,8 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
       if (providers.length === 0) {
         throw new Error(
           `No provider credential is configured. Run ${
-            TARGET === "claude"
-              ? "./bin/model-router claude setup --guided"
+            TARGET === "cursor"
+              ? "./bin/model-router cursor setup --guided"
               : "./bin/setup --guided"
           } before installing.`,
         );
@@ -148,8 +148,8 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
       if (missing.length) {
         throw new Error(
           `Selected providers need persistent authentication: ${missing.join(", ")}. Run ${
-            TARGET === "claude"
-              ? "./bin/model-router claude setup --guided"
+            TARGET === "cursor"
+              ? "./bin/model-router cursor setup --guided"
               : "./bin/setup --guided"
           }.`,
         );
