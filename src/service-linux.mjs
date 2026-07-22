@@ -72,7 +72,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=${systemdQuote(SOURCE_ROOT)}
+WorkingDirectory=${String(SOURCE_ROOT).replaceAll("%", "%%")}
 ExecStart=${systemdQuote(process.execPath)} ${systemdQuote(start)}
 Restart=always
 RestartSec=5

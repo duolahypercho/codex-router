@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -8,9 +8,10 @@ import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
-function render(script, platform, testRoot, target = "codex") {
-  return execFileSync(process.execPath, [path.join(root, "src", script), "render"], {
-    cwd: root,
+function render(script, platform, testRoot, target = "codex", sourceRoot = root) {
+  const nodeArgs = sourceRoot === root ? [] : ["--preserve-symlinks", "--preserve-symlinks-main"];
+  return execFileSync(process.execPath, [...nodeArgs, path.join(sourceRoot, "src", script), "render"], {
+    cwd: sourceRoot,
     encoding: "utf8",
     env: {
       ...process.env,
@@ -73,3 +74,25 @@ test("background service definitions render for macOS, Linux, and Windows", () =
     rmSync(testRoot, { recursive: true, force: true });
   }
 });
+
+test(
+  "systemd WorkingDirectory is unquoted and escapes literal specifiers",
+  { skip: process.platform === "win32" },
+  () => {
+    const testRoot = mkdtempSync(path.join(os.tmpdir(), "codex-router-systemd-path-"));
+    const linkedRoot = path.join(testRoot, "router %u");
+    symlinkSync(root, linkedRoot, "dir");
+    try {
+      const systemd = render("service-linux.mjs", "linux", testRoot, "codex", linkedRoot);
+      const workingDirectory = systemd
+        .split(/\r?\n/)
+        .find((line) => line.startsWith("WorkingDirectory="));
+      assert.equal(
+        workingDirectory,
+        `WorkingDirectory=${linkedRoot.replaceAll("%", "%%")}`,
+      );
+    } finally {
+      rmSync(testRoot, { recursive: true, force: true });
+    }
+  },
+);
