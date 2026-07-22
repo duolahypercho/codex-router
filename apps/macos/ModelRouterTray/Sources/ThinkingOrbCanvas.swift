@@ -5,7 +5,8 @@ import SwiftUI
 
 enum ThinkingOrbMode {
   case shaping
-  case thinking
+  case composing
+  case solving
 }
 
 /// Compact dotted Thinking Orbs renderers adapted from https://orbs.jakubantalik.com/
@@ -24,8 +25,10 @@ final class ThinkingOrbRenderer {
     switch mode {
     case .shaping:
       drawMorph(in: ctx, time: time)
-    case .thinking:
-      drawOrbits(in: ctx, time: time)
+    case .composing:
+      drawComposing(in: ctx, time: time)
+    case .solving:
+      drawSolving(in: ctx, time: time)
     }
   }
 
@@ -103,6 +106,18 @@ final class ThinkingOrbRenderer {
     }
   }
 
+  private struct RubikMove {
+    let axis: Int
+    let low: CGFloat
+    let high: CGFloat
+    let angle: CGFloat
+  }
+
+  private struct RubikTimeline {
+    let amounts: [CGFloat]
+    let active: Int
+  }
+
   private static let triangle = Perimeter(
     [CGPoint(x: 0, y: -0.26), CGPoint(x: 0.24, y: 0.16), CGPoint(x: -0.24, y: 0.16)]
   )
@@ -115,6 +130,8 @@ final class ThinkingOrbRenderer {
       CGPoint(x: -0.2, y: -0.2),
     ]
   )
+
+  private lazy var rubikMoves = buildRubikMoves(count: 14)
 
   private func smoothStep(_ value: CGFloat) -> CGFloat {
     value * value * (3 - 2 * value)
@@ -206,84 +223,196 @@ final class ThinkingOrbRenderer {
     paintDots(in: ctx, dots: dots, minRadius: 0.25)
   }
 
-  private func drawOrbits(in ctx: CGContext, time: CGFloat) {
+  private func fibonacciSphere(index: Int, count: Int) -> (CGFloat, CGFloat, CGFloat) {
+    let goldenAngle = CGFloat.pi * (3 - sqrt(5))
+    let y = 1 - 2 * (CGFloat(index) + 0.5) / CGFloat(count)
+    let radius = sqrt(1 - y * y)
+    let angle = CGFloat(index) * goldenAngle
+    return (radius * cos(angle), y, radius * sin(angle))
+  }
+
+  private func buildRubikMoves(count: Int) -> [RubikMove] {
+    var moves: [RubikMove] = []
+    for index in 0..<count {
+      let axis = min(2, Int(floor(hash(index, 2.3) * 3)))
+      let low = -1 + 0.5 * min(3, floor(hash(index, 5.9) * 4))
+      let direction: CGFloat = hash(index, 7.7) < 0.5 ? 1 : -1
+      moves.append(
+        RubikMove(axis: axis, low: low, high: low + 0.5, angle: direction * .pi / 2)
+      )
+    }
+    return moves
+  }
+
+  private func rubikTimeline(time: CGFloat) -> RubikTimeline {
+    let moveDuration: CGFloat = 0.42
+    let pause: CGFloat = 1.2
+    let cycleDuration = 2 * CGFloat(rubikMoves.count) * moveDuration + pause
+    let cycle = time.truncatingRemainder(dividingBy: cycleDuration)
+    var amounts = Array(repeating: CGFloat(0), count: rubikMoves.count)
+    var active = -1
+
+    if cycle < 2 * CGFloat(rubikMoves.count) * moveDuration {
+      let step = Int(floor(cycle / moveDuration))
+      let progress = (cycle - CGFloat(step) * moveDuration) / moveDuration
+      let eased = 1 - pow(1 - min(1, progress / 0.7), 3)
+      if step < rubikMoves.count {
+        for index in 0..<step { amounts[index] = 1 }
+        amounts[step] = eased
+        active = step
+      } else {
+        let reverse = 2 * rubikMoves.count - 1 - step
+        for index in 0..<reverse { amounts[index] = 1 }
+        amounts[reverse] = 1 - eased
+        active = reverse
+      }
+    }
+    return RubikTimeline(amounts: amounts, active: active)
+  }
+
+  private func applyRubikMoves(
+    x initialX: CGFloat,
+    y initialY: CGFloat,
+    z initialZ: CGFloat,
+    timeline: RubikTimeline
+  ) -> (x: CGFloat, y: CGFloat, z: CGFloat, active: Bool) {
+    var x = initialX
+    var y = initialY
+    var z = initialZ
+    var active = false
+    for index in rubikMoves.indices {
+      let amount = timeline.amounts[index]
+      if amount <= 0 { continue }
+      let move = rubikMoves[index]
+      let coordinate = move.axis == 0 ? x : move.axis == 1 ? y : z
+      if coordinate < move.low || coordinate >= move.high { continue }
+      if index == timeline.active { active = true }
+      let angle = move.angle * amount
+      let cosine = cos(angle)
+      let sine = sin(angle)
+      if move.axis == 0 {
+        let nextY = y * cosine - z * sine
+        z = y * sine + z * cosine
+        y = nextY
+      } else if move.axis == 1 {
+        let nextX = x * cosine + z * sine
+        z = -x * sine + z * cosine
+        x = nextX
+      } else {
+        let nextX = x * cosine - y * sine
+        y = x * sine + y * cosine
+        x = nextX
+      }
+    }
+    return (x, y, z, active)
+  }
+
+  private func drawSolving(in ctx: CGContext, time: CGFloat) {
     let radius = (size / 2) * 0.82
     let scale = radiusScale()
+    let timeline = rubikTimeline(time: time)
+    let latitudeRings = 4
+    let longitudeDensity = 12
+    let yaw = time * 0.55
+    let pitch = 0.35 + 0.1 * sin(time * 0.9)
     var dots: [Dot] = []
 
-    let orbitCount = 4
-    let ghostCount = 16
-    let particleCount = 3
-    let ghostRadius = 0.9 * 2.4 * scale
-    let ghostAlpha: CGFloat = 0.5
-    let particleRadius = 1.2 * 2.4
-    let particleDepth = 1.6 * 2.4
-    let minRadius: CGFloat = 0.3
-    let yaw = time * 0.12
-    let pitch: CGFloat = 0.3
-
-    for orbit in 0..<orbitCount {
-      let a = hash(orbit, 1.7)
-      let b = hash(orbit, 5.2)
-      let c = hash(orbit, 8.9)
-      let orbitRadius = radius * (0.45 + 0.52 * a)
-      let theta = a * 2 * .pi
-      let phi = acos(2 * b - 1)
-      let nx = sin(phi) * cos(theta)
-      let ny = cos(phi)
-      let nz = sin(phi) * sin(theta)
-
-      var tx = -ny
-      var ty = nx
-      let tLen = max(1e-6, sqrt(tx * tx + ty * ty))
-      tx /= tLen
-      ty /= tLen
-      let bx = -nz * ty
-      let by = nz * tx
-      let bz = nx * ty - ny * tx
-      let orbitSpeed = (0.25 + 0.55 * c) * (c > 0.5 ? 1 : -1)
-
-      for ghost in 0..<ghostCount {
-        let angle = CGFloat(ghost) / CGFloat(ghostCount) * 2 * .pi
-        let px = (tx * cos(angle) + bx * sin(angle)) * orbitRadius
-        let py = (ty * cos(angle) + by * sin(angle)) * orbitRadius
-        let pz = (bz * sin(angle)) * orbitRadius
-        let (x, y, z) = projectPoint(yaw: yaw, pitch: pitch, x: px, y: py, z: pz)
-        let depth = (z / orbitRadius + 1) / 2
-        dots.append(
-          Dot(
-            x: x,
-            y: y,
-            z: z,
-            r: ghostRadius,
-            white: 0.72,
-            a: ghostAlpha * (0.4 + 0.6 * depth)
-          )
+    for latitude in 0...latitudeRings {
+      let latitudeAngle = -.pi / 2 + CGFloat(latitude) / CGFloat(latitudeRings) * .pi
+      let ringRadius = cos(latitudeAngle)
+      let ringY = sin(latitudeAngle)
+      let pointCount = max(1, Int(round(abs(ringRadius) * CGFloat(longitudeDensity))))
+      for longitude in 0..<pointCount {
+        let angle = CGFloat(longitude) / CGFloat(pointCount) * 2 * .pi
+        let transformed = applyRubikMoves(
+          x: ringRadius * cos(angle),
+          y: ringY,
+          z: ringRadius * sin(angle),
+          timeline: timeline
         )
-      }
-
-      for particle in 0..<particleCount {
-        let angle =
-          time * orbitSpeed + CGFloat(particle) / CGFloat(particleCount) * 2 * .pi + b * 6
-        let px = (tx * cos(angle) + bx * sin(angle)) * orbitRadius
-        let py = (ty * cos(angle) + by * sin(angle)) * orbitRadius
-        let pz = (bz * sin(angle)) * orbitRadius
-        let (x, y, z) = projectPoint(yaw: yaw, pitch: pitch, x: px, y: py, z: pz)
-        let depth = (z / orbitRadius + 1) / 2
+        let (x, y, z) = projectPoint(
+          yaw: yaw,
+          pitch: pitch,
+          x: transformed.x * radius,
+          y: transformed.y * radius,
+          z: transformed.z * radius
+        )
+        let depth = (z / radius + 1) / 2
         dots.append(
           Dot(
             x: x,
             y: y,
             z: z,
-            r: (particleRadius + particleDepth * depth) * scale,
-            white: 0.3 - 0.22 * depth,
+            r: (1.14 + 3.23 * depth + (transformed.active ? 0.57 : 0)) * scale,
+            white: 0.62 - 0.54 * depth - (transformed.active ? 0.14 : 0),
             a: 1
           )
         )
       }
     }
 
-    paintDots(in: ctx, dots: dots, minRadius: minRadius)
+    paintDots(in: ctx, dots: dots, minRadius: 0.3)
+  }
+
+  private func drawComposing(in ctx: CGContext, time: CGFloat) {
+    let radius = (size / 2) * 0.78
+    let scale = radiusScale()
+    var dots: [Dot] = []
+    let ghostCount = 8
+
+    for index in 0..<ghostCount {
+      let point = fibonacciSphere(index: index, count: ghostCount)
+      let (x, y, z) = projectPoint(
+        yaw: 0,
+        pitch: 0.3,
+        x: point.0 * radius,
+        y: point.1 * radius,
+        z: point.2 * radius
+      )
+      let depth = (z / radius + 1) / 2
+      dots.append(Dot(x: x, y: y, z: z, r: 0.8 * scale, white: 0.78, a: 0.1 + 0.22 * depth))
+    }
+
+    let tilt: CGFloat = 0.55
+    let cosTilt = cos(tilt)
+    let sinTilt = sin(tilt)
+    let bandCount = 10
+    let segmentCount = 20
+    for band in 0..<bandCount {
+      let offsetBase = (CGFloat(band) - CGFloat(bandCount - 1) / 2) * 0.075
+      let edge = abs(CGFloat(band) - CGFloat(bandCount - 1) / 2)
+        / (CGFloat(bandCount - 1) / 2)
+      for segment in 0..<segmentCount {
+        let angle = CGFloat(segment) / CGFloat(segmentCount) * 2 * .pi
+        let wobble = 0.16 * sin(angle * 3 - time * 1.7 + CGFloat(band) * 0.22)
+          + 0.07 * sin(angle * 5 + time * 1.1)
+        let offset = offsetBase + wobble
+        let px = cos(angle)
+        let py = cosTilt * sin(angle) - sinTilt * offset
+        let pz = sinTilt * sin(angle) + cosTilt * offset
+        let length = sqrt(px * px + py * py + pz * pz)
+        let (x, y, z) = projectPoint(
+          yaw: 0,
+          pitch: 0.3,
+          x: px / length * radius,
+          y: py / length * radius,
+          z: pz / length * radius
+        )
+        let depth = (z / radius + 1) / 2
+        dots.append(
+          Dot(
+            x: x,
+            y: y,
+            z: z,
+            r: (1.1803 + 1.8241 * depth) * (1 - 0.25 * edge) * scale,
+            white: 0.52 - 0.44 * depth + 0.18 * edge,
+            a: 0.4 + 0.6 * depth
+          )
+        )
+      }
+    }
+
+    paintDots(in: ctx, dots: dots, minRadius: 0.3)
   }
 
   private func paintDots(in ctx: CGContext, dots: [Dot], minRadius: CGFloat) {
@@ -405,7 +534,8 @@ final class ThinkingOrbNSView: NSView {
   private var rendererSpeed: CGFloat {
     switch mode {
     case .shaping: return 2.08
-    case .thinking: return 3.9
+    case .composing: return 3.12
+    case .solving: return 1.95
     }
   }
 }

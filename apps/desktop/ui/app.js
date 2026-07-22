@@ -163,7 +163,7 @@ function startPanel() {
     const activity = state.health?.activity || {};
     const activityState = state.health?.ok === false ? "offline" : activity.state || "idle";
     const labels = {
-      generating: "Thinking",
+      generating: "Composing",
       starting: "Starting",
       offline: "Offline",
       error: "Error",
@@ -400,7 +400,7 @@ function startIsland() {
     area: document.getElementById("island-area-path"),
   };
   const thinkingOrb = elements.orbit
-    ? createThinkingOrb(elements.orbit, { size: 18, speed: 3.9, dark: true })
+    ? createThinkingOrb(elements.orbit, { size: 18, dark: true })
     : null;
 
   elements.root.addEventListener("pointerenter", () => setExpanded(true));
@@ -459,7 +459,7 @@ function startIsland() {
     const activity = state.health?.activity || {};
     const activityState = state.health?.ok === false ? "offline" : activity.state || "idle";
     const labels = {
-      generating: "Thinking",
+      generating: "Composing",
       starting: "Starting",
       offline: "Offline",
       error: "Error",
@@ -468,11 +468,13 @@ function startIsland() {
     elements.root.dataset.state = activityState;
     elements.state.textContent = labels[activityState] || "Idle";
     if (elements.orbit) {
-      const thinkingMode = activityState === "generating"
-        ? "thinking"
-        : activityState === "idle" ? "shaping" : "hidden";
-      elements.orbit.classList.toggle("is-thinking", thinkingMode !== "hidden");
-      thinkingOrb?.setMode(thinkingMode);
+      const orbMode = {
+        generating: "composing",
+        idle: "shaping",
+        error: "solving",
+      }[activityState] || "hidden";
+      elements.orbit.classList.toggle("is-thinking", orbMode !== "hidden");
+      thinkingOrb?.setMode(orbMode);
     }
 
     const options = sourceOptions(state);

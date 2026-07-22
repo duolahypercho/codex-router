@@ -764,9 +764,9 @@ private struct LiveOrb: View {
   var body: some View {
     ZStack(alignment: .topTrailing) {
       Group {
-        if state == .idle || state == .generating {
+        if state == .idle || state == .generating || state == .error {
           ThinkingOrbView(
-            mode: state == .generating ? .thinking : .shaping,
+            mode: orbMode,
             reduceMotion: reduceMotion,
             size: 18
           )
@@ -812,6 +812,14 @@ private struct LiveOrb: View {
     .onChange(of: count) { _ in animate() }
     .onChange(of: reduceMotion) { _ in animate() }
     .onDisappear { effectTask?.cancel() }
+  }
+
+  private var orbMode: ThinkingOrbMode {
+    switch state {
+    case .generating: return .composing
+    case .error: return .solving
+    case .idle, .starting: return .shaping
+    }
   }
 
   private var orbHaloOpacity: Double {
