@@ -18,7 +18,7 @@ final class IslandDisplayModel: ObservableObject {
     switch state {
     case .compact: return CGSize(width: 320, height: 40)
     case .peek:
-      let activityHeight = min(312, 68 + CGFloat(activeRequestCount) * 40)
+      let activityHeight = min(360, 126 + CGFloat(activeRequestCount) * 40)
       return CGSize(width: 404, height: activeRequestCount > 0 ? activityHeight : 148)
     case .expanded: return CGSize(width: 520, height: 372)
     }
@@ -227,11 +227,8 @@ private struct IslandOverlayView: View {
         .layoutPriority(1)
       if hiddenActiveCount > 0 {
         Text("+\(hiddenActiveCount)")
-          .font(.system(size: 9, weight: .bold, design: .rounded))
-          .foregroundStyle(.black.opacity(0.88))
-          .padding(.horizontal, 6)
-          .frame(height: 18)
-          .background(store.activityState.tint, in: Capsule())
+          .font(.system(size: 9.5, weight: .semibold, design: .rounded))
+          .foregroundStyle(.white.opacity(0.56))
           .fixedSize()
       } else if store.activeRequests.isEmpty {
         Text(compactUsageSummary)
@@ -258,12 +255,14 @@ private struct IslandOverlayView: View {
       HStack(spacing: 9) {
         LiveOrb(state: store.activityState, count: store.activeRequestCount)
         VStack(alignment: .leading, spacing: 1) {
-          Text(peekTitle)
+          Text(store.activityState.label)
             .font(.system(size: 12, weight: .semibold, design: .rounded))
+            .foregroundStyle(store.activityState.tint)
             .lineLimit(1)
-          Text("\(store.activitySummaryLabel) · \(sourceLabel)")
+          Text("\(peekTitle) · \(sourceLabel)")
             .font(.system(size: 9, weight: .medium, design: .rounded))
-            .foregroundStyle(store.activityState.tint.opacity(0.92))
+            .foregroundStyle(routerMuted)
+            .lineLimit(1)
         }
         Spacer()
         HStack(spacing: 12) {
@@ -287,23 +286,40 @@ private struct IslandOverlayView: View {
       HStack(spacing: 9) {
         LiveOrb(state: store.activityState)
         VStack(alignment: .leading, spacing: 1) {
-          Text("ACTIVE SESSIONS")
-            .font(.system(size: 9, weight: .semibold, design: .monospaced))
-            .tracking(0.7)
-            .foregroundStyle(routerMuted)
-          Text("\(store.activeRequestCount) composing")
-            .font(.system(size: 11, weight: .semibold, design: .rounded))
+          Text(store.activityState.label)
+            .font(.system(size: 12, weight: .semibold, design: .rounded))
             .foregroundStyle(store.activityState.tint)
+          Text("\(store.activeRequestCount) ACTIVE \(store.activeRequestCount == 1 ? "SESSION" : "SESSIONS")")
+            .font(.system(size: 8, weight: .semibold, design: .monospaced))
+            .foregroundStyle(routerMuted)
         }
         Spacer()
-        Text("Hover to inspect")
-          .font(.system(size: 8.5, weight: .medium, design: .rounded))
-          .foregroundStyle(routerMuted)
+        HStack(spacing: 12) {
+          IslandHeaderMetric(value: todayTokenValue, label: "TODAY TOKENS")
+          if let accountHeaderValue {
+            IslandHeaderMetric(value: accountHeaderValue, label: accountHeaderLabel)
+          }
+        }
       }
       ScrollView(.vertical) {
         ActiveRequestList(store: store, limit: store.activeRequests.count, compact: true)
       }
       .scrollIndicators(.hidden)
+      .frame(maxHeight: CGFloat(store.activeRequestCount) * 40)
+
+      HStack {
+        Text("DAILY USAGE")
+          .font(.system(size: 8, weight: .semibold, design: .monospaced))
+          .foregroundStyle(routerMuted)
+        Spacer()
+        Text("LAST 7 DAYS")
+          .font(.system(size: 8, weight: .semibold, design: .monospaced))
+          .foregroundStyle(routerMuted)
+      }
+
+      IslandUsageLineChart(points: dailyGraphPoints, tint: graphTint, showsAxis: false)
+        .id("\(store.selectedUsageProviderID)-daily-active-peek")
+        .frame(height: 43)
     }
     .padding(.horizontal, 14)
     .padding(.top, 10)
@@ -737,12 +753,20 @@ private struct ProviderIcon: View {
   var body: some View {
     ZStack {
       RoundedRectangle(cornerRadius: max(3, size * 0.24), style: .continuous)
-        .fill(iconTint.opacity(0.16))
-      Image(systemName: symbolName)
-        .font(.system(size: size * 0.5, weight: .semibold))
-        .foregroundStyle(iconTint)
+        .fill(Color.white.opacity(0.08))
+      if let providerImage {
+        Image(nsImage: providerImage)
+          .resizable()
+          .interpolation(.high)
+          .scaledToFit()
+      } else {
+        Image(systemName: "cpu")
+          .font(.system(size: size * 0.5, weight: .semibold))
+          .foregroundStyle(routerMuted)
+      }
     }
     .frame(width: size, height: size)
+    .clipShape(RoundedRectangle(cornerRadius: max(3, size * 0.24), style: .continuous))
     .overlay {
       RoundedRectangle(cornerRadius: max(3, size * 0.24), style: .continuous)
         .stroke(Color.white.opacity(0.1), lineWidth: 0.5)
@@ -751,22 +775,23 @@ private struct ProviderIcon: View {
     .accessibilityLabel(providerName)
   }
 
-  private var symbolName: String {
-    if providerID == "openai" { return "sparkles" }
-    if providerID.hasPrefix("grok") { return "xmark" }
-    if providerID.hasPrefix("kimi") { return "moon.fill" }
-    if providerID == "deepseek" { return "wave.3.right" }
-    if providerID == "anthropic-api" { return "a.circle.fill" }
-    return "cpu"
+  private var providerImage: NSImage? {
+    guard let assetName else { return nil }
+    let url = Bundle.module.url(
+      forResource: assetName,
+      withExtension: "png",
+      subdirectory: "ProviderIcons"
+    ) ?? Bundle.module.url(forResource: assetName, withExtension: "png")
+    return url.flatMap(NSImage.init(contentsOf:))
   }
 
-  private var iconTint: Color {
-    if providerID == "openai" { return .white.opacity(0.92) }
-    if providerID.hasPrefix("grok") { return Color(red: 0.77, green: 0.88, blue: 1) }
-    if providerID.hasPrefix("kimi") { return Color(red: 0.49, green: 0.88, blue: 0.78) }
-    if providerID == "deepseek" { return Color(red: 0.42, green: 0.69, blue: 1) }
-    if providerID == "anthropic-api" { return Color(red: 0.94, green: 0.64, blue: 0.46) }
-    return routerMuted
+  private var assetName: String? {
+    if providerID == "openai" { return "openai" }
+    if providerID.hasPrefix("grok") { return "grok" }
+    if providerID.hasPrefix("kimi") { return "kimi" }
+    if providerID == "deepseek" { return "deepseek" }
+    if providerID == "anthropic-api" { return "anthropic" }
+    return nil
   }
 
   private var providerName: String {

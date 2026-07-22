@@ -26,10 +26,12 @@ ChatGPT is the initial detail view only when native ChatGPT usage is available;
 otherwise the tray starts with an existing external provider. The detailed
 view and the Island automatically return to the provider handling the next
 Codex request. Hover the Island for a quick view or click it for expanded
-account usage. During activity, the compact Island shows a provider glyph and
-the Codex session title instead of repeating the provider name. Additional
-concurrent requests appear as `+N`; hover lists every live routed session with
-its status and elapsed time.
+account usage. During activity, the compact Island shows the provider's
+published mark and the Codex session title instead of repeating the provider
+name. Additional
+concurrent requests appear as a muted, unframed `+N`; hover lists every live
+routed session with its status and elapsed time while retaining the seven-day
+usage graph and today's usage metrics.
 
 - ChatGPT shows the subscription limit and daily buckets reported by the
   installed Codex app-server; the tray never reads or copies the ChatGPT
@@ -63,8 +65,8 @@ its status and elapsed time.
   decorative movement. The Island is shown by default and can be toggled from
   the tray.
 - When multiple Codex model requests run at the same time, the Island shows the
-  first provider glyph and session title plus `+N` for the remaining requests.
-  Hover and expand list each live request with its provider glyph, session
+  first provider mark and session title plus `+N` for the remaining requests.
+  Hover and expand list each live request with its provider mark, session
   title, Composing status, and elapsed time. Long titles pan to the end and
   bounce back; Reduce Motion leaves them clipped. Session titles are resolved
   from Codex's local session index and are not copied into usage history. The

@@ -8,6 +8,10 @@ let package = Package(
     .executable(name: "ModelRouterTray", targets: ["ModelRouterTray"]),
   ],
   targets: [
-    .executableTarget(name: "ModelRouterTray", path: "Sources"),
+    .executableTarget(
+      name: "ModelRouterTray",
+      path: "Sources",
+      resources: [.process("Resources")]
+    ),
   ],
 )

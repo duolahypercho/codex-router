@@ -11,6 +11,9 @@ swift build -c "$configuration" --package-path "$tray_dir"
 mkdir -p "$bundle_dir/Contents/MacOS" "$bundle_dir/Contents/Resources"
 cp "$binary_dir/ModelRouterTray" "$bundle_dir/Contents/MacOS/ModelRouterTray"
 cp "$tray_dir/Resources/Info.plist" "$bundle_dir/Contents/Info.plist"
+if [ -d "$binary_dir/ModelRouterTray_ModelRouterTray.bundle" ]; then
+  cp -R "$binary_dir/ModelRouterTray_ModelRouterTray.bundle" "$bundle_dir/Contents/Resources/"
+fi
 printf '%s\n' "$repo_dir" > "$bundle_dir/Contents/Resources/router-root"
 
 printf '%s\n' "$bundle_dir"
