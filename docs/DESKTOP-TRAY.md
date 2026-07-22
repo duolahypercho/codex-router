@@ -32,9 +32,10 @@ and disables its activity-pill switch; router monitoring continues normally.
   API key. Unconnected providers remain available only in **Connections**.
 
 The status mark is a still dotted Thinking Orbs-style orb while idle and
-animates while a model is generating. Starting and error states retain their
-colored status dots. A low-contrast edge signal appears only while generating.
-The app honors the system's reduced-motion preference.
+animates beside a **Thinking** label while a model is generating. Starting and
+error states retain their colored status dots. A low-contrast edge signal
+appears only while generating. The app honors the system's reduced-motion
+preference.
 
 ## Build prerequisites
 

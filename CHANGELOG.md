@@ -2,7 +2,8 @@
 
 ## Unreleased
 
-- Use a still Thinking Orbs-style dotted orb while idle and animate it while generating.
+- Use a still Thinking Orbs-style dotted orb while idle, then animate it with a
+  `Thinking` label while generating.
 - Added a native Windows and Linux tray companion with a seven-day token graph,
   connected-provider quota cards, secure onboarding, an animated top-center
   activity pill on Windows/X11, and an explicit tray-only Wayland fallback.

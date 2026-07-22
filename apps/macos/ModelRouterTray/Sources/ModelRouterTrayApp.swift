@@ -28,7 +28,7 @@ enum RouterActivityState: String, Decodable {
   var label: String {
     switch self {
     case .idle: return "Idle"
-    case .generating: return "Generating"
+    case .generating: return "Thinking"
     case .starting: return "Starting"
     case .error: return "Error"
     }

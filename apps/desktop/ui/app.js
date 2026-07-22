@@ -163,7 +163,7 @@ function startPanel() {
     const activity = state.health?.activity || {};
     const activityState = state.health?.ok === false ? "offline" : activity.state || "idle";
     const labels = {
-      generating: "Generating",
+      generating: "Thinking",
       starting: "Starting",
       offline: "Offline",
       error: "Error",
@@ -459,7 +459,7 @@ function startIsland() {
     const activity = state.health?.activity || {};
     const activityState = state.health?.ok === false ? "offline" : activity.state || "idle";
     const labels = {
-      generating: "Generating",
+      generating: "Thinking",
       starting: "Starting",
       offline: "Offline",
       error: "Error",

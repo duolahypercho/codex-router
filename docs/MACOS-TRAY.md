@@ -55,8 +55,8 @@ active count and lists each live model request.
   date and time appear beside the chart title. Usage refreshes every 30 seconds,
   and the detailed view switches when a request uses a different provider.
 - The Island status mark is a still dotted Thinking Orbs-style orb while idle
-  and animates while generating. Starting uses amber, and errors use a red
-  status dot that pulses once before settling. The
+  and animates beside a **Thinking** label while generating. Starting uses
+  amber, and errors use a red status dot that pulses once before settling. The
   daily line draws in once when opened or refreshed. Reduce Motion disables
   decorative movement. The Island is shown by default and can be toggled from
   the tray.
