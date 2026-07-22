@@ -36,6 +36,23 @@ const OAUTH_LOCK_TARGET = path.join(KIMI_CODE_HOME, "oauth", "kimi-code");
 const DEVICE_ID_PATH = path.join(KIMI_CODE_HOME, "device_id");
 let refreshInFlight;
 
+function oauthError(message, { code = "oauth_error", status = 502 } = {}) {
+  const error = new Error(message);
+  error.code = code;
+  error.status = status;
+  return error;
+}
+
+function unauthorizedError(message) {
+  return oauthError(message, { code: "oauth_unauthorized", status: 401 });
+}
+
+function transientError(message, cause) {
+  const error = oauthError(message, { code: "oauth_transient", status: 503 });
+  if (cause !== undefined) error.cause = cause;
+  return error;
+}
+
 function asciiHeader(value, fallback = "unknown") {
   const cleaned = String(value).replace(/[^\u0020-\u007e]/g, "").trim();
   return cleaned || fallback;
@@ -54,9 +71,14 @@ function macOSProductVersion() {
 }
 
 function readDeviceId() {
-  const value = readFileSync(DEVICE_ID_PATH, "utf8").trim();
+  let value;
+  try {
+    value = readFileSync(DEVICE_ID_PATH, "utf8").trim();
+  } catch {
+    throw unauthorizedError("Kimi device id is missing; run `kimi login` first.");
+  }
   if (!value) {
-    throw new Error("Kimi device id is missing; run `kimi login` first.");
+    throw unauthorizedError("Kimi device id is missing; run `kimi login` first.");
   }
   return value;
 }
@@ -79,18 +101,26 @@ export function kimiIdentityHeaders() {
 
 function validateToken(value) {
   if (!value || typeof value !== "object") {
-    throw new Error("Kimi OAuth credential file is not a JSON object.");
-  }
-  if (typeof value.access_token !== "string" || !value.access_token) {
-    throw new Error("Kimi OAuth credential is missing; run `kimi login`.");
-  }
-  if (typeof value.refresh_token !== "string" || !value.refresh_token) {
-    throw new Error("Kimi OAuth refresh credential is missing; run `kimi login`.");
+    throw unauthorizedError("Kimi OAuth credential file is invalid; run `kimi login`.");
   }
   const expiresAt = Number(value.expires_at);
   const expiresIn = Number(value.expires_in);
+  if (
+    value.access_token === "" &&
+    value.refresh_token === "" &&
+    expiresAt === 0 &&
+    expiresIn === 0
+  ) {
+    throw unauthorizedError("Kimi OAuth session was rejected; run `kimi login` again.");
+  }
+  if (typeof value.access_token !== "string" || !value.access_token) {
+    throw unauthorizedError("Kimi OAuth credential is missing; run `kimi login`.");
+  }
+  if (typeof value.refresh_token !== "string" || !value.refresh_token) {
+    throw unauthorizedError("Kimi OAuth refresh credential is missing; run `kimi login`.");
+  }
   if (!Number.isFinite(expiresAt) || !Number.isFinite(expiresIn)) {
-    throw new Error("Kimi OAuth credential has invalid expiry metadata.");
+    throw unauthorizedError("Kimi OAuth credential has invalid expiry metadata; run `kimi login`.");
   }
   return {
     access_token: value.access_token,
@@ -104,9 +134,14 @@ function validateToken(value) {
 
 export function readKimiOAuthToken() {
   if (!existsSync(CREDENTIALS_PATH)) {
-    throw new Error("Kimi OAuth credentials were not found; run `kimi login`.");
+    throw unauthorizedError("Kimi OAuth credentials were not found; run `kimi login`.");
   }
-  return validateToken(JSON.parse(readFileSync(CREDENTIALS_PATH, "utf8")));
+  try {
+    return validateToken(JSON.parse(readFileSync(CREDENTIALS_PATH, "utf8")));
+  } catch (error) {
+    if (error?.code === "oauth_unauthorized") throw error;
+    throw unauthorizedError("Kimi OAuth credential file is invalid; run `kimi login`.");
+  }
 }
 
 function shouldRefresh(token) {
@@ -115,6 +150,10 @@ function shouldRefresh(token) {
     token.expires_in > 0 ? token.expires_in * 0.5 : 0,
   );
   return Math.floor(Date.now() / 1_000) >= token.expires_at - threshold;
+}
+
+function isHardExpired(token) {
+  return Math.floor(Date.now() / 1_000) >= token.expires_at;
 }
 
 function sameToken(left, right) {
@@ -151,6 +190,17 @@ function atomicSaveToken(token) {
   }
 }
 
+function revokedTombstone(token) {
+  return {
+    access_token: "",
+    refresh_token: "",
+    expires_at: 0,
+    expires_in: 0,
+    scope: token.scope,
+    token_type: token.token_type,
+  };
+}
+
 function delay(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
@@ -159,8 +209,9 @@ async function refreshToken(refreshTokenValue) {
   const retryable = new Set([429, 500, 502, 503, 504]);
   let lastError;
   for (let attempt = 0; attempt < 3; attempt += 1) {
+    let response;
     try {
-      const response = await fetch(`${OAUTH_HOST}/api/oauth/token`, {
+      response = await fetch(`${OAUTH_HOST}/api/oauth/token`, {
         method: "POST",
         headers: {
           ...kimiIdentityHeaders(),
@@ -174,58 +225,76 @@ async function refreshToken(refreshTokenValue) {
         }),
         signal: AbortSignal.timeout(30_000),
       });
-      const payload = await response.json().catch(() => ({}));
-      if (response.ok) {
-        const expiresIn = Number(payload.expires_in);
-        if (
-          typeof payload.access_token !== "string" ||
-          typeof payload.refresh_token !== "string" ||
-          !Number.isFinite(expiresIn) ||
-          expiresIn <= 0
-        ) {
-          throw new Error("Kimi OAuth refresh returned an incomplete response.");
-        }
-        return {
-          access_token: payload.access_token,
-          refresh_token: payload.refresh_token,
-          expires_at: Math.floor(Date.now() / 1_000) + expiresIn,
-          expires_in: expiresIn,
-          scope: typeof payload.scope === "string" ? payload.scope : "kimi-code",
-          token_type: typeof payload.token_type === "string" ? payload.token_type : "Bearer",
-        };
-      }
-      const code = typeof payload.error === "string" ? payload.error : "oauth_error";
-      if (response.status === 401 || response.status === 403 || code === "invalid_grant") {
-        const error = new Error("Kimi OAuth refresh was rejected; run `kimi login` again.");
-        error.code = "oauth_unauthorized";
-        throw error;
-      }
-      if (!retryable.has(response.status)) {
-        throw new Error(`Kimi OAuth refresh failed with HTTP ${response.status}.`);
-      }
-      lastError = new Error(`Temporary Kimi OAuth error: HTTP ${response.status}.`);
     } catch (error) {
-      if (error?.code === "oauth_unauthorized") throw error;
-      lastError = error instanceof Error ? error : new Error(String(error));
+      lastError = transientError("Kimi OAuth refresh could not reach the authentication service.", error);
+      if (attempt < 2) await delay(2 ** attempt * 1_000);
+      continue;
     }
+
+    const payload = await response.json().catch(() => ({}));
+    if (response.ok) {
+      const expiresIn = Number(payload.expires_in);
+      if (
+        typeof payload.access_token !== "string" ||
+        typeof payload.refresh_token !== "string" ||
+        !Number.isFinite(expiresIn) ||
+        expiresIn <= 0
+      ) {
+        throw oauthError("Kimi OAuth refresh returned an incomplete response.");
+      }
+      return {
+        access_token: payload.access_token,
+        refresh_token: payload.refresh_token,
+        expires_at: Math.floor(Date.now() / 1_000) + expiresIn,
+        expires_in: expiresIn,
+        scope: typeof payload.scope === "string" ? payload.scope : "kimi-code",
+        token_type: typeof payload.token_type === "string" ? payload.token_type : "Bearer",
+      };
+    }
+    const code = typeof payload.error === "string" ? payload.error : "oauth_error";
+    if (response.status === 401 || response.status === 403 || code === "invalid_grant") {
+      throw unauthorizedError("Kimi OAuth refresh was rejected; run `kimi login` again.");
+    }
+    if (!retryable.has(response.status)) {
+      throw oauthError(`Kimi OAuth refresh failed with HTTP ${response.status}.`);
+    }
+    lastError = transientError(`Temporary Kimi OAuth error: HTTP ${response.status}.`);
     if (attempt < 2) await delay(2 ** attempt * 1_000);
   }
-  throw lastError || new Error("Kimi OAuth refresh failed.");
+  throw lastError || transientError("Kimi OAuth refresh failed.");
 }
 
 export async function ensureFreshKimiOAuthToken({ force = false } = {}) {
-  if (refreshInFlight) return refreshInFlight;
-  refreshInFlight = (async () => {
+  const current = refreshInFlight;
+  if (current) {
+    if (!force || current.force) return current.promise;
+    try {
+      await current.promise;
+    } catch {
+      // The original caller owns its failure. A forced caller still needs its
+      // own attempt because the non-forced refresh may have kept the old token.
+    }
+    return ensureFreshKimiOAuthToken({ force: true });
+  }
+
+  const promise = (async () => {
     const initial = readKimiOAuthToken();
     if (!force && !shouldRefresh(initial)) return initial.access_token;
 
-    mkdirSync(path.dirname(OAUTH_LOCK_TARGET), { recursive: true, mode: 0o700 });
-    writeFileSync(OAUTH_LOCK_TARGET, "", { flag: "a", mode: 0o600 });
-    const release = await lockfile.lock(OAUTH_LOCK_TARGET, {
-      retries: { retries: 120, factor: 1, minTimeout: 500, maxTimeout: 1_000 },
-      stale: 5_000,
-      realpath: false,
-    });
+    let release;
+    try {
+      mkdirSync(path.dirname(OAUTH_LOCK_TARGET), { recursive: true, mode: 0o700 });
+      writeFileSync(OAUTH_LOCK_TARGET, "", { flag: "a", mode: 0o600 });
+      release = await lockfile.lock(OAUTH_LOCK_TARGET, {
+        retries: { retries: 120, factor: 1, minTimeout: 500, maxTimeout: 1_000 },
+        stale: 5_000,
+        realpath: false,
+      });
+    } catch (error) {
+      if (!force && !isHardExpired(initial)) return initial.access_token;
+      throw transientError("Kimi OAuth refresh lock is unavailable.", error);
+    }
+
     try {
       const latest = readKimiOAuthToken();
       if (!force && !shouldRefresh(latest)) return latest.access_token;
@@ -241,14 +310,22 @@ export async function ensureFreshKimiOAuthToken({ force = false } = {}) {
           if (recovered.refresh_token !== latest.refresh_token) {
             return recovered.access_token;
           }
+          atomicSaveToken(revokedTombstone(latest));
+        } else if (error?.code === "oauth_transient" && !force && !isHardExpired(latest)) {
+          return latest.access_token;
         }
         throw error;
       }
     } finally {
-      await release();
+      try {
+        await release();
+      } catch {
+        // The lock may have been reaped as stale after a long network pause.
+      }
     }
   })().finally(() => {
-    refreshInFlight = undefined;
+    if (refreshInFlight?.promise === promise) refreshInFlight = undefined;
   });
-  return refreshInFlight;
+  refreshInFlight = { promise, force };
+  return promise;
 }

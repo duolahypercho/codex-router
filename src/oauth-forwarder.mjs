@@ -197,6 +197,16 @@ async function handleRequest(request, response) {
     await upstream.arrayBuffer();
     token = await ensureFreshKimiOAuthToken({ force: true });
     upstream = await requestUpstream(request, target, body, token, controller.signal);
+    if (upstream.status === 401) {
+      await upstream.arrayBuffer();
+      writeJson(response, 401, {
+        error: {
+          type: "authentication_error",
+          message: "Kimi OAuth was rejected; run `kimi login` again.",
+        },
+      });
+      return;
+    }
   }
   await pipeResponse(upstream, response);
   if (!QUIET) {
@@ -209,12 +219,15 @@ async function handleRequest(request, response) {
 const server = http.createServer((request, response) => {
   handleRequest(request, response).catch((error) => {
     const status = httpErrorStatus(error);
+    const authenticationFailure = status === 401;
     console.error("[kimi-oauth] request failed");
     if (!response.headersSent) {
       writeJson(response, status, {
         error: {
-          type: "kimi_oauth_proxy_error",
-          message: "The Kimi OAuth forwarder could not complete the request.",
+          type: authenticationFailure ? "authentication_error" : "kimi_oauth_proxy_error",
+          message: authenticationFailure
+            ? "Kimi OAuth could not be refreshed; run `kimi login` again."
+            : "The Kimi OAuth forwarder could not complete the request.",
         },
       });
     } else if (!response.writableEnded) {
