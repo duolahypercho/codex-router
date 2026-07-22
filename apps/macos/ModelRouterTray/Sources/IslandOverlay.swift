@@ -746,9 +746,9 @@ private struct LiveOrb: View {
     ZStack(alignment: .topTrailing) {
       ZStack {
         Circle()
-          .fill(state.tint.opacity(state == .idle ? 0.11 : 0.15))
+          .fill(state.tint.opacity(state == .idle ? 0.11 : 0.18))
           .frame(width: 18, height: 18)
-          .scaleEffect((state == .generating || state == .starting) && pulsing ? 1.15 : 0.96)
+          .scaleEffect((state == .generating || state == .starting) && pulsing ? 1.22 : 0.96)
         Circle()
           .fill(state.tint)
           .frame(width: 8, height: 8)
@@ -773,7 +773,7 @@ private struct LiveOrb: View {
   private func animate() {
     withAnimation(nil) { pulsing = false }
     guard state == .generating || state == .starting, !reduceMotion else { return }
-    withAnimation(.easeInOut(duration: 1.8).repeatForever(autoreverses: true)) {
+    withAnimation(.easeInOut(duration: 1.5).repeatForever(autoreverses: true)) {
       pulsing = true
     }
   }
@@ -849,7 +849,7 @@ private struct StatusGlow: View {
     case .starting:
       return 0.065
     case .generating:
-      return 0.075
+      return 0.09
     case .error:
       return errorPulse ? 0.22 : 0.12
     }
@@ -864,9 +864,9 @@ private struct StatusGlow: View {
     case .idle:
       return 0.065
     case .starting:
-      return breathing ? 0.13 : 0.09
+      return breathing ? 0.16 : 0.10
     case .generating:
-      return breathing ? 0.15 : 0.10
+      return breathing ? 0.19 : 0.12
     case .error:
       return errorPulse ? 0.20 : 0.12
     }
@@ -876,11 +876,11 @@ private struct StatusGlow: View {
     AngularGradient(
       gradient: Gradient(stops: [
         .init(color: .clear, location: 0),
-        .init(color: .clear, location: 0.64),
-        .init(color: state.tint.opacity(0.16), location: 0.69),
-        .init(color: state.tint.opacity(0.72), location: 0.76),
-        .init(color: Color.white.opacity(0.42), location: 0.79),
-        .init(color: state.tint.opacity(0.48), location: 0.83),
+        .init(color: .clear, location: 0.70),
+        .init(color: state.tint.opacity(0.20), location: 0.74),
+        .init(color: state.tint.opacity(0.68), location: 0.79),
+        .init(color: Color.white.opacity(0.28), location: 0.81),
+        .init(color: state.tint.opacity(0.42), location: 0.84),
         .init(color: .clear, location: 0.90),
         .init(color: .clear, location: 1),
       ]),
@@ -915,15 +915,14 @@ private struct StatusGlow: View {
       case .generating:
         withAnimation(nil) {
           sweepAngle = -120
-          sweepOpacity = 0.48
+          sweepOpacity = 0.42
         }
         await Task<Never, Never>.yield()
         guard !Task.isCancelled else { return }
-        withAnimation(.easeOut(duration: 0.65)) {
+        withAnimation(.linear(duration: 3.8).repeatForever(autoreverses: false)) {
           sweepAngle = 240
-          sweepOpacity = 0
         }
-        withAnimation(.easeInOut(duration: 1.8).repeatForever(autoreverses: true)) {
+        withAnimation(.easeInOut(duration: 1.5).repeatForever(autoreverses: true)) {
           breathing = true
         }
       case .error:
