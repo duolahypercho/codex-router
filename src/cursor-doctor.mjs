@@ -8,6 +8,7 @@ import { privateFileIsProtected } from "./file-security.mjs";
 import { PROVIDERS } from "./model-registry.mjs";
 import { grokOAuthStatus } from "./grok-oauth-status.mjs";
 import { kimiOAuthStatus } from "./oauth-status.mjs";
+import { waitForRouterHealth } from "./router-health.mjs";
 import {
   CALLER_SECRET_PATH,
   INTERNAL_SECRET_PATH,
@@ -15,7 +16,6 @@ import {
   PORTS,
   SOURCE_ROOT,
   TARGET,
-  loopback,
 } from "./paths.mjs";
 import { credentialStatus } from "./provider-credentials.mjs";
 import { providerSelectionStatus, selectedListedModels } from "./provider-selection.mjs";
@@ -231,8 +231,10 @@ try {
   );
 }
 
+let serviceLoaded = false;
 try {
   const service = childJson("service.mjs", ["status"]);
+  serviceLoaded = Boolean(service.loaded);
   add(
     service.loaded ? "ok" : "fail",
     "Cursor router service",
@@ -248,26 +250,15 @@ try {
   );
 }
 
-try {
-  const response = await fetch(loopback(PORTS.router, "/health"), {
-    signal: AbortSignal.timeout(2_000),
-  });
-  const payload = await response.json().catch(() => ({}));
-  const healthy = response.ok && payload.service === "cursor-router";
-  add(
-    healthy ? "ok" : "fail",
-    "Cursor router health",
-    healthy ? `version ${payload.version}` : `unexpected service or HTTP ${response.status}`,
-    "Run ./bin/model-router cursor doctor --fix.",
-  );
-} catch {
-  add(
-    "fail",
-    "Cursor router health",
-    `not reachable on 127.0.0.1:${PORTS.router}`,
-    "Run ./bin/model-router cursor doctor --fix.",
-  );
-}
+const health = await waitForRouterHealth({ timeoutMs: serviceLoaded ? 30_000 : 2_000 });
+add(
+  health.ok ? "ok" : "fail",
+  "Cursor router health",
+  health.ok
+    ? `version ${health.payload.version}`
+    : `not ready on 127.0.0.1:${PORTS.router} after ${serviceLoaded ? 30 : 2} seconds; ${health.error}`,
+  "Run ./bin/model-router cursor doctor --fix.",
+);
 
 if (jsonOutput) {
   process.stdout.write(

@@ -104,6 +104,7 @@ ${environmentEntries()}
 function run(args, options = {}) {
   return execFileSync(launchctl, args, {
     encoding: "utf8",
+    timeout: 15_000,
     stdio: options.quiet
       ? ["ignore", "ignore", "ignore"]
       : ["ignore", "pipe", "pipe"],

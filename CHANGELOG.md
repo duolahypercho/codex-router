@@ -12,6 +12,8 @@
   routed requests.
 - Made macOS service reinstalls wait for launchd to finish unloading and use an
   in-place restart, preventing transient bootstrap status-5 failures.
+- Serialized background-service changes and added bounded readiness checks so
+  repairs cannot overlap or report failure while a healthy router is starting.
 - Added the isolated Cursor target and corrected its PowerShell installer path.
 - Fixed partial startup failures so already-running forwarders are terminated,
   and isolated all six ports in the real LiteLLM integration test.

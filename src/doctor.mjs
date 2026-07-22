@@ -9,6 +9,7 @@ import { detectLegacyInstallations } from "./legacy-migration.mjs";
 import { PROVIDERS } from "./model-registry.mjs";
 import { grokOAuthStatus } from "./grok-oauth-status.mjs";
 import { kimiOAuthStatus } from "./oauth-status.mjs";
+import { waitForRouterHealth } from "./router-health.mjs";
 import {
   CALLER_SECRET_PATH,
   CONFIG_PATH,
@@ -17,7 +18,6 @@ import {
   MERGED_CATALOG_PATH,
   PORTS,
   SOURCE_ROOT,
-  loopback,
 } from "./paths.mjs";
 import { credentialStatus } from "./provider-credentials.mjs";
 import {
@@ -291,8 +291,10 @@ add(
     : "Disable the other router manually; Codex Router will not overwrite it.",
 );
 
+let serviceLoaded = false;
 try {
   const service = childJson("service.mjs", ["status"]);
+  serviceLoaded = Boolean(service.loaded);
   add(
     service.loaded ? "ok" : "fail",
     "Background service",
@@ -308,26 +310,15 @@ try {
   );
 }
 
-try {
-  const response = await fetch(loopback(PORTS.router, "/health"), {
-    signal: AbortSignal.timeout(2_000),
-  });
-  const payload = await response.json().catch(() => ({}));
-  const healthy = response.ok && payload.service === "codex-router";
-  add(
-    healthy ? "ok" : "fail",
-    "Router health",
-    healthy ? `version ${payload.version}` : `unexpected service or HTTP ${response.status}`,
-    "Run ./bin/doctor --fix. If it still fails, create a support bundle.",
-  );
-} catch {
-  add(
-    "fail",
-    "Router health",
-    `not reachable on 127.0.0.1:${PORTS.router}`,
-    "Run ./bin/doctor --fix, then inspect the support bundle if needed.",
-  );
-}
+const health = await waitForRouterHealth({ timeoutMs: serviceLoaded ? 30_000 : 2_000 });
+add(
+  health.ok ? "ok" : "fail",
+  "Router health",
+  health.ok
+    ? `version ${health.payload.version}`
+    : `not ready on 127.0.0.1:${PORTS.router} after ${serviceLoaded ? 30 : 2} seconds; ${health.error}`,
+  "Run ./bin/doctor --fix. If it still fails, create a support bundle.",
+);
 
 if (codex && catalogOk) {
   try {
