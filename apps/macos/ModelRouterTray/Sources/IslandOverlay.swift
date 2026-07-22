@@ -763,27 +763,36 @@ private struct LiveOrb: View {
 
   var body: some View {
     ZStack(alignment: .topTrailing) {
-      ZStack {
-        Circle()
-          .stroke(state.tint.opacity(0.38), lineWidth: 0.7)
-          .frame(width: 11, height: 11)
-          .scaleEffect(rippling ? (state == .idle ? 2.0 : 2.3) : 0.72)
-          .opacity(rippling ? 0 : (state == .idle ? 0.24 : 0.38))
-        Circle()
-          .fill(state.tint.opacity(orbHaloOpacity))
-          .frame(width: 18, height: 18)
-          .scaleEffect(orbHaloScale)
-        Circle()
-          .fill(state.tint)
-          .frame(width: 8, height: 8)
-          .overlay(Circle().stroke(Color.white.opacity(0.42), lineWidth: 0.6))
-          .scaleEffect(coreScale)
-          .opacity(coreOpacity)
-          .shadow(
-            color: state.tint.opacity(pulsing ? 0.42 : 0.16),
-            radius: pulsing ? 3.5 : 1.2
-          )
+      Group {
+        if state == .generating {
+          ThinkingOrbView(active: true, reduceMotion: reduceMotion, size: 18)
+            .frame(width: 18, height: 18)
+        } else {
+          ZStack {
+            Circle()
+              .stroke(state.tint.opacity(0.38), lineWidth: 0.7)
+              .frame(width: 11, height: 11)
+              .scaleEffect(rippling ? (state == .idle ? 2.0 : 2.3) : 0.72)
+              .opacity(rippling ? 0 : (state == .idle ? 0.24 : 0.38))
+            Circle()
+              .fill(state.tint.opacity(orbHaloOpacity))
+              .frame(width: 18, height: 18)
+              .scaleEffect(orbHaloScale)
+            Circle()
+              .fill(state.tint)
+              .frame(width: 8, height: 8)
+              .overlay(Circle().stroke(Color.white.opacity(0.42), lineWidth: 0.6))
+              .scaleEffect(coreScale)
+              .opacity(coreOpacity)
+              .shadow(
+                color: state.tint.opacity(pulsing ? 0.42 : 0.16),
+                radius: pulsing ? 3.5 : 1.2
+              )
+          }
+        }
       }
+      .frame(width: 18, height: 18)
+
       if count > 1 {
         Text("\(min(count, 9))")
           .font(.system(size: 7, weight: .bold, design: .rounded))

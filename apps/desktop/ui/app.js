@@ -9,6 +9,7 @@ import {
   sourceOptions,
   todayTokens,
 } from "./model.mjs";
+import { createThinkingOrb } from "./thinking-orb.mjs";
 
 const invoke = window.__TAURI__?.core?.invoke;
 const view = new URLSearchParams(window.location.search).get("view") || "panel";
@@ -389,6 +390,7 @@ function startIsland() {
   };
   const elements = {
     root: document.getElementById("island"),
+    orbit: document.getElementById("island-orbit"),
     state: document.getElementById("island-state"),
     provider: document.getElementById("island-provider"),
     tokens: document.getElementById("island-tokens"),
@@ -397,6 +399,9 @@ function startIsland() {
     line: document.getElementById("island-line-path"),
     area: document.getElementById("island-area-path"),
   };
+  const thinkingOrb = elements.orbit
+    ? createThinkingOrb(elements.orbit, { size: 18, speed: 3.9, dark: true })
+    : null;
 
   elements.root.addEventListener("pointerenter", () => setExpanded(true));
   elements.root.addEventListener("pointerleave", () => setExpanded(false));
@@ -462,6 +467,11 @@ function startIsland() {
     };
     elements.root.dataset.state = activityState;
     elements.state.textContent = labels[activityState] || "Idle";
+    if (elements.orbit) {
+      const thinking = activityState === "generating";
+      elements.orbit.classList.toggle("is-thinking", thinking);
+      thinkingOrb?.setRunning(thinking);
+    }
 
     const options = sourceOptions(state);
     const requested = activity.provider || "openai";

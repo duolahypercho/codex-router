@@ -894,6 +894,29 @@ h2 {
   place-items: center;
   border: 1px solid rgba(116, 135, 161, 0.2);
   border-radius: 50%;
+  overflow: hidden;
+}
+
+.activity-orbit.is-thinking {
+  border-color: transparent;
+  background: transparent;
+}
+
+.activity-orbit.is-thinking i,
+.activity-orbit.is-thinking::after {
+  display: none;
+}
+
+.thinking-orb-canvas {
+  position: absolute;
+  inset: 0;
+  width: 18px;
+  height: 18px;
+  display: block;
+}
+
+.thinking-orb-canvas[hidden] {
+  display: none;
 }
 
 .activity-orbit i {
@@ -915,17 +938,17 @@ h2 {
   opacity: 0;
 }
 
-.island[data-state="generating"] .activity-orbit {
+.island[data-state="generating"] .activity-orbit:not(.is-thinking) {
   border-color: rgba(99, 221, 164, 0.22);
 }
 
-.island[data-state="generating"] .activity-orbit i {
+.island[data-state="generating"] .activity-orbit:not(.is-thinking) i {
   background: var(--green);
   box-shadow: 0 0 11px rgba(99, 221, 164, 0.78);
   animation: status-working 1.1s ease-in-out infinite;
 }
 
-.island[data-state="generating"] .activity-orbit::after {
+.island[data-state="generating"] .activity-orbit:not(.is-thinking)::after {
   opacity: 1;
   animation: orbit-dot 1.8s linear infinite;
 }

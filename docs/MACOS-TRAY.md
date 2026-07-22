@@ -55,6 +55,7 @@ active count and lists each live model request.
   date and time appear beside the chart title. Usage refreshes every 30 seconds,
   and the detailed view switches when a request uses a different provider.
 - The Island uses green for idle, amber while generating, and red after an
+- While generating, the Island status mark becomes a dotted Thinking Orbs-style working orb instead of the solid status dot.
   error. The colored status dot itself scales and brightens with a slow idle
   heartbeat; generation quickens the dot and adds a clearer localized pulse
   and low-contrast edge comet, while errors pulse once before settling. The

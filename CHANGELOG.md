@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Use a Thinking Orbs-style dotted "working" orb on the Dynamic Island while generating.
 - Added a native Windows and Linux tray companion with a seven-day token graph,
   connected-provider quota cards, secure onboarding, an animated top-center
   activity pill on Windows/X11, and an explicit tray-only Wayland fallback.
