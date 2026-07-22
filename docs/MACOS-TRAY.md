@@ -61,7 +61,7 @@ edge during both idle and active sessions.
   date and time appear beside the chart title. Usage refreshes every 30 seconds,
   and the detailed view switches when a request uses a different provider.
 - The Island status mark uses Thinking Orbs **Shaping** while idle,
-  **Composing** while generating, and **Solving** for errors. Starting retains
+  **Thinking** while generating, and **Solving** for errors. Starting retains
   its amber status dot, and the Error label remains explicit. The
   daily line draws in once when opened or refreshed. Reduce Motion disables
   decorative movement. The Island is shown by default and can be toggled from
@@ -69,7 +69,7 @@ edge during both idle and active sessions.
 - When multiple Codex model requests run at the same time, the Island shows the
   first provider mark and session title plus `+N` for the remaining requests.
   Hover and expand list each live request with its provider mark, session
-  title, Composing status, and elapsed time. Long titles pan to the end and
+  title, Thinking status, and elapsed time. Long titles pan to the end and
   bounce back; Reduce Motion leaves them clipped. Session titles are resolved
   from Codex's local session index and are not copied into usage history. The
   focused usage view still follows the newest active request.

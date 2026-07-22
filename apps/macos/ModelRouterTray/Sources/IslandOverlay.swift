@@ -907,7 +907,7 @@ private struct ActiveRequestList: View {
           )
           .frame(maxWidth: .infinity)
           TimelineView(.periodic(from: .now, by: 1)) { context in
-            Text("Composing · \(elapsedLabel(for: request, now: context.date))")
+            Text("Thinking · \(elapsedLabel(for: request, now: context.date))")
               .font(.system(size: compact ? 8.5 : 9, weight: .medium, design: .rounded))
               .foregroundStyle(routerYellow.opacity(0.95))
               .monospacedDigit()

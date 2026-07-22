@@ -5,7 +5,7 @@
 - Grok OAuth injects bare hosted `web_search` and `x_search` tools so xAI can
   run server-side realtime search agentically, matching Grok Build. Router-side
   search env filters and request search-parameter mapping were removed.
-- Use Thinking Orbs `Shaping` while idle, `Composing` while generating, and
+- Use Thinking Orbs `Shaping` while idle, `Thinking` while generating, and
   `Solving` for the Island's error indicator.
 - Replace compact provider names with the providers' published marks and Codex
   session titles, add a plain `+N` concurrent-session indicator, and show dark

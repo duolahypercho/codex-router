@@ -31,7 +31,7 @@ and disables its activity-pill switch; router monitoring continues normally.
 - Provider cards are absent until that provider has a usable OAuth session or
   API key. Unconnected providers remain available only in **Connections**.
 
-The status mark uses Thinking Orbs **Shaping** while idle, **Composing** while a
+The status mark uses Thinking Orbs **Shaping** while idle, **Thinking** while a
 model is generating, and **Solving** for errors. Starting retains its colored
 status dot, and the Error label remains explicit. A low-contrast edge signal
 appears only while generating. The app honors the system's reduced-motion
