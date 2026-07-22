@@ -540,7 +540,7 @@ private struct LiveOrb: View {
         Circle()
           .fill(state.tint.opacity(0.2))
           .frame(width: 18, height: 18)
-          .scaleEffect(state == .generating && pulsing ? 1.34 : 0.94)
+          .scaleEffect((state == .generating || state == .starting) && pulsing ? 1.34 : 0.94)
         Circle()
           .fill(state.tint)
           .frame(width: 8, height: 8)
@@ -563,7 +563,7 @@ private struct LiveOrb: View {
 
   private func animate() {
     pulsing = false
-    guard state == .generating, !reduceMotion else { return }
+    guard state == .generating || state == .starting, !reduceMotion else { return }
     withAnimation(.easeInOut(duration: 0.72).repeatForever(autoreverses: true)) {
       pulsing = true
     }
@@ -629,13 +629,18 @@ private struct StatusGlow: View {
   private var sweepDuration: Double {
     switch state {
     case .idle: return 2.6
+    case .starting: return 1.7
     case .generating: return 1.15
     case .error: return 0.82
     }
   }
 
   private var flashDuration: Double {
-    state == .idle ? 1.25 : 0.62
+    switch state {
+    case .idle: return 1.25
+    case .starting: return 0.9
+    case .generating, .error: return 0.62
+    }
   }
 }
 

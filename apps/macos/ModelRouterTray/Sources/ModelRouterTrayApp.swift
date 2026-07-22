@@ -13,12 +13,14 @@ let routerMuted = Color.secondary.opacity(0.72)
 enum RouterActivityState: String, Decodable {
   case idle
   case generating
+  case starting
   case error
 
   var tint: Color {
     switch self {
     case .idle: return routerMint
     case .generating: return routerYellow
+    case .starting: return routerAccent
     case .error: return routerRed
     }
   }
@@ -27,6 +29,7 @@ enum RouterActivityState: String, Decodable {
     switch self {
     case .idle: return "Idle"
     case .generating: return "Generating"
+    case .starting: return "Starting"
     case .error: return "Error"
     }
   }
@@ -95,6 +98,7 @@ final class RouterStore: ObservableObject {
   private var hasResolvedInitialUsageProvider = false
   private var hasObservedActiveProvider = false
   private var manuallySelectedUsageProvider = false
+  private var activityHealthFailureStartedAt: Date?
 
   init() {
     selectedUsageProviderID = "openai"
@@ -496,18 +500,19 @@ final class RouterStore: ObservableObject {
   private func refreshActivity() async {
     let configuredPort = ProcessInfo.processInfo.environment["MODEL_ROUTER_PORT"] ?? "4102"
     guard let url = URL(string: "http://127.0.0.1:\(configuredPort)/health") else {
-      activityState = .error
-      activeRequests = []
-      activeRequestCount = 0
-      activeModel = nil
+      recordActivityHealthFailure()
       return
     }
     var request = URLRequest(url: url)
     request.cachePolicy = .reloadIgnoringLocalCacheData
     request.timeoutInterval = 2
     do {
-      let (data, _) = try await URLSession.shared.data(for: request)
+      let (data, response) = try await URLSession.shared.data(for: request)
+      guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+        throw RouterError("Router health check failed.")
+      }
       let health = try JSONDecoder().decode(RouterHealth.self, from: data)
+      activityHealthFailureStartedAt = nil
       activityState = health.activity.state
       activeRequests = health.activity.active ?? []
       activeRequestCount = health.activity.activeCount ?? activeRequests.count
@@ -519,10 +524,20 @@ final class RouterStore: ObservableObject {
         focusUsageProvider(provider)
       }
     } catch {
-      activityState = .error
-      activeRequests = []
-      activeRequestCount = 0
-      activeModel = nil
+      recordActivityHealthFailure()
+    }
+  }
+
+  private func recordActivityHealthFailure() {
+    activeRequests = []
+    activeRequestCount = 0
+    activeModel = nil
+    let now = Date()
+    if let startedAt = activityHealthFailureStartedAt {
+      activityState = now.timeIntervalSince(startedAt) < 30 ? .starting : .error
+    } else {
+      activityHealthFailureStartedAt = now
+      activityState = .starting
     }
   }
 
@@ -1678,7 +1693,7 @@ private struct StatusBeacon: View {
         Circle()
           .fill(state.tint.opacity(0.18))
           .frame(width: 14, height: 14)
-          .scaleEffect(state == .generating && breathing ? 1.28 : 0.9)
+          .scaleEffect((state == .generating || state == .starting) && breathing ? 1.28 : 0.9)
         Circle()
           .fill(state.tint)
           .frame(width: 7, height: 7)
@@ -1693,7 +1708,7 @@ private struct StatusBeacon: View {
 
   private func animate() {
     breathing = false
-    guard state == .generating, !reduceMotion else { return }
+    guard state == .generating || state == .starting, !reduceMotion else { return }
     withAnimation(.easeInOut(duration: 0.72).repeatForever(autoreverses: true)) {
       breathing = true
     }

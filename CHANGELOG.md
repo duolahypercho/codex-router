@@ -16,6 +16,8 @@
   in-place restart, preventing transient bootstrap status-5 failures.
 - Serialized background-service changes and added bounded readiness checks so
   repairs cannot overlap or report failure while a healthy router is starting.
+- Added a 30-second `Starting` grace state to the macOS tray so routine router
+  recovery does not appear as an immediate failure.
 - Added the isolated Cursor target and corrected its PowerShell installer path.
 - Fixed partial startup failures so already-running forwarders are terminated,
   and isolated all six ports in the real LiteLLM integration test.
