@@ -33,7 +33,9 @@ active count and lists each live model request.
   installed Codex app-server; the tray never reads or copies the ChatGPT
   credential file.
 - External OAuth and API providers have separate account meters and local
-  traffic graphs. Kimi Code OAuth reads weekly and five-hour quota from Kimi's
+  traffic graphs. The Island uses a compact daily-token line graph and keeps
+  the selected range's token total separate from the provider-reported quota
+  percentage used. Kimi Code OAuth reads weekly and five-hour quota from Kimi's
   usage API with the existing CLI session. Grok OAuth reads weekly or monthly
   credit usage from the official Grok CLI chat-proxy billing endpoint with the
   existing `~/.grok/auth.json` session. Near expiry, or after one rejected
@@ -45,9 +47,10 @@ active count and lists each live model request.
 - Local graphs cover only traffic sent through this router on this Mac and are
   labeled that way. A local graph is never presented as provider-wide billing
   or remaining subscription quota.
-- Daily token bars can show 7, 30, or 90 days. Seven-day charts label every
-  weekday; longer ranges use spaced date ticks while retaining one bar per day.
-  Hover any bar for its full date and exact token count. When the provider
+- Daily token charts can show 7, 30, or 90 days. The tray uses bars while the
+  Island uses a line graph. Seven-day charts label every weekday; longer ranges
+  use spaced date ticks while retaining one point per day. Hover any mark for
+  its date and exact token count. When the provider
   reports a quota reset, its local reset date and time appear beside the chart
   title. Usage refreshes every 30 seconds, and the detailed view switches when
   a request uses a different provider.

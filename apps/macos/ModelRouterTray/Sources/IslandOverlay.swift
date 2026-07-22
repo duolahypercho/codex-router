@@ -217,9 +217,11 @@ private struct IslandOverlayView: View {
           .foregroundStyle(.white.opacity(0.78))
           .lineLimit(1)
       } else {
-        Text(store.selectedUsageText ?? "Usage —")
+        Text(compactUsageSummary)
           .font(.system(size: 10, weight: .medium, design: .monospaced))
           .foregroundStyle(.white.opacity(0.78))
+          .lineLimit(1)
+          .minimumScaleFactor(0.75)
       }
     }
     .padding(.horizontal, 14)
@@ -238,20 +240,17 @@ private struct IslandOverlayView: View {
             .foregroundStyle(store.activityState.tint.opacity(0.92))
         }
         Spacer()
-        VStack(alignment: .trailing, spacing: 1) {
-          Text(primaryMetric)
-            .font(.system(size: 18, weight: .semibold, design: .rounded))
-            .monospacedDigit()
-          Text(primaryLabel)
-            .font(.system(size: 7, weight: .semibold, design: .monospaced))
-            .tracking(0.7)
-            .foregroundStyle(routerMuted)
+        HStack(spacing: 12) {
+          IslandHeaderMetric(value: compactTokenCount(peekTokenTotal), label: "7D TOKENS")
+          if let accountHeaderValue {
+            IslandHeaderMetric(value: accountHeaderValue, label: accountHeaderLabel)
+          }
         }
       }
       if store.hasConcurrentActivity {
         ActiveRequestList(store: store, limit: 3, compact: true)
       } else {
-        UsageBarChart(points: store.dailyUsage(days: 7), tint: graphTint)
+        IslandUsageLineChart(points: peekGraphPoints, tint: graphTint, showsAxis: false)
           .id("\(store.selectedUsageProviderID)-peek")
           .frame(height: 43)
       }
@@ -273,9 +272,6 @@ private struct IslandOverlayView: View {
             .foregroundStyle(store.activityState.tint)
         }
         Spacer()
-        Text(primaryMetric)
-          .font(.system(size: 25, weight: .semibold, design: .rounded))
-          .monospacedDigit()
         Button("Collapse") { display.setState(.peek) }
         .buttonStyle(.plain)
         .font(.system(size: 9, weight: .medium, design: .rounded))
@@ -283,26 +279,30 @@ private struct IslandOverlayView: View {
       }
 
       HStack(spacing: 8) {
-        MetricTile(title: primaryTitle, value: primaryTileMetric, detail: primaryDetail, tint: routerAccent)
-        MetricTile(title: secondaryTitle, value: secondaryMetric, detail: secondaryDetail, tint: .white.opacity(0.82))
+        MetricTile(
+          title: "\(range.rawValue)-DAY TOKENS",
+          value: graphTokenTotal,
+          detail: tokenSourceDetail,
+          tint: .white.opacity(0.88)
+        )
+        MetricTile(
+          title: accountTileTitle,
+          value: accountTileValue,
+          detail: accountTileDetail,
+          tint: routerAccent
+        )
       }
 
-      HStack(alignment: .firstTextBaseline, spacing: 6) {
-        Text("DAILY TOKEN USAGE")
+      HStack(alignment: .firstTextBaseline) {
+        Text("DAILY TOKEN TREND")
           .font(.system(size: 8, weight: .semibold, design: .monospaced))
           .tracking(0.8)
           .foregroundStyle(routerMuted)
-        if let reset = store.selectedUsageResetDate {
-          Text("· \(usageResetCaption(reset))")
-            .font(.system(size: 8, design: .rounded))
-            .foregroundStyle(routerMuted)
-            .lineLimit(1)
-        }
         Spacer()
         UsageRangePicker(selection: $range)
       }
 
-      UsageBarChart(points: graphPoints, tint: graphTint)
+      IslandUsageLineChart(points: graphPoints, tint: graphTint)
         .id("\(store.selectedUsageProviderID)-\(range.rawValue)-expanded")
         .frame(height: 78)
 
@@ -375,60 +375,89 @@ private struct IslandOverlayView: View {
     return "OAUTH ROUTE"
   }
 
-  private var primaryMetric: String {
+  private var compactUsageSummary: String {
+    let tokens = "\(compactTokenCount(peekTokenTotal)) tok"
+    guard let accountCompactValue else { return tokens }
+    return "\(tokens) · \(accountCompactValue)"
+  }
+
+  private var peekTokenTotal: Double {
+    peekGraphPoints.reduce(0) { $0 + $1.tokens }
+  }
+
+  private var peekGraphPoints: [DailyUsagePoint] {
+    store.dailyUsage(days: 7)
+  }
+
+  private var quotaUsedPercent: Double? {
     if store.selectedUsageUsesChatGPT {
-      guard let remaining = store.accountUsage?.primary?.remainingPercent else { return "—" }
-      return "\(remaining)%"
+      guard let used = store.accountUsage?.primary?.usedPercent else { return nil }
+      return Double(max(0, min(100, used)))
     }
-    guard store.providerUsage != nil else { return "—" }
-    if let metric = store.selectedAccountMetric { return formattedAccountMetric(metric) }
-    return compactTokenCount(store.localUsageTotals(days: range.rawValue).tokens)
+    guard store.selectedAccountMetric?.kind == "quota",
+          let used = store.selectedAccountMetric?.usedPercent
+    else { return nil }
+    return max(0, min(100, used))
   }
 
-  private var primaryLabel: String {
-    if store.selectedUsageUsesChatGPT { return "SUBSCRIPTION LEFT" }
-    return store.selectedAccountMetric?.label.uppercased() ?? "\(range.rawValue)D LOCAL TOKENS"
-  }
-
-  private var primaryTitle: String {
+  private var accountUsageLabel: String {
     if store.selectedUsageUsesChatGPT {
-      return store.accountUsage?.primary?.durationLabel.uppercased() ?? "CHATGPT LIMIT"
-    }
-    if let metric = store.selectedAccountMetric { return metric.label.uppercased() }
-    return "\(range.rawValue)-DAY REQUESTS"
-  }
-
-  private var primaryTileMetric: String {
-    if store.selectedUsageUsesChatGPT { return primaryMetric }
-    if let metric = store.selectedAccountMetric { return formattedAccountMetric(metric) }
-    return "\(store.localUsageTotals(days: range.rawValue).requests)"
-  }
-
-  private var primaryDetail: String {
-    if store.selectedUsageUsesChatGPT {
-      guard let reset = store.accountUsage?.primary?.resetDate else { return "Native Codex subscription" }
-      return "Resets \(reset.formatted(date: .abbreviated, time: .shortened))"
+      return store.accountUsage?.primary?.durationLabel ?? "ChatGPT limit"
     }
     if let metric = store.selectedAccountMetric {
-      if let reset = metric.resetDate {
-        return "Resets \(reset.formatted(date: .abbreviated, time: .shortened))"
-      }
-      if let detail = metric.detail, !detail.isEmpty { return detail }
-      return "Official provider account"
+      return metric.kind == "quota" ? standardizedLimitLabel(metric.label) : metric.label
     }
-    return "Measured on this Mac"
+    return "Usage limit"
   }
 
-  private var secondaryTitle: String {
-    "\(range.rawValue)-DAY USAGE"
+  private var accountHeaderValue: String? {
+    if let quotaUsedPercent { return "\(Int(quotaUsedPercent.rounded()))%" }
+    guard let metric = store.selectedAccountMetric, metric.kind == "balance" else { return nil }
+    return formattedAccountMetric(metric)
   }
 
-  private var secondaryMetric: String {
+  private var accountHeaderLabel: String {
+    if quotaUsedPercent != nil {
+      let window = accountUsageLabel.replacingOccurrences(
+        of: " limit",
+        with: "",
+        options: [.caseInsensitive]
+      )
+      return "\(window.uppercased()) USED"
+    }
+    return accountUsageLabel.uppercased()
+  }
+
+  private var accountCompactValue: String? {
+    if let quotaUsedPercent { return "\(Int(quotaUsedPercent.rounded()))% used" }
+    guard let metric = store.selectedAccountMetric, metric.kind == "balance" else { return nil }
+    return formattedAccountMetric(metric)
+  }
+
+  private var accountTileTitle: String {
+    accountUsageLabel.uppercased()
+  }
+
+  private var accountTileValue: String {
+    if let quotaUsedPercent { return "\(Int(quotaUsedPercent.rounded()))% used" }
+    if let metric = store.selectedAccountMetric, metric.kind == "balance" {
+      return formattedAccountMetric(metric)
+    }
+    return "—"
+  }
+
+  private var accountTileDetail: String {
+    if let reset = store.selectedUsageResetDate { return usageResetCaption(reset) }
+    if let detail = store.selectedAccountMetric?.detail, !detail.isEmpty { return detail }
+    return quotaUsedPercent == nil ? "Not reported by provider" : "No reset reported"
+  }
+
+  private var graphTokenTotal: String {
     compactTokenCount(graphValues.reduce(0, +))
   }
 
-  private var secondaryDetail: String {
-    return "tokens by day"
+  private var tokenSourceDetail: String {
+    store.selectedUsageUsesChatGPT ? "ChatGPT account usage" : "Measured by this router"
   }
 
   private var graphValues: [Double] {
@@ -443,6 +472,209 @@ private struct IslandOverlayView: View {
     routerAccent
   }
 
+}
+
+private struct IslandHeaderMetric: View {
+  let value: String
+  let label: String
+
+  var body: some View {
+    VStack(alignment: .trailing, spacing: 1) {
+      Text(value)
+        .font(.system(size: 17, weight: .semibold, design: .rounded))
+        .monospacedDigit()
+      Text(label)
+        .font(.system(size: 7, weight: .semibold, design: .monospaced))
+        .tracking(0.7)
+        .foregroundStyle(routerMuted)
+        .lineLimit(1)
+    }
+  }
+}
+
+private struct IslandUsageLineChart: View {
+  let points: [DailyUsagePoint]
+  let tint: Color
+  var showsAxis = true
+
+  @State private var hoveredIndex: Int?
+
+  var body: some View {
+    GeometryReader { geometry in
+      let axisHeight: CGFloat = showsAxis ? 14 : 0
+      let plotHeight = max(1, geometry.size.height - axisHeight)
+      let maximum = max(points.map(\.tokens).max() ?? 0, 1)
+      let coordinates = chartCoordinates(
+        width: geometry.size.width,
+        height: plotHeight,
+        maximum: maximum
+      )
+
+      ZStack(alignment: .topLeading) {
+        ForEach(1..<4, id: \.self) { index in
+          Path { path in
+            let y = plotHeight * CGFloat(index) / 4
+            path.move(to: CGPoint(x: 0, y: y))
+            path.addLine(to: CGPoint(x: geometry.size.width, y: y))
+          }
+          .stroke(Color.white.opacity(0.055), style: StrokeStyle(lineWidth: 0.5, dash: [2, 3]))
+        }
+
+        if !coordinates.isEmpty {
+          areaPath(coordinates, baseline: plotHeight - 2)
+            .fill(
+              LinearGradient(
+                colors: [tint.opacity(0.22), tint.opacity(0.015)],
+                startPoint: .top,
+                endPoint: .bottom
+              )
+            )
+
+          linePath(coordinates)
+            .stroke(
+              tint.opacity(0.95),
+              style: StrokeStyle(lineWidth: 1.8, lineCap: .round, lineJoin: .round)
+            )
+
+          if let last = coordinates.last {
+            Circle()
+              .fill(tint)
+              .frame(width: 5, height: 5)
+              .overlay(Circle().stroke(Color.white.opacity(0.72), lineWidth: 0.7))
+              .position(last)
+          }
+        }
+
+        if showsAxis {
+          ForEach(Array(points.enumerated()), id: \.element.id) { index, point in
+            if shouldLabel(index: index), coordinates.indices.contains(index) {
+              Text(axisLabel(for: point))
+                .font(.system(size: 7.5, weight: .medium, design: .rounded))
+                .foregroundStyle(routerMuted)
+                .fixedSize()
+                .position(
+                  x: min(
+                    geometry.size.width - 10,
+                    max(10, coordinates[index].x)
+                  ),
+                  y: plotHeight + 6
+                )
+            }
+          }
+        }
+
+        if let hoveredIndex,
+           points.indices.contains(hoveredIndex),
+           coordinates.indices.contains(hoveredIndex) {
+          let coordinate = coordinates[hoveredIndex]
+          Path { path in
+            path.move(to: CGPoint(x: coordinate.x, y: 2))
+            path.addLine(to: CGPoint(x: coordinate.x, y: plotHeight - 2))
+          }
+          .stroke(Color.white.opacity(0.22), lineWidth: 0.6)
+
+          Circle()
+            .fill(tint)
+            .frame(width: 7, height: 7)
+            .overlay(Circle().stroke(Color.white.opacity(0.9), lineWidth: 1))
+            .position(coordinate)
+
+          Text(hoverText(for: points[hoveredIndex]))
+            .font(.system(size: 8, weight: .medium, design: .monospaced))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 4)
+            .background(routerInk.opacity(0.92), in: Capsule())
+            .overlay(Capsule().stroke(Color.white.opacity(0.12), lineWidth: 0.5))
+            .fixedSize()
+            .position(
+              x: min(geometry.size.width - 66, max(66, coordinate.x)),
+              y: 11
+            )
+        }
+      }
+      .contentShape(Rectangle())
+      .onContinuousHover { phase in
+        switch phase {
+        case .active(let location):
+          hoveredIndex = nearestIndex(to: location.x, width: geometry.size.width)
+        case .ended:
+          hoveredIndex = nil
+        }
+      }
+    }
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel("Daily token usage line chart")
+    .accessibilityValue("\(formattedTotalTokens) tokens over \(points.count) days")
+  }
+
+  private var formattedTotalTokens: String {
+    Int64(points.reduce(0) { $0 + $1.tokens }).formatted(.number.grouping(.automatic))
+  }
+
+  private func chartCoordinates(width: CGFloat, height: CGFloat, maximum: Double) -> [CGPoint] {
+    let horizontalInset: CGFloat = 3
+    let topInset: CGFloat = 5
+    let bottomInset: CGFloat = 3
+    let usableWidth = max(1, width - horizontalInset * 2)
+    let usableHeight = max(1, height - topInset - bottomInset)
+    return points.enumerated().map { index, point in
+      let x = points.count > 1
+        ? horizontalInset + usableWidth * CGFloat(index) / CGFloat(points.count - 1)
+        : width / 2
+      let normalized = max(0, min(1, point.tokens / maximum))
+      let y = topInset + usableHeight * (1 - CGFloat(normalized))
+      return CGPoint(x: x, y: y)
+    }
+  }
+
+  private func linePath(_ coordinates: [CGPoint]) -> Path {
+    Path { path in
+      guard let first = coordinates.first else { return }
+      path.move(to: first)
+      for coordinate in coordinates.dropFirst() {
+        path.addLine(to: coordinate)
+      }
+    }
+  }
+
+  private func areaPath(_ coordinates: [CGPoint], baseline: CGFloat) -> Path {
+    Path { path in
+      guard let first = coordinates.first, let last = coordinates.last else { return }
+      path.move(to: CGPoint(x: first.x, y: baseline))
+      path.addLine(to: first)
+      for coordinate in coordinates.dropFirst() {
+        path.addLine(to: coordinate)
+      }
+      path.addLine(to: CGPoint(x: last.x, y: baseline))
+      path.closeSubpath()
+    }
+  }
+
+  private func nearestIndex(to x: CGFloat, width: CGFloat) -> Int? {
+    guard !points.isEmpty else { return nil }
+    guard points.count > 1, width > 0 else { return 0 }
+    let fraction = max(0, min(1, x / width))
+    return Int((fraction * CGFloat(points.count - 1)).rounded())
+  }
+
+  private func shouldLabel(index: Int) -> Bool {
+    let stride = points.count <= 7 ? 1 : points.count <= 31 ? 5 : 15
+    return index.isMultiple(of: stride) || index == points.count - 1
+  }
+
+  private func axisLabel(for point: DailyUsagePoint) -> String {
+    if points.count <= 7 {
+      return point.date.formatted(.dateTime.weekday(.abbreviated))
+    }
+    return point.date.formatted(.dateTime.month(.defaultDigits).day())
+  }
+
+  private func hoverText(for point: DailyUsagePoint) -> String {
+    let date = point.date.formatted(.dateTime.month(.abbreviated).day())
+    let tokens = Int64(point.tokens).formatted(.number.grouping(.automatic))
+    return "\(date) · \(tokens) tok"
+  }
 }
 
 

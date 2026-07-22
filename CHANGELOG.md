@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Replaced the Dynamic Island token bars with an interactive line graph and
+  added visible token totals plus provider-reported quota percentage used.
 - Hide tray usage cards until the corresponding OAuth session or API key is
   configured; enabled providers and historical local traffic no longer create
   disconnected-account cards.
