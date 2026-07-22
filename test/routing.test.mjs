@@ -401,7 +401,7 @@ test("router preserves native auth and isolates every external route", async () 
   }
 });
 
-test("router synthesizes v1 and v2 compaction for registry models", async () => {
+test("router synthesizes routed compaction and safely replays it to native models", async () => {
   const gatewayRequests = [];
   const gateway = await mockServer(async (request, response) => {
     gatewayRequests.push({ headers: request.headers, body: await bodyJson(request) });
@@ -416,10 +416,16 @@ test("router synthesizes v1 and v2 compaction for registry models", async () => 
       ],
     });
   });
+  const nativeRequests = [];
+  const native = await mockServer(async (request, response) => {
+    nativeRequests.push({ headers: request.headers, body: await bodyJson(request) });
+    json(response, 200, { route: "native" });
+  });
   const routerPort = await openPort();
   const router = run("router.mjs", {
     CODEX_ROUTER_PORT: String(routerPort),
     CODEX_ROUTER_GATEWAY_BASE_URL: `http://127.0.0.1:${gateway.port}/v1`,
+    CODEX_NATIVE_BASE_URL: `http://127.0.0.1:${native.port}/backend-api/codex`,
     CODEX_ROUTER_QUIET: "1",
   });
   const headers = {
@@ -467,9 +473,27 @@ test("router synthesizes v1 and v2 compaction for registry models", async () => 
     assert.equal(replay.status, 200);
     assert.equal(gatewayRequests.at(-1).body.input[0].type, "message");
     assert.match(gatewayRequests.at(-1).body.input[0].content[0].text, /compact summary/);
+
+    const nativeCompaction = {
+      type: "compaction",
+      id: "cmp_native",
+      encrypted_content: "genuine-openai-encrypted-content",
+    };
+    const nativeReplay = await fetch(`${routerBase(routerPort)}/responses`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        model: "gpt-5.6-sol",
+        input: [v2Body.output[0], nativeCompaction, ...input],
+      }),
+    });
+    assert.equal(nativeReplay.status, 200);
+    assert.equal(nativeRequests[0].body.input[0].type, "message");
+    assert.match(nativeRequests[0].body.input[0].content[0].text, /compact summary/);
+    assert.deepEqual(nativeRequests[0].body.input[1], nativeCompaction);
   } finally {
     await stopChild(router);
-    await closeServer(gateway.server);
+    await Promise.all([closeServer(native.server), closeServer(gateway.server)]);
   }
 });
 

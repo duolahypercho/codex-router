@@ -305,6 +305,17 @@ function normalizeRoutedInput(input) {
     });
 }
 
+function normalizeNativeInput(input) {
+  if (!Array.isArray(input)) return input;
+  return input.map((item) => {
+    if (item?.type !== "compaction") return item;
+    const summary = decodeSummary(item.encrypted_content);
+    return summary === undefined
+      ? item
+      : messageItem(`${SUMMARY_PREFIX}\n\n${summary}`);
+  });
+}
+
 function extractUserMessages(input) {
   if (!Array.isArray(input)) return [];
   const messages = [];
@@ -552,6 +563,9 @@ async function handleResponses(request, response, requestUrl) {
       routedBody = Buffer.from(JSON.stringify(routed), "utf8");
     } else {
       const native = { ...payload };
+      if (Array.isArray(payload.input)) {
+        native.input = normalizeNativeInput(payload.input);
+      }
       if (!compactV1) delete native.previous_response_id;
       target = nativeTarget(requestUrl.pathname, requestUrl.search);
       headers = nativeHeaders(request);
