@@ -1,9 +1,7 @@
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-
-import lockfile from "proper-lockfile";
 
 import { grokAuthPath, grokSessionEntry } from "./grok-oauth-status.mjs";
 
@@ -47,6 +45,10 @@ function shouldRefresh(session, now) {
   return Number.isFinite(session.expiresAt) && session.expiresAt <= now + REFRESH_THRESHOLD_MS;
 }
 
+function isHardExpired(session, now) {
+  return Number.isFinite(session.expiresAt) && session.expiresAt <= now;
+}
+
 function grokExecutable() {
   if (process.env.GROK_CLI) return process.env.GROK_CLI;
   const managed = path.join(process.env.GROK_HOME || path.join(os.homedir(), ".grok"), "bin", "grok");
@@ -84,33 +86,38 @@ export async function ensureFreshGrokOAuthToken({
 } = {}) {
   const initial = readSession();
   if (!force && !shouldRefresh(initial, now)) return initial.accessToken;
-  if (refreshInFlight) return refreshInFlight;
+
+  // A forced recovery must not reuse the unchanged token returned by a
+  // concurrent early-refresh attempt. Wait for that attempt, then retry if it
+  // only fell back to the still-valid access token.
+  while (refreshInFlight) {
+    const token = await refreshInFlight;
+    if (!force || token !== initial.accessToken) return token;
+  }
 
   refreshInFlight = (async () => {
-    const authPath = grokAuthPath();
-    mkdirSync(path.dirname(authPath), { recursive: true, mode: 0o700 });
-    const release = await lockfile.lock(authPath, {
-      retries: { retries: 60, factor: 1, minTimeout: 250, maxTimeout: 500 },
-      stale: REFRESH_TIMEOUT_MS + 5_000,
-      realpath: false,
-    });
-    try {
-      const latest = readSession();
-      if (!force && !shouldRefresh(latest, now)) return latest.accessToken;
-      if (force && latest.accessToken !== initial.accessToken) return latest.accessToken;
+    const latest = readSession();
+    if (!force && !shouldRefresh(latest, now)) return latest.accessToken;
+    if (force && latest.accessToken !== initial.accessToken) return latest.accessToken;
 
+    try {
       await refresh();
-      const refreshed = readSession();
-      if (
-        refreshed.accessToken === latest.accessToken &&
-        (force || shouldRefresh(refreshed, Date.now()))
-      ) {
-        throw oauthError("Grok OAuth was not renewed; run `grok login --oauth`.");
-      }
-      return refreshed.accessToken;
-    } finally {
-      await release();
+    } catch (error) {
+      // The five-minute refresh margin is conservative. Keep serving an access
+      // token that is still wire-valid when the CLI has a transient problem;
+      // an upstream 401 will take the forced path and surface an auth error.
+      if (!force && !isHardExpired(latest, Date.now())) return latest.accessToken;
+      throw error;
     }
+
+    const refreshed = readSession();
+    if (refreshed.accessToken === latest.accessToken) {
+      if (!force && !isHardExpired(refreshed, Date.now())) {
+        return refreshed.accessToken;
+      }
+      throw oauthError("Grok OAuth was not renewed; run `grok login --oauth`.");
+    }
+    return refreshed.accessToken;
   })().finally(() => {
     refreshInFlight = undefined;
   });
