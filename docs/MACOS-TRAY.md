@@ -55,11 +55,12 @@ active count and lists each live model request.
   date and time appear beside the chart title. Usage refreshes every 30 seconds,
   and the detailed view switches when a request uses a different provider.
 - The Island uses green for idle, amber while generating, and red after an
-  error. Idle uses a slow heartbeat around the status orb; generation adds a
-  clearer localized pulse and low-contrast edge comet, and errors pulse once
-  before settling. The daily line draws in once when opened or refreshed.
-  Reduce Motion disables decorative movement. The Island is shown by default
-  and can be toggled from the tray.
+  error. The colored status dot itself scales and brightens with a slow idle
+  heartbeat; generation quickens the dot and adds a clearer localized pulse
+  and low-contrast edge comet, while errors pulse once before settling. The
+  daily line draws in once when opened or refreshed. Reduce Motion disables
+  decorative movement. The Island is shown by default and can be toggled from
+  the tray.
 - When multiple Codex model requests run at the same time, the Island shows an
   active count, stacks concurrent providers or models in compact form, and
   lists each live request with elapsed time on hover and expand. The focused

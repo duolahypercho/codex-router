@@ -2,9 +2,9 @@
 
 ## Unreleased
 
-- Balanced the Dynamic Island with a slow idle heartbeat, a clearer localized
-  pulse and edge comet during generation, and a one-shot line-chart draw when
-  usage opens or changes, while preserving Reduce Motion behavior.
+- Balanced the Dynamic Island with an animated status dot and slow idle
+  heartbeat, a clearer localized pulse and edge comet during generation, and a
+  one-shot line-chart draw while preserving Reduce Motion behavior.
 - Restored the Dynamic Island's daily line graph with today's token total and
   provider quota percentage, while leaving longer-range controls in the tray.
 - Hide tray usage cards until the corresponding OAuth session or API key is

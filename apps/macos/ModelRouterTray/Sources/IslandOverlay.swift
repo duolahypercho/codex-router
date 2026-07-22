@@ -759,6 +759,7 @@ private struct LiveOrb: View {
   var count: Int = 0
   @State private var pulsing = false
   @State private var rippling = false
+  @State private var effectTask: Task<Void, Never>?
 
   var body: some View {
     ZStack(alignment: .topTrailing) {
@@ -776,6 +777,8 @@ private struct LiveOrb: View {
           .fill(state.tint)
           .frame(width: 8, height: 8)
           .overlay(Circle().stroke(Color.white.opacity(0.42), lineWidth: 0.6))
+          .scaleEffect(coreScale)
+          .opacity(coreOpacity)
           .shadow(
             color: state.tint.opacity(pulsing ? 0.42 : 0.16),
             radius: pulsing ? 3.5 : 1.2
@@ -795,6 +798,7 @@ private struct LiveOrb: View {
     .onChange(of: state) { _ in animate() }
     .onChange(of: count) { _ in animate() }
     .onChange(of: reduceMotion) { _ in animate() }
+    .onDisappear { effectTask?.cancel() }
   }
 
   private var orbHaloOpacity: Double {
@@ -808,7 +812,26 @@ private struct LiveOrb: View {
     return pulsing ? 1.28 : 0.92
   }
 
+  private var coreScale: CGFloat {
+    if reduceMotion { return 1 }
+    switch state {
+    case .idle:
+      return pulsing ? 1.10 : 0.92
+    case .starting, .generating:
+      return pulsing ? 1.16 : 0.88
+    case .error:
+      return pulsing ? 1.18 : 1
+    }
+  }
+
+  private var coreOpacity: Double {
+    if reduceMotion { return 1 }
+    if state == .idle { return pulsing ? 1 : 0.76 }
+    return pulsing ? 1 : 0.84
+  }
+
   private func animate() {
+    effectTask?.cancel()
     withAnimation(nil) {
       pulsing = false
       rippling = false
@@ -816,9 +839,14 @@ private struct LiveOrb: View {
     guard !reduceMotion else { return }
 
     if state == .error {
-      withAnimation(.easeOut(duration: 0.8)) {
-        pulsing = true
-        rippling = true
+      effectTask = Task { @MainActor in
+        withAnimation(.easeOut(duration: 0.28)) {
+          pulsing = true
+          rippling = true
+        }
+        try? await Task.sleep(nanoseconds: 520_000_000)
+        guard !Task.isCancelled else { return }
+        withAnimation(.easeInOut(duration: 0.32)) { pulsing = false }
       }
       return
     }
