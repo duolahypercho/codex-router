@@ -563,13 +563,20 @@ final class RouterStore: ObservableObject {
     defer { providerOperation = nil }
     do {
       _ = try await runControl(arguments: ["auth-mode", enabled ? "on" : "off"])
-      await refresh()
-      message = enabled
-        ? "OpenAI login disabled for new Codex sessions."
-        : "OpenAI login restored for new Codex sessions."
     } catch {
       message = error.localizedDescription
       await refresh()
+      return
+    }
+
+    await refresh()
+    do {
+      try await restartCodexApp()
+      message = enabled
+        ? "Codex restarted with external-provider mode."
+        : "Codex restarted with OpenAI login restored."
+    } catch {
+      message = "Mode changed, but Codex could not restart: \(error.localizedDescription)"
     }
   }
 
@@ -697,6 +704,47 @@ final class RouterStore: ObservableObject {
     }
     if providerSetup[providerID]?.configured == true { return "Ready to enable" }
     return "Needs setup"
+  }
+
+  private func restartCodexApp() async throws {
+    let bundleIdentifier = "com.openai.codex"
+    let workspace = NSWorkspace.shared
+    let runningApplications = NSRunningApplication.runningApplications(
+      withBundleIdentifier: bundleIdentifier
+    )
+    let applicationURL = runningApplications.compactMap(\.bundleURL).first
+      ?? workspace.urlForApplication(withBundleIdentifier: bundleIdentifier)
+
+    guard let applicationURL else {
+      throw RouterError("the Codex desktop app could not be found")
+    }
+
+    for application in runningApplications where !application.isTerminated {
+      guard application.terminate() else {
+        throw RouterError("Codex did not accept a graceful quit request")
+      }
+    }
+
+    for _ in 0..<50 {
+      if runningApplications.allSatisfy({ $0.isTerminated }) { break }
+      try await Task.sleep(nanoseconds: 100_000_000)
+    }
+
+    guard runningApplications.allSatisfy({ $0.isTerminated }) else {
+      throw RouterError("Codex did not quit in time; restart it manually")
+    }
+
+    let configuration = NSWorkspace.OpenConfiguration()
+    configuration.activates = true
+    try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+      workspace.openApplication(at: applicationURL, configuration: configuration) { _, error in
+        if let error {
+          continuation.resume(throwing: error)
+        } else {
+          continuation.resume(returning: ())
+        }
+      }
+    }
   }
 
   private func runControl(arguments: [String], stdin: Data? = nil) async throws -> Data {
@@ -1068,8 +1116,8 @@ private struct TrayView: View {
         settingRow(
           title: "Use without OpenAI login",
           detail: store.loginFree
-            ? "External providers · restart Codex to apply"
-            : "Use connected external models in new sessions",
+            ? "External providers · Codex restarts automatically"
+            : "Use connected models and restart Codex",
           isOn: Binding(
             get: { store.loginFree },
             set: { enabled in Task { await store.setLoginFree(enabled) } }

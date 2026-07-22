@@ -176,16 +176,19 @@ The tray's **Use without OpenAI login** switch selects the managed custom
 provider for new Codex sessions. In that mode, enabled external models use the
 OAuth session or API key configured for their provider and do not require a
 ChatGPT or OpenAI API login. Connect and enable at least one external provider
-before turning it on, then fully quit and reopen Codex. The switch keeps the
-current model when it already belongs to a connected external provider;
-otherwise it selects the first enabled model from one of those providers.
+before turning it on. On macOS, the tray gracefully quits and reopens the
+registered Codex desktop app after the mode changes; if that restart fails, the
+tray reports that Codex must be restarted manually. The switch keeps the current
+model when it already belongs to a connected external provider; otherwise it
+selects the first enabled model from one of those providers.
 
 Turning the switch off restores the exact root `model` and `model_provider`
 values that were present before the mode was enabled. The router does not
 modify or delete ChatGPT credentials. Native GPT models, ChatGPT usage, cloud
 tasks, and other account-backed features still require OpenAI authentication
 and are not available while signed out. The equivalent local control command is
-`./bin/control auth-mode on` or `./bin/control auth-mode off`.
+`./bin/control auth-mode on` or `./bin/control auth-mode off`; when using the
+command directly, restart Codex yourself.
 
 ## Make models appear in Claude Desktop
 

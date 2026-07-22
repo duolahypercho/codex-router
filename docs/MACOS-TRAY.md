@@ -112,11 +112,14 @@ the tray restores the previous provider selection and shows the error.
 
 The **Use without OpenAI login** switch changes new Codex sessions to the
 managed custom router provider. At least one external provider must be connected
-and enabled. Fully quit and reopen Codex after changing the switch. Turning it
-off restores the previous root model-provider setting; neither direction reads,
-changes, or deletes ChatGPT credentials. The mode keeps the current external
-model when possible, otherwise selects the first model from a connected,
-enabled provider, and restores the previous model when switched off.
+and enabled. After applying the change, the tray gracefully quits and reopens
+the registered Codex desktop app so the new mode takes effect. It never
+force-quits Codex; if the app does not quit or reopen, the mode remains changed
+and the tray asks you to restart Codex manually. Turning the switch off restores
+the previous root model-provider setting; neither direction reads, changes, or
+deletes ChatGPT credentials. The mode keeps the current external model when
+possible, otherwise selects the first model from a connected, enabled provider,
+and restores the previous model when switched off.
 
 ## Adding providers and models
 
