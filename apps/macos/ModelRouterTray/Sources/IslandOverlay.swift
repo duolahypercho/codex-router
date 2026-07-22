@@ -13,9 +13,9 @@ final class IslandDisplayModel: ObservableObject {
 
   var size: CGSize {
     switch state {
-    case .compact: return CGSize(width: 286, height: 40)
-    case .peek: return CGSize(width: 382, height: 116)
-    case .expanded: return CGSize(width: 520, height: 334)
+    case .compact: return CGSize(width: 320, height: 40)
+    case .peek: return CGSize(width: 404, height: 148)
+    case .expanded: return CGSize(width: 520, height: 372)
     }
   }
 
@@ -201,19 +201,26 @@ private struct IslandOverlayView: View {
 
   private var compactContent: some View {
     HStack(spacing: 7) {
-      LiveOrb(state: store.activityState)
-      Text(store.activityState.label)
+      LiveOrb(state: store.activityState, count: store.activeRequestCount)
+      Text(store.activitySummaryLabel)
         .font(.system(size: 10, weight: .semibold, design: .rounded))
         .foregroundStyle(store.activityState.tint)
       Text("·")
         .foregroundStyle(routerMuted)
-      Text(store.selectedUsageProvider.shortName)
+      Text(store.compactActivityProvidersLabel)
         .font(.system(size: 11, weight: .medium, design: .rounded))
         .lineLimit(1)
       Spacer(minLength: 6)
-      Text(store.selectedUsageText ?? "Usage —")
-        .font(.system(size: 10, weight: .medium, design: .monospaced))
-        .foregroundStyle(.white.opacity(0.78))
+      if store.hasConcurrentActivity {
+        Text(compactActiveModelsLabel)
+          .font(.system(size: 10, weight: .medium, design: .rounded))
+          .foregroundStyle(.white.opacity(0.78))
+          .lineLimit(1)
+      } else {
+        Text(store.selectedUsageText ?? "Usage —")
+          .font(.system(size: 10, weight: .medium, design: .monospaced))
+          .foregroundStyle(.white.opacity(0.78))
+      }
     }
     .padding(.horizontal, 14)
   }
@@ -221,12 +228,12 @@ private struct IslandOverlayView: View {
   private var peekContent: some View {
     VStack(spacing: 9) {
       HStack(spacing: 9) {
-        LiveOrb(state: store.activityState)
+        LiveOrb(state: store.activityState, count: store.activeRequestCount)
         VStack(alignment: .leading, spacing: 1) {
-          Text(store.selectedUsageProvider.displayName)
+          Text(peekTitle)
             .font(.system(size: 12, weight: .semibold, design: .rounded))
             .lineLimit(1)
-          Text("\(store.activityState.label) · \(sourceLabel)")
+          Text("\(store.activitySummaryLabel) · \(sourceLabel)")
             .font(.system(size: 9, weight: .medium, design: .rounded))
             .foregroundStyle(store.activityState.tint.opacity(0.92))
         }
@@ -241,9 +248,13 @@ private struct IslandOverlayView: View {
             .foregroundStyle(routerMuted)
         }
       }
-      UsageBarChart(points: store.dailyUsage(days: 7), tint: graphTint)
-        .id("\(store.selectedUsageProviderID)-peek")
-        .frame(height: 43)
+      if store.hasConcurrentActivity {
+        ActiveRequestList(store: store, limit: 3, compact: true)
+      } else {
+        UsageBarChart(points: store.dailyUsage(days: 7), tint: graphTint)
+          .id("\(store.selectedUsageProviderID)-peek")
+          .frame(height: 43)
+      }
     }
     .padding(.horizontal, 15)
     .padding(.top, 10)
@@ -253,11 +264,11 @@ private struct IslandOverlayView: View {
   private var expandedContent: some View {
     VStack(spacing: 13) {
       HStack(spacing: 10) {
-        LiveOrb(state: store.activityState)
+        LiveOrb(state: store.activityState, count: store.activeRequestCount)
         VStack(alignment: .leading, spacing: 2) {
-          Text(store.selectedUsageProvider.displayName)
+          Text(peekTitle)
             .font(.system(size: 15, weight: .semibold, design: .rounded))
-          Text("\(store.activityState.label) · \(sourceLabel)")
+          Text("\(store.activitySummaryLabel) · \(sourceLabel)")
             .font(.system(size: 9, weight: .medium, design: .rounded))
             .foregroundStyle(store.activityState.tint)
         }
@@ -296,32 +307,38 @@ private struct IslandOverlayView: View {
         .frame(height: 78)
 
       HStack {
-        Text("ACTIVE PROVIDER")
+        Text(store.hasConcurrentActivity ? "ACTIVE NOW" : "ACTIVE PROVIDER")
           .font(.system(size: 8, weight: .semibold, design: .monospaced))
           .tracking(0.8)
           .foregroundStyle(routerMuted)
         Spacer()
-        Text("Account and traffic are provider-scoped")
+        Text(store.hasConcurrentActivity
+          ? "\(store.activeRequestCount) concurrent model requests"
+          : "Account and traffic are provider-scoped")
           .font(.system(size: 9, design: .rounded))
           .foregroundStyle(routerMuted)
       }
 
-      HStack {
-        VStack(alignment: .leading, spacing: 2) {
-          Text(store.selectedUsageProvider.displayName)
-            .font(.system(size: 10, weight: .semibold, design: .rounded))
-          Text(store.selectedUsageProvider.detail)
-            .font(.system(size: 8, design: .rounded))
-            .foregroundStyle(routerMuted)
+      if store.hasConcurrentActivity {
+        ActiveRequestList(store: store, limit: 4, compact: false)
+      } else {
+        HStack {
+          VStack(alignment: .leading, spacing: 2) {
+            Text(store.selectedUsageProvider.displayName)
+              .font(.system(size: 10, weight: .semibold, design: .rounded))
+            Text(store.selectedUsageProvider.detail)
+              .font(.system(size: 8, design: .rounded))
+              .foregroundStyle(routerMuted)
+          }
+          Spacer()
+          Text(store.activityState == .generating ? "Live" : "Last used")
+            .font(.system(size: 9, weight: .medium, design: .rounded))
+            .foregroundStyle(store.activityState.tint)
         }
-        Spacer()
-        Text(store.activityState == .generating ? "Live" : "Last used")
-          .font(.system(size: 9, weight: .medium, design: .rounded))
-          .foregroundStyle(store.activityState.tint)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(Color.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
       }
-      .padding(.horizontal, 10)
-      .padding(.vertical, 7)
-      .background(Color.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
     .padding(.horizontal, 17)
     .padding(.top, 13)
@@ -330,7 +347,23 @@ private struct IslandOverlayView: View {
 
   private var glow: some View {
     StatusGlow(state: store.activityState)
-      .id(store.activityState)
+      .id("\(store.activityState.rawValue)-\(store.activeRequestCount)")
+  }
+
+  private var peekTitle: String {
+    if store.hasConcurrentActivity {
+      return store.compactActivityProvidersLabel
+    }
+    return store.selectedUsageProvider.displayName
+  }
+
+  private var compactActiveModelsLabel: String {
+    let models = store.activeRequests.prefix(2).map(store.modelLabel(for:))
+    if models.isEmpty { return "Live" }
+    if store.activeRequests.count > 2 {
+      return "\(models.joined(separator: " · ")) +\(store.activeRequests.count - 2)"
+    }
+    return models.joined(separator: " · ")
   }
 
   private var sourceLabel: String {
@@ -412,6 +445,57 @@ private struct IslandOverlayView: View {
 
 }
 
+
+private struct ActiveRequestList: View {
+  @ObservedObject var store: RouterStore
+  let limit: Int
+  let compact: Bool
+
+  var body: some View {
+    VStack(spacing: compact ? 5 : 6) {
+      ForEach(Array(store.activeRequests.prefix(limit))) { request in
+        HStack(spacing: 8) {
+          Circle()
+            .fill(routerYellow)
+            .frame(width: 6, height: 6)
+          VStack(alignment: .leading, spacing: 1) {
+            Text(store.modelLabel(for: request))
+              .font(.system(size: compact ? 10 : 11, weight: .semibold, design: .rounded))
+              .lineLimit(1)
+            Text(store.displayName(forProvider: request.provider))
+              .font(.system(size: compact ? 8 : 9, weight: .medium, design: .rounded))
+              .foregroundStyle(routerMuted)
+              .lineLimit(1)
+          }
+          Spacer(minLength: 6)
+          Text(elapsedLabel(for: request))
+            .font(.system(size: compact ? 9 : 10, weight: .medium, design: .monospaced))
+            .foregroundStyle(routerYellow.opacity(0.95))
+            .monospacedDigit()
+        }
+        .padding(.horizontal, compact ? 8 : 10)
+        .padding(.vertical, compact ? 5 : 7)
+        .background(Color.white.opacity(0.045), in: RoundedRectangle(cornerRadius: compact ? 8 : 10, style: .continuous))
+      }
+      if store.activeRequests.count > limit {
+        Text("+\(store.activeRequests.count - limit) more")
+          .font(.system(size: 9, weight: .medium, design: .rounded))
+          .foregroundStyle(routerMuted)
+          .frame(maxWidth: .infinity, alignment: .leading)
+      }
+    }
+  }
+
+  private func elapsedLabel(for request: RouterActiveRequest) -> String {
+    let started = Date(timeIntervalSince1970: request.startedAt / 1000)
+    let seconds = max(0, Int(Date().timeIntervalSince(started)))
+    if seconds < 60 { return "\(seconds)s" }
+    let minutes = seconds / 60
+    let rem = seconds % 60
+    return "\(minutes)m \(rem)s"
+  }
+}
+
 private struct IslandSilhouette: InsettableShape {
   var inset: CGFloat = 0
 
@@ -447,21 +531,34 @@ private struct IslandSilhouette: InsettableShape {
 private struct LiveOrb: View {
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   let state: RouterActivityState
+  var count: Int = 0
   @State private var pulsing = false
 
   var body: some View {
-    ZStack {
-      Circle()
-        .fill(state.tint.opacity(0.2))
-        .frame(width: 18, height: 18)
-        .scaleEffect(state == .generating && pulsing ? 1.34 : 0.94)
-      Circle()
-        .fill(state.tint)
-        .frame(width: 8, height: 8)
-        .overlay(Circle().stroke(Color.white.opacity(0.42), lineWidth: 0.6))
+    ZStack(alignment: .topTrailing) {
+      ZStack {
+        Circle()
+          .fill(state.tint.opacity(0.2))
+          .frame(width: 18, height: 18)
+          .scaleEffect(state == .generating && pulsing ? 1.34 : 0.94)
+        Circle()
+          .fill(state.tint)
+          .frame(width: 8, height: 8)
+          .overlay(Circle().stroke(Color.white.opacity(0.42), lineWidth: 0.6))
+      }
+      if count > 1 {
+        Text("\(min(count, 9))")
+          .font(.system(size: 7, weight: .bold, design: .rounded))
+          .foregroundStyle(.black.opacity(0.88))
+          .frame(width: 11, height: 11)
+          .background(state.tint, in: Circle())
+          .overlay(Circle().stroke(Color.black.opacity(0.35), lineWidth: 0.6))
+          .offset(x: 5, y: -4)
+      }
     }
     .onAppear { animate() }
     .onChange(of: state) { _ in animate() }
+    .onChange(of: count) { _ in animate() }
   }
 
   private func animate() {

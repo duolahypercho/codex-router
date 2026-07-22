@@ -64,13 +64,19 @@ const ERROR_STATUS_DURATION_MS = 8_000;
 let requestSequence = 0;
 const activeRequests = new Map();
 let lastUsedProvider;
+let lastUsedModel;
 let errorStatusUntil = 0;
 
 if (!INTERNAL_KEY) throw new Error("CODEX_ROUTER_INTERNAL_KEY is required.");
 assertCallerSecret(CALLER_KEY);
 
 function activityPayload() {
-  const activeProvider = [...activeRequests.values()].findLast(Boolean);
+  const active = [...activeRequests.values()].filter(
+    (entry) => entry && typeof entry === "object" && entry.provider,
+  );
+  const latest = active.at(-1);
+  const provider = latest?.provider || lastUsedProvider;
+  const model = latest?.model || lastUsedModel;
   return {
     state:
       activeRequests.size > 0
@@ -78,20 +84,29 @@ function activityPayload() {
         : Date.now() < errorStatusUntil
           ? "error"
           : "idle",
-    ...(activeProvider || lastUsedProvider
-      ? { provider: activeProvider || lastUsedProvider }
-      : {}),
+    activeCount: activeRequests.size,
+    active,
+    ...(provider ? { provider } : {}),
+    ...(model ? { model } : {}),
   };
 }
 
 function beginRequestActivity() {
   const requestId = ++requestSequence;
-  activeRequests.set(requestId, undefined);
+  activeRequests.set(requestId, null);
   let finished = false;
   return {
-    setProvider(provider) {
-      activeRequests.set(requestId, provider);
+    setRoute({ provider, model } = {}) {
+      if (!provider) return;
+      const entry = {
+        id: String(requestId),
+        provider,
+        ...(model ? { model } : {}),
+        startedAt: Date.now(),
+      };
+      activeRequests.set(requestId, entry);
       lastUsedProvider = provider;
+      if (model) lastUsedModel = model;
     },
     finish(status) {
       if (finished) return;
@@ -502,7 +517,10 @@ async function handleResponses(request, response, requestUrl) {
       });
       return;
     }
-    activity.setProvider(route?.provider || "openai");
+    activity.setRoute({
+      provider: route?.provider || "openai",
+      model: requestedModel || undefined,
+    });
     const compactV1 = /\/responses\/compact$/.test(requestUrl.pathname);
     const compactV2 =
       route &&

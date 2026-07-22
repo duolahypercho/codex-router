@@ -2,8 +2,9 @@
 
 Model Router Tray is a native macOS Dynamic-Island-style overlay plus menu-bar
 control panel for the local Codex router. The top-center island follows the
-provider handling the latest request, reveals live usage on hover, and expands
-on click. The tray shows Codex service state, an all-provider usage overview,
+provider handling the latest request, reveals live usage on hover, expands on
+click, and surfaces concurrent model requests when more than one agent is
+active. The tray shows Codex service state, an all-provider usage overview,
 active-provider detail, and provider setup shared with the existing
 command-line control plane.
 
@@ -48,6 +49,10 @@ account usage.
   a request uses a different provider.
 - The Island uses green for idle, amber while generating, and red after an
   error. It is shown by default and can be toggled from the tray.
+- When multiple Codex model requests run at the same time, the Island shows an
+  active count, stacks concurrent providers or models in compact form, and
+  lists each live request with elapsed time on hover and expand. The focused
+  usage view still follows the newest active request.
 - Local routed-model events record timestamp, model, provider, HTTP status,
   duration, and the input/output/total token counts reported by the provider.
   Prompts, responses, and API keys are never stored. Provider metering begins

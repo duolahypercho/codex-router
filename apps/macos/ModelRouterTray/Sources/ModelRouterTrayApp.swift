@@ -74,6 +74,9 @@ final class RouterStore: ObservableObject {
   @Published private(set) var lastUpdated: Date?
   @Published private(set) var selectedUsageProviderID: String
   @Published private(set) var activityState: RouterActivityState = .idle
+  @Published private(set) var activeRequests: [RouterActiveRequest] = []
+  @Published private(set) var activeRequestCount: Int = 0
+  @Published private(set) var activeModel: String?
   @Published private(set) var accountUsage: CodexAccountUsage?
   @Published private(set) var accountUsageError: String?
   @Published private(set) var providerUsage: ProviderUsageSnapshot?
@@ -147,6 +150,57 @@ final class RouterStore: ObservableObject {
   var selectedUsageResetDate: Date? {
     if selectedUsageUsesChatGPT { return accountUsage?.primary?.resetDate }
     return selectedAccountMetric?.resetDate
+  }
+
+  var hasConcurrentActivity: Bool {
+    activeRequestCount > 1
+  }
+
+  var activitySummaryLabel: String {
+    if activityState == .generating, activeRequestCount > 1 {
+      return "\(activeRequestCount) active"
+    }
+    return activityState.label
+  }
+
+  var compactActivityProvidersLabel: String {
+    let names = uniqueActiveProviderShortNames
+    if names.isEmpty { return selectedUsageProvider.shortName }
+    if names.count == 1 { return names[0] }
+    if names.count == 2 { return "\(names[0]) + \(names[1])" }
+    return "\(names[0]) +\(names.count - 1)"
+  }
+
+  var uniqueActiveProviderShortNames: [String] {
+    var seen = Set<String>()
+    var names: [String] = []
+    for request in activeRequests {
+      let name = shortName(forProvider: request.provider)
+      if seen.insert(name).inserted {
+        names.append(name)
+      }
+    }
+    return names
+  }
+
+  func shortName(forProvider providerID: String) -> String {
+    usageProviderChoices.first(where: { $0.id == providerID })?.shortName
+      ?? providerID
+  }
+
+  func displayName(forProvider providerID: String) -> String {
+    usageProviderChoices.first(where: { $0.id == providerID })?.displayName
+      ?? providerID
+  }
+
+  func modelLabel(for request: RouterActiveRequest) -> String {
+    guard let model = request.model, !model.isEmpty else {
+      return displayName(forProvider: request.provider)
+    }
+    if let slash = model.lastIndex(of: "/") {
+      return String(model[model.index(after: slash)...])
+    }
+    return model
   }
 
   var visibleUsageProviders: [UsageProviderChoice] {
@@ -443,6 +497,9 @@ final class RouterStore: ObservableObject {
     let configuredPort = ProcessInfo.processInfo.environment["MODEL_ROUTER_PORT"] ?? "4102"
     guard let url = URL(string: "http://127.0.0.1:\(configuredPort)/health") else {
       activityState = .error
+      activeRequests = []
+      activeRequestCount = 0
+      activeModel = nil
       return
     }
     var request = URLRequest(url: url)
@@ -452,6 +509,9 @@ final class RouterStore: ObservableObject {
       let (data, _) = try await URLSession.shared.data(for: request)
       let health = try JSONDecoder().decode(RouterHealth.self, from: data)
       activityState = health.activity.state
+      activeRequests = health.activity.active ?? []
+      activeRequestCount = health.activity.activeCount ?? activeRequests.count
+      activeModel = health.activity.model
       if health.activity.state == .generating,
          let provider = health.activity.provider {
         hasObservedActiveProvider = true
@@ -460,6 +520,9 @@ final class RouterStore: ObservableObject {
       }
     } catch {
       activityState = .error
+      activeRequests = []
+      activeRequestCount = 0
+      activeModel = nil
     }
   }
 
@@ -575,6 +638,16 @@ private struct RouterHealth: Decodable {
 private struct RouterActivity: Decodable {
   let state: RouterActivityState
   let provider: String?
+  let model: String?
+  let activeCount: Int?
+  let active: [RouterActiveRequest]?
+}
+
+struct RouterActiveRequest: Decodable, Identifiable, Equatable {
+  let id: String
+  let provider: String
+  let model: String?
+  let startedAt: Double
 }
 
 private struct RouterError: LocalizedError {
@@ -749,9 +822,13 @@ private struct StatusItemLabel: View {
       Circle()
         .fill(store.activityState.tint)
         .frame(width: 6, height: 6)
-      Text(store.selectedUsageProvider.shortName)
+      Text(store.hasConcurrentActivity ? store.activitySummaryLabel : store.selectedUsageProvider.shortName)
         .font(.system(size: 11, weight: .medium, design: .rounded))
-      if let usage = store.selectedUsageText {
+      if store.hasConcurrentActivity {
+        Text(store.compactActivityProvidersLabel)
+          .font(.system(size: 10, weight: .medium, design: .rounded))
+          .foregroundStyle(.secondary)
+      } else if let usage = store.selectedUsageText {
         Text(usage)
           .font(.system(size: 10, weight: .medium, design: .monospaced))
           .foregroundStyle(.secondary)

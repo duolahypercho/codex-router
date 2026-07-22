@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Surface concurrent Codex model requests on the Dynamic Island: active count,
+  multi-provider compact labels, and live request rows with elapsed time.
 - Added a credential-isolated Anthropic API provider with Claude Opus 4.8 in
   the Codex picker, native Anthropic Messages forwarding, secure key setup,
   tray controls, and a real LiteLLM-to-mock-Anthropic Codex integration test.

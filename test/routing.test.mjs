@@ -198,12 +198,44 @@ test("router requires the configured path capability before any model route", as
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ model: "deepseek/deepseek-v4-pro", input: "hold" }),
     });
-    await new Promise((resolve) => setTimeout(resolve, 25));
-    const generatingHealth = await fetch(`http://127.0.0.1:${routerPort}/health`);
-    const generatingActivity = (await generatingHealth.json()).activity;
+    const secondHeldRequest = fetch(`${routerBase(routerPort)}/responses`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "deepseek/deepseek-v4-flash", input: "hold" }),
+    });
+    let generatingActivity;
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      const generatingHealth = await fetch(`http://127.0.0.1:${routerPort}/health`);
+      generatingActivity = (await generatingHealth.json()).activity;
+      if (
+        generatingActivity.state === "generating" &&
+        generatingActivity.activeCount === 2 &&
+        generatingActivity.active?.length === 2
+      ) {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
     assert.equal(generatingActivity.state, "generating");
     assert.equal(generatingActivity.provider, "deepseek");
+    assert.equal(generatingActivity.activeCount, 2);
+    assert.equal(generatingActivity.active.length, 2);
+    assert.deepEqual(
+      new Set(generatingActivity.active.map((entry) => entry.model)),
+      new Set(["deepseek/deepseek-v4-pro", "deepseek/deepseek-v4-flash"]),
+    );
+    assert.ok(
+      ["deepseek/deepseek-v4-pro", "deepseek/deepseek-v4-flash"].includes(
+        generatingActivity.model,
+      ),
+    );
+    for (const entry of generatingActivity.active) {
+      assert.equal(entry.provider, "deepseek");
+      assert.equal(typeof entry.id, "string");
+      assert.equal(typeof entry.startedAt, "number");
+    }
     assert.equal((await heldRequest).status, 200);
+    assert.equal((await secondHeldRequest).status, 200);
 
     const errorSentinel = "SENSITIVE_ERROR_DETAIL_MUST_NOT_ESCAPE";
     const invalidEncoding = await fetch(`${routerBase(routerPort)}/responses`, {
