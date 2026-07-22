@@ -215,6 +215,80 @@ final class RouterStore: ObservableObject {
     }
   }
 
+  var visibleUsageCards: [UsageOverviewCard] {
+    visibleUsageProviders.flatMap(usageCards(for:))
+  }
+
+  func usageCards(for provider: UsageProviderChoice) -> [UsageOverviewCard] {
+    if provider.id == "openai" {
+      var cards: [UsageOverviewCard] = []
+      if let primary = accountUsage?.primary {
+        cards.append(
+          UsageOverviewCard(
+            id: "openai-primary",
+            provider: provider,
+            metric: nil,
+            kindLabel: primary.durationLabel,
+            remainingPercent: Double(primary.remainingPercent),
+            resetDate: primary.resetDate
+          )
+        )
+      } else {
+        cards.append(
+          UsageOverviewCard(
+            id: "openai-primary",
+            provider: provider,
+            metric: nil,
+            kindLabel: nil,
+            remainingPercent: nil,
+            resetDate: nil
+          )
+        )
+      }
+      if let secondary = accountUsage?.secondary {
+        cards.append(
+          UsageOverviewCard(
+            id: "openai-secondary",
+            provider: provider,
+            metric: nil,
+            kindLabel: secondary.durationLabel,
+            remainingPercent: Double(secondary.remainingPercent),
+            resetDate: secondary.resetDate
+          )
+        )
+      }
+      return cards
+    }
+
+    let metrics = providerUsage(for: provider.id)?.account.metrics ?? []
+    if !metrics.isEmpty {
+      return metrics.enumerated().map { index, metric in
+        let kindLabel = metric.kind == "quota"
+          ? standardizedLimitLabel(metric.label)
+          : metric.label
+        return UsageOverviewCard(
+          id: "\(provider.id)-metric-\(index)",
+          provider: provider,
+          metric: metric,
+          kindLabel: kindLabel,
+          remainingPercent: metric.remainingPercent,
+          resetDate: metric.resetDate
+        )
+      }
+    }
+
+    return [
+      UsageOverviewCard(
+        id: "\(provider.id)-local",
+        provider: provider,
+        metric: nil,
+        kindLabel: nil,
+        remainingPercent: nil,
+        resetDate: nil
+      )
+    ]
+  }
+
   func providerUsage(for providerID: String) -> RouterProviderUsage? {
     providerUsage?.providers.first(where: { $0.id == providerID })
   }
@@ -827,6 +901,18 @@ struct UsageProviderChoice: Identifiable {
   let isEnabled: Bool
 }
 
+struct UsageOverviewCard: Identifiable {
+  let id: String
+  let provider: UsageProviderChoice
+  let metric: ProviderAccountMetric?
+  let kindLabel: String?
+  let remainingPercent: Double?
+  let resetDate: Date?
+
+  var providerID: String { provider.id }
+  var title: String { provider.displayName }
+}
+
 struct ProviderSetupSnapshot: Decodable {
   let providers: [ProviderSetupState]
 }
@@ -1328,11 +1414,12 @@ private struct ProviderUsageSection: View {
       guard store.selectedUsageProvider.isEnabled else { return store.selectedUsageProvider.detail }
       guard let usage = store.selectedProviderUsage else { return "Loading provider usage…" }
       if let metric = usage.account.metrics.first {
+        let label = standardizedLimitLabel(metric.label)
         if let reset = metric.resetDate {
-          return "\(metric.label) · resets \(reset.formatted(date: .abbreviated, time: .shortened))"
+          return "\(label) · \(usageResetCaption(reset))"
         }
         if let detail = metric.detail, !detail.isEmpty { return detail }
-        return "Official provider account"
+        return label
       }
       return "\(usage.credentialType.uppercased()) traffic · measured on this Mac"
     }
@@ -1386,8 +1473,8 @@ private struct AllProviderUsageGrid: View {
 
   var body: some View {
     LazyVGrid(columns: columns, spacing: 8) {
-      ForEach(store.visibleUsageProviders) { provider in
-        AllProviderUsageCard(store: store, provider: provider)
+      ForEach(store.visibleUsageCards) { card in
+        AllProviderUsageCard(store: store, card: card)
       }
     }
   }
@@ -1395,18 +1482,18 @@ private struct AllProviderUsageGrid: View {
 
 private struct AllProviderUsageCard: View {
   @ObservedObject var store: RouterStore
-  let provider: UsageProviderChoice
+  let card: UsageOverviewCard
 
   var body: some View {
     Button {
-      store.selectUsageProvider(provider.id)
+      store.selectUsageProvider(card.providerID)
     } label: {
       VStack(alignment: .leading, spacing: 7) {
         HStack(spacing: 6) {
           Circle()
-            .fill(provider.id == store.selectedUsageProviderID ? store.activityState.tint : statusTint)
+            .fill(card.providerID == store.selectedUsageProviderID ? store.activityState.tint : statusTint)
             .frame(width: 6, height: 6)
-          Text(provider.displayName)
+          Text(card.title)
             .font(.system(size: 10, weight: .medium))
             .lineLimit(1)
           Spacer(minLength: 4)
@@ -1433,24 +1520,10 @@ private struct AllProviderUsageCard: View {
           .foregroundStyle(routerMuted)
           .lineLimit(1)
 
-        if !resetLines.isEmpty {
-          ForEach(Array(resetLines.enumerated()), id: \.offset) { _, line in
-            Text(line)
-              .font(.system(size: 8))
-              .foregroundStyle(routerMuted)
-              .lineLimit(1)
-          }
-        } else if showsResetPlaceholder {
-          Text("No reset reported")
-            .font(.system(size: 8))
-            .foregroundStyle(routerMuted)
-            .lineLimit(1)
-        } else {
-          Text("Local router traffic")
-            .font(.system(size: 8))
-            .foregroundStyle(routerMuted)
-            .lineLimit(1)
-        }
+        Text(footerText)
+          .font(.system(size: 8))
+          .foregroundStyle(routerMuted)
+          .lineLimit(1)
       }
       .padding(10)
       .frame(maxWidth: .infinity, minHeight: 98, alignment: .leading)
@@ -1458,22 +1531,18 @@ private struct AllProviderUsageCard: View {
       .overlay(
         RoundedRectangle(cornerRadius: 10, style: .continuous)
           .stroke(
-            provider.id == store.selectedUsageProviderID ? routerAccent.opacity(0.45) : Color.clear,
+            card.providerID == store.selectedUsageProviderID ? routerAccent.opacity(0.45) : Color.clear,
             lineWidth: 0.75
           )
       )
     }
     .buttonStyle(.plain)
-    .help("Show \(provider.displayName) usage")
-    .accessibilityLabel("Show \(provider.displayName) usage")
-  }
-
-  private var accountMetric: ProviderAccountMetric? {
-    store.providerUsage(for: provider.id)?.account.metrics.first
+    .help("Show \(card.provider.displayName) usage")
+    .accessibilityLabel("Show \(card.provider.displayName) usage")
   }
 
   private var account: ProviderAccountUsage? {
-    store.providerUsage(for: provider.id)?.account
+    store.providerUsage(for: card.providerID)?.account
   }
 
   private var oauthNeedsReconnect: Bool {
@@ -1482,29 +1551,26 @@ private struct AllProviderUsageCard: View {
   }
 
   private var localTotals: (tokens: Double, requests: Int) {
-    store.localUsageTotals(for: provider.id, days: 7)
+    store.localUsageTotals(for: card.providerID, days: 7)
   }
 
   private var metricText: String {
-    if provider.id == "openai" {
-      guard let remaining = store.accountUsage?.primary?.remainingPercent else { return "—" }
-      return "\(remaining)% left"
-    }
     if oauthNeedsReconnect { return "Reconnect" }
-    if let accountMetric { return formattedAccountMetric(accountMetric) }
-    return store.localUsageSummary(for: provider.id, days: 7)
+    if let metric = card.metric { return formattedAccountMetric(metric) }
+    if let remaining = card.remainingPercent {
+      return "\(Int(remaining.rounded()))% left"
+    }
+    if card.providerID == "openai" { return "—" }
+    return store.localUsageSummary(for: card.providerID, days: 7)
   }
 
   private var detailText: String {
-    if provider.id == "openai" {
-      return store.accountUsage?.primary?.durationLabel ?? "ChatGPT subscription"
-    }
     if oauthNeedsReconnect { return "OAuth expired · reconnect below" }
-    if let accountMetric {
-      if localTotals.requests > 0 {
-        return "\(accountMetric.label) · \(localTotals.requests) local req"
-      }
-      return accountMetric.label
+    if let kindLabel = card.kindLabel {
+      return kindLabel
+    }
+    if card.providerID == "openai" {
+      return store.accountUsage?.primary?.durationLabel ?? "Weekly limit"
     }
     if localTotals.requests > 0 || localTotals.tokens > 0 {
       if localTotals.tokens > 0, localTotals.requests > 0 {
@@ -1515,41 +1581,28 @@ private struct AllProviderUsageCard: View {
       }
       return "7D local traffic"
     }
-    if provider.isEnabled { return "No router traffic yet" }
+    if card.provider.isEnabled { return "No router traffic yet" }
     return "Configured · currently hidden"
   }
 
-  private var resetLines: [String] {
-    if provider.id == "openai" {
-      return [store.accountUsage?.primary, store.accountUsage?.secondary]
-        .compactMap { window in
-          guard let window, let reset = window.resetDate else { return nil }
-          return "\(window.durationLabel) · \(usageResetCaption(reset))"
-        }
+  private var footerText: String {
+    if oauthNeedsReconnect { return "Sign in again to restore quota" }
+    if let reset = card.resetDate {
+      return usageResetCaption(reset)
     }
-    return (account?.metrics ?? []).compactMap { metric in
-      guard let reset = metric.resetDate else { return nil }
-      return "\(metric.label) · \(usageResetCaption(reset))"
+    if card.metric != nil || card.providerID == "openai" {
+      return "No reset reported"
     }
+    return "Local router traffic"
   }
 
   private var remainingFraction: CGFloat? {
-    if provider.id == "openai" {
-      guard let remaining = store.accountUsage?.primary?.remainingPercent else { return nil }
-      return CGFloat(max(0, min(100, remaining))) / 100
-    }
-    guard accountMetric?.kind == "quota", let remaining = accountMetric?.remainingPercent else {
-      return nil
-    }
+    guard let remaining = card.remainingPercent else { return nil }
     return CGFloat(max(0, min(100, remaining))) / 100
   }
 
-  private var showsResetPlaceholder: Bool {
-    provider.id == "openai" || accountMetric != nil
-  }
-
   private var statusTint: Color {
-    if provider.id == "openai" || provider.isEnabled { return routerMint }
+    if card.providerID == "openai" || card.provider.isEnabled { return routerMint }
     return Color.secondary.opacity(0.42)
   }
 }
@@ -1678,6 +1731,29 @@ struct UsageBarChart: View {
     let tokens = Int64(point.tokens).formatted(.number.grouping(.automatic))
     return "\(date) · \(tokens) tokens"
   }
+}
+
+func standardizedLimitLabel(_ label: String) -> String {
+  let lowered = label.lowercased()
+  if lowered.contains("5-hour") || lowered.contains("5 hour") {
+    return "5-hour limit"
+  }
+  if lowered.contains("weekly") {
+    return "Weekly limit"
+  }
+  if lowered.contains("monthly") {
+    return "Monthly limit"
+  }
+  if lowered.contains("daily") {
+    return "Daily limit"
+  }
+  if lowered.contains("hour") && lowered.contains("limit") {
+    return label
+  }
+  if lowered.contains("quota") || lowered.contains("limit") {
+    return label.replacingOccurrences(of: "quota", with: "limit", options: [.caseInsensitive])
+  }
+  return label
 }
 
 func formattedAccountMetric(_ metric: ProviderAccountMetric) -> String {

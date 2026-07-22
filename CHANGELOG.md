@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Cleaned up All usage cards so each quota window is its own card with a short
+  limit label and a single reset line, and Kimi five-hour windows appear
+  separately from the weekly limit.
 - Fixed All usage cards so local traffic with request counts no longer shows
   "No use", and local-only providers show "Local router traffic" instead of
   "No reset reported".

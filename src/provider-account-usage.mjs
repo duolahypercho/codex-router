@@ -52,7 +52,7 @@ export function kimiQuotaMetrics(payload) {
   const limits = payload?.limits ||
     payload?.usages?.find((entry) => entry?.scope === "FEATURE_CODING")?.limits;
   return [
-    quotaMetric("Weekly quota", weekly),
+    quotaMetric("Weekly limit", weekly),
     quotaMetric("5-hour limit", limits?.[0]?.detail),
   ].filter(Boolean);
 }

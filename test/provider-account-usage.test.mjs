@@ -16,7 +16,7 @@ test("normalizes Kimi weekly and five-hour quota windows", () => {
   }), [
     {
       kind: "quota",
-      label: "Weekly quota",
+      label: "Weekly limit",
       usedPercent: 10.44921875,
       remainingPercent: 89.55078125,
       used: 214,

@@ -15,15 +15,16 @@ router configuration.
 ## Provider usage
 
 The tray's **All usage** grid shows ChatGPT plus every configured, enabled, or
-previously used external provider at once. Each card shows official account
-quota or balance when available; otherwise it shows clearly labeled seven-day
-traffic measured by this router. Provider cards also show every quota reset
-reported by the provider and can be clicked to inspect that provider. ChatGPT
-is the initial detail view only when native ChatGPT usage is available;
+previously used external provider at once. Each quota window gets its own card
+with a short limit label and a single reset line. Official account balance is
+shown when available; otherwise a card falls back to clearly labeled seven-day
+traffic measured by this router. Cards can be clicked to inspect that provider.
+ChatGPT is the initial detail view only when native ChatGPT usage is available;
 otherwise the tray starts with an existing external provider. The detailed
 view and the Island automatically return to the provider handling the next
 Codex request. Hover the Island for a quick view or click it for expanded
-account usage.
+account usage. When multiple Codex requests run at once, the Island shows the
+active count and lists each live model request.
 
 - ChatGPT shows the subscription limit and daily buckets reported by the
   installed Codex app-server; the tray never reads or copies the ChatGPT
