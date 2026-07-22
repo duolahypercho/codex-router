@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Fixed All usage cards so local traffic with request counts no longer shows
+  "No use", and local-only providers show "Local router traffic" instead of
+  "No reset reported".
 - Surface concurrent Codex model requests on the Dynamic Island: active count,
   multi-provider compact labels, and live request rows with elapsed time.
 - Added a credential-isolated Anthropic API provider with Claude Opus 4.8 in
