@@ -116,17 +116,47 @@ final class RouterStore: ObservableObject {
     snapshot.targets["codex"]?.loginFree == true
   }
 
+  private static let providerShortNames: [String: String] = [
+    "grok-oauth": "Grok",
+    "kimi-oauth": "Kimi",
+    "deepseek": "DeepSeek",
+    "grok-api": "Grok API",
+    "kimi-api": "Kimi API",
+    "anthropic-api": "Claude",
+    "zai-coding": "GLM",
+    "qwen-plan": "Qwen",
+    "ollama-cloud": "Ollama",
+  ]
+
+  static func shortName(forRegistryProvider provider: RouterProviderInfo) -> String {
+    if let short = providerShortNames[provider.id] { return short }
+    let base = provider.displayName.split(separator: "(").first.map(String.init)
+      ?? provider.displayName
+    let trimmed = base.trimmingCharacters(in: .whitespaces)
+    return trimmed.count > 12 ? String(trimmed.prefix(12)) : trimmed
+  }
+
+  // Provider choices come from the router's registry snapshot so newly added
+  // providers appear without a tray update; the static list is only a
+  // fallback for routers that predate the snapshot's providers field.
   var usageProviderChoices: [UsageProviderChoice] {
-    let enabled = Set(snapshot.targets["codex"]?.enabledProviders ?? [])
-    return [
-      UsageProviderChoice(id: "openai", displayName: "ChatGPT", shortName: "ChatGPT", detail: "Codex subscription", isEnabled: true),
-      UsageProviderChoice(id: "grok-oauth", displayName: "Grok OAuth", shortName: "Grok", detail: providerDetail("grok-oauth", enabled: enabled), isEnabled: enabled.contains("grok-oauth")),
-      UsageProviderChoice(id: "kimi-oauth", displayName: "Kimi OAuth", shortName: "Kimi", detail: providerDetail("kimi-oauth", enabled: enabled), isEnabled: enabled.contains("kimi-oauth")),
-      UsageProviderChoice(id: "deepseek", displayName: "DeepSeek API", shortName: "DeepSeek", detail: providerDetail("deepseek", enabled: enabled), isEnabled: enabled.contains("deepseek")),
-      UsageProviderChoice(id: "grok-api", displayName: "Grok API", shortName: "Grok API", detail: providerDetail("grok-api", enabled: enabled), isEnabled: enabled.contains("grok-api")),
-      UsageProviderChoice(id: "kimi-api", displayName: "Kimi API", shortName: "Kimi API", detail: providerDetail("kimi-api", enabled: enabled), isEnabled: enabled.contains("kimi-api")),
-      UsageProviderChoice(id: "anthropic-api", displayName: "Anthropic API", shortName: "Claude", detail: providerDetail("anthropic-api", enabled: enabled), isEnabled: enabled.contains("anthropic-api")),
+    let target = snapshot.targets["codex"]
+    let enabled = Set(target?.enabledProviders ?? [])
+    let registryProviders = target?.providers ?? RouterProviderInfo.legacyFallback
+    var choices = [
+      UsageProviderChoice(
+        id: "openai", displayName: "ChatGPT", shortName: "ChatGPT",
+        detail: "Codex subscription", isEnabled: true),
     ]
+    for provider in registryProviders {
+      choices.append(UsageProviderChoice(
+        id: provider.id,
+        displayName: provider.displayName,
+        shortName: Self.shortName(forRegistryProvider: provider),
+        detail: providerDetail(provider.id, enabled: enabled),
+        isEnabled: enabled.contains(provider.id)))
+    }
+    return choices
   }
 
   var selectedUsageProvider: UsageProviderChoice {
@@ -935,6 +965,8 @@ struct ProviderAccountUsage: Decodable {
   let source: String
   let metrics: [ProviderAccountMetric]
   let message: String?
+  let plan: String?
+  let dashboardUrl: String?
 }
 
 struct ProviderAccountMetric: Decodable {
@@ -966,11 +998,27 @@ struct RouterTarget: Decodable {
   let configured: Bool
   let active: Bool
   let enabledProviders: [String]
+  let providers: [RouterProviderInfo]?
   let models: [RouterModel]
   let selectedModel: String?
   let loginFree: Bool?
   let loginFreeManaged: Bool?
   let nativeAliases: [String: String]?
+}
+
+struct RouterProviderInfo: Decodable {
+  let id: String
+  let displayName: String
+  let kind: String?
+
+  static let legacyFallback: [RouterProviderInfo] = [
+    .init(id: "grok-oauth", displayName: "Grok OAuth", kind: "oauth"),
+    .init(id: "kimi-oauth", displayName: "Kimi OAuth", kind: "oauth"),
+    .init(id: "deepseek", displayName: "DeepSeek API", kind: "openai-compatible"),
+    .init(id: "grok-api", displayName: "Grok API", kind: "openai-compatible"),
+    .init(id: "kimi-api", displayName: "Kimi API", kind: "openai-compatible"),
+    .init(id: "anthropic-api", displayName: "Anthropic API", kind: "openai-compatible"),
+  ]
 }
 
 struct RouterModel: Decodable, Identifiable {
@@ -1452,8 +1500,23 @@ private struct ProviderUsageSection: View {
           .foregroundStyle(routerMuted)
           .lineLimit(2)
       }
+
+      if let dashboardURL {
+        Button("Open usage dashboard") {
+          NSWorkspace.shared.open(dashboardURL)
+        }
+        .buttonStyle(.link)
+        .font(.system(size: 9))
+      }
     }
     .padding(.vertical, 2)
+  }
+
+  private var dashboardURL: URL? {
+    guard !store.selectedUsageUsesChatGPT,
+          let raw = store.selectedProviderUsage?.account.dashboardUrl
+    else { return nil }
+    return URL(string: raw)
   }
 
   private var sectionTitle: String {

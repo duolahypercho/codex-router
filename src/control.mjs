@@ -82,7 +82,7 @@ async function emitProbe() {
     PROVIDER_SELECTION_PATH,
   } = await import("./paths.mjs");
   const { readProviderSelection } = await import("./provider-selection.mjs");
-  const { LISTED_MODELS } = await import("./model-registry.mjs");
+  const { LISTED_MODELS, PROVIDERS } = await import("./model-registry.mjs");
   const { readNativeAliases } = await import("./native-alias.mjs");
 
   const enabledProviders = readProviderSelection();
@@ -108,6 +108,11 @@ async function emitProbe() {
       configured: existsSync(PROVIDER_SELECTION_PATH),
       active: targetIsActive(TARGET),
       enabledProviders,
+      providers: [...PROVIDERS.values()].map((provider) => ({
+        id: provider.id,
+        displayName: provider.displayName,
+        kind: provider.kind,
+      })),
       models,
       ...(selectedModel ? { selectedModel } : {}),
       ...(codexConfig

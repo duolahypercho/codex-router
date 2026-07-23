@@ -814,6 +814,9 @@ private struct ProviderIcon: View {
     if providerID.hasPrefix("kimi") { return "Kimi" }
     if providerID == "deepseek" { return "DeepSeek" }
     if providerID == "anthropic-api" { return "Anthropic" }
+    if providerID == "zai-coding" { return "GLM" }
+    if providerID == "qwen-plan" { return "Qwen" }
+    if providerID == "ollama-cloud" { return "Ollama" }
     return "Model provider"
   }
 }
