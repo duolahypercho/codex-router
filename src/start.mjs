@@ -170,10 +170,13 @@ async function main() {
     "--port",
     String(PORTS.gateway),
   ]);
+  // LiteLLM cold starts can take minutes when launchd starves the job under
+  // system load; killing it mid-import restarts the import from scratch and
+  // the service loops forever, so wait long enough for a starved import.
   await waitForHealth(
     loopback(PORTS.gateway, "/health/liveliness"),
     { Authorization: `Bearer ${internalKey}` },
-    30_000,
+    300_000,
     undefined,
     gateway,
   );
