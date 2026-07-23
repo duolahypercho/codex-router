@@ -13,6 +13,11 @@
   after each entry, challenges input that looks like the same key pasted
   twice before saving, and re-prompts instead of failing on empty input, so a
   paste with terminal echo disabled is no longer a silent leap of faith.
+- Guided setup now offers to build and launch the desktop companion app as a
+  final step on macOS (menu bar, installed into `~/Applications`) and Linux
+  (tray), with `--with-tray`/`--no-tray` overrides on `install.sh` and
+  `bin/setup`. A missing toolchain or failed build warns and continues; it
+  never fails the router install.
 - Added a reversible tray toggle that lets signed-out Codex CLI/App sessions
   use connected external providers through a managed custom model provider,
   while preserving ChatGPT credentials and restoring the prior provider mode.

@@ -10,6 +10,8 @@ guided=auto
 providers=
 migrate_known=false
 smoke_test=false
+with_tray=false
+no_tray=false
 previous_revision=
 target=codex
 
@@ -33,6 +35,8 @@ Options:
   --providers LIST   Enable comma-separated provider ids (or "configured")
   --migrate-known    Snapshot and replace recognized earlier router installs
   --smoke-test       Make one small billed request per enabled provider
+  --with-tray        Also build and launch the desktop companion app
+  --no-tray          Never offer the desktop companion app
   -h, --help          Show this help
 
 When run from a checkout, this script installs that checkout. When piped from
@@ -94,6 +98,14 @@ while [ "$#" -gt 0 ]; do
       providers=$2
       guided=false
       shift 2
+      ;;
+    --with-tray)
+      with_tray=true
+      shift
+      ;;
+    --no-tray)
+      no_tray=true
+      shift
       ;;
     --migrate-known)
       migrate_known=true
@@ -195,6 +207,8 @@ if [ "$guided" = true ]; then set -- "$@" --guided; fi
 if [ -n "$providers" ]; then set -- "$@" --providers "$providers"; fi
 if [ "$migrate_known" = true ]; then set -- "$@" --migrate-known; fi
 if [ "$smoke_test" = true ]; then set -- "$@" --smoke-test; fi
+if [ "$with_tray" = true ]; then set -- "$@" --with-tray; fi
+if [ "$no_tray" = true ]; then set -- "$@" --no-tray; fi
 if ! "$repo_dir/bin/setup" "$@"; then
   if [ -n "$previous_revision" ]; then
     git -C "$repo_dir" switch --detach "$previous_revision" >/dev/null 2>&1 || true
