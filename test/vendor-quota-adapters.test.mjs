@@ -109,7 +109,7 @@ test("normalizes z.ai time and token quota windows", () => {
     },
     {
       kind: "quota",
-      label: "Token quota",
+      label: "Daily tokens",
       usedPercent: 25,
       remainingPercent: 75,
       used: 25,
@@ -117,6 +117,21 @@ test("normalizes z.ai time and token quota windows", () => {
       remaining: 75,
       unit: "percent",
     },
+  ]);
+});
+
+test("z.ai token windows keep their window in the label", () => {
+  const metrics = zaiQuotaMetrics({
+    limits: [
+      { type: "TOKENS_LIMIT", unit: 3, number: 5, percentage: 1 },
+      { type: "TOKENS_LIMIT", unit: 6, number: 1, percentage: 8 },
+      { type: "TOKENS_LIMIT", unit: 0, number: 0, percentage: 12 },
+    ],
+  });
+  assert.deepEqual(metrics.map((metric) => metric.label), [
+    "5-hour tokens",
+    "Weekly tokens",
+    "Token quota",
   ]);
 });
 

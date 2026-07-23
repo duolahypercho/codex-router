@@ -317,8 +317,13 @@ export function zaiQuotaMetrics(data) {
     const percent = computed ?? numberValue(raw.percentage);
     if (percent === undefined) continue;
     const usedPercent = Math.min(100, Math.max(0, percent));
+    const windowLabel = zaiWindowLabel(raw.unit, raw.number);
     const label =
-      raw.type === "TOKENS_LIMIT" ? "Token quota" : zaiWindowLabel(raw.unit, raw.number);
+      raw.type === "TOKENS_LIMIT"
+        ? windowLabel
+          ? windowLabel.replace(" limit", " tokens")
+          : "Token quota"
+        : windowLabel;
     if (!label) continue;
     const metric = {
       kind: "quota",
