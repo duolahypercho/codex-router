@@ -114,6 +114,39 @@ async function closeServer(server) {
   await new Promise((resolve) => server.close(resolve));
 }
 
+test("router health ignores disabled forwarders", async () => {
+  const testRoot = mkdtempSync(path.join(os.tmpdir(), "router-health-selection-"));
+  writeFileSync(
+    path.join(testRoot, "enabled-providers.json"),
+    `${JSON.stringify({ version: 1, providers: ["kimi-oauth"] })}\n`,
+    { mode: 0o600 },
+  );
+  const healthy = await mockServer((request, response) => {
+    json(response, 200, { ok: true });
+  });
+  const unavailableApiPort = await openPort();
+  const routerPort = await openPort();
+  const router = run("router.mjs", {
+    CODEX_ROUTER_PORT: String(routerPort),
+    CODEX_ROUTER_STATE_DIR: testRoot,
+    CODEX_ROUTER_SHOW_ALL_MODELS: "0",
+    CODEX_ROUTER_OAUTH_HEALTH_URL: `http://127.0.0.1:${healthy.port}/health`,
+    CODEX_ROUTER_API_HEALTH_URL: `http://127.0.0.1:${unavailableApiPort}/health`,
+    CODEX_ROUTER_GATEWAY_HEALTH_URL: `http://127.0.0.1:${healthy.port}/health`,
+    CODEX_ROUTER_QUIET: "1",
+  });
+
+  try {
+    await waitFor(`http://127.0.0.1:${routerPort}/health`, router);
+    const response = await fetch(`http://127.0.0.1:${routerPort}/health`);
+    assert.equal(response.status, 200);
+  } finally {
+    await stopChild(router);
+    await closeServer(healthy.server);
+    rmSync(testRoot, { recursive: true, force: true });
+  }
+});
+
 test("router requires the configured path capability before any model route", async () => {
   const sessionDirectory = mkdtempSync(path.join(os.tmpdir(), "model-router-session-"));
   const sessionIndex = path.join(sessionDirectory, "session_index.jsonl");

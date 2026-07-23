@@ -21,7 +21,7 @@ import {
   writeJson,
 } from "./http-utils.mjs";
 import { MERGED_CATALOG_PATH, PORTS, loopback } from "./paths.mjs";
-import { MODEL_BY_SLUG, providerForModel } from "./model-registry.mjs";
+import { MODEL_BY_SLUG, PROVIDERS, providerForModel } from "./model-registry.mjs";
 import { readNativeAliases } from "./native-alias.mjs";
 import { readProviderSelection } from "./provider-selection.mjs";
 import { ResponseUsageTransform } from "./response-usage.mjs";
@@ -259,9 +259,15 @@ async function serviceHealth(url) {
 }
 
 async function healthPayload() {
+  const enabled = new Set(readProviderSelection());
+  const apiEnabled = [...PROVIDERS.values()].some(
+    (provider) => enabled.has(provider.id) && provider.kind === "openai-compatible",
+  );
   const [oauth, api, gateway] = await Promise.all([
-    serviceHealth(OAUTH_HEALTH),
-    serviceHealth(API_HEALTH),
+    enabled.has("kimi-oauth")
+      ? serviceHealth(OAUTH_HEALTH)
+      : { reachable: true, enabled: false },
+    apiEnabled ? serviceHealth(API_HEALTH) : { reachable: true, enabled: false },
     serviceHealth(GATEWAY_HEALTH),
   ]);
   return {
