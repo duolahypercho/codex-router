@@ -619,6 +619,37 @@ test("API forwarder replaces caller auth and enforces Kimi K3 API parameters", a
   }
 });
 
+test("API forwarder health omits disabled API providers", async () => {
+  const testRoot = mkdtempSync(path.join(os.tmpdir(), "api-forwarder-health-"));
+  writeFileSync(
+    path.join(testRoot, "enabled-providers.json"),
+    `${JSON.stringify({ version: 1, providers: ["kimi-oauth"] })}\n`,
+    { mode: 0o600 },
+  );
+  const forwarderPort = await openPort();
+  const forwarder = run("api-forwarder.mjs", {
+    CODEX_ROUTER_API_PORT: String(forwarderPort),
+    CODEX_ROUTER_STATE_DIR: testRoot,
+    CODEX_ROUTER_SHOW_ALL_MODELS: "0",
+    CODEX_ROUTER_QUIET: "1",
+  });
+
+  try {
+    await waitFor(`http://127.0.0.1:${forwarderPort}/health`, forwarder, {
+      Authorization: `Bearer ${INTERNAL_KEY}`,
+    });
+    const response = await fetch(`http://127.0.0.1:${forwarderPort}/health`, {
+      headers: { Authorization: `Bearer ${INTERNAL_KEY}` },
+    });
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    assert.deepEqual(payload.providers, {});
+  } finally {
+    await stopChild(forwarder);
+    rmSync(testRoot, { recursive: true, force: true });
+  }
+});
+
 test("API forwarder supports all DeepSeek V4 models and normalizes thinking", async () => {
   const upstreamRequests = [];
   const upstream = await mockServer(async (request, response) => {

@@ -7,10 +7,11 @@ import { readInstallManifest } from "./install-manifest.mjs";
 import { SOURCE_ROOT, TARGET } from "./paths.mjs";
 
 function git(args, options = {}) {
-  return execFileSync("git", ["-C", SOURCE_ROOT, ...args], {
+  const output = execFileSync("git", ["-C", SOURCE_ROOT, ...args], {
     encoding: "utf8",
     stdio: options.inherit ? "inherit" : ["ignore", "pipe", "pipe"],
-  }).trim();
+  });
+  return typeof output === "string" ? output.trim() : "";
 }
 
 function requireManagedCheckout() {
