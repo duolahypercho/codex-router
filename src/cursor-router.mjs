@@ -5,6 +5,8 @@ import { assertCallerSecret, secretEqual } from "./caller-auth.mjs";
 import {
   HOP_BY_HOP_HEADERS,
   httpErrorStatus,
+  logRequestFailure,
+  isAbortError,
   pipeResponse,
   readRequestBody,
   writeJson,
@@ -309,8 +311,17 @@ async function handleRequest(request, response) {
 
 const server = http.createServer((request, response) => {
   handleRequest(request, response).catch((error) => {
+    logRequestFailure("cursor-router", error);
+    if (isAbortError(error)) {
+      if (!response.headersSent) {
+        response.writeHead(499);
+        response.end();
+      } else if (!response.writableEnded) {
+        response.destroy();
+      }
+      return;
+    }
     const status = httpErrorStatus(error);
-    console.error("[cursor-router] request failed");
     if (!response.headersSent) {
       openAiError(
         response,

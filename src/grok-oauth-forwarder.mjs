@@ -7,6 +7,8 @@ import { fileURLToPath } from "node:url";
 
 import {
   httpErrorStatus,
+  logRequestFailure,
+  isAbortError,
   readRequestBody,
   requireInternalAuth,
   writeJson,
@@ -449,8 +451,17 @@ if (isMain) {
   if (!INTERNAL_KEY) throw new Error("MODEL_ROUTER_INTERNAL_KEY is required.");
   const server = http.createServer((request, response) => {
     handleRequest(request, response).catch((error) => {
+      logRequestFailure("grok-oauth", error);
+      if (isAbortError(error)) {
+        if (!response.headersSent) {
+          response.writeHead(499);
+          response.end();
+        } else if (!response.writableEnded) {
+          response.destroy();
+        }
+        return;
+      }
       const status = httpErrorStatus(error);
-      console.error("[grok-oauth] request failed");
       if (!response.headersSent) {
         writeJson(response, status, {
           error: {
