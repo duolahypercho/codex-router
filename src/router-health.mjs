@@ -9,7 +9,7 @@ export async function waitForRouterHealth({
   target = TARGET,
   url = loopback(PORTS.router, "/health"),
   timeoutMs = 30_000,
-  requestTimeoutMs = 1_000,
+  requestTimeoutMs = 4_000,
   intervalMs = 250,
   fetchImpl = fetch,
 } = {}) {

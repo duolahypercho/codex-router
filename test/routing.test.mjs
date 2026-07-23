@@ -114,14 +114,17 @@ async function closeServer(server) {
   await new Promise((resolve) => server.close(resolve));
 }
 
-test("router health ignores disabled forwarders", async () => {
+test("router health waits for enabled dependencies and ignores disabled forwarders", async () => {
   const testRoot = mkdtempSync(path.join(os.tmpdir(), "router-health-selection-"));
   writeFileSync(
     path.join(testRoot, "enabled-providers.json"),
     `${JSON.stringify({ version: 1, providers: ["kimi-oauth"] })}\n`,
     { mode: 0o600 },
   );
-  const healthy = await mockServer((request, response) => {
+  const healthy = await mockServer(async (request, response) => {
+    if (request.url === "/oauth-health") {
+      await new Promise((resolve) => setTimeout(resolve, 1_200));
+    }
     json(response, 200, { ok: true });
   });
   const unavailableApiPort = await openPort();
@@ -130,9 +133,9 @@ test("router health ignores disabled forwarders", async () => {
     CODEX_ROUTER_PORT: String(routerPort),
     CODEX_ROUTER_STATE_DIR: testRoot,
     CODEX_ROUTER_SHOW_ALL_MODELS: "0",
-    CODEX_ROUTER_OAUTH_HEALTH_URL: `http://127.0.0.1:${healthy.port}/health`,
+    CODEX_ROUTER_OAUTH_HEALTH_URL: `http://127.0.0.1:${healthy.port}/oauth-health`,
     CODEX_ROUTER_API_HEALTH_URL: `http://127.0.0.1:${unavailableApiPort}/health`,
-    CODEX_ROUTER_GATEWAY_HEALTH_URL: `http://127.0.0.1:${healthy.port}/health`,
+    CODEX_ROUTER_GATEWAY_HEALTH_URL: `http://127.0.0.1:${healthy.port}/gateway-health`,
     CODEX_ROUTER_QUIET: "1",
   });
 
