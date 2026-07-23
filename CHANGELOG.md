@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Service startup failures now include the underlying bounded, non-sensitive
+  error message (for example which health check timed out or which service
+  exited early) instead of a generic failure line.
+
 - Added a reversible tray toggle that lets signed-out Codex CLI/App sessions
   use connected external providers through a managed custom model provider,
   while preserving ChatGPT credentials and restoring the prior provider mode.
