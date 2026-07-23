@@ -15,6 +15,7 @@ import {
   PROVIDERS,
   providerForModel,
 } from "./model-registry.mjs";
+import { readProviderSelection } from "./provider-selection.mjs";
 import {
   credentialStatus,
   resolveProviderCredential,
@@ -135,8 +136,9 @@ function upstreamHeaders(requestHeaders, body, apiKey, provider) {
 
 function healthPayload() {
   const providers = {};
+  const enabled = new Set(readProviderSelection());
   for (const provider of PROVIDERS.values()) {
-    if (provider.kind !== "openai-compatible") continue;
+    if (provider.kind !== "openai-compatible" || !enabled.has(provider.id)) continue;
     const status = credentialStatus(provider);
     providers[provider.id] = {
       credential_present: status.configured,

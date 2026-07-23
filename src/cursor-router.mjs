@@ -182,7 +182,7 @@ async function serviceHealth(url) {
   try {
     const response = await fetch(url, {
       headers: { Authorization: `Bearer ${INTERNAL_KEY}` },
-      signal: AbortSignal.timeout(1_000),
+      signal: AbortSignal.timeout(3_000),
     });
     const raw = await response.json().catch(() => undefined);
     const payload = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
