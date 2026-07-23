@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- The Dynamic Island setting is now a three-way mode: Off, Notch (the
+  existing top-of-screen overlay), or Desktop — a draggable widget-style
+  panel pinned just above the desktop icons that always shows live router
+  activity, every connected provider's vendor quota bars with reset
+  countdowns, and the 7-day token trend, with its position remembered.
 - Added a Z.ai vendor quota adapter: when a `zai-coding` provider is
   configured, account usage now reports real plan windows (5-hour, weekly,
   token quota) with reset times from Z.ai's key-authenticated quota API,

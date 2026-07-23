@@ -54,14 +54,19 @@ struct ModelRouterTrayApp: App {
 final class AppDelegate: NSObject, NSApplicationDelegate {
   let store = RouterStore()
   private var islandController: IslandWindowController?
+  private var desktopPanelController: DesktopPanelWindowController?
   private var islandVisibility: AnyCancellable?
 
   func applicationDidFinishLaunching(_ notification: Notification) {
     NSApp.setActivationPolicy(.accessory)
     islandController = IslandWindowController(store: store)
-    islandVisibility = store.$islandVisible
+    desktopPanelController = DesktopPanelWindowController(store: store)
+    islandVisibility = store.$islandMode
       .removeDuplicates()
-      .sink { [weak self] visible in self?.islandController?.setVisible(visible) }
+      .sink { [weak self] mode in
+        self?.islandController?.setVisible(mode == .notch)
+        self?.desktopPanelController?.setVisible(mode == .desktop)
+      }
     Task { await store.startPolling() }
     Task { await store.startActivityPolling() }
     Task { await store.startAccountUsagePolling() }
@@ -87,7 +92,7 @@ final class RouterStore: ObservableObject {
   @Published private(set) var providerUsageError: String?
   @Published private(set) var providerSetup: [String: ProviderSetupState] = [:]
   @Published private(set) var providerOperation: String?
-  @Published private(set) var islandVisible: Bool
+  @Published private(set) var islandMode: IslandMode
 
   private var polling = false
   private var activityPolling = false
@@ -95,6 +100,7 @@ final class RouterStore: ObservableObject {
   private var providerPolling = false
   private let defaults = UserDefaults.standard
   private let islandVisibilityKey = "ModelRouterTray.islandVisible"
+  private let islandModeKey = "ModelRouterTray.islandMode"
   private var accountUsageResolved = false
   private var hasResolvedInitialUsageProvider = false
   private var hasObservedActiveProvider = false
@@ -103,9 +109,14 @@ final class RouterStore: ObservableObject {
 
   init() {
     selectedUsageProviderID = "openai"
-    islandVisible = defaults.object(forKey: islandVisibilityKey) == nil
-      ? true
-      : defaults.bool(forKey: islandVisibilityKey)
+    if let raw = defaults.string(forKey: islandModeKey), let mode = IslandMode(rawValue: raw) {
+      islandMode = mode
+    } else if defaults.object(forKey: islandVisibilityKey) == nil {
+      islandMode = .notch
+    } else {
+      // Migrate the pre-desktop-mode boolean setting.
+      islandMode = defaults.bool(forKey: islandVisibilityKey) ? .notch : .off
+    }
   }
 
   var codexActive: Bool {
@@ -390,9 +401,42 @@ final class RouterStore: ObservableObject {
     }
   }
 
-  func setIslandVisible(_ visible: Bool) {
-    islandVisible = visible
-    defaults.set(visible, forKey: islandVisibilityKey)
+  func setIslandMode(_ mode: IslandMode) {
+    islandMode = mode
+    defaults.set(mode.rawValue, forKey: islandModeKey)
+  }
+
+  // Every vendor quota window the desktop panel can show at a glance:
+  // the ChatGPT rate-limit windows plus each connected provider's account
+  // quota metrics.
+  var desktopQuotaRows: [DesktopQuotaRow] {
+    var rows: [DesktopQuotaRow] = []
+    if let account = accountUsage {
+      for (suffix, window) in [("primary", account.primary), ("secondary", account.secondary)] {
+        guard let window else { continue }
+        rows.append(DesktopQuotaRow(
+          id: "openai-\(suffix)",
+          providerID: "openai",
+          providerName: "ChatGPT",
+          label: window.durationLabel,
+          usedPercent: Double(window.usedPercent),
+          resetAt: window.resetsAt))
+      }
+    }
+    for provider in usageProviderChoices where provider.id != "openai" && provider.isEnabled {
+      guard let usage = providerUsage(for: provider.id) else { continue }
+      for (index, metric) in usage.account.metrics.enumerated() where metric.kind == "quota" {
+        guard let used = metric.usedPercent else { continue }
+        rows.append(DesktopQuotaRow(
+          id: "\(provider.id)-\(index)",
+          providerID: provider.id,
+          providerName: provider.shortName,
+          label: metric.label,
+          usedPercent: used,
+          resetAt: metric.resetAt))
+      }
+    }
+    return rows
   }
 
   func startAccountUsagePolling() async {
@@ -1037,6 +1081,30 @@ struct UsageProviderChoice: Identifiable {
   let isEnabled: Bool
 }
 
+enum IslandMode: String, CaseIterable, Identifiable {
+  case off
+  case notch
+  case desktop
+
+  var id: String { rawValue }
+  var label: String {
+    switch self {
+    case .off: return "Off"
+    case .notch: return "Notch"
+    case .desktop: return "Desktop"
+    }
+  }
+}
+
+struct DesktopQuotaRow: Identifiable {
+  let id: String
+  let providerID: String
+  let providerName: String
+  let label: String
+  let usedPercent: Double
+  let resetAt: TimeInterval?
+}
+
 struct UsageOverviewCard: Identifiable {
   let id: String
   let provider: UsageProviderChoice
@@ -1155,14 +1223,30 @@ private struct TrayView: View {
           sectionLabel("All usage", detail: "7-day snapshot")
           AllProviderUsageGrid(store: store)
         }
-        settingRow(
-          title: "Dynamic Island",
-          detail: "Show provider usage and activity status",
-          isOn: Binding(
-            get: { store.islandVisible },
-            set: { store.setIslandVisible($0) }
-          )
-        )
+        HStack(spacing: 12) {
+          VStack(alignment: .leading, spacing: 3) {
+            Text("Dynamic Island")
+              .font(.system(size: 12, weight: .medium))
+            Text(store.islandMode == .desktop
+              ? "Quotas and live activity pinned to the desktop"
+              : "Show provider usage and activity status")
+              .font(.system(size: 10))
+              .foregroundStyle(.secondary)
+          }
+          Spacer()
+          Picker("", selection: Binding(
+            get: { store.islandMode },
+            set: { store.setIslandMode($0) }
+          )) {
+            ForEach(IslandMode.allCases) { mode in
+              Text(mode.label).tag(mode)
+            }
+          }
+          .pickerStyle(.segmented)
+          .labelsHidden()
+          .frame(width: 168)
+        }
+        .padding(.vertical, 2)
         settingRow(
           title: "Use without OpenAI login",
           detail: store.loginFree
