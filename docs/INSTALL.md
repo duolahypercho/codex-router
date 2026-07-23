@@ -88,6 +88,7 @@ API-key providers use hidden prompts:
 ./bin/provider-key deepseek set
 ./bin/provider-key grok-api set
 ./bin/provider-key anthropic-api set
+./bin/provider-key zai-coding set
 ```
 
 Grok OAuth uses the official Grok CLI session:
