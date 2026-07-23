@@ -13,6 +13,12 @@
   after each entry, challenges input that looks like the same key pasted
   twice before saving, and re-prompts instead of failing on empty input, so a
   paste with terminal echo disabled is no longer a silent leap of faith.
+- Added interactive model curation: `bin/curate-models PROVIDER` discovers the
+  provider's live model list, lets the user toggle models the registry does
+  not ship, and stores them as protected local user models with conservative
+  default metadata. User models overlay the registry at load time; invalid or
+  colliding entries are skipped with warnings instead of failing the router,
+  and the command can rebuild routes and restart the service on request.
 - Rebuilt the guided setup as a stepped wizard: numbered progress headers, a
   toggleable provider list with live ready/needs-key/needs-sign-in status,
   `a`/`n` select-all/none shortcuts, invalid-input recovery instead of

@@ -62,6 +62,12 @@ test("toggleSelection refuses to finish with nothing selected", () => {
   assert.ok(state.error.includes("at least one"));
 });
 
+test("toggleSelection can finish empty when allowEmpty is set", () => {
+  const state = toggleSelection(new Set(), "", 3, { allowEmpty: true });
+  assert.equal(state.done, true);
+  assert.deepEqual([...state.selected], []);
+});
+
 test("toggleSelection reports invalid input without changing the selection", () => {
   const state = toggleSelection(new Set([1]), "0,nope", 3);
   assert.ok(state.error);

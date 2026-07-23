@@ -46,10 +46,10 @@ export function renderProviderChoices(snapshots, selected, colorEnabled = false)
     .join("\n");
 }
 
-export function toggleSelection(selected, input, count) {
+export function toggleSelection(selected, input, count, { allowEmpty = false } = {}) {
   const trimmed = String(input || "").trim().toLowerCase();
   if (trimmed === "") {
-    if (selected.size === 0) {
+    if (selected.size === 0 && !allowEmpty) {
       return { selected, error: "Select at least one provider." };
     }
     return { selected, done: true };
