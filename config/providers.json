@@ -16,10 +16,18 @@
       "baseUrl": "https://api.moonshot.cn/v1",
       "baseUrlEnv": "KIMI_API_BASE_URL",
       "credential": {
-        "environment": ["KIMI_API_KEY", "MOONSHOT_API_KEY"],
+        "environment": [
+          "KIMI_API_KEY",
+          "MOONSHOT_API_KEY"
+        ],
         "file": "kimi-api-key.secret",
-        "legacyFiles": ["api-key.secret"],
-        "keychainServices": ["codex-router-kimi-api", "kimi-codex-api"],
+        "legacyFiles": [
+          "api-key.secret"
+        ],
+        "keychainServices": [
+          "codex-router-kimi-api",
+          "kimi-codex-api"
+        ],
         "prompt": "Kimi Platform API key"
       }
     },
@@ -31,10 +39,14 @@
       "baseUrl": "https://api.deepseek.com",
       "baseUrlEnv": "DEEPSEEK_API_BASE_URL",
       "credential": {
-        "environment": ["DEEPSEEK_API_KEY"],
+        "environment": [
+          "DEEPSEEK_API_KEY"
+        ],
         "file": "deepseek-api-key.secret",
         "legacyFiles": [],
-        "keychainServices": ["codex-router-deepseek-api"],
+        "keychainServices": [
+          "codex-router-deepseek-api"
+        ],
         "prompt": "DeepSeek API key"
       }
     },
@@ -53,10 +65,15 @@
       "baseUrl": "https://api.x.ai/v1",
       "baseUrlEnv": "XAI_API_BASE_URL",
       "credential": {
-        "environment": ["XAI_API_KEY", "GROK_API_KEY"],
+        "environment": [
+          "XAI_API_KEY",
+          "GROK_API_KEY"
+        ],
         "file": "xai-api-key.secret",
         "legacyFiles": [],
-        "keychainServices": ["codex-router-xai-api"],
+        "keychainServices": [
+          "codex-router-xai-api"
+        ],
         "prompt": "xAI API key"
       }
     },
@@ -69,11 +86,35 @@
       "baseUrl": "https://api.anthropic.com/v1",
       "baseUrlEnv": "ANTHROPIC_API_BASE_URL",
       "credential": {
-        "environment": ["ANTHROPIC_API_KEY"],
+        "environment": [
+          "ANTHROPIC_API_KEY"
+        ],
         "file": "anthropic-api-key.secret",
         "legacyFiles": [],
-        "keychainServices": ["codex-router-anthropic-api"],
+        "keychainServices": [
+          "codex-router-anthropic-api"
+        ],
         "prompt": "Anthropic API key"
+      }
+    },
+    {
+      "id": "ollama-cloud",
+      "displayName": "Ollama Cloud",
+      "kind": "openai-compatible",
+      "ownedBy": "ollama",
+      "baseUrl": "https://ollama.com/v1",
+      "baseUrlEnv": "OLLAMA_CLOUD_BASE_URL",
+      "credential": {
+        "environment": [
+          "OLLAMA_API_KEY",
+          "OLLAMA_CLOUD_API_KEY"
+        ],
+        "file": "ollama-cloud-api-key.secret",
+        "legacyFiles": [],
+        "keychainServices": [
+          "codex-router-ollama-cloud"
+        ],
+        "prompt": "Ollama Cloud API key"
       }
     }
   ],
@@ -89,11 +130,17 @@
       "priority": 2,
       "defaultEffort": "high",
       "reasoningLevels": [
-        { "effort": "high", "description": "Always-on coding reasoning" }
+        {
+          "effort": "high",
+          "description": "Always-on coding reasoning"
+        }
       ],
       "contextWindow": 262144,
       "autoCompact": 235000,
-      "inputModalities": ["text", "image"],
+      "inputModalities": [
+        "text",
+        "image"
+      ],
       "requestProfile": "kimi-oauth",
       "compHash": "kimi-oauth-kimi-for-coding-v1"
     },
@@ -108,11 +155,17 @@
       "priority": 3,
       "defaultEffort": "high",
       "reasoningLevels": [
-        { "effort": "high", "description": "Always-on coding reasoning" }
+        {
+          "effort": "high",
+          "description": "Always-on coding reasoning"
+        }
       ],
       "contextWindow": 262144,
       "autoCompact": 235000,
-      "inputModalities": ["text", "image"],
+      "inputModalities": [
+        "text",
+        "image"
+      ],
       "requestProfile": "kimi-oauth",
       "compHash": "kimi-oauth-kimi-for-coding-highspeed-v1"
     },
@@ -127,13 +180,25 @@
       "priority": 4,
       "defaultEffort": "high",
       "reasoningLevels": [
-        { "effort": "low", "description": "Faster reasoning" },
-        { "effort": "high", "description": "Balanced deep reasoning" },
-        { "effort": "max", "description": "Maximum reasoning depth" }
+        {
+          "effort": "low",
+          "description": "Faster reasoning"
+        },
+        {
+          "effort": "high",
+          "description": "Balanced deep reasoning"
+        },
+        {
+          "effort": "max",
+          "description": "Maximum reasoning depth"
+        }
       ],
       "contextWindow": 262144,
       "autoCompact": 235000,
-      "inputModalities": ["text", "image"],
+      "inputModalities": [
+        "text",
+        "image"
+      ],
       "requestProfile": "kimi-oauth",
       "compHash": "kimi-oauth-k3-v2"
     },
@@ -148,11 +213,17 @@
       "priority": 5,
       "defaultEffort": "max",
       "reasoningLevels": [
-        { "effort": "max", "description": "Maximum reasoning required by the Kimi K3 API" }
+        {
+          "effort": "max",
+          "description": "Maximum reasoning required by the Kimi K3 API"
+        }
       ],
       "contextWindow": 1048576,
       "autoCompact": 900000,
-      "inputModalities": ["text", "image"],
+      "inputModalities": [
+        "text",
+        "image"
+      ],
       "requestProfile": "kimi-k3",
       "compHash": "kimi-api-k3-v2"
     },
@@ -167,12 +238,20 @@
       "priority": 6,
       "defaultEffort": "high",
       "reasoningLevels": [
-        { "effort": "high", "description": "Deep reasoning" },
-        { "effort": "max", "description": "Maximum reasoning for complex agent work" }
+        {
+          "effort": "high",
+          "description": "Deep reasoning"
+        },
+        {
+          "effort": "max",
+          "description": "Maximum reasoning for complex agent work"
+        }
       ],
       "contextWindow": 1048576,
       "autoCompact": 900000,
-      "inputModalities": ["text"],
+      "inputModalities": [
+        "text"
+      ],
       "requestProfile": "deepseek-thinking",
       "compHash": "deepseek-v4-flash-v1"
     },
@@ -187,12 +266,20 @@
       "priority": 7,
       "defaultEffort": "high",
       "reasoningLevels": [
-        { "effort": "high", "description": "Deep reasoning" },
-        { "effort": "max", "description": "Maximum reasoning for complex agent work" }
+        {
+          "effort": "high",
+          "description": "Deep reasoning"
+        },
+        {
+          "effort": "max",
+          "description": "Maximum reasoning for complex agent work"
+        }
       ],
       "contextWindow": 1048576,
       "autoCompact": 900000,
-      "inputModalities": ["text"],
+      "inputModalities": [
+        "text"
+      ],
       "requestProfile": "deepseek-thinking",
       "compHash": "deepseek-v4-pro-v1"
     },
@@ -223,13 +310,25 @@
       "priority": 1,
       "defaultEffort": "high",
       "reasoningLevels": [
-        { "effort": "low", "description": "Faster reasoning" },
-        { "effort": "medium", "description": "Balanced reasoning" },
-        { "effort": "high", "description": "Deep reasoning" }
+        {
+          "effort": "low",
+          "description": "Faster reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced reasoning"
+        },
+        {
+          "effort": "high",
+          "description": "Deep reasoning"
+        }
       ],
       "contextWindow": 500000,
       "autoCompact": 440000,
-      "inputModalities": ["text", "image"],
+      "inputModalities": [
+        "text",
+        "image"
+      ],
       "requestProfile": "xai-reasoning",
       "compHash": "grok-oauth-grok-4-5-v1"
     },
@@ -244,13 +343,25 @@
       "priority": 8,
       "defaultEffort": "high",
       "reasoningLevels": [
-        { "effort": "low", "description": "Faster reasoning" },
-        { "effort": "medium", "description": "Balanced reasoning" },
-        { "effort": "high", "description": "Deep reasoning" }
+        {
+          "effort": "low",
+          "description": "Faster reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced reasoning"
+        },
+        {
+          "effort": "high",
+          "description": "Deep reasoning"
+        }
       ],
       "contextWindow": 500000,
       "autoCompact": 440000,
-      "inputModalities": ["text", "image"],
+      "inputModalities": [
+        "text",
+        "image"
+      ],
       "requestProfile": "xai-reasoning",
       "compHash": "grok-api-grok-4-5-v1"
     },
@@ -265,13 +376,115 @@
       "priority": 9,
       "defaultEffort": "high",
       "reasoningLevels": [
-        { "effort": "high", "description": "Adaptive deep reasoning for agentic work" }
+        {
+          "effort": "high",
+          "description": "Adaptive deep reasoning for agentic work"
+        }
       ],
       "contextWindow": 1048576,
       "autoCompact": 900000,
-      "inputModalities": ["text", "image"],
+      "inputModalities": [
+        "text",
+        "image"
+      ],
       "requestProfile": "anthropic-reasoning",
       "compHash": "anthropic-api-claude-opus-4-8-v1"
+    },
+    {
+      "slug": "ollama-cloud/glm-5.2",
+      "gatewayModel": "ollama-cloud-glm-5-2",
+      "upstreamModel": "glm-5.2",
+      "provider": "ollama-cloud",
+      "listed": true,
+      "displayName": "GLM-5.2 (Ollama Cloud)",
+      "description": "GLM-5.2 hosted on Ollama Cloud with agentic coding and a 1M context window.",
+      "priority": 14,
+      "defaultEffort": "high",
+      "reasoningLevels": [
+        {
+          "effort": "high",
+          "description": "Adaptive deep reasoning"
+        }
+      ],
+      "contextWindow": 1000000,
+      "autoCompact": 880000,
+      "inputModalities": [
+        "text"
+      ],
+      "requestProfile": "ollama-cloud",
+      "compHash": "ollama-cloud-glm-5-2-v1"
+    },
+    {
+      "slug": "ollama-cloud/kimi-k2.7-code",
+      "gatewayModel": "ollama-cloud-kimi-k2-7-code",
+      "upstreamModel": "kimi-k2.7-code",
+      "provider": "ollama-cloud",
+      "listed": true,
+      "displayName": "Kimi K2.7 Code (Ollama Cloud)",
+      "description": "Kimi K2.7 Code hosted on Ollama Cloud for coding agents with a 256k context window.",
+      "priority": 15,
+      "defaultEffort": "high",
+      "reasoningLevels": [
+        {
+          "effort": "high",
+          "description": "Always-on coding reasoning"
+        }
+      ],
+      "contextWindow": 262144,
+      "autoCompact": 235000,
+      "inputModalities": [
+        "text"
+      ],
+      "requestProfile": "ollama-cloud",
+      "compHash": "ollama-cloud-kimi-k2-7-code-v1"
+    },
+    {
+      "slug": "ollama-cloud/minimax-m3",
+      "gatewayModel": "ollama-cloud-minimax-m3",
+      "upstreamModel": "minimax-m3",
+      "provider": "ollama-cloud",
+      "listed": true,
+      "displayName": "MiniMax M3 (Ollama Cloud)",
+      "description": "MiniMax M3 hosted on Ollama Cloud for coding with a 512k context window.",
+      "priority": 16,
+      "defaultEffort": "high",
+      "reasoningLevels": [
+        {
+          "effort": "high",
+          "description": "Adaptive deep reasoning"
+        }
+      ],
+      "contextWindow": 524288,
+      "autoCompact": 470000,
+      "inputModalities": [
+        "text"
+      ],
+      "requestProfile": "ollama-cloud",
+      "compHash": "ollama-cloud-minimax-m3-v1"
+    },
+    {
+      "slug": "ollama-cloud/deepseek-v4-pro",
+      "gatewayModel": "ollama-cloud-deepseek-v4-pro",
+      "upstreamModel": "deepseek-v4-pro",
+      "provider": "ollama-cloud",
+      "listed": true,
+      "displayName": "DeepSeek V4 Pro (Ollama Cloud)",
+      "description": "DeepSeek V4 Pro hosted on Ollama Cloud with reasoning and a 512k context window.",
+      "priority": 17,
+      "defaultEffort": "high",
+      "reasoningLevels": [
+        {
+          "effort": "high",
+          "description": "Adaptive deep reasoning"
+        }
+      ],
+      "contextWindow": 524288,
+      "autoCompact": 470000,
+      "inputModalities": [
+        "text"
+      ],
+      "requestProfile": "ollama-cloud",
+      "compHash": "ollama-cloud-deepseek-v4-pro-v1"
     }
   ]
 }

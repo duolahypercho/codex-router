@@ -95,6 +95,10 @@ function normalizeBody(buffer, contentType, route) {
   } else if (model.requestProfile === "deepseek-nonthinking") {
     payload.thinking = { type: "disabled" };
     delete payload.reasoning_effort;
+  } else if (model.requestProfile === "ollama-cloud") {
+    // Ollama's OpenAI-compatible surface does not document reasoning_effort;
+    // hosted models reason by default, so drop the parameter.
+    delete payload.reasoning_effort;
   } else if (model.requestProfile === "xai-reasoning") {
     if (!["low", "medium", "high"].includes(payload.reasoning_effort)) {
       payload.reasoning_effort = "high";

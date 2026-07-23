@@ -79,6 +79,10 @@ Linux installations support the Codex CLI and the Cursor target's local gateway.
 | Grok 4.5 (OAuth) | `grok-oauth/grok-4.5` | Official Grok CLI OAuth session |
 | Grok 4.5 (API) | `grok-api/grok-4.5` | Separately billed xAI API key |
 | Claude Opus 4.8 (API) | `anthropic-api/claude-opus-4.8` | Separately billed Anthropic API key |
+| GLM-5.2 (Ollama Cloud) | `ollama-cloud/glm-5.2` | Ollama Cloud API key |
+| Kimi K2.7 Code (Ollama Cloud) | `ollama-cloud/kimi-k2.7-code` | Ollama Cloud API key |
+| MiniMax M3 (Ollama Cloud) | `ollama-cloud/minimax-m3` | Ollama Cloud API key |
+| DeepSeek V4 Pro (Ollama Cloud) | `ollama-cloud/deepseek-v4-pro` | Ollama Cloud API key |
 
 The Codex catalog is credential-aware. It includes models only from enabled
 external providers with a stored API key or valid OAuth session. Native GPT
@@ -102,6 +106,13 @@ ChatGPT OAuth provider in the router.
 Kimi Code OAuth and Kimi Platform API access are separate authentication and
 billing systems. The two Kimi entries intentionally coexist. Older DeepSeek
 aliases remain hidden compatibility routes and are not advertised to new users.
+
+
+
+The Ollama Cloud entries bill through an ollama.com account and can host the
+same model families as other providers under separate quota. Matching entries
+(for example DeepSeek V4 Pro) intentionally coexist with the vendor-direct
+providers because credentials and billing differ.
 
 Only enabled providers appear in an app's picker. Each target has its own
 selection and API-key files:
