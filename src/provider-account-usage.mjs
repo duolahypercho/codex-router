@@ -283,6 +283,92 @@ function localOnly(message) {
   return { status: "local-only", source: "local-router", metrics: [], message };
 }
 
+const ZAI_QUOTA_URL =
+  process.env.ZAI_QUOTA_URL || "https://api.z.ai/api/monitor/usage/quota/limit";
+const ZAI_PLAN_DASHBOARD_URL = "https://z.ai/manage-apikey/coding-plan/personal/my-plan";
+const QWEN_PLAN_DASHBOARD_URL =
+  "https://modelstudio.console.alibabacloud.com/ap-southeast-1/?tab=plan#/efm/subscription/token-plan";
+const OLLAMA_DASHBOARD_URL = "https://ollama.com/settings";
+
+function zaiWindowLabel(unit, number) {
+  if (unit === 6) return number === 1 ? "Weekly limit" : `${number}-week limit`;
+  if (unit === 1) return number === 1 ? "Daily limit" : `${number}-day limit`;
+  if (unit === 3) return number === 1 ? "Hourly limit" : `${number}-hour limit`;
+  if (unit === 5) return `${number}-minute limit`;
+  return undefined;
+}
+
+// Z.ai quota entries carry either explicit counters (usage = allowance,
+// currentValue = consumed) or a pre-computed percentage; counters win because
+// the percentage field is sometimes stale or zero.
+export function zaiQuotaMetrics(data) {
+  const metrics = [];
+  for (const raw of data?.limits || []) {
+    if (!raw || typeof raw !== "object") continue;
+    // A one-minute TIME_LIMIT entry is z.ai's MCP monthly marker, not a
+    // usable rate window.
+    if (raw.type === "TIME_LIMIT" && raw.unit === 5 && raw.number === 1) continue;
+    const allowance = numberValue(raw.usage);
+    const consumed = numberValue(raw.currentValue);
+    const computed =
+      allowance !== undefined && allowance > 0 && consumed !== undefined
+        ? (consumed / allowance) * 100
+        : undefined;
+    const percent = computed ?? numberValue(raw.percentage);
+    if (percent === undefined) continue;
+    const usedPercent = Math.min(100, Math.max(0, percent));
+    const label =
+      raw.type === "TOKENS_LIMIT" ? "Token quota" : zaiWindowLabel(raw.unit, raw.number);
+    if (!label) continue;
+    const metric = {
+      kind: "quota",
+      label,
+      usedPercent,
+      remainingPercent: 100 - usedPercent,
+      used: usedPercent,
+      limit: 100,
+      remaining: 100 - usedPercent,
+      unit: "percent",
+    };
+    const resetAt = numberValue(raw.nextResetTime);
+    if (resetAt !== undefined) metric.resetAt = resetAt / 1_000;
+    metrics.push(metric);
+  }
+  return metrics;
+}
+
+async function zaiCodingAccount(fetchImpl) {
+  const credential = resolveProviderCredential("zai-coding");
+  if (!credential) return { status: "not-configured", source: "official-api", metrics: [] };
+  const response = await fetchImpl(ZAI_QUOTA_URL, {
+    headers: {
+      Authorization: `Bearer ${credential.value}`,
+      "User-Agent": `codex-router/${VERSION}`,
+    },
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || payload?.success !== true || payload?.code !== 200) {
+    throw new Error(
+      typeof payload?.msg === "string" && payload.msg
+        ? payload.msg
+        : `Z.ai quota API returned HTTP ${response.status}`,
+    );
+  }
+  const metrics = zaiQuotaMetrics(payload.data);
+  if (!metrics.length) throw new Error("Z.ai quota response was incomplete");
+  const account = {
+    status: "available",
+    source: "official-api",
+    metrics,
+    dashboardUrl: ZAI_PLAN_DASHBOARD_URL,
+  };
+  if (typeof payload.data?.planName === "string" && payload.data.planName) {
+    account.plan = payload.data.planName;
+  }
+  return account;
+}
+
 async function accountUsageFor(providerId, fetchImpl) {
   try {
     if (providerId === "deepseek") return await deepSeekAccount(fetchImpl);
@@ -297,6 +383,25 @@ async function accountUsageFor(providerId, fetchImpl) {
     if (providerId === "anthropic-api") {
       return resolveProviderCredential("anthropic-api")
         ? localOnly("Anthropic API account balance is unavailable; showing router traffic")
+        : { status: "not-configured", source: "official-api", metrics: [] };
+    }
+    if (providerId === "zai-coding") return await zaiCodingAccount(fetchImpl);
+    if (providerId === "qwen-plan") {
+      // Alibaba plan quotas are only visible behind a console session; never
+      // import browser cookies. Link to the console instead.
+      return resolveProviderCredential("qwen-plan")
+        ? {
+            ...localOnly("Alibaba shows plan quotas only in its console; showing router traffic"),
+            dashboardUrl: QWEN_PLAN_DASHBOARD_URL,
+          }
+        : { status: "not-configured", source: "official-api", metrics: [] };
+    }
+    if (providerId === "ollama-cloud") {
+      return resolveProviderCredential("ollama-cloud")
+        ? {
+            ...localOnly("Ollama shows account usage only on ollama.com; showing router traffic"),
+            dashboardUrl: OLLAMA_DASHBOARD_URL,
+          }
         : { status: "not-configured", source: "official-api", metrics: [] };
     }
     return localOnly("Showing router traffic");
