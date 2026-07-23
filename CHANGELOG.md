@@ -13,6 +13,14 @@
   after each entry, challenges input that looks like the same key pasted
   twice before saving, and re-prompts instead of failing on empty input, so a
   paste with terminal echo disabled is no longer a silent leap of faith.
+- Rebuilt the guided setup as a stepped wizard: numbered progress headers, a
+  toggleable provider list with live ready/needs-key/needs-sign-in status,
+  `a`/`n` select-all/none shortcuts, invalid-input recovery instead of
+  aborting, color when the terminal supports it (respecting `NO_COLOR`), and a
+  review summary with explicit confirmation before anything is installed.
+- Guided Codex setup can now onboard Grok OAuth (and offers to `npm install`
+  a missing official provider CLI), matching what the Cursor setup and tray
+  already supported.
 - Added a reversible tray toggle that lets signed-out Codex CLI/App sessions
   use connected external providers through a managed custom model provider,
   while preserving ChatGPT credentials and restoring the prior provider mode.
