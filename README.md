@@ -166,6 +166,21 @@ tray reports that Codex must be restarted manually. The switch keeps the current
 model when it already belongs to a connected external provider; otherwise it
 selects the first enabled model from one of those providers.
 
+While the switch is on, model selection happens in Codex's own picker: the
+catalog republishes external models with their real names, so switching models
+needs no extra tray UI. `./bin/control model-set <model-slug>` switches the
+active model from the command line; it accepts canonical external slugs and
+writes the aliased native slug so pickers highlight the selection.
+
+Login-free catalogs republish external models under the native GPT slugs
+(with the external model's own name and reasoning levels), because some Codex
+surfaces — notably the ChatGPT desktop app's model menu — only display models
+whose slugs pass a server-delivered allowlist of native slugs. The router
+records the mapping in `native-aliases.json` and dispatches those slugs to the
+mapped external provider. Models beyond the available native slots stay listed
+under their own slugs, and signing back in restores the native catalog
+untouched.
+
 Turning the switch off restores the exact root `model` and `model_provider`
 values that were present before the mode was enabled. The router does not
 modify or delete ChatGPT credentials. Native GPT models, ChatGPT usage, cloud

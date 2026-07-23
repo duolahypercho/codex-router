@@ -83,6 +83,7 @@ async function emitProbe() {
   } = await import("./paths.mjs");
   const { readProviderSelection } = await import("./provider-selection.mjs");
   const { LISTED_MODELS } = await import("./model-registry.mjs");
+  const { readNativeAliases } = await import("./native-alias.mjs");
 
   const enabledProviders = readProviderSelection();
   const usageEvents = TARGET === "codex"
@@ -115,7 +116,9 @@ async function emitProbe() {
             loginFreeManaged: Boolean(codexConfig.login_free_managed),
           }
         : {}),
-      ...(TARGET === "codex" ? { usageEvents } : {}),
+      ...(TARGET === "codex"
+        ? { usageEvents, nativeAliases: readNativeAliases() }
+        : {}),
     }),
   );
 }
@@ -291,6 +294,7 @@ async function setLoginFreeMode(desired) {
     const { providerOnboardingSnapshot } = await import("./provider-onboarding.mjs");
     const { readProviderSelection, selectedListedModels } = await import("./provider-selection.mjs");
     const { MODEL_BY_SLUG } = await import("./model-registry.mjs");
+    const { readNativeAliases } = await import("./native-alias.mjs");
     const selected = new Set(readProviderSelection());
     const readyProviders = new Set(
       providerOnboardingSnapshot().providers
@@ -303,10 +307,12 @@ async function setLoginFreeMode(desired) {
       );
     }
     const currentModel = codexConfigSnapshot()?.model;
-    const currentRoute = MODEL_BY_SLUG.get(currentModel);
+    const currentRoute =
+      MODEL_BY_SLUG.get(currentModel) ??
+      MODEL_BY_SLUG.get(readNativeAliases()[currentModel]);
     loginFreeModel =
       currentRoute && readyProviders.has(currentRoute.provider)
-        ? currentModel
+        ? currentRoute.slug
         : selectedListedModels().find((model) => readyProviders.has(model.provider))?.slug;
     if (!loginFreeModel) {
       throw new Error("No enabled model is available for the connected external providers.");
@@ -317,12 +323,20 @@ async function setLoginFreeMode(desired) {
     [path.join(REPO_ROOT, "src", "catalog.mjs")],
     {
       cwd: REPO_ROOT,
-      env: { ...process.env, MODEL_ROUTER_TARGET: "codex" },
+      env: {
+        ...process.env,
+        MODEL_ROUTER_TARGET: "codex",
+        MODEL_ROUTER_LOGIN_FREE: desired === "on" ? "1" : "0",
+      },
       encoding: "utf8",
     },
   );
   if (catalog.status !== 0) {
     throw new Error((catalog.stderr || "Codex model catalog could not be refreshed.").trim());
+  }
+  if (loginFreeModel) {
+    const { nativeAliasFor } = await import("./native-alias.mjs");
+    loginFreeModel = nativeAliasFor(loginFreeModel) || loginFreeModel;
   }
   const command = desired === "on" ? "login-free-enable" : "login-free-disable";
   const commandArgs = [path.join(REPO_ROOT, "src", "config-manager.mjs"), command];
@@ -338,6 +352,34 @@ async function setLoginFreeMode(desired) {
   );
   if (result.status !== 0) {
     throw new Error((result.stderr || "Codex provider mode could not be changed.").trim());
+  }
+  process.stdout.write(result.stdout);
+}
+
+async function setLoginFreeModel(slug) {
+  const value = String(slug || "").trim();
+  if (!value) throw new Error("Usage: control model-set <model-slug>");
+  const config = codexConfigSnapshot();
+  if (!config?.login_free) {
+    throw new Error("Switching the tray model requires login-free mode.");
+  }
+  const { selectedConfiguredListedModels } = await import("./provider-selection.mjs");
+  if (!selectedConfiguredListedModels().some((model) => model.slug === value)) {
+    throw new Error(`${value} is not an enabled, authenticated external model.`);
+  }
+  const { nativeAliasFor } = await import("./native-alias.mjs");
+  const configModel = nativeAliasFor(value) || value;
+  const result = spawnSync(
+    process.execPath,
+    [path.join(REPO_ROOT, "src", "config-manager.mjs"), "login-free-enable", configModel],
+    {
+      cwd: REPO_ROOT,
+      env: { ...process.env, MODEL_ROUTER_TARGET: "codex" },
+      encoding: "utf8",
+    },
+  );
+  if (result.status !== 0) {
+    throw new Error((result.stderr || "The Codex model could not be changed.").trim());
   }
   process.stdout.write(result.stdout);
 }
@@ -370,6 +412,8 @@ if (args.includes("--probe")) {
   await saveProviderCredential(args[1]);
 } else if (args[0] === "auth-mode") {
   await setLoginFreeMode(args[1]);
+} else if (args[0] === "model-set") {
+  await setLoginFreeModel(args[1]);
 } else {
   printOverview(args.includes("--json"));
 }

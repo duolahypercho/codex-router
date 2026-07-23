@@ -53,6 +53,7 @@ export const LEGACY_STATE_DIR = path.join(CODEX_HOME, "kimi-router");
 export const CONFIG_PATH = path.join(CODEX_HOME, "config.toml");
 export const NATIVE_CATALOG_PATH = path.join(STATE_DIR, "native-models.json");
 export const MERGED_CATALOG_PATH = path.join(STATE_DIR, "merged-models.json");
+export const NATIVE_ALIAS_PATH = path.join(STATE_DIR, "native-aliases.json");
 export const LITELLM_CONFIG_PATH = path.join(STATE_DIR, "litellm.yaml");
 export const INTERNAL_SECRET_PATH = path.join(STATE_DIR, "internal-secret");
 export const CALLER_SECRET_PATH = path.join(STATE_DIR, "caller-secret");

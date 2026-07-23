@@ -13,10 +13,12 @@ import { protectPrivateFile } from "./file-security.mjs";
 import {
   CONFIG_PATH,
   MERGED_CATALOG_PATH,
+  NATIVE_ALIAS_PATH,
   NATIVE_CATALOG_PATH,
 } from "./paths.mjs";
 import { codexIsAuthenticated, requireCodexBinary } from "./codex-binary.mjs";
 import { MODEL_BY_SLUG } from "./model-registry.mjs";
+import { buildNativeAliasAssignments } from "./native-alias.mjs";
 import { selectedConfiguredListedModels } from "./provider-selection.mjs";
 
 const refresh = process.argv.includes("--refresh-native");
@@ -80,6 +82,21 @@ function selectedModel() {
   const firstTable = config.search(/^\s*\[/m);
   const root = firstTable === -1 ? config : config.slice(0, firstTable);
   return root.match(/^\s*model\s*=\s*["\']([^"\']+)["\']/m)?.[1];
+}
+
+// Login-free mode routes everything through the external providers, so native
+// GPT slugs are unusable there even when a ChatGPT credential file exists.
+// Mode toggles pass the desired state via MODEL_ROUTER_LOGIN_FREE because they
+// rebuild the catalog before rewriting the Codex config.
+function loginFreeConfigured() {
+  const override = process.env.MODEL_ROUTER_LOGIN_FREE;
+  if (override === "1") return true;
+  if (override === "0") return false;
+  if (!existsSync(CONFIG_PATH)) return false;
+  const config = readFileSync(CONFIG_PATH, "utf8");
+  const firstTable = config.search(/^\s*\[/m);
+  const root = firstTable === -1 ? config : config.slice(0, firstTable);
+  return root.match(/^\s*model_provider\s*=\s*["\']([^"\']+)["\']/m)?.[1] === "codex-router";
 }
 
 function identityName(model) {
@@ -153,6 +170,13 @@ export function routedModel(template, model) {
   return next;
 }
 
+function sortCatalogModels(models) {
+  return [...models].sort((left, right) => {
+    const priority = Number(left.priority ?? 999) - Number(right.priority ?? 999);
+    return priority || String(left.slug).localeCompare(String(right.slug));
+  });
+}
+
 export function buildMergedCatalog(native, routedModelsList, { includeNative = true } = {}) {
   const template =
     native.models.find((model) => model.slug === "gpt-5.5") ||
@@ -167,28 +191,58 @@ export function buildMergedCatalog(native, routedModelsList, { includeNative = t
   for (const model of routedModelsList) {
     models.set(model.slug, routedModel(template, model));
   }
-  return [...models.values()].sort((left, right) => {
-    const priority = Number(left.priority ?? 999) - Number(right.priority ?? 999);
-    return priority || String(left.slug).localeCompare(String(right.slug));
-  });
+  return sortCatalogModels(models.values());
+}
+
+// Login-free Codex surfaces only list allowlisted native slugs, so external
+// models are republished under those slugs with their own names and reasoning
+// levels. Each aliased model keeps a hidden entry under its canonical slug so
+// routing, doctor checks, and existing configs keep resolving it.
+export function buildLoginFreeCatalog(native, routedModelsList) {
+  const assignments = buildNativeAliasAssignments(native.models, routedModelsList);
+  const aliasedSlugs = new Set(assignments.map(({ model }) => model.slug));
+  const aliases = Object.fromEntries(
+    assignments.map(({ nativeModel, model }) => [nativeModel.slug, model.slug]),
+  );
+  const models = [
+    ...assignments.map(({ nativeModel, model }) => ({
+      ...routedModel(nativeModel, model),
+      slug: nativeModel.slug,
+      priority: nativeModel.priority,
+    })),
+    ...buildMergedCatalog(native, routedModelsList, { includeNative: false }).map(
+      (model) =>
+        aliasedSlugs.has(model.slug) ? { ...model, visibility: "hide" } : model,
+    ),
+  ];
+  return { models: sortCatalogModels(models), aliases };
 }
 
 function main() {
   const routedModels = selectedConfiguredListedModels();
   const native = nativeCatalog();
   const openaiAuthenticated = codexIsAuthenticated();
-  const merged = buildMergedCatalog(native, routedModels, {
-    includeNative: openaiAuthenticated,
-  });
+  const loginFree = loginFreeConfigured();
+  const { models: merged, aliases } = loginFree
+    ? buildLoginFreeCatalog(native, routedModels)
+    : {
+        models: buildMergedCatalog(native, routedModels, {
+          includeNative: openaiAuthenticated,
+        }),
+        aliases: {},
+      };
   atomicJson(MERGED_CATALOG_PATH, { models: merged });
+  atomicJson(NATIVE_ALIAS_PATH, { version: 1, aliases });
   process.stdout.write(
     `${JSON.stringify({
       path: MERGED_CATALOG_PATH,
       models: merged.length,
       routed_models: routedModels.length,
-      native_models: openaiAuthenticated
+      native_models: !loginFree && openaiAuthenticated
         ? merged.filter((model) => !MODEL_BY_SLUG.has(String(model.slug))).length
         : 0,
+      aliased_models: Object.keys(aliases).length,
+      login_free: loginFree,
       openai_authenticated: openaiAuthenticated,
       selected_model: selectedModel() || null,
     })}\n`,

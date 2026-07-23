@@ -22,6 +22,7 @@ import {
 } from "./http-utils.mjs";
 import { MERGED_CATALOG_PATH, PORTS, loopback } from "./paths.mjs";
 import { MODEL_BY_SLUG, providerForModel } from "./model-registry.mjs";
+import { readNativeAliases } from "./native-alias.mjs";
 import { readProviderSelection } from "./provider-selection.mjs";
 import { ResponseUsageTransform } from "./response-usage.mjs";
 import { sessionNameFromHeaders } from "./codex-session-names.mjs";
@@ -520,7 +521,9 @@ async function handleResponses(request, response, requestUrl) {
     const body = decodeBody(encoded, request.headers["content-encoding"]);
     const payload = parseBody(body);
     const requestedModel = typeof payload.model === "string" ? payload.model : "";
-    const registeredRoute = MODEL_BY_SLUG.get(requestedModel);
+    const registeredRoute =
+      MODEL_BY_SLUG.get(requestedModel) ??
+      MODEL_BY_SLUG.get(readNativeAliases()[requestedModel]);
     const route = registeredRoute && readProviderSelection().includes(registeredRoute.provider)
       ? registeredRoute
       : undefined;
@@ -536,7 +539,7 @@ async function handleResponses(request, response, requestUrl) {
     }
     activity.setRoute({
       provider: route?.provider || "openai",
-      model: requestedModel || undefined,
+      model: route?.slug || requestedModel || undefined,
       sessionName: sessionNameFromHeaders(request.headers),
     });
     const compactV1 = /\/responses\/compact$/.test(requestUrl.pathname);
@@ -591,7 +594,7 @@ async function handleResponses(request, response, requestUrl) {
     await pipeResponse(upstream, response, HOP_BY_HOP_HEADERS, usageTransform);
     const usage = usageTransform?.tokenUsage();
     recordUsageEvent({
-      model: requestedModel,
+      model: route?.slug || requestedModel,
       provider: route?.provider || "openai",
       status: upstream.status,
       durationMs: Date.now() - startedAt,

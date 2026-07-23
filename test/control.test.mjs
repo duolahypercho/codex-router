@@ -227,23 +227,172 @@ test("login-free control selects a ready external model and restores Codex defau
   try {
     const enabled = runMode("on");
     assert.equal(enabled.login_free, true);
-    assert.match(enabled.model, /^deepseek\//);
+    assert.equal(enabled.model, "gpt-5.6-sol");
     assert.equal(enabled.model_provider, "codex-router");
     const catalog = JSON.parse(readFileSync(path.join(stateDir, "merged-models.json"), "utf8"));
-    assert.equal(catalog.models.some((model) => model.slug === "gpt-5.6-sol"), false);
+    const aliasEntry = catalog.models.find((model) => model.slug === "gpt-5.6-sol");
+    assert.match(aliasEntry.display_name, /DeepSeek/);
+    assert.equal(aliasEntry.visibility, "list");
     assert.deepEqual(
-      catalog.models.filter((model) => model.slug.startsWith("deepseek/")).map((model) => model.slug),
-      ["deepseek/deepseek-v4-flash", "deepseek/deepseek-v4-pro"],
+      catalog.models
+        .filter((model) => model.slug.startsWith("deepseek/"))
+        .map((model) => [model.slug, model.visibility]),
+      [
+        ["deepseek/deepseek-v4-flash", "hide"],
+        ["deepseek/deepseek-v4-pro", "list"],
+      ],
     );
+    const aliases = JSON.parse(readFileSync(path.join(stateDir, "native-aliases.json"), "utf8"));
+    assert.deepEqual(aliases, {
+      version: 1,
+      aliases: { "gpt-5.6-sol": "deepseek/deepseek-v4-flash" },
+    });
 
     const disabled = runMode("off");
     assert.equal(disabled.login_free, false);
     assert.equal(disabled.model, "gpt-5.6-sol");
     assert.equal(disabled.model_provider, "openai");
-    const signedOutCatalog = JSON.parse(
-      readFileSync(path.join(stateDir, "merged-models.json"), "utf8"),
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("login-free aliasing applies even when a ChatGPT credential is still stored", () => {
+  const stateDir = mkdtempSync(path.join(os.tmpdir(), "control-login-free-auth-"));
+  writeFileSync(path.join(stateDir, "config.toml"), `model = "gpt-5.6-sol"\n`, {
+    mode: 0o600,
+  });
+  writeFileSync(
+    path.join(stateDir, "enabled-providers.json"),
+    `${JSON.stringify({ version: 1, providers: ["deepseek"] })}\n`,
+    { mode: 0o600 },
+  );
+  writeFileSync(path.join(stateDir, "deepseek-api-key.secret"), "test-provider-key\n", {
+    mode: 0o600,
+  });
+  writeFileSync(
+    path.join(stateDir, "caller-secret"),
+    "test-control-caller-capability-with-sufficient-length\n",
+    { mode: 0o600 },
+  );
+  writeFileSync(
+    path.join(stateDir, "native-models.json"),
+    `${JSON.stringify({
+      models: [
+        { slug: "gpt-5.6-sol", display_name: "GPT-5.6-Sol", visibility: "list", priority: 10 },
+      ],
+    })}\n`,
+    { mode: 0o600 },
+  );
+  try {
+    const enabled = JSON.parse(
+      execFileSync(
+        process.execPath,
+        [path.join(root, "src", "control.mjs"), "auth-mode", "on"],
+        {
+          cwd: root,
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            CODEX_HOME: stateDir,
+            CODEX_BIN: "/usr/bin/true",
+            MODEL_ROUTER_TARGET: "codex",
+            MODEL_ROUTER_STATE_DIR: stateDir,
+          },
+        },
+      ),
     );
-    assert.equal(signedOutCatalog.models.some((model) => model.slug === "gpt-5.6-sol"), false);
+    assert.equal(enabled.login_free, true);
+    assert.equal(enabled.model, "gpt-5.6-sol");
+    const aliases = JSON.parse(readFileSync(path.join(stateDir, "native-aliases.json"), "utf8"));
+    assert.deepEqual(aliases.aliases, { "gpt-5.6-sol": "deepseek/deepseek-v4-flash" });
+    const catalog = JSON.parse(readFileSync(path.join(stateDir, "merged-models.json"), "utf8"));
+    assert.match(
+      catalog.models.find((model) => model.slug === "gpt-5.6-sol").display_name,
+      /DeepSeek/,
+    );
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("model-set switches the login-free model and rejects unavailable models", () => {
+  const stateDir = mkdtempSync(path.join(os.tmpdir(), "control-model-set-"));
+  writeFileSync(path.join(stateDir, "config.toml"), `model = "gpt-5.6-sol"\n`, {
+    mode: 0o600,
+  });
+  writeFileSync(
+    path.join(stateDir, "enabled-providers.json"),
+    `${JSON.stringify({ version: 1, providers: ["deepseek", "kimi-api"] })}\n`,
+    { mode: 0o600 },
+  );
+  writeFileSync(path.join(stateDir, "deepseek-api-key.secret"), "test-provider-key\n", {
+    mode: 0o600,
+  });
+  writeFileSync(
+    path.join(stateDir, "caller-secret"),
+    "test-control-caller-capability-with-sufficient-length\n",
+    { mode: 0o600 },
+  );
+  writeFileSync(
+    path.join(stateDir, "native-models.json"),
+    `${JSON.stringify({
+      models: [
+        {
+          slug: "gpt-5.6-sol",
+          display_name: "GPT-5.6-Sol",
+          visibility: "list",
+          priority: 10,
+        },
+      ],
+    })}\n`,
+    { mode: 0o600 },
+  );
+  const environment = {
+    ...process.env,
+    CODEX_HOME: stateDir,
+    CODEX_BIN: process.execPath,
+    KIMI_CODE_HOME: path.join(stateDir, "kimi-code"),
+    MODEL_ROUTER_TARGET: "codex",
+    MODEL_ROUTER_STATE_DIR: stateDir,
+  };
+  delete environment.KIMI_API_KEY;
+  delete environment.MOONSHOT_API_KEY;
+  const runControl = (...commandArgs) =>
+    JSON.parse(
+      execFileSync(
+        process.execPath,
+        [path.join(root, "src", "control.mjs"), ...commandArgs],
+        { cwd: root, encoding: "utf8", env: environment },
+      ),
+    );
+
+  try {
+    assert.throws(
+      () => runControl("model-set", "deepseek/deepseek-v4-flash"),
+      /login-free/,
+      "model-set must require login-free mode",
+    );
+
+    runControl("auth-mode", "on");
+    const switched = runControl("model-set", "deepseek/deepseek-v4-flash");
+    assert.equal(switched.model, "gpt-5.6-sol");
+    assert.equal(switched.model_provider, "codex-router");
+    assert.equal(switched.login_free, true);
+
+    const overflow = runControl("model-set", "deepseek/deepseek-v4-pro");
+    assert.equal(overflow.model, "deepseek/deepseek-v4-pro");
+
+    assert.throws(
+      () => runControl("model-set", "kimi-api/kimi-k3"),
+      /enabled, authenticated/,
+      "model-set must reject models from unauthenticated providers",
+    );
+    assert.throws(
+      () => runControl("model-set", "gpt-5.6-sol"),
+      /enabled, authenticated/,
+      "model-set must reject native models",
+    );
   } finally {
     rmSync(stateDir, { recursive: true, force: true });
   }

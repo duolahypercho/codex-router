@@ -67,6 +67,18 @@ each enabled external provider. Native GPT entries are included only when
 `codex login status` confirms an OpenAI login, so signed-out login-free users see
 only their authenticated external models.
 
+Signed-out catalogs additionally alias external models onto native GPT slugs.
+The ChatGPT desktop app's model menu filters `model/list` results against a
+server-delivered allowlist of native slugs, so an external slug can never
+appear there. Aliased entries reuse the allowlisted slugs while carrying the
+external model's display name, description, and reasoning levels; each aliased
+model also keeps a hidden entry under its canonical slug so routing, doctor
+checks, and saved configs continue to resolve. `native-aliases.json` records
+the slug mapping, the router consults it when dispatching `/responses`, and
+`control model-set`/`auth-mode` write the alias slug into the Codex config so
+pickers highlight the active model. Signed-in catalog builds clear the alias
+map, which restores native GPT routing.
+
 | Picker model | Public slug | Gateway model | Upstream model |
 | --- | --- | --- | --- |
 | K2.7 Coding Highspeed OAuth | `kimi-oauth/kimi-for-coding-highspeed` | `kimi-oauth-kimi-for-coding-highspeed` | `kimi-for-coding-highspeed` |
@@ -93,7 +105,9 @@ picker instead of replacing the provider with a generic `Custom` entry.
 The same managed config also defines an inert `codex-router` custom provider.
 The tray's login-free switch selects that provider for new Codex sessions, so
 Codex can send Responses requests to the local router without first acquiring
-OpenAI authentication. The switch snapshots the previous root
+OpenAI authentication. Model selection stays in the native Codex picker in
+both modes: login-free catalogs alias external models onto native slugs, and
+`control model-set` switches the active model from the command line. The switch snapshots the previous root
 `model_provider` in protected state and restores it when disabled. It never
 changes any ChatGPT credential. It keeps an already selected external model or
 selects the first model from a connected, enabled provider, snapshots the prior

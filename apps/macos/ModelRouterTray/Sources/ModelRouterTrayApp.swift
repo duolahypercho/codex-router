@@ -970,6 +970,7 @@ struct RouterTarget: Decodable {
   let selectedModel: String?
   let loginFree: Bool?
   let loginFreeManaged: Bool?
+  let nativeAliases: [String: String]?
 }
 
 struct RouterModel: Decodable, Identifiable {

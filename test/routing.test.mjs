@@ -59,10 +59,17 @@ async function mockServer(handler) {
 }
 
 function run(script, env) {
+  // Isolate from the user's real router state (e.g. native-aliases.json)
+  // unless the test provides its own state directory.
+  const stateIsolation =
+    env?.MODEL_ROUTER_STATE_DIR || env?.CODEX_ROUTER_STATE_DIR
+      ? {}
+      : { MODEL_ROUTER_STATE_DIR: mkdtempSync(path.join(os.tmpdir(), "routing-state-")) };
   const child = spawn(process.execPath, [path.join(root, "src", script)], {
     cwd: root,
     env: {
       ...process.env,
+      ...stateIsolation,
       CODEX_ROUTER_CALLER_KEY: CALLER_KEY,
       CODEX_ROUTER_INTERNAL_KEY: INTERNAL_KEY,
       KIMI_INTERNAL_KEY: INTERNAL_KEY,
@@ -316,6 +323,46 @@ test("router refuses a known model whose provider is hidden", async () => {
     assert.equal(response.status, 409);
     assert.equal((await response.json()).error.type, "provider_not_enabled");
     assert.equal(gatewayRequests.length, 0);
+  } finally {
+    await stopChild(router);
+    await closeServer(gateway.server);
+    rmSync(testRoot, { recursive: true, force: true });
+  }
+});
+
+test("router dispatches aliased native slugs to the mapped external model", async () => {
+  const gatewayRequests = [];
+  const gateway = await mockServer(async (request, response) => {
+    gatewayRequests.push(await bodyJson(request));
+    json(response, 200, { route: "external" });
+  });
+  const routerPort = await openPort();
+  const testRoot = mkdtempSync(path.join(os.tmpdir(), "codex-router-alias-route-"));
+  const stateDir = path.join(testRoot, "state");
+  mkdirSync(stateDir, { recursive: true });
+  writeFileSync(
+    path.join(stateDir, "native-aliases.json"),
+    `${JSON.stringify({ version: 1, aliases: { "gpt-5.5": "kimi-oauth/k3" } })}\n`,
+  );
+  const router = run("router.mjs", {
+    CODEX_ROUTER_PORT: String(routerPort),
+    CODEX_ROUTER_GATEWAY_BASE_URL: `http://127.0.0.1:${gateway.port}/v1`,
+    CODEX_ROUTER_STATE_DIR: stateDir,
+    CODEX_ROUTER_QUIET: "1",
+  });
+
+  try {
+    await waitFor(`${routerBase(routerPort)}/models`, router);
+    const response = await fetch(`${routerBase(routerPort)}/responses`, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer CODEX_CALLER_SECRET",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ model: "gpt-5.5", input: "alias test" }),
+    });
+    assert.equal(response.status, 200);
+    assert.equal(gatewayRequests.at(-1).model, "kimi-oauth-k3");
   } finally {
     await stopChild(router);
     await closeServer(gateway.server);
