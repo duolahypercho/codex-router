@@ -79,6 +79,8 @@ Linux installations support the Codex CLI and the Cursor target's local gateway.
 | Grok 4.5 (OAuth) | `grok-oauth/grok-4.5` | Official Grok CLI OAuth session |
 | Grok 4.5 (API) | `grok-api/grok-4.5` | Separately billed xAI API key |
 | Claude Opus 4.8 (API) | `anthropic-api/claude-opus-4.8` | Separately billed Anthropic API key |
+| Qwen3.7 Max (Plan) | `qwen-plan/qwen3.7-max` | Alibaba Model Studio plan API key |
+| Qwen3.7 Plus (Plan) | `qwen-plan/qwen3.7-plus` | Alibaba Model Studio plan API key |
 
 The Codex catalog is credential-aware. It includes models only from enabled
 external providers with a stored API key or valid OAuth session. Native GPT
@@ -102,6 +104,13 @@ ChatGPT OAuth provider in the router.
 Kimi Code OAuth and Kimi Platform API access are separate authentication and
 billing systems. The two Kimi entries intentionally coexist. Older DeepSeek
 aliases remain hidden compatibility routes and are not advertised to new users.
+
+
+The Qwen entries default to the Alibaba Model Studio Token Plan endpoint in
+the Singapore region. Coding Plan subscribers or other regions can point
+`QWEN_PLAN_BASE_URL` at their dashboard-issued base URL. Plan keys use the
+`sk-sp-` prefix and are separate from pay-as-you-go Model Studio keys; Alibaba
+reserves plan endpoints for interactive coding tools.
 
 Only enabled providers appear in an app's picker. Each target has its own
 selection and API-key files:

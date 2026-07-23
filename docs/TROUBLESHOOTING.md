@@ -84,7 +84,10 @@ Setting or rotating it takes effect on the next request; the background service
 does not need a restart.
 
 Confirm the key belongs to the named system. Kimi Code OAuth, Kimi Platform,
-DeepSeek, and Anthropic do not share credentials or billing.
+DeepSeek, Anthropic, and Alibaba Model Studio plans do not share credentials
+or billing. Alibaba plan keys (`sk-sp-` prefix) are separate from
+pay-as-you-go Model Studio keys and only work with the plan's dedicated base
+URL.
 
 ## A provider changed its model IDs
 

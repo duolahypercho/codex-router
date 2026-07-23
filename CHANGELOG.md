@@ -13,6 +13,10 @@
   after each entry, challenges input that looks like the same key pasted
   twice before saving, and re-prompts instead of failing on empty input, so a
   paste with terminal echo disabled is no longer a silent leap of faith.
+- Added a Qwen provider (`qwen-plan`) for Alibaba Model Studio Token and
+  Coding Plan subscriptions with Qwen3.7 Max and Qwen3.7 Plus picker models,
+  defaulting to the Singapore Token Plan endpoint with an environment override
+  for other regions or plans.
 - Added a reversible tray toggle that lets signed-out Codex CLI/App sessions
   use connected external providers through a managed custom model provider,
   while preserving ChatGPT credentials and restoring the prior provider mode.

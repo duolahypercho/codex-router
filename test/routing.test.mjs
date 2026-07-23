@@ -794,6 +794,61 @@ test("API forwarder supports all DeepSeek V4 models and normalizes thinking", as
   }
 });
 
+test("API forwarder routes Qwen plan models without unsupported parameters", async () => {
+  const upstreamRequests = [];
+  const upstream = await mockServer(async (request, response) => {
+    upstreamRequests.push({ headers: request.headers, body: await bodyJson(request) });
+    json(response, 200, { choices: [] });
+  });
+  const forwarderPort = await openPort();
+  const forwarder = run("api-forwarder.mjs", {
+    CODEX_ROUTER_API_PORT: String(forwarderPort),
+    QWEN_PLAN_BASE_URL: `http://127.0.0.1:${upstream.port}`,
+    QWEN_PLAN_API_KEY: "TEST_QWEN_PLAN_KEY",
+    CODEX_ROUTER_QUIET: "1",
+  });
+
+  try {
+    await waitFor(`http://127.0.0.1:${forwarderPort}/health`, forwarder, {
+      Authorization: `Bearer ${INTERNAL_KEY}`,
+    });
+    for (const [gatewayModel, upstreamModel] of [
+      ["qwen-plan-qwen3-7-max", "qwen3.7-max"],
+      ["qwen-plan-qwen3-7-plus", "qwen3.7-plus"],
+    ]) {
+      const response = await fetch(
+        `http://127.0.0.1:${forwarderPort}/v1/chat/completions`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${INTERNAL_KEY}`,
+            "ChatGPT-Account-Id": "must-not-forward",
+            "X-Codex-Installation-Id": "must-not-forward",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model: gatewayModel,
+            reasoning_effort: "high",
+            tool_choice: "required",
+            messages: [{ role: "user", content: "test" }],
+          }),
+        },
+      );
+      assert.equal(response.status, 200);
+      const request = upstreamRequests.at(-1);
+      assert.equal(request.headers.authorization, "Bearer TEST_QWEN_PLAN_KEY");
+      assert.equal(request.headers["chatgpt-account-id"], undefined);
+      assert.equal(request.headers["x-codex-installation-id"], undefined);
+      assert.equal(request.body.model, upstreamModel);
+      assert.equal(request.body.reasoning_effort, undefined);
+      assert.equal(request.body.tool_choice, "auto");
+    }
+  } finally {
+    await stopChild(forwarder);
+    await closeServer(upstream.server);
+  }
+});
+
 test("API forwarder routes Grok 4.5 with supported xAI reasoning effort", async () => {
   const upstreamRequests = [];
   const upstream = await mockServer(async (request, response) => {

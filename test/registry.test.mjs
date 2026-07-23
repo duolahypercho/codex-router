@@ -23,9 +23,15 @@ test("provider registry exposes configured API and OAuth model families", () => 
       "grok-oauth/grok-4.5",
       "grok-api/grok-4.5",
       "anthropic-api/claude-opus-4.8",
+      "qwen-plan/qwen3.7-max",
+      "qwen-plan/qwen3.7-plus",
     ],
   );
   assert.equal(PROVIDERS.get("deepseek").baseUrl, "https://api.deepseek.com");
+  assert.equal(
+    PROVIDERS.get("qwen-plan").baseUrl,
+    "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
+  );
   assert.equal(PROVIDERS.get("grok-api").baseUrl, "https://api.x.ai/v1");
   assert.equal(PROVIDERS.get("grok-oauth").proxyBaseEnv, "GROK_OAUTH_FORWARD_BASE_URL");
   assert.equal(PROVIDERS.get("anthropic-api").protocol, "anthropic");
