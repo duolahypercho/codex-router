@@ -1,6 +1,6 @@
 import { Readable } from "node:stream";
 
-import { secretEqual } from "./caller-auth.mjs";
+import { redactCallerUrl, secretEqual } from "./caller-auth.mjs";
 import { TARGET } from "./paths.mjs";
 
 export const MAX_BODY_BYTES = Number(
@@ -51,10 +51,39 @@ export function writeJson(response, status, payload) {
 }
 
 export function httpErrorStatus(error, fallback = 502) {
+  if (isAbortError(error)) return 499;
   const status = Number(error?.status);
   return Number.isInteger(status) && status >= 400 && status <= 599
     ? status
     : fallback;
+}
+
+export function isAbortError(error) {
+  if (!error) return false;
+  if (error.name === "AbortError") return true;
+  if (error.code === "ABORT_ERR" || error.code === "ERR_CANCELED") return true;
+  const message = String(error.message || error);
+  return /(?:^|\b)(?:abort(?:ed|error)?|the operation was aborted|request aborted|premature close)(?:\b|$)/i.test(
+    message,
+  );
+}
+
+export function formatErrorForLog(error) {
+  if (!(error instanceof Error)) {
+    return redactCallerUrl(String(error));
+  }
+  const parts = [];
+  if (error.name && error.name !== "Error") parts.push(error.name);
+  if (error.message) parts.push(error.message);
+  if (error.code) parts.push(`code=${error.code}`);
+  if (Number.isInteger(error.status)) parts.push(`status=${error.status}`);
+  const text = parts.length ? parts.join(": ") : error.toString();
+  return redactCallerUrl(text);
+}
+
+export function logRequestFailure(label, error) {
+  const kind = isAbortError(error) ? "request canceled" : "request failed";
+  console.error(`[${label}] ${kind}: ${formatErrorForLog(error)}`);
 }
 
 export function copyResponseHeaders(upstream, response, denylist = HOP_BY_HOP_HEADERS) {

@@ -15,6 +15,8 @@ import {
 import {
   HOP_BY_HOP_HEADERS,
   httpErrorStatus,
+  isAbortError,
+  logRequestFailure,
   MAX_BODY_BYTES,
   pipeResponse,
   readRequestBody,
@@ -119,7 +121,8 @@ function beginRequestActivity() {
       if (finished) return;
       finished = true;
       activeRequests.delete(requestId);
-      if (status >= 400) errorStatusUntil = Date.now() + ERROR_STATUS_DURATION_MS;
+      // Client cancels (499) and 4xx should not flash the island error state.
+      if (status >= 500) errorStatusUntil = Date.now() + ERROR_STATUS_DURATION_MS;
     },
   };
 }
@@ -612,7 +615,7 @@ async function handleResponses(request, response, requestUrl) {
       );
     }
   } catch (error) {
-    activity.finish(500);
+    activity.finish(isAbortError(error) ? 499 : 500);
     throw error;
   } finally {
     activity.finish(response.statusCode);
@@ -680,8 +683,17 @@ async function handleRequest(request, response) {
 
 const server = http.createServer((request, response) => {
   handleRequest(request, response).catch((error) => {
+    logRequestFailure("codex-router", error);
+    if (isAbortError(error)) {
+      if (!response.headersSent) {
+        response.writeHead(499);
+        response.end();
+      } else if (!response.writableEnded) {
+        response.destroy();
+      }
+      return;
+    }
     const status = httpErrorStatus(error);
-    console.error("[codex-router] request failed");
     if (!response.headersSent) {
       writeJson(response, status, {
         error: {
