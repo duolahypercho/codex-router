@@ -5,7 +5,10 @@
 - Service startup failures now include the underlying bounded, non-sensitive
   error message (for example which health check timed out or which service
   exited early) instead of a generic failure line.
-
+- Canceling a generation (or any client disconnect mid-request) no longer
+  flips router health into the eight-second error state, so tray and island
+  status indicators stop flashing red on ordinary cancels. Errors the router
+  or an upstream actually produced still surface.
 - Added a reversible tray toggle that lets signed-out Codex CLI/App sessions
   use connected external providers through a managed custom model provider,
   while preserving ChatGPT credentials and restoring the prior provider mode.
