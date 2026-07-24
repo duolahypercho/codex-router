@@ -794,6 +794,60 @@ test("API forwarder supports all DeepSeek V4 models and normalizes thinking", as
   }
 });
 
+test("API forwarder routes Ollama Cloud models without unsupported parameters", async () => {
+  const upstreamRequests = [];
+  const upstream = await mockServer(async (request, response) => {
+    upstreamRequests.push({ headers: request.headers, body: await bodyJson(request) });
+    json(response, 200, { choices: [] });
+  });
+  const forwarderPort = await openPort();
+  const forwarder = run("api-forwarder.mjs", {
+    CODEX_ROUTER_API_PORT: String(forwarderPort),
+    OLLAMA_CLOUD_BASE_URL: `http://127.0.0.1:${upstream.port}`,
+    OLLAMA_API_KEY: "TEST_OLLAMA_CLOUD_KEY",
+    CODEX_ROUTER_QUIET: "1",
+  });
+
+  try {
+    await waitFor(`http://127.0.0.1:${forwarderPort}/health`, forwarder, {
+      Authorization: `Bearer ${INTERNAL_KEY}`,
+    });
+    for (const [gatewayModel, upstreamModel] of [
+      ["ollama-cloud-glm-5-2", "glm-5.2"],
+      ["ollama-cloud-kimi-k2-7-code", "kimi-k2.7-code"],
+    ]) {
+      const response = await fetch(
+        `http://127.0.0.1:${forwarderPort}/v1/chat/completions`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${INTERNAL_KEY}`,
+            "ChatGPT-Account-Id": "must-not-forward",
+            "X-Codex-Installation-Id": "must-not-forward",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model: gatewayModel,
+            reasoning_effort: "high",
+            messages: [{ role: "user", content: "test" }],
+          }),
+        },
+      );
+      assert.equal(response.status, 200);
+      const request = upstreamRequests.at(-1);
+      assert.equal(request.headers.authorization, "Bearer TEST_OLLAMA_CLOUD_KEY");
+      assert.equal(request.headers["chatgpt-account-id"], undefined);
+      assert.equal(request.headers["x-codex-installation-id"], undefined);
+      assert.equal(request.body.model, upstreamModel);
+      assert.equal(request.body.reasoning_effort, undefined);
+    }
+  } finally {
+    await stopChild(forwarder);
+    await closeServer(upstream.server);
+  }
+});
+
+
 test("API forwarder routes Qwen plan models without unsupported parameters", async () => {
   const upstreamRequests = [];
   const upstream = await mockServer(async (request, response) => {

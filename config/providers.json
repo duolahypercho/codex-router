@@ -136,6 +136,26 @@
         ],
         "prompt": "Alibaba Model Studio plan API key"
       }
+    },
+    {
+      "id": "ollama-cloud",
+      "displayName": "Ollama Cloud",
+      "kind": "openai-compatible",
+      "ownedBy": "ollama",
+      "baseUrl": "https://ollama.com/v1",
+      "baseUrlEnv": "OLLAMA_CLOUD_BASE_URL",
+      "credential": {
+        "environment": [
+          "OLLAMA_API_KEY",
+          "OLLAMA_CLOUD_API_KEY"
+        ],
+        "file": "ollama-cloud-api-key.secret",
+        "legacyFiles": [],
+        "keychainServices": [
+          "codex-router-ollama-cloud"
+        ],
+        "prompt": "Ollama Cloud API key"
+      }
     }
   ],
   "models": [
@@ -513,6 +533,102 @@
       ],
       "requestProfile": "qwen-plan",
       "compHash": "qwen-plan-qwen3-7-plus-v1"
+    },
+    {
+      "slug": "ollama-cloud/glm-5.2",
+      "gatewayModel": "ollama-cloud-glm-5-2",
+      "upstreamModel": "glm-5.2",
+      "provider": "ollama-cloud",
+      "listed": true,
+      "displayName": "GLM-5.2 (Ollama Cloud)",
+      "description": "GLM-5.2 hosted on Ollama Cloud with agentic coding and a 1M context window.",
+      "priority": 14,
+      "defaultEffort": "high",
+      "reasoningLevels": [
+        {
+          "effort": "high",
+          "description": "Adaptive deep reasoning"
+        }
+      ],
+      "contextWindow": 1000000,
+      "autoCompact": 880000,
+      "inputModalities": [
+        "text"
+      ],
+      "requestProfile": "ollama-cloud",
+      "compHash": "ollama-cloud-glm-5-2-v1"
+    },
+    {
+      "slug": "ollama-cloud/kimi-k2.7-code",
+      "gatewayModel": "ollama-cloud-kimi-k2-7-code",
+      "upstreamModel": "kimi-k2.7-code",
+      "provider": "ollama-cloud",
+      "listed": true,
+      "displayName": "Kimi K2.7 Code (Ollama Cloud)",
+      "description": "Kimi K2.7 Code hosted on Ollama Cloud for coding agents with a 256k context window.",
+      "priority": 15,
+      "defaultEffort": "high",
+      "reasoningLevels": [
+        {
+          "effort": "high",
+          "description": "Always-on coding reasoning"
+        }
+      ],
+      "contextWindow": 262144,
+      "autoCompact": 235000,
+      "inputModalities": [
+        "text"
+      ],
+      "requestProfile": "ollama-cloud",
+      "compHash": "ollama-cloud-kimi-k2-7-code-v1"
+    },
+    {
+      "slug": "ollama-cloud/minimax-m3",
+      "gatewayModel": "ollama-cloud-minimax-m3",
+      "upstreamModel": "minimax-m3",
+      "provider": "ollama-cloud",
+      "listed": true,
+      "displayName": "MiniMax M3 (Ollama Cloud)",
+      "description": "MiniMax M3 hosted on Ollama Cloud for coding with a 512k context window.",
+      "priority": 16,
+      "defaultEffort": "high",
+      "reasoningLevels": [
+        {
+          "effort": "high",
+          "description": "Adaptive deep reasoning"
+        }
+      ],
+      "contextWindow": 524288,
+      "autoCompact": 470000,
+      "inputModalities": [
+        "text"
+      ],
+      "requestProfile": "ollama-cloud",
+      "compHash": "ollama-cloud-minimax-m3-v1"
+    },
+    {
+      "slug": "ollama-cloud/deepseek-v4-pro",
+      "gatewayModel": "ollama-cloud-deepseek-v4-pro",
+      "upstreamModel": "deepseek-v4-pro",
+      "provider": "ollama-cloud",
+      "listed": true,
+      "displayName": "DeepSeek V4 Pro (Ollama Cloud)",
+      "description": "DeepSeek V4 Pro hosted on Ollama Cloud with reasoning and a 512k context window.",
+      "priority": 17,
+      "defaultEffort": "high",
+      "reasoningLevels": [
+        {
+          "effort": "high",
+          "description": "Adaptive deep reasoning"
+        }
+      ],
+      "contextWindow": 524288,
+      "autoCompact": 470000,
+      "inputModalities": [
+        "text"
+      ],
+      "requestProfile": "ollama-cloud",
+      "compHash": "ollama-cloud-deepseek-v4-pro-v1"
     }
   ]
 }

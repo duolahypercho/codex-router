@@ -25,6 +25,10 @@
   after each entry, challenges input that looks like the same key pasted
   twice before saving, and re-prompts instead of failing on empty input, so a
   paste with terminal echo disabled is no longer a silent leap of faith.
+- Added an Ollama Cloud provider (`ollama-cloud`) with GLM-5.2, Kimi K2.7
+  Code, MiniMax M3, and DeepSeek V4 Pro picker models, using ollama.com's
+  OpenAI-compatible API with an account API key and context windows read from
+  Ollama's published model metadata.
 - Added a Qwen provider (`qwen-plan`) for Alibaba Model Studio Token and
   Coding Plan subscriptions with Qwen3.7 Max and Qwen3.7 Plus picker models,
   defaulting to the Singapore Token Plan endpoint with an environment override
