@@ -25,6 +25,11 @@
   after each entry, challenges input that looks like the same key pasted
   twice before saving, and re-prompts instead of failing on empty input, so a
   paste with terminal echo disabled is no longer a silent leap of faith.
+- Guided setup now offers to build and launch the desktop companion app as a
+  final step on macOS (menu bar, installed into `~/Applications`) and Linux
+  (tray), with `--with-tray`/`--no-tray` overrides on `install.sh` and
+  `bin/setup`. A missing toolchain or failed build warns and continues; it
+  never fails the router install.
 - Added an Ollama Cloud provider (`ollama-cloud`) with GLM-5.2, Kimi K2.7
   Code, MiniMax M3, and DeepSeek V4 Pro picker models, using ollama.com's
   OpenAI-compatible API with an account API key and context windows read from
