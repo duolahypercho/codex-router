@@ -134,6 +134,11 @@ function normalizeBody(buffer, contentType, route) {
     delete payload.reasoning_effort;
     payload.thinking = { type: "adaptive" };
     payload.output_config = { effort: "high" };
+  } else if (model.requestProfile === "minimax-m3") {
+    // MiniMax uses its own thinking control on the OpenAI-compatible
+    // Chat Completions endpoint instead of reasoning_effort.
+    delete payload.reasoning_effort;
+    payload.thinking = { type: "adaptive" };
   }
   return { body: Buffer.from(JSON.stringify(payload), "utf8"), model, provider };
 }
