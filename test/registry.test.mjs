@@ -31,6 +31,7 @@ test("provider registry exposes configured API and OAuth model families", () => 
       "ollama-cloud/kimi-k2.7-code",
       "ollama-cloud/minimax-m3",
       "ollama-cloud/deepseek-v4-pro",
+      "minimax-token-plan/minimax-m3",
     ],
   );
   assert.equal(PROVIDERS.get("deepseek").baseUrl, "https://api.deepseek.com");
@@ -43,6 +44,7 @@ test("provider registry exposes configured API and OAuth model families", () => 
     "https://api.z.ai/api/coding/paas/v4",
   );
   assert.equal(PROVIDERS.get("ollama-cloud").baseUrl, "https://ollama.com/v1");
+  assert.equal(PROVIDERS.get("minimax-token-plan").baseUrl, "https://api.minimax.io/v1");
   assert.equal(PROVIDERS.get("grok-api").baseUrl, "https://api.x.ai/v1");
   assert.equal(PROVIDERS.get("grok-oauth").proxyBaseEnv, "GROK_OAUTH_FORWARD_BASE_URL");
   assert.equal(PROVIDERS.get("anthropic-api").protocol, "anthropic");
@@ -56,6 +58,10 @@ test("provider registry exposes configured API and OAuth model families", () => 
       { effort: "high", description: "Always-on coding reasoning" },
     ]);
   }
+  const minimax = MODEL_BY_SLUG.get("minimax-token-plan/minimax-m3");
+  assert.equal(minimax.contextWindow, 1_000_000);
+  assert.equal(minimax.autoCompact, 900_000);
+  assert.deepEqual(minimax.inputModalities, ["text", "image"]);
   assert.deepEqual(
     MODEL_BY_SLUG.get("anthropic-api/claude-opus-4.8").reasoningLevels,
     [{ effort: "high", description: "Adaptive deep reasoning for agentic work" }],
