@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- The Dynamic Island setting is now a three-way mode: Off, Notch (the
+  existing top-of-screen overlay), or Desktop — a draggable widget-style
+  panel pinned just above the desktop icons that always shows live router
+  activity, every connected provider's vendor quota bars with reset
+  countdowns, and the 7-day token trend, with its position remembered.
+- Added a Z.ai vendor quota adapter: when a `zai-coding` provider is
+  configured, account usage now reports real plan windows (5-hour, weekly,
+  token quota) with reset times from Z.ai's key-authenticated quota API,
+  plus a dashboard link. Alibaba plan and Ollama Cloud accounts stay
+  local-only by design — their vendor dashboards are session-gated and the
+  router never imports browser cookies — but now carry a `dashboardUrl` so
+  companion UIs can deep-link to the official usage pages.
 - Service startup failures now include the underlying bounded, non-sensitive
   error message (for example which health check timed out or which service
   exited early) instead of a generic failure line.
@@ -18,6 +30,32 @@
   (tray), with `--with-tray`/`--no-tray` overrides on `install.sh` and
   `bin/setup`. A missing toolchain or failed build warns and continues; it
   never fails the router install.
+- Added an Ollama Cloud provider (`ollama-cloud`) with GLM-5.2, Kimi K2.7
+  Code, MiniMax M3, and DeepSeek V4 Pro picker models, using ollama.com's
+  OpenAI-compatible API with an account API key and context windows read from
+  Ollama's published model metadata.
+- Added a Qwen provider (`qwen-plan`) for Alibaba Model Studio Token and
+  Coding Plan subscriptions with Qwen3.7 Max and Qwen3.7 Plus picker models,
+  defaulting to the Singapore Token Plan endpoint with an environment override
+  for other regions or plans.
+- Added a Z.ai GLM Coding Plan provider (`zai-coding`) with GLM-5.2 and
+  GLM-5-Turbo picker models. Requests use the plan's dedicated coding endpoint,
+  enable thinking, map Codex's maximum reasoning tier to Z.ai's `max` effort,
+  and drop sampling overrides that conflict with thinking mode.
+- Added interactive model curation: `bin/curate-models PROVIDER` discovers the
+  provider's live model list, lets the user toggle models the registry does
+  not ship, and stores them as protected local user models with conservative
+  default metadata. User models overlay the registry at load time; invalid or
+  colliding entries are skipped with warnings instead of failing the router,
+  and the command can rebuild routes and restart the service on request.
+- Rebuilt the guided setup as a stepped wizard: numbered progress headers, a
+  toggleable provider list with live ready/needs-key/needs-sign-in status,
+  `a`/`n` select-all/none shortcuts, invalid-input recovery instead of
+  aborting, color when the terminal supports it (respecting `NO_COLOR`), and a
+  review summary with explicit confirmation before anything is installed.
+- Guided Codex setup can now onboard Grok OAuth (and offers to `npm install`
+  a missing official provider CLI), matching what the Cursor setup and tray
+  already supported.
 - Added a reversible tray toggle that lets signed-out Codex CLI/App sessions
   use connected external providers through a managed custom model provider,
   while preserving ChatGPT credentials and restoring the prior provider mode.

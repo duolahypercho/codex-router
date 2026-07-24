@@ -29,7 +29,9 @@ user.
 3. Never ask the user to paste OAuth tokens or API keys into chat, command
    arguments, logs, environment snippets, or tracked files.
 4. Determine which provider IDs the user requested: `anthropic-api`,
-   `kimi-oauth`, `kimi-api`, `deepseek`, and/or `grok-api`. If they did not specify and credentials already exist, use
+   `kimi-oauth`, `kimi-api`, `deepseek`, `grok-api`, `qwen-plan`,
+   `zai-coding`, and/or `ollama-cloud`. If they did not specify and
+   credentials already exist, use
    `configured` rather than showing providers that cannot authenticate.
 5. For Kimi OAuth, reuse a valid `kimi login` session. If login is needed, run
    the official CLI only in an interactive terminal. For API providers, invoke

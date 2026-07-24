@@ -79,6 +79,12 @@ skips it. On macOS the app bundle is placed in `~/Applications` and needs the
 Swift toolchain; a missing toolchain skips the step with guidance instead of
 failing setup. Windows still builds the tray manually with
 `scripts/build-desktop-tray.ps1`.
+Guided setup walks through numbered steps: a provider list you toggle by
+number (`a` selects all, `n` clears, Enter continues) with a live
+ready/needs-key/needs-sign-in status per provider, credential onboarding for
+anything you selected that is not connected yet, and a review summary before
+any change is made.
+
 ## Authentication choices
 
 Kimi Code OAuth reuses the official CLI session. Guided setup offers to run the
@@ -95,6 +101,9 @@ API-key providers use hidden prompts:
 ./bin/provider-key deepseek set
 ./bin/provider-key grok-api set
 ./bin/provider-key anthropic-api set
+./bin/provider-key ollama-cloud set
+./bin/provider-key qwen-plan set
+./bin/provider-key zai-coding set
 ```
 
 Grok OAuth uses the official Grok CLI session:

@@ -23,9 +23,26 @@ test("provider registry exposes configured API and OAuth model families", () => 
       "grok-oauth/grok-4.5",
       "grok-api/grok-4.5",
       "anthropic-api/claude-opus-4.8",
+      "zai-coding/glm-5.2",
+      "zai-coding/glm-5-turbo",
+      "qwen-plan/qwen3.7-max",
+      "qwen-plan/qwen3.7-plus",
+      "ollama-cloud/glm-5.2",
+      "ollama-cloud/kimi-k2.7-code",
+      "ollama-cloud/minimax-m3",
+      "ollama-cloud/deepseek-v4-pro",
     ],
   );
   assert.equal(PROVIDERS.get("deepseek").baseUrl, "https://api.deepseek.com");
+  assert.equal(
+    PROVIDERS.get("qwen-plan").baseUrl,
+    "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
+  );
+  assert.equal(
+    PROVIDERS.get("zai-coding").baseUrl,
+    "https://api.z.ai/api/coding/paas/v4",
+  );
+  assert.equal(PROVIDERS.get("ollama-cloud").baseUrl, "https://ollama.com/v1");
   assert.equal(PROVIDERS.get("grok-api").baseUrl, "https://api.x.ai/v1");
   assert.equal(PROVIDERS.get("grok-oauth").proxyBaseEnv, "GROK_OAUTH_FORWARD_BASE_URL");
   assert.equal(PROVIDERS.get("anthropic-api").protocol, "anthropic");

@@ -95,6 +95,34 @@ function normalizeBody(buffer, contentType, route) {
   } else if (model.requestProfile === "deepseek-nonthinking") {
     payload.thinking = { type: "disabled" };
     delete payload.reasoning_effort;
+  } else if (model.requestProfile === "ollama-cloud") {
+    // Ollama's OpenAI-compatible surface does not document reasoning_effort;
+    // hosted models reason by default, so drop the parameter.
+    delete payload.reasoning_effort;
+  } else if (model.requestProfile === "qwen-plan") {
+    // DashScope's OpenAI-compatible mode does not document reasoning_effort;
+    // Qwen3.7 models reason adaptively by default, so drop the parameter
+    // rather than risk an invalid-parameter rejection.
+    delete payload.reasoning_effort;
+    // Qwen rejects forced tool choices in thinking mode
+    // ("tool_choice ... does not support being set to required or object");
+    // downgrade to auto so tool calls stay available.
+    if (payload.tool_choice !== undefined && payload.tool_choice !== "none") {
+      payload.tool_choice = "auto";
+    }
+  } else if (model.requestProfile === "glm-thinking") {
+    payload.thinking = { type: "enabled" };
+    if (["xhigh", "max", "ultra"].includes(payload.reasoning_effort)) {
+      payload.reasoning_effort = "max";
+    } else {
+      // Z.ai documents only the maximum tier; leave other levels to the
+      // upstream default rather than sending an unsupported value.
+      delete payload.reasoning_effort;
+    }
+    // Z.ai requires temperature 1.0 with thinking enabled; drop sampling
+    // overrides so the upstream default applies.
+    delete payload.temperature;
+    delete payload.top_p;
   } else if (model.requestProfile === "xai-reasoning") {
     if (!["low", "medium", "high"].includes(payload.reasoning_effort)) {
       payload.reasoning_effort = "high";
