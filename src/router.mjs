@@ -318,6 +318,25 @@ function normalizeRoutedInput(input) {
     });
 }
 
+function stripToolCallItems(input) {
+  if (!Array.isArray(input)) return input;
+  // Compaction asks the model for a handoff summary, not a tool turn. The raw
+  // function_call / function_call_output items are not useful to the summarizer
+  // and, once translated to chat completions for strict providers (e.g.
+  // MiniMax), can trip "tool call result does not follow tool call" because the
+  // summarization request carries no tools but the tool-bearing history still
+  // does. Drop tool-call and tool-result items before summarizing so the
+  // request is a clean narrative of user/assistant messages; message items
+  // (including assistant output_text) are preserved.
+  const TOOL_ITEM_TYPES = new Set([
+    "function_call",
+    "function_call_output",
+    "custom_tool_call",
+    "custom_tool_call_output",
+  ]);
+  return input.filter((item) => !TOOL_ITEM_TYPES.has(item?.type));
+}
+
 function normalizeNativeInput(input) {
   if (!Array.isArray(input)) return input;
   return input.map((item) => {
@@ -401,7 +420,7 @@ async function summarize(payload, route, signal) {
     tools: [],
     tool_choice: "none",
     input: [
-      ...normalizeRoutedInput(originalInput),
+      ...stripToolCallItems(normalizeRoutedInput(originalInput)),
       messageItem(COMPACT_PROMPT),
     ],
   };

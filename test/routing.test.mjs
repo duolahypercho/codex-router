@@ -645,6 +645,60 @@ test("router synthesizes routed compaction and safely replays it to native model
   }
 });
 
+test("router strips tool-call items from routed compaction input", async () => {
+  const gatewayRequests = [];
+  const gateway = await mockServer(async (request, response) => {
+    gatewayRequests.push({ headers: request.headers, body: await bodyJson(request) });
+    json(response, 200, {
+      id: "resp-summary",
+      object: "response",
+      output: [
+        { type: "message", content: [{ type: "output_text", text: "compact summary" }] },
+      ],
+    });
+  });
+  const routerPort = await openPort();
+  const router = run("router.mjs", {
+    CODEX_ROUTER_PORT: String(routerPort),
+    CODEX_ROUTER_GATEWAY_BASE_URL: `http://127.0.0.1:${gateway.port}/v1`,
+    CODEX_ROUTER_QUIET: "1",
+  });
+  const headers = {
+    Authorization: "Bearer CODEX_CALLER_SECRET",
+    "Content-Type": "application/json",
+  };
+
+  try {
+    await waitFor(`${routerBase(routerPort)}/models`, router);
+    const input = [
+      { type: "message", role: "user", content: [{ type: "input_text", text: "do work" }] },
+      { type: "function_call", id: "call_1", call_id: "call_1", name: "exec_command", arguments: "{}" },
+      { type: "function_call_output", call_id: "call_1", output: "done" },
+      { type: "message", role: "assistant", content: [{ type: "output_text", text: "all set" }] },
+    ];
+    const v2 = await fetch(`${routerBase(routerPort)}/responses`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        model: "deepseek/deepseek-v4-pro",
+        stream: false,
+        input: [...input, { type: "compaction_trigger" }],
+      }),
+    });
+    assert.equal(v2.status, 200);
+    const summarizeRequest = gatewayRequests[0];
+    const sentTypes = summarizeRequest.body.input.map((item) => item?.type);
+    assert.ok(!sentTypes.includes("function_call"));
+    assert.ok(!sentTypes.includes("function_call_output"));
+    // Message items (user + assistant text) and the compact prompt are kept.
+    assert.ok(sentTypes.includes("message"));
+    assert.match(summarizeRequest.body.input.at(-1).content[0].text, /CONTEXT CHECKPOINT COMPACTION/);
+  } finally {
+    await stopChild(router);
+    await closeServer(gateway.server);
+  }
+});
+
 test("API forwarder replaces caller auth and enforces Kimi K3 API parameters", async () => {
   const upstreamRequests = [];
   const upstream = await mockServer(async (request, response) => {
