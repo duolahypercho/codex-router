@@ -49,6 +49,13 @@ test("trayBundleDir places the macOS bundle in the user's Applications folder", 
   );
 });
 
+test("trayBundleDir uses forward slashes regardless of the host OS", () => {
+  // A macOS bundle path must never contain backslashes even when the tooling
+  // runs on Windows (CI); guards the path.posix join.
+  const result = trayBundleDir("darwin", "/Users/example");
+  assert.ok(!result.includes("\\"), `expected no backslashes in ${result}`);
+});
+
 test("trayBundleDir is undefined on other platforms", () => {
   assert.equal(trayBundleDir("linux", "/home/example"), undefined);
 });
