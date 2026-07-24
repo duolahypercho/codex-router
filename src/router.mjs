@@ -709,6 +709,7 @@ const server = http.createServer((request, response) => {
 });
 
 server.on("upgrade", (_request, socket) => {
+  socket.on("error", () => {});
   socket.end(
     "HTTP/1.1 426 Upgrade Required\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
   );
