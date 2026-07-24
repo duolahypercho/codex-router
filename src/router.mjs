@@ -221,6 +221,23 @@ function nativeHeaders(request) {
   return headers;
 }
 
+function nativeLiveHeaders(request) {
+  const headers = nativeHeaders(request);
+  const contentType = request.headers["content-type"];
+  if (contentType !== undefined) {
+    headers["Content-Type"] = Array.isArray(contentType)
+      ? contentType.join(", ")
+      : contentType;
+  }
+  for (const name of ["accept", "content-encoding"]) {
+    const value = request.headers[name];
+    if (value !== undefined) {
+      headers[name] = Array.isArray(value) ? value.join(", ") : value;
+    }
+  }
+  return headers;
+}
+
 function routedHeaders() {
   return {
     Authorization: `Bearer ${INTERNAL_KEY}`,
@@ -632,6 +649,55 @@ async function handleResponses(request, response, requestUrl) {
   }
 }
 
+async function handleNativeLive(request, response, requestUrl) {
+  const activity = beginRequestActivity();
+  let clientGone = false;
+  try {
+    if (request.headers.origin || request.headers["sec-fetch-site"]) {
+      writeJson(response, 403, {
+        error: {
+          type: "browser_request_rejected",
+          message: "Browser-originated requests are not accepted by the local model router.",
+        },
+      });
+      return;
+    }
+    const body = await readRequestBody(request);
+    activity.setRoute({
+      provider: "openai",
+      model: "voice",
+      sessionName: sessionNameFromHeaders(request.headers),
+    });
+    const controller = new AbortController();
+    request.once("aborted", () => {
+      clientGone = true;
+      controller.abort();
+    });
+    response.once("close", () => {
+      if (!response.writableEnded) {
+        clientGone = true;
+        controller.abort();
+      }
+    });
+    const upstream = await fetch(nativeTarget(requestUrl.pathname, requestUrl.search), {
+      method: "POST",
+      headers: nativeLiveHeaders(request),
+      body,
+      signal: controller.signal,
+    });
+    await pipeResponse(upstream, response, HOP_BY_HOP_HEADERS);
+  } catch (error) {
+    if (clientGone) {
+      activity.finish(0);
+      return;
+    }
+    activity.finish(500);
+    throw error;
+  } finally {
+    activity.finish(response.statusCode);
+  }
+}
+
 async function handleRequest(request, response) {
   const requestUrl = new URL(
     request.url || "/",
@@ -684,6 +750,13 @@ async function handleRequest(request, response) {
     )
   ) {
     await handleResponses(request, response, requestUrl);
+    return;
+  }
+  if (
+    request.method === "POST" &&
+    ["/live", "/v1/live"].includes(requestUrl.pathname)
+  ) {
+    await handleNativeLive(request, response, requestUrl);
     return;
   }
   writeJson(response, 404, {

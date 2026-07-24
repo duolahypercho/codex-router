@@ -549,6 +549,80 @@ test("router preserves native auth and isolates every external route", async () 
   }
 });
 
+test("router passes live voice directly to native OpenAI without affecting Kimi", async () => {
+  const nativeRequests = [];
+  const routedRequests = [];
+  const native = await mockServer(async (request, response) => {
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk);
+    nativeRequests.push({
+      url: request.url,
+      headers: request.headers,
+      body: Buffer.concat(chunks).toString("utf8"),
+    });
+    response.writeHead(200, { "Content-Type": "application/sdp" });
+    response.write("answer-");
+    response.end("sdp");
+  });
+  const gateway = await mockServer(async (request, response) => {
+    routedRequests.push({ headers: request.headers, body: await bodyJson(request) });
+    json(response, 200, { route: "external" });
+  });
+  const routerPort = await openPort();
+  const router = run("router.mjs", {
+    CODEX_ROUTER_PORT: String(routerPort),
+    CODEX_NATIVE_BASE_URL: `http://127.0.0.1:${native.port}/backend-api/codex`,
+    CODEX_ROUTER_GATEWAY_BASE_URL: `http://127.0.0.1:${gateway.port}/v1`,
+    CODEX_ROUTER_QUIET: "1",
+  });
+
+  try {
+    await waitFor(`${routerBase(routerPort)}/models`, router);
+    const unauthenticated = await fetch(`http://127.0.0.1:${routerPort}/v1/live`, {
+      method: "POST",
+      headers: { "Content-Type": "application/sdp" },
+      body: "blocked-offer",
+    });
+    assert.equal(unauthenticated.status, 401);
+
+    const live = await fetch(`${routerBase(routerPort)}/live?channels=1`, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer CODEX_CALLER_SECRET",
+        "ChatGPT-Account-Id": "account-secret",
+        "Content-Type": "application/sdp",
+        Accept: "application/sdp",
+        "X-Private-Header": "must-not-forward",
+      },
+      body: "offer-sdp",
+    });
+    assert.equal(live.status, 200);
+    assert.equal(live.headers.get("content-type"), "application/sdp");
+    assert.equal(await live.text(), "answer-sdp");
+    assert.equal(nativeRequests.length, 1);
+    assert.equal(nativeRequests[0].url, "/backend-api/codex/live?channels=1");
+    assert.equal(nativeRequests[0].headers.authorization, "Bearer CODEX_CALLER_SECRET");
+    assert.equal(nativeRequests[0].headers["chatgpt-account-id"], "account-secret");
+    assert.equal(nativeRequests[0].headers["content-type"], "application/sdp");
+    assert.equal(nativeRequests[0].headers.accept, "application/sdp");
+    assert.equal(nativeRequests[0].headers["x-private-header"], undefined);
+    assert.equal(nativeRequests[0].body, "offer-sdp");
+    assert.equal(routedRequests.length, 0);
+
+    const kimi = await fetch(`${routerBase(routerPort)}/responses`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "kimi-oauth/k3", input: "keep routing" }),
+    });
+    assert.equal(kimi.status, 200);
+    assert.equal(routedRequests.length, 1);
+    assert.equal(routedRequests[0].body.model, "kimi-oauth-k3");
+  } finally {
+    await stopChild(router);
+    await Promise.all([closeServer(native.server), closeServer(gateway.server)]);
+  }
+});
+
 test("router synthesizes routed compaction and safely replays it to native models", async () => {
   const gatewayRequests = [];
   const gateway = await mockServer(async (request, response) => {
