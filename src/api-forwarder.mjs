@@ -55,6 +55,55 @@ function deepSeekEffort(value) {
   return ["xhigh", "max", "ultra"].includes(value) ? "max" : "high";
 }
 
+// Strict chat-completions providers (e.g. MiniMax) reject a turn whose tool
+// result messages do not immediately follow the assistant message carrying the
+// matching tool_calls. When the upstream Responses-API history is translated to
+// chat completions, an assistant turn that produced both tool_calls and a text
+// message can arrive as two consecutive assistant messages (one with
+// tool_calls, one with the text), so the tool results no longer follow the
+// tool-call-bearing assistant. Coalesce runs of consecutive assistant messages
+// into a single assistant message (combining content and tool_calls) so the
+// chat-completions contract holds. This is a safe normalization: consecutive
+// assistant messages are not a valid multi-turn shape, so merging them cannot
+// change a well-formed conversation.
+function combineAssistantContent(target, source) {
+  const sourceContent = source.content;
+  if (sourceContent === undefined || sourceContent === null) return;
+  const targetContent = target.content;
+  if (targetContent === undefined || targetContent === null || targetContent === "") {
+    target.content = sourceContent;
+    return;
+  }
+  if (typeof targetContent === "string" && typeof sourceContent === "string") {
+    target.content = `${targetContent}\n${sourceContent}`;
+    return;
+  }
+  const targetBlocks = Array.isArray(targetContent) ? targetContent : [targetContent];
+  const sourceBlocks = Array.isArray(sourceContent) ? sourceContent : [sourceContent];
+  target.content = [...targetBlocks, ...sourceBlocks];
+}
+
+function coalesceAssistantMessages(messages) {
+  if (!Array.isArray(messages) || messages.length < 2) return messages;
+  const coalesced = [];
+  for (const message of messages) {
+    const previous = coalesced[coalesced.length - 1];
+    if (
+      message?.role === "assistant" &&
+      previous?.role === "assistant" &&
+      (Array.isArray(previous.tool_calls) || Array.isArray(message.tool_calls))
+    ) {
+      combineAssistantContent(previous, message);
+      if (Array.isArray(message.tool_calls) && message.tool_calls.length) {
+        previous.tool_calls = [...(previous.tool_calls || []), ...message.tool_calls];
+      }
+      continue;
+    }
+    coalesced.push(message);
+  }
+  return coalesced;
+}
+
 function normalizeBody(buffer, contentType, route) {
   if (!buffer.length || !String(contentType || "").includes("application/json")) {
     const error = new Error("API-provider requests require a JSON body.");
@@ -82,6 +131,9 @@ function normalizeBody(buffer, contentType, route) {
   }
 
   payload.model = model.upstreamModel;
+  if (Array.isArray(payload.messages)) {
+    payload.messages = coalesceAssistantMessages(payload.messages);
+  }
   if (model.requestProfile === "kimi-k3") {
     payload.reasoning_effort = "max";
     delete payload.thinking;

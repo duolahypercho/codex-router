@@ -794,6 +794,67 @@ test("API forwarder supports all DeepSeek V4 models and normalizes thinking", as
   }
 });
 
+test("API forwarder coalesces consecutive assistant messages so tool results follow tool calls", async () => {
+  const upstreamRequests = [];
+  const upstream = await mockServer(async (request, response) => {
+    upstreamRequests.push({ headers: request.headers, body: await bodyJson(request) });
+    json(response, 200, { choices: [] });
+  });
+  const forwarderPort = await openPort();
+  const forwarder = run("api-forwarder.mjs", {
+    CODEX_ROUTER_API_PORT: String(forwarderPort),
+    DEEPSEEK_API_BASE_URL: `http://127.0.0.1:${upstream.port}/v1`,
+    DEEPSEEK_API_KEY: "TEST_DEEPSEEK_KEY",
+    CODEX_ROUTER_QUIET: "1",
+  });
+
+  try {
+    await waitFor(`http://127.0.0.1:${forwarderPort}/health`, forwarder, {
+      Authorization: `Bearer ${INTERNAL_KEY}`,
+    });
+    // Mimics a Responses->chat-completions translation that split one assistant
+    // turn into a tool-call message and a separate text message, followed by the
+    // tool results. Strict providers (e.g. MiniMax) reject this with
+    // "tool call result does not follow tool call" because the tool results no
+    // longer follow the tool-call-bearing assistant message.
+    const toolCall = {
+      id: "call_A",
+      type: "function",
+      function: { name: "exec_command", arguments: "{}" },
+    };
+    const response = await fetch(
+      `http://127.0.0.1:${forwarderPort}/v1/chat/completions`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${INTERNAL_KEY}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "deepseek-v4-pro",
+          messages: [
+            { role: "user", content: "run it" },
+            { role: "assistant", tool_calls: [toolCall] },
+            { role: "assistant", content: "Running the command now." },
+            { role: "tool", tool_call_id: "call_A", content: "done" },
+          ],
+        }),
+      },
+    );
+    assert.equal(response.status, 200);
+    const messages = upstreamRequests[0].body.messages;
+    assert.equal(messages.length, 3);
+    assert.equal(messages[1].role, "assistant");
+    assert.equal(messages[1].content, "Running the command now.");
+    assert.deepEqual(messages[1].tool_calls, [toolCall]);
+    assert.equal(messages[2].role, "tool");
+    assert.equal(messages[2].tool_call_id, "call_A");
+  } finally {
+    await stopChild(forwarder);
+    await closeServer(upstream.server);
+  }
+});
+
 test("API forwarder routes Ollama Cloud models without unsupported parameters", async () => {
   const upstreamRequests = [];
   const upstream = await mockServer(async (request, response) => {
