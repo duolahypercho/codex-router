@@ -521,6 +521,7 @@ function requireCodexTransport(request, response) {
 async function handleResponses(request, response, requestUrl) {
   const startedAt = Date.now();
   const activity = beginRequestActivity();
+  let clientGone = false;
   try {
     if (!requireCodexTransport(request, response)) return;
     const encoded = await readRequestBody(request);
@@ -555,9 +556,15 @@ async function handleResponses(request, response, requestUrl) {
       payload.input.at(-1)?.type === "compaction_trigger";
 
     const controller = new AbortController();
-    request.once("aborted", () => controller.abort());
+    request.once("aborted", () => {
+      clientGone = true;
+      controller.abort();
+    });
     response.once("close", () => {
-      if (!response.writableEnded) controller.abort();
+      if (!response.writableEnded) {
+        clientGone = true;
+        controller.abort();
+      }
     });
 
     if (route && (compactV1 || compactV2)) {
@@ -612,6 +619,12 @@ async function handleResponses(request, response, requestUrl) {
       );
     }
   } catch (error) {
+    // A client that walked away (canceled generation, closed stream) is not
+    // a router failure; only surface errors the router or upstream produced.
+    if (clientGone) {
+      activity.finish(0);
+      return;
+    }
     activity.finish(500);
     throw error;
   } finally {

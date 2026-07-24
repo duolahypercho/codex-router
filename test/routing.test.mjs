@@ -324,6 +324,58 @@ test("router requires the configured path capability before any model route", as
   }
 });
 
+test("a canceled request does not flip activity into the error state", async () => {
+  const gateway = await mockServer(async (request, response) => {
+    if (request.method === "GET" && request.url === "/health") {
+      json(response, 200, { ok: true, credential_present: true });
+      return;
+    }
+    const body = await bodyJson(request);
+    if (body.input === "hang") {
+      // Hold the request open until the router aborts it, then finish so the
+      // mock server can close cleanly.
+      await new Promise((resolve) => {
+        request.once("close", resolve);
+        response.once("close", resolve);
+      });
+      return;
+    }
+    json(response, 200, { route: "external" });
+  });
+  const routerPort = await openPort();
+  const router = run("router.mjs", {
+    CODEX_ROUTER_PORT: String(routerPort),
+    CODEX_ROUTER_GATEWAY_BASE_URL: `http://127.0.0.1:${gateway.port}/v1`,
+    CODEX_ROUTER_OAUTH_HEALTH_URL: `http://127.0.0.1:${gateway.port}/health`,
+    CODEX_ROUTER_API_HEALTH_URL: `http://127.0.0.1:${gateway.port}/health`,
+    CODEX_ROUTER_GATEWAY_HEALTH_URL: `http://127.0.0.1:${gateway.port}/health`,
+    CODEX_ROUTER_QUIET: "1",
+  });
+
+  try {
+    await waitFor(`${routerBase(routerPort)}/models`, router);
+    const canceler = new AbortController();
+    const held = fetch(`${routerBase(routerPort)}/responses`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "deepseek/deepseek-v4-pro", input: "hang" }),
+      signal: canceler.signal,
+    }).catch(() => undefined);
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    canceler.abort();
+    await held;
+    await new Promise((resolve) => setTimeout(resolve, 150));
+
+    const health = await fetch(`http://127.0.0.1:${routerPort}/health`);
+    const payload = await health.json();
+    assert.equal(payload.activity.state, "idle");
+    assert.equal(payload.activity.activeCount, 0);
+  } finally {
+    await stopChild(router);
+    await closeServer(gateway.server);
+  }
+});
+
 test("router refuses a known model whose provider is hidden", async () => {
   const gatewayRequests = [];
   const gateway = await mockServer(async (request, response) => {

@@ -76,7 +76,10 @@ token into Codex config, an API-key file, or an environment variable.
 ./bin/provider-key anthropic-api status
 ```
 
-Input is hidden. A key written by the helper is protected for the current user.
+Input is hidden. After you press Enter, the prompt reports how many characters
+it received, so you can tell a paste registered, and it asks before saving a
+value that looks like the same key pasted twice. A key written by the helper is
+protected for the current user.
 Setting or rotating it takes effect on the next request; the background service
 does not need a restart.
 

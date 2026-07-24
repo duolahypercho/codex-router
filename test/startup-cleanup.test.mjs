@@ -74,6 +74,10 @@ test("startup failure terminates services that already became healthy", { timeou
     assert.equal(exit.signal, null);
     assert.equal(exit.code, 1, errors);
     assert.match(errors, /\[model-router\] startup failed/);
+    assert.match(
+      errors,
+      /startup failed: Service exited before becoming healthy at http:\/\/127\.0\.0\.1:\d+\/health\/liveliness/,
+    );
     assert.doesNotMatch(errors, /startup-internal-key-with-sufficient-length/);
     assert.doesNotMatch(errors, /startup-caller-key-with-sufficient-length/);
     for (const port of [oauthPort, apiPort, grokOauthPort]) {
