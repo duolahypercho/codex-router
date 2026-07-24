@@ -84,7 +84,12 @@ Setting or rotating it takes effect on the next request; the background service
 does not need a restart.
 
 Confirm the key belongs to the named system. Kimi Code OAuth, Kimi Platform,
-DeepSeek, and Anthropic do not share credentials or billing.
+DeepSeek, Anthropic, Alibaba Model Studio plans, and the Z.ai GLM Coding Plan
+do not share credentials or billing. Alibaba plan keys (`sk-sp-` prefix) are
+separate from pay-as-you-go Model Studio keys and only work with the plan's
+dedicated base URL. The Z.ai coding key is also distinct from general Z.ai
+platform keys; only the Coding Plan subscription key works with the coding
+endpoint.
 
 ## A provider changed its model IDs
 
@@ -105,6 +110,18 @@ tools, and compaction:
 
 Open a provider request with the official documentation and test results. Do
 not add an untested model directly to every user's picker.
+
+To use a newly discovered model locally without waiting for a registry
+release, curate it for your own machine:
+
+```sh
+./bin/curate-models deepseek
+```
+
+Curated entries live in the state directory's `user-models.json` with
+conservative default metadata, are skipped automatically if a later registry
+update ships the same model, and are removed by re-running the command and
+deselecting them.
 
 ## Native GPT models stopped working
 

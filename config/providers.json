@@ -98,6 +98,46 @@
       }
     },
     {
+      "id": "zai-coding",
+      "displayName": "Z.ai GLM Coding Plan",
+      "kind": "openai-compatible",
+      "ownedBy": "zai",
+      "baseUrl": "https://api.z.ai/api/coding/paas/v4",
+      "baseUrlEnv": "ZAI_CODING_BASE_URL",
+      "credential": {
+        "environment": [
+          "ZAI_API_KEY",
+          "ZAI_CODING_API_KEY"
+        ],
+        "file": "zai-coding-api-key.secret",
+        "legacyFiles": [],
+        "keychainServices": [
+          "codex-router-zai-coding"
+        ],
+        "prompt": "Z.ai GLM Coding Plan API key"
+      }
+    },
+    {
+      "id": "qwen-plan",
+      "displayName": "Qwen (Alibaba Plan)",
+      "kind": "openai-compatible",
+      "ownedBy": "alibaba",
+      "baseUrl": "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
+      "baseUrlEnv": "QWEN_PLAN_BASE_URL",
+      "credential": {
+        "environment": [
+          "QWEN_PLAN_API_KEY",
+          "DASHSCOPE_API_KEY"
+        ],
+        "file": "qwen-plan-api-key.secret",
+        "legacyFiles": [],
+        "keychainServices": [
+          "codex-router-qwen-plan"
+        ],
+        "prompt": "Alibaba Model Studio plan API key"
+      }
+    },
+    {
       "id": "ollama-cloud",
       "displayName": "Ollama Cloud",
       "kind": "openai-compatible",
@@ -389,6 +429,110 @@
       ],
       "requestProfile": "anthropic-reasoning",
       "compHash": "anthropic-api-claude-opus-4-8-v1"
+    },
+    {
+      "slug": "zai-coding/glm-5.2",
+      "gatewayModel": "zai-coding-glm-5-2",
+      "upstreamModel": "glm-5.2",
+      "provider": "zai-coding",
+      "listed": true,
+      "displayName": "GLM-5.2 (Coding Plan)",
+      "description": "GLM-5.2 through the Z.ai GLM Coding Plan subscription with agentic coding, tool calls, and a 1M context window.",
+      "priority": 10,
+      "defaultEffort": "high",
+      "reasoningLevels": [
+        {
+          "effort": "high",
+          "description": "Deep reasoning with thinking enabled"
+        },
+        {
+          "effort": "max",
+          "description": "Maximum reasoning depth"
+        }
+      ],
+      "contextWindow": 1048576,
+      "autoCompact": 900000,
+      "inputModalities": [
+        "text"
+      ],
+      "requestProfile": "glm-thinking",
+      "compHash": "zai-coding-glm-5-2-v1"
+    },
+    {
+      "slug": "zai-coding/glm-5-turbo",
+      "gatewayModel": "zai-coding-glm-5-turbo",
+      "upstreamModel": "glm-5-turbo",
+      "provider": "zai-coding",
+      "listed": true,
+      "displayName": "GLM-5-Turbo (Coding Plan)",
+      "description": "GLM-5-Turbo through the Z.ai GLM Coding Plan subscription; faster responses with a 200k context window.",
+      "priority": 11,
+      "defaultEffort": "high",
+      "reasoningLevels": [
+        {
+          "effort": "high",
+          "description": "Deep reasoning with thinking enabled"
+        },
+        {
+          "effort": "max",
+          "description": "Maximum reasoning depth"
+        }
+      ],
+      "contextWindow": 204800,
+      "autoCompact": 180000,
+      "inputModalities": [
+        "text"
+      ],
+      "requestProfile": "glm-thinking",
+      "compHash": "zai-coding-glm-5-turbo-v1"
+    },
+    {
+      "slug": "qwen-plan/qwen3.7-max",
+      "gatewayModel": "qwen-plan-qwen3-7-max",
+      "upstreamModel": "qwen3.7-max",
+      "provider": "qwen-plan",
+      "listed": true,
+      "displayName": "Qwen3.7 Max (Plan)",
+      "description": "Qwen3.7 Max through an Alibaba Model Studio Token or Coding Plan subscription for deep agentic coding.",
+      "priority": 12,
+      "defaultEffort": "high",
+      "reasoningLevels": [
+        {
+          "effort": "high",
+          "description": "Adaptive deep reasoning"
+        }
+      ],
+      "contextWindow": 262144,
+      "autoCompact": 235000,
+      "inputModalities": [
+        "text"
+      ],
+      "requestProfile": "qwen-plan",
+      "compHash": "qwen-plan-qwen3-7-max-v1"
+    },
+    {
+      "slug": "qwen-plan/qwen3.7-plus",
+      "gatewayModel": "qwen-plan-qwen3-7-plus",
+      "upstreamModel": "qwen3.7-plus",
+      "provider": "qwen-plan",
+      "listed": true,
+      "displayName": "Qwen3.7 Plus (Plan)",
+      "description": "Qwen3.7 Plus through an Alibaba Model Studio Token or Coding Plan subscription; balanced speed and reasoning.",
+      "priority": 13,
+      "defaultEffort": "high",
+      "reasoningLevels": [
+        {
+          "effort": "high",
+          "description": "Adaptive deep reasoning"
+        }
+      ],
+      "contextWindow": 262144,
+      "autoCompact": 235000,
+      "inputModalities": [
+        "text"
+      ],
+      "requestProfile": "qwen-plan",
+      "compHash": "qwen-plan-qwen3-7-plus-v1"
     },
     {
       "slug": "ollama-cloud/glm-5.2",

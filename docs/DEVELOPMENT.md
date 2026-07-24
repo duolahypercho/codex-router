@@ -58,6 +58,14 @@ An alternate registry can be tested in a development process with
 `CODEX_ROUTER_REGISTRY=/path/file.json`. Installed background services use the
 checked-in registry.
 
+User-curated models (`user-models.json` in the state directory, written by
+`bin/curate-models`) overlay the checked-in registry at load time. They pass
+the same per-model validation, but a problem — including a collision with a
+model a registry update later ships — skips the entry and surfaces it in
+`USER_MODEL_WARNINGS` instead of failing the load, so a stale user file can
+never take the router down. The listed-model live-test requirement applies to
+registry submissions; curated entries are explicitly local-only.
+
 ## Tests
 
 ```sh
