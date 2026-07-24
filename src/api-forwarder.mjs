@@ -95,6 +95,19 @@ function normalizeBody(buffer, contentType, route) {
   } else if (model.requestProfile === "deepseek-nonthinking") {
     payload.thinking = { type: "disabled" };
     delete payload.reasoning_effort;
+  } else if (model.requestProfile === "glm-thinking") {
+    payload.thinking = { type: "enabled" };
+    if (["xhigh", "max", "ultra"].includes(payload.reasoning_effort)) {
+      payload.reasoning_effort = "max";
+    } else {
+      // Z.ai documents only the maximum tier; leave other levels to the
+      // upstream default rather than sending an unsupported value.
+      delete payload.reasoning_effort;
+    }
+    // Z.ai requires temperature 1.0 with thinking enabled; drop sampling
+    // overrides so the upstream default applies.
+    delete payload.temperature;
+    delete payload.top_p;
   } else if (model.requestProfile === "xai-reasoning") {
     if (!["low", "medium", "high"].includes(payload.reasoning_effort)) {
       payload.reasoning_effort = "high";

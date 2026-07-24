@@ -25,6 +25,10 @@
   after each entry, challenges input that looks like the same key pasted
   twice before saving, and re-prompts instead of failing on empty input, so a
   paste with terminal echo disabled is no longer a silent leap of faith.
+- Added a Z.ai GLM Coding Plan provider (`zai-coding`) with GLM-5.2 and
+  GLM-5-Turbo picker models. Requests use the plan's dedicated coding endpoint,
+  enable thinking, map Codex's maximum reasoning tier to Z.ai's `max` effort,
+  and drop sampling overrides that conflict with thinking mode.
 - Added interactive model curation: `bin/curate-models PROVIDER` discovers the
   provider's live model list, lets the user toggle models the registry does
   not ship, and stores them as protected local user models with conservative

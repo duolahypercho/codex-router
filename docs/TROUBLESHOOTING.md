@@ -84,7 +84,9 @@ Setting or rotating it takes effect on the next request; the background service
 does not need a restart.
 
 Confirm the key belongs to the named system. Kimi Code OAuth, Kimi Platform,
-DeepSeek, and Anthropic do not share credentials or billing.
+DeepSeek, Anthropic, and the Z.ai GLM Coding Plan do not share credentials or
+billing. The Z.ai coding key is also distinct from general Z.ai platform keys;
+only the Coding Plan subscription key works with the coding endpoint.
 
 ## A provider changed its model IDs
 
