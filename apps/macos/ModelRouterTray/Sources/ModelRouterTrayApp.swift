@@ -54,14 +54,19 @@ struct ModelRouterTrayApp: App {
 final class AppDelegate: NSObject, NSApplicationDelegate {
   let store = RouterStore()
   private var islandController: IslandWindowController?
+  private var desktopPanelController: DesktopPanelWindowController?
   private var islandVisibility: AnyCancellable?
 
   func applicationDidFinishLaunching(_ notification: Notification) {
     NSApp.setActivationPolicy(.accessory)
     islandController = IslandWindowController(store: store)
-    islandVisibility = store.$islandVisible
+    desktopPanelController = DesktopPanelWindowController(store: store)
+    islandVisibility = store.$islandMode
       .removeDuplicates()
-      .sink { [weak self] visible in self?.islandController?.setVisible(visible) }
+      .sink { [weak self] mode in
+        self?.islandController?.setVisible(mode == .notch)
+        self?.desktopPanelController?.setVisible(mode == .desktop)
+      }
     Task { await store.startPolling() }
     Task { await store.startActivityPolling() }
     Task { await store.startAccountUsagePolling() }
@@ -87,7 +92,7 @@ final class RouterStore: ObservableObject {
   @Published private(set) var providerUsageError: String?
   @Published private(set) var providerSetup: [String: ProviderSetupState] = [:]
   @Published private(set) var providerOperation: String?
-  @Published private(set) var islandVisible: Bool
+  @Published private(set) var islandMode: IslandMode
 
   private var polling = false
   private var activityPolling = false
@@ -95,6 +100,7 @@ final class RouterStore: ObservableObject {
   private var providerPolling = false
   private let defaults = UserDefaults.standard
   private let islandVisibilityKey = "ModelRouterTray.islandVisible"
+  private let islandModeKey = "ModelRouterTray.islandMode"
   private var accountUsageResolved = false
   private var hasResolvedInitialUsageProvider = false
   private var hasObservedActiveProvider = false
@@ -103,9 +109,14 @@ final class RouterStore: ObservableObject {
 
   init() {
     selectedUsageProviderID = "openai"
-    islandVisible = defaults.object(forKey: islandVisibilityKey) == nil
-      ? true
-      : defaults.bool(forKey: islandVisibilityKey)
+    if let raw = defaults.string(forKey: islandModeKey), let mode = IslandMode(rawValue: raw) {
+      islandMode = mode
+    } else if defaults.object(forKey: islandVisibilityKey) == nil {
+      islandMode = .notch
+    } else {
+      // Migrate the pre-desktop-mode boolean setting.
+      islandMode = defaults.bool(forKey: islandVisibilityKey) ? .notch : .off
+    }
   }
 
   var codexActive: Bool {
@@ -116,17 +127,47 @@ final class RouterStore: ObservableObject {
     snapshot.targets["codex"]?.loginFree == true
   }
 
+  private static let providerShortNames: [String: String] = [
+    "grok-oauth": "Grok",
+    "kimi-oauth": "Kimi",
+    "deepseek": "DeepSeek",
+    "grok-api": "Grok API",
+    "kimi-api": "Kimi API",
+    "anthropic-api": "Claude",
+    "zai-coding": "GLM",
+    "qwen-plan": "Qwen",
+    "ollama-cloud": "Ollama",
+  ]
+
+  static func shortName(forRegistryProvider provider: RouterProviderInfo) -> String {
+    if let short = providerShortNames[provider.id] { return short }
+    let base = provider.displayName.split(separator: "(").first.map(String.init)
+      ?? provider.displayName
+    let trimmed = base.trimmingCharacters(in: .whitespaces)
+    return trimmed.count > 12 ? String(trimmed.prefix(12)) : trimmed
+  }
+
+  // Provider choices come from the router's registry snapshot so newly added
+  // providers appear without a tray update; the static list is only a
+  // fallback for routers that predate the snapshot's providers field.
   var usageProviderChoices: [UsageProviderChoice] {
-    let enabled = Set(snapshot.targets["codex"]?.enabledProviders ?? [])
-    return [
-      UsageProviderChoice(id: "openai", displayName: "ChatGPT", shortName: "ChatGPT", detail: "Codex subscription", isEnabled: true),
-      UsageProviderChoice(id: "grok-oauth", displayName: "Grok OAuth", shortName: "Grok", detail: providerDetail("grok-oauth", enabled: enabled), isEnabled: enabled.contains("grok-oauth")),
-      UsageProviderChoice(id: "kimi-oauth", displayName: "Kimi OAuth", shortName: "Kimi", detail: providerDetail("kimi-oauth", enabled: enabled), isEnabled: enabled.contains("kimi-oauth")),
-      UsageProviderChoice(id: "deepseek", displayName: "DeepSeek API", shortName: "DeepSeek", detail: providerDetail("deepseek", enabled: enabled), isEnabled: enabled.contains("deepseek")),
-      UsageProviderChoice(id: "grok-api", displayName: "Grok API", shortName: "Grok API", detail: providerDetail("grok-api", enabled: enabled), isEnabled: enabled.contains("grok-api")),
-      UsageProviderChoice(id: "kimi-api", displayName: "Kimi API", shortName: "Kimi API", detail: providerDetail("kimi-api", enabled: enabled), isEnabled: enabled.contains("kimi-api")),
-      UsageProviderChoice(id: "anthropic-api", displayName: "Anthropic API", shortName: "Claude", detail: providerDetail("anthropic-api", enabled: enabled), isEnabled: enabled.contains("anthropic-api")),
+    let target = snapshot.targets["codex"]
+    let enabled = Set(target?.enabledProviders ?? [])
+    let registryProviders = target?.providers ?? RouterProviderInfo.legacyFallback
+    var choices = [
+      UsageProviderChoice(
+        id: "openai", displayName: "ChatGPT", shortName: "ChatGPT",
+        detail: "Codex subscription", isEnabled: true),
     ]
+    for provider in registryProviders {
+      choices.append(UsageProviderChoice(
+        id: provider.id,
+        displayName: provider.displayName,
+        shortName: Self.shortName(forRegistryProvider: provider),
+        detail: providerDetail(provider.id, enabled: enabled),
+        isEnabled: enabled.contains(provider.id)))
+    }
+    return choices
   }
 
   var selectedUsageProvider: UsageProviderChoice {
@@ -360,9 +401,42 @@ final class RouterStore: ObservableObject {
     }
   }
 
-  func setIslandVisible(_ visible: Bool) {
-    islandVisible = visible
-    defaults.set(visible, forKey: islandVisibilityKey)
+  func setIslandMode(_ mode: IslandMode) {
+    islandMode = mode
+    defaults.set(mode.rawValue, forKey: islandModeKey)
+  }
+
+  // Every vendor quota window the desktop panel can show at a glance:
+  // the ChatGPT rate-limit windows plus each connected provider's account
+  // quota metrics.
+  var desktopQuotaRows: [DesktopQuotaRow] {
+    var rows: [DesktopQuotaRow] = []
+    if let account = accountUsage {
+      for (suffix, window) in [("primary", account.primary), ("secondary", account.secondary)] {
+        guard let window else { continue }
+        rows.append(DesktopQuotaRow(
+          id: "openai-\(suffix)",
+          providerID: "openai",
+          providerName: "ChatGPT",
+          label: window.durationLabel,
+          usedPercent: Double(window.usedPercent),
+          resetAt: window.resetsAt))
+      }
+    }
+    for provider in usageProviderChoices where provider.id != "openai" && provider.isEnabled {
+      guard let usage = providerUsage(for: provider.id) else { continue }
+      for (index, metric) in usage.account.metrics.enumerated() where metric.kind == "quota" {
+        guard let used = metric.usedPercent else { continue }
+        rows.append(DesktopQuotaRow(
+          id: "\(provider.id)-\(index)",
+          providerID: provider.id,
+          providerName: provider.shortName,
+          label: metric.label,
+          usedPercent: used,
+          resetAt: metric.resetAt))
+      }
+    }
+    return rows
   }
 
   func startAccountUsagePolling() async {
@@ -935,6 +1009,8 @@ struct ProviderAccountUsage: Decodable {
   let source: String
   let metrics: [ProviderAccountMetric]
   let message: String?
+  let plan: String?
+  let dashboardUrl: String?
 }
 
 struct ProviderAccountMetric: Decodable {
@@ -966,11 +1042,27 @@ struct RouterTarget: Decodable {
   let configured: Bool
   let active: Bool
   let enabledProviders: [String]
+  let providers: [RouterProviderInfo]?
   let models: [RouterModel]
   let selectedModel: String?
   let loginFree: Bool?
   let loginFreeManaged: Bool?
   let nativeAliases: [String: String]?
+}
+
+struct RouterProviderInfo: Decodable {
+  let id: String
+  let displayName: String
+  let kind: String?
+
+  static let legacyFallback: [RouterProviderInfo] = [
+    .init(id: "grok-oauth", displayName: "Grok OAuth", kind: "oauth"),
+    .init(id: "kimi-oauth", displayName: "Kimi OAuth", kind: "oauth"),
+    .init(id: "deepseek", displayName: "DeepSeek API", kind: "openai-compatible"),
+    .init(id: "grok-api", displayName: "Grok API", kind: "openai-compatible"),
+    .init(id: "kimi-api", displayName: "Kimi API", kind: "openai-compatible"),
+    .init(id: "anthropic-api", displayName: "Anthropic API", kind: "openai-compatible"),
+  ]
 }
 
 struct RouterModel: Decodable, Identifiable {
@@ -987,6 +1079,30 @@ struct UsageProviderChoice: Identifiable {
   let shortName: String
   let detail: String
   let isEnabled: Bool
+}
+
+enum IslandMode: String, CaseIterable, Identifiable {
+  case off
+  case notch
+  case desktop
+
+  var id: String { rawValue }
+  var label: String {
+    switch self {
+    case .off: return "Off"
+    case .notch: return "Notch"
+    case .desktop: return "Desktop"
+    }
+  }
+}
+
+struct DesktopQuotaRow: Identifiable {
+  let id: String
+  let providerID: String
+  let providerName: String
+  let label: String
+  let usedPercent: Double
+  let resetAt: TimeInterval?
 }
 
 struct UsageOverviewCard: Identifiable {
@@ -1107,14 +1223,30 @@ private struct TrayView: View {
           sectionLabel("All usage", detail: "7-day snapshot")
           AllProviderUsageGrid(store: store)
         }
-        settingRow(
-          title: "Dynamic Island",
-          detail: "Show provider usage and activity status",
-          isOn: Binding(
-            get: { store.islandVisible },
-            set: { store.setIslandVisible($0) }
-          )
-        )
+        HStack(spacing: 12) {
+          VStack(alignment: .leading, spacing: 3) {
+            Text("Dynamic Island")
+              .font(.system(size: 12, weight: .medium))
+            Text(store.islandMode == .desktop
+              ? "Quotas and live activity pinned to the desktop"
+              : "Show provider usage and activity status")
+              .font(.system(size: 10))
+              .foregroundStyle(.secondary)
+          }
+          Spacer()
+          Picker("", selection: Binding(
+            get: { store.islandMode },
+            set: { store.setIslandMode($0) }
+          )) {
+            ForEach(IslandMode.allCases) { mode in
+              Text(mode.label).tag(mode)
+            }
+          }
+          .pickerStyle(.segmented)
+          .labelsHidden()
+          .frame(width: 168)
+        }
+        .padding(.vertical, 2)
         settingRow(
           title: "Use without OpenAI login",
           detail: store.loginFree
@@ -1452,8 +1584,23 @@ private struct ProviderUsageSection: View {
           .foregroundStyle(routerMuted)
           .lineLimit(2)
       }
+
+      if let dashboardURL {
+        Button("Open usage dashboard") {
+          NSWorkspace.shared.open(dashboardURL)
+        }
+        .buttonStyle(.link)
+        .font(.system(size: 9))
+      }
     }
     .padding(.vertical, 2)
+  }
+
+  private var dashboardURL: URL? {
+    guard !store.selectedUsageUsesChatGPT,
+          let raw = store.selectedProviderUsage?.account.dashboardUrl
+    else { return nil }
+    return URL(string: raw)
   }
 
   private var sectionTitle: String {

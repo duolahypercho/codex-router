@@ -72,6 +72,12 @@ Set-Location codex-router
 ./install.ps1 -Guided
 ```
 
+Guided setup walks through numbered steps: a provider list you toggle by
+number (`a` selects all, `n` clears, Enter continues) with a live
+ready/needs-key/needs-sign-in status per provider, credential onboarding for
+anything you selected that is not connected yet, and a review summary before
+any change is made.
+
 ## Authentication choices
 
 Kimi Code OAuth reuses the official CLI session. Guided setup offers to run the
@@ -89,6 +95,7 @@ API-key providers use hidden prompts:
 ./bin/provider-key grok-api set
 ./bin/provider-key anthropic-api set
 ./bin/provider-key qwen-plan set
+./bin/provider-key zai-coding set
 ```
 
 Grok OAuth uses the official Grok CLI session:

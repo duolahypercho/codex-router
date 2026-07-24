@@ -81,6 +81,8 @@ Linux installations support the Codex CLI and the Cursor target's local gateway.
 | Claude Opus 4.8 (API) | `anthropic-api/claude-opus-4.8` | Separately billed Anthropic API key |
 | Qwen3.7 Max (Plan) | `qwen-plan/qwen3.7-max` | Alibaba Model Studio plan API key |
 | Qwen3.7 Plus (Plan) | `qwen-plan/qwen3.7-plus` | Alibaba Model Studio plan API key |
+| GLM-5.2 (Coding Plan) | `zai-coding/glm-5.2` | Z.ai GLM Coding Plan API key |
+| GLM-5-Turbo (Coding Plan) | `zai-coding/glm-5-turbo` | Z.ai GLM Coding Plan API key |
 
 The Codex catalog is credential-aware. It includes models only from enabled
 external providers with a stored API key or valid OAuth session. Native GPT
@@ -111,6 +113,18 @@ the Singapore region. Coding Plan subscribers or other regions can point
 `QWEN_PLAN_BASE_URL` at their dashboard-issued base URL. Plan keys use the
 `sk-sp-` prefix and are separate from pay-as-you-go Model Studio keys; Alibaba
 reserves plan endpoints for interactive coding tools.
+The Z.ai entries use the GLM Coding Plan's dedicated endpoint and its
+subscription API key. That key is not interchangeable with general Z.ai
+platform keys, and Z.ai reserves the coding endpoint for interactive coding
+tools.
+Beyond the built-in models, each API-key provider's live catalog can be
+curated interactively: `./bin/curate-models PROVIDER` lists the models the
+provider currently advertises that are not in the registry, lets you toggle
+the ones you want, and stores them as user models with conservative default
+metadata in protected state (surviving updates, editable in place, and
+removable by re-running the command and deselecting). Curated models are
+local to your machine and are not vetted by the repository's compatibility
+tests.
 
 Only enabled providers appear in an app's picker. Each target has its own
 selection and API-key files:

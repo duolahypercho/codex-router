@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 
 import { SOURCE_ROOT } from "./paths.mjs";
+import { readUserModels } from "./user-models.mjs";
 
 export const REGISTRY_PATH =
   process.env.MODEL_ROUTER_REGISTRY ||
@@ -61,70 +62,8 @@ function loadRegistry() {
   const slugs = new Set();
   const gatewayModels = new Set();
   const models = parsed.models.map((model) => {
-    if (!model || typeof model !== "object" || Array.isArray(model)) {
-      fail("every model must be an object");
-    }
-    for (const field of ["slug", "gatewayModel", "upstreamModel", "provider"]) {
-      if (typeof model[field] !== "string" || !model[field]) {
-        fail(`model is missing ${field}`);
-      }
-    }
-    if (!providers.has(model.provider)) {
-      fail(`model ${model.slug} references unknown provider ${model.provider}`);
-    }
-    if (!model.slug.startsWith(`${model.provider}/`)) {
-      fail(`model ${model.slug} must be namespaced under ${model.provider}/`);
-    }
-    if (model.requestProfile !== undefined && typeof model.requestProfile !== "string") {
-      fail(`model ${model.slug} has an invalid requestProfile`);
-    }
-    if (slugs.has(model.slug)) fail(`duplicate model slug ${model.slug}`);
-    if (gatewayModels.has(model.gatewayModel)) {
-      fail(`duplicate gateway model ${model.gatewayModel}`);
-    }
-    if (model.listed) {
-      for (const field of ["displayName", "description", "defaultEffort", "compHash"]) {
-        if (typeof model[field] !== "string" || !model[field]) {
-          fail(`listed model ${model.slug} is missing ${field}`);
-        }
-      }
-      if (!Array.isArray(model.reasoningLevels) || model.reasoningLevels.length === 0) {
-        fail(`listed model ${model.slug} requires reasoningLevels`);
-      }
-      if (!Number.isInteger(model.contextWindow) || model.contextWindow < 1) {
-        fail(`listed model ${model.slug} requires contextWindow`);
-      }
-      if (!Number.isInteger(model.priority)) {
-        fail(`listed model ${model.slug} requires an integer priority`);
-      }
-      if (
-        !Number.isInteger(model.autoCompact) ||
-        model.autoCompact < 1 ||
-        model.autoCompact > model.contextWindow
-      ) {
-        fail(`listed model ${model.slug} requires a valid autoCompact limit`);
-      }
-      if (
-        !Array.isArray(model.inputModalities) ||
-        model.inputModalities.length === 0 ||
-        model.inputModalities.some((value) => !["text", "image"].includes(value))
-      ) {
-        fail(`listed model ${model.slug} requires supported inputModalities`);
-      }
-      if (
-        model.reasoningLevels.some(
-          (level) =>
-            !level ||
-            typeof level.effort !== "string" ||
-            !level.effort ||
-            typeof level.description !== "string" ||
-            !level.description,
-        ) ||
-        !model.reasoningLevels.some((level) => level.effort === model.defaultEffort)
-      ) {
-        fail(`listed model ${model.slug} has invalid reasoningLevels`);
-      }
-    }
+    const problem = modelProblem(model, providers, slugs, gatewayModels);
+    if (problem) fail(problem);
     slugs.add(model.slug);
     gatewayModels.add(model.gatewayModel);
     return Object.freeze(model);
@@ -136,10 +75,103 @@ function loadRegistry() {
   };
 }
 
+// Returns a problem description instead of throwing so the strict registry
+// loader can fail hard while the user-model overlay skips with a warning.
+function modelProblem(model, providers, slugs, gatewayModels) {
+  if (!model || typeof model !== "object" || Array.isArray(model)) {
+    return "every model must be an object";
+  }
+  for (const field of ["slug", "gatewayModel", "upstreamModel", "provider"]) {
+    if (typeof model[field] !== "string" || !model[field]) {
+      return `model is missing ${field}`;
+    }
+  }
+  if (!providers.has(model.provider)) {
+    return `model ${model.slug} references unknown provider ${model.provider}`;
+  }
+  if (!model.slug.startsWith(`${model.provider}/`)) {
+    return `model ${model.slug} must be namespaced under ${model.provider}/`;
+  }
+  if (model.requestProfile !== undefined && typeof model.requestProfile !== "string") {
+    return `model ${model.slug} has an invalid requestProfile`;
+  }
+  if (slugs.has(model.slug)) return `duplicate model slug ${model.slug}`;
+  if (gatewayModels.has(model.gatewayModel)) {
+    return `duplicate gateway model ${model.gatewayModel}`;
+  }
+  if (model.listed) {
+    for (const field of ["displayName", "description", "defaultEffort", "compHash"]) {
+      if (typeof model[field] !== "string" || !model[field]) {
+        return `listed model ${model.slug} is missing ${field}`;
+      }
+    }
+    if (!Array.isArray(model.reasoningLevels) || model.reasoningLevels.length === 0) {
+      return `listed model ${model.slug} requires reasoningLevels`;
+    }
+    if (!Number.isInteger(model.contextWindow) || model.contextWindow < 1) {
+      return `listed model ${model.slug} requires contextWindow`;
+    }
+    if (!Number.isInteger(model.priority)) {
+      return `listed model ${model.slug} requires an integer priority`;
+    }
+    if (
+      !Number.isInteger(model.autoCompact) ||
+      model.autoCompact < 1 ||
+      model.autoCompact > model.contextWindow
+    ) {
+      return `listed model ${model.slug} requires a valid autoCompact limit`;
+    }
+    if (
+      !Array.isArray(model.inputModalities) ||
+      model.inputModalities.length === 0 ||
+      model.inputModalities.some((value) => !["text", "image"].includes(value))
+    ) {
+      return `listed model ${model.slug} requires supported inputModalities`;
+    }
+    if (
+      model.reasoningLevels.some(
+        (level) =>
+          !level ||
+          typeof level.effort !== "string" ||
+          !level.effort ||
+          typeof level.description !== "string" ||
+          !level.description,
+      ) ||
+      !model.reasoningLevels.some((level) => level.effort === model.defaultEffort)
+    ) {
+      return `listed model ${model.slug} has invalid reasoningLevels`;
+    }
+  }
+  return undefined;
+}
+
+// User-curated models extend the checked-in registry. A broken entry (or a
+// collision after an upstream update ships the same model) must never take
+// the whole router down, so problems skip the entry and surface as warnings.
+function mergeUserModels(base) {
+  const warnings = [];
+  const models = [...base.models];
+  const slugs = new Set(models.map((model) => model.slug));
+  const gatewayModels = new Set(models.map((model) => model.gatewayModel));
+  for (const model of readUserModels()) {
+    const problem = modelProblem(model, base.providers, slugs, gatewayModels);
+    if (problem) {
+      warnings.push(`Skipped user model: ${problem}`);
+      continue;
+    }
+    slugs.add(model.slug);
+    gatewayModels.add(model.gatewayModel);
+    models.push(Object.freeze(model));
+  }
+  return { models: Object.freeze(models), warnings: Object.freeze(warnings) };
+}
+
 const registry = loadRegistry();
+const merged = mergeUserModels(registry);
 
 export const PROVIDERS = registry.providers;
-export const MODELS = registry.models;
+export const MODELS = merged.models;
+export const USER_MODEL_WARNINGS = merged.warnings;
 export const LISTED_MODELS = Object.freeze(MODELS.filter((model) => model.listed));
 export const API_MODELS = Object.freeze(
   MODELS.filter((model) => PROVIDERS.get(model.provider)?.kind === "openai-compatible"),

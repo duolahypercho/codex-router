@@ -98,6 +98,26 @@
       }
     },
     {
+      "id": "zai-coding",
+      "displayName": "Z.ai GLM Coding Plan",
+      "kind": "openai-compatible",
+      "ownedBy": "zai",
+      "baseUrl": "https://api.z.ai/api/coding/paas/v4",
+      "baseUrlEnv": "ZAI_CODING_BASE_URL",
+      "credential": {
+        "environment": [
+          "ZAI_API_KEY",
+          "ZAI_CODING_API_KEY"
+        ],
+        "file": "zai-coding-api-key.secret",
+        "legacyFiles": [],
+        "keychainServices": [
+          "codex-router-zai-coding"
+        ],
+        "prompt": "Z.ai GLM Coding Plan API key"
+      }
+    },
+    {
       "id": "qwen-plan",
       "displayName": "Qwen (Alibaba Plan)",
       "kind": "openai-compatible",
@@ -389,6 +409,62 @@
       ],
       "requestProfile": "anthropic-reasoning",
       "compHash": "anthropic-api-claude-opus-4-8-v1"
+    },
+    {
+      "slug": "zai-coding/glm-5.2",
+      "gatewayModel": "zai-coding-glm-5-2",
+      "upstreamModel": "glm-5.2",
+      "provider": "zai-coding",
+      "listed": true,
+      "displayName": "GLM-5.2 (Coding Plan)",
+      "description": "GLM-5.2 through the Z.ai GLM Coding Plan subscription with agentic coding, tool calls, and a 1M context window.",
+      "priority": 10,
+      "defaultEffort": "high",
+      "reasoningLevels": [
+        {
+          "effort": "high",
+          "description": "Deep reasoning with thinking enabled"
+        },
+        {
+          "effort": "max",
+          "description": "Maximum reasoning depth"
+        }
+      ],
+      "contextWindow": 1048576,
+      "autoCompact": 900000,
+      "inputModalities": [
+        "text"
+      ],
+      "requestProfile": "glm-thinking",
+      "compHash": "zai-coding-glm-5-2-v1"
+    },
+    {
+      "slug": "zai-coding/glm-5-turbo",
+      "gatewayModel": "zai-coding-glm-5-turbo",
+      "upstreamModel": "glm-5-turbo",
+      "provider": "zai-coding",
+      "listed": true,
+      "displayName": "GLM-5-Turbo (Coding Plan)",
+      "description": "GLM-5-Turbo through the Z.ai GLM Coding Plan subscription; faster responses with a 200k context window.",
+      "priority": 11,
+      "defaultEffort": "high",
+      "reasoningLevels": [
+        {
+          "effort": "high",
+          "description": "Deep reasoning with thinking enabled"
+        },
+        {
+          "effort": "max",
+          "description": "Maximum reasoning depth"
+        }
+      ],
+      "contextWindow": 204800,
+      "autoCompact": 180000,
+      "inputModalities": [
+        "text"
+      ],
+      "requestProfile": "glm-thinking",
+      "compHash": "zai-coding-glm-5-turbo-v1"
     },
     {
       "slug": "qwen-plan/qwen3.7-max",
