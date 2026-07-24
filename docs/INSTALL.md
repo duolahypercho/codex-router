@@ -94,6 +94,7 @@ API-key providers use hidden prompts:
 ./bin/provider-key deepseek set
 ./bin/provider-key grok-api set
 ./bin/provider-key anthropic-api set
+./bin/provider-key qwen-plan set
 ./bin/provider-key zai-coding set
 ```
 

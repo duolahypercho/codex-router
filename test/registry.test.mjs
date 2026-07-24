@@ -25,9 +25,15 @@ test("provider registry exposes configured API and OAuth model families", () => 
       "anthropic-api/claude-opus-4.8",
       "zai-coding/glm-5.2",
       "zai-coding/glm-5-turbo",
+      "qwen-plan/qwen3.7-max",
+      "qwen-plan/qwen3.7-plus",
     ],
   );
   assert.equal(PROVIDERS.get("deepseek").baseUrl, "https://api.deepseek.com");
+  assert.equal(
+    PROVIDERS.get("qwen-plan").baseUrl,
+    "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
+  );
   assert.equal(
     PROVIDERS.get("zai-coding").baseUrl,
     "https://api.z.ai/api/coding/paas/v4",

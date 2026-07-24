@@ -36,6 +36,7 @@ test("provider selection keeps backward compatibility and can hide the final pro
       "grok-api",
       "anthropic-api",
       "zai-coding",
+      "qwen-plan",
     ]);
     process.env.KIMI_API_KEY = "TEST_ENVIRONMENT_ONLY_KEY";
     assert.deepEqual(configuredProviderIds(), []);

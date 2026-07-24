@@ -84,9 +84,12 @@ Setting or rotating it takes effect on the next request; the background service
 does not need a restart.
 
 Confirm the key belongs to the named system. Kimi Code OAuth, Kimi Platform,
-DeepSeek, Anthropic, and the Z.ai GLM Coding Plan do not share credentials or
-billing. The Z.ai coding key is also distinct from general Z.ai platform keys;
-only the Coding Plan subscription key works with the coding endpoint.
+DeepSeek, Anthropic, Alibaba Model Studio plans, and the Z.ai GLM Coding Plan
+do not share credentials or billing. Alibaba plan keys (`sk-sp-` prefix) are
+separate from pay-as-you-go Model Studio keys and only work with the plan's
+dedicated base URL. The Z.ai coding key is also distinct from general Z.ai
+platform keys; only the Coding Plan subscription key works with the coding
+endpoint.
 
 ## A provider changed its model IDs
 

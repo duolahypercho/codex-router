@@ -16,10 +16,18 @@
       "baseUrl": "https://api.moonshot.cn/v1",
       "baseUrlEnv": "KIMI_API_BASE_URL",
       "credential": {
-        "environment": ["KIMI_API_KEY", "MOONSHOT_API_KEY"],
+        "environment": [
+          "KIMI_API_KEY",
+          "MOONSHOT_API_KEY"
+        ],
         "file": "kimi-api-key.secret",
-        "legacyFiles": ["api-key.secret"],
-        "keychainServices": ["codex-router-kimi-api", "kimi-codex-api"],
+        "legacyFiles": [
+          "api-key.secret"
+        ],
+        "keychainServices": [
+          "codex-router-kimi-api",
+          "kimi-codex-api"
+        ],
         "prompt": "Kimi Platform API key"
       }
     },
@@ -31,10 +39,14 @@
       "baseUrl": "https://api.deepseek.com",
       "baseUrlEnv": "DEEPSEEK_API_BASE_URL",
       "credential": {
-        "environment": ["DEEPSEEK_API_KEY"],
+        "environment": [
+          "DEEPSEEK_API_KEY"
+        ],
         "file": "deepseek-api-key.secret",
         "legacyFiles": [],
-        "keychainServices": ["codex-router-deepseek-api"],
+        "keychainServices": [
+          "codex-router-deepseek-api"
+        ],
         "prompt": "DeepSeek API key"
       }
     },
@@ -53,10 +65,15 @@
       "baseUrl": "https://api.x.ai/v1",
       "baseUrlEnv": "XAI_API_BASE_URL",
       "credential": {
-        "environment": ["XAI_API_KEY", "GROK_API_KEY"],
+        "environment": [
+          "XAI_API_KEY",
+          "GROK_API_KEY"
+        ],
         "file": "xai-api-key.secret",
         "legacyFiles": [],
-        "keychainServices": ["codex-router-xai-api"],
+        "keychainServices": [
+          "codex-router-xai-api"
+        ],
         "prompt": "xAI API key"
       }
     },
@@ -69,10 +86,14 @@
       "baseUrl": "https://api.anthropic.com/v1",
       "baseUrlEnv": "ANTHROPIC_API_BASE_URL",
       "credential": {
-        "environment": ["ANTHROPIC_API_KEY"],
+        "environment": [
+          "ANTHROPIC_API_KEY"
+        ],
         "file": "anthropic-api-key.secret",
         "legacyFiles": [],
-        "keychainServices": ["codex-router-anthropic-api"],
+        "keychainServices": [
+          "codex-router-anthropic-api"
+        ],
         "prompt": "Anthropic API key"
       }
     },
@@ -84,11 +105,36 @@
       "baseUrl": "https://api.z.ai/api/coding/paas/v4",
       "baseUrlEnv": "ZAI_CODING_BASE_URL",
       "credential": {
-        "environment": ["ZAI_API_KEY", "ZAI_CODING_API_KEY"],
+        "environment": [
+          "ZAI_API_KEY",
+          "ZAI_CODING_API_KEY"
+        ],
         "file": "zai-coding-api-key.secret",
         "legacyFiles": [],
-        "keychainServices": ["codex-router-zai-coding"],
+        "keychainServices": [
+          "codex-router-zai-coding"
+        ],
         "prompt": "Z.ai GLM Coding Plan API key"
+      }
+    },
+    {
+      "id": "qwen-plan",
+      "displayName": "Qwen (Alibaba Plan)",
+      "kind": "openai-compatible",
+      "ownedBy": "alibaba",
+      "baseUrl": "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
+      "baseUrlEnv": "QWEN_PLAN_BASE_URL",
+      "credential": {
+        "environment": [
+          "QWEN_PLAN_API_KEY",
+          "DASHSCOPE_API_KEY"
+        ],
+        "file": "qwen-plan-api-key.secret",
+        "legacyFiles": [],
+        "keychainServices": [
+          "codex-router-qwen-plan"
+        ],
+        "prompt": "Alibaba Model Studio plan API key"
       }
     }
   ],
@@ -104,11 +150,17 @@
       "priority": 2,
       "defaultEffort": "high",
       "reasoningLevels": [
-        { "effort": "high", "description": "Always-on coding reasoning" }
+        {
+          "effort": "high",
+          "description": "Always-on coding reasoning"
+        }
       ],
       "contextWindow": 262144,
       "autoCompact": 235000,
-      "inputModalities": ["text", "image"],
+      "inputModalities": [
+        "text",
+        "image"
+      ],
       "requestProfile": "kimi-oauth",
       "compHash": "kimi-oauth-kimi-for-coding-v1"
     },
@@ -123,11 +175,17 @@
       "priority": 3,
       "defaultEffort": "high",
       "reasoningLevels": [
-        { "effort": "high", "description": "Always-on coding reasoning" }
+        {
+          "effort": "high",
+          "description": "Always-on coding reasoning"
+        }
       ],
       "contextWindow": 262144,
       "autoCompact": 235000,
-      "inputModalities": ["text", "image"],
+      "inputModalities": [
+        "text",
+        "image"
+      ],
       "requestProfile": "kimi-oauth",
       "compHash": "kimi-oauth-kimi-for-coding-highspeed-v1"
     },
@@ -142,13 +200,25 @@
       "priority": 4,
       "defaultEffort": "high",
       "reasoningLevels": [
-        { "effort": "low", "description": "Faster reasoning" },
-        { "effort": "high", "description": "Balanced deep reasoning" },
-        { "effort": "max", "description": "Maximum reasoning depth" }
+        {
+          "effort": "low",
+          "description": "Faster reasoning"
+        },
+        {
+          "effort": "high",
+          "description": "Balanced deep reasoning"
+        },
+        {
+          "effort": "max",
+          "description": "Maximum reasoning depth"
+        }
       ],
       "contextWindow": 262144,
       "autoCompact": 235000,
-      "inputModalities": ["text", "image"],
+      "inputModalities": [
+        "text",
+        "image"
+      ],
       "requestProfile": "kimi-oauth",
       "compHash": "kimi-oauth-k3-v2"
     },
@@ -163,11 +233,17 @@
       "priority": 5,
       "defaultEffort": "max",
       "reasoningLevels": [
-        { "effort": "max", "description": "Maximum reasoning required by the Kimi K3 API" }
+        {
+          "effort": "max",
+          "description": "Maximum reasoning required by the Kimi K3 API"
+        }
       ],
       "contextWindow": 1048576,
       "autoCompact": 900000,
-      "inputModalities": ["text", "image"],
+      "inputModalities": [
+        "text",
+        "image"
+      ],
       "requestProfile": "kimi-k3",
       "compHash": "kimi-api-k3-v2"
     },
@@ -182,12 +258,20 @@
       "priority": 6,
       "defaultEffort": "high",
       "reasoningLevels": [
-        { "effort": "high", "description": "Deep reasoning" },
-        { "effort": "max", "description": "Maximum reasoning for complex agent work" }
+        {
+          "effort": "high",
+          "description": "Deep reasoning"
+        },
+        {
+          "effort": "max",
+          "description": "Maximum reasoning for complex agent work"
+        }
       ],
       "contextWindow": 1048576,
       "autoCompact": 900000,
-      "inputModalities": ["text"],
+      "inputModalities": [
+        "text"
+      ],
       "requestProfile": "deepseek-thinking",
       "compHash": "deepseek-v4-flash-v1"
     },
@@ -202,12 +286,20 @@
       "priority": 7,
       "defaultEffort": "high",
       "reasoningLevels": [
-        { "effort": "high", "description": "Deep reasoning" },
-        { "effort": "max", "description": "Maximum reasoning for complex agent work" }
+        {
+          "effort": "high",
+          "description": "Deep reasoning"
+        },
+        {
+          "effort": "max",
+          "description": "Maximum reasoning for complex agent work"
+        }
       ],
       "contextWindow": 1048576,
       "autoCompact": 900000,
-      "inputModalities": ["text"],
+      "inputModalities": [
+        "text"
+      ],
       "requestProfile": "deepseek-thinking",
       "compHash": "deepseek-v4-pro-v1"
     },
@@ -238,13 +330,25 @@
       "priority": 1,
       "defaultEffort": "high",
       "reasoningLevels": [
-        { "effort": "low", "description": "Faster reasoning" },
-        { "effort": "medium", "description": "Balanced reasoning" },
-        { "effort": "high", "description": "Deep reasoning" }
+        {
+          "effort": "low",
+          "description": "Faster reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced reasoning"
+        },
+        {
+          "effort": "high",
+          "description": "Deep reasoning"
+        }
       ],
       "contextWindow": 500000,
       "autoCompact": 440000,
-      "inputModalities": ["text", "image"],
+      "inputModalities": [
+        "text",
+        "image"
+      ],
       "requestProfile": "xai-reasoning",
       "compHash": "grok-oauth-grok-4-5-v1"
     },
@@ -259,13 +363,25 @@
       "priority": 8,
       "defaultEffort": "high",
       "reasoningLevels": [
-        { "effort": "low", "description": "Faster reasoning" },
-        { "effort": "medium", "description": "Balanced reasoning" },
-        { "effort": "high", "description": "Deep reasoning" }
+        {
+          "effort": "low",
+          "description": "Faster reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced reasoning"
+        },
+        {
+          "effort": "high",
+          "description": "Deep reasoning"
+        }
       ],
       "contextWindow": 500000,
       "autoCompact": 440000,
-      "inputModalities": ["text", "image"],
+      "inputModalities": [
+        "text",
+        "image"
+      ],
       "requestProfile": "xai-reasoning",
       "compHash": "grok-api-grok-4-5-v1"
     },
@@ -280,11 +396,17 @@
       "priority": 9,
       "defaultEffort": "high",
       "reasoningLevels": [
-        { "effort": "high", "description": "Adaptive deep reasoning for agentic work" }
+        {
+          "effort": "high",
+          "description": "Adaptive deep reasoning for agentic work"
+        }
       ],
       "contextWindow": 1048576,
       "autoCompact": 900000,
-      "inputModalities": ["text", "image"],
+      "inputModalities": [
+        "text",
+        "image"
+      ],
       "requestProfile": "anthropic-reasoning",
       "compHash": "anthropic-api-claude-opus-4-8-v1"
     },
@@ -299,12 +421,20 @@
       "priority": 10,
       "defaultEffort": "high",
       "reasoningLevels": [
-        { "effort": "high", "description": "Deep reasoning with thinking enabled" },
-        { "effort": "max", "description": "Maximum reasoning depth" }
+        {
+          "effort": "high",
+          "description": "Deep reasoning with thinking enabled"
+        },
+        {
+          "effort": "max",
+          "description": "Maximum reasoning depth"
+        }
       ],
       "contextWindow": 1048576,
       "autoCompact": 900000,
-      "inputModalities": ["text"],
+      "inputModalities": [
+        "text"
+      ],
       "requestProfile": "glm-thinking",
       "compHash": "zai-coding-glm-5-2-v1"
     },
@@ -319,14 +449,70 @@
       "priority": 11,
       "defaultEffort": "high",
       "reasoningLevels": [
-        { "effort": "high", "description": "Deep reasoning with thinking enabled" },
-        { "effort": "max", "description": "Maximum reasoning depth" }
+        {
+          "effort": "high",
+          "description": "Deep reasoning with thinking enabled"
+        },
+        {
+          "effort": "max",
+          "description": "Maximum reasoning depth"
+        }
       ],
       "contextWindow": 204800,
       "autoCompact": 180000,
-      "inputModalities": ["text"],
+      "inputModalities": [
+        "text"
+      ],
       "requestProfile": "glm-thinking",
       "compHash": "zai-coding-glm-5-turbo-v1"
+    },
+    {
+      "slug": "qwen-plan/qwen3.7-max",
+      "gatewayModel": "qwen-plan-qwen3-7-max",
+      "upstreamModel": "qwen3.7-max",
+      "provider": "qwen-plan",
+      "listed": true,
+      "displayName": "Qwen3.7 Max (Plan)",
+      "description": "Qwen3.7 Max through an Alibaba Model Studio Token or Coding Plan subscription for deep agentic coding.",
+      "priority": 12,
+      "defaultEffort": "high",
+      "reasoningLevels": [
+        {
+          "effort": "high",
+          "description": "Adaptive deep reasoning"
+        }
+      ],
+      "contextWindow": 262144,
+      "autoCompact": 235000,
+      "inputModalities": [
+        "text"
+      ],
+      "requestProfile": "qwen-plan",
+      "compHash": "qwen-plan-qwen3-7-max-v1"
+    },
+    {
+      "slug": "qwen-plan/qwen3.7-plus",
+      "gatewayModel": "qwen-plan-qwen3-7-plus",
+      "upstreamModel": "qwen3.7-plus",
+      "provider": "qwen-plan",
+      "listed": true,
+      "displayName": "Qwen3.7 Plus (Plan)",
+      "description": "Qwen3.7 Plus through an Alibaba Model Studio Token or Coding Plan subscription; balanced speed and reasoning.",
+      "priority": 13,
+      "defaultEffort": "high",
+      "reasoningLevels": [
+        {
+          "effort": "high",
+          "description": "Adaptive deep reasoning"
+        }
+      ],
+      "contextWindow": 262144,
+      "autoCompact": 235000,
+      "inputModalities": [
+        "text"
+      ],
+      "requestProfile": "qwen-plan",
+      "compHash": "qwen-plan-qwen3-7-plus-v1"
     }
   ]
 }
