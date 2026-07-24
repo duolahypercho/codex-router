@@ -645,6 +645,68 @@ test("router synthesizes routed compaction and safely replays it to native model
   }
 });
 
+test("router strips non-OpenAI reasoning encrypted_content before replaying to native", async () => {
+  const nativeRequests = [];
+  const native = await mockServer(async (request, response) => {
+    nativeRequests.push({ headers: request.headers, body: await bodyJson(request) });
+    json(response, 200, { route: "native" });
+  });
+  const routerPort = await openPort();
+  const router = run("router.mjs", {
+    CODEX_ROUTER_PORT: String(routerPort),
+    CODEX_NATIVE_BASE_URL: `http://127.0.0.1:${native.port}/backend-api/codex`,
+    CODEX_ROUTER_QUIET: "1",
+  });
+  const headers = {
+    Authorization: "Bearer CODEX_CALLER_SECRET",
+    "Content-Type": "application/json",
+  };
+
+  try {
+    await waitFor(`${routerBase(routerPort)}/models`, router);
+    // Mimics an Ollama local-responses reasoning item: encrypted_content holds
+    // the plain-text reasoning instead of an OpenAI-issued opaque blob.
+    const bogusReasoning = {
+      type: "reasoning",
+      id: "rs_518653",
+      summary: [{ type: "summary_text", text: "The user is frustrated." }],
+      content: null,
+      encrypted_content: "The user is frustrated.",
+    };
+    const genuineReasoning = {
+      type: "reasoning",
+      id: "rs_real",
+      summary: [],
+      content: null,
+      encrypted_content: "gAAAAABkZmtM7cT9w_XY_zThisIsAnOpaqueBlobWithNoWhitespace",
+    };
+    const userMessage = {
+      type: "message",
+      role: "user",
+      content: [{ type: "input_text", text: "continue" }],
+    };
+    const replay = await fetch(`${routerBase(routerPort)}/responses`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        model: "gpt-5.6-sol",
+        input: [bogusReasoning, genuineReasoning, userMessage],
+      }),
+    });
+    assert.equal(replay.status, 200);
+    const sent = nativeRequests[0].body.input;
+    const sentBogus = sent.find((item) => item?.id === "rs_518653");
+    const sentGenuine = sent.find((item) => item?.id === "rs_real");
+    assert.equal(sentBogus.type, "reasoning");
+    assert.equal(sentBogus.encrypted_content, undefined);
+    assert.deepEqual(sentBogus.summary, bogusReasoning.summary);
+    assert.equal(sentGenuine.encrypted_content, genuineReasoning.encrypted_content);
+  } finally {
+    await stopChild(router);
+    await closeServer(native.server);
+  }
+});
+
 test("API forwarder replaces caller auth and enforces Kimi K3 API parameters", async () => {
   const upstreamRequests = [];
   const upstream = await mockServer(async (request, response) => {
