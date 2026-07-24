@@ -225,6 +225,16 @@ This is expected. Codex Router declines the optional Responses WebSocket
 upgrade, and current Codex falls back to compressed HTTP. A warning alone is not
 a failed model request.
 
+## Voice Mode reports an unsupported `/v1/live` route
+
+Codex Voice uses native realtime endpoints that are separate from the Responses
+API. Current installs keep the WebRTC call and its sideband WebSocket on Codex's
+native endpoints instead of sending them through the Responses-only router.
+
+Run `./bin/enable` again after updating, fully quit Codex, and reopen it so the
+managed realtime overrides take effect. User-owned realtime endpoint overrides
+are preserved.
+
 ## Uninstall retained files
 
 This is intentional. `./bin/uninstall` removes only the active integration and
