@@ -211,9 +211,10 @@ async function main() {
 let exitCode = 0;
 try {
   exitCode = await main();
-} catch {
+} catch (error) {
   if (!shuttingDown) {
-    console.error("[model-router] startup failed; inspect the service logs above for details.");
+    const reason = (error instanceof Error && error.message) || String(error);
+    console.error(`[model-router] startup failed: ${reason}; inspect the service logs above for details.`);
     exitCode = 1;
   }
 } finally {
