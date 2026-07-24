@@ -3,10 +3,18 @@ import { closeSync, openSync, readSync, writeSync } from "node:fs";
 import path from "node:path";
 
 import { detectLegacyInstallations, applyKnownMigrations, rollbackLatestMigration } from "./legacy-migration.mjs";
+import { grokOAuthStatus } from "./grok-oauth-status.mjs";
 import { PROVIDERS } from "./model-registry.mjs";
 import { kimiOAuthStatus } from "./oauth-status.mjs";
 import { SOURCE_ROOT } from "./paths.mjs";
 import { credentialStatus } from "./provider-credentials.mjs";
+import {
+  installOauthCli,
+  oauthCliPath,
+  oauthLoginArgs,
+  providerOnboardingSnapshot,
+} from "./provider-onboarding.mjs";
+import { renderProviderChoices, stepHeader, toggleSelection } from "./setup-ui.mjs";
 import {
   configuredProviderIds,
   validateProviderIds,
@@ -117,29 +125,40 @@ function confirm(label, defaultYes = true) {
 }
 
 function providerConfigured(provider) {
-  return provider.kind === "oauth"
-    ? provider.id === "kimi-oauth" && kimiOAuthStatus().configured
-    : credentialStatus(provider, { persistent: true }).configured;
+  if (provider.kind === "oauth") {
+    if (provider.id === "kimi-oauth") return kimiOAuthStatus().configured;
+    if (provider.id === "grok-oauth") return grokOAuthStatus().configured;
+    return false;
+  }
+  return credentialStatus(provider, { persistent: true }).configured;
 }
+
+const colorEnabled = Boolean(process.stdout.isTTY) && !process.env.NO_COLOR;
 
 function guidedSelection() {
   const providers = [...PROVIDERS.values()];
+  const snapshots = providerOnboardingSnapshot().providers;
+  let selected = new Set(
+    snapshots
+      .map((snapshot, index) => (snapshot.action === "ready" ? index + 1 : undefined))
+      .filter(Boolean),
+  );
+  if (selected.size === 0) selected = new Set([1]);
   process.stdout.write("\nChoose the providers to show in Codex:\n");
-  providers.forEach((provider, index) => {
-    process.stdout.write(
-      `  ${index + 1}. ${provider.displayName} ${providerConfigured(provider) ? "(ready)" : "(setup required)"}\n`,
-    );
-  });
-  const readyIndexes = providers
-    .map((provider, index) => (providerConfigured(provider) ? String(index + 1) : undefined))
-    .filter(Boolean)
-    .join(",");
-  const raw = promptLine("Enter numbers separated by commas", readyIndexes || "1");
-  const selected = raw.split(",").map((value) => Number(value.trim()));
-  if (selected.some((value) => !Number.isInteger(value) || value < 1 || value > providers.length)) {
-    throw new Error("Provider selection contains an invalid number.");
+  for (;;) {
+    process.stdout.write(`${renderProviderChoices(snapshots, selected, colorEnabled)}\n`);
+    const raw = promptLine("Toggle numbers (comma-separated), a=all, n=none; Enter to continue");
+    const result = toggleSelection(selected, raw, snapshots.length);
+    selected = result.selected;
+    if (result.error) {
+      process.stdout.write(`${result.error}\n`);
+    } else if (result.done) {
+      break;
+    }
   }
-  return validateProviderIds(selected.map((value) => providers[value - 1].id));
+  return validateProviderIds(
+    [...selected].sort((a, b) => a - b).map((position) => providers[position - 1].id),
+  );
 }
 
 function requestedSelection() {
@@ -150,17 +169,6 @@ function requestedSelection() {
     return validateProviderIds(requested.split(","));
   }
   return guided ? guidedSelection() : configuredProviderIds();
-}
-
-function executable(name) {
-  const finder = process.platform === "win32" ? "where.exe" : "which";
-  try {
-    return execFileSync(finder, [name], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] })
-      .trim()
-      .split(/\r?\n/)[0];
-  } catch {
-    return undefined;
-  }
 }
 
 function run(command, commandArgs, options = {}) {
@@ -181,20 +189,28 @@ function configureProvider(provider) {
   if (!guided) {
     const setup =
       provider.kind === "oauth"
-        ? "run `kimi login`"
+        ? "sign in with the provider's official CLI"
         : `run \`./bin/provider-key ${provider.id} set\``;
     throw new Error(`${provider.displayName} is selected but not configured; ${setup} first.`);
   }
   if (provider.kind === "oauth") {
-    const kimi = executable("kimi");
-    if (!kimi) {
-      throw new Error(
-        "Kimi Code CLI is required for OAuth. Install it from https://www.kimi.com/help/kimi-code/cli-getting-started, then run setup again.",
-      );
+    let cli = oauthCliPath(provider.id);
+    if (!cli) {
+      if (!confirm(`Install the official ${provider.displayName} CLI with npm now?`)) {
+        throw new Error(
+          `${provider.displayName} needs its official CLI; install it and run setup again.`,
+        );
+      }
+      installOauthCli(provider.id);
+      cli = oauthCliPath(provider.id);
     }
-    if (!confirm("Run `kimi login` now?")) throw new Error("Kimi OAuth setup was cancelled.");
-    run(kimi, ["login"]);
-    if (!kimiOAuthStatus().configured) throw new Error("Kimi OAuth login did not produce a usable credential.");
+    if (!confirm(`Sign in to ${provider.displayName} now?`)) {
+      throw new Error(`${provider.displayName} sign-in was cancelled.`);
+    }
+    run(cli, oauthLoginArgs(provider.id));
+    if (!providerConfigured(provider)) {
+      throw new Error(`${provider.displayName} sign-in did not produce a usable credential.`);
+    }
   } else {
     if (!confirm(`Enter a ${provider.displayName} key securely now?`)) {
       throw new Error(`${provider.displayName} setup was cancelled.`);
@@ -211,17 +227,29 @@ async function main() {
       `An unknown model router owns ${legacy.config.modelCatalogJson}; automatic setup will not replace it.`,
     );
   }
+  const stepTitles = ["Choose providers", "Connect credentials"];
+  if (legacy.installations.length) stepTitles.push("Migrate older router");
+  stepTitles.push("Review and install");
+  let stepIndex = 0;
+  const nextStep = (title) => {
+    stepIndex += 1;
+    if (guided) process.stdout.write(stepHeader(stepIndex, stepTitles.length, title));
+  };
+
+  nextStep("Choose providers");
   const providers = requestedSelection();
   if (providers.length === 0) {
     throw new Error(
       "No configured provider was found. Run `./bin/setup --guided` or pass `--providers` after configuring credentials.",
     );
   }
+  nextStep("Connect credentials");
   for (const id of providers) configureProvider(PROVIDERS.get(id));
   writeProviderSelection(providers);
 
   let migration;
   if (legacy.installations.length) {
+    nextStep("Migrate older router");
     const approved = migrateKnown || (guided && confirm(
       `Safely migrate ${legacy.installations.map((item) => item.id).join(", ")} and keep a rollback snapshot?`,
     ));
@@ -234,6 +262,19 @@ async function main() {
   if (selectionOnly) {
     process.stdout.write(`${JSON.stringify({ providers, migration }, null, 2)}\n`);
     return;
+  }
+
+  nextStep("Review and install");
+  if (guided) {
+    process.stdout.write(
+      `\nReady to install:\n` +
+        `  Providers: ${providers.join(", ")}\n` +
+        `  Migration: ${migration ? "recognized older router (rollback snapshot kept)" : "none needed"}\n` +
+        `  Changes: per-user background service and the managed Codex config block\n`,
+    );
+    if (!confirm("Proceed?")) {
+      throw new Error("Setup was cancelled before installing the service.");
+    }
   }
 
   try {

@@ -15,7 +15,9 @@ import { kimiOAuthStatus } from "./oauth-status.mjs";
 import { grokOAuthStatus } from "./grok-oauth-status.mjs";
 import { SOURCE_ROOT } from "./paths.mjs";
 import { credentialStatus } from "./provider-credentials.mjs";
+import { providerOnboardingSnapshot } from "./provider-onboarding.mjs";
 import { configuredProviderIds, validateProviderIds } from "./provider-selection.mjs";
+import { renderProviderChoices, toggleSelection } from "./setup-ui.mjs";
 
 // Target-agnostic setup helpers shared by every target's <target>-setup.mjs.
 // Only the app name, the provider-key command hint, and the install/doctor
@@ -166,27 +168,32 @@ function tryRun(command, commandArgs) {
 
 function guidedSelection(appName) {
   const providers = [...PROVIDERS.values()];
-  process.stdout.write(`\nChoose the providers to show in ${appName}:\n`);
-  providers.forEach((provider, index) => {
-    process.stdout.write(
-      `  ${index + 1}. ${provider.displayName} ${
-        providerConfigured(provider) ? "(ready)" : "(setup required)"
-      }\n`,
-    );
-  });
-  process.stdout.write(
-    "\nOAuth entries reuse official Kimi or Grok CLI sessions; API entries use a provider key.\n",
+  const snapshots = providerOnboardingSnapshot().providers;
+  const colorEnabled = Boolean(process.stdout.isTTY) && !process.env.NO_COLOR;
+  let selected = new Set(
+    snapshots
+      .map((snapshot, index) => (snapshot.action === "ready" ? index + 1 : undefined))
+      .filter(Boolean),
   );
-  const readyIndexes = providers
-    .map((provider, index) => (providerConfigured(provider) ? String(index + 1) : undefined))
-    .filter(Boolean)
-    .join(",");
-  const raw = promptLine("Enter numbers separated by commas", readyIndexes || "1");
-  const selected = raw.split(",").map((value) => Number(value.trim()));
-  if (selected.some((value) => !Number.isInteger(value) || value < 1 || value > providers.length)) {
-    throw new Error("Provider selection contains an invalid number.");
+  if (selected.size === 0) selected = new Set([1]);
+  process.stdout.write(`\nChoose the providers to show in ${appName}:\n`);
+  process.stdout.write(
+    "OAuth entries reuse official Kimi or Grok CLI sessions; API entries use a provider key.\n",
+  );
+  for (;;) {
+    process.stdout.write(`${renderProviderChoices(snapshots, selected, colorEnabled)}\n`);
+    const raw = promptLine("Toggle numbers (comma-separated), a=all, n=none; Enter to continue");
+    const result = toggleSelection(selected, raw, snapshots.length);
+    selected = result.selected;
+    if (result.error) {
+      process.stdout.write(`${result.error}\n`);
+    } else if (result.done) {
+      break;
+    }
   }
-  return validateProviderIds(selected.map((value) => providers[value - 1].id));
+  return validateProviderIds(
+    [...selected].sort((a, b) => a - b).map((position) => providers[position - 1].id),
+  );
 }
 
 // Resolve which provider ids to enable from --providers, or interactively.
