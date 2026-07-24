@@ -108,6 +108,18 @@ tools, and compaction:
 Open a provider request with the official documentation and test results. Do
 not add an untested model directly to every user's picker.
 
+To use a newly discovered model locally without waiting for a registry
+release, curate it for your own machine:
+
+```sh
+./bin/curate-models deepseek
+```
+
+Curated entries live in the state directory's `user-models.json` with
+conservative default metadata, are skipped automatically if a later registry
+update ships the same model, and are removed by re-running the command and
+deselecting them.
+
 ## Native GPT models stopped working
 
 Temporarily return Codex to its native base URL:

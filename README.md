@@ -109,6 +109,14 @@ The Z.ai entries use the GLM Coding Plan's dedicated endpoint and its
 subscription API key. That key is not interchangeable with general Z.ai
 platform keys, and Z.ai reserves the coding endpoint for interactive coding
 tools.
+Beyond the built-in models, each API-key provider's live catalog can be
+curated interactively: `./bin/curate-models PROVIDER` lists the models the
+provider currently advertises that are not in the registry, lets you toggle
+the ones you want, and stores them as user models with conservative default
+metadata in protected state (surviving updates, editable in place, and
+removable by re-running the command and deselecting). Curated models are
+local to your machine and are not vetted by the repository's compatibility
+tests.
 
 Only enabled providers appear in an app's picker. Each target has its own
 selection and API-key files:
