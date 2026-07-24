@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- The Dynamic Island setting is now a three-way mode: Off, Notch (the
+  existing top-of-screen overlay), or Desktop — a draggable widget-style
+  panel pinned just above the desktop icons that always shows live router
+  activity, every connected provider's vendor quota bars with reset
+  countdowns, and the 7-day token trend, with its position remembered.
+- Added a Z.ai vendor quota adapter: when a `zai-coding` provider is
+  configured, account usage now reports real plan windows (5-hour, weekly,
+  token quota) with reset times from Z.ai's key-authenticated quota API,
+  plus a dashboard link. Alibaba plan and Ollama Cloud accounts stay
+  local-only by design — their vendor dashboards are session-gated and the
+  router never imports browser cookies — but now carry a `dashboardUrl` so
+  companion UIs can deep-link to the official usage pages.
 - Service startup failures now include the underlying bounded, non-sensitive
   error message (for example which health check timed out or which service
   exited early) instead of a generic failure line.

@@ -814,6 +814,9 @@ private struct ProviderIcon: View {
     if providerID.hasPrefix("kimi") { return "Kimi" }
     if providerID == "deepseek" { return "DeepSeek" }
     if providerID == "anthropic-api" { return "Anthropic" }
+    if providerID == "zai-coding" { return "GLM" }
+    if providerID == "qwen-plan" { return "Qwen" }
+    if providerID == "ollama-cloud" { return "Ollama" }
     return "Model provider"
   }
 }
@@ -1291,4 +1294,175 @@ private struct MetricTile: View {
         .stroke(Color.white.opacity(0.08), lineWidth: 0.6)
     )
   }
+}
+
+@MainActor
+final class DesktopPanelWindowController {
+  static let panelSize = CGSize(width: 340, height: 432)
+  private static let frameName = "ModelRouterTray.desktopPanel"
+  private let window: NSPanel
+
+  init(store: RouterStore) {
+    window = NSPanel(
+      contentRect: NSRect(origin: .zero, size: Self.panelSize),
+      styleMask: [.borderless, .nonactivatingPanel, .fullSizeContentView],
+      backing: .buffered,
+      defer: false
+    )
+    window.isOpaque = false
+    window.backgroundColor = .clear
+    window.hasShadow = true
+    // Sit just above the desktop icons so the panel behaves like a widget:
+    // always readable on the desktop, never covering application windows.
+    window.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.desktopIconWindow)) + 1)
+    window.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
+    window.isMovable = true
+    window.isMovableByWindowBackground = true
+    window.hidesOnDeactivate = false
+    window.contentView = NSHostingView(
+      rootView: DesktopPanelView(store: store)
+        .frame(width: Self.panelSize.width, height: Self.panelSize.height)
+        .preferredColorScheme(.dark)
+    )
+    window.setFrameAutosaveName(Self.frameName)
+  }
+
+  func setVisible(_ visible: Bool) {
+    if visible {
+      if !window.setFrameUsingName(Self.frameName), let screen = NSScreen.main {
+        let frame = screen.visibleFrame
+        window.setFrameOrigin(NSPoint(
+          x: frame.maxX - Self.panelSize.width - 24,
+          y: frame.maxY - Self.panelSize.height - 24
+        ))
+      }
+      window.orderFrontRegardless()
+    } else {
+      window.orderOut(nil)
+    }
+  }
+}
+
+private struct DesktopPanelView: View {
+  @ObservedObject var store: RouterStore
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 11) {
+      HStack(spacing: 10) {
+        LiveOrb(state: store.activityState, count: store.activeRequestCount)
+        VStack(alignment: .leading, spacing: 2) {
+          Text(store.activityState.label)
+            .font(.system(size: 14, weight: .semibold, design: .rounded))
+          Text(store.activitySummaryLabel)
+            .font(.system(size: 9, weight: .medium, design: .rounded))
+            .foregroundStyle(store.activityState.tint)
+            .lineLimit(1)
+        }
+        Spacer()
+        Text("ROUTER")
+          .font(.system(size: 8, weight: .bold, design: .monospaced))
+          .tracking(1.1)
+          .foregroundStyle(routerMuted)
+      }
+
+      if store.hasConcurrentActivity {
+        ActiveRequestList(store: store, limit: 3, compact: true)
+      }
+
+      Text("QUOTAS")
+        .font(.system(size: 8, weight: .semibold, design: .monospaced))
+        .tracking(0.8)
+        .foregroundStyle(routerMuted)
+
+      if store.desktopQuotaRows.isEmpty {
+        Text("Connect a provider to see its quota here.")
+          .font(.system(size: 10, design: .rounded))
+          .foregroundStyle(routerMuted)
+      } else {
+        ScrollView(.vertical, showsIndicators: false) {
+          VStack(spacing: 8) {
+            ForEach(store.desktopQuotaRows) { row in
+              DesktopQuotaBarRow(row: row)
+            }
+          }
+        }
+        .frame(maxHeight: 190)
+      }
+
+      Spacer(minLength: 0)
+
+      HStack(alignment: .firstTextBaseline) {
+        Text("DAILY TOKENS")
+          .font(.system(size: 8, weight: .semibold, design: .monospaced))
+          .tracking(0.8)
+          .foregroundStyle(routerMuted)
+        Spacer()
+        Text("LAST 7 DAYS")
+          .font(.system(size: 8, weight: .semibold, design: .monospaced))
+          .tracking(0.6)
+          .foregroundStyle(routerMuted)
+      }
+      IslandUsageLineChart(points: store.dailyUsage(days: 7), tint: routerAccent)
+        .frame(height: 54)
+    }
+    .padding(16)
+    .background(
+      RoundedRectangle(cornerRadius: 20, style: .continuous)
+        .fill(islandBezel.opacity(0.97))
+    )
+    .overlay(
+      RoundedRectangle(cornerRadius: 20, style: .continuous)
+        .stroke(Color.white.opacity(0.09), lineWidth: 0.8)
+    )
+  }
+}
+
+private struct DesktopQuotaBarRow: View {
+  let row: DesktopQuotaRow
+
+  private var tint: Color {
+    if row.usedPercent >= 90 { return routerRed }
+    if row.usedPercent >= 70 { return routerYellow }
+    return routerMint
+  }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 3) {
+      HStack(spacing: 6) {
+        ProviderIcon(providerID: row.providerID, size: 14)
+        Text("\(row.providerName) · \(row.label)")
+          .font(.system(size: 10, weight: .medium, design: .rounded))
+          .lineLimit(1)
+        Spacer()
+        if let resetAt = row.resetAt {
+          Text(desktopResetLabel(resetAt))
+            .font(.system(size: 8, design: .rounded))
+            .foregroundStyle(routerMuted)
+        }
+        Text("\(Int(row.usedPercent.rounded()))%")
+          .font(.system(size: 10, weight: .semibold, design: .rounded))
+          .monospacedDigit()
+          .foregroundStyle(tint)
+      }
+      GeometryReader { geometry in
+        ZStack(alignment: .leading) {
+          Capsule().fill(Color.white.opacity(0.08))
+          Capsule()
+            .fill(tint)
+            .frame(width: max(3, geometry.size.width * min(1, row.usedPercent / 100)))
+        }
+      }
+      .frame(height: 4)
+    }
+  }
+}
+
+private func desktopResetLabel(_ epoch: TimeInterval) -> String {
+  let seconds = epoch - Date().timeIntervalSince1970
+  if seconds <= 0 { return "resets soon" }
+  let minutes = Int(seconds / 60)
+  if minutes < 60 { return "resets in \(minutes)m" }
+  let hours = minutes / 60
+  if hours < 24 { return "resets in \(hours)h" }
+  return "resets in \(hours / 24)d \(hours % 24)h"
 }
