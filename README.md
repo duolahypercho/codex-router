@@ -227,8 +227,9 @@ Verify that the Windows `config.toml` uses a path that the WSL runtime can read:
 model_catalog_json = "/mnt/c/Users/<WindowsUser>/.codex/codex-router/merged-models.json"
 ```
 
-A Windows-style path such as `C:\Users\...` may not resolve correctly when Codex
-is running through WSL.
+When the Codex runtime is executing inside WSL, a Windows-style path such as
+`C:\Users\...` is not readable as a Linux filesystem path. Use the corresponding
+`/mnt/c/...` path instead.
 
 If setup appears successful but the Desktop model picker does not change, check
 which Codex home was modified before rerunning setup.
