@@ -79,6 +79,14 @@ approval_policy = "never"
         `openai_base_url = "http://127.0.0.1:46192/_codex-router/${CALLER_KEY}/v1"`,
       ),
     );
+    assert.match(
+      configured,
+      /^experimental_realtime_webrtc_call_base_url = "https:\/\/chatgpt\.com\/backend-api\/codex"$/m,
+    );
+    assert.match(
+      configured,
+      /^experimental_realtime_ws_base_url = "https:\/\/api\.openai\.com\/v1"$/m,
+    );
     assert.match(configured, /model_reasoning_effort = "xhigh"/);
     assert.match(configured, /\[profiles\.work\]/);
     assert.match(configured, /approval_policy = "never"/);
@@ -106,12 +114,71 @@ approval_policy = "never"
     const restored = readFileSync(configPath, "utf8");
     assert.doesNotMatch(
       restored,
-      /codex-router-(?:provider-)?managed|openai_base_url|model_catalog_json/,
+      /codex-router-(?:provider-)?managed|openai_base_url|model_catalog_json|experimental_realtime_(?:webrtc_call|ws)_base_url/,
     );
     assert.match(restored, /model = "gpt-5\.6-sol"/);
     assert.match(restored, /model_provider = "openai"/);
     assert.match(restored, /model_reasoning_effort = "xhigh"/);
     assert.match(restored, /\[profiles\.work\]/);
+  } finally {
+    rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
+test("config manager preserves user-owned realtime endpoints", () => {
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), "codex-router-realtime-"));
+  const configPath = path.join(codexHome, "config.toml");
+  const original = `experimental_realtime_webrtc_call_base_url = "https://voice.example/calls"
+experimental_realtime_ws_base_url = "wss://voice.example/live"
+chatgpt_base_url = "https://chat.example/backend-api/"
+`;
+  writeFileSync(configPath, original, { mode: 0o600 });
+
+  try {
+    run("enable", codexHome);
+    const enabled = readFileSync(configPath, "utf8");
+    assert.equal(
+      (enabled.match(/^experimental_realtime_webrtc_call_base_url\s*=/gm) || []).length,
+      1,
+    );
+    assert.equal(
+      (enabled.match(/^experimental_realtime_ws_base_url\s*=/gm) || []).length,
+      1,
+    );
+    assert.match(enabled, /experimental_realtime_webrtc_call_base_url = "https:\/\/voice\.example\/calls"/);
+    assert.match(enabled, /experimental_realtime_ws_base_url = "wss:\/\/voice\.example\/live"/);
+
+    run("disable", codexHome);
+    assert.equal(readFileSync(configPath, "utf8"), original);
+  } finally {
+    rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
+test("config manager derives native Voice calls from a custom ChatGPT base URL", () => {
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), "codex-router-voice-base-"));
+  const configPath = path.join(codexHome, "config.toml");
+  writeFileSync(
+    configPath,
+    `chatgpt_base_url = "https://chat.example/backend-api/"
+`,
+    { mode: 0o600 },
+  );
+
+  try {
+    run("enable", codexHome);
+    const enabled = readFileSync(configPath, "utf8");
+    assert.match(
+      enabled,
+      /^experimental_realtime_webrtc_call_base_url = "https:\/\/chat\.example\/backend-api\/codex"$/m,
+    );
+
+    run("disable", codexHome);
+    assert.equal(
+      readFileSync(configPath, "utf8"),
+      `chatgpt_base_url = "https://chat.example/backend-api/"
+`,
+    );
   } finally {
     rmSync(codexHome, { recursive: true, force: true });
   }

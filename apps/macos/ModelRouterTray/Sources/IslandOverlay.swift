@@ -240,11 +240,11 @@ private struct IslandOverlayView: View {
       }
       if let weeklyUsedPercent {
         VStack(alignment: .trailing, spacing: 0) {
-          Text("\(Int(weeklyUsedPercent.rounded()))%")
+          Text("\(Int((100 - weeklyUsedPercent).rounded()))%")
             .font(.system(size: 10, weight: .semibold, design: .monospaced))
             .foregroundStyle(.white.opacity(0.9))
             .monospacedDigit()
-          Text("WEEKLY USED")
+          Text("WEEKLY LEFT")
             .font(.system(size: 6.5, weight: .semibold, design: .monospaced))
             .foregroundStyle(routerMuted)
         }

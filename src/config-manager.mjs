@@ -36,6 +36,10 @@ const endMarker = "# END codex-router-managed";
 const providerStartMarker = "# BEGIN codex-router-provider-managed";
 const providerEndMarker = "# END codex-router-provider-managed";
 const routerProviderId = "codex-router";
+const defaultChatgptBaseUrl = "https://chatgpt.com/backend-api";
+const defaultRealtimeWebsocketBaseUrl = "https://api.openai.com/v1";
+const realtimeCallBaseUrlKey = "experimental_realtime_webrtc_call_base_url";
+const realtimeWebsocketBaseUrlKey = "experimental_realtime_ws_base_url";
 const markerPairs = [
   [startMarker, endMarker],
   [providerStartMarker, providerEndMarker],
@@ -124,6 +128,15 @@ function rootValue(lines, key) {
 
 function rootHasValue(lines, key) {
   return lines.some((line) => new RegExp(`^\\s*${key}\\s*=`).test(line));
+}
+
+function nativeRealtimeCallBaseUrl(lines) {
+  const chatgptBaseUrl = (
+    rootValue(lines, "chatgpt_base_url") || defaultChatgptBaseUrl
+  ).replace(/\/+$/, "");
+  return chatgptBaseUrl.endsWith("/codex")
+    ? chatgptBaseUrl
+    : `${chatgptBaseUrl}/codex`;
 }
 
 function replaceRootValue(contents, key, value) {
@@ -314,11 +327,25 @@ function enabledContents(contents) {
   if (existingCatalog && existingCatalog !== MERGED_CATALOG_PATH) {
     throw new Error(`Refusing to replace user-owned model_catalog_json: ${existingCatalog}`);
   }
+  const managedRealtimeOverrides = [];
+  // Codex Voice uses a WebRTC call plus a sideband WebSocket. Keep both on
+  // Codex's native endpoints instead of inheriting the Responses-only router URL.
+  if (!rootHasValue(rootLines, realtimeCallBaseUrlKey)) {
+    managedRealtimeOverrides.push(
+      `${realtimeCallBaseUrlKey} = ${JSON.stringify(nativeRealtimeCallBaseUrl(rootLines))}`,
+    );
+  }
+  if (!rootHasValue(rootLines, realtimeWebsocketBaseUrlKey)) {
+    managedRealtimeOverrides.push(
+      `${realtimeWebsocketBaseUrlKey} = ${JSON.stringify(defaultRealtimeWebsocketBaseUrl)}`,
+    );
+  }
   rootLines.push(
     "",
     startMarker,
     `openai_base_url = ${JSON.stringify(routerBaseUrl)}`,
     `model_catalog_json = ${JSON.stringify(MERGED_CATALOG_PATH)}`,
+    ...managedRealtimeOverrides,
     endMarker,
   );
   const tableLines = trimBlankEdges(cleaned.tableLines);

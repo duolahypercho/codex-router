@@ -156,6 +156,26 @@
         ],
         "prompt": "Ollama Cloud API key"
       }
+    },
+    {
+      "id": "minimax-token-plan",
+      "displayName": "MiniMax Token Plan",
+      "kind": "openai-compatible",
+      "ownedBy": "minimax",
+      "baseUrl": "https://api.minimax.io/v1",
+      "baseUrlEnv": "MINIMAX_BASE_URL",
+      "credential": {
+        "environment": [
+          "MINIMAX_API_KEY",
+          "MINIMAX_TOKEN_PLAN_API_KEY"
+        ],
+        "file": "minimax-token-plan-key.secret",
+        "legacyFiles": [],
+        "keychainServices": [
+          "codex-router-minimax-token-plan"
+        ],
+        "prompt": "MiniMax Token Plan API key"
+      }
     }
   ],
   "models": [
@@ -629,6 +649,31 @@
       ],
       "requestProfile": "ollama-cloud",
       "compHash": "ollama-cloud-deepseek-v4-pro-v1"
+    },
+    {
+      "slug": "minimax-token-plan/minimax-m3",
+      "gatewayModel": "minimax-token-plan-minimax-m3",
+      "upstreamModel": "MiniMax-M3",
+      "provider": "minimax-token-plan",
+      "listed": true,
+      "displayName": "MiniMax M3",
+      "description": "MiniMax M3 using a MiniMax Token Plan API key.",
+      "priority": 18,
+      "defaultEffort": "high",
+      "reasoningLevels": [
+        {
+          "effort": "high",
+          "description": "Adaptive reasoning for agentic coding"
+        }
+      ],
+      "contextWindow": 1000000,
+      "autoCompact": 900000,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "requestProfile": "minimax-m3",
+      "compHash": "minimax-token-plan-minimax-m3-v1"
     }
   ]
 }

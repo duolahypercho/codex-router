@@ -318,9 +318,29 @@ function normalizeRoutedInput(input) {
     });
 }
 
+// OpenAI-issued reasoning `encrypted_content` is an opaque token (Fernet-style,
+// e.g. "gAAAAAB...") with no whitespace. Some local Responses providers (notably
+// Ollama) mimic the reasoning-item shape but fill `encrypted_content` with the
+// plain-text reasoning summary. Codex stores those items, and when the
+// conversation is later replayed to OpenAI's native Responses API, OpenAI
+// rejects the undecryptable blob with "Encrypted content could not be decrypted
+// or parsed." Strip the non-opaque value before sending to native; the item's
+// `summary` still carries the readable reasoning.
+function isOpaqueEncryptedContent(value) {
+  return typeof value === "string" && value.length > 0 && !/\s/.test(value);
+}
+
+function sanitizeReasoningForNative(item) {
+  if (item?.encrypted_content === undefined) return item;
+  if (isOpaqueEncryptedContent(item.encrypted_content)) return item;
+  const { encrypted_content, ...rest } = item;
+  return rest;
+}
+
 function normalizeNativeInput(input) {
   if (!Array.isArray(input)) return input;
   return input.map((item) => {
+    if (item?.type === "reasoning") return sanitizeReasoningForNative(item);
     if (item?.type !== "compaction") return item;
     const summary = decodeSummary(item.encrypted_content);
     return summary === undefined
@@ -709,6 +729,7 @@ const server = http.createServer((request, response) => {
 });
 
 server.on("upgrade", (_request, socket) => {
+  socket.on("error", () => {});
   socket.end(
     "HTTP/1.1 426 Upgrade Required\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
   );

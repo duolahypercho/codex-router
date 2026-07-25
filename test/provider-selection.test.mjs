@@ -9,7 +9,7 @@ process.env.CODEX_HOME = path.join(testRoot, "codex");
 process.env.CODEX_ROUTER_STATE_DIR = path.join(testRoot, "state");
 process.env.KIMI_CODE_HOME = path.join(testRoot, "kimi-code");
 process.env.GROK_AUTH_PATH = path.join(testRoot, "grok", "auth.json");
-for (const name of ["ANTHROPIC_API_KEY", "DEEPSEEK_API_KEY", "KIMI_API_KEY", "MOONSHOT_API_KEY", "XAI_API_KEY", "GROK_API_KEY"]) {
+for (const name of ["ANTHROPIC_API_KEY", "DEEPSEEK_API_KEY", "KIMI_API_KEY", "MINIMAX_API_KEY", "MINIMAX_TOKEN_PLAN_API_KEY", "MOONSHOT_API_KEY", "XAI_API_KEY", "GROK_API_KEY"]) {
   delete process.env[name];
 }
 
@@ -38,6 +38,7 @@ test("provider selection keeps backward compatibility and can hide the final pro
       "zai-coding",
       "qwen-plan",
       "ollama-cloud",
+      "minimax-token-plan",
     ]);
     process.env.KIMI_API_KEY = "TEST_ENVIRONMENT_ONLY_KEY";
     assert.deepEqual(configuredProviderIds(), []);

@@ -38,6 +38,8 @@ function isolatedEnvironment(testRoot) {
     KIMI_API_KEY: "",
     MOONSHOT_API_KEY: "",
     DEEPSEEK_API_KEY: "",
+    MINIMAX_API_KEY: "",
+    MINIMAX_TOKEN_PLAN_API_KEY: "",
     XAI_API_KEY: "",
     GROK_API_KEY: "",
     ANTHROPIC_API_KEY: "",
@@ -60,6 +62,7 @@ test("provider onboarding reports install, login, and API key actions without se
     assert.equal(byId["kimi-api"].action, "add-key");
     assert.equal(byId["grok-api"].action, "add-key");
     assert.equal(byId["anthropic-api"].action, "add-key");
+    assert.equal(byId["minimax-token-plan"].action, "add-key");
     assert.equal("source" in byId["kimi-api"], false);
   } finally {
     rmSync(testRoot, { recursive: true, force: true });

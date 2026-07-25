@@ -35,6 +35,8 @@ test("automatic selection-only setup exposes only configured providers", () => {
           DEEPSEEK_API_KEY: "",
           KIMI_API_KEY: "",
           MOONSHOT_API_KEY: "",
+          MINIMAX_API_KEY: "",
+          MINIMAX_TOKEN_PLAN_API_KEY: "",
           XAI_API_KEY: "",
           GROK_API_KEY: "",
         },
