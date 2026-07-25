@@ -51,3 +51,18 @@ test("alias reads pick up rewritten state and reverse lookups resolve", () => {
   assert.equal(nativeAliasFor("kimi-oauth/k3"), "gpt-5.5");
   assert.equal(nativeAliasFor("grok-oauth/grok-4.5"), undefined);
 });
+
+test("alias reads see a same-size rewrite made within one clock tick", () => {
+  const write = (target) =>
+    writeFileSync(
+      NATIVE_ALIAS_PATH,
+      `${JSON.stringify({ version: 1, aliases: { "gpt-5.5": target } })}\n`,
+      { mode: 0o600 },
+    );
+  write("kimi-oauth/k3");
+  assert.deepEqual(readNativeAliases(), { "gpt-5.5": "kimi-oauth/k3" });
+  // Same byte length as the first write, so only a sub-millisecond mtime
+  // difference distinguishes the two revisions.
+  write("kimi-oauth/k9");
+  assert.deepEqual(readNativeAliases(), { "gpt-5.5": "kimi-oauth/k9" });
+});
