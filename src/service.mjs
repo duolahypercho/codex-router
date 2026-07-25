@@ -19,6 +19,12 @@ if (!script) {
 const command = process.argv[2] || "status";
 const mutatingCommands = new Set(["install", "uninstall", "start", "stop", "restart"]);
 const readinessCommands = new Set(["install", "start", "restart"]);
+// start.mjs allows the LiteLLM gateway 300s to cold start, so the readiness
+// wait has to cover at least that. A shorter wait reports failure while the
+// service is still booting, and the installer's rollback then uninstalls the
+// service and reverts the app config out from under a router that goes on to
+// come up healthy seconds later.
+const READINESS_TIMEOUT_MS = 300_000;
 
 async function runServiceCommand() {
   const result = spawnSync(
@@ -30,9 +36,11 @@ async function runServiceCommand() {
   if (result.status !== 0) return result.status ?? 1;
   if (!readinessCommands.has(command)) return 0;
 
-  const health = await waitForRouterHealth();
+  const health = await waitForRouterHealth({ timeoutMs: READINESS_TIMEOUT_MS });
   if (health.ok) return 0;
-  console.error(`Router did not become healthy within 30 seconds: ${health.error}`);
+  console.error(
+    `Router did not become healthy within ${READINESS_TIMEOUT_MS / 1_000} seconds: ${health.error}`,
+  );
   return 1;
 }
 
