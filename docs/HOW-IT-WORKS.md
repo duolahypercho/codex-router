@@ -74,7 +74,7 @@ appear there. Aliased entries reuse the allowlisted slugs while carrying the
 external model's display name, description, and reasoning levels; each aliased
 model also keeps a hidden entry under its canonical slug so routing, doctor
 checks, and saved configs continue to resolve. `native-aliases.json` records
-the slug mapping, the router consults it when dispatching `/responses`, and
+the slug mapping; the router consults it when dispatching `/responses`, and
 `control model-set`/`auth-mode` write the alias slug into the Codex config so
 pickers highlight the active model. Signed-in catalog builds clear the alias
 map, which restores native GPT routing.
