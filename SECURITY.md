@@ -77,7 +77,7 @@ The router, LiteLLM gateway, OAuth forwarder, and API forwarder bind only to
 it in the managed URL and Cursor sends it as the configured gateway credential.
 Internal gateway and forwarder routes require a separate random service key,
 and credential-detail health responses are authenticated.
-Model requests must use JSON, requests with browser-origin headers are rejected,
+Model requests must use JSON; requests with browser-origin headers are rejected,
 and the router sends no CORS permission headers. This remains compatible with
 Codex API-key sessions that do not attach a bearer header to the loopback hop.
 
