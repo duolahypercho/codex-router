@@ -115,7 +115,7 @@ aliases remain hidden compatibility routes and are not advertised to new users.
 
 
 The Ollama Cloud entries bill through an ollama.com account and can host the
-same model families as other providers under separate quota. Matching entries
+same model families as other providers under a separate quota. Matching entries
 (for example DeepSeek V4 Pro) intentionally coexist with the vendor-direct
 providers because credentials and billing differ.
 The Qwen entries default to the Alibaba Model Studio Token Plan endpoint in
