@@ -284,18 +284,22 @@ function snapshot(contents) {
   const { rootLines } = splitRoot(contents);
   const baseUrl = rootValue(rootLines, "openai_base_url");
   const catalog = rootValue(rootLines, "model_catalog_json");
+  const modelProvider = rootValue(rootLines, "model_provider") || "openai";
+  const providerModeStatePresent = existsSync(CODEX_PROVIDER_MODE_PATH);
   return {
     mode:
       isManagedRouterBaseUrl(baseUrl) && catalog === MERGED_CATALOG_PATH
         ? "router"
         : "native",
     model: rootValue(rootLines, "model") || null,
-    model_provider: rootValue(rootLines, "model_provider") || "openai",
-    login_free: rootValue(rootLines, "model_provider") === routerProviderId,
+    model_provider: modelProvider,
+    provider_mode_managed:
+      [routerProviderId, authenticatedRouterProviderId].includes(modelProvider) &&
+      providerModeStatePresent,
+    login_free: modelProvider === routerProviderId,
     login_free_managed:
-      rootValue(rootLines, "model_provider") === routerProviderId &&
-      existsSync(CODEX_PROVIDER_MODE_PATH),
-    provider_mode_state_present: existsSync(CODEX_PROVIDER_MODE_PATH),
+      modelProvider === routerProviderId && providerModeStatePresent,
+    provider_mode_state_present: providerModeStatePresent,
     openai_base_url: baseUrl ? redactCallerUrl(baseUrl) : null,
     model_catalog_json: catalog || null,
     config_protected: privateFileIsProtected(CONFIG_PATH),

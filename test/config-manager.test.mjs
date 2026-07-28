@@ -62,6 +62,7 @@ approval_policy = "never"
     assert.equal(enabled.mode, "router");
     assert.equal(enabled.model, "gpt-5.6-sol");
     assert.equal(enabled.model_provider, "codex-router-openai");
+    assert.equal(enabled.provider_mode_managed, true);
     assert.equal(enabled.config_protected, true);
     assert.equal(
       enabled.openai_base_url,
@@ -237,6 +238,7 @@ approval_policy = "never"
     const restored = run("login-free-disable", codexHome, stateDir);
     assert.equal(restored.mode, "router");
     assert.equal(restored.model_provider, "codex-router-openai");
+    assert.equal(restored.provider_mode_managed, true);
     assert.equal(restored.login_free, false);
     assert.equal(restored.model, "gpt-5.6-sol");
     assert.equal(existsSync(providerModePath), true);
