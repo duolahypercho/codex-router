@@ -251,7 +251,7 @@ test("login-free control selects a ready external model and restores Codex defau
     const disabled = runMode("off");
     assert.equal(disabled.login_free, false);
     assert.equal(disabled.model, "gpt-5.6-sol");
-    assert.equal(disabled.model_provider, "openai");
+    assert.equal(disabled.model_provider, "codex-router-openai");
   } finally {
     rmSync(stateDir, { recursive: true, force: true });
   }

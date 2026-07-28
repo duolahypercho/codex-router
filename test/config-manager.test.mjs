@@ -61,7 +61,7 @@ approval_policy = "never"
     const enabled = run("enable", codexHome);
     assert.equal(enabled.mode, "router");
     assert.equal(enabled.model, "gpt-5.6-sol");
-    assert.equal(enabled.model_provider, "openai");
+    assert.equal(enabled.model_provider, "codex-router-openai");
     assert.equal(enabled.config_protected, true);
     assert.equal(
       enabled.openai_base_url,
@@ -73,7 +73,10 @@ approval_policy = "never"
     assert.match(configured, /# BEGIN codex-router-managed/);
     assert.match(configured, /# BEGIN codex-router-provider-managed/);
     assert.match(configured, /\[model_providers\.codex-router\]/);
+    assert.match(configured, /\[model_providers\.codex-router-openai\]/);
     assert.match(configured, /wire_api = "responses"/);
+    assert.match(configured, /requires_openai_auth = true/);
+    assert.match(configured, /supports_websockets = false/);
     assert.ok(
       configured.includes(
         `openai_base_url = "http://127.0.0.1:46192/_codex-router/${CALLER_KEY}/v1"`,
@@ -108,6 +111,15 @@ approval_policy = "never"
       1,
     );
 
+    writeFileSync(
+      configPath,
+      readFileSync(configPath, "utf8").replace(
+        'model = "gpt-5.6-sol"',
+        'model = "gpt-5.6-terra"',
+      ),
+      { mode: 0o600 },
+    );
+
     const disabled = run("disable", codexHome);
     assert.equal(disabled.mode, "native");
     assert.equal(disabled.config_protected, true);
@@ -116,7 +128,7 @@ approval_policy = "never"
       restored,
       /codex-router-(?:provider-)?managed|openai_base_url|model_catalog_json|experimental_realtime_(?:webrtc_call|ws)_base_url/,
     );
-    assert.match(restored, /model = "gpt-5\.6-sol"/);
+    assert.match(restored, /model = "gpt-5\.6-terra"/);
     assert.match(restored, /model_provider = "openai"/);
     assert.match(restored, /model_reasoning_effort = "xhigh"/);
     assert.match(restored, /\[profiles\.work\]/);
@@ -224,12 +236,20 @@ approval_policy = "never"
 
     const restored = run("login-free-disable", codexHome, stateDir);
     assert.equal(restored.mode, "router");
-    assert.equal(restored.model_provider, "openai");
+    assert.equal(restored.model_provider, "codex-router-openai");
     assert.equal(restored.login_free, false);
     assert.equal(restored.model, "gpt-5.6-sol");
+    assert.equal(existsSync(providerModePath), true);
+    assert.match(
+      readFileSync(configPath, "utf8"),
+      /^model_provider = "codex-router-openai"$/m,
+    );
+    assert.match(readFileSync(configPath, "utf8"), /^model = "gpt-5.6-sol"$/m);
+
+    const disabled = run("disable", codexHome, stateDir);
+    assert.equal(disabled.model_provider, "openai");
     assert.equal(existsSync(providerModePath), false);
     assert.match(readFileSync(configPath, "utf8"), /^model_provider = "openai"$/m);
-    assert.match(readFileSync(configPath, "utf8"), /^model = "gpt-5.6-sol"$/m);
   } finally {
     rmSync(codexHome, { recursive: true, force: true });
   }
@@ -292,6 +312,11 @@ test("config manager adopts the exact legacy router-owned provider table", () =>
       .replace("# BEGIN codex-router-provider-managed\n", "")
       .replace("\n# END codex-router-provider-managed", "")
       .replace(
+        /\[model_providers\.codex-router-openai\][\s\S]*?(?=\n\[model_providers\.codex-router\])\n/,
+        "",
+      )
+      .replace("\nsupports_websockets = false", "")
+      .replace(
         'name = "Codex Router (external models)"',
         'name = "Codex Router (extra providers)"',
       )
@@ -304,9 +329,14 @@ test("config manager adopts the exact legacy router-owned provider table", () =>
     assert.equal(enabled.model, "kimi-oauth/kimi-k2.5");
     const migrated = readFileSync(configPath, "utf8");
     assert.equal((migrated.match(/\[model_providers\.codex-router\]/g) || []).length, 1);
+    assert.equal(
+      (migrated.match(/\[model_providers\.codex-router-openai\]/g) || []).length,
+      1,
+    );
     assert.match(migrated, /# BEGIN codex-router-provider-managed/);
     assert.match(migrated, /name = "Codex Router \(external models\)"/);
-    assert.doesNotMatch(migrated, /extra providers|requires_openai_auth/);
+    assert.doesNotMatch(migrated, /extra providers/);
+    assert.match(migrated, /requires_openai_auth = true/);
   } finally {
     rmSync(codexHome, { recursive: true, force: true });
   }
