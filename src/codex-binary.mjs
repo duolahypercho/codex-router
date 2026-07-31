@@ -28,10 +28,22 @@ export function findCodexBinary() {
   if (direct) return direct;
   const finder = process.platform === "win32" ? "where.exe" : "which";
   try {
-    return execFileSync(finder, ["codex"], {
+    const found = execFileSync(finder, ["codex"], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
-    }).trim().split(/\r?\n/)[0] || undefined;
+    }).trim().split(/\r?\n/).filter(Boolean);
+    if (process.platform === "win32") {
+      // `where codex` lists the extensionless npm shim first (e.g.
+      // `...\npm\codex`), which Node cannot spawn directly. Prefer the
+      // explicit `.cmd`/`.exe` entries it also returns so callers get a
+      // directly executable path.
+      return (
+        found.find((candidate) => candidate.toLowerCase().endsWith(".cmd")) ||
+        found.find((candidate) => candidate.toLowerCase().endsWith(".exe")) ||
+        found[0]
+      );
+    }
+    return found[0];
   } catch {
     return undefined;
   }
@@ -50,11 +62,18 @@ export function requireCodexBinary() {
 export function codexIsAuthenticated() {
   const binary = findCodexBinary();
   if (!binary) return false;
+  const options = { timeout: 10_000, stdio: "ignore" };
   try {
-    execFileSync(binary, ["login", "status"], {
-      timeout: 10_000,
-      stdio: "ignore",
-    });
+    // On Windows, npm-installed CLIs resolve to a `.cmd` shim, which Node
+    // cannot spawn without a shell (throws ENOENT/EINVAL, silently
+    // misreporting the user as logged out and dropping native OpenAI models
+    // from the merged catalog). Mirror the shell:true handling already used
+    // by catalog.execCodex().
+    if (process.platform === "win32" && binary.toLowerCase().endsWith(".cmd")) {
+      execFileSync(binary, ["login", "status"], { ...options, shell: true });
+    } else {
+      execFileSync(binary, ["login", "status"], options);
+    }
     return true;
   } catch {
     return false;
