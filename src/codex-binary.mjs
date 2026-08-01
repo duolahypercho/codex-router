@@ -59,21 +59,29 @@ export function requireCodexBinary() {
   return binary;
 }
 
+// On Windows, npm-installed CLIs resolve to a `.cmd` shim, which Node cannot
+// spawn without a shell (throws ENOENT/EINVAL). Centralize that handling here so
+// every codex invocation goes through one path. `findCodexBinary()` already
+// prefers the explicit `.cmd`, so callers can pass the resolved binary through
+// without re-checking the extension.
+export function runCodex(args, options = {}) {
+  const binary = requireCodexBinary();
+  const merged = { ...options };
+  if (
+    process.platform === "win32" &&
+    binary.toLowerCase().endsWith(".cmd") &&
+    merged.shell === undefined
+  ) {
+    merged.shell = true;
+  }
+  return execFileSync(binary, args, merged);
+}
+
 export function codexIsAuthenticated() {
   const binary = findCodexBinary();
   if (!binary) return false;
-  const options = { timeout: 10_000, stdio: "ignore" };
   try {
-    // On Windows, npm-installed CLIs resolve to a `.cmd` shim, which Node
-    // cannot spawn without a shell (throws ENOENT/EINVAL, silently
-    // misreporting the user as logged out and dropping native OpenAI models
-    // from the merged catalog). Mirror the shell:true handling already used
-    // by catalog.execCodex().
-    if (process.platform === "win32" && binary.toLowerCase().endsWith(".cmd")) {
-      execFileSync(binary, ["login", "status"], { ...options, shell: true });
-    } else {
-      execFileSync(binary, ["login", "status"], options);
-    }
+    runCodex(["login", "status"], { timeout: 10_000, stdio: "ignore" });
     return true;
   } catch {
     return false;

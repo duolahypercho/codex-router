@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
@@ -16,7 +15,7 @@ import {
   NATIVE_ALIAS_PATH,
   NATIVE_CATALOG_PATH,
 } from "./paths.mjs";
-import { codexIsAuthenticated, requireCodexBinary } from "./codex-binary.mjs";
+import { codexIsAuthenticated, runCodex } from "./codex-binary.mjs";
 import { syncRoutedCodexAgents } from "./codex-agent-catalog.mjs";
 import { MODEL_BY_SLUG } from "./model-registry.mjs";
 import { buildNativeAliasAssignments } from "./native-alias.mjs";
@@ -40,20 +39,17 @@ function atomicJson(target, value) {
 function captureNative() {
   const args = ["debug", "models"];
   if (bundled) args.push("--bundled");
+  const options = {
+    encoding: "utf8",
+    timeout: 30_000,
+    maxBuffer: 32 * 1024 * 1024,
+  };
   let output;
   try {
-    output = execFileSync(requireCodexBinary(), args, {
-      encoding: "utf8",
-      timeout: 30_000,
-      maxBuffer: 32 * 1024 * 1024,
-    });
+    output = runCodex(args, options);
   } catch (error) {
     if (bundled) throw error;
-    output = execFileSync(requireCodexBinary(), ["debug", "models", "--bundled"], {
-      encoding: "utf8",
-      timeout: 30_000,
-      maxBuffer: 32 * 1024 * 1024,
-    });
+    output = runCodex(["debug", "models", "--bundled"], options);
   }
   const parsed = JSON.parse(output);
   if (!parsed || !Array.isArray(parsed.models) || parsed.models.length === 0) {
