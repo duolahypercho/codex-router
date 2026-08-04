@@ -35,10 +35,10 @@ export function findCodexBinary() {
     if (process.platform === "win32") {
       // `where codex` lists the extensionless npm shim first (e.g.
       // `...\npm\codex`), which Node cannot spawn directly. Prefer the
-      // explicit `.cmd`/`.exe` entries it also returns so callers get a
-      // directly executable path.
+      // explicit `.cmd`/`.bat`/`.exe` entries it also returns so callers get
+      // a directly executable path.
       return (
-        found.find((candidate) => candidate.toLowerCase().endsWith(".cmd")) ||
+        found.find((candidate) => /\.(cmd|bat)$/i.test(candidate)) ||
         found.find((candidate) => candidate.toLowerCase().endsWith(".exe")) ||
         found[0]
       );
@@ -59,22 +59,24 @@ export function requireCodexBinary() {
   return binary;
 }
 
-// On Windows, npm-installed CLIs resolve to a `.cmd` shim, which Node cannot
-// spawn without a shell (throws ENOENT/EINVAL). Centralize that handling here so
-// every codex invocation goes through one path. `findCodexBinary()` already
-// prefers the explicit `.cmd`, so callers can pass the resolved binary through
-// without re-checking the extension.
+// On Windows, npm-installed CLIs resolve to a `.cmd`/`.bat` shim, which Node
+// cannot spawn without a shell (throws ENOENT/EINVAL). Centralize that handling
+// here so every codex invocation goes through one path. `findCodexBinary()`
+// already prefers the explicit shim, so callers can pass the resolved binary
+// through without re-checking the extension.
 export function runCodex(args, options = {}) {
   const binary = requireCodexBinary();
   const merged = { ...options };
-  if (
-    process.platform === "win32" &&
-    binary.toLowerCase().endsWith(".cmd") &&
-    merged.shell === undefined
-  ) {
+  const needsShell =
+    process.platform === "win32" && /\.(cmd|bat)$/i.test(binary);
+  if (needsShell && merged.shell === undefined) {
     merged.shell = true;
   }
-  return execFileSync(binary, args, merged);
+  // With shell:true, Node concatenates file+args without quoting, so a path
+  // containing spaces (e.g. C:\Users\John Smith\...) would split into two
+  // tokens and fail. Quote the command; cmd.exe /d /s /c strips the outer
+  // quotes correctly, and this branch is Windows-only.
+  return execFileSync(merged.shell ? `"${binary}"` : binary, args, merged);
 }
 
 export function codexIsAuthenticated() {
