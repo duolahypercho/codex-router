@@ -132,6 +132,12 @@ function rewriteModelMessages(messages, model) {
   return next;
 }
 
+function normalizeNativeModel(model) {
+  return Object.hasOwn(model, "supports_reasoning_summaries")
+    ? model
+    : { ...model, supports_reasoning_summaries: false };
+}
+
 export function routedModel(template, model) {
   const next = {
     ...template,
@@ -190,7 +196,9 @@ export function buildMergedCatalog(native, routedModelsList, { includeNative = t
     throw new Error("Native model catalog is empty.");
   }
   const models = new Map(
-    includeNative ? native.models.map((model) => [model.slug, model]) : [],
+    includeNative
+      ? native.models.map((model) => [model.slug, normalizeNativeModel(model)])
+      : [],
   );
   for (const model of routedModelsList) {
     models.set(model.slug, routedModel(template, model));

@@ -66,6 +66,7 @@ test("merged catalog preserves native GPT identity while rewriting routed models
   const merged = buildMergedCatalog({ models: [template] }, [grok]);
   const bySlug = new Map(merged.map((model) => [model.slug, model]));
   assert.match(bySlug.get("gpt-5.5").base_instructions, /based on GPT-5/);
+  assert.equal(bySlug.get("gpt-5.5").supports_reasoning_summaries, false);
   assert.match(bySlug.get("grok-oauth/grok-4.5").base_instructions, /based on Grok 4\.5/);
   assert.doesNotMatch(bySlug.get("grok-oauth/grok-4.5").base_instructions, /GPT-5/);
 });

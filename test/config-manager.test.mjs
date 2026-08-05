@@ -190,6 +190,29 @@ model_reasoning_effort = "high"
   }
 });
 
+test("config manager does not add the legacy agents scalar to modern agent configs", () => {
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), "codex-router-modern-agents-"));
+  const configPath = path.join(codexHome, "config.toml");
+  const original = `[agents.gsd-example]
+description = "Example agent"
+config_file = "/tmp/example-agent.toml"
+`;
+  writeFileSync(configPath, original, { mode: 0o600 });
+
+  try {
+    run("enable", codexHome);
+    const enabled = readFileSync(configPath, "utf8");
+    assert.doesNotMatch(enabled, /codex-router-agent-concurrency-managed/);
+    assert.doesNotMatch(enabled, /^\[agents\]$/m);
+    assert.match(enabled, /^\[agents\.gsd-example\]$/m);
+
+    run("disable", codexHome);
+    assert.equal(readFileSync(configPath, "utf8").trimStart(), original);
+  } finally {
+    rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
 test("config manager preserves user-owned realtime endpoints", () => {
   const codexHome = mkdtempSync(path.join(os.tmpdir(), "codex-router-realtime-"));
   const configPath = path.join(codexHome, "config.toml");
