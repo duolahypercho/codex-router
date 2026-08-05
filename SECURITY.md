@@ -118,10 +118,12 @@ diff -u ~/.codex/config.toml.pre-codex-router ~/.codex/config.toml
 
 ## Dependency and release hygiene
 
-LiteLLM is version-pinned because it processes prompts, tool calls, streams, and
-provider responses. Node dependencies are locked by `package-lock.json`. CI runs
-syntax, audit, and route/state tests on macOS, Linux, and Windows. Tagged source
-archives include SHA-256 checksums and GitHub build-provenance attestations.
+LiteLLM and every resolved Python dependency are pinned and hash-verified in
+`requirements/litellm.lock` because the gateway processes prompts, tool calls,
+streams, and provider responses. Node dependencies are locked by
+`package-lock.json`. CI runs syntax, audit, and route/state tests on macOS,
+Linux, and Windows. Tagged source archives include SHA-256 checksums and GitHub
+build-provenance attestations.
 
 The convenience bootstrap commands track the repository's default branch. Users
 who need a fully reviewable or pinned install should download a tagged archive,

@@ -72,7 +72,7 @@ if command -v uv >/dev/null 2>&1; then
   if [ ! -x .venv/bin/python ]; then
     uv venv --python 3.12 .venv
   fi
-  uv pip install --python .venv/bin/python 'litellm[proxy]==1.93.0'
+  uv pip sync --require-hashes --python .venv/bin/python requirements/litellm.lock
 else
   if ! command -v python3 >/dev/null 2>&1; then
     echo "Python 3.10+ or uv is required to install LiteLLM." >&2
@@ -81,7 +81,7 @@ else
   python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else "Python 3.10 or newer is required.")'
   python3 -m venv .venv
   .venv/bin/python -m pip install --upgrade pip
-  .venv/bin/python -m pip install 'litellm[proxy]==1.93.0'
+  .venv/bin/python -m pip install --require-hashes -r requirements/litellm.lock
 fi
 
 node src/secret.mjs ensure

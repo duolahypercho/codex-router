@@ -72,11 +72,20 @@ registry submissions; curated entries are explicitly local-only.
 
 ```sh
 npm ci
+uv venv --python 3.12 .venv
+uv pip sync --require-hashes --python .venv/bin/python requirements/litellm.lock
 npm run check
 npm test
 sh -n install.sh
 for file in bin/*; do sh -n "$file"; done
 npm audit --omit=dev
+```
+
+After verifying a compatible LiteLLM release, regenerate the committed lock with:
+
+```sh
+uv pip compile --universal --generate-hashes --python-version 3.10 \
+  requirements/litellm.in -o requirements/litellm.lock
 ```
 
 The test suite verifies native header forwarding, external credential
