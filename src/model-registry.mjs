@@ -99,6 +99,12 @@ function modelProblem(model, providers, slugs, gatewayModels) {
     return `model ${model.slug} has an invalid requestProfile`;
   }
   if (
+    model.protocol !== undefined &&
+    !["openai", "anthropic", "openai-responses"].includes(model.protocol)
+  ) {
+    return `model ${model.slug} has an unsupported API protocol`;
+  }
+  if (
     model.multiAgentVersion !== undefined &&
     !["v1", "v2"].includes(model.multiAgentVersion)
   ) {

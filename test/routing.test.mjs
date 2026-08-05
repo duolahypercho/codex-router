@@ -1131,11 +1131,11 @@ test("API forwarder health omits disabled API providers", async () => {
   }
 });
 
-test("API forwarder supports all DeepSeek V4 models and normalizes thinking", async () => {
+test("API forwarder supports DeepSeek V4 on the Responses API and normalizes thinking", async () => {
   const upstreamRequests = [];
   const upstream = await mockServer(async (request, response) => {
-    upstreamRequests.push({ headers: request.headers, body: await bodyJson(request) });
-    json(response, 200, { choices: [] });
+    upstreamRequests.push({ path: request.url, headers: request.headers, body: await bodyJson(request) });
+    json(response, 200, { output: [] });
   });
   const forwarderPort = await openPort();
   const forwarder = run("api-forwarder.mjs", {
@@ -1154,7 +1154,7 @@ test("API forwarder supports all DeepSeek V4 models and normalizes thinking", as
       ["deepseek-v4-pro", "deepseek-v4-pro", "max"],
     ]) {
       const response = await fetch(
-        `http://127.0.0.1:${forwarderPort}/v1/chat/completions`,
+        `http://127.0.0.1:${forwarderPort}/v1/responses`,
         {
           method: "POST",
           headers: {
@@ -1167,12 +1167,13 @@ test("API forwarder supports all DeepSeek V4 models and normalizes thinking", as
             model: gatewayModel,
             reasoning_effort: effort === "max" ? "xhigh" : "low",
             temperature: 0.7,
-            messages: [{ role: "user", content: "test" }],
+            input: "test",
           }),
         },
       );
       assert.equal(response.status, 200);
       const request = upstreamRequests.at(-1);
+      assert.equal(request.path, "/responses");
       assert.equal(request.headers.authorization, "Bearer TEST_DEEPSEEK_API_KEY");
       assert.equal(request.headers["chatgpt-account-id"], undefined);
       assert.equal(request.headers["x-codex-installation-id"], undefined);
@@ -1224,7 +1225,7 @@ test("API forwarder coalesces consecutive assistant messages so tool results fol
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          model: "deepseek-v4-pro",
+          model: "deepseek-legacy-reasoner",
           messages: [
             { role: "user", content: "run it" },
             { role: "assistant", tool_calls: [toolCall] },
@@ -1290,7 +1291,7 @@ test("API forwarder synthesizes missing tool results for incomplete tool_calls h
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          model: "deepseek-v4-flash",
+          model: "deepseek-legacy-reasoner",
           messages: [
             { role: "user", content: "continue after compact" },
             { role: "assistant", tool_calls: toolCalls },
@@ -1355,7 +1356,7 @@ test("API forwarder coalesces split assistant tool turns before synthesizing mis
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          model: "deepseek-v4-pro",
+          model: "deepseek-legacy-reasoner",
           messages: [
             { role: "user", content: "run it" },
             { role: "assistant", tool_calls: [toolCall] },

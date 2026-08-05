@@ -15,6 +15,7 @@ export function renderLiteLlmConfig() {
   const lines = ["model_list:"];
   for (const model of MODELS) {
     const provider = providerForModel(model);
+    const protocolSurface = model.protocol || provider.protocol;
     const apiBaseEnv = provider.kind === "oauth"
       ? provider.proxyBaseEnv
       : provider.protocol === "anthropic"
@@ -22,8 +23,8 @@ export function renderLiteLlmConfig() {
         : "CODEX_ROUTER_API_FORWARD_BASE_URL";
     const translatedModel =
       provider.kind === "oauth" ? model.upstreamModel : model.gatewayModel;
-    const protocol = provider.protocol === "anthropic" ? "anthropic" : "openai";
-    const responsesSurface = provider.protocol === "openai-responses";
+    const protocol = protocolSurface === "anthropic" ? "anthropic" : "openai";
+    const responsesSurface = protocolSurface === "openai-responses";
     lines.push(
       `  - model_name: ${yamlString(model.gatewayModel)}`,
       "    litellm_params:",
