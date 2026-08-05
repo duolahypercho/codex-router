@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- **Adapted the managed `[agents]` concurrency default to the installed Codex
+  build.** Some Codex builds (observed on 0.141-0.145) parse `[agents]` as a
+  pure role map and refuse to load any config containing the scalar, which
+  broke `codex login status` and `codex doctor` outright. The config manager
+  now probes the installed binary with a minimal config before writing the
+  scalar and skips it when the build rejects it, so builds that accept the
+  scalar keep the concurrency cap and strict builds keep a loadable config.
+- **Re-captured the native model catalog when the Codex build changes.** The
+  cached capture now records the Codex version that produced it and is
+  refreshed from `codex debug models` on mismatch, so a catalog captured by an
+  older build no longer feeds missing or stale capability fields (such as
+  `supports_reasoning_summaries`) into the merged catalog after an upgrade. If
+  the re-capture fails, the router keeps serving the previous capture and says
+  so instead of failing the rebuild.
+
 - **Removed the Cursor and opencode app targets.** The router now focuses on
   Codex only: `--target codex` is the sole installer target, the Cursor Chat
   Completions gateway and the opencode config manager/subagent generator are
