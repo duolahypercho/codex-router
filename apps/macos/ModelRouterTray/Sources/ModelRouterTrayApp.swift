@@ -41,25 +41,30 @@ struct ModelRouterTrayApp: App {
   @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
   var body: some Scene {
-    MenuBarExtra {
-      TrayView(store: appDelegate.store)
-        .frame(width: 352, height: 560)
-    } label: {
-      StatusItemLabel(store: appDelegate.store)
+    // The status item and popover are owned by AppDelegate so the menu-bar
+    // click path remains reliable across macOS releases. SwiftUI's
+    // MenuBarExtra window style can create a visible status item whose
+    // transient window does not reliably activate when the app is launched
+    // as an accessory app.
+    Settings {
+      EmptyView()
     }
-    .menuBarExtraStyle(.window)
   }
 }
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
   let store = RouterStore()
+  private var statusItem: NSStatusItem?
+  private var popover: NSPopover?
+  private var statusItemUpdates: AnyCancellable?
   private var islandController: IslandWindowController?
   private var desktopPanelController: DesktopPanelWindowController?
   private var islandVisibility: AnyCancellable?
 
   func applicationDidFinishLaunching(_ notification: Notification) {
     NSApp.setActivationPolicy(.accessory)
+    configureStatusItem()
     islandController = IslandWindowController(store: store)
     desktopPanelController = DesktopPanelWindowController(store: store)
     islandVisibility = store.$islandMode
@@ -72,6 +77,69 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     Task { await store.startActivityPolling() }
     Task { await store.startAccountUsagePolling() }
     Task { await store.startProviderPolling() }
+  }
+
+  private func configureStatusItem() {
+    let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+    statusItem = item
+    guard let button = item.button else { return }
+
+    button.title = "Model Router"
+    button.font = NSFont.systemFont(ofSize: 11, weight: .medium)
+    button.toolTip = "Model Router"
+    button.target = self
+    button.action = #selector(togglePopover(_:))
+
+    let panel = NSPopover()
+    // Accessory apps do not become the active application when a status item
+    // is clicked. A transient popover closes immediately on that deactivation;
+    // semitransient keeps the panel open while still dismissing it when the
+    // user clicks outside the app.
+    panel.behavior = .semitransient
+    panel.animates = true
+    panel.contentSize = NSSize(width: 352, height: 560)
+    panel.delegate = self
+    panel.contentViewController = NSHostingController(
+      rootView: TrayView(store: store).frame(width: 352, height: 560)
+    )
+    popover = panel
+
+    statusItemUpdates = store.objectWillChange
+      .receive(on: RunLoop.main)
+      .sink { [weak self] _ in self?.updateStatusItemTitle() }
+    updateStatusItemTitle()
+  }
+
+  private func updateStatusItemTitle() {
+    guard let button = statusItem?.button else { return }
+    if store.hasConcurrentActivity {
+      button.title = "\(store.activitySummaryLabel) · \(store.compactActivityProvidersLabel)"
+    } else {
+      button.title = store.selectedUsageProvider.shortName
+    }
+  }
+
+  @objc private func togglePopover(_ sender: Any?) {
+    guard let button = statusItem?.button, let panel = popover else { return }
+    if panel.isShown {
+      panel.performClose(sender)
+      return
+    }
+    // An accessory app's popover can otherwise remain behind the active app.
+    // Temporarily becoming regular lets AppKit bring it to the front; the
+    // delegate below restores menu-bar-only behavior after it closes.
+    NSApp.setActivationPolicy(.regular)
+    panel.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+    if let window = panel.contentViewController?.view.window {
+      window.level = .popUpMenu
+      window.makeKeyAndOrderFront(nil)
+      window.orderFrontRegardless()
+    }
+    NSApp.activate(ignoringOtherApps: true)
+  }
+
+  func popoverDidClose(_ notification: Notification) {
+    NSApp.setActivationPolicy(.accessory)
   }
 }
 
@@ -1336,29 +1404,6 @@ struct ProviderSetupState: Decodable, Identifiable, Equatable {
   let configured: Bool
   let cliInstalled: Bool?
   let action: String
-}
-
-private struct StatusItemLabel: View {
-  @ObservedObject var store: RouterStore
-
-  var body: some View {
-    HStack(spacing: 5) {
-      Circle()
-        .fill(store.activityState.tint)
-        .frame(width: 6, height: 6)
-      Text(store.hasConcurrentActivity ? store.activitySummaryLabel : store.selectedUsageProvider.shortName)
-        .font(.system(size: 11, weight: .medium, design: .rounded))
-      if store.hasConcurrentActivity {
-        Text(store.compactActivityProvidersLabel)
-          .font(.system(size: 10, weight: .medium, design: .rounded))
-          .foregroundStyle(.secondary)
-      } else if let usage = store.selectedUsageText {
-        Text(usage)
-          .font(.system(size: 10, weight: .medium, design: .monospaced))
-          .foregroundStyle(.secondary)
-      }
-    }
-  }
 }
 
 enum TrayTab: String, CaseIterable, Identifiable {
