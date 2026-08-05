@@ -198,10 +198,11 @@ function normalizeBody(buffer, contentType, route) {
     error.status = 400;
     throw error;
   }
+  const protocolSurface = model.protocol || provider.protocol;
   const expectedRoute =
-    provider.protocol === "anthropic"
+    protocolSurface === "anthropic"
       ? "/messages"
-      : provider.protocol === "openai-responses"
+      : protocolSurface === "openai-responses"
         ? "/responses"
         : "/chat/completions";
   if (route !== expectedRoute) {

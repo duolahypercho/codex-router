@@ -1,0 +1,3 @@
+# LiteLLM is the local gateway used by the router. Keep this direct requirement
+# in sync with the generated, hash-verified lock file beside it.
+litellm[proxy]==1.83.9

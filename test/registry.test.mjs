@@ -158,6 +158,7 @@ test("LiteLLM configuration is generated from every registry route", () => {
     rendered,
     /model: "openai\/responses\/opencode-go-responses-gpt-5-6-luna"/,
   );
+  assert.match(rendered, /model: "openai\/responses\/deepseek-v4-flash"/);
   assert.match(rendered, /model: "anthropic\/opencode-go-messages-minimax-m3"/);
   const lunaBlock = rendered.slice(
     rendered.indexOf('model_name: "opencode-go-responses-gpt-5-6-luna"'),
