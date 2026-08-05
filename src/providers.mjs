@@ -6,6 +6,7 @@ import { grokOAuthStatus } from "./grok-oauth-status.mjs";
 import { kimiOAuthStatus } from "./oauth-status.mjs";
 import { credentialStatus } from "./provider-credentials.mjs";
 import {
+  canonicalProviderId,
   disableProvider,
   enableProvider,
   readProviderSelection,
@@ -32,12 +33,16 @@ function configured(provider) {
 
 function list() {
   const selected = new Set(readProviderSelection());
-  return [...PROVIDERS.values()].map((provider) => ({
-    id: provider.id,
-    name: provider.displayName,
-    visible: selected.has(provider.id),
-    configured: configured(provider),
-  }));
+  // Protocol variants follow their parent's selection and credential, so the
+  // catalog shows one row per family instead of three opencode Go entries.
+  return [...PROVIDERS.values()]
+    .filter((provider) => !provider.variantOf)
+    .map((provider) => ({
+      id: provider.id,
+      name: provider.displayName,
+      visible: selected.has(provider.id),
+      configured: configured(provider),
+    }));
 }
 
 function main() {
@@ -56,7 +61,9 @@ function main() {
     }
     return;
   }
-  const provider = PROVIDERS.get(providerId);
+  // Toggling a protocol variant toggles its whole family, so report the
+  // canonical provider the user actually changed.
+  const provider = PROVIDERS.get(canonicalProviderId(providerId ?? ""));
   if (!provider || !["enable", "disable"].includes(command)) {
     throw new Error("Usage: providers [list [--json]|enable ID|disable ID]");
   }

@@ -76,6 +76,18 @@ test("codex probe reports enabled models", () => {
   assert.ok(deepseek.length > 0 && deepseek.every((m) => m.enabled));
 });
 
+test("codex probe folds protocol variants into one provider family", () => {
+  const slice = probe("codex", ["opencode-go"]);
+  // Models served by the messages/responses variants group under the family
+  // id, so the tray renders a single opencode Go row.
+  const family = slice.models.filter((m) => m.provider === "opencode-go");
+  assert.ok(family.length > 0 && family.every((m) => m.enabled));
+  assert.ok(!slice.models.some((m) => m.provider.startsWith("opencode-go-")));
+  const providerIds = slice.providers.map((p) => p.id);
+  assert.ok(providerIds.includes("opencode-go"));
+  assert.ok(!providerIds.some((id) => id.startsWith("opencode-go-")));
+});
+
 test("codex probe exposes only privacy-safe recent usage events", () => {
   const event = {
     at: new Date().toISOString(),

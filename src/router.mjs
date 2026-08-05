@@ -27,7 +27,7 @@ import {
 } from "./paths.mjs";
 import { MODEL_BY_SLUG, PROVIDERS, providerForModel } from "./model-registry.mjs";
 import { readNativeAliases } from "./native-alias.mjs";
-import { readProviderSelection } from "./provider-selection.mjs";
+import { canonicalProviderId, readProviderSelection } from "./provider-selection.mjs";
 import { ResponseUsageTransform } from "./response-usage.mjs";
 import { activityMetadataFromHeaders } from "./codex-session-names.mjs";
 import { recordUsageEvent } from "./usage-events.mjs";
@@ -887,8 +887,10 @@ async function handleResponses(request, response, requestUrl) {
       });
       return;
     }
+    // Activity and usage attribute protocol variants to their canonical
+    // family so the tray Island and graphs show one provider per subscription.
     activity.setRoute({
-      provider: route?.provider || "openai",
+      provider: route ? canonicalProviderId(route.provider) : "openai",
       model: route?.slug || requestedModel || undefined,
       ...activityMetadataFromHeaders(request.headers),
     });
@@ -958,7 +960,7 @@ async function handleResponses(request, response, requestUrl) {
     const usage = usageTransform?.tokenUsage();
     recordUsageEvent({
       model: route?.slug || requestedModel,
-      provider: route?.provider || "openai",
+      provider: route ? canonicalProviderId(route.provider) : "openai",
       status: upstream.status,
       durationMs: Date.now() - startedAt,
       ...usage,

@@ -172,7 +172,6 @@ function tryRun(command, commandArgs) {
 }
 
 function guidedSelection(appName) {
-  const providers = [...PROVIDERS.values()];
   const snapshots = providerOnboardingSnapshot().providers;
   const colorEnabled = Boolean(process.stdout.isTTY) && !process.env.NO_COLOR;
   let selected = new Set(
@@ -197,7 +196,7 @@ function guidedSelection(appName) {
     }
   }
   return validateProviderIds(
-    [...selected].sort((a, b) => a - b).map((position) => providers[position - 1].id),
+    [...selected].sort((a, b) => a - b).map((position) => snapshots[position - 1].id),
   );
 }
 

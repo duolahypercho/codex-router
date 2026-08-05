@@ -371,8 +371,28 @@
       }
     },
     {
+      "id": "meta",
+      "displayName": "Meta API",
+      "kind": "openai-compatible",
+      "ownedBy": "meta",
+      "protocol": "openai-responses",
+      "baseUrl": "https://api.meta.ai/v1",
+      "baseUrlEnv": "META_BASE_URL",
+      "credential": {
+        "environment": [
+          "META_API_KEY"
+        ],
+        "file": "meta-api-key.secret",
+        "legacyFiles": [],
+        "keychainServices": [
+          "codex-router-meta"
+        ],
+        "prompt": "Meta API key"
+      }
+    },
+    {
       "id": "opencode-go",
-      "displayName": "opencode Go",
+      "displayName": "opencode Go/Zen",
       "kind": "openai-compatible",
       "ownedBy": "opencode",
       "baseUrl": "https://opencode.ai/zen/go/v1",
@@ -387,14 +407,15 @@
         "keychainServices": [
           "codex-router-opencode-go"
         ],
-        "prompt": "opencode Go API key"
+        "prompt": "opencode API key"
       }
     },
     {
       "id": "opencode-go-messages",
-      "displayName": "opencode Go Messages",
+      "displayName": "opencode Messages",
       "kind": "openai-compatible",
       "ownedBy": "opencode",
+      "variantOf": "opencode-go",
       "protocol": "anthropic",
       "baseUrl": "https://opencode.ai/zen/go/v1",
       "baseUrlEnv": "OPENCODE_GO_BASE_URL",
@@ -408,14 +429,15 @@
         "keychainServices": [
           "codex-router-opencode-go"
         ],
-        "prompt": "opencode Go API key"
+        "prompt": "opencode API key"
       }
     },
     {
       "id": "opencode-go-responses",
-      "displayName": "opencode Go Responses",
+      "displayName": "opencode Responses",
       "kind": "openai-compatible",
       "ownedBy": "opencode",
+      "variantOf": "opencode-go",
       "protocol": "openai-responses",
       "baseUrl": "https://opencode.ai/zen/go/v1",
       "baseUrlEnv": "OPENCODE_GO_BASE_URL",
@@ -429,7 +451,28 @@
         "keychainServices": [
           "codex-router-opencode-go"
         ],
-        "prompt": "opencode Go API key"
+        "prompt": "opencode API key"
+      }
+    },
+    {
+      "id": "opencode-zen",
+      "displayName": "opencode Zen",
+      "kind": "openai-compatible",
+      "ownedBy": "opencode",
+      "variantOf": "opencode-go",
+      "baseUrl": "https://opencode.ai/zen/v1",
+      "baseUrlEnv": "OPENCODE_ZEN_BASE_URL",
+      "credential": {
+        "environment": [
+          "OPENCODE_API_KEY",
+          "OPENCODE_GO_API_KEY"
+        ],
+        "file": "opencode-go-api-key.secret",
+        "legacyFiles": [],
+        "keychainServices": [
+          "codex-router-opencode-go"
+        ],
+        "prompt": "opencode API key"
       }
     }
   ],
@@ -1496,6 +1539,130 @@
         "text"
       ],
       "compHash": "opencode-go-responses-gpt-5-6-luna-v1"
+    },
+    {
+      "slug": "meta/muse-spark-1.2",
+      "gatewayModel": "meta-muse-spark-1-2",
+      "upstreamModel": "muse-spark-1.2",
+      "provider": "meta",
+      "listed": true,
+      "displayName": "Muse Spark 1.2 (Meta)",
+      "description": "Meta's coding-optimized agentic model with a 1M context window, through the Meta Model API using the Responses API.",
+      "priority": 48,
+      "defaultEffort": "high",
+      "reasoningLevels": [
+        {
+          "effort": "minimal",
+          "description": "Fastest responses"
+        },
+        {
+          "effort": "low",
+          "description": "Quick reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced reasoning"
+        },
+        {
+          "effort": "high",
+          "description": "Deep reasoning"
+        },
+        {
+          "effort": "xhigh",
+          "description": "Maximum reasoning"
+        }
+      ],
+      "supportsReasoningSummaries": true,
+      "defaultReasoningSummary": "auto",
+      "contextWindow": 1048576,
+      "autoCompact": 900000,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "compHash": "meta-muse-spark-1-2-v1"
+    },
+    {
+      "slug": "meta/muse-spark-1.2-contributor",
+      "gatewayModel": "meta-muse-spark-1-2-contributor",
+      "upstreamModel": "muse-spark-1.2-contributor",
+      "provider": "meta",
+      "listed": true,
+      "displayName": "Muse Spark 1.2 Contributor (Meta)",
+      "description": "Cheaper Contributor tier of Muse Spark 1.2; Meta may use its inputs and outputs for training. Same 1M context window through the Meta Model API using the Responses API.",
+      "priority": 49,
+      "defaultEffort": "high",
+      "reasoningLevels": [
+        {
+          "effort": "minimal",
+          "description": "Fastest responses"
+        },
+        {
+          "effort": "low",
+          "description": "Quick reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced reasoning"
+        },
+        {
+          "effort": "high",
+          "description": "Deep reasoning"
+        },
+        {
+          "effort": "xhigh",
+          "description": "Maximum reasoning"
+        }
+      ],
+      "supportsReasoningSummaries": true,
+      "defaultReasoningSummary": "auto",
+      "contextWindow": 1048576,
+      "autoCompact": 900000,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "compHash": "meta-muse-spark-1-2-contributor-v1"
+    },
+    {
+      "slug": "meta/muse-spark-1.1",
+      "gatewayModel": "meta-muse-spark-1-1",
+      "upstreamModel": "muse-spark-1.1",
+      "provider": "meta",
+      "listed": true,
+      "displayName": "Muse Spark 1.1 (Meta)",
+      "description": "Previous-generation Muse Spark coding model with a 1M context window, through the Meta Model API using the Responses API.",
+      "priority": 50,
+      "defaultEffort": "high",
+      "reasoningLevels": [
+        {
+          "effort": "minimal",
+          "description": "Fastest responses"
+        },
+        {
+          "effort": "low",
+          "description": "Quick reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced reasoning"
+        },
+        {
+          "effort": "high",
+          "description": "Deep reasoning"
+        },
+        {
+          "effort": "xhigh",
+          "description": "Maximum reasoning"
+        }
+      ],
+      "contextWindow": 1000000,
+      "autoCompact": 850000,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "compHash": "meta-muse-spark-1-1-v1"
     }
   ]
 }

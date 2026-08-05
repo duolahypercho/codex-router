@@ -81,7 +81,7 @@ async function emitProbe() {
     TARGET,
     PROVIDER_SELECTION_PATH,
   } = await import("./paths.mjs");
-  const { readProviderSelection } = await import("./provider-selection.mjs");
+  const { canonicalProviderId, readProviderSelection } = await import("./provider-selection.mjs");
   const { LISTED_MODELS, PROVIDERS } = await import("./model-registry.mjs");
   const { readNativeAliases } = await import("./native-alias.mjs");
 
@@ -89,10 +89,12 @@ async function emitProbe() {
   const usageEvents = TARGET === "codex"
     ? (await import("./usage-events.mjs")).recentUsageEvents()
     : [];
+  // The tray groups models by provider to build its rows, so protocol
+  // variants report their canonical family id: one opencode Go row, not three.
   const routedModels = LISTED_MODELS.map((model) => ({
     slug: model.slug,
     displayName: model.displayName,
-    provider: model.provider,
+    provider: canonicalProviderId(model.provider),
     gatewayModel: model.gatewayModel,
     enabled: enabledProviders.includes(model.provider),
   }));
@@ -108,11 +110,13 @@ async function emitProbe() {
       configured: existsSync(PROVIDER_SELECTION_PATH),
       active: targetIsActive(TARGET),
       enabledProviders,
-      providers: [...PROVIDERS.values()].map((provider) => ({
-        id: provider.id,
-        displayName: provider.displayName,
-        kind: provider.kind,
-      })),
+      providers: [...PROVIDERS.values()]
+        .filter((provider) => !provider.variantOf)
+        .map((provider) => ({
+          id: provider.id,
+          displayName: provider.displayName,
+          kind: provider.kind,
+        })),
       models,
       ...(selectedModel ? { selectedModel } : {}),
       ...(codexConfig
@@ -130,19 +134,14 @@ async function emitProbe() {
 
 async function emitProbeSet(provider, desired) {
   const { TARGET } = await import("./paths.mjs");
-  const { readProviderSelection, writeProviderSelection } = await import("./provider-selection.mjs");
+  const { disableProvider, enableProvider } = await import("./provider-selection.mjs");
   const { PROVIDERS } = await import("./model-registry.mjs");
   if (!PROVIDERS.has(provider)) throw new Error(`Unknown provider: ${provider}`);
   if (desired !== "on" && desired !== "off") throw new Error("state must be on or off");
 
-  const current = readProviderSelection();
-  const next =
-    desired === "on"
-      ? current.includes(provider)
-        ? current
-        : [...current, provider]
-      : current.filter((id) => id !== provider);
-  writeProviderSelection(next);
+  // The selection helpers own variant-family semantics: toggling a provider
+  // that has protocol variants (or is one) toggles the whole family.
+  const next = desired === "on" ? enableProvider(provider) : disableProvider(provider);
   process.stdout.write(JSON.stringify({ target: TARGET, enabledProviders: next }));
 }
 

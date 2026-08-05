@@ -3,6 +3,11 @@ import { spawnSync } from "node:child_process";
 
 import { discoverProviderModels } from "./model-discovery.mjs";
 import { MODELS, PROVIDERS, USER_MODEL_WARNINGS } from "./model-registry.mjs";
+import {
+  fetchModelsDevCatalog,
+  modelsDevMetadata,
+  readModelsDevSnapshot,
+} from "./models-dev.mjs";
 import { SOURCE_ROOT } from "./paths.mjs";
 import { confirm, promptLine } from "./setup-shared.mjs";
 import { toggleSelection } from "./setup-ui.mjs";
@@ -19,10 +24,13 @@ const modelsOption = (() => {
 })();
 const apply = process.argv.includes("--apply");
 const noApply = process.argv.includes("--no-apply");
+const noMetadata = process.argv.includes("--no-metadata");
+const refreshMetadata = process.argv.includes("--refresh-metadata");
 
 function usage() {
   console.error(
-    "Usage: curate-models.mjs PROVIDER [--models id1,id2 | interactive] [--apply|--no-apply]",
+    "Usage: curate-models.mjs PROVIDER [--models id1,id2 | interactive] " +
+      "[--apply|--no-apply] [--no-metadata] [--refresh-metadata]",
   );
   process.exit(2);
 }
@@ -50,7 +58,8 @@ function chooseInteractively(candidates, curated) {
   );
   process.stdout.write(
     `\nChoose ${provider.displayName} models to add to the picker.\n` +
-      "Curated models keep conservative default metadata you can edit later.\n",
+      "New entries take metadata defaults from models.dev when it is reachable\n" +
+      "(conservative defaults otherwise); every value stays editable later.\n",
   );
   for (;;) {
     process.stdout.write(`${renderRows(candidates, curated, selected)}\n`);
@@ -118,16 +127,52 @@ async function main() {
     (model) => model.provider === providerId && model.requestProfile,
   )?.requestProfile;
   const byUpstream = new Map(mine.map((model) => [model.upstreamModel, model]));
-  const nextMine = chosen.map(
-    (id, index) =>
-      byUpstream.get(id) ||
-      userModelEntry({
-        providerId,
-        upstreamId: id,
-        requestProfile: inheritedProfile,
-        priority: 100 + index,
-      }),
-  );
+
+  // models.dev supplies metadata defaults only (context, modalities, naming,
+  // pricing text). Which models exist still comes from the provider's own
+  // /v1/models endpoint above, and a fetch failure just keeps the
+  // conservative defaults. Existing curated entries are never touched unless
+  // the user explicitly asks for --refresh-metadata.
+  const wantsMetadata =
+    !noMetadata &&
+    (refreshMetadata || chosen.some((id) => !byUpstream.has(id)));
+  let catalog;
+  if (wantsMetadata) {
+    try {
+      catalog = await fetchModelsDevCatalog();
+    } catch (error) {
+      const snapshot = readModelsDevSnapshot();
+      const reason = error instanceof Error ? error.message : String(error);
+      if (snapshot) {
+        catalog = snapshot.providers;
+        console.error(
+          `models.dev is unreachable (${reason}); using the checked-in snapshot from ${snapshot.fetchedAt}.`,
+        );
+      } else {
+        console.error(`models.dev metadata unavailable (${reason}); using conservative defaults.`);
+      }
+    }
+  }
+  const metadataFor = (id) =>
+    catalog ? modelsDevMetadata(catalog, providerId, id) : undefined;
+
+  let enriched = 0;
+  const nextMine = chosen.map((id, index) => {
+    const existing = byUpstream.get(id);
+    const metadata =
+      existing && !refreshMetadata ? undefined : metadataFor(id);
+    if (metadata) enriched += 1;
+    if (existing) {
+      return metadata ? { ...existing, ...metadata } : existing;
+    }
+    return userModelEntry({
+      providerId,
+      upstreamId: id,
+      requestProfile: inheritedProfile,
+      priority: 100 + index,
+      metadata,
+    });
+  });
   const target = writeUserModels([...others, ...nextMine]);
   const added = nextMine.filter((model) => !curated.has(model.upstreamModel)).length;
   const removed = mine.length - (nextMine.length - added);
@@ -136,6 +181,12 @@ async function main() {
       nextMine.length === 1 ? "" : "s"
     } (${added} added, ${removed} removed) to ${target}.\n`,
   );
+  if (enriched > 0) {
+    process.stdout.write(
+      `Filled metadata for ${enriched} model${enriched === 1 ? "" : "s"} from models.dev; ` +
+        "edit the user model file to override any value.\n",
+    );
+  }
 
   if (noApply) {
     process.stdout.write("Run ./bin/install to regenerate routes and the picker catalog.\n");

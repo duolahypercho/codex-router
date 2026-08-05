@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, statSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -61,6 +61,45 @@ test("provider selection keeps backward compatibility and can hide the final pro
     assert.deepEqual(disableProvider("deepseek"), []);
     assert.deepEqual(selectedListedModels(), []);
     assert.deepEqual(enableProvider("deepseek"), ["deepseek"]);
+  } finally {
+    rmSync(testRoot, { recursive: true, force: true });
+  }
+});
+
+test("opencode Go protocol variants follow their parent as one family", () => {
+  try {
+    writeProviderCredential("opencode-go", "TEST_OPENCODE_GO_SELECTION_KEY");
+
+    // Selecting any family member stores only the canonical parent, so a
+    // selection written before a variant shipped still exposes it on read.
+    writeProviderSelection(["opencode-go-messages"]);
+    assert.deepEqual(
+      JSON.parse(readFileSync(PROVIDER_SELECTION_PATH, "utf8")).providers,
+      ["opencode-go"],
+    );
+    assert.deepEqual(readProviderSelection(), [
+      "opencode-go",
+      "opencode-go-messages",
+      "opencode-go-responses",
+      "opencode-zen",
+    ]);
+
+    const slugs = selectedConfiguredListedModels().map((model) => model.slug);
+    assert.ok(slugs.includes("opencode-go/grok-4.5"));
+    assert.ok(slugs.includes("opencode-go-messages/minimax-m3"));
+    assert.ok(slugs.includes("opencode-go-messages/qwen3.8-max"));
+    assert.ok(slugs.includes("opencode-go-responses/gpt-5.6-luna"));
+
+    // Disabling any member hides the whole family; a variant cannot stay
+    // half-enabled behind its parent's back.
+    assert.deepEqual(disableProvider("opencode-go-responses"), []);
+    assert.deepEqual(selectedListedModels(), []);
+    assert.deepEqual(enableProvider("opencode-go"), ["opencode-go"]);
+    assert.ok(
+      selectedConfiguredListedModels()
+        .map((model) => model.slug)
+        .includes("opencode-go-messages/minimax-m2.7"),
+    );
   } finally {
     rmSync(testRoot, { recursive: true, force: true });
   }

@@ -77,7 +77,7 @@ Options:
   --no-tray            Never offer the desktop companion app
   --help               Show this help
 
-Providers: ${[...PROVIDERS.keys()].join(", ")}
+Providers: ${[...PROVIDERS.values()].filter((provider) => !provider.variantOf).map((provider) => provider.id).join(", ")}
 `);
   process.exit(0);
 }
@@ -144,7 +144,6 @@ function providerConfigured(provider) {
 const colorEnabled = Boolean(process.stdout.isTTY) && !process.env.NO_COLOR;
 
 function guidedSelection() {
-  const providers = [...PROVIDERS.values()];
   const snapshots = providerOnboardingSnapshot().providers;
   let selected = new Set(
     snapshots
@@ -165,7 +164,7 @@ function guidedSelection() {
     }
   }
   return validateProviderIds(
-    [...selected].sort((a, b) => a - b).map((position) => providers[position - 1].id),
+    [...selected].sort((a, b) => a - b).map((position) => snapshots[position - 1].id),
   );
 }
 

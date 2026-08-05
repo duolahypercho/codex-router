@@ -2,6 +2,7 @@ import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync } from "
 import path from "node:path";
 
 import { STATE_DIR } from "./paths.mjs";
+import { canonicalProviderId } from "./provider-selection.mjs";
 
 export const USAGE_EVENTS_PATH = path.join(STATE_DIR, "usage-events.jsonl");
 
@@ -85,7 +86,10 @@ export function recentUsageEvents({ sinceMs = 24 * 60 * 60 * 1000, limit = 1_000
           ...(event.meteringVersion === 1 ? { meteringVersion: 1 } : {}),
           at: event.at,
           model: safeText(event.model, "unknown"),
-          provider: safeText(event.provider, "unknown"),
+          // Historical events may carry a protocol-variant provider id; fold
+          // the whole family into its canonical provider so usage stays one
+          // series per subscription.
+          provider: canonicalProviderId(safeText(event.provider, "unknown")),
           status: Number.isInteger(event.status) ? event.status : 0,
           durationMs: Number.isFinite(event.durationMs)
             ? Math.max(0, Math.round(event.durationMs))

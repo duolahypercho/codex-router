@@ -6,8 +6,8 @@ These instructions apply when a user asks an agent to install this repository.
 
 - `codex` is the only supported target. If the user asks for Cursor or
   opencode integration, explain that those targets were removed and the
-  router now focuses on Codex; the opencode Go model subscription remains
-  available as a provider inside Codex.
+  router now focuses on Codex; the opencode provider (the Go subscription and
+  the pay-per-use Zen endpoint) remains available inside Codex.
 
 ## Codex outcome
 
@@ -28,9 +28,13 @@ user.
    arguments, logs, environment snippets, or tracked files.
 4. Determine which provider IDs the user requested: `anthropic-api`,
    `kimi-oauth`, `kimi-api`, `deepseek`, `grok-oauth`, `grok-api`, `qwen-plan`,
-   `zai-coding`, `ollama-cloud`, `minimax-token-plan`, and/or `opencode-go`
-   (whose `opencode-go-messages` and `opencode-go-responses` protocol variants
-   share its stored key). The
+   `zai-coding`, `ollama-cloud`, `minimax-token-plan`, `meta`, and/or
+   `opencode-go`
+   (shown to users as "opencode Go/Zen"; its `opencode-go-messages`,
+   `opencode-go-responses`, and `opencode-zen` variants share its stored key
+   and are enabled and disabled with it automatically; never select or toggle
+   them separately. Zen ships no preselected models — curate them per user
+   with `bin/curate-models opencode-zen`). The
    catalog-only providers `groq`, `openrouter`, `together`, `fireworks`,
    `cerebras`, `mistral`, `nvidia-nim`, `siliconflow`, `huggingface`, and
    `gemini-api` are also selectable, but they ship no preselected models: after
@@ -87,8 +91,16 @@ to ship tested support to every installer.
    `node .\src\curate-models.mjs` with the same arguments.
 5. Local curation writes protected `user-models.json` state and survives router
    updates. Never edit `config/providers.json` merely to satisfy one machine's
-   request. Curated models receive conservative metadata and are not implicitly
-   approved as native v2 subagent model overrides.
+   request. New curated models take metadata defaults (context window,
+   modalities, pricing text) from the community models.dev catalog — live
+   fetch first, then the checked-in `config/models-dev.json` snapshot when
+   offline, then conservative defaults; the provider's own `/v1/models`
+   endpoint alone decides which models exist, every fetched value is validated
+   and stays user-editable, and `--no-metadata` skips the lookup. Refresh the
+   snapshot from upstream via `bin/update-models-dev-snapshot`, or hand-edit
+   `config/models-dev.json` directly for models upstream lacks, and commit
+   the diff. Curated models are not implicitly approved as native v2 subagent
+   model overrides.
 6. Run `./bin/model-router codex doctor`. A live `bin/test-model` request uses
    provider quota, so run it only with the user's approval. Finally, tell the
    user to fully quit and reopen Codex before checking the picker.
@@ -107,21 +119,74 @@ installation. It is repository development and requires the process below.
    supported reasoning levels; input modalities; context/compaction limits;
    and the correct request profile. Use `listed: false` for compatibility-only
    aliases.
-3. A new provider also needs credential isolation, discovery metadata,
+3. Every shipped model must also be covered by the models.dev snapshot. If
+   the community catalog does not already describe the model, add its entry
+   directly to `config/models-dev.json` (sorted keys, same shape as its
+   neighbors) in the same change. A model that exists in
+   `config/providers.json` but not in the snapshot leaves local curation with
+   conservative defaults — do not ship that state knowingly.
+4. A new provider also needs credential isolation, discovery metadata,
    selection/onboarding support, request translation, health behavior, and
-   tests. Never place an API key or OAuth artifact in the registry.
-4. Set `multiAgentVersion: "v2"` only after the model is proven through native
+   tests. Never place an API key or OAuth artifact in the registry. A new
+   provider is not done until the whole checklist in
+   "Ship a new provider to every installer" below passes.
+5. Set `multiAgentVersion: "v2"` only after the model is proven through native
    Codex collaboration: tool calls work, encrypted subagent payload relay works
    without disclosure, a marker-return spawn succeeds, and a same-thread
    follow-up succeeds. Otherwise omit it and retain conservative v1 behavior.
-5. Remember that Codex advertises only a small priority-ordered subset of native
+6. Remember that Codex advertises only a small priority-ordered subset of native
    spawn-model overrides. Adjust priority intentionally and keep the desired
    Kimi/Grok/GPT choices in that visible subset; do not crowd them out
    accidentally when adding a model.
-6. Add registry, catalog, routing/request-profile, and failure-path regression
+7. Add registry, catalog, routing/request-profile, and failure-path regression
    tests. Run `npm run check` and `npm test`. With explicit quota approval, run
    `./bin/test-model 'provider/model' --live --yes`, reinstall, fully restart
    Codex, and perform the native subagent probe before claiming support.
+
+### Ship a new provider to every installer
+
+A new provider is only complete when all of the following are true. Do not
+land a provider that satisfies routing but skips the tray, install, or usage
+surfaces.
+
+1. **One-click install.** The provider ID must work end to end with no manual
+   config edits: selectable through `install.sh --providers` /
+   `install.ps1 -Providers`, through
+   `bin/model-router codex providers enable PROVIDER`, and reported correctly
+   by `bin/model-router codex doctor`. If the provider ships no preselected
+   models, document it as catalog-only and make sure `bin/curate-models`
+   handles it.
+2. **Tray setup section.** Every provider must appear in the macOS tray with a
+   working setup card driven by `src/provider-onboarding.mjs` and the control
+   commands the tray invokes:
+   - API-key providers get the hidden credential path (tray →
+     `control credential PROVIDER` over stdin → `saveApiCredential`). The key
+     must never transit chat, logs, or command arguments.
+   - OAuth providers additionally get the OAuth section: an `OAUTH_CLIS`
+     entry in `src/provider-onboarding.mjs` (executable, npm package, login
+     arguments) so the tray's `install-cli PROVIDER` and `login PROVIDER`
+     buttons work, plus status,
+     session-refresh, and reconnect-on-expiry wiring in the provider's OAuth
+     status/session modules (follow `kimi-oauth-*` / `grok-oauth-*` as the
+     patterns).
+   - Add the provider icon under
+     `apps/macos/ModelRouterTray/Resources/` and record its source in
+     `PROVIDER-ICON-SOURCES.md`.
+3. **Usage, limits, and balance in the tray.** Wire the provider's account
+   endpoint into `src/provider-account-usage.mjs` so `provider-usage --json`
+   returns real metrics: `quota` metrics (used/limit/remaining with reset
+   time) for plan- or window-limited providers, and `balance` metrics (the
+   remaining dollar or credit amount) for prepaid/pay-per-use providers. These
+   feed the tray's "% left" display, usage cards, and low-remaining reminders,
+   so a provider without them silently hides the user's spend. If the provider
+   exposes no usage or balance API, the snapshot must degrade gracefully and
+   the tray must say usage is unavailable rather than showing stale or empty
+   numbers. Routed request/token accounting comes from the shared usage-events
+   pipeline and needs no per-provider work beyond correct event recording.
+4. **Models.dev coverage.** Map the provider in `MODELS_DEV_PROVIDER_KEYS`
+   (`src/models-dev.mjs`) and add its models to `config/models-dev.json` as
+   described in step 3 of "Ship a model to every installer", so curated
+   models pick up context windows, modalities, and pricing text offline.
 
 ## Codex safety boundaries
 

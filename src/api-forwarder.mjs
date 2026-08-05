@@ -17,7 +17,7 @@ import {
 } from "./model-registry.mjs";
 import { parseRateLimitHeaders } from "./rate-limit-headers.mjs";
 import { recordRateLimitSnapshot } from "./rate-limit-state.mjs";
-import { readProviderSelection } from "./provider-selection.mjs";
+import { canonicalProviderId, readProviderSelection } from "./provider-selection.mjs";
 import {
   credentialStatus,
   resolveProviderCredential,
@@ -387,7 +387,9 @@ async function handleRequest(request, response) {
   // Recorded after the body streams because persisting is synchronous I/O and
   // must never sit in time-to-first-byte.
   const rateLimit = parseRateLimitHeaders(upstream.headers);
-  if (rateLimit) recordRateLimitSnapshot(normalized.provider.id, rateLimit);
+  // Variant-routed responses meter the same upstream subscription, so quota
+  // headers land under the family's canonical provider id.
+  if (rateLimit) recordRateLimitSnapshot(canonicalProviderId(normalized.provider.id), rateLimit);
   if (!QUIET) {
     console.error(
       `[api-forwarder] provider=${normalized.provider.id} model=${normalized.model.upstreamModel} status=${upstream.status} duration_ms=${Date.now() - startedAt}`,

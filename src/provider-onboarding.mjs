@@ -70,8 +70,11 @@ function oauthConfigured(providerId) {
 }
 
 export function providerOnboardingSnapshot() {
+  // Protocol variants share their parent's key and selection, so onboarding
+  // surfaces (tray, guided setup) offer one entry per family.
+  const selectable = [...PROVIDERS.values()].filter((provider) => !provider.variantOf);
   return {
-    providers: [...PROVIDERS.values()].map((provider) => {
+    providers: selectable.map((provider) => {
       if (provider.kind === "oauth") {
         const cliPath = oauthCliPath(provider.id);
         const cli = provider.id === "grok-oauth"

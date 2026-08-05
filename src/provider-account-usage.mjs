@@ -471,13 +471,17 @@ export async function providerAccountUsageSnapshot({
   providerIds = [...PROVIDERS.keys()],
 } = {}) {
   const enabled = new Set(providerIds);
+  // One account entry per credential: protocol variants share their parent's
+  // key and quota, so only canonical providers are queried and reported.
   const entries = await Promise.all(
-    [...PROVIDERS.keys()].map(async (id) => [
-      id,
-      enabled.has(id)
-        ? await accountUsageFor(id, fetchImpl)
-        : { status: "disabled", source: "none", metrics: [] },
-    ]),
+    [...PROVIDERS.values()]
+      .filter((provider) => !provider.variantOf)
+      .map(async ({ id }) => [
+        id,
+        enabled.has(id)
+          ? await accountUsageFor(id, fetchImpl)
+          : { status: "disabled", source: "none", metrics: [] },
+      ]),
   );
   return Object.fromEntries(entries);
 }

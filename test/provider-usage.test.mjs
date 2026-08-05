@@ -3,6 +3,14 @@ import test from "node:test";
 
 import { aggregateProviderUsage } from "../src/provider-usage.mjs";
 
+test("protocol variants never appear as separate usage providers", () => {
+  const snapshot = aggregateProviderUsage([], { now: Date.parse("2026-07-21T18:00:00Z") });
+  const ids = snapshot.providers.map((provider) => provider.id);
+  assert.ok(ids.includes("opencode-go"));
+  assert.ok(!ids.includes("opencode-go-messages"));
+  assert.ok(!ids.includes("opencode-go-responses"));
+});
+
 test("aggregates tokens and calls independently for each provider", () => {
   const now = Date.parse("2026-07-21T18:00:00Z");
   const snapshot = aggregateProviderUsage(

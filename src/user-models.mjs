@@ -6,13 +6,25 @@ import { STATE_DIR } from "./paths.mjs";
 
 // User-curated models live outside config/providers.json so a checkout update
 // never discards them. Entries carry the same shape as registry models;
-// metadata uses conservative defaults the user can edit in place.
+// metadata uses conservative defaults the user can edit in place, optionally
+// pre-filled from the models.dev catalog (src/models-dev.mjs) at curation
+// time. Either way the stored values are plain local state the user owns.
 
 export const USER_MODELS_PATH =
   process.env.MODEL_ROUTER_USER_MODELS || path.join(STATE_DIR, "user-models.json");
 
 const DEFAULT_CONTEXT_WINDOW = 131072;
 const DEFAULT_AUTO_COMPACT = 110000;
+
+// Enrichment may adjust presentation and sizing metadata only; identity and
+// routing fields always come from the provider id and the discovered model id.
+const METADATA_FIELDS = new Set([
+  "description",
+  "contextWindow",
+  "autoCompact",
+  "inputModalities",
+  "metadataSource",
+]);
 
 function gatewaySafe(value) {
   return String(value)
@@ -22,7 +34,7 @@ function gatewaySafe(value) {
     .replace(/^-|-$/g, "");
 }
 
-export function userModelEntry({ providerId, upstreamId, requestProfile, priority }) {
+export function userModelEntry({ providerId, upstreamId, requestProfile, priority, metadata }) {
   const gatewayModel = `${gatewaySafe(providerId)}-${gatewaySafe(upstreamId)}`;
   const entry = {
     slug: `${providerId}/${upstreamId}`,
@@ -40,6 +52,9 @@ export function userModelEntry({ providerId, upstreamId, requestProfile, priorit
     inputModalities: ["text"],
     compHash: `${gatewayModel}-user-v1`,
   };
+  for (const [key, value] of Object.entries(metadata || {})) {
+    if (METADATA_FIELDS.has(key)) entry[key] = value;
+  }
   if (requestProfile) entry.requestProfile = requestProfile;
   return entry;
 }

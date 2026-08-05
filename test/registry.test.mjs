@@ -56,6 +56,9 @@ test("provider registry exposes configured API and OAuth model families", () => 
       "opencode-go-messages/qwen3.6-plus",
       "opencode-go/hy3",
       "opencode-go-responses/gpt-5.6-luna",
+      "meta/muse-spark-1.2",
+      "meta/muse-spark-1.2-contributor",
+      "meta/muse-spark-1.1",
     ],
   );
   assert.equal(PROVIDERS.get("deepseek").baseUrl, "https://api.deepseek.com");
@@ -75,6 +78,15 @@ test("provider registry exposes configured API and OAuth model families", () => 
   assert.equal(PROVIDERS.get("opencode-go-responses").baseUrl, "https://opencode.ai/zen/go/v1");
   assert.equal(PROVIDERS.get("opencode-go-messages").protocol, "anthropic");
   assert.equal(PROVIDERS.get("opencode-go-responses").protocol, "openai-responses");
+  // The protocol variants are one selectable family: they declare the parent
+  // whose credential and picker selection they follow.
+  assert.equal(PROVIDERS.get("opencode-go").variantOf, undefined);
+  assert.equal(PROVIDERS.get("opencode-go-messages").variantOf, "opencode-go");
+  assert.equal(PROVIDERS.get("opencode-go-responses").variantOf, "opencode-go");
+  assert.equal(
+    PROVIDERS.get("opencode-go-messages").credential.file,
+    PROVIDERS.get("opencode-go").credential.file,
+  );
   assert.equal(PROVIDERS.get("grok-api").baseUrl, "https://api.x.ai/v1");
   assert.equal(PROVIDERS.get("grok-oauth").proxyBaseEnv, "GROK_OAUTH_FORWARD_BASE_URL");
   // Qwen OAuth was discontinued upstream on 2026-04-15, so the plan key is the

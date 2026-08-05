@@ -17,6 +17,25 @@
   the re-capture fails, the router keeps serving the previous capture and says
   so instead of failing the rebuild.
 
+- **New Meta Model API provider.** The `meta` provider (shown as "Meta API")
+  routes the Responses protocol to `https://api.meta.ai/v1` with a stored
+  `META_API_KEY`. Three Muse Spark models ship in the registry: 1.2, its
+  cheaper 1.2 Contributor tier (whose inputs and outputs Meta may use for
+  training), and the previous-generation 1.1 — the 1.2 tiers with reasoning
+  summaries enabled. More Meta models can be curated per machine with
+  `bin/curate-models meta`.
+
+- **opencode Go is one provider family everywhere.** The
+  `opencode-go-messages` and `opencode-go-responses` protocol variants now
+  declare `variantOf: "opencode-go"` in the registry, and provider selection
+  treats the three as a single unit: enabling or disabling any of them toggles
+  the whole family, the selection file stores only `opencode-go`, and every
+  read expands it back to all variants. This retroactively fixes installs
+  whose selection predates the variants — MiniMax, Qwen, and GPT 5.6 Luna
+  models no longer vanish from the Codex picker while the other opencode Go
+  models show. Setup, the tray, and `providers list` now show one
+  **opencode Go** entry instead of three.
+
 - **Removed the Cursor and opencode app targets.** The router now focuses on
   Codex only: `--target codex` is the sole installer target, the Cursor Chat
   Completions gateway and the opencode config manager/subagent generator are

@@ -62,6 +62,26 @@ function loadRegistry() {
     providers.set(provider.id, Object.freeze(provider));
   }
 
+  // Protocol variants (e.g. opencode-go-messages) ride on another provider's
+  // credential and selection state, so the link must point at a real canonical
+  // provider whose stored key is actually the one the variant will send.
+  for (const provider of providers.values()) {
+    if (provider.variantOf === undefined) continue;
+    const parent = providers.get(provider.variantOf);
+    if (!parent) {
+      fail(`provider ${provider.id} is a variant of unknown provider ${provider.variantOf}`);
+    }
+    if (parent.variantOf !== undefined) {
+      fail(`provider ${provider.id} may not be a variant of variant ${parent.id}`);
+    }
+    if (provider.kind !== "openai-compatible" || parent.kind !== "openai-compatible") {
+      fail(`variant provider ${provider.id} and its parent must be openai-compatible`);
+    }
+    if (provider.credential?.file !== parent.credential?.file) {
+      fail(`variant provider ${provider.id} must share ${parent.id}'s credential file`);
+    }
+  }
+
   const slugs = new Set();
   const gatewayModels = new Set();
   const models = parsed.models.map((model) => {
@@ -103,6 +123,18 @@ function modelProblem(model, providers, slugs, gatewayModels) {
     !["v1", "v2"].includes(model.multiAgentVersion)
   ) {
     return `model ${model.slug} has an invalid multiAgentVersion`;
+  }
+  if (
+    model.supportsReasoningSummaries !== undefined &&
+    typeof model.supportsReasoningSummaries !== "boolean"
+  ) {
+    return `model ${model.slug} has an invalid supportsReasoningSummaries`;
+  }
+  if (
+    model.defaultReasoningSummary !== undefined &&
+    !["auto", "concise", "detailed"].includes(model.defaultReasoningSummary)
+  ) {
+    return `model ${model.slug} has an invalid defaultReasoningSummary`;
   }
   if (slugs.has(model.slug)) return `duplicate model slug ${model.slug}`;
   if (gatewayModels.has(model.gatewayModel)) {

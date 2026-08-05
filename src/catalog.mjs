@@ -185,8 +185,11 @@ export function routedModel(template, model) {
     service_tiers: [],
     availability_nux: null,
     upgrade: null,
-    supports_reasoning_summaries: false,
-    default_reasoning_summary: "none",
+    supports_reasoning_summaries: model.supportsReasoningSummaries === true,
+    default_reasoning_summary:
+      model.supportsReasoningSummaries === true
+        ? model.defaultReasoningSummary || "auto"
+        : "none",
     support_verbosity: false,
     default_verbosity: null,
     supports_search_tool: false,

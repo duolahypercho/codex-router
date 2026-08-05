@@ -35,8 +35,10 @@ const NATIVE_OPENAI = {
 
 export function aggregateProviderUsage(events, { days = 90, now = Date.now() } = {}) {
   const cutoff = now - days * 24 * 60 * 60 * 1_000;
+  // Protocol variants never appear as usage rows: their events, quota
+  // headers, and activity are all folded into the canonical family provider.
   const byProvider = new Map(
-    [NATIVE_OPENAI, ...PROVIDERS.values()].map((provider) => [
+    [NATIVE_OPENAI, ...[...PROVIDERS.values()].filter((provider) => !provider.variantOf)].map((provider) => [
       provider.id,
       {
         id: provider.id,

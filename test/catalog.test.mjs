@@ -58,6 +58,20 @@ test("routed models are native v2 spawn-agent model overrides", () => {
   assert.equal(model.multi_agent_version, "v2");
 });
 
+test("routed models advertise reasoning summaries only when the registry opts in", () => {
+  // Default stays off: external models must not claim summary support untested.
+  const plain = routedModel(template, grok);
+  assert.equal(plain.supports_reasoning_summaries, false);
+  assert.equal(plain.default_reasoning_summary, "none");
+  const summarized = routedModel(template, {
+    ...grok,
+    supportsReasoningSummaries: true,
+    defaultReasoningSummary: "auto",
+  });
+  assert.equal(summarized.supports_reasoning_summaries, true);
+  assert.equal(summarized.default_reasoning_summary, "auto");
+});
+
 test("unverified routed models retain conservative v1 collaboration", () => {
   const model = routedModel(template, {
     ...grok,

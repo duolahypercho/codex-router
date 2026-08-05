@@ -87,6 +87,9 @@ Linux installations support the Codex CLI.
 | GLM-5.2 (Qwen Plan) | `qwen-plan/glm-5.2` | Alibaba Model Studio plan API key |
 | GLM-5.2 (Coding Plan) | `zai-coding/glm-5.2` | Z.ai GLM Coding Plan API key |
 | GLM-5-Turbo (Coding Plan) | `zai-coding/glm-5-turbo` | Z.ai GLM Coding Plan API key |
+| Muse Spark 1.2 (Meta) | `meta/muse-spark-1.2` | Meta Model API key |
+| Muse Spark 1.2 Contributor (Meta) | `meta/muse-spark-1.2-contributor` | Meta Model API key |
+| Muse Spark 1.1 (Meta) | `meta/muse-spark-1.1` | Meta Model API key |
 
 The Codex catalog is credential-aware. It includes models only from enabled
 external providers with a stored API key or valid OAuth session. Native GPT
@@ -142,21 +145,31 @@ tools.
 Beyond the built-in models, each API-key provider's live catalog can be
 curated interactively: `./bin/curate-models PROVIDER` lists the models the
 provider currently advertises that are not in the registry, lets you toggle
-the ones you want, and stores them as user models with conservative default
-metadata in protected state (surviving updates, editable in place, and
-removable by re-running the command and deselecting). Curated models are
+the ones you want, and stores them as user models in protected state
+(surviving updates, editable in place, and removable by re-running the
+command and deselecting). New entries take context-window, modality, and
+pricing metadata from the community-maintained
+[models.dev](https://models.dev/) catalog when it is reachable, falling back
+first to the checked-in snapshot in `config/models-dev.json` and then to
+conservative defaults (`--no-metadata` skips the lookup; `--refresh-metadata`
+re-applies it to existing entries). The provider's own
+`/v1/models` endpoint always decides which models exist. Curated models are
 local to your machine and are not vetted by the repository's compatibility
 tests.
 
-### opencode Go subscription
+### opencode (Go subscription and Zen)
 
-opencode Go is opencode's flat-rate subscription that fronts popular open
-coding models at `https://opencode.ai/zen/go/v1`, separate from opencode's
-pay-per-use Zen endpoint. The catalog is split across three provider IDs by
-the protocol each model speaks upstream, and all three read the same stored
-opencode API key (`OPENCODE_API_KEY` or `OPENCODE_GO_API_KEY` in the
-environment). Set the key once, then enable the provider IDs whose models you
-want:
+The opencode provider family covers both of opencode's endpoints with one
+stored API key (`OPENCODE_API_KEY` or `OPENCODE_GO_API_KEY` in the
+environment): the flat-rate **Go** subscription at
+`https://opencode.ai/zen/go/v1`, whose tested models ship in the registry
+below, and the pay-per-use **Zen** endpoint at `https://opencode.ai/zen/v1`,
+whose larger catalog is available through local curation
+(`./bin/curate-models opencode-zen`). Everything appears as a single
+"opencode Go/Zen" provider; internally the catalog is split across provider
+IDs by
+endpoint and by the protocol each model speaks upstream. Set the key once and
+enable the family:
 
 ```sh
 ./bin/model-router codex provider-key opencode-go set
@@ -185,10 +198,33 @@ want:
 | GPT 5.6 Luna (opencode Go) | `opencode-go-responses/gpt-5.6-luna` |
 
 `opencode-go` carries the Chat Completions models, `opencode-go-messages` the
-Anthropic Messages models, and `opencode-go-responses` the Responses models.
+Anthropic Messages models, `opencode-go-responses` the Responses models, and
+`opencode-zen` the pay-per-use Zen endpoint (no preselected models — curate
+the ones you want). All four are one selectable family: they share a single
+stored key, and enabling or disabling any of them toggles all of them
+together.
 Entries that duplicate a vendor-direct provider (for example DeepSeek V4 Pro)
 intentionally coexist because the subscription bills separately. Point
-`OPENCODE_GO_BASE_URL` elsewhere to override the endpoint.
+`OPENCODE_GO_BASE_URL` (or `OPENCODE_ZEN_BASE_URL`) elsewhere to override the
+endpoints.
+
+### Meta Model API
+
+Meta's Muse Spark models speak the Responses protocol at
+`https://api.meta.ai/v1` (`META_API_KEY` in the environment, or store the key
+once):
+
+```sh
+./bin/model-router codex provider-key meta set
+./bin/model-router codex providers enable meta
+```
+
+Three Muse Spark models ship in the registry: 1.2 and its cheaper
+Contributor tier (whose inputs and outputs Meta may use for training) with a
+1M context window, reasoning efforts from minimal to xhigh, and reasoning
+summaries enabled, plus the previous-generation 1.1. Additional Meta models
+can be added per machine with `./bin/curate-models meta`. Point
+`META_BASE_URL` elsewhere to override the endpoint.
 
 ### Catalog-only providers
 
@@ -216,8 +252,9 @@ Add a key, then pick the models you want from the provider's live catalog:
 ./bin/curate-models groq
 ```
 
-Curated entries carry conservative default metadata and are local to your
-machine. Verify a model before relying on it:
+Curated entries take metadata defaults from models.dev when available
+(conservative defaults otherwise) and are local to your machine. Verify a
+model before relying on it:
 
 ```sh
 ./bin/test-model 'groq/MODEL_ID' --live --yes
