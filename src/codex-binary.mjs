@@ -82,6 +82,22 @@ export function runCodex(args, options = {}) {
   return execFileSync(command, args, { ...spawnOptions, ...options });
 }
 
+// The version tells catalog code whether a cached native capture came from
+// the currently installed build. Undefined means "could not ask", which
+// callers must treat as unknown rather than as a mismatch.
+export function codexVersion() {
+  try {
+    const output = runCodex(["--version"], {
+      encoding: "utf8",
+      timeout: 10_000,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    return output.trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 // Failing to *run* Codex is not evidence that the user is signed out. The two
 // used to be indistinguishable, so one Windows spawn error silently stripped
 // every native model from the catalog. Report the reason so callers can refuse

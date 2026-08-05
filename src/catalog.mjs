@@ -15,7 +15,7 @@ import {
   NATIVE_ALIAS_PATH,
   NATIVE_CATALOG_PATH,
 } from "./paths.mjs";
-import { codexAuthStatus, runCodex } from "./codex-binary.mjs";
+import { codexAuthStatus, codexVersion, runCodex } from "./codex-binary.mjs";
 import { syncRoutedCodexAgents } from "./codex-agent-catalog.mjs";
 import { MODEL_BY_SLUG } from "./model-registry.mjs";
 import { buildNativeAliasAssignments } from "./native-alias.mjs";
@@ -64,17 +64,43 @@ function captureNative() {
       "Refusing to capture an already-merged catalog. Disable the router before refreshing native models.",
     );
   }
-  atomicJson(NATIVE_CATALOG_PATH, { models: parsed.models });
+  const capturedWith = codexVersion();
+  atomicJson(NATIVE_CATALOG_PATH, {
+    ...(capturedWith ? { captured_with: capturedWith } : {}),
+    models: parsed.models,
+  });
   return parsed;
+}
+
+// A native capture is only trustworthy for the Codex build that produced it:
+// newer builds can require catalog fields the older build never emitted, or
+// carry different capability values for the same slug. An unknown current
+// version keeps the cache — with no binary to re-ask, stale is the best we
+// have.
+export function nativeCatalogIsReusable(parsed, currentVersion) {
+  if (!parsed || !Array.isArray(parsed.models) || parsed.models.length === 0) {
+    return false;
+  }
+  return !currentVersion || parsed.captured_with === currentVersion;
 }
 
 function nativeCatalog() {
   if (!existsSync(NATIVE_CATALOG_PATH) || refresh) return captureNative();
   const parsed = JSON.parse(readFileSync(NATIVE_CATALOG_PATH, "utf8"));
-  if (!parsed || !Array.isArray(parsed.models) || parsed.models.length === 0) {
+  if (nativeCatalogIsReusable(parsed, codexVersion())) return parsed;
+  try {
     return captureNative();
+  } catch (error) {
+    // Version-mismatched is still better than empty: serve the stale capture
+    // when the re-capture fails, but say so instead of hiding it.
+    if (parsed && Array.isArray(parsed.models) && parsed.models.length > 0) {
+      console.error(
+        `Could not refresh the native model catalog (${error.message}); reusing the cached capture.`,
+      );
+      return parsed;
+    }
+    throw error;
   }
-  return parsed;
 }
 
 function selectedModel() {

@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildMergedCatalog, buildLoginFreeCatalog, routedModel } from "../src/catalog.mjs";
+import {
+  buildMergedCatalog,
+  buildLoginFreeCatalog,
+  nativeCatalogIsReusable,
+  routedModel,
+} from "../src/catalog.mjs";
 
 const template = {
   slug: "gpt-5.5",
@@ -129,4 +134,19 @@ test("login-free catalog keeps overflow models visible under their own slugs", (
   const bySlug = new Map(models.map((model) => [model.slug, model]));
   assert.equal(bySlug.get("kimi-oauth/kimi-for-coding").visibility, "list");
   assert.equal(bySlug.get("grok-oauth/grok-4.5").visibility, "hide");
+});
+
+test("native catalog cache is reusable only for the codex build that captured it", () => {
+  const captured = { captured_with: "codex-cli 0.142.5", models: [template] };
+
+  assert.equal(nativeCatalogIsReusable(captured, "codex-cli 0.142.5"), true);
+  assert.equal(nativeCatalogIsReusable(captured, "codex-cli 0.146.1"), false);
+  // Unknown current version: no binary to re-ask, so keep what we have.
+  assert.equal(nativeCatalogIsReusable(captured, undefined), true);
+  // Un-stamped caches predate version tracking; re-capture when we can ask.
+  assert.equal(nativeCatalogIsReusable({ models: [template] }, "codex-cli 0.146.1"), false);
+  assert.equal(nativeCatalogIsReusable({ models: [template] }, undefined), true);
+  // Invalid or empty caches are never reusable.
+  assert.equal(nativeCatalogIsReusable(undefined, undefined), false);
+  assert.equal(nativeCatalogIsReusable({ models: [] }, "codex-cli 0.146.1"), false);
 });
