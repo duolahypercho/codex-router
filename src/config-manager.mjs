@@ -1,13 +1,19 @@
+import { spawnSync } from "node:child_process";
 import {
   copyFileSync,
   existsSync,
   mkdirSync,
+  mkdtempSync,
   readFileSync,
   renameSync,
+  rmSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
+import os from "node:os";
 import path from "node:path";
+
+import { codexSpawnTarget, findCodexBinary } from "./codex-binary.mjs";
 
 import {
   assertCallerSecret,
@@ -151,6 +157,53 @@ function hasModernMultiAgentConfig(input) {
     .some((line) => /^\s*multi_agent_v2\s*=/.test(line));
 }
 
+// Some Codex builds parse `[agents]` as a pure role map and reject the
+// concurrency scalar outright, which blocks the whole config from loading
+// (observed on 0.141-0.145; earlier and later builds accept it). A version
+// table would need constant maintenance, so ask the installed binary instead:
+// have it load a config containing only the scalar and see whether it parses.
+// The probe config is minimal on purpose — the answer must not depend on
+// anything else in the user's config.
+let codexAcceptsAgentConcurrencyScalar;
+function installedCodexAcceptsAgentConcurrencyScalar() {
+  if (codexAcceptsAgentConcurrencyScalar !== undefined) {
+    return codexAcceptsAgentConcurrencyScalar;
+  }
+  codexAcceptsAgentConcurrencyScalar = probeAgentConcurrencyScalar();
+  return codexAcceptsAgentConcurrencyScalar;
+}
+
+function probeAgentConcurrencyScalar() {
+  const binary = findCodexBinary();
+  // With no binary to ask, keep the historical behavior of writing the scalar.
+  if (!binary) return true;
+  const probeHome = mkdtempSync(path.join(os.tmpdir(), "codex-router-schema-probe-"));
+  try {
+    writeFileSync(
+      path.join(probeHome, "config.toml"),
+      `[agents]\nmax_concurrent_threads_per_session = ${managedAgentMaxConcurrency}\n`,
+      { encoding: "utf8", mode: 0o600 },
+    );
+    const { command: probeCommand, options } = codexSpawnTarget(binary);
+    // `login status` exits non-zero when signed out, so the exit code says
+    // nothing about the config; only the load-error message does.
+    const result = spawnSync(probeCommand, ["login", "status"], {
+      ...options,
+      encoding: "utf8",
+      timeout: 10_000,
+      env: { ...process.env, CODEX_HOME: probeHome },
+    });
+    if (result.error) return true;
+    return !/Error loading configuration/i.test(
+      `${result.stdout || ""}\n${result.stderr || ""}`,
+    );
+  } catch {
+    return true;
+  } finally {
+    rmSync(probeHome, { recursive: true, force: true });
+  }
+}
+
 function withManagedAgentConcurrency(input) {
   const cleaned = withoutManagedAgentConcurrency(input);
   if (hasModernMultiAgentConfig(cleaned)) return cleaned;
@@ -169,11 +222,6 @@ function withManagedAgentConcurrency(input) {
   const agentsHeader = lines.findIndex((line) =>
     /^\s*\[\s*agents\s*\]\s*(?:#.*)?$/.test(line),
   );
-  const managedLines = [
-    agentConcurrencyStartMarker,
-    `max_concurrent_threads_per_session = ${managedAgentMaxConcurrency}`,
-    agentConcurrencyEndMarker,
-  ];
   if (agentsHeader !== -1) {
     let tableEnd = agentsHeader + 1;
     while (tableEnd < lines.length && !/^\s*\[/.test(lines[tableEnd])) tableEnd += 1;
@@ -183,6 +231,14 @@ function withManagedAgentConcurrency(input) {
         /^\s*(?:max_concurrent_threads_per_session|max_threads)\s*=/.test(line),
       );
     if (userConfigured) return cleaned;
+  }
+  if (!installedCodexAcceptsAgentConcurrencyScalar()) return cleaned;
+  const managedLines = [
+    agentConcurrencyStartMarker,
+    `max_concurrent_threads_per_session = ${managedAgentMaxConcurrency}`,
+    agentConcurrencyEndMarker,
+  ];
+  if (agentsHeader !== -1) {
     lines.splice(agentsHeader + 1, 0, ...managedLines);
   } else {
     while (lines.length && !lines.at(-1).trim()) lines.pop();

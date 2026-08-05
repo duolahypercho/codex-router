@@ -19,11 +19,27 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const manager = path.join(root, "src", "config-manager.mjs");
 const CALLER_KEY = "test-config-caller-capability-with-sufficient-length";
 
+// The config manager probes the installed Codex binary to learn whether its
+// schema accepts the managed [agents] concurrency scalar. Point it at stubs so
+// the tests do not depend on whichever Codex build this machine has.
+const codexStubDir = mkdtempSync(path.join(os.tmpdir(), "codex-router-codex-stub-"));
+const scalarAcceptingCodex = path.join(codexStubDir, "codex-accepts-scalar");
+writeFileSync(scalarAcceptingCodex, "#!/bin/sh\necho 'Not logged in' >&2\nexit 1\n", {
+  mode: 0o755,
+});
+const scalarRejectingCodex = path.join(codexStubDir, "codex-rejects-scalar");
+writeFileSync(
+  scalarRejectingCodex,
+  "#!/bin/sh\necho 'Error loading configuration: invalid type: integer, expected struct AgentRoleToml' >&2\nexit 1\n",
+  { mode: 0o755 },
+);
+
 function run(
   command,
   codexHome,
   stateDir = path.join(codexHome, "router-state"),
   commandArgs = [],
+  env = {},
 ) {
   mkdirSync(stateDir, { recursive: true, mode: 0o700 });
   const callerSecretPath = path.join(stateDir, "caller-secret");
@@ -36,9 +52,11 @@ function run(
       encoding: "utf8",
       env: {
         ...process.env,
+        CODEX_BIN: scalarAcceptingCodex,
         CODEX_HOME: codexHome,
         CODEX_ROUTER_STATE_DIR: stateDir,
         CODEX_ROUTER_PORT: "46192",
+        ...env,
       },
     }),
   );
@@ -208,6 +226,42 @@ config_file = "/tmp/example-agent.toml"
 
     run("disable", codexHome);
     assert.equal(readFileSync(configPath, "utf8").trimStart(), original);
+  } finally {
+    rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
+test("config manager skips the agents scalar when the codex binary rejects it", () => {
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), "codex-router-strict-schema-"));
+  const configPath = path.join(codexHome, "config.toml");
+  const original = `model = "gpt-5.5"
+`;
+  writeFileSync(configPath, original, { mode: 0o600 });
+
+  try {
+    run("enable", codexHome, undefined, [], { CODEX_BIN: scalarRejectingCodex });
+    const enabled = readFileSync(configPath, "utf8");
+    assert.doesNotMatch(enabled, /codex-router-agent-concurrency-managed/);
+    assert.doesNotMatch(enabled, /^\[agents\]$/m);
+    assert.match(enabled, /# BEGIN codex-router-managed/);
+
+    run("disable", codexHome, undefined, [], { CODEX_BIN: scalarRejectingCodex });
+    assert.equal(readFileSync(configPath, "utf8").trimStart(), original);
+  } finally {
+    rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
+test("config manager keeps writing the agents scalar when the codex binary accepts it", () => {
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), "codex-router-lenient-schema-"));
+  const configPath = path.join(codexHome, "config.toml");
+  writeFileSync(configPath, `model = "gpt-5.5"\n`, { mode: 0o600 });
+
+  try {
+    run("enable", codexHome, undefined, [], { CODEX_BIN: scalarAcceptingCodex });
+    const enabled = readFileSync(configPath, "utf8");
+    assert.match(enabled, /codex-router-agent-concurrency-managed/);
+    assert.match(enabled, /^max_concurrent_threads_per_session = 6$/m);
   } finally {
     rmSync(codexHome, { recursive: true, force: true });
   }
