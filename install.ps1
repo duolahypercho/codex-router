@@ -142,7 +142,9 @@ try {
       & uv venv --python 3.12 .venv
       if ($LASTEXITCODE -ne 0) { throw "uv could not create the Python environment." }
     }
-    & uv pip install --python $Python "litellm[proxy]==1.93.0"
+    # litellm 1.95.0 needs fastapi<0.140 (get_flat_dependant was removed);
+    # re-test before lifting either pin.
+    & uv pip install --python $Python "litellm[proxy]==1.95.0" "fastapi==0.139.2"
   } else {
     if (Get-Command "py" -ErrorAction SilentlyContinue) {
       & py -3 -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)"
@@ -158,7 +160,7 @@ try {
     if (-not (Test-Path $Python)) { throw "The Python virtual environment was not created." }
     & $Python -m pip install --upgrade pip
     if ($LASTEXITCODE -ne 0) { throw "pip upgrade failed." }
-    & $Python -m pip install "litellm[proxy]==1.93.0"
+    & $Python -m pip install "litellm[proxy]==1.95.0" "fastapi==0.139.2"
   }
   if ($LASTEXITCODE -ne 0) { throw "LiteLLM installation failed." }
 
