@@ -1478,6 +1478,7 @@ struct ProviderSetupState: Decodable, Identifiable, Equatable {
 
 private struct StatusItemLabel: View {
   @ObservedObject var store: RouterStore
+  private static let reservedWidth: CGFloat = 180
 
   var body: some View {
     HStack(spacing: 5) {
@@ -1486,16 +1487,25 @@ private struct StatusItemLabel: View {
         .frame(width: 6, height: 6)
       Text(store.hasConcurrentActivity ? store.activitySummaryLabel : store.selectedUsageProvider.shortName)
         .font(.system(size: 11, weight: .medium, design: .rounded))
+        .lineLimit(1)
+        .truncationMode(.tail)
       if store.hasConcurrentActivity {
         Text(store.compactActivityProvidersLabel)
           .font(.system(size: 10, weight: .medium, design: .rounded))
           .foregroundStyle(.secondary)
+          .lineLimit(1)
+          .truncationMode(.tail)
       } else if let usage = store.selectedUsageText {
         Text(usage)
           .font(.system(size: 10, weight: .medium, design: .monospaced))
           .foregroundStyle(.secondary)
+          .lineLimit(1)
+          .truncationMode(.tail)
       }
     }
+    // Keep the NSStatusItem anchor stable while activity text changes.
+    .frame(width: Self.reservedWidth, alignment: .leading)
+    .clipped()
   }
 }
 
