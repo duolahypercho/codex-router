@@ -85,6 +85,7 @@ const NATIVE_IMAGE_PATHS = new Set([
   "/v1/images/edits",
   "/v1/images/generations",
 ]);
+const NATIVE_SEARCH_PATHS = new Set(["/alpha/search", "/v1/alpha/search"]);
 const AGENT_PAYLOAD_RELAY_TOOL = "relay_external_agent_payload";
 const AGENT_PAYLOAD_CACHE_TTL_MS = 15 * 60 * 1_000;
 const AGENT_PAYLOAD_CACHE_MAX_BYTES = 8 * 1024 * 1024;
@@ -984,7 +985,7 @@ async function handleResponses(request, response, requestUrl) {
   }
 }
 
-async function handleNativeImage(request, response, requestUrl) {
+async function handleNativeRequest(request, response, requestUrl, defaultModel) {
   const startedAt = Date.now();
   const activity = beginRequestActivity();
   let clientGone = false;
@@ -993,8 +994,7 @@ async function handleNativeImage(request, response, requestUrl) {
     const encoded = await readRequestBody(request);
     const body = decodeBody(encoded, request.headers["content-encoding"]);
     const payload = parseBody(body);
-    const requestedModel =
-      typeof payload.model === "string" ? payload.model : "gpt-image-2";
+    const requestedModel = typeof payload.model === "string" ? payload.model : defaultModel;
     activity.setRoute({
       provider: "openai",
       model: requestedModel,
@@ -1101,7 +1101,11 @@ async function handleRequest(request, response) {
     return;
   }
   if (request.method === "POST" && NATIVE_IMAGE_PATHS.has(requestUrl.pathname)) {
-    await handleNativeImage(request, response, requestUrl);
+    await handleNativeRequest(request, response, requestUrl, "gpt-image-2");
+    return;
+  }
+  if (request.method === "POST" && NATIVE_SEARCH_PATHS.has(requestUrl.pathname)) {
+    await handleNativeRequest(request, response, requestUrl, "web-search");
     return;
   }
   writeJson(response, 404, {

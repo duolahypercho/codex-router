@@ -133,7 +133,7 @@ and never grants CORS access.
 
 | Route | Incoming Codex credential | Upstream credential |
 | --- | --- | --- |
-| Native GPT | Allow-listed and forwarded | Existing ChatGPT/Codex authentication |
+| Native GPT, image generation, and web search | Allow-listed and forwarded | Existing ChatGPT/Codex authentication |
 | Kimi OAuth | Discarded | Kimi CLI OAuth bearer from `~/.kimi-code` |
 | Kimi API | Discarded | Kimi Platform API key |
 | DeepSeek | Discarded | DeepSeek API key |
