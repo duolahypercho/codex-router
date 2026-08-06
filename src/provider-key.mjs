@@ -25,14 +25,19 @@ if (!providerId || !new Set(["status", "set", "remove"]).has(command)) {
 
 const provider = apiProvider(providerId);
 
+// The try/finally pair must live in a single array element: joining elements
+// with "; " would otherwise produce "}; finally", which PowerShell rejects
+// with "MissingCatchOrFinally" — silently breaking every hidden key prompt
+// on Windows (the POSIX path reads /dev/tty directly and never hits this).
+export const WINDOWS_HIDDEN_PROMPT_SCRIPT = [
+  "$secret = Read-Host $env:CODEX_ROUTER_PROMPT_LABEL -AsSecureString",
+  "$pointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secret)",
+  "try { [Console]::Out.Write([Runtime.InteropServices.Marshal]::PtrToStringBSTR($pointer)) } finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($pointer) }",
+].join("; ");
+
 function hiddenPrompt(label) {
   if (process.platform === "win32") {
-    const script = [
-      "$secret = Read-Host $env:CODEX_ROUTER_PROMPT_LABEL -AsSecureString",
-      "$pointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secret)",
-      "try { [Console]::Out.Write([Runtime.InteropServices.Marshal]::PtrToStringBSTR($pointer)) }",
-      "finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($pointer) }",
-    ].join("; ");
+    const script = WINDOWS_HIDDEN_PROMPT_SCRIPT;
     let lastError;
     for (const executable of ["powershell.exe", "pwsh.exe"]) {
       try {
