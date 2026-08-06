@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
+import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 
-import { codexSpawnTarget, preferSpawnablePath } from "../src/codex-binary.mjs";
+import { codexSpawnTarget, findCodexBinary, preferSpawnablePath } from "../src/codex-binary.mjs";
 
 // Reported in #46: `where.exe codex` on an npm global install lists the
 // extensionless POSIX shim before the batch shim. Node cannot spawn the former
@@ -69,3 +72,39 @@ test("a POSIX binary never gets a shell, even if it ends in .cmd", () => {
   assert.equal(codexSpawnTarget("/opt/homebrew/bin/codex", "darwin").options.shell, undefined);
   assert.equal(codexSpawnTarget("/weird/path/codex.cmd", "darwin").options.shell, undefined);
 });
+
+test(
+  "finds the newest Codex Desktop App bundled CLI on Windows",
+  { skip: process.platform !== "win32" },
+  () => {
+    const testRoot = mkdtempSync(path.join(os.tmpdir(), "codex-router-desktop-cli-"));
+    const binDir = path.join(testRoot, "OpenAI", "Codex", "bin");
+    const oldVersion = path.join(binDir, "aaa111", "codex.exe");
+    const newVersion = path.join(binDir, "bbb222", "codex.exe");
+    mkdirSync(path.dirname(oldVersion), { recursive: true });
+    mkdirSync(path.dirname(newVersion), { recursive: true });
+    writeFileSync(oldVersion, "");
+    writeFileSync(newVersion, "");
+    const past = new Date(Date.now() - 60_000);
+    utimesSync(oldVersion, past, past);
+    utimesSync(newVersion, new Date(), new Date());
+
+    const saved = {
+      CODEX_BIN: process.env.CODEX_BIN,
+      CODEX_INSTALL_DIR: process.env.CODEX_INSTALL_DIR,
+      LOCALAPPDATA: process.env.LOCALAPPDATA,
+    };
+    try {
+      delete process.env.CODEX_BIN;
+      delete process.env.CODEX_INSTALL_DIR;
+      process.env.LOCALAPPDATA = testRoot;
+      assert.equal(findCodexBinary(), newVersion);
+    } finally {
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      rmSync(testRoot, { recursive: true, force: true });
+    }
+  },
+);

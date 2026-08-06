@@ -1,7 +1,28 @@
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+
+// The ChatGPT/Codex desktop app bundles its CLI under a version-hashed
+// directory, e.g. %LOCALAPPDATA%\OpenAI\Codex\bin\<hash>\codex.exe. That hash
+// changes on every app update, so scan for the newest installed version
+// instead of pinning a single path.
+function desktopAppBundledCodex() {
+  if (process.platform !== "win32") return undefined;
+  const localAppData = process.env.LOCALAPPDATA;
+  if (!localAppData) return undefined;
+  const binDir = path.join(localAppData, "OpenAI", "Codex", "bin");
+  if (!existsSync(binDir)) return undefined;
+  try {
+    return readdirSync(binDir, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => path.join(binDir, entry.name, "codex.exe"))
+      .filter((candidate) => existsSync(candidate))
+      .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)[0];
+  } catch {
+    return undefined;
+  }
+}
 
 function candidates() {
   const localAppData = process.env.LOCALAPPDATA;
@@ -19,6 +40,7 @@ function candidates() {
     localAppData && path.join(localAppData, "Programs", "OpenAI", "Codex", "bin", "codex.exe"),
     localAppData && path.join(localAppData, "Programs", "Codex", "resources", "codex.exe"),
     localAppData && path.join(localAppData, "Programs", "Codex", "resources", "app", "bin", "codex.exe"),
+    desktopAppBundledCodex(),
     path.join(os.homedir(), ".local", "bin", process.platform === "win32" ? "codex.exe" : "codex"),
   ].filter(Boolean);
 }
