@@ -41,6 +41,10 @@ test("background service definitions render for macOS, Linux, and Windows", () =
     assert.match(windows, /@echo off\r?\n/);
     assert.match(windows, /set "CODEX_ROUTER_STATE_DIR=/);
     assert.match(windows, /litellm|start\.mjs/);
+    // The Python gateway must run with UTF-8 output even when the host
+    // console code page is not UTF-8 (see service-windows.mjs).
+    assert.match(windows, /set "PYTHONIOENCODING=utf-8"/);
+    assert.match(windows, /set "PYTHONUTF8=1"/);
   } finally {
     rmSync(testRoot, { recursive: true, force: true });
   }
