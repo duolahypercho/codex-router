@@ -43,7 +43,11 @@ switch ($Command) {
     Invoke-RouterNode "src\config-manager.mjs" @("disable")
     Invoke-RouterNode "src\service.mjs" @("uninstall")
   }
-  "update" { Invoke-RouterNode "src\update.mjs" @("update") }
+  "update" {
+    # `update check` stays a read-only comparison; a bare `update` installs.
+    $UpdateArguments = if ($Arguments.Count) { $Arguments } else { @("update") }
+    Invoke-RouterNode "src\update.mjs" $UpdateArguments
+  }
   "rollback" { Invoke-RouterNode "src\update.mjs" @("rollback") }
   "support-bundle" { Invoke-RouterNode "src\support-bundle.mjs" $Arguments }
   "smoke-test" {

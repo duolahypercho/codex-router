@@ -2,6 +2,26 @@
 
 ## 0.4.0-beta.2
 
+- **Updates stop reinstalling dependencies that never changed.** Every update
+  re-ran the whole installer, so a commit that touched one `.mjs` file still
+  wiped `node_modules` for a fresh `npm ci` and re-resolved the entire
+  `litellm[proxy]` tree against PyPI — which pulled unpinned transitive
+  upgrades and, on a cold uv cache or a slow link, dominated the run. Both
+  installers now fingerprint each dependency step (the lockfile for Node, the
+  pinned requirement set plus the installed distribution versions for Python)
+  and skip it when the artifacts already match, recording the stamp next to
+  `node_modules/` and `.venv/` so deleting either one reinstalls. Repair still
+  rebuilds everything: `doctor --fix` passes `--force-deps` (`-ForceDeps` on
+  Windows), which fingerprints cannot know about a corrupted tree. The
+  LiteLLM and FastAPI pins now live in `src/install-plan.mjs`, and a test
+  fails if either installer's copy drifts.
+
+- **`update check` no longer performs the update.** The `bin/update` wrapper
+  hardcoded the `update` subcommand, so the read-only availability check was
+  unreachable from the CLI and asking "is there a new version?" reinstalled
+  the router instead. Both `bin/update` and `codex-router.ps1 update` now
+  forward the subcommand, and a bare invocation still updates.
+
 - **Reasoning efforts now match what the installed Codex build can display.**
   Codex's picker parses effort levels into a fixed enum and silently drops
   values it does not recognize; `max` and `ultra` only joined that enum in

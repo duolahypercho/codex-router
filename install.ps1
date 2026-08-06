@@ -2,6 +2,7 @@
 param(
   [switch]$CheckoutInstall,
   [switch]$PrepareOnly,
+  [switch]$ForceDeps,
   [ValidateSet("codex")]
   [string]$Target = "codex",
   [switch]$Guided,
@@ -133,18 +134,44 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "Configure at least one provider before installing." }
   }
 
-  & npm ci --omit=dev
-  if ($LASTEXITCODE -ne 0) { throw "npm dependency installation failed." }
+  # Every update re-runs this installer, so the dependency steps are skipped
+  # when their inputs are unchanged; -ForceDeps (used by doctor --fix) rebuilds
+  # them.
+  function Get-InstallStep([string]$Step) {
+    if ($ForceDeps) { return "run" }
+    try {
+      $Status = (& node src/install-plan.mjs status $Step 2>$null | Select-Object -Last 1)
+      if ($LASTEXITCODE -ne 0) { return "run" }
+      return "$Status".Trim()
+    } catch {
+      return "run"
+    }
+  }
+
+  if ((Get-InstallStep "node-deps") -eq "skip") {
+    Write-Host "Node dependencies already match package-lock.json; skipping npm ci."
+  } else {
+    & npm ci --omit=dev
+    if ($LASTEXITCODE -ne 0) { throw "npm dependency installation failed." }
+    & node src/install-plan.mjs record node-deps
+    if ($LASTEXITCODE -ne 0) { throw "Recording the Node dependency state failed." }
+  }
 
   $Python = Join-Path $ScriptDirectory ".venv\Scripts\python.exe"
-  if (Get-Command "uv" -ErrorAction SilentlyContinue) {
+  if ((Get-InstallStep "python-deps") -eq "skip") {
+    Write-Host "LiteLLM already matches the pinned versions; skipping the Python install."
+  } elseif (Get-Command "uv" -ErrorAction SilentlyContinue) {
     if (-not (Test-Path $Python)) {
       & uv venv --python 3.12 .venv
       if ($LASTEXITCODE -ne 0) { throw "uv could not create the Python environment." }
     }
     # litellm 1.95.0 needs fastapi<0.140 (get_flat_dependant was removed);
-    # re-test before lifting either pin.
+    # re-test before lifting either pin. src/install-plan.mjs holds the same
+    # pins and its test fails when only one copy moves.
     & uv pip install --python $Python "litellm[proxy]==1.95.0" "fastapi==0.139.2"
+    if ($LASTEXITCODE -ne 0) { throw "LiteLLM installation failed." }
+    & node src/install-plan.mjs record python-deps
+    if ($LASTEXITCODE -ne 0) { throw "Recording the Python dependency state failed." }
   } else {
     if (Get-Command "py" -ErrorAction SilentlyContinue) {
       & py -3 -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)"
@@ -161,8 +188,10 @@ try {
     & $Python -m pip install --upgrade pip
     if ($LASTEXITCODE -ne 0) { throw "pip upgrade failed." }
     & $Python -m pip install "litellm[proxy]==1.95.0" "fastapi==0.139.2"
+    if ($LASTEXITCODE -ne 0) { throw "LiteLLM installation failed." }
+    & node src/install-plan.mjs record python-deps
+    if ($LASTEXITCODE -ne 0) { throw "Recording the Python dependency state failed." }
   }
-  if ($LASTEXITCODE -ne 0) { throw "LiteLLM installation failed." }
 
   & node src/secret.mjs ensure
   if ($LASTEXITCODE -ne 0) { throw "Local router-key setup failed." }

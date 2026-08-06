@@ -1,0 +1,119 @@
+import assert from "node:assert/strict";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import test from "node:test";
+
+import {
+  PYTHON_REQUIREMENTS,
+  installedDistributionVersion,
+  installerRequirementDrift,
+  recordStep,
+  requirementParts,
+  stepStatus,
+} from "../src/install-plan.mjs";
+
+function checkout() {
+  const root = mkdtempSync(path.join(tmpdir(), "install-plan-"));
+  writeFileSync(path.join(root, "package-lock.json"), '{"lockfileVersion":3}\n');
+  return root;
+}
+
+function installNodeModules(root) {
+  mkdirSync(path.join(root, "node_modules"), { recursive: true });
+  writeFileSync(path.join(root, "node_modules", ".package-lock.json"), "{}\n");
+}
+
+function installVenv(root, versions = { litellm: "1.95.0", fastapi: "0.139.2" }) {
+  const site = path.join(root, ".venv", "lib", "python3.12", "site-packages");
+  mkdirSync(site, { recursive: true });
+  mkdirSync(path.join(root, ".venv", "bin"), { recursive: true });
+  writeFileSync(path.join(root, ".venv", "bin", "python"), "");
+  writeFileSync(path.join(root, ".venv", "pyvenv.cfg"), "version_info = 3.12\n");
+  for (const [name, version] of Object.entries(versions)) {
+    mkdirSync(path.join(site, `${name}-${version}.dist-info`), { recursive: true });
+  }
+}
+
+test("a missing installation always runs its step", () => {
+  const root = checkout();
+  try {
+    assert.equal(stepStatus("node-deps", { root, platform: "darwin" }), "run");
+    assert.equal(stepStatus("python-deps", { root, platform: "darwin" }), "run");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("recorded steps are skipped until their inputs change", () => {
+  const root = checkout();
+  try {
+    installNodeModules(root);
+    installVenv(root);
+    recordStep("node-deps", { root });
+    recordStep("python-deps", { root });
+
+    assert.equal(stepStatus("node-deps", { root, platform: "darwin" }), "skip");
+    assert.equal(stepStatus("python-deps", { root, platform: "darwin" }), "skip");
+
+    writeFileSync(path.join(root, "package-lock.json"), '{"lockfileVersion":3,"x":1}\n');
+    assert.equal(stepStatus("node-deps", { root, platform: "darwin" }), "run");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a stamp cannot vouch for dependencies that are no longer installed", () => {
+  const root = checkout();
+  try {
+    installNodeModules(root);
+    installVenv(root);
+    recordStep("node-deps", { root });
+    recordStep("python-deps", { root });
+
+    // A drifted transitive upgrade that downgraded a pinned distribution must
+    // reinstall even though the stamp still matches the pins.
+    rmSync(path.join(root, ".venv", "lib", "python3.12", "site-packages", "litellm-1.95.0.dist-info"), {
+      recursive: true,
+      force: true,
+    });
+    assert.equal(stepStatus("python-deps", { root, platform: "darwin" }), "run");
+
+    rmSync(path.join(root, "node_modules", ".package-lock.json"), { force: true });
+    assert.equal(stepStatus("node-deps", { root, platform: "darwin" }), "run");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a rebuilt virtual environment on another Python reinstalls", () => {
+  const root = checkout();
+  try {
+    installVenv(root);
+    recordStep("python-deps", { root });
+    writeFileSync(path.join(root, ".venv", "pyvenv.cfg"), "version = 3.13.1\n");
+    assert.equal(stepStatus("python-deps", { root, platform: "darwin" }), "run");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("distribution lookup normalizes names and ignores extras", () => {
+  const root = checkout();
+  try {
+    installVenv(root, { litellm: "1.95.0", "litellm_proxy_extras": "0.4.81" });
+    assert.equal(requirementParts("litellm[proxy]==1.95.0").name, "litellm");
+    assert.equal(
+      installedDistributionVersion("litellm-proxy-extras", { root, platform: "darwin" }),
+      "0.4.81",
+    );
+    assert.equal(installedDistributionVersion("absent", { root, platform: "darwin" }), undefined);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("both installers pin the same LiteLLM and FastAPI versions", () => {
+  assert.equal(PYTHON_REQUIREMENTS.length, 2);
+  assert.deepEqual(installerRequirementDrift(), []);
+});

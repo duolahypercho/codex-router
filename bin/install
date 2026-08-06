@@ -4,6 +4,7 @@ set -eu
 repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 prepare_only=false
 migrate_known=false
+force_deps=false
 target=${MODEL_ROUTER_TARGET:-codex}
 
 # Installing is the sanctioned way for a checkout to take over a state
@@ -21,7 +22,8 @@ for argument in "$@"; do
   case "$argument" in
     --prepare-only) prepare_only=true ;;
     --migrate-known) migrate_known=true ;;
-    *) echo "Usage: $0 [--prepare-only] [--migrate-known]" >&2; exit 2 ;;
+    --force-deps) force_deps=true ;;
+    *) echo "Usage: $0 [--prepare-only] [--migrate-known] [--force-deps]" >&2; exit 2 ;;
   esac
 done
 
@@ -59,15 +61,34 @@ fi
 if [ "$prepare_only" != true ]; then
   node src/provider-selection.mjs ensure-configured >/dev/null
 fi
-npm ci --omit=dev
+# Every update re-runs this installer, so the dependency steps are skipped when
+# their inputs are unchanged; --force-deps (used by doctor --fix) rebuilds them.
+install_step() {
+  if [ "$force_deps" = true ]; then
+    echo run
+  else
+    node src/install-plan.mjs status "$1" 2>/dev/null || echo run
+  fi
+}
 
-if command -v uv >/dev/null 2>&1; then
+if [ "$(install_step node-deps)" = skip ]; then
+  echo "Node dependencies already match package-lock.json; skipping npm ci."
+else
+  npm ci --omit=dev
+  node src/install-plan.mjs record node-deps
+fi
+
+if [ "$(install_step python-deps)" = skip ]; then
+  echo "LiteLLM already matches the pinned versions; skipping the Python install."
+elif command -v uv >/dev/null 2>&1; then
   if [ ! -x .venv/bin/python ]; then
     uv venv --python 3.12 .venv
   fi
   # litellm 1.95.0 needs fastapi<0.140 (get_flat_dependant was removed);
-  # re-test before lifting either pin.
+  # re-test before lifting either pin. src/install-plan.mjs holds the same pins
+  # and its test fails when only one copy moves.
   uv pip install --python .venv/bin/python 'litellm[proxy]==1.95.0' 'fastapi==0.139.2'
+  node src/install-plan.mjs record python-deps
 else
   if ! command -v python3 >/dev/null 2>&1; then
     echo "Python 3.10+ or uv is required to install LiteLLM." >&2
@@ -77,6 +98,7 @@ else
   python3 -m venv .venv
   .venv/bin/python -m pip install --upgrade pip
   .venv/bin/python -m pip install 'litellm[proxy]==1.95.0' 'fastapi==0.139.2'
+  node src/install-plan.mjs record python-deps
 fi
 
 node src/secret.mjs ensure

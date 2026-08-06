@@ -67,6 +67,8 @@ function repair() {
     childJson("legacy-migration.mjs", ["apply", "--yes"]);
   }
   const repairStdio = jsonOutput ? ["inherit", "ignore", "inherit"] : "inherit";
+  // Repair rebuilds dependencies unconditionally: the fingerprints an ordinary
+  // install trusts cannot see a corrupted node_modules or virtual environment.
   const result = process.platform === "win32"
     ? spawnSync(
         "powershell.exe",
@@ -78,10 +80,11 @@ function repair() {
           "-File",
           path.join(SOURCE_ROOT, "install.ps1"),
           "-CheckoutInstall",
+          "-ForceDeps",
         ],
         { cwd: SOURCE_ROOT, env: process.env, stdio: repairStdio },
       )
-    : spawnSync(path.join(SOURCE_ROOT, "bin", "install"), [], {
+    : spawnSync(path.join(SOURCE_ROOT, "bin", "install"), ["--force-deps"], {
         cwd: SOURCE_ROOT,
         env: process.env,
         stdio: repairStdio,

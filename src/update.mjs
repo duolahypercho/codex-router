@@ -162,20 +162,25 @@ export function rollbackCheckout() {
   return { rolledBack: true, from: current, to: target };
 }
 
+const COMMANDS = {
+  check: checkForUpdate,
+  update: updateCheckout,
+  rollback: rollbackCheckout,
+};
+
+// `check` must stay read-only: the tray and the CLI both use it to answer "is
+// an update available?" without touching the installation.
+export function resolveCommand(args) {
+  return COMMANDS[args[0] || "update"];
+}
+
 async function main() {
-  const command = process.argv[2] || "update";
-  const result = command === "check"
-    ? checkForUpdate()
-    : command === "update"
-      ? updateCheckout()
-      : command === "rollback"
-        ? rollbackCheckout()
-        : undefined;
-  if (!result) {
+  const command = resolveCommand(process.argv.slice(2));
+  if (!command) {
     console.error("Usage: update.mjs check|update|rollback");
     process.exit(2);
   }
-  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+  process.stdout.write(`${JSON.stringify(command(), null, 2)}\n`);
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

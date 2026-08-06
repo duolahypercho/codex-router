@@ -249,6 +249,7 @@ Live quota-consuming verification is separate:
 ## Update and rollback
 
 ```sh
+./bin/update check
 ./bin/update
 ./bin/rollback
 ```
@@ -256,6 +257,7 @@ Live quota-consuming verification is separate:
 Windows:
 
 ```powershell
+./codex-router.ps1 update check
 ./codex-router.ps1 update
 ./codex-router.ps1 rollback
 ```
@@ -263,7 +265,14 @@ Windows:
 The updater requires a clean checkout on the recognized GitHub origin. It
 fetches `origin/main`, retains the current revision under
 `refs/codex-router/rollback`, fast-forwards, and reinstalls. A failed install
-automatically checks out and reinstalls the previous revision.
+automatically checks out and reinstalls the previous revision. `update check`
+only compares the revisions and changes nothing.
+
+The reinstall skips dependency work whose inputs are unchanged, so an update
+that carries no `package-lock.json` or LiteLLM pin change costs a service
+restart rather than a full `npm ci` and PyPI resolution. `./bin/doctor --fix`
+rebuilds them regardless, as does `./bin/install --force-deps`
+(`./install.ps1 -CheckoutInstall -ForceDeps` on Windows).
 
 When upgrading from a release without caller capabilities, the installer
 generates one, replaces only the marked managed URL, tightens config permissions,

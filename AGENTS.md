@@ -61,8 +61,13 @@ user.
    catalog, caller capability, internal key, service, router health, and
    selected credentials must be `OK`. Unselected credentials may be `WARN`.
 9. If a managed layer fails, use `model-router codex doctor --fix`; add
-   `--migrate-known` only for a recognized older installation. If repair still
-   fails, create `bin/support-bundle` and report its path without uploading it.
+   `--migrate-known` only for a recognized older installation. Repair rebuilds
+   the Node and Python dependencies unconditionally, unlike a normal install or
+   update, which skips whichever dependency step already matches its
+   fingerprint. Force that rebuild by hand with `bin/install --force-deps`
+   (`./install.ps1 -CheckoutInstall -ForceDeps`) when an environment looks
+   corrupted rather than merely out of date. If repair still fails, create
+   `bin/support-bundle` and report its path without uploading it.
 10. Do not terminate Codex. Tell the user to fully quit it, reopen it, create a
     new task, and choose the new model.
 
