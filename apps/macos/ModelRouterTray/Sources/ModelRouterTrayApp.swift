@@ -120,6 +120,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     let secondaryText = isActive
       ? store.compactActivityProvidersLabel
       : store.selectedUsageText
+    // secondaryLabelColor is too subdued against some menu-bar appearances;
+    // use a softened label color so usage remains readable at a glance.
+    let secondaryColor = NSColor.labelColor.withAlphaComponent(0.82)
 
     let title = NSMutableAttributedString()
     title.append(NSAttributedString(
@@ -141,7 +144,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
       title.append(NSAttributedString(
         string: secondaryText,
         attributes: [
-          .foregroundColor: NSColor.secondaryLabelColor,
+          .foregroundColor: secondaryColor,
           .font: isActive
             ? NSFont.systemFont(ofSize: 10, weight: .medium)
             : NSFont.monospacedSystemFont(ofSize: 10, weight: .medium),
