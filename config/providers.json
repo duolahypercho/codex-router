@@ -970,7 +970,11 @@
       "reasoningLevels": [
         {
           "effort": "high",
-          "description": "Adaptive deep reasoning"
+          "description": "Deep reasoning"
+        },
+        {
+          "effort": "max",
+          "description": "Maximum reasoning depth"
         }
       ],
       "contextWindow": 262144,
@@ -994,7 +998,11 @@
       "reasoningLevels": [
         {
           "effort": "high",
-          "description": "Adaptive deep reasoning"
+          "description": "Deep reasoning"
+        },
+        {
+          "effort": "max",
+          "description": "Maximum reasoning depth"
         }
       ],
       "contextWindow": 262144,
@@ -1018,7 +1026,11 @@
       "reasoningLevels": [
         {
           "effort": "high",
-          "description": "Adaptive deep reasoning"
+          "description": "Deep reasoning"
+        },
+        {
+          "effort": "max",
+          "description": "Maximum reasoning depth"
         }
       ],
       "contextWindow": 262144,

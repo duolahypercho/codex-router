@@ -1456,18 +1456,18 @@ test("API forwarder routes Qwen plan models without unsupported parameters", asy
     await waitFor(`http://127.0.0.1:${forwarderPort}/health`, forwarder, {
       Authorization: `Bearer ${INTERNAL_KEY}`,
     });
-    for (const [gatewayModel, upstreamModel] of [
-      ["qwen-plan-qwen3-7-max", "qwen3.7-max"],
-      ["qwen-plan-qwen3-7-plus", "qwen3.7-plus"],
-      ["qwen-plan-qwen3-8-max", "qwen3.8-max"],
-      ["qwen-plan-qwen3-8-max-preview", "qwen3.8-max-preview"],
-      ["qwen-plan-qwen3-6-flash", "qwen3.6-flash"],
-      // DeepSeek and GLM reach this provider through DashScope's compatible
-      // mode, so they take the Qwen plan profile rather than each vendor's
-      // native thinking profile, which sends parameters DashScope rejects.
-      ["qwen-plan-deepseek-v4-pro", "deepseek-v4-pro"],
-      ["qwen-plan-deepseek-v4-flash-0731", "deepseek-v4-flash-0731"],
-      ["qwen-plan-glm-5-2", "glm-5.2"],
+    // Qwen models have no documented effort control on DashScope, so the
+    // parameter is dropped; the cross-vendor DeepSeek/GLM models DO document
+    // reasoning_effort there (high/max), so the picked tier passes through.
+    for (const [gatewayModel, upstreamModel, expectedEffort] of [
+      ["qwen-plan-qwen3-7-max", "qwen3.7-max", undefined],
+      ["qwen-plan-qwen3-7-plus", "qwen3.7-plus", undefined],
+      ["qwen-plan-qwen3-8-max", "qwen3.8-max", undefined],
+      ["qwen-plan-qwen3-8-max-preview", "qwen3.8-max-preview", undefined],
+      ["qwen-plan-qwen3-6-flash", "qwen3.6-flash", undefined],
+      ["qwen-plan-deepseek-v4-pro", "deepseek-v4-pro", "high"],
+      ["qwen-plan-deepseek-v4-flash-0731", "deepseek-v4-flash-0731", "high"],
+      ["qwen-plan-glm-5-2", "glm-5.2", "high"],
     ]) {
       const response = await fetch(
         `http://127.0.0.1:${forwarderPort}/v1/chat/completions`,
@@ -1493,7 +1493,7 @@ test("API forwarder routes Qwen plan models without unsupported parameters", asy
       assert.equal(request.headers["chatgpt-account-id"], undefined);
       assert.equal(request.headers["x-codex-installation-id"], undefined);
       assert.equal(request.body.model, upstreamModel);
-      assert.equal(request.body.reasoning_effort, undefined);
+      assert.equal(request.body.reasoning_effort, expectedEffort);
       assert.equal(request.body.tool_choice, "auto");
     }
   } finally {

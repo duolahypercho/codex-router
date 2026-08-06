@@ -26,8 +26,10 @@
   high; GLM-5.2 sends its two documented tiers explicitly (upstream defaults
   to max when the parameter is omitted) and defaults to max as Z.ai
   recommends; GLM-5-Turbo no longer advertises effort control it does not
-  support. Providers whose thinking control is binary or undocumented (Qwen
-  via DashScope, Ollama Cloud, MiniMax, MiMo, Kimi K2.x) intentionally keep a
+  support; and the cross-vendor DeepSeek/GLM models resold through the
+  Alibaba plan gain the high/max ladder DashScope documents for them.
+  Providers whose thinking control is binary or undocumented (Qwen via
+  DashScope, Ollama Cloud, MiniMax, MiMo, Kimi K2.x) intentionally keep a
   single level.
 
 - **Curated models now carry user-provided metadata, including reasoning

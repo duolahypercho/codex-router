@@ -247,10 +247,17 @@ function normalizeBody(buffer, contentType, route) {
     // hosted models reason by default, so drop the parameter.
     delete payload.reasoning_effort;
   } else if (model.requestProfile === "qwen-plan") {
-    // DashScope's OpenAI-compatible mode does not document reasoning_effort;
-    // Qwen3.7 models reason adaptively by default, so drop the parameter
-    // rather than risk an invalid-parameter rejection.
-    delete payload.reasoning_effort;
+    // DashScope documents reasoning_effort only for the cross-vendor
+    // DeepSeek/GLM models it resells (high/max; low/medium collapse to high,
+    // xhigh to max). Qwen models have no documented effort control, so the
+    // parameter is dropped for them.
+    if ((model.reasoningLevels || []).length > 1) {
+      payload.reasoning_effort = ["xhigh", "max", "ultra"].includes(payload.reasoning_effort)
+        ? "max"
+        : "high";
+    } else {
+      delete payload.reasoning_effort;
+    }
     // Qwen rejects forced tool choices in thinking mode
     // ("tool_choice ... does not support being set to required or object");
     // downgrade to auto so tool calls stay available.
