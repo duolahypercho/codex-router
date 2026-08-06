@@ -1,6 +1,28 @@
 # Changelog
 
-## Unreleased
+## 0.4.0-beta.2
+
+- **Reasoning efforts now match what the installed Codex build can display.**
+  Codex's picker parses effort levels into a fixed enum and silently drops
+  values it does not recognize; `max` and `ultra` only joined that enum in
+  Codex 0.143.0, so on older builds the `max` tiers curated for several
+  models simply vanished from the effort menu (GLM-5.2 lost its second tier,
+  DeepSeek V4 Flash showed two levels instead of three). The catalog now
+  derives the supported vocabulary from the installed Codex version and
+  republishes out-of-range efforts at the nearest supported tier (`max` →
+  `xhigh`), keeping defaults and announcement copy in range. Routing is
+  unchanged — the forwarder already folds `xhigh` back to each vendor's
+  documented maximum.
+
+- **Legacy opencode Go models now offer Codex's native migration prompt.**
+  GLM-5.1, Kimi K2.6, and MiniMax M2.7 carry an `upgradeTo` entry pointing at
+  their generational successor on the same subscription (GLM-5.2, Kimi K3,
+  MiniMax M3), so operators still running the older model get the
+  full-screen "upgrade" modal and can switch their default with one accept —
+  the older models stay in the picker. Upgrade targets are now validated at
+  registry load: a checked-in prompt pointing at a missing or unlisted slug
+  fails the build, and a user-curated one is skipped with a warning instead
+  of shipping a modal that can never render.
 
 - **New models announce themselves in Codex.** Checked-in models that newly
   become routable — shipped by a router update, or unlocked the moment their

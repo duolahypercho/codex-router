@@ -120,6 +120,17 @@ test("registry merges valid user models and skips collisions", async () => {
       ...userModelEntry({ providerId: "deepseek", upstreamId: "deepseek-blank-nux", priority: 103 }),
       availabilityNux: "   ",
     },
+    // An upgrade prompt pointing at a slug the merged registry does not carry
+    // can never render, so the entry is skipped.
+    {
+      ...userModelEntry({ providerId: "deepseek", upstreamId: "deepseek-bad-upgrade", priority: 104 }),
+      upgradeTo: { model: "no-such/model", markdown: "Switch now" },
+    },
+    // A prompt targeting a listed checked-in model is kept.
+    {
+      ...userModelEntry({ providerId: "deepseek", upstreamId: "deepseek-good-upgrade", priority: 105 }),
+      upgradeTo: { model: "deepseek/deepseek-v4-pro", markdown: "V4 Pro supersedes this preview." },
+    },
   ];
   writeUserModels(entries);
   const registry = await import("../src/model-registry.mjs");
@@ -128,8 +139,13 @@ test("registry merges valid user models and skips collisions", async () => {
   assert.equal(slugs.filter((slug) => slug === "deepseek/deepseek-v4-pro").length, 1);
   assert.ok(!slugs.includes("no-such-provider/x-model"));
   assert.ok(!slugs.includes("deepseek/deepseek-blank-nux"));
+  assert.ok(!slugs.includes("deepseek/deepseek-bad-upgrade"));
+  assert.deepEqual(
+    registry.MODEL_BY_SLUG.get("deepseek/deepseek-good-upgrade").upgradeTo,
+    { model: "deepseek/deepseek-v4-pro", markdown: "V4 Pro supersedes this preview." },
+  );
   assert.ok(registry.MODEL_BY_GATEWAY_ID.has("deepseek-deepseek-user-test"));
-  assert.ok(registry.USER_MODEL_WARNINGS.length >= 3);
+  assert.ok(registry.USER_MODEL_WARNINGS.length >= 4);
   const merged = registry.MODEL_BY_SLUG.get("deepseek/deepseek-user-test");
   assert.equal(merged.listed, true);
   assert.equal(merged.availabilityNux, "Now available through your DeepSeek key.");

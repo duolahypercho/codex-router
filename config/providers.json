@@ -1229,6 +1229,10 @@
       "displayName": "GLM-5.1 (opencode Go)",
       "description": "GLM-5.1 through the opencode Go subscription.",
       "priority": 32,
+      "upgradeTo": {
+        "model": "opencode-go/glm-5.2",
+        "markdown": "GLM-5.2 is available on your opencode Go subscription\n\n{model_to} is the next GLM generation after {model_from}, with the same 1M-token context window plus a Max reasoning tier for harder agent work. Accept to switch your default model; GLM-5.1 stays available in the picker."
+      },
       "defaultEffort": "high",
       "reasoningLevels": [
         {
@@ -1298,6 +1302,10 @@
       "displayName": "Kimi K2.6 (opencode Go)",
       "description": "Kimi K2.6 through the opencode Go subscription.",
       "priority": 35,
+      "upgradeTo": {
+        "model": "opencode-go/kimi-k3",
+        "markdown": "Kimi K3 is available on your opencode Go subscription\n\n{model_to} is Moonshot's successor to {model_from}, running at maximum reasoning effort with the same 256K-token context window. Accept to switch your default model; Kimi K2.6 stays available in the picker."
+      },
       "defaultEffort": "high",
       "reasoningLevels": [
         {
@@ -1448,6 +1456,10 @@
       "displayName": "MiniMax M2.7 (opencode Go)",
       "description": "MiniMax M2.7 through the opencode Go subscription using the Messages API.",
       "priority": 41,
+      "upgradeTo": {
+        "model": "opencode-go-messages/minimax-m3",
+        "markdown": "MiniMax M3 is available on your opencode Go subscription\n\n{model_to} succeeds {model_from} and grows the context window from 128K to 1M tokens. Accept to switch your default model; MiniMax M2.7 stays available in the picker."
+      },
       "defaultEffort": "high",
       "reasoningLevels": [
         {

@@ -92,10 +92,32 @@ function loadRegistry() {
     return Object.freeze(model);
   });
 
+  const modelBySlug = new Map(models.map((model) => [model.slug, model]));
+  for (const model of models) {
+    const problem = upgradeTargetProblem(model, modelBySlug);
+    if (problem) fail(problem);
+  }
+
   return {
     providers,
     models: Object.freeze(models),
   };
+}
+
+// Codex only renders the upgrade modal when the target slug is in the picker,
+// so a prompt pointing at a missing or unlisted model can never fire. Catch
+// that at load time instead of shipping a silent no-op. Targets may be
+// declared later in the file, so this runs after the whole set is known.
+function upgradeTargetProblem(model, modelBySlug) {
+  if (model.upgradeTo === undefined) return undefined;
+  const target = modelBySlug.get(model.upgradeTo.model);
+  if (!target) {
+    return `model ${model.slug} upgrades to unknown model ${model.upgradeTo.model}`;
+  }
+  if (!target.listed) {
+    return `model ${model.slug} upgrades to unlisted model ${model.upgradeTo.model}`;
+  }
+  return undefined;
 }
 
 // Returns a problem description instead of throwing so the strict registry
@@ -217,6 +239,7 @@ function mergeUserModels(base) {
   const models = [...base.models];
   const slugs = new Set(models.map((model) => model.slug));
   const gatewayModels = new Set(models.map((model) => model.gatewayModel));
+  const userModels = new Set();
   for (const model of readUserModels()) {
     const problem = modelProblem(model, base.providers, slugs, gatewayModels);
     if (problem) {
@@ -225,9 +248,23 @@ function mergeUserModels(base) {
     }
     slugs.add(model.slug);
     gatewayModels.add(model.gatewayModel);
-    models.push(Object.freeze(model));
+    const frozen = Object.freeze(model);
+    userModels.add(frozen);
+    models.push(frozen);
   }
-  return { models: Object.freeze(models), warnings: Object.freeze(warnings) };
+  // Upgrade targets may point at models merged later in the overlay, so they
+  // resolve only after the whole set settles.
+  const modelBySlug = new Map(models.map((model) => [model.slug, model]));
+  const kept = models.filter((model) => {
+    if (!userModels.has(model)) return true;
+    const problem = upgradeTargetProblem(model, modelBySlug);
+    if (problem) {
+      warnings.push(`Skipped user model: ${problem}`);
+      return false;
+    }
+    return true;
+  });
+  return { models: Object.freeze(kept), warnings: Object.freeze(warnings) };
 }
 
 const registry = loadRegistry();

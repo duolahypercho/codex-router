@@ -180,3 +180,62 @@ test("LiteLLM configuration is generated from every registry route", () => {
   assert.doesNotMatch(lunaBlock, /use_chat_completions_api/);
   assert.doesNotMatch(rendered, /ANTHROPIC_API_KEY|DEEPSEEK_API_KEY|KIMI_API_KEY/);
 });
+
+test("curated upgrade prompts point at listed generational successors", () => {
+  // The modal only renders when the target slug is in the picker, so every
+  // upgradeTo must resolve to a listed model (also enforced at load time).
+  for (const model of MODELS) {
+    if (model.upgradeTo === undefined) continue;
+    const target = MODEL_BY_SLUG.get(model.upgradeTo.model);
+    assert.ok(target, `${model.slug} upgrade target exists`);
+    assert.equal(target.listed, true, `${model.slug} upgrade target is listed`);
+    // Accepting the modal switches the default model, so the target must ride
+    // the same credential: same provider, or a variant of the same parent.
+    const family = (id) => PROVIDERS.get(id).variantOf || id;
+    assert.equal(
+      family(target.provider),
+      family(model.provider),
+      `${model.slug} upgrade target stays on the same credential`,
+    );
+  }
+  assert.equal(
+    MODEL_BY_SLUG.get("opencode-go/glm-5.1").upgradeTo.model,
+    "opencode-go/glm-5.2",
+  );
+  assert.equal(
+    MODEL_BY_SLUG.get("opencode-go/kimi-k2.6").upgradeTo.model,
+    "opencode-go/kimi-k3",
+  );
+  assert.equal(
+    MODEL_BY_SLUG.get("opencode-go-messages/minimax-m2.7").upgradeTo.model,
+    "opencode-go-messages/minimax-m3",
+  );
+});
+
+test("a checked-in upgrade prompt with an unresolvable target fails the registry load", async () => {
+  const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const path = (await import("node:path")).default;
+  const { spawnSync } = await import("node:child_process");
+  const dir = mkdtempSync(path.join(tmpdir(), "registry-upgrade-test-"));
+  try {
+    const registry = JSON.parse(
+      (await import("node:fs")).readFileSync("config/providers.json", "utf8"),
+    );
+    registry.models[0] = {
+      ...registry.models[0],
+      upgradeTo: { model: "no-such/model", markdown: "Upgrade now" },
+    };
+    const registryPath = path.join(dir, "providers.json");
+    writeFileSync(registryPath, JSON.stringify(registry));
+    const result = spawnSync(
+      process.execPath,
+      ["-e", "import('./src/model-registry.mjs').catch((e)=>{console.error(e.message);process.exit(1);})"],
+      { encoding: "utf8", env: { ...process.env, MODEL_ROUTER_REGISTRY: registryPath } },
+    );
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /upgrades to unknown model no-such\/model/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
