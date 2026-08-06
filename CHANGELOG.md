@@ -28,9 +28,13 @@
   recommends; GLM-5-Turbo no longer advertises effort control it does not
   support; and the cross-vendor DeepSeek/GLM models resold through the
   Alibaba plan gain the high/max ladder DashScope documents for them.
-  Providers whose thinking control is binary or undocumented (Qwen via
-  DashScope, Ollama Cloud, MiniMax, MiMo, Kimi K2.x) intentionally keep a
-  single level.
+  The opencode Go models take their ladders from opencode's own model
+  registry (Grok low/medium/high; GLM-5.2 and DeepSeek V4 Pro high/max;
+  DeepSeek V4 Flash low/high/max; HY3 low/high; Kimi K3 max-only; GPT 5.6
+  Luna low through max), passed through verbatim since the gateway validates
+  these values itself. Providers whose thinking control is binary or
+  undocumented (Qwen via DashScope, Ollama Cloud, MiniMax, MiMo, Kimi K2.x)
+  intentionally keep a single level.
 
 - **Curated models now carry user-provided metadata, including reasoning
   efforts.** `bin/curate-models` asks for each new model's context window,

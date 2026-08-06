@@ -1174,6 +1174,14 @@
       "defaultEffort": "high",
       "reasoningLevels": [
         {
+          "effort": "low",
+          "description": "Faster reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced reasoning"
+        },
+        {
           "effort": "high",
           "description": "Deep reasoning"
         }
@@ -1194,11 +1202,15 @@
       "displayName": "GLM-5.2 (opencode Go)",
       "description": "GLM-5.2 through the opencode Go subscription.",
       "priority": 31,
-      "defaultEffort": "high",
+      "defaultEffort": "max",
       "reasoningLevels": [
         {
           "effort": "high",
           "description": "Deep reasoning"
+        },
+        {
+          "effort": "max",
+          "description": "Maximum reasoning depth"
         }
       ],
       "contextWindow": 1048576,
@@ -1240,11 +1252,11 @@
       "displayName": "Kimi K3 (opencode Go)",
       "description": "Kimi K3 through the opencode Go subscription.",
       "priority": 33,
-      "defaultEffort": "high",
+      "defaultEffort": "max",
       "reasoningLevels": [
         {
-          "effort": "high",
-          "description": "Deep reasoning"
+          "effort": "max",
+          "description": "Maximum reasoning depth"
         }
       ],
       "contextWindow": 262144,
@@ -1314,6 +1326,10 @@
         {
           "effort": "high",
           "description": "Deep reasoning"
+        },
+        {
+          "effort": "max",
+          "description": "Maximum reasoning depth"
         }
       ],
       "contextWindow": 1048576,
@@ -1335,8 +1351,16 @@
       "defaultEffort": "high",
       "reasoningLevels": [
         {
+          "effort": "low",
+          "description": "Faster reasoning"
+        },
+        {
           "effort": "high",
           "description": "Deep reasoning"
+        },
+        {
+          "effort": "max",
+          "description": "Maximum reasoning depth"
         }
       ],
       "contextWindow": 1048576,
@@ -1542,6 +1566,10 @@
       "defaultEffort": "high",
       "reasoningLevels": [
         {
+          "effort": "low",
+          "description": "Faster reasoning"
+        },
+        {
           "effort": "high",
           "description": "Deep reasoning"
         }
@@ -1562,11 +1590,27 @@
       "displayName": "GPT 5.6 Luna (opencode Go)",
       "description": "GPT 5.6 Luna through the opencode Go subscription using the Responses API.",
       "priority": 47,
-      "defaultEffort": "high",
+      "defaultEffort": "medium",
       "reasoningLevels": [
+        {
+          "effort": "low",
+          "description": "Faster reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced reasoning"
+        },
         {
           "effort": "high",
           "description": "Deep reasoning"
+        },
+        {
+          "effort": "xhigh",
+          "description": "Extended reasoning"
+        },
+        {
+          "effort": "max",
+          "description": "Maximum reasoning depth"
         }
       ],
       "contextWindow": 272000,
