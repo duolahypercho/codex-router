@@ -931,6 +931,7 @@ async function handleResponses(request, response, requestUrl) {
         model: route.gatewayModel,
         input,
       };
+      delete routed.client_metadata;
       target = `${GATEWAY_BASE}/responses`;
       headers = routedHeaders();
       routedBody = Buffer.from(JSON.stringify(routed), "utf8");

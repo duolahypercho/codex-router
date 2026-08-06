@@ -506,6 +506,7 @@ test("router preserves native auth and isolates every external route", async () 
           model: "gpt-5.6-sol",
           input: "native test",
           previous_response_id: "remove-me",
+          client_metadata: { workspace: "test" },
         }),
       ),
     );
@@ -527,7 +528,7 @@ test("router preserves native auth and isolates every external route", async () 
       const response = await fetch(`${routerBase(routerPort)}/responses`, {
         method: "POST",
         headers: callerHeaders,
-        body: JSON.stringify({ model, input: "external test" }),
+        body: JSON.stringify({ model, input: "external test", client_metadata: { workspace: "test" } }),
       });
       assert.equal(response.status, 200);
       assert.equal(routedRequests.at(-1).body.model, gatewayModel);
@@ -537,11 +538,13 @@ test("router preserves native auth and isolates every external route", async () 
     assert.equal(nativeRequests[0].headers["chatgpt-account-id"], "account-secret");
     assert.equal(nativeRequests[0].headers["x-private-header"], undefined);
     assert.equal(nativeRequests[0].body.previous_response_id, undefined);
+    assert.deepEqual(nativeRequests[0].body.client_metadata, { workspace: "test" });
     for (const request of routedRequests) {
       assert.equal(request.headers.authorization, `Bearer ${INTERNAL_KEY}`);
       assert.equal(request.headers["chatgpt-account-id"], undefined);
       assert.equal(request.headers["x-codex-installation-id"], undefined);
       assert.equal(request.headers["x-private-header"], undefined);
+      assert.equal(request.body.client_metadata, undefined);
     }
   } finally {
     await stopChild(router);
@@ -1084,6 +1087,7 @@ test("API forwarder replaces caller auth and enforces Kimi K3 API parameters", a
           model: "kimi-api-k3",
           reasoning_effort: "low",
           messages: [{ role: "user", content: "test" }],
+          client_metadata: { workspace: "test" },
         }),
       },
     );
@@ -1095,11 +1099,115 @@ test("API forwarder replaces caller auth and enforces Kimi K3 API parameters", a
     assert.equal(request.body.model, "kimi-k3");
     // K3 documents low/high/max; the requested low passes through unchanged.
     assert.equal(request.body.reasoning_effort, "low");
+    assert.equal(request.body.client_metadata, undefined);
   } finally {
     await stopChild(forwarder);
     await closeServer(upstream.server);
   }
 });
+
+
+
+test("API forwarder injects thought_signature for Gemini models and omits it for others", async () => {
+  const upstreamRequests = [];
+  const upstream = await mockServer(async (req, res) => {
+    const body = await bodyJson(req);
+    upstreamRequests.push({ headers: req.headers, body });
+    json(res, 200, {
+      id: "chatcmpl-test",
+      object: "chat.completion",
+      created: 1,
+      model: body.model,
+      choices: [{ index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
+    });
+  });
+
+  const forwarderPort = await openPort();
+  const forwarder = run("api-forwarder.mjs", {
+    GEMINI_API_BASE_URL: `http://127.0.0.1:${upstream.port}/v1`,
+    GEMINI_API_KEY: "TEST_GEMINI_KEY",
+    DEEPSEEK_API_BASE_URL: `http://127.0.0.1:${upstream.port}/v1`,
+    DEEPSEEK_API_KEY: "TEST_DEEPSEEK_KEY",
+    KIMI_API_FORWARD_PORT: String(forwarderPort),
+    MODEL_ROUTER_API_PORT: String(forwarderPort),
+    KIMI_PROXY_QUIET: "1",
+  });
+
+  try {
+    await waitFor(`http://127.0.0.1:${forwarderPort}/health`, forwarder, {
+      Authorization: `Bearer ${INTERNAL_KEY}`,
+    });
+
+    // Test Gemini model tool_calls thought_signature injection and web_search_options removal
+    const geminiRes = await fetch(`http://127.0.0.1:${forwarderPort}/v1/chat/completions`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${INTERNAL_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "gemini-api-models-gemini-3-5-flash",
+        web_search_options: { enabled: true },
+        messages: [
+          {
+            role: "assistant",
+            content: null,
+            tool_calls: [
+              {
+                id: "call_123",
+                type: "function",
+                function: { name: "test_func", arguments: "{}" },
+              },
+            ],
+          },
+          { role: "tool", tool_call_id: "call_123", content: "result" },
+        ],
+      }),
+    });
+    assert.equal(geminiRes.status, 200);
+    const geminiReq = upstreamRequests[0];
+    assert.equal(geminiReq.body.web_search_options, undefined);
+    assert.equal(geminiReq.body.messages[0].tool_calls[0].thought_signature, "skip_thought_signature_validator");
+    assert.equal(geminiReq.body.messages[0].tool_calls[0].function.thought_signature, "skip_thought_signature_validator");
+    assert.equal(geminiReq.body.messages[0].tool_calls[0].extra_content.google.thought_signature, "skip_thought_signature_validator");
+
+    // Test non-Gemini model (DeepSeek) does not inject thought_signature and preserves web_search_options if passed
+    const deepseekRes = await fetch(`http://127.0.0.1:${forwarderPort}/v1/chat/completions`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${INTERNAL_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "deepseek-legacy-chat",
+        web_search_options: { enabled: true },
+        messages: [
+          {
+            role: "assistant",
+            content: null,
+            tool_calls: [
+              {
+                id: "call_456",
+                type: "function",
+                function: { name: "test_func", arguments: "{}" },
+              },
+            ],
+          },
+          { role: "tool", tool_call_id: "call_456", content: "result" },
+        ],
+      }),
+    });
+    assert.equal(deepseekRes.status, 200);
+    const deepseekReq = upstreamRequests[1];
+    assert.deepEqual(deepseekReq.body.web_search_options, { enabled: true });
+    assert.equal(deepseekReq.body.messages[0].tool_calls[0].thought_signature, undefined);
+
+  } finally {
+    forwarder.kill();
+    await new Promise((resolve) => upstream.server.close(resolve));
+  }
+});
+
 
 test("API forwarder health omits disabled API providers", async () => {
   const testRoot = mkdtempSync(path.join(os.tmpdir(), "api-forwarder-health-"));

@@ -80,6 +80,14 @@ test("provider registry exposes configured API and OAuth model families", () => 
       "meta/muse-spark-1.2",
       "meta/muse-spark-1.2-contributor",
       "meta/muse-spark-1.1",
+      "gemini-api/models/gemini-3.1-pro-preview",
+      "gemini-api/models/gemini-3.1-pro-preview-customtools",
+      "gemini-api/models/gemini-3.5-flash",
+      "gemini-api/models/gemini-3.5-flash-lite",
+      "gemini-api/models/gemini-3.5-live-translate-preview",
+      "gemini-api/models/gemini-3.6-flash",
+      "gemini-api/models/gemma-4-26b-a4b-it",
+      "gemini-api/models/gemma-4-31b-it",
     ],
   );
   assert.equal(PROVIDERS.get("deepseek").baseUrl, "https://api.deepseek.com");

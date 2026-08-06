@@ -2400,6 +2400,254 @@
       ],
       "supportsApplyPatchTool": false,
       "compHash": "meta-muse-spark-1-1-v1"
+    },
+    {
+      "slug": "gemini-api/models/gemini-3.1-pro-preview",
+      "gatewayModel": "gemini-api-models-gemini-3-1-pro-preview",
+      "upstreamModel": "models/gemini-3.1-pro-preview",
+      "provider": "gemini-api",
+      "listed": true,
+      "displayName": "Gemini 3.1 Pro Preview (API)",
+      "description": "Google Gemini 3.1 Pro Preview via Gemini API.",
+      "priority": 9,
+      "defaultEffort": "medium",
+      "reasoningLevels": [
+        {
+          "effort": "low",
+          "description": "Lighter reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced adaptive reasoning"
+        },
+        {
+          "effort": "high",
+          "description": "Deep reasoning"
+        }
+      ],
+      "contextWindow": 1048576,
+      "autoCompact": 900000,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "requestProfile": "gemini-reasoning",
+      "compHash": "gemini-api-models-gemini-3-1-pro-preview-v1"
+    },
+    {
+      "slug": "gemini-api/models/gemini-3.1-pro-preview-customtools",
+      "gatewayModel": "gemini-api-models-gemini-3-1-pro-preview-customtools",
+      "upstreamModel": "models/gemini-3.1-pro-preview-customtools",
+      "provider": "gemini-api",
+      "listed": true,
+      "displayName": "Gemini 3.1 Pro Custom Tools (API)",
+      "description": "Google Gemini 3.1 Pro Preview with custom tools via Gemini API.",
+      "priority": 9,
+      "defaultEffort": "medium",
+      "reasoningLevels": [
+        {
+          "effort": "low",
+          "description": "Lighter reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced adaptive reasoning"
+        },
+        {
+          "effort": "high",
+          "description": "Deep reasoning"
+        }
+      ],
+      "contextWindow": 1048576,
+      "autoCompact": 900000,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "requestProfile": "gemini-reasoning",
+      "compHash": "gemini-api-models-gemini-3-1-pro-preview-customtools-v1"
+    },
+    {
+      "slug": "gemini-api/models/gemini-3.5-flash",
+      "gatewayModel": "gemini-api-models-gemini-3-5-flash",
+      "upstreamModel": "models/gemini-3.5-flash",
+      "provider": "gemini-api",
+      "listed": true,
+      "displayName": "Gemini 3.5 Flash (API)",
+      "description": "Google Gemini 3.5 Flash via Gemini API.",
+      "priority": 8,
+      "defaultEffort": "medium",
+      "reasoningLevels": [
+        {
+          "effort": "low",
+          "description": "Lighter reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced adaptive reasoning"
+        },
+        {
+          "effort": "high",
+          "description": "Deep reasoning"
+        }
+      ],
+      "contextWindow": 1048576,
+      "autoCompact": 900000,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "requestProfile": "gemini-reasoning",
+      "compHash": "gemini-api-models-gemini-3-5-flash-v1"
+    },
+    {
+      "slug": "gemini-api/models/gemini-3.5-flash-lite",
+      "gatewayModel": "gemini-api-models-gemini-3-5-flash-lite",
+      "upstreamModel": "models/gemini-3.5-flash-lite",
+      "provider": "gemini-api",
+      "listed": true,
+      "displayName": "Gemini 3.5 Flash Lite (API)",
+      "description": "Google Gemini 3.5 Flash Lite via Gemini API.",
+      "priority": 7,
+      "defaultEffort": "low",
+      "reasoningLevels": [
+        {
+          "effort": "low",
+          "description": "Lighter reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced adaptive reasoning"
+        }
+      ],
+      "contextWindow": 1048576,
+      "autoCompact": 900000,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "requestProfile": "gemini-reasoning",
+      "compHash": "gemini-api-models-gemini-3-5-flash-lite-v1"
+    },
+    {
+      "slug": "gemini-api/models/gemini-3.5-live-translate-preview",
+      "gatewayModel": "gemini-api-models-gemini-3-5-live-translate-preview",
+      "upstreamModel": "models/gemini-3.5-live-translate-preview",
+      "provider": "gemini-api",
+      "listed": true,
+      "displayName": "Gemini 3.5 Live Translate (API)",
+      "description": "Google Gemini 3.5 Live Translate Preview via Gemini API.",
+      "priority": 6,
+      "defaultEffort": "medium",
+      "reasoningLevels": [
+        {
+          "effort": "low",
+          "description": "Lighter reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced adaptive reasoning"
+        }
+      ],
+      "contextWindow": 1048576,
+      "autoCompact": 900000,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "requestProfile": "gemini-reasoning",
+      "compHash": "gemini-api-models-gemini-3-5-live-translate-preview-v1"
+    },
+    {
+      "slug": "gemini-api/models/gemini-3.6-flash",
+      "gatewayModel": "gemini-api-models-gemini-3-6-flash",
+      "upstreamModel": "models/gemini-3.6-flash",
+      "provider": "gemini-api",
+      "listed": true,
+      "displayName": "Gemini 3.6 Flash (API)",
+      "description": "Google Gemini 3.6 Flash via Gemini API.",
+      "priority": 8,
+      "defaultEffort": "medium",
+      "reasoningLevels": [
+        {
+          "effort": "low",
+          "description": "Lighter reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced adaptive reasoning"
+        },
+        {
+          "effort": "high",
+          "description": "Deep reasoning"
+        }
+      ],
+      "contextWindow": 1048576,
+      "autoCompact": 900000,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "requestProfile": "gemini-reasoning",
+      "compHash": "gemini-api-models-gemini-3-6-flash-v1"
+    },
+    {
+      "slug": "gemini-api/models/gemma-4-26b-a4b-it",
+      "gatewayModel": "gemini-api-models-gemma-4-26b-a4b-it",
+      "upstreamModel": "models/gemma-4-26b-a4b-it",
+      "provider": "gemini-api",
+      "listed": true,
+      "displayName": "Gemma 4 26B A4B IT (API)",
+      "description": "Gemma 4 26B A4B IT via Gemini API.",
+      "priority": 5,
+      "defaultEffort": "medium",
+      "reasoningLevels": [
+        {
+          "effort": "low",
+          "description": "Lighter reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced adaptive reasoning"
+        }
+      ],
+      "contextWindow": 131072,
+      "autoCompact": 100000,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "requestProfile": "gemini-reasoning",
+      "compHash": "gemini-api-models-gemma-4-26b-a4b-it-v1"
+    },
+    {
+      "slug": "gemini-api/models/gemma-4-31b-it",
+      "gatewayModel": "gemini-api-models-gemma-4-31b-it",
+      "upstreamModel": "models/gemma-4-31b-it",
+      "provider": "gemini-api",
+      "listed": true,
+      "displayName": "Gemma 4 31B IT (API)",
+      "description": "Gemma 4 31B IT via Gemini API.",
+      "priority": 5,
+      "defaultEffort": "medium",
+      "reasoningLevels": [
+        {
+          "effort": "low",
+          "description": "Lighter reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced adaptive reasoning"
+        }
+      ],
+      "contextWindow": 131072,
+      "autoCompact": 100000,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "requestProfile": "gemini-reasoning",
+      "compHash": "gemini-api-models-gemma-4-31b-it-v1"
     }
   ]
 }

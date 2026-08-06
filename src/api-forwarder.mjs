@@ -1,5 +1,7 @@
 import http from "node:http";
 
+const GEMINI_THOUGHT_SIGNATURE_SENTINEL = "skip_thought_signature_validator";
+
 import {
   HOP_BY_HOP_HEADERS,
   httpErrorStatus,
@@ -181,9 +183,41 @@ function ensureToolResultsForCalls(messages) {
   return repaired;
 }
 
-function sanitizeChatToolHistory(messages) {
+function ensureGeminiThoughtSignatures(messages) {
   if (!Array.isArray(messages)) return messages;
-  return ensureToolResultsForCalls(coalesceAssistantMessages(messages));
+  for (const message of messages) {
+    if (message?.role === "assistant" && Array.isArray(message.tool_calls)) {
+      for (const call of message.tool_calls) {
+        if (call && typeof call === "object") {
+          call.thought_signature = GEMINI_THOUGHT_SIGNATURE_SENTINEL;
+          if (call.function && typeof call.function === "object") {
+            call.function.thought_signature = GEMINI_THOUGHT_SIGNATURE_SENTINEL;
+          }
+          if (!call.extra_content || typeof call.extra_content !== "object") {
+            call.extra_content = {};
+          }
+          if (!call.extra_content.google || typeof call.extra_content.google !== "object") {
+            call.extra_content.google = {};
+          }
+          call.extra_content.google.thought_signature = GEMINI_THOUGHT_SIGNATURE_SENTINEL;
+        }
+      }
+    }
+  }
+  return messages;
+}
+
+function sanitizeChatToolHistory(messages, provider) {
+  if (!Array.isArray(messages)) return messages;
+  const repaired = ensureToolResultsForCalls(coalesceAssistantMessages(messages));
+  if (
+    provider?.id === "gemini-api" ||
+    provider?.ownedBy === "google" ||
+    (provider?.id && provider.id.includes("gemini"))
+  ) {
+    ensureGeminiThoughtSignatures(repaired);
+  }
+  return repaired;
 }
 
 function normalizeBody(buffer, contentType, route) {
@@ -198,12 +232,14 @@ function normalizeBody(buffer, contentType, route) {
     error.status = 400;
     throw error;
   }
+  delete payload.client_metadata;
   const requestedModel = String(payload.model || "");
   // LiteLLM's Responses bridge prefixes the gateway id with `responses/` on
   // the upstream wire format; the forwarder still owns the id translation.
   const model =
     MODEL_BY_GATEWAY_ID.get(requestedModel.replace(/^responses\//, "")) ||
-    MODEL_BY_GATEWAY_ID.get(requestedModel);
+    MODEL_BY_GATEWAY_ID.get(requestedModel) ||
+    MODEL_BY_SLUG.get(requestedModel);
   const provider = model && providerForModel(model);
   if (!model || provider?.kind !== "openai-compatible") {
     const error = new Error(`Unknown API gateway model: ${String(payload.model || "missing")}`);
@@ -223,8 +259,16 @@ function normalizeBody(buffer, contentType, route) {
   }
 
   payload.model = model.upstreamModel;
+  delete payload.client_metadata;
+  if (
+    provider?.id === "gemini-api" ||
+    provider?.ownedBy === "google" ||
+    (provider?.id && provider.id.includes("gemini"))
+  ) {
+    delete payload.web_search_options;
+  }
   if (Array.isArray(payload.messages)) {
-    payload.messages = sanitizeChatToolHistory(payload.messages);
+    payload.messages = sanitizeChatToolHistory(payload.messages, provider);
   }
   if (model.requestProfile === "kimi-k3") {
     const effort = kimiK3Effort(payload.reasoning_effort);

@@ -89,6 +89,7 @@ function normalizeKimiBody(buffer, contentType) {
   }
   const payload = JSON.parse(buffer.toString("utf8"));
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return buffer;
+  delete payload.client_metadata;
   foldInterveningAssistantMessages(payload.messages);
   payload.thinking = { type: "enabled" };
   if (payload.model === "k3") {
