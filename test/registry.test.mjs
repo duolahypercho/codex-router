@@ -125,10 +125,12 @@ test("provider registry exposes configured API and OAuth model families", () => 
     MODEL_BY_SLUG.get("opencode-go-responses/gpt-5.6-luna").contextWindow,
     272_000,
   );
+  // Documented output_config.effort ladder for Opus 4.8 (default high).
   assert.deepEqual(
-    MODEL_BY_SLUG.get("anthropic-api/claude-opus-4.8").reasoningLevels,
-    [{ effort: "high", description: "Adaptive deep reasoning for agentic work" }],
+    MODEL_BY_SLUG.get("anthropic-api/claude-opus-4.8").reasoningLevels.map((level) => level.effort),
+    ["low", "medium", "high", "xhigh", "max"],
   );
+  assert.equal(MODEL_BY_SLUG.get("anthropic-api/claude-opus-4.8").defaultEffort, "high");
   const grok = MODEL_BY_SLUG.get("grok-api/grok-4.5");
   assert.equal(grok.contextWindow, 500_000);
   assert.deepEqual(grok.reasoningLevels.map((level) => level.effort), ["low", "medium", "high"]);

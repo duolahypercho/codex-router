@@ -25,13 +25,16 @@ const effortsOption = (() => {
 })();
 
 // The Codex effort ladder. Registry models describe each level explicitly;
-// curated models reuse these standard descriptions.
+// curated models reuse these standard descriptions. Only advertise levels the
+// upstream actually documents — an unsupported value can be rejected with a
+// 400 or silently remapped by the provider.
 const EFFORT_DESCRIPTIONS = {
   minimal: "Fastest responses",
   low: "Quick reasoning",
   medium: "Balanced reasoning",
   high: "Deep reasoning",
-  xhigh: "Maximum reasoning",
+  xhigh: "Extended reasoning",
+  max: "Maximum reasoning",
 };
 
 function usage() {

@@ -17,6 +17,19 @@
   the re-capture fails, the router keeps serving the previous capture and says
   so instead of failing the rebuild.
 
+- **Reasoning effort ladders now match each vendor's documentation.** Every
+  listed model's picker levels were verified against the provider's official
+  API docs: Kimi K3 (API) gains its documented low/high/max ladder instead of
+  a forced max; DeepSeek V4 Flash gains its real low tier; Claude Opus 4.8
+  gains the full low/medium/high/xhigh/max `output_config.effort` ladder and
+  the forwarder now passes the picked effort through instead of hardcoding
+  high; GLM-5.2 sends its two documented tiers explicitly (upstream defaults
+  to max when the parameter is omitted) and defaults to max as Z.ai
+  recommends; GLM-5-Turbo no longer advertises effort control it does not
+  support. Providers whose thinking control is binary or undocumented (Qwen
+  via DashScope, Ollama Cloud, MiniMax, MiMo, Kimi K2.x) intentionally keep a
+  single level.
+
 - **Curated models now carry user-provided metadata, including reasoning
   efforts.** `bin/curate-models` asks for each new model's context window,
   image support, and reasoning efforts (so curated models get the effort

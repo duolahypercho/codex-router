@@ -1093,7 +1093,8 @@ test("API forwarder replaces caller auth and enforces Kimi K3 API parameters", a
     assert.equal(request.headers["chatgpt-account-id"], undefined);
     assert.equal(request.headers["x-codex-installation-id"], undefined);
     assert.equal(request.body.model, "kimi-k3");
-    assert.equal(request.body.reasoning_effort, "max");
+    // K3 documents low/high/max; the requested low passes through unchanged.
+    assert.equal(request.body.reasoning_effort, "low");
   } finally {
     await stopChild(forwarder);
     await closeServer(upstream.server);
@@ -1149,9 +1150,12 @@ test("API forwarder supports all DeepSeek V4 models and normalizes thinking", as
     await waitFor(`http://127.0.0.1:${forwarderPort}/health`, forwarder, {
       Authorization: `Bearer ${INTERNAL_KEY}`,
     });
-    for (const [gatewayModel, upstreamModel, effort] of [
-      ["deepseek-v4-flash", "deepseek-v4-flash", "high"],
-      ["deepseek-v4-pro", "deepseek-v4-pro", "max"],
+    // DeepSeek documents low/high/max; low passes through (a real tier on
+    // V4 Flash) and the xhigh compat alias maps to max.
+    for (const [gatewayModel, upstreamModel, sentEffort, effort] of [
+      ["deepseek-v4-flash", "deepseek-v4-flash", "low", "low"],
+      ["deepseek-v4-flash", "deepseek-v4-flash", "medium", "high"],
+      ["deepseek-v4-pro", "deepseek-v4-pro", "xhigh", "max"],
     ]) {
       const response = await fetch(
         `http://127.0.0.1:${forwarderPort}/v1/chat/completions`,
@@ -1165,7 +1169,7 @@ test("API forwarder supports all DeepSeek V4 models and normalizes thinking", as
           },
           body: JSON.stringify({
             model: gatewayModel,
-            reasoning_effort: effort === "max" ? "xhigh" : "low",
+            reasoning_effort: sentEffort,
             temperature: 0.7,
             messages: [{ role: "user", content: "test" }],
           }),
@@ -1595,8 +1599,12 @@ test("API forwarder routes GLM coding-plan models with thinking enabled", async 
     await waitFor(`http://127.0.0.1:${forwarderPort}/health`, forwarder, {
       Authorization: `Bearer ${INTERNAL_KEY}`,
     });
+    // GLM-5.2 has two documented tiers (high/max, upstream default max), so
+    // high must be sent explicitly; GLM-5-Turbo does not support the
+    // parameter and never receives it.
     for (const [gatewayModel, upstreamModel, sentEffort, expectedEffort] of [
       ["zai-coding-glm-5-2", "glm-5.2", "xhigh", "max"],
+      ["zai-coding-glm-5-2", "glm-5.2", "high", "high"],
       ["zai-coding-glm-5-turbo", "glm-5-turbo", "low", undefined],
     ]) {
       const response = await fetch(
@@ -1729,7 +1737,7 @@ test("API forwarder isolates Anthropic credentials on the native Messages route"
         body: JSON.stringify({
           model: "anthropic-api-claude-opus-4-8",
           max_tokens: 64,
-          reasoning_effort: "high",
+          reasoning_effort: "xhigh",
           messages: [{ role: "user", content: "test" }],
         }),
       },
@@ -1744,7 +1752,10 @@ test("API forwarder isolates Anthropic credentials on the native Messages route"
     assert.equal(request.body.model, "claude-opus-4-8");
     assert.equal(request.body.reasoning_effort, undefined);
     assert.deepEqual(request.body.thinking, { type: "adaptive" });
-    assert.deepEqual(request.body.output_config, { effort: "high" });
+    // The picker's effort passes through to output_config (documented ladder
+    // low/medium/high/xhigh/max); the integration test covers the high
+    // fallback for unrecognized values.
+    assert.deepEqual(request.body.output_config, { effort: "xhigh" });
   } finally {
     await stopChild(forwarder);
     await closeServer(upstream.server);

@@ -576,8 +576,16 @@
       "defaultEffort": "max",
       "reasoningLevels": [
         {
+          "effort": "low",
+          "description": "Faster reasoning"
+        },
+        {
+          "effort": "high",
+          "description": "Balanced deep reasoning"
+        },
+        {
           "effort": "max",
-          "description": "Maximum reasoning required by the Kimi K3 API"
+          "description": "Maximum reasoning depth"
         }
       ],
       "contextWindow": 1048576,
@@ -600,6 +608,10 @@
       "priority": 6,
       "defaultEffort": "high",
       "reasoningLevels": [
+        {
+          "effort": "low",
+          "description": "Faster reasoning"
+        },
         {
           "effort": "high",
           "description": "Deep reasoning"
@@ -741,8 +753,24 @@
       "defaultEffort": "high",
       "reasoningLevels": [
         {
+          "effort": "low",
+          "description": "Minimal thinking, fastest responses"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced adaptive thinking"
+        },
+        {
           "effort": "high",
           "description": "Adaptive deep reasoning for agentic work"
+        },
+        {
+          "effort": "xhigh",
+          "description": "Extended thinking, recommended for coding"
+        },
+        {
+          "effort": "max",
+          "description": "Unconstrained thinking on every response"
         }
       ],
       "contextWindow": 1048576,
@@ -763,7 +791,7 @@
       "displayName": "GLM-5.2 (Coding Plan)",
       "description": "GLM-5.2 through the Z.ai GLM Coding Plan subscription with agentic coding, tool calls, and a 1M context window.",
       "priority": 10,
-      "defaultEffort": "high",
+      "defaultEffort": "max",
       "reasoningLevels": [
         {
           "effort": "high",
@@ -795,11 +823,7 @@
       "reasoningLevels": [
         {
           "effort": "high",
-          "description": "Deep reasoning with thinking enabled"
-        },
-        {
-          "effort": "max",
-          "description": "Maximum reasoning depth"
+          "description": "Adaptive thinking (effort control is not supported)"
         }
       ],
       "contextWindow": 204800,
