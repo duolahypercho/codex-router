@@ -112,10 +112,55 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
   private func updateStatusItemTitle() {
     guard let button = statusItem?.button else { return }
-    if store.hasConcurrentActivity {
-      button.title = "\(store.activitySummaryLabel) · \(store.compactActivityProvidersLabel)"
-    } else {
-      button.title = store.selectedUsageProvider.shortName
+
+    let isActive = store.hasConcurrentActivity
+    let primaryText = isActive
+      ? store.activitySummaryLabel
+      : store.selectedUsageProvider.shortName
+    let secondaryText = isActive
+      ? store.compactActivityProvidersLabel
+      : store.selectedUsageText
+
+    let title = NSMutableAttributedString()
+    title.append(NSAttributedString(
+      string: "● ",
+      attributes: [
+        .foregroundColor: statusItemTint(for: store.activityState),
+        .font: NSFont.systemFont(ofSize: 8, weight: .medium),
+      ]
+    ))
+    title.append(NSAttributedString(
+      string: primaryText,
+      attributes: [
+        .foregroundColor: NSColor.labelColor,
+        .font: NSFont.systemFont(ofSize: 11, weight: .medium),
+      ]
+    ))
+    if let secondaryText {
+      title.append(NSAttributedString(string: "  "))
+      title.append(NSAttributedString(
+        string: secondaryText,
+        attributes: [
+          .foregroundColor: NSColor.secondaryLabelColor,
+          .font: isActive
+            ? NSFont.systemFont(ofSize: 10, weight: .medium)
+            : NSFont.monospacedSystemFont(ofSize: 10, weight: .medium),
+        ]
+      ))
+    }
+    button.attributedTitle = title
+  }
+
+  private func statusItemTint(for state: RouterActivityState) -> NSColor {
+    switch state {
+    case .idle:
+      return NSColor(calibratedRed: 0.38, green: 0.82, blue: 0.61, alpha: 1)
+    case .generating:
+      return NSColor(calibratedRed: 0.94, green: 0.68, blue: 0.25, alpha: 1)
+    case .starting:
+      return NSColor(calibratedRed: 0.36, green: 0.66, blue: 0.91, alpha: 1)
+    case .error:
+      return NSColor(calibratedRed: 0.91, green: 0.35, blue: 0.32, alpha: 1)
     }
   }
 
