@@ -38,12 +38,13 @@ export const WINDOWS_HIDDEN_PROMPT_SCRIPT = [
 function hiddenPrompt(label) {
   if (process.platform === "win32") {
     const script = WINDOWS_HIDDEN_PROMPT_SCRIPT;
+    const encodedScript = Buffer.from(script, "utf16le").toString("base64");
     let lastError;
     for (const executable of ["powershell.exe", "pwsh.exe"]) {
       try {
         return execFileSync(
           executable,
-          ["-NoLogo", "-NoProfile", "-Command", script],
+          ["-NoLogo", "-NoProfile", "-EncodedCommand", encodedScript],
           {
             encoding: "utf8",
             env: { ...process.env, CODEX_ROUTER_PROMPT_LABEL: label },
@@ -51,7 +52,11 @@ function hiddenPrompt(label) {
           },
         );
       } catch (error) {
-        lastError = error;
+        if (error.code !== "ENOENT") {
+          lastError = error;
+        } else if (!lastError) {
+          lastError = error;
+        }
       }
     }
     throw lastError || new Error("PowerShell is required for hidden API-key input.");

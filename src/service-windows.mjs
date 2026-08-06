@@ -33,6 +33,8 @@ function cmdEscape(value) {
 function wrapper() {
   const start = path.join(SOURCE_ROOT, "src", "start.mjs");
   const variables = {
+    PYTHONIOENCODING: "utf-8",
+    PYTHONUTF8: "1",
     MODEL_ROUTER_TARGET: TARGET,
     MODEL_ROUTER_STATE_DIR: STATE_DIR,
     MODEL_ROUTER_QUIET: "1",
@@ -76,42 +78,59 @@ function writeWrapper() {
 
 function installTask() {
   const script = [
-    "$action = New-ScheduledTaskAction -Execute 'cmd.exe' -Argument ('/D /C \"\"' + $env:CODEX_ROUTER_WRAPPER + '\"\"')",
-    "$trigger = New-ScheduledTaskTrigger -AtLogOn -User ([Security.Principal.WindowsIdentity]::GetCurrent().Name)",
+    "$action = New-ScheduledTaskAction -Execute $env:CODEX_ROUTER_WRAPPER",
+    "$trigger = New-ScheduledTaskTrigger -AtLogOn",
     "$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew",
-    "$principal = New-ScheduledTaskPrincipal -UserId ([Security.Principal.WindowsIdentity]::GetCurrent().Name) -LogonType Interactive -RunLevel Limited",
-    "Register-ScheduledTask -TaskName $env:CODEX_ROUTER_TASK -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force | Out-Null",
-  ].join("; ");
+    "Register-ScheduledTask -TaskName $env:CODEX_ROUTER_TASK -Action $action -Trigger $trigger -Settings $settings -Force | Out-Null",
+  ].join("\n");
+  const encodedScript = Buffer.from(script, "utf16le").toString("base64");
   try {
     execFileSync(
       "powershell.exe",
-      ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
+      ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encodedScript],
       {
         env: {
           ...process.env,
           CODEX_ROUTER_TASK: taskName,
           CODEX_ROUTER_WRAPPER: wrapperPath,
         },
-        stdio: ["ignore", "ignore", "ignore"],
+        stdio: ["ignore", "pipe", "pipe"],
       },
     );
   } catch {
-    const action = `cmd.exe /D /C ""${wrapperPath}""`;
-    schtasks(
-      ["/Create", "/TN", taskName, "/SC", "ONLOGON", "/TR", action, "/RL", "LIMITED", "/F"],
-      { quiet: true },
-    );
+    try {
+      const action = `cmd.exe /D /C "${wrapperPath}"`;
+      schtasks(
+        ["/Create", "/TN", taskName, "/SC", "ONLOGON", "/TR", action, "/RL", "LIMITED", "/F"],
+        { quiet: true },
+      );
+    } catch {
+      const startupFolder = path.join(
+        process.env.APPDATA || "",
+        "Microsoft",
+        "Windows",
+        "Start Menu",
+        "Programs",
+        "Startup",
+      );
+      if (existsSync(startupFolder)) {
+        const shortcutScript = `$ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut('${path.join(startupFolder, "CodexRouter.lnk").replaceAll("'", "''")}'); $s.TargetPath = '${wrapperPath.replaceAll("'", "''")}'; $s.WindowStyle = 7; $s.Save()`;
+        const encodedShortcut = Buffer.from(shortcutScript, "utf16le").toString("base64");
+        execFileSync("powershell.exe", ["-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encodedShortcut], { stdio: ["ignore", "ignore", "ignore"] });
+      }
+    }
   }
 }
 
 function taskState() {
   const script =
     "try { [Console]::Out.Write((Get-ScheduledTask -TaskName $env:CODEX_ROUTER_TASK).State.ToString()) } catch { exit 1 }";
+  const encodedScript = Buffer.from(script, "utf16le").toString("base64");
   for (const executable of ["powershell.exe", "pwsh.exe"]) {
     try {
       return execFileSync(
         executable,
-        ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
+        ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encodedScript],
         {
           encoding: "utf8",
           env: { ...process.env, CODEX_ROUTER_TASK: taskName },
@@ -161,7 +180,7 @@ if (command === "render") {
     // Missing task.
   }
   process.stdout.write(
-    `${JSON.stringify({ installed, loaded: state === "running", state })}\n`,
+    `${JSON.stringify({ installed, loaded: installed && (state === "running" || state === "ready"), state })}\n`,
   );
 } else if (command === "stop") {
   schtasks(["/End", "/TN", taskName], { quiet: true });

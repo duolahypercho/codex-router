@@ -65,7 +65,7 @@ function serviceLoaded(label) {
 function rootValues(contents, key) {
   const firstTable = contents.search(/^\s*\[/m);
   const root = firstTable === -1 ? contents : contents.slice(0, firstTable);
-  return [...root.matchAll(new RegExp(`^\s*${key}\s*=\s*["']([^"']+)["']`, "gm"))]
+  return [...root.matchAll(new RegExp(`^\\s*${key}\\s*=\\s*["']([^"']+)["']`, "gm"))]
     .map((match) => match[1]);
 }
 

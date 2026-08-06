@@ -44,6 +44,8 @@ const callerKey = assertCallerSecret(
 writeLiteLlmConfig();
 
 const commonEnv = {
+  PYTHONIOENCODING: "utf-8",
+  PYTHONUTF8: "1",
   MODEL_ROUTER_TARGET: TARGET,
   MODEL_ROUTER_STATE_DIR: STATE_DIR,
   MODEL_ROUTER_CALLER_KEY: callerKey,
