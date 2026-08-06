@@ -1618,7 +1618,9 @@
       "inputModalities": [
         "text"
       ],
-      "compHash": "opencode-go-responses-gpt-5-6-luna-v1"
+      "compHash": "opencode-go-responses-gpt-5-6-luna-v1",
+      "supportsReasoningSummaries": true,
+      "defaultReasoningSummary": "auto"
     },
     {
       "slug": "meta/muse-spark-1.2",
