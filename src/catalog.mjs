@@ -105,6 +105,70 @@ function nativeCatalog() {
   }
 }
 
+// Codex's picker deserializes reasoning efforts into a fixed enum and
+// silently drops any level it does not recognize, so a curated "max" level
+// simply vanishes from the effort menu on builds whose enum ends at xhigh
+// (issue #57). No runtime probe can see this: config parsing accepts unknown
+// effort strings, and `debug models` passes catalog levels through as plain
+// strings even on builds whose picker cannot offer them. The enum history is
+// the only reliable signal — max and ultra joined in 0.143.0 (verified
+// against the published binaries: 0.142.5 lacks the serde variants, 0.143.0
+// carries them), and the baseline predates this router. An unknown version
+// clamps: a wrongly clamped Max still routes at full effort under the xhigh
+// label, while a wrongly emitted max is exactly the missing-picker-entry bug.
+const BASELINE_EFFORTS = ["minimal", "low", "medium", "high", "xhigh"];
+const EFFORT_LADDER = [...BASELINE_EFFORTS, "max", "ultra"];
+const MAX_EFFORT_SINCE = [0, 143, 0];
+
+export function codexEffortVocabulary(version) {
+  const match = /(\d+)\.(\d+)\.(\d+)(-[0-9A-Za-z.]+)?/.exec(String(version || ""));
+  if (!match) return new Set(BASELINE_EFFORTS);
+  const installed = [Number(match[1]), Number(match[2]), Number(match[3])];
+  for (let index = 0; index < 3; index += 1) {
+    if (installed[index] > MAX_EFFORT_SINCE[index]) return new Set(EFFORT_LADDER);
+    if (installed[index] < MAX_EFFORT_SINCE[index]) return new Set(BASELINE_EFFORTS);
+  }
+  // Exactly the boundary release: prereleases of it may predate the variants.
+  return match[4] ? new Set(BASELINE_EFFORTS) : new Set(EFFORT_LADDER);
+}
+
+function clampEffort(effort, vocabulary) {
+  if (vocabulary.has(effort)) return effort;
+  const start = EFFORT_LADDER.indexOf(effort);
+  // Off-ladder values cannot be ranked, so pass them through unchanged.
+  if (start === -1) return effort;
+  for (let index = start - 1; index >= 0; index -= 1) {
+    if (vocabulary.has(EFFORT_LADDER[index])) return EFFORT_LADDER[index];
+  }
+  return effort;
+}
+
+// Registry levels are ordered lightest-first, so when a clamped level lands on
+// an effort the model already offers (xhigh + max both become xhigh), the
+// genuine entry keeps its slot and the clamped duplicate is dropped.
+export function clampModelEfforts(models, vocabulary) {
+  return models.map((model) => {
+    if (!Array.isArray(model.reasoningLevels)) return model;
+    const levels = [];
+    const seen = new Set();
+    for (const level of model.reasoningLevels) {
+      const effort = clampEffort(level.effort, vocabulary);
+      if (seen.has(effort)) continue;
+      seen.add(effort);
+      levels.push(effort === level.effort ? level : { ...level, effort });
+    }
+    const defaultEffort = clampEffort(model.defaultEffort, vocabulary);
+    if (
+      defaultEffort === model.defaultEffort &&
+      levels.length === model.reasoningLevels.length &&
+      levels.every((level, index) => level === model.reasoningLevels[index])
+    ) {
+      return model;
+    }
+    return { ...model, reasoningLevels: levels, defaultEffort };
+  });
+}
+
 function selectedModel() {
   if (!existsSync(CONFIG_PATH)) return undefined;
   const config = readFileSync(CONFIG_PATH, "utf8");
@@ -363,8 +427,11 @@ function main() {
   // advertising models the running gateway has no route for.
   assertStateOwnership("write the Codex model catalog");
   const userSlugs = new Set(readUserModels().map((model) => String(model.slug)));
+  // Clamp before announcements and agent sync so every surface Codex reads —
+  // picker levels, defaults, and announcement copy — stays inside the effort
+  // vocabulary the installed build can actually deserialize.
   const { models: routedModels, announcedAt } = annotateNewModelAnnouncements(
-    selectedConfiguredListedModels(),
+    clampModelEfforts(selectedConfiguredListedModels(), codexEffortVocabulary(codexVersion())),
     readAnnouncedAt(),
     userSlugs,
     Date.now(),

@@ -6,6 +6,8 @@ import {
   annotateNewModelAnnouncements,
   buildMergedCatalog,
   buildLoginFreeCatalog,
+  clampModelEfforts,
+  codexEffortVocabulary,
   nativeCatalogIsReusable,
   routedModel,
 } from "../src/catalog.mjs";
@@ -222,6 +224,82 @@ test("login-free catalog keeps overflow models visible under their own slugs", (
   const bySlug = new Map(models.map((model) => [model.slug, model]));
   assert.equal(bySlug.get("kimi-oauth/kimi-for-coding").visibility, "list");
   assert.equal(bySlug.get("grok-oauth/grok-4.5").visibility, "hide");
+});
+
+test("effort vocabulary follows the installed codex build's enum history", () => {
+  // max and ultra joined the enum in 0.143.0.
+  const legacy = codexEffortVocabulary("codex-cli 0.142.5");
+  assert.deepEqual(
+    [...legacy].sort(),
+    ["high", "low", "medium", "minimal", "xhigh"],
+  );
+  assert.ok(codexEffortVocabulary("codex-cli 0.143.0").has("max"));
+  assert.ok(codexEffortVocabulary("codex-cli 0.147.0-alpha.1.2").has("ultra"));
+  // A prerelease of the boundary build may predate the variants, and an
+  // unknown version must clamp rather than risk an unparseable picker level.
+  assert.ok(!codexEffortVocabulary("codex-cli 0.143.0-alpha.3").has("max"));
+  assert.ok(!codexEffortVocabulary(undefined).has("max"));
+});
+
+test("efforts the installed codex build cannot parse clamp to the nearest supported tier", () => {
+  const vocabulary = codexEffortVocabulary("codex-cli 0.141.0");
+  const [deepseek] = clampModelEfforts(
+    [
+      {
+        ...grok,
+        defaultEffort: "max",
+        reasoningLevels: [
+          { effort: "low", description: "Faster reasoning" },
+          { effort: "high", description: "Deep reasoning" },
+          { effort: "max", description: "Maximum reasoning" },
+        ],
+      },
+    ],
+    vocabulary,
+  );
+  // Codex 0.141 drops unknown enum variants, so "max" must reach it as xhigh
+  // (issue #57); the forwarder already folds xhigh back to the upstream max.
+  assert.deepEqual(deepseek.reasoningLevels, [
+    { effort: "low", description: "Faster reasoning" },
+    { effort: "high", description: "Deep reasoning" },
+    { effort: "xhigh", description: "Maximum reasoning" },
+  ]);
+  assert.equal(deepseek.defaultEffort, "xhigh");
+});
+
+test("clamped duplicates collapse onto the model's genuine entry for that tier", () => {
+  const vocabulary = codexEffortVocabulary("codex-cli 0.141.0");
+  const [opus] = clampModelEfforts(
+    [
+      {
+        ...grok,
+        defaultEffort: "max",
+        reasoningLevels: [
+          { effort: "xhigh", description: "Extended reasoning" },
+          { effort: "max", description: "Maximum reasoning" },
+        ],
+      },
+    ],
+    vocabulary,
+  );
+  assert.deepEqual(opus.reasoningLevels, [
+    { effort: "xhigh", description: "Extended reasoning" },
+  ]);
+  assert.equal(opus.defaultEffort, "xhigh");
+});
+
+test("models stay untouched when the installed build understands their efforts", () => {
+  const vocabulary = codexEffortVocabulary("codex-cli 0.146.1");
+  const original = {
+    ...grok,
+    defaultEffort: "max",
+    reasoningLevels: [
+      { effort: "high", description: "Deep reasoning" },
+      { effort: "max", description: "Maximum reasoning" },
+    ],
+  };
+  const [unchanged] = clampModelEfforts([original], vocabulary);
+  assert.equal(unchanged, original);
 });
 
 test("native catalog cache is reusable only for the codex build that captured it", () => {
