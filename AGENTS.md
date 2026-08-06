@@ -91,16 +91,14 @@ to ship tested support to every installer.
    `node .\src\curate-models.mjs` with the same arguments.
 5. Local curation writes protected `user-models.json` state and survives router
    updates. Never edit `config/providers.json` merely to satisfy one machine's
-   request. New curated models take metadata defaults (context window,
-   modalities, pricing text) from the community models.dev catalog — live
-   fetch first, then the checked-in `config/models-dev.json` snapshot when
-   offline, then conservative defaults; the provider's own `/v1/models`
-   endpoint alone decides which models exist, every fetched value is validated
-   and stays user-editable, and `--no-metadata` skips the lookup. Refresh the
-   snapshot from upstream via `bin/update-models-dev-snapshot`, or hand-edit
-   `config/models-dev.json` directly for models upstream lacks, and commit
-   the diff. Curated models are not implicitly approved as native v2 subagent
-   model overrides.
+   request. The provider's own `/v1/models` endpoint alone decides which
+   models exist. Interactive curation asks for each new model's context
+   window, image support, and reasoning efforts (so the user can switch
+   effort in the picker); the deterministic `--models` form takes
+   conservative defaults, `--efforts minimal,low,medium,high,xhigh` sets the
+   effort ladder, and every stored value stays editable in
+   `user-models.json`. Curated models are not implicitly approved as native
+   v2 subagent model overrides.
 6. Run `./bin/model-router codex doctor`. A live `bin/test-model` request uses
    provider quota, so run it only with the user's approval. Finally, tell the
    user to fully quit and reopen Codex before checking the picker.
@@ -119,26 +117,20 @@ installation. It is repository development and requires the process below.
    supported reasoning levels; input modalities; context/compaction limits;
    and the correct request profile. Use `listed: false` for compatibility-only
    aliases.
-3. Every shipped model must also be covered by the models.dev snapshot. If
-   the community catalog does not already describe the model, add its entry
-   directly to `config/models-dev.json` (sorted keys, same shape as its
-   neighbors) in the same change. A model that exists in
-   `config/providers.json` but not in the snapshot leaves local curation with
-   conservative defaults — do not ship that state knowingly.
-4. A new provider also needs credential isolation, discovery metadata,
+3. A new provider also needs credential isolation, discovery metadata,
    selection/onboarding support, request translation, health behavior, and
    tests. Never place an API key or OAuth artifact in the registry. A new
    provider is not done until the whole checklist in
    "Ship a new provider to every installer" below passes.
-5. Set `multiAgentVersion: "v2"` only after the model is proven through native
+4. Set `multiAgentVersion: "v2"` only after the model is proven through native
    Codex collaboration: tool calls work, encrypted subagent payload relay works
    without disclosure, a marker-return spawn succeeds, and a same-thread
    follow-up succeeds. Otherwise omit it and retain conservative v1 behavior.
-6. Remember that Codex advertises only a small priority-ordered subset of native
+5. Remember that Codex advertises only a small priority-ordered subset of native
    spawn-model overrides. Adjust priority intentionally and keep the desired
    Kimi/Grok/GPT choices in that visible subset; do not crowd them out
    accidentally when adding a model.
-7. Add registry, catalog, routing/request-profile, and failure-path regression
+6. Add registry, catalog, routing/request-profile, and failure-path regression
    tests. Run `npm run check` and `npm test`. With explicit quota approval, run
    `./bin/test-model 'provider/model' --live --yes`, reinstall, fully restart
    Codex, and perform the native subagent probe before claiming support.
@@ -183,10 +175,6 @@ surfaces.
    the tray must say usage is unavailable rather than showing stale or empty
    numbers. Routed request/token accounting comes from the shared usage-events
    pipeline and needs no per-provider work beyond correct event recording.
-4. **Models.dev coverage.** Map the provider in `MODELS_DEV_PROVIDER_KEYS`
-   (`src/models-dev.mjs`) and add its models to `config/models-dev.json` as
-   described in step 3 of "Ship a model to every installer", so curated
-   models pick up context windows, modalities, and pricing text offline.
 
 ## Codex safety boundaries
 

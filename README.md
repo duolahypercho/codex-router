@@ -147,15 +147,14 @@ curated interactively: `./bin/curate-models PROVIDER` lists the models the
 provider currently advertises that are not in the registry, lets you toggle
 the ones you want, and stores them as user models in protected state
 (surviving updates, editable in place, and removable by re-running the
-command and deselecting). New entries take context-window, modality, and
-pricing metadata from the community-maintained
-[models.dev](https://models.dev/) catalog when it is reachable, falling back
-first to the checked-in snapshot in `config/models-dev.json` and then to
-conservative defaults (`--no-metadata` skips the lookup; `--refresh-metadata`
-re-applies it to existing entries). The provider's own
-`/v1/models` endpoint always decides which models exist. Curated models are
-local to your machine and are not vetted by the repository's compatibility
-tests.
+command and deselecting). Curation asks for each new model's context window,
+image support, and reasoning efforts — so curated models get the effort
+switcher in the picker — and everything defaults conservatively when
+unanswered (`--efforts minimal,low,medium,high,xhigh` sets the ladder in the
+non-interactive `--models` form; every value stays editable in
+`user-models.json`). The provider's own `/v1/models` endpoint always decides
+which models exist. Curated models are local to your machine and are not
+vetted by the repository's compatibility tests.
 
 ### opencode (Go subscription and Zen)
 
@@ -252,9 +251,9 @@ Add a key, then pick the models you want from the provider's live catalog:
 ./bin/curate-models groq
 ```
 
-Curated entries take metadata defaults from models.dev when available
-(conservative defaults otherwise) and are local to your machine. Verify a
-model before relying on it:
+Curated entries use the context window, image support, and reasoning efforts
+you provide during curation (conservative defaults otherwise) and are local
+to your machine. Verify a model before relying on it:
 
 ```sh
 ./bin/test-model 'groq/MODEL_ID' --live --yes

@@ -35,6 +35,51 @@ test("userModelEntry fills conservative picker metadata", () => {
   assert.ok(entry.description.length > 0);
 });
 
+test("curation metadata can set sizing and the effort ladder", () => {
+  const entry = userModelEntry({
+    providerId: "deepseek",
+    upstreamId: "deepseek-effort-test",
+    priority: 100,
+    metadata: {
+      contextWindow: 262144,
+      autoCompact: 222822,
+      inputModalities: ["text", "image"],
+      reasoningLevels: [
+        { effort: "low", description: "Quick reasoning" },
+        { effort: "medium", description: "Balanced reasoning" },
+        { effort: "high", description: "Deep reasoning" },
+      ],
+      defaultEffort: "medium",
+    },
+  });
+  assert.equal(entry.contextWindow, 262144);
+  assert.deepEqual(entry.inputModalities, ["text", "image"]);
+  assert.equal(entry.reasoningLevels.length, 3);
+  assert.equal(entry.defaultEffort, "medium");
+});
+
+test("curation metadata cannot replace identity or routing fields", () => {
+  const entry = userModelEntry({
+    providerId: "deepseek",
+    upstreamId: "deepseek-guard-test",
+    priority: 100,
+    metadata: {
+      slug: "evil/override",
+      gatewayModel: "evil-gateway",
+      upstreamModel: "evil-upstream",
+      provider: "evil",
+      requestProfile: "evil-profile",
+      contextWindow: 200000,
+    },
+  });
+  assert.equal(entry.slug, "deepseek/deepseek-guard-test");
+  assert.equal(entry.gatewayModel, "deepseek-deepseek-guard-test");
+  assert.equal(entry.upstreamModel, "deepseek-guard-test");
+  assert.equal(entry.provider, "deepseek");
+  assert.equal(entry.requestProfile, undefined);
+  assert.equal(entry.contextWindow, 200000);
+});
+
 test("userModelEntry omits requestProfile when the provider has none", () => {
   const entry = userModelEntry({
     providerId: "zai-coding",

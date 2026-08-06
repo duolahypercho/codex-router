@@ -68,16 +68,12 @@ model a registry update later ships — skips the entry and surfaces it in
 never take the router down. The listed-model live-test requirement applies to
 registry submissions; curated entries are explicitly local-only.
 
-Curated entries pull metadata defaults from the models.dev community catalog:
-live `https://models.dev/api.json` first, then the checked-in filtered
-snapshot at `config/models-dev.json` (MIT-licensed data) when offline, then
-conservative defaults. The snapshot is the single hand-editable artifact —
-to cover a model upstream lacks, add it directly to the file (sorted keys,
-same shape as its neighbors). `bin/update-models-dev-snapshot` refreshes the
-snapshot from upstream at development time; a refresh replaces the whole
-file, so hand-added models appear in the diff as removals — restore the ones
-to keep before committing. Review and commit the diff like any other
-registry change; installed machines only ever read the committed file.
+Curated entries get their metadata from the user, not from any online
+catalog: interactive curation asks for each new model's context window,
+image support, and reasoning efforts (`--efforts` sets the effort ladder in
+the deterministic `--models` form), and everything defaults conservatively
+when unanswered. The stored entries in `user-models.json` are plain local
+state — edit any value in place and re-run `./bin/install` to apply.
 
 ## Tests
 

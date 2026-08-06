@@ -6,9 +6,10 @@ import { STATE_DIR } from "./paths.mjs";
 
 // User-curated models live outside config/providers.json so a checkout update
 // never discards them. Entries carry the same shape as registry models;
-// metadata uses conservative defaults the user can edit in place, optionally
-// pre-filled from the models.dev catalog (src/models-dev.mjs) at curation
-// time. Either way the stored values are plain local state the user owns.
+// metadata uses conservative defaults the user can adjust at curation time
+// (bin/curate-models asks for context, modalities, and reasoning efforts) or
+// edit in place afterwards. The stored values are plain local state the user
+// owns.
 
 export const USER_MODELS_PATH =
   process.env.MODEL_ROUTER_USER_MODELS || path.join(STATE_DIR, "user-models.json");
@@ -16,14 +17,16 @@ export const USER_MODELS_PATH =
 const DEFAULT_CONTEXT_WINDOW = 131072;
 const DEFAULT_AUTO_COMPACT = 110000;
 
-// Enrichment may adjust presentation and sizing metadata only; identity and
-// routing fields always come from the provider id and the discovered model id.
+// Curation may adjust presentation, sizing, and effort metadata only;
+// identity and routing fields always come from the provider id and the
+// discovered model id.
 const METADATA_FIELDS = new Set([
   "description",
   "contextWindow",
   "autoCompact",
   "inputModalities",
-  "metadataSource",
+  "reasoningLevels",
+  "defaultEffort",
 ]);
 
 function gatewaySafe(value) {

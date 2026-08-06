@@ -17,6 +17,15 @@
   the re-capture fails, the router keeps serving the previous capture and says
   so instead of failing the rebuild.
 
+- **Curated models now carry user-provided metadata, including reasoning
+  efforts.** `bin/curate-models` asks for each new model's context window,
+  image support, and reasoning efforts (so curated models get the effort
+  switcher in the Codex picker), with `--efforts` available for the
+  non-interactive `--models` form. Every value defaults conservatively and
+  stays editable in `user-models.json`. No online metadata catalog is
+  consulted — the provider's own `/v1/models` endpoint decides which models
+  exist, and the metadata is yours.
+
 - **New Meta Model API provider.** The `meta` provider (shown as "Meta API")
   routes the Responses protocol to `https://api.meta.ai/v1` with a stored
   `META_API_KEY`. Three Muse Spark models ship in the registry: 1.2, its

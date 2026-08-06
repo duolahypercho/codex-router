@@ -157,11 +157,11 @@ release, curate it for your own machine:
 ./bin/curate-models deepseek
 ```
 
-Curated entries live in the state directory's `user-models.json` with
-metadata defaults filled from models.dev when it is reachable (conservative
-defaults otherwise), are skipped automatically if a later registry update
-ships the same model, and are removed by re-running the command and
-deselecting them.
+Curated entries live in the state directory's `user-models.json` with the
+context window, image support, and reasoning efforts you provide during
+curation (conservative defaults otherwise), are skipped automatically if a
+later registry update ships the same model, and are removed by re-running
+the command and deselecting them.
 
 ## Native GPT models stopped working
 
