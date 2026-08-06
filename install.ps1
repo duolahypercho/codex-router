@@ -72,8 +72,25 @@ if (-not $CheckoutInstall) {
       if ($LASTEXITCODE -ne 0 -or $Dirty) {
         throw "$InstallDir has local changes; automatic update will not overwrite them."
       }
-      $Branch = (& git -C $InstallDir branch --show-current).Trim()
-      if ($Branch -ne "main") { throw "$InstallDir must be on its main branch to update." }
+      # A failed setup rolls the checkout back to a detached HEAD (see the
+      # rollback below), where `branch --show-current` prints nothing. A native
+      # command with no output yields $null, and in Windows PowerShell 5.1
+      # [string]$null stays $null, so guard explicitly before calling Trim().
+      $Branch = & git -C $InstallDir branch --show-current
+      if ($null -eq $Branch) { $Branch = "" }
+      $Branch = [string]$Branch.Trim()
+      if ($Branch -ne "main") {
+        if (-not $Branch) {
+          & git -C $InstallDir switch main 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            throw "$InstallDir is in a detached HEAD state and could not be restored to main; run 'git switch main' there and retry."
+          }
+          $Branch = & git -C $InstallDir branch --show-current
+          if ($null -eq $Branch) { $Branch = "" }
+          $Branch = [string]$Branch.Trim()
+        }
+        if ($Branch -ne "main") { throw "$InstallDir must be on its main branch to update." }
+      }
       $PreviousRevision = (& git -C $InstallDir rev-parse HEAD).Trim()
       & git -C $InstallDir update-ref refs/codex-router/rollback $PreviousRevision
       & git -C $InstallDir pull --ff-only origin main
