@@ -281,8 +281,17 @@ function normalizeBody(buffer, contentType, route) {
   }
 
   payload.model = model.upstreamModel;
-  // Gemini has no OpenAI-shaped web search parameter and 400s on the field.
-  if (isGeminiProvider(provider)) delete payload.web_search_options;
+  // Gemini has no OpenAI-shaped web search / penalty / store parameters and 400s on those fields.
+  if (isGeminiProvider(provider)) {
+    delete payload.web_search_options;
+    delete payload.frequency_penalty;
+    delete payload.presence_penalty;
+    delete payload.store;
+    delete payload.seed;
+    delete payload.logit_bias;
+    delete payload.thinking;
+    delete payload.think;
+  }
   if (Array.isArray(payload.messages)) {
     payload.messages = sanitizeChatToolHistory(payload.messages, provider);
   }

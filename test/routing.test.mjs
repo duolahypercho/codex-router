@@ -1152,6 +1152,8 @@ test("API forwarder fills only missing Gemini thought signatures", async () => {
       body: JSON.stringify({
         model: curated.gatewayModel,
         web_search_options: { search_context_size: "medium" },
+        thinking: { type: "enabled" },
+        think: true,
         messages: [
           { role: "user", content: "test" },
           {
@@ -1174,8 +1176,10 @@ test("API forwarder fills only missing Gemini thought signatures", async () => {
     assert.equal(response.status, 200);
     const body = upstreamRequests[0];
     assert.equal(body.model, "gemini-3.5-flash");
-    // Gemini rejects the OpenAI-shaped web search parameter outright.
+    // Gemini rejects the OpenAI-shaped web search / thinking parameters outright.
     assert.equal(body.web_search_options, undefined);
+    assert.equal(body.thinking, undefined);
+    assert.equal(body.think, undefined);
     const [signed, bare] = body.messages.find((message) => message.role === "assistant").tool_calls;
     // A signature Gemini already returned must survive untouched.
     assert.equal(signed.thought_signature, "real-upstream-signature");

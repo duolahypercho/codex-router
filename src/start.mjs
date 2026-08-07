@@ -79,6 +79,8 @@ const commonEnv = {
   LITELLM_LOG: "ERROR",
   LITELLM_TELEMETRY: "False",
   NO_COLOR: "1",
+  PYTHONIOENCODING: "utf-8",
+  PYTHONUTF8: "1",
 };
 
 const children = [];
