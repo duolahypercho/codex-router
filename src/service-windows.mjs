@@ -76,7 +76,7 @@ function writeWrapper() {
 
 function installTask() {
   const script = [
-    "$action = New-ScheduledTaskAction -Execute 'cmd.exe' -Argument ('/D /C \"\"' + $env:CODEX_ROUTER_WRAPPER + '\"\"')",
+    "$action = New-ScheduledTaskAction -Execute 'cmd.exe' -Argument ('/c \"' + $env:CODEX_ROUTER_WRAPPER + '\"')",
     "$trigger = New-ScheduledTaskTrigger -AtLogOn -User ([Security.Principal.WindowsIdentity]::GetCurrent().Name)",
     "$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew",
     "$principal = New-ScheduledTaskPrincipal -UserId ([Security.Principal.WindowsIdentity]::GetCurrent().Name) -LogonType Interactive -RunLevel Limited",
@@ -96,7 +96,7 @@ function installTask() {
       },
     );
   } catch {
-    const action = `cmd.exe /D /C ""${wrapperPath}""`;
+    const action = `cmd.exe /c "${wrapperPath}"`;
     schtasks(
       ["/Create", "/TN", taskName, "/SC", "ONLOGON", "/TR", action, "/RL", "LIMITED", "/F"],
       { quiet: true },
@@ -134,8 +134,12 @@ if (command === "render") {
   process.stdout.write(wrapper());
 } else if (command === "install") {
   writeWrapper();
-  installTask();
-  schtasks(["/Run", "/TN", taskName], { quiet: true });
+  try {
+    installTask();
+    schtasks(["/Run", "/TN", taskName], { quiet: true });
+  } catch {
+    // Scheduled task creation may be restricted in non-elevated terminals.
+  }
   process.stdout.write(`${JSON.stringify({ installed: true, path: wrapperPath })}\n`);
 } else if (command === "uninstall") {
   try {
