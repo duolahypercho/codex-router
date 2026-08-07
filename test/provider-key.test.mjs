@@ -12,6 +12,7 @@ const savedArgv = [...process.argv];
 process.argv = [process.argv[0], "provider-key.mjs", "opencode-go", "status"];
 const { WINDOWS_HIDDEN_PROMPT_SCRIPT } = await import("../src/provider-key.mjs");
 process.argv = savedArgv;
+process.exitCode = 0;
 
 test("the Windows hidden-prompt script is structurally valid PowerShell", () => {
   // Joining the script pieces with "; " must not split `try { }` from

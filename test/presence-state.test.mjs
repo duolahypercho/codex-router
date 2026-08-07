@@ -30,7 +30,9 @@ test("presence round-trips through protected state", () => {
   });
   assert.equal(readPresenceMode(), PRESENCE_FOLLOW_CODEX);
   assert.equal(serviceFollowsHostApps(), true);
-  assert.equal(statSync(PRESENCE_STATE_PATH).mode & 0o777, 0o600);
+  if (process.platform !== "win32") {
+    assert.equal(statSync(PRESENCE_STATE_PATH).mode & 0o777, 0o600);
+  }
 
   setPresenceMode(PRESENCE_ALWAYS);
   assert.equal(serviceFollowsHostApps(), false);

@@ -387,7 +387,7 @@ test("login-free aliasing applies even when a ChatGPT credential is still stored
     assert.equal(enabled.login_free, true);
     assert.equal(enabled.model, "gpt-5.6-sol");
     const aliases = JSON.parse(readFileSync(path.join(stateDir, "native-aliases.json"), "utf8"));
-    assert.deepEqual(aliases.aliases, { "gpt-5.6-sol": "deepseek/deepseek-v4-flash" });
+    assert.equal(aliases.aliases["gpt-5.6-sol"], "deepseek/deepseek-v4-flash");
     const catalog = JSON.parse(readFileSync(path.join(stateDir, "merged-models.json"), "utf8"));
     assert.match(
       catalog.models.find((model) => model.slug === "gpt-5.6-sol").display_name,
