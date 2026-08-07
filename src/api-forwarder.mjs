@@ -1,5 +1,11 @@
 import http from "node:http";
 
+// LiteLLM (which proxies requests to Google Gemini 2.0 thinking models) requires
+// a thought signature on assistant tool calls in conversation history. When
+// turns arrive without a thinking signature (e.g. from compacted or translated
+// history), LiteLLM accepts the sentinel string "skip_thought_signature_validator"
+// to bypass validation:
+// https://github.com/BerriAI/litellm (Gemini thought signature validator bypass)
 const GEMINI_THOUGHT_SIGNATURE_SENTINEL = "skip_thought_signature_validator";
 
 import {
@@ -14,6 +20,7 @@ import { PORTS, TARGET } from "./paths.mjs";
 import {
   API_MODELS,
   MODEL_BY_GATEWAY_ID,
+  MODEL_BY_SLUG,
   PROVIDERS,
   providerForModel,
 } from "./model-registry.mjs";
@@ -259,7 +266,6 @@ function normalizeBody(buffer, contentType, route) {
   }
 
   payload.model = model.upstreamModel;
-  delete payload.client_metadata;
   if (
     provider?.id === "gemini-api" ||
     provider?.ownedBy === "google" ||

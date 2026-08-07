@@ -1202,6 +1202,22 @@ test("API forwarder injects thought_signature for Gemini models and omits it for
     assert.deepEqual(deepseekReq.body.web_search_options, { enabled: true });
     assert.equal(deepseekReq.body.messages[0].tool_calls[0].thought_signature, undefined);
 
+    // Test API forwarder supports model resolution by full slug (MODEL_BY_SLUG)
+    const slugRes = await fetch(`http://127.0.0.1:${forwarderPort}/v1/chat/completions`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${INTERNAL_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "gemini-api/models/gemini-3.5-flash",
+        messages: [{ role: "user", content: "hello" }],
+      }),
+    });
+    assert.equal(slugRes.status, 200);
+    const slugReq = upstreamRequests[2];
+    assert.equal(slugReq.body.model, "models/gemini-3.5-flash");
+
   } finally {
     forwarder.kill();
     await new Promise((resolve) => upstream.server.close(resolve));
