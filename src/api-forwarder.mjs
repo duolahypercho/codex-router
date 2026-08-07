@@ -202,6 +202,36 @@ function isGeminiProvider(provider) {
   return provider?.id === "gemini-api" || provider?.ownedBy === "google";
 }
 
+// Google Gemini OpenAI-compatible endpoints reject non-user content parts of
+// type image_url/input_image ("Invalid content part type: image_url").
+// Convert image parts in assistant and tool history turns to text placeholders.
+function sanitizeGeminiImageContent(messages) {
+  return messages.map((message) => {
+    if (!message || message.role === "user" || !Array.isArray(message.content)) return message;
+    let changed = false;
+    const newContent = message.content.map((part) => {
+      if (!part || typeof part !== "object") return part;
+      if (part.type === "image_url" || part.type === "input_image") {
+        changed = true;
+        const urlStr =
+          typeof part.image_url === "string"
+            ? part.image_url
+            : typeof part.image_url?.url === "string"
+              ? part.image_url.url
+              : "";
+        const label = urlStr.startsWith("data:")
+          ? "[Image]"
+          : urlStr
+            ? `[Image: ${urlStr}]`
+            : "[Image]";
+        return { type: "text", text: label };
+      }
+      return part;
+    });
+    return changed ? { ...message, content: newContent } : message;
+  });
+}
+
 // Gemini 3.x thinking models reject assistant tool calls whose reasoning
 // signature is missing, which is the normal state after compaction or after a
 // history translated from another provider. The sentinel below is the
@@ -238,7 +268,9 @@ function ensureGeminiThoughtSignatures(messages) {
 function sanitizeChatToolHistory(messages, provider) {
   if (!Array.isArray(messages)) return messages;
   const repaired = ensureToolResultsForCalls(coalesceAssistantMessages(messages));
-  return isGeminiProvider(provider) ? ensureGeminiThoughtSignatures(repaired) : repaired;
+  return isGeminiProvider(provider)
+    ? ensureGeminiThoughtSignatures(sanitizeGeminiImageContent(repaired))
+    : repaired;
 }
 
 function normalizeBody(buffer, contentType, route) {

@@ -1168,7 +1168,14 @@ test("API forwarder fills only missing Gemini thought signatures", async () => {
               { id: "call-bare", type: "function", function: { name: "b", arguments: "{}" } },
             ],
           },
-          { role: "tool", tool_call_id: "call-signed", content: "ok" },
+          {
+            role: "tool",
+            tool_call_id: "call-signed",
+            content: [
+              { type: "text", text: "Image generated:" },
+              { type: "image_url", image_url: { url: "data:image/png;base64,123" } },
+            ],
+          },
           { role: "tool", tool_call_id: "call-bare", content: "ok" },
         ],
       }),
@@ -1180,6 +1187,12 @@ test("API forwarder fills only missing Gemini thought signatures", async () => {
     assert.equal(body.web_search_options, undefined);
     assert.equal(body.thinking, undefined);
     assert.equal(body.think, undefined);
+    // Non-user image_url content parts are converted to text for Gemini compatibility.
+    const toolMsg = body.messages.find((message) => message.role === "tool" && Array.isArray(message.content));
+    assert.deepEqual(toolMsg.content, [
+      { type: "text", text: "Image generated:" },
+      { type: "text", text: "[Image]" },
+    ]);
     const [signed, bare] = body.messages.find((message) => message.role === "assistant").tool_calls;
     // A signature Gemini already returned must survive untouched.
     assert.equal(signed.thought_signature, "real-upstream-signature");
