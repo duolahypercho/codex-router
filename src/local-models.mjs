@@ -150,6 +150,17 @@ export function syncLocalUserModels({
         },
       }),
       displayName: `${tag} (local)`,
+      // Codex's apply_patch is a freeform custom tool, which has no
+      // representation in Ollama's tool schema: it arrives mangled or not at
+      // all, and the model is left guessing at a toolset it cannot see. Opting
+      // out keeps every tool a plain function, which Ollama does support.
+      // Observed without this: llama3.2:3b inventing a `create_goal` call and
+      // emitting it as prose.
+      supportsApplyPatchTool: false,
+      // Driving subagents is a harder job than answering a turn, and no local
+      // model has been shown to do it here. Claiming v2 would offer them as
+      // spawn targets on that untested basis.
+      multiAgentVersion: "v1",
     };
   });
   writeUserModels([...others, ...entries]);
