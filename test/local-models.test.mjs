@@ -45,6 +45,12 @@ test("the snapshot joins installed, checked, loaded, and vision state", () => {
     running: ["qwen2.5vl:3b"],
     selection: { version: 1, enabled: ["gemma3:4b"] },
     benchmarks: { "gemma3:4b": { tier: "accurate", textPercent: 100 } },
+    // Supplied so the test never shells out to the machine's real Ollama.
+    capabilities: {
+      "gemma3:4b": ["completion", "vision"],
+      "qwen2.5vl:3b": ["completion", "vision"],
+      "llava:latest": ["completion", "vision"],
+    },
   });
   assert.equal(snapshot.installed, 3);
   assert.equal(snapshot.enabled, 1);
@@ -53,9 +59,12 @@ test("the snapshot joins installed, checked, loaded, and vision state", () => {
   assert.equal(byTag["gemma3:4b"].enabled, true);
   assert.equal(byTag["gemma3:4b"].accuracy, "accurate");
   assert.equal(byTag["qwen2.5vl:3b"].running, true);
-  // Vision capability is recognised by family name.
+  // Vision comes from Ollama's own report, so gemma3 counts as vision-capable
+  // even though nothing in its name says so.
   assert.equal(byTag["qwen2.5vl:3b"].vision, true);
-  assert.equal(byTag["gemma3:4b"].vision, false);
+  assert.equal(byTag["gemma3:4b"].vision, true);
+  // None of these can call tools, so none can be a Codex chat model.
+  assert.equal(snapshot.usableAsChat, 0);
 });
 
 test("removing a model needs explicit consent and unchecks it", () => {
@@ -86,4 +95,61 @@ test("a failed removal surfaces ollama's own message", () => {
       }),
     /model 'missing' not found/,
   );
+});
+
+test("ollama's reported capabilities are parsed, not guessed from the name", async () => {
+  const { parseOllamaCapabilities } = await import("../src/local-models.mjs");
+  const show = `  Model
+    architecture        gemma3
+    parameters          4.3B
+
+  Capabilities
+    completion
+    vision
+
+  Parameters
+    stop  "<end_of_turn>"
+`;
+  assert.deepEqual(parseOllamaCapabilities(show), ["completion", "vision"]);
+  // The block ends at the next heading, so later sections are not swallowed.
+  assert.ok(!parseOllamaCapabilities(show).includes("stop"));
+  assert.deepEqual(parseOllamaCapabilities("no capabilities section here"), []);
+});
+
+test("a model without tool support is never published to the Codex picker", async () => {
+  const { syncLocalUserModels } = await import("../src/local-models.mjs");
+  const caps = {
+    "qwen3:4b": ["completion", "tools"],
+    "qwen2.5vl:3b": ["completion", "vision", "tools"],
+    "gemma3:4b": ["completion", "vision"],
+    "moondream:latest": ["completion", "vision"],
+  };
+  const entries = syncLocalUserModels({
+    enabled: ["qwen3:4b", "qwen2.5vl:3b", "gemma3:4b", "moondream:latest"],
+    capabilitiesFor: (tag) => caps[tag] || [],
+  });
+  // Codex cannot drive a toolless model, so publishing one hands the operator
+  // a picker entry that fails on its first turn.
+  assert.deepEqual(entries.map((e) => e.upstreamModel), ["qwen3:4b", "qwen2.5vl:3b"]);
+  // Image input is claimed only where Ollama reports vision.
+  const byId = Object.fromEntries(entries.map((e) => [e.upstreamModel, e]));
+  assert.deepEqual(byId["qwen3:4b"].inputModalities, ["text"]);
+  assert.deepEqual(byId["qwen2.5vl:3b"].inputModalities, ["text", "image"]);
+});
+
+test("the snapshot reports how many checked models Codex can actually drive", async () => {
+  const { localModelsSnapshot, parseOllamaList } = await import("../src/local-models.mjs");
+  const snapshot = localModelsSnapshot({
+    inventory: parseOllamaList(
+      "NAME  ID  SIZE  MODIFIED\nqwen3:4b  aaa  2.6 GB  1 hour ago\ngemma3:4b  bbb  3.3 GB  1 hour ago\n",
+    ),
+    running: [],
+    selection: { version: 1, enabled: ["qwen3:4b", "gemma3:4b"] },
+    capabilities: { "qwen3:4b": ["completion", "tools"], "gemma3:4b": ["completion", "vision"] },
+  });
+  assert.equal(snapshot.enabled, 2);
+  assert.equal(snapshot.usableAsChat, 1);
+  const byTag = Object.fromEntries(snapshot.models.map((m) => [m.tag, m]));
+  assert.equal(byTag["gemma3:4b"].tools, false);
+  assert.equal(byTag["gemma3:4b"].vision, true);
 });

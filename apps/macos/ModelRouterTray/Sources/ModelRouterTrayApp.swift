@@ -1674,6 +1674,7 @@ struct ModelSettingsSnapshot: Decodable {
 struct LocalModelsSnapshot: Decodable {
   let installed: Int
   let enabled: Int
+  let usableAsChat: Int?
   let totalGb: Double
   let models: [InstalledLocalModel]
 }
@@ -1685,8 +1686,14 @@ struct InstalledLocalModel: Decodable, Identifiable, Equatable {
   let enabled: Bool
   let running: Bool
   let vision: Bool
+  let tools: Bool?
   let accuracy: String?
   var id: String { tag }
+
+  /// Codex drives every turn through tool calls, so a model without them
+  /// cannot be a chat model here however good it is. It stays useful as a
+  /// vision reader, and the row has to say so or the checkbox looks broken.
+  var canBeChatModel: Bool { tools == true }
 }
 
 struct VisionEngineOption: Decodable, Identifiable, Equatable {
@@ -2457,6 +2464,9 @@ private struct TrayView: View {
             if model.vision {
               Text("vision").font(.system(size: 9)).foregroundStyle(routerMint)
             }
+            Text(model.canBeChatModel ? "chat" : "no tools — vision only")
+              .font(.system(size: 9))
+              .foregroundStyle(model.canBeChatModel ? routerMint : routerYellow)
             if let accuracy = model.accuracy {
               Text(accuracy)
                 .font(.system(size: 9))

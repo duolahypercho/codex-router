@@ -18,7 +18,6 @@ import {
 import { STATE_DIR } from "./paths.mjs";
 import { readUserModels, userModelEntry, writeUserModels } from "./user-models.mjs";
 
-import { isVisionModelId } from "./vision-host.mjs";
 
 // Local models are the operator's own software running on their own machine, so
 // the router only ever reads and reports what Ollama already has. Installing and
@@ -75,14 +74,14 @@ const LOCAL_MODEL_PRIORITY = 900;
 // registry, gateway config, and Codex catalog already consume, so a local
 // model reaches the picker through exactly the same path as any curated cloud
 // model. Unchecking withdraws it again without touching the download.
-export function setLocalModelEnabled(tag, enabled, { vision } = {}) {
+export function setLocalModelEnabled(tag, enabled) {
   const value = String(tag || "").trim();
   if (!value) throw new Error("A model tag is required.");
   const current = new Set(readLocalModelSelection().enabled);
   if (enabled) current.add(value);
   else current.delete(value);
   const selection = writeSelection({ version: 1, enabled: [...current].sort() });
-  syncLocalUserModels({ enabled: selection.enabled, vision });
+  syncLocalUserModels({ enabled: selection.enabled });
   // Checking a model is the operator saying they want it available, so the
   // provider follows the models rather than being a second switch to find:
   // it turns on with the first check and off when the last one clears.
@@ -109,24 +108,96 @@ export function syncLocalProviderSelection(shouldEnable) {
 // other curated model untouched. Declarative on purpose: the checked list is
 // the source of truth, so a half-applied toggle cannot leave a stale entry
 // advertising a model that is no longer selected.
-export function syncLocalUserModels({ enabled = readLocalModelSelection().enabled, vision } = {}) {
+export function syncLocalUserModels({
+  enabled = readLocalModelSelection().enabled,
+  capabilitiesFor = (tag) => localModelCapabilities(tag),
+} = {}) {
   const others = readUserModels().filter((model) => model.provider !== LOCAL_PROVIDER_ID);
-  const visionTag = (tag) => (typeof vision === "function" ? vision(tag) : isVisionModelId(tag));
-  const entries = enabled.map((tag, index) =>
-    userModelEntry({
-      providerId: LOCAL_PROVIDER_ID,
-      upstreamId: tag,
-      priority: LOCAL_MODEL_PRIORITY + index,
-      metadata: {
-        // Only a model that can actually read images may advertise it, exactly
-        // as the checked-in registry is held to.
-        inputModalities: visionTag(tag) ? ["text", "image"] : ["text"],
-        description: `${tag} running locally through Ollama on this machine.`,
-      },
-    }),
-  ).map((entry) => ({ ...entry, displayName: `${entry.upstreamModel} (local)` }));
+  // Codex drives every turn through tool calls. A model without them is not a
+  // weaker chat model, it is a broken one: the first request comes back "does
+  // not support tools". Such a model stays installed and stays usable as a
+  // vision reader, but it is never published into the picker.
+  const publishable = enabled.filter((tag) => capabilitiesFor(tag).includes("tools"));
+  const entries = publishable.map((tag, index) => {
+    const capabilities = capabilitiesFor(tag);
+    return {
+      ...userModelEntry({
+        providerId: LOCAL_PROVIDER_ID,
+        upstreamId: tag,
+        priority: LOCAL_MODEL_PRIORITY + index,
+        metadata: {
+          // Reported by Ollama, so the entry claims image input only when the
+          // model genuinely has it -- the same standard the checked-in
+          // registry is held to.
+          inputModalities: capabilities.includes("vision") ? ["text", "image"] : ["text"],
+          description: `${tag} running locally through Ollama on this machine.`,
+        },
+      }),
+      displayName: `${tag} (local)`,
+    };
+  });
   writeUserModels([...others, ...entries]);
   return entries;
+}
+
+export const CAPABILITY_CACHE_PATH =
+  process.env.MODEL_ROUTER_LOCAL_CAPABILITY_CACHE ||
+  path.join(STATE_DIR, "local-model-capabilities.json");
+
+// Ollama reports what a model can actually do, which beats inferring it from
+// the name: most small vision models cannot call tools, and a name says
+// nothing about it. Codex is an agent -- it needs tool calls to edit files and
+// run commands -- so publishing a toolless model gives the operator a picker
+// entry that 400s on the first turn.
+export function parseOllamaCapabilities(stdout) {
+  const text = String(stdout || "");
+  const section = text.split(/Capabilities/i)[1];
+  if (!section) return [];
+  const capabilities = [];
+  for (const raw of section.split("\n").slice(1)) {
+    const line = raw.trim();
+    if (!line) break; // the capability block ends at the first blank line
+    if (/^[A-Z]/.test(line)) break; // ...or at the next section heading
+    capabilities.push(line.split(/\s+/)[0].toLowerCase());
+  }
+  return capabilities;
+}
+
+function readCapabilityCache() {
+  try {
+    const parsed = JSON.parse(readFileSync(CAPABILITY_CACHE_PATH, "utf8"));
+    return parsed?.version === 1 && parsed.models ? parsed.models : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeCapabilityCache(models) {
+  mkdirSync(path.dirname(CAPABILITY_CACHE_PATH), { recursive: true, mode: 0o700 });
+  const temporary = `${CAPABILITY_CACHE_PATH}.tmp.${process.pid}`;
+  writeFileSync(temporary, `${JSON.stringify({ version: 1, models })}\n`, {
+    encoding: "utf8",
+    mode: 0o600,
+  });
+  renameSync(temporary, CAPABILITY_CACHE_PATH);
+}
+
+// Keyed by the model's content id, so a retagged or rebuilt model is re-read
+// while an unchanged one costs no subprocess at all -- the tray polls this.
+export function localModelCapabilities(tag, id, { spawn = spawnSync, cache } = {}) {
+  const store = cache || readCapabilityCache();
+  const key = id || tag;
+  if (store[key]) return store[key];
+  try {
+    const result = spawn("ollama", ["show", tag], { encoding: "utf8" });
+    if (result.status !== 0 || typeof result.stdout !== "string") return [];
+    const capabilities = parseOllamaCapabilities(result.stdout);
+    store[key] = capabilities;
+    if (!cache) writeCapabilityCache(store);
+    return capabilities;
+  } catch {
+    return [];
+  }
 }
 
 // `ollama list` is a fixed-width table; the columns are name, id, size, and a
@@ -201,21 +272,34 @@ export function localModelsSnapshot({
   running = runningLocalModels(),
   selection = readLocalModelSelection(),
   benchmarks = {},
+  capabilities,
 } = {}) {
   const enabled = new Set(selection.enabled);
   const runningSet = new Set(running);
-  const models = inventory.map((entry) => ({
-    ...entry,
-    enabled: enabled.has(entry.tag),
-    running: runningSet.has(entry.tag),
-    vision: isVisionModelId(entry.tag),
-    accuracy: benchmarks[entry.tag]?.tier,
-    measured: benchmarks[entry.tag],
-  }));
+  const cache = capabilities;
+  const models = inventory.map((entry) => {
+    const caps = cache
+      ? cache[entry.tag] || []
+      : localModelCapabilities(entry.tag, entry.id);
+    return {
+      ...entry,
+      capabilities: caps,
+      enabled: enabled.has(entry.tag),
+      running: runningSet.has(entry.tag),
+      // Reported by Ollama, not guessed from the name.
+      vision: caps.includes("vision"),
+      // Codex drives models through tool calls, so a model without them can
+      // never be a chat model here -- only a vision reader for the bridge.
+      tools: caps.includes("tools"),
+      accuracy: benchmarks[entry.tag]?.tier,
+      measured: benchmarks[entry.tag],
+    };
+  });
   return {
     path: LOCAL_MODELS_STATE_PATH,
     installed: models.length,
     enabled: models.filter((model) => model.enabled).length,
+    usableAsChat: models.filter((model) => model.tools).length,
     totalGb: Math.round(models.reduce((sum, model) => sum + model.sizeGb, 0) * 10) / 10,
     models,
   };
