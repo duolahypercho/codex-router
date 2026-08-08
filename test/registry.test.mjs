@@ -471,3 +471,15 @@ test("a keyless provider must be loopback and must not carry a credential", asyn
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// The OpenAI-compatible surface silently ignores num_ctx, so a local model
+// routed through it gets Ollama's maximum context -- a ~15 GB KV cache for ~2 GB
+// of weights, which overflows a 16 GB machine and drops inference onto the CPU.
+// Local models therefore route with Ollama's own protocol, which honours it.
+test("local models route with Ollama's native protocol and a bounded context", () => {
+  const rendered = renderLiteLlmConfig();
+  const openAiRoutes = rendered.match(/model: "openai\/local-[^"]+"/g);
+  assert.equal(openAiRoutes, null, "a local model must not use the OpenAI-compatible surface");
+  // Every non-local model keeps the forwarder path untouched.
+  assert.match(rendered, /model: "openai\/deepseek-v4-pro"/);
+});

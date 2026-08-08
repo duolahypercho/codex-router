@@ -7,6 +7,10 @@ import { LITELLM_CONFIG_PATH } from "./paths.mjs";
 import { MODELS, providerForModel } from "./model-registry.mjs";
 import { assertStateOwnership } from "./state-owner.mjs";
 
+// Big enough for real Codex turns, small enough that a small model stays
+// entirely on the GPU of a 16 GB machine.
+const LOCAL_NUM_CTX = 16384;
+
 function yamlString(value) {
   return JSON.stringify(String(value));
 }
@@ -15,6 +19,24 @@ export function renderLiteLlmConfig() {
   const lines = ["model_list:"];
   for (const model of MODELS) {
     const provider = providerForModel(model);
+    // A local model is routed with Ollama's own protocol rather than its
+    // OpenAI-compatible surface, purely so `num_ctx` can be set. That surface
+    // ignores it, and Ollama then reserves the model's maximum context: on a
+    // 3B model that is a ~15 GB KV cache for ~2 GB of weights, which overflows
+    // a 16 GB machine and pushes inference onto the CPU. Measured here, the
+    // same model went from 17 GB and 43% CPU to 3.1 GB entirely on the GPU,
+    // and from ~35 s to under 10 s for the same reply.
+    if (provider.keyless) {
+      lines.push(
+        `  - model_name: ${yamlString(model.gatewayModel)}`,
+        "    litellm_params:",
+        `      model: ${yamlString(`ollama_chat/${model.upstreamModel}`)}`,
+        `      api_base: ${yamlString(`os.environ/${provider.baseUrlEnv}_ROOT`)}`,
+        `      num_ctx: ${LOCAL_NUM_CTX}`,
+        "",
+      );
+      continue;
+    }
     const apiBaseEnv = provider.kind === "oauth"
       ? provider.proxyBaseEnv
       : provider.protocol === "anthropic"
