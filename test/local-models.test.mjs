@@ -5,6 +5,10 @@ import path from "node:path";
 import test from "node:test";
 
 const stateDir = mkdtempSync(path.join(os.tmpdir(), "local-models-test-"));
+// Capability lookups shell out to `ollama show`, which blocks while Ollama is
+// loading a large model -- a real source of intermittent failures. Every test
+// that mutates the selection injects this stub instead.
+const NO_OLLAMA = { capabilitiesFor: () => ["completion", "tools"] };
 process.env.CODEX_ROUTER_STATE_DIR = stateDir;
 
 const {
@@ -34,10 +38,10 @@ test("checking a model is separate from installing or deleting it", () => {
   // No capability lookup here: this asserts the selection, and shelling out to
   // the machine's real Ollama would make it slow and environment-dependent.
   assert.deepEqual(readLocalModelSelection().enabled, []);
-  setLocalModelEnabled("gemma3:4b", true);
-  setLocalModelEnabled("llava:latest", true);
+  setLocalModelEnabled("gemma3:4b", true, NO_OLLAMA);
+  setLocalModelEnabled("llava:latest", true, NO_OLLAMA);
   assert.deepEqual(readLocalModelSelection().enabled, ["gemma3:4b", "llava:latest"]);
-  setLocalModelEnabled("llava:latest", false);
+  setLocalModelEnabled("llava:latest", false, NO_OLLAMA);
   assert.deepEqual(readLocalModelSelection().enabled, ["gemma3:4b"]);
 });
 
@@ -70,7 +74,7 @@ test("the snapshot joins installed, checked, loaded, and vision state", () => {
 });
 
 test("removing a model needs explicit consent and unchecks it", () => {
-  setLocalModelEnabled("doomed:latest", true);
+  setLocalModelEnabled("doomed:latest", true, NO_OLLAMA);
   assert.throws(
     () => removeLocalModel("doomed:latest", { spawn: () => ({ status: 0 }) }),
     /deletes it from disk/,
@@ -80,6 +84,7 @@ test("removing a model needs explicit consent and unchecks it", () => {
 
   let called;
   removeLocalModel("doomed:latest", {
+    ...NO_OLLAMA,
     confirmed: true,
     spawn: (bin, args) => { called = { bin, args }; return { status: 0 }; },
   });
@@ -92,6 +97,7 @@ test("a failed removal surfaces ollama's own message", () => {
   assert.throws(
     () =>
       removeLocalModel("missing", {
+        ...NO_OLLAMA,
         confirmed: true,
         spawn: () => ({ status: 1, stderr: "model 'missing' not found" }),
       }),

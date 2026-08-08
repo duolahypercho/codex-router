@@ -312,7 +312,7 @@ export function runningLocalModels({ spawn = spawnSync } = {}) {
 
 // Deleting reclaims gigabytes and cannot be undone without downloading again,
 // so the caller must pass explicit consent rather than this inferring it.
-export function removeLocalModel(tag, { spawn = spawnSync, confirmed = false } = {}) {
+export function removeLocalModel(tag, { spawn = spawnSync, confirmed = false, capabilitiesFor } = {}) {
   const value = String(tag || "").trim();
   if (!value) throw new Error("A model tag is required.");
   if (!confirmed) {
@@ -325,7 +325,7 @@ export function removeLocalModel(tag, { spawn = spawnSync, confirmed = false } =
   }
   // A deleted model cannot stay checked, or the picker would offer something
   // that is no longer on disk.
-  setLocalModelEnabled(value, false);
+  setLocalModelEnabled(value, false, capabilitiesFor ? { capabilitiesFor } : undefined);
   return value;
 }
 
