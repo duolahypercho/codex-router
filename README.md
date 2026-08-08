@@ -504,6 +504,45 @@ and are not available while signed out. The equivalent local control command is
 `./bin/control auth-mode on` or `./bin/control auth-mode off`; when using the
 command directly, restart Codex yourself.
 
+### Use a local model in Codex
+
+Models running on this machine can appear in Codex's picker like any other
+provider. Open the tray's **Model Settings → Local LLMs**, check the ones you
+want, then fully quit and reopen Codex.
+
+```sh
+./bin/control local-models list                  # what is installed
+./bin/control local-models install llama3.2:3b   # download, with progress
+./bin/control local-models set llama3.2:3b on    # publish it to Codex
+./bin/control local-models uninstall llava --yes # delete it from disk
+```
+
+Checking, installing, and removing are three separate actions on purpose:
+unchecking never deletes a download, and removing needs explicit confirmation.
+The `local` provider turns itself on with the first checked model and off when
+the last one clears, so there is no second switch to find.
+
+**Codex needs tool calling, and most local models do not have it.** Codex drives
+every turn through tool calls, so a model without them fails on its first
+request. Only models Ollama reports as tool-capable are published to the picker;
+the rest stay installed and stay usable as vision readers, labelled *"no tools —
+vision only"*. Check before you download:
+
+```sh
+./bin/control local-models inspect llama3.2:3b   # {"tools":true,"sizeGb":2}
+./bin/control local-models inspect gemma3:4b     # {"tools":false,"sizeGb":3.3}
+```
+
+That reads the model's chat template from the registry — a few kilobytes
+instead of a multi-gigabyte pull. It is a filter, not a guarantee:
+`qwen2.5-coder:7b` advertises tools and still returns them as plain JSON text,
+which Codex cannot dispatch. `llama3.2:3b` was verified making a real
+structured tool call through the router.
+
+Expect local models to be slow. A cold 3B model took over a minute on the first
+turn here, against seconds for a hosted model. They cost nothing and stay on
+your machine; that is the trade.
+
 ### Paste images into a text-only model
 
 Most external coding models cannot see. Paste a screenshot into DeepSeek V4 Pro
