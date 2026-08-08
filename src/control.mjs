@@ -471,7 +471,21 @@ function runDoctor(args) {
   process.stdout.write(`${JSON.stringify({ ok: true })}\n`);
 }
 
-function refreshModelSettingsCatalog() {
+function refreshModelSettingsCatalog({ routes = false } = {}) {
+  // The catalog decides what Codex offers; the gateway config decides what it
+  // can route. A change that adds or removes models has to write both, or the
+  // picker advertises a model whose request has nowhere to go -- the exact
+  // drift doctor's "Catalog matches gateway routes" check exists to catch.
+  if (routes) {
+    const rendered = spawnSync(
+      process.execPath,
+      ["-e", "import('./src/litellm-config.mjs').then((m) => m.writeLiteLlmConfig())"],
+      { cwd: REPO_ROOT, env: { ...process.env, MODEL_ROUTER_TARGET: "codex" }, stdio: "ignore" },
+    );
+    if (rendered.status !== 0) {
+      throw new Error("The gateway routing config could not be refreshed.");
+    }
+  }
   const result = spawnSync(
     process.execPath,
     [path.join(REPO_ROOT, "src", "catalog.mjs")],
@@ -824,11 +838,13 @@ async function handleLocalModels(action, value, flag) {
     const tag = String(value || "").trim();
     if (!tag) throw new Error("Usage: control local-models uninstall <model-tag> --yes");
     removeLocalModel(tag, { confirmed: flag === "--yes" || value === "--yes" });
+    refreshModelSettingsCatalog({ routes: true });
   } else if (action === "set") {
     if (!["on", "off"].includes(flag)) {
       throw new Error("Usage: control local-models set <model-tag> <on|off>");
     }
     setLocalModelEnabled(value, flag === "on");
+    refreshModelSettingsCatalog({ routes: true });
   } else {
     throw new Error(
       "Usage: control local-models list|install <tag>|uninstall <tag> --yes|set <tag> <on|off>",
