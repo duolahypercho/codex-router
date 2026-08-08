@@ -624,8 +624,11 @@ To read images locally instead, download a local model and switch to it — from
 the tray or the CLI.
 
 **From the macOS tray** (no terminal): open the menu-bar app → Model Settings →
-"Vision for text-only models" → Local models. Each model lists its download size
-and whether it fits your machine's memory; click Download, then Use.
+Local LLMs, install a vision model by tag, then click "Use for vision" on its
+row. Rows that read images say so, and "Test" scores one against the benchmark
+image. Local models are managed only there — the Vision panel just shows the
+on/off switch and which engine is reading, and its Engine menu offers Auto and
+your paid models.
 
 **From the CLI**, list the same picker — size, fit, and what's already pulled:
 
@@ -718,7 +721,7 @@ weekly, cached, falling back to the checked-in figures offline), so they match
 what `ollama list` will show you.
 
 **Any other model.** The curated list is short on purpose, but it is not a
-cage: the tray's Local models section has a field that accepts any Ollama tag —
+cage: the tray's Local LLMs section has a field that accepts any Ollama tag —
 including `hf.co/user/repo:Q4_K_M` — and the CLI takes one too.
 
 ```sh
