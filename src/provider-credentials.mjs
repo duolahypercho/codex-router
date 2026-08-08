@@ -29,10 +29,16 @@ export function apiProvider(providerId) {
 }
 
 export function primaryCredentialPath(provider) {
+  if (!provider.credential) {
+    throw new Error(`Provider ${provider.id} stores no credential.`);
+  }
   return path.join(STATE_DIR, provider.credential.file);
 }
 
 export function credentialPaths(provider) {
+  // A keyless provider stores nothing, so there is no file to look for and
+  // nothing for a support bundle to redact.
+  if (!provider.credential) return [];
   const names = [provider.credential.file, ...(provider.credential.legacyFiles || [])];
   const candidates = names.flatMap((name) => [
     path.join(STATE_DIR, name),
@@ -61,6 +67,13 @@ function keyFromKeychain(provider) {
 export function resolveProviderCredential(providerOrId, options = {}) {
   const provider =
     typeof providerOrId === "string" ? apiProvider(providerOrId) : providerOrId;
+  // Nothing to resolve for a loopback provider: it authenticates no one. The
+  // placeholder keeps the forwarder's header shape uniform, and the registry
+  // guarantees keyless providers are loopback-only, so it never leaves the
+  // machine.
+  if (provider.keyless) {
+    return { value: "local", source: "local endpoint (no key required)", persistent: true };
+  }
   if (!options.persistent) {
     for (const name of provider.credential.environment) {
       const value = process.env[name]?.trim();
@@ -89,6 +102,7 @@ export function resolveProviderCredential(providerOrId, options = {}) {
 // naming only the key one would hide the OAuth flow from every surface that
 // prints this sentence (doctor, discovery errors, the enable gate).
 export function credentialSetupHint(provider) {
+  if (provider.keyless) return "No key needed; it runs on this machine.";
   const keyCommand = targetCli(`provider-key ${provider.id} set`);
   const session = cliSessionDescriptor(provider);
   return session

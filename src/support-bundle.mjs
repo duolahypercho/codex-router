@@ -87,6 +87,9 @@ function knownLocalSecrets() {
   const files = [CALLER_SECRET_PATH, INTERNAL_SECRET_PATH];
   for (const provider of PROVIDERS.values()) {
     if (provider.kind !== "openai-compatible") continue;
+    // A keyless provider holds no secret, so there is nothing to collect and
+    // nothing to redact for it.
+    if (provider.keyless) continue;
     files.push(...credentialPaths(provider));
     for (const name of provider.credential.environment) {
       const value = process.env[name]?.trim();

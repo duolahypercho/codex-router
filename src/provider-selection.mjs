@@ -61,6 +61,11 @@ export function configuredProviderIds() {
       } else if (provider.id === "grok-oauth" && grokOAuthStatus().configured) {
         configured.push(provider.id);
       }
+    } else if (provider.keyless) {
+      // Nothing to configure: the endpoint is on this machine. Whether it is
+      // actually running is a health question, reported by doctor, not a
+      // reason to hide the provider.
+      configured.push(provider.id);
     } else if (credentialStatus(provider, { persistent: true }).configured) {
       configured.push(provider.id);
     }

@@ -1,15 +1,27 @@
 import assert from "node:assert/strict";
+import { mkdtempSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 
-import { renderLiteLlmConfig } from "../src/litellm-config.mjs";
-import {
+// These assertions describe the checked-in registry, so the machine's own
+// curated models (including any local Ollama models the operator has checked)
+// must not leak in. Point the overlay at an empty directory before the registry
+// loads, which is why the imports below are dynamic.
+process.env.MODEL_ROUTER_USER_MODELS = path.join(
+  mkdtempSync(path.join(os.tmpdir(), "registry-test-")),
+  "user-models.json",
+);
+
+const { renderLiteLlmConfig } = await import("../src/litellm-config.mjs");
+const {
   API_MODELS,
   LISTED_MODELS,
   MODEL_BY_SLUG,
   MODELS,
   PROVIDERS,
   readRegistryDocument,
-} from "../src/model-registry.mjs";
+} = await import("../src/model-registry.mjs");
 
 test("provider registry exposes configured API and OAuth model families", () => {
   // Order follows the deterministic sorted walk of the config/ vendor tree;
@@ -411,6 +423,50 @@ test("a checked-in upgrade prompt with an unresolvable target fails the registry
     );
     assert.equal(result.status, 1);
     assert.match(result.stderr, /upgrades to unknown model no-such\/model/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// A keyless provider skips the credential requirement, which is only safe
+// because it cannot reach off-box. Both halves of that bargain are enforced.
+test("a keyless provider must be loopback and must not carry a credential", async () => {
+  const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const nodePath = (await import("node:path")).default;
+  const { spawnSync } = await import("node:child_process");
+  const dir = mkdtempSync(nodePath.join(tmpdir(), "registry-keyless-test-"));
+  const load = (mutate) => {
+    const registry = readRegistryDocument("config");
+    mutate(registry);
+    const registryPath = nodePath.join(dir, "providers.json");
+    writeFileSync(registryPath, JSON.stringify(registry));
+    return spawnSync(
+      process.execPath,
+      ["-e", "import('./src/model-registry.mjs').catch((e)=>{console.error(e.message);process.exit(1);})"],
+      { encoding: "utf8", env: { ...process.env, MODEL_ROUTER_REGISTRY: registryPath } },
+    );
+  };
+  try {
+    // Off-box endpoint: unauthenticated traffic must never leave the machine.
+    const remote = load((registry) => {
+      registry.providers = registry.providers.map((provider) =>
+        provider.id === "local" ? { ...provider, baseUrl: "https://example.com/v1" } : provider,
+      );
+    });
+    assert.equal(remote.status, 1);
+    assert.match(remote.stderr, /must use a loopback baseUrl/);
+
+    // Declaring a credential while claiming to need none is contradictory.
+    const keyed = load((registry) => {
+      registry.providers = registry.providers.map((provider) =>
+        provider.id === "local"
+          ? { ...provider, credential: { file: "x.secret", environment: [] } }
+          : provider,
+      );
+    });
+    assert.equal(keyed.status, 1);
+    assert.match(keyed.stderr, /must not declare a credential/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

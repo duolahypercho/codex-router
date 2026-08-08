@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "providers": [
+    {
+      "id": "local",
+      "displayName": "Local (Ollama)",
+      "kind": "openai-compatible",
+      "ownedBy": "local",
+      "baseUrl": "http://127.0.0.1:11434/v1",
+      "baseUrlEnv": "MODEL_ROUTER_LOCAL_BASE_URL",
+      "keyless": true,
+      "planNote": "Runs on this machine. Start Ollama before using these models."
+    }
+  ]
+}

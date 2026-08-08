@@ -10,7 +10,14 @@ import {
 import path from "node:path";
 
 import { protectPrivateFile } from "./file-security.mjs";
+import {
+  disableProvider,
+  enableProvider,
+  readProviderSelection,
+} from "./provider-selection.mjs";
 import { STATE_DIR } from "./paths.mjs";
+import { readUserModels, userModelEntry, writeUserModels } from "./user-models.mjs";
+
 import { isVisionModelId } from "./vision-host.mjs";
 
 // Local models are the operator's own software running on their own machine, so
@@ -58,13 +65,68 @@ function writeSelection(selection) {
   return selection;
 }
 
-export function setLocalModelEnabled(tag, enabled) {
+export const LOCAL_PROVIDER_ID = "local";
+
+// Local models sort after every cloud model in the picker: they are slower and
+// smaller, so they should not displace a paid flagship at the top of the list.
+const LOCAL_MODEL_PRIORITY = 900;
+
+// Checking a model publishes it: it joins the user-model overlay, which the
+// registry, gateway config, and Codex catalog already consume, so a local
+// model reaches the picker through exactly the same path as any curated cloud
+// model. Unchecking withdraws it again without touching the download.
+export function setLocalModelEnabled(tag, enabled, { vision } = {}) {
   const value = String(tag || "").trim();
   if (!value) throw new Error("A model tag is required.");
   const current = new Set(readLocalModelSelection().enabled);
   if (enabled) current.add(value);
   else current.delete(value);
-  return writeSelection({ version: 1, enabled: [...current].sort() });
+  const selection = writeSelection({ version: 1, enabled: [...current].sort() });
+  syncLocalUserModels({ enabled: selection.enabled, vision });
+  // Checking a model is the operator saying they want it available, so the
+  // provider follows the models rather than being a second switch to find:
+  // it turns on with the first check and off when the last one clears.
+  syncLocalProviderSelection(selection.enabled.length > 0);
+  return selection;
+}
+
+// Deliberately failure-tolerant. The selection file is shared state that other
+// commands also write; if it cannot be updated the models are still published
+// and the operator can enable the provider by hand, which beats failing the
+// checkbox.
+export function syncLocalProviderSelection(shouldEnable) {
+  try {
+    const enabled = readProviderSelection().includes(LOCAL_PROVIDER_ID);
+    if (shouldEnable && !enabled) enableProvider(LOCAL_PROVIDER_ID);
+    if (!shouldEnable && enabled) disableProvider(LOCAL_PROVIDER_ID);
+    return shouldEnable;
+  } catch {
+    return undefined;
+  }
+}
+
+// Rebuilds the overlay's local entries from the checked set, leaving every
+// other curated model untouched. Declarative on purpose: the checked list is
+// the source of truth, so a half-applied toggle cannot leave a stale entry
+// advertising a model that is no longer selected.
+export function syncLocalUserModels({ enabled = readLocalModelSelection().enabled, vision } = {}) {
+  const others = readUserModels().filter((model) => model.provider !== LOCAL_PROVIDER_ID);
+  const visionTag = (tag) => (typeof vision === "function" ? vision(tag) : isVisionModelId(tag));
+  const entries = enabled.map((tag, index) =>
+    userModelEntry({
+      providerId: LOCAL_PROVIDER_ID,
+      upstreamId: tag,
+      priority: LOCAL_MODEL_PRIORITY + index,
+      metadata: {
+        // Only a model that can actually read images may advertise it, exactly
+        // as the checked-in registry is held to.
+        inputModalities: visionTag(tag) ? ["text", "image"] : ["text"],
+        description: `${tag} running locally through Ollama on this machine.`,
+      },
+    }),
+  ).map((entry) => ({ ...entry, displayName: `${entry.upstreamModel} (local)` }));
+  writeUserModels([...others, ...entries]);
+  return entries;
 }
 
 // `ollama list` is a fixed-width table; the columns are name, id, size, and a
