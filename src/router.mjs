@@ -1043,6 +1043,15 @@ async function handleResponses(request, response, requestUrl) {
       // Native OpenAI traffic keeps client_metadata; routed providers do not
       // consume it and the strict ones reject the unknown field.
       delete routed.client_metadata;
+      // Codex sends reasoning as an object. LiteLLM's Ollama path tests that
+      // value for membership of a string set, which raises on a dict and fails
+      // the whole turn -- 210 of them here before this was caught. Ollama has
+      // no reasoning-effort concept to map it onto anyway, so drop it rather
+      // than translate it into something the model never asked for.
+      if (provider?.keyless) {
+        delete routed.reasoning;
+        delete routed.reasoning_effort;
+      }
       target = `${GATEWAY_BASE}/responses`;
       headers = routedHeaders();
       routedBody = Buffer.from(JSON.stringify(routed), "utf8");
