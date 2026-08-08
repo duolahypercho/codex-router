@@ -164,15 +164,26 @@ async function main() {
     });
     // The model only becomes the reader once it is actually on disk, so a
     // failed or cancelled download never repoints the bridge at a missing one.
-    const { setVisionBridgeEnabled, setVisionBridgeLocal } = await import(
+    const { readVisionBridgeSettings, setVisionBridgeEnabled, setVisionBridgeLocal } = await import(
       "./vision-bridge-state.mjs"
     );
-    setVisionBridgeLocal({ model: tag });
-    setVisionBridgeEnabled(true);
+    // Downloading is not choosing. A freshly pulled model is unmeasured, and
+    // silently promoting it over a reader that is known to work would swap an
+    // accurate transcript for a possibly fabricated one without the operator
+    // ever asking. So it becomes the engine only when there is nothing else --
+    // the first-run case, where any reader beats none. Otherwise the picker's
+    // Use button (and its measured label) makes the call.
+    const settings = readVisionBridgeSettings();
+    const adopt = !settings.enabled || !settings.engine;
+    if (adopt) {
+      setVisionBridgeLocal({ model: tag });
+      setVisionBridgeEnabled(true);
+    }
     writeVisionDownload({
       ...base,
       status: "done",
-      detail: "ready",
+      detail: adopt ? "ready" : "downloaded",
+      adopted: adopt,
       percent: 100,
       updatedAt: Date.now(),
     });

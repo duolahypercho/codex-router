@@ -98,6 +98,7 @@ async function emitProbe() {
     await import("./vision-host.mjs");
   const { readVisionDownload } = await import("./vision-download.mjs");
   const { readBenchmarkResults } = await import("./vision-benchmark.mjs");
+  const { localModelsSnapshot } = await import("./local-models.mjs");
   const { selectedConfiguredListedModels } = await import("./provider-selection.mjs");
   // Bounded and weekly: the tray reads this snapshot constantly, so a fresh
   // cache costs nothing and a stale one costs one short, failure-tolerant pass.
@@ -153,6 +154,7 @@ async function emitProbe() {
             modelSettings: {
               subagents: subagentSettingsSnapshot(),
               picker: modelPickerSnapshot(),
+              localModels: localModelsSnapshot({ benchmarks: readBenchmarkResults() }),
               visionBridge: (() => {
                 const candidates = selectedConfiguredListedModels();
                 const resolved = resolveVisionEngine(
@@ -776,6 +778,65 @@ async function handleVisionBridge(action, value, extra) {
   process.stdout.write(`${JSON.stringify(snapshot())}\n`);
 }
 
+// Local models are managed as their own thing, not as a vision detail: the
+// operator installs, checks, and removes them here, and the vision bridge is
+// only one of the consumers.
+async function handleLocalModels(action, value, flag) {
+  const {
+    localModelsSnapshot,
+    removeLocalModel,
+    setLocalModelEnabled,
+  } = await import("./local-models.mjs");
+  const { readBenchmarkResults } = await import("./vision-benchmark.mjs");
+  const snapshot = () => localModelsSnapshot({ benchmarks: readBenchmarkResults() });
+  if (action === "list" || action === "status" || !action) {
+    process.stdout.write(`${JSON.stringify(snapshot())}\n`);
+    return;
+  }
+  if (action === "install") {
+    // Same detached worker the vision picker uses: gigabytes must not block.
+    const tag = String(value || "").trim();
+    if (!tag) throw new Error("Usage: control local-models install <model-tag>");
+    const { ollamaAvailable, OLLAMA_INSTALL_HINT } = await import("./vision-host.mjs");
+    if (!ollamaAvailable()) throw new Error(`Ollama is not installed. ${OLLAMA_INSTALL_HINT}`);
+    const { readVisionDownload, writeVisionDownload } = await import("./vision-download.mjs");
+    const active = readVisionDownload();
+    if (active?.status === "downloading" && active.tag !== tag) {
+      throw new Error(`${active.tag} is already downloading (${active.percent || 0}%).`);
+    }
+    writeVisionDownload({
+      version: 1,
+      tag,
+      status: "downloading",
+      detail: "starting",
+      percent: 0,
+      startedAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+    spawn(process.execPath, [path.join(REPO_ROOT, "src", "vision-download.mjs"), tag], {
+      detached: true,
+      stdio: "ignore",
+    }).unref();
+    process.stdout.write(`${JSON.stringify({ started: true, tag })}\n`);
+    return;
+  }
+  if (action === "uninstall") {
+    const tag = String(value || "").trim();
+    if (!tag) throw new Error("Usage: control local-models uninstall <model-tag> --yes");
+    removeLocalModel(tag, { confirmed: flag === "--yes" || value === "--yes" });
+  } else if (action === "set") {
+    if (!["on", "off"].includes(flag)) {
+      throw new Error("Usage: control local-models set <model-tag> <on|off>");
+    }
+    setLocalModelEnabled(value, flag === "on");
+  } else {
+    throw new Error(
+      "Usage: control local-models list|install <tag>|uninstall <tag> --yes|set <tag> <on|off>",
+    );
+  }
+  process.stdout.write(`${JSON.stringify(snapshot())}\n`);
+}
+
 async function handlePicker(action, value, flag) {
   const {
     modelPickerSnapshot,
@@ -931,6 +992,8 @@ if (args.includes("--probe")) {
   await setLoginFreeModel(args[1]);
 } else if (args[0] === "subagents") {
   await handleSubagents(args[1], args[2], args[3]);
+} else if (args[0] === "local-models") {
+  await handleLocalModels(args[1], args[2], args[3]);
 } else if (args[0] === "vision-bridge") {
   await handleVisionBridge(args[1] || "status", args[2], args[3]);
 } else if (args[0] === "picker") {

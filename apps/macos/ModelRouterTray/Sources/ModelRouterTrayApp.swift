@@ -1082,6 +1082,16 @@ final class RouterStore: ObservableObject {
     await applyModelSettings(arguments: ["vision-bridge", "engine", value])
   }
 
+  func setLocalModelEnabled(_ tag: String, enabled: Bool) async {
+    await applyModelSettings(arguments: ["local-models", "set", tag, enabled ? "on" : "off"])
+  }
+
+  /// Deletes the model from disk. Irreversible short of downloading it again,
+  /// so the tray arms the row before this is reachable.
+  func uninstallLocalModel(_ tag: String) async {
+    await applyModelSettings(arguments: ["local-models", "uninstall", tag, "--yes"])
+  }
+
   /// Switches the reader to an already-installed local model.
   func useLocalVisionModel(_ tag: String) async {
     await applyModelSettings(arguments: ["vision-bridge", "local", tag])
@@ -1657,7 +1667,26 @@ struct RouterModel: Decodable, Identifiable {
 struct ModelSettingsSnapshot: Decodable {
   let subagents: SubagentSettingsSnapshot
   let picker: PickerSettingsSnapshot
+  let localModels: LocalModelsSnapshot?
   let visionBridge: VisionBridgeSnapshot?
+}
+
+struct LocalModelsSnapshot: Decodable {
+  let installed: Int
+  let enabled: Int
+  let totalGb: Double
+  let models: [InstalledLocalModel]
+}
+
+struct InstalledLocalModel: Decodable, Identifiable, Equatable {
+  let tag: String
+  let sizeGb: Double
+  let modified: String?
+  let enabled: Bool
+  let running: Bool
+  let vision: Bool
+  let accuracy: String?
+  var id: String { tag }
 }
 
 struct VisionEngineOption: Decodable, Identifiable, Equatable {
@@ -2185,6 +2214,9 @@ private struct TrayView: View {
     @State private var pickerExpanded = true
     @State private var visionExpanded = true
     @State private var localModelsExpanded = false
+    @State private var localLlmExpanded = false
+    @State private var installTag = ""
+    @State private var armedRemoval: String?
     @State private var customTag = ""
     @State private var collapsedProviders = Set<String>()
 
@@ -2338,6 +2370,14 @@ private struct TrayView: View {
         }
 
         AccordionPanel(
+          title: "Local LLMs",
+          summary: localLlmSummary,
+          expanded: $localLlmExpanded
+        ) {
+          localLlmPanel
+        }
+
+        AccordionPanel(
           title: "Vision for text-only models",
           summary: visionSummary,
           expanded: $visionExpanded
@@ -2345,6 +2385,124 @@ private struct TrayView: View {
           visionPanel
         }
       }
+    }
+
+    // Everything installed through Ollama, in one place: check the ones to keep
+    // available, install more by tag, remove the ones eating disk. Checking a
+    // model is not the same as downloading it and not the same as deleting it,
+    // so the three actions stay visibly separate.
+    @ViewBuilder private var localLlmPanel: some View {
+      VStack(alignment: .leading, spacing: 8) {
+        Text("Models running on this Mac through Ollama. Checked models stay available to the router.")
+          .font(.system(size: 9))
+          .foregroundStyle(routerMuted)
+        if (localModels?.models ?? []).isEmpty {
+          Text("Nothing installed yet. Add one below, or install Ollama first.")
+            .font(.system(size: 9))
+            .foregroundStyle(routerMutedStrong)
+        }
+        ForEach(localModels?.models ?? []) { model in
+          installedLocalRow(model)
+        }
+        Divider().padding(.vertical, 2)
+        HStack(spacing: 6) {
+          TextField("Install by tag, e.g. gemma3:4b", text: $installTag)
+            .textFieldStyle(.roundedBorder)
+            .font(.system(size: 10))
+            .disabled(busy || store.visionDownload?.isRunning == true)
+            .onSubmit { submitInstall() }
+          Button("Install") { submitInstall() }
+            .buttonStyle(.borderless)
+            .font(.system(size: 9, weight: .medium))
+            .foregroundStyle(canInstall ? routerMint : routerMutedStrong)
+            .disabled(!canInstall)
+        }
+        if let download = store.visionDownload, download.isRunning {
+          HStack(spacing: 6) {
+            ProgressView(value: Double(download.percent ?? 0), total: 100)
+              .progressViewStyle(.linear)
+              .tint(routerMint)
+            Text("\(download.tag ?? "") \(download.percent ?? 0)%")
+              .font(.system(size: 9, weight: .medium))
+              .foregroundStyle(routerMint)
+              .monospacedDigit()
+          }
+        }
+      }
+    }
+
+    @ViewBuilder private func installedLocalRow(_ model: InstalledLocalModel) -> some View {
+      HStack(spacing: 10) {
+        Toggle("", isOn: Binding(
+          get: { model.enabled },
+          set: { on in Task { await store.setLocalModelEnabled(model.tag, enabled: on) } }
+        ))
+        .labelsHidden()
+        .toggleStyle(.checkbox)
+        .controlSize(.mini)
+        .disabled(busy)
+        VStack(alignment: .leading, spacing: 2) {
+          HStack(spacing: 6) {
+            Text(model.tag)
+              .font(.system(size: 11, weight: .medium))
+              .lineLimit(1)
+            if model.running {
+              Text("loaded").font(.system(size: 8, weight: .medium)).foregroundStyle(routerMint)
+            }
+          }
+          HStack(spacing: 6) {
+            Text(String(format: "%.1f GB", model.sizeGb))
+              .font(.system(size: 9))
+              .foregroundStyle(routerMutedStrong)
+            if model.vision {
+              Text("vision").font(.system(size: 9)).foregroundStyle(routerMint)
+            }
+            if let accuracy = model.accuracy {
+              Text(accuracy)
+                .font(.system(size: 9))
+                .foregroundStyle(accuracy == "accurate" ? routerMint : routerRed)
+            }
+          }
+        }
+        Spacer()
+        // Two-step, because this deletes gigabytes and there is no undo.
+        if armedRemoval == model.tag {
+          Button("Confirm") {
+            armedRemoval = nil
+            Task { await store.uninstallLocalModel(model.tag) }
+          }
+          .buttonStyle(.borderless)
+          .font(.system(size: 9, weight: .medium))
+          .foregroundStyle(routerRed)
+          .disabled(busy)
+        } else {
+          Button("Remove") { armedRemoval = model.tag }
+            .buttonStyle(.borderless)
+            .font(.system(size: 9))
+            .foregroundStyle(routerMutedStrong)
+            .disabled(busy)
+        }
+      }
+      .padding(.horizontal, 2)
+    }
+
+    private var localModels: LocalModelsSnapshot? { settings?.localModels }
+
+    private var localLlmSummary: String {
+      guard let localModels, localModels.installed > 0 else { return "none installed" }
+      return "\(localModels.enabled) of \(localModels.installed) checked · \(String(format: "%.1f", localModels.totalGb)) GB"
+    }
+
+    private var canInstall: Bool {
+      !busy && store.visionDownload?.isRunning != true
+        && !installTag.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    private func submitInstall() {
+      let tag = installTag.trimmingCharacters(in: .whitespaces)
+      guard canInstall else { return }
+      installTag = ""
+      Task { await store.downloadLocalVisionModel(tag) }
     }
 
     // Lets a text-only model (DeepSeek, GLM, ...) answer about a pasted image by
