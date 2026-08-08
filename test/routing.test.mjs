@@ -7,7 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { zstdCompressSync } from "node:zlib";
+import { zstdCompressSync, zstdDecompressSync } from "node:zlib";
 
 import { callerBaseUrl } from "../src/caller-auth.mjs";
 
@@ -31,7 +31,11 @@ function json(response, status, payload) {
 async function bodyJson(request) {
   const chunks = [];
   for await (const chunk of request) chunks.push(chunk);
-  return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  const raw = Buffer.concat(chunks);
+  // The router compresses large bodies on the way to the native backend, the
+  // way Codex itself does on the way in, so a mock backend has to decode one.
+  const body = request.headers["content-encoding"] === "zstd" ? zstdDecompressSync(raw) : raw;
+  return JSON.parse(body.toString("utf8"));
 }
 
 async function openPort() {
@@ -638,6 +642,87 @@ test("router permits a compressed context larger than the encoded request limit"
 
     assert.equal(response.status, 200, await response.text());
     assert.equal(receivedInputLength, input.length);
+  } finally {
+    await stopChild(router);
+    await closeServer(native.server);
+  }
+});
+
+test("router hands the native backend a compressed body instead of inflated JSON", async () => {
+  const seen = [];
+  const native = await mockServer(async (request, response) => {
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk);
+    const raw = Buffer.concat(chunks);
+    const encoding = request.headers["content-encoding"];
+    const decoded = encoding === "zstd" ? zstdDecompressSync(raw) : raw;
+    seen.push({ encoding, wireBytes: raw.length, payload: JSON.parse(decoded.toString("utf8")) });
+    json(response, 200, { id: "ok", output: [] });
+  });
+  const routerPort = await openPort();
+  const router = run("router.mjs", {
+    CODEX_ROUTER_PORT: String(routerPort),
+    CODEX_NATIVE_BASE_URL: `http://127.0.0.1:${native.port}`,
+    CODEX_ROUTER_GATEWAY_BASE_URL: `http://127.0.0.1:${native.port}`,
+    CODEX_ROUTER_QUIET: "1",
+  });
+
+  try {
+    await waitFor(`${routerBase(routerPort)}/models`, router);
+    // A real turn: far past the threshold, and compressible the way a
+    // conversation is rather than the way a run of one character is.
+    const text = Array.from(
+      { length: 4_000 },
+      (_, index) => `line ${index}: the quick brown fox jumps over the lazy dog`,
+    ).join("\n");
+    const big = JSON.stringify({
+      model: "gpt-5.6-sol",
+      input: [{ type: "message", role: "user", content: [{ type: "input_text", text }] }],
+    });
+
+    const response = await fetch(`${routerBase(routerPort)}/responses`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${CALLER_KEY}`, "Content-Type": "application/json" },
+      body: big,
+    });
+    assert.equal(response.status, 200, await response.text());
+
+    const [call] = seen;
+    assert.equal(call.encoding, "zstd");
+    // The point of the exercise: fewer bytes on the wire than the router holds
+    // in memory, and the backend still receives the exact turn.
+    assert.ok(call.wireBytes < big.length / 2, `${call.wireBytes} vs ${big.length}`);
+    assert.equal(call.payload.input[0].content[0].text, text);
+  } finally {
+    await stopChild(router);
+    await closeServer(native.server);
+  }
+});
+
+test("a small native turn is sent unencoded, exactly as it always was", async () => {
+  const seen = [];
+  const native = await mockServer(async (request, response) => {
+    seen.push({ encoding: request.headers["content-encoding"], body: await bodyJson(request) });
+    json(response, 200, { id: "ok", output: [] });
+  });
+  const routerPort = await openPort();
+  const router = run("router.mjs", {
+    CODEX_ROUTER_PORT: String(routerPort),
+    CODEX_NATIVE_BASE_URL: `http://127.0.0.1:${native.port}`,
+    CODEX_ROUTER_GATEWAY_BASE_URL: `http://127.0.0.1:${native.port}`,
+    CODEX_ROUTER_QUIET: "1",
+  });
+
+  try {
+    await waitFor(`${routerBase(routerPort)}/models`, router);
+    const response = await fetch(`${routerBase(routerPort)}/responses`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${CALLER_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "gpt-5.6-sol", input: "hello" }),
+    });
+    assert.equal(response.status, 200, await response.text());
+    assert.equal(seen[0].encoding, undefined);
+    assert.equal(seen[0].body.input, "hello");
   } finally {
     await stopChild(router);
     await closeServer(native.server);
