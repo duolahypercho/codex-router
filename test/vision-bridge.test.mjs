@@ -19,6 +19,7 @@ import {
   stripImages,
   substituteImages,
   supportsImageInput,
+  visionEngineEfforts,
   VISION_EVIDENCE_MAX_CHARS,
 } from "../src/vision-bridge.mjs";
 
@@ -454,4 +455,90 @@ test("a streamed reply is reassembled from deltas, and from the final envelope w
 
   // Keep-alives and unparseable lines must not break reassembly.
   assert.equal(streamedResponseText(": keep-alive\n\ndata: not json\n\n"), "");
+});
+
+test("effort levels are read from both catalog spellings", () => {
+  assert.deepEqual(
+    visionEngineEfforts({
+      supported_reasoning_levels: [{ effort: "low" }, { effort: "xhigh" }],
+    }),
+    ["low", "xhigh"],
+  );
+  assert.deepEqual(
+    visionEngineEfforts({ reasoningLevels: [{ effort: "high" }, { effort: "max" }] }),
+    ["high", "max"],
+  );
+  assert.deepEqual(visionEngineEfforts({}), []);
+});
+
+test("a native engine carries the levels it declares", () => {
+  const engine = nativeVisionEngine({
+    ...NATIVE_LUNA,
+    default_reasoning_level: "medium",
+    supported_reasoning_levels: [{ effort: "low" }, { effort: "medium" }, { effort: "xhigh" }],
+  });
+  assert.deepEqual(engine.efforts, ["low", "medium", "xhigh"]);
+  assert.equal(engine.defaultEffort, "medium");
+});
+
+test("a chosen effort rides along to the engine", async () => {
+  let body;
+  await describeImage({
+    engine: nativeVisionEngine({
+      ...NATIVE_LUNA,
+      supported_reasoning_levels: [{ effort: "low" }, { effort: "xhigh" }],
+    }),
+    imageUrl: "data:image/png;base64,AAAA",
+    gatewayBase: "http://127.0.0.1:4100/v1",
+    headers: {},
+    nativeCall: { baseUrl: "https://chatgpt.com/backend-api/codex", headers: {} },
+    effort: "xhigh",
+    fetchImpl: async (url, init) => {
+      body = JSON.parse(init.body);
+      return new Response('data: {"type":"response.output_text.delta","delta":"An invoice."}\n\n', {
+        status: 200,
+      });
+    },
+  });
+  assert.deepEqual(body.reasoning, { effort: "xhigh" });
+});
+
+test("an effort the engine never offered is dropped rather than sent", async () => {
+  let body;
+  await describeImage({
+    engine: nativeVisionEngine({
+      ...NATIVE_LUNA,
+      supported_reasoning_levels: [{ effort: "low" }, { effort: "high" }],
+    }),
+    imageUrl: "data:image/png;base64,AAAA",
+    gatewayBase: "http://127.0.0.1:4100/v1",
+    headers: {},
+    nativeCall: { baseUrl: "https://chatgpt.com/backend-api/codex", headers: {} },
+    effort: "max",
+    fetchImpl: async (url, init) => {
+      body = JSON.parse(init.body);
+      return new Response('data: {"type":"response.output_text.delta","delta":"An invoice."}\n\n', {
+        status: 200,
+      });
+    },
+  });
+  assert.equal("reasoning" in body, false);
+});
+
+test("no chosen effort leaves the request exactly as it was", async () => {
+  let body;
+  await describeImage({
+    engine: nativeVisionEngine(NATIVE_LUNA),
+    imageUrl: "data:image/png;base64,AAAA",
+    gatewayBase: "http://127.0.0.1:4100/v1",
+    headers: {},
+    nativeCall: { baseUrl: "https://chatgpt.com/backend-api/codex", headers: {} },
+    fetchImpl: async (url, init) => {
+      body = JSON.parse(init.body);
+      return new Response('data: {"type":"response.output_text.delta","delta":"An invoice."}\n\n', {
+        status: 200,
+      });
+    },
+  });
+  assert.equal("reasoning" in body, false);
 });

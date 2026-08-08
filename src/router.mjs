@@ -688,8 +688,11 @@ async function normalizeRoutedAgentInput(request, input, signal) {
 // Codex resends the whole conversation every turn, so the same screenshot
 // arrives again on every follow-up. Without the hash cache a five-turn
 // conversation about one image would buy the same transcript five times.
-async function visionEvidenceFor(url, engine, signal, request) {
-  const cached = evidenceCache.get(url);
+async function visionEvidenceFor(url, engine, signal, request, effort) {
+  // The effort is part of the identity of a transcript: raising it and pasting
+  // the same screenshot again must re-read it, not replay the cheaper pass.
+  const key = `${engine.slug}\u0000${effort || "default"}\u0000${url}`;
+  const cached = evidenceCache.get(key);
   if (cached !== undefined) return cached;
   const text = await describeImage({
     engine,
@@ -702,9 +705,10 @@ async function visionEvidenceFor(url, engine, signal, request) {
     nativeCall: request
       ? { baseUrl: NATIVE_BASE, headers: nativeHeaders(request) }
       : undefined,
+    effort,
     signal,
   });
-  return evidenceCache.set(url, text);
+  return evidenceCache.set(key, text);
 }
 
 // Text-only models get their images read by a vision-capable model the
@@ -733,8 +737,9 @@ async function bridgeVisionInput(input, route, signal, request) {
     ).input;
   }
   const engineName = engine.displayName || engine.slug;
+  const { effort } = readVisionBridgeSettings();
   const result = await substituteImages(input, async (url) => ({
-    text: await visionEvidenceFor(url, engine, signal, request),
+    text: await visionEvidenceFor(url, engine, signal, request, effort),
     engineName,
   }));
   if (!QUIET) {

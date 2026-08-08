@@ -1077,9 +1077,18 @@ final class RouterStore: ObservableObject {
     await applyModelSettings(arguments: ["vision-bridge", enabled ? "on" : "off"])
   }
 
-  /// Picks a paid cloud engine ("auto" or a model slug) as the image reader.
-  func setVisionBridgeEngine(_ value: String) async {
-    await applyModelSettings(arguments: ["vision-bridge", "engine", value])
+  /// Picks a cloud engine ("auto" or a model slug) as the image reader, and
+  /// optionally the reasoning effort it reads at. Passing "default" for the
+  /// effort hands the level back to the model. One command, so the two never
+  /// land out of step.
+  func setVisionBridgeEngine(_ value: String, effort: String? = nil) async {
+    var arguments = ["vision-bridge", "engine", value]
+    if let effort { arguments.append(effort) }
+    await applyModelSettings(arguments: arguments)
+  }
+
+  func setVisionBridgeEffort(_ effort: String) async {
+    await applyModelSettings(arguments: ["vision-bridge", "effort", effort])
   }
 
   func setLocalModelEnabled(_ tag: String, enabled: Bool) async {
@@ -1717,6 +1726,10 @@ struct InstalledLocalModel: Decodable, Identifiable, Equatable {
 struct VisionEngineOption: Decodable, Identifiable, Equatable {
   let slug: String
   let displayName: String
+  // The reasoning levels this model itself declares. Older routers do not send
+  // them, and some models declare none, so an empty list means "no level to
+  // choose" rather than "no levels allowed".
+  let efforts: [String]?
   var id: String { slug }
 }
 
@@ -1731,6 +1744,8 @@ struct VisionBridgeSnapshot: Decodable {
   // Vision models from the signed-in ChatGPT session. Older routers do not send
   // this, so it defaults to empty rather than failing the whole decode.
   let nativeEngines: [VisionEngineOption]?
+  /// Pinned reasoning effort, `nil` when the reader runs at its own default.
+  let effort: String?
   let download: VisionDownloadState?
 }
 
@@ -2662,18 +2677,14 @@ private struct TrayView: View {
         if !(vision?.paidEngines ?? []).isEmpty {
           Section("Paid (cloud)") {
             ForEach(vision?.paidEngines ?? []) { option in
-              Button(option.displayName) {
-                Task { await store.setVisionBridgeEngine(option.slug) }
-              }
+              engineEntry(option)
             }
           }
         }
         if !(vision?.nativeEngines ?? []).isEmpty {
           Section("Your ChatGPT plan") {
             ForEach(vision?.nativeEngines ?? []) { option in
-              Button(option.displayName) {
-                Task { await store.setVisionBridgeEngine(option.slug) }
-              }
+              engineEntry(option)
             }
           }
         }
@@ -2690,6 +2701,44 @@ private struct TrayView: View {
       .disabled(busy)
     }
 
+    // Hovering a model opens its own levels, so picking the reader and how hard
+    // it reads is one gesture. A model that declares no levels stays a plain
+    // button: there would be nothing behind the submenu.
+    @ViewBuilder private func engineEntry(_ option: VisionEngineOption) -> some View {
+      let efforts = option.efforts ?? []
+      if efforts.isEmpty {
+        Button(engineEntryLabel(option, selected: isSelectedEngine(option.slug))) {
+          Task { await store.setVisionBridgeEngine(option.slug) }
+        }
+      } else {
+        Menu(engineEntryLabel(option, selected: isSelectedEngine(option.slug))) {
+          Button(effortEntryLabel("Model default", selected: isSelectedEngine(option.slug) && vision?.effort == nil)) {
+            Task { await store.setVisionBridgeEngine(option.slug, effort: "default") }
+          }
+          ForEach(efforts, id: \.self) { effort in
+            Button(
+              effortEntryLabel(
+                effort.capitalized,
+                selected: isSelectedEngine(option.slug) && vision?.effort == effort
+              )
+            ) {
+              Task { await store.setVisionBridgeEngine(option.slug, effort: effort) }
+            }
+          }
+        }
+      }
+    }
+
+    private func isSelectedEngine(_ slug: String) -> Bool { vision?.engine == slug }
+
+    private func engineEntryLabel(_ option: VisionEngineOption, selected: Bool) -> String {
+      selected ? "\u{2713} \(option.displayName)" : option.displayName
+    }
+
+    private func effortEntryLabel(_ title: String, selected: Bool) -> String {
+      selected ? "\u{2713} \(title)" : title
+    }
+
     private var vision: VisionBridgeSnapshot? { settings?.visionBridge }
 
     private var currentEngineLabel: String {
@@ -2697,10 +2746,11 @@ private struct TrayView: View {
       if vision.engine == "local" {
         return "Local · \(vision.local?.model ?? "model")"
       }
+      let suffix = vision.effort.map { " · \($0)" } ?? ""
       if vision.engine == nil {
-        return "Auto · \(vision.resolvedEngineName ?? vision.resolvedEngine ?? "none")"
+        return "Auto · \(vision.resolvedEngineName ?? vision.resolvedEngine ?? "none")\(suffix)"
       }
-      return vision.resolvedEngineName ?? vision.resolvedEngine ?? vision.engine ?? "none"
+      return "\(vision.resolvedEngineName ?? vision.resolvedEngine ?? vision.engine ?? "none")\(suffix)"
     }
 
     private var hiddenModels: Set<String> {
