@@ -851,7 +851,6 @@ async function summarize(payload, route, signal) {
     model: route.gatewayModel,
     stream: false,
     tools: [],
-    tool_choice: "none",
     input: [...bridged, messageItem(COMPACT_PROMPT)],
   };
   delete body.previous_response_id;
