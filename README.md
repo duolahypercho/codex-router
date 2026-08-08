@@ -504,10 +504,14 @@ and are not available while signed out. The equivalent local control command is
 `./bin/control auth-mode on` or `./bin/control auth-mode off`; when using the
 command directly, restart Codex yourself.
 
-### Use a local model in Codex
+### Use a local model in Codex (experimental)
 
 Models running on this machine can appear in Codex's picker like any other
-provider. Open the tray's **Model Settings → Local LLMs**, check the ones you
+provider. They are labelled **experimental** there, and the label is earned:
+using a local model as the *vision reader* is reliable, but using one as a
+*chat model* is not. A borderline model was seen passing the capability check
+and failing the identical check minutes later, so treat local chat as something
+to try rather than something to depend on. Open the tray's **Model Settings → Local LLMs**, check the ones you
 want, then fully quit and reopen Codex.
 
 ```sh

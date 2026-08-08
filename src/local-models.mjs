@@ -149,7 +149,12 @@ export function syncLocalUserModels({
           description: `${tag} running locally through Ollama on this machine.`,
         },
       }),
-      displayName: `${tag} (local)`,
+      // Marked experimental in the picker itself. Vision is proven -- a local
+      // model transcribes an image accurately every time -- but driving a
+      // Codex turn is not: a model can pass this check and fail the same one
+      // minutes later, and the label has to say so where the choice is made,
+      // not only in a doc nobody opens mid-task.
+      displayName: `${tag} (local, experimental)`,
       // Codex's apply_patch is a freeform custom tool, which has no
       // representation in Ollama's tool schema: it arrives mangled or not at
       // all, and the model is left guessing at a toolset it cannot see. Opting

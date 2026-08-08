@@ -324,6 +324,12 @@ the turn as text. Treat it as a router capability, never as a model capability.
 `local` is a keyless provider: it serves from this machine, so there is no
 credential to store, prompt for, or redact.
 
+Local models are published as **experimental**, and the two roles are not
+equally proven. Reading images is dependable: a local vision model transcribes
+codes, numbers, and dates exactly, every run. Driving a Codex turn is not: the
+same model has passed `local-models agent-check` and failed the identical check
+minutes later. Do not quietly drop the label because a check happened to pass.
+
 1. `keyless: true` is only valid with a loopback `baseUrl` and no `credential`
    block; the loader rejects both violations. An unauthenticated provider
    pointed at the internet would send traffic off-box with no key.
