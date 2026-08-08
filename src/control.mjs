@@ -807,6 +807,22 @@ async function handleLocalModels(action, value, flag) {
     process.stdout.write(`${JSON.stringify(snapshot())}\n`);
     return;
   }
+  if (action === "agent-check") {
+    // Runs the real Codex client against the model. Slow by design: every
+    // cheaper approximation tried here disagreed with reality.
+    const { checkAgentCapability } = await import("./agent-check.mjs");
+    const { readLocalModelSelection, saveAgentCheck } = await import("./local-models.mjs");
+    const tags = value ? [String(value).trim()] : readLocalModelSelection().enabled;
+    if (!tags.length) throw new Error("No local models are checked.");
+    const results = [];
+    for (const tag of tags) {
+      const result = checkAgentCapability(`local/${tag}`);
+      saveAgentCheck(tag, result);
+      results.push({ tag, ...result });
+    }
+    process.stdout.write(`${JSON.stringify({ results })}\n`);
+    return;
+  }
   if (action === "inspect") {
     // Answers "can Codex drive this?" for a few kilobytes instead of a
     // multi-gigabyte download.

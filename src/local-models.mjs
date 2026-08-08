@@ -215,6 +215,31 @@ export async function fetchRegistryCapabilities(tag, { fetchImpl = fetch, timeou
   }
 }
 
+export const AGENT_CHECK_PATH =
+  process.env.MODEL_ROUTER_AGENT_CHECKS ||
+  path.join(STATE_DIR, "local-agent-checks.json");
+
+export function readAgentChecks() {
+  try {
+    const parsed = JSON.parse(readFileSync(AGENT_CHECK_PATH, "utf8"));
+    return parsed?.version === 1 && parsed.results ? parsed.results : {};
+  } catch {
+    return {};
+  }
+}
+
+export function saveAgentCheck(tag, result) {
+  const results = { ...readAgentChecks(), [tag]: result };
+  mkdirSync(path.dirname(AGENT_CHECK_PATH), { recursive: true, mode: 0o700 });
+  const temporary = `${AGENT_CHECK_PATH}.tmp.${process.pid}`;
+  writeFileSync(temporary, `${JSON.stringify({ version: 1, results })}\n`, {
+    encoding: "utf8",
+    mode: 0o600,
+  });
+  renameSync(temporary, AGENT_CHECK_PATH);
+  return results;
+}
+
 export const CAPABILITY_CACHE_PATH =
   process.env.MODEL_ROUTER_LOCAL_CAPABILITY_CACHE ||
   path.join(STATE_DIR, "local-model-capabilities.json");
@@ -348,6 +373,7 @@ export function localModelsSnapshot({
   selection = readLocalModelSelection(),
   benchmarks = {},
   capabilities,
+  agentChecks = readAgentChecks(),
 } = {}) {
   const enabled = new Set(selection.enabled);
   const runningSet = new Set(running);
@@ -368,6 +394,11 @@ export function localModelsSnapshot({
       tools: caps.includes("tools"),
       accuracy: benchmarks[entry.tag]?.tier,
       measured: benchmarks[entry.tag],
+      // Whether the real Codex client could actually drive it. Unmeasured
+      // stays unmeasured: a guess here is what sends someone into a task with
+      // a model that invents tools.
+      agent: agentChecks[entry.tag]?.verdict,
+      agentCapable: agentChecks[entry.tag]?.agentCapable,
     };
   });
   return {

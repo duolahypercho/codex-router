@@ -1688,12 +1688,30 @@ struct InstalledLocalModel: Decodable, Identifiable, Equatable {
   let vision: Bool
   let tools: Bool?
   let accuracy: String?
+  let agent: String?
   var id: String { tag }
 
   /// Codex drives every turn through tool calls, so a model without them
   /// cannot be a chat model here however good it is. It stays useful as a
   /// vision reader, and the row has to say so or the checkbox looks broken.
   var canBeChatModel: Bool { tools == true }
+
+  /// What this model is good for as a Codex chat model, from a measured run of
+  /// the real client where one exists. Tool support alone is not enough: a
+  /// model can call tools perfectly on a short prompt and still fall apart on
+  /// Codex's real instructions.
+  var chatRoleLabel: String {
+    if tools != true { return "no tools — can't chat" }
+    switch agent {
+    case "agent": return "works in Codex"
+    case "flaky": return "unreliable in Codex"
+    case "not-published": return "not offered yet"
+    case .some: return "fails in Codex"
+    default: return "chat — untested"
+    }
+  }
+
+  var chatRoleGood: Bool { tools == true && agent == "agent" }
 }
 
 struct VisionEngineOption: Decodable, Identifiable, Equatable {
@@ -2461,12 +2479,14 @@ private struct TrayView: View {
             Text(String(format: "%.1f GB", model.sizeGb))
               .font(.system(size: 9))
               .foregroundStyle(routerMutedStrong)
+            // The two roles a local model can fill, stated separately: one
+            // model may be good at reading images and useless as an agent.
             if model.vision {
-              Text("vision").font(.system(size: 9)).foregroundStyle(routerMint)
+              Text("reads images").font(.system(size: 9)).foregroundStyle(routerMint)
             }
-            Text(model.canBeChatModel ? "chat" : "no tools — vision only")
+            Text(model.chatRoleLabel)
               .font(.system(size: 9))
-              .foregroundStyle(model.canBeChatModel ? routerMint : routerYellow)
+              .foregroundStyle(model.chatRoleGood ? routerMint : routerYellow)
             if let accuracy = model.accuracy {
               Text(accuracy)
                 .font(.system(size: 9))
@@ -2475,6 +2495,22 @@ private struct TrayView: View {
           }
         }
         Spacer()
+        // The vision role is chosen per model, independently of whether it is
+        // offered to Codex as a chat model: the best image reader here cannot
+        // call tools, and the best agent cannot see.
+        if model.vision {
+          if isVisionEngine(model) {
+            Text("reading images")
+              .font(.system(size: 9, weight: .medium))
+              .foregroundStyle(routerMint)
+          } else {
+            Button("Use for vision") { Task { await store.useLocalVisionModel(model.tag) } }
+              .buttonStyle(.borderless)
+              .font(.system(size: 9))
+              .foregroundStyle(routerMint)
+              .disabled(busy)
+          }
+        }
         // Two-step, because this deletes gigabytes and there is no undo.
         if armedRemoval == model.tag {
           Button("Confirm") {
@@ -2498,9 +2534,14 @@ private struct TrayView: View {
 
     private var localModels: LocalModelsSnapshot? { settings?.localModels }
 
+    private func isVisionEngine(_ model: InstalledLocalModel) -> Bool {
+      vision?.engine == "local" && vision?.local?.model == model.tag
+    }
+
     private var localLlmSummary: String {
       guard let localModels, localModels.installed > 0 else { return "none installed" }
-      return "\(localModels.enabled) of \(localModels.installed) checked · \(String(format: "%.1f", localModels.totalGb)) GB"
+      let chat = localModels.usableAsChat ?? 0
+      return "\(localModels.installed) installed · \(chat) for Codex · \(String(format: "%.1f", localModels.totalGb)) GB"
     }
 
     private var canInstall: Bool {
