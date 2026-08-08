@@ -28,6 +28,8 @@ import { readHiddenModels } from "./model-picker-state.mjs";
 import { buildNativeAliasAssignments } from "./native-alias.mjs";
 import { selectedConfiguredListedModels } from "./provider-selection.mjs";
 import { assertStateOwnership } from "./state-owner.mjs";
+import { applyVisionBridge, resolveVisionEngine } from "./vision-bridge.mjs";
+import { readVisionBridgeSettings } from "./vision-bridge-state.mjs";
 
 const refresh = process.argv.includes("--refresh-native");
 const bundled = process.argv.includes("--bundled-native");
@@ -453,8 +455,9 @@ function main() {
   assertStateOwnership("write the Codex model catalog");
   const userSlugs = new Set(readUserModels().map((model) => String(model.slug)));
   const hiddenModels = readHiddenModels();
+  const selectedModels = selectedConfiguredListedModels();
   const allMultiAgentModels = applyMultiAgentSettings(
-    selectedConfiguredListedModels(),
+    selectedModels,
     readMultiAgentSettings(),
     hiddenModels,
   );
@@ -467,6 +470,13 @@ function main() {
     userSlugs,
     Date.now(),
   );
+  // Advertised last, and only while an engine actually resolves: Codex gates
+  // the paste on `input_modalities`, so a bridge that has gone away must take
+  // the advertisement with it rather than leaving a paste that 400s. This runs
+  // after the announcement pass so a bridged model never announces "image
+  // input" as though it grew the capability itself.
+  const visionEngine = resolveVisionEngine(selectedModels, readVisionBridgeSettings());
+  const catalogModels = applyVisionBridge(routedModels, visionEngine);
   const native = nativeCatalog();
   // Dropping every native model is destructive, so only do it when Codex
   // actually answered that the session is signed out. If the probe could not
@@ -483,9 +493,9 @@ function main() {
   const openaiAuthenticated = auth.authenticated;
   const loginFree = loginFreeConfigured();
   const { models: merged, aliases } = loginFree
-    ? buildLoginFreeCatalog(native, routedModels)
+    ? buildLoginFreeCatalog(native, catalogModels)
     : {
-        models: buildMergedCatalog(native, routedModels, {
+        models: buildMergedCatalog(native, catalogModels, {
           includeNative: openaiAuthenticated,
         }),
         aliases: {},
@@ -506,6 +516,10 @@ function main() {
       models: merged.length,
       routed_models: routedModels.length,
       routed_agents: routedAgents.length,
+      vision_bridge_engine: visionEngine?.slug || null,
+      vision_bridged_models: catalogModels.filter(
+        (model) => model.visionBridgeEngine !== undefined,
+      ).length,
       native_models: !loginFree && openaiAuthenticated
         ? merged.filter((model) => !MODEL_BY_SLUG.has(String(model.slug))).length
         : 0,

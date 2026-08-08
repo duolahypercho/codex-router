@@ -272,6 +272,14 @@ function modelProblem(model, providers, slugs, gatewayModels) {
   ) {
     return `model ${model.slug} has an invalid supportsImageDetailOriginal`;
   }
+  // The router's vision bridge covers every text-only model once the operator
+  // enables it, so this field exists only to opt one out -- a model whose
+  // upstream mangles long injected transcripts, for example. Setting it true
+  // would read as a capability claim the model does not have, and the bridge
+  // never needs it, so only false is accepted.
+  if (model.visionBridge !== undefined && model.visionBridge !== false) {
+    return `model ${model.slug} may only set visionBridge to false`;
+  }
   // "hosted" means the provider's own backend executes web searches
   // server-side (xAI's Responses proxy today). No other mode may be declared
   // yet: an unimplemented mode would make the catalog advertise a search

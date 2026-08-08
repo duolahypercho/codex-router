@@ -250,6 +250,75 @@ surfaces.
    numbers. Routed request/token accounting comes from the shared usage-events
    pipeline and needs no per-provider work beyond correct event recording.
 
+## Vision bridge for text-only models
+
+The router can let a text-only model answer about a pasted image: the routed
+request path sends each image part to a vision-capable model the operator has
+already enabled and credentialed, and substitutes the returned transcript into
+the turn as text. Treat it as a router capability, never as a model capability.
+
+1. It is opt-in per install (`bin/control vision-bridge on`, protected state in
+   `vision-bridge.json`). The installer auto-enables it once, and only when it
+   is still unconfigured and the operator already enabled a vision-capable
+   provider — that reuses a model they already pay for, so no download and no
+   surprise. When no such provider exists it stays off and the summary points
+   at `vision-bridge setup`. `visionBridgeConfigured()` gates this so
+   re-running the installer never overrides an explicit off. Never auto-enable
+   in any other path; a routed image spends the engine provider's quota.
+2. The registry keeps declaring what each model itself reads. `inputModalities`
+   is never edited to add `image` for a bridge, and `visionBridge` accepts only
+   `false`, as a per-model opt-out. The registry loader rejects `true` so the
+   file can never assert a capability the model lacks.
+3. The catalog advertises image input on a bridged model only while an engine
+   actually resolves from the selected, credentialed, listed set. When the
+   bridge is off, or the pinned engine disappears, the advertisement goes with
+   it — Codex gates the paste on `input_modalities`, so a stale advertisement
+   would leave a paste that nothing can serve. Rebuild the catalog after every
+   change and tell the user to fully quit and reopen Codex.
+4. A registry engine's call goes through the same gateway, credential, and
+   request profile as any other routed turn. Do not add a second upstream path,
+   a separate vision API key, or an external CLI dependency for a hosted engine.
+   The one sanctioned exception is the local engine (`vision-bridge local`): a
+   vision model the operator runs themselves (Ollama, LM Studio, llama.cpp). It
+   lives outside the registry, so the request path calls its
+   `/v1/chat/completions` endpoint directly with no credential, and it is used
+   only when explicitly pinned — auto mode never routes images to `localhost`,
+   since an unreachable server would fail every paste. This is what lets a
+   text-only-only install enable the bridge with no paid vision model. The
+   `vision-bridge setup` command and probe target Ollama for auto-download
+   because it is a managed daemon with a stable model registry — the only
+   runtime where "install once and it keeps working" holds. llama.cpp and LM
+   Studio remain first-class manual engines (the probe detects both, and
+   `vision-bridge local <model> <baseUrl>` pins either); the installer never
+   installs a runtime or pulls a multi-gigabyte model without explicit consent
+   (`setup` requires `--yes` before any download). A model download runs
+   detached (`src/vision-download.mjs` streams Ollama's `/api/pull` and records
+   progress in `vision-download.json`): `pull` returns at once and `pull-status`
+   reports the percentage, because a synchronous multi-gigabyte pull freezes
+   the tray and reads as a crash. The worker pins the model only after it is on
+   disk, so a failed or interrupted download never repoints the bridge at a
+   model that is not there.
+5. Substituted transcripts are untrusted user data. Keep them fenced and
+   labelled as quoted image content, never log a transcript or a gateway error
+   body, and keep the per-image failure path degrading to a stated failure
+   rather than a failed turn.
+6. Evidence, not impressions. The instruction set asks for a transcript, a
+   layout list, readable data values, and an explicit uncertainty list, so the
+   downstream model quotes rather than guesses. Preserve the uncertainty
+   section in any rewrite.
+7. Never add a local model to `LOCAL_VISION_CATALOG` with an `accuracy` claim
+   that was not measured. Run `node src/vision-benchmark.mjs`, which scores a
+   model against a checked-in image with known contents, and record the result
+   in `measured`; anything unmeasured stays `untested`. This is not bureaucracy:
+   `llava` scores 0% and `moondream` 0% on text while sounding entirely
+   plausible, so a reputation-based label would route users straight to a model
+   that fabricates invoice numbers. The picker sorts on this field, so an
+   unearned "accurate" puts a confident-wrong reader at the top of the list.
+7. Regression coverage lives in `test/vision-bridge.test.mjs`,
+   `test/vision-bridge-state.test.mjs`, and the bridged-catalog case in
+   `test/catalog.test.mjs`. A change to engine ranking, caching, substitution,
+   or the advertisement rule needs a test there.
+
 ## Codex safety boundaries
 
 - The config manager owns its marked root `openai_base_url` and

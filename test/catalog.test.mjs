@@ -364,3 +364,28 @@ test("native catalog cache is reusable only for the codex build that captured it
   assert.equal(nativeCatalogIsReusable(undefined, undefined), false);
   assert.equal(nativeCatalogIsReusable({ models: [] }, "codex-cli 0.146.1"), false);
 });
+
+test("a bridged text-only model advertises image input, and only through the bridge", async () => {
+  const { applyVisionBridge } = await import("../src/vision-bridge.mjs");
+  const deepseek = {
+    ...grok,
+    slug: "deepseek/deepseek-v4-pro",
+    displayName: "DeepSeek V4 Pro",
+    gatewayModel: "deepseek-v4-pro",
+    inputModalities: ["text"],
+    compHash: "deepseek-v4-pro-v1",
+  };
+
+  // Off, or with no engine to read images with, the catalog repeats the
+  // registry's honest declaration and Codex refuses the paste.
+  assert.deepEqual(routedModel(template, deepseek).input_modalities, ["text"]);
+
+  const [bridged] = applyVisionBridge([deepseek], grok);
+  const entry = routedModel(template, bridged);
+  assert.deepEqual(entry.input_modalities, ["text", "image"]);
+  // The bridge is router state, not a picker field: nothing about the engine
+  // leaks into what Codex reads.
+  assert.equal(entry.visionBridgeEngine, undefined);
+  // Advertising image input is not a claim about detail handling.
+  assert.equal(entry.supports_image_detail_original, false);
+});

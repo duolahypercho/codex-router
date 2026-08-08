@@ -109,6 +109,7 @@ final class RouterStore: ObservableObject {
   @Published private(set) var providerUsageError: String?
   @Published private(set) var providerSetup: [String: ProviderSetupState] = [:]
   @Published private(set) var providerOperation: String?
+  @Published private(set) var visionDownload: VisionDownloadState?
   @Published private(set) var maintenanceMessage: String?
   @Published private(set) var maintenanceSucceeded = false
   @Published private(set) var islandMode: IslandMode
@@ -1071,6 +1072,61 @@ final class RouterStore: ObservableObject {
     await applyModelSettings(arguments: ["picker", "all", "hide"])
   }
 
+  func setVisionBridgeEnabled(_ enabled: Bool) async {
+    await applyModelSettings(arguments: ["vision-bridge", enabled ? "on" : "off"])
+  }
+
+  /// Picks a paid cloud engine ("auto" or a model slug) as the image reader.
+  func setVisionBridgeEngine(_ value: String) async {
+    await applyModelSettings(arguments: ["vision-bridge", "engine", value])
+  }
+
+  /// Switches the reader to an already-installed local model.
+  func useLocalVisionModel(_ tag: String) async {
+    await applyModelSettings(arguments: ["vision-bridge", "local", tag])
+  }
+
+  /// Downloads a local vision model with Ollama, then pins it. The tray row
+  /// shows the size, so the click is the consent for the download.
+  ///
+  /// Gigabytes take minutes: the control command starts a detached worker and
+  /// returns at once, and this polls progress so the row shows a live
+  /// percentage instead of a frozen panel. Only the download buttons are
+  /// disabled meanwhile — the rest of the tray stays usable.
+  func downloadLocalVisionModel(_ tag: String) async {
+    guard visionDownload?.isRunning != true else { return }
+    visionDownload = VisionDownloadState(
+      tag: tag, status: "downloading", detail: "starting", percent: 0, error: nil
+    )
+    do {
+      _ = try await runControl(arguments: ["vision-bridge", "pull", tag])
+    } catch {
+      message = error.localizedDescription
+      visionDownload = nil
+      return
+    }
+    await pollVisionDownload()
+  }
+
+  private func pollVisionDownload() async {
+    while !Task.isCancelled {
+      try? await Task.sleep(nanoseconds: 1_000_000_000)
+      guard let data = try? await runControl(arguments: ["vision-bridge", "pull-status"]),
+        let state = try? JSONDecoder().decode(VisionDownloadState.self, from: data)
+      else { continue }
+      visionDownload = state
+      if state.isRunning { continue }
+      // Terminal: refresh so the row flips to "in use" and the engine label
+      // catches up, then report what happened.
+      await refresh()
+      message = state.status == "done"
+        ? "\(state.tag ?? "Model") downloaded. Restart Codex to refresh its picker."
+        : (state.error ?? "The download failed.")
+      visionDownload = nil
+      return
+    }
+  }
+
   private func applyModelSettings(arguments: [String]) async {
     guard providerOperation == nil else { return }
     providerOperation = "models"
@@ -1584,6 +1640,67 @@ struct RouterModel: Decodable, Identifiable {
 struct ModelSettingsSnapshot: Decodable {
   let subagents: SubagentSettingsSnapshot
   let picker: PickerSettingsSnapshot
+  let visionBridge: VisionBridgeSnapshot?
+}
+
+struct VisionEngineOption: Decodable, Identifiable, Equatable {
+  let slug: String
+  let displayName: String
+  var id: String { slug }
+}
+
+struct LocalVisionModel: Decodable, Identifiable, Equatable {
+  let tag: String
+  let label: String
+  let sizeGb: Double
+  let minRamGib: Double
+  let fits: Bool
+  let installed: Bool
+  let recommended: Bool?
+  let note: String?
+  let accuracy: String?
+  var id: String { tag }
+
+  /// Measured on a checked-in benchmark image, not guessed. A caption-only
+  /// model fabricates codes and numbers, so the picker has to warn rather than
+  /// list it as an equal choice.
+  var accuracyLabel: String {
+    switch accuracy {
+    case "accurate": return "reads text accurately"
+    case "partial": return "reads some text"
+    case "captions-only": return "captions only — invents text"
+    default: return "not benchmarked"
+    }
+  }
+
+  var accuracyIsGood: Bool { accuracy == "accurate" }
+  var accuracyIsPoor: Bool { accuracy == "captions-only" }
+}
+
+struct VisionBridgeSnapshot: Decodable {
+  let enabled: Bool
+  let engine: String?
+  let local: VisionLocalPin?
+  let resolvedEngine: String?
+  let resolvedEngineName: String?
+  let hostMemGib: Double?
+  let paidEngines: [VisionEngineOption]
+  let localModels: [LocalVisionModel]
+  let download: VisionDownloadState?
+}
+
+struct VisionLocalPin: Decodable, Equatable {
+  let model: String?
+}
+
+struct VisionDownloadState: Decodable, Equatable {
+  let tag: String?
+  let status: String
+  let detail: String?
+  let percent: Int?
+  let error: String?
+
+  var isRunning: Bool { status == "downloading" }
 }
 
 struct SubagentSettingsSnapshot: Decodable {
@@ -2039,6 +2156,9 @@ private struct TrayView: View {
     let target: RouterTarget
     @State private var subagentsExpanded = true
     @State private var pickerExpanded = true
+    @State private var visionExpanded = true
+    @State private var localModelsExpanded = false
+    @State private var customTag = ""
     @State private var collapsedProviders = Set<String>()
 
     private struct ProviderModels: Identifiable {
@@ -2189,7 +2309,245 @@ private struct TrayView: View {
             }
           }
         }
+
+        AccordionPanel(
+          title: "Vision for text-only models",
+          summary: visionSummary,
+          expanded: $visionExpanded
+        ) {
+          visionPanel
+        }
       }
+    }
+
+    // Lets a text-only model (DeepSeek, GLM, ...) answer about a pasted image by
+    // having a vision model read it. The engine defaults to an enabled paid
+    // model; the operator can switch to a local model once it is downloaded in
+    // the picker below. Everything maps to a `control vision-bridge` command, so
+    // the tray never needs the agent.
+    @ViewBuilder private var visionPanel: some View {
+      VStack(alignment: .leading, spacing: 8) {
+        Text("Text-only models can't see images. When on, a vision model reads the paste and hands over the text.")
+          .font(.system(size: 9))
+          .foregroundStyle(routerMuted)
+        toggleRow(
+          title: "Read images for text-only models",
+          detail: vision?.enabled == true
+            ? "Reading via \(currentEngineLabel)"
+            : "Off — text-only models refuse pasted images",
+          isOn: Binding(
+            get: { vision?.enabled == true },
+            set: { on in Task { await store.setVisionBridgeEnabled(on) } }
+          ),
+          disabled: busy
+        )
+        if vision?.enabled == true {
+          HStack(spacing: 8) {
+            Text("Engine")
+              .font(.system(size: 11, weight: .medium))
+            Spacer()
+            engineMenu
+          }
+          .padding(.horizontal, 2)
+
+          AccordionPanel(
+            title: "Local models",
+            summary: localModelsSummary,
+            expanded: $localModelsExpanded
+          ) {
+            localModelsList
+          }
+        }
+      }
+    }
+
+    @ViewBuilder private var engineMenu: some View {
+      Menu {
+        Button("Auto · cheapest paid model") {
+          Task { await store.setVisionBridgeEngine("auto") }
+        }
+        if !(vision?.paidEngines ?? []).isEmpty {
+          Section("Paid (cloud)") {
+            ForEach(vision?.paidEngines ?? []) { option in
+              Button(option.displayName) {
+                Task { await store.setVisionBridgeEngine(option.slug) }
+              }
+            }
+          }
+        }
+        let installedLocal = (vision?.localModels ?? []).filter(\.installed)
+        if !installedLocal.isEmpty {
+          Section("Local (downloaded)") {
+            ForEach(installedLocal) { model in
+              Button("\(model.label) · local") {
+                Task { await store.useLocalVisionModel(model.tag) }
+              }
+            }
+          }
+        }
+      } label: {
+        HStack(spacing: 4) {
+          Text(currentEngineLabel).lineLimit(1)
+          Image(systemName: "chevron.up.chevron.down").font(.system(size: 8))
+        }
+        .font(.system(size: 10, weight: .medium))
+        .foregroundStyle(routerMint)
+      }
+      .menuStyle(.borderlessButton)
+      .fixedSize()
+      .disabled(busy)
+    }
+
+    // The downloadable picker. Each row shows size and whether it fits this
+    // machine's memory, so the choice is informed before the download starts.
+    @ViewBuilder private var localModelsList: some View {
+      VStack(alignment: .leading, spacing: 6) {
+        Text("Free, private, offline. Downloads run through Ollama.")
+          .font(.system(size: 9))
+          .foregroundStyle(routerMuted)
+        ForEach(vision?.localModels ?? []) { model in
+          localModelRow(model)
+        }
+        Divider().padding(.vertical, 2)
+        // The curated list is deliberately short and benchmarked, so this is
+        // the escape hatch: any Ollama tag, including `hf.co/user/repo:quant`.
+        // Unlisted models carry no accuracy claim -- the operator chose them.
+        VStack(alignment: .leading, spacing: 4) {
+          Text("Any other Ollama model")
+            .font(.system(size: 10, weight: .medium))
+          HStack(spacing: 6) {
+            TextField("e.g. minicpm-v or hf.co/user/repo:Q4_K_M", text: $customTag)
+              .textFieldStyle(.roundedBorder)
+              .font(.system(size: 10))
+              .disabled(busy || vision?.download?.isRunning == true)
+              .onSubmit { submitCustomTag() }
+            Button("Add") { submitCustomTag() }
+              .buttonStyle(.borderless)
+              .font(.system(size: 9, weight: .medium))
+              .foregroundStyle(canSubmitCustomTag ? routerMint : routerMutedStrong)
+              .disabled(!canSubmitCustomTag)
+          }
+          Text("Downloads it if needed, then uses it. Not benchmarked — check its reading yourself.")
+            .font(.system(size: 9))
+            .foregroundStyle(routerMuted)
+        }
+      }
+    }
+
+    private var canSubmitCustomTag: Bool {
+      !busy && vision?.download?.isRunning != true
+        && !customTag.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    private func submitCustomTag() {
+      let tag = customTag.trimmingCharacters(in: .whitespaces)
+      guard canSubmitCustomTag else { return }
+      customTag = ""
+      Task { await store.downloadLocalVisionModel(tag) }
+    }
+
+    @ViewBuilder private func localModelRow(_ model: LocalVisionModel) -> some View {
+      HStack(spacing: 10) {
+        VStack(alignment: .leading, spacing: 2) {
+          HStack(spacing: 6) {
+            Text(model.label)
+              .font(.system(size: 11, weight: .medium))
+              .lineLimit(1)
+            if model.recommended == true {
+              Text("recommended")
+                .font(.system(size: 8, weight: .medium))
+                .foregroundStyle(routerMint)
+            }
+          }
+          HStack(spacing: 6) {
+            Text(String(format: "%.1f GB", model.sizeGb))
+              .font(.system(size: 9))
+              .foregroundStyle(routerMutedStrong)
+            Text(model.fits ? "fits your Mac" : "needs \(Int(model.minRamGib)) GB RAM")
+              .font(.system(size: 9))
+              .foregroundStyle(model.fits ? routerMint : routerYellow)
+            Text("·").font(.system(size: 9)).foregroundStyle(routerMuted)
+            Text(model.accuracyLabel)
+              .font(.system(size: 9))
+              .foregroundStyle(
+                model.accuracyIsGood
+                  ? routerMint
+                  : model.accuracyIsPoor ? routerRed : routerMutedStrong
+              )
+          }
+        }
+        Spacer()
+        localModelAction(model)
+      }
+      .padding(.horizontal, 2)
+    }
+
+    @ViewBuilder private func localModelAction(_ model: LocalVisionModel) -> some View {
+      let download = store.visionDownload
+      let downloadingThis = download?.isRunning == true && download?.tag == model.tag
+      if downloadingThis {
+        // A percentage is the whole point of the async path: a multi-gigabyte
+        // pull that shows nothing reads as a hang.
+        HStack(spacing: 6) {
+          ProgressView(value: Double(download?.percent ?? 0), total: 100)
+            .progressViewStyle(.linear)
+            .tint(routerMint)
+            .frame(width: 54)
+          Text("\(download?.percent ?? 0)%")
+            .font(.system(size: 9, weight: .medium))
+            .foregroundStyle(routerMint)
+            .monospacedDigit()
+        }
+      } else if model.installed {
+        if isCurrentLocal(model) {
+          Text("in use")
+            .font(.system(size: 9, weight: .medium))
+            .foregroundStyle(routerMint)
+        } else {
+          Button("Use") { Task { await store.useLocalVisionModel(model.tag) } }
+            .buttonStyle(.borderless)
+            .font(.system(size: 9, weight: .medium))
+            .foregroundStyle(routerMint)
+            .disabled(busy)
+        }
+      } else {
+        Button("Download") {
+          Task { await store.downloadLocalVisionModel(model.tag) }
+        }
+        .buttonStyle(.borderless)
+        .font(.system(size: 9, weight: .medium))
+        .foregroundStyle(model.fits ? routerMint : routerMutedStrong)
+        // Only one pull at a time; other rows stay clickable otherwise.
+        .disabled(busy || download?.isRunning == true)
+      }
+    }
+
+    private var vision: VisionBridgeSnapshot? { settings?.visionBridge }
+
+    private func isCurrentLocal(_ model: LocalVisionModel) -> Bool {
+      vision?.engine == "local" && vision?.local?.model == model.tag
+    }
+
+    private var currentEngineLabel: String {
+      guard let vision else { return "none" }
+      if vision.engine == "local" {
+        return "Local · \(vision.local?.model ?? "model")"
+      }
+      if vision.engine == nil {
+        return "Auto · \(vision.resolvedEngineName ?? vision.resolvedEngine ?? "none")"
+      }
+      return vision.resolvedEngineName ?? vision.resolvedEngine ?? vision.engine ?? "none"
+    }
+
+    private var localModelsSummary: String {
+      let models = vision?.localModels ?? []
+      let installed = models.filter(\.installed).count
+      return "\(installed) downloaded · \(models.count) available"
+    }
+
+    private var visionSummary: String {
+      guard let vision, vision.enabled else { return "off" }
+      return currentEngineLabel
     }
 
     private var hiddenModels: Set<String> {

@@ -20,10 +20,16 @@ import {
 import { renderProviderChoices, stepHeader, toggleSelection } from "./setup-ui.mjs";
 import {
   configuredProviderIds,
+  selectedConfiguredListedModels,
   validateProviderIds,
   writeProviderSelection,
 } from "./provider-selection.mjs";
 import { trayBundleDir, trayDecision } from "./tray-install.mjs";
+import { resolveVisionEngine } from "./vision-bridge.mjs";
+import {
+  setVisionBridgeEnabled,
+  visionBridgeConfigured,
+} from "./vision-bridge-state.mjs";
 
 const args = process.argv.slice(2);
 const guided = args.includes("--guided");
@@ -352,6 +358,27 @@ async function main() {
   }
   writeProviderSelection(providers);
 
+  // Make pasted images just work for text-only models on a fresh install. When
+  // the operator already enabled a vision-capable provider, turn the bridge on
+  // before the catalog is built (so the picker advertises image input from the
+  // first launch) using that model -- no download, no extra step. This only
+  // fires when the bridge was never configured, so re-running the installer
+  // never overrides someone who turned it off on purpose. With no vision
+  // provider, it stays off and the summary points at the local-model setup.
+  let visionBridge;
+  if (!visionBridgeConfigured()) {
+    const engine = resolveVisionEngine(selectedConfiguredListedModels(), {
+      enabled: true,
+      engine: null,
+    });
+    if (engine) {
+      setVisionBridgeEnabled(true);
+      visionBridge = { enabled: true, engine: engine.slug };
+    } else {
+      visionBridge = { enabled: false, engine: null };
+    }
+  }
+
   let migration;
   if (legacy.installations.length) {
     nextStep("Migrate older router");
@@ -415,6 +442,16 @@ async function main() {
   process.stdout.write(
     `\nCodex Router is ready with: ${providers.join(", ")}\nFully quit Codex, reopen it, and start a new task.\n`,
   );
+  if (visionBridge?.enabled) {
+    process.stdout.write(
+      `\nVision: text-only models can now read pasted images, via ${visionBridge.engine}.\n`,
+    );
+  } else if (visionBridge && !visionBridge.enabled) {
+    process.stdout.write(
+      `\nVision: no image-capable provider is enabled, so text-only models cannot read images yet.\n` +
+        `  Free local option: ./bin/control vision-bridge setup   (uses a small local model)\n`,
+    );
+  }
   if (pendingCredentials.length) {
     process.stdout.write(
       `\nStill needs a credential:\n` +

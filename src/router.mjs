@@ -29,7 +29,11 @@ import { MODEL_BY_SLUG, PROVIDERS, providerForModel } from "./model-registry.mjs
 import { createHealthCache } from "./health-cache.mjs";
 import { readNativeAliases } from "./native-alias.mjs";
 import { readNativeRedirect } from "./native-redirect.mjs";
-import { canonicalProviderId, readProviderSelection } from "./provider-selection.mjs";
+import {
+  canonicalProviderId,
+  readProviderSelection,
+  selectedConfiguredListedModels,
+} from "./provider-selection.mjs";
 import { ResponseUsageTransform } from "./response-usage.mjs";
 import {
   CollaborationToolCallTransform,
@@ -38,6 +42,16 @@ import {
 import { activityMetadataFromHeaders } from "./codex-session-names.mjs";
 import { translateGatewayError } from "./error-translation.mjs";
 import { recordUsageEvent } from "./usage-events.mjs";
+import {
+  describeImage,
+  evidenceCache,
+  inputHasImage,
+  resolveVisionEngine,
+  stripImages,
+  substituteImages,
+  supportsImageInput,
+} from "./vision-bridge.mjs";
+import { readVisionBridgeSettings } from "./vision-bridge-state.mjs";
 import { VERSION } from "./version.mjs";
 
 const LISTEN_HOST =
@@ -656,6 +670,58 @@ async function normalizeRoutedAgentInput(request, input, signal) {
   return output;
 }
 
+// Codex resends the whole conversation every turn, so the same screenshot
+// arrives again on every follow-up. Without the hash cache a five-turn
+// conversation about one image would buy the same transcript five times.
+async function visionEvidenceFor(url, engine, signal) {
+  const cached = evidenceCache.get(url);
+  if (cached !== undefined) return cached;
+  const text = await describeImage({
+    engine,
+    imageUrl: url,
+    gatewayBase: GATEWAY_BASE,
+    headers: routedHeaders(),
+    signal,
+  });
+  return evidenceCache.set(url, text);
+}
+
+// Text-only models get their images read by a vision-capable model the
+// operator already enabled. Turns without images cost nothing here, and a
+// model that reads images itself is never touched.
+async function bridgeVisionInput(input, route, signal) {
+  if (!inputHasImage(input)) return input;
+  if (supportsImageInput(route)) return input;
+  if (route.visionBridge === false) {
+    return stripImages(input, `${route.displayName || route.slug} cannot read images`).input;
+  }
+  const engine = resolveVisionEngine(
+    selectedConfiguredListedModels(),
+    readVisionBridgeSettings(),
+  );
+  if (!engine) {
+    // The catalog only advertises image input while an engine resolves, so
+    // this is the race where one went away mid-conversation, or a client that
+    // attached an image regardless.
+    return stripImages(
+      input,
+      "the router's vision bridge is off or has no enabled vision model to read it with",
+    ).input;
+  }
+  const engineName = engine.displayName || engine.slug;
+  const result = await substituteImages(input, async (url) => ({
+    text: await visionEvidenceFor(url, engine, signal),
+    engineName,
+  }));
+  if (!QUIET) {
+    console.error(
+      `[codex-router] vision-bridge model=${route.slug} engine=${engine.slug} ` +
+        `images=${result.images} described=${result.described} failed=${result.failed}`,
+    );
+  }
+  return result.input;
+}
+
 // OpenAI-issued reasoning `encrypted_content` is an opaque token (Fernet-style,
 // e.g. "gAAAAAB...") with no whitespace. Some local Responses providers (notably
 // Ollama) mimic the reasoning-item shape but fill `encrypted_content` with the
@@ -752,16 +818,21 @@ function extractResponseText(payload) {
 
 async function summarize(payload, route, signal) {
   const originalInput = Array.isArray(payload.input) ? payload.input : [];
+  // Compaction replays the whole conversation, so any image still in it would
+  // reach the text-only model unbridged and fail the compaction rather than
+  // the turn. The evidence is already cached from the turn that pasted it.
+  const bridged = await bridgeVisionInput(
+    normalizeRoutedInput(originalInput),
+    route,
+    signal,
+  );
   const body = {
     ...payload,
     model: route.gatewayModel,
     stream: false,
     tools: [],
     tool_choice: "none",
-    input: [
-      ...normalizeRoutedInput(originalInput),
-      messageItem(COMPACT_PROMPT),
-    ],
+    input: [...bridged, messageItem(COMPACT_PROMPT)],
   };
   delete body.previous_response_id;
   delete body.client_metadata;
@@ -950,9 +1021,9 @@ async function handleResponses(request, response, requestUrl) {
     let routedBody;
     let collaborationFlattened = false;
     if (route) {
-      const input = await normalizeRoutedAgentInput(
-        request,
-        payload.input,
+      const input = await bridgeVisionInput(
+        await normalizeRoutedAgentInput(request, payload.input, controller.signal),
+        route,
         controller.signal,
       );
       const provider = providerForModel(route);

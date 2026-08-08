@@ -33,6 +33,8 @@ import {
   providerSelectionStatus,
   selectedConfiguredListedModels,
 } from "./provider-selection.mjs";
+import { resolveVisionEngine } from "./vision-bridge.mjs";
+import { readVisionBridgeSettings } from "./vision-bridge-state.mjs";
 
 const checks = [];
 const add = (status, name, detail, fix) => checks.push({ status, name, detail, fix });
@@ -269,6 +271,37 @@ add(
     : `${requiredRoutedModels.length} routed models`,
   "Run ./bin/doctor --fix from the owning checkout, then fully quit and reopen Codex.",
 );
+// The bridge is opt-in, so "off" is a normal state and reports ok. Enabled
+// with no resolvable engine is the broken one: Codex would keep offering the
+// paste while nothing could read it, so the catalog drops the advertisement
+// and this says why.
+const visionSettings = readVisionBridgeSettings();
+const visionEngine = resolveVisionEngine(requiredRoutedModels, visionSettings);
+if (visionSettings.enabled && !visionEngine) {
+  add(
+    "warn",
+    "Vision bridge",
+    visionSettings.engine
+      ? `pinned engine ${visionSettings.engine} is not an enabled model that reads images`
+      : "enabled, but no enabled provider offers a model that reads images",
+    "Enable a provider with a vision model, or run ./bin/model-router codex control vision-bridge engine auto.",
+  );
+} else if (visionEngine?.local) {
+  add(
+    "ok",
+    "Vision bridge",
+    `text-only models read images via a local model (${visionEngine.gatewayModel} at ${visionEngine.baseUrl})`,
+    "Make sure the local server is running and the model is pulled, e.g. `ollama pull " +
+      `${visionEngine.gatewayModel}\`.`,
+  );
+} else {
+  add(
+    "ok",
+    "Vision bridge",
+    visionEngine ? `text-only models read images via ${visionEngine.slug}` : "off",
+    "Run ./bin/model-router codex control vision-bridge on to let text-only models read pasted images.",
+  );
+}
 const agentStatus = routedCodexAgentStatus(requiredRoutedModels);
 add(
   agentStatus.ok ? "ok" : "fail",

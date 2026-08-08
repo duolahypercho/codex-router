@@ -359,6 +359,35 @@ test("curated upgrade prompts point at listed generational successors", () => {
   );
 });
 
+// The router's vision bridge is what gives a text-only model images, so the
+// registry may only record an opt-out. A `true` would read as a capability the
+// model itself has, which is exactly the claim the bridge must never make.
+test("visionBridge may only be set to false", async () => {
+  const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const path = (await import("node:path")).default;
+  const { spawnSync } = await import("node:child_process");
+  const dir = mkdtempSync(path.join(tmpdir(), "registry-vision-test-"));
+  try {
+    const registry = readRegistryDocument("config");
+    registry.models = [
+      { ...registry.models[0], visionBridge: true },
+      ...registry.models.slice(1),
+    ];
+    const registryPath = path.join(dir, "providers.json");
+    writeFileSync(registryPath, JSON.stringify(registry));
+    const result = spawnSync(
+      process.execPath,
+      ["-e", "import('./src/model-registry.mjs').catch((e)=>{console.error(e.message);process.exit(1);})"],
+      { encoding: "utf8", env: { ...process.env, MODEL_ROUTER_REGISTRY: registryPath } },
+    );
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /may only set visionBridge to false/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("a checked-in upgrade prompt with an unresolvable target fails the registry load", async () => {
   const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");
