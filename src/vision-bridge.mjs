@@ -106,6 +106,56 @@ export function localVisionEngine(settings) {
   };
 }
 
+// A native engine is a model from the signed-in ChatGPT session: the same
+// backend and credential Codex already spends on its own turns, so it needs no
+// extra key and nothing to install. It cannot ride the gateway, which only
+// holds external provider credentials and has no route for a native slug, so
+// the request path builds a third call for it. Native catalog entries arrive in
+// the snake_case shape Codex writes, not the registry's camelCase.
+function nativeModalities(model) {
+  const declared = model?.input_modalities ?? model?.inputModalities;
+  return Array.isArray(declared) ? declared : ["text"];
+}
+
+// A model only offers the levels it declares, and the two catalogs spell them
+// differently: the registry writes camelCase `reasoningLevels`, the native
+// capture writes Codex's own `supported_reasoning_levels`. Anything that
+// declares nothing gets an empty list, which reads as "no choice to offer".
+export function visionEngineEfforts(model) {
+  const levels =
+    model?.efforts ?? model?.reasoningLevels ?? model?.supported_reasoning_levels;
+  if (!Array.isArray(levels)) return [];
+  return levels
+    .map((level) => (typeof level === "string" ? level : level?.effort))
+    .filter((effort) => typeof effort === "string" && effort.length > 0);
+}
+
+export function nativeVisionEngine(model) {
+  const slug = String(model?.slug || "");
+  return {
+    slug,
+    displayName: model?.display_name || model?.displayName || slug,
+    gatewayModel: slug,
+    inputModalities: nativeModalities(model),
+    priority: Number(model?.priority ?? 999),
+    efforts: visionEngineEfforts(model),
+    defaultEffort: model?.default_reasoning_level || model?.defaultEffort || null,
+    native: true,
+  };
+}
+
+// Only models the operator can actually reach and see: a hidden slug is one
+// they took out of the picker, and a native entry that is not listed is not
+// theirs to spend. The caller decides whether native models ship at all, since
+// a signed-out or login-free install has none.
+export function nativeVisionCandidates(models, hidden = new Set()) {
+  return (Array.isArray(models) ? models : [])
+    .filter((model) => model?.visibility === "list")
+    .filter((model) => !hidden.has(String(model?.slug)))
+    .map(nativeVisionEngine)
+    .filter(supportsImageInput);
+}
+
 // `candidates` must already be the selected and credentialed set: an engine the
 // operator cannot actually call would make the catalog promise image input that
 // every turn then fails to deliver. The local engine is the one exception --
@@ -243,13 +293,90 @@ export function responseText(payload) {
   return text.join("\n").trim();
 }
 
-// Two call shapes. A registry engine rides the same gateway every other turn
+// Reassembles a Responses SSE stream into the same string the buffered shape
+// would have produced. Deltas are preferred because they are always present;
+// the terminal `response.completed` envelope is the fallback for a backend that
+// only sends the finished object, and it is read with the same parser as a
+// non-streaming reply so both paths agree on what counts as text.
+export function streamedResponseText(body) {
+  const deltas = [];
+  let completed;
+  for (const block of String(body).split(/\r?\n\r?\n/)) {
+    for (const line of block.split(/\r?\n/)) {
+      if (!line.startsWith("data:")) continue;
+      const data = line.slice(5).trim();
+      if (!data || data === "[DONE]") continue;
+      let event;
+      try {
+        event = JSON.parse(data);
+      } catch {
+        continue;
+      }
+      if (event?.type === "response.output_text.delta" && typeof event.delta === "string") {
+        deltas.push(event.delta);
+      } else if (event?.response) {
+        completed = event.response;
+      }
+    }
+  }
+  const streamed = deltas.join("").trim();
+  return streamed || (completed ? responseText(completed) : "");
+}
+
+// The Codex backend rejects a non-streaming Responses call outright with
+// `{"detail":"Stream must be set to true"}`, so the native path has to ask for
+// a stream and reassemble it. The gateway is happy either way, and a single
+// buffered reply is simpler to bound and cache, so it keeps asking for one.
+function responsesBody(engine, imageUrl, { stream = false, effort } = {}) {
+  return {
+    model: engine.gatewayModel,
+    stream,
+    store: false,
+    // Left out entirely unless the operator picked one, so the model keeps its
+    // own default and the request stays byte-identical to what it was.
+    ...(effort ? { reasoning: { effort } } : {}),
+    instructions: VISION_EVIDENCE_INSTRUCTIONS,
+    input: [
+      {
+        type: "message",
+        role: "user",
+        content: [
+          { type: "input_text", text: DESCRIBE_REQUEST_TEXT },
+          { type: "input_image", image_url: imageUrl },
+        ],
+      },
+    ],
+  };
+}
+
+// Three call shapes. A registry engine rides the same gateway every other turn
 // uses, so its credential, request profile, and protocol translation are the
 // ones the installer already verified -- Responses API, no new credential. A
 // local engine is the operator's own model on their own box: it speaks OpenAI
 // chat completions (Ollama, LM Studio, llama.cpp) with no auth, so it takes its
-// own base URL and its own request shape.
-function describeRequest(engine, imageUrl, gatewayBase, gatewayHeaders) {
+// own base URL and its own request shape. A native engine speaks the same
+// Responses API as the gateway path, but has to go straight to the Codex
+// backend carrying the caller's own session headers, because the gateway has no
+// route or credential for a native slug.
+function describeRequest(engine, imageUrl, gatewayBase, gatewayHeaders, nativeCall, effort) {
+  // Pinned engines and pinned efforts are chosen separately, so the stored
+  // level may be one this engine never offered. Sending it anyway is a 400
+  // from the backend; dropping it just falls back to the model's own default.
+  const supported = visionEngineEfforts(engine);
+  const level = effort && (supported.length === 0 || supported.includes(effort)) ? effort : undefined;
+  if (engine.native) {
+    if (!nativeCall?.baseUrl || !nativeCall?.headers) {
+      throw new Error(
+        `${engine.displayName || engine.slug} needs the caller's Codex session to read images`,
+      );
+    }
+    return {
+      url: `${nativeCall.baseUrl.replace(/\/+$/, "")}/responses`,
+      headers: { ...nativeCall.headers, Accept: "text/event-stream" },
+      body: responsesBody(engine, imageUrl, { stream: true, effort: level }),
+      stream: true,
+    };
+  }
   if (engine.local) {
     return {
       url: `${engine.baseUrl.replace(/\/+$/, "")}/chat/completions`,
@@ -276,22 +403,7 @@ function describeRequest(engine, imageUrl, gatewayBase, gatewayHeaders) {
   return {
     url: `${gatewayBase}/responses`,
     headers: gatewayHeaders,
-    body: {
-      model: engine.gatewayModel,
-      stream: false,
-      store: false,
-      instructions: VISION_EVIDENCE_INSTRUCTIONS,
-      input: [
-        {
-          type: "message",
-          role: "user",
-          content: [
-            { type: "input_text", text: DESCRIBE_REQUEST_TEXT },
-            { type: "input_image", image_url: imageUrl },
-          ],
-        },
-      ],
-    },
+    body: responsesBody(engine, imageUrl, { effort: level }),
   };
 }
 
@@ -300,11 +412,13 @@ export async function describeImage({
   imageUrl,
   gatewayBase,
   headers,
+  nativeCall,
+  effort,
   signal,
   fetchImpl = fetch,
   timeoutMs = DEFAULT_VISION_TIMEOUT_MS,
 }) {
-  const request = describeRequest(engine, imageUrl, gatewayBase, headers);
+  const request = describeRequest(engine, imageUrl, gatewayBase, headers, nativeCall, effort);
   const timeout = AbortSignal.timeout(timeoutMs);
   const upstream = await fetchImpl(request.url, {
     method: "POST",
@@ -325,7 +439,9 @@ export async function describeImage({
   }
   let text;
   try {
-    text = responseText(JSON.parse(bytes.toString("utf8")));
+    text = request.stream
+      ? streamedResponseText(bytes.toString("utf8"))
+      : responseText(JSON.parse(bytes.toString("utf8")));
   } catch {
     throw new Error(`${engine.displayName || engine.slug} returned an unreadable response`);
   }

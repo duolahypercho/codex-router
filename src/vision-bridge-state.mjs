@@ -16,7 +16,30 @@ export const VISION_BRIDGE_STATE_PATH =
   path.join(STATE_DIR, "vision-bridge.json");
 
 function defaultSettings() {
-  return { version: 1, enabled: false, engine: null, local: null };
+  return { version: 1, enabled: false, engine: null, effort: null, local: null };
+}
+
+// Transcribing a screenshot is mechanical work, so the engine's own default is
+// usually the right spend. An operator who wants a dense dashboard read
+// properly, or who wants the cheapest possible pass, can say so. `null` leaves
+// the model's default alone, which is what every install had before.
+// The whole ladder Codex knows, not one model's slice of it: which levels are
+// really on offer is the engine's own declaration, checked where the request is
+// built. This list only keeps a hand-edited state file from smuggling in a
+// value no model could ever accept.
+export const VISION_EFFORT_LEVELS = [
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+  "ultra",
+];
+
+function normalizeEffort(value) {
+  const effort = typeof value === "string" ? value.trim().toLowerCase() : "";
+  return VISION_EFFORT_LEVELS.includes(effort) ? effort : null;
 }
 
 function normalizeLocal(value) {
@@ -43,6 +66,7 @@ export function readVisionBridgeSettings() {
         version: 1,
         enabled: parsed.enabled,
         engine: typeof parsed.engine === "string" && parsed.engine ? parsed.engine : null,
+        effort: normalizeEffort(parsed.effort),
         local: normalizeLocal(parsed.local),
       };
     }
@@ -90,6 +114,13 @@ export function setVisionBridgeEngine(slug) {
   const value = slug === null || slug === undefined ? null : String(slug).trim();
   const current = readVisionBridgeSettings();
   return writeSettings({ ...current, version: 1, engine: value || null });
+}
+
+// Only the native and gateway paths carry this. A local engine speaks chat
+// completions to Ollama or LM Studio, which has no reasoning-effort field.
+export function setVisionBridgeEffort(effort) {
+  const current = readVisionBridgeSettings();
+  return writeSettings({ ...current, version: 1, effort: normalizeEffort(effort) });
 }
 
 // True once the operator has made any explicit choice. Install-time auto-enable

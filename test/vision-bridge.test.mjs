@@ -10,12 +10,16 @@ import {
   inputHasImage,
   LOCAL_ENGINE_SLUG,
   localVisionEngine,
+  nativeVisionCandidates,
+  nativeVisionEngine,
   rankVisionEngines,
   resolveVisionEngine,
   responseText,
+  streamedResponseText,
   stripImages,
   substituteImages,
   supportsImageInput,
+  visionEngineEfforts,
   VISION_EVIDENCE_MAX_CHARS,
 } from "../src/vision-bridge.mjs";
 
@@ -312,4 +316,229 @@ test("an overlong transcript is truncated instead of blowing the context", async
 test("evidence block labels which image it belongs to", () => {
   const block = evidenceBlock("body", { ordinal: 3, engineName: "Grok 4.5" });
   assert.match(block, /^\[Image 3 — read for you by Grok 4\.5/);
+});
+
+// Native catalog entries arrive in the snake_case shape Codex writes, which is
+// not the camelCase the registry uses.
+const NATIVE_LUNA = {
+  slug: "gpt-5.6-luna",
+  display_name: "GPT-5.6 Luna",
+  visibility: "list",
+  priority: 3,
+  input_modalities: ["text", "image"],
+};
+const NATIVE_TEXT_ONLY = {
+  slug: "gpt-5.6-nano",
+  display_name: "GPT-5.6 Nano",
+  visibility: "list",
+  priority: 1,
+  input_modalities: ["text"],
+};
+
+test("a native catalog entry becomes an engine the ranker understands", () => {
+  const engine = nativeVisionEngine(NATIVE_LUNA);
+  assert.equal(engine.slug, "gpt-5.6-luna");
+  assert.equal(engine.gatewayModel, "gpt-5.6-luna");
+  assert.equal(engine.native, true);
+  // The ranker reads camelCase, so the snake_case declaration has to be carried
+  // across or every native model would look text-only.
+  assert.equal(supportsImageInput(engine), true);
+});
+
+test("native candidates skip text-only, hidden, and unlisted models", () => {
+  const models = [
+    NATIVE_LUNA,
+    NATIVE_TEXT_ONLY,
+    { ...NATIVE_LUNA, slug: "gpt-5.6-terra" },
+    { ...NATIVE_LUNA, slug: "codex-auto-review", visibility: "hide" },
+  ];
+  const candidates = nativeVisionCandidates(models, new Set(["gpt-5.6-terra"]));
+  assert.deepEqual(
+    candidates.map((engine) => engine.slug),
+    ["gpt-5.6-luna"],
+  );
+});
+
+test("a native engine can be pinned and outranks nothing by accident", () => {
+  const candidates = [FLASH_VISION, ...nativeVisionCandidates([NATIVE_LUNA])];
+  const pinned = resolveVisionEngine(candidates, {
+    enabled: true,
+    engine: "gpt-5.6-luna",
+  });
+  assert.equal(pinned.slug, "gpt-5.6-luna");
+  // Without a pin the cheap-tier hint still wins, so enabling the bridge does
+  // not quietly start spending the subscription.
+  const automatic = resolveVisionEngine(candidates, { enabled: true });
+  assert.equal(automatic.slug, FLASH_VISION.slug);
+});
+
+test("describeImage sends a native engine to the Codex backend with the caller's session", async () => {
+  let seen;
+  const text = await describeImage({
+    engine: nativeVisionEngine(NATIVE_LUNA),
+    imageUrl: "data:image/png;base64,AAAA",
+    gatewayBase: "http://127.0.0.1:4100/v1",
+    headers: { Authorization: "Bearer internal-router-key" },
+    nativeCall: {
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      headers: { Authorization: "Bearer caller-session", "chatgpt-account-id": "acct-1" },
+    },
+    fetchImpl: async (url, init) => {
+      seen = { url, headers: init.headers, body: JSON.parse(init.body) };
+      return new Response(
+        [
+          'data: {"type":"response.output_text.delta","delta":"## Summary\\n"}',
+          "",
+          'data: {"type":"response.output_text.delta","delta":"An invoice."}',
+          "",
+          "data: [DONE]",
+          "",
+        ].join("\n"),
+        { status: 200 },
+      );
+    },
+  });
+  assert.equal(seen.url, "https://chatgpt.com/backend-api/codex/responses");
+  // The gateway credential must never travel to the native backend, and the
+  // caller's session must never travel to the gateway.
+  assert.equal(seen.headers.Authorization, "Bearer caller-session");
+  assert.equal(seen.headers["chatgpt-account-id"], "acct-1");
+  assert.equal(seen.body.model, "gpt-5.6-luna");
+  assert.equal(seen.body.store, false);
+  // The Codex backend answers a buffered call with
+  // `{"detail":"Stream must be set to true"}`, so this path has to stream.
+  assert.equal(seen.body.stream, true);
+  assert.equal(seen.headers.Accept, "text/event-stream");
+  assert.deepEqual(seen.body.input[0].content[1], {
+    type: "input_image",
+    image_url: "data:image/png;base64,AAAA",
+  });
+  assert.match(text, /An invoice/);
+});
+
+test("a native engine with no caller session fails closed instead of falling back to the gateway", async () => {
+  let called = false;
+  await assert.rejects(
+    describeImage({
+      engine: nativeVisionEngine(NATIVE_LUNA),
+      imageUrl: "data:image/png;base64,AAAA",
+      gatewayBase: "http://127.0.0.1:4100/v1",
+      headers: { Authorization: "Bearer internal-router-key" },
+      fetchImpl: async () => {
+        called = true;
+        return new Response("{}", { status: 200 });
+      },
+    }),
+    /needs the caller's Codex session/,
+  );
+  // The gateway has no route for a native slug, so a silent fallback would turn
+  // a missing header into a confusing upstream 404.
+  assert.equal(called, false);
+});
+
+test("a streamed reply is reassembled from deltas, and from the final envelope when there are none", () => {
+  const deltas = [
+    'data: {"type":"response.output_text.delta","delta":"## Summary\\n"}',
+    "",
+    'data: {"type":"response.output_text.delta","delta":"A chart."}',
+    "",
+    "data: [DONE]",
+    "",
+  ].join("\n");
+  assert.equal(streamedResponseText(deltas), "## Summary\nA chart.");
+
+  // Some backends send only the finished object. It is read with the same
+  // parser as a buffered reply, so both shapes agree on what counts as text.
+  const envelope =
+    'data: {"type":"response.completed","response":{"output":[{"content":[{"type":"output_text","text":"Only at the end."}]}]}}\n\n';
+  assert.equal(streamedResponseText(envelope), "Only at the end.");
+
+  // Keep-alives and unparseable lines must not break reassembly.
+  assert.equal(streamedResponseText(": keep-alive\n\ndata: not json\n\n"), "");
+});
+
+test("effort levels are read from both catalog spellings", () => {
+  assert.deepEqual(
+    visionEngineEfforts({
+      supported_reasoning_levels: [{ effort: "low" }, { effort: "xhigh" }],
+    }),
+    ["low", "xhigh"],
+  );
+  assert.deepEqual(
+    visionEngineEfforts({ reasoningLevels: [{ effort: "high" }, { effort: "max" }] }),
+    ["high", "max"],
+  );
+  assert.deepEqual(visionEngineEfforts({}), []);
+});
+
+test("a native engine carries the levels it declares", () => {
+  const engine = nativeVisionEngine({
+    ...NATIVE_LUNA,
+    default_reasoning_level: "medium",
+    supported_reasoning_levels: [{ effort: "low" }, { effort: "medium" }, { effort: "xhigh" }],
+  });
+  assert.deepEqual(engine.efforts, ["low", "medium", "xhigh"]);
+  assert.equal(engine.defaultEffort, "medium");
+});
+
+test("a chosen effort rides along to the engine", async () => {
+  let body;
+  await describeImage({
+    engine: nativeVisionEngine({
+      ...NATIVE_LUNA,
+      supported_reasoning_levels: [{ effort: "low" }, { effort: "xhigh" }],
+    }),
+    imageUrl: "data:image/png;base64,AAAA",
+    gatewayBase: "http://127.0.0.1:4100/v1",
+    headers: {},
+    nativeCall: { baseUrl: "https://chatgpt.com/backend-api/codex", headers: {} },
+    effort: "xhigh",
+    fetchImpl: async (url, init) => {
+      body = JSON.parse(init.body);
+      return new Response('data: {"type":"response.output_text.delta","delta":"An invoice."}\n\n', {
+        status: 200,
+      });
+    },
+  });
+  assert.deepEqual(body.reasoning, { effort: "xhigh" });
+});
+
+test("an effort the engine never offered is dropped rather than sent", async () => {
+  let body;
+  await describeImage({
+    engine: nativeVisionEngine({
+      ...NATIVE_LUNA,
+      supported_reasoning_levels: [{ effort: "low" }, { effort: "high" }],
+    }),
+    imageUrl: "data:image/png;base64,AAAA",
+    gatewayBase: "http://127.0.0.1:4100/v1",
+    headers: {},
+    nativeCall: { baseUrl: "https://chatgpt.com/backend-api/codex", headers: {} },
+    effort: "max",
+    fetchImpl: async (url, init) => {
+      body = JSON.parse(init.body);
+      return new Response('data: {"type":"response.output_text.delta","delta":"An invoice."}\n\n', {
+        status: 200,
+      });
+    },
+  });
+  assert.equal("reasoning" in body, false);
+});
+
+test("no chosen effort leaves the request exactly as it was", async () => {
+  let body;
+  await describeImage({
+    engine: nativeVisionEngine(NATIVE_LUNA),
+    imageUrl: "data:image/png;base64,AAAA",
+    gatewayBase: "http://127.0.0.1:4100/v1",
+    headers: {},
+    nativeCall: { baseUrl: "https://chatgpt.com/backend-api/codex", headers: {} },
+    fetchImpl: async (url, init) => {
+      body = JSON.parse(init.body);
+      return new Response('data: {"type":"response.output_text.delta","delta":"An invoice."}\n\n', {
+        status: 200,
+      });
+    },
+  });
+  assert.equal("reasoning" in body, false);
 });
