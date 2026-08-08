@@ -8,7 +8,7 @@
       "ownedBy": "commandcode",
       "baseUrl": "https://api.commandcode.ai/provider/v1",
       "baseUrlEnv": "COMMANDCODE_BASE_URL",
-      "planNote": "Needs the Command Code Provider plan. A Go, GOAT, Pro, or Max plan signs in successfully and is then refused with \"your plan doesn't include API access\" on every request.",
+      "planNote": "Needs the Command Code Provider plan.",
       "credential": {
         "environment": [
           "COMMAND_CODE_API_KEY",
