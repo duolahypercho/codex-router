@@ -97,6 +97,7 @@ async function emitProbe() {
   const { annotateLocalModels, hostVisionProfile, refreshVisionModelSizesIfStale } =
     await import("./vision-host.mjs");
   const { readVisionDownload } = await import("./vision-download.mjs");
+  const { readBenchmarkResults } = await import("./vision-benchmark.mjs");
   const { selectedConfiguredListedModels } = await import("./provider-selection.mjs");
   // Bounded and weekly: the tray reads this snapshot constantly, so a fresh
   // cache costs nothing and a stale one costs one short, failure-tolerant pass.
@@ -170,7 +171,7 @@ async function emitProbe() {
                     displayName: model.displayName,
                   })),
                   // The downloadable local picker, each with size + fit + state.
-                  localModels: annotateLocalModels(),
+                  localModels: annotateLocalModels({ benchmarks: readBenchmarkResults() }),
                   download: readVisionDownload(),
                 };
               })(),
@@ -641,9 +642,13 @@ async function handleVisionBridge(action, value, extra) {
     // whether it fits this machine, and whether it is already pulled.
     const { annotateLocalModels, hostVisionProfile, refreshVisionModelSizesIfStale } =
       await import("./vision-host.mjs");
+    const { readBenchmarkResults } = await import("./vision-benchmark.mjs");
     await refreshVisionModelSizesIfStale();
     process.stdout.write(
-      `${JSON.stringify({ host: hostVisionProfile(), models: annotateLocalModels() })}\n`,
+      `${JSON.stringify({
+        host: hostVisionProfile(),
+        models: annotateLocalModels({ benchmarks: readBenchmarkResults() }),
+      })}\n`,
     );
     return;
   }
@@ -684,6 +689,29 @@ async function handleVisionBridge(action, value, extra) {
     );
     child.unref();
     process.stdout.write(`${JSON.stringify({ started: true, tag })}\n`);
+    return;
+  }
+  if (action === "benchmark") {
+    // Measures an installed model against the checked-in ground-truth image and
+    // stores the result, so a model the operator downloaded themselves can earn
+    // a label without touching the CLI or trusting a reputation.
+    const tag = String(value || "").trim();
+    if (!tag) throw new Error("Usage: control vision-bridge benchmark <model-tag>");
+    const { benchmarkModel, saveBenchmarkResult } = await import("./vision-benchmark.mjs");
+    const { probeLocalServer } = await import("./vision-host.mjs");
+    const server = await probeLocalServer();
+    if (!server.reachable) {
+      throw new Error(`No local runtime at ${server.baseUrl} (${server.error}).`);
+    }
+    const result = await benchmarkModel(tag, { baseUrl: server.baseUrl });
+    if (!result.ok) throw new Error(result.error);
+    // The transcript is only useful while debugging and would bloat the state
+    // file with a page of text per model.
+    const { transcript, ...stored } = result;
+    saveBenchmarkResult(tag, stored);
+    // No catalog rebuild: a score changes a label in this tray, not which
+    // models Codex is offered, so this stays runnable from any checkout.
+    process.stdout.write(`${JSON.stringify(stored)}\n`);
     return;
   }
   if (action === "pull-status") {

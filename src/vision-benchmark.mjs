@@ -1,8 +1,8 @@
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { SOURCE_ROOT } from "./paths.mjs";
+import { SOURCE_ROOT, STATE_DIR } from "./paths.mjs";
 import { describeImage, localVisionEngine } from "./vision-bridge.mjs";
 import {
   LOCAL_VISION_CATALOG,
@@ -50,19 +50,51 @@ export function scoreTranscript(transcript) {
     total += expected.length;
   }
   const percent = total ? Math.round((found / total) * 100) : 0;
-  return { percent, found, total, groups };
+  // Text is the number that decides whether a model is safe to trust, so it is
+  // reported alongside the overall score rather than recomputed by callers.
+  const textFound =
+    (groups.codes?.found || 0) + (groups.numbers?.found || 0) + (groups.dates?.found || 0);
+  const textTotal =
+    (groups.codes?.total || 0) + (groups.numbers?.total || 0) + (groups.dates?.total || 0);
+  const textPercent = textTotal ? Math.round((textFound / textTotal) * 100) : 0;
+  return { percent, textPercent, found, total, groups };
 }
 
 // Text accuracy is what the bridge actually needs: a model that describes the
 // shapes but invents the invoice number is worse than useless, because the
 // downstream model repeats the invention as fact.
-export function accuracyTier({ percent, groups }) {
-  const textFound = (groups.codes?.found || 0) + (groups.numbers?.found || 0) + (groups.dates?.found || 0);
-  const textTotal = (groups.codes?.total || 0) + (groups.numbers?.total || 0) + (groups.dates?.total || 0);
-  const textPercent = textTotal ? (textFound / textTotal) * 100 : 0;
+export function accuracyTier({ textPercent = 0 }) {
   if (textPercent >= 80) return "accurate";
   if (textPercent >= 40) return "partial";
   return "captions-only";
+}
+
+// Results are persisted so a model the operator downloaded and tested keeps its
+// earned label across restarts, and so the picker can show a measured score for
+// models that were never in the curated list at all.
+export const BENCHMARK_RESULTS_PATH =
+  process.env.MODEL_ROUTER_VISION_BENCHMARKS ||
+  path.join(STATE_DIR, "vision-benchmarks.json");
+
+export function readBenchmarkResults() {
+  try {
+    const parsed = JSON.parse(readFileSync(BENCHMARK_RESULTS_PATH, "utf8"));
+    return parsed?.version === 1 && parsed.results ? parsed.results : {};
+  } catch {
+    return {};
+  }
+}
+
+export function saveBenchmarkResult(tag, result) {
+  const results = { ...readBenchmarkResults(), [tag]: result };
+  mkdirSync(path.dirname(BENCHMARK_RESULTS_PATH), { recursive: true, mode: 0o700 });
+  const temporary = `${BENCHMARK_RESULTS_PATH}.tmp.${process.pid}`;
+  writeFileSync(temporary, `${JSON.stringify({ version: 1, results })}\n`, {
+    encoding: "utf8",
+    mode: 0o600,
+  });
+  renameSync(temporary, BENCHMARK_RESULTS_PATH);
+  return results;
 }
 
 export async function benchmarkModel(tag, { baseUrl, timeoutMs = 300_000 } = {}) {

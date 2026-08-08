@@ -266,3 +266,44 @@ test("a cached registry size overrides the catalog value, in decimal GB", () => 
   assert.equal(qwen.sizeGb, 3);
   assert.equal(qwen.sizeSource, "registry");
 });
+
+test("a locally measured score overrides the shipped label", () => {
+  // llava ships as captions-only; if it reads correctly on this machine, the
+  // local measurement is what the picker must believe.
+  const models = annotateLocalModels({
+    installed: ["llava:latest"],
+    sizes: {},
+    benchmarks: { llava: { percent: 90, textPercent: 92, tier: "accurate", seconds: 12 } },
+  });
+  const llava = models.find((m) => m.tag === "llava");
+  assert.equal(llava.accuracy, "accurate");
+  assert.equal(llava.measuredLocally, true);
+  assert.equal(llava.measured.textPercent, 92);
+  // Re-ranked on the new tier: no longer buried below the caption-only models.
+  // (It sits behind qwen2.5vl:3b, which shares the tier and is a smaller
+  // download — size only breaks ties within a tier.)
+  assert.ok(
+    models.findIndex((m) => m.tag === "llava") <
+      models.findIndex((m) => m.tag === "moondream"),
+  );
+  assert.equal(models[0].accuracy, "accurate");
+});
+
+test("an installed model outside the catalog appears once it is measured", () => {
+  const models = annotateLocalModels({
+    installed: ["minicpm-v:latest"],
+    sizes: {},
+    benchmarks: { "minicpm-v": { percent: 60, textPercent: 50, tier: "partial" } },
+  });
+  const custom = models.find((m) => m.tag === "minicpm-v");
+  assert.ok(custom, "a measured, installed model must be listed");
+  assert.equal(custom.custom, true);
+  assert.equal(custom.accuracy, "partial");
+  // A measured model that is not installed is not invented into the list.
+  const absent = annotateLocalModels({
+    installed: [],
+    sizes: {},
+    benchmarks: { "minicpm-v": { percent: 60, textPercent: 50, tier: "partial" } },
+  });
+  assert.equal(absent.find((m) => m.tag === "minicpm-v"), undefined);
+});

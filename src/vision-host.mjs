@@ -227,10 +227,34 @@ export function annotateLocalModels(
     profile = hostVisionProfile(),
     installed = ollamaInstalledModels(),
     sizes = readSizeCache()?.sizes,
+    benchmarks = {},
   } = {},
 ) {
   const installedTags = Array.isArray(installed) ? installed : [];
-  return LOCAL_VISION_CATALOG.map((model) => {
+  // A model the operator downloaded and tested themselves is listed alongside
+  // the curated ones: the picker is a shortlist, not a whitelist, so anything
+  // installed and measured deserves the same label treatment.
+  const extras = Object.entries(benchmarks)
+    .filter(
+      ([tag]) =>
+        !LOCAL_VISION_CATALOG.some((model) => tagsMatch(model.tag, tag)) &&
+        installedTags.some((name) => tagsMatch(tag, name)),
+    )
+    .map(([tag, result]) => ({
+      tag,
+      label: tag,
+      sizeGb: 0,
+      minRamGib: 0,
+      note: "Added by you.",
+      custom: true,
+      accuracy: result?.tier || "untested",
+      measured: result,
+    }));
+  return [...LOCAL_VISION_CATALOG, ...extras].map((model) => {
+    // A locally measured result always wins over the shipped one: it was run on
+    // this machine, against this build of the model.
+    const measured = benchmarks[model.tag] || model.measured;
+    const accuracy = benchmarks[model.tag]?.tier || model.accuracy || "untested";
     // A published size is the truth; the checked-in number is the fallback for
     // an offline machine or a tag the registry no longer serves.
     // Decimal GB, matching what `ollama list` and ollama.com display, so the
@@ -244,7 +268,11 @@ export function annotateLocalModels(
       ...model,
       sizeGb,
       sizeSource: Number.isFinite(bytes) ? "registry" : "catalog",
-      accuracy: model.accuracy || "untested",
+      accuracy,
+      measured,
+      // Only a locally measured score can be shown as this machine's own
+      // result; a shipped figure was measured somewhere else.
+      measuredLocally: Boolean(benchmarks[model.tag]),
       fits: profile.memGib >= model.minRamGib,
       installed: installedTags.some((tag) => tagsMatch(model.tag, tag)),
     };

@@ -110,6 +110,7 @@ final class RouterStore: ObservableObject {
   @Published private(set) var providerSetup: [String: ProviderSetupState] = [:]
   @Published private(set) var providerOperation: String?
   @Published private(set) var visionDownload: VisionDownloadState?
+  @Published private(set) var benchmarkingTag: String?
   @Published private(set) var maintenanceMessage: String?
   @Published private(set) var maintenanceSucceeded = false
   @Published private(set) var islandMode: IslandMode
@@ -1086,6 +1087,22 @@ final class RouterStore: ObservableObject {
     await applyModelSettings(arguments: ["vision-bridge", "local", tag])
   }
 
+  /// Scores an installed model against the checked-in ground-truth image. This
+  /// is what makes "not benchmarked" actionable in the tray: download any
+  /// model, then measure whether it actually reads before trusting it.
+  func benchmarkLocalVisionModel(_ tag: String) async {
+    guard benchmarkingTag == nil else { return }
+    benchmarkingTag = tag
+    defer { benchmarkingTag = nil }
+    do {
+      _ = try await runControl(arguments: ["vision-bridge", "benchmark", tag])
+      await refresh()
+      message = "\(tag) tested. The score is on its row."
+    } catch {
+      message = error.localizedDescription
+    }
+  }
+
   /// Downloads a local vision model with Ollama, then pins it. The tray row
   /// shows the size, so the click is the consent for the download.
   ///
@@ -1659,6 +1676,9 @@ struct LocalVisionModel: Decodable, Identifiable, Equatable {
   let recommended: Bool?
   let note: String?
   let accuracy: String?
+  let measured: LocalVisionMeasurement?
+  let measuredLocally: Bool?
+  let custom: Bool?
   var id: String { tag }
 
   /// Measured on a checked-in benchmark image, not guessed. A caption-only
@@ -1671,6 +1691,13 @@ struct LocalVisionModel: Decodable, Identifiable, Equatable {
     case "captions-only": return "captions only — invents text"
     default: return "not benchmarked"
     }
+  }
+
+  /// "12/12 text" is the number that actually decides whether a model is safe
+  /// to trust; the overall percent also counts shapes and colours.
+  var scoreLabel: String? {
+    guard let measured else { return nil }
+    return "\(measured.textPercent ?? measured.percent)% text"
   }
 
   var accuracyIsGood: Bool { accuracy == "accurate" }
@@ -2474,6 +2501,11 @@ private struct TrayView: View {
                   ? routerMint
                   : model.accuracyIsPoor ? routerRed : routerMutedStrong
               )
+            if let score = model.scoreLabel {
+              Text(model.measuredLocally == true ? "\(score) here" : score)
+                .font(.system(size: 9))
+                .foregroundStyle(routerMuted)
+            }
           }
         }
         Spacer()
@@ -2499,16 +2531,31 @@ private struct TrayView: View {
             .monospacedDigit()
         }
       } else if model.installed {
-        if isCurrentLocal(model) {
-          Text("in use")
-            .font(.system(size: 9, weight: .medium))
-            .foregroundStyle(routerMint)
-        } else {
-          Button("Use") { Task { await store.useLocalVisionModel(model.tag) } }
-            .buttonStyle(.borderless)
-            .font(.system(size: 9, weight: .medium))
-            .foregroundStyle(routerMint)
-            .disabled(busy)
+        HStack(spacing: 8) {
+          // Any installed model can be measured here, so a downloaded model is
+          // never stuck reading "not benchmarked" with no way to fix it.
+          if store.benchmarkingTag == model.tag {
+            Text("testing…")
+              .font(.system(size: 9, weight: .medium))
+              .foregroundStyle(routerYellow)
+          } else {
+            Button("Test") { Task { await store.benchmarkLocalVisionModel(model.tag) } }
+              .buttonStyle(.borderless)
+              .font(.system(size: 9))
+              .foregroundStyle(routerMutedStrong)
+              .disabled(busy || store.benchmarkingTag != nil)
+          }
+          if isCurrentLocal(model) {
+            Text("in use")
+              .font(.system(size: 9, weight: .medium))
+              .foregroundStyle(routerMint)
+          } else {
+            Button("Use") { Task { await store.useLocalVisionModel(model.tag) } }
+              .buttonStyle(.borderless)
+              .font(.system(size: 9, weight: .medium))
+              .foregroundStyle(routerMint)
+              .disabled(busy)
+          }
         }
       } else {
         Button("Download") {
@@ -3776,4 +3823,10 @@ private struct VisualEffectBlur: NSViewRepresentable {
   }
 
   func updateNSView(_ nsView: NSVisualEffectView, context: Context) {}
+}
+
+struct LocalVisionMeasurement: Decodable, Equatable {
+  let percent: Int
+  let textPercent: Int?
+  let seconds: Double?
 }
