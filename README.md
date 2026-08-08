@@ -539,6 +539,19 @@ instead of a multi-gigabyte pull. It is a filter, not a guarantee:
 which Codex cannot dispatch. `llama3.2:3b` was verified making a real
 structured tool call through the router.
 
+**Size matters more than the tools flag.** Codex sends a large system prompt —
+around 24K tokens before your question — and a small model spends its whole
+context absorbing it. Verified with the real Codex CLI on this repo:
+
+| Model | Result |
+|-------|--------|
+| `qwen2.5-coder:7b` | ran shell commands, created and verified a file — works |
+| `llama3.2:3b` | answered about its own system prompt instead of the task |
+
+Both make correct tool calls in isolation. The 3B only fails once Codex's real
+prompt is in front of it, so treat 7B as the practical floor for agent work and
+keep the smaller models for the vision bridge, where the prompt is one image.
+
 Expect local models to be slow. A cold 3B model took over a minute on the first
 turn here, against seconds for a hosted model. They cost nothing and stay on
 your machine; that is the trade.
