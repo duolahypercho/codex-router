@@ -319,6 +319,32 @@ the turn as text. Treat it as a router capability, never as a model capability.
    `test/catalog.test.mjs`. A change to engine ranking, caching, substitution,
    or the advertisement rule needs a test there.
 
+## Local models as a provider
+
+`local` is a keyless provider: it serves from this machine, so there is no
+credential to store, prompt for, or redact.
+
+1. `keyless: true` is only valid with a loopback `baseUrl` and no `credential`
+   block; the loader rejects both violations. An unauthenticated provider
+   pointed at the internet would send traffic off-box with no key.
+2. Checked local models are published into the user-model overlay, the same
+   mechanism curated cloud models use. Do not add a second registry path for
+   them, and never write local models into the checked-in `config/` tree --
+   they exist only on the machine that installed them.
+3. A change to the checked set must rewrite **both** the Codex catalog and the
+   gateway route table (`refreshModelSettingsCatalog({ routes: true })`).
+   Writing one without the other is the drift doctor's "Catalog matches gateway
+   routes" check exists to catch.
+4. Checking, installing, and removing are three separate actions. Unchecking
+   never deletes a download; removing requires explicit consent and unchecks
+   the model so nothing stays selected once it is off disk.
+5. A local model advertises image input only when its family can actually read
+   images -- the same standard the checked-in registry is held to.
+6. New providers only reach a running router after the service restarts, since
+   the registry and gateway config load at startup. If the router starts
+   answering every request with `local_router_error`, suspect a process still
+   holding pre-change state rather than the new code.
+
 ## Codex safety boundaries
 
 - The config manager owns its marked root `openai_base_url` and
