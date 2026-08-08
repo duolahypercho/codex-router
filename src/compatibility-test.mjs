@@ -50,7 +50,9 @@ async function toolCall(model) {
         strict: true,
       },
     ],
-    tool_choice: "required",
+    // OpenRouter providers for Qwen 3.8 Max and Muse Spark 1.2 reject
+    // `required` while still supporting function calls through `auto`.
+    tool_choice: "auto",
   });
   const call = (payload?.output || []).find(
     (item) => item?.type === "function_call" && item?.name === "codex_router_probe",
