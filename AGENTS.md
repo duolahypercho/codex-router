@@ -340,7 +340,14 @@ credential to store, prompt for, or redact.
    the model so nothing stays selected once it is off disk.
 5. A local model advertises image input only when its family can actually read
    images -- the same standard the checked-in registry is held to.
-6. New providers only reach a running router after the service restarts, since
+6. Codex drives every turn through tool calls, so a local model is publishable
+   only when Ollama reports the `tools` capability. Most vision models do not
+   have it. `local-models inspect <tag>` reads the registry's chat template to
+   answer that before a download, but a template mentioning `.Tools` is
+   necessary and not sufficient -- `qwen2.5-coder:7b` advertises tools and
+   still returns them as plain JSON text, which Codex cannot dispatch. Treat
+   the flag as a filter and a real request as the proof.
+7. New providers only reach a running router after the service restarts, since
    the registry and gateway config load at startup. If the router starts
    answering every request with `local_router_error`, suspect a process still
    holding pre-change state rather than the new code.

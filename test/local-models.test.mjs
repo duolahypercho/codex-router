@@ -31,6 +31,8 @@ test("ollama list is parsed into tag, size, and age", () => {
 });
 
 test("checking a model is separate from installing or deleting it", () => {
+  // No capability lookup here: this asserts the selection, and shelling out to
+  // the machine's real Ollama would make it slow and environment-dependent.
   assert.deepEqual(readLocalModelSelection().enabled, []);
   setLocalModelEnabled("gemma3:4b", true);
   setLocalModelEnabled("llava:latest", true);
@@ -152,4 +154,37 @@ test("the snapshot reports how many checked models Codex can actually drive", as
   const byTag = Object.fromEntries(snapshot.models.map((m) => [m.tag, m]));
   assert.equal(byTag["gemma3:4b"].tools, false);
   assert.equal(byTag["gemma3:4b"].vision, true);
+});
+
+test("tool support is read from the registry template before downloading", async () => {
+  const { fetchRegistryCapabilities } = await import("../src/local-models.mjs");
+  const manifest = {
+    layers: [
+      { mediaType: "application/vnd.ollama.image.model", size: 2_000_000_000 },
+      { mediaType: "application/vnd.ollama.image.template", size: 1429, digest: "sha256:abc" },
+    ],
+  };
+  const withTemplate = (body) => async (url, init) => {
+    if (url.includes("/manifests/")) return new Response(JSON.stringify(manifest), { status: 200 });
+    // Blob URLs redirect to a CDN; the fetch must be told to follow.
+    assert.equal(init.redirect, "follow");
+    return new Response(body, { status: 200 });
+  };
+
+  const tooled = await fetchRegistryCapabilities("llama3.2:3b", {
+    fetchImpl: withTemplate("{{- if .Tools }}You may call tools{{ end }}"),
+  });
+  assert.equal(tooled.tools, true);
+  assert.equal(tooled.sizeGb, 2);
+
+  const plain = await fetchRegistryCapabilities("gemma3:4b", {
+    fetchImpl: withTemplate("<start_of_turn>{{ .Prompt }}<end_of_turn>"),
+  });
+  assert.equal(plain.tools, false);
+
+  // Offline stays advisory: an unknown answer must not block an install.
+  assert.equal(
+    await fetchRegistryCapabilities("x", { fetchImpl: async () => { throw new Error("offline"); } }),
+    undefined,
+  );
 });

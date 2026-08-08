@@ -807,6 +807,16 @@ async function handleLocalModels(action, value, flag) {
     process.stdout.write(`${JSON.stringify(snapshot())}\n`);
     return;
   }
+  if (action === "inspect") {
+    // Answers "can Codex drive this?" for a few kilobytes instead of a
+    // multi-gigabyte download.
+    const tag = String(value || "").trim();
+    if (!tag) throw new Error("Usage: control local-models inspect <model-tag>");
+    const { fetchRegistryCapabilities } = await import("./local-models.mjs");
+    const info = await fetchRegistryCapabilities(tag);
+    process.stdout.write(`${JSON.stringify(info || { tag, unknown: true })}\n`);
+    return;
+  }
   if (action === "install") {
     // Same detached worker the vision picker uses: gigabytes must not block.
     const tag = String(value || "").trim();
@@ -818,6 +828,8 @@ async function handleLocalModels(action, value, flag) {
     if (active?.status === "downloading" && active.tag !== tag) {
       throw new Error(`${active.tag} is already downloading (${active.percent || 0}%).`);
     }
+    const { fetchRegistryCapabilities } = await import("./local-models.mjs");
+    const advertised = await fetchRegistryCapabilities(tag);
     writeVisionDownload({
       version: 1,
       tag,
@@ -831,7 +843,17 @@ async function handleLocalModels(action, value, flag) {
       detached: true,
       stdio: "ignore",
     }).unref();
-    process.stdout.write(`${JSON.stringify({ started: true, tag })}\n`);
+    // Advisory, never blocking: the operator may well want a vision-only
+    // model, but they should know before the gigabytes land.
+    process.stdout.write(
+      `${JSON.stringify({ started: true, tag, tools: advertised?.tools ?? null })}\n`,
+    );
+    if (advertised && !advertised.tools) {
+      process.stderr.write(
+        `Note: ${tag} does not advertise tool calling, so Codex cannot use it as a chat model. ` +
+          `It can still serve as a vision reader.\n`,
+      );
+    }
     return;
   }
   if (action === "uninstall") {

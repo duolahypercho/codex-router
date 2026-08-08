@@ -74,14 +74,14 @@ const LOCAL_MODEL_PRIORITY = 900;
 // registry, gateway config, and Codex catalog already consume, so a local
 // model reaches the picker through exactly the same path as any curated cloud
 // model. Unchecking withdraws it again without touching the download.
-export function setLocalModelEnabled(tag, enabled) {
+export function setLocalModelEnabled(tag, enabled, { capabilitiesFor } = {}) {
   const value = String(tag || "").trim();
   if (!value) throw new Error("A model tag is required.");
   const current = new Set(readLocalModelSelection().enabled);
   if (enabled) current.add(value);
   else current.delete(value);
   const selection = writeSelection({ version: 1, enabled: [...current].sort() });
-  syncLocalUserModels({ enabled: selection.enabled });
+  syncLocalUserModels({ enabled: selection.enabled, ...(capabilitiesFor ? { capabilitiesFor } : {}) });
   // Checking a model is the operator saying they want it available, so the
   // provider follows the models rather than being a second switch to find:
   // it turns on with the first check and off when the last one clears.
@@ -138,6 +138,54 @@ export function syncLocalUserModels({
   });
   writeUserModels([...others, ...entries]);
   return entries;
+}
+
+const REGISTRY_BASE =
+  process.env.MODEL_ROUTER_OLLAMA_REGISTRY || "https://registry.ollama.ai";
+
+// Tool support before the download, so nobody spends gigabytes on a model
+// Codex can never drive. Ollama bakes tool calling into the chat template, and
+// the registry serves that template as its own layer -- so fetching a few
+// kilobytes answers what would otherwise cost a multi-gigabyte pull.
+//
+// A template mentioning `.Tools` is necessary but not sufficient: qwen2.5-coder
+// has it and still emits tool calls as plain text. So this reports "the model
+// claims tools", and only a real request proves it.
+export async function fetchRegistryCapabilities(tag, { fetchImpl = fetch, timeoutMs = 6000 } = {}) {
+  const [name, version = "latest"] = String(tag).split(":");
+  if (!name) return undefined;
+  const base = `${REGISTRY_BASE}/v2/library/${encodeURIComponent(name)}`;
+  try {
+    const manifest = await fetchImpl(
+      `${base}/manifests/${encodeURIComponent(version)}`,
+      {
+        headers: { Accept: "application/vnd.docker.distribution.manifest.v2+json" },
+        signal: AbortSignal.timeout(timeoutMs),
+      },
+    );
+    if (!manifest.ok) return undefined;
+    const parsed = await manifest.json();
+    const layers = Array.isArray(parsed?.layers) ? parsed.layers : [];
+    const template = layers.find((layer) => layer?.mediaType?.endsWith(".template"));
+    const bytes = layers.reduce((sum, layer) => sum + (layer?.size || 0), 0);
+    if (!template?.digest) return { tag, tools: false, sizeGb: bytes / 1e9 };
+    // Blob URLs redirect to a CDN, so the fetch has to follow them.
+    const blob = await fetchImpl(`${base}/blobs/${template.digest}`, {
+      redirect: "follow",
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!blob.ok) return { tag, tools: false, sizeGb: bytes / 1e9 };
+    const text = await blob.text();
+    return {
+      tag,
+      tools: /\{\{[^}]*\.Tools/i.test(text),
+      sizeGb: Math.round((bytes / 1e9) * 10) / 10,
+    };
+  } catch {
+    // Offline or an unknown tag: the install proceeds unannotated rather than
+    // being blocked by a lookup that is only advisory.
+    return undefined;
+  }
 }
 
 export const CAPABILITY_CACHE_PATH =
