@@ -47,11 +47,13 @@ import {
   describeImage,
   evidenceCache,
   inputHasImage,
+  nativeVisionCandidates,
   resolveVisionEngine,
   stripImages,
   substituteImages,
   supportsImageInput,
 } from "./vision-bridge.mjs";
+import { readHiddenModels } from "./model-picker-state.mjs";
 import { readVisionBridgeSettings } from "./vision-bridge-state.mjs";
 import { VERSION } from "./version.mjs";
 
@@ -308,6 +310,18 @@ function catalogModels() {
   try {
     const parsed = JSON.parse(readFileSync(CATALOG_PATH, "utf8"));
     return Array.isArray(parsed.models) ? parsed.models : [];
+  } catch {
+    return [];
+  }
+}
+
+// The native capture, not the merged catalog: the merged one is where a bridged
+// model already advertises borrowed image input, and reading engines back out of
+// it would let a bridge nominate itself.
+function nativeCatalogModels() {
+  try {
+    const parsed = JSON.parse(readFileSync(NATIVE_CATALOG_PATH, "utf8"));
+    return Array.isArray(parsed?.models) ? parsed.models : [];
   } catch {
     return [];
   }
@@ -674,7 +688,7 @@ async function normalizeRoutedAgentInput(request, input, signal) {
 // Codex resends the whole conversation every turn, so the same screenshot
 // arrives again on every follow-up. Without the hash cache a five-turn
 // conversation about one image would buy the same transcript five times.
-async function visionEvidenceFor(url, engine, signal) {
+async function visionEvidenceFor(url, engine, signal, request) {
   const cached = evidenceCache.get(url);
   if (cached !== undefined) return cached;
   const text = await describeImage({
@@ -682,6 +696,12 @@ async function visionEvidenceFor(url, engine, signal) {
     imageUrl: url,
     gatewayBase: GATEWAY_BASE,
     headers: routedHeaders(),
+    // A native engine is spent on the caller's own ChatGPT session, so it can
+    // only be reached with the headers this very request arrived with. The
+    // router never stores those.
+    nativeCall: request
+      ? { baseUrl: NATIVE_BASE, headers: nativeHeaders(request) }
+      : undefined,
     signal,
   });
   return evidenceCache.set(url, text);
@@ -690,14 +710,17 @@ async function visionEvidenceFor(url, engine, signal) {
 // Text-only models get their images read by a vision-capable model the
 // operator already enabled. Turns without images cost nothing here, and a
 // model that reads images itself is never touched.
-async function bridgeVisionInput(input, route, signal) {
+async function bridgeVisionInput(input, route, signal, request) {
   if (!inputHasImage(input)) return input;
   if (supportsImageInput(route)) return input;
   if (route.visionBridge === false) {
     return stripImages(input, `${route.displayName || route.slug} cannot read images`).input;
   }
   const engine = resolveVisionEngine(
-    selectedConfiguredListedModels(),
+    [
+      ...selectedConfiguredListedModels(),
+      ...nativeVisionCandidates(nativeCatalogModels(), readHiddenModels()),
+    ],
     readVisionBridgeSettings(),
   );
   if (!engine) {
@@ -711,7 +734,7 @@ async function bridgeVisionInput(input, route, signal) {
   }
   const engineName = engine.displayName || engine.slug;
   const result = await substituteImages(input, async (url) => ({
-    text: await visionEvidenceFor(url, engine, signal),
+    text: await visionEvidenceFor(url, engine, signal, request),
     engineName,
   }));
   if (!QUIET) {
@@ -836,7 +859,7 @@ function extractResponseText(payload) {
   return text.join("\n");
 }
 
-async function summarize(payload, route, signal) {
+async function summarize(payload, route, signal, request) {
   const originalInput = Array.isArray(payload.input) ? payload.input : [];
   // Compaction replays the whole conversation, so any image still in it would
   // reach the text-only model unbridged and fail the compaction rather than
@@ -845,6 +868,7 @@ async function summarize(payload, route, signal) {
     normalizeRoutedInput(originalInput),
     route,
     signal,
+    request,
   );
   const body = {
     ...payload,
@@ -909,8 +933,8 @@ function writeCompactionSse(response, model, summary) {
   response.end("data: [DONE]\n\n");
 }
 
-async function handleRoutedCompaction(response, payload, route, signal, v2) {
-  const result = await summarize(payload, route, signal);
+async function handleRoutedCompaction(response, payload, route, signal, v2, request) {
+  const result = await summarize(payload, route, signal, request);
   if (!result.ok) {
     writeJson(response, result.status, result.payload);
     return;
@@ -1032,7 +1056,7 @@ async function handleResponses(request, response, requestUrl) {
     });
 
     if (route && (compactV1 || compactV2)) {
-      await handleRoutedCompaction(response, payload, route, controller.signal, compactV2);
+      await handleRoutedCompaction(response, payload, route, controller.signal, compactV2, request);
       return;
     }
 
@@ -1045,6 +1069,7 @@ async function handleResponses(request, response, requestUrl) {
         await normalizeRoutedAgentInput(request, payload.input, controller.signal),
         route,
         controller.signal,
+        request,
       );
       const provider = providerForModel(route);
       // LiteLLM's Responses -> Chat Completions bridge drops namespace tools.

@@ -28,7 +28,11 @@ import { readHiddenModels } from "./model-picker-state.mjs";
 import { buildNativeAliasAssignments } from "./native-alias.mjs";
 import { selectedConfiguredListedModels } from "./provider-selection.mjs";
 import { assertStateOwnership } from "./state-owner.mjs";
-import { applyVisionBridge, resolveVisionEngine } from "./vision-bridge.mjs";
+import {
+  applyVisionBridge,
+  nativeVisionCandidates,
+  resolveVisionEngine,
+} from "./vision-bridge.mjs";
 import { readVisionBridgeSettings } from "./vision-bridge-state.mjs";
 
 const refresh = process.argv.includes("--refresh-native");
@@ -491,13 +495,6 @@ function main() {
     userSlugs,
     Date.now(),
   );
-  // Advertised last, and only while an engine actually resolves: Codex gates
-  // the paste on `input_modalities`, so a bridge that has gone away must take
-  // the advertisement with it rather than leaving a paste that 400s. This runs
-  // after the announcement pass so a bridged model never announces "image
-  // input" as though it grew the capability itself.
-  const visionEngine = resolveVisionEngine(selectedModels, readVisionBridgeSettings());
-  const catalogModels = applyVisionBridge(routedModels, visionEngine);
   const captured = nativeCatalog();
   const native = {
     ...captured,
@@ -521,6 +518,25 @@ function main() {
   }
   const openaiAuthenticated = auth.authenticated;
   const loginFree = loginFreeConfigured();
+  // Advertised last, and only while an engine actually resolves: Codex gates
+  // the paste on `input_modalities`, so a bridge that has gone away must take
+  // the advertisement with it rather than leaving a paste that 400s. This runs
+  // after the announcement pass so a bridged model never announces "image
+  // input" as though it grew the capability itself.
+  //
+  // Native models join the candidate list only once the auth probe says the
+  // session can actually spend them. A login-free install routes every turn
+  // away from the native backend, so nominating a native engine there would
+  // promise image input the router cannot deliver.
+  const nativeEngines =
+    openaiAuthenticated && !loginFree
+      ? nativeVisionCandidates(captured.models, hiddenModels)
+      : [];
+  const visionEngine = resolveVisionEngine(
+    [...selectedModels, ...nativeEngines],
+    readVisionBridgeSettings(),
+  );
+  const catalogModels = applyVisionBridge(routedModels, visionEngine);
   const { models: merged, aliases } = loginFree
     ? buildLoginFreeCatalog(native, catalogModels)
     : {
