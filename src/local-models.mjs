@@ -70,6 +70,20 @@ export const LOCAL_PROVIDER_ID = "local";
 // smaller, so they should not displace a paid flagship at the top of the list.
 const LOCAL_MODEL_PRIORITY = 900;
 
+// The overlay's default is 128K, which is wrong for a model running on the
+// operator's own laptop: the KV cache for that window costs ~15 GB on a 3B
+// model, overflows a 16 GB machine, and pushes half the work onto the CPU --
+// measured here as 17 GB and 43% CPU versus 3.1 GB and 100% GPU at 8K, a six
+// fold difference in wall clock. Codex sizes its prompts to the number
+// advertised here, so advertising 128K asks a small local model for exactly
+// the context that makes it unusable.
+//
+// This caps what Codex sends. It does not change what Ollama reserves: the
+// OpenAI-compatible endpoint ignores `num_ctx`, so the allocation is set by
+// Ollama's own OLLAMA_CONTEXT_LENGTH.
+const LOCAL_CONTEXT_WINDOW = 32768;
+const LOCAL_AUTO_COMPACT = 28000;
+
 // Checking a model publishes it: it joins the user-model overlay, which the
 // registry, gateway config, and Codex catalog already consume, so a local
 // model reaches the picker through exactly the same path as any curated cloud
@@ -130,6 +144,8 @@ export function syncLocalUserModels({
           // model genuinely has it -- the same standard the checked-in
           // registry is held to.
           inputModalities: capabilities.includes("vision") ? ["text", "image"] : ["text"],
+          contextWindow: LOCAL_CONTEXT_WINDOW,
+          autoCompact: LOCAL_AUTO_COMPACT,
           description: `${tag} running locally through Ollama on this machine.`,
         },
       }),
