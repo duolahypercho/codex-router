@@ -331,7 +331,11 @@ function normalizeBody(buffer, contentType, route) {
   if (Array.isArray(payload.messages)) {
     payload.messages = sanitizeChatToolHistory(payload.messages, provider);
   }
-  if (model.requestProfile === "kimi-k3") {
+  if (model.requestProfile === "clinepass") {
+    delete payload.reasoning_effort;
+    delete payload.thinking;
+    delete payload.top_p;
+  } else if (model.requestProfile === "kimi-k3") {
     const effort = kimiK3Effort(payload.reasoning_effort);
     // Absent means the platform default (max); K3 rejects the thinking param.
     if (effort) payload.reasoning_effort = effort;

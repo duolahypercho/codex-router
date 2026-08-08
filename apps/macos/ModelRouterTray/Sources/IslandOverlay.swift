@@ -953,6 +953,7 @@ private struct ProviderIcon: View {
     if providerID == "qwen-plan" { return "Qwen" }
     if providerID == "ollama-cloud" { return "Ollama" }
     if providerID.hasPrefix("commandcode") { return "Command Code" }
+    if providerID == "clinepass" { return "ClinePass" }
     return "Model provider"
   }
 }

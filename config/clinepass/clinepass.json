@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "providers": [
+    {
+      "id": "clinepass",
+      "displayName": "ClinePass",
+      "kind": "openai-compatible",
+      "ownedBy": "clinepass",
+      "baseUrl": "https://api.cline.bot/api/v1",
+      "baseUrlEnv": "CLINE_API_BASE_URL",
+      "credential": {
+        "environment": [
+          "CLINE_API_KEY"
+        ],
+        "file": "clinepass-api-key.secret",
+        "legacyFiles": [],
+        "keychainServices": [
+          "codex-router-clinepass"
+        ],
+        "prompt": "ClinePass API key"
+      }
+    }
+  ]
+}

@@ -938,6 +938,7 @@ fn validate_provider(provider: &str) -> Result<(), String> {
         "deepseek",
         "grok-api",
         "grok-oauth",
+        "clinepass",
     ];
     if PROVIDERS.contains(&provider) {
         Ok(())
@@ -988,9 +989,12 @@ mod tests {
     #[test]
     fn accepts_only_known_provider_ids() {
         assert!(validate_provider("kimi-oauth").is_ok());
+        assert!(validate_provider("clinepass").is_ok());
         assert!(validate_provider("../../secret").is_err());
         assert!(validate_provider_kind("deepseek", ProviderKind::Api).is_ok());
         assert!(validate_provider_kind("deepseek", ProviderKind::Oauth).is_err());
+        assert!(validate_provider_kind("clinepass", ProviderKind::Api).is_ok());
+        assert!(validate_provider_kind("clinepass", ProviderKind::Oauth).is_err());
     }
 
     #[test]

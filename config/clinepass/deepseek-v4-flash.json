@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "slug": "clinepass/deepseek-v4-flash",
+      "gatewayModel": "clinepass-deepseek-v4-flash",
+      "upstreamModel": "cline-pass/deepseek-v4-flash",
+      "provider": "clinepass",
+      "listed": true,
+      "displayName": "DeepSeek V4 Flash (ClinePass)",
+      "description": "DeepSeek V4 Flash through ClinePass.",
+      "priority": 56,
+      "defaultEffort": "high",
+      "reasoningLevels": [
+        {
+          "effort": "high",
+          "description": "Default model behavior"
+        }
+      ],
+      "contextWindow": 131072,
+      "autoCompact": 110000,
+      "inputModalities": [
+        "text"
+      ],
+      "requestProfile": "clinepass",
+      "compHash": "clinepass-deepseek-v4-flash-v1"
+    }
+  ]
+}

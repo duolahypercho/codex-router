@@ -28,7 +28,7 @@ user.
    arguments, logs, environment snippets, or tracked files.
 4. Determine which provider IDs the user requested: `anthropic-api`,
    `kimi-oauth`, `kimi-api`, `deepseek`, `grok-oauth`, `grok-api`, `qwen-plan`,
-   `zai-coding`, `ollama-cloud`, `minimax-token-plan`, `meta`, and/or
+   `zai-coding`, `ollama-cloud`, `minimax-token-plan`, `meta`, `clinepass`, and/or
    `opencode-go`
    (shown to users as "opencode Go/Zen"; its `opencode-go-messages`,
    `opencode-go-responses`, and `opencode-zen` variants share its stored key

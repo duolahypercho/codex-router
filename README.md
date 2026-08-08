@@ -91,6 +91,18 @@ Linux installations support the Codex CLI.
 | Muse Spark 1.2 (Meta) | `meta/muse-spark-1.2` | Meta Model API key |
 | Muse Spark 1.2 Contributor (Meta) | `meta/muse-spark-1.2-contributor` | Meta Model API key |
 | Muse Spark 1.1 (Meta) | `meta/muse-spark-1.1` | Meta Model API key |
+| GLM-5.2 (ClinePass) | `clinepass/glm-5.2` | ClinePass API key |
+| Kimi K3 (ClinePass) | `clinepass/kimi-k3` | ClinePass API key |
+| Kimi K2.7 Code (ClinePass) | `clinepass/kimi-k2.7-code` | ClinePass API key |
+| Kimi K2.6 (ClinePass) | `clinepass/kimi-k2.6` | ClinePass API key |
+| DeepSeek V4 Pro (ClinePass) | `clinepass/deepseek-v4-pro` | ClinePass API key |
+| DeepSeek V4 Flash (ClinePass) | `clinepass/deepseek-v4-flash` | ClinePass API key |
+| MiMo-V2.5 (ClinePass) | `clinepass/mimo-v2.5` | ClinePass API key |
+| MiMo-V2.5-Pro (ClinePass) | `clinepass/mimo-v2.5-pro` | ClinePass API key |
+| MiniMax M3 (ClinePass) | `clinepass/minimax-m3` | ClinePass API key |
+| Qwen3.7 Max (ClinePass) | `clinepass/qwen3.7-max` | ClinePass API key |
+| Qwen3.7 Plus (ClinePass) | `clinepass/qwen3.7-plus` | ClinePass API key |
+| Qwen3.8 Max (ClinePass) | `clinepass/qwen3.8-max` | ClinePass API key |
 
 The Codex catalog is credential-aware. It includes models only from enabled
 external providers with a stored API key or valid OAuth session. Native GPT

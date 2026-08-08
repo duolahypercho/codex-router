@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "slug": "clinepass/kimi-k2.6",
+      "gatewayModel": "clinepass-kimi-k2-6",
+      "upstreamModel": "cline-pass/kimi-k2.6",
+      "provider": "clinepass",
+      "listed": true,
+      "displayName": "Kimi K2.6 (ClinePass)",
+      "description": "Kimi K2.6 through ClinePass.",
+      "priority": 54,
+      "defaultEffort": "high",
+      "reasoningLevels": [
+        {
+          "effort": "high",
+          "description": "Default model behavior"
+        }
+      ],
+      "contextWindow": 131072,
+      "autoCompact": 110000,
+      "inputModalities": [
+        "text"
+      ],
+      "requestProfile": "clinepass",
+      "compHash": "clinepass-kimi-k2-6-v1"
+    }
+  ]
+}

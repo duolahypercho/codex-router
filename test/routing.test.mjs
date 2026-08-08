@@ -1345,6 +1345,76 @@ test("API forwarder replaces caller auth and enforces Kimi K3 API parameters", a
   }
 });
 
+test("API forwarder routes ClinePass with isolated auth and unchanged stream tools", async () => {
+  const upstreamRequests = [];
+  const upstream = await mockServer(async (request, response) => {
+    upstreamRequests.push({
+      url: request.url,
+      headers: request.headers,
+      body: await bodyJson(request),
+    });
+    json(response, 200, { choices: [] });
+  });
+  const forwarderPort = await openPort();
+  const forwarder = run("api-forwarder.mjs", {
+    CODEX_ROUTER_API_PORT: String(forwarderPort),
+    CLINE_API_BASE_URL: `http://127.0.0.1:${upstream.port}/api/v1`,
+    CLINE_API_KEY: "TEST_CLINEPASS_KEY",
+    CODEX_ROUTER_QUIET: "1",
+  });
+
+  try {
+    await waitFor(`http://127.0.0.1:${forwarderPort}/health`, forwarder, {
+      Authorization: `Bearer ${INTERNAL_KEY}`,
+    });
+    const tools = [{
+      type: "function",
+      function: {
+        name: "read_file",
+        parameters: { type: "object", properties: { path: { type: "string" } } },
+      },
+    }];
+    const response = await fetch(
+      `http://127.0.0.1:${forwarderPort}/v1/chat/completions`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${INTERNAL_KEY}`,
+          "X-Api-Key": "must-not-forward",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "clinepass-qwen3-8-max",
+          reasoning_effort: "high",
+          thinking: { type: "enabled" },
+          top_p: 0.9,
+          temperature: 0.7,
+          stream: true,
+          tools,
+          tool_choice: "auto",
+          messages: [{ role: "user", content: "test" }],
+        }),
+      },
+    );
+    assert.equal(response.status, 200);
+    const request = upstreamRequests[0];
+    assert.equal(request.url, "/api/v1/chat/completions");
+    assert.equal(request.headers.authorization, "Bearer TEST_CLINEPASS_KEY");
+    assert.equal(request.headers["x-api-key"], undefined);
+    assert.equal(request.body.model, "cline-pass/qwen3.8-max");
+    assert.equal(request.body.reasoning_effort, undefined);
+    assert.equal(request.body.thinking, undefined);
+    assert.equal(request.body.top_p, undefined);
+    assert.equal(request.body.temperature, 0.7);
+    assert.equal(request.body.stream, true);
+    assert.deepEqual(request.body.tools, tools);
+    assert.equal(request.body.tool_choice, "auto");
+  } finally {
+    await stopChild(forwarder);
+    await closeServer(upstream.server);
+  }
+});
+
 test("API forwarder health omits disabled API providers", async () => {
   const testRoot = mkdtempSync(path.join(os.tmpdir(), "api-forwarder-health-"));
   writeFileSync(

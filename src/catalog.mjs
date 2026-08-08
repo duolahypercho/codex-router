@@ -300,6 +300,11 @@ export function routedModel(template, model) {
     // opt in after their tool and encrypted-payload relay paths are verified.
     multi_agent_version: model.multiAgentVersion || "v1",
   };
+  // ClinePass strips these unsupported request controls, so Codex must not offer them.
+  if (model.requestProfile === "clinepass") {
+    delete next.default_reasoning_level;
+    delete next.supported_reasoning_levels;
+  }
   if (typeof next.base_instructions === "string") {
     next.base_instructions = rewriteIdentity(next.base_instructions, model);
   }
