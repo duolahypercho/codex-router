@@ -55,6 +55,19 @@ function codexConfigSnapshot() {
   }
 }
 
+// The raw entries as written, without the picker-shaped normalization
+// `nativeCodexModels` applies: the vision bridge reads declared modalities,
+// which that mapping drops.
+function catalogModelsAt(catalogPath) {
+  if (!existsSync(catalogPath)) return [];
+  try {
+    const parsed = JSON.parse(readFileSync(catalogPath, "utf8"));
+    return Array.isArray(parsed?.models) ? parsed.models : [];
+  } catch {
+    return [];
+  }
+}
+
 function nativeCodexModels(catalogPath, hiddenModels = new Set()) {
   if (!existsSync(catalogPath)) return [];
   try {
@@ -81,6 +94,7 @@ function nativeCodexModels(catalogPath, hiddenModels = new Set()) {
 async function emitProbe() {
   const {
     CONFIG_PATH,
+    MERGED_CATALOG_PATH,
     NATIVE_CATALOG_PATH,
     TARGET,
     PROVIDER_SELECTION_PATH,
@@ -93,7 +107,9 @@ async function emitProbe() {
   const { readVisionBridgeSettings, visionBridgeSnapshot } = await import(
     "./vision-bridge-state.mjs"
   );
-  const { rankVisionEngines, resolveVisionEngine } = await import("./vision-bridge.mjs");
+  const { nativeVisionCandidates, rankVisionEngines, resolveVisionEngine } = await import(
+    "./vision-bridge.mjs"
+  );
   const { annotateLocalModels, hostVisionProfile, refreshVisionModelSizesIfStale } =
     await import("./vision-host.mjs");
   const { readVisionDownload } = await import("./vision-download.mjs");
@@ -157,8 +173,22 @@ async function emitProbe() {
               localModels: localModelsSnapshot({ benchmarks: readBenchmarkResults() }),
               visionBridge: (() => {
                 const candidates = selectedConfiguredListedModels();
+                // Only the native models that actually shipped into the picker.
+                // A signed-out or login-free install has none, and offering one
+                // there would pin an engine the router cannot reach. The
+                // capture is what declares the modalities; the merged catalog
+                // is what proves the model survived the auth gate.
+                const shipped = new Set(
+                  catalogModelsAt(MERGED_CATALOG_PATH).map((model) => String(model.slug)),
+                );
+                const natives = nativeVisionCandidates(
+                  catalogModelsAt(NATIVE_CATALOG_PATH).filter((model) =>
+                    shipped.has(String(model.slug)),
+                  ),
+                  hiddenModels,
+                );
                 const resolved = resolveVisionEngine(
-                  candidates,
+                  [...candidates, ...natives],
                   readVisionBridgeSettings(),
                 );
                 return {
@@ -169,6 +199,14 @@ async function emitProbe() {
                   // Cloud vision models the operator already pays for -- the
                   // default engines. Auto picks the cheapest of these.
                   paidEngines: rankVisionEngines(candidates).map((model) => ({
+                    slug: model.slug,
+                    displayName: model.displayName,
+                  })),
+                  // Vision models from the signed-in ChatGPT session. No extra
+                  // key, nothing to download: the plan is already being paid
+                  // for. Kept apart from the paid list so the operator can see
+                  // which bill a choice lands on.
+                  nativeEngines: rankVisionEngines(natives).map((model) => ({
                     slug: model.slug,
                     displayName: model.displayName,
                   })),

@@ -1728,6 +1728,9 @@ struct VisionBridgeSnapshot: Decodable {
   let resolvedEngineName: String?
   let hostMemGib: Double?
   let paidEngines: [VisionEngineOption]
+  // Vision models from the signed-in ChatGPT session. Older routers do not send
+  // this, so it defaults to empty rather than failing the whole decode.
+  let nativeEngines: [VisionEngineOption]?
   let download: VisionDownloadState?
 }
 
@@ -2659,6 +2662,15 @@ private struct TrayView: View {
         if !(vision?.paidEngines ?? []).isEmpty {
           Section("Paid (cloud)") {
             ForEach(vision?.paidEngines ?? []) { option in
+              Button(option.displayName) {
+                Task { await store.setVisionBridgeEngine(option.slug) }
+              }
+            }
+          }
+        }
+        if !(vision?.nativeEngines ?? []).isEmpty {
+          Section("Your ChatGPT plan") {
+            ForEach(vision?.nativeEngines ?? []) { option in
               Button(option.displayName) {
                 Task { await store.setVisionBridgeEngine(option.slug) }
               }
