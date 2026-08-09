@@ -10,7 +10,8 @@ intentional exception: the router reuses the official Kimi CLI session under
 
 Codex Router handles four credential classes and keeps them on distinct paths:
 
-- ChatGPT/Codex authentication is allow-listed only for native GPT requests.
+- ChatGPT/Codex authentication is allow-listed only for native GPT, image, and
+  standalone web-search requests.
 - Kimi Code OAuth is read from the official Kimi CLI directory and sent only to
   the Kimi Code managed endpoint.
 - Kimi Platform API keys are sent only to the configured Kimi Platform endpoint.

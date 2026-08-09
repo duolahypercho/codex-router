@@ -285,3 +285,72 @@ test("a zero-prompt JSON response is rewritten with the estimate", async () => {
   assert.equal(rewritten.id, "response-test");
   assert.equal(transform.substitutedInputTokens(), 99_000);
 });
+
+test("meters a stream the backend sent without a content-type header", async () => {
+  // The ChatGPT backend answers /responses this way: an SSE body, every
+  // x-codex-* header present, and no content-type at all.
+  const body = [
+    'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"hi"}\n\n',
+    'event: response.completed\ndata: {"type":"response.completed","response":{"usage":{"input_tokens":153642,"output_tokens":661,"total_tokens":154303}}}\n\n',
+    "data: [DONE]\n\n",
+  ];
+  const transform = new ResponseUsageTransform("");
+  const output = await passThrough(transform, body.map((part) => Buffer.from(part, "utf8")));
+  assert.equal(output, body.join(""));
+  assert.deepEqual(transform.tokenUsage(), {
+    inputTokens: 153642,
+    outputTokens: 661,
+    totalTokens: 154303,
+  });
+});
+
+test("meters a headerless stream whose first event spans two chunks", async () => {
+  const terminal =
+    'event: response.completed\ndata: {"type":"response.completed","response":{"usage":{"input_tokens":4,"output_tokens":2}}}\n\n';
+  const transform = new ResponseUsageTransform("");
+  const output = await passThrough(transform, [
+    Buffer.from(terminal.slice(0, 40), "utf8"),
+    Buffer.from(terminal.slice(40), "utf8"),
+  ]);
+  assert.equal(output, terminal);
+  assert.deepEqual(transform.tokenUsage(), {
+    inputTokens: 4,
+    outputTokens: 2,
+    totalTokens: 6,
+  });
+});
+
+test("still reads a headerless body as JSON when it is not an event stream", async () => {
+  const body = JSON.stringify({ usage: { input_tokens: 7, output_tokens: 3 } });
+  const transform = new ResponseUsageTransform("");
+  const output = await passThrough(transform, [Buffer.from(body, "utf8")]);
+  assert.equal(output, body);
+  assert.deepEqual(transform.tokenUsage(), {
+    inputTokens: 7,
+    outputTokens: 3,
+    totalTokens: 10,
+  });
+});
+
+test("a declared JSON content-type is never re-read as an event stream", async () => {
+  // A JSON body that happens to open with the word data must not be sniffed
+  // into the streaming branch when the header already settled the question.
+  const body = '{"data": "one", "usage": {"input_tokens": 5, "output_tokens": 1}}';
+  const transform = new ResponseUsageTransform("application/json");
+  const output = await passThrough(transform, [Buffer.from(body, "utf8")]);
+  assert.equal(output, body);
+  assert.deepEqual(transform.tokenUsage(), {
+    inputTokens: 5,
+    outputTokens: 1,
+    totalTokens: 6,
+  });
+});
+
+test("substitutes an estimated prompt count on a headerless stream", async () => {
+  const body =
+    'event: response.completed\ndata: {"type":"response.completed","response":{"usage":{"input_tokens":0,"output_tokens":9,"total_tokens":9}}}\n\n';
+  const transform = new ResponseUsageTransform("", { estimatedInputTokens: 1200 });
+  const output = await passThrough(transform, [Buffer.from(body, "utf8")]);
+  assert.match(output, /"input_tokens":1200/);
+  assert.equal(transform.substitutedInputTokens(), 1200);
+});

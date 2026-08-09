@@ -109,7 +109,7 @@ state_dir=${MODEL_ROUTER_STATE_DIR:-${CODEX_ROUTER_STATE_DIR:-${KIMI_CODEX_STATE
 if [ -s "$state_dir/native-models.json" ]; then
   node src/catalog.mjs
 else
-  node src/catalog.mjs --refresh-native
+  node src/catalog.mjs --refresh-native --bundled-native
 fi
 node src/litellm-config.mjs
 

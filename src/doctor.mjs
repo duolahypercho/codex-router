@@ -11,7 +11,10 @@ import { detectLegacyInstallations } from "./legacy-migration.mjs";
 import { PROVIDERS } from "./model-registry.mjs";
 import { grokOAuthStatus } from "./grok-oauth-status.mjs";
 import { kimiOAuthStatus } from "./oauth-status.mjs";
-import { readMultiAgentSettings } from "./multi-agent-state.mjs";
+import {
+  readMultiAgentSettings,
+  subagentEligibleModels,
+} from "./multi-agent-state.mjs";
 import { readHiddenModels } from "./model-picker-state.mjs";
 import { serviceFollowsHostApps } from "./presence-state.mjs";
 import { waitForRouterHealth } from "./router-health.mjs";
@@ -390,13 +393,19 @@ if (visionSettings.enabled && !visionEngine) {
     "Run ./bin/model-router codex control vision-bridge on to let text-only models read pasted images.",
   );
 }
-const agentStatus = routedCodexAgentStatus(requiredRoutedModels);
+// The same list the catalog writes definitions from, so a model switched off
+// as a subagent is expected to have no definition rather than a missing one.
+const agentStatus = routedCodexAgentStatus(
+  subagentEligibleModels(requiredRoutedModels, readMultiAgentSettings()),
+);
 add(
   agentStatus.ok ? "ok" : "fail",
   "Routed model agents",
   agentStatus.ok
     ? `${agentStatus.current} current definitions in ${CODEX_AGENTS_DIR}`
-    : `${agentStatus.current} of ${agentStatus.expected} current definitions in ${CODEX_AGENTS_DIR}`,
+    : agentStatus.extra.length && agentStatus.current === agentStatus.expected
+      ? `${agentStatus.extra.length} definitions in ${CODEX_AGENTS_DIR} for models that are switched off as subagents`
+      : `${agentStatus.current} of ${agentStatus.expected} current definitions in ${CODEX_AGENTS_DIR}`,
   "Run ./bin/doctor --fix, then fully quit Codex, reopen it, and create a new task.",
 );
 add(

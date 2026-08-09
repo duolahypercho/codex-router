@@ -2,6 +2,56 @@
 
 ## Unreleased
 
+- **The reader is asked what you actually want to know, and asked again when
+  that changes.** The question used to be pinned to the image's own message, so
+  an image's reading was fixed by the first thing ever asked about it. Paste a
+  photo, ask "what is this?", and a reader under orders to describe rather than
+  identify answered "a lake at dusk" — after which the model went to the
+  filesystem, then to reverse image search, and uploaded the screenshot to a
+  public image host to get an answer the vision model could have given in a
+  line. Now the newest image follows the newest question.
+
+  It is still bought once per *question*, never once per turn, so Codex
+  resending the whole conversation between turns costs nothing — and only the
+  newest image follows the conversation, so a chat holding ten screenshots
+  cannot turn one new question into ten new reads. Earlier readings are kept, so
+  the answer to your first question is still in front of the model when you ask
+  your second.
+
+- **The reader may say what something is.** A new `## Identification` section:
+  the place, product, application, chart type, or well-known image it
+  recognizes, with its confidence and what in the picture supports it. It is
+  the one section where inference is allowed — `## Text` stays verbatim, and an
+  unrecognizable image says `(unrecognized)` rather than guessing.
+
+- **One unreachable engine no longer costs you the image.** Resolving an engine
+  and reaching it are different questions, and the bridge conflated them: a
+  pinned engine that resolved and then answered 401 because a session lapsed,
+  or 503 because the provider's endpoint was down, left every paste degrading
+  to "could not be read" until somebody noticed. Both happened within an hour of
+  testing. The reader is now a short list — your chosen engine first, then the
+  other credentialed vision models — and the image is offered to the next one
+  when the first cannot be reached. Verified live with a genuinely dead engine
+  pinned first: all ten test images were still read.
+
+  Nothing extra is spent when your engine works, since a second engine is only
+  called after the first has failed. It is not silent: the evidence names
+  whichever engine actually did the reading and the log line records the
+  fallback. A pin that does not resolve at all is still an operator-visible
+  problem rather than a quiet switch, and a pinned local engine never falls back
+  onto a provider's quota you did not choose to spend. Another provider is tried
+  before another attempt at a broken one, which cut a degraded read from 30–52s
+  to 12–35s.
+
+- **A read that fails once is asked again.** The engine is a rate-limited
+  account across a network, so a 429, a 502, a reset connection, or an empty
+  reply used to cost you that image for the whole turn. Those are retried twice,
+  250ms then 1s. A refusal is not: 400, 401, 403 and 404 buy the identical
+  refusal a second time, and a timeout is reported rather than retried, because
+  the per-attempt budget is already two minutes. A local engine that is down
+  still reports the transport's own words, which is how you learn your own
+  server is not running.
+
 - **The gateway no longer installs a cryptography with a known advisory.**
   litellm 1.95.0 required `cryptography>=48.0.1,<49.0`, and the fix for
   GHSA-g6cj-pr64-35w5 — a Bleichenbacher oracle reachable through PKCS#7

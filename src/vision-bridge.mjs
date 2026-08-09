@@ -22,6 +22,14 @@ export const VISION_EVIDENCE_INSTRUCTIONS = [
   "## Summary",
   "One paragraph: what this image is and what it shows.",
   "",
+  "## Identification",
+  "What this most likely *is*, when you recognize it: a place, product, application,",
+  "person's role, chart type, document, or well-known image -- and the notable things",
+  "in it and how they relate. This is the one section where inference is allowed, so",
+  "say how confident you are and name what in the image supports it. Write",
+  "`(unrecognized)` when nothing here is recognizable. Never present a guess as",
+  "something you read; that belongs in the sections below or in `## Uncertain`.",
+  "",
   "## Text",
   "Every readable word, transcribed verbatim in reading order. Preserve line breaks,",
   "code indentation, and table structure. Write `(no text)` when the image has none.",
@@ -69,11 +77,24 @@ export function focusInstructions(question) {
   ].join("\n");
 }
 
-// A question is only worth asking the engine if it stays identical every turn,
-// because Codex resends the whole conversation and the cache is keyed on it. So
-// it comes from the text sitting in the same message as the image -- fixed the
-// moment the turn was sent -- and never from the newest message, which changes
-// on every follow-up and would buy a fresh transcript each time.
+// The reader is asked what the operator actually wants to know, and it is asked
+// again whenever that changes. Pinning the question to the image's own message
+// kept the cache still, but it meant an image's reading was fixed by the first
+// thing ever asked about it: paste a photo, ask "what is this?", and the reader
+// -- under instructions to describe rather than identify -- came back with "a
+// lake at dusk". The model then went to the filesystem, then to reverse image
+// search, and uploaded the operator's screenshot to a public host to get an
+// answer the vision model could have given in one line.
+//
+// So the newest image tracks the newest question, which is what a person means
+// by "ask about this picture". The cost is bounded by the thing that actually
+// bounds it: a question that has already been asked is served from the record,
+// so a conversation pays once per *distinct* question rather than once per
+// turn. Codex resending the whole conversation is therefore still free.
+//
+// Only the newest image follows the conversation. Older images keep the
+// question they were read for and their accumulated record, so a chat with ten
+// screenshots in it cannot turn one new question into ten new reads.
 export const VISION_QUESTION_MAX_CHARS = 500;
 
 // Codex fences a pasted image with its own markup:
@@ -94,16 +115,60 @@ function partText(part) {
   return typeof part.text === "string" ? part.text.trim() : "";
 }
 
-export function questionForImage(item) {
+// Codex sends its own bookkeeping as user-role messages -- the plugin list, the
+// environment context -- each one a single tag wrapping its whole part. They
+// are not anybody's question, and taking the newest user message literally
+// would hand the reader a directory listing to describe.
+const CONTEXT_BLOCK = /^<([a-z][\w-]*)>[\s\S]*<\/\1>$/i;
+
+// And it prefixes the operator's words with the files they mentioned:
+//
+//   # Files mentioned by the user:
+//   ## Screenshot 2026-08-09 at 4.53.53 AM.png: /Users/…/Desktop/Screenshot…
+//   ## My request:
+//   what img is this?
+//
+// Only the request is the question. The rest is a path the reader cannot see,
+// and sending it produced transcripts written about a filename.
+const REQUEST_MARKER = /^##[ \t]*My request:[ \t]*$/im;
+
+function requestOnly(text) {
+  const marker = REQUEST_MARKER.exec(text);
+  return marker ? text.slice(marker.index + marker[0].length).trim() : text;
+}
+
+function messageQuestion(item) {
   if (!Array.isArray(item?.content)) return "";
   const text = item.content
     .map((part) => partText(part))
-    .filter((value) => value && !IMAGE_WRAPPER_TAG.test(value))
+    .filter(
+      (value) => value && !IMAGE_WRAPPER_TAG.test(value) && !CONTEXT_BLOCK.test(value),
+    )
     .join("\n\n")
     .trim();
-  return text.length > VISION_QUESTION_MAX_CHARS
-    ? text.slice(0, VISION_QUESTION_MAX_CHARS).trimEnd()
-    : text;
+  const question = requestOnly(text).trim();
+  return question.length > VISION_QUESTION_MAX_CHARS
+    ? question.slice(0, VISION_QUESTION_MAX_CHARS).trimEnd()
+    : question;
+}
+
+export function questionForImage(item) {
+  return messageQuestion(item);
+}
+
+// The last thing the operator actually asked, which is what the newest image is
+// read for. Walking backwards rather than forwards because Codex appends: the
+// newest message is the current question, and everything before it has already
+// been answered.
+export function latestQuestion(input) {
+  if (!Array.isArray(input)) return "";
+  for (let index = input.length - 1; index >= 0; index -= 1) {
+    const item = input[index];
+    if (item?.role !== "user") continue;
+    const asked = messageQuestion(item);
+    if (asked) return asked;
+  }
+  return "";
 }
 
 export const VISION_EVIDENCE_MAX_CHARS = 24_000;
@@ -306,6 +371,48 @@ export function resolveVisionEngine(listCandidates, settings) {
   return ranked.find((model) => !isLoopbackEngine(model));
 }
 
+// How many engines one image may be offered to before it is written off. The
+// point is an image that gets read, not a tour of every provider the operator
+// has a key for: a second opinion is worth a little quota, a fifth is not.
+const VISION_ENGINE_ATTEMPTS = 3;
+
+// Resolving an engine and *reaching* it are different questions, and the bridge
+// used to conflate them. A pin that no longer resolves stays an operator-visible
+// problem -- that rule is untouched above. But a pinned engine that resolves and
+// then answers 401 because a session lapsed, or 503 because the provider's
+// endpoint is down, left every paste degrading to "could not be read" until
+// somebody noticed. Both happened here within one hour of testing.
+//
+// So the reader is a *list*: the chosen engine first, then the other
+// credentialed, non-loopback vision models, ranked as always. Nothing extra is
+// spent on the happy path, because the second engine is only ever called after
+// the first has failed and exhausted its retries. It is not silent either --
+// the evidence header names whichever engine actually did the reading, and the
+// per-turn log line says a fallback happened.
+export function resolveVisionEngines(listCandidates, settings) {
+  if (typeof listCandidates !== "function") {
+    throw new TypeError(
+      "resolveVisionEngines takes a function returning the selected, credentialed candidates, " +
+        "so the list is only built when it is going to be ranked.",
+    );
+  }
+  // Built at most once per call, however many times it is needed below.
+  // Assembling it means a synchronous credential probe of every provider --
+  // on macOS a `/usr/bin/security` spawn each, ~250ms with the event loop
+  // stopped -- so asking twice would double the cost of every pasted image.
+  let candidates;
+  const once = () => (candidates ??= listCandidates());
+  const primary = resolveVisionEngine(once, settings);
+  if (!primary) return [];
+  // A pinned local engine is the operator naming their own machine; falling
+  // back off it would spend a provider's quota they did not ask to spend here.
+  if (primary.local) return [primary];
+  const alternates = rankVisionEngines(once()).filter(
+    (model) => model.slug !== primary.slug && !isLoopbackEngine(model),
+  );
+  return [primary, ...alternates].slice(0, VISION_ENGINE_ATTEMPTS);
+}
+
 // The bridge stands in for the model, so a model that already reads images is
 // left exactly as the registry declared it.
 export function bridgedModel(model, engine) {
@@ -402,6 +509,25 @@ function viewImagePaths(input) {
   return paths;
 }
 
+// Which image the conversation is currently about: the one in the last item
+// that carries any. Keyed by URL rather than by position so the paste and the
+// `view_image` result that fetched the same bytes count as one image and share
+// a single read, instead of buying the same transcript twice under two
+// different questions.
+function activeImageUrls(input) {
+  for (let index = input.length - 1; index >= 0; index -= 1) {
+    if (!hasImagePart(input[index])) continue;
+    const field = imagePartsField(input[index]);
+    const urls = new Set();
+    for (const part of input[index][field]) {
+      const url = imageUrlOf(part);
+      if (url !== undefined) urls.add(url);
+    }
+    return urls;
+  }
+  return new Set();
+}
+
 function sourceForImage(item, field, index, paths) {
   if (field === "output") return paths.get(item?.call_id) || "";
   for (let before = index - 1; before >= 0; before -= 1) {
@@ -427,7 +553,13 @@ export function inputHasImage(input) {
 // omit it when there is nothing to tabulate -- so it is not evidence of a bad
 // read. The other four are unconditional, and their absence means the engine
 // answered in some shape of its own rather than the one it was asked for.
-const REQUIRED_EVIDENCE_SECTIONS = ["Summary", "Text", "Layout", "Uncertain"];
+const REQUIRED_EVIDENCE_SECTIONS = [
+  "Summary",
+  "Identification",
+  "Text",
+  "Layout",
+  "Uncertain",
+];
 
 export const TRUNCATION_NOTICE = "[transcript truncated by the router]";
 
@@ -812,6 +944,28 @@ function describeRequest(engine, imageUrl, gatewayBase, gatewayHeaders, nativeCa
   };
 }
 
+// A read that fails once is not a read that cannot be done. The engine is a
+// rate-limited account on the other side of a network, so 429s, 502s and reset
+// connections happen -- and losing that image for the whole turn means the
+// operator pastes a screenshot and gets told it could not be read, for a reason
+// that would have gone away in a second. Everything here is a *transient*
+// answer: a refusal (401, 403, 404) or a bad request is not retried, because a
+// second identical call buys the identical refusal.
+const VISION_RETRY_DELAYS_MS = [250, 1_000];
+
+function isTransientStatus(status) {
+  return status === 408 || status === 425 || status === 429 || status >= 500;
+}
+
+// A timeout is deliberately *not* transient. The per-attempt budget is already
+// two minutes; spending another two on the same slow engine turns one late
+// answer into a turn that never comes back.
+function isTransientError(error) {
+  return !["TimeoutError", "AbortError"].includes(error?.name);
+}
+
+class TransientVisionError extends Error {}
+
 export async function describeImage({
   engine,
   imageUrl,
@@ -823,15 +977,70 @@ export async function describeImage({
   question = "",
   fetchImpl = fetch,
   timeoutMs = DEFAULT_VISION_TIMEOUT_MS,
+  retryDelaysMs = VISION_RETRY_DELAYS_MS,
+}) {
+  let lastTransient;
+  for (let attempt = 0; attempt <= retryDelaysMs.length; attempt += 1) {
+    if (attempt) {
+      await new Promise((resolve) => setTimeout(resolve, retryDelaysMs[attempt - 1]));
+      // The caller went away between attempts; there is nobody to read for.
+      if (signal?.aborted) break;
+    }
+    try {
+      return await attemptDescribe({
+        engine,
+        imageUrl,
+        gatewayBase,
+        headers,
+        nativeCall,
+        effort,
+        signal,
+        question,
+        fetchImpl,
+        timeoutMs,
+      });
+    } catch (error) {
+      if (!(error instanceof TransientVisionError)) throw error;
+      lastTransient = error;
+    }
+  }
+  throw new Error(lastTransient?.message || `${engine.displayName || engine.slug} could not be reached`);
+}
+
+async function attemptDescribe({
+  engine,
+  imageUrl,
+  gatewayBase,
+  headers,
+  nativeCall,
+  effort,
+  signal,
+  question,
+  fetchImpl,
+  timeoutMs,
 }) {
   const request = describeRequest(engine, imageUrl, gatewayBase, headers, nativeCall, effort, question);
   const timeout = AbortSignal.timeout(timeoutMs);
-  const upstream = await fetchImpl(request.url, {
-    method: "POST",
-    headers: request.headers,
-    body: JSON.stringify(request.body),
-    signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
-  });
+  let upstream;
+  try {
+    upstream = await fetchImpl(request.url, {
+      method: "POST",
+      headers: request.headers,
+      body: JSON.stringify(request.body),
+      signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
+    });
+  } catch (error) {
+    // The transport's own wording is kept: "fetch failed" against a loopback
+    // engine is how an operator learns their own server is down, and replacing
+    // it with something tidier would throw that away. It is still retried --
+    // a server that is restarting answers the second ask.
+    if (error?.name === "TimeoutError") {
+      throw new Error(`${engine.displayName || engine.slug} took too long to read it`);
+    }
+    const message = error?.message || `${engine.displayName || engine.slug} could not be reached`;
+    if (isTransientError(error)) throw new TransientVisionError(message);
+    throw new Error(message);
+  }
   const bytes = Buffer.from(await upstream.arrayBuffer());
   if (bytes.length > MAX_VISION_RESPONSE_BYTES) {
     throw new Error(`${engine.displayName || engine.slug} returned an oversized response`);
@@ -839,9 +1048,9 @@ export async function describeImage({
   if (!upstream.ok) {
     // Never echo the gateway body: it can carry provider error text that names
     // credential state.
-    throw new Error(
-      `${engine.displayName || engine.slug} answered HTTP ${upstream.status}`,
-    );
+    const message = `${engine.displayName || engine.slug} answered HTTP ${upstream.status}`;
+    if (isTransientStatus(upstream.status)) throw new TransientVisionError(message);
+    throw new Error(message);
   }
   let text;
   try {
@@ -857,7 +1066,13 @@ export async function describeImage({
         : `${engine.displayName || engine.slug} returned an unreadable response`,
     );
   }
-  if (!text) throw new Error(`${engine.displayName || engine.slug} returned no description`);
+  // An empty reply is an engine that hiccupped, not one that refuses: worth
+  // one more ask before the image is written off.
+  if (!text) {
+    throw new TransientVisionError(
+      `${engine.displayName || engine.slug} returned no description`,
+    );
+  }
   return text.length > VISION_EVIDENCE_MAX_CHARS
     ? `${text.slice(0, VISION_EVIDENCE_MAX_CHARS)}\n${TRUNCATION_NOTICE}`
     : text;
@@ -891,11 +1106,12 @@ async function runBounded(jobs, limit, run) {
 export async function substituteImages(input, describe) {
   if (!Array.isArray(input)) return { input, images: 0, described: 0, failed: 0 };
   const paths = viewImagePaths(input);
+  // The newest image is read for the newest question; everything older keeps
+  // the question it was already read for, and its record.
+  const active = activeImageUrls(input);
+  const newest = latestQuestion(input);
   // A tool result has no words of its own, so the words it is read for are the
-  // ones that led to it: the last thing the user asked. That is what makes the
-  // `view_image` round trip free -- same image, same question, same cache key
-  // as the paste it came from -- and it is stable on every later turn, because
-  // a follow-up question is appended after the tool result, never before it.
+  // ones that led to it: the last thing the user asked before it.
   let lastQuestion = "";
   // Numbering is fixed here, walking the turn in order, so "Image 3" means the
   // third image in the conversation no matter which read finishes first.
@@ -920,7 +1136,7 @@ export async function substituteImages(input, describe) {
       if (url === undefined) return { part };
       const job = {
         url,
-        question,
+        question: active.has(url) && newest ? newest : question,
         ordinal: jobs.length + 1,
         source: sourceForImage(item, field, index, paths),
       };
