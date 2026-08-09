@@ -474,6 +474,36 @@ function upstreamHeaders(requestHeaders, body, apiKey, provider) {
   return headers;
 }
 
+async function normalizeUpstreamResponse(upstream, model) {
+  const contentType = String(upstream.headers.get("content-type") || "").toLowerCase();
+  if (model.requestProfile !== "clinepass" || !contentType.includes("application/json")) {
+    return upstream;
+  }
+
+  const body = Buffer.from(await upstream.arrayBuffer());
+  let payload;
+  try {
+    payload = JSON.parse(body.toString("utf8"));
+  } catch {
+    payload = undefined;
+  }
+  const nested = payload?.data;
+  const wrapped =
+    Array.isArray(nested?.choices) &&
+    nested.choices.length > 0 &&
+    (!Array.isArray(payload?.choices) || payload.choices.length === 0);
+  const normalizedBody = wrapped
+    ? Buffer.from(JSON.stringify(nested), "utf8")
+    : body;
+  const headers = new Headers(upstream.headers);
+  headers.delete("content-length");
+  return new Response(normalizedBody, {
+    status: upstream.status,
+    statusText: upstream.statusText,
+    headers,
+  });
+}
+
 function healthPayload() {
   const providers = {};
   const enabled = new Set(readProviderSelection());
@@ -555,13 +585,14 @@ async function handleRequest(request, response) {
     body: normalized.body,
     signal: controller.signal,
   });
-  await pipeResponse(upstream, response);
+  const normalizedUpstream = await normalizeUpstreamResponse(upstream, normalized.model);
+  await pipeResponse(normalizedUpstream, response);
   // Harvest the provider's own quota report from the response it just sent.
   // Costs no extra request and works for any provider that emits the standard
   // headers, so a newly added provider reports limits without bespoke code.
   // Recorded after the body streams because persisting is synchronous I/O and
   // must never sit in time-to-first-byte.
-  const rateLimit = parseRateLimitHeaders(upstream.headers);
+  const rateLimit = parseRateLimitHeaders(normalizedUpstream.headers);
   // Variant-routed responses meter the same upstream subscription, so quota
   // headers land under the family's canonical provider id.
   if (rateLimit) recordRateLimitSnapshot(canonicalProviderId(normalized.provider.id), rateLimit);

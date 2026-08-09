@@ -1672,7 +1672,7 @@ test("API forwarder replaces caller auth and enforces Kimi K3 API parameters", a
   }
 });
 
-test("API forwarder routes ClinePass with isolated auth and unchanged stream tools", async () => {
+test("API forwarder routes ClinePass with isolated auth and unwraps JSON completions", async () => {
   const upstreamRequests = [];
   const upstream = await mockServer(async (request, response) => {
     upstreamRequests.push({
@@ -1680,7 +1680,13 @@ test("API forwarder routes ClinePass with isolated auth and unchanged stream too
       headers: request.headers,
       body: await bodyJson(request),
     });
-    json(response, 200, { choices: [] });
+    json(response, 200, {
+      success: true,
+      data: {
+        id: "wrapped-clinepass-response",
+        choices: [{ index: 0, message: { role: "assistant", content: "ok" } }],
+      },
+    });
   });
   const forwarderPort = await openPort();
   const forwarder = run("api-forwarder.mjs", {
@@ -1724,6 +1730,10 @@ test("API forwarder routes ClinePass with isolated auth and unchanged stream too
       },
     );
     assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), {
+      id: "wrapped-clinepass-response",
+      choices: [{ index: 0, message: { role: "assistant", content: "ok" } }],
+    });
     const request = upstreamRequests[0];
     assert.equal(request.url, "/api/v1/chat/completions");
     assert.equal(request.headers.authorization, "Bearer TEST_CLINEPASS_KEY");
