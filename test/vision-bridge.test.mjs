@@ -15,21 +15,26 @@ import {
   inputHasImage,
   LOCAL_ENGINE_SLUG,
   localVisionEngine,
+  missingEvidenceSections,
   nativeAccountKey,
   nativeVisionCandidates,
   nativeVisionEngine,
+  latestQuestion,
   questionForImage,
   rankVisionEngines,
   resolveVisionEngine,
+  resolveVisionEngines,
   responseText,
   streamedResponseText,
   stripImages,
   substituteImages,
   supportsImageInput,
+  TRUNCATION_NOTICE,
   visionEngineEfforts,
   VisionStreamError,
   VISION_EVIDENCE_MAX_CHARS,
   VISION_QUESTION_MAX_CHARS,
+  VISION_RECORD_MAX_CHARS,
 } from "../src/vision-bridge.mjs";
 import { nativeVisionEngines } from "../src/vision-engines.mjs";
 
@@ -335,6 +340,171 @@ test("images survive as text when no engine can read them", () => {
   assert.match(input[0].content[1].text, /could not be read: the bridge is off/);
 });
 
+// What Codex actually sends after a text-only model reaches for `view_image` on
+// the path that came with a paste: the same bytes again, this time as the output
+// of a tool call rather than as part of a message.
+function pastedThenViewedImage(url = "data:image/png;base64,AAAA") {
+  return [
+    {
+      type: "message",
+      role: "user",
+      content: [
+        { type: "input_text", text: "what does this say?" },
+        // Codex's own wrapper around a pasted file, verbatim.
+        { type: "input_text", text: '<image name=[Image #1] path="/tmp/shot.png">' },
+        { type: "input_image", image_url: url, detail: "high" },
+        { type: "input_text", text: "</image>" },
+      ],
+    },
+    {
+      type: "function_call",
+      call_id: "call_1",
+      name: "view_image",
+      arguments: '{"path":"/tmp/shot.png"}',
+    },
+    {
+      type: "function_call_output",
+      call_id: "call_1",
+      output: [{ type: "input_image", image_url: url, detail: "high" }],
+    },
+  ];
+}
+
+test("an image in a tool result is found, not just one in a message", () => {
+  assert.equal(inputHasImage(pastedThenViewedImage()), true);
+  assert.equal(
+    inputHasImage([
+      { type: "function_call_output", call_id: "call_1", output: "plain text" },
+    ]),
+    false,
+  );
+});
+
+test("a tool result's image is read for the question that led to it, and costs nothing twice", async () => {
+  const cache = createEvidenceCache();
+  const questions = [];
+  let calls = 0;
+  const transcript = [
+    "## Summary\nA login screen.",
+    "## Identification\nA sign-in page. (medium confidence)",
+    "## Text\nSign in",
+    "## Layout\n- title (top)",
+    "## Uncertain\n(nothing)",
+  ].join("\n\n");
+  const describe = async (url, _ordinal, question) => {
+    questions.push(question);
+    const cached = cache.get(url, question);
+    if (cached !== undefined) return { text: cached, engineName: "Qwen3.6 Flash" };
+    calls += 1;
+    return {
+      text: cache.set(url, question, transcript),
+      engineName: "Qwen3.6 Flash",
+    };
+  };
+  const result = await substituteImages(pastedThenViewedImage(), describe);
+  assert.equal(result.images, 2);
+  assert.equal(result.described, 2);
+  assert.equal(result.failed, 0);
+  // The paste and the tool result ask the engine the same thing, so the second
+  // read is a cache hit rather than a second purchase of the same transcript.
+  // Codex's own `<image …>` wrapper is markup, not something the user asked,
+  // so it never reaches the engine — and because it does not, both reads share
+  // one cache key.
+  assert.deepEqual(questions, ["what does this say?", "what does this say?"]);
+  assert.equal(calls, 1);
+  const [message, , toolResult] = result.input;
+  // Both images name the file they are a reading of: the paste from Codex's
+  // wrapper, the tool result from the `view_image` call that asked for it.
+  // That is what stops the model paying for a round trip to open it again.
+  const evidence = message.content.find((part) => part.text.includes("IMAGE EVIDENCE"));
+  assert.match(evidence.text, /Image 1 \(path=\/tmp\/shot\.png\)/);
+  assert.match(evidence.text, /you do not need to open it again/);
+  // Nothing image-shaped may survive into the tool result, and a tool result
+  // that is now pure text goes back on the wire as ordinary text. The reading
+  // itself is not repeated: it is the same image, one item above.
+  assert.equal(typeof toolResult.output, "string");
+  assert.match(toolResult.output, /Image 2 \(path=\/tmp\/shot\.png\)/);
+  assert.match(toolResult.output, /is the same image as Image 1/);
+  assert.doesNotMatch(toolResult.output, /IMAGE EVIDENCE/);
+  assert.doesNotMatch(JSON.stringify(result.input), /input_image|image_url/);
+});
+
+test("an incomplete reading says so, and only then mentions looking again", async () => {
+  const full = [
+    "## Summary\nA login screen.",
+    "## Identification\nA sign-in page. (medium confidence)",
+    "## Text\nSign in",
+    "## Layout\n- title (top)",
+    "## Uncertain\n(nothing)",
+  ].join("\n\n");
+  const complete = evidenceBlock(full, { ordinal: 1, engineName: "Qwen3.6 Flash" });
+  assert.doesNotMatch(complete, /incomplete/);
+  assert.doesNotMatch(complete, /open the image again/);
+
+  // A reader that answered in a shape of its own leaves the model unable to
+  // tell "not in the image" from "not in the transcript". It is told -- but not
+  // invited to look again, because a reader that ignores the format returns the
+  // same shape on the next pass and the invitation would buy a loop.
+  const thin = evidenceBlock("A login screen, probably.", { ordinal: 1, engineName: "X" });
+  assert.match(thin, /did not come back in the shape it was asked for/);
+  assert.match(thin, /Text, Layout, Uncertain/);
+  assert.doesNotMatch(thin, /open the image again/);
+
+  // `## Data` is optional by contract, so its absence is not a bad read.
+  assert.deepEqual(missingEvidenceSections(full), []);
+
+  // Truncation is the one case a second look can actually fix, so it is the
+  // one case that mentions it.
+  const cut = evidenceBlock(`${full}\n${TRUNCATION_NOTICE}`, { ordinal: 1, engineName: "X" });
+  assert.match(cut, /cut off at the router's size limit/);
+  assert.match(cut, /open the image again/);
+});
+
+test("images in one turn are read together, and keep their numbering", async () => {
+  const turn = [
+    {
+      type: "message",
+      role: "user",
+      content: [
+        { type: "input_text", text: "compare these" },
+        { type: "input_image", image_url: "data:image/png;base64,AAAA" },
+        { type: "input_image", image_url: "data:image/png;base64,BBBB" },
+        { type: "input_image", image_url: "data:image/png;base64,CCCC" },
+      ],
+    },
+  ];
+  let running = 0;
+  let peak = 0;
+  const describe = async (url, ordinal) => {
+    running += 1;
+    peak = Math.max(peak, running);
+    // The slowest read finishes first, so sequential numbering cannot be an
+    // accident of completion order.
+    await new Promise((resolve) => setTimeout(resolve, url.endsWith("AAAA") ? 30 : 1));
+    running -= 1;
+    return { text: `## Summary\nimage ${ordinal}`, engineName: "Qwen3.6 Flash" };
+  };
+  const result = await substituteImages(turn, describe);
+  assert.equal(result.described, 3);
+  assert.ok(peak > 1, "reads must overlap rather than queue one behind another");
+  const texts = result.input[0].content.slice(1).map((part) => part.text);
+  assert.match(texts[0], /\[Image 1 —[\s\S]*image 1/);
+  assert.match(texts[1], /\[Image 2 —[\s\S]*image 2/);
+  assert.match(texts[2], /\[Image 3 —[\s\S]*image 3/);
+});
+
+test("a tool result's image survives as text when no engine can read it", () => {
+  const { input, images } = stripImages(pastedThenViewedImage(), "the bridge is off");
+  assert.equal(images, 2);
+  const toolResult = input[2];
+  assert.equal(typeof toolResult.output, "string");
+  assert.match(
+    toolResult.output,
+    /Image 2 \(path=\/tmp\/shot\.png\) could not be read: the bridge is off/,
+  );
+  assert.doesNotMatch(JSON.stringify(input), /input_image|image_url/);
+});
+
 test("the same image is described once and served from cache after that", async () => {
   const cache = createEvidenceCache();
   let calls = 0;
@@ -389,7 +559,7 @@ test("the question comes from the image's own message, not the newest one", () =
 });
 
 // Summary, Text, Layout, Data, Uncertain.
-const VISION_EVIDENCE_SECTIONS = 5;
+const VISION_EVIDENCE_SECTIONS = 6;
 
 test("a question is added to the engine's instructions without replacing them", async () => {
   const call = async (question) => {
@@ -428,14 +598,18 @@ test("a question is added to the engine's instructions without replacing them", 
   assert.equal(plain.match(/^## /gm).length, VISION_EVIDENCE_SECTIONS);
 });
 
-test("two questions about one image are described separately, each cached once", async () => {
+test("two questions about one image are read separately and kept together", async () => {
   const cache = createEvidenceCache();
   const asked = [];
+  let last;
   const describe = async (url, _ordinal, question) => {
     const cached = cache.get(url, question);
-    if (cached !== undefined) return { text: cached, engineName: "Qwen3.6 Flash" };
+    if (cached !== undefined) return { text: (last = cached), engineName: "Qwen3.6 Flash" };
     asked.push(question);
-    return { text: cache.set(url, question, `read: ${question}`), engineName: "Qwen3.6 Flash" };
+    return {
+      text: (last = cache.set(url, question, `read: ${question}`)),
+      engineName: "Qwen3.6 Flash",
+    };
   };
   const turnAsking = (text) =>
     userTurn([
@@ -450,7 +624,305 @@ test("two questions about one image are described separately, each cached once",
   await substituteImages(turnAsking("what colour is the header?"), describe);
 
   assert.deepEqual(asked, ["what is the error code?", "what colour is the header?"]);
-  assert.equal(cache.size, 2);
+  // One record per image, holding both readings — so the answer to the first
+  // question is still in front of the model on the turn that asks the second.
+  assert.equal(cache.size, 1);
+  assert.match(last, /read: what is the error code\?/);
+  assert.match(last, /read: what colour is the header\?/);
+  assert.match(last, /the same image, read again for: "what colour is the header\?"/);
+});
+
+// The story this whole design exists for: paste a screenshot, ask something,
+// then ask something *else* about the same picture. The second question has to
+// reach the reader -- that is what "ask the model that can see" means -- and
+// the first answer has to survive, because the model is still being shown both.
+// Codex sends its own bookkeeping as user-role messages and prefixes the
+// operator's words with the files they mentioned. Taking the newest user
+// message literally handed the reader a plugin catalogue or a temp-file path to
+// describe -- which is exactly what it did to a screenshot on 2026-08-09.
+test("the question is the operator's words, not Codex's bookkeeping", () => {
+  const conversation = [
+    {
+      type: "message",
+      role: "user",
+      content: [
+        { type: "input_text", text: "<recommended_plugins>\nAirtable\nAsana\n</recommended_plugins>" },
+        { type: "input_text", text: "<environment_context>\n  <cwd>/x</cwd>\n</environment_context>" },
+      ],
+    },
+    {
+      type: "message",
+      role: "user",
+      content: [
+        {
+          type: "input_text",
+          text:
+            "\n# Files mentioned by the user:\n\n" +
+            "## Screenshot 2026-08-09 at 4.53.53\u202fAM.png: /Users/me/Desktop/Screenshot.png\n\n" +
+            "## My request:\nwhat img is this?\n",
+        },
+        { type: "input_text", text: '<image name=[Image #1] path="/Users/me/Desktop/Screenshot.png">' },
+        { type: "input_image", image_url: "data:image/png;base64,AAAA" },
+        { type: "input_text", text: "</image>" },
+      ],
+    },
+  ];
+  assert.equal(latestQuestion(conversation), "what img is this?");
+  assert.equal(questionForImage(conversation[1]), "what img is this?");
+  // A context-only message is nobody's question.
+  assert.equal(latestQuestion([conversation[0]]), "");
+  // Without the marker the whole text is the question, as before.
+  assert.equal(
+    latestQuestion([{ type: "message", role: "user", content: [{ type: "input_text", text: "read the dialog" }] }]),
+    "read the dialog",
+  );
+  assert.equal(latestQuestion([]), "");
+  assert.equal(latestQuestion(undefined), "");
+});
+
+// "Every time I submit an image, it gets read" is a reliability claim, and the
+// engine is a rate-limited account across a network. A 429 or a 502 that would
+// have cleared in a second used to cost the operator that image for the whole
+// turn.
+// Resolving an engine and reaching it are different questions. Both of these
+// happened within an hour of live testing: the native engine answered 401 after
+// a session lapsed, and a provider's endpoint answered 503. Either one used to
+// mean every pasted image degraded to "could not be read" until somebody
+// noticed.
+test("the reader is a list, so one unreachable engine does not cost the image", () => {
+  const candidates = () => [FLASH_VISION, FLAGSHIP_VISION, LOOPBACK_VISION];
+
+  // The operator's choice comes first, then the other credentialed models.
+  const pinned = resolveVisionEngines(candidates, { enabled: true, engine: FLAGSHIP_VISION.slug });
+  assert.deepEqual(pinned.map((engine) => engine.slug), [FLAGSHIP_VISION.slug, FLASH_VISION.slug]);
+
+  // Auto puts the cheapest first and still carries a spare.
+  const auto = resolveVisionEngines(candidates, { enabled: true, engine: null });
+  assert.deepEqual(auto.map((engine) => engine.slug), [FLASH_VISION.slug, FLAGSHIP_VISION.slug]);
+
+  // A machine-served engine is never a fallback: it is only there while the
+  // operator's own runtime is running, which is why auto never picks one.
+  assert.ok(!auto.some((engine) => engine.slug === LOOPBACK_VISION.slug));
+
+  // ...and pinning one means the operator named their machine on purpose, so
+  // nothing falls off it onto a provider's quota they did not choose to spend.
+  const local = resolveVisionEngines(candidates, {
+    enabled: true,
+    engine: LOCAL_ENGINE_SLUG,
+    local: { model: "moondream", baseUrl: "http://127.0.0.1:11434/v1" },
+  });
+  assert.equal(local.length, 1);
+  assert.equal(local[0].slug, LOCAL_ENGINE_SLUG);
+
+  // Off is still off, and an unresolvable pin is still an operator-visible
+  // problem rather than a silent switch to another model.
+  assert.deepEqual(resolveVisionEngines(candidates, { enabled: false }), []);
+  assert.deepEqual(resolveVisionEngines(candidates, { enabled: true, engine: "nobody/here" }), []);
+});
+
+// The credentialed list costs a synchronous credential probe per provider, so
+// asking for a fallback must not mean asking for that list twice.
+test("the candidate list is still built at most once, fallback or not", () => {
+  let built = 0;
+  const candidates = () => {
+    built += 1;
+    return [FLASH_VISION, FLAGSHIP_VISION];
+  };
+  assert.equal(resolveVisionEngines(candidates, { enabled: true, engine: null }).length, 2);
+  assert.equal(built, 1);
+
+  built = 0;
+  resolveVisionEngines(candidates, { enabled: false });
+  assert.equal(built, 0, "a switched-off bridge still consulted the credentialed model list");
+
+  assert.throws(
+    () => resolveVisionEngines([FLASH_VISION], { enabled: true, engine: null }),
+    /function returning the selected, credentialed candidates/,
+  );
+});
+
+test("a read that fails transiently is asked again; a refusal is not", async () => {
+  const engine = localVisionEngine({ local: { model: "moondream" } });
+  const ok = () =>
+    new Response(JSON.stringify({ choices: [{ message: { content: "## Summary\nA chart." } }] }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+
+  for (const status of [429, 503]) {
+    let calls = 0;
+    const text = await describeImage({
+      engine,
+      imageUrl: "data:image/png;base64,AAAA",
+      gatewayBase: "http://unused/v1",
+      headers: {},
+      retryDelaysMs: [1, 1],
+      fetchImpl: async () => {
+        calls += 1;
+        return calls === 1 ? new Response("", { status }) : ok();
+      },
+    });
+    assert.equal(calls, 2, `HTTP ${status} should have been retried`);
+    assert.match(text, /A chart\./);
+  }
+
+  // An empty reply is a hiccup, not a refusal.
+  let empty = 0;
+  await describeImage({
+    engine,
+    imageUrl: "data:image/png;base64,AAAA",
+    gatewayBase: "http://unused/v1",
+    headers: {},
+    retryDelaysMs: [1],
+    fetchImpl: async () => {
+      empty += 1;
+      return empty === 1
+        ? new Response(JSON.stringify({ choices: [] }), { status: 200 })
+        : ok();
+    },
+  });
+  assert.equal(empty, 2);
+
+  // A refusal is final: asking again buys the identical refusal.
+  for (const status of [400, 401, 403, 404]) {
+    let calls = 0;
+    await assert.rejects(
+      describeImage({
+        engine,
+        imageUrl: "data:image/png;base64,AAAA",
+        gatewayBase: "http://unused/v1",
+        headers: {},
+        retryDelaysMs: [1, 1],
+        fetchImpl: async () => {
+          calls += 1;
+          return new Response("", { status });
+        },
+      }),
+      new RegExp(`answered HTTP ${status}`),
+    );
+    assert.equal(calls, 1, `HTTP ${status} must not be retried`);
+  }
+
+  // Retries are bounded, and the last transient message is what the turn says.
+  let attempts = 0;
+  await assert.rejects(
+    describeImage({
+      engine,
+      imageUrl: "data:image/png;base64,AAAA",
+      gatewayBase: "http://unused/v1",
+      headers: {},
+      retryDelaysMs: [1, 1],
+      fetchImpl: async () => {
+        attempts += 1;
+        return new Response("", { status: 502 });
+      },
+    }),
+    /answered HTTP 502/,
+  );
+  assert.equal(attempts, 3);
+});
+
+// A slow engine is not retried: the per-attempt budget is already two minutes,
+// and spending another two turns one late answer into a turn that never ends.
+test("a timeout is reported rather than tried again", async () => {
+  let calls = 0;
+  await assert.rejects(
+    describeImage({
+      engine: localVisionEngine({ local: { model: "moondream" } }),
+      imageUrl: "data:image/png;base64,AAAA",
+      gatewayBase: "http://unused/v1",
+      headers: {},
+      retryDelaysMs: [1, 1],
+      fetchImpl: async () => {
+        calls += 1;
+        const error = new Error("timed out");
+        error.name = "TimeoutError";
+        throw error;
+      },
+    }),
+    /took too long to read it/,
+  );
+  assert.equal(calls, 1);
+});
+
+test("a follow-up question is asked of the image, and the earlier reading is kept", async () => {
+  const cache = createEvidenceCache();
+  const url = "data:image/png;base64,AAAA";
+  const asked = [];
+  const describe = async (image, _ordinal, question) => {
+    const cached = cache.get(image, question);
+    if (cached !== undefined) return { text: cached, engineName: "Qwen3.6 Flash" };
+    asked.push(question);
+    return { text: cache.set(image, question, `read: ${question}`), engineName: "Qwen3.6 Flash" };
+  };
+  const paste = {
+    type: "message",
+    role: "user",
+    content: [
+      { type: "input_text", text: "what colour is it?" },
+      { type: "input_image", image_url: url },
+    ],
+  };
+  const says = (text) => ({ type: "message", role: "user", content: [{ type: "input_text", text }] });
+
+  // Turn one.
+  await substituteImages([paste], describe);
+  assert.deepEqual(asked, ["what colour is it?"]);
+
+  // Codex resends the conversation with nothing new: no question has changed,
+  // so nothing is bought.
+  await substituteImages([paste], describe);
+  assert.deepEqual(asked, ["what colour is it?"]);
+
+  // Turn two asks something else. That reaches the reader, once.
+  const second = await substituteImages([paste, says("what does it say?")], describe);
+  assert.deepEqual(asked, ["what colour is it?", "what does it say?"]);
+  const rendered = JSON.stringify(second.input);
+  assert.match(rendered, /read: what does it say\?/);
+  // ...and the answer to the first question is still in front of the model.
+  assert.match(rendered, /read: what colour is it\?/);
+
+  // Asking it again costs nothing.
+  await substituteImages([paste, says("what does it say?")], describe);
+  assert.equal(asked.length, 2);
+});
+
+// Only the newest image follows the conversation. A chat holding ten
+// screenshots must not turn one new question into ten new reads.
+test("a new question re-reads the newest image and leaves older ones alone", async () => {
+  const asked = [];
+  const describe = async (url, _ordinal, question) => {
+    asked.push(`${url.slice(-4)}:${question}`);
+    return { text: `read ${url.slice(-4)} for ${question}`, engineName: "Qwen3.6 Flash" };
+  };
+  const paste = (url, text) => ({
+    type: "message",
+    role: "user",
+    content: [
+      { type: "input_text", text },
+      { type: "input_image", image_url: url },
+    ],
+  });
+  const older = paste("data:image/png;base64,AAAA", "what is the first one?");
+  const newer = paste("data:image/png;base64,BBBB", "what is the second one?");
+  await substituteImages(
+    [older, newer, { type: "message", role: "user", content: [{ type: "input_text", text: "and the totals?" }] }],
+    describe,
+  );
+  // The newest image is read for the newest question; the older one keeps the
+  // question it was already read for.
+  assert.deepEqual(asked, ["AAAA:what is the first one?", "BBBB:and the totals?"]);
+});
+
+test("a record drops the readings it cannot fit, and never the first one", () => {
+  const cache = createEvidenceCache();
+  const url = "data:image/png;base64,AAAA";
+  cache.set(url, "first", `base ${"a".repeat(VISION_RECORD_MAX_CHARS - 20)}`);
+  const full = cache.set(url, "second", "a later reading");
+  assert.match(full, /^base a{100}/);
+  assert.match(full, /1 further reading of this image omitted/);
+  assert.doesNotMatch(full, /a later reading/);
+  assert.ok(full.length <= VISION_RECORD_MAX_CHARS + 200);
 });
 
 test("response text is read from both Responses and chat-completions shapes", () => {
@@ -1006,8 +1478,8 @@ test("the request path hands the engine resolver a list it has not built yet", a
   const body = source.slice(start, source.indexOf("\n}\n", start));
   assert.match(
     body,
-    /resolveVisionEngine\(\s*\(\)\s*=>/,
-    "bridgeVisionInput must pass resolveVisionEngine a thunk, not an assembled array",
+    /resolveVisionEngines\(\s*\(\)\s*=>/,
+    "bridgeVisionInput must pass resolveVisionEngines a thunk, not an assembled array",
   );
   // `selectedConfiguredListedModels()` is the synchronous credential scan. It
   // may only appear inside that thunk -- never on a line the handler runs before
@@ -1058,6 +1530,31 @@ test("a bridged read is recorded rather than spent silently", async () => {
     /if \(!QUIET\)/,
     "the vision-bridge line must not be gated on QUIET",
   );
+});
+
+// The list only helps if the read path actually walks it. Asserted against the
+// source because the loop lives inside the request handler, the same way the
+// QUIET and usage-event rules above are asserted.
+test("the read path tries every resolved engine before giving up on an image", async () => {
+  const source = await readFile(path.join(repoRoot, "src/router.mjs"), "utf8");
+  const bridge = source.slice(
+    source.indexOf("async function bridgeVisionInput"),
+    source.indexOf("function isOpaqueEncryptedContent"),
+  );
+  assert.match(bridge, /for \(const \[index, engine\] of engines\.entries\(\)\)/);
+  // A failure moves to the next engine rather than ending the image.
+  assert.match(bridge, /catch \(error\) \{\s*lastError = error;/);
+  // ...and when they all refuse, the turn says what the last one said.
+  assert.match(bridge, /throw lastError;/);
+  // A fallback is never silent: the engine that actually read it is named in
+  // the evidence, and the log line says a fallback happened.
+  assert.match(bridge, /engineName: engine\.displayName \|\| engine\.slug/);
+  assert.match(bridge, /fellBack/);
+  // Another provider beats another attempt: an engine is only retried when
+  // there is nothing else left to try, or a paste waits out a retry ladder
+  // against a dead endpoint while a working engine sits behind it.
+  assert.match(bridge, /const last = index === engines\.length - 1;/);
+  assert.match(bridge, /last \? undefined : \[\]/);
 });
 
 test("a cached native transcript is not replayed for a different account", () => {

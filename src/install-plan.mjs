@@ -16,9 +16,17 @@ import { trayBundleDir } from "./tray-install.mjs";
 
 export const SOURCE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
-// litellm 1.95.0 needs fastapi<0.140 (get_flat_dependant was removed); re-test
-// before lifting either pin.
-export const PYTHON_REQUIREMENTS = ["litellm[proxy]==1.95.0", "fastapi==0.139.2"];
+// litellm still needs fastapi<0.140: `get_flat_dependant` was removed in 0.140
+// and `litellm/proxy/management_endpoints/management_v1/common.py` imports it,
+// so the proxy dies on startup with an ImportError. Its own metadata does not
+// say so -- 1.96.0 declares `fastapi<1.0,>=0.136.3` -- which is why the cap is
+// held here and why lifting it needs the gateway *booted*, not just resolved.
+// Verified against 1.96.0 by starting the proxy on both pins.
+//
+// The litellm pin itself is a security floor as much as a version: 1.95.0
+// required `cryptography>=48.0.1,<49.0`, which no patched cryptography can
+// satisfy (GHSA-g6cj-pr64-35w5 is fixed in 50.0.0). Do not move it back.
+export const PYTHON_REQUIREMENTS = ["litellm[proxy]==1.96.0", "fastapi==0.139.2"];
 
 // Pinning the two direct requirements left their whole transitive tree floating:
 // every install re-resolved `litellm[proxy]` against PyPI and executed whatever

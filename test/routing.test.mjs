@@ -9,7 +9,6 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -17,6 +16,7 @@ import { fileURLToPath } from "node:url";
 import { zstdCompressSync, zstdDecompressSync } from "node:zlib";
 
 import { callerBaseUrl } from "../src/caller-auth.mjs";
+import { openPort } from "./port-pool.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const INTERNAL_KEY = "test-internal-service-key-with-sufficient-length";
@@ -43,19 +43,6 @@ async function bodyJson(request) {
   // way Codex itself does on the way in, so a mock backend has to decode one.
   const body = request.headers["content-encoding"] === "zstd" ? zstdDecompressSync(raw) : raw;
   return JSON.parse(body.toString("utf8"));
-}
-
-async function openPort() {
-  const server = net.createServer();
-  await new Promise((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  assert.ok(typeof address === "object" && address);
-  const port = address.port;
-  await new Promise((resolve) => server.close(resolve));
-  return port;
 }
 
 async function mockServer(handler) {
@@ -1024,6 +1011,82 @@ test("router sends standalone image requests only to the native OpenAI backend",
   }
 });
 
+test("router sends standalone web search only to the native OpenAI backend", async () => {
+  const nativeRequests = [];
+  const native = await mockServer(async (request, response) => {
+    nativeRequests.push({
+      url: request.url,
+      headers: request.headers,
+      body: await bodyJson(request),
+    });
+    json(response, 200, {
+      output: "search result",
+      results: [{ type: "text_result", ref_id: "turn0search0" }],
+    });
+  });
+  const routerPort = await openPort();
+  const router = run("router.mjs", {
+    CODEX_ROUTER_PORT: String(routerPort),
+    CODEX_NATIVE_BASE_URL: `http://127.0.0.1:${native.port}/backend-api/codex`,
+    CODEX_ROUTER_QUIET: "1",
+  });
+  const headers = {
+    Authorization: "Bearer CODEX_CALLER_SECRET",
+    "ChatGPT-Account-Id": "account-secret",
+    "X-Codex-Installation-Id": "installation-secret",
+    "X-Codex-Turn-Metadata": "turn-metadata",
+    "X-Private-Header": "must-not-forward",
+    "Content-Type": "application/json",
+  };
+
+  try {
+    await waitFor(`${routerBase(routerPort)}/models`, router);
+    const searchBody = zstdCompressSync(
+      Buffer.from(
+        JSON.stringify({
+          id: "search-session",
+          model: "gpt-5.6-sol",
+          commands: { search_query: [{ q: "OpenAI news" }] },
+          settings: { external_web_access: true },
+        }),
+      ),
+    );
+    const search = await fetch(`${routerBase(routerPort)}/alpha/search?source=codex`, {
+      method: "POST",
+      headers: { ...headers, "Content-Encoding": "zstd" },
+      body: searchBody,
+    });
+    const searchPayload = await search.json();
+    assert.equal(search.status, 200, JSON.stringify(searchPayload));
+    assert.deepEqual(searchPayload, {
+      output: "search result",
+      results: [{ type: "text_result", ref_id: "turn0search0" }],
+    });
+
+    assert.equal(nativeRequests.length, 1);
+    assert.equal(nativeRequests[0].url, "/backend-api/codex/alpha/search?source=codex");
+    assert.equal(nativeRequests[0].headers.authorization, "Bearer CODEX_CALLER_SECRET");
+    assert.equal(nativeRequests[0].headers["chatgpt-account-id"], "account-secret");
+    assert.equal(nativeRequests[0].headers["x-codex-installation-id"], "installation-secret");
+    assert.equal(nativeRequests[0].headers["x-codex-turn-metadata"], "turn-metadata");
+    assert.equal(nativeRequests[0].headers["x-private-header"], undefined);
+    assert.equal(nativeRequests[0].headers["content-encoding"], undefined);
+    assert.equal(nativeRequests[0].body.model, "gpt-5.6-sol");
+    assert.deepEqual(nativeRequests[0].body.commands.search_query, [{ q: "OpenAI news" }]);
+
+    const unsupported = await fetch(`${routerBase(routerPort)}/alpha/embeddings`, {
+      method: "POST",
+      headers,
+      body: "{}",
+    });
+    assert.equal(unsupported.status, 404);
+    assert.equal(nativeRequests.length, 1);
+  } finally {
+    await stopChild(router);
+    await closeServer(native.server);
+  }
+});
+
 test("router synthesizes routed compaction and safely replays it to native models", async () => {
   const gatewayRequests = [];
   const gateway = await mockServer(async (request, response) => {
@@ -1440,7 +1503,10 @@ function curatedGeminiModel() {
           reasoningLevels: [{ effort: "high", description: "Adaptive reasoning" }],
           contextWindow: 131072,
           autoCompact: 110000,
-          inputModalities: ["text"],
+          // Honest for this model, and load-bearing for the signature test
+          // below: a model declared text-only has its image parts replaced
+          // before any Gemini-specific handling is reached.
+          inputModalities: ["text", "image"],
           compHash: "gemini-api-gemini-3-5-flash-user-v1",
         },
       ],
@@ -1449,6 +1515,64 @@ function curatedGeminiModel() {
   );
   return { dir, file, gatewayModel: "gemini-api-gemini-3-5-flash" };
 }
+
+// The forwarder sits downstream of the gateway, so Codex's own traffic reaches
+// it already bridged. What this covers is the other way in: a client talking to
+// the gateway directly, whose image would otherwise reach the provider intact
+// and come back as a 400 naming a JSON variant rather than an image.
+test("API forwarder replaces an image a text-only model cannot read", async () => {
+  const upstreamRequests = [];
+  const upstream = await mockServer(async (request, response) => {
+    upstreamRequests.push(await bodyJson(request));
+    json(response, 200, { choices: [] });
+  });
+  const forwarderPort = await openPort();
+  const forwarder = run("api-forwarder.mjs", {
+    CODEX_ROUTER_API_PORT: String(forwarderPort),
+    DEEPSEEK_API_BASE_URL: `http://127.0.0.1:${upstream.port}/v1`,
+    DEEPSEEK_API_KEY: "TEST_DEEPSEEK_API_KEY",
+    KIMI_PROXY_QUIET: "1",
+  });
+
+  try {
+    await waitFor(`http://127.0.0.1:${forwarderPort}/health`, forwarder, {
+      Authorization: `Bearer ${INTERNAL_KEY}`,
+    });
+    const response = await fetch(`http://127.0.0.1:${forwarderPort}/v1/chat/completions`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${INTERNAL_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "deepseek-v4-flash",
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "what does this say?" },
+              { type: "image_url", image_url: { url: "data:image/png;base64,AAAA" } },
+            ],
+          },
+        ],
+      }),
+    });
+    assert.equal(response.status, 200);
+    const body = upstreamRequests[0];
+    assert.doesNotMatch(JSON.stringify(body), /image_url|base64/);
+    // A chat-completions part is `text`; substituting a Responses `input_text`
+    // would trade an image the provider rejects for a text part it rejects.
+    assert.deepEqual(
+      body.messages[0].content.map((part) => part.type),
+      ["text", "text"],
+    );
+    assert.match(body.messages[0].content[1].text, /could not be read/);
+    assert.match(body.messages[0].content[1].text, /skips the router's vision bridge/);
+  } finally {
+    await stopChild(forwarder);
+    await closeServer(upstream.server);
+  }
+});
 
 test("API forwarder fills only missing Gemini thought signatures", async () => {
   const upstreamRequests = [];
@@ -3354,5 +3478,249 @@ test("the prompt-token estimate can be switched off", async () => {
     await stopChild(router);
     await closeServer(gateway.server);
     rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("an image a text-only model fetched with view_image never reaches the provider", async () => {
+  // The shape that broke: a paste carries the image *and* its path as text, so
+  // a text-only model calls Codex's `view_image` on the path and the tool
+  // result comes back holding the same bytes again. The bridge read the
+  // message and left the tool result alone, so the provider was handed a raw
+  // data URL and rejected the entire conversation with a message that never
+  // mentions an image ("unknown variant `image_url`, expected `text`").
+  const dataUrl = "data:image/png;base64,AAAA";
+  const gatewayRequests = [];
+  const gateway = await mockServer(async (request, response) => {
+    gatewayRequests.push(await bodyJson(request));
+    json(response, 200, { route: "external" });
+  });
+  const native = await mockServer(async (_request, response) => {
+    json(response, 200, { id: "unused", output: [] });
+  });
+  const visionCalls = [];
+  const engine = await mockServer(async (request, response) => {
+    visionCalls.push(await bodyJson(request));
+    json(response, 200, {
+      choices: [{ message: { content: "## Summary\nA login screen." } }],
+    });
+  });
+  const stateDirectory = mkdtempSync(path.join(os.tmpdir(), "router-view-image-"));
+  const bridgeState = path.join(stateDirectory, "vision-bridge.json");
+  writeFileSync(
+    bridgeState,
+    `${JSON.stringify({
+      version: 1,
+      enabled: true,
+      engine: "local",
+      effort: null,
+      local: { baseUrl: `http://127.0.0.1:${engine.port}/v1`, model: "moondream" },
+    })}\n`,
+    { mode: 0o600 },
+  );
+  const routerPort = await openPort();
+  const router = run("router.mjs", {
+    CODEX_ROUTER_PORT: String(routerPort),
+    CODEX_NATIVE_BASE_URL: `http://127.0.0.1:${native.port}/backend-api/codex`,
+    CODEX_ROUTER_GATEWAY_BASE_URL: `http://127.0.0.1:${gateway.port}/v1`,
+    MODEL_ROUTER_VISION_BRIDGE_STATE: bridgeState,
+    CODEX_ROUTER_QUIET: "1",
+  });
+
+  const input = [
+    {
+      type: "message",
+      role: "user",
+      content: [
+        { type: "input_text", text: "what does this say?" },
+        { type: "input_image", image_url: dataUrl, detail: "high" },
+      ],
+    },
+    {
+      type: "function_call",
+      call_id: "call_1",
+      name: "view_image",
+      arguments: '{"path":"/tmp/codex-clipboard.png"}',
+    },
+    {
+      type: "function_call_output",
+      call_id: "call_1",
+      output: [{ type: "input_image", image_url: dataUrl, detail: "high" }],
+    },
+  ];
+
+  try {
+    await waitFor(`${routerBase(routerPort)}/models`, router);
+    const response = await fetch(`${routerBase(routerPort)}/responses`, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer CHATGPT_SESSION_TOKEN",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ model: "deepseek/deepseek-v4-pro", stream: false, input }),
+    });
+
+    assert.equal(response.status, 200, await response.text());
+    assert.equal(gatewayRequests.length, 1);
+    const forwarded = gatewayRequests[0];
+    // The only thing the provider must never see, in either place.
+    assert.doesNotMatch(JSON.stringify(forwarded), /input_image|image_url|base64/);
+    assert.match(forwarded.input[0].content[1].text, /IMAGE EVIDENCE/);
+    assert.match(forwarded.input[0].content[1].text, /A login screen\./);
+    // A tool result that is now pure text goes back as ordinary text. It is the
+    // same image one item above, so it points at that reading instead of
+    // paying for every word of it a second time.
+    assert.equal(typeof forwarded.input[2].output, "string");
+    assert.match(forwarded.input[2].output, /is the same image as Image 1/);
+    assert.doesNotMatch(forwarded.input[2].output, /A login screen\./);
+    assert.equal(forwarded.input[2].call_id, "call_1");
+    // Two images, one purchase: the tool result is read for the question that
+    // led to it, so it lands on the transcript the paste already paid for.
+    assert.equal(visionCalls.length, 1);
+    assert.match(JSON.stringify(visionCalls[0]), /what does this say\?/);
+  } finally {
+    await stopChild(router);
+    await closeServer(gateway.server);
+    await closeServer(native.server);
+    await closeServer(engine.server);
+    rmSync(stateDirectory, { recursive: true, force: true });
+  }
+});
+
+test("two concurrent turns carrying one image buy one read, not two", async () => {
+  // Observed in production: Codex had two requests in flight carrying the same
+  // pasted screenshot, both missed the cache because neither read had returned
+  // yet, and the engine was charged twice for one transcript.
+  const dataUrl = "data:image/png;base64,AAAA";
+  const gateway = await mockServer(async (_request, response) => {
+    json(response, 200, { route: "external" });
+  });
+  const native = await mockServer(async (_request, response) => {
+    json(response, 200, { id: "unused", output: [] });
+  });
+  let reads = 0;
+  const engine = await mockServer(async (_request, response) => {
+    reads += 1;
+    // Slow enough that the second request is certain to arrive mid-read.
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    json(response, 200, {
+      choices: [{ message: { content: "## Summary\nA login screen." } }],
+    });
+  });
+  const stateDirectory = mkdtempSync(path.join(os.tmpdir(), "router-single-flight-"));
+  const bridgeState = path.join(stateDirectory, "vision-bridge.json");
+  writeFileSync(
+    bridgeState,
+    `${JSON.stringify({
+      version: 1,
+      enabled: true,
+      engine: "local",
+      effort: null,
+      local: { baseUrl: `http://127.0.0.1:${engine.port}/v1`, model: "moondream" },
+    })}\n`,
+    { mode: 0o600 },
+  );
+  const routerPort = await openPort();
+  const router = run("router.mjs", {
+    CODEX_ROUTER_PORT: String(routerPort),
+    CODEX_NATIVE_BASE_URL: `http://127.0.0.1:${native.port}/backend-api/codex`,
+    CODEX_ROUTER_GATEWAY_BASE_URL: `http://127.0.0.1:${gateway.port}/v1`,
+    MODEL_ROUTER_VISION_BRIDGE_STATE: bridgeState,
+    CODEX_ROUTER_QUIET: "1",
+  });
+
+  const turn = JSON.stringify({
+    model: "deepseek/deepseek-v4-pro",
+    stream: false,
+    input: [
+      {
+        type: "message",
+        role: "user",
+        content: [
+          { type: "input_text", text: "what does this say?" },
+          { type: "input_image", image_url: dataUrl },
+        ],
+      },
+    ],
+  });
+
+  try {
+    await waitFor(`${routerBase(routerPort)}/models`, router);
+    const send = () =>
+      fetch(`${routerBase(routerPort)}/responses`, {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer CHATGPT_SESSION_TOKEN",
+          "Content-Type": "application/json",
+        },
+        body: turn,
+      });
+    const [first, second] = await Promise.all([send(), send()]);
+    assert.equal(first.status, 200, await first.text());
+    assert.equal(second.status, 200, await second.text());
+    assert.equal(reads, 1, "the second request must wait on the first read, not buy its own");
+  } finally {
+    await stopChild(router);
+    await closeServer(gateway.server);
+    await closeServer(native.server);
+    await closeServer(engine.server);
+    rmSync(stateDirectory, { recursive: true, force: true });
+  }
+});
+
+test("a turn with no image reaches a text-only model untouched", async () => {
+  // The vision bridge rewrites turns that carry images. A turn that carries
+  // none must reach the model exactly as Codex sent it: no injected evidence
+  // block, no engine lookup, and above all no failure when the operator has
+  // no vision engine at all.
+  const gatewayRequests = [];
+  const gateway = await mockServer(async (request, response) => {
+    gatewayRequests.push(await bodyJson(request));
+    json(response, 200, { route: "external" });
+  });
+  const native = await mockServer(async (_request, response) => {
+    json(response, 200, { id: "unused", output: [] });
+  });
+  const routerPort = await openPort();
+  const router = run("router.mjs", {
+    CODEX_ROUTER_PORT: String(routerPort),
+    CODEX_NATIVE_BASE_URL: `http://127.0.0.1:${native.port}/backend-api/codex`,
+    CODEX_ROUTER_GATEWAY_BASE_URL: `http://127.0.0.1:${gateway.port}/v1`,
+    // No vision engine is reachable here, which is the state that would break
+    // an unconditional bridge.
+    CODEX_ROUTER_QUIET: "1",
+  });
+
+  const input = [
+    {
+      type: "message",
+      role: "user",
+      content: [{ type: "input_text", text: "explain this function" }],
+    },
+  ];
+
+  try {
+    await waitFor(`${routerBase(routerPort)}/models`, router);
+    const response = await fetch(`${routerBase(routerPort)}/responses`, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer CHATGPT_SESSION_TOKEN",
+        "Content-Type": "application/json",
+      },
+      // deepseek reads no images, so it is exactly the model the bridge exists
+      // for — and exactly the one that must not be touched without an image.
+      body: JSON.stringify({ model: "deepseek/deepseek-v4-pro", stream: false, input }),
+    });
+
+    assert.equal(response.status, 200, await response.text());
+    assert.equal(gatewayRequests.length, 1);
+    // Byte-for-byte the same turn: no evidence block, no substitution notice,
+    // no extra part of any kind.
+    assert.deepEqual(gatewayRequests[0].input, input);
+    // And nothing anywhere in the forwarded body mentions the bridge.
+    assert.doesNotMatch(JSON.stringify(gatewayRequests[0]), /vision|image|could not read/i);
+  } finally {
+    await stopChild(router);
+    await closeServer(gateway.server);
+    await closeServer(native.server);
   }
 });

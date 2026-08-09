@@ -2,13 +2,13 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import http from "node:http";
-import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { callerBaseUrl } from "../src/caller-auth.mjs";
+import { openPort } from "./port-pool.mjs";
 
 // `test/vision-bridge.test.mjs` proves the bridge's parts in isolation. This
 // file measures the whole path: a real router process, a real routed turn, and
@@ -84,17 +84,6 @@ async function bodyJson(request) {
   const chunks = [];
   for await (const chunk of request) chunks.push(chunk);
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
-}
-
-async function openPort() {
-  const server = net.createServer();
-  await new Promise((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const { port } = server.address();
-  await new Promise((resolve) => server.close(resolve));
-  return port;
 }
 
 async function mockServer(handler) {
@@ -311,7 +300,7 @@ function imageParts(input) {
 // Measurements 1, 2 and 3 are one conversation, because they are one question:
 // what does a five-turn conversation about one screenshot cost, and what does
 // the model actually receive?
-test("five turns about one pasted image buy exactly one transcript", async () => {
+test("one image is bought once per question asked, never once per turn", async () => {
   const upstreams = await bridgeUpstreams();
   const router = await startBridgedRouter(upstreams);
   const durations = [];
@@ -330,10 +319,11 @@ test("five turns about one pasted image buy exactly one transcript", async () =>
 
     // Codex resends the whole conversation, so the message the screenshot was
     // pasted into -- image, question and all -- arrives again on every later
-    // turn, with each new question appended after it as its own message. The
-    // engine is asked about the words beside the image, and those never change
-    // once the turn carrying them has been sent, so the four follow-ups land on
-    // the transcript the first turn bought.
+    // turn, with each new question appended after it as its own message. Each
+    // of those questions is a different thing to ask about the picture, and the
+    // reader is the only thing that can answer them, so each one is asked once
+    // and the answers accumulate. What must never happen is paying again for a
+    // question already asked -- see the resend below.
     const history = [];
     for (let index = 1; index <= 5; index += 1) {
       const question = `Question ${index} about this screenshot?`;
@@ -353,27 +343,41 @@ test("five turns about one pasted image buy exactly one transcript", async () =>
       );
     }
 
-    // 1. The billing property. One image, five turns, one purchase.
-    report(`reads for 5 turns on one image: ${upstreams.state.visionRequests.length}`);
-    assert.equal(upstreams.state.visionRequests.length, 1);
+    // 1. The billing property. Five distinct questions, five reads -- one per
+    // question, never one per turn. The resend below is what proves the
+    // difference, and it is the case Codex actually produces most often.
+    report(`reads for 5 different questions on one image: ${upstreams.state.visionRequests.length}`);
+    assert.equal(upstreams.state.visionRequests.length, 5);
     assert.equal(upstreams.state.gatewayRequests.length, 8);
 
-    // 2. Latency. Turn 1 pays for the read; nothing after it does. The bound is
-    // the difference rather than an absolute, because carrying an image also
-    // costs a fixed amount that has nothing to do with the engine -- see the
-    // overhead report below, which is measured but deliberately not asserted.
-    const [first, ...rest] = durations;
-    const cached = [...rest].sort((left, right) => left - right)[Math.floor(rest.length / 2)];
+    // The same conversation arriving again -- which is what happens while the
+    // model works through a turn -- asks the engine nothing at all.
+    await turn(router.port, textTurn({ question: "Question 5 about this screenshot?", history: history.slice(0, -1) }));
+    report(`reads after resending the same conversation: ${upstreams.state.visionRequests.length}`);
+    assert.equal(upstreams.state.visionRequests.length, 5);
+
+    // 2. Latency. A question the reader has already been asked costs nothing:
+    // that is what the resend above measures, and it is the shape Codex
+    // produces on every turn while a model works. A *new* question pays for the
+    // read, on purpose -- it is the only way to answer it. The bound is a
+    // difference rather than an absolute, because carrying an image also costs
+    // a fixed amount that has nothing to do with the engine.
+    const repeated = await turn(
+      router.port,
+      textTurn({ question: "Question 5 about this screenshot?", history: history.slice(0, -1) }),
+    );
+    const asked = [...durations].sort((left, right) => left - right)[Math.floor(durations.length / 2)];
     const floor = [...baseline].sort((left, right) => left - right)[1];
     report(`image turn latencies ms: ${durations.map((ms) => ms.toFixed(0)).join(", ")}`);
     report(
-      `read cost ${(first - cached).toFixed(0)}ms; ` +
-        `fixed cost of carrying an image on a cache hit ${(cached - floor).toFixed(0)}ms`,
+      `read cost ${(asked - repeated.ms).toFixed(0)}ms; ` +
+        `fixed cost of carrying an image on a cache hit ${(repeated.ms - floor).toFixed(0)}ms`,
     );
+    assert.equal(repeated.status, 200);
     assert.ok(
-      first - cached >= VISION_DELAY_MS * 0.5,
-      `turn 1 (${first.toFixed(0)}ms) did not visibly pay the ${VISION_DELAY_MS}ms read ` +
-        `that later turns (${cached.toFixed(0)}ms) skipped`,
+      asked - repeated.ms >= VISION_DELAY_MS * 0.5,
+      `a repeated question (${repeated.ms.toFixed(0)}ms) did not visibly skip the ` +
+        `${VISION_DELAY_MS}ms read that a new one (${asked.toFixed(0)}ms) pays`,
     );
 
     // 3. What the routed model was handed, on every turn -- not just the first.
@@ -417,7 +421,10 @@ test("a failed vision read degrades to a stated failure and the turn still compl
       imageTurn({ question: "What does this error say?" }),
     );
     assert.equal(result.status, 200);
-    assert.equal(upstreams.state.visionRequests.length, 1);
+    // A 500 is transient, so the read was asked for again before the image was
+    // written off: one attempt plus two retries.
+    report(`attempts against a failing engine: ${upstreams.state.visionRequests.length}`);
+    assert.equal(upstreams.state.visionRequests.length, 3);
     const sent = upstreams.state.gatewayRequests.at(-1);
     assert.equal(imageParts(sent.input).length, 0);
     const stated = textParts(sent.input).find((text) => text.includes("could not be read"));
@@ -437,7 +444,10 @@ test("a failed vision read degrades to a stated failure and the turn still compl
     );
     assert.equal(retry.status, 200);
     report(`reads after a failure then a recovery: ${upstreams.state.visionRequests.length}`);
-    assert.equal(upstreams.state.visionRequests.length, 2);
+    // Three attempts against the failing engine, then one against the
+    // recovered one. Nothing was cached, so recovery is tried rather than the
+    // failure being replayed for an hour.
+    assert.equal(upstreams.state.visionRequests.length, 4);
     assert.ok(
       textParts(upstreams.state.gatewayRequests.at(-1).input).some((text) =>
         text.includes("<<<IMAGE EVIDENCE"),
@@ -486,6 +496,55 @@ test("a model that declares image input is never sent through the bridge", async
 // bought separately rather than answered from the first transcript. Measurement
 // 1 still comes out at one read because a resent conversation repeats the
 // image's own message verbatim; it is a fresh paste that costs again.
+// The whole point, end to end: paste a screenshot, ask something, then ask
+// something else about the same picture in a later turn. The second question
+// has to reach the engine, and the first answer has to still be in front of the
+// model. This is the failure that sent a model to a public image host for an
+// answer the reader could have given.
+test("a follow-up question about a pasted image reaches the engine, once", async () => {
+  const upstreams = await bridgeUpstreams({ visionDelayMs: 0 });
+  const router = await startBridgedRouter(upstreams);
+
+  try {
+    const paste = imageTurn({ question: "what img is this?" });
+    await turn(router.port, paste);
+    assert.equal(upstreams.state.visionRequests.length, 1);
+
+    // Codex resends the conversation while the model works. No new question,
+    // so nothing is bought.
+    await turn(router.port, paste);
+    assert.equal(upstreams.state.visionRequests.length, 1);
+
+    // A follow-up, as a new user message after the image.
+    const followUp = {
+      ...paste,
+      input: [
+        ...paste.input,
+        { type: "message", role: "user", content: [{ type: "input_text", text: "what does the text say?" }] },
+      ],
+    };
+    await turn(router.port, followUp);
+    report(`reads after a follow-up question: ${upstreams.state.visionRequests.length}`);
+    assert.equal(upstreams.state.visionRequests.length, 2);
+
+    // The engine was asked the *new* question...
+    const asked = upstreams.state.visionRequests.map((body) => JSON.stringify(body));
+    assert.match(asked[1], /what does the text say\?/);
+    // ...and the model is still shown the answer to the first one.
+    const evidence = textParts(upstreams.state.gatewayRequests.at(-1).input)
+      .filter((text) => text.includes("<<<IMAGE EVIDENCE"))
+      .join("\n");
+    assert.match(evidence, /IMAGE EVIDENCE/);
+
+    // Asking the same follow-up again costs nothing.
+    await turn(router.port, followUp);
+    assert.equal(upstreams.state.visionRequests.length, 2);
+  } finally {
+    await router.stop();
+    await closeServer(upstreams.server);
+  }
+});
+
 test("the evidence cache is keyed on the image and on the question pasted with it", async () => {
   const upstreams = await bridgeUpstreams({ visionDelayMs: 0 });
   const router = await startBridgedRouter(upstreams);
@@ -532,10 +591,12 @@ test("the evidence cache is keyed on the image and on the question pasted with i
   }
 });
 
-// Pasting a handful of screenshots at once is ordinary. `substituteImages`
-// awaits each read in turn, so the wait the operator sees is the sum, not the
-// max -- and none of it overlaps the routed turn, which has not started yet.
-test("images in one turn are read one after another, not together", async () => {
+// Pasting a handful of screenshots at once is ordinary, and none of the reading
+// overlaps the routed turn -- that has not started yet, so the operator waits
+// for all of it. Reads therefore run together, bounded by
+// `VISION_READ_CONCURRENCY` so a whole album does not arrive at a rate-limited
+// account as one burst. The wait is the slowest read, not the sum of them.
+test("images in one turn are read together, not one after another", async () => {
   const upstreams = await bridgeUpstreams();
   const router = await startBridgedRouter(upstreams);
 
@@ -559,8 +620,8 @@ test("images in one turn are read one after another, not together", async () => 
     assert.equal(upstreams.state.visionRequests.length, 3);
     report(`3 images in one turn: ${result.ms.toFixed(0)}ms for 3 x ${VISION_DELAY_MS}ms reads`);
     assert.ok(
-      result.ms >= VISION_DELAY_MS * 2.5,
-      `3 reads finished in ${result.ms.toFixed(0)}ms, which is faster than serial`,
+      result.ms < VISION_DELAY_MS * 2.5,
+      `3 reads finished in ${result.ms.toFixed(0)}ms, which is no better than serial`,
     );
     const evidence = textParts(upstreams.state.gatewayRequests.at(-1).input).filter((text) =>
       text.includes("<<<IMAGE EVIDENCE"),
@@ -575,11 +636,12 @@ test("images in one turn are read one after another, not together", async () => 
   }
 });
 
-// The cache is checked and filled around an await, with nothing recording that
-// a read is already in flight. Two turns that overlap -- a subagent alongside
-// its parent, a client retry, two panes of the same conversation -- therefore
-// both miss and both buy the transcript.
-test("two overlapping turns on the same image each buy their own transcript", async () => {
+// Two turns that overlap -- a subagent alongside its parent, a client retry,
+// two panes of the same conversation -- are the case the cache alone cannot
+// serve, because it only knows about reads that have already finished. Asking
+// the same thing now waits on the read already in flight; asking something
+// different is a different transcript and is bought as one.
+test("overlapping turns share a read only when they ask the same thing", async () => {
   const upstreams = await bridgeUpstreams();
   const router = await startBridgedRouter(upstreams);
 
@@ -598,6 +660,20 @@ test("two overlapping turns on the same image each buy their own transcript", as
     // conversation looks like.
     await turn(router.port, imageTurn({ question: "First reader." }));
     assert.equal(upstreams.state.visionRequests.length, 2);
+
+    // The same image and the same question, in flight at the same time: one
+    // read, shared. This is the shape Codex actually produces, and it was
+    // charging the engine twice for a single pasted screenshot.
+    const both = await Promise.all([
+      turn(router.port, imageTurn({ question: "Same reader.", image: IMAGE_B })),
+      turn(router.port, imageTurn({ question: "Same reader.", image: IMAGE_B })),
+    ]);
+    assert.deepEqual(
+      both.map((result) => result.status),
+      [200, 200],
+    );
+    report(`reads for 2 overlapping turns asking the same thing: ${upstreams.state.visionRequests.length - 2}`);
+    assert.equal(upstreams.state.visionRequests.length, 3);
   } finally {
     await router.stop();
     await closeServer(upstreams.server);

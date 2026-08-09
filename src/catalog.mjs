@@ -23,6 +23,7 @@ import { MODEL_BY_SLUG } from "./model-registry.mjs";
 import {
   applyMultiAgentSettings,
   readMultiAgentSettings,
+  subagentEligibleModels,
 } from "./multi-agent-state.mjs";
 import { readHiddenModels } from "./model-picker-state.mjs";
 import { buildNativeAliasAssignments } from "./native-alias.mjs";
@@ -478,9 +479,10 @@ function main() {
   const userSlugs = new Set(readUserModels().map((model) => String(model.slug)));
   const hiddenModels = readHiddenModels();
   const selectedModels = selectedConfiguredListedModels();
+  const multiAgentSettings = readMultiAgentSettings();
   const allMultiAgentModels = applyMultiAgentSettings(
     selectedModels,
-    readMultiAgentSettings(),
+    multiAgentSettings,
     hiddenModels,
   );
   // Clamp before announcements and agent sync so every surface Codex reads —
@@ -495,11 +497,7 @@ function main() {
   const captured = nativeCatalog();
   const native = {
     ...captured,
-    models: promoteNativeMultiAgent(
-      captured.models,
-      readMultiAgentSettings(),
-      hiddenModels,
-    ),
+    models: promoteNativeMultiAgent(captured.models, multiAgentSettings, hiddenModels),
   };
   // Dropping every native model is destructive, so only do it when Codex
   // actually answered that the session is signed out. If the probe could not
@@ -556,13 +554,20 @@ function main() {
   });
   atomicJson(NATIVE_ALIAS_PATH, { version: 1, aliases });
   writeAnnouncedAt(announcedAt);
-  const routedAgents = syncRoutedCodexAgents(routedModels);
+  // Codex offers every file in the agents directory by name, so a model
+  // switched off as a subagent needs its definition gone as well. Without
+  // this, switching it off changes multi_agent_version and nothing else, and
+  // the model still answers when it is spawned by name.
+  const routedAgents = syncRoutedCodexAgents(
+    subagentEligibleModels(routedModels, multiAgentSettings),
+  );
   process.stdout.write(
     `${JSON.stringify({
       path: MERGED_CATALOG_PATH,
       models: merged.length,
       routed_models: routedModels.length,
-      routed_agents: routedAgents.length,
+      routed_agents: routedAgents.written.length,
+      removed_agents: routedAgents.removed.length,
       vision_bridge_engine: visionEngine?.slug || null,
       vision_bridged_models: catalogModels.filter(
         (model) => model.visionBridgeEngine !== undefined,

@@ -24,7 +24,19 @@ function installNodeModules(root) {
   writeFileSync(path.join(root, "node_modules", ".package-lock.json"), "{}\n");
 }
 
-function installVenv(root, versions = { litellm: "1.95.0", fastapi: "0.139.2" }) {
+// Derived from the pins rather than written out, because a hand-copied version
+// turns every future bump into a failure of these tests rather than of the
+// thing they cover. Drift detection is exactly what they exercise: a fixture
+// frozen at the old version *is* drift, and asserting "skip" against it asserts
+// that the installer ignores a changed pin.
+const PINNED_VERSIONS = Object.fromEntries(
+  PYTHON_REQUIREMENTS.map((requirement) => {
+    const { name, version } = requirementParts(requirement);
+    return [name, version];
+  }),
+);
+
+function installVenv(root, versions = PINNED_VERSIONS) {
   const site = path.join(root, ".venv", "lib", "python3.12", "site-packages");
   mkdirSync(site, { recursive: true });
   mkdirSync(path.join(root, ".venv", "bin"), { recursive: true });
@@ -73,10 +85,17 @@ test("a stamp cannot vouch for dependencies that are no longer installed", () =>
 
     // A drifted transitive upgrade that downgraded a pinned distribution must
     // reinstall even though the stamp still matches the pins.
-    rmSync(path.join(root, ".venv", "lib", "python3.12", "site-packages", "litellm-1.95.0.dist-info"), {
-      recursive: true,
-      force: true,
-    });
+    rmSync(
+      path.join(
+        root,
+        ".venv",
+        "lib",
+        "python3.12",
+        "site-packages",
+        `litellm-${PINNED_VERSIONS.litellm}.dist-info`,
+      ),
+      { recursive: true, force: true },
+    );
     assert.equal(stepStatus("python-deps", { root, platform: "darwin" }), "run");
 
     rmSync(path.join(root, "node_modules", ".package-lock.json"), { force: true });

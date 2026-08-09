@@ -8,6 +8,8 @@ const stateDir = mkdtempSync(path.join(os.tmpdir(), "vision-bridge-state-test-")
 process.env.CODEX_ROUTER_STATE_DIR = stateDir;
 
 const {
+  DEFAULT_VISION_EFFORT,
+  DEFAULT_VISION_ENGINE,
   VISION_BRIDGE_STATE_PATH,
   readVisionBridgeSettings,
   setVisionBridgeEffort,
@@ -26,12 +28,16 @@ function forgetState() {
 test("a machine that never configured the bridge gets it on", () => {
   forgetState();
   assert.equal(visionBridgeConfigured(), false);
+  // The default names a model rather than ranking for one: "cheapest" was
+  // scored by slug substring and matched nothing on a typical install, so the
+  // winner fell out of alphabetical order.
   assert.deepEqual(readVisionBridgeSettings(), {
     version: 1,
     enabled: true,
-    engine: null,
-    effort: null,
+    engine: DEFAULT_VISION_ENGINE,
+    effort: DEFAULT_VISION_EFFORT,
     local: null,
+    defaulted: true,
   });
   assert.ok(VISION_BRIDGE_STATE_PATH.startsWith(stateDir));
 });
@@ -61,13 +67,14 @@ test("enabling and pinning round-trip through protected state", () => {
   assert.equal(visionBridgeSnapshot().path, VISION_BRIDGE_STATE_PATH);
 
   // Unpinning hands the choice back to the automatic ranking without turning
-  // the bridge off.
+  // the bridge off. The effort is a separate axis and is left alone, and the
+  // result is no longer `defaulted`: the operator has been here.
   setVisionBridgeEngine(null);
   assert.deepEqual(readVisionBridgeSettings(), {
     version: 1,
     enabled: true,
     engine: null,
-    effort: null,
+    effort: DEFAULT_VISION_EFFORT,
     local: null,
   });
 

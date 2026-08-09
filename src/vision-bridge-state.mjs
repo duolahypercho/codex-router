@@ -18,14 +18,34 @@ export const VISION_BRIDGE_STATE_PATH =
 // What a machine that has never answered the question gets. Pasting a
 // screenshot to a text-only model is the single thing operators expect to work
 // without reading documentation, and everything the bridge needs to serve it is
-// already installed: the ranking prefers the cheapest engine, and an install
-// with nothing to read images with resolves no engine and degrades exactly as
-// it always did. So the honest default is on.
+// already installed. So the honest default is on.
+//
+// The default names a model rather than ranking for one. The ranking scored
+// "cheapest" by testing slugs against /flash|haiku|mini|lite|small|turbo/, which
+// matches none of the engines a typical install actually has -- they all tie and
+// the winner falls out of alphabetical order. Calling that "the cheapest paid
+// model" in the UI was a claim the code could not support, so the default is a
+// named model at a named effort: transcribing a screenshot is mechanical work
+// that the smallest reasoning setting handles.
+//
+// A default that is unavailable (no OpenAI login) still falls back to the
+// ranking; `defaulted` is what tells the resolver this was nobody's decision.
+// An engine the operator picked never falls back -- see resolveVisionEngine.
 //
 // This is deliberately *not* the fallback for a state file that exists and
 // cannot be read -- see `disabledSettings()`.
+export const DEFAULT_VISION_ENGINE = "gpt-5.6-luna";
+export const DEFAULT_VISION_EFFORT = "low";
+
 function defaultSettings() {
-  return { version: 1, enabled: true, engine: null, effort: null, local: null };
+  return {
+    version: 1,
+    enabled: true,
+    engine: DEFAULT_VISION_ENGINE,
+    effort: DEFAULT_VISION_EFFORT,
+    local: null,
+    defaulted: true,
+  };
 }
 
 // The conservative reading, used only when a state file is present but this

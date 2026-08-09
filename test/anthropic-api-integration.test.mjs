@@ -2,13 +2,13 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import http from "node:http";
-import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { callerBaseUrl } from "../src/caller-auth.mjs";
+import { freePort } from "./port-pool.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const litellm = path.join(
@@ -21,18 +21,6 @@ const enabled = process.env.MODEL_ROUTER_LITELLM_INTEGRATION === "1";
 const INTERNAL_KEY = "anthropic-e2e-internal-service-key-with-sufficient-length";
 const CALLER_KEY = "anthropic-e2e-caller-capability-with-sufficient-length";
 const PROVIDER_KEY = "anthropic-e2e-provider-key";
-
-async function freePort() {
-  const server = net.createServer();
-  await new Promise((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  assert.ok(address && typeof address === "object");
-  await new Promise((resolve) => server.close(resolve));
-  return address.port;
-}
 
 async function freePorts(count) {
   const ports = new Set();

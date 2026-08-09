@@ -3,6 +3,11 @@ import { StringDecoder } from "node:string_decoder";
 
 const MAX_JSON_CAPTURE_BYTES = 8 * 1024 * 1024;
 
+// An SSE field line, matched against the opening bytes of a body whose
+// content-type header never arrived.
+const SSE_FIELD_LINE = /^(?:event|data):/m;
+const SSE_SNIFF_BYTES = 512;
+
 // Bytes of forwarded request body per prompt token.
 //
 // The familiar rule is four characters per token, which is roughly where plain
@@ -140,13 +145,20 @@ export class ResponseUsageTransform extends Transform {
   // a malformed or non-UTF-8 byte can never be replaced on its way through.
   #pending = Buffer.alloc(0);
   #released = false;
+  #undeclared = false;
 
   // `estimatedInputTokens` arrives only on routed requests large enough that a
   // reported zero cannot be true. Without it this transform observes and
   // forwards the response byte for byte, exactly as it always did.
   constructor(contentType = "", { estimatedInputTokens } = {}) {
     super();
-    this.#eventStream = String(contentType).toLowerCase().includes("text/event-stream");
+    const declared = String(contentType).toLowerCase();
+    this.#eventStream = declared.includes("text/event-stream");
+    // The ChatGPT backend answers /responses with an SSE body and no
+    // content-type header at all, so deciding on the header alone reads every
+    // native turn as a JSON document, fails to parse it, and meters the turn
+    // as zero tokens. When the header says nothing, the first bytes decide.
+    this.#undeclared = !this.#eventStream && !declared.includes("json");
     this.#estimate =
       Number.isInteger(estimatedInputTokens) && estimatedInputTokens > 0
         ? estimatedInputTokens
@@ -154,6 +166,12 @@ export class ResponseUsageTransform extends Transform {
   }
 
   _transform(chunk, _encoding, callback) {
+    if (this.#undeclared && chunk.length) {
+      this.#undeclared = false;
+      this.#eventStream = SSE_FIELD_LINE.test(
+        chunk.subarray(0, SSE_SNIFF_BYTES).toString("utf8"),
+      );
+    }
     if (this.#estimate === undefined) {
       this.#observeOnly(chunk);
       callback();

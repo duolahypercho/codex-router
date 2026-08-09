@@ -57,7 +57,7 @@ import {
   hasNativeSession,
   inputHasImage,
   nativeAccountKey,
-  resolveVisionEngine,
+  resolveVisionEngines,
   stripImages,
   substituteImages,
   supportsImageInput,
@@ -124,6 +124,7 @@ const NATIVE_IMAGE_PATHS = new Set([
   "/v1/images/edits",
   "/v1/images/generations",
 ]);
+const NATIVE_SEARCH_PATHS = new Set(["/alpha/search", "/v1/alpha/search"]);
 const AGENT_PAYLOAD_RELAY_TOOL = "relay_external_agent_payload";
 const AGENT_PAYLOAD_CACHE_TTL_MS = 15 * 60 * 1_000;
 const AGENT_PAYLOAD_CACHE_MAX_BYTES = 8 * 1024 * 1024;
@@ -769,10 +770,20 @@ function visionEngineProvider(engine) {
   return engine.provider || "unknown";
 }
 
+// The cache only stops a *finished* read from being bought twice. Codex sends
+// concurrent requests, and one turn can carry the same image more than once, so
+// two reads of one screenshot were routinely in flight together -- both missing
+// the cache because neither had returned yet, and the engine charged twice for
+// one transcript. Seen in production: two overlapping reads of a single pasted
+// image, three seconds apart. Waiters share the first read's outcome, failure
+// included, because retrying an image the engine just refused buys the same
+// refusal again.
+const visionReadsInFlight = new Map();
+
 // Codex resends the whole conversation every turn, so the same screenshot
 // arrives again on every follow-up. Without the hash cache a five-turn
 // conversation about one image would buy the same transcript five times.
-async function visionEvidenceFor(url, engine, signal, request, effort, question = "") {
+async function visionEvidenceFor(url, engine, request, effort, question = "", retryDelaysMs) {
   // A native engine is spent on the caller's own ChatGPT session, so it can
   // only be reached with the headers this very request arrived with. The router
   // never stores those.
@@ -798,14 +809,32 @@ async function visionEvidenceFor(url, engine, signal, request, effort, question 
   // A cache hit buys nothing, so it records nothing: the events file is a
   // record of spend, not of calls the router avoided.
   if (cached !== undefined) return cached;
-  // A bridged read is a request the operator never asked for by name, billed to
-  // whichever engine won the ranking. It rides the same usage-events pipeline
-  // every routed turn uses, so `usage-events.jsonl` and `control probe` show
-  // that a vision call happened, against which model, and whether it worked --
-  // otherwise the very first read on an install that enabled nothing would
-  // leave no trace at all. Token counts are not available here (`describeImage`
-  // returns the transcript, not the envelope), so the event carries what it
-  // honestly has.
+  const readKey = `${key} ${question}`;
+  const running = visionReadsInFlight.get(readKey);
+  if (running) return running;
+  // Deliberately not tied to the caller's AbortSignal. The read is shared, so
+  // one client's cancellation would abort a read another live request is
+  // waiting on and cost it an image it could have had. `describeImage` bounds
+  // itself with its own timeout, and an abandoned read still fills the cache
+  // for the retry that usually follows.
+  const read = readVisionEvidence({ url, engine, nativeCall, effort, question, key, retryDelaysMs });
+  visionReadsInFlight.set(readKey, read);
+  try {
+    return await read;
+  } finally {
+    visionReadsInFlight.delete(readKey);
+  }
+}
+
+// A bridged read is a request the operator never asked for by name, billed to
+// whichever engine won the ranking. It rides the same usage-events pipeline
+// every routed turn uses, so `usage-events.jsonl` and `control probe` show
+// that a vision call happened, against which model, and whether it worked --
+// otherwise the very first read on an install that enabled nothing would
+// leave no trace at all. Token counts are not available here (`describeImage`
+// returns the transcript, not the envelope), so the event carries what it
+// honestly has.
+async function readVisionEvidence({ url, engine, nativeCall, effort, question, key, retryDelaysMs }) {
   const startedAt = Date.now();
   let status = 0;
   try {
@@ -816,8 +845,8 @@ async function visionEvidenceFor(url, engine, signal, request, effort, question 
       headers: routedHeaders(),
       nativeCall,
       effort,
-      signal,
       question,
+      ...(retryDelaysMs ? { retryDelaysMs } : {}),
     });
     status = 200;
     return evidenceCache.set(key, question, text);
@@ -834,14 +863,14 @@ async function visionEvidenceFor(url, engine, signal, request, effort, question 
 // Text-only models get their images read by a vision-capable model the
 // operator already enabled. Turns without images cost nothing here, and a
 // model that reads images itself is never touched.
-async function bridgeVisionInput(input, route, signal, request) {
+async function bridgeVisionInput(input, route, request) {
   if (!inputHasImage(input)) return input;
   if (supportsImageInput(route)) return input;
   if (route.visionBridge === false) {
     return stripImages(input, `${route.displayName || route.slug} cannot read images`).input;
   }
   const settings = readVisionBridgeSettings();
-  // Nothing below is evaluated unless `resolveVisionEngine` is actually going to
+  // Nothing below is evaluated unless `resolveVisionEngines` is actually going to
   // rank candidates, which it is not when the bridge is off and not when the
   // engine is pinned to `local`. Both of those used to pay for this list anyway:
   // `selectedConfiguredListedModels()` probes every provider's credential
@@ -860,7 +889,7 @@ async function bridgeVisionInput(input, route, signal, request) {
   // cannot be stale, so it has to hold too: without one there is no native
   // engine to nominate, and a pin naming one stops resolving on the very next
   // paste rather than at the next catalog rebuild.
-  const engine = resolveVisionEngine(
+  const engines = resolveVisionEngines(
     () => [
       ...selectedConfiguredListedModels(),
       ...(request && hasNativeSession(nativeHeaders(request))
@@ -869,7 +898,7 @@ async function bridgeVisionInput(input, route, signal, request) {
     ],
     settings,
   );
-  if (!engine) {
+  if (!engines.length) {
     // The catalog only advertises image input while an engine resolves, so
     // this is the race where one went away mid-conversation, or a client that
     // attached an image regardless.
@@ -878,20 +907,51 @@ async function bridgeVisionInput(input, route, signal, request) {
       "the router's vision bridge is off or has no enabled vision model to read it with",
     ).input;
   }
-  const engineName = engine.displayName || engine.slug;
   const { effort } = settings;
-  const result = await substituteImages(input, async (url, _ordinal, question) => ({
-    text: await visionEvidenceFor(url, engine, signal, request, effort, question),
-    engineName,
-  }));
+  let fellBack = 0;
+  // Each engine in turn until one reads the image. The first is the operator's
+  // choice and answers nearly always; the rest exist so a lapsed session or a
+  // provider outage costs a slower read rather than the whole image.
+  const readWithAnyEngine = async (url, question) => {
+    let lastError;
+    for (const [index, engine] of engines.entries()) {
+      // Retry the engine only when there is nothing else to try. Waiting out a
+      // 250ms + 1s ladder against an endpoint that is down, when a working
+      // engine is sitting right behind it, is how a fallback that works turns
+      // into a paste that takes half a minute -- measured at 30-52s before this
+      // line existed. Another provider beats another attempt.
+      const last = index === engines.length - 1;
+      try {
+        const text = await visionEvidenceFor(
+          url,
+          engine,
+          request,
+          effort,
+          question,
+          last ? undefined : [],
+        );
+        if (index) fellBack += 1;
+        return { text, engineName: engine.displayName || engine.slug };
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    // Every engine refused, so the turn says what the last one said -- the
+    // operator's own engine is named first in the log line above it.
+    throw lastError;
+  };
+  const result = await substituteImages(input, (url, _ordinal, question) =>
+    readWithAnyEngine(url, question),
+  );
   // Never gated on QUIET, for the same reason the retry line is not: a
   // production LaunchAgent hard-sets `CODEX_ROUTER_QUIET=1`, and this is the
   // one line that says the router spent an engine's quota on a paste nobody
   // named. Silent automatic spending is the failure mode; the log carries a
   // model, an engine, and counts -- never a transcript.
   console.error(
-    `[codex-router] vision-bridge model=${route.slug} engine=${engine.slug} ` +
-      `images=${result.images} described=${result.described} failed=${result.failed}`,
+    `[codex-router] vision-bridge model=${route.slug} engine=${engines[0].slug} ` +
+      `images=${result.images} described=${result.described} failed=${result.failed}` +
+      (fellBack ? ` fellBack=${fellBack}` : ""),
   );
   return result.input;
 }
@@ -1059,7 +1119,6 @@ async function summarize(request, payload, route, signal) {
   const bridged = await bridgeVisionInput(
     await normalizeRoutedAgentInput(request, originalInput, signal),
     route,
-    signal,
     request,
   );
   const body = {
@@ -1294,7 +1353,6 @@ async function handleResponses(request, response, requestUrl) {
       const input = await bridgeVisionInput(
         await normalizeRoutedAgentInput(request, payload.input, controller.signal),
         route,
-        controller.signal,
         request,
       );
       const provider = providerForModel(route);
@@ -1463,7 +1521,7 @@ async function handleResponses(request, response, requestUrl) {
   }
 }
 
-async function handleNativeImage(request, response, requestUrl) {
+async function handleNativeRequest(request, response, requestUrl, defaultModel) {
   const startedAt = Date.now();
   const activity = beginRequestActivity();
   let clientGone = false;
@@ -1473,7 +1531,7 @@ async function handleNativeImage(request, response, requestUrl) {
     const body = decodeBody(encoded, request.headers["content-encoding"]);
     const payload = parseBody(body);
     const requestedModel =
-      typeof payload.model === "string" ? payload.model : "gpt-image-2";
+      typeof payload.model === "string" ? payload.model : defaultModel;
     activity.setRoute({
       provider: "openai",
       model: requestedModel,
@@ -1598,7 +1656,11 @@ async function handleRequest(request, response) {
     return;
   }
   if (request.method === "POST" && NATIVE_IMAGE_PATHS.has(requestUrl.pathname)) {
-    await handleNativeImage(request, response, requestUrl);
+    await handleNativeRequest(request, response, requestUrl, "gpt-image-2");
+    return;
+  }
+  if (request.method === "POST" && NATIVE_SEARCH_PATHS.has(requestUrl.pathname)) {
+    await handleNativeRequest(request, response, requestUrl, "web-search");
     return;
   }
   writeJson(response, 404, {

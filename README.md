@@ -521,11 +521,53 @@ to try rather than something to depend on. Open the tray's **Model Settings → 
 want, then fully quit and reopen Codex.
 
 ```sh
-./bin/control local-models list                  # what is installed
+./bin/control local-models list                  # installed, plus what to download
 ./bin/control local-models install llama3.2:3b   # download, with progress
 ./bin/control local-models set llama3.2:3b on    # publish it to Codex
 ./bin/control local-models uninstall llava --yes # delete it from disk
 ```
+
+`list` also answers "which model should I get?", because knowing a tag by
+heart is not a reasonable prerequisite. The tray shows the same two groups
+under **Local LLMs**, one button per model:
+
+```text
+For coding — experimental. Codex's prompt uses about 20K of the 32K window:
+
+  llama3.2:3b          2.0 GB verified  ran a real tool call through Codex
+  qwen2.5-coder:1.5b   1.0 GB untested  smallest coder
+  devstral            14.3 GB untested  built for agents
+
+For reading images only — cannot code:
+
+  qwen2.5vl:3b         3.2 GB  accurate
+  moondream            1.7 GB  captions-only
+```
+
+A tool template is a floor, not a prediction — it has been wrong in both
+directions here. What settles it is running the real client:
+
+```sh
+./bin/control local-models agent-check llama3.2:3b
+```
+
+That runs `codex exec` in a scratch workspace twice and requires both runs to
+verify a marker file only present there, which is proof the model dispatched a
+tool and read real output. Both runs must pass; a mixed result is reported as
+flaky, because a borderline model has passed and then failed the identical
+check minutes later.
+
+Be realistic about the window. Every local model is advertised to Codex at
+32K, and Codex's own instructions and tool definitions take about 20K of that
+before your code is added — so roughly 12K is left to work in, whatever the
+model natively holds. Tool support and native context are still read from the
+model's own files (the chat template and the GGUF header, about a megabyte of
+ranged requests), which is how `phi4` turns out to hold 16K rather than the
+128K its family suggests — below the advertised cap, so worse than it looks. Image readers are ranked by what
+they scored against a known image, so a small confident-wrong reader never
+tops the list. Everything is rated against this machine's memory, anything too
+large is not offered, and anything already downloaded drops off. Add `--json`
+for the same data as an object.
 
 Checking, installing, and removing are three separate actions on purpose:
 unchecking never deletes a download, and removing needs explicit confirmation.
@@ -539,8 +581,8 @@ the rest stay installed and stay usable as vision readers, labelled *"no tools �
 vision only"*. Check before you download:
 
 ```sh
-./bin/control local-models inspect llama3.2:3b   # {"tools":true,"sizeGb":2}
-./bin/control local-models inspect gemma3:4b     # {"tools":false,"sizeGb":3.3}
+./bin/control local-models inspect llama3.2:3b   # tools:true  context:131072
+./bin/control local-models inspect phi4          # tools:false context:16384
 ```
 
 That reads the model's chat template from the registry — a few kilobytes
@@ -548,6 +590,28 @@ instead of a multi-gigabyte pull. It is a filter, not a guarantee:
 `qwen2.5-coder:7b` advertises tools and still returns them as plain JSON text,
 which Codex cannot dispatch. `llama3.2:3b` was verified making a real
 structured tool call through the router.
+
+**And it has to fit in memory.** The same registry lookup carries the download
+size, so `inspect` also reports whether this machine can run it — reading
+unified memory on Apple Silicon, GPU memory where NVIDIA reports it, and system
+RAM otherwise. Weights are not the whole cost: the context and cache sit beside
+them, so the estimate allows about 20% on top.
+
+| `fit` | Meaning |
+| --- | --- |
+| `fits` | Runs at full speed |
+| `tight` | Runs, but spills onto the CPU and is slow |
+| `too-large` | Cannot run on this machine |
+
+`install` refuses a `too-large` model before downloading anything, because
+gigabytes that cannot load cost both the transfer and the disk:
+
+```text
+Error: gpt-oss:120b needs about 79 GB to run and this machine has
+68.7 GB unified memory · GPU budget ~51.5 GB. Pass --yes to download it anyway.
+```
+
+A `tight` model warns and proceeds — that one is a judgement call, not a wall.
 
 **Size matters more than the tools flag.** Codex sends a large system prompt —
 around 24K tokens before your question — and a small model spends its whole

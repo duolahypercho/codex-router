@@ -104,16 +104,30 @@ dependency tree. That tree is pinned and hashed rather than re-resolved.
    only on the machine that produced it; `test/python-lock.test.mjs` fails on
    that, on an unhashed entry, and on any disagreement with
    `PYTHON_REQUIREMENTS`. Do not weaken those tests to land a lock.
-4. `litellm==1.95.0` publishes wheels for `manylinux` and `win_amd64` only, so
-   **macOS builds it from the sdist** with `maturin` and a Rust toolchain. That
-   predates the lock and the lock does not change it — the sdist hash is in the
-   file, so the source build is verified too. Do not "fix" a slow or failing
-   macOS install by moving the pin; check for `cargo` first.
+4. Check which wheels a litellm pin actually publishes before moving it.
+   `1.95.0` shipped `manylinux` and `win_amd64` only, so **macOS built it from
+   the sdist** with `maturin` and a Rust toolchain — slow, and broken outright
+   without `cargo`. `1.96.0` publishes macOS wheels (arm64 and x86_64) as well,
+   so no supported platform builds from source today. If a macOS install is slow
+   or failing, check for `cargo` and check the pin's wheel list; do not assume
+   either state.
 5. Hash verification covers the distributions, not the isolated build
    environment pip and uv create for an sdist. `maturin` is fetched unhashed
    during that build. Closing that gap needs a separate build-requirements
-   lock; do not claim the current lock covers it.
-6. The lock is proven by installing it, not by reasoning about it.
+   lock; do not claim the current lock covers it. No supported platform builds
+   from source at the current pin, which narrows the exposure but does not
+   remove it — a pin without a wheel for someone's platform brings it back.
+6. A pin can be a **security floor**, and moving it backwards reintroduces the
+   advisory it was raised for. `litellm==1.95.0` required
+   `cryptography>=48.0.1,<49.0`, so no patched cryptography could be resolved
+   while it was held (GHSA-g6cj-pr64-35w5, fixed in 50.0.0). Dependabot reports
+   the transitive package; the fix is almost always the direct pin above it.
+7. Resolving is not booting. litellm's own metadata allows fastapi versions its
+   code cannot import (`get_flat_dependant`, removed in 0.140), so `uv pip
+   compile` will happily produce a lock whose gateway dies on startup. Any
+   change to either Python pin has to be proven by starting the proxy and
+   getting a live `/health/liveliness`, not by a successful resolve.
+8. The lock is proven by installing it, not by reasoning about it.
    `.github/workflows/python-lock.yml` installs it for real on Linux and
    Windows through both resolvers, then asserts the pinned versions, the
    `litellm[proxy]` extra, and a live `/health/liveliness`. It gets the command
@@ -447,7 +461,108 @@ the turn as text. Treat it as a router capability, never as a model capability.
    layout list, readable data values, and an explicit uncertainty list, so the
    downstream model quotes rather than guesses. Preserve the uncertainty
    section in any rewrite.
-8. Never add a local model to `LOCAL_VISION_CATALOG` with an `accuracy` claim
+   - `## Identification` is the **one** section where inference is allowed, and
+     it exists because a pure transcription contract cannot answer "what is
+     this?" — which is the most common thing anyone asks about a pasted image.
+     Without it the reader described a photo it plainly recognized, and the
+     routed model went looking on the internet, uploading the operator's
+     screenshot to a public host on the way. Keep it separate from `## Text`,
+     keep it required, and keep `(unrecognized)` as the answer when nothing is
+     recognizable. Inference belongs in one labelled place, never spread
+     through the sections that claim to be a reading.
+8. The reader is asked what the operator wants to know, and asked **again when
+   that changes**. Pinning the question to the image's own message kept the
+   cache still and made an image's reading a snapshot of the first thing ever
+   asked about it. The newest image follows the newest question instead. Three
+   properties keep that affordable, and all three are load-bearing:
+   - Bought once per *question*, never per turn: a question already asked is
+     served from the record, so Codex resending the conversation is free.
+   - Only the **newest** image follows the conversation. Older images keep the
+     question they were read for, so a chat holding ten screenshots cannot turn
+     one new question into ten new reads.
+   - The record accumulates, so an earlier answer survives a later question.
+   The question itself is the operator's words only: Codex's `<image …>` wrapper,
+   its `# Files mentioned by the user:` preamble, and its context blocks
+   (`<environment_context>`, `<recommended_plugins>`) are bookkeeping, and
+   sending them produced transcripts written about a filename.
+9. Resolving an engine and **reaching** it are different questions. The reader
+   is a short list — the operator's choice first, then the other credentialed,
+   non-loopback vision models — and an image is offered to the next one when the
+   first cannot be reached. A 401 from a lapsed session and a 503 from a
+   provider outage both turned every paste into "could not be read" while the
+   engine still resolved perfectly. What the fallback must not become:
+   - **Silent.** The evidence header names the engine that actually read the
+     image, and the per-turn log line records `fellBack`.
+   - **A way around a pin.** A pin that does not *resolve* is still an
+     operator-visible problem, never a quiet switch to another model, and a
+     pinned **local** engine never falls back onto a provider's quota nobody
+     chose to spend.
+   - **Expensive.** The list is capped, the candidate set is still built at most
+     once per turn, and a second engine is only ever called after the first has
+     failed — so a working engine costs exactly what it did before. Another
+     provider is tried before another *attempt* at a broken one: retries are
+     spent only on the last engine in the list, because waiting out a retry
+     ladder against a dead endpoint while a working engine sits behind it is
+     how a fallback that works becomes a paste that takes half a minute.
+10. A read that fails **transiently** is asked again — twice, at 250ms and 1s.
+   The engine is a rate-limited account across a network, and losing an image
+   for the whole turn to a 429 that would have cleared in a second is the
+   opposite of what the bridge is for. What is not retried is equally
+   deliberate: 4xx refusals buy the identical refusal, and a timeout is reported
+   rather than retried because the per-attempt budget is already two minutes. A
+   transport failure keeps the transport's own wording ("fetch failed"), which
+   is how an operator learns their own loopback engine is down.
+   - A reading that came back **incomplete** says so in its own header. The
+     downstream model cannot otherwise tell "the image does not show that" from
+     "the transcript does not mention it", and it answers the first with
+     confidence either way. `## Data` is optional by contract and its absence is
+     not a bad read. The two causes are reported differently on purpose: a read
+     cut off at the size cap left a large image genuinely unread, so it is the
+     one case that invites a second look; missing sections mean the engine does
+     not follow the format at all -- a small local model answering in prose --
+     and reading again returns the same shape, so an invitation there buys a
+     loop rather than an answer. Never advertise a second look on every image.
+11. Every image the router carries is read, in **both** places Codex puts one:
+   parts of a user message, and the `output` of a `function_call_output`. A
+   text-only model that has just been handed a transcript still sees the file's
+   path in the turn and calls `view_image` on it, and that tool result holds the
+   same bytes again. Missing it hands a raw data URL to a provider that rejects
+   the whole conversation with an error naming no image
+   (`unknown variant image_url, expected text`). Two consequences are load-bearing
+   and must survive any rewrite:
+   - **Say which file the transcript is of.** A pasted image takes the path from
+     Codex's own `<image … path="…">` wrapper, a tool result from the
+     `view_image` call that asked for it. Without that link the model pays a tool
+     turn plus a full resend of the conversation to open a file it has already
+     been given — far more than the read cost. That wrapper is markup, not the
+     operator's words, so it is stripped from the question sent to the engine.
+   - **A tool result inherits the question that led to it**, so a `view_image`
+     round trip lands on the transcript the paste already bought instead of
+     buying a second one. It is also the only way a *later* question gets a
+     freshly focused read, since the question pinned to an image is the one in
+     its own message.
+12. An image's evidence is **one record per image, not one transcript per
+   question**. The question still decides whether a read has to be bought;
+   what gets injected is every reading the router holds for that image. Filing
+   one transcript per (image, question) and injecting only the matching one made
+   the evidence a snapshot of the first question ever asked, which a later
+   question could not add to. Keep the record append-only, keep the first
+   (general) reading undroppable when the cap bites, and keep the whole record
+   inside the budget a single transcript used to have. When one turn carries the
+   same image twice — the paste and the `view_image` result — only the first
+   slot prints the record; the rest point at it. That pointer is keyed on the
+   image, never on matching transcript text: two different screenshots can read
+   identically, and "the same image" has to be a fact about the bytes.
+13. One image, one purchase. The transcript cache only knows about reads that
+   have **finished**, so concurrent requests — Codex sends them, and a subagent
+   runs beside its parent — all missed and all bought the same transcript. Reads
+   in flight are shared by image, effort, account, and question; waiters take the
+   first read's outcome including its failure, and the shared read is never tied
+   to one caller's `AbortSignal`, or one client's cancellation would cost a live
+   request an image. Reads within a turn run concurrently under a fixed cap: the
+   operator waits for all of them before the routed turn starts, but the engine
+   is somebody's rate-limited account and must not receive an album as a burst.
+14. Never add a local model to `LOCAL_VISION_CATALOG` with an `accuracy` claim
    that was not measured. Run `node src/vision-benchmark.mjs`, which scores a
    model against a checked-in image with known contents, and record the result
    in `measured`; anything unmeasured stays `untested`. This is not bureaucracy:
@@ -455,7 +570,7 @@ the turn as text. Treat it as a router capability, never as a model capability.
    plausible, so a reputation-based label would route users straight to a model
    that fabricates invoice numbers. The picker sorts on this field, so an
    unearned "accurate" puts a confident-wrong reader at the top of the list.
-9. Which native models may read an image is one rule in one place
+15. Which native models may read an image is one rule in one place
    (`src/vision-engines.mjs`), not a criterion each surface re-derives. The
    catalog build, the tray, and the request path each asked it separately once,
    and the three answers disagreed — the request path applied no auth gate at
@@ -464,10 +579,24 @@ the turn as text. Treat it as a router capability, never as a model capability.
    process) and only the request path holds the caller's live session. Every
    call site names its evidence explicitly, and the coverage below fails when
    one of them stops.
-10. Regression coverage lives in `test/vision-bridge.test.mjs`,
-    `test/vision-bridge-state.test.mjs`, and the bridged-catalog case in
-    `test/catalog.test.mjs`. A change to engine ranking, caching, substitution,
-    the native gate, or the advertisement rule needs a test there.
+16. The bridge lives on the **routed request path only**. `src/api-forwarder.mjs`
+    sits downstream of the gateway — every routed model's `api_base` points at
+    it — so Codex's traffic arrives already bridged and an image reaching that
+    hop came from a client talking to the gateway directly. It replaces those
+    parts with the same stated failure rather than reading them: an engine call
+    from there would re-enter the gateway that is holding the request open. The
+    substituted part must use the protocol's own text type (`input_text` for
+    Responses, `text` for chat completions and Anthropic messages), or an image
+    the provider rejects is merely traded for a text part it rejects.
+17. Regression coverage lives in `test/vision-bridge.test.mjs`,
+    `test/vision-bridge-state.test.mjs`, the bridged-catalog case in
+    `test/catalog.test.mjs`, the whole-path measurements in
+    `test/vision-bridge-e2e.test.mjs`, and the router cases in
+    `test/routing.test.mjs`. A change to engine ranking, caching, substitution,
+    the native gate, or the advertisement rule needs a test there. The two
+    properties worth stating as tests rather than prose: nothing image-shaped
+    may survive into a forwarded body, and one image asked one question may be
+    bought only once however many requests are in flight.
 
 ## Local models as a provider
 

@@ -160,6 +160,16 @@ export function applyMultiAgentSettings(models, settings, hidden = new Set()) {
   });
 }
 
+// Models the user has not switched off as a subagent.
+//
+// Only the explicit "off" is honoured here. A model the settings never mention
+// keeps the definition it has always had, so an install that has chosen
+// nothing keeps every model callable by name the way it does today.
+export function subagentEligibleModels(models, settings) {
+  const disabled = new Set(settings?.disabled || []);
+  return models.filter((model) => !disabled.has(String(model.slug)));
+}
+
 // Compatibility helper for the original all-models switch.
 export function applyAllMultiAgent(models, enabled) {
   return applyMultiAgentSettings(models, {

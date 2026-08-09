@@ -7,6 +7,7 @@ import {
   renameSync,
   writeFileSync,
 } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 import { protectPrivateFile } from "./file-security.mjs";
@@ -17,6 +18,9 @@ import {
 } from "./provider-selection.mjs";
 import { STATE_DIR } from "./paths.mjs";
 import { readUserModels, userModelEntry, writeUserModels } from "./user-models.mjs";
+// The vision catalog is measured against a known image, so image readers are
+// taken from there rather than guessed at a second time here.
+import { LOCAL_VISION_CATALOG as VISION_CATALOG } from "./vision-host.mjs";
 
 
 // Local models are the operator's own software running on their own machine, so
@@ -200,18 +204,22 @@ export async function fetchRegistryCapabilities(tag, { fetchImpl = fetch, timeou
     const layers = Array.isArray(parsed?.layers) ? parsed.layers : [];
     const template = layers.find((layer) => layer?.mediaType?.endsWith(".template"));
     const bytes = layers.reduce((sum, layer) => sum + (layer?.size || 0), 0);
-    if (!template?.digest) return { tag, tools: false, sizeGb: bytes / 1e9 };
+    // One tenth of a gigabyte on every path: the two early returns used to
+    // hand back the raw quotient, so a model whose template could not be read
+    // reported "18.556700222 GB" in the tray while its neighbours read "18.6".
+    const sizeGb = Math.round((bytes / 1e9) * 10) / 10;
+    if (!template?.digest) return { tag, tools: false, sizeGb };
     // Blob URLs redirect to a CDN, so the fetch has to follow them.
     const blob = await fetchImpl(`${base}/blobs/${template.digest}`, {
       redirect: "follow",
       signal: AbortSignal.timeout(timeoutMs),
     });
-    if (!blob.ok) return { tag, tools: false, sizeGb: bytes / 1e9 };
+    if (!blob.ok) return { tag, tools: false, sizeGb };
     const text = await blob.text();
     return {
       tag,
       tools: /\{\{[^}]*\.Tools/i.test(text),
-      sizeGb: Math.round((bytes / 1e9) * 10) / 10,
+      sizeGb,
     };
   } catch {
     // Offline or an unknown tag: the install proceeds unannotated rather than
@@ -406,6 +414,12 @@ export function localModelsSnapshot({
       agentCapable: agentChecks[entry.tag]?.agentCapable,
     };
   });
+  // Without this the only way to install a model was to already know its tag,
+  // which is no help to anyone who has never installed one. Rated for this
+  // machine so the list cannot suggest something that will not run here.
+  const capacity = detectMachine();
+  const available = suggestedLocalModels({ capacity, installed: models });
+  const availableVision = suggestedVisionModels({ capacity, installed: models });
   return {
     path: LOCAL_MODELS_STATE_PATH,
     installed: models.length,
@@ -413,5 +427,479 @@ export function localModelsSnapshot({
     usableAsChat: models.filter((model) => model.tools).length,
     totalGb: Math.round(models.reduce((sum, model) => sum + model.sizeGb, 0) * 10) / 10,
     models,
+    available,
+    availableVision,
+    machine: describeMachine(capacity),
   };
+}
+
+// --- machine fit -----------------------------------------------------------
+
+// Weights are not the whole cost: the KV cache, context, and runtime overhead
+// need room beside them. A fifth on top is the common working estimate and is
+// deliberately conservative, so a model reported as fitting actually runs.
+const OVERHEAD_FACTOR = 1.2;
+
+// Leave the operating system its own working set rather than pretending every
+// byte of RAM is available to one process.
+const SYSTEM_HEADROOM = 0.8;
+
+// macOS lets the GPU wire roughly three quarters of unified memory.
+const UNIFIED_GPU_SHARE = 0.75;
+
+// Without a GPU the whole model sits in system memory beside everything else
+// the machine is doing, so only the smaller part of the budget is comfortable.
+const COMFORTABLE_CPU_SHARE = 0.6;
+
+function nvidiaMemoryBytes() {
+  try {
+    const output = spawnSync(
+      "nvidia-smi",
+      ["--query-gpu=memory.total", "--format=csv,noheader,nounits"],
+      { encoding: "utf8", timeout: 3_000 },
+    );
+    if (output.status !== 0 || !output.stdout) return undefined;
+    // Multi-GPU hosts report one line each; a model runs on one card.
+    const largest = output.stdout
+      .split(/\r?\n/)
+      .map((line) => Number.parseInt(line.trim(), 10))
+      .filter((value) => Number.isFinite(value) && value > 0)
+      .sort((left, right) => right - left)[0];
+    return largest ? largest * 1_048_576 : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// Pure, so ratings can be tested against machines this one is not.
+export function machineCapacity({
+  totalMemoryBytes,
+  gpuMemoryBytes,
+  unifiedMemory = false,
+  platform = process.platform,
+} = {}) {
+  const total = Number(totalMemoryBytes) || 0;
+  const systemBudget = Math.floor(total * SYSTEM_HEADROOM);
+  const gpuBudget = unifiedMemory
+    ? Math.floor(total * UNIFIED_GPU_SHARE)
+    : Number(gpuMemoryBytes) || undefined;
+  return {
+    platform,
+    totalMemoryBytes: total,
+    unifiedMemory,
+    gpuBudgetBytes: gpuBudget,
+    // What runs at full speed, and what runs at all. With no GPU to fall back
+    // from, "comfortable" is a fraction of RAM rather than all of it, or every
+    // model reads as either fine or impossible and a 7B that will swap the
+    // machine to a crawl is reported as a clean fit.
+    fastBudgetBytes: gpuBudget || Math.floor(systemBudget * COMFORTABLE_CPU_SHARE),
+    ceilingBytes: Math.max(gpuBudget || 0, systemBudget),
+  };
+}
+
+export function detectMachine() {
+  const unifiedMemory = process.platform === "darwin" && process.arch === "arm64";
+  return machineCapacity({
+    totalMemoryBytes: os.totalmem(),
+    gpuMemoryBytes: unifiedMemory ? undefined : nvidiaMemoryBytes(),
+    unifiedMemory,
+  });
+}
+
+export function describeMachine(capacity) {
+  const memory = capacity.unifiedMemory
+    ? `${(capacity.totalMemoryBytes / 1e9).toFixed(1)} GB unified memory`
+    : `${(capacity.totalMemoryBytes / 1e9).toFixed(1)} GB RAM`;
+  const gpu = capacity.unifiedMemory
+    ? `GPU budget ~${(capacity.gpuBudgetBytes / 1e9).toFixed(1)} GB`
+    : capacity.gpuBudgetBytes
+      ? `${(capacity.gpuBudgetBytes / 1e9).toFixed(1)} GB GPU memory`
+      : "no GPU memory detected; models run on the CPU";
+  return `${memory} · ${gpu}`;
+}
+
+// "fits" runs at full speed, "tight" runs but spills to the CPU, "too-large"
+// cannot run here at all. Sizes come from the registry manifest, so this works
+// for any tag rather than a list someone has to keep current.
+export function rateModelFit(sizeGb, capacity = detectMachine()) {
+  const bytes = Number(sizeGb) * 1e9;
+  if (!Number.isFinite(bytes) || bytes <= 0) return undefined;
+  const needed = bytes * OVERHEAD_FACTOR;
+  if (needed <= capacity.fastBudgetBytes) return "fits";
+  if (needed <= capacity.ceilingBytes) return "tight";
+  return "too-large";
+}
+
+export function fitAdvisory(tag, sizeGb, capacity = detectMachine()) {
+  const fit = rateModelFit(sizeGb, capacity);
+  if (fit === "tight") {
+    return `${tag} (${sizeGb} GB) is close to this machine's limit (${describeMachine(capacity)}); expect it to spill onto the CPU and run slowly.`;
+  }
+  if (fit === "too-large") {
+    return `${tag} needs about ${Math.ceil(sizeGb * OVERHEAD_FACTOR)} GB to run and this machine has ${describeMachine(capacity)}.`;
+  }
+  return undefined;
+}
+
+// --- what is worth downloading ---------------------------------------------
+
+// Nothing answered "which model should I get?", so the only way in was to
+// already know a tag. Two questions decide it, and they have different
+// answers: can this model do coding work, or can it only read images?
+//
+// Every value here was read from the model's own files on 2026-08-09, not
+// from documentation: `tools` and `sizeGb` from the registry manifest via
+// fetchRegistryCapabilities, `context` from the GGUF header via
+// fetchRegistryContext. Both lookups run again live -- inspect reads them per
+// tag, and install re-checks -- so a republished tag corrects itself there
+// rather than silently disagreeing with this list.
+//
+// A tool template is a floor, not a prediction. Upstream measured it failing
+// in both directions: a 3B model that emits perfect tool calls against a short
+// prompt answers about its own instructions once Codex's real ~24K-token
+// prompt is in front of it, and a 7B model that returns tool calls as plain
+// text on Ollama's OpenAI surface dispatches them correctly through the
+// router's native route. Only `local-models agent-check` settles it, by
+// running the real client twice and requiring both runs to pass.
+//
+// So `codex` below records what was actually observed, and "untested" is left
+// as untested rather than dressed up as a recommendation.
+//
+// Context is a floor check too. Every local model is advertised to Codex at
+// LOCAL_CONTEXT_WINDOW regardless of what it natively holds, so native context
+// above that buys nothing today -- but a model below it is worse than
+// advertised, which is what this threshold catches.
+const MIN_CODING_CONTEXT = LOCAL_CONTEXT_WINDOW;
+
+// Codex's own instructions and tool definitions occupy most of that window
+// before the operator's code is added. Measured from 40 real session rollouts
+// under ~/.codex/sessions: tool definitions run 28.5K chars at the median and
+// 34.1K at p90, base instructions 17.9K, and the first turn's context another
+// 22.3K -- roughly 17K to 21K tokens on turn one, depending on how densely the
+// JSON tokenizes. This uses the middle of that range.
+export const CODEX_PROMPT_TOKENS = 20_000;
+
+export const SUGGESTED_LOCAL_MODELS = Object.freeze(
+  [
+    {
+      tag: "llama3.2:3b",
+      sizeGb: 2,
+      tools: true,
+      context: 131_072,
+      codex: "verified",
+      note: "ran a real tool call through Codex",
+    },
+    {
+      tag: "qwen2.5-coder:1.5b",
+      sizeGb: 1,
+      tools: true,
+      context: 32_768,
+      codex: "untested",
+      note: "smallest coder",
+    },
+    {
+      tag: "qwen2.5-coder:3b",
+      sizeGb: 1.9,
+      tools: true,
+      context: 32_768,
+      codex: "untested",
+      note: "small coder",
+    },
+    {
+      tag: "mistral:7b",
+      sizeGb: 4.4,
+      tools: true,
+      context: 32_768,
+      codex: "untested",
+      note: "general purpose",
+    },
+    {
+      tag: "qwen2.5-coder:7b",
+      sizeGb: 4.7,
+      tools: true,
+      context: 32_768,
+      codex: "untested",
+      note: "has returned tool calls as plain text",
+    },
+    {
+      tag: "llama3.1:8b",
+      sizeGb: 4.9,
+      tools: true,
+      context: 131_072,
+      codex: "untested",
+      note: "general purpose",
+    },
+    {
+      tag: "qwen2.5-coder:14b",
+      sizeGb: 9,
+      tools: true,
+      context: 32_768,
+      codex: "untested",
+      note: "stronger coder",
+    },
+    {
+      tag: "gpt-oss:20b",
+      sizeGb: 13.8,
+      tools: true,
+      context: 131_072,
+      codex: "untested",
+      note: "thinking model",
+    },
+    {
+      tag: "devstral",
+      sizeGb: 14.3,
+      tools: true,
+      context: 131_072,
+      codex: "untested",
+      note: "built for agents",
+    },
+  ].map((entry) => Object.freeze(entry)),
+);
+
+function notInstalled(installed) {
+  const have = new Set(installed.map((entry) => String(entry?.tag ?? entry)));
+  return (tag) => !have.has(tag) && !have.has(`${tag}:latest`);
+}
+
+// Models that can actually do coding work here: they call tools, they hold
+// enough context to be worth pointing at a codebase, and they fit in memory.
+export function suggestedLocalModels({
+  capacity = detectMachine(),
+  installed = [],
+  includeUnusable = false,
+} = {}) {
+  const fresh = notInstalled(installed);
+  return SUGGESTED_LOCAL_MODELS
+    .filter((entry) => entry.tools && entry.context >= MIN_CODING_CONTEXT)
+    .map((entry) => ({ ...entry, fit: rateModelFit(entry.sizeGb, capacity) }))
+    .filter((entry) => fresh(entry.tag))
+    .filter((entry) => includeUnusable || entry.fit !== "too-large")
+    // Proven first: an untested model is a thing to try, not a recommendation.
+    .sort(
+      (left, right) =>
+        (left.codex === "verified" ? 0 : 1) - (right.codex === "verified" ? 0 : 1) ||
+        left.sizeGb - right.sizeGb,
+    );
+}
+
+// Models that can only read images. Kept separate because the choice is a
+// different one -- accuracy at transcription, not coding ability -- and the
+// vision catalog already records what each one actually scored.
+export function suggestedVisionModels({
+  capacity = detectMachine(),
+  installed = [],
+  catalog,
+} = {}) {
+  const fresh = notInstalled(installed);
+  const entries = catalog || VISION_CATALOG;
+  return entries
+    .map((entry) => ({
+      tag: entry.tag,
+      sizeGb: entry.sizeGb,
+      accuracy: entry.accuracy,
+      note: entry.note,
+      fit: rateModelFit(entry.sizeGb, capacity),
+    }))
+    .filter((entry) => fresh(entry.tag))
+    .filter((entry) => entry.fit !== "too-large")
+    // Proven readers first. Sorting by size alone would top the list with
+    // moondream, which is the smallest and transcribed none of the test text —
+    // a confident-wrong reader is worse than a slower right one.
+    .sort(
+      (left, right) =>
+        VISION_ACCURACY_RANK[left.accuracy] - VISION_ACCURACY_RANK[right.accuracy] ||
+        left.sizeGb - right.sizeGb,
+    );
+}
+
+// Mirrors the vision catalog's own ranking: measured-accurate, then partial,
+// then unmeasured, then the ones that only caption.
+const VISION_ACCURACY_RANK = {
+  accurate: 0,
+  partial: 1,
+  untested: 2,
+  "captions-only": 3,
+};
+
+// A snapshot is the tray's data contract, not something a person can read at a
+// terminal. This renders the same object for the operator, in the two groups
+// the choice actually splits into.
+function contextLabel(tokens) {
+  return tokens >= 1000 ? `${Math.round(tokens / 1024)}K` : String(tokens);
+}
+
+export function renderLocalModels(snapshot) {
+  const lines = [`Local models · ${snapshot.machine || "this machine"}`, ""];
+  if (snapshot.models.length === 0) {
+    lines.push("Installed: none yet");
+  } else {
+    lines.push(`Installed: ${snapshot.installed} · ${snapshot.totalGb} GB`);
+    const width = Math.max(...snapshot.models.map((model) => model.tag.length));
+    for (const model of snapshot.models) {
+      const role = model.tools ? (model.vision ? "code + images" : "code") : "images only";
+      lines.push(
+        `  ${model.enabled ? "[x]" : "[ ]"} ${model.tag.padEnd(width)} ` +
+          `${`${model.sizeGb.toFixed(1)} GB`.padStart(8)}  ${role}${model.running ? "  · loaded" : ""}`,
+      );
+    }
+  }
+  const coding = snapshot.available || [];
+  const vision = snapshot.availableVision || [];
+  if (coding.length) {
+    // The honest framing: Codex's own prompt takes most of the window before
+    // any code is added, and only a verified model is known to drive a turn.
+    const room = Math.max(0, LOCAL_CONTEXT_WINDOW - CODEX_PROMPT_TOKENS);
+    lines.push(
+      "",
+      "For coding — experimental. Codex's prompt uses about " +
+        `${Math.round(CODEX_PROMPT_TOKENS / 1000)}K of the ${contextLabel(LOCAL_CONTEXT_WINDOW)} ` +
+        `window, leaving roughly ${Math.round(room / 1000)}K to work in.`,
+      "",
+    );
+    const width = Math.max(...coding.map((entry) => entry.tag.length));
+    for (const entry of coding) {
+      lines.push(
+        `  ${entry.tag.padEnd(width)} ${`${entry.sizeGb.toFixed(1)} GB`.padStart(8)} ` +
+          `${entry.codex.padEnd(9)} ${entry.note}${entry.fit === "tight" ? " (tight)" : ""}`,
+      );
+    }
+    lines.push("", "  Test one yourself:  ./bin/control local-models agent-check <tag>");
+  }
+  if (vision.length) {
+    lines.push("", "For reading images only — cannot code:", "");
+    const width = Math.max(...vision.map((entry) => entry.tag.length));
+    for (const entry of vision) {
+      lines.push(
+        `  ${entry.tag.padEnd(width)} ${`${entry.sizeGb.toFixed(1)} GB`.padStart(8)}  ${entry.accuracy}`,
+      );
+    }
+  }
+  if (coding.length || vision.length) {
+    lines.push("", `  ./bin/control local-models install ${(coding[0] || vision[0]).tag}`);
+  }
+  return lines.join("\n");
+}
+
+// --- measured context length ------------------------------------------------
+
+// How much of a codebase a model can hold decides whether it is worth pointing
+// at one, and neither the registry manifest nor Ollama publishes it before the
+// model is on disk. It is in the model file itself: GGUF stores its metadata
+// as a key-value block at the very start, so a ranged request for the first
+// megabyte reads the real number without pulling the weights.
+const GGUF_MAGIC = 0x46554747;
+const GGUF_HEAD_BYTES = 1_000_000;
+
+// GGUF value type tags, in the order the format defines them.
+const GGUF_UINT8 = 0;
+const GGUF_INT8 = 1;
+const GGUF_UINT16 = 2;
+const GGUF_INT16 = 3;
+const GGUF_UINT32 = 4;
+const GGUF_INT32 = 5;
+const GGUF_FLOAT32 = 6;
+const GGUF_BOOL = 7;
+const GGUF_STRING = 8;
+const GGUF_ARRAY = 9;
+const GGUF_UINT64 = 10;
+const GGUF_INT64 = 11;
+const GGUF_FLOAT64 = 12;
+
+class ShortRead extends Error {}
+
+function ggufReader(buffer) {
+  let offset = 0;
+  const need = (count) => {
+    if (offset + count > buffer.length) throw new ShortRead();
+  };
+  return {
+    u8() { need(1); return buffer[offset++]; },
+    u32() { need(4); const value = buffer.readUInt32LE(offset); offset += 4; return value; },
+    i32() { need(4); const value = buffer.readInt32LE(offset); offset += 4; return value; },
+    u64() { need(8); const value = Number(buffer.readBigUInt64LE(offset)); offset += 8; return value; },
+    i64() { need(8); const value = Number(buffer.readBigInt64LE(offset)); offset += 8; return value; },
+    f32() { need(4); const value = buffer.readFloatLE(offset); offset += 4; return value; },
+    f64() { need(8); const value = buffer.readDoubleLE(offset); offset += 8; return value; },
+    str() {
+      const length = this.u64();
+      need(length);
+      const value = buffer.toString("utf8", offset, offset + length);
+      offset += length;
+      return value;
+    },
+  };
+}
+
+// Values are read rather than skipped because an array's byte length is only
+// knowable by walking it -- tokenizer vocabularies are arrays of strings.
+function readGgufValue(reader, type) {
+  if (type === GGUF_UINT8 || type === GGUF_INT8 || type === GGUF_BOOL) return reader.u8();
+  if (type === GGUF_UINT16 || type === GGUF_INT16) return reader.u32() & 0xffff;
+  if (type === GGUF_UINT32) return reader.u32();
+  if (type === GGUF_INT32) return reader.i32();
+  if (type === GGUF_FLOAT32) return reader.f32();
+  if (type === GGUF_STRING) return reader.str();
+  if (type === GGUF_UINT64) return reader.u64();
+  if (type === GGUF_INT64) return reader.i64();
+  if (type === GGUF_FLOAT64) return reader.f64();
+  if (type === GGUF_ARRAY) {
+    const elementType = reader.u32();
+    const count = reader.u64();
+    for (let index = 0; index < count; index += 1) readGgufValue(reader, elementType);
+    return undefined;
+  }
+  throw new Error(`unsupported GGUF value type ${type}`);
+}
+
+export function parseGgufContextLength(buffer) {
+  const reader = ggufReader(buffer);
+  if (reader.u32() !== GGUF_MAGIC) return undefined;
+  reader.u32();
+  reader.u64();
+  const pairs = reader.u64();
+  for (let index = 0; index < pairs; index += 1) {
+    let key;
+    let value;
+    try {
+      key = reader.str();
+      value = readGgufValue(reader, reader.u32());
+    } catch (error) {
+      // The head of the file ran out before the key appeared. Unknown is the
+      // honest answer; it never blocks an install.
+      if (error instanceof ShortRead) return undefined;
+      throw error;
+    }
+    // Namespaced by architecture: llama.context_length, qwen2.context_length.
+    if (key.endsWith(".context_length") && Number.isFinite(value)) return value;
+  }
+  return undefined;
+}
+
+export async function fetchRegistryContext(tag, { fetchImpl = fetch, timeoutMs = 8_000 } = {}) {
+  const [name, version = "latest"] = String(tag).split(":");
+  if (!name) return undefined;
+  const base = `${REGISTRY_BASE}/v2/library/${encodeURIComponent(name)}`;
+  try {
+    const manifest = await fetchImpl(`${base}/manifests/${encodeURIComponent(version)}`, {
+      headers: { Accept: "application/vnd.docker.distribution.manifest.v2+json" },
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!manifest.ok) return undefined;
+    const parsed = await manifest.json();
+    const weights = (parsed?.layers || []).find((layer) =>
+      layer?.mediaType?.endsWith(".model"),
+    );
+    if (!weights?.digest) return undefined;
+    const head = await fetchImpl(`${base}/blobs/${weights.digest}`, {
+      redirect: "follow",
+      headers: { Range: `bytes=0-${GGUF_HEAD_BYTES - 1}` },
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!head.ok) return undefined;
+    return parseGgufContextLength(Buffer.from(await head.arrayBuffer()));
+  } catch {
+    // Offline, a non-GGUF model, or a CDN that refuses ranges: unknown, never
+    // an error the operator has to deal with.
+    return undefined;
+  }
 }

@@ -1686,6 +1686,40 @@ struct LocalModelsSnapshot: Decodable {
   let usableAsChat: Int?
   let totalGb: Double
   let models: [InstalledLocalModel]
+  // Optional so a tray built against this snapshot keeps decoding one from an
+  // older router that has no suggestions to offer.
+  let available: [AvailableLocalModel]?
+  let availableVision: [AvailableVisionModel]?
+  let machine: String?
+}
+
+/// A model worth downloading, already rated against this machine's memory by
+/// the router. Nothing that cannot run here reaches the tray.
+struct AvailableLocalModel: Decodable, Identifiable, Equatable {
+  let tag: String
+  let sizeGb: Double
+  let tools: Bool
+  let context: Int?
+  /// What running the real Codex client against this model actually produced.
+  /// A tool template predicts it in neither direction, so "untested" stays
+  /// untested rather than reading as a recommendation.
+  let codex: String?
+  let note: String
+  let fit: String
+  var id: String { tag }
+
+  var isVerified: Bool { codex == "verified" }
+}
+
+/// A model that can only read images. Ranked by what it actually scored
+/// against a known image, never by size alone.
+struct AvailableVisionModel: Decodable, Identifiable, Equatable {
+  let tag: String
+  let sizeGb: Double
+  let accuracy: String
+  let note: String
+  let fit: String
+  var id: String { tag }
 }
 
 struct InstalledLocalModel: Decodable, Identifiable, Equatable {
@@ -1926,8 +1960,21 @@ private struct TrayView: View {
   @State private var providersExpanded = true
 
   private var target: RouterTarget? { store.snapshot.targets["codex"] }
+  // Rows come from the registry snapshot, not from the models in the picker.
+  // Deriving them from models hid every provider that ships none until its
+  // models were curated — which is backwards, because the row is where the
+  // operator sets a provider up. That left the ten catalog-only services and
+  // the keyless local provider invisible in the one place built to configure
+  // them. The model-derived list survives only for routers that predate the
+  // snapshot's `providers` field.
   private var providers: [(id: String, enabled: Bool)] {
     guard let target else { return [] }
+    if let registry = target.providers, !registry.isEmpty {
+      let enabled = Set(target.enabledProviders)
+      return registry
+        .map { (id: $0.id, enabled: enabled.contains($0.id)) }
+        .sorted { $0.id < $1.id }
+    }
     return Dictionary(grouping: target.models.filter { $0.provider != "openai" }, by: \.provider)
       .map { (id: $0.key, enabled: $0.value.contains(where: \.enabled)) }
       .sorted { $0.id < $1.id }
@@ -2406,7 +2453,7 @@ private struct TrayView: View {
           .font(.system(size: 9))
           .foregroundStyle(routerMuted)
         if sortedLocalModels.isEmpty {
-          Text("Nothing installed yet. Add one below, or install Ollama first.")
+          Text("Nothing installed yet. Pick one below to download, or type any tag.")
             .font(.system(size: 9))
             .foregroundStyle(routerMutedStrong)
         } else {
@@ -2426,6 +2473,27 @@ private struct TrayView: View {
           VStack(spacing: 7) {
             ForEach(sortedLocalModels) { model in
               installedLocalRow(model)
+            }
+          }
+        }
+        // Knowing a tag by heart is not a reasonable prerequisite for trying a
+        // local model, and the text field below was the only way in. These are
+        // rated against this machine's memory, so nothing offered here is
+        // something it cannot run.
+        if !suggestedLocalModels.isEmpty {
+          Divider().padding(.vertical, 2)
+          downloadHeader("FOR CODING · EXPERIMENTAL", detail: "~9K to work in after Codex's prompt")
+          VStack(spacing: 6) {
+            ForEach(suggestedLocalModels) { model in
+              availableLocalRow(model)
+            }
+          }
+        }
+        if !suggestedVisionModels.isEmpty {
+          downloadHeader("FOR READING IMAGES ONLY", detail: "cannot code")
+          VStack(spacing: 6) {
+            ForEach(suggestedVisionModels) { model in
+              availableVisionRow(model)
             }
           }
         }
@@ -2450,6 +2518,92 @@ private struct TrayView: View {
           downloadBar(tag: download.tag, percent: download.percent)
         }
       }
+    }
+
+    @ViewBuilder private func availableLocalRow(_ model: AvailableLocalModel) -> some View {
+      HStack(spacing: 8) {
+        VStack(alignment: .leading, spacing: 1) {
+          Text(model.tag)
+            .font(.system(size: 10, weight: .medium))
+            .lineLimit(1)
+          Text(model.note)
+            .font(.system(size: 8))
+            .foregroundStyle(routerMuted)
+            .lineLimit(1)
+            .truncationMode(.tail)
+        }
+        Spacer()
+        if model.fit == "tight" {
+          Text("tight")
+            .font(.system(size: 8, weight: .medium))
+            .foregroundStyle(routerYellow)
+        }
+        // Whether anyone has actually driven a Codex turn with it.
+        Text(model.isVerified ? "verified" : "untested")
+          .font(.system(size: 8, weight: model.isVerified ? .semibold : .regular))
+          .foregroundStyle(model.isVerified ? routerMint : routerMuted)
+        Text(String(format: "%.1f GB", model.sizeGb))
+          .font(.system(size: 9))
+          .foregroundStyle(routerMuted)
+          .monospacedDigit()
+        Button("Download") {
+          Task { await store.downloadLocalVisionModel(model.tag) }
+        }
+        .buttonStyle(.borderless)
+        .font(.system(size: 9, weight: .medium))
+        .foregroundStyle(canDownloadSuggestion ? routerMint : routerMutedStrong)
+        .disabled(!canDownloadSuggestion)
+      }
+    }
+
+    @ViewBuilder private func downloadHeader(_ title: String, detail: String?) -> some View {
+      Divider().padding(.vertical, 2)
+      HStack(spacing: 4) {
+        Text(title)
+        Spacer()
+        if let detail {
+          Text(detail).lineLimit(1).truncationMode(.tail)
+        }
+      }
+      .font(.system(size: 8, weight: .semibold))
+      .foregroundStyle(routerMuted)
+      .padding(.horizontal, 2)
+    }
+
+    @ViewBuilder private func availableVisionRow(_ model: AvailableVisionModel) -> some View {
+      HStack(spacing: 8) {
+        Text(model.tag)
+          .font(.system(size: 10, weight: .medium))
+          .lineLimit(1)
+        // What it scored against a known image, not a claim about it.
+        Text(model.accuracy)
+          .font(.system(size: 8))
+          .foregroundStyle(model.accuracy == "accurate" ? routerMint : routerMuted)
+        Spacer()
+        Text(String(format: "%.1f GB", model.sizeGb))
+          .font(.system(size: 9))
+          .foregroundStyle(routerMuted)
+          .monospacedDigit()
+        Button("Download") {
+          Task { await store.downloadLocalVisionModel(model.tag) }
+        }
+        .buttonStyle(.borderless)
+        .font(.system(size: 9, weight: .medium))
+        .foregroundStyle(canDownloadSuggestion ? routerMint : routerMutedStrong)
+        .disabled(!canDownloadSuggestion)
+      }
+    }
+
+    private var canDownloadSuggestion: Bool {
+      !busy && store.visionDownload?.isRunning != true
+    }
+
+    private var suggestedLocalModels: [AvailableLocalModel] {
+      localModels?.available ?? []
+    }
+
+    private var suggestedVisionModels: [AvailableVisionModel] {
+      localModels?.availableVision ?? []
     }
 
     private static let checkColumnWidth: CGFloat = 38
@@ -2657,23 +2811,32 @@ private struct TrayView: View {
           ),
           disabled: busy
         )
-        if vision?.enabled == true {
-          HStack(spacing: 8) {
-            Text("Engine")
-              .font(.system(size: 11, weight: .medium))
-            Spacer()
-            engineMenu
-          }
-          .padding(.horizontal, 2)
+        // The row stays put when the switch flips. Showing and hiding it
+        // resized the whole panel on every toggle, and because the state only
+        // settles after the control command returns, the jump happened twice.
+        HStack(spacing: 8) {
+          Text("Engine")
+            .font(.system(size: 11, weight: .medium))
+            // The one label that must never compress; it is four characters
+            // and the menu beside it is what should give way.
+            .fixedSize()
+          Spacer(minLength: 8)
+          engineMenu
         }
+        .padding(.horizontal, 2)
+        .opacity(vision?.enabled == true ? 1 : 0.45)
+        .disabled(vision?.enabled != true)
       }
     }
 
     @ViewBuilder private var engineMenu: some View {
       Menu {
-        Button("Auto · cheapest paid model") {
-          Task { await store.setVisionBridgeEngine("auto") }
-        }
+        // No "Auto" entry. It was labelled "cheapest paid model", but the
+        // ranking behind it scored cost by testing slugs against
+        // /flash|haiku|mini|lite|small|turbo/ -- which matches none of the
+        // engines a typical install has, so they tied and the winner fell out
+        // of alphabetical order. The menu now offers only models the operator
+        // can actually evaluate, and a fresh install starts on a named default.
         if !(vision?.paidEngines ?? []).isEmpty {
           Section("Paid (cloud)") {
             ForEach(vision?.paidEngines ?? []) { option in
@@ -2690,14 +2853,25 @@ private struct TrayView: View {
         }
       } label: {
         HStack(spacing: 4) {
-          Text(currentEngineLabel).lineLimit(1)
-          Image(systemName: "chevron.up.chevron.down").font(.system(size: 8))
+          Text(currentEngineLabel)
+            .lineLimit(1)
+            // A label reads "Auto · MiniMax M3 (opencode Go) · high": the ends
+            // carry the meaning, so the middle is what goes.
+            .truncationMode(.middle)
+          Image(systemName: "chevron.up.chevron.down")
+            .font(.system(size: 8))
+            .fixedSize()
         }
         .font(.system(size: 10, weight: .medium))
         .foregroundStyle(routerMint)
       }
       .menuStyle(.borderlessButton)
-      .fixedSize()
+      // Not fixedSize: that asks for the label's ideal width and ignores the
+      // 352pt popover, so a long engine name pushed the row off the panel
+      // instead of truncating. A ceiling lets it shrink and keeps the chevron
+      // on screen.
+      .frame(maxWidth: 230, alignment: .trailing)
+      .help(currentEngineLabel)
       .disabled(busy)
     }
 
@@ -2748,7 +2922,13 @@ private struct TrayView: View {
       }
       let suffix = vision.effort.map { " · \($0)" } ?? ""
       if vision.engine == nil {
-        return "Auto · \(vision.resolvedEngineName ?? vision.resolvedEngine ?? "none")\(suffix)"
+        // While a change is in flight the snapshot can arrive with the choice
+        // recorded but nothing resolved yet. "Auto" alone is true throughout;
+        // "Auto · none" was a claim that flashed and then contradicted itself.
+        guard let resolved = vision.resolvedEngineName ?? vision.resolvedEngine else {
+          return "Auto\(suffix)"
+        }
+        return "Auto · \(resolved)\(suffix)"
       }
       return "\(vision.resolvedEngineName ?? vision.resolvedEngine ?? vision.engine ?? "none")\(suffix)"
     }
@@ -2809,8 +2989,12 @@ private struct TrayView: View {
             .font(.system(size: 9))
             .foregroundStyle(routerMutedStrong)
             .lineLimit(1)
+            // "Reading via <engine>" carries a model name of unbounded length,
+            // and the switch to the right must not be pushed off the panel.
+            .truncationMode(.tail)
+            .help(detail)
         }
-        Spacer()
+        Spacer(minLength: 8)
         Toggle("", isOn: isOn)
           .labelsHidden()
           .toggleStyle(.switch)
