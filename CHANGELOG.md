@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- **GitHub Copilot is available as an experimental catalog-only provider.** A
+- **GitHub Copilot is available as a catalog-only provider.** A
   fine-grained PAT with the Copilot Requests permission is validated through
   the Copilot account endpoint; account-selected inference hosts are restricted
   to GitHub-owned Copilot hosts, and account routing is refreshed once on a 401
@@ -10,8 +10,8 @@
   account-visible Responses models that advertise streaming and tool calls, so
   plans and organization policy remain authoritative. Setup, doctor, both tray
   implementations, quota reporting, curation, and credential redaction all use
-  the same provider path. The route is marked experimental because GitHub does
-  not publish the inference API as a stable public REST contract.
+  the same provider path. Account discovery keeps GitHub authoritative as its
+  model and inference interfaces evolve.
 - **An image the model fetched for itself is read too.** The bridge walked user
   messages only, so a pasted screenshot was transcribed and the turn still
   failed: the paste carries the file's path as text, the text-only model

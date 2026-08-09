@@ -119,7 +119,7 @@ grok login --oauth
 Native GPT models continue to use Codex directly. There is no separate GPT or
 ChatGPT OAuth provider in the router.
 
-### GitHub Copilot (experimental)
+### GitHub Copilot
 
 `github-copilot` routes account-visible models that explicitly advertise the
 Responses API, streaming, and tool calls. The catalog is plan- and
@@ -146,9 +146,9 @@ only when it is GitHub-owned. The tray reads the account's AI-credit or legacy
 request quota when GitHub exposes a per-user meter; organization-managed plans
 that expose no per-seat quota fall back to router-observed traffic.
 
-This integration is experimental because GitHub documents the PAT permission
-and Copilot clients, but not the inference API as a stable public REST contract.
-It may change upstream. Requests consume the user's Copilot allowance; use it
+GitHub documents the PAT permission and Copilot clients, while the inference
+interface may continue to evolve. Requests consume the user's Copilot
+allowance; use it
 within the [GitHub Copilot terms](https://docs.github.com/site-policy/github-terms/github-terms-for-additional-products-and-features#github-copilot)
 and [acceptable use policies](https://docs.github.com/site-policy/acceptable-use-policies/github-acceptable-use-policies).
 
@@ -375,7 +375,7 @@ often for the repository to pin and live-verify individual entries:
 | SiliconFlow | `siliconflow` | `https://api.siliconflow.cn/v1` |
 | Hugging Face Router | `huggingface` | `https://router.huggingface.co/v1` |
 | Google Gemini API | `gemini-api` | `https://generativelanguage.googleapis.com/v1beta/openai` |
-| GitHub Copilot (experimental) | `github-copilot` | Account-specific GitHub Copilot endpoint |
+| GitHub Copilot | `github-copilot` | Account-specific GitHub Copilot endpoint |
 
 Add a key, then pick the models you want from the provider's live catalog:
 
