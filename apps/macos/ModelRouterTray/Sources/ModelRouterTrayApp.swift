@@ -388,6 +388,7 @@ final class RouterStore: ObservableObject {
     "qwen-plan": "Qwen",
     "ollama-cloud": "Ollama",
     "commandcode": "Command Code",
+    "clinepass": "ClinePass",
   ]
 
   static func shortName(forRegistryProvider provider: RouterProviderInfo) -> String {

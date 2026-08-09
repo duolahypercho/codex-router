@@ -30,6 +30,18 @@ test("provider registry exposes configured API and OAuth model families", () => 
     LISTED_MODELS.map((model) => model.slug),
     [
       "anthropic-api/claude-opus-4.8",
+      "clinepass/deepseek-v4-flash",
+      "clinepass/deepseek-v4-pro",
+      "clinepass/glm-5.2",
+      "clinepass/kimi-k2.6",
+      "clinepass/kimi-k2.7-code",
+      "clinepass/kimi-k3",
+      "clinepass/mimo-v2.5-pro",
+      "clinepass/mimo-v2.5",
+      "clinepass/minimax-m3",
+      "clinepass/qwen3.7-max",
+      "clinepass/qwen3.7-plus",
+      "clinepass/qwen3.8-max",
       "commandcode/deepseek-v4-flash",
       "commandcode/deepseek-v4-pro",
       "commandcode/gemini-3.5-flash",
@@ -137,6 +149,39 @@ test("provider registry exposes configured API and OAuth model families", () => 
     "COMMANDCODE_API_KEY",
   ]);
   assert.equal(PROVIDERS.get("grok-api").baseUrl, "https://api.x.ai/v1");
+  const clinepass = PROVIDERS.get("clinepass");
+  assert.equal(clinepass.baseUrl, "https://api.cline.bot/api/v1");
+  assert.equal(clinepass.baseUrlEnv, "CLINE_API_BASE_URL");
+  assert.deepEqual(clinepass.credential.environment, ["CLINE_API_KEY"]);
+  assert.equal(clinepass.credential.file, "clinepass-api-key.secret");
+  assert.deepEqual(clinepass.credential.keychainServices, ["codex-router-clinepass"]);
+  const clinepassModels = LISTED_MODELS.filter(({ provider }) => provider === "clinepass");
+  assert.deepEqual(
+    clinepassModels.map(({ upstreamModel }) => upstreamModel),
+    [
+      "cline-pass/deepseek-v4-flash",
+      "cline-pass/deepseek-v4-pro",
+      "cline-pass/glm-5.2",
+      "cline-pass/kimi-k2.6",
+      "cline-pass/kimi-k2.7-code",
+      "cline-pass/kimi-k3",
+      "cline-pass/mimo-v2.5-pro",
+      "cline-pass/mimo-v2.5",
+      "cline-pass/minimax-m3",
+      "cline-pass/qwen3.7-max",
+      "cline-pass/qwen3.7-plus",
+      "cline-pass/qwen3.8-max",
+    ],
+  );
+  for (const model of clinepassModels) {
+    assert.equal(model.requestProfile, "clinepass", model.slug);
+    assert.equal(model.defaultEffort, "high", model.slug);
+    assert.deepEqual(model.reasoningLevels, [
+      { effort: "high", description: "Default model behavior" },
+    ], model.slug);
+    assert.equal(model.multiAgentVersion, undefined, model.slug);
+    assert.deepEqual(model.inputModalities, ["text"], model.slug);
+  }
   assert.equal(PROVIDERS.get("grok-oauth").proxyBaseEnv, "GROK_OAUTH_FORWARD_BASE_URL");
   // Qwen OAuth was discontinued upstream on 2026-04-15, so the plan key is the
   // only Qwen surface. A second key-based provider would differ only by base
@@ -337,7 +382,7 @@ test("LiteLLM configuration is generated from every registry route", () => {
     rendered.indexOf('model_name:', rendered.indexOf('model_name: "opencode-go-responses-gpt-5-6-luna"') + 1),
   );
   assert.doesNotMatch(lunaBlock, /use_chat_completions_api/);
-  assert.doesNotMatch(rendered, /ANTHROPIC_API_KEY|DEEPSEEK_API_KEY|KIMI_API_KEY/);
+  assert.doesNotMatch(rendered, /ANTHROPIC_API_KEY|CLINE_API_KEY|DEEPSEEK_API_KEY|KIMI_API_KEY/);
 });
 
 test("curated upgrade prompts point at listed generational successors", () => {

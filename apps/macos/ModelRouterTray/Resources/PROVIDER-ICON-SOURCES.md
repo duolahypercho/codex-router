@@ -13,5 +13,6 @@ blue accent and DeepSeek's original blue mark are preserved.
 | DeepSeek | https://www.deepseek.com/ | https://www.deepseek.com/favicon.ico |
 | Anthropic | https://www.anthropic.com/ | https://cdn.prod.website-files.com/67ce28cfec624e2b733f8a52/681d52619fec35886a7f1a70_favicon.png |
 | Command Code | https://commandcode.ai/ | https://commandcode.ai/apple-touch-icon.png |
+| ClinePass | https://cline.bot/ | https://cline.bot/assets/branding/favicons/favicon-256x256.png |
 
 The marks remain trademarks of their respective owners.

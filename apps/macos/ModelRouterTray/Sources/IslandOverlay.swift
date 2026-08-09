@@ -589,7 +589,9 @@ private struct IslandOverlayView: View {
     if provider == "openai" { return "CHATGPT • NATIVE" }
     if provider == "grok-oauth" { return "XAI • OAUTH SESSION" }
     if provider == "grok-api" { return "XAI • METERED API" }
-    if provider.hasSuffix("-api") || provider == "deepseek" { return "METERED API" }
+    if provider.hasSuffix("-api") || provider == "deepseek" || provider == "clinepass" {
+      return "METERED API"
+    }
     return "OAUTH ROUTE"
   }
 
@@ -940,6 +942,7 @@ private struct ProviderIcon: View {
     if providerID == "deepseek" { return "deepseek" }
     if providerID == "anthropic-api" { return "anthropic" }
     if providerID.hasPrefix("commandcode") { return "commandcode" }
+    if providerID == "clinepass" { return "clinepass" }
     return nil
   }
 
@@ -953,6 +956,7 @@ private struct ProviderIcon: View {
     if providerID == "qwen-plan" { return "Qwen" }
     if providerID == "ollama-cloud" { return "Ollama" }
     if providerID.hasPrefix("commandcode") { return "Command Code" }
+    if providerID == "clinepass" { return "ClinePass" }
     return "Model provider"
   }
 }
