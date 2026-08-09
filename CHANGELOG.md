@@ -12,6 +12,21 @@
   implementations, quota reporting, curation, and credential redaction all use
   the same provider path. Account discovery keeps GitHub authoritative as its
   model and inference interfaces evolve.
+- **The gateway no longer installs a cryptography with a known advisory.**
+  litellm 1.95.0 required `cryptography>=48.0.1,<49.0`, and the fix for
+  GHSA-g6cj-pr64-35w5 — a Bleichenbacher oracle reachable through PKCS#7
+  EnvelopedData decryption — landed in 50.0.0, so the patched version could not
+  be resolved at all while that pin was held. litellm moves to 1.96.0, which
+  allows `cryptography>=49.0.0,<51.0`, and the lock now carries 50.0.0. Nothing
+  else moves except `litellm-enterprise`.
+
+  The fastapi cap stays at 0.139.2. litellm 1.96.0 declares `fastapi<1.0` but
+  still imports `get_flat_dependant`, which 0.140 removed, so a resolve that
+  looks clean produces a gateway that dies on startup — verified by booting the
+  proxy on both pins rather than by trusting the resolver. macOS installs get
+  faster as a side effect: 1.96.0 publishes macOS wheels, where 1.95.0 had to be
+  built from the sdist with a Rust toolchain.
+
 - **An image the model fetched for itself is read too.** The bridge walked user
   messages only, so a pasted screenshot was transcribed and the turn still
   failed: the paste carries the file's path as text, the text-only model

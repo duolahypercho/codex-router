@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -131,6 +132,29 @@ def free_port() -> int:
         return probe.getsockname()[1]
 
 
+def stop_proxy(child: subprocess.Popen) -> None:
+    """Stop the proxy, and anything it started.
+
+    `terminate()` reaches the CLI process and nothing else. litellm leaves a
+    second process behind on Windows that keeps the log file open, so the
+    workspace could not be deleted afterwards and something stayed listening on
+    the port. Killing the tree is the only way to end both from here.
+    """
+    if child.poll() is None:
+        if os.name == "nt":
+            subprocess.run(
+                ["taskkill", "/T", "/F", "/PID", str(child.pid)],
+                capture_output=True,
+                check=False,
+            )
+        else:
+            child.terminate()
+        try:
+            child.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            child.kill()
+
+
 def check_proxy_starts(venv: Path, timeout: float) -> bool:
     """Start the proxy the way src/start.mjs does and wait for /health/liveliness.
 
@@ -144,7 +168,17 @@ def check_proxy_starts(venv: Path, timeout: float) -> bool:
         return fail(f"the litellm entry point is missing at {binary}")
 
     port = free_port()
-    with tempfile.TemporaryDirectory() as workspace:
+    # Deliberately not `TemporaryDirectory()`. A held handle must not fail a
+    # check that has already answered: litellm writes its log into this
+    # workspace, and on Windows the handle can outlive the process we waited on,
+    # so the automatic cleanup raised PermissionError [WinError 32] *after*
+    # /health/liveliness had returned 200 -- reporting a working gateway as a
+    # broken lock. `ignore_cleanup_errors=True` would say the same thing but
+    # only on Python 3.10+, and this script has to keep running wherever it is
+    # pointed. A leaked temp directory is not worth a false failure; `stop_proxy`
+    # is what keeps the leak from being routine.
+    workspace = tempfile.mkdtemp()
+    try:
         config = Path(workspace) / "litellm.yaml"
         config.write_text(
             "model_list:\n"
@@ -195,14 +229,10 @@ def check_proxy_starts(venv: Path, timeout: float) -> bool:
                     except (urllib.error.URLError, OSError):
                         time.sleep(2)
             finally:
-                # Recorded above before this shutdown overwrites returncode, so
-                # "the proxy crashed" is never reported as "CI killed it".
-                if child.poll() is None:
-                    child.terminate()
-                    try:
-                        child.wait(timeout=30)
-                    except subprocess.TimeoutExpired:
-                        child.kill()
+                # `exited` was recorded above, before this shutdown overwrites
+                # returncode, so "the proxy crashed" is never reported as
+                # "CI killed it".
+                stop_proxy(child)
 
         # The proxy output is the diagnosis, so it is printed in full rather
         # than summarised: a transitive dependency the lock's markers excluded
@@ -214,6 +244,8 @@ def check_proxy_starts(venv: Path, timeout: float) -> bool:
         if exited is not None:
             return fail(f"the proxy exited with {exited} before it became live")
         return fail(f"the proxy did not answer /health/liveliness within {timeout}s")
+    finally:
+        shutil.rmtree(workspace, ignore_errors=True)
 
 
 def main() -> int:

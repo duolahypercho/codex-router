@@ -107,16 +107,30 @@ dependency tree. That tree is pinned and hashed rather than re-resolved.
    only on the machine that produced it; `test/python-lock.test.mjs` fails on
    that, on an unhashed entry, and on any disagreement with
    `PYTHON_REQUIREMENTS`. Do not weaken those tests to land a lock.
-4. `litellm==1.95.0` publishes wheels for `manylinux` and `win_amd64` only, so
-   **macOS builds it from the sdist** with `maturin` and a Rust toolchain. That
-   predates the lock and the lock does not change it — the sdist hash is in the
-   file, so the source build is verified too. Do not "fix" a slow or failing
-   macOS install by moving the pin; check for `cargo` first.
+4. Check which wheels a litellm pin actually publishes before moving it.
+   `1.95.0` shipped `manylinux` and `win_amd64` only, so **macOS built it from
+   the sdist** with `maturin` and a Rust toolchain — slow, and broken outright
+   without `cargo`. `1.96.0` publishes macOS wheels (arm64 and x86_64) as well,
+   so no supported platform builds from source today. If a macOS install is slow
+   or failing, check for `cargo` and check the pin's wheel list; do not assume
+   either state.
 5. Hash verification covers the distributions, not the isolated build
    environment pip and uv create for an sdist. `maturin` is fetched unhashed
    during that build. Closing that gap needs a separate build-requirements
-   lock; do not claim the current lock covers it.
-6. The lock is proven by installing it, not by reasoning about it.
+   lock; do not claim the current lock covers it. No supported platform builds
+   from source at the current pin, which narrows the exposure but does not
+   remove it — a pin without a wheel for someone's platform brings it back.
+6. A pin can be a **security floor**, and moving it backwards reintroduces the
+   advisory it was raised for. `litellm==1.95.0` required
+   `cryptography>=48.0.1,<49.0`, so no patched cryptography could be resolved
+   while it was held (GHSA-g6cj-pr64-35w5, fixed in 50.0.0). Dependabot reports
+   the transitive package; the fix is almost always the direct pin above it.
+7. Resolving is not booting. litellm's own metadata allows fastapi versions its
+   code cannot import (`get_flat_dependant`, removed in 0.140), so `uv pip
+   compile` will happily produce a lock whose gateway dies on startup. Any
+   change to either Python pin has to be proven by starting the proxy and
+   getting a live `/health/liveliness`, not by a successful resolve.
+8. The lock is proven by installing it, not by reasoning about it.
    `.github/workflows/python-lock.yml` installs it for real on Linux and
    Windows through both resolvers, then asserts the pinned versions, the
    `litellm[proxy]` extra, and a live `/health/liveliness`. It gets the command
