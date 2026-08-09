@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **GitHub Copilot is available as an experimental catalog-only provider.** A
+  fine-grained PAT with the Copilot Requests permission is validated through
+  the Copilot account endpoint; account-selected inference hosts are restricted
+  to GitHub-owned Copilot hosts, and account routing is refreshed once on a 401
+  before any bytes are relayed. Live discovery exposes only
+  account-visible Responses models that advertise streaming and tool calls, so
+  plans and organization policy remain authoritative. Setup, doctor, both tray
+  implementations, quota reporting, curation, and credential redaction all use
+  the same provider path. The route is marked experimental because GitHub does
+  not publish the inference API as a stable public REST contract.
+
 - **A curated model can say it refuses a forced tool choice.** A few upstreams
   call tools happily when `tool_choice` is `"auto"` and answer HTTP 400 when
   one is required, so the compatibility check reported no tool support and the

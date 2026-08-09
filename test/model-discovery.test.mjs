@@ -7,6 +7,8 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const { PROVIDERS } = await import("../src/model-registry.mjs");
+const { modelIds } = await import("../src/model-discovery.mjs");
 
 test("model discovery compares fixtures without needing or exposing a key", () => {
   const testRoot = mkdtempSync(path.join(os.tmpdir(), "codex-router-discovery-"));
@@ -53,4 +55,64 @@ test("Command Code discovery parses the Provider API model list", () => {
   } finally {
     rmSync(testRoot, { recursive: true, force: true });
   }
+});
+
+test("Copilot discovery exposes only selectable Responses models with tools", () => {
+  const payload = {
+    data: [
+      {
+        id: "gpt-responses",
+        model_picker_enabled: true,
+        supported_endpoints: ["/responses", "/chat/completions"],
+        capabilities: { supports: { tool_calls: true, streaming: true } },
+      },
+      {
+        id: "chat-only",
+        model_picker_enabled: true,
+        supported_endpoints: ["/chat/completions"],
+        capabilities: { supports: { tool_calls: true, streaming: true } },
+      },
+      {
+        id: "no-tools",
+        model_picker_enabled: true,
+        supported_endpoints: ["/responses"],
+        capabilities: { supports: { tool_calls: false, streaming: true } },
+      },
+      {
+        id: "policy-disabled",
+        model_picker_enabled: true,
+        policy: { state: "disabled" },
+        supported_endpoints: ["/responses"],
+        capabilities: { supports: { tool_calls: true, streaming: true } },
+      },
+      {
+        id: "utility",
+        model_picker_enabled: false,
+        supported_endpoints: ["/responses"],
+        capabilities: { supports: { tool_calls: true, streaming: true } },
+      },
+      {
+        id: "accounts/router/internal",
+        object: "model",
+        model_picker_enabled: true,
+        supported_endpoints: ["/responses"],
+        capabilities: { type: "chat", supports: { tool_calls: true, streaming: true } },
+      },
+      {
+        id: "embedding-record",
+        object: "embedding",
+        model_picker_enabled: true,
+        supported_endpoints: ["/responses"],
+        capabilities: { supports: { tool_calls: true, streaming: true } },
+      },
+      {
+        id: "non-chat",
+        object: "model",
+        model_picker_enabled: true,
+        supported_endpoints: ["/responses"],
+        capabilities: { type: "embedding", supports: { tool_calls: true, streaming: true } },
+      },
+    ],
+  };
+  assert.deepEqual(modelIds(payload, PROVIDERS.get("github-copilot")), ["gpt-responses"]);
 });

@@ -309,10 +309,10 @@ async fn save_api_key(
 ) -> Result<Value, String> {
     validate_provider_kind(&provider, ProviderKind::Api)?;
     if api_key.trim().is_empty() {
-        return Err("Enter an API key first.".into());
+        return Err("Enter a credential first.".into());
     }
     if api_key.len() > 16 * 1024 {
-        return Err("The API key is too large.".into());
+        return Err("The credential is too large.".into());
     }
 
     let router = state.inner().clone();
@@ -326,7 +326,7 @@ async fn save_api_key(
         run_control_json(&router, &["providers", "--json"], None)
     })
     .await
-    .map_err(|_| "The API key operation did not finish.".to_string())?
+    .map_err(|_| "The credential operation did not finish.".to_string())?
 }
 
 // The control plane already drops the provider from the Codex selection when a
@@ -345,7 +345,7 @@ async fn remove_api_key(state: State<'_, RouterState>, provider: String) -> Resu
         Ok(removal)
     })
     .await
-    .map_err(|_| "The API key removal did not finish.".to_string())?
+    .map_err(|_| "The credential removal did not finish.".to_string())?
 }
 
 #[tauri::command]
@@ -938,6 +938,7 @@ fn validate_provider(provider: &str) -> Result<(), String> {
         "deepseek",
         "grok-api",
         "grok-oauth",
+        "github-copilot",
     ];
     if PROVIDERS.contains(&provider) {
         Ok(())
@@ -991,6 +992,7 @@ mod tests {
         assert!(validate_provider("../../secret").is_err());
         assert!(validate_provider_kind("deepseek", ProviderKind::Api).is_ok());
         assert!(validate_provider_kind("deepseek", ProviderKind::Oauth).is_err());
+        assert!(validate_provider_kind("github-copilot", ProviderKind::Api).is_ok());
     }
 
     #[test]

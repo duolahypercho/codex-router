@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "providers": [
+    {
+      "id": "github-copilot",
+      "displayName": "GitHub Copilot (experimental)",
+      "kind": "openai-compatible",
+      "ownedBy": "github",
+      "protocol": "openai-responses",
+      "authProfile": "github-copilot",
+      "baseUrl": "https://api.individual.githubcopilot.com",
+      "baseUrlEnv": "GITHUB_COPILOT_BASE_URL",
+      "planNote": "Experimental: requires Copilot access and uses GitHub's evolving Copilot inference API. After connecting, run ./bin/curate-models github-copilot.",
+      "credential": {
+        "environment": [
+          "COPILOT_GITHUB_TOKEN"
+        ],
+        "file": "github-copilot-token.secret",
+        "legacyFiles": [],
+        "keychainServices": [
+          "codex-router-github-copilot"
+        ],
+        "prompt": "fine-grained GitHub PAT with Copilot Requests permission",
+        "label": "GitHub token"
+      }
+    }
+  ]
+}

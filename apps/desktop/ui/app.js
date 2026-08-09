@@ -290,7 +290,8 @@ function startPanel() {
 
   function providerRow(provider, enabled) {
     const isBusy = state.busyProvider === provider.id;
-    const kind = provider.kind === "oauth" ? "OAuth" : "API key";
+    const credentialLabel = provider.credentialLabel || "API key";
+    const kind = provider.kind === "oauth" ? "OAuth" : credentialLabel;
     let detail = provider.configured ? `${kind} connected` : `${kind} not connected`;
     let action = "";
     let actionLabel = "";
@@ -299,17 +300,19 @@ function startPanel() {
       actionLabel = provider.cliInstalled ? (provider.configured ? "Reconnect" : "Sign in") : "Install CLI";
     } else {
       action = "key";
-      actionLabel = provider.configured ? "Replace key" : "Add key";
+      actionLabel = credentialLabel === "API key"
+        ? provider.configured ? "Replace key" : "Add key"
+        : provider.configured ? `Replace ${credentialLabel}` : `Add ${credentialLabel}`;
     }
     if (isBusy) detail = "Working…";
     const canRemove = provider.kind === "api" && provider.configured;
     return `<article class="provider-row">
-      <div><strong>${escapeHtml(provider.displayName)}</strong><small>${escapeHtml(detail)}</small></div>
+      <div><strong>${escapeHtml(provider.displayName)}</strong><small>${escapeHtml(detail)}</small>${provider.planNote ? `<small>${escapeHtml(provider.planNote)}</small>` : ""}</div>
       <div class="provider-actions">
         <button class="mini-button" type="button" data-action="${action}" data-provider="${escapeHtml(provider.id)}"${isBusy ? " disabled" : ""}>${actionLabel}</button>
         ${
           canRemove
-            ? `<button class="mini-button danger" type="button" data-action="remove-key" data-provider="${escapeHtml(provider.id)}" aria-label="Remove ${escapeHtml(provider.displayName)} key"${isBusy ? " disabled" : ""}>Remove</button>`
+            ? `<button class="mini-button danger" type="button" data-action="remove-key" data-provider="${escapeHtml(provider.id)}" aria-label="Remove ${escapeHtml(provider.displayName)} credential"${isBusy ? " disabled" : ""}>Remove</button>`
             : ""
         }
         ${
@@ -525,10 +528,13 @@ function startPanel() {
     const action = button.dataset.action;
     if (action === "key") {
       const setup = state.providerSetup?.providers?.find((item) => item.id === provider);
+      const credentialLabel = setup?.credentialLabel || "API key";
+      const credentialNoun = credentialLabel === "API key" ? "key" : credentialLabel;
       state.keyProvider = provider;
       elements.keyTitle.textContent = setup?.configured
-        ? `Replace ${setup.displayName} key`
-        : `Add ${setup?.displayName || "API"} key`;
+        ? `Replace ${setup.displayName} ${credentialNoun}`
+        : `Add ${setup?.displayName || "API"} ${credentialNoun}`;
+      elements.keyInput.placeholder = `Paste ${credentialLabel.toLowerCase()}`;
       elements.keyDialog.showModal();
       requestAnimationFrame(() => elements.keyInput.focus());
       return;
@@ -537,9 +543,11 @@ function startPanel() {
     if (action === "remove-key") {
       const setup = state.providerSetup?.providers?.find((item) => item.id === provider);
       const name = setup?.displayName || "this provider";
+      const credentialLabel = setup?.credentialLabel || "API key";
+      const credentialNoun = credentialLabel === "API key" ? "key" : credentialLabel;
       state.removeProvider = provider;
-      elements.removeTitle.textContent = `Remove ${name} key`;
-      elements.removeBody.textContent = `The stored ${name} key is deleted from this Mac and ${name} is hidden from the Codex model picker. You can add a new key at any time.`;
+      elements.removeTitle.textContent = `Remove ${name} ${credentialNoun}`;
+      elements.removeBody.textContent = `The stored ${name} ${credentialLabel.toLowerCase()} is deleted from this machine and ${name} is hidden from the Codex model picker. You can add a new credential at any time.`;
       elements.removeDialog.showModal();
       requestAnimationFrame(() => elements.cancelRemove.focus());
       return;
@@ -629,7 +637,7 @@ function startPanel() {
     renderProviders();
     try {
       await call("save_api_key", { provider, apiKey });
-      showToast("API key saved. Restart Codex to refresh its model picker.");
+      showToast("Credential saved. Restart Codex to refresh its model picker.");
       await refreshPanel({ quiet: true });
     } catch (error) {
       showToast(errorMessage(error), true);

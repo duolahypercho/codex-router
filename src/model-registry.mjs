@@ -132,6 +132,22 @@ function loadRegistry() {
         fail(`provider ${provider.id} requires ${field}`);
       }
     }
+    if (
+      provider.authProfile !== undefined &&
+      !["github-copilot"].includes(provider.authProfile)
+    ) {
+      fail(`provider ${provider.id} has an unsupported auth profile`);
+    }
+    if (
+      provider.authProfile === "github-copilot" &&
+      (
+        provider.id !== "github-copilot" ||
+        provider.kind !== "openai-compatible" ||
+        provider.protocol !== "openai-responses"
+      )
+    ) {
+      fail("the github-copilot auth profile requires the github-copilot Responses provider");
+    }
     if (provider.kind === "oauth" && !provider.proxyBaseEnv) {
       fail(`OAuth provider ${provider.id} requires proxyBaseEnv`);
     }
@@ -159,6 +175,12 @@ function loadRegistry() {
         (!provider.credential?.file || !Array.isArray(provider.credential.environment))
       ) {
         fail(`provider ${provider.id} requires credential metadata`);
+      }
+      if (
+        provider.credential?.label !== undefined &&
+        (typeof provider.credential.label !== "string" || !provider.credential.label.trim())
+      ) {
+        fail(`provider ${provider.id} has an invalid credential label`);
       }
       const sessionProblem = cliSessionProblem(provider);
       if (sessionProblem) fail(sessionProblem);
@@ -198,6 +220,9 @@ function loadRegistry() {
     }
     if (provider.credential?.file !== parent.credential?.file) {
       fail(`variant provider ${provider.id} must share ${parent.id}'s credential file`);
+    }
+    if (provider.authProfile !== parent.authProfile) {
+      fail(`variant provider ${provider.id} must share ${parent.id}'s auth profile`);
     }
     // A variant that resolved a different CLI sign-in than its parent would
     // authenticate one protocol surface and not the other from the same

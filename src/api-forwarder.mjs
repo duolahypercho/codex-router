@@ -19,9 +19,14 @@ import { parseRateLimitHeaders } from "./rate-limit-headers.mjs";
 import { recordRateLimitSnapshot } from "./rate-limit-state.mjs";
 import { canonicalProviderId, readProviderSelection } from "./provider-selection.mjs";
 import {
+  credentialLabel,
   credentialStatus,
   resolveProviderCredential,
 } from "./provider-credentials.mjs";
+import {
+  ensureFreshGitHubCopilotSession,
+  githubCopilotRequestHeaders,
+} from "./github-copilot-session.mjs";
 import { VERSION } from "./version.mjs";
 
 const LISTEN_HOST =
@@ -331,6 +336,11 @@ function normalizeBody(buffer, contentType, route) {
   if (Array.isArray(payload.messages)) {
     payload.messages = sanitizeChatToolHistory(payload.messages, provider);
   }
+  if (provider.authProfile === "github-copilot") {
+    // This is native ChatGPT account metadata, not an upstream scheduling
+    // request Copilot accepts.
+    delete payload.service_tier;
+  }
   if (model.requestProfile === "kimi-k3") {
     const effort = kimiK3Effort(payload.reasoning_effort);
     // Absent means the platform default (max); K3 rejects the thinking param.
@@ -443,14 +453,26 @@ function normalizeBody(buffer, contentType, route) {
       payload.tool_choice = "auto";
     }
   }
-  return { body: Buffer.from(JSON.stringify(payload), "utf8"), model, provider };
+  return { body: Buffer.from(JSON.stringify(payload), "utf8"), model, provider, payload };
 }
 
-function upstreamHeaders(requestHeaders, body, apiKey, provider) {
+function upstreamHeaders(requestHeaders, body, apiKey, provider, extraHeaders = {}) {
   const headers = {};
+  const providerIdentityHeaders = new Set([
+    "copilot-integration-id",
+    "copilot-vision-request",
+    "editor-plugin-version",
+    "editor-version",
+    "openai-intent",
+    "openai-organization",
+    "x-github-api-version",
+    "x-initiator",
+    "x-request-id",
+  ]);
   for (const [name, value] of Object.entries(requestHeaders)) {
     const lower = name.toLowerCase();
     if (HOP_BY_HOP_HEADERS.has(lower) || lower === "authorization" || lower === "x-api-key") continue;
+    if (provider.authProfile === "github-copilot" && providerIdentityHeaders.has(lower)) continue;
     if (lower.startsWith("x-msh-") || lower.startsWith("x-codex-")) continue;
     if (lower.startsWith("x-openai-") || lower === "chatgpt-account-id") continue;
     if (lower === "originator" || lower === "user-agent" || lower === "accept-encoding") {
@@ -466,8 +488,23 @@ function upstreamHeaders(requestHeaders, body, apiKey, provider) {
   }
   headers["User-Agent"] = `codex-router/${VERSION}`;
   headers["Accept-Encoding"] = "identity";
+  Object.assign(headers, extraHeaders);
   if (body.length) headers["Content-Length"] = String(body.length);
   return headers;
+}
+
+async function upstreamSession(provider, credential, payload, options = {}) {
+  if (provider.authProfile !== "github-copilot") {
+    return { apiKey: credential.value, baseUrl: providerBaseUrl(provider), headers: {} };
+  }
+  const session = await ensureFreshGitHubCopilotSession(credential.value, options);
+  return {
+    apiKey: session.token,
+    baseUrl: process.env[provider.baseUrlEnv]
+      ? providerBaseUrl(provider)
+      : session.baseUrl,
+    headers: githubCopilotRequestHeaders(payload, session.token),
+  };
 }
 
 function healthPayload() {
@@ -529,11 +566,15 @@ async function handleRequest(request, response) {
   const credential = resolveProviderCredential(normalized.provider);
   if (!credential) {
     const setup = credentialStatus(normalized.provider).setup;
+    const credentialType = credentialLabel(normalized.provider);
+    const label = credentialType === "API key" ? "key" : credentialType.toLowerCase();
     writeJson(response, 503, {
       error: {
-        type: "provider_api_key_missing",
+        type: credentialType === "API key"
+          ? "provider_api_key_missing"
+          : "provider_credential_missing",
         provider: normalized.provider.id,
-        message: `${normalized.provider.displayName} key is not configured. ${setup}.`,
+        message: `${normalized.provider.displayName} ${label} is not configured. ${setup}.`,
       },
     });
     return;
@@ -544,13 +585,44 @@ async function handleRequest(request, response) {
   response.once("close", () => {
     if (!response.writableEnded) controller.abort();
   });
-  const target = `${providerBaseUrl(normalized.provider)}${route}${requestUrl.search}`;
-  const upstream = await fetch(target, {
+  let session = await upstreamSession(normalized.provider, credential, normalized.payload);
+  let target = `${session.baseUrl}${route}${requestUrl.search}`;
+  let upstream = await fetch(target, {
     method: request.method,
-    headers: upstreamHeaders(request.headers, normalized.body, credential.value, normalized.provider),
+    headers: upstreamHeaders(
+      request.headers,
+      normalized.body,
+      session.apiKey,
+      normalized.provider,
+      session.headers,
+    ),
     body: normalized.body,
     signal: controller.signal,
   });
+  // Account routing can change with plan or policy. Re-resolve and replay once
+  // before any response byte reaches the caller; every other status is relayed.
+  if (normalized.provider.authProfile === "github-copilot" && upstream.status === 401) {
+    await upstream.body?.cancel().catch(() => undefined);
+    session = await upstreamSession(
+      normalized.provider,
+      credential,
+      normalized.payload,
+      { force: true },
+    );
+    target = `${session.baseUrl}${route}${requestUrl.search}`;
+    upstream = await fetch(target, {
+      method: request.method,
+      headers: upstreamHeaders(
+        request.headers,
+        normalized.body,
+        session.apiKey,
+        normalized.provider,
+        session.headers,
+      ),
+      body: normalized.body,
+      signal: controller.signal,
+    });
+  }
   await pipeResponse(upstream, response);
   // Harvest the provider's own quota report from the response it just sent.
   // Costs no extra request and works for any provider that emits the standard

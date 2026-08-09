@@ -102,6 +102,7 @@ API-key providers use hidden prompts:
 ./bin/provider-key ollama-cloud set
 ./bin/provider-key qwen-plan set
 ./bin/provider-key zai-coding set
+./bin/provider-key github-copilot set
 ```
 
 Replace a stored key by running `set` again. Delete one with `remove`, which
@@ -135,11 +136,18 @@ Windows:
 ./codex-router.ps1 provider-key deepseek set
 ./codex-router.ps1 provider-key grok-api set
 ./codex-router.ps1 provider-key anthropic-api set
+./codex-router.ps1 provider-key github-copilot set
 ```
 
-Kimi OAuth, Kimi Platform, DeepSeek, xAI, and Anthropic are separate account and billing
+Kimi OAuth, Kimi Platform, DeepSeek, xAI, Anthropic, and GitHub Copilot are separate account and billing
 systems. Never put a credential in chat, a command argument, shell history,
 the provider registry, or a tracked file.
+
+GitHub Copilot requires a fine-grained PAT with the **Copilot Requests**
+permission. After storing it, run `./bin/curate-models github-copilot`; the
+provider publishes no fixed model list because model and protocol availability
+depends on the account's plan and organization policy. The router does not read
+the official Copilot CLI credential store.
 
 Noninteractive setup can reuse already configured credentials:
 
@@ -175,7 +183,7 @@ Setup performs these operations in order:
 4. Installs locked Node dependencies and pinned LiteLLM in `.venv`.
 5. Generates separate random Codex caller and internal-service keys.
 6. Captures the native Codex model catalog and adds only selected provider models.
-7. Generates gateway routes from `config/providers.json`.
+7. Generates gateway routes from the split registry tree under `config/`.
 8. Adds the marked capability-bearing base URL and catalog block. When the user
    has not set an agent concurrency limit, it also configures six spawned-agent
    slots so native Kimi/Grok/GPT collaboration does not remain on Codex's small

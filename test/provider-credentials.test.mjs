@@ -14,7 +14,7 @@ import test from "node:test";
 const testRoot = mkdtempSync(path.join(os.tmpdir(), "codex-router-credentials-"));
 process.env.CODEX_HOME = path.join(testRoot, "codex");
 process.env.CODEX_ROUTER_STATE_DIR = path.join(testRoot, "state");
-for (const name of ["ANTHROPIC_API_KEY", "DEEPSEEK_API_KEY", "KIMI_API_KEY", "MOONSHOT_API_KEY", "XAI_API_KEY", "GROK_API_KEY"]) {
+for (const name of ["ANTHROPIC_API_KEY", "COPILOT_GITHUB_TOKEN", "DEEPSEEK_API_KEY", "KIMI_API_KEY", "MOONSHOT_API_KEY", "XAI_API_KEY", "GROK_API_KEY"]) {
   delete process.env[name];
 }
 
@@ -44,6 +44,23 @@ test("provider credentials use protected files and remove legacy managed keys", 
     assert.equal(privateFileIsProtected(anthropicPath), true);
     assert.equal(resolveProviderCredential("anthropic-api")?.value, "TEST_ANTHROPIC_FILE_KEY");
 
+    assert.throws(
+      () => writeProviderCredential("github-copilot", "ghp_TEST_CLASSIC_TOKEN"),
+      /Classic GitHub PATs are not supported/,
+    );
+    process.env.COPILOT_GITHUB_TOKEN = "ghp_TEST_CLASSIC_ENV_TOKEN";
+    assert.equal(resolveProviderCredential("github-copilot"), undefined);
+    delete process.env.COPILOT_GITHUB_TOKEN;
+    const copilotPath = writeProviderCredential(
+      "github-copilot",
+      "github_pat_TEST_FINE_GRAINED_TOKEN",
+    );
+    assert.equal(privateFileIsProtected(copilotPath), true);
+    assert.equal(
+      resolveProviderCredential("github-copilot")?.value,
+      "github_pat_TEST_FINE_GRAINED_TOKEN",
+    );
+
     const legacyDirectory = path.join(process.env.CODEX_HOME, "kimi-router");
     const legacyPath = path.join(legacyDirectory, "api-key.secret");
     mkdirSync(legacyDirectory, { recursive: true, mode: 0o700 });
@@ -55,9 +72,11 @@ test("provider credentials use protected files and remove legacy managed keys", 
     assert.equal(removeProviderCredential("deepseek"), 1);
     assert.equal(removeProviderCredential("grok-api"), 1);
     assert.equal(removeProviderCredential("anthropic-api"), 1);
+    assert.equal(removeProviderCredential("github-copilot"), 1);
     assert.equal(existsSync(deepSeekPath), false);
     assert.equal(existsSync(xaiPath), false);
     assert.equal(existsSync(anthropicPath), false);
+    assert.equal(existsSync(copilotPath), false);
   } finally {
     rmSync(testRoot, { recursive: true, force: true });
   }

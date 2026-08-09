@@ -3,6 +3,10 @@ import { readFileSync } from "node:fs";
 import { grokOAuthStatus, grokSessionEntry } from "./grok-oauth-status.mjs";
 import { ensureFreshGrokOAuthToken } from "./grok-oauth-session.mjs";
 import { ensureFreshKimiOAuthToken, kimiIdentityHeaders } from "./kimi-oauth-session.mjs";
+import {
+  assertGitHubCopilotCredential,
+  githubCopilotAccountHeaders,
+} from "./github-copilot-session.mjs";
 import { kimiOAuthStatus } from "./oauth-status.mjs";
 import { PROVIDERS } from "./model-registry.mjs";
 import { resolveProviderCredential } from "./provider-credentials.mjs";
@@ -166,6 +170,53 @@ export function grokCreditsMetrics(payload) {
     });
   }
 
+  return metrics;
+}
+
+export function githubCopilotQuotaMetrics(payload) {
+  const reset =
+    payload?.quota_reset_date ??
+    payload?.quota_reset_date_utc ??
+    payload?.limited_user_reset_date;
+  const labels = {
+    premium_interactions: "AI credits",
+    chat: "Chat messages",
+    completions: "Inline suggestions",
+  };
+  const metrics = [];
+  for (const [name, detail] of Object.entries(payload?.quota_snapshots || {})) {
+    if (!labels[name] || !detail || detail.unlimited === true) continue;
+    const limit = detail.entitlement == null ? undefined : numberValue(detail.entitlement);
+    const remaining = detail.remaining == null ? undefined : numberValue(detail.remaining);
+    const percentRemaining = detail.percent_remaining == null
+      ? undefined
+      : numberValue(detail.percent_remaining);
+    if (!Number.isFinite(limit) || limit <= 0) continue;
+    if (remaining === -1) continue;
+    const resolvedRemaining = Number.isFinite(remaining)
+      ? remaining
+      : Number.isFinite(percentRemaining)
+        ? (limit * percentRemaining) / 100
+        : undefined;
+    const metric = quotaMetric(labels[name], {
+      limit,
+      remaining: resolvedRemaining,
+      resetTime: reset,
+    }, name === "premium_interactions" ? "credits" : "requests");
+    if (metric) metrics.push(metric);
+  }
+  if (metrics.length) return metrics;
+  const monthly = payload?.monthly_quotas || {};
+  const limited = payload?.limited_user_quotas || {};
+  for (const name of ["chat", "completions"]) {
+    if (monthly[name] == null || limited[name] == null) continue;
+    const metric = quotaMetric(labels[name], {
+      limit: monthly[name],
+      remaining: limited[name],
+      resetTime: reset,
+    });
+    if (metric) metrics.push(metric);
+  }
   return metrics;
 }
 
@@ -407,6 +458,32 @@ async function zaiCodingAccount(fetchImpl) {
   return account;
 }
 
+async function githubCopilotAccount(fetchImpl) {
+  const credential = resolveProviderCredential("github-copilot");
+  if (!credential) return { status: "not-configured", source: "official-api", metrics: [] };
+  const token = assertGitHubCopilotCredential(credential.value);
+  const response = await fetchImpl("https://api.github.com/copilot_internal/user", {
+    headers: githubCopilotAccountHeaders(token),
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
+  if (!response.ok) throw new Error(`GitHub Copilot usage API returned HTTP ${response.status}`);
+  const payload = await response.json().catch(() => ({}));
+  const metrics = githubCopilotQuotaMetrics(payload);
+  const account = {
+    status: metrics.length ? "available" : "local-only",
+    source: "official-api",
+    metrics,
+    dashboardUrl: "https://github.com/settings/copilot",
+    ...(!metrics.length
+      ? { message: "GitHub exposes no per-seat quota for this Copilot plan; showing router traffic" }
+      : {}),
+  };
+  if (typeof payload?.copilot_plan === "string" && payload.copilot_plan) {
+    account.plan = payload.copilot_plan;
+  }
+  return account;
+}
+
 async function accountUsageFor(providerId, fetchImpl) {
   try {
     if (providerId === "deepseek") return await deepSeekAccount(fetchImpl);
@@ -465,6 +542,7 @@ async function accountUsageFor(providerId, fetchImpl) {
           }
         : { status: "not-configured", source: "official-api", metrics: [] };
     }
+    if (providerId === "github-copilot") return await githubCopilotAccount(fetchImpl);
     // Every remaining provider — including the catalog-only ones — reports its
     // window through response headers or shows router traffic alone.
     return withHeaderQuota(providerId, localOnly("Showing router traffic"));

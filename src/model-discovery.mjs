@@ -4,16 +4,35 @@ import { fileURLToPath } from "node:url";
 
 import { MODELS, PROVIDERS } from "./model-registry.mjs";
 import { credentialStatus, resolveProviderCredential } from "./provider-credentials.mjs";
+import {
+  ensureFreshGitHubCopilotSession,
+  githubCopilotCatalogHeaders,
+} from "./github-copilot-session.mjs";
 
 function option(name) {
   const index = process.argv.indexOf(name);
   return index === -1 ? undefined : process.argv[index + 1];
 }
 
-function modelIds(payload) {
+export function modelIds(payload, provider) {
   const data = Array.isArray(payload) ? payload : payload?.data;
   if (!Array.isArray(data)) throw new Error("The provider returned an invalid model list.");
-  return [...new Set(data.map((item) => String(item?.id || "").trim()).filter(Boolean))].sort();
+  const candidates = provider?.authProfile === "github-copilot"
+    ? data.filter((item) =>
+        typeof item?.id === "string" &&
+        !item.id.startsWith("accounts/") &&
+        (item.object === undefined || item.object === "model") &&
+        (item.capabilities?.type === undefined || item.capabilities.type === "chat") &&
+        item.model_picker_enabled === true &&
+        item?.policy?.state !== "disabled" &&
+        item?.policy?.state !== "unconfigured" &&
+        item?.capabilities?.supports?.tool_calls === true &&
+        item?.capabilities?.supports?.streaming !== false &&
+        Array.isArray(item?.supported_endpoints) &&
+        item.supported_endpoints.includes("/responses")
+      )
+    : data;
+  return [...new Set(candidates.map((item) => String(item?.id || "").trim()).filter(Boolean))].sort();
 }
 
 async function providerPayload(provider) {
@@ -21,11 +40,19 @@ async function providerPayload(provider) {
   if (fixture) return JSON.parse(readFileSync(path.resolve(fixture), "utf8"));
   const credential = resolveProviderCredential(provider);
   if (!credential) throw new Error(credentialStatus(provider).setup);
-  const baseUrl = String(process.env[provider.baseUrlEnv] || provider.baseUrl).replace(/\/+$/, "");
+  let baseUrl = String(process.env[provider.baseUrlEnv] || provider.baseUrl).replace(/\/+$/, "");
+  let headers = provider.protocol === "anthropic"
+    ? { "x-api-key": credential.value, "anthropic-version": "2023-06-01" }
+    : { Authorization: `Bearer ${credential.value}` };
+  if (provider.authProfile === "github-copilot") {
+    const session = await ensureFreshGitHubCopilotSession(credential.value);
+    if (!process.env[provider.baseUrlEnv]) baseUrl = session.baseUrl;
+    headers = {
+      ...githubCopilotCatalogHeaders(session.token),
+    };
+  }
   const response = await fetch(`${baseUrl}/models`, {
-    headers: provider.protocol === "anthropic"
-      ? { "x-api-key": credential.value, "anthropic-version": "2023-06-01" }
-      : { Authorization: `Bearer ${credential.value}` },
+    headers,
     signal: AbortSignal.timeout(30_000),
   });
   const payload = await response.json().catch(() => ({}));
@@ -39,9 +66,9 @@ export async function discoverProviderModels(providerId) {
   const provider = PROVIDERS.get(providerId);
   if (!provider) throw new Error(`Unknown provider: ${providerId}`);
   if (provider.kind !== "openai-compatible") {
-    throw new Error(`${provider.displayName} does not expose a supported API-key model-list endpoint.`);
+    throw new Error(`${provider.displayName} does not expose a supported model-list endpoint.`);
   }
-  const discovered = modelIds(await providerPayload(provider));
+  const discovered = modelIds(await providerPayload(provider), provider);
   const registered = MODELS
     .filter((model) => model.provider === providerId)
     .map((model) => model.upstreamModel)
@@ -62,7 +89,7 @@ async function main() {
   if (process.argv.includes("--help")) {
     process.stdout.write(`Usage: discover-models PROVIDER [--fixture FILE] [--json]
 
-Queries an API-key provider's official /models endpoint and compares it with
+Queries a provider's official /models endpoint and compares it with
 the checked-in config/ registry tree. Credential values are never printed or written.
 `);
     return;

@@ -16,6 +16,7 @@ import { kimiOAuthStatus } from "./oauth-status.mjs";
 import { STATE_DIR } from "./paths.mjs";
 import {
   apiProvider,
+  credentialLabel,
   credentialStatus,
   removeProviderCredential,
   writeProviderCredential,
@@ -164,6 +165,7 @@ export function providerOnboardingSnapshot() {
         id: provider.id,
         displayName: provider.displayName,
         kind: "api",
+        ...(provider.credential?.label ? { credentialLabel: credentialLabel(provider) } : {}),
         configured,
         action: configured ? "ready" : "add-key",
         // Carried to the tray so the plan requirement is visible at the

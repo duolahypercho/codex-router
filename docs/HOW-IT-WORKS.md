@@ -52,8 +52,8 @@ sequenceDiagram
 
 ## One registry, multiple consumers
 
-`config/providers.json` supplies the model mapping used by the catalog, router,
-gateway generator, API forwarder, and doctor.
+The split registry tree under `config/` supplies the model mapping used by the
+catalog, router, gateway generator, API forwarder, and doctor.
 
 `enabled-providers.json` is a separate local policy. It controls both picker
 visibility and dispatcher access. A known namespaced model whose provider is
@@ -137,11 +137,20 @@ and never grants CORS access.
 | Kimi OAuth | Discarded | Kimi CLI OAuth bearer from `~/.kimi-code` |
 | Kimi API | Discarded | Kimi Platform API key |
 | DeepSeek | Discarded | DeepSeek API key |
+| GitHub Copilot | Discarded | Stored fine-grained GitHub token, after Copilot entitlement and endpoint validation |
 
 The Codex-to-router and internal-service trust boundaries use two different
 random keys, each stored with mode `600` or a current-user Windows ACL. Neither
 is a provider credential. Each external forwarder removes Codex account,
 installation, attestation, and private headers before sending a request upstream.
+
+GitHub Copilot adds one more credential boundary inside the shared API
+forwarder. The stored fine-grained GitHub token is sent to GitHub's Copilot
+account endpoint first, which validates entitlement and returns the account's
+inference endpoint. That endpoint is accepted only when it resolves to a
+GitHub-owned Copilot host, so account metadata cannot redirect the token to an
+arbitrary server. The forwarder refreshes account routing once on a 401, before
+relaying any response byte.
 
 ## Provider normalization
 

@@ -1,15 +1,15 @@
 # Codex Router
 
-Use Anthropic, Kimi, DeepSeek, xAI, opencode Go, Command Code, and future
-external models inside the Codex App and CLI through one local,
+Use Anthropic, Kimi, DeepSeek, xAI, GitHub Copilot, opencode Go, Command Code,
+and future external models inside the Codex App and CLI through one local,
 credential-isolating router.
 The integration speaks the Responses API and merges external entries into
 Codex's native model catalog, so routed models appear in the normal picker
 next to the native GPT models.
 
 Codex Router is an independent community project. It is not affiliated with or
-endorsed by OpenAI, Anthropic, Moonshot AI, DeepSeek, OpenRouter, opencode, or
-the referenced opencodex project.
+endorsed by OpenAI, GitHub, Anthropic, Moonshot AI, DeepSeek, OpenRouter,
+opencode, or the referenced opencodex project.
 
 ## Give the link to your agent
 
@@ -26,8 +26,8 @@ restart to me. Never ask me to paste a token or API key into chat.
 ```
 
 If compatible authentication already exists, an agent can finish everything
-except the final app restart. API keys are entered only through a hidden local
-terminal prompt.
+except the final app restart. Provider credentials are entered only through a
+hidden local terminal prompt.
 
 ## Guided install
 
@@ -47,7 +47,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File $installer -Target codex
 ```
 
 The setup selects providers, detects existing authentication, can run the
-official `kimi login`, prompts invisibly for API keys, installs a per-user
+official `kimi login`, prompts invisibly for provider credentials, installs a per-user
 background service, and verifies every local layer. It never makes a paid test
 request unless `--smoke-test` is explicitly selected.
 
@@ -93,7 +93,7 @@ Linux installations support the Codex CLI.
 | Muse Spark 1.1 (Meta) | `meta/muse-spark-1.1` | Meta Model API key |
 
 The Codex catalog is credential-aware. It includes models only from enabled
-external providers with a stored API key or valid OAuth session. Native GPT
+external providers with a stored credential or valid OAuth session. Native GPT
 models are included only when `codex login status` confirms an OpenAI login.
 
 Qwen is key-only. Alibaba discontinued the Qwen Code OAuth free tier on
@@ -118,6 +118,39 @@ grok login --oauth
 
 Native GPT models continue to use Codex directly. There is no separate GPT or
 ChatGPT OAuth provider in the router.
+
+### GitHub Copilot (experimental)
+
+`github-copilot` routes account-visible models that explicitly advertise the
+Responses API, streaming, and tool calls. The catalog is plan- and
+policy-specific, so this provider ships no hard-coded models: store a
+fine-grained GitHub PAT with the **Copilot Requests** permission, then curate
+from the live catalog. This initial integration targets GitHub.com; GitHub
+Enterprise Cloud data-residency hosts are not yet configured by the router.
+
+```sh
+./bin/model-router codex provider-key github-copilot set
+./bin/curate-models github-copilot
+```
+
+The hidden prompt stores the GitHub token in protected router state. For a
+foreground process, `COPILOT_GITHUB_TOKEN` is also accepted. Classic `ghp_`
+tokens are not supported by Copilot; create a fine-grained `github_pat_` token
+at [GitHub personal access tokens](https://github.com/settings/personal-access-tokens/new).
+The router deliberately does not read or copy the official Copilot CLI's
+credential store.
+
+At request time the GitHub credential is validated through the Copilot account
+endpoint, which also selects the account's inference host. That host is accepted
+only when it is GitHub-owned. The tray reads the account's AI-credit or legacy
+request quota when GitHub exposes a per-user meter; organization-managed plans
+that expose no per-seat quota fall back to router-observed traffic.
+
+This integration is experimental because GitHub documents the PAT permission
+and Copilot clients, but not the inference API as a stable public REST contract.
+It may change upstream. Requests consume the user's Copilot allowance; use it
+within the [GitHub Copilot terms](https://docs.github.com/site-policy/github-terms/github-terms-for-additional-products-and-features#github-copilot)
+and [acceptable use policies](https://docs.github.com/site-policy/acceptable-use-policies/github-acceptable-use-policies).
 
 Kimi Code OAuth and Kimi Platform API access are separate authentication and
 billing systems. The two Kimi entries intentionally coexist. Older DeepSeek
@@ -342,6 +375,7 @@ often for the repository to pin and live-verify individual entries:
 | SiliconFlow | `siliconflow` | `https://api.siliconflow.cn/v1` |
 | Hugging Face Router | `huggingface` | `https://router.huggingface.co/v1` |
 | Google Gemini API | `gemini-api` | `https://generativelanguage.googleapis.com/v1beta/openai` |
+| GitHub Copilot (experimental) | `github-copilot` | Account-specific GitHub Copilot endpoint |
 
 Add a key, then pick the models you want from the provider's live catalog:
 

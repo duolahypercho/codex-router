@@ -1450,6 +1450,121 @@ function curatedGeminiModel() {
   return { dir, file, gatewayModel: "gemini-api-gemini-3-5-flash" };
 }
 
+function curatedCopilotModel() {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "routing-copilot-models-"));
+  const file = path.join(dir, "user-models.json");
+  writeFileSync(
+    file,
+    JSON.stringify({
+      version: 1,
+      models: [
+        {
+          slug: "github-copilot/gpt-test",
+          gatewayModel: "github-copilot-gpt-test",
+          upstreamModel: "gpt-test",
+          provider: "github-copilot",
+          listed: true,
+          displayName: "GPT Test (Copilot)",
+          description: "Test fixture.",
+          priority: 500,
+          defaultEffort: "high",
+          reasoningLevels: [{ effort: "high", description: "Adaptive reasoning" }],
+          contextWindow: 131072,
+          autoCompact: 110000,
+          inputModalities: ["text", "image"],
+          compHash: "github-copilot-gpt-test-user-v1",
+        },
+      ],
+    }),
+    "utf8",
+  );
+  return { dir, file, gatewayModel: "github-copilot-gpt-test" };
+}
+
+test("API forwarder validates Copilot auth, sets identity headers, and retries routing once", async () => {
+  const userRequests = [];
+  const upstreamRequests = [];
+  const upstream = await mockServer(async (request, response) => {
+    if (request.url === "/user") {
+      userRequests.push(request.headers);
+      json(response, 200, {
+        endpoints: {},
+      });
+      return;
+    }
+    upstreamRequests.push({
+      headers: request.headers,
+      body: await bodyJson(request),
+    });
+    if (upstreamRequests.length === 1) {
+      json(response, 401, { error: { message: "expired" } });
+      return;
+    }
+    json(response, 200, {
+      id: "resp_copilot",
+      object: "response",
+      status: "completed",
+      model: "gpt-test",
+      output: [],
+    });
+  });
+  const curated = curatedCopilotModel();
+  const forwarderPort = await openPort();
+  const forwarder = run("api-forwarder.mjs", {
+    CODEX_ROUTER_API_PORT: String(forwarderPort),
+    MODEL_ROUTER_USER_MODELS: curated.file,
+    GITHUB_COPILOT_BASE_URL: `http://127.0.0.1:${upstream.port}`,
+    GITHUB_COPILOT_USER_URL: `http://127.0.0.1:${upstream.port}/user`,
+    COPILOT_GITHUB_TOKEN: "github_pat_TEST_GITHUB_SOURCE_TOKEN",
+    CODEX_ROUTER_QUIET: "1",
+  });
+
+  try {
+    await waitFor(`http://127.0.0.1:${forwarderPort}/health`, forwarder, {
+      Authorization: `Bearer ${INTERNAL_KEY}`,
+    });
+    const response = await fetch(`http://127.0.0.1:${forwarderPort}/v1/responses`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${INTERNAL_KEY}`,
+        "ChatGPT-Account-Id": "must-not-forward",
+        "Copilot-Integration-Id": "must-not-forward",
+        "X-Initiator": "user",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: `responses/${curated.gatewayModel}`,
+        service_tier: "priority",
+        input: [
+          {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_image", image_url: "data:image/png;base64,AAA" }],
+          },
+          { type: "function_call_output", call_id: "call-1", output: "ok" },
+        ],
+      }),
+    });
+    assert.equal(response.status, 200);
+    assert.equal(userRequests.length, 2);
+    assert.equal(userRequests[0].authorization, "Bearer github_pat_TEST_GITHUB_SOURCE_TOKEN");
+    assert.equal(upstreamRequests.length, 2);
+    assert.equal(upstreamRequests[0].headers.authorization, "Bearer github_pat_TEST_GITHUB_SOURCE_TOKEN");
+    assert.equal(upstreamRequests[1].headers.authorization, "Bearer github_pat_TEST_GITHUB_SOURCE_TOKEN");
+    assert.equal(upstreamRequests[1].headers["copilot-integration-id"], "copilot-developer-cli");
+    assert.equal(upstreamRequests[1].headers["openai-intent"], "conversation-edits");
+    assert.equal(upstreamRequests[1].headers["x-initiator"], "agent");
+    assert.equal(upstreamRequests[1].headers["copilot-vision-request"], "true");
+    assert.equal(upstreamRequests[1].headers["chatgpt-account-id"], undefined);
+    assert.equal(upstreamRequests[1].body.model, "gpt-test");
+    assert.equal(upstreamRequests[1].body.service_tier, undefined);
+  } finally {
+    await stopChild(forwarder);
+    await closeServer(upstream.server);
+    rmSync(curated.dir, { recursive: true, force: true });
+  }
+});
+
 test("API forwarder fills only missing Gemini thought signatures", async () => {
   const upstreamRequests = [];
   const upstream = await mockServer(async (request, response) => {

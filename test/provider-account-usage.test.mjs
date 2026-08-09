@@ -3,11 +3,70 @@ import test from "node:test";
 
 import {
   deepSeekBalanceMetrics,
+  githubCopilotQuotaMetrics,
   grokCreditsMetrics,
   kimiApiBalanceMetrics,
   kimiQuotaMetrics,
   providerAccountUsageSnapshot,
 } from "../src/provider-account-usage.mjs";
+
+test("normalizes GitHub Copilot AI-credit quota", () => {
+  assert.deepEqual(githubCopilotQuotaMetrics({
+    quota_reset_date: "2026-09-01T00:00:00Z",
+    quota_snapshots: {
+      premium_interactions: {
+        entitlement: 1_500,
+        remaining: 1_125,
+        percent_remaining: 75,
+      },
+      chat: { entitlement: -1, remaining: -1, unlimited: true },
+    },
+  }), [{
+    kind: "quota",
+    label: "AI credits",
+    usedPercent: 25,
+    remainingPercent: 75,
+    used: 375,
+    limit: 1_500,
+    remaining: 1_125,
+    unit: "credits",
+    resetAt: 1_788_220_800,
+  }]);
+});
+
+test("GitHub Copilot usage reads the account quota without exposing the token", async () => {
+  process.env.COPILOT_GITHUB_TOKEN = "github_pat_TEST_COPILOT_USAGE_TOKEN";
+  try {
+    const snapshot = await providerAccountUsageSnapshot({
+      providerIds: ["github-copilot"],
+      fetchImpl: async (url, options) => {
+        assert.equal(url, "https://api.github.com/copilot_internal/user");
+        assert.equal(options.headers.Authorization, "Bearer github_pat_TEST_COPILOT_USAGE_TOKEN");
+        return new Response(JSON.stringify({
+          copilot_plan: "pro",
+          quota_snapshots: {
+            premium_interactions: { entitlement: 1_500, percent_remaining: 90 },
+          },
+        }));
+      },
+    });
+    assert.equal(snapshot["github-copilot"].status, "available");
+    assert.equal(snapshot["github-copilot"].plan, "pro");
+    assert.equal(snapshot["github-copilot"].metrics[0].remainingPercent, 90);
+    assert.doesNotMatch(JSON.stringify(snapshot), /TEST_COPILOT_USAGE_TOKEN/);
+  } finally {
+    delete process.env.COPILOT_GITHUB_TOKEN;
+  }
+});
+
+test("GitHub Copilot ignores null and unlimited quota placeholders", () => {
+  assert.deepEqual(githubCopilotQuotaMetrics({
+    quota_snapshots: {
+      premium_interactions: { entitlement: null, remaining: null, percent_remaining: null },
+      chat: { entitlement: 100, remaining: -1, percent_remaining: 100 },
+    },
+  }), []);
+});
 
 test("normalizes Kimi weekly and five-hour quota windows", () => {
   assert.deepEqual(kimiQuotaMetrics({

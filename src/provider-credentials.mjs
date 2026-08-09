@@ -19,6 +19,10 @@ import { protectPrivateFile } from "./file-security.mjs";
 import { LEGACY_STATE_DIRS, STATE_DIR, TARGET } from "./paths.mjs";
 import { targetCli } from "./target-integration.mjs";
 import { PROVIDERS } from "./model-registry.mjs";
+import {
+  assertGitHubCopilotCredential,
+  githubCopilotCredentialProblem,
+} from "./github-copilot-session.mjs";
 
 export function apiProvider(providerId) {
   const provider = PROVIDERS.get(providerId);
@@ -64,6 +68,13 @@ function keyFromKeychain(provider) {
   return undefined;
 }
 
+function resolvedCredential(provider, value, source, persistent) {
+  if (provider.authProfile === "github-copilot" && githubCopilotCredentialProblem(value)) {
+    return undefined;
+  }
+  return { value, source, persistent };
+}
+
 export function resolveProviderCredential(providerOrId, options = {}) {
   const provider =
     typeof providerOrId === "string" ? apiProvider(providerOrId) : providerOrId;
@@ -77,24 +88,36 @@ export function resolveProviderCredential(providerOrId, options = {}) {
   if (!options.persistent) {
     for (const name of provider.credential.environment) {
       const value = process.env[name]?.trim();
-      if (value) return { value, source: `environment (${name})`, persistent: false };
+      if (value) {
+        const credential = resolvedCredential(provider, value, `environment (${name})`, false);
+        if (credential) return credential;
+      }
     }
   }
   for (const candidate of credentialPaths(provider)) {
     if (!existsSync(candidate)) continue;
     const value = readFileSync(candidate, "utf8").trim();
     if (value) {
-      return { value, source: `protected file (${candidate})`, persistent: true };
+      const credential = resolvedCredential(
+        provider,
+        value,
+        `protected file (${candidate})`,
+        true,
+      );
+      if (credential) return credential;
     }
   }
   const keychain = keyFromKeychain(provider);
-  if (keychain) return { ...keychain, persistent: true };
+  if (keychain) {
+    const credential = resolvedCredential(provider, keychain.value, keychain.source, true);
+    if (credential) return credential;
+  }
   // The provider CLI's own sign-in comes last: a key the user deliberately
   // stored here, or exported into the environment, stays in charge, and the
   // session only fills the gap for someone who never pasted one.
   const session = readCliSessionCredential(provider);
   return session
-    ? { value: session.value, source: session.label, persistent: true }
+    ? resolvedCredential(provider, session.value, session.label, true)
     : undefined;
 }
 
@@ -110,6 +133,10 @@ export function credentialSetupHint(provider) {
     : `Run ${keyCommand}`;
 }
 
+export function credentialLabel(provider) {
+  return provider.credential?.label || "API key";
+}
+
 export function credentialStatus(providerOrId, options = {}) {
   const provider =
     typeof providerOrId === "string" ? apiProvider(providerOrId) : providerOrId;
@@ -123,7 +150,10 @@ export function writeProviderCredential(providerOrId, value) {
   const provider =
     typeof providerOrId === "string" ? apiProvider(providerOrId) : providerOrId;
   const key = String(value || "").trim();
-  if (!key) throw new Error("No API key was entered; nothing changed.");
+  if (!key) throw new Error(`No ${credentialLabel(provider)} was entered; nothing changed.`);
+  if (provider.authProfile === "github-copilot") {
+    assertGitHubCopilotCredential(key);
+  }
   mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 });
   chmodSync(STATE_DIR, 0o700);
   const target = primaryCredentialPath(provider);

@@ -388,6 +388,7 @@ final class RouterStore: ObservableObject {
     "qwen-plan": "Qwen",
     "ollama-cloud": "Ollama",
     "commandcode": "Command Code",
+    "github-copilot": "Copilot",
   ]
 
   static func shortName(forRegistryProvider provider: RouterProviderInfo) -> String {
@@ -846,9 +847,10 @@ final class RouterStore: ObservableObject {
 
   func saveProviderKey(_ provider: String, key: String) async {
     let secret = Data(key.utf8)
+    let label = providerSetup[provider]?.credentialLabel ?? "API key"
     await performProviderOperation(
       provider,
-      successMessage: "API key saved. Restart Codex to refresh its model picker."
+      successMessage: "\(label) saved. Restart Codex to refresh its model picker."
     ) {
       _ = try await runControl(arguments: ["credential", provider], stdin: secret)
       try await updateProviderSelection(provider, enabled: true)
@@ -858,9 +860,10 @@ final class RouterStore: ObservableObject {
   // The control plane already drops the provider from the Codex selection when
   // the key file is deleted; this only makes that selection live.
   func removeProviderKey(_ provider: String) async {
+    let label = providerSetup[provider]?.credentialLabel ?? "API key"
     await performProviderOperation(
       provider,
-      successMessage: "API key removed. Restart Codex to refresh its model picker."
+      successMessage: "\(label) removed. Restart Codex to refresh its model picker."
     ) {
       _ = try await runControl(arguments: ["credential", provider, "--remove"])
       _ = try? await runControl(arguments: ["apply", "--targets", "codex", "--activate"])
@@ -1847,6 +1850,7 @@ struct ProviderSetupState: Decodable, Identifiable, Equatable {
   let signIn: Bool?
   let signedIn: Bool?
   let signInAction: String?
+  let credentialLabel: String?
   // Set when connecting successfully still leaves the account unable to use
   // the API, because its plan does not include one. Shown before the buttons
   // rather than after a 403 lands in Codex.
@@ -3013,6 +3017,8 @@ private struct ProviderSetupRow: View {
   @State private var removalArmed = false
   @State private var armGeneration = 0
 
+  private var credentialLabel: String { setup?.credentialLabel ?? "API key" }
+
   var body: some View {
     VStack(alignment: .leading, spacing: 9) {
       HStack(spacing: 10) {
@@ -3040,11 +3046,11 @@ private struct ProviderSetupRow: View {
 
       if showingKeyField, setup?.kind == "api" {
         VStack(alignment: .leading, spacing: 5) {
-          Text(setup?.configured == true ? "Replacement API key" : "API key")
+          Text(setup?.configured == true ? "Replacement \(credentialLabel)" : credentialLabel)
             .font(.system(size: 9, weight: .medium))
             .foregroundStyle(routerMuted)
           HStack(spacing: 7) {
-            SecureField("Paste key", text: $apiKey)
+            SecureField("Paste \(credentialLabel.lowercased())", text: $apiKey)
               .textFieldStyle(.plain)
               .font(.system(size: 11, design: .monospaced))
               .padding(.horizontal, 9)
@@ -3081,7 +3087,7 @@ private struct ProviderSetupRow: View {
   }
 
   private var detail: String {
-    if removalArmed { return "Click the check again to delete this key" }
+    if removalArmed { return "Click the check again to delete this credential" }
     guard let setup else { return "Checking setup…" }
     if oauthNeedsReconnect {
       return "Session expired · reconnect for account usage"
@@ -3096,7 +3102,7 @@ private struct ProviderSetupRow: View {
     case "install": return "Official CLI required"
     case "login": return "Sign in with the official CLI"
     case "add-key":
-      return offersSignIn ? "Sign in or paste an API key" : "API key required"
+      return offersSignIn ? "Sign in or paste an API key" : "\(credentialLabel) required"
     default: return "Setup required"
     }
   }
@@ -3160,7 +3166,9 @@ private struct ProviderSetupRow: View {
           }
           .buttonStyle(.plain)
           .foregroundStyle(routerAccent)
-          .help(showingKeyField ? "Cancel key replacement" : "Replace API key")
+          .help(showingKeyField
+            ? "Cancel credential replacement"
+            : "Replace \(credentialLabel)")
           .disabled(controlsDisabled)
 
           Button(action: { tapRemove() }) {
@@ -3170,7 +3178,9 @@ private struct ProviderSetupRow: View {
           }
           .buttonStyle(.plain)
           .foregroundStyle(removalArmed ? routerRed : routerYellow)
-          .help(removalArmed ? "Click again to delete the stored key" : "Remove stored API key")
+          .help(removalArmed
+            ? "Click again to delete the stored credential"
+            : "Remove stored \(credentialLabel)")
           .disabled(controlsDisabled)
         }
         Toggle("", isOn: Binding(get: { provider.enabled }, set: onToggle))
@@ -3204,7 +3214,11 @@ private struct ProviderSetupRow: View {
     switch setup?.action {
     case "install": return "Install & Sign In"
     case "login": return "Sign In"
-    case "add-key": return showingKeyField ? "Cancel" : "Add Key"
+    case "add-key":
+      guard !showingKeyField else { return "Cancel" }
+      return credentialLabel == "API key"
+        ? "Add Key"
+        : "Add \(credentialLabel)"
     default: return "Checking…"
     }
   }

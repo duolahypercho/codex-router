@@ -1,20 +1,23 @@
 # Security model
 
 The router has its own trust root separate from Codex's: a random caller key,
-an internal service key, a private state directory, per-provider API-key
+an internal service key, a private state directory, per-provider credential
 files, and a dedicated service identity and port range. Kimi OAuth is the
 intentional exception: the router reuses the official Kimi CLI session under
 `~/.kimi-code`.
 
 ## Credential separation
 
-Codex Router handles four credential classes and keeps them on distinct paths:
+Codex Router keeps every credential class on a distinct path:
 
 - ChatGPT/Codex authentication is allow-listed only for native GPT requests.
 - Kimi Code OAuth is read from the official Kimi CLI directory and sent only to
   the Kimi Code managed endpoint.
 - Kimi Platform API keys are sent only to the configured Kimi Platform endpoint.
 - DeepSeek API keys are sent only to the configured DeepSeek endpoint.
+- A GitHub Copilot fine-grained PAT is validated through GitHub's Copilot
+  account endpoint and sent only to the GitHub-owned inference endpoint that
+  account metadata selects.
 
 External requests never receive ChatGPT account IDs, Codex installation IDs,
 attestation headers, or the caller's authorization header. The loopback gateway
@@ -39,6 +42,7 @@ Router state lives under `$CODEX_HOME/codex-router` by default:
 | `deepseek-api-key.secret` | Optional DeepSeek key | `600` |
 | `xai-api-key.secret` | Optional xAI key | `600` |
 | `anthropic-api-key.secret` | Optional Anthropic key | `600` |
+| `github-copilot-token.secret` | Optional fine-grained GitHub token with Copilot Requests permission | `600` |
 | `native-models.json` | Cached native Codex catalog | `600` |
 | `merged-models.json` | Native plus registry model catalog | `600` |
 | `litellm.yaml` | Generated routes with environment references only | `600` |
@@ -62,7 +66,7 @@ Compatible legacy Keychain lookup is a migration path only.
 Kimi OAuth remains under `$KIMI_CODE_HOME` or `~/.kimi-code`; Codex Router does
 not copy it into its own state directory.
 
-Never commit the state directory, a provider key, a Kimi credential file, or
+Never commit the state directory, a provider credential, a Kimi credential file, or
 a generated config from a live installation.
 
 ## Network boundary
@@ -89,7 +93,13 @@ sharing screenshots or logs.
 
 API base URL overrides are trusted-user configuration. A malicious override can
 send the matching provider credential to another server. Inspect background
-service environment changes and never accept an untrusted `config/providers.json`.
+service environment changes and never accept an untrusted registry override.
+
+For GitHub Copilot, the account-selected inference endpoint is allowlisted to
+HTTPS GitHub Copilot hosts before the token is sent. A base URL override is
+trusted-user configuration and receives the same token, so it must be protected
+like every other provider override. Validated account routing is cached briefly
+in process memory and refreshed once after an upstream 401.
 
 ## Configuration safety
 

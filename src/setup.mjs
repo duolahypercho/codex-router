@@ -250,7 +250,8 @@ function configureProvider(provider) {
     // because most people have an account long before they have a key. Saying
     // no falls through to the key prompt rather than failing the install.
     if (session && hasSignInCli(provider.id) && signInToProvider(provider)) return;
-    if (!confirm(`Enter a ${provider.displayName} key securely now?`)) {
+    const prompt = provider.credential?.prompt || `${provider.displayName} API key`;
+    if (!confirm(`Enter ${prompt} securely now?`)) {
       throw incomplete(`${provider.displayName} setup was cancelled.`);
     }
     run(process.execPath, [path.join(SOURCE_ROOT, "src", "provider-key.mjs"), provider.id, "set"]);

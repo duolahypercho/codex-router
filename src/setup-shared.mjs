@@ -182,7 +182,7 @@ function guidedSelection(appName) {
   if (selected.size === 0) selected = new Set([1]);
   process.stdout.write(`\nChoose the providers to show in ${appName}:\n`);
   process.stdout.write(
-    "OAuth entries reuse official Kimi or Grok CLI sessions; API entries use a provider key.\n",
+    "OAuth entries reuse official Kimi or Grok CLI sessions; API entries use a provider credential.\n",
   );
   for (;;) {
     process.stdout.write(`${renderProviderChoices(snapshots, selected, colorEnabled)}\n`);
@@ -290,7 +290,8 @@ export function configureProvider(provider, { guided, providerKeyCommand }) {
     if (provider.id === "grok-oauth") onboardGrokOauth();
     else onboardKimiOauth();
   } else {
-    if (!confirm(`Enter a ${provider.displayName} key securely now?`)) {
+    const prompt = provider.credential?.prompt || `${provider.displayName} API key`;
+    if (!confirm(`Enter ${prompt} securely now?`)) {
       throw new Error(`${provider.displayName} setup was cancelled.`);
     }
     run(process.execPath, [path.join(SOURCE_ROOT, "src", "provider-key.mjs"), provider.id, "set"]);

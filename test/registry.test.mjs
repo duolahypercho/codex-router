@@ -137,6 +137,11 @@ test("provider registry exposes configured API and OAuth model families", () => 
     "COMMANDCODE_API_KEY",
   ]);
   assert.equal(PROVIDERS.get("grok-api").baseUrl, "https://api.x.ai/v1");
+  assert.equal(PROVIDERS.get("github-copilot").authProfile, "github-copilot");
+  assert.equal(PROVIDERS.get("github-copilot").protocol, "openai-responses");
+  assert.deepEqual(PROVIDERS.get("github-copilot").credential.environment, [
+    "COPILOT_GITHUB_TOKEN",
+  ]);
   assert.equal(PROVIDERS.get("grok-oauth").proxyBaseEnv, "GROK_OAUTH_FORWARD_BASE_URL");
   // Qwen OAuth was discontinued upstream on 2026-04-15, so the plan key is the
   // only Qwen surface. A second key-based provider would differ only by base
@@ -331,6 +336,11 @@ test("LiteLLM configuration is generated from every registry route", () => {
     rendered,
     /model: "openai\/responses\/opencode-go-responses-gpt-5-6-luna"/,
   );
+  assert.equal(
+    MODELS.some((model) => model.provider === "github-copilot"),
+    false,
+    "Copilot stays catalog-only until account-visible models are curated",
+  );
   assert.match(rendered, /model: "anthropic\/opencode-go-messages-minimax-m3"/);
   const lunaBlock = rendered.slice(
     rendered.indexOf('model_name: "opencode-go-responses-gpt-5-6-luna"'),
@@ -467,6 +477,56 @@ test("a keyless provider must be loopback and must not carry a credential", asyn
     });
     assert.equal(keyed.status, 1);
     assert.match(keyed.stderr, /must not declare a credential/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the Copilot auth profile cannot be attached to another provider", async () => {
+  const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const nodePath = (await import("node:path")).default;
+  const { spawnSync } = await import("node:child_process");
+  const dir = mkdtempSync(nodePath.join(tmpdir(), "registry-copilot-profile-test-"));
+  try {
+    const registry = readRegistryDocument("config");
+    registry.providers = registry.providers.map((provider) =>
+      provider.id === "deepseek" ? { ...provider, authProfile: "github-copilot" } : provider,
+    );
+    const registryPath = nodePath.join(dir, "providers.json");
+    writeFileSync(registryPath, JSON.stringify(registry));
+    const result = spawnSync(
+      process.execPath,
+      ["-e", "import('./src/model-registry.mjs').catch((e)=>{console.error(e.message);process.exit(1);})"],
+      { encoding: "utf8", env: { ...process.env, MODEL_ROUTER_REGISTRY: registryPath } },
+    );
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /requires the github-copilot Responses provider/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the Copilot auth profile cannot be attached to an OAuth provider", async () => {
+  const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const nodePath = (await import("node:path")).default;
+  const { spawnSync } = await import("node:child_process");
+  const dir = mkdtempSync(nodePath.join(tmpdir(), "registry-copilot-oauth-test-"));
+  try {
+    const registry = readRegistryDocument("config");
+    registry.providers = registry.providers.map((provider) =>
+      provider.id === "kimi-oauth" ? { ...provider, authProfile: "github-copilot" } : provider,
+    );
+    const registryPath = nodePath.join(dir, "providers.json");
+    writeFileSync(registryPath, JSON.stringify(registry));
+    const result = spawnSync(
+      process.execPath,
+      ["-e", "import('./src/model-registry.mjs').catch((e)=>{console.error(e.message);process.exit(1);})"],
+      { encoding: "utf8", env: { ...process.env, MODEL_ROUTER_REGISTRY: registryPath } },
+    );
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /requires the github-copilot Responses provider/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

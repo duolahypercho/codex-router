@@ -26,7 +26,7 @@ import {
   SOURCE_ROOT,
 } from "./paths.mjs";
 import { cliSessionDescriptor } from "./cli-session-credential.mjs";
-import { credentialStatus } from "./provider-credentials.mjs";
+import { credentialLabel, credentialStatus } from "./provider-credentials.mjs";
 import { providerNeedsCuration } from "./provider-onboarding.mjs";
 import { stateOwnershipStatus } from "./state-owner.mjs";
 import {
@@ -418,9 +418,12 @@ for (const provider of PROVIDERS.values()) {
   if (provider.kind !== "openai-compatible") continue;
   const status = credentialStatus(provider, { persistent: true });
   const session = cliSessionDescriptor(provider);
+  const credentialType = credentialLabel(provider);
   add(
     status.configured ? "ok" : selection.providers.includes(provider.id) ? "fail" : "warn",
-    `${provider.displayName} key`,
+    `${provider.displayName} ${
+      credentialType === "API key" ? "key" : credentialType.toLowerCase()
+    }`,
     status.configured ? status.source : "not configured",
     session
       ? `Run ${session.loginCommand}, or ./bin/provider-key ${provider.id} set.`
@@ -436,10 +439,11 @@ for (const provider of PROVIDERS.values()) {
   // its models are curated, and nothing else says so after the key is stored.
   // Anyone who set a key before that hint existed can only find out here.
   if (status.configured && providerNeedsCuration(provider.id)) {
+    const credentialNoun = credentialType === "API key" ? "key" : credentialType.toLowerCase();
     add(
       "warn",
       `${provider.displayName} models`,
-      "key stored but no models curated; the picker stays empty",
+      `${credentialNoun} stored but no models curated; the picker stays empty`,
       `Run ./bin/curate-models ${provider.id} in an interactive terminal.`,
     );
   }

@@ -22,6 +22,9 @@ export function stepHeader(step, total, title) {
 }
 
 export function providerStatusLabel(snapshot) {
+  if (snapshot.action === "add-key" && snapshot.credentialLabel) {
+    return `needs ${snapshot.credentialLabel}`;
+  }
   return ACTION_LABELS[snapshot.action] || "setup required";
 }
 

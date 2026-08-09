@@ -2,7 +2,7 @@
 
 ## Architecture
 
-- `config/providers.json` is the provider and model registry.
+- `config/` is the split provider and model registry tree.
 - `src/model-registry.mjs` validates and indexes that registry.
 - `src/catalog.mjs` merges listed registry models with native Codex models.
 - `src/litellm-config.mjs` generates every provider translation route.
@@ -20,7 +20,7 @@
 
 ## Add an API-key provider
 
-1. Add a provider object to `config/providers.json` with a unique lowercase ID,
+1. Add a provider fragment under `config/<vendor>/` with a unique lowercase ID,
    API base URL, protocol when it is not OpenAI-compatible, environment variable, protected key filename, and optional
    Keychain service.
 2. Add one model object per upstream model. Public slugs should be namespaced as
@@ -44,6 +44,13 @@ to add another provider using one of those protocols.
 OAuth schemes usually need a dedicated adapter because refresh and identity
 rules are provider-specific. Never infer that an API key can replace an OAuth
 credential or vice versa.
+
+GitHub Copilot is the existing dynamic-auth exception inside the shared API
+forwarder. Its registry provider declares `authProfile: "github-copilot"`;
+`src/github-copilot-session.mjs` validates the stored fine-grained PAT against
+the account endpoint, caches the validated account routing briefly, allowlists
+the returned inference host, and builds provider identity headers. Do not reuse
+that profile for another vendor.
 
 ## Registry rules
 

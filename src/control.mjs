@@ -329,7 +329,7 @@ async function readSecretFromStdin() {
   let size = 0;
   for await (const chunk of process.stdin) {
     size += chunk.length;
-    if (size > 16 * 1024) throw new Error("The API key is too large.");
+    if (size > 16 * 1024) throw new Error("The provider credential is too large.");
     chunks.push(chunk);
   }
   return Buffer.concat(chunks).toString("utf8");

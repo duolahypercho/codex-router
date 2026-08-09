@@ -3,6 +3,7 @@ import { closeSync, openSync, readSync, writeSync } from "node:fs";
 
 import {
   apiProvider,
+  credentialLabel,
   credentialStatus,
   primaryCredentialPath,
   writeProviderCredential,
@@ -25,6 +26,8 @@ if (!providerId || !new Set(["status", "set", "remove"]).has(command)) {
 }
 
 const provider = apiProvider(providerId);
+const credentialType = credentialLabel(provider);
+const credentialNoun = credentialType === "API key" ? "key" : credentialType.toLowerCase();
 
 // The try/finally pair must live in a single array element: joining elements
 // with "; " would otherwise produce "}; finally", which PowerShell rejects
@@ -222,12 +225,12 @@ if (command === "status") {
   const status = credentialStatus(provider);
   process.stdout.write(
     status.configured
-      ? `${provider.displayName} key is configured via ${status.source}.${
+      ? `${provider.displayName} ${credentialNoun} is configured via ${status.source}.${
           status.persistent
             ? ""
-            : " This environment-only key is not inherited by the background service; run the set command to save it securely."
+            : ` This environment-only ${credentialNoun} is not inherited by the background service; run the set command to save it securely.`
         }\n`
-      : `${provider.displayName} key is not configured.\n`,
+      : `${provider.displayName} ${credentialNoun} is not configured.\n`,
   );
   if (!status.configured) process.exitCode = 1;
 } else if (command === "set") {
@@ -236,7 +239,7 @@ if (command === "status") {
   enableProvider(provider.id);
   const refreshed = refreshTargetPickerIfInstalled();
   process.stdout.write(
-    `${provider.displayName} key saved to protected local storage at ${target}. The provider is enabled.${
+    `${provider.displayName} ${credentialNoun} saved to protected local storage at ${target}. The provider is enabled.${
       refreshed ? ` Fully quit and reopen ${targetPickerName()} to refresh the model picker.` : ""
     }\n`,
   );
@@ -251,14 +254,14 @@ if (command === "status") {
   const refreshed = removal.removedFiles ? refreshTargetPickerIfInstalled() : false;
   process.stdout.write(
     removal.removedFiles
-      ? `Removed ${removal.removedFiles} managed ${provider.displayName} key file${removal.removedFiles === 1 ? "" : "s"} and disabled the provider.${
+      ? `Removed ${removal.removedFiles} managed ${provider.displayName} ${credentialNoun} file${removal.removedFiles === 1 ? "" : "s"} and disabled the provider.${
           refreshed ? ` Fully quit and reopen ${targetPickerName()} to refresh the model picker.` : ""
         }\n`
-      : `No managed ${provider.displayName} key file exists.\n`,
+      : `No managed ${provider.displayName} ${credentialNoun} file exists.\n`,
   );
   if (removal.stillConfigured) {
     process.stdout.write(
-      `A ${provider.displayName} key is still available from ${removal.remainingSource}; remove it there to fully disconnect.\n`,
+      `A ${provider.displayName} ${credentialNoun} is still available from ${removal.remainingSource}; remove it there to fully disconnect.\n`,
     );
   }
 }

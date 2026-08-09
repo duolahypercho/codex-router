@@ -927,9 +927,9 @@ private struct ProviderIcon: View {
     guard let assetName else { return nil }
     let url = Bundle.module.url(
       forResource: assetName,
-      withExtension: "png",
+      withExtension: assetExtension,
       subdirectory: "ProviderIcons"
-    ) ?? Bundle.module.url(forResource: assetName, withExtension: "png")
+    ) ?? Bundle.module.url(forResource: assetName, withExtension: assetExtension)
     return url.flatMap(NSImage.init(contentsOf:))
   }
 
@@ -940,7 +940,12 @@ private struct ProviderIcon: View {
     if providerID == "deepseek" { return "deepseek" }
     if providerID == "anthropic-api" { return "anthropic" }
     if providerID.hasPrefix("commandcode") { return "commandcode" }
+    if providerID == "github-copilot" { return "github-copilot" }
     return nil
+  }
+
+  private var assetExtension: String {
+    providerID == "github-copilot" ? "svg" : "png"
   }
 
   private var providerName: String {
@@ -953,6 +958,7 @@ private struct ProviderIcon: View {
     if providerID == "qwen-plan" { return "Qwen" }
     if providerID == "ollama-cloud" { return "Ollama" }
     if providerID.hasPrefix("commandcode") { return "Command Code" }
+    if providerID == "github-copilot" { return "GitHub Copilot" }
     return "Model provider"
   }
 }

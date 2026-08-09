@@ -40,16 +40,19 @@ user.
    never select or toggle it separately. Command Code accepts either a stored
    key or a `command-code login` browser sign-in — see step 5). The
    catalog-only providers `groq`, `openrouter`, `together`, `fireworks`,
-   `cerebras`, `mistral`, `nvidia-nim`, `siliconflow`, `huggingface`, and
-   `gemini-api` are also selectable, but they ship no preselected models: after
-   the key is stored, the user must run `bin/curate-models PROVIDER` in an
+   `cerebras`, `mistral`, `nvidia-nim`, `siliconflow`, `huggingface`,
+   `gemini-api`, and `github-copilot` are also selectable, but they ship no
+   preselected models: after
+   the credential is stored, the user must run `bin/curate-models PROVIDER` in an
    interactive terminal to choose models. If they did not specify and
    credentials already exist, use
    `configured` rather than showing providers that cannot authenticate.
 5. For Kimi OAuth, reuse a valid `kimi login` session. If login is needed, run
    the official CLI only in an interactive terminal. For API providers, invoke
    `bin/model-router codex provider-key PROVIDER set` in a PTY so the hidden
-   prompt receives the value directly; do not relay it through chat. Command
+   prompt receives the value directly; do not relay it through chat. GitHub
+   Copilot requires a fine-grained PAT with the Copilot Requests permission;
+   never read or copy the official Copilot CLI credential store. Command
    Code also accepts a browser sign-in: reuse a valid `command-code login`
    session (`~/.commandcode/auth.json`), or run that CLI in an interactive
    terminal. A successful sign-in does not mean the account may use the
