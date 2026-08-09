@@ -41,15 +41,41 @@ function expandProviderIds(ids) {
   return [...selected];
 }
 
-export function validateProviderIds(values) {
-  const named = values
+// Trim, drop blanks, and rewrite retired ids to their successor. Shared by the
+// strict write path and the tolerant read path so both resolve aliases the
+// same way; only the handling of an id this build does not know differs.
+function resolveProviderIds(values) {
+  return values
     .map((value) => String(value).trim())
     .filter(Boolean)
     .map((value) => RETIRED_PROVIDER_ALIASES.get(value) || value);
+}
+
+// Write path: strict. Someone naming a provider -- on the CLI, in
+// `install --providers`, in the guided picker, or through the tray -- gets a
+// hard error for a typo instead of a silently narrower selection.
+export function validateProviderIds(values) {
+  const named = resolveProviderIds(values);
   for (const id of named) {
     if (!PROVIDERS.has(id)) throw new Error(`Unknown provider: ${id}`);
   }
   return [...new Set(named.map((id) => canonicalProviderId(id)))];
+}
+
+// Read path: tolerant. `PROVIDERS` is built from `config/` at module import, so
+// the set of known ids is frozen for the life of the process while the
+// selection file is rewritten by CLI runs that may come from another checkout.
+// One id this build does not recognize -- version skew after an update, a
+// renamed or removed provider -- must not take the whole router down, because
+// this runs on every routed turn and as the first statement of /health.
+function filterKnownProviderIds(values) {
+  const known = [];
+  const unknown = [];
+  for (const id of resolveProviderIds(values)) {
+    if (PROVIDERS.has(id)) known.push(canonicalProviderId(id));
+    else unknown.push(id);
+  }
+  return { known: [...new Set(known)], unknown: [...new Set(unknown)] };
 }
 
 export function configuredProviderIds() {
@@ -73,27 +99,68 @@ export function configuredProviderIds() {
   return configured;
 }
 
-export function readProviderSelection() {
+// Never throws. Returns the providers to expose plus what had to be ignored, so
+// doctor and the support bundle can report the damage while requests keep
+// flowing. Degrading here matches every other state reader in the hot path
+// (`readNativeAliases`, `readNativeRedirect`, the doctor's catalog read).
+export function readProviderSelectionDetail() {
   if (
     process.env.MODEL_ROUTER_SHOW_ALL_MODELS === "1" ||
     (TARGET === "codex" && process.env.CODEX_ROUTER_SHOW_ALL_MODELS === "1")
   ) {
-    return providerIds();
+    return { providers: providerIds(), ignored: [], degraded: undefined };
   }
-  if (!existsSync(PROVIDER_SELECTION_PATH)) return providerIds();
+  if (!existsSync(PROVIDER_SELECTION_PATH)) {
+    return { providers: providerIds(), ignored: [], degraded: undefined };
+  }
+  let parsed;
   try {
-    const parsed = JSON.parse(readFileSync(PROVIDER_SELECTION_PATH, "utf8"));
-    if (parsed?.version !== 1 || !Array.isArray(parsed.providers)) {
-      throw new Error("version/providers are invalid");
-    }
-    return expandProviderIds(validateProviderIds(parsed.providers));
+    parsed = JSON.parse(readFileSync(PROVIDER_SELECTION_PATH, "utf8"));
   } catch (error) {
-    throw new Error(
-      `Invalid provider selection ${PROVIDER_SELECTION_PATH}: ${
+    return {
+      providers: providerIds(),
+      ignored: [],
+      degraded: `Unreadable provider selection ${PROVIDER_SELECTION_PATH}: ${
         error instanceof Error ? error.message : String(error)
       }`,
-    );
+    };
   }
+  if (parsed?.version !== 1 || !Array.isArray(parsed.providers)) {
+    return {
+      providers: providerIds(),
+      ignored: [],
+      degraded: `Invalid provider selection ${PROVIDER_SELECTION_PATH}: version/providers are invalid`,
+    };
+  }
+  const { known, unknown } = filterKnownProviderIds(parsed.providers);
+  // An explicitly empty list is a real choice -- disabling the last provider
+  // writes `[]`, and hiding everything is supported -- so it stays empty.
+  // A non-empty list that filters down to nothing is different: this build
+  // recognizes none of the operator's choices, so their file says nothing
+  // about the providers it does have. Falling back to the no-file default
+  // leaves the install in the same coherent state as a fresh one instead of
+  // stranding it with zero routable models, and the credential-aware catalog
+  // still hides anything that cannot authenticate.
+  if (known.length === 0 && unknown.length > 0) {
+    return {
+      providers: providerIds(),
+      ignored: unknown,
+      degraded: `Provider selection ${PROVIDER_SELECTION_PATH} names no provider this build knows (${
+        unknown.join(", ")
+      }); showing all providers until it is rewritten.`,
+    };
+  }
+  return {
+    providers: expandProviderIds(known),
+    ignored: unknown,
+    degraded: unknown.length
+      ? `Provider selection ${PROVIDER_SELECTION_PATH} names unknown providers: ${unknown.join(", ")}`
+      : undefined,
+  };
+}
+
+export function readProviderSelection() {
+  return readProviderSelectionDetail().providers;
 }
 
 export function writeProviderSelection(values) {
@@ -145,10 +212,13 @@ export function selectedConfiguredListedModels() {
 }
 
 export function providerSelectionStatus() {
+  const detail = readProviderSelectionDetail();
   return {
     path: PROVIDER_SELECTION_PATH,
     explicit: existsSync(PROVIDER_SELECTION_PATH),
-    providers: readProviderSelection(),
+    providers: detail.providers,
+    ignored: detail.ignored,
+    ...(detail.degraded ? { degraded: detail.degraded } : {}),
   };
 }
 

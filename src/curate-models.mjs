@@ -24,6 +24,10 @@ const effortsOption = (() => {
   const index = process.argv.indexOf("--efforts");
   return index === -1 ? undefined : process.argv[index + 1];
 })();
+const requestProfileOption = (() => {
+  const index = process.argv.indexOf("--request-profile");
+  return index === -1 ? undefined : process.argv[index + 1];
+})();
 
 // The Codex effort ladder. Registry models describe each level explicitly;
 // curated models reuse these standard descriptions. Only advertise levels the
@@ -38,12 +42,38 @@ const EFFORT_DESCRIPTIONS = {
   max: "Maximum reasoning",
 };
 
+// Request profiles a curated model may opt into. The vendor profiles in
+// `src/api-forwarder.mjs` translate one upstream's parameter surface and are
+// inherited from that provider's registry models, never chosen here; these
+// describe a restriction the user observed on a model the repository does not
+// ship, so they are the only ones worth offering by hand.
+const AUTO_TOOL_CHOICE = "auto-tool-choice";
+const REQUEST_PROFILE_DESCRIPTIONS = {
+  [AUTO_TOOL_CHOICE]:
+    'reject a forced tool_choice ("required") while still calling tools under "auto"',
+};
+
 function usage() {
   console.error(
     "Usage: curate-models.mjs PROVIDER [--models id1,id2 | interactive] " +
-      "[--apply|--no-apply] [--efforts minimal,low,medium,high,xhigh]",
+      "[--apply|--no-apply] [--efforts minimal,low,medium,high,xhigh] " +
+      `[--request-profile ${Object.keys(REQUEST_PROFILE_DESCRIPTIONS).join("|")}]`,
   );
   process.exit(2);
+}
+
+// Nothing downstream validates the stored value: the forwarder simply matches
+// no branch, so a typo would store a model that keeps failing exactly the way
+// it did before curation. Fail here instead, the way an unknown effort does.
+export function parseRequestProfile(raw) {
+  const profile = String(raw ?? "").trim().toLowerCase();
+  if (!profile) return undefined;
+  if (!REQUEST_PROFILE_DESCRIPTIONS[profile]) {
+    throw new Error(
+      `Unknown request profile "${profile}". Choose from: ${Object.keys(REQUEST_PROFILE_DESCRIPTIONS).join(", ")}.`,
+    );
+  }
+  return profile;
 }
 
 export function parseEfforts(raw) {
@@ -75,6 +105,14 @@ if (!provider) {
 const flagEfforts = (() => {
   try {
     return effortsOption ? parseEfforts(effortsOption) : undefined;
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(2);
+  }
+})();
+const flagRequestProfile = (() => {
+  try {
+    return requestProfileOption ? parseRequestProfile(requestProfileOption) : undefined;
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     process.exit(2);
@@ -199,15 +237,37 @@ async function main() {
     return Object.keys(metadata).length > 0 ? metadata : undefined;
   };
 
+  // A provider that ships registry models lends its vendor profile to anything
+  // curated beside them. The catalog-only providers ship none, so their first
+  // curated model would get nothing at all -- which is correct for almost
+  // every model and wrong for the ones whose upstream refuses a forced tool
+  // choice. That is a per-model fact (a reseller fronts many upstreams, and
+  // the restriction belongs to the model behind it), so it is asked per model
+  // rather than defaulted per provider.
+  const requestProfileFor = (id) => {
+    if (flagRequestProfile) return flagRequestProfile;
+    if (inheritedProfile) return inheritedProfile;
+    if (!interactive) return undefined;
+    // Defaults to no: this weakens a forced tool choice into a request the
+    // model may decline, so it must be answered rather than fallen into by
+    // pressing Enter through the prompts.
+    return confirm(`  Does ${id} ${REQUEST_PROFILE_DESCRIPTIONS[AUTO_TOOL_CHOICE]}?`, false)
+      ? AUTO_TOOL_CHOICE
+      : undefined;
+  };
+
   const nextMine = chosen.map((id, index) => {
     const existing = byUpstream.get(id);
     if (existing) return existing;
+    // Ask for the metadata before the profile so the interactive prompts stay
+    // under the one "Metadata for ID" heading in the order they are printed.
+    const metadata = metadataFor(id);
     return userModelEntry({
       providerId,
       upstreamId: id,
-      requestProfile: inheritedProfile,
+      requestProfile: requestProfileFor(id),
       priority: 100 + index,
-      metadata: metadataFor(id),
+      metadata,
     });
   });
   const target = writeUserModels([...others, ...nextMine]);

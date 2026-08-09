@@ -262,11 +262,19 @@ Windows:
 ./codex-router.ps1 rollback
 ```
 
-The updater requires a clean checkout on the recognized GitHub origin. It
-fetches `origin/main`, retains the current revision under
+The updater requires the recognized GitHub origin and a checkout with no edits
+to tracked files. It fetches `origin/main`, retains the current revision under
 `refs/codex-router/rollback`, fast-forwards, and reinstalls. A failed install
 automatically checks out and reinstalls the previous revision. `update check`
 only compares the revisions and changes nothing.
+
+Untracked files never block an update; only edits to tracked files do, and the
+refusal names them. Keep them with `git -C <checkout> stash`, or discard them by
+re-running the same command with `--force` (`./bin/update --force`,
+`./bin/rollback --force`, `./codex-router.ps1 rollback --force`). The bootstrap
+installers take the same escape: `--force` for the `curl | sh` script and
+`-Force` for the `irm | iex` one. Every force path discards tracked edits only;
+none of them delete untracked files.
 
 Setup distinguishes a broken checkout from unfinished configuration. When it
 exits 2 — a declined prompt, a missing credential, an invalid `--providers`

@@ -1,13 +1,20 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import http from "node:http";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { zstdCompressSync } from "node:zlib";
+import { zstdCompressSync, zstdDecompressSync } from "node:zlib";
 
 import { callerBaseUrl } from "../src/caller-auth.mjs";
 
@@ -31,7 +38,11 @@ function json(response, status, payload) {
 async function bodyJson(request) {
   const chunks = [];
   for await (const chunk of request) chunks.push(chunk);
-  return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  const raw = Buffer.concat(chunks);
+  // The router compresses large bodies on the way to the native backend, the
+  // way Codex itself does on the way in, so a mock backend has to decode one.
+  const body = request.headers["content-encoding"] === "zstd" ? zstdDecompressSync(raw) : raw;
+  return JSON.parse(body.toString("utf8"));
 }
 
 async function openPort() {
@@ -644,6 +655,87 @@ test("router permits a compressed context larger than the encoded request limit"
   }
 });
 
+test("router hands the native backend a compressed body instead of inflated JSON", async () => {
+  const seen = [];
+  const native = await mockServer(async (request, response) => {
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk);
+    const raw = Buffer.concat(chunks);
+    const encoding = request.headers["content-encoding"];
+    const decoded = encoding === "zstd" ? zstdDecompressSync(raw) : raw;
+    seen.push({ encoding, wireBytes: raw.length, payload: JSON.parse(decoded.toString("utf8")) });
+    json(response, 200, { id: "ok", output: [] });
+  });
+  const routerPort = await openPort();
+  const router = run("router.mjs", {
+    CODEX_ROUTER_PORT: String(routerPort),
+    CODEX_NATIVE_BASE_URL: `http://127.0.0.1:${native.port}`,
+    CODEX_ROUTER_GATEWAY_BASE_URL: `http://127.0.0.1:${native.port}`,
+    CODEX_ROUTER_QUIET: "1",
+  });
+
+  try {
+    await waitFor(`${routerBase(routerPort)}/models`, router);
+    // A real turn: far past the threshold, and compressible the way a
+    // conversation is rather than the way a run of one character is.
+    const text = Array.from(
+      { length: 4_000 },
+      (_, index) => `line ${index}: the quick brown fox jumps over the lazy dog`,
+    ).join("\n");
+    const big = JSON.stringify({
+      model: "gpt-5.6-sol",
+      input: [{ type: "message", role: "user", content: [{ type: "input_text", text }] }],
+    });
+
+    const response = await fetch(`${routerBase(routerPort)}/responses`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${CALLER_KEY}`, "Content-Type": "application/json" },
+      body: big,
+    });
+    assert.equal(response.status, 200, await response.text());
+
+    const [call] = seen;
+    assert.equal(call.encoding, "zstd");
+    // The point of the exercise: fewer bytes on the wire than the router holds
+    // in memory, and the backend still receives the exact turn.
+    assert.ok(call.wireBytes < big.length / 2, `${call.wireBytes} vs ${big.length}`);
+    assert.equal(call.payload.input[0].content[0].text, text);
+  } finally {
+    await stopChild(router);
+    await closeServer(native.server);
+  }
+});
+
+test("a small native turn is sent unencoded, exactly as it always was", async () => {
+  const seen = [];
+  const native = await mockServer(async (request, response) => {
+    seen.push({ encoding: request.headers["content-encoding"], body: await bodyJson(request) });
+    json(response, 200, { id: "ok", output: [] });
+  });
+  const routerPort = await openPort();
+  const router = run("router.mjs", {
+    CODEX_ROUTER_PORT: String(routerPort),
+    CODEX_NATIVE_BASE_URL: `http://127.0.0.1:${native.port}`,
+    CODEX_ROUTER_GATEWAY_BASE_URL: `http://127.0.0.1:${native.port}`,
+    CODEX_ROUTER_QUIET: "1",
+  });
+
+  try {
+    await waitFor(`${routerBase(routerPort)}/models`, router);
+    const response = await fetch(`${routerBase(routerPort)}/responses`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${CALLER_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "gpt-5.6-sol", input: "hello" }),
+    });
+    assert.equal(response.status, 200, await response.text());
+    assert.equal(seen[0].encoding, undefined);
+    assert.equal(seen[0].body.input, "hello");
+  } finally {
+    await stopChild(router);
+    await closeServer(native.server);
+  }
+});
+
 test("router relays encrypted Codex subagent payloads before external routing", async () => {
   const nativeRequests = [];
   const native = await mockServer(async (request, response) => {
@@ -1172,6 +1264,159 @@ test("router inlines an external parent's plaintext task before replaying to nat
   }
 });
 
+// A routed subagent cannot mint an OpenAI Fernet token, so Codex stores its
+// readable handoff under `agent_message.content[].encrypted_content` regardless
+// of how the surrounding envelope is rendered. The envelope-matching path only
+// covers the four `Message Type:` headers that end at `Payload:`; everything
+// else reached OpenAI unchanged and failed the whole request with "Encrypted
+// function output content could not be decrypted or decoded", so the
+// conversation could neither continue nor compact.
+const readableHandoffCases = [
+  {
+    label: "no envelope at all",
+    id: "amsg_bare",
+    content: [{ type: "encrypted_content", encrypted_content: "Summarize the diff." }],
+    expected: [{ type: "input_text", text: "Summarize the diff." }],
+  },
+  {
+    label: "text after the payload",
+    id: "amsg_trailing",
+    content: [
+      {
+        type: "input_text",
+        text: "Message Type: FINAL_ANSWER\nSender: /root/reviewer\nPayload:\n",
+      },
+      { type: "encrypted_content", encrypted_content: "The review is done." },
+      { type: "input_text", text: "\n(truncated)" },
+    ],
+    expected: [
+      {
+        type: "input_text",
+        text: "Message Type: FINAL_ANSWER\nSender: /root/reviewer\nPayload:\n",
+      },
+      { type: "input_text", text: "The review is done." },
+      { type: "input_text", text: "\n(truncated)" },
+    ],
+  },
+  {
+    label: "unrecognized message type",
+    id: "amsg_unknown_type",
+    content: [
+      { type: "input_text", text: "Message Type: TASK_ABORTED\nSender: /root\nPayload:\n" },
+      { type: "encrypted_content", encrypted_content: "The user interrupted the task." },
+    ],
+    expected: [
+      { type: "input_text", text: "Message Type: TASK_ABORTED\nSender: /root\nPayload:\n" },
+      { type: "input_text", text: "The user interrupted the task." },
+    ],
+  },
+  {
+    label: "readable and opaque parts in one message",
+    id: "amsg_mixed",
+    content: [
+      { type: "input_text", text: "Message Type: MESSAGE\nSender: /root\nPayload:\n" },
+      { type: "encrypted_content", encrypted_content: "Readable routed handoff." },
+      {
+        type: "encrypted_content",
+        encrypted_content: "gAAAAABkZmtM7cT9w_XY_zThisIsAnOpaqueBlobWithNoWhitespace==",
+      },
+    ],
+    expected: [
+      { type: "input_text", text: "Message Type: MESSAGE\nSender: /root\nPayload:\n" },
+      { type: "input_text", text: "Readable routed handoff." },
+      {
+        type: "encrypted_content",
+        encrypted_content: "gAAAAABkZmtM7cT9w_XY_zThisIsAnOpaqueBlobWithNoWhitespace==",
+      },
+    ],
+  },
+];
+
+// Nothing here may be rewritten: an opaque OpenAI blob has to arrive
+// byte-identical, and `input_text` / `input_image` are already legal.
+const untouchedHandoffItems = [
+  {
+    type: "agent_message",
+    id: "amsg_opaque",
+    author: "/root",
+    recipient: "/root/other",
+    content: [
+      { type: "input_text", text: "Message Type: NEW_TASK\nSender: /root\nPayload:\n" },
+      {
+        type: "encrypted_content",
+        encrypted_content: "gAAAAABmXk9wQ1J2c3RfT3BhcXVlQmxvYl9Ob1doaXRlc3BhY2U=",
+      },
+    ],
+  },
+  {
+    type: "agent_message",
+    id: "amsg_plain_parts",
+    author: "/root/reviewer",
+    recipient: "/root",
+    content: [
+      { type: "input_text", text: "Already ordinary text." },
+      { type: "input_image", image_url: "https://example.invalid/shot.png" },
+    ],
+  },
+];
+
+for (const endpoint of ["/responses", "/responses/compact"]) {
+  test(`router converts readable routed-agent handoffs to input_text on ${endpoint}`, async () => {
+    const nativeRequests = [];
+    const native = await mockServer(async (request, response) => {
+      nativeRequests.push({ url: request.url, body: await bodyJson(request) });
+      json(response, 200, { route: "native" });
+    });
+    const routerPort = await openPort();
+    const router = run("router.mjs", {
+      CODEX_ROUTER_PORT: String(routerPort),
+      CODEX_NATIVE_BASE_URL: `http://127.0.0.1:${native.port}/backend-api/codex`,
+      CODEX_ROUTER_QUIET: "1",
+    });
+    const headers = {
+      Authorization: "Bearer CODEX_CALLER_SECRET",
+      "Content-Type": "application/json",
+    };
+
+    try {
+      await waitFor(`${routerBase(routerPort)}/models`, router);
+      const input = [
+        ...readableHandoffCases.map((entry) => ({
+          type: "agent_message",
+          id: entry.id,
+          author: "/root",
+          recipient: "/root/reviewer",
+          content: entry.content,
+        })),
+        ...untouchedHandoffItems,
+      ];
+      const replay = await fetch(`${routerBase(routerPort)}${endpoint}`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ model: "gpt-5.6-sol", input }),
+      });
+      assert.equal(replay.status, 200);
+      assert.match(nativeRequests[0].url, new RegExp(`${endpoint}$`));
+      const sent = nativeRequests[0].body.input;
+      for (const entry of readableHandoffCases) {
+        const item = sent.find((candidate) => candidate?.id === entry.id);
+        assert.deepEqual(item.content, entry.expected, entry.label);
+        assert.equal(item.type, "agent_message", entry.label);
+        assert.equal(item.recipient, "/root/reviewer", entry.label);
+      }
+      for (const untouched of untouchedHandoffItems) {
+        assert.deepEqual(
+          sent.find((candidate) => candidate?.id === untouched.id),
+          untouched,
+        );
+      }
+    } finally {
+      await stopChild(router);
+      await closeServer(native.server);
+    }
+  });
+}
+
 // Gemini models reach the registry only through `bin/curate-models gemini-api`,
 // so the fixture registers one the same way curation does.
 function curatedGeminiModel() {
@@ -1517,6 +1762,86 @@ test("API forwarder supports all DeepSeek V4 models and normalizes thinking", as
   }
 });
 
+test("API forwarder downgrades forced tool choices for DeepSeek thinking models", async () => {
+  const upstreamRequests = [];
+  const upstream = await mockServer(async (request, response) => {
+    upstreamRequests.push({ headers: request.headers, body: await bodyJson(request) });
+    json(response, 200, { choices: [] });
+  });
+  const forwarderPort = await openPort();
+  const forwarder = run("api-forwarder.mjs", {
+    CODEX_ROUTER_API_PORT: String(forwarderPort),
+    DEEPSEEK_API_BASE_URL: `http://127.0.0.1:${upstream.port}`,
+    DEEPSEEK_API_KEY: "TEST_DEEPSEEK_API_KEY",
+    CODEX_ROUTER_QUIET: "1",
+  });
+
+  async function forward(gatewayModel, body) {
+    const response = await fetch(
+      `http://127.0.0.1:${forwarderPort}/v1/chat/completions`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${INTERNAL_KEY}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: gatewayModel,
+          messages: [{ role: "user", content: "test" }],
+          ...body,
+        }),
+      },
+    );
+    assert.equal(response.status, 200);
+    return upstreamRequests.at(-1);
+  }
+
+  try {
+    await waitFor(`http://127.0.0.1:${forwarderPort}/health`, forwarder, {
+      Authorization: `Bearer ${INTERNAL_KEY}`,
+    });
+    // DeepSeek answers a forced tool choice under thinking with HTTP 400
+    // ("Thinking mode does not support this tool_choice"). The compatibility
+    // probe sends the string form and the subagent payload relay sends the
+    // object form, so both must arrive as auto rather than failing the turn.
+    for (const gatewayModel of [
+      "deepseek-v4-flash",
+      "deepseek-v4-pro",
+      "deepseek-legacy-reasoner",
+    ]) {
+      for (const toolChoice of [
+        "required",
+        { type: "function", function: { name: "relay_external_agent_payload" } },
+      ]) {
+        const request = await forward(gatewayModel, { tool_choice: toolChoice });
+        assert.deepEqual(request.body.thinking, { type: "enabled" });
+        assert.equal(request.body.tool_choice, "auto");
+      }
+
+      // "none" is not a forced choice: it suppresses tool calls, which the
+      // compaction turn relies on, so it must survive untouched.
+      const suppressed = await forward(gatewayModel, { tool_choice: "none" });
+      assert.equal(suppressed.body.tool_choice, "none");
+
+      // An absent choice stays absent so DeepSeek applies its own default.
+      const absent = await forward(gatewayModel, {});
+      assert.equal(absent.body.tool_choice, undefined);
+      assert.equal("tool_choice" in absent.body, false);
+    }
+
+    // Thinking is disabled on the non-thinking profile, so the restriction does
+    // not apply and a forced choice must pass through unchanged.
+    const nonThinking = await forward("deepseek-legacy-chat", {
+      tool_choice: "required",
+    });
+    assert.deepEqual(nonThinking.body.thinking, { type: "disabled" });
+    assert.equal(nonThinking.body.tool_choice, "required");
+  } finally {
+    await stopChild(forwarder);
+    await closeServer(upstream.server);
+  }
+});
+
 test("API forwarder coalesces consecutive assistant messages so tool results follow tool calls", async () => {
   const upstreamRequests = [];
   const upstream = await mockServer(async (request, response) => {
@@ -1846,6 +2171,143 @@ test("API forwarder routes Qwen plan models without unsupported parameters", asy
   } finally {
     await stopChild(forwarder);
     await closeServer(upstream.server);
+  }
+});
+
+// The catalog-only resellers ship no models, so their entries reach the
+// registry only through `bin/curate-models`. The fixture registers two
+// OpenRouter models the same way curation does: one whose upstream refuses a
+// forced tool choice and therefore carries the opt-in profile, and one that
+// does not, because OpenRouter itself imposes no such restriction.
+function curatedOpenRouterModels() {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "routing-openrouter-models-"));
+  const file = path.join(dir, "user-models.json");
+  const entry = (upstreamModel, gatewayModel, requestProfile) => ({
+    slug: `openrouter/${upstreamModel}`,
+    gatewayModel,
+    upstreamModel,
+    provider: "openrouter",
+    listed: true,
+    displayName: `${upstreamModel} (curated)`,
+    description: "Test fixture.",
+    priority: 500,
+    defaultEffort: "high",
+    reasoningLevels: [{ effort: "high", description: "Adaptive reasoning" }],
+    contextWindow: 131072,
+    autoCompact: 110000,
+    inputModalities: ["text"],
+    compHash: `${gatewayModel}-user-v1`,
+    ...(requestProfile ? { requestProfile } : {}),
+  });
+  writeFileSync(
+    file,
+    JSON.stringify({
+      version: 1,
+      models: [
+        entry("qwen/qwen3.8-max", "openrouter-qwen-qwen3-8-max", "auto-tool-choice"),
+        entry("openai/gpt-5.3", "openrouter-openai-gpt-5-3"),
+      ],
+    }),
+    "utf8",
+  );
+  return {
+    dir,
+    file,
+    restricted: "openrouter-qwen-qwen3-8-max",
+    unrestricted: "openrouter-openai-gpt-5-3",
+  };
+}
+
+test("API forwarder downgrades forced tool choices only for models that declare the restriction", async () => {
+  const upstreamRequests = [];
+  const upstream = await mockServer(async (request, response) => {
+    upstreamRequests.push({ headers: request.headers, body: await bodyJson(request) });
+    json(response, 200, { choices: [] });
+  });
+  const curated = curatedOpenRouterModels();
+  const forwarderPort = await openPort();
+  const forwarder = run("api-forwarder.mjs", {
+    CODEX_ROUTER_API_PORT: String(forwarderPort),
+    MODEL_ROUTER_USER_MODELS: curated.file,
+    OPENROUTER_API_BASE_URL: `http://127.0.0.1:${upstream.port}`,
+    OPENROUTER_API_KEY: "TEST_OPENROUTER_API_KEY",
+    CODEX_ROUTER_QUIET: "1",
+  });
+
+  async function forward(gatewayModel, body) {
+    const response = await fetch(`http://127.0.0.1:${forwarderPort}/v1/chat/completions`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${INTERNAL_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: gatewayModel,
+        messages: [{ role: "user", content: "test" }],
+        ...body,
+      }),
+    });
+    assert.equal(response.status, 200);
+    return upstreamRequests.at(-1);
+  }
+
+  try {
+    await waitFor(`http://127.0.0.1:${forwarderPort}/health`, forwarder, {
+      Authorization: `Bearer ${INTERNAL_KEY}`,
+    });
+    // Some upstreams answer a forced tool choice with a hard 400 while still
+    // calling tools under "auto". The compatibility probe sends the string
+    // form and the subagent payload relay sends the object form, so both must
+    // arrive as auto rather than failing the turn.
+    for (const toolChoice of [
+      "required",
+      { type: "function", function: { name: "relay_external_agent_payload" } },
+    ]) {
+      const request = await forward(curated.restricted, { tool_choice: toolChoice });
+      assert.equal(request.headers.authorization, "Bearer TEST_OPENROUTER_API_KEY");
+      assert.equal(request.body.model, "qwen/qwen3.8-max");
+      assert.equal(request.body.tool_choice, "auto");
+    }
+
+    // "none" is not a forced choice: it suppresses tool calls, which the
+    // compaction turn relies on, so it must survive untouched.
+    const suppressed = await forward(curated.restricted, { tool_choice: "none" });
+    assert.equal(suppressed.body.tool_choice, "none");
+
+    // An absent choice stays absent so the upstream applies its own default.
+    const absent = await forward(curated.restricted, {});
+    assert.equal(absent.body.tool_choice, undefined);
+    assert.equal("tool_choice" in absent.body, false);
+
+    // The profile normalizes the tool choice and nothing else. Reusing
+    // qwen-plan here would have collapsed the picked effort to DashScope's
+    // two-tier ladder, which is not OpenRouter's parameter surface.
+    const untouched = await forward(curated.restricted, {
+      reasoning_effort: "medium",
+      temperature: 0.4,
+      tool_choice: "required",
+    });
+    assert.equal(untouched.body.reasoning_effort, "medium");
+    assert.equal(untouched.body.temperature, 0.4);
+
+    // The restriction belongs to the upstream model, not to the reseller: a
+    // sibling curated on the same provider keeps its forced choice, so tool
+    // calling is not weakened for every OpenRouter model to serve two.
+    const sibling = await forward(curated.unrestricted, { tool_choice: "required" });
+    assert.equal(sibling.body.model, "openai/gpt-5.3");
+    assert.equal(sibling.body.tool_choice, "required");
+
+    const siblingObject = await forward(curated.unrestricted, {
+      tool_choice: { type: "function", function: { name: "relay_external_agent_payload" } },
+    });
+    assert.deepEqual(siblingObject.body.tool_choice, {
+      type: "function",
+      function: { name: "relay_external_agent_payload" },
+    });
+  } finally {
+    await stopChild(forwarder);
+    await closeServer(upstream.server);
+    rmSync(curated.dir, { recursive: true, force: true });
   }
 });
 
@@ -2499,5 +2961,237 @@ test("native redirect falls back to native when the target cannot route", async 
     await stopChild(router);
     await closeServer(native.server);
     rmSync(testRoot, { recursive: true, force: true });
+  }
+});
+
+function usageEvents(stateDir) {
+  const file = path.join(stateDir, "usage-events.jsonl");
+  if (!existsSync(file)) return [];
+  return readFileSync(file, "utf8")
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+}
+
+// The router meters after it has already answered the client, so the fetch can
+// resolve before the event reaches disk. Poll rather than sleep.
+async function waitForUsageEvents(stateDir, count, child) {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    const events = usageEvents(stateDir);
+    if (events.length >= count) return events;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(`Timed out waiting for ${count} usage events: ${child.testErrors()}`);
+}
+
+async function waitForStderr(child, pattern) {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    if (pattern.test(child.testErrors())) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(`Timed out waiting for ${pattern}: ${child.testErrors()}`);
+}
+
+// A routed compaction that leaves no usage event and no log line is invisible:
+// nothing in the router's own telemetry can answer "was compaction even
+// attempted?", which is what made issue #95 slow to diagnose.
+test("routed compaction records usage and logs on success and on failure", async () => {
+  let failing = false;
+  const gateway = await mockServer(async (request, response) => {
+    await bodyJson(request);
+    if (failing) {
+      json(response, 502, { error: { message: "provider refused the compaction" } });
+      return;
+    }
+    json(response, 200, {
+      id: "resp-summary",
+      object: "response",
+      output: [
+        { type: "message", content: [{ type: "output_text", text: "compact summary" }] },
+      ],
+      usage: { input_tokens: 1234, output_tokens: 56, total_tokens: 1290 },
+    });
+  });
+  const stateDir = mkdtempSync(path.join(os.tmpdir(), "routing-compaction-usage-"));
+  const routerPort = await openPort();
+  // QUIET stays off here: the log line is half of what this test asserts.
+  const router = run("router.mjs", {
+    CODEX_ROUTER_PORT: String(routerPort),
+    CODEX_ROUTER_GATEWAY_BASE_URL: `http://127.0.0.1:${gateway.port}/v1`,
+    MODEL_ROUTER_STATE_DIR: stateDir,
+  });
+  const headers = {
+    Authorization: "Bearer CODEX_CALLER_SECRET",
+    "Content-Type": "application/json",
+  };
+  const body = JSON.stringify({
+    model: "deepseek/deepseek-v4-pro",
+    input: [
+      { type: "message", role: "user", content: [{ type: "input_text", text: "keep me" }] },
+    ],
+  });
+
+  try {
+    await waitFor(`${routerBase(routerPort)}/models`, router);
+
+    const ok = await fetch(`${routerBase(routerPort)}/responses/compact`, {
+      method: "POST",
+      headers,
+      body,
+    });
+    assert.equal(ok.status, 200, await ok.text());
+    const [success] = await waitForUsageEvents(stateDir, 1, router);
+    assert.equal(success.model, "deepseek/deepseek-v4-pro");
+    assert.equal(success.provider, "deepseek");
+    assert.equal(success.status, 200);
+    assert.equal(success.inputTokens, 1234);
+    assert.equal(success.outputTokens, 56);
+    assert.equal(success.totalTokens, 1290);
+    await waitForStderr(
+      router,
+      /\[codex-router\] model=deepseek\/deepseek-v4-pro provider=deepseek status=200/,
+    );
+
+    failing = true;
+    const failed = await fetch(`${routerBase(routerPort)}/responses/compact`, {
+      method: "POST",
+      headers,
+      body,
+    });
+    assert.equal(failed.status, 502);
+    const events = await waitForUsageEvents(stateDir, 2, router);
+    const failure = events.at(-1);
+    assert.equal(failure.model, "deepseek/deepseek-v4-pro");
+    assert.equal(failure.provider, "deepseek");
+    assert.equal(failure.status, 502);
+    // A failed compaction reports no tokens at all rather than zeros, which
+    // would be indistinguishable from the zero-token accounting behind #95.
+    assert.equal("inputTokens" in failure, false);
+    assert.equal("outputTokens" in failure, false);
+    assert.equal("totalTokens" in failure, false);
+    await waitForStderr(
+      router,
+      /\[codex-router\] model=deepseek\/deepseek-v4-pro provider=deepseek status=502/,
+    );
+  } finally {
+    await stopChild(router);
+    await closeServer(gateway.server);
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+// AGENTS.md requires the same collaboration handling on `/responses` and
+// `/responses/compact` alike. Compaction replays the whole conversation, so a
+// `/goal` or subagent session compacting through a routed model would otherwise
+// summarize opaque payloads.
+test("routed compaction resolves subagent handoffs before summarizing", async () => {
+  const nativeRequests = [];
+  const native = await mockServer(async (request, response) => {
+    nativeRequests.push({ headers: request.headers, body: await bodyJson(request) });
+    const relayArguments = JSON.stringify({ payload: "Review the routed diff." });
+    const events = [
+      {
+        type: "response.output_item.added",
+        item: {
+          type: "function_call",
+          id: "fc_relay",
+          name: "relay_external_agent_payload",
+          arguments: "",
+        },
+      },
+      {
+        type: "response.function_call_arguments.done",
+        item_id: "fc_relay",
+        arguments: relayArguments,
+      },
+    ];
+    response.writeHead(200, { "Content-Type": "text/event-stream" });
+    response.end(
+      `${events
+        .map((entry) => `event: ${entry.type}\ndata: ${JSON.stringify(entry)}\n\n`)
+        .join("")}data: [DONE]\n\n`,
+    );
+  });
+  const gatewayRequests = [];
+  const gateway = await mockServer(async (request, response) => {
+    gatewayRequests.push(await bodyJson(request));
+    json(response, 200, {
+      id: "resp-summary",
+      object: "response",
+      output: [
+        { type: "message", content: [{ type: "output_text", text: "compact summary" }] },
+      ],
+    });
+  });
+  const routerPort = await openPort();
+  const router = run("router.mjs", {
+    CODEX_ROUTER_PORT: String(routerPort),
+    CODEX_NATIVE_BASE_URL: `http://127.0.0.1:${native.port}/backend-api/codex`,
+    CODEX_ROUTER_GATEWAY_BASE_URL: `http://127.0.0.1:${gateway.port}/v1`,
+    CODEX_ROUTER_QUIET: "1",
+  });
+
+  try {
+    await waitFor(`${routerBase(routerPort)}/models`, router);
+    const response = await fetch(`${routerBase(routerPort)}/responses/compact`, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer CHATGPT_SESSION_TOKEN",
+        "ChatGPT-Account-Id": "account-id",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "kimi-oauth/k3",
+        input: [
+          {
+            type: "agent_message",
+            id: "amsg_routed",
+            author: "/root",
+            recipient: "/root/critic",
+            content: [
+              {
+                type: "input_text",
+                text: "Message Type: NEW_TASK\nTask name: /root/critic\nSender: /root\nPayload:\n",
+              },
+              {
+                type: "encrypted_content",
+                encrypted_content: "Summarize the routed subagent handoff.",
+              },
+            ],
+          },
+          {
+            type: "agent_message",
+            id: "amsg_native",
+            author: "/root",
+            recipient: "/root/critic",
+            content: [
+              { type: "input_text", text: "Message Type: MESSAGE\nSender: /root\nPayload:\n" },
+              { type: "encrypted_content", encrypted_content: "gAAAAA-test-payload=" },
+            ],
+          },
+        ],
+      }),
+    });
+    assert.equal(response.status, 200, await response.text());
+    assert.equal(gatewayRequests.length, 1);
+    const sent = gatewayRequests[0].input;
+
+    const routed = sent.find((item) => item?.id === "amsg_routed");
+    assert.equal(routed.content.some((part) => part.type === "encrypted_content"), false);
+    assert.equal(routed.content.at(-1).type, "input_text");
+    assert.equal(routed.content.at(-1).text, "Summarize the routed subagent handoff.");
+
+    // The Fernet-shaped payload proves the request itself is threaded through:
+    // resolving it needs the caller's native session for the relay.
+    const relayed = sent.find((item) => item?.id === "amsg_native");
+    assert.equal(relayed.content.some((part) => part.type === "encrypted_content"), false);
+    assert.equal(relayed.content.at(-1).text, "Review the routed diff.");
+    assert.equal(nativeRequests.length, 1);
+    assert.equal(nativeRequests[0].headers.authorization, "Bearer CHATGPT_SESSION_TOKEN");
+  } finally {
+    await stopChild(router);
+    await Promise.all([closeServer(native.server), closeServer(gateway.server)]);
   }
 });

@@ -84,10 +84,12 @@ elif command -v uv >/dev/null 2>&1; then
   if [ ! -x .venv/bin/python ]; then
     uv venv --python 3.12 .venv
   fi
-  # litellm 1.95.0 needs fastapi<0.140 (get_flat_dependant was removed);
-  # re-test before lifting either pin. src/install-plan.mjs holds the same pins
-  # and its test fails when only one copy moves.
-  uv pip install --python .venv/bin/python 'litellm[proxy]==1.95.0' 'fastapi==0.139.2'
+  # requirements/python.txt is the hash-verified transitive closure of the pins
+  # in src/install-plan.mjs. Hash checking makes every wheel and sdist in that
+  # tree verify against the lock before it is executed; without it only the two
+  # top-level packages were pinned and the rest was whatever PyPI resolved that
+  # day. Regenerate the lock with bin/lock-python, never by hand.
+  uv pip install --python .venv/bin/python --require-hashes -r requirements/python.txt
   node src/install-plan.mjs record python-deps
 else
   if ! command -v python3 >/dev/null 2>&1; then
@@ -97,7 +99,8 @@ else
   python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else "Python 3.10 or newer is required.")'
   python3 -m venv .venv
   .venv/bin/python -m pip install --upgrade pip
-  .venv/bin/python -m pip install 'litellm[proxy]==1.95.0' 'fastapi==0.139.2'
+  # Same hash-verified lock as the uv branch above; both branches stay checked.
+  .venv/bin/python -m pip install --require-hashes -r requirements/python.txt
   node src/install-plan.mjs record python-deps
 fi
 

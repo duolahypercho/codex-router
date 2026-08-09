@@ -33,7 +33,11 @@ switch ($Command) {
   }
   "providers" { Invoke-RouterNode "src\providers.mjs" $Arguments }
   "provider-key" { Invoke-RouterNode "src\provider-key.mjs" $Arguments }
-  "install" { & (Join-Path $Root "install.ps1") -CheckoutInstall -Target $Target }
+  # `bin/install` accepts --prepare-only/--migrate-known/--force-deps, so the
+  # Windows wrapper has to pass the equivalent switches through instead of
+  # dropping them; `./model-router.ps1 codex install -ForceDeps` was silently
+  # running a plain install.
+  "install" { & (Join-Path $Root "install.ps1") -CheckoutInstall -Target $Target @Arguments }
   "enable" { & (Join-Path $Root "install.ps1") -CheckoutInstall -Target $Target }
   "disable" {
     Invoke-RouterNode "src\config-manager.mjs" @("disable")
@@ -48,7 +52,13 @@ switch ($Command) {
     $UpdateArguments = if ($Arguments.Count) { $Arguments } else { @("update") }
     Invoke-RouterNode "src\update.mjs" $UpdateArguments
   }
-  "rollback" { Invoke-RouterNode "src\update.mjs" @("rollback") }
+  "rollback" {
+    # The subcommand is fixed, so the caller's flags are appended to it rather
+    # than replacing it -- the shape `bin/rollback` uses (`update.mjs rollback
+    # "$@"`). Hardcoding the list here made `rollback --force` unreachable on
+    # Windows, which is the only way past tracked edits that block a rollback.
+    Invoke-RouterNode "src\update.mjs" (@("rollback") + $Arguments)
+  }
   "support-bundle" { Invoke-RouterNode "src\support-bundle.mjs" $Arguments }
   "smoke-test" {
     Invoke-RouterNode "src\smoke-test.mjs" $Arguments

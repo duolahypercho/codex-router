@@ -216,6 +216,16 @@ try {
       : "none",
     "Run ./bin/setup --guided and choose at least one provider.",
   );
+  // The router no longer refuses to serve on a selection file it cannot fully
+  // resolve, so the damage has to be reported here instead of as a 502.
+  if (selection.degraded) {
+    add(
+      "warn",
+      "Provider selection file",
+      selection.degraded,
+      "Run ./bin/setup --guided, or ./bin/providers enable PROVIDER, to rewrite the selection with this build's provider ids.",
+    );
+  }
 } catch (error) {
   add(
     "fail",

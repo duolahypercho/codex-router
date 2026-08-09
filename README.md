@@ -153,7 +153,13 @@ image support, and reasoning efforts — so curated models get the effort
 switcher in the picker — and everything defaults conservatively when
 unanswered (`--efforts minimal,low,medium,high,xhigh` sets the ladder in the
 non-interactive `--models` form; every value stays editable in
-`user-models.json`). The provider's own `/v1/models` endpoint always decides
+`user-models.json`). It also asks whether the model rejects a forced
+`tool_choice`: a few upstreams call tools happily when the choice is `auto`
+but answer HTTP 400 when one is required, which fails the compatibility check
+and the routed-subagent handoff even though tool calling works. Answering yes
+stores `"requestProfile": "auto-tool-choice"`, and the router downgrades the
+forced choice for that model only (`--request-profile auto-tool-choice` in the
+`--models` form). The provider's own `/v1/models` endpoint always decides
 which models exist. Curated models are local to your machine and are not
 vetted by the repository's compatibility tests.
 
@@ -835,7 +841,9 @@ For a managed Git checkout:
 ./bin/model-router codex rollback
 ```
 
-Updates require a clean `main` checkout and a recognized repository origin.
+Updates require a `main` checkout with no edits to tracked files, plus a
+recognized repository origin. Untracked files never block an update, and
+`--force` discards tracked edits without deleting untracked ones.
 The previous revision is retained as a local rollback ref, and a failed install
 restores the previous source revision. If you already ran `git pull` manually,
 run the update command anyway; it applies the pulled revision when the install

@@ -21,9 +21,6 @@ function requireManagedCheckout() {
       "This release is not a Git checkout. Re-run the installation command to upgrade it.",
     );
   }
-  if (git(["status", "--porcelain"])) {
-    throw new Error("The checkout has local changes; refusing to replace them during update.");
-  }
   const origin = git(["remote", "get-url", "origin"]);
   const configured = process.env.CODEX_ROUTER_REPOSITORY_URL;
   const allowed = new Set([
@@ -35,6 +32,50 @@ function requireManagedCheckout() {
   if (!allowed.has(origin)) {
     throw new Error(`The origin remote is not a recognized Codex Router repository: ${origin}`);
   }
+}
+
+// Exported so the Windows bootstrap installer, which reimplements this refusal
+// in PowerShell and cannot import it, can be tested against the same number.
+export const DIRTY_PREVIEW_LIMIT = 10;
+
+// Only tracked edits are at stake. A fast-forward merge never replaces an
+// untracked file, and git refuses the rare collision on its own with a precise
+// message, so counting untracked files as "local changes" only ever stranded
+// people: one stray file in the checkout and every future update was refused,
+// with nothing in the error to say which file or how to get past it.
+export function localModifications() {
+  return git(["status", "--porcelain", "--untracked-files=no"])
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+export function localModificationsMessage(changes, sourceRoot = SOURCE_ROOT) {
+  const preview = changes
+    .slice(0, DIRTY_PREVIEW_LIMIT)
+    .map((line) => `  ${line}`)
+    .join("\n");
+  const remainder = changes.length - DIRTY_PREVIEW_LIMIT;
+  return [
+    `The checkout has local changes to ${changes.length} tracked file${
+      changes.length === 1 ? "" : "s"
+    }; refusing to replace them during update:`,
+    preview,
+    ...(remainder > 0 ? [`  ...and ${remainder} more`] : []),
+    "",
+    `Keep them:    git -C ${sourceRoot} stash`,
+    "Discard them: re-run the same command with --force",
+  ].join("\n");
+}
+
+// Called only where the checkout is actually about to be rewritten, so a
+// checkout with edits still answers "is an update available?" and still
+// reinstalls at the same commit.
+function requireReplaceableCheckout(force) {
+  const changes = localModifications();
+  if (changes.length === 0) return;
+  if (!force) throw new Error(localModificationsMessage(changes));
+  git(["reset", "--hard", "HEAD"], { inherit: true });
 }
 
 export function currentCheckoutInstaller(platform = process.platform, target = TARGET) {
@@ -144,7 +185,7 @@ export function installationNeedsRefresh(manifest, revision) {
   return manifest?.current?.commit !== revision;
 }
 
-export function updateCheckout() {
+export function updateCheckout({ force = false } = {}) {
   const status = checkForUpdate();
   if (!status.updateAvailable) {
     if (!installationNeedsRefresh(readInstallManifest(), status.current)) {
@@ -154,6 +195,7 @@ export function updateCheckout() {
     refreshTrayCompanion();
     return { ...status, updated: false, reinstalled: true };
   }
+  requireReplaceableCheckout(force);
   let branch = git(["branch", "--show-current"]);
   if (!branch) {
     git(["switch", "main"], { inherit: true });
@@ -184,8 +226,11 @@ export function updateCheckout() {
   return { ...status, updated: true, reinstalled: true };
 }
 
-export function rollbackCheckout() {
+export function rollbackCheckout({ force = false } = {}) {
   requireManagedCheckout();
+  // A rollback checks out a different revision, so it overwrites tracked edits
+  // exactly the way an update does.
+  requireReplaceableCheckout(force);
   const current = git(["rev-parse", "HEAD"]);
   let target;
   try {
@@ -223,16 +268,22 @@ const COMMANDS = {
 // `check` must stay read-only: the tray and the CLI both use it to answer "is
 // an update available?" without touching the installation.
 export function resolveCommand(args) {
-  return COMMANDS[args[0] || "update"];
+  return COMMANDS[args.find((argument) => !argument.startsWith("--")) || "update"];
+}
+
+// A bare `update --force` has to keep working, so the flag is stripped before
+// the subcommand is read rather than being taken for one.
+export function parseArguments(args) {
+  return { command: resolveCommand(args), force: args.includes("--force") };
 }
 
 async function main() {
-  const command = resolveCommand(process.argv.slice(2));
+  const { command, force } = parseArguments(process.argv.slice(2));
   if (!command) {
-    console.error("Usage: update.mjs check|update|rollback");
+    console.error("Usage: update.mjs check|update|rollback [--force]");
     process.exit(2);
   }
-  process.stdout.write(`${JSON.stringify(command(), null, 2)}\n`);
+  process.stdout.write(`${JSON.stringify(command({ force }), null, 2)}\n`);
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

@@ -13,6 +13,7 @@ smoke_test=false
 with_tray=false
 no_tray=false
 previous_revision=
+force=false
 target=codex
 
 usage() {
@@ -37,6 +38,8 @@ Options:
   --smoke-test       Make one small billed request per enabled provider
   --with-tray        Also build and launch the desktop companion app
   --no-tray          Never offer the desktop companion app
+  --force            Discard edits to tracked files in the managed checkout
+                     before updating it. Untracked files are never touched.
   -h, --help          Show this help
 
 When run from a checkout, this script installs that checkout. When piped from
@@ -47,6 +50,45 @@ EOF
 die() {
   printf 'codex-router: %s\n' "$*" >&2
   exit 1
+}
+
+# Mirrors DIRTY_PREVIEW_LIMIT in src/update.mjs and $DirtyPreviewLimit in
+# install.ps1. test/installer-scripts.test.mjs compares all three, so they
+# cannot drift apart.
+dirty_preview_limit=10
+
+# Mirrors localModifications() in src/update.mjs. Only tracked edits are at
+# stake: a fast-forward pull never replaces an untracked file, and git refuses
+# the rare collision on its own with a precise message. Counting untracked
+# files as "local changes" only ever stranded people -- one stray file in the
+# checkout and every later self-update was refused, with nothing in the error
+# to say which file or how to get past it.
+local_modifications() {
+  status_output=$(git -C "$1" status --porcelain --untracked-files=no) || return 1
+  printf '%s\n' "$status_output" | sed -e 's/^[[:space:]]*//' -e '/^$/d'
+}
+
+# Mirrors localModificationsMessage() in src/update.mjs. Naming the files and
+# both ways forward is the whole point: the old message named neither, so
+# anyone blocked by a single stray edit had nothing to act on.
+local_modifications_message() {
+  changes=$1
+  directory=$2
+  count=$(printf '%s\n' "$changes" | wc -l)
+  count=$((count))
+  if [ "$count" -eq 1 ]; then
+    counted="1 tracked file"
+  else
+    counted="$count tracked files"
+  fi
+  printf 'The checkout has local changes to %s; refusing to replace them during update:\n' "$counted"
+  printf '%s\n' "$changes" | head -n "$dirty_preview_limit" | sed 's/^/  /'
+  if [ "$count" -gt "$dirty_preview_limit" ]; then
+    printf '  ...and %s more\n' "$((count - dirty_preview_limit))"
+  fi
+  printf '\n'
+  printf 'Keep them:    git -C %s stash\n' "$directory"
+  printf 'Discard them: re-run the same command with --force\n'
 }
 
 while [ "$#" -gt 0 ]; do
@@ -115,6 +157,10 @@ while [ "$#" -gt 0 ]; do
       smoke_test=true
       shift
       ;;
+    --force)
+      force=true
+      shift
+      ;;
     -h|--help)
       usage
       exit 0
@@ -161,8 +207,20 @@ if [ -z "$repo_dir" ]; then
         ;;
     esac
 
-    [ -z "$(git -C "$install_dir" status --porcelain)" ] ||
-      die "$install_dir has local changes; review them before updating"
+    # Mirrors requireReplaceableCheckout() in src/update.mjs, including its
+    # refusal to reach for `git clean`: --force restores files git already
+    # tracks and leaves untracked files exactly where they are, because an
+    # update has no business deleting work git was never asked to track.
+    changes=$(local_modifications "$install_dir") ||
+      die "unable to read the Git status of $install_dir"
+    if [ -n "$changes" ]; then
+      if [ "$force" != true ]; then
+        local_modifications_message "$changes" "$install_dir" >&2
+        exit 1
+      fi
+      git -C "$install_dir" reset --hard HEAD ||
+        die "unable to discard the local changes in $install_dir"
+    fi
     current_branch=$(git -C "$install_dir" branch --show-current)
     [ "$current_branch" = "main" ] ||
       die "$install_dir must be on its main branch before updating"

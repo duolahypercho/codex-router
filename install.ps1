@@ -10,6 +10,9 @@ param(
   [string]$Providers,
   [switch]$MigrateKnown,
   [switch]$SmokeTest,
+  # Discards tracked edits in the managed checkout so the update can proceed.
+  # Deliberately never touches untracked files -- see Reset-ManagedCheckout.
+  [switch]$Force,
   [string]$InstallDir = $(
     if ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA "codex-router" }
     else { Join-Path $HOME ".local\share\codex-router" }
@@ -44,6 +47,47 @@ function Test-RouterCheckout([string]$Directory) {
   }
 }
 
+# Mirrors DIRTY_PREVIEW_LIMIT in src/update.mjs. test/installer-scripts.test.mjs
+# imports that constant and compares it with this one, so the two cannot drift.
+$DirtyPreviewLimit = 10
+
+# Mirrors localModifications() in src/update.mjs. Only tracked edits are at
+# stake: a fast-forward pull never replaces an untracked file, and git refuses
+# the rare collision on its own with a precise message. Counting untracked files
+# as "local changes" only ever stranded people -- one stray file in the checkout
+# and every later self-update was refused.
+function Get-LocalModification([string]$Directory) {
+  $Output = @(& git -C $Directory status --porcelain --untracked-files=no)
+  if ($LASTEXITCODE -ne 0) { throw "Unable to read the Git status of $Directory." }
+  return @($Output | ForEach-Object { "$_".Trim() } | Where-Object { $_ })
+}
+
+# Mirrors localModificationsMessage() in src/update.mjs. Naming the files and
+# both ways forward is the whole point: the old message named neither, so anyone
+# blocked by a single stray edit had nothing to act on.
+function Get-LocalModificationMessage([string[]]$Changes, [string]$Directory) {
+  $Plural = if ($Changes.Count -eq 1) { "" } else { "s" }
+  $Lines = @(
+    "The checkout has local changes to $($Changes.Count) tracked file${Plural}; refusing to replace them during update:"
+  )
+  $Lines += @($Changes | Select-Object -First $DirtyPreviewLimit | ForEach-Object { "  $_" })
+  $Remainder = $Changes.Count - $DirtyPreviewLimit
+  if ($Remainder -gt 0) { $Lines += "  ...and $Remainder more" }
+  $Lines += ""
+  $Lines += "Keep them:    git -C $Directory stash"
+  $Lines += "Discard them: re-run the same command with -Force"
+  return ($Lines -join "`n")
+}
+
+# Mirrors requireReplaceableCheckout() in src/update.mjs, including its refusal
+# to reach for `git clean`: -Force restores files git already tracks and leaves
+# untracked files exactly where they are, because an update has no business
+# deleting work git was never asked to track.
+function Reset-ManagedCheckout([string]$Directory) {
+  & git -C $Directory reset --hard HEAD
+  if ($LASTEXITCODE -ne 0) { throw "Unable to discard the local changes in $Directory." }
+}
+
 $ScriptDirectory = $PSScriptRoot
 if (-not $ScriptDirectory) { $ScriptDirectory = (Get-Location).Path }
 
@@ -68,9 +112,12 @@ if (-not $CheckoutInstall) {
       if ($Origin -notin $AllowedOrigins) {
         throw "$InstallDir has an unrecognized origin and will not be updated: $Origin"
       }
-      $Dirty = (& git -C $InstallDir status --porcelain)
-      if ($LASTEXITCODE -ne 0 -or $Dirty) {
-        throw "$InstallDir has local changes; automatic update will not overwrite them."
+      # PowerShell unrolls a one-element array on return, so re-wrap before
+      # reading .Count.
+      $Dirty = @(Get-LocalModification $InstallDir)
+      if ($Dirty.Count) {
+        if (-not $Force) { throw (Get-LocalModificationMessage $Dirty $InstallDir) }
+        Reset-ManagedCheckout $InstallDir
       }
       # A failed setup rolls the checkout back to a detached HEAD (see the
       # rollback below), where `branch --show-current` prints nothing. A native
@@ -190,10 +237,12 @@ try {
       & uv venv --python 3.12 .venv
       if ($LASTEXITCODE -ne 0) { throw "uv could not create the Python environment." }
     }
-    # litellm 1.95.0 needs fastapi<0.140 (get_flat_dependant was removed);
-    # re-test before lifting either pin. src/install-plan.mjs holds the same
-    # pins and its test fails when only one copy moves.
-    & uv pip install --python $Python "litellm[proxy]==1.95.0" "fastapi==0.139.2"
+    # requirements/python.txt is the hash-verified transitive closure of the
+    # pins in src/install-plan.mjs. Hash checking makes every wheel and sdist
+    # in that tree verify against the lock before it is executed; without it
+    # only the two top-level packages were pinned and the rest was whatever
+    # PyPI resolved that day. Regenerate with bin/lock-python, never by hand.
+    & uv pip install --python $Python --require-hashes -r requirements/python.txt
     if ($LASTEXITCODE -ne 0) { throw "LiteLLM installation failed." }
     & node src/install-plan.mjs record python-deps
     if ($LASTEXITCODE -ne 0) { throw "Recording the Python dependency state failed." }
@@ -212,7 +261,8 @@ try {
     if (-not (Test-Path $Python)) { throw "The Python virtual environment was not created." }
     & $Python -m pip install --upgrade pip
     if ($LASTEXITCODE -ne 0) { throw "pip upgrade failed." }
-    & $Python -m pip install "litellm[proxy]==1.95.0" "fastapi==0.139.2"
+    # Same hash-verified lock as the uv branch above; both stay hash-checked.
+    & $Python -m pip install --require-hashes -r requirements/python.txt
     if ($LASTEXITCODE -ne 0) { throw "LiteLLM installation failed." }
     & node src/install-plan.mjs record python-deps
     if ($LASTEXITCODE -ne 0) { throw "Recording the Python dependency state failed." }

@@ -2,6 +2,50 @@
 
 ## Unreleased
 
+- **A curated model can say it refuses a forced tool choice.** A few upstreams
+  call tools happily when `tool_choice` is `"auto"` and answer HTTP 400 when
+  one is required, so the compatibility check reported no tool support and the
+  routed-subagent handoff failed on a model whose tool calling was fine. The
+  vendor profiles already covered DeepSeek and Qwen on their own endpoints;
+  reached through a reseller like OpenRouter the same model had nowhere to
+  declare it, because those providers ship no registry models to inherit a
+  profile from. Curation now asks, and stores `auto-tool-choice`
+  (`--request-profile auto-tool-choice` in the `--models` form), which
+  downgrades the forced choice for that model and touches no other parameter.
+  It stays per model on purpose: OpenRouter reports `tool_choice` support per
+  model in its own catalog, so downgrading for a whole reseller would let
+  models that honor a forced choice quietly decline both the probe and the
+  subagent relay's forced function call. The probe itself still sends
+  `required`. Thanks to @jepgambardella for the report.
+
+- **Windows no longer opens a console window at logon.** The scheduled task ran
+  the CMD wrapper through `cmd.exe`, so a console window appeared at every logon
+  and stayed for the router's lifetime, reappearing on each watchdog restart.
+  The task now runs a generated VBS launcher under `wscript.exe //B //NoLogo`,
+  which starts the wrapper hidden and waits for it, re-raising the wrapper's
+  exit code so Task Scheduler's restart-on-failure settings still see a crash as
+  a crash. Reinstalling replaces the old task in place, and uninstalling removes
+  both generated launchers. Reinstalling and restarting now wait for the running
+  instance to actually exit before starting the new one, an install that cannot
+  register the task starts the router again rather than leaving the machine with
+  none, and stopping a service that was never installed is no longer an error.
+
+- **The Python gateway now installs from a hash-verified lock.** Pinning
+  `litellm[proxy]` and `fastapi` left their entire transitive tree unpinned, so
+  every install resolved and then executed around a hundred packages that
+  nothing had verified — and two machines installing on different days got
+  different trees. `requirements/python.txt` now pins that whole closure with a
+  SHA256 for every distribution, and all four install paths (the `uv` and `pip`
+  branches of `bin/install` and `install.ps1`) install it with
+  `--require-hashes`. The pinned versions are unchanged. The lock is universal:
+  one file covering macOS, Linux, and Windows on CPython 3.10+ through
+  environment markers, rather than a snapshot of whoever generated it. The
+  version literals are gone from the shell scripts entirely — `bin/lock-python`
+  regenerates the lock from `PYTHON_REQUIREMENTS`, and
+  `test/python-lock.test.mjs` fails the suite if the lock, the compile input,
+  and that constant ever disagree, or if either installer stops checking
+  hashes.
+
 - **Text-only models can answer about a pasted image.** A model with no image
   input — DeepSeek, GLM, Kimi — used to refuse the paste outright. When the
   vision bridge is on, a vision model you already have reads the image and
@@ -49,6 +93,25 @@
   so a router update never leaves a stale companion behind. Update & Verify
   now updates the checkout recorded as the installation owner instead of
   whichever checkout the tray binary was built from.
+
+- **A busy machine no longer fails startup on services that are working.**
+  Each health probe was abandoned after a flat second, and a probe we gave up
+  on counted exactly like a refused connection. Under the fork and exec
+  contention of a login — when a build or a sync starts at the same moment as
+  the router — a forwarder that had printed `listening` at 1.4 s answered every
+  probe later than that, so all of them aborted, the budget ran out, and
+  startup reported `Timed out waiting for API forwarder to become healthy`
+  about a service that was fine. The probe window now widens from 1 s to a 10 s
+  cap, and the two outcomes are told apart: nothing listening on loopback
+  refuses instantly, so a refusal still backs off (a cold-starting gateway must
+  not flood its own access log), while an abort is retried at once with a wider
+  window, because the window it already spent is backoff enough and gives no
+  evidence the service is dead. A timeout now also says which of the two it
+  saw. A service that genuinely died is still reported the same way it always
+  was, by the exit check between the probe and the sleep: waking that sleep from
+  the child's own exit callback would report it sooner, and kills the process on
+  Windows with a libuv assertion while it is reporting the failure it had
+  already diagnosed correctly.
 
 ## 0.4.0-beta.2
 

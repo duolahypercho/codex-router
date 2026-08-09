@@ -5,14 +5,17 @@ import {
   brotliDecompressSync,
   gunzipSync,
   inflateSync,
+  zstdCompress,
   zstdDecompressSync,
 } from "node:zlib";
+import { promisify } from "node:util";
 
 import {
   assertCallerSecret,
   authenticatedRoute,
 } from "./caller-auth.mjs";
 import {
+  endStreamedResponse,
   HOP_BY_HOP_HEADERS,
   httpErrorStatus,
   pipeResponse,
@@ -34,7 +37,7 @@ import {
   readProviderSelection,
   selectedConfiguredListedModels,
 } from "./provider-selection.mjs";
-import { ResponseUsageTransform } from "./response-usage.mjs";
+import { ResponseUsageTransform, tokenUsageFromPayload } from "./response-usage.mjs";
 import {
   CollaborationToolCallTransform,
   flattenCollaborationHistory,
@@ -278,6 +281,32 @@ function decodeBody(body, contentEncoding) {
   return decoded;
 }
 
+// Codex compresses its own request bodies with zstd, and the Codex backend
+// accepts them. The router has to inflate one to route it, and a decoded body
+// cannot travel under the caller's Content-Encoding, so every turn used to go
+// up the link as full inflated JSON: 2.6x more bytes than the client sent,
+// measured across a week of real turns. Compressing it again costs about 10ms
+// off the event loop on a 2 MB turn. Small bodies are left alone, where a TLS
+// record or two is the whole payload and compression buys nothing.
+const MIN_COMPRESSED_BODY_BYTES = 16 * 1024;
+const compressBody = promisify(zstdCompress);
+
+async function compressedNativeBody(body, headers) {
+  if (body.length < MIN_COMPRESSED_BODY_BYTES) return body;
+  try {
+    const compressed = await compressBody(body);
+    // Incompressible payloads (base64 image data, mostly) would only pay the
+    // decode cost on the far side for nothing.
+    if (compressed.length >= body.length) return body;
+    headers["Content-Encoding"] = "zstd";
+    return compressed;
+  } catch {
+    // Compression is an optimization, never a requirement: the plain body is
+    // always a valid request, so a zstd failure must not fail the turn.
+    return body;
+  }
+}
+
 function nativeHeaders(request) {
   const headers = {
     "Content-Type": "application/json",
@@ -453,6 +482,17 @@ function nativeAgentRelayModel() {
   }
 }
 
+// Every `encrypted_content` value OpenAI issues is a Fernet token: the version
+// byte 0x80 followed by a big-endian timestamp whose leading bytes stay zero
+// for the rest of the century, which base64url-encodes to the fixed `gAAAAA`
+// prefix over the base64url alphabet with no whitespace. This is the whole
+// detection predicate -- the plaintext is never inspected.
+const NATIVE_ENCRYPTED_TOKEN = /^gAAAAA[A-Za-z0-9_-]+={0,2}$/;
+
+function isNativeEncryptedToken(value) {
+  return typeof value === "string" && NATIVE_ENCRYPTED_TOKEN.test(value);
+}
+
 function encryptedAgentPayload(item) {
   if (!Array.isArray(item?.content)) return undefined;
   const visibleText = item.content
@@ -474,7 +514,7 @@ function encryptedAgentPayload(item) {
   if (!encrypted) return undefined;
   return {
     content: encrypted.encrypted_content,
-    native: /^gAAAAA[A-Za-z0-9_-]+={0,2}$/.test(encrypted.encrypted_content),
+    native: isNativeEncryptedToken(encrypted.encrypted_content),
   };
 }
 
@@ -777,7 +817,43 @@ function sanitizeReasoningForNative(item) {
 // rejects the whole request with "Encrypted function output content could not
 // be decrypted or decoded" and the subagent dies before returning an answer.
 // Inline the payload as ordinary text so the native child can read it.
+//
+// Codex renders every handoff between agents as an `agent_message`, whose
+// content schema accepts only `input_text`, `input_image`, and
+// `encrypted_content` -- so `output_text` is not an option, and the readable
+// handoff has nowhere else to live. Matching the collaboration envelope covers
+// only the four `Message Type:` headers whose visible text ends at `Payload:`;
+// any other rendering reached OpenAI unchanged and failed replay and
+// `/responses/compact` alike, so the conversation could neither continue nor
+// compact. Normalize at the schema level instead.
+//
+// Classify on the ciphertext format alone (`isNativeEncryptedToken`), never on
+// what the plaintext looks like. A value that fails that shape is one the
+// native backend would reject anyway, so rewriting it replaces a certain
+// failure; a value that passes is forwarded byte-identical. Keying off the
+// stored value rather than a router-written sentinel is deliberate: the router
+// never authors these items -- Codex does, from the routed model's
+// collaboration tool call -- so there is no write site to mark, and a marker
+// would in any case abandon the already-broken conversations this recovers.
+function normalizeAgentMessageForNative(item) {
+  if (item?.type !== "agent_message" || !Array.isArray(item.content)) return item;
+  let changed = false;
+  const content = item.content.map((part) => {
+    if (part?.type !== "encrypted_content") return part;
+    const value = part.encrypted_content;
+    if (typeof value !== "string" || value.length === 0) return part;
+    if (isNativeEncryptedToken(value)) return part;
+    changed = true;
+    return { type: "input_text", text: value };
+  });
+  return changed ? { ...item, content } : item;
+}
+
 function sanitizeCollaborationForNative(item) {
+  const normalized = normalizeAgentMessageForNative(item);
+  if (normalized !== item) return normalized;
+  // Anything outside an `agent_message` is only rewritten when it carries a
+  // recognizable collaboration envelope, which is where the payload belongs.
   const payload = encryptedAgentPayload(item);
   if (!payload || payload.native) return item;
   return {
@@ -864,13 +940,19 @@ function extractResponseText(payload) {
   return text.join("\n");
 }
 
-async function summarize(payload, route, signal, request) {
+async function summarize(request, payload, route, signal) {
   const originalInput = Array.isArray(payload.input) ? payload.input : [];
   // Compaction replays the whole conversation, so any image still in it would
   // reach the text-only model unbridged and fail the compaction rather than
   // the turn. The evidence is already cached from the turn that pasted it.
+  //
+  // It replays the collaboration items too, so the agent-payload resolution a
+  // routed turn performs has to happen here as well -- otherwise a compaction
+  // inside a `/goal` or subagent session summarizes opaque payloads. The relay
+  // is cached by ciphertext, so a conversation whose turns already resolved
+  // costs nothing extra here.
   const bridged = await bridgeVisionInput(
-    normalizeRoutedInput(originalInput),
+    await normalizeRoutedAgentInput(request, originalInput, signal),
     route,
     signal,
     request,
@@ -879,8 +961,10 @@ async function summarize(payload, route, signal, request) {
     ...payload,
     model: route.gatewayModel,
     stream: false,
+    // An empty tool list already disables tool use on every forwarder, and
+    // xAI rejects tool_choice "none" paired with it, so the field is omitted
+    // rather than sent redundantly.
     tools: [],
-    tool_choice: "none",
     input: [...bridged, messageItem(COMPACT_PROMPT)],
   };
   delete body.previous_response_id;
@@ -896,8 +980,15 @@ async function summarize(payload, route, signal, request) {
     return { ok: false, status: 502, payload: { error: { message: "Compact response is too large." } } };
   }
   const parsed = JSON.parse(bytes.toString("utf8"));
-  if (!upstream.ok) return { ok: false, status: upstream.status, payload: parsed };
-  return { ok: true, summary: extractResponseText(parsed), input: originalInput };
+  // Compaction is a plain non-streaming call, so the usage block (when the
+  // provider sends one) is already in hand. `tokenUsageFromPayload` returns
+  // undefined when it is absent, and `recordUsageEvent` then omits the token
+  // fields entirely rather than metering an invented zero.
+  const usage = tokenUsageFromPayload(parsed);
+  if (!upstream.ok) {
+    return { ok: false, status: upstream.status, payload: parsed, usage };
+  }
+  return { ok: true, summary: extractResponseText(parsed), input: originalInput, usage };
 }
 
 function compactionSnapshot(model, item, status = "completed") {
@@ -938,11 +1029,13 @@ function writeCompactionSse(response, model, summary) {
   response.end("data: [DONE]\n\n");
 }
 
-async function handleRoutedCompaction(response, payload, route, signal, v2, request) {
-  const result = await summarize(payload, route, signal, request);
+// Returns what the request path needs to meter and log the compaction, so a
+// routed compaction leaves the same telemetry trail as any other routed turn.
+async function handleRoutedCompaction(request, response, payload, route, signal, v2) {
+  const result = await summarize(request, payload, route, signal);
   if (!result.ok) {
     writeJson(response, result.status, result.payload);
-    return;
+    return { status: result.status, usage: result.usage };
   }
   if (v2) {
     if (payload.stream === false) {
@@ -955,9 +1048,10 @@ async function handleRoutedCompaction(response, payload, route, signal, v2, requ
     } else {
       writeCompactionSse(response, payload.model, result.summary);
     }
-    return;
+    return { status: 200, usage: result.usage };
   }
   writeJson(response, 200, { output: compactOutput(result.input, result.summary) });
+  return { status: 200, usage: result.usage };
 }
 
 async function handleModels(response) {
@@ -1061,7 +1155,29 @@ async function handleResponses(request, response, requestUrl) {
     });
 
     if (route && (compactV1 || compactV2)) {
-      await handleRoutedCompaction(response, payload, route, controller.signal, compactV2, request);
+      const compaction = await handleRoutedCompaction(
+        request,
+        response,
+        payload,
+        route,
+        controller.signal,
+        compactV2,
+      );
+      // Compaction used to return here without metering or logging, so neither
+      // a successful nor a failed one appeared anywhere in the router's own
+      // telemetry. Mirror the ordinary request path exactly.
+      recordUsageEvent({
+        model: route.slug,
+        provider: canonicalProviderId(route.provider),
+        status: compaction.status,
+        durationMs: Date.now() - startedAt,
+        ...compaction.usage,
+      });
+      if (!QUIET) {
+        console.error(
+          `[codex-router] model=${requestedModel || "unknown"} provider=${route.provider} status=${compaction.status}`,
+        );
+      }
       return;
     }
 
@@ -1115,7 +1231,10 @@ async function handleResponses(request, response, requestUrl) {
       if (!compactV1) delete native.previous_response_id;
       target = nativeTarget(requestUrl.pathname, requestUrl.search);
       headers = nativeHeaders(request);
-      routedBody = Buffer.from(JSON.stringify(native), "utf8");
+      routedBody = await compressedNativeBody(
+        Buffer.from(JSON.stringify(native), "utf8"),
+        headers,
+      );
     }
 
     const upstream = await fetch(target, {
@@ -1225,12 +1344,13 @@ async function handleNativeImage(request, response, requestUrl) {
       }
     });
 
+    const headers = nativeHeaders(request);
     const upstream = await fetch(
       nativeTarget(requestUrl.pathname, requestUrl.search),
       {
         method: "POST",
-        headers: nativeHeaders(request),
-        body,
+        headers,
+        body: await compressedNativeBody(body, headers),
         signal: controller.signal,
       },
     );
@@ -1324,7 +1444,14 @@ async function handleRequest(request, response) {
 const server = http.createServer((request, response) => {
   handleRequest(request, response).catch((error) => {
     const status = httpErrorStatus(error);
-    console.error("[codex-router] request failed");
+    // The bare string this used to log made every mid-stream failure
+    // indistinguishable in production. The cause belongs in the log; response
+    // bodies never do, so only the error's own message and code are recorded.
+    console.error(
+      `[codex-router] request failed: ${
+        error instanceof Error ? `${error.name}: ${error.message}` : String(error)
+      }${error?.code ? ` (${error.code})` : ""}`,
+    );
     if (!response.headersSent) {
       writeJson(response, status, {
         error: {
@@ -1332,8 +1459,11 @@ const server = http.createServer((request, response) => {
           message: "The local router could not complete the request.",
         },
       });
-    } else if (!response.writableEnded) {
-      response.destroy();
+    } else {
+      // The body is already streaming, so there is no status left to change.
+      // Destroying here reset the socket and cost the chunked terminator,
+      // which the client reported only as a decode failure.
+      endStreamedResponse(response);
     }
   });
 });
@@ -1343,6 +1473,30 @@ server.on("upgrade", (_request, socket) => {
   socket.end(
     "HTTP/1.1 426 Upgrade Required\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
   );
+});
+// Without this an 'error' event is unhandled and the process exits silently.
+// Under a supervisor that reads as a crash loop with the port never bound and
+// nothing in the log saying why, so name the cause and use exit codes a
+// supervisor and a human can tell apart.
+server.on("error", (error) => {
+  if (error?.code === "EADDRINUSE") {
+    console.error(
+      `[codex-router] cannot listen: ${LISTEN_HOST}:${LISTEN_PORT} is already in use. Another router or an unrelated process holds it; stop that process, then start the service again.`,
+    );
+    process.exit(98);
+  }
+  if (error?.code === "EACCES") {
+    console.error(
+      `[codex-router] cannot listen: permission denied binding ${LISTEN_HOST}:${LISTEN_PORT}.`,
+    );
+    process.exit(97);
+  }
+  console.error(
+    `[codex-router] server error: ${
+      error instanceof Error ? `${error.name}: ${error.message}` : String(error)
+    }${error?.code ? ` (${error.code})` : ""}`,
+  );
+  process.exit(96);
 });
 server.requestTimeout = 0;
 server.headersTimeout = 65_000;

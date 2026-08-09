@@ -75,6 +75,17 @@ the deterministic `--models` form), and everything defaults conservatively
 when unanswered. The stored entries in `user-models.json` are plain local
 state — edit any value in place and re-run `./bin/install` to apply.
 
+A curated model inherits a request profile from the provider's registry
+models when it has any. The catalog-only resellers ship none, so curation
+also offers `auto-tool-choice` (`--request-profile` in the deterministic
+form) — the one profile meaningful to pick by hand, for a model whose
+upstream rejects `tool_choice: "required"` while still calling tools under
+`"auto"`. It normalizes the tool choice and nothing else, so it composes with
+no vendor's parameter surface and misreads none. Keep it per model: the
+restriction belongs to the upstream behind the reseller, and a provider-wide
+downgrade would let models that honor a forced choice decline both the
+compatibility probe and the subagent payload relay's forced function call.
+
 ## Tests
 
 ```sh

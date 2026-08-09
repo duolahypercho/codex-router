@@ -6,8 +6,11 @@ import { fileURLToPath } from "node:url";
 
 import {
   INITIAL_PROBE_DELAY_MS,
+  INITIAL_PROBE_TIMEOUT_MS,
   MAX_PROBE_DELAY_MS,
+  MAX_PROBE_TIMEOUT_MS,
   probeDelayMs,
+  probeTimeoutMs,
 } from "../src/health-backoff.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -49,9 +52,54 @@ test("a slow gateway boot costs far fewer probes than a flat interval", () => {
 });
 
 test("startup polling uses the backoff rather than a fixed sleep", () => {
-  const start = readFileSync(path.join(root, "src", "start.mjs"), "utf8");
-  assert.match(start, /probeDelayMs\(attempt\)/);
-  // A leftover constant sleep in the same loop would silently restore the
+  // The loop moved out of start.mjs so it could be tested directly, but the
+  // guard is the same: a leftover constant sleep would silently restore the
   // flat-interval flood.
-  assert.doesNotMatch(start, /setTimeout\(resolve, 200\)/);
+  const probe = readFileSync(path.join(root, "src", "health-probe.mjs"), "utf8");
+  assert.match(probe, /probeDelayMs\(attempt\)/);
+  assert.doesNotMatch(probe, /setTimeout\(resolve, 200\)/);
+  const start = readFileSync(path.join(root, "src", "start.mjs"), "utf8");
+  assert.match(start, /health-probe\.mjs/);
+});
+
+test("the first probe window is unchanged so early failures surface as fast as ever", () => {
+  // Widening the window must not cost responsiveness at the start of the loop:
+  // the first probe is the same 1 s it always was, so a crash or an interrupt
+  // is still noticed within a second even before the exit-abort path.
+  assert.equal(probeTimeoutMs(0), INITIAL_PROBE_TIMEOUT_MS);
+  assert.equal(INITIAL_PROBE_TIMEOUT_MS, 1_000);
+});
+
+test("the probe window widens for a starved machine and then holds at the cap", () => {
+  // A flat 1 s window is smaller than a live-but-starved service's response
+  // time under fork-storm contention, which is what declared a healthy
+  // forwarder dead.
+  assert.ok(probeTimeoutMs(1) > probeTimeoutMs(0));
+  assert.ok(probeTimeoutMs(4) > 3 * INITIAL_PROBE_TIMEOUT_MS);
+  assert.equal(probeTimeoutMs(50), MAX_PROBE_TIMEOUT_MS);
+  // Unbounded growth would let one probe swallow the whole budget, and the
+  // loop would stop re-checking for a crashed child.
+  assert.equal(probeTimeoutMs(1000), MAX_PROBE_TIMEOUT_MS);
+  assert.ok(MAX_PROBE_TIMEOUT_MS < 30_000);
+});
+
+test("a nonsense probe window falls back to the initial timeout", () => {
+  assert.equal(probeTimeoutMs(Number.NaN), INITIAL_PROBE_TIMEOUT_MS);
+  assert.equal(probeTimeoutMs(-1), INITIAL_PROBE_TIMEOUT_MS);
+  assert.equal(probeTimeoutMs(Number.POSITIVE_INFINITY), MAX_PROBE_TIMEOUT_MS);
+});
+
+test("a starved-but-healthy service fits several widening probes inside one budget", () => {
+  // The forwarders get 30 s. With aborted probes retried immediately (an abort
+  // is not evidence, and the window it already spent is backoff enough) the
+  // budget must buy a window far wider than the 1.4 s that used to fail.
+  let elapsed = 0;
+  let attempt = 0;
+  let widest = 0;
+  while (elapsed < 30_000) {
+    widest = probeTimeoutMs(attempt);
+    elapsed += widest;
+    attempt += 1;
+  }
+  assert.ok(widest >= 7_000, `widest window inside the budget was only ${widest} ms`);
 });

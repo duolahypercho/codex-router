@@ -113,7 +113,10 @@ test("distribution lookup normalizes names and ignores extras", () => {
   }
 });
 
-test("both installers pin the same LiteLLM and FastAPI versions", () => {
+// The pins themselves live in requirements/python.txt now; what the installers
+// have to agree on is that they both install that lock with hash checking.
+// test/python-lock.test.mjs covers the lock's own agreement with these pins.
+test("both installers install the Python tree from the hashed lock", () => {
   assert.equal(PYTHON_REQUIREMENTS.length, 2);
   assert.deepEqual(installerRequirementDrift(), []);
 });

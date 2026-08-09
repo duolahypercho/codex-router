@@ -7,7 +7,9 @@ import test from "node:test";
 // coverage of any kind.
 const savedArgv = [...process.argv];
 process.argv = [process.argv[0], "curate-models.mjs", "gemini-api"];
-const { parseEfforts, renderRows } = await import("../src/curate-models.mjs");
+const { parseEfforts, parseRequestProfile, renderRows } = await import(
+  "../src/curate-models.mjs"
+);
 process.argv = savedArgv;
 process.exitCode = 0;
 
@@ -52,6 +54,29 @@ test("whitespace and casing are tolerated", () => {
 test("an empty efforts list leaves the model defaults alone", () => {
   assert.equal(parseEfforts(""), undefined);
   assert.equal(parseEfforts(" , , "), undefined);
+});
+
+test("a curated model can opt into the auto tool-choice profile", () => {
+  // A reseller-hosted model whose upstream rejects tool_choice "required" is
+  // otherwise unreachable: the catalog-only providers ship no registry model
+  // to inherit a profile from, so the first curated model gets none.
+  assert.equal(parseRequestProfile("auto-tool-choice"), "auto-tool-choice");
+});
+
+test("an unknown request profile is rejected by name", () => {
+  // Nothing validates requestProfile downstream — the forwarder just runs no
+  // branch — so a typo would store a model that silently keeps failing.
+  assert.throws(() => parseRequestProfile("qwen-plan"), /Unknown request profile "qwen-plan"/);
+  assert.throws(() => parseRequestProfile("auto_tool_choice"), /Unknown request profile/);
+});
+
+test("an empty request profile leaves the model without one", () => {
+  assert.equal(parseRequestProfile(""), undefined);
+  assert.equal(parseRequestProfile("  "), undefined);
+});
+
+test("request profile whitespace and casing are tolerated", () => {
+  assert.equal(parseRequestProfile(" Auto-Tool-Choice "), "auto-tool-choice");
 });
 
 test("the picker marks selection and existing curation separately", () => {

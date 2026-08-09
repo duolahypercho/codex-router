@@ -1,0 +1,11 @@
+# Shell scripts must reach every checkout with LF endings. A CRLF install.sh is
+# not merely awkward to diff: `sh` treats the trailing \r as part of the last
+# token on every line, so the script fails at runtime. Windows checkouts with
+# core.autocrlf=true produced exactly that, and the installer-script tests read
+# these files as text, so the damage showed up there first.
+*.sh text eol=lf
+
+# The PowerShell entry points are the mirror image: they are executed by Windows
+# and are conventionally CRLF, but nothing here depends on their endings, so
+# they are normalized in the repository and left to the platform on checkout.
+*.ps1 text

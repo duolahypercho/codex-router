@@ -247,6 +247,11 @@ Get-ScheduledTask -TaskName "Codex Router"
 ./codex-router.ps1 doctor --fix
 ```
 
+The task runs `start-codex-router-hidden.vbs` from the state directory under
+`wscript.exe`, which starts `start-codex-router.cmd` without a console window,
+so a missing window is not a sign that the router is down. Read `router.log` in
+the same directory for its output.
+
 Keep the repository at the absolute path used during installation. Rerun setup
 from the new path if it was moved.
 
@@ -259,8 +264,11 @@ Manual rollback is:
 ./bin/rollback
 ```
 
-Updates refuse dirty checkouts, non-`main` development branches, and unknown
-origin URLs rather than overwriting local work.
+Updates refuse edits to tracked files, non-`main` development branches, and
+unknown origin URLs rather than overwriting local work. Untracked files never
+block an update; the refusal names the tracked files that do, and re-running the
+same command with `--force` discards those edits without deleting anything
+untracked.
 
 Legacy migration rollback is separate:
 

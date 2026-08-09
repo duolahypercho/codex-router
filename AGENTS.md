@@ -82,6 +82,49 @@ user.
 10. Do not terminate Codex. Tell the user to fully quit it, reopen it, create a
     new task, and choose the new model.
 
+## The Python gateway is installed from a hash-verified lock
+
+The router's gateway is LiteLLM, so every install executes a large Python
+dependency tree. That tree is pinned and hashed rather than re-resolved.
+
+1. `requirements/python.txt` is the lock: the full transitive closure of
+   `PYTHON_REQUIREMENTS` in `src/install-plan.mjs`, every distribution pinned
+   and carrying its SHA256. Both installers install *that file* with
+   `--require-hashes`, in both their `uv` and their `pip` branch. Pinning only
+   the two top-level packages left everything underneath them floating, which
+   is how one machine's gateway came to differ from another's.
+2. Never edit either `requirements/` file by hand, and never add a package to
+   an installer command line. Change the pin in `src/install-plan.mjs` and run
+   `bin/lock-python`, which rewrites `requirements/python.in` from
+   `PYTHON_REQUIREMENTS` and recompiles the lock. Commit both files together.
+3. The lock must stay **universal**. `bin/lock-python` passes `--universal
+   --generate-hashes --python-version 3.10`, which is what makes one file
+   serve macOS, Linux, and Windows on CPython 3.10+ through environment
+   markers. A lock regenerated without `--universal` looks fine and installs
+   only on the machine that produced it; `test/python-lock.test.mjs` fails on
+   that, on an unhashed entry, and on any disagreement with
+   `PYTHON_REQUIREMENTS`. Do not weaken those tests to land a lock.
+4. `litellm==1.95.0` publishes wheels for `manylinux` and `win_amd64` only, so
+   **macOS builds it from the sdist** with `maturin` and a Rust toolchain. That
+   predates the lock and the lock does not change it — the sdist hash is in the
+   file, so the source build is verified too. Do not "fix" a slow or failing
+   macOS install by moving the pin; check for `cargo` first.
+5. Hash verification covers the distributions, not the isolated build
+   environment pip and uv create for an sdist. `maturin` is fetched unhashed
+   during that build. Closing that gap needs a separate build-requirements
+   lock; do not claim the current lock covers it.
+6. The lock is proven by installing it, not by reasoning about it.
+   `.github/workflows/python-lock.yml` installs it for real on Linux and
+   Windows through both resolvers, then asserts the pinned versions, the
+   `litellm[proxy]` extra, and a live `/health/liveliness`. It gets the command
+   from `install-plan.mjs python-install-command`, which extracts the line from
+   `bin/install` and `install.ps1` themselves — never write a `pip install` line
+   into CI, because a job that spells its own command can pass while the
+   shipped installer fails. Its negative control must also keep failing: if an
+   unhashed requirement ever installs, every other check in that job is
+   meaningless. Do not add a resolver cache there; a cache hit can serve an
+   already-unpacked wheel and skip the hash check the job exists to perform.
+
 ## Requests to install or expose more models
 
 First distinguish a local model addition from a repository-wide model change.
@@ -122,7 +165,17 @@ to ship tested support to every installer.
    times per slug, tracked by the Codex client itself); leave it unset unless
    the model is genuinely news to the operator. Curated models are not
    implicitly approved as native v2 subagent model overrides.
-6. Run `./bin/model-router codex doctor`. A live `bin/test-model` request uses
+6. A curated model inherits a request profile from the provider's registry
+   models. The catalog-only resellers ship none, so curation also asks whether
+   the model rejects a forced `tool_choice` (`--request-profile
+   auto-tool-choice` in the deterministic form). Answer yes only for a model
+   observed to answer HTTP 400 on `tool_choice: "required"` while still
+   calling tools under `"auto"` — the restriction belongs to the upstream
+   behind the reseller, not to the reseller, so it is set per model and never
+   as a provider-wide default. Never widen it by changing what
+   `src/compatibility-test.mjs` sends: the probe must keep sending `required`,
+   or it stops proving tool calling works for every other provider.
+7. Run `./bin/model-router codex doctor`. A live `bin/test-model` request uses
    provider quota, so run it only with the user's approval. Finally, tell the
    user to fully quit and reopen Codex before checking the picker.
 
@@ -395,6 +448,19 @@ minutes later. Do not quietly drop the label because a check happened to pass.
   native request with `stream: true`, accept SSE by body framing as well as
   content type, recognize padded `gAAAA...=` ciphertext, and treat non-Fernet
   `encrypted_content` from an external parent as plaintext.
+- The same rule applies in reverse, and it is not conditional on the envelope.
+  A routed subagent cannot mint an OpenAI token, so Codex stores its readable
+  handoff under `agent_message.content[].encrypted_content` whatever the
+  surrounding `Message Type:` rendering looks like. Before forwarding to a
+  native Responses endpoint — `/responses` and `/responses/compact` alike —
+  rewrite every non-Fernet `encrypted_content` part of an `agent_message` to
+  `input_text`; that schema accepts only `input_text`, `input_image`, and
+  `encrypted_content`, so `output_text` is not a fallback. Classify on the
+  ciphertext format (the `gAAAAA` Fernet prefix over base64url with no
+  whitespace), never on whether the plaintext looks readable, and forward a
+  value that passes byte-identical. Do not gate this on a router-written
+  sentinel: the router never authors these items, and a marker would strand
+  the already-broken conversations this recovers.
 - Never log relay response bodies, decrypted task text, or exception messages
   that can echo either. Regressions require fragmented/mislabeled SSE tests and
   real marker-return probes through every installed routed agent plus a

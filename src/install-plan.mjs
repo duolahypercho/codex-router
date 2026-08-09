@@ -17,10 +17,35 @@ import { trayBundleDir } from "./tray-install.mjs";
 export const SOURCE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 // litellm 1.95.0 needs fastapi<0.140 (get_flat_dependant was removed); re-test
-// before lifting either pin. bin/install and install.ps1 repeat these literals
-// so both scripts stay readable; `installerRequirementDrift` fails the test
-// suite if a copy is edited alone.
+// before lifting either pin.
 export const PYTHON_REQUIREMENTS = ["litellm[proxy]==1.95.0", "fastapi==0.139.2"];
+
+// Pinning the two direct requirements left their whole transitive tree floating:
+// every install re-resolved `litellm[proxy]` against PyPI and executed whatever
+// it got. `requirements/python.txt` is the hash-verified closure of the pins
+// above, and both installers now install *from that file* with
+// `--require-hashes` instead of naming the packages themselves. That is also
+// why the version literals no longer appear in the shell scripts: #114 was
+// three copies of one rule drifting apart, and the fix is fewer copies rather
+// than more comments asking people to keep them in step.
+//
+// Slash-separated on purpose. These strings are matched against the text of
+// `bin/install` and `install.ps1`, so they must not pick up backslashes when
+// the test suite runs on Windows.
+export const PYTHON_LOCK = "requirements/python.txt";
+export const PYTHON_LOCK_INPUT = "requirements/python.in";
+
+// The lock is universal: one file covering macOS, Linux, and Windows on
+// CPython 3.10+, with environment markers selecting per-platform entries. A
+// regeneration that drops `--universal` still produces a valid-looking file
+// that only resolves on the machine that generated it, so `pythonLockDrift`
+// checks the flags uv records in the header as well as the pins. The compile
+// command itself lives in `bin/lock-python` and nowhere else.
+export const PYTHON_LOCK_SCRIPT = "bin/lock-python";
+
+function repoPath(root, relative) {
+  return path.join(root, ...relative.split("/"));
+}
 
 const STAMP_NAME = ".codex-router-install.json";
 
@@ -175,8 +200,17 @@ export const STEPS = {
   },
   "python-deps": {
     stamp: (root) => path.join(root, ".venv", STAMP_NAME),
+    // The lock is an input now, not just the two pins. A regenerated lock moves
+    // transitive versions while PYTHON_REQUIREMENTS stays put, and without the
+    // lock in the fingerprint that update would be skipped as "already matches".
     fingerprint: (root) =>
-      sha256([`python:${venvPythonVersion(root)}`, ...PYTHON_REQUIREMENTS].join("\0")),
+      sha256(
+        [
+          `python:${venvPythonVersion(root)}`,
+          ...PYTHON_REQUIREMENTS,
+          readFile(repoPath(root, PYTHON_LOCK)) ?? "",
+        ].join("\0"),
+      ),
     installed: (root, platform) => {
       if (!existsSync(venvPython(root, platform))) return false;
       return PYTHON_REQUIREMENTS.every((requirement) => {
@@ -261,13 +295,161 @@ export function recordStep(step, { root = SOURCE_ROOT } = {}) {
   return target;
 }
 
-// The installers hold the pins as literals so the shell stays readable; this
-// check keeps those copies identical to PYTHON_REQUIREMENTS.
+// A pinned line in a pip requirements file: `name[extra]==version`, optionally
+// followed by an environment marker and the backslash that continues into the
+// `--hash=` lines. A universal lock names the same package more than once when
+// the resolution differs per Python version, so versions collect into a list.
+const LOCK_PIN = /^([A-Za-z0-9][A-Za-z0-9._-]*)(\[[^\]]*\])?==([^\s;\\]+)/;
+const LOCK_HASH = /--hash=sha256:[0-9a-f]{64}/;
+
+// PyPI treats `-`, `_`, and `.` as the same character in a project name, so the
+// lock and PYTHON_REQUIREMENTS can spell one package two ways.
+function normalizeProject(name) {
+  return name.toLowerCase().replace(/[-_.]+/g, "-");
+}
+
+// Returns one entry per pinned line: its project, version, and whether the line
+// carries at least one hash. An entry without hashes is the failure this whole
+// mechanism exists to prevent, so it is reported rather than skipped.
+export function parseLock(contents) {
+  const entries = [];
+  let current;
+  for (const line of String(contents).split("\n")) {
+    const pin = LOCK_PIN.exec(line);
+    if (pin) {
+      current = { project: normalizeProject(pin[1]), version: pin[3], hashes: 0 };
+      if (LOCK_HASH.test(line)) current.hashes += 1;
+      entries.push(current);
+      continue;
+    }
+    if (current && LOCK_HASH.test(line)) current.hashes += 1;
+    // A blank line ends the continuation, so a later `--hash` cannot be
+    // credited to a requirement it does not belong to.
+    if (!line.trim()) current = undefined;
+  }
+  return entries;
+}
+
+// Requirement lines of the compile input, comments and blanks removed.
+export function lockInputRequirements(root = SOURCE_ROOT) {
+  return (readFile(repoPath(root, PYTHON_LOCK_INPUT)) ?? "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith("#"));
+}
+
+// Every way the lock can stop describing PYTHON_REQUIREMENTS. Drift is what
+// killed the first attempt at this (#52 pinned a LiteLLM twelve minor versions
+// behind main and nothing failed), so each condition returns a sentence rather
+// than a boolean.
+export function pythonLockDrift(root = SOURCE_ROOT) {
+  const problems = [];
+  const contents = readFile(repoPath(root, PYTHON_LOCK));
+  if (contents === undefined) {
+    return [`${PYTHON_LOCK} is missing; regenerate it with ${PYTHON_LOCK_SCRIPT}`];
+  }
+
+  const input = lockInputRequirements(root);
+  if (input.join("\n") !== PYTHON_REQUIREMENTS.join("\n")) {
+    problems.push(
+      `${PYTHON_LOCK_INPUT} declares [${input.join(", ")}] but PYTHON_REQUIREMENTS is ` +
+        `[${PYTHON_REQUIREMENTS.join(", ")}]`,
+    );
+  }
+
+  // A lock compiled for one platform installs fine on that platform and fails
+  // everywhere else, so the recorded command is part of what has to match.
+  const header = contents.split("\n").slice(0, 8).join(" ");
+  for (const flag of ["--universal", "--generate-hashes"]) {
+    if (!header.includes(flag)) {
+      problems.push(`${PYTHON_LOCK} was not generated with ${flag}`);
+    }
+  }
+
+  const entries = parseLock(contents);
+  if (!entries.length) problems.push(`${PYTHON_LOCK} pins no distributions`);
+  const unhashed = entries.filter((entry) => entry.hashes === 0);
+  if (unhashed.length) {
+    problems.push(
+      `${PYTHON_LOCK} has ${unhashed.length} requirement(s) without a hash: ` +
+        unhashed.map((entry) => `${entry.project}==${entry.version}`).join(", "),
+    );
+  }
+
+  for (const requirement of PYTHON_REQUIREMENTS) {
+    const { name, version } = requirementParts(requirement);
+    const locked = entries.filter((entry) => entry.project === normalizeProject(name));
+    if (!locked.length) {
+      problems.push(`${PYTHON_LOCK} does not pin ${name}`);
+      continue;
+    }
+    const wrong = locked.filter((entry) => entry.version !== version);
+    if (wrong.length) {
+      problems.push(
+        `${PYTHON_LOCK} pins ${name}==${wrong.map((entry) => entry.version).join("/")} ` +
+          `but PYTHON_REQUIREMENTS asks for ${version}`,
+      );
+    }
+  }
+  return problems;
+}
+
+// Each installer installs the Python tree twice: once through uv, once through
+// pip for machines without it. Both invocations have to name the lock *and*
+// check hashes, so they are counted rather than merely looked for — a script
+// where only the uv branch was converted still leaves everyone else unverified.
+// Matching on the command shape also keeps prose about `--require-hashes` in
+// the surrounding comments from passing for an install.
+export function installerPythonInstalls(script) {
+  return String(script)
+    .split("\n")
+    .filter((line) => !/^\s*(#|\s*<#)/.test(line))
+    .filter((line) => line.includes("--require-hashes") && line.includes(`-r ${PYTHON_LOCK}`));
+}
+
+// The installers no longer repeat the version literals — they install the lock.
 export function installerRequirementDrift(root = SOURCE_ROOT) {
-  return [path.join("bin", "install"), "install.ps1"].filter((script) => {
-    const contents = readFile(path.join(root, script)) ?? "";
-    return !PYTHON_REQUIREMENTS.every((requirement) => contents.includes(requirement));
-  });
+  return [path.join("bin", "install"), "install.ps1"].filter(
+    (script) => installerPythonInstalls(readFile(path.join(root, script)) ?? "").length !== 2,
+  );
+}
+
+// Slash-separated for the same reason PYTHON_LOCK is: these are repository
+// paths, resolved through repoPath, not host paths.
+export const INSTALLER_SCRIPTS = { posix: "bin/install", windows: "install.ps1" };
+
+// Which of the two extracted lines belongs to which branch. `uv pip install`
+// and `<python> -m pip install` are disjoint by construction, so neither
+// pattern can claim the other's line.
+const INSTALL_TOOLS = {
+  uv: /(?:^|\s)uv\s+pip\s+install\s/,
+  pip: /(?:^|\s)-m\s+pip\s+install\s/,
+};
+
+// CI installs the lock by running the installer's *own* command rather than a
+// hand-written pip line, so the job cannot pass while the shipped installer
+// fails. The line is extracted verbatim by the same matcher
+// `installerRequirementDrift` uses, and it is returned ready to execute in the
+// checkout root: the posix lines already name `.venv/bin/python`, and the
+// PowerShell lines expect the `$Python` that install.ps1 itself defines.
+export function pythonInstallCommand(tool, { root = SOURCE_ROOT, platform = "posix" } = {}) {
+  const script = INSTALLER_SCRIPTS[platform];
+  if (!script) {
+    throw new Error(`Unknown installer platform: ${platform} (expected posix or windows)`);
+  }
+  const pattern = INSTALL_TOOLS[tool];
+  if (!pattern) throw new Error(`Unknown install tool: ${tool} (expected uv or pip)`);
+  const contents = readFile(repoPath(root, script));
+  if (contents === undefined) throw new Error(`${script} is missing`);
+  const matches = installerPythonInstalls(contents)
+    .map((line) => line.trim())
+    .filter((line) => pattern.test(line));
+  if (matches.length !== 1) {
+    throw new Error(
+      `${script} has ${matches.length} hash-checked ${tool} install command(s); expected exactly 1`,
+    );
+  }
+  return matches[0];
 }
 
 function main(argv) {
@@ -307,8 +489,15 @@ function main(argv) {
     process.stdout.write(`${PYTHON_REQUIREMENTS.join("\n")}\n`);
     return 0;
   }
+  // `python-install-command <uv|pip> [posix|windows]` — what CI runs so that it
+  // exercises the shipped installer's command rather than a copy of it.
+  if (command === "python-install-command") {
+    process.stdout.write(`${pythonInstallCommand(step, { platform: argv[2] || "posix" })}\n`);
+    return 0;
+  }
   console.error(
-    "Usage: install-plan.mjs status|record <node-deps|python-deps> | tray-plan | record-tray | requirements",
+    "Usage: install-plan.mjs status|record <node-deps|python-deps> | tray-plan | record-tray | " +
+      "requirements | python-install-command <uv|pip> [posix|windows]",
   );
   return 2;
 }

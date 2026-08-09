@@ -344,6 +344,14 @@ function normalizeBody(buffer, contentType, route) {
     delete payload.top_p;
     delete payload.presence_penalty;
     delete payload.frequency_penalty;
+    // DeepSeek rejects forced tool choices while thinking is enabled
+    // ("Thinking mode does not support this tool_choice"); downgrade to auto so
+    // tool calls stay available. Codex sends "required" for the compatibility
+    // probe and a function object for the subagent payload relay, so without
+    // this both tool calling and routed subagents fail on every thinking model.
+    if (payload.tool_choice !== undefined && payload.tool_choice !== "none") {
+      payload.tool_choice = "auto";
+    }
   } else if (model.requestProfile === "deepseek-nonthinking") {
     payload.thinking = { type: "disabled" };
     delete payload.reasoning_effort;
@@ -412,6 +420,28 @@ function normalizeBody(buffer, contentType, route) {
     // Chat Completions endpoint instead of reasoning_effort.
     delete payload.reasoning_effort;
     payload.thinking = { type: "adaptive" };
+  } else if (model.requestProfile === "auto-tool-choice") {
+    // Some models call tools happily under "auto" but reject being forced to,
+    // the way DeepSeek and Qwen do in thinking mode. Their vendor profiles
+    // above already handle it; this one exists for a model reached through a
+    // reseller (OpenRouter, Together, Fireworks, ...), where the restriction
+    // travels with the upstream model while the reseller's parameter surface
+    // is plain OpenAI. So it normalizes the tool choice and nothing else:
+    // borrowing qwen-plan for an OpenRouter-hosted Qwen would silently
+    // collapse the picked effort onto DashScope's two-tier ladder.
+    //
+    // Deliberately not applied provider-wide. OpenRouter reports tool_choice
+    // as a per-model entry in the `supported_parameters` of its own
+    // /api/v1/models listing (filterable with ?supported_parameters=tool_choice),
+    // and its default routing forwards a parameter an endpoint does not
+    // support rather than refusing the request, so a rejection is the
+    // upstream's and not the reseller's. Downgrading for every model behind
+    // one reseller would let models that honor "required" decline the
+    // compatibility probe and, worse, decline the forced function call the
+    // subagent payload relay depends on.
+    if (payload.tool_choice !== undefined && payload.tool_choice !== "none") {
+      payload.tool_choice = "auto";
+    }
   }
   return { body: Buffer.from(JSON.stringify(payload), "utf8"), model, provider };
 }

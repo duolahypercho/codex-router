@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -28,13 +28,23 @@ const {
   configuredProviderIds,
   disableProvider,
   enableProvider,
+  providerSelectionStatus,
   readProviderSelection,
+  readProviderSelectionDetail,
   selectedConfiguredListedModels,
   selectedListedModels,
+  validateProviderIds,
   writeProviderSelection,
 } = await import("../src/provider-selection.mjs");
 const { PROVIDER_SELECTION_PATH } = await import("../src/paths.mjs");
 const { privateFileIsProtected } = await import("../src/file-security.mjs");
+
+// Write the selection file behind the API so a test can stage the exact state a
+// newer checkout, or a corrupt write, leaves behind for an older running build.
+function stageSelectionFile(contents) {
+  mkdirSync(path.dirname(PROVIDER_SELECTION_PATH), { recursive: true });
+  writeFileSync(PROVIDER_SELECTION_PATH, contents, { encoding: "utf8", mode: 0o600 });
+}
 
 test("provider selection keeps backward compatibility and can hide the final provider", () => {
   try {
@@ -140,6 +150,159 @@ test("Command Code protocol variants follow their parent as one family", () => {
         .map((model) => model.slug)
         .includes("commandcode-messages/claude-sonnet-5"),
     );
+  } finally {
+    rmSync(testRoot, { recursive: true, force: true });
+  }
+});
+
+// `PROVIDERS` is frozen at module import, so a selection file naming an id this
+// build does not have -- version skew after an update, a CLI run from a newer
+// checkout, a provider that was renamed or removed -- used to throw out of the
+// first statement of `healthPayload()` and out of every `/responses` turn,
+// wedging the whole router until the service restarted.
+test("an unknown provider id in the selection file is filtered out, not fatal", () => {
+  try {
+    stageSelectionFile(
+      `${JSON.stringify({
+        version: 1,
+        providers: ["deepseek", "provider-from-a-newer-build"],
+      })}\n`,
+    );
+
+    assert.deepEqual(readProviderSelection(), ["deepseek"]);
+    const detail = readProviderSelectionDetail();
+    assert.deepEqual(detail.ignored, ["provider-from-a-newer-build"]);
+    assert.match(detail.degraded, /provider-from-a-newer-build/);
+    // The surviving provider still routes and still filters the catalog.
+    assert.deepEqual(
+      selectedListedModels().map((model) => model.slug),
+      ["deepseek/deepseek-v4-flash", "deepseek/deepseek-v4-pro"],
+    );
+    // Doctor and the support bundle read through this, so the damage is
+    // reportable instead of arriving as a 502 on every request.
+    const status = providerSelectionStatus();
+    assert.deepEqual(status.providers, ["deepseek"]);
+    assert.deepEqual(status.ignored, ["provider-from-a-newer-build"]);
+  } finally {
+    rmSync(testRoot, { recursive: true, force: true });
+  }
+});
+
+test("a retired provider alias still maps to its successor while unknown ids are dropped", () => {
+  try {
+    stageSelectionFile(
+      `${JSON.stringify({
+        version: 1,
+        providers: ["chatgpt-oauth", "provider-from-a-newer-build"],
+      })}\n`,
+    );
+
+    assert.deepEqual(readProviderSelection(), ["grok-oauth"]);
+    assert.deepEqual(readProviderSelectionDetail().ignored, ["provider-from-a-newer-build"]);
+  } finally {
+    rmSync(testRoot, { recursive: true, force: true });
+  }
+});
+
+// When nothing in the file exists in this build, the operator's stored intent
+// says nothing about the providers this build does have, so the read falls back
+// to the no-file default rather than stranding the install with no route at
+// all. The credential-aware catalog still hides anything that cannot
+// authenticate, so this is the same coherent state as a fresh install.
+test("a selection naming only unknown providers falls back to the no-file default", () => {
+  try {
+    stageSelectionFile(
+      `${JSON.stringify({
+        version: 1,
+        providers: ["provider-from-a-newer-build", "provider-that-was-removed"],
+      })}\n`,
+    );
+
+    assert.deepEqual(readProviderSelection(), [...PROVIDERS.keys()]);
+    const detail = readProviderSelectionDetail();
+    assert.deepEqual(detail.ignored, [
+      "provider-from-a-newer-build",
+      "provider-that-was-removed",
+    ]);
+    assert.match(detail.degraded, /no provider this build knows/);
+  } finally {
+    rmSync(testRoot, { recursive: true, force: true });
+  }
+});
+
+// An explicitly empty list is a deliberate choice -- disabling the last
+// provider writes `[]` -- so it must not be mistaken for the unknown-id
+// fallback above and silently reopen every provider.
+test("an explicitly empty selection still hides every provider", () => {
+  try {
+    stageSelectionFile(`${JSON.stringify({ version: 1, providers: [] })}\n`);
+
+    assert.deepEqual(readProviderSelection(), []);
+    assert.deepEqual(readProviderSelectionDetail().ignored, []);
+    assert.equal(readProviderSelectionDetail().degraded, undefined);
+    assert.deepEqual(selectedListedModels(), []);
+  } finally {
+    rmSync(testRoot, { recursive: true, force: true });
+  }
+});
+
+test("an unreadable or wrong-version selection file degrades instead of throwing", () => {
+  try {
+    stageSelectionFile("{ not json at all");
+    assert.deepEqual(readProviderSelection(), [...PROVIDERS.keys()]);
+    assert.match(readProviderSelectionDetail().degraded, /Unreadable provider selection/);
+
+    stageSelectionFile(`${JSON.stringify({ version: 99, providers: ["deepseek"] })}\n`);
+    assert.deepEqual(readProviderSelection(), [...PROVIDERS.keys()]);
+    assert.match(readProviderSelectionDetail().degraded, /version\/providers are invalid/);
+  } finally {
+    rmSync(testRoot, { recursive: true, force: true });
+  }
+});
+
+// The read path degrading must not soften the write path: a person naming a
+// provider on the CLI, in `install --providers`, or through the tray still gets
+// a hard error for a typo rather than a silently narrower selection.
+test("the write path still rejects an unknown provider id", () => {
+  try {
+    assert.throws(
+      () => validateProviderIds(["deepseek", "provider-from-a-newer-build"]),
+      /Unknown provider: provider-from-a-newer-build/,
+    );
+    assert.throws(
+      () => writeProviderSelection(["deepseek", "provider-from-a-newer-build"]),
+      /Unknown provider: provider-from-a-newer-build/,
+    );
+    assert.throws(
+      () => enableProvider("provider-from-a-newer-build"),
+      /Unknown provider: provider-from-a-newer-build/,
+    );
+
+    // A rejected write leaves the previous file exactly as it was.
+    writeProviderSelection(["deepseek"]);
+    assert.throws(
+      () => writeProviderSelection(["provider-from-a-newer-build"]),
+      /Unknown provider: provider-from-a-newer-build/,
+    );
+    assert.deepEqual(
+      JSON.parse(readFileSync(PROVIDER_SELECTION_PATH, "utf8")).providers,
+      ["deepseek"],
+    );
+
+    // A CLI run against a file a newer build left behind rewrites it without
+    // the unknown id, so the next read is clean again.
+    stageSelectionFile(
+      `${JSON.stringify({
+        version: 1,
+        providers: ["deepseek", "provider-from-a-newer-build"],
+      })}\n`,
+    );
+    assert.deepEqual(enableProvider("kimi-api"), ["deepseek", "kimi-api"]);
+    assert.deepEqual(
+      JSON.parse(readFileSync(PROVIDER_SELECTION_PATH, "utf8")).providers,
+      ["deepseek", "kimi-api"],
+    );
+    assert.deepEqual(readProviderSelectionDetail().ignored, []);
   } finally {
     rmSync(testRoot, { recursive: true, force: true });
   }
