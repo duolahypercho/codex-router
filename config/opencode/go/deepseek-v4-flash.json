@@ -21,8 +21,8 @@
           "description": "Deep reasoning"
         },
         {
-          "effort": "max",
-          "description": "Maximum reasoning depth"
+          "effort": "xhigh",
+          "description": "Extra high reasoning depth for complex problems"
         }
       ],
       "contextWindow": 1048576,
