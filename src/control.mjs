@@ -55,6 +55,16 @@ function codexConfigSnapshot() {
   }
 }
 
+// One list, three consumers: the probe the tray renders, the resolve that names
+// the current engine, and the validation that accepts a pin. They disagreed
+// once already -- the picker offered native models the setter then rejected --
+// so the criteria now live in one place for every surface (see
+// `src/vision-engines.mjs`).
+async function shippedNativeVisionEngines(hidden) {
+  const { installedNativeVisionEngines } = await import("./vision-engines.mjs");
+  return installedNativeVisionEngines({ hidden });
+}
+
 function nativeCodexModels(catalogPath, hiddenModels = new Set()) {
   if (!existsSync(catalogPath)) return [];
   try {
@@ -79,12 +89,8 @@ function nativeCodexModels(catalogPath, hiddenModels = new Set()) {
 // --- per-target probes (run with MODEL_ROUTER_TARGET set) -------------------
 
 async function emitProbe() {
-  const {
-    CONFIG_PATH,
-    NATIVE_CATALOG_PATH,
-    TARGET,
-    PROVIDER_SELECTION_PATH,
-  } = await import("./paths.mjs");
+  const { CONFIG_PATH, NATIVE_CATALOG_PATH, TARGET, PROVIDER_SELECTION_PATH } =
+    await import("./paths.mjs");
   const { canonicalProviderId, readProviderSelection } = await import("./provider-selection.mjs");
   const { LISTED_MODELS, PROVIDERS } = await import("./model-registry.mjs");
   const { readNativeAliases } = await import("./native-alias.mjs");
@@ -94,7 +100,10 @@ async function emitProbe() {
   const { readVisionBridgeSettings, visionBridgeSnapshot } = await import(
     "./vision-bridge-state.mjs"
   );
-  const { rankVisionEngines, resolveVisionEngine } = await import("./vision-bridge.mjs");
+  const { rankVisionEngines, resolveVisionEngine, visionEngineEfforts } = await import(
+    "./vision-bridge.mjs"
+  );
+  const { installedNativeVisionEngines } = await import("./vision-engines.mjs");
   const { annotateLocalModels, hostVisionProfile, refreshVisionModelSizesIfStale } =
     await import("./vision-host.mjs");
   const { readVisionDownload } = await import("./vision-download.mjs");
@@ -159,8 +168,15 @@ async function emitProbe() {
               localModels: localModelsSnapshot({ benchmarks: readBenchmarkResults() }),
               visionBridge: (() => {
                 const candidates = selectedConfiguredListedModels();
+                // Only the native models that actually shipped into the picker.
+                // A signed-out or login-free install has none, and offering one
+                // there would pin an engine the router cannot reach. Same rule
+                // the catalog build and the request path apply, from the same
+                // helper, so the tray can never advertise an engine the setter
+                // or the router would then refuse.
+                const natives = installedNativeVisionEngines({ hidden: hiddenModels });
                 const resolved = resolveVisionEngine(
-                  candidates,
+                  [...candidates, ...natives],
                   readVisionBridgeSettings(),
                 );
                 return {
@@ -173,6 +189,16 @@ async function emitProbe() {
                   paidEngines: rankVisionEngines(candidates).map((model) => ({
                     slug: model.slug,
                     displayName: model.displayName,
+                    efforts: visionEngineEfforts(model),
+                  })),
+                  // Vision models from the signed-in ChatGPT session. No extra
+                  // key, nothing to download: the plan is already being paid
+                  // for. Kept apart from the paid list so the operator can see
+                  // which bill a choice lands on.
+                  nativeEngines: rankVisionEngines(natives).map((model) => ({
+                    slug: model.slug,
+                    displayName: model.displayName,
+                    efforts: visionEngineEfforts(model),
                   })),
                   // The downloadable local picker, each with size + fit + state.
                   localModels: annotateLocalModels({ benchmarks: readBenchmarkResults() }),
@@ -651,20 +677,37 @@ async function runVisionBridgeSetup({ consent }) {
   process.stderr.write(`Vision bridge on: ${chosen} (local, via Ollama).\n`);
 }
 
+// "default" and an empty argument both mean "stop pinning a level", which is
+// how every install behaved before the level was selectable.
+function effortArgument(value, levels) {
+  const effort = String(value ?? "").trim().toLowerCase();
+  if (!effort || effort === "default" || effort === "auto") return null;
+  if (!levels.includes(effort)) {
+    throw new Error(`${effort} is not a reasoning effort. Choose one of: ${levels.join(", ")}, or "default".`);
+  }
+  return effort;
+}
+
 async function handleVisionBridge(action, value, extra) {
   const {
     readVisionBridgeSettings,
     setVisionBridgeEnabled,
+    setVisionBridgeEffort,
     setVisionBridgeEngine,
     setVisionBridgeLocal,
     visionBridgeSnapshot,
+    VISION_EFFORT_LEVELS,
   } = await import("./vision-bridge-state.mjs");
-  const { LOCAL_ENGINE_SLUG, rankVisionEngines, resolveVisionEngine } = await import(
-    "./vision-bridge.mjs"
-  );
+  const {
+    LOCAL_ENGINE_SLUG,
+    rankVisionEngines,
+    resolveVisionEngine,
+    visionEngineEfforts,
+  } = await import("./vision-bridge.mjs");
   const { selectedConfiguredListedModels } = await import("./provider-selection.mjs");
+  const nativeEngines = await shippedNativeVisionEngines();
   const snapshot = () => {
-    const candidates = selectedConfiguredListedModels();
+    const candidates = [...selectedConfiguredListedModels(), ...nativeEngines];
     const settings = readVisionBridgeSettings();
     const resolved = resolveVisionEngine(candidates, settings);
     return {
@@ -677,6 +720,9 @@ async function handleVisionBridge(action, value, extra) {
         ...rankVisionEngines(candidates).map((model) => model.slug),
         LOCAL_ENGINE_SLUG,
       ],
+      // What the engine now in force will actually accept. Empty means it
+      // declares no levels, so the only honest answer is its own default.
+      availableEfforts: resolved ? visionEngineEfforts(resolved) : [],
     };
   };
   if (action === "status") {
@@ -810,7 +856,13 @@ async function handleVisionBridge(action, value, extra) {
   } else if (action === "engine") {
     const slug = String(value || "").trim();
     if (slug && slug !== "auto" && slug !== LOCAL_ENGINE_SLUG) {
-      const available = rankVisionEngines(selectedConfiguredListedModels());
+      // Must accept everything the picker offers. Validating against the routed
+      // models alone rejected every native slug, so choosing one from the tray
+      // silently left the previous engine in place.
+      const available = rankVisionEngines([
+        ...selectedConfiguredListedModels(),
+        ...nativeEngines,
+      ]);
       if (!available.some((model) => model.slug === slug)) {
         throw new Error(
           `${slug} is not an enabled model that reads images. Choose one of: ${
@@ -820,10 +872,16 @@ async function handleVisionBridge(action, value, extra) {
       }
     }
     setVisionBridgeEngine(slug && slug !== "auto" ? slug : null);
+    // The tray picks an engine and a level in one click, so the level rides
+    // along here. Left out, whatever was pinned before stays pinned.
+    if (extra !== undefined) setVisionBridgeEffort(effortArgument(extra, VISION_EFFORT_LEVELS));
+  } else if (action === "effort") {
+    setVisionBridgeEffort(effortArgument(value, VISION_EFFORT_LEVELS));
   } else {
     throw new Error(
       "Usage: control vision-bridge status|probe|models|setup [--yes]|on|off|" +
-        "engine <model-slug|local|auto>|local [model] [baseUrl]|pull <model-tag>",
+        "engine <model-slug|local|auto> [effort]|effort <level|default>|" +
+        "local [model] [baseUrl]|pull <model-tag>",
     );
   }
   refreshModelSettingsCatalog();

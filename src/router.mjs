@@ -37,7 +37,11 @@ import {
   readProviderSelection,
   selectedConfiguredListedModels,
 } from "./provider-selection.mjs";
-import { ResponseUsageTransform, tokenUsageFromPayload } from "./response-usage.mjs";
+import {
+  estimateInputTokens,
+  ResponseUsageTransform,
+  tokenUsageFromPayload,
+} from "./response-usage.mjs";
 import { fetchWithRetry } from "./upstream-retry.mjs";
 import {
   CollaborationToolCallTransform,
@@ -50,13 +54,17 @@ import { recordUsageEvent } from "./usage-events.mjs";
 import {
   describeImage,
   evidenceCache,
+  hasNativeSession,
   inputHasImage,
+  nativeAccountKey,
   resolveVisionEngine,
   stripImages,
   substituteImages,
   supportsImageInput,
 } from "./vision-bridge.mjs";
+import { readHiddenModels } from "./model-picker-state.mjs";
 import { readVisionBridgeSettings } from "./vision-bridge-state.mjs";
+import { installedNativeVisionEngines } from "./vision-engines.mjs";
 import { VERSION } from "./version.mjs";
 
 const LISTEN_HOST =
@@ -91,6 +99,11 @@ const INTERNAL_KEY =
 const CALLER_KEY = process.env.CODEX_ROUTER_CALLER_KEY;
 const QUIET =
   process.env.CODEX_ROUTER_QUIET === "1" || process.env.KIMI_PROXY_QUIET === "1";
+// Kill switch for the zero-prompt-token substitution (#95). It is on because a
+// provider that reports no prompt tokens breaks compaction outright, but an
+// operator who would rather see the provider's own numbers can turn it off
+// without downgrading the router.
+const ZERO_INPUT_ESTIMATE = process.env.CODEX_ROUTER_ZERO_INPUT_ESTIMATE !== "0";
 const ERROR_STATUS_DURATION_MS = 8_000;
 const configuredDecodedBodyBytes = Number(
   process.env.MODEL_ROUTER_MAX_DECODED_BODY_BYTES ||
@@ -750,30 +763,62 @@ async function normalizeRoutedAgentInput(request, input, signal) {
 // Codex resends the whole conversation every turn, so the same screenshot
 // arrives again on every follow-up. Without the hash cache a five-turn
 // conversation about one image would buy the same transcript five times.
-async function visionEvidenceFor(url, engine, signal) {
-  const cached = evidenceCache.get(url);
+async function visionEvidenceFor(url, engine, signal, request, effort) {
+  // A native engine is spent on the caller's own ChatGPT session, so it can
+  // only be reached with the headers this very request arrived with. The router
+  // never stores those.
+  const nativeCall = request
+    ? { baseUrl: NATIVE_BASE, headers: nativeHeaders(request) }
+    : undefined;
+  // For a native engine the account is part of the identity of a transcript
+  // too. That call is authorized by the caller's live session, and a cache hit
+  // skips the call along with every re-check that this session may still spend
+  // this model. Landing on an entry takes the identical image bytes, so this is
+  // an entitlement boundary rather than a confidentiality one -- but it is
+  // still a boundary. Gateway and local engines keep the key they had: neither
+  // is scoped to a caller.
+  const account = engine.native ? nativeAccountKey(nativeCall?.headers) : "";
+  // The effort is part of the identity of a transcript: raising it and pasting
+  // the same screenshot again must re-read it, not replay the cheaper pass.
+  const key = `${engine.slug}\u0000${effort || "default"}\u0000${account}\u0000${url}`;
+  const cached = evidenceCache.get(key);
   if (cached !== undefined) return cached;
   const text = await describeImage({
     engine,
     imageUrl: url,
     gatewayBase: GATEWAY_BASE,
     headers: routedHeaders(),
+    nativeCall,
+    effort,
     signal,
   });
-  return evidenceCache.set(url, text);
+  return evidenceCache.set(key, text);
 }
 
 // Text-only models get their images read by a vision-capable model the
 // operator already enabled. Turns without images cost nothing here, and a
 // model that reads images itself is never touched.
-async function bridgeVisionInput(input, route, signal) {
+async function bridgeVisionInput(input, route, signal, request) {
   if (!inputHasImage(input)) return input;
   if (supportsImageInput(route)) return input;
   if (route.visionBridge === false) {
     return stripImages(input, `${route.displayName || route.slug} cannot read images`).input;
   }
+  // Native candidates need two things at once, and neither is sufficient alone.
+  // The shared helper (`src/vision-engines.mjs`) applies the same auth gate the
+  // catalog build and the tray apply -- this path used to read the capture off
+  // disk with no gate at all. But every on-disk artifact is reused across a
+  // failed probe by design, so a sign-out leaves them naming an engine nothing
+  // can call. The caller's live session is the evidence that cannot be stale,
+  // so it has to hold too: without one there is no native engine to nominate,
+  // and a pin naming one stops resolving on the very next paste rather than at
+  // the next catalog rebuild.
+  const nativeEngines =
+    request && hasNativeSession(nativeHeaders(request))
+      ? installedNativeVisionEngines({ hidden: readHiddenModels() })
+      : [];
   const engine = resolveVisionEngine(
-    selectedConfiguredListedModels(),
+    [...selectedConfiguredListedModels(), ...nativeEngines],
     readVisionBridgeSettings(),
   );
   if (!engine) {
@@ -786,8 +831,9 @@ async function bridgeVisionInput(input, route, signal) {
     ).input;
   }
   const engineName = engine.displayName || engine.slug;
+  const { effort } = readVisionBridgeSettings();
   const result = await substituteImages(input, async (url) => ({
-    text: await visionEvidenceFor(url, engine, signal),
+    text: await visionEvidenceFor(url, engine, signal, request, effort),
     engineName,
   }));
   if (!QUIET) {
@@ -963,6 +1009,7 @@ async function summarize(request, payload, route, signal) {
     await normalizeRoutedAgentInput(request, originalInput, signal),
     route,
     signal,
+    request,
   );
   const body = {
     ...payload,
@@ -1197,6 +1244,7 @@ async function handleResponses(request, response, requestUrl) {
         await normalizeRoutedAgentInput(request, payload.input, controller.signal),
         route,
         controller.signal,
+        request,
       );
       const provider = providerForModel(route);
       // LiteLLM's Responses -> Chat Completions bridge drops namespace tools.
@@ -1303,8 +1351,23 @@ async function handleResponses(request, response, requestUrl) {
     }
     // Native OpenAI responses carry the same `usage` shape as routed ones, so
     // meter both paths; without this, native traffic reports zero tokens.
+    //
+    // A routed provider that answers a large prompt with `input_tokens: 0` is
+    // reporting something that cannot be true, and Codex reads exactly that
+    // number to decide when to compact -- opencode's Go endpoint did it for a
+    // whole model family and sessions ran past the context window and died
+    // (#95). The estimate below is offered only for those responses; the
+    // predicate is structural (this request, these bytes, an explicit zero),
+    // so it cannot fire on a provider that reports correctly and it disables
+    // itself the moment the upstream starts reporting again.
     const usageTransform = new ResponseUsageTransform(
       upstream.headers.get("content-type") || "",
+      {
+        estimatedInputTokens:
+          ZERO_INPUT_ESTIMATE && route
+            ? estimateInputTokens(routedBody, { contextWindow: route.contextWindow })
+            : undefined,
+      },
     );
     const transforms = [usageTransform];
     if (collaborationFlattened) {
@@ -1312,8 +1375,11 @@ async function handleResponses(request, response, requestUrl) {
     }
     await pipeResponse(upstream, response, HOP_BY_HOP_HEADERS, transforms);
     const usage = usageTransform?.tokenUsage();
-    // `retries` is what separates "it never failed" from "it failed and the
-    // router absorbed it", both of which otherwise record a plain 200.
+    const estimatedInputTokens = usageTransform?.substitutedInputTokens();
+    // `retries` separates "it never failed" from "it failed and the router
+    // absorbed it", both of which otherwise record a plain 200;
+    // `estimatedInputTokens` separates a count the provider sent from one the
+    // router had to invent. Neither is inferable from the rest of the event.
     recordUsageEvent({
       model: route?.slug || requestedModel,
       provider: route ? canonicalProviderId(route.provider) : "openai",
@@ -1321,10 +1387,15 @@ async function handleResponses(request, response, requestUrl) {
       durationMs: Date.now() - startedAt,
       retries: upstreamRetries,
       ...usage,
+      estimatedInputTokens,
     });
     if (!QUIET) {
+      // The substitution is named in the log line as well as the usage event:
+      // a router that quietly invents token counts is its own trap.
       console.error(
-        `[codex-router] model=${requestedModel || "unknown"} provider=${route?.provider || "openai"} status=${upstream.status}${upstreamRetries ? ` retries=${upstreamRetries}` : ""}`,
+        `[codex-router] model=${requestedModel || "unknown"} provider=${route?.provider || "openai"} status=${upstream.status}${
+          upstreamRetries ? ` retries=${upstreamRetries}` : ""
+        }${estimatedInputTokens ? ` estimated-input-tokens=${estimatedInputTokens}` : ""}`,
       );
     }
   } catch (error) {

@@ -351,15 +351,58 @@ the turn as text. Treat it as a router capability, never as a model capability.
    the tray and reads as a crash. The worker pins the model only after it is on
    disk, so a failed or interrupted download never repoints the bridge at a
    model that is not there.
-5. Substituted transcripts are untrusted user data. Keep them fenced and
+5. The second sanctioned exception is a **native engine**: a vision model from
+   the operator's own signed-in ChatGPT plan, reached over the native path the
+   router already owns (`NATIVE_BASE`) with the caller's own session headers.
+   It is permitted because it introduces nothing — no stored credential, no
+   separate vision API key, no external CLI, no install step, nothing to
+   download — and because it spends a plan the operator already pays for, on a
+   backend the router already talks to on every native turn. That is the whole
+   justification. These conditions are what keep it from widening into
+   something else, and each one is load-bearing:
+   - **No new credential, ever.** A native engine carries the caller's session
+     and nothing else: the fixed `FORWARD_HEADERS` allowlist, copied from the
+     request in hand and sent only to the hardcoded `NATIVE_BASE`. The router
+     must never store, cache, mint, or read a credential for this path, and the
+     gateway's internal key must never travel to that backend. An engine that
+     would need a key the router does not already hold is not this exception.
+   - **Fail closed when there is no caller session.** No session on the request
+     means no native engine: not a candidate, and a pin naming one does not
+     resolve. Never fall back to the gateway for a native slug — it holds no
+     credential for one — and never accept an on-disk capture as evidence that
+     the session is still good. `native-models.json` and `merged-models.json`
+     are both reused deliberately when a fresh probe fails, so a sign-out leaves
+     them naming an engine that can no longer be called. Signing out has to stop
+     the engine resolving on the very next paste, not at the next catalog
+     rebuild. Cached transcripts are part of this: a native transcript is keyed
+     to the account that bought it, because a cache hit skips the call and with
+     it every check that this session may still spend that model.
+   - **This is not a general bypass.** It licenses one destination and one
+     credential: the router's own native path, on the caller's own session. It
+     is not a precedent that any hosted engine may skip the gateway once its
+     credential story sounds tidy. Item 4 stands unchanged for every registry
+     engine — a hosted engine that would bring a second upstream, a separate
+     vision key, or an external dependency goes through the gateway or does not
+     ship.
+
+   Known gap: plan quota spent this way is **not** surfaced in usage or limits,
+   so a transcribed screenshot bills the operator's ChatGPT plan invisibly. That
+   is the one thing "Ship a new provider to every installer" requires of
+   everyone else that this path does not yet do. It is being closed separately.
+   Do not read it as settled, do not weaken this section to accommodate it, and
+   do not extend the exception to another engine while it is still open.
+6. Substituted transcripts are untrusted user data. Keep them fenced and
    labelled as quoted image content, never log a transcript or a gateway error
    body, and keep the per-image failure path degrading to a stated failure
-   rather than a failed turn.
-6. Evidence, not impressions. The instruction set asks for a transcript, a
+   rather than a failed turn. A stream that fails partway through is a failure,
+   not a short transcript: deltas already in hand are discarded rather than
+   returned, because a plausible truncated transcript is quoted downstream as
+   though it were the whole image.
+7. Evidence, not impressions. The instruction set asks for a transcript, a
    layout list, readable data values, and an explicit uncertainty list, so the
    downstream model quotes rather than guesses. Preserve the uncertainty
    section in any rewrite.
-7. Never add a local model to `LOCAL_VISION_CATALOG` with an `accuracy` claim
+8. Never add a local model to `LOCAL_VISION_CATALOG` with an `accuracy` claim
    that was not measured. Run `node src/vision-benchmark.mjs`, which scores a
    model against a checked-in image with known contents, and record the result
    in `measured`; anything unmeasured stays `untested`. This is not bureaucracy:
@@ -367,10 +410,19 @@ the turn as text. Treat it as a router capability, never as a model capability.
    plausible, so a reputation-based label would route users straight to a model
    that fabricates invoice numbers. The picker sorts on this field, so an
    unearned "accurate" puts a confident-wrong reader at the top of the list.
-7. Regression coverage lives in `test/vision-bridge.test.mjs`,
-   `test/vision-bridge-state.test.mjs`, and the bridged-catalog case in
-   `test/catalog.test.mjs`. A change to engine ranking, caching, substitution,
-   or the advertisement rule needs a test there.
+9. Which native models may read an image is one rule in one place
+   (`src/vision-engines.mjs`), not a criterion each surface re-derives. The
+   catalog build, the tray, and the request path each asked it separately once,
+   and the three answers disagreed — the request path applied no auth gate at
+   all. The rule is shared; only the evidence for the gate differs, because just
+   one caller can afford to ask Codex directly (`codexAuthStatus()` spawns a
+   process) and only the request path holds the caller's live session. Every
+   call site names its evidence explicitly, and the coverage below fails when
+   one of them stops.
+10. Regression coverage lives in `test/vision-bridge.test.mjs`,
+    `test/vision-bridge-state.test.mjs`, and the bridged-catalog case in
+    `test/catalog.test.mjs`. A change to engine ranking, caching, substitution,
+    the native gate, or the advertisement rule needs a test there.
 
 ## Local models as a provider
 
@@ -480,6 +532,44 @@ merely failing them.
    turn the router rescued is distinguishable from one that never failed. Log
    the status or the transport error's own name and code — never a response
    body, and never the caller capability path.
+
+## Substituting a prompt-token count a provider reported as zero
+
+Codex decides when to compact from the `input_tokens` each response reports, so
+a provider that answers a large prompt with an explicit zero disables
+compaction entirely and the session runs until the provider rejects the turn.
+The router replaces that number on the way to Codex. The rules are narrow on
+purpose.
+
+1. Only an **explicit zero** is replaced, and only on a **routed** response
+   whose request the router measured as large. A missing usage block, a missing
+   prompt field, and any positive count are all forwarded untouched, so a
+   provider that reports correctly never sees this path and the substitution
+   stops by itself the moment the upstream recovers. Do not widen the predicate
+   into "the number looks wrong".
+2. The estimate errs **high**. Compaction sits below the provider's hard limit
+   (900,000 of 1,048,576 for the affected models, a 14% margin), so an estimate
+   that lands low still lets the turn die, while a high one only compacts
+   sooner. Do not "improve" the ratio toward accuracy without re-checking that
+   margin, and do not add a tokenizer dependency or download for it.
+3. Telemetry keeps what the **provider** said. The usage event records the
+   reported counts verbatim and adds `estimatedInputTokens` beside them; the
+   log line names the substitution. Never fold the estimate into `inputTokens`
+   — a run of estimated turns is the evidence that the provider is still
+   broken, and an overwritten field would read as a recovery.
+4. The response body is otherwise byte-identical, including bytes that are not
+   valid UTF-8: the rewrite path forwards the original buffers and re-encodes
+   only the one `data:` line it replaces, preserving framing and terminators.
+   Do not reintroduce a decoded-text passthrough, which silently rewrites a
+   malformed byte to U+FFFD.
+5. If a provider is ever added that reports prompt tokens *excluding* cache
+   hits, a fully cached turn could report a truthful zero. Substituting there
+   is still right for compaction — cached tokens occupy the context window —
+   but say so in that provider's registry work rather than discovering it from
+   a surprised user.
+6. Regression coverage lives in `test/response-usage.test.mjs` and the
+   `prompt-token estimate` cases in `test/routing.test.mjs`. A change to the
+   predicate, the ratio, or the telemetry needs a test there.
 
 ## Routed subagent regression prevention
 

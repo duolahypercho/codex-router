@@ -10,6 +10,7 @@ process.env.CODEX_ROUTER_STATE_DIR = stateDir;
 const {
   VISION_BRIDGE_STATE_PATH,
   readVisionBridgeSettings,
+  setVisionBridgeEffort,
   setVisionBridgeEnabled,
   setVisionBridgeEngine,
   setVisionBridgeLocal,
@@ -17,7 +18,7 @@ const {
 } = await import("../src/vision-bridge-state.mjs");
 
 test("the bridge is off until the operator turns it on", () => {
-  assert.deepEqual(readVisionBridgeSettings(), { version: 1, enabled: false, engine: null, local: null });
+  assert.deepEqual(readVisionBridgeSettings(), { version: 1, enabled: false, engine: null, effort: null, local: null });
   assert.ok(VISION_BRIDGE_STATE_PATH.startsWith(stateDir));
 });
 
@@ -36,6 +37,7 @@ test("enabling and pinning round-trip through protected state", () => {
     version: 1,
     enabled: true,
     engine: null,
+    effort: null,
     local: null,
   });
 
@@ -58,5 +60,26 @@ test("pinning a local model stores it and selects the local engine", () => {
 
 test("corrupt state reads as off rather than throwing", () => {
   writeFileSync(VISION_BRIDGE_STATE_PATH, "{not json", "utf8");
-  assert.deepEqual(readVisionBridgeSettings(), { version: 1, enabled: false, engine: null, local: null });
+  assert.deepEqual(readVisionBridgeSettings(), { version: 1, enabled: false, engine: null, effort: null, local: null });
+});
+
+test("a reasoning effort is pinned and cleared on its own, without touching the engine", () => {
+  setVisionBridgeEnabled(true);
+  setVisionBridgeEngine("gpt-5.6-luna");
+
+  setVisionBridgeEffort("xhigh");
+  assert.equal(readVisionBridgeSettings().effort, "xhigh");
+  assert.equal(readVisionBridgeSettings().engine, "gpt-5.6-luna");
+
+  // Anything outside the known ladder reads as no pin at all, so a hand-edited
+  // state file cannot smuggle a value the backend would reject.
+  setVisionBridgeEffort("turbo");
+  assert.equal(readVisionBridgeSettings().effort, null);
+
+  setVisionBridgeEffort("MAX");
+  assert.equal(readVisionBridgeSettings().effort, "max");
+
+  setVisionBridgeEffort(null);
+  assert.equal(readVisionBridgeSettings().effort, null);
+  assert.equal(readVisionBridgeSettings().engine, "gpt-5.6-luna");
 });

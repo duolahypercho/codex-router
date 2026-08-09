@@ -3362,3 +3362,164 @@ test("routed compaction resolves subagent handoffs before summarizing", async ()
     await Promise.all([closeServer(native.server), closeServer(gateway.server)]);
   }
 });
+
+// Issue #95: opencode's Go endpoint reports `input_tokens: 0` for its DeepSeek
+// V4 models, so Codex's context counter never climbs, auto-compaction never
+// fires, and the provider eventually rejects the turn at its real limit. Codex
+// reads that number out of `response.completed`, so a router that only logged
+// the problem would not fix it -- the substituted count has to reach the client.
+test("router substitutes a prompt-token estimate a provider reported as zero", async () => {
+  let reportedInputTokens = 0;
+  const gatewayBodies = [];
+  const gateway = await mockServer(async (request, response) => {
+    gatewayBodies.push(await bodyJson(request));
+    const completed = {
+      type: "response.completed",
+      response: {
+        id: "resp_routed",
+        usage: {
+          input_tokens: reportedInputTokens,
+          output_tokens: 12,
+          total_tokens: reportedInputTokens + 12,
+        },
+      },
+    };
+    response.writeHead(200, { "Content-Type": "text/event-stream" });
+    response.end(
+      `event: response.completed\ndata: ${JSON.stringify(completed)}\n\ndata: [DONE]\n\n`,
+    );
+  });
+  const stateDir = mkdtempSync(path.join(os.tmpdir(), "routing-zero-input-"));
+  const routerPort = await openPort();
+  // QUIET stays off: the log line is part of what makes a substitution visible.
+  const router = run("router.mjs", {
+    CODEX_ROUTER_PORT: String(routerPort),
+    CODEX_ROUTER_GATEWAY_BASE_URL: `http://127.0.0.1:${gateway.port}/v1`,
+    MODEL_ROUTER_STATE_DIR: stateDir,
+  });
+  const headers = {
+    Authorization: "Bearer CODEX_CALLER_SECRET",
+    "Content-Type": "application/json",
+  };
+  const conversation = "the quick brown fox jumps over the lazy dog. ".repeat(1_000);
+  const body = JSON.stringify({
+    model: "opencode-go/deepseek-v4-flash",
+    input: [
+      { type: "message", role: "user", content: [{ type: "input_text", text: conversation }] },
+    ],
+  });
+
+  try {
+    await waitFor(`${routerBase(routerPort)}/models`, router);
+
+    const zero = await fetch(`${routerBase(routerPort)}/responses`, {
+      method: "POST",
+      headers,
+      body,
+    });
+    assert.equal(zero.status, 200);
+    const streamed = await zero.text();
+    const completed = JSON.parse(
+      streamed
+        .split("\n")
+        .find((line) => line.startsWith("data:") && line.includes("response.completed"))
+        .slice(5),
+    );
+    // What Codex now reads is an estimate of the prompt it actually sent,
+    // erring high: never below the familiar four-bytes-per-token figure, and
+    // never above the densest plausible three.
+    const estimate = completed.response.usage.input_tokens;
+    assert.ok(estimate >= Math.ceil(conversation.length / 4), `estimate ${estimate} too low`);
+    assert.ok(estimate <= Math.ceil((conversation.length + 2_000) / 3), `estimate ${estimate} too high`);
+    assert.equal(completed.response.usage.total_tokens, estimate + 12);
+
+    const [substituted] = await waitForUsageEvents(stateDir, 1, router);
+    assert.equal(substituted.model, "opencode-go/deepseek-v4-flash");
+    // The telemetry keeps the provider's own zero and records the estimate
+    // beside it, so nothing here can be mistaken for the provider recovering.
+    assert.equal(substituted.inputTokens, 0);
+    assert.equal(substituted.outputTokens, 12);
+    assert.equal(substituted.estimatedInputTokens, estimate);
+    await waitForStderr(router, new RegExp(`estimated-input-tokens=${estimate}\\b`));
+
+    // A provider that reports correctly is left alone on the very same route.
+    reportedInputTokens = 4_321;
+    const reported = await fetch(`${routerBase(routerPort)}/responses`, {
+      method: "POST",
+      headers,
+      body,
+    });
+    assert.equal(reported.status, 200);
+    assert.match(await reported.text(), /"input_tokens":4321/);
+    const events = await waitForUsageEvents(stateDir, 2, router);
+    const honest = events.at(-1);
+    assert.equal(honest.inputTokens, 4_321);
+    assert.equal("estimatedInputTokens" in honest, false);
+    assert.equal(router.testErrors().match(/estimated-input-tokens=/g).length, 1);
+    assert.equal(gatewayBodies.length, 2);
+  } finally {
+    await stopChild(router);
+    await closeServer(gateway.server);
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+// Inventing token counts is a heuristic, however tightly gated, so an operator
+// has to be able to see the provider's own numbers again without downgrading.
+test("the prompt-token estimate can be switched off", async () => {
+  const gateway = await mockServer(async (request, response) => {
+    await bodyJson(request);
+    const completed = {
+      type: "response.completed",
+      response: {
+        id: "resp_routed",
+        usage: { input_tokens: 0, output_tokens: 12, total_tokens: 12 },
+      },
+    };
+    response.writeHead(200, { "Content-Type": "text/event-stream" });
+    response.end(
+      `event: response.completed\ndata: ${JSON.stringify(completed)}\n\ndata: [DONE]\n\n`,
+    );
+  });
+  const stateDir = mkdtempSync(path.join(os.tmpdir(), "routing-zero-input-off-"));
+  const routerPort = await openPort();
+  const router = run("router.mjs", {
+    CODEX_ROUTER_PORT: String(routerPort),
+    CODEX_ROUTER_GATEWAY_BASE_URL: `http://127.0.0.1:${gateway.port}/v1`,
+    CODEX_ROUTER_ZERO_INPUT_ESTIMATE: "0",
+    CODEX_ROUTER_QUIET: "1",
+    MODEL_ROUTER_STATE_DIR: stateDir,
+  });
+
+  try {
+    await waitFor(`${routerBase(routerPort)}/models`, router);
+    const response = await fetch(`${routerBase(routerPort)}/responses`, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer CODEX_CALLER_SECRET",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "opencode-go/deepseek-v4-flash",
+        input: [
+          {
+            type: "message",
+            role: "user",
+            content: [
+              { type: "input_text", text: "the quick brown fox. ".repeat(2_000) },
+            ],
+          },
+        ],
+      }),
+    });
+    assert.equal(response.status, 200);
+    assert.match(await response.text(), /"input_tokens":0/);
+    const [event] = await waitForUsageEvents(stateDir, 1, router);
+    assert.equal(event.inputTokens, 0);
+    assert.equal("estimatedInputTokens" in event, false);
+  } finally {
+    await stopChild(router);
+    await closeServer(gateway.server);
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});

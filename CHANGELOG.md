@@ -39,6 +39,25 @@
   on the usage event, so an upstream that is being papered over still looks
   flaky in the telemetry instead of healthy.
 
+- **A provider that reports no prompt tokens no longer disables compaction.**
+  Codex decides when to auto-compact from the `input_tokens` each response
+  reports. opencode's Go endpoint stopped reporting them for its DeepSeek V4
+  models, so the context counter never climbed, compaction never fired, and
+  sessions ran until the provider itself refused the turn — one captured turn
+  carried 1,050,034 tokens against a 1,048,576-token limit, with the context
+  bar still showing nearly empty. When a routed response now explicitly claims
+  zero prompt tokens for a request the router just measured as large, the
+  router substitutes an estimate of the prompt it sent, so Codex compacts on
+  time. The estimate errs high on purpose: compaction sits 14% below the hard
+  limit, so an estimate that lands low would let the turn die anyway, while a
+  high one only compacts sooner. Nothing else is touched — a provider that
+  reports correctly, a response with no usage block, and native traffic all
+  pass through byte for byte, and the substitution stops by itself once the
+  upstream starts reporting again. It is never silent: the usage event keeps
+  the provider's own counts and adds `estimatedInputTokens` beside them, and
+  the turn logs `estimated-input-tokens=<count>`, so estimated turns can never
+  be mistaken for the provider having recovered.
+
 - **Windows no longer opens a console window at logon.** The scheduled task ran
   the CMD wrapper through `cmd.exe`, so a console window appeared at every logon
   and stayed for the router's lifetime, reappearing on each watchdog restart.
