@@ -13,7 +13,9 @@
       "planNote": "Requires Copilot access. After connecting, run ./bin/curate-models github-copilot.",
       "credential": {
         "environment": [
-          "COPILOT_GITHUB_TOKEN"
+          "COPILOT_GITHUB_TOKEN",
+          "GH_TOKEN",
+          "GITHUB_TOKEN"
         ],
         "file": "github-copilot-token.secret",
         "legacyFiles": [],

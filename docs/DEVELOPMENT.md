@@ -52,40 +52,6 @@ the account endpoint, caches the validated account routing briefly, allowlists
 the returned inference host, and builds provider identity headers. Do not reuse
 that profile for another vendor.
 
-### GitHub Copilot reference implementations
-
-This support is based on two established first-class Copilot providers, pinned
-to the revisions reviewed during implementation:
-
-- [OpenClaw provider](https://github.com/openclaw/openclaw/tree/5d98d2e6ecd7a53b41e2643dc7689c12118e0e1c/extensions/github-copilot):
-  [`runtime-auth.ts`](https://github.com/openclaw/openclaw/blob/5d98d2e6ecd7a53b41e2643dc7689c12118e0e1c/extensions/github-copilot/runtime-auth.ts)
-  validates the original GitHub token through `/copilot_internal/user`, takes
-  `endpoints.api` from that response, and restricts it to GitHub Copilot hosts;
-  [`models.ts`](https://github.com/openclaw/openclaw/blob/5d98d2e6ecd7a53b41e2643dc7689c12118e0e1c/extensions/github-copilot/models.ts)
-  filters the live catalog using object/type, picker policy, tool, streaming,
-  endpoint, and account availability metadata;
-  [`runtime-identity.ts`](https://github.com/openclaw/openclaw/blob/5d98d2e6ecd7a53b41e2643dc7689c12118e0e1c/extensions/github-copilot/runtime-identity.ts)
-  supplies the Copilot integration identity; and
-  [`usage.ts`](https://github.com/openclaw/openclaw/blob/5d98d2e6ecd7a53b41e2643dc7689c12118e0e1c/extensions/github-copilot/usage.ts)
-  maps `/copilot_internal/user` quota snapshots.
-- [Hermes Agent provider](https://github.com/NousResearch/hermes-agent/tree/a4970d07d58af41968b7371776481b56411bc3d6/plugins/model-providers/copilot):
-  [`copilot_auth.py`](https://github.com/NousResearch/hermes-agent/blob/a4970d07d58af41968b7371776481b56411bc3d6/hermes_cli/copilot_auth.py)
-  documents accepted `gho_`, `github_pat_`, and `ghu_` tokens, rejects classic
-  `ghp_` PATs, and builds Copilot intent/initiator/vision headers;
-  [`models.py`](https://github.com/NousResearch/hermes-agent/blob/a4970d07d58af41968b7371776481b56411bc3d6/hermes_cli/models.py)
-  consumes `model_picker_enabled`, `supported_endpoints`, and capability data;
-  and the
-  [provider profile](https://github.com/NousResearch/hermes-agent/blob/a4970d07d58af41968b7371776481b56411bc3d6/plugins/model-providers/copilot/__init__.py)
-  registers Copilot and its credential environment variables as a normal
-  provider rather than an experimental one.
-
-The implementations are references, not copied dependencies. OpenClaw's current
-direct-token account-validation path is the closest match to this router.
-Hermes additionally retains a compatibility token-exchange path and supports
-Chat Completions and Anthropic Messages models. Codex Router deliberately ships
-only account-advertised Responses models because its gateway and curation
-contract require one verified wire protocol per provider entry.
-
 ## Registry rules
 
 The registry is intentionally declarative. `src/model-registry.mjs` rejects

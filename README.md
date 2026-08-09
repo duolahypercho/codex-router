@@ -134,8 +134,9 @@ Enterprise Cloud data-residency hosts are not yet configured by the router.
 ```
 
 The hidden prompt stores the GitHub token in protected router state. For a
-foreground process, `COPILOT_GITHUB_TOKEN` is also accepted. Classic `ghp_`
-tokens are not supported by Copilot; create a fine-grained `github_pat_` token
+foreground process, `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, and `GITHUB_TOKEN` are
+checked in that order. Classic `ghp_` tokens are not supported by Copilot;
+create a fine-grained `github_pat_` token
 at [GitHub personal access tokens](https://github.com/settings/personal-access-tokens/new).
 The router deliberately does not read or copy the official Copilot CLI's
 credential store.
@@ -151,18 +152,6 @@ interface may continue to evolve. Requests consume the user's Copilot
 allowance; use it
 within the [GitHub Copilot terms](https://docs.github.com/site-policy/github-terms/github-terms-for-additional-products-and-features#github-copilot)
 and [acceptable use policies](https://docs.github.com/site-policy/acceptable-use-policies/github-acceptable-use-policies).
-
-The implementation follows established GitHub Copilot provider behavior in
-[OpenClaw](https://github.com/openclaw/openclaw/tree/5d98d2e6ecd7a53b41e2643dc7689c12118e0e1c/extensions/github-copilot)
-and [Hermes Agent](https://github.com/NousResearch/hermes-agent/tree/a4970d07d58af41968b7371776481b56411bc3d6/plugins/model-providers/copilot).
-OpenClaw is the direct reference for validating the source token through
-`/copilot_internal/user`, allowlisting the account-selected inference host,
-live model discovery, provider identity headers, and quota parsing. Hermes is
-an independent reference for first-class Copilot provider registration,
-supported token types and precedence, capability-based protocol selection, and
-the required initiator and vision headers. See
-[Development](docs/DEVELOPMENT.md#github-copilot-reference-implementations) for
-the pinned source files and the differences from this router.
 
 Kimi Code OAuth and Kimi Platform API access are separate authentication and
 billing systems. The two Kimi entries intentionally coexist. Older DeepSeek

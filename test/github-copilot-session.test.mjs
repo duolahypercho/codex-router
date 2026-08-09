@@ -16,8 +16,10 @@ test("Copilot validates once and reuses fresh account routing", async () => {
   const fetchImpl = async (_url, options) => {
     calls += 1;
     assert.equal(options.headers.Authorization, "Bearer github_pat_TEST_SOURCE_TOKEN");
-    assert.match(options.headers["Editor-Version"], /^codex\//);
-    assert.match(options.headers["Editor-Plugin-Version"], /^codex-router\//);
+    assert.equal(options.headers["Editor-Version"], "vscode/1.107.0");
+    assert.equal(options.headers["Editor-Plugin-Version"], "copilot-chat/0.35.0");
+    assert.match(options.headers["User-Agent"], /^GitHubCopilotChat\/0\.35\.0/);
+    assert.equal(options.headers["Accept-Encoding"], "identity");
     assert.equal(options.headers["X-GitHub-Api-Version"], "2025-04-01");
     return new Response(JSON.stringify({
       endpoints: { api: "https://api.individual.githubcopilot.com" },

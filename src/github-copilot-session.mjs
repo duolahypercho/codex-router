@@ -1,7 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
 
-import { VERSION } from "./version.mjs";
-
 const USER_URL =
   process.env.GITHUB_COPILOT_USER_URL ||
   "https://api.github.com/copilot_internal/user";
@@ -9,14 +7,15 @@ const DEFAULT_API_BASE_URL = "https://api.individual.githubcopilot.com";
 const REQUEST_TIMEOUT_MS = 30_000;
 const SESSION_TTL_MS = 5 * 60_000;
 
-const CLIENT_VERSION = VERSION.replace(/[^0-9.].*$/, "") || "0.0.0";
-const EDITOR_VERSION = `codex/${CLIENT_VERSION}`;
-const EDITOR_PLUGIN_VERSION = `codex-router/${VERSION}`;
-const USER_AGENT = `codex-router/${VERSION}`;
+// Copilot uses this editor identity to select the coding-agent integration;
+// generic HTTP client identities receive a narrower model allowlist.
+const EDITOR_VERSION = "vscode/1.107.0";
+const EDITOR_PLUGIN_VERSION = "copilot-chat/0.35.0";
+const USER_AGENT = "GitHubCopilotChat/0.35.0";
 const ACCOUNT_API_VERSION = "2025-04-01";
 const INFERENCE_API_VERSION = "2026-06-01";
 const RUNTIME_INTEGRATION_ID = "copilot-developer-cli";
-const SOURCE_TOKEN_PREFIXES = ["github_pat_", "gho_", "ghu_", "ghs_"];
+const SOURCE_TOKEN_PREFIXES = ["github_pat_", "gho_", "ghu_"];
 
 let cached;
 let pending;
@@ -99,6 +98,7 @@ export function githubCopilotAccountHeaders(githubToken) {
     "Editor-Version": EDITOR_VERSION,
     "Editor-Plugin-Version": EDITOR_PLUGIN_VERSION,
     "User-Agent": USER_AGENT,
+    "Accept-Encoding": "identity",
     "X-GitHub-Api-Version": ACCOUNT_API_VERSION,
   };
 }
@@ -187,6 +187,7 @@ export function githubCopilotRequestHeaders(payload, token) {
     "Openai-Intent": "conversation-edits",
     "Openai-Organization": "github-copilot",
     "User-Agent": USER_AGENT,
+    "Accept-Encoding": "identity",
     "X-GitHub-Api-Version": INFERENCE_API_VERSION,
     "X-Initiator": agent ? "agent" : "user",
     "X-Request-Id": randomUUID(),

@@ -48,6 +48,8 @@ function isolatedEnvironment(testRoot) {
     GROK_API_KEY: "",
     ANTHROPIC_API_KEY: "",
     COPILOT_GITHUB_TOKEN: "",
+    GH_TOKEN: "",
+    GITHUB_TOKEN: "",
   };
 }
 
