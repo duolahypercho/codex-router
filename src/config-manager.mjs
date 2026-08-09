@@ -735,5 +735,17 @@ try {
   if (pendingProviderModeState) clearProviderModeState();
   throw error;
 }
-if (command === "disable" || command === "login-free-disable") clearProviderModeState();
+// Another configuration manager may restore or replace the root provider
+// while an old login-free snapshot remains. Once ordinary signed-in routing is
+// explicitly enabled, that snapshot can no longer be a valid rollback target;
+// retaining it makes doctor claim login-free is still half-active and risks a
+// later toggle restoring obsolete values.
+const currentProviderBeforeCommand = snapshot(current).model_provider;
+if (
+  command === "disable" ||
+  command === "login-free-disable" ||
+  (command === "enable" && currentProviderBeforeCommand !== routerProviderId)
+) {
+  clearProviderModeState();
+}
 process.stdout.write(`${JSON.stringify(snapshot(next))}\n`);

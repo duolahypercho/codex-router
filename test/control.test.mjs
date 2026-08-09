@@ -54,6 +54,13 @@ function probe(target, providers, usageEvents = [], options = {}) {
       { mode: 0o600 },
     );
   }
+  if (options.signedCoexistence) {
+    writeFileSync(
+      path.join(stateDir, "signed-coexistence.json"),
+      `${JSON.stringify({ version: 1, model: options.signedCoexistence })}\n`,
+      { mode: 0o600 },
+    );
+  }
   try {
     const output = execFileSync(process.execPath, [path.join(root, "src", "control.mjs"), "--probe"], {
       cwd: root,
@@ -156,7 +163,16 @@ test("codex probe includes native GPT models and the configured default", () => 
   assert.equal(slice.loginFree, false);
   assert.equal(slice.loginFreeManaged, false);
   assert.equal(slice.modelSettings.picker.hidden.length, 0);
+  assert.equal(slice.modelSettings.signedCoexistence.model, null);
   assert.ok(["all", "selected", "proven"].includes(slice.modelSettings.subagents.mode));
+});
+
+test("codex probe exposes coexistence selection without credential material", () => {
+  const slice = probe("codex", ["clinepass"], [], {
+    signedCoexistence: "clinepass/kimi-k3",
+  });
+  assert.equal(slice.modelSettings.signedCoexistence.model, "clinepass/kimi-k3");
+  assert.equal(JSON.stringify(slice).includes("api-key"), false);
 });
 
 test("codex probe exposes managed login-free mode without credential details", () => {
@@ -193,6 +209,15 @@ test("control exposes subagent and picker settings without credentials", () => {
       ),
     );
     assert.deepEqual(picker.hidden, []);
+
+    const coexistence = JSON.parse(
+      execFileSync(
+        process.execPath,
+        [path.join(root, "src", "control.mjs"), "coexistence", "status"],
+        { cwd: root, encoding: "utf8", env },
+      ),
+    );
+    assert.equal(coexistence.model, null);
   } finally {
     rmSync(stateDir, { recursive: true, force: true });
   }

@@ -30,7 +30,13 @@ via `swift run` provides no bundle identity, so the toggle is hidden there.
 The router's background service is a separate launchd agent and keeps running
 regardless of this setting.
 
-The Settings tab's **Models** section has two accordions. **Subagent models**
+The Settings tab's **Models** section begins with **Alongside ChatGPT**, which
+exposes one connected external model while retaining the current ChatGPT login
+and every visible native GPT model. It rebuilds the startup catalog but never
+restarts Codex; quit and reopen Codex yourself when ready. Selecting **Off** and
+restarting returns to the ordinary ChatGPT-only catalog.
+
+The section also has two accordions. **Subagent models**
 exposes every enabled model, or only selected models, as Codex v2 subagent
 overrides; **Model picker** hides or shows individual models without changing
 their provider connection. Restart Codex after changing either group so its

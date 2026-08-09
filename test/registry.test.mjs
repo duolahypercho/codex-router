@@ -175,7 +175,11 @@ test("provider registry exposes configured API and OAuth model families", () => 
   );
   for (const model of clinepassModels) {
     assert.equal(model.requestProfile, "clinepass", model.slug);
-    assert.equal(model.multiAgentVersion, undefined, model.slug);
+    assert.equal(
+      model.multiAgentVersion,
+      model.slug === "clinepass/kimi-k3" ? "v2" : undefined,
+      model.slug,
+    );
     if (model.slug !== "clinepass/kimi-k3") {
       assert.equal(model.defaultEffort, "high", model.slug);
       assert.deepEqual(model.reasoningLevels, [
@@ -185,6 +189,7 @@ test("provider registry exposes configured API and OAuth model families", () => 
     }
   }
   const clinepassKimiK3 = MODEL_BY_SLUG.get("clinepass/kimi-k3");
+  assert.equal(clinepassKimiK3.multiAgentVersion, "v2");
   assert.equal(clinepassKimiK3.defaultEffort, "max");
   assert.deepEqual(
     clinepassKimiK3.reasoningLevels.map((level) => level.effort),

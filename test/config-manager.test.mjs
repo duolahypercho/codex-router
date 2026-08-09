@@ -449,6 +449,32 @@ approval_policy = "never"
   }
 });
 
+test("signed-in enable clears stale login-free restore state after an external provider change", () => {
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), "codex-router-config-stale-mode-"));
+  const stateDir = path.join(codexHome, "codex-router");
+  const configPath = path.join(codexHome, "config.toml");
+  const providerModePath = path.join(stateDir, "codex-provider-mode.json");
+  mkdirSync(stateDir, { recursive: true });
+  writeFileSync(configPath, 'model_provider = "openai"\n', { mode: 0o600 });
+  try {
+    run("login-free-enable", codexHome, stateDir, ["deepseek/deepseek-v4-pro"]);
+    assert.equal(existsSync(providerModePath), true);
+    const externallyRestored = readFileSync(configPath, "utf8").replace(
+      /^model_provider = "codex-router"$/m,
+      'model_provider = "custom"',
+    );
+    writeFileSync(configPath, externallyRestored, { mode: 0o600 });
+
+    const enabled = run("enable", codexHome, stateDir);
+    assert.equal(enabled.mode, "router");
+    assert.equal(enabled.model_provider, "custom");
+    assert.equal(enabled.provider_mode_state_present, false);
+    assert.equal(existsSync(providerModePath), false);
+  } finally {
+    rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
 test("disabling the router from login-free mode restores an originally unset provider", () => {
   const codexHome = mkdtempSync(path.join(os.tmpdir(), "codex-router-login-free-unset-"));
   const stateDir = path.join(codexHome, "router-state");

@@ -522,6 +522,30 @@ and are not available while signed out. The equivalent local control command is
 `./bin/control auth-mode on` or `./bin/control auth-mode off`; when using the
 command directly, restart Codex yourself.
 
+### Use one external model alongside ChatGPT
+
+For normal signed-in Codex use, open the tray's **Models** section and choose a
+connected model under **Alongside ChatGPT**. This keeps the existing ChatGPT
+login, native GPT picker entries, root `model`, root `model_provider`, profiles,
+and other settings unchanged. Restart Codex yourself when ready, then choose the
+external model by its real display name in a new task. Select **Off** and restart
+to restore the ordinary ChatGPT-only catalog.
+
+The equivalent control commands are:
+
+```sh
+./bin/control coexistence set clinepass/kimi-k3
+./bin/control coexistence off
+```
+
+Signed-in Codex validates model IDs against an account allowlist before a
+request reaches the configured endpoint. Coexistence therefore publishes the
+one selected external model through an otherwise hidden, allowlisted native GPT
+slot and records the selective route in `native-aliases.json`. Canonical
+external IDs remain hidden, while every visible native GPT entry is preserved
+and forwarded with the existing ChatGPT authentication. This is separate from
+login-free mode and never selects the custom provider.
+
 ### Use a local model in Codex (experimental)
 
 Models running on this machine can appear in Codex's picker like any other

@@ -1046,6 +1046,14 @@ final class RouterStore: ObservableObject {
     await applyModelSettings(arguments: ["subagents", "mode", mode])
   }
 
+  func setSignedCoexistenceModel(_ slug: String?) async {
+    if let slug, !slug.isEmpty {
+      await applyModelSettings(arguments: ["coexistence", "set", slug])
+    } else {
+      await applyModelSettings(arguments: ["coexistence", "off"])
+    }
+  }
+
   func setSubagentModel(_ slug: String, enabled: Bool) async {
     await applyModelSettings(
       arguments: ["subagents", "set", slug, enabled ? "on" : "off"]
@@ -1666,10 +1674,15 @@ struct RouterModel: Decodable, Identifiable {
 }
 
 struct ModelSettingsSnapshot: Decodable {
+  let signedCoexistence: SignedCoexistenceSnapshot?
   let subagents: SubagentSettingsSnapshot
   let picker: PickerSettingsSnapshot
   let localModels: LocalModelsSnapshot?
   let visionBridge: VisionBridgeSnapshot?
+}
+
+struct SignedCoexistenceSnapshot: Decodable {
+  let model: String?
 }
 
 struct LocalModelsSnapshot: Decodable {
@@ -2225,11 +2238,15 @@ private struct TrayView: View {
 
     private var enabledModels: [RouterModel] {
       target.models
-        .filter(\.enabled)
+        .filter { $0.enabled && (store.loginFree || $0.provider == "openai") }
         .sorted {
           if $0.provider != $1.provider { return $0.provider < $1.provider }
           return $0.slug < $1.slug
         }
+    }
+
+    private var coexistenceModels: [RouterModel] {
+      enabledExternalModels.filter { store.providerSetup[$0.provider]?.configured == true }
     }
 
     private func providerGroups(_ models: [RouterModel]) -> [ProviderModels] {
@@ -2258,6 +2275,38 @@ private struct TrayView: View {
 
     var body: some View {
       VStack(alignment: .leading, spacing: 10) {
+        HStack(spacing: 12) {
+          VStack(alignment: .leading, spacing: 2) {
+            Text("Alongside ChatGPT")
+              .font(.system(size: 12, weight: .medium))
+            Text(coexistenceDetail)
+              .font(.system(size: 9))
+              .foregroundStyle(routerMutedStrong)
+              .lineLimit(2)
+          }
+          Spacer()
+          Picker("", selection: Binding(
+            get: { settings?.signedCoexistence?.model ?? "" },
+            set: { slug in
+              Task { await store.setSignedCoexistenceModel(slug.isEmpty ? nil : slug) }
+            }
+          )) {
+            Text("Off").tag("")
+            ForEach(coexistenceModels) { model in
+              Text(model.displayName).tag(model.slug)
+            }
+          }
+          .labelsHidden()
+          .pickerStyle(.menu)
+          .frame(width: 180)
+          .disabled(busy || store.loginFree || coexistenceModels.isEmpty)
+        }
+        .padding(10)
+        .background(
+          Color.blue.opacity(0.08),
+          in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+        )
+
         AccordionPanel(
           title: "Subagent models",
           summary: subagentSummary,
@@ -2694,6 +2743,19 @@ private struct TrayView: View {
 
     private var hiddenModels: Set<String> {
       Set(settings?.picker.hidden ?? [])
+    }
+
+    private var coexistenceDetail: String {
+      if store.loginFree {
+        return "Turn off login-free mode before enabling coexistence"
+      }
+      if settings?.signedCoexistence?.model != nil {
+        return "Keeps your OpenAI login; restart Codex when ready"
+      }
+      if coexistenceModels.isEmpty {
+        return "Connect and enable an external provider first"
+      }
+      return "Expose one external model without replacing your OpenAI login"
     }
 
     private var enabledSubagentSet: Set<String> {

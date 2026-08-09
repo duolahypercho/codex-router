@@ -70,6 +70,12 @@ Inspect Codex's startup catalog directly:
 codex debug models
 ```
 
+If Codex says an external model is not supported with a ChatGPT account, the
+canonical external ID reached the signed-in account allowlist. Keep login-free
+mode off and select that model under the tray's **Models → Alongside ChatGPT**
+control, then restart Codex and create a new task. The doctor should report
+`OK Signed-in coexistence` with both the external and aliased model IDs.
+
 ## Routed model agents are missing
 
 Pulling `main` updates only the source checkout. Apply that revision to the

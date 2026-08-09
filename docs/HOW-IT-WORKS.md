@@ -75,8 +75,17 @@ model also keeps a hidden entry under its canonical slug so routing, doctor
 checks, and saved configs continue to resolve. `native-aliases.json` records
 the slug mapping; the router consults it when dispatching `/responses`, and
 `control model-set`/`auth-mode` write the alias slug into the Codex config so
-pickers highlight the active model. Signed-in catalog builds clear the alias
-map, which restores native GPT routing.
+pickers highlight the active model.
+
+Signed-in coexistence is narrower. Codex validates a selected model ID against
+its account allowlist before sending the request, even when a custom catalog is
+loaded. When the user explicitly selects one model under **Alongside ChatGPT**,
+the catalog borrows one otherwise hidden allowlisted GPT slot for that model,
+keeps all visible native GPT entries unchanged, and hides canonical external
+IDs that Codex would reject. The router maps only that slot to the selected
+external provider. Turning coexistence off clears the alias map and restores
+the native hidden entry; neither direction changes the ChatGPT login,
+`model_provider`, or selected root `model`.
 
 | Picker model | Public slug | Gateway model | Upstream model |
 | --- | --- | --- | --- |

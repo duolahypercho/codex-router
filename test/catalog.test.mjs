@@ -7,6 +7,8 @@ import {
   applyAllMultiAgent,
   buildMergedCatalog,
   buildLoginFreeCatalog,
+  buildSignedInCatalog,
+  buildSignedInNativeCatalog,
   clampModelEfforts,
   codexEffortVocabulary,
   nativeCatalogIsReusable,
@@ -283,6 +285,84 @@ test("login-free catalog keeps overflow models visible under their own slugs", (
   const bySlug = new Map(models.map((model) => [model.slug, model]));
   assert.equal(bySlug.get("kimi-oauth/kimi-for-coding").visibility, "list");
   assert.equal(bySlug.get("grok-oauth/grok-4.5").visibility, "hide");
+});
+
+test("signed-in coexistence aliases one external model without replacing visible native models", () => {
+  const hiddenSlot = {
+    ...template,
+    slug: "gpt-5.6-sol-wm",
+    display_name: "GPT-5.6-Sol-WM",
+    visibility: "hide",
+    priority: 1,
+    multi_agent_version: "v2",
+    default_reasoning_level: "low",
+    supported_reasoning_levels: [
+      { effort: "low", description: "Fast" },
+      { effort: "high", description: "Deep" },
+      { effort: "max", description: "Maximum" },
+    ],
+  };
+  const autoReview = {
+    ...template,
+    slug: "codex-auto-review",
+    display_name: "Codex Auto Review",
+    visibility: "hide",
+    priority: 40,
+  };
+  const kimi = {
+    ...grok,
+    slug: "clinepass/kimi-k3",
+    displayName: "Kimi K3 (ClinePass)",
+    priority: 2,
+    defaultEffort: "max",
+    reasoningLevels: [
+      { effort: "high", description: "Deep reasoning" },
+      { effort: "max", description: "Maximum reasoning" },
+    ],
+    contextWindow: 1_048_576,
+    autoCompact: 900_000,
+    compHash: "clinepass-kimi-k3-v1",
+  };
+
+  const { models, aliases } = buildSignedInCatalog(
+    { models: [template, hiddenSlot, autoReview] },
+    [grok, kimi],
+    kimi.slug,
+  );
+
+  assert.deepEqual(aliases, { "gpt-5.6-sol-wm": "clinepass/kimi-k3" });
+  const bySlug = new Map(models.map((model) => [model.slug, model]));
+  assert.equal(bySlug.get("gpt-5.5").display_name, "GPT-5.5");
+  assert.equal(bySlug.get("gpt-5.5").visibility, "list");
+  assert.equal(bySlug.get("codex-auto-review").visibility, "hide");
+  assert.equal(bySlug.get("gpt-5.6-sol-wm").display_name, "Kimi K3 (ClinePass)");
+  assert.equal(bySlug.get("gpt-5.6-sol-wm").visibility, "list");
+  assert.equal(bySlug.get("gpt-5.6-sol-wm").context_window, 1_048_576);
+  assert.equal(bySlug.get("gpt-5.6-sol-wm").max_context_window, 1_048_576);
+  assert.equal(bySlug.get("gpt-5.6-sol-wm").auto_compact_token_limit, 900_000);
+  assert.equal(bySlug.get("gpt-5.6-sol-wm").default_reasoning_level, "max");
+  assert.equal(bySlug.get("gpt-5.6-sol-wm").multi_agent_version, "v2");
+  assert.equal(bySlug.get("clinepass/kimi-k3").visibility, "hide");
+  assert.equal(bySlug.get("grok-oauth/grok-4.5").visibility, "hide");
+});
+
+test("signed-in coexistence off preserves native models and hides rejected external slugs", () => {
+  const { models, aliases } = buildSignedInNativeCatalog({ models: [template] }, [grok]);
+  assert.deepEqual(aliases, {});
+  const bySlug = new Map(models.map((model) => [model.slug, model]));
+  assert.equal(bySlug.get("gpt-5.5").visibility, "list");
+  assert.equal(bySlug.get("grok-oauth/grok-4.5").visibility, "hide");
+});
+
+test("signed-in coexistence fails closed without a hidden allowlisted slot", () => {
+  assert.throws(
+    () => buildSignedInCatalog({ models: [template] }, [grok], grok.slug),
+    /verified hidden gpt-5.6-sol-wm model slot/,
+  );
+  assert.throws(
+    () => buildSignedInCatalog({ models: [template] }, [grok], "clinepass/missing"),
+    /model is unavailable/,
+  );
 });
 
 test("effort vocabulary follows the installed codex build's enum history", () => {

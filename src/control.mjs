@@ -89,6 +89,7 @@ async function emitProbe() {
   const { LISTED_MODELS, PROVIDERS } = await import("./model-registry.mjs");
   const { readNativeAliases } = await import("./native-alias.mjs");
   const { subagentSettingsSnapshot } = await import("./multi-agent-state.mjs");
+  const { signedCoexistenceSnapshot } = await import("./signed-coexistence-state.mjs");
   const { modelPickerSnapshot } = await import("./model-picker-state.mjs");
   const { readVisionBridgeSettings, visionBridgeSnapshot } = await import(
     "./vision-bridge-state.mjs"
@@ -152,6 +153,7 @@ async function emitProbe() {
             usageEvents,
             nativeAliases: readNativeAliases(),
             modelSettings: {
+              signedCoexistence: signedCoexistenceSnapshot(),
               subagents: subagentSettingsSnapshot(),
               picker: modelPickerSnapshot(),
               localModels: localModelsSnapshot({ benchmarks: readBenchmarkResults() }),
@@ -561,6 +563,42 @@ async function handleSubagents(action, value, flag) {
   }
   refreshModelSettingsCatalog();
   process.stdout.write(`${JSON.stringify(subagentSettingsSnapshot())}\n`);
+}
+
+async function handleSignedCoexistence(action, value) {
+  const {
+    setSignedCoexistenceModel,
+    signedCoexistenceSnapshot,
+  } = await import("./signed-coexistence-state.mjs");
+  if (action === "status") {
+    process.stdout.write(`${JSON.stringify(signedCoexistenceSnapshot())}\n`);
+    return;
+  }
+  if (action === "off") {
+    setSignedCoexistenceModel(null);
+  } else if (action === "set") {
+    const config = codexConfigSnapshot();
+    if (config?.login_free) {
+      throw new Error("Turn off login-free mode before enabling signed-in coexistence.");
+    }
+    const { codexAuthStatus } = await import("./codex-binary.mjs");
+    const auth = codexAuthStatus();
+    if (!auth.authenticated) {
+      throw new Error("Sign in to Codex with ChatGPT before enabling coexistence.");
+    }
+    if (!(await knownModelSlug(value))) {
+      throw new Error(`Unknown model slug: ${value}`);
+    }
+    const { selectedConfiguredListedModels } = await import("./provider-selection.mjs");
+    if (!selectedConfiguredListedModels().some((model) => model.slug === value)) {
+      throw new Error(`${value} is not an enabled, authenticated external model.`);
+    }
+    setSignedCoexistenceModel(value);
+  } else {
+    throw new Error("Usage: control coexistence status|set <model-slug>|off");
+  }
+  refreshModelSettingsCatalog();
+  process.stdout.write(`${JSON.stringify(signedCoexistenceSnapshot())}\n`);
 }
 
 // The bridge changes what the picker advertises (image input on text-only
@@ -1046,6 +1084,8 @@ if (args.includes("--probe")) {
   await setLoginFreeModel(args[1]);
 } else if (args[0] === "subagents") {
   await handleSubagents(args[1], args[2], args[3]);
+} else if (args[0] === "coexistence") {
+  await handleSignedCoexistence(args[1] || "status", args[2]);
 } else if (args[0] === "local-models") {
   await handleLocalModels(args[1], args[2], args[3]);
 } else if (args[0] === "vision-bridge") {

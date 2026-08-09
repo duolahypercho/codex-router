@@ -27,6 +27,7 @@ import {
 import { readHiddenModels } from "./model-picker-state.mjs";
 import { buildNativeAliasAssignments } from "./native-alias.mjs";
 import { selectedConfiguredListedModels } from "./provider-selection.mjs";
+import { readSignedCoexistence } from "./signed-coexistence-state.mjs";
 import { assertStateOwnership } from "./state-owner.mjs";
 import { applyVisionBridge, resolveVisionEngine } from "./vision-bridge.mjs";
 import { readVisionBridgeSettings } from "./vision-bridge-state.mjs";
@@ -469,6 +470,76 @@ export function buildLoginFreeCatalog(native, routedModelsList) {
   return { models: sortCatalogModels(models), aliases };
 }
 
+// ChatGPT-authenticated Codex validates model slugs against a native allowlist
+// before it sends a request. Keep every visible native model intact and borrow
+// one hidden GPT slot for the explicitly selected external model. Canonical
+// external entries remain hidden for routing and agent definitions, because a
+// user-selectable canonical slug would be rejected before reaching the router.
+export function buildSignedInNativeCatalog(native, routedModelsList) {
+  const routedSlugs = new Set(routedModelsList.map((model) => String(model.slug)));
+  return {
+    models: buildMergedCatalog(native, routedModelsList).map((model) =>
+      routedSlugs.has(String(model.slug))
+        ? { ...model, visibility: "hide" }
+        : model,
+    ),
+    aliases: {},
+  };
+}
+
+export function buildSignedInCatalog(native, routedModelsList, selectedExternalSlug) {
+  const selected = routedModelsList.find(
+    (model) => String(model.slug) === String(selectedExternalSlug),
+  );
+  if (!selected) {
+    throw new Error(`Signed-in coexistence model is unavailable: ${selectedExternalSlug}`);
+  }
+  // Each slot changes the meaning of a real native model ID, so it must be
+  // proven explicitly against the signed-in account gate. Never fall through
+  // to a newly introduced hidden model just because its name starts with GPT.
+  const verifiedSlots = new Set(["gpt-5.6-sol-wm"]);
+  const hiddenSlots = native.models
+    .filter(
+      (model) =>
+        model.visibility !== "list" &&
+        typeof model.slug === "string" &&
+        verifiedSlots.has(model.slug),
+    )
+    .sort((left, right) => {
+      const preferred = (model) => (model.slug === "gpt-5.6-sol-wm" ? 0 : 1);
+      return (
+        preferred(left) - preferred(right) ||
+        Number(left.priority ?? 999) - Number(right.priority ?? 999) ||
+        String(left.slug).localeCompare(String(right.slug))
+      );
+    });
+  const slot = hiddenSlots[0];
+  if (!slot) {
+    throw new Error(
+      "Signed-in coexistence requires the verified hidden gpt-5.6-sol-wm model slot.",
+    );
+  }
+  const slotEfforts = new Set(
+    (slot.supported_reasoning_levels || []).map((level) => String(level.effort)),
+  );
+  const [compatible] = slotEfforts.size
+    ? clampModelEfforts([selected], slotEfforts)
+    : [selected];
+  const alias = {
+    ...routedModel(slot, compatible),
+    slug: slot.slug,
+    priority: slot.priority,
+    visibility: "list",
+  };
+  const signedIn = buildSignedInNativeCatalog(native, routedModelsList);
+  const models = new Map(signedIn.models.map((model) => [model.slug, model]));
+  models.set(slot.slug, alias);
+  return {
+    models: sortCatalogModels(models.values()),
+    aliases: { [slot.slug]: selected.slug },
+  };
+}
+
 function main() {
   // The catalog is what Codex offers in its picker. Writing it from a checkout
   // that does not own this state directory is how the picker ends up
@@ -521,8 +592,13 @@ function main() {
   }
   const openaiAuthenticated = auth.authenticated;
   const loginFree = loginFreeConfigured();
+  const signedCoexistence = readSignedCoexistence();
   const { models: merged, aliases } = loginFree
     ? buildLoginFreeCatalog(native, catalogModels)
+    : openaiAuthenticated && signedCoexistence.model
+      ? buildSignedInCatalog(native, catalogModels, signedCoexistence.model)
+    : openaiAuthenticated
+      ? buildSignedInNativeCatalog(native, catalogModels)
     : {
         models: buildMergedCatalog(native, catalogModels, {
           includeNative: openaiAuthenticated,
@@ -554,6 +630,8 @@ function main() {
         : 0,
       aliased_models: Object.keys(aliases).length,
       login_free: loginFree,
+      signed_coexistence_model:
+        !loginFree && openaiAuthenticated ? signedCoexistence.model : null,
       openai_authenticated: openaiAuthenticated,
       openai_auth_reason: auth.reason,
       selected_model: selectedModel() || null,

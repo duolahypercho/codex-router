@@ -110,6 +110,7 @@ fn main() {
             set_subagent_selection,
             set_picker_model,
             set_picker_models,
+            set_signed_coexistence_model,
             set_login_free,
             set_island_enabled,
             set_island_expanded,
@@ -445,6 +446,22 @@ async fn set_picker_models(state: State<'_, RouterState>, show_all: bool) -> Res
         None,
     )
     .await
+}
+
+#[tauri::command]
+async fn set_signed_coexistence_model(
+    state: State<'_, RouterState>,
+    model: Option<String>,
+) -> Result<Value, String> {
+    let mut args = vec!["coexistence".into()];
+    match model.map(|value| value.trim().to_string()).filter(|value| !value.is_empty()) {
+        Some(slug) => {
+            args.push("set".into());
+            args.push(slug);
+        }
+        None => args.push("off".into()),
+    }
+    run_json_command(state.inner().clone(), args, None).await
 }
 
 #[tauri::command]

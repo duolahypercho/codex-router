@@ -32,6 +32,7 @@
         "image"
       ],
       "requestProfile": "clinepass",
+      "multiAgentVersion": "v2",
       "compHash": "clinepass-kimi-k3-v2"
     }
   ]

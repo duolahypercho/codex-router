@@ -13,6 +13,7 @@ import { grokOAuthStatus } from "./grok-oauth-status.mjs";
 import { kimiOAuthStatus } from "./oauth-status.mjs";
 import { readMultiAgentSettings } from "./multi-agent-state.mjs";
 import { readHiddenModels } from "./model-picker-state.mjs";
+import { readNativeAliases } from "./native-alias.mjs";
 import { serviceFollowsHostApps } from "./presence-state.mjs";
 import { waitForRouterHealth } from "./router-health.mjs";
 import {
@@ -35,6 +36,7 @@ import {
 } from "./provider-selection.mjs";
 import { resolveVisionEngine } from "./vision-bridge.mjs";
 import { readVisionBridgeSettings } from "./vision-bridge-state.mjs";
+import { readSignedCoexistence } from "./signed-coexistence-state.mjs";
 
 const checks = [];
 const add = (status, name, detail, fix) => checks.push({ status, name, detail, fix });
@@ -251,6 +253,61 @@ add(
   catalogOk ? `${requiredModels.size} routed models` : MERGED_CATALOG_PATH,
   "Run ./bin/refresh-catalog, or ./bin/doctor --fix if files are missing.",
 );
+let codexConfig;
+let codexConfigError;
+try {
+  codexConfig = childJson("config-manager.mjs", ["status"]);
+} catch (error) {
+  codexConfigError = error;
+}
+const signedCoexistence = readSignedCoexistence();
+if (!signedCoexistence.model) {
+  add(
+    "ok",
+    "Signed-in coexistence",
+    "off",
+    "Choose an external model under Models > Alongside ChatGPT in the tray app.",
+  );
+} else if (codexConfig?.login_free) {
+  add(
+    "ok",
+    "Signed-in coexistence",
+    `${signedCoexistence.model}; suspended while login-free mode is active`,
+    "Turn off login-free mode to resume the signed-in coexistence model.",
+  );
+} else {
+  const aliases = readNativeAliases();
+  const aliasSlug = Object.entries(aliases).find(
+    ([, target]) => target === signedCoexistence.model,
+  )?.[0];
+  const selectedRoute = requiredRoutedModels.find(
+    (model) => model.slug === signedCoexistence.model,
+  );
+  const aliasEntry = aliasSlug
+    ? catalogModels.find((model) => model.slug === aliasSlug)
+    : undefined;
+  const canonicalEntry = catalogModels.find(
+    (model) => model.slug === signedCoexistence.model,
+  );
+  const problems = [];
+  if (!codexAuth.authenticated) problems.push("ChatGPT sign-in is not active");
+  if (!selectedRoute) problems.push("selected external model is not enabled and authenticated");
+  if (!aliasSlug) problems.push("native alias is missing");
+  if (!aliasEntry || aliasEntry.visibility !== "list") {
+    problems.push("aliased picker entry is missing");
+  }
+  if (!canonicalEntry || canonicalEntry.visibility === "list") {
+    problems.push("canonical external slug is not safely hidden");
+  }
+  add(
+    problems.length ? "fail" : "ok",
+    "Signed-in coexistence",
+    problems.length
+      ? problems.join("; ")
+      : `${signedCoexistence.model} via ${aliasSlug}; ChatGPT login retained`,
+    "Use Models > Alongside ChatGPT in the tray app, then refresh the catalog.",
+  );
+}
 // The catalog tells Codex which models to offer; the gateway config decides
 // which it can actually route. When a second checkout writes one of them the
 // two drift apart, and Codex forwards the unroutable model upstream, where it
@@ -445,8 +502,8 @@ for (const provider of PROVIDERS.values()) {
   }
 }
 
-try {
-  const config = childJson("config-manager.mjs", ["status"]);
+if (codexConfig) {
+  const config = codexConfig;
   add(
     config.mode === "router" ? "ok" : "fail",
     "Codex routing config",
@@ -468,11 +525,11 @@ try {
         : "OpenAI login available",
     "Use the tray toggle to switch modes, or run ./bin/doctor --fix.",
   );
-} catch (error) {
+} else {
   add(
     "fail",
     "Codex routing config",
-    error instanceof Error ? error.message : String(error),
+    codexConfigError instanceof Error ? codexConfigError.message : String(codexConfigError),
     "Inspect ~/.codex/config.toml, then run ./bin/doctor --fix.",
   );
 }

@@ -36,6 +36,7 @@ function startPanel() {
     sourceWasChosen: false,
     busyProvider: null,
     modelSettingsBusy: false,
+    signedCoexistenceBusy: false,
     loginFreeBusy: false,
     keyProvider: null,
     removeProvider: null,
@@ -67,6 +68,8 @@ function startPanel() {
     subagentAllSwitchLabel: document.getElementById("subagent-all-switch-label"),
     subagentModelList: document.getElementById("subagent-model-list"),
     pickerModelList: document.getElementById("picker-model-list"),
+    signedCoexistenceModel: document.getElementById("signed-coexistence-model"),
+    signedCoexistenceNote: document.getElementById("signed-coexistence-note"),
     loginFreeSwitch: document.getElementById("login-free-switch"),
     loginFreeSwitchLabel: document.getElementById("login-free-switch-label"),
     loginFreeNote: document.getElementById("login-free-note"),
@@ -109,6 +112,7 @@ function startPanel() {
   elements.subagentModelList.addEventListener("click", handleModelSettingsClick);
   elements.pickerModelList.addEventListener("change", handleModelSettingsToggle);
   elements.pickerModelList.addEventListener("click", handleModelSettingsClick);
+  elements.signedCoexistenceModel.addEventListener("change", handleSignedCoexistenceChange);
   elements.loginFreeSwitch.addEventListener("change", handleLoginFreeToggle);
   elements.islandSwitch.addEventListener("change", handleIslandToggle);
   elements.keyForm.addEventListener("submit", saveKey);
@@ -349,7 +353,40 @@ function startPanel() {
     const enabledModels = models.filter(
       (model) => model.enabled && enabledProviders.has(model.provider),
     );
-    const pickerModels = models.filter((model) => model.enabled);
+    const configuredProviders = new Set(
+      (state.providerSetup?.providers || [])
+        .filter((provider) => provider.configured)
+        .map((provider) => provider.id),
+    );
+    const coexistenceModels = enabledModels
+      .filter(
+        (model) =>
+          !model.native &&
+          model.visible !== false &&
+          configuredProviders.has(model.provider),
+      )
+      .sort((left, right) => String(left.displayName).localeCompare(String(right.displayName)));
+    const coexistenceModel = settings?.signedCoexistence?.model || "";
+    const loginFree = snapshot?.loginFree === true;
+    elements.signedCoexistenceModel.innerHTML = [
+      '<option value="">Off</option>',
+      ...coexistenceModels.map(
+        (model) =>
+          `<option value="${escapeHtml(model.slug)}"${model.slug === coexistenceModel ? " selected" : ""}>${escapeHtml(model.displayName)}</option>`,
+      ),
+    ].join("");
+    elements.signedCoexistenceModel.disabled =
+      state.signedCoexistenceBusy || loginFree || coexistenceModels.length === 0;
+    elements.signedCoexistenceNote.textContent = loginFree
+      ? "Turn off login-free mode before enabling coexistence"
+      : coexistenceModel
+        ? "Active for new Codex tasks after you restart the app"
+        : coexistenceModels.length
+          ? "Expose one external model while keeping your OpenAI login"
+          : "Connect and enable an external provider first";
+    const pickerModels = models.filter(
+      (model) => model.enabled && (loginFree || model.native),
+    );
     const subagent = settings?.subagents || { mode: "proven", enabled: [], disabled: [] };
     const enabledSubagents = new Set(subagent.enabled || []);
     const disabledSubagents = new Set(subagent.disabled || []);
@@ -441,6 +478,27 @@ function startPanel() {
       : '<div class="empty-state">No enabled models to show.</div>';
     const pickerCount = pickerModels.filter((model) => !hiddenModels.has(model.slug)).length;
     elements.pickerSummary.textContent = `${pickerCount} visible · ${hiddenModels.size} hidden`;
+  }
+
+  async function handleSignedCoexistenceChange() {
+    const model = elements.signedCoexistenceModel.value || null;
+    state.signedCoexistenceBusy = true;
+    renderModelSettings();
+    try {
+      state.snapshot = await call("set_signed_coexistence_model", { model });
+      showToast(
+        model
+          ? "External model enabled alongside ChatGPT. Restart Codex when ready to apply."
+          : "ChatGPT-only model picker restored. Restart Codex when ready to apply.",
+      );
+      await refreshPanel({ quiet: true });
+    } catch (error) {
+      showToast(errorMessage(error), true);
+      await refreshPanel({ quiet: true });
+    } finally {
+      state.signedCoexistenceBusy = false;
+      renderModelSettings();
+    }
   }
 
   async function handleSubagentAllToggle() {

@@ -35,7 +35,12 @@ export const CONFIG_PATH = path.join(CODEX_HOME, "config.toml");
 export const CODEX_AGENTS_DIR = path.join(CODEX_HOME, "agents");
 export const NATIVE_CATALOG_PATH = path.join(STATE_DIR, "native-models.json");
 export const MERGED_CATALOG_PATH = path.join(STATE_DIR, "merged-models.json");
-export const NATIVE_ALIAS_PATH = path.join(STATE_DIR, "native-aliases.json");
+export const NATIVE_ALIAS_PATH =
+  process.env.MODEL_ROUTER_NATIVE_ALIAS_STATE ||
+  path.join(STATE_DIR, "native-aliases.json");
+export const SIGNED_COEXISTENCE_PATH =
+  process.env.MODEL_ROUTER_SIGNED_COEXISTENCE_STATE ||
+  path.join(STATE_DIR, "signed-coexistence.json");
 export const ANNOUNCED_MODELS_PATH = path.join(STATE_DIR, "announced-models.json");
 export const LITELLM_CONFIG_PATH = path.join(STATE_DIR, "litellm.yaml");
 export const INTERNAL_SECRET_PATH = path.join(STATE_DIR, "internal-secret");

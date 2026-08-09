@@ -622,6 +622,31 @@ h2 {
   font-size: 8.5px;
 }
 
+.coexistence-setting > div {
+  min-width: 0;
+}
+
+#signed-coexistence-model {
+  appearance: none;
+  max-width: 174px;
+  padding: 7px 24px 7px 9px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  outline: 0;
+  background-color: rgba(255, 255, 255, 0.045);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='7' viewBox='0 0 12 7'%3E%3Cpath d='m1 1 5 5 5-5' fill='none' stroke='%238b97aa' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 7px center;
+  color: var(--ink);
+  font-size: 9px;
+  cursor: pointer;
+}
+
+#signed-coexistence-model:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
 .accordion {
   margin-bottom: 10px;
   overflow: hidden;
