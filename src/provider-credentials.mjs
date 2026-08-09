@@ -51,19 +51,79 @@ export function credentialPaths(provider) {
   return [...new Set(candidates)];
 }
 
+// Every other source this module consults is a `statSync`/`readFileSync` pair
+// costing microseconds. This one spawns a process, and it is the only reason
+// resolving credentials is expensive at all: on this tree a full pass over the
+// registry is 26 keychain services, measured at ~9ms per spawn -- 235ms of a
+// 235.5ms scan. Because `execFileSync` is synchronous, that quarter second is
+// spent with the event loop stopped, so a single routed turn that resolves
+// credentials stalls every other in-flight request too.
+//
+// So the spawn is memoized, and only the spawn. Scope is the point: the router
+// **never writes a Keychain item** -- `writeProviderCredential` below writes a
+// protected file in the state directory, `kimi login` and `grok login` write
+// their own OAuth files, and `command-code login` writes its own session file.
+// All three of those stay live on every call, and files are checked *before*
+// the Keychain, so a key the operator adds through any documented path is
+// visible immediately. What can go stale is only a key some other tool put in
+// the login keychain behind the router's back, which nothing in this repository
+// does. Thirty seconds is the ceiling on noticing that; see `resetKeychainCache`
+// for the same-process paths that shorten it to zero.
+//
+// The cached entry holds the secret in memory for that window. That is not a
+// new exposure: the value is already read into memory on every resolve and
+// forwarded upstream, and it is never logged or written out from here.
+const KEYCHAIN_CACHE_TTL_MS = 30_000;
+const keychainCache = new Map();
+let keychainProbes = 0;
+
+// Test-visible evidence that the memo is doing its job, without resorting to a
+// timing threshold. Counts actual `/usr/bin/security` spawns.
+export function keychainProbeCount() {
+  return keychainProbes;
+}
+
+// Anything that changes what this process believes about stored credentials
+// drops the memo, so a write followed by a read inside one process is never
+// served a stale answer. In practice credentials are written by short-lived CLI
+// processes (`provider-key set`, `bin/control credential`) rather than by the
+// long-running router, so this is a correctness backstop for same-process
+// sequences -- installer and tray flows that store a key and then immediately
+// rebuild the catalog -- and the TTL is what governs the router itself.
+export function resetKeychainCache() {
+  keychainCache.clear();
+}
+
+function keychainSecret(service, now) {
+  const cached = keychainCache.get(service);
+  if (cached && now - cached.at < KEYCHAIN_CACHE_TTL_MS) return cached.result;
+  keychainProbes += 1;
+  let result = null;
+  try {
+    const value = execFileSync(
+      "/usr/bin/security",
+      ["find-generic-password", "-s", service, "-a", "default", "-w"],
+      { encoding: "utf8", timeout: 2_000, stdio: ["ignore", "pipe", "ignore"] },
+    ).trim();
+    if (value) result = { value, source: `macOS Keychain (${service})` };
+  } catch {
+    // No such item, or the keychain refused. Either way: nothing here.
+  }
+  // A miss is cached as deliberately as a hit. The absent case is both the
+  // common one and the expensive one -- a machine with no keychain items pays
+  // the full 26 spawns every pass -- so caching only hits would have left the
+  // cost exactly where it was.
+  keychainCache.set(service, { at: now, result });
+  return result;
+}
+
 function keyFromKeychain(provider) {
   if (process.platform !== "darwin" || TARGET !== "codex") return undefined;
+  const now = Date.now();
   for (const service of provider.credential.keychainServices || []) {
-    try {
-      const value = execFileSync(
-        "/usr/bin/security",
-        ["find-generic-password", "-s", service, "-a", "default", "-w"],
-        { encoding: "utf8", timeout: 2_000, stdio: ["ignore", "pipe", "ignore"] },
-      ).trim();
-      if (value) return { value, source: `macOS Keychain (${service})` };
-    } catch {
-      // Try the next compatible service name.
-    }
+    const found = keychainSecret(service, now);
+    if (found) return found;
+    // Otherwise try the next compatible service name.
   }
   return undefined;
 }
@@ -167,6 +227,7 @@ export function writeProviderCredential(providerOrId, value) {
     if (existsSync(temporary)) unlinkSync(temporary);
     throw error;
   }
+  resetKeychainCache();
   return target;
 }
 
@@ -179,6 +240,10 @@ export function removeProviderCredential(providerOrId) {
     unlinkSync(candidate);
     removed += 1;
   }
+  // Deleting the files makes the Keychain the next thing consulted, and
+  // `removeApiCredential` reports what still resolves afterwards. That answer
+  // has to come from a fresh look.
+  resetKeychainCache();
   return removed;
 }
 

@@ -12,11 +12,20 @@ const NO_OLLAMA = { capabilitiesFor: () => ["completion", "tools"] };
 process.env.CODEX_ROUTER_STATE_DIR = stateDir;
 
 const {
+  CODEX_PROMPT_TOKENS,
+  describeMachine,
+  fitAdvisory,
   localModelsSnapshot,
+  machineCapacity,
+  parseGgufContextLength,
   parseOllamaList,
+  rateModelFit,
   readLocalModelSelection,
   removeLocalModel,
+  renderLocalModels,
   setLocalModelEnabled,
+  suggestedLocalModels,
+  suggestedVisionModels,
 } = await import("../src/local-models.mjs");
 
 const LIST = `NAME                ID              SIZE      MODIFIED
@@ -193,4 +202,251 @@ test("tool support is read from the registry template before downloading", async
     await fetchRegistryCapabilities("x", { fetchImpl: async () => { throw new Error("offline"); } }),
     undefined,
   );
+});
+
+test("model fit is rated against the machine, not a fixed list", () => {
+  const laptop = machineCapacity({ totalMemoryBytes: 8e9, platform: "linux" });
+  const workstation = machineCapacity({
+    totalMemoryBytes: 32e9,
+    gpuMemoryBytes: 24e9,
+    platform: "linux",
+  });
+  const mac = machineCapacity({ totalMemoryBytes: 16e9, unifiedMemory: true, platform: "darwin" });
+
+  // Sizes come from the registry manifest, so any tag can be rated.
+  assert.equal(rateModelFit(18.6, laptop), "too-large");
+  assert.equal(rateModelFit(18.6, workstation), "fits");
+  assert.equal(rateModelFit(4.7, mac), "fits");
+
+  // Without a GPU to fall back from, a model that would consume most of RAM
+  // runs but crawls; reporting that as a clean fit is what wastes an evening.
+  assert.equal(rateModelFit(4.7, laptop), "tight");
+  assert.equal(rateModelFit(1.9, laptop), "fits");
+
+  // An unknown size cannot be rated, and must not read as a refusal.
+  assert.equal(rateModelFit(undefined, laptop), undefined);
+  assert.equal(rateModelFit(0, laptop), undefined);
+});
+
+test("fit advisories name the shortfall and stay silent when a model fits", () => {
+  const laptop = machineCapacity({ totalMemoryBytes: 8e9, platform: "linux" });
+  assert.equal(fitAdvisory("qwen2.5-coder:3b", 1.9, laptop), undefined);
+  assert.match(fitAdvisory("qwen2.5-coder:7b", 4.7, laptop), /close to this machine's limit/);
+  const refusal = fitAdvisory("qwen3-coder:30b", 18.6, laptop);
+  assert.match(refusal, /needs about 23 GB/);
+  assert.match(refusal, /8\.0 GB RAM/);
+});
+
+test("a machine description says which memory the number refers to", () => {
+  assert.match(
+    describeMachine(machineCapacity({ totalMemoryBytes: 16e9, unifiedMemory: true })),
+    /unified memory · GPU budget ~12\.0 GB/,
+  );
+  assert.match(
+    describeMachine(machineCapacity({ totalMemoryBytes: 8e9 })),
+    /no GPU memory detected/,
+  );
+  assert.match(
+    describeMachine(machineCapacity({ totalMemoryBytes: 32e9, gpuMemoryBytes: 24e9 })),
+    /24\.0 GB GPU memory/,
+  );
+});
+
+test("the download list is rated, filtered, and ordered by size", () => {
+  const laptop = machineCapacity({ totalMemoryBytes: 8e9, platform: "linux" });
+  const suggestions = suggestedLocalModels({ capacity: laptop });
+
+  // Nothing that cannot run here is ever offered for download.
+  assert.ok(suggestions.length > 0);
+  assert.ok(suggestions.every((entry) => entry.fit !== "too-large"));
+  // Verified first, then size. Ordering is asserted in full by the
+  // verification test; here it is enough that the untested tail is by size.
+  const untested = suggestions.filter((entry) => entry.codex !== "verified");
+  assert.deepEqual(
+    untested.map((entry) => entry.sizeGb),
+    [...untested.map((entry) => entry.sizeGb)].sort((a, b) => a - b),
+  );
+
+  // Tool support decides whether Codex can drive a model, so every entry
+  // carries it rather than leaving it to be discovered after the download.
+  assert.ok(suggestions.every((entry) => typeof entry.tools === "boolean"));
+
+  // A model already downloaded is not offered again, with or without the
+  // implicit :latest Ollama reports.
+  const withInstalled = suggestedLocalModels({
+    capacity: laptop,
+    installed: [{ tag: "llama3.2:3b" }],
+  });
+  assert.equal(withInstalled.some((entry) => entry.tag === "llama3.2:3b"), false);
+});
+
+test("a machine too small for everything still gets an honest empty list", () => {
+  const tiny = machineCapacity({ totalMemoryBytes: 1e9, platform: "linux" });
+  assert.deepEqual(suggestedLocalModels({ capacity: tiny }), []);
+  // Asking for the unusable ones is explicit, never the default.
+  assert.ok(suggestedLocalModels({ capacity: tiny, includeUnusable: true }).length > 0);
+});
+
+test("the listing renders for a person, not only for the tray", () => {
+  const snapshot = localModelsSnapshot({
+    inventory: parseOllamaList(
+      "NAME  ID  SIZE  MODIFIED\nllama3.2:3b  aaa  2.0 GB  1 hour ago\ngemma3:4b  bbb  3.3 GB  1 hour ago\n",
+    ),
+    running: ["llama3.2:3b"],
+    selection: { version: 1, enabled: ["llama3.2:3b"] },
+    capabilities: {
+      "llama3.2:3b": ["completion", "tools"],
+      "gemma3:4b": ["completion", "vision"],
+    },
+  });
+  const rendered = renderLocalModels(snapshot);
+
+  // The checkbox is what offers a model to Codex, so it leads each row.
+  assert.match(rendered, /\[x\] llama3\.2:3b\s+2\.0 GB\s+code\s+· loaded/);
+  // A model Codex cannot drive must say so where the choice is made.
+  assert.match(rendered, /\[ \] gemma3:4b\s+3\.3 GB\s+images only/);
+  // The two groups answer different questions and are never merged.
+  assert.match(rendered, /For coding — experimental/);
+  assert.match(rendered, /For reading images only — cannot code:/);
+  assert.match(rendered, /control local-models install /);
+});
+
+test("an empty machine reads as empty rather than as a broken table", () => {
+  const rendered = renderLocalModels(
+    localModelsSnapshot({ inventory: [], running: [], selection: { version: 1, enabled: [] } }),
+  );
+  assert.match(rendered, /Installed: none yet/);
+  // The whole point of the empty state is that it says what to do next.
+  assert.match(rendered, /For coding/);
+});
+
+test("coding models are separated from image readers", () => {
+  const roomy = machineCapacity({ totalMemoryBytes: 64e9, unifiedMemory: true });
+
+  // Every coding suggestion must be able to do the job: Codex drives through
+  // tool calls, and a small window makes a model useless on real code.
+  for (const entry of suggestedLocalModels({ capacity: roomy })) {
+    assert.equal(entry.tools, true, `${entry.tag} cannot call tools`);
+    assert.ok(entry.context >= 32_768, `${entry.tag} has too little context`);
+  }
+
+  // Image readers are a different question, so they never appear as coding
+  // suggestions and are ranked by what they actually scored, not by size.
+  const vision = suggestedVisionModels({ capacity: roomy });
+  const codingTags = new Set(suggestedLocalModels({ capacity: roomy }).map((e) => e.tag));
+  assert.ok(vision.length > 0);
+  assert.ok(vision.every((entry) => !codingTags.has(entry.tag)));
+  assert.equal(vision[0].accuracy, "accurate");
+  // The smallest reader scored zero on text, so size must not float it up.
+  assert.notEqual(vision[0].tag, "moondream");
+  assert.ok(vision.at(-1).accuracy === "captions-only");
+});
+
+// A GGUF header built by hand, so the parser is tested without the network and
+// without a multi-gigabyte fixture.
+function ggufHeader(pairs, { magic = 0x46554747, declaredPairs } = {}) {
+  const chunks = [];
+  const u32 = (value) => {
+    const buffer = Buffer.alloc(4);
+    buffer.writeUInt32LE(value);
+    return buffer;
+  };
+  const u64 = (value) => {
+    const buffer = Buffer.alloc(8);
+    buffer.writeBigUInt64LE(BigInt(value));
+    return buffer;
+  };
+  const str = (value) => {
+    const bytes = Buffer.from(value, "utf8");
+    return Buffer.concat([u64(bytes.length), bytes]);
+  };
+  chunks.push(u32(magic), u32(3), u64(0), u64(declaredPairs ?? pairs.length));
+  for (const [key, type, value] of pairs) {
+    chunks.push(str(key), u32(type));
+    if (type === 8) chunks.push(str(value));
+    else if (type === 4) chunks.push(u32(value));
+    else if (type === 10) chunks.push(u64(value));
+    else if (type === 9) {
+      // Array of strings, the shape a tokenizer vocabulary takes.
+      chunks.push(u32(8), u64(value.length), ...value.map(str));
+    }
+  }
+  return Buffer.concat(chunks);
+}
+
+test("context length is read from the model's own GGUF header", () => {
+  const buffer = ggufHeader([
+    ["general.architecture", 8, "llama"],
+    ["general.name", 8, "Llama 3.2 3B Instruct"],
+    ["llama.block_count", 4, 28],
+    ["llama.context_length", 4, 131072],
+  ]);
+  assert.equal(parseGgufContextLength(buffer), 131072);
+
+  // The key is namespaced by architecture, so the parser matches the suffix
+  // rather than one vendor's spelling.
+  assert.equal(
+    parseGgufContextLength(
+      ggufHeader([["qwen2.context_length", 10, 32768]]),
+    ),
+    32768,
+  );
+});
+
+test("a tokenizer array before the key is walked, not guessed past", () => {
+  // An array's byte length is only knowable by walking it: skipping blindly
+  // would desynchronise the reader and return a garbage context length.
+  const buffer = ggufHeader([
+    ["general.architecture", 8, "llama"],
+    ["tokenizer.ggml.tokens", 9, ["<s>", "</s>", "hello", "world"]],
+    ["llama.context_length", 4, 8192],
+  ]);
+  assert.equal(parseGgufContextLength(buffer), 8192);
+});
+
+test("an unreadable header is unknown rather than an error", () => {
+  // Not GGUF at all.
+  assert.equal(parseGgufContextLength(Buffer.from("not a model file")), undefined);
+  // Truncated mid-value: the ranged read ended before the key appeared, which
+  // must never fail an install.
+  const truncated = ggufHeader([
+    ["general.architecture", 8, "llama"],
+    ["llama.context_length", 4, 4096],
+  ]).subarray(0, 40);
+  assert.equal(parseGgufContextLength(truncated), undefined);
+  // Claims more pairs than it carries.
+  assert.equal(
+    parseGgufContextLength(ggufHeader([["general.architecture", 8, "llama"]], { declaredPairs: 9 })),
+    undefined,
+  );
+});
+
+test("only a model observed driving Codex is marked verified", () => {
+  const suggestions = suggestedLocalModels({
+    capacity: machineCapacity({ totalMemoryBytes: 64e9, unifiedMemory: true }),
+  });
+
+  // A tool template predicts capability in neither direction, so nothing may
+  // claim more than was observed.
+  assert.ok(suggestions.every((entry) => ["verified", "untested"].includes(entry.codex)));
+  const verified = suggestions.filter((entry) => entry.codex === "verified");
+  assert.deepEqual(verified.map((entry) => entry.tag), ["llama3.2:3b"]);
+
+  // Proven first: an untested model is a thing to try, not a recommendation,
+  // and sorting by size alone would bury the only one known to work.
+  assert.equal(suggestions[0].tag, "llama3.2:3b");
+  assert.ok(suggestions[1].sizeGb < suggestions[0].sizeGb);
+});
+
+test("the listing says how little room Codex leaves in the window", () => {
+  const rendered = renderLocalModels(
+    localModelsSnapshot({ inventory: [], running: [], selection: { version: 1, enabled: [] } }),
+  );
+  // Native context above the advertised cap buys nothing, so the number that
+  // matters is what is left after Codex's own prompt.
+  assert.match(rendered, /For coding — experimental/);
+  // Derived from the measured constant rather than restated, so the copy and
+  // the measurement cannot drift apart.
+  assert.match(rendered, new RegExp(`${Math.round(CODEX_PROMPT_TOKENS / 1000)}K of the 32K window`));
+  assert.match(rendered, /agent-check/);
 });

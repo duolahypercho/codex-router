@@ -34,6 +34,12 @@ export function recordUsageEvent({
   outputTokens,
   totalTokens,
   retries,
+  // Present only when the router replaced an upstream `input_tokens: 0` with
+  // its own estimate on the way to Codex (#95). The reported counts above stay
+  // exactly as the provider sent them, so an estimated turn is never mistaken
+  // for the provider having recovered -- and a run of these events is the
+  // signal that it has not.
+  estimatedInputTokens,
   at = Date.now(),
 }) {
   const event = {
@@ -52,6 +58,9 @@ export function recordUsageEvent({
       : {}),
     ...(safeTokenCount(totalTokens) !== undefined
       ? { totalTokens: safeTokenCount(totalTokens) }
+      : {}),
+    ...(safeTokenCount(estimatedInputTokens) !== undefined
+      ? { estimatedInputTokens: safeTokenCount(estimatedInputTokens) }
       : {}),
   };
   try {
@@ -94,6 +103,7 @@ export function recentUsageEvents({ sinceMs = 24 * 60 * 60 * 1000, limit = 1_000
         const outputTokens = safeTokenCount(event.outputTokens);
         const totalTokens = safeTokenCount(event.totalTokens);
         const retries = safeRetryCount(event.retries);
+        const estimatedInputTokens = safeTokenCount(event.estimatedInputTokens);
         return {
           ...(event.meteringVersion === 1 ? { meteringVersion: 1 } : {}),
           at: event.at,
@@ -110,6 +120,7 @@ export function recentUsageEvents({ sinceMs = 24 * 60 * 60 * 1000, limit = 1_000
           ...(inputTokens !== undefined ? { inputTokens } : {}),
           ...(outputTokens !== undefined ? { outputTokens } : {}),
           ...(totalTokens !== undefined ? { totalTokens } : {}),
+          ...(estimatedInputTokens !== undefined ? { estimatedInputTokens } : {}),
         };
       });
   } catch {

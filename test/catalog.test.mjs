@@ -422,6 +422,50 @@ test("proven subagent mode leaves the native catalog untouched", () => {
   assert.deepEqual(promoted, native);
 });
 
+test("a ChatGPT-plan model drives the same advertisement as a routed engine", async () => {
+  const { applyVisionBridge, nativeVisionCandidates, resolveVisionEngine } = await import(
+    "../src/vision-bridge.mjs"
+  );
+  const deepseek = {
+    ...grok,
+    slug: "deepseek/deepseek-v4-flash",
+    displayName: "DeepSeek V4 Flash",
+    gatewayModel: "deepseek-v4-flash",
+    inputModalities: ["text"],
+    compHash: "deepseek-v4-flash-native-bridge-v1",
+  };
+  // The native capture is snake_case, the registry is camelCase, and both have
+  // to reach the same advertisement rule.
+  const capture = [
+    {
+      slug: "gpt-5.6-luna",
+      display_name: "GPT-5.6-Luna",
+      visibility: "list",
+      priority: 3,
+      input_modalities: ["text", "image"],
+    },
+  ];
+
+  const engine = resolveVisionEngine(() => nativeVisionCandidates(capture), {
+    enabled: true,
+    engine: "gpt-5.6-luna",
+  });
+  const [bridged] = applyVisionBridge([deepseek], engine);
+  assert.deepEqual(routedModel(template, bridged).input_modalities, ["text", "image"]);
+
+  // A model the operator took out of the picker is not theirs to spend, so it
+  // cannot resolve, and the advertisement goes with it.
+  const hidden = resolveVisionEngine(
+    () => nativeVisionCandidates(capture, new Set(["gpt-5.6-luna"])),
+    { enabled: true, engine: "gpt-5.6-luna" },
+  );
+  assert.equal(hidden, undefined);
+  assert.deepEqual(
+    routedModel(template, applyVisionBridge([deepseek], hidden)[0]).input_modalities,
+    ["text"],
+  );
+});
+
 test("a bridged text-only model advertises image input, and only through the bridge", async () => {
   const { applyVisionBridge } = await import("../src/vision-bridge.mjs");
   const deepseek = {

@@ -27,7 +27,7 @@ import {
 import { trayBundleDir, trayDecision } from "./tray-install.mjs";
 import { resolveVisionEngine } from "./vision-bridge.mjs";
 import {
-  setVisionBridgeEnabled,
+  readVisionBridgeSettings,
   visionBridgeConfigured,
 } from "./vision-bridge-state.mjs";
 
@@ -359,26 +359,24 @@ async function main() {
   }
   writeProviderSelection(providers);
 
-  // Make pasted images just work for text-only models on a fresh install. When
-  // the operator already enabled a vision-capable provider, turn the bridge on
-  // before the catalog is built (so the picker advertises image input from the
-  // first launch) using that model -- no download, no extra step. This only
-  // fires when the bridge was never configured, so re-running the installer
-  // never overrides someone who turned it off on purpose. With no vision
-  // provider, it stays off and the summary points at the local-model setup.
-  let visionBridge;
-  if (!visionBridgeConfigured()) {
-    const engine = resolveVisionEngine(selectedConfiguredListedModels(), {
-      enabled: true,
-      engine: null,
-    });
-    if (engine) {
-      setVisionBridgeEnabled(true);
-      visionBridge = { enabled: true, engine: engine.slug };
-    } else {
-      visionBridge = { enabled: false, engine: null };
-    }
-  }
+  // Pasted images just work for text-only models: the bridge is on by default,
+  // so the installer no longer writes anything here. It used to auto-enable
+  // once when a vision-capable provider happened to be selected, which both
+  // left the state file's mere presence meaning "the installer ran" and left
+  // every other install needing a command nobody knew about. Reporting is all
+  // that is left to do -- and only for an install that has not answered the
+  // question itself, so a re-run never claims credit for a machine the operator
+  // already configured.
+  const visionBridge = visionBridgeConfigured()
+    ? undefined
+    : {
+        enabled: readVisionBridgeSettings().enabled,
+        engine:
+          resolveVisionEngine(
+            () => selectedConfiguredListedModels(),
+            readVisionBridgeSettings(),
+          )?.slug || null,
+      };
 
   let migration;
   if (legacy.installations.length) {
@@ -443,14 +441,16 @@ async function main() {
   process.stdout.write(
     `\nCodex Router is ready with: ${providers.join(", ")}\nFully quit Codex, reopen it, and start a new task.\n`,
   );
-  if (visionBridge?.enabled) {
+  if (visionBridge?.enabled && visionBridge.engine) {
     process.stdout.write(
-      `\nVision: text-only models can now read pasted images, via ${visionBridge.engine}.\n`,
+      `\nVision: text-only models can now read pasted images, via ${visionBridge.engine}.\n` +
+        `  It spends that provider's quota. Turn it off with: ./bin/control vision-bridge off\n`,
     );
-  } else if (visionBridge && !visionBridge.enabled) {
+  } else if (visionBridge?.enabled) {
     process.stdout.write(
-      `\nVision: no image-capable provider is enabled, so text-only models cannot read images yet.\n` +
-        `  Free local option: ./bin/control vision-bridge setup   (uses a small local model)\n`,
+      `\nVision: no enabled provider offers a model that reads images.\n` +
+        `  Signed in to ChatGPT? Codex's own vision model will read them, on the plan you already pay for.\n` +
+        `  Otherwise, free local option: ./bin/control vision-bridge setup   (uses a small local model)\n`,
     );
   }
   if (pendingCredentials.length) {

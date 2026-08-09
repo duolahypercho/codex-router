@@ -12,6 +12,86 @@
   implementations, quota reporting, curation, and credential redaction all use
   the same provider path. The route is marked experimental because GitHub does
   not publish the inference API as a stable public REST contract.
+- **An image the model fetched for itself is read too.** The bridge walked user
+  messages only, so a pasted screenshot was transcribed and the turn still
+  failed: the paste carries the file's path as text, the text-only model
+  reached for Codex's `view_image` tool on it, and the tool result came back
+  holding the same megabytes of image the bridge had just paid to read. The
+  provider rejected the whole conversation (`unknown variant image_url`) with
+  no mention of an image. Tool results are now read on the same terms as
+  messages — and for the question that led to them, so the second read of the
+  same screenshot is served from the transcript cache rather than bought again.
+  Text-only models can now read image files on disk as well as pastes, which
+  fell out of the same fix.
+
+- **A transcript says which file it is of, so the model stops fetching what it
+  already has.** A paste carries the image and its path, and nothing connected
+  the two: the model was handed a full reading and then spent a tool call and an
+  entire resend of the conversation opening the file itself — far more than the
+  read cost. The evidence header now names the path and says the reading is
+  complete. Codex's `<image …>` wrapper is markup rather than anything you
+  asked, so it no longer travels to the vision engine as part of your question.
+
+- **One image asked one question is bought once, however many requests are in
+  flight.** The transcript cache only knew about reads that had finished, so
+  concurrent turns — Codex sends them, and a subagent runs beside its parent —
+  all missed and all paid. Measured on a real install: one pasted screenshot,
+  two overlapping reads, three seconds apart. Reads now share, and the images in
+  one turn are read concurrently under a cap rather than one after another, so a
+  turn with five screenshots waits for the slowest instead of the sum.
+
+- **What the router knows about an image accumulates instead of resetting.** A
+  transcript used to be filed under the question that bought it, and only that
+  one was ever injected — so an image's evidence was a snapshot of the first
+  thing you asked about it. Ask "what colour is this?" and a later "what does
+  the text say?" got the colour-focused reading back, with no way to ever add to
+  it. The record is now per image: a later read appends, and every turn sees
+  everything the router has learned about that picture. Records are capped, and
+  the first, general reading is never the one dropped.
+
+  The same image appearing twice in a turn — the paste and the tool result that
+  fetched it — now prints its reading once, with the second slot pointing at the
+  first. That is keyed on the image itself, never on transcripts that happen to
+  match, so two screenshots that read alike are still two images.
+
+- **An image sent straight to the gateway no longer dies at the provider.** The
+  API forwarder sits downstream of the gateway, so Codex's own turns arrive
+  already bridged — but a client talking to the gateway directly could hand a
+  text-only model an image and get back a 400 naming a JSON variant, which reads
+  as a router bug. Those parts are now replaced with a stated failure that says
+  where the bridge actually lives. Reading them there is deliberately not
+  offered: the engine call would re-enter the gateway holding that very request.
+
+- **An incomplete reading says so.** A transcript that came back missing its
+  required sections, or truncated at the router's size limit, is labelled as
+  partial — and that is the only time the model is told it can look again. Left
+  unsaid, a model cannot tell "the image does not show that" from "the
+  transcript does not mention it", and it answers the first with confidence
+  either way.
+
+- **A text-only model reads a pasted image with no configuration.** The vision
+  bridge is now on by default: paste a screenshot into DeepSeek, GLM, or Kimi
+  and it is transcribed by the cheapest vision-capable model you have already
+  enabled — or by your signed-in ChatGPT plan — instead of silently doing
+  nothing until you discovered a toggle. An install with nothing to read images
+  with behaves exactly as it did before: no engine resolves, the picker keeps
+  saying text-only, and Codex keeps refusing the paste.
+
+  Turning it off is permanent. The state file's *presence* is what separates
+  "never configured" from "configured off", so a stored `enabled: false` is
+  never re-enabled by this change or any future one, and a state file this
+  build cannot parse falls back to off rather than to the new default. The
+  installer no longer writes bridge state at all; it only reports what will
+  happen.
+
+  Two things it will not do on its own. It never picks an engine served from
+  your own machine — the pinned `local` engine, or a model from the keyless
+  `local` provider — because your runtime may not be running and that would
+  fail every paste; pin one and it is used gladly. And it no longer spends
+  quota invisibly: every read that misses the transcript cache records a usage
+  event naming the engine it was billed to, and the per-turn log line is no
+  longer suppressed on an unattended service. A ChatGPT-plan engine's quota is
+  still not reflected in the tray's limits.
 
 - **A curated model can say it refuses a forced tool choice.** A few upstreams
   call tools happily when `tool_choice` is `"auto"` and answer HTTP 400 when
@@ -49,6 +129,65 @@
   backoff. Retries are logged whether or not the service is quiet, and recorded
   on the usage event, so an upstream that is being papered over still looks
   flaky in the telemetry instead of healthy.
+
+- **A provider that reports no prompt tokens no longer disables compaction.**
+  Codex decides when to auto-compact from the `input_tokens` each response
+  reports. opencode's Go endpoint stopped reporting them for its DeepSeek V4
+  models, so the context counter never climbed, compaction never fired, and
+  sessions ran until the provider itself refused the turn — one captured turn
+  carried 1,050,034 tokens against a 1,048,576-token limit, with the context
+  bar still showing nearly empty. When a routed response now explicitly claims
+  zero prompt tokens for a request the router just measured as large, the
+  router substitutes an estimate of the prompt it sent, so Codex compacts on
+  time. The estimate errs high on purpose: compaction sits 14% below the hard
+  limit, so an estimate that lands low would let the turn die anyway, while a
+  high one only compacts sooner. Nothing else is touched — a provider that
+  reports correctly, a response with no usage block, and native traffic all
+  pass through byte for byte, and the substitution stops by itself once the
+  upstream starts reporting again. It is never silent: the usage event keeps
+  the provider's own counts and adds `estimatedInputTokens` beside them, and
+  the turn logs `estimated-input-tokens=<count>`, so estimated turns can never
+  be mistaken for the provider having recovered.
+
+- **You can now see which local models to download.** Installing one required
+  knowing its tag by heart: the tray's only entry point was a free-text field,
+  and every command took a tag as an argument, so anyone who had never
+  installed a local model had nowhere to start. `local-models list` and the
+  tray's Local LLMs panel now offer a shortlist rated against this machine's
+  memory, with tool support stated per entry — it decides whether Codex can
+  drive the model at all, and several popular coding models turn out not to
+  have it. Anything already downloaded drops off the list. `list` also renders
+  for a person now instead of printing one long JSON line; `--json` keeps the
+  machine-readable form.
+
+- **A local model is now checked against the machine before it downloads.**
+  Installing one asked whether Codex could drive it but never whether the
+  machine could run it, so a 65 GB pull could finish on a laptop that can never
+  load it. The registry manifest already carries the size, so the same lookup
+  now also rates fit against detected memory — unified memory on Apple Silicon,
+  GPU memory where NVIDIA reports it, system RAM otherwise, allowing ~20% above
+  the weights for context and cache. `inspect` reports `fits`, `tight`, or
+  `too-large`; `install` refuses a `too-large` model before transferring
+  anything unless `--yes` overrides it, and warns on a `tight` one.
+
+- **The doctor stopped telling the local provider to store an API key.** Its
+  provider loop labelled every row "<name> key" and offered `provider-key ...
+  set` as the fix — a command the keyless local provider refuses. The
+  empty-picker warning also claimed a "key stored" that never existed and
+  pointed at `curate-models`, which is the remote-catalog flow rather than the
+  download-and-check one local models use. The row is named for the endpoint
+  now, and both fixes name commands that work.
+
+- **The macOS tray lists every provider, not just the ones already working.**
+  Its Providers section built rows by grouping the models in the picker, so a
+  provider shipping none had no row — hiding the local provider and all ten
+  catalog-only services in the one place built to configure them. Rows now come
+  from the router's registry snapshot.
+
+- **The Windows and Linux tray can toggle providers added after it shipped.**
+  Its provider allowlist was a hardcoded six-entry list, so everything added
+  since — the local provider included — failed with "Unknown provider." It now
+  validates the id's shape and lets the registry decide what exists.
 
 - **Windows no longer opens a console window at logon.** The scheduled task ran
   the CMD wrapper through `cmd.exe`, so a console window appeared at every logon

@@ -20,7 +20,9 @@ for (const name of ["ANTHROPIC_API_KEY", "COPILOT_GITHUB_TOKEN", "DEEPSEEK_API_K
 
 const {
   credentialFileMode,
+  keychainProbeCount,
   removeProviderCredential,
+  resetKeychainCache,
   resolveProviderCredential,
   writeProviderCredential,
 } = await import("../src/provider-credentials.mjs");
@@ -81,3 +83,56 @@ test("provider credentials use protected files and remove legacy managed keys", 
     rmSync(testRoot, { recursive: true, force: true });
   }
 });
+
+// The keychain lookup is the only part of resolving a credential that spawns a
+// process, and `configuredProviderIds()` runs it once per provider per service
+// on the routed request path -- synchronously, so the whole event loop waits.
+// This asserts the spawn count directly rather than a duration: a timing bound
+// would be flaky, a probe count is exact.
+const { TARGET } = await import("../src/paths.mjs");
+const keychainProbed = process.platform === "darwin" && TARGET === "codex";
+
+test(
+  "a keychain lookup is spawned once per service, not once per resolve",
+  { skip: keychainProbed ? false : "the keychain is only consulted on macOS/codex" },
+  (t) => {
+    t.after(() => rmSync(testRoot, { recursive: true, force: true }));
+    resetKeychainCache();
+    // "openrouter" has no file credential here, so the resolve falls all the way
+    // through to the keychain. Nothing is stored under its service names on a
+    // test machine, and an absent item is exactly the case that used to cost a
+    // spawn every single time.
+    const before = keychainProbeCount();
+    resolveProviderCredential("openrouter", { persistent: true });
+    const firstPass = keychainProbeCount() - before;
+    assert.ok(firstPass >= 1, "the first resolve should have probed the keychain");
+
+    for (let index = 0; index < 20; index += 1) {
+      resolveProviderCredential("openrouter", { persistent: true });
+    }
+    assert.equal(
+      keychainProbeCount() - before,
+      firstPass,
+      "20 further resolves re-spawned /usr/bin/security instead of reusing the memo",
+    );
+
+    // Storing a key is the mutation that must not be masked. It lands in a
+    // protected file, which is consulted before the keychain, so it is visible
+    // at once -- and the memo is dropped as well so nothing downstream can be
+    // served a pre-write answer.
+    writeProviderCredential("openrouter", "TEST_OPENROUTER_FILE_KEY");
+    const credential = resolveProviderCredential("openrouter", { persistent: true });
+    assert.equal(credential?.value, "TEST_OPENROUTER_FILE_KEY");
+    assert.match(credential.source, /^protected file/);
+
+    // Removing it puts the keychain back in play, and that answer is taken
+    // fresh rather than from the memo the write invalidated.
+    removeProviderCredential("openrouter");
+    const afterRemove = keychainProbeCount();
+    resolveProviderCredential("openrouter", { persistent: true });
+    assert.ok(
+      keychainProbeCount() > afterRemove,
+      "removing the stored key left the keychain answer cached from before the write",
+    );
+  },
+);

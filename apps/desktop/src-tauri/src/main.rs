@@ -930,17 +930,19 @@ enum ProviderKind {
     Api,
 }
 
+// Which provider ids exist is decided by the router's registry, which gains
+// entries with every release; a list copied here silently stops the tray from
+// toggling anything added since it was written — which by now is most of them.
+// This guard therefore only has to keep an arbitrary string out of a
+// subprocess argument, because the control plane rejects an id it does not know.
 fn validate_provider(provider: &str) -> Result<(), String> {
-    const PROVIDERS: &[&str] = &[
-        "anthropic-api",
-        "kimi-oauth",
-        "kimi-api",
-        "deepseek",
-        "grok-api",
-        "grok-oauth",
-        "github-copilot",
-    ];
-    if PROVIDERS.contains(&provider) {
+    let valid = !provider.is_empty()
+        && provider.len() <= 64
+        && provider.chars().all(|character| {
+            character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
+        })
+        && !provider.starts_with('-');
+    if valid {
         Ok(())
     } else {
         Err("Unknown provider.".into())
@@ -987,9 +989,16 @@ mod tests {
     }
 
     #[test]
-    fn accepts_only_known_provider_ids() {
+    fn accepts_only_registry_shaped_provider_ids() {
         assert!(validate_provider("kimi-oauth").is_ok());
+        // Providers the registry gained after this file was written must keep
+        // working without a code change here.
+        assert!(validate_provider("local").is_ok());
+        assert!(validate_provider("openrouter").is_ok());
         assert!(validate_provider("../../secret").is_err());
+        assert!(validate_provider("").is_err());
+        assert!(validate_provider("--flag").is_err());
+        assert!(validate_provider("Grok API").is_err());
         assert!(validate_provider_kind("deepseek", ProviderKind::Api).is_ok());
         assert!(validate_provider_kind("deepseek", ProviderKind::Oauth).is_err());
         assert!(validate_provider_kind("github-copilot", ProviderKind::Api).is_ok());

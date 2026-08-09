@@ -18,6 +18,7 @@ import {
 import { parseRateLimitHeaders } from "./rate-limit-headers.mjs";
 import { recordRateLimitSnapshot } from "./rate-limit-state.mjs";
 import { canonicalProviderId, readProviderSelection } from "./provider-selection.mjs";
+import { stripImages, supportsImageInput } from "./vision-bridge.mjs";
 import {
   credentialLabel,
   credentialStatus,
@@ -340,6 +341,36 @@ function normalizeBody(buffer, contentType, route) {
     // This is native ChatGPT account metadata, not an upstream scheduling
     // request Copilot accepts.
     delete payload.service_tier;
+  }
+  // An image here has bypassed the router's vision bridge. This forwarder sits
+  // *downstream* of the gateway -- every routed model's `api_base` points at it
+  // -- so Codex's own traffic arrives already bridged and never carries one.
+  // What reaches this line is a client talking to the gateway directly, and the
+  // provider's answer to an image part on a text-only model is a 400 naming a
+  // JSON variant rather than an image, which reads as a router bug.
+  //
+  // Reading it here is deliberately not the answer. The engine call would have
+  // to re-enter the gateway that is holding this very request open, so the fix
+  // for wanting images read is to send them through the router, which is where
+  // the bridge lives. Say that in the model's own turn instead of dropping the
+  // part or letting the provider refuse the whole conversation.
+  if (!supportsImageInput(model)) {
+    const textPartType = provider.protocol === "openai-responses" ? "input_text" : "text";
+    const reason =
+      `${model.displayName || model.gatewayModel} cannot read images, and an image sent ` +
+      "straight to the gateway skips the router's vision bridge";
+    for (const field of ["messages", "input"]) {
+      if (!Array.isArray(payload[field])) continue;
+      const stripped = stripImages(payload[field], reason, { textPartType });
+      if (!stripped.images) continue;
+      payload[field] = stripped.input;
+      // Never quieted: content the caller sent has been replaced, and an
+      // unattended service is exactly where that must not happen in silence.
+      console.error(
+        `[api-forwarder] model=${model.gatewayModel} stripped=${stripped.images} ` +
+          "image part(s) that bypassed the vision bridge",
+      );
+    }
   }
   if (model.requestProfile === "kimi-k3") {
     const effort = kimiK3Effort(payload.reasoning_effort);
