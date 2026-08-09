@@ -130,6 +130,32 @@ export function visionEngineEfforts(model) {
     .filter((effort) => typeof effort === "string" && effort.length > 0);
 }
 
+// The live authorization for a native call, and the only evidence that cannot
+// be stale. The on-disk captures are reused across a failed probe by design, so
+// after a sign-out they still name an engine nothing can reach; the session on
+// the request in hand either exists right now or it does not.
+export function hasNativeSession(headers) {
+  if (!headers || typeof headers !== "object") return false;
+  for (const [name, value] of Object.entries(headers)) {
+    if (name.toLowerCase() !== "authorization") continue;
+    if (typeof value === "string" && value.trim()) return true;
+  }
+  return false;
+}
+
+// The account a native transcript was bought on. Transcripts are cached by
+// image bytes, and a native engine is authorized by the caller's live session,
+// so a hit must not replay one account's purchase for another: the hit skips
+// the call and with it every check that this session may spend that model.
+export function nativeAccountKey(headers) {
+  if (!headers || typeof headers !== "object") return "";
+  for (const [name, value] of Object.entries(headers)) {
+    if (name.toLowerCase() !== "chatgpt-account-id") continue;
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return "";
+}
+
 export function nativeVisionEngine(model) {
   const slug = String(model?.slug || "");
   return {
@@ -293,14 +319,38 @@ export function responseText(payload) {
   return text.join("\n").trim();
 }
 
+// A stream that died partway through, as opposed to a stream that was merely
+// hard to parse. The distinction matters at exactly one place -- the caller
+// turns this into a stated per-image failure -- so it carries no upstream text
+// with it. Error bodies from the backend never reach a prompt or a log.
+export class VisionStreamError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "VisionStreamError";
+  }
+}
+
+const STREAM_FAILURE_TYPES = new Set(["error", "response.failed", "response.incomplete"]);
+
 // Reassembles a Responses SSE stream into the same string the buffered shape
 // would have produced. Deltas are preferred because they are always present;
 // the terminal `response.completed` envelope is the fallback for a backend that
 // only sends the finished object, and it is read with the same parser as a
 // non-streaming reply so both paths agree on what counts as text.
+//
+// A failure partway through is a failure, never a short transcript. Deltas
+// followed by `{"type":"error"}` used to return the partial text with the error
+// dropped, and a `response.failed` envelope was never even inspected because
+// `deltas.join()` was already non-empty. Either way a backend error produced a
+// plausible truncated transcript with nothing to say it was truncated, and the
+// downstream model quoted it as the whole image -- the exact opposite of the
+// bridge's "evidence, not impressions" contract. Throwing lets `describeImage`
+// degrade that one image through `unreadableBlock()`, which is the behaviour
+// this path was supposed to have all along.
 export function streamedResponseText(body) {
   const deltas = [];
-  let completed;
+  let envelope;
+  let failed = false;
   for (const block of String(body).split(/\r?\n\r?\n/)) {
     for (const line of block.split(/\r?\n/)) {
       if (!line.startsWith("data:")) continue;
@@ -314,13 +364,23 @@ export function streamedResponseText(body) {
       }
       if (event?.type === "response.output_text.delta" && typeof event.delta === "string") {
         deltas.push(event.delta);
+      } else if (STREAM_FAILURE_TYPES.has(event?.type) || event?.error) {
+        failed = true;
+        if (event?.response) envelope = event.response;
       } else if (event?.response) {
-        completed = event.response;
+        envelope = event.response;
       }
     }
   }
+  // A backend that only ever sends the finished object leaves `status` unset,
+  // so an absent status is not a verdict. A present one that is not
+  // "completed" is: the stream stopped somewhere other than the end.
+  const status = typeof envelope?.status === "string" ? envelope.status : undefined;
+  if (failed || (status !== undefined && status !== "completed")) {
+    throw new VisionStreamError("the reader's response stream failed before it finished");
+  }
   const streamed = deltas.join("").trim();
-  return streamed || (completed ? responseText(completed) : "");
+  return streamed || (envelope ? responseText(envelope) : "");
 }
 
 // The Codex backend rejects a non-streaming Responses call outright with
@@ -365,7 +425,11 @@ function describeRequest(engine, imageUrl, gatewayBase, gatewayHeaders, nativeCa
   const supported = visionEngineEfforts(engine);
   const level = effort && (supported.length === 0 || supported.includes(effort)) ? effort : undefined;
   if (engine.native) {
-    if (!nativeCall?.baseUrl || !nativeCall?.headers) {
+    // `nativeHeaders()` always returns Content-Type and Accept-Encoding, so the
+    // presence of a headers object proves nothing. The session itself is the
+    // authorization for this call; without it the request would reach the Codex
+    // backend unauthenticated and come back 401.
+    if (!nativeCall?.baseUrl || !hasNativeSession(nativeCall?.headers)) {
       throw new Error(
         `${engine.displayName || engine.slug} needs the caller's Codex session to read images`,
       );
@@ -442,8 +506,14 @@ export async function describeImage({
     text = request.stream
       ? streamedResponseText(bytes.toString("utf8"))
       : responseText(JSON.parse(bytes.toString("utf8")));
-  } catch {
-    throw new Error(`${engine.displayName || engine.slug} returned an unreadable response`);
+  } catch (error) {
+    // A stream that failed mid-flight says so. Anything else is a shape this
+    // parser could not read at all. Neither message carries upstream text.
+    throw new Error(
+      error instanceof VisionStreamError
+        ? `${engine.displayName || engine.slug} stopped partway through reading it`
+        : `${engine.displayName || engine.slug} returned an unreadable response`,
+    );
   }
   if (!text) throw new Error(`${engine.displayName || engine.slug} returned no description`);
   return text.length > VISION_EVIDENCE_MAX_CHARS

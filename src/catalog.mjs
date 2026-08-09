@@ -28,12 +28,9 @@ import { readHiddenModels } from "./model-picker-state.mjs";
 import { buildNativeAliasAssignments } from "./native-alias.mjs";
 import { selectedConfiguredListedModels } from "./provider-selection.mjs";
 import { assertStateOwnership } from "./state-owner.mjs";
-import {
-  applyVisionBridge,
-  nativeVisionCandidates,
-  resolveVisionEngine,
-} from "./vision-bridge.mjs";
+import { applyVisionBridge, resolveVisionEngine } from "./vision-bridge.mjs";
 import { readVisionBridgeSettings } from "./vision-bridge-state.mjs";
+import { nativeVisionEngines } from "./vision-engines.mjs";
 
 const refresh = process.argv.includes("--refresh-native");
 const bundled = process.argv.includes("--bundled-native");
@@ -528,10 +525,15 @@ function main() {
   // session can actually spend them. A login-free install routes every turn
   // away from the native backend, so nominating a native engine there would
   // promise image input the router cannot deliver.
-  const nativeEngines =
-    openaiAuthenticated && !loginFree
-      ? nativeVisionCandidates(captured.models, hiddenModels)
-      : [];
+  // The one shared rule (`src/vision-engines.mjs`). This is the only caller
+  // that can name the gate from the probe itself: it is the process that runs
+  // the probe, and it is building the merged catalog every other caller reads
+  // the verdict back out of.
+  const nativeEngines = nativeVisionEngines({
+    models: captured.models,
+    hidden: hiddenModels,
+    authorized: openaiAuthenticated && !loginFree,
+  });
   const visionEngine = resolveVisionEngine(
     [...selectedModels, ...nativeEngines],
     readVisionBridgeSettings(),

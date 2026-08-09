@@ -55,35 +55,14 @@ function codexConfigSnapshot() {
   }
 }
 
-// The raw entries as written, without the picker-shaped normalization
-// `nativeCodexModels` applies: the vision bridge reads declared modalities,
-// which that mapping drops.
-function catalogModelsAt(catalogPath) {
-  if (!existsSync(catalogPath)) return [];
-  try {
-    const parsed = JSON.parse(readFileSync(catalogPath, "utf8"));
-    return Array.isArray(parsed?.models) ? parsed.models : [];
-  } catch {
-    return [];
-  }
-}
-
 // One list, three consumers: the probe the tray renders, the resolve that names
 // the current engine, and the validation that accepts a pin. They disagreed
-// once already -- the picker offered native models the setter then rejected.
-async function shippedNativeVisionEngines() {
-  const { MERGED_CATALOG_PATH, NATIVE_CATALOG_PATH } = await import("./paths.mjs");
-  const { nativeVisionCandidates } = await import("./vision-bridge.mjs");
-  const { modelPickerSnapshot } = await import("./model-picker-state.mjs");
-  // The capture declares the modalities; the merged catalog proves the entry
-  // survived the auth gate, so a signed-out or login-free install offers none.
-  const shipped = new Set(
-    catalogModelsAt(MERGED_CATALOG_PATH).map((model) => String(model.slug)),
-  );
-  return nativeVisionCandidates(
-    catalogModelsAt(NATIVE_CATALOG_PATH).filter((model) => shipped.has(String(model.slug))),
-    new Set(modelPickerSnapshot().hidden),
-  );
+// once already -- the picker offered native models the setter then rejected --
+// so the criteria now live in one place for every surface (see
+// `src/vision-engines.mjs`).
+async function shippedNativeVisionEngines(hidden) {
+  const { installedNativeVisionEngines } = await import("./vision-engines.mjs");
+  return installedNativeVisionEngines({ hidden });
 }
 
 function nativeCodexModels(catalogPath, hiddenModels = new Set()) {
@@ -110,13 +89,8 @@ function nativeCodexModels(catalogPath, hiddenModels = new Set()) {
 // --- per-target probes (run with MODEL_ROUTER_TARGET set) -------------------
 
 async function emitProbe() {
-  const {
-    CONFIG_PATH,
-    MERGED_CATALOG_PATH,
-    NATIVE_CATALOG_PATH,
-    TARGET,
-    PROVIDER_SELECTION_PATH,
-  } = await import("./paths.mjs");
+  const { CONFIG_PATH, NATIVE_CATALOG_PATH, TARGET, PROVIDER_SELECTION_PATH } =
+    await import("./paths.mjs");
   const { canonicalProviderId, readProviderSelection } = await import("./provider-selection.mjs");
   const { LISTED_MODELS, PROVIDERS } = await import("./model-registry.mjs");
   const { readNativeAliases } = await import("./native-alias.mjs");
@@ -125,12 +99,10 @@ async function emitProbe() {
   const { readVisionBridgeSettings, visionBridgeSnapshot } = await import(
     "./vision-bridge-state.mjs"
   );
-  const {
-    nativeVisionCandidates,
-    rankVisionEngines,
-    resolveVisionEngine,
-    visionEngineEfforts,
-  } = await import("./vision-bridge.mjs");
+  const { rankVisionEngines, resolveVisionEngine, visionEngineEfforts } = await import(
+    "./vision-bridge.mjs"
+  );
+  const { installedNativeVisionEngines } = await import("./vision-engines.mjs");
   const { annotateLocalModels, hostVisionProfile, refreshVisionModelSizesIfStale } =
     await import("./vision-host.mjs");
   const { readVisionDownload } = await import("./vision-download.mjs");
@@ -196,18 +168,11 @@ async function emitProbe() {
                 const candidates = selectedConfiguredListedModels();
                 // Only the native models that actually shipped into the picker.
                 // A signed-out or login-free install has none, and offering one
-                // there would pin an engine the router cannot reach. The
-                // capture is what declares the modalities; the merged catalog
-                // is what proves the model survived the auth gate.
-                const shipped = new Set(
-                  catalogModelsAt(MERGED_CATALOG_PATH).map((model) => String(model.slug)),
-                );
-                const natives = nativeVisionCandidates(
-                  catalogModelsAt(NATIVE_CATALOG_PATH).filter((model) =>
-                    shipped.has(String(model.slug)),
-                  ),
-                  hiddenModels,
-                );
+                // there would pin an engine the router cannot reach. Same rule
+                // the catalog build and the request path apply, from the same
+                // helper, so the tray can never advertise an engine the setter
+                // or the router would then refuse.
+                const natives = installedNativeVisionEngines({ hidden: hiddenModels });
                 const resolved = resolveVisionEngine(
                   [...candidates, ...natives],
                   readVisionBridgeSettings(),

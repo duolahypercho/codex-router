@@ -49,8 +49,9 @@ import { recordUsageEvent } from "./usage-events.mjs";
 import {
   describeImage,
   evidenceCache,
+  hasNativeSession,
   inputHasImage,
-  nativeVisionCandidates,
+  nativeAccountKey,
   resolveVisionEngine,
   stripImages,
   substituteImages,
@@ -58,6 +59,7 @@ import {
 } from "./vision-bridge.mjs";
 import { readHiddenModels } from "./model-picker-state.mjs";
 import { readVisionBridgeSettings } from "./vision-bridge-state.mjs";
+import { installedNativeVisionEngines } from "./vision-engines.mjs";
 import { VERSION } from "./version.mjs";
 
 const LISTEN_HOST =
@@ -339,18 +341,6 @@ function catalogModels() {
   try {
     const parsed = JSON.parse(readFileSync(CATALOG_PATH, "utf8"));
     return Array.isArray(parsed.models) ? parsed.models : [];
-  } catch {
-    return [];
-  }
-}
-
-// The native capture, not the merged catalog: the merged one is where a bridged
-// model already advertises borrowed image input, and reading engines back out of
-// it would let a bridge nominate itself.
-function nativeCatalogModels() {
-  try {
-    const parsed = JSON.parse(readFileSync(NATIVE_CATALOG_PATH, "utf8"));
-    return Array.isArray(parsed?.models) ? parsed.models : [];
   } catch {
     return [];
   }
@@ -729,9 +719,23 @@ async function normalizeRoutedAgentInput(request, input, signal) {
 // arrives again on every follow-up. Without the hash cache a five-turn
 // conversation about one image would buy the same transcript five times.
 async function visionEvidenceFor(url, engine, signal, request, effort) {
+  // A native engine is spent on the caller's own ChatGPT session, so it can
+  // only be reached with the headers this very request arrived with. The router
+  // never stores those.
+  const nativeCall = request
+    ? { baseUrl: NATIVE_BASE, headers: nativeHeaders(request) }
+    : undefined;
+  // For a native engine the account is part of the identity of a transcript
+  // too. That call is authorized by the caller's live session, and a cache hit
+  // skips the call along with every re-check that this session may still spend
+  // this model. Landing on an entry takes the identical image bytes, so this is
+  // an entitlement boundary rather than a confidentiality one -- but it is
+  // still a boundary. Gateway and local engines keep the key they had: neither
+  // is scoped to a caller.
+  const account = engine.native ? nativeAccountKey(nativeCall?.headers) : "";
   // The effort is part of the identity of a transcript: raising it and pasting
   // the same screenshot again must re-read it, not replay the cheaper pass.
-  const key = `${engine.slug}\u0000${effort || "default"}\u0000${url}`;
+  const key = `${engine.slug}\u0000${effort || "default"}\u0000${account}\u0000${url}`;
   const cached = evidenceCache.get(key);
   if (cached !== undefined) return cached;
   const text = await describeImage({
@@ -739,12 +743,7 @@ async function visionEvidenceFor(url, engine, signal, request, effort) {
     imageUrl: url,
     gatewayBase: GATEWAY_BASE,
     headers: routedHeaders(),
-    // A native engine is spent on the caller's own ChatGPT session, so it can
-    // only be reached with the headers this very request arrived with. The
-    // router never stores those.
-    nativeCall: request
-      ? { baseUrl: NATIVE_BASE, headers: nativeHeaders(request) }
-      : undefined,
+    nativeCall,
     effort,
     signal,
   });
@@ -760,11 +759,21 @@ async function bridgeVisionInput(input, route, signal, request) {
   if (route.visionBridge === false) {
     return stripImages(input, `${route.displayName || route.slug} cannot read images`).input;
   }
+  // Native candidates need two things at once, and neither is sufficient alone.
+  // The shared helper (`src/vision-engines.mjs`) applies the same auth gate the
+  // catalog build and the tray apply -- this path used to read the capture off
+  // disk with no gate at all. But every on-disk artifact is reused across a
+  // failed probe by design, so a sign-out leaves them naming an engine nothing
+  // can call. The caller's live session is the evidence that cannot be stale,
+  // so it has to hold too: without one there is no native engine to nominate,
+  // and a pin naming one stops resolving on the very next paste rather than at
+  // the next catalog rebuild.
+  const nativeEngines =
+    request && hasNativeSession(nativeHeaders(request))
+      ? installedNativeVisionEngines({ hidden: readHiddenModels() })
+      : [];
   const engine = resolveVisionEngine(
-    [
-      ...selectedConfiguredListedModels(),
-      ...nativeVisionCandidates(nativeCatalogModels(), readHiddenModels()),
-    ],
+    [...selectedConfiguredListedModels(), ...nativeEngines],
     readVisionBridgeSettings(),
   );
   if (!engine) {
