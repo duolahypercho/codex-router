@@ -332,7 +332,17 @@ function normalizeBody(buffer, contentType, route) {
     payload.messages = sanitizeChatToolHistory(payload.messages, provider);
   }
   if (model.requestProfile === "clinepass") {
-    delete payload.reasoning_effort;
+    // Most of the experimental ClinePass catalog still uses conservative
+    // single-tier metadata, so it must not receive an unverified effort
+    // control. Kimi K3 is the exception: Cline's own current catalog declares
+    // low/high/max, matching Kimi's OpenAI-compatible wire format.
+    if (model.upstreamModel === "cline-pass/kimi-k3") {
+      const effort = kimiK3Effort(payload.reasoning_effort);
+      if (effort) payload.reasoning_effort = effort;
+      else delete payload.reasoning_effort;
+    } else {
+      delete payload.reasoning_effort;
+    }
     delete payload.thinking;
     delete payload.top_p;
   } else if (model.requestProfile === "kimi-k3") {

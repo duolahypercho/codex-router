@@ -1752,6 +1752,93 @@ test("API forwarder routes ClinePass with isolated auth and unwraps JSON complet
   }
 });
 
+test("API forwarder preserves Kimi K3 images and maps ClinePass reasoning effort", async () => {
+  const upstreamRequests = [];
+  const upstream = await mockServer(async (request, response) => {
+    upstreamRequests.push(await bodyJson(request));
+    json(response, 200, {
+      success: true,
+      data: {
+        id: "wrapped-kimi-k3-response",
+        choices: [{ index: 0, message: { role: "assistant", content: "ok" } }],
+      },
+    });
+  });
+  const forwarderPort = await openPort();
+  const forwarder = run("api-forwarder.mjs", {
+    CODEX_ROUTER_API_PORT: String(forwarderPort),
+    CLINE_API_BASE_URL: `http://127.0.0.1:${upstream.port}/api/v1`,
+    CLINE_API_KEY: "TEST_CLINEPASS_KEY",
+    CODEX_ROUTER_QUIET: "1",
+  });
+
+  try {
+    await waitFor(`http://127.0.0.1:${forwarderPort}/health`, forwarder, {
+      Authorization: `Bearer ${INTERNAL_KEY}`,
+    });
+    for (const [sentEffort, expectedEffort] of [
+      ["low", "low"],
+      ["high", "high"],
+      ["max", "max"],
+      ["ultra", "max"],
+    ]) {
+      const response = await fetch(
+        `http://127.0.0.1:${forwarderPort}/v1/chat/completions`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${INTERNAL_KEY}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model: "clinepass-kimi-k3",
+            reasoning_effort: sentEffort,
+            thinking: { type: "enabled" },
+            top_p: 0.9,
+            temperature: 0.7,
+            tools: [{
+              type: "function",
+              function: {
+                name: "inspect_image",
+                parameters: { type: "object", properties: {} },
+              },
+            }],
+            messages: [{
+              role: "user",
+              content: [
+                { type: "text", text: "What is in this image?" },
+                {
+                  type: "image_url",
+                  image_url: { url: "data:image/png;base64,dGVzdA==" },
+                },
+              ],
+            }],
+          }),
+        },
+      );
+      assert.equal(response.status, 200);
+      assert.equal((await response.json()).id, "wrapped-kimi-k3-response");
+      const request = upstreamRequests.at(-1);
+      assert.equal(request.model, "cline-pass/kimi-k3");
+      assert.equal(request.reasoning_effort, expectedEffort);
+      assert.equal(request.thinking, undefined);
+      assert.equal(request.top_p, undefined);
+      assert.equal(request.temperature, 0.7);
+      assert.equal(request.tools[0].function.name, "inspect_image");
+      assert.deepEqual(request.messages[0].content, [
+        { type: "text", text: "What is in this image?" },
+        {
+          type: "image_url",
+          image_url: { url: "data:image/png;base64,dGVzdA==" },
+        },
+      ]);
+    }
+  } finally {
+    await stopChild(forwarder);
+    await closeServer(upstream.server);
+  }
+});
+
 test("API forwarder health omits disabled API providers", async () => {
   const testRoot = mkdtempSync(path.join(os.tmpdir(), "api-forwarder-health-"));
   writeFileSync(

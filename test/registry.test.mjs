@@ -175,13 +175,24 @@ test("provider registry exposes configured API and OAuth model families", () => 
   );
   for (const model of clinepassModels) {
     assert.equal(model.requestProfile, "clinepass", model.slug);
-    assert.equal(model.defaultEffort, "high", model.slug);
-    assert.deepEqual(model.reasoningLevels, [
-      { effort: "high", description: "Default model behavior" },
-    ], model.slug);
     assert.equal(model.multiAgentVersion, undefined, model.slug);
-    assert.deepEqual(model.inputModalities, ["text"], model.slug);
+    if (model.slug !== "clinepass/kimi-k3") {
+      assert.equal(model.defaultEffort, "high", model.slug);
+      assert.deepEqual(model.reasoningLevels, [
+        { effort: "high", description: "Default model behavior" },
+      ], model.slug);
+      assert.deepEqual(model.inputModalities, ["text"], model.slug);
+    }
   }
+  const clinepassKimiK3 = MODEL_BY_SLUG.get("clinepass/kimi-k3");
+  assert.equal(clinepassKimiK3.defaultEffort, "max");
+  assert.deepEqual(
+    clinepassKimiK3.reasoningLevels.map((level) => level.effort),
+    ["low", "high", "max"],
+  );
+  assert.equal(clinepassKimiK3.contextWindow, 1_048_576);
+  assert.equal(clinepassKimiK3.autoCompact, 900_000);
+  assert.deepEqual(clinepassKimiK3.inputModalities, ["text", "image"]);
   assert.equal(PROVIDERS.get("grok-oauth").proxyBaseEnv, "GROK_OAUTH_FORWARD_BASE_URL");
   // Qwen OAuth was discontinued upstream on 2026-04-15, so the plan key is the
   // only Qwen surface. A second key-based provider would differ only by base

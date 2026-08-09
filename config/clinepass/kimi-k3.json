@@ -8,22 +8,31 @@
       "provider": "clinepass",
       "listed": true,
       "displayName": "Kimi K3 (ClinePass)",
-      "description": "Kimi K3 through ClinePass.",
+      "description": "Kimi K3 through ClinePass with 1M context, image input, tools, and configurable reasoning.",
       "priority": 52,
-      "defaultEffort": "high",
+      "defaultEffort": "max",
       "reasoningLevels": [
         {
+          "effort": "low",
+          "description": "Faster reasoning"
+        },
+        {
           "effort": "high",
-          "description": "Default model behavior"
+          "description": "Balanced deep reasoning"
+        },
+        {
+          "effort": "max",
+          "description": "Maximum reasoning depth"
         }
       ],
-      "contextWindow": 131072,
-      "autoCompact": 110000,
+      "contextWindow": 1048576,
+      "autoCompact": 900000,
       "inputModalities": [
-        "text"
+        "text",
+        "image"
       ],
       "requestProfile": "clinepass",
-      "compHash": "clinepass-kimi-k3-v1"
+      "compHash": "clinepass-kimi-k3-v2"
     }
   ]
 }
