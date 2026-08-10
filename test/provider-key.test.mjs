@@ -107,7 +107,7 @@ test(
   },
   () => {
     const testRoot = mkdtempSync(path.join(os.tmpdir(), "codex-router-posix-prompt-"));
-    const secret = "pr149-pty-secret";
+    const secret = "test-value";
     const helper = String.raw`
 import errno
 import os
