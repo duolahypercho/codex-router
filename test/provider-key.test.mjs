@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+
+const root = path.resolve(import.meta.dirname, "..");
 
 // provider-key.mjs is a CLI entry that validates process.argv at module
 // evaluation time (and exits when the arguments are missing), so give it a
@@ -90,6 +92,99 @@ test(
         encoding: "utf8",
         stdio: ["ignore", "pipe", "inherit"],
       });
+    } finally {
+      rmSync(testRoot, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "the POSIX hidden prompt captures a key without echoing it",
+  {
+    skip:
+      process.platform === "win32" ||
+      spawnSync("python3", ["--version"], { stdio: "ignore" }).status !== 0,
+  },
+  () => {
+    const testRoot = mkdtempSync(path.join(os.tmpdir(), "codex-router-posix-prompt-"));
+    const secret = "pr149-pty-secret";
+    const helper = String.raw`
+import errno
+import os
+import select
+import sys
+import termios
+import time
+
+node, provider_key, home, state_dir, secret = sys.argv[1:]
+env = os.environ.copy()
+env.update({
+    "HOME": home,
+    "CODEX_HOME": home,
+    "CODEX_ROUTER_STATE_DIR": state_dir,
+    "MODEL_ROUTER_STATE_DIR": state_dir,
+})
+pid, master = os.forkpty()
+if pid == 0:
+    os.execve(node, [node, provider_key, "deepseek", "set"], env)
+
+output = bytearray()
+prompt = b"DeepSeek API key: "
+sent = False
+while True:
+    ready, _, _ = select.select([master], [], [], 10)
+    if not ready:
+        os.kill(pid, 9)
+        raise SystemExit("timed out waiting for provider-key")
+    try:
+        chunk = os.read(master, 4096)
+    except OSError as error:
+        if error.errno == errno.EIO:
+            break
+        raise
+    if not chunk:
+        break
+    output.extend(chunk)
+    if not sent and prompt in output:
+        deadline = time.monotonic() + 2
+        while termios.tcgetattr(master)[3] & termios.ECHO:
+            if time.monotonic() >= deadline:
+                os.kill(pid, 9)
+                raise SystemExit("provider-key did not disable terminal echo")
+            time.sleep(0.01)
+        os.write(master, secret.encode() + b"\n")
+        sent = True
+
+_, status = os.waitpid(pid, 0)
+os.close(master)
+sys.stdout.buffer.write(output)
+raise SystemExit(os.waitstatus_to_exitcode(status))
+`;
+    try {
+      const result = spawnSync(
+        "python3",
+        [
+          "-c",
+          helper,
+          process.execPath,
+          path.join(root, "src", "provider-key.mjs"),
+          testRoot,
+          path.join(testRoot, "router state"),
+          secret,
+        ],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            DEEPSEEK_API_KEY: "",
+          },
+          timeout: 20_000,
+        },
+      );
+      assert.equal(result.status, 0, result.stderr || result.stdout);
+      assert.match(result.stdout, /Received \d+ characters\./);
+      assert.match(result.stdout, /DeepSeek API key saved to protected local storage/);
+      assert.doesNotMatch(result.stdout, new RegExp(secret));
     } finally {
       rmSync(testRoot, { recursive: true, force: true });
     }
