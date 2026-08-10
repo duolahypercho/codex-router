@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -109,6 +115,62 @@ test("install.sh is valid POSIX shell", () => {
   });
   assert.equal(result.status, 0, result.stderr);
 });
+
+test(
+  "POSIX install and enable preserve the PATH-selected Node wrapper",
+  { skip: process.platform === "win32" },
+  () => {
+    const testRoot = mkdtempSync(path.join(os.tmpdir(), "codex-router-node-wrapper-"));
+    const wrapperDir = path.join(testRoot, "runtime bin % wrapper");
+    const wrapper = path.join(wrapperDir, "node");
+    const callLog = path.join(testRoot, "wrapper calls.log");
+    const servicePath = `${wrapperDir}:${process.env.PATH || "/usr/local/bin:/usr/bin:/bin"}`;
+    const baseEnv = { ...process.env };
+    delete baseEnv.CODEX_ROUTER_NODE_BIN;
+    try {
+      mkdirSync(wrapperDir, { recursive: true });
+      writeFileSync(
+        wrapper,
+        `#!/bin/sh
+printf '%s\\t%s\\t' "$CODEX_ROUTER_NODE_BIN" "$PATH" >>"$CODEX_ROUTER_WRAPPER_LOG"
+printf '<%s>' "$@" >>"$CODEX_ROUTER_WRAPPER_LOG"
+printf '\\n' >>"$CODEX_ROUTER_WRAPPER_LOG"
+if [ "\${1:-}" = src/install-plan.mjs ] && [ "\${2:-}" = status ]; then
+  printf 'skip\\n'
+fi
+`,
+        { mode: 0o755 },
+      );
+      const env = {
+        ...baseEnv,
+        PATH: servicePath,
+        HOME: testRoot,
+        CODEX_HOME: path.join(testRoot, "codex home"),
+        CODEX_ROUTER_STATE_DIR: path.join(testRoot, "router state"),
+        MODEL_ROUTER_STATE_DIR: path.join(testRoot, "router state"),
+        CODEX_ROUTER_WRAPPER_LOG: callLog,
+      };
+
+      for (const [script, args, expectedCall] of [
+        [path.join(root, "bin", "install"), ["--prepare-only"], "<src/catalog.mjs>"],
+        [path.join(root, "bin", "enable"), [], "<src/service.mjs><install>"],
+      ]) {
+        writeFileSync(callLog, "", "utf8");
+        const result = spawnSync(script, args, { cwd: root, encoding: "utf8", env });
+        assert.equal(result.status, 0, result.stderr || result.stdout);
+        const calls = readFileSync(callLog, "utf8").trim().split("\n");
+        assert.ok(calls.some((line) => line.includes(expectedCall)), calls.join("\n"));
+        const routedCalls = calls.filter((line) => line.includes("\t<src/"));
+        assert.ok(
+          routedCalls.every((line) => line.startsWith(`${wrapper}\t${servicePath}\t`)),
+          calls.join("\n"),
+        );
+      }
+    } finally {
+      rmSync(testRoot, { recursive: true, force: true });
+    }
+  },
+);
 
 test(
   "install.ps1 parses under powershell.exe",

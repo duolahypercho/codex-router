@@ -70,11 +70,21 @@ function systemdQuoted(value) {
     .replaceAll('"', '\\"')}"`;
 }
 
+function launchdXml(value) {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&apos;");
+}
+
 test("background service definitions render for macOS, Linux, and Windows", () => {
   const testRoot = mkdtempSync(path.join(os.tmpdir(), "codex-router-services-"));
   try {
     const launchd = render("service-macos.mjs", "darwin", testRoot);
     assert.match(launchd, /<string>io\.github\.codex-router<\/string>/);
+    assert.match(launchd, /<key>PATH<\/key>/);
     assert.match(launchd, /CODEX_ROUTER_STATE_DIR/);
 
     const systemd = render("service-linux.mjs", "linux", testRoot);
@@ -96,14 +106,16 @@ test("background service definitions render for macOS, Linux, and Windows", () =
   }
 });
 
-test("packaged services persist stable source and Node paths", () => {
+test("packaged services preserve wrapper and PATH values with service-safe quoting", () => {
   const testRoot = mkdtempSync(path.join(os.tmpdir(), "codex-router-packaged-service-"));
-  const stableRoot = path.join(testRoot, "opt", "codex-router", "libexec");
-  const stableNode = path.join(testRoot, "opt", "node", "bin", "node");
+  const stableRoot = path.join(testRoot, "opt % router", "libexec");
+  const stableNode = path.join(testRoot, 'runtime "bin" %', "node wrapper");
+  const servicePath = `${path.dirname(stableNode)}:${path.join(testRoot, "support & tools")}`;
   const env = {
     CODEX_ROUTER_SOURCE_ROOT: stableRoot,
     CODEX_ROUTER_NODE_BIN: stableNode,
     CODEX_ROUTER_PACKAGE_MANAGER: "homebrew",
+    PATH: servicePath,
   };
   try {
     const launchd = serviceCommand(
@@ -115,7 +127,12 @@ test("packaged services persist stable source and Node paths", () => {
       root,
       env,
     );
-    assert.match(launchd, new RegExp(stableNode.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    assert.ok(launchd.includes(`<string>${launchdXml(stableNode)}</string>`));
+    assert.ok(
+      launchd.includes(
+        `<key>PATH</key>\n    <string>${launchdXml(servicePath)}</string>`,
+      ),
+    );
     assert.match(launchd, /<key>CODEX_ROUTER_SOURCE_ROOT<\/key>/);
     assert.match(launchd, /<key>CODEX_ROUTER_NODE_BIN<\/key>/);
     assert.match(launchd, /<string>homebrew<\/string>/);
@@ -131,6 +148,7 @@ test("packaged services persist stable source and Node paths", () => {
     );
     assert.ok(systemd.includes(`WorkingDirectory=${stableRoot.replaceAll("%", "%%")}`));
     assert.ok(systemd.includes(`ExecStart=${systemdQuoted(stableNode)}`));
+    assert.ok(systemd.includes(`Environment=${systemdQuoted(`PATH=${servicePath}`)}`));
     assert.ok(systemd.includes(`Environment="CODEX_ROUTER_PACKAGE_MANAGER=homebrew"`));
   } finally {
     rmSync(testRoot, { recursive: true, force: true });
