@@ -49,6 +49,7 @@ function systemdQuote(value) {
 function unit() {
   const start = path.join(SOURCE_ROOT, "src", "start.mjs");
   const environment = {
+    PATH: process.env.PATH || "/usr/local/bin:/usr/bin:/bin",
     MODEL_ROUTER_TARGET: TARGET,
     MODEL_ROUTER_STATE_DIR: STATE_DIR,
     MODEL_ROUTER_QUIET: "1",

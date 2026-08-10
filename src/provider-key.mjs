@@ -96,7 +96,7 @@ function hiddenPrompt(label) {
     cleaned = true;
     if (terminalState) {
       try {
-        execFileSync("/bin/stty", [terminalState], {
+        execFileSync("/bin/stty", ["-F", "/dev/tty", terminalState], {
           stdio: [descriptor, "ignore", descriptor],
         });
       } catch {
@@ -120,13 +120,13 @@ function hiddenPrompt(label) {
     ]),
   );
   try {
-    terminalState = execFileSync("/bin/stty", ["-g"], {
+    terminalState = execFileSync("/bin/stty", ["-F", "/dev/tty", "-g"], {
       encoding: "utf8",
       stdio: [descriptor, "pipe", descriptor],
     }).trim();
     for (const [signal, handler] of handlers) process.on(signal, handler);
     writeSync(descriptor, `${label}: `);
-    execFileSync("/bin/stty", ["-echo"], {
+    execFileSync("/bin/stty", ["-F", "/dev/tty", "-echo"], {
       stdio: [descriptor, "ignore", descriptor],
     });
     const chunks = [];

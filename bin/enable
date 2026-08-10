@@ -7,6 +7,8 @@ case "${MODEL_ROUTER_TARGET:-codex}" in
   codex) ;;
   *) echo "MODEL_ROUTER_TARGET must be codex." >&2; exit 2 ;;
 esac
+CODEX_ROUTER_NODE_BIN=${CODEX_ROUTER_NODE_BIN:-$(command -v node)}
+export CODEX_ROUTER_NODE_BIN
 adopt_native_catalog=false
 for argument in "$@"; do
   case "$argument" in

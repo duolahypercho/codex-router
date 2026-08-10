@@ -60,6 +60,12 @@ done
 
 node -e 'const [a,b]=process.versions.node.split(".").map(Number); if (!(a>22 || (a===22 && b>=19))) { console.error("Node.js 22.19 or newer is required."); process.exit(1) }'
 
+# Preserve the launcher selected by the operator. A compatibility wrapper may
+# delegate to another runtime, so process.execPath is not necessarily the
+# executable that should be placed in the background service.
+CODEX_ROUTER_NODE_BIN=${CODEX_ROUTER_NODE_BIN:-$(command -v node)}
+export CODEX_ROUTER_NODE_BIN
+
 cd "$repo_dir"
 codex_home=${CODEX_HOME:-$HOME/.codex}
 mkdir -p "$codex_home"

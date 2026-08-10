@@ -80,6 +80,7 @@ test("background service definitions render for macOS, Linux, and Windows", () =
     const systemd = render("service-linux.mjs", "linux", testRoot);
     assert.match(systemd, /\[Service\]/);
     assert.match(systemd, /ExecStart=/);
+    assert.match(systemd, /Environment="PATH=/);
     assert.match(systemd, /Environment="CODEX_ROUTER_STATE_DIR=/);
 
     const windows = render("service-windows.mjs", "win32", testRoot);
