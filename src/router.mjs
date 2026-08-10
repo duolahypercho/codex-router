@@ -44,10 +44,10 @@ import {
 } from "./response-usage.mjs";
 import { fetchWithRetry } from "./upstream-retry.mjs";
 import {
-  CollaborationToolCallTransform,
-  flattenCollaborationHistory,
-  flattenCollaborationNamespaceTools,
-} from "./collaboration-namespace.mjs";
+  NamespaceToolCallTransform,
+  flattenNamespaceHistory,
+  flattenNamespaceTools,
+} from "./namespace-tools.mjs";
 import { activityMetadataFromHeaders } from "./codex-session-names.mjs";
 import { translateGatewayError } from "./error-translation.mjs";
 import { recordUsageEvent } from "./usage-events.mjs";
@@ -1348,7 +1348,7 @@ async function handleResponses(request, response, requestUrl) {
     let target;
     let headers;
     let routedBody;
-    let collaborationFlattened = false;
+    let namespaceTools;
     if (route) {
       const input = await bridgeVisionInput(
         await normalizeRoutedAgentInput(request, payload.input, controller.signal),
@@ -1356,20 +1356,25 @@ async function handleResponses(request, response, requestUrl) {
         request,
       );
       const provider = providerForModel(route);
-      // LiteLLM's Responses -> Chat Completions bridge drops namespace tools.
-      // Chat-completions providers need the collaboration namespace flattened
-      // into ordinary functions; the response transform maps calls back.
+      // LiteLLM's Responses -> Chat Completions bridge drops every namespace
+      // tool, which is how Codex ships its MCP servers, its bundled plugins,
+      // and its collaboration toolset alike -- so on a chat-completions
+      // provider the model was offered none of them and reported the tool as
+      // missing. Flatten each namespace into ordinary functions the bridge
+      // carries; the response transform maps the calls back.
       if (provider?.protocol !== "openai-responses") {
-        const flattened = flattenCollaborationNamespaceTools(payload.tools);
-        collaborationFlattened = flattened.flattened;
-        if (collaborationFlattened) payload.tools = flattened.tools;
+        const flattened = flattenNamespaceTools(payload.tools);
+        if (flattened.flattened) {
+          payload.tools = flattened.tools;
+          namespaceTools = flattened.map;
+        }
       }
       const routed = {
         ...payload,
         model: route.gatewayModel,
         // The stored call history must use the same tool names as the tool
         // list, or the model copies the bare names out of its own transcript.
-        input: collaborationFlattened ? flattenCollaborationHistory(input) : input,
+        input: namespaceTools ? flattenNamespaceHistory(input, namespaceTools) : input,
       };
       // Native OpenAI traffic keeps client_metadata; routed providers do not
       // consume it and the strict ones reject the unknown field.
@@ -1479,8 +1484,8 @@ async function handleResponses(request, response, requestUrl) {
       },
     );
     const transforms = [usageTransform];
-    if (collaborationFlattened) {
-      transforms.push(new CollaborationToolCallTransform());
+    if (namespaceTools) {
+      transforms.push(new NamespaceToolCallTransform(namespaceTools));
     }
     await pipeResponse(upstream, response, HOP_BY_HOP_HEADERS, transforms);
     const usage = usageTransform?.tokenUsage();

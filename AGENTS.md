@@ -745,6 +745,44 @@ purpose.
    `prompt-token estimate` cases in `test/routing.test.mjs`. A change to the
    predicate, the ratio, or the telemetry needs a test there.
 
+## Namespace tools must survive the Chat Completions bridge
+
+Codex ships MCP servers, bundled plugins, and its collaboration toolset as
+Responses-API tools of `type: "namespace"`. LiteLLM's Responses -> Chat
+Completions bridge drops that type outright, so anything left as a namespace
+reaches a non-Responses provider as nothing at all — the model is offered no
+such tool and answers that it is missing. `src/namespace-tools.mjs` is what
+prevents that, and the rules that keep it correct are narrow.
+
+1. Flatten **every** namespace, not a named list. The collaboration namespace
+   was rescued first only because subagents broke first; scoping the fix to it
+   left every MCP server and plugin silently unusable on nearly every provider.
+   The gate is the provider protocol (`openai-responses` passes through
+   untouched), never the namespace's identity.
+2. Renaming is a **round trip, and all three legs are required**: the tool list,
+   the stored `function_call` history, and the model's own calls on the way
+   back. Rename only the list and the model copies the bare name out of its own
+   transcript; skip the response transform and Codex answers `unsupported call`.
+3. Restore from the **per-request map**, never by splitting on `__`. A namespace
+   named `mcp__node_repl` holding a tool named `js` makes the delimiter
+   ambiguous, and a name shortened to fit a provider's 64-character function
+   limit cannot be split at all. The map is built from the tools that request
+   actually offered, so a tool the model was never given cannot be resolved into
+   a namespace call by accident.
+4. A bare name is recovered **only when one namespace claims it**. Two
+   namespaces exposing the same tool name are left alone; guessing dispatches
+   the call to the wrong server, which is worse than Codex rejecting it. The
+   collaboration toolset stays recoverable in full even when Codex offered a
+   subset, which is the case that first made recovery necessary.
+5. Flattened names must stay **stable across turns**. The history rewrite and
+   the tool list are computed independently and have to agree, so any
+   shortening is deterministic in the namespace and tool name alone — never a
+   counter, a timestamp, or the position in the list.
+6. Regression coverage lives in `test/namespace-tools.test.mjs` and the MCP
+   namespace case in `test/routing.test.mjs`. A tool-name smoke test is not
+   enough: the routing test asserts the flattened tools, the renamed history,
+   and the restored call together, because the failure mode is one leg missing.
+
 ## Routed subagent regression prevention
 
 - A normal `/responses` smoke test does not cover Codex collaboration. Current

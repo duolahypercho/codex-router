@@ -500,6 +500,95 @@ test("router dispatches aliased native slugs to the mapped external model", asyn
   }
 });
 
+// LiteLLM's chat-completions bridge drops every `type: "namespace"` tool, so
+// an MCP server reached no routed model: the model was offered nothing and
+// answered that the tool was missing. The flattening has to survive the whole
+// round trip -- tools, stored history, and the call coming back.
+test("router flattens MCP namespace tools to a routed model and restores the call", async () => {
+  const gatewayRequests = [];
+  const gateway = await mockServer(async (request, response) => {
+    gatewayRequests.push(await bodyJson(request));
+    const item = {
+      type: "function_call",
+      name: "mcp__node_repl__js",
+      call_id: "call_js",
+      arguments: '{"code":"1+1"}',
+    };
+    response.writeHead(200, { "Content-Type": "text/event-stream" });
+    response.end(
+      `data: ${JSON.stringify({ type: "response.output_item.done", item })}\n\ndata: [DONE]\n\n`,
+    );
+  });
+  const routerPort = await openPort();
+  const router = run("router.mjs", {
+    CODEX_ROUTER_PORT: String(routerPort),
+    CODEX_ROUTER_GATEWAY_BASE_URL: `http://127.0.0.1:${gateway.port}/v1`,
+    CODEX_ROUTER_QUIET: "1",
+  });
+
+  try {
+    await waitFor(`${routerBase(routerPort)}/models`, router);
+    const response = await fetch(`${routerBase(routerPort)}/responses`, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer CODEX_CALLER_SECRET",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "deepseek/deepseek-v4-pro",
+        tools: [
+          { type: "function", name: "exec_command" },
+          {
+            type: "namespace",
+            name: "mcp__node_repl",
+            tools: [
+              {
+                type: "function",
+                name: "js",
+                description: "Run JavaScript",
+                parameters: { type: "object", properties: { code: { type: "string" } } },
+              },
+            ],
+          },
+        ],
+        input: [
+          { type: "function_call", name: "js", namespace: "mcp__node_repl", call_id: "call_prior" },
+          { type: "function_call_output", call_id: "call_prior", output: "2" },
+        ],
+      }),
+    });
+    assert.equal(response.status, 200);
+
+    const forwarded = gatewayRequests.at(-1);
+    assert.deepEqual(
+      forwarded.tools.map((tool) => tool.name),
+      ["exec_command", "mcp__node_repl__js"],
+    );
+    // A namespace tool that reaches LiteLLM is a tool the model never sees.
+    assert.ok(forwarded.tools.every((tool) => tool.type !== "namespace"));
+    assert.equal(forwarded.tools[1].description, "Run JavaScript");
+    // The history has to use the same name as the tool list, or the model
+    // copies the bare name out of its own transcript.
+    assert.equal(forwarded.input[0].name, "mcp__node_repl__js");
+    assert.equal(forwarded.input[0].namespace, undefined);
+    assert.deepEqual(forwarded.input[1], {
+      type: "function_call_output",
+      call_id: "call_prior",
+      output: "2",
+    });
+
+    // Codex dispatches MCP calls by namespace, so the flattened name has to be
+    // undone before the call reaches it.
+    const streamed = await response.text();
+    assert.match(streamed, /"name":"js"/);
+    assert.match(streamed, /"namespace":"mcp__node_repl"/);
+    assert.doesNotMatch(streamed, /mcp__node_repl__js/);
+  } finally {
+    await stopChild(router);
+    await closeServer(gateway.server);
+  }
+});
+
 test("router preserves native auth and isolates every external route", async () => {
   const nativeRequests = [];
   const routedRequests = [];

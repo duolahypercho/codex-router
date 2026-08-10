@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- **Your MCP servers and Codex's bundled plugins now reach external models.**
+  Codex hands its MCP servers, its browser and computer-use plugins, and its
+  collaboration toolset to the model as Responses-API `namespace` tools. Chat
+  Completions has no such type, so the gateway dropped every one of them on the
+  way out: on DeepSeek — or any other provider that is not on the Responses
+  protocol, which is nearly all of them — the model was offered no MCP tools at
+  all and said so, reporting `mcp__node_repl__js` and the browser tools as
+  missing. Only the collaboration namespace had been rescued, and only because
+  subagents broke first.
+
+  Each namespace is now flattened into ordinary functions the gateway carries,
+  the stored call history is renamed to match so the model does not copy a name
+  it was never offered, and the namespace is restored on the way back so Codex
+  dispatches the call exactly as it would natively. A name too long for a
+  provider's 64-character limit is shortened deterministically rather than
+  rejected. Native Responses providers are untouched: they never needed this.
+
 - **The reader is asked what you actually want to know, and asked again when
   that changes.** The question used to be pinned to the image's own message, so
   an image's reading was fixed by the first thing ever asked about it. Paste a

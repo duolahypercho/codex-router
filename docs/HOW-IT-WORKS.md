@@ -177,6 +177,17 @@ They are never sent to an external model provider.
 Commands, permissions, MCP tools, skills, and task state remain in Codex. Only
 model inference and external-model compaction are routed.
 
+Codex groups its MCP servers, its bundled plugins, and its collaboration
+toolset into Responses-API `namespace` tools. Chat Completions has no
+equivalent and the gateway drops that tool type, so an external model would be
+offered none of them and would report the tool as missing. For providers that
+are not on the Responses protocol, the router flattens each namespace into
+ordinary functions named `<namespace>__<tool>`, renames the stored call history
+to match, and restores the original namespace on every call the model makes, so
+Codex dispatches it exactly as it would natively. Names that would exceed a
+provider's 64-character function-name limit are shortened deterministically and
+restored from the same per-request map.
+
 Codex collaboration messages can place a delegated subagent task in native
 OpenAI `encrypted_content`. External providers cannot read that opaque item. For
 routed subagents only, the router uses the already-authenticated native Codex
