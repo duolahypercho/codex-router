@@ -17,6 +17,20 @@ Examples:
 EOF
 }
 
+version() {
+  node -p 'require(process.argv[1]).version' "$repo_dir/package.json"
+}
+
+if [ "$#" -eq 1 ] && [ "$1" = "--version" ]; then
+  version
+  exit 0
+fi
+
+if [ "$#" -eq 2 ] && [ "$1" = "codex" ] && [ "$2" = "--version" ]; then
+  version
+  exit 0
+fi
+
 if [ "$#" -lt 2 ]; then
   usage >&2
   exit 2

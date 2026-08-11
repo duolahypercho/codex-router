@@ -66,6 +66,9 @@ installer below because the formula builds the locked Python dependencies from
 source. The release workflow generates `Formula/codex-router.rb` from
 `requirements/python.txt` and refreshes it for each release.
 
+Maintainers preparing the eventual `homebrew/core` submission should follow
+[`docs/HOMEBREW_CORE.md`](docs/HOMEBREW_CORE.md).
+
 ### Guided installer
 
 macOS or Linux:

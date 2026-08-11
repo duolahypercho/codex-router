@@ -4,12 +4,9 @@ class CodexRouter < Formula
   desc "Use external coding models inside the Codex App and CLI"
   homepage "https://github.com/duolahypercho/codex-router"
   url "https://github.com/duolahypercho/codex-router/releases/download/v0.4.0-beta.2/codex-router-0.4.0-beta.2.tar.gz"
-  version "0.4.0-beta.2"
   sha256 "665511833fe4681c6e2c9e930f4561710ad3d265622ed1fb4fa1df8d24307482"
   license "MIT"
 
-  depends_on "node"
-  depends_on "python@3.14"
   depends_on "pkgconf" => :build
   depends_on "rust" => :build
   depends_on "libsndfile"
@@ -17,6 +14,9 @@ class CodexRouter < Formula
   # skips the libsodium it vendors and expects one to already be present. Without
   # this its _sodium.c cannot find sodium.h. See Homebrew's extend/ENV/super.rb.
   depends_on "libsodium"
+  depends_on "libyaml"
+  depends_on "node"
+  depends_on "python@3.14"
 
   # Optional LiteLLM resources omitted because PyPI publishes no portable source:
   # - hf-xet==1.6.0
@@ -560,63 +560,68 @@ class CodexRouter < Formula
       # resolved by the interpreter at load time, so linking one on macOS needs
       # -undefined dynamic_lookup. maturin supplies that itself for some projects
       # and not others -- polars gets it, tokenizers does not, and tokenizers
-      # fails with hundreds of undefined _Py* symbols. Setting RUSTFLAGS covers
-      # the gap without fighting maturin: CARGO_ENCODED_RUSTFLAGS wins wherever
-      # maturin does set it, and non-Rust resources ignore this entirely.
-      with_env(RUSTFLAGS: "-C link-arg=-undefined -C link-arg=dynamic_lookup") do
-        venv.pip_install standard
-        # Homebrew's superenv shim strips every -O flag the caller passes and
-        # substitutes HOMEBREW_OPTIMIZATION_LEVEL. That breaks a Rust resource
-        # built through cc-rs whose vendored C insists on its own level:
-        # litellm's python-bridge pulls aws-lc-sys, whose jitterentropy refuses
-        # to compile unless optimization is off, and its deliberate -O0 never
-        # survives. Dropping "O" from HOMEBREW_CCCFG turns that rewriting off;
-        # cargo already picks correct release flags on its own.
-        #
-        # polars-runtime-32 turns on foldhash's "nightly" cargo feature, whose
-        # #![feature(hasher_prefixfree_extras)] stable rustc rejects outright
-        # (E0554). Polars publishes wheels built on a nightly toolchain and
-        # Homebrew ships only stable, so the escape hatch upstream relies on is
-        # the only way through. polars is not optional here: litellm declares it
-        # under the "proxy" extra, and the proxy is what this router runs.
-        #
-        # polars also asks for thin LTO plus debug line tables, and linking it
-        # that way needs far more scratch space than the crate itself: a machine
-        # without tens of spare gigabytes fails as an LLVM write error,
-        # surfacing only as a rustc SIGSEGV. Neither setting changes what the
-        # router does with polars, so drop both rather than require headroom.
-        with_env(
-          HOMEBREW_CCCFG: ENV.fetch("HOMEBREW_CCCFG", "").delete("O"),
-          RUSTC_BOOTSTRAP: "1",
-          CARGO_PROFILE_RELEASE_LTO: "false",
-          CARGO_PROFILE_RELEASE_DEBUG: "false",
-          CARGO_PROFILE_RELEASE_SPLIT_DEBUGINFO: "off",
-        ) do
-          venv.pip_install relaxed
-        end
+      # fails with hundreds of undefined _Py* symbols. Non-Rust resources ignore
+      # the flag, and Linux must not receive this macOS linker option.
+      ENV.append_to_rustflags "-C link-arg=-Wl,-undefined,dynamic_lookup" if OS.mac?
+      venv.pip_install standard
+      # Homebrew's superenv shim strips every -O flag the caller passes and
+      # substitutes HOMEBREW_OPTIMIZATION_LEVEL. That breaks a Rust resource
+      # built through cc-rs whose vendored C insists on its own level:
+      # litellm's python-bridge pulls aws-lc-sys, whose jitterentropy refuses
+      # to compile unless optimization is off, and its deliberate -O0 never
+      # survives. Dropping "O" from HOMEBREW_CCCFG turns that rewriting off;
+      # cargo already picks correct release flags on its own.
+      #
+      # polars-runtime-32 turns on foldhash's "nightly" cargo feature, whose
+      # #![feature(hasher_prefixfree_extras)] stable rustc rejects outright
+      # (E0554). Polars publishes wheels built on a nightly toolchain and
+      # Homebrew ships only stable, so the escape hatch upstream relies on is
+      # the only way through. polars is not optional here: litellm declares it
+      # under the "proxy" extra, and the proxy is what this router runs.
+      #
+      # polars also asks for thin LTO plus debug line tables, and linking it
+      # that way needs far more scratch space than the crate itself: a machine
+      # without tens of spare gigabytes fails as an LLVM write error,
+      # surfacing only as a rustc SIGSEGV. Neither setting changes what the
+      # router does with polars, so drop both rather than require headroom.
+      with_env(
+        HOMEBREW_CCCFG:                        ENV.fetch("HOMEBREW_CCCFG", "").delete("O"),
+        RUSTC_BOOTSTRAP:                       "1",
+        CARGO_PROFILE_RELEASE_LTO:             "false",
+        CARGO_PROFILE_RELEASE_DEBUG:           "false",
+        CARGO_PROFILE_RELEASE_SPLIT_DEBUGINFO: "off",
+      ) do
+        venv.pip_install relaxed
       end
-      system Formula["node"].opt_bin/"node", "src/install-plan.mjs", "record", "node-deps"
-      system Formula["node"].opt_bin/"node", "src/install-plan.mjs", "record", "python-deps"
+      # Older release archives predate the dependency fingerprint helper. The
+      # dependencies are already installed at this point, so those archives
+      # remain usable; newer releases record fingerprints for faster updates.
+      install_plan = libexec/"src/install-plan.mjs"
+      if install_plan.exist?
+        system formula_opt_bin("node")/"node", install_plan, "record", "node-deps"
+        system formula_opt_bin("node")/"node", install_plan, "record", "python-deps"
+      end
     end
 
     (bin/"codex-router").write <<~SH
       #!/bin/sh
-      export PATH="#{Formula['node'].opt_bin}:$PATH"
-      export CODEX_ROUTER_SOURCE_ROOT="#{opt_libexec}"
-      export CODEX_ROUTER_NODE_BIN="#{Formula['node'].opt_bin}/node"
+      source_root=$(CDPATH= cd -- "#{opt_libexec}" && pwd -P)
+      export PATH="#{formula_opt_bin("node")}:$PATH"
+      export CODEX_ROUTER_SOURCE_ROOT="$source_root"
+      export CODEX_ROUTER_NODE_BIN="#{formula_opt_bin("node")}/node"
       export CODEX_ROUTER_PACKAGE_MANAGER=homebrew
-      exec "#{opt_libexec}/bin/model-router" codex "$@"
+      exec "$source_root/bin/model-router" codex "$@"
     SH
   end
 
   def post_install
     state_root = ENV["MODEL_ROUTER_STATE_DIR"] || ENV["CODEX_ROUTER_STATE_DIR"] ||
-                 ENV["KIMI_CODEX_STATE_DIR"] || Pathname(Dir.home)/".codex/codex-router"
+                 ENV["KIMI_CODEX_STATE_DIR"] || (Pathname(Dir.home)/".codex/codex-router")
     manifest_path = Pathname(state_root)/"install-manifest.json"
     return unless manifest_path.exist?
 
     manifest = JSON.parse(manifest_path.read)
-    return unless manifest.dig("current", "packageManager") == "homebrew"
+    return if manifest.dig("current", "packageManager") != "homebrew"
 
     system bin/"codex-router", "install"
   rescue JSON::ParserError
@@ -635,8 +640,10 @@ class CodexRouter < Formula
   end
 
   test do
-    assert_match "Usage: model-router", shell_output("#{bin}/codex-router 2>&1", 2)
-    system Formula["node"].opt_bin/"node", "--input-type=module", "--eval",
+    output = shell_output("#{bin}/codex-router providers list --json")
+    assert_match '"providers":', output
+    assert_match '"anthropic-api"', output
+    system formula_opt_bin("node")/"node", "--input-type=module", "--eval",
            "import('#{libexec}/node_modules/proper-lockfile/index.js')"
     system libexec/".venv/bin/python", "-c", "import fastapi, litellm"
   end

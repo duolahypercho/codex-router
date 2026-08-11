@@ -26,6 +26,16 @@ function field(contents, name, pattern) {
   return match[1];
 }
 
+function releaseVersion(sourceUrl) {
+  const match = /\/codex-router-([^/]+)\.tar\.gz$/.exec(sourceUrl);
+  if (!match) {
+    throw new Error(
+      "The committed formula URL must end with codex-router-VERSION.tar.gz.",
+    );
+  }
+  return match[1];
+}
+
 async function main() {
   const formulaPath = path.join(sourceRoot, FORMULA_PATH);
   let committed;
@@ -40,9 +50,10 @@ async function main() {
     return;
   }
 
+  const sourceUrl = field(committed, "url", /^\s*url\s+"([^"]+)"/m);
   const regenerated = await buildFormula({
-    version: field(committed, "version", /^\s*version\s+"([^"]+)"/m),
-    sourceUrl: field(committed, "url", /^\s*url\s+"([^"]+)"/m),
+    version: releaseVersion(sourceUrl),
+    sourceUrl,
     sourceSha256: field(committed, "sha256", /^\s*sha256\s+"([a-f0-9]{64})"/m),
     pythonFormula: field(committed, "Python formula", /depends_on\s+"(python@[\d.]+)"/),
     pythonVersion: field(committed, "Python version", /depends_on\s+"python@([\d.]+)"/),

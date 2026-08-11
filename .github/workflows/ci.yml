@@ -28,7 +28,7 @@ jobs:
       - run: npm audit --omit=dev --audit-level=high
       - name: Check shell syntax
         if: runner.os != 'Windows'
-        run: for file in install.sh bin/* scripts/build-desktop-tray.sh; do [ "$(head -n 1 "$file")" != '#!/bin/sh' ] || sh -n "$file"; done
+        run: for file in install.sh bin/* scripts/build-desktop-tray.sh packaging/homebrew/check-core-readiness.sh; do [ "$(head -n 1 "$file")" != '#!/bin/sh' ] || sh -n "$file"; done
       - name: Check installer help
         if: runner.os != 'Windows'
         run: ./install.sh --help
@@ -76,6 +76,41 @@ jobs:
       - name: Verify the formula matches the Python lock
         if: steps.changed.outputs.run == 'true'
         run: node packaging/homebrew/check-formula.mjs
+      - name: Set up Homebrew
+        id: set-up-homebrew
+        if: steps.changed.outputs.run == 'true'
+        uses: Homebrew/actions/setup-homebrew@b35a29a0f83ee8b8ca07b219fc8db3d7bb88ab49 # 2026.08.10.2
+      - name: Cache Homebrew Bundler RubyGems
+        id: cache-homebrew-gems
+        if: steps.changed.outputs.run == 'true'
+        uses: actions/cache@v5
+        with:
+          path: ${{ steps.set-up-homebrew.outputs.gems-path }}
+          key: ${{ runner.os }}-rubygems-${{ steps.set-up-homebrew.outputs.gems-hash }}
+          restore-keys: ${{ runner.os }}-rubygems-
+      - name: Install Homebrew Bundler RubyGems
+        if: steps.changed.outputs.run == 'true' && steps.cache-homebrew-gems.outputs.cache-hit != 'true'
+        run: brew install-bundler-gems
+      - name: Audit the generated formula for Homebrew core
+        if: steps.changed.outputs.run == 'true'
+        run: packaging/homebrew/check-core-readiness.sh
+
+  # A complete source build is intentionally manual because LiteLLM's locked
+  # Python dependency tree is large. Run this on the candidate stable commit
+  # before opening the homebrew/core pull request.
+  homebrew-install:
+    if: github.event_name == 'workflow_dispatch'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up Homebrew
+        uses: Homebrew/actions/setup-homebrew@b35a29a0f83ee8b8ca07b219fc8db3d7bb88ab49 # 2026.08.10.2
+      - name: Build and test the formula from source
+        run: packaging/homebrew/check-core-readiness.sh --install
 
   desktop:
     strategy:
