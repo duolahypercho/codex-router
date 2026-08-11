@@ -210,6 +210,18 @@ test("both installers keep the update when setup reports exit 2", () => {
   assert.match(windows, /switch --detach \$PreviousRevision/);
 });
 
+test("broken virtual environments use the venv tools' exact-target clear mode", () => {
+  const posix = readFileSync(path.join(root, "bin", "install"), "utf8");
+  const windows = readFileSync(path.join(root, "install.ps1"), "utf8");
+
+  assert.doesNotMatch(posix, /rm\s+-rf\s+\.venv/);
+  assert.match(posix, /uv venv --clear --python 3\.12 \.venv/);
+  assert.match(posix, /python3 -m venv --clear \.venv/);
+  assert.doesNotMatch(windows, /Remove-Item\s+-Recurse.*\.venv/);
+  assert.match(windows, /uv venv --clear --python 3\.12 \.venv/);
+  assert.match(windows, /-m venv --clear \.venv/);
+});
+
 test("the kept-update message names the way back", () => {
   // Keeping the update on exit 2 is the right default, but a user who wanted
   // the old revision needs to be told the escape hatch exists; the retained
