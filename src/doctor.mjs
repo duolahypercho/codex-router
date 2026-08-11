@@ -29,6 +29,7 @@ import {
   MERGED_CATALOG_PATH,
   PORTS,
   SOURCE_ROOT,
+  TARGET,
 } from "./paths.mjs";
 import { CODEX_APP_TOOLS } from "./codex-app-tools.mjs";
 import {
@@ -469,19 +470,38 @@ add(
 // Python as the venv home leaves `.venv/bin/python` dangling) keeps the
 // launcher on disk but makes every spawn fail with a bare ENOENT. Probing
 // the interpreter turns that silent restart loop into an actionable check.
-const venvPython = path.join(
-  SOURCE_ROOT,
-  ".venv",
-  process.platform === "win32" ? "Scripts" : "bin",
-  process.platform === "win32" ? "python.exe" : "python",
-);
-const venvProblem = venvRuntimeProblem(venvPython);
+// The probe applies only to the bundled venv: a custom launcher
+// (MODEL_ROUTER_LITELLM_BIN or a codex-target alias) may deliberately ship
+// without the bundled `.venv`, and a fresh checkout has no venv until the
+// installer runs.
+const usesBundledVenv = !process.env.MODEL_ROUTER_LITELLM_BIN &&
+  !(TARGET === "codex" &&
+    (process.env.CODEX_ROUTER_LITELLM_BIN || process.env.KIMI_LITELLM_BIN));
+let venvCheck;
+if (usesBundledVenv) {
+  const venvPython = path.join(
+    SOURCE_ROOT,
+    ".venv",
+    process.platform === "win32" ? "Scripts" : "bin",
+    process.platform === "win32" ? "python.exe" : "python",
+  );
+  const venvProblem = venvRuntimeProblem(venvPython);
+  venvCheck = venvProblem
+    ? {
+        status: "fail",
+        detail: `${venvPython} cannot run (${venvProblem})`,
+      }
+    : { status: "ok", detail: `${venvPython} runs` };
+} else {
+  venvCheck = {
+    status: "ok",
+    detail: "custom LiteLLM launcher configured; bundled venv not required",
+  };
+}
 add(
-  venvProblem ? "fail" : "ok",
+  venvCheck.status,
   "LiteLLM venv runtime",
-  venvProblem
-    ? `${venvPython} cannot run (${venvProblem})`
-    : `${venvPython} runs`,
+  venvCheck.detail,
   "Run ./bin/doctor --fix; it rebuilds the virtual environment from the pinned lock.",
 );
 

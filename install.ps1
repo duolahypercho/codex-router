@@ -247,7 +247,17 @@ try {
   if ((Get-InstallStep "python-deps") -eq "skip") {
     Write-Host "LiteLLM already matches the pinned versions; skipping the Python install."
   } elseif (Get-Command "uv" -ErrorAction SilentlyContinue) {
-    if (-not (Test-Path $Python)) {
+    $VenvHomeOk = (& node src/install-plan.mjs venv-home-ok 2>$null | Select-Object -Last 1) -eq "ok"
+    if (-not (Test-Path $Python) -or -not $VenvHomeOk) {
+      # A venv whose interpreter home was cleared (macOS wipes /private/tmp,
+      # and installers that recorded a temporary Python as the venv home end
+      # up with a dangling interpreter) must be recreated, not pip-installed
+      # into: the launcher may still exist while pyvenv.cfg points at a
+      # vanished home.
+      if (Test-Path ".venv") {
+        Write-Host "The virtual environment's interpreter home is missing; recreating the venv."
+        Remove-Item -Recurse -Force ".venv"
+      }
       & uv venv --python 3.12 .venv
       if ($LASTEXITCODE -ne 0) { throw "uv could not create the Python environment." }
     }
@@ -261,6 +271,16 @@ try {
     & node src/install-plan.mjs record python-deps
     if ($LASTEXITCODE -ne 0) { throw "Recording the Python dependency state failed." }
   } else {
+    $VenvHomeOk = (& node src/install-plan.mjs venv-home-ok 2>$null | Select-Object -Last 1) -eq "ok"
+    if (-not $VenvHomeOk) {
+      # Same clearing logic as the uv branch: a venv with a vanished
+      # interpreter home must be recreated from scratch instead of installed
+      # over.
+      if (Test-Path ".venv") {
+        Write-Host "The virtual environment's interpreter home is missing; recreating the venv."
+        Remove-Item -Recurse -Force ".venv"
+      }
+    }
     if (Get-Command "py" -ErrorAction SilentlyContinue) {
       & py -3 -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)"
       if ($LASTEXITCODE -ne 0) { throw "Python 3.10 or newer is required." }

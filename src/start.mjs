@@ -40,21 +40,29 @@ if (!existsSync(litellm)) {
 // while the launcher itself is still present. Probe the interpreter
 // explicitly so a broken venv fails here with a readable message and a fix
 // path instead of feeding launchd's restart loop an unreadable crash.
-const venvPython =
-  process.env.MODEL_ROUTER_VENV_PYTHON ||
-  path.join(
+// The probe applies only to the bundled venv: a custom launcher
+// (MODEL_ROUTER_LITELLM_BIN or a codex-target alias) may deliberately ship
+// without the bundled `.venv`, and CI exercises startup with
+// MODEL_ROUTER_LITELLM_BIN=process.execPath on a fresh checkout that has no
+// venv at all.
+const usesBundledVenv = !process.env.MODEL_ROUTER_LITELLM_BIN &&
+  !(TARGET === "codex" &&
+    (process.env.CODEX_ROUTER_LITELLM_BIN || process.env.KIMI_LITELLM_BIN));
+if (usesBundledVenv) {
+  const venvPython = path.join(
     SOURCE_ROOT,
     ".venv",
     process.platform === "win32" ? "Scripts" : "bin",
     process.platform === "win32" ? "python.exe" : "python",
   );
-const venvProblem = venvRuntimeProblem(venvPython);
-if (venvProblem) {
-  throw new Error(
-    `The LiteLLM virtual environment is broken at ${venvPython} (${venvProblem}). ` +
-      `Run ./bin/doctor --fix to rebuild the virtual environment, ` +
-      `or ./bin/install --force-deps.`,
-  );
+  const venvProblem = venvRuntimeProblem(venvPython);
+  if (venvProblem) {
+    throw new Error(
+      `The LiteLLM virtual environment is broken at ${venvPython} (${venvProblem}). ` +
+        `Run ./bin/doctor --fix to rebuild the virtual environment, ` +
+        `or ./bin/install --force-deps.`,
+    );
+  }
 }
 if (!existsSync(INTERNAL_SECRET_PATH)) {
   throw new Error(`Internal service key is missing; run ./bin/install.`);
