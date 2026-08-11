@@ -117,6 +117,24 @@ test("a rebuilt virtual environment on another Python reinstalls", () => {
   }
 });
 
+test("a virtual environment whose interpreter home was cleared reinstalls", () => {
+  const root = checkout();
+  try {
+    installVenv(root);
+    recordStep("python-deps", { root });
+    // macOS wipes /private/tmp; an installer that recorded a temporary Python
+    // as the venv home leaves the interpreter dangling after reboot. The stamp
+    // must not vouch for a venv that cannot run.
+    writeFileSync(
+      path.join(root, ".venv", "pyvenv.cfg"),
+      "home = /private/tmp/codex-router-python-bin\nversion = 3.12.12\n",
+    );
+    assert.equal(stepStatus("python-deps", { root, platform: "darwin" }), "run");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("distribution lookup normalizes names and ignores extras", () => {
   const root = checkout();
   try {

@@ -16,6 +16,7 @@ import {
 } from "./paths.mjs";
 import { waitForHealth as pollHealth } from "./health-probe.mjs";
 import { writeLiteLlmConfig } from "./litellm-config.mjs";
+import { venvRuntimeProblem } from "./venv-runtime.mjs";
 
 const litellm =
   process.env.MODEL_ROUTER_LITELLM_BIN ||
@@ -30,6 +31,30 @@ const litellm =
   );
 if (!existsSync(litellm)) {
   throw new Error(`LiteLLM is not installed at ${litellm}; run ./bin/install.`);
+}
+
+// A launcher file that exists on disk is not proof the venv works: an
+// interpreter home pointing at a cleared temporary directory (macOS wipes
+// /private/tmp, and an installer that recorded a temporary Python as the venv
+// home leaves `.venv/bin/python` dangling) makes every spawn fail with ENOENT
+// while the launcher itself is still present. Probe the interpreter
+// explicitly so a broken venv fails here with a readable message and a fix
+// path instead of feeding launchd's restart loop an unreadable crash.
+const venvPython =
+  process.env.MODEL_ROUTER_VENV_PYTHON ||
+  path.join(
+    SOURCE_ROOT,
+    ".venv",
+    process.platform === "win32" ? "Scripts" : "bin",
+    process.platform === "win32" ? "python.exe" : "python",
+  );
+const venvProblem = venvRuntimeProblem(venvPython);
+if (venvProblem) {
+  throw new Error(
+    `The LiteLLM virtual environment is broken at ${venvPython} (${venvProblem}). ` +
+      `Run ./bin/doctor --fix to rebuild the virtual environment, ` +
+      `or ./bin/install --force-deps.`,
+  );
 }
 if (!existsSync(INTERNAL_SECRET_PATH)) {
   throw new Error(`Internal service key is missing; run ./bin/install.`);

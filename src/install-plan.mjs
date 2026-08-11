@@ -123,6 +123,20 @@ function venvPythonVersion(root) {
   return match ? match[1] : "unknown";
 }
 
+// The venv records the base interpreter it was created from. If that
+// directory was cleared -- macOS periodically wipes /private/tmp, and an
+// installer that recorded a temporary Python as the venv home leaves the
+// interpreter dangling after reboot -- the venv is unusable even when
+// `.venv/bin/python` still resolves through a copied binary. Treat an
+// unresolvable home as "not installed" so every install/update rebuilds it.
+function venvPythonHomeUsable(root) {
+  const config = readFile(path.join(root, ".venv", "pyvenv.cfg")) || "";
+  const match = config.match(/^\s*home\s*=\s*(.+)$/m);
+  if (!match) return true; // unknown; the interpreter probe decides
+  const home = match[1].trim();
+  return existsSync(home);
+}
+
 // The companion is one bundle per user, not one per checkout: a `dist/` target
 // inside the repository produces a separate tray for every clone and leaves
 // launchd pointing at whichever one installed last.
@@ -220,6 +234,11 @@ export const STEPS = {
         ].join("\0"),
       ),
     installed: (root, platform) => {
+      // A venv whose interpreter home was cleared (macOS wipes /private/tmp,
+      // and installers that recorded a temporary Python as the venv home end
+      // up with a dangling interpreter) must read as "not installed" so the
+      // next install/update rebuilds it instead of skipping a broken venv.
+      if (!venvPythonHomeUsable(root)) return false;
       if (!existsSync(venvPython(root, platform))) return false;
       return PYTHON_REQUIREMENTS.every((requirement) => {
         const { name, version } = requirementParts(requirement);

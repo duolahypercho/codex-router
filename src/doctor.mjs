@@ -48,6 +48,7 @@ import {
   readVisionBridgeSettings,
   visionBridgeConfigured,
 } from "./vision-bridge-state.mjs";
+import { venvRuntimeProblem } from "./venv-runtime.mjs";
 
 const checks = [];
 const add = (status, name, detail, fix) => checks.push({ status, name, detail, fix });
@@ -460,6 +461,28 @@ add(
   "Generated gateway config",
   LITELLM_CONFIG_PATH,
   "Run ./bin/doctor --fix.",
+);
+
+// The venv that runs LiteLLM can be broken while every file it needs still
+// exists: an interpreter home pointing at a cleared temporary directory
+// (macOS wipes /private/tmp, and an installer that recorded a temporary
+// Python as the venv home leaves `.venv/bin/python` dangling) keeps the
+// launcher on disk but makes every spawn fail with a bare ENOENT. Probing
+// the interpreter turns that silent restart loop into an actionable check.
+const venvPython = path.join(
+  SOURCE_ROOT,
+  ".venv",
+  process.platform === "win32" ? "Scripts" : "bin",
+  process.platform === "win32" ? "python.exe" : "python",
+);
+const venvProblem = venvRuntimeProblem(venvPython);
+add(
+  venvProblem ? "fail" : "ok",
+  "LiteLLM venv runtime",
+  venvProblem
+    ? `${venvPython} cannot run (${venvProblem})`
+    : `${venvPython} runs`,
+  "Run ./bin/doctor --fix; it rebuilds the virtual environment from the pinned lock.",
 );
 
 const secretMode = existsSync(INTERNAL_SECRET_PATH)
