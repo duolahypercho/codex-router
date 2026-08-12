@@ -78,6 +78,8 @@ struct CodexModeController {
     case missingModel
     case incompleteRouterConfiguration
     case missingManagedBlockSource
+    case unavailableRouterTarget
+    case routerModeMismatch
 
     var errorDescription: String? {
       switch self {
@@ -89,12 +91,28 @@ struct CodexModeController {
         return "The codex-router provider requires its managed configuration block."
       case .missingManagedBlockSource:
         return "Could not find the local router-managed configuration block."
+      case .unavailableRouterTarget:
+        return "Router status did not include the Codex target."
+      case .routerModeMismatch:
+        return "Router status did not confirm the selected Codex mode."
       }
     }
   }
 
   static func mode(from config: String) -> CodexMode {
     config.contains(routerProviderLine) ? .customModel : .chatGPT
+  }
+
+
+  static func verifyRouterStatus(_ status: RouterSnapshot, expected mode: CodexMode) throws {
+    guard let target = status.targets["codex"] else {
+      throw ConfigurationError.unavailableRouterTarget
+    }
+    // Custom mode is only ready after the Codex target is live; ChatGPT mode
+    // must have released that target. A zero-exit stale status is not success.
+    guard target.active == (mode == .customModel) else {
+      throw ConfigurationError.routerModeMismatch
+    }
   }
 
   static func replacingRouterBlock(in config: String, enabled: Bool) throws -> String {
@@ -535,7 +553,9 @@ final class RouterStore: ObservableObject {
       guard CodexModeController.mode(from: written) == mode else {
         throw RouterError("Codex configuration did not retain the selected mode.")
       }
-      _ = try await runControl(arguments: ["--json"])
+      let statusOutput = try await runControl(arguments: ["--json"])
+      let routerStatus = try JSONDecoder().decode(RouterSnapshot.self, from: statusOutput)
+      try CodexModeController.verifyRouterStatus(routerStatus, expected: mode)
       codexMode = mode
       await refresh()
       message = mode == .customModel

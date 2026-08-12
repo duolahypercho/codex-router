@@ -44,6 +44,14 @@ final class ModeConfigurationTests: XCTestCase {
     XCTAssertTrue(result.contains("# BEGIN codex-router-managed"))
   }
 
+  func testRouterStatusMismatchIsRejectedBeforeSuccess() throws {
+    let data = Data(#"{"targets":{"codex":{"target":"codex","configured":true,"active":false,"enabledProviders":[],"models":[]}}}"#.utf8)
+    let status = try JSONDecoder().decode(RouterSnapshot.self, from: data)
+    XCTAssertThrowsError(
+      try CodexModeController.verifyRouterStatus(status, expected: .customModel)
+    )
+  }
+
   func testInvalidEnabledConfigurationIsRejectedBeforeReplacement() throws {
     XCTAssertThrowsError(
       try CodexModeController.validated("model_provider = \"codex-router\"\n")
