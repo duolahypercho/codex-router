@@ -3,13 +3,13 @@
 <plist version="1.0">
 <dict>
   <key>CFBundleDisplayName</key>
-  <string>Model Router</string>
+  <string>Open Router Model Router</string>
   <key>CFBundleExecutable</key>
   <string>ModelRouterTray</string>
   <key>CFBundleIdentifier</key>
   <string>io.github.codex-router.tray</string>
   <key>CFBundleName</key>
-  <string>Model Router</string>
+  <string>Open Router Model Router</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>

@@ -790,12 +790,12 @@ final class RouterStore: ObservableObject {
 
   var selectedUsageText: String? {
     if selectedUsageUsesChatGPT {
-      guard let primary = accountUsage?.primary else { return nil }
-      return "\(primary.remainingPercent)% left"
+      guard let weekly = accountUsage?.weeklyWindow else { return "Unavailable" }
+      return "\(weekly.remainingPercent)% left"
     }
     guard providerUsage != nil else { return nil }
     if let metric = selectedAccountMetric { return formattedAccountMetric(metric) }
-    return localUsageSummary(for: selectedUsageProviderID, days: 7)
+    return "Unavailable"
   }
 
   var selectedUsageUsesChatGPT: Bool {
@@ -815,7 +815,7 @@ final class RouterStore: ObservableObject {
   }
 
   var selectedUsageResetDate: Date? {
-    if selectedUsageUsesChatGPT { return accountUsage?.primary?.resetDate }
+    if selectedUsageUsesChatGPT { return accountUsage?.weeklyWindow?.resetDate }
     return selectedAccountMetric?.resetDate
   }
 
@@ -958,72 +958,63 @@ final class RouterStore: ObservableObject {
 
   func usageCards(for provider: UsageProviderChoice) -> [UsageOverviewCard] {
     if provider.id == "openai" {
-      var cards: [UsageOverviewCard] = []
-      if let primary = accountUsage?.primary {
-        cards.append(
-          UsageOverviewCard(
-            id: "openai-primary",
-            provider: provider,
-            metric: nil,
-            kindLabel: primary.durationLabel,
-            remainingPercent: Double(primary.remainingPercent),
-            resetDate: primary.resetDate
-          )
-        )
-      } else {
-        cards.append(
-          UsageOverviewCard(
-            id: "openai-primary",
-            provider: provider,
-            metric: nil,
-            kindLabel: nil,
-            remainingPercent: nil,
-            resetDate: nil
-          )
-        )
-      }
-      if let secondary = accountUsage?.secondary {
-        cards.append(
-          UsageOverviewCard(
-            id: "openai-secondary",
-            provider: provider,
-            metric: nil,
-            kindLabel: secondary.durationLabel,
-            remainingPercent: Double(secondary.remainingPercent),
-            resetDate: secondary.resetDate
-          )
-        )
-      }
-      return cards
-    }
-
-    let metrics = providerUsage(for: provider.id)?.account.metrics ?? []
-    if !metrics.isEmpty {
-      return metrics.enumerated().map { index, metric in
-        let kindLabel = metric.kind == "quota"
-          ? standardizedLimitLabel(metric.label)
-          : metric.label
-        return UsageOverviewCard(
-          id: "\(provider.id)-metric-\(index)",
+      let weekly = accountUsage?.weeklyWindow
+      return [
+        UsageOverviewCard(
+          id: "openai-weekly",
           provider: provider,
-          metric: metric,
-          kindLabel: kindLabel,
-          remainingPercent: metric.remainingPercent,
-          resetDate: metric.resetDate
+          metric: nil,
+          kindLabel: "Weekly",
+          remainingPercent: weekly.map { Double($0.remainingPercent) },
+          resetDate: weekly?.resetDate,
+          status: weekly == nil ? .unavailable : .available,
+          message: weekly == nil ? "ChatGPT did not report a weekly usage window." : nil
+        )
+      ]
+    }
+
+    let account = providerUsage(for: provider.id)?.account
+    let metrics = account?.metrics ?? []
+    if provider.id == "opencode-go" {
+      return UsageCardMapper.openCodeCards(metrics: metrics, unavailableMessage: account?.message).map { card in
+        UsageOverviewCard(
+          id: "\(provider.id)-\(card.title.lowercased())",
+          provider: provider,
+          metric: card.metric,
+          kindLabel: card.title,
+          remainingPercent: card.metric?.remainingPercent,
+          resetDate: card.metric?.resetDate,
+          status: card.status,
+          message: card.message
         )
       }
     }
 
-    return [
-      UsageOverviewCard(
-        id: "\(provider.id)-local",
+    guard !metrics.isEmpty else {
+      return [UsageOverviewCard(
+        id: "\(provider.id)-unavailable",
         provider: provider,
         metric: nil,
-        kindLabel: nil,
+        kindLabel: "Usage limit",
         remainingPercent: nil,
-        resetDate: nil
+        resetDate: nil,
+        status: .unavailable,
+        message: account?.message
+      )]
+    }
+    return metrics.enumerated().map { index, metric in
+      let kindLabel = metric.kind == "quota" ? standardizedLimitLabel(metric.label) : metric.label
+      return UsageOverviewCard(
+        id: "\(provider.id)-metric-\(index)",
+        provider: provider,
+        metric: metric,
+        kindLabel: kindLabel,
+        remainingPercent: metric.remainingPercent,
+        resetDate: metric.resetDate,
+        status: metric.available == false ? .unavailable : .available,
+        message: metric.available == false ? (metric.detail ?? account?.message) : nil
       )
-    ]
+    }
   }
 
   func providerUsage(for providerID: String) -> RouterProviderUsage? {
@@ -2066,6 +2057,11 @@ struct CodexAccountUsage: Decodable, Equatable {
   let dailyUsageBuckets: [CodexDailyUsageBucket]
   let summary: CodexUsageSummary
 
+  var weeklyWindow: CodexRateLimitWindow? {
+    guard secondary?.isWeekly == true else { return nil }
+    return secondary
+  }
+
   static func == (lhs: CodexAccountUsage, rhs: CodexAccountUsage) -> Bool {
     lhs.planType == rhs.planType
       && lhs.limitId == rhs.limitId
@@ -2083,6 +2079,8 @@ struct CodexRateLimitWindow: Decodable, Equatable {
   let resetsAt: TimeInterval?
 
   var resetDate: Date? { resetsAt.map(Date.init(timeIntervalSince1970:)) }
+
+  var isWeekly: Bool { windowDurationMins == 7 * 24 * 60 }
 
   var durationLabel: String {
     guard let minutes = windowDurationMins else { return "Current limit" }
@@ -2179,6 +2177,8 @@ struct ProviderAccountUsage: Decodable, Equatable {
 struct ProviderAccountMetric: Decodable, Equatable {
   let kind: String
   let label: String
+  let window: String?
+  let name: String?
   let usedPercent: Double?
   let remainingPercent: Double?
   let used: Double?
@@ -2483,6 +2483,41 @@ struct DesktopQuotaRow: Identifiable {
   let resetAt: TimeInterval?
 }
 
+enum UsageCardStatus: Equatable {
+  case available
+  case unavailable
+}
+
+struct UsageCardMapper {
+  struct Card: Equatable {
+    let title: String
+    let metric: ProviderAccountMetric?
+    let status: UsageCardStatus
+    let message: String?
+  }
+
+  static func openCodeCards(metrics: [ProviderAccountMetric], unavailableMessage: String? = nil) -> [Card] {
+    ["Rolling", "Weekly", "Monthly"].map { title in
+      let metric = metrics.first { matches($0, title: title) }
+      return Card(
+        title: title,
+        metric: metric,
+        status: metric == nil || metric?.available == false ? .unavailable : .available,
+        message: metric == nil ? unavailableMessage : (metric?.available == false ? metric?.detail : nil)
+      )
+    }
+  }
+
+  private static func matches(_ metric: ProviderAccountMetric, title: String) -> Bool {
+    let label = [metric.label, metric.window, metric.name]
+      .compactMap { $0 }
+      .joined(separator: " ")
+      .lowercased()
+      .filter { $0.isLetter || $0.isNumber }
+    return label.contains(title.lowercased())
+  }
+}
+
 struct UsageOverviewCard: Identifiable {
   let id: String
   let provider: UsageProviderChoice
@@ -2490,9 +2525,11 @@ struct UsageOverviewCard: Identifiable {
   let kindLabel: String?
   let remainingPercent: Double?
   let resetDate: Date?
+  let status: UsageCardStatus
+  let message: String?
 
   var providerID: String { provider.id }
-  var title: String { provider.displayName }
+  var title: String { "\(provider.displayName) · \(kindLabel ?? "Usage")" }
 }
 
 struct ProviderSetupSnapshot: Decodable {
@@ -2624,7 +2661,7 @@ private struct TrayView: View {
   private var header: some View {
     HStack(alignment: .center, spacing: 12) {
       VStack(alignment: .leading, spacing: 3) {
-        Text("Model Router")
+        Text("Open Router Model Router")
           .font(.system(size: 15, weight: .semibold))
         Text(accountLabel)
           .font(.system(size: 10, weight: .regular))
@@ -5012,6 +5049,7 @@ private struct CurrentUsageLimitCard: View {
   }
 
   private var metricText: String {
+    if card.status == .unavailable { return "Unavailable" }
     if let metric = card.metric { return formattedAccountMetric(metric) }
     guard let remaining = card.remainingPercent else { return "—" }
     return "\(Int(remaining.rounded()))% left"
@@ -5203,6 +5241,7 @@ private struct AllProviderUsageCard: View {
 
   private var metricText: String {
     if oauthNeedsReconnect { return "Reconnect" }
+    if card.status == .unavailable { return "Unavailable" }
     if let metric = card.metric { return formattedAccountMetric(metric) }
     if let remaining = card.remainingPercent {
       return "\(Int(remaining.rounded()))% left"
@@ -5213,6 +5252,7 @@ private struct AllProviderUsageCard: View {
 
   private var detailText: String {
     if oauthNeedsReconnect { return "OAuth expired · reconnect below" }
+    if card.status == .unavailable { return card.message ?? "Quota data is unavailable" }
     if let kindLabel = card.kindLabel {
       return kindLabel
     }
@@ -5234,6 +5274,7 @@ private struct AllProviderUsageCard: View {
 
   private var footerText: String {
     if oauthNeedsReconnect { return "Sign in again to restore quota" }
+    if card.status == .unavailable { return "No reset reported" }
     if let reset = card.resetDate {
       return usageResetCaption(reset)
     }

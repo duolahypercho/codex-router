@@ -81,3 +81,11 @@ final class ModeConfigurationTests: XCTestCase {
     XCTAssertThrowsError(try CodexModeController.validated(input))
   }
 }
+
+final class UsageCardMapperTests: XCTestCase {
+  func testOpenCodeUsageCardsUseUnavailableForMissingMetrics() {
+    let cards = UsageCardMapper.openCodeCards(metrics: [])
+    XCTAssertEqual(cards.map(\.title), ["Rolling", "Weekly", "Monthly"])
+    XCTAssertTrue(cards.allSatisfy { $0.status == .unavailable })
+  }
+}
