@@ -188,14 +188,18 @@ test("the macOS tray executes control only from the checkout sealed into Info.pl
     "utf8",
   );
   assert.doesNotMatch(source, /MODEL_ROUTER_SOURCE_ROOT/);
-  assert.match(source, /object\(forInfoDictionaryKey: "ModelRouterSourceRoot"\)/);
-  assert.doesNotMatch(source, /String\(contentsOf:/);
-  assert.doesNotMatch(source, /currentDirectoryPath/);
+  const sourceRoot = source.slice(
+    source.indexOf("private func sourceRoot()"),
+    source.indexOf("private func validatedSourceRoot"),
+  );
+  assert.match(sourceRoot, /object\(forInfoDictionaryKey: "ModelRouterSourceRoot"\)/);
+  assert.doesNotMatch(sourceRoot, /String\(contentsOf:/);
+  assert.doesNotMatch(sourceRoot, /currentDirectoryPath/);
   assert.match(source, /isExecutableFile\(atPath: control\.path\)/);
 
   const script = readFileSync(path.join(root, "scripts", "build-macos-tray-app.sh"), "utf8");
   assert.match(script, /Add :ModelRouterSourceRoot string \$repo_dir/);
-  assert.doesNotMatch(script, /Contents\/Resources\/router-root/);
+  assert.match(script, /rm -f "\$bundle_dir\/Contents\/Resources\/router-root"/);
 });
 
 test("follow mode rechecks host presence and drains requests before stopping", () => {

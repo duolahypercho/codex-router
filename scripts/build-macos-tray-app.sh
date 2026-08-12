@@ -18,6 +18,11 @@ swift build -c "$configuration" --package-path "$tray_dir" 1>&2
 mkdir -p "$bundle_dir/Contents/MacOS" "$bundle_dir/Contents/Resources"
 cp "$binary_dir/ModelRouterTray" "$bundle_dir/Contents/MacOS/ModelRouterTray"
 cp "$tray_dir/Resources/Info.plist" "$bundle_dir/Contents/Info.plist"
+# Older desktop-package builds stored this checkout pointer in a loose resource
+# instead of the Info.plist that RouterStore reads. Do not carry that stale
+# resource forward when rebuilding an existing bundle: the plist below is the
+# sole, signed source-root contract for the macOS tray.
+rm -f "$bundle_dir/Contents/Resources/router-root"
 if [ -d "$binary_dir/ModelRouterTray_ModelRouterTray.bundle" ]; then
   rm -rf "$bundle_dir/Contents/Resources/ModelRouterTray_ModelRouterTray.bundle" \
     "$bundle_dir/ModelRouterTray_ModelRouterTray.bundle"
