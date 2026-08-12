@@ -104,13 +104,20 @@ struct CodexModeController {
   }
 
 
-  static func verifyRouterStatus(_ status: RouterSnapshot, expected mode: CodexMode) throws {
-    guard let target = status.targets["codex"] else {
+  static func verifyRouterStatus(
+    _ status: RouterSnapshot,
+    serviceStatus: RouterServiceStatus,
+    expected mode: CodexMode
+  ) throws {
+    guard let target = status.targets["codex"], target.target == "codex" else {
       throw ConfigurationError.unavailableRouterTarget
     }
-    // Custom mode is only ready after the Codex target is live; ChatGPT mode
-    // must have released that target. A zero-exit stale status is not success.
-    guard target.active == (mode == .customModel) else {
+    // `active` means the LaunchAgent is installed or loaded, so an intentionally
+    // stopped service still reports active. Check the service state separately.
+    let serviceIsRunning = serviceStatus.state != "stopped"
+    guard serviceIsRunning == (mode == .customModel),
+          mode != .customModel || target.active
+    else {
       throw ConfigurationError.routerModeMismatch
     }
   }
@@ -539,13 +546,15 @@ final class RouterStore: ObservableObject {
       failedAction = "write Codex configuration"
       try atomicallyReplaceCodexConfig(at: configURL, with: Data(replacement.utf8))
 
-      failedAction = mode == .customModel ? "start the router service" : "disable router mode"
+      failedAction = mode == .customModel ? "start the router service" : "stop router mode"
       if mode == .customModel {
         _ = try await runControl(arguments: ["service", "start"])
         failedAction = "apply router mode to Codex"
         _ = try await runControl(arguments: ["apply", "--targets", "codex", "--activate"])
       } else {
-        _ = try await runControl(arguments: ["disable"])
+        // Keep the launch agent installed so the tray remains available; stop
+        // the router process with the supported service command instead.
+        _ = try await runControl(arguments: ["service", "stop"])
       }
 
       failedAction = "verify the selected mode"
@@ -555,7 +564,10 @@ final class RouterStore: ObservableObject {
       }
       let statusOutput = try await runControl(arguments: ["--json"])
       let routerStatus = try JSONDecoder().decode(RouterSnapshot.self, from: statusOutput)
-      try CodexModeController.verifyRouterStatus(routerStatus, expected: mode)
+      let serviceOutput = try await runControl(arguments: ["service", "status"])
+      let serviceStatus = try JSONDecoder().decode(RouterServiceStatus.self, from: serviceOutput)
+      try CodexModeController.verifyRouterStatus(
+        routerStatus, serviceStatus: serviceStatus, expected: mode)
       codexMode = mode
       await refresh()
       message = mode == .customModel
@@ -2021,6 +2033,13 @@ private struct RouterError: LocalizedError {
 struct RouterSnapshot: Decodable {
   let targets: [String: RouterTarget]
   static let empty = RouterSnapshot(targets: [:])
+}
+
+
+struct RouterServiceStatus: Decodable {
+  let installed: Bool
+  let loaded: Bool
+  let state: String
 }
 
 enum UsageRange: Int, CaseIterable, Identifiable {

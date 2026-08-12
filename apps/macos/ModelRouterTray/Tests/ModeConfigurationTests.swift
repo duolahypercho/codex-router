@@ -45,10 +45,22 @@ final class ModeConfigurationTests: XCTestCase {
   }
 
   func testRouterStatusMismatchIsRejectedBeforeSuccess() throws {
-    let data = Data(#"{"targets":{"codex":{"target":"codex","configured":true,"active":false,"enabledProviders":[],"models":[]}}}"#.utf8)
+    let data = Data(#"{"targets":{"codex":{"target":"codex","configured":true,"active":true,"enabledProviders":[],"models":[]}}}"#.utf8)
     let status = try JSONDecoder().decode(RouterSnapshot.self, from: data)
+    let stoppedService = RouterServiceStatus(installed: true, loaded: false, state: "stopped")
     XCTAssertThrowsError(
-      try CodexModeController.verifyRouterStatus(status, expected: .customModel)
+      try CodexModeController.verifyRouterStatus(
+        status, serviceStatus: stoppedService, expected: .customModel)
+    )
+  }
+
+  func testStoppedServiceConfirmsChatGPTMode() throws {
+    let data = Data(#"{"targets":{"codex":{"target":"codex","configured":true,"active":true,"enabledProviders":[],"models":[]}}}"#.utf8)
+    let status = try JSONDecoder().decode(RouterSnapshot.self, from: data)
+    let stoppedService = RouterServiceStatus(installed: true, loaded: false, state: "stopped")
+    XCTAssertNoThrow(
+      try CodexModeController.verifyRouterStatus(
+        status, serviceStatus: stoppedService, expected: .chatGPT)
     )
   }
 
