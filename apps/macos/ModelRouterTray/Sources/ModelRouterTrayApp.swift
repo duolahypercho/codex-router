@@ -56,6 +56,152 @@ enum RouterActivityState: String, Decodable {
   }
 }
 
+
+enum CodexMode: String {
+  case customModel
+  case chatGPT
+}
+
+struct CodexModeController {
+  private static let routerProviderLine = "model_provider = \"codex-router\""
+  private static let managedBlockBegin = "# BEGIN codex-router-managed"
+  private static let managedBlockEnd = "# END codex-router-managed"
+  private static let flashSubagentLine = "default_subagent_model = \"opencode-go/deepseek-v4-flash\""
+
+  enum ConfigurationError: LocalizedError {
+    case duplicateManagedBlock
+    case missingModel
+    case incompleteRouterConfiguration
+    case missingManagedBlockSource
+
+    var errorDescription: String? {
+      switch self {
+      case .duplicateManagedBlock:
+        return "Codex configuration contains duplicate router-managed blocks."
+      case .missingModel:
+        return "Codex configuration must include a model setting."
+      case .incompleteRouterConfiguration:
+        return "The codex-router provider requires its managed configuration block."
+      case .missingManagedBlockSource:
+        return "Could not find the local router-managed configuration block."
+      }
+    }
+  }
+
+  static func mode(from config: String) -> CodexMode {
+    config.contains(routerProviderLine) ? .customModel : .chatGPT
+  }
+
+  static func replacingRouterBlock(in config: String, enabled: Bool) throws -> String {
+    try validated(config)
+
+    var result = removeManagedBlock(from: config)
+    result = removeRouterProvider(from: result)
+
+    guard enabled else { return normalize(result) }
+
+    result = replaceSubagentModel(in: result)
+    let managedBlock = try managedBlockFromLocalConfiguration()
+    result = normalize(result)
+    if !result.isEmpty { result += "\n" }
+    result += routerProviderLine + "\n" + managedBlock
+    try validated(result)
+    return normalize(result)
+  }
+
+  static func validated(_ config: String) throws {
+    let begins = config.components(separatedBy: managedBlockBegin).count - 1
+    let ends = config.components(separatedBy: managedBlockEnd).count - 1
+    guard begins <= 1, ends <= 1, begins == ends else {
+      throw ConfigurationError.duplicateManagedBlock
+    }
+    guard containsSetting(named: "model", in: config) else {
+      throw ConfigurationError.missingModel
+    }
+    if mode(from: config) == .customModel && begins != 1 {
+      throw ConfigurationError.incompleteRouterConfiguration
+    }
+  }
+
+  private static func removeManagedBlock(from config: String) -> String {
+    guard let begin = config.range(of: managedBlockBegin),
+          let end = config.range(of: managedBlockEnd, range: begin.upperBound..<config.endIndex)
+    else { return config }
+
+    var lowerBound = begin.lowerBound
+    if lowerBound > config.startIndex,
+       config[config.index(before: lowerBound)] == "\n" {
+      lowerBound = config.index(before: lowerBound)
+    }
+    var upperBound = end.upperBound
+    if upperBound < config.endIndex, config[upperBound] == "\n" {
+      upperBound = config.index(after: upperBound)
+    }
+    var result = config
+    result.removeSubrange(lowerBound..<upperBound)
+    return result
+  }
+
+  private static func removeRouterProvider(from config: String) -> String {
+    config
+      .split(separator: "\n", omittingEmptySubsequences: false)
+      .filter { line in line.trimmingCharacters(in: .whitespaces) != routerProviderLine }
+      .joined(separator: "\n")
+  }
+
+  private static func replaceSubagentModel(in config: String) -> String {
+    let lines = config.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+    var replaced = false
+    let result = lines.map { line -> String in
+      guard line.trimmingCharacters(in: .whitespaces).hasPrefix("default_subagent_model =") else {
+        return line
+      }
+      replaced = true
+      return flashSubagentLine
+    }
+    return replaced ? result.joined(separator: "\n") : config + (config.hasSuffix("\n") ? "" : "\n") + flashSubagentLine
+  }
+
+  private static func containsSetting(named name: String, in config: String) -> Bool {
+    config.split(separator: "\n", omittingEmptySubsequences: false).contains { line in
+      line.trimmingCharacters(in: .whitespaces).hasPrefix("\(name) =")
+    }
+  }
+
+  private static func managedBlockFromLocalConfiguration() throws -> String {
+    let fileManager = FileManager.default
+    let codexDirectory = fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".codex")
+    let filenames = (try? fileManager.contentsOfDirectory(atPath: codexDirectory.path)) ?? []
+    let candidates = filenames
+      .filter { $0 == "config.toml" || $0.hasPrefix("config.toml.router-disabled-backup-") }
+      .sorted(by: >)
+      .map { codexDirectory.appendingPathComponent($0) }
+
+    for candidate in candidates {
+      guard let configuration = try? String(contentsOf: candidate, encoding: .utf8),
+            let block = extractManagedBlock(from: configuration)
+      else { continue }
+      return block
+    }
+    throw ConfigurationError.missingManagedBlockSource
+  }
+
+  private static func extractManagedBlock(from config: String) -> String? {
+    guard let begin = config.range(of: managedBlockBegin),
+          let end = config.range(of: managedBlockEnd, range: begin.upperBound..<config.endIndex)
+    else { return nil }
+    return String(config[begin.lowerBound...end.upperBound])
+  }
+
+  private static func normalize(_ config: String) -> String {
+    config
+      .split(separator: "\n", omittingEmptySubsequences: false)
+      .drop { $0.isEmpty }
+      .joined(separator: "\n")
+      .trimmingCharacters(in: .newlines) + "\n"
+  }
+}
+
 @main
 struct ModelRouterTrayApp: App {
   @NSApplicationDelegateAdaptor private var appDelegate: AppDelegate
