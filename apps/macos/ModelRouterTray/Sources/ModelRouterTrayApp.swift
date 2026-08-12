@@ -67,6 +67,11 @@ struct CodexModeController {
   private static let managedBlockBegin = "# BEGIN codex-router-managed"
   private static let managedBlockEnd = "# END codex-router-managed"
   private static let flashSubagentLine = "default_subagent_model = \"opencode-go/deepseek-v4-flash\""
+  private static let nativeSubagentLine = "default_subagent_model = \"gpt-5.6-luna\""
+
+  // Tests inject a non-sensitive fixture. Production leaves this nil and reads
+  // the router's authenticated local configuration at the point of use.
+  static var managedBlockSource: (() throws -> String)?
 
   enum ConfigurationError: LocalizedError {
     case duplicateManagedBlock
@@ -98,10 +103,12 @@ struct CodexModeController {
     var result = removeManagedBlock(from: config)
     result = removeRouterProvider(from: result)
 
-    guard enabled else { return normalize(result) }
+    guard enabled else {
+      return normalize(replaceSubagentModel(in: result, with: nativeSubagentLine))
+    }
 
-    result = replaceSubagentModel(in: result)
-    let managedBlock = try managedBlockFromLocalConfiguration()
+    result = replaceSubagentModel(in: result, with: flashSubagentLine)
+    let managedBlock = try (managedBlockSource?() ?? managedBlockFromLocalConfiguration())
     result = normalize(result)
     if !result.isEmpty { result += "\n" }
     result += routerProviderLine + "\n" + managedBlock
@@ -118,8 +125,14 @@ struct CodexModeController {
     guard containsSetting(named: "model", in: config) else {
       throw ConfigurationError.missingModel
     }
-    if mode(from: config) == .customModel && begins != 1 {
-      throw ConfigurationError.incompleteRouterConfiguration
+    if mode(from: config) == .customModel {
+      guard begins == 1,
+            let block = extractManagedBlock(from: config),
+            containsNonEmptySetting(named: "openai_base_url", in: block),
+            containsNonEmptySetting(named: "model_catalog_json", in: block)
+      else {
+        throw ConfigurationError.incompleteRouterConfiguration
+      }
     }
   }
 
@@ -149,7 +162,7 @@ struct CodexModeController {
       .joined(separator: "\n")
   }
 
-  private static func replaceSubagentModel(in config: String) -> String {
+  private static func replaceSubagentModel(in config: String, with replacement: String) -> String {
     let lines = config.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
     var replaced = false
     let result = lines.map { line -> String in
@@ -157,14 +170,24 @@ struct CodexModeController {
         return line
       }
       replaced = true
-      return flashSubagentLine
+      return replacement
     }
-    return replaced ? result.joined(separator: "\n") : config + (config.hasSuffix("\n") ? "" : "\n") + flashSubagentLine
+    return replaced ? result.joined(separator: "\n") : config + (config.hasSuffix("\n") ? "" : "\n") + replacement
   }
 
   private static func containsSetting(named name: String, in config: String) -> Bool {
     config.split(separator: "\n", omittingEmptySubsequences: false).contains { line in
       line.trimmingCharacters(in: .whitespaces).hasPrefix("\(name) =")
+    }
+  }
+
+  private static func containsNonEmptySetting(named name: String, in config: String) -> Bool {
+    config.split(separator: "\n", omittingEmptySubsequences: false).contains { line in
+      let trimmed = line.trimmingCharacters(in: .whitespaces)
+      let prefix = "\(name) ="
+      guard trimmed.hasPrefix(prefix) else { return false }
+      let value = trimmed.dropFirst(prefix.count).trimmingCharacters(in: .whitespaces)
+      return value.count > 2 && value.first == "\"" && value.last == "\""
     }
   }
 
