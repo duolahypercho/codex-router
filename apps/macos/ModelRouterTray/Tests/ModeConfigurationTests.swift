@@ -44,6 +44,12 @@ final class ModeConfigurationTests: XCTestCase {
     XCTAssertTrue(result.contains("# BEGIN codex-router-managed"))
   }
 
+  func testInvalidEnabledConfigurationIsRejectedBeforeReplacement() throws {
+    XCTAssertThrowsError(
+      try CodexModeController.validated("model_provider = \"codex-router\"\n")
+    )
+  }
+
   func testValidationRejectsRouterProviderWithoutMeaningfulManagedEntries() {
     let input = """
     model = "gpt-5.6-sol"

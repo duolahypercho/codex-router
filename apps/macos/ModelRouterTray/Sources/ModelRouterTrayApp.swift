@@ -306,6 +306,8 @@ final class RouterStore: ObservableObject {
   @Published private(set) var presenceMode: TrayPresenceMode
   @Published private(set) var hostAppRunning = false
   @Published private(set) var surfacesVisible = true
+  @Published private(set) var codexMode: CodexMode
+  @Published private(set) var modeOperation: String?
 
   private var polling = false
   private var activityPolling = false
@@ -384,6 +386,15 @@ final class RouterStore: ObservableObject {
 
   init() {
     selectedUsageProviderID = "openai"
+    // Keep the switch read-only until a mode change is explicitly requested.
+    // A missing or unreadable config is treated as native ChatGPT mode.
+    let configURL = FileManager.default.homeDirectoryForCurrentUser
+      .appendingPathComponent(".codex/config.toml")
+    if let config = try? String(contentsOf: configURL, encoding: .utf8) {
+      codexMode = CodexModeController.mode(from: config)
+    } else {
+      codexMode = .chatGPT
+    }
     if let raw = defaults.string(forKey: islandModeKey), let mode = IslandMode(rawValue: raw) {
       islandMode = mode
     } else if defaults.object(forKey: islandVisibilityKey) == nil {
@@ -476,6 +487,104 @@ final class RouterStore: ObservableObject {
     // button into a full repair.
     persistPresenceMode(mode)
     reconcileService()
+  }
+
+
+  /// Switches only the router-owned portion of Codex configuration. The original
+  /// file is copied before any mutation so native ChatGPT credentials remain
+  /// untouched and every failed transition can be restored atomically.
+  func setCodexMode(_ mode: CodexMode) async {
+    guard modeOperation == nil, mode != codexMode else { return }
+    modeOperation = mode == .customModel ? "Enabling custom model mode" : "Restoring ChatGPT mode"
+    defer { modeOperation = nil }
+
+    let fileManager = FileManager.default
+    let codexDirectory = fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".codex")
+    let configURL = codexDirectory.appendingPathComponent("config.toml")
+    var snapshot: Data?
+    var failedAction = "read Codex configuration"
+
+    do {
+      let original = try String(contentsOf: configURL, encoding: .utf8)
+      snapshot = Data(original.utf8)
+      let backupDirectory = codexDirectory.appendingPathComponent("router-mode-backups", isDirectory: true)
+      try fileManager.createDirectory(at: backupDirectory, withIntermediateDirectories: true)
+      let timestamp = Self.modeBackupTimestamp.string(from: .now)
+      let backupURL = backupDirectory.appendingPathComponent("config.toml.\(timestamp)-\(UUID().uuidString).toml")
+      try snapshot!.write(to: backupURL, options: .atomic)
+      try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: backupURL.path)
+
+      failedAction = "prepare the selected configuration"
+      let replacement = try CodexModeController.replacingRouterBlock(in: original, enabled: mode == .customModel)
+      try CodexModeController.validated(replacement)
+
+      failedAction = "write Codex configuration"
+      try atomicallyReplaceCodexConfig(at: configURL, with: Data(replacement.utf8))
+
+      failedAction = mode == .customModel ? "start the router service" : "disable router mode"
+      if mode == .customModel {
+        _ = try await runControl(arguments: ["service", "start"])
+        failedAction = "apply router mode to Codex"
+        _ = try await runControl(arguments: ["apply", "--targets", "codex", "--activate"])
+      } else {
+        _ = try await runControl(arguments: ["disable"])
+      }
+
+      failedAction = "verify the selected mode"
+      let written = try String(contentsOf: configURL, encoding: .utf8)
+      guard CodexModeController.mode(from: written) == mode else {
+        throw RouterError("Codex configuration did not retain the selected mode.")
+      }
+      _ = try await runControl(arguments: ["--json"])
+      codexMode = mode
+      await refresh()
+      message = mode == .customModel
+        ? "Custom model mode enabled. Fully quit and reopen Codex when ready."
+        : "ChatGPT mode restored. Fully quit and reopen Codex when ready."
+    } catch {
+      let transitionError = error
+      if let snapshot {
+        do {
+          try atomicallyReplaceCodexConfig(at: configURL, with: snapshot)
+          if let restored = try? String(contentsOf: configURL, encoding: .utf8) {
+            codexMode = CodexModeController.mode(from: restored)
+          }
+          if codexMode == .customModel {
+            _ = try? await runControl(arguments: ["service", "start"])
+          }
+        } catch {
+          message = "Failed to \(failedAction): \(transitionError.localizedDescription). Could not restore the original Codex configuration: \(error.localizedDescription)"
+          await refresh()
+          return
+        }
+      }
+      await refresh()
+      message = snapshot == nil
+        ? "Failed to \(failedAction): \(transitionError.localizedDescription). No Codex configuration was changed."
+        : "Failed to \(failedAction): \(transitionError.localizedDescription). Original Codex configuration was restored."
+    }
+  }
+
+  private static let modeBackupTimestamp: DateFormatter = {
+    let formatter = DateFormatter()
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.calendar = Calendar(identifier: .gregorian)
+    formatter.timeZone = TimeZone(secondsFromGMT: 0)
+    formatter.dateFormat = "yyyyMMdd-HHmmss"
+    return formatter
+  }()
+
+  private func atomicallyReplaceCodexConfig(at destination: URL, with data: Data) throws {
+    let temporary = destination.deletingLastPathComponent()
+      .appendingPathComponent(".config.toml.router-mode-\(UUID().uuidString)")
+    do {
+      try data.write(to: temporary, options: .atomic)
+      try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: temporary.path)
+      _ = try FileManager.default.replaceItemAt(destination, withItemAt: temporary)
+    } catch {
+      try? FileManager.default.removeItem(at: temporary)
+      throw error
+    }
   }
 
   private func refreshHostAppRunning() {
@@ -2687,6 +2796,26 @@ private struct TrayView: View {
 
   @ViewBuilder
   private func settingsTab(for target: RouterTarget) -> some View {
+    settingRow(
+      title: "Custom Model / Orchestrator Mode",
+      detail: store.codexMode == .customModel
+        ? "Sol routes connected specialist models"
+        : "Normal ChatGPT models only",
+      isOn: Binding(
+        get: { store.codexMode == .customModel },
+        set: { isOn in Task { await store.setCodexMode(isOn ? .customModel : .chatGPT) } }
+      ),
+      isDisabled: store.modeOperation != nil
+    )
+    if store.modeOperation != nil {
+      HStack(spacing: 6) {
+        ProgressView().controlSize(.small)
+        Text(store.modeOperation ?? "Switching mode…")
+          .font(.system(size: 9))
+          .foregroundStyle(routerMuted)
+      }
+      .padding(.vertical, 1)
+    }
     HStack(spacing: 12) {
       VStack(alignment: .leading, spacing: 3) {
         Text("Show tray")
@@ -2744,7 +2873,7 @@ private struct TrayView: View {
         get: { store.signedRouting },
         set: { enabled in Task { await store.setSignedRouting(enabled) } }
       ),
-      isDisabled: store.providerOperation != nil || store.loginFree
+      isDisabled: store.providerOperation != nil || store.loginFree || store.modeOperation != nil
     )
     settingRow(
       title: "Use without OpenAI login",
@@ -2755,7 +2884,7 @@ private struct TrayView: View {
         get: { store.loginFree },
         set: { enabled in Task { await store.setLoginFree(enabled) } }
       ),
-      isDisabled: store.providerOperation != nil || store.signedRouting
+      isDisabled: store.providerOperation != nil || store.signedRouting || store.modeOperation != nil
     )
     maintenanceRow
     AccordionPanel(
