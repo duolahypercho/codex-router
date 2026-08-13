@@ -94,14 +94,28 @@ export function grokCliPreflight({
   // An npm-installed CLI resolves to a .cmd shim, which Node refuses to spawn
   // without a shell; without this hop the launch fails before the CLI is even
   // reached and the failure reads as an application-control block.
-  const target = spawnableCommand(executable, ["--version"], platform);
-  const result = spawnSyncImpl(target.command, target.args, {
-    ...target.options,
-    encoding: "utf8",
-    env: sanitizedEnvironment,
-    timeout: 5_000,
-    windowsHide: true,
-  });
+  let result;
+  try {
+    const target = spawnableCommand(executable, ["--version"], platform);
+    result = spawnSyncImpl(target.command, target.args, {
+      ...target.options,
+      encoding: "utf8",
+      env: sanitizedEnvironment,
+      timeout: 5_000,
+      windowsHide: true,
+    });
+  } catch (error) {
+    // A path this module will not hand to a shell is a CLI that cannot run,
+    // and saying so beats letting the throw escape into the doctor's report.
+    return {
+      state: "unavailable",
+      installed: true,
+      runnable: false,
+      executable,
+      detail: `installed, but the official Grok CLI could not run (${error.message})`,
+      fix: "Check GROK_CLI, then run `grok --version` in a terminal and rerun the doctor.",
+    };
+  }
   if (!result.error && result.status === 0) {
     return { state: "ready", installed: true, runnable: true, executable };
   }

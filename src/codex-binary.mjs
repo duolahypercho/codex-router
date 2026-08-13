@@ -99,8 +99,11 @@ export function codexVersion() {
 export function codexAuthStatus() {
   const binary = findCodexBinary();
   if (!binary) return { authenticated: false, reason: "codex-not-found" };
-  const target = spawnableCommand(binary, ["login", "status"]);
   try {
+    // Inside the try: a path this module refuses to hand to a shell is a probe
+    // that could not run, which is the "unknown" this function exists to
+    // report -- not an exception for every caller to learn to expect.
+    const target = spawnableCommand(binary, ["login", "status"]);
     execFileSync(target.command, target.args, {
       ...target.options,
       timeout: 10_000,

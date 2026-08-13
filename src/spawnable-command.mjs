@@ -61,9 +61,44 @@ export function isWindowsBatchShim(binary, platform = process.platform) {
 // `shell: true` does, silently splitting any argument that contains one. The
 // escaping below is the form npm's own `cross-spawn` uses: quote the argument,
 // preserve backslash runs ahead of a quote, then neutralize every character
-// cmd.exe would otherwise act on. Batch files get a second round because
-// cmd.exe re-parses the line when it invokes one.
+// cmd.exe would otherwise act on.
+//
+// Exactly one shim shape needs a second round of `^` escaping: the cmd-shim
+// npm generates under `node_modules/.bin`, which re-enters cmd.exe to reach
+// the real program, so the first interpreter consumes one layer before the
+// second ever sees it. Applying that second layer to an ordinary batch file
+// instead corrupts the line -- Windows answers "The syntax of the command is
+// incorrect", which is how this was caught.
+const CMD_SHIM_PATTERN = /node_modules[\\/]\.bin[\\/][^\\/]+\.cmd$/i;
+
+export function needsDoubleEscape(binary) {
+  return CMD_SHIM_PATTERN.test(String(binary || ""));
+}
 const CMD_META_CHARACTERS = /([()\][%!^"`<>&|;, *?])/g;
+
+// Escaping is the wrong last line of defence for a character that cannot occur
+// in a real path to begin with. Windows forbids " < > | ? * and every control
+// character in a file name, and those are exactly the ones that could end the
+// quoted span or start a second command if the escaping above were ever wrong.
+// (`&`, `^`, `%`, `!`, `(`, `)` and spaces are legal -- "C:\Program Files
+// (x86)" is an ordinary path -- so those are escaped, not rejected.)
+//
+// The binary path reaching here comes from CODEX_BIN, LOCALAPPDATA, or PATH.
+// Anyone who can set those already chooses which program runs, so this is not
+// the boundary that stops an attacker who has them; it is what keeps a
+// mistyped or hostile value from becoming a second command instead of a plain
+// "that is not a path" error.
+const PATH_ILLEGAL_ON_WINDOWS = /["<>|?*\u0000-\u001f]/;
+
+export function assertSpawnablePath(binary) {
+  if (PATH_ILLEGAL_ON_WINDOWS.test(String(binary))) {
+    throw new Error(
+      "Refusing to run a Windows path containing characters no file name may hold. " +
+        "Check CODEX_BIN, GROK_CLI, or whatever set this command path.",
+    );
+  }
+  return binary;
+}
 
 export function escapeWindowsShellCommand(value) {
   return String(value).replace(CMD_META_CHARACTERS, "^$1");
@@ -93,9 +128,11 @@ export function spawnableCommand(binary, args = [], platform = process.platform)
   if (!isWindowsBatchShim(binary, platform)) {
     return { command: binary, args: argumentList, options: {} };
   }
+  assertSpawnablePath(binary);
+  const doubleEscape = needsDoubleEscape(binary);
   const line = [
     escapeWindowsShellCommand(binary),
-    ...argumentList.map((argument) => escapeWindowsShellArgument(argument, true)),
+    ...argumentList.map((argument) => escapeWindowsShellArgument(argument, doubleEscape)),
   ].join(" ");
   return {
     command: process.env.ComSpec || "cmd.exe",

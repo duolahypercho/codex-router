@@ -61,5 +61,5 @@ test("the proof run reaches Codex through an npm batch shim on Windows", () => {
   const line = invocation.args[3];
   assert.ok(line.includes("codex.cmd"), line);
   // One argument, not one per word.
-  assert.ok(line.includes("list^^^ the^^^ files"), line);
+  assert.ok(line.includes("list^ the^ files"), line);
 });
