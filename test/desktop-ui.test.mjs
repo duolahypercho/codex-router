@@ -10,6 +10,7 @@ import {
   quotaWindow,
   visibleLocalDownload,
 } from "../apps/desktop/ui/model.mjs";
+import { availableLanguages, getLanguage, setLanguage, t, translationKeys } from "../apps/desktop/ui/i18n.mjs";
 
 test("desktop usage series fills missing local calendar days", () => {
   const series = dailySeries(
@@ -129,4 +130,19 @@ test("active model speed prefers its provider and matches qualified slugs", () =
   usage.providers[0].models[0].observedTokensPerSecond = null;
   assert.equal(observedModelSpeed(usage, "deepseek", "deepseek/deepseek-v4-flash"), null);
   assert.equal(observedModelSpeed(usage, "deepseek", "missing/model"), null);
+});
+
+test("desktop UI exposes English and Simplified Chinese translations", () => {
+  assert.deepEqual(availableLanguages().map(({ id }) => id), ["en", "zh-CN"]);
+  const keys = translationKeys();
+  assert.deepEqual([...keys.en].sort(), [...keys["zh-CN"]].sort());
+  try {
+    setLanguage("zh-CN");
+    assert.equal(getLanguage(), "zh-CN");
+    assert.equal(t("nav.usage"), "用量");
+    assert.equal(t("usage.resetsToday", { time: "10:30" }), "今天 10:30 重置");
+  } finally {
+    setLanguage("en");
+  }
+  assert.equal(t("nav.usage"), "Usage");
 });

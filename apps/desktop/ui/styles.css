@@ -1253,6 +1253,27 @@ h2 {
   border-top: 1px solid var(--line);
 }
 
+.footer-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.language-control select {
+  max-width: 76px;
+  padding: 3px 18px 3px 5px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.045);
+  color: var(--muted-strong);
+  font-size: 8.5px;
+  outline: 0;
+}
+
+.language-control select:focus {
+  border-color: rgba(118, 165, 255, 0.55);
+}
+
 .panel-footer strong,
 .panel-footer small {
   display: block;
