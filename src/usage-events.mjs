@@ -1,10 +1,47 @@
-import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import {
+  appendFileSync,
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  statSync,
+} from "node:fs";
 import path from "node:path";
 
 import { STATE_DIR } from "./paths.mjs";
 import { canonicalProviderId } from "./provider-selection.mjs";
 
 export const USAGE_EVENTS_PATH = path.join(STATE_DIR, "usage-events.jsonl");
+
+// A single status probe asks for both the recent events and the aging totals,
+// and this file only grows -- nothing rotates it. Reading it twice per probe
+// costs two linear scans that get slower for the life of the install, and the
+// desktop app polls every 60s. Cache the split once, keyed on size and mtime so
+// any append invalidates it.
+let lineCache = { key: undefined, lines: [] };
+
+function usageEventLines() {
+  if (!existsSync(USAGE_EVENTS_PATH)) {
+    lineCache = { key: undefined, lines: [] };
+    return lineCache.lines;
+  }
+  let key;
+  try {
+    const stats = statSync(USAGE_EVENTS_PATH);
+    key = `${stats.size}:${stats.mtimeMs}`;
+  } catch {
+    key = undefined;
+  }
+  if (key !== undefined && key === lineCache.key) return lineCache.lines;
+  let lines;
+  try {
+    lines = readFileSync(USAGE_EVENTS_PATH, "utf8").split("\n");
+  } catch {
+    lines = [];
+  }
+  lineCache = { key, lines };
+  return lines;
+}
 
 function safeText(value, fallback) {
   const text = typeof value === "string" ? value.trim() : "";
@@ -168,7 +205,7 @@ export function toolResultAgingTotals({ now = Date.now() } = {}) {
   const floors = AGING_RANGES.map((range) => now - (now % range.bucketMs));
   const cacheSums = AGING_RANGES.map(() => ({ aged: [0, 0], unaged: [0, 0] }));
   try {
-    for (const line of readFileSync(USAGE_EVENTS_PATH, "utf8").split("\n")) {
+    for (const line of usageEventLines()) {
       // Pre-filter: aging stats and cache telemetry are both rare fields.
       const hasAging = line.includes('"toolResultsAged"');
       const hasCache = line.includes('"cachedInputTokens"');
@@ -233,8 +270,7 @@ export function recentUsageEvents({ sinceMs = 24 * 60 * 60 * 1000, limit = 1_000
   if (!existsSync(USAGE_EVENTS_PATH)) return [];
   const cutoff = Date.now() - sinceMs;
   try {
-    return readFileSync(USAGE_EVENTS_PATH, "utf8")
-      .split("\n")
+    return usageEventLines()
       .filter(Boolean)
       .slice(-Math.max(1, limit))
       .map((line) => {
