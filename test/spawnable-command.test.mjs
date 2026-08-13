@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -147,6 +147,20 @@ const TRICKY_ARGUMENTS = [
   "caret^value",
 ];
 
+// Deliberately awkward, and all of it legal on Windows: the runner's own temp
+// path has no spaces, so nothing here would otherwise exercise the escaping
+// that a real "C:\\Program Files (x86)" install depends on.
+const AWKWARD_DIRECTORY = "shim dir (x86) & co";
+
+function shimDirectory() {
+  const directory = path.join(
+    mkdtempSync(path.join(os.tmpdir(), "codex-router-shim-")),
+    AWKWARD_DIRECTORY,
+  );
+  mkdirSync(directory, { recursive: true });
+  return directory;
+}
+
 function argumentDumper(directory) {
   const dumper = path.join(directory, "dump-argv.mjs");
   writeFileSync(dumper, "console.log(JSON.stringify(process.argv.slice(2)));\n");
@@ -166,7 +180,7 @@ function runThroughShim(shimPath) {
 }
 
 test("a plain batch shim receives every argument intact", windowsOnly, () => {
-  const directory = mkdtempSync(path.join(os.tmpdir(), "codex-router-shim-"));
+  const directory = shimDirectory();
   try {
     const dumper = argumentDumper(directory);
     const shim = path.join(directory, "probe.cmd");
@@ -182,7 +196,7 @@ test("an npm global shim receives every argument intact", windowsOnly, () => {
   // the case this router hits most, and the one that decides whether the
   // double-escape branch applies here. It does not: this template reaches the
   // program without re-entering cmd.exe.
-  const directory = mkdtempSync(path.join(os.tmpdir(), "codex-router-npm-shim-"));
+  const directory = shimDirectory();
   try {
     const dumper = argumentDumper(directory);
     const shim = path.join(directory, "probe.cmd");
@@ -236,4 +250,20 @@ test("only an npm cmd-shim under node_modules/.bin takes the second escape layer
   assert.equal(needsDoubleEscape("C:\\p\\node_modules\\.bin\\codex.CMD"), true);
   assert.equal(needsDoubleEscape("C:\\Users\\ann\\AppData\\Roaming\\npm\\codex.cmd"), false);
   assert.equal(needsDoubleEscape("C:\\tools\\codex.cmd"), false);
+});
+
+test("an ordinary token is passed through bare, so a shim's %1 still matches", () => {
+  // Windows CI caught this: quoting every argument turned `debug` into
+  // `"debug"`, and a batch shim comparing %1 textually stopped matching. A
+  // real program never notices -- argv parsing strips the quotes -- but shims
+  // that read their own arguments do.
+  const line = spawnableCommand("C:\\npm\\codex.cmd", ["debug", "models"], "win32").args[3];
+  assert.ok(line.endsWith('codex.cmd debug models"'), line);
+
+  for (const bare of ["--version", "login", "app-server", "gpt-5.6-sol", "@xai-official/grok"]) {
+    assert.equal(escapeWindowsShellArgument(bare), bare);
+  }
+  for (const quoted of ["a b", 'say "hi"', "a&b", "100%", "a^b", "a(b)", "a,b", ""]) {
+    assert.notEqual(escapeWindowsShellArgument(quoted), quoted);
+  }
 });

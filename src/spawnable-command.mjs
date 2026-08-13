@@ -104,8 +104,17 @@ export function escapeWindowsShellCommand(value) {
   return String(value).replace(CMD_META_CHARACTERS, "^$1");
 }
 
+// An argument holding nothing cmd.exe or the child's parser would act on is
+// passed through bare. Wrapping it in quotes anyway is invisible to a real
+// program -- argv parsing strips them -- but a batch file that compares `%1`
+// textually sees the quotes and stops matching, and shims that inspect their
+// own arguments are common enough that quoting everything breaks them. Bare is
+// also simply what a person typing the command would produce.
+const SAFE_BARE_ARGUMENT = /^[A-Za-z0-9_@+=:.\/\\-]+$/;
+
 export function escapeWindowsShellArgument(value, doubleEscape = false) {
   let escaped = String(value);
+  if (SAFE_BARE_ARGUMENT.test(escaped)) return escaped;
   // Backslashes are literal unless they precede a quote, where each one has to
   // be doubled so the quote it escapes survives as data.
   escaped = escaped.replace(/(\\*)"/g, '$1$1\\"');
