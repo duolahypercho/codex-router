@@ -122,7 +122,9 @@ export function providerConfigured(provider) {
     if (provider.id === "grok-oauth") return grokOAuthStatus().configured;
     return false;
   }
-  return credentialStatus(provider, { persistent: true }).configured;
+  return provider.keyless || provider.authMode === "anonymous"
+    ? true
+    : credentialStatus(provider, { persistent: true }).configured;
 }
 
 // Per-provider hint for a selected-but-unconfigured OAuth provider.
@@ -290,6 +292,7 @@ export function configureProvider(provider, { guided, providerKeyCommand }) {
     if (provider.id === "grok-oauth") onboardGrokOauth();
     else onboardKimiOauth();
   } else {
+    if (provider.authMode === "anonymous") return;
     const prompt = provider.credential?.prompt || `${provider.displayName} API key`;
     if (!confirm(`Enter ${prompt} securely now?`)) {
       throw new Error(`${provider.displayName} setup was cancelled.`);

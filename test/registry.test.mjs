@@ -16,6 +16,7 @@ process.env.MODEL_ROUTER_USER_MODELS = path.join(
 const { renderLiteLlmConfig } = await import("../src/litellm-config.mjs");
 const {
   API_MODELS,
+  anonymousModelAllowed,
   LISTED_MODELS,
   MODEL_BY_SLUG,
   MODELS,
@@ -168,6 +169,18 @@ test("provider registry exposes configured API and OAuth model families", () => 
   assert.equal(chutes.credential.file, "chutes-api-key.secret");
   assert.deepEqual(chutes.credential.keychainServices, ["codex-router-chutes"]);
   assert.equal(LISTED_MODELS.some(({ provider }) => provider === "chutes"), false);
+  const opencodeFree = PROVIDERS.get("opencode-free");
+  assert.equal(opencodeFree.authMode, "anonymous");
+  assert.equal(opencodeFree.baseUrl, "https://console.opencode.ai/inference/openai/v1");
+  assert.equal(opencodeFree.credential, undefined);
+  assert.equal(anonymousModelAllowed(opencodeFree, "big-pickle"), true);
+  assert.equal(anonymousModelAllowed(opencodeFree, "mimo-v2.5-free"), true);
+  assert.equal(anonymousModelAllowed(opencodeFree, "glm-5.1"), false);
+  const kiloFree = PROVIDERS.get("kilo-free");
+  assert.equal(kiloFree.authMode, "anonymous");
+  assert.equal(kiloFree.baseUrl, "https://api.kilo.ai/api/gateway");
+  assert.equal(anonymousModelAllowed(kiloFree, "z-ai/glm-5:free"), true);
+  assert.equal(anonymousModelAllowed(kiloFree, "z-ai/glm-5"), false);
   const clinepass = PROVIDERS.get("clinepass");
   assert.equal(clinepass.baseUrl, "https://api.cline.bot/api/v1");
   assert.equal(clinepass.baseUrlEnv, "CLINE_API_BASE_URL");
@@ -615,6 +628,48 @@ test("a keyless provider must be loopback and must not carry a credential", asyn
     });
     assert.equal(keyed.status, 1);
     assert.match(keyed.stderr, /must not declare a credential/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("anonymous providers are fixed official endpoints without credentials", async () => {
+  const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const nodePath = (await import("node:path")).default;
+  const { spawnSync } = await import("node:child_process");
+  const dir = mkdtempSync(nodePath.join(tmpdir(), "registry-anonymous-test-"));
+  const load = (mutate) => {
+    const registry = readRegistryDocument("config");
+    mutate(registry);
+    const registryPath = nodePath.join(dir, "providers.json");
+    writeFileSync(registryPath, JSON.stringify(registry));
+    return spawnSync(
+      process.execPath,
+      ["-e", "import('./src/model-registry.mjs').catch((e)=>{console.error(e.message);process.exit(1);})"],
+      { encoding: "utf8", env: { ...process.env, MODEL_ROUTER_REGISTRY: registryPath } },
+    );
+  };
+  try {
+    const redirected = load((registry) => {
+      registry.providers = registry.providers.map((provider) =>
+        provider.id === "opencode-free"
+          ? { ...provider, baseUrl: "https://example.com/v1" }
+          : provider,
+      );
+    });
+    assert.equal(redirected.status, 1);
+    assert.match(redirected.stderr, /anonymous provider opencode-free must use its fixed official endpoint/);
+
+    const keyed = load((registry) => {
+      registry.providers = registry.providers.map((provider) =>
+        provider.id === "kilo-free"
+          ? { ...provider, credential: { file: "unexpected.secret", environment: [] } }
+          : provider,
+      );
+    });
+    assert.equal(keyed.status, 1);
+    assert.match(keyed.stderr, /anonymous provider kilo-free must not declare keyless or credential metadata/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

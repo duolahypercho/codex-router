@@ -345,13 +345,20 @@ function startPanel() {
   function providerRow(provider, enabled) {
     const isBusy = state.busyProvider === provider.id;
     const credentialLabel = provider.credentialLabel || "API key";
-    const kind = provider.kind === "oauth" ? "OAuth" : credentialLabel;
+    const kind = provider.kind === "oauth"
+      ? "OAuth"
+      : provider.kind === "anonymous"
+        ? "No API key"
+        : credentialLabel;
     let detail = provider.configured ? `${kind} connected` : `${kind} not connected`;
     let action = "";
     let actionLabel = "";
     if (provider.kind === "oauth") {
       action = provider.cliInstalled ? "login" : "install";
       actionLabel = provider.cliInstalled ? (provider.configured ? "Reconnect" : "Sign in") : "Install CLI";
+    } else if (provider.kind === "anonymous") {
+      action = "none";
+      actionLabel = "Ready";
     } else {
       action = "key";
       actionLabel = credentialLabel === "API key"
@@ -360,10 +367,13 @@ function startPanel() {
     }
     if (isBusy) detail = "Working…";
     const canRemove = provider.kind === "api" && provider.configured;
+    const actionButton = provider.kind === "anonymous"
+      ? `<button class="mini-button" type="button" disabled title="${escapeHtml(provider.anonymousNote || "No API key required")}">Ready</button>`
+      : `<button class="mini-button" type="button" data-action="${action}" data-provider="${escapeHtml(provider.id)}"${isBusy ? " disabled" : ""}>${escapeHtml(actionLabel)}</button>`;
     return `<article class="provider-row">
-      <div><strong>${escapeHtml(provider.displayName)}</strong><small>${escapeHtml(detail)}</small>${provider.planNote ? `<small>${escapeHtml(provider.planNote)}</small>` : ""}</div>
+      <div><strong>${escapeHtml(provider.displayName)}</strong><small>${escapeHtml(detail)}</small>${provider.planNote ? `<small>${escapeHtml(provider.planNote)}</small>` : ""}${provider.anonymousNote ? `<small>${escapeHtml(provider.anonymousNote)}</small>` : ""}</div>
       <div class="provider-actions">
-        <button class="mini-button" type="button" data-action="${action}" data-provider="${escapeHtml(provider.id)}"${isBusy ? " disabled" : ""}>${escapeHtml(actionLabel)}</button>
+        ${actionButton}
         ${
           canRemove
             ? `<button class="mini-button danger" type="button" data-action="remove-key" data-provider="${escapeHtml(provider.id)}" aria-label="Remove ${escapeHtml(provider.displayName)} credential"${isBusy ? " disabled" : ""}>Remove</button>`

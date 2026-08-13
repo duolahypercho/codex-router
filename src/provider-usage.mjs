@@ -43,7 +43,11 @@ export function aggregateProviderUsage(events, { days = 90, now = Date.now() } =
       {
         id: provider.id,
         displayName: provider.displayName,
-        credentialType: provider.kind === "oauth" ? "oauth" : "api",
+        credentialType: provider.kind === "oauth"
+          ? "oauth"
+          : provider.authMode === "anonymous"
+            ? "anonymous"
+            : "api",
         scope: "local-router",
         requests: 0,
         successfulRequests: 0,

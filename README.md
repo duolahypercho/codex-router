@@ -325,6 +325,37 @@ intentionally coexist because the subscription bills separately. Point
 `OPENCODE_GO_BASE_URL` (or `OPENCODE_ZEN_BASE_URL`) elsewhere to override the
 endpoints.
 
+### Anonymous free model gateways
+
+Two additional catalog-only entries use providers' documented free-model
+exceptions. They do not ask for an API key, and they deliberately ship no
+checked-in model metadata: the provider's live `/models` response is filtered
+to the free subset and then added locally with `./bin/curate-models`.
+
+| Picker label | Provider ID | Endpoint | Free-model rule |
+| --- | --- | --- | --- |
+| OpenCode Free | `opencode-free` | `https://console.opencode.ai/inference/openai/v1` | `big-pickle` and IDs ending in `-free` |
+| Kilo Free | `kilo-free` | `https://api.kilo.ai/api/gateway` | IDs ending in `:free` |
+
+Enable one and discover its current catalog:
+
+```sh
+./bin/model-router codex providers enable opencode-free
+./bin/curate-models opencode-free
+
+./bin/model-router codex providers enable kilo-free
+./bin/curate-models kilo-free
+```
+
+OpenCode Console documents that free chat models can omit the bearer header;
+the paid Console models still require a key. Kilo documents anonymous access
+only for `:free` models and limits anonymous traffic to 200 requests per hour
+per IP. Both catalogs and limits are provider-controlled and can change, so
+the router refuses paid IDs and shows traffic-only usage when no quota header
+has been observed. Kilo's general SDK setup guide still asks external SDK
+users for an API key; this entry intentionally covers only the gateway's
+documented anonymous `:free` path.
+
 ### Command Code Provider API
 
 Command Code's official Provider API is an OpenAI-compatible chat completions

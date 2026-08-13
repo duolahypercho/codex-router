@@ -950,11 +950,13 @@ private struct ProviderIcon: View {
     if providerID.hasPrefix("commandcode") { return "commandcode" }
     if providerID == "github-copilot" { return "github-copilot" }
     if providerID == "chutes" { return "chutes" }
+    if providerID == "opencode-free" { return "opencode-free" }
+    if providerID == "kilo-free" { return "kilo-free" }
     return nil
   }
 
   private var assetExtension: String {
-    ["github-copilot", "chutes"].contains(providerID) ? "svg" : "png"
+    ["github-copilot", "chutes", "opencode-free", "kilo-free"].contains(providerID) ? "svg" : "png"
   }
 
   private var providerName: String {
@@ -970,6 +972,8 @@ private struct ProviderIcon: View {
     if providerID == "github-copilot" { return "GitHub Copilot" }
     if providerID == "clinepass" { return "ClinePass" }
     if providerID == "chutes" { return "Chutes" }
+    if providerID == "opencode-free" { return "OpenCode Free" }
+    if providerID == "kilo-free" { return "Kilo Free" }
     return "Model provider"
   }
 }

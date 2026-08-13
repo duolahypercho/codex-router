@@ -625,10 +625,14 @@ for (const provider of PROVIDERS.values()) {
     status.configured ? "ok" : selection.providers.includes(provider.id) ? "fail" : "warn",
     provider.keyless
       ? `${provider.displayName} endpoint`
+      : provider.authMode === "anonymous"
+        ? `${provider.displayName} anonymous endpoint`
       : `${provider.displayName} ${credentialNoun}`,
     status.configured ? status.source : "not configured",
     provider.keyless
       ? "Start Ollama, then run ./bin/control local-models list."
+      : provider.authMode === "anonymous"
+        ? provider.anonymousNote || "No key needed; only the provider's free models are available."
       : session
         ? `Run ${session.loginCommand}, or ./bin/provider-key ${provider.id} set.`
         : `Run ./bin/provider-key ${provider.id} set.`,
@@ -648,6 +652,8 @@ for (const provider of PROVIDERS.values()) {
       `${provider.displayName} models`,
       provider.keyless
         ? "no local models are checked, so the picker stays empty"
+        : provider.authMode === "anonymous"
+          ? `${provider.displayName} is ready; discover and curate its current free models`
         : `${credentialNoun} stored but no models curated; the picker stays empty`,
       // Local models are downloaded and checked, never curated from a remote
       // catalog, so naming `curate-models` here points at the wrong command.

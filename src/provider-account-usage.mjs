@@ -782,6 +782,9 @@ async function accountUsageFor(providerId, fetchImpl) {
     if (providerId === "commandcode") return await commandCodeAccount(fetchImpl);
     if (providerId === "minimax-token-plan") return await minimaxTokenPlanAccount(fetchImpl);
     if (providerId === "opencode-go") return await opencodeGoAccount(fetchImpl);
+    if (providerId === "opencode-free" || providerId === "kilo-free") {
+      return withHeaderQuota(providerId, localOnly("Anonymous free-provider quota is not exposed; showing router traffic"));
+    }
     if (providerId === "github-copilot") return await githubCopilotAccount(fetchImpl);
     // Every remaining provider — including the catalog-only ones — reports its
     // window through response headers or shows router traffic alone.

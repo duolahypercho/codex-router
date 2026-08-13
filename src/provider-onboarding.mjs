@@ -160,7 +160,9 @@ export function providerOnboardingSnapshot() {
                 : "login",
         };
       }
-      const configured = credentialStatus(provider, { persistent: true }).configured;
+      const configured = provider.keyless || provider.authMode === "anonymous"
+        ? true
+        : credentialStatus(provider, { persistent: true }).configured;
       const entry = {
         id: provider.id,
         displayName: provider.displayName,
@@ -172,6 +174,13 @@ export function providerOnboardingSnapshot() {
         // moment someone decides to connect, not after Codex 403s.
         ...(provider.planNote ? { planNote: provider.planNote } : {}),
       };
+      if (provider.authMode === "anonymous") {
+        entry.kind = "anonymous";
+        entry.action = "ready";
+        entry.credentialLabel = "No API key";
+        entry.anonymousNote = provider.anonymousNote;
+        return entry;
+      }
       // A provider whose CLI mints its key through a browser sign-in keeps the
       // key field (people with a Studio key still paste it) and gains a second
       // route. The tray needs both states to label the row honestly: whether

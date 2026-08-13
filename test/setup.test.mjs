@@ -47,9 +47,9 @@ test("automatic selection-only setup exposes only configured providers", () => {
     );
     // `local` needs no credential -- it serves from this machine -- so
     // "configured" always includes it alongside the keyed providers.
-    assert.deepEqual(JSON.parse(output).providers, ["deepseek", "local"]);
+    assert.deepEqual(JSON.parse(output).providers, ["deepseek", "kilo-free", "local", "opencode-free"]);
     const selection = JSON.parse(readFileSync(path.join(stateDir, "enabled-providers.json"), "utf8"));
-    assert.deepEqual(selection.providers, ["deepseek", "local"]);
+    assert.deepEqual(selection.providers, ["deepseek", "kilo-free", "local", "opencode-free"]);
   } finally {
     rmSync(testRoot, { recursive: true, force: true });
   }

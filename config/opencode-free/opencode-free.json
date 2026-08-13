@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "providers": [
+    {
+      "id": "opencode-free",
+      "displayName": "OpenCode Free",
+      "kind": "openai-compatible",
+      "ownedBy": "opencode",
+      "baseUrl": "https://console.opencode.ai/inference/openai/v1",
+      "authMode": "anonymous",
+      "anonymousModelPolicy": "opencode-console",
+      "anonymousNote": "No API key is needed for OpenCode Console free chat models. The free catalog and limits can change."
+    }
+  ]
+}

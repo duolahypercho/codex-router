@@ -87,10 +87,11 @@ export function configuredProviderIds() {
       } else if (provider.id === "grok-oauth" && grokOAuthStatus().configured) {
         configured.push(provider.id);
       }
-    } else if (provider.keyless) {
-      // Nothing to configure: the endpoint is on this machine. Whether it is
-      // actually running is a health question, reported by doctor, not a
-      // reason to hide the provider.
+    } else if (provider.keyless || provider.authMode === "anonymous") {
+      // Nothing to configure: local providers run on this machine, while
+      // anonymous providers authenticate by the provider's free-model policy.
+      // Reachability and rate limits remain health questions, not reasons to
+      // hide a provider from the picker.
       configured.push(provider.id);
     } else if (credentialStatus(provider, { persistent: true }).configured) {
       configured.push(provider.id);

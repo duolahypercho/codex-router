@@ -428,6 +428,8 @@ final class RouterStore: ObservableObject {
   }
 
   private static let providerShortNames: [String: String] = [
+    "opencode-free": "OpenCode Free",
+    "kilo-free": "Kilo Free",
     "grok-oauth": "Grok",
     "kimi-oauth": "Kimi",
     "deepseek": "DeepSeek",
@@ -2231,6 +2233,7 @@ struct ProviderSetupState: Decodable, Identifiable, Equatable {
   // the API, because its plan does not include one. Shown before the buttons
   // rather than after a 403 lands in Codex.
   let planNote: String?
+  let anonymousNote: String?
 }
 
 private struct StatusItemLabel: View {
@@ -4346,6 +4349,17 @@ private struct ProviderSetupRow: View {
             .fixedSize(horizontal: false, vertical: true)
         }
         .foregroundStyle(routerYellow.opacity(0.9))
+      }
+
+      if let anonymousNote = setup?.anonymousNote {
+        HStack(alignment: .top, spacing: 5) {
+          Image(systemName: "info.circle")
+            .font(.system(size: 9, weight: .semibold))
+          Text(anonymousNote)
+            .font(.system(size: 9))
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        .foregroundStyle(routerMuted)
       }
 
       if showingKeyField, setup?.kind == "api" {

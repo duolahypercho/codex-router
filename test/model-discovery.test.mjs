@@ -124,3 +124,25 @@ test("Copilot discovery exposes only account-enabled Responses models with tools
   };
   assert.deepEqual(modelIds(payload, PROVIDERS.get("github-copilot")), ["gpt-responses"]);
 });
+
+test("anonymous discovery keeps only each provider's documented free models", () => {
+  const opencode = PROVIDERS.get("opencode-free");
+  assert.deepEqual(
+    modelIds({ data: [
+      { id: "glm-5.1" },
+      { id: "big-pickle" },
+      { id: "mimo-v2.5-free" },
+      { id: "accounts/internal" },
+    ] }, opencode),
+    ["big-pickle", "mimo-v2.5-free"],
+  );
+  const kilo = PROVIDERS.get("kilo-free");
+  assert.deepEqual(
+    modelIds({ data: [
+      { id: "z-ai/glm-5:free" },
+      { id: "minimax/minimax-m2.1:free" },
+      { id: "z-ai/glm-5" },
+    ] }, kilo),
+    ["minimax/minimax-m2.1:free", "z-ai/glm-5:free"],
+  );
+});

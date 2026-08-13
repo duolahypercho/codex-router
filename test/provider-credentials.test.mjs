@@ -30,6 +30,14 @@ const { privateFileIsProtected } = await import("../src/file-security.mjs");
 
 test("provider credentials use protected files and remove legacy managed keys", () => {
   try {
+    const anonymous = resolveProviderCredential("opencode-free");
+    assert.deepEqual(anonymous, {
+      value: undefined,
+      source: "official anonymous endpoint",
+      persistent: true,
+    });
+    assert.throws(() => writeProviderCredential("opencode-free", "SHOULD_NOT_BE_STORED"), /Unknown API-key provider/);
+
     const deepSeekPath = writeProviderCredential("deepseek", "TEST_DEEPSEEK_FILE_KEY");
     assert.equal(privateFileIsProtected(deepSeekPath), true);
     if (process.platform !== "win32") {

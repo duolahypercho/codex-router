@@ -58,7 +58,9 @@ const QUIET =
 if (!INTERNAL_KEY) throw new Error("MODEL_ROUTER_INTERNAL_KEY is required.");
 
 function providerBaseUrl(provider) {
-  return String(process.env[provider.baseUrlEnv] || provider.baseUrl).replace(/\/+$/, "");
+  return String(
+    provider.authMode === "anonymous" ? provider.baseUrl : process.env[provider.baseUrlEnv] || provider.baseUrl,
+  ).replace(/\/+$/, "");
 }
 
 // DeepSeek documents low/high/max (docs also accept xhigh as a compat alias).
@@ -533,7 +535,10 @@ function upstreamHeaders(requestHeaders, body, apiKey, provider, extraHeaders = 
     }
     if (value !== undefined) headers[name] = Array.isArray(value) ? value.join(", ") : value;
   }
-  if (provider.protocol === "anthropic") {
+  if (provider.authMode === "anonymous") {
+    // The upstream explicitly permits anonymous access for the provider's
+    // free-model subset. Never forward the gateway's internal bearer token.
+  } else if (provider.protocol === "anthropic") {
     headers["x-api-key"] = apiKey;
     headers["anthropic-version"] ||= "2023-06-01";
   } else {
