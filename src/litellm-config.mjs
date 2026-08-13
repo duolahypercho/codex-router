@@ -63,6 +63,15 @@ export function renderLiteLlmConfig() {
     "  drop_params: true",
     "  request_timeout: 600",
     "",
+    // Every model_name above has exactly one deployment, so a cooldown can
+    // never route around a failure -- it can only hide it. LiteLLM cools a
+    // deployment down on a 401 and then answers with its own 429 "No
+    // deployments available", which the router translates into "provider is
+    // rate-limiting, wait a bit and retry": the one piece of advice that cannot
+    // fix a rejected credential. Relay the provider's real status instead.
+    "router_settings:",
+    "  disable_cooldowns: true",
+    "",
     "general_settings:",
     "  disable_spend_logs: true",
     "",

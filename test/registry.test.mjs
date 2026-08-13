@@ -426,6 +426,15 @@ test("Ollama Cloud models advertise only levels the forwarder maps to Ollama", (
   }
 });
 
+// Every model_name has exactly one deployment, so a cooldown can only hide a
+// failure -- it turns a 401 into LiteLLM's own 429. See #179.
+test("the gateway config disables deployment cooldowns", () => {
+  const rendered = renderLiteLlmConfig();
+  assert.match(rendered, /router_settings:\n\s+disable_cooldowns: true/);
+  const names = [...rendered.matchAll(/^  - model_name: (.+)$/gm)].map((m) => m[1]);
+  assert.equal(new Set(names).size, names.length, "one deployment per model_name");
+});
+
 test("LiteLLM configuration is generated from every registry route", () => {
   const rendered = renderLiteLlmConfig();
   for (const model of MODELS) {

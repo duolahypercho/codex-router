@@ -413,3 +413,57 @@ test("a genuine 403 credential rejection still says so", () => {
   assert.equal(translated.error.type, "authentication_error");
   assert.match(translated.error.message, /rejected the stored credentials/);
 });
+
+// Regression for #179: LiteLLM cools a deployment down on a 401 and then
+// answers with its own 429 "No deployments available". Telling the user to wait
+// out a rejected credential loops them forever.
+const COOLED_DOWN_401 = `{"error":{"message":"No deployments available for selected model, Try again in 51 seconds. ${"x".repeat(400)} cooldown_list=[('abc', {'exception_received': 'AuthenticationError', 'status_code': '401'})]"}}`;
+
+test("a cooled-down 401 is reported as an auth failure, not a rate limit", () => {
+  const translated = translateGatewayError({
+    status: 429,
+    bodyText: COOLED_DOWN_401,
+    modelName: "kimi-k3",
+    providerName: "Kimi",
+    providerKind: "api",
+  });
+  assert.equal(translated.error.type, "authentication_error");
+  assert.match(translated.error.message, /Re-run codex-router setup/);
+  // The status on the wire stays truthful; only the classification changes.
+  assert.equal(translated.error.code, "429");
+});
+
+test("a cooled-down 401 on an OAuth provider advises signing in again", () => {
+  const translated = translateGatewayError({
+    status: 429,
+    bodyText: COOLED_DOWN_401,
+    modelName: "kimi-k3",
+    providerName: "Kimi",
+    providerKind: "oauth",
+  });
+  assert.equal(translated.error.type, "authentication_error");
+  assert.match(translated.error.message, /Sign in to Kimi again/);
+});
+
+test("a genuine rate limit is still a rate limit", () => {
+  const translated = translateGatewayError({
+    status: 429,
+    bodyText: JSON.stringify({ error: { message: "rate limit exceeded" } }),
+    modelName: "kimi-k3",
+    providerName: "Kimi",
+    providerKind: "api",
+    retryAfterSeconds: 30,
+  });
+  assert.equal(translated.error.type, "rate_limit_error");
+});
+
+test("a cooldown caused by a 429 is not reclassified", () => {
+  const translated = translateGatewayError({
+    status: 429,
+    bodyText: COOLED_DOWN_401.replace("'401'", "'429'"),
+    modelName: "kimi-k3",
+    providerName: "Kimi",
+    providerKind: "api",
+  });
+  assert.equal(translated.error.type, "rate_limit_error");
+});

@@ -181,6 +181,22 @@ function describeFailure({
   };
 }
 
+// LiteLLM answers with its own 429 when it has taken the only deployment for a
+// model out of rotation, and its body carries the status that caused it. A
+// cooled-down 401 is a rejected credential, not a rate limit, and "wait a bit
+// and retry" loops the user forever. Read the raw body: the cooldown list sits
+// past extractUpstreamDetail's truncation limit.
+const COOLDOWN_MARKER = /No deployments available/i;
+const COOLDOWN_STATUS = /['"]?status_code['"]?\s*[:=]\s*['"]?(\d{3})/i;
+
+function cooledDownStatus(status, bodyText) {
+  if (status !== 429 || typeof bodyText !== "string" || !COOLDOWN_MARKER.test(bodyText)) {
+    return undefined;
+  }
+  const original = Number(COOLDOWN_STATUS.exec(bodyText)?.[1]);
+  return Number.isFinite(original) && original !== 429 ? original : undefined;
+}
+
 export function translateGatewayError({
   status,
   bodyText,
@@ -190,8 +206,11 @@ export function translateGatewayError({
   retryAfterSeconds,
 }) {
   const detail = extractUpstreamDetail(bodyText);
+  // Keep the HTTP status on the wire as-is; only the human-facing
+  // classification changes, so the transport stays truthful.
+  const effectiveStatus = cooledDownStatus(status, bodyText) ?? status;
   const failure = describeFailure({
-    status,
+    status: effectiveStatus,
     detail,
     errorType: parseUpstreamError(bodyText).type,
     modelName,
