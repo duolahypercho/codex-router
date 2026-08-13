@@ -3,7 +3,12 @@ import test from "node:test";
 
 import { CODEX_APP_TOOLS } from "../src/codex-app-tools.mjs";
 import { toResponsesRequest } from "../src/grok-oauth-forwarder.mjs";
-import { hasObjectRoot, objectRootToolSchema } from "../src/tool-schema-root.mjs";
+import {
+  hasObjectRoot,
+  normalizeSchemaLiterals,
+  objectRootToolSchema,
+  providerToolSchema,
+} from "../src/tool-schema-root.mjs";
 
 test("object-rooted schemas are returned untouched", () => {
   const schema = { type: "object", properties: { path: { type: "string" } }, required: ["path"] };
@@ -125,4 +130,73 @@ test("automation_update keeps its branch fields after flattening", () => {
     Object.keys(flattened.properties).includes("mode"),
     "the discriminating field survives the merge",
   );
+});
+
+// Regression for #179: Moonshot rejects the whole request when an enum literal
+// contradicts the type its own node declares. The reported path was
+// `properties.appTaskLane.properties.enabled.enum`, from a client-supplied
+// schema, so it cannot be repaired in the bundled snapshot.
+test("literals that contradict their declared type are dropped", () => {
+  const schema = {
+    type: "object",
+    properties: {
+      appTaskLane: {
+        type: "object",
+        properties: {
+          enabled: { type: "string", enum: [true] },
+          mode: { type: "string", enum: ["auto", "manual"] },
+        },
+      },
+    },
+  };
+
+  const normalized = normalizeSchemaLiterals(schema);
+  assert.deepEqual(normalized.properties.appTaskLane.properties.enabled, { type: "string" });
+  assert.deepEqual(normalized.properties.appTaskLane.properties.mode.enum, ["auto", "manual"]);
+  assert.deepEqual(
+    schema.properties.appTaskLane.properties.enabled.enum,
+    [true],
+    "the client's schema object is never mutated",
+  );
+});
+
+test("a clean schema is returned by identity, with no copy", () => {
+  const schema = { type: "object", properties: { mode: { type: "string", enum: ["a"] } } };
+  assert.equal(normalizeSchemaLiterals(schema), schema);
+  assert.equal(providerToolSchema(schema), schema);
+});
+
+test("integers satisfy a declared number type", () => {
+  assert.deepEqual(normalizeSchemaLiterals({ type: "number", enum: [1, 2.5] }).enum, [1, 2.5]);
+});
+
+test("a const contradicting its declared type is dropped", () => {
+  assert.deepEqual(normalizeSchemaLiterals({ type: "string", const: 5 }), { type: "string" });
+});
+
+test("an untyped enum is left alone", () => {
+  const schema = { enum: [true, "a"] };
+  assert.equal(normalizeSchemaLiterals(schema), schema);
+});
+
+test("contradicting literals are dropped through $defs and unions", () => {
+  const schema = {
+    $defs: { lane: { type: "string", enum: [1] } },
+    oneOf: [{ type: "object", properties: { flag: { type: "boolean", enum: ["yes"] } } }],
+  };
+  const normalized = normalizeSchemaLiterals(schema);
+  assert.equal("enum" in normalized.$defs.lane, false, "an emptied enum is removed, not left empty");
+  assert.equal("enum" in normalized.oneOf[0].properties.flag, false);
+});
+
+test("providerToolSchema fixes a union root and its literals together", () => {
+  const schema = {
+    oneOf: [
+      { type: "object", properties: { mode: { type: "string", enum: [true, "view"] } } },
+      { type: "object", properties: { id: { type: "string" } } },
+    ],
+  };
+  const normalized = providerToolSchema(schema);
+  assert.equal(normalized.type, "object");
+  assert.deepEqual(normalized.properties.mode.enum, ["view"]);
 });

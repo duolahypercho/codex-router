@@ -3,6 +3,7 @@ import { StringDecoder } from "node:string_decoder";
 
 import { HeaderlessSseDetector } from "./sse-prefix.mjs";
 import { coerceFunctionCallArguments } from "./tool-arguments.mjs";
+import { providerToolSchema } from "./tool-schema-root.mjs";
 
 // The Codex client ships most of its toolset as `type: "namespace"` entries:
 // the collaboration runtime, the app toolset (threads, automations,
@@ -120,7 +121,17 @@ export function flattenNamespaceTools(tools) {
         // arguments their server requires. Keep inputSchema too: it is the
         // client's native representation and responses-native routes retain
         // it untouched.
-        const parameters = fn.parameters ?? fn.inputSchema;
+        //
+        // Strict upstreams (Moonshot/Kimi, the xAI CLI proxy) reject the whole
+        // request -- not the one tool -- over a union-rooted parameter schema or
+        // an enum literal that contradicts its declared type. Codex's own
+        // `codex_app__automation_update` ships a `oneOf` root, so a session that
+        // never touches automations still dies on its first message. Normalize
+        // only the provider-facing copy; `inputSchema` stays exactly as the
+        // client sent it.
+        const clientSchema = fn.parameters ?? fn.inputSchema;
+        const parameters =
+          clientSchema === undefined ? undefined : providerToolSchema(clientSchema);
         flattened.push({
           ...fn,
           name: `${tool.name}${NAMESPACE_DELIMITER}${fn.name}`,

@@ -17,7 +17,7 @@ import { PORTS } from "./paths.mjs";
 import { MODELS } from "./model-registry.mjs";
 import { ensureFreshGrokOAuthToken } from "./grok-oauth-session.mjs";
 import { grokOAuthStatus } from "./grok-oauth-status.mjs";
-import { objectRootToolSchema } from "./tool-schema-root.mjs";
+import { providerToolSchema } from "./tool-schema-root.mjs";
 import { VERSION } from "./version.mjs";
 
 // LiteLLM speaks OpenAI Chat Completions to this forwarder. It reuses the
@@ -189,7 +189,7 @@ export function toResponsesRequest(chat, options = {}) {
           description: tool.function.description,
           // xAI 400s the whole request over a union-rooted parameter schema,
           // which Codex's own `automation_update` app tool ships.
-          parameters: objectRootToolSchema(
+          parameters: providerToolSchema(
             tool.function.parameters || { type: "object", properties: {} },
           ),
           strict: false,
