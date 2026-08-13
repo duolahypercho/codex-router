@@ -200,3 +200,37 @@ test("providerToolSchema fixes a union root and its literals together", () => {
   assert.equal(normalized.type, "object");
   assert.deepEqual(normalized.properties.mode.enum, ["view"]);
 });
+
+// providerToolSchema runs on every namespace and MCP tool, where schemas are
+// server-defined. objectRootToolSchema collapses any root it cannot recognize
+// into an empty object -- correct for xAI, which rejects every non-object root,
+// but it would silently replace a real MCP schema with one accepting anything.
+test("a non-object root that is not a union is left alone", () => {
+  for (const schema of [
+    { type: "array", items: { type: "string" } },
+    { type: "string" },
+    {},
+  ]) {
+    assert.equal(providerToolSchema(schema), schema, JSON.stringify(schema));
+  }
+});
+
+test("a union root is still merged into an object", () => {
+  const merged = providerToolSchema({
+    oneOf: [
+      { type: "object", properties: { mode: { type: "string" } } },
+      { type: "object", properties: { id: { type: "string" } } },
+    ],
+  });
+  assert.equal(merged.type, "object");
+  assert.deepEqual(Object.keys(merged.properties).sort(), ["id", "mode"]);
+});
+
+test("literals are still normalized inside a schema that keeps its root", () => {
+  const normalized = providerToolSchema({
+    type: "array",
+    items: { type: "string", enum: [true, "ok"] },
+  });
+  assert.equal(normalized.type, "array");
+  assert.deepEqual(normalized.items.enum, ["ok"]);
+});

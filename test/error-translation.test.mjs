@@ -414,29 +414,31 @@ test("a genuine 403 credential rejection still says so", () => {
   assert.match(translated.error.message, /rejected the stored credentials/);
 });
 
-// Regression for #179: LiteLLM cools a deployment down on a 401 and then
-// answers with its own 429 "No deployments available". Telling the user to wait
-// out a rejected credential loops them forever.
-const COOLED_DOWN_401 = `{"error":{"message":"No deployments available for selected model, Try again in 51 seconds. ${"x".repeat(400)} cooldown_list=[('abc', {'exception_received': 'AuthenticationError', 'status_code': '401'})]"}}`;
-
-test("a cooled-down 401 is reported as an auth failure, not a rate limit", () => {
+// Regression for #179. LiteLLM used to cool a deployment down on a 401 and
+// then answer with its own 429, so the user was told to wait out a rejected
+// credential. router_settings.disable_cooldowns (see litellm-config) stops that
+// at the source; this locks in that a real upstream 401 still classifies
+// correctly once it reaches the translator, and that a real 429 still does too.
+//
+// Deliberately no test for parsing a status out of LiteLLM's cooldown body:
+// _get_cooldown_deployments returns bare deployment ids (cooldown_handlers.py),
+// so the client-facing message carries no originating status to read.
+test("an upstream 401 is an auth failure, not a rate limit", () => {
   const translated = translateGatewayError({
-    status: 429,
-    bodyText: COOLED_DOWN_401,
+    status: 401,
+    bodyText: JSON.stringify({ error: { message: "invalid api key" } }),
     modelName: "kimi-k3",
     providerName: "Kimi",
     providerKind: "api",
   });
   assert.equal(translated.error.type, "authentication_error");
   assert.match(translated.error.message, /Re-run codex-router setup/);
-  // The status on the wire stays truthful; only the classification changes.
-  assert.equal(translated.error.code, "429");
 });
 
-test("a cooled-down 401 on an OAuth provider advises signing in again", () => {
+test("an upstream 401 on an OAuth provider advises signing in again", () => {
   const translated = translateGatewayError({
-    status: 429,
-    bodyText: COOLED_DOWN_401,
+    status: 401,
+    bodyText: JSON.stringify({ error: { message: "invalid session" } }),
     modelName: "kimi-k3",
     providerName: "Kimi",
     providerKind: "oauth",
@@ -453,17 +455,6 @@ test("a genuine rate limit is still a rate limit", () => {
     providerName: "Kimi",
     providerKind: "api",
     retryAfterSeconds: 30,
-  });
-  assert.equal(translated.error.type, "rate_limit_error");
-});
-
-test("a cooldown caused by a 429 is not reclassified", () => {
-  const translated = translateGatewayError({
-    status: 429,
-    bodyText: COOLED_DOWN_401.replace("'401'", "'429'"),
-    modelName: "kimi-k3",
-    providerName: "Kimi",
-    providerKind: "api",
   });
   assert.equal(translated.error.type, "rate_limit_error");
 });

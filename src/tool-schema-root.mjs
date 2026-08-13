@@ -223,8 +223,19 @@ export function normalizeSchemaLiterals(schema, depth = 0) {
 }
 
 // The one provider-facing normalization: literals aligned with the type their
-// own node declares, then the root forced to a plain object. Returns `schema`
-// unchanged when neither applies.
+// own node declares, and a union root merged into a plain object. Returns
+// `schema` unchanged when neither applies.
+//
+// Deliberately narrower than objectRootToolSchema alone. That function collapses
+// *any* root it cannot recognize -- an array root, a bare `type: "string"`, an
+// empty object -- into `{type:"object", properties:{}}`, discarding the real
+// schema. That is the right trade for xAI, which rejects every non-object root
+// outright. It is the wrong trade here: this runs on every namespace and MCP
+// tool, where a server-defined schema that merely looks unusual would be
+// silently replaced with one accepting anything. Only a union root is the
+// documented strict-upstream rejection, so only a union root is rewritten.
 export function providerToolSchema(schema) {
-  return objectRootToolSchema(normalizeSchemaLiterals(schema));
+  const normalized = normalizeSchemaLiterals(schema);
+  if (!isPlainObject(normalized) || !hasRootUnion(normalized)) return normalized;
+  return objectRootToolSchema(normalized);
 }
