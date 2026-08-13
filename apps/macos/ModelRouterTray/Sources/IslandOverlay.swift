@@ -63,9 +63,26 @@ final class IslandWindowController {
   private var initialTrackingTimer: Timer?
   private var screenObserver: NSObjectProtocol?
   private var trackingInstalled = false
+  private let ownsOverlay: Bool
+
+  // Only one process may draw the overlay. Nothing else enforces this, and two
+  // aggravators made duplicate overlays easy to hit: a stale bundle at another
+  // path can launch alongside the installed app, and a `swift run` debug binary
+  // has no bundle identifier at all -- so it reads a different UserDefaults
+  // domain and can never observe a preference set by the installed app. A user
+  // who turned the Island off then watched an overlay stay on screen was
+  // looking at that second process. Suppress the unbundled build outright, and
+  // yield to an installed tray that is already running.
+  private static func claimsOverlay() -> Bool {
+    guard let identifier = Bundle.main.bundleIdentifier else { return false }
+    let others = NSRunningApplication.runningApplications(withBundleIdentifier: identifier)
+      .filter { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }
+    return others.isEmpty
+  }
 
   init(store: RouterStore) {
     self.store = store
+    ownsOverlay = Self.claimsOverlay()
     window = NSPanel(
       contentRect: NSRect(origin: .zero, size: Self.windowSize),
       styleMask: [.borderless, .nonactivatingPanel, .fullSizeContentView],
@@ -83,7 +100,9 @@ final class IslandWindowController {
   }
 
   func setVisible(_ visible: Bool) {
-    if visible {
+    // A process that does not own the overlay still tears down on `false`, so a
+    // window it somehow put up can never outlive the setting.
+    if visible && ownsOverlay {
       installContentIfNeeded()
       reposition()
       window.orderFrontRegardless()

@@ -111,8 +111,10 @@ edge during both idle and active sessions.
   **Thinking** while generating, and **Solving** for errors. Starting retains
   its amber status dot, and the Error label remains explicit. The
   daily line draws in once when opened or refreshed. Reduce Motion disables
-  decorative movement. The Island is shown by default and can be toggled from
-  the tray.
+  decorative movement. The Island is off on a new install and is enabled from
+  **Dynamic Island** in the tray Settings (`Off` / `Notch` / `Desktop`). An
+  install that already had it on keeps it. The menu-bar panel is the primary
+  surface and stays available whichever mode is selected.
 - When multiple Codex model requests run at the same time, the Island shows the
   first provider mark and session title plus `+N` for the remaining requests.
   Hover and expand list each live request with its provider mark, session

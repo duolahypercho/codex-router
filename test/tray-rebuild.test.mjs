@@ -249,3 +249,41 @@ test("every tray assertion names its platform instead of inheriting the host", (
     assert.match(call, /platform:/, `missing explicit platform: ${call}`);
   }
 });
+
+// Regression for #180. The tray has no Swift test target and CI runs no macOS
+// job, so the repo's convention for asserting Swift behavior is a source
+// assertion -- see the follow-mode case above.
+test("the Dynamic Island is opt-in on a new install", () => {
+  const source = readFileSync(
+    path.join(root, "apps", "macos", "ModelRouterTray", "Sources", "ModelRouterTrayApp.swift"),
+    "utf8",
+  );
+  // A fresh install starts off; one that has launched before keeps the overlay
+  // rather than losing it silently on update.
+  assert.match(
+    source,
+    /let hasLaunchedBefore = defaults\.object\(forKey: loginItemBundlePathKey\) != nil/,
+  );
+  assert.match(source, /let resolved: IslandMode = hasLaunchedBefore \? \.notch : \.off/);
+  // Persisted, so "never configured" stops colliding with "chose notch".
+  assert.match(source, /defaults\.set\(resolved\.rawValue, forKey: islandModeKey\)/);
+});
+
+test("only one process may draw the Island overlay", () => {
+  const source = readFileSync(
+    path.join(root, "apps", "macos", "ModelRouterTray", "Sources", "IslandOverlay.swift"),
+    "utf8",
+  );
+  // An unbundled `swift run` binary has no identifier, reads a different
+  // UserDefaults domain, and could never see the preference change -- it must
+  // never claim the overlay.
+  assert.match(source, /guard let identifier = Bundle\.main\.bundleIdentifier else \{ return false \}/);
+  assert.match(source, /NSRunningApplication\.runningApplications\(withBundleIdentifier: identifier\)/);
+  assert.match(source, /if visible && ownsOverlay \{/);
+});
+
+test("the docs no longer claim the Island is on by default", () => {
+  const trayDoc = readFileSync(path.join(root, "docs", "MACOS-TRAY.md"), "utf8");
+  assert.doesNotMatch(trayDoc, /Island is shown by default/);
+  assert.match(trayDoc, /off on a new install/);
+});

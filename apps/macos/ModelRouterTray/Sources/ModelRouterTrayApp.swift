@@ -218,7 +218,19 @@ final class RouterStore: ObservableObject {
     if let raw = defaults.string(forKey: islandModeKey), let mode = IslandMode(rawValue: raw) {
       islandMode = mode
     } else if defaults.object(forKey: islandVisibilityKey) == nil {
-      islandMode = .notch
+      // The overlay is opt-in on a fresh install: it covers the notch on every
+      // display, while the menu-bar panel stays available regardless of this
+      // setting. An install that has launched before is a different case --
+      // silently retiring an overlay somebody has been using is its own
+      // surprise -- so only a genuinely new install starts off. retireLoginItem
+      // records the bundle path on every bundled launch and runs after this
+      // initializer, so its absence here means nothing has ever launched.
+      let hasLaunchedBefore = defaults.object(forKey: loginItemBundlePathKey) != nil
+      let resolved: IslandMode = hasLaunchedBefore ? .notch : .off
+      islandMode = resolved
+      // Persist it, so "never configured" and "explicitly chose notch" stop
+      // being the same state for every launch after this one.
+      defaults.set(resolved.rawValue, forKey: islandModeKey)
     } else {
       // Migrate the pre-desktop-mode boolean setting.
       islandMode = defaults.bool(forKey: islandVisibilityKey) ? .notch : .off
@@ -2580,7 +2592,9 @@ private struct TrayView: View {
           .font(.system(size: 12, weight: .medium))
         Text(store.islandMode == .desktop
           ? "Quotas and live activity pinned to the desktop"
-          : "Show provider usage and activity status")
+          : store.islandMode == .notch
+            ? "Usage and activity over the notch on every display"
+            : "Off by default. The menu-bar panel stays available either way.")
           .font(.system(size: 10))
           .foregroundStyle(routerMuted)
       }

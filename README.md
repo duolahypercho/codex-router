@@ -1011,10 +1011,12 @@ cannot strand Codex without its endpoint. **Always** keeps it continuously on.
 See the [macOS tray guide](docs/MACOS-TRAY.md) for behavior and
 rebuild notes.
 
-The app also places a Dynamic-Island-style overlay at the top center of the
+The app can also place a Dynamic-Island-style overlay at the top center of the
 active display. It follows the provider handling the latest request, reveals
-usage on hover, and expands on click. The menu-bar panel remains available for
-the all-provider overview and configuration.
+usage on hover, and expands on click. It is off on a new install; enable it
+under **Dynamic Island** in the tray Settings. The menu-bar panel is the
+primary surface for the all-provider overview and configuration, and stays
+available whether or not the overlay is on.
 
 ## Windows and Linux tray control panel
 
