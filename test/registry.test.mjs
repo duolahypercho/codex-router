@@ -241,6 +241,7 @@ test("provider registry exposes configured API and OAuth model families", () => 
     assert.equal(model.multiAgentVersion, "v2", model.slug);
   }
   assert.equal(MODEL_BY_SLUG.get("grok-oauth/grok-4.6").multiAgentVersion, undefined);
+  assert.equal(MODEL_BY_SLUG.get("deepseek/deepseek-v4-flash").multiAgentVersion, "v2");
   assert.equal(MODEL_BY_SLUG.get("deepseek/deepseek-v4-pro").multiAgentVersion, undefined);
   for (const slug of [
     "kimi-oauth/kimi-for-coding-highspeed",

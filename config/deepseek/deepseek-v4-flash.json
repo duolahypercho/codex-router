@@ -7,6 +7,7 @@
       "upstreamModel": "deepseek-v4-flash",
       "provider": "deepseek",
       "listed": true,
+      "multiAgentVersion": "v2",
       "displayName": "DeepSeek V4 Flash (API)",
       "description": "DeepSeek V4 Flash via the DeepSeek API; fast reasoning, tool calls, and a 1M context window.",
       "priority": 6,
