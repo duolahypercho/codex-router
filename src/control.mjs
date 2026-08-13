@@ -719,17 +719,27 @@ async function handleSubagents(action, value, flag) {
   process.stdout.write(`${JSON.stringify(subagentSettingsSnapshot())}\n`);
 }
 
-async function handleToolResultAging(action) {
-  const { setToolResultAgingEnabled, toolResultAgingSnapshot } = await import(
-    "./tool-result-aging-state.mjs"
-  );
+async function handleToolResultAging(action, nativeAction) {
+  const {
+    setNativeToolResultAgingEnabled,
+    setToolResultAgingEnabled,
+    toolResultAgingSnapshot,
+  } = await import("./tool-result-aging-state.mjs");
   const desired = action || "status";
   if (desired === "status") {
     process.stdout.write(`${JSON.stringify(toolResultAgingSnapshot())}\n`);
     return;
   }
+  if (desired === "native") {
+    if (nativeAction !== "on" && nativeAction !== "off") {
+      throw new Error("Usage: control tool-result-aging status|on|off|native <on|off>");
+    }
+    setNativeToolResultAgingEnabled(nativeAction === "on");
+    process.stdout.write(`${JSON.stringify(toolResultAgingSnapshot())}\n`);
+    return;
+  }
   if (desired !== "on" && desired !== "off") {
-    throw new Error("Usage: control tool-result-aging status|on|off");
+    throw new Error("Usage: control tool-result-aging status|on|off|native <on|off>");
   }
   setToolResultAgingEnabled(desired === "on");
   process.stdout.write(`${JSON.stringify(toolResultAgingSnapshot())}\n`);
@@ -1483,7 +1493,7 @@ if (args.includes("--probe")) {
 } else if (args[0] === "subagents") {
   await handleSubagents(args[1], args[2], args[3]);
 } else if (args[0] === "tool-result-aging") {
-  await handleToolResultAging(args[1]);
+  await handleToolResultAging(args[1], args[2]);
 } else if (args[0] === "local-models") {
   await handleLocalModels(args[1], args[2], ...args.slice(3));
 } else if (args[0] === "vision-bridge") {

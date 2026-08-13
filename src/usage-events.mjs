@@ -122,6 +122,113 @@ export function recordUsageEvent({
   }
 }
 
+// Tool-result aging writes its per-request savings into the shared usage
+// events, so the running total is derived here rather than kept as a second
+// counter that could drift. Bytes are what the router actually measured;
+// the token figure is the usual ~4 bytes/token estimate and is labelled as
+// such everywhere it surfaces.
+const BYTES_PER_TOKEN_ESTIMATE = 4;
+
+const HOUR_MS = 3_600_000;
+const DAY_MS = 24 * HOUR_MS;
+// The tray's range tabs. Buckets are fixed-length and end at the current
+// hour/day so a quiet stretch reads as a gap instead of reflowing the chart.
+const AGING_RANGES = [
+  { key: "24h", bucketMs: HOUR_MS, buckets: 24 },
+  { key: "7d", bucketMs: DAY_MS, buckets: 7 },
+  { key: "30d", bucketMs: DAY_MS, buckets: 30 },
+];
+
+function emptyRange(buckets) {
+  return {
+    savedTokens: 0,
+    requests: 0,
+    buckets: new Array(buckets).fill(0),
+    // Measured prompt-cache rates in this window, split by whether the
+    // request carried compacted results. Only providers that report
+    // cachedInputTokens contribute (native GPT does; most routed do not), so
+    // either rate can be null when nothing measurable happened.
+    cache: { agedRate: null, unagedRate: null, agedTurns: 0, unagedTurns: 0 },
+  };
+}
+
+export function toolResultAgingTotals({ now = Date.now() } = {}) {
+  const totals = {
+    requests: 0,
+    resultsAged: 0,
+    bytesSaved: 0,
+    estimatedTokensSaved: 0,
+    firstAt: undefined,
+    lastAt: undefined,
+    ranges: Object.fromEntries(
+      AGING_RANGES.map((range) => [range.key, emptyRange(range.buckets)]),
+    ),
+  };
+  if (!existsSync(USAGE_EVENTS_PATH)) return totals;
+  const floors = AGING_RANGES.map((range) => now - (now % range.bucketMs));
+  const cacheSums = AGING_RANGES.map(() => ({ aged: [0, 0], unaged: [0, 0] }));
+  try {
+    for (const line of readFileSync(USAGE_EVENTS_PATH, "utf8").split("\n")) {
+      // Pre-filter: aging stats and cache telemetry are both rare fields.
+      const hasAging = line.includes('"toolResultsAged"');
+      const hasCache = line.includes('"cachedInputTokens"');
+      if (!hasAging && !hasCache) continue;
+      let event;
+      try {
+        event = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      const at = typeof event?.at === "string" ? Date.parse(event.at) : NaN;
+      const resultsAged = safeTokenCount(event?.toolResultsAged);
+      if (resultsAged) {
+        totals.requests += 1;
+        totals.resultsAged += resultsAged;
+        const bytesSaved = safeTokenCount(event.toolResultBytesSaved) ?? 0;
+        totals.bytesSaved += bytesSaved;
+        if (typeof event.at === "string") {
+          totals.firstAt = totals.firstAt ?? event.at;
+          totals.lastAt = event.at;
+        }
+        if (Number.isFinite(at)) {
+          const savedTokens = Math.round(bytesSaved / BYTES_PER_TOKEN_ESTIMATE);
+          AGING_RANGES.forEach((range, index) => {
+            const bucket =
+              range.buckets - 1 - Math.floor((floors[index] - (at - (at % range.bucketMs))) / range.bucketMs);
+            if (bucket >= 0 && bucket < range.buckets) {
+              const slot = totals.ranges[range.key];
+              slot.buckets[bucket] += savedTokens;
+              slot.savedTokens += savedTokens;
+              slot.requests += 1;
+            }
+          });
+        }
+      }
+      const inputTokens = safeTokenCount(event?.inputTokens);
+      const cachedInputTokens = safeTokenCount(event?.cachedInputTokens);
+      if (hasCache && inputTokens && cachedInputTokens !== undefined && Number.isFinite(at)) {
+        AGING_RANGES.forEach((range, index) => {
+          if (at < now - range.bucketMs * range.buckets) return;
+          const side = cacheSums[index][resultsAged ? "aged" : "unaged"];
+          side[0] += inputTokens;
+          side[1] += Math.min(cachedInputTokens, inputTokens);
+          totals.ranges[range.key].cache[resultsAged ? "agedTurns" : "unagedTurns"] += 1;
+        });
+      }
+    }
+  } catch {
+    // Telemetry must never break a status surface; report what was readable.
+  }
+  totals.estimatedTokensSaved = Math.round(totals.bytesSaved / BYTES_PER_TOKEN_ESTIMATE);
+  const rate = ([input, cached]) =>
+    input ? Math.round((cached / input) * 1_000) / 1_000 : null;
+  AGING_RANGES.forEach((range, index) => {
+    totals.ranges[range.key].cache.agedRate = rate(cacheSums[index].aged);
+    totals.ranges[range.key].cache.unagedRate = rate(cacheSums[index].unaged);
+  });
+  return totals;
+}
+
 export function recentUsageEvents({ sinceMs = 24 * 60 * 60 * 1000, limit = 1_000 } = {}) {
   if (!existsSync(USAGE_EVENTS_PATH)) return [];
   const cutoff = Date.now() - sinceMs;

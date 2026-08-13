@@ -500,6 +500,101 @@ test("router dispatches aliased native slugs to the mapped external model", asyn
   }
 });
 
+test("native tool-result aging is opt-in and rewrites only consumed old results", async () => {
+  const nativeRequests = [];
+  const native = await mockServer(async (request, response) => {
+    nativeRequests.push({ url: request.url, body: await bodyJson(request) });
+    json(response, 200, { route: "native" });
+  });
+
+  // A conversation whose first tool result is large, already acted on, and
+  // outside the four-newest frontier — exactly the shape aging compacts.
+  const bigOutput = "x".repeat(40_000);
+  const agableInput = [
+    { type: "function_call", call_id: "call-old", name: "shell", arguments: "{}" },
+    { type: "function_call_output", call_id: "call-old", output: bigOutput },
+    {
+      type: "message",
+      role: "assistant",
+      content: [{ type: "output_text", text: "acted on it" }],
+    },
+    ...[1, 2, 3, 4].map((n) => ({
+      type: "function_call_output",
+      call_id: `call-${n}`,
+      output: `small result ${n}`,
+    })),
+  ];
+  const send = async (routerPort) =>
+    fetch(`${routerBase(routerPort)}/responses`, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer CODEX_CALLER_SECRET",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ model: "gpt-5.6-sol", input: agableInput }),
+    });
+
+  // Default state: the native path forwards the blob untouched.
+  const defaultPort = await openPort();
+  const defaultRouter = run("router.mjs", {
+    CODEX_ROUTER_PORT: String(defaultPort),
+    CODEX_NATIVE_BASE_URL: `http://127.0.0.1:${native.port}/backend-api/codex`,
+    CODEX_ROUTER_QUIET: "1",
+  });
+  try {
+    await waitFor(`${routerBase(defaultPort)}/models`, defaultRouter);
+    assert.equal((await send(defaultPort)).status, 200);
+    assert.equal(nativeRequests.at(-1).body.input[1].output, bigOutput);
+  } finally {
+    await stopChild(defaultRouter);
+  }
+
+  // Opted in: the blob becomes a receipt, the newest results stay intact,
+  // and the usage event records the savings.
+  const stateDir = mkdtempSync(path.join(os.tmpdir(), "native-aging-state-"));
+  writeFileSync(
+    path.join(stateDir, "tool-result-aging.json"),
+    `${JSON.stringify({ version: 1, enabled: true, nativeEnabled: true })}\n`,
+    "utf8",
+  );
+  const agingPort = await openPort();
+  const agingRouter = run("router.mjs", {
+    CODEX_ROUTER_PORT: String(agingPort),
+    CODEX_NATIVE_BASE_URL: `http://127.0.0.1:${native.port}/backend-api/codex`,
+    CODEX_ROUTER_QUIET: "1",
+    MODEL_ROUTER_STATE_DIR: stateDir,
+  });
+  try {
+    await waitFor(`${routerBase(agingPort)}/models`, agingRouter);
+    assert.equal((await send(agingPort)).status, 200);
+    const forwarded = nativeRequests.at(-1).body.input;
+    assert.match(forwarded[1].output, /^\[Older tool result compacted by Codex Router/);
+    assert.match(forwarded[1].output, /sha256:[0-9a-f]{64}/);
+    assert.equal(forwarded.at(-1).output, "small result 4");
+    // The usage event is appended after the response is relayed; give the
+    // router a moment to flush it rather than racing the write.
+    const eventsPath = path.join(stateDir, "usage-events.jsonl");
+    let aged;
+    const deadline = Date.now() + 3_000;
+    while (!aged && Date.now() < deadline) {
+      if (existsSync(eventsPath)) {
+        aged = readFileSync(eventsPath, "utf8")
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line))
+          .find((event) => event.toolResultsAged);
+      }
+      if (!aged) await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    assert.equal(aged?.toolResultsAged, 1);
+    assert.ok(aged.toolResultBytesSaved > 30_000);
+  } finally {
+    await stopChild(agingRouter);
+    rmSync(stateDir, { recursive: true, force: true });
+    native.server.close();
+  }
+});
+
 test("router preserves native auth and isolates every external route", async () => {
   const nativeRequests = [];
   const routedRequests = [];

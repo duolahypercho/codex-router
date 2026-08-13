@@ -77,7 +77,10 @@ import { readHiddenModels } from "./model-picker-state.mjs";
 import { readVisionBridgeSettings } from "./vision-bridge-state.mjs";
 import { installedNativeVisionEngines } from "./vision-engines.mjs";
 import { ageToolResults } from "./tool-result-aging.mjs";
-import { toolResultAgingEnabled } from "./tool-result-aging-state.mjs";
+import {
+  nativeToolResultAgingEnabled,
+  toolResultAgingEnabled,
+} from "./tool-result-aging-state.mjs";
 import { VERSION } from "./version.mjs";
 
 const LISTEN_HOST =
@@ -1774,6 +1777,18 @@ async function handleResponses(request, response, requestUrl) {
       const native = { ...payload };
       if (Array.isArray(payload.input)) {
         native.input = normalizeNativeInput(payload.input);
+        // Native turns leave here as stateless full conversations (the
+        // previous_response_id below is stripped), so an old tool result costs
+        // its full size on every turn of this path too. Compaction turns are
+        // exempt: compactV1 keeps its chaining, and a summary should read the
+        // true content rather than a receipt.
+        if (!compactV1) {
+          const aged = ageToolResults(native.input, {
+            enabled: nativeToolResultAgingEnabled(),
+          });
+          native.input = aged.input;
+          toolResultAging = aged.stats;
+        }
       }
       if (!compactV1) delete native.previous_response_id;
       target = nativeTarget(requestUrl.pathname);

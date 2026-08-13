@@ -1959,6 +1959,83 @@ struct ModelSettingsSnapshot: Decodable {
 struct ToolResultAgingSnapshot: Decodable {
   let enabled: Bool
   let environmentOverride: Bool?
+  let stats: ToolResultAgingStats?
+}
+
+struct ToolResultAgingStats: Decodable {
+  let requests: Int?
+  let resultsAged: Int?
+  let bytesSaved: Int?
+  let estimatedTokensSaved: Int?
+  let ranges: [String: ToolResultAgingRange]?
+
+  var savingsSummary: String? {
+    guard let requests, requests > 0, let estimatedTokensSaved, let bytesSaved else { return nil }
+    let tokens = Self.compactCount(estimatedTokensSaved)
+    let megabytes = String(format: "%.1f", Double(bytesSaved) / 1_048_576)
+    return "Saved ~\(tokens) tokens (\(megabytes) MB) across \(requests) requests"
+  }
+
+  static func compactCount(_ value: Int) -> String {
+    if value >= 1_000_000 { return String(format: "%.1fM", Double(value) / 1_000_000) }
+    if value >= 1_000 { return String(format: "%.1fk", Double(value) / 1_000) }
+    return String(value)
+  }
+}
+
+struct ToolResultAgingRange: Decodable {
+  let savedTokens: Int?
+  let requests: Int?
+  let buckets: [Int]?
+  let cache: ToolResultAgingCache?
+}
+
+// Display order and labels for the savings card's range tabs. Keys must match
+// the snapshot's `stats.ranges` keys from src/usage-events.mjs.
+enum SavingsRange: String, CaseIterable {
+  case day = "24h"
+  case week = "7d"
+  case month = "30d"
+
+  var label: String {
+    switch self {
+    case .day: return "24H"
+    case .week: return "7D"
+    case .month: return "30D"
+    }
+  }
+
+  var caption: String {
+    switch self {
+    case .day: return "tokens saved · last 24 hours"
+    case .week: return "tokens saved · last 7 days"
+    case .month: return "tokens saved · last 30 days"
+    }
+  }
+
+  var bucketUnit: String {
+    switch self {
+    case .day: return "h"
+    case .week, .month: return "d"
+    }
+  }
+}
+
+struct ToolResultAgingCache: Decodable {
+  let agedRate: Double?
+  let unagedRate: Double?
+  let agedTurns: Int?
+  let unagedTurns: Int?
+
+  // One line of measured evidence, shown only when both sides have data:
+  // "Cache 99.0% normal · 99.5% compacted" answers the break-the-cache worry
+  // with the provider's own telemetry.
+  var comparisonSummary: String? {
+    guard let agedRate, let unagedRate, let agedTurns, agedTurns > 0 else { return nil }
+    let normal = String(format: "%.1f%%", unagedRate * 100)
+    let compacted = String(format: "%.1f%%", agedRate * 100)
+    return "Cache \(normal) normal · \(compacted) compacted (n=\(agedTurns))"
+  }
 }
 
 struct LocalModelsSnapshot: Decodable {
@@ -2286,6 +2363,7 @@ private struct TrayView: View {
   @ObservedObject var store: RouterStore
   @AppStorage("trayTab") private var tab: TrayTab = .usage
   @State private var providersExpanded = true
+  @State private var savingsRange: SavingsRange = .day
 
   private var target: RouterTarget? { store.snapshot.targets["codex"] }
   // Rows come from the registry snapshot, not from the models in the picker.
@@ -2442,6 +2520,72 @@ private struct TrayView: View {
       Color.primary.opacity(0.045),
       in: RoundedRectangle(cornerRadius: 9, style: .continuous)
     )
+
+    if let agingStats = target?.modelSettings?.toolResultAging?.stats,
+       let agedRequests = agingStats.requests, agedRequests > 0 {
+      let range = agingStats.ranges?[savingsRange.rawValue]
+      sectionLabel("Context savings", detail: "\(agedRequests) requests compacted all-time")
+      VStack(alignment: .leading, spacing: 8) {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+          VStack(alignment: .leading, spacing: 2) {
+            Text("Old tool results replaced with receipts")
+              .font(.system(size: 10, weight: .medium))
+              .lineLimit(1)
+            Text("\(range?.requests ?? 0) compacted requests in this window")
+              .font(.system(size: 8))
+              .foregroundStyle(routerMuted)
+              .lineLimit(1)
+          }
+          Spacer(minLength: 8)
+          VStack(alignment: .trailing, spacing: 4) {
+            HStack(spacing: 2) {
+              ForEach(SavingsRange.allCases, id: \.rawValue) { candidate in
+                Button {
+                  savingsRange = candidate
+                } label: {
+                  Text(candidate.label)
+                    .font(.system(size: 8, weight: savingsRange == candidate ? .bold : .regular))
+                    .foregroundStyle(savingsRange == candidate ? routerMint : routerMuted)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 2)
+                    .background(
+                      savingsRange == candidate ? Color.primary.opacity(0.08) : Color.clear,
+                      in: RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    )
+                }
+                .buttonStyle(.plain)
+              }
+            }
+            Text("~\(compactTokenCount(Double(range?.savedTokens ?? 0))) tok")
+              .font(.system(size: 15, weight: .semibold, design: .monospaced))
+              .foregroundStyle(routerMint)
+              .monospacedDigit()
+          }
+        }
+        if let buckets = range?.buckets, buckets.contains(where: { $0 > 0 }) {
+          SavingsSparkBars(
+            buckets: buckets,
+            caption: savingsRange.caption,
+            bucketUnit: savingsRange.bucketUnit
+          )
+        } else {
+          Text("Nothing compacted in this window")
+            .font(.system(size: 8))
+            .foregroundStyle(routerMuted)
+        }
+        if let cacheLine = range?.cache?.comparisonSummary {
+          Text(cacheLine)
+            .font(.system(size: 8))
+            .foregroundStyle(routerMuted)
+            .lineLimit(1)
+        }
+      }
+      .padding(9)
+      .background(
+        Color.primary.opacity(0.045),
+        in: RoundedRectangle(cornerRadius: 9, style: .continuous)
+      )
+    }
 
     sectionLabel(
       "Live requests",
@@ -2622,7 +2766,8 @@ private struct TrayView: View {
       title: "Compact old tool results",
       detail: target.modelSettings?.toolResultAging?.environmentOverride == true
         ? "Forced off by CODEX_ROUTER_TOOL_RESULT_AGING=0"
-        : "External models · applies on the next request",
+        : (target.modelSettings?.toolResultAging?.stats?.savingsSummary
+          ?? "External models · applies on the next request"),
       isOn: Binding(
         get: { target.modelSettings?.toolResultAging?.enabled ?? true },
         set: { enabled in Task { await store.setToolResultAgingEnabled(enabled) } }
@@ -4713,6 +4858,43 @@ private struct ProviderUsageSection: View {
     }
     guard store.selectedProviderUsage?.account.metrics.isEmpty == true else { return nil }
     return store.selectedProviderUsage?.account.message
+  }
+}
+
+// Saved-token bars for the status tab's Context savings card: fixed slots
+// (oldest left, hourly or daily depending on the selected range), so a quiet
+// stretch reads as a gap rather than reflowing the chart. Values come
+// precomputed from the router snapshot.
+private struct SavingsSparkBars: View {
+  let buckets: [Int]
+  let caption: String
+  let bucketUnit: String
+
+  var body: some View {
+    let peak = max(buckets.max() ?? 0, 1)
+    VStack(alignment: .leading, spacing: 3) {
+      HStack(alignment: .bottom, spacing: 2) {
+        ForEach(Array(buckets.enumerated()), id: \.offset) { _, value in
+          RoundedRectangle(cornerRadius: 1.5, style: .continuous)
+            .fill(value > 0 ? routerMint : Color.primary.opacity(0.12))
+            .frame(maxWidth: .infinity)
+            .frame(height: value > 0 ? max(4, CGFloat(value) / CGFloat(peak) * 26) : 2)
+        }
+      }
+      .frame(height: 26, alignment: .bottom)
+      HStack {
+        Text(caption)
+          .font(.system(size: 7.5))
+          .foregroundStyle(routerMuted)
+        Spacer()
+        Text("peak \(ToolResultAgingStats.compactCount(peak))/\(bucketUnit)")
+          .font(.system(size: 7.5))
+          .foregroundStyle(routerMuted)
+          .monospacedDigit()
+      }
+    }
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel("\(caption), peak \(peak) per \(bucketUnit == "h" ? "hour" : "day")")
   }
 }
 

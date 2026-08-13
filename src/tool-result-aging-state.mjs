@@ -10,17 +10,21 @@ import path from "node:path";
 
 import { protectPrivateFile } from "./file-security.mjs";
 import { STATE_DIR } from "./paths.mjs";
+import { toolResultAgingTotals } from "./usage-events.mjs";
 
 export const TOOL_RESULT_AGING_STATE_PATH =
   process.env.MODEL_ROUTER_TOOL_RESULT_AGING_STATE ||
   path.join(STATE_DIR, "tool-result-aging.json");
 
+// Routed aging defaults on; native aging defaults off. The native path is
+// deliberately conservative (near-byte-identical forwarding to OpenAI), so
+// compacting it is an explicit operator opt-in rather than a default.
 function defaultSettings() {
-  return { version: 1, enabled: true, defaulted: true };
+  return { version: 1, enabled: true, nativeEnabled: false, defaulted: true };
 }
 
 function disabledSettings() {
-  return { version: 1, enabled: false };
+  return { version: 1, enabled: false, nativeEnabled: false };
 }
 
 export function readToolResultAgingSettings() {
@@ -28,7 +32,13 @@ export function readToolResultAgingSettings() {
   try {
     const parsed = JSON.parse(readFileSync(TOOL_RESULT_AGING_STATE_PATH, "utf8"));
     if (parsed?.version === 1 && typeof parsed.enabled === "boolean") {
-      return { version: 1, enabled: parsed.enabled };
+      return {
+        version: 1,
+        enabled: parsed.enabled,
+        // Absent on files written before the native flag existed; absence is
+        // the off default, never an error.
+        nativeEnabled: parsed.nativeEnabled === true,
+      };
     }
   } catch {
     // A malformed explicit choice must not silently change routed context.
@@ -52,12 +62,33 @@ function writeSettings(settings) {
 }
 
 export function setToolResultAgingEnabled(enabled) {
-  return writeSettings({ version: 1, enabled: enabled === true });
+  const current = readToolResultAgingSettings();
+  return writeSettings({
+    version: 1,
+    enabled: enabled === true,
+    nativeEnabled: current.nativeEnabled === true,
+  });
+}
+
+export function setNativeToolResultAgingEnabled(enabled) {
+  const current = readToolResultAgingSettings();
+  return writeSettings({
+    version: 1,
+    enabled: current.enabled === true,
+    nativeEnabled: enabled === true,
+  });
 }
 
 export function toolResultAgingEnabled() {
   if (process.env.CODEX_ROUTER_TOOL_RESULT_AGING === "0") return false;
   return readToolResultAgingSettings().enabled;
+}
+
+// The environment kill switch silences both paths: it exists to stop the
+// router rewriting request context at all, not one flavor of it.
+export function nativeToolResultAgingEnabled() {
+  if (process.env.CODEX_ROUTER_TOOL_RESULT_AGING === "0") return false;
+  return readToolResultAgingSettings().nativeEnabled === true;
 }
 
 export function toolResultAgingSnapshot() {
@@ -69,5 +100,8 @@ export function toolResultAgingSnapshot() {
     configured: existsSync(TOOL_RESULT_AGING_STATE_PATH),
     environmentOverride,
     path: TOOL_RESULT_AGING_STATE_PATH,
+    // Cumulative savings derived from recorded usage events, so every status
+    // surface (CLI, desktop, tray) can show what the feature actually bought.
+    stats: toolResultAgingTotals(),
   };
 }

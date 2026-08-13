@@ -533,6 +533,20 @@ function startPanel() {
     elements.pickerSummary.textContent = `${pickerCount} visible · ${hiddenModels.size} hidden`;
   }
 
+  function formatCompactCount(value) {
+    const count = Number(value) || 0;
+    if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}M`;
+    if (count >= 1_000) return `${(count / 1_000).toFixed(1)}k`;
+    return String(count);
+  }
+
+  function toolResultAgingSavingsLine(stats) {
+    if (!stats || !(Number(stats.requests) > 0)) return "";
+    const tokens = formatCompactCount(stats.estimatedTokensSaved);
+    const mb = ((Number(stats.bytesSaved) || 0) / (1024 * 1024)).toFixed(1);
+    return `Saved ~${tokens} tokens (${mb} MB) across ${stats.requests} requests · `;
+  }
+
   function renderToolResultAgingSetting() {
     const aging = state.snapshot?.targets?.codex?.modelSettings?.toolResultAging;
     const overridden = aging?.environmentOverride === true;
@@ -543,7 +557,7 @@ function startPanel() {
       : "Applies to the next external-model request without a restart.";
     elements.toolResultAgingNote.textContent = overridden
       ? "Forced off by the environment override"
-      : "Receipts replace consumed results over 32 KiB; the four newest stay intact";
+      : `${toolResultAgingSavingsLine(aging?.stats)}Receipts replace consumed results over 32 KiB; the four newest stay intact`;
   }
 
   function renderLocalModels() {
