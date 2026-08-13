@@ -37,7 +37,7 @@ test("the precedence probe uses shared cross-platform Codex and venv paths", () 
     "utf8",
   );
   assert.match(source, /findCodexBinary\(\)/);
-  assert.match(source, /codexSpawnTarget\(CODEX_BIN\)/);
+  assert.match(source, /spawnableCommand\(CODEX_BIN, args\)/);
   assert.match(source, /process\.platform === "win32" \? "Scripts" : "bin"/);
   assert.match(source, /process\.platform === "win32" \? "litellm\.exe" : "litellm"/);
 });

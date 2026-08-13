@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { findCodexBinary } from "./codex-binary.mjs";
+import { spawnableCommand } from "./spawnable-command.mjs";
 
 // Whether a local model can drive Codex is not predictable from its size, its
 // tool flag, or a hand-written probe. Every approximation tried here got it
@@ -74,7 +75,13 @@ export function checkAgentCapability(slug, options = {}) {
 
 function runAgentCheckOnce(
   slug,
-  { codex = findCodexBinary(), spawn = spawnSync, timeoutMs = 420_000, catalogSlugs } = {},
+  {
+    codex = findCodexBinary(),
+    spawn = spawnSync,
+    timeoutMs = 420_000,
+    catalogSlugs,
+    platform = process.platform,
+  } = {},
 ) {
   if (!codex) return { slug, ok: false, error: "No Codex binary found." };
   // A slug Codex cannot resolve does not fail loudly -- it quietly serves the
@@ -96,7 +103,10 @@ function runAgentCheckOnce(
   const startedAt = Date.now();
   try {
     writeFileSync(path.join(workspace, marker), "ok\n", "utf8");
-    const result = spawn(
+    // The prompt is a whole sentence, so this cannot go through a naive
+    // `shell: true` -- that joins arguments on spaces and would hand Codex
+    // eighteen arguments instead of one. spawnableCommand quotes for cmd.exe.
+    const target = spawnableCommand(
       codex,
       [
         "exec",
@@ -108,8 +118,15 @@ function runAgentCheckOnce(
         "--skip-git-repo-check",
         CHECK_PROMPT,
       ],
-      { cwd: workspace, encoding: "utf8", timeout: timeoutMs },
+      platform,
     );
+    const result = spawn(target.command, target.args, {
+      ...target.options,
+      cwd: workspace,
+      encoding: "utf8",
+      timeout: timeoutMs,
+      windowsHide: true,
+    });
     const graded = gradeCodexRun(
       { status: result.status, stdout: result.stdout, stderr: result.stderr },
       marker,

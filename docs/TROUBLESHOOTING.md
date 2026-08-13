@@ -117,8 +117,14 @@ On Windows, first confirm that the installed official CLI can launch:
 grok --version
 ```
 
-If that command reports `spawn UNKNOWN`, "An Application Control policy has
-blocked this file," or a Smart App Control notification, Grok OAuth cannot
+If `grok --version` works in a terminal but the doctor still reports the CLI as
+blocked, upgrade first: releases before this fix picked the extensionless npm
+shim out of `where.exe grok` and could not spawn it, and that failure raises the
+same `spawn UNKNOWN` Windows application control does. The router now selects
+the `grok.cmd` shim and launches it through `cmd.exe`.
+
+If the command itself reports `spawn UNKNOWN`, "An Application Control policy
+has blocked this file," or a Smart App Control notification, Grok OAuth cannot
 complete login or refresh its session. Keep Smart App Control enabled; it does
 not offer a safe per-app bypass for this failure. Until xAI publishes an
 official CLI build that Windows allows, use the API-key provider instead:

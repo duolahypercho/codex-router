@@ -2,6 +2,43 @@
 
 ## Unreleased
 
+- **Windows stops mistaking its own spawn failures for provider problems.** A
+  command resolved on Windows and a command Windows can spawn are two different
+  things: `where.exe` lists the extensionless npm shim first, and Node has
+  refused to run a `.cmd` shim without a shell since CVE-2024-27980. Four
+  copies of the same lookup helper took line one anyway, and the spawn errors
+  that followed were each read as something else. The official Grok CLI was the
+  worst of it — a healthy npm install failed to launch, raising the same
+  `spawn UNKNOWN` that Smart App Control raises, so the router announced that
+  Windows application control had blocked it and told the operator to give up
+  on OAuth and use an API key. Even had the preflight passed, the token refresh
+  behind it spawned the shim the same unusable way.
+
+  Resolution and launching now live in one module and are used everywhere:
+  the routed-subagent proof run (which hands Codex a whole sentence, so it
+  cannot go through a shell that joins arguments on spaces), the Codex account
+  usage panel, the doctor's Codex configuration probe, the `npm install -g` and
+  sign-in paths for provider CLIs, and the precedence probe. Arguments are
+  escaped for `cmd.exe` rather than concatenated, so a path under
+  `C:\Program Files` and a prompt containing spaces both survive.
+
+- **Three more Windows-only breakages in the same family.** The Codex account
+  usage panel kept a private two-line search for the CLI — an undocumented
+  environment variable, a macOS-only path, then the bare name — which finds
+  nothing on Windows, so the panel reported "the Codex app-server could not be
+  started" on every machine; it now uses the shared discovery and kills the
+  process tree rather than leaking a Codex process per poll. `control apply`
+  ran the POSIX `bin/enable` script, which Windows cannot execute, and now
+  takes the PowerShell installer that `doctor --fix` already uses. The
+  vision-model download worker was the one detached child without
+  `windowsHide`, so it opened a console window for the length of a
+  multi-gigabyte pull.
+
+- **A local Ollama the router could find is one it can also run.** The vision
+  host probed for Ollama through the runtime's known install locations but then
+  spawned the bare name, so a Windows install under `%LOCALAPPDATA%` reported
+  as available and failed at the next call. Both now use the same resolver.
+
 - **Routed models that emit integer tool arguments as JSON floats no longer
   get those calls rejected by Codex.** Grok 4.6 was sending
   `timeout_ms: 20000.0`; Codex's native `shell_command` schema wants a `u64`,

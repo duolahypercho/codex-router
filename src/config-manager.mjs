@@ -14,7 +14,7 @@ import {
 import os from "node:os";
 import path from "node:path";
 
-import { codexSpawnTarget, findCodexBinary } from "./codex-binary.mjs";
+import { findCodexBinary, spawnableCommand } from "./codex-binary.mjs";
 
 import {
   assertCallerSecret,
@@ -245,13 +245,14 @@ multi_agent_v2 = { enabled = true, max_concurrent_threads_per_session = ${manage
 `,
       { encoding: "utf8", mode: 0o600 },
     );
-    const { command: probeCommand, options } = codexSpawnTarget(binary);
+    const probe = spawnableCommand(binary, ["login", "status"]);
     // `login status` exits non-zero when signed out, so the exit code says
     // nothing about the config; only the load-error message does.
-    const result = spawnSync(probeCommand, ["login", "status"], {
-      ...options,
+    const result = spawnSync(probe.command, probe.args, {
+      ...probe.options,
       encoding: "utf8",
       timeout: 10_000,
+      windowsHide: true,
       env: { ...process.env, CODEX_HOME: probeHome },
     });
     if (result.error) return false;
@@ -321,13 +322,14 @@ function probeAgentConcurrencyScalar() {
       `max_concurrent_threads_per_session = ${managedAgentMaxConcurrency}\n`,
       { encoding: "utf8", mode: 0o600 },
     );
-    const { command: probeCommand, options } = codexSpawnTarget(binary);
+    const probe = spawnableCommand(binary, ["login", "status"]);
     // `login status` exits non-zero when signed out, so the exit code says
     // nothing about the config; only the load-error message does.
-    const result = spawnSync(probeCommand, ["login", "status"], {
-      ...options,
+    const result = spawnSync(probe.command, probe.args, {
+      ...probe.options,
       encoding: "utf8",
       timeout: 10_000,
+      windowsHide: true,
       env: { ...process.env, CODEX_HOME: probeHome },
     });
     if (result.error) return true;

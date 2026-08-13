@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { codexSpawnTarget, findCodexBinary, preferSpawnablePath } from "../src/codex-binary.mjs";
+import { findCodexBinary, preferSpawnablePath, spawnableCommand } from "../src/codex-binary.mjs";
 
 // Reported in #46: `where.exe codex` on an npm global install lists the
 // extensionless POSIX shim before the batch shim. Node cannot spawn the former
@@ -54,23 +54,31 @@ test("returns undefined for empty finder output", () => {
   assert.equal(preferSpawnablePath(["", "   "], "darwin"), undefined);
 });
 
-test("a Windows batch shim runs through a shell with its path quoted", () => {
+test("a Windows batch shim runs through cmd.exe with its path escaped", () => {
   // cmd.exe splits on spaces and Codex is routinely installed under a profile
   // directory that contains them.
-  const target = codexSpawnTarget("C:\\Program Files\\npm\\codex.cmd", "win32");
-  assert.equal(target.command, '"C:\\Program Files\\npm\\codex.cmd"');
-  assert.equal(target.options.shell, true);
+  const target = spawnableCommand("C:\\Program Files\\npm\\codex.cmd", ["login"], "win32");
+  assert.match(target.command, /cmd\.exe$/i);
+  assert.equal(target.args[0], "/d");
+  assert.equal(target.args[2], "/c");
+  assert.match(target.args[3], /C:\\Program\^ Files\\npm\\codex\.cmd/);
+  assert.equal(target.options.windowsVerbatimArguments, true);
 });
 
 test("a Windows .exe is spawned directly, without a shell", () => {
-  const target = codexSpawnTarget("C:\\Programs\\Codex\\codex.exe", "win32");
+  const target = spawnableCommand("C:\\Programs\\Codex\\codex.exe", ["login"], "win32");
   assert.equal(target.command, "C:\\Programs\\Codex\\codex.exe");
-  assert.equal(target.options.shell, undefined);
+  assert.deepEqual(target.args, ["login"]);
+  assert.deepEqual(target.options, {});
 });
 
 test("a POSIX binary never gets a shell, even if it ends in .cmd", () => {
-  assert.equal(codexSpawnTarget("/opt/homebrew/bin/codex", "darwin").options.shell, undefined);
-  assert.equal(codexSpawnTarget("/weird/path/codex.cmd", "darwin").options.shell, undefined);
+  assert.deepEqual(spawnableCommand("/opt/homebrew/bin/codex", ["login"], "darwin"), {
+    command: "/opt/homebrew/bin/codex",
+    args: ["login"],
+    options: {},
+  });
+  assert.deepEqual(spawnableCommand("/weird/path/codex.cmd", [], "darwin").options, {});
 });
 
 test(

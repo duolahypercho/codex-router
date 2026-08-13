@@ -4,6 +4,7 @@ import path from "node:path";
 
 import { validCallerSecret } from "./caller-auth.mjs";
 import { codexAuthStatus, findCodexBinary, runCodex } from "./codex-binary.mjs";
+import { commandOnPath, spawnableCommand } from "./spawnable-command.mjs";
 import { routedCodexAgentStatus } from "./codex-agent-catalog.mjs";
 import { privateFileIsProtected } from "./file-security.mjs";
 import { grokCliPreflight } from "./grok-cli.mjs";
@@ -90,7 +91,16 @@ function bundledVenvProblem() {
 // says nothing here; only the load-error message does.
 function configLoadComplaint(binary, spawn) {
   try {
-    const result = spawn(binary, ["login", "status"], { encoding: "utf8", timeout: 10_000 });
+    // A .cmd shim needs the cmd.exe hop, or the probe dies before Codex is
+    // reached -- and a probe that never ran reports no complaint, which made
+    // this check silently pass on every npm-installed Windows Codex.
+    const target = spawnableCommand(binary, ["login", "status"]);
+    const result = spawn(target.command, target.args, {
+      ...target.options,
+      encoding: "utf8",
+      timeout: 10_000,
+      windowsHide: true,
+    });
     if (result.error) return undefined;
     return `${result.stdout || ""}\n${result.stderr || ""}`
       .split(/\r?\n/)
@@ -121,18 +131,6 @@ export function codexConfigLoadError({
   return undefined;
 }
 
-function commandOnPath(name) {
-  try {
-    return execFileSync(process.platform === "win32" ? "where.exe" : "which", [name], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    })
-      .trim()
-      .split(/\r?\n/)[0];
-  } catch {
-    return undefined;
-  }
-}
 
 function readableSecret(target, validator) {
   if (!existsSync(target)) return false;

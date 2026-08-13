@@ -19,7 +19,7 @@ import { fileURLToPath } from "node:url";
 
 import { callerBaseUrl } from "../src/caller-auth.mjs";
 import { buildMergedCatalog } from "../src/catalog.mjs";
-import { codexSpawnTarget, findCodexBinary } from "../src/codex-binary.mjs";
+import { findCodexBinary, spawnableCommand } from "../src/codex-binary.mjs";
 import { writeLiteLlmConfig } from "../src/litellm-config.mjs";
 import { MODEL_BY_SLUG, PROVIDERS } from "../src/model-registry.mjs";
 
@@ -134,10 +134,11 @@ function runCodex({ model, marker, routerBaseUrl, catalogPath }) {
       SOURCE_ROOT,
       `Reply with exactly ${marker}. Do not call tools.`,
     ];
-    const { command, options } = codexSpawnTarget(CODEX_BIN);
-    const child = spawn(command, args, {
-      ...options,
+    const target = spawnableCommand(CODEX_BIN, args);
+    const child = spawn(target.command, target.args, {
+      ...target.options,
       cwd: SOURCE_ROOT,
+      windowsHide: true,
       env: { ...process.env, CODEX_HOME, MODEL_ROUTER_TARGET: "codex" },
       stdio: ["ignore", "pipe", "pipe"],
     });
