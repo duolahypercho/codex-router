@@ -101,7 +101,9 @@ edge during both idle and active sessions.
   label every weekday; longer ranges use spaced date ticks while retaining one
   point per day. The Island uses a fixed seven-day line graph so hover remains
   quick and the longer ranges stay in the tray. Hover any mark for its date and
-  exact token count. When the provider reports a quota reset, its local reset
+  displayed token count. Use the `Full`/`M` selector beside the range picker to
+  switch between grouped full numbers and millions. When the provider reports a
+  quota reset, its local reset
   date and time appear beside the chart title. Usage refreshes every 30 seconds,
   and the detailed view switches when a new request uses a different provider.
   A provider selected manually remains focused for the rest of the current

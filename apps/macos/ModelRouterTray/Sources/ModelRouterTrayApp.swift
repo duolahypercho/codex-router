@@ -1772,6 +1772,37 @@ enum UsageRange: Int, CaseIterable, Identifiable {
   }
 }
 
+enum TokenDisplayUnit: String, CaseIterable, Identifiable {
+  case full
+  case millions
+
+  var id: Self { self }
+
+  var label: String {
+    switch self {
+    case .full: return routerLocalized("Full")
+    case .millions: return "M"
+    }
+  }
+
+  var accessibilityLabel: String {
+    switch self {
+    case .full: return routerLocalized("Full token numbers")
+    case .millions: return routerLocalized("Millions of tokens")
+    }
+  }
+
+  func format(_ value: Double) -> String {
+    let normalized = value.isFinite ? max(0, value) : 0
+    switch self {
+    case .full:
+      return Int64(normalized.rounded()).formatted(.number.grouping(.automatic))
+    case .millions:
+      return "\(String(format: "%.1f", normalized / 1_000_000))M"
+    }
+  }
+}
+
 struct CodexAccountUsage: Decodable, Equatable {
   let fetchedAt: String
   let planType: String?
@@ -4666,6 +4697,12 @@ private struct ProviderSetupRow: View {
 private struct ProviderUsageSection: View {
   @ObservedObject var store: RouterStore
   @State private var range: UsageRange = .week
+  @AppStorage("ModelRouterTray.tokenDisplayUnit") private var tokenDisplayUnitRawValue =
+    TokenDisplayUnit.full.rawValue
+
+  private var tokenDisplayUnit: TokenDisplayUnit {
+    TokenDisplayUnit(rawValue: self.tokenDisplayUnitRawValue) ?? .full
+  }
 
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
@@ -4696,11 +4733,20 @@ private struct ProviderUsageSection: View {
           .font(.system(size: 10, weight: .medium))
           .foregroundStyle(routerMuted)
         Spacer()
-        UsageRangePicker(selection: $range)
+        HStack(spacing: 5) {
+          UsageRangePicker(selection: $range)
+          TokenDisplayUnitPicker(selection: Binding(
+            get: { self.tokenDisplayUnit },
+            set: { self.tokenDisplayUnitRawValue = $0.rawValue }
+          ))
+        }
       }
 
-      UsageBarChart(points: store.dailyUsage(days: range.rawValue), tint: routerAccent)
-        .id("\(store.selectedUsageProviderID)-\(range.rawValue)")
+      UsageBarChart(
+        points: store.dailyUsage(days: range.rawValue),
+        tint: routerAccent,
+        tokenDisplayUnit: self.tokenDisplayUnit)
+        .id("\(store.selectedUsageProviderID)-\(range.rawValue)-\(self.tokenDisplayUnit.rawValue)")
         .frame(height: 88)
 
       HStack {
@@ -4758,7 +4804,7 @@ private struct ProviderUsageSection: View {
     }
     guard store.providerUsage != nil else { return "—" }
     if let metric = store.selectedAccountMetric { return formattedAccountMetric(metric) }
-    return compactTokenCount(store.localUsageTotals(days: range.rawValue).tokens)
+    return self.tokenDisplayUnit.format(store.localUsageTotals(days: range.rawValue).tokens)
   }
 
   private var quotaCards: [UsageOverviewCard] {
@@ -4787,15 +4833,16 @@ private struct ProviderUsageSection: View {
 
   private var rangeCaption: String {
     let total = store.dailyTokens(days: range.rawValue).reduce(0, +)
+    let formattedTotal = self.tokenDisplayUnit.format(total)
     if !store.selectedUsageUsesChatGPT {
       let requests = store.localUsageTotals(days: range.rawValue).requests
       return RouterLanguage.isSimplifiedChinese
-        ? "\(compactTokenCount(total)) token · \(requests) 个请求 · 近 \(range.rawValue) 天"
-        : "\(compactTokenCount(total)) tokens · \(requests) requests over \(range.rawValue) days"
+        ? "\(formattedTotal) token · \(requests) 个请求 · 近 \(range.rawValue) 天"
+        : "\(formattedTotal) tokens · \(requests) requests over \(range.rawValue) days"
     }
     return RouterLanguage.isSimplifiedChinese
-      ? "\(compactTokenCount(total)) token · 近 \(range.rawValue) 天"
-      : "\(compactTokenCount(total)) tokens over \(range.rawValue) days"
+      ? "\(formattedTotal) token · 近 \(range.rawValue) 天"
+      : "\(formattedTotal) tokens over \(range.rawValue) days"
   }
 
   private var usageError: String? {
@@ -5144,9 +5191,36 @@ struct UsageRangePicker: View {
   }
 }
 
+struct TokenDisplayUnitPicker: View {
+  @Binding var selection: TokenDisplayUnit
+
+  var body: some View {
+    HStack(spacing: 2) {
+      ForEach(TokenDisplayUnit.allCases) { unit in
+        Button(unit.label) { self.selection = unit }
+          .buttonStyle(.plain)
+          .font(.system(size: 9, weight: .medium))
+          .foregroundStyle(self.selection == unit ? routerText : routerMuted)
+          .padding(.horizontal, 6)
+          .padding(.vertical, 4)
+          .background(
+            self.selection == unit ? Color.primary.opacity(0.10) : Color.clear,
+            in: Capsule()
+          )
+          .accessibilityLabel(unit.accessibilityLabel)
+          .accessibilityAddTraits(self.selection == unit ? .isSelected : [])
+      }
+    }
+    .padding(2)
+    .background(Color.primary.opacity(0.045), in: Capsule())
+    .accessibilityLabel(routerLocalized("Token unit"))
+  }
+}
+
 struct UsageBarChart: View {
   let points: [DailyUsagePoint]
   let tint: Color
+  var tokenDisplayUnit: TokenDisplayUnit = .full
   var showsAxis = true
 
   @State private var hoveredDate: Date?
@@ -5220,7 +5294,7 @@ struct UsageBarChart: View {
         }
       }
     }
-    .accessibilityLabel(routerLocalized("Daily token usage chart. Hover a day for its exact token count."))
+    .accessibilityLabel(routerLocalized("Daily token usage chart. Hover a day for its displayed token count."))
   }
 
   private var hoveredPoint: DailyUsagePoint? {
@@ -5242,7 +5316,7 @@ struct UsageBarChart: View {
 
   private func hoverText(for point: DailyUsagePoint) -> String {
     let date = point.date.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day())
-    let tokens = Int64(point.tokens).formatted(.number.grouping(.automatic))
+    let tokens = self.tokenDisplayUnit.format(point.tokens)
     return RouterLanguage.isSimplifiedChinese ? "\(date) · \(tokens) token" : "\(date) · \(tokens) tokens"
   }
 }

@@ -63,6 +63,10 @@
 "Add Key" = "添加密钥";
 "Open usage dashboard" = "打开用量面板";
 "Daily token usage" = "每日 token 用量";
+"Full" = "完整";
+"Full token numbers" = "完整 token 数";
+"Millions of tokens" = "百万 token";
+"Token unit" = "token 单位";
 "Router traffic" = "路由流量";
 "Usage limit" = "用量限制";
 "No reset reported" = "未提供重置时间";
@@ -73,7 +77,7 @@
 "Hide all" = "全部隐藏";
 "Router unavailable" = "路由不可用";
 "Run setup, then refresh this panel." = "请先运行设置，然后刷新此面板。";
-"Daily token usage chart. Hover a day for its exact token count." = "每日 token 用量图表。将鼠标悬停在某天上可查看准确 token 数。";
+"Daily token usage chart. Hover a day for its displayed token count." = "每日 token 用量图表。将鼠标悬停在某天上可查看当前显示的 token 数。";
 "WEEKLY LEFT" = "每周剩余";
 "DAILY USAGE" = "每日用量";
 "LAST 7 DAYS" = "过去 7 天";
