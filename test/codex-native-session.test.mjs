@@ -149,3 +149,62 @@ test("the router's own caller key is not an upstream credential", () => {
   assert.equal(isRouterLocal(undefined), false);
   assert.equal(isRouterLocal(""), false);
 });
+
+// ChatGPT's own backend accepts a narrower request than the public Responses
+// API. Codex complies already; a generic client sends sampling parameters it
+// rejects one at a time, each as a bare 400. Measured against the live endpoint,
+// not guessed -- these are the exact ten it named.
+test("a substituted caller's payload is made acceptable to the native endpoint", () => {
+  const UNSUPPORTED = [
+    "temperature",
+    "top_p",
+    "presence_penalty",
+    "frequency_penalty",
+    "max_tokens",
+    "max_output_tokens",
+    "metadata",
+    "seed",
+    "user",
+    "truncation",
+  ];
+
+  // The transform the router applies, kept in step with router.mjs.
+  const normalize = (payload) => {
+    payload.store = false;
+    for (const key of UNSUPPORTED) delete payload[key];
+    return payload;
+  };
+
+  const sent = {
+    model: "gpt-5.6-luna",
+    stream: true,
+    input: [{ role: "user", content: [{ type: "input_text", text: "hi" }] }],
+    // Everything a generic OpenAI client would reasonably include.
+    temperature: 0.7,
+    top_p: 1,
+    max_output_tokens: 100,
+    metadata: { a: "b" },
+    seed: 1,
+    user: "someone",
+    truncation: "auto",
+    // Accepted upstream, so these must survive.
+    reasoning: { effort: "low" },
+    tool_choice: "auto",
+    parallel_tool_calls: true,
+    instructions: "be brief",
+  };
+
+  const out = normalize({ ...sent });
+  assert.equal(out.store, false, "store must be false or the turn is a 400");
+  for (const key of UNSUPPORTED) {
+    assert.equal(key in out, false, `${key} is rejected upstream and must be stripped`);
+  }
+  // Stripping must not become a whitelist that quietly drops what works.
+  assert.deepEqual(out.reasoning, { effort: "low" });
+  assert.equal(out.tool_choice, "auto");
+  assert.equal(out.parallel_tool_calls, true);
+  assert.equal(out.instructions, "be brief");
+  assert.equal(out.model, "gpt-5.6-luna");
+  assert.equal(out.stream, true);
+  assert.deepEqual(out.input, sent.input);
+});

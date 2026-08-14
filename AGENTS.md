@@ -1000,6 +1000,16 @@ the same user on the same machine buys nothing.
   forward it — a router secret must never leave the machine.
 - Test the shape the client actually sends. A curl with no `Authorization`
   header at all passes the naive guard and proves nothing.
+- **The native endpoint accepts a narrower request than the public Responses
+  API.** `store` must be `false`, `stream` must be `true`, and ten parameters a
+  generic OpenAI client sends are rejected one at a time as bare 400s:
+  `temperature`, `top_p`, `presence_penalty`, `frequency_penalty`, `max_tokens`,
+  `max_output_tokens`, `metadata`, `seed`, `user`, `truncation`. Codex complies
+  already, so the payload is normalized *only* for a caller whose session was
+  substituted — a Codex turn is never rewritten. `reasoning`, `tool_choice`,
+  `parallel_tool_calls`, and `instructions` are accepted and must survive; the
+  strip is a denylist for that reason, not a whitelist. Measure any change to
+  that list against the live endpoint rather than guessing.
 - **Publishable exactly while spendable.** `dshRoutedModels()` includes native
   models only while `nativeSessionAvailable()` is true, so the harness is never
   offered a model that would 401. `visibility: "hide"` entries stay unpublished:
