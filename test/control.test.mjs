@@ -613,11 +613,37 @@ api_key = "ROLLBACK_QUERY_SECRET"
   }
 });
 
-test("aggregate overview covers every target", () => {
+// The state directory is pinned per case on purpose: this assertion used to
+// read the developer's own installation, so publishing to DeepSeek Harness on
+// the machine running the tests changed the expected target list.
+function overviewTargets(stateDir) {
   const output = execFileSync(process.execPath, [path.join(root, "src", "control.mjs"), "--json"], {
     cwd: root,
     encoding: "utf8",
+    env: { ...process.env, MODEL_ROUTER_STATE_DIR: stateDir },
   });
-  const overview = JSON.parse(output);
-  assert.deepEqual(Object.keys(overview.targets).sort(), ["codex"]);
+  return Object.keys(JSON.parse(output).targets).sort();
+}
+
+test("aggregate overview covers every target", () => {
+  const stateDir = mkdtempSync(path.join(os.tmpdir(), "control-targets-"));
+  try {
+    assert.deepEqual(overviewTargets(stateDir), ["codex"]);
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("the harness target appears only once its route has been published", () => {
+  const stateDir = mkdtempSync(path.join(os.tmpdir(), "control-targets-dsh-"));
+  try {
+    writeFileSync(
+      path.join(stateDir, "dsh-models.json"),
+      `${JSON.stringify({ version: 1, route: "codex-router", models: [] })}\n`,
+      { mode: 0o600 },
+    );
+    assert.deepEqual(overviewTargets(stateDir), ["codex", "dsh"]);
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true });
+  }
 });

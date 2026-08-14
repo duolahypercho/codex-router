@@ -4,10 +4,23 @@ These instructions apply when a user asks an agent to install this repository.
 
 ## Choose the target
 
-- `codex` is the only supported target. If the user asks for Cursor or
-  opencode integration, explain that those targets were removed and the
-  router now focuses on Codex; the opencode provider (the Go subscription and
-  the pay-per-use Zen endpoint) remains available inside Codex.
+- `codex` (the Codex CLI and desktop app) and `dsh` (DeepSeek Harness) are the
+  supported targets. If the user asks for Cursor or opencode integration,
+  explain that those targets were removed and the router does not have them;
+  the opencode provider (the Go subscription and the pay-per-use Zen endpoint)
+  remains available as a provider inside both targets.
+- **A target is a client, not a router.** One installation serves both: one
+  background service, one gateway, one set of provider credentials, one
+  provider selection, one set of ports. `MODEL_ROUTER_TARGET` selects which
+  client's configuration a command writes. It must never fork the state
+  directory, the service, or the credential store — a user who installs both
+  would otherwise be asked for every API key twice and would run two gateways
+  against one set of provider quotas. `ROUTER_PLANE_TARGET` in
+  `src/paths.mjs` names that shared plane, and the environment aliases and the
+  `/health` service name are keyed on it rather than on the client.
+- Installing both is normal and needs no special handling: run the install
+  once per target. Whichever one is already present is republished whenever the
+  routable set changes, so the two clients cannot drift apart.
 
 ## Codex outcome
 
@@ -90,6 +103,109 @@ user.
    `bin/support-bundle` and report its path without uploading it.
 10. Do not terminate Codex. Tell the user to fully quit it, reopen it, create a
     new task, and choose the new model.
+
+## DeepSeek Harness outcome
+
+Publish the router's routed models into DeepSeek Harness as one provider route,
+preserve every other section, route, comment, and credential in the harness's
+own documents, and leave the harness running — it hot-reloads, so there is
+nothing to restart and nothing to tell the user to quit.
+
+## DeepSeek Harness procedure
+
+1. Steps 1-6 of the Codex procedure apply unchanged, except that Codex itself is
+   not a prerequisite: a harness-only machine needs Node 22.19+, `uv` or Python
+   3.10+, and the harness. Do not run `src/catalog.mjs` there — it asks the
+   Codex CLI whether the session is signed in and refuses to publish when it
+   cannot ask, which is a failure, not a fallback.
+2. Run `./install.sh --target dsh --auto --providers IDS` (macOS/Linux) or
+   `./install.ps1 -Target dsh -Auto -Providers IDS` (Windows).
+   `--migrate-known` and `--adopt-native-catalog` are refused here: both act on
+   Codex's own configuration, and the harness has no counterpart to either.
+3. Run `bin/model-router dsh doctor`. "Harness routing config", "Harness caller
+   credential", "Harness settings privacy", and "Harness catalog freshness"
+   must be `OK`, alongside the shared-plane checks.
+4. Do not tell the user to restart the harness. `dsh-settings-file` watches the
+   document and publishes external edits, so the route is live on the next
+   request. Saying otherwise trains people to restart for nothing.
+
+## What the harness integration writes, and what it must never touch
+
+The router owns exactly two keys, in two documents that belong to the harness.
+Both are hot-reloaded by it, and its own Models page writes provider routes
+beside ours, so everything else in them is somebody else's work.
+
+1. **One route, not a section.** The router owns
+   `llm-pi-ai.providers.codex-router` in `$DSH_HOME/settings.yaml` and
+   `CODEX_ROUTER_CALLER_KEY` in `$DSH_HOME/.credentials.yaml`. It never reads,
+   rewrites, or removes a sibling route, another adapter's section, or another
+   credential. Publishing twice is byte-identical, and removing the route
+   restores the document exactly — including the user's comments and blank
+   lines. `test/dsh-config-manager.test.mjs` asserts both properties against a
+   document that has work of somebody else's in every position the router
+   writes near; do not weaken them.
+2. **Refuse rather than guess.** `src/yaml-structure.mjs` is a fail-closed
+   structural lexer for block-mapping YAML, not a general YAML parser. A
+   document it cannot read plainly — a tab indent, a multi-document stream, a
+   duplicate key, a sequence root, an unterminated flow collection, an anchored
+   key, an inline `providers` mapping — is refused with the file untouched and
+   the line named. A refusal costs a command; a wrong guess rewrites a file
+   whose only copy is on the user's disk. Never add a "best effort" path there.
+3. **Both documents are private.** The settings document carries the managed
+   base URL, which is a local caller capability, and the credentials document
+   carries the key it references. Both are written 0600 under a 0700 directory,
+   the same bound the harness itself holds them to, and status output reports
+   the redacted URL exactly as the Codex manager does. Never print the complete
+   managed base URL.
+4. **Only routed models are published**, and only the selected, credentialed,
+   listed, non-hidden ones. An unregistered slug on the router's
+   `/v1/responses` endpoint is treated as native GPT traffic needing the
+   caller's own ChatGPT session, which a harness request does not carry — so a
+   native model advertised here would offer a turn that cannot authenticate.
+   For the same reason the vision-bridge engine candidates exclude native
+   models: this call site's evidence is that there is no caller session to
+   check.
+5. **The protocol is `openai-responses`**, because that is the only thing the
+   router's caller endpoint serves, and every router capability — tool-result
+   ageing, the vision bridge, prompt-token substitution, upstream retry, usage
+   and throughput accounting — already sits on that routed path. Do not add a
+   second upstream path or a chat-completions surface for the harness; the
+   point of pointing it at the same endpoint Codex uses is that there is one
+   request path to keep correct. `models[].id` is the router **slug**, never
+   the gateway model id: `/v1/responses` resolves it against `MODEL_BY_SLUG`,
+   and a gateway id falls through to the native path.
+6. **No `compat` on the route.** pi-ai types its reasoning-dispatch switches
+   only on `openai-completions` and refuses a route-level switch anywhere else.
+   Each model's request profile is applied on the router's own side of the hop,
+   which is where that knowledge belongs.
+7. **A reasoning level pi-ai cannot name is dropped, not approximated.** Its
+   level set is `off, minimal, low, medium, high, xhigh, max`; the Codex ladder
+   also spells `ultra`. `unmappableEfforts()` reports what was dropped so the
+   omission is visible rather than silent. A model with no levels declares
+   `reasoningEfforts: false` — omitting the field would inherit whatever
+   pi-ai's installed catalog says about a colliding id.
+8. **The default model is the user's.** Taking over `agent-default-model` is
+   opt-in (`--set-default-model`), snapshotted verbatim, and restored on
+   uninstall — the same discipline the Codex login-free mode applies to `model`
+   and `model_provider`. Never write it as a side effect of publishing.
+9. **Delegation is composition, not settings.** `dsh-tool-subagent` installs no
+   settings section, so the router cannot configure the harness's subagent
+   model and must not edit a preset it does not own. A child with no model of
+   its own inherits the default model selection, which is already a routed
+   model once the route is the default;
+   `./bin/model-router dsh subagent-preset` prints the block to paste for a
+   deployment that wants children on a *different* routed model. Codex's
+   `bin/multi-agent` stays Codex-only: it drives `multi_agent_version` and the
+   Codex agents directory, whose payloads are Codex's own encrypted format.
+10. **Drift is this integration's failure mode.** The harness hot-reloads its
+    settings document, so anything else that writes it takes effect at once and
+    can leave the published route naming models the gateway no longer routes.
+    `dsh-models.json` in the router's own state directory records what the last
+    publish wrote; doctor compares it against the routable set, and it is the
+    marker that decides whether an integration is installed. Any code path that
+    changes the routable set must republish through
+    `refreshTargetPickerIfInstalled()`, which refreshes every installed client
+    rather than only the active target.
 
 ## The Python gateway is installed from a hash-verified lock
 

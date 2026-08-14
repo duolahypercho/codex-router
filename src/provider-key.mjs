@@ -15,6 +15,7 @@ import {
   refreshTargetPickerIfInstalled,
   targetCli,
   targetPickerName,
+  targetRestartHint,
 } from "./target-integration.mjs";
 
 const providerId = process.argv[2];
@@ -240,7 +241,7 @@ if (command === "status") {
   const refreshed = refreshTargetPickerIfInstalled();
   process.stdout.write(
     `${provider.displayName} ${credentialNoun} saved to protected local storage at ${target}. The provider is enabled.${
-      refreshed ? ` Fully quit and reopen ${targetPickerName()} to refresh the model picker.` : ""
+      refreshed ? ` ${targetRestartHint()}` : ""
     }\n`,
   );
   if (providerNeedsCuration(provider.id)) {
@@ -255,7 +256,7 @@ if (command === "status") {
   process.stdout.write(
     removal.removedFiles
       ? `Removed ${removal.removedFiles} managed ${provider.displayName} ${credentialNoun} file${removal.removedFiles === 1 ? "" : "s"} and disabled the provider.${
-          refreshed ? ` Fully quit and reopen ${targetPickerName()} to refresh the model picker.` : ""
+          refreshed ? ` ${targetRestartHint()}` : ""
         }\n`
       : `No managed ${provider.displayName} ${credentialNoun} file exists.\n`,
   );

@@ -4,18 +4,32 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { pickerCommandArgs } from "./control-args.mjs";
+// The publish marker lives under the shared state directory, which does not
+// vary by target, so reading it here does not disturb the per-target probes
+// below that re-import paths with their own MODEL_ROUTER_TARGET.
+import { DSH_CATALOG_PATH } from "./paths.mjs";
 
 // Cross-target control plane for a tray/UI (e.g. the planned pane fork). It
 // reads which registry models are enabled per target and toggles them. Toggling
 // only rewrites each target's provider selection; making it live is a separate
 // explicit `apply`, so a toggle never silently restarts a running target.
 
-const TARGETS = ["codex"];
 const SELF = fileURLToPath(import.meta.url);
 const REPO_ROOT = path.resolve(path.dirname(SELF), "..");
+// The harness integration appears here only once it is installed. The tray
+// renders one section per target, so listing `dsh` unconditionally would put an
+// empty section in front of every Codex-only install for a client they do not
+// run. `dsh-models.json` is written by the publish and removed by the
+// uninstall, so its presence is exactly the question being asked.
+const DSH_PUBLISHED = DSH_CATALOG_PATH;
+const TARGETS = existsSync(DSH_PUBLISHED) ? ["codex", "dsh"] : ["codex"];
 const args = process.argv.slice(2);
 
 function targetIsActive(target) {
+  // One service serves every client, so "is this target active" cannot be the
+  // service's own status for more than one of them. For the harness it is
+  // whether the route has been published into its settings document.
+  if (target === "dsh") return existsSync(DSH_PUBLISHED);
   const result = spawnSync(process.execPath, [path.join(REPO_ROOT, "src", "service.mjs"), "status"], {
     env: { ...process.env, MODEL_ROUTER_TARGET: target },
     encoding: "utf8",
@@ -295,7 +309,9 @@ function refreshActiveTarget(target) {
   const command =
     target === "codex"
       ? [process.execPath, [path.join(REPO_ROOT, "src", "catalog.mjs")]]
-      : undefined;
+      : target === "dsh"
+        ? [process.execPath, [path.join(REPO_ROOT, "src", "dsh-config-manager.mjs"), "install"]]
+        : undefined;
   if (!command) return;
   const result = spawnSync(command[0], command[1], {
     env: { ...process.env, MODEL_ROUTER_TARGET: target },

@@ -8,7 +8,7 @@ import { detectLegacyInstallations, applyKnownMigrations, rollbackLatestMigratio
 import { grokOAuthStatus } from "./grok-oauth-status.mjs";
 import { PROVIDERS } from "./model-registry.mjs";
 import { kimiOAuthStatus } from "./oauth-status.mjs";
-import { SOURCE_ROOT } from "./paths.mjs";
+import { SOURCE_ROOT, TARGET } from "./paths.mjs";
 import { credentialStatus } from "./provider-credentials.mjs";
 import {
   hasSignInCli,
@@ -68,6 +68,14 @@ for (let index = 0; index < args.length; index += 1) {
 if (!setupArgumentError && migrateKnown && adoptNativeCatalog) {
   setupArgumentError =
     "--adopt-native-catalog cannot be combined with --migrate-known.";
+}
+// Both act on Codex's own configuration: one replaces an older router's
+// managed block, the other adopts the ChatGPT-plan catalog Codex reads. The
+// harness integration is one settings section and has neither.
+if (!setupArgumentError && TARGET !== "codex" && (migrateKnown || adoptNativeCatalog)) {
+  setupArgumentError = `${
+    migrateKnown ? "--migrate-known" : "--adopt-native-catalog"
+  } applies only to the Codex target.`;
 }
 
 function option(name) {
@@ -428,13 +436,16 @@ async function main() {
   }
 
   nextStep("Review and install");
+  const dshTarget = TARGET === "dsh";
   if (guided) {
     process.stdout.write(
       `\nReady to install:\n` +
         `  Providers: ${providers.join(", ")}\n` +
         `  Migration: ${migration ? "recognized older router (rollback snapshot kept)" : "none needed"}\n` +
-        `  Native catalog: ${adoptNativeCatalog ? "adopt existing user catalog" : "capture from Codex"}\n` +
-        `  Changes: per-user background service and the managed Codex config block\n`,
+        (dshTarget
+          ? `  Changes: per-user background service and one provider route in the harness settings document\n`
+          : `  Native catalog: ${adoptNativeCatalog ? "adopt existing user catalog" : "capture from Codex"}\n` +
+            `  Changes: per-user background service and the managed Codex config block\n`),
     );
     if (!confirm("Proceed?")) {
       throw incomplete("Setup was cancelled before installing the service.");
@@ -476,7 +487,10 @@ async function main() {
   }
   run(process.execPath, [path.join(SOURCE_ROOT, "src", "doctor.mjs")]);
   process.stdout.write(
-    `\nCodex Router is ready with: ${providers.join(", ")}\nFully quit Codex, reopen it, and start a new task.\n`,
+    dshTarget
+      ? `\nDeepSeek Harness is ready with: ${providers.join(", ")}\n` +
+        `It reloads its settings document on the next request, so there is nothing to restart.\n`
+      : `\nCodex Router is ready with: ${providers.join(", ")}\nFully quit Codex, reopen it, and start a new task.\n`,
   );
   if (visionBridge?.enabled && visionBridge.engine) {
     process.stdout.write(
