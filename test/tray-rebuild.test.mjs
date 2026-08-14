@@ -250,23 +250,34 @@ test("every tray assertion names its platform instead of inheriting the host", (
   }
 });
 
-// Regression for #180. The tray has no Swift test target and CI runs no macOS
-// job, so the repo's convention for asserting Swift behavior is a source
-// assertion -- see the follow-mode case above.
-test("the Dynamic Island is opt-in on a new install", () => {
+// Regression for #180. The mode decision itself is covered by real Swift tests
+// (apps/macos/ModelRouterTray/Tests/IslandModeTests.swift), which CI runs on
+// the macOS matrix leg -- asserting on the source text of an initializer only
+// ever proved the source said something. What stays here is the wiring those
+// Swift tests cannot see.
+test("the tray ships a Swift test target and CI runs it", () => {
+  const manifest = readFileSync(
+    path.join(root, "apps", "macos", "ModelRouterTray", "Package.swift"),
+    "utf8",
+  );
+  assert.match(manifest, /\.testTarget\(\s*\n\s*name: "ModelRouterTrayTests"/);
+
+  const workflow = readFileSync(path.join(root, ".github", "workflows", "ci.yml"), "utf8");
+  assert.match(workflow, /working-directory: apps\/macos\/ModelRouterTray\n\s+run: swift test/);
+  assert.match(workflow, /if: runner\.os == 'macOS'/);
+});
+
+test("the island mode decision stays pure, so it stays testable", () => {
   const source = readFileSync(
     path.join(root, "apps", "macos", "ModelRouterTray", "Sources", "ModelRouterTrayApp.swift"),
     "utf8",
   );
-  // A fresh install starts off; one that has launched before keeps the overlay
-  // rather than losing it silently on update.
-  assert.match(
-    source,
-    /let hasLaunchedBefore = defaults\.object\(forKey: loginItemBundlePathKey\) != nil/,
-  );
-  assert.match(source, /let resolved: IslandMode = hasLaunchedBefore \? \.notch : \.off/);
-  // Persisted, so "never configured" stops colliding with "chose notch".
-  assert.match(source, /defaults\.set\(resolved\.rawValue, forKey: islandModeKey\)/);
+  // nonisolated because it reads no stored state; if someone reaches for
+  // `defaults` inside it, that stops being true and the Swift tests stop
+  // being able to call it.
+  assert.match(source, /nonisolated static func resolveIslandMode\(/);
+  const body = source.slice(source.indexOf("nonisolated static func resolveIslandMode("));
+  assert.doesNotMatch(body.slice(0, body.indexOf("\n  init()")), /defaults\./);
 });
 
 test("only one process may draw the Island overlay", () => {

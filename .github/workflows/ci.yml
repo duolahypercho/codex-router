@@ -26,6 +26,10 @@ jobs:
       - run: npm run check
       - run: npm test
       - run: npm audit --omit=dev --audit-level=high
+      - name: Test the macOS tray
+        if: runner.os == 'macOS'
+        working-directory: apps/macos/ModelRouterTray
+        run: swift test
       - name: Check shell syntax
         if: runner.os != 'Windows'
         run: for file in install.sh bin/* scripts/build-desktop-tray.sh packaging/homebrew/check-core-readiness.sh; do [ "$(head -n 1 "$file")" != '#!/bin/sh' ] || sh -n "$file"; done
