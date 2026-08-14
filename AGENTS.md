@@ -899,6 +899,38 @@ purpose.
   real marker-return probes through every installed routed agent plus a
   same-thread follow-up.
 
+## Installing the harness is one action, and it is never a side effect
+
+`dsh-config-manager.mjs` publishes routed models into a harness that is already
+there. On a machine without one that assumption is a manual `npm install -g` the
+user has to find in the docs, so `src/dsh-install.mjs` owns the other half.
+
+- `control harness setup` installs `@deepseek-ai/dsh` globally if `dsh` is
+  absent, then publishes. `control harness status` reports without touching
+  anything. The tray's Settings row drives the same command.
+- Global, not `npx`. The harness's own README documents `npx @deepseek-ai/dsh
+  web`, which refetches per run and leaves no `dsh` behind — and an npx process
+  is invisible to `presence-state.mjs`, which has to be able to see the client
+  to keep the router up for it.
+- Never folded into `apply`, `enable`, or a repair path. It installs a
+  third-party package over the network; that must be something a user asked for
+  in as many words, not a consequence of something else.
+- Node is checked before npm is reached. The package declares no `engines`, so a
+  stale runtime otherwise fails at first boot with a syntax error from inside
+  `node_modules`. Compare major and minor numerically — `22.9` sorts above
+  `22.19` as a string.
+- Install then publish, with no rollback between them. A publish that fails
+  leaves an installed harness, which is where a retry wants to start, and the
+  publish is idempotent so the retry is a re-run of the same call.
+- `npm-global-install.mjs` holds the npm mechanics for both this and the
+  provider CLIs. One copy, because the details that took a debugging session to
+  get right — the PATH a spawn inherits, where npm drops binaries per platform,
+  which line of npm's output is worth showing — are exactly what drifts.
+- Native GPT models are not published, here or anywhere: they need the caller's
+  own ChatGPT session, which a harness request does not carry. The count the
+  button reports is the routable set, not the picker.
+
+
 ## A client the tray cannot watch keeps the router on
 
 The tray's presence setting can tie the router to the Codex and ChatGPT desktop

@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+- **The tray can install DeepSeek Harness, not just publish into one.**
+  `--target dsh` wrote routed models into a harness the user had already
+  installed themselves; on a machine without one, the missing step was an
+  `npm install -g` mentioned in passing in the docs. A Settings row now installs
+  `@deepseek-ai/dsh` and publishes in one click, and `control harness
+  status|setup` does the same from a terminal.
+
+  Global rather than the `npx @deepseek-ai/dsh web` the harness's README
+  documents: npx refetches on every run, leaves no `dsh` to type again, and is
+  invisible to the presence rule that keeps the router up for clients it cannot
+  watch. Node is checked against the harness's floor before npm is reached,
+  since the package declares no `engines` and a stale runtime otherwise fails at
+  first boot with a syntax error from inside `node_modules`. Install and publish
+  are ordered but not transactional — a failed publish leaves an installed
+  harness, which is where a retry wants to start, and republishing is
+  byte-identical. The npm mechanics move to `src/npm-global-install.mjs`, shared
+  with the provider-CLI installs rather than copied.
+
+  It is never a side effect: no `apply`, `enable`, or repair path installs the
+  harness. Native GPT models stay unpublished for the reason they always were —
+  a harness request carries no ChatGPT session — so the model count the button
+  reports is the routable set.
+
+
 - **A client the tray cannot watch keeps the router running.** The tray's
   presence setting could tie the router to the Codex and ChatGPT desktop apps
   and stop it 30 seconds after both closed. `NSRunningApplication` enumerates

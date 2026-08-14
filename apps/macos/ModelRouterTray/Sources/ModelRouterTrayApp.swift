@@ -133,6 +133,8 @@ final class RouterStore: ObservableObject {
   @Published private(set) var benchmarkingTag: String?
   @Published private(set) var maintenanceMessage: String?
   @Published private(set) var maintenanceSucceeded = false
+  @Published private(set) var harnessMessage: String?
+  @Published private(set) var harnessSucceeded = false
   @Published private(set) var islandMode: IslandMode
   // Publishing the language makes every view re-render on change, so the
   // panel switches in place instead of waiting for the next relaunch.
@@ -280,6 +282,8 @@ final class RouterStore: ObservableObject {
   var signedRouting: Bool {
     snapshot.targets["codex"]?.signedRouting == true
   }
+
+  var harnessRunning: Bool { providerOperation == "harness" }
 
   var maintenanceRunning: Bool {
     providerOperation == "maintenance" || providerOperation == "doctor"
@@ -1202,6 +1206,34 @@ final class RouterStore: ObservableObject {
     }
   }
 
+  // Install the harness if it is absent, then publish the routed models into
+  // its own documents. One button, because "install it" and "point it at this
+  // router" are never wanted separately -- an installed harness that routes
+  // nowhere is not a state anybody asked for.
+  func setupHarness() async {
+    guard providerOperation == nil else { return }
+    providerOperation = "harness"
+    harnessSucceeded = false
+    harnessMessage = snapshot.harness?.installed == true
+      ? routerLocalized("Publishing routed models…")
+      : routerLocalized("Installing DeepSeek Harness…")
+    defer { providerOperation = nil }
+    do {
+      let output = try await runControl(arguments: ["harness", "setup"])
+      let result = try JSONDecoder().decode(HarnessSetupResult.self, from: output)
+      await refresh()
+      harnessSucceeded = true
+      harnessMessage = routerFormat(
+        routerLocalized("%d models published. Run `%@` to start."),
+        result.published.models,
+        result.launch
+      )
+    } catch {
+      harnessMessage = error.localizedDescription
+      await refresh()
+    }
+  }
+
   func fixAndVerify() async {
     guard providerOperation == nil else { return }
     providerOperation = "doctor"
@@ -1835,7 +1867,24 @@ struct RouterSnapshot: Decodable {
   // Absent from an older router's output, so the tray keeps working against one
   // rather than failing the whole decode over a field it gained later.
   let presence: RouterPresence?
-  static let empty = RouterSnapshot(targets: [:], presence: nil)
+  let harness: RouterHarness?
+  static let empty = RouterSnapshot(targets: [:], presence: nil, harness: nil)
+}
+
+struct HarnessSetupResult: Decodable {
+  struct Published: Decodable { let models: Int }
+  let published: Published
+  let launch: String
+}
+
+struct RouterHarness: Decodable {
+  let package: String
+  let installed: Bool
+  let version: String?
+  let published: Bool
+  let nodeVersion: String
+  let nodeSupported: Bool
+  let minimumNode: String
 }
 
 struct RouterPresence: Decodable {
@@ -2972,6 +3021,7 @@ private struct TrayView: View {
       isDisabled: store.providerOperation != nil
         || target.modelSettings?.toolResultAging?.environmentOverride == true
     )
+    harnessRow
     maintenanceRow
     AccordionPanel(
       title: routerLocalized("Providers"),
@@ -4576,6 +4626,85 @@ private struct TrayView: View {
         .disabled(isDisabled)
     }
     .padding(.vertical, 1)
+  }
+
+  // Offered whether or not the harness is installed: the same button installs
+  // it, publishes into it, or republishes after the routable set changed. The
+  // detail line says which of the three the click will do, so it is never a
+  // surprise that it reached for the network.
+  private var harnessRow: some View {
+    let harness = store.snapshot.harness
+    let installed = harness?.installed == true
+    let published = harness?.published == true
+    let blocked = harness?.nodeSupported == false
+    return VStack(alignment: .leading, spacing: 6) {
+      HStack(spacing: 12) {
+        VStack(alignment: .leading, spacing: 3) {
+          Text(routerLocalized("DeepSeek Harness"))
+            .font(.system(size: 12, weight: .medium))
+          Text(harnessDetail(harness: harness, installed: installed, published: published))
+            .font(.system(size: 9))
+            .foregroundStyle(routerMuted)
+            .lineLimit(2)
+        }
+        Spacer(minLength: 8)
+        if store.harnessRunning {
+          ProgressView()
+            .controlSize(.small)
+            .tint(routerAccent)
+            .frame(width: 94)
+            .accessibilityLabel(routerLocalized("Setting up DeepSeek Harness"))
+        } else {
+          Button {
+            Task { await store.setupHarness() }
+          } label: {
+            Label(
+              installed
+                ? (published ? routerLocalized("Republish") : routerLocalized("Connect"))
+                : routerLocalized("Install"),
+              systemImage: installed ? "arrow.triangle.2.circlepath" : "arrow.down.circle"
+            )
+          }
+          .buttonStyle(AccentButtonStyle())
+          .disabled(store.providerOperation != nil || blocked)
+          .opacity(store.providerOperation == nil && !blocked ? 1 : 0.5)
+          .help(routerLocalized("Install DeepSeek Harness and publish this router's models into it"))
+        }
+      }
+      if let message = store.harnessMessage {
+        Text(message)
+          .font(.system(size: 9))
+          .foregroundStyle(store.harnessSucceeded ? routerMint : routerRed.opacity(0.9))
+          .lineLimit(3)
+      }
+    }
+    .padding(10)
+    .background(
+      Color.primary.opacity(0.045),
+      in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+    )
+  }
+
+  private func harnessDetail(
+    harness: RouterHarness?,
+    installed: Bool,
+    published: Bool
+  ) -> String {
+    guard let harness else { return routerLocalized("Checking…") }
+    if !harness.nodeSupported {
+      return routerFormat(
+        routerLocalized("Needs Node %@ or newer; this router runs Node %@"),
+        harness.minimumNode,
+        harness.nodeVersion
+      )
+    }
+    if !installed {
+      return routerLocalized("Not installed · installs the CLI, then publishes this router's models")
+    }
+    let version = harness.version.map { "v\($0)" } ?? routerLocalized("installed")
+    return published
+      ? routerFormat(routerLocalized("%@ · routed models published · `dsh web` to start"), version)
+      : routerFormat(routerLocalized("%@ · installed but not routed here yet"), version)
   }
 
   private var maintenanceRow: some View {

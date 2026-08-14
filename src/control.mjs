@@ -11,6 +11,7 @@ import { DSH_CATALOG_PATH } from "./paths.mjs";
 // Same reasoning: presence is a property of the shared plane, not of a target,
 // so the overview can resolve it statically without perturbing those probes.
 import { presenceSnapshot } from "./presence-state.mjs";
+import { harnessSnapshot } from "./dsh-install.mjs";
 
 // Cross-target control plane for a tray/UI (e.g. the planned pane fork). It
 // reads which registry models are enabled per target and toggles them. Toggling
@@ -275,8 +276,14 @@ function printOverview(asJson) {
     // The tray polls this. Presence rides along so the rule that decides
     // whether the router may be stopped is computed once, here, rather than
     // re-derived from target flags on the Swift side where it would drift.
+    // The harness snapshot joins it so the tray can offer the install without
+    // a probe of its own; its version lookup is one exec of a local CLI.
     process.stdout.write(
-      `${JSON.stringify({ targets, presence: presenceSnapshot() }, null, 2)}\n`,
+      `${JSON.stringify(
+        { targets, presence: presenceSnapshot(), harness: harnessSnapshot() },
+        null,
+        2,
+      )}\n`,
     );
     return;
   }
@@ -1489,6 +1496,23 @@ async function handleNativeRedirect(action, value) {
   process.stdout.write(`${JSON.stringify(setNativeRedirect(value))}\n`);
 }
 
+// One action for "give me a working harness": install the CLI if it is absent,
+// then publish the routed models into its own documents. Kept behind an
+// explicit subcommand rather than folded into `apply`, because it installs a
+// third-party package and that must never be a side effect of something else.
+async function handleHarness(action) {
+  const { harnessSnapshot, setupHarness } = await import("./dsh-install.mjs");
+  if (!action || action === "status") {
+    process.stdout.write(`${JSON.stringify(harnessSnapshot())}\n`);
+    return;
+  }
+  if (action !== "setup" && action !== "install") {
+    throw new Error("Usage: control harness status|setup");
+  }
+  const result = await setupHarness();
+  process.stdout.write(`${JSON.stringify(result)}\n`);
+}
+
 async function handlePresence(action, value) {
   const { PRESENCE_MODES, presenceSnapshot, setPresenceMode } = await import(
     "./presence-state.mjs"
@@ -1555,6 +1579,8 @@ if (args.includes("--probe")) {
   await handleNativeRedirect(args[1], args[2]);
 } else if (args[0] === "tray") {
   handleTray(args[1]);
+} else if (args[0] === "harness") {
+  await handleHarness(args[1]);
 } else if (args[0] === "presence") {
   await handlePresence(args[1], args[2]);
 } else if (args[0] === "maintenance") {
