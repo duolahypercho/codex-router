@@ -108,6 +108,7 @@ Linux installations support the Codex CLI.
 | K2.7 Coding (OAuth) | `kimi-oauth/kimi-for-coding` | Existing Kimi Code CLI OAuth session |
 | Kimi K3 (OAuth) | `kimi-oauth/k3` | Existing Kimi Code CLI OAuth session |
 | Kimi K3 (API) | `kimi-api/kimi-k3` | Separately billed Kimi Platform API key |
+| Kimi K3 (China API) | `kimi-api-cn/kimi-k3` | Separately billed Moonshot **China** platform key |
 | DeepSeek V4 Flash (API) | `deepseek/deepseek-v4-flash` | DeepSeek API key |
 | DeepSeek V4 Pro (API) | `deepseek/deepseek-v4-pro` | DeepSeek API key |
 | Grok 4.5 (OAuth) | `grok-oauth/grok-4.5` | Official Grok CLI OAuth session |
@@ -144,6 +145,14 @@ Linux installations support the Codex CLI.
 | Qwen3.7 Max (ClinePass) | `clinepass/qwen3.7-max` | ClinePass API key |
 | Qwen3.7 Plus (ClinePass) | `clinepass/qwen3.7-plus` | ClinePass API key |
 | Qwen3.8 Max (ClinePass) | `clinepass/qwen3.8-max` | ClinePass API key |
+
+Kimi has two API platforms and they are not interchangeable. `kimi-api` is the
+global console at platform.moonshot.ai; `kimi-api-cn` is the mainland console at
+platform.moonshot.cn. Accounts, billing, and keys are separate — a key minted on
+one platform is rejected by the other — so each is enabled and credentialed on
+its own, and both can be active at once. Pick the one matching where your key
+was created. (`kimi-oauth` is a third, distinct thing: the Kimi Code
+subscription reused through the official CLI's session.)
 
 The Codex catalog is credential-aware. It includes models only from enabled
 external providers with a stored credential or valid OAuth session. Native GPT

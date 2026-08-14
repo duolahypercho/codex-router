@@ -69,6 +69,7 @@ test("provider registry exposes configured API and OAuth model families", () => 
       "grok-oauth/grok-4.5",
       "grok-oauth/grok-4.6",
       "kimi-api/kimi-k3",
+      "kimi-api-cn/kimi-k3",
       "kimi-oauth/k3",
       "kimi-oauth/kimi-for-coding-highspeed",
       "kimi-oauth/kimi-for-coding",
@@ -151,9 +152,36 @@ test("provider registry exposes configured API and OAuth model families", () => 
     "COMMANDCODE_API_KEY",
   ]);
   assert.equal(PROVIDERS.get("grok-api").baseUrl, "https://api.x.ai/v1");
-  // Kimi API Platform uses the global endpoint by default; China/custom
-  // deployments can still override it with KIMI_API_BASE_URL.
+  // kimi-api is the global platform. The mainland one is its own provider
+  // below, not a KIMI_API_BASE_URL override of this one -- the override still
+  // works for a genuinely custom deployment, but pointing it at moonshot.cn
+  // would authenticate the wrong account's key against the wrong host.
   assert.equal(PROVIDERS.get("kimi-api").baseUrl, "https://api.moonshot.ai/v1");
+  // Moonshot runs two platforms with separate accounts, separate billing, and
+  // keys each host rejects from the other. They must never collapse into one
+  // provider, and must never share a credential.
+  assert.equal(PROVIDERS.get("kimi-api-cn").baseUrl, "https://api.moonshot.cn/v1");
+  assert.notEqual(
+    PROVIDERS.get("kimi-api-cn").credential.file,
+    PROVIDERS.get("kimi-api").credential.file,
+  );
+  assert.notEqual(
+    PROVIDERS.get("kimi-api-cn").baseUrlEnv,
+    PROVIDERS.get("kimi-api").baseUrlEnv,
+  );
+  for (const field of ["environment", "keychainServices"]) {
+    const global = new Set(PROVIDERS.get("kimi-api").credential[field]);
+    const china = PROVIDERS.get("kimi-api-cn").credential[field];
+    assert.ok(
+      china.every((entry) => !global.has(entry)),
+      `kimi-api-cn ${field} must not overlap the global platform`,
+    );
+  }
+  // The China route has never been through the native collaboration probe
+  // AGENTS.md requires, so it stays conservative v1 while the global one is v2.
+  assert.equal(MODEL_BY_SLUG.get("kimi-api-cn/kimi-k3").multiAgentVersion, undefined);
+  assert.equal(MODEL_BY_SLUG.get("kimi-api/kimi-k3").multiAgentVersion, "v2");
+  assert.equal(MODEL_BY_SLUG.get("kimi-api-cn/kimi-k3").upstreamModel, "kimi-k3");
   assert.equal(PROVIDERS.get("github-copilot").authProfile, "github-copilot");
   assert.equal(PROVIDERS.get("github-copilot").protocol, "openai-responses");
   assert.deepEqual(PROVIDERS.get("github-copilot").credential.environment, [
@@ -235,12 +263,19 @@ test("provider registry exposes configured API and OAuth model families", () => 
     "DASHSCOPE_API_KEY",
   ]);
   assert.equal(PROVIDERS.get("anthropic-api").protocol, "anthropic");
+  // Deliberate v1 holdouts. Both are unproven through the native collaboration
+  // probe AGENTS.md requires, and a v2 claim is not inherited from a sibling
+  // route: kimi-api-cn is the same model on a different platform, which is
+  // exactly the kind of "surely it also works" assumption the probe exists for.
+  const unprovenForV2 = new Set(["grok-oauth/grok-4.6", "kimi-api-cn/kimi-k3"]);
   for (const model of LISTED_MODELS.filter(({ provider, slug }) =>
-    /^(?:kimi|grok)-/.test(provider) && slug !== "grok-oauth/grok-4.6",
+    /^(?:kimi|grok)-/.test(provider) && !unprovenForV2.has(slug),
   )) {
     assert.equal(model.multiAgentVersion, "v2", model.slug);
   }
-  assert.equal(MODEL_BY_SLUG.get("grok-oauth/grok-4.6").multiAgentVersion, undefined);
+  for (const slug of unprovenForV2) {
+    assert.equal(MODEL_BY_SLUG.get(slug).multiAgentVersion, undefined, slug);
+  }
   assert.equal(MODEL_BY_SLUG.get("deepseek/deepseek-v4-pro").multiAgentVersion, undefined);
   for (const slug of [
     "kimi-oauth/kimi-for-coding-highspeed",
@@ -289,6 +324,7 @@ test("provider registry exposes configured API and OAuth model families", () => 
     "grok-api/grok-4.5",
     "grok-oauth/grok-4.5",
     "grok-oauth/grok-4.6",
+    "kimi-api-cn/kimi-k3",
     "kimi-api/kimi-k3",
     "kimi-oauth/k3",
     "kimi-oauth/kimi-for-coding",

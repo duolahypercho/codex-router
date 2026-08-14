@@ -816,3 +816,34 @@ test("normalizes Grok prepaid credits and pay-as-you-go balance", () => {
     },
   ]);
 });
+
+// The balance probe used to be pinned to the global provider id. Both Moonshot
+// platforms answer /users/me/balance, in their own currency, from their own
+// account -- so it is parameterized and each provider must reach its own host.
+test("the China Kimi platform is probed on its own host and currency", async () => {
+  const requested = [];
+  process.env.KIMI_API_CN_KEY = "TEST_KIMI_CN_KEY";
+  delete process.env.KIMI_API_CN_BASE_URL;
+  try {
+    const snapshot = await providerAccountUsageSnapshot({
+      providerIds: ["kimi-api-cn"],
+      fetchImpl: async (url) => {
+        requested.push(String(url));
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            code: 0,
+            status: true,
+            data: { available_balance: 3.5, cash_balance: 3.5, voucher_balance: 0 },
+          }),
+        };
+      },
+    });
+    assert.deepEqual(requested, ["https://api.moonshot.cn/v1/users/me/balance"]);
+    assert.equal(snapshot["kimi-api-cn"].status, "available");
+    assert.equal(snapshot["kimi-api-cn"].metrics[0].currency, "CNY");
+  } finally {
+    delete process.env.KIMI_API_CN_KEY;
+  }
+});

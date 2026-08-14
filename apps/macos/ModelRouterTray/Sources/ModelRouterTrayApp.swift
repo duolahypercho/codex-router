@@ -433,6 +433,7 @@ final class RouterStore: ObservableObject {
     "deepseek": "DeepSeek",
     "grok-api": "Grok API",
     "kimi-api": "Kimi API",
+    "kimi-api-cn": "Kimi CN",
     "anthropic-api": "Claude",
     "zai-coding": "GLM",
     "qwen-plan": "Qwen",
@@ -1934,6 +1935,7 @@ struct RouterProviderInfo: Decodable {
     .init(id: "deepseek", displayName: "DeepSeek API", kind: "openai-compatible"),
     .init(id: "grok-api", displayName: "Grok API", kind: "openai-compatible"),
     .init(id: "kimi-api", displayName: "Kimi API", kind: "openai-compatible"),
+    .init(id: "kimi-api-cn", displayName: "Kimi API (China)", kind: "openai-compatible"),
     .init(id: "anthropic-api", displayName: "Anthropic API", kind: "openai-compatible"),
   ]
 }
