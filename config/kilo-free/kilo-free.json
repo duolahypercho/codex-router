@@ -9,7 +9,7 @@
       "baseUrl": "https://api.kilo.ai/api/gateway",
       "authMode": "anonymous",
       "anonymousModelPolicy": "suffix-free",
-      "anonymousNote": "No API key is needed for Kilo :free models. Anonymous access is limited per IP and the free catalog can change."
+      "anonymousNote": "No API key is needed for Kilo :free models. Use at your own risk: anonymous access is limited per IP, shared by everyone behind it, and can be narrowed or withdrawn without notice. The free catalog can change."
     }
   ]
 }

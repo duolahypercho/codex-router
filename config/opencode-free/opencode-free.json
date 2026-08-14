@@ -9,7 +9,7 @@
       "baseUrl": "https://console.opencode.ai/inference/openai/v1",
       "authMode": "anonymous",
       "anonymousModelPolicy": "opencode-console",
-      "anonymousNote": "No API key is needed for OpenCode Console free chat models. The free catalog and limits can change."
+      "anonymousNote": "No API key is needed for OpenCode Console free chat models. Use at your own risk: access is a published exception, not an entitlement, and some IDs ending in -free still require a bearer token. The free catalog and limits can change without notice."
     }
   ]
 }

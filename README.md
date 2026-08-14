@@ -384,6 +384,20 @@ has been observed. Kilo's general SDK setup guide still asks external SDK
 users for an API key; this entry intentionally covers only the gateway's
 documented anonymous `:free` path.
 
+> **Use these at your own risk.** They are the only providers here that reach an
+> upstream with no account behind them, and that changes what "supported" can
+> mean. Nobody has agreed to serve you: access is a published exception, not an
+> entitlement, and it can be narrowed, rate-limited, or withdrawn without
+> notice. The naming rule is a heuristic, not a promise — a model whose ID says
+> `free` may still answer `401 Paid inference requests require an
+> Authorization bearer token`, which was true of five of the seven IDs OpenCode
+> Console's filter admitted when this was written. Anonymous traffic is
+> identified by IP, so a router fanning out parallel subagents spends a shared
+> per-IP budget quickly, and one machine's usage can exhaust another's on the
+> same network. Treat these as a way to try a model, not as something to depend
+> on: nothing in this repository can keep them working, and a failure here is
+> not a bug the project can fix.
+
 ### Command Code Provider API
 
 Command Code's official Provider API is an OpenAI-compatible chat completions
