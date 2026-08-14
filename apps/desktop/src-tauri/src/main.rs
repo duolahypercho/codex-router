@@ -337,10 +337,7 @@ async fn local_models(state: State<'_, RouterState>) -> Result<Value, String> {
 }
 
 #[tauri::command]
-async fn local_model_speed(
-    state: State<'_, RouterState>,
-    model: String,
-) -> Result<Value, String> {
+async fn local_model_speed(state: State<'_, RouterState>, model: String) -> Result<Value, String> {
     validate_local_model_ref(&model)?;
     run_json_command(
         state.inner().clone(),
@@ -396,10 +393,7 @@ async fn vision_bridge_probe(state: State<'_, RouterState>) -> Result<Value, Str
 }
 
 #[tauri::command]
-async fn set_vision_bridge(
-    state: State<'_, RouterState>,
-    enabled: bool,
-) -> Result<Value, String> {
+async fn set_vision_bridge(state: State<'_, RouterState>, enabled: bool) -> Result<Value, String> {
     run_json_command(
         state.inner().clone(),
         vec![
@@ -429,10 +423,7 @@ async fn set_vision_engine(
 }
 
 #[tauri::command]
-async fn set_vision_effort(
-    state: State<'_, RouterState>,
-    effort: String,
-) -> Result<Value, String> {
+async fn set_vision_effort(state: State<'_, RouterState>, effort: String) -> Result<Value, String> {
     validate_vision_value(&effort, "vision effort")?;
     run_json_command(
         state.inner().clone(),
@@ -443,10 +434,7 @@ async fn set_vision_effort(
 }
 
 #[tauri::command]
-async fn pull_vision_model(
-    state: State<'_, RouterState>,
-    model: String,
-) -> Result<Value, String> {
+async fn pull_vision_model(state: State<'_, RouterState>, model: String) -> Result<Value, String> {
     validate_local_model_ref(&model)?;
     run_json_command(
         state.inner().clone(),
@@ -538,10 +526,7 @@ async fn uninstall_local_model(
 }
 
 #[tauri::command]
-async fn cancel_local_model(
-    state: State<'_, RouterState>,
-    model: String,
-) -> Result<Value, String> {
+async fn cancel_local_model(state: State<'_, RouterState>, model: String) -> Result<Value, String> {
     validate_local_model_ref(&model)?;
     run_json_command(
         state.inner().clone(),
@@ -800,10 +785,7 @@ async fn set_tool_result_aging(
 }
 
 #[tauri::command]
-async fn set_signed_routing(
-    state: State<'_, RouterState>,
-    enabled: bool,
-) -> Result<Value, String> {
+async fn set_signed_routing(state: State<'_, RouterState>, enabled: bool) -> Result<Value, String> {
     run_command_then_snapshot(
         state.inner().clone(),
         vec![
@@ -825,10 +807,7 @@ async fn presence_status(state: State<'_, RouterState>) -> Result<Value, String>
 }
 
 #[tauri::command]
-async fn set_presence_mode(
-    state: State<'_, RouterState>,
-    mode: String,
-) -> Result<Value, String> {
+async fn set_presence_mode(state: State<'_, RouterState>, mode: String) -> Result<Value, String> {
     if !matches!(mode.as_str(), "always" | "follow-codex") {
         return Err("Choose Always or With Codex for tray visibility.".into());
     }
@@ -923,10 +902,7 @@ async fn run_json_command(
     .map_err(|_| "The Model Router command did not finish.".to_string())?
 }
 
-async fn run_command_then_snapshot(
-    state: RouterState,
-    args: Vec<String>,
-) -> Result<Value, String> {
+async fn run_command_then_snapshot(state: RouterState, args: Vec<String>) -> Result<Value, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let borrowed = args.iter().map(String::as_str).collect::<Vec<_>>();
         run_control(&state, &borrowed, None)?;
@@ -1413,8 +1389,7 @@ fn validate_vision_value(value: &str, label: &str) -> Result<(), String> {
     let valid = !trimmed.is_empty()
         && trimmed.len() <= 256
         && trimmed.chars().all(|character| {
-            character.is_ascii_alphanumeric()
-                || matches!(character, '.' | '_' | '/' | ':' | '-')
+            character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '/' | ':' | '-')
         });
     if valid {
         Ok(())
