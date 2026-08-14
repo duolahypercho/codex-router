@@ -4078,6 +4078,12 @@ test("router ages consumed large tool results but preserves the newest result fr
     json(response, 200, { output: [{ type: "message", role: "assistant", content: "ok" }] });
   });
   const stateDir = mkdtempSync(path.join(os.tmpdir(), "routing-tool-result-aging-"));
+  // Aging is opt-in, so this test states the setting it is exercising rather
+  // than relying on a default.
+  writeFileSync(
+    path.join(stateDir, "tool-result-aging.json"),
+    JSON.stringify({ version: 1, enabled: true, nativeEnabled: false }),
+  );
   const routerPort = await openPort();
   const router = run("router.mjs", {
     CODEX_ROUTER_PORT: String(routerPort),

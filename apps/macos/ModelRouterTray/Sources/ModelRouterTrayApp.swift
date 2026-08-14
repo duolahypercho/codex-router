@@ -675,6 +675,25 @@ final class RouterStore: ObservableObject {
       }
   }
 
+  // Issue #182. The headline card follows whatever is generating right now,
+  // which answers "how fast is this" but never "how do my models compare".
+  // `lastUsedAt` was already decoded and unread; this is what it was for.
+  // Only measured models appear -- an unmeasured one would need a placeholder
+  // row that says nothing, and the card above already covers "no samples yet".
+  var recentModelSpeeds: [ModelUsageRow] {
+    guard let snapshot = providerUsage else { return [] }
+    return snapshot.providers
+      .flatMap { provider in
+        (provider.models ?? []).map { model in
+          ModelUsageRow(providerID: provider.id, providerName: provider.displayName, model: model)
+        }
+      }
+      .filter { $0.model.observedTokensPerSecond != nil }
+      .sorted { ($0.model.lastUsedAt ?? "") > ($1.model.lastUsedAt ?? "") }
+      .prefix(4)
+      .map { $0 }
+  }
+
   var overallTokenTotal: Int64 {
     overallModelUsage.reduce(0) { $0 + $1.model.totalTokens }
   }
@@ -2599,6 +2618,37 @@ private struct TrayView: View {
       Color.primary.opacity(0.045),
       in: RoundedRectangle(cornerRadius: 9, style: .continuous)
     )
+    // Issue #182: the card above tracks the active model only, so a second
+    // model's speed was unknowable without switching to it and waiting.
+    if store.recentModelSpeeds.count > 1 {
+      VStack(spacing: 0) {
+        ForEach(store.recentModelSpeeds) { row in
+          HStack(spacing: 8) {
+            Text(row.model.displayName ?? row.model.slug)
+              .font(.system(size: 9))
+              .lineLimit(1)
+              .truncationMode(.middle)
+            Spacer(minLength: 8)
+            Text(row.providerName)
+              .font(.system(size: 8))
+              .foregroundStyle(routerMuted)
+              .lineLimit(1)
+            Text(row.model.observedTokensPerSecond.map { String(format: "%.1f", $0) } ?? "—")
+              .font(.system(size: 9, weight: .medium, design: .monospaced))
+              .foregroundStyle(routerMint)
+              .monospacedDigit()
+              .frame(width: 46, alignment: .trailing)
+          }
+          .padding(.vertical, 3)
+          .padding(.horizontal, 9)
+        }
+      }
+      .padding(.vertical, 2)
+      .background(
+        Color.primary.opacity(0.03),
+        in: RoundedRectangle(cornerRadius: 9, style: .continuous)
+      )
+    }
 
     if let agingStats = target?.modelSettings?.toolResultAging?.stats,
        let agedRequests = agingStats.requests, agedRequests > 0 {
@@ -2878,11 +2928,11 @@ private struct TrayView: View {
       isDisabled: store.providerOperation != nil || store.signedRouting
     )
     settingRow(
-      title: routerLocalized("Compact old tool results"),
+      title: routerLocalized("Compact old tool results (experimental)"),
       detail: target.modelSettings?.toolResultAging?.environmentOverride == true
         ? routerLocalized("Forced off by CODEX_ROUTER_TOOL_RESULT_AGING=0")
         : (target.modelSettings?.toolResultAging?.stats?.savingsSummary
-          ?? routerLocalized("External models · applies on the next request")),
+          ?? routerLocalized("Off by default · replaces consumed tool results on external models")),
       isOn: Binding(
         get: { target.modelSettings?.toolResultAging?.enabled ?? true },
         set: { enabled in Task { await store.setToolResultAgingEnabled(enabled) } }

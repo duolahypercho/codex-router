@@ -11,6 +11,10 @@ function dateKey(value) {
   return `${year}-${month}-${day}`;
 }
 
+// Fastest published serving rates are a few hundred tokens per second; this
+// is set well above them so a genuinely fast model is never discarded.
+const MAX_PLAUSIBLE_TOKENS_PER_SECOND = 500;
+
 function nonnegative(value) {
   const number = Number(value);
   return Number.isFinite(number) && number >= 0 ? Math.round(number) : 0;
@@ -134,14 +138,28 @@ export function aggregateProviderUsage(events, { days = 90, now = Date.now() } =
     // 426-token one at 69 on the same model.
     const firstTokenMs = optionalNonnegative(event.firstTokenMs);
     const generationDurationMs = durationMs - (firstTokenMs ?? durationMs);
+    // A long Codex turn can trip the empty-completion hold budget and still
+    // finish as a normal 200 with streamed tokens. That flag means "we
+    // stopped waiting to classify emptiness", not "this rate is unusable".
+    // Keep those replies; drop only empty/retried/canceled ones.
     const measurable =
       event.status >= 200 &&
       event.status < 400 &&
       !event.retries &&
       event.emptyCompletion !== true &&
-      event.emptyCompletionRetried !== true &&
-      event.emptyCompletionGuardReleased !== true;
-    if (measurable && outputTokens > 0 && firstTokenMs !== undefined && generationDurationMs > 0) {
+      event.emptyCompletionRetried !== true;
+    // Detection can fail on a converted stream -- the first token is noticed
+    // near the end, so thousands of tokens appear to arrive in milliseconds.
+    // No served model streams anywhere near this fast, so treat it as a broken
+    // sample rather than a record-breaking one.
+    const impossibleRate = (outputTokens * 1_000) / generationDurationMs > MAX_PLAUSIBLE_TOKENS_PER_SECOND;
+    if (
+      measurable &&
+      outputTokens > 0 &&
+      firstTokenMs !== undefined &&
+      generationDurationMs > 0 &&
+      !impossibleRate
+    ) {
       model.speedSamples.push({ outputTokens, generationDurationMs });
       // Keep the displayed rate current instead of averaging the model's
       // entire 90-day usage history. Twenty replies smooth one-off bursts
@@ -170,14 +188,17 @@ export function aggregateProviderUsage(events, { days = 90, now = Date.now() } =
       ),
       models: [...models.values()]
         .map(({ speedSamples, firstTokenSamples, ...model }) => {
-          const speedOutputTokens = speedSamples.reduce(
-            (total, sample) => total + sample.outputTokens,
-            0,
-          );
-          const speedDurationMs = speedSamples.reduce(
-            (total, sample) => total + sample.generationDurationMs,
-            0,
-          );
+          // Median of per-reply rates, not total tokens over total time. A
+          // pooled ratio lets one bad sample carry the answer: a stream whose
+          // first token is detected late reports thousands of tokens across a
+          // fraction of a second, and summing puts that straight into the
+          // numerator. Observed live -- one provider produced 11,656 tok/s
+          // this way and dragged a 20-sample window to 711 while every sane
+          // reply in it sat near 114. A median cannot be moved by a minority
+          // of impossible samples, and needs no threshold to tune.
+          const rates = speedSamples
+            .map((sample) => (sample.outputTokens * 1_000) / sample.generationDurationMs)
+            .sort((left, right) => left - right);
           return {
             ...model,
             speedSampleCount: speedSamples.length,
@@ -188,10 +209,9 @@ export function aggregateProviderUsage(events, { days = 90, now = Date.now() } =
                   Math.floor(firstTokenSamples.length / 2)
                 ]
               : null,
-            observedTokensPerSecond:
-              speedDurationMs > 0
-                ? Math.round((speedOutputTokens * 1_000 * 10) / speedDurationMs) / 10
-                : null,
+            observedTokensPerSecond: rates.length
+              ? Math.round(rates[Math.floor(rates.length / 2)] * 10) / 10
+              : null,
           };
         })
         .sort(
