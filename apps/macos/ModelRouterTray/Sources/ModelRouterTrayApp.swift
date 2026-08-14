@@ -2811,6 +2811,11 @@ private struct TrayView: View {
           .foregroundStyle(routerMuted)
       }
       Spacer()
+      // A dropdown rather than the segmented style the neighbouring rows use:
+      // the option labels are written in the language each one selects, so
+      // they are different scripts and different widths, and a segmented
+      // control would size every cell to the widest and leave the Latin ones
+      // adrift. A dropdown also stays right when a third language lands.
       Picker("", selection: Binding(
         get: { store.language },
         set: { store.setLanguage($0) }
@@ -2819,7 +2824,7 @@ private struct TrayView: View {
           Text(option.label).tag(option)
         }
       }
-      .pickerStyle(.segmented)
+      .pickerStyle(.menu)
       .labelsHidden()
       .frame(width: 168)
     }
