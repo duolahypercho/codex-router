@@ -784,6 +784,27 @@ add(
 // must not read as a failure: a `fail` here sets the exit code and sends the
 // tray's Fix button down the full repair path for a router that is off on
 // purpose.
+// A ChatGPT session the router can no longer spend is not a router fault, but
+// it is why native models stop appearing in the harness -- and it is fixed by
+// opening Codex, which nothing else would tell the user.
+try {
+  const { nativeSessionStatus } = await import("./codex-native-session.mjs");
+  const session = nativeSessionStatus();
+  if (session.present && session.fallbackEnabled) {
+    const hours = session.expiresInHours;
+    add(
+      session.usable ? "ok" : "warn",
+      "Codex session for harness models",
+      session.usable
+        ? `valid${hours === undefined ? "" : ` for ${hours}h`}`
+        : "expired; open Codex once to renew it (native models are withheld until then)",
+      "Open Codex, or run `codex login`.",
+    );
+  }
+} catch {
+  // Never let a diagnostic be the thing that fails the doctor.
+}
+
 const followsHostApps = serviceFollowsHostApps();
 let serviceLoaded = false;
 let serviceStoppedByDesign = false;

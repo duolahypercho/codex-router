@@ -12,6 +12,7 @@ const {
   nativeSessionAvailable,
   nativeSessionHeaders,
   nativeSessionStatus,
+  tokenExpiryMs,
 } = await import("../src/codex-native-session.mjs");
 
 const { dshNativeModels } = await import("../src/dsh-catalog.mjs");
@@ -207,4 +208,54 @@ test("a substituted caller's payload is made acceptable to the native endpoint",
   assert.equal(out.model, "gpt-5.6-luna");
   assert.equal(out.stream, true);
   assert.deepEqual(out.input, sent.input);
+});
+
+// The gap that made this "works while you also use Codex" rather than "works":
+// the access token has a ten-day life, Codex renews it whenever Codex is used,
+// and a harness-only stretch longer than that left the router sending a dead
+// token and the user staring at 401s.
+const jwtWithExp = (epochSeconds) =>
+  `header.${Buffer.from(JSON.stringify({ exp: epochSeconds })).toString("base64url")}.sig`;
+
+test("the expiry claim is read without the token leaving the module", () => {
+  const at = Math.floor(Date.now() / 1000) + 3600;
+  assert.equal(tokenExpiryMs(jwtWithExp(at)), at * 1000);
+  // Anything unreadable is treated as usable: refusing to send a token that
+  // might be perfectly good is worse than letting the upstream be the judge.
+  assert.equal(tokenExpiryMs("not-a-jwt"), undefined);
+  assert.equal(tokenExpiryMs(""), undefined);
+  assert.equal(tokenExpiryMs("a.notbase64!.c"), undefined);
+});
+
+test("an expired session is withheld rather than spent on a certain 401", () => {
+  const seconds = Math.floor(Date.now() / 1000);
+  // No Codex to run, so the refresh nudge is a no-op and the behaviour under
+  // test is the withholding itself.
+  process.env.CODEX_BIN = "/nonexistent/codex";
+  try {
+    writeAuth({ access_token: jwtWithExp(seconds - 3600), account_id: ACCOUNT });
+    assert.equal(nativeSessionHeaders(), undefined, "a dead token must not be sent");
+    assert.equal(nativeSessionStatus().expired, true);
+    assert.equal(nativeSessionStatus().usable, false);
+
+    // Inside the skew: still refused, because a token that dies mid-flight
+    // costs the whole turn.
+    writeAuth({ access_token: jwtWithExp(seconds + 30), account_id: ACCOUNT });
+    assert.equal(nativeSessionHeaders(), undefined);
+
+    writeAuth({ access_token: jwtWithExp(seconds + 172800), account_id: ACCOUNT });
+    assert.notEqual(nativeSessionHeaders(), undefined, "a live token must still be sent");
+    assert.equal(nativeSessionStatus().usable, true);
+    assert.ok(nativeSessionStatus().expiresInHours > 47);
+  } finally {
+    delete process.env.CODEX_BIN;
+  }
+});
+
+test("status reports the remaining life, never the token", () => {
+  const seconds = Math.floor(Date.now() / 1000);
+  writeAuth({ access_token: jwtWithExp(seconds + 36000), account_id: ACCOUNT });
+  const status = nativeSessionStatus();
+  assert.ok(status.expiresInHours > 9 && status.expiresInHours <= 10);
+  assert.doesNotMatch(JSON.stringify(status), new RegExp(ACCOUNT));
 });

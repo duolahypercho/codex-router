@@ -22,6 +22,16 @@
   401 back instead of a success. The credential is never logged, never returned
   by a status call, and never put in an error message.
 
+  The session is checked for life, not just presence. That access token lasts
+  about ten days and Codex renews it only when Codex is used, so a harness-only
+  stretch longer than that would have left the router sending a dead token. An
+  expired session is declined two minutes early, native models stop being
+  published while it is dead, and `doctor` gains a line saying to open Codex
+  once — which is the fix, and which nothing else would have told anybody.
+  Renewal is left to Codex: reproducing that OAuth exchange would mean guessing
+  an unpublished client identity and risking the very login this was asked not
+  to disturb.
+
   Worth knowing before leaving it on: it widens what the caller key reaches,
   from the API-key providers to the ChatGPT subscription as well.
   `CODEX_ROUTER_NATIVE_SESSION_FALLBACK=0` turns it off, and the harness drops

@@ -72,9 +72,16 @@ export function nodeMeetsHarnessMinimum(version = process.versions.node) {
 
 export async function harnessSnapshotWithWeb() {
   const base = harnessSnapshot();
-  if (!base.installed) return { ...base, web: { running: false, url: null } };
+  const { nativeSessionStatus } = await import("./codex-native-session.mjs");
+  // Reported beside the harness because this is where its consequence shows:
+  // native models publish only while the session is spendable, so a stale one
+  // is why eight models quietly left the picker.
+  const nativeSession = nativeSessionStatus();
+  if (!base.installed) {
+    return { ...base, nativeSession, web: { running: false, url: null } };
+  }
   const { dshWebState } = await import("./dsh-web.mjs");
-  return { ...base, web: await dshWebState() };
+  return { ...base, nativeSession, web: await dshWebState() };
 }
 
 export function harnessSnapshot() {

@@ -1022,9 +1022,21 @@ the same user on the same machine buys nothing.
   spends the ChatGPT subscription and not only the API-key providers. That is a
   deliberate, user-made tradeoff; `CODEX_ROUTER_NATIVE_SESSION_FALLBACK=0` turns
   it off and the harness silently drops back to routed models only.
-- Age is reported because Codex refreshes that file. A stale session is a
-  different problem from an absent one, and an expired token surfaces as the
-  upstream's own 401 rather than anything this router invents.
+- **The access token lives about ten days, and Codex renews it only when Codex
+  is used.** A harness-only stretch longer than that would otherwise leave the
+  router sending a dead token. `nativeSessionHeaders()` reads the `exp` claim
+  and declines two minutes early, so an expired session withholds the headers
+  and `dshRoutedModels()` stops publishing native models — the picker loses the
+  eight rather than serving certain 401s.
+- **Codex refreshes its own credential; this router never does.** Reproducing
+  that OAuth exchange would mean guessing an unpublished client identity and, if
+  refresh tokens rotate, either rewriting Codex's own file or invalidating the
+  login this router was asked not to disturb. `refreshViaCodex()` runs
+  `codex login status` instead — best effort, single-flight, at most once every
+  five minutes — and lets Codex decide. If nothing renews, the session simply
+  reads as expired.
+- `doctor` reports it as its own line, because "open Codex once" is the fix and
+  nothing else would say so.
 
 ## A client the tray cannot watch keeps the router on
 
