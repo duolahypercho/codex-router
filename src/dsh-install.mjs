@@ -70,6 +70,13 @@ export function nodeMeetsHarnessMinimum(version = process.versions.node) {
   return Number.isFinite(minor) && minor >= MINIMUM_NODE_MINOR;
 }
 
+export async function harnessSnapshotWithWeb() {
+  const base = harnessSnapshot();
+  if (!base.installed) return { ...base, web: { running: false, url: null } };
+  const { dshWebState } = await import("./dsh-web.mjs");
+  return { ...base, web: await dshWebState() };
+}
+
 export function harnessSnapshot() {
   const binary = harnessCliPath();
   return {
@@ -125,11 +132,28 @@ export async function setupHarness({ force = false, setDefaultModel = false } = 
   const install = installHarness({ force });
   const { install: publishRoute } = await import("./dsh-config-manager.mjs");
   const published = publishRoute({ setDefaultModel });
+
+  // Start the browser UI on the way out, adopting one that is already serving.
+  // A publish with nothing running leaves the user holding a command and a port
+  // to remember, which is the step this whole action exists to remove. A
+  // failure here is reported, not thrown: the models are published either way,
+  // and that result must not be discarded because a UI would not boot.
+  let web;
+  let webError;
+  try {
+    const { startDshWeb } = await import("./dsh-web.mjs");
+    web = await startDshWeb();
+  } catch (error) {
+    webError = error?.message || String(error);
+  }
+
   return {
     binary: install.binary,
     version: harnessVersion(install.binary),
     installedNow: install.changed,
     published,
+    web: web || null,
+    webError: webError || null,
     // Native GPT models are never published: they need the caller's own
     // ChatGPT session, which a harness request does not carry. Saying so beats
     // letting somebody count the picker and conclude the publish dropped them.

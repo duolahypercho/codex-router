@@ -25,6 +25,16 @@
   a harness request carries no ChatGPT session — so the model count the button
   reports is the routable set.
 
+  The button then starts the harness's browser UI and turns into **Open site**.
+  Publishing models and leaving somebody to remember a command and a port was
+  the step this action existed to remove, so `setupHarness` starts the UI on the
+  way out and the row reports the URL it is serving. A running server this
+  router did not start is adopted rather than collided with — the harness binds
+  a fixed port, so a second launch exits with `EADDRINUSE` — and only a process
+  this router started is ever signalled, matched on PID *and* process start
+  identity because PIDs are reused. A UI that fails to boot does not discard a
+  publish that succeeded.
+
 
 - **A client the tray cannot watch keeps the router running.** The tray's
   presence setting could tie the router to the Codex and ChatGPT desktop apps

@@ -930,6 +930,25 @@ user has to find in the docs, so `src/dsh-install.mjs` owns the other half.
   own ChatGPT session, which a harness request does not carry. The count the
   button reports is the routable set, not the picker.
 
+`src/dsh-web.mjs` starts and finds the browser UI, so the tray's button can be
+`Open site` once there is a site to open.
+
+- Adopt, never collide. The harness binds a fixed port rather than picking a
+  free one, so a second launch exits with `EADDRINUSE` and takes the click with
+  it. `startDshWeb` probes first and returns `startedNow: false` when something
+  already answers.
+- Stop only what this router started, the same rule `ollama-runtime.mjs`
+  follows. PID plus process start identity are persisted together and both must
+  match, because PIDs are reused; `src/process-identity.mjs` holds that check
+  for both callers.
+- The probe asks whether the port answers, not what is behind it. A 404 from the
+  harness's own router is a running harness, and fingerprinting somebody else's
+  HTML to be surer would be worse than the ambiguity.
+- The port is a setting (`MODEL_ROUTER_DSH_WEB_PORT`), not a constant. `dsh web
+  --port` exists, and a user who moved theirs must not be sent to a dead URL.
+- A UI that will not start does not discard a publish that succeeded.
+  `setupHarness` reports `webError` and leaves the model count standing.
+
 
 ## A client the tray cannot watch keeps the router on
 

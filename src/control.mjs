@@ -1501,13 +1501,28 @@ async function handleNativeRedirect(action, value) {
 // explicit subcommand rather than folded into `apply`, because it installs a
 // third-party package and that must never be a side effect of something else.
 async function handleHarness(action) {
-  const { harnessSnapshot, setupHarness } = await import("./dsh-install.mjs");
+  const { harnessSnapshotWithWeb, setupHarness } = await import("./dsh-install.mjs");
   if (!action || action === "status") {
-    process.stdout.write(`${JSON.stringify(harnessSnapshot())}\n`);
+    process.stdout.write(`${JSON.stringify(await harnessSnapshotWithWeb())}\n`);
+    return;
+  }
+  if (action === "web") {
+    const { dshWebState } = await import("./dsh-web.mjs");
+    process.stdout.write(`${JSON.stringify(await dshWebState())}\n`);
+    return;
+  }
+  if (action === "start") {
+    const { startDshWeb } = await import("./dsh-web.mjs");
+    process.stdout.write(`${JSON.stringify(await startDshWeb())}\n`);
+    return;
+  }
+  if (action === "stop") {
+    const { stopDshWeb } = await import("./dsh-web.mjs");
+    process.stdout.write(`${JSON.stringify(await stopDshWeb())}\n`);
     return;
   }
   if (action !== "setup" && action !== "install") {
-    throw new Error("Usage: control harness status|setup");
+    throw new Error("Usage: control harness status|setup|start|stop|web");
   }
   const result = await setupHarness();
   process.stdout.write(`${JSON.stringify(result)}\n`);

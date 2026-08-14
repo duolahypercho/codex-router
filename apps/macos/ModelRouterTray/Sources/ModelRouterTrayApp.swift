@@ -1223,11 +1223,51 @@ final class RouterStore: ObservableObject {
       let result = try JSONDecoder().decode(HarnessSetupResult.self, from: output)
       await refresh()
       harnessSucceeded = true
-      harnessMessage = routerFormat(
-        routerLocalized("%d models published. Run `%@` to start."),
-        result.published.models,
-        result.launch
-      )
+      if let failure = result.webError {
+        // The publish landed; only the UI did not come up. Say which, so the
+        // model count is not read as a lie.
+        harnessMessage = routerFormat(
+          routerLocalized("%d models published, but the harness UI did not start: %@"),
+          result.published.models,
+          failure
+        )
+        harnessSucceeded = false
+      } else {
+        harnessMessage = routerFormat(
+          routerLocalized("%d models published."),
+          result.published.models
+        )
+        openHarnessWeb()
+      }
+    } catch {
+      harnessMessage = error.localizedDescription
+      await refresh()
+    }
+  }
+
+  // Opening is not a router action -- there is nothing to run and nothing that
+  // can fail slowly -- so it stays off the serialized operation queue that the
+  // install and publish share.
+  func openHarnessWeb() {
+    guard let raw = snapshot.harness?.web?.url, let url = URL(string: raw) else { return }
+    NSWorkspace.shared.open(url)
+  }
+
+  // Start without republishing. Offered when the models are already published
+  // and only the browser UI is down, which is the state a machine lands in
+  // after a reboot.
+  func startHarnessWeb() async {
+    guard providerOperation == nil else { return }
+    providerOperation = "harness"
+    harnessSucceeded = false
+    harnessMessage = routerLocalized("Starting DeepSeek Harness…")
+    defer { providerOperation = nil }
+    do {
+      _ = try await runControl(arguments: ["harness", "start"])
+      await refresh()
+      harnessSucceeded = true
+      harnessMessage = nil
+      openHarnessWeb()
     } catch {
       harnessMessage = error.localizedDescription
       await refresh()
@@ -1875,6 +1915,8 @@ struct HarnessSetupResult: Decodable {
   struct Published: Decodable { let models: Int }
   let published: Published
   let launch: String
+  let web: RouterHarnessWeb?
+  let webError: String?
 }
 
 struct RouterHarness: Decodable {
@@ -1885,6 +1927,13 @@ struct RouterHarness: Decodable {
   let nodeVersion: String
   let nodeSupported: Bool
   let minimumNode: String
+  let web: RouterHarnessWeb?
+}
+
+struct RouterHarnessWeb: Decodable {
+  let running: Bool
+  let url: String?
+  let port: Int?
 }
 
 struct RouterPresence: Decodable {
@@ -4636,6 +4685,7 @@ private struct TrayView: View {
     let harness = store.snapshot.harness
     let installed = harness?.installed == true
     let published = harness?.published == true
+    let running = harness?.web?.running == true
     let blocked = harness?.nodeSupported == false
     return VStack(alignment: .leading, spacing: 6) {
       HStack(spacing: 12) {
@@ -4654,15 +4704,35 @@ private struct TrayView: View {
             .tint(routerAccent)
             .frame(width: 94)
             .accessibilityLabel(routerLocalized("Setting up DeepSeek Harness"))
+        } else if running {
+          // Everything is in place, so the only thing left to want is the page.
+          Button {
+            store.openHarnessWeb()
+          } label: {
+            Label(routerLocalized("Open site"), systemImage: "arrow.up.forward.app")
+          }
+          .buttonStyle(AccentButtonStyle())
+          .help(routerLocalized("Open the DeepSeek Harness browser UI"))
+        } else if installed && published {
+          // Published but nothing serving: the state a machine reboots into.
+          // Starting is not republishing, so it does not rewrite the harness's
+          // documents to put a window back on screen.
+          Button {
+            Task { await store.startHarnessWeb() }
+          } label: {
+            Label(routerLocalized("Start"), systemImage: "play.circle")
+          }
+          .buttonStyle(AccentButtonStyle())
+          .disabled(store.providerOperation != nil || blocked)
+          .opacity(store.providerOperation == nil && !blocked ? 1 : 0.5)
+          .help(routerLocalized("Start the DeepSeek Harness browser UI"))
         } else {
           Button {
             Task { await store.setupHarness() }
           } label: {
             Label(
-              installed
-                ? (published ? routerLocalized("Republish") : routerLocalized("Connect"))
-                : routerLocalized("Install"),
-              systemImage: installed ? "arrow.triangle.2.circlepath" : "arrow.down.circle"
+              installed ? routerLocalized("Connect") : routerLocalized("Install"),
+              systemImage: installed ? "link" : "arrow.down.circle"
             )
           }
           .buttonStyle(AccentButtonStyle())
@@ -4702,8 +4772,11 @@ private struct TrayView: View {
       return routerLocalized("Not installed · installs the CLI, then publishes this router's models")
     }
     let version = harness.version.map { "v\($0)" } ?? routerLocalized("installed")
+    if let web = harness.web, web.running, let url = web.url {
+      return routerFormat(routerLocalized("%@ · running at %@"), version, url)
+    }
     return published
-      ? routerFormat(routerLocalized("%@ · routed models published · `dsh web` to start"), version)
+      ? routerFormat(routerLocalized("%@ · routed models published · not running"), version)
       : routerFormat(routerLocalized("%@ · installed but not routed here yet"), version)
   }
 
