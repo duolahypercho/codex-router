@@ -263,7 +263,7 @@ test("the tray ships a Swift test target and CI runs it", () => {
   assert.match(manifest, /\.testTarget\(\s*\n\s*name: "ModelRouterTrayTests"/);
 
   const workflow = readFileSync(path.join(root, ".github", "workflows", "ci.yml"), "utf8");
-  assert.match(workflow, /working-directory: apps\/macos\/ModelRouterTray\n\s+run: swift test/);
+  assert.match(workflow, /working-directory: apps\/macos\/ModelRouterTray\s+run: swift test/);
   assert.match(workflow, /if: runner\.os == 'macOS'/);
 });
 
@@ -276,8 +276,10 @@ test("the island mode decision stays pure, so it stays testable", () => {
   // `defaults` inside it, that stops being true and the Swift tests stop
   // being able to call it.
   assert.match(source, /nonisolated static func resolveIslandMode\(/);
-  const body = source.slice(source.indexOf("nonisolated static func resolveIslandMode("));
-  assert.doesNotMatch(body.slice(0, body.indexOf("\n  init()")), /defaults\./);
+  const declaration = source.slice(source.indexOf("nonisolated static func resolveIslandMode("));
+  const initIndex = declaration.search(/\r?\n  init\(\)/);
+  assert.ok(initIndex > 0, "resolveIslandMode still sits above init()");
+  assert.doesNotMatch(declaration.slice(0, initIndex), /defaults\./);
 });
 
 test("only one process may draw the Island overlay", () => {
