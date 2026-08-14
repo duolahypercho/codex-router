@@ -15,8 +15,8 @@ MODEL_ROUTER_ALLOW_FOREIGN_STATE=1
 export MODEL_ROUTER_ALLOW_FOREIGN_STATE
 
 case "$target" in
-  codex) ;;
-  *) echo "MODEL_ROUTER_TARGET must be codex." >&2; exit 2 ;;
+  codex|dsh) ;;
+  *) echo "MODEL_ROUTER_TARGET must be codex or dsh." >&2; exit 2 ;;
 esac
 
 for argument in "$@"; do
@@ -39,6 +39,13 @@ if [ "$prepare_only" = true ] && [ "$adopt_native_catalog" = true ]; then
 fi
 if [ "$migrate_known" = true ] && [ "$adopt_native_catalog" = true ]; then
   echo "--adopt-native-catalog cannot be combined with --migrate-known." >&2
+  exit 2
+fi
+# The native catalog is the ChatGPT-plan model list Codex ships and adopts.
+# The harness has no equivalent and no ChatGPT session, so there is nothing for
+# either flag to act on there.
+if [ "$target" = dsh ] && [ "$adopt_native_catalog" = true ]; then
+  echo "--adopt-native-catalog applies to the Codex integration only." >&2
   exit 2
 fi
 if [ "${CODEX_ROUTER_PACKAGE_MANAGER:-}" = homebrew ] && [ "$force_deps" = true ]; then
@@ -161,13 +168,23 @@ esac
 node src/secret.mjs ensure
 config_enabled=false
 service_installed=false
-config_manager=src/config-manager.mjs
+# Each target enables its own client configuration; everything above and below
+# that one step is the shared router plane.
+if [ "$target" = dsh ]; then
+  config_manager=src/dsh-config-manager.mjs
+  config_enable_command=install
+  config_disable_command=uninstall
+else
+  config_manager=src/config-manager.mjs
+  config_enable_command=enable
+  config_disable_command=disable
+fi
 rollback() {
   if [ "$service_installed" = true ]; then
     node src/service.mjs uninstall >/dev/null 2>&1 || true
   fi
   if [ "$config_enabled" = true ]; then
-    node "$config_manager" disable >/dev/null 2>&1 || true
+    node "$config_manager" "$config_disable_command" >/dev/null 2>&1 || true
   elif [ "$adopt_native_catalog" = true ]; then
     node src/native-catalog-source.mjs clear-pending >/dev/null 2>&1 || true
   fi
@@ -177,13 +194,27 @@ trap rollback EXIT HUP INT TERM
 if [ "$adopt_native_catalog" = true ]; then
   node src/native-catalog-source.mjs prepare-from-config >/dev/null
 fi
+# Building the Codex catalog asks the Codex CLI whether the session is signed
+# in, and refuses to publish when it cannot ask. A harness-only machine has no
+# Codex to ask, so the catalog is built only when Codex is the target or an
+# earlier Codex install already left one behind.
 state_dir=${MODEL_ROUTER_STATE_DIR:-${CODEX_ROUTER_STATE_DIR:-${KIMI_CODEX_STATE_DIR:-${CODEX_HOME:-$HOME/.codex}/codex-router}}}
-if [ -s "$state_dir/native-models.json" ]; then
+if [ "$target" = codex ]; then
+  if [ -s "$state_dir/native-models.json" ]; then
+    node src/catalog.mjs
+  else
+    node src/catalog.mjs --refresh-native --bundled-native
+  fi
+elif [ -s "$state_dir/native-models.json" ]; then
   node src/catalog.mjs
-else
-  node src/catalog.mjs --refresh-native --bundled-native
 fi
 node src/litellm-config.mjs
+# The router plane is shared, so an install for one client changes the routable
+# set for the other. Republish whichever integration is already installed here
+# rather than leaving it advertising a stale model list.
+if [ "$target" != dsh ] && [ -s "$state_dir/dsh-models.json" ]; then
+  node src/dsh-config-manager.mjs install >/dev/null
+fi
 
 if [ "$prepare_only" = true ]; then
   echo "Dependencies and local Codex router files are prepared. Application configuration was not changed."
@@ -192,9 +223,9 @@ fi
 
 config_enabled=true
 if [ "$adopt_native_catalog" = true ]; then
-  node "$config_manager" enable --adopt-native-catalog
+  node "$config_manager" "$config_enable_command" --adopt-native-catalog
 else
-  node "$config_manager" enable
+  node "$config_manager" "$config_enable_command"
 fi
 service_installed=true
 node src/service.mjs install
@@ -235,10 +266,18 @@ trap - EXIT HUP INT TERM
 
 # The skill pack teaches custom routed models how to use the app's native
 # tools. Best effort: a skill install failure must never roll the router back.
-node src/skills-install.mjs install
+# It targets Codex's own user-skill directory, so a harness install skips it.
+if [ "$target" = codex ]; then
+  node src/skills-install.mjs install
+fi
 
-echo "Installed the selected external model routes for Codex."
-echo "Fully quit and reopen Codex, then start a new task."
+if [ "$target" = dsh ]; then
+  echo "Published the selected external model routes to DeepSeek Harness."
+  echo "The harness reloads its settings document on the next request; no restart is needed."
+else
+  echo "Installed the selected external model routes for Codex."
+  echo "Fully quit and reopen Codex, then start a new task."
+fi
 echo "Kimi API key: $repo_dir/bin/provider-key kimi-api set"
 echo "DeepSeek API key: $repo_dir/bin/provider-key deepseek set"
 echo "xAI API key: $repo_dir/bin/provider-key grok-api set"

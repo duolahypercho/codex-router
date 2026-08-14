@@ -2,6 +2,49 @@
 
 ## Unreleased
 
+- **DeepSeek Harness is a supported target.** `--target dsh` publishes every
+  routed model into the harness's own `settings.yaml` as one provider route,
+  keyed to the same `/v1/responses` endpoint Codex already uses — so a harness
+  turn gets the router's tool-result ageing, vision bridge, prompt-token
+  substitution, bounded upstream retries, and tokens-per-second accounting
+  without a second request path. The harness's shipped bundle mounts
+  `dsh-llm-pi-ai` dormant and hot-reloads its settings document, so this is a
+  settings write rather than a plugin change and there is nothing to restart.
+  A target is a *client*, not a router: both share one service, one gateway,
+  one credential store, and one provider selection, so adding the second
+  integration never asks for a key again, and any change to the routable set
+  republishes whichever clients are installed rather than letting the two
+  drift apart.
+
+  The router owns exactly one key in each of the harness's two documents
+  (`llm-pi-ai.providers.codex-router` and `CODEX_ROUTER_CALLER_KEY`) and treats
+  every other byte as somebody else's: sibling routes, other sections,
+  comments, and other credentials survive a publish, and `dsh disable` restores
+  the document. A settings file the new fail-closed YAML lexer cannot read
+  unambiguously — a tab indent, a duplicate key, a multi-document stream, an
+  inline `providers` mapping — is refused with the file untouched and the line
+  named, rather than rewritten on a guess. Both documents are written 0600, the
+  same bound the harness holds them to, because the settings document carries
+  the managed base URL and the other carries the key it references.
+
+  Only selected, credentialed, listed, non-hidden routed models are published.
+  Native GPT models are not: they need the caller's own ChatGPT session, which
+  a harness request does not carry, so advertising them would offer a turn that
+  cannot authenticate — the same reason the vision-bridge engine candidates
+  exclude them here. Taking over the harness's default model is opt-in,
+  snapshotted, and reversible; delegation stays the user's, since
+  `dsh-tool-subagent` is composition rather than settings and
+  `./bin/model-router dsh subagent-preset` hands over the block to paste
+  instead of editing a preset the router does not own.
+
+- **`src/skills-install.mjs` no longer hijacks an unrelated `install`.** Its
+  CLI block ran on `process.argv[2]` alone with no entry-module guard, and
+  `install-manifest.mjs` imports it — so any command that transitively pulled
+  the manifest in while its own subcommand happened to be `install` or
+  `uninstall` installed the Codex skill pack and exited 0 before doing its own
+  work. Every other module in the repository already guarded this; this one
+  now does too.
+
 - **Windows installs the tray companion, and keeps it.** Nothing on Windows
   ever built or started it: `install.ps1` had no tray option at all, the
   installer's own decision helper excluded the platform outright, and
