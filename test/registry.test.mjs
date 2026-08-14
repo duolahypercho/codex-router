@@ -246,7 +246,7 @@ test("provider registry exposes configured API and OAuth model families", () => 
   assert.equal(LISTED_MODELS.some(({ provider }) => provider === "chutes"), false);
   const opencodeFree = PROVIDERS.get("opencode-free");
   assert.equal(opencodeFree.authMode, "anonymous");
-  assert.equal(opencodeFree.baseUrl, "https://console.opencode.ai/inference/openai/v1");
+  assert.equal(opencodeFree.baseUrl, "https://opencode.ai/zen/v1");
   assert.equal(opencodeFree.credential, undefined);
   assert.equal(anonymousModelAllowed(opencodeFree, "big-pickle"), true);
   assert.equal(anonymousModelAllowed(opencodeFree, "mimo-v2.5-free"), true);

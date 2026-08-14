@@ -362,7 +362,7 @@ to the free subset and then added locally with `./bin/curate-models`.
 
 | Picker label | Provider ID | Endpoint | Free-model rule |
 | --- | --- | --- | --- |
-| OpenCode Free | `opencode-free` | `https://console.opencode.ai/inference/openai/v1` | `big-pickle` and IDs ending in `-free` |
+| OpenCode Free | `opencode-free` | `https://opencode.ai/zen/v1` | `big-pickle` and IDs ending in `-free` |
 | Kilo Free | `kilo-free` | `https://api.kilo.ai/api/gateway` | IDs ending in `:free` |
 
 Enable one and discover its current catalog:
@@ -388,15 +388,14 @@ documented anonymous `:free` path.
 > upstream with no account behind them, and that changes what "supported" can
 > mean. Nobody has agreed to serve you: access is a published exception, not an
 > entitlement, and it can be narrowed, rate-limited, or withdrawn without
-> notice. The naming rule is a heuristic, not a promise — a model whose ID says
-> `free` may still answer `401 Paid inference requests require an
-> Authorization bearer token`, which was true of five of the seven IDs OpenCode
-> Console's filter admitted when this was written. Anonymous traffic is
-> identified by IP, so a router fanning out parallel subagents spends a shared
-> per-IP budget quickly, and one machine's usage can exhaust another's on the
-> same network. Treat these as a way to try a model, not as something to depend
-> on: nothing in this repository can keep them working, and a failure here is
-> not a bug the project can fix.
+> notice. The naming rule is a heuristic rather than a promise — the catalogs
+> carry no pricing field to check, so a model whose ID says `free` can still
+> answer `401 Paid inference requests require an Authorization bearer token`,
+> and the router cannot tell in advance. Anonymous traffic is identified by IP,
+> so a router fanning out parallel subagents spends a budget shared with
+> everyone behind that address. Treat these as a way to try a model, not as
+> something to depend on: nothing in this repository can keep them working, and
+> a failure here is not a bug the project can fix.
 
 ### Command Code Provider API
 

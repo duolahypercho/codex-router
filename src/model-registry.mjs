@@ -18,7 +18,7 @@ function fail(message) {
 // future registry entry cannot turn an arbitrary HTTPS endpoint into a
 // credential-free exfiltration path.
 const ANONYMOUS_ENDPOINTS = Object.freeze({
-  "opencode-free": "https://console.opencode.ai/inference/openai/v1",
+  "opencode-free": "https://opencode.ai/zen/v1",
   "kilo-free": "https://api.kilo.ai/api/gateway",
 });
 
