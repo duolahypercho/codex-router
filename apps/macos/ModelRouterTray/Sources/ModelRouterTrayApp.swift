@@ -1264,9 +1264,37 @@ final class RouterStore: ObservableObject {
     }
   }
 
-  // Turn the harness off without uninstalling it. Separate from the primary
-  // button because it is the one destructive thing in this row, and because a
-  // user who wants it off usually wants the CLI kept.
+  // Stop the running harness. This is the resource question -- a booted harness
+  // holds a Node process and its plugin tree resident -- not the integration
+  // question, so it leaves the published route alone and the row goes straight
+  // back to offering play.
+  func stopHarnessWeb() async {
+    guard providerOperation == nil else { return }
+    providerOperation = "harness"
+    harnessSucceeded = false
+    harnessMessage = routerLocalized("Stopping…")
+    defer { providerOperation = nil }
+    do {
+      let output = try await runControl(arguments: ["harness", "stop"])
+      let result = try JSONDecoder().decode(HarnessStopResult.self, from: output)
+      await refresh()
+      if result.stopped {
+        harnessSucceeded = true
+        harnessMessage = routerLocalized("Stopped. Memory and CPU released.")
+      } else {
+        // Never signal a process this router did not start. Say where it came
+        // from instead of failing silently or killing somebody's terminal.
+        harnessSucceeded = false
+        harnessMessage = routerLocalized("This harness was started outside the router — stop it where you started it.")
+      }
+    } catch {
+      harnessMessage = error.localizedDescription
+      await refresh()
+    }
+  }
+
+  // Remove the router's models from the harness. Distinct from stopping: this
+  // is about the integration, not about what is resident.
   func disconnectHarness() async {
     guard providerOperation == nil else { return }
     providerOperation = "harness"
@@ -1919,6 +1947,11 @@ struct RouterSnapshot: Decodable {
   let presence: RouterPresence?
   let harness: RouterHarness?
   static let empty = RouterSnapshot(targets: [:], presence: nil, harness: nil)
+}
+
+struct HarnessStopResult: Decodable {
+  let stopped: Bool
+  let reason: String?
 }
 
 struct HarnessSetupResult: Decodable {
@@ -4749,17 +4782,34 @@ private struct TrayView: View {
           .opacity(store.providerOperation == nil && !blocked ? 1 : 0.5)
           .help(routerLocalized("Install DeepSeek Harness and publish this router's models into it"))
         }
-        if published && !store.harnessRunning {
-          Button {
-            Task { await store.disconnectHarness() }
-          } label: {
-            Label(routerLocalized("Turn off"), systemImage: "power")
+        // The secondary action follows what is actually costing something.
+        // While the harness is resident that is memory and CPU, so the offer is
+        // to stop it; once it is stopped the only thing left to undo is the
+        // integration.
+        if !store.harnessRunning {
+          if running {
+            Button {
+              Task { await store.stopHarnessWeb() }
+            } label: {
+              Label(routerLocalized("Turn off"), systemImage: "stop.circle")
+            }
+            .buttonStyle(.borderless)
+            .font(.system(size: 10))
+            .foregroundStyle(routerMuted)
+            .disabled(store.providerOperation != nil)
+            .help(routerLocalized("Stop the harness process and free its memory and CPU"))
+          } else if published {
+            Button {
+              Task { await store.disconnectHarness() }
+            } label: {
+              Label(routerLocalized("Disconnect"), systemImage: "power")
+            }
+            .buttonStyle(.borderless)
+            .font(.system(size: 10))
+            .foregroundStyle(routerMuted)
+            .disabled(store.providerOperation != nil)
+            .help(routerLocalized("Remove this router's models from the harness, keeping the harness itself"))
           }
-          .buttonStyle(.borderless)
-          .font(.system(size: 10))
-          .foregroundStyle(routerMuted)
-          .disabled(store.providerOperation != nil)
-          .help(routerLocalized("Remove this router's models from the harness, keeping the harness itself"))
         }
       }
       if let message = store.harnessMessage {

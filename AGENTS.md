@@ -954,6 +954,13 @@ user has to find in the docs, so `src/dsh-install.mjs` owns the other half.
 - `control --json` must carry the *web-aware* snapshot. It is what the tray
   polls, and the cheap synchronous variant reports no `web` at all, which reads
   as "stopped" and offers to start a harness that is already serving.
+- Stopping and disconnecting are different questions, and the row asks whichever
+  one currently costs something. While the harness is resident it holds a Node
+  process and its plugin tree in memory -- ~184 MB measured -- so the secondary
+  action is **Turn off**, which stops the process and leaves the route
+  published. Once nothing is running, the only thing left to undo is the
+  integration, so it becomes **Disconnect**. A harness this router did not start
+  is never signalled; the row says where it came from instead.
 - Turning a client off is not a reason to tear the plane down. `bin/disable`
   removes the service only once `installedTargets()` is empty; disabling the
   harness while Codex is still published used to uninstall the LaunchAgent and
