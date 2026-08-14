@@ -954,6 +954,17 @@ user has to find in the docs, so `src/dsh-install.mjs` owns the other half.
 - `control --json` must carry the *web-aware* snapshot. It is what the tray
   polls, and the cheap synchronous variant reports no `web` at all, which reads
   as "stopped" and offers to start a harness that is already serving.
+- Turning a client off is not a reason to tear the plane down. `bin/disable`
+  removes the service only once `installedTargets()` is empty; disabling the
+  harness while Codex is still published used to uninstall the LaunchAgent and
+  stop Codex working too. `control harness disconnect` is the tray's path and
+  never touches the service at all.
+- The default model is the user's. Restore only over a default this router
+  wrote — the harness's own Models page writes the same key, and a snapshot
+  taken before their choice is not a licence to undo it. With no snapshot but a
+  router-owned default, remove the key rather than leave the harness pointed at
+  a provider the same uninstall just deleted. All three cases are covered in
+  `test/dsh-config-manager.test.mjs`.
 
 
 ## A client the tray cannot watch keeps the router on

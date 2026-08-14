@@ -209,19 +209,43 @@ function snapshotDefaultModel(contents) {
 
 function restoreDefaultModel(contents) {
   const target = defaultModelSnapshotPath();
-  if (!existsSync(target)) return { contents, restored: false };
-  let previous;
-  try {
-    previous = JSON.parse(readFileSync(target, "utf8")).previous;
-  } catch {
-    return { contents, restored: false };
-  }
   const document = scanYamlDocument(contents);
   const node = yamlNode(document, DEFAULT_MODEL_PATH);
+  // Whether the default currently in the document is one this router wrote.
+  // Between a snapshot and now the user may have chosen their own -- the
+  // harness's own Models page writes the same key -- and putting a snapshot
+  // back over that is not a restore, it is discarding a later choice.
+  const routerOwnsCurrent = Boolean(
+    node &&
+      document.lines
+        .slice(node.index, node.endIndex + 1)
+        .some((line) => new RegExp(`^\\s*provider:\\s*['"]?${DSH_ROUTE_ID}['"]?\\s*$`).test(line)),
+  );
+
+  let previous;
+  if (existsSync(target)) {
+    try {
+      previous = JSON.parse(readFileSync(target, "utf8")).previous;
+    } catch {
+      previous = undefined;
+    }
+    unlinkSync(target);
+  }
+
+  // Somebody else's choice, or no default at all: nothing here belongs to this
+  // router, so nothing is touched.
+  if (node && !routerOwnsCurrent) return { contents, restored: false };
+  if (!node && !previous) return { contents, restored: false };
+
   const lines = [...document.lines];
-  if (node) lines.splice(node.index, node.endIndex - node.index + 1, ...(previous || []));
-  else if (previous) lines.push(...previous);
-  unlinkSync(target);
+  if (node) {
+    // Ours. Put back what was there before, or -- with no snapshot to put back
+    // -- take it out rather than leave the harness pointed at a provider this
+    // uninstall just removed.
+    lines.splice(node.index, node.endIndex - node.index + 1, ...(previous || []));
+  } else if (previous) {
+    lines.push(...previous);
+  }
   return { contents: joinLines(normalizeTrailing(lines)), restored: true };
 }
 

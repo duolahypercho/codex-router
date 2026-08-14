@@ -148,7 +148,7 @@ function sandbox() {
 function manage(command, { dshHome, stateDir }) {
   const output = execFileSync(
     process.execPath,
-    [path.join(root, "src", "dsh-config-manager.mjs"), command],
+    [path.join(root, "src", "dsh-config-manager.mjs"), ...command.split(" ")],
     {
       cwd: root,
       encoding: "utf8",
@@ -216,6 +216,77 @@ test("install refuses when no provider is selected rather than publishing nothin
   );
   try {
     assert.throws(() => manage("install", box), /No routed models/);
+  } finally {
+    rmSync(box.dshHome, { recursive: true, force: true });
+    rmSync(box.stateDir, { recursive: true, force: true });
+  }
+});
+
+// A default model is the user's own choice. The router may take it over only
+// when asked, and giving it back must never overwrite a choice made since.
+function settingsOf(box) {
+  return readFileSync(path.join(box.dshHome, "settings.yaml"), "utf8");
+}
+
+test("uninstall gives back a default the router took over", () => {
+  const box = sandbox();
+  try {
+    manage("install --set-default-model", box);
+    assert.match(settingsOf(box), /agent-default-model:\n  provider: "codex-router"/);
+    manage("uninstall", box);
+    // The sandbox document has no default of its own, so taking ours out
+    // leaves none -- not one pointing at a route that was just removed.
+    assert.doesNotMatch(settingsOf(box), /provider: "codex-router"/);
+  } finally {
+    rmSync(box.dshHome, { recursive: true, force: true });
+    rmSync(box.stateDir, { recursive: true, force: true });
+  }
+});
+
+test("uninstall leaves a default the user chose after the router took over", () => {
+  const box = sandbox();
+  try {
+    manage("install --set-default-model", box);
+    // The harness's own Models page writes this same key. Somebody switching
+    // to a non-routed model afterwards must not have that undone by an
+    // uninstall restoring a snapshot taken before they chose it.
+    const chosen = 'agent-default-model:\n  provider: "deepseek-official"\n  model: "deepseek-v4-flash"\n';
+    const settingsPath = path.join(box.dshHome, "settings.yaml");
+    writeFileSync(
+      settingsPath,
+      settingsOf(box).replace(
+        /agent-default-model:\n(?:  .*\n)+/,
+        chosen,
+      ),
+      "utf8",
+    );
+
+    const result = manage("uninstall", box);
+    assert.equal(result.defaultModelRestored, false);
+    const after = settingsOf(box);
+    assert.match(after, /provider: "deepseek-official"/);
+    assert.match(after, /model: "deepseek-v4-flash"/);
+  } finally {
+    rmSync(box.dshHome, { recursive: true, force: true });
+    rmSync(box.stateDir, { recursive: true, force: true });
+  }
+});
+
+test("uninstall removes a router-owned default even with no snapshot to restore", () => {
+  const box = sandbox();
+  try {
+    manage("install --set-default-model", box);
+    // Consume the snapshot the way a first uninstall does, then put the
+    // router's default back. Leaving it would point the harness at a provider
+    // this very uninstall removed.
+    manage("uninstall", box);
+    manage("install --set-default-model", box);
+    rmSync(path.join(box.stateDir, "dsh-default-model.json"), { force: true });
+
+    manage("uninstall", box);
+    const after = settingsOf(box);
+    assert.doesNotMatch(after, /provider: "codex-router"/);
+    assert.doesNotMatch(after, /agent-default-model:/);
   } finally {
     rmSync(box.dshHome, { recursive: true, force: true });
     rmSync(box.stateDir, { recursive: true, force: true });

@@ -1264,6 +1264,26 @@ final class RouterStore: ObservableObject {
     }
   }
 
+  // Turn the harness off without uninstalling it. Separate from the primary
+  // button because it is the one destructive thing in this row, and because a
+  // user who wants it off usually wants the CLI kept.
+  func disconnectHarness() async {
+    guard providerOperation == nil else { return }
+    providerOperation = "harness"
+    harnessSucceeded = false
+    harnessMessage = routerLocalized("Disconnecting…")
+    defer { providerOperation = nil }
+    do {
+      _ = try await runControl(arguments: ["harness", "disconnect"])
+      await refresh()
+      harnessSucceeded = true
+      harnessMessage = routerLocalized("Turned off. The harness and its own settings were kept.")
+    } catch {
+      harnessMessage = error.localizedDescription
+      await refresh()
+    }
+  }
+
   func fixAndVerify() async {
     guard providerOperation == nil else { return }
     providerOperation = "doctor"
@@ -4728,6 +4748,18 @@ private struct TrayView: View {
           .disabled(store.providerOperation != nil || blocked)
           .opacity(store.providerOperation == nil && !blocked ? 1 : 0.5)
           .help(routerLocalized("Install DeepSeek Harness and publish this router's models into it"))
+        }
+        if published && !store.harnessRunning {
+          Button {
+            Task { await store.disconnectHarness() }
+          } label: {
+            Label(routerLocalized("Turn off"), systemImage: "power")
+          }
+          .buttonStyle(.borderless)
+          .font(.system(size: 10))
+          .foregroundStyle(routerMuted)
+          .disabled(store.providerOperation != nil)
+          .help(routerLocalized("Remove this router's models from the harness, keeping the harness itself"))
         }
       }
       if let message = store.harnessMessage {

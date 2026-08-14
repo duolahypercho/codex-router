@@ -1522,8 +1522,13 @@ async function handleHarness(action) {
     process.stdout.write(`${JSON.stringify(await stopDshWeb())}\n`);
     return;
   }
+  if (action === "disconnect" || action === "off") {
+    const { disconnectHarness } = await import("./dsh-install.mjs");
+    process.stdout.write(`${JSON.stringify(await disconnectHarness())}\n`);
+    return;
+  }
   if (action !== "setup" && action !== "install") {
-    throw new Error("Usage: control harness status|setup|start|stop|web");
+    throw new Error("Usage: control harness status|setup|start|stop|web|disconnect");
   }
   const result = await setupHarness();
   process.stdout.write(`${JSON.stringify(result)}\n`);

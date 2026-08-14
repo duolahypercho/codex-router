@@ -39,6 +39,24 @@
   `EADDRINUSE` — and only a process this router started is ever signalled,
   matched on PID *and* process start identity because PIDs are reused.
 
+  It can also be turned off again, which it could not safely be before.
+  `bin/model-router dsh disable` ran `service.mjs uninstall` unconditionally, so
+  switching the harness off removed the LaunchAgent and stopped Codex working
+  too — the service is one shared plane, and one client leaving is not a reason
+  to retire it. `bin/disable` now removes it only once no client integration
+  remains, and the tray's **Turn off** goes through `control harness disconnect`,
+  which stops a UI this router started, removes the route, and touches nothing
+  else: the CLI, the harness's own settings, its other providers, and the
+  service all stay.
+
+  Two ways the uninstall could damage a user's own configuration are fixed with
+  it. Restoring the default model overwrote whatever was there with the snapshot
+  taken at install — so a model chosen afterwards through the harness's own
+  Models page was silently discarded; the restore now applies only over a
+  default this router wrote. And with no snapshot left to restore, a
+  router-owned default was left in place pointing at the provider the same
+  uninstall had just removed; it is now taken out.
+
 
 - **A client the tray cannot watch keeps the router running.** The tray's
   presence setting could tie the router to the Codex and ChatGPT desktop apps

@@ -153,3 +153,28 @@ export async function setupHarness({ force = false, setDefaultModel = false } = 
     launch: `${DSH_EXECUTABLE} web`,
   };
 }
+
+// Turning the harness off, as opposed to uninstalling it. Removes this
+// router's route from the harness's documents and stops a UI this router
+// started -- and stops there. The CLI stays installed, the harness's own
+// settings, profiles, sessions, and other providers are untouched, and the
+// shared background service keeps running for whatever other client is still
+// pointed at it.
+export async function disconnectHarness({ stopWeb = true } = {}) {
+  const { uninstall: unpublishRoute } = await import("./dsh-config-manager.mjs");
+  let web;
+  if (stopWeb) {
+    const { stopDshWeb } = await import("./dsh-web.mjs");
+    web = await stopDshWeb();
+  }
+  const removed = unpublishRoute();
+  const { installedTargets } = await import("./target-integration.mjs");
+  return {
+    removed,
+    web: web || null,
+    // Named so the caller can say what survived rather than leaving somebody to
+    // wonder whether they just took the router down.
+    remainingTargets: installedTargets(),
+    stillInstalled: Boolean(harnessCliPath()),
+  };
+}
