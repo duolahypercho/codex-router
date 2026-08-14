@@ -82,6 +82,7 @@ import {
   toolResultAgingEnabled,
 } from "./tool-result-aging-state.mjs";
 import { VERSION } from "./version.mjs";
+import { nativeSessionHeaders } from "./codex-native-session.mjs";
 
 const LISTEN_HOST =
   process.env.CODEX_ROUTER_HOST || process.env.KIMI_ROUTER_HOST || "127.0.0.1";
@@ -353,6 +354,15 @@ function nativeHeaders(request) {
     if (value !== undefined) {
       headers[name] = Array.isArray(value) ? value.join(", ") : value;
     }
+  }
+  // A caller that brought its own session is relayed exactly as it arrived --
+  // Codex always does, so nothing about a Codex turn changes here. A caller
+  // that brought none (the harness, which has no ChatGPT login of its own)
+  // falls back to the session this machine is already signed in with, rather
+  // than being offered native models it could never spend.
+  if (!headers.authorization) {
+    const fallback = nativeSessionHeaders();
+    if (fallback) Object.assign(headers, fallback);
   }
   return headers;
 }

@@ -974,6 +974,38 @@ user has to find in the docs, so `src/dsh-install.mjs` owns the other half.
   `test/dsh-config-manager.test.mjs`.
 
 
+## Native GPT for a client with no ChatGPT login of its own
+
+Native traffic is authorized by the caller's session: `nativeHeaders` copies
+`authorization` and `chatgpt-account-id` off the incoming request, and Codex
+attaches both. A harness turn attaches neither, so native models advertised to
+it were models it could never spend.
+
+`src/codex-native-session.mjs` closes that by falling back to the session this
+machine is already signed in with, in `$CODEX_HOME/auth.json`. The user is
+signed in to Codex here; asking them to sign in again for a client running as
+the same user on the same machine buys nothing.
+
+- **Fallback, never override.** The injection happens only when the request
+  carried no `authorization` at all. Codex always carries one, so a Codex turn
+  is byte-identical to before — verified by relaying a deliberately invalid
+  token and getting that token's own 401 back rather than a success.
+- **Publishable exactly while spendable.** `dshRoutedModels()` includes native
+  models only while `nativeSessionAvailable()` is true, so the harness is never
+  offered a model that would 401. `visibility: "hide"` entries stay unpublished:
+  they are Codex's own internals, a watermarked build and the auto-review model.
+- **The credential never leaves the process.** It is not logged, not returned by
+  a status call, and not put in an error message. `nativeSessionStatus()` reports
+  presence, usability, and age — `test/codex-native-session.test.mjs` asserts the
+  serialized status contains neither the token nor the account id.
+- **It widens the caller key.** With the fallback on, anything holding that key
+  spends the ChatGPT subscription and not only the API-key providers. That is a
+  deliberate, user-made tradeoff; `CODEX_ROUTER_NATIVE_SESSION_FALLBACK=0` turns
+  it off and the harness silently drops back to routed models only.
+- Age is reported because Codex refreshes that file. A stale session is a
+  different problem from an absent one, and an expired token surfaces as the
+  upstream's own 401 rather than anything this router invents.
+
 ## A client the tray cannot watch keeps the router on
 
 The tray's presence setting can tie the router to the Codex and ChatGPT desktop

@@ -130,6 +130,34 @@ export function dshCatalogModels(selectedModels, visionEngine) {
   return applyVisionBridge(selectedModels, visionEngine);
 }
 
+/**
+ * Native GPT models, shaped for the harness route.
+ *
+ * These are authorized by a ChatGPT session rather than an API key, so they are
+ * publishable only while the router can supply one -- see
+ * `codex-native-session.mjs`. The caller decides that; this function only maps.
+ *
+ * `visibility: "hide"` entries are Codex's own internal variants (a watermarked
+ * build, the auto-review model) and are not offered to anybody.
+ */
+export function dshNativeModels(nativeCatalogModels) {
+  return (nativeCatalogModels || [])
+    .filter((model) => model?.slug && model.visibility !== "hide")
+    .map((model) => ({
+      slug: String(model.slug),
+      displayName: model.display_name ? `${model.display_name} (Codex)` : String(model.slug),
+      contextWindow: Number.isFinite(model.context_window) ? model.context_window : undefined,
+      inputModalities: Array.isArray(model.input_modalities) ? model.input_modalities : ["text"],
+      reasoningLevels: Array.isArray(model.supported_reasoning_levels)
+        ? model.supported_reasoning_levels
+            .filter((level) => level?.effort)
+            .map((level) => ({ effort: level.effort }))
+        : [],
+      priority: Number.isFinite(model.priority) ? -model.priority : undefined,
+      native: true,
+    }));
+}
+
 /** The model a fresh harness agent should start on: the highest priority one. */
 export function dshDefaultModel(models) {
   const ranked = [...models].sort(

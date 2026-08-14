@@ -22,6 +22,7 @@ import {
   DSH_HOME,
   DSH_SETTINGS_PATH,
   CALLER_SECRET_PATH,
+  NATIVE_CATALOG_PATH,
   PORTS,
 } from "./paths.mjs";
 import { protectPrivateFile } from "./file-security.mjs";
@@ -31,6 +32,7 @@ import {
   buildDshRoute,
   dshCatalogModels,
   dshDefaultModel,
+  dshNativeModels,
   renderDshRouteLines,
   unmappableEfforts,
 } from "./dsh-catalog.mjs";
@@ -38,6 +40,7 @@ import { readHiddenModels } from "./model-picker-state.mjs";
 import { readMultiAgentSettings, subagentEligibleModels } from "./multi-agent-state.mjs";
 import { selectedConfiguredListedModels } from "./provider-selection.mjs";
 import { assertStateOwnership } from "./state-owner.mjs";
+import { nativeSessionAvailable } from "./codex-native-session.mjs";
 import { resolveVisionEngine } from "./vision-bridge.mjs";
 import { readVisionBridgeSettings } from "./vision-bridge-state.mjs";
 import { scanYamlDocument, spliceYamlBlock, yamlNode, yamlScalar } from "./yaml-structure.mjs";
@@ -249,18 +252,38 @@ function restoreDefaultModel(contents) {
   return { contents: joinLines(normalizeTrailing(lines)), restored: true };
 }
 
+// The native catalog Codex itself published, captured by `catalog.mjs`. Read
+// rather than re-derived: it is the same document the Codex picker is built
+// from, so the harness cannot end up advertising a native model Codex does not
+// have. Absent simply means no native models are offered.
+function readNativeCatalogModels() {
+  if (!existsSync(NATIVE_CATALOG_PATH)) return [];
+  try {
+    const parsed = JSON.parse(readFileSync(NATIVE_CATALOG_PATH, "utf8"));
+    return Array.isArray(parsed?.models) ? parsed.models : [];
+  } catch {
+    return [];
+  }
+}
+
 /** The routed models the harness should be offered, vision bridge included. */
 export function dshRoutedModels() {
   const hidden = readHiddenModels();
   const selected = selectedConfiguredListedModels().filter(
     (model) => !hidden.has(String(model.slug)),
   );
-  // No native candidates: a harness request carries no ChatGPT session, so a
-  // native engine could not be spent even though the local install may hold
-  // one. `vision-engines` wants each call site to name its evidence, and this
-  // one's evidence is that there is no caller session to check.
+  // Native GPT models are authorized by a ChatGPT session rather than an API
+  // key. The harness carries none of its own -- but this machine is signed in
+  // to Codex, and the router relays that session for a caller that brought
+  // nothing (see `codex-native-session.mjs`). So they are publishable exactly
+  // while that fallback can supply one, and withheld the moment it cannot.
+  const native = nativeSessionAvailable() ? dshNativeModels(readNativeCatalogModels()) : [];
+  // The vision engine still resolves over routed candidates only. A native
+  // engine is spent per-caller, and `vision-engines` wants each call site to
+  // name its evidence; this one's is that a bridge read is issued by the router
+  // on the caller's behalf, which is not the same as relaying their turn.
   const engine = resolveVisionEngine(() => selected, readVisionBridgeSettings());
-  return { models: dshCatalogModels(selected, engine), engine };
+  return { models: [...dshCatalogModels(selected, engine), ...native], engine };
 }
 
 function buildRoute() {

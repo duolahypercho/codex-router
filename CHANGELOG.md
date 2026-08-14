@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+- **DeepSeek Harness can use the Codex models you are already signed in to.**
+  Native GPT traffic is authorized by the caller's own ChatGPT session — the
+  router copies `authorization` and `chatgpt-account-id` off each request, Codex
+  attaches both, and a harness turn attaches neither. So the eight native models
+  were withheld from the harness: advertising them would have offered a turn
+  that could not authenticate.
+
+  The router now falls back to the session this machine is already signed in
+  with. You are logged in to Codex here; a client running as the same user on
+  the same machine should not have to log in again. The eight `gpt-5.6-*` and
+  `gpt-5.x` models publish to the harness whenever that session is usable, and
+  are withheld the moment it is not, so the picker never offers a model that
+  would 401.
+
+  It is a fallback and never an override: the injection happens only for a
+  request that carried no credential of its own, so a Codex turn is unchanged —
+  verified by relaying a deliberately invalid token and getting that token's own
+  401 back instead of a success. The credential is never logged, never returned
+  by a status call, and never put in an error message.
+
+  Worth knowing before leaving it on: it widens what the caller key reaches,
+  from the API-key providers to the ChatGPT subscription as well.
+  `CODEX_ROUTER_NATIVE_SESSION_FALLBACK=0` turns it off, and the harness drops
+  back to routed models only.
+
 - **The tray can install DeepSeek Harness, not just publish into one.**
   `--target dsh` wrote routed models into a harness the user had already
   installed themselves; on a machine without one, the missing step was an
