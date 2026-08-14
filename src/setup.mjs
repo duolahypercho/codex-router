@@ -297,6 +297,25 @@ function installTray() {
       run(path.join(SOURCE_ROOT, "scripts", "build-macos-tray-app.sh"), [bundleDir]);
       run("open", [bundleDir]);
       process.stdout.write(`Menu-bar companion installed at ${bundleDir} and opened.\n`);
+    } else if (process.platform === "win32") {
+      // Windows had no path through here at all: the tray was built by hand or
+      // not at all, and nothing brought it back after a reboot. Registering the
+      // logon task is what makes it stay, and it also starts the first
+      // instance, so there is no separate launch step.
+      run("powershell.exe", [
+        "-NoLogo",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        path.join(SOURCE_ROOT, "scripts", "build-desktop-tray.ps1"),
+        "-BinaryOnly",
+      ]);
+      run(process.execPath, [path.join(SOURCE_ROOT, "src", "tray-service.mjs"), "install"]);
+      process.stdout.write(
+        "Desktop companion built, launched, and set to start at logon.\n" +
+          "Windows 11 hides new tray icons: click the ^ chevron by the clock to find it, and drag it onto the taskbar to pin it.\n",
+      );
     } else {
       run(path.join(SOURCE_ROOT, "bin", "model-router-tray"), []);
       process.stdout.write("Desktop companion built and launched.\n");
@@ -307,7 +326,10 @@ function installTray() {
         (process.platform === "darwin"
           ? "Recent macOS SDKs need the full Xcode app (not only the Command Line Tools) to build the menu-bar companion's SwiftUI macros.\n"
           : "") +
-        "The router itself is installed; retry later with ./bin/model-router-tray.\n",
+        (process.platform === "win32"
+          ? "The Tauri companion needs Rust stable and Cargo on PATH.\n" +
+            "The router itself is installed; retry later with .\\scripts\\build-desktop-tray.ps1 -BinaryOnly.\n"
+          : "The router itself is installed; retry later with ./bin/model-router-tray.\n"),
     );
   }
 }

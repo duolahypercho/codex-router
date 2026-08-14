@@ -92,6 +92,9 @@ export const TRAY_APP_PATH =
   trayBundleDir("darwin", os.homedir()) ?? path.join(os.homedir(), "Applications", "Model Router.app");
 export const LEGACY_TRAY_APP_PATH = path.join(SOURCE_ROOT, "dist", "Model Router.app");
 export const TRAY_APP_BINARY = path.join(TRAY_APP_PATH, "Contents", "MacOS", "ModelRouterTray");
+// Task Scheduler names the tray separately from the router's own task so
+// stopping one never takes the other down.
+export const TRAY_TASK_NAME = "Codex Router Tray";
 
 function port(name, fallback) {
   const value = Number(process.env[name] || fallback);

@@ -1020,10 +1020,16 @@ surface.
 ```
 
 ```powershell
-# Windows PowerShell
+# Windows PowerShell -- build, launch, and start at logon
+.\install.ps1 -CheckoutInstall -WithTray
+
+# or build and launch it by hand
 .\scripts\build-desktop-tray.ps1 -BinaryOnly
 Start-Process .\apps\desktop\src-tauri\target\release\codex-router-desktop.exe
 ```
+
+Windows 11 hides new tray icons in the `^` overflow next to the clock; drag the
+icon onto the taskbar to pin it.
 
 Windows and Linux on X11 receive the floating top-center activity pill. Linux
 on Wayland uses the tray panel without the pill because the compositor owns

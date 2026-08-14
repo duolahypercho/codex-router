@@ -70,12 +70,16 @@ Set-Location codex-router
 ./install.ps1 -Guided
 ```
 
-On macOS and Linux, guided setup also offers to build and launch the desktop
-companion (the macOS menu bar app or the Windows/Linux tray). `--with-tray`
-installs it without asking, `--no-tray` never offers it, and automatic mode
-skips it. On macOS the app bundle is placed in `~/Applications` and needs the
-Swift toolchain; a missing toolchain skips the step with guidance instead of
-failing setup. Windows still builds the tray manually with
+Guided setup also offers to build and launch the desktop companion (the macOS
+menu bar app, or the Windows/Linux tray). `--with-tray` installs it without
+asking, `--no-tray` never offers it, and automatic mode skips it. On Windows
+the same choice is `-WithTray` / `-NoTray`.
+
+On macOS the app bundle is placed in `~/Applications` and needs the Swift
+toolchain; a missing toolchain skips the step with guidance instead of failing
+setup. On Windows the Tauri companion is built with Rust and registered as a
+`Codex Router Tray` logon task so it returns after a reboot; a missing Rust
+toolchain skips the step the same way. You can still build it by hand with
 `scripts/build-desktop-tray.ps1`.
 Guided setup walks through numbered steps: a provider list you toggle by
 number (`a` selects all, `n` clears, Enter continues) with a live

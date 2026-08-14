@@ -91,6 +91,28 @@ Start-Process .\apps\desktop\src-tauri\target\release\codex-router-desktop.exe
 Pass `-BinaryOnly` for an unbundled executable. Installer artifacts are written
 under `apps\desktop\src-tauri\target\release\bundle` by a full build.
 
+## Starting at logon
+
+`install.ps1 -WithTray` builds the companion and registers a `Codex Router
+Tray` scheduled task that runs it at logon, separately from the router's own
+`Codex Router` task so stopping one never takes the other down. The same task
+is managed directly with:
+
+```powershell
+node src\control.mjs tray enable    # build required first; also starts it now
+node src\control.mjs tray status
+node src\control.mjs tray disable
+```
+
+Quitting from the tray menu keeps it quit: the restart setting covers a crash,
+not a clean exit, so the tray returns at the next logon rather than reappearing
+immediately. Linux has no supervisor — launch it with `./bin/model-router-tray`
+— and the tray commands say so instead of reporting a silent success.
+
+Windows 11 hides new tray icons in the `^` overflow next to the clock. Drag the
+icon onto the taskbar to pin it; an unpinned icon is the most common reason the
+companion looks like it never started.
+
 The app discovers the router checkout from `MODEL_ROUTER_SOURCE_ROOT`, a saved
 bundle pointer, the source tree during development, or the standard install
 location (`%LOCALAPPDATA%\codex-router` on Windows and

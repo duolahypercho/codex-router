@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- **Windows installs the tray companion, and keeps it.** Nothing on Windows
+  ever built or started it: `install.ps1` had no tray option at all, the
+  installer's own decision helper excluded the platform outright, and
+  `control tray enable` answered `{"supported":false}` and exited 0 — a silent
+  no-op that reads as success while no tray was ever going to appear. The only
+  route was knowing to run `scripts/build-desktop-tray.ps1` by hand, and even
+  then the companion vanished at the next reboot. `install.ps1 -WithTray` (and
+  `-NoTray`, matching `install.sh`) now builds it and registers a `Codex Router
+  Tray` logon task, kept separate from the router's own task so stopping one
+  never takes the other down. Quitting from the tray menu stays quit: the
+  restart setting covers a crash, not a clean exit. A platform with no
+  supervisor now says so on stderr rather than reporting success, and the
+  guidance names the `^` overflow that hides new tray icons on Windows 11.
+
 - **Windows stops mistaking its own spawn failures for provider problems.** A
   command resolved on Windows and a command Windows can spawn are two different
   things: `where.exe` lists the extensionless npm shim first, and Node has

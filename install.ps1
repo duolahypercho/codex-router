@@ -11,6 +11,10 @@ param(
   [switch]$MigrateKnown,
   [switch]$AdoptNativeCatalog,
   [switch]$SmokeTest,
+  # Matches install.sh's --with-tray/--no-tray. Windows previously had no way
+  # to ask for the companion at all, so it was never built and never started.
+  [switch]$WithTray,
+  [switch]$NoTray,
   # Discards tracked edits in the managed checkout so the update can proceed.
   # Deliberately never touches untracked files -- see Reset-ManagedCheckout.
   [switch]$Force,
@@ -30,6 +34,9 @@ if ($PrepareOnly -and $AdoptNativeCatalog) {
 }
 if ($MigrateKnown -and $AdoptNativeCatalog) {
   throw "-AdoptNativeCatalog cannot be combined with -MigrateKnown."
+}
+if ($WithTray -and $NoTray) {
+  throw "-WithTray cannot be combined with -NoTray."
 }
 $PreviousRevision = $null
 $RepositoryUrl = if ($env:CODEX_ROUTER_REPOSITORY_URL) {
@@ -172,6 +179,8 @@ if (-not $CheckoutInstall) {
   if ($MigrateKnown) { $SetupArguments += "--migrate-known" }
   if ($AdoptNativeCatalog) { $SetupArguments += "--adopt-native-catalog" }
   if ($SmokeTest) { $SetupArguments += "--smoke-test" }
+  if ($WithTray) { $SetupArguments += "--with-tray" }
+  if ($NoTray) { $SetupArguments += "--no-tray" }
   & node @SetupArguments
   $SetupExitCode = $LASTEXITCODE
   # Exit 2 means setup left configuration unfinished (a declined prompt, a
