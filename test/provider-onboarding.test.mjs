@@ -80,7 +80,7 @@ test("provider onboarding reports install, login, and API key actions without se
     for (const id of ["opencode-free", "kilo-free"]) {
       assert.equal(byId[id].kind, "anonymous");
       assert.equal(byId[id].configured, true);
-      assert.equal(byId[id].action, "ready");
+      assert.equal(byId[id].action, "anonymous");
       assert.equal(byId[id].credentialLabel, "No API key");
       assert.match(byId[id].anonymousNote, /No API key/);
     }

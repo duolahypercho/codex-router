@@ -26,6 +26,7 @@ for (const provider of PROVIDERS.values()) {
 const { writeProviderCredential } = await import("../src/provider-credentials.mjs");
 const {
   configuredProviderIds,
+  defaultProviderIds,
   disableProvider,
   enableProvider,
   providerSelectionStatus,
@@ -56,9 +57,11 @@ test("provider selection keeps backward compatibility and can hide the final pro
     // credential to configure and it is always available. Everything else has
     // to authenticate before it counts.
     assert.deepEqual(configuredProviderIds(), ["kilo-free", "local", "opencode-free"]);
+    assert.deepEqual(defaultProviderIds(), ["local"]);
     delete process.env.KIMI_API_KEY;
     writeProviderCredential("deepseek", "TEST_DEEPSEEK_SELECTION_KEY");
     assert.deepEqual(configuredProviderIds(), ["deepseek", "kilo-free", "local", "opencode-free"]);
+    assert.deepEqual(defaultProviderIds(), ["deepseek", "local"]);
 
     writeProviderSelection(["chatgpt-oauth"]);
     assert.deepEqual(readProviderSelection(), ["grok-oauth"]);

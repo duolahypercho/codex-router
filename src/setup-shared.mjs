@@ -20,7 +20,7 @@ import { grokOAuthStatus } from "./grok-oauth-status.mjs";
 import { SOURCE_ROOT } from "./paths.mjs";
 import { credentialStatus } from "./provider-credentials.mjs";
 import { providerOnboardingSnapshot } from "./provider-onboarding.mjs";
-import { configuredProviderIds, validateProviderIds } from "./provider-selection.mjs";
+import { defaultProviderIds, validateProviderIds } from "./provider-selection.mjs";
 import { renderProviderChoices, toggleSelection } from "./setup-ui.mjs";
 
 // Target-agnostic setup helpers shared by every target's <target>-setup.mjs.
@@ -205,11 +205,11 @@ function guidedSelection(appName) {
 // Resolve which provider ids to enable from --providers, or interactively.
 export function selectProviders({ requested, guided, appName }) {
   if (requested) {
-    if (requested === "configured") return configuredProviderIds();
+    if (requested === "configured") return defaultProviderIds();
     if (requested === "all") return [...PROVIDERS.keys()];
     return validateProviderIds(requested.split(","));
   }
-  return guided ? guidedSelection(appName) : configuredProviderIds();
+  return guided ? guidedSelection(appName) : defaultProviderIds();
 }
 
 function locateKimiCli() {

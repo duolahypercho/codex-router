@@ -176,7 +176,9 @@ export function providerOnboardingSnapshot() {
       };
       if (provider.authMode === "anonymous") {
         entry.kind = "anonymous";
-        entry.action = "ready";
+        // Guided setup pre-checks every `ready` row. An off-box endpoint must
+        // be chosen explicitly even though it needs no API key.
+        entry.action = "anonymous";
         entry.credentialLabel = "No API key";
         entry.anonymousNote = provider.anonymousNote;
         return entry;

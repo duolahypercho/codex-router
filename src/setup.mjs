@@ -19,7 +19,7 @@ import {
 } from "./provider-onboarding.mjs";
 import { renderProviderChoices, stepHeader, toggleSelection } from "./setup-ui.mjs";
 import {
-  configuredProviderIds,
+  defaultProviderIds,
   selectedConfiguredListedModels,
   validateProviderIds,
   writeProviderSelection,
@@ -204,11 +204,11 @@ function guidedSelection() {
 function requestedSelection() {
   const requested = option("--providers");
   if (requested) {
-    if (requested === "configured") return configuredProviderIds();
+    if (requested === "configured") return defaultProviderIds();
     if (requested === "all") return [...PROVIDERS.keys()];
     return validateProviderIds(requested.split(","));
   }
-  return guided ? guidedSelection() : configuredProviderIds();
+  return guided ? guidedSelection() : defaultProviderIds();
 }
 
 function run(command, commandArgs, options = {}) {

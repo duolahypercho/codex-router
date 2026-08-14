@@ -47,6 +47,11 @@ user.
    interactive terminal to choose models. If they did not specify and
    credentials already exist, use
    `configured` rather than showing providers that cannot authenticate.
+   The anonymous catalog-only providers `opencode-free` and `kilo-free` are
+   also selectable, but they need no credential only for their documented free
+   model subsets. They ship no preselected models and must be explicitly
+   selected before `bin/curate-models PROVIDER` is run; never select either one
+   on the user's behalf just because it can authenticate without a key.
 5. For Kimi OAuth, reuse a valid `kimi login` session. If login is needed, run
    the official CLI only in an interactive terminal. For API providers, invoke
    `bin/model-router codex provider-key PROVIDER set` in a PTY so the hidden
@@ -600,6 +605,23 @@ the turn as text. Treat it as a router capability, never as a model capability.
     properties worth stating as tests rather than prose: nothing image-shaped
     may survive into a forwarded body, and one image asked one question may be
     bought only once however many requests are in flight.
+
+## Anonymous remote providers
+
+`authMode: "anonymous"` is not the same as `keyless`. A keyless provider is
+loopback-only and serves from this machine; an anonymous provider sends the
+operator's prompt to a fixed remote endpoint under a provider-controlled free
+model policy. It must never declare a credential, keyless mode, or a base-URL
+override, and the registry loader keeps its endpoint allowlisted.
+
+Anonymous providers are **configured but never defaulted**: the credential
+resolver may report them as ready, and an explicit `--providers` choice may
+route a curated free model, but `defaultProviderIds()`, the no-argument setup
+path, `--providers configured`, and `ensure-configured` must not add them when
+the operator did not ask. They are catalog-only, so discovery filters the
+provider's live `/models` response to its documented free IDs and the user
+must curate models locally. Never check in a paid model ID or silently turn on
+an anonymous endpoint during installation.
 
 ## Local models as a provider
 

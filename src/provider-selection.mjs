@@ -100,6 +100,18 @@ export function configuredProviderIds() {
   return configured;
 }
 
+// `configuredProviderIds()` answers whether a provider can authenticate. The
+// installer also needs a narrower answer: which configured providers may be
+// enabled when the operator did not name any. Anonymous providers can
+// authenticate without a key, but enabling one sends future prompts to a
+// third-party endpoint, so it must be an explicit choice. Loopback keyless
+// providers remain safe to include in the default.
+export function defaultProviderIds() {
+  return configuredProviderIds().filter(
+    (id) => PROVIDERS.get(id)?.authMode !== "anonymous",
+  );
+}
+
 // Never throws. Returns the providers to expose plus what had to be ignored, so
 // doctor and the support bundle can report the damage while requests keep
 // flowing. Degrading here matches every other state reader in the hot path
@@ -185,7 +197,7 @@ export function writeProviderSelection(values) {
 export function enableProvider(providerId) {
   const current = existsSync(PROVIDER_SELECTION_PATH)
     ? readProviderSelection()
-    : configuredProviderIds();
+    : defaultProviderIds();
   return writeProviderSelection([...current, providerId]);
 }
 
@@ -193,7 +205,7 @@ export function disableProvider(providerId) {
   const target = canonicalProviderId(providerId);
   const current = existsSync(PROVIDER_SELECTION_PATH)
     ? readProviderSelection()
-    : configuredProviderIds();
+    : defaultProviderIds();
   return writeProviderSelection(
     current.filter((id) => canonicalProviderId(id) !== target),
   );
@@ -236,7 +248,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     } else if (command === "ensure-configured") {
       const providers = existsSync(PROVIDER_SELECTION_PATH)
         ? readProviderSelection()
-        : writeProviderSelection(configuredProviderIds());
+        : writeProviderSelection(defaultProviderIds());
       if (providers.length === 0) {
         throw new Error(
           `No provider credential is configured. Run ${
