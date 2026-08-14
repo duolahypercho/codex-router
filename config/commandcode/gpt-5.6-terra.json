@@ -2,15 +2,15 @@
   "version": 1,
   "models": [
     {
-      "slug": "commandcode-messages/claude-fable-5",
-      "gatewayModel": "commandcode-messages-claude-fable-5",
-      "upstreamModel": "claude-fable-5",
-      "provider": "commandcode-messages",
+      "slug": "commandcode/gpt-5.6-terra",
+      "gatewayModel": "commandcode-gpt-5-6-terra",
+      "upstreamModel": "gpt-5.6-terra",
+      "provider": "commandcode",
       "listed": true,
-      "displayName": "Claude Fable 5 (Command Code)",
-      "description": "Claude Fable 5 through the Command Code Provider API using the Messages API.",
-      "priority": 133,
-      "defaultEffort": "high",
+      "displayName": "GPT 5.6 Terra (Command Code)",
+      "description": "GPT 5.6 Terra through the Command Code Provider API.",
+      "priority": 116,
+      "defaultEffort": "medium",
       "reasoningLevels": [
         {
           "effort": "low",
@@ -33,12 +33,14 @@
           "description": "Maximum reasoning depth"
         }
       ],
-      "contextWindow": 1000000,
+      "contextWindow": 1050000,
       "autoCompact": 900000,
       "inputModalities": [
         "text"
       ],
-      "compHash": "commandcode-messages-claude-fable-5-v1"
+      "compHash": "commandcode-gpt-5-6-terra-v1",
+      "supportsReasoningSummaries": true,
+      "defaultReasoningSummary": "auto"
     }
   ]
 }

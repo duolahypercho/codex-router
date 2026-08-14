@@ -2,14 +2,14 @@
   "version": 1,
   "models": [
     {
-      "slug": "commandcode/gemini-3.5-flash",
-      "gatewayModel": "commandcode-gemini-3-5-flash",
-      "upstreamModel": "google/gemini-3.5-flash",
+      "slug": "commandcode/qwen3.7-flash",
+      "gatewayModel": "commandcode-qwen3-7-flash",
+      "upstreamModel": "Qwen/Qwen3.7-Flash",
       "provider": "commandcode",
       "listed": true,
-      "displayName": "Gemini 3.5 Flash (Command Code)",
-      "description": "Gemini 3.5 Flash through the Command Code Provider API.",
-      "priority": 121,
+      "displayName": "Qwen3.7 Flash (Command Code)",
+      "description": "Qwen3.7 Flash through the Command Code Provider API.",
+      "priority": 110,
       "defaultEffort": "high",
       "reasoningLevels": [
         {
@@ -22,7 +22,7 @@
       "inputModalities": [
         "text"
       ],
-      "compHash": "commandcode-gemini-3-5-flash-v1"
+      "compHash": "commandcode-qwen3-7-flash-v1"
     }
   ]
 }

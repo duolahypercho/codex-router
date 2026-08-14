@@ -2,14 +2,14 @@
   "version": 1,
   "models": [
     {
-      "slug": "commandcode-messages/claude-fable-5",
-      "gatewayModel": "commandcode-messages-claude-fable-5",
-      "upstreamModel": "claude-fable-5",
+      "slug": "commandcode-messages/claude-opus-5",
+      "gatewayModel": "commandcode-messages-claude-opus-5",
+      "upstreamModel": "claude-opus-5",
       "provider": "commandcode-messages",
       "listed": true,
-      "displayName": "Claude Fable 5 (Command Code)",
-      "description": "Claude Fable 5 through the Command Code Provider API using the Messages API.",
-      "priority": 133,
+      "displayName": "Claude Opus 5 (Command Code)",
+      "description": "Claude Opus 5 through the Command Code Provider API using the Messages API.",
+      "priority": 130,
       "defaultEffort": "high",
       "reasoningLevels": [
         {
@@ -36,9 +36,10 @@
       "contextWindow": 1000000,
       "autoCompact": 900000,
       "inputModalities": [
-        "text"
+        "text",
+        "image"
       ],
-      "compHash": "commandcode-messages-claude-fable-5-v1"
+      "compHash": "commandcode-messages-claude-opus-5-v1"
     }
   ]
 }

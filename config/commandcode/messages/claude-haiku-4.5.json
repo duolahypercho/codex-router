@@ -4,12 +4,12 @@
     {
       "slug": "commandcode-messages/claude-haiku-4.5",
       "gatewayModel": "commandcode-messages-claude-haiku-4-5",
-      "upstreamModel": "claude-haiku-4-5",
+      "upstreamModel": "claude-haiku-4-5-20251001",
       "provider": "commandcode-messages",
       "listed": true,
       "displayName": "Claude Haiku 4.5 (Command Code)",
       "description": "Claude Haiku 4.5 through the Command Code Provider API using the Messages API.",
-      "priority": 120,
+      "priority": 134,
       "defaultEffort": "high",
       "reasoningLevels": [
         {
@@ -22,7 +22,7 @@
       "inputModalities": [
         "text"
       ],
-      "compHash": "commandcode-messages-claude-haiku-4-5-v1"
+      "compHash": "commandcode-messages-claude-haiku-4-5-v2"
     }
   ]
 }
