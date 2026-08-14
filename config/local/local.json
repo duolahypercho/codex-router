@@ -6,6 +6,7 @@
       "displayName": "Local (Ollama)",
       "kind": "openai-compatible",
       "ownedBy": "local",
+      "transport": "ollama",
       "baseUrl": "http://127.0.0.1:11434/v1",
       "baseUrlEnv": "MODEL_ROUTER_LOCAL_BASE_URL",
       "keyless": true,

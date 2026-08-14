@@ -653,7 +653,9 @@ for (const provider of PROVIDERS.values()) {
       : `${provider.displayName} ${credentialNoun}`,
     status.configured ? status.source : "not configured",
     provider.keyless
-      ? "Start Ollama, then run ./bin/control local-models list."
+      ? provider.id === "local"
+        ? "Start Ollama, then run ./bin/control local-models list."
+        : `Start ${provider.displayName}, then run ./bin/curate-models ${provider.id}.`
       : provider.authMode === "anonymous"
         ? provider.anonymousNote || "No key needed; only the provider's free models are available."
       : session
@@ -678,10 +680,12 @@ for (const provider of PROVIDERS.values()) {
         : provider.authMode === "anonymous"
           ? `${provider.displayName} is ready; discover and curate its current free models`
         : `${credentialNoun} stored but no models curated; the picker stays empty`,
-      // Local models are downloaded and checked, never curated from a remote
-      // catalog, so naming `curate-models` here points at the wrong command.
+      // Ollama models are downloaded and checked locally; other keyless local
+      // providers use the generic live catalog curation path.
       provider.keyless
-        ? `Install one with ./bin/control local-models install <tag-or-url> --yes; tool-capable models are checked automatically.`
+        ? provider.id === "local"
+          ? `Install one with ./bin/control local-models install <tag-or-url> --yes; tool-capable models are checked automatically.`
+          : `Run ./bin/curate-models ${provider.id} in an interactive terminal.`
         : `Run ./bin/curate-models ${provider.id} in an interactive terminal.`,
     );
   }
