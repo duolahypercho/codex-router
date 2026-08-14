@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "slug": "commandcode/gemini-3.7-flash",
+      "gatewayModel": "commandcode-gemini-3-7-flash",
+      "upstreamModel": "google/gemini-3.7-flash",
+      "provider": "commandcode",
+      "listed": true,
+      "displayName": "Gemini 3.7 Flash (Command Code)",
+      "description": "Gemini 3.7 Flash through the Command Code Provider API.",
+      "priority": 120,
+      "defaultEffort": "high",
+      "reasoningLevels": [
+        {
+          "effort": "high",
+          "description": "Deep reasoning"
+        }
+      ],
+      "contextWindow": 1048576,
+      "autoCompact": 900000,
+      "inputModalities": [
+        "text"
+      ],
+      "compHash": "commandcode-gemini-3-7-flash-v1"
+    }
+  ]
+}

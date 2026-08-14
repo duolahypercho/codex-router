@@ -9,7 +9,7 @@
       "listed": true,
       "displayName": "Hy3 (Command Code)",
       "description": "Tencent Hy3 through the Command Code Provider API.",
-      "priority": 115,
+      "priority": 122,
       "defaultEffort": "high",
       "reasoningLevels": [
         {

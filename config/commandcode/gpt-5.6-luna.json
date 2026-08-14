@@ -9,7 +9,7 @@
       "listed": true,
       "displayName": "GPT 5.6 Luna (Command Code)",
       "description": "GPT 5.6 Luna through the Command Code Provider API.",
-      "priority": 112,
+      "priority": 118,
       "defaultEffort": "medium",
       "reasoningLevels": [
         {

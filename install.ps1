@@ -3,7 +3,7 @@ param(
   [switch]$CheckoutInstall,
   [switch]$PrepareOnly,
   [switch]$ForceDeps,
-  [ValidateSet("codex")]
+  [ValidateSet("codex", "dsh")]
   [string]$Target = "codex",
   [switch]$Guided,
   [switch]$Auto,
@@ -26,8 +26,14 @@ param(
 
 $ErrorActionPreference = "Stop"
 $env:MODEL_ROUTER_TARGET = $Target
+# Legacy migration replaces an older router's managed Codex config block, and
+# the native catalog is the ChatGPT-plan model list Codex adopts. Neither has a
+# counterpart in DeepSeek Harness, whose integration is one settings section.
 if ($Target -ne "codex" -and $MigrateKnown) {
   throw "-MigrateKnown applies only to the Codex target."
+}
+if ($Target -ne "codex" -and $AdoptNativeCatalog) {
+  throw "-AdoptNativeCatalog applies only to the Codex target."
 }
 if ($PrepareOnly -and $AdoptNativeCatalog) {
   throw "-AdoptNativeCatalog cannot be used with -PrepareOnly."
@@ -210,7 +216,11 @@ if ([int]$VersionParts[0] -lt 22 -or
   throw "Node.js 22.19 or newer is required; Node.js 24 LTS is recommended."
 }
 
-$ConfigManager = "src\config-manager.mjs"
+# Each target enables its own client configuration; everything around that one
+# step is the shared router plane.
+$ConfigManager = if ($Target -eq "dsh") { "src\dsh-config-manager.mjs" } else { "src\config-manager.mjs" }
+$ConfigEnableCommand = if ($Target -eq "dsh") { "install" } else { "enable" }
+$ConfigDisableCommand = if ($Target -eq "dsh") { "uninstall" } else { "disable" }
 $ConfigEnabled = $false
 $ServiceInstalled = $false
 $AdoptionPending = $false
@@ -320,20 +330,42 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "Existing native model-catalog adoption failed." }
     $AdoptionPending = $true
   }
+  # The state root is read by both arms below, so it is computed once rather
+  # than inside the Codex branch: the harness arm needs it to find an existing
+  # native catalog, and the republish step needs it to find the harness's own.
+  $StateRoot = if ($env:MODEL_ROUTER_STATE_DIR) { $env:MODEL_ROUTER_STATE_DIR }
+    elseif ($env:CODEX_ROUTER_STATE_DIR) { $env:CODEX_ROUTER_STATE_DIR }
+    elseif ($env:KIMI_CODEX_STATE_DIR) { $env:KIMI_CODEX_STATE_DIR }
+    elseif ($env:CODEX_HOME) { Join-Path $env:CODEX_HOME "codex-router" }
+    else { Join-Path $HOME ".codex\codex-router" }
+  # `-s` in the POSIX scripts: present *and* non-empty. A zero-byte state file
+  # is a half-written one, and treating it as real publishes an empty catalog.
+  function Test-NonEmptyFile([string] $Path) {
+    return (Test-Path $Path -PathType Leaf) -and ((Get-Item $Path).Length -gt 0)
+  }
+  $NativeCatalogPath = Join-Path $StateRoot "native-models.json"
   if ($Target -eq "codex") {
-    $StateRoot = if ($env:MODEL_ROUTER_STATE_DIR) { $env:MODEL_ROUTER_STATE_DIR }
-      elseif ($env:CODEX_ROUTER_STATE_DIR) { $env:CODEX_ROUTER_STATE_DIR }
-      elseif ($env:CODEX_HOME) { Join-Path $env:CODEX_HOME "codex-router" }
-      else { Join-Path $HOME ".codex\codex-router" }
-    if (Test-Path (Join-Path $StateRoot "native-models.json")) {
+    if (Test-NonEmptyFile $NativeCatalogPath) {
       & node src/catalog.mjs
     } else {
       & node src/catalog.mjs --refresh-native
     }
     if ($LASTEXITCODE -ne 0) { throw "Codex model-catalog generation failed." }
+  } elseif (Test-NonEmptyFile $NativeCatalogPath) {
+    # A harness-only machine has no Codex to ask for a native catalog, so one is
+    # regenerated only when an earlier Codex install already left one behind.
+    & node src/catalog.mjs
+    if ($LASTEXITCODE -ne 0) { throw "Codex model-catalog generation failed." }
   }
   & node src/litellm-config.mjs
   if ($LASTEXITCODE -ne 0) { throw "Gateway configuration generation failed." }
+  # The router plane is shared, so an install for one client changes the routable
+  # set for the other. Republish whichever integration is already installed here
+  # rather than leaving it advertising a stale model list.
+  if ($Target -ne "dsh" -and (Test-NonEmptyFile (Join-Path $StateRoot "dsh-models.json"))) {
+    & node src/dsh-config-manager.mjs install | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "DeepSeek Harness republish failed." }
+  }
 
   if ($PrepareOnly) {
     Write-Host "Dependencies and generated files are prepared; application configuration was not changed."
@@ -341,7 +373,7 @@ try {
   }
 
   $ConfigEnabled = $true
-  $ConfigArguments = @($ConfigManager, "enable")
+  $ConfigArguments = @($ConfigManager, $ConfigEnableCommand)
   if ($AdoptNativeCatalog) { $ConfigArguments += "--adopt-native-catalog" }
   & node @ConfigArguments
   if ($LASTEXITCODE -ne 0) { throw "$Target configuration update failed." }
@@ -353,11 +385,15 @@ try {
   if ($LASTEXITCODE -ne 0) { throw "The router did not become healthy." }
   & node src/install-manifest.mjs record | Out-Null
   if ($LASTEXITCODE -ne 0) { throw "Install-manifest recording failed." }
-  Write-Host "Installed the selected external model routes. Fully quit and reopen Codex."
+  if ($Target -eq "dsh") {
+    Write-Host "Published the selected external model routes to DeepSeek Harness. It reloads them on the next request."
+  } else {
+    Write-Host "Installed the selected external model routes. Fully quit and reopen Codex."
+  }
 } catch {
   if ($ServiceInstalled) { & node src/service.mjs uninstall 2>$null | Out-Null }
   if ($ConfigEnabled) {
-    & node $ConfigManager disable 2>$null | Out-Null
+    & node $ConfigManager $ConfigDisableCommand 2>$null | Out-Null
   } elseif ($AdoptionPending) {
     & node src/native-catalog-source.mjs clear-pending 2>$null | Out-Null
   }

@@ -87,6 +87,86 @@
   reuses the checkout-installer helper that `update` already uses and that is
   unit tested, rather than a second hand-written PowerShell argument list that
   nothing covered — the follow-up asked for in the review of #186.
+- **DeepSeek Harness is a supported target.** `--target dsh` publishes every
+  routed model into the harness's own `settings.yaml` as one provider route,
+  keyed to the same `/v1/responses` endpoint Codex already uses — so a harness
+  turn gets the router's tool-result ageing, vision bridge, prompt-token
+  substitution, bounded upstream retries, and tokens-per-second accounting
+  without a second request path. The harness's shipped bundle mounts
+  `dsh-llm-pi-ai` dormant and hot-reloads its settings document, so this is a
+  settings write rather than a plugin change and there is nothing to restart.
+  A target is a *client*, not a router: both share one service, one gateway,
+  one credential store, and one provider selection, so adding the second
+  integration never asks for a key again, and any change to the routable set
+  republishes whichever clients are installed rather than letting the two
+  drift apart.
+
+  The router owns exactly one key in each of the harness's two documents
+  (`llm-pi-ai.providers.codex-router` and `CODEX_ROUTER_CALLER_KEY`) and treats
+  every other byte as somebody else's: sibling routes, other sections,
+  comments, and other credentials survive a publish, and `dsh disable` restores
+  the document. A settings file the new fail-closed YAML lexer cannot read
+  unambiguously — a tab indent, a duplicate key, a multi-document stream, an
+  inline `providers` mapping — is refused with the file untouched and the line
+  named, rather than rewritten on a guess. Both documents are written 0600, the
+  same bound the harness holds them to, because the settings document carries
+  the managed base URL and the other carries the key it references.
+
+  Only selected, credentialed, listed, non-hidden routed models are published.
+  Native GPT models are not: they need the caller's own ChatGPT session, which
+  a harness request does not carry, so advertising them would offer a turn that
+  cannot authenticate — the same reason the vision-bridge engine candidates
+  exclude them here. Taking over the harness's default model is opt-in,
+  snapshotted, and reversible; delegation stays the user's, since
+  `dsh-tool-subagent` is composition rather than settings and
+  `./bin/model-router dsh subagent-preset` hands over the block to paste
+  instead of editing a preset the router does not own.
+
+- **`src/skills-install.mjs` no longer hijacks an unrelated `install`.** Its
+  CLI block ran on `process.argv[2]` alone with no entry-module guard, and
+  `install-manifest.mjs` imports it — so any command that transitively pulled
+  the manifest in while its own subcommand happened to be `install` or
+  `uninstall` installed the Codex skill pack and exited 0 before doing its own
+  work. Every other module in the repository already guarded this; this one
+  now does too.
+
+- **Command Code's catalog caught up, and one dead route fixed.** The Messages
+  route advertised Haiku 4.5 as `claude-haiku-4-5`, the undated alias every
+  other Anthropic surface accepts. Command Code's catalog does not carry it —
+  only the dated `claude-haiku-4-5-20251001` — so that route could never have
+  resolved, and it was the one registered id in either reseller family absent
+  from the live `/models` list. A registry assertion now pins the dated id.
+
+  Fourteen models Command Code serves and the registry did not are now checked
+  in: `grok-4.6`, `claude-opus-5`, `gpt-5.6-sol`, `gpt-5.6-terra`,
+  `gemini-3.7-flash`, `GLM-5.2-Fast`, `Kimi-K2.7-Code-Highspeed`,
+  `Qwen3.7-Flash`, and first entries for five vendors the reseller added since
+  the last sweep — `meta/muse-spark-1.2`, `nvidia/nemotron-3-ultra`,
+  `sakana/fugu-ultra`, `thinkingmachines/inkling` and `inkling-small`, and
+  `poolside/laguna-s-2.1`. Context windows come from Command Code's own
+  `/models` payload rather than the model name; effort ladders, image support,
+  and request profiles mirror the already shipped sibling of the same upstream
+  line, or fall back to the conservative single-`high` floor for a vendor with
+  no prior entry. Older point releases the catalog still lists behind a
+  registered newer sibling (GLM-5/5.1, Kimi K2.5/K2.6, MiniMax-M2.5,
+  Qwen3.6, Step-3.5, gemini-3.1/3.5-flash-lite, gpt-5.3/5.4, mimo-v2.5) stay
+  out deliberately; `bin/curate-models commandcode` still reaches them per
+  user.
+
+  These fourteen route correctly — a live request reaches Command Code and
+  comes back with the account's own plan verdict — but their capability
+  metadata is **not** live-verified: the test account is on the Go plan, which
+  answers every Provider API call with "Your Go plan doesn't include API
+  access." That blocks the tool-calling, streaming, and compaction probes for
+  the twenty-one models already shipped just as much as for the new ones. Run
+  `./bin/test-model 'commandcode/SLUG' --live --yes` on a Provider-plan account
+  before treating any of them as proven.
+
+  opencode Go needed no additions. All seven ids its catalog lists and the
+  registry omits (`glm-5`, `kimi-k2.5`, `minimax-m2.5`, `qwen3.5-plus`,
+  `mimo-v2-pro`, `mimo-v2-omni`, `hy3-preview`) are older releases or preview
+  channels of models already registered, and every registered opencode Go id
+  is still live.
 
 - **Windows installs the tray companion, and keeps it.** Nothing on Windows
   ever built or started it: `install.ps1` had no tray option at all, the

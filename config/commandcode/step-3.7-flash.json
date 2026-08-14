@@ -9,7 +9,7 @@
       "listed": true,
       "displayName": "Step 3.7 Flash (Command Code)",
       "description": "Step 3.7 Flash through the Command Code Provider API.",
-      "priority": 116,
+      "priority": 123,
       "defaultEffort": "high",
       "reasoningLevels": [
         {

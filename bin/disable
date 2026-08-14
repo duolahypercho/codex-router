@@ -4,10 +4,17 @@ set -eu
 repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$repo_dir"
 case "${MODEL_ROUTER_TARGET:-codex}" in
-  codex) ;;
-  *) echo "MODEL_ROUTER_TARGET must be codex." >&2; exit 2 ;;
+  codex)
+    node src/config-manager.mjs disable
+    node src/service.mjs uninstall
+    echo "External model routes disabled. Your model, provider, and profile settings were preserved."
+    echo "Fully quit and reopen Codex."
+    ;;
+  dsh)
+    node src/dsh-config-manager.mjs uninstall >/dev/null
+    node src/service.mjs uninstall
+    echo "The codex-router provider route was removed from DeepSeek Harness."
+    echo "Every other settings section, provider route, and stored credential was preserved."
+    ;;
+  *) echo "MODEL_ROUTER_TARGET must be codex or dsh." >&2; exit 2 ;;
 esac
-node src/config-manager.mjs disable
-node src/service.mjs uninstall
-echo "External model routes disabled. Your model, provider, and profile settings were preserved."
-echo "Fully quit and reopen Codex."

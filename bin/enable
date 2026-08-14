@@ -3,9 +3,10 @@ set -eu
 
 repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$repo_dir"
-case "${MODEL_ROUTER_TARGET:-codex}" in
-  codex) ;;
-  *) echo "MODEL_ROUTER_TARGET must be codex." >&2; exit 2 ;;
+target=${MODEL_ROUTER_TARGET:-codex}
+case "$target" in
+  codex|dsh) ;;
+  *) echo "MODEL_ROUTER_TARGET must be codex or dsh." >&2; exit 2 ;;
 esac
 CODEX_ROUTER_NODE_BIN=${CODEX_ROUTER_NODE_BIN:-$(command -v node)}
 export CODEX_ROUTER_NODE_BIN
@@ -16,12 +17,26 @@ for argument in "$@"; do
     *) echo "Usage: $0 [--adopt-native-catalog]" >&2; exit 2 ;;
   esac
 done
+if [ "$target" = dsh ] && [ "$adopt_native_catalog" = true ]; then
+  echo "--adopt-native-catalog applies to the Codex integration only." >&2
+  exit 2
+fi
 if [ "$adopt_native_catalog" = true ]; then
   node src/legacy-migration.mjs assert-clear --adopt-native-catalog >/dev/null
 else
   node src/legacy-migration.mjs assert-clear >/dev/null
 fi
-config_manager=src/config-manager.mjs
+# Only the client-configuration step differs between targets; the provider
+# selection, the gateway route table, and the service are one shared plane.
+if [ "$target" = dsh ]; then
+  config_manager=src/dsh-config-manager.mjs
+  config_enable_command=install
+  config_disable_command=uninstall
+else
+  config_manager=src/config-manager.mjs
+  config_enable_command=enable
+  config_disable_command=disable
+fi
 node src/provider-selection.mjs ensure-configured >/dev/null
 node src/secret.mjs ensure
 config_enabled=false
@@ -31,7 +46,7 @@ rollback() {
     node src/service.mjs uninstall >/dev/null 2>&1 || true
   fi
   if [ "$config_enabled" = true ]; then
-    node "$config_manager" disable >/dev/null 2>&1 || true
+    node "$config_manager" "$config_disable_command" >/dev/null 2>&1 || true
   elif [ "$adopt_native_catalog" = true ]; then
     node src/native-catalog-source.mjs clear-pending >/dev/null 2>&1 || true
   fi
@@ -40,13 +55,23 @@ trap rollback EXIT HUP INT TERM
 if [ "$adopt_native_catalog" = true ]; then
   node src/native-catalog-source.mjs prepare-from-config >/dev/null
 fi
-node src/catalog.mjs
+# `catalog.mjs` asks the Codex CLI whether the session is signed in and refuses
+# to publish when it cannot ask, so a harness-only machine never runs it.
+state_dir=${MODEL_ROUTER_STATE_DIR:-${CODEX_ROUTER_STATE_DIR:-${KIMI_CODEX_STATE_DIR:-${CODEX_HOME:-$HOME/.codex}/codex-router}}}
+if [ "$target" = codex ] || [ -s "$state_dir/native-models.json" ]; then
+  node src/catalog.mjs
+fi
 node src/litellm-config.mjs
+# The router plane is shared, so enabling for one client changes the routable
+# set for the other. Republish whichever integration is already installed.
+if [ "$target" != dsh ] && [ -s "$state_dir/dsh-models.json" ]; then
+  node src/dsh-config-manager.mjs install >/dev/null
+fi
 config_enabled=true
 if [ "$adopt_native_catalog" = true ]; then
-  node "$config_manager" enable --adopt-native-catalog
+  node "$config_manager" "$config_enable_command" --adopt-native-catalog
 else
-  node "$config_manager" enable
+  node "$config_manager" "$config_enable_command"
 fi
 service_installed=true
 node src/service.mjs install
@@ -54,4 +79,8 @@ node src/wait-health.mjs
 config_enabled=false
 service_installed=false
 trap - EXIT HUP INT TERM
-echo "External model routes enabled. Fully quit and reopen Codex."
+if [ "$target" = dsh ]; then
+  echo "External model routes published to DeepSeek Harness. It reloads them on the next request."
+else
+  echo "External model routes enabled. Fully quit and reopen Codex."
+fi

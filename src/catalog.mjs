@@ -620,9 +620,14 @@ function sortCatalogModels(models) {
 // still ships gpt-5.6-luna as "v1" even though it runs correctly on the v2
 // backend (openai/codex#35097, #36294). spawn_agent filters candidate child
 // models on that static value, so a v1 entry can never be delegated to by a v2
-// parent. applyMultiAgentSettings only reaches routed models, which is why
-// "all" mode never promoted the native slugs; apply the same opt-in here so the
-// subagent modes mean what the Settings tab says they mean.
+// parent.
+//
+// These upstream-verified slugs run fine on the v2 backend, so they are
+// promoted unconditionally — no mode switch, no Settings dance. The subagent
+// opt-in below only reaches the *remaining* native models, which stay
+// conservative because their v2 relay paths have not been verified.
+const NATIVE_V2_BACKEND_SLUGS = new Set(["gpt-5.6-luna"]);
+
 export function promoteNativeMultiAgent(models, settings, hidden = new Set()) {
   const enabled = new Set(settings.enabled || []);
   const disabled = new Set(settings.disabled || []);
@@ -630,6 +635,9 @@ export function promoteNativeMultiAgent(models, settings, hidden = new Set()) {
     const slug = String(model.slug);
     if (model.visibility !== "list") return model;
     if (hidden.has(slug) || disabled.has(slug)) return model;
+    if (NATIVE_V2_BACKEND_SLUGS.has(slug)) {
+      return { ...model, multi_agent_version: "v2" };
+    }
     if (settings.mode === "all" || (settings.mode === "selected" && enabled.has(slug))) {
       return { ...model, multi_agent_version: "v2" };
     }
