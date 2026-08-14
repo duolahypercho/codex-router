@@ -782,3 +782,14 @@ purpose.
   that can echo either. Regressions require fragmented/mislabeled SSE tests and
   real marker-return probes through every installed routed agent plus a
   same-thread follow-up.
+
+## Generated media and scratch output
+
+- Anything a skill, tool, or agent produces that is not source — rendered
+  video, images, audio, benchmark dumps, one-off reports — belongs in
+  `generated/` at the repository root. That directory is gitignored, so the
+  working tree stays clean and nothing large lands in a commit by accident.
+- Do not add per-extension ignore rules (`*.mp4`, `*.png`) for this. They also
+  hide checked-in assets such as tray icons and documentation screenshots.
+- Files that are meant to ship — icons, fixtures, docs assets — go in their
+  real home under version control, not in `generated/`.
