@@ -77,7 +77,7 @@ test("breaks provider usage down by model, heaviest first", () => {
         model: "deepseek/deepseek-v4-flash",
         status: 200,
         durationMs: 2_000,
-        responseStartMs: 500,
+        firstTokenMs: 500,
         inputTokens: 100,
         outputTokens: 40,
         totalTokens: 140,
@@ -89,7 +89,7 @@ test("breaks provider usage down by model, heaviest first", () => {
         model: "deepseek/deepseek-v4-pro",
         status: 200,
         durationMs: 4_000,
-        responseStartMs: 1_500,
+        firstTokenMs: 1_500,
         inputTokens: 900,
         outputTokens: 100,
         totalTokens: 1_000,
@@ -164,7 +164,7 @@ test("uses only the latest 20 clean generation timings for observed speed", () =
     model: "deepseek/deepseek-v4-flash",
     status: 200,
     durationMs: index < 2 ? 11_000 : 3_000,
-    responseStartMs: 1_000,
+    firstTokenMs: 1_000,
     outputTokens: 100,
     totalTokens: 100,
   }));
@@ -173,12 +173,12 @@ test("uses only the latest 20 clean generation timings for observed speed", () =
   events.push({
     ...events.at(-1),
     at: new Date(now - 500).toISOString(),
-    responseStartMs: undefined,
+    firstTokenMs: undefined,
   });
   events.push({
     ...events.at(-1),
     at: new Date(now).toISOString(),
-    responseStartMs: 1_000,
+    firstTokenMs: 1_000,
     retries: 1,
   });
 
@@ -201,7 +201,7 @@ test("accepts a response that starts within the first measured millisecond", () 
         model: "deepseek/deepseek-v4-flash",
         status: 200,
         durationMs: 2_000,
-        responseStartMs: 0,
+        firstTokenMs: 0,
         outputTokens: 100,
       },
     ],
@@ -232,4 +232,85 @@ test("keeps unlabeled model traffic visible instead of dropping it", () => {
 
   assert.deepEqual(grok.models.map((model) => model.slug), ["unknown"]);
   assert.equal(grok.models[0].totalTokens, 25);
+});
+
+// Output tokens per second is the rate after the first token, with the wait
+// before it reported separately -- the definition every published benchmark
+// uses. Dividing by time-since-headers instead put a reasoning model's silent
+// thinking in the denominator, so the same model read at 12 tok/s on a short
+// reply and 69 on a long one.
+test("the observed rate does not move with reply length", () => {
+  const at = new Date().toISOString();
+  const reply = (outputTokens) => ({
+    meteringVersion: 1,
+    at,
+    model: "gpt-x",
+    provider: "openai",
+    status: 200,
+    inputTokens: 10,
+    outputTokens,
+    totalTokens: 10 + outputTokens,
+    responseStartMs: 700,
+    firstTokenMs: 2900,
+    // 2.9s of thinking, then a steady 80 tokens/second.
+    durationMs: 2900 + Math.round(outputTokens * 12.5),
+  });
+
+  const short = aggregateProviderUsage([reply(31)]).providers[0].models[0];
+  const long = aggregateProviderUsage([reply(426)]).providers[0].models[0];
+  assert.equal(Math.round(short.observedTokensPerSecond), 80);
+  assert.equal(Math.round(long.observedTokensPerSecond), 80);
+});
+
+test("time to first token is reported on its own", () => {
+  const at = new Date().toISOString();
+  const events = [1200, 2900, 5000].map((firstTokenMs) => ({
+    meteringVersion: 1,
+    at,
+    model: "gpt-x",
+    provider: "openai",
+    status: 200,
+    inputTokens: 10,
+    outputTokens: 100,
+    totalTokens: 110,
+    firstTokenMs,
+    durationMs: firstTokenMs + 1000,
+  }));
+  const model = aggregateProviderUsage(events).providers[0].models[0];
+  // Median, so one cold start cannot drag it.
+  assert.equal(model.observedFirstTokenMs, 2900);
+});
+
+test("a first token that outlives its own request is not sampled", () => {
+  const model = aggregateProviderUsage([{
+    meteringVersion: 1,
+    at: new Date().toISOString(),
+    model: "gpt-x",
+    provider: "openai",
+    status: 200,
+    inputTokens: 10,
+    outputTokens: 100,
+    totalTokens: 110,
+    firstTokenMs: 5000,
+    durationMs: 1000,
+  }]).providers[0].models[0];
+  assert.equal(model.observedTokensPerSecond, null);
+  assert.equal(model.observedFirstTokenMs, null);
+});
+
+test("rows recorded before first-token timing are unmeasured, not wrong", () => {
+  const model = aggregateProviderUsage([{
+    meteringVersion: 1,
+    at: new Date().toISOString(),
+    model: "gpt-x",
+    provider: "openai",
+    status: 200,
+    inputTokens: 10,
+    outputTokens: 100,
+    totalTokens: 110,
+    responseStartMs: 200,
+    durationMs: 1000,
+  }]).providers[0].models[0];
+  assert.equal(model.observedTokensPerSecond, null);
+  assert.equal(model.observedFirstTokenMs, null);
 });

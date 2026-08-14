@@ -108,6 +108,7 @@ export function aggregateProviderUsage(events, { days = 90, now = Date.now() } =
       outputTokens: 0,
       totalTokens: 0,
       speedSamples: [],
+      firstTokenSamples: [],
       lastUsedAt: new Date(at).toISOString(),
     };
     model.requests += 1;
@@ -124,23 +125,36 @@ export function aggregateProviderUsage(events, { days = 90, now = Date.now() } =
     model.totalTokens += totalTokens;
     const durationMs = nonnegative(event.durationMs);
     const responseStartMs = optionalNonnegative(event.responseStartMs);
-    const generationDurationMs = durationMs - (responseStartMs ?? durationMs);
-    if (
+    // Output tokens per second is defined as the rate *after* the first token,
+    // with the wait before it reported separately as time-to-first-token --
+    // that is how every published benchmark states it, and it is the only
+    // split that does not change with reply length. Dividing by the time since
+    // the response headers instead buries a reasoning model's silent thinking
+    // in the denominator, which made a 31-token reply read at 12 tok/s and a
+    // 426-token one at 69 on the same model.
+    const firstTokenMs = optionalNonnegative(event.firstTokenMs);
+    const generationDurationMs = durationMs - (firstTokenMs ?? durationMs);
+    const measurable =
       event.status >= 200 &&
       event.status < 400 &&
-      outputTokens > 0 &&
-      responseStartMs !== undefined &&
-      generationDurationMs > 0 &&
       !event.retries &&
       event.emptyCompletion !== true &&
       event.emptyCompletionRetried !== true &&
-      event.emptyCompletionGuardReleased !== true
-    ) {
+      event.emptyCompletionGuardReleased !== true;
+    if (measurable && outputTokens > 0 && firstTokenMs !== undefined && generationDurationMs > 0) {
       model.speedSamples.push({ outputTokens, generationDurationMs });
       // Keep the displayed rate current instead of averaging the model's
       // entire 90-day usage history. Twenty replies smooth one-off bursts
       // without letting old sessions dominate the result.
       if (model.speedSamples.length > 20) model.speedSamples.shift();
+    }
+    // Time-to-first-token stands on its own: it is the pause the operator
+    // actually feels before anything appears, and on a reasoning model it is
+    // roughly half the request. Sampled from the same events, so a turn that
+    // is unfit for a rate is unfit for this too.
+    if (measurable && firstTokenMs !== undefined && firstTokenMs > 0 && firstTokenMs <= durationMs) {
+      model.firstTokenSamples.push(firstTokenMs);
+      if (model.firstTokenSamples.length > 20) model.firstTokenSamples.shift();
     }
     if (at >= Date.parse(model.lastUsedAt)) model.lastUsedAt = new Date(at).toISOString();
     provider.models.set(slug, model);
@@ -155,7 +169,7 @@ export function aggregateProviderUsage(events, { days = 90, now = Date.now() } =
         left.startDate.localeCompare(right.startDate),
       ),
       models: [...models.values()]
-        .map(({ speedSamples, ...model }) => {
+        .map(({ speedSamples, firstTokenSamples, ...model }) => {
           const speedOutputTokens = speedSamples.reduce(
             (total, sample) => total + sample.outputTokens,
             0,
@@ -167,6 +181,13 @@ export function aggregateProviderUsage(events, { days = 90, now = Date.now() } =
           return {
             ...model,
             speedSampleCount: speedSamples.length,
+            // Median, not mean: one cold start or one queued request would
+            // drag an average far more than it reflects a typical turn.
+            observedFirstTokenMs: firstTokenSamples.length
+              ? [...firstTokenSamples].sort((left, right) => left - right)[
+                  Math.floor(firstTokenSamples.length / 2)
+                ]
+              : null,
             observedTokensPerSecond:
               speedDurationMs > 0
                 ? Math.round((speedOutputTokens * 1_000 * 10) / speedDurationMs) / 10
