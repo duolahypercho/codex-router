@@ -8,6 +8,9 @@ import { pickerCommandArgs } from "./control-args.mjs";
 // vary by target, so reading it here does not disturb the per-target probes
 // below that re-import paths with their own MODEL_ROUTER_TARGET.
 import { DSH_CATALOG_PATH } from "./paths.mjs";
+// Same reasoning: presence is a property of the shared plane, not of a target,
+// so the overview can resolve it statically without perturbing those probes.
+import { presenceSnapshot } from "./presence-state.mjs";
 
 // Cross-target control plane for a tray/UI (e.g. the planned pane fork). It
 // reads which registry models are enabled per target and toggles them. Toggling
@@ -269,7 +272,12 @@ function probeTargets() {
 function printOverview(asJson) {
   const targets = probeTargets();
   if (asJson) {
-    process.stdout.write(`${JSON.stringify({ targets }, null, 2)}\n`);
+    // The tray polls this. Presence rides along so the rule that decides
+    // whether the router may be stopped is computed once, here, rather than
+    // re-derived from target flags on the Swift side where it would drift.
+    process.stdout.write(
+      `${JSON.stringify({ targets, presence: presenceSnapshot() }, null, 2)}\n`,
+    );
     return;
   }
   for (const target of TARGETS) {

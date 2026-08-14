@@ -140,10 +140,11 @@ final class RouterStore: ObservableObject {
   @Published private(set) var presenceMode: TrayPresenceMode
   @Published private(set) var hostAppRunning = false
   @Published private(set) var surfacesVisible = true
-  // The harness publishes no bundle ID and cannot be started lazily, so its
-  // route being live overrides follow mode. Sourced from the routine snapshot
-  // rather than a probe of its own, so publishing mid-session is picked up.
-  @Published private(set) var harnessPublished = false
+  // A client the tray cannot watch -- the harness, or a terminal `codex` --
+  // overrides follow mode. The router computes this; the tray does not
+  // re-derive it. Sourced from the routine snapshot, so a client appearing
+  // mid-session is picked up without a relaunch.
+  @Published private(set) var routerPinsServiceOn = false
 
   private var polling = false
   private var activityPolling = false
@@ -334,16 +335,16 @@ final class RouterStore: ObservableObject {
     }
   }
 
-  // The mode the tray acts on. A DeepSeek Harness turn arrives over a socket
-  // with no app behind it, so following the Codex apps would stop the router
-  // under a harness-only user with nothing left to notice their next request.
+  // The mode the tray acts on. A harness turn or a TUI turn arrives over a
+  // socket with no app behind it, so following the Codex apps would stop the
+  // router under a user with nothing left to notice their next request.
   var effectivePresenceMode: TrayPresenceMode {
-    harnessPublished ? .always : presenceMode
+    routerPinsServiceOn ? .always : presenceMode
   }
 
-  private func updateHarnessPublished(_ published: Bool) {
-    guard harnessPublished != published else { return }
-    harnessPublished = published
+  private func updateRouterPinsServiceOn(_ pinned: Bool) {
+    guard routerPinsServiceOn != pinned else { return }
+    routerPinsServiceOn = pinned
     refreshSurfacesVisible()
     reconcileService()
   }
@@ -814,7 +815,7 @@ final class RouterStore: ObservableObject {
     do {
       let output = try await runControl(arguments: ["--json"])
       snapshot = try JSONDecoder().decode(RouterSnapshot.self, from: output)
-      updateHarnessPublished(snapshot.targets["dsh"]?.active == true)
+      updateRouterPinsServiceOn(snapshot.presence?.effectiveMode == "always")
       let reportedLocalModels = snapshot.targets["codex"]?.modelSettings?.localModels
       let installedLocalTags = Set(reportedLocalModels?.models.map(\.tag) ?? [])
       let rawReportedLocalDownload = reportedLocalModels?.download
@@ -1831,7 +1832,17 @@ private struct RouterError: LocalizedError {
 
 struct RouterSnapshot: Decodable {
   let targets: [String: RouterTarget]
-  static let empty = RouterSnapshot(targets: [:])
+  // Absent from an older router's output, so the tray keeps working against one
+  // rather than failing the whole decode over a field it gained later.
+  let presence: RouterPresence?
+  static let empty = RouterSnapshot(targets: [:], presence: nil)
+}
+
+struct RouterPresence: Decodable {
+  let mode: String
+  let effectiveMode: String
+  let harnessPublished: Bool
+  let terminalCodex: Bool
 }
 
 enum UsageRange: Int, CaseIterable, Identifiable {
@@ -2851,8 +2862,8 @@ private struct TrayView: View {
       VStack(alignment: .leading, spacing: 3) {
         Text(routerLocalized("Show tray"))
           .font(.system(size: 12, weight: .medium))
-        Text(store.presenceMode == .followCodex && store.harnessPublished
-          ? routerLocalized("Kept on: DeepSeek Harness has no window to follow")
+        Text(store.presenceMode == .followCodex && store.routerPinsServiceOn
+          ? routerLocalized("Kept on: a terminal session has no window to follow")
           : store.presenceMode == .followCodex
             ? routerLocalized("Appears with Codex or ChatGPT, hides when they quit")
             : routerLocalized("Menu bar icon stays visible"))

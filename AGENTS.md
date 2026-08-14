@@ -899,28 +899,33 @@ purpose.
   real marker-return probes through every installed routed agent plus a
   same-thread follow-up.
 
-## A published harness route keeps the router on
+## A client the tray cannot watch keeps the router on
 
 The tray's presence setting can tie the router to the Codex and ChatGPT desktop
-apps, stopping it 30 seconds after both close. That is safe for Codex, which is
-an app the tray can watch and whose next launch it can notice. It is not safe
-for the harness: `dsh` is a CLI with no bundle identifier, so there is nothing
-to observe, and it cannot be started on demand either — a harness turn that
-finds 127.0.0.1:4202 closed fails immediately, while the five-process stack
-behind that port takes up to 300 seconds to warm. Lazy start is not available
-at request latency, so the port has to already be open.
+apps, stopping it 30 seconds after both close. That is only safe for a client
+the tray can actually see. `NSRunningApplication` enumerates app bundles, so it
+sees the desktop apps and nothing else — a `codex` TUI in a terminal and a `dsh`
+harness turn both register nothing at all. Neither can be started on demand
+either: a turn that finds 127.0.0.1:4202 closed fails immediately, while the
+five-process stack behind that port takes up to 300 seconds to warm, so lazy
+start does not exist at request latency. The port has to already be open.
 
 - `effectivePresenceMode()` in `src/presence-state.mjs` is what the tray and
-  `doctor` act on. It reports `always` whenever `dsh-models.json` exists,
-  whatever the stored mode says. Read it, never `readPresenceMode()`, anywhere
-  a service gets stopped.
-- The stored mode is overridden, never rewritten. Removing the harness route
-  hands the user's own choice back on the next read.
-- The tray mirrors this through `effectivePresenceMode`, fed by
-  `targets.dsh.active` in the routine `--json` snapshot rather than a probe of
-  its own, so publishing the route mid-session takes effect without a relaunch.
-- `test/presence-state.test.mjs` covers the override, the round trip, and the
-  fact that always-on is left alone. A change to the gate needs a test there.
+  `doctor` act on. It reports `always` whenever `dsh-models.json` exists or
+  `codex` resolves on PATH, whatever the stored mode says. Read it, never
+  `readPresenceMode()`, anywhere a service gets stopped.
+- Detection errs toward finding a client. A false positive costs a dormant
+  toggle; a false negative costs somebody their next request.
+- The stored mode is overridden, never rewritten. Removing the harness route or
+  the CLI hands the user's own choice back on the next read.
+- The router owns the rule and the tray consumes it: `control --json` carries a
+  `presence` block, and the tray reads `presence.effectiveMode` rather than
+  re-deriving anything from target flags, which is where the two would drift.
+  The field is optional in the Swift decoder, so a tray keeps working against a
+  router that predates it.
+- `test/presence-state.test.mjs` covers both signals, the override, the round
+  trip, and the fact that always-on is left alone. A change to the gate needs a
+  test there.
 
 ## Generated media and scratch output
 

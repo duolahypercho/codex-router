@@ -2,21 +2,25 @@
 
 ## Unreleased
 
-- **A published harness route keeps the router running.** The tray's presence
-  setting could tie the router to the Codex and ChatGPT desktop apps and stop it
-  30 seconds after both closed. Codex can be followed that way — it is an app
-  the tray watches, and the next launch starts the router back up. `dsh` cannot:
-  it is a CLI with no bundle identifier to observe, and no lazy start is
-  possible either, because a harness turn that finds 127.0.0.1:4202 closed fails
-  at once while the stack behind that port takes up to 300 seconds to warm. A
-  harness-only user who tried the setting got a dead port and a `doctor` line
-  telling them to open Codex, which they do not use.
+- **A client the tray cannot watch keeps the router running.** The tray's
+  presence setting could tie the router to the Codex and ChatGPT desktop apps
+  and stop it 30 seconds after both closed. `NSRunningApplication` enumerates
+  app bundles and nothing else, so that setting could only ever see those two:
+  a `codex` TUI in a terminal and a `dsh` harness turn are both invisible to it.
+  Neither can be started on demand either — a turn that finds 127.0.0.1:4202
+  closed fails at once, while the stack behind that port takes up to 300 seconds
+  to warm — so a terminal user who tried the setting got a dead port and a
+  `doctor` line telling them to open an app they may not use.
 
   `effectivePresenceMode()` now reports `always` whenever the harness route is
-  published, and the tray and `doctor` both act on that instead of the raw mode.
-  The stored preference is overridden rather than rewritten, so unpublishing the
-  route restores the user's own choice; the tray reads the state from the
-  snapshot it already polls, so publishing mid-session needs no relaunch.
+  published or `codex` resolves on PATH, and the tray and `doctor` both act on
+  that instead of the raw mode. Detection errs toward finding a client: a false
+  positive costs a dormant toggle, a false negative costs somebody their next
+  request. The stored preference is overridden rather than rewritten, so
+  removing the client restores the user's own choice. `control --json` now
+  carries a `presence` block so the router owns the rule and the tray consumes
+  it rather than re-deriving it, and the tray picks up a change on the snapshot
+  it already polls.
 
 - **DeepSeek Harness is a supported target.** `--target dsh` publishes every
   routed model into the harness's own `settings.yaml` as one provider route,

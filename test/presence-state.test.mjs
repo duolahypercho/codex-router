@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -8,6 +8,13 @@ import { privateFileIsProtected } from "../src/file-security.mjs";
 
 const stateDir = mkdtempSync(path.join(os.tmpdir(), "presence-state-test-"));
 process.env.CODEX_ROUTER_STATE_DIR = stateDir;
+
+// A PATH with no `codex` on it, so the terminal-client probe answers no unless
+// a test puts one there. Set before the module loads: the probe memoizes.
+// Not an empty directory -- the probe runs `which`, which has to stay findable
+// -- but the two system directories that never hold a Codex install.
+const emptyPathDir = "/usr/bin:/bin";
+process.env.PATH = emptyPathDir;
 
 const {
   PRESENCE_ALWAYS,
@@ -19,6 +26,7 @@ const {
   readPresenceMode,
   serviceFollowsHostApps,
   setPresenceMode,
+  terminalCodexInstalled,
 } = await import("../src/presence-state.mjs");
 
 const { DSH_CATALOG_PATH } = await import("../src/paths.mjs");
@@ -29,6 +37,22 @@ function publishHarness() {
 
 function unpublishHarness() {
   rmSync(DSH_CATALOG_PATH, { force: true });
+}
+
+// A directory holding an executable `codex`, added to PATH to stand in for a
+// terminal install. `which` only reports it when it is executable.
+function installTerminalCodex() {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "presence-codex-path-"));
+  const binary = path.join(dir, "codex");
+  writeFileSync(binary, "#!/bin/sh\nexit 0\n", { encoding: "utf8", mode: 0o755 });
+  chmodSync(binary, 0o755);
+  process.env.PATH = `${dir}${path.delimiter}${emptyPathDir}`;
+  return dir;
+}
+
+function uninstallTerminalCodex(dir) {
+  process.env.PATH = emptyPathDir;
+  rmSync(dir, { recursive: true, force: true });
 }
 
 test("presence defaults to always when no state has been written", () => {
@@ -42,6 +66,7 @@ test("presence round-trips through protected state", () => {
     mode: PRESENCE_FOLLOW_CODEX,
     effectiveMode: PRESENCE_FOLLOW_CODEX,
     harnessPublished: false,
+    terminalCodex: false,
     path: PRESENCE_STATE_PATH,
   });
   assert.equal(readPresenceMode(), PRESENCE_FOLLOW_CODEX);
@@ -74,12 +99,37 @@ test("a published harness pins the router on without discarding the choice", () 
     mode: PRESENCE_FOLLOW_CODEX,
     effectiveMode: PRESENCE_ALWAYS,
     harnessPublished: true,
+    terminalCodex: false,
     path: PRESENCE_STATE_PATH,
   });
 
   // Removing the route hands the user's own choice back.
   unpublishHarness();
   assert.equal(effectivePresenceMode(), PRESENCE_FOLLOW_CODEX);
+  assert.equal(serviceFollowsHostApps(), true);
+  setPresenceMode(PRESENCE_ALWAYS);
+});
+
+// Windows resolves through where.exe and would need an executable of its own;
+// the rule under test is platform-independent, the fixture is not.
+test("a terminal codex pins the router on the same way the harness does",
+  { skip: process.platform === "win32" }, () => {
+  setPresenceMode(PRESENCE_FOLLOW_CODEX);
+  assert.equal(terminalCodexInstalled(), false);
+  assert.equal(serviceFollowsHostApps(), true);
+
+  // NSRunningApplication enumerates app bundles, so a `codex` run from a shell
+  // is as invisible to follow mode as the harness is -- and just as unable to
+  // be started on demand once its first request has already been refused.
+  const dir = installTerminalCodex();
+  assert.equal(terminalCodexInstalled(), true);
+  assert.equal(effectivePresenceMode(), PRESENCE_ALWAYS);
+  assert.equal(serviceFollowsHostApps(), false);
+  assert.equal(presenceSnapshot().terminalCodex, true);
+  assert.equal(readPresenceMode(), PRESENCE_FOLLOW_CODEX);
+
+  uninstallTerminalCodex(dir);
+  assert.equal(terminalCodexInstalled(), false);
   assert.equal(serviceFollowsHostApps(), true);
   setPresenceMode(PRESENCE_ALWAYS);
 });
