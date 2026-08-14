@@ -630,15 +630,13 @@ private struct IslandOverlayView: View {
     routerAccent
   }
 
-  private var quotaUsedPercent: Double? {
+  private var quotaRemainingPercent: Double? {
     if store.selectedUsageUsesChatGPT {
-      guard let used = store.accountUsage?.primary?.usedPercent else { return nil }
-      return Double(max(0, min(100, used)))
+      guard let remaining = store.accountUsage?.primary?.remainingPercent else { return nil }
+      return Double(max(0, min(100, remaining)))
     }
-    guard store.selectedAccountMetric?.kind == "quota",
-          let used = store.selectedAccountMetric?.usedPercent
-    else { return nil }
-    return max(0, min(100, used))
+    guard let metric = store.selectedAccountMetric else { return nil }
+    return remainingQuotaPercent(metric)
   }
 
   private var weeklyRemainingPercent: Double? {
@@ -669,20 +667,20 @@ private struct IslandOverlayView: View {
 
   private var accountHeaderValue: String? {
     if let weeklyRemainingPercent { return "\(Int(weeklyRemainingPercent.rounded()))%" }
-    if let quotaUsedPercent { return "\(Int(quotaUsedPercent.rounded()))%" }
+    if let quotaRemainingPercent { return "\(Int(quotaRemainingPercent.rounded()))%" }
     guard let metric = store.selectedAccountMetric, metric.kind == "balance" else { return nil }
     return formattedAccountMetric(metric)
   }
 
   private var accountHeaderLabel: String {
     if weeklyRemainingPercent != nil { return "WEEKLY LEFT" }
-    if quotaUsedPercent != nil {
+    if quotaRemainingPercent != nil {
       let window = accountUsageLabel.replacingOccurrences(
         of: " limit",
         with: "",
         options: [.caseInsensitive]
       )
-      return "\(window.uppercased()) USED"
+      return "\(window.uppercased()) LEFT"
     }
     return accountUsageLabel.uppercased()
   }
@@ -692,7 +690,7 @@ private struct IslandOverlayView: View {
   }
 
   private var accountTileValue: String {
-    if let quotaUsedPercent { return "\(Int(quotaUsedPercent.rounded()))% used" }
+    if let quotaRemainingPercent { return "\(Int(quotaRemainingPercent.rounded()))% left" }
     if let metric = store.selectedAccountMetric, metric.kind == "balance" {
       return formattedAccountMetric(metric)
     }
@@ -702,7 +700,7 @@ private struct IslandOverlayView: View {
   private var accountTileDetail: String {
     if let reset = store.selectedUsageResetDate { return usageResetCaption(reset) }
     if let detail = store.selectedAccountMetric?.detail, !detail.isEmpty { return detail }
-    return quotaUsedPercent == nil ? "Not reported by provider" : "No reset reported"
+    return quotaRemainingPercent == nil ? "Not reported by provider" : "No reset reported"
   }
 
   private var tokenSourceDetail: String {
@@ -1715,8 +1713,8 @@ private struct DesktopQuotaBarRow: View {
   let row: DesktopQuotaRow
 
   private var tint: Color {
-    if row.usedPercent >= 90 { return routerRed }
-    if row.usedPercent >= 70 { return routerYellow }
+    if row.remainingPercent <= 10 { return routerRed }
+    if row.remainingPercent <= 30 { return routerYellow }
     return routerMint
   }
 
@@ -1733,7 +1731,7 @@ private struct DesktopQuotaBarRow: View {
             .font(.system(size: 8, design: .rounded))
             .foregroundStyle(routerMuted)
         }
-        Text("\(Int(row.usedPercent.rounded()))%")
+        Text("\(Int(row.remainingPercent.rounded()))% left")
           .font(.system(size: 10, weight: .semibold, design: .rounded))
           .monospacedDigit()
           .foregroundStyle(tint)
@@ -1743,7 +1741,7 @@ private struct DesktopQuotaBarRow: View {
           Capsule().fill(Color.white.opacity(0.08))
           Capsule()
             .fill(tint)
-            .frame(width: max(3, geometry.size.width * min(1, row.usedPercent / 100)))
+            .frame(width: max(3, geometry.size.width * min(1, row.remainingPercent / 100)))
         }
       }
       .frame(height: 4)

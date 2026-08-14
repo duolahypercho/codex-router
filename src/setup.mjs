@@ -325,9 +325,12 @@ function installTray() {
           ? "Recent macOS SDKs need the full Xcode app (not only the Command Line Tools) to build the menu-bar companion's SwiftUI macros.\n"
           : "") +
         (process.platform === "win32"
-          ? "The Tauri companion needs Rust stable and Cargo on PATH.\n" +
-            "The router itself is installed; retry later with .\\codex-router.ps1 tray.\n"
-          : "The router itself is installed; retry later with ./bin/model-router-tray.\n"),
+          ? "The router itself is installed; retry later with .\\codex-router.ps1 tray,\n" +
+            "or .\\codex-router.ps1 companion for the Electron build, which needs no Rust.\n"
+          : "The router itself is installed; retry later with ./bin/model-router-tray.\n") +
+        // Nothing to build and nothing to download, so it is the one suggestion
+        // that cannot fail for the same reason this just did.
+        "The companion also runs in a browser: .\\codex-router.ps1 panel (./bin/panel on macOS and Linux).\n",
     );
   }
 }

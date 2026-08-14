@@ -29,7 +29,7 @@ import {
   ollamaCommand,
   ollamaModelsPath,
 } from "./ollama-runtime.mjs";
-import { readLocalDownload } from "./local-download.mjs";
+import { readLocalDownload, writeLocalDownload } from "./local-download.mjs";
 import {
   EXPLORE_LOCAL_MODELS,
   LOCAL_FAMILY_RESEARCH,
@@ -530,6 +530,34 @@ export function localModelsSnapshot({
     families.set(identity.family, current);
   }
   for (const family of families.values()) family.variants.sort();
+  let download = readLocalDownload();
+  // Older uninstall workers recorded an error when Ollama had already
+  // removed the weights but the optional Codex catalog refresh failed.  The
+  // inventory is authoritative here: do not keep showing a red "removal
+  // failed" card for a model that is no longer on disk.  Preserve the warning
+  // so the operator still knows the picker may need a Codex restart.
+  const removedButUnpublished = download?.kind === "uninstall"
+    && download.status === "error"
+    && /^The model was removed,/i.test(String(download.error || ""));
+  if (removedButUnpublished && !models.some((model) => canonicalLocalModelTag(model.tag) === canonicalLocalModelTag(download.tag))) {
+    const catalogError = download.catalogError || download.error;
+    const repaired = {
+      ...download,
+      status: "done",
+      detail: "Model removed · catalog refresh needed",
+      percent: 100,
+      updatedAt: Date.now(),
+      catalogError,
+      error: undefined,
+    };
+    try {
+      download = writeLocalDownload(repaired);
+    } catch {
+      // Rendering the truthful inventory still matters if the protected state
+      // file cannot be rewritten; the next refresh can try the repair again.
+      download = repaired;
+    }
+  }
   return {
     path: LOCAL_MODELS_STATE_PATH,
     installed: models.length,
@@ -546,7 +574,7 @@ export function localModelsSnapshot({
       note: "Any valid Ollama tag is supported. Paste an ollama.com model URL or enter a tag to inspect and install it.",
     },
     runtime: localOllamaRuntimeSnapshot(),
-    download: readLocalDownload(),
+    download,
     machine: describeMachine(capacity),
   };
 }

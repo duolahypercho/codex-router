@@ -89,6 +89,17 @@ export function metricPercent(metric = {}) {
     : null;
 }
 
+// Quota data is normalized internally as percentage used, but the tray's
+// allowance surfaces should answer the operator's question: how much is left.
+// Prefer an explicitly reported remaining value, then derive it from the
+// provider's used counters or percentage.
+export function metricRemainingPercent(metric = {}) {
+  const direct = clampPercent(metric.remainingPercent);
+  if (direct !== null) return direct;
+  const used = metricPercent(metric);
+  return used === null ? null : 100 - used;
+}
+
 export function buildQuotaCards({ account, providerUsage, providerSetup } = {}) {
   const cards = [];
   const seen = new Set();
@@ -107,6 +118,7 @@ export function buildQuotaCards({ account, providerUsage, providerSetup } = {}) 
       window: window.key,
       label: window.label,
       usedPercent: metricPercent(metric),
+      remainingPercent: metricRemainingPercent(metric),
       resetAt: Number(metric.resetsAt ?? metric.resetAt) || null,
     });
   };
@@ -189,7 +201,10 @@ export function visibleLocalDownload(localModels = {}) {
   if (!download) return null;
   if (download.status !== "done" || !download.tag) return download;
   const installed = new Set((localModels.models || []).map((model) => model.tag));
-  return installed.has(download.tag) ? download : null;
+  // A completed removal normally disappears once its row is gone. Keep a
+  // terminal warning visible when publication failed, though, so “removed”
+  // is not silently mistaken for “the catalog is already refreshed.”
+  return installed.has(download.tag) || download.catalogError || download.restartError ? download : null;
 }
 
 export function observedModelSpeed(providerUsage, providerId, modelSlug) {

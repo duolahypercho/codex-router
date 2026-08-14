@@ -5,6 +5,14 @@
 # these files as text, so the damage showed up there first.
 *.sh text eol=lf
 
+# The bin/ entry points are the same POSIX shell scripts without the extension,
+# so the rule above never reached them: a Windows checkout with
+# core.autocrlf=true rewrites all of them to CRLF, and `sh` then treats the
+# trailing \r as part of the last token on every line. The blobs were already
+# LF, which is why POSIX installs kept working and the damage stayed invisible
+# to everyone except someone running bin/ from Git Bash on Windows.
+bin/* text eol=lf
+
 # The PowerShell entry points are the mirror image: they are executed by Windows
 # and are conventionally CRLF, but nothing here depends on their endings, so
 # they are normalized in the repository and left to the platform on checkout.

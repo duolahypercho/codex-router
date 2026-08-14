@@ -101,8 +101,21 @@ fn main() {
             provider_usage,
             provider_setup,
             local_models,
+            local_model_speed,
+            update_local_ollama,
+            vision_bridge_status,
+            vision_bridge_models,
+            vision_bridge_probe,
+            set_vision_bridge,
+            set_vision_engine,
+            set_vision_effort,
+            pull_vision_model,
+            vision_pull_status,
+            benchmark_vision_model,
+            use_local_vision_model,
             install_local_model,
             uninstall_local_model,
+            cancel_local_model,
             set_local_model_enabled,
             install_provider_cli,
             connect_oauth,
@@ -118,6 +131,11 @@ fn main() {
             set_picker_models,
             set_tool_result_aging,
             set_login_free,
+            set_signed_routing,
+            presence_status,
+            set_presence_mode,
+            maintenance,
+            doctor_fix,
             set_island_enabled,
             set_island_expanded,
             show_panel,
@@ -290,6 +308,164 @@ async fn local_models(state: State<'_, RouterState>) -> Result<Value, String> {
     .await
 }
 
+#[tauri::command]
+async fn local_model_speed(
+    state: State<'_, RouterState>,
+    model: String,
+) -> Result<Value, String> {
+    validate_local_model_ref(&model)?;
+    run_json_command(
+        state.inner().clone(),
+        vec!["local-models".into(), "benchmark".into(), model],
+        None,
+    )
+    .await
+}
+
+#[tauri::command]
+async fn update_local_ollama(state: State<'_, RouterState>) -> Result<Value, String> {
+    run_json_command(
+        state.inner().clone(),
+        vec![
+            "local-models".into(),
+            "runtime".into(),
+            "update".into(),
+            "--yes".into(),
+        ],
+        None,
+    )
+    .await
+}
+
+#[tauri::command]
+async fn vision_bridge_status(state: State<'_, RouterState>) -> Result<Value, String> {
+    run_json_command(
+        state.inner().clone(),
+        vec!["vision-bridge".into(), "status".into()],
+        None,
+    )
+    .await
+}
+
+#[tauri::command]
+async fn vision_bridge_models(state: State<'_, RouterState>) -> Result<Value, String> {
+    run_json_command(
+        state.inner().clone(),
+        vec!["vision-bridge".into(), "models".into()],
+        None,
+    )
+    .await
+}
+
+#[tauri::command]
+async fn vision_bridge_probe(state: State<'_, RouterState>) -> Result<Value, String> {
+    run_json_command(
+        state.inner().clone(),
+        vec!["vision-bridge".into(), "probe".into()],
+        None,
+    )
+    .await
+}
+
+#[tauri::command]
+async fn set_vision_bridge(
+    state: State<'_, RouterState>,
+    enabled: bool,
+) -> Result<Value, String> {
+    run_json_command(
+        state.inner().clone(),
+        vec![
+            "vision-bridge".into(),
+            (if enabled { "on" } else { "off" }).into(),
+        ],
+        None,
+    )
+    .await
+}
+
+#[tauri::command]
+async fn set_vision_engine(
+    state: State<'_, RouterState>,
+    engine: String,
+    effort: Option<String>,
+) -> Result<Value, String> {
+    validate_vision_value(&engine, "vision engine")?;
+    if let Some(value) = effort.as_deref() {
+        validate_vision_value(value, "vision effort")?;
+    }
+    let mut args = vec!["vision-bridge".into(), "engine".into(), engine];
+    if let Some(value) = effort {
+        args.push(value);
+    }
+    run_json_command(state.inner().clone(), args, None).await
+}
+
+#[tauri::command]
+async fn set_vision_effort(
+    state: State<'_, RouterState>,
+    effort: String,
+) -> Result<Value, String> {
+    validate_vision_value(&effort, "vision effort")?;
+    run_json_command(
+        state.inner().clone(),
+        vec!["vision-bridge".into(), "effort".into(), effort],
+        None,
+    )
+    .await
+}
+
+#[tauri::command]
+async fn pull_vision_model(
+    state: State<'_, RouterState>,
+    model: String,
+) -> Result<Value, String> {
+    validate_local_model_ref(&model)?;
+    run_json_command(
+        state.inner().clone(),
+        vec!["vision-bridge".into(), "pull".into(), model],
+        None,
+    )
+    .await
+}
+
+#[tauri::command]
+async fn vision_pull_status(state: State<'_, RouterState>) -> Result<Value, String> {
+    run_json_command(
+        state.inner().clone(),
+        vec!["vision-bridge".into(), "pull-status".into()],
+        None,
+    )
+    .await
+}
+
+#[tauri::command]
+async fn benchmark_vision_model(
+    state: State<'_, RouterState>,
+    model: String,
+) -> Result<Value, String> {
+    validate_local_model_ref(&model)?;
+    run_json_command(
+        state.inner().clone(),
+        vec!["vision-bridge".into(), "benchmark".into(), model],
+        None,
+    )
+    .await
+}
+
+#[tauri::command]
+async fn use_local_vision_model(
+    state: State<'_, RouterState>,
+    model: String,
+) -> Result<Value, String> {
+    validate_local_model_ref(&model)?;
+    run_json_command(
+        state.inner().clone(),
+        vec!["vision-bridge".into(), "local".into(), model],
+        None,
+    )
+    .await
+}
+
 // `--yes` is consent to install and start Ollama itself when it is missing, so
 // a single install action covers both the runtime and the model. `force` is a
 // separate decision -- the operator accepting a model this machine is rated too
@@ -326,7 +502,22 @@ async fn uninstall_local_model(
             "uninstall".into(),
             model,
             "--yes".into(),
+            "--async".into(),
         ],
+        None,
+    )
+    .await
+}
+
+#[tauri::command]
+async fn cancel_local_model(
+    state: State<'_, RouterState>,
+    model: String,
+) -> Result<Value, String> {
+    validate_local_model_ref(&model)?;
+    run_json_command(
+        state.inner().clone(),
+        vec!["local-models".into(), "cancel".into(), model],
         None,
     )
     .await
@@ -581,6 +772,62 @@ async fn set_tool_result_aging(
 }
 
 #[tauri::command]
+async fn set_signed_routing(
+    state: State<'_, RouterState>,
+    enabled: bool,
+) -> Result<Value, String> {
+    run_command_then_snapshot(
+        state.inner().clone(),
+        vec![
+            "signed-routing".into(),
+            (if enabled { "on" } else { "off" }).into(),
+        ],
+    )
+    .await
+}
+
+#[tauri::command]
+async fn presence_status(state: State<'_, RouterState>) -> Result<Value, String> {
+    run_json_command(
+        state.inner().clone(),
+        vec!["presence".into(), "status".into()],
+        None,
+    )
+    .await
+}
+
+#[tauri::command]
+async fn set_presence_mode(
+    state: State<'_, RouterState>,
+    mode: String,
+) -> Result<Value, String> {
+    if !matches!(mode.as_str(), "always" | "follow-codex") {
+        return Err("Choose Always or With Codex for tray visibility.".into());
+    }
+    run_json_command(
+        state.inner().clone(),
+        vec!["presence".into(), "set".into(), mode],
+        None,
+    )
+    .await
+}
+
+#[tauri::command]
+async fn maintenance(state: State<'_, RouterState>) -> Result<Value, String> {
+    run_json_command(state.inner().clone(), vec!["maintenance".into()], None).await
+}
+
+#[tauri::command]
+async fn doctor_fix(state: State<'_, RouterState>) -> Result<Value, String> {
+    run_json_command(
+        state.inner().clone(),
+        vec!["doctor".into(), "--fix".into(), "--json".into()],
+        None,
+    )
+    .await
+}
+
+#[tauri::command]
 async fn set_login_free(state: State<'_, RouterState>, enabled: bool) -> Result<Value, String> {
     let router = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -643,6 +890,19 @@ async fn run_json_command(
     tauri::async_runtime::spawn_blocking(move || {
         let borrowed = args.iter().map(String::as_str).collect::<Vec<_>>();
         run_control_json(&state, &borrowed, stdin.as_deref().map(str::as_bytes))
+    })
+    .await
+    .map_err(|_| "The Model Router command did not finish.".to_string())?
+}
+
+async fn run_command_then_snapshot(
+    state: RouterState,
+    args: Vec<String>,
+) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let borrowed = args.iter().map(String::as_str).collect::<Vec<_>>();
+        run_control(&state, &borrowed, None)?;
+        run_control_json(&state, &["--json"], None)
     })
     .await
     .map_err(|_| "The Model Router command did not finish.".to_string())?
@@ -1117,6 +1377,21 @@ fn validate_local_model_ref(model: &str) -> Result<(), String> {
         Ok(())
     } else {
         Err("Enter a valid Ollama model tag or model-page URL.".into())
+    }
+}
+
+fn validate_vision_value(value: &str, label: &str) -> Result<(), String> {
+    let trimmed = value.trim();
+    let valid = !trimmed.is_empty()
+        && trimmed.len() <= 256
+        && trimmed.chars().all(|character| {
+            character.is_ascii_alphanumeric()
+                || matches!(character, '.' | '_' | '/' | ':' | '-')
+        });
+    if valid {
+        Ok(())
+    } else {
+        Err(format!("Invalid {label}."))
     }
 }
 

@@ -23,6 +23,7 @@
 
       <nav class="tabs" aria-label="Model Router sections">
         <button class="tab is-active" type="button" data-tab="usage">Usage</button>
+        <button class="tab" type="button" data-tab="status">Status</button>
         <button class="tab" type="button" data-tab="connections">Connections</button>
         <button class="tab" type="button" data-tab="models">Models</button>
       </nav>
@@ -31,7 +32,14 @@
         <div class="usage-heading">
           <div>
             <p class="eyebrow">Token activity</p>
-            <select id="usage-source" aria-label="Usage source"></select>
+            <div class="usage-controls">
+              <select id="usage-source" aria-label="Usage source"></select>
+              <select id="usage-range" aria-label="Usage range">
+                <option value="7">7D</option>
+                <option value="30">30D</option>
+                <option value="90">90D</option>
+              </select>
+            </div>
           </div>
           <span id="live-state" class="live-state" data-state="idle"><i></i><span>Idle</span></span>
         </div>
@@ -44,13 +52,13 @@
               <small>tokens</small>
             </div>
             <div class="secondary-metric">
-              <span class="metric-label">Last 7 days</span>
+              <span class="metric-label">Last <span id="usage-range-label">7 days</span></span>
               <strong id="week-tokens">—</strong>
               <small>tokens</small>
             </div>
           </div>
-          <div id="chart-wrap" class="chart-wrap" tabindex="0" aria-label="Daily token usage for the last seven days">
-            <svg id="usage-chart" viewBox="0 0 328 112" role="img" aria-label="Seven-day token usage line chart">
+          <div id="chart-wrap" class="chart-wrap" tabindex="0" aria-label="Daily token usage">
+            <svg id="usage-chart" viewBox="0 0 328 112" role="img" aria-label="Daily token usage line chart">
               <defs>
                 <linearGradient id="chart-area" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="0" stop-color="#70a4ff" stop-opacity="0.28" />
@@ -89,6 +97,17 @@
           <button id="refresh-data" class="text-button" type="button">Refresh</button>
         </div>
         <div id="quota-cards" class="quota-grid" aria-live="polite"></div>
+        <div id="usage-overview" class="usage-overview" aria-live="polite"></div>
+      </section>
+
+      <section id="status-view" class="view" hidden>
+        <div class="connections-intro">
+          <p class="eyebrow">Live router</p>
+          <h2>Status</h2>
+          <p id="status-summary">Waiting for activity.</p>
+        </div>
+        <div id="active-requests" class="status-card" aria-live="polite"></div>
+        <div id="quota-resets" class="status-card" aria-live="polite"></div>
       </section>
 
       <section id="connections-view" class="view" hidden>
@@ -108,7 +127,38 @@
             <span class="sr-only">Use Codex without OpenAI login</span>
           </label>
         </div>
+        <div class="mode-setting">
+          <div>
+            <strong>Use Router with ChatGPT</strong>
+            <small id="signed-routing-note">Keep native ChatGPT transport and task history</small>
+          </div>
+          <label class="switch" id="signed-routing-switch-label">
+            <input id="signed-routing-switch" type="checkbox" />
+            <span aria-hidden="true"></span>
+            <span class="sr-only">Use Router with ChatGPT</span>
+          </label>
+        </div>
+        <div class="mode-setting mode-setting-select">
+          <div>
+            <strong>Show tray</strong>
+            <small id="presence-note">Keep the Windows tray visible</small>
+          </div>
+          <select id="presence-mode" aria-label="Show tray mode">
+            <option value="always">Always</option>
+            <option value="follow-codex">With Codex</option>
+          </select>
+        </div>
         <div id="provider-list" class="provider-list"></div>
+        <div class="maintenance-card">
+          <div>
+            <strong id="maintenance-status">Router ready</strong>
+            <small id="maintenance-note">Update the checkout and verify its installation.</small>
+          </div>
+          <div class="maintenance-actions">
+            <button id="maintenance-update" class="text-button" type="button">Update</button>
+            <button id="maintenance-fix" class="text-button" type="button">Fix</button>
+          </div>
+        </div>
       </section>
 
       <section id="models-view" class="view" hidden>
@@ -122,6 +172,33 @@
             <span aria-hidden="true"></span>
             <span class="sr-only">Compact old tool results for external models</span>
           </label>
+        </div>
+        <div class="accordion">
+          <button class="accordion-header" type="button" data-accordion="vision" aria-expanded="true">
+            <span>
+              <strong>Vision bridge</strong>
+              <small id="vision-summary">Loading…</small>
+            </span>
+            <span class="accordion-chevron" aria-hidden="true"></span>
+          </button>
+          <div class="accordion-body is-open" data-accordion-body="vision">
+            <div class="mode-setting">
+              <div>
+                <strong>Read images for text-only models</strong>
+                <small id="vision-note">A vision engine reads pasted images and returns quoted text.</small>
+              </div>
+              <label class="switch" id="vision-switch-label">
+                <input id="vision-switch" type="checkbox" />
+                <span aria-hidden="true"></span>
+                <span class="sr-only">Read images for text-only models</span>
+              </label>
+            </div>
+            <div class="vision-controls">
+              <label>Engine<select id="vision-engine" aria-label="Vision engine"></select></label>
+              <label>Effort<select id="vision-effort" aria-label="Vision effort"></select></label>
+            </div>
+            <div id="vision-local-models" class="vision-local-models"></div>
+          </div>
         </div>
         <div class="accordion">
           <button class="accordion-header" type="button" data-accordion="subagents" aria-expanded="true">
@@ -192,6 +269,8 @@
               <small>Enter an Ollama tag or model-page URL.</small>
             </form>
             <div id="local-quick-picks" class="local-quick-picks"></div>
+            <div id="local-catalog" class="local-catalog"></div>
+            <div id="local-runtime-actions" class="local-runtime-actions"></div>
           </div>
         </div>
       </section>
@@ -263,7 +342,7 @@
         <div class="island-divider" aria-hidden="true"></div>
         <div class="island-metric island-percent">
           <strong id="island-percent">—</strong>
-          <small>weekly</small>
+          <small>weekly left</small>
         </div>
       </div>
       <div class="island-expanded" aria-hidden="true">

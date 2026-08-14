@@ -6,6 +6,7 @@ import {
   chartGeometry,
   compactTokens,
   dailySeries,
+  metricRemainingPercent,
   observedModelSpeed,
   quotaWindow,
   visibleLocalDownload,
@@ -79,6 +80,19 @@ test("quota cards omit unconfigured providers and de-duplicate synonymous window
       { providerId: "kimi-oauth", label: "5-hour limit" },
     ],
   );
+  assert.deepEqual(
+    cards.map(({ usedPercent, remainingPercent }) => ({ usedPercent, remainingPercent })),
+    [
+      { usedPercent: 48, remainingPercent: 52 },
+      { usedPercent: 3, remainingPercent: 97 },
+    ],
+  );
+});
+
+test("quota remaining percentage prefers provider data and derives from usage", () => {
+  assert.equal(metricRemainingPercent({ usedPercent: 35 }), 65);
+  assert.equal(metricRemainingPercent({ used: 25, limit: 100 }), 75);
+  assert.equal(metricRemainingPercent({ usedPercent: 35, remainingPercent: 72 }), 72);
 });
 
 test("chart geometry stays finite for an empty week", () => {
@@ -101,6 +115,17 @@ test("completed local downloads disappear when the model is no longer installed"
   assert.deepEqual(
     visibleLocalDownload({ models: [{ tag: "gemma4:12b" }], download: done }),
     done,
+  );
+  const removedWithWarning = {
+    tag: "gemma4:12b",
+    kind: "uninstall",
+    status: "done",
+    detail: "Model removed · catalog refresh needed",
+    catalogError: "The Codex catalog could not be refreshed.",
+  };
+  assert.deepEqual(
+    visibleLocalDownload({ models: [], download: removedWithWarning }),
+    removedWithWarning,
   );
   const active = { tag: "gemma4:12b", status: "downloading", percent: 42 };
   assert.deepEqual(visibleLocalDownload({ models: [], download: active }), active);

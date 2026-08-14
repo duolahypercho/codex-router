@@ -97,6 +97,8 @@ test("each feature command answers through the bridge", options, async () => {
       "provider usage": "provider_usage",
       "provider setup": "provider_setup",
       "local LLMs": "local_models",
+      "vision bridge": "vision_bridge_status",
+      "tray presence": "presence_status",
     };
     const results = {};
     for (const [label, command] of Object.entries(features)) {
@@ -174,8 +176,9 @@ test("every tab opens and renders its panel", options, async () => {
 
     const tabs = [
       { id: "usage", expect: /token activity|allowance|limits/i },
+      { id: "status", expect: /live router|live requests|quota resets/i },
       { id: "connections", expect: /connection|provider|api key/i },
-      { id: "models", expect: /model|subagent|picker/i },
+      { id: "models", expect: /vision bridge|local llms|subagent|picker/i },
     ];
 
     for (const [index, tab] of tabs.entries()) {
@@ -183,6 +186,28 @@ test("every tab opens and renders its panel", options, async () => {
       assert.equal(await button.count(), 1, `no tab button for ${tab.id}`);
       await button.click();
       await window.waitForTimeout(400);
+
+      if (tab.id === "status") {
+        await window.waitForFunction(
+          () => Boolean(document.querySelector("#active-requests header")),
+          null,
+          { timeout: 15_000 },
+        );
+      }
+      if (tab.id === "models") {
+        await window.waitForFunction(
+          () => !/^Loading/.test(document.querySelector("#vision-summary")?.textContent || ""),
+          null,
+          { timeout: 15_000 },
+        );
+      }
+      if (tab.id === "connections") {
+        await window.waitForFunction(
+          () => Boolean(document.querySelector("#provider-list .provider-row")),
+          null,
+          { timeout: 15_000 },
+        );
+      }
 
       // The clicked tab is the active one, and no other tab is.
       const active = await window.evaluate(
@@ -194,10 +219,124 @@ test("every tab opens and renders its panel", options, async () => {
       const text = await window.locator("body").innerText();
       assert.match(text, tab.expect, `${tab.id} panel did not render its content`);
 
+      if (tab.id === "usage") {
+        await window.locator("#usage-range").selectOption("30");
+        assert.equal(await window.locator("#usage-range-label").textContent(), "30 days");
+        await window.locator("#usage-range").selectOption("7");
+      }
+
       await window.screenshot({
         path: path.join(shots, `0${index + 2}-${tab.id}.png`),
       });
     }
+  } finally {
+    await electron.close();
+  }
+});
+
+test("the local model panel renders the complete Ollama catalog", options, async () => {
+  const electron = await launch();
+  try {
+    const window = await electron.firstWindow();
+    await window.waitForLoadState("domcontentloaded");
+    await window.locator('button.tab[data-tab="models"]').click();
+    await window.waitForFunction(
+      () => !/^Loading/.test(document.querySelector("#local-model-summary")?.textContent || ""),
+      null,
+      { timeout: 10_000 },
+    );
+    const catalog = await window.evaluate(async () => {
+      const snapshot = await window.__TAURI__.core.invoke("local_models", {});
+      return {
+        available: snapshot.availableExplore?.length ?? 0,
+        rendered: document.querySelectorAll(".local-catalog-row").length,
+        heading: document.querySelector(".local-catalog")?.textContent ?? "",
+      };
+    });
+    if (catalog.available > 0) {
+      assert.equal(catalog.rendered, catalog.available, "every available tag needs an install row");
+      assert.match(catalog.heading, /Discover Ollama/i);
+      await window.locator('[data-local-catalog-action="variant-help"]').click();
+      assert.match(await window.locator(".local-catalog").innerText(), /Size tags choose model scale/i);
+    }
+  } finally {
+    await electron.close();
+  }
+});
+
+// The shell shipped one decorated window: the UI draws its own header and
+// close button, so a native frame put a second title bar and a second set of
+// controls above them, and the activity pill -- a whole second window in the
+// Tauri shell -- did not exist at all.
+test("the panel and the pill are separate chromeless windows", options, async () => {
+  const electron = await launch();
+  try {
+    await (await electron.firstWindow()).waitForLoadState("domcontentloaded");
+    const windows = await electron.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows().map((w) => ({
+        view: new URL(w.webContents.getURL()).searchParams.get("view"),
+        bounds: w.getBounds(),
+        // A framed window's outer height exceeds its content height by the
+        // title bar. Equal means there is no native chrome.
+        chromeless: w.getBounds().height === w.getContentBounds().height,
+      })),
+    );
+
+    const panel = windows.find((w) => w.view === "panel");
+    const island = windows.find((w) => w.view === "island");
+    assert.ok(panel, "no window loaded the panel view");
+    assert.ok(island, "the activity pill window was never created");
+    assert.equal(panel.chromeless, true, "the panel must not carry a native title bar");
+    assert.equal(island.chromeless, true, "the pill must not carry a native title bar");
+
+    // Sized from the Tauri shell's constants: the two render the same
+    // stylesheet, so a different size is a layout bug rather than a choice.
+    assert.ok(Math.abs(panel.bounds.width - 382) <= 2, `panel width ${panel.bounds.width}`);
+    assert.ok(Math.abs(island.bounds.width - 326) <= 2, `pill width ${island.bounds.width}`);
+    assert.ok(Math.abs(island.bounds.height - 44) <= 2, `pill height ${island.bounds.height}`);
+  } finally {
+    await electron.close();
+  }
+});
+
+// The UI reads islandSupported/islandReason -- the camelCase serialization of
+// the Rust struct. The shell answered with an `island` key instead, which the
+// UI never looks at, so the switch could not reflect the real state.
+test("platform_info answers in the shape the shared UI reads", options, async () => {
+  const electron = await launch();
+  try {
+    const window = await electron.firstWindow();
+    await window.waitForLoadState("domcontentloaded");
+    const info = await window.evaluate(() => window.__TAURI__.core.invoke("platform_info", {}));
+    assert.equal(typeof info.islandSupported, "boolean");
+    assert.ok("islandReason" in info, "islandReason must be present, even as null");
+    assert.equal(info.os, process.platform === "win32" ? "win32" : info.os);
+  } finally {
+    await electron.close();
+  }
+});
+
+test("toggling the pill off actually hides its window", options, async () => {
+  const electron = await launch();
+  try {
+    const window = await electron.firstWindow();
+    await window.waitForLoadState("domcontentloaded");
+    const visible = () =>
+      electron.evaluate(({ BrowserWindow }) =>
+        BrowserWindow.getAllWindows()
+          .filter((w) => w.webContents.getURL().includes("view=island"))
+          .map((w) => w.isVisible()),
+      );
+
+    assert.deepEqual(await visible(), [true], "the pill starts shown, as it does on Tauri");
+    await window.evaluate(() =>
+      window.__TAURI__.core.invoke("set_island_enabled", { enabled: false }),
+    );
+    assert.deepEqual(await visible(), [false], "the setting was stored but the window stayed up");
+    await window.evaluate(() =>
+      window.__TAURI__.core.invoke("set_island_enabled", { enabled: true }),
+    );
+    assert.deepEqual(await visible(), [true]);
   } finally {
     await electron.close();
   }

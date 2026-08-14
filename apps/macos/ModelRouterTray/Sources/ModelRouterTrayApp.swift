@@ -859,20 +859,20 @@ final class RouterStore: ObservableObject {
           providerID: "openai",
           providerName: "ChatGPT",
           label: window.durationLabel,
-          usedPercent: Double(window.usedPercent),
+          remainingPercent: Double(window.remainingPercent),
           resetAt: window.resetsAt))
       }
     }
     for provider in usageProviderChoices where provider.id != "openai" && provider.isEnabled {
       guard let usage = providerUsage(for: provider.id) else { continue }
       for (index, metric) in usage.account.metrics.enumerated() where metric.kind == "quota" {
-        guard let used = metric.usedPercent else { continue }
+        guard let remaining = remainingQuotaPercent(metric) else { continue }
         rows.append(DesktopQuotaRow(
           id: "\(provider.id)-\(index)",
           providerID: provider.id,
           providerName: provider.shortName,
           label: metric.label,
-          usedPercent: used,
+          remainingPercent: remaining,
           resetAt: metric.resetAt))
       }
     }
@@ -1286,18 +1286,40 @@ final class RouterStore: ObservableObject {
   /// Deletes the model from disk. Irreversible short of downloading it again,
   /// so the tray arms the row before this is reachable.
   func uninstallLocalModel(_ tag: String) async {
-    guard providerOperation == nil, localModelOperation == nil else { return }
+    guard providerOperation == nil, localModelOperation == nil, localDownload?.isRunning != true else { return }
     let startedAt = Date()
     localModelOperation = LocalModelOperation(tag: tag, kind: .uninstall)
-    await applyModelSettings(arguments: ["local-models", "uninstall", tag, "--yes"])
+    do {
+      // The native tray uses the same detached worker as Windows/Linux, so the
+      // panel stays responsive and can cancel a removal while Ollama deletes.
+      _ = try await runControl(arguments: ["local-models", "uninstall", tag, "--yes", "--async"])
+      await pollLocalDownload()
+    } catch {
+      message = error.localizedDescription
+      localModelOperation = nil
+    }
     // A local delete can complete before SwiftUI presents the next frame, and
     // refresh removes the model row that used to own the only progress UI.
-    // Keep the operation banner around long enough to be perceived.
+    // Keep the terminal status around long enough to be perceived.
     let remaining = 0.8 - Date().timeIntervalSince(startedAt)
-    if remaining > 0 {
+    if remaining > 0, localModelOperation != nil {
       try? await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000))
     }
     localModelOperation = nil
+  }
+
+  /// Cancels the active local pull or removal and leaves the terminal state in
+  /// the status card. The router kills the exact detached worker, including
+  /// its Ollama child process on Windows.
+  func cancelLocalModel(_ tag: String) async {
+    guard localDownload?.isRunning == true || localModelOperation?.tag == tag else { return }
+    do {
+      _ = try await runControl(arguments: ["local-models", "cancel", tag])
+      await pollLocalDownload()
+    } catch {
+      message = error.localizedDescription
+      localModelOperation = nil
+    }
   }
 
   /// Switches the reader to an already-installed local model.
@@ -1373,7 +1395,7 @@ final class RouterStore: ObservableObject {
   /// machine is rated too small for. Every catalog entry is offered, so the
   /// only way to attempt an oversized one is to say so explicitly here.
   func downloadLocalModel(_ tag: String, force: Bool = false) async {
-    guard localDownload?.isRunning != true else { return }
+    guard localModelOperation == nil, localDownload?.isRunning != true else { return }
     let startedAt = Date().timeIntervalSince1970 * 1_000
     localDownload = VisionDownloadState(
       tag: tag,
@@ -1427,12 +1449,29 @@ final class RouterStore: ObservableObject {
       else { continue }
       let state = decoded.download
       localDownload = state
-      guard let state else { continue }
+      guard let state else {
+        localModelOperation = nil
+        message = "No local model operation is running."
+        return
+      }
       if state.isRunning { continue }
       await refresh()
-      message = state.status == "done"
-        ? "\(state.tag ?? "Model") ready for Codex. Restart Codex to refresh its picker."
-        : (state.error ?? "The local model download failed.")
+      let isUninstall = state.isUninstalling || localModelOperation?.tag == state.tag
+      switch state.status {
+      case "done":
+        message = isUninstall
+          ? "\(state.tag ?? "Model") was removed."
+          : "\(state.tag ?? "Model") ready for Codex. Restart Codex to refresh its picker."
+      case "cancelled":
+        message = isUninstall
+          ? "\(state.tag ?? "Model") removal cancelled."
+          : "\(state.tag ?? "Model") download cancelled."
+      default:
+        message = state.error ?? (isUninstall
+          ? "The local model removal failed."
+          : "The local model download failed.")
+      }
+      localModelOperation = nil
       return
     }
   }
@@ -2152,7 +2191,8 @@ struct VisionDownloadState: Decodable, Equatable {
   let startedAt: Double?
   let updatedAt: Double?
 
-  var isRunning: Bool { status == "downloading" }
+  var isRunning: Bool { status == "downloading" || status == "uninstalling" }
+  var isUninstalling: Bool { status == "uninstalling" }
 }
 
 struct SubagentSettingsSnapshot: Decodable {
@@ -2223,7 +2263,7 @@ struct DesktopQuotaRow: Identifiable {
   let providerID: String
   let providerName: String
   let label: String
-  let usedPercent: Double
+  let remainingPercent: Double
   let resetAt: TimeInterval?
 }
 
@@ -3012,6 +3052,12 @@ private struct TrayView: View {
             .truncationMode(.middle)
         }
         Spacer(minLength: 4)
+        Button("Cancel", role: .cancel) {
+          Task { await store.cancelLocalModel(operation.tag) }
+        }
+        .buttonStyle(.borderless)
+        .font(.system(size: 8, weight: .semibold))
+        .foregroundStyle(routerRed)
         ProgressView()
           .controlSize(.small)
           .tint(routerRed)
@@ -3153,7 +3199,7 @@ private struct TrayView: View {
         TextField("gemma4:12b or ollama.com/library/gemma4:12b", text: $installTag)
           .textFieldStyle(.roundedBorder)
           .font(.system(size: 10))
-          .disabled(busy || store.localDownload?.isRunning == true)
+          .disabled(busy || store.localModelOperation != nil || store.localDownload?.isRunning == true)
           .onSubmit { submitInstall() }
         Button("Install") { submitInstall() }
           .buttonStyle(.borderless)
@@ -3479,7 +3525,7 @@ private struct TrayView: View {
     }
 
     private var canDownloadLocalSuggestion: Bool {
-      !busy && store.localDownload?.isRunning != true
+      !busy && store.localModelOperation == nil && store.localDownload?.isRunning != true
     }
 
     private var suggestedLocalModels: [AvailableLocalModel] {
@@ -3508,7 +3554,10 @@ private struct TrayView: View {
     @ViewBuilder private func localDownloadStatus(_ download: VisionDownloadState) -> some View {
       let isDone = download.status == "done"
       let isError = download.status == "error"
-      let tint = isError ? routerRed : (isDone ? routerMint : routerYellow)
+      let isCancelled = download.status == "cancelled"
+      let isUninstalling = download.isUninstalling
+        || (store.localModelOperation?.tag == download.tag)
+      let tint = isError || isCancelled ? routerRed : (isDone ? routerMint : routerYellow)
       VStack(alignment: .leading, spacing: 4) {
         HStack(spacing: 6) {
           if download.isRunning {
@@ -3518,11 +3567,26 @@ private struct TrayView: View {
               .fill(tint)
               .frame(width: 6, height: 6)
           }
-          Text(isError ? "Local model install failed" : (isDone ? "Local model ready" : "Installing local model"))
+          Text(
+            isError
+              ? (isUninstalling ? "Local model removal failed" : "Local model install failed")
+              : (isCancelled
+                ? (isUninstalling ? "Local model removal cancelled" : "Local model download cancelled")
+                : (isDone ? (isUninstalling ? "Local model removed" : "Local model ready")
+                  : (isUninstalling ? "Uninstalling local model" : "Installing local model")))
+          )
             .font(.system(size: 9, weight: .semibold))
             .foregroundStyle(tint)
           Spacer(minLength: 4)
-          if let percent = download.percent, !isError {
+          if download.isRunning, let tag = download.tag {
+            Button("Cancel", role: .cancel) {
+              Task { await store.cancelLocalModel(tag) }
+            }
+            .buttonStyle(.borderless)
+            .font(.system(size: 8, weight: .semibold))
+            .foregroundStyle(routerRed)
+          }
+          if let percent = download.percent, !isError && !isCancelled && !isUninstalling {
             Text("\(percent)%")
               .font(.system(size: 9, weight: .medium))
               .foregroundStyle(routerMutedStrong)
@@ -3538,10 +3602,10 @@ private struct TrayView: View {
         if let detail = download.error ?? download.detail, !detail.isEmpty {
           Text(detail)
             .font(.system(size: 8))
-            .foregroundStyle(isError ? routerRed : routerMuted)
+            .foregroundStyle(isError || isCancelled ? routerRed : routerMuted)
             .lineLimit(2)
         }
-        if download.isRunning {
+        if download.isRunning && !isUninstalling {
           ProgressView(value: Double(download.percent ?? 0), total: 100)
             .progressViewStyle(.linear)
             .tint(routerMint)
@@ -3865,10 +3929,13 @@ private struct TrayView: View {
       if let download = store.localDownload, download.isRunning {
         let tag = download.tag ?? "local model"
         let percent = download.percent.map { " · \($0)%" } ?? ""
-        return "Downloading \(tag)\(percent)"
+        return "\(download.isUninstalling ? "Removing" : "Downloading") \(tag)\(percent)"
       }
       if let download = store.localDownload, download.status == "error" {
-        return "Last download failed"
+        return download.isUninstalling ? "Last removal failed" : "Last download failed"
+      }
+      if let download = store.localDownload, download.status == "cancelled" {
+        return download.isUninstalling ? "Removal cancelled" : "Download cancelled"
       }
       guard let localModels, localModels.installed > 0 else {
         let available = localModels?.availableExplore?.count ?? 0
@@ -3881,7 +3948,7 @@ private struct TrayView: View {
     }
 
     private var canInstall: Bool {
-      !busy && store.localDownload?.isRunning != true
+      !busy && store.localModelOperation == nil && store.localDownload?.isRunning != true
         && !installTag.trimmingCharacters(in: .whitespaces).isEmpty
     }
 
@@ -5182,7 +5249,7 @@ func standardizedLimitLabel(_ label: String) -> String {
 }
 
 func formattedAccountMetric(_ metric: ProviderAccountMetric) -> String {
-  if metric.kind == "quota", let remaining = metric.remainingPercent {
+  if let remaining = remainingQuotaPercent(metric) {
     return "\(Int(remaining.rounded()))% left"
   }
   if metric.kind == "balance", let value = metric.value {
@@ -5194,6 +5261,20 @@ func formattedAccountMetric(_ metric: ProviderAccountMetric) -> String {
     return formatter.string(from: NSNumber(value: value)) ?? String(format: "%.2f", value)
   }
   return "—"
+}
+
+func remainingQuotaPercent(_ metric: ProviderAccountMetric) -> Double? {
+  guard metric.kind == "quota" else { return nil }
+  if let remaining = metric.remainingPercent {
+    return max(0, min(100, remaining))
+  }
+  if let used = metric.usedPercent {
+    return 100 - max(0, min(100, used))
+  }
+  if let used = metric.used, let limit = metric.limit, limit > 0 {
+    return max(0, min(100, (1 - used / limit) * 100))
+  }
+  return nil
 }
 
 func compactTokenCount(_ value: Double) -> String {

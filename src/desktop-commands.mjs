@@ -29,14 +29,47 @@ export const COMMANDS = {
   provider_usage: () => ({ args: ["provider-usage", "--json"] }),
   provider_setup: () => ({ args: ["providers", "--json"] }),
   local_models: () => ({ args: ["local-models", "list", "--json"] }),
-  install_local_model: ({ tag }) => ({
-    args: ["local-models", "install", requireTag(tag), "--yes", "--force"],
+  local_model_speed: ({ model, tag }) => ({
+    args: ["local-models", "benchmark", requireTag(model ?? tag)],
   }),
-  uninstall_local_model: ({ tag }) => ({
-    args: ["local-models", "uninstall", requireTag(tag), "--yes"],
+  update_local_ollama: () => ({ args: ["local-models", "runtime", "update", "--yes"] }),
+  vision_bridge_status: () => ({ args: ["vision-bridge", "status"] }),
+  vision_bridge_models: () => ({ args: ["vision-bridge", "models"] }),
+  vision_bridge_probe: () => ({ args: ["vision-bridge", "probe"] }),
+  set_vision_bridge: ({ enabled }) => ({
+    args: ["vision-bridge", enabled ? "on" : "off"],
   }),
-  set_local_model_enabled: ({ tag, enabled }) => ({
-    args: ["local-models", "set", requireTag(tag), enabled ? "on" : "off"],
+  set_vision_engine: ({ engine, effort }) => ({
+    args: ["vision-bridge", "engine", String(engine || "auto"), ...(effort ? [String(effort)] : [])],
+  }),
+  set_vision_effort: ({ effort }) => ({ args: ["vision-bridge", "effort", String(effort || "default")] }),
+  pull_vision_model: ({ model, tag }) => ({
+    args: ["vision-bridge", "pull", requireTag(model ?? tag)],
+  }),
+  vision_pull_status: () => ({ args: ["vision-bridge", "pull-status"] }),
+  benchmark_vision_model: ({ model, tag }) => ({
+    args: ["vision-bridge", "benchmark", requireTag(model ?? tag)],
+  }),
+  use_local_vision_model: ({ model, tag }) => ({
+    args: ["vision-bridge", "local", requireTag(model ?? tag)],
+  }),
+  install_local_model: ({ model, tag, force }) => ({
+    args: [
+      "local-models",
+      "install",
+      requireTag(model ?? tag),
+      "--yes",
+      ...(force ? ["--force"] : []),
+    ],
+  }),
+  uninstall_local_model: ({ model, tag }) => ({
+    args: ["local-models", "uninstall", requireTag(model ?? tag), "--yes", "--async"],
+  }),
+  cancel_local_model: ({ model, tag }) => ({
+    args: ["local-models", "cancel", requireTag(model ?? tag)],
+  }),
+  set_local_model_enabled: ({ model, tag, enabled }) => ({
+    args: ["local-models", "set", requireTag(model ?? tag), enabled ? "on" : "off"],
   }),
   install_provider_cli: ({ provider }) => ({ args: ["install-cli", requireProvider(provider)] }),
   connect_oauth: ({ provider }) => ({
@@ -80,7 +113,19 @@ export const COMMANDS = {
     args: ["picker", "provider", requireProvider(provider), visible ? "show" : "hide"],
   }),
   set_picker_models: ({ showAll }) => ({ args: ["picker", "all", showAll ? "show" : "hide"] }),
-  set_tool_result_aging: ({ mode }) => ({ args: ["tool-result-aging", String(mode)] }),
+  set_tool_result_aging: ({ mode, enabled }) => ({
+    args: ["tool-result-aging", (enabled ?? (mode === "on")) ? "on" : "off"],
+  }),
+  set_signed_routing: ({ enabled }) => ({
+    args: ["signed-routing", enabled ? "on" : "off"],
+    then: ["--json"],
+  }),
+  presence_status: () => ({ args: ["presence", "status"] }),
+  set_presence_mode: ({ mode }) => ({ args: ["presence", "set", String(mode || "always")] }),
+  service_start: () => ({ args: ["service", "start"] }),
+  service_stop: () => ({ args: ["service", "stop"] }),
+  maintenance: () => ({ args: ["maintenance"] }),
+  doctor_fix: () => ({ args: ["doctor", "--fix", "--json"] }),
 };
 
 function requireProvider(provider) {

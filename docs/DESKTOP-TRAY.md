@@ -21,7 +21,7 @@ and disables its activity-pill switch; router monitoring continues normally.
 ## What it shows
 
 - The compact pill shows router state, the active model, today's tokens, and
-  the active provider's weekly percentage.
+  the active provider's weekly percentage left.
 - Hovering the pill expands a seven-day daily token graph. The series is
   refreshed in the background rather than recalculated on every hover.
 - The panel shows the same daily graph at a larger size. Hover any point for
@@ -42,15 +42,84 @@ and disables its activity-pill switch; router monitoring continues normally.
   removals keep a visible operation banner even when the installed row
   disappears immediately. A completed download is hidden after its model is
   removed, so stale `ready · 100%` state never implies that it is still on disk.
+  If Ollama removal succeeds but the Codex catalog cannot be refreshed, the
+  status remains **Model removed** with a catalog-refresh warning rather than
+  reporting a false removal failure.
+  Both operations expose a persistent status bar and **Cancel** action. The
+  control plane serializes install/removal claims and returns an existing
+  operation for repeated requests, so a double-click cannot launch duplicate
+  Ollama workers.
+  The Windows/Linux panel also shows the full router catalog under **Discover
+  Ollama**, grouped by family with search, fit warnings, cloud-only labels, and
+  a download action for every local tag. New or uncatalogued Ollama tags remain
+  installable through the tag or model-page URL field.
 - **Usage** shows the active or most recently used model's observed output
   throughput when the upstream reports output tokens. The rate is end-to-end
   tokens per second from successful metered replies, not a synthetic estimate.
+- **Status** mirrors the macOS live view with in-flight requests, elapsed time,
+  model speed, and quota reset times. Usage also includes all-provider and
+  tokens-by-model summaries.
+- **Connections** includes signed routing, login-free mode, tray presence
+  (always or while Codex/ChatGPT is running), one-click OAuth **Install & Sign
+  In**, and Update/Fix maintenance actions.
+- **Vision bridge** exposes the shared native/hosted engine and effort
+  selectors, local vision downloads, benchmark/use actions, and the same
+  default-on/fail-closed behavior as macOS. Windows follow mode polls the
+  `ChatGPT.exe`/`codex.exe` process list, hides the companion when both quit,
+  and stops/restarts the router only after the same idle grace period.
 
 The status mark uses Thinking Orbs **Shaping** while idle, **Thinking** while a
 model is generating, and **Solving** for errors. Starting retains its colored
 status dot, and the Error label remains explicit. A low-contrast edge signal
 appears only while generating. The app honors the system's reduced-motion
 preference.
+
+## Opening it in a browser instead
+
+The same panel is served by the router you have already started, so there is
+nothing to build, download, or find in the tray:
+
+```powershell
+.\codex-router.ps1 panel
+```
+
+```sh
+./bin/panel
+```
+
+That opens your default browser on the companion. The address carries this
+machine's router capability, so treat it as a password: the command prints it
+redacted, and `--print` is the only way to get the literal URL. Do not paste it
+into chat, an issue, or a screen share.
+
+The browser panel is read-only by design. Saving an API key is not something to
+expose to any page that learns the capability, so those commands stay in the
+tray and the desktop shells.
+
+## Building without a Rust toolchain
+
+The Tauri companion needs Rust and Cargo. If they are not installed,
+`tray install` builds the Electron shell instead, which needs only the Node the
+router install already required:
+
+```powershell
+.\codex-router.ps1 companion
+```
+
+It renders `apps/desktop/ui` verbatim through the same command table, so it is
+the same companion in a different host, and it registers the same logon task.
+Select it explicitly with the command above; `companion status`, `start`,
+`stop`, `restart`, and `uninstall` behave as the tray actions do.
+
+On Linux, `./bin/model-router-tray` makes the same choice and falls back the
+same way.
+
+One caveat worth knowing: npm 11 refuses install scripts unless they are
+approved, and electron downloads its runtime from one. `npm ci` therefore exits
+0 with the package installed and no runtime, and the app then fails to start
+with nothing pointing at the cause. `scripts/build-electron-companion.ps1`
+fetches the runtime directly and refuses to report success without it, so use
+that script rather than a bare `npm ci`.
 
 ## Downloading a prebuilt binary
 

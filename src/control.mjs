@@ -590,19 +590,42 @@ async function updateAndVerifyCodex() {
 }
 
 function runDoctor(args) {
+  const json = args.includes("--json");
   const result = spawnSync(
     process.execPath,
     [path.join(REPO_ROOT, "src", "doctor.mjs"), ...args],
     {
       cwd: REPO_ROOT,
       env: { ...process.env, MODEL_ROUTER_TARGET: "codex" },
-      stdio: "inherit",
+      stdio: json ? ["inherit", "pipe", "pipe"] : "inherit",
+      ...(json ? { encoding: "utf8", maxBuffer: 32 * 1024 * 1024 } : {}),
     },
   );
+  if (result.error) throw result.error;
   if (result.status !== 0) {
+    if (json) {
+      try {
+        const report = JSON.parse(String(result.stdout || ""));
+        const failed = Array.isArray(report?.checks)
+          ? report.checks.filter((check) => check.status === "fail").map((check) => check.name)
+          : [];
+        if (failed.length) throw new Error(`Doctor found problems: ${failed.join(", ")}.`);
+      } catch (error) {
+        if (error instanceof Error && error.message.startsWith("Doctor found problems:")) throw error;
+      }
+    }
     throw new Error(
       (result.stderr || "The Codex doctor could not finish.").trim(),
     );
+  }
+  if (json) {
+    try {
+      const report = JSON.parse(String(result.stdout || ""));
+      process.stdout.write(`${JSON.stringify(report)}\n`);
+    } catch {
+      throw new Error("The Codex doctor returned an unreadable report.");
+    }
+    return;
   }
   process.stdout.write(`${JSON.stringify({ ok: true })}\n`);
 }
@@ -648,6 +671,21 @@ async function restartRouterForLocalRoutes() {
     process.stderr.write("Router service restarted so local routes are live.\n");
   }
   return restarted;
+}
+
+async function finalizeLocalModelPublication() {
+  const warnings = {};
+  try {
+    refreshModelSettingsCatalog({ routes: true });
+  } catch (error) {
+    warnings.catalogError = error instanceof Error ? error.message : String(error);
+  }
+  try {
+    await restartRouterForLocalRoutes();
+  } catch (error) {
+    warnings.restartError = error instanceof Error ? error.message : String(error);
+  }
+  return warnings;
 }
 
 async function knownModelSlug(slug) {
@@ -1144,6 +1182,12 @@ async function handleLocalModels(action, value, ...rest) {
     process.stdout.write(`${JSON.stringify(result)}\n`);
     return;
   }
+  if (action === "cancel") {
+    const { cancelLocalDownload } = await import("./local-download.mjs");
+    const result = cancelLocalDownload(value);
+    process.stdout.write(`${JSON.stringify(result)}\n`);
+    return;
+  }
   if (action === "install" || action === "install-and-use") {
     // Same detached-worker principle as the vision picker, but this worker is
     // for Codex chat models: successful completion checks the model on and
@@ -1151,21 +1195,12 @@ async function handleLocalModels(action, value, ...rest) {
     const { normalizeLocalModelTag, splitLocalModelTag } = await import("./local-model-ref.mjs");
     const tag = normalizeLocalModelTag(value);
     const identity = splitLocalModelTag(tag);
-    const { readLocalDownload, writeLocalDownload } = await import("./local-download.mjs");
-    const active = readLocalDownload();
-    if (active?.status === "downloading" && active.tag !== tag) {
-      throw new Error(`${active.tag} is already downloading (${active.percent || 0}%).`);
-    }
-    if (active?.status === "downloading" && active.tag === tag) {
-      process.stdout.write(`${JSON.stringify({
-        started: false,
-        existing: true,
-        tag,
-        percent: active.percent || 0,
-        detail: active.detail || "downloading",
-      })}\n`);
-      return;
-    }
+    const {
+      claimLocalOperation,
+      isLocalOperationActive,
+      readLocalDownload,
+      writeLocalDownload,
+    } = await import("./local-download.mjs");
     const startedAt = Date.now();
     const writePhase = (detail, extra = {}) => writeLocalDownload({
       version: 1,
@@ -1175,17 +1210,67 @@ async function handleLocalModels(action, value, ...rest) {
       percent: 0,
       startedAt,
       updatedAt: Date.now(),
-      workerPid: process.pid,
+      kind: "download",
+      controllerPid: process.pid,
+      workerPid: null,
       ...extra,
     });
+    const claim = claimLocalOperation(tag, "download");
+    if (!claim.acquired) {
+      const active = readLocalDownload();
+      if (isLocalOperationActive(active) && active.tag !== tag) {
+        throw new Error(
+          active.status === "uninstalling"
+            ? `${active.tag} is already being removed.`
+            : `${active.tag} is already downloading (${active.percent || 0}%).`,
+        );
+      }
+      if (isLocalOperationActive(active) && active.tag === tag) {
+        process.stdout.write(`${JSON.stringify({
+          started: false,
+          existing: true,
+          tag,
+          percent: active.percent || 0,
+          detail: active.detail || "downloading",
+          kind: active.kind || (active.status === "uninstalling" ? "uninstall" : "download"),
+        })}\n`);
+        return;
+      }
+      throw new Error("Another local model operation is starting. Try again shortly.");
+    }
     // Persist the optimistic state before any network lookup or runtime
     // installation. The tray may refresh while either one is in progress, and
     // the operator should still see that the click was accepted.
-    writePhase("Checking model and machine fit");
+    try {
+      const active = readLocalDownload();
+      if (isLocalOperationActive(active) && active.tag !== tag) {
+        throw new Error(
+          active.status === "uninstalling"
+            ? `${active.tag} is already being removed.`
+            : `${active.tag} is already downloading (${active.percent || 0}%).`,
+        );
+      }
+      if (isLocalOperationActive(active) && active.tag === tag) {
+        process.stdout.write(`${JSON.stringify({
+          started: false,
+          existing: true,
+          tag,
+          percent: active.percent || 0,
+          detail: active.detail || "downloading",
+          kind: active.kind || (active.status === "uninstalling" ? "uninstall" : "download"),
+        })}\n`);
+        return;
+      }
+      writePhase("Checking model and machine fit");
+    } finally {
+      claim.release();
+    }
+    const cancelled = () => readLocalDownload()?.status === "cancelled";
     try {
       const { fetchRegistryCapabilities, detectMachine, fitAdvisory, rateDiskFit, rateModelFit } =
         await import("./local-models.mjs");
       const advertised = await fetchRegistryCapabilities(tag);
+      if (cancelled()) return;
       // A missing tool template costs nothing to discover afterwards; gigabytes
       // that cannot run cost the download and the disk. So the tool note stays
       // advisory while a model too large for this machine is refused unless the
@@ -1198,6 +1283,7 @@ async function handleLocalModels(action, value, ...rest) {
           `${fitAdvisory(tag, advertised.sizeGb, capacity) || `${tag} may not fit on this machine's free disk.`} Pass --force to download it anyway.`,
         );
       }
+      if (cancelled()) return;
       writePhase("Preparing headless Ollama");
       const { ensureOllamaHeadless, ollamaCommand } = await import("./ollama-runtime.mjs");
       // One action installs both. `--yes` is the operator's consent to touch
@@ -1213,6 +1299,7 @@ async function handleLocalModels(action, value, ...rest) {
         );
       }
       await ensureOllamaHeadless({ install: installRuntime });
+      if (cancelled()) return;
       writePhase("Starting model download");
       const child = spawn(process.execPath, [path.join(REPO_ROOT, "src", "local-download.mjs"), tag], {
         detached: true,
@@ -1223,12 +1310,14 @@ async function handleLocalModels(action, value, ...rest) {
       writeLocalDownload({
         ...readLocalDownload(),
         version: 1,
+        kind: "download",
         tag,
         status: "downloading",
         detail: "Starting model download",
         percent: 0,
         startedAt,
         updatedAt: Date.now(),
+        controllerPid: null,
         workerPid: child.pid,
       });
       // Advisory, never blocking: the operator may well want a vision-only
@@ -1256,9 +1345,11 @@ async function handleLocalModels(action, value, ...rest) {
       return;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      if (cancelled()) return;
       writeLocalDownload({
         ...readLocalDownload(),
         version: 1,
+        kind: "download",
         tag,
         status: "error",
         detail: "failed",
@@ -1270,12 +1361,130 @@ async function handleLocalModels(action, value, ...rest) {
       throw error;
     }
   }
+  if (action === "finalize-uninstall") {
+    // Ollama removal has already completed by the time this cleanup step is
+    // reached.  Catalog/gateway refresh and a service restart are follow-up
+    // publication work: if either one is unavailable, report the warning but
+    // do not turn a successfully removed model into a false removal failure.
+    const warnings = await finalizeLocalModelPublication();
+    process.stdout.write(`${JSON.stringify({
+      finalized: true,
+      tag: value || null,
+      ...warnings,
+    })}\n`);
+    return;
+  }
   if (action === "uninstall") {
-    const tag = String(value || "").trim();
-    if (!tag) throw new Error("Usage: control local-models uninstall <model-tag> --yes");
+    const rawTag = String(value || "").trim();
+    if (!rawTag) throw new Error("Usage: control local-models uninstall <model-tag> --yes");
+    const { normalizeLocalModelTag } = await import("./local-model-ref.mjs");
+    const tag = normalizeLocalModelTag(rawTag);
+    const {
+      claimLocalOperation,
+      isLocalOperationActive,
+      readLocalDownload,
+      writeLocalDownload,
+    } = await import("./local-download.mjs");
+    const claim = claimLocalOperation(tag, "uninstall");
+    if (!claim.acquired) {
+      const active = readLocalDownload();
+      if (isLocalOperationActive(active) && active.tag === tag) {
+        process.stdout.write(`${JSON.stringify({
+          started: false,
+          existing: true,
+          tag,
+          kind: active.kind || (active.status === "uninstalling" ? "uninstall" : "download"),
+          status: active.status,
+        })}\n`);
+        return;
+      }
+      throw new Error("Another local model operation is starting. Try again shortly.");
+    }
+    try {
+    const active = readLocalDownload();
+    if (isLocalOperationActive(active) && active.tag !== tag) {
+      throw new Error(
+        active.status === "uninstalling"
+          ? `${active.tag} is already being removed.`
+          : `${active.tag} is already downloading (${active.percent || 0}%).`,
+      );
+    }
+    if (isLocalOperationActive(active) && active.tag === tag) {
+      process.stdout.write(`${JSON.stringify({
+        started: false,
+        existing: true,
+        tag,
+        kind: active.kind || (active.status === "uninstalling" ? "uninstall" : "download"),
+        status: active.status,
+      })}\n`);
+      return;
+    }
+    if (flags.has("--async")) {
+      const startedAt = Date.now();
+      writeLocalDownload({
+        version: 1,
+        kind: "uninstall",
+        tag,
+        status: "uninstalling",
+        detail: "Starting model removal",
+        percent: 0,
+        startedAt,
+        updatedAt: startedAt,
+        controllerPid: process.pid,
+        workerPid: null,
+      });
+      try {
+        const child = spawn(
+          process.execPath,
+          [path.join(REPO_ROOT, "src", "local-uninstall.mjs"), tag],
+          { detached: true, stdio: "ignore", windowsHide: true },
+        );
+        child.unref();
+        writeLocalDownload({
+          ...readLocalDownload(),
+          controllerPid: null,
+          workerPid: child.pid,
+          updatedAt: Date.now(),
+        });
+      } catch (error) {
+        writeLocalDownload({
+          ...readLocalDownload(),
+          status: "error",
+          detail: "Removal failed to start",
+          updatedAt: Date.now(),
+          controllerPid: null,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
+      }
+      process.stdout.write(`${JSON.stringify({ started: true, tag, kind: "uninstall" })}\n`);
+      return;
+    }
     removeLocalModel(tag, { confirmed: flags.has("--yes") || value === "--yes" });
-    refreshModelSettingsCatalog({ routes: true });
-    await restartRouterForLocalRoutes();
+    const warnings = await finalizeLocalModelPublication();
+    const finishedAt = Date.now();
+    writeLocalDownload({
+      version: 1,
+      kind: "uninstall",
+      tag,
+      status: "done",
+      detail: warnings.catalogError
+        ? "Model removed · catalog refresh needed"
+        : warnings.restartError
+          ? "Model removed · router restart needed"
+          : "Model removed",
+      percent: 100,
+      startedAt: finishedAt,
+      updatedAt: finishedAt,
+      workerPid: null,
+      controllerPid: null,
+      ...(warnings.catalogError ? { catalogError: warnings.catalogError } : {}),
+      ...(warnings.restartError ? { restartError: warnings.restartError } : {}),
+      error: undefined,
+    });
+    } finally {
+      claim.release();
+    }
   } else if (action === "set") {
     if (!["on", "off"].includes(positional)) {
       throw new Error("Usage: control local-models set <model-tag> <on|off>");
@@ -1293,7 +1502,7 @@ async function handleLocalModels(action, value, ...rest) {
       "Usage: control local-models list [--json]|inspect <tag-or-url>|" +
         "install <tag-or-url> [--yes] [--force]|benchmark <tag>|" +
         "runtime status|runtime start [--yes]|runtime update --yes|" +
-        "uninstall <tag> --yes|set <tag> <on|off>\n" +
+        "uninstall <tag> --yes|cancel [<tag>]|set <tag> <on|off>\n" +
         "  --yes    consent to installing/starting Ollama itself (headless)\n" +
         "  --force  download a model rated too large for this machine anyway",
     );
@@ -1387,12 +1596,17 @@ function handleService(action) {
   const result = spawnSync(
     process.execPath,
     [path.join(REPO_ROOT, "src", "service.mjs"), value],
-    { stdio: "inherit", env: process.env },
+    { stdio: ["inherit", "pipe", "pipe"], env: process.env, encoding: "utf8" },
   );
   if (result.error) throw result.error;
   if (result.status !== 0) {
-    throw new Error(`Background service ${value} failed with exit code ${result.status}.`);
+    throw new Error(
+      String(result.stderr || `Background service ${value} failed with exit code ${result.status}.`).trim(),
+    );
   }
+  const output = String(result.stdout || "").trim();
+  if (output) process.stdout.write(`${output}\n`);
+  else process.stdout.write(`${JSON.stringify({ state: value === "stop" ? "stopped" : "running" })}\n`);
 }
 
 // Supervision for the tray companion. `disable` boots the agent out, which

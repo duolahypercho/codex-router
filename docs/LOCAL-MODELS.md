@@ -22,9 +22,15 @@ background, then a tool-capable model is checked on and published to Codex.
 The tray shows a persistent status card immediately—checking fit, preparing
 Ollama, pulling layers, and then ready or failed—so a long download never looks
 like a dead click.
+While a pull or removal is active, that card includes **Cancel**. Cancellation
+stops the exact detached worker (including its child process on Windows), keeps
+the cancelled result visible, and leaves the model in its last completed state.
+Repeated clicks or concurrent commands reuse the existing operation; they do
+not start a second Ollama pull or removal.
 
-The **View more** panel includes the complete tag inventories captured from the
-official Ollama pages for Gemma 4, Qwen 3.5/3.6, Nemotron 3 Super, Ornith,
+The native macOS tray's **View more** panel and the Windows/Linux panel's
+**Discover Ollama** section include the complete tag inventories captured from
+the official Ollama pages for Gemma 4, Qwen 3.5/3.6, Nemotron 3 Super, Ornith,
 Nemotron 3, and Muse Glimmer. That includes quantized, MLX, BF16, and other
 published variants—not only the family aliases. Cloud aliases are shown for
 completeness but are labelled **cloud only** and cannot be downloaded as local
@@ -49,6 +55,7 @@ Useful commands:
 ./bin/control local-models inspect https://ollama.com/library/gemma4:12b
 ./bin/control local-models install gemma4:12b --yes
 ./bin/control local-models install gpt-oss:20b --yes --force
+./bin/control local-models cancel gemma4:12b
 ./bin/control local-models benchmark gemma4:12b
 ./bin/control local-models runtime status
 ./bin/control local-models runtime start

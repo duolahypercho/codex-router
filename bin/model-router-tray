@@ -63,8 +63,20 @@ case $(uname -s) in
     printf 'Tray installed and supervised by launchd: %s\n' "$bundle_dir"
     ;;
   Linux)
-    binary_path=$("$repo_dir/scripts/build-desktop-tray.sh" --binary-only | tail -n 1)
-    nohup "$binary_path" >/dev/null 2>&1 &
+    # Rust is the only prerequisite the Tauri shell adds over what the router
+    # install already required. Without cargo this step failed outright, so the
+    # machine ended up with no companion; the Electron shell renders the same
+    # UI from the same sources and needs only Node.
+    if command -v cargo >/dev/null 2>&1; then
+      binary_path=$("$repo_dir/scripts/build-desktop-tray.sh" --binary-only | tail -n 1)
+      nohup "$binary_path" >/dev/null 2>&1 &
+    else
+      printf 'codex-router: cargo is not installed; building the Electron companion instead.\n' >&2
+      binary_path=$("$repo_dir/scripts/build-electron-companion.sh" | tail -n 1)
+      # Electron is a runtime plus an app directory, so it takes the app as an
+      # argument where the Tauri binary takes none.
+      nohup "$binary_path" "$repo_dir/apps/electron" >/dev/null 2>&1 &
+    fi
     ;;
   *)
     printf 'codex-router: on Windows run ./codex-router.ps1 tray\n' >&2

@@ -37,6 +37,18 @@ export function callerBaseUrl(port, secret) {
   return `http://127.0.0.1:${port}${callerBasePath(secret)}`;
 }
 
+// The companion's browser surface sits behind the same capability as the API,
+// so it is the same secret in the same position -- only the leaf differs. Built
+// here rather than assembled by the caller so the one place that knows the
+// path shape stays the one place that has to change.
+export function panelPath(secret) {
+  return `${CALLER_PATH_PREFIX}/${assertCallerSecret(secret)}/panel/`;
+}
+
+export function panelUrl(port, secret) {
+  return `http://127.0.0.1:${port}${panelPath(secret)}`;
+}
+
 export function authenticatedRoute(pathname, expectedSecret) {
   if (typeof pathname !== "string") return undefined;
   const prefix = `${CALLER_PATH_PREFIX}/`;
@@ -75,10 +87,15 @@ export function isManagedCallerBaseUrl(value, port) {
   }
 }
 
+// Every leaf the capability guards, not just `/v1`. Redaction is what keeps the
+// caller key out of support bundles, doctor output, and error messages, and it
+// matched only the API path -- so the panel URL, which carries the identical
+// secret in the identical position, passed through those surfaces verbatim.
+// A new leaf must be added here at the same time it is added to the router.
 export function redactCallerUrl(value) {
   if (typeof value !== "string") return value;
   return value.replace(
-    new RegExp(`(${CALLER_PATH_PREFIX}/)[A-Za-z0-9_-]+(?=/v1(?:/|$))`, "g"),
+    new RegExp(`(${CALLER_PATH_PREFIX}/)[A-Za-z0-9_-]+(?=/(?:v1|panel)(?:/|$))`, "g"),
     "$1[REDACTED]",
   );
 }

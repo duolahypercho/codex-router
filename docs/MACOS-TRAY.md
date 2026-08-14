@@ -76,7 +76,7 @@ name. Additional
 concurrent requests appear as a muted, unframed `+N`; hover lists every live
 routed session with its status and elapsed time while retaining the seven-day
 usage graph and today's usage metrics. When the selected provider reports a
-weekly quota, its percentage used stays pinned to the compact Island's trailing
+weekly quota, its percentage left stays pinned to the compact Island's trailing
 edge during both idle and active sessions.
 
 - ChatGPT shows the subscription limit and daily buckets reported by the
@@ -84,7 +84,7 @@ edge during both idle and active sessions.
   credential file.
 - External OAuth and API providers have separate account meters and local
   traffic graphs. The Island shows today's token total and a fixed seven-day
-  daily line graph beside the provider-reported quota percentage used. Kimi
+  daily line graph beside the provider-reported quota percentage left. Kimi
   Code OAuth reads weekly and five-hour quota from Kimi's
   usage API with the existing CLI session. Grok OAuth reads weekly or monthly
   credit usage from the official Grok CLI chat-proxy billing endpoint with the

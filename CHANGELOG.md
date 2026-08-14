@@ -2,6 +2,47 @@
 
 ## Unreleased
 
+- **A command that opens the browser panel.** The panel shipped with no way to
+  reach it: its URL carries the caller capability, and nothing printed one, so
+  "nothing to install" still meant "and no way in". `codex-router.ps1 panel`
+  (`bin/panel`) opens it in the default browser. It reports the router being
+  down instead of opening a page that would load empty, and prints the address
+  redacted, because AGENTS.md treats the capability path as local
+  authentication; `--print` is the deliberate exception and says what it is
+  handing over.
+
+- **Caller-key redaction covered only `/v1`.** `redactCallerUrl` is what keeps
+  the capability out of support bundles, doctor output, and error messages, and
+  it matched the API path alone -- so a panel URL, the identical secret in the
+  identical position, travelled through every one of those surfaces verbatim.
+  It now covers each leaf the capability guards.
+
+- **The companion no longer requires a Rust toolchain.** Building it meant
+  installing cargo, the heaviest prerequisite in the project, asked of someone
+  who only wanted to see the panel; without it the install step failed and the
+  machine ended up with no companion at all. `tray install` now falls back to
+  the Electron shell, which needs only the Node the router install already
+  required, and `codex-router.ps1 companion` selects it explicitly.
+  `scripts/build-electron-companion.ps1` and its shell counterpart verify the
+  runtime is actually present: npm 11 blocks install scripts by default and
+  electron downloads its runtime from one, so `npm ci` exits 0 having fetched
+  the package but not the binary, and the failure surfaces much later as an app
+  that never starts.
+
+- **Every single-argument Windows subcommand was unreachable.** PowerShell
+  enumerates a statement's output into an assignment, so
+  `$Arguments = if (...) { @(...) }` collapsed a one-element array to the
+  element itself; `$Arguments[0]` then indexed a String and returned its first
+  character. `codex-router.ps1 tray status` died on "Unknown tray action 's'",
+  as did start, stop, restart, and uninstall. The existing tests asserted the
+  script's text rather than running it, so none of them saw it.
+
+- **`bin/` scripts were not pinned to LF.** They are the same POSIX shell
+  scripts as `install.sh` without the extension, so `.gitattributes`' `*.sh`
+  rule never reached them and a Windows checkout with `core.autocrlf=true`
+  rewrote all 27 to CRLF, which `sh` fails on. The blobs were already LF, which
+  is why POSIX installs kept working and the damage stayed invisible.
+
 - **The companion opens in a browser, with nothing to install.** The router is
   already an HTTP server on loopback with a capability-gated path, and the UI
   is plain HTML whose entire backend surface is one function, so it now serves

@@ -31,15 +31,19 @@ const {
 } = await import("../src/ollama-runtime.mjs");
 const { benchmarkLocalModel, readLocalBenchmarks } = await import("../src/local-benchmark.mjs");
 const {
+  claimLocalOperation,
+  cancelLocalDownload,
   downloadLocalModel,
   readLocalDownload,
   reconcileLocalDownload,
+  writeLocalDownload,
 } = await import("../src/local-download.mjs");
 const {
   readVisionBridgeSettings,
   setVisionBridgeEnabled,
   setVisionBridgeEngine,
 } = await import("../src/vision-bridge-state.mjs");
+const { localModelsSnapshot } = await import("../src/local-models.mjs");
 
 test("Ollama model URLs normalize to explicit family and variant tags", () => {
   assert.equal(normalizeLocalModelTag("gemma4:12b"), "gemma4:12b");
@@ -297,6 +301,150 @@ test("stale or dead local download workers become retryable errors", () => {
     { now: 1_000_000, timeoutMs: 10_000, persist: false },
   );
   assert.equal(legacyStale.status, "error");
+});
+
+test("active local downloads and removals can be cancelled without a second worker", () => {
+  const signals = [];
+  writeLocalDownload({
+    version: 1,
+    kind: "download",
+    tag: "gemma4:12b",
+    status: "downloading",
+    startedAt: 1_000,
+    updatedAt: 2_000,
+    workerPid: 42,
+  });
+  const cancelled = cancelLocalDownload("gemma4:12b", {
+    now: () => 2_000,
+    kill: (pid, signal) => {
+      signals.push([pid, signal]);
+    },
+    platform: "linux",
+  });
+  assert.equal(cancelled.cancelled, true);
+  assert.equal(readLocalDownload().status, "cancelled");
+  assert.deepEqual(signals, [[42, 0], [42, "SIGTERM"]]);
+
+  writeLocalDownload({
+    version: 1,
+    kind: "uninstall",
+    tag: "gemma4:12b",
+    status: "uninstalling",
+    startedAt: 3_000,
+    updatedAt: 4_000,
+    workerPid: 43,
+  });
+  const removal = cancelLocalDownload("gemma4:12b", {
+    now: () => 4_000,
+    kill: () => {},
+    spawn: (command, args) => {
+      assert.equal(command, "taskkill");
+      assert.deepEqual(args, ["/PID", "43", "/T", "/F"]);
+      return { status: 0 };
+    },
+    platform: "win32",
+  });
+  assert.equal(removal.state.kind, "uninstall");
+  assert.equal(readLocalDownload().status, "cancelled");
+  writeLocalDownload({
+    version: 1,
+    kind: "download",
+    tag: "gemma4:12b",
+    status: "downloading",
+    startedAt: 5_000,
+    updatedAt: 6_000,
+    workerPid: 44,
+  });
+  assert.throws(
+    () => cancelLocalDownload("other:latest", { now: () => 6_000, kill: () => {} }),
+    /active local model operation/,
+  );
+  writeLocalDownload({
+    version: 1,
+    kind: "download",
+    tag: "gemma4:12b",
+    status: "cancelled",
+    detail: "Download cancelled",
+    updatedAt: 6_000,
+  });
+});
+
+test("a removed model with a failed catalog refresh stays a completed removal", () => {
+  const catalogError = "The model was removed, but the Codex catalog could not be refreshed.";
+  writeLocalDownload({
+    version: 1,
+    kind: "uninstall",
+    tag: "gemma4:12b",
+    status: "error",
+    detail: "Removal failed",
+    error: catalogError,
+    updatedAt: 12_000,
+  });
+  const snapshot = localModelsSnapshot({
+    inventory: [],
+    running: [],
+    selection: { enabled: [] },
+    capabilities: {},
+    agentChecks: {},
+  });
+  assert.equal(snapshot.installed, 0);
+  assert.equal(snapshot.download.status, "done");
+  assert.equal(snapshot.download.detail, "Model removed · catalog refresh needed");
+  assert.equal(snapshot.download.catalogError, catalogError);
+  assert.equal(snapshot.download.error, undefined);
+});
+
+test("local operation claims serialize concurrent controllers", () => {
+  const claimPath = path.join(stateDir, "operation.claim");
+  const first = claimLocalOperation("gemma4:12b", "download", {
+    claimPath,
+    now: () => 10_000,
+    kill: () => {},
+  });
+  assert.equal(first.acquired, true);
+  const second = claimLocalOperation("gemma4:12b", "download", {
+    claimPath,
+    now: () => 10_001,
+    kill: () => {},
+  });
+  assert.equal(second.acquired, false);
+  first.release();
+  const third = claimLocalOperation("gemma4:12b", "uninstall", {
+    claimPath,
+    now: () => 10_002,
+    kill: () => {},
+  });
+  assert.equal(third.acquired, true);
+  third.release();
+});
+
+test("a cancelled worker cannot resurrect the download state", async () => {
+  writeLocalDownload({
+    version: 1,
+    kind: "download",
+    tag: "gemma4:12b",
+    status: "cancelled",
+    detail: "Download cancelled",
+    updatedAt: 11_000,
+  });
+  let runtimeCalled = false;
+  const result = await downloadLocalModel("gemma4:12b", {
+    ensureRuntime: async () => {
+      runtimeCalled = true;
+    },
+  });
+  assert.deepEqual(result, { tag: "gemma4:12b", status: "cancelled", cancelled: true });
+  assert.equal(runtimeCalled, false);
+  assert.equal(readLocalDownload().status, "cancelled");
+  writeLocalDownload({
+    version: 1,
+    kind: "download",
+    tag: "gemma4:12b",
+    status: "done",
+    detail: "ready",
+    percent: 100,
+    updatedAt: 11_000,
+  });
 });
 
 test("runtime probe and headless reuse never open the Ollama GUI", async () => {

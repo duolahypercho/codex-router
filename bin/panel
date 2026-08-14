@@ -1,0 +1,8 @@
+#!/bin/sh
+set -eu
+
+repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+case "${MODEL_ROUTER_TARGET:-codex}" in
+  codex) exec node "$repo_dir/src/panel.mjs" "$@" ;;
+  *) echo "The companion panel is available only for the Codex target." >&2; exit 2 ;;
+esac
