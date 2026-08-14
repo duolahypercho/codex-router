@@ -16,9 +16,17 @@ enum TrayLanguage: String, CaseIterable, Identifiable {
   /// Deliberately shown in the language each option selects, not in the
   /// current one: somebody who cannot read the current language still has to
   /// be able to find their way out.
+  ///
+  /// `system` additionally names what it currently resolves to. Without that
+  /// it is the one option whose label says nothing about the language you
+  /// would get -- and worse, it is itself translated, so picking Chinese makes
+  /// "System" read as 跟随系统 even on an English Mac, which looks like the
+  /// setting is stuck.
   var label: String {
     switch self {
-    case .system: return routerLocalized("System")
+    case .system:
+      let resolved = RouterLanguage.systemPrefersChinese ? "中文" : "English"
+      return "\(routerLocalized("System")) · \(resolved)"
     case .english: return "English"
     case .chinese: return "中文"
     }

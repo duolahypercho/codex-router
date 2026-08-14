@@ -168,7 +168,13 @@ fn main() {
 }
 
 fn install_tray(app: &mut tauri::App) -> tauri::Result<()> {
-    let open = MenuItem::with_id(app, "open", tray_text("Open Model Router"), true, None::<&str>)?;
+    let open = MenuItem::with_id(
+        app,
+        "open",
+        tray_text("Open Model Router"),
+        true,
+        None::<&str>,
+    )?;
     let toggle = MenuItem::with_id(
         app,
         "toggle-island",

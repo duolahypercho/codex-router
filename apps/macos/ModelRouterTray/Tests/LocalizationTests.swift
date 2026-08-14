@@ -55,6 +55,20 @@ struct LocalizationTests {
     #expect(TrayLanguage.chinese.label == "中文")
   }
 
+  @Test("system names the language it currently resolves to")
+  func systemLabelNamesItsResolution() {
+    let original = RouterLanguage.selection
+    defer { RouterLanguage.setSelection(original) }
+    let resolved = RouterLanguage.systemPrefersChinese ? "中文" : "English"
+
+    // The point of the suffix: it must say what you would get, in both modes,
+    // so "System" can never read as Chinese while resolving to English.
+    RouterLanguage.setSelection(.english)
+    #expect(TrayLanguage.system.label == "System · \(resolved)")
+    RouterLanguage.setSelection(.chinese)
+    #expect(TrayLanguage.system.label == "跟随系统 · \(resolved)")
+  }
+
   @Test("interpolated strings keep their format specifiers")
   func formatSpecifiersSurvive() {
     let original = RouterLanguage.selection
