@@ -617,3 +617,48 @@ test("response transform rewrites native shell_command integer floats in SSE", a
   assert.match(output, /timeout_ms\\":15000/);
   assert.doesNotMatch(output, /20000\.0|15000\.0/);
 });
+
+// Regression for #175: strict upstreams (the xAI CLI proxy, Moonshot/Kimi)
+// reject the whole request over a union-rooted parameter schema. Codex's own
+// `automation_update` ships a `oneOf` root, so every routed provider saw it.
+test("every flattened app tool reaches the provider with an object root", async () => {
+  const { mergeCodexAppTools } = await import("../src/codex-app-tools.mjs");
+  const { hasObjectRoot } = await import("../src/tool-schema-root.mjs");
+
+  const merged = mergeCodexAppTools([{ type: "namespace", name: "codex_app", tools: [] }]);
+  const { tools } = flattenNamespaceTools(merged.tools);
+
+  const unionRooted = tools
+    .filter((tool) => tool.parameters && !hasObjectRoot(tool.parameters))
+    .map((tool) => tool.name);
+  assert.deepEqual(unionRooted, [], "a union root fails the whole request, not the one tool");
+
+  const automationUpdate = tools.find((tool) => tool.name === "codex_app__automation_update");
+  assert.ok(automationUpdate, "automation_update is still relayed");
+  assert.equal(automationUpdate.parameters.type, "object");
+  assert.ok(
+    Array.isArray(automationUpdate.inputSchema.oneOf),
+    "inputSchema keeps the client's native union for responses-native routes",
+  );
+});
+
+test("flattened parameters drop literals that contradict their declared type", () => {
+  const { tools } = flattenNamespaceTools([
+    {
+      type: "namespace",
+      name: "codex_app",
+      tools: [
+        {
+          name: "automation_update",
+          inputSchema: {
+            type: "object",
+            properties: { enabled: { type: "string", enum: [true] } },
+          },
+        },
+      ],
+    },
+  ]);
+
+  const flattened = tools.find((tool) => tool.name === "codex_app__automation_update");
+  assert.equal("enum" in flattened.parameters.properties.enabled, false);
+});

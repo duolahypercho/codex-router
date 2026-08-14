@@ -3,6 +3,10 @@ import { existsSync, readdirSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { commandOnPath, preferSpawnablePath, spawnableCommand } from "./spawnable-command.mjs";
+
+export { preferSpawnablePath, spawnableCommand };
+
 // The ChatGPT/Codex desktop app bundles its CLI under a version-hashed
 // directory, e.g. %LOCALAPPDATA%\OpenAI\Codex\bin\<hash>\codex.exe. That hash
 // changes on every app update, so scan for the newest installed version
@@ -45,38 +49,12 @@ function candidates() {
   ].filter(Boolean);
 }
 
-// `where.exe codex` on an npm global install lists the extensionless shell shim
-// before the one Node can run:
-//   ...\npm\codex       <- POSIX-style shim, listed first, NOT spawnable
-//   ...\npm\codex.cmd   <- the batch shim that actually works
-// existsSync() reports true for the first because Windows resolves it through
-// PATHEXT, but execFileSync throws ENOENT on it without a shell. Choose an entry
-// Node can execute instead of trusting the listed order.
-const WINDOWS_SPAWNABLE_EXTENSIONS = [".exe", ".com", ".cmd", ".bat"];
-
-export function preferSpawnablePath(paths, platform = process.platform) {
-  const found = paths.map((value) => value.trim()).filter(Boolean);
-  if (platform !== "win32") return found[0];
-  for (const extension of WINDOWS_SPAWNABLE_EXTENSIONS) {
-    const match = found.find((value) => value.toLowerCase().endsWith(extension));
-    if (match) return match;
-  }
-  return found[0];
-}
-
 export function findCodexBinary() {
   const direct = candidates().find((candidate) => existsSync(candidate));
   if (direct) return direct;
-  const finder = process.platform === "win32" ? "where.exe" : "which";
-  try {
-    const output = execFileSync(finder, ["codex"], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-    return preferSpawnablePath(output.split(/\r?\n/)) || undefined;
-  } catch {
-    return undefined;
-  }
+  // Never the raw first line of the finder: on Windows that is the
+  // extensionless npm shim, which Node cannot spawn. See spawnable-command.mjs.
+  return commandOnPath("codex");
 }
 
 export function requireCodexBinary() {
@@ -89,19 +67,13 @@ export function requireCodexBinary() {
   return binary;
 }
 
-// A .cmd/.bat shim is a batch script, so Windows needs a shell to run it. The
-// path is quoted because cmd.exe splits on spaces and Codex is routinely
-// installed under a profile directory that contains them.
-export function codexSpawnTarget(binary, platform = process.platform) {
-  if (platform === "win32" && /\.(cmd|bat)$/i.test(binary)) {
-    return { command: `"${binary}"`, options: { shell: true } };
-  }
-  return { command: binary, options: {} };
-}
-
 export function runCodex(args, options = {}) {
-  const { command, options: spawnOptions } = codexSpawnTarget(requireCodexBinary());
-  return execFileSync(command, args, { ...spawnOptions, ...options });
+  const target = spawnableCommand(requireCodexBinary(), args);
+  return execFileSync(target.command, target.args, {
+    windowsHide: true,
+    ...target.options,
+    ...options,
+  });
 }
 
 // The version tells catalog code whether a cached native capture came from
@@ -127,12 +99,16 @@ export function codexVersion() {
 export function codexAuthStatus() {
   const binary = findCodexBinary();
   if (!binary) return { authenticated: false, reason: "codex-not-found" };
-  const { command, options } = codexSpawnTarget(binary);
   try {
-    execFileSync(command, ["login", "status"], {
-      ...options,
+    // Inside the try: a path this module refuses to hand to a shell is a probe
+    // that could not run, which is the "unknown" this function exists to
+    // report -- not an exception for every caller to learn to expect.
+    const target = spawnableCommand(binary, ["login", "status"]);
+    execFileSync(target.command, target.args, {
+      ...target.options,
       timeout: 10_000,
       stdio: "ignore",
+      windowsHide: true,
     });
     return { authenticated: true, reason: "authenticated", binary };
   } catch (error) {

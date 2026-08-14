@@ -1,7 +1,9 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+
+import { commandOnPath, spawnableCommand } from "./spawnable-command.mjs";
 
 const WINDOWS_BLOCK_CODES = new Set(["EACCES", "EPERM", "UNKNOWN"]);
 const WINDOWS_BLOCK_PATTERNS = [
@@ -17,26 +19,18 @@ export const GROK_CLI_BLOCKED_DETAIL =
 export const GROK_CLI_BLOCKED_FIX =
   "Keep Smart App Control enabled. Use the grok-api provider, or install a trusted official Grok CLI release that Windows allows.";
 
-function commandPath(name, platform = process.platform) {
-  const finder = platform === "win32" ? "where.exe" : "which";
-  try {
-    return execFileSync(finder, [name], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    })
-      .trim()
-      .split(/\r?\n/)[0];
-  } catch {
-    return undefined;
-  }
-}
-
 export function grokCliPath({
   environment = process.env,
   platform = process.platform,
+  exec,
 } = {}) {
   if (environment.GROK_CLI) return environment.GROK_CLI;
-  const discovered = commandPath("grok", platform);
+  // The official CLI ships as an npm package, so on Windows `where.exe grok`
+  // leads with the extensionless shim Node cannot spawn. Taking that line made
+  // a perfectly healthy install fail with the same `spawn UNKNOWN` that Smart
+  // App Control raises, and the preflight below then blamed application
+  // control for it. Ask for a spawnable entry instead.
+  const discovered = commandOnPath("grok", { platform, ...(exec ? { exec } : {}) });
   if (discovered) return discovered;
 
   const directory = path.join(
@@ -44,7 +38,11 @@ export function grokCliPath({
     "bin",
   );
   const candidates = platform === "win32"
-    ? [path.join(directory, "grok.exe"), path.join(directory, "grok")]
+    ? [
+        path.join(directory, "grok.exe"),
+        path.join(directory, "grok.cmd"),
+        path.join(directory, "grok"),
+      ]
     : [
         path.join(os.homedir(), ".npm-global", "bin", "grok"),
         path.join(directory, "grok"),
@@ -93,12 +91,31 @@ export function grokCliPreflight({
   }
 
   const { XAI_API_KEY: _apiKey, ...sanitizedEnvironment } = environment;
-  const result = spawnSyncImpl(executable, ["--version"], {
-    encoding: "utf8",
-    env: sanitizedEnvironment,
-    timeout: 5_000,
-    windowsHide: true,
-  });
+  // An npm-installed CLI resolves to a .cmd shim, which Node refuses to spawn
+  // without a shell; without this hop the launch fails before the CLI is even
+  // reached and the failure reads as an application-control block.
+  let result;
+  try {
+    const target = spawnableCommand(executable, ["--version"], platform);
+    result = spawnSyncImpl(target.command, target.args, {
+      ...target.options,
+      encoding: "utf8",
+      env: sanitizedEnvironment,
+      timeout: 5_000,
+      windowsHide: true,
+    });
+  } catch (error) {
+    // A path this module will not hand to a shell is a CLI that cannot run,
+    // and saying so beats letting the throw escape into the doctor's report.
+    return {
+      state: "unavailable",
+      installed: true,
+      runnable: false,
+      executable,
+      detail: `installed, but the official Grok CLI could not run (${error.message})`,
+      fix: "Check GROK_CLI, then run `grok --version` in a terminal and rerun the doctor.",
+    };
+  }
   if (!result.error && result.status === 0) {
     return { state: "ready", installed: true, runnable: true, executable };
   }

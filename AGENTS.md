@@ -27,7 +27,7 @@ user.
 3. Never ask the user to paste OAuth tokens or API keys into chat, command
    arguments, logs, environment snippets, or tracked files.
 4. Determine which provider IDs the user requested: `anthropic-api`,
-   `kimi-oauth`, `kimi-api`, `deepseek`, `grok-oauth`, `grok-api`, `qwen-plan`,
+   `kimi-oauth`, `kimi-api`, `kimi-api-cn`, `deepseek`, `grok-oauth`, `grok-api`, `qwen-plan`,
    `zai-coding`, `ollama-cloud`, `minimax-token-plan`, `meta`, `clinepass`, and/or
    `opencode-go`
    (shown to users as "opencode Go/Zen"; its `opencode-go-messages`,
@@ -52,6 +52,18 @@ user.
    model subsets. They ship no preselected models and must be explicitly
    selected before `bin/curate-models PROVIDER` is run; never select either one
    on the user's behalf just because it can authenticate without a key.
+   `kimi-api` and `kimi-api-cn` are two different Moonshot platforms, not a
+   fallback pair: the global console at platform.moonshot.ai and the mainland
+   one at platform.moonshot.cn have separate accounts, separate billing, and
+   keys that each host rejects from the other. Ask which platform the user's
+   key came from rather than defaulting, and never copy a stored key between
+   the two.
+   `kimi-api` and `kimi-api-cn` are two different Moonshot platforms, not a
+   fallback pair: the global console at platform.moonshot.ai and the mainland
+   one at platform.moonshot.cn have separate accounts, separate billing, and
+   keys that each host rejects from the other. Ask which platform the user's
+   key came from rather than defaulting, and never copy a stored key between
+   the two.
 5. For Kimi OAuth, reuse a valid `kimi login` session. If login is needed, run
    the official CLI only in an interactive terminal. For API providers, invoke
    `bin/model-router codex provider-key PROVIDER set` in a PTY so the hidden

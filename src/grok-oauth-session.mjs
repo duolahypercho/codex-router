@@ -7,6 +7,7 @@ import {
   grokCliPreflight,
 } from "./grok-cli.mjs";
 import { grokAuthPath, grokSessionEntry } from "./grok-oauth-status.mjs";
+import { spawnableCommand } from "./spawnable-command.mjs";
 
 const REFRESH_THRESHOLD_MS = 5 * 60 * 1_000;
 const REFRESH_TIMEOUT_MS = 30_000;
@@ -54,18 +55,25 @@ function isHardExpired(session, now) {
 
 export function refreshWithOfficialCli({
   executable = grokCliPath() || "grok",
+  platform = process.platform,
   preflightOptions,
   spawnImpl = spawn,
 } = {}) {
-  const preflight = grokCliPreflight({ executable, ...preflightOptions });
+  const preflight = grokCliPreflight({ executable, platform, ...preflightOptions });
   if (!preflight.runnable) {
     return Promise.reject(oauthError(grokCliFailureMessage(preflight)));
   }
   return new Promise((resolve, reject) => {
     const { XAI_API_KEY: _apiKey, ...environment } = process.env;
-    const child = spawnImpl(executable, ["models"], {
+    // The same batch-shim hop the preflight takes: a refresh that skipped it
+    // failed on every npm-installed Windows CLI, expiring the session that the
+    // preflight had just reported as healthy.
+    const target = spawnableCommand(executable, ["models"], platform);
+    const child = spawnImpl(target.command, target.args, {
+      ...target.options,
       env: environment,
       stdio: ["ignore", "ignore", "ignore"],
+      windowsHide: true,
     });
     let timedOut = false;
     const timer = setTimeout(() => {

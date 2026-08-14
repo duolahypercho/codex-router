@@ -1,14 +1,39 @@
-import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { execFileSync, spawn } from "node:child_process";
 import readline from "node:readline";
 
-const DEFAULT_TIMEOUT_MS = 10_000;
-const APP_CODEX = "/Applications/ChatGPT.app/Contents/Resources/codex";
+import { findCodexBinary } from "./codex-binary.mjs";
+import { spawnableCommand } from "./spawnable-command.mjs";
 
+const DEFAULT_TIMEOUT_MS = 10_000;
+
+// This used to keep its own two-line search -- an undocumented CODEX_BINARY
+// override, a hardcoded macOS app path, then the bare name "codex". None of
+// the three finds a Windows install: the bundled Desktop CLI lives under a
+// version-hashed %LOCALAPPDATA% directory, and a bare "codex" resolves to the
+// extensionless npm shim that Node cannot spawn. The panel reported "the Codex
+// app-server could not be started" on every Windows machine. Use the same
+// discovery the rest of the router uses, and keep CODEX_BINARY working for
+// anyone who set it.
 function codexBinary() {
-  if (process.env.CODEX_BINARY) return process.env.CODEX_BINARY;
-  if (existsSync(APP_CODEX)) return APP_CODEX;
-  return "codex";
+  return process.env.CODEX_BINARY || findCodexBinary();
+}
+
+// Killing a child that was reached through cmd.exe kills the shell, not the
+// app-server behind it. On a timeout that left a Codex process holding the
+// pipe for as long as the session lived, once per poll.
+function killProcessTree(child, viaShell) {
+  if (!viaShell || process.platform !== "win32" || !child.pid) {
+    child.kill();
+    return;
+  }
+  try {
+    execFileSync("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], {
+      stdio: "ignore",
+      windowsHide: true,
+    });
+  } catch {
+    child.kill();
+  }
 }
 
 function clampPercent(value) {
@@ -62,10 +87,22 @@ export function normalizeCodexAccountUsage(rateLimitResponse, usageResponse, now
   };
 }
 
-export function readCodexAccountUsage({ timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
+export function readCodexAccountUsage({
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+  binary = codexBinary(),
+  platform = process.platform,
+  spawnImpl = spawn,
+} = {}) {
   return new Promise((resolve, reject) => {
-    const processHandle = spawn(codexBinary(), ["app-server"], {
+    if (!binary) {
+      reject(new Error("The Codex app-server could not be started: no Codex binary was found."));
+      return;
+    }
+    const target = spawnableCommand(binary, ["app-server"], platform);
+    const processHandle = spawnImpl(target.command, target.args, {
+      ...target.options,
       stdio: ["pipe", "pipe", "ignore"],
+      windowsHide: true,
     });
     const lines = readline.createInterface({ input: processHandle.stdout });
     const responses = new Map();
@@ -76,7 +113,7 @@ export function readCodexAccountUsage({ timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
       settled = true;
       clearTimeout(timer);
       lines.close();
-      processHandle.kill();
+      killProcessTree(processHandle, Boolean(target.options.windowsVerbatimArguments));
       if (error) reject(error);
       else resolve(value);
     };

@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   grokCliFailureMessage,
+  grokCliPath,
   grokCliPreflight,
   windowsApplicationControlBlocked,
 } from "../src/grok-cli.mjs";
@@ -126,4 +127,60 @@ test("Grok OAuth refresh surfaces the Windows policy block before token expiry",
     },
   );
   assert.equal(refreshLaunches, 0);
+});
+
+// The official CLI is an npm package, so `where.exe grok` leads with the
+// extensionless shim. Spawning that raises `spawn UNKNOWN`, which is also what
+// Smart App Control raises -- so a healthy install was reported as blocked by
+// Windows application control and the operator was told to give up on OAuth.
+test("Grok CLI discovery skips the npm shim Windows cannot spawn", () => {
+  const resolved = grokCliPath({
+    environment: {},
+    platform: "win32",
+    exec: () =>
+      "C:\\Users\\ann\\AppData\\Roaming\\npm\\grok\r\n" +
+      "C:\\Users\\ann\\AppData\\Roaming\\npm\\grok.cmd\r\n",
+  });
+  assert.equal(resolved, "C:\\Users\\ann\\AppData\\Roaming\\npm\\grok.cmd");
+});
+
+test("Grok CLI preflight launches a batch shim through cmd.exe", () => {
+  let invocation;
+  const status = grokCliPreflight({
+    executable: "C:\\Users\\ann\\AppData\\Roaming\\npm\\grok.cmd",
+    environment: {},
+    platform: "win32",
+    spawnSyncImpl: (command, args, options) => {
+      invocation = { command, args, options };
+      return { status: 0, stdout: "0.2.112\n" };
+    },
+  });
+  assert.equal(status.state, "ready");
+  assert.match(invocation.command, /cmd\.exe$/i);
+  assert.deepEqual(invocation.args.slice(0, 3), ["/d", "/s", "/c"]);
+  assert.ok(invocation.args[3].includes("grok.cmd"), invocation.args[3]);
+  assert.equal(invocation.options.windowsVerbatimArguments, true);
+  assert.equal(invocation.options.windowsHide, true);
+});
+
+test("Grok OAuth refresh runs the batch shim the preflight approved", async () => {
+  const launches = [];
+  await refreshWithOfficialCli({
+    executable: "C:\\npm\\grok.cmd",
+    platform: "win32",
+    preflightOptions: { spawnSyncImpl: () => ({ status: 0 }) },
+    spawnImpl: (command, args, options) => {
+      launches.push({ command, args, options });
+      return {
+        once(event, handler) {
+          if (event === "exit") handler(0);
+        },
+        kill() {},
+      };
+    },
+  });
+  assert.equal(launches.length, 1);
+  assert.match(launches[0].command, /cmd\.exe$/i);
+  assert.ok(launches[0].args[3].includes("grok.cmd"), launches[0].args[3]);
+  assert.equal(launches[0].options.windowsVerbatimArguments, true);
 });

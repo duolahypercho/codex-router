@@ -21,6 +21,7 @@ import { SOURCE_ROOT } from "./paths.mjs";
 import { credentialStatus } from "./provider-credentials.mjs";
 import { providerOnboardingSnapshot } from "./provider-onboarding.mjs";
 import { defaultProviderIds, validateProviderIds } from "./provider-selection.mjs";
+import { commandOnPath, spawnableCommand } from "./spawnable-command.mjs";
 import { renderProviderChoices, toggleSelection } from "./setup-ui.mjs";
 
 // Target-agnostic setup helpers shared by every target's <target>-setup.mjs.
@@ -136,21 +137,15 @@ function oauthSetupHint(provider) {
 }
 
 function executable(name) {
-  const finder = process.platform === "win32" ? "where.exe" : "which";
-  try {
-    return execFileSync(finder, [name], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    })
-      .trim()
-      .split(/\r?\n/)[0];
-  } catch {
-    return undefined;
-  }
+  // Not the finder's first line: on Windows that is the extensionless npm
+  // shim, and every caller here goes on to spawn what it gets back.
+  return commandOnPath(name);
 }
 
 export function run(command, commandArgs) {
-  const result = spawnSync(command, commandArgs, {
+  const target = spawnableCommand(command, commandArgs);
+  const result = spawnSync(target.command, target.args, {
+    ...target.options,
     cwd: SOURCE_ROOT,
     env: process.env,
     stdio: "inherit",
@@ -164,7 +159,9 @@ export function run(command, commandArgs) {
 // Like run(), but reports success instead of throwing on a non-zero exit so the
 // caller can offer a retry (e.g. a cancelled `kimi login`).
 function tryRun(command, commandArgs) {
-  const result = spawnSync(command, commandArgs, {
+  const target = spawnableCommand(command, commandArgs);
+  const result = spawnSync(target.command, target.args, {
+    ...target.options,
     cwd: SOURCE_ROOT,
     env: process.env,
     stdio: "inherit",

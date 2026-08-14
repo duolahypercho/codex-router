@@ -101,7 +101,9 @@ edge during both idle and active sessions.
   label every weekday; longer ranges use spaced date ticks while retaining one
   point per day. The Island uses a fixed seven-day line graph so hover remains
   quick and the longer ranges stay in the tray. Hover any mark for its date and
-  exact token count. When the provider reports a quota reset, its local reset
+  displayed token count. Use the `Full`/`M` selector beside the range picker to
+  switch between grouped full numbers and millions. When the provider reports a
+  quota reset, its local reset
   date and time appear beside the chart title. Usage refreshes every 30 seconds,
   and the detailed view switches when a new request uses a different provider.
   A provider selected manually remains focused for the rest of the current
@@ -111,8 +113,10 @@ edge during both idle and active sessions.
   **Thinking** while generating, and **Solving** for errors. Starting retains
   its amber status dot, and the Error label remains explicit. The
   daily line draws in once when opened or refreshed. Reduce Motion disables
-  decorative movement. The Island is shown by default and can be toggled from
-  the tray.
+  decorative movement. The Island is off on a new install and is enabled from
+  **Dynamic Island** in the tray Settings (`Off` / `Notch` / `Desktop`). An
+  install that already had it on keeps it. The menu-bar panel is the primary
+  surface and stays available whichever mode is selected.
 - When multiple Codex model requests run at the same time, the Island shows the
   first provider mark and session title plus `+N` for the remaining requests.
   Hover and expand list each live request with its provider mark, session

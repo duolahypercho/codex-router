@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { normalizeCodexAccountUsage } from "../src/codex-account-usage.mjs";
+import {
+  normalizeCodexAccountUsage,
+  readCodexAccountUsage,
+} from "../src/codex-account-usage.mjs";
 
 test("normalizes Codex limits and daily usage without account credentials", () => {
   const value = normalizeCodexAccountUsage(
@@ -59,4 +62,40 @@ test("clamps malformed percentages and tolerates missing usage", () => {
   assert.equal(value.primary.usedPercent, 100);
   assert.equal(value.primary.remainingPercent, 0);
   assert.deepEqual(value.dailyUsageBuckets, []);
+});
+
+// The panel used to run its own two-line search for Codex -- an undocumented
+// CODEX_BINARY, a macOS app path, then the bare name "codex". On Windows all
+// three miss, and the bare name resolves to the npm shim Node refuses to
+// spawn, so the usage panel reported "the Codex app-server could not be
+// started" on every Windows machine.
+test("the usage panel reaches an npm-installed Codex through cmd.exe", () => {
+  let invocation;
+  readCodexAccountUsage({
+    binary: "C:\\Users\\ann\\AppData\\Roaming\\npm\\codex.cmd",
+    platform: "win32",
+    spawnImpl: (command, args, options) => {
+      invocation = { command, args, options };
+      return {
+        stdout: { on() {}, once() {}, removeListener() {}, setEncoding() {} },
+        stdin: { write() {} },
+        once() {},
+        kill() {},
+      };
+    },
+  }).catch(() => {});
+
+  assert.match(invocation.command, /cmd\.exe$/i);
+  assert.deepEqual(invocation.args.slice(0, 3), ["/d", "/s", "/c"]);
+  assert.ok(invocation.args[3].includes("codex.cmd"), invocation.args[3]);
+  assert.equal(invocation.options.windowsVerbatimArguments, true);
+  assert.equal(invocation.options.windowsHide, true);
+});
+
+test("the usage panel names a missing Codex instead of blaming the app-server", async () => {
+  // `null`, not `undefined`: a default parameter fires for `undefined`, so
+  // passing that resolved a real binary and the rejection never happened on any
+  // machine with Codex installed. It only looked green because CI runners have
+  // none -- which is the one environment where this assertion cannot fail.
+  await assert.rejects(readCodexAccountUsage({ binary: null }), /no Codex binary was found/);
 });

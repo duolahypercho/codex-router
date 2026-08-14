@@ -392,8 +392,13 @@ async function deepSeekAccount(fetchImpl) {
   return { status: "available", source: "official-api", metrics };
 }
 
-async function kimiApiAccount(fetchImpl) {
-  const provider = PROVIDERS.get("kimi-api");
+// Moonshot runs two platforms that share this balance route but nothing else:
+// the global console at platform.moonshot.ai and the mainland one at
+// platform.moonshot.cn. Accounts, billing, and keys are separate -- a key
+// minted on one is rejected by the other -- so they are separate providers here
+// and this probe is parameterized rather than pinned to one of them.
+async function kimiApiAccount(fetchImpl, providerId = "kimi-api") {
+  const provider = PROVIDERS.get(providerId);
   const credential = resolveProviderCredential(provider);
   if (!credential) return { status: "not-configured", source: "official-api", metrics: [] };
   const baseURL = (process.env[provider.baseUrlEnv] || provider.baseUrl).replace(/\/+$/, "");
@@ -735,7 +740,9 @@ async function accountUsageFor(providerId, fetchImpl) {
   try {
     if (providerId === "chutes") return await chutesAccount(fetchImpl);
     if (providerId === "deepseek") return await deepSeekAccount(fetchImpl);
-    if (providerId === "kimi-api") return await kimiApiAccount(fetchImpl);
+    if (providerId === "kimi-api" || providerId === "kimi-api-cn") {
+      return await kimiApiAccount(fetchImpl, providerId);
+    }
     if (providerId === "kimi-oauth") return await kimiOAuthAccount(fetchImpl);
     if (providerId === "grok-oauth") return await grokOAuthAccount(fetchImpl);
     if (providerId === "grok-api") {

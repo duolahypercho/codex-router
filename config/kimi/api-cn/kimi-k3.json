@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "slug": "kimi-api-cn/kimi-k3",
+      "gatewayModel": "kimi-api-cn-k3",
+      "upstreamModel": "kimi-k3",
+      "provider": "kimi-api-cn",
+      "listed": true,
+      "displayName": "Kimi K3 (China API)",
+      "description": "Kimi K3 through the mainland China Moonshot platform (api.moonshot.cn), billed to a separate platform.moonshot.cn account.",
+      "priority": 6,
+      "defaultEffort": "max",
+      "reasoningLevels": [
+        {
+          "effort": "low",
+          "description": "Faster reasoning"
+        },
+        {
+          "effort": "high",
+          "description": "Balanced deep reasoning"
+        },
+        {
+          "effort": "max",
+          "description": "Maximum reasoning depth"
+        }
+      ],
+      "contextWindow": 1048576,
+      "autoCompact": 900000,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "requestProfile": "kimi-k3",
+      "supportsImageDetailOriginal": true,
+      "compHash": "kimi-api-cn-k3-v1"
+    }
+  ]
+}

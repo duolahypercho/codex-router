@@ -11,9 +11,18 @@ function dateKey(value) {
   return `${year}-${month}-${day}`;
 }
 
+// Fastest published serving rates are a few hundred tokens per second; this
+// is set well above them so a genuinely fast model is never discarded.
+const MAX_PLAUSIBLE_TOKENS_PER_SECOND = 500;
+
 function nonnegative(value) {
   const number = Number(value);
   return Number.isFinite(number) && number >= 0 ? Math.round(number) : 0;
+}
+
+function optionalNonnegative(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 ? Math.round(number) : undefined;
 }
 
 // Routed slugs are provider-qualified (`kimi-oauth/k3`); native ones are bare
@@ -106,9 +115,8 @@ export function aggregateProviderUsage(events, { days = 90, now = Date.now() } =
       inputTokens: 0,
       outputTokens: 0,
       totalTokens: 0,
-      speedOutputTokens: 0,
-      speedDurationMs: 0,
-      speedSampleCount: 0,
+      speedSamples: [],
+      firstTokenSamples: [],
       lastUsedAt: new Date(at).toISOString(),
     };
     model.requests += 1;
@@ -124,10 +132,51 @@ export function aggregateProviderUsage(events, { days = 90, now = Date.now() } =
     model.outputTokens += outputTokens;
     model.totalTokens += totalTokens;
     const durationMs = nonnegative(event.durationMs);
-    if (event.status >= 200 && event.status < 400 && outputTokens > 0 && durationMs > 0) {
-      model.speedOutputTokens += outputTokens;
-      model.speedDurationMs += durationMs;
-      model.speedSampleCount += 1;
+    const responseStartMs = optionalNonnegative(event.responseStartMs);
+    // Output tokens per second is defined as the rate *after* the first token,
+    // with the wait before it reported separately as time-to-first-token --
+    // that is how every published benchmark states it, and it is the only
+    // split that does not change with reply length. Dividing by the time since
+    // the response headers instead buries a reasoning model's silent thinking
+    // in the denominator, which made a 31-token reply read at 12 tok/s and a
+    // 426-token one at 69 on the same model.
+    const firstTokenMs = optionalNonnegative(event.firstTokenMs);
+    const generationDurationMs = durationMs - (firstTokenMs ?? durationMs);
+    // A long Codex turn can trip the empty-completion hold budget and still
+    // finish as a normal 200 with streamed tokens. That flag means "we
+    // stopped waiting to classify emptiness", not "this rate is unusable".
+    // Keep those replies; drop only empty/retried/canceled ones.
+    const measurable =
+      event.status >= 200 &&
+      event.status < 400 &&
+      !event.retries &&
+      event.emptyCompletion !== true &&
+      event.emptyCompletionRetried !== true;
+    // Detection can fail on a converted stream -- the first token is noticed
+    // near the end, so thousands of tokens appear to arrive in milliseconds.
+    // No served model streams anywhere near this fast, so treat it as a broken
+    // sample rather than a record-breaking one.
+    const impossibleRate = (outputTokens * 1_000) / generationDurationMs > MAX_PLAUSIBLE_TOKENS_PER_SECOND;
+    if (
+      measurable &&
+      outputTokens > 0 &&
+      firstTokenMs !== undefined &&
+      generationDurationMs > 0 &&
+      !impossibleRate
+    ) {
+      model.speedSamples.push({ outputTokens, generationDurationMs });
+      // Keep the displayed rate current instead of averaging the model's
+      // entire 90-day usage history. Twenty replies smooth one-off bursts
+      // without letting old sessions dominate the result.
+      if (model.speedSamples.length > 20) model.speedSamples.shift();
+    }
+    // Time-to-first-token stands on its own: it is the pause the operator
+    // actually feels before anything appears, and on a reasoning model it is
+    // roughly half the request. Sampled from the same events, so a turn that
+    // is unfit for a rate is unfit for this too.
+    if (measurable && firstTokenMs !== undefined && firstTokenMs > 0 && firstTokenMs <= durationMs) {
+      model.firstTokenSamples.push(firstTokenMs);
+      if (model.firstTokenSamples.length > 20) model.firstTokenSamples.shift();
     }
     if (at >= Date.parse(model.lastUsedAt)) model.lastUsedAt = new Date(at).toISOString();
     provider.models.set(slug, model);
@@ -142,13 +191,33 @@ export function aggregateProviderUsage(events, { days = 90, now = Date.now() } =
         left.startDate.localeCompare(right.startDate),
       ),
       models: [...models.values()]
-        .map(({ speedOutputTokens, speedDurationMs, ...model }) => ({
-          ...model,
-          observedTokensPerSecond:
-            speedDurationMs > 0
-              ? Math.round((speedOutputTokens * 1_000 * 10) / speedDurationMs) / 10
+        .map(({ speedSamples, firstTokenSamples, ...model }) => {
+          // Median of per-reply rates, not total tokens over total time. A
+          // pooled ratio lets one bad sample carry the answer: a stream whose
+          // first token is detected late reports thousands of tokens across a
+          // fraction of a second, and summing puts that straight into the
+          // numerator. Observed live -- one provider produced 11,656 tok/s
+          // this way and dragged a 20-sample window to 711 while every sane
+          // reply in it sat near 114. A median cannot be moved by a minority
+          // of impossible samples, and needs no threshold to tune.
+          const rates = speedSamples
+            .map((sample) => (sample.outputTokens * 1_000) / sample.generationDurationMs)
+            .sort((left, right) => left - right);
+          return {
+            ...model,
+            speedSampleCount: speedSamples.length,
+            // Median, not mean: one cold start or one queued request would
+            // drag an average far more than it reflects a typical turn.
+            observedFirstTokenMs: firstTokenSamples.length
+              ? [...firstTokenSamples].sort((left, right) => left - right)[
+                  Math.floor(firstTokenSamples.length / 2)
+                ]
               : null,
-        }))
+            observedTokensPerSecond: rates.length
+              ? Math.round(rates[Math.floor(rates.length / 2)] * 10) / 10
+              : null,
+          };
+        })
         .sort(
           (left, right) => right.totalTokens - left.totalTokens || right.requests - left.requests,
         ),

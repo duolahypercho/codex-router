@@ -17,7 +17,7 @@ import { PORTS } from "./paths.mjs";
 import { MODELS } from "./model-registry.mjs";
 import { ensureFreshGrokOAuthToken } from "./grok-oauth-session.mjs";
 import { grokOAuthStatus } from "./grok-oauth-status.mjs";
-import { objectRootToolSchema } from "./tool-schema-root.mjs";
+import { normalizeSchemaLiterals, objectRootToolSchema } from "./tool-schema-root.mjs";
 import { VERSION } from "./version.mjs";
 
 // LiteLLM speaks OpenAI Chat Completions to this forwarder. It reuses the
@@ -188,9 +188,15 @@ export function toResponsesRequest(chat, options = {}) {
           name: tool.function.name,
           description: tool.function.description,
           // xAI 400s the whole request over a union-rooted parameter schema,
-          // which Codex's own `automation_update` app tool ships.
+          // which Codex's own `automation_update` app tool ships. It rejects
+          // every non-object root, so this keeps objectRootToolSchema's full
+          // collapse rather than the narrower providerToolSchema the shared
+          // relay uses -- and additionally drops literals that contradict their
+          // declared type, which the relay now does for every provider.
           parameters: objectRootToolSchema(
-            tool.function.parameters || { type: "object", properties: {} },
+            normalizeSchemaLiterals(
+              tool.function.parameters || { type: "object", properties: {} },
+            ),
           ),
           strict: false,
         }))

@@ -321,10 +321,32 @@ function runApply() {
     if (targetIsActive(target)) {
       refreshActiveTarget(target);
     } else {
-      const result = spawnSync(path.join(REPO_ROOT, "bin", "enable"), [], {
-        env: { ...process.env, MODEL_ROUTER_TARGET: target },
-        stdio: "inherit",
-      });
+      // `bin/enable` is a POSIX shell script. Windows reaches the same enable
+      // path through the PowerShell installer, the way doctor --fix and
+      // curate-models already do; spawning the shell script there failed with
+      // ENOEXEC and reported it as a plain "apply failed".
+      const result = process.platform === "win32"
+        ? spawnSync(
+            "powershell.exe",
+            [
+              "-NoLogo",
+              "-NoProfile",
+              "-ExecutionPolicy",
+              "Bypass",
+              "-File",
+              path.join(REPO_ROOT, "install.ps1"),
+              "-CheckoutInstall",
+            ],
+            {
+              cwd: REPO_ROOT,
+              env: { ...process.env, MODEL_ROUTER_TARGET: target },
+              stdio: "inherit",
+            },
+          )
+        : spawnSync(path.join(REPO_ROOT, "bin", "enable"), [], {
+            env: { ...process.env, MODEL_ROUTER_TARGET: target },
+            stdio: "inherit",
+          });
       if (result.status !== 0) throw new Error(`${target}: apply failed`);
     }
     applied.push(target);
@@ -719,17 +741,27 @@ async function handleSubagents(action, value, flag) {
   process.stdout.write(`${JSON.stringify(subagentSettingsSnapshot())}\n`);
 }
 
-async function handleToolResultAging(action) {
-  const { setToolResultAgingEnabled, toolResultAgingSnapshot } = await import(
-    "./tool-result-aging-state.mjs"
-  );
+async function handleToolResultAging(action, nativeAction) {
+  const {
+    setNativeToolResultAgingEnabled,
+    setToolResultAgingEnabled,
+    toolResultAgingSnapshot,
+  } = await import("./tool-result-aging-state.mjs");
   const desired = action || "status";
   if (desired === "status") {
     process.stdout.write(`${JSON.stringify(toolResultAgingSnapshot())}\n`);
     return;
   }
+  if (desired === "native") {
+    if (nativeAction !== "on" && nativeAction !== "off") {
+      throw new Error("Usage: control tool-result-aging status|on|off|native <on|off>");
+    }
+    setNativeToolResultAgingEnabled(nativeAction === "on");
+    process.stdout.write(`${JSON.stringify(toolResultAgingSnapshot())}\n`);
+    return;
+  }
   if (desired !== "on" && desired !== "off") {
-    throw new Error("Usage: control tool-result-aging status|on|off");
+    throw new Error("Usage: control tool-result-aging status|on|off|native <on|off>");
   }
   setToolResultAgingEnabled(desired === "on");
   process.stdout.write(`${JSON.stringify(toolResultAgingSnapshot())}\n`);
@@ -898,7 +930,10 @@ async function handleVisionBridge(action, value, extra) {
     const child = spawn(
       process.execPath,
       [path.join(REPO_ROOT, "src", "vision-download.mjs"), tag],
-      { detached: true, stdio: "ignore" },
+      // windowsHide matters more here than anywhere else: a detached child
+      // gets its own console on Windows, and this one lives for the length of
+      // a multi-gigabyte pull. The local-model worker below already hides.
+      { detached: true, stdio: "ignore", windowsHide: true },
     );
     child.unref();
     process.stdout.write(`${JSON.stringify({ started: true, tag })}\n`);
@@ -1483,7 +1518,7 @@ if (args.includes("--probe")) {
 } else if (args[0] === "subagents") {
   await handleSubagents(args[1], args[2], args[3]);
 } else if (args[0] === "tool-result-aging") {
-  await handleToolResultAging(args[1]);
+  await handleToolResultAging(args[1], args[2]);
 } else if (args[0] === "local-models") {
   await handleLocalModels(args[1], args[2], ...args.slice(3));
 } else if (args[0] === "vision-bridge") {

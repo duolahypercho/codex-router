@@ -114,3 +114,128 @@ export function objectRootToolSchema(schema) {
     additionalProperties: true,
   };
 }
+
+// Moonshot validates every enum/const literal against the type its own node
+// declares, and rejects the whole request -- not the one tool -- on a mismatch:
+//
+//   tools.function.parameters is not a valid moonshot flavored json schema,
+//   details: <At path 'properties.appTaskLane.properties.enabled.enum':
+//            enum value (true) does not match any type in [string]>
+//
+// The contradiction is the client's: mergeCodexAppTools lets client-provided
+// definitions win, so it cannot be repaired in the bundled snapshot. Drop the
+// offending literal rather than coercing it. A literal that contradicts its own
+// declared type could never validate, so dropping it cannot change a well-formed
+// schema; coercing `true` to `"true"` would instead tell the model to send a
+// value the app never asked for.
+
+const MAX_LITERAL_DEPTH = 32;
+const SCHEMA_MAP_KEYWORDS = ["properties", "patternProperties", "$defs", "definitions"];
+const SCHEMA_LIST_KEYWORDS = ["anyOf", "oneOf", "allOf", "prefixItems"];
+const SCHEMA_CHILD_KEYWORDS = [
+  "items",
+  "additionalProperties",
+  "contains",
+  "not",
+  "if",
+  "then",
+  "else",
+  "propertyNames",
+];
+
+function jsonTypeOf(value) {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "array";
+  if (typeof value === "boolean") return "boolean";
+  if (typeof value === "string") return "string";
+  if (typeof value === "number") return Number.isInteger(value) ? "integer" : "number";
+  if (typeof value === "object") return "object";
+  return undefined;
+}
+
+function declaredTypes(schema) {
+  if (typeof schema.type === "string") return [schema.type];
+  if (Array.isArray(schema.type)) return schema.type.filter((entry) => typeof entry === "string");
+  return [];
+}
+
+function matchesDeclaredType(value, types) {
+  const actual = jsonTypeOf(value);
+  if (actual === undefined) return false;
+  if (types.includes(actual)) return true;
+  // JSON Schema counts every integer as a number.
+  return actual === "integer" && types.includes("number");
+}
+
+// Returns `schema` by identity when nothing contradicts, so a clean toolset
+// costs one walk and no copy, and the client's object is never mutated.
+export function normalizeSchemaLiterals(schema, depth = 0) {
+  if (!isPlainObject(schema) || depth > MAX_LITERAL_DEPTH) return schema;
+  let next = schema;
+  const replace = (key, value) => {
+    if (next === schema) next = { ...schema };
+    if (value === undefined) delete next[key];
+    else next[key] = value;
+  };
+
+  const types = declaredTypes(schema);
+  if (types.length) {
+    if (Array.isArray(schema.enum)) {
+      const kept = schema.enum.filter((value) => matchesDeclaredType(value, types));
+      if (kept.length !== schema.enum.length) replace("enum", kept.length ? kept : undefined);
+    }
+    if ("const" in schema && !matchesDeclaredType(schema.const, types)) {
+      replace("const", undefined);
+    }
+  }
+
+  for (const keyword of SCHEMA_MAP_KEYWORDS) {
+    const node = schema[keyword];
+    if (!isPlainObject(node)) continue;
+    let changed = false;
+    const rewritten = {};
+    for (const [name, child] of Object.entries(node)) {
+      const sanitized = normalizeSchemaLiterals(child, depth + 1);
+      if (sanitized !== child) changed = true;
+      rewritten[name] = sanitized;
+    }
+    if (changed) replace(keyword, rewritten);
+  }
+
+  for (const keyword of [...SCHEMA_LIST_KEYWORDS, ...SCHEMA_CHILD_KEYWORDS]) {
+    const node = schema[keyword];
+    if (Array.isArray(node)) {
+      let changed = false;
+      const rewritten = node.map((child) => {
+        const sanitized = normalizeSchemaLiterals(child, depth + 1);
+        if (sanitized !== child) changed = true;
+        return sanitized;
+      });
+      if (changed) replace(keyword, rewritten);
+      continue;
+    }
+    if (!isPlainObject(node)) continue;
+    const sanitized = normalizeSchemaLiterals(node, depth + 1);
+    if (sanitized !== node) replace(keyword, sanitized);
+  }
+
+  return next;
+}
+
+// The one provider-facing normalization: literals aligned with the type their
+// own node declares, and a union root merged into a plain object. Returns
+// `schema` unchanged when neither applies.
+//
+// Deliberately narrower than objectRootToolSchema alone. That function collapses
+// *any* root it cannot recognize -- an array root, a bare `type: "string"`, an
+// empty object -- into `{type:"object", properties:{}}`, discarding the real
+// schema. That is the right trade for xAI, which rejects every non-object root
+// outright. It is the wrong trade here: this runs on every namespace and MCP
+// tool, where a server-defined schema that merely looks unusual would be
+// silently replaced with one accepting anything. Only a union root is the
+// documented strict-upstream rejection, so only a union root is rewritten.
+export function providerToolSchema(schema) {
+  const normalized = normalizeSchemaLiterals(schema);
+  if (!isPlainObject(normalized) || !hasRootUnion(normalized)) return normalized;
+  return objectRootToolSchema(normalized);
+}

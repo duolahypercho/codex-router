@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import {
+  ollamaCommand,
   ollamaAvailable as runtimeOllamaAvailable,
   ollamaInstallHint,
 } from "./ollama-runtime.mjs";
@@ -33,8 +34,16 @@ export function ollamaAvailable({ spawn = spawnSync } = {}) {
 
 // A model download is gigabytes, so it is never silent: the caller passes an
 // explicit consent flag (a --yes on the CLI, or a confirmed installer prompt).
+//
+// The runtime resolver, not the bare name: `ollamaAvailable()` above finds
+// Ollama through its known install locations, which on Windows is a
+// %LOCALAPPDATA% path the router's own PATH may never have seen. Probing with
+// one resolver and running with another reported an installed Ollama and then
+// failed to spawn it.
 export function pullOllamaModel(model, { spawn = spawnSync } = {}) {
-  const result = spawn("ollama", ["pull", model], { stdio: "inherit" });
+  const command = ollamaCommand({ spawn });
+  if (!command) throw new Error(`\`ollama pull ${model}\` failed: ${ollamaInstallMessage()}`);
+  const result = spawn(command, ["pull", model], { stdio: "inherit" });
   if (result.status !== 0) {
     throw new Error(`\`ollama pull ${model}\` failed (exit ${result.status ?? "unknown"}).`);
   }
@@ -46,7 +55,9 @@ export function pullOllamaModel(model, { spawn = spawnSync } = {}) {
 // as Ollama reports them (e.g. "qwen2.5vl:3b", "moondream:latest").
 export function ollamaInstalledModels({ spawn = spawnSync } = {}) {
   try {
-    const result = spawn("ollama", ["list"], { encoding: "utf8" });
+    const command = ollamaCommand({ spawn });
+    if (!command) return [];
+    const result = spawn(command, ["list"], { encoding: "utf8", windowsHide: true });
     if (result.status !== 0 || typeof result.stdout !== "string") return [];
     return result.stdout
       .split("\n")

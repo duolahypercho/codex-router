@@ -43,8 +43,10 @@ and disables its activity-pill switch; router monitoring continues normally.
   disappears immediately. A completed download is hidden after its model is
   removed, so stale `ready · 100%` state never implies that it is still on disk.
 - **Usage** shows the active or most recently used model's observed output
-  throughput when the upstream reports output tokens. The rate is end-to-end
-  tokens per second from successful metered replies, not a synthetic estimate.
+  throughput when the upstream reports output tokens. The rate is calculated
+  from the streamed generation phase of the latest 20 clean, successful
+  replies, excluding queueing, prompt processing, retries, and historical rows
+  that predate generation timing.
 
 The status mark uses Thinking Orbs **Shaping** while idle, **Thinking** while a
 model is generating, and **Solving** for errors. Starting retains its colored
@@ -90,6 +92,28 @@ Start-Process .\apps\desktop\src-tauri\target\release\codex-router-desktop.exe
 
 Pass `-BinaryOnly` for an unbundled executable. Installer artifacts are written
 under `apps\desktop\src-tauri\target\release\bundle` by a full build.
+
+## Starting at logon
+
+`install.ps1 -WithTray` builds the companion and registers a `Codex Router
+Tray` scheduled task that runs it at logon, separately from the router's own
+`Codex Router` task so stopping one never takes the other down. The same task
+is managed directly with:
+
+```powershell
+node src\control.mjs tray enable    # build required first; also starts it now
+node src\control.mjs tray status
+node src\control.mjs tray disable
+```
+
+Quitting from the tray menu keeps it quit: the restart setting covers a crash,
+not a clean exit, so the tray returns at the next logon rather than reappearing
+immediately. Linux has no supervisor — launch it with `./bin/model-router-tray`
+— and the tray commands say so instead of reporting a silent success.
+
+Windows 11 hides new tray icons in the `^` overflow next to the clock. Drag the
+icon onto the taskbar to pin it; an unpinned icon is the most common reason the
+companion looks like it never started.
 
 The app discovers the router checkout from `MODEL_ROUTER_SOURCE_ROOT`, a saved
 bundle pointer, the source tree during development, or the standard install

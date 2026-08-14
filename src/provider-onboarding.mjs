@@ -22,6 +22,7 @@ import {
   writeProviderCredential,
 } from "./provider-credentials.mjs";
 import { disableProvider } from "./provider-selection.mjs";
+import { commandOnPath, spawnableCommand } from "./spawnable-command.mjs";
 
 const SIGN_IN_CLIS = Object.freeze({
   "kimi-oauth": {
@@ -68,11 +69,14 @@ function readNpmGlobalBinDir() {
   const npm = npmPath();
   if (!npm) return undefined;
   try {
-    const prefix = execFileSync(npm, ["prefix", "-g"], {
+    const npmPrefix = spawnableCommand(npm, ["prefix", "-g"]);
+    const prefix = execFileSync(npmPrefix.command, npmPrefix.args, {
+      ...npmPrefix.options,
       encoding: "utf8",
       env: spawnEnvironment(),
       timeout: 15_000,
       stdio: ["ignore", "pipe", "ignore"],
+      windowsHide: true,
     }).trim();
     if (!prefix) return undefined;
     // npm drops binaries straight into the prefix on Windows and into
@@ -84,17 +88,9 @@ function readNpmGlobalBinDir() {
 }
 
 function commandPath(name) {
-  const finder = process.platform === "win32" ? "where.exe" : "which";
-  try {
-    return execFileSync(finder, [name], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    })
-      .trim()
-      .split(/\r?\n/)[0];
-  } catch {
-    return undefined;
-  }
+  // Not the finder's first line: on Windows that is the extensionless npm
+  // shim, and every caller here goes on to spawn what it gets back.
+  return commandOnPath(name);
 }
 
 // A registry entry can declare a CLI session before anyone teaches this module
@@ -252,7 +248,10 @@ export function installOauthCli(providerId) {
   }
   const npm = npmPath();
   if (!npm) throw new Error("Node.js and npm are required to install this provider CLI.");
-  const result = spawnSync(npm, ["install", "-g", cli.npmPackage], {
+  const install = spawnableCommand(npm, ["install", "-g", cli.npmPackage]);
+  const result = spawnSync(install.command, install.args, {
+    ...install.options,
+    windowsHide: true,
     encoding: "utf8",
     env: spawnEnvironment(),
   });
@@ -360,7 +359,9 @@ export function loginOauthProvider(providerId) {
   }
   // The CLI itself is another `#!/usr/bin/env node` script, so signing in needs
   // the same PATH repair the install did.
-  const result = spawnSync(executable, oauthLoginArgs(providerId), {
+  const login = spawnableCommand(executable, oauthLoginArgs(providerId));
+  const result = spawnSync(login.command, login.args, {
+    ...login.options,
     encoding: "utf8",
     env: spawnEnvironment(),
     timeout: LOGIN_TIMEOUT_MS,
