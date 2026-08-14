@@ -13,8 +13,13 @@ process.env.CODEX_ROUTER_STATE_DIR = stateDir;
 // a test puts one there. Set before the module loads: the probe memoizes.
 // Not an empty directory -- the probe runs `which`, which has to stay findable
 // -- but the two system directories that never hold a Codex install.
-const emptyPathDir = "/usr/bin:/bin";
-process.env.PATH = emptyPathDir;
+//
+// POSIX only. On Windows this PATH would hide `powershell.exe`, which
+// `protectPrivateFile` needs to read the current SID -- so every test in this
+// file that writes protected state would fail on a detail none of them are
+// about. The probe's own tests skip there for the same reason.
+const emptyPathDir = process.platform === "win32" ? process.env.PATH : "/usr/bin:/bin";
+if (process.platform !== "win32") process.env.PATH = emptyPathDir;
 
 const {
   PRESENCE_ALWAYS,

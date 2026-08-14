@@ -7,8 +7,10 @@ import { test } from "node:test";
 const stateDir = mkdtempSync(path.join(os.tmpdir(), "dsh-install-test-"));
 process.env.CODEX_ROUTER_STATE_DIR = stateDir;
 // `which` has to stay findable; neither of these ever holds a harness install.
-const barePath = "/usr/bin:/bin";
-process.env.PATH = barePath;
+// POSIX only: on Windows this would hide `powershell.exe` from the helpers that
+// protect private files, failing tests over a detail they are not about.
+const barePath = process.platform === "win32" ? process.env.PATH : "/usr/bin:/bin";
+if (process.platform !== "win32") process.env.PATH = barePath;
 // PATH alone does not isolate this: the finder also asks npm where its global
 // binaries live, and that answer is independent of PATH. Point npm at an empty
 // prefix so the real harness on this machine cannot be mistaken for the fixture.

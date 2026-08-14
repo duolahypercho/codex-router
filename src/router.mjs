@@ -386,10 +386,23 @@ function nativeHeaders(request) {
 
 // The token out of an `Authorization: Bearer <token>` header, or undefined for
 // any other scheme -- which is relayed untouched rather than inspected.
+//
+// Parsed rather than matched. `/^Bearer\s+(.+)$/` reads well and backtracks
+// polynomially on a header of many spaces and no token, and this runs on a
+// header an unauthenticated caller controls. Scanning is linear and needs no
+// reasoning about which quantifiers can overlap.
+const BEARER_PREFIX = "bearer";
 function bearerToken(value) {
   if (typeof value !== "string") return undefined;
-  const match = /^Bearer\s+(.+)$/i.exec(value.trim());
-  return match ? match[1].trim() : undefined;
+  const trimmed = value.trim();
+  if (trimmed.length <= BEARER_PREFIX.length) return undefined;
+  if (trimmed.slice(0, BEARER_PREFIX.length).toLowerCase() !== BEARER_PREFIX) return undefined;
+  // The scheme and the token must be separated by whitespace, or `BearerX` and
+  // `Bearer X` would parse the same.
+  const separator = trimmed[BEARER_PREFIX.length];
+  if (separator !== " " && separator !== "\t") return undefined;
+  const token = trimmed.slice(BEARER_PREFIX.length + 1).trim();
+  return token || undefined;
 }
 
 // True when the caller authenticated to this router and brought no upstream

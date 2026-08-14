@@ -126,10 +126,16 @@ test("the router's own caller key is not an upstream credential", () => {
   const INTERNAL = "internal-key-0123456789abcdef";
 
   // The predicate the router applies, kept in step with router.mjs.
+  const PREFIX = "bearer";
   const bearer = (value) => {
     if (typeof value !== "string") return undefined;
-    const match = /^Bearer\s+(.+)$/i.exec(value.trim());
-    return match ? match[1].trim() : undefined;
+    const trimmed = value.trim();
+    if (trimmed.length <= PREFIX.length) return undefined;
+    if (trimmed.slice(0, PREFIX.length).toLowerCase() !== PREFIX) return undefined;
+    const separator = trimmed[PREFIX.length];
+    if (separator !== " " && separator !== "\t") return undefined;
+    const token = trimmed.slice(PREFIX.length + 1).trim();
+    return token || undefined;
   };
   const isRouterLocal = (header) => {
     const token = bearer(header);
@@ -258,4 +264,35 @@ test("status reports the remaining life, never the token", () => {
   const status = nativeSessionStatus();
   assert.ok(status.expiresInHours > 9 && status.expiresInHours <= 10);
   assert.doesNotMatch(JSON.stringify(status), new RegExp(ACCOUNT));
+});
+
+test("the bearer parser is linear and rejects the shapes it should", () => {
+  const PREFIX = "bearer";
+  const bearer = (value) => {
+    if (typeof value !== "string") return undefined;
+    const trimmed = value.trim();
+    if (trimmed.length <= PREFIX.length) return undefined;
+    if (trimmed.slice(0, PREFIX.length).toLowerCase() !== PREFIX) return undefined;
+    const separator = trimmed[PREFIX.length];
+    if (separator !== " " && separator !== "\t") return undefined;
+    const token = trimmed.slice(PREFIX.length + 1).trim();
+    return token || undefined;
+  };
+
+  assert.equal(bearer("Bearer abc"), "abc");
+  assert.equal(bearer("bearer\tabc"), "abc");
+  assert.equal(bearer("  Bearer   abc  "), "abc");
+  // A scheme with no separator is a different scheme, not a malformed one.
+  assert.equal(bearer("BearerX"), undefined);
+  assert.equal(bearer("Bearer"), undefined);
+  assert.equal(bearer("Bearer    "), undefined);
+  assert.equal(bearer("Basic abc"), undefined);
+
+  // The header comes from an unauthenticated caller. The old regex backtracked
+  // polynomially on this; parsing has to stay linear.
+  const hostile = `Bearer${" ".repeat(50_000)}`;
+  const started = process.hrtime.bigint();
+  assert.equal(bearer(hostile), undefined);
+  const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+  assert.ok(elapsedMs < 250, `parsing took ${elapsedMs.toFixed(1)}ms, which suggests backtracking`);
 });
