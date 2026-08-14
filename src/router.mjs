@@ -13,6 +13,7 @@ import { promisify } from "node:util";
 import {
   assertCallerSecret,
   authenticatedRoute,
+  secretEqual,
 } from "./caller-auth.mjs";
 import {
   applyKeepAliveTimeouts,
@@ -355,16 +356,40 @@ function nativeHeaders(request) {
       headers[name] = Array.isArray(value) ? value.join(", ") : value;
     }
   }
-  // A caller that brought its own session is relayed exactly as it arrived --
-  // Codex always does, so nothing about a Codex turn changes here. A caller
-  // that brought none (the harness, which has no ChatGPT login of its own)
-  // falls back to the session this machine is already signed in with, rather
-  // than being offered native models it could never spend.
-  if (!headers.authorization) {
+  // A caller that brought its own upstream session is relayed exactly as it
+  // arrived -- Codex always does, so nothing about a Codex turn changes here.
+  //
+  // "Brought none" is not the same as "sent no header". The harness
+  // authenticates to this router with the router's *own* caller key, as a
+  // bearer token, because a provider route has nowhere else to put a
+  // credential. That key means "you may use this router"; it is not an OpenAI
+  // credential, and forwarding it upstream earns exactly the "API key is
+  // invalid" it deserves -- besides handing a local secret to a remote host.
+  // So a router-local key counts as no upstream credential at all.
+  const presented = bearerToken(headers.authorization);
+  const routerLocal =
+    presented !== undefined &&
+    (secretEqual(presented, CALLER_KEY || "") || secretEqual(presented, INTERNAL_KEY || ""));
+  if (!headers.authorization || routerLocal) {
     const fallback = nativeSessionHeaders();
-    if (fallback) Object.assign(headers, fallback);
+    if (fallback) {
+      Object.assign(headers, fallback);
+    } else if (routerLocal) {
+      // Nothing to substitute. Send no credential rather than this one: the
+      // upstream 401 is the same either way, and a router secret must never
+      // leave the machine.
+      delete headers.authorization;
+    }
   }
   return headers;
+}
+
+// The token out of an `Authorization: Bearer <token>` header, or undefined for
+// any other scheme -- which is relayed untouched rather than inspected.
+function bearerToken(value) {
+  if (typeof value !== "string") return undefined;
+  const match = /^Bearer\s+(.+)$/i.exec(value.trim());
+  return match ? match[1].trim() : undefined;
 }
 
 function routedHeaders() {

@@ -986,10 +986,20 @@ machine is already signed in with, in `$CODEX_HOME/auth.json`. The user is
 signed in to Codex here; asking them to sign in again for a client running as
 the same user on the same machine buys nothing.
 
-- **Fallback, never override.** The injection happens only when the request
-  carried no `authorization` at all. Codex always carries one, so a Codex turn
-  is byte-identical to before — verified by relaying a deliberately invalid
-  token and getting that token's own 401 back rather than a success.
+- **Fallback, never override.** Injection happens only when the request carried
+  no *upstream* credential. Codex always carries one, so a Codex turn is
+  byte-identical to before — verified by relaying a deliberately invalid token
+  and getting that token's own 401 back rather than a success.
+- **"No credential" is not "no header".** The harness authenticates to this
+  router with the router's own caller key, sent as a bearer token, because a
+  provider route has nowhere else to put one. Testing `!headers.authorization`
+  therefore never fired for a real harness turn: the caller key went upstream
+  and every turn came back "API key is invalid". Compare the presented bearer
+  token against `CALLER_KEY` and `INTERNAL_KEY` and treat a match as no upstream
+  credential. When there is nothing to substitute, delete the header rather than
+  forward it — a router secret must never leave the machine.
+- Test the shape the client actually sends. A curl with no `Authorization`
+  header at all passes the naive guard and proves nothing.
 - **Publishable exactly while spendable.** `dshRoutedModels()` includes native
   models only while `nativeSessionAvailable()` is true, so the harness is never
   offered a model that would 401. `visibility: "hide"` entries stay unpublished:

@@ -113,3 +113,39 @@ test("an empty or malformed native catalog publishes nothing", () => {
   assert.deepEqual(dshNativeModels([]), []);
   assert.deepEqual(dshNativeModels([{ display_name: "no slug" }]), []);
 });
+
+// The bug this file exists to prevent a repeat of: the first version of the
+// fallback tested `!headers.authorization`, and a curl with no header at all
+// passed. The harness does not call that way -- its provider route has nowhere
+// to put a credential except `apiKeyEnv`, so it sends the router's own caller
+// key as a bearer token. The guard never fired, the caller key went upstream,
+// and every harness turn came back "API key is invalid".
+test("the router's own caller key is not an upstream credential", () => {
+  const CALLER = "caller-secret-0123456789abcdef";
+  const INTERNAL = "internal-key-0123456789abcdef";
+
+  // The predicate the router applies, kept in step with router.mjs.
+  const bearer = (value) => {
+    if (typeof value !== "string") return undefined;
+    const match = /^Bearer\s+(.+)$/i.exec(value.trim());
+    return match ? match[1].trim() : undefined;
+  };
+  const isRouterLocal = (header) => {
+    const token = bearer(header);
+    return token !== undefined && (token === CALLER || token === INTERNAL);
+  };
+
+  // What the harness sends: recognised as local, so the session substitutes.
+  assert.equal(isRouterLocal(`Bearer ${CALLER}`), true);
+  assert.equal(isRouterLocal(`bearer ${CALLER}`), true, "the scheme is case-insensitive");
+  assert.equal(isRouterLocal(`Bearer ${INTERNAL}`), true);
+
+  // What Codex sends: a real upstream token, relayed untouched.
+  assert.equal(isRouterLocal("Bearer sk-a-real-upstream-token"), false);
+  assert.equal(isRouterLocal("Bearer eyJhbGciOiJIUzI1NiJ9.payload.sig"), false);
+
+  // Anything that is not a bearer header is left alone rather than inspected.
+  assert.equal(isRouterLocal("Basic dXNlcjpwYXNz"), false);
+  assert.equal(isRouterLocal(undefined), false);
+  assert.equal(isRouterLocal(""), false);
+});
