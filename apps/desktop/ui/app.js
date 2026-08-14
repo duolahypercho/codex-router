@@ -12,9 +12,18 @@ import {
   visibleLocalDownload,
 } from "./model.mjs";
 import { createThinkingOrb } from "./thinking-orb.mjs";
+import {
+  applyTranslations,
+  availableLanguages,
+  getLanguage,
+  setLanguage,
+  t,
+} from "./i18n.mjs";
 
 const invoke = window.__TAURI__?.core?.invoke;
 const view = new URLSearchParams(window.location.search).get("view") || "panel";
+
+applyTranslations(document);
 
 if (view === "island") {
   document.getElementById("island").hidden = false;
@@ -108,7 +117,20 @@ function startPanel() {
     removeForm: document.getElementById("remove-form"),
     closeRemoveDialog: document.getElementById("close-remove-dialog"),
     cancelRemove: document.getElementById("cancel-remove"),
+    language: document.getElementById("language-select"),
   };
+
+  if (elements.language) {
+    elements.language.innerHTML = availableLanguages()
+      .map((language) => `<option value="${language.id}">${language.label}</option>`)
+      .join("");
+    elements.language.value = getLanguage();
+    elements.language.addEventListener("change", () => {
+      setLanguage(elements.language.value);
+      applyTranslations(document);
+      renderPanel();
+    });
+  }
 
   elements.tabs.forEach((button) => {
     button.addEventListener("click", () => selectTab(button.dataset.tab));
@@ -157,8 +179,8 @@ function startPanel() {
   });
 
   if (!invoke) {
-    elements.routerStatus.textContent = "Desktop bridge unavailable";
-    showToast("Open this surface from the Model Router desktop app.", true);
+    elements.routerStatus.textContent = t("status.desktopBridgeUnavailable");
+    showToast(t("general.desktopBridgeHint"), true);
     return;
   }
 
@@ -242,20 +264,14 @@ function startPanel() {
   function renderStatus() {
     const activity = state.health?.activity || {};
     const activityState = state.health?.ok === false ? "offline" : activity.state || "idle";
-    const labels = {
-      generating: "Thinking",
-      starting: "Starting",
-      offline: "Offline",
-      error: "Error",
-      idle: "Idle",
-    };
+    const labels = activityLabels();
     elements.liveState.dataset.state = activityState;
-    elements.liveState.querySelector("span").textContent = labels[activityState] || "Idle";
+    elements.liveState.querySelector("span").textContent = labels[activityState] || t("status.idle");
     if (state.health?.ok) {
       const model = activity.model ? ` · ${activity.model}` : "";
-      elements.routerStatus.textContent = `Router online${model}`;
+      elements.routerStatus.textContent = t("status.routerOnline", { model });
     } else {
-      elements.routerStatus.textContent = "Router offline · usage remains available";
+      elements.routerStatus.textContent = t("status.routerOffline");
     }
     renderModelSpeed(activity);
   }
@@ -264,14 +280,17 @@ function startPanel() {
     const active = activity.active?.at(-1);
     const model = active?.model || activity.model;
     const provider = active?.provider || activity.provider;
-    const label = model ? String(model).split("/").at(-1) : "No model observed";
+    const label = model ? String(model).split("/").at(-1) : t("status.noModelObserved");
     const observed = observedModelSpeed(state.providerUsage, provider, model);
     elements.speedModel.textContent = label;
-    elements.modelSpeed.textContent = observed ? `${observed.speed.toFixed(1)} tok/s` : "— tok/s";
+    elements.modelSpeed.textContent = observed ? `${observed.speed.toFixed(1)} tok/s` : t("status.noSpeed");
     elements.modelSpeed.classList.toggle("is-measured", Boolean(observed));
     elements.speedDetail.textContent = observed
-      ? `Observed output throughput · ${observed.samples} ${observed.samples === 1 ? "reply" : "replies"}`
-      : "Appears after a metered reply";
+      ? t("status.observedThroughput", {
+          count: observed.samples,
+          reply: observed.samples === 1 ? t("status.reply") : t("status.replies"),
+        })
+      : t("status.appearsAfterMeteredReply");
   }
 
   function renderSourcePicker() {
@@ -293,7 +312,7 @@ function startPanel() {
               `<option value="${escapeHtml(option.id)}"${option.id === state.selectedSource ? " selected" : ""}>${escapeHtml(option.name)}</option>`,
           )
           .join("")
-      : '<option value="">No connected usage</option>';
+      : `<option value="">${escapeHtml(t("usage.noConnectedUsage"))}</option>`;
   }
 
   function renderUsage() {
@@ -314,12 +333,12 @@ function startPanel() {
             return `<article class="quota-card">
               <header><span class="quota-provider">${escapeHtml(card.providerName)}</span><span class="quota-value">${percent}</span></header>
               <h3>${card.label}</h3>
-              <progress max="100" value="${progress}" aria-label="${escapeHtml(card.label)} ${percent} used"></progress>
+              <progress max="100" value="${progress}" aria-label="${escapeHtml(t("usage.used", { label: card.label, percent }))}"></progress>
               <p>${escapeHtml(formatReset(card.resetAt))}</p>
             </article>`;
           })
           .join("")
-      : '<div class="empty-state">Connect OAuth or add an API key to show provider limits here.</div>';
+      : `<div class="empty-state">${escapeHtml(t("connections.connectToShowLimits"))}</div>`;
   }
 
   function renderProviders() {
@@ -327,7 +346,7 @@ function startPanel() {
     const enabled = new Set(state.snapshot?.targets?.codex?.enabledProviders || []);
     elements.providers.innerHTML = providers.length
       ? providers.map((provider) => providerRow(provider, enabled.has(provider.id))).join("")
-      : '<div class="empty-state">Provider setup is unavailable while the router files cannot be found.</div>';
+      : `<div class="empty-state">${escapeHtml(t("connections.providerSetupUnavailable"))}</div>`;
   }
 
   function renderLoginFreeSetting() {
@@ -335,43 +354,52 @@ function startPanel() {
     elements.loginFreeSwitch.checked = enabled;
     elements.loginFreeSwitch.disabled = state.loginFreeBusy || state.busyProvider !== null;
     elements.loginFreeSwitchLabel.title = enabled
-      ? "External-provider mode is active for new Codex sessions."
-      : "Use the local router without signing in to OpenAI.";
+      ? t("connections.externalModeActive")
+      : t("connections.localRouterWithoutLogin");
     elements.loginFreeNote.textContent = enabled
-      ? "External providers · restart Codex to apply"
-      : "Use connected external models in new Codex sessions";
+      ? t("connections.externalProvidersRestart")
+      : t("connections.useConnectedModels");
   }
 
   function providerRow(provider, enabled) {
     const isBusy = state.busyProvider === provider.id;
-    const credentialLabel = provider.credentialLabel || "API key";
-    const kind = provider.kind === "oauth" ? "OAuth" : credentialLabel;
-    let detail = provider.configured ? `${kind} connected` : `${kind} not connected`;
+    const isApiKey = !provider.credentialLabel || provider.credentialLabel === "API key" || provider.credentialLabel === t("connections.apiKey");
+    const credentialLabel = isApiKey
+      ? t("connections.apiKey")
+      : provider.credentialLabel === "GitHub token" ? t("connections.githubToken") : provider.credentialLabel;
+    const kind = provider.kind === "oauth" ? t("connections.oauth") : credentialLabel;
+    let detail = provider.configured
+      ? t("connections.connected", { kind })
+      : t("connections.notConnected", { kind });
     let action = "";
     let actionLabel = "";
     if (provider.kind === "oauth") {
       action = provider.cliInstalled ? "login" : "install";
-      actionLabel = provider.cliInstalled ? (provider.configured ? "Reconnect" : "Sign in") : "Install CLI";
+      actionLabel = provider.cliInstalled
+        ? provider.configured ? t("connections.reconnect") : t("connections.signIn")
+        : t("connections.installCli");
     } else {
       action = "key";
-      actionLabel = credentialLabel === "API key"
-        ? provider.configured ? "Replace key" : "Add key"
-        : provider.configured ? `Replace ${credentialLabel}` : `Add ${credentialLabel}`;
+      actionLabel = isApiKey
+        ? provider.configured ? t("connections.replaceKey") : t("connections.addKey")
+        : provider.configured
+          ? t("connections.replaceCredential", { credential: credentialLabel })
+          : t("connections.addCredential", { credential: credentialLabel });
     }
-    if (isBusy) detail = "Working…";
+    if (isBusy) detail = t("status.working");
     const canRemove = provider.kind === "api" && provider.configured;
     return `<article class="provider-row">
-      <div><strong>${escapeHtml(provider.displayName)}</strong><small>${escapeHtml(detail)}</small>${provider.planNote ? `<small>${escapeHtml(provider.planNote)}</small>` : ""}</div>
+      <div><strong>${escapeHtml(provider.displayName)}</strong><small>${escapeHtml(detail)}</small>${provider.planNote ? `<small>${escapeHtml(localizeProviderPlan(provider.planNote))}</small>` : ""}</div>
       <div class="provider-actions">
         <button class="mini-button" type="button" data-action="${action}" data-provider="${escapeHtml(provider.id)}"${isBusy ? " disabled" : ""}>${escapeHtml(actionLabel)}</button>
         ${
           canRemove
-            ? `<button class="mini-button danger" type="button" data-action="remove-key" data-provider="${escapeHtml(provider.id)}" aria-label="Remove ${escapeHtml(provider.displayName)} credential"${isBusy ? " disabled" : ""}>Remove</button>`
+            ? `<button class="mini-button danger" type="button" data-action="remove-key" data-provider="${escapeHtml(provider.id)}" aria-label="${escapeHtml(t("connections.removeCredentialAria", { provider: provider.displayName }))}"${isBusy ? " disabled" : ""}>${escapeHtml(t("actions.remove"))}</button>`
             : ""
         }
         ${
           provider.configured
-            ? `<label class="provider-check"><input type="checkbox" data-provider="${escapeHtml(provider.id)}" aria-label="Enable ${escapeHtml(provider.displayName)}"${enabled ? " checked" : ""}${isBusy ? " disabled" : ""}></label>`
+            ? `<label class="provider-check"><input type="checkbox" data-provider="${escapeHtml(provider.id)}" aria-label="${escapeHtml(t("connections.enableProviderAria", { provider: provider.displayName }))}"${enabled ? " checked" : ""}${isBusy ? " disabled" : ""}></label>`
             : ""
         }
       </div>
@@ -382,10 +410,10 @@ function startPanel() {
     const supported = state.platform?.islandSupported !== false;
     elements.islandSwitch.disabled = !supported;
     elements.islandSwitch.checked = supported && state.settings?.islandEnabled !== false;
-    elements.islandSwitchLabel.title = supported ? "" : state.platform?.islandReason || "Unavailable";
+    elements.islandSwitchLabel.title = supported ? "" : state.platform?.islandReason || t("footer.unavailable");
     elements.islandNote.textContent = supported
-      ? "Top-center live activity · hover for daily graph"
-      : state.platform?.islandReason || "Unavailable on this desktop session";
+      ? t("footer.topCenterGraph")
+      : state.platform?.islandReason || t("general.unavailableThisSession");
   }
 
   function toggleAccordion(button) {
@@ -441,7 +469,9 @@ function startPanel() {
     // for a picker toggle.
     function providerGroupsMarkup(groups, rowMarkup, setting, groupSummary) {
       const [onLabel, offLabel] =
-        setting === "picker" ? ["Show all", "Hide all"] : ["Subagents on", "Subagents off"];
+        setting === "picker"
+          ? [t("actions.showAll"), t("actions.hideAll")]
+          : [t("actions.subagentsOn"), t("actions.subagentsOff")];
       return groups
         .map(
           (group) => `<details class="model-provider-group" open>
@@ -458,8 +488,7 @@ function startPanel() {
 
     elements.subagentAllSwitch.disabled = state.modelSettingsBusy;
     elements.subagentAllSwitch.checked = subagent.mode === "all";
-    elements.subagentAllSwitchLabel.title =
-      "Only registry-proven v2 models can be exposed as Codex subagents.";
+    elements.subagentAllSwitchLabel.title = t("models.onlyProvenV2");
 
     // Models hidden from the picker are forced off as subagents, so their
     // rows here were permanently locked noise. They are filtered out; the
@@ -480,41 +509,45 @@ function startPanel() {
         : !disabledSubagents.has(model.slug);
     const subagentRow = (model) => {
         const checked = isSubagentOn(model);
-        const badge = " · proven v2";
+        const badge = t("models.provenV2");
         return `<label class="model-setting-row">
           <span><strong>${escapeHtml(model.displayName)}</strong><small>${escapeHtml(badge)}</small></span>
-          <span class="provider-check"><input type="checkbox" data-subagent="${escapeHtml(model.slug)}" aria-label="Use ${escapeHtml(model.displayName)} as a subagent"${checked ? " checked" : ""}${state.modelSettingsBusy ? " disabled" : ""}></span>
+          <span class="provider-check"><input type="checkbox" data-subagent="${escapeHtml(model.slug)}" aria-label="${escapeHtml(t("models.useModelAria", { model: model.displayName }))}"${checked ? " checked" : ""}${state.modelSettingsBusy ? " disabled" : ""}></span>
         </label>`;
       };
 
     const hiddenSubagentNote = hiddenSubagentCount
-      ? `<div class="model-settings-note">${hiddenSubagentCount} model${
-          hiddenSubagentCount === 1 ? " is" : "s are"
-        } hidden from the picker and not listed here. Show ${
-          hiddenSubagentCount === 1 ? "it" : "them"
-        } in the picker section below to use ${
-          hiddenSubagentCount === 1 ? "it" : "them"
-        } as ${hiddenSubagentCount === 1 ? "a subagent" : "subagents"}.</div>`
+      ? `<div class="model-settings-note">${escapeHtml(t(
+          hiddenSubagentCount === 1 ? "models.hiddenFromPickerOne" : "models.hiddenFromPickerMany",
+          { count: hiddenSubagentCount },
+        ))}</div>`
       : "";
     elements.subagentModelList.innerHTML = subagentGroups.length
       ? providerGroupsMarkup(
           subagentGroups,
           subagentRow,
           "subagents",
-          (group) => `${group.items.filter(isSubagentOn).length} of ${group.items.length} on`,
+          (group) => t("models.providerCountOn", {
+            on: group.items.filter(isSubagentOn).length,
+            total: group.items.length,
+          }),
         ) + hiddenSubagentNote
-      : `<div class="empty-state">Enable a provider to choose subagent models here.</div>${hiddenSubagentNote}`;
+      : `<div class="empty-state">${escapeHtml(t("models.enableProviderForSubagents"))}</div>${hiddenSubagentNote}`;
     const subagentCount = subagentModels.filter(
       (model) => !disabledSubagents.has(model.slug),
     ).length;
-    elements.subagentSummary.textContent = `${subagentCount} subagent model${subagentCount === 1 ? "" : "s"} · ${subagent.mode}`;
+    elements.subagentSummary.textContent = t("models.subagentSummary", {
+      count: subagentCount,
+      plural: subagentCount === 1 ? "" : "s",
+      mode: localizeSubagentMode(subagent.mode),
+    });
 
     const pickerGroups = groupModels(pickerModels);
     const pickerRow = (model) => {
         const visible = !hiddenModels.has(model.slug);
         return `<label class="model-setting-row">
           <span><strong>${escapeHtml(model.displayName)}</strong><small>${escapeHtml(model.slug)}</small></span>
-          <span class="provider-check"><input type="checkbox" data-picker="${escapeHtml(model.slug)}" aria-label="Show ${escapeHtml(model.displayName)} in the picker"${visible ? " checked" : ""}${state.modelSettingsBusy ? " disabled" : ""}></span>
+          <span class="provider-check"><input type="checkbox" data-picker="${escapeHtml(model.slug)}" aria-label="${escapeHtml(t("models.showModelAria", { model: model.displayName }))}"${visible ? " checked" : ""}${state.modelSettingsBusy ? " disabled" : ""}></span>
         </label>`;
       };
 
@@ -524,13 +557,14 @@ function startPanel() {
           pickerRow,
           "picker",
           (group) =>
-            `${group.items.filter((model) => !hiddenModels.has(model.slug)).length} of ${
-              group.items.length
-            } visible`,
+            t("models.providerCountVisible", {
+              visible: group.items.filter((model) => !hiddenModels.has(model.slug)).length,
+              total: group.items.length,
+            }),
         )
-      : '<div class="empty-state">No enabled models to show.</div>';
+      : `<div class="empty-state">${escapeHtml(t("models.noEnabledModels"))}</div>`;
     const pickerCount = pickerModels.filter((model) => !hiddenModels.has(model.slug)).length;
-    elements.pickerSummary.textContent = `${pickerCount} visible · ${hiddenModels.size} hidden`;
+    elements.pickerSummary.textContent = `${pickerCount} ${t("models.visible")} · ${hiddenModels.size} ${t("models.hidden")}`;
   }
 
   function formatCompactCount(value) {
@@ -553,11 +587,11 @@ function startPanel() {
     elements.toolResultAgingSwitch.checked = aging?.enabled !== false;
     elements.toolResultAgingSwitch.disabled = state.toolResultAgingBusy || overridden;
     elements.toolResultAgingSwitchLabel.title = overridden
-      ? "Forced off by CODEX_ROUTER_TOOL_RESULT_AGING=0"
-      : "Applies to the next external-model request without a restart.";
+      ? t("models.toolAgingForcedOff")
+      : t("models.toolAgingNextRequest");
     elements.toolResultAgingNote.textContent = overridden
-      ? "Forced off by the environment override"
-      : `${toolResultAgingSavingsLine(aging?.stats)}Receipts replace consumed results over 32 KiB; the four newest stay intact`;
+      ? t("models.toolAgingEnvironment")
+      : `${toolResultAgingSavingsLine(aging?.stats)}${t("models.toolAgingNote")}`;
   }
 
   function renderLocalModels() {
@@ -566,13 +600,18 @@ function startPanel() {
     const download = visibleLocalDownload(local);
     const busy = state.localModelBusy;
     elements.localModelSummary.textContent = installed.length
-      ? `${installed.length} installed · ${(Number(local.totalGb) || 0).toFixed(1)} GB`
-      : "none installed";
+      ? t("models.installedSummary", {
+          count: installed.length,
+          size: (Number(local.totalGb) || 0).toFixed(1),
+        })
+      : t("models.noneInstalled");
 
     elements.localModelOperation.hidden = !busy;
     if (busy) {
-      const label = busy.kind === "uninstall" ? "Uninstalling" : busy.kind === "install" ? "Installing" : "Applying";
-      elements.localModelOperation.innerHTML = `<span class="operation-pulse" aria-hidden="true"></span><span><strong>${label} local model</strong><small>${escapeHtml(busy.tag)}</small></span><span class="operation-spinner" aria-hidden="true"></span>`;
+      const label = busy.kind === "uninstall"
+        ? t("status.uninstalling")
+        : busy.kind === "install" ? t("status.installing") : t("status.applying");
+      elements.localModelOperation.innerHTML = `<span class="operation-pulse" aria-hidden="true"></span><span><strong>${escapeHtml(label)} ${escapeHtml(t("models.localModel"))}</strong><small>${escapeHtml(busy.tag)}</small></span><span class="operation-spinner" aria-hidden="true"></span>`;
       elements.localModelOperation.classList.toggle("is-danger", busy.kind === "uninstall");
     }
 
@@ -580,11 +619,13 @@ function startPanel() {
       const running = download.status === "downloading";
       const failed = download.status === "error";
       const percent = Math.max(0, Math.min(100, Number(download.percent) || 0));
-      const title = failed ? "Local model install failed" : running ? "Installing local model" : "Local model ready";
+      const title = failed
+        ? t("status.localModelInstallFailed")
+        : running ? t("status.installingLocalModel") : t("status.localModelReady");
       elements.localDownloadStatus.innerHTML = `<div class="download-status${failed ? " is-error" : running ? " is-running" : " is-ready"}">
         <div><span class="operation-pulse" aria-hidden="true"></span><strong>${title}</strong><span>${failed ? "" : `${percent}%`}</span></div>
-        <small>${escapeHtml(download.tag || "Local model")}${download.error || download.detail ? ` · ${escapeHtml(download.error || download.detail)}` : ""}</small>
-        ${running ? `<progress max="100" value="${percent}" aria-label="Installing ${escapeHtml(download.tag || "local model")} ${percent}%"></progress>` : ""}
+        <small>${escapeHtml(download.tag || t("models.localLlms"))}${download.error || download.detail ? ` · ${escapeHtml(download.error || localizeDownloadDetail(download.detail))}` : ""}</small>
+        ${running ? `<progress max="100" value="${percent}" aria-label="${escapeHtml(t("status.installingLocalModel"))} ${escapeHtml(download.tag || t("models.localLlms"))} ${percent}%"></progress>` : ""}
       </div>`;
     } else {
       elements.localDownloadStatus.innerHTML = "";
@@ -592,17 +633,17 @@ function startPanel() {
 
     elements.localModelList.innerHTML = installed.length
       ? installed.map((model) => localModelRow(model, busy)).join("")
-      : '<div class="empty-state local-empty">Nothing installed. Choose a quick pick or enter an Ollama tag below.</div>';
+      : `<div class="empty-state local-empty">${escapeHtml(t("models.nothingInstalled"))}</div>`;
 
     const installBusy = Boolean(busy) || download?.status === "downloading";
     elements.localModelInput.disabled = installBusy;
     elements.localModelForm.querySelector("button").disabled = installBusy;
     const picks = (local.available || []).slice(0, 4);
     elements.localQuickPicks.innerHTML = picks.length
-      ? `<div class="local-section-label"><span>Quick picks</span><small>recommended for this machine</small></div>${picks
+      ? `<div class="local-section-label"><span>${escapeHtml(t("models.quickPicks"))}</span><small>${escapeHtml(t("models.recommendedForMachine"))}</small></div>${picks
           .map(
             (model) => `<button type="button" class="quick-pick" data-local-action="install" data-model="${escapeHtml(model.tag)}"${installBusy ? " disabled" : ""}>
-              <span><strong>${escapeHtml(model.tag)}</strong><small>${escapeHtml(model.codex === "verified" ? "verified in Codex" : model.fit || "untested")}</small></span>
+              <span><strong>${escapeHtml(model.tag)}</strong><small>${escapeHtml(model.codex === "verified" ? t("models.verifiedInCodex") : model.fit || t("models.untested"))}</small></span>
               <span>${Number(model.sizeGb || 0).toFixed(1)} GB</span>
             </button>`,
           )
@@ -616,15 +657,15 @@ function startPanel() {
     const speed = model.tokensPerSecond === null || model.tokensPerSecond === undefined
       ? Number.NaN
       : Number(model.tokensPerSecond);
-    const detail = [
-      model.agent === "agent" ? "works in Codex" : model.tools ? "chat untested" : "no tool calling",
-      Number.isFinite(speed) ? `${speed.toFixed(1)} tok/s` : "speed unmeasured",
+      const detail = [
+      model.agent === "agent" ? t("models.worksInCodex") : model.tools ? t("models.chatUntested") : t("models.noToolCalling"),
+      Number.isFinite(speed) ? `${speed.toFixed(1)} tok/s` : t("models.speedUnmeasured"),
     ].join(" · ");
     return `<article class="local-model-row${isBusy ? " is-busy" : ""}">
-      <label class="provider-check"><input type="checkbox" data-local-toggle="${escapeHtml(model.tag)}" aria-label="Enable ${escapeHtml(model.tag)} in Codex"${model.enabled ? " checked" : ""}${busy || model.tools !== true ? " disabled" : ""}></label>
+      <label class="provider-check"><input type="checkbox" data-local-toggle="${escapeHtml(model.tag)}" aria-label="${escapeHtml(t("models.enableLocalAria", { model: model.tag }))}"${model.enabled ? " checked" : ""}${busy || model.tools !== true ? " disabled" : ""}></label>
       <div><strong>${escapeHtml(model.tag)}</strong><small>${escapeHtml(detail)}</small></div>
       <span class="local-size">${Number(model.sizeGb || 0).toFixed(1)} GB</span>
-      <button class="mini-button danger" type="button" data-local-action="${armed ? "confirm-remove" : "remove"}" data-model="${escapeHtml(model.tag)}"${busy ? " disabled" : ""}>${armed ? "Confirm" : "Remove"}</button>
+      <button class="mini-button danger" type="button" data-local-action="${armed ? "confirm-remove" : "remove"}" data-model="${escapeHtml(model.tag)}"${busy ? " disabled" : ""}>${armed ? escapeHtml(t("actions.confirm")) : escapeHtml(t("actions.remove"))}</button>
     </article>`;
   }
 
@@ -632,7 +673,7 @@ function startPanel() {
     event.preventDefault();
     const model = elements.localModelInput.value.trim();
     if (!model) {
-      showToast("Enter an Ollama model tag or model-page URL.", true);
+      showToast(t("models.enterOllamaTag"), true);
       return;
     }
     elements.localModelInput.value = "";
@@ -661,7 +702,7 @@ function startPanel() {
       state.localModels = await call("uninstall_local_model", { model });
       const remaining = 800 - (Date.now() - startedAt);
       if (remaining > 0) await new Promise((resolve) => window.setTimeout(resolve, remaining));
-      showToast(`${model} removed from this machine.`);
+      showToast(t("models.localModelRemoved", { model }));
       await refreshPanel({ quiet: true });
     } catch (error) {
       showToast(errorMessage(error), true);
@@ -712,7 +753,7 @@ function startPanel() {
       // A model rated too large is refused once, not hidden. Ask, then retry
       // with the override so every catalog entry stays installable.
       if (!force && detail.includes("--force")) {
-        if (window.confirm(`${detail}\n\nDownload ${model} anyway?`)) {
+        if (window.confirm(`${detail}\n\n${t("models.downloadAnyway", { model })}`)) {
           await startLocalInstall(model, { force: true });
         }
         return;
@@ -733,9 +774,9 @@ function startPanel() {
       }
       state.localModelBusy = null;
       if (download?.status === "done") {
-        showToast(`${download.tag || model} is ready. Restart Codex to refresh its model picker.`);
+        showToast(t("models.localModelReadyRestart", { model: download.tag || model }));
       } else if (download?.status === "error") {
-        showToast(download.error || "The local model install failed.", true);
+        showToast(download.error || t("models.localModelInstallError"), true);
       }
       await refreshPanel({ quiet: true });
     } catch (error) {
@@ -752,7 +793,7 @@ function startPanel() {
     renderModelSettings();
     try {
       state.snapshot = await call("set_subagent_mode", { mode });
-      showToast(enabled ? "All enabled models can now run as subagents." : "Subagent mode updated.");
+      showToast(enabled ? t("models.allSubagentsEnabled") : t("models.subagentModeUpdated"));
       await refreshPanel({ quiet: true });
     } catch (error) {
       elements.subagentAllSwitch.checked = !enabled;
@@ -779,8 +820,8 @@ function startPanel() {
         }
         showToast(
           setting === "subagents"
-            ? `${provider} models ${enabled ? "on" : "off"} as subagents. They stay in Codex's picker. Restart Codex to refresh its subagents.`
-            : `${provider} models ${enabled ? "shown in" : "hidden from"} the picker. Restart Codex to refresh it.`,
+            ? t(enabled ? "models.providerSubagentsOn" : "models.providerSubagentsOff", { provider })
+            : t(enabled ? "models.providerShown" : "models.providerHidden", { provider }),
         );
         await refreshPanel({ quiet: true });
       } catch (error) {
@@ -801,15 +842,11 @@ function startPanel() {
       if (group === "subagents") {
         const selectAll = action === "select-all";
         state.snapshot = await call("set_subagent_selection", { selectAll });
-        showToast(
-          `${selectAll ? "Every picker-visible model can now run as a subagent." : "Subagent selection cleared. Models stay in Codex's picker."} Restart Codex to refresh its subagents.`,
-        );
+        showToast(t(selectAll ? "models.everyPickerModelSubagent" : "models.subagentSelectionCleared"));
       } else {
         const showAll = action === "show-all";
         state.snapshot = await call("set_picker_models", { showAll });
-        showToast(
-          `${showAll ? "Every model is visible in the picker." : "All models hidden from the picker."} Restart Codex to refresh it.`,
-        );
+        showToast(t(showAll ? "models.everyModelVisible" : "models.allModelsHidden"));
       }
       await refreshPanel({ quiet: true });
     } catch (error) {
@@ -832,15 +869,13 @@ function startPanel() {
           slug: subagent.dataset.subagent,
           enabled: subagent.checked,
         });
-        showToast(
-          "Subagent selection updated. The model stays in Codex's picker. Restart Codex to refresh its subagents.",
-        );
+        showToast(t("models.subagentSelectionUpdated"));
       } else {
         state.snapshot = await call("set_picker_model", {
           slug: picker.dataset.picker,
           visible: picker.checked,
         });
-        showToast("Model picker updated. Restart Codex to refresh its picker.");
+        showToast(t("models.pickerUpdated"));
       }
       await refreshPanel({ quiet: true });
     } catch (error) {
@@ -860,13 +895,16 @@ function startPanel() {
     const action = button.dataset.action;
     if (action === "key") {
       const setup = state.providerSetup?.providers?.find((item) => item.id === provider);
-      const credentialLabel = setup?.credentialLabel || "API key";
-      const credentialNoun = credentialLabel === "API key" ? "key" : credentialLabel;
+      const isApiKey = !setup?.credentialLabel || setup.credentialLabel === "API key" || setup.credentialLabel === t("connections.apiKey");
+      const credentialLabel = isApiKey
+        ? t("connections.apiKey")
+        : setup.credentialLabel === "GitHub token" ? t("connections.githubToken") : setup.credentialLabel;
+      const credentialNoun = credentialLabel;
       state.keyProvider = provider;
       elements.keyTitle.textContent = setup?.configured
-        ? `Replace ${setup.displayName} ${credentialNoun}`
-        : `Add ${setup?.displayName || "API"} ${credentialNoun}`;
-      elements.keyInput.placeholder = `Paste ${credentialLabel.toLowerCase()}`;
+        ? t("connections.replaceCredentialTitle", { provider: setup.displayName, credential: credentialNoun })
+        : t("connections.addCredentialTitle", { provider: setup?.displayName || "API", credential: credentialNoun });
+      elements.keyInput.placeholder = t("connections.pasteCredentialType", { credential: credentialNoun });
       elements.keyDialog.showModal();
       requestAnimationFrame(() => elements.keyInput.focus());
       return;
@@ -874,12 +912,15 @@ function startPanel() {
 
     if (action === "remove-key") {
       const setup = state.providerSetup?.providers?.find((item) => item.id === provider);
-      const name = setup?.displayName || "this provider";
-      const credentialLabel = setup?.credentialLabel || "API key";
-      const credentialNoun = credentialLabel === "API key" ? "key" : credentialLabel;
+      const name = setup?.displayName || t("general.provider");
+      const isApiKey = !setup?.credentialLabel || setup.credentialLabel === "API key" || setup.credentialLabel === t("connections.apiKey");
+      const credentialLabel = isApiKey
+        ? t("connections.apiKey")
+        : setup.credentialLabel === "GitHub token" ? t("connections.githubToken") : setup.credentialLabel;
+      const credentialNoun = credentialLabel;
       state.removeProvider = provider;
-      elements.removeTitle.textContent = `Remove ${name} ${credentialNoun}`;
-      elements.removeBody.textContent = `The stored ${name} ${credentialLabel.toLowerCase()} is deleted from this machine and ${name} is hidden from the Codex model picker. You can add a new credential at any time.`;
+      elements.removeTitle.textContent = t("connections.removeCredentialTitle", { provider: name, credential: credentialNoun });
+      elements.removeBody.textContent = t("connections.removeBodyDynamic", { provider: name, credential: credentialNoun });
       elements.removeDialog.showModal();
       requestAnimationFrame(() => elements.cancelRemove.focus());
       return;
@@ -890,10 +931,10 @@ function startPanel() {
     try {
       if (action === "install") {
         await call("install_provider_cli", { provider });
-        showToast("Official provider CLI installed. Sign in to continue.");
+        showToast(t("connections.officialCliInstalled"));
       } else if (action === "login") {
         await call("connect_oauth", { provider });
-        showToast("Provider connected. Restart Codex to refresh its model picker.");
+        showToast(t("connections.providerConnected"));
       }
       await refreshPanel({ quiet: true });
     } catch (error) {
@@ -913,7 +954,7 @@ function startPanel() {
     state.busyProvider = provider;
     try {
       state.snapshot = await call("set_provider_enabled", { provider, enabled });
-      showToast(enabled ? "Provider enabled." : "Provider hidden from Codex.");
+      showToast(enabled ? t("connections.providerEnabled") : t("connections.providerHidden"));
       await refreshPanel({ quiet: true });
     } catch (error) {
       checkbox.checked = !enabled;
@@ -946,8 +987,8 @@ function startPanel() {
       state.snapshot = await call("set_login_free", { enabled });
       showToast(
         enabled
-          ? "OpenAI login disabled for new Codex sessions. Restart Codex to apply."
-          : "OpenAI login restored for new Codex sessions. Restart Codex to apply.",
+          ? t("connections.openAILoginDisabled")
+          : t("connections.openAILoginRestored"),
       );
     } catch (error) {
       elements.loginFreeSwitch.checked = !enabled;
@@ -967,8 +1008,8 @@ function startPanel() {
       await refreshPanel({ quiet: true });
       showToast(
         enabled
-          ? "Old tool-result compaction is on for the next external-model request."
-          : "Exact tool results will be sent on the next external-model request.",
+          ? t("models.toolAgingOn")
+          : t("models.toolAgingExact"),
       );
     } catch (error) {
       elements.toolResultAgingSwitch.checked = !enabled;
@@ -990,7 +1031,7 @@ function startPanel() {
     renderProviders();
     try {
       await call("save_api_key", { provider, apiKey });
-      showToast("Credential saved. Restart Codex to refresh its model picker.");
+      showToast(t("connections.credentialSaved"));
       await refreshPanel({ quiet: true });
     } catch (error) {
       showToast(errorMessage(error), true);
@@ -1069,7 +1110,7 @@ function startIsland() {
   elements.root.addEventListener("click", () => call("show_panel"));
 
   if (!invoke) {
-    elements.state.textContent = "Unavailable";
+    elements.state.textContent = t("status.unavailable");
     elements.root.dataset.state = "offline";
     return;
   }
@@ -1119,15 +1160,9 @@ function startIsland() {
   function renderIsland() {
     const activity = state.health?.activity || {};
     const activityState = state.health?.ok === false ? "offline" : activity.state || "idle";
-    const labels = {
-      generating: "Thinking",
-      starting: "Starting",
-      offline: "Offline",
-      error: "Error",
-      idle: "Idle",
-    };
+    const labels = activityLabels();
     elements.root.dataset.state = activityState;
-    elements.state.textContent = labels[activityState] || "Idle";
+    elements.state.textContent = labels[activityState] || t("status.idle");
     if (elements.orbit) {
       const orbMode = {
         generating: "composing",
@@ -1143,9 +1178,9 @@ function startIsland() {
     const source = options.find((option) => option.id === requested) || options[0];
     elements.provider.textContent = activityState === "generating" && activity.model
       ? activity.model
-      : source?.name || "Model Router";
+      : source?.name || t("island.modelRouter");
     elements.tokens.textContent = source ? compactTokens(todayTokens(source)) : "—";
-    elements.week.textContent = source ? `${compactTokens(sevenDayTokens(source))} tokens` : "No usage yet";
+    elements.week.textContent = source ? `${compactTokens(sevenDayTokens(source))} ${t("usage.tokens")}` : t("island.noUsageYet");
 
     const weekly = buildQuotaCards(state).find(
       (card) => card.providerId === source?.id && card.window === "weekly",
@@ -1160,7 +1195,12 @@ function startIsland() {
     elements.area.setAttribute("d", geometry.area);
     elements.root.setAttribute(
       "aria-label",
-      `${labels[activityState] || "Idle"}. ${source ? `${exactTokens(todayTokens(source))} tokens today.` : "No usage data."}`,
+      t("island.ariaLabel", {
+        state: labels[activityState] || t("status.idle"),
+        details: source
+          ? t("island.tokensToday", { count: exactTokens(todayTokens(source)) })
+          : t("usage.noUsageData"),
+      }),
     );
   }
 
@@ -1175,6 +1215,40 @@ function startIsland() {
       elements.root.classList.remove("is-expanded");
     }
   }
+}
+
+function activityLabels() {
+  return {
+    generating: t("status.thinking"),
+    starting: t("status.starting"),
+    offline: t("status.offline"),
+    error: t("status.error"),
+    idle: t("status.idle"),
+  };
+}
+
+function localizeProviderPlan(note) {
+  const value = String(note || "");
+  if (getLanguage() === "zh-CN") {
+    if (value.includes("Needs the Command Code Provider plan")) return "需要 Command Code Provider 方案。";
+    if (value.includes("Requires Copilot access")) return "需要 Copilot 访问权限。连接后，请运行 ./bin/curate-models github-copilot。";
+    if (value.includes("Requires an active ClinePass subscription")) return "需要有效的 ClinePass 订阅。";
+    if (value.includes("Runs on this machine")) return "在此设备上运行。使用这些模型前请先启动 Ollama。";
+  }
+  return value;
+}
+
+function localizeSubagentMode(mode) {
+  const key = {
+    proven: "models.modeProven",
+    selected: "models.modeSelected",
+    all: "models.modeAll",
+  }[mode];
+  return key ? t(key) : mode || t("models.modeProven");
+}
+
+function localizeDownloadDetail(detail) {
+  return detail === "starting" ? t("models.downloadStarting") : detail;
 }
 
 function renderChart(series, elements) {
@@ -1205,7 +1279,9 @@ function renderChart(series, elements) {
       elements.chartPoints.querySelectorAll(".chart-point").forEach((item) => item.classList.remove("is-active"));
       dot.classList.add("is-active");
       elements.chartTooltip.querySelector("span").textContent = series[index].longLabel;
-      elements.chartTooltip.querySelector("strong").textContent = `${exactTokens(series[index].tokens)} tokens`;
+      elements.chartTooltip.querySelector("strong").textContent = t("usage.tooltipTokens", {
+        count: exactTokens(series[index].tokens),
+      });
       elements.chartTooltip.style.left = `${(point.x / 328) * 100}%`;
       elements.chartTooltip.style.top = `${point.y}px`;
       elements.chartTooltip.hidden = false;
@@ -1227,25 +1303,28 @@ function svgElement(name, attributes) {
 }
 
 function call(command, args) {
-  if (!invoke) return Promise.reject(new Error("Desktop bridge unavailable."));
+  if (!invoke) return Promise.reject(new Error(t("status.desktopBridgeUnavailable")));
   return invoke(command, args);
 }
 
 // A key can also come from the macOS Keychain or the environment, which the
 // router cannot delete, so say so rather than reporting a clean disconnect.
 function removalMessage(removal) {
-  const name = removal?.displayName || "The provider";
+  const name = removal?.displayName || t("general.provider");
   if (removal?.stillConfigured) {
-    return `${name} key removed from local storage, but a key is still active from ${removal.remainingSource || "another source"}.`;
+    return t("general.keyRemovedStillActive", {
+      provider: name,
+      source: removal.remainingSource || t("general.anotherSource"),
+    });
   }
   if (removal && removal.removedFiles === 0) {
-    return `No stored ${name} key was found.`;
+    return t("general.noStoredKey", { provider: name });
   }
-  return `${name} key removed. Restart Codex to refresh its model picker.`;
+  return t("general.keyRemovedRestart", { provider: name });
 }
 
 function errorMessage(error) {
-  const message = typeof error === "string" ? error : error?.message || "The operation could not be completed.";
+  const message = typeof error === "string" ? error : error?.message || t("general.operationFailed");
   return String(message).replace(/\s+/g, " ").trim().slice(0, 500);
 }
 

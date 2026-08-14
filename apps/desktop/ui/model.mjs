@@ -1,3 +1,5 @@
+import { getLocale, t } from "./i18n.mjs";
+
 const DAY_MS = 24 * 60 * 60 * 1_000;
 
 export function clampPercent(value) {
@@ -8,13 +10,13 @@ export function clampPercent(value) {
 
 export function compactTokens(value) {
   const tokens = Math.max(0, Number(value) || 0);
-  if (tokens < 1_000) return Math.round(tokens).toLocaleString("en-US");
+  if (tokens < 1_000) return Math.round(tokens).toLocaleString(getLocale());
   if (tokens < 1_000_000) return `${trimFixed(tokens / 1_000, tokens < 10_000 ? 1 : 0)}k`;
   return `${trimFixed(tokens / 1_000_000, tokens < 10_000_000 ? 1 : 0)}m`;
 }
 
 export function exactTokens(value) {
-  return Math.max(0, Math.round(Number(value) || 0)).toLocaleString("en-US");
+  return Math.max(0, Math.round(Number(value) || 0)).toLocaleString(getLocale());
 }
 
 export function localDateKey(date) {
@@ -34,8 +36,8 @@ export function dailySeries(buckets = [], days = 7, today = new Date()) {
     const key = localDateKey(date);
     return {
       key,
-      label: new Intl.DateTimeFormat("en-US", { weekday: "short" }).format(date),
-      longLabel: new Intl.DateTimeFormat("en-US", {
+      label: new Intl.DateTimeFormat(getLocale(), { weekday: "short" }).format(date),
+      longLabel: new Intl.DateTimeFormat(getLocale(), {
         month: "short",
         day: "numeric",
       }).format(date),
@@ -71,10 +73,10 @@ export function quotaWindow(metric = {}) {
     label.includes("five-hour") ||
     minutes === 300
   ) {
-    return { key: "five-hour", label: "5-hour limit" };
+    return { key: "five-hour", label: t("usage.fiveHourLimit") };
   }
   if (label.includes("week") || minutes === 10_080) {
-    return { key: "weekly", label: "Weekly limit" };
+    return { key: "weekly", label: t("usage.weeklyLimit") };
   }
   return null;
 }
@@ -156,23 +158,23 @@ export function sourceOptions({ account, providerUsage, providerSetup } = {}) {
 }
 
 export function formatReset(unixSeconds, now = new Date()) {
-  if (!Number.isFinite(Number(unixSeconds)) || Number(unixSeconds) <= 0) return "Reset time unavailable";
+  if (!Number.isFinite(Number(unixSeconds)) || Number(unixSeconds) <= 0) return t("usage.resetUnavailable");
   const date = new Date(Number(unixSeconds) * 1_000);
   const sameDay = localDateKey(date) === localDateKey(now);
   const tomorrow = localDateKey(date) === localDateKey(new Date(now.getTime() + DAY_MS));
-  const time = new Intl.DateTimeFormat("en-US", {
+  const time = new Intl.DateTimeFormat(getLocale(), {
     hour: "numeric",
     minute: "2-digit",
   }).format(date);
-  if (sameDay) return `Resets today at ${time}`;
-  if (tomorrow) return `Resets tomorrow at ${time}`;
-  return `Resets ${new Intl.DateTimeFormat("en-US", {
+  if (sameDay) return t("usage.resetsToday", { time });
+  if (tomorrow) return t("usage.resetsTomorrow", { time });
+  return t("usage.resetsAt", { date: new Intl.DateTimeFormat(getLocale(), {
     weekday: "short",
     month: "short",
     day: "numeric",
     hour: "numeric",
     minute: "2-digit",
-  }).format(date)}`;
+  }).format(date) });
 }
 
 export function todayTokens(source, today = new Date()) {

@@ -300,3 +300,39 @@ test("the docs no longer claim the Island is on by default", () => {
   assert.doesNotMatch(trayDoc, /Island is shown by default/);
   assert.match(trayDoc, /off on a new install/);
 });
+
+// The tray dictionary is keyed on the English source string, so a new
+// routerLocalized("...") literal is silently English-only until somebody
+// remembers to add it. That is exactly how "Fix Codex Router installation"
+// shipped untranslated. Check every literal against the dictionary here,
+// where it is cheap, instead of noticing it in a screenshot.
+test("every localized tray literal has a Chinese translation", () => {
+  const sources = ["ModelRouterTrayApp.swift", "IslandOverlay.swift", "ThinkingOrbCanvas.swift"]
+    .map((name) =>
+      readFileSync(
+        path.join(root, "apps", "macos", "ModelRouterTray", "Sources", name),
+        "utf8",
+      ),
+    )
+    .join("\n");
+  const catalog = readFileSync(
+    path.join(root, "apps", "macos", "ModelRouterTray", "Sources", "Localization.swift"),
+    "utf8",
+  );
+
+  // Only literal call sites can be checked statically; the handful that pass a
+  // variable are localized at whatever assigns them.
+  const literals = new Set(
+    [...sources.matchAll(/router(?:Localized|Format)\(\s*"((?:[^"\\]|\\.)*)"/g)].map((m) => m[1]),
+  );
+  assert.ok(literals.size > 100, `expected a full catalog, found ${literals.size}`);
+
+  const translated = new Set(
+    [...catalog.matchAll(/^\s*"((?:[^"\\]|\\.)*)":\s*"/gm)].map((m) => m[1]),
+  );
+
+  // Brand names are deliberately identical in both languages.
+  const untranslatable = new Set(["CODEX"]);
+  const missing = [...literals].filter((k) => !translated.has(k) && !untranslatable.has(k));
+  assert.deepEqual(missing, [], `untranslated tray strings: ${missing.join(" | ")}`);
+});
