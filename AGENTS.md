@@ -946,8 +946,14 @@ user has to find in the docs, so `src/dsh-install.mjs` owns the other half.
   HTML to be surer would be worse than the ambiguity.
 - The port is a setting (`MODEL_ROUTER_DSH_WEB_PORT`), not a constant. `dsh web
   --port` exists, and a user who moved theirs must not be sent to a dead URL.
-- A UI that will not start does not discard a publish that succeeded.
-  `setupHarness` reports `webError` and leaves the model count standing.
+- Setup does not start the UI. It already installs a package and writes another
+  program's configuration; adding a server launch makes one click three
+  consequential things, and the last is the one the user can do themselves a
+  moment later. Starting is its own button, so a republish never puts a browser
+  window on screen that nobody asked for.
+- `control --json` must carry the *web-aware* snapshot. It is what the tray
+  polls, and the cheap synchronous variant reports no `web` at all, which reads
+  as "stopped" and offers to start a harness that is already serving.
 
 
 ## A client the tray cannot watch keeps the router on

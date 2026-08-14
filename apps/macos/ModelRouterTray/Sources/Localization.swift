@@ -162,7 +162,7 @@ enum RouterChineseText {
     "Starting DeepSeek Harness…": "正在启动 DeepSeek Harness…",
     "%@ · running at %@": "%@ · 运行于 %@",
     "%@ · routed models published · not running": "%@ · 已发布路由模型 · 未运行",
-    "%d models published.": "已发布 %d 个模型。",
+    "%d models published. Press play to open the harness.": "已发布 %d 个模型。按播放按钮打开 Harness。",
     "%d models published, but the harness UI did not start: %@": "已发布 %d 个模型，但 Harness 界面未能启动：%@",
     "Menu bar icon stays visible": "菜单栏图标始终显示",
     "Dynamic Island": "动态岛",

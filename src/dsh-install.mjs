@@ -133,27 +133,20 @@ export async function setupHarness({ force = false, setDefaultModel = false } = 
   const { install: publishRoute } = await import("./dsh-config-manager.mjs");
   const published = publishRoute({ setDefaultModel });
 
-  // Start the browser UI on the way out, adopting one that is already serving.
-  // A publish with nothing running leaves the user holding a command and a port
-  // to remember, which is the step this whole action exists to remove. A
-  // failure here is reported, not thrown: the models are published either way,
-  // and that result must not be discarded because a UI would not boot.
-  let web;
-  let webError;
-  try {
-    const { startDshWeb } = await import("./dsh-web.mjs");
-    web = await startDshWeb();
-  } catch (error) {
-    webError = error?.message || String(error);
-  }
+  // Deliberately does not start the UI. Setup already installs a package and
+  // writes another program's configuration; launching a server on top of that
+  // makes one click three irreversible-looking things, and the last of them is
+  // the one the user can trivially do themselves a moment later. Starting is
+  // its own button, so a machine that only needed republishing does not get a
+  // browser window it did not ask for.
+  const { dshWebState } = await import("./dsh-web.mjs");
 
   return {
     binary: install.binary,
     version: harnessVersion(install.binary),
     installedNow: install.changed,
     published,
-    web: web || null,
-    webError: webError || null,
+    web: await dshWebState(),
     // Native GPT models are never published: they need the caller's own
     // ChatGPT session, which a harness request does not carry. Saying so beats
     // letting somebody count the picker and conclude the publish dropped them.

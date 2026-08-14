@@ -25,15 +25,19 @@
   a harness request carries no ChatGPT session — so the model count the button
   reports is the routable set.
 
-  The button then starts the harness's browser UI and turns into **Open site**.
-  Publishing models and leaving somebody to remember a command and a port was
-  the step this action existed to remove, so `setupHarness` starts the UI on the
-  way out and the row reports the URL it is serving. A running server this
-  router did not start is adopted rather than collided with — the harness binds
-  a fixed port, so a second launch exits with `EADDRINUSE` — and only a process
-  this router started is ever signalled, matched on PID *and* process start
-  identity because PIDs are reused. A UI that fails to boot does not discard a
-  publish that succeeded.
+  The row then runs the harness's browser UI: **Install**, then **Connect**,
+  then a play button, then **Open site**, each shown only in the state it
+  applies to. Publishing models and leaving somebody to remember a command and a
+  port was the step this action existed to remove, so the play button starts the
+  UI and the row reports the URL it is serving. Setup itself deliberately does
+  not start anything — it already installs a package and writes another
+  program's configuration, and a republish should not put a browser window on
+  screen nobody asked for.
+
+  A running server this router did not start is adopted rather than collided
+  with — the harness binds a fixed port, so a second launch exits with
+  `EADDRINUSE` — and only a process this router started is ever signalled,
+  matched on PID *and* process start identity because PIDs are reused.
 
 
 - **A client the tray cannot watch keeps the router running.** The tray's

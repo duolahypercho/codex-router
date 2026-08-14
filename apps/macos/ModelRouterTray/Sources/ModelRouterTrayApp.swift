@@ -1223,22 +1223,12 @@ final class RouterStore: ObservableObject {
       let result = try JSONDecoder().decode(HarnessSetupResult.self, from: output)
       await refresh()
       harnessSucceeded = true
-      if let failure = result.webError {
-        // The publish landed; only the UI did not come up. Say which, so the
-        // model count is not read as a lie.
-        harnessMessage = routerFormat(
-          routerLocalized("%d models published, but the harness UI did not start: %@"),
-          result.published.models,
-          failure
-        )
-        harnessSucceeded = false
-      } else {
-        harnessMessage = routerFormat(
-          routerLocalized("%d models published."),
-          result.published.models
-        )
-        openHarnessWeb()
-      }
+      // The row now offers the play button; say so rather than leaving the
+      // count sitting there as if nothing further were expected.
+      harnessMessage = routerFormat(
+        routerLocalized("%d models published. Press play to open the harness."),
+        result.published.models
+      )
     } catch {
       harnessMessage = error.localizedDescription
       await refresh()
@@ -1916,7 +1906,6 @@ struct HarnessSetupResult: Decodable {
   let published: Published
   let launch: String
   let web: RouterHarnessWeb?
-  let webError: String?
 }
 
 struct RouterHarness: Decodable {

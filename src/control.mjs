@@ -11,7 +11,7 @@ import { DSH_CATALOG_PATH } from "./paths.mjs";
 // Same reasoning: presence is a property of the shared plane, not of a target,
 // so the overview can resolve it statically without perturbing those probes.
 import { presenceSnapshot } from "./presence-state.mjs";
-import { harnessSnapshot } from "./dsh-install.mjs";
+import { harnessSnapshotWithWeb } from "./dsh-install.mjs";
 
 // Cross-target control plane for a tray/UI (e.g. the planned pane fork). It
 // reads which registry models are enabled per target and toggles them. Toggling
@@ -270,17 +270,18 @@ function probeTargets() {
   return targets;
 }
 
-function printOverview(asJson) {
+async function printOverview(asJson) {
   const targets = probeTargets();
   if (asJson) {
     // The tray polls this. Presence rides along so the rule that decides
     // whether the router may be stopped is computed once, here, rather than
     // re-derived from target flags on the Swift side where it would drift.
-    // The harness snapshot joins it so the tray can offer the install without
-    // a probe of its own; its version lookup is one exec of a local CLI.
+    // The harness snapshot joins it for the same reason -- and it has to be
+    // the variant that probes the web port, or the tray reads every running
+    // harness as stopped and offers to start one that is already up.
     process.stdout.write(
       `${JSON.stringify(
-        { targets, presence: presenceSnapshot(), harness: harnessSnapshot() },
+        { targets, presence: presenceSnapshot(), harness: await harnessSnapshotWithWeb() },
         null,
         2,
       )}\n`,
@@ -301,7 +302,7 @@ function printOverview(asJson) {
   }
 }
 
-function runSet(provider, desired) {
+async function runSet(provider, desired) {
   const requested = optionValue("--targets");
   const selected = requested ? requested.split(",").map((value) => value.trim()) : TARGETS;
   for (const target of selected) {
@@ -317,7 +318,7 @@ function runSet(provider, desired) {
   process.stderr.write(
     `Set ${provider} ${desired} for: ${selected.join(", ")}. Run \`bin/control apply\` to make it live.\n`,
   );
-  printOverview(args.includes("--json"));
+  await printOverview(args.includes("--json"));
 }
 
 function refreshActiveTarget(target) {
@@ -1550,7 +1551,7 @@ if (args.includes("--probe")) {
   await emitProbeSet(args[1], args[2]);
 } else if (args[0] === "set") {
   if (!args[1] || !args[2]) throw new Error("Usage: control set <provider> <on|off> [--targets ...]");
-  runSet(args[1], args[2]);
+  await runSet(args[1], args[2]);
 } else if (args[0] === "apply") {
   runApply();
 } else if (args[0] === "account") {
@@ -1603,5 +1604,5 @@ if (args.includes("--probe")) {
 } else if (args[0] === "doctor") {
   runDoctor(args.slice(1));
 } else {
-  printOverview(args.includes("--json"));
+  await printOverview(args.includes("--json"));
 }
