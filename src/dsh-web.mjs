@@ -7,6 +7,7 @@ import { protectPrivateFile } from "./file-security.mjs";
 import { spawnEnvironment } from "./npm-global-install.mjs";
 import { STATE_DIR } from "./paths.mjs";
 import { processStartIdentity, stateOwnsProcess } from "./process-identity.mjs";
+import { spawnableCommand } from "./spawnable-command.mjs";
 
 // Starting and finding the harness's browser UI, so the tray can offer "Open"
 // instead of leaving somebody to remember a command and a port.
@@ -24,6 +25,10 @@ const LOG_PATH = path.join(STATE_DIR, "dsh-web.log");
 const READY_TIMEOUT_MS = 90_000;
 const READY_INTERVAL_MS = 400;
 const PROBE_TIMEOUT_MS = 1_500;
+// How long an unresponsive server gets after SIGKILL before the stop is
+// reported as failed. A killed process is reaped in milliseconds; this only has
+// to outlast the scheduler.
+const KILL_GRACE_MS = 2_000;
 
 export function dshWebUrl({ port = DSH_WEB_PORT, host = DSH_WEB_HOST } = {}) {
   return `http://${host}:${port}`;
@@ -116,9 +121,16 @@ export async function startDshWeb({
 
   mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 });
   const logFd = openSync(LOG_PATH, "a", 0o600);
+  // On Windows `dsh` resolves to a `.cmd` shim, and Node has refused to spawn
+  // one without a shell since the CVE-2024-27980 fix -- a raw spawn answers
+  // EINVAL, so the tray's Start button could never have worked there. Every
+  // other caller of this binary already goes through `spawnableCommand`; this
+  // one was the exception it exists to prevent.
+  const command = spawnableCommand(binary, ["web", "--port", String(port)]);
   let child;
   try {
-    child = spawn(binary, ["web", "--port", String(port)], {
+    child = spawn(command.command, command.args, {
+      ...command.options,
       detached: true,
       stdio: ["ignore", logFd, logFd],
       windowsHide: true,
@@ -169,15 +181,41 @@ export async function stopDshWeb({
   if (!stateOwnsProcess(state, { identity })) {
     return { stopped: false, reason: "external-or-unmanaged" };
   }
+  // Ownership is the liveness test, not bare PID presence: a recycled PID
+  // carries a different start time and comm, so it reads as gone rather than as
+  // a process this router may signal again.
+  const stillOurs = () => stateOwnsProcess(state, { identity });
+  const waitForExit = async (limitMs) => {
+    const deadline = Date.now() + limitMs;
+    while (Date.now() < deadline) {
+      if (!stillOurs()) return true;
+      await waitFor(100);
+    }
+    return !stillOurs();
+  };
+
   try {
     kill(state.pid, "SIGTERM");
   } catch {
     return { stopped: false, reason: "signal-failed" };
   }
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline && stateOwnsProcess(readState(), { identity })) {
-    if (!identity(state.pid)) break;
-    await waitFor(100);
+  if (!(await waitForExit(timeoutMs))) {
+    // SIGTERM is a request. Reporting success without checking is what leaves a
+    // harness holding the port while the ownership record says nobody started
+    // it -- after which the tray reads it as externally started forever, and
+    // this function refuses to touch it. Escalate the way the Ollama runtime
+    // does before giving up.
+    try {
+      kill(state.pid, "SIGKILL");
+    } catch {
+      // Gone between the check and the signal is the good case. A real failure
+      // is caught by the confirmation below rather than assumed here.
+    }
+    if (!(await waitForExit(KILL_GRACE_MS))) {
+      // The record is left intact on purpose: it is the only thing that still
+      // identifies this process as ours to stop on the next attempt.
+      return { stopped: false, pid: state.pid, reason: "still-running" };
+    }
   }
   writeState({ managed: false });
   return { stopped: true, pid: state.pid };
