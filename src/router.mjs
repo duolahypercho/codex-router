@@ -1584,6 +1584,7 @@ async function handleResponses(request, response, requestUrl) {
   let route;
   let upstreamRetries;
   let upstreamLatencyMs;
+  let firstTokenMs;
   let usageTransform;
   let emptyCompletionGuard;
   let retryUsageTransform;
@@ -1856,6 +1857,8 @@ async function handleResponses(request, response, requestUrl) {
         provider: canonicalProviderId(route.provider),
         status: upstream.status,
         durationMs: Date.now() - startedAt,
+        responseStartMs: upstreamLatencyMs,
+        firstTokenMs,
       });
       finalStatus = upstream.status;
       activityStatus = upstream.status;
@@ -1910,6 +1913,12 @@ async function handleResponses(request, response, requestUrl) {
       leaveOpen: relayOpen,
     });
     usage = usageTransform?.tokenUsage();
+    // Time to the first generated token, which is what an output-tokens-per-
+    // second figure has to divide by. `upstreamLatencyMs` stops at the response
+    // headers, and on a reasoning model the gap between the two is seconds of
+    // silent thinking that would otherwise be charged to the generation rate.
+    const firstTokenAt = usageTransform?.firstTokenAt?.();
+    if (firstTokenAt !== undefined) firstTokenMs = firstTokenAt - startedAt;
     estimatedInputTokens = usageTransform?.substitutedInputTokens();
     // The `close` listener above sets `clientGone` when the client's socket
     // goes away, but `pipeResponse` can resolve before that event fires: the
@@ -2055,6 +2064,8 @@ async function handleResponses(request, response, requestUrl) {
       provider: route ? canonicalProviderId(route.provider) : "openai",
       status: finalStatus,
       durationMs: Date.now() - startedAt,
+      responseStartMs: upstreamLatencyMs,
+      firstTokenMs,
       retries: upstreamRetries,
       ...usage,
       estimatedInputTokens,
@@ -2117,6 +2128,8 @@ async function handleResponses(request, response, requestUrl) {
           provider: route ? canonicalProviderId(route.provider) : "openai",
           status: 0,
           durationMs: Date.now() - startedAt,
+          responseStartMs: upstreamLatencyMs,
+        firstTokenMs,
           retries: upstreamRetries,
           ...usage,
           estimatedInputTokens,
@@ -2140,6 +2153,8 @@ async function handleResponses(request, response, requestUrl) {
         provider: route ? canonicalProviderId(route.provider) : "openai",
         status: finalStatus,
         durationMs: Date.now() - startedAt,
+        responseStartMs: upstreamLatencyMs,
+        firstTokenMs,
         retries: upstreamRetries,
         ...usage,
         estimatedInputTokens,

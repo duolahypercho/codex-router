@@ -44,21 +44,35 @@ test("provider registry exposes configured API and OAuth model families", () => 
       "clinepass/qwen3.8-max",
       "commandcode/deepseek-v4-flash",
       "commandcode/deepseek-v4-pro",
+      "commandcode/fugu-ultra",
       "commandcode/gemini-3.5-flash",
+      "commandcode/gemini-3.7-flash",
+      "commandcode/glm-5.2-fast",
       "commandcode/glm-5.2",
       "commandcode/gpt-5.5",
       "commandcode/gpt-5.6-luna",
+      "commandcode/gpt-5.6-sol",
+      "commandcode/gpt-5.6-terra",
       "commandcode/grok-4.5",
+      "commandcode/grok-4.6",
       "commandcode/hy3-paid",
+      "commandcode/inkling-small",
+      "commandcode/inkling",
+      "commandcode/kimi-k2.7-code-highspeed",
       "commandcode/kimi-k2.7-code",
       "commandcode/kimi-k3",
+      "commandcode/laguna-s-2.1",
       "commandcode-messages/claude-fable-5",
       "commandcode-messages/claude-haiku-4.5",
       "commandcode-messages/claude-opus-4.8",
+      "commandcode-messages/claude-opus-5",
       "commandcode-messages/claude-sonnet-5",
       "commandcode/mimo-v2.5-pro",
       "commandcode/minimax-m2.7",
       "commandcode/minimax-m3",
+      "commandcode/muse-spark-1.2",
+      "commandcode/nemotron-3-ultra",
+      "commandcode/qwen3.7-flash",
       "commandcode/qwen3.7-max",
       "commandcode/qwen3.7-plus",
       "commandcode/qwen3.8-max",
@@ -356,6 +370,13 @@ test("provider registry exposes configured API and OAuth model families", () => 
   assert.equal(
     MODEL_BY_SLUG.get("commandcode-messages/claude-opus-4.8").contextWindow,
     1_000_000,
+  );
+  // Command Code serves Haiku 4.5 only under its dated id. The undated alias
+  // every other Anthropic surface accepts is absent from this catalog, so the
+  // route 404s the moment the registry shortens it.
+  assert.equal(
+    MODEL_BY_SLUG.get("commandcode-messages/claude-haiku-4.5").upstreamModel,
+    "claude-haiku-4-5-20251001",
   );
   // Documented output_config.effort ladder for Opus 4.8 (default high).
   assert.deepEqual(

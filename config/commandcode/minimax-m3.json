@@ -9,7 +9,7 @@
       "listed": true,
       "displayName": "MiniMax M3 (Command Code)",
       "description": "MiniMax M3 through the Command Code Provider API.",
-      "priority": 108,
+      "priority": 111,
       "defaultEffort": "high",
       "reasoningLevels": [
         {

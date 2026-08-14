@@ -2,14 +2,14 @@
   "version": 1,
   "models": [
     {
-      "slug": "commandcode/grok-4.5",
-      "gatewayModel": "commandcode-grok-4-5",
-      "upstreamModel": "xai/grok-4.5",
+      "slug": "commandcode/grok-4.6",
+      "gatewayModel": "commandcode-grok-4-6",
+      "upstreamModel": "xai/grok-4.6",
       "provider": "commandcode",
       "listed": true,
-      "displayName": "Grok 4.5 (Command Code)",
-      "description": "Grok 4.5 through the Command Code Provider API.",
-      "priority": 115,
+      "displayName": "Grok 4.6 (Command Code)",
+      "description": "Grok 4.6 through the Command Code Provider API.",
+      "priority": 114,
       "defaultEffort": "high",
       "reasoningLevels": [
         {
@@ -31,7 +31,7 @@
         "text",
         "image"
       ],
-      "compHash": "commandcode-grok-4-5-v1"
+      "compHash": "commandcode-grok-4-6-v1"
     }
   ]
 }

@@ -2,14 +2,14 @@
   "version": 1,
   "models": [
     {
-      "slug": "commandcode/kimi-k2.7-code",
-      "gatewayModel": "commandcode-kimi-k2-7-code",
-      "upstreamModel": "moonshotai/Kimi-K2.7-Code",
+      "slug": "commandcode/laguna-s-2.1",
+      "gatewayModel": "commandcode-laguna-s-2-1",
+      "upstreamModel": "poolside/laguna-s-2.1-free",
       "provider": "commandcode",
       "listed": true,
-      "displayName": "Kimi K2.7 Code (Command Code)",
-      "description": "Kimi K2.7 Code through the Command Code Provider API.",
-      "priority": 105,
+      "displayName": "Laguna S 2.1 (Command Code)",
+      "description": "Laguna S 2.1 through the Command Code Provider API.",
+      "priority": 129,
       "defaultEffort": "high",
       "reasoningLevels": [
         {
@@ -22,7 +22,7 @@
       "inputModalities": [
         "text"
       ],
-      "compHash": "commandcode-kimi-k2-7-code-v1"
+      "compHash": "commandcode-laguna-s-2-1-v1"
     }
   ]
 }

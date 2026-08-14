@@ -16,11 +16,17 @@ export const TOOL_RESULT_AGING_STATE_PATH =
   process.env.MODEL_ROUTER_TOOL_RESULT_AGING_STATE ||
   path.join(STATE_DIR, "tool-result-aging.json");
 
-// Routed aging defaults on; native aging defaults off. The native path is
-// deliberately conservative (near-byte-identical forwarding to OpenAI), so
-// compacting it is an explicit operator opt-in rather than a default.
+// Both paths default off. Compaction rewrites tool results the model already
+// acted on: it saves real context, but it is a change to what the model sees
+// mid-conversation, and its savings figures are still being validated against
+// provider-billed tokens. That is an experiment to opt into, not a default to
+// discover after it has already altered a session. The structural rule from
+// the vision bridge applies here too -- an absent file means nobody has
+// answered and the current default applies, while a stored value is the
+// operator's own answer and is kept verbatim, so turning this on survives any
+// later change of default.
 function defaultSettings() {
-  return { version: 1, enabled: true, nativeEnabled: false, defaulted: true };
+  return { version: 1, enabled: false, nativeEnabled: false, defaulted: true };
 }
 
 function disabledSettings() {

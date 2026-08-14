@@ -67,6 +67,17 @@ export function recordUsageEvent({
   provider,
   status,
   durationMs,
+  // Milliseconds from receiving the request until the upstream response
+  // headers arrived. Together with durationMs this isolates the streamed
+  // generation phase from prompt processing, queueing, and router setup.
+  // Historical rows omit it and must not be used for generation-rate math.
+  responseStartMs,
+  // Milliseconds from receiving the request until the first generated token
+  // reached the client. This -- not responseStartMs -- is the split an
+  // output-tokens-per-second figure divides by, matching how the industry
+  // reports it: tokens after the first token, with the wait before it counted
+  // separately as time-to-first-token.
+  firstTokenMs,
   inputTokens,
   cachedInputTokens,
   outputTokens,
@@ -114,6 +125,12 @@ export function recordUsageEvent({
     provider: safeText(provider, "unknown"),
     status: Number.isInteger(status) ? status : 0,
     durationMs: Number.isFinite(durationMs) ? Math.max(0, Math.round(durationMs)) : 0,
+    ...(safeTokenCount(responseStartMs) !== undefined
+      ? { responseStartMs: safeTokenCount(responseStartMs) }
+      : {}),
+    ...(safeTokenCount(firstTokenMs) !== undefined
+      ? { firstTokenMs: safeTokenCount(firstTokenMs) }
+      : {}),
     ...(streamAborted === true ? { streamAborted: true } : {}),
     ...(emptyCompletion === true ? { emptyCompletion: true } : {}),
     ...(emptyCompletionRetried === true ? { emptyCompletionRetried: true } : {}),
@@ -311,6 +328,12 @@ export function recentUsageEvents({ sinceMs = 24 * 60 * 60 * 1000, limit = 1_000
           durationMs: Number.isFinite(event.durationMs)
             ? Math.max(0, Math.round(event.durationMs))
             : 0,
+          ...(safeTokenCount(event.responseStartMs) !== undefined
+            ? { responseStartMs: safeTokenCount(event.responseStartMs) }
+            : {}),
+          ...(safeTokenCount(event.firstTokenMs) !== undefined
+            ? { firstTokenMs: safeTokenCount(event.firstTokenMs) }
+            : {}),
           ...(event.streamAborted === true ? { streamAborted: true } : {}),
           ...(event.emptyCompletion === true ? { emptyCompletion: true } : {}),
           ...(event.emptyCompletionRetried === true

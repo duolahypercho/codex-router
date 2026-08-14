@@ -168,19 +168,25 @@ fn main() {
 }
 
 fn install_tray(app: &mut tauri::App) -> tauri::Result<()> {
-    let open = MenuItem::with_id(app, "open", "Open Model Router", true, None::<&str>)?;
-    let toggle = MenuItem::with_id(
+    let open = MenuItem::with_id(
         app,
-        "toggle-island",
-        "Toggle activity pill",
+        "open",
+        tray_text("Open Model Router"),
         true,
         None::<&str>,
     )?;
-    let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+    let toggle = MenuItem::with_id(
+        app,
+        "toggle-island",
+        tray_text("Toggle activity pill"),
+        true,
+        None::<&str>,
+    )?;
+    let quit = MenuItem::with_id(app, "quit", tray_text("Quit"), true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&open, &toggle, &quit])?;
 
     let mut builder = TrayIconBuilder::with_id("model-router")
-        .tooltip("Codex Model Router")
+        .tooltip(tray_text("Codex Model Router"))
         .menu(&menu)
         .show_menu_on_left_click(cfg!(target_os = "linux"))
         .on_menu_event(|app, event| match event.id.as_ref() {
@@ -222,6 +228,28 @@ fn install_tray(app: &mut tauri::App) -> tauri::Result<()> {
     }
     builder.build(app)?;
     Ok(())
+}
+
+/// The native macOS companion has its own SwiftUI localization layer. Keep the
+/// Tauri tray menu in sync for Linux and Windows, where the menu itself is
+/// rendered by the Rust tray backend.
+fn tray_text(english: &str) -> String {
+    let language = ["LC_ALL", "LC_MESSAGES", "LANG", "LANGUAGE"]
+        .iter()
+        .filter_map(|name| env::var(name).ok())
+        .find(|value| !value.trim().is_empty())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if language.starts_with("zh") || language.contains("zh_") {
+        return match english {
+            "Open Model Router" => "打开模型路由".into(),
+            "Toggle activity pill" => "切换活动胶囊".into(),
+            "Quit" => "退出".into(),
+            "Codex Model Router" => "Codex 模型路由".into(),
+            _ => english.into(),
+        };
+    }
+    english.into()
 }
 
 #[tauri::command]

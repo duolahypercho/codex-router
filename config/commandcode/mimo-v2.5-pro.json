@@ -9,7 +9,7 @@
       "listed": true,
       "displayName": "MiMo-V2.5-Pro (Command Code)",
       "description": "MiMo-V2.5-Pro through the Command Code Provider API.",
-      "priority": 110,
+      "priority": 113,
       "defaultEffort": "high",
       "reasoningLevels": [
         {

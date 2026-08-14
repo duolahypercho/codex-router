@@ -21,7 +21,7 @@ enum LocalModelOperationKind: Equatable {
 
   var label: String {
     switch self {
-    case .uninstall: return "Uninstalling"
+    case .uninstall: return routerLocalized("Uninstalling")
     }
   }
 }
@@ -48,10 +48,10 @@ enum RouterActivityState: String, Decodable {
 
   var label: String {
     switch self {
-    case .idle: return "Idle"
-    case .generating: return "Thinking"
-    case .starting: return "Starting"
-    case .error: return "Error"
+    case .idle: return routerLocalized("Idle")
+    case .generating: return routerLocalized("Thinking")
+    case .starting: return routerLocalized("Starting")
+    case .error: return routerLocalized("Error")
     }
   }
 }
@@ -134,6 +134,9 @@ final class RouterStore: ObservableObject {
   @Published private(set) var maintenanceMessage: String?
   @Published private(set) var maintenanceSucceeded = false
   @Published private(set) var islandMode: IslandMode
+  // Publishing the language makes every view re-render on change, so the
+  // panel switches in place instead of waiting for the next relaunch.
+  @Published private(set) var language: TrayLanguage = RouterLanguage.selection
   @Published private(set) var presenceMode: TrayPresenceMode
   @Published private(set) var hostAppRunning = false
   @Published private(set) var surfacesVisible = true
@@ -511,7 +514,9 @@ final class RouterStore: ObservableObject {
   var selectedUsageText: String? {
     if selectedUsageUsesChatGPT {
       guard let primary = accountUsage?.primary else { return nil }
-      return "\(primary.remainingPercent)% left"
+      return RouterLanguage.isSimplifiedChinese
+        ? "剩余 \(primary.remainingPercent)%"
+        : "\(primary.remainingPercent)% left"
     }
     guard providerUsage != nil else { return nil }
     if let metric = selectedAccountMetric { return formattedAccountMetric(metric) }
@@ -556,7 +561,9 @@ final class RouterStore: ObservableObject {
 
   var activitySummaryLabel: String {
     if activityState == .generating, activeChatCount > 1 {
-      return "\(activeChatCount) chats"
+      return RouterLanguage.isSimplifiedChinese
+        ? "\(activeChatCount) 个会话"
+        : "\(activeChatCount) chats"
     }
     return activityState.label
   }
@@ -634,7 +641,7 @@ final class RouterStore: ObservableObject {
   func sessionName(for request: RouterActiveRequest) -> String {
     guard let sessionName = request.sessionName?.trimmingCharacters(in: .whitespacesAndNewlines),
           !sessionName.isEmpty
-    else { return "Active session" }
+    else { return routerLocalized("Active session") }
     return sessionName
   }
 
@@ -666,6 +673,25 @@ final class RouterStore: ObservableObject {
         }
         return $0.model.requests > $1.model.requests
       }
+  }
+
+  // Issue #182. The headline card follows whatever is generating right now,
+  // which answers "how fast is this" but never "how do my models compare".
+  // `lastUsedAt` was already decoded and unread; this is what it was for.
+  // Only measured models appear -- an unmeasured one would need a placeholder
+  // row that says nothing, and the card above already covers "no samples yet".
+  var recentModelSpeeds: [ModelUsageRow] {
+    guard let snapshot = providerUsage else { return [] }
+    return snapshot.providers
+      .flatMap { provider in
+        (provider.models ?? []).map { model in
+          ModelUsageRow(providerID: provider.id, providerName: provider.displayName, model: model)
+        }
+      }
+      .filter { $0.model.observedTokensPerSecond != nil }
+      .sorted { ($0.model.lastUsedAt ?? "") > ($1.model.lastUsedAt ?? "") }
+      .prefix(4)
+      .map { $0 }
   }
 
   var overallTokenTotal: Int64 {
@@ -844,6 +870,14 @@ final class RouterStore: ObservableObject {
   func setIslandMode(_ mode: IslandMode) {
     islandMode = mode
     defaults.set(mode.rawValue, forKey: islandModeKey)
+  }
+
+  func setLanguage(_ next: TrayLanguage) {
+    guard next != language else { return }
+    // RouterLanguage holds the value routerLocalized() reads, so it has to be
+    // updated before the published change re-renders anything.
+    RouterLanguage.setSelection(next)
+    language = next
   }
 
   // Every vendor quota window the desktop panel can show at a glance:
@@ -1105,9 +1139,9 @@ final class RouterStore: ObservableObject {
       return "\(compactTokenCount(totals.tokens)) tok"
     }
     if totals.requests > 0 {
-      return "\(totals.requests) req"
+      return RouterLanguage.isSimplifiedChinese ? "\(totals.requests) 个请求" : "\(totals.requests) req"
     }
-    return "No traffic"
+    return routerLocalized("No traffic")
   }
 
 
@@ -1630,10 +1664,12 @@ final class RouterStore: ObservableObject {
 
   private func providerDetail(_ providerID: String, enabled: Set<String>) -> String {
     if enabled.contains(providerID) {
-      return providerID.hasSuffix("-oauth") ? "OAuth · enabled" : "API · enabled"
+      return providerID.hasSuffix("-oauth")
+        ? routerLocalized("OAuth · enabled")
+        : routerLocalized("API · enabled")
     }
-    if providerSetup[providerID]?.configured == true { return "Ready to enable" }
-    return "Needs setup"
+    if providerSetup[providerID]?.configured == true { return routerLocalized("Ready to enable") }
+    return routerLocalized("Needs setup")
   }
 
   private func restartCodexApp() async throws {
@@ -1794,6 +1830,37 @@ enum UsageRange: Int, CaseIterable, Identifiable {
   }
 }
 
+enum TokenDisplayUnit: String, CaseIterable, Identifiable {
+  case full
+  case millions
+
+  var id: Self { self }
+
+  var label: String {
+    switch self {
+    case .full: return routerLocalized("Full")
+    case .millions: return "M"
+    }
+  }
+
+  var accessibilityLabel: String {
+    switch self {
+    case .full: return routerLocalized("Full token numbers")
+    case .millions: return routerLocalized("Millions of tokens")
+    }
+  }
+
+  func format(_ value: Double) -> String {
+    let normalized = value.isFinite ? max(0, value) : 0
+    switch self {
+    case .full:
+      return Int64(normalized.rounded()).formatted(.number.grouping(.automatic))
+    case .millions:
+      return "\(String(format: "%.1f", normalized / 1_000_000))M"
+    }
+  }
+}
+
 struct CodexAccountUsage: Decodable, Equatable {
   let fetchedAt: String
   let planType: String?
@@ -1822,17 +1889,17 @@ struct CodexRateLimitWindow: Decodable, Equatable {
   var resetDate: Date? { resetsAt.map(Date.init(timeIntervalSince1970:)) }
 
   var durationLabel: String {
-    guard let minutes = windowDurationMins else { return "Current limit" }
+    guard let minutes = windowDurationMins else { return routerLocalized("Current limit") }
     if minutes >= 1_440, minutes.isMultiple(of: 1_440) {
       let days = minutes / 1_440
-      if days == 1 { return "Daily limit" }
-      if days == 7 { return "Weekly limit" }
-      return "\(days)-day limit"
+      if days == 1 { return routerLocalized("Daily limit") }
+      if days == 7 { return routerLocalized("Weekly limit") }
+      return RouterLanguage.isSimplifiedChinese ? "\(days) 天限制" : "\(days)-day limit"
     }
     if minutes >= 60, minutes.isMultiple(of: 60) {
-      return "\(minutes / 60)-hour limit"
+      return RouterLanguage.isSimplifiedChinese ? "\(minutes / 60) 小时限制" : "\(minutes / 60)-hour limit"
     }
-    return "\(minutes)-minute limit"
+    return RouterLanguage.isSimplifiedChinese ? "\(minutes) 分钟限制" : "\(minutes)-minute limit"
   }
 }
 
@@ -2175,13 +2242,13 @@ struct InstalledLocalModel: Decodable, Identifiable, Equatable {
   /// model can call tools perfectly on a short prompt and still fall apart on
   /// Codex's real instructions.
   var chatRoleLabel: String {
-    if tools != true { return "no tools — can't chat" }
+    if tools != true { return routerLocalized("no tools — can't chat") }
     switch agent {
-    case "agent": return "works in Codex"
-    case "flaky": return "unreliable in Codex"
-    case "not-published": return "not offered yet"
-    case .some: return "fails in Codex"
-    default: return "chat — untested"
+    case "agent": return routerLocalized("works in Codex")
+    case "flaky": return routerLocalized("unreliable in Codex")
+    case "not-published": return routerLocalized("not offered yet")
+    case .some: return routerLocalized("fails in Codex")
+    default: return routerLocalized("chat — untested")
     }
   }
 
@@ -2258,8 +2325,8 @@ enum TrayPresenceMode: String, CaseIterable, Identifiable {
   var id: String { rawValue }
   var label: String {
     switch self {
-    case .always: return "Always"
-    case .followCodex: return "With Codex"
+    case .always: return routerLocalized("Always")
+    case .followCodex: return routerLocalized("With Codex")
     }
   }
 
@@ -2288,9 +2355,9 @@ enum IslandMode: String, CaseIterable, Identifiable {
   var id: String { rawValue }
   var label: String {
     switch self {
-    case .off: return "Off"
-    case .notch: return "Notch"
-    case .desktop: return "Desktop"
+    case .off: return routerLocalized("Off")
+    case .notch: return routerLocalized("Notch")
+    case .desktop: return routerLocalized("Desktop")
     }
   }
 }
@@ -2383,9 +2450,9 @@ enum TrayTab: String, CaseIterable, Identifiable {
 
   var label: String {
     switch self {
-    case .usage: return "Usage"
-    case .status: return "Status"
-    case .settings: return "Settings"
+    case .usage: return routerLocalized("Usage")
+    case .status: return routerLocalized("Status")
+    case .settings: return routerLocalized("Settings")
     }
   }
 }
@@ -2446,7 +2513,7 @@ private struct TrayView: View {
   private var header: some View {
     HStack(alignment: .center, spacing: 12) {
       VStack(alignment: .leading, spacing: 3) {
-        Text("Model Router")
+        Text(routerLocalized("Model Router"))
           .font(.system(size: 15, weight: .semibold))
         Text(accountLabel)
           .font(.system(size: 10, weight: .regular))
@@ -2463,7 +2530,7 @@ private struct TrayView: View {
       guard let provider = store.selectedProviderUsage else { return store.selectedUsageProvider.detail }
       return "\(provider.displayName) · \(provider.credentialType.uppercased())"
     }
-    guard let plan = store.accountUsage?.planType else { return "Codex account" }
+    guard let plan = store.accountUsage?.planType else { return routerLocalized("Codex account") }
     return "ChatGPT \(plan.capitalized)"
   }
 
@@ -2493,18 +2560,18 @@ private struct TrayView: View {
   @ViewBuilder
   private var usageTab: some View {
     if store.visibleUsageProviders.isEmpty && store.overallModelUsage.isEmpty {
-      emptyNotice("No usage recorded yet")
+      emptyNotice(routerLocalized("No usage recorded yet"))
     }
     if !store.visibleUsageProviders.isEmpty {
-      sectionLabel("Current usage", detail: store.selectedUsageProvider.displayName)
+      sectionLabel(routerLocalized("Current usage"), detail: store.selectedUsageProvider.displayName)
       ProviderUsageSection(store: store)
         .id(store.selectedUsageProviderID)
-      sectionLabel("All usage", detail: "7-day snapshot")
+      sectionLabel(routerLocalized("All usage"), detail: routerLocalized("7-day snapshot"))
       AllProviderUsageGrid(store: store)
     }
     if !store.overallModelUsage.isEmpty {
       sectionLabel(
-        "Tokens by model",
+        routerLocalized("Tokens by model"),
         detail: "\(compactTokenCount(Double(store.overallTokenTotal))) tok · \(store.overallRequestTotal) req"
       )
       ModelUsageBreakdown(store: store)
@@ -2513,7 +2580,7 @@ private struct TrayView: View {
 
   @ViewBuilder
   private var statusTab: some View {
-    sectionLabel("Router", detail: store.activitySummaryLabel)
+    sectionLabel(routerLocalized("Router"), detail: store.activitySummaryLabel)
     HStack(spacing: 8) {
       Circle()
         .fill(store.activityState.tint)
@@ -2528,7 +2595,7 @@ private struct TrayView: View {
       Spacer()
     }
 
-    sectionLabel("Model speed", detail: speedSampleDetail)
+    sectionLabel(routerLocalized("Model speed"), detail: speedSampleDetail)
     HStack(alignment: .firstTextBaseline, spacing: 8) {
       VStack(alignment: .leading, spacing: 2) {
         Text(activeModelLabel)
@@ -2551,6 +2618,37 @@ private struct TrayView: View {
       Color.primary.opacity(0.045),
       in: RoundedRectangle(cornerRadius: 9, style: .continuous)
     )
+    // Issue #182: the card above tracks the active model only, so a second
+    // model's speed was unknowable without switching to it and waiting.
+    if store.recentModelSpeeds.count > 1 {
+      VStack(spacing: 0) {
+        ForEach(store.recentModelSpeeds) { row in
+          HStack(spacing: 8) {
+            Text(row.model.displayName ?? row.model.slug)
+              .font(.system(size: 9))
+              .lineLimit(1)
+              .truncationMode(.middle)
+            Spacer(minLength: 8)
+            Text(row.providerName)
+              .font(.system(size: 8))
+              .foregroundStyle(routerMuted)
+              .lineLimit(1)
+            Text(row.model.observedTokensPerSecond.map { String(format: "%.1f", $0) } ?? "—")
+              .font(.system(size: 9, weight: .medium, design: .monospaced))
+              .foregroundStyle(routerMint)
+              .monospacedDigit()
+              .frame(width: 46, alignment: .trailing)
+          }
+          .padding(.vertical, 3)
+          .padding(.horizontal, 9)
+        }
+      }
+      .padding(.vertical, 2)
+      .background(
+        Color.primary.opacity(0.03),
+        in: RoundedRectangle(cornerRadius: 9, style: .continuous)
+      )
+    }
 
     if let agingStats = target?.modelSettings?.toolResultAging?.stats,
        let agedRequests = agingStats.requests, agedRequests > 0 {
@@ -2619,11 +2717,11 @@ private struct TrayView: View {
     }
 
     sectionLabel(
-      "Live requests",
-      detail: store.activeRequests.isEmpty ? "None" : "\(store.activeRequests.count)"
+      routerLocalized("Live requests"),
+      detail: store.activeRequests.isEmpty ? routerLocalized("None") : "\(store.activeRequests.count)"
     )
     if store.activeRequests.isEmpty {
-      emptyNotice("Nothing in flight")
+      emptyNotice(routerLocalized("Nothing in flight"))
     } else {
       VStack(spacing: 6) {
         ForEach(store.activeRequests) { request in
@@ -2646,7 +2744,7 @@ private struct TrayView: View {
     }
 
     if !quotaResets.isEmpty {
-      sectionLabel("Quota resets", detail: "\(quotaResets.count)")
+      sectionLabel(routerLocalized("Quota resets"), detail: "\(quotaResets.count)")
       VStack(spacing: 5) {
         ForEach(quotaResets, id: \.id) { entry in
           HStack {
@@ -2671,15 +2769,18 @@ private struct TrayView: View {
   }
 
   private var activityDetail: String {
-    guard store.activeRequestCount > 0 else { return "No traffic right now" }
+    guard store.activeRequestCount > 0 else { return routerLocalized("No traffic right now") }
     let chats = store.activeChatCount
     let requests = store.activeRequestCount
+    if RouterLanguage.isSimplifiedChinese {
+      return "\(chats) 个会话 · \(requests) 个请求进行中"
+    }
     return "\(chats) chat\(chats == 1 ? "" : "s") · \(requests) request\(requests == 1 ? "" : "s") in flight"
   }
 
   private var activeModelLabel: String {
     guard let model = store.activeRequests.last?.model ?? store.activeModel else {
-      return "No model observed"
+      return routerLocalized("No model observed")
     }
     return model.split(separator: "/").last.map(String.init) ?? model
   }
@@ -2690,19 +2791,23 @@ private struct TrayView: View {
   }
 
   private var speedSampleDetail: String {
-    guard let model = store.activeRequests.last?.model ?? store.activeModel else { return "Waiting" }
+    guard let model = store.activeRequests.last?.model ?? store.activeModel else { return routerLocalized("Waiting") }
     let displayName = model.split(separator: "/").last.map(String.init) ?? model
     let sampleCount = store.providerUsage?.providers
       .flatMap { $0.models ?? [] }
       .first { $0.slug == model || $0.displayName == displayName }?
       .speedSampleCount ?? 0
-    return sampleCount == 0 ? "No samples" : "\(sampleCount) reply\(sampleCount == 1 ? "" : "s")"
+    return sampleCount == 0
+      ? routerLocalized("No samples")
+      : RouterLanguage.isSimplifiedChinese
+        ? "\(sampleCount) 条回复"
+        : "\(sampleCount) reply\(sampleCount == 1 ? "" : "s")"
   }
 
   private var speedExplanation: String {
     store.activeModelObservedTokensPerSecond == nil
-      ? "Appears after a metered reply"
-      : "Observed output throughput"
+      ? routerLocalized("Appears after a metered reply")
+      : routerLocalized("Observed output throughput")
   }
 
   // `startedAt` arrives as epoch milliseconds from the router health payload.
@@ -2725,11 +2830,11 @@ private struct TrayView: View {
   private func settingsTab(for target: RouterTarget) -> some View {
     HStack(spacing: 12) {
       VStack(alignment: .leading, spacing: 3) {
-        Text("Show tray")
+        Text(routerLocalized("Show tray"))
           .font(.system(size: 12, weight: .medium))
         Text(store.presenceMode == .followCodex
-          ? "Appears with Codex or ChatGPT, hides when they quit"
-          : "Menu bar icon stays visible")
+          ? routerLocalized("Appears with Codex or ChatGPT, hides when they quit")
+          : routerLocalized("Menu bar icon stays visible"))
           .font(.system(size: 10))
           .foregroundStyle(routerMuted)
       }
@@ -2749,13 +2854,40 @@ private struct TrayView: View {
     .padding(.vertical, 2)
     HStack(spacing: 12) {
       VStack(alignment: .leading, spacing: 3) {
-        Text("Dynamic Island")
+        Text(routerLocalized("Language"))
+          .font(.system(size: 12, weight: .medium))
+        Text(routerLocalized("Tray language. Reopen the panel to apply everywhere."))
+          .font(.system(size: 10))
+          .foregroundStyle(routerMuted)
+      }
+      Spacer()
+      // A dropdown rather than the segmented style the neighbouring rows use:
+      // the option labels are written in the language each one selects, so
+      // they are different scripts and different widths, and a segmented
+      // control would size every cell to the widest and leave the Latin ones
+      // adrift. A dropdown also stays right when a third language lands.
+      Picker("", selection: Binding(
+        get: { store.language },
+        set: { store.setLanguage($0) }
+      )) {
+        ForEach(TrayLanguage.allCases) { option in
+          Text(option.label).tag(option)
+        }
+      }
+      .pickerStyle(.menu)
+      .labelsHidden()
+      .frame(width: 168)
+    }
+    .padding(.vertical, 2)
+    HStack(spacing: 12) {
+      VStack(alignment: .leading, spacing: 3) {
+        Text(routerLocalized("Dynamic Island"))
           .font(.system(size: 12, weight: .medium))
         Text(store.islandMode == .desktop
-          ? "Quotas and live activity pinned to the desktop"
+          ? routerLocalized("Quotas and live activity pinned to the desktop")
           : store.islandMode == .notch
-            ? "Usage and activity over the notch on every display"
-            : "Off by default. The menu-bar panel stays available either way.")
+            ? routerLocalized("Usage and activity over the notch on every display")
+            : routerLocalized("Off by default. The menu-bar panel stays available either way."))
           .font(.system(size: 10))
           .foregroundStyle(routerMuted)
       }
@@ -2774,10 +2906,10 @@ private struct TrayView: View {
     }
     .padding(.vertical, 2)
     settingRow(
-      title: "Use Router with ChatGPT",
+      title: routerLocalized("Use Router with ChatGPT"),
       detail: store.signedRouting
-        ? "Native GPT + external models · task history preserved"
-        : "Keep ChatGPT login and the current task history",
+        ? routerLocalized("Native GPT + external models · task history preserved")
+        : routerLocalized("Keep ChatGPT login and the current task history"),
       isOn: Binding(
         get: { store.signedRouting },
         set: { enabled in Task { await store.setSignedRouting(enabled) } }
@@ -2785,10 +2917,10 @@ private struct TrayView: View {
       isDisabled: store.providerOperation != nil || store.loginFree
     )
     settingRow(
-      title: "Use without OpenAI login",
+      title: routerLocalized("Use without OpenAI login"),
       detail: store.loginFree
-        ? "External providers · Codex restarts automatically"
-        : "Use connected models and restart Codex",
+        ? routerLocalized("External providers · Codex restarts automatically")
+        : routerLocalized("Use connected models and restart Codex"),
       isOn: Binding(
         get: { store.loginFree },
         set: { enabled in Task { await store.setLoginFree(enabled) } }
@@ -2796,11 +2928,11 @@ private struct TrayView: View {
       isDisabled: store.providerOperation != nil || store.signedRouting
     )
     settingRow(
-      title: "Compact old tool results",
+      title: routerLocalized("Compact old tool results (experimental)"),
       detail: target.modelSettings?.toolResultAging?.environmentOverride == true
-        ? "Forced off by CODEX_ROUTER_TOOL_RESULT_AGING=0"
+        ? routerLocalized("Forced off by CODEX_ROUTER_TOOL_RESULT_AGING=0")
         : (target.modelSettings?.toolResultAging?.stats?.savingsSummary
-          ?? "External models · applies on the next request"),
+          ?? routerLocalized("Off by default · replaces consumed tool results on external models")),
       isOn: Binding(
         get: { target.modelSettings?.toolResultAging?.enabled ?? true },
         set: { enabled in Task { await store.setToolResultAgingEnabled(enabled) } }
@@ -2810,8 +2942,8 @@ private struct TrayView: View {
     )
     maintenanceRow
     AccordionPanel(
-      title: "Providers",
-      summary: store.providerOperation == nil ? "Auto-saved" : "Applying…",
+      title: routerLocalized("Providers"),
+      summary: store.providerOperation == nil ? routerLocalized("Auto-saved") : routerLocalized("Applying…"),
       expanded: $providersExpanded
     ) {
       VStack(spacing: 0) {
@@ -2947,13 +3079,13 @@ private struct TrayView: View {
     var body: some View {
       VStack(alignment: .leading, spacing: 10) {
         AccordionPanel(
-          title: "Subagent models",
+          title: routerLocalized("Subagent models"),
           summary: subagentSummary,
           expanded: $subagentsExpanded
         ) {
           VStack(alignment: .leading, spacing: 8) {
             toggleRow(
-              title: "All proven models",
+              title: routerLocalized("All proven models"),
               detail: settings?.subagents.mode == "all"
                 ? "Every proven v2 model can run as a subagent"
                 : "Only selected proven v2 models can run as subagents",
@@ -2969,7 +3101,7 @@ private struct TrayView: View {
               ),
               disabled: busy
             )
-            Text("Subagent choices do not hide models from Codex's picker — use Model picker below for that.")
+            Text(routerLocalized("Subagent choices do not hide models from Codex's picker — use Model picker below for that."))
               .font(.system(size: 9))
               .foregroundStyle(routerMuted)
             toolbar(
@@ -3015,12 +3147,12 @@ private struct TrayView: View {
         }
 
         AccordionPanel(
-          title: "Model picker",
+          title: routerLocalized("Model picker"),
           summary: pickerSummary,
           expanded: $pickerExpanded
         ) {
           VStack(alignment: .leading, spacing: 8) {
-            Text("Hidden models stay connected but are not offered by Codex.")
+            Text(routerLocalized("Hidden models stay connected but are not offered by Codex."))
               .font(.system(size: 9))
               .foregroundStyle(routerMuted)
             toolbar(
@@ -3066,7 +3198,7 @@ private struct TrayView: View {
         }
 
         AccordionPanel(
-          title: "Local LLMs",
+          title: routerLocalized("Local LLMs"),
           summary: localLlmSummary,
           expanded: $localLlmExpanded
         ) {
@@ -3076,7 +3208,7 @@ private struct TrayView: View {
         // Header says "Vision" and nothing else; the state it used to summarise
         // is one line below, in the toggle's own detail.
         AccordionPanel(
-          title: "Vision",
+          title: routerLocalized("Vision"),
           summary: "",
           expanded: $visionExpanded
         ) {
@@ -3084,22 +3216,24 @@ private struct TrayView: View {
         }
       }
       .alert(
-        "Download anyway?",
+        routerLocalized("Download anyway?"),
         isPresented: Binding(
           get: { pendingOversizedInstall != nil },
           set: { presented in if !presented { pendingOversizedInstall = nil } }
         ),
         presenting: pendingOversizedInstall
       ) { tag in
-        Button("Download \(tag)", role: .destructive) {
+        Button("\(routerLocalized("Download")) \(tag)", role: .destructive) {
           pendingOversizedInstall = nil
           Task { await store.downloadLocalModel(tag, force: true) }
         }
-        Button("Cancel", role: .cancel) { pendingOversizedInstall = nil }
+        Button(routerLocalized("Cancel"), role: .cancel) { pendingOversizedInstall = nil }
       } message: { tag in
         Text(
-          "\(tag) is rated too large for this machine's memory or free disk. "
-            + "It will download, but it may fail to load or run very slowly."
+          RouterLanguage.isSimplifiedChinese
+            ? "\(tag) 对本机内存或可用磁盘空间来说过大。仍会下载，但可能无法加载或运行非常缓慢。"
+            : "\(tag) is rated too large for this machine's memory or free disk. "
+              + "It will download, but it may fail to load or run very slowly."
         )
       }
     }
@@ -3114,7 +3248,7 @@ private struct TrayView: View {
     // phrases truncate in place instead of making the panel wider or taller.
     @ViewBuilder private var localLlmPanel: some View {
       VStack(alignment: .leading, spacing: 10) {
-        Text("Run models locally through Ollama. Enable an installed model to make it available to Codex.")
+        Text(routerLocalized("Run models locally through Ollama. Enable an installed model to make it available to Codex."))
           .font(.system(size: 9))
           .foregroundStyle(routerMuted)
         if let operation = store.localModelOperation {
@@ -3130,7 +3264,7 @@ private struct TrayView: View {
           localCatalogSection(explore)
         }
         localInstallSection
-        Button(localDetailsExpanded ? "Hide machine & runtime" : "Machine & runtime") {
+        Button(routerLocalized(localDetailsExpanded ? "Hide machine & runtime" : "Machine & runtime")) {
           withAnimation(.easeOut(duration: 0.15)) { localDetailsExpanded.toggle() }
         }
         .buttonStyle(.borderless)
@@ -3147,7 +3281,7 @@ private struct TrayView: View {
       HStack(spacing: 9) {
         OperationPulse(tint: routerRed)
         VStack(alignment: .leading, spacing: 2) {
-          Text("\(operation.kind.label) local model")
+          Text("\(routerLocalized(operation.kind.label)) \(routerLocalized("local model"))")
             .font(.system(size: 9, weight: .semibold))
             .foregroundStyle(routerRed)
           Text(operation.tag)
@@ -3167,26 +3301,26 @@ private struct TrayView: View {
         in: RoundedRectangle(cornerRadius: 8, style: .continuous)
       )
       .accessibilityElement(children: .combine)
-      .accessibilityLabel("\(operation.kind.label) local model \(operation.tag)")
+      .accessibilityLabel("\(routerLocalized(operation.kind.label)) \(routerLocalized("local model")) \(operation.tag)")
     }
 
     @ViewBuilder private var localInstalledSection: some View {
       let installedCount = sortedLocalModels.count
       let detail = installedCount == 0
-        ? "none installed"
-        : "\(installedCount) installed · \(String(format: "%.1f", localModels?.totalGb ?? 0)) GB"
+        ? routerLocalized("none installed")
+        : "\(installedCount) \(routerLocalized("installed")) · \(String(format: "%.1f", localModels?.totalGb ?? 0)) GB"
       downloadHeader("ON THIS MAC", detail: detail)
       if sortedLocalModels.isEmpty {
-        Text("Nothing installed yet. Start with a quick pick or browse the Ollama catalog below.")
+        Text(routerLocalized("Nothing installed yet. Start with a quick pick or browse the Ollama catalog below."))
           .font(.system(size: 9))
           .foregroundStyle(routerMutedStrong)
       } else {
         HStack(spacing: 0) {
-          Text("CODEX")
+          Text(routerLocalized("CODEX"))
             .frame(width: Self.checkColumnWidth, alignment: .leading)
-          Text("MODEL")
+          Text(routerLocalized("MODEL"))
           Spacer()
-          Text("SIZE")
+          Text(routerLocalized("SIZE"))
         }
         .font(.system(size: 8, weight: .semibold))
         .foregroundStyle(routerMuted)
@@ -3203,7 +3337,7 @@ private struct TrayView: View {
       if !suggestedLocalModels.isEmpty || !suggestedVisionModels.isEmpty {
         downloadHeader("QUICK PICKS", detail: "shortlist for this Mac")
         if !visibleQuickCodingModels.isEmpty {
-          Text("CODING")
+          Text(routerLocalized("CODING"))
             .font(.system(size: 8, weight: .semibold))
             .foregroundStyle(routerMuted)
           VStack(spacing: 3) {
@@ -3213,7 +3347,7 @@ private struct TrayView: View {
           }
         }
         if !visibleQuickVisionModels.isEmpty {
-          Text("IMAGE READING")
+          Text(routerLocalized("IMAGE READING"))
             .font(.system(size: 8, weight: .semibold))
             .foregroundStyle(routerMuted)
             .padding(.top, 2)
@@ -3224,7 +3358,13 @@ private struct TrayView: View {
           }
         }
         if quickPickRemainingCount > 0 || quickPicksExpanded {
-          Button(quickPicksExpanded ? "Show fewer quick picks" : "Show \(quickPickRemainingCount) more quick picks") {
+          Button(
+            quickPicksExpanded
+              ? routerLocalized("Show fewer quick picks")
+              : (RouterLanguage.isSimplifiedChinese
+                  ? "再显示 \(quickPickRemainingCount) 个快速选项"
+                  : "Show \(quickPickRemainingCount) more quick picks")
+          ) {
             withAnimation(.easeOut(duration: 0.15)) { quickPicksExpanded.toggle() }
           }
           .buttonStyle(.borderless)
@@ -3243,40 +3383,50 @@ private struct TrayView: View {
         .count
       let showingAllCatalog = localCatalogFilter.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
       let shownCloudCount = showingAllCatalog ? cloudCount : visibleCloudCount
-      let catalogDetail = showingAllCatalog
-        ? "\(localCatalogFamilies.count) families · \(explore.count) tags"
-        : "\(localCatalogFamilies.count) families · \(visibleTagCount) matches"
+      let catalogDetail = RouterLanguage.isSimplifiedChinese
+        ? (showingAllCatalog
+            ? "\(localCatalogFamilies.count) 个系列 · \(explore.count) 个标签"
+            : "\(localCatalogFamilies.count) 个系列 · \(visibleTagCount) 个匹配")
+        : (showingAllCatalog
+            ? "\(localCatalogFamilies.count) families · \(explore.count) tags"
+            : "\(localCatalogFamilies.count) families · \(visibleTagCount) matches")
       downloadHeader(
         "DISCOVER OLLAMA",
         detail: catalogDetail +
-          (shownCloudCount > 0 ? " · \(shownCloudCount) cloud-only" : "")
+          (shownCloudCount > 0
+            ? (RouterLanguage.isSimplifiedChinese ? " · \(shownCloudCount) 个仅云端" : " · \(shownCloudCount) cloud-only")
+            : "")
       )
-      Button(variantHelpExpanded ? "Hide tag guide" : "What do these tags mean?") {
+      Button(routerLocalized(variantHelpExpanded ? "Hide tag guide" : "What do these tags mean?")) {
         withAnimation(.easeOut(duration: 0.15)) { variantHelpExpanded.toggle() }
       }
       .buttonStyle(.borderless)
       .font(.system(size: 8, weight: .medium))
       .foregroundStyle(routerMutedStrong)
       if variantHelpExpanded {
-        Text("Size tags choose the model scale. Q4/Q8/BF16 are weight precision; MLX/NVFP4 are hardware-oriented builds; cloud tags run remotely. Codex compatibility is checked only after a pull.")
+        Text(routerLocalized("Size tags choose the model scale. Q4/Q8/BF16 are weight precision; MLX/NVFP4 are hardware-oriented builds; cloud tags run remotely. Codex compatibility is checked only after a pull."))
           .font(.system(size: 8))
           .foregroundStyle(routerMuted)
           .fixedSize(horizontal: false, vertical: true)
           .padding(.top, 2)
       }
       HStack(spacing: 6) {
-        TextField("Search family or tag", text: $localCatalogFilter)
+        TextField(routerLocalized("Search family or tag"), text: $localCatalogFilter)
           .textFieldStyle(.roundedBorder)
           .font(.system(size: 10))
         if !localCatalogFilter.isEmpty {
-          Button("Clear") { localCatalogFilter = "" }
+          Button(routerLocalized("Clear")) { localCatalogFilter = "" }
             .buttonStyle(.borderless)
             .font(.system(size: 9, weight: .medium))
             .foregroundStyle(routerMutedStrong)
         }
       }
       if localCatalogFamilies.isEmpty {
-        Text("No Ollama tags match \"\(localCatalogFilter)\".")
+        Text(
+          RouterLanguage.isSimplifiedChinese
+            ? "没有匹配“\(localCatalogFilter)”的 Ollama 标签。"
+            : "No Ollama tags match \"\(localCatalogFilter)\"."
+        )
           .font(.system(size: 9))
           .foregroundStyle(routerMutedStrong)
           .padding(.top, 2)
@@ -3291,16 +3441,16 @@ private struct TrayView: View {
 
     @ViewBuilder private var localInstallSection: some View {
       downloadHeader("INSTALL A MODEL", detail: "Ollama tag or URL")
-      Text("Use a tag or model-page URL. Downloads stay headless.")
+      Text(routerLocalized("Use a tag or model-page URL. Downloads stay headless."))
         .font(.system(size: 8))
         .foregroundStyle(routerMuted)
       HStack(spacing: 6) {
-        TextField("gemma4:12b or ollama.com/library/gemma4:12b", text: $installTag)
+        TextField(routerLocalized("gemma4:12b or ollama.com/library/gemma4:12b"), text: $installTag)
           .textFieldStyle(.roundedBorder)
           .font(.system(size: 10))
           .disabled(busy || store.localDownload?.isRunning == true)
           .onSubmit { submitInstall() }
-        Button("Install") { submitInstall() }
+        Button(routerLocalized("Install")) { submitInstall() }
           .buttonStyle(.borderless)
           .font(.system(size: 9, weight: .medium))
           .foregroundStyle(canInstall ? routerMint : routerMutedStrong)
@@ -3374,18 +3524,18 @@ private struct TrayView: View {
           .padding(.bottom, 2)
       }
       if let recommended {
-        Text("BEST FIT FOR THIS MAC")
+        Text(routerLocalized("BEST FIT FOR THIS MAC"))
           .font(.system(size: 8, weight: .semibold))
           .foregroundStyle(routerMint)
           .padding(.bottom, 1)
         exploreLocalRow(recommended, isRecommended: true)
       } else if family.models.allSatisfy({ $0.downloadable == false }) {
-        Text("CLOUD ONLY · NO LOCAL DOWNLOAD")
+        Text(routerLocalized("CLOUD ONLY · NO LOCAL DOWNLOAD"))
           .font(.system(size: 8, weight: .semibold))
           .foregroundStyle(routerMutedStrong)
           .padding(.bottom, 1)
       } else {
-        Text("NO LOCAL VARIANT FITS THIS MAC")
+        Text(routerLocalized("NO LOCAL VARIANT FITS THIS MAC"))
           .font(.system(size: 8, weight: .semibold))
           .foregroundStyle(routerRed)
           .padding(.bottom, 1)
@@ -3400,7 +3550,13 @@ private struct TrayView: View {
         .padding(.top, 3)
       }
       if expanded || hiddenCount > 0 {
-        Button(expanded ? "Show fewer tags" : "View all \(family.models.count) tags") {
+        Button(
+          expanded
+            ? routerLocalized("Show fewer tags")
+            : (RouterLanguage.isSimplifiedChinese
+                ? "查看全部 \(family.models.count) 个标签"
+                : "View all \(family.models.count) tags")
+        ) {
           withAnimation(.easeOut(duration: 0.15)) {
             if expandedLocalVariants.contains(family.id) {
               expandedLocalVariants.remove(family.id)
@@ -3424,20 +3580,27 @@ private struct TrayView: View {
         }
         if let runtime = localModels?.runtime {
           let runtimeLabel = runtime.installed == true
-            ? "Ollama \(runtime.version ?? "installed")"
-            : "Ollama not installed"
-          Text("\(runtimeLabel) · headless server \(runtime.running == true ? "managed" : "not started")")
+            ? "Ollama \(runtime.version ?? routerLocalized("installed"))"
+            : (RouterLanguage.isSimplifiedChinese ? "Ollama 未安装" : "Ollama not installed")
+          let serverState = runtime.running == true
+            ? routerLocalized("managed")
+            : routerLocalized("not started")
+          Text(
+            RouterLanguage.isSimplifiedChinese
+              ? "\(runtimeLabel) · 后台服务器 \(serverState)"
+              : "\(runtimeLabel) · headless server \(serverState)"
+          )
             .font(.system(size: 8))
             .foregroundStyle(runtime.installed == true ? routerMint : routerYellow)
           if let modelsPath = runtime.modelsPath {
-            Text("Models: \(modelsPath)")
+            Text("\(routerLocalized("Models:")) \(modelsPath)")
               .font(.system(size: 8))
               .foregroundStyle(routerMuted)
               .lineLimit(1)
               .truncationMode(.middle)
           }
           if runtime.installed == true {
-            Button("Update Ollama") { Task { await store.updateLocalOllama() } }
+            Button(routerLocalized("Update Ollama")) { Task { await store.updateLocalOllama() } }
               .buttonStyle(.borderless)
               .font(.system(size: 8, weight: .medium))
               .foregroundStyle(routerMutedStrong)
@@ -3445,11 +3608,19 @@ private struct TrayView: View {
           }
         }
         if let families = localModels?.families, !families.isEmpty {
-          Text("\(families.count) Ollama families; exact tags are grouped above.")
+          Text(
+            RouterLanguage.isSimplifiedChinese
+              ? "上方已按系列归类 \(families.count) 个 Ollama 系列的具体标签。"
+              : "\(families.count) Ollama families; exact tags are grouped above."
+          )
             .font(.system(size: 8))
             .foregroundStyle(routerMuted)
         }
-        Text("Speed is measured after install with Ollama's eval counters; unmeasured models show no invented number.")
+        Text(
+          RouterLanguage.isSimplifiedChinese
+            ? "安装后会使用 Ollama 的评测计数器测量速度；未测量的模型不会显示臆造的数字。"
+            : "Speed is measured after install with Ollama's eval counters; unmeasured models show no invented number."
+        )
           .font(.system(size: 8))
           .foregroundStyle(routerMuted)
       }
@@ -3482,11 +3653,11 @@ private struct TrayView: View {
             .truncationMode(.tail)
         }
         Spacer(minLength: 3)
-        Text(downloadable ? String(format: "%.1f GB", model.sizeGb) : "cloud")
+        Text(downloadable ? String(format: "%.1f GB", model.sizeGb) : routerLocalized("cloud"))
           .font(.system(size: 8))
           .foregroundStyle(routerMuted)
           .monospacedDigit()
-        Text(downloadable ? (tooLarge ? "won't fit" : model.fit) : "cloud only")
+        Text(downloadable ? (tooLarge ? routerLocalized("won't fit") : routerLocalized(model.fit)) : routerLocalized("cloud only"))
           .font(.system(size: 8))
           .foregroundStyle(!downloadable ? routerMuted : (tooLarge ? routerRed : routerMutedStrong))
         if downloadable {
@@ -3494,7 +3665,7 @@ private struct TrayView: View {
           // the button left those tags with no install path at all. The label
           // changes to name the risk and the tap asks once before spending the
           // gigabytes; confirming sends --force.
-          Button(tooLarge ? "Anyway" : "Download") {
+          Button(tooLarge ? routerLocalized("Anyway") : routerLocalized("Download")) {
             if tooLarge {
               pendingOversizedInstall = model.tag
             } else {
@@ -3508,7 +3679,7 @@ private struct TrayView: View {
           )
           .disabled(!canDownloadLocalSuggestion)
         } else {
-          Text("cloud only")
+          Text(routerLocalized("cloud only"))
             .font(.system(size: 8, weight: .medium))
             .foregroundStyle(routerMutedStrong)
         }
@@ -3518,30 +3689,30 @@ private struct TrayView: View {
     private func localVariantTitle(_ model: AvailableLocalModel) -> String {
       guard let variant = model.variant, !variant.isEmpty else { return model.tag }
       switch variant.lowercased() {
-      case "latest": return "Default"
-      case "cloud": return "Cloud"
+      case "latest": return routerLocalized("Default")
+      case "cloud": return routerLocalized("Cloud")
       default: break
       }
       if localVariantIsStandard(model) { return variant.uppercased() }
       let lower = variant.lowercased()
-      if lower.contains("mlx") { return "Apple Silicon build" }
-      if lower.contains("nvfp4") { return "NVFP4 build" }
-      if lower.contains("q4") || lower.contains("int4") { return "4-bit build" }
-      if lower.contains("q8") || lower.contains("int8") { return "8-bit build" }
-      if lower.contains("bf16") { return "BF16 build" }
-      if lower.contains("coding") { return "Coding build" }
-      return "Specialized build"
+      if lower.contains("mlx") { return routerLocalized("Apple Silicon build") }
+      if lower.contains("nvfp4") { return routerLocalized("NVFP4 build") }
+      if lower.contains("q4") || lower.contains("int4") { return routerLocalized("4-bit build") }
+      if lower.contains("q8") || lower.contains("int8") { return routerLocalized("8-bit build") }
+      if lower.contains("bf16") { return routerLocalized("BF16 build") }
+      if lower.contains("coding") { return routerLocalized("Coding build") }
+      return routerLocalized("Specialized build")
     }
 
     private func localVariantBadge(
       _ model: AvailableLocalModel,
       isRecommended: Bool
     ) -> String? {
-      if isRecommended { return "BEST FIT" }
-      if model.downloadable == false { return "CLOUD" }
-      if model.variant == "latest" { return "DEFAULT" }
-      if model.fit == "tight" || model.diskFit == "tight" { return "TIGHT" }
-      if !localModelFits(model) { return "WON'T FIT" }
+      if isRecommended { return routerLocalized("BEST FIT") }
+      if model.downloadable == false { return routerLocalized("CLOUD") }
+      if model.variant == "latest" { return routerLocalized("DEFAULT") }
+      if model.fit == "tight" || model.diskFit == "tight" { return routerLocalized("TIGHT") }
+      if !localModelFits(model) { return routerLocalized("WON'T FIT") }
       return nil
     }
 
@@ -3561,7 +3732,11 @@ private struct TrayView: View {
           Text(model.tag)
             .font(.system(size: 9, weight: .medium))
             .lineLimit(1)
-          Text(model.fit == "tight" ? "memory tight" : (model.isVerified ? "verified" : "untested"))
+          Text(
+            routerLocalized(
+              model.fit == "tight" ? "memory tight" : (model.isVerified ? "verified" : "untested")
+            )
+          )
             .font(.system(size: 8))
             .foregroundStyle(model.fit == "tight" ? routerYellow : (model.isVerified ? routerMint : routerMuted))
             .lineLimit(1)
@@ -3571,7 +3746,7 @@ private struct TrayView: View {
           .font(.system(size: 8))
           .foregroundStyle(routerMuted)
           .monospacedDigit()
-        Button("Download") {
+        Button(routerLocalized("Download")) {
           Task { await store.downloadLocalModel(model.tag) }
         }
         .buttonStyle(.borderless)
@@ -3588,7 +3763,11 @@ private struct TrayView: View {
           Text(model.tag)
             .font(.system(size: 9, weight: .medium))
             .lineLimit(1)
-          Text("\(model.accuracy) · \(model.fit)")
+          Text(
+            RouterLanguage.isSimplifiedChinese
+              ? "\(routerLocalized(model.accuracy)) · \(routerLocalized(model.fit))"
+              : "\(model.accuracy) · \(model.fit)"
+          )
             .font(.system(size: 8))
             .foregroundStyle(model.accuracy == "accurate" ? routerMint : routerMuted)
             .lineLimit(1)
@@ -3598,7 +3777,7 @@ private struct TrayView: View {
           .font(.system(size: 8))
           .foregroundStyle(routerMuted)
           .monospacedDigit()
-        Button("Download") {
+        Button(routerLocalized("Download")) {
           Task { await store.downloadLocalModel(model.tag) }
         }
         .buttonStyle(.borderless)
@@ -3612,10 +3791,10 @@ private struct TrayView: View {
     @ViewBuilder private func downloadHeader(_ title: String, detail: String?) -> some View {
       Divider().padding(.vertical, 2)
       HStack(spacing: 4) {
-        Text(title)
+        Text(routerLocalized(title))
         Spacer()
         if let detail {
-          Text(detail).lineLimit(1).truncationMode(.tail)
+          Text(routerLocalized(detail)).lineLimit(1).truncationMode(.tail)
         }
       }
       .font(.system(size: 8, weight: .semibold))
@@ -3663,7 +3842,11 @@ private struct TrayView: View {
               .fill(tint)
               .frame(width: 6, height: 6)
           }
-          Text(isError ? "Local model install failed" : (isDone ? "Local model ready" : "Installing local model"))
+          Text(
+            isError
+              ? routerLocalized("Local model install failed")
+              : (isDone ? routerLocalized("Local model ready") : routerLocalized("Installing local model"))
+          )
             .font(.system(size: 9, weight: .semibold))
             .foregroundStyle(tint)
           Spacer(minLength: 4)
@@ -3703,7 +3886,7 @@ private struct TrayView: View {
         ProgressView(value: Double(percent ?? 0), total: 100)
           .progressViewStyle(.linear)
           .tint(routerMint)
-        Text("Installing\(tagLabel) · \(percent ?? 0)%")
+        Text("\(routerLocalized("Installing"))\(tagLabel) · \(percent ?? 0)%")
           .font(.system(size: 9, weight: .medium))
           .foregroundStyle(routerMint)
           .lineLimit(1)
@@ -3735,7 +3918,7 @@ private struct TrayView: View {
               .lineLimit(1)
               .truncationMode(.middle)
             if model.running {
-              Text("loaded")
+              Text(routerLocalized("loaded"))
                 .font(.system(size: 8, weight: .medium))
                 .foregroundStyle(routerMint)
             }
@@ -3745,26 +3928,26 @@ private struct TrayView: View {
               .foregroundStyle(routerMutedStrong)
               .layoutPriority(1)
             Menu {
-              Button("Measure speed") {
+              Button(routerLocalized("Measure speed")) {
                 Task { await store.benchmarkLocalModelSpeed(model.tag) }
               }
               .disabled(busy || store.benchmarkingTag != nil)
               if model.vision {
-                Button("Test image reading") {
+                Button(routerLocalized("Test image reading")) {
                   Task { await store.benchmarkLocalVisionModel(model.tag) }
                 }
                 .disabled(busy || store.benchmarkingTag != nil)
                 if isVisionEngine(model) {
-                  Label("Reading images", systemImage: "checkmark")
+                  Label(routerLocalized("Reading images"), systemImage: "checkmark")
                 } else {
-                  Button("Use for image reading") {
+                  Button(routerLocalized("Use for image reading")) {
                     Task { await store.useLocalVisionModel(model.tag) }
                   }
                   .disabled(busy)
                 }
               }
               Divider()
-              Button("Remove model", role: .destructive) {
+              Button(routerLocalized("Remove model"), role: .destructive) {
                 armedRemoval = model.tag
               }
               .disabled(busy)
@@ -3776,7 +3959,11 @@ private struct TrayView: View {
             }
             .menuStyle(.borderlessButton)
             .buttonStyle(.borderless)
-            .accessibilityLabel("Actions for \(model.tag)")
+            .accessibilityLabel(
+              RouterLanguage.isSimplifiedChinese
+                ? "\(model.tag) 的操作"
+                : "Actions for \(model.tag)"
+            )
           }
           if let operation {
             HStack(spacing: 7) {
@@ -3797,7 +3984,7 @@ private struct TrayView: View {
             downloadBar(tag: nil, percent: download.percent)
           } else {
             if store.benchmarkingTag == model.tag {
-              Text("testing…")
+              Text(routerLocalized("testing…"))
                 .font(.system(size: 9, weight: .medium))
                 .foregroundStyle(routerYellow)
             } else {
@@ -3806,10 +3993,10 @@ private struct TrayView: View {
           }
           if armedRemoval == model.tag {
             HStack(spacing: 6) {
-              Text("Confirm removal?")
+              Text(routerLocalized("Confirm removal?"))
                 .font(.system(size: 8, weight: .medium))
                 .foregroundStyle(routerRed)
-              Button("Confirm") {
+              Button(routerLocalized("Confirm")) {
                 armedRemoval = nil
                 Task { await store.uninstallLocalModel(model.tag) }
               }
@@ -3817,7 +4004,7 @@ private struct TrayView: View {
               .font(.system(size: 8, weight: .semibold))
               .foregroundStyle(routerRed)
               .disabled(busy)
-              Button("Cancel") { armedRemoval = nil }
+              Button(routerLocalized("Cancel")) { armedRemoval = nil }
                 .buttonStyle(.borderless)
                 .font(.system(size: 8))
                 .foregroundStyle(routerMutedStrong)
@@ -3837,7 +4024,7 @@ private struct TrayView: View {
         Text(localRoleLabel(model))
           .foregroundStyle(localRoleColor(model))
         if let accuracy = model.accuracy, model.vision {
-          Text("· \(accuracy)")
+          Text("· \(RouterLanguage.isSimplifiedChinese ? routerLocalized(accuracy) : accuracy)")
             .foregroundStyle(accuracy == "accurate" ? routerMint : routerRed)
         }
         if let speed = model.tokensPerSecond {
@@ -3845,7 +4032,7 @@ private struct TrayView: View {
             .foregroundStyle(routerMutedStrong)
             .monospacedDigit()
         } else {
-          Text("· speed unmeasured")
+          Text("· \(routerLocalized("speed unmeasured"))")
             .foregroundStyle(routerMuted)
         }
       }
@@ -3855,7 +4042,7 @@ private struct TrayView: View {
 
     private func localRoleLabel(_ model: InstalledLocalModel) -> String {
       if model.canBeChatModel { return model.chatRoleLabel }
-      return model.vision ? "vision only — no tools" : model.chatRoleLabel
+      return model.vision ? routerLocalized("vision only — no tools") : model.chatRoleLabel
     }
 
     private func localRoleColor(_ model: InstalledLocalModel) -> Color {
@@ -3962,18 +4149,20 @@ private struct TrayView: View {
         && model.diskFit != "too-large"
     }
 
-    private func localFamilySummary(_ family: LocalCatalogFamily) -> String {
-      let fits = family.models.filter(localModelFits).count
-      let cloud = family.models.filter { $0.downloadable == false }.count
-      var parts = ["\(family.models.count) tags"]
-      if fits > 0 {
-        parts.append("\(fits) fit")
-      } else if cloud == family.models.count {
-        parts.append("cloud only")
-      } else {
-        parts.append("none fit")
-      }
-      if cloud > 0 && cloud < family.models.count { parts.append("\(cloud) cloud") }
+  private func localFamilySummary(_ family: LocalCatalogFamily) -> String {
+    let fits = family.models.filter(localModelFits).count
+    let cloud = family.models.filter { $0.downloadable == false }.count
+    var parts = [RouterLanguage.isSimplifiedChinese ? "\(family.models.count) 个标签" : "\(family.models.count) tags"]
+    if fits > 0 {
+      parts.append(RouterLanguage.isSimplifiedChinese ? "\(fits) 个适配" : "\(fits) fit")
+    } else if cloud == family.models.count {
+      parts.append(routerLocalized("cloud only"))
+    } else {
+      parts.append(routerLocalized("none fit"))
+    }
+    if cloud > 0 && cloud < family.models.count {
+      parts.append(RouterLanguage.isSimplifiedChinese ? "\(cloud) 个云端" : "\(cloud) cloud")
+    }
       return parts.joined(separator: " · ")
     }
 
@@ -4008,21 +4197,25 @@ private struct TrayView: View {
 
     private var localLlmSummary: String {
       if let download = store.localDownload, download.isRunning {
-        let tag = download.tag ?? "local model"
+        let tag = download.tag ?? routerLocalized("local model")
         let percent = download.percent.map { " · \($0)%" } ?? ""
-        return "Downloading \(tag)\(percent)"
+        return "\(routerLocalized("Downloading")) \(tag)\(percent)"
       }
       if let download = store.localDownload, download.status == "error" {
-        return "Last download failed"
+        return routerLocalized("Last download failed")
       }
       guard let localModels, localModels.installed > 0 else {
         let available = localModels?.availableExplore?.count ?? 0
-        return available > 0 ? "none installed · \(available) available" : "none installed"
+        return available > 0
+          ? (RouterLanguage.isSimplifiedChinese ? "尚未安装 · 有 \(available) 个可用" : "none installed · \(available) available")
+          : routerLocalized("none installed")
       }
       let chat = localModels.usableAsChat ?? 0
       let available = localModels.availableExplore?.count ?? 0
       let suffix = available > 0 ? " · \(available) available" : ""
-      return "\(localModels.installed) installed · \(chat) for Codex · \(String(format: "%.1f", localModels.totalGb)) GB\(suffix)"
+      return RouterLanguage.isSimplifiedChinese
+        ? "已安装 \(localModels.installed) 个 · \(chat) 个可用于 Codex · \(String(format: "%.1f", localModels.totalGb)) GB\(suffix.replacingOccurrences(of: " available", with: " 个可用"))"
+        : "\(localModels.installed) installed · \(chat) for Codex · \(String(format: "%.1f", localModels.totalGb)) GB\(suffix)"
     }
 
     private var canInstall: Bool {
@@ -4045,14 +4238,14 @@ private struct TrayView: View {
     // needs the agent.
     @ViewBuilder private var visionPanel: some View {
       VStack(alignment: .leading, spacing: 8) {
-        Text("Text-only models can't see images. When on, a vision model reads the paste and hands over the text.")
+        Text(routerLocalized("Text-only models can't see images. When on, a vision model reads the paste and hands over the text."))
           .font(.system(size: 9))
           .foregroundStyle(routerMuted)
         toggleRow(
-          title: "Read images for text-only models",
+          title: routerLocalized("Read images for text-only models"),
           detail: vision?.enabled == true
-            ? "Reading via \(currentEngineLabel)"
-            : "Off — text-only models refuse pasted images",
+            ? (RouterLanguage.isSimplifiedChinese ? "读取引擎：\(currentEngineLabel)" : "Reading via \(currentEngineLabel)")
+            : routerLocalized("Off — text-only models refuse pasted images"),
           isOn: Binding(
             get: { vision?.enabled == true },
             set: { on in Task { await store.setVisionBridgeEnabled(on) } }
@@ -4063,7 +4256,7 @@ private struct TrayView: View {
         // resized the whole panel on every toggle, and because the state only
         // settles after the control command returns, the jump happened twice.
         HStack(spacing: 8) {
-          Text("Engine")
+          Text(routerLocalized("Engine"))
             .font(.system(size: 11, weight: .medium))
             // The one label that must never compress; it is four characters
             // and the menu beside it is what should give way.
@@ -4086,14 +4279,14 @@ private struct TrayView: View {
         // of alphabetical order. The menu now offers only models the operator
         // can actually evaluate, and a fresh install starts on a named default.
         if !(vision?.paidEngines ?? []).isEmpty {
-          Section("Paid (cloud)") {
+          Section(routerLocalized("Paid (cloud)")) {
             ForEach(vision?.paidEngines ?? []) { option in
               engineEntry(option)
             }
           }
         }
         if !(vision?.nativeEngines ?? []).isEmpty {
-          Section("Your ChatGPT plan") {
+          Section(routerLocalized("Your ChatGPT plan")) {
             ForEach(vision?.nativeEngines ?? []) { option in
               engineEntry(option)
             }
@@ -4134,7 +4327,7 @@ private struct TrayView: View {
         }
       } else {
         Menu(engineEntryLabel(option, selected: isSelectedEngine(option.slug))) {
-          Button(effortEntryLabel("Model default", selected: isSelectedEngine(option.slug) && vision?.effort == nil)) {
+          Button(effortEntryLabel(routerLocalized("Model default"), selected: isSelectedEngine(option.slug) && vision?.effort == nil)) {
             Task { await store.setVisionBridgeEngine(option.slug, effort: "default") }
           }
           ForEach(efforts, id: \.self) { effort in
@@ -4164,9 +4357,9 @@ private struct TrayView: View {
     private var vision: VisionBridgeSnapshot? { settings?.visionBridge }
 
     private var currentEngineLabel: String {
-      guard let vision else { return "none" }
+      guard let vision else { return routerLocalized("none") }
       if vision.engine == "local" {
-        return "Local · \(vision.local?.model ?? "model")"
+        return "\(routerLocalized("Local")) · \(vision.local?.model ?? routerLocalized("MODEL"))"
       }
       let suffix = vision.effort.map { " · \($0)" } ?? ""
       if vision.engine == nil {
@@ -4174,11 +4367,11 @@ private struct TrayView: View {
         // recorded but nothing resolved yet. "Auto" alone is true throughout;
         // "Auto · none" was a claim that flashed and then contradicted itself.
         guard let resolved = vision.resolvedEngineName ?? vision.resolvedEngine else {
-          return "Auto\(suffix)"
+          return "\(routerLocalized("Auto"))\(suffix)"
         }
-        return "Auto · \(resolved)\(suffix)"
+        return "\(routerLocalized("Auto")) · \(resolved)\(suffix)"
       }
-      return "\(vision.resolvedEngineName ?? vision.resolvedEngine ?? vision.engine ?? "none")\(suffix)"
+      return "\(vision.resolvedEngineName ?? vision.resolvedEngine ?? vision.engine ?? routerLocalized("none"))\(suffix)"
     }
 
     private var hiddenModels: Set<String> {
@@ -4199,19 +4392,23 @@ private struct TrayView: View {
     }
 
     private func subagentDetail(for model: RouterModel) -> String {
-      if model.visible == false { return "Hidden from picker — show it below to use it here" }
-      if isSubagent(model) { return "Proven v2" }
-      return "Not selected"
+      if model.visible == false { return routerLocalized("Hidden from picker — show it below to use it here") }
+      if isSubagent(model) { return routerLocalized("Proven v2") }
+      return routerLocalized("Not selected")
     }
 
-    private var subagentSummary: String {
+  private var subagentSummary: String {
       let count = enabledExternalModels.filter { isSubagent($0) }.count
-      return "\(count) enabled · \(settings?.subagents.mode ?? "proven")"
+      return RouterLanguage.isSimplifiedChinese
+        ? "\(count) 个已启用 · \(settings?.subagents.mode ?? "proven")"
+        : "\(count) enabled · \(settings?.subagents.mode ?? "proven")"
     }
 
     private var pickerSummary: String {
       let visible = enabledModels.filter { !hiddenModels.contains($0.slug) }.count
-      return "\(visible) visible · \(hiddenModels.count) hidden"
+      return RouterLanguage.isSimplifiedChinese
+        ? "\(visible) 个显示 · \(hiddenModels.count) 个隐藏"
+        : "\(visible) visible · \(hiddenModels.count) hidden"
     }
 
     private func toggleRow(
@@ -4370,28 +4567,28 @@ private struct TrayView: View {
             .controlSize(.small)
             .tint(routerAccent)
             .frame(width: 94)
-            .accessibilityLabel("Running Codex Router maintenance")
+            .accessibilityLabel(routerLocalized("Running Codex Router maintenance"))
         } else {
           Button {
             Task { await store.updateAndVerify() }
           } label: {
-            Label("Update", systemImage: "arrow.triangle.2.circlepath")
+            Label(routerLocalized("Update"), systemImage: "arrow.triangle.2.circlepath")
           }
           .buttonStyle(AccentButtonStyle())
           .disabled(store.providerOperation != nil)
           .opacity(store.providerOperation == nil ? 1 : 0.5)
-          .help("Apply the checked-out router revision, then run the Codex doctor")
-          .accessibilityLabel("Update and verify Codex Router")
+          .help(routerLocalized("Apply the checked-out router revision, then run the Codex doctor"))
+          .accessibilityLabel(routerLocalized("Update and verify Codex Router"))
           Button {
             Task { await store.fixAndVerify() }
           } label: {
-            Label("Fix", systemImage: "wrench.and.screwdriver")
+            Label(routerLocalized("Fix"), systemImage: "wrench.and.screwdriver")
           }
           .buttonStyle(AccentButtonStyle())
           .disabled(store.providerOperation != nil)
           .opacity(store.providerOperation == nil ? 1 : 0.5)
-          .help("Run the Codex doctor and repair managed router files")
-          .accessibilityLabel("Fix Codex Router installation")
+          .help(routerLocalized("Run the Codex doctor and repair managed router files"))
+          .accessibilityLabel(routerLocalized("Fix Codex Router installation"))
         }
       }
       if maintenanceFailed {
@@ -4410,15 +4607,15 @@ private struct TrayView: View {
 
   private var maintenanceStatus: String {
     if store.maintenanceRunning {
-      return "Working…"
+      return routerLocalized("Working…")
     }
     if store.maintenanceSucceeded {
-      return store.maintenanceMessage ?? "All good"
+      return store.maintenanceMessage ?? routerLocalized("All good")
     }
     if maintenanceFailed {
-      return "Update or fix failed"
+      return routerLocalized("Update or fix failed")
     }
-    return store.maintenanceMessage ?? "Router ready"
+    return store.maintenanceMessage ?? routerLocalized("Router ready")
   }
 
   private var maintenanceFailed: Bool {
@@ -4434,9 +4631,9 @@ private struct TrayView: View {
 
   private var emptyState: some View {
     VStack(spacing: 10) {
-      Text("Router unavailable")
+      Text(routerLocalized("Router unavailable"))
         .font(.system(size: 13, weight: .semibold))
-      Text("Run setup, then refresh this panel.")
+      Text(routerLocalized("Run setup, then refresh this panel."))
         .font(.system(size: 11))
         .foregroundStyle(routerMuted)
     }
@@ -4445,7 +4642,7 @@ private struct TrayView: View {
 
   private var footer: some View {
     HStack(spacing: 9) {
-      Button(store.isRefreshing ? "Refreshing…" : "Refresh") {
+      Button(store.isRefreshing ? routerLocalized("Refreshing…") : routerLocalized("Refresh")) {
         Task {
           await store.refresh()
           await store.refreshAccountUsage()
@@ -4465,12 +4662,12 @@ private struct TrayView: View {
           .foregroundStyle(Color(red: 1, green: 0.61, blue: 0.52))
       } else {
         Spacer()
-        Text(store.lastUpdated.map { "Updated \($0.formatted(date: .omitted, time: .shortened))" } ?? "Awaiting data")
+        Text(store.lastUpdated.map { "\(routerLocalized("Updated")) \($0.formatted(date: .omitted, time: .shortened))" } ?? routerLocalized("Awaiting data"))
           .font(.system(size: 10, weight: .regular))
           .foregroundStyle(routerMuted)
       }
 
-      Button("Quit") { NSApp.terminate(nil) }
+      Button(routerLocalized("Quit")) { NSApp.terminate(nil) }
         .buttonStyle(.plain)
         .font(.system(size: 11, weight: .medium))
         .foregroundStyle(routerMuted)
@@ -4499,7 +4696,7 @@ private struct ProviderSetupRow: View {
   @State private var removalArmed = false
   @State private var armGeneration = 0
 
-  private var credentialLabel: String { setup?.credentialLabel ?? "API key" }
+  private var credentialLabel: String { setup?.credentialLabel ?? routerLocalized("API key") }
 
   var body: some View {
     VStack(alignment: .leading, spacing: 9) {
@@ -4528,17 +4725,26 @@ private struct ProviderSetupRow: View {
 
       if showingKeyField, setup?.kind == "api" {
         VStack(alignment: .leading, spacing: 5) {
-          Text(setup?.configured == true ? "Replacement \(credentialLabel)" : credentialLabel)
+          Text(
+            setup?.configured == true
+              ? (RouterLanguage.isSimplifiedChinese ? "替换\(credentialLabel)" : "Replacement \(credentialLabel)")
+              : credentialLabel
+          )
             .font(.system(size: 9, weight: .medium))
             .foregroundStyle(routerMuted)
           HStack(spacing: 7) {
-            SecureField("Paste \(credentialLabel.lowercased())", text: $apiKey)
+            SecureField(
+              RouterLanguage.isSimplifiedChinese
+                ? "粘贴\(credentialLabel)"
+                : "Paste \(credentialLabel.lowercased())",
+              text: $apiKey
+            )
               .textFieldStyle(.plain)
               .font(.system(size: 11, design: .monospaced))
               .padding(.horizontal, 9)
               .padding(.vertical, 7)
               .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 6))
-            Button("Save") {
+            Button(routerLocalized("Save")) {
               let key = apiKey
               apiKey = ""
               showingKeyField = false
@@ -4569,23 +4775,23 @@ private struct ProviderSetupRow: View {
   }
 
   private var detail: String {
-    if removalArmed { return "Click the check again to delete this credential" }
-    guard let setup else { return "Checking setup…" }
+    if removalArmed { return routerLocalized("Click the check again to delete this credential") }
+    guard let setup else { return routerLocalized("Checking setup…") }
     if oauthNeedsReconnect {
-      return "Session expired · reconnect for account usage"
+      return routerLocalized("Session expired · reconnect for account usage")
     }
     if setup.configured {
-      let visibility = provider.enabled ? "Available in Codex" : "Hidden from Codex"
+      let visibility = provider.enabled ? routerLocalized("Available in Codex") : routerLocalized("Hidden from Codex")
       return setup.signedIn == true
-        ? "Signed in · \(visibility)"
-        : "Ready · \(visibility)"
+        ? (RouterLanguage.isSimplifiedChinese ? "已登录 · \(visibility)" : "Signed in · \(visibility)")
+        : (RouterLanguage.isSimplifiedChinese ? "就绪 · \(visibility)" : "Ready · \(visibility)")
     }
     switch setup.action {
-    case "install": return "Official CLI required"
-    case "login": return "Sign in with the official CLI"
+    case "install": return routerLocalized("Official CLI required")
+    case "login": return routerLocalized("Sign in with the official CLI")
     case "add-key":
-      return offersSignIn ? "Sign in or paste an API key" : "\(credentialLabel) required"
-    default: return "Setup required"
+      return offersSignIn ? routerLocalized("Sign in or paste an API key") : "\(credentialLabel) \(routerLocalized("required"))"
+    default: return routerLocalized("Setup required")
     }
   }
 
@@ -4594,7 +4800,7 @@ private struct ProviderSetupRow: View {
   // Names both halves when both will run, so one click never does more than
   // the label promised.
   private var signInTitle: String {
-    setup?.signInAction == "install" ? "Install & Sign In" : "Sign In"
+    setup?.signInAction == "install" ? routerLocalized("Install & Sign In") : routerLocalized("Sign In")
   }
 
   @ViewBuilder
@@ -4608,7 +4814,7 @@ private struct ProviderSetupRow: View {
       HStack(spacing: 8) {
         if setup?.kind == "oauth" {
           if oauthNeedsReconnect {
-            Button("Reconnect", action: onLogin)
+            Button(routerLocalized("Reconnect"), action: onLogin)
               .buttonStyle(.plain)
               .font(.system(size: 10, weight: .medium))
               .foregroundStyle(routerYellow)
@@ -4621,7 +4827,7 @@ private struct ProviderSetupRow: View {
             }
             .buttonStyle(.plain)
             .foregroundStyle(routerAccent)
-            .help("Reconnect OAuth")
+            .help(routerLocalized("Reconnect OAuth"))
             .disabled(controlsDisabled)
           }
         }
@@ -4635,9 +4841,9 @@ private struct ProviderSetupRow: View {
           }
           .buttonStyle(.plain)
           .foregroundStyle(routerAccent)
-          .help(setup?.signInAction == "install"
+          .help(routerLocalized(setup?.signInAction == "install"
             ? "Install the official CLI and sign in"
-            : "Sign in again with the official CLI")
+            : "Sign in again with the official CLI"))
           .disabled(controlsDisabled)
         }
         if setup?.kind == "api" {
@@ -4648,9 +4854,11 @@ private struct ProviderSetupRow: View {
           }
           .buttonStyle(.plain)
           .foregroundStyle(routerAccent)
-          .help(showingKeyField
-            ? "Cancel credential replacement"
-            : "Replace \(credentialLabel)")
+          .help(
+            showingKeyField
+              ? routerLocalized("Cancel credential replacement")
+              : (RouterLanguage.isSimplifiedChinese ? "替换\(credentialLabel)" : "Replace \(credentialLabel)")
+          )
           .disabled(controlsDisabled)
 
           Button(action: { tapRemove() }) {
@@ -4660,9 +4868,11 @@ private struct ProviderSetupRow: View {
           }
           .buttonStyle(.plain)
           .foregroundStyle(removalArmed ? routerRed : routerYellow)
-          .help(removalArmed
-            ? "Click again to delete the stored credential"
-            : "Remove stored \(credentialLabel)")
+          .help(
+            removalArmed
+              ? routerLocalized("Click again to delete the stored credential")
+              : (RouterLanguage.isSimplifiedChinese ? "移除已保存的\(credentialLabel)" : "Remove stored \(credentialLabel)")
+          )
           .disabled(controlsDisabled)
         }
         Toggle("", isOn: Binding(get: { provider.enabled }, set: onToggle))
@@ -4694,14 +4904,14 @@ private struct ProviderSetupRow: View {
 
   private var actionTitle: String {
     switch setup?.action {
-    case "install": return "Install & Sign In"
-    case "login": return "Sign In"
+    case "install": return routerLocalized("Install & Sign In")
+    case "login": return routerLocalized("Sign In")
     case "add-key":
-      guard !showingKeyField else { return "Cancel" }
-      return credentialLabel == "API key"
-        ? "Add Key"
-        : "Add \(credentialLabel)"
-    default: return "Checking…"
+      guard !showingKeyField else { return routerLocalized("Cancel") }
+      return credentialLabel == routerLocalized("API key")
+        ? routerLocalized("Add Key")
+        : (RouterLanguage.isSimplifiedChinese ? "添加\(credentialLabel)" : "Add \(credentialLabel)")
+    default: return routerLocalized("Checking…")
     }
   }
 
@@ -4751,6 +4961,12 @@ private struct ProviderSetupRow: View {
 private struct ProviderUsageSection: View {
   @ObservedObject var store: RouterStore
   @State private var range: UsageRange = .week
+  @AppStorage("ModelRouterTray.tokenDisplayUnit") private var tokenDisplayUnitRawValue =
+    TokenDisplayUnit.full.rawValue
+
+  private var tokenDisplayUnit: TokenDisplayUnit {
+    TokenDisplayUnit(rawValue: self.tokenDisplayUnitRawValue) ?? .full
+  }
 
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
@@ -4777,15 +4993,24 @@ private struct ProviderUsageSection: View {
       }
 
       HStack(alignment: .firstTextBaseline) {
-        Text(store.selectedUsageUsesChatGPT ? "Daily token usage" : "Router traffic")
+        Text(routerLocalized(store.selectedUsageUsesChatGPT ? "Daily token usage" : "Router traffic"))
           .font(.system(size: 10, weight: .medium))
           .foregroundStyle(routerMuted)
         Spacer()
-        UsageRangePicker(selection: $range)
+        HStack(spacing: 5) {
+          UsageRangePicker(selection: $range)
+          TokenDisplayUnitPicker(selection: Binding(
+            get: { self.tokenDisplayUnit },
+            set: { self.tokenDisplayUnitRawValue = $0.rawValue }
+          ))
+        }
       }
 
-      UsageBarChart(points: store.dailyUsage(days: range.rawValue), tint: routerAccent)
-        .id("\(store.selectedUsageProviderID)-\(range.rawValue)")
+      UsageBarChart(
+        points: store.dailyUsage(days: range.rawValue),
+        tint: routerAccent,
+        tokenDisplayUnit: self.tokenDisplayUnit)
+        .id("\(store.selectedUsageProviderID)-\(range.rawValue)-\(self.tokenDisplayUnit.rawValue)")
         .frame(height: 88)
 
       HStack {
@@ -4793,7 +5018,7 @@ private struct ProviderUsageSection: View {
         Spacer()
         if store.selectedUsageUsesChatGPT,
            let streak = store.accountUsage?.summary.currentStreakDays {
-          Text("\(streak)-day streak")
+          Text(RouterLanguage.isSimplifiedChinese ? "连续 \(streak) 天" : "\(streak)-day streak")
         }
       }
       .font(.system(size: 9))
@@ -4814,7 +5039,7 @@ private struct ProviderUsageSection: View {
       }
 
       if let dashboardURL {
-        Button("Open usage dashboard") {
+        Button(routerLocalized("Open usage dashboard")) {
           NSWorkspace.shared.open(dashboardURL)
         }
         .buttonStyle(.link)
@@ -4832,18 +5057,18 @@ private struct ProviderUsageSection: View {
   }
 
   private var sectionTitle: String {
-    if store.selectedUsageUsesChatGPT { return "ChatGPT subscription" }
+    if store.selectedUsageUsesChatGPT { return routerLocalized("ChatGPT subscription") }
     return store.selectedProviderUsage?.displayName ?? store.selectedUsageProvider.displayName
   }
 
   private var primaryMetric: String {
     if store.selectedUsageUsesChatGPT {
       guard let value = store.accountUsage?.primary?.remainingPercent else { return "—" }
-      return "\(value)% left"
+      return RouterLanguage.isSimplifiedChinese ? "剩余 \(value)%" : "\(value)% left"
     }
     guard store.providerUsage != nil else { return "—" }
     if let metric = store.selectedAccountMetric { return formattedAccountMetric(metric) }
-    return compactTokenCount(store.localUsageTotals(days: range.rawValue).tokens)
+    return self.tokenDisplayUnit.format(store.localUsageTotals(days: range.rawValue).tokens)
   }
 
   private var quotaCards: [UsageOverviewCard] {
@@ -4858,23 +5083,30 @@ private struct ProviderUsageSection: View {
   private var limitDetail: String {
     if !store.selectedUsageUsesChatGPT {
       guard store.selectedUsageProvider.isEnabled else { return store.selectedUsageProvider.detail }
-      guard let usage = store.selectedProviderUsage else { return "Loading provider usage…" }
+      guard let usage = store.selectedProviderUsage else { return routerLocalized("Loading provider usage…") }
       if let metric = usage.account.metrics.first {
         if let detail = metric.detail, !detail.isEmpty { return detail }
         return standardizedLimitLabel(metric.label)
       }
-      return "\(usage.credentialType.uppercased()) traffic · measured on this Mac"
+      return RouterLanguage.isSimplifiedChinese
+        ? "\(usage.credentialType.uppercased()) 流量 · \(routerLocalized("measured on this Mac"))"
+        : "\(usage.credentialType.uppercased()) traffic · measured on this Mac"
     }
-    return "Loading native Codex usage…"
+    return routerLocalized("Loading native Codex usage…")
   }
 
   private var rangeCaption: String {
     let total = store.dailyTokens(days: range.rawValue).reduce(0, +)
+    let formattedTotal = self.tokenDisplayUnit.format(total)
     if !store.selectedUsageUsesChatGPT {
       let requests = store.localUsageTotals(days: range.rawValue).requests
-      return "\(compactTokenCount(total)) tokens · \(requests) requests over \(range.rawValue) days"
+      return RouterLanguage.isSimplifiedChinese
+        ? "\(formattedTotal) token · \(requests) 个请求 · 近 \(range.rawValue) 天"
+        : "\(formattedTotal) tokens · \(requests) requests over \(range.rawValue) days"
     }
-    return "\(compactTokenCount(total)) tokens over \(range.rawValue) days"
+    return RouterLanguage.isSimplifiedChinese
+      ? "\(formattedTotal) token · 近 \(range.rawValue) 天"
+      : "\(formattedTotal) tokens over \(range.rawValue) days"
   }
 
   private var usageError: String? {
@@ -4887,7 +5119,7 @@ private struct ProviderUsageSection: View {
   private var accountMessage: String? {
     guard !store.selectedUsageUsesChatGPT else { return nil }
     guard store.selectedUsageProvider.isEnabled else {
-      return "Set up this provider below to fetch its account usage."
+      return routerLocalized("Set up this provider below to fetch its account usage.")
     }
     guard store.selectedProviderUsage?.account.metrics.isEmpty == true else { return nil }
     return store.selectedProviderUsage?.account.message
@@ -4937,7 +5169,7 @@ private struct CurrentUsageLimitCard: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 7) {
       HStack(alignment: .firstTextBaseline, spacing: 6) {
-        Text(card.kindLabel ?? "Usage limit")
+        Text(card.kindLabel ?? routerLocalized("Usage limit"))
           .font(.system(size: 10, weight: .medium))
           .lineLimit(1)
         Spacer(minLength: 4)
@@ -4971,11 +5203,13 @@ private struct CurrentUsageLimitCard: View {
   private var metricText: String {
     if let metric = card.metric { return formattedAccountMetric(metric) }
     guard let remaining = card.remainingPercent else { return "—" }
-    return "\(Int(remaining.rounded()))% left"
+    return RouterLanguage.isSimplifiedChinese
+      ? "剩余 \(Int(remaining.rounded()))%"
+      : "\(Int(remaining.rounded()))% left"
   }
 
   private var resetText: String {
-    guard let reset = card.resetDate else { return "No reset reported" }
+    guard let reset = card.resetDate else { return routerLocalized("No reset reported") }
     return usageResetCaption(reset)
   }
 
@@ -5038,7 +5272,11 @@ private struct ModelUsageBreakdown: View {
       }
 
       if hiddenCount > 0 {
-        Text("+\(hiddenCount) more model\(hiddenCount == 1 ? "" : "s")")
+        Text(
+          RouterLanguage.isSimplifiedChinese
+            ? "还有 \(hiddenCount) 个模型"
+            : "+\(hiddenCount) more model\(hiddenCount == 1 ? "" : "s")"
+        )
           .font(.system(size: 8.5))
           .foregroundStyle(routerMuted)
       }
@@ -5051,19 +5289,27 @@ private struct ModelUsageBreakdown: View {
   }
 
   private func primaryLabel(for row: ModelUsageRow) -> String {
-    guard row.model.totalTokens > 0 else { return "\(row.model.requests) req" }
-    return "\(compactTokenCount(Double(row.model.totalTokens))) tok"
+    guard row.model.totalTokens > 0 else {
+      return RouterLanguage.isSimplifiedChinese ? "\(row.model.requests) 个请求" : "\(row.model.requests) req"
+    }
+    return RouterLanguage.isSimplifiedChinese
+      ? "\(compactTokenCount(Double(row.model.totalTokens))) token"
+      : "\(compactTokenCount(Double(row.model.totalTokens))) tok"
   }
 
   private func detailLabel(for row: ModelUsageRow) -> String {
     // A model with traffic but no metered response carries no token counts;
     // say so rather than implying it burned nothing.
     guard row.model.totalTokens > 0 else {
-      return "\(row.model.requests) req · not metered"
+      return RouterLanguage.isSimplifiedChinese
+        ? "\(row.model.requests) 个请求 · 未计量"
+        : "\(row.model.requests) req · not metered"
     }
     let input = compactTokenCount(Double(row.model.inputTokens))
     let output = compactTokenCount(Double(row.model.outputTokens))
-    return "\(input) in · \(output) out · \(row.model.requests) req"
+    return RouterLanguage.isSimplifiedChinese
+      ? "输入 \(input) · 输出 \(output) · \(row.model.requests) 个请求"
+      : "\(input) in · \(output) out · \(row.model.requests) req"
   }
 }
 
@@ -5141,8 +5387,16 @@ private struct AllProviderUsageCard: View {
       )
     }
     .buttonStyle(.plain)
-    .help("Show \(card.provider.displayName) usage")
-    .accessibilityLabel("Show \(card.provider.displayName) usage")
+    .help(
+      RouterLanguage.isSimplifiedChinese
+        ? "显示 \(card.provider.displayName) 用量"
+        : "Show \(card.provider.displayName) usage"
+    )
+    .accessibilityLabel(
+      RouterLanguage.isSimplifiedChinese
+        ? "显示 \(card.provider.displayName) 用量"
+        : "Show \(card.provider.displayName) usage"
+    )
   }
 
   private var account: ProviderAccountUsage? {
@@ -5159,17 +5413,19 @@ private struct AllProviderUsageCard: View {
   }
 
   private var metricText: String {
-    if oauthNeedsReconnect { return "Reconnect" }
+    if oauthNeedsReconnect { return routerLocalized("Reconnect") }
     if let metric = card.metric { return formattedAccountMetric(metric) }
     if let remaining = card.remainingPercent {
-      return "\(Int(remaining.rounded()))% left"
+      return RouterLanguage.isSimplifiedChinese
+        ? "剩余 \(Int(remaining.rounded()))%"
+        : "\(Int(remaining.rounded()))% left"
     }
     if card.providerID == "openai" { return "—" }
     return store.localUsageSummary(for: card.providerID, days: 7)
   }
 
   private var detailText: String {
-    if oauthNeedsReconnect { return "OAuth expired · reconnect below" }
+    if oauthNeedsReconnect { return routerLocalized("OAuth expired · reconnect below") }
     if let kindLabel = card.kindLabel {
       return kindLabel
     }
@@ -5178,26 +5434,28 @@ private struct AllProviderUsageCard: View {
     }
     if localTotals.requests > 0 || localTotals.tokens > 0 {
       if localTotals.tokens > 0, localTotals.requests > 0 {
-        return "7D local · \(localTotals.requests) requests"
+        return RouterLanguage.isSimplifiedChinese
+          ? "近 7 天本地 · \(localTotals.requests) 个请求"
+          : "7D local · \(localTotals.requests) requests"
       }
       if localTotals.requests > 0 {
-        return "7D local · tokens not reported"
+        return RouterLanguage.isSimplifiedChinese ? "近 7 天本地 · 未报告 token" : "7D local · tokens not reported"
       }
-      return "7D local traffic"
+      return RouterLanguage.isSimplifiedChinese ? "近 7 天本地流量" : "7D local traffic"
     }
-    if card.provider.isEnabled { return "No router traffic yet" }
-    return "Configured · currently hidden"
+    if card.provider.isEnabled { return routerLocalized("No router traffic yet") }
+    return routerLocalized("Configured · currently hidden")
   }
 
   private var footerText: String {
-    if oauthNeedsReconnect { return "Sign in again to restore quota" }
+    if oauthNeedsReconnect { return routerLocalized("Sign in again to restore quota") }
     if let reset = card.resetDate {
       return usageResetCaption(reset)
     }
     if card.metric != nil || card.providerID == "openai" {
-      return "No reset reported"
+      return routerLocalized("No reset reported")
     }
-    return "Local router traffic"
+    return routerLocalized("Local router traffic")
   }
 
   private var remainingFraction: CGFloat? {
@@ -5234,9 +5492,36 @@ struct UsageRangePicker: View {
   }
 }
 
+struct TokenDisplayUnitPicker: View {
+  @Binding var selection: TokenDisplayUnit
+
+  var body: some View {
+    HStack(spacing: 2) {
+      ForEach(TokenDisplayUnit.allCases) { unit in
+        Button(unit.label) { self.selection = unit }
+          .buttonStyle(.plain)
+          .font(.system(size: 9, weight: .medium))
+          .foregroundStyle(self.selection == unit ? routerText : routerMuted)
+          .padding(.horizontal, 6)
+          .padding(.vertical, 4)
+          .background(
+            self.selection == unit ? Color.primary.opacity(0.10) : Color.clear,
+            in: Capsule()
+          )
+          .accessibilityLabel(unit.accessibilityLabel)
+          .accessibilityAddTraits(self.selection == unit ? .isSelected : [])
+      }
+    }
+    .padding(2)
+    .background(Color.primary.opacity(0.045), in: Capsule())
+    .accessibilityLabel(routerLocalized("Token unit"))
+  }
+}
+
 struct UsageBarChart: View {
   let points: [DailyUsagePoint]
   let tint: Color
+  var tokenDisplayUnit: TokenDisplayUnit = .full
   var showsAxis = true
 
   @State private var hoveredDate: Date?
@@ -5310,7 +5595,7 @@ struct UsageBarChart: View {
         }
       }
     }
-    .accessibilityLabel("Daily token usage chart. Hover a day for its exact token count.")
+    .accessibilityLabel(routerLocalized("Daily token usage chart. Hover a day for its displayed token count."))
   }
 
   private var hoveredPoint: DailyUsagePoint? {
@@ -5332,8 +5617,8 @@ struct UsageBarChart: View {
 
   private func hoverText(for point: DailyUsagePoint) -> String {
     let date = point.date.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day())
-    let tokens = Int64(point.tokens).formatted(.number.grouping(.automatic))
-    return "\(date) · \(tokens) tokens"
+    let tokens = self.tokenDisplayUnit.format(point.tokens)
+    return RouterLanguage.isSimplifiedChinese ? "\(date) · \(tokens) token" : "\(date) · \(tokens) tokens"
   }
 }
 

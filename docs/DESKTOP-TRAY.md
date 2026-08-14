@@ -43,8 +43,10 @@ and disables its activity-pill switch; router monitoring continues normally.
   disappears immediately. A completed download is hidden after its model is
   removed, so stale `ready · 100%` state never implies that it is still on disk.
 - **Usage** shows the active or most recently used model's observed output
-  throughput when the upstream reports output tokens. The rate is end-to-end
-  tokens per second from successful metered replies, not a synthetic estimate.
+  throughput when the upstream reports output tokens. The rate is calculated
+  from the streamed generation phase of the latest 20 clean, successful
+  replies, excluding queueing, prompt processing, retries, and historical rows
+  that predate generation timing.
 
 The status mark uses Thinking Orbs **Shaping** while idle, **Thinking** while a
 model is generating, and **Solving** for errors. Starting retains its colored

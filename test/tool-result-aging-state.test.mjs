@@ -22,16 +22,18 @@ function forgetState() {
   delete process.env.CODEX_ROUTER_TOOL_RESULT_AGING;
 }
 
-test("tool-result aging defaults on before it is configured", () => {
+// Compaction rewrites what the model sees mid-conversation, so it is opted
+// into rather than discovered after the fact.
+test("tool-result aging defaults off until it is configured", () => {
   forgetState();
   assert.deepEqual(readToolResultAgingSettings(), {
     version: 1,
-    enabled: true,
+    enabled: false,
     nativeEnabled: false,
     defaulted: true,
   });
   assert.equal(toolResultAgingSnapshot().configured, false);
-  assert.equal(toolResultAgingEnabled(), true);
+  assert.equal(toolResultAgingEnabled(), false);
   assert.equal(nativeToolResultAgingEnabled(), false);
 });
 
@@ -54,8 +56,9 @@ test("native aging is a separate opt-in that survives the routed toggle", () => 
   forgetState();
   setNativeToolResultAgingEnabled(true);
   assert.equal(nativeToolResultAgingEnabled(), true);
-  // The routed default must not be disturbed by opting the native path in.
-  assert.equal(toolResultAgingEnabled(), true);
+  // The routed default must not be disturbed by opting the native path in --
+  // it stays at whatever it was, which on a fresh state is off.
+  assert.equal(toolResultAgingEnabled(), false);
 
   // Flipping the routed flag must not silently reset the native choice.
   setToolResultAgingEnabled(false);
