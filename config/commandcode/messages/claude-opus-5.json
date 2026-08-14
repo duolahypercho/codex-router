@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "slug": "commandcode-messages/claude-opus-5",
+      "gatewayModel": "commandcode-messages-claude-opus-5",
+      "upstreamModel": "claude-opus-5",
+      "provider": "commandcode-messages",
+      "listed": true,
+      "displayName": "Claude Opus 5 (Command Code)",
+      "description": "Claude Opus 5 through the Command Code Provider API using the Messages API.",
+      "priority": 130,
+      "defaultEffort": "high",
+      "reasoningLevels": [
+        {
+          "effort": "low",
+          "description": "Faster reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced reasoning"
+        },
+        {
+          "effort": "high",
+          "description": "Deep reasoning"
+        },
+        {
+          "effort": "xhigh",
+          "description": "Extended reasoning"
+        },
+        {
+          "effort": "max",
+          "description": "Maximum reasoning depth"
+        }
+      ],
+      "contextWindow": 1000000,
+      "autoCompact": 900000,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "compHash": "commandcode-messages-claude-opus-5-v1"
+    }
+  ]
+}

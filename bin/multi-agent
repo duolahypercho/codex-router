@@ -3,9 +3,15 @@ set -eu
 
 repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$repo_dir"
+# Codex-only on purpose. This toggle drives `multi_agent_version` and the
+# Codex agents directory -- native spawn overrides whose payloads are Codex's
+# own encrypted format. DeepSeek Harness delegates through `dsh-tool-subagent`,
+# whose child model comes from the composition or, unset, from the default
+# model selection; see `./bin/model-router dsh subagent-preset`.
 case "${MODEL_ROUTER_TARGET:-codex}" in
   codex) ;;
-  *) echo "MODEL_ROUTER_TARGET must be codex." >&2; exit 2 ;;
+  dsh) echo "Native subagent overrides are a Codex concept. For DeepSeek Harness run: ./bin/model-router dsh subagent-preset" >&2; exit 2 ;;
+  *) echo "MODEL_ROUTER_TARGET must be codex or dsh." >&2; exit 2 ;;
 esac
 
 command=${1:-status}

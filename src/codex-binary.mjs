@@ -3,6 +3,7 @@ import { existsSync, readdirSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { isShimFile, resolveRealCodex } from "./codex-shim.mjs";
 import { commandOnPath, preferSpawnablePath, spawnableCommand } from "./spawnable-command.mjs";
 
 export { preferSpawnablePath, spawnableCommand };
@@ -49,12 +50,30 @@ function candidates() {
   ].filter(Boolean);
 }
 
+// The router must never resolve `codex` to the shim it installs in front of it.
+//
+// The shim's job is to guarantee the router is listening before Codex starts,
+// so it runs `control service start` when it finds the router down. Reaching it
+// from inside the router turns that into a loop: the tray polls
+// `control account` every 30 seconds, that spawns Codex through this function,
+// and the shim revives the router the tray just stopped -- forever.
+//
+// Both resolution paths need the filter, not just PATH. `~/.local/bin` is a
+// candidate below *and* a directory `chooseShimDirectory` may install into,
+// because it restricts itself to the home directory.
 export function findCodexBinary() {
-  const direct = candidates().find((candidate) => existsSync(candidate));
+  const direct = candidates().find(
+    (candidate) => existsSync(candidate) && !isShimFile(candidate),
+  );
   if (direct) return direct;
   // Never the raw first line of the finder: on Windows that is the
   // extensionless npm shim, which Node cannot spawn. See spawnable-command.mjs.
-  return commandOnPath("codex");
+  const found = commandOnPath("codex");
+  if (found && !isShimFile(found)) return found;
+  // The finder landed on our own shim, so walk past it to the real Codex the
+  // shim itself execs. When there is none, report none: handing back the shim
+  // would rebuild the loop this filter exists to break.
+  return resolveRealCodex()?.file;
 }
 
 export function requireCodexBinary() {

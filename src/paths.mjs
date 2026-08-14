@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 
 import { trayBundleDir } from "./tray-install.mjs";
 
-const supportedTargets = new Set(["codex"]);
+const supportedTargets = new Set(["codex", "dsh"]);
 
 export const TARGET = process.env.MODEL_ROUTER_TARGET || "codex";
 if (!supportedTargets.has(TARGET)) {
@@ -13,7 +13,20 @@ if (!supportedTargets.has(TARGET)) {
   );
 }
 
-export const TARGET_DISPLAY_NAME = "Codex Router";
+// The router *plane* -- service, ports, gateway, secrets, credentials, provider
+// selection -- is one installation shared by every client integration, so the
+// two targets are not two routers. `TARGET` selects which client's
+// configuration this command writes; it must never fork the state directory or
+// the service, or a user who installs both would be asked for every API key
+// twice and would run two gateways against one set of provider quotas.
+//
+// A handful of environment aliases (`CODEX_ROUTER_*`, `KIMI_*`) are keyed on
+// the plane rather than on the client, because they name the service's own
+// process. They stay on `codex` whichever integration is being installed.
+export const ROUTER_PLANE_TARGET = "codex";
+
+export const TARGET_DISPLAY_NAME =
+  TARGET === "dsh" ? "DeepSeek Harness Router" : "Codex Router";
 const configuredSourceRoot = process.env.CODEX_ROUTER_SOURCE_ROOT;
 if (configuredSourceRoot && !path.isAbsolute(configuredSourceRoot)) {
   throw new Error("CODEX_ROUTER_SOURCE_ROOT must be an absolute path.");
@@ -28,6 +41,22 @@ export const SOURCE_ROOT = configuredSourceRoot
   : path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 export const CODEX_HOME =
   process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
+
+// DeepSeek Harness reads its own home from `$DSH_HOME`, defaulting to `~/.dsh`
+// (`dsh-settings-file` and `dsh-credentials-local` both resolve it that way).
+// Match that resolution exactly rather than hardcoding the default, or a user
+// who moved their harness home gets a settings document nothing reads.
+export const DSH_HOME = process.env.DSH_HOME || path.join(os.homedir(), ".dsh");
+// The hot-reloaded user settings document. `dsh-settings-file` mounts it by
+// default and publishes external edits, which is why the router can add its
+// provider route without asking anyone to restart the harness.
+export const DSH_SETTINGS_PATH =
+  process.env.MODEL_ROUTER_DSH_SETTINGS || path.join(DSH_HOME, "settings.yaml");
+// The managed credential document. `apiKeyEnv` in the settings document is a
+// *reference*; this file is where the referenced value lives, which is what
+// keeps the caller key out of the settings document itself.
+export const DSH_CREDENTIALS_PATH =
+  process.env.MODEL_ROUTER_DSH_CREDENTIALS || path.join(DSH_HOME, ".credentials.yaml");
 
 function managedStateDir() {
   return (
@@ -48,6 +77,11 @@ export const NATIVE_CATALOG_SOURCE_PATH = path.join(
   "native-catalog-source.json",
 );
 export const MERGED_CATALOG_PATH = path.join(STATE_DIR, "merged-models.json");
+// What the last dsh publish actually wrote. The settings document is the
+// user's and is hot-reloaded by anything else that edits it, so drift is
+// detected against this snapshot rather than by re-deriving what "should" be
+// there and trusting the answer.
+export const DSH_CATALOG_PATH = path.join(STATE_DIR, "dsh-models.json");
 export const NATIVE_ALIAS_PATH = path.join(STATE_DIR, "native-aliases.json");
 export const ANNOUNCED_MODELS_PATH = path.join(STATE_DIR, "announced-models.json");
 export const LITELLM_CONFIG_PATH = path.join(STATE_DIR, "litellm.yaml");

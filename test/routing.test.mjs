@@ -2874,12 +2874,21 @@ test("API forwarder routes GLM coding-plan models with thinking enabled", async 
     await waitFor(`http://127.0.0.1:${forwarderPort}/health`, forwarder, {
       Authorization: `Bearer ${INTERNAL_KEY}`,
     });
-    // GLM-5.2 has two documented tiers (high/max, upstream default max), so
-    // high must be sent explicitly; GLM-5-Turbo does not support the
-    // parameter and never receives it.
+    // Each entry is clamped onto the tiers Z.ai documents for that model.
+    // GLM-5.2 has two (high/max, upstream default max), so high must be sent
+    // explicitly and anything under it lands on high. GLM-5.3 adds a low tier,
+    // so low must survive instead of being rounded up to high. GLM-5-Turbo
+    // does not support the parameter and never receives it.
     for (const [gatewayModel, upstreamModel, sentEffort, expectedEffort] of [
       ["zai-coding-glm-5-2", "glm-5.2", "xhigh", "max"],
       ["zai-coding-glm-5-2", "glm-5.2", "high", "high"],
+      ["zai-coding-glm-5-2", "glm-5.2", "low", "high"],
+      ["zai-coding-glm-5-3", "glm-5.3", "minimal", "low"],
+      ["zai-coding-glm-5-3", "glm-5.3", "low", "low"],
+      ["zai-coding-glm-5-3", "glm-5.3", "medium", "low"],
+      ["zai-coding-glm-5-3", "glm-5.3", "high", "high"],
+      ["zai-coding-glm-5-3", "glm-5.3", "max", "max"],
+      ["zai-coding-glm-5-3-1m", "glm-5.3[1m]", "xhigh", "max"],
       ["zai-coding-glm-5-turbo", "glm-5-turbo", "low", undefined],
     ]) {
       const response = await fetch(
@@ -2911,6 +2920,63 @@ test("API forwarder routes GLM coding-plan models with thinking enabled", async 
       assert.equal(request.body.reasoning_effort, expectedEffort);
       assert.equal(request.body.temperature, undefined);
       assert.equal(request.body.top_p, undefined);
+    }
+  } finally {
+    await stopChild(forwarder);
+    await closeServer(upstream.server);
+  }
+});
+
+test("API forwarder bills the Z.ai platform on its own endpoint and key", async () => {
+  const upstreamRequests = [];
+  const upstream = await mockServer(async (request, response) => {
+    upstreamRequests.push({ url: request.url, headers: request.headers, body: await bodyJson(request) });
+    json(response, 200, { choices: [] });
+  });
+  const forwarderPort = await openPort();
+  const forwarder = run("api-forwarder.mjs", {
+    CODEX_ROUTER_API_PORT: String(forwarderPort),
+    ZAI_API_BASE_URL: `http://127.0.0.1:${upstream.port}`,
+    ZAI_PLATFORM_API_KEY: "TEST_ZAI_PLATFORM_KEY",
+    // The Coding Plan variable is deliberately set too: the metered platform
+    // is a separate product with a separate credential, so a plan key must
+    // never authenticate a pay-per-token turn.
+    ZAI_API_KEY: "TEST_ZAI_CODING_KEY",
+    CODEX_ROUTER_QUIET: "1",
+  });
+
+  try {
+    await waitFor(`http://127.0.0.1:${forwarderPort}/health`, forwarder, {
+      Authorization: `Bearer ${INTERNAL_KEY}`,
+    });
+    // GLM-5.3 carries the documented low tier; GLM-4.7 has no documented
+    // effort ladder at all and must never receive the parameter.
+    for (const [gatewayModel, upstreamModel, sentEffort, expectedEffort] of [
+      ["zai-api-glm-5-3", "glm-5.3", "low", "low"],
+      ["zai-api-glm-5-2", "glm-5.2", "low", "high"],
+      ["zai-api-glm-4-7", "glm-4.7", "high", undefined],
+    ]) {
+      const response = await fetch(
+        `http://127.0.0.1:${forwarderPort}/v1/chat/completions`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${INTERNAL_KEY}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model: gatewayModel,
+            reasoning_effort: sentEffort,
+            messages: [{ role: "user", content: "test" }],
+          }),
+        },
+      );
+      assert.equal(response.status, 200);
+      const request = upstreamRequests.at(-1);
+      assert.equal(request.headers.authorization, "Bearer TEST_ZAI_PLATFORM_KEY");
+      assert.equal(request.body.model, upstreamModel);
+      assert.deepEqual(request.body.thinking, { type: "enabled" });
+      assert.equal(request.body.reasoning_effort, expectedEffort);
     }
   } finally {
     await stopChild(forwarder);

@@ -45,21 +45,35 @@ test("provider registry exposes configured API and OAuth model families", () => 
       "clinepass/qwen3.8-max",
       "commandcode/deepseek-v4-flash",
       "commandcode/deepseek-v4-pro",
+      "commandcode/fugu-ultra",
       "commandcode/gemini-3.5-flash",
+      "commandcode/gemini-3.7-flash",
+      "commandcode/glm-5.2-fast",
       "commandcode/glm-5.2",
       "commandcode/gpt-5.5",
       "commandcode/gpt-5.6-luna",
+      "commandcode/gpt-5.6-sol",
+      "commandcode/gpt-5.6-terra",
       "commandcode/grok-4.5",
+      "commandcode/grok-4.6",
       "commandcode/hy3-paid",
+      "commandcode/inkling-small",
+      "commandcode/inkling",
+      "commandcode/kimi-k2.7-code-highspeed",
       "commandcode/kimi-k2.7-code",
       "commandcode/kimi-k3",
+      "commandcode/laguna-s-2.1",
       "commandcode-messages/claude-fable-5",
       "commandcode-messages/claude-haiku-4.5",
       "commandcode-messages/claude-opus-4.8",
+      "commandcode-messages/claude-opus-5",
       "commandcode-messages/claude-sonnet-5",
       "commandcode/mimo-v2.5-pro",
       "commandcode/minimax-m2.7",
       "commandcode/minimax-m3",
+      "commandcode/muse-spark-1.2",
+      "commandcode/nemotron-3-ultra",
+      "commandcode/qwen3.7-flash",
       "commandcode/qwen3.7-max",
       "commandcode/qwen3.7-plus",
       "commandcode/qwen3.8-max",
@@ -87,6 +101,7 @@ test("provider registry exposes configured API and OAuth model families", () => 
       "opencode-go/deepseek-v4-pro",
       "opencode-go/glm-5.1",
       "opencode-go/glm-5.2",
+      "opencode-go/glm-5.3",
       "opencode-go/grok-4.5",
       "opencode-go/hy3",
       "opencode-go/kimi-k2.6",
@@ -109,8 +124,13 @@ test("provider registry exposes configured API and OAuth model families", () => 
       "qwen-plan/qwen3.7-plus",
       "qwen-plan/qwen3.8-max-preview",
       "qwen-plan/qwen3.8-max",
+      "zai-api/glm-4.7",
+      "zai-api/glm-5.2",
+      "zai-api/glm-5.3",
       "zai-coding/glm-5-turbo",
       "zai-coding/glm-5.2",
+      "zai-coding/glm-5.3-1m",
+      "zai-coding/glm-5.3",
     ],
   );
   assert.equal(PROVIDERS.get("deepseek").baseUrl, "https://api.deepseek.com");
@@ -122,6 +142,33 @@ test("provider registry exposes configured API and OAuth model families", () => 
     PROVIDERS.get("zai-coding").baseUrl,
     "https://api.z.ai/api/coding/paas/v4",
   );
+  // The pay-per-token platform is its own endpoint, its own credential, and its
+  // own key file: a Coding Plan key is not billable on it.
+  assert.equal(PROVIDERS.get("zai-api").baseUrl, "https://api.z.ai/api/paas/v4");
+  assert.equal(PROVIDERS.get("zai-api").variantOf, undefined);
+  assert.equal(PROVIDERS.get("zai-api").credential.file, "zai-api-key.secret");
+  assert.notEqual(
+    PROVIDERS.get("zai-api").credential.file,
+    PROVIDERS.get("zai-coding").credential.file,
+  );
+  // Every channel the credential can arrive through has to be distinct, not
+  // just the file: the same check the China Kimi route gets below. A shared
+  // keychain service or base-URL variable would let one product's key satisfy
+  // the other's lookup, which is the whole failure this split exists to stop.
+  for (const field of ["environment", "keychainServices"]) {
+    const platform = PROVIDERS.get("zai-api").credential[field] || [];
+    const plan = new Set(PROVIDERS.get("zai-coding").credential[field] || []);
+    assert.ok(platform.length > 0, `zai-api declares no ${field}`);
+    assert.ok(
+      platform.every((entry) => !plan.has(entry)),
+      `zai-api ${field} must not overlap the Coding Plan`,
+    );
+  }
+  assert.notEqual(
+    PROVIDERS.get("zai-api").baseUrlEnv,
+    PROVIDERS.get("zai-coding").baseUrlEnv,
+  );
+  assert.ok(PROVIDERS.get("zai-api").planNote);
   assert.equal(PROVIDERS.get("ollama-cloud").baseUrl, "https://ollama.com/v1");
   assert.equal(PROVIDERS.get("minimax-token-plan").baseUrl, "https://api.minimax.io/v1");
   // Go is its own endpoint, not the pay-per-use Zen one.
@@ -369,6 +416,13 @@ test("provider registry exposes configured API and OAuth model families", () => 
   assert.equal(
     MODEL_BY_SLUG.get("commandcode-messages/claude-opus-4.8").contextWindow,
     1_000_000,
+  );
+  // Command Code serves Haiku 4.5 only under its dated id. The undated alias
+  // every other Anthropic surface accepts is absent from this catalog, so the
+  // route 404s the moment the registry shortens it.
+  assert.equal(
+    MODEL_BY_SLUG.get("commandcode-messages/claude-haiku-4.5").upstreamModel,
+    "claude-haiku-4-5-20251001",
   );
   // Documented output_config.effort ladder for Opus 4.8 (default high).
   assert.deepEqual(

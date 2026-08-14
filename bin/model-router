@@ -5,15 +5,26 @@ repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 
 usage() {
   cat <<'EOF'
-Usage: model-router codex COMMAND [arguments]
+Usage: model-router TARGET COMMAND [arguments]
+
+Targets:
+  codex   the Codex CLI and desktop app
+  dsh     DeepSeek Harness (its settings document, hot-reloaded)
+
+Both targets share one router: one service, one set of provider credentials,
+one provider selection. The target chooses which client's configuration a
+command writes, not which router it talks to.
 
 Commands:
   setup, install, doctor, status, provider-key, providers, enable, disable,
-  multi-agent, media, uninstall, smoke-test, start, update, rollback
+  multi-agent, media, uninstall, smoke-test, start, update, rollback, shim
+  subagent-preset (dsh only)
 
 Examples:
   ./bin/model-router codex doctor
-  ./bin/model-router codex status
+  ./bin/model-router codex shim install
+  ./bin/model-router dsh enable
+  ./bin/model-router dsh status
 EOF
 }
 
@@ -26,7 +37,7 @@ if [ "$#" -eq 1 ] && [ "$1" = "--version" ]; then
   exit 0
 fi
 
-if [ "$#" -eq 2 ] && [ "$1" = "codex" ] && [ "$2" = "--version" ]; then
+if [ "$#" -eq 2 ] && { [ "$1" = "codex" ] || [ "$1" = "dsh" ]; } && [ "$2" = "--version" ]; then
   version
   exit 0
 fi
@@ -41,12 +52,12 @@ command=$2
 shift 2
 
 case "$target" in
-  codex) ;;
+  codex|dsh) ;;
   *) echo "Unknown target: $target" >&2; usage >&2; exit 2 ;;
 esac
 
 case "$command" in
-  setup|install|doctor|status|provider-key|providers|enable|disable|multi-agent|media|uninstall|smoke-test|start|update|rollback) ;;
+  setup|install|doctor|status|provider-key|providers|enable|disable|multi-agent|media|uninstall|smoke-test|start|update|rollback|subagent-preset|shim) ;;
   *) echo "Unknown command: $command" >&2; usage >&2; exit 2 ;;
 esac
 

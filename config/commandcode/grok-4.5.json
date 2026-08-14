@@ -9,7 +9,7 @@
       "listed": true,
       "displayName": "Grok 4.5 (Command Code)",
       "description": "Grok 4.5 through the Command Code Provider API.",
-      "priority": 111,
+      "priority": 115,
       "defaultEffort": "high",
       "reasoningLevels": [
         {

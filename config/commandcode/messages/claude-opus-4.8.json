@@ -9,7 +9,7 @@
       "listed": true,
       "displayName": "Claude Opus 4.8 (Command Code)",
       "description": "Claude Opus 4.8 through the Command Code Provider API using the Messages API.",
-      "priority": 118,
+      "priority": 132,
       "defaultEffort": "high",
       "reasoningLevels": [
         {

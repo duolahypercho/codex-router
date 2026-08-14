@@ -9,7 +9,7 @@
       "listed": true,
       "displayName": "GLM-5-Turbo (Coding Plan)",
       "description": "GLM-5-Turbo through the Z.ai GLM Coding Plan subscription; faster responses with a 200k context window.",
-      "priority": 11,
+      "priority": 13,
       "defaultEffort": "high",
       "reasoningLevels": [
         {

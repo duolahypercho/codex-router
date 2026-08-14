@@ -9,7 +9,7 @@
       "listed": true,
       "displayName": "MiniMax M2.7 (Command Code)",
       "description": "MiniMax M2.7 through the Command Code Provider API.",
-      "priority": 109,
+      "priority": 112,
       "defaultEffort": "high",
       "reasoningLevels": [
         {

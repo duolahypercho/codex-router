@@ -163,7 +163,10 @@ do not share credentials or billing. Alibaba plan keys (`sk-sp-` prefix) are
 separate from pay-as-you-go Model Studio keys and only work with the plan's
 dedicated base URL. The Z.ai coding key is also distinct from general Z.ai
 platform keys; only the Coding Plan subscription key works with the coding
-endpoint.
+endpoint. The two live side by side as separate providers: `zai-coding` reads
+`ZAI_API_KEY` / `ZAI_CODING_API_KEY` for the plan, and `zai-api` reads
+`ZAI_PLATFORM_API_KEY` for pay-per-token traffic. A 401 on one route usually
+means the other route's key was stored.
 
 ## A provider changed its model IDs
 

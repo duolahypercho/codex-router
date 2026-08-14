@@ -584,6 +584,7 @@ function withHeaderQuota(providerId, fallback) {
 const ZAI_QUOTA_URL =
   process.env.ZAI_QUOTA_URL || "https://api.z.ai/api/monitor/usage/quota/limit";
 const ZAI_PLAN_DASHBOARD_URL = "https://z.ai/manage-apikey/coding-plan/personal/my-plan";
+const ZAI_API_DASHBOARD_URL = "https://z.ai/manage-apikey/billing";
 const QWEN_PLAN_DASHBOARD_URL =
   "https://modelstudio.console.alibabacloud.com/ap-southeast-1/?tab=plan#/efm/subscription/token-plan";
 const OLLAMA_DASHBOARD_URL = "https://ollama.com/settings";
@@ -762,6 +763,20 @@ async function accountUsageFor(providerId, fetchImpl) {
         : { status: "not-configured", source: "official-api", metrics: [] };
     }
     if (providerId === "zai-coding") return await zaiCodingAccount(fetchImpl);
+    if (providerId === "zai-api") {
+      // The quota route zai-coding polls reports a Coding Plan's windows; a
+      // pay-per-token platform key has no plan behind it and Z.ai publishes no
+      // balance API, so link the billing page instead of inventing a number.
+      return resolveProviderCredential("zai-api")
+        ? {
+            ...withHeaderQuota(
+              providerId,
+              localOnly("Z.ai shows the platform balance only on z.ai; showing router traffic"),
+            ),
+            dashboardUrl: ZAI_API_DASHBOARD_URL,
+          }
+        : { status: "not-configured", source: "official-api", metrics: [] };
+    }
     if (providerId === "qwen-plan") {
       // Alibaba plan quotas are only visible behind a console session; never
       // import browser cookies. Link to the console instead.

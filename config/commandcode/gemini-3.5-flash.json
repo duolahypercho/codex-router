@@ -9,7 +9,7 @@
       "listed": true,
       "displayName": "Gemini 3.5 Flash (Command Code)",
       "description": "Gemini 3.5 Flash through the Command Code Provider API.",
-      "priority": 114,
+      "priority": 121,
       "defaultEffort": "high",
       "reasoningLevels": [
         {

@@ -9,7 +9,7 @@
       "listed": true,
       "displayName": "GPT 5.5 (Command Code)",
       "description": "GPT 5.5 through the Command Code Provider API.",
-      "priority": 113,
+      "priority": 119,
       "defaultEffort": "medium",
       "reasoningLevels": [
         {

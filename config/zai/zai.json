@@ -20,6 +20,26 @@
         ],
         "prompt": "Z.ai GLM Coding Plan API key"
       }
+    },
+    {
+      "id": "zai-api",
+      "displayName": "Z.ai API",
+      "kind": "openai-compatible",
+      "ownedBy": "zai",
+      "baseUrl": "https://api.z.ai/api/paas/v4",
+      "baseUrlEnv": "ZAI_API_BASE_URL",
+      "planNote": "The pay-per-token platform key is a different credential from the GLM Coding Plan key; a Coding Plan key is not billable on this endpoint.",
+      "credential": {
+        "environment": [
+          "ZAI_PLATFORM_API_KEY"
+        ],
+        "file": "zai-api-key.secret",
+        "legacyFiles": [],
+        "keychainServices": [
+          "codex-router-zai-api"
+        ],
+        "prompt": "Z.ai API key (open platform, pay per token)"
+      }
     }
   ]
 }

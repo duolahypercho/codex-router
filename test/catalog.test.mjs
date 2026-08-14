@@ -773,14 +773,36 @@ test("selected subagent mode only promotes the chosen native models", () => {
   assert.equal(promoted[1].multi_agent_version, "v1");
 });
 
-test("proven subagent mode leaves the native catalog untouched", () => {
-  const native = [{ slug: "gpt-5.6-luna", visibility: "list", multi_agent_version: "v1" }];
+test("proven subagent mode still promotes upstream-verified v2-backend slugs", () => {
+  // gpt-5.6-luna is shipped as v1 by upstream but runs on the v2 backend, so
+  // it must be promoted even in the conservative proven mode; an unverified
+  // native slug keeps its upstream value.
+  const native = [
+    { slug: "gpt-5.6-luna", visibility: "list", multi_agent_version: "v1" },
+    { slug: "gpt-5.4", visibility: "list", multi_agent_version: "v1" },
+  ];
   const promoted = promoteNativeMultiAgent(native, {
     mode: "proven",
     enabled: [],
     disabled: [],
   });
-  assert.deepEqual(promoted, native);
+  assert.equal(promoted[0].multi_agent_version, "v2");
+  assert.equal(promoted[1].multi_agent_version, "v1");
+});
+
+test("an upstream-verified slug still honours disabled and picker-hidden", () => {
+  const native = [{ slug: "gpt-5.6-luna", visibility: "list", multi_agent_version: "v1" }];
+  const promoted = promoteNativeMultiAgent(
+    native,
+    { mode: "proven", enabled: [], disabled: ["gpt-5.6-luna"] },
+  );
+  assert.equal(promoted[0].multi_agent_version, "v1");
+  const hidden = promoteNativeMultiAgent(
+    native,
+    { mode: "proven", enabled: [], disabled: [] },
+    new Set(["gpt-5.6-luna"]),
+  );
+  assert.equal(hidden[0].multi_agent_version, "v1");
 });
 
 test("a ChatGPT-plan model drives the same advertisement as a routed engine", async () => {

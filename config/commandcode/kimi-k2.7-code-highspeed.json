@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "slug": "commandcode/kimi-k2.7-code-highspeed",
+      "gatewayModel": "commandcode-kimi-k2-7-code-highspeed",
+      "upstreamModel": "moonshotai/Kimi-K2.7-Code-Highspeed",
+      "provider": "commandcode",
+      "listed": true,
+      "displayName": "Kimi K2.7 Code HighSpeed (Command Code)",
+      "description": "Kimi K2.7 Code HighSpeed through the Command Code Provider API.",
+      "priority": 106,
+      "defaultEffort": "high",
+      "reasoningLevels": [
+        {
+          "effort": "high",
+          "description": "Deep reasoning"
+        }
+      ],
+      "contextWindow": 262000,
+      "autoCompact": 235000,
+      "inputModalities": [
+        "text"
+      ],
+      "compHash": "commandcode-kimi-k2-7-code-highspeed-v1"
+    }
+  ]
+}

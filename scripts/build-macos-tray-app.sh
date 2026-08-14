@@ -18,6 +18,15 @@ swift build -c "$configuration" --package-path "$tray_dir" 1>&2
 mkdir -p "$bundle_dir/Contents/MacOS" "$bundle_dir/Contents/Resources"
 cp "$binary_dir/ModelRouterTray" "$bundle_dir/Contents/MacOS/ModelRouterTray"
 cp "$tray_dir/Resources/Info.plist" "$bundle_dir/Contents/Info.plist"
+# The icon is committed as a built .icns, not rasterized here: scripts/build-app-icon.sh
+# needs sips and iconutil, and a tray build must not start depending on them.
+# Without this file the bundle falls back to the generic macOS app icon, which
+# is what made Model Router unfindable in Finder, Launchpad, and Spotlight.
+if [ -f "$tray_dir/Resources/AppIcon.icns" ]; then
+  cp "$tray_dir/Resources/AppIcon.icns" "$bundle_dir/Contents/Resources/AppIcon.icns"
+else
+  printf 'codex-router: AppIcon.icns is missing; run scripts/build-app-icon.sh.\n' >&2
+fi
 if [ -d "$binary_dir/ModelRouterTray_ModelRouterTray.bundle" ]; then
   rm -rf "$bundle_dir/Contents/Resources/ModelRouterTray_ModelRouterTray.bundle" \
     "$bundle_dir/ModelRouterTray_ModelRouterTray.bundle"

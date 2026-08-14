@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "slug": "zai-coding/glm-5.3",
+      "gatewayModel": "zai-coding-glm-5-3",
+      "upstreamModel": "glm-5.3",
+      "provider": "zai-coding",
+      "listed": true,
+      "displayName": "GLM-5.3 (Coding Plan)",
+      "description": "GLM-5.3 through the Z.ai GLM Coding Plan subscription, with low/high/max reasoning tiers for agentic coding and tool calls. Z.ai documents the 1M context window only behind the [1m] model suffix, which the GLM-5.3 1M entry routes to.",
+      "priority": 10,
+      "defaultEffort": "max",
+      "reasoningLevels": [
+        {
+          "effort": "low",
+          "description": "Fast reasoning for simple edits"
+        },
+        {
+          "effort": "high",
+          "description": "Deep reasoning with thinking enabled"
+        },
+        {
+          "effort": "max",
+          "description": "Maximum reasoning depth"
+        }
+      ],
+      "contextWindow": 200000,
+      "autoCompact": 180000,
+      "inputModalities": [
+        "text"
+      ],
+      "requestProfile": "glm-thinking",
+      "compHash": "zai-coding-glm-5-3-v1"
+    }
+  ]
+}

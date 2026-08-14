@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "slug": "commandcode/gpt-5.6-sol",
+      "gatewayModel": "commandcode-gpt-5-6-sol",
+      "upstreamModel": "gpt-5.6-sol",
+      "provider": "commandcode",
+      "listed": true,
+      "displayName": "GPT 5.6 Sol (Command Code)",
+      "description": "GPT 5.6 Sol through the Command Code Provider API.",
+      "priority": 117,
+      "defaultEffort": "medium",
+      "reasoningLevels": [
+        {
+          "effort": "low",
+          "description": "Faster reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced reasoning"
+        },
+        {
+          "effort": "high",
+          "description": "Deep reasoning"
+        },
+        {
+          "effort": "xhigh",
+          "description": "Extended reasoning"
+        },
+        {
+          "effort": "max",
+          "description": "Maximum reasoning depth"
+        }
+      ],
+      "contextWindow": 1050000,
+      "autoCompact": 900000,
+      "inputModalities": [
+        "text"
+      ],
+      "compHash": "commandcode-gpt-5-6-sol-v1",
+      "supportsReasoningSummaries": true,
+      "defaultReasoningSummary": "auto"
+    }
+  ]
+}

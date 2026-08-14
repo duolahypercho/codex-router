@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "slug": "zai-api/glm-4.7",
+      "gatewayModel": "zai-api-glm-4-7",
+      "upstreamModel": "glm-4.7",
+      "provider": "zai-api",
+      "listed": true,
+      "displayName": "GLM-4.7 (Z.ai API)",
+      "description": "GLM-4.7 billed per token on the Z.ai open platform: a cheaper 200K-context tier for routine edits. Z.ai documents no reasoning_effort ladder for it, so thinking is simply enabled.",
+      "priority": 65,
+      "defaultEffort": "high",
+      "reasoningLevels": [
+        {
+          "effort": "high",
+          "description": "Thinking enabled"
+        }
+      ],
+      "contextWindow": 200000,
+      "autoCompact": 180000,
+      "inputModalities": [
+        "text"
+      ],
+      "requestProfile": "glm-thinking",
+      "compHash": "zai-api-glm-4-7-v1"
+    }
+  ]
+}

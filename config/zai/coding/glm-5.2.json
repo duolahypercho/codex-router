@@ -9,7 +9,7 @@
       "listed": true,
       "displayName": "GLM-5.2 (Coding Plan)",
       "description": "GLM-5.2 through the Z.ai GLM Coding Plan subscription with agentic coding, tool calls, and a 1M context window.",
-      "priority": 10,
+      "priority": 12,
       "defaultEffort": "max",
       "reasoningLevels": [
         {
