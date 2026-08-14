@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "slug": "commandcode/muse-spark-1.2",
+      "gatewayModel": "commandcode-muse-spark-1-2",
+      "upstreamModel": "meta/muse-spark-1.2",
+      "provider": "commandcode",
+      "listed": true,
+      "displayName": "Muse Spark 1.2 (Command Code)",
+      "description": "Muse Spark 1.2 through the Command Code Provider API.",
+      "priority": 124,
+      "defaultEffort": "high",
+      "reasoningLevels": [
+        {
+          "effort": "high",
+          "description": "Deep reasoning"
+        }
+      ],
+      "contextWindow": 1048576,
+      "autoCompact": 900000,
+      "inputModalities": [
+        "text"
+      ],
+      "compHash": "commandcode-muse-spark-1-2-v1"
+    }
+  ]
+}

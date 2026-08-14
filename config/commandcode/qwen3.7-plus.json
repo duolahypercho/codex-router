@@ -9,7 +9,7 @@
       "listed": true,
       "displayName": "Qwen3.7 Plus (Command Code)",
       "description": "Qwen3.7 Plus through the Command Code Provider API.",
-      "priority": 107,
+      "priority": 109,
       "defaultEffort": "high",
       "reasoningLevels": [
         {

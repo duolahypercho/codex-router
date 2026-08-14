@@ -9,7 +9,7 @@
       "listed": true,
       "displayName": "Claude Sonnet 5 (Command Code)",
       "description": "Claude Sonnet 5 through the Command Code Provider API using the Messages API.",
-      "priority": 117,
+      "priority": 131,
       "defaultEffort": "high",
       "reasoningLevels": [
         {

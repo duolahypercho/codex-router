@@ -2,14 +2,14 @@
   "version": 1,
   "models": [
     {
-      "slug": "commandcode/kimi-k2.7-code",
-      "gatewayModel": "commandcode-kimi-k2-7-code",
-      "upstreamModel": "moonshotai/Kimi-K2.7-Code",
+      "slug": "commandcode/inkling",
+      "gatewayModel": "commandcode-inkling",
+      "upstreamModel": "thinkingmachines/inkling",
       "provider": "commandcode",
       "listed": true,
-      "displayName": "Kimi K2.7 Code (Command Code)",
-      "description": "Kimi K2.7 Code through the Command Code Provider API.",
-      "priority": 105,
+      "displayName": "Inkling (Command Code)",
+      "description": "Inkling through the Command Code Provider API.",
+      "priority": 127,
       "defaultEffort": "high",
       "reasoningLevels": [
         {
@@ -22,7 +22,7 @@
       "inputModalities": [
         "text"
       ],
-      "compHash": "commandcode-kimi-k2-7-code-v1"
+      "compHash": "commandcode-inkling-v1"
     }
   ]
 }
