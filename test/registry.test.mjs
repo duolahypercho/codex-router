@@ -150,10 +150,22 @@ test("provider registry exposes configured API and OAuth model families", () => 
     PROVIDERS.get("zai-api").credential.file,
     PROVIDERS.get("zai-coding").credential.file,
   );
-  assert.ok(
-    !PROVIDERS.get("zai-api").credential.environment.some((name) =>
-      PROVIDERS.get("zai-coding").credential.environment.includes(name),
-    ),
+  // Every channel the credential can arrive through has to be distinct, not
+  // just the file: the same check the China Kimi route gets below. A shared
+  // keychain service or base-URL variable would let one product's key satisfy
+  // the other's lookup, which is the whole failure this split exists to stop.
+  for (const field of ["environment", "keychainServices"]) {
+    const platform = PROVIDERS.get("zai-api").credential[field] || [];
+    const plan = new Set(PROVIDERS.get("zai-coding").credential[field] || []);
+    assert.ok(platform.length > 0, `zai-api declares no ${field}`);
+    assert.ok(
+      platform.every((entry) => !plan.has(entry)),
+      `zai-api ${field} must not overlap the Coding Plan`,
+    );
+  }
+  assert.notEqual(
+    PROVIDERS.get("zai-api").baseUrlEnv,
+    PROVIDERS.get("zai-coding").baseUrlEnv,
   );
   assert.ok(PROVIDERS.get("zai-api").planNote);
   assert.equal(PROVIDERS.get("ollama-cloud").baseUrl, "https://ollama.com/v1");

@@ -471,8 +471,9 @@ function normalizeBody(buffer, contentType, route) {
     payload.thinking = { type: "enabled" };
     // Each GLM entry declares exactly the tiers Z.ai documents for it, and the
     // requested effort is clamped onto them. Models whose registry entry offers
-    // a single level (GLM-5-Turbo, GLM-5.1, GLM-4.7) do not support the
-    // parameter at all.
+    // a single level (GLM-5-Turbo, GLM-4.7) do not support the parameter at
+    // all. Read the count off the entry rather than naming models here: this
+    // list is what goes stale when a route is added.
     const levels = (model.reasoningLevels || []).map((level) => level.effort);
     if (levels.length > 1) {
       payload.reasoning_effort = glmEffort(payload.reasoning_effort, levels);
