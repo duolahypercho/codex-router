@@ -93,5 +93,9 @@ test("the usage panel reaches an npm-installed Codex through cmd.exe", () => {
 });
 
 test("the usage panel names a missing Codex instead of blaming the app-server", async () => {
-  await assert.rejects(readCodexAccountUsage({ binary: undefined }), /no Codex binary was found/);
+  // `null`, not `undefined`: a default parameter fires for `undefined`, so
+  // passing that resolved a real binary and the rejection never happened on any
+  // machine with Codex installed. It only looked green because CI runners have
+  // none -- which is the one environment where this assertion cannot fail.
+  await assert.rejects(readCodexAccountUsage({ binary: null }), /no Codex binary was found/);
 });

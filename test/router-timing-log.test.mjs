@@ -205,6 +205,15 @@ test("every routed turn writes a timestamped timing line with cache tokens", asy
     assert.match(timing, /upstream_ms=\d+/);
     assert.match(timing, /out_tokens=5/);
     assert.match(timing, /cached_tokens=90/);
+    const [usageEvent] = readFileSync(
+      path.join(router.stateDir, "usage-events.jsonl"),
+      "utf8",
+    )
+      .trim()
+      .split("\n")
+      .map(JSON.parse);
+    assert.ok(usageEvent.responseStartMs >= 0);
+    assert.ok(usageEvent.responseStartMs <= usageEvent.durationMs);
   } finally {
     await stopChild(router);
     await closeServer(gateway.server);

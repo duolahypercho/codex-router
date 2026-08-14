@@ -172,6 +172,12 @@ export class ResponseUsageTransform extends Transform {
   #pending = Buffer.alloc(0);
   #released = false;
   #headerlessDetector;
+  // When the first token of visible output arrived, relative to whenever the
+  // caller says the request started. Headers are not this: a reasoning model
+  // answers with headers and then thinks in silence for seconds before the
+  // first token appears, and counting that silence as generation is what makes
+  // a fast model read as slow. See #192.
+  #firstTokenAt;
 
   // `estimatedInputTokens` arrives only on routed requests large enough that a
   // reported zero cannot be true. Without it this transform observes and
@@ -371,7 +377,33 @@ export class ResponseUsageTransform extends Transform {
   }
 
   #observe(payload) {
+    this.#noteFirstToken(payload);
     const usage = tokenUsageFromPayload(payload);
     if (usage) this.#usage = usage;
+  }
+
+  // The first event that carries visible generated text. Reasoning summaries
+  // and tool-call argument deltas are output the model is producing, so they
+  // count too -- what must not count is the wait before any of it starts.
+  #noteFirstToken(payload) {
+    if (this.#firstTokenAt !== undefined) return;
+    const type = payload?.type;
+    if (typeof type !== "string") return;
+    const producesOutput =
+      type === "response.output_text.delta" ||
+      type === "response.reasoning_summary_text.delta" ||
+      type === "response.function_call_arguments.delta" ||
+      type === "response.audio_transcript.delta";
+    // Chat-completions bridges stream choices[].delta instead of typed events.
+    const chatDelta = payload?.choices?.[0]?.delta;
+    const chatProducesOutput =
+      typeof chatDelta?.content === "string" && chatDelta.content.length > 0;
+    if (producesOutput || chatProducesOutput) this.#firstTokenAt = Date.now();
+  }
+
+  // Epoch milliseconds of the first generated token, or undefined when the
+  // response never streamed one (a non-streaming reply, or an error).
+  firstTokenAt() {
+    return this.#firstTokenAt;
   }
 }

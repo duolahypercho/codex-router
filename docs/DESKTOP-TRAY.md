@@ -54,8 +54,10 @@ and disables its activity-pill switch; router monitoring continues normally.
   a download action for every local tag. New or uncatalogued Ollama tags remain
   installable through the tag or model-page URL field.
 - **Usage** shows the active or most recently used model's observed output
-  throughput when the upstream reports output tokens. The rate is end-to-end
-  tokens per second from successful metered replies, not a synthetic estimate.
+  throughput when the upstream reports output tokens. The rate is calculated
+  from the streamed generation phase of the latest 20 clean, successful
+  replies, excluding queueing, prompt processing, retries, and historical rows
+  that predate generation timing.
 - **Status** mirrors the macOS live view with in-flight requests, elapsed time,
   model speed, and quota reset times. Usage also includes all-provider and
   tokens-by-model summaries.

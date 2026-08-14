@@ -158,7 +158,8 @@ test("codex probe includes native GPT models and the configured default", () => 
   assert.equal(slice.loginFreeManaged, false);
   assert.equal(slice.modelSettings.picker.hidden.length, 0);
   assert.ok(["all", "selected", "proven"].includes(slice.modelSettings.subagents.mode));
-  assert.equal(slice.modelSettings.toolResultAging.enabled, true);
+  // Compaction is opt-in, so an unconfigured probe reports it off.
+  assert.equal(slice.modelSettings.toolResultAging.enabled, false);
 });
 
 test("codex probe exposes managed login-free mode without credential details", () => {
@@ -217,10 +218,12 @@ test("control toggles tool-result aging without a router restart", () => {
       ),
     );
   try {
+    // Starts off, because compaction is opted into.
+    assert.equal(runControl("status").enabled, false);
+    assert.equal(runControl("on").enabled, true);
     assert.equal(runControl("status").enabled, true);
     assert.equal(runControl("off").enabled, false);
     assert.equal(runControl("status").enabled, false);
-    assert.equal(runControl("on").enabled, true);
   } finally {
     rmSync(stateDir, { recursive: true, force: true });
   }

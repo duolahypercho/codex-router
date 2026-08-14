@@ -524,11 +524,25 @@ respectively when a deliberately larger local workload requires it.
 For routed external models, old textual tool results larger than 32 KiB are
 compacted after the model has acted on them. The four newest tool results stay
 intact, and each compacted result keeps a hash, head/tail evidence, and an exact
-rerun instruction. Native OpenAI traffic is unchanged. Toggle **Compact old
-tool results** in the router Settings; the next external-model request sees the
-change without restarting Codex or the router. The equivalent CLI commands are
-`./bin/control tool-result-aging on`, `off`, and `status`. Set
-`CODEX_ROUTER_TOOL_RESULT_AGING=0` for a hard environment-level override.
+rerun instruction.
+
+This is **experimental and off by default.** It rewrites what the model sees
+mid-conversation, and its savings figures are still being validated against
+provider-billed tokens, so it is opted into rather than discovered after it has
+already altered a session. Turning it on is remembered: a stored answer is kept
+verbatim and is never re-defaulted by a later release.
+
+Toggle **Compact old tool results (experimental)** in the router Settings;
+the next external-model request sees the change without restarting Codex or the
+router. The equivalent CLI commands are `./bin/control tool-result-aging on`,
+`off`, and `status`.
+
+Native OpenAI traffic is unchanged by default. `./bin/control
+tool-result-aging native on` extends the same compaction to native GPT models;
+`native off` restores the default. It is opt-in because it changes what is sent
+to OpenAI's own endpoint, and an install that has never run it keeps the
+pre-existing behavior. Set `CODEX_ROUTER_TOOL_RESULT_AGING=0` for a hard
+environment-level override that disables both the routed and the native path.
 
 To estimate the effect without spending provider quota, run:
 
@@ -537,7 +551,9 @@ node scripts/measure-tool-result-aging.mjs /path/to/rollout.jsonl
 ```
 
 The report compares each observed compaction boundary and the latest history
-before and after aging; this is an estimate and spends no provider quota. For a
+before and after aging; this is an estimate and spends no provider quota.
+`node scripts/aging-benchmark.mjs` reports the savings already recorded in
+`usage-events.jsonl` — measured turns rather than an estimate. For a
 live check, leave the setting on and inspect `usage-events.jsonl` after a routed
 turn; events that compacted history include `toolResultsAged` and
 `toolResultBytesSaved`. Those counters measure serialized context bytes, while
