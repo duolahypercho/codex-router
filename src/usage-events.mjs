@@ -97,6 +97,13 @@ export function recordUsageEvent({
   // cover both attempts, because both were sent and both were billed. This
   // marker is what says the reported spend belongs to two attempts at one turn.
   emptyCompletionRetried,
+  // True when the turn was empty and the router could not repair it, because
+  // the attempt had already been relayed: the upstream proved it was generating
+  // before it produced nothing, so the hold was over and a retry would have
+  // grafted a second response onto a stream the client was already reading.
+  // Kept apart from `emptyCompletionRetried` because this failure reaches the
+  // user and that one does not.
+  emptyCompletionUnrepairable,
   // True when the guard released the stream at its byte/time hold budget
   // without a verdict, so this turn may have been an empty completion the
   // router chose not to retry. Kept apart from `emptyCompletion` because the
@@ -134,6 +141,9 @@ export function recordUsageEvent({
     ...(streamAborted === true ? { streamAborted: true } : {}),
     ...(emptyCompletion === true ? { emptyCompletion: true } : {}),
     ...(emptyCompletionRetried === true ? { emptyCompletionRetried: true } : {}),
+    ...(emptyCompletionUnrepairable === true
+      ? { emptyCompletionUnrepairable: true }
+      : {}),
     ...(emptyCompletionGuardReleased === true
       ? { emptyCompletionGuardReleased: true }
       : {}),
@@ -336,6 +346,9 @@ export function recentUsageEvents({ sinceMs = 24 * 60 * 60 * 1000, limit = 1_000
             : {}),
           ...(event.streamAborted === true ? { streamAborted: true } : {}),
           ...(event.emptyCompletion === true ? { emptyCompletion: true } : {}),
+          ...(event.emptyCompletionUnrepairable === true
+            ? { emptyCompletionUnrepairable: true }
+            : {}),
           ...(event.emptyCompletionRetried === true
             ? { emptyCompletionRetried: true }
             : {}),

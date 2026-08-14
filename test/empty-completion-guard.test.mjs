@@ -39,6 +39,8 @@ async function runGuard(
   return {
     body: Buffer.concat(chunks).toString("utf8"),
     empty: guard.isEmpty(),
+    suppressed: guard.suppressedPrologue(),
+    live: guard.releasedForLiveness(),
   };
 }
 
@@ -60,12 +62,33 @@ const CONTENT_TURN = [
   "",
 ].join("\n");
 
+// Empty after visibly generating. The reasoning delta is liveness: it ends the
+// hold, so the attempt reaches the client and can no longer be swapped out for
+// a retry behind its back. Still classified empty.
 const EMPTY_TURN = [
   'event: response.created',
   'data: {"type":"response.created","response":{"id":"r1"}}',
   "",
   'event: response.reasoning_text.delta',
   'data: {"type":"response.reasoning_text.delta","delta":"thinking..."}',
+  "",
+  'event: response.completed',
+  'data: {"type":"response.completed","response":{"id":"r1","output":[]}}',
+  "",
+  'event: response.done',
+  'data: {"type":"response.done","response":{"id":"r1"}}',
+  "",
+].join("\n");
+
+// Empty without ever proving it was generating: prologue, then a terminal. The
+// hold costs nothing here (a silent upstream has no prologue worth waiting for)
+// and buys everything, so this attempt is discarded whole and retried.
+const SILENT_TURN = [
+  'event: response.created',
+  'data: {"type":"response.created","response":{"id":"r1"}}',
+  "",
+  'event: response.in_progress',
+  'data: {"type":"response.in_progress","response":{"id":"r1"}}',
   "",
   'event: response.completed',
   'data: {"type":"response.completed","response":{"id":"r1","output":[]}}',
@@ -104,10 +127,70 @@ test("a turn with output text passes through untouched and is not empty", async 
   assert.match(body, /response\.done/);
 });
 
-test("a reasoning-only turn is flagged empty and the entire attempt is discarded", async () => {
-  const { body, empty } = await runGuard(EMPTY_TURN);
+test("a silent turn is flagged empty and the entire attempt is discarded", async () => {
+  const { body, empty, suppressed, live } = await runGuard(SILENT_TURN);
   assert.equal(empty, true);
+  assert.equal(suppressed, true);
+  assert.equal(live, false);
   assert.equal(body, "");
+});
+
+test("a reasoning-only turn is still empty but is relayed, not suppressed", async () => {
+  const { body, empty, suppressed, live } = await runGuard(EMPTY_TURN);
+  assert.equal(empty, true);
+  // The verdict survives the release: the caller learns the turn produced
+  // nothing, and learns it cannot fix that invisibly.
+  assert.equal(suppressed, false);
+  assert.equal(live, true);
+  assert.equal(body, EMPTY_TURN);
+});
+
+test("reasoning ends the hold before the terminal event arrives", async () => {
+  // The point of the release is latency, so prove the bytes leave the guard
+  // while the stream is still open rather than at flush.
+  const guard = new EmptyCompletionGuard("text/event-stream");
+  const seen = [];
+  guard.on("data", (chunk) => seen.push(Buffer.from(chunk).toString("utf8")));
+  const split = EMPTY_TURN.indexOf("event: response.completed");
+  guard.write(Buffer.from(EMPTY_TURN.slice(0, split)));
+  assert.match(seen.join(""), /reasoning_text\.delta/);
+  guard.end(Buffer.from(EMPTY_TURN.slice(split)));
+  await new Promise((resolve) => guard.on("end", resolve).resume());
+  assert.equal(guard.isEmpty(), true);
+  assert.equal(guard.suppressedPrologue(), false);
+});
+
+test("a reasoning turn that then produces content is not empty", async () => {
+  const input = [
+    "event: response.reasoning_text.delta",
+    'data: {"type":"response.reasoning_text.delta","delta":"thinking..."}',
+    "",
+    "event: response.output_text.delta",
+    'data: {"type":"response.output_text.delta","delta":"Hello"}',
+    "",
+    "event: response.completed",
+    'data: {"type":"response.completed","response":{"output":[]}}',
+    "",
+  ].join("\n");
+  const { body, empty, live } = await runGuard(input, { chunkSize: 13 });
+  assert.equal(empty, false);
+  assert.equal(live, true);
+  assert.equal(body, input);
+});
+
+test("a reasoning item announces liveness when no summary is streamed", async () => {
+  const input = [
+    "event: response.output_item.added",
+    'data: {"type":"response.output_item.added","item":{"type":"reasoning","id":"rs_1"}}',
+    "",
+    "event: response.completed",
+    'data: {"type":"response.completed","response":{"output":[]}}',
+    "",
+  ].join("\n");
+  const { body, empty, suppressed } = await runGuard(input);
+  assert.equal(empty, true);
+  assert.equal(suppressed, false);
+  assert.equal(body, input);
 });
 
 test("a content turn is released byte for byte after classification", async () => {
@@ -276,16 +359,31 @@ test("a chat-completions tool call counts as content", async () => {
   assert.equal((await runGuard(input)).empty, false);
 });
 
-test("a chat-completions turn with only reasoning is still empty", async () => {
+test("a chat-completions turn with only reasoning is empty but relayed", async () => {
   const input = [
     `data: ${JSON.stringify({ choices: [{ delta: { reasoning_content: "thinking..." } }] })}`,
     "",
     "data: [DONE]",
     "",
   ].join("\n");
-  const { body, empty } = await runGuard(input);
+  const { body, empty, suppressed, live } = await runGuard(input);
   assert.equal(empty, true);
-  assert.doesNotMatch(body, /\[DONE\]/);
+  assert.equal(suppressed, false);
+  assert.equal(live, true);
+  assert.equal(body, input);
+});
+
+test("a chat-completions `reasoning` field is liveness too", async () => {
+  // DeepSeek sends `reasoning_content`; several resellers relay `reasoning`.
+  const input = [
+    `data: ${JSON.stringify({ choices: [{ delta: { reasoning: "thinking..." } }] })}`,
+    "",
+    "data: [DONE]",
+    "",
+  ].join("\n");
+  const { empty, suppressed } = await runGuard(input);
+  assert.equal(empty, true);
+  assert.equal(suppressed, false);
 });
 
 test("multiple data fields are joined per the SSE dispatch algorithm", async () => {
@@ -303,17 +401,17 @@ test("multiple data fields are joined per the SSE dispatch algorithm", async () 
 });
 
 test("the pre-content byte bound fails open to one coherent original attempt", async () => {
-  const { body, empty } = await runGuard(EMPTY_TURN, { maxPreludeBytes: 1 });
+  const { body, empty } = await runGuard(SILENT_TURN, { maxPreludeBytes: 1 });
   assert.equal(empty, false);
-  assert.equal(body, EMPTY_TURN);
+  assert.equal(body, SILENT_TURN);
 });
 
 test("the pre-content time bound also covers a headerless SSE attempt", async () => {
-  const split = EMPTY_TURN.indexOf("event: response.completed");
+  const split = SILENT_TURN.indexOf("event: response.completed");
   async function* delayedTurn() {
-    yield Buffer.from(EMPTY_TURN.slice(0, split));
+    yield Buffer.from(SILENT_TURN.slice(0, split));
     await new Promise((resolve) => setTimeout(resolve, 20));
-    yield Buffer.from(EMPTY_TURN.slice(split));
+    yield Buffer.from(SILENT_TURN.slice(split));
   }
   const guard = new EmptyCompletionGuard("", { maxPreludeMs: 5 });
   const chunks = [];
@@ -328,7 +426,7 @@ test("the pre-content time bound also covers a headerless SSE attempt", async ()
     }),
   );
   assert.equal(guard.isEmpty(), false);
-  assert.equal(Buffer.concat(chunks).toString("utf8"), EMPTY_TURN);
+  assert.equal(Buffer.concat(chunks).toString("utf8"), SILENT_TURN);
 });
 
 test("headerless SSE detection spans a split BOM, comments, and blank lines", async () => {
@@ -364,7 +462,7 @@ test("a byte-budget release reports releasedForBudget", async () => {
   const guard = new EmptyCompletionGuard("text/event-stream", { maxPreludeBytes: 1 });
   const chunks = [];
   await pipeline(
-    Readable.from([Buffer.from(EMPTY_TURN)]),
+    Readable.from([Buffer.from(SILENT_TURN)]),
     guard,
     new Writable({
       write(chunk, _encoding, callback) {
@@ -375,15 +473,15 @@ test("a byte-budget release reports releasedForBudget", async () => {
   );
   assert.equal(guard.isEmpty(), false);
   assert.equal(guard.releasedForBudget(), true);
-  assert.equal(Buffer.concat(chunks).toString("utf8"), EMPTY_TURN);
+  assert.equal(Buffer.concat(chunks).toString("utf8"), SILENT_TURN);
 });
 
 test("a time-budget release reports releasedForBudget and never classifies empty", async () => {
-  const split = EMPTY_TURN.indexOf("event: response.completed");
+  const split = SILENT_TURN.indexOf("event: response.completed");
   async function* delayedTurn() {
-    yield Buffer.from(EMPTY_TURN.slice(0, split));
+    yield Buffer.from(SILENT_TURN.slice(0, split));
     await new Promise((resolve) => setTimeout(resolve, 20));
-    yield Buffer.from(EMPTY_TURN.slice(split));
+    yield Buffer.from(SILENT_TURN.slice(split));
   }
   const guard = new EmptyCompletionGuard("", { maxPreludeMs: 5 });
   const chunks = [];
@@ -399,7 +497,7 @@ test("a time-budget release reports releasedForBudget and never classifies empty
   );
   assert.equal(guard.isEmpty(), false);
   assert.equal(guard.releasedForBudget(), true);
-  assert.equal(Buffer.concat(chunks).toString("utf8"), EMPTY_TURN);
+  assert.equal(Buffer.concat(chunks).toString("utf8"), SILENT_TURN);
 });
 
 test("a content release never reports releasedForBudget", async () => {

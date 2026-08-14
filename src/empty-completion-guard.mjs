@@ -60,10 +60,53 @@ function chunkHasChatContent(data) {
   });
 }
 
+// Liveness is proof the upstream is generating without being output the client
+// can act on. Reasoning is the canonical case, and it is why liveness exists as
+// a separate verdict: on a reasoning model the gap between the first reasoning
+// delta and the first output token is seconds to minutes, and holding that gap
+// is what turns a healthy turn into a frozen screen. Measured against
+// deepseek-v4-pro, the hold moved the client's first byte from 517 ms to
+// 30,638 ms — the byte/time budget, not the model, decided when the caller saw
+// anything. Liveness ends the hold. It deliberately does not count as content,
+// so the emptiness verdict below is unchanged: a turn that streams only
+// reasoning and then completes with nothing is still classified empty, it just
+// can no longer be repaired invisibly.
+function isLivenessEvent(eventType, data) {
+  if (typeof eventType === "string") {
+    if (/reasoning/.test(eventType)) {
+      if (/\.delta$/.test(eventType)) {
+        return typeof data?.delta === "string" && data.delta.length > 0;
+      }
+      // `.added`/`.done` on a reasoning part carry no delta of their own but
+      // still only appear once the model has started producing.
+      if (/\.(?:added|done)$/.test(eventType)) return true;
+    }
+    // Responses streams without summaries announce reasoning as an output item
+    // rather than as a typed reasoning event.
+    if (
+      eventType === "response.output_item.added" &&
+      data?.item?.type === "reasoning"
+    ) {
+      return true;
+    }
+  }
+  const choices = data?.choices;
+  if (!Array.isArray(choices)) return false;
+  return choices.some((choice) => {
+    const delta = choice?.delta ?? choice?.message;
+    if (!delta || typeof delta !== "object") return false;
+    // `reasoning_content` is DeepSeek's field; `reasoning` is what several
+    // OpenAI-compatible resellers relay instead.
+    const reasoning = delta.reasoning_content ?? delta.reasoning;
+    return typeof reasoning === "string" && reasoning.length > 0;
+  });
+}
+
 // Content means something the client can act on: output text or a tool call.
 // Reasoning deltas are deliberately not content — a turn that streams only
 // reasoning and then completes with nothing is exactly the empty completion
-// this guard exists to catch.
+// this guard exists to catch. See `isLivenessEvent` for what reasoning does
+// instead: it ends the hold without settling the verdict.
 function isContentEvent(eventType, data) {
   if (typeof eventType === "string") {
     if (/(?:^|\.)output_text\.delta$/.test(eventType)) {
@@ -116,10 +159,17 @@ function isContentEvent(eventType, data) {
 // the upstream answers 200 and emits `response.completed` but never produced
 // output text or a tool call. The client has no code path for "the model said
 // nothing", so it silently marks the turn done — the "random stop" the app
-// cannot explain. The guard holds the entire pre-content attempt, not merely
-// its terminal events: an empty first attempt must contribute no response id,
-// sequence number, reasoning, or other prologue bytes to the retry the caller
-// ultimately sees.
+// cannot explain.
+//
+// The hold exists only to make the retry invisible: an empty first attempt must
+// contribute no response id, sequence number, or other prologue bytes to the
+// retry the caller ultimately sees. That is worth paying for when the upstream
+// is silent, because a silent upstream has no prologue worth waiting for. It is
+// not worth paying for when the upstream is visibly generating — so a liveness
+// event ends the hold and the guard keeps watching from behind the relay. The
+// turn can still be classified empty afterwards; what it loses is the ability
+// to be repaired without the client noticing, which `suppressedPrologue()`
+// reports so the caller can retry silently or state the failure instead.
 export class EmptyCompletionGuard extends Transform {
   #eventStream;
   #decoder = new StringDecoder("utf8");
@@ -131,6 +181,8 @@ export class EmptyCompletionGuard extends Transform {
   #empty = false;
   #released = false;
   #releasedForBudget = false;
+  #releasedForLiveness = false;
+  #suppressedPrologue = false;
   #headerlessDetector;
   #maxPreludeBytes;
   #maxPreludeMs;
@@ -177,6 +229,22 @@ export class EmptyCompletionGuard extends Transform {
     return this.#releasedForBudget;
   }
 
+  // True when the hold ended because the upstream proved it was generating
+  // rather than because it produced content. The stream was relayed in full and
+  // on time; the verdict, if any, arrives later.
+  releasedForLiveness() {
+    return this.#releasedForLiveness;
+  }
+
+  // True when the guard still held every byte at the moment it declared the
+  // turn empty. Only then can the caller retry invisibly: the client has seen
+  // no head, no response id, and no sequence numbers from the failed attempt.
+  // An empty turn without this is real and must be reported, not retried — a
+  // second attempt would graft a second head onto a stream already in flight.
+  suppressedPrologue() {
+    return this.#suppressedPrologue;
+  }
+
   _transform(chunk, _encoding, callback) {
     if (this.#headerlessDetector) {
       const detected = this.#headerlessDetector.write(chunk);
@@ -202,11 +270,18 @@ export class EmptyCompletionGuard extends Transform {
       this.push(chunk);
       return;
     }
+    const bytes = Buffer.from(chunk);
     if (this.#released) {
-      this.push(chunk);
+      this.push(bytes);
+      // A liveness release ends the hold, not the question. Keep parsing from
+      // behind the relay so a turn that streamed reasoning and then produced
+      // nothing is still recognized — it just gets reported instead of retried.
+      if (!this.#settled()) {
+        this.#parseBuffer += this.#decoder.write(bytes);
+        this.#consumeBlocks();
+      }
       return;
     }
-    const bytes = Buffer.from(chunk);
     this.#chunks.push(bytes);
     this.#bufferedBytes += bytes.length;
     this.#parseBuffer += this.#decoder.write(bytes);
@@ -214,6 +289,13 @@ export class EmptyCompletionGuard extends Transform {
     if (!this.#released && this.#bufferedBytes > this.#maxPreludeBytes) {
       this.#release({ budget: true });
     }
+  }
+
+  // No further parsing can change the outcome: either the turn produced content
+  // or the hold ended for a reason that also ended the verdict (a content
+  // release, an unparseable terminal, or the byte/time budget).
+  #settled() {
+    return this.#sawContent || (this.#released && !this.#releasedForLiveness);
   }
 
   _flush(callback) {
@@ -231,6 +313,18 @@ export class EmptyCompletionGuard extends Transform {
       return;
     }
     if (this.#released) {
+      // A stream released for liveness was relayed in full, so there is nothing
+      // left to push — but its verdict is still owed. Finish parsing and record
+      // it; the caller reads `suppressedPrologue()` to learn that this one
+      // cannot be retried behind the client's back.
+      if (!this.#settled()) {
+        this.#parseBuffer += this.#decoder.end();
+        if (this.#parseBuffer) {
+          this.#classifyBlock(this.#parseBuffer);
+          this.#parseBuffer = "";
+        }
+        if (!this.#sawContent && this.#sawTerminal) this.#empty = true;
+      }
       callback();
       return;
     }
@@ -243,6 +337,8 @@ export class EmptyCompletionGuard extends Transform {
     }
     if (!this.#sawContent && this.#sawTerminal) {
       this.#empty = true;
+      // Every byte is still held, so the retry can replace this attempt whole.
+      this.#suppressedPrologue = true;
       this.#chunks = [];
       this.#bufferedBytes = 0;
     } else {
@@ -263,7 +359,7 @@ export class EmptyCompletionGuard extends Transform {
     this.#parseBuffer = blocks.pop() || "";
     for (const block of blocks) {
       this.#classifyBlock(block);
-      if (this.#released) return;
+      if (this.#settled()) return;
     }
   }
 
@@ -288,18 +384,29 @@ export class EmptyCompletionGuard extends Transform {
         return;
       }
       this.#sawTerminal = true;
+      return;
+    }
+    // Neither content nor terminal. If it proves the upstream is generating,
+    // stop holding: the cost of the hold is paid by every reasoning turn, while
+    // the empty completions it repairs are a fraction of a percent of them.
+    if (!this.#released && this.#livenessOf(eventType, dataText) === true) {
+      this.#release({ liveness: true });
     }
   }
 
-  #release({ budget = false } = {}) {
+  #release({ budget = false, liveness = false } = {}) {
     if (this.#released) return;
     this.#released = true;
     if (budget) this.#releasedForBudget = true;
+    if (liveness) this.#releasedForLiveness = true;
     this.#clearTimer();
     for (const chunk of this.#chunks) this.push(chunk);
     this.#chunks = [];
     this.#bufferedBytes = 0;
-    this.#parseBuffer = "";
+    // A liveness release keeps parsing, and the buffer holds the partial block
+    // straddling the release. Dropping it would corrupt the very block the
+    // verdict may depend on. Every other release is done reading.
+    if (!liveness) this.#parseBuffer = "";
   }
 
   #clearTimer() {
@@ -332,6 +439,19 @@ export class EmptyCompletionGuard extends Transform {
       // a content event into a false empty completion.
       dataText: dataLines.length ? dataLines.join("\n") : undefined,
     };
+  }
+
+  // Liveness never decides the verdict, only the hold, so an unparseable block
+  // is simply "not yet proven alive" rather than the indeterminate that
+  // `#contentOf` has to preserve.
+  #livenessOf(eventType, dataText) {
+    if (!dataText || dataText === "[DONE]") return false;
+    try {
+      const data = JSON.parse(dataText);
+      return isLivenessEvent(eventType ?? data?.type, data);
+    } catch {
+      return false;
+    }
   }
 
   #contentOf(eventType, dataText) {

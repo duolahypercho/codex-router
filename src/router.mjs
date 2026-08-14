@@ -25,6 +25,7 @@ import {
   pipeResponse,
   readRequestBody,
   writeJson,
+  writeStreamErrorEvent,
 } from "./http-utils.mjs";
 import { EmptyCompletionGuard } from "./empty-completion-guard.mjs";
 import {
@@ -1684,6 +1685,11 @@ async function handleResponses(request, response, requestUrl) {
   let toolResultAging;
   let emptyCompletion = false;
   let emptyCompletionRetried = false;
+  // An empty turn the router could not repair because the attempt was already
+  // relayed. Distinct from `emptyCompletionRetried` in the meter: one is a
+  // failure the router absorbed, the other a failure it had to hand to the
+  // client, and only the second is visible to the user.
+  let emptyCompletionUnrepairable = false;
   let guardReleasedForBudget = false;
   let finalStatus;
   let activityStatus;
@@ -2027,11 +2033,26 @@ async function handleResponses(request, response, requestUrl) {
     // successful 40-second turn.
     guardReleasedForBudget =
       emptyCompletionGuard?.releasedForBudget() === true && !clientWalkedAway;
-    if (emptyCompletion) {
-      // The upstream answered 200 with nothing. Retry the identical request
-      // once: same bytes, same headers, same signal. The guard discarded the
-      // whole first stream, so the retry supplies the only head, response id,
-      // sequence space, reasoning, and output the client ever receives.
+    // The turn produced nothing, but the guard had already released it: the
+    // upstream proved it was generating (reasoning), so the head, response id,
+    // and prologue are on the wire. A second attempt would graft a second
+    // response onto a stream the client is already reading. State the failure
+    // instead. This is the case the hold used to cover, priced honestly — the
+    // hold cost every reasoning turn up to its full budget of dead air, and
+    // bought a silent rescue on roughly one routed turn in a thousand.
+    if (emptyCompletion && emptyCompletionGuard?.suppressedPrologue() !== true) {
+      emptyCompletionUnrepairable = true;
+      writeStreamErrorEvent(response, {
+        code: "empty_completion",
+        message:
+          "The model streamed reasoning but produced no output. The router could not retry because the response had already started.",
+      });
+    } else if (emptyCompletion) {
+      // The upstream answered 200 with nothing and never proved otherwise, so
+      // the guard still holds every byte. Retry the identical request once:
+      // same bytes, same headers, same signal. The discarded first stream means
+      // the retry supplies the only head, response id, sequence space,
+      // reasoning, and output the client ever receives.
       emptyCompletionRetried = true;
       let upstream2;
       try {
@@ -2164,6 +2185,7 @@ async function handleResponses(request, response, requestUrl) {
       ...toolResultAging,
       ...(emptyCompletion ? { emptyCompletion: true } : {}),
       ...(emptyCompletionRetried ? { emptyCompletionRetried: true } : {}),
+      ...(emptyCompletionUnrepairable ? { emptyCompletionUnrepairable: true } : {}),
       ...(guardReleasedForBudget ? { emptyCompletionGuardReleased: true } : {}),
     });
     usageRecorded = true;
@@ -2180,6 +2202,8 @@ async function handleResponses(request, response, requestUrl) {
             : ""
         }${
           emptyCompletionRetried ? " empty-completion-retried=true" : ""
+        }${
+          emptyCompletionUnrepairable ? " empty-completion-unrepairable=true" : ""
         }${emptyCompletion ? " empty-completion=true" : ""}`,
       );
     }
