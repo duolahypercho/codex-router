@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "slug": "commandcode/inkling-small",
+      "gatewayModel": "commandcode-inkling-small",
+      "upstreamModel": "thinkingmachines/inkling-small",
+      "provider": "commandcode",
+      "listed": true,
+      "displayName": "Inkling Small (Command Code)",
+      "description": "Inkling Small through the Command Code Provider API.",
+      "priority": 128,
+      "defaultEffort": "high",
+      "reasoningLevels": [
+        {
+          "effort": "high",
+          "description": "Deep reasoning"
+        }
+      ],
+      "contextWindow": 1000000,
+      "autoCompact": 900000,
+      "inputModalities": [
+        "text"
+      ],
+      "compHash": "commandcode-inkling-small-v1"
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "slug": "commandcode/laguna-s-2.1",
+      "gatewayModel": "commandcode-laguna-s-2-1",
+      "upstreamModel": "poolside/laguna-s-2.1-free",
+      "provider": "commandcode",
+      "listed": true,
+      "displayName": "Laguna S 2.1 (Command Code)",
+      "description": "Laguna S 2.1 through the Command Code Provider API.",
+      "priority": 129,
+      "defaultEffort": "high",
+      "reasoningLevels": [
+        {
+          "effort": "high",
+          "description": "Deep reasoning"
+        }
+      ],
+      "contextWindow": 256000,
+      "autoCompact": 235000,
+      "inputModalities": [
+        "text"
+      ],
+      "compHash": "commandcode-laguna-s-2-1-v1"
+    }
+  ]
+}

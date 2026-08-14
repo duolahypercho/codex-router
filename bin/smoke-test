@@ -2,7 +2,9 @@
 set -eu
 
 repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+# The smoke test spends provider quota against the shared router plane, so it
+# proves the same routes whichever client asked for it.
 case "${MODEL_ROUTER_TARGET:-codex}" in
-  codex) exec node "$repo_dir/src/smoke-test.mjs" "$@" ;;
-  *) echo "Smoke tests are available only for the Codex target." >&2; exit 2 ;;
+  codex|dsh) exec node "$repo_dir/src/smoke-test.mjs" "$@" ;;
+  *) echo "MODEL_ROUTER_TARGET must be codex or dsh." >&2; exit 2 ;;
 esac

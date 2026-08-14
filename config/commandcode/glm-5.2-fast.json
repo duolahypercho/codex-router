@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "slug": "commandcode/glm-5.2-fast",
+      "gatewayModel": "commandcode-glm-5-2-fast",
+      "upstreamModel": "zai-org/GLM-5.2-Fast",
+      "provider": "commandcode",
+      "listed": true,
+      "displayName": "GLM-5.2 Fast (Command Code)",
+      "description": "GLM-5.2 Fast through the Command Code Provider API.",
+      "priority": 103,
+      "defaultEffort": "high",
+      "reasoningLevels": [
+        {
+          "effort": "high",
+          "description": "Deep reasoning"
+        }
+      ],
+      "contextWindow": 1000000,
+      "autoCompact": 900000,
+      "inputModalities": [
+        "text"
+      ],
+      "compHash": "commandcode-glm-5-2-fast-v1"
+    }
+  ]
+}

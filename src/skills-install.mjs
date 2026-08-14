@@ -430,8 +430,15 @@ function codexHome() {
   return process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
 }
 
+// The guard matters: `install-manifest.mjs` imports this module, so without
+// it any command that transitively pulls the manifest in -- and happens to have
+// been invoked with `install` or `uninstall` as its own subcommand -- would
+// install the skill pack and `process.exit(0)` before its own work ran.
 const [, , command] = process.argv;
-if (command === "install" || command === "uninstall") {
+const invokedDirectly =
+  Boolean(process.argv[1]) &&
+  path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (invokedDirectly && (command === "install" || command === "uninstall")) {
   try {
     if (command === "install") {
       const { installed, skipped } = installSkills(codexHome());

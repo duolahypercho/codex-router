@@ -1,0 +1,25 @@
+#!/bin/sh
+set -eu
+
+repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+cd "$repo_dir"
+case "${MODEL_ROUTER_TARGET:-codex}" in
+  dsh) ;;
+  codex) echo "Codex configures native subagents with ./bin/multi-agent." >&2; exit 2 ;;
+  *) echo "MODEL_ROUTER_TARGET must be codex or dsh." >&2; exit 2 ;;
+esac
+node --input-type=module -e '
+import { subagentPreset } from "./src/dsh-config-manager.mjs";
+const preset = subagentPreset();
+if (!preset.yaml) {
+  console.error("No routed model is available to delegate to. Enable a provider first.");
+  process.exit(1);
+}
+process.stdout.write(
+  "A child with no model of its own inherits the default model selection, which is\n" +
+  "already a routed model once this route is the default. Paste the block below into\n" +
+  "your preset\x27s agent.cordis.yml only to put children on a different routed model\n" +
+  "from their parent.\n\n" + preset.yaml + "\n\n" +
+  "Subagent-proven routed models: " + (preset.provenModels.join(", ") || "none yet") + "\n",
+);
+'

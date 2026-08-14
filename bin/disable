@@ -3,11 +3,33 @@ set -eu
 
 repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$repo_dir"
+
+# The service, gateway, ports, and credentials are one plane shared by every
+# client integration. Tearing it down because *one* client was turned off is how
+# disabling the harness used to stop Codex working as well. Uninstall it only
+# once nothing is pointed at it any more.
+retire_service_if_unused() {
+  remaining=$(node src/target-integration.mjs installed-targets)
+  if [ -z "$remaining" ]; then
+    node src/service.mjs uninstall
+    echo "No client integrations remain, so the background service was removed."
+  else
+    echo "The background service is still running for: $remaining."
+  fi
+}
+
 case "${MODEL_ROUTER_TARGET:-codex}" in
-  codex) ;;
-  *) echo "MODEL_ROUTER_TARGET must be codex." >&2; exit 2 ;;
+  codex)
+    node src/config-manager.mjs disable
+    retire_service_if_unused
+    echo "External model routes disabled. Your model, provider, and profile settings were preserved."
+    echo "Fully quit and reopen Codex."
+    ;;
+  dsh)
+    node src/dsh-config-manager.mjs uninstall >/dev/null
+    retire_service_if_unused
+    echo "The codex-router provider route was removed from DeepSeek Harness."
+    echo "Every other settings section, provider route, and stored credential was preserved."
+    ;;
+  *) echo "MODEL_ROUTER_TARGET must be codex or dsh." >&2; exit 2 ;;
 esac
-node src/config-manager.mjs disable
-node src/service.mjs uninstall
-echo "External model routes disabled. Your model, provider, and profile settings were preserved."
-echo "Fully quit and reopen Codex."

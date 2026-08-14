@@ -9,7 +9,7 @@
       "listed": true,
       "displayName": "Qwen3.7 Max (Command Code)",
       "description": "Qwen3.7 Max through the Command Code Provider API.",
-      "priority": 106,
+      "priority": 108,
       "defaultEffort": "high",
       "reasoningLevels": [
         {

@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "slug": "commandcode/grok-4.6",
+      "gatewayModel": "commandcode-grok-4-6",
+      "upstreamModel": "xai/grok-4.6",
+      "provider": "commandcode",
+      "listed": true,
+      "displayName": "Grok 4.6 (Command Code)",
+      "description": "Grok 4.6 through the Command Code Provider API.",
+      "priority": 114,
+      "defaultEffort": "high",
+      "reasoningLevels": [
+        {
+          "effort": "low",
+          "description": "Faster reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced reasoning"
+        },
+        {
+          "effort": "high",
+          "description": "Deep reasoning"
+        }
+      ],
+      "contextWindow": 500000,
+      "autoCompact": 440000,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "compHash": "commandcode-grok-4-6-v1"
+    }
+  ]
+}

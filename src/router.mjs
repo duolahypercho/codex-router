@@ -13,6 +13,7 @@ import { promisify } from "node:util";
 import {
   assertCallerSecret,
   authenticatedRoute,
+  secretEqual,
 } from "./caller-auth.mjs";
 import {
   applyKeepAliveTimeouts,
@@ -82,6 +83,7 @@ import {
   toolResultAgingEnabled,
 } from "./tool-result-aging-state.mjs";
 import { VERSION } from "./version.mjs";
+import { nativeSessionHeaders } from "./codex-native-session.mjs";
 
 const LISTEN_HOST =
   process.env.CODEX_ROUTER_HOST || process.env.KIMI_ROUTER_HOST || "127.0.0.1";
@@ -354,7 +356,94 @@ function nativeHeaders(request) {
       headers[name] = Array.isArray(value) ? value.join(", ") : value;
     }
   }
+  // A caller that brought its own upstream session is relayed exactly as it
+  // arrived -- Codex always does, so nothing about a Codex turn changes here.
+  //
+  // "Brought none" is not the same as "sent no header". The harness
+  // authenticates to this router with the router's *own* caller key, as a
+  // bearer token, because a provider route has nowhere else to put a
+  // credential. That key means "you may use this router"; it is not an OpenAI
+  // credential, and forwarding it upstream earns exactly the "API key is
+  // invalid" it deserves -- besides handing a local secret to a remote host.
+  // So a router-local key counts as no upstream credential at all.
+  const presented = bearerToken(headers.authorization);
+  const routerLocal =
+    presented !== undefined &&
+    (secretEqual(presented, CALLER_KEY || "") || secretEqual(presented, INTERNAL_KEY || ""));
+  if (!headers.authorization || routerLocal) {
+    const fallback = nativeSessionHeaders();
+    if (fallback) {
+      Object.assign(headers, fallback);
+    } else if (routerLocal) {
+      // Nothing to substitute. Send no credential rather than this one: the
+      // upstream 401 is the same either way, and a router secret must never
+      // leave the machine.
+      delete headers.authorization;
+    }
+  }
   return headers;
+}
+
+// The token out of an `Authorization: Bearer <token>` header, or undefined for
+// any other scheme -- which is relayed untouched rather than inspected.
+//
+// Parsed rather than matched. `/^Bearer\s+(.+)$/` reads well and backtracks
+// polynomially on a header of many spaces and no token, and this runs on a
+// header an unauthenticated caller controls. Scanning is linear and needs no
+// reasoning about which quantifiers can overlap.
+const BEARER_PREFIX = "bearer";
+function bearerToken(value) {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  if (trimmed.length <= BEARER_PREFIX.length) return undefined;
+  if (trimmed.slice(0, BEARER_PREFIX.length).toLowerCase() !== BEARER_PREFIX) return undefined;
+  // The scheme and the token must be separated by whitespace, or `BearerX` and
+  // `Bearer X` would parse the same.
+  const separator = trimmed[BEARER_PREFIX.length];
+  if (separator !== " " && separator !== "\t") return undefined;
+  const token = trimmed.slice(BEARER_PREFIX.length + 1).trim();
+  return token || undefined;
+}
+
+// True when the caller authenticated to this router and brought no upstream
+// credential of its own -- the harness, and anything else pointed at a managed
+// caller base URL. Codex is never this.
+function callerBroughtNoUpstreamCredential(request) {
+  const presented = bearerToken(request.headers.authorization);
+  if (presented === undefined) return request.headers.authorization === undefined;
+  return secretEqual(presented, CALLER_KEY || "") || secretEqual(presented, INTERNAL_KEY || "");
+}
+
+// ChatGPT's own backend accepts a narrower request than the public Responses
+// API does. Codex knows the difference and complies; a generic OpenAI client
+// does not, and every one of these comes back as a bare 400 that names a single
+// parameter. Measured against the live endpoint rather than guessed.
+const NATIVE_UNSUPPORTED_PARAMS = Object.freeze([
+  "temperature",
+  "top_p",
+  "presence_penalty",
+  "frequency_penalty",
+  "max_tokens",
+  "max_output_tokens",
+  "metadata",
+  "seed",
+  "user",
+  "truncation",
+]);
+
+/**
+ * Make a generic Responses request acceptable to the native endpoint.
+ *
+ * Applied only for a caller whose session this router substituted, so a Codex
+ * turn is never rewritten -- Codex sends a compliant request already, and the
+ * promise that its traffic is byte-identical is worth more than the tidiness of
+ * one shared path.
+ */
+function normalizeNativeForSubstitutedCaller(payload) {
+  // Not optional upstream: `store` must be false, and anything else is a 400.
+  payload.store = false;
+  for (const key of NATIVE_UNSUPPORTED_PARAMS) delete payload[key];
+  return payload;
 }
 
 function routedHeaders() {
@@ -1792,6 +1881,9 @@ async function handleResponses(request, response, requestUrl) {
         }
       }
       if (!compactV1) delete native.previous_response_id;
+      if (callerBroughtNoUpstreamCredential(request)) {
+        normalizeNativeForSubstitutedCaller(native);
+      }
       target = nativeTarget(requestUrl.pathname);
       headers = nativeHeaders(request);
       routedBody = await compressedNativeBody(

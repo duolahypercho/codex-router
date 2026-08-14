@@ -4,18 +4,36 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { pickerCommandArgs } from "./control-args.mjs";
+// The publish marker lives under the shared state directory, which does not
+// vary by target, so reading it here does not disturb the per-target probes
+// below that re-import paths with their own MODEL_ROUTER_TARGET.
+import { DSH_CATALOG_PATH } from "./paths.mjs";
+// Same reasoning: presence is a property of the shared plane, not of a target,
+// so the overview can resolve it statically without perturbing those probes.
+import { presenceSnapshot } from "./presence-state.mjs";
+import { harnessSnapshotWithWeb } from "./dsh-install.mjs";
 
 // Cross-target control plane for a tray/UI (e.g. the planned pane fork). It
 // reads which registry models are enabled per target and toggles them. Toggling
 // only rewrites each target's provider selection; making it live is a separate
 // explicit `apply`, so a toggle never silently restarts a running target.
 
-const TARGETS = ["codex"];
 const SELF = fileURLToPath(import.meta.url);
 const REPO_ROOT = path.resolve(path.dirname(SELF), "..");
+// The harness integration appears here only once it is installed. The tray
+// renders one section per target, so listing `dsh` unconditionally would put an
+// empty section in front of every Codex-only install for a client they do not
+// run. `dsh-models.json` is written by the publish and removed by the
+// uninstall, so its presence is exactly the question being asked.
+const DSH_PUBLISHED = DSH_CATALOG_PATH;
+const TARGETS = existsSync(DSH_PUBLISHED) ? ["codex", "dsh"] : ["codex"];
 const args = process.argv.slice(2);
 
 function targetIsActive(target) {
+  // One service serves every client, so "is this target active" cannot be the
+  // service's own status for more than one of them. For the harness it is
+  // whether the route has been published into its settings document.
+  if (target === "dsh") return existsSync(DSH_PUBLISHED);
   const result = spawnSync(process.execPath, [path.join(REPO_ROOT, "src", "service.mjs"), "status"], {
     env: { ...process.env, MODEL_ROUTER_TARGET: target },
     encoding: "utf8",
@@ -252,10 +270,22 @@ function probeTargets() {
   return targets;
 }
 
-function printOverview(asJson) {
+async function printOverview(asJson) {
   const targets = probeTargets();
   if (asJson) {
-    process.stdout.write(`${JSON.stringify({ targets }, null, 2)}\n`);
+    // The tray polls this. Presence rides along so the rule that decides
+    // whether the router may be stopped is computed once, here, rather than
+    // re-derived from target flags on the Swift side where it would drift.
+    // The harness snapshot joins it for the same reason -- and it has to be
+    // the variant that probes the web port, or the tray reads every running
+    // harness as stopped and offers to start one that is already up.
+    process.stdout.write(
+      `${JSON.stringify(
+        { targets, presence: presenceSnapshot(), harness: await harnessSnapshotWithWeb() },
+        null,
+        2,
+      )}\n`,
+    );
     return;
   }
   for (const target of TARGETS) {
@@ -272,7 +302,7 @@ function printOverview(asJson) {
   }
 }
 
-function runSet(provider, desired) {
+async function runSet(provider, desired) {
   const requested = optionValue("--targets");
   const selected = requested ? requested.split(",").map((value) => value.trim()) : TARGETS;
   for (const target of selected) {
@@ -288,14 +318,16 @@ function runSet(provider, desired) {
   process.stderr.write(
     `Set ${provider} ${desired} for: ${selected.join(", ")}. Run \`bin/control apply\` to make it live.\n`,
   );
-  printOverview(args.includes("--json"));
+  await printOverview(args.includes("--json"));
 }
 
 function refreshActiveTarget(target) {
   const command =
     target === "codex"
       ? [process.execPath, [path.join(REPO_ROOT, "src", "catalog.mjs")]]
-      : undefined;
+      : target === "dsh"
+        ? [process.execPath, [path.join(REPO_ROOT, "src", "dsh-config-manager.mjs"), "install"]]
+        : undefined;
   if (!command) return;
   const result = spawnSync(command[0], command[1], {
     env: { ...process.env, MODEL_ROUTER_TARGET: target },
@@ -1465,6 +1497,43 @@ async function handleNativeRedirect(action, value) {
   process.stdout.write(`${JSON.stringify(setNativeRedirect(value))}\n`);
 }
 
+// One action for "give me a working harness": install the CLI if it is absent,
+// then publish the routed models into its own documents. Kept behind an
+// explicit subcommand rather than folded into `apply`, because it installs a
+// third-party package and that must never be a side effect of something else.
+async function handleHarness(action) {
+  const { harnessSnapshotWithWeb, setupHarness } = await import("./dsh-install.mjs");
+  if (!action || action === "status") {
+    process.stdout.write(`${JSON.stringify(await harnessSnapshotWithWeb())}\n`);
+    return;
+  }
+  if (action === "web") {
+    const { dshWebState } = await import("./dsh-web.mjs");
+    process.stdout.write(`${JSON.stringify(await dshWebState())}\n`);
+    return;
+  }
+  if (action === "start") {
+    const { startDshWeb } = await import("./dsh-web.mjs");
+    process.stdout.write(`${JSON.stringify(await startDshWeb())}\n`);
+    return;
+  }
+  if (action === "stop") {
+    const { stopDshWeb } = await import("./dsh-web.mjs");
+    process.stdout.write(`${JSON.stringify(await stopDshWeb())}\n`);
+    return;
+  }
+  if (action === "disconnect" || action === "off") {
+    const { disconnectHarness } = await import("./dsh-install.mjs");
+    process.stdout.write(`${JSON.stringify(await disconnectHarness())}\n`);
+    return;
+  }
+  if (action !== "setup" && action !== "install") {
+    throw new Error("Usage: control harness status|setup|start|stop|web|disconnect");
+  }
+  const result = await setupHarness();
+  process.stdout.write(`${JSON.stringify(result)}\n`);
+}
+
 async function handlePresence(action, value) {
   const { PRESENCE_MODES, presenceSnapshot, setPresenceMode } = await import(
     "./presence-state.mjs"
@@ -1487,7 +1556,7 @@ if (args.includes("--probe")) {
   await emitProbeSet(args[1], args[2]);
 } else if (args[0] === "set") {
   if (!args[1] || !args[2]) throw new Error("Usage: control set <provider> <on|off> [--targets ...]");
-  runSet(args[1], args[2]);
+  await runSet(args[1], args[2]);
 } else if (args[0] === "apply") {
   runApply();
 } else if (args[0] === "account") {
@@ -1531,6 +1600,8 @@ if (args.includes("--probe")) {
   await handleNativeRedirect(args[1], args[2]);
 } else if (args[0] === "tray") {
   handleTray(args[1]);
+} else if (args[0] === "harness") {
+  await handleHarness(args[1]);
 } else if (args[0] === "presence") {
   await handlePresence(args[1], args[2]);
 } else if (args[0] === "maintenance") {
@@ -1538,5 +1609,5 @@ if (args.includes("--probe")) {
 } else if (args[0] === "doctor") {
   runDoctor(args.slice(1));
 } else {
-  printOverview(args.includes("--json"));
+  await printOverview(args.includes("--json"));
 }

@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "slug": "commandcode/nemotron-3-ultra",
+      "gatewayModel": "commandcode-nemotron-3-ultra",
+      "upstreamModel": "nvidia/nemotron-3-ultra-550b-a55b",
+      "provider": "commandcode",
+      "listed": true,
+      "displayName": "Nemotron 3 Ultra (Command Code)",
+      "description": "Nemotron 3 Ultra through the Command Code Provider API.",
+      "priority": 125,
+      "defaultEffort": "high",
+      "reasoningLevels": [
+        {
+          "effort": "high",
+          "description": "Deep reasoning"
+        }
+      ],
+      "contextWindow": 1000000,
+      "autoCompact": 900000,
+      "inputModalities": [
+        "text"
+      ],
+      "compHash": "commandcode-nemotron-3-ultra-v1"
+    }
+  ]
+}

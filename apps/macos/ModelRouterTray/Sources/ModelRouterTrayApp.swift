@@ -133,6 +133,8 @@ final class RouterStore: ObservableObject {
   @Published private(set) var benchmarkingTag: String?
   @Published private(set) var maintenanceMessage: String?
   @Published private(set) var maintenanceSucceeded = false
+  @Published private(set) var harnessMessage: String?
+  @Published private(set) var harnessSucceeded = false
   @Published private(set) var islandMode: IslandMode
   // Publishing the language makes every view re-render on change, so the
   // panel switches in place instead of waiting for the next relaunch.
@@ -140,6 +142,11 @@ final class RouterStore: ObservableObject {
   @Published private(set) var presenceMode: TrayPresenceMode
   @Published private(set) var hostAppRunning = false
   @Published private(set) var surfacesVisible = true
+  // A client the tray cannot watch -- the harness, or a terminal `codex` --
+  // overrides follow mode. The router computes this; the tray does not
+  // re-derive it. Sourced from the routine snapshot, so a client appearing
+  // mid-session is picked up without a relaunch.
+  @Published private(set) var routerPinsServiceOn = false
 
   private var polling = false
   private var activityPolling = false
@@ -276,6 +283,8 @@ final class RouterStore: ObservableObject {
     snapshot.targets["codex"]?.signedRouting == true
   }
 
+  var harnessRunning: Bool { providerOperation == "harness" }
+
   var maintenanceRunning: Bool {
     providerOperation == "maintenance" || providerOperation == "doctor"
   }
@@ -330,6 +339,20 @@ final class RouterStore: ObservableObject {
     }
   }
 
+  // The mode the tray acts on. A harness turn or a TUI turn arrives over a
+  // socket with no app behind it, so following the Codex apps would stop the
+  // router under a user with nothing left to notice their next request.
+  var effectivePresenceMode: TrayPresenceMode {
+    routerPinsServiceOn ? .always : presenceMode
+  }
+
+  private func updateRouterPinsServiceOn(_ pinned: Bool) {
+    guard routerPinsServiceOn != pinned else { return }
+    routerPinsServiceOn = pinned
+    refreshSurfacesVisible()
+    reconcileService()
+  }
+
   func setPresenceMode(_ mode: TrayPresenceMode) {
     presenceMode = mode
     defaults.set(mode.rawValue, forKey: presenceModeKey)
@@ -352,7 +375,7 @@ final class RouterStore: ObservableObject {
   }
 
   private func refreshSurfacesVisible() {
-    surfacesVisible = presenceMode == .always || hostAppRunning
+    surfacesVisible = effectivePresenceMode == .always || hostAppRunning
   }
 
   private func persistPresenceMode(_ mode: TrayPresenceMode) {
@@ -366,7 +389,7 @@ final class RouterStore: ObservableObject {
   // Stops are deferred: Codex restarts itself, and a request can outlive the
   // window that issued it.
   private func reconcileService() {
-    guard presenceMode == .followCodex else {
+    guard effectivePresenceMode == .followCodex else {
       pendingServiceStop?.cancel()
       pendingServiceStop = nil
       // Leaving follow mode hands the router back to launchd's always-on
@@ -397,16 +420,16 @@ final class RouterStore: ObservableObject {
 
   private func stopServiceWhenIdle() async {
     while !Task.isCancelled {
-      guard presenceMode == .followCodex, !hostAppRunning else { return }
+      guard effectivePresenceMode == .followCodex, !hostAppRunning else { return }
       if activeRequestCount == 0 && activityState == .idle { break }
       try? await Task.sleep(for: activeRequestRecheck)
       refreshHostAppRunning()
     }
-    guard !Task.isCancelled, presenceMode == .followCodex, !hostAppRunning else { return }
+    guard !Task.isCancelled, effectivePresenceMode == .followCodex, !hostAppRunning else { return }
     guard serviceIntent != .stopped else { return }
     serviceIntent = .stopped
     enqueueServiceWork { [weak self] in
-      guard let self, self.presenceMode == .followCodex, !self.hostAppRunning else { return }
+      guard let self, self.effectivePresenceMode == .followCodex, !self.hostAppRunning else { return }
       await self.runServiceCommand("stop")
     }
   }
@@ -450,7 +473,7 @@ final class RouterStore: ObservableObject {
   func restoreServiceOnQuit() {
     pendingServiceStop?.cancel()
     hostAppRecheck?.cancel()
-    guard presenceMode == .followCodex, serviceIntent == .stopped else { return }
+    guard effectivePresenceMode == .followCodex, serviceIntent == .stopped else { return }
     guard let root = try? sourceRoot() else { return }
     let task = Process()
     task.executableURL = root.appendingPathComponent("bin/control")
@@ -797,6 +820,7 @@ final class RouterStore: ObservableObject {
     do {
       let output = try await runControl(arguments: ["--json"])
       snapshot = try JSONDecoder().decode(RouterSnapshot.self, from: output)
+      updateRouterPinsServiceOn(snapshot.presence?.effectiveMode == "always")
       let reportedLocalModels = snapshot.targets["codex"]?.modelSettings?.localModels
       let installedLocalTags = Set(reportedLocalModels?.models.map(\.tag) ?? [])
       let rawReportedLocalDownload = reportedLocalModels?.download
@@ -1179,6 +1203,112 @@ final class RouterStore: ObservableObject {
       maintenanceMessage = "Update installed. Fully quit and reopen Codex to load updated models and agents."
     } catch {
       maintenanceMessage = error.localizedDescription
+      await refresh()
+    }
+  }
+
+  // Install the harness if it is absent, then publish the routed models into
+  // its own documents. One button, because "install it" and "point it at this
+  // router" are never wanted separately -- an installed harness that routes
+  // nowhere is not a state anybody asked for.
+  func setupHarness() async {
+    guard providerOperation == nil else { return }
+    providerOperation = "harness"
+    harnessSucceeded = false
+    harnessMessage = snapshot.harness?.installed == true
+      ? routerLocalized("Publishing routed models…")
+      : routerLocalized("Installing DeepSeek Harness…")
+    defer { providerOperation = nil }
+    do {
+      let output = try await runControl(arguments: ["harness", "setup"])
+      let result = try JSONDecoder().decode(HarnessSetupResult.self, from: output)
+      await refresh()
+      harnessSucceeded = true
+      // The row now offers the play button; say so rather than leaving the
+      // count sitting there as if nothing further were expected.
+      harnessMessage = routerFormat(
+        routerLocalized("%d models published. Press play to open the harness."),
+        result.published.models
+      )
+    } catch {
+      harnessMessage = error.localizedDescription
+      await refresh()
+    }
+  }
+
+  // Opening is not a router action -- there is nothing to run and nothing that
+  // can fail slowly -- so it stays off the serialized operation queue that the
+  // install and publish share.
+  func openHarnessWeb() {
+    guard let raw = snapshot.harness?.web?.url, let url = URL(string: raw) else { return }
+    NSWorkspace.shared.open(url)
+  }
+
+  // Start without republishing. Offered when the models are already published
+  // and only the browser UI is down, which is the state a machine lands in
+  // after a reboot.
+  func startHarnessWeb() async {
+    guard providerOperation == nil else { return }
+    providerOperation = "harness"
+    harnessSucceeded = false
+    harnessMessage = routerLocalized("Starting DeepSeek Harness…")
+    defer { providerOperation = nil }
+    do {
+      _ = try await runControl(arguments: ["harness", "start"])
+      await refresh()
+      harnessSucceeded = true
+      harnessMessage = nil
+      openHarnessWeb()
+    } catch {
+      harnessMessage = error.localizedDescription
+      await refresh()
+    }
+  }
+
+  // Stop the running harness. This is the resource question -- a booted harness
+  // holds a Node process and its plugin tree resident -- not the integration
+  // question, so it leaves the published route alone and the row goes straight
+  // back to offering play.
+  func stopHarnessWeb() async {
+    guard providerOperation == nil else { return }
+    providerOperation = "harness"
+    harnessSucceeded = false
+    harnessMessage = routerLocalized("Stopping…")
+    defer { providerOperation = nil }
+    do {
+      let output = try await runControl(arguments: ["harness", "stop"])
+      let result = try JSONDecoder().decode(HarnessStopResult.self, from: output)
+      await refresh()
+      if result.stopped {
+        harnessSucceeded = true
+        harnessMessage = routerLocalized("Stopped. Memory and CPU released.")
+      } else {
+        // Never signal a process this router did not start. Say where it came
+        // from instead of failing silently or killing somebody's terminal.
+        harnessSucceeded = false
+        harnessMessage = routerLocalized("This harness was started outside the router — stop it where you started it.")
+      }
+    } catch {
+      harnessMessage = error.localizedDescription
+      await refresh()
+    }
+  }
+
+  // Remove the router's models from the harness. Distinct from stopping: this
+  // is about the integration, not about what is resident.
+  func disconnectHarness() async {
+    guard providerOperation == nil else { return }
+    providerOperation = "harness"
+    harnessSucceeded = false
+    harnessMessage = routerLocalized("Disconnecting…")
+    defer { providerOperation = nil }
+    do {
+      _ = try await runControl(arguments: ["harness", "disconnect"])
+      await refresh()
+      harnessSucceeded = true
+      harnessMessage = routerLocalized("Turned off. The harness and its own settings were kept.")
+    } catch {
+      harnessMessage = error.localizedDescription
       await refresh()
     }
   }
@@ -1813,7 +1943,47 @@ private struct RouterError: LocalizedError {
 
 struct RouterSnapshot: Decodable {
   let targets: [String: RouterTarget]
-  static let empty = RouterSnapshot(targets: [:])
+  // Absent from an older router's output, so the tray keeps working against one
+  // rather than failing the whole decode over a field it gained later.
+  let presence: RouterPresence?
+  let harness: RouterHarness?
+  static let empty = RouterSnapshot(targets: [:], presence: nil, harness: nil)
+}
+
+struct HarnessStopResult: Decodable {
+  let stopped: Bool
+  let reason: String?
+}
+
+struct HarnessSetupResult: Decodable {
+  struct Published: Decodable { let models: Int }
+  let published: Published
+  let launch: String
+  let web: RouterHarnessWeb?
+}
+
+struct RouterHarness: Decodable {
+  let package: String
+  let installed: Bool
+  let version: String?
+  let published: Bool
+  let nodeVersion: String
+  let nodeSupported: Bool
+  let minimumNode: String
+  let web: RouterHarnessWeb?
+}
+
+struct RouterHarnessWeb: Decodable {
+  let running: Bool
+  let url: String?
+  let port: Int?
+}
+
+struct RouterPresence: Decodable {
+  let mode: String
+  let effectiveMode: String
+  let harnessPublished: Bool
+  let terminalCodex: Bool
 }
 
 enum UsageRange: Int, CaseIterable, Identifiable {
@@ -2833,9 +3003,11 @@ private struct TrayView: View {
       VStack(alignment: .leading, spacing: 3) {
         Text(routerLocalized("Show tray"))
           .font(.system(size: 12, weight: .medium))
-        Text(store.presenceMode == .followCodex
-          ? routerLocalized("Appears with Codex or ChatGPT, hides when they quit")
-          : routerLocalized("Menu bar icon stays visible"))
+        Text(store.presenceMode == .followCodex && store.routerPinsServiceOn
+          ? routerLocalized("Kept on: a terminal session has no window to follow")
+          : store.presenceMode == .followCodex
+            ? routerLocalized("Appears with Codex or ChatGPT, hides when they quit")
+            : routerLocalized("Menu bar icon stays visible"))
           .font(.system(size: 10))
           .foregroundStyle(routerMuted)
       }
@@ -2941,6 +3113,7 @@ private struct TrayView: View {
       isDisabled: store.providerOperation != nil
         || target.modelSettings?.toolResultAging?.environmentOverride == true
     )
+    harnessRow
     maintenanceRow
     AccordionPanel(
       title: routerLocalized("Providers"),
@@ -4545,6 +4718,138 @@ private struct TrayView: View {
         .disabled(isDisabled)
     }
     .padding(.vertical, 1)
+  }
+
+  // Offered whether or not the harness is installed: the same button installs
+  // it, publishes into it, or republishes after the routable set changed. The
+  // detail line says which of the three the click will do, so it is never a
+  // surprise that it reached for the network.
+  private var harnessRow: some View {
+    let harness = store.snapshot.harness
+    let installed = harness?.installed == true
+    let published = harness?.published == true
+    let running = harness?.web?.running == true
+    let blocked = harness?.nodeSupported == false
+    return VStack(alignment: .leading, spacing: 6) {
+      HStack(spacing: 12) {
+        VStack(alignment: .leading, spacing: 3) {
+          Text(routerLocalized("DeepSeek Harness"))
+            .font(.system(size: 12, weight: .medium))
+          Text(harnessDetail(harness: harness, installed: installed, published: published))
+            .font(.system(size: 9))
+            .foregroundStyle(routerMuted)
+            .lineLimit(2)
+        }
+        Spacer(minLength: 8)
+        if store.harnessRunning {
+          ProgressView()
+            .controlSize(.small)
+            .tint(routerAccent)
+            .frame(width: 94)
+            .accessibilityLabel(routerLocalized("Setting up DeepSeek Harness"))
+        } else if running {
+          // Everything is in place, so the only thing left to want is the page.
+          Button {
+            store.openHarnessWeb()
+          } label: {
+            Label(routerLocalized("Open site"), systemImage: "arrow.up.forward.app")
+          }
+          .buttonStyle(AccentButtonStyle())
+          .help(routerLocalized("Open the DeepSeek Harness browser UI"))
+        } else if installed && published {
+          // Published but nothing serving: the state a machine reboots into.
+          // Starting is not republishing, so it does not rewrite the harness's
+          // documents to put a window back on screen.
+          Button {
+            Task { await store.startHarnessWeb() }
+          } label: {
+            Label(routerLocalized("Start"), systemImage: "play.circle")
+          }
+          .buttonStyle(AccentButtonStyle())
+          .disabled(store.providerOperation != nil || blocked)
+          .opacity(store.providerOperation == nil && !blocked ? 1 : 0.5)
+          .help(routerLocalized("Start the DeepSeek Harness browser UI"))
+        } else {
+          Button {
+            Task { await store.setupHarness() }
+          } label: {
+            Label(
+              installed ? routerLocalized("Connect") : routerLocalized("Install"),
+              systemImage: installed ? "link" : "arrow.down.circle"
+            )
+          }
+          .buttonStyle(AccentButtonStyle())
+          .disabled(store.providerOperation != nil || blocked)
+          .opacity(store.providerOperation == nil && !blocked ? 1 : 0.5)
+          .help(routerLocalized("Install DeepSeek Harness and publish this router's models into it"))
+        }
+        // The secondary action follows what is actually costing something.
+        // While the harness is resident that is memory and CPU, so the offer is
+        // to stop it; once it is stopped the only thing left to undo is the
+        // integration.
+        if !store.harnessRunning {
+          if running {
+            Button {
+              Task { await store.stopHarnessWeb() }
+            } label: {
+              Label(routerLocalized("Turn off"), systemImage: "stop.circle")
+            }
+            .buttonStyle(.borderless)
+            .font(.system(size: 10))
+            .foregroundStyle(routerMuted)
+            .disabled(store.providerOperation != nil)
+            .help(routerLocalized("Stop the harness process and free its memory and CPU"))
+          } else if published {
+            Button {
+              Task { await store.disconnectHarness() }
+            } label: {
+              Label(routerLocalized("Disconnect"), systemImage: "power")
+            }
+            .buttonStyle(.borderless)
+            .font(.system(size: 10))
+            .foregroundStyle(routerMuted)
+            .disabled(store.providerOperation != nil)
+            .help(routerLocalized("Remove this router's models from the harness, keeping the harness itself"))
+          }
+        }
+      }
+      if let message = store.harnessMessage {
+        Text(message)
+          .font(.system(size: 9))
+          .foregroundStyle(store.harnessSucceeded ? routerMint : routerRed.opacity(0.9))
+          .lineLimit(3)
+      }
+    }
+    .padding(10)
+    .background(
+      Color.primary.opacity(0.045),
+      in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+    )
+  }
+
+  private func harnessDetail(
+    harness: RouterHarness?,
+    installed: Bool,
+    published: Bool
+  ) -> String {
+    guard let harness else { return routerLocalized("Checking…") }
+    if !harness.nodeSupported {
+      return routerFormat(
+        routerLocalized("Needs Node %@ or newer; this router runs Node %@"),
+        harness.minimumNode,
+        harness.nodeVersion
+      )
+    }
+    if !installed {
+      return routerLocalized("Not installed · installs the CLI, then publishes this router's models")
+    }
+    let version = harness.version.map { "v\($0)" } ?? routerLocalized("installed")
+    if let web = harness.web, web.running, let url = web.url {
+      return routerFormat(routerLocalized("%@ · running at %@"), version, url)
+    }
+    return published
+      ? routerFormat(routerLocalized("%@ · routed models published · not running"), version)
+      : routerFormat(routerLocalized("%@ · installed but not routed here yet"), version)
   }
 
   private var maintenanceRow: some View {

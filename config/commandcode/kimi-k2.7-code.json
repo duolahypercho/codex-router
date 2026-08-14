@@ -9,7 +9,7 @@
       "listed": true,
       "displayName": "Kimi K2.7 Code (Command Code)",
       "description": "Kimi K2.7 Code through the Command Code Provider API.",
-      "priority": 104,
+      "priority": 105,
       "defaultEffort": "high",
       "reasoningLevels": [
         {
