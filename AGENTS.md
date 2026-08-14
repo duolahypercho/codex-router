@@ -899,6 +899,29 @@ purpose.
   real marker-return probes through every installed routed agent plus a
   same-thread follow-up.
 
+## A published harness route keeps the router on
+
+The tray's presence setting can tie the router to the Codex and ChatGPT desktop
+apps, stopping it 30 seconds after both close. That is safe for Codex, which is
+an app the tray can watch and whose next launch it can notice. It is not safe
+for the harness: `dsh` is a CLI with no bundle identifier, so there is nothing
+to observe, and it cannot be started on demand either — a harness turn that
+finds 127.0.0.1:4202 closed fails immediately, while the five-process stack
+behind that port takes up to 300 seconds to warm. Lazy start is not available
+at request latency, so the port has to already be open.
+
+- `effectivePresenceMode()` in `src/presence-state.mjs` is what the tray and
+  `doctor` act on. It reports `always` whenever `dsh-models.json` exists,
+  whatever the stored mode says. Read it, never `readPresenceMode()`, anywhere
+  a service gets stopped.
+- The stored mode is overridden, never rewritten. Removing the harness route
+  hands the user's own choice back on the next read.
+- The tray mirrors this through `effectivePresenceMode`, fed by
+  `targets.dsh.active` in the routine `--json` snapshot rather than a probe of
+  its own, so publishing the route mid-session takes effect without a relaunch.
+- `test/presence-state.test.mjs` covers the override, the round trip, and the
+  fact that always-on is left alone. A change to the gate needs a test there.
+
 ## Generated media and scratch output
 
 - Anything a skill, tool, or agent produces that is not source — rendered

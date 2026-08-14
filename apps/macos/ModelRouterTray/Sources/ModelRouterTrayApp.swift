@@ -140,6 +140,10 @@ final class RouterStore: ObservableObject {
   @Published private(set) var presenceMode: TrayPresenceMode
   @Published private(set) var hostAppRunning = false
   @Published private(set) var surfacesVisible = true
+  // The harness publishes no bundle ID and cannot be started lazily, so its
+  // route being live overrides follow mode. Sourced from the routine snapshot
+  // rather than a probe of its own, so publishing mid-session is picked up.
+  @Published private(set) var harnessPublished = false
 
   private var polling = false
   private var activityPolling = false
@@ -330,6 +334,20 @@ final class RouterStore: ObservableObject {
     }
   }
 
+  // The mode the tray acts on. A DeepSeek Harness turn arrives over a socket
+  // with no app behind it, so following the Codex apps would stop the router
+  // under a harness-only user with nothing left to notice their next request.
+  var effectivePresenceMode: TrayPresenceMode {
+    harnessPublished ? .always : presenceMode
+  }
+
+  private func updateHarnessPublished(_ published: Bool) {
+    guard harnessPublished != published else { return }
+    harnessPublished = published
+    refreshSurfacesVisible()
+    reconcileService()
+  }
+
   func setPresenceMode(_ mode: TrayPresenceMode) {
     presenceMode = mode
     defaults.set(mode.rawValue, forKey: presenceModeKey)
@@ -352,7 +370,7 @@ final class RouterStore: ObservableObject {
   }
 
   private func refreshSurfacesVisible() {
-    surfacesVisible = presenceMode == .always || hostAppRunning
+    surfacesVisible = effectivePresenceMode == .always || hostAppRunning
   }
 
   private func persistPresenceMode(_ mode: TrayPresenceMode) {
@@ -366,7 +384,7 @@ final class RouterStore: ObservableObject {
   // Stops are deferred: Codex restarts itself, and a request can outlive the
   // window that issued it.
   private func reconcileService() {
-    guard presenceMode == .followCodex else {
+    guard effectivePresenceMode == .followCodex else {
       pendingServiceStop?.cancel()
       pendingServiceStop = nil
       // Leaving follow mode hands the router back to launchd's always-on
@@ -397,16 +415,16 @@ final class RouterStore: ObservableObject {
 
   private func stopServiceWhenIdle() async {
     while !Task.isCancelled {
-      guard presenceMode == .followCodex, !hostAppRunning else { return }
+      guard effectivePresenceMode == .followCodex, !hostAppRunning else { return }
       if activeRequestCount == 0 && activityState == .idle { break }
       try? await Task.sleep(for: activeRequestRecheck)
       refreshHostAppRunning()
     }
-    guard !Task.isCancelled, presenceMode == .followCodex, !hostAppRunning else { return }
+    guard !Task.isCancelled, effectivePresenceMode == .followCodex, !hostAppRunning else { return }
     guard serviceIntent != .stopped else { return }
     serviceIntent = .stopped
     enqueueServiceWork { [weak self] in
-      guard let self, self.presenceMode == .followCodex, !self.hostAppRunning else { return }
+      guard let self, self.effectivePresenceMode == .followCodex, !self.hostAppRunning else { return }
       await self.runServiceCommand("stop")
     }
   }
@@ -450,7 +468,7 @@ final class RouterStore: ObservableObject {
   func restoreServiceOnQuit() {
     pendingServiceStop?.cancel()
     hostAppRecheck?.cancel()
-    guard presenceMode == .followCodex, serviceIntent == .stopped else { return }
+    guard effectivePresenceMode == .followCodex, serviceIntent == .stopped else { return }
     guard let root = try? sourceRoot() else { return }
     let task = Process()
     task.executableURL = root.appendingPathComponent("bin/control")
@@ -796,6 +814,7 @@ final class RouterStore: ObservableObject {
     do {
       let output = try await runControl(arguments: ["--json"])
       snapshot = try JSONDecoder().decode(RouterSnapshot.self, from: output)
+      updateHarnessPublished(snapshot.targets["dsh"]?.active == true)
       let reportedLocalModels = snapshot.targets["codex"]?.modelSettings?.localModels
       let installedLocalTags = Set(reportedLocalModels?.models.map(\.tag) ?? [])
       let rawReportedLocalDownload = reportedLocalModels?.download
@@ -2832,9 +2851,11 @@ private struct TrayView: View {
       VStack(alignment: .leading, spacing: 3) {
         Text(routerLocalized("Show tray"))
           .font(.system(size: 12, weight: .medium))
-        Text(store.presenceMode == .followCodex
-          ? routerLocalized("Appears with Codex or ChatGPT, hides when they quit")
-          : routerLocalized("Menu bar icon stays visible"))
+        Text(store.presenceMode == .followCodex && store.harnessPublished
+          ? routerLocalized("Kept on: DeepSeek Harness has no window to follow")
+          : store.presenceMode == .followCodex
+            ? routerLocalized("Appears with Codex or ChatGPT, hides when they quit")
+            : routerLocalized("Menu bar icon stays visible"))
           .font(.system(size: 10))
           .foregroundStyle(routerMuted)
       }

@@ -9,7 +9,7 @@ import {
 import path from "node:path";
 
 import { protectPrivateFile } from "./file-security.mjs";
-import { STATE_DIR } from "./paths.mjs";
+import { DSH_CATALOG_PATH, STATE_DIR } from "./paths.mjs";
 
 export const PRESENCE_ALWAYS = "always";
 export const PRESENCE_FOLLOW_CODEX = "follow-codex";
@@ -33,13 +33,36 @@ export function readPresenceMode() {
   }
 }
 
+// Follow mode watches two desktop bundle IDs. DeepSeek Harness is a CLI, so it
+// has no bundle to watch and no launch notification to observe -- and it cannot
+// be started lazily either: a harness turn that finds 4202 closed fails
+// outright, while the stack behind that port takes up to 300s to warm. So a
+// published harness route pins the router on. The stored mode is left alone, so
+// unpublishing the route hands the user's own choice back.
+export function harnessPublished() {
+  return existsSync(DSH_CATALOG_PATH);
+}
+
+// What the tray and doctor must actually act on, as opposed to what the toggle
+// says. Read this rather than the raw mode anywhere a service gets stopped.
+export function effectivePresenceMode() {
+  const mode = readPresenceMode();
+  if (mode === PRESENCE_FOLLOW_CODEX && harnessPublished()) return PRESENCE_ALWAYS;
+  return mode;
+}
+
 // True when the router is allowed to be down because the desktop apps are shut.
 export function serviceFollowsHostApps() {
-  return readPresenceMode() === PRESENCE_FOLLOW_CODEX;
+  return effectivePresenceMode() === PRESENCE_FOLLOW_CODEX;
 }
 
 export function presenceSnapshot() {
-  return { mode: readPresenceMode(), path: PRESENCE_STATE_PATH };
+  return {
+    mode: readPresenceMode(),
+    effectiveMode: effectivePresenceMode(),
+    harnessPublished: harnessPublished(),
+    path: PRESENCE_STATE_PATH,
+  };
 }
 
 export function setPresenceMode(mode) {

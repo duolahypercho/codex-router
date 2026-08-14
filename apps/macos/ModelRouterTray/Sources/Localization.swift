@@ -143,6 +143,7 @@ enum RouterChineseText {
     "Provider hidden. Restart Codex to refresh its model picker.": "提供商已隐藏。请重启 Codex 以刷新模型选择器。",
     "Show tray": "显示菜单栏图标",
     "Appears with Codex or ChatGPT, hides when they quit": "Codex 或 ChatGPT 运行时显示，退出后隐藏",
+    "Kept on: DeepSeek Harness has no window to follow": "保持开启：DeepSeek Harness 没有可跟随的窗口",
     "Menu bar icon stays visible": "菜单栏图标始终显示",
     "Dynamic Island": "动态岛",
     "Quotas and live activity pinned to the desktop": "将额度和实时活动固定在桌面",
