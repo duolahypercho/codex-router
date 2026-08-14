@@ -56,9 +56,9 @@
   with the provider-CLI installs rather than copied.
 
   It is never a side effect: no `apply`, `enable`, or repair path installs the
-  harness. Native GPT models stay unpublished for the reason they always were —
-  a harness request carries no ChatGPT session — so the model count the button
-  reports is the routable set.
+  harness. The model count the button reports is the routable set, not the
+  picker — native GPT models come and go with the Codex session described
+  above.
 
   The row then runs the harness's browser UI: **Install**, then **Connect**,
   then a play button, then **Open site**, each shown only in the state it

@@ -154,9 +154,11 @@ export async function setupHarness({ force = false, setDefaultModel = false } = 
     installedNow: install.changed,
     published,
     web: await dshWebState(),
-    // Native GPT models are never published: they need the caller's own
-    // ChatGPT session, which a harness request does not carry. Saying so beats
-    // letting somebody count the picker and conclude the publish dropped them.
+    // `published` is the routed count. Native GPT models ride the Codex session
+    // this machine is signed in with, so they come and go with it -- reporting
+    // the routed set beats a number that changes when nobody published
+    // anything, and beats letting somebody count the picker and conclude the
+    // publish dropped them.
     launch: `${DSH_EXECUTABLE} web`,
   };
 }

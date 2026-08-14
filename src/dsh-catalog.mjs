@@ -6,10 +6,12 @@
 // settings write, not a plugin or composition change, and the harness picks it
 // up on its next request because `dsh-settings-file` hot-reloads the document.
 //
-// Only routed models are published. An unregistered slug on the router's
-// `/v1/responses` endpoint is treated as native GPT traffic, which needs the
-// caller's own ChatGPT session — the harness carries none, so advertising a
-// native model here would offer a turn that cannot authenticate.
+// Routed models are always published. An unregistered slug on the router's
+// `/v1/responses` endpoint is treated as native GPT traffic, which needs a
+// ChatGPT session the harness does not carry — so a native model is published
+// only while `codex-native-session.mjs` can substitute the one this machine is
+// signed in with, and is withheld again the moment it cannot. See
+// `dshNativeModels` below.
 
 import { applyVisionBridge } from "./vision-bridge.mjs";
 import { yamlScalar } from "./yaml-structure.mjs";

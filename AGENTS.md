@@ -157,14 +157,19 @@ beside ours, so everything else in them is somebody else's work.
    the same bound the harness itself holds them to, and status output reports
    the redacted URL exactly as the Codex manager does. Never print the complete
    managed base URL.
-4. **Only routed models are published**, and only the selected, credentialed,
-   listed, non-hidden ones. An unregistered slug on the router's
-   `/v1/responses` endpoint is treated as native GPT traffic needing the
-   caller's own ChatGPT session, which a harness request does not carry — so a
-   native model advertised here would offer a turn that cannot authenticate.
-   For the same reason the vision-bridge engine candidates exclude native
-   models: this call site's evidence is that there is no caller session to
-   check.
+4. **Routed models are always published; native ones only while a session backs
+   them.** Publish only the selected, credentialed, listed, non-hidden routed
+   models. An unregistered slug on the router's `/v1/responses` endpoint is
+   treated as native GPT traffic needing a ChatGPT session, which a harness
+   request does not carry — so a native model is advertised only while
+   `nativeSessionStatus().usable` reports the session this machine is signed in
+   with as spendable, and is withheld again the moment it is not. Publishing one
+   the router cannot authorize offers a turn that 401s, which is the failure
+   this gate exists to prevent; never widen it to presence alone, because an
+   expired session is present.
+   The vision-bridge engine candidates still exclude native models: that call
+   site admits an engine on evidence the *caller's* session can spend it, and a
+   substituted session is not the caller's.
 5. **The protocol is `openai-responses`**, because that is the only thing the
    router's caller endpoint serves, and every router capability — tool-result
    ageing, the vision bridge, prompt-token substitution, upstream retry, usage
@@ -926,9 +931,11 @@ user has to find in the docs, so `src/dsh-install.mjs` owns the other half.
   provider CLIs. One copy, because the details that took a debugging session to
   get right — the PATH a spawn inherits, where npm drops binaries per platform,
   which line of npm's output is worth showing — are exactly what drifts.
-- Native GPT models are not published, here or anywhere: they need the caller's
-  own ChatGPT session, which a harness request does not carry. The count the
-  button reports is the routable set, not the picker.
+- Native GPT models are published only while `codex-native-session.mjs` reports
+  a usable session: they need a ChatGPT session, a harness request carries none
+  of its own, and the fallback spends the one this machine is already signed in
+  with. They are withheld again the moment it is missing or expired. The count
+  the button reports is the routable set, not the picker.
 
 `src/dsh-web.mjs` starts and finds the browser UI, so the tray's button can be
 `Open site` once there is a site to open.

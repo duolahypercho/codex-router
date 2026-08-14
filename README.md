@@ -1066,9 +1066,20 @@ comments, and your other stored keys are left exactly as they were —
 A settings file this build cannot read unambiguously is refused with the file
 untouched rather than rewritten on a guess.
 
-**Native GPT models are not published.** They need the caller's own ChatGPT
-session, which a harness request does not carry, so advertising them would
-offer a turn that cannot authenticate.
+**Native GPT models publish while this machine has a usable Codex session.**
+They are authorized by a ChatGPT session and a harness request carries none of
+its own, so the router falls back to the session Codex is already signed in with
+here — you are logged in on this machine, and a client running as the same user
+should not have to log in again. They are withheld the moment that session is
+missing or expired, so the picker never offers a turn that would 401. If they
+disappear, open Codex once to renew it; `./bin/model-router doctor` says so too.
+
+It is a fallback and never an override: a request that presents its own
+credential is relayed untouched, so nothing about a Codex turn changes. Worth
+knowing before leaving it on — it widens what the caller key reaches, from the
+API-key providers to your ChatGPT subscription as well. Set
+`CODEX_ROUTER_NATIVE_SESSION_FALLBACK=0` to turn it off, and the harness
+publishes routed models only.
 
 **Subagents.** A child spawned by `dsh-tool-subagent` with no model of its own
 inherits the default model selection, so it is already routed once this route
