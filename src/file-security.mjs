@@ -1,5 +1,14 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, statSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  renameSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
+import path from "node:path";
 
 let windowsSid;
 
@@ -35,6 +44,30 @@ export function protectPrivateFile(target) {
     { stdio: "ignore" },
   );
   return target;
+}
+
+// All private JSON state uses the same temp-file, owner-only, atomic replace.
+// Keeping it here prevents one state writer from drifting away from the rest.
+export function writePrivateFile(target, contents, { directoryMode } = {}) {
+  const directory = path.dirname(target);
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  if (directoryMode !== undefined) chmodSync(directory, directoryMode);
+  const temporary = `${target}.tmp.${process.pid}`;
+  try {
+    writeFileSync(temporary, contents, { encoding: "utf8", mode: 0o600 });
+    protectPrivateFile(temporary);
+    renameSync(temporary, target);
+    protectPrivateFile(target);
+  } catch (error) {
+    if (existsSync(temporary)) unlinkSync(temporary);
+    throw error;
+  }
+  return target;
+}
+
+export function writePrivateJson(target, value, { space = 2, directoryMode } = {}) {
+  writePrivateFile(target, `${JSON.stringify(value, null, space)}\n`, { directoryMode });
+  return value;
 }
 
 export function privateFileIsProtected(target) {

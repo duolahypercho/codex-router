@@ -1,20 +1,15 @@
 import { execFileSync } from "node:child_process";
 import {
-  chmodSync,
   existsSync,
-  mkdirSync,
   readFileSync,
-  renameSync,
-  writeFileSync,
 } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { protectPrivateFile } from "./file-security.mjs";
+import { writePrivateJson } from "./file-security.mjs";
 import {
   INSTALL_MANIFEST_PATH,
   SOURCE_ROOT,
-  STATE_DIR,
   TARGET,
 } from "./paths.mjs";
 import { providerSelectionStatus } from "./provider-selection.mjs";
@@ -52,16 +47,7 @@ export function readInstallManifest() {
 }
 
 function atomicWrite(value) {
-  mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 });
-  chmodSync(STATE_DIR, 0o700);
-  const temporary = `${INSTALL_MANIFEST_PATH}.tmp.${process.pid}`;
-  writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, {
-    encoding: "utf8",
-    mode: 0o600,
-  });
-  protectPrivateFile(temporary);
-  renameSync(temporary, INSTALL_MANIFEST_PATH);
-  protectPrivateFile(INSTALL_MANIFEST_PATH);
+  writePrivateJson(INSTALL_MANIFEST_PATH, value, { directoryMode: 0o700 });
 }
 
 export function recordInstall() {
