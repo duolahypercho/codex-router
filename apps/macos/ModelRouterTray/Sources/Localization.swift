@@ -238,6 +238,7 @@ enum RouterChineseText {
     "External providers · Codex restarts automatically": "外部提供商 · Codex 会自动重启",
     "Use connected models and restart Codex": "使用已连接模型并重启 Codex",
     "Compact old tool results": "压缩旧工具结果",
+    "Effort as subagent": "作为子代理的思考强度",
     "Forced off by CODEX_ROUTER_TOOL_RESULT_AGING=0": "已被 CODEX_ROUTER_TOOL_RESULT_AGING=0 强制关闭",
     "External models · applies on the next request": "外部模型 · 下次请求生效",
     "Providers": "提供商",

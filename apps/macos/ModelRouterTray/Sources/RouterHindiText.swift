@@ -142,6 +142,7 @@ enum RouterHindiText {
     "Engine": "इंजन",
     "Paid (cloud)": "सशुल्क (क्लाउड)",
     "Your ChatGPT plan": "आपकी ChatGPT योजना",
+    "Effort as subagent": "सबएजेंट के रूप में प्रयास",
     "Model default": "मॉडल डिफ़ॉल्ट",
     "Update": "अपडेट करें",
     "Fix": "ठीक करें",

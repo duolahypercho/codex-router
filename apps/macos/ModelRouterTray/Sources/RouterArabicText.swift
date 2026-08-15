@@ -142,6 +142,7 @@ enum RouterArabicText {
     "Engine": "المحرك",
     "Paid (cloud)": "مدفوع (سحابي)",
     "Your ChatGPT plan": "خطة ChatGPT الخاصة بك",
+    "Effort as subagent": "مستوى التفكير كوكيل فرعي",
     "Model default": "افتراضي النموذج",
     "Update": "تحديث",
     "Fix": "إصلاح",

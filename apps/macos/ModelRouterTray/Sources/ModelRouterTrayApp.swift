@@ -1539,6 +1539,14 @@ final class RouterStore: ObservableObject {
     )
   }
 
+  // An empty level clears the override, which the control command spells
+  // "default" -- the model goes back to deciding its own depth.
+  func setSubagentEffort(_ slug: String, effort: String?) async {
+    await applyModelSettings(
+      arguments: ["subagents", "effort", slug, effort ?? "default"]
+    )
+  }
+
   func setSubagentProvider(_ provider: String, enabled: Bool) async {
     await applyModelSettings(
       arguments: ["subagents", "provider", provider, enabled ? "on" : "off"]
@@ -2446,6 +2454,7 @@ struct RouterModel: Decodable, Identifiable {
   let enabled: Bool
   let multiAgentVersion: String?
   let visible: Bool?
+  let reasoningLevels: [String]?
   var id: String { slug }
 }
 
@@ -2738,6 +2747,9 @@ struct SubagentSettingsSnapshot: Decodable {
   let disabled: [String]
   let all: Bool
   let proofs: [String: SubagentProofSnapshot]?
+  // Per-model depth applied only to child turns. Absent for every model the
+  // operator has not set, which is the common case.
+  let efforts: [String: String]?
 }
 
 struct SubagentProofSnapshot: Decodable {
@@ -3725,17 +3737,26 @@ private struct TrayView: View {
                     ]
                   )
                   ForEach(group.models) { model in
-                    toggleRow(
-                      title: model.displayName,
-                      detail: subagentDetail(for: model),
-                      isOn: Binding(
-                        get: { isSubagent(model) },
-                        set: { enabled in
-                          Task { await store.setSubagentModel(model.slug, enabled: enabled) }
-                        }
-                      ),
-                      disabled: busy || model.visible == false
-                    )
+                    VStack(alignment: .leading, spacing: 3) {
+                      toggleRow(
+                        title: model.displayName,
+                        detail: subagentDetail(for: model),
+                        isOn: Binding(
+                          get: { isSubagent(model) },
+                          set: { enabled in
+                            Task { await store.setSubagentModel(model.slug, enabled: enabled) }
+                          }
+                        ),
+                        disabled: busy || model.visible == false
+                      )
+                      // Only for models actually acting as subagents, and only
+                      // when the model offers a choice: a one-level ladder has
+                      // nothing to pick, and an off model has no child turns to
+                      // apply a depth to.
+                      if isSubagent(model), (model.reasoningLevels?.count ?? 0) > 1 {
+                        subagentEffortRow(for: model)
+                      }
+                    }
                   }
                 }
               }
@@ -5012,6 +5033,39 @@ private struct TrayView: View {
       if model.visible == false { return false }
       if disabledSubagentSet.contains(model.slug) { return false }
       return model.multiAgentVersion == "v2" || selectedSubagentSet.contains(model.slug)
+    }
+
+    // Codex chooses which model a child runs on; this chooses how hard it
+    // thinks once it gets there. Indented under its model so it reads as a
+    // property of that row rather than another model in the list.
+    private func subagentEffortRow(for model: RouterModel) -> some View {
+      let levels = model.reasoningLevels ?? []
+      let current = settings?.subagents.efforts?[model.slug]
+      return HStack(spacing: 6) {
+        Text(routerLocalized("Effort as subagent"))
+          .font(.system(size: 9))
+          .foregroundStyle(routerMuted)
+        Spacer(minLength: 6)
+        Menu {
+          Button(routerLocalized("Model default")) {
+            Task { await store.setSubagentEffort(model.slug, effort: nil) }
+          }
+          ForEach(levels, id: \.self) { level in
+            Button(level) {
+              Task { await store.setSubagentEffort(model.slug, effort: level) }
+            }
+          }
+        } label: {
+          Text(current ?? routerLocalized("Model default"))
+            .font(.system(size: 9, weight: .medium))
+            .lineLimit(1)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .disabled(busy)
+      }
+      .padding(.leading, 14)
+      .padding(.trailing, 2)
     }
 
     private func subagentDetail(for model: RouterModel) -> String {

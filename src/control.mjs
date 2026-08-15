@@ -103,10 +103,21 @@ function nativeCodexModels(catalogPath, hiddenModels = new Set(), subagentSettin
         native: true,
         multiAgentVersion: model.multi_agent_version || "v1",
         visible: !hiddenModels.has(model.slug),
+        ...reasoningLevelField(model.supported_reasoning_levels),
       }));
   } catch {
     return [];
   }
+}
+
+// Registry entries carry objects ({ effort, description }); the merged catalog
+// carries the same list in Codex's wire shape. Both reduce to the effort names
+// a surface can offer.
+function reasoningLevelField(levels) {
+  const names = (Array.isArray(levels) ? levels : [])
+    .map((level) => (typeof level === "string" ? level : level?.effort))
+    .filter((level) => typeof level === "string" && level);
+  return names.length ? { reasoningLevels: names } : {};
 }
 
 // --- per-target probes (run with MODEL_ROUTER_TARGET set) -------------------
@@ -186,6 +197,11 @@ async function emitProbe() {
     enabled: enabledProviders.includes(model.provider),
     multiAgentVersion: model.multiAgentVersion || "v1",
     visible: !hiddenModels.has(model.slug),
+    // The ladders differ per model, so a surface offering a subagent effort
+    // has to be told which levels this one accepts rather than guessing from a
+    // global list. Omitted when the model advertises none, so an entry without
+    // a ladder keeps the exact shape it always had.
+    ...reasoningLevelField(model.reasoningLevels),
   }));
   const models = TARGET === "codex"
     ? [
