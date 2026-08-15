@@ -54,6 +54,7 @@ import {
   NamespaceToolCallTransform,
   flattenNamespacedHistory,
   flattenNamespaceTools,
+  repairToolSchemaRoots,
 } from "./namespace-relay.mjs";
 import { pendingInterruptTargets } from "./subagent-completion.mjs";
 import { mergeCodexAppTools } from "./codex-app-tools.mjs";
@@ -1845,6 +1846,12 @@ async function handleResponses(request, response, requestUrl) {
         // spawn_agent model enum off it to drop an invented or stale optional
         // override before Codex validates the call.
         flattenedNamespaces = flattenNamespaceTools(payload.tools).namespaces;
+        // Keeping the namespace shape is not the same as keeping a root the
+        // upstream rejects. `opencode-go-responses/gpt-5.6-luna` 400s a
+        // `type: ["object","null"]` parameter root while accepting the same
+        // request with a plain or union root -- so the strict-root repair has to
+        // run here too, on the tools alone, without flattening anything.
+        payload.tools = repairToolSchemaRoots(payload.tools);
       }
       let routedInput = input;
       // The stored call history must use the same tool names as the tool

@@ -9,6 +9,7 @@ import {
   flattenNamespaceTools,
   rewriteNamespaceFunctionCall,
   rewriteNamespaceResponsePayload,
+  repairToolSchemaRoots,
 } from "../src/namespace-relay.mjs";
 import { mergeCodexAppTools } from "../src/codex-app-tools.mjs";
 
@@ -708,4 +709,25 @@ test("an ordinary function tool is passed through by identity", () => {
   const { tools, flattened } = flattenNamespaceTools([tool]);
   assert.equal(tools[0], tool);
   assert.equal(flattened, false);
+});
+
+// Responses-native providers keep the namespace shape, so their tools never go
+// through the flattening path -- but they still reach an upstream with a root
+// it may reject. `opencode-go-responses/gpt-5.6-luna` 400s a
+// `type: ["object","null"]` root while accepting the same request with a plain
+// or union root, so the repair has to be available without flattening.
+test("repairToolSchemaRoots fixes roots without flattening", () => {
+  const tools = [
+    { type: "function", name: "nullable", parameters: { type: ["object", "null"], properties: { a: {} } } },
+    { type: "namespace", name: "codex_app", tools: [{ name: "child", inputSchema: { type: "object" } }] },
+  ];
+  const repaired = repairToolSchemaRoots(tools);
+  assert.equal(repaired[0].parameters.type, "object");
+  // The namespace entry keeps its native shape; only roots are touched.
+  assert.equal(repaired[1], tools[1]);
+});
+
+test("repairToolSchemaRoots returns the original array when nothing needs repair", () => {
+  const tools = [{ type: "function", name: "fine", parameters: { type: "object", properties: { a: {} } } }];
+  assert.equal(repairToolSchemaRoots(tools), tools);
 });
