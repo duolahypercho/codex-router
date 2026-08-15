@@ -142,7 +142,6 @@ Linux installations support the Codex CLI.
 | DeepSeek V4 Flash (Qwen Plan) | `qwen-plan/deepseek-v4-flash-0731` | Alibaba Model Studio plan API key |
 | GLM-5.2 (Qwen Plan) | `qwen-plan/glm-5.2` | Alibaba Model Studio plan API key |
 | GLM-5.3 (Coding Plan) | `zai-coding/glm-5.3` | Z.ai GLM Coding Plan API key |
-| GLM-5.3 1M (Coding Plan) | `zai-coding/glm-5.3-1m` | Z.ai GLM Coding Plan API key |
 | GLM-5.2 (Coding Plan) | `zai-coding/glm-5.2` | Z.ai GLM Coding Plan API key |
 | GLM-5-Turbo (Coding Plan) | `zai-coding/glm-5-turbo` | Z.ai GLM Coding Plan API key |
 | GLM-5.3 (Z.ai API) | `zai-api/glm-5.3` | Separately billed Z.ai platform API key |
@@ -283,10 +282,12 @@ tools. The metered platform is therefore a separate provider, `zai-api`, on
 `https://api.z.ai/api/paas/v4` with its own key file and its own environment
 variable (`ZAI_PLATFORM_API_KEY`, never the plan's `ZAI_API_KEY`) — connecting
 one does not connect the other. GLM-5.3 ships on both routes with Z.ai's
-documented low/high/max reasoning tiers; the 1M context window is only
-documented behind the `[1m]` model suffix, which is what the separate
-`zai-coding/glm-5.3-1m` entry sends, so the plain GLM-5.3 entries stay at the
-200K lineage default until a live run proves otherwise.
+documented low/high/max reasoning tiers and a one-million-token context
+window. The `[1m]` model suffix that circulated for GLM-5.3 does not exist on
+either Z.ai endpoint -- both the OpenAI-compatible coding route and the
+Anthropic route reject `glm-5.3[1m]` with error 1214 -- and it was never
+needed: a live run accepted 990,020 prompt tokens on the plain `glm-5.3`
+code.
 Beyond the built-in models, each API-key provider's live catalog can be
 curated interactively: `./bin/curate-models PROVIDER` lists the models the
 provider currently advertises that are not in the registry, lets you toggle

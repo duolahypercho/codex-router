@@ -133,7 +133,6 @@ test("provider registry exposes configured API and OAuth model families", () => 
       "zai-api/glm-5.3",
       "zai-coding/glm-5-turbo",
       "zai-coding/glm-5.2",
-      "zai-coding/glm-5.3-1m",
       "zai-coding/glm-5.3",
     ],
   );

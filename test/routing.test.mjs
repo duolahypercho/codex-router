@@ -2889,7 +2889,6 @@ test("API forwarder routes GLM coding-plan models with thinking enabled", async 
       ["zai-coding-glm-5-3", "glm-5.3", "medium", "low"],
       ["zai-coding-glm-5-3", "glm-5.3", "high", "high"],
       ["zai-coding-glm-5-3", "glm-5.3", "max", "max"],
-      ["zai-coding-glm-5-3-1m", "glm-5.3[1m]", "xhigh", "max"],
       ["zai-coding-glm-5-turbo", "glm-5-turbo", "low", undefined],
     ]) {
       const response = await fetch(
