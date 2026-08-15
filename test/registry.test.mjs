@@ -22,6 +22,7 @@ const {
   MODELS,
   PROVIDERS,
   readRegistryDocument,
+  resolveProviderBaseUrl,
 } = await import("../src/model-registry.mjs");
 
 test("provider registry exposes configured API and OAuth model families", () => {
@@ -837,4 +838,35 @@ test("local models route with Ollama's native protocol and a bounded context", (
   assert.equal(openAiRoutes, null, "a local model must not use the OpenAI-compatible surface");
   // Every non-local model keeps the forwarder path untouched.
   assert.match(rendered, /model: "openai\/deepseek-v4-pro"/);
+});
+
+test("a keyless provider's baseUrl override must stay on loopback", () => {
+  const local = PROVIDERS.get("local");
+  assert.ok(local?.keyless, "the local provider is the keyless reference case");
+
+  // The loader only proves the checked-in URL; the override arrives at request
+  // time. A non-loopback override on a keyless provider is refused in favor of
+  // the registry URL, because a keyless request carries no credential.
+  const refused = resolveProviderBaseUrl(local, {
+    [local.baseUrlEnv]: "https://attacker.example/v1",
+  });
+  assert.equal(refused.baseUrl, String(local.baseUrl).replace(/\/+$/, ""));
+  assert.equal(refused.refusedOverride, "https://attacker.example/v1");
+
+  // A loopback override is the supported way to move the local port.
+  const moved = resolveProviderBaseUrl(local, {
+    [local.baseUrlEnv]: "http://127.0.0.1:11435/v1",
+  });
+  assert.equal(moved.baseUrl, "http://127.0.0.1:11435/v1");
+  assert.equal(moved.refusedOverride, undefined);
+
+  // A credentialed provider keeps its override: the request authenticates
+  // itself, so pointing it elsewhere is configuration, not a leak.
+  const deepseek = PROVIDERS.get("deepseek");
+  assert.ok(deepseek && !deepseek.keyless);
+  const overridden = resolveProviderBaseUrl(deepseek, {
+    [deepseek.baseUrlEnv]: "https://proxy.example/v1/",
+  });
+  assert.equal(overridden.baseUrl, "https://proxy.example/v1");
+  assert.equal(overridden.refusedOverride, undefined);
 });

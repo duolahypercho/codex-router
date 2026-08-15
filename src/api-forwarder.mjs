@@ -16,6 +16,7 @@ import {
   MODEL_BY_GATEWAY_ID,
   PROVIDERS,
   providerForModel,
+  resolveProviderBaseUrl,
 } from "./model-registry.mjs";
 import { parseRateLimitHeaders } from "./rate-limit-headers.mjs";
 import { recordRateLimitSnapshot } from "./rate-limit-state.mjs";
@@ -60,10 +61,19 @@ const QUIET =
 
 if (!INTERNAL_KEY) throw new Error("MODEL_ROUTER_INTERNAL_KEY is required.");
 
+// One line per provider per process: the refusal repeats on every request,
+// and the point is that the operator learns about it, not that the log fills.
+const warnedBaseUrlOverrides = new Set();
+
 function providerBaseUrl(provider) {
-  return String(
-    provider.authMode === "anonymous" ? provider.baseUrl : process.env[provider.baseUrlEnv] || provider.baseUrl,
-  ).replace(/\/+$/, "");
+  const { baseUrl, refusedOverride } = resolveProviderBaseUrl(provider);
+  if (refusedOverride && !warnedBaseUrlOverrides.has(provider.id)) {
+    warnedBaseUrlOverrides.add(provider.id);
+    console.error(
+      `[api-forwarder] ${provider.baseUrlEnv} ignored: keyless provider ${provider.id} sends no credential, so it stays on its loopback endpoint`,
+    );
+  }
+  return baseUrl;
 }
 
 // DeepSeek documents low/high/max (docs also accept xhigh as a compat alias).
