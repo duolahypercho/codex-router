@@ -2,7 +2,12 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { anonymousModelAllowed, MODELS, PROVIDERS } from "./model-registry.mjs";
+import {
+  anonymousModelAllowed,
+  MODELS,
+  PROVIDERS,
+  resolveProviderBaseUrl,
+} from "./model-registry.mjs";
 import { credentialStatus, resolveProviderCredential } from "./provider-credentials.mjs";
 import {
   ensureFreshGitHubCopilotSession,
@@ -40,9 +45,10 @@ async function providerPayload(provider) {
   if (fixture) return JSON.parse(readFileSync(path.resolve(fixture), "utf8"));
   const credential = resolveProviderCredential(provider);
   if (!credential) throw new Error(credentialStatus(provider).setup);
-  let baseUrl = String(
-    provider.authMode === "anonymous" ? provider.baseUrl : process.env[provider.baseUrlEnv] || provider.baseUrl,
-  ).replace(/\/+$/, "");
+  // The same loopback guard the api-forwarder applies: a keyless provider's
+  // placeholder credential passes the check above, so an unguarded override
+  // would send `Bearer local` to whatever host the environment names.
+  let baseUrl = resolveProviderBaseUrl(provider).baseUrl;
   let headers = provider.authMode === "anonymous"
     ? {}
     : provider.protocol === "anthropic"

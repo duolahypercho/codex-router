@@ -46,6 +46,23 @@ function loopbackBaseUrl(value) {
   }
 }
 
+// The loader proves a keyless provider's checked-in baseUrl is loopback, but
+// an environment override arrives at request time and skips that proof. A
+// keyless request carries no credential, so a non-loopback override would send
+// unauthenticated traffic off-box. Resolve overrides through this guard: the
+// override is refused — not the request — because the registry URL is always
+// safe to fall back to. Anonymous providers never allow an override at all
+// (the loader rejects baseUrlEnv on them), so they resolve to their fixed
+// endpoint here by construction.
+export function resolveProviderBaseUrl(provider, env = process.env) {
+  const override = provider.baseUrlEnv ? env[provider.baseUrlEnv] : undefined;
+  const raw = normalizedBaseUrl(override || provider.baseUrl);
+  if (provider.keyless && !loopbackBaseUrl(raw)) {
+    return { baseUrl: normalizedBaseUrl(provider.baseUrl), refusedOverride: raw };
+  }
+  return { baseUrl: raw };
+}
+
 // Byte-order comparison keeps the walk identical on every machine; a
 // locale-aware sort could reorder fragments (and therefore the merged model
 // list) between hosts.
