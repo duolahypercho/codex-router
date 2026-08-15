@@ -342,7 +342,10 @@ so the unit of evidence is always the slug, never the model name.
 1. Enabling a non-registry-v2 model hands it to a detached capability probe
    (`src/subagent-verify.mjs`): two live requests through the installed router
    proving streaming and a forced tool call. The proofs snapshot shows
-   `checking` until the verdict lands and the catalog republishes.
+   `checking` until the verdict lands and the catalog republishes. A worker
+   that dies without a verdict marks its slugs `failed` on the way out, and a
+   `checking` older than the probe ceiling is treated as abandoned — so
+   switching a wedged model off and on always re-researches it.
 2. A passing model is advertised to Codex as an **experimental** v2 subagent,
    recorded in the protected `multi-agent-proofs.json`. The first real child
    turn settles it: Codex marks child turns with `x-openai-subagent`, and the

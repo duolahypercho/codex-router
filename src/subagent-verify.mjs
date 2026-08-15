@@ -18,9 +18,21 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..
 // evidence — never the toggle itself — advertises the model to Codex as a
 // v2 subagent (as "experimental", until a real spawn settles it).
 
+// A probe is two 180-second-capped requests, so any "checking" older than
+// this ceiling was left behind by a worker that died — machine sleep, OOM, a
+// kill — not one still working. Stale checking is retryable without force,
+// which is what makes toggling a wedged model off and on recover it.
+export const STALE_CHECKING_MS = 10 * 60_000;
+
+function checkingIsStale(proof, now = Date.now()) {
+  const startedAt = Date.parse(proof?.startedAt || "");
+  if (!Number.isFinite(startedAt)) return true;
+  return now - startedAt > STALE_CHECKING_MS;
+}
+
 // Which of these slugs need a probe at all. Registry-v2 models shipped with
 // the full native proof; slugs already carrying local evidence keep it.
-export function subagentVerificationCandidates(slugs, { force = false } = {}) {
+export function subagentVerificationCandidates(slugs, { force = false, now = Date.now() } = {}) {
   const proofs = readSubagentProofs().proofs;
   const seen = new Set();
   const candidates = [];
@@ -32,8 +44,9 @@ export function subagentVerificationCandidates(slugs, { force = false } = {}) {
     if (!model) continue;
     if (model.multiAgentVersion === "v2") continue;
     const status = proofs[slug]?.status;
-    if (!force && (status === "experimental" || status === "proven" || status === "checking")) {
-      continue;
+    if (!force) {
+      if (status === "experimental" || status === "proven") continue;
+      if (status === "checking" && !checkingIsStale(proofs[slug], now)) continue;
     }
     candidates.push(slug);
   }
@@ -102,11 +115,28 @@ function refreshCatalog() {
 }
 
 async function workerMain(slugs) {
-  // The parent already marked these "checking"; force re-runs them past that.
-  await verifySubagentCandidates(slugs, { force: true });
-  // Publish whatever the verdicts imply. A failed refresh leaves the proofs
-  // recorded; the next control mutation republishes them.
-  refreshCatalog();
+  try {
+    // The parent already marked these "checking"; force re-runs them past that.
+    await verifySubagentCandidates(slugs, { force: true });
+  } finally {
+    // A worker that dies before a verdict must not strand its slugs: anything
+    // still "checking" here failed to get an answer, and "failed" with a
+    // reason is recoverable where a silent wedge is not. (A hard kill writes
+    // nothing — the staleness ceiling above is that case's backstop.)
+    const proofs = readSubagentProofs().proofs;
+    for (const slug of slugs) {
+      if (proofs[String(slug)]?.status === "checking") {
+        recordProbeResult(slug, {
+          ok: false,
+          checks: [],
+          detail: "the probe worker exited before a verdict; switch the model off and on to retry",
+        });
+      }
+    }
+    // Publish whatever the verdicts imply. A failed refresh leaves the proofs
+    // recorded; the next control mutation republishes them.
+    refreshCatalog();
+  }
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

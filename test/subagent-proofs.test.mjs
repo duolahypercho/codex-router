@@ -146,3 +146,26 @@ test("verify records the probe's verdict, and a probe crash reads as a failure",
 test("the proofs path override is honoured", () => {
   assert.equal(SUBAGENT_PROOFS_PATH, process.env.MODEL_ROUTER_SUBAGENT_PROOFS);
 });
+
+test("a wedged 'checking' becomes retryable once it goes stale", () => {
+  const slug = "deepseek/deepseek-v4-flash";
+  recordProbeStarted(slug);
+  const started = Date.parse(subagentProofSnapshot()[slug].startedAt);
+
+  // Fresh checking means a worker is (plausibly) still running: don't stack a
+  // second probe on it.
+  assert.deepEqual(subagentVerificationCandidates([slug], { now: started + 1_000 }), []);
+
+  // Past the probe ceiling the worker is dead, and the ordinary toggle path
+  // must be able to re-probe without knowing about force.
+  assert.deepEqual(
+    subagentVerificationCandidates([slug], { now: started + 11 * 60_000 }),
+    [slug],
+  );
+
+  // A checking record with no readable start time is treated as stale, not
+  // trusted forever.
+  recordProbeStarted(slug, { at: "not-a-timestamp" });
+  assert.deepEqual(subagentVerificationCandidates([slug]), [slug]);
+  clearSubagentProof(slug);
+});
