@@ -331,6 +331,41 @@ to ship tested support to every installer.
 If the provider itself is unknown to the registry, stop treating the request as
 installation. It is repository development and requires the process below.
 
+### Subagent capability is researched, not asserted
+
+Switching a model on as a subagent (tray toggle, `control subagents set`) is
+the operator's whole job; deciding whether that model **under that provider**
+can hold the v2 child role is the router's. The same model answers differently
+per provider — tool support, request profiles, and payload handling all vary —
+so the unit of evidence is always the slug, never the model name.
+
+1. Enabling a non-registry-v2 model hands it to a detached capability probe
+   (`src/subagent-verify.mjs`): two live requests through the installed router
+   proving streaming and a forced tool call. The proofs snapshot shows
+   `checking` until the verdict lands and the catalog republishes. A worker
+   that dies without a verdict marks its slugs `failed` on the way out, and a
+   `checking` older than the probe ceiling is treated as abandoned — so
+   switching a wedged model off and on always re-researches it.
+2. A passing model is advertised to Codex as an **experimental** v2 subagent,
+   recorded in the protected `multi-agent-proofs.json`. The first real child
+   turn settles it: Codex marks child turns with `x-openai-subagent`, and the
+   router's own request path records a clean completion as the durable proof
+   (`proven`) or a structural rejection — HTTP 400/422 — as a demotion back to
+   v1 with the reason kept where it was switched on. Transient failures (429,
+   5xx, disconnects) prove nothing and leave the window open.
+3. Local settings still never manufacture a v2 claim. The only writers of
+   promotion evidence are the probe worker and the router's observation of
+   real traffic; an unreadable proofs file promotes nothing, and a hidden or
+   switched-off slug stays v1 whatever evidence it carries.
+4. `control subagents verify [SLUG ...]` re-researches explicitly (foreground,
+   ~2 requests per candidate); with no slugs it sweeps the enabled list.
+   Select-all and mode changes never trigger probes — a sweep across every
+   provider is quota the operator must ask for.
+5. Machine-local proofs are exactly that. Shipping a default to every
+   installer still requires the full native collaboration proof and a registry
+   change (below); never edit the checked-in `config/` tree because one
+   machine's probe passed.
+
 ### Ship a model to every installer
 
 1. Run `./bin/discover-models PROVIDER`; discovery is read-only. Confirm the
@@ -816,6 +851,40 @@ minutes later. Do not quietly drop the label because a check happened to pass.
 - Do not delete retained keys, logs, backups, snapshots, or old state
   directories.
 - Do not restart or quit the Codex App from the installation task.
+
+## Discovery-disabled means no credential reader touches anything
+
+An install made with `--no-provider --no-discovery` persists a discovery
+kill-switch (`discovery-mode.json`, read through
+`src/discovery-mode.mjs` `discoveryDisabled()`, overridable with
+`CODEX_ROUTER_NO_DISCOVERY=1|0`). While it is set, the promise is absolute:
+no provider credential file, macOS Keychain item, other CLI's OAuth or
+session file, or Codex `auth.json` is read, no `codex login status` probe
+runs against the real `CODEX_HOME`, and traffic gets a local
+`503 router_idle_no_provider` instead of provider or native forwarding.
+
+1. Every new credential reader, sign-in probe, or session consumer must
+   consult `discoveryDisabled()` before its first read or spawn and report
+   "nothing found" rather than throwing. The guard belongs at the reader, not
+   only at its current callers — call graphs move.
+2. An explicitly written empty provider selection is a deliberate state, not
+   an error: `ensure-configured` reports it as idle, the doctor warns instead
+   of failing, and installing or updating on top of it must keep working.
+3. Never select a provider, re-enable discovery, or clear the marker on the
+   user's behalf. Re-running setup without the flags is the only exit path,
+   and it is the operator's to take.
+4. The account-aware `codex debug models` (and `models_cache.json`, which is
+   that same catalog written to disk) counts as an account read: the catalog
+   capture and the doctor's staleness probe use only `debug models --bundled`
+   while the switch is set. `test/doctor-idle.test.mjs` proves the bare form
+   never spawns.
+5. A corrupt `discovery-mode.json` deliberately reads as discovery **on** —
+   the opposite direction of the vision-bridge precedent, which fails toward
+   off. There the risk is spending quota nobody approved; here the marker
+   only ever exists on a machine that installed with `--no-provider`, where
+   resuming reads finds no credentials to spend, while failing toward "off"
+   on a credentialed install would silently blind every provider over one
+   damaged file. `test/discovery-mode.test.mjs` pins the choice.
 
 ## The `codex` shim is opt-in and must never break `codex`
 

@@ -15,6 +15,10 @@ param(
   # to ask for the companion at all, so it was never built and never started.
   [switch]$WithTray,
   [switch]$NoTray,
+  # Matches install.sh's --no-provider/--no-discovery: install idle with an
+  # explicit empty selection, optionally with credential discovery disabled.
+  [switch]$NoProvider,
+  [switch]$NoDiscovery,
   # Discards tracked edits in the managed checkout so the update can proceed.
   # Deliberately never touches untracked files -- see Reset-ManagedCheckout.
   [switch]$Force,
@@ -43,6 +47,15 @@ if ($MigrateKnown -and $AdoptNativeCatalog) {
 }
 if ($WithTray -and $NoTray) {
   throw "-WithTray cannot be combined with -NoTray."
+}
+# An idle install is exactly "no providers", so naming providers alongside it
+# is a contradiction; and -NoDiscovery alone would select providers that can
+# never authenticate.
+if ($NoProvider -and ($Guided -or $Providers)) {
+  throw "-NoProvider cannot be combined with -Guided or -Providers."
+}
+if ($NoDiscovery -and -not $NoProvider) {
+  throw "-NoDiscovery requires -NoProvider."
 }
 $PreviousRevision = $null
 $RepositoryUrl = if ($env:CODEX_ROUTER_REPOSITORY_URL) {
@@ -179,7 +192,7 @@ if (-not $CheckoutInstall) {
 
   $SetupScript = "src\setup.mjs"
   $SetupArguments = @((Join-Path $Repository $SetupScript))
-  $UseGuided = $Guided -or (-not $Auto -and [Environment]::UserInteractive)
+  $UseGuided = $Guided -or (-not $Auto -and -not $NoProvider -and [Environment]::UserInteractive)
   if ($UseGuided) { $SetupArguments += "--guided" }
   if ($Providers) { $SetupArguments += @("--providers", $Providers) }
   if ($MigrateKnown) { $SetupArguments += "--migrate-known" }
@@ -187,6 +200,8 @@ if (-not $CheckoutInstall) {
   if ($SmokeTest) { $SetupArguments += "--smoke-test" }
   if ($WithTray) { $SetupArguments += "--with-tray" }
   if ($NoTray) { $SetupArguments += "--no-tray" }
+  if ($NoProvider) { $SetupArguments += "--no-provider" }
+  if ($NoDiscovery) { $SetupArguments += "--no-discovery" }
   & node @SetupArguments
   $SetupExitCode = $LASTEXITCODE
   # Exit 2 means setup left configuration unfinished (a declined prompt, a

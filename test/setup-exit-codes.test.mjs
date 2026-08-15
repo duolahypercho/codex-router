@@ -50,6 +50,24 @@ test("an unknown provider id leaves the checkout update in place", () => {
   assert.equal(result.status, SETUP_INCOMPLETE_EXIT);
 });
 
+test("--no-provider contradicts naming or picking providers", () => {
+  const withProviders = runSetup(["--no-provider", "--providers", "deepseek"]);
+  assert.equal(withProviders.status, SETUP_INCOMPLETE_EXIT);
+  assert.match(withProviders.stderr, /--no-provider cannot be combined with --providers/);
+
+  const withGuided = runSetup(["--no-provider", "--guided"]);
+  assert.equal(withGuided.status, SETUP_INCOMPLETE_EXIT);
+  assert.match(withGuided.stderr, /--no-provider cannot be combined with --guided/);
+});
+
+test("--no-discovery alone leaves the checkout update in place", () => {
+  // Discovery off with providers still selected would manufacture an install
+  // where nothing can ever authenticate; the flag pair is the contract.
+  const result = runSetup(["--no-discovery"]);
+  assert.equal(result.status, SETUP_INCOMPLETE_EXIT);
+  assert.match(result.stderr, /--no-discovery requires --no-provider/);
+});
+
 // Deliberately absent: a "no configured provider" case driven through
 // `--providers configured`. Credentials for OAuth providers are discovered
 // from each CLI's own state, not from MODEL_ROUTER_STATE_DIR, so on a machine

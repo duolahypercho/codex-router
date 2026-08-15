@@ -629,7 +629,7 @@ model_reasoning_effort = "high"
 
 # BEGIN kimi-codex-router-managed
 openai_base_url = "http://127.0.0.1:46192/v1"
-model_catalog_json = "${prototypeCatalog}"
+model_catalog_json = ${JSON.stringify(prototypeCatalog)}
 
 [projects."/important/project"]
 trust_level = "trusted"

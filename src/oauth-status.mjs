@@ -2,6 +2,8 @@ import { existsSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { discoveryDisabled } from "./discovery-mode.mjs";
+
 export function kimiCodeHome() {
   return process.env.KIMI_CODE_HOME || path.join(os.homedir(), ".kimi-code");
 }
@@ -12,6 +14,16 @@ function kimiCredentialsPath() {
 
 export function kimiOAuthStatus() {
   const credentialsPath = kimiCredentialsPath();
+  // Defense in depth for --no-discovery: the caller-facing scans are already
+  // guarded, but this file is another CLI's credential store and must not be
+  // opened at all while discovery is off.
+  if (discoveryDisabled()) {
+    return {
+      configured: false,
+      credentialsPath,
+      setup: "Credential discovery is disabled; re-run setup without --no-discovery",
+    };
+  }
   if (!existsSync(credentialsPath)) {
     return {
       configured: false,
@@ -54,6 +66,13 @@ export function kimiOAuthStatus() {
 // - `incomplete` / `invalid` / `missing`: no usable session on disk
 export function kimiOAuthHealth() {
   const credentialsPath = kimiCredentialsPath();
+  if (discoveryDisabled()) {
+    return {
+      status: "missing",
+      detail: "credential discovery is disabled",
+      fix: "Re-run setup without --no-discovery",
+    };
+  }
   if (!existsSync(credentialsPath)) {
     return {
       status: "missing",

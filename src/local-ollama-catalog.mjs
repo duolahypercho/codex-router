@@ -3,7 +3,7 @@
 // non-downloadable: they route through Ollama cloud and have no local weights.
 // Refresh this manifest when the upstream tag pages change; arbitrary tags
 // and model-page URLs remain supported by the install field.
-// Captured from the official pages on 2026-08-15.
+// Captured from the official pages on 2026-08-11; qwen3.8 captured 2026-08-15.
 
 // The tag list is intentionally exhaustive, but the tray should not make a
 // first-time user choose between every quantization and accelerator build.
@@ -28,7 +28,7 @@ export const LOCAL_FAMILY_RESEARCH = Object.freeze({
   "qwen3.8": Object.freeze({
     status: "Official Ollama · 12 tags",
     capabilities: Object.freeze(["vision", "tools", "thinking"]),
-    note: "Qwen's 27B vision-language model for coding, research, and long-horizon agentic work.",
+    note: "27B Qwen family with substantial gains on coding and long-horizon agentic tasks.",
   }),
   "nemotron-3-super": Object.freeze({
     status: "Official Ollama · 7 tags",

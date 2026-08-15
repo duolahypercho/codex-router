@@ -103,6 +103,17 @@ trusted-user configuration and receives the same token, so it must be protected
 like every other provider override. Validated account routing is cached briefly
 in process memory and refreshed once after an upstream 401.
 
+An install made with `--no-provider --no-discovery` (see
+[docs/INSTALL.md](docs/INSTALL.md)) is verifiable in this frame: zero provider
+credential reads or writes, zero Keychain lookups, zero reads of other CLIs'
+OAuth or session files, zero reads of Codex's `auth.json`, no `codex login
+status` spawn against the real `CODEX_HOME`, and no outbound provider or
+native connection — traffic gets a local `503 router_idle_no_provider`. Every
+credential reader funnels through the persisted `discovery-mode.json`
+kill-switch. The one Codex spawn that remains during install is `codex debug
+models --bundled`, which reads the binary's static model list, not
+credentials.
+
 ## Configuration safety
 
 The config manager:

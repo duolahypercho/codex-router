@@ -87,6 +87,45 @@
   reuses the checkout-installer helper that `update` already uses and that is
   unit tested, rather than a second hand-written PowerShell argument list that
   nothing covered — the follow-up asked for in the review of #186.
+- **A credential-free install mode for lifecycle validation.** (#224)
+  `install.sh --no-provider --no-discovery` (PowerShell: `-NoProvider
+  -NoDiscovery`) installs the router idle: an explicit empty provider
+  selection, no credential prompts, and a persisted discovery kill-switch
+  honored by every credential reader — provider key files, the macOS
+  Keychain, other CLIs' OAuth and session files, Codex's `auth.json`, and the
+  `codex login status` probe all stay untouched. Codex traffic gets a local
+  `503 router_idle_no_provider` instead of provider or native forwarding, the
+  doctor reports the idle state at warn and exits 0, and a new `stop`
+  subcommand completes the install → start → status → doctor → stop →
+  uninstall loop. Re-running setup without the flags leaves idle mode. As
+  part of this, an explicitly empty provider selection now passes
+  `ensure-configured` as idle, which also un-breaks `bin/update` for anyone
+  who had hidden their last provider by hand.
+- **Uninstalling the last client integration now removes the background
+  service.** Whether Codex still counted as installed was keyed on the cached
+  native catalog, a file uninstall deliberately retains — so the service, its
+  LaunchAgent, and its listening ports survived every codex uninstall. The
+  installed-state witness is now the managed block in `config.toml`, which
+  enable writes and disable removes; `bin/disable` of the last client retires
+  the service too, matching what the Windows wrapper always did, and
+  `bin/enable` reinstalls it on the way back.
+
+- **Switching a model on as a subagent now researches it instead of ignoring
+  it.** Only six registry-proven models could ever be spawned as native v2
+  children; everything else the operator enabled was a silent no-show, and
+  promoting one more meant a repository change per model per provider. Now the
+  toggle is the assignment: enabling a model hands it to a detached capability
+  probe (two live requests proving streaming and a forced tool call through
+  the installed router), a passing model is advertised to Codex as an
+  experimental subagent, and the first real child turn settles the verdict —
+  the router watches its own request path for `x-openai-subagent` turns, and a
+  clean completion records a durable machine-local proof while a structural
+  rejection demotes the model back to v1 with the reason kept in the subagent
+  snapshot. Evidence lives in the protected `multi-agent-proofs.json`; local
+  settings still cannot manufacture a v2 claim, hidden or switched-off models
+  stay v1 whatever evidence they carry, and `control subagents verify` re-runs
+  the research explicitly.
+
 - **A reasoning model no longer answers into thirty seconds of silence.** The
   empty-completion guard buffered every routed streaming response until it saw
   content, and reasoning deltas deliberately did not count as content. On a

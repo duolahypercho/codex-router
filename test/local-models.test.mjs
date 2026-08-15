@@ -510,6 +510,12 @@ test("the explore catalog groups the requested Ollama families and keeps fit vis
   assert.equal(entries.find((entry) => entry.tag === "gemma4:12b").tools, false);
   assert.equal(EXPLORE_LOCAL_MODELS.length, 201);
   assert.equal(new Set(EXPLORE_LOCAL_MODELS.map((entry) => entry.tag)).size, 201);
+  // The qwen3.8 capture (2026-08-15): 12 official 27B tags, 256K context.
+  assert.equal(
+    entries.find((entry) => entry.tag === "qwen3.8:27b").researchStatus,
+    "Official Ollama · 12 tags",
+  );
+  assert.equal(entries.find((entry) => entry.tag === "qwen3.8:27b").context, 262144);
   const cloud = entries.find((entry) => entry.tag === "qwen3.5:cloud");
   assert.equal(cloud.downloadable, false);
   assert.equal(cloud.fit, "cloud-only");

@@ -97,6 +97,37 @@ export function injectSessionModelForSpawnCalls(item, model) {
 
 const MAX_JSON_CAPTURE_BYTES = 64 * 1024 * 1024;
 
+// Repair one tool's parameter root, or return it untouched. Providers reject a
+// union or nullable-object root by name -- xAI, DeepSeek V4, and the
+// opencode-go Responses surface all do -- and none of them care whether the
+// tool arrived inside a namespace. `providerToolSchema` returns anything it
+// does not recognize by identity, so an ordinary root costs one call and no
+// copy.
+export function repairToolSchemaRoot(tool) {
+  const parameters = tool?.function?.parameters ?? tool?.parameters;
+  if (parameters === undefined) return tool;
+  const repaired = providerToolSchema(parameters);
+  if (repaired === parameters) return tool;
+  return tool.function
+    ? { ...tool, function: { ...tool.function, parameters: repaired } }
+    : { ...tool, parameters: repaired };
+}
+
+// Array form for callers that relay tools without flattening them --
+// Responses-native providers keep the namespace shape but still need a root
+// their upstream accepts. Returns the original array when nothing needed
+// repair, so the common request is not copied.
+export function repairToolSchemaRoots(tools) {
+  if (!Array.isArray(tools)) return tools;
+  let changed = false;
+  const repaired = tools.map((tool) => {
+    const next = repairToolSchemaRoot(tool);
+    if (next !== tool) changed = true;
+    return next;
+  });
+  return changed ? repaired : tools;
+}
+
 // Flatten every namespace entry into plain functions named
 // `<namespace>__<tool>`. Returns the set of namespaces that were flattened
 // (name -> tool names) so callers can rename history and restore calls.
@@ -154,7 +185,17 @@ export function flattenNamespaceTools(tools) {
       }
       continue;
     }
-    flattened.push(tool);
+    // A plain function tool needs the same repair as a namespaced one. The
+    // rejections are the provider's, not the namespace's: DeepSeek V4 Flash and
+    // Pro both 400 a `type: ["object","null"]` root with "schema must be a JSON
+    // Schema of 'type: \"object\"'", and xAI rejects a union root the same way,
+    // whether the tool arrived inside a namespace or on its own. Repairing only
+    // the flattened children left every client-declared tool to fail on the
+    // provider that objects. `providerToolSchema` returns anything it does not
+    // recognize unchanged, so a tool with an ordinary root is not copied.
+    const repaired = repairToolSchemaRoot(tool);
+    if (repaired !== tool) changed = true;
+    flattened.push(repaired);
   }
   if (spawnAgentModels.size > 0) SPAWN_AGENT_MODELS.set(namespaces, spawnAgentModels);
   return { tools: flattened, flattened: changed, namespaces };

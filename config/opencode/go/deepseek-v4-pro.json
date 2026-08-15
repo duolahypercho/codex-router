@@ -26,7 +26,8 @@
       "inputModalities": [
         "text"
       ],
-      "compHash": "opencode-go-deepseek-v4-pro-v1"
+      "requestProfile": "auto-tool-choice",
+      "compHash": "opencode-go-deepseek-v4-pro-v2"
     }
   ]
 }

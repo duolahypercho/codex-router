@@ -33,7 +33,8 @@
       "searchTool": {
         "mode": "standalone"
       },
-      "compHash": "opencode-go-deepseek-v4-flash-v2"
+      "requestProfile": "auto-tool-choice",
+      "compHash": "opencode-go-deepseek-v4-flash-v3"
     }
   ]
 }

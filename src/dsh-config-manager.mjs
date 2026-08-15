@@ -38,6 +38,7 @@ import {
 } from "./dsh-catalog.mjs";
 import { readHiddenModels } from "./model-picker-state.mjs";
 import { readMultiAgentSettings, subagentEligibleModels } from "./multi-agent-state.mjs";
+import { applySubagentProofs, subagentProofSnapshot } from "./subagent-proofs.mjs";
 import { selectedConfiguredListedModels } from "./provider-selection.mjs";
 import { assertStateOwnership } from "./state-owner.mjs";
 import { nativeSessionAvailable } from "./codex-native-session.mjs";
@@ -269,8 +270,14 @@ function readNativeCatalogModels() {
 /** The routed models the harness should be offered, vision bridge included. */
 export function dshRoutedModels() {
   const hidden = readHiddenModels();
-  const selected = selectedConfiguredListedModels().filter(
-    (model) => !hidden.has(String(model.slug)),
+  // The same machine-local capability proofs the Codex catalog honors: a
+  // model this machine verified as a subagent is one everywhere the proven
+  // set is consumed, or the harness's tool-subagent preset silently disagrees
+  // with the picker about which children exist.
+  const selected = applySubagentProofs(
+    selectedConfiguredListedModels().filter((model) => !hidden.has(String(model.slug))),
+    subagentProofSnapshot(),
+    { hidden, disabled: readMultiAgentSettings().disabled },
   );
   // Native GPT models are authorized by a ChatGPT session rather than an API
   // key. The harness carries none of its own -- but this machine is signed in

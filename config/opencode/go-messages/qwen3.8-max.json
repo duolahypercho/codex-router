@@ -23,7 +23,8 @@
         "text",
         "image"
       ],
-      "compHash": "opencode-go-messages-qwen3-8-max-v2"
+      "compHash": "opencode-go-messages-qwen3-8-max-v3",
+      "requestProfile": "auto-tool-choice"
     }
   ]
 }

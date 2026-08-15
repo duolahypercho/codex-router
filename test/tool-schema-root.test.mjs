@@ -234,3 +234,74 @@ test("literals are still normalized inside a schema that keeps its root", () => 
   assert.equal(normalized.type, "array");
   assert.deepEqual(normalized.items.enum, ["ok"]);
 });
+
+// xAI reads the root `type` literally. A nullable object root is legal JSON
+// Schema and is rejected with the same `tool parameter root must be an object
+// type` as a union -- confirmed against the live backend, where
+// `type: ["object", "null"]` 400s and plain `"object"` does not.
+test("a nullable object root is rewritten to a plain object root", () => {
+  const rewritten = objectRootToolSchema({
+    type: ["object", "null"],
+    properties: { id: { type: "string" } },
+    required: ["id"],
+  });
+  assert.equal(rewritten.type, "object");
+  assert.deepEqual(Object.keys(rewritten.properties), ["id"]);
+  assert.deepEqual(rewritten.required, ["id"]);
+});
+
+test("hasObjectRoot rejects a declared type that is not exactly object", () => {
+  assert.equal(hasObjectRoot({ type: ["object", "null"], properties: { id: {} } }), false);
+  assert.equal(hasObjectRoot({ type: "object", properties: { id: {} } }), true);
+  // No declared type at all still falls back to `properties`, which xAI accepts.
+  assert.equal(hasObjectRoot({ properties: { id: {} } }), true);
+});
+
+// Rewriting a root that merged nothing has no branch ambiguity to paper over,
+// so it must not quietly widen a schema that closed itself.
+test("a rewrite that merged no union keeps its own additionalProperties", () => {
+  const closed = objectRootToolSchema({
+    type: ["object", "null"],
+    properties: { id: {} },
+    additionalProperties: false,
+  });
+  assert.equal(closed.additionalProperties, false);
+  const merged = objectRootToolSchema({
+    oneOf: [
+      { type: "object", properties: { a: {} } },
+      { type: "object", properties: { b: {} } },
+    ],
+  });
+  assert.equal(merged.additionalProperties, true);
+});
+
+// A nullable object root is rejected by name by two independent upstreams --
+// xAI ("tool parameter root must be an object type") and DeepSeek ("schema must
+// be a JSON Schema of 'type: \"object\"', got 'type: [\"object\",\"null\"]'") --
+// both reproduced live, so the shared relay repairs it for every provider.
+test("the shared relay repairs a nullable object root", () => {
+  const repaired = providerToolSchema({
+    type: ["object", "null"],
+    properties: { id: { type: "string" } },
+    required: ["id"],
+    additionalProperties: false,
+  });
+  assert.equal(repaired.type, "object");
+  assert.deepEqual(Object.keys(repaired.properties), ["id"]);
+  assert.deepEqual(repaired.required, ["id"]);
+  // Nothing was merged, so the schema keeps the door it closed.
+  assert.equal(repaired.additionalProperties, false);
+});
+
+// Still narrow: the relay runs on every namespace and MCP tool, so a root it
+// merely finds unusual must survive untouched rather than be replaced with one
+// that accepts anything.
+test("the shared relay leaves other roots alone", () => {
+  const plain = { type: "object", properties: { id: {} } };
+  assert.equal(providerToolSchema(plain), plain);
+  const typeless = { properties: { id: {} } };
+  assert.equal(providerToolSchema(typeless), typeless);
+  // No "object" member means collapsing it would destroy the schema, not fix it.
+  const notObject = { type: ["string", "null"] };
+  assert.equal(providerToolSchema(notObject), notObject);
+});
