@@ -2,6 +2,8 @@ import { existsSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { discoveryDisabled } from "./discovery-mode.mjs";
+
 // Some providers finish a browser OAuth flow in their own CLI and then mint a
 // long-lived API key into that CLI's home directory instead of handing back a
 // refreshable token pair. Command Code works this way: `command-code login`
@@ -39,6 +41,9 @@ export function cliSessionPath(provider) {
 export function readCliSessionCredential(provider) {
   const descriptor = cliSessionDescriptor(provider);
   if (!descriptor) return undefined;
+  // Defense in depth for --no-discovery: another CLI's session file must not
+  // be opened at all while discovery is off.
+  if (discoveryDisabled()) return undefined;
   const file = cliSessionPath(provider);
   if (!file || !existsSync(file)) return undefined;
   let parsed;

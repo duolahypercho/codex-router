@@ -9,6 +9,7 @@ import {
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { discoveryDisabled } from "./discovery-mode.mjs";
 import { protectPrivateFile } from "./file-security.mjs";
 import { PROVIDER_SELECTION_PATH, STATE_DIR, TARGET } from "./paths.mjs";
 import { LISTED_MODELS, PROVIDERS } from "./model-registry.mjs";
@@ -79,6 +80,11 @@ function filterKnownProviderIds(values) {
 }
 
 export function configuredProviderIds() {
+  // Under --no-discovery nothing counts as configured, not even keyless local
+  // backends that read no credential: "configured" feeds the default
+  // selection, the catalog, and the enable gate, and an idle install promises
+  // all of those stay empty until the operator re-runs setup.
+  if (discoveryDisabled()) return [];
   const configured = [];
   for (const provider of PROVIDERS.values()) {
     if (provider.kind === "oauth") {

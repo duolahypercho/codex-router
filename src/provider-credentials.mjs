@@ -15,6 +15,7 @@ import {
   cliSessionDescriptor,
   readCliSessionCredential,
 } from "./cli-session-credential.mjs";
+import { discoveryDisabled } from "./discovery-mode.mjs";
 import { protectPrivateFile } from "./file-security.mjs";
 import { LEGACY_STATE_DIRS, STATE_DIR, TARGET } from "./paths.mjs";
 import { targetCli } from "./target-integration.mjs";
@@ -154,6 +155,11 @@ export function resolveProviderCredential(providerOrId, options = {}) {
   if (provider.keyless) {
     return { value: "local", source: "local endpoint (no key required)", persistent: true };
   }
+  // The --no-discovery promise: no environment sniffing, no credential files,
+  // no Keychain spawn, no other CLI's session file. The guard sits here, after
+  // the anonymous and keyless returns, because those two read nothing -- and
+  // before everything that does.
+  if (discoveryDisabled()) return undefined;
   if (!options.persistent) {
     for (const name of provider.credential.environment) {
       const value = process.env[name]?.trim();
