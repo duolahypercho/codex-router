@@ -457,6 +457,7 @@ export function localModelsSnapshot({
   benchmarks = {},
   capabilities,
   agentChecks = readAgentChecks(),
+  runtime = localOllamaRuntimeSnapshot(),
 } = {}) {
   // Compared canonically: `ollama list` always prints `gemma3:latest`, while an
   // older state file may hold the bare `gemma3` the CLI once stored. Matching
@@ -545,7 +546,7 @@ export function localModelsSnapshot({
       mode: "ollama-tags",
       note: "Any valid Ollama tag is supported. Paste an ollama.com model URL or enter a tag to inspect and install it.",
     },
-    runtime: localOllamaRuntimeSnapshot(),
+    runtime,
     download: readLocalDownload(),
     machine: describeMachine(capacity),
   };

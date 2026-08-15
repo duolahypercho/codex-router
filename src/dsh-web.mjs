@@ -1,9 +1,9 @@
 import { spawn } from "node:child_process";
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, openSync, readFileSync } from "node:fs";
 import path from "node:path";
 
 import { harnessCliPath } from "./dsh-install.mjs";
-import { protectPrivateFile } from "./file-security.mjs";
+import { writePrivateJson } from "./file-security.mjs";
 import { spawnEnvironment } from "./npm-global-install.mjs";
 import { STATE_DIR } from "./paths.mjs";
 import { processStartIdentity, stateOwnsProcess } from "./process-identity.mjs";
@@ -45,15 +45,7 @@ function readState() {
 }
 
 function writeState(state) {
-  mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 });
-  const temporary = `${STATE_PATH}.tmp.${process.pid}`;
-  writeFileSync(temporary, `${JSON.stringify({ version: 1, ...state }, null, 2)}\n`, {
-    encoding: "utf8",
-    mode: 0o600,
-  });
-  protectPrivateFile(temporary);
-  renameSync(temporary, STATE_PATH);
-  protectPrivateFile(STATE_PATH);
+  writePrivateJson(STATE_PATH, { version: 1, ...state });
 }
 
 // Reachability, not identity. Whether the URL the button would open actually

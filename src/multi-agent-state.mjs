@@ -1,14 +1,10 @@
 import {
-  chmodSync,
   existsSync,
-  mkdirSync,
   readFileSync,
-  renameSync,
-  writeFileSync,
 } from "node:fs";
 import path from "node:path";
 
-import { protectPrivateFile } from "./file-security.mjs";
+import { writePrivateJson } from "./file-security.mjs";
 import { STATE_DIR } from "./paths.mjs";
 
 export const MULTI_AGENT_STATE_PATH =
@@ -74,17 +70,7 @@ export function subagentSettingsSnapshot() {
 }
 
 function writeSettings(settings) {
-  const stateDir = path.dirname(MULTI_AGENT_STATE_PATH);
-  mkdirSync(stateDir, { recursive: true, mode: 0o700 });
-  chmodSync(stateDir, 0o700);
-  const temporary = `${MULTI_AGENT_STATE_PATH}.tmp.${process.pid}`;
-  writeFileSync(temporary, `${JSON.stringify(settings, null, 2)}\n`, {
-    encoding: "utf8",
-    mode: 0o600,
-  });
-  protectPrivateFile(temporary);
-  renameSync(temporary, MULTI_AGENT_STATE_PATH);
-  protectPrivateFile(MULTI_AGENT_STATE_PATH);
+  writePrivateJson(MULTI_AGENT_STATE_PATH, settings, { directoryMode: 0o700 });
 }
 
 export function setMultiAgentMode(mode) {

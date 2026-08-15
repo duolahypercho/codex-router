@@ -1,14 +1,10 @@
 import {
-  chmodSync,
   existsSync,
-  mkdirSync,
   readFileSync,
-  renameSync,
-  writeFileSync,
 } from "node:fs";
 import path from "node:path";
 
-import { protectPrivateFile } from "./file-security.mjs";
+import { writePrivateJson } from "./file-security.mjs";
 import { STATE_DIR } from "./paths.mjs";
 import { toolResultAgingTotals } from "./usage-events.mjs";
 
@@ -53,17 +49,7 @@ export function readToolResultAgingSettings() {
 }
 
 function writeSettings(settings) {
-  const stateDir = path.dirname(TOOL_RESULT_AGING_STATE_PATH);
-  mkdirSync(stateDir, { recursive: true, mode: 0o700 });
-  chmodSync(stateDir, 0o700);
-  const temporary = `${TOOL_RESULT_AGING_STATE_PATH}.tmp.${process.pid}`;
-  writeFileSync(temporary, `${JSON.stringify(settings, null, 2)}\n`, {
-    encoding: "utf8",
-    mode: 0o600,
-  });
-  protectPrivateFile(temporary);
-  renameSync(temporary, TOOL_RESULT_AGING_STATE_PATH);
-  protectPrivateFile(TOOL_RESULT_AGING_STATE_PATH);
+  writePrivateJson(TOOL_RESULT_AGING_STATE_PATH, settings, { directoryMode: 0o700 });
   return settings;
 }
 

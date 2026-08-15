@@ -1,14 +1,10 @@
 import {
-  chmodSync,
   existsSync,
-  mkdirSync,
   readFileSync,
-  renameSync,
-  writeFileSync,
 } from "node:fs";
 import path from "node:path";
 
-import { protectPrivateFile } from "./file-security.mjs";
+import { writePrivateJson } from "./file-security.mjs";
 import { DSH_CATALOG_PATH, STATE_DIR } from "./paths.mjs";
 import { commandOnPath } from "./spawnable-command.mjs";
 
@@ -96,16 +92,6 @@ export function setPresenceMode(mode) {
     throw new Error(`Presence mode must be one of: ${PRESENCE_MODES.join(", ")}.`);
   }
 
-  const stateDir = path.dirname(PRESENCE_STATE_PATH);
-  mkdirSync(stateDir, { recursive: true, mode: 0o700 });
-  chmodSync(stateDir, 0o700);
-  const temporary = `${PRESENCE_STATE_PATH}.tmp.${process.pid}`;
-  writeFileSync(temporary, `${JSON.stringify({ version: 1, mode: value }, null, 2)}\n`, {
-    encoding: "utf8",
-    mode: 0o600,
-  });
-  protectPrivateFile(temporary);
-  renameSync(temporary, PRESENCE_STATE_PATH);
-  protectPrivateFile(PRESENCE_STATE_PATH);
+  writePrivateJson(PRESENCE_STATE_PATH, { version: 1, mode: value }, { directoryMode: 0o700 });
   return presenceSnapshot();
 }

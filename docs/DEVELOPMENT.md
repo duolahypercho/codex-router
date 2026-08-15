@@ -121,7 +121,12 @@ npm ci
 npm run check
 npm test
 sh -n install.sh
-for file in bin/*; do sh -n "$file"; done
+for file in bin/*; do
+  case "$file" in
+    *.mjs) node --check "$file" ;;
+    *) sh -n "$file" ;;
+  esac
+done
 npm audit --omit=dev
 ```
 

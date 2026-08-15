@@ -1,15 +1,11 @@
 import {
-  chmodSync,
   existsSync,
-  mkdirSync,
   readFileSync,
-  renameSync,
-  writeFileSync,
 } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { protectPrivateFile } from "./file-security.mjs";
+import { writePrivateJson } from "./file-security.mjs";
 import { STATE_DIR } from "./paths.mjs";
 import { ensureOllamaHeadless } from "./ollama-runtime.mjs";
 import { normalizeLocalModelTag } from "./local-model-ref.mjs";
@@ -72,14 +68,7 @@ export function readLocalDownload(options) {
 }
 
 export function writeLocalDownload(state) {
-  const directory = path.dirname(LOCAL_DOWNLOAD_STATE_PATH);
-  mkdirSync(directory, { recursive: true, mode: 0o700 });
-  chmodSync(directory, 0o700);
-  const temporary = `${LOCAL_DOWNLOAD_STATE_PATH}.tmp.${process.pid}`;
-  writeFileSync(temporary, `${JSON.stringify(state)}\n`, { encoding: "utf8", mode: 0o600 });
-  protectPrivateFile(temporary);
-  renameSync(temporary, LOCAL_DOWNLOAD_STATE_PATH);
-  protectPrivateFile(LOCAL_DOWNLOAD_STATE_PATH);
+  writePrivateJson(LOCAL_DOWNLOAD_STATE_PATH, state, { space: 0, directoryMode: 0o700 });
   return state;
 }
 

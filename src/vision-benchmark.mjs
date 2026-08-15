@@ -1,5 +1,7 @@
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import path from "node:path";
+
+import { writePrivateJson } from "./file-security.mjs";
 import { fileURLToPath } from "node:url";
 
 import { SOURCE_ROOT, STATE_DIR } from "./paths.mjs";
@@ -87,13 +89,7 @@ export function readBenchmarkResults() {
 
 export function saveBenchmarkResult(tag, result) {
   const results = { ...readBenchmarkResults(), [tag]: result };
-  mkdirSync(path.dirname(BENCHMARK_RESULTS_PATH), { recursive: true, mode: 0o700 });
-  const temporary = `${BENCHMARK_RESULTS_PATH}.tmp.${process.pid}`;
-  writeFileSync(temporary, `${JSON.stringify({ version: 1, results })}\n`, {
-    encoding: "utf8",
-    mode: 0o600,
-  });
-  renameSync(temporary, BENCHMARK_RESULTS_PATH);
+  writePrivateJson(BENCHMARK_RESULTS_PATH, { version: 1, results });
   return results;
 }
 

@@ -2,6 +2,43 @@
 
 ## Unreleased
 
+- **A reasoning model no longer answers into thirty seconds of silence.** The
+  empty-completion guard buffered every routed streaming response until it saw
+  content, and reasoning deltas deliberately did not count as content. On a
+  reasoning model the gap between the first reasoning delta and the first output
+  token is seconds to minutes, so the guard held that entire gap and the caller
+  saw nothing until the turn closed or the hold budget expired. Measured against
+  `opencode-go/deepseek-v4-pro` with only this behaviour varying, the client's
+  first byte moved from 30,638 ms to 517 ms; `deepseek-v4-flash` moved from
+  29,409 ms to 536 ms. Both held runs parked at the 30-second budget, which is
+  to say the budget decided when the caller saw anything, not the model.
+
+  Throughput was never affected, which is why this read as a frozen turn rather
+  than a slow one — and why no metric caught it. `responseStartMs` stops at
+  the response headers and `firstTokenMs` fires on reasoning deltas, and the
+  guard kept holding past both.
+
+  The hold exists only to make the retry invisible, and the recorded meter
+  prices it: across 19,043 routed turns it fired 168 retries, of which 17
+  succeeded. Every reasoning turn paid up to thirty seconds of dead air for a
+  silent rescue on roughly one routed turn in a thousand. So reasoning now ends
+  the hold without settling the verdict — the stream is relayed and the guard
+  keeps watching from behind it, and a turn that reasons and then produces
+  nothing is still classified empty. A silent upstream has no prologue worth
+  waiting for, so that case still holds every byte and still retries silently.
+
+- **An empty turn that already reached the client is stated, not swallowed.**
+  Once the prologue is on the wire the router cannot substitute a retry for it,
+  so it writes an `error` event into the open stream instead of grafting a
+  second response onto one the client is already reading. Codex treats that as
+  retryable and reissues the turn on its own ladder, which recovers more than
+  the single silent retry it replaces — verified against `codex-cli` 0.145.0
+  with a stub upstream: a reasoning turn ending in an empty completion produced
+  one request, no answer and no error, while the same turn ending in an `error`
+  event produced two requests and an answer. Turns that end this way are
+  metered as `emptyCompletionUnrepairable`, apart from the retried ones, because
+  one is a failure the router absorbed and the other is one the user sees.
+
 - **GLM-5.3, on every route that actually serves it.** Z.ai shipped GLM-5.3 on
   2026-08-14. It is now in the picker three ways: `zai-coding/glm-5.3` on the
   GLM Coding Plan subscription, `zai-api/glm-5.3` on the metered platform, and
