@@ -474,6 +474,18 @@ test("the explore catalog groups the requested Ollama families and keeps fit vis
     "qwen3.5:35b-a3b-coding-nvfp4",
     "qwen3.6:27b",
     "qwen3.6:35b-a3b-mtp-q4_K_M",
+    "qwen3.8:latest",
+    "qwen3.8:27b",
+    "qwen3.8:27b-mlx",
+    "qwen3.8:27b-mlx-bf16",
+    "qwen3.8:27b-mtp-q4_K_M",
+    "qwen3.8:27b-mtp-q8_0",
+    "qwen3.8:27b-mtp-bf16",
+    "qwen3.8:27b-mxfp8",
+    "qwen3.8:27b-nvfp4",
+    "qwen3.8:27b-q4_K_M",
+    "qwen3.8:27b-q8_0",
+    "qwen3.8:27b-bf16",
     "nemotron-3-super:120b",
     "nemotron-3-super:120b-a12b-q8_0",
     "nemotron-3.5-lightning:latest",
@@ -496,8 +508,8 @@ test("the explore catalog groups the requested Ollama families and keeps fit vis
   ]) assert.ok(tags.has(tag), tag);
   assert.equal(entries.find((entry) => entry.tag === "nemotron-3-super:120b").fit, "too-large");
   assert.equal(entries.find((entry) => entry.tag === "gemma4:12b").tools, false);
-  assert.equal(EXPLORE_LOCAL_MODELS.length, 189);
-  assert.equal(new Set(EXPLORE_LOCAL_MODELS.map((entry) => entry.tag)).size, 189);
+  assert.equal(EXPLORE_LOCAL_MODELS.length, 201);
+  assert.equal(new Set(EXPLORE_LOCAL_MODELS.map((entry) => entry.tag)).size, 201);
   const cloud = entries.find((entry) => entry.tag === "qwen3.5:cloud");
   assert.equal(cloud.downloadable, false);
   assert.equal(cloud.fit, "cloud-only");
@@ -519,6 +531,15 @@ test("the explore catalog groups the requested Ollama families and keeps fit vis
     entries.find((entry) => entry.tag === "nemotron-3.5-lightning:latest").researchStatus,
     "Official Ollama · 11 tags",
   );
+  assert.equal(
+    entries.find((entry) => entry.tag === "qwen3.8:latest").researchStatus,
+    "Official Ollama · 12 tags",
+  );
+  assert.deepEqual(
+    entries.find((entry) => entry.tag === "qwen3.8:latest").researchCapabilities,
+    ["vision", "tools", "thinking"],
+  );
+  assert.equal(entries.find((entry) => entry.tag === "qwen3.8:27b-mtp-q8_0").sizeGb, 30);
   assert.deepEqual(
     entries.find((entry) => entry.tag === "nemotron-3.5-lightning:latest").researchCapabilities,
     ["tools", "thinking"],
@@ -633,3 +654,4 @@ test("the listing says how little room Codex leaves in the window", () => {
   assert.match(rendered, new RegExp(`${Math.round(CODEX_PROMPT_TOKENS / 1000)}K of the 32K window`));
   assert.match(rendered, /agent-check/);
 });
+

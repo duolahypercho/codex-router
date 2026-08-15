@@ -30,8 +30,8 @@ not start a second Ollama pull or removal.
 
 The native macOS tray's **View more** panel and the Windows/Linux panel's
 **Discover Ollama** section include the complete tag inventories captured from
-the official Ollama pages for Gemma 4, Qwen 3.5/3.6, Nemotron 3 Super, Ornith,
-Nemotron 3, and Muse Glimmer. That includes quantized, MLX, BF16, and other
+the official Ollama pages for Gemma 4, Qwen 3.5/3.6/3.8, Nemotron 3 Super,
+Ornith, Nemotron 3, and Muse Glimmer. That includes quantized, MLX, BF16, and other
 published variants—not only the family aliases. Cloud aliases are shown for
 completeness but are labelled **cloud only** and cannot be downloaded as local
 weights. The manifest is a dated snapshot, so arbitrary Ollama tags and model
@@ -105,3 +105,4 @@ Checking a model uses one canonical tag. `devstral` and `devstral:latest` are
 the same weights, so checking or unchecking through either spelling affects the
 same entry, and selection files written by older versions are normalized on the
 next write.
+
