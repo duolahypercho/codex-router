@@ -117,15 +117,35 @@ function isEmptyNativeMetadata(value) {
   return false;
 }
 
+// Only fields where an empty account value can never be a deliberate account
+// narrowing may be backfilled from the bundled catalog. Each entry earns its
+// place: the speed/service tiers are the observed bug (a stale account schema
+// wiped the Fast tier), `input_modalities: []` would describe a model nothing
+// can call, and the tool/instruction fields are binary-schema data the account
+// cache merely mirrors. Deliberately absent: `visibility` (the account's own
+// signal, always non-empty in practice but not worth betting on) and
+// `supported_reasoning_levels` (an account that lost an effort ladder is
+// expressing exactly that — resurrecting bundled's ladder would offer efforts
+// the account cannot spend).
+const BUNDLED_BACKFILL_FIELDS = Object.freeze([
+  "additional_speed_tiers",
+  "service_tiers",
+  "input_modalities",
+  "experimental_supported_tools",
+  "include_apps_usage_instructions",
+  "model_messages",
+]);
+
 // The account catalog may use an older schema and publish empty fields for
-// capabilities already present in the current binary. Preserve every
-// non-empty bundled field in that case; a non-empty account value remains
-// authoritative for account-dependent data such as visibility.
+// capabilities already present in the current binary. Preserve the non-empty
+// bundled value for the allowlisted schema fields in that case; a non-empty
+// account value always remains authoritative.
 export function mergeNativeModel(accountModel, bundledModel) {
   if (!bundledModel) return { ...accountModel };
 
   const merged = { ...bundledModel, ...accountModel };
-  for (const [field, value] of Object.entries(bundledModel)) {
+  for (const field of BUNDLED_BACKFILL_FIELDS) {
+    const value = bundledModel[field];
     if (
       !isEmptyNativeMetadata(value) &&
       isEmptyNativeMetadata(accountModel[field])
