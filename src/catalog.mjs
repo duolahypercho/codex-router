@@ -523,10 +523,6 @@ export function routedModel(template, model) {
   return next;
 }
 
-export function applyAllMultiAgent(models, enabled) {
-  return models;
-}
-
 export const AUTO_ANNOUNCE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
 function formatTokenCount(tokens) {
