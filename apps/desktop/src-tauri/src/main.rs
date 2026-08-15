@@ -1442,7 +1442,10 @@ fn validate_lmstudio_model_id(model: &str) -> Result<(), String> {
     let trimmed = model.trim();
     let valid = !trimmed.is_empty()
         && trimmed.len() <= 128
-        && trimmed.chars().next().is_some_and(|c| c.is_ascii_alphanumeric())
+        && trimmed
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphanumeric())
         && trimmed
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '/' | ':' | '-'))
