@@ -154,7 +154,30 @@ export function flattenNamespaceTools(tools) {
       }
       continue;
     }
-    flattened.push(tool);
+    // A plain function tool needs the same repair as a namespaced one. The
+    // rejections are the provider's, not the namespace's: DeepSeek V4 Flash and
+    // Pro both 400 a `type: ["object","null"]` root with "schema must be a JSON
+    // Schema of 'type: \"object\"'", and xAI rejects a union root the same way,
+    // whether the tool arrived inside a namespace or on its own. Repairing only
+    // the flattened children left every client-declared tool to fail on the
+    // provider that objects. `providerToolSchema` returns anything it does not
+    // recognize unchanged, so a tool with an ordinary root is not copied.
+    const parameters = tool?.function?.parameters ?? tool?.parameters;
+    if (parameters === undefined) {
+      flattened.push(tool);
+      continue;
+    }
+    const repaired = providerToolSchema(parameters);
+    if (repaired === parameters) {
+      flattened.push(tool);
+      continue;
+    }
+    changed = true;
+    flattened.push(
+      tool.function
+        ? { ...tool, function: { ...tool.function, parameters: repaired } }
+        : { ...tool, parameters: repaired },
+    );
   }
   if (spawnAgentModels.size > 0) SPAWN_AGENT_MODELS.set(namespaces, spawnAgentModels);
   return { tools: flattened, flattened: changed, namespaces };

@@ -662,3 +662,50 @@ test("flattened parameters drop literals that contradict their declared type", (
   const flattened = tools.find((tool) => tool.name === "codex_app__automation_update");
   assert.equal("enum" in flattened.parameters.properties.enabled, false);
 });
+
+// A plain function tool reaches the provider with the same root a namespaced
+// one does, and the providers that object do not care which it was. DeepSeek V4
+// (Flash and Pro) both 400 a `type: ["object","null"]` root -- "schema must be a
+// JSON Schema of 'type: \"object\"'" -- and xAI rejects a union root, both
+// reproduced live. Repairing only the flattened children left every
+// client-declared tool to fail on those providers.
+test("a plain function tool's union root is repaired too", () => {
+  const { tools, flattened } = flattenNamespaceTools([
+    {
+      type: "function",
+      function: {
+        name: "plain",
+        parameters: {
+          oneOf: [
+            { type: "object", properties: { a: { type: "string" } }, required: ["a"] },
+            { type: "object", properties: { b: { type: "string" } }, required: ["a"] },
+          ],
+        },
+      },
+    },
+  ]);
+  assert.equal(flattened, true);
+  assert.equal(tools[0].function.parameters.type, "object");
+  assert.equal(tools[0].function.parameters.oneOf, undefined);
+  assert.deepEqual(Object.keys(tools[0].function.parameters.properties), ["a", "b"]);
+});
+
+test("a plain function tool's nullable root is repaired too", () => {
+  const { tools, flattened } = flattenNamespaceTools([
+    { type: "function", name: "plain", parameters: { type: ["object", "null"], properties: { a: {} } } },
+  ]);
+  assert.equal(flattened, true);
+  assert.equal(tools[0].parameters.type, "object");
+});
+
+// The repair must not copy a tool it had nothing to fix: an ordinary root is
+// the overwhelming majority, and a needless rewrite is a needless risk.
+test("an ordinary function tool is passed through by identity", () => {
+  const tool = {
+    type: "function",
+    function: { name: "plain", parameters: { type: "object", properties: { a: {} } } },
+  };
+  const { tools, flattened } = flattenNamespaceTools([tool]);
+  assert.equal(tools[0], tool);
+  assert.equal(flattened, false);
+});

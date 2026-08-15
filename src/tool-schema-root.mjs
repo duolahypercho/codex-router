@@ -65,10 +65,19 @@ function hasRootUnion(schema) {
 // say `type: "object"` and still be rejected for carrying a `oneOf` beside it.
 // Checking only `type`/`properties` here is what let the live client's
 // `automation_update` -- which sends both -- through untouched.
+//
+// A declared type is read literally, which is why a nullable root is not an
+// object root. `type: ["object", "null"]` is a legal JSON Schema object that
+// also permits null, and xAI rejects it with the same
+// `tool parameter root must be an object type` as a union -- verified against
+// the live backend. Only the exact string passes; a declared type that is
+// anything else sends the schema down the rewrite path, and the `properties`
+// fallback is left for schemas that declare no type at all.
 export function hasObjectRoot(schema) {
   if (!isPlainObject(schema)) return false;
   if (hasRootUnion(schema)) return false;
-  return schema.type === "object" || isPlainObject(schema.properties);
+  if (schema.type !== undefined) return schema.type === "object";
+  return isPlainObject(schema.properties);
 }
 
 // Returns `schema` unchanged when its root is already a plain object, so the
@@ -110,8 +119,13 @@ export function objectRootToolSchema(schema) {
     properties,
     ...(required.length ? { required } : {}),
     // The merged object cannot describe which branch a call belongs to, so it
-    // must not reject fields that only one branch declares.
-    additionalProperties: true,
+    // must not reject fields that only one branch declares. A root that was
+    // rewritten without merging anything -- a nullable `type: ["object","null"]`
+    // becoming plain `"object"` -- has no such ambiguity, so it keeps whatever
+    // it declared rather than being quietly opened up.
+    ...(unionBranches.length || schema.additionalProperties === undefined
+      ? { additionalProperties: true }
+      : { additionalProperties: schema.additionalProperties }),
   };
 }
 
@@ -234,8 +248,28 @@ export function normalizeSchemaLiterals(schema, depth = 0) {
 // tool, where a server-defined schema that merely looks unusual would be
 // silently replaced with one accepting anything. Only a union root is the
 // documented strict-upstream rejection, so only a union root is rewritten.
+// A root `type` array that offers "object" among others -- the nullable object
+// root. Narrow on purpose: an array that cannot be an object at all is left
+// alone, because collapsing it would replace a real schema with one accepting
+// anything, which is the trade this function exists to avoid.
+function hasNullableObjectRoot(schema) {
+  return Array.isArray(schema.type) && schema.type.includes("object");
+}
+
 export function providerToolSchema(schema) {
   const normalized = normalizeSchemaLiterals(schema);
-  if (!isPlainObject(normalized) || !hasRootUnion(normalized)) return normalized;
+  if (!isPlainObject(normalized)) return normalized;
+  // Two independent upstreams reject a nullable object root by name, which is
+  // what promotes it from "unusual" to documented alongside the union:
+  //
+  //   xAI:      tool parameter root must be an object type
+  //   DeepSeek: schema must be a JSON Schema of 'type: "object"',
+  //             got 'type: ["object","null"]'
+  //
+  // Both were reproduced live. The repair is lossless here -- properties,
+  // required and additionalProperties all survive -- because only the root's
+  // own `null` alternative is dropped, and a tool call whose entire argument
+  // object is null is not a call any of these providers can dispatch.
+  if (!hasRootUnion(normalized) && !hasNullableObjectRoot(normalized)) return normalized;
   return objectRootToolSchema(normalized);
 }
