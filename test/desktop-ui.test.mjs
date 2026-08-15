@@ -172,17 +172,40 @@ test("active model speed prefers its provider and matches qualified slugs", () =
   assert.equal(observedModelSpeed(usage, "deepseek", "missing/model"), null);
 });
 
-test("desktop UI exposes English and Simplified Chinese translations", () => {
-  assert.deepEqual(availableLanguages().map(({ id }) => id), ["en", "zh-CN"]);
+test("desktop UI exposes translations with matching keys for every language", () => {
+  assert.deepEqual(
+    availableLanguages().map(({ id }) => id),
+    ["en", "zh-CN", "ar", "hi", "ja", "ko"],
+  );
   const keys = translationKeys();
-  assert.deepEqual([...keys.en].sort(), [...keys["zh-CN"]].sort());
+  const englishKeys = [...keys.en].sort();
+  for (const language of Object.keys(keys)) {
+    assert.deepEqual([...keys[language]].sort(), englishKeys, `translation keys diverge for ${language}`);
+  }
+  const samples = [
+    ["zh-CN", "用量"],
+    ["ar", "الاستخدام"],
+    ["hi", "उपयोग"],
+    ["ja", "使用量"],
+    ["ko", "사용량"],
+  ];
   try {
+    for (const [language, navUsage] of samples) {
+      setLanguage(language);
+      assert.equal(getLanguage(), language);
+      assert.equal(t("nav.usage"), navUsage);
+    }
     setLanguage("zh-CN");
-    assert.equal(getLanguage(), "zh-CN");
-    assert.equal(t("nav.usage"), "用量");
     assert.equal(t("usage.resetsToday", { time: "10:30" }), "今天 10:30 重置");
   } finally {
     setLanguage("en");
   }
   assert.equal(t("nav.usage"), "Usage");
+});
+
+test("desktop UI marks Arabic as the only right-to-left language", () => {
+  for (const { id, dir } of availableLanguages()) {
+    if (id === "ar") assert.equal(dir, "rtl");
+    else assert.notEqual(dir, "rtl", `unexpected right-to-left direction for ${id}`);
+  }
 });
