@@ -169,3 +169,35 @@ test("a wedged 'checking' becomes retryable once it goes stale", () => {
   assert.deepEqual(subagentVerificationCandidates([slug]), [slug]);
   clearSubagentProof(slug);
 });
+
+test("a probe that only hit quota or outage defers instead of condemning", async () => {
+  const slug = "deepseek/deepseek-v4-flash";
+  const deferred = await verifySubagentCandidates([slug], {
+    probe: async () => ({
+      ok: false,
+      checks: [
+        { name: "tool calling", ok: false, status: 429, detail: "1-week quota exhausted" },
+        { name: "streaming", ok: true, status: 200 },
+      ],
+      detail: "tool calling: 1-week quota exhausted",
+    }),
+  });
+  assert.equal(deferred[0].status, "deferred");
+  // Nothing recorded: the next toggle or sweep researches again.
+  assert.equal(subagentProofSnapshot()[slug], undefined);
+
+  // A structural rejection alongside a transient one is still a failure —
+  // the 400 answered the capability question even though the 503 did not.
+  const condemned = await verifySubagentCandidates([slug], {
+    probe: async () => ({
+      ok: false,
+      checks: [
+        { name: "tool calling", ok: false, status: 400, detail: "tool_choice rejected" },
+        { name: "streaming", ok: false, status: 503, detail: "upstream flap" },
+      ],
+      detail: "tool calling: tool_choice rejected",
+    }),
+  });
+  assert.equal(condemned[0].status, "failed");
+  clearSubagentProof(slug);
+});

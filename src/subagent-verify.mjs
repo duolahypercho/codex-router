@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 
 import { MODEL_BY_SLUG } from "./model-registry.mjs";
 import {
+  clearSubagentProof,
   readSubagentProofs,
   recordProbeResult,
   recordProbeStarted,
@@ -53,6 +54,19 @@ export function subagentVerificationCandidates(slugs, { force = false, now = Dat
   return candidates;
 }
 
+// The probe measures capability, and a provider that is rate limited, out of
+// quota, or briefly down has not answered that question. "failed" is reserved
+// for evidence the model cannot hold the role; everything transient clears the
+// slot instead, so the next toggle or sweep simply researches again — the same
+// distinction the request-path observer draws between a 400 and a 429.
+const TRANSIENT_PROBE_STATUSES = new Set([402, 408, 429, 500, 502, 503, 504]);
+
+function probeWasTransient(outcome) {
+  const failing = (outcome.checks || []).filter((check) => !check.ok);
+  if (!failing.length) return false;
+  return failing.every((check) => TRANSIENT_PROBE_STATUSES.has(check.status));
+}
+
 export async function verifySubagentCandidates(slugs, { probe, force = false } = {}) {
   const runProbe =
     probe ||
@@ -69,6 +83,11 @@ export async function verifySubagentCandidates(slugs, { probe, force = false } =
         checks: [],
         detail: error instanceof Error ? error.message : String(error),
       };
+    }
+    if (!outcome.ok && probeWasTransient(outcome)) {
+      clearSubagentProof(slug);
+      results.push({ slug, status: "deferred", reason: outcome.detail });
+      continue;
     }
     results.push({
       slug,
