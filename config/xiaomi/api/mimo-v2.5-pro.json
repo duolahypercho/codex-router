@@ -18,7 +18,7 @@
         }
       ],
       "contextWindow": 1048576,
-      "autoCompact": 996147,
+      "autoCompact": 900000,
       "inputModalities": [
         "text"
       ],

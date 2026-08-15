@@ -493,7 +493,12 @@ test("official Xiaomi MiMo routes advertise only verified capabilities", () => {
   const pro = MODEL_BY_SLUG.get("xiaomi-mimo/mimo-v2.5-pro");
   for (const model of [pro, vlm]) {
     assert.equal(model.contextWindow, 1_048_576);
-    assert.equal(model.autoCompact, 996_147);
+    // 900,000 is what every other million-token route in this registry
+    // compacts at, including the three other MiMo routes. The 95% this
+    // started at left ~52K of headroom on a window Codex is already told to
+    // treat as 95% effective, so a turn could grow past the limit before
+    // anything compacted it.
+    assert.equal(model.autoCompact, 900_000);
     assert.equal(model.defaultEffort, "high");
     assert.deepEqual(model.reasoningLevels, [
       { effort: "high", description: "Deep reasoning" },
