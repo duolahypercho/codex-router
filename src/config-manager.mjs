@@ -63,6 +63,22 @@ const multiAgentV2StartMarker = "# BEGIN codex-router-multi-agent-v2-managed";
 const multiAgentV2EndMarker = "# END codex-router-multi-agent-v2-managed";
 const createdAgentsTableMarker = "# codex-router-created-agents-table";
 const managedAgentMaxConcurrency = 6;
+// Codex 0.147 records a child's FINAL_ANSWER as subAgentActivity
+// `interacted` and keeps that child visually working for the whole live
+// parent turn. close_agent is not in the v2 toolset; interrupt_agent is the
+// only model-callable way to flip the badge to done without the user
+// clicking into the child. The usage hint is injected into the root
+// developer's collaboration preamble.
+const managedSubagentCompletionHint =
+  "When a child agent finishes (FINAL_ANSWER, task_complete, or an idle/errored wait snapshot), call interrupt_agent on that child so Codex can mark it done. Do not leave finished children in the working state.";
+
+export function managedMultiAgentV2FeatureLine() {
+  return (
+    `multi_agent_v2 = { enabled = true, max_concurrent_threads_per_session = ${managedAgentMaxConcurrency}, ` +
+    `expose_spawn_agent_model_overrides = true, usage_hint_enabled = true, ` +
+    `root_agent_usage_hint_text = ${tomlValue(managedSubagentCompletionHint)} }`
+  );
+}
 const routerProviderId = "codex-router";
 const signedProviderId = "codex-router-signed";
 const defaultChatgptBaseUrl = "https://chatgpt.com/backend-api";
@@ -295,7 +311,7 @@ function probeMultiAgentV2Support() {
     writeFileSync(
       path.join(probeHome, "config.toml"),
       `[features]
-multi_agent_v2 = { enabled = true, max_concurrent_threads_per_session = ${managedAgentMaxConcurrency}, expose_spawn_agent_model_overrides = true }
+${managedMultiAgentV2FeatureLine()}
 `,
       { encoding: "utf8", mode: 0o600 },
     );
@@ -329,7 +345,7 @@ function withManagedMultiAgentV2(input) {
   const cleaned = withoutManagedMultiAgentV2(input);
   if (hasModernMultiAgentConfig(cleaned)) return cleaned;
   if (!installedCodexSupportsMultiAgentV2()) return cleaned;
-  const featureLine = `multi_agent_v2 = { enabled = true, max_concurrent_threads_per_session = ${managedAgentMaxConcurrency}, expose_spawn_agent_model_overrides = true }`;
+  const featureLine = managedMultiAgentV2FeatureLine();
   const managedLines = [
     multiAgentV2StartMarker,
     featureLine,

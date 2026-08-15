@@ -4,6 +4,12 @@ import { StringDecoder } from "node:string_decoder";
 import { HeaderlessSseDetector } from "./sse-prefix.mjs";
 import { coerceFunctionCallArguments } from "./tool-arguments.mjs";
 import { providerToolSchema } from "./tool-schema-root.mjs";
+import {
+  buildInterruptAgentCall,
+  filterAlreadyInterrupted,
+  formatSseBlock,
+  interruptTargetFromCall,
+} from "./subagent-completion.mjs";
 
 // The Codex client ships most of its toolset as `type: "namespace"` entries:
 // the collaboration runtime, the app toolset (threads, automations,
@@ -327,6 +333,36 @@ export function rewriteNamespaceResponsePayload(payload, lookups, sessionModel) 
   return changed ? rewritten : undefined;
 }
 
+// Inject missing collaboration.interrupt_agent calls for children that already
+// finished (FINAL_ANSWER in the request input) when the model forgot to close
+// them. Codex 0.147 keeps those children Working until interrupt_agent runs or
+// the user opens the child. Sequence numbers continue after the last model
+// event so Codex accepts the spliced calls as part of the same response.
+function nextSequence(event, lastSequence) {
+  const value = Number(event?.sequence_number);
+  return Number.isFinite(value) ? value : lastSequence;
+}
+
+function trackInterruptFromItem(item, interrupted) {
+  if (!item) return;
+  const target = interruptTargetFromCall(item);
+  if (target) interrupted.add(target);
+}
+
+function appendInterruptCallsToOutput(output, pending, interrupted) {
+  const remaining = filterAlreadyInterrupted(pending, interrupted);
+  if (!remaining.length) return { output, injected: 0, remaining: [] };
+  const base = Array.isArray(output) ? [...output] : [];
+  for (const item of base) trackInterruptFromItem(item, interrupted);
+  const still = filterAlreadyInterrupted(remaining, interrupted);
+  for (const target of still) {
+    const call = buildInterruptAgentCall(target);
+    base.push(call);
+    interrupted.add(target);
+  }
+  return { output: base, injected: still.length, remaining: still };
+}
+
 // Rewrites LiteLLM's flattened `<namespace>__<tool>` function calls back to
 // the namespace + name shape Codex dispatches through its app runtime.
 export class NamespaceToolCallTransform extends Transform {
@@ -338,11 +374,27 @@ export class NamespaceToolCallTransform extends Transform {
   #headerlessDetector;
   #lookups;
   #sessionModel;
+  #pendingInterrupts;
+  #injectOnly = false;
+  #interruptedTargets = new Set();
+  #lastSequence = 0;
+  #interruptSeq = 0;
+  #injectQueue = [];
+  #injectionsDone = false;
+  #lastInjectedCalls = [];
 
-  constructor(namespaces, contentType = "", sessionModel) {
+  constructor(namespaces, contentType = "", sessionModel, options = {}) {
     super();
     this.#lookups = buildNamespaceLookups(namespaces);
     this.#sessionModel = sessionModel;
+    this.#pendingInterrupts = Array.isArray(options.pendingInterrupts)
+      ? [...options.pendingInterrupts]
+      : [];
+    // Native turns attach this transform only to close finished children. A
+    // native stream is otherwise relayed byte-identical, so inject-only mode
+    // must not run the namespace rewrites (they exist for routed providers)
+    // or re-serialize model-authored events it did not change.
+    this.#injectOnly = Boolean(options.injectOnly);
     const declared = String(contentType).toLowerCase();
     this.#eventStream = declared.includes("text/event-stream");
     this.#headerlessDetector =
@@ -402,13 +454,24 @@ export class NamespaceToolCallTransform extends Transform {
         return;
       }
       try {
-        const payload = JSON.parse(body.toString("utf8"));
-        const rewritten = rewriteNamespaceResponsePayload(
-          payload,
-          this.#lookups,
-          this.#sessionModel,
-        );
-        this.push(rewritten ? Buffer.from(JSON.stringify(rewritten), "utf8") : body);
+        const original = JSON.parse(body.toString("utf8"));
+        let payload = original;
+        if (!this.#injectOnly) {
+          const rewritten = rewriteNamespaceResponsePayload(
+            payload,
+            this.#lookups,
+            this.#sessionModel,
+          );
+          if (rewritten) payload = rewritten;
+        }
+        payload = this.#injectJsonInterrupts(payload);
+        // An inject-only relay that injected nothing returns the exact bytes
+        // it was handed rather than a re-serialization of them.
+        if (this.#injectOnly && payload === original) {
+          this.push(body);
+        } else {
+          this.push(Buffer.from(JSON.stringify(payload), "utf8"));
+        }
       } catch {
         this.push(body);
       }
@@ -417,6 +480,11 @@ export class NamespaceToolCallTransform extends Transform {
     }
     this.#buffer += this.#decoder.end();
     this.#emitCompleteEvents(true);
+    // Streams that omit response.completed / [DONE] still need the closes.
+    for (const piece of this.#drainInterruptBlocks()) {
+      this.push(Buffer.from(piece));
+      if (!piece.endsWith("\n\n")) this.push(Buffer.from("\n\n"));
+    }
     callback();
   }
 
@@ -424,38 +492,188 @@ export class NamespaceToolCallTransform extends Transform {
     const blocks = this.#buffer.split(/\r?\n\r?\n/);
     this.#buffer = flush ? "" : blocks.pop() || "";
     for (const block of blocks) {
-      this.push(Buffer.from(this.#rewriteBlock(block)));
-      this.push(Buffer.from("\n\n"));
+      const pieces = this.#rewriteBlock(block);
+      for (const piece of pieces) {
+        this.push(Buffer.from(piece));
+        if (!piece.endsWith("\n\n")) this.push(Buffer.from("\n\n"));
+      }
     }
   }
 
   #rewriteBlock(block) {
     const lines = block.split(/\r?\n/);
-    const rewritten = [];
-    let changed = false;
-    for (const line of lines) {
-      if (!line.startsWith("data:")) {
-        rewritten.push(line);
-        continue;
+    const eventName = lines
+      .find((line) => line.startsWith("event:"))
+      ?.slice(6)
+      .trim();
+    let dataLineIndex = -1;
+    let dataText = "";
+    for (let index = 0; index < lines.length; index += 1) {
+      const line = lines[index];
+      if (!line.startsWith("data:")) continue;
+      dataLineIndex = index;
+      dataText = line.slice(5).trimStart();
+      break;
+    }
+    if (dataLineIndex === -1) return [block];
+    if (!dataText || dataText === "[DONE]") {
+      // Inject before the stream terminator so Codex still executes the calls.
+      if (dataText === "[DONE]" || eventName === "response.done") {
+        return [...this.#drainInterruptBlocks(), block];
       }
-      const data = line.slice(5).trimStart();
-      if (!data || data === "[DONE]") {
-        rewritten.push(line);
-        continue;
-      }
-      try {
-        const event = JSON.parse(data);
+      return [block];
+    }
+    try {
+      let event = JSON.parse(dataText);
+      if (!this.#injectOnly) {
         const next = rewriteNamespaceResponsePayload(event, this.#lookups, this.#sessionModel);
-        if (!next) {
-          rewritten.push(line);
-          continue;
+        if (next) event = next;
+      }
+      this.#observeEvent(event);
+      const rebuilt = [...lines];
+      rebuilt[dataLineIndex] = `data: ${JSON.stringify(event)}`;
+      // Inject finished-child interrupts before the response closes so Codex
+      // still executes them as ordinary tool calls in this turn.
+      if (event?.type === "response.completed" || eventName === "response.completed") {
+        const interruptBlocks = this.#drainInterruptBlocks();
+        const withOutput = this.#mergeInjectedIntoCompleted(event);
+        // Nothing injected and nothing rewritten: the event goes out as it
+        // came in, not as a JSON round-trip of itself.
+        if (this.#injectOnly && !interruptBlocks.length && withOutput === event) {
+          return [block];
         }
-        rewritten.push(`data: ${JSON.stringify(next)}`);
-        changed = true;
-      } catch {
-        rewritten.push(line);
+        rebuilt[dataLineIndex] = `data: ${JSON.stringify(withOutput)}`;
+        return [...interruptBlocks, rebuilt.join("\n")];
+      }
+      if (event?.type === "response.done" || eventName === "response.done") {
+        const interruptBlocks = this.#drainInterruptBlocks();
+        if (this.#injectOnly) return [...interruptBlocks, block];
+        return [...interruptBlocks, rebuilt.join("\n")];
+      }
+      if (this.#injectOnly) return [block];
+      return [rebuilt.join("\n")];
+    } catch {
+      return [block];
+    }
+  }
+
+  #observeEvent(event) {
+    if (!event || typeof event !== "object") return;
+    this.#lastSequence = nextSequence(event, this.#lastSequence);
+    trackInterruptFromItem(event.item, this.#interruptedTargets);
+    if (Array.isArray(event.output)) {
+      for (const item of event.output) trackInterruptFromItem(item, this.#interruptedTargets);
+    }
+    if (Array.isArray(event.response?.output)) {
+      for (const item of event.response.output) {
+        trackInterruptFromItem(item, this.#interruptedTargets);
       }
     }
-    return changed ? `${rewritten.join("\r\n")}\r\n` : block;
+  }
+
+  #remainingInterrupts() {
+    return filterAlreadyInterrupted(this.#pendingInterrupts, this.#interruptedTargets);
+  }
+
+  #drainInterruptBlocks() {
+    if (this.#injectionsDone) return [];
+    const remaining = this.#remainingInterrupts();
+    if (!remaining.length) {
+      this.#injectionsDone = true;
+      this.#lastInjectedCalls = [];
+      return [];
+    }
+    const blocks = [];
+    const injectedCalls = [];
+    for (const target of remaining) {
+      this.#interruptSeq += 1;
+      const callId = `call_router_interrupt_${this.#interruptSeq}`;
+      const call = buildInterruptAgentCall(target, { callId });
+      this.#interruptedTargets.add(target);
+      injectedCalls.push(call);
+      const addedSeq = this.#lastSequence + 1;
+      const doneSeq = this.#lastSequence + 2;
+      this.#lastSequence = doneSeq;
+      const added = {
+        type: "response.output_item.added",
+        sequence_number: addedSeq,
+        item: {
+          type: "function_call",
+          name: call.name,
+          namespace: call.namespace,
+          call_id: call.call_id,
+          arguments: "",
+        },
+      };
+      const done = {
+        type: "response.output_item.done",
+        sequence_number: doneSeq,
+        item: {
+          type: "function_call",
+          name: call.name,
+          namespace: call.namespace,
+          call_id: call.call_id,
+          arguments: call.arguments,
+        },
+      };
+      blocks.push(formatSseBlock("response.output_item.added", added).trimEnd() + "\n");
+      blocks.push(formatSseBlock("response.output_item.done", done).trimEnd() + "\n");
+    }
+    this.#lastInjectedCalls = injectedCalls;
+    this.#injectionsDone = true;
+    return blocks.map((block) => block.replace(/\n$/, ""));
+  }
+
+  #mergeInjectedIntoCompleted(event) {
+    // drainInterruptBlocks already marked targets interrupted and emitted the
+    // SSE tool calls. Mirror those calls into response.completed.output so
+    // non-incremental consumers still see them.
+    if (!event || typeof event !== "object") return event;
+    const injected = this.#lastInjectedCalls;
+    if (!Array.isArray(injected) || !injected.length) return event;
+    if (Array.isArray(event.response?.output)) {
+      return {
+        ...event,
+        response: {
+          ...event.response,
+          output: [...event.response.output, ...injected],
+        },
+      };
+    }
+    if (Array.isArray(event.output)) {
+      return { ...event, output: [...event.output, ...injected] };
+    }
+    return event;
+  }
+
+  #injectJsonInterrupts(payload) {
+    if (!payload || typeof payload !== "object") return payload;
+    // Non-streaming Responses put completed function calls in `output`.
+    if (Array.isArray(payload.output)) {
+      for (const item of payload.output) trackInterruptFromItem(item, this.#interruptedTargets);
+      const result = appendInterruptCallsToOutput(
+        payload.output,
+        this.#pendingInterrupts,
+        this.#interruptedTargets,
+      );
+      if (result.injected) payload = { ...payload, output: result.output };
+    }
+    if (payload.response && Array.isArray(payload.response.output)) {
+      for (const item of payload.response.output) {
+        trackInterruptFromItem(item, this.#interruptedTargets);
+      }
+      const result = appendInterruptCallsToOutput(
+        payload.response.output,
+        this.#pendingInterrupts,
+        this.#interruptedTargets,
+      );
+      if (result.injected) {
+        payload = {
+          ...payload,
+          response: { ...payload.response, output: result.output },
+        };
+      }
+    }
+    return payload;
   }
 }
