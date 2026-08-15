@@ -183,6 +183,16 @@ async function emitProbe() {
           id: provider.id,
           displayName: provider.displayName,
           kind: provider.kind,
+          // The vendor, so a UI can group the rows a `variantOf` cannot merge.
+          // Z.ai, Kimi, and xAI each publish several providers that are one
+          // brand but genuinely separate accounts -- different endpoints, and
+          // keys that are not interchangeable -- so they must stay separately
+          // connectable while still reading as one vendor.
+          ownedBy: provider.ownedBy,
+          // An anonymous gateway is not an account, so the tray needs this to
+          // keep one out of a vendor's "N accounts" group (opencode-free would
+          // otherwise be drawn as a second opencode account).
+          authMode: provider.authMode,
         })),
       models,
       ...(selectedModel ? { selectedModel } : {}),

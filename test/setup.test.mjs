@@ -45,12 +45,11 @@ test("automatic selection-only setup exposes only configured providers", () => {
         },
       },
     );
-    // `local` needs no credential -- it serves from this machine -- so the
-    // no-flag default includes it alongside keyed providers, but anonymous
-    // off-box endpoints require an explicit --providers choice.
-    assert.deepEqual(JSON.parse(output).providers, ["deepseek", "local"]);
+    // Local backends need no credential and are included by default, while
+    // anonymous off-box endpoints require an explicit --providers choice.
+    assert.deepEqual(JSON.parse(output).providers, ["deepseek", "lmstudio", "local"]);
     const selection = JSON.parse(readFileSync(path.join(stateDir, "enabled-providers.json"), "utf8"));
-    assert.deepEqual(selection.providers, ["deepseek", "local"]);
+    assert.deepEqual(selection.providers, ["deepseek", "lmstudio", "local"]);
   } finally {
     rmSync(testRoot, { recursive: true, force: true });
   }
@@ -87,9 +86,9 @@ test("ensure-configured does not auto-select anonymous providers", () => {
         },
       },
     );
-    assert.deepEqual(JSON.parse(output).providers, ["deepseek", "local"]);
+    assert.deepEqual(JSON.parse(output).providers, ["deepseek", "lmstudio", "local"]);
     const selection = JSON.parse(readFileSync(path.join(stateDir, "enabled-providers.json"), "utf8"));
-    assert.deepEqual(selection.providers, ["deepseek", "local"]);
+    assert.deepEqual(selection.providers, ["deepseek", "lmstudio", "local"]);
   } finally {
     rmSync(testRoot, { recursive: true, force: true });
   }
@@ -128,7 +127,7 @@ test("configured setup mode also excludes anonymous providers by default", () =>
         },
       },
     );
-    assert.deepEqual(JSON.parse(output).providers, ["deepseek", "local"]);
+    assert.deepEqual(JSON.parse(output).providers, ["deepseek", "lmstudio", "local"]);
   } finally {
     rmSync(testRoot, { recursive: true, force: true });
   }

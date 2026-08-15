@@ -16,6 +16,9 @@ import {
   readKimiOAuthToken,
 } from "./kimi-oauth-session.mjs";
 import { PORTS, TARGET } from "./paths.mjs";
+import { installStableFetchTransport } from "./fetch-transport.mjs";
+
+installStableFetchTransport();
 
 const API_BASE = (
   process.env.KIMI_CODE_BASE_URL || "https://api.kimi.com/coding/v1"
@@ -124,7 +127,9 @@ function upstreamHeaders(requestHeaders, body) {
   }
   Object.assign(headers, kimiIdentityHeaders());
   headers["Accept-Encoding"] = "identity";
-  if (body.length) headers["Content-Length"] = String(body.length);
+  // Content-Length is fetch's to compute. An explicit copy is at best
+  // redundant, and the HTTP/1.1 dispatcher rejects the request outright
+  // (UND_ERR_INVALID_ARG) when a caller-supplied value accompanies a body.
   return headers;
 }
 

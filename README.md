@@ -732,6 +732,20 @@ command directly, restart Codex yourself.
 
 ### Use a local model in Codex (experimental)
 
+LM Studio can run as a second local backend alongside Ollama. Its models use
+the stable `lmstudio/<model-id>` namespace, so identical model IDs loaded in
+the two backends never collide:
+
+```sh
+./bin/model-router codex providers enable lmstudio
+./bin/curate-models lmstudio
+```
+
+The default endpoint is `http://127.0.0.1:1234/v1`. Set
+`MODEL_ROUTER_LMSTUDIO_BASE_URL` when LM Studio listens elsewhere. Curation
+reads `/v1/models` and publishes only models explicitly chosen by the user.
+Ollama keeps its existing native route and local model controls.
+
 Models running on this machine can appear in Codex's picker like any other
 provider. They are labelled **experimental** there, and the label is earned:
 using a local model as the *vision reader* is reliable, but using one as a
