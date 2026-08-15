@@ -10,6 +10,10 @@ enum TrayLanguage: String, CaseIterable, Identifiable {
   case system
   case english
   case chinese
+  case arabic
+  case hindi
+  case japanese
+  case korean
 
   var id: String { rawValue }
 
@@ -25,10 +29,47 @@ enum TrayLanguage: String, CaseIterable, Identifiable {
   var label: String {
     switch self {
     case .system:
-      let resolved = RouterLanguage.systemPrefersChinese ? "中文" : "English"
-      return "\(routerLocalized("System")) · \(resolved)"
+      return "\(routerLocalized("System")) · \(RouterLanguage.systemResolution.nativeName)"
     case .english: return "English"
     case .chinese: return "中文"
+    case .arabic: return "العربية"
+    case .hindi: return "हिन्दी"
+    case .japanese: return "日本語"
+    case .korean: return "한국어"
+    }
+  }
+}
+
+/// A concrete language the tray can render in: `TrayLanguage` minus `system`,
+/// which resolves to one of these.
+enum ResolvedTrayLanguage {
+  case english
+  case chinese
+  case arabic
+  case hindi
+  case japanese
+  case korean
+
+  var nativeName: String {
+    switch self {
+    case .english: return "English"
+    case .chinese: return "中文"
+    case .arabic: return "العربية"
+    case .hindi: return "हिन्दी"
+    case .japanese: return "日本語"
+    case .korean: return "한국어"
+    }
+  }
+
+  /// English is the source text itself, so it carries no table.
+  var table: [String: String]? {
+    switch self {
+    case .english: return nil
+    case .chinese: return RouterChineseText.values
+    case .arabic: return RouterArabicText.values
+    case .hindi: return RouterHindiText.values
+    case .japanese: return RouterJapaneseText.values
+    case .korean: return RouterKoreanText.values
     }
   }
 }
@@ -48,18 +89,33 @@ enum RouterLanguage {
     UserDefaults.standard.set(next.rawValue, forKey: storageKey)
   }
 
-  static var systemPrefersChinese: Bool {
-    let preferred = Locale.preferredLanguages.first ?? Locale.current.identifier
-    return preferred.lowercased().hasPrefix("zh")
+  static var systemResolution: ResolvedTrayLanguage {
+    let preferred = (Locale.preferredLanguages.first ?? Locale.current.identifier).lowercased()
+    if preferred.hasPrefix("zh") { return .chinese }
+    if preferred.hasPrefix("ar") { return .arabic }
+    if preferred.hasPrefix("hi") { return .hindi }
+    if preferred.hasPrefix("ja") { return .japanese }
+    if preferred.hasPrefix("ko") { return .korean }
+    return .english
   }
 
-  static var isSimplifiedChinese: Bool {
+  static var systemPrefersChinese: Bool { systemResolution == .chinese }
+
+  static var resolution: ResolvedTrayLanguage {
     switch selection {
-    case .system: return systemPrefersChinese
-    case .english: return false
-    case .chinese: return true
+    case .system: return systemResolution
+    case .english: return .english
+    case .chinese: return .chinese
+    case .arabic: return .arabic
+    case .hindi: return .hindi
+    case .japanese: return .japanese
+    case .korean: return .korean
     }
   }
+
+  /// Kept for the call sites that compose Chinese strings inline; those fall
+  /// back to English in every other translated language.
+  static var isSimplifiedChinese: Bool { resolution == .chinese }
 }
 
 /// Small, dependency-free localization layer for strings rendered by the
@@ -67,8 +123,7 @@ enum RouterLanguage {
 /// fallback, so a newly added string is still usable before its translation is
 /// added.
 func routerLocalized(_ english: String) -> String {
-  guard RouterLanguage.isSimplifiedChinese else { return english }
-  return RouterChineseText.values[english] ?? english
+  RouterLanguage.resolution.table?[english] ?? english
 }
 
 func routerFormat(_ english: String, _ arguments: CVarArg...) -> String {
