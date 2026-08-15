@@ -36,6 +36,7 @@ import {
 } from "./paths.mjs";
 import { MODEL_BY_SLUG, PROVIDERS, providerForModel } from "./model-registry.mjs";
 import { createHealthCache } from "./health-cache.mjs";
+import { discoveryDisabled } from "./discovery-mode.mjs";
 import { readNativeAliases } from "./native-alias.mjs";
 import { readNativeRedirect } from "./native-redirect.mjs";
 import {
@@ -1710,6 +1711,23 @@ function observeSubagentOutcome(request, route, status, { emptyCompletion = fals
   }
 }
 
+// The local answer an idle install gives instead of native forwarding. With
+// discovery disabled the native path is impossible by construction -- the
+// session fallback never reads auth.json -- so traffic that would leave for
+// chatgpt.com is refused before any upstream fetch, keeping the --no-discovery
+// promise that nothing leaves this machine.
+function writeIdleNoProviderError(response) {
+  writeJson(response, 503, {
+    error: {
+      type: "router_idle_no_provider",
+      message:
+        "This router was installed without providers and with credential discovery disabled " +
+        "(--no-provider --no-discovery), so no traffic leaves this machine. " +
+        "Re-run setup without those flags to enable a provider.",
+    },
+  });
+}
+
 async function handleResponses(request, response, requestUrl) {
   const startedAt = Date.now();
   const activity = beginRequestActivity();
@@ -1771,6 +1789,13 @@ async function handleResponses(request, response, requestUrl) {
           message: `Provider ${registeredRoute.provider} is hidden. Run ./bin/providers enable ${registeredRoute.provider}.`,
         },
       });
+      return;
+    }
+    // Anything without a route from here on is native GPT traffic. An install
+    // that merely hid every provider keeps its native passthrough -- that has
+    // always worked -- but an idle --no-discovery install answers locally.
+    if (!route && discoveryDisabled()) {
+      writeIdleNoProviderError(response);
       return;
     }
     // Activity and usage attribute protocol variants to their canonical
@@ -2377,6 +2402,12 @@ async function handleNativeRequest(request, response, requestUrl, defaultModel) 
   let requestedModel = defaultModel;
   try {
     if (!requireCodexTransport(request, response)) return;
+    // Image and web-search turns are native-only; an idle install refuses
+    // them locally rather than forwarding to chatgpt.com.
+    if (discoveryDisabled()) {
+      writeIdleNoProviderError(response);
+      return;
+    }
     const encoded = await readRequestBody(request);
     const body = decodeBody(encoded, request.headers["content-encoding"]);
     const payload = parseBody(body);
