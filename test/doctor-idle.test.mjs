@@ -122,10 +122,20 @@ test(
       assert.equal(existsSync(loginSentinel), false, "the sign-in probe still spawned codex login");
 
       // The idle state fails nothing that touches providers; anything failed
-      // must be environmental (no running service and no installed skill pack
-      // in this sandbox).
+      // must be environmental -- no running service, no installed skill pack,
+      // and on CI no LiteLLM virtual environment either.
       const failed = report.checks.filter((check) => check.status === "fail");
-      const allowed = new Set(["Background service", "Router health", "Codex skill pack"]);
+      const allowed = new Set([
+        "Background service",
+        "Router health",
+        "Codex skill pack",
+        "LiteLLM venv runtime",
+        // The staged secrets get POSIX modes, not the Windows ACL the real
+        // writers apply, so these two rows are staging noise on win32 only.
+        ...(process.platform === "win32"
+          ? ["Internal service key", "Router caller key"]
+          : []),
+      ]);
       assert.deepEqual(
         failed.map((check) => check.name).filter((name) => !allowed.has(name)),
         [],
