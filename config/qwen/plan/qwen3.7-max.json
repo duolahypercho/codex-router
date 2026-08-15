@@ -17,7 +17,7 @@
           "description": "Adaptive deep reasoning"
         }
       ],
-      "contextWindow": 1000000,
+      "contextWindow": 983616,
       "autoCompact": 900000,
       "inputModalities": [
         "text",
