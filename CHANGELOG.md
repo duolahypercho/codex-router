@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **Uninstalling the last client integration now removes the background
+  service.** Whether Codex still counted as installed was keyed on the cached
+  native catalog, a file uninstall deliberately retains — so the service, its
+  LaunchAgent, and its listening ports survived every codex uninstall. The
+  installed-state witness is now the managed block in `config.toml`, which
+  enable writes and disable removes; `bin/disable` of the last client retires
+  the service too, matching what the Windows wrapper always did, and
+  `bin/enable` reinstalls it on the way back.
+
 - **Switching a model on as a subagent now researches it instead of ignoring
   it.** Only six registry-proven models could ever be spawned as native v2
   children; everything else the operator enabled was a silent no-show, and

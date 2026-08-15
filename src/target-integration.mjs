@@ -1,9 +1,22 @@
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { DSH_CATALOG_PATH, NATIVE_CATALOG_PATH, SOURCE_ROOT, TARGET } from "./paths.mjs";
+import {
+  CONFIG_PATH,
+  DSH_CATALOG_PATH,
+  NATIVE_CATALOG_PATH,
+  SOURCE_ROOT,
+  TARGET,
+} from "./paths.mjs";
+
+// The begin markers config-manager.mjs writes around every block it owns,
+// including the legacy kimi-era pairs it still recognizes. config-manager.mjs
+// is a command-line script, so the prefix is restated here rather than
+// imported; the markers are a compatibility surface that lives in users'
+// config files and cannot change without a migration anyway.
+const managedMarkerPattern = /^# BEGIN (?:kimi-)?codex-(?:router|proxy)-/m;
 
 function run(script, args = []) {
   execFileSync(process.execPath, [path.join(SOURCE_ROOT, "src", script), ...args], {
@@ -53,9 +66,23 @@ export function targetRestartHint() {
  */
 export function installedTargets() {
   const installed = [];
-  if (existsSync(NATIVE_CATALOG_PATH)) installed.push("codex");
+  // Codex counts as installed while its config still carries a managed block.
+  // The cached native catalog is deliberately retained across uninstalls, so
+  // its presence says a catalog was once published, not that Codex is still
+  // pointed at the plane -- keying on it left the service and its LaunchAgent
+  // behind after the last integration was removed.
+  if (codexIntegrationInstalled()) installed.push("codex");
   if (existsSync(DSH_CATALOG_PATH)) installed.push("dsh");
   return installed;
+}
+
+function codexIntegrationInstalled() {
+  if (!existsSync(CONFIG_PATH)) return false;
+  try {
+    return managedMarkerPattern.test(readFileSync(CONFIG_PATH, "utf8"));
+  } catch {
+    return false;
+  }
 }
 
 export function refreshTargetPickerIfInstalled() {
