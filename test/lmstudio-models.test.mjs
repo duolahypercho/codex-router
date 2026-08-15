@@ -107,6 +107,18 @@ test("checking a model publishes it through the same overlay curate-models write
   assert.ok(Array.isArray(raw.models));
 });
 
+test("a disable/re-enable cycle cannot land two models on one priority", () => {
+  writeUserModels([]);
+  setLmstudioModelEnabled("alpha", true);
+  setLmstudioModelEnabled("beta", true);
+  setLmstudioModelEnabled("gamma", true);
+  setLmstudioModelEnabled("beta", false);
+  setLmstudioModelEnabled("beta", true);
+  const mine = readUserModels().filter((model) => model.provider === "lmstudio");
+  const priorities = mine.map((model) => model.priority);
+  assert.equal(new Set(priorities).size, priorities.length, `collision in ${priorities}`);
+});
+
 test("toggling one model leaves the other curated LM Studio entries alone", () => {
   writeUserModels([]);
   setLmstudioModelEnabled("alpha", true);

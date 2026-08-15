@@ -133,14 +133,14 @@ export function setLmstudioModelEnabled(id, enabled) {
   const mine = existing.filter(
     (model) => model.provider === LMSTUDIO_PROVIDER_ID && model.upstreamModel !== value,
   );
-  const entries = enabled
+  const next = enabled
     ? [
         ...mine,
         {
           ...userModelEntry({
             providerId: LMSTUDIO_PROVIDER_ID,
             upstreamId: value,
-            priority: LMSTUDIO_MODEL_PRIORITY + mine.length,
+            priority: LMSTUDIO_MODEL_PRIORITY,
             metadata: {
               contextWindow: LMSTUDIO_CONTEXT_WINDOW,
               autoCompact: LMSTUDIO_AUTO_COMPACT,
@@ -160,6 +160,14 @@ export function setLmstudioModelEnabled(id, enabled) {
         },
       ]
     : mine;
+  // Renumbered on every write rather than assigned once: a priority derived
+  // from the list length at toggle time collides after a disable/re-enable
+  // cycle (enable A,B,C; disable B; re-enable B lands on C's number). Kept as
+  // a renumber, not a rebuild, so metadata curate-models asked for survives.
+  const entries = next.map((entry, index) => ({
+    ...entry,
+    priority: LMSTUDIO_MODEL_PRIORITY + index,
+  }));
   writeUserModels([...others, ...entries]);
   syncLmstudioProviderSelection(entries.length > 0);
   return entries;

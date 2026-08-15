@@ -228,12 +228,18 @@ async function emitProbe() {
               subagents: subagentSettingsSnapshot(),
               picker: modelPickerSnapshot(),
               toolResultAging: toolResultAgingSnapshot(),
-              localModels: localModelsSnapshot({
-                inventory: localInventory,
-                running: localRunning,
-                runtime: localRuntime,
-                benchmarks: localAndVisionBenchmarks,
-              }),
+              localModels: {
+                ...localModelsSnapshot({
+                  inventory: localInventory,
+                  running: localRunning,
+                  runtime: localRuntime,
+                  benchmarks: localAndVisionBenchmarks,
+                }),
+                // The panel's periodic refresh reads this snapshot, not
+                // `local-models list`, so the LM Studio section must ride
+                // here too or it paints once and vanishes on the next poll.
+                lmstudio: await (await import("./lmstudio-models.mjs")).lmstudioSnapshot(),
+              },
               visionBridge: (() => {
                 const candidates = selectedConfiguredListedModels();
                 // Only the native models that actually shipped into the picker.

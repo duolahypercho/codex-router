@@ -566,7 +566,7 @@ async fn set_lmstudio_model_enabled(
     model: String,
     enabled: bool,
 ) -> Result<Value, String> {
-    validate_local_model_ref(&model)?;
+    validate_lmstudio_model_id(&model)?;
     run_json_command(
         state.inner().clone(),
         vec![
@@ -1432,6 +1432,25 @@ fn validate_local_model_ref(model: &str) -> Result<(), String> {
         Ok(())
     } else {
         Err("Enter a valid Ollama model tag or model-page URL.".into())
+    }
+}
+
+/// Same character discipline as the Node-side `requireTag` (an id reaches a
+/// command line either way), with an error that names LM Studio instead of
+/// telling an LM Studio user their id is not a valid Ollama tag.
+fn validate_lmstudio_model_id(model: &str) -> Result<(), String> {
+    let trimmed = model.trim();
+    let valid = !trimmed.is_empty()
+        && trimmed.len() <= 128
+        && trimmed.chars().next().is_some_and(|c| c.is_ascii_alphanumeric())
+        && trimmed
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '/' | ':' | '-'))
+        && !trimmed.starts_with('-');
+    if valid {
+        Ok(())
+    } else {
+        Err("Enter a valid LM Studio model id.".into())
     }
 }
 
