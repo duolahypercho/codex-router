@@ -72,6 +72,9 @@ export function subagentSettingsSnapshot() {
     // lets a surface explain *why* an enabled model is or is not offered as
     // a subagent instead of leaving it a silent no-show.
     proofs: subagentProofSnapshot(),
+    // Per-model reasoning depth applied only to child turns. Empty when the
+    // operator has never set one, which is the common case.
+    efforts: subagentEfforts(),
   };
 }
 
@@ -119,20 +122,69 @@ export function setMultiAgentModels(slugs, enabled) {
     mode: current.mode === "proven" && enabled ? "selected" : current.mode,
     enabled: [...enabledSet].sort(),
     disabled: [...disabledSet].sort(),
+    // Rebuilt literally rather than spread, so every writer has to carry the
+    // effort map forward by hand or silently drop a user's choices.
+    ...(current.efforts ? { efforts: current.efforts } : {}),
   };
   writeSettings(next);
   return subagentSettingsSnapshot();
 }
 
-export function replaceMultiAgentState({ mode, enabled = [], disabled = [] }) {
+// Codex picks a subagent's model, but nothing lets an operator say how hard
+// that subagent should think. A child auditing one file rarely needs the depth
+// its parent is running at, and the reverse is true for a child doing the
+// analysis the parent delegated precisely because it was expensive. Effort is
+// per model rather than global: the useful setting is "when work lands on this
+// model as a child, run it at this depth", and that answer differs by model.
+//
+// An absent entry means "leave the turn alone", which is not the same as
+// recording the model's own default -- a default that later changes upstream
+// should follow the model, not stay frozen at whatever it was when someone
+// opened a settings page.
+export function subagentEfforts() {
+  const efforts = readMultiAgentSettings().efforts;
+  if (!efforts || typeof efforts !== "object" || Array.isArray(efforts)) return {};
+  const clean = {};
+  for (const [slug, effort] of Object.entries(efforts)) {
+    if (typeof slug === "string" && typeof effort === "string" && slug && effort) {
+      clean[slug] = effort;
+    }
+  }
+  return clean;
+}
+
+export function subagentEffort(slug) {
+  return subagentEfforts()[String(slug || "")];
+}
+
+// `effort` of undefined/null clears the override and restores the model's own
+// default. Validation against the model's advertised levels belongs to the
+// caller, which is the layer that can see the registry.
+export function setSubagentEffort(slug, effort) {
+  const key = String(slug || "").trim();
+  if (!key) throw new Error("A model slug is required.");
+  const current = readMultiAgentSettings();
+  const efforts = { ...subagentEfforts() };
+  if (effort === undefined || effort === null || effort === "") delete efforts[key];
+  else efforts[key] = String(effort).trim();
+  const next = { ...current, version: 2 };
+  if (Object.keys(efforts).length) next.efforts = efforts;
+  else delete next.efforts;
+  writeSettings(next);
+  return subagentSettingsSnapshot();
+}
+
+export function replaceMultiAgentState({ mode, enabled = [], disabled = [], efforts }) {
   if (!SUBAGENT_MODES.includes(mode)) {
     throw new Error(`Unknown subagent mode "${mode}". Choose: ${SUBAGENT_MODES.join(", ")}`);
   }
+  const carried = efforts === undefined ? readMultiAgentSettings().efforts : efforts;
   const next = {
     version: 2,
     mode,
     enabled: [...new Set(enabled)].sort(),
     disabled: [...new Set(disabled)].sort(),
+    ...(carried && Object.keys(carried).length ? { efforts: carried } : {}),
   };
   writeSettings(next);
   return subagentSettingsSnapshot();
