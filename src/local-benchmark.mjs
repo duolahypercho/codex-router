@@ -1,14 +1,10 @@
 import {
-  chmodSync,
   existsSync,
-  mkdirSync,
   readFileSync,
-  renameSync,
-  writeFileSync,
 } from "node:fs";
 import path from "node:path";
 
-import { protectPrivateFile } from "./file-security.mjs";
+import { writePrivateJson } from "./file-security.mjs";
 import { STATE_DIR } from "./paths.mjs";
 import { normalizeLocalModelTag } from "./local-model-ref.mjs";
 import { ollamaRootUrl } from "./ollama-runtime.mjs";
@@ -26,17 +22,7 @@ export function readLocalBenchmarks() {
   }
 }
 export function writeLocalBenchmarks(results) {
-  const directory = path.dirname(LOCAL_BENCHMARKS_PATH);
-  mkdirSync(directory, { recursive: true, mode: 0o700 });
-  chmodSync(directory, 0o700);
-  const temporary = `${LOCAL_BENCHMARKS_PATH}.tmp.${process.pid}`;
-  writeFileSync(temporary, `${JSON.stringify({ version: 1, results }, null, 2)}\n`, {
-    encoding: "utf8",
-    mode: 0o600,
-  });
-  protectPrivateFile(temporary);
-  renameSync(temporary, LOCAL_BENCHMARKS_PATH);
-  protectPrivateFile(LOCAL_BENCHMARKS_PATH);
+  writePrivateJson(LOCAL_BENCHMARKS_PATH, { version: 1, results }, { directoryMode: 0o700 });
   return results;
 }
 

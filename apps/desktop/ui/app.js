@@ -263,9 +263,6 @@ function startPanel() {
       ["account", "account_usage"],
       ["providerUsage", "provider_usage"],
       ["providerSetup", "provider_setup"],
-      ["localModels", "local_models"],
-      ["visionBridge", "vision_bridge_status"],
-      ["presence", "presence_status"],
       ["health", "router_health"],
       ["platform", "platform_info"],
       ["settings", "desktop_settings"],
@@ -284,6 +281,16 @@ function startPanel() {
       if ("value" in result) state[result.key] = result.value;
       else errors.push(result.error);
     }
+    // The control snapshot already contains the local-model, vision-bridge,
+    // and presence views. Reusing them avoids starting separate Node processes
+    // for the same Ollama inventory and keeps all three sections consistent.
+    const codexSettings = state.snapshot?.targets?.codex?.modelSettings;
+    if (codexSettings?.localModels) state.localModels = codexSettings.localModels;
+    if (codexSettings?.visionBridge) {
+      state.visionBridge = codexSettings.visionBridge;
+      state.visionDownload = codexSettings.visionBridge.download || null;
+    }
+    if (state.snapshot?.presence) state.presence = state.snapshot.presence;
     renderPanel();
     elements.refresh.disabled = false;
     if (!quiet && errors.length && !state.snapshot) showToast(errorMessage(errors[0]), true);

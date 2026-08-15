@@ -71,6 +71,7 @@ test("the snapshot joins installed, checked, loaded, and vision state", () => {
     running: ["qwen2.5vl:3b"],
     selection: { version: 1, enabled: ["gemma3:4b"] },
     benchmarks: { "gemma3:4b": { tier: "accurate", textPercent: 100 } },
+    runtime: { installed: true, running: true, version: "0.1.0" },
     // Supplied so the test never shells out to the machine's real Ollama.
     capabilities: {
       "gemma3:4b": ["completion", "vision"],
@@ -91,6 +92,7 @@ test("the snapshot joins installed, checked, loaded, and vision state", () => {
   assert.equal(byTag["gemma3:4b"].vision, true);
   // None of these can call tools, so none can be a Codex chat model.
   assert.equal(snapshot.usableAsChat, 0);
+  assert.deepEqual(snapshot.runtime, { installed: true, running: true, version: "0.1.0" });
 });
 
 test("removing a model needs explicit consent and unchecks it", () => {

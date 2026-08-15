@@ -1,14 +1,10 @@
 import {
-  chmodSync,
   existsSync,
-  mkdirSync,
   readFileSync,
-  renameSync,
-  writeFileSync,
 } from "node:fs";
 import path from "node:path";
 
-import { protectPrivateFile } from "./file-security.mjs";
+import { writePrivateJson } from "./file-security.mjs";
 import { STATE_DIR } from "./paths.mjs";
 
 export const VISION_BRIDGE_STATE_PATH =
@@ -130,17 +126,7 @@ export function readVisionBridgeSettings() {
 }
 
 function writeSettings(settings) {
-  const stateDir = path.dirname(VISION_BRIDGE_STATE_PATH);
-  mkdirSync(stateDir, { recursive: true, mode: 0o700 });
-  chmodSync(stateDir, 0o700);
-  const temporary = `${VISION_BRIDGE_STATE_PATH}.tmp.${process.pid}`;
-  writeFileSync(temporary, `${JSON.stringify(settings, null, 2)}\n`, {
-    encoding: "utf8",
-    mode: 0o600,
-  });
-  protectPrivateFile(temporary);
-  renameSync(temporary, VISION_BRIDGE_STATE_PATH);
-  protectPrivateFile(VISION_BRIDGE_STATE_PATH);
+  writePrivateJson(VISION_BRIDGE_STATE_PATH, settings, { directoryMode: 0o700 });
   return settings;
 }
 

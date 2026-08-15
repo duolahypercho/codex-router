@@ -133,11 +133,21 @@ async function emitProbe() {
     [...new Set([...Object.keys(visionBenchmarks), ...Object.keys(localBenchmarks)])]
       .map((tag) => [tag, { ...visionBenchmarks[tag], ...localBenchmarks[tag] }]),
   );
-  const { localModelsSnapshot } = await import("./local-models.mjs");
+  const { localModelInventory, localModelsSnapshot, runningLocalModels } = await import(
+    "./local-models.mjs",
+  );
+  const { localOllamaRuntimeSnapshot } = await import("./ollama-runtime.mjs");
   const { selectedConfiguredListedModels } = await import("./provider-selection.mjs");
   // Bounded and weekly: the tray reads this snapshot constantly, so a fresh
   // cache costs nothing and a stale one costs one short, failure-tolerant pass.
   if (TARGET === "codex") await refreshVisionModelSizesIfStale();
+  // One probe serves several tray sections. Reuse the local reads so the same
+  // snapshot does not run `ollama list` and the hardware checks once per view.
+  const localInventory = TARGET === "codex" ? localModelInventory() : [];
+  const localRunning = TARGET === "codex" ? runningLocalModels() : [];
+  const localProfile = TARGET === "codex" ? hostVisionProfile() : undefined;
+  const localRuntime = TARGET === "codex" ? localOllamaRuntimeSnapshot() : undefined;
+  const localInstalled = localInventory.map((model) => model.tag);
 
   const enabledProviders = readProviderSelection();
   const hiddenModels = new Set(modelPickerSnapshot().hidden);
@@ -192,7 +202,12 @@ async function emitProbe() {
               subagents: subagentSettingsSnapshot(),
               picker: modelPickerSnapshot(),
               toolResultAging: toolResultAgingSnapshot(),
-              localModels: localModelsSnapshot({ benchmarks: localAndVisionBenchmarks }),
+              localModels: localModelsSnapshot({
+                inventory: localInventory,
+                running: localRunning,
+                runtime: localRuntime,
+                benchmarks: localAndVisionBenchmarks,
+              }),
               visionBridge: (() => {
                 const candidates = selectedConfiguredListedModels();
                 // Only the native models that actually shipped into the picker.
@@ -210,7 +225,7 @@ async function emitProbe() {
                   ...visionBridgeSnapshot(),
                   resolvedEngine: resolved?.slug || null,
                   resolvedEngineName: resolved?.displayName || null,
-                  hostMemGib: hostVisionProfile().memGib,
+                  hostMemGib: localProfile.memGib,
                   // Cloud vision models the operator already pays for -- the
                   // default engines. Auto picks the cheapest of these.
                   paidEngines: rankVisionEngines(candidates).map((model) => ({
@@ -228,7 +243,11 @@ async function emitProbe() {
                     efforts: visionEngineEfforts(model),
                   })),
                   // The downloadable local picker, each with size + fit + state.
-                  localModels: annotateLocalModels({ benchmarks: readBenchmarkResults() }),
+                  localModels: annotateLocalModels({
+                    profile: localProfile,
+                    installed: localInstalled,
+                    benchmarks: localAndVisionBenchmarks,
+                  }),
                   download: readVisionDownload(),
                 };
               })(),
