@@ -3,7 +3,7 @@
 // non-downloadable: they route through Ollama cloud and have no local weights.
 // Refresh this manifest when the upstream tag pages change; arbitrary tags
 // and model-page URLs remain supported by the install field.
-// Captured from the official pages on 2026-08-11.
+// Captured from the official pages on 2026-08-11; qwen3.8 captured 2026-08-15.
 
 // The tag list is intentionally exhaustive, but the tray should not make a
 // first-time user choose between every quantization and accelerator build.
@@ -24,6 +24,11 @@ export const LOCAL_FAMILY_RESEARCH = Object.freeze({
     status: "Official Ollama · 30 tags",
     capabilities: Object.freeze(["vision", "tools", "thinking"]),
     note: "Qwen's newer agentic-coding and thinking-focused family.",
+  }),
+  "qwen3.8": Object.freeze({
+    status: "Official Ollama · 12 tags",
+    capabilities: Object.freeze(["vision", "tools", "thinking"]),
+    note: "27B Qwen family with substantial gains on coding and long-horizon agentic tasks.",
   }),
   "nemotron-3-super": Object.freeze({
     status: "Official Ollama · 7 tags",
@@ -197,6 +202,18 @@ export const EXPLORE_LOCAL_MODELS = Object.freeze(
     {"tag": "qwen3.6:35b-a3b-mtp-bf16", "sizeGb": 72, "tools": false, "context": 262144, "codex": "unverified", "displayName": "Qwen3.6 · 35b a3b mtp bf16", "note": "Official Ollama tag; capabilities are checked after pull.", "downloadable": true},
     {"tag": "qwen3.6:35b-a3b-mxfp8", "sizeGb": 38, "tools": false, "context": 262144, "codex": "unverified", "displayName": "Qwen3.6 · 35b a3b mxfp8", "note": "Official Ollama tag; capabilities are checked after pull.", "downloadable": true},
     {"tag": "qwen3.6:35b-mlx", "sizeGb": 22, "tools": false, "context": 262144, "codex": "unverified", "displayName": "Qwen3.6 · 35b mlx", "note": "Official Ollama tag; capabilities are checked after pull.", "downloadable": true},
+    {"tag": "qwen3.8:latest", "sizeGb": 18, "tools": false, "context": 262144, "codex": "unverified", "displayName": "Qwen3.8 · latest", "note": "Official Ollama tag; capabilities are checked after pull.", "downloadable": true},
+    {"tag": "qwen3.8:27b", "sizeGb": 18, "tools": false, "context": 262144, "codex": "unverified", "displayName": "Qwen3.8 · 27b", "note": "Official Ollama tag; capabilities are checked after pull.", "downloadable": true},
+    {"tag": "qwen3.8:27b-mlx", "sizeGb": 18, "tools": false, "context": 262144, "codex": "unverified", "displayName": "Qwen3.8 · 27b mlx", "note": "Official Ollama tag; capabilities are checked after pull.", "downloadable": true},
+    {"tag": "qwen3.8:27b-mlx-bf16", "sizeGb": 56, "tools": false, "context": 262144, "codex": "unverified", "displayName": "Qwen3.8 · 27b mlx bf16", "note": "Official Ollama tag; capabilities are checked after pull.", "downloadable": true},
+    {"tag": "qwen3.8:27b-mtp-q4_K_M", "sizeGb": 18, "tools": false, "context": 262144, "codex": "unverified", "displayName": "Qwen3.8 · 27b mtp q4_K_M", "note": "Official Ollama tag; capabilities are checked after pull.", "downloadable": true},
+    {"tag": "qwen3.8:27b-mtp-q8_0", "sizeGb": 30, "tools": false, "context": 262144, "codex": "unverified", "displayName": "Qwen3.8 · 27b mtp q8_0", "note": "Official Ollama tag; capabilities are checked after pull.", "downloadable": true},
+    {"tag": "qwen3.8:27b-mtp-bf16", "sizeGb": 56, "tools": false, "context": 262144, "codex": "unverified", "displayName": "Qwen3.8 · 27b mtp bf16", "note": "Official Ollama tag; capabilities are checked after pull.", "downloadable": true},
+    {"tag": "qwen3.8:27b-mxfp8", "sizeGb": 32, "tools": false, "context": 262144, "codex": "unverified", "displayName": "Qwen3.8 · 27b mxfp8", "note": "Official Ollama tag; capabilities are checked after pull.", "downloadable": true},
+    {"tag": "qwen3.8:27b-nvfp4", "sizeGb": 18, "tools": false, "context": 262144, "codex": "unverified", "displayName": "Qwen3.8 · 27b nvfp4", "note": "Official Ollama tag; capabilities are checked after pull.", "downloadable": true},
+    {"tag": "qwen3.8:27b-q4_K_M", "sizeGb": 18, "tools": false, "context": 262144, "codex": "unverified", "displayName": "Qwen3.8 · 27b q4_K_M", "note": "Official Ollama tag; capabilities are checked after pull.", "downloadable": true},
+    {"tag": "qwen3.8:27b-q8_0", "sizeGb": 30, "tools": false, "context": 262144, "codex": "unverified", "displayName": "Qwen3.8 · 27b q8_0", "note": "Official Ollama tag; capabilities are checked after pull.", "downloadable": true},
+    {"tag": "qwen3.8:27b-bf16", "sizeGb": 56, "tools": false, "context": 262144, "codex": "unverified", "displayName": "Qwen3.8 · 27b bf16", "note": "Official Ollama tag; capabilities are checked after pull.", "downloadable": true},
     {"tag": "nemotron-3-super:latest", "sizeGb": 87, "tools": false, "context": 262144, "codex": "unverified", "displayName": "Nemotron 3 Super · latest", "note": "Official Ollama tag; capabilities are checked after pull.", "downloadable": true},
     {"tag": "nemotron-3-super:cloud", "sizeGb": 0, "tools": false, "context": 262144, "codex": "cloud-only", "displayName": "Nemotron 3 Super · cloud", "note": "Cloud-only Ollama alias; no local weights to download.", "downloadable": false},
     {"tag": "nemotron-3-super:120b", "sizeGb": 87, "tools": false, "context": 262144, "codex": "unverified", "displayName": "Nemotron 3 Super · 120b", "note": "Official Ollama tag; capabilities are checked after pull.", "downloadable": true},
