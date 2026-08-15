@@ -3376,7 +3376,7 @@ private struct TrayView: View {
       isDisabled: store.providerOperation != nil || store.signedRouting
     )
     settingRow(
-      title: routerLocalized("Compact old tool results (experimental)"),
+      title: routerLocalized("Compact old tool results"),
       detail: target.modelSettings?.toolResultAging?.environmentOverride == true
         ? routerLocalized("Forced off by CODEX_ROUTER_TOOL_RESULT_AGING=0")
         : (target.modelSettings?.toolResultAging?.stats?.savingsSummary
