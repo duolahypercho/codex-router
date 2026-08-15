@@ -82,13 +82,17 @@ export async function verifySubagentCandidates(slugs, { probe, force = false } =
     try {
       outcome = await runProbe(slug);
     } catch (error) {
+      // A probe that never got an answer — router restarting, DNS, socket
+      // refused — proved nothing about the model. Mark it unreachable so the
+      // classifier below defers it rather than condemning it.
       outcome = {
         ok: false,
+        unreachable: true,
         checks: [],
         detail: error instanceof Error ? error.message : String(error),
       };
     }
-    if (!outcome.ok && probeAnsweredAboutTheAccount(outcome)) {
+    if (!outcome.ok && (outcome.unreachable || probeAnsweredAboutTheAccount(outcome))) {
       clearSubagentProof(slug);
       results.push({ slug, status: "deferred", reason: outcome.detail });
       continue;

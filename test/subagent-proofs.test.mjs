@@ -133,14 +133,16 @@ test("verify records the probe's verdict, and a probe crash reads as a failure",
   assert.equal(subagentProofSnapshot()["deepseek/deepseek-v4-flash"].status, "experimental");
   clearSubagentProof("deepseek/deepseek-v4-flash");
 
+  // A probe that never reached the provider proved nothing: it defers and
+  // leaves no verdict, instead of writing "incapable" for a socket error.
   const crashed = await verifySubagentCandidates(["deepseek/deepseek-v4-flash"], {
     probe: async () => {
       throw new Error("router unreachable");
     },
   });
-  assert.equal(crashed[0].status, "failed");
+  assert.equal(crashed[0].status, "deferred");
   assert.match(crashed[0].reason, /router unreachable/);
-  clearSubagentProof("deepseek/deepseek-v4-flash");
+  assert.equal(subagentProofSnapshot()["deepseek/deepseek-v4-flash"], undefined);
 });
 
 test("the proofs path override is honoured", () => {
