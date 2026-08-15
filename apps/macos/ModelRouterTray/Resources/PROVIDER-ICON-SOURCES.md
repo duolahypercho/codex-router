@@ -17,5 +17,15 @@ blue accent and DeepSeek's original blue mark are preserved.
 | Chutes | https://chutes.ai/ | Inline SVG mark from the official site header |
 | OpenCode Free | https://opencode.ai/brand | Monochrome adaptation of the official OpenCode mark |
 | Kilo Free | https://kilo.ai/open | https://github.com/Kilo-Org/kilocode/blob/main/packages/kilo-vscode/assets/icons/kilo-dark.svg (Apache-2.0 repository asset) |
+| Z.AI (GLM) | https://z.ai/ | https://www.google.com/s2/favicons?domain=z.ai&sz=128 |
+| Qwen | https://qwen.ai/ | https://www.google.com/s2/favicons?domain=qwen.ai&sz=128 |
+| Ollama | https://ollama.com/ | https://www.google.com/s2/favicons?domain=ollama.com&sz=128 |
+| Cline | https://cline.bot/ | https://www.google.com/s2/favicons?domain=cline.bot&sz=128 |
+| MiniMax | https://www.minimax.io/ | https://www.google.com/s2/favicons?domain=minimax.io&sz=128 |
+| Meta AI | https://www.meta.ai/ | https://www.google.com/s2/favicons?domain=meta.ai&sz=128 |
+
+The Z.AI, Qwen, Ollama, Cline, MiniMax, and Meta AI marks were fetched on
+2026-08-15. The opencode-go routes reuse the OpenCode Free mark rather than
+shipping a duplicate asset.
 
 The marks remain trademarks of their respective owners.

@@ -943,7 +943,9 @@ private struct IslandUsageLineChart: View {
 }
 
 
-private struct ProviderIcon: View {
+// Internal rather than private: the status panel's quota-reset rows in
+// ModelRouterTrayApp.swift render the same provider mark.
+struct ProviderIcon: View {
   let providerID: String
   let size: CGFloat
 
@@ -990,13 +992,23 @@ private struct ProviderIcon: View {
     if providerID.hasPrefix("commandcode") { return "commandcode" }
     if providerID == "github-copilot" { return "github-copilot" }
     if providerID == "chutes" { return "chutes" }
-    if providerID == "opencode-free" { return "opencode-free" }
+    // opencode-free plus the opencode-go API/Messages/Responses routes.
+    if providerID.hasPrefix("opencode") { return "opencode-free" }
     if providerID == "kilo-free" { return "kilo-free" }
+    if providerID.hasPrefix("zai-") { return "zai" }
+    if providerID == "qwen-plan" { return "qwen" }
+    // Local models run through the same Ollama runtime the cloud tier uses.
+    if providerID == "ollama-cloud" || providerID == "local" { return "ollama" }
+    if providerID == "clinepass" { return "cline" }
+    if providerID == "minimax-token-plan" { return "minimax" }
+    if providerID == "meta" { return "meta" }
     return nil
   }
 
   private var assetExtension: String {
-    ["github-copilot", "chutes", "opencode-free", "kilo-free"].contains(providerID) ? "svg" : "png"
+    // Keyed off the asset, not the provider id, so every route sharing a mark
+    // (opencode-go and friends) resolves the same file type.
+    ["github-copilot", "chutes", "opencode-free", "kilo-free"].contains(assetName ?? "") ? "svg" : "png"
   }
 
   private var providerName: String {

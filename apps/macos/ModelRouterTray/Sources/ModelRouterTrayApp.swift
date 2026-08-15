@@ -3191,26 +3191,48 @@ private struct TrayView: View {
 
     if !quotaResets.isEmpty {
       sectionLabel(routerLocalized("Quota resets"), detail: "\(quotaResets.count)")
-      VStack(spacing: 5) {
+      VStack(spacing: 6) {
         ForEach(quotaResets, id: \.id) { entry in
-          HStack {
-            Text(entry.title)
-              .font(.system(size: 10, weight: .medium))
-              .lineLimit(1)
+          HStack(spacing: 8) {
+            ProviderIcon(providerID: entry.providerID, size: 14)
+            VStack(alignment: .leading, spacing: 1) {
+              // The window label leads: the provider name alone leaves
+              // ChatGPT's 5-hour and weekly rows indistinguishable.
+              Text(entry.window ?? entry.provider)
+                .font(.system(size: 10, weight: .medium))
+                .lineLimit(1)
+              if entry.window != nil {
+                Text(entry.provider)
+                  .font(.system(size: 8.5))
+                  .foregroundStyle(routerMuted)
+                  .lineLimit(1)
+              }
+            }
             Spacer(minLength: 6)
-            Text(usageResetCaption(entry.date))
-              .font(.system(size: 9))
-              .foregroundStyle(routerMuted)
+            VStack(alignment: .trailing, spacing: 1) {
+              Text(resetCountdownLabel(entry.date))
+                .font(.system(size: 10, weight: .semibold))
+                .monospacedDigit()
+              Text(resetClockLabel(entry.date))
+                .font(.system(size: 8.5))
+                .foregroundStyle(routerMuted)
+            }
           }
         }
       }
     }
   }
 
-  private var quotaResets: [(id: String, title: String, date: Date)] {
+  private var quotaResets: [(id: String, providerID: String, provider: String, window: String?, date: Date)] {
     store.visibleUsageCards.compactMap { card in
       guard let date = card.resetDate else { return nil }
-      return (id: card.id, title: card.title, date: date)
+      return (
+        id: card.id,
+        providerID: card.providerID,
+        provider: card.title,
+        window: card.kindLabel,
+        date: date
+      )
     }
   }
 
@@ -6325,6 +6347,45 @@ func compactTokenCount(_ value: Double) -> String {
 
 func usageResetCaption(_ date: Date) -> String {
   "Resets \(date.formatted(.dateTime.month(.abbreviated).day().hour().minute()))"
+}
+
+// How long until a quota window reopens -- the number people actually scan
+// the reset list for. The absolute clock time is resetClockLabel's job.
+// `chinese` is a parameter (not read inline) so tests stay deterministic while
+// the Tray language suite mutates the process-wide selection in parallel.
+func resetCountdownLabel(
+  _ date: Date,
+  now: Date = Date(),
+  chinese: Bool = RouterLanguage.isSimplifiedChinese
+) -> String {
+  let seconds = date.timeIntervalSince(now)
+  if seconds <= 0 { return chinese ? "即将重置" : "resets soon" }
+  let minutes = Int(seconds / 60)
+  if minutes < 60 {
+    return chinese ? "\(minutes) 分钟后" : "in \(minutes)m"
+  }
+  let hours = minutes / 60
+  if hours < 24 {
+    return chinese
+      ? "\(hours) 小时 \(minutes % 60) 分后"
+      : "in \(hours)h \(minutes % 60)m"
+  }
+  return chinese
+    ? "\(hours / 24) 天 \(hours % 24) 小时后"
+    : "in \(hours / 24)d \(hours % 24)h"
+}
+
+// Just enough calendar context for the countdown: time today, weekday inside
+// the coming week (a weekly window's whole range), month and day beyond it
+// (monthly windows).
+func resetClockLabel(_ date: Date, now: Date = Date()) -> String {
+  if Calendar.current.isDate(date, inSameDayAs: now) {
+    return date.formatted(.dateTime.hour().minute())
+  }
+  if date.timeIntervalSince(now) < 7 * 24 * 3600 {
+    return date.formatted(.dateTime.weekday(.abbreviated).hour().minute())
+  }
+  return date.formatted(.dateTime.month(.abbreviated).day().hour().minute())
 }
 
 private struct StatusBeacon: View {

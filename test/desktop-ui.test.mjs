@@ -43,6 +43,21 @@ test("quota windows use one weekly label and a distinct five-hour label", () => 
   });
 });
 
+test("monthly quota windows keep their own label instead of being dropped", () => {
+  assert.deepEqual(quotaWindow({ label: "Monthly limit" }), {
+    key: "monthly",
+    label: "Monthly limit",
+  });
+  assert.deepEqual(quotaWindow({ label: "Monthly subscription" }), {
+    key: "monthly",
+    label: "Monthly limit",
+  });
+  assert.deepEqual(quotaWindow({ windowDurationMins: 43_200 }), {
+    key: "monthly",
+    label: "Monthly limit",
+  });
+});
+
 test("quota cards omit unconfigured providers and de-duplicate synonymous windows", () => {
   const cards = buildQuotaCards({
     providerSetup: {
