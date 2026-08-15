@@ -2588,6 +2588,7 @@ test("API forwarder routes Qwen plan models without unsupported parameters", asy
       ["qwen-plan-qwen3-8-max-preview", "qwen3.8-max-preview", undefined],
       ["qwen-plan-qwen3-6-flash", "qwen3.6-flash", undefined],
       ["qwen-plan-deepseek-v4-pro", "deepseek-v4-pro", "high"],
+      ["qwen-plan-deepseek-v4-pro-0813", "deepseek-v4-pro-0813", "high"],
       ["qwen-plan-deepseek-v4-flash-0731", "deepseek-v4-flash-0731", "high"],
       ["qwen-plan-glm-5-2", "glm-5.2", "high"],
     ]) {

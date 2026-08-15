@@ -78,6 +78,9 @@ export function quotaWindow(metric = {}) {
   if (label.includes("week") || minutes === 10_080) {
     return { key: "weekly", label: t("usage.weeklyLimit") };
   }
+  if (label.includes("month") || minutes === 43_200) {
+    return { key: "monthly", label: t("usage.monthlyLimit") };
+  }
   return null;
 }
 

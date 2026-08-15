@@ -118,6 +118,7 @@ test("provider registry exposes configured API and OAuth model families", () => 
       "opencode-go-messages/qwen3.8-max",
       "opencode-go-responses/gpt-5.6-luna",
       "qwen-plan/deepseek-v4-flash-0731",
+      "qwen-plan/deepseek-v4-pro-0813",
       "qwen-plan/deepseek-v4-pro",
       "qwen-plan/glm-5.2",
       "qwen-plan/qwen3.6-flash",

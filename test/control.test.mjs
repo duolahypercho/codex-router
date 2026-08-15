@@ -647,3 +647,28 @@ test("the harness target appears only once its route has been published", () => 
     rmSync(stateDir, { recursive: true, force: true });
   }
 });
+
+test("the tray usage advertises rebuild alongside the supervised actions", () => {
+  const stateDir = mkdtempSync(path.join(os.tmpdir(), "control-tray-usage-"));
+  try {
+    assert.throws(
+      () =>
+        execFileSync(
+          process.execPath,
+          [path.join(root, "src", "control.mjs"), "tray", "bogus"],
+          {
+            cwd: root,
+            encoding: "utf8",
+            stdio: ["ignore", "pipe", "pipe"],
+            env: { ...process.env, MODEL_ROUTER_STATE_DIR: stateDir },
+          },
+        ),
+      (error) => {
+        assert.match(String(error.stderr), /Usage: control tray enable\|disable\|status\|restart\|rebuild/);
+        return true;
+      },
+    );
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});

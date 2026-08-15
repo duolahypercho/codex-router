@@ -2,14 +2,14 @@
   "version": 1,
   "models": [
     {
-      "slug": "qwen-plan/deepseek-v4-flash-0731",
-      "gatewayModel": "qwen-plan-deepseek-v4-flash-0731",
-      "upstreamModel": "deepseek-v4-flash-0731",
+      "slug": "qwen-plan/deepseek-v4-pro-0813",
+      "gatewayModel": "qwen-plan-deepseek-v4-pro-0813",
+      "upstreamModel": "deepseek-v4-pro-0813",
       "provider": "qwen-plan",
       "listed": true,
-      "displayName": "DeepSeek V4 Flash (Qwen Plan)",
-      "description": "DeepSeek V4 Flash (0731) served through an Alibaba Model Studio Token or Coding Plan subscription; faster and cheaper than V4 Pro.",
-      "priority": 19,
+      "displayName": "DeepSeek V4 Pro 0813 (Qwen Plan)",
+      "description": "DeepSeek V4 Pro (0813 snapshot) served through an Alibaba Model Studio Token or Coding Plan subscription; Alibaba lists it separately from the original deepseek-v4-pro.",
+      "priority": 18,
       "defaultEffort": "high",
       "reasoningLevels": [
         {
@@ -27,7 +27,7 @@
         "text"
       ],
       "requestProfile": "qwen-plan",
-      "compHash": "qwen-plan-deepseek-v4-flash-0731-v1"
+      "compHash": "qwen-plan-deepseek-v4-pro-0813-v1"
     }
   ]
 }

@@ -594,13 +594,12 @@ compacted after the model has acted on them. The four newest tool results stay
 intact, and each compacted result keeps a hash, head/tail evidence, and an exact
 rerun instruction.
 
-This is **experimental and off by default.** It rewrites what the model sees
-mid-conversation, and its savings figures are still being validated against
-provider-billed tokens, so it is opted into rather than discovered after it has
-already altered a session. Turning it on is remembered: a stored answer is kept
-verbatim and is never re-defaulted by a later release.
+This is **off by default.** It rewrites what the model sees mid-conversation,
+so it is opted into rather than discovered after it has already altered a
+session. Turning it on is remembered: a stored answer is kept verbatim and is
+never re-defaulted by a later release.
 
-Toggle **Compact old tool results (experimental)** in the router Settings;
+Toggle **Compact old tool results** in the router Settings;
 the next external-model request sees the change without restarting Codex or the
 router. The equivalent CLI commands are `./bin/control tool-result-aging on`,
 `off`, and `status`.

@@ -9,7 +9,7 @@
       "listed": true,
       "displayName": "GLM-5.2 (Qwen Plan)",
       "description": "Zhipu GLM-5.2 served through an Alibaba Model Studio Token or Coding Plan subscription rather than a separate Z.ai plan key.",
-      "priority": 19,
+      "priority": 20,
       "defaultEffort": "max",
       "reasoningLevels": [
         {

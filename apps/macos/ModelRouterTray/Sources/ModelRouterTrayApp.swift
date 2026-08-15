@@ -1998,21 +1998,34 @@ final class RouterStore: ObservableObject {
     return routerLocalized("Needs setup")
   }
 
-  // Restarting the companion means killing the process that is asking for it,
-  // so the request has to outlive the caller. `control tray restart` hands the
-  // job to launchd (`launchctl kickstart -k`), which has already committed to
-  // the relaunch by the time it signals this process -- the signal is the
-  // consequence of the request, not a race with it. If this process dies before
-  // the reply is read, the plist still covers it: KeepAlive's
-  // `SuccessfulExit: false` restarts the agent after any abnormal exit, so the
-  // tray cannot end up dead either way. Only the failure path can be reported,
+  // Restart rebuilds both halves and brings them back up: maintenance pulls
+  // the managed install to origin/main and verifies it (reinstalling the
+  // service when anything landed), the explicit service restart covers the
+  // nothing-to-update case, and the tray rebuild goes last because it replaces
+  // and relaunches the process that is asking. A failed update must not turn
+  // Restart into a no-op -- an offline machine still deserves a restart -- so
+  // its error is carried into the message but the restart steps still run.
+  // Each step outlives this process: maintenance may itself relaunch a stale
+  // tray, and the rebuild launcher quits this tray only after the staged
+  // bundle passes verification, with launchd's `SuccessfulExit: false`
+  // covering any abnormal exit. Only the failure path can be reported,
   // because a success takes the window that would have shown it.
-  func restartTray() async {
-    message = routerLocalized("Restarting the tray…")
+  func restartRouter() async {
+    message = routerLocalized("Restarting…")
+    var updateFailure: String?
     do {
-      _ = try await runControl(arguments: ["tray", "restart"])
+      _ = try await runControl(arguments: ["maintenance"])
     } catch {
-      message = routerFormat("Tray restart failed: %@", error.localizedDescription)
+      updateFailure = error.localizedDescription
+    }
+    do {
+      _ = try await runControl(arguments: ["service", "restart"])
+      _ = try await runControl(arguments: ["tray", "rebuild"])
+      if let updateFailure {
+        message = routerFormat("Restarted without updating: %@", updateFailure)
+      }
+    } catch {
+      message = routerFormat("Restart failed: %@", error.localizedDescription)
     }
   }
 
@@ -3231,26 +3244,48 @@ private struct TrayView: View {
 
     if !quotaResets.isEmpty {
       sectionLabel(routerLocalized("Quota resets"), detail: "\(quotaResets.count)")
-      VStack(spacing: 5) {
+      VStack(spacing: 6) {
         ForEach(quotaResets, id: \.id) { entry in
-          HStack {
-            Text(entry.title)
-              .font(.system(size: 10, weight: .medium))
-              .lineLimit(1)
+          HStack(spacing: 8) {
+            ProviderIcon(providerID: entry.providerID, size: 14)
+            VStack(alignment: .leading, spacing: 1) {
+              // The window label leads: the provider name alone leaves
+              // ChatGPT's 5-hour and weekly rows indistinguishable.
+              Text(entry.window ?? entry.provider)
+                .font(.system(size: 10, weight: .medium))
+                .lineLimit(1)
+              if entry.window != nil {
+                Text(entry.provider)
+                  .font(.system(size: 8.5))
+                  .foregroundStyle(routerMuted)
+                  .lineLimit(1)
+              }
+            }
             Spacer(minLength: 6)
-            Text(usageResetCaption(entry.date))
-              .font(.system(size: 9))
-              .foregroundStyle(routerMuted)
+            VStack(alignment: .trailing, spacing: 1) {
+              Text(resetCountdownLabel(entry.date))
+                .font(.system(size: 10, weight: .semibold))
+                .monospacedDigit()
+              Text(resetClockLabel(entry.date))
+                .font(.system(size: 8.5))
+                .foregroundStyle(routerMuted)
+            }
           }
         }
       }
     }
   }
 
-  private var quotaResets: [(id: String, title: String, date: Date)] {
+  private var quotaResets: [(id: String, providerID: String, provider: String, window: String?, date: Date)] {
     store.visibleUsageCards.compactMap { card in
       guard let date = card.resetDate else { return nil }
-      return (id: card.id, title: card.title, date: date)
+      return (
+        id: card.id,
+        providerID: card.providerID,
+        provider: card.title,
+        window: card.kindLabel,
+        date: date
+      )
     }
   }
 
@@ -3416,7 +3451,7 @@ private struct TrayView: View {
       isDisabled: store.providerOperation != nil || store.signedRouting
     )
     settingRow(
-      title: routerLocalized("Compact old tool results (experimental)"),
+      title: routerLocalized("Compact old tool results"),
       detail: target.modelSettings?.toolResultAging?.environmentOverride == true
         ? routerLocalized("Forced off by CODEX_ROUTER_TOOL_RESULT_AGING=0")
         : (target.modelSettings?.toolResultAging?.stats?.savingsSummary
@@ -5327,11 +5362,10 @@ private struct TrayView: View {
       .foregroundStyle(routerAccent)
       .disabled(store.isRefreshing)
 
-      // Rebuilding the app replaces the bundle but leaves the running agent on
-      // the old binary, and quitting from here does not bring it back on a
-      // successful exit. This is the one control that closes that loop.
-      Button(routerLocalized("Restart Tray")) {
-        Task { await store.restartTray() }
+      // One control for "pick up the current code": update and reinstall the
+      // backend, restart the service, then rebuild and relaunch this tray.
+      Button(routerLocalized("Restart")) {
+        Task { await store.restartRouter() }
       }
       .buttonStyle(.plain)
       .font(.system(size: 11, weight: .medium))
@@ -6402,6 +6436,45 @@ func compactTokenCount(_ value: Double) -> String {
 
 func usageResetCaption(_ date: Date) -> String {
   "Resets \(date.formatted(.dateTime.month(.abbreviated).day().hour().minute()))"
+}
+
+// How long until a quota window reopens -- the number people actually scan
+// the reset list for. The absolute clock time is resetClockLabel's job.
+// `chinese` is a parameter (not read inline) so tests stay deterministic while
+// the Tray language suite mutates the process-wide selection in parallel.
+func resetCountdownLabel(
+  _ date: Date,
+  now: Date = Date(),
+  chinese: Bool = RouterLanguage.isSimplifiedChinese
+) -> String {
+  let seconds = date.timeIntervalSince(now)
+  if seconds <= 0 { return chinese ? "即将重置" : "resets soon" }
+  let minutes = Int(seconds / 60)
+  if minutes < 60 {
+    return chinese ? "\(minutes) 分钟后" : "in \(minutes)m"
+  }
+  let hours = minutes / 60
+  if hours < 24 {
+    return chinese
+      ? "\(hours) 小时 \(minutes % 60) 分后"
+      : "in \(hours)h \(minutes % 60)m"
+  }
+  return chinese
+    ? "\(hours / 24) 天 \(hours % 24) 小时后"
+    : "in \(hours / 24)d \(hours % 24)h"
+}
+
+// Just enough calendar context for the countdown: time today, weekday inside
+// the coming week (a weekly window's whole range), month and day beyond it
+// (monthly windows).
+func resetClockLabel(_ date: Date, now: Date = Date()) -> String {
+  if Calendar.current.isDate(date, inSameDayAs: now) {
+    return date.formatted(.dateTime.hour().minute())
+  }
+  if date.timeIntervalSince(now) < 7 * 24 * 3600 {
+    return date.formatted(.dateTime.weekday(.abbreviated).hour().minute())
+  }
+  return date.formatted(.dateTime.month(.abbreviated).day().hour().minute())
 }
 
 private struct StatusBeacon: View {

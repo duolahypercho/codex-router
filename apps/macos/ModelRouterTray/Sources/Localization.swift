@@ -79,7 +79,6 @@ func routerFormat(_ english: String, _ arguments: CVarArg...) -> String {
 enum RouterChineseText {
   static let values: [String: String] = [
     "Uninstalling": "正在卸载",
-    "Compact old tool results (experimental)": "压缩旧工具结果（实验性）",
     "Off by default · replaces consumed tool results on external models": "默认关闭 · 在外部模型上替换已使用的工具结果",
     "Fix Codex Router installation": "修复 Codex 路由安装",
     "Language": "语言",
@@ -229,9 +228,10 @@ enum RouterChineseText {
     "Refresh": "刷新",
     "Refreshing…": "刷新中…",
     "%d accounts": "%d 个账号",
-    "Restart Tray": "重启托盘",
-    "Restarting the tray…": "正在重启托盘…",
-    "Tray restart failed: %@": "重启托盘失败：%@",
+    "Restart": "重启",
+    "Restarting…": "正在重启…",
+    "Restart failed: %@": "重启失败：%@",
+    "Restarted without updating: %@": "已重启但未更新：%@",
     "Awaiting data": "等待数据",
     "Quit": "退出",
     "API key": "API 密钥",
