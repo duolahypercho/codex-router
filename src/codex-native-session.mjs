@@ -163,6 +163,21 @@ export function nativeSessionAvailable() {
  * from "not signed in".
  */
 export function nativeSessionStatus() {
+  // Whether auth.json exists, and how old it is, is metadata about a
+  // credential this process promised not to look at. Reporting it absent is
+  // the same answer every other guarded reader gives under --no-discovery.
+  if (discoveryDisabled()) {
+    return {
+      path: CODEX_AUTH_PATH,
+      present: false,
+      usable: false,
+      hasAccountId: false,
+      expired: false,
+      expiresInHours: undefined,
+      ageHours: undefined,
+      fallbackEnabled: false,
+    };
+  }
   const present = existsSync(CODEX_AUTH_PATH);
   const session = present ? readSession() : undefined;
   let ageHours;

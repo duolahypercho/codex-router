@@ -66,7 +66,10 @@ test("disabling discovery empties the configured set and blinds every reader", a
   const { kimiOAuthStatus } = await import("../src/oauth-status.mjs");
   const { grokOAuthStatus } = await import("../src/grok-oauth-status.mjs");
   const { codexAuthStatus } = await import("../src/codex-binary.mjs");
-  const { nativeSessionFallbackEnabled } = await import("../src/codex-native-session.mjs");
+  const { nativeSessionFallbackEnabled, nativeSessionStatus } = await import(
+    "../src/codex-native-session.mjs"
+  );
+  const { readCodexAccountUsage } = await import("../src/codex-account-usage.mjs");
   try {
     process.env.CODEX_ROUTER_NO_DISCOVERY = "1";
     // Even keyless local backends drop out: "configured" feeds the default
@@ -80,6 +83,29 @@ test("disabling discovery empties the configured set and blinds every reader", a
       reason: "discovery-disabled",
     });
     assert.equal(nativeSessionFallbackEnabled(), false);
+
+    // Even the metadata is withheld: whether auth.json exists, and how old it
+    // is, is knowledge about a credential this process promised not to read.
+    const session = nativeSessionStatus();
+    assert.equal(session.present, false);
+    assert.equal(session.usable, false);
+    assert.equal(session.ageHours, undefined);
+    assert.equal(session.fallbackEnabled, false);
+
+    // The account-usage probe spawns `codex app-server` and reads the
+    // signed-in ChatGPT account; it must refuse before any spawn.
+    let spawned = false;
+    await assert.rejects(
+      readCodexAccountUsage({
+        binary: "codex",
+        spawnImpl: () => {
+          spawned = true;
+          throw new Error("must not spawn");
+        },
+      }),
+      /discovery is disabled/i,
+    );
+    assert.equal(spawned, false, "the account probe spawned despite the kill-switch");
   } finally {
     delete process.env.CODEX_ROUTER_NO_DISCOVERY;
   }
