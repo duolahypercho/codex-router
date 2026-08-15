@@ -10,6 +10,7 @@ import path from "node:path";
 
 import { STATE_DIR } from "./paths.mjs";
 import { canonicalProviderId } from "./provider-selection.mjs";
+import { acceptedInputTokens } from "./context-window-drift.mjs";
 
 export const USAGE_EVENTS_PATH = path.join(STATE_DIR, "usage-events.jsonl");
 
@@ -399,4 +400,33 @@ export function recentUsageEvents({ sinceMs = 24 * 60 * 60 * 1000, limit = 1_000
   } catch {
     return [];
   }
+}
+
+// Highest prompt each model has been observed to have accepted, scanned across
+// the whole ledger rather than a recent window: the turn that disproves a
+// declared context window may be months old and must not age out of the
+// evidence. Streamed line by line with a cheap pre-filter, because the ledger
+// only grows and parsing every row to find a maximum is wasteful.
+export function observedInputCeilings() {
+  const highest = new Map();
+  if (!existsSync(USAGE_EVENTS_PATH)) return highest;
+  try {
+    for (const line of usageEventLines()) {
+      if (!line.includes('"inputTokens"')) continue;
+      // A substituted estimate cannot disprove a provider's own limit.
+      if (line.includes('"estimatedInputTokens"')) continue;
+      let event;
+      try {
+        event = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      const accepted = acceptedInputTokens(event);
+      if (accepted === undefined) continue;
+      if (accepted > (highest.get(event.model) ?? 0)) highest.set(event.model, accepted);
+    }
+  } catch {
+    // Telemetry must never break a status surface; report what was readable.
+  }
+  return highest;
 }

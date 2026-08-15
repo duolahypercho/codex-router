@@ -54,6 +54,8 @@ import {
   readVisionBridgeSettings,
   visionBridgeConfigured,
 } from "./vision-bridge-state.mjs";
+import { contextWindowDrift, describeContextWindowDrift } from "./context-window-drift.mjs";
+import { observedInputCeilings } from "./usage-events.mjs";
 import { venvRuntimeProblem } from "./venv-runtime.mjs";
 import {
   dependencyRepairHint,
@@ -459,6 +461,20 @@ add(
     ? `${unroutable.length} offered model(s) have no gateway route: ${unroutable.join(", ")}`
     : `${catalogRoutedModels.length} routed models`,
   "Run ./bin/doctor --fix from the owning checkout, then fully quit and reopen Codex.",
+);
+// Warn, not fail: an understated window still routes, and the operator may be
+// running a plan whose real ceiling is genuinely lower than the vendor's. What
+// they cannot do is notice it on their own -- the symptom is a session that
+// compacts and restarts its own work forever, which reads as a bad model
+// rather than a bad number.
+const windowDrift = contextWindowDrift(catalogRoutedModels, observedInputCeilings());
+add(
+  windowDrift.length ? "warn" : "ok",
+  "Context windows match observed traffic",
+  windowDrift.length
+    ? describeContextWindowDrift(windowDrift)
+    : `${catalogRoutedModels.length} routed models, no provider has exceeded its declared window`,
+  "The provider accepted more than the declared contextWindow, so the entry understates the model. Raise contextWindow (and autoCompact with it) in this model's config entry.",
 );
 // "Off" is a normal state and reports ok. Enabled with no resolvable engine is
 // the broken one: Codex would keep offering the paste while nothing could read
