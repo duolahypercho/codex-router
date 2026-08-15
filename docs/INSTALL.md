@@ -208,6 +208,63 @@ replace an unmarked user-owned `openai_base_url`, `model_catalog_json`, or agent
 concurrency value. Disabling the router removes only its marked concurrency
 default; a user-owned value remains intact.
 
+## Credential-free (idle) install
+
+For validating the router's install, lifecycle, network, and uninstall
+behavior before trusting it with any credential, both installers accept an
+explicit idle mode:
+
+```sh
+./install.sh --target codex --no-provider --no-discovery --no-tray
+```
+
+```powershell
+./install.ps1 -Target codex -NoProvider -NoDiscovery -NoTray
+```
+
+`--no-provider` installs with an explicit empty provider selection: no
+provider is selected, no credential is prompted for or written, and the
+default-provider discovery scan is skipped. It conflicts with `--guided`,
+`--providers`, and the key-prompt flags. On its own it does not disable
+credential discovery — the doctor and tray may still look at what exists, and
+Codex's native passthrough keeps working exactly as it does for an operator
+who hides every provider by hand.
+
+`--no-discovery` (requires `--no-provider`) additionally persists a discovery
+kill-switch in the state directory (`discovery-mode.json`). While it is set:
+
+- Provider credential files, the macOS Keychain, other CLIs' OAuth and
+  session files, and Codex's own `auth.json` are never read.
+- The `codex login status` sign-in probe is never spawned against the real
+  `CODEX_HOME`. (The catalog build still runs `codex debug models --bundled`,
+  which reads a static model list, not credentials.)
+- The merged catalog publishes no models, so Codex's picker is empty by
+  design while pointed at the router.
+- Codex traffic reaching the router gets a local
+  `503 router_idle_no_provider` error instead of native or provider
+  forwarding. Nothing leaves the machine; every listener stays on
+  `127.0.0.1` as always.
+
+The full lifecycle works in this state:
+
+```sh
+./bin/model-router codex status
+./bin/model-router codex doctor    # exits 0; idle state reports as warnings
+./bin/model-router codex stop
+./bin/model-router codex start     # foreground; the service restarts it otherwise
+./bin/model-router codex uninstall
+```
+
+Uninstall is the undo path: it removes the managed config block and, once no
+client integration remains, the background service and its LaunchAgent.
+`rollback` is not — it reverts the managed *source checkout* to the previous
+revision, not the installation.
+
+To leave idle mode, re-run setup or the installer without the flags (for
+example `./bin/setup --guided`); every setup run rewrites the discovery
+marker, so a normal install re-enables discovery. `CODEX_ROUTER_NO_DISCOVERY=1`
+(or `=0`) overrides the marker either way for one process.
+
 ## Recognized older installations
 
 Read-only detection:

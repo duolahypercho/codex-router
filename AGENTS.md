@@ -852,6 +852,28 @@ minutes later. Do not quietly drop the label because a check happened to pass.
   directories.
 - Do not restart or quit the Codex App from the installation task.
 
+## Discovery-disabled means no credential reader touches anything
+
+An install made with `--no-provider --no-discovery` persists a discovery
+kill-switch (`discovery-mode.json`, read through
+`src/discovery-mode.mjs` `discoveryDisabled()`, overridable with
+`CODEX_ROUTER_NO_DISCOVERY=1|0`). While it is set, the promise is absolute:
+no provider credential file, macOS Keychain item, other CLI's OAuth or
+session file, or Codex `auth.json` is read, no `codex login status` probe
+runs against the real `CODEX_HOME`, and traffic gets a local
+`503 router_idle_no_provider` instead of provider or native forwarding.
+
+1. Every new credential reader, sign-in probe, or session consumer must
+   consult `discoveryDisabled()` before its first read or spawn and report
+   "nothing found" rather than throwing. The guard belongs at the reader, not
+   only at its current callers — call graphs move.
+2. An explicitly written empty provider selection is a deliberate state, not
+   an error: `ensure-configured` reports it as idle, the doctor warns instead
+   of failing, and installing or updating on top of it must keep working.
+3. Never select a provider, re-enable discovery, or clear the marker on the
+   user's behalf. Re-running setup without the flags is the only exit path,
+   and it is the operator's to take.
+
 ## The `codex` shim is opt-in and must never break `codex`
 
 `src/codex-shim.mjs` can put a wrapper named `codex` on the user's PATH so the

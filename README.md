@@ -97,6 +97,11 @@ official `kimi login`, prompts invisibly for provider credentials, installs a pe
 background service, and verifies every local layer. It never makes a paid test
 request unless `--smoke-test` is explicitly selected.
 
+To validate the install and uninstall lifecycle before trusting the router
+with any credential, pass `--no-provider --no-discovery`: the router installs
+idle, reads no credential from anywhere, and answers Codex traffic with a
+local error. See [docs/INSTALL.md](docs/INSTALL.md#credential-free-idle-install).
+
 Requirements:
 
 - The Codex App or CLI.
