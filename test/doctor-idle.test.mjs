@@ -14,7 +14,7 @@ const callerSecret = "doctor-idle-caller-capability-with-sufficient-length";
 // session file must be skipped, so the tombstone staying absent is part of
 // what this file proves. Schema probes that point CODEX_HOME at a scratch
 // directory read no credentials and are allowed through.
-function writeCodexStub(directory, loginSentinel, realHome) {
+function writeCodexStub(directory, loginSentinel, realHome, accountSentinel) {
   const windows = process.platform === "win32";
   const target = path.join(directory, windows ? "codex-idle.cmd" : "codex-idle");
   const models = JSON.stringify({
@@ -22,15 +22,19 @@ function writeCodexStub(directory, loginSentinel, realHome) {
       { slug: "gpt-5.6-sol", display_name: "GPT-5.6 Sol", visibility: "list", priority: 10 },
     ],
   });
+  // `debug models` and `debug models --bundled` are different promises: the
+  // bare form answers with the signed-in account's catalog, the --bundled
+  // form with the binary's static list. The stub records every bare call so
+  // the no-discovery tests can prove only the bundled form ever ran.
   writeFileSync(
     target,
     windows
-      ? `@echo off\r\nif "%1"=="--version" (echo codex-cli 99.0.0& exit /b 0)\r\nif "%1"=="login" (if "%CODEX_HOME%"=="${realHome}" echo probed> "${loginSentinel}"\r\nexit /b 0)\r\nif "%1"=="debug" (echo ${models}& exit /b 0)\r\nexit /b 1\r\n`
+      ? `@echo off\r\nif "%1"=="--version" (echo codex-cli 99.0.0& exit /b 0)\r\nif "%1"=="login" (if "%CODEX_HOME%"=="${realHome}" echo probed> "${loginSentinel}"\r\nexit /b 0)\r\nif "%1"=="debug" if not "%3"=="--bundled" echo probed>> "${accountSentinel}"\r\nif "%1"=="debug" (echo ${models}& exit /b 0)\r\nexit /b 1\r\n`
       : `#!/bin/sh
 case "$1" in
   --version) echo 'codex-cli 99.0.0' ;;
   login) [ "\${CODEX_HOME:-}" = '${realHome}' ] && echo probed > '${loginSentinel}'; exit 0 ;;
-  debug) printf '%s\\n' '${models}' ;;
+  debug) [ "\${3:-}" = '--bundled' ] || echo probed >> '${accountSentinel}'; printf '%s\\n' '${models}' ;;
   *) exit 1 ;;
 esac
 `,
@@ -66,27 +70,33 @@ function stageIdleHome() {
     { mode: 0o600 },
   );
   const loginSentinel = path.join(codexHome, "login-probed");
+  const accountSentinel = path.join(codexHome, "account-catalog-probed");
   const env = {
     ...process.env,
-    CODEX_BIN: writeCodexStub(codexHome, loginSentinel, codexHome),
+    CODEX_BIN: writeCodexStub(codexHome, loginSentinel, codexHome, accountSentinel),
     CODEX_HOME: codexHome,
     CODEX_ROUTER_PORT: "46193",
     CODEX_ROUTER_STATE_DIR: stateDir,
     MODEL_ROUTER_STATE_DIR: stateDir,
     MODEL_ROUTER_TARGET: "codex",
   };
-  return { codexHome, stateDir, env, loginSentinel };
+  return { codexHome, stateDir, env, loginSentinel, accountSentinel };
 }
 
 test(
   "an idle --no-provider --no-discovery install passes the doctor at warn",
   { timeout: 60_000 },
   () => {
-    const { codexHome, env, loginSentinel } = stageIdleHome();
+    const { codexHome, env, loginSentinel, accountSentinel } = stageIdleHome();
     env.CODEX_ROUTER_NO_DISCOVERY = "1";
     try {
       const catalog = child("catalog.mjs", ["--refresh-native"], env);
       assert.equal(catalog.status, 0, catalog.stderr);
+      assert.equal(
+        existsSync(accountSentinel),
+        false,
+        "the catalog capture spawned the account-aware `codex debug models`",
+      );
       const gateway = child("litellm-config.mjs", [], env);
       assert.equal(gateway.status, 0, gateway.stderr);
       const enabled = child("config-manager.mjs", ["enable"], env);
@@ -120,6 +130,11 @@ test(
       assert.equal(byName.get("Codex sign-in probe").status, "ok");
       assert.equal(byName.get("Codex sign-in probe").detail, "discovery-disabled");
       assert.equal(existsSync(loginSentinel), false, "the sign-in probe still spawned codex login");
+      assert.equal(
+        existsSync(accountSentinel),
+        false,
+        "something spawned the account-aware `codex debug models` under --no-discovery",
+      );
 
       // The idle state fails nothing that touches providers; anything failed
       // must be environmental -- no running service, no installed skill pack,

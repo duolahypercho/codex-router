@@ -964,7 +964,18 @@ if (codexTarget) {
   );
 }
 
-if (codex && catalogOk && routedTransportActive) {
+if (codex && catalogOk && routedTransportActive && credentialDiscoveryOff) {
+  // `debug models` without --bundled answers with the signed-in account's
+  // catalog, which a discovery-disabled install promised never to consult.
+  // The on-disk catalog was already verified above; the only thing skipped
+  // is the is-Codex-restarted staleness probe.
+  add(
+    "ok",
+    "Codex model catalog",
+    "on-disk catalog verified; the account-aware staleness probe is skipped while discovery is off",
+    "Re-enable discovery to restore the startup staleness check.",
+  );
+} else if (codex && catalogOk && routedTransportActive) {
   try {
     const parsed = JSON.parse(
       runCodex(["debug", "models"], {

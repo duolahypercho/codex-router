@@ -81,7 +81,12 @@ function codexIntegrationInstalled() {
   try {
     return managedMarkerPattern.test(readFileSync(CONFIG_PATH, "utf8"));
   } catch {
-    return false;
+    // The file exists and cannot be read — Codex mid-write, an AV lock, a
+    // permission hiccup. This answer feeds retire-the-service-if-unused, so
+    // "cannot tell" must count as installed: tearing down the shared service
+    // because a read flaked is the unrecoverable direction, while keeping it
+    // alive one cycle longer costs nothing.
+    return true;
   }
 }
 

@@ -873,6 +873,18 @@ runs against the real `CODEX_HOME`, and traffic gets a local
 3. Never select a provider, re-enable discovery, or clear the marker on the
    user's behalf. Re-running setup without the flags is the only exit path,
    and it is the operator's to take.
+4. The account-aware `codex debug models` (and `models_cache.json`, which is
+   that same catalog written to disk) counts as an account read: the catalog
+   capture and the doctor's staleness probe use only `debug models --bundled`
+   while the switch is set. `test/doctor-idle.test.mjs` proves the bare form
+   never spawns.
+5. A corrupt `discovery-mode.json` deliberately reads as discovery **on** —
+   the opposite direction of the vision-bridge precedent, which fails toward
+   off. There the risk is spending quota nobody approved; here the marker
+   only ever exists on a machine that installed with `--no-provider`, where
+   resuming reads finds no credentials to spend, while failing toward "off"
+   on a credentialed install would silently blind every provider over one
+   damaged file. `test/discovery-mode.test.mjs` pins the choice.
 
 ## The `codex` shim is opt-in and must never break `codex`
 

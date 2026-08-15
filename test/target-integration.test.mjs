@@ -86,3 +86,19 @@ test("the harness catalog snapshot still marks the dsh integration", () => {
 test.after(() => {
   rmSync(testRoot, { recursive: true, force: true });
 });
+
+test("a config that exists but cannot be read still counts as installed", () => {
+  try {
+    // This answer feeds retire-the-service-if-unused. Codex mid-write, an AV
+    // lock, or a permission hiccup makes the read throw while the integration
+    // is plainly still there; "cannot tell" must keep the shared service
+    // alive rather than tear it down over a flaked read. A directory at the
+    // config path throws EISDIR on every platform, root included, which makes
+    // the unreadable case portable to test.
+    mkdirSync(CONFIG_PATH, { recursive: true });
+    assert.deepEqual(installedTargets(), ["codex"]);
+  } finally {
+    rmSync(CONFIG_PATH, { recursive: true, force: true });
+    clearStagedFiles();
+  }
+});
