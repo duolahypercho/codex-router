@@ -399,6 +399,21 @@ function modelProblem(model, providers, slugs, gatewayModels) {
     return `model ${model.slug} has an invalid supportsApplyPatchTool`;
   }
   if (
+    model.supportsParallelToolCalls !== undefined &&
+    typeof model.supportsParallelToolCalls !== "boolean"
+  ) {
+    return `model ${model.slug} has an invalid supportsParallelToolCalls`;
+  }
+  if (
+    model.experimentalSupportedTools !== undefined &&
+    (!Array.isArray(model.experimentalSupportedTools) ||
+      model.experimentalSupportedTools.some(
+        (tool) => typeof tool !== "string" || !tool.trim(),
+      ))
+  ) {
+    return `model ${model.slug} has invalid experimentalSupportedTools`;
+  }
+  if (
     model.supportsImageDetailOriginal !== undefined &&
     typeof model.supportsImageDetailOriginal !== "boolean"
   ) {

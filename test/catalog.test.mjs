@@ -202,6 +202,20 @@ test("routed models advertise search and image detail only when the registry opt
   assert.equal(standalone.supports_search_tool, true);
 });
 
+test("routed models can explicitly narrow inherited tool capabilities", () => {
+  const plain = routedModel(template, grok);
+  assert.equal("supports_parallel_tool_calls" in plain, false);
+  assert.equal("experimental_supported_tools" in plain, false);
+
+  const narrowed = routedModel(template, {
+    ...grok,
+    supportsParallelToolCalls: false,
+    experimentalSupportedTools: [],
+  });
+  assert.equal(narrowed.supports_parallel_tool_calls, false);
+  assert.deepEqual(narrowed.experimental_supported_tools, []);
+});
+
 test("routed service tiers are explicit and never inherit a paid default", () => {
   const plain = routedModel(template, grok);
   assert.deepEqual(plain.service_tiers, []);

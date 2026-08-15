@@ -126,6 +126,8 @@ test("provider registry exposes configured API and OAuth model families", () => 
       "qwen-plan/qwen3.7-plus",
       "qwen-plan/qwen3.8-max-preview",
       "qwen-plan/qwen3.8-max",
+      "xiaomi-mimo/mimo-v2.5-pro",
+      "xiaomi-mimo/mimo-v2.5",
       "zai-api/glm-4.7",
       "zai-api/glm-5.2",
       "zai-api/glm-5.3",
@@ -182,6 +184,12 @@ test("provider registry exposes configured API and OAuth model families", () => 
   assert.equal(PROVIDERS.get("commandcode").baseUrl, "https://api.commandcode.ai/provider/v1");
   assert.equal(PROVIDERS.get("commandcode-messages").baseUrl, "https://api.commandcode.ai/provider/v1");
   assert.equal(PROVIDERS.get("commandcode-messages").protocol, "anthropic");
+  // Xiaomi's direct API is OpenAI-compatible chat, not the Responses gateway.
+  assert.equal(PROVIDERS.get("xiaomi-mimo").baseUrl, "https://api.xiaomimimo.com/v1");
+  assert.equal(PROVIDERS.get("xiaomi-mimo").baseUrlEnv, "XIAOMI_MIMO_API_BASE_URL");
+  assert.equal(PROVIDERS.get("xiaomi-mimo").protocol, "openai");
+  assert.deepEqual(PROVIDERS.get("xiaomi-mimo").credential.environment, ["MIMO_API_KEY"]);
+  assert.equal(PROVIDERS.get("xiaomi-mimo").credential.file, "xiaomi-mimo-api-key.secret");
   // The protocol variants are one selectable family: they declare the parent
   // whose credential and picker selection they follow.
   assert.equal(PROVIDERS.get("opencode-go").variantOf, undefined);
@@ -373,6 +381,7 @@ test("provider registry exposes configured API and OAuth model families", () => 
   const standaloneSearchSlugs = new Set([
     "deepseek/deepseek-v4-flash",
     "opencode-go/deepseek-v4-flash",
+    "xiaomi-mimo/mimo-v2.5",
   ]);
   for (const model of MODELS) {
     if (["grok-oauth/grok-4.5", "grok-oauth/grok-4.6"].includes(model.slug) || standaloneSearchSlugs.has(model.slug)) continue;
@@ -399,6 +408,7 @@ test("provider registry exposes configured API and OAuth model families", () => 
     "qwen-plan/qwen3.7-max",
     "qwen-plan/qwen3.8-max",
     "qwen-plan/qwen3.8-max-preview",
+    "xiaomi-mimo/mimo-v2.5",
   ]);
   for (const slug of originalDetailSlugs) {
     assert.ok(
@@ -476,6 +486,28 @@ test("Meta models opt out of the apply_patch custom tool", () => {
     assert.equal(MODEL_BY_SLUG.get(slug).supportsApplyPatchTool, false);
   }
   assert.equal(MODEL_BY_SLUG.get("grok-oauth/grok-4.5").supportsApplyPatchTool, undefined);
+});
+
+test("official Xiaomi MiMo routes advertise only verified capabilities", () => {
+  const vlm = MODEL_BY_SLUG.get("xiaomi-mimo/mimo-v2.5");
+  const pro = MODEL_BY_SLUG.get("xiaomi-mimo/mimo-v2.5-pro");
+  for (const model of [pro, vlm]) {
+    assert.equal(model.contextWindow, 1_048_576);
+    assert.equal(model.autoCompact, 996_147);
+    assert.equal(model.defaultEffort, "high");
+    assert.deepEqual(model.reasoningLevels, [
+      { effort: "high", description: "Deep reasoning" },
+    ]);
+    assert.equal(model.supportsReasoningSummaries, true);
+    assert.equal(model.supportsParallelToolCalls, false);
+    assert.deepEqual(model.experimentalSupportedTools, []);
+    assert.equal(model.supportsApplyPatchTool, false);
+  }
+  assert.deepEqual(pro.inputModalities, ["text"]);
+  assert.equal(pro.searchTool, undefined);
+  assert.deepEqual(vlm.inputModalities, ["text", "image"]);
+  assert.equal(vlm.supportsImageDetailOriginal, true);
+  assert.deepEqual(vlm.searchTool, { mode: "standalone" });
 });
 
 test("deprecated DeepSeek aliases remain routable but stay out of the picker", () => {

@@ -3494,6 +3494,52 @@ test("API forwarder strips web_search_options for Fireworks", async () => {
   }
 });
 
+test("API forwarder keeps Xiaomi MiMo web search options on chat completions", async () => {
+  const upstreamRequests = [];
+  const upstream = await mockServer(async (request, response) => {
+    upstreamRequests.push(await bodyJson(request));
+    json(response, 200, { choices: [] });
+  });
+  const forwarderPort = await openPort();
+  const forwarder = run("api-forwarder.mjs", {
+    CODEX_ROUTER_API_PORT: String(forwarderPort),
+    XIAOMI_MIMO_API_BASE_URL: `http://127.0.0.1:${upstream.port}/v1`,
+    MIMO_API_KEY: "TEST_MIMO_API_KEY",
+    CODEX_ROUTER_QUIET: "1",
+  });
+
+  try {
+    await waitFor(`http://127.0.0.1:${forwarderPort}/health`, forwarder, {
+      Authorization: `Bearer ${INTERNAL_KEY}`,
+    });
+    const response = await fetch(
+      `http://127.0.0.1:${forwarderPort}/v1/chat/completions`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${INTERNAL_KEY}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "xiaomi-mimo-mimo-v2-5",
+          web_search_options: { search_context_size: "medium" },
+          client_metadata: { workspace: "caller-owned" },
+          messages: [{ role: "user", content: "test" }],
+        }),
+      },
+    );
+    assert.equal(response.status, 200, forwarder.testErrors());
+    assert.equal(upstreamRequests[0].model, "mimo-v2.5");
+    assert.deepEqual(upstreamRequests[0].web_search_options, {
+      search_context_size: "medium",
+    });
+    assert.equal(upstreamRequests[0].client_metadata, undefined);
+  } finally {
+    await stopChild(forwarder);
+    await closeServer(upstream.server);
+  }
+});
+
 test("router strips Fireworks web_search_options on routed and compaction requests", async () => {
   const gatewayRequests = [];
   const gateway = await mockServer(async (request, response) => {

@@ -131,6 +131,8 @@ Linux installations support the Codex CLI.
 | DeepSeek V4 Pro (Ollama Cloud) | `ollama-cloud/deepseek-v4-pro` | Ollama Cloud API key |
 | DeepSeek V4 Flash (Ollama Cloud) | `ollama-cloud/deepseek-v4-flash` | Ollama Cloud API key |
 | MiniMax M3 | `minimax-token-plan/minimax-m3` | MiniMax Token Plan API key |
+| MiMo-V2.5 (Xiaomi API) | `xiaomi-mimo/mimo-v2.5` | Xiaomi MiMo API key |
+| MiMo-V2.5-Pro (Xiaomi API) | `xiaomi-mimo/mimo-v2.5-pro` | Xiaomi MiMo API key |
 | Qwen3.8 Max (Plan) | `qwen-plan/qwen3.8-max` | Alibaba Model Studio plan API key |
 | Qwen3.8 Max Preview (Plan) | `qwen-plan/qwen3.8-max-preview` | Alibaba Model Studio plan API key |
 | Qwen3.7 Max (Plan) | `qwen-plan/qwen3.7-max` | Alibaba Model Studio plan API key |
@@ -208,6 +210,14 @@ endpoint.
 npm install -g @xai-official/grok
 grok login --oauth
 ```
+
+MiMo (Xiaomi API) uses Xiaomi's official OpenAI-compatible endpoint at
+`https://api.xiaomimimo.com/v1`. Unlike MiMo reseller routes, the direct API
+serves `mimo-v2.5` and `mimo-v2.5-pro` through the standard
+`/chat/completions` surface, so requests never touch the Responses gateway.
+`mimo-v2.5` is verified for text/image input and Codex standalone web search;
+`mimo-v2.5-pro` is text-only. Store the key with
+`./bin/model-router codex provider-key xiaomi-mimo set`.
 
 Native GPT models continue to use Codex directly. There is no separate GPT or
 ChatGPT OAuth provider in the router.

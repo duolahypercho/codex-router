@@ -574,6 +574,15 @@ export function routedModel(template, model) {
     delete next.default_reasoning_level;
     delete next.supported_reasoning_levels;
   }
+  // A few OpenAI-compatible upstreams reject tool scheduling the native
+  // template advertises. Registry entries opt out explicitly so the picker
+  // never offers a custom or parallel tool the provider backend will 400.
+  if (typeof model.supportsParallelToolCalls === "boolean") {
+    next.supports_parallel_tool_calls = model.supportsParallelToolCalls;
+  }
+  if (Array.isArray(model.experimentalSupportedTools)) {
+    next.experimental_supported_tools = [...model.experimentalSupportedTools];
+  }
   if (typeof next.base_instructions === "string") {
     next.base_instructions = rewriteIdentity(next.base_instructions, model);
   }

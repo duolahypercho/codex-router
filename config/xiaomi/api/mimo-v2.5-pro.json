@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "slug": "xiaomi-mimo/mimo-v2.5-pro",
+      "gatewayModel": "xiaomi-mimo-mimo-v2-5-pro",
+      "upstreamModel": "mimo-v2.5-pro",
+      "provider": "xiaomi-mimo",
+      "listed": true,
+      "displayName": "MiMo-V2.5-Pro (Xiaomi API)",
+      "description": "MiMo-V2.5-Pro through Xiaomi's official OpenAI-compatible API. Text input only.",
+      "priority": 70,
+      "defaultEffort": "high",
+      "reasoningLevels": [
+        {
+          "effort": "high",
+          "description": "Deep reasoning"
+        }
+      ],
+      "contextWindow": 1048576,
+      "autoCompact": 996147,
+      "inputModalities": [
+        "text"
+      ],
+      "compHash": "xiaomi-mimo-v2-5-pro-v1",
+      "supportsReasoningSummaries": true,
+      "supportsParallelToolCalls": false,
+      "experimentalSupportedTools": [],
+      "supportsApplyPatchTool": false
+    }
+  ]
+}
