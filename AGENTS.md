@@ -331,6 +331,38 @@ to ship tested support to every installer.
 If the provider itself is unknown to the registry, stop treating the request as
 installation. It is repository development and requires the process below.
 
+### Subagent capability is researched, not asserted
+
+Switching a model on as a subagent (tray toggle, `control subagents set`) is
+the operator's whole job; deciding whether that model **under that provider**
+can hold the v2 child role is the router's. The same model answers differently
+per provider — tool support, request profiles, and payload handling all vary —
+so the unit of evidence is always the slug, never the model name.
+
+1. Enabling a non-registry-v2 model hands it to a detached capability probe
+   (`src/subagent-verify.mjs`): two live requests through the installed router
+   proving streaming and a forced tool call. The proofs snapshot shows
+   `checking` until the verdict lands and the catalog republishes.
+2. A passing model is advertised to Codex as an **experimental** v2 subagent,
+   recorded in the protected `multi-agent-proofs.json`. The first real child
+   turn settles it: Codex marks child turns with `x-openai-subagent`, and the
+   router's own request path records a clean completion as the durable proof
+   (`proven`) or a structural rejection — HTTP 400/422 — as a demotion back to
+   v1 with the reason kept where it was switched on. Transient failures (429,
+   5xx, disconnects) prove nothing and leave the window open.
+3. Local settings still never manufacture a v2 claim. The only writers of
+   promotion evidence are the probe worker and the router's observation of
+   real traffic; an unreadable proofs file promotes nothing, and a hidden or
+   switched-off slug stays v1 whatever evidence it carries.
+4. `control subagents verify [SLUG ...]` re-researches explicitly (foreground,
+   ~2 requests per candidate); with no slugs it sweeps the enabled list.
+   Select-all and mode changes never trigger probes — a sweep across every
+   provider is quota the operator must ask for.
+5. Machine-local proofs are exactly that. Shipping a default to every
+   installer still requires the full native collaboration proof and a registry
+   change (below); never edit the checked-in `config/` tree because one
+   machine's probe passed.
+
 ### Ship a model to every installer
 
 1. Run `./bin/discover-models PROVIDER`; discovery is read-only. Confirm the

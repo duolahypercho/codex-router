@@ -741,7 +741,7 @@ async function knownModelSlug(slug) {
   return MODEL_BY_SLUG.has(slug);
 }
 
-async function handleSubagents(action, value, flag) {
+async function handleSubagents(action, value, flag, rest = []) {
   const {
     replaceMultiAgentState,
     setMultiAgentMode,
@@ -769,6 +769,19 @@ async function handleSubagents(action, value, flag) {
     });
   } else if (action === "mode") {
     setMultiAgentMode(value);
+  } else if (action === "verify") {
+    // Explicit re-research: probe the named slugs (or every enabled one) in
+    // the foreground and print the verdicts. Spends ~2 live requests per
+    // candidate on that model's own provider.
+    const { verifySubagentCandidates } = await import("./subagent-verify.mjs");
+    const targets = rest.filter(Boolean);
+    const sweep = targets.length
+      ? targets
+      : subagentSettingsSnapshot().enabled;
+    const verified = await verifySubagentCandidates(sweep, { force: targets.length > 0 });
+    refreshModelSettingsCatalog();
+    process.stdout.write(`${JSON.stringify({ verified })}\n`);
+    return;
   } else if (action === "set") {
     if (!["on", "off"].includes(flag)) {
       throw new Error("Usage: control subagents set <model-slug> <on|off>");
@@ -777,6 +790,14 @@ async function handleSubagents(action, value, flag) {
       throw new Error(`Unknown model slug: ${value}`);
     }
     setMultiAgentModel(value, flag === "on");
+    // Selection is the assignment: switching a model on hands it to the
+    // capability probe. Detached, because this command answers a tray toggle
+    // and cannot sit on a live network round-trip; the proofs snapshot shows
+    // "checking" until the worker records a verdict and republishes.
+    if (flag === "on") {
+      const { spawnDetachedVerification } = await import("./subagent-verify.mjs");
+      spawnDetachedVerification([value]);
+    }
   } else if (action === "provider") {
     if (!["on", "off"].includes(flag)) {
       throw new Error("Usage: control subagents provider <provider-id> <on|off>");
@@ -792,10 +813,14 @@ async function handleSubagents(action, value, flag) {
       throw new Error(`No enabled models found for provider: ${value}`);
     }
     setMultiAgentModels(slugs, flag === "on");
+    if (flag === "on") {
+      const { spawnDetachedVerification } = await import("./subagent-verify.mjs");
+      spawnDetachedVerification(slugs);
+    }
   } else {
     throw new Error(
       "Usage: control subagents status|select-all|unselect-all|mode <all|selected|proven>|" +
-        "set <model-slug> <on|off>|provider <provider-id> <on|off>",
+        "set <model-slug> <on|off>|provider <provider-id> <on|off>|verify [model-slug ...]",
     );
   }
   refreshModelSettingsCatalog();
@@ -1614,7 +1639,7 @@ if (args.includes("--probe")) {
 } else if (args[0] === "model-set") {
   await setLoginFreeModel(args[1]);
 } else if (args[0] === "subagents") {
-  await handleSubagents(args[1], args[2], args[3]);
+  await handleSubagents(args[1], args[2], args[3], args.slice(2));
 } else if (args[0] === "tool-result-aging") {
   await handleToolResultAging(args[1], args[2]);
 } else if (args[0] === "local-models") {

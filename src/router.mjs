@@ -56,6 +56,12 @@ import {
   flattenNamespaceTools,
 } from "./namespace-relay.mjs";
 import { pendingInterruptTargets } from "./subagent-completion.mjs";
+import {
+  awaitingSpawnProof,
+  recordSpawnFailure,
+  recordSpawnObserved,
+  subagentProofSnapshot,
+} from "./subagent-proofs.mjs";
 import { mergeCodexAppTools } from "./codex-app-tools.mjs";
 import { activityMetadataFromHeaders } from "./codex-session-names.mjs";
 import { translateGatewayError } from "./error-translation.mjs";
@@ -1670,6 +1676,39 @@ function requireCodexTransport(request, response) {
   return true;
 }
 
+// A model in the experimental subagent window earns its durable proof — or
+// its demotion — from real traffic: Codex marks child turns with
+// x-openai-subagent, so the first clean completion of one settles "this model
+// can hold the child role" without a dedicated probe session. Only structural
+// rejections demote (400/422, the shape a schema or encrypted-payload refusal
+// takes); transient failures — 429s, 5xx, disconnects — prove nothing either
+// way and leave the window open. Neither line is QUIET-gated: a promotion or
+// demotion that happens silently is how a picker entry becomes unexplainable.
+function observeSubagentOutcome(request, route, status, { emptyCompletion = false } = {}) {
+  if (!route) return;
+  try {
+    if (!request.headers["x-openai-subagent"]) return;
+    if (!awaitingSpawnProof(route.slug, subagentProofSnapshot())) return;
+    if (status === 200 && !emptyCompletion) {
+      recordSpawnObserved(route.slug, { status });
+      console.error(
+        `[codex-router] subagent proven: ${route.slug} completed a live child turn`,
+      );
+    } else if (status === 400 || status === 422) {
+      recordSpawnFailure(route.slug, {
+        status,
+        reason: `child turn rejected with HTTP ${status}`,
+      });
+      console.error(
+        `[codex-router] subagent demoted: ${route.slug} child turn rejected with HTTP ${status}; ` +
+          "it stays v1 until 'control subagents verify' passes again",
+      );
+    }
+  } catch {
+    // Observation is bookkeeping; it must never fail the turn it watched.
+  }
+}
+
 async function handleResponses(request, response, requestUrl) {
   const startedAt = Date.now();
   const activity = beginRequestActivity();
@@ -1975,6 +2014,7 @@ async function handleResponses(request, response, requestUrl) {
         responseStartMs: upstreamLatencyMs,
         firstTokenMs,
       });
+      observeSubagentOutcome(request, route, upstream.status);
       finalStatus = upstream.status;
       activityStatus = upstream.status;
       usageRecorded = true;
@@ -2212,6 +2252,7 @@ async function handleResponses(request, response, requestUrl) {
       ...(emptyCompletionUnrepairable ? { emptyCompletionUnrepairable: true } : {}),
       ...(guardReleasedForBudget ? { emptyCompletionGuardReleased: true } : {}),
     });
+    observeSubagentOutcome(request, route, finalStatus, { emptyCompletion });
     usageRecorded = true;
     activityStatus = finalStatus;
     if (!QUIET) {

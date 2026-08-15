@@ -1,0 +1,148 @@
+import assert from "node:assert/strict";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import test from "node:test";
+
+// Point the proofs file and the user-model overlay at empty temp state before
+// the modules read their paths, the same isolation the registry tests use.
+const stateDir = mkdtempSync(path.join(os.tmpdir(), "subagent-proofs-test-"));
+process.env.MODEL_ROUTER_SUBAGENT_PROOFS = path.join(stateDir, "multi-agent-proofs.json");
+process.env.MODEL_ROUTER_USER_MODELS = path.join(stateDir, "user-models.json");
+
+const {
+  applySubagentProofs,
+  awaitingSpawnProof,
+  clearSubagentProof,
+  readSubagentProofs,
+  recordProbeResult,
+  recordProbeStarted,
+  recordSpawnFailure,
+  recordSpawnObserved,
+  subagentProofSnapshot,
+  SUBAGENT_PROOFS_PATH,
+} = await import("../src/subagent-proofs.mjs");
+const { subagentVerificationCandidates, verifySubagentCandidates } = await import(
+  "../src/subagent-verify.mjs"
+);
+
+test("a proof walks checking -> experimental -> proven, and failures carry reasons", () => {
+  const slug = "example/alpha";
+  assert.equal(recordProbeStarted(slug).status, "checking");
+  assert.equal(awaitingSpawnProof(slug), false);
+
+  const experimental = recordProbeResult(slug, {
+    ok: true,
+    checks: [{ name: "tool calling", ok: true }],
+  });
+  assert.equal(experimental.status, "experimental");
+  assert.equal(awaitingSpawnProof(slug), true);
+
+  const proven = recordSpawnObserved(slug, { status: 200 });
+  assert.equal(proven.status, "proven");
+  assert.equal(awaitingSpawnProof(slug), false);
+
+  const failed = recordSpawnFailure("example/beta", { status: 400 });
+  assert.equal(failed.status, "failed");
+  assert.match(failed.reason, /400/);
+
+  const probeFailed = recordProbeResult("example/gamma", {
+    ok: false,
+    checks: [],
+    detail: "tool calling: function call missing",
+  });
+  assert.equal(probeFailed.status, "failed");
+  assert.match(probeFailed.reason, /function call missing/);
+
+  clearSubagentProof("example/gamma");
+  assert.equal(subagentProofSnapshot()["example/gamma"], undefined);
+});
+
+test("a proofs file that cannot be read promotes nothing", () => {
+  const corrupt = path.join(stateDir, "corrupt.json");
+  writeFileSync(corrupt, "{not json", { mode: 0o600 });
+  assert.deepEqual(readSubagentProofs(corrupt), { version: 1, proofs: {} });
+  // Unknown statuses are dropped rather than trusted.
+  const invented = path.join(stateDir, "invented.json");
+  writeFileSync(
+    invented,
+    JSON.stringify({ version: 1, proofs: { "x/y": { status: "definitely-v2" } } }),
+    { mode: 0o600 },
+  );
+  assert.deepEqual(readSubagentProofs(invented).proofs, {});
+});
+
+test("proof promotion respects demotions and never touches registry claims", () => {
+  const models = [
+    { slug: "vendor/experimental" },
+    { slug: "vendor/proven" },
+    { slug: "vendor/failed" },
+    { slug: "vendor/checking" },
+    { slug: "vendor/hidden" },
+    { slug: "vendor/disabled" },
+    { slug: "vendor/registry", multiAgentVersion: "v2" },
+  ];
+  const proofs = {
+    "vendor/experimental": { status: "experimental" },
+    "vendor/proven": { status: "proven" },
+    "vendor/failed": { status: "failed" },
+    "vendor/checking": { status: "checking" },
+    "vendor/hidden": { status: "proven" },
+    "vendor/disabled": { status: "proven" },
+  };
+  const promoted = applySubagentProofs(models, proofs, {
+    hidden: new Set(["vendor/hidden"]),
+    disabled: ["vendor/disabled"],
+  });
+  const bySlug = new Map(promoted.map((model) => [model.slug, model.multiAgentVersion]));
+  assert.equal(bySlug.get("vendor/experimental"), "v2");
+  assert.equal(bySlug.get("vendor/proven"), "v2");
+  assert.equal(bySlug.get("vendor/failed"), undefined);
+  assert.equal(bySlug.get("vendor/checking"), undefined);
+  assert.equal(bySlug.get("vendor/hidden"), undefined);
+  assert.equal(bySlug.get("vendor/disabled"), undefined);
+  assert.equal(bySlug.get("vendor/registry"), "v2");
+  // No proofs at all is a pass-through, not a rewrite.
+  assert.equal(applySubagentProofs(models, {}), models);
+});
+
+test("verification skips registry-v2 models, unknown slugs, and settled proofs", () => {
+  recordProbeResult("deepseek/deepseek-v4-pro", { ok: true, checks: [] });
+  const candidates = subagentVerificationCandidates([
+    "kimi-oauth/k3", // registry v2: shipped with the full native proof
+    "deepseek/deepseek-v4-pro", // already experimental locally
+    "deepseek/deepseek-v4-flash", // real, unproven: the one that needs research
+    "not-a/model", // unknown slugs cannot be probed
+    "deepseek/deepseek-v4-flash", // duplicates collapse
+  ]);
+  assert.deepEqual(candidates, ["deepseek/deepseek-v4-flash"]);
+  // force re-researches a settled slug.
+  assert.ok(
+    subagentVerificationCandidates(["deepseek/deepseek-v4-pro"], { force: true }).includes(
+      "deepseek/deepseek-v4-pro",
+    ),
+  );
+  clearSubagentProof("deepseek/deepseek-v4-pro");
+});
+
+test("verify records the probe's verdict, and a probe crash reads as a failure", async () => {
+  const passed = await verifySubagentCandidates(["deepseek/deepseek-v4-flash"], {
+    probe: async (slug) => ({ ok: true, checks: [{ name: "tool calling", ok: true, slug }] }),
+  });
+  assert.equal(passed[0].status, "experimental");
+  assert.equal(subagentProofSnapshot()["deepseek/deepseek-v4-flash"].status, "experimental");
+  clearSubagentProof("deepseek/deepseek-v4-flash");
+
+  const crashed = await verifySubagentCandidates(["deepseek/deepseek-v4-flash"], {
+    probe: async () => {
+      throw new Error("router unreachable");
+    },
+  });
+  assert.equal(crashed[0].status, "failed");
+  assert.match(crashed[0].reason, /router unreachable/);
+  clearSubagentProof("deepseek/deepseek-v4-flash");
+});
+
+test("the proofs path override is honoured", () => {
+  assert.equal(SUBAGENT_PROOFS_PATH, process.env.MODEL_ROUTER_SUBAGENT_PROOFS);
+});

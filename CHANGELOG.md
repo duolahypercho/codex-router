@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- **Switching a model on as a subagent now researches it instead of ignoring
+  it.** Only six registry-proven models could ever be spawned as native v2
+  children; everything else the operator enabled was a silent no-show, and
+  promoting one more meant a repository change per model per provider. Now the
+  toggle is the assignment: enabling a model hands it to a detached capability
+  probe (two live requests proving streaming and a forced tool call through
+  the installed router), a passing model is advertised to Codex as an
+  experimental subagent, and the first real child turn settles the verdict —
+  the router watches its own request path for `x-openai-subagent` turns, and a
+  clean completion records a durable machine-local proof while a structural
+  rejection demotes the model back to v1 with the reason kept in the subagent
+  snapshot. Evidence lives in the protected `multi-agent-proofs.json`; local
+  settings still cannot manufacture a v2 claim, hidden or switched-off models
+  stay v1 whatever evidence they carry, and `control subagents verify` re-runs
+  the research explicitly.
+
 - **A reasoning model no longer answers into thirty seconds of silence.** The
   empty-completion guard buffered every routed streaming response until it saw
   content, and reasoning deltas deliberately did not count as content. On a
