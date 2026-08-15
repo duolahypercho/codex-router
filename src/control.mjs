@@ -154,9 +154,25 @@ async function emitProbe() {
   const usageEvents = TARGET === "codex"
     ? (await import("./usage-events.mjs")).recentUsageEvents()
     : [];
+  // The same machine-local capability proofs the catalog honors: the tray's
+  // "Subagent models" section filters on v2, so a probe built from the raw
+  // registry hid every model this machine had just verified — the third
+  // consumer to need this overlay, after the catalog and the DSH preset.
+  //
+  // Deliberately unlike the catalog, `disabled` is not passed: the catalog
+  // demotes a switched-off model so Codex stops offering it, but this probe
+  // is what draws the rows the operator switches. A proven model whose
+  // toggle is off must keep its row — with the toggle shown off — or the
+  // section it was switched off in loses the way to switch it back on.
+  const { applySubagentProofs } = await import("./subagent-proofs.mjs");
+  const provenListedModels = applySubagentProofs(
+    LISTED_MODELS,
+    subagentSettingsSnapshot().proofs,
+    { hidden: hiddenModels },
+  );
   // The tray groups models by provider to build its rows, so protocol
   // variants report their canonical family id: one opencode Go row, not three.
-  const routedModels = LISTED_MODELS.map((model) => ({
+  const routedModels = provenListedModels.map((model) => ({
     slug: model.slug,
     displayName: model.displayName,
     provider: canonicalProviderId(model.provider),
