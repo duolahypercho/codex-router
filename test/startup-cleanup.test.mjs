@@ -29,7 +29,8 @@ async function portIsClosed(port) {
   });
 }
 
-// Startup is a pipeline of five sequential child spawns, each gated on an HTTP
+// Startup spawns five children — the three forwarders in parallel, then the
+// gateway and frontend in sequence — each gated on an HTTP
 // health probe that backs off from 200 ms to a 2 s cap between refused probes
 // and widens the probe window itself from 1 s to a 10 s cap. That makes the run
 // time depend on how fast this machine can fork and schedule processes, not on
