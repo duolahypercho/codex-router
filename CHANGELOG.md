@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- **The GLM-5.3 1M entry routed to a model code Z.ai does not serve.** Shipping
+  `glm-5.3[1m]` took the vendor's documented 1M suffix at its word, and the
+  suffix answers `1214` on both the OpenAI-compatible and Anthropic endpoints --
+  every request through that entry failed, while plain `glm-5.3` on the same
+  endpoint and credential succeeded. The entry is gone rather than repaired,
+  because there is nothing behind it to repair. The window it was invented to
+  reach turned out to be served on the plain entry all along: a 990,020-token
+  prompt was accepted, so `zai-coding/glm-5.3` declares 1M and its picker
+  description says so instead of directing readers to an entry that no longer
+  exists. A `config.toml` still naming the removed slug has nothing to route to
+  and fails at the native target; reselect the plain GLM-5.3 entry.
+
 - **The panel's local-model view surfaces LM Studio.** LM Studio arrived as a
   provider with exactly one door: `./bin/curate-models lmstudio` in an
   interactive terminal, while the panel's Local LLMs section read only
