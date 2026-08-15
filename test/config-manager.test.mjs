@@ -593,7 +593,7 @@ test("config manager upgrades the earlier Kimi-only managed block", () => {
 
 # BEGIN kimi-codex-router-managed
 openai_base_url = "http://127.0.0.1:46192/v1"
-model_catalog_json = "${path.join(codexHome, "kimi-router", "merged-models.json")}"
+model_catalog_json = ${JSON.stringify(path.join(codexHome, "kimi-router", "merged-models.json"))}
 # END kimi-codex-router-managed
 
 [profiles.personal]
@@ -629,7 +629,7 @@ model_reasoning_effort = "high"
 
 # BEGIN kimi-codex-router-managed
 openai_base_url = "http://127.0.0.1:46192/v1"
-model_catalog_json = "${prototypeCatalog}"
+model_catalog_json = ${JSON.stringify(prototypeCatalog)}
 
 [projects."/important/project"]
 trust_level = "trusted"
