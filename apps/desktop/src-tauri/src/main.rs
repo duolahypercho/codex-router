@@ -1256,6 +1256,7 @@ mod tests {
         assert!(parse_health_response(response).is_none());
     }
 
+    #[cfg(windows)]
     #[test]
     fn source_root_path_is_executable_by_node() {
         // `canonicalize` returns `\\?\C:\...` on Windows, which node cannot run
@@ -1265,6 +1266,15 @@ mod tests {
         assert_eq!(extended, PathBuf::from(r"C:\Users\me\codex-router"));
         let plain = windows_readable_path(PathBuf::from(r"C:\Users\me\codex-router"));
         assert_eq!(plain, PathBuf::from(r"C:\Users\me\codex-router"));
+        let posix = windows_readable_path(PathBuf::from("/home/me/codex-router"));
+        assert_eq!(posix, PathBuf::from("/home/me/codex-router"));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn source_root_path_is_left_alone_off_windows() {
+        // The extended-length prefix only exists on Windows; everywhere else
+        // the helper must hand the path through untouched.
         let posix = windows_readable_path(PathBuf::from("/home/me/codex-router"));
         assert_eq!(posix, PathBuf::from("/home/me/codex-router"));
     }
