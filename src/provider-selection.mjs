@@ -252,9 +252,19 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
         `${JSON.stringify({ providers: writeProviderSelection(values) }, null, 2)}\n`,
       );
     } else if (command === "ensure-configured") {
-      const providers = existsSync(PROVIDER_SELECTION_PATH)
+      const explicit = existsSync(PROVIDER_SELECTION_PATH);
+      const providers = explicit
         ? readProviderSelection()
         : writeProviderSelection(defaultProviderIds());
+      // An explicitly written empty selection is a deliberate state -- an
+      // idle --no-provider install, or an operator who hid the last provider
+      // -- and installing on top of it must keep working, or `bin/update`
+      // would strand exactly those installs. Only a *discovered* empty set
+      // still means "nothing can authenticate yet".
+      if (providers.length === 0 && explicit) {
+        process.stdout.write(`${JSON.stringify({ providers: [], idle: true }, null, 2)}\n`);
+        process.exit(0);
+      }
       if (providers.length === 0) {
         throw new Error(
           `No provider credential is configured. Run ${

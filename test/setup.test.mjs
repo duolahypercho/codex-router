@@ -55,6 +55,94 @@ test("automatic selection-only setup exposes only configured providers", () => {
   }
 });
 
+test("--no-provider --no-discovery writes an empty selection and the discovery marker", () => {
+  const testRoot = mkdtempSync(path.join(os.tmpdir(), "codex-router-setup-idle-"));
+  const codexHome = path.join(testRoot, "codex");
+  const stateDir = path.join(testRoot, "state");
+  mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+  // A configured credential really is on disk; the idle install must ignore
+  // it rather than auto-selecting its provider.
+  writeFileSync(path.join(stateDir, "deepseek-api-key.secret"), "TEST_SETUP_KEY\n", {
+    mode: 0o600,
+  });
+
+  try {
+    const output = execFileSync(
+      process.execPath,
+      ["src/setup.mjs", "--selection-only", "--no-provider", "--no-discovery"],
+      {
+        cwd: root,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          CODEX_HOME: codexHome,
+          CODEX_ROUTER_STATE_DIR: stateDir,
+          KIMI_CODE_HOME: path.join(testRoot, "kimi-code"),
+          GROK_AUTH_PATH: path.join(testRoot, "grok", "auth.json"),
+          COMMANDCODE_CLI_HOME: path.join(testRoot, "commandcode"),
+          CODEX_ROUTER_LAUNCH_AGENTS_DIR: path.join(testRoot, "LaunchAgents"),
+          CODEX_ROUTER_SKIP_LAUNCHCTL: "1",
+        },
+      },
+    );
+    assert.deepEqual(JSON.parse(output).providers, []);
+    const selection = JSON.parse(readFileSync(path.join(stateDir, "enabled-providers.json"), "utf8"));
+    assert.deepEqual(selection.providers, []);
+    const discovery = JSON.parse(readFileSync(path.join(stateDir, "discovery-mode.json"), "utf8"));
+    assert.deepEqual(discovery, { version: 1, discovery: "disabled" });
+  } finally {
+    rmSync(testRoot, { recursive: true, force: true });
+  }
+});
+
+test("re-running setup without the idle flags clears the discovery marker", () => {
+  const testRoot = mkdtempSync(path.join(os.tmpdir(), "codex-router-setup-exit-idle-"));
+  const codexHome = path.join(testRoot, "codex");
+  const stateDir = path.join(testRoot, "state");
+  mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+  writeFileSync(path.join(stateDir, "deepseek-api-key.secret"), "TEST_SETUP_KEY\n", {
+    mode: 0o600,
+  });
+  writeFileSync(
+    path.join(stateDir, "discovery-mode.json"),
+    '{"version":1,"discovery":"disabled"}\n',
+    { mode: 0o600 },
+  );
+  writeFileSync(
+    path.join(stateDir, "enabled-providers.json"),
+    '{"version":1,"providers":[]}\n',
+    { mode: 0o600 },
+  );
+
+  try {
+    const output = execFileSync(
+      process.execPath,
+      ["src/setup.mjs", "--selection-only", "--providers", "deepseek"],
+      {
+        cwd: root,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          CODEX_HOME: codexHome,
+          CODEX_ROUTER_STATE_DIR: stateDir,
+          KIMI_CODE_HOME: path.join(testRoot, "kimi-code"),
+          GROK_AUTH_PATH: path.join(testRoot, "grok", "auth.json"),
+          COMMANDCODE_CLI_HOME: path.join(testRoot, "commandcode"),
+          CODEX_ROUTER_LAUNCH_AGENTS_DIR: path.join(testRoot, "LaunchAgents"),
+          CODEX_ROUTER_SKIP_LAUNCHCTL: "1",
+        },
+      },
+    );
+    // The re-run is the exit path from idle mode: the marker flips back to
+    // enabled and the stored key is discoverable again.
+    assert.deepEqual(JSON.parse(output).providers, ["deepseek"]);
+    const discovery = JSON.parse(readFileSync(path.join(stateDir, "discovery-mode.json"), "utf8"));
+    assert.deepEqual(discovery, { version: 1, discovery: "enabled" });
+  } finally {
+    rmSync(testRoot, { recursive: true, force: true });
+  }
+});
+
 test("ensure-configured does not auto-select anonymous providers", () => {
   const testRoot = mkdtempSync(path.join(os.tmpdir(), "codex-router-ensure-configured-"));
   const stateDir = path.join(testRoot, "state");
@@ -89,6 +177,41 @@ test("ensure-configured does not auto-select anonymous providers", () => {
     assert.deepEqual(JSON.parse(output).providers, ["deepseek", "lmstudio", "local"]);
     const selection = JSON.parse(readFileSync(path.join(stateDir, "enabled-providers.json"), "utf8"));
     assert.deepEqual(selection.providers, ["deepseek", "lmstudio", "local"]);
+  } finally {
+    rmSync(testRoot, { recursive: true, force: true });
+  }
+});
+
+test("ensure-configured accepts an explicitly empty selection as idle", () => {
+  const testRoot = mkdtempSync(path.join(os.tmpdir(), "codex-router-ensure-idle-"));
+  const stateDir = path.join(testRoot, "state");
+  mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+  // The state an idle --no-provider install (or an operator who hid the last
+  // provider) leaves behind. Installing on top of it must keep working, or
+  // bin/update would strand exactly those installs.
+  writeFileSync(
+    path.join(stateDir, "enabled-providers.json"),
+    '{"version":1,"providers":[]}\n',
+    { mode: 0o600 },
+  );
+  try {
+    const output = execFileSync(
+      process.execPath,
+      ["src/provider-selection.mjs", "ensure-configured"],
+      {
+        cwd: root,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          CODEX_HOME: path.join(testRoot, "codex"),
+          CODEX_ROUTER_STATE_DIR: stateDir,
+          KIMI_CODE_HOME: path.join(testRoot, "kimi-code"),
+          GROK_AUTH_PATH: path.join(testRoot, "grok", "auth.json"),
+          COMMANDCODE_CLI_HOME: path.join(testRoot, "commandcode"),
+        },
+      },
+    );
+    assert.deepEqual(JSON.parse(output), { providers: [], idle: true });
   } finally {
     rmSync(testRoot, { recursive: true, force: true });
   }
