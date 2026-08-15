@@ -40,6 +40,7 @@ import {
   skillRequiredFields,
 } from "./skills-install.mjs";
 import { cliSessionDescriptor } from "./cli-session-credential.mjs";
+import { discoveryDisabled } from "./discovery-mode.mjs";
 import { credentialLabel, credentialStatus } from "./provider-credentials.mjs";
 import { providerNeedsCuration } from "./provider-onboarding.mjs";
 import { stateOwnershipStatus } from "./state-owner.mjs";
@@ -123,6 +124,10 @@ export function codexConfigLoadError({
   spawn = spawnSync,
   binaries = [findCodexBinary(), commandOnPath("codex")],
 } = {}) {
+  // The probe is `codex login status` against the user's real CODEX_HOME, and
+  // Codex reads its session file to answer it. --no-discovery promises that
+  // read never happens, so the config-load check goes unanswered in idle mode.
+  if (discoveryDisabled()) return undefined;
   const seen = new Set();
   for (const binary of binaries) {
     if (!binary || seen.has(binary)) continue;
@@ -347,18 +352,29 @@ let requiredModels = new Set();
 const routedTransportActive = codexTarget
   ? routedCatalogConfigured(existsSync(CONFIG_PATH) ? readFileSync(CONFIG_PATH, "utf8") : "")
   : existsSync(DSH_CATALOG_PATH);
+// An install made with --no-provider --no-discovery is idle on purpose: the
+// selection is an explicit empty list and the discovery marker is set. That
+// state is what the operator asked for, so the empty selection and the empty
+// catalog report at warn/ok -- the precedent is serviceStoppedByDesign below.
+let idleInstall = false;
 try {
   selection = providerSelectionStatus();
+  idleInstall =
+    selection.explicit && selection.providers.length === 0 && discoveryDisabled();
   requiredRoutedModels = selectedConfiguredListedModels();
   catalogRoutedModels = routedTransportActive ? requiredRoutedModels : [];
   requiredModels = new Set(catalogRoutedModels.map((model) => model.slug));
   add(
-    selection.providers.length ? "ok" : "fail",
+    selection.providers.length ? "ok" : idleInstall ? "warn" : "fail",
     "Enabled providers",
     selection.providers.length
       ? `${selection.providers.join(", ")}${selection.explicit ? "" : " (legacy show-all mode)"}`
-      : "none",
-    "Run ./bin/setup --guided and choose at least one provider.",
+      : idleInstall
+        ? "none (idle install: --no-provider)"
+        : "none",
+    idleInstall
+      ? "Run ./bin/setup without --no-provider to enable a provider."
+      : "Run ./bin/setup --guided and choose at least one provider.",
   );
   // The router no longer refuses to serve on a selection file it cannot fully
   // resolve, so the damage has to be reported here instead of as a 502.
@@ -392,20 +408,24 @@ try {
 }
 const catalogOk =
   catalogReadable &&
-  (routedTransportActive
+  (routedTransportActive && !idleInstall
     ? requiredModels.size > 0 &&
       [...requiredModels].every((slug) => catalogModels.some((model) => model.slug === slug))
     : !catalogModels.some((model) => MODEL_BY_SLUG.has(String(model.slug))));
 // The merged catalog is the file Codex reads. A harness install has no
 // equivalent: its offer is the settings route, checked by "Harness routing
-// config" below.
+// config" below. An idle install deliberately publishes no routed models, so
+// its catalog is held to the same standard as inactive transport: nothing
+// routable may be offered.
 if (codexTarget) add(
   catalogOk ? "ok" : "fail",
   "Merged catalog",
   catalogOk
-    ? routedTransportActive
-      ? `${requiredModels.size} routed models`
-      : "native-only; routed transport is inactive"
+    ? idleInstall
+      ? "idle install; no routed models"
+      : routedTransportActive
+        ? `${requiredModels.size} routed models`
+        : "native-only; routed transport is inactive"
     : MERGED_CATALOG_PATH,
   "Run ./bin/refresh-catalog, or ./bin/doctor --fix if files are missing.",
 );
@@ -603,40 +623,65 @@ add(
   "Run ./bin/doctor --fix; this capability is generated locally and is not a provider key.",
 );
 
-const kimiHealth = kimiOAuthHealth();
-const kimiSelected = selection.providers.includes("kimi-oauth");
-// An expired access token is a normal, recoverable state: the request path
-// refreshes it with the still-valid refresh token before forwarding, so it
-// must not read as a failure here. Every unusable state fails when Kimi OAuth
-// is selected; an unselected provider is advisory regardless of credential
-// health.
-const kimiStatus = !kimiSelected
-  ? "warn"
-  : kimiHealth.status === "ok" || kimiHealth.status === "stale"
-    ? "ok"
-    : "fail";
-add(
-  kimiStatus,
-  "Kimi OAuth",
-  kimiHealth.detail,
-  kimiHealth.fix,
-);
-const grokOauth = grokOAuthStatus();
-const grokCli = grokCliPreflight();
-const grokOauthReady = grokOauth.configured && grokCli.runnable;
-add(
-  grokOauthReady ? "ok" : selection.providers.includes("grok-oauth") ? "fail" : "warn",
-  "Grok OAuth",
-  !grokCli.runnable
-    ? grokCli.detail
-    : grokOauth.configured
-      ? grokOauth.source
-      : `not configured; ${grokOauth.setup}`,
-  !grokCli.runnable ? grokCli.fix : "Run grok login, then rerun the doctor.",
-);
+// Per-provider credential rows are themselves discovery: each one resolves the
+// provider's credential. Under --no-discovery the resolvers answer nothing by
+// design, so 26 rows of "not configured" would report the guard's output as
+// though it were the machine's state. One row says what is actually true.
+const credentialDiscoveryOff = discoveryDisabled();
+if (credentialDiscoveryOff) {
+  add(
+    "warn",
+    "Credential discovery",
+    "disabled (--no-discovery); provider credentials, the Keychain, and other CLIs' sessions are not read",
+    "Re-run ./bin/setup without --no-discovery to re-enable it.",
+  );
+  const listenHost = process.env.CODEX_ROUTER_HOST || process.env.KIMI_ROUTER_HOST;
+  if (listenHost && !["127.0.0.1", "localhost", "::1"].includes(listenHost)) {
+    add(
+      "warn",
+      "Router listen host",
+      `${listenHost} (an idle install is expected to stay loopback-only)`,
+      "Unset CODEX_ROUTER_HOST / KIMI_ROUTER_HOST to bind 127.0.0.1.",
+    );
+  }
+}
+if (!credentialDiscoveryOff) {
+  const kimiHealth = kimiOAuthHealth();
+  const kimiSelected = selection.providers.includes("kimi-oauth");
+  // An expired access token is a normal, recoverable state: the request path
+  // refreshes it with the still-valid refresh token before forwarding, so it
+  // must not read as a failure here. Every unusable state fails when Kimi OAuth
+  // is selected; an unselected provider is advisory regardless of credential
+  // health.
+  const kimiStatus = !kimiSelected
+    ? "warn"
+    : kimiHealth.status === "ok" || kimiHealth.status === "stale"
+      ? "ok"
+      : "fail";
+  add(
+    kimiStatus,
+    "Kimi OAuth",
+    kimiHealth.detail,
+    kimiHealth.fix,
+  );
+  const grokOauth = grokOAuthStatus();
+  const grokCli = grokCliPreflight();
+  const grokOauthReady = grokOauth.configured && grokCli.runnable;
+  add(
+    grokOauthReady ? "ok" : selection.providers.includes("grok-oauth") ? "fail" : "warn",
+    "Grok OAuth",
+    !grokCli.runnable
+      ? grokCli.detail
+      : grokOauth.configured
+        ? grokOauth.source
+        : `not configured; ${grokOauth.setup}`,
+    !grokCli.runnable ? grokCli.fix : "Run grok login, then rerun the doctor.",
+  );
+}
 
 for (const provider of PROVIDERS.values()) {
   if (provider.kind !== "openai-compatible") continue;
+  if (credentialDiscoveryOff) continue;
   const status = credentialStatus(provider, { persistent: true });
   const session = cliSessionDescriptor(provider);
   const credentialType = credentialLabel(provider);

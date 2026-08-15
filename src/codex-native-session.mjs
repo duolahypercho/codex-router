@@ -97,6 +97,10 @@ const REFRESH_RETRY_INTERVAL_MS = 5 * 60_000;
 const REFRESH_TIMEOUT_MS = 30_000;
 
 export async function refreshViaCodex({ now = Date.now() } = {}) {
+  // `codex login status` makes Codex read (and possibly rewrite) its session
+  // file; unreachable while readSession() is guarded, but the promise should
+  // not depend on that call graph staying put.
+  if (discoveryDisabled()) return false;
   if (refreshInFlight) return refreshInFlight;
   if (now - lastRefreshAttemptMs < REFRESH_RETRY_INTERVAL_MS) return false;
   lastRefreshAttemptMs = now;
