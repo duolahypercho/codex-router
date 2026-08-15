@@ -89,8 +89,27 @@ switch ($Command) {
   # it now and again at every logon.
   "tray" {
     $Action = if ($Arguments.Count) { [string]$Arguments[0] } else { "install" }
-    if ($Action -notin @("install", "status", "start", "stop", "restart", "uninstall")) {
-      throw "Unknown tray action '$Action'. Choose: install, status, start, stop, restart, uninstall."
+    if ($Action -notin @("install", "status", "start", "stop", "restart", "uninstall", "rebuild")) {
+      throw "Unknown tray action '$Action'. Choose: install, status, start, stop, restart, uninstall, rebuild."
+    }
+    # `rebuild` is `control tray rebuild`'s Windows half: build unconditionally
+    # -- bypassing the source-fingerprint skip that `install` uses -- then
+    # restart whichever companion Task Scheduler already supervises.
+    if ($Action -eq "rebuild") {
+      if (Get-Command cargo -ErrorAction SilentlyContinue) {
+        & (Join-Path $Root "scripts\build-desktop-tray.ps1") -BinaryOnly
+        if ($LASTEXITCODE -ne 0) { throw "Desktop companion build failed." }
+        & node (Join-Path $Root "src\install-plan.mjs") record-tray | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+          Write-Warning "Could not stamp the companion build; the next update will rebuild it."
+        }
+      } else {
+        Write-Output "Cargo is not on PATH; rebuilding the Electron companion instead."
+        & (Join-Path $Root "scripts\build-electron-companion.ps1") | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "Electron companion build failed." }
+      }
+      Invoke-RouterNode "src\tray-service.mjs" @("restart")
+      exit 0
     }
     # Rust is the only prerequisite the Tauri shell adds over what the router
     # install already required. Without it this step used to fail and print an

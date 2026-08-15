@@ -1733,11 +1733,29 @@ function handleTray(action) {
     // checkout even when its source fingerprint says the installed copy is
     // current, so this bypasses the update flow's staleness check and runs
     // the launcher directly. The launcher quits the running tray only after
-    // the staged replacement passes verification.
-    const result = spawnSync(path.join(REPO_ROOT, "bin", "model-router-tray"), [], {
-      stdio: "inherit",
-      env: process.env,
-    });
+    // the staged replacement passes verification. `bin/model-router-tray` is
+    // a POSIX shell script; Windows reaches the same sequence through
+    // `codex-router.ps1 tray rebuild`, which owns the cargo-or-Electron
+    // choice so it exists once instead of drifting between here and there.
+    const result = process.platform === "win32"
+      ? spawnSync(
+          "powershell.exe",
+          [
+            "-NoLogo",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            path.join(REPO_ROOT, "codex-router.ps1"),
+            "tray",
+            "rebuild",
+          ],
+          { stdio: "inherit", env: process.env },
+        )
+      : spawnSync(path.join(REPO_ROOT, "bin", "model-router-tray"), [], {
+          stdio: "inherit",
+          env: process.env,
+        });
     if (result.error) throw result.error;
     if (result.status !== 0) {
       throw new Error(`Tray rebuild failed with exit code ${result.status}.`);

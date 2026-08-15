@@ -31,12 +31,13 @@ test("command lookup lives in one place, so no file takes the finder's first lin
 });
 
 test("no POSIX bin/ script is spawned without a Windows counterpart", () => {
-  // bin/* are `#!/bin/sh` scripts. Windows reaches the same work through
-  // install.ps1, the way doctor --fix and curate-models already do.
+  // bin/* are `#!/bin/sh` scripts. Windows reaches the same work through a
+  // PowerShell counterpart -- install.ps1 for doctor --fix and curate-models,
+  // codex-router.ps1 tray rebuild for the tray launcher.
   const spawnsBinScript = /(?:spawnSync|spawn|execFileSync)\(\s*path\.join\([^)]*"bin",\s*"[a-z-]+"\s*\)/;
   const offenders = sources
     .filter(({ text }) => spawnsBinScript.test(text))
-    .filter(({ text }) => !text.includes("install.ps1"))
+    .filter(({ text }) => !text.includes(".ps1"))
     .map(({ name }) => name);
   assert.deepEqual(
     offenders,
