@@ -19,6 +19,15 @@ test("desktop local-model commands use the shared model argument", () => {
   assert.deepEqual(COMMANDS.set_local_model_enabled({ model: "gemma4:12b", enabled: true }), {
     args: ["local-models", "set", "gemma4:12b", "on"],
   });
+  // LM Studio ids carry slashes ("qwen/qwen3-4b"), which requireTag permits.
+  assert.deepEqual(
+    COMMANDS.set_lmstudio_model_enabled({ model: "qwen/qwen3-4b", enabled: true }),
+    { args: ["local-models", "lmstudio-set", "qwen/qwen3-4b", "on"] },
+  );
+  assert.deepEqual(
+    COMMANDS.set_lmstudio_model_enabled({ id: "qwen/qwen3-4b", enabled: false }),
+    { args: ["local-models", "lmstudio-set", "qwen/qwen3-4b", "off"] },
+  );
   assert.deepEqual(COMMANDS.local_model_speed({ model: "gemma4:12b" }), {
     args: ["local-models", "benchmark", "gemma4:12b"],
   });

@@ -1188,11 +1188,17 @@ async function handleLocalModels(action, value, ...rest) {
     [...new Set([...Object.keys(visionBenchmarks), ...Object.keys(localBenchmarks)])]
       .map((tag) => [tag, { ...visionBenchmarks[tag], ...localBenchmarks[tag] }]),
   );
-  const snapshot = () => localModelsSnapshot({
-    benchmarks: localAndVisionBenchmarks,
+  // The LM Studio section rides along with every snapshot so the panel's one
+  // `local_models` read covers both local runtimes. Its probe is a loopback
+  // HTTP call with a short timeout, so an LM Studio that is simply off costs
+  // the snapshot a bounded wait, not an error.
+  const { lmstudioSnapshot } = await import("./lmstudio-models.mjs");
+  const snapshot = async () => ({
+    ...localModelsSnapshot({ benchmarks: localAndVisionBenchmarks }),
+    lmstudio: await lmstudioSnapshot(),
   });
   if (action === "list" || action === "status" || !action) {
-    const current = snapshot();
+    const current = await snapshot();
     // The tray and any script read JSON; a person at a terminal was handed a
     // single unbroken line, which only got worse once the snapshot grew a
     // download list. Explicit `--json` keeps the machine contract, and a bare
@@ -1609,17 +1615,33 @@ async function handleLocalModels(action, value, ...rest) {
     setLocalModelEnabled(value, enabled);
     refreshModelSettingsCatalog({ routes: true });
     if (wasEnabled !== enabled) await restartRouterForLocalRoutes();
+  } else if (action === "lmstudio-set") {
+    if (!["on", "off"].includes(positional)) {
+      throw new Error("Usage: control local-models lmstudio-set <model-id> <on|off>");
+    }
+    // The panel's checkbox for a model LM Studio serves. Publishing goes
+    // through the same user-model overlay `curate-models lmstudio` writes,
+    // and the same restart that makes an Ollama toggle live makes this one.
+    const { isLmstudioModelEnabled, setLmstudioModelEnabled } = await import(
+      "./lmstudio-models.mjs"
+    );
+    const enabled = positional === "on";
+    const wasEnabled = isLmstudioModelEnabled(value);
+    setLmstudioModelEnabled(value, enabled);
+    refreshModelSettingsCatalog({ routes: true });
+    if (wasEnabled !== enabled) await restartRouterForLocalRoutes();
   } else {
     throw new Error(
       "Usage: control local-models list [--json]|inspect <tag-or-url>|" +
         "install <tag-or-url> [--yes] [--force]|benchmark <tag>|" +
         "runtime status|runtime start [--yes]|runtime update --yes|" +
-        "uninstall <tag> --yes|cancel [<tag>]|set <tag> <on|off>\n" +
+        "uninstall <tag> --yes|cancel [<tag>]|set <tag> <on|off>|" +
+        "lmstudio-set <id> <on|off>\n" +
         "  --yes    consent to installing/starting Ollama itself (headless)\n" +
         "  --force  download a model rated too large for this machine anyway",
     );
   }
-  process.stdout.write(`${JSON.stringify(snapshot())}\n`);
+  process.stdout.write(`${JSON.stringify(await snapshot())}\n`);
 }
 
 async function handlePicker(action, value, flag) {

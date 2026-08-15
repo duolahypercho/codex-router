@@ -844,6 +844,18 @@ h2 {
   font-size: 8px;
 }
 
+.lmstudio-section {
+  margin-top: 10px;
+}
+
+.lmstudio-section:empty {
+  display: none;
+}
+
+.lmstudio-section .local-model-row {
+  grid-template-columns: auto 1fr;
+}
+
 .maintenance-card {
   display: flex;
   align-items: center;

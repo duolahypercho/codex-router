@@ -95,6 +95,20 @@ The default endpoint is `http://127.0.0.1:1234/v1`. Override it with
 `MODEL_ROUTER_LMSTUDIO_BASE_URL`. LM Studio models use the generic Chat
 Completions path; Ollama continues using its native route and context handling.
 
+The desktop companion and browser panel list the models LM Studio is currently
+serving under Local LLMs, and checking one publishes it to the picker without
+the interactive terminal:
+
+```text
+./bin/control local-models list            # includes the LM Studio section
+./bin/control local-models lmstudio-set <model-id> on|off
+```
+
+Both doors write the same user-model overlay, so a model curated in the
+terminal can be unchecked in the panel and vice versa. Loading and unloading
+the weights stays in LM Studio; the checkbox only controls whether the model
+is offered in the picker.
+
 Downloads rated too large for the machine are stopped unless `--force` is
 present; `--yes` alone does not override the fit check, because consenting to
 install Ollama is not the same as consenting to a model that will not run. A

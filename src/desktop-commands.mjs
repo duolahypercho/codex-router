@@ -71,6 +71,9 @@ export const COMMANDS = {
   set_local_model_enabled: ({ model, tag, enabled }) => ({
     args: ["local-models", "set", requireTag(model ?? tag), enabled ? "on" : "off"],
   }),
+  set_lmstudio_model_enabled: ({ model, id, enabled }) => ({
+    args: ["local-models", "lmstudio-set", requireTag(model ?? id), enabled ? "on" : "off"],
+  }),
   install_provider_cli: ({ provider }) => ({ args: ["install-cli", requireProvider(provider)] }),
   connect_oauth: ({ provider }) => ({
     args: ["login", requireProvider(provider)],

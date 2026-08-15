@@ -120,6 +120,7 @@ fn main() {
             uninstall_local_model,
             cancel_local_model,
             set_local_model_enabled,
+            set_lmstudio_model_enabled,
             install_provider_cli,
             connect_oauth,
             save_api_key,
@@ -551,6 +552,26 @@ async fn set_local_model_enabled(
         vec![
             "local-models".into(),
             "set".into(),
+            model,
+            (if enabled { "on" } else { "off" }).into(),
+        ],
+        None,
+    )
+    .await
+}
+
+#[tauri::command]
+async fn set_lmstudio_model_enabled(
+    state: State<'_, RouterState>,
+    model: String,
+    enabled: bool,
+) -> Result<Value, String> {
+    validate_local_model_ref(&model)?;
+    run_json_command(
+        state.inner().clone(),
+        vec![
+            "local-models".into(),
+            "lmstudio-set".into(),
             model,
             (if enabled { "on" } else { "off" }).into(),
         ],

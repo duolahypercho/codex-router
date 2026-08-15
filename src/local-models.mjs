@@ -1046,6 +1046,24 @@ export function renderLocalModels(snapshot) {
       "  Any valid Ollama tag or ollama.com model URL also works.",
     );
   }
+  // Present whenever the snapshot carries it, including the not-running case:
+  // an LM Studio user who stopped the server should read "not running", not
+  // watch the whole section vanish as if support had gone away.
+  const lmstudio = snapshot.lmstudio;
+  if (lmstudio) {
+    lines.push("", `${lmstudio.displayName || "LM Studio"}:`);
+    if (!lmstudio.reachable && lmstudio.models.length === 0) {
+      lines.push("  Not running. Start LM Studio's local server to list its models.");
+    } else {
+      for (const model of lmstudio.models) {
+        lines.push(
+          `  ${model.enabled ? "[x]" : "[ ]"} ${model.id}` +
+            `${model.served ? "" : "  · not currently served"}`,
+        );
+      }
+      lines.push("  Toggle one:  ./bin/control local-models lmstudio-set <id> on|off");
+    }
+  }
   return lines.join("\n");
 }
 

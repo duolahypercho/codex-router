@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- **The panel's local-model view surfaces LM Studio.** LM Studio arrived as a
+  provider with exactly one door: `./bin/curate-models lmstudio` in an
+  interactive terminal, while the panel's Local LLMs section read only
+  `ollama list` -- so models loaded in LM Studio were invisible there and
+  uncountable in its summary. The snapshot now carries an LM Studio section
+  read from the server's own `/v1/models` endpoint, the panel lists what it
+  serves with checkboxes, and checking one publishes it through the same
+  user-model overlay the terminal writes, so neither door can strand the
+  other's entries. A stopped server reads "not running" instead of the section
+  vanishing, and a curated model the server no longer serves stays visible as
+  such rather than lingering in the picker with no way to see why.
+
 ## 0.4.0-beta.4
 
 - **A command that opens the browser panel.** The panel shipped with no way to

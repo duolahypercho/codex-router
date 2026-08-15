@@ -40,6 +40,7 @@ function startPanel() {
     providerUsage: null,
     providerSetup: null,
     localModels: null,
+    lmstudioBusy: null,
     visionBridge: null,
     visionDownload: null,
     visionPollTimer: null,
@@ -140,6 +141,7 @@ function startPanel() {
     visionEffort: document.getElementById("vision-effort"),
     visionLocalModels: document.getElementById("vision-local-models"),
     localRuntimeActions: document.getElementById("local-runtime-actions"),
+    lmstudioSection: document.getElementById("lmstudio-section"),
     refresh: document.getElementById("refresh-data"),
     islandSwitch: document.getElementById("island-switch"),
     islandSwitchLabel: document.getElementById("island-switch-label"),
@@ -200,6 +202,7 @@ function startPanel() {
   elements.localModelList.addEventListener("click", handleLocalModelClick);
   elements.localModelList.addEventListener("change", handleLocalModelToggle);
   elements.localRuntimeActions.addEventListener("click", handleLocalRuntimeClick);
+  elements.lmstudioSection.addEventListener("change", handleLmstudioModelToggle);
   elements.localDownloadStatus.addEventListener("click", handleLocalModelClick);
   elements.localQuickPicks.addEventListener("click", handleLocalModelClick);
   elements.localCatalog.addEventListener("click", handleLocalModelClick);
@@ -912,11 +915,70 @@ function startPanel() {
           .join("")}${morePicks}`
       : "";
     renderLocalCatalog(local, installBusy);
+    renderLmstudioSection(local.lmstudio, installBusy);
     const runtime = local.runtime || {};
     const machine = local.machine ? `<small class="muted-line">${escapeHtml(local.machine)}</small>` : "";
     elements.localRuntimeActions.innerHTML = runtime.installed
       ? `<div><small>Ollama ${escapeHtml(runtime.version || "installed")} · headless server ${runtime.running ? "running" : "not started"}</small>${runtime.modelsPath ? `<small class="muted-line">Models: ${escapeHtml(runtime.modelsPath)}</small>` : ""}${machine}</div><button class="text-button" type="button" data-local-runtime-action="update"${state.maintenanceBusy || state.localModelBusy ? " disabled" : ""}>Update Ollama</button>`
       : `<small>Ollama is not installed. Installing a model can set it up with explicit consent.</small>`;
+  }
+
+  // LM Studio owns loading and unloading its models, so this section is a
+  // roster with checkboxes, not a lifecycle manager: checking publishes the
+  // model to the picker, and a stopped server reads "not running" instead of
+  // the section disappearing.
+  function renderLmstudioSection(lmstudio, busy = false) {
+    if (!elements.lmstudioSection) return;
+    if (!lmstudio) {
+      elements.lmstudioSection.innerHTML = "";
+      return;
+    }
+    const name = lmstudio.displayName || "LM Studio";
+    const header = `<div class="local-section-label"><span>${escapeHtml(name)}</span><small>${
+      lmstudio.reachable
+        ? "Local server running · models are managed in LM Studio"
+        : "Not running · start LM Studio's local server to list its models"
+    }</small></div>`;
+    const models = Array.isArray(lmstudio.models) ? lmstudio.models : [];
+    if (!models.length) {
+      elements.lmstudioSection.innerHTML = lmstudio.reachable
+        ? `${header}<div class="empty-state local-empty">No models are loaded in LM Studio yet.</div>`
+        : header;
+      return;
+    }
+    const rowBusy = busy || state.lmstudioBusy;
+    const rows = models
+      .map((model) => {
+        const isBusy = state.lmstudioBusy === model.id;
+        const detail = model.served
+          ? model.enabled ? "In the picker" : "Served · unchecked"
+          : "Checked but not currently served";
+        return `<article class="local-model-row${isBusy ? " is-busy" : ""}">
+          <label class="provider-check"><input type="checkbox" data-lmstudio-toggle="${escapeHtml(model.id)}" aria-label="Offer ${escapeHtml(model.id)} in the model picker"${model.enabled ? " checked" : ""}${rowBusy ? " disabled" : ""}></label>
+          <div><strong>${escapeHtml(model.id)}</strong><small>${escapeHtml(detail)}</small></div>
+        </article>`;
+      })
+      .join("");
+    elements.lmstudioSection.innerHTML = `${header}${rows}`;
+  }
+
+  async function handleLmstudioModelToggle(event) {
+    const checkbox = event.target.closest("input[data-lmstudio-toggle]");
+    if (!checkbox) return;
+    const model = checkbox.dataset.lmstudioToggle;
+    if (!model || state.lmstudioBusy) return;
+    const enabled = checkbox.checked;
+    state.lmstudioBusy = model;
+    renderLmstudioSection(state.localModels?.lmstudio);
+    try {
+      state.localModels = await call("set_lmstudio_model_enabled", { model, enabled });
+      await refreshPanel({ quiet: true });
+    } catch (error) {
+      showToast(errorMessage(error), true);
+    } finally {
+      state.lmstudioBusy = null;
+      renderLocalModels();
+    }
   }
 
   function handleLocalCatalogInput(event) {
