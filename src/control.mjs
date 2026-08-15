@@ -1527,9 +1527,25 @@ const TRAY_COMMANDS = { enable: "install", disable: "uninstall", status: "status
 
 function handleTray(action) {
   const value = action || "status";
+  if (value === "rebuild") {
+    // The tray's footer Restart control wants the bundle rebuilt from this
+    // checkout even when its source fingerprint says the installed copy is
+    // current, so this bypasses the update flow's staleness check and runs
+    // the launcher directly. The launcher quits the running tray only after
+    // the staged replacement passes verification.
+    const result = spawnSync(path.join(REPO_ROOT, "bin", "model-router-tray"), [], {
+      stdio: "inherit",
+      env: process.env,
+    });
+    if (result.error) throw result.error;
+    if (result.status !== 0) {
+      throw new Error(`Tray rebuild failed with exit code ${result.status}.`);
+    }
+    return;
+  }
   const subcommand = TRAY_COMMANDS[value];
   if (!subcommand) {
-    throw new Error(`Usage: control tray ${Object.keys(TRAY_COMMANDS).join("|")}`);
+    throw new Error(`Usage: control tray ${[...Object.keys(TRAY_COMMANDS), "rebuild"].join("|")}`);
   }
   const result = spawnSync(
     process.execPath,

@@ -1959,21 +1959,34 @@ final class RouterStore: ObservableObject {
     return routerLocalized("Needs setup")
   }
 
-  // Restarting the companion means killing the process that is asking for it,
-  // so the request has to outlive the caller. `control tray restart` hands the
-  // job to launchd (`launchctl kickstart -k`), which has already committed to
-  // the relaunch by the time it signals this process -- the signal is the
-  // consequence of the request, not a race with it. If this process dies before
-  // the reply is read, the plist still covers it: KeepAlive's
-  // `SuccessfulExit: false` restarts the agent after any abnormal exit, so the
-  // tray cannot end up dead either way. Only the failure path can be reported,
+  // Restart rebuilds both halves and brings them back up: maintenance pulls
+  // the managed install to origin/main and verifies it (reinstalling the
+  // service when anything landed), the explicit service restart covers the
+  // nothing-to-update case, and the tray rebuild goes last because it replaces
+  // and relaunches the process that is asking. A failed update must not turn
+  // Restart into a no-op -- an offline machine still deserves a restart -- so
+  // its error is carried into the message but the restart steps still run.
+  // Each step outlives this process: maintenance may itself relaunch a stale
+  // tray, and the rebuild launcher quits this tray only after the staged
+  // bundle passes verification, with launchd's `SuccessfulExit: false`
+  // covering any abnormal exit. Only the failure path can be reported,
   // because a success takes the window that would have shown it.
-  func restartTray() async {
-    message = routerLocalized("Restarting the tray…")
+  func restartRouter() async {
+    message = routerLocalized("Restarting…")
+    var updateFailure: String?
     do {
-      _ = try await runControl(arguments: ["tray", "restart"])
+      _ = try await runControl(arguments: ["maintenance"])
     } catch {
-      message = routerFormat("Tray restart failed: %@", error.localizedDescription)
+      updateFailure = error.localizedDescription
+    }
+    do {
+      _ = try await runControl(arguments: ["service", "restart"])
+      _ = try await runControl(arguments: ["tray", "rebuild"])
+      if let updateFailure {
+        message = routerFormat("Restarted without updating: %@", updateFailure)
+      }
+    } catch {
+      message = routerFormat("Restart failed: %@", error.localizedDescription)
     }
   }
 
@@ -5286,11 +5299,10 @@ private struct TrayView: View {
       .foregroundStyle(routerAccent)
       .disabled(store.isRefreshing)
 
-      // Rebuilding the app replaces the bundle but leaves the running agent on
-      // the old binary, and quitting from here does not bring it back on a
-      // successful exit. This is the one control that closes that loop.
-      Button(routerLocalized("Restart Tray")) {
-        Task { await store.restartTray() }
+      // One control for "pick up the current code": update and reinstall the
+      // backend, restart the service, then rebuild and relaunch this tray.
+      Button(routerLocalized("Restart")) {
+        Task { await store.restartRouter() }
       }
       .buttonStyle(.plain)
       .font(.system(size: 11, weight: .medium))
