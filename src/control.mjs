@@ -122,7 +122,8 @@ async function emitProbe() {
     "./vision-bridge.mjs"
   );
   const { installedNativeVisionEngines } = await import("./vision-engines.mjs");
-  const { annotateLocalModels, hostVisionProfile } = await import("./vision-host.mjs");
+  const { annotateLocalModels, hostVisionProfile, refreshVisionModelSizesIfStale } =
+    await import("./vision-host.mjs");
   const { readVisionDownload } = await import("./vision-download.mjs");
   const { readBenchmarkResults } = await import("./vision-benchmark.mjs");
   const { readLocalBenchmarks } = await import("./local-benchmark.mjs");
@@ -137,6 +138,9 @@ async function emitProbe() {
   );
   const { localOllamaRuntimeSnapshot } = await import("./ollama-runtime.mjs");
   const { selectedConfiguredListedModels } = await import("./provider-selection.mjs");
+  // Bounded and weekly: the tray reads this snapshot constantly, so a fresh
+  // cache costs nothing and a stale one costs one short, failure-tolerant pass.
+  if (TARGET === "codex") await refreshVisionModelSizesIfStale();
   // One probe serves several tray sections. Reuse the local reads so the same
   // snapshot does not run `ollama list` and the hardware checks once per view.
   const localInventory = TARGET === "codex" ? localModelInventory() : [];
