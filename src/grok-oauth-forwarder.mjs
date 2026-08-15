@@ -19,6 +19,9 @@ import { ensureFreshGrokOAuthToken } from "./grok-oauth-session.mjs";
 import { grokOAuthStatus } from "./grok-oauth-status.mjs";
 import { normalizeSchemaLiterals, objectRootToolSchema } from "./tool-schema-root.mjs";
 import { VERSION } from "./version.mjs";
+import { installStableFetchTransport } from "./fetch-transport.mjs";
+
+installStableFetchTransport();
 
 // LiteLLM speaks OpenAI Chat Completions to this forwarder. It reuses the
 // official Grok CLI OAuth session and translates to xAI's Responses proxy.

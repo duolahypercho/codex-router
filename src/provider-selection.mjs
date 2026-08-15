@@ -9,6 +9,7 @@ import {
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { discoveryDisabled } from "./discovery-mode.mjs";
 import { protectPrivateFile } from "./file-security.mjs";
 import { PROVIDER_SELECTION_PATH, STATE_DIR, TARGET } from "./paths.mjs";
 import { LISTED_MODELS, PROVIDERS } from "./model-registry.mjs";
@@ -79,6 +80,11 @@ function filterKnownProviderIds(values) {
 }
 
 export function configuredProviderIds() {
+  // Under --no-discovery nothing counts as configured, not even keyless local
+  // backends that read no credential: "configured" feeds the default
+  // selection, the catalog, and the enable gate, and an idle install promises
+  // all of those stay empty until the operator re-runs setup.
+  if (discoveryDisabled()) return [];
   const configured = [];
   for (const provider of PROVIDERS.values()) {
     if (provider.kind === "oauth") {
@@ -246,9 +252,19 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
         `${JSON.stringify({ providers: writeProviderSelection(values) }, null, 2)}\n`,
       );
     } else if (command === "ensure-configured") {
-      const providers = existsSync(PROVIDER_SELECTION_PATH)
+      const explicit = existsSync(PROVIDER_SELECTION_PATH);
+      const providers = explicit
         ? readProviderSelection()
         : writeProviderSelection(defaultProviderIds());
+      // An explicitly written empty selection is a deliberate state -- an
+      // idle --no-provider install, or an operator who hid the last provider
+      // -- and installing on top of it must keep working, or `bin/update`
+      // would strand exactly those installs. Only a *discovered* empty set
+      // still means "nothing can authenticate yet".
+      if (providers.length === 0 && explicit) {
+        process.stdout.write(`${JSON.stringify({ providers: [], idle: true }, null, 2)}\n`);
+        process.exit(0);
+      }
       if (providers.length === 0) {
         throw new Error(
           `No provider credential is configured. Run ${

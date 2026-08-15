@@ -1,15 +1,12 @@
 import {
-  chmodSync,
   existsSync,
-  mkdirSync,
   readFileSync,
-  renameSync,
-  writeFileSync,
 } from "node:fs";
 import path from "node:path";
 
-import { protectPrivateFile } from "./file-security.mjs";
+import { writePrivateJson } from "./file-security.mjs";
 import { STATE_DIR } from "./paths.mjs";
+import { subagentProofSnapshot } from "./subagent-proofs.mjs";
 
 export const MULTI_AGENT_STATE_PATH =
   process.env.MODEL_ROUTER_MULTI_AGENT_STATE ||
@@ -70,21 +67,16 @@ export function subagentSettingsSnapshot() {
     ...settings,
     all: settings.mode === "all",
     path: MULTI_AGENT_STATE_PATH,
+    // Machine-local capability verdicts, keyed by slug: checking /
+    // experimental / proven / failed (with the failure reason). This is what
+    // lets a surface explain *why* an enabled model is or is not offered as
+    // a subagent instead of leaving it a silent no-show.
+    proofs: subagentProofSnapshot(),
   };
 }
 
 function writeSettings(settings) {
-  const stateDir = path.dirname(MULTI_AGENT_STATE_PATH);
-  mkdirSync(stateDir, { recursive: true, mode: 0o700 });
-  chmodSync(stateDir, 0o700);
-  const temporary = `${MULTI_AGENT_STATE_PATH}.tmp.${process.pid}`;
-  writeFileSync(temporary, `${JSON.stringify(settings, null, 2)}\n`, {
-    encoding: "utf8",
-    mode: 0o600,
-  });
-  protectPrivateFile(temporary);
-  renameSync(temporary, MULTI_AGENT_STATE_PATH);
-  protectPrivateFile(MULTI_AGENT_STATE_PATH);
+  writePrivateJson(MULTI_AGENT_STATE_PATH, settings, { directoryMode: 0o700 });
 }
 
 export function setMultiAgentMode(mode) {

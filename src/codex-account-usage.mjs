@@ -2,6 +2,7 @@ import { execFileSync, spawn } from "node:child_process";
 import readline from "node:readline";
 
 import { findCodexBinary } from "./codex-binary.mjs";
+import { discoveryDisabled } from "./discovery-mode.mjs";
 import { spawnableCommand } from "./spawnable-command.mjs";
 
 const DEFAULT_TIMEOUT_MS = 10_000;
@@ -94,6 +95,15 @@ export function readCodexAccountUsage({
   spawnImpl = spawn,
 } = {}) {
   return new Promise((resolve, reject) => {
+    // The app-server answers with the signed-in ChatGPT account's usage, which
+    // makes this a live credential probe against the real CODEX_HOME -- the
+    // same class of read codexAuthStatus() refuses. The tray polls this every
+    // 30 seconds, so an unguarded spawn here would quietly break the
+    // --no-discovery promise in the background.
+    if (discoveryDisabled()) {
+      reject(new Error("Credential discovery is disabled (--no-discovery); the Codex account is not read."));
+      return;
+    }
     if (!binary) {
       reject(new Error("The Codex app-server could not be started: no Codex binary was found."));
       return;

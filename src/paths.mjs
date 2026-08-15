@@ -90,6 +90,7 @@ export const CALLER_SECRET_PATH = path.join(STATE_DIR, "caller-secret");
 export const CODEX_PROVIDER_MODE_PATH = path.join(STATE_DIR, "codex-provider-mode.json");
 export const SIGNED_PROVIDER_MODE_PATH = path.join(STATE_DIR, "signed-provider-mode.json");
 export const PROVIDER_SELECTION_PATH = path.join(STATE_DIR, "enabled-providers.json");
+export const DISCOVERY_MODE_PATH = path.join(STATE_DIR, "discovery-mode.json");
 export const INSTALL_MANIFEST_PATH = path.join(STATE_DIR, "install-manifest.json");
 export const SKILL_OWNERSHIP_PATH = path.join(STATE_DIR, "managed-skills.json");
 export const MIGRATIONS_DIR = path.join(STATE_DIR, "migrations");

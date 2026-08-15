@@ -133,20 +133,46 @@ async function emitProbe() {
     [...new Set([...Object.keys(visionBenchmarks), ...Object.keys(localBenchmarks)])]
       .map((tag) => [tag, { ...visionBenchmarks[tag], ...localBenchmarks[tag] }]),
   );
-  const { localModelsSnapshot } = await import("./local-models.mjs");
+  const { localModelInventory, localModelsSnapshot, runningLocalModels } = await import(
+    "./local-models.mjs",
+  );
+  const { localOllamaRuntimeSnapshot } = await import("./ollama-runtime.mjs");
   const { selectedConfiguredListedModels } = await import("./provider-selection.mjs");
   // Bounded and weekly: the tray reads this snapshot constantly, so a fresh
   // cache costs nothing and a stale one costs one short, failure-tolerant pass.
   if (TARGET === "codex") await refreshVisionModelSizesIfStale();
+  // One probe serves several tray sections. Reuse the local reads so the same
+  // snapshot does not run `ollama list` and the hardware checks once per view.
+  const localInventory = TARGET === "codex" ? localModelInventory() : [];
+  const localRunning = TARGET === "codex" ? runningLocalModels() : [];
+  const localProfile = TARGET === "codex" ? hostVisionProfile() : undefined;
+  const localRuntime = TARGET === "codex" ? localOllamaRuntimeSnapshot() : undefined;
+  const localInstalled = localInventory.map((model) => model.tag);
 
   const enabledProviders = readProviderSelection();
   const hiddenModels = new Set(modelPickerSnapshot().hidden);
   const usageEvents = TARGET === "codex"
     ? (await import("./usage-events.mjs")).recentUsageEvents()
     : [];
+  // The same machine-local capability proofs the catalog honors: the tray's
+  // "Subagent models" section filters on v2, so a probe built from the raw
+  // registry hid every model this machine had just verified — the third
+  // consumer to need this overlay, after the catalog and the DSH preset.
+  //
+  // Deliberately unlike the catalog, `disabled` is not passed: the catalog
+  // demotes a switched-off model so Codex stops offering it, but this probe
+  // is what draws the rows the operator switches. A proven model whose
+  // toggle is off must keep its row — with the toggle shown off — or the
+  // section it was switched off in loses the way to switch it back on.
+  const { applySubagentProofs } = await import("./subagent-proofs.mjs");
+  const provenListedModels = applySubagentProofs(
+    LISTED_MODELS,
+    subagentSettingsSnapshot().proofs,
+    { hidden: hiddenModels },
+  );
   // The tray groups models by provider to build its rows, so protocol
   // variants report their canonical family id: one opencode Go row, not three.
-  const routedModels = LISTED_MODELS.map((model) => ({
+  const routedModels = provenListedModels.map((model) => ({
     slug: model.slug,
     displayName: model.displayName,
     provider: canonicalProviderId(model.provider),
@@ -173,6 +199,16 @@ async function emitProbe() {
           id: provider.id,
           displayName: provider.displayName,
           kind: provider.kind,
+          // The vendor, so a UI can group the rows a `variantOf` cannot merge.
+          // Z.ai, Kimi, and xAI each publish several providers that are one
+          // brand but genuinely separate accounts -- different endpoints, and
+          // keys that are not interchangeable -- so they must stay separately
+          // connectable while still reading as one vendor.
+          ownedBy: provider.ownedBy,
+          // An anonymous gateway is not an account, so the tray needs this to
+          // keep one out of a vendor's "N accounts" group (opencode-free would
+          // otherwise be drawn as a second opencode account).
+          authMode: provider.authMode,
         })),
       models,
       ...(selectedModel ? { selectedModel } : {}),
@@ -192,7 +228,12 @@ async function emitProbe() {
               subagents: subagentSettingsSnapshot(),
               picker: modelPickerSnapshot(),
               toolResultAging: toolResultAgingSnapshot(),
-              localModels: localModelsSnapshot({ benchmarks: localAndVisionBenchmarks }),
+              localModels: localModelsSnapshot({
+                inventory: localInventory,
+                running: localRunning,
+                runtime: localRuntime,
+                benchmarks: localAndVisionBenchmarks,
+              }),
               visionBridge: (() => {
                 const candidates = selectedConfiguredListedModels();
                 // Only the native models that actually shipped into the picker.
@@ -210,7 +251,7 @@ async function emitProbe() {
                   ...visionBridgeSnapshot(),
                   resolvedEngine: resolved?.slug || null,
                   resolvedEngineName: resolved?.displayName || null,
-                  hostMemGib: hostVisionProfile().memGib,
+                  hostMemGib: localProfile.memGib,
                   // Cloud vision models the operator already pays for -- the
                   // default engines. Auto picks the cheapest of these.
                   paidEngines: rankVisionEngines(candidates).map((model) => ({
@@ -228,7 +269,11 @@ async function emitProbe() {
                     efforts: visionEngineEfforts(model),
                   })),
                   // The downloadable local picker, each with size + fit + state.
-                  localModels: annotateLocalModels({ benchmarks: readBenchmarkResults() }),
+                  localModels: annotateLocalModels({
+                    profile: localProfile,
+                    installed: localInstalled,
+                    benchmarks: localAndVisionBenchmarks,
+                  }),
                   download: readVisionDownload(),
                 };
               })(),
@@ -712,7 +757,7 @@ async function knownModelSlug(slug) {
   return MODEL_BY_SLUG.has(slug);
 }
 
-async function handleSubagents(action, value, flag) {
+async function handleSubagents(action, value, flag, rest = []) {
   const {
     replaceMultiAgentState,
     setMultiAgentMode,
@@ -740,6 +785,19 @@ async function handleSubagents(action, value, flag) {
     });
   } else if (action === "mode") {
     setMultiAgentMode(value);
+  } else if (action === "verify") {
+    // Explicit re-research: probe the named slugs (or every enabled one) in
+    // the foreground and print the verdicts. Spends ~2 live requests per
+    // candidate on that model's own provider.
+    const { verifySubagentCandidates } = await import("./subagent-verify.mjs");
+    const targets = rest.filter(Boolean);
+    const sweep = targets.length
+      ? targets
+      : subagentSettingsSnapshot().enabled;
+    const verified = await verifySubagentCandidates(sweep, { force: targets.length > 0 });
+    refreshModelSettingsCatalog();
+    process.stdout.write(`${JSON.stringify({ verified })}\n`);
+    return;
   } else if (action === "set") {
     if (!["on", "off"].includes(flag)) {
       throw new Error("Usage: control subagents set <model-slug> <on|off>");
@@ -748,6 +806,14 @@ async function handleSubagents(action, value, flag) {
       throw new Error(`Unknown model slug: ${value}`);
     }
     setMultiAgentModel(value, flag === "on");
+    // Selection is the assignment: switching a model on hands it to the
+    // capability probe. Detached, because this command answers a tray toggle
+    // and cannot sit on a live network round-trip; the proofs snapshot shows
+    // "checking" until the worker records a verdict and republishes.
+    if (flag === "on") {
+      const { spawnDetachedVerification } = await import("./subagent-verify.mjs");
+      spawnDetachedVerification([value]);
+    }
   } else if (action === "provider") {
     if (!["on", "off"].includes(flag)) {
       throw new Error("Usage: control subagents provider <provider-id> <on|off>");
@@ -763,10 +829,14 @@ async function handleSubagents(action, value, flag) {
       throw new Error(`No enabled models found for provider: ${value}`);
     }
     setMultiAgentModels(slugs, flag === "on");
+    if (flag === "on") {
+      const { spawnDetachedVerification } = await import("./subagent-verify.mjs");
+      spawnDetachedVerification(slugs);
+    }
   } else {
     throw new Error(
       "Usage: control subagents status|select-all|unselect-all|mode <all|selected|proven>|" +
-        "set <model-slug> <on|off>|provider <provider-id> <on|off>",
+        "set <model-slug> <on|off>|provider <provider-id> <on|off>|verify [model-slug ...]",
     );
   }
   refreshModelSettingsCatalog();
@@ -1585,7 +1655,7 @@ if (args.includes("--probe")) {
 } else if (args[0] === "model-set") {
   await setLoginFreeModel(args[1]);
 } else if (args[0] === "subagents") {
-  await handleSubagents(args[1], args[2], args[3]);
+  await handleSubagents(args[1], args[2], args[3], args.slice(2));
 } else if (args[0] === "tool-result-aging") {
   await handleToolResultAging(args[1], args[2]);
 } else if (args[0] === "local-models") {

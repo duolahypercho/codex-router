@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "providers": [
+    {
+      "id": "lmstudio",
+      "displayName": "LM Studio (Local)",
+      "kind": "openai-compatible",
+      "ownedBy": "lmstudio",
+      "protocol": "openai",
+      "baseUrl": "http://127.0.0.1:1234/v1",
+      "baseUrlEnv": "MODEL_ROUTER_LMSTUDIO_BASE_URL",
+      "keyless": true,
+      "planNote": "Runs on this machine. Start the LM Studio local server before using these models."
+    }
+  ]
+}

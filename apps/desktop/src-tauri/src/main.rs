@@ -19,6 +19,9 @@ use tauri::{
     AppHandle, Manager, PhysicalPosition, Position, State, WebviewWindow, WindowEvent,
 };
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
 const PANEL_WIDTH: f64 = 382.0;
 const PANEL_HEIGHT: f64 = 610.0;
 const ISLAND_WIDTH: f64 = 326.0;
@@ -746,6 +749,14 @@ fn run_control(
             Stdio::null()
         });
 
+    // Spawned from a GUI process with no console, a console-subsystem child
+    // (node.exe) gets a fresh console window unless CREATE_NO_WINDOW is set.
+    // Every control call would otherwise flash a terminal on screen.
+    #[cfg(windows)]
+    {
+        command.creation_flags(0x08000000);
+    }
+
     let mut child = command
         .spawn()
         .map_err(|_| "Could not start the Model Router control process.".to_string())?;
@@ -1000,6 +1011,25 @@ fn resolve_source_root(app: &AppHandle) -> Option<PathBuf> {
         .into_iter()
         .find(|candidate| candidate.join("src/control.mjs").is_file())
         .and_then(|candidate| candidate.canonicalize().ok().or(Some(candidate)))
+        .map(windows_readable_path)
+}
+
+// `canonicalize` returns Windows extended-length paths (`\\?\C:\...`). Node
+// cannot execute one of those as a script entry point: it strips the prefix,
+// resolves the drive letter alone, and fails at startup with ESDIR/EISDIR on a
+// directory — which is exactly the error the tray's refresh produced on every
+// spawn. The desktop app never needs the extended form (its paths are far
+// short of MAX_PATH), so drop the prefix before handing the path to Node.
+fn windows_readable_path(path: PathBuf) -> PathBuf {
+    #[cfg(windows)]
+    {
+        if let Some(text) = path.to_str() {
+            if let Some(stripped) = text.strip_prefix(r"\\?\") {
+                return PathBuf::from(stripped);
+            }
+        }
+    }
+    path
 }
 
 fn standard_source_roots() -> Vec<PathBuf> {
@@ -1224,6 +1254,29 @@ mod tests {
     fn rejects_non_success_health_response() {
         let response = b"HTTP/1.1 503 Nope\r\n\r\n{}";
         assert!(parse_health_response(response).is_none());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn source_root_path_is_executable_by_node() {
+        // `canonicalize` returns `\\?\C:\...` on Windows, which node cannot run
+        // as a script entry (it fails with ESDIR/EISDIR on the drive letter).
+        // The stripped form must be what the desktop app hands to node.
+        let extended = windows_readable_path(PathBuf::from(r"\\?\C:\Users\me\codex-router"));
+        assert_eq!(extended, PathBuf::from(r"C:\Users\me\codex-router"));
+        let plain = windows_readable_path(PathBuf::from(r"C:\Users\me\codex-router"));
+        assert_eq!(plain, PathBuf::from(r"C:\Users\me\codex-router"));
+        let posix = windows_readable_path(PathBuf::from("/home/me/codex-router"));
+        assert_eq!(posix, PathBuf::from("/home/me/codex-router"));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn source_root_path_is_left_alone_off_windows() {
+        // The extended-length prefix only exists on Windows; everywhere else
+        // the helper must hand the path through untouched.
+        let posix = windows_readable_path(PathBuf::from("/home/me/codex-router"));
+        assert_eq!(posix, PathBuf::from("/home/me/codex-router"));
     }
 
     #[cfg(target_os = "linux")]

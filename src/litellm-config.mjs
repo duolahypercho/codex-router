@@ -26,7 +26,7 @@ export function renderLiteLlmConfig() {
     // a 16 GB machine and pushes inference onto the CPU. Measured here, the
     // same model went from 17 GB and 43% CPU to 3.1 GB entirely on the GPU,
     // and from ~35 s to under 10 s for the same reply.
-    if (provider.keyless) {
+    if (provider.keyless && provider.transport === "ollama") {
       lines.push(
         `  - model_name: ${yamlString(model.gatewayModel)}`,
         "    litellm_params:",

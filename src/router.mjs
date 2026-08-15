@@ -36,6 +36,7 @@ import {
 } from "./paths.mjs";
 import { MODEL_BY_SLUG, PROVIDERS, providerForModel } from "./model-registry.mjs";
 import { createHealthCache } from "./health-cache.mjs";
+import { discoveryDisabled } from "./discovery-mode.mjs";
 import { readNativeAliases } from "./native-alias.mjs";
 import { readNativeRedirect } from "./native-redirect.mjs";
 import {
@@ -54,7 +55,15 @@ import {
   NamespaceToolCallTransform,
   flattenNamespacedHistory,
   flattenNamespaceTools,
+  repairToolSchemaRoots,
 } from "./namespace-relay.mjs";
+import { pendingInterruptTargets } from "./subagent-completion.mjs";
+import {
+  awaitingSpawnProof,
+  recordSpawnFailure,
+  recordSpawnObserved,
+  subagentProofSnapshot,
+} from "./subagent-proofs.mjs";
 import { mergeCodexAppTools } from "./codex-app-tools.mjs";
 import { activityMetadataFromHeaders } from "./codex-session-names.mjs";
 import { translateGatewayError } from "./error-translation.mjs";
@@ -85,6 +94,9 @@ import {
 } from "./tool-result-aging-state.mjs";
 import { VERSION } from "./version.mjs";
 import { nativeSessionHeaders } from "./codex-native-session.mjs";
+import { installStableFetchTransport } from "./fetch-transport.mjs";
+
+installStableFetchTransport();
 
 const LISTEN_HOST =
   process.env.CODEX_ROUTER_HOST || process.env.KIMI_ROUTER_HOST || "127.0.0.1";
@@ -1666,6 +1678,56 @@ function requireCodexTransport(request, response) {
   return true;
 }
 
+// A model in the experimental subagent window earns its durable proof — or
+// its demotion — from real traffic: Codex marks child turns with
+// x-openai-subagent, so the first clean completion of one settles "this model
+// can hold the child role" without a dedicated probe session. Only structural
+// rejections demote (400/422, the shape a schema or encrypted-payload refusal
+// takes); transient failures — 429s, 5xx, disconnects — prove nothing either
+// way and leave the window open. Neither line is QUIET-gated: a promotion or
+// demotion that happens silently is how a picker entry becomes unexplainable.
+function observeSubagentOutcome(request, route, status, { emptyCompletion = false } = {}) {
+  if (!route) return;
+  try {
+    if (!request.headers["x-openai-subagent"]) return;
+    if (!awaitingSpawnProof(route.slug, subagentProofSnapshot())) return;
+    if (status === 200 && !emptyCompletion) {
+      recordSpawnObserved(route.slug, { status });
+      console.error(
+        `[codex-router] subagent proven: ${route.slug} completed a live child turn`,
+      );
+    } else if (status === 400 || status === 422) {
+      recordSpawnFailure(route.slug, {
+        status,
+        reason: `child turn rejected with HTTP ${status}`,
+      });
+      console.error(
+        `[codex-router] subagent demoted: ${route.slug} child turn rejected with HTTP ${status}; ` +
+          "it stays v1 until 'control subagents verify' passes again",
+      );
+    }
+  } catch {
+    // Observation is bookkeeping; it must never fail the turn it watched.
+  }
+}
+
+// The local answer an idle install gives instead of native forwarding. With
+// discovery disabled the native path is impossible by construction -- the
+// session fallback never reads auth.json -- so traffic that would leave for
+// chatgpt.com is refused before any upstream fetch, keeping the --no-discovery
+// promise that nothing leaves this machine.
+function writeIdleNoProviderError(response) {
+  writeJson(response, 503, {
+    error: {
+      type: "router_idle_no_provider",
+      message:
+        "This router was installed without providers and with credential discovery disabled " +
+        "(--no-provider --no-discovery), so no traffic leaves this machine. " +
+        "Re-run setup without those flags to enable a provider.",
+    },
+  });
+}
+
 async function handleResponses(request, response, requestUrl) {
   const startedAt = Date.now();
   const activity = beginRequestActivity();
@@ -1683,6 +1745,7 @@ async function handleResponses(request, response, requestUrl) {
   let usage;
   let estimatedInputTokens;
   let toolResultAging;
+  let pendingInterrupts = [];
   let emptyCompletion = false;
   let emptyCompletionRetried = false;
   // An empty turn the router could not repair because the attempt was already
@@ -1726,6 +1789,13 @@ async function handleResponses(request, response, requestUrl) {
           message: `Provider ${registeredRoute.provider} is hidden. Run ./bin/providers enable ${registeredRoute.provider}.`,
         },
       });
+      return;
+    }
+    // Anything without a route from here on is native GPT traffic. An install
+    // that merely hid every provider keeps its native passthrough -- that has
+    // always worked -- but an idle --no-discovery install answers locally.
+    if (!route && discoveryDisabled()) {
+      writeIdleNoProviderError(response);
       return;
     }
     // Activity and usage attribute protocol variants to their canonical
@@ -1840,6 +1910,12 @@ async function handleResponses(request, response, requestUrl) {
         // spawn_agent model enum off it to drop an invented or stale optional
         // override before Codex validates the call.
         flattenedNamespaces = flattenNamespaceTools(payload.tools).namespaces;
+        // Keeping the namespace shape is not the same as keeping a root the
+        // upstream rejects. `opencode-go-responses/gpt-5.6-luna` 400s a
+        // `type: ["object","null"]` parameter root while accepting the same
+        // request with a plain or union root -- so the strict-root repair has to
+        // run here too, on the tools alone, without flattening anything.
+        payload.tools = repairToolSchemaRoots(payload.tools);
       }
       let routedInput = input;
       // The stored call history must use the same tool names as the tool
@@ -1847,6 +1923,11 @@ async function handleResponses(request, response, requestUrl) {
       if (namespacesFlattened) {
         routedInput = flattenNamespacedHistory(routedInput, flattenedNamespaces);
       }
+      // Close finished children the parent left Working. Only when the
+      // collaboration toolset is actually available on this turn.
+      pendingInterrupts = pendingInterruptTargets(input, {
+        namespaces: flattenedNamespaces,
+      });
       const routed = {
         ...payload,
         model: route.gatewayModel,
@@ -1886,6 +1967,13 @@ async function handleResponses(request, response, requestUrl) {
           toolResultAging = aged.stats;
         }
       }
+      // SF and other native multi-agent parents hit this path (model_provider
+      // openai). They have the same Working-badge bug, so inventory the tools
+      // and queue missing interrupt_agent closes the same way as routed turns.
+      flattenedNamespaces = flattenNamespaceTools(payload.tools).namespaces;
+      pendingInterrupts = pendingInterruptTargets(native.input ?? payload.input, {
+        namespaces: flattenedNamespaces,
+      });
       if (!compactV1) delete native.previous_response_id;
       if (callerBroughtNoUpstreamCredential(request)) {
         normalizeNativeForSubstitutedCaller(native);
@@ -1958,6 +2046,7 @@ async function handleResponses(request, response, requestUrl) {
         responseStartMs: upstreamLatencyMs,
         firstTokenMs,
       });
+      observeSubagentOutcome(request, route, upstream.status);
       finalStatus = upstream.status;
       activityStatus = upstream.status;
       usageRecorded = true;
@@ -1988,12 +2077,19 @@ async function handleResponses(request, response, requestUrl) {
             : undefined,
       });
       const transforms = [usageObserver];
-      // Every attempt uses the same normal transform pipeline. In particular,
-      // a tool call recovered by the retry must still have its flattened
-      // namespace restored before Codex sees it.
-      if (route) {
+      // Restore flattened namespace calls for routed chat-completions providers,
+      // and inject missing finished-child interrupts for both routed and native
+      // multi-agent parents (San Francisco uses native GPT).
+      if (route || pendingInterrupts.length > 0) {
         transforms.push(
-          new NamespaceToolCallTransform(flattenedNamespaces, contentType, route.slug),
+          new NamespaceToolCallTransform(
+            flattenedNamespaces,
+            contentType,
+            route?.slug,
+            // A native stream is attached only for the injection, so it must
+            // not pick up the routed-provider rewrites on the way through.
+            { pendingInterrupts, injectOnly: !route },
+          ),
         );
       }
       const guard =
@@ -2188,6 +2284,7 @@ async function handleResponses(request, response, requestUrl) {
       ...(emptyCompletionUnrepairable ? { emptyCompletionUnrepairable: true } : {}),
       ...(guardReleasedForBudget ? { emptyCompletionGuardReleased: true } : {}),
     });
+    observeSubagentOutcome(request, route, finalStatus, { emptyCompletion });
     usageRecorded = true;
     activityStatus = finalStatus;
     if (!QUIET) {
@@ -2305,6 +2402,12 @@ async function handleNativeRequest(request, response, requestUrl, defaultModel) 
   let requestedModel = defaultModel;
   try {
     if (!requireCodexTransport(request, response)) return;
+    // Image and web-search turns are native-only; an idle install refuses
+    // them locally rather than forwarding to chatgpt.com.
+    if (discoveryDisabled()) {
+      writeIdleNoProviderError(response);
+      return;
+    }
     const encoded = await readRequestBody(request);
     const body = decodeBody(encoded, request.headers["content-encoding"]);
     const payload = parseBody(body);

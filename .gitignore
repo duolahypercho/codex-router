@@ -1,7 +1,7 @@
 .DS_Store
 .venv/
 .build/
-node_modules/
+node_modules
 dist/
 apps/desktop/src-tauri/target/
 apps/desktop/src-tauri/gen/

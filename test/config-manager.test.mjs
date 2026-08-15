@@ -120,7 +120,7 @@ approval_policy = "never"
     assert.match(configured, /# BEGIN codex-router-multi-agent-v2-managed/);
     assert.match(
       configured,
-      /multi_agent_v2 = \{ enabled = true, max_concurrent_threads_per_session = 6, expose_spawn_agent_model_overrides = true \}/,
+      /multi_agent_v2 = \{ enabled = true, max_concurrent_threads_per_session = 6, expose_spawn_agent_model_overrides = true, usage_hint_enabled = true, root_agent_usage_hint_text = "When a child agent finishes \(FINAL_ANSWER, task_complete, or an idle\/errored wait snapshot\), call interrupt_agent on that child so Codex can mark it done\. Do not leave finished children in the working state\." \}/,
     );
     assert.doesNotMatch(configured, /codex-router-agent-concurrency-managed/);
     assert.doesNotMatch(configured, /^max_concurrent_threads_per_session\s*=/m);
@@ -319,7 +319,7 @@ test("config manager enables multi_agent_v2 and skips the legacy agents scalar w
     assert.match(enabled, /# BEGIN codex-router-multi-agent-v2-managed/);
     assert.match(
       enabled,
-      /multi_agent_v2 = \{ enabled = true, max_concurrent_threads_per_session = 6, expose_spawn_agent_model_overrides = true \}/,
+      /multi_agent_v2 = \{ enabled = true, max_concurrent_threads_per_session = 6, expose_spawn_agent_model_overrides = true, usage_hint_enabled = true, root_agent_usage_hint_text = "When a child agent finishes \(FINAL_ANSWER, task_complete, or an idle\/errored wait snapshot\), call interrupt_agent on that child so Codex can mark it done\. Do not leave finished children in the working state\." \}/,
     );
     assert.doesNotMatch(enabled, /codex-router-agent-concurrency-managed/);
     assert.doesNotMatch(enabled, /^max_concurrent_threads_per_session\s*=/m);
@@ -335,6 +335,22 @@ test("config manager enables multi_agent_v2 and skips the legacy agents scalar w
     const restored = readFileSync(configPath, "utf8");
     assert.doesNotMatch(restored, /codex-router-multi-agent-v2-managed|multi_agent_v2/);
     assert.equal(restored.trimStart(), `model = "gpt-5.5"\n`);
+  } finally {
+    rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
+test("the managed multi_agent_v2 line tells the parent to interrupt finished children", () => {
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), "codex-router-v2-hint-"));
+  const configPath = path.join(codexHome, "config.toml");
+  writeFileSync(configPath, `model = "gpt-5.5"\n`, { mode: 0o600 });
+
+  try {
+    run("enable", codexHome);
+    const enabled = readFileSync(configPath, "utf8");
+    assert.match(enabled, /usage_hint_enabled = true/);
+    assert.match(enabled, /root_agent_usage_hint_text = "When a child agent finishes/);
+    assert.match(enabled, /call interrupt_agent on that child/);
   } finally {
     rmSync(codexHome, { recursive: true, force: true });
   }
@@ -577,7 +593,7 @@ test("config manager upgrades the earlier Kimi-only managed block", () => {
 
 # BEGIN kimi-codex-router-managed
 openai_base_url = "http://127.0.0.1:46192/v1"
-model_catalog_json = "${path.join(codexHome, "kimi-router", "merged-models.json")}"
+model_catalog_json = ${JSON.stringify(path.join(codexHome, "kimi-router", "merged-models.json"))}
 # END kimi-codex-router-managed
 
 [profiles.personal]
@@ -613,7 +629,7 @@ model_reasoning_effort = "high"
 
 # BEGIN kimi-codex-router-managed
 openai_base_url = "http://127.0.0.1:46192/v1"
-model_catalog_json = "${prototypeCatalog}"
+model_catalog_json = ${JSON.stringify(prototypeCatalog)}
 
 [projects."/important/project"]
 trust_level = "trusted"
@@ -1216,6 +1232,104 @@ wire_api = "responses"
       /lost ownership|Refusing to replace/i,
     );
     assert.match(readFileSync(configPath, "utf8"), /changed\.invalid/);
+  } finally {
+    rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
+test("config manager keeps user tables parked inside the managed provider block", () => {
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), "codex-router-config-"));
+  const configPath = path.join(codexHome, "config.toml");
+  writeFileSync(configPath, 'model = "gpt-5.6-sol"\nmodel_provider = "openai"\n', {
+    mode: 0o644,
+  });
+
+  try {
+    run("enable", codexHome);
+
+    // The desktop app rewrites config.toml wholesale and can park user tables
+    // between the managed provider table and the end marker.
+    const parked = readFileSync(configPath, "utf8").replace(
+      "# END codex-router-provider-managed",
+      `[desktop]
+localeOverride = "zh-CN"
+followUpQueueMode = "queue"
+
+[desktop.appearanceLightChromeTheme]
+accent = "#4e96d1"
+
+# END codex-router-provider-managed`,
+    );
+    assert.notEqual(parked, readFileSync(configPath, "utf8"));
+    writeFileSync(configPath, parked, { mode: 0o600 });
+
+    const reenabled = run("enable", codexHome);
+    assert.equal(reenabled.mode, "router");
+    const refreshed = readFileSync(configPath, "utf8");
+    assert.match(refreshed, /\[desktop\]/);
+    assert.match(refreshed, /localeOverride = "zh-CN"/);
+    assert.match(refreshed, /\[desktop\.appearanceLightChromeTheme\]/);
+    assert.match(refreshed, /accent = "#4e96d1"/);
+    // The hoisted table must sit outside the managed block.
+    const providerBlock = refreshed.match(
+      /# BEGIN codex-router-provider-managed\n[\s\S]*?\n# END codex-router-provider-managed/,
+    );
+    assert.ok(providerBlock);
+    assert.doesNotMatch(providerBlock[0], /\[desktop\]/);
+
+    const disabled = run("disable", codexHome);
+    assert.equal(disabled.mode, "native");
+    const restored = readFileSync(configPath, "utf8");
+    assert.doesNotMatch(restored, /codex-router-provider-managed/);
+    assert.match(restored, /\[desktop\]/);
+    assert.match(restored, /localeOverride = "zh-CN"/);
+    assert.match(restored, /accent = "#4e96d1"/);
+  } finally {
+    rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
+test("a header-looking line inside a parked multiline string does not split the hoist", () => {
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), "codex-router-config-"));
+  const configPath = path.join(codexHome, "config.toml");
+  writeFileSync(configPath, 'model = "gpt-5.6-sol"\nmodel_provider = "openai"\n', {
+    mode: 0o644,
+  });
+
+  try {
+    run("enable", codexHome);
+
+    // A parked table can hold a multiline string whose content looks like a
+    // TOML header. A `[`-prefix line scan would split the string there and
+    // corrupt the hoisted table; the real scanner must carry it out whole.
+    const parked = readFileSync(configPath, "utf8").replace(
+      "# END codex-router-provider-managed",
+      `[desktop]
+notes = """
+[not_a_table]
+still the same string
+"""
+accent = "#4e96d1"
+
+# END codex-router-provider-managed`,
+    );
+    writeFileSync(configPath, parked, { mode: 0o600 });
+
+    const reenabled = run("enable", codexHome);
+    assert.equal(reenabled.mode, "router");
+    const refreshed = readFileSync(configPath, "utf8");
+    // The whole table survived as one piece: header, multiline string with its
+    // header-looking content, and the key that followed the string.
+    assert.match(
+      refreshed,
+      /\[desktop\]\nnotes = """\n\[not_a_table\]\nstill the same string\n"""\naccent = "#4e96d1"/,
+    );
+    // The string content was not promoted to a real table anywhere.
+    assert.equal(
+      refreshed.indexOf("[not_a_table]"),
+      refreshed.lastIndexOf("[not_a_table]"),
+      "the header-looking line appears once, inside the string",
+    );
   } finally {
     rmSync(codexHome, { recursive: true, force: true });
   }

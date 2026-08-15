@@ -2,6 +2,101 @@
 
 ## Unreleased
 
+- **A credential-free install mode for lifecycle validation.** (#224)
+  `install.sh --no-provider --no-discovery` (PowerShell: `-NoProvider
+  -NoDiscovery`) installs the router idle: an explicit empty provider
+  selection, no credential prompts, and a persisted discovery kill-switch
+  honored by every credential reader — provider key files, the macOS
+  Keychain, other CLIs' OAuth and session files, Codex's `auth.json`, and the
+  `codex login status` probe all stay untouched. Codex traffic gets a local
+  `503 router_idle_no_provider` instead of provider or native forwarding, the
+  doctor reports the idle state at warn and exits 0, and a new `stop`
+  subcommand completes the install → start → status → doctor → stop →
+  uninstall loop. Re-running setup without the flags leaves idle mode. As
+  part of this, an explicitly empty provider selection now passes
+  `ensure-configured` as idle, which also un-breaks `bin/update` for anyone
+  who had hidden their last provider by hand.
+- **Uninstalling the last client integration now removes the background
+  service.** Whether Codex still counted as installed was keyed on the cached
+  native catalog, a file uninstall deliberately retains — so the service, its
+  LaunchAgent, and its listening ports survived every codex uninstall. The
+  installed-state witness is now the managed block in `config.toml`, which
+  enable writes and disable removes; `bin/disable` of the last client retires
+  the service too, matching what the Windows wrapper always did, and
+  `bin/enable` reinstalls it on the way back.
+
+- **Switching a model on as a subagent now researches it instead of ignoring
+  it.** Only six registry-proven models could ever be spawned as native v2
+  children; everything else the operator enabled was a silent no-show, and
+  promoting one more meant a repository change per model per provider. Now the
+  toggle is the assignment: enabling a model hands it to a detached capability
+  probe (two live requests proving streaming and a forced tool call through
+  the installed router), a passing model is advertised to Codex as an
+  experimental subagent, and the first real child turn settles the verdict —
+  the router watches its own request path for `x-openai-subagent` turns, and a
+  clean completion records a durable machine-local proof while a structural
+  rejection demotes the model back to v1 with the reason kept in the subagent
+  snapshot. Evidence lives in the protected `multi-agent-proofs.json`; local
+  settings still cannot manufacture a v2 claim, hidden or switched-off models
+  stay v1 whatever evidence they carry, and `control subagents verify` re-runs
+  the research explicitly.
+
+- **A reasoning model no longer answers into thirty seconds of silence.** The
+  empty-completion guard buffered every routed streaming response until it saw
+  content, and reasoning deltas deliberately did not count as content. On a
+  reasoning model the gap between the first reasoning delta and the first output
+  token is seconds to minutes, so the guard held that entire gap and the caller
+  saw nothing until the turn closed or the hold budget expired. Measured against
+  `opencode-go/deepseek-v4-pro` with only this behaviour varying, the client's
+  first byte moved from 30,638 ms to 517 ms; `deepseek-v4-flash` moved from
+  29,409 ms to 536 ms. Both held runs parked at the 30-second budget, which is
+  to say the budget decided when the caller saw anything, not the model.
+
+  Throughput was never affected, which is why this read as a frozen turn rather
+  than a slow one — and why no metric caught it. `responseStartMs` stops at
+  the response headers and `firstTokenMs` fires on reasoning deltas, and the
+  guard kept holding past both.
+
+  The hold exists only to make the retry invisible, and the recorded meter
+  prices it: across 19,043 routed turns it fired 168 retries, of which 17
+  succeeded. Every reasoning turn paid up to thirty seconds of dead air for a
+  silent rescue on roughly one routed turn in a thousand. So reasoning now ends
+  the hold without settling the verdict — the stream is relayed and the guard
+  keeps watching from behind it, and a turn that reasons and then produces
+  nothing is still classified empty. A silent upstream has no prologue worth
+  waiting for, so that case still holds every byte and still retries silently.
+
+- **An empty turn that already reached the client is stated, not swallowed.**
+  Once the prologue is on the wire the router cannot substitute a retry for it,
+  so it writes an `error` event into the open stream instead of grafting a
+  second response onto one the client is already reading. Codex treats that as
+  retryable and reissues the turn on its own ladder, which recovers more than
+  the single silent retry it replaces — verified against `codex-cli` 0.145.0
+  with a stub upstream: a reasoning turn ending in an empty completion produced
+  one request, no answer and no error, while the same turn ending in an `error`
+  event produced two requests and an answer. Turns that end this way are
+  metered as `emptyCompletionUnrepairable`, apart from the retried ones, because
+  one is a failure the router absorbed and the other is one the user sees.
+
+- **Finished subagents close without a click, even when the parent ignores the
+  usage hint.** Codex 0.147 still maps a child's `FINAL_ANSWER` to Working for
+  the live parent turn, and long San Francisco multi-agent parents often never
+  call `interrupt_agent` despite the managed `root_agent_usage_hint_text`. The
+  router now scans the request input for unfinished `FINAL_ANSWER` children and
+  injects the missing `collaboration.interrupt_agent` calls into the parent
+  response (stream and non-stream) before `response.completed`. This runs on
+  both routed external models and native OpenAI multi-agent parents (the SF
+  build path). Model-authored interrupts are left alone; only missing closes
+  are added.
+
+- **Finished subagents no longer stay Working just because the parent turn is
+  still live.** Codex 0.147 records a child's `FINAL_ANSWER` as
+  `subAgentActivity` `interacted` and maps that to Working until the parent
+  turn ends, the user clicks into the child, or the parent calls
+  `interrupt_agent`. `close_agent` is not in that v2 toolset. The managed
+  `multi_agent_v2` block now ships a root usage hint that tells the parent to
+  interrupt finished children, so new tasks settle the badge without a click.
+
 - **GLM-5.3, on every route that actually serves it.** Z.ai shipped GLM-5.3 on
   2026-08-14. It is now in the picker three ways: `zai-coding/glm-5.3` on the
   GLM Coding Plan subscription, `zai-api/glm-5.3` on the metered platform, and

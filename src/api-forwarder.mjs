@@ -16,6 +16,7 @@ import {
   MODEL_BY_GATEWAY_ID,
   PROVIDERS,
   providerForModel,
+  resolveProviderBaseUrl,
 } from "./model-registry.mjs";
 import { parseRateLimitHeaders } from "./rate-limit-headers.mjs";
 import { recordRateLimitSnapshot } from "./rate-limit-state.mjs";
@@ -31,6 +32,9 @@ import {
   githubCopilotRequestHeaders,
 } from "./github-copilot-session.mjs";
 import { VERSION } from "./version.mjs";
+import { installStableFetchTransport } from "./fetch-transport.mjs";
+
+installStableFetchTransport();
 
 const LISTEN_HOST =
   process.env.MODEL_ROUTER_API_HOST ||
@@ -57,10 +61,19 @@ const QUIET =
 
 if (!INTERNAL_KEY) throw new Error("MODEL_ROUTER_INTERNAL_KEY is required.");
 
+// One line per provider per process: the refusal repeats on every request,
+// and the point is that the operator learns about it, not that the log fills.
+const warnedBaseUrlOverrides = new Set();
+
 function providerBaseUrl(provider) {
-  return String(
-    provider.authMode === "anonymous" ? provider.baseUrl : process.env[provider.baseUrlEnv] || provider.baseUrl,
-  ).replace(/\/+$/, "");
+  const { baseUrl, refusedOverride } = resolveProviderBaseUrl(provider);
+  if (refusedOverride && !warnedBaseUrlOverrides.has(provider.id)) {
+    warnedBaseUrlOverrides.add(provider.id);
+    console.error(
+      `[api-forwarder] ${provider.baseUrlEnv} ignored: keyless provider ${provider.id} sends no credential, so it stays on its loopback endpoint`,
+    );
+  }
+  return baseUrl;
 }
 
 // DeepSeek documents low/high/max (docs also accept xhigh as a compat alias).
@@ -570,7 +583,9 @@ function upstreamHeaders(requestHeaders, body, apiKey, provider, extraHeaders = 
   headers["User-Agent"] = `codex-router/${VERSION}`;
   headers["Accept-Encoding"] = "identity";
   Object.assign(headers, extraHeaders);
-  if (body.length) headers["Content-Length"] = String(Buffer.byteLength(body));
+  // Content-Length is fetch's to compute. An explicit copy is at best
+  // redundant, and the HTTP/1.1 dispatcher rejects the request outright
+  // (UND_ERR_INVALID_ARG) when a caller-supplied value accompanies a body.
   return headers;
 }
 

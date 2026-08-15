@@ -22,7 +22,8 @@
       "inputModalities": [
         "text"
       ],
-      "compHash": "opencode-go-messages-qwen3-6-plus-v1"
+      "compHash": "opencode-go-messages-qwen3-6-plus-v2",
+      "requestProfile": "auto-tool-choice"
     }
   ]
 }

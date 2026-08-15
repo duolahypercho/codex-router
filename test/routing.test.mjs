@@ -4501,3 +4501,100 @@ test("a turn with no image reaches a text-only model untouched", async () => {
     await closeServer(native.server);
   }
 });
+
+test("a live child turn settles an experimental subagent's proof", async () => {
+  const proofsPath = path.join(
+    mkdtempSync(path.join(os.tmpdir(), "subagent-proofs-e2e-")),
+    "multi-agent-proofs.json",
+  );
+  // Three models in the experimental window: one will prove itself, one will
+  // be rejected structurally, one completes a turn that carries no subagent
+  // marker and must stay untouched.
+  writeFileSync(
+    proofsPath,
+    JSON.stringify({
+      version: 1,
+      proofs: {
+        "deepseek/deepseek-v4-pro": { status: "experimental" },
+        "deepseek/deepseek-v4-flash": { status: "experimental" },
+        "deepseek/deepseek-chat": { status: "experimental" },
+      },
+    }),
+    { mode: 0o600 },
+  );
+  const gateway = await mockServer(async (request, response) => {
+    if (request.url === "/health") {
+      json(response, 200, { ok: true });
+      return;
+    }
+    const body = await bodyJson(request);
+    if (String(body.model || "").includes("flash")) {
+      json(response, 400, { error: { message: "encrypted payload rejected" } });
+      return;
+    }
+    json(response, 200, {
+      id: "resp_child",
+      output: [
+        { type: "message", content: [{ type: "output_text", text: "child done" }] },
+      ],
+      usage: { input_tokens: 12, output_tokens: 3 },
+    });
+  });
+  const routerPort = await openPort();
+  const router = run("router.mjs", {
+    CODEX_ROUTER_PORT: String(routerPort),
+    CODEX_ROUTER_GATEWAY_BASE_URL: `http://127.0.0.1:${gateway.port}/v1`,
+    CODEX_ROUTER_OAUTH_HEALTH_URL: `http://127.0.0.1:${gateway.port}/health`,
+    CODEX_ROUTER_API_HEALTH_URL: `http://127.0.0.1:${gateway.port}/health`,
+    CODEX_ROUTER_GATEWAY_HEALTH_URL: `http://127.0.0.1:${gateway.port}/health`,
+    MODEL_ROUTER_SUBAGENT_PROOFS: proofsPath,
+    CODEX_ROUTER_QUIET: "1",
+  });
+
+  const childTurn = (model, headers = {}) =>
+    fetch(`${routerBase(routerPort)}/responses`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...headers },
+      body: JSON.stringify({ model, input: "finish the task" }),
+    });
+
+  try {
+    await waitFor(`${routerBase(routerPort)}/models`, router);
+
+    // A clean completion of a marked child turn is the durable proof.
+    const proven = await childTurn("deepseek/deepseek-v4-pro", {
+      "x-openai-subagent": "review-child",
+    });
+    assert.equal(proven.status, 200);
+
+    // A structural rejection of a marked child turn is the demotion.
+    const rejected = await childTurn("deepseek/deepseek-v4-flash", {
+      "x-openai-subagent": "review-child",
+    });
+    assert.equal(rejected.status, 400);
+
+    // The same success without the subagent marker proves nothing.
+    const unmarked = await childTurn("deepseek/deepseek-chat");
+    assert.equal(unmarked.status, 200);
+
+    const deadline = Date.now() + 3_000;
+    let proofs;
+    while (Date.now() < deadline) {
+      proofs = JSON.parse(readFileSync(proofsPath, "utf8")).proofs;
+      if (
+        proofs["deepseek/deepseek-v4-pro"].status === "proven" &&
+        proofs["deepseek/deepseek-v4-flash"].status === "failed"
+      ) {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    assert.equal(proofs["deepseek/deepseek-v4-pro"].status, "proven");
+    assert.equal(proofs["deepseek/deepseek-v4-flash"].status, "failed");
+    assert.match(proofs["deepseek/deepseek-v4-flash"].reason, /400/);
+    assert.equal(proofs["deepseek/deepseek-chat"].status, "experimental");
+  } finally {
+    await stopChild(router);
+    await closeServer(gateway.server);
+  }
+});

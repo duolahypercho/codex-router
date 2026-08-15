@@ -125,6 +125,28 @@ async function compaction(model) {
   };
 }
 
+// The two capabilities a Codex spawn actually exercises, and nothing else:
+// a child turn is a streamed conversation driven by tool calls, so a model
+// that streams and answers a forced tool call can hold the child role. Basic
+// text and compaction stay out — this probe runs automatically when a model
+// is switched on as a subagent, and two requests is its whole quota budget.
+export async function subagentCapabilityProbe(model) {
+  if (!MODEL_BY_SLUG.has(model)) throw new Error(`Unknown registry model: ${model}`);
+  const checks = [
+    { name: "tool calling", ...(await toolCall(model)) },
+    { name: "streaming", ...(await streaming(model)) },
+  ];
+  return {
+    model,
+    ok: checks.every((check) => check.ok),
+    checks,
+    detail: checks
+      .filter((check) => !check.ok)
+      .map((check) => `${check.name}: ${check.detail}`)
+      .join("; "),
+  };
+}
+
 export async function compatibilityTest(model, options = {}) {
   if (!MODEL_BY_SLUG.has(model)) throw new Error(`Unknown registry model: ${model}`);
   const results = [];

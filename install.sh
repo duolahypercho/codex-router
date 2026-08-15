@@ -12,6 +12,8 @@ migrate_known=false
 smoke_test=false
 with_tray=false
 no_tray=false
+no_provider=false
+no_discovery=false
 previous_revision=
 force=false
 target=codex
@@ -38,6 +40,9 @@ Options:
   --smoke-test       Make one small billed request per enabled provider
   --with-tray        Also build and launch the desktop companion app
   --no-tray          Never offer the desktop companion app
+  --no-provider      Install idle: no provider is selected or configured
+  --no-discovery     With --no-provider: never read credentials, the Keychain,
+                     or other CLIs' sessions; Codex traffic gets a local error
   --force            Discard edits to tracked files in the managed checkout
                      before updating it. Untracked files are never touched.
   -h, --help          Show this help
@@ -149,6 +154,14 @@ while [ "$#" -gt 0 ]; do
       no_tray=true
       shift
       ;;
+    --no-provider)
+      no_provider=true
+      shift
+      ;;
+    --no-discovery)
+      no_discovery=true
+      shift
+      ;;
     --migrate-known)
       migrate_known=true
       shift
@@ -180,6 +193,15 @@ esac
 # counterpart in the harness, whose integration is one settings section.
 if [ "$target" != codex ] && [ "$migrate_known" = true ]; then
   die "--migrate-known applies only to the Codex target"
+fi
+# An idle install is exactly "no providers", so naming providers or pasting
+# keys alongside it is a contradiction; and --no-discovery alone would select
+# providers that can never authenticate.
+if [ "$no_provider" = true ] && { [ -n "$providers" ] || [ -n "$configure_provider_keys" ] || [ "$guided" = true ]; }; then
+  die "--no-provider cannot be combined with --guided, --providers, or key flags"
+fi
+if [ "$no_discovery" = true ] && [ "$no_provider" != true ]; then
+  die "--no-discovery requires --no-provider"
 fi
 MODEL_ROUTER_TARGET=$target
 export MODEL_ROUTER_TARGET
@@ -256,7 +278,9 @@ for provider_id in $configure_provider_keys; do
 done
 
 if [ "$guided" = auto ]; then
-  if [ -t 1 ] && [ -r /dev/tty ] && [ -w /dev/tty ]; then
+  if [ "$no_provider" = true ]; then
+    guided=false
+  elif [ -t 1 ] && [ -r /dev/tty ] && [ -w /dev/tty ]; then
     guided=true
   else
     guided=false
@@ -270,6 +294,8 @@ if [ "$migrate_known" = true ]; then set -- "$@" --migrate-known; fi
 if [ "$smoke_test" = true ]; then set -- "$@" --smoke-test; fi
 if [ "$with_tray" = true ]; then set -- "$@" --with-tray; fi
 if [ "$no_tray" = true ]; then set -- "$@" --no-tray; fi
+if [ "$no_provider" = true ]; then set -- "$@" --no-provider; fi
+if [ "$no_discovery" = true ]; then set -- "$@" --no-discovery; fi
 setup_status=0
 "$repo_dir/bin/setup" "$@" || setup_status=$?
 # Exit 2 means setup left configuration unfinished (a declined prompt, a

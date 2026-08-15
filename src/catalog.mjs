@@ -29,6 +29,7 @@ import {
   readMultiAgentSettings,
   subagentEligibleModels,
 } from "./multi-agent-state.mjs";
+import { applySubagentProofs, subagentProofSnapshot } from "./subagent-proofs.mjs";
 import { readHiddenModels } from "./model-picker-state.mjs";
 import { buildNativeAliasAssignments } from "./native-alias.mjs";
 import { selectedConfiguredListedModels, configuredProviderIds } from "./provider-selection.mjs";
@@ -41,6 +42,7 @@ import {
   readNativeCatalogFile,
   readNativeCatalogSource,
 } from "./native-catalog-source.mjs";
+import { discoveryDisabled } from "./discovery-mode.mjs";
 
 const refresh = process.argv.includes("--refresh-native");
 
@@ -205,15 +207,23 @@ function restoreFileSnapshot(target, snapshot) {
   }
 }
 
-function captureNative(cache = readModelsCache()) {
+function captureNative(cache) {
+  // A discovery-disabled install promised that nothing account-derived is
+  // read: `debug models` without --bundled reflects the signed-in account's
+  // catalog, and `models_cache.json` is that same catalog written to disk, so
+  // both stay untouched and the bundled static list is the whole capture.
+  // This is the gate SECURITY.md's "the one Codex spawn that remains is
+  // `codex debug models --bundled`" claim rests on.
+  const idle = discoveryDisabled();
+  const resolved = cache ?? (idle ? {} : readModelsCache());
   // This is the account-aware catalog Codex itself cached after signing in.
   // Reading it directly also avoids asking `codex debug models` while the
   // router catalog is active, which would merely return our own merged output.
-  let account = cache.catalog;
+  let account = resolved.catalog;
   let fallback;
   let accountError;
   let fallbackError;
-  if (!account) {
+  if (!account && !idle) {
     try {
       account = JSON.parse(runCodex(["debug", "models"], {
         encoding: "utf8",
@@ -292,7 +302,10 @@ function nativeCatalog() {
     }
     return catalog;
   }
-  const cache = readModelsCache();
+  // `models_cache.json` is the signed-in account's catalog written to disk,
+  // so a discovery-disabled install leaves it unread like every other
+  // account-derived artifact.
+  const cache = discoveryDisabled() ? {} : readModelsCache();
   if (!existsSync(NATIVE_CATALOG_PATH) || refresh) return captureNative(cache);
   const parsed = JSON.parse(readFileSync(NATIVE_CATALOG_PATH, "utf8"));
   if (nativeCatalogIsReusable(parsed, codexVersion(), cache.fingerprint)) {
@@ -570,10 +583,6 @@ export function routedModel(template, model) {
   return next;
 }
 
-export function applyAllMultiAgent(models, enabled) {
-  return models;
-}
-
 export const AUTO_ANNOUNCE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
 function formatTokenCount(tokens) {
@@ -755,10 +764,14 @@ function main() {
   const hiddenModels = readHiddenModels();
   const selectedModels = selectedConfiguredListedModels();
   const multiAgentSettings = readMultiAgentSettings();
-  const allMultiAgentModels = applyMultiAgentSettings(
-    selectedModels,
-    multiAgentSettings,
-    hiddenModels,
+  // Demotions first, then this machine's own recorded proofs. Settings still
+  // never manufacture a v2 claim — a promotion here traces to a live probe
+  // or an observed spawn in `multi-agent-proofs.json` — and a slug the
+  // operator hid or switched off stays v1 whatever evidence it carries.
+  const allMultiAgentModels = applySubagentProofs(
+    applyMultiAgentSettings(selectedModels, multiAgentSettings, hiddenModels),
+    subagentProofSnapshot(),
+    { hidden: hiddenModels, disabled: multiAgentSettings.disabled },
   );
   // Clamp before announcements and agent sync so every surface Codex reads —
   // picker levels, defaults, and announcement copy — stays inside the effort

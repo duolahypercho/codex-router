@@ -22,6 +22,7 @@ const {
   MODELS,
   PROVIDERS,
   readRegistryDocument,
+  resolveProviderBaseUrl,
 } = await import("../src/model-registry.mjs");
 
 test("provider registry exposes configured API and OAuth model families", () => {
@@ -200,6 +201,9 @@ test("provider registry exposes configured API and OAuth model families", () => 
     "COMMANDCODE_API_KEY",
   ]);
   assert.equal(PROVIDERS.get("grok-api").baseUrl, "https://api.x.ai/v1");
+  assert.equal(PROVIDERS.get("local").transport, "ollama");
+  assert.equal(PROVIDERS.get("lmstudio").baseUrl, "http://127.0.0.1:1234/v1");
+  assert.equal(PROVIDERS.get("lmstudio").baseUrlEnv, "MODEL_ROUTER_LMSTUDIO_BASE_URL");
   // kimi-api is the global platform. The mainland one is its own provider
   // below, not a KIMI_API_BASE_URL override of this one -- the override still
   // works for a genuinely custom deployment, but pointing it at moonshot.cn
@@ -834,4 +838,64 @@ test("local models route with Ollama's native protocol and a bounded context", (
   assert.equal(openAiRoutes, null, "a local model must not use the OpenAI-compatible surface");
   // Every non-local model keeps the forwarder path untouched.
   assert.match(rendered, /model: "openai\/deepseek-v4-pro"/);
+});
+
+test("a keyless provider's baseUrl override must stay on loopback", () => {
+  const local = PROVIDERS.get("local");
+  assert.ok(local?.keyless, "the local provider is the keyless reference case");
+
+  // The loader only proves the checked-in URL; the override arrives at request
+  // time. A non-loopback override on a keyless provider is refused in favor of
+  // the registry URL, because a keyless request carries no credential.
+  const refused = resolveProviderBaseUrl(local, {
+    [local.baseUrlEnv]: "https://attacker.example/v1",
+  });
+  assert.equal(refused.baseUrl, String(local.baseUrl).replace(/\/+$/, ""));
+  assert.equal(refused.refusedOverride, "https://attacker.example/v1");
+
+  // A loopback override is the supported way to move the local port.
+  const moved = resolveProviderBaseUrl(local, {
+    [local.baseUrlEnv]: "http://127.0.0.1:11435/v1",
+  });
+  assert.equal(moved.baseUrl, "http://127.0.0.1:11435/v1");
+  assert.equal(moved.refusedOverride, undefined);
+
+  // A credentialed provider keeps its override: the request authenticates
+  // itself, so pointing it elsewhere is configuration, not a leak.
+  const deepseek = PROVIDERS.get("deepseek");
+  assert.ok(deepseek && !deepseek.keyless);
+  const overridden = resolveProviderBaseUrl(deepseek, {
+    [deepseek.baseUrlEnv]: "https://proxy.example/v1/",
+  });
+  assert.equal(overridden.baseUrl, "https://proxy.example/v1");
+  assert.equal(overridden.refusedOverride, undefined);
+});
+
+test("opencode's DeepSeek models never receive a forced tool_choice", () => {
+  // Console Go serves DeepSeek V4 in thinking mode, which answers HTTP 400 to
+  // tool_choice "required" ("Thinking mode does not support this tool_choice")
+  // while calling tools correctly under "auto" — both halves observed live on
+  // 2026-08-15. Per AGENTS.md that is exactly the per-model auto-tool-choice
+  // case: the restriction belongs to the upstream behind the reseller, so the
+  // router downgrades the forced choice for these two slugs and no others.
+  for (const slug of [
+    "opencode-go/deepseek-v4-flash",
+    "opencode-go/deepseek-v4-pro",
+    // Same class, observed 2026-08-15 in the full sweep: 400 on required
+    // (Kimi K2.7 Code on the chat route; the four Qwens on the messages
+    // route answer a bare {"model": ...} echo), clean probe calls under auto.
+    "opencode-go/kimi-k2.7-code",
+    "opencode-go-messages/qwen3.6-plus",
+    "opencode-go-messages/qwen3.7-max",
+    "opencode-go-messages/qwen3.7-plus",
+    "opencode-go-messages/qwen3.8-max",
+  ]) {
+    assert.equal(MODEL_BY_SLUG.get(slug).requestProfile, "auto-tool-choice", slug);
+  }
+  // The sibling opencode routes keep their defaults: the probe proved nothing
+  // about them, and a provider-wide default is what the rule forbids. (kimi-k3
+  // carries its own effort profile, so it is not a clean control here.)
+  for (const slug of ["opencode-go/glm-5.3", "opencode-go/grok-4.5", "opencode-go/mimo-v2.5"]) {
+    assert.equal(MODEL_BY_SLUG.get(slug).requestProfile, undefined, slug);
+  }
 });

@@ -97,6 +97,11 @@ official `kimi login`, prompts invisibly for provider credentials, installs a pe
 background service, and verifies every local layer. It never makes a paid test
 request unless `--smoke-test` is explicitly selected.
 
+To validate the install and uninstall lifecycle before trusting the router
+with any credential, pass `--no-provider --no-discovery`: the router installs
+idle, reads no credential from anywhere, and answers Codex traffic with a
+local error. See [docs/INSTALL.md](docs/INSTALL.md#credential-free-idle-install).
+
 Requirements:
 
 - The Codex App or CLI.
@@ -732,6 +737,20 @@ command directly, restart Codex yourself.
 
 ### Use a local model in Codex (experimental)
 
+LM Studio can run as a second local backend alongside Ollama. Its models use
+the stable `lmstudio/<model-id>` namespace, so identical model IDs loaded in
+the two backends never collide:
+
+```sh
+./bin/model-router codex providers enable lmstudio
+./bin/curate-models lmstudio
+```
+
+The default endpoint is `http://127.0.0.1:1234/v1`. Set
+`MODEL_ROUTER_LMSTUDIO_BASE_URL` when LM Studio listens elsewhere. Curation
+reads `/v1/models` and publishes only models explicitly chosen by the user.
+Ollama keeps its existing native route and local model controls.
+
 Models running on this machine can appear in Codex's picker like any other
 provider. They are labelled **experimental** there, and the label is earned:
 using a local model as the *vision reader* is reliable, but using one as a
@@ -1256,6 +1275,8 @@ specific bytes. Browser and computer-use execution remains live-only.
 ./bin/model-router codex setup --guided
 ./bin/model-router codex doctor
 ./bin/model-router codex status
+./bin/model-router codex start
+./bin/model-router codex stop
 ./bin/model-router codex disable
 ./bin/model-router codex enable
 ./bin/model-router codex uninstall

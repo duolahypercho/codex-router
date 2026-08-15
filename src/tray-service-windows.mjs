@@ -74,11 +74,31 @@ function taskExists() {
 }
 
 function taskRunning() {
-  try {
-    return /\bRunning\b/i.test(schtasks(["/Query", "/TN", TRAY_TASK_NAME, "/FO", "LIST", "/V"]));
-  } catch {
-    return false;
+  // `schtasks` output is localized ("En ejecución" on Spanish Windows), so a
+  // regex on its text reads a running task as stopped. Task Scheduler's own
+  // State property is an enum that renders the same in every locale.
+  const script =
+    "try { [Console]::Out.Write((Get-ScheduledTask -TaskName $env:CODEX_ROUTER_TRAY_TASK).State.ToString()) } catch { exit 1 }";
+  for (const executable of ["powershell.exe", "pwsh.exe"]) {
+    try {
+      return (
+        execFileSync(
+          executable,
+          ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
+          {
+            encoding: "utf8",
+            env: { ...process.env, CODEX_ROUTER_TRAY_TASK: TRAY_TASK_NAME },
+            stdio: ["ignore", "pipe", "ignore"],
+          },
+        )
+          .trim()
+          .toLowerCase() === "running"
+      );
+    } catch {
+      // Try Windows PowerShell after PowerShell Core, or fall back to schtasks.
+    }
   }
+  return false;
 }
 
 function endTask() {

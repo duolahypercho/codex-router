@@ -268,9 +268,9 @@ test("the Windows wrapper hands every command its own arguments", () => {
   );
   assert.ok(branches.size >= 16, `only found ${branches.size} branches`);
 
-  // bin/disable and bin/uninstall accept no arguments, so their
+  // bin/disable, bin/uninstall, and bin/stop accept no arguments, so their
   // branches pass fixed node subcommand names rather than user input.
-  const takesNoArguments = new Set(["disable", "uninstall"]);
+  const takesNoArguments = new Set(["disable", "uninstall", "stop"]);
   for (const [command, body] of branches) {
     if (takesNoArguments.has(command)) {
       assert.equal(
@@ -475,6 +475,27 @@ test("the documented rollback behaviour matches the exit-2 contract", () => {
 // Two structural properties guard that: --prepare-only must exit before the
 // skills step touches ~/.codex/skills, and the skills step must run after the
 // rollback trap is disarmed, so a skills failure cannot undo config/service.
+test("both installers declare, validate, and forward the idle-install flags", () => {
+  // The flags exist so issue #224's credential-free lifecycle validation can
+  // run identically on every platform; a flag that lands in only one
+  // installer silently narrows that promise to one OS.
+  const posix = readFileSync(path.join(root, "install.sh"), "utf8");
+  assert.match(posix, /--no-provider\)/);
+  assert.match(posix, /--no-discovery\)/);
+  assert.match(posix, /--no-discovery requires --no-provider/);
+  assert.match(posix, /--no-provider cannot be combined with/);
+  assert.match(posix, /set -- "\$@" --no-provider/);
+  assert.match(posix, /set -- "\$@" --no-discovery/);
+
+  const windows = readFileSync(path.join(root, "install.ps1"), "utf8");
+  assert.match(windows, /\[switch\]\$NoProvider/);
+  assert.match(windows, /\[switch\]\$NoDiscovery/);
+  assert.match(windows, /-NoDiscovery requires -NoProvider/);
+  assert.match(windows, /-NoProvider cannot be combined with/);
+  assert.match(windows, /\$SetupArguments \+= "--no-provider"/);
+  assert.match(windows, /\$SetupArguments \+= "--no-discovery"/);
+});
+
 test("prepare-only exits before the skills step", () => {
   const source = readScript("bin", "install");
   const prepareExit = source.indexOf("Dependencies and local Codex router files are prepared");

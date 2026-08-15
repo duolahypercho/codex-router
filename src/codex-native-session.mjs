@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 
+import { discoveryDisabled } from "./discovery-mode.mjs";
 import { CODEX_HOME } from "./paths.mjs";
 
 // The ChatGPT session the local Codex install already holds.
@@ -26,6 +27,10 @@ export const CODEX_AUTH_PATH =
 // local process holding that key can spend the ChatGPT subscription and not
 // only the API-key providers -- so there has to be a way to say no.
 export function nativeSessionFallbackEnabled() {
+  // --no-discovery composes with the dedicated env switch: the Codex session
+  // is a credential this process did not receive from its caller, so an idle
+  // install must never spend it.
+  if (discoveryDisabled()) return false;
   return process.env.CODEX_ROUTER_NATIVE_SESSION_FALLBACK !== "0";
 }
 
@@ -49,6 +54,9 @@ export function tokenExpiryMs(accessToken) {
 const EXPIRY_SKEW_MS = 120_000;
 
 function readSession() {
+  // Under --no-discovery the Codex auth file is never opened; status readers
+  // above report it absent rather than pretending to know what is inside.
+  if (discoveryDisabled()) return undefined;
   if (!existsSync(CODEX_AUTH_PATH)) return undefined;
   try {
     const parsed = JSON.parse(readFileSync(CODEX_AUTH_PATH, "utf8"));
@@ -89,6 +97,10 @@ const REFRESH_RETRY_INTERVAL_MS = 5 * 60_000;
 const REFRESH_TIMEOUT_MS = 30_000;
 
 export async function refreshViaCodex({ now = Date.now() } = {}) {
+  // `codex login status` makes Codex read (and possibly rewrite) its session
+  // file; unreachable while readSession() is guarded, but the promise should
+  // not depend on that call graph staying put.
+  if (discoveryDisabled()) return false;
   if (refreshInFlight) return refreshInFlight;
   if (now - lastRefreshAttemptMs < REFRESH_RETRY_INTERVAL_MS) return false;
   lastRefreshAttemptMs = now;
@@ -151,6 +163,21 @@ export function nativeSessionAvailable() {
  * from "not signed in".
  */
 export function nativeSessionStatus() {
+  // Whether auth.json exists, and how old it is, is metadata about a
+  // credential this process promised not to look at. Reporting it absent is
+  // the same answer every other guarded reader gives under --no-discovery.
+  if (discoveryDisabled()) {
+    return {
+      path: CODEX_AUTH_PATH,
+      present: false,
+      usable: false,
+      hasAccountId: false,
+      expired: false,
+      expiresInHours: undefined,
+      ageHours: undefined,
+      fallbackEnabled: false,
+    };
+  }
   const present = existsSync(CODEX_AUTH_PATH);
   const session = present ? readSession() : undefined;
   let ageHours;

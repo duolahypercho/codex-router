@@ -1959,6 +1959,24 @@ final class RouterStore: ObservableObject {
     return routerLocalized("Needs setup")
   }
 
+  // Restarting the companion means killing the process that is asking for it,
+  // so the request has to outlive the caller. `control tray restart` hands the
+  // job to launchd (`launchctl kickstart -k`), which has already committed to
+  // the relaunch by the time it signals this process -- the signal is the
+  // consequence of the request, not a race with it. If this process dies before
+  // the reply is read, the plist still covers it: KeepAlive's
+  // `SuccessfulExit: false` restarts the agent after any abnormal exit, so the
+  // tray cannot end up dead either way. Only the failure path can be reported,
+  // because a success takes the window that would have shown it.
+  func restartTray() async {
+    message = routerLocalized("Restarting the tray…")
+    do {
+      _ = try await runControl(arguments: ["tray", "restart"])
+    } catch {
+      message = routerFormat("Tray restart failed: %@", error.localizedDescription)
+    }
+  }
+
   private func restartCodexApp() async throws {
     let bundleIdentifier = "com.openai.codex"
     let workspace = NSWorkspace.shared
@@ -2351,15 +2369,21 @@ struct RouterProviderInfo: Decodable {
   let id: String
   let displayName: String
   let kind: String?
+  // Optional because a router older than the field still answers without it;
+  // those rows simply stay ungrouped rather than failing to decode.
+  let ownedBy: String?
+  // Optional for the same reason. "anonymous" keeps a keyless gateway out of
+  // a vendor's "N accounts" group; a missing value reads as credentialed.
+  let authMode: String?
 
   static let legacyFallback: [RouterProviderInfo] = [
-    .init(id: "grok-oauth", displayName: "Grok OAuth", kind: "oauth"),
-    .init(id: "kimi-oauth", displayName: "Kimi OAuth", kind: "oauth"),
-    .init(id: "deepseek", displayName: "DeepSeek API", kind: "openai-compatible"),
-    .init(id: "grok-api", displayName: "Grok API", kind: "openai-compatible"),
-    .init(id: "kimi-api", displayName: "Kimi API", kind: "openai-compatible"),
-    .init(id: "kimi-api-cn", displayName: "Kimi API (China)", kind: "openai-compatible"),
-    .init(id: "anthropic-api", displayName: "Anthropic API", kind: "openai-compatible"),
+    .init(id: "grok-oauth", displayName: "Grok OAuth", kind: "oauth", ownedBy: "xai", authMode: nil),
+    .init(id: "kimi-oauth", displayName: "Kimi OAuth", kind: "oauth", ownedBy: "kimi", authMode: nil),
+    .init(id: "deepseek", displayName: "DeepSeek API", kind: "openai-compatible", ownedBy: "deepseek", authMode: nil),
+    .init(id: "grok-api", displayName: "Grok API", kind: "openai-compatible", ownedBy: "xai", authMode: nil),
+    .init(id: "kimi-api", displayName: "Kimi API", kind: "openai-compatible", ownedBy: "kimi", authMode: nil),
+    .init(id: "kimi-api-cn", displayName: "Kimi API (China)", kind: "openai-compatible", ownedBy: "kimi", authMode: nil),
+    .init(id: "anthropic-api", displayName: "Anthropic API", kind: "openai-compatible", ownedBy: "anthropic", authMode: nil),
   ]
 }
 
@@ -2828,6 +2852,84 @@ private struct TrayView: View {
       .sorted { $0.id < $1.id }
   }
 
+  // Vendors that publish more than one provider read as unrelated services in a
+  // flat list -- "Z.ai GLM Coding Plan" and "Z.ai API" sit apart under Z, and
+  // Kimi's three sit under K with nothing saying they are one account family.
+  // `variantOf` already collapses the rows that share a credential; these do not
+  // share one, so they stay separately connectable and are only drawn together.
+  private var providerVendorGroups: [ProviderGroup] {
+    guard let target, let registry = target.providers, !registry.isEmpty else {
+      return providers.map {
+        ProviderGroup(
+          id: $0.id,
+          vendorLabel: nil,
+          members: [ProviderGroup.Member(id: $0.id, enabled: $0.enabled, shortName: nil)]
+        )
+      }
+    }
+    let enabled = Set(target.enabledProviders)
+    let names = Dictionary(uniqueKeysWithValues: registry.map { ($0.id, $0.displayName) })
+    func lone(_ entry: RouterProviderInfo) -> ProviderGroup {
+      ProviderGroup(id: entry.id, vendorLabel: nil, members: [
+        ProviderGroup.Member(id: entry.id, enabled: enabled.contains(entry.id), shortName: nil)
+      ])
+    }
+    return Dictionary(grouping: registry) { $0.ownedBy ?? $0.id }
+      .flatMap { vendor, entries -> [ProviderGroup] in
+        let sorted = entries.sorted { $0.id < $1.id }
+        // An anonymous gateway is not an account of the vendor's paid product;
+        // drawing it under an "N accounts" heading beside a credentialed
+        // sibling claims a relationship that does not exist (opencode-free
+        // would read as a second opencode account). It always stands alone.
+        let accounts = sorted.filter { $0.authMode != "anonymous" }
+        let standalone = sorted.filter { $0.authMode == "anonymous" }
+        // A lone provider keeps its own name and no header: a vendor heading
+        // above a single row is noise, not structure.
+        guard accounts.count > 1 else { return sorted.map(lone) }
+        let prefix = commonWordPrefix(accounts.map { names[$0.id] ?? $0.id })
+        // No shared leading words means the display names cannot supply a
+        // heading, and a raw registry id is not one either -- those rows stay
+        // flat rather than shipping a lowercase internal id as a brand.
+        guard !prefix.isEmpty else { return sorted.map(lone) }
+        let group = ProviderGroup(
+          id: vendor,
+          vendorLabel: prefix,
+          members: accounts.map { entry in
+            let full = names[entry.id] ?? entry.id
+            let short = String(full.dropFirst(prefix.count)).trimmingCharacters(in: .whitespaces)
+            // "Z.ai API" minus "Z.ai" leaves "API"; a name that is nothing but
+            // its vendor leaves nothing, so keep the full name there.
+            return ProviderGroup.Member(
+              id: entry.id,
+              enabled: enabled.contains(entry.id),
+              shortName: short.isEmpty ? full : short
+            )
+          }
+        )
+        return [group] + standalone.map(lone)
+      }
+      .sorted { ($0.vendorLabel ?? $0.members[0].id) < ($1.vendorLabel ?? $1.members[0].id) }
+  }
+
+  // The vendor name is the leading words every display name in the group
+  // shares: "Z.ai GLM Coding Plan" + "Z.ai API" -> "Z.ai", and "xAI Grok OAuth"
+  // + "xAI Grok API" -> "xAI Grok". Whole words only, so a group that happens to
+  // share a few letters cannot produce a heading that is half a word.
+  private func commonWordPrefix(_ values: [String]) -> String {
+    guard let first = values.first else { return "" }
+    var prefix = first.split(separator: " ").map(String.init)
+    for value in values.dropFirst() {
+      let words = value.split(separator: " ").map(String.init)
+      var shared: [String] = []
+      for (a, b) in zip(prefix, words) where a == b { shared.append(a) }
+      prefix = shared
+      if prefix.isEmpty { break }
+    }
+    // Identical names share every word, which says nothing about a vendor.
+    if values.allSatisfy({ $0 == first }) { return "" }
+    return prefix.joined(separator: " ")
+  }
+
   var body: some View {
     ZStack {
       VisualEffectBlur()
@@ -3293,23 +3395,51 @@ private struct TrayView: View {
       summary: store.providerOperation == nil ? routerLocalized("Auto-saved") : routerLocalized("Applying…"),
       expanded: $providersExpanded
     ) {
+      // Bound once per body pass. Reading the property inside the loop instead
+      // would regroup and re-sort the whole registry for every row, and `body`
+      // re-runs on each store publish, so the cost would be paid continuously
+      // rather than once: measured at 89us a pass, that is 2.4ms of a render
+      // spent on nothing.
+      let groups = providerVendorGroups
       VStack(spacing: 0) {
-        ForEach(providers, id: \.id) { provider in
-          ProviderSetupRow(
-            provider: provider,
-            setup: store.providerSetup[provider.id],
-            account: store.providerUsage(for: provider.id)?.account,
-            isBusy: store.providerOperation == provider.id,
-            controlsDisabled: store.providerOperation != nil,
-            onToggle: { enabled in
-              Task { await store.setProvider(provider.id, enabled: enabled) }
-            },
-            onConnect: { Task { await store.connectProvider(provider.id) } },
-            onLogin: { Task { await store.loginProvider(provider.id) } },
-            onSaveKey: { key in Task { await store.saveProviderKey(provider.id, key: key) } },
-            onRemoveKey: { Task { await store.removeProviderKey(provider.id) } }
-          )
-          if provider.id != providers.last?.id {
+        ForEach(groups) { group in
+          if let vendorLabel = group.vendorLabel {
+            HStack(spacing: 6) {
+              Text(vendorLabel)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(routerMuted)
+              Text(routerFormat("%d accounts", group.members.count))
+                .font(.system(size: 9))
+                .foregroundStyle(routerMuted.opacity(0.7))
+              Spacer()
+            }
+            .padding(.top, 8)
+            .padding(.bottom, 2)
+          }
+          ForEach(group.members) { member in
+            ProviderSetupRow(
+              provider: (id: member.id, enabled: member.enabled),
+              titleOverride: member.shortName,
+              setup: store.providerSetup[member.id],
+              account: store.providerUsage(for: member.id)?.account,
+              isBusy: store.providerOperation == member.id,
+              controlsDisabled: store.providerOperation != nil,
+              onToggle: { enabled in
+                Task { await store.setProvider(member.id, enabled: enabled) }
+              },
+              onConnect: { Task { await store.connectProvider(member.id) } },
+              onLogin: { Task { await store.loginProvider(member.id) } },
+              onSaveKey: { key in Task { await store.saveProviderKey(member.id, key: key) } },
+              onRemoveKey: { Task { await store.removeProviderKey(member.id) } }
+            )
+            // Indent only the grouped rows, so a vendor's accounts read as
+            // belonging to the heading above them.
+            .padding(.leading, group.vendorLabel == nil ? 0 : 10)
+            if member.id != group.members.last?.id {
+              Divider().padding(.leading, group.vendorLabel == nil ? 0 : 10)
+            }
+          }
+          if group.id != groups.last?.id {
             Divider()
           }
         }
@@ -5134,6 +5264,16 @@ private struct TrayView: View {
       .foregroundStyle(routerAccent)
       .disabled(store.isRefreshing)
 
+      // Rebuilding the app replaces the bundle but leaves the running agent on
+      // the old binary, and quitting from here does not bring it back on a
+      // successful exit. This is the one control that closes that loop.
+      Button(routerLocalized("Restart Tray")) {
+        Task { await store.restartTray() }
+      }
+      .buttonStyle(.plain)
+      .font(.system(size: 11, weight: .medium))
+      .foregroundStyle(routerMuted)
+
       if let message = store.message {
         Text(message)
           .lineLimit(1)
@@ -5156,8 +5296,25 @@ private struct TrayView: View {
 
 }
 
+// One vendor's providers. `vendorLabel` is nil when the vendor publishes a
+// single provider, which renders exactly as it always did.
+private struct ProviderGroup: Identifiable {
+  struct Member: Identifiable {
+    let id: String
+    let enabled: Bool
+    /// The display name with the vendor prefix removed, or nil when ungrouped.
+    let shortName: String?
+  }
+
+  let id: String
+  let vendorLabel: String?
+  let members: [Member]
+}
+
 private struct ProviderSetupRow: View {
   let provider: (id: String, enabled: Bool)
+  /// Set for a grouped row, whose vendor already appears in the heading above.
+  var titleOverride: String? = nil
   let setup: ProviderSetupState?
   let account: ProviderAccountUsage?
   let isBusy: Bool
@@ -5181,7 +5338,7 @@ private struct ProviderSetupRow: View {
     VStack(alignment: .leading, spacing: 9) {
       HStack(spacing: 10) {
         VStack(alignment: .leading, spacing: 2) {
-          Text(setup?.displayName ?? provider.id)
+          Text(titleOverride ?? setup?.displayName ?? provider.id)
             .font(.system(size: 12, weight: .medium))
           Text(detail)
             .font(.system(size: 9, weight: .regular))

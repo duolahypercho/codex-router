@@ -46,6 +46,23 @@ function loopbackBaseUrl(value) {
   }
 }
 
+// The loader proves a keyless provider's checked-in baseUrl is loopback, but
+// an environment override arrives at request time and skips that proof. A
+// keyless request carries no credential, so a non-loopback override would send
+// unauthenticated traffic off-box. Resolve overrides through this guard: the
+// override is refused — not the request — because the registry URL is always
+// safe to fall back to. Anonymous providers never allow an override at all
+// (the loader rejects baseUrlEnv on them), so they resolve to their fixed
+// endpoint here by construction.
+export function resolveProviderBaseUrl(provider, env = process.env) {
+  const override = provider.baseUrlEnv ? env[provider.baseUrlEnv] : undefined;
+  const raw = normalizedBaseUrl(override || provider.baseUrl);
+  if (provider.keyless && !loopbackBaseUrl(raw)) {
+    return { baseUrl: normalizedBaseUrl(provider.baseUrl), refusedOverride: raw };
+  }
+  return { baseUrl: raw };
+}
+
 // Byte-order comparison keeps the walk identical on every machine; a
 // locale-aware sort could reorder fragments (and therefore the merged model
 // list) between hosts.
@@ -258,6 +275,12 @@ function loadRegistry() {
         !["openai", "anthropic", "openai-responses"].includes(provider.protocol)
       ) {
         fail(`provider ${provider.id} has an unsupported API protocol`);
+      }
+      if (provider.transport !== undefined && provider.transport !== "ollama") {
+        fail(`provider ${provider.id} has an unsupported transport`);
+      }
+      if (provider.transport === "ollama" && !provider.keyless) {
+        fail(`provider ${provider.id} Ollama transport must be keyless`);
       }
     }
     providers.set(provider.id, Object.freeze(provider));

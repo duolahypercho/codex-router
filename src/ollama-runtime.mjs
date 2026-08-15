@@ -6,14 +6,12 @@ import {
   openSync,
   readFileSync,
   realpathSync,
-  renameSync,
   unlinkSync,
-  writeFileSync,
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { protectPrivateFile } from "./file-security.mjs";
+import { writePrivateJson } from "./file-security.mjs";
 import { STATE_DIR } from "./paths.mjs";
 import { processStartIdentity, stateOwnsProcess } from "./process-identity.mjs";
 
@@ -123,19 +121,6 @@ export async function probeOllama({
       error: error instanceof Error ? error.message : String(error),
     };
   }
-}
-
-function writePrivateJson(target, value) {
-  mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
-  const temporary = `${target}.tmp.${process.pid}`;
-  writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, {
-    encoding: "utf8",
-    mode: 0o600,
-  });
-  protectPrivateFile(temporary);
-  renameSync(temporary, target);
-  protectPrivateFile(target);
-  return value;
 }
 
 export function readOllamaRuntimeState() {

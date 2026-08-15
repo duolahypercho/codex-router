@@ -204,7 +204,6 @@ function startPanel() {
       ["account", "account_usage"],
       ["providerUsage", "provider_usage"],
       ["providerSetup", "provider_setup"],
-      ["localModels", "local_models"],
       ["health", "router_health"],
       ["platform", "platform_info"],
       ["settings", "desktop_settings"],
@@ -223,6 +222,10 @@ function startPanel() {
       if ("value" in result) state[result.key] = result.value;
       else errors.push(result.error);
     }
+    // The control snapshot already contains the local-model view. Reusing it
+    // avoids starting a second Node process for the same Ollama inventory.
+    const localModels = state.snapshot?.targets?.codex?.modelSettings?.localModels;
+    if (localModels) state.localModels = localModels;
     renderPanel();
     elements.refresh.disabled = false;
     if (!quiet && errors.length && !state.snapshot) showToast(errorMessage(errors[0]), true);
