@@ -28,9 +28,18 @@ function positiveInteger(value) {
 // Estimated counts prove nothing either -- the router substitutes those when a
 // provider reports zero, and an estimate cannot disprove a provider's own
 // limit.
+// An empty-completion retry sends the same prompt twice and both attempts are
+// billed, so the meter deliberately sums them (mergeTokenUsage) and the turn
+// lands as a normal 200 carrying roughly double the prompt it actually sent.
+// Believed as capacity that is a ~2x window overstatement invented out of one
+// retry -- and the remediation this check prints is "raise the window", so the
+// bad sample would talk an operator into doubling a correct number.
+// provider-usage.mjs drops these same events from its throughput math for the
+// same reason: a merged pair is not one measurement.
 export function acceptedInputTokens(event) {
   if (event?.status !== 200) return undefined;
   if (event?.estimatedInputTokens !== undefined) return undefined;
+  if (event?.emptyCompletionRetried === true) return undefined;
   return positiveInteger(event?.inputTokens);
 }
 

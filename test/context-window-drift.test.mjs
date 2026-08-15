@@ -57,6 +57,31 @@ test("only turns the provider accepted count as evidence", () => {
   assert.deepEqual(drift, []);
 });
 
+// An empty-completion retry bills both attempts, so the meter sums them and a
+// perfectly ordinary turn lands as a 200 carrying twice the prompt it sent.
+// Believing that would invent a ~2x window out of one retry -- and this check
+// tells the operator to raise the window, so the bad sample argues for
+// doubling a number that was right.
+test("a retried turn's doubled prompt count is not evidence of capacity", () => {
+  assert.equal(
+    acceptedInputTokens(event("m", 900_000, { emptyCompletionRetried: true })),
+    undefined,
+  );
+  assert.equal(acceptedInputTokens(event("m", 900_000)), 900_000);
+  const drift = contextWindowDrift(MODELS, [
+    event("qwen-plan/qwen3.8-max", 524_288, { emptyCompletionRetried: true }),
+  ]);
+  assert.deepEqual(drift, []);
+  // A real accepted turn still counts on a slug that also has retried traffic.
+  assert.deepEqual(
+    contextWindowDrift(MODELS, [
+      event("qwen-plan/qwen3.8-max", 524_288, { emptyCompletionRetried: true }),
+      event("qwen-plan/qwen3.8-max", 277_174),
+    ]).map((entry) => entry.observed),
+    [277_174],
+  );
+});
+
 // The router substitutes its own estimate when a provider reports zero input
 // tokens. An estimate cannot disprove that provider's own limit.
 test("estimated input counts never disprove a declared window", () => {
