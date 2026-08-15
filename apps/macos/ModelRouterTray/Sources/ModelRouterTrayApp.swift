@@ -2440,13 +2440,26 @@ struct ToolResultAgingStats: Decodable {
       // operator hunting for a hook that was loaded the whole time. Report the
       // largest result seen so the gap to the floor is visible.
       guard let evaluatedRequests, evaluatedRequests > 0 else { return nil }
-      let largest = Self.compactBytes(largestResultBytes ?? 0)
+      let largestBytes = largestResultBytes ?? 0
+      let largest = Self.compactBytes(largestBytes)
+      // Size is only one of the two reasons nothing ages. A result the model
+      // has not acted on yet is skipped whatever its size, so a result over
+      // the floor can still be counted here -- and saying "no result over
+      // 32 KB (largest 40 KB)" would contradict itself in the same sentence.
+      if largestBytes > Self.agingMinBytes {
+        return "Nothing aged yet in \(evaluatedRequests) requests (largest \(largest))"
+      }
       return "No result over 32 KB in \(evaluatedRequests) requests (largest \(largest))"
     }
     let tokens = Self.compactCount(estimatedTokensSaved)
     let megabytes = String(format: "%.1f", Double(bytesSaved) / 1_048_576)
     return "Saved ~\(tokens) tokens (\(megabytes) MB) across \(requests) requests"
   }
+
+  // Mirrors TOOL_RESULT_AGING_MIN_BYTES in src/tool-result-aging.mjs. Only the
+  // wording above depends on it, so a drifted copy misworks a label rather
+  // than the pass itself.
+  static let agingMinBytes = 32 * 1024
 
   static func compactBytes(_ value: Int) -> String {
     if value >= 1_048_576 { return String(format: "%.1f MB", Double(value) / 1_048_576) }
