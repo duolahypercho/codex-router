@@ -200,6 +200,9 @@ test("provider registry exposes configured API and OAuth model families", () => 
     "COMMANDCODE_API_KEY",
   ]);
   assert.equal(PROVIDERS.get("grok-api").baseUrl, "https://api.x.ai/v1");
+  assert.equal(PROVIDERS.get("local").transport, "ollama");
+  assert.equal(PROVIDERS.get("lmstudio").baseUrl, "http://127.0.0.1:1234/v1");
+  assert.equal(PROVIDERS.get("lmstudio").baseUrlEnv, "MODEL_ROUTER_LMSTUDIO_BASE_URL");
   // kimi-api is the global platform. The mainland one is its own provider
   // below, not a KIMI_API_BASE_URL override of this one -- the override still
   // works for a genuinely custom deployment, but pointing it at moonshot.cn

@@ -1,15 +1,11 @@
 import {
-  chmodSync,
   existsSync,
-  mkdirSync,
   readFileSync,
-  renameSync,
-  writeFileSync,
 } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { protectPrivateFile } from "./file-security.mjs";
+import { writePrivateJson } from "./file-security.mjs";
 import { STATE_DIR } from "./paths.mjs";
 import { DEFAULT_LOCAL_VISION_BASE_URL } from "./vision-bridge.mjs";
 
@@ -34,17 +30,7 @@ export function readVisionDownload() {
 }
 
 export function writeVisionDownload(state) {
-  const stateDir = path.dirname(VISION_DOWNLOAD_STATE_PATH);
-  mkdirSync(stateDir, { recursive: true, mode: 0o700 });
-  chmodSync(stateDir, 0o700);
-  const temporary = `${VISION_DOWNLOAD_STATE_PATH}.tmp.${process.pid}`;
-  writeFileSync(temporary, `${JSON.stringify(state)}\n`, {
-    encoding: "utf8",
-    mode: 0o600,
-  });
-  protectPrivateFile(temporary);
-  renameSync(temporary, VISION_DOWNLOAD_STATE_PATH);
-  protectPrivateFile(VISION_DOWNLOAD_STATE_PATH);
+  writePrivateJson(VISION_DOWNLOAD_STATE_PATH, state, { space: 0, directoryMode: 0o700 });
   return state;
 }
 

@@ -1220,3 +1220,55 @@ wire_api = "responses"
     rmSync(codexHome, { recursive: true, force: true });
   }
 });
+
+test("config manager keeps user tables parked inside the managed provider block", () => {
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), "codex-router-config-"));
+  const configPath = path.join(codexHome, "config.toml");
+  writeFileSync(configPath, 'model = "gpt-5.6-sol"\nmodel_provider = "openai"\n', {
+    mode: 0o644,
+  });
+
+  try {
+    run("enable", codexHome);
+
+    // The desktop app rewrites config.toml wholesale and can park user tables
+    // between the managed provider table and the end marker.
+    const parked = readFileSync(configPath, "utf8").replace(
+      "# END codex-router-provider-managed",
+      `[desktop]
+localeOverride = "zh-CN"
+followUpQueueMode = "queue"
+
+[desktop.appearanceLightChromeTheme]
+accent = "#4e96d1"
+
+# END codex-router-provider-managed`,
+    );
+    assert.notEqual(parked, readFileSync(configPath, "utf8"));
+    writeFileSync(configPath, parked, { mode: 0o600 });
+
+    const reenabled = run("enable", codexHome);
+    assert.equal(reenabled.mode, "router");
+    const refreshed = readFileSync(configPath, "utf8");
+    assert.match(refreshed, /\[desktop\]/);
+    assert.match(refreshed, /localeOverride = "zh-CN"/);
+    assert.match(refreshed, /\[desktop\.appearanceLightChromeTheme\]/);
+    assert.match(refreshed, /accent = "#4e96d1"/);
+    // The hoisted table must sit outside the managed block.
+    const providerBlock = refreshed.match(
+      /# BEGIN codex-router-provider-managed\n[\s\S]*?\n# END codex-router-provider-managed/,
+    );
+    assert.ok(providerBlock);
+    assert.doesNotMatch(providerBlock[0], /\[desktop\]/);
+
+    const disabled = run("disable", codexHome);
+    assert.equal(disabled.mode, "native");
+    const restored = readFileSync(configPath, "utf8");
+    assert.doesNotMatch(restored, /codex-router-provider-managed/);
+    assert.match(restored, /\[desktop\]/);
+    assert.match(restored, /localeOverride = "zh-CN"/);
+    assert.match(restored, /accent = "#4e96d1"/);
+  } finally {
+    rmSync(codexHome, { recursive: true, force: true });
+  }
+});

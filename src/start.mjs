@@ -191,20 +191,38 @@ const FRONTEND = { script: "router.mjs", service: "codex-router", label: "Codex 
 for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, stopChildren);
 
 async function main() {
+  // These forwarders use separate ports and do not depend on one another.
+  // Start all of them before waiting so a cold service does not pay their
+  // startup times one after another.
   const kimiForwarder = run(process.execPath, [path.join(SOURCE_ROOT, "src", "oauth-forwarder.mjs")]);
-  await waitForHealth("OAuth forwarder", loopback(PORTS.oauth, "/health"), {
-    Authorization: `Bearer ${internalKey}`,
-  }, 30_000, undefined, kimiForwarder);
-
   const api = run(process.execPath, [path.join(SOURCE_ROOT, "src", "api-forwarder.mjs")]);
-  await waitForHealth("API forwarder", loopback(PORTS.api, "/health"), {
-    Authorization: `Bearer ${internalKey}`,
-  }, 30_000, undefined, api);
-
   const grokForwarder = run(process.execPath, [path.join(SOURCE_ROOT, "src", "grok-oauth-forwarder.mjs")]);
-  await waitForHealth("Grok OAuth forwarder", loopback(PORTS.grokOauth, "/health"), {
-    Authorization: `Bearer ${internalKey}`,
-  }, 30_000, undefined, grokForwarder);
+  await Promise.all([
+    waitForHealth(
+      "OAuth forwarder",
+      loopback(PORTS.oauth, "/health"),
+      { Authorization: `Bearer ${internalKey}` },
+      30_000,
+      undefined,
+      kimiForwarder,
+    ),
+    waitForHealth(
+      "API forwarder",
+      loopback(PORTS.api, "/health"),
+      { Authorization: `Bearer ${internalKey}` },
+      30_000,
+      undefined,
+      api,
+    ),
+    waitForHealth(
+      "Grok OAuth forwarder",
+      loopback(PORTS.grokOauth, "/health"),
+      { Authorization: `Bearer ${internalKey}` },
+      30_000,
+      undefined,
+      grokForwarder,
+    ),
+  ]);
 
   const gateway = run(litellm, [
     "--config",

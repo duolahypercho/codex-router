@@ -259,6 +259,12 @@ function loadRegistry() {
       ) {
         fail(`provider ${provider.id} has an unsupported API protocol`);
       }
+      if (provider.transport !== undefined && provider.transport !== "ollama") {
+        fail(`provider ${provider.id} has an unsupported transport`);
+      }
+      if (provider.transport === "ollama" && !provider.keyless) {
+        fail(`provider ${provider.id} Ollama transport must be keyless`);
+      }
     }
     providers.set(provider.id, Object.freeze(provider));
   }

@@ -1,7 +1,7 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 
-import { protectPrivateFile } from "./file-security.mjs";
+import { writePrivateJson } from "./file-security.mjs";
 import { STATE_DIR } from "./paths.mjs";
 
 // User-curated models live outside the checked-in config/ registry tree so a checkout update
@@ -78,19 +78,6 @@ export function readUserModels() {
 }
 
 export function writeUserModels(models) {
-  mkdirSync(path.dirname(USER_MODELS_PATH), { recursive: true, mode: 0o700 });
-  const temporary = `${USER_MODELS_PATH}.tmp.${process.pid}`;
-  writeFileSync(temporary, `${JSON.stringify({ version: 1, models }, null, 2)}\n`, {
-    encoding: "utf8",
-    mode: 0o600,
-  });
-  try {
-    protectPrivateFile(temporary);
-    renameSync(temporary, USER_MODELS_PATH);
-    protectPrivateFile(USER_MODELS_PATH);
-  } catch (error) {
-    if (existsSync(temporary)) unlinkSync(temporary);
-    throw error;
-  }
+  writePrivateJson(USER_MODELS_PATH, { version: 1, models });
   return USER_MODELS_PATH;
 }
