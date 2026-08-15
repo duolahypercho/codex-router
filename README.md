@@ -134,8 +134,13 @@ Linux installations support the Codex CLI.
 | DeepSeek V4 Pro (Qwen Plan) | `qwen-plan/deepseek-v4-pro` | Alibaba Model Studio plan API key |
 | DeepSeek V4 Flash (Qwen Plan) | `qwen-plan/deepseek-v4-flash-0731` | Alibaba Model Studio plan API key |
 | GLM-5.2 (Qwen Plan) | `qwen-plan/glm-5.2` | Alibaba Model Studio plan API key |
+| GLM-5.3 (Coding Plan) | `zai-coding/glm-5.3` | Z.ai GLM Coding Plan API key |
+| GLM-5.3 1M (Coding Plan) | `zai-coding/glm-5.3-1m` | Z.ai GLM Coding Plan API key |
 | GLM-5.2 (Coding Plan) | `zai-coding/glm-5.2` | Z.ai GLM Coding Plan API key |
 | GLM-5-Turbo (Coding Plan) | `zai-coding/glm-5-turbo` | Z.ai GLM Coding Plan API key |
+| GLM-5.3 (Z.ai API) | `zai-api/glm-5.3` | Separately billed Z.ai platform API key |
+| GLM-5.2 (Z.ai API) | `zai-api/glm-5.2` | Separately billed Z.ai platform API key |
+| GLM-4.7 (Z.ai API) | `zai-api/glm-4.7` | Separately billed Z.ai platform API key |
 | Muse Spark 1.2 (Meta) | `meta/muse-spark-1.2` | Meta Model API key |
 | Muse Spark 1.2 Contributor (Meta) | `meta/muse-spark-1.2-contributor` | Meta Model API key |
 | Muse Spark 1.1 (Meta) | `meta/muse-spark-1.1` | Meta Model API key |
@@ -256,10 +261,17 @@ the Singapore region. Coding Plan subscribers or other regions can point
 `QWEN_PLAN_BASE_URL` at their dashboard-issued base URL. Plan keys use the
 `sk-sp-` prefix and are separate from pay-as-you-go Model Studio keys; Alibaba
 reserves plan endpoints for interactive coding tools.
-The Z.ai entries use the GLM Coding Plan's dedicated endpoint and its
+The `zai-coding` entries use the GLM Coding Plan's dedicated endpoint and its
 subscription API key. That key is not interchangeable with general Z.ai
 platform keys, and Z.ai reserves the coding endpoint for interactive coding
-tools.
+tools. The metered platform is therefore a separate provider, `zai-api`, on
+`https://api.z.ai/api/paas/v4` with its own key file and its own environment
+variable (`ZAI_PLATFORM_API_KEY`, never the plan's `ZAI_API_KEY`) — connecting
+one does not connect the other. GLM-5.3 ships on both routes with Z.ai's
+documented low/high/max reasoning tiers; the 1M context window is only
+documented behind the `[1m]` model suffix, which is what the separate
+`zai-coding/glm-5.3-1m` entry sends, so the plain GLM-5.3 entries stay at the
+200K lineage default until a live run proves otherwise.
 Beyond the built-in models, each API-key provider's live catalog can be
 curated interactively: `./bin/curate-models PROVIDER` lists the models the
 provider currently advertises that are not in the registry, lets you toggle
@@ -311,6 +323,7 @@ started with.
 | Picker label | Model ID |
 | --- | --- |
 | Grok 4.5 (opencode Go) | `opencode-go/grok-4.5` |
+| GLM-5.3 (opencode Go) | `opencode-go/glm-5.3` |
 | GLM-5.2 (opencode Go) | `opencode-go/glm-5.2` |
 | GLM-5.1 (opencode Go) | `opencode-go/glm-5.1` |
 | Kimi K3 (opencode Go) | `opencode-go/kimi-k3` |
@@ -339,6 +352,50 @@ Entries that duplicate a vendor-direct provider (for example DeepSeek V4 Pro)
 intentionally coexist because the subscription bills separately. Point
 `OPENCODE_GO_BASE_URL` (or `OPENCODE_ZEN_BASE_URL`) elsewhere to override the
 endpoints.
+
+### Anonymous free model gateways
+
+Two additional catalog-only entries use providers' documented free-model
+exceptions. They do not ask for an API key, and they deliberately ship no
+checked-in model metadata: the provider's live `/models` response is filtered
+to the free subset and then added locally with `./bin/curate-models`.
+
+| Picker label | Provider ID | Endpoint | Free-model rule |
+| --- | --- | --- | --- |
+| OpenCode Free | `opencode-free` | `https://opencode.ai/zen/v1` | `big-pickle` and IDs ending in `-free` |
+| Kilo Free | `kilo-free` | `https://api.kilo.ai/api/gateway` | IDs ending in `:free` |
+
+Enable one and discover its current catalog:
+
+```sh
+./bin/model-router codex providers enable opencode-free
+./bin/curate-models opencode-free
+
+./bin/model-router codex providers enable kilo-free
+./bin/curate-models kilo-free
+```
+
+OpenCode Console documents that free chat models can omit the bearer header;
+the paid Console models still require a key. Kilo documents anonymous access
+only for `:free` models and limits anonymous traffic to 200 requests per hour
+per IP. Both catalogs and limits are provider-controlled and can change, so
+the router refuses paid IDs and shows traffic-only usage when no quota header
+has been observed. Kilo's general SDK setup guide still asks external SDK
+users for an API key; this entry intentionally covers only the gateway's
+documented anonymous `:free` path.
+
+> **Use these at your own risk.** They are the only providers here that reach an
+> upstream with no account behind them, and that changes what "supported" can
+> mean. Nobody has agreed to serve you: access is a published exception, not an
+> entitlement, and it can be narrowed, rate-limited, or withdrawn without
+> notice. The naming rule is a heuristic rather than a promise — the catalogs
+> carry no pricing field to check, so a model whose ID says `free` can still
+> answer `401 Paid inference requests require an Authorization bearer token`,
+> and the router cannot tell in advance. Anonymous traffic is identified by IP,
+> so a router fanning out parallel subagents spends a budget shared with
+> everyone behind that address. Treat these as a way to try a model, not as
+> something to depend on: nothing in this repository can keep them working, and
+> a failure here is not a bug the project can fix.
 
 ### Command Code Provider API
 
@@ -1066,9 +1123,20 @@ comments, and your other stored keys are left exactly as they were —
 A settings file this build cannot read unambiguously is refused with the file
 untouched rather than rewritten on a guess.
 
-**Native GPT models are not published.** They need the caller's own ChatGPT
-session, which a harness request does not carry, so advertising them would
-offer a turn that cannot authenticate.
+**Native GPT models publish while this machine has a usable Codex session.**
+They are authorized by a ChatGPT session and a harness request carries none of
+its own, so the router falls back to the session Codex is already signed in with
+here — you are logged in on this machine, and a client running as the same user
+should not have to log in again. They are withheld the moment that session is
+missing or expired, so the picker never offers a turn that would 401. If they
+disappear, open Codex once to renew it; `./bin/model-router doctor` says so too.
+
+It is a fallback and never an override: a request that presents its own
+credential is relayed untouched, so nothing about a Codex turn changes. Worth
+knowing before leaving it on — it widens what the caller key reaches, from the
+API-key providers to your ChatGPT subscription as well. Set
+`CODEX_ROUTER_NATIVE_SESSION_FALLBACK=0` to turn it off, and the harness
+publishes routed models only.
 
 **Subagents.** A child spawned by `dsh-tool-subagent` with no model of its own
 inherits the default model selection, so it is already routed once this route

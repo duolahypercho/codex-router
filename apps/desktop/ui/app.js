@@ -569,8 +569,11 @@ function startPanel() {
 
   function providerRow(provider, enabled) {
     const isBusy = state.busyProvider === provider.id;
+    const isAnonymous = provider.kind === "anonymous";
     const isApiKey = !provider.credentialLabel || provider.credentialLabel === "API key" || provider.credentialLabel === t("connections.apiKey");
-    const credentialLabel = isApiKey
+    const credentialLabel = isAnonymous
+      ? t("connections.noApiKey")
+      : isApiKey
       ? t("connections.apiKey")
       : provider.credentialLabel === "GitHub token" ? t("connections.githubToken") : provider.credentialLabel;
     const kind = provider.kind === "oauth" ? t("connections.oauth") : credentialLabel;
@@ -584,6 +587,9 @@ function startPanel() {
       actionLabel = provider.cliInstalled
         ? provider.configured ? t("connections.reconnect") : t("connections.signIn")
         : `${t("connections.installCli")} & ${t("connections.signIn")}`;
+    } else if (isAnonymous) {
+      action = "none";
+      actionLabel = t("connections.ready");
     } else {
       action = "key";
       actionLabel = isApiKey
@@ -594,10 +600,13 @@ function startPanel() {
     }
     if (isBusy) detail = t("status.working");
     const canRemove = provider.kind === "api" && provider.configured;
+    const actionButton = isAnonymous
+      ? `<button class="mini-button" type="button" disabled title="${escapeHtml(provider.anonymousNote || t("connections.noApiKey"))}">${escapeHtml(actionLabel)}</button>`
+      : `<button class="mini-button" type="button" data-action="${action}" data-provider="${escapeHtml(provider.id)}"${isBusy ? " disabled" : ""}>${escapeHtml(actionLabel)}</button>`;
     return `<article class="provider-row">
-      <div><strong>${escapeHtml(provider.displayName)}</strong><small>${escapeHtml(detail)}</small>${provider.planNote ? `<small>${escapeHtml(localizeProviderPlan(provider.planNote))}</small>` : ""}</div>
+      <div><strong>${escapeHtml(provider.displayName)}</strong><small>${escapeHtml(detail)}</small>${provider.planNote ? `<small>${escapeHtml(localizeProviderPlan(provider.planNote))}</small>` : ""}${provider.anonymousNote ? `<small>${escapeHtml(provider.anonymousNote)}</small>` : ""}</div>
       <div class="provider-actions">
-        <button class="mini-button" type="button" data-action="${action}" data-provider="${escapeHtml(provider.id)}"${isBusy ? " disabled" : ""}>${escapeHtml(actionLabel)}</button>
+        ${actionButton}
         ${
           canRemove
             ? `<button class="mini-button danger" type="button" data-action="remove-key" data-provider="${escapeHtml(provider.id)}" aria-label="${escapeHtml(t("connections.removeCredentialAria", { provider: provider.displayName }))}"${isBusy ? " disabled" : ""}>${escapeHtml(t("actions.remove"))}</button>`

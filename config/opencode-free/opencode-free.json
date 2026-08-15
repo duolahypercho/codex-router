@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "providers": [
+    {
+      "id": "opencode-free",
+      "displayName": "OpenCode Free",
+      "kind": "openai-compatible",
+      "ownedBy": "opencode",
+      "baseUrl": "https://opencode.ai/zen/v1",
+      "authMode": "anonymous",
+      "anonymousModelPolicy": "opencode-console",
+      "anonymousNote": "No API key is needed for OpenCode Zen free models. Use at your own risk: access is a published exception, not an entitlement, and the free catalog and limits can change without notice."
+    }
+  ]
+}

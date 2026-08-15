@@ -60,6 +60,11 @@ user.
    interactive terminal to choose models. If they did not specify and
    credentials already exist, use
    `configured` rather than showing providers that cannot authenticate.
+   The anonymous catalog-only providers `opencode-free` and `kilo-free` are
+   also selectable, but they need no credential only for their documented free
+   model subsets. They ship no preselected models and must be explicitly
+   selected before `bin/curate-models PROVIDER` is run; never select either one
+   on the user's behalf just because it can authenticate without a key.
    `kimi-api` and `kimi-api-cn` are two different Moonshot platforms, not a
    fallback pair: the global console at platform.moonshot.ai and the mainland
    one at platform.moonshot.cn have separate accounts, separate billing, and
@@ -157,14 +162,19 @@ beside ours, so everything else in them is somebody else's work.
    the same bound the harness itself holds them to, and status output reports
    the redacted URL exactly as the Codex manager does. Never print the complete
    managed base URL.
-4. **Only routed models are published**, and only the selected, credentialed,
-   listed, non-hidden ones. An unregistered slug on the router's
-   `/v1/responses` endpoint is treated as native GPT traffic needing the
-   caller's own ChatGPT session, which a harness request does not carry — so a
-   native model advertised here would offer a turn that cannot authenticate.
-   For the same reason the vision-bridge engine candidates exclude native
-   models: this call site's evidence is that there is no caller session to
-   check.
+4. **Routed models are always published; native ones only while a session backs
+   them.** Publish only the selected, credentialed, listed, non-hidden routed
+   models. An unregistered slug on the router's `/v1/responses` endpoint is
+   treated as native GPT traffic needing a ChatGPT session, which a harness
+   request does not carry — so a native model is advertised only while
+   `nativeSessionStatus().usable` reports the session this machine is signed in
+   with as spendable, and is withheld again the moment it is not. Publishing one
+   the router cannot authorize offers a turn that 401s, which is the failure
+   this gate exists to prevent; never widen it to presence alone, because an
+   expired session is present.
+   The vision-bridge engine candidates still exclude native models: that call
+   site admits an engine on evidence the *caller's* session can spend it, and a
+   substituted session is not the caller's.
 5. **The protocol is `openai-responses`**, because that is the only thing the
    router's caller endpoint serves, and every router capability — tool-result
    ageing, the vision bridge, prompt-token substitution, upstream retry, usage
@@ -723,6 +733,23 @@ the turn as text. Treat it as a router capability, never as a model capability.
     may survive into a forwarded body, and one image asked one question may be
     bought only once however many requests are in flight.
 
+## Anonymous remote providers
+
+`authMode: "anonymous"` is not the same as `keyless`. A keyless provider is
+loopback-only and serves from this machine; an anonymous provider sends the
+operator's prompt to a fixed remote endpoint under a provider-controlled free
+model policy. It must never declare a credential, keyless mode, or a base-URL
+override, and the registry loader keeps its endpoint allowlisted.
+
+Anonymous providers are **configured but never defaulted**: the credential
+resolver may report them as ready, and an explicit `--providers` choice may
+route a curated free model, but `defaultProviderIds()`, the no-argument setup
+path, `--providers configured`, and `ensure-configured` must not add them when
+the operator did not ask. They are catalog-only, so discovery filters the
+provider's live `/models` response to its documented free IDs and the user
+must curate models locally. Never check in a paid model ID or silently turn on
+an anonymous endpoint during installation.
+
 ## Local models as a provider
 
 `local` is a keyless provider: it serves from this machine, so there is no
@@ -789,6 +816,55 @@ minutes later. Do not quietly drop the label because a check happened to pass.
 - Do not delete retained keys, logs, backups, snapshots, or old state
   directories.
 - Do not restart or quit the Codex App from the installation task.
+
+## The `codex` shim is opt-in and must never break `codex`
+
+`src/codex-shim.mjs` can put a wrapper named `codex` on the user's PATH so the
+router is verified up before Codex starts. Installing a file that shadows a
+command the user already has is a change only they may authorize.
+
+1. Never install it from `install.sh`, `install.ps1`, `doctor --fix`, or any
+   automatic repair. It ships behind `model-router codex shim install` only.
+2. Never write into a PATH directory outside the user's home directory. A shim
+   in `/usr/local/bin` changes `codex` for every account on the machine.
+3. Never overwrite or delete a `codex` that does not carry `SHIM_MARKER`.
+   Another wrapper there is somebody's deliberate setup, not debris.
+4. Never edit shell startup files to put the shim on PATH. When no directory
+   ahead of Codex is writable, print the `export PATH=...` line and stop.
+5. Every failure path in the generated shim must still `exec` the real Codex.
+   A stopped router, a deleted checkout, and a gateway that never becomes
+   healthy are all recoverable; a `codex` that refuses to start is not. The
+   wait is bounded by `MODEL_ROUTER_SHIM_WAIT`, and `MODEL_ROUTER_SHIM=0`
+   bypasses the check.
+
+`test/codex-shim.test.mjs` covers each of these. Do not weaken those tests to
+land a change.
+
+## Detecting whether Codex is open
+
+Follow mode ("Show tray: With Codex") decides when the tray is visible and, in
+that mode, when the router runs at all. Codex ships both as a desktop app and as
+an npm CLI, and only the app has a bundle identifier, so
+`NSRunningApplication` alone is not an answer: a bundle-only check reported
+"Codex is not running" for every terminal session, hid the menu bar item, and
+stopped the router 30 seconds into the user's work.
+
+Detection must cover both — bundle identifiers for the apps, and a process-table
+scan for the CLI. Keep the scan in `sysctl`; it runs every five seconds for the
+life of the session, and spawning `pgrep` on that cadence is a cost the check
+does not justify. `apps/macos/ModelRouterTray/Tests/HostProcessDetectionTests.swift`
+guards it.
+
+## The macOS app icon is committed, not built during a tray build
+
+`apps/macos/ModelRouterTray/Resources/AppIcon.svg` is the source and
+`AppIcon.icns` beside it is the committed output of `scripts/build-app-icon.sh`.
+Regenerate and commit both together after editing the SVG. Do not make
+`scripts/build-macos-tray-app.sh` rasterize the icon: it would put `sips` and
+`iconutil` on the critical path of every tray build for one asset that changes
+almost never. Keep the SVG free of `--` inside comments and of SVG filter
+primitives — CoreSVG, which is what `sips` uses, rejects the first and silently
+drops the second.
 
 ## Upstream retries are legal only before the first relayed byte
 
@@ -898,3 +974,183 @@ purpose.
   that can echo either. Regressions require fragmented/mislabeled SSE tests and
   real marker-return probes through every installed routed agent plus a
   same-thread follow-up.
+
+## Installing the harness is one action, and it is never a side effect
+
+`dsh-config-manager.mjs` publishes routed models into a harness that is already
+there. On a machine without one that assumption is a manual `npm install -g` the
+user has to find in the docs, so `src/dsh-install.mjs` owns the other half.
+
+- `control harness setup` installs `@deepseek-ai/dsh` globally if `dsh` is
+  absent, then publishes. `control harness status` reports without touching
+  anything. The tray's Settings row drives the same command.
+- Global, not `npx`. The harness's own README documents `npx @deepseek-ai/dsh
+  web`, which refetches per run and leaves no `dsh` behind — and an npx process
+  is invisible to `presence-state.mjs`, which has to be able to see the client
+  to keep the router up for it.
+- Never folded into `apply`, `enable`, or a repair path. It installs a
+  third-party package over the network; that must be something a user asked for
+  in as many words, not a consequence of something else.
+- Node is checked before npm is reached. The package declares no `engines`, so a
+  stale runtime otherwise fails at first boot with a syntax error from inside
+  `node_modules`. Compare major and minor numerically — `22.9` sorts above
+  `22.19` as a string.
+- Install then publish, with no rollback between them. A publish that fails
+  leaves an installed harness, which is where a retry wants to start, and the
+  publish is idempotent so the retry is a re-run of the same call.
+- `npm-global-install.mjs` holds the npm mechanics for both this and the
+  provider CLIs. One copy, because the details that took a debugging session to
+  get right — the PATH a spawn inherits, where npm drops binaries per platform,
+  which line of npm's output is worth showing — are exactly what drifts.
+- Native GPT models are published only while `codex-native-session.mjs` reports
+  a usable session: they need a ChatGPT session, a harness request carries none
+  of its own, and the fallback spends the one this machine is already signed in
+  with. They are withheld again the moment it is missing or expired. The count
+  the button reports is the routable set, not the picker.
+
+`src/dsh-web.mjs` starts and finds the browser UI, so the tray's button can be
+`Open site` once there is a site to open.
+
+- Adopt, never collide. The harness binds a fixed port rather than picking a
+  free one, so a second launch exits with `EADDRINUSE` and takes the click with
+  it. `startDshWeb` probes first and returns `startedNow: false` when something
+  already answers.
+- Stop only what this router started, the same rule `ollama-runtime.mjs`
+  follows. PID plus process start identity are persisted together and both must
+  match, because PIDs are reused; `src/process-identity.mjs` holds that check
+  for both callers.
+- The probe asks whether the port answers, not what is behind it. A 404 from the
+  harness's own router is a running harness, and fingerprinting somebody else's
+  HTML to be surer would be worse than the ambiguity.
+- The port is a setting (`MODEL_ROUTER_DSH_WEB_PORT`), not a constant. `dsh web
+  --port` exists, and a user who moved theirs must not be sent to a dead URL.
+- Setup does not start the UI. It already installs a package and writes another
+  program's configuration; adding a server launch makes one click three
+  consequential things, and the last is the one the user can do themselves a
+  moment later. Starting is its own button, so a republish never puts a browser
+  window on screen that nobody asked for.
+- `control --json` must carry the *web-aware* snapshot. It is what the tray
+  polls, and the cheap synchronous variant reports no `web` at all, which reads
+  as "stopped" and offers to start a harness that is already serving.
+- Stopping and disconnecting are different questions, and the row asks whichever
+  one currently costs something. While the harness is resident it holds a Node
+  process and its plugin tree in memory -- ~184 MB measured -- so the secondary
+  action is **Turn off**, which stops the process and leaves the route
+  published. Once nothing is running, the only thing left to undo is the
+  integration, so it becomes **Disconnect**. A harness this router did not start
+  is never signalled; the row says where it came from instead.
+- Turning a client off is not a reason to tear the plane down. `bin/disable`
+  removes the service only once `installedTargets()` is empty; disabling the
+  harness while Codex is still published used to uninstall the LaunchAgent and
+  stop Codex working too. `control harness disconnect` is the tray's path and
+  never touches the service at all.
+- The default model is the user's. Restore only over a default this router
+  wrote — the harness's own Models page writes the same key, and a snapshot
+  taken before their choice is not a licence to undo it. With no snapshot but a
+  router-owned default, remove the key rather than leave the harness pointed at
+  a provider the same uninstall just deleted. All three cases are covered in
+  `test/dsh-config-manager.test.mjs`.
+
+
+## Native GPT for a client with no ChatGPT login of its own
+
+Native traffic is authorized by the caller's session: `nativeHeaders` copies
+`authorization` and `chatgpt-account-id` off the incoming request, and Codex
+attaches both. A harness turn attaches neither, so native models advertised to
+it were models it could never spend.
+
+`src/codex-native-session.mjs` closes that by falling back to the session this
+machine is already signed in with, in `$CODEX_HOME/auth.json`. The user is
+signed in to Codex here; asking them to sign in again for a client running as
+the same user on the same machine buys nothing.
+
+- **Fallback, never override.** Injection happens only when the request carried
+  no *upstream* credential. Codex always carries one, so a Codex turn is
+  byte-identical to before — verified by relaying a deliberately invalid token
+  and getting that token's own 401 back rather than a success.
+- **"No credential" is not "no header".** The harness authenticates to this
+  router with the router's own caller key, sent as a bearer token, because a
+  provider route has nowhere else to put one. Testing `!headers.authorization`
+  therefore never fired for a real harness turn: the caller key went upstream
+  and every turn came back "API key is invalid". Compare the presented bearer
+  token against `CALLER_KEY` and `INTERNAL_KEY` and treat a match as no upstream
+  credential. When there is nothing to substitute, delete the header rather than
+  forward it — a router secret must never leave the machine.
+- Test the shape the client actually sends. A curl with no `Authorization`
+  header at all passes the naive guard and proves nothing.
+- **The native endpoint accepts a narrower request than the public Responses
+  API.** `store` must be `false`, `stream` must be `true`, and ten parameters a
+  generic OpenAI client sends are rejected one at a time as bare 400s:
+  `temperature`, `top_p`, `presence_penalty`, `frequency_penalty`, `max_tokens`,
+  `max_output_tokens`, `metadata`, `seed`, `user`, `truncation`. Codex complies
+  already, so the payload is normalized *only* for a caller whose session was
+  substituted — a Codex turn is never rewritten. `reasoning`, `tool_choice`,
+  `parallel_tool_calls`, and `instructions` are accepted and must survive; the
+  strip is a denylist for that reason, not a whitelist. Measure any change to
+  that list against the live endpoint rather than guessing.
+- **Publishable exactly while spendable.** `dshRoutedModels()` includes native
+  models only while `nativeSessionAvailable()` is true, so the harness is never
+  offered a model that would 401. `visibility: "hide"` entries stay unpublished:
+  they are Codex's own internals, a watermarked build and the auto-review model.
+- **The credential never leaves the process.** It is not logged, not returned by
+  a status call, and not put in an error message. `nativeSessionStatus()` reports
+  presence, usability, and age — `test/codex-native-session.test.mjs` asserts the
+  serialized status contains neither the token nor the account id.
+- **It widens the caller key.** With the fallback on, anything holding that key
+  spends the ChatGPT subscription and not only the API-key providers. That is a
+  deliberate, user-made tradeoff; `CODEX_ROUTER_NATIVE_SESSION_FALLBACK=0` turns
+  it off and the harness silently drops back to routed models only.
+- **The access token lives about ten days, and Codex renews it only when Codex
+  is used.** A harness-only stretch longer than that would otherwise leave the
+  router sending a dead token. `nativeSessionHeaders()` reads the `exp` claim
+  and declines two minutes early, so an expired session withholds the headers
+  and `dshRoutedModels()` stops publishing native models — the picker loses the
+  eight rather than serving certain 401s.
+- **Codex refreshes its own credential; this router never does.** Reproducing
+  that OAuth exchange would mean guessing an unpublished client identity and, if
+  refresh tokens rotate, either rewriting Codex's own file or invalidating the
+  login this router was asked not to disturb. `refreshViaCodex()` runs
+  `codex login status` instead — best effort, single-flight, at most once every
+  five minutes — and lets Codex decide. If nothing renews, the session simply
+  reads as expired.
+- `doctor` reports it as its own line, because "open Codex once" is the fix and
+  nothing else would say so.
+
+## A client the tray cannot watch keeps the router on
+
+The tray's presence setting can tie the router to the Codex and ChatGPT desktop
+apps, stopping it 30 seconds after both close. That is only safe for a client
+the tray can actually see. `NSRunningApplication` enumerates app bundles, so it
+sees the desktop apps and nothing else — a `codex` TUI in a terminal and a `dsh`
+harness turn both register nothing at all. Neither can be started on demand
+either: a turn that finds 127.0.0.1:4202 closed fails immediately, while the
+five-process stack behind that port takes up to 300 seconds to warm, so lazy
+start does not exist at request latency. The port has to already be open.
+
+- `effectivePresenceMode()` in `src/presence-state.mjs` is what the tray and
+  `doctor` act on. It reports `always` whenever `dsh-models.json` exists or
+  `codex` resolves on PATH, whatever the stored mode says. Read it, never
+  `readPresenceMode()`, anywhere a service gets stopped.
+- Detection errs toward finding a client. A false positive costs a dormant
+  toggle; a false negative costs somebody their next request.
+- The stored mode is overridden, never rewritten. Removing the harness route or
+  the CLI hands the user's own choice back on the next read.
+- The router owns the rule and the tray consumes it: `control --json` carries a
+  `presence` block, and the tray reads `presence.effectiveMode` rather than
+  re-deriving anything from target flags, which is where the two would drift.
+  The field is optional in the Swift decoder, so a tray keeps working against a
+  router that predates it.
+- `test/presence-state.test.mjs` covers both signals, the override, the round
+  trip, and the fact that always-on is left alone. A change to the gate needs a
+  test there.
+
+## Generated media and scratch output
+
+- Anything a skill, tool, or agent produces that is not source — rendered
+  video, images, audio, benchmark dumps, one-off reports — belongs in
+  `generated/` at the repository root. That directory is gitignored, so the
+  working tree stays clean and nothing large lands in a commit by accident.
+- Do not add per-extension ignore rules (`*.mp4`, `*.png`) for this. They also
+  hide checked-in assets such as tray icons and documentation screenshots.
+- Files that are meant to ship — icons, fixtures, docs assets — go in their
+  real home under version control, not in `generated/`.

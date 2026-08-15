@@ -87,16 +87,29 @@ export function configuredProviderIds() {
       } else if (provider.id === "grok-oauth" && grokOAuthStatus().configured) {
         configured.push(provider.id);
       }
-    } else if (provider.keyless) {
-      // Nothing to configure: the endpoint is on this machine. Whether it is
-      // actually running is a health question, reported by doctor, not a
-      // reason to hide the provider.
+    } else if (provider.keyless || provider.authMode === "anonymous") {
+      // Nothing to configure: local providers run on this machine, while
+      // anonymous providers authenticate by the provider's free-model policy.
+      // Reachability and rate limits remain health questions, not reasons to
+      // hide a provider from the picker.
       configured.push(provider.id);
     } else if (credentialStatus(provider, { persistent: true }).configured) {
       configured.push(provider.id);
     }
   }
   return configured;
+}
+
+// `configuredProviderIds()` answers whether a provider can authenticate. The
+// installer also needs a narrower answer: which configured providers may be
+// enabled when the operator did not name any. Anonymous providers can
+// authenticate without a key, but enabling one sends future prompts to a
+// third-party endpoint, so it must be an explicit choice. Loopback keyless
+// providers remain safe to include in the default.
+export function defaultProviderIds() {
+  return configuredProviderIds().filter(
+    (id) => PROVIDERS.get(id)?.authMode !== "anonymous",
+  );
 }
 
 // Never throws. Returns the providers to expose plus what had to be ignored, so
@@ -184,7 +197,7 @@ export function writeProviderSelection(values) {
 export function enableProvider(providerId) {
   const current = existsSync(PROVIDER_SELECTION_PATH)
     ? readProviderSelection()
-    : configuredProviderIds();
+    : defaultProviderIds();
   return writeProviderSelection([...current, providerId]);
 }
 
@@ -192,7 +205,7 @@ export function disableProvider(providerId) {
   const target = canonicalProviderId(providerId);
   const current = existsSync(PROVIDER_SELECTION_PATH)
     ? readProviderSelection()
-    : configuredProviderIds();
+    : defaultProviderIds();
   return writeProviderSelection(
     current.filter((id) => canonicalProviderId(id) !== target),
   );
@@ -235,7 +248,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     } else if (command === "ensure-configured") {
       const providers = existsSync(PROVIDER_SELECTION_PATH)
         ? readProviderSelection()
-        : writeProviderSelection(configuredProviderIds());
+        : writeProviderSelection(defaultProviderIds());
       if (providers.length === 0) {
         throw new Error(
           `No provider credential is configured. Run ${

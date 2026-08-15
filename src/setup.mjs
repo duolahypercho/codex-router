@@ -19,7 +19,7 @@ import {
 } from "./provider-onboarding.mjs";
 import { renderProviderChoices, stepHeader, toggleSelection } from "./setup-ui.mjs";
 import {
-  configuredProviderIds,
+  defaultProviderIds,
   selectedConfiguredListedModels,
   validateProviderIds,
   writeProviderSelection,
@@ -177,7 +177,9 @@ function providerConfigured(provider) {
     if (provider.id === "grok-oauth") return grokOAuthStatus().configured;
     return false;
   }
-  return credentialStatus(provider, { persistent: true }).configured;
+  return provider.keyless || provider.authMode === "anonymous"
+    ? true
+    : credentialStatus(provider, { persistent: true }).configured;
 }
 
 const colorEnabled = Boolean(process.stdout.isTTY) && !process.env.NO_COLOR;
@@ -210,11 +212,11 @@ function guidedSelection() {
 function requestedSelection() {
   const requested = option("--providers");
   if (requested) {
-    if (requested === "configured") return configuredProviderIds();
+    if (requested === "configured") return defaultProviderIds();
     if (requested === "all") return [...PROVIDERS.keys()];
     return validateProviderIds(requested.split(","));
   }
-  return guided ? guidedSelection() : configuredProviderIds();
+  return guided ? guidedSelection() : defaultProviderIds();
 }
 
 function run(command, commandArgs, options = {}) {
@@ -261,6 +263,7 @@ function configureProvider(provider) {
       throw incomplete(`${provider.displayName} sign-in did not produce a usable credential.`);
     }
   } else {
+    if (provider.authMode === "anonymous") return;
     // A provider whose CLI mints its key in the browser gets that offer first,
     // because most people have an account long before they have a key. Saying
     // no falls through to the key prompt rather than failing the install.

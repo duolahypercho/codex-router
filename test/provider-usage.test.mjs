@@ -61,6 +61,7 @@ test("aggregates tokens and calls independently for each provider", () => {
     { startDate: "2026-07-21", tokens: 0, requests: 1 },
   ]);
   assert.equal(byId.deepseek.credentialType, "api");
+  assert.equal(byId["opencode-free"].credentialType, "anonymous");
   assert.equal(byId.deepseek.totalTokens, 100);
   assert.equal(byId["kimi-api"].requests, 0);
   assert.equal(snapshot.scope, "local-router");

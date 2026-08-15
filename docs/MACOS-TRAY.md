@@ -11,6 +11,28 @@ command-line control plane.
 The tray focuses on Codex and does not disable, uninstall, or change the
 existing router configuration.
 
+## Opening it like an app
+
+`./bin/model-router-tray` installs **Model Router.app** into `~/Applications`,
+where Finder, Spotlight, and Launchpad can all find it by name and icon. The
+icon is built from `apps/macos/ModelRouterTray/Resources/AppIcon.svg`; edit the
+SVG and run `scripts/build-app-icon.sh` to regenerate the committed
+`AppIcon.icns`. That script needs `sips` and `iconutil`, which is why the
+`.icns` is committed rather than rasterized during a normal tray build.
+
+The app stays `LSUIElement`, so opening it produces a menu bar item rather than
+a window or a Dock icon. Opening it deliberately does three things: it makes the
+surfaces visible for 20 seconds even if **With Codex** would otherwise hide
+them, it starts the router, and it pulses the status dot so the click gets an
+answer. Without that, opening the app in follow mode with Codex closed looked
+like nothing had happened — on exactly the launch that having an icon is for.
+The reveal is time-boxed rather than sticky so follow mode resumes on its own
+instead of silently leaving you in always-on.
+
+launchd passes `--supervised` when it starts the tray at login, which is how a
+login start is told apart from a person opening the app. A login start must not
+force the surfaces visible, or follow mode would be overridden every morning.
+
 ## Start at login
 
 The first time the tray runs from its app bundle, it registers itself as a
@@ -41,9 +63,16 @@ model picker reloads the merged catalog.
 The Settings tab's **Show tray** control chooses when the tray surfaces are
 visible. **Always** (the default) keeps the menu bar icon present like any
 menu bar app. **With Codex** ties every surface — menu bar icon, Dynamic
-Island, and desktop panel — to the Codex and ChatGPT desktop apps
-(`com.openai.codex`, `com.openai.chat`): the tray appears when either app
-launches and disappears when the last one quits. The tray process itself
+Island, and desktop panel — to Codex being open, whether that is the Codex or
+ChatGPT desktop app (`com.openai.codex`, `com.openai.chat`) or the `codex` CLI:
+the tray appears when the first one starts and disappears when the last one
+quits. The CLI needs a separate check. It is a terminal process with no bundle
+identifier, so `NSRunningApplication` cannot see it; a bundle-only check
+reported "Codex is not running" for every terminal session, which hid the menu
+bar item immediately and then stopped the router 30 seconds into the work it
+was needed for. The watcher therefore also scans the process table (via
+`sysctl`, not by spawning `pgrep`, since this runs every five seconds).
+The tray process itself
 stays resident as a lightweight watcher; quitting on app exit would leave
 nothing around to notice the next launch. Combined with **Start at login**,
 this makes the tray fully automatic: it waits invisibly after a reboot and

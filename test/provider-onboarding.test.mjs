@@ -77,6 +77,13 @@ test("provider onboarding reports install, login, and API key actions without se
     assert.equal("credentialLabel" in byId["deepseek"], false);
     assert.equal(byId.clinepass.action, "add-key");
     assert.equal(byId.chutes.action, "add-key");
+    for (const id of ["opencode-free", "kilo-free"]) {
+      assert.equal(byId[id].kind, "anonymous");
+      assert.equal(byId[id].configured, true);
+      assert.equal(byId[id].action, "anonymous");
+      assert.equal(byId[id].credentialLabel, "No API key");
+      assert.match(byId[id].anonymousNote, /No API key/);
+    }
     assert.equal("source" in byId["kimi-api"], false);
   } finally {
     rmSync(testRoot, { recursive: true, force: true });

@@ -6,6 +6,8 @@
   <string>Model Router</string>
   <key>CFBundleExecutable</key>
   <string>ModelRouterTray</string>
+  <key>CFBundleIconFile</key>
+  <string>AppIcon</string>
   <key>CFBundleIdentifier</key>
   <string>io.github.codex-router.tray</string>
   <key>CFBundleName</key>

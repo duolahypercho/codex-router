@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "slug": "zai-coding/glm-5.3-1m",
+      "gatewayModel": "zai-coding-glm-5-3-1m",
+      "upstreamModel": "glm-5.3[1m]",
+      "provider": "zai-coding",
+      "listed": true,
+      "displayName": "GLM-5.3 1M (Coding Plan)",
+      "description": "GLM-5.3 on the Z.ai GLM Coding Plan with the documented 1M context route: the [1m] model suffix and a one-million-token compaction window.",
+      "priority": 11,
+      "defaultEffort": "max",
+      "reasoningLevels": [
+        {
+          "effort": "low",
+          "description": "Fast reasoning for simple edits"
+        },
+        {
+          "effort": "high",
+          "description": "Deep reasoning with thinking enabled"
+        },
+        {
+          "effort": "max",
+          "description": "Maximum reasoning depth"
+        }
+      ],
+      "contextWindow": 1000000,
+      "autoCompact": 900000,
+      "inputModalities": [
+        "text"
+      ],
+      "requestProfile": "glm-thinking",
+      "compHash": "zai-coding-glm-5-3-1m-v1"
+    }
+  ]
+}

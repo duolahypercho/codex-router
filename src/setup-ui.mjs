@@ -8,6 +8,7 @@ const ACTION_LABELS = Object.freeze({
   login: "needs CLI sign-in",
   install: "needs CLI install",
   blocked: "CLI blocked by Windows",
+  anonymous: "no API key",
 });
 
 const COLOR_CODES = Object.freeze({

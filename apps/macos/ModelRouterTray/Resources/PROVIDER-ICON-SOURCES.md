@@ -15,5 +15,7 @@ blue accent and DeepSeek's original blue mark are preserved.
 | Command Code | https://commandcode.ai/ | https://commandcode.ai/apple-touch-icon.png |
 | GitHub Copilot | https://github.com/features/copilot | https://github.com/primer/octicons/blob/main/icons/copilot-24.svg (MIT) |
 | Chutes | https://chutes.ai/ | Inline SVG mark from the official site header |
+| OpenCode Free | https://opencode.ai/brand | Monochrome adaptation of the official OpenCode mark |
+| Kilo Free | https://kilo.ai/open | https://github.com/Kilo-Org/kilocode/blob/main/packages/kilo-vscode/assets/icons/kilo-dark.svg (Apache-2.0 repository asset) |
 
 The marks remain trademarks of their respective owners.

@@ -31,7 +31,9 @@ function configured(provider) {
   if (provider.kind === "oauth") {
     return Boolean(SIGN_IN_STATUS[provider.id]?.status().configured);
   }
-  return credentialStatus(provider, { persistent: true }).configured;
+  return provider.keyless || provider.authMode === "anonymous"
+    ? true
+    : credentialStatus(provider, { persistent: true }).configured;
 }
 
 function list() {

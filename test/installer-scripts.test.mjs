@@ -16,6 +16,11 @@ import { DIRTY_PREVIEW_LIMIT, localModificationsMessage } from "../src/update.mj
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
+// Windows does not guarantee a POSIX shell. Run these executable-shell
+// assertions wherever `sh` is available (including Git Bash on CI), and skip
+// them honestly on a native Windows checkout that has no such runtime.
+const POSIX_SHELL_AVAILABLE = spawnSync("sh", ["-c", "exit 0"], { stdio: "ignore" }).status === 0;
+
 // Nothing on a non-Windows machine can execute PowerShell -- the parse test in
 // this file is skipped off Windows for exactly that reason -- so the Windows
 // assertions here read the shipped scripts as text instead. That still catches
@@ -109,7 +114,7 @@ function runPosixHelper(call, args, options = {}) {
   return result.stdout;
 }
 
-test("install.sh is valid POSIX shell", () => {
+test("install.sh is valid POSIX shell", { skip: !POSIX_SHELL_AVAILABLE }, () => {
   const result = spawnSync("sh", ["-n", path.join(root, "install.sh")], {
     encoding: "utf8",
   });
@@ -132,7 +137,7 @@ test("Homebrew setup never reconciles package-manager-owned dependencies", () =>
   );
 });
 
-test("Homebrew force-deps fails early with the package-manager repair command", () => {
+test("Homebrew force-deps fails early with the package-manager repair command", { skip: !POSIX_SHELL_AVAILABLE }, () => {
   const result = spawnSync("sh", [path.join(root, "bin", "install"), "--force-deps"], {
     encoding: "utf8",
     env: { ...process.env, CODEX_ROUTER_PACKAGE_MANAGER: "homebrew" },
@@ -351,7 +356,7 @@ test("every copy of the refusal previews at the same limit", () => {
   }
 });
 
-test("the POSIX installer's refusal is byte-identical to src/update.mjs", () => {
+test("the POSIX installer's refusal is byte-identical to src/update.mjs", { skip: !POSIX_SHELL_AVAILABLE }, () => {
   // Not a pattern match: install.sh's own helper is executed and its output
   // compared with the Node original. A reword on either side fails here, which
   // is the coupling that was missing when the first fix landed in one file.
@@ -368,7 +373,7 @@ test("the POSIX installer's refusal is byte-identical to src/update.mjs", () => 
   }
 });
 
-test("the POSIX installer counts tracked edits and ignores untracked files", () => {
+test("the POSIX installer counts tracked edits and ignores untracked files", { skip: !POSIX_SHELL_AVAILABLE }, () => {
   // The behaviour change every curl|sh user gets: a checkout carrying nothing
   // but an untracked file now updates instead of refusing forever.
   const checkout = mkdtempSync(path.join(os.tmpdir(), "posix-dirty-"));

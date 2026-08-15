@@ -87,6 +87,152 @@
   reuses the checkout-installer helper that `update` already uses and that is
   unit tested, rather than a second hand-written PowerShell argument list that
   nothing covered — the follow-up asked for in the review of #186.
+- **GLM-5.3, on every route that actually serves it.** Z.ai shipped GLM-5.3 on
+  2026-08-14. It is now in the picker three ways: `zai-coding/glm-5.3` on the
+  GLM Coding Plan subscription, `zai-api/glm-5.3` on the metered platform, and
+  `opencode-go/glm-5.3` on the opencode Go subscription, whose catalog already
+  advertises it (`./bin/discover-models opencode-go`). Command Code, Qwen Plan,
+  Ollama Cloud, and ClinePass do not carry it yet, so nothing was added there.
+
+  Z.ai documents the 1M context window for GLM-5.3 only behind the `[1m]` model
+  suffix, so that is a separate entry — `zai-coding/glm-5.3-1m`, which sends
+  `glm-5.3[1m]` and a one-million-token compaction window. The suffix-free
+  entries stay at the 200K lineage default rather than inheriting GLM-5.2's 1M,
+  because under-declaring a context window compacts early and over-declaring
+  overruns the turn.
+
+- **A Z.ai key now means one of two different things, and the router keeps them
+  apart.** `zai-api` is a new provider for the metered open platform on
+  `https://api.z.ai/api/paas/v4`, carrying GLM-5.3, GLM-5.2 (1M context), and
+  the cheaper GLM-4.7. It ships GLM-5.3 and GLM-5.2 with the same reasoning
+  ladders as the plan route, and GLM-4.7 with none, because Z.ai documents no
+  effort control for it.
+
+  It is a separate credential end to end: its own key file
+  (`zai-api-key.secret`), its own keychain service, and its own environment
+  variable (`ZAI_PLATFORM_API_KEY`) — never the plan's `ZAI_API_KEY`. A Coding
+  Plan key is not billable on the metered endpoint and vice versa, so a
+  `planNote` says so wherever a key is connected, and the account panel links
+  the billing page instead of polling the plan quota route with a key that has
+  no plan behind it.
+
+- **GLM reasoning effort follows the model, not the vendor.** The `glm-thinking`
+  request profile mapped every multi-tier GLM onto GLM-5.2's two rungs
+  (high/max), which would have silently rounded GLM-5.3's new `low` tier up to
+  `high` and billed deeper thinking than was asked for. The requested effort is
+  now clamped onto the ladder each model's own registry entry declares.
+
+- **DeepSeek Harness can use the Codex models you are already signed in to.**
+  Native GPT traffic is authorized by the caller's own ChatGPT session — the
+  router copies `authorization` and `chatgpt-account-id` off each request, Codex
+  attaches both, and a harness turn attaches neither. So the eight native models
+  were withheld from the harness: advertising them would have offered a turn
+  that could not authenticate.
+
+  The router now falls back to the session this machine is already signed in
+  with. You are logged in to Codex here; a client running as the same user on
+  the same machine should not have to log in again. The eight `gpt-5.6-*` and
+  `gpt-5.x` models publish to the harness whenever that session is usable, and
+  are withheld the moment it is not, so the picker never offers a model that
+  would 401.
+
+  It is a fallback and never an override: the injection happens only for a
+  request that carried no credential of its own, so a Codex turn is unchanged —
+  verified by relaying a deliberately invalid token and getting that token's own
+  401 back instead of a success. The credential is never logged, never returned
+  by a status call, and never put in an error message.
+
+  The session is checked for life, not just presence. That access token lasts
+  about ten days and Codex renews it only when Codex is used, so a harness-only
+  stretch longer than that would have left the router sending a dead token. An
+  expired session is declined two minutes early, native models stop being
+  published while it is dead, and `doctor` gains a line saying to open Codex
+  once — which is the fix, and which nothing else would have told anybody.
+  Renewal is left to Codex: reproducing that OAuth exchange would mean guessing
+  an unpublished client identity and risking the very login this was asked not
+  to disturb.
+
+  Worth knowing before leaving it on: it widens what the caller key reaches,
+  from the API-key providers to the ChatGPT subscription as well.
+  `CODEX_ROUTER_NATIVE_SESSION_FALLBACK=0` turns it off, and the harness drops
+  back to routed models only.
+
+- **The tray can install DeepSeek Harness, not just publish into one.**
+  `--target dsh` wrote routed models into a harness the user had already
+  installed themselves; on a machine without one, the missing step was an
+  `npm install -g` mentioned in passing in the docs. A Settings row now installs
+  `@deepseek-ai/dsh` and publishes in one click, and `control harness
+  status|setup` does the same from a terminal.
+
+  Global rather than the `npx @deepseek-ai/dsh web` the harness's README
+  documents: npx refetches on every run, leaves no `dsh` to type again, and is
+  invisible to the presence rule that keeps the router up for clients it cannot
+  watch. Node is checked against the harness's floor before npm is reached,
+  since the package declares no `engines` and a stale runtime otherwise fails at
+  first boot with a syntax error from inside `node_modules`. Install and publish
+  are ordered but not transactional — a failed publish leaves an installed
+  harness, which is where a retry wants to start, and republishing is
+  byte-identical. The npm mechanics move to `src/npm-global-install.mjs`, shared
+  with the provider-CLI installs rather than copied.
+
+  It is never a side effect: no `apply`, `enable`, or repair path installs the
+  harness. The model count the button reports is the routable set, not the
+  picker — native GPT models come and go with the Codex session described
+  above.
+
+  The row then runs the harness's browser UI: **Install**, then **Connect**,
+  then a play button, then **Open site**, each shown only in the state it
+  applies to. Publishing models and leaving somebody to remember a command and a
+  port was the step this action existed to remove, so the play button starts the
+  UI and the row reports the URL it is serving. Setup itself deliberately does
+  not start anything — it already installs a package and writes another
+  program's configuration, and a republish should not put a browser window on
+  screen nobody asked for.
+
+  A running server this router did not start is adopted rather than collided
+  with — the harness binds a fixed port, so a second launch exits with
+  `EADDRINUSE` — and only a process this router started is ever signalled,
+  matched on PID *and* process start identity because PIDs are reused.
+
+  It can also be turned off again, which it could not safely be before.
+  `bin/model-router dsh disable` ran `service.mjs uninstall` unconditionally, so
+  switching the harness off removed the LaunchAgent and stopped Codex working
+  too — the service is one shared plane, and one client leaving is not a reason
+  to retire it. `bin/disable` now removes it only once no client integration
+  remains, and the tray's **Turn off** goes through `control harness disconnect`,
+  which stops a UI this router started, removes the route, and touches nothing
+  else: the CLI, the harness's own settings, its other providers, and the
+  service all stay.
+
+  Two ways the uninstall could damage a user's own configuration are fixed with
+  it. Restoring the default model overwrote whatever was there with the snapshot
+  taken at install — so a model chosen afterwards through the harness's own
+  Models page was silently discarded; the restore now applies only over a
+  default this router wrote. And with no snapshot left to restore, a
+  router-owned default was left in place pointing at the provider the same
+  uninstall had just removed; it is now taken out.
+
+
+- **A client the tray cannot watch keeps the router running.** The tray's
+  presence setting could tie the router to the Codex and ChatGPT desktop apps
+  and stop it 30 seconds after both closed. `NSRunningApplication` enumerates
+  app bundles and nothing else, so that setting could only ever see those two:
+  a `codex` TUI in a terminal and a `dsh` harness turn are both invisible to it.
+  Neither can be started on demand either — a turn that finds 127.0.0.1:4202
+  closed fails at once, while the stack behind that port takes up to 300 seconds
+  to warm — so a terminal user who tried the setting got a dead port and a
+  `doctor` line telling them to open an app they may not use.
+
+  `effectivePresenceMode()` now reports `always` whenever the harness route is
+  published or `codex` resolves on PATH, and the tray and `doctor` both act on
+  that instead of the raw mode. Detection errs toward finding a client: a false
+  positive costs a dormant toggle, a false negative costs somebody their next
+  request. The stored preference is overridden rather than rewritten, so
+  removing the client restores the user's own choice. `control --json` now
+  carries a `presence` block so the router owns the rule and the tray consumes
+  it rather than re-deriving it, and the tray picks up a change on the snapshot
+  it already polls.
+
 - **DeepSeek Harness is a supported target.** `--target dsh` publishes every
   routed model into the harness's own `settings.yaml` as one provider route,
   keyed to the same `/v1/responses` endpoint Codex already uses — so a harness

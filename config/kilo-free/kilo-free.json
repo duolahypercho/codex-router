@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "providers": [
+    {
+      "id": "kilo-free",
+      "displayName": "Kilo Free",
+      "kind": "openai-compatible",
+      "ownedBy": "kilo",
+      "baseUrl": "https://api.kilo.ai/api/gateway",
+      "authMode": "anonymous",
+      "anonymousModelPolicy": "suffix-free",
+      "anonymousNote": "No API key is needed for Kilo :free models. Use at your own risk: anonymous access is limited per IP, shared by everyone behind it, and can be narrowed or withdrawn without notice. The free catalog can change."
+    }
+  ]
+}

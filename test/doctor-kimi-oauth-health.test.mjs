@@ -103,6 +103,12 @@ function doctorKimiCheck({ selected, credential }) {
     removeDirectoryIfPresent(kimiHome);
     rmSync(selectionPath, { force: true });
     removeDirectoryIfPresent(stateDir);
+    // Node's Windows profile resolver may create these empty profile
+    // directories while doctor probes the Codex account. They are fixture
+    // scaffolding, not router state, but must be removed before the temp root
+    // can be deleted with the non-recursive cleanup above.
+    removeDirectoryIfPresent(path.join(testRoot, "AppData", "Roaming"));
+    removeDirectoryIfPresent(path.join(testRoot, "AppData"));
     removeDirectoryIfPresent(testRoot);
   }
 }

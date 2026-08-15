@@ -106,6 +106,7 @@ API-key providers use hidden prompts:
 ./bin/provider-key ollama-cloud set
 ./bin/provider-key qwen-plan set
 ./bin/provider-key zai-coding set
+./bin/provider-key zai-api set
 ./bin/provider-key github-copilot set
 ```
 
@@ -276,6 +277,40 @@ Live quota-consuming verification is separate:
 ./bin/smoke-test --yes
 ./bin/test-model 'kimi-oauth/k3' --live --yes
 ```
+
+## Starting the router when Codex starts
+
+The router normally runs continuously under launchd, and the macOS tray starts
+it again whenever Codex appears. Both learn about a new Codex by polling, so a
+cold start can race: the CLI can send its first request a second or two before
+the gateway is accepting connections.
+
+The optional `codex` shim closes that window by doing the check in the one place
+that is provably earlier than Codex — in front of it:
+
+```sh
+./bin/model-router codex shim install
+./bin/model-router codex shim status
+./bin/model-router codex shim uninstall
+```
+
+It is never installed automatically, because putting a file named `codex` on
+your PATH shadows a command the router was not asked to own.
+
+Install picks the writable directory closest to the real Codex but still ahead
+of it on PATH, and refuses to overwrite any `codex` it did not write. If nothing
+suitable is on PATH, the shim lands in the router's state directory and prints
+the one `export PATH=...` line to add — it does not edit shell startup files on
+your behalf. `status` distinguishes *installed* from *effective*, since a shim
+that ends up behind the real Codex on PATH is a silent no-op.
+
+When the router is already listening, the shim costs one loopback connection and
+no processes at all. When it is not, the shim starts the service, waits up to
+`MODEL_ROUTER_SHIM_WAIT` seconds (45 by default), and then runs Codex regardless
+— a router problem must never become "codex will not start". Set
+`MODEL_ROUTER_SHIM=0` for a single run to bypass the check entirely.
+
+The shim is a bash script and is not available on Windows.
 
 ## Update and rollback
 

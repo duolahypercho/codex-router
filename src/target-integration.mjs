@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { DSH_CATALOG_PATH, NATIVE_CATALOG_PATH, SOURCE_ROOT, TARGET } from "./paths.mjs";
 
@@ -42,6 +43,21 @@ export function targetRestartHint() {
  * only whichever target the current command happens to run under is how one
  * client ends up advertising a model the other just gained or lost.
  */
+/**
+ * Which client integrations are currently published.
+ *
+ * The service, gateway, ports, and credentials are one shared plane -- see the
+ * note on `ROUTER_PLANE_TARGET` in paths.mjs. Turning one client off is not a
+ * reason to tear that plane down while another client is still pointed at it,
+ * which is how disabling the harness used to stop Codex working too.
+ */
+export function installedTargets() {
+  const installed = [];
+  if (existsSync(NATIVE_CATALOG_PATH)) installed.push("codex");
+  if (existsSync(DSH_CATALOG_PATH)) installed.push("dsh");
+  return installed;
+}
+
 export function refreshTargetPickerIfInstalled() {
   let refreshed = false;
   if (existsSync(NATIVE_CATALOG_PATH)) {
@@ -56,4 +72,13 @@ export function refreshTargetPickerIfInstalled() {
     refreshed = true;
   }
   return refreshed;
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  if (process.argv[2] === "installed-targets") {
+    process.stdout.write(`${installedTargets().join(",")}\n`);
+  } else {
+    console.error("Usage: target-integration installed-targets");
+    process.exit(2);
+  }
 }

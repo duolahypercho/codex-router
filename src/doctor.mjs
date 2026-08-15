@@ -648,10 +648,14 @@ for (const provider of PROVIDERS.values()) {
     status.configured ? "ok" : selection.providers.includes(provider.id) ? "fail" : "warn",
     provider.keyless
       ? `${provider.displayName} endpoint`
+      : provider.authMode === "anonymous"
+        ? `${provider.displayName} anonymous endpoint`
       : `${provider.displayName} ${credentialNoun}`,
     status.configured ? status.source : "not configured",
     provider.keyless
       ? "Start Ollama, then run ./bin/control local-models list."
+      : provider.authMode === "anonymous"
+        ? provider.anonymousNote || "No key needed; only the provider's free models are available."
       : session
         ? `Run ${session.loginCommand}, or ./bin/provider-key ${provider.id} set.`
         : `Run ./bin/provider-key ${provider.id} set.`,
@@ -671,6 +675,8 @@ for (const provider of PROVIDERS.values()) {
       `${provider.displayName} models`,
       provider.keyless
         ? "no local models are checked, so the picker stays empty"
+        : provider.authMode === "anonymous"
+          ? `${provider.displayName} is ready; discover and curate its current free models`
         : `${credentialNoun} stored but no models curated; the picker stays empty`,
       // Local models are downloaded and checked, never curated from a remote
       // catalog, so naming `curate-models` here points at the wrong command.
@@ -784,6 +790,27 @@ add(
 // must not read as a failure: a `fail` here sets the exit code and sends the
 // tray's Fix button down the full repair path for a router that is off on
 // purpose.
+// A ChatGPT session the router can no longer spend is not a router fault, but
+// it is why native models stop appearing in the harness -- and it is fixed by
+// opening Codex, which nothing else would tell the user.
+try {
+  const { nativeSessionStatus } = await import("./codex-native-session.mjs");
+  const session = nativeSessionStatus();
+  if (session.present && session.fallbackEnabled) {
+    const hours = session.expiresInHours;
+    add(
+      session.usable ? "ok" : "warn",
+      "Codex session for harness models",
+      session.usable
+        ? `valid${hours === undefined ? "" : ` for ${hours}h`}`
+        : "expired; open Codex once to renew it (native models are withheld until then)",
+      "Open Codex, or run `codex login`.",
+    );
+  }
+} catch {
+  // Never let a diagnostic be the thing that fails the doctor.
+}
+
 const followsHostApps = serviceFollowsHostApps();
 let serviceLoaded = false;
 let serviceStoppedByDesign = false;

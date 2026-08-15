@@ -984,11 +984,13 @@ private struct ProviderIcon: View {
     if providerID.hasPrefix("commandcode") { return "commandcode" }
     if providerID == "github-copilot" { return "github-copilot" }
     if providerID == "chutes" { return "chutes" }
+    if providerID == "opencode-free" { return "opencode-free" }
+    if providerID == "kilo-free" { return "kilo-free" }
     return nil
   }
 
   private var assetExtension: String {
-    ["github-copilot", "chutes"].contains(providerID) ? "svg" : "png"
+    ["github-copilot", "chutes", "opencode-free", "kilo-free"].contains(providerID) ? "svg" : "png"
   }
 
   private var providerName: String {
@@ -997,13 +999,15 @@ private struct ProviderIcon: View {
     if providerID.hasPrefix("kimi") { return "Kimi" }
     if providerID == "deepseek" { return "DeepSeek" }
     if providerID == "anthropic-api" { return "Anthropic" }
-    if providerID == "zai-coding" { return "GLM" }
+    if providerID.hasPrefix("zai-") { return "GLM" }
     if providerID == "qwen-plan" { return "Qwen" }
     if providerID == "ollama-cloud" { return "Ollama" }
     if providerID.hasPrefix("commandcode") { return "Command Code" }
     if providerID == "github-copilot" { return "GitHub Copilot" }
     if providerID == "clinepass" { return "ClinePass" }
     if providerID == "chutes" { return "Chutes" }
+    if providerID == "opencode-free" { return "OpenCode Free" }
+    if providerID == "kilo-free" { return "Kilo Free" }
     return routerLocalized("Model provider")
   }
 }

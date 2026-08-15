@@ -15,3 +15,4 @@ apps/desktop/src-tauri/icons/icon.icns
 *.tmp
 .electron-shots/
 release/
+generated/

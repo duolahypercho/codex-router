@@ -95,8 +95,14 @@ map, which restores native GPT routing.
 | DeepSeek V4 Pro Ollama Cloud | `ollama-cloud/deepseek-v4-pro` | `ollama-cloud-deepseek-v4-pro` | `deepseek-v4-pro` |
 | Qwen3.7 Max Plan | `qwen-plan/qwen3.7-max` | `qwen-plan-qwen3-7-max` | `qwen3.7-max` |
 | Qwen3.7 Plus Plan | `qwen-plan/qwen3.7-plus` | `qwen-plan-qwen3-7-plus` | `qwen3.7-plus` |
+| GLM-5.3 Coding Plan | `zai-coding/glm-5.3` | `zai-coding-glm-5-3` | `glm-5.3` |
+| GLM-5.3 1M Coding Plan | `zai-coding/glm-5.3-1m` | `zai-coding-glm-5-3-1m` | `glm-5.3[1m]` |
 | GLM-5.2 Coding Plan | `zai-coding/glm-5.2` | `zai-coding-glm-5-2` | `glm-5.2` |
 | GLM-5-Turbo Coding Plan | `zai-coding/glm-5-turbo` | `zai-coding-glm-5-turbo` | `glm-5-turbo` |
+| GLM-5.3 Z.ai API | `zai-api/glm-5.3` | `zai-api-glm-5-3` | `glm-5.3` |
+| GLM-5.2 Z.ai API | `zai-api/glm-5.2` | `zai-api-glm-5-2` | `glm-5.2` |
+| GLM-4.7 Z.ai API | `zai-api/glm-4.7` | `zai-api-glm-4-7` | `glm-4.7` |
+| GLM-5.3 opencode Go | `opencode-go/glm-5.3` | `opencode-go-glm-5-3` | `glm-5.3` |
 
 The native catalog objects are preserved rather than reconstructed, which keeps
 current instructions and capability metadata from the installed Codex build.

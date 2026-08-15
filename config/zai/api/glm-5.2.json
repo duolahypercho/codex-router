@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "slug": "zai-api/glm-5.2",
+      "gatewayModel": "zai-api-glm-5-2",
+      "upstreamModel": "glm-5.2",
+      "provider": "zai-api",
+      "listed": true,
+      "displayName": "GLM-5.2 (Z.ai API)",
+      "description": "GLM-5.2 billed per token on the Z.ai open platform, with a documented 1M context window and 128K maximum output.",
+      "priority": 64,
+      "defaultEffort": "max",
+      "reasoningLevels": [
+        {
+          "effort": "high",
+          "description": "Deep reasoning with thinking enabled"
+        },
+        {
+          "effort": "max",
+          "description": "Maximum reasoning depth"
+        }
+      ],
+      "contextWindow": 1048576,
+      "autoCompact": 900000,
+      "inputModalities": [
+        "text"
+      ],
+      "requestProfile": "glm-thinking",
+      "compHash": "zai-api-glm-5-2-v1"
+    }
+  ]
+}

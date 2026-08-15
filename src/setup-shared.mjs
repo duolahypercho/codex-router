@@ -20,7 +20,7 @@ import { grokOAuthStatus } from "./grok-oauth-status.mjs";
 import { SOURCE_ROOT } from "./paths.mjs";
 import { credentialStatus } from "./provider-credentials.mjs";
 import { providerOnboardingSnapshot } from "./provider-onboarding.mjs";
-import { configuredProviderIds, validateProviderIds } from "./provider-selection.mjs";
+import { defaultProviderIds, validateProviderIds } from "./provider-selection.mjs";
 import { commandOnPath, spawnableCommand } from "./spawnable-command.mjs";
 import { renderProviderChoices, toggleSelection } from "./setup-ui.mjs";
 
@@ -123,7 +123,9 @@ export function providerConfigured(provider) {
     if (provider.id === "grok-oauth") return grokOAuthStatus().configured;
     return false;
   }
-  return credentialStatus(provider, { persistent: true }).configured;
+  return provider.keyless || provider.authMode === "anonymous"
+    ? true
+    : credentialStatus(provider, { persistent: true }).configured;
 }
 
 // Per-provider hint for a selected-but-unconfigured OAuth provider.
@@ -200,11 +202,11 @@ function guidedSelection(appName) {
 // Resolve which provider ids to enable from --providers, or interactively.
 export function selectProviders({ requested, guided, appName }) {
   if (requested) {
-    if (requested === "configured") return configuredProviderIds();
+    if (requested === "configured") return defaultProviderIds();
     if (requested === "all") return [...PROVIDERS.keys()];
     return validateProviderIds(requested.split(","));
   }
-  return guided ? guidedSelection(appName) : configuredProviderIds();
+  return guided ? guidedSelection(appName) : defaultProviderIds();
 }
 
 function locateKimiCli() {
@@ -287,6 +289,7 @@ export function configureProvider(provider, { guided, providerKeyCommand }) {
     if (provider.id === "grok-oauth") onboardGrokOauth();
     else onboardKimiOauth();
   } else {
+    if (provider.authMode === "anonymous") return;
     const prompt = provider.credential?.prompt || `${provider.displayName} API key`;
     if (!confirm(`Enter ${prompt} securely now?`)) {
       throw new Error(`${provider.displayName} setup was cancelled.`);

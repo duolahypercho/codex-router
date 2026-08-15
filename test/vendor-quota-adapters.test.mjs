@@ -23,6 +23,19 @@ writeFileSync(registryPath, JSON.stringify({
       },
     },
     {
+      id: "zai-api",
+      displayName: "Z.ai API",
+      kind: "openai-compatible",
+      ownedBy: "zai",
+      baseUrl: "https://api.z.ai/api/paas/v4",
+      baseUrlEnv: "ZAI_API_BASE_URL",
+      credential: {
+        environment: ["ZAI_PLATFORM_API_KEY"],
+        file: "zai-api-key.secret",
+        prompt: "Z.ai API key (open platform, pay per token)",
+      },
+    },
+    {
       id: "qwen-plan",
       displayName: "Qwen (Alibaba Plan)",
       kind: "openai-compatible",
@@ -191,3 +204,20 @@ test("qwen and ollama stay local-only but carry a dashboard link", async () => {
 });
 
 
+
+test("the z.ai platform key never reaches the Coding Plan quota endpoint", async () => {
+  writeFileSync(path.join(stateDir, "zai-api-key.secret"), "TEST_ZAI_PLATFORM_KEY\n", {
+    mode: 0o600,
+  });
+  const snapshot = await providerAccountUsageSnapshot({
+    providerIds: ["zai-api"],
+    fetchImpl: async () => {
+      // The quota route reports a Coding Plan's windows and Z.ai publishes no
+      // balance API, so a metered platform key must not be spent probing it.
+      throw new Error("the metered Z.ai platform must not reach the plan quota API");
+    },
+  });
+  assert.equal(snapshot["zai-api"].status, "local-only");
+  assert.equal(snapshot["zai-api"].dashboardUrl, "https://z.ai/manage-apikey/billing");
+  assert.deepEqual(snapshot["zai-api"].metrics, []);
+});

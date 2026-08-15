@@ -16,6 +16,7 @@ process.env.MODEL_ROUTER_USER_MODELS = path.join(
 const { renderLiteLlmConfig } = await import("../src/litellm-config.mjs");
 const {
   API_MODELS,
+  anonymousModelAllowed,
   LISTED_MODELS,
   MODEL_BY_SLUG,
   MODELS,
@@ -100,6 +101,7 @@ test("provider registry exposes configured API and OAuth model families", () => 
       "opencode-go/deepseek-v4-pro",
       "opencode-go/glm-5.1",
       "opencode-go/glm-5.2",
+      "opencode-go/glm-5.3",
       "opencode-go/grok-4.5",
       "opencode-go/hy3",
       "opencode-go/kimi-k2.6",
@@ -122,8 +124,13 @@ test("provider registry exposes configured API and OAuth model families", () => 
       "qwen-plan/qwen3.7-plus",
       "qwen-plan/qwen3.8-max-preview",
       "qwen-plan/qwen3.8-max",
+      "zai-api/glm-4.7",
+      "zai-api/glm-5.2",
+      "zai-api/glm-5.3",
       "zai-coding/glm-5-turbo",
       "zai-coding/glm-5.2",
+      "zai-coding/glm-5.3-1m",
+      "zai-coding/glm-5.3",
     ],
   );
   assert.equal(PROVIDERS.get("deepseek").baseUrl, "https://api.deepseek.com");
@@ -135,6 +142,33 @@ test("provider registry exposes configured API and OAuth model families", () => 
     PROVIDERS.get("zai-coding").baseUrl,
     "https://api.z.ai/api/coding/paas/v4",
   );
+  // The pay-per-token platform is its own endpoint, its own credential, and its
+  // own key file: a Coding Plan key is not billable on it.
+  assert.equal(PROVIDERS.get("zai-api").baseUrl, "https://api.z.ai/api/paas/v4");
+  assert.equal(PROVIDERS.get("zai-api").variantOf, undefined);
+  assert.equal(PROVIDERS.get("zai-api").credential.file, "zai-api-key.secret");
+  assert.notEqual(
+    PROVIDERS.get("zai-api").credential.file,
+    PROVIDERS.get("zai-coding").credential.file,
+  );
+  // Every channel the credential can arrive through has to be distinct, not
+  // just the file: the same check the China Kimi route gets below. A shared
+  // keychain service or base-URL variable would let one product's key satisfy
+  // the other's lookup, which is the whole failure this split exists to stop.
+  for (const field of ["environment", "keychainServices"]) {
+    const platform = PROVIDERS.get("zai-api").credential[field] || [];
+    const plan = new Set(PROVIDERS.get("zai-coding").credential[field] || []);
+    assert.ok(platform.length > 0, `zai-api declares no ${field}`);
+    assert.ok(
+      platform.every((entry) => !plan.has(entry)),
+      `zai-api ${field} must not overlap the Coding Plan`,
+    );
+  }
+  assert.notEqual(
+    PROVIDERS.get("zai-api").baseUrlEnv,
+    PROVIDERS.get("zai-coding").baseUrlEnv,
+  );
+  assert.ok(PROVIDERS.get("zai-api").planNote);
   assert.equal(PROVIDERS.get("ollama-cloud").baseUrl, "https://ollama.com/v1");
   assert.equal(PROVIDERS.get("minimax-token-plan").baseUrl, "https://api.minimax.io/v1");
   // Go is its own endpoint, not the pay-per-use Zen one.
@@ -210,6 +244,18 @@ test("provider registry exposes configured API and OAuth model families", () => 
   assert.equal(chutes.credential.file, "chutes-api-key.secret");
   assert.deepEqual(chutes.credential.keychainServices, ["codex-router-chutes"]);
   assert.equal(LISTED_MODELS.some(({ provider }) => provider === "chutes"), false);
+  const opencodeFree = PROVIDERS.get("opencode-free");
+  assert.equal(opencodeFree.authMode, "anonymous");
+  assert.equal(opencodeFree.baseUrl, "https://opencode.ai/zen/v1");
+  assert.equal(opencodeFree.credential, undefined);
+  assert.equal(anonymousModelAllowed(opencodeFree, "big-pickle"), true);
+  assert.equal(anonymousModelAllowed(opencodeFree, "mimo-v2.5-free"), true);
+  assert.equal(anonymousModelAllowed(opencodeFree, "glm-5.1"), false);
+  const kiloFree = PROVIDERS.get("kilo-free");
+  assert.equal(kiloFree.authMode, "anonymous");
+  assert.equal(kiloFree.baseUrl, "https://api.kilo.ai/api/gateway");
+  assert.equal(anonymousModelAllowed(kiloFree, "z-ai/glm-5:free"), true);
+  assert.equal(anonymousModelAllowed(kiloFree, "z-ai/glm-5"), false);
   const clinepass = PROVIDERS.get("clinepass");
   assert.equal(clinepass.baseUrl, "https://api.cline.bot/api/v1");
   assert.equal(clinepass.baseUrlEnv, "CLINE_API_BASE_URL");
@@ -681,6 +727,48 @@ test("a keyless provider must be loopback and must not carry a credential", asyn
     });
     assert.equal(keyed.status, 1);
     assert.match(keyed.stderr, /must not declare a credential/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("anonymous providers are fixed official endpoints without credentials", async () => {
+  const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const nodePath = (await import("node:path")).default;
+  const { spawnSync } = await import("node:child_process");
+  const dir = mkdtempSync(nodePath.join(tmpdir(), "registry-anonymous-test-"));
+  const load = (mutate) => {
+    const registry = readRegistryDocument("config");
+    mutate(registry);
+    const registryPath = nodePath.join(dir, "providers.json");
+    writeFileSync(registryPath, JSON.stringify(registry));
+    return spawnSync(
+      process.execPath,
+      ["-e", "import('./src/model-registry.mjs').catch((e)=>{console.error(e.message);process.exit(1);})"],
+      { encoding: "utf8", env: { ...process.env, MODEL_ROUTER_REGISTRY: registryPath } },
+    );
+  };
+  try {
+    const redirected = load((registry) => {
+      registry.providers = registry.providers.map((provider) =>
+        provider.id === "opencode-free"
+          ? { ...provider, baseUrl: "https://example.com/v1" }
+          : provider,
+      );
+    });
+    assert.equal(redirected.status, 1);
+    assert.match(redirected.stderr, /anonymous provider opencode-free must use its fixed official endpoint/);
+
+    const keyed = load((registry) => {
+      registry.providers = registry.providers.map((provider) =>
+        provider.id === "kilo-free"
+          ? { ...provider, credential: { file: "unexpected.secret", environment: [] } }
+          : provider,
+      );
+    });
+    assert.equal(keyed.status, 1);
+    assert.match(keyed.stderr, /anonymous provider kilo-free must not declare keyless or credential metadata/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

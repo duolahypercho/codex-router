@@ -13,6 +13,39 @@ function fail(message) {
   throw new Error(`Invalid provider registry ${REGISTRY_PATH}: ${message}`);
 }
 
+// Remote providers that intentionally accept anonymous traffic are a much
+// narrower class than local `keyless` providers. Keep the allowlist here so a
+// future registry entry cannot turn an arbitrary HTTPS endpoint into a
+// credential-free exfiltration path.
+const ANONYMOUS_ENDPOINTS = Object.freeze({
+  "opencode-free": "https://opencode.ai/zen/v1",
+  "kilo-free": "https://api.kilo.ai/api/gateway",
+});
+
+export function anonymousModelAllowed(provider, modelId) {
+  const id = typeof modelId === "string" ? modelId.trim() : "";
+  if (provider?.authMode !== "anonymous" || !id) return false;
+  if (provider.anonymousModelPolicy === "opencode-console") {
+    return id === "big-pickle" || id.endsWith("-free");
+  }
+  if (provider.anonymousModelPolicy === "suffix-free") return id.endsWith(":free");
+  return false;
+}
+
+function normalizedBaseUrl(value) {
+  return String(value || "").replace(/\/+$/, "");
+}
+
+function loopbackBaseUrl(value) {
+  try {
+    const url = new URL(value);
+    return ["http:", "https:"].includes(url.protocol) &&
+      ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname);
+  } catch {
+    return false;
+  }
+}
+
 // Byte-order comparison keeps the walk identical on every machine; a
 // locale-aware sort could reorder fragments (and therefore the merged model
 // list) between hosts.
@@ -167,11 +200,38 @@ function loadRegistry() {
       }
       // Only a loopback endpoint may skip authentication: a keyless provider
       // pointed at the internet would send unauthenticated traffic off-box.
-      if (provider.keyless && !/^https?:\/\/(127\.0\.0\.1|\[::1\]|localhost)([:/]|$)/.test(provider.baseUrl)) {
+      if (provider.keyless && !loopbackBaseUrl(provider.baseUrl)) {
         fail(`keyless provider ${provider.id} must use a loopback baseUrl`);
       }
       if (
+        provider.authMode !== undefined &&
+        !["anonymous"].includes(provider.authMode)
+      ) {
+        fail(`provider ${provider.id} has an unsupported authMode`);
+      }
+      if (provider.authMode === "anonymous") {
+        const expected = ANONYMOUS_ENDPOINTS[provider.id];
+        if (!expected || normalizedBaseUrl(provider.baseUrl) !== expected) {
+          fail(`anonymous provider ${provider.id} must use its fixed official endpoint`);
+        }
+        if (provider.baseUrlEnv !== undefined) {
+          fail(`anonymous provider ${provider.id} must not allow a baseUrl override`);
+        }
+        if (provider.keyless || provider.credential !== undefined) {
+          fail(`anonymous provider ${provider.id} must not declare keyless or credential metadata`);
+        }
+        if (!["opencode-console", "suffix-free"].includes(provider.anonymousModelPolicy)) {
+          fail(`anonymous provider ${provider.id} requires a supported anonymousModelPolicy`);
+        }
+        if (typeof provider.anonymousNote !== "string" || !provider.anonymousNote.trim()) {
+          fail(`anonymous provider ${provider.id} requires an anonymousNote`);
+        }
+      } else if (provider.anonymousModelPolicy !== undefined || provider.anonymousNote !== undefined) {
+        fail(`provider ${provider.id} has anonymous metadata without authMode anonymous`);
+      }
+      if (
         !provider.keyless &&
+        provider.authMode !== "anonymous" &&
         (!provider.credential?.file || !Array.isArray(provider.credential.environment))
       ) {
         fail(`provider ${provider.id} requires credential metadata`);
@@ -284,11 +344,15 @@ function modelProblem(model, providers, slugs, gatewayModels) {
       return `model is missing ${field}`;
     }
   }
-  if (!providers.has(model.provider)) {
+  const provider = providers.get(model.provider);
+  if (!provider) {
     return `model ${model.slug} references unknown provider ${model.provider}`;
   }
   if (!model.slug.startsWith(`${model.provider}/`)) {
     return `model ${model.slug} must be namespaced under ${model.provider}/`;
+  }
+  if (provider.authMode === "anonymous" && !anonymousModelAllowed(provider, model.upstreamModel)) {
+    return `anonymous provider ${provider.id} only accepts its documented free-model ids`;
   }
   if (model.requestProfile !== undefined && typeof model.requestProfile !== "string") {
     return `model ${model.slug} has an invalid requestProfile`;

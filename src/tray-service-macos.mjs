@@ -27,6 +27,11 @@ function xml(value) {
 // KeepAlive is conditional on purpose. `SuccessfulExit: false` restarts the tray
 // when it crashes or is killed, but leaves it down after the Quit menu item
 // exits cleanly — an unconditional KeepAlive would make Quit impossible.
+//
+// `--supervised` marks the launch as launchd's rather than the user's. Opening
+// Model Router by hand reveals the menu bar item and starts the router on
+// purpose; a login start must not, or follow mode would be overridden every
+// time the user logs in. AppDelegate.launchedByUser reads this argument.
 function plist() {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -37,6 +42,7 @@ function plist() {
   <key>ProgramArguments</key>
   <array>
     <string>${xml(TRAY_APP_BINARY)}</string>
+    <string>--supervised</string>
   </array>
   <key>RunAtLoad</key>
   <true/>

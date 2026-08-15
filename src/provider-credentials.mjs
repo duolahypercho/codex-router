@@ -26,7 +26,7 @@ import {
 
 export function apiProvider(providerId) {
   const provider = PROVIDERS.get(providerId);
-  if (!provider || provider.kind !== "openai-compatible") {
+  if (!provider || provider.kind !== "openai-compatible" || provider.authMode === "anonymous") {
     throw new Error(`Unknown API-key provider: ${providerId}`);
   }
   return provider;
@@ -137,7 +137,16 @@ function resolvedCredential(provider, value, source, persistent) {
 
 export function resolveProviderCredential(providerOrId, options = {}) {
   const provider =
-    typeof providerOrId === "string" ? apiProvider(providerOrId) : providerOrId;
+    typeof providerOrId === "string" ? PROVIDERS.get(providerOrId) : providerOrId;
+  if (!provider || provider.kind !== "openai-compatible") {
+    throw new Error(`Unknown API-key provider: ${typeof providerOrId === "string" ? providerOrId : "unknown"}`);
+  }
+  // Anonymous providers deliberately carry no secret. Returning a persistent
+  // marker makes them participate in the same configured/selected/catalog
+  // flow as local Ollama without ever creating a credential file or header.
+  if (provider.authMode === "anonymous") {
+    return { value: undefined, source: "official anonymous endpoint", persistent: true };
+  }
   // Nothing to resolve for a loopback provider: it authenticates no one. The
   // placeholder keeps the forwarder's header shape uniform, and the registry
   // guarantees keyless providers are loopback-only, so it never leaves the
@@ -185,6 +194,7 @@ export function resolveProviderCredential(providerOrId, options = {}) {
 // naming only the key one would hide the OAuth flow from every surface that
 // prints this sentence (doctor, discovery errors, the enable gate).
 export function credentialSetupHint(provider) {
+  if (provider.authMode === "anonymous") return "No key needed; free models are rate limited by the provider.";
   if (provider.keyless) return "No key needed; it runs on this machine.";
   const keyCommand = targetCli(`provider-key ${provider.id} set`);
   const session = cliSessionDescriptor(provider);
@@ -194,12 +204,16 @@ export function credentialSetupHint(provider) {
 }
 
 export function credentialLabel(provider) {
+  if (provider.authMode === "anonymous") return "No API key";
   return provider.credential?.label || "API key";
 }
 
 export function credentialStatus(providerOrId, options = {}) {
   const provider =
-    typeof providerOrId === "string" ? apiProvider(providerOrId) : providerOrId;
+    typeof providerOrId === "string" ? PROVIDERS.get(providerOrId) : providerOrId;
+  if (!provider || provider.kind !== "openai-compatible") {
+    throw new Error(`Unknown API-key provider: ${typeof providerOrId === "string" ? providerOrId : "unknown"}`);
+  }
   const credential = resolveProviderCredential(provider, options);
   return credential
     ? { configured: true, source: credential.source, persistent: credential.persistent }
