@@ -4645,3 +4645,84 @@ test("a live child turn settles an experimental subagent's proof", async () => {
     await closeServer(gateway.server);
   }
 });
+
+// The whole value of a per-model subagent effort is that it applies in one
+// role and not the other: the same model must keep its normal depth when it is
+// the parent. A setting that leaked into parent turns would quietly re-tune
+// every conversation on that model.
+test("a subagent effort reaches child turns and leaves parent turns alone", async () => {
+  const stateDir = mkdtempSync(path.join(os.tmpdir(), "subagent-effort-e2e-"));
+  // The state directory has to be in the environment *before* the module is
+  // imported: paths.mjs resolves it once at import time, so importing first
+  // and pointing afterwards writes to the real user config instead.
+  const previousStateDir = process.env.MODEL_ROUTER_STATE_DIR;
+  process.env.MODEL_ROUTER_STATE_DIR = stateDir;
+  try {
+    const { setSubagentEffort } = await import(
+      `../src/multi-agent-state.mjs?e2e=${Date.now()}`
+    );
+    setSubagentEffort("deepseek/deepseek-v4-pro", "max");
+  } finally {
+    if (previousStateDir === undefined) delete process.env.MODEL_ROUTER_STATE_DIR;
+    else process.env.MODEL_ROUTER_STATE_DIR = previousStateDir;
+  }
+
+  const seen = [];
+  const gateway = await mockServer(async (request, response) => {
+    if (request.url === "/health") {
+      json(response, 200, { ok: true });
+      return;
+    }
+    const body = await bodyJson(request);
+    seen.push({ model: body.model, effort: body.reasoning_effort });
+    json(response, 200, {
+      id: "resp_effort",
+      output: [{ type: "message", content: [{ type: "output_text", text: "ok" }] }],
+      usage: { input_tokens: 5, output_tokens: 1 },
+    });
+  });
+  const routerPort = await openPort();
+  const router = run("router.mjs", {
+    MODEL_ROUTER_STATE_DIR: stateDir,
+    CODEX_ROUTER_PORT: String(routerPort),
+    CODEX_ROUTER_GATEWAY_BASE_URL: `http://127.0.0.1:${gateway.port}/v1`,
+    CODEX_ROUTER_OAUTH_HEALTH_URL: `http://127.0.0.1:${gateway.port}/health`,
+    CODEX_ROUTER_API_HEALTH_URL: `http://127.0.0.1:${gateway.port}/health`,
+    CODEX_ROUTER_GATEWAY_HEALTH_URL: `http://127.0.0.1:${gateway.port}/health`,
+    CODEX_ROUTER_QUIET: "1",
+  });
+
+  const turn = (model, headers = {}) =>
+    fetch(`${routerBase(routerPort)}/responses`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...headers },
+      body: JSON.stringify({ model, input: "go", reasoning_effort: "low" }),
+    });
+
+  try {
+    await waitFor(`${routerBase(routerPort)}/models`, router);
+
+    const child = await turn("deepseek/deepseek-v4-pro", {
+      "x-openai-subagent": "review-child",
+    });
+    assert.equal(child.status, 200);
+
+    const parent = await turn("deepseek/deepseek-v4-pro");
+    assert.equal(parent.status, 200);
+
+    // A model with no configured effort is untouched in either role.
+    const other = await turn("deepseek/deepseek-v4-flash", {
+      "x-openai-subagent": "review-child",
+    });
+    assert.equal(other.status, 200);
+
+    assert.equal(seen.length, 3);
+    assert.equal(seen[0].effort, "max", "the child turn did not receive the configured effort");
+    assert.equal(seen[1].effort, "low", "the parent turn was re-tuned by a subagent setting");
+    assert.equal(seen[2].effort, "low", "an unconfigured model was altered");
+  } finally {
+    router.kill("SIGTERM");
+    gateway.server.close();
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
