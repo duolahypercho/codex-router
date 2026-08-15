@@ -20,6 +20,7 @@ import {
   nativeCatalogIsReusable,
   deriveBaseInstructions,
   mergeNativeCatalogs,
+  mergeNativeModel,
   promoteNativeMultiAgent,
   routedCatalogConfigured,
   routedModel,
@@ -630,6 +631,48 @@ test("native catalog merge preserves account visibility and bundled-only models"
     },
     { slug: "gpt-bundled-only", visibility: "list" },
   ]);
+});
+
+test("native catalog merge never loses non-empty bundled metadata", () => {
+  const merged = mergeNativeModel(
+    {
+      slug: "gpt-5.6-luna",
+      additional_speed_tiers: [],
+      service_tiers: [],
+      input_modalities: [],
+      experimental_supported_tools: [],
+      include_apps_usage_instructions: undefined,
+      model_messages: {},
+    },
+    {
+      slug: "gpt-5.6-luna",
+      additional_speed_tiers: ["fast"],
+      service_tiers: [
+        { id: "priority", name: "Fast", description: "1.5x speed" },
+      ],
+      input_modalities: ["text", "image"],
+      experimental_supported_tools: ["web_search"],
+      include_apps_usage_instructions: true,
+      model_messages: { instructions_template: "bundled instructions" },
+    },
+  );
+  assert.deepEqual(merged.additional_speed_tiers, ["fast"]);
+  assert.deepEqual(merged.service_tiers, [
+    { id: "priority", name: "Fast", description: "1.5x speed" },
+  ]);
+  assert.deepEqual(merged.input_modalities, ["text", "image"]);
+  assert.deepEqual(merged.experimental_supported_tools, ["web_search"]);
+  assert.equal(merged.include_apps_usage_instructions, true);
+  assert.deepEqual(merged.model_messages, {
+    instructions_template: "bundled instructions",
+  });
+  assert.equal(
+    mergeNativeModel(
+      { slug: "gpt-5.6-luna", visibility: "list" },
+      { slug: "gpt-5.6-luna", visibility: "hide" },
+    ).visibility,
+    "list",
+  );
 });
 
 test("account-only models satisfy the strict custom-catalog instruction schema", () => {

@@ -90,7 +90,7 @@ export function mergeNativeCatalogs(accountCatalog, bundledCatalog) {
     if (seen.has(slug)) continue;
     seen.add(slug);
     const base = fallbackBySlug.get(slug);
-    const merged = base ? { ...base, ...model } : { ...model };
+    const merged = mergeNativeModel(model, base);
     // The remote cache may omit `base_instructions` because Codex can derive
     // it internally. A custom model_catalog_json is parsed more strictly and
     // requires the field, so derive it the same way for account-only models
@@ -107,6 +107,33 @@ export function mergeNativeCatalogs(accountCatalog, bundledCatalog) {
       ...fallback.filter((model) => !seen.has(String(model?.slug || ""))),
     ],
   };
+}
+
+function isEmptyNativeMetadata(value) {
+  if (value === undefined || value === null) return true;
+  if (typeof value === "string") return value.trim() === "";
+  if (Array.isArray(value)) return value.length === 0;
+  if (typeof value === "object") return Object.keys(value).length === 0;
+  return false;
+}
+
+// The account catalog may use an older schema and publish empty fields for
+// capabilities already present in the current binary. Preserve every
+// non-empty bundled field in that case; a non-empty account value remains
+// authoritative for account-dependent data such as visibility.
+export function mergeNativeModel(accountModel, bundledModel) {
+  if (!bundledModel) return { ...accountModel };
+
+  const merged = { ...bundledModel, ...accountModel };
+  for (const [field, value] of Object.entries(bundledModel)) {
+    if (
+      !isEmptyNativeMetadata(value) &&
+      isEmptyNativeMetadata(accountModel[field])
+    ) {
+      merged[field] = value;
+    }
+  }
+  return merged;
 }
 
 // One read serves both the catalog contents and the fingerprint; reading the
