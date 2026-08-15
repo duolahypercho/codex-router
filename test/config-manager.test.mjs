@@ -1288,3 +1288,49 @@ accent = "#4e96d1"
     rmSync(codexHome, { recursive: true, force: true });
   }
 });
+
+test("a header-looking line inside a parked multiline string does not split the hoist", () => {
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), "codex-router-config-"));
+  const configPath = path.join(codexHome, "config.toml");
+  writeFileSync(configPath, 'model = "gpt-5.6-sol"\nmodel_provider = "openai"\n', {
+    mode: 0o644,
+  });
+
+  try {
+    run("enable", codexHome);
+
+    // A parked table can hold a multiline string whose content looks like a
+    // TOML header. A `[`-prefix line scan would split the string there and
+    // corrupt the hoisted table; the real scanner must carry it out whole.
+    const parked = readFileSync(configPath, "utf8").replace(
+      "# END codex-router-provider-managed",
+      `[desktop]
+notes = """
+[not_a_table]
+still the same string
+"""
+accent = "#4e96d1"
+
+# END codex-router-provider-managed`,
+    );
+    writeFileSync(configPath, parked, { mode: 0o600 });
+
+    const reenabled = run("enable", codexHome);
+    assert.equal(reenabled.mode, "router");
+    const refreshed = readFileSync(configPath, "utf8");
+    // The whole table survived as one piece: header, multiline string with its
+    // header-looking content, and the key that followed the string.
+    assert.match(
+      refreshed,
+      /\[desktop\]\nnotes = """\n\[not_a_table\]\nstill the same string\n"""\naccent = "#4e96d1"/,
+    );
+    // The string content was not promoted to a real table anywhere.
+    assert.equal(
+      refreshed.indexOf("[not_a_table]"),
+      refreshed.lastIndexOf("[not_a_table]"),
+      "the header-looking line appears once, inside the string",
+    );
+  } finally {
+    rmSync(codexHome, { recursive: true, force: true });
+  }
+});
