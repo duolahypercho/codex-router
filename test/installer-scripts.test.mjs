@@ -268,9 +268,9 @@ test("the Windows wrapper hands every command its own arguments", () => {
   );
   assert.ok(branches.size >= 16, `only found ${branches.size} branches`);
 
-  // bin/disable and bin/uninstall accept no arguments, so their
+  // bin/disable, bin/uninstall, and bin/stop accept no arguments, so their
   // branches pass fixed node subcommand names rather than user input.
-  const takesNoArguments = new Set(["disable", "uninstall"]);
+  const takesNoArguments = new Set(["disable", "uninstall", "stop"]);
   for (const [command, body] of branches) {
     if (takesNoArguments.has(command)) {
       assert.equal(

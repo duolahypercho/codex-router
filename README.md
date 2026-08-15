@@ -1270,6 +1270,8 @@ specific bytes. Browser and computer-use execution remains live-only.
 ./bin/model-router codex setup --guided
 ./bin/model-router codex doctor
 ./bin/model-router codex status
+./bin/model-router codex start
+./bin/model-router codex stop
 ./bin/model-router codex disable
 ./bin/model-router codex enable
 ./bin/model-router codex uninstall
