@@ -22,7 +22,8 @@
       "inputModalities": [
         "text"
       ],
-      "compHash": "opencode-go-kimi-k2-7-code-v1"
+      "compHash": "opencode-go-kimi-k2-7-code-v2",
+      "requestProfile": "auto-tool-choice"
     }
   ]
 }
