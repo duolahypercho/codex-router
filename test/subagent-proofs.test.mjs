@@ -201,3 +201,22 @@ test("a probe that only hit quota or outage defers instead of condemning", async
   assert.equal(condemned[0].status, "failed");
   clearSubagentProof(slug);
 });
+
+test("a plan-entitlement refusal defers every model it gated, condemning none", async () => {
+  const slug = "deepseek/deepseek-v4-flash";
+  // The Command Code case: the credential authenticates, the plan cannot call
+  // the API, and every model behind it answers 403. Thirty models probed on
+  // an un-entitled account must not become thirty "incapable" verdicts.
+  const gated = await verifySubagentCandidates([slug], {
+    probe: async () => ({
+      ok: false,
+      checks: [
+        { name: "tool calling", ok: false, status: 403, detail: "plan does not include the API" },
+        { name: "streaming", ok: false, status: 403, detail: "plan does not include the API" },
+      ],
+      detail: "tool calling: plan does not include the API",
+    }),
+  });
+  assert.equal(gated[0].status, "deferred");
+  assert.equal(subagentProofSnapshot()[slug], undefined);
+});

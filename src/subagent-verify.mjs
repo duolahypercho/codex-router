@@ -54,17 +54,21 @@ export function subagentVerificationCandidates(slugs, { force = false, now = Dat
   return candidates;
 }
 
-// The probe measures capability, and a provider that is rate limited, out of
-// quota, or briefly down has not answered that question. "failed" is reserved
-// for evidence the model cannot hold the role; everything transient clears the
-// slot instead, so the next toggle or sweep simply researches again — the same
-// distinction the request-path observer draws between a 400 and a 429.
-const TRANSIENT_PROBE_STATUSES = new Set([402, 408, 429, 500, 502, 503, 504]);
+// The probe measures capability, and these statuses answer about the account
+// or the moment, never about the model: rate limits, exhausted quota, and
+// outages (402/408/429/5xx) clear on their own; missing credentials and plan
+// entitlements (401/403) clear when the operator upgrades — a Command Code Go
+// plan probing 30 models recorded 30 "incapable" verdicts when the truth was
+// one un-entitled account. "failed" is reserved for evidence the model cannot
+// hold the role; everything here clears the slot instead, so the next toggle
+// or sweep simply researches again — the same distinction the request-path
+// observer draws between a 400 and a 429.
+const PROBE_STATUSES_ABOUT_THE_ACCOUNT = new Set([401, 402, 403, 408, 429, 500, 502, 503, 504]);
 
-function probeWasTransient(outcome) {
+function probeAnsweredAboutTheAccount(outcome) {
   const failing = (outcome.checks || []).filter((check) => !check.ok);
   if (!failing.length) return false;
-  return failing.every((check) => TRANSIENT_PROBE_STATUSES.has(check.status));
+  return failing.every((check) => PROBE_STATUSES_ABOUT_THE_ACCOUNT.has(check.status));
 }
 
 export async function verifySubagentCandidates(slugs, { probe, force = false } = {}) {
@@ -84,7 +88,7 @@ export async function verifySubagentCandidates(slugs, { probe, force = false } =
         detail: error instanceof Error ? error.message : String(error),
       };
     }
-    if (!outcome.ok && probeWasTransient(outcome)) {
+    if (!outcome.ok && probeAnsweredAboutTheAccount(outcome)) {
       clearSubagentProof(slug);
       results.push({ slug, status: "deferred", reason: outcome.detail });
       continue;
