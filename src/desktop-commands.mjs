@@ -74,6 +74,9 @@ export const COMMANDS = {
   set_lmstudio_model_enabled: ({ model, id, enabled }) => ({
     args: ["local-models", "lmstudio-set", requireTag(model ?? id), enabled ? "on" : "off"],
   }),
+  set_cursor_model_enabled: ({ model, id, enabled }) => ({
+    args: ["local-models", "cursor-set", requireCursorModel(model ?? id), enabled ? "on" : "off"],
+  }),
   install_provider_cli: ({ provider }) => ({ args: ["install-cli", requireProvider(provider)] }),
   connect_oauth: ({ provider }) => ({
     args: ["login", requireProvider(provider)],
@@ -142,6 +145,20 @@ function requireProvider(provider) {
 function requireTag(tag) {
   const value = String(tag ?? "");
   if (!/^[A-Za-z0-9][\w.:\/-]{0,127}$/.test(value)) throw new Error(`Unknown model tag: ${tag}`);
+  return value;
+}
+
+// Cursor names parameterized models with a bracket suffix --
+// `claude-opus-4-8[context=1m,effort=high,fast=false]` -- which `requireTag`
+// rejects along with everything else it does not recognize. Widening that
+// shared validator to admit brackets would loosen it for Ollama and LM Studio
+// tags too, so Cursor gets its own, matching `validCursorModelId` in
+// cursor-cli.mjs exactly. Both exist because this value becomes an argv entry.
+function requireCursorModel(id) {
+  const value = String(id ?? "");
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*(?:\[[A-Za-z0-9=,._-]*\])?$/.test(value) || value.length > 128) {
+    throw new Error(`Unknown Cursor model: ${id}`);
+  }
   return value;
 }
 

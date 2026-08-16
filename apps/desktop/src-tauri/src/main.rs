@@ -121,6 +121,7 @@ fn main() {
             cancel_local_model,
             set_local_model_enabled,
             set_lmstudio_model_enabled,
+            set_cursor_model_enabled,
             install_provider_cli,
             connect_oauth,
             save_api_key,
@@ -572,6 +573,26 @@ async fn set_lmstudio_model_enabled(
         vec![
             "local-models".into(),
             "lmstudio-set".into(),
+            model,
+            (if enabled { "on" } else { "off" }).into(),
+        ],
+        None,
+    )
+    .await
+}
+
+#[tauri::command]
+async fn set_cursor_model_enabled(
+    state: State<'_, RouterState>,
+    model: String,
+    enabled: bool,
+) -> Result<Value, String> {
+    validate_cursor_model_id(&model)?;
+    run_json_command(
+        state.inner().clone(),
+        vec![
+            "local-models".into(),
+            "cursor-set".into(),
             model,
             (if enabled { "on" } else { "off" }).into(),
         ],
@@ -1438,6 +1459,38 @@ fn validate_local_model_ref(model: &str) -> Result<(), String> {
 /// Same character discipline as the Node-side `requireTag` (an id reaches a
 /// command line either way), with an error that names LM Studio instead of
 /// telling an LM Studio user their id is not a valid Ollama tag.
+// Cursor names parameterized models with a bracket suffix
+// (`claude-opus-4-8[context=1m,effort=high]`), which the LM Studio validator
+// below rejects. Kept separate rather than widening that one, so Ollama and
+// LM Studio ids stay as narrow as they are. Mirrors `validCursorModelId` in
+// src/cursor-cli.mjs and `requireCursorModel` in src/desktop-commands.mjs.
+fn validate_cursor_model_id(model: &str) -> Result<(), String> {
+    let trimmed = model.trim();
+    let (head, tail) = match trimmed.split_once('[') {
+        Some((head, rest)) => match rest.strip_suffix(']') {
+            Some(inner) => (head, Some(inner)),
+            None => return Err(format!("Unknown Cursor model: {model}")),
+        },
+        None => (trimmed, None),
+    };
+    let head_ok = !head.is_empty()
+        && head.len() <= 128
+        && head.chars().next().is_some_and(|c| c.is_ascii_alphanumeric())
+        && head
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'));
+    let tail_ok = tail.is_none_or(|inner| {
+        inner
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '=' | ',' | '.' | '_' | '-'))
+    });
+    if head_ok && tail_ok && trimmed.len() <= 128 {
+        Ok(())
+    } else {
+        Err(format!("Unknown Cursor model: {model}"))
+    }
+}
+
 fn validate_lmstudio_model_id(model: &str) -> Result<(), String> {
     let trimmed = model.trim();
     let valid = !trimmed.is_empty()

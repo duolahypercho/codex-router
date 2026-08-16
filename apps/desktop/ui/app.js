@@ -50,6 +50,7 @@ function startPanel() {
     providerSetup: null,
     localModels: null,
     lmstudioBusy: null,
+    cursorBusy: null,
     visionBridge: null,
     visionDownload: null,
     visionPollTimer: null,
@@ -154,6 +155,7 @@ function startPanel() {
     visionLocalModels: document.getElementById("vision-local-models"),
     localRuntimeActions: document.getElementById("local-runtime-actions"),
     lmstudioSection: document.getElementById("lmstudio-section"),
+    cursorSection: document.getElementById("cursor-section"),
     refresh: document.getElementById("refresh-data"),
     islandSwitch: document.getElementById("island-switch"),
     islandSwitchLabel: document.getElementById("island-switch-label"),
@@ -215,6 +217,7 @@ function startPanel() {
   elements.localModelList.addEventListener("change", handleLocalModelToggle);
   elements.localRuntimeActions.addEventListener("click", handleLocalRuntimeClick);
   elements.lmstudioSection.addEventListener("change", handleLmstudioModelToggle);
+  elements.cursorSection.addEventListener("change", handleCursorModelToggle);
   elements.localDownloadStatus.addEventListener("click", handleLocalModelClick);
   elements.localQuickPicks.addEventListener("click", handleLocalModelClick);
   elements.localCatalog.addEventListener("click", handleLocalModelClick);
@@ -950,6 +953,7 @@ function startPanel() {
       : "";
     renderLocalCatalog(local, installBusy);
     renderLmstudioSection(local.lmstudio, installBusy);
+    renderCursorSection(local.cursor, installBusy);
     const runtime = local.runtime || {};
     const machine = local.machine ? `<small class="muted-line">${escapeHtml(local.machine)}</small>` : "";
     elements.localRuntimeActions.innerHTML = runtime.installed
@@ -994,6 +998,64 @@ function startPanel() {
       })
       .join("");
     elements.lmstudioSection.innerHTML = `${header}${rows}`;
+  }
+
+  // Cursor's roster, and the three states it can be in. They need different
+  // fixes -- start the service, press Sign in, or pick a model -- so the
+  // header says which rather than collapsing them into "unavailable".
+  function renderCursorSection(cursor, busy = false) {
+    if (!elements.cursorSection) return;
+    if (!cursor) {
+      elements.cursorSection.innerHTML = "";
+      return;
+    }
+    const name = cursor.displayName || "Cursor CLI";
+    const status = !cursor.reachable
+      ? "Bridge not running \u00b7 start the router service"
+      : !cursor.signedIn
+        ? `Signed out \u00b7 ${cursor.detail || "sign in from Connections above"}`
+        : "Signed in \u00b7 spends your Cursor plan \u00b7 answers only, no tool calls";
+    const header = `<div class="local-section-label"><span>${escapeHtml(name)}</span><small>${escapeHtml(status)}</small></div>`;
+    const models = Array.isArray(cursor.models) ? cursor.models : [];
+    if (!models.length) {
+      elements.cursorSection.innerHTML = cursor.signedIn
+        ? `${header}<div class="empty-state local-empty">This Cursor account has no models available.</div>`
+        : header;
+      return;
+    }
+    const rowBusy = busy || state.cursorBusy;
+    const rows = models
+      .map((model) => {
+        const isBusy = state.cursorBusy === model.id;
+        const detail = model.served
+          ? model.enabled ? "In the picker" : "Available \u00b7 unchecked"
+          : "Checked but no longer offered by this account";
+        return `<article class="local-model-row${isBusy ? " is-busy" : ""}">
+          <label class="provider-check"><input type="checkbox" data-command="set_cursor_model_enabled" data-cursor-toggle="${escapeHtml(model.id)}" aria-label="Offer ${escapeHtml(model.id)} in the model picker"${model.enabled ? " checked" : ""}${rowBusy ? " disabled" : ""}></label>
+          <div><strong>${escapeHtml(model.id)}</strong><small>${escapeHtml(detail)}</small></div>
+        </article>`;
+      })
+      .join("");
+    elements.cursorSection.innerHTML = `${header}${rows}`;
+  }
+
+  async function handleCursorModelToggle(event) {
+    const checkbox = event.target.closest("input[data-cursor-toggle]");
+    if (!checkbox) return;
+    const model = checkbox.dataset.cursorToggle;
+    if (!model || state.cursorBusy) return;
+    const enabled = checkbox.checked;
+    state.cursorBusy = model;
+    renderCursorSection(state.localModels?.cursor);
+    try {
+      state.localModels = await call("set_cursor_model_enabled", { model, enabled });
+      await refreshPanel({ quiet: true });
+    } catch (error) {
+      showToast(errorMessage(error), true);
+    } finally {
+      state.cursorBusy = null;
+      renderLocalModels();
+    }
   }
 
   async function handleLmstudioModelToggle(event) {

@@ -264,6 +264,12 @@ async function emitProbe() {
                 // `local-models list`, so the LM Studio section must ride
                 // here too or it paints once and vanishes on the next poll.
                 lmstudio: await (await import("./lmstudio-models.mjs")).lmstudioSnapshot(),
+                // Cursor rides here for the same reason LM Studio does: the
+                // panel repaints from this snapshot, so a section fed by a
+                // separate call would paint once and vanish on the next poll.
+                // Its probe is the bridge's own /v1/models -- a loopback GET
+                // behind a 60s cache, never a round trip to Cursor per refresh.
+                cursor: await (await import("./cursor-models.mjs")).cursorSnapshot(),
               },
               visionBridge: (() => {
                 const candidates = selectedConfiguredListedModels();
@@ -1308,9 +1314,11 @@ async function handleLocalModels(action, value, ...rest) {
   // HTTP call with a short timeout, so an LM Studio that is simply off costs
   // the snapshot a bounded wait, not an error.
   const { lmstudioSnapshot } = await import("./lmstudio-models.mjs");
+  const { cursorSnapshot } = await import("./cursor-models.mjs");
   const snapshot = async () => ({
     ...localModelsSnapshot({ benchmarks: localAndVisionBenchmarks }),
     lmstudio: await lmstudioSnapshot(),
+    cursor: await cursorSnapshot(),
   });
   if (action === "list" || action === "status" || !action) {
     const current = await snapshot();
@@ -1745,13 +1753,28 @@ async function handleLocalModels(action, value, ...rest) {
     setLmstudioModelEnabled(value, enabled);
     refreshModelSettingsCatalog({ routes: true });
     if (wasEnabled !== enabled) await restartRouterForLocalRoutes();
+  } else if (action === "cursor-set") {
+    if (!["on", "off"].includes(positional)) {
+      throw new Error("Usage: control local-models cursor-set <model-id> <on|off>");
+    }
+    // The panel's checkbox for a model the Cursor account can spend. Same
+    // overlay `curate-models cursor-cli` writes, same restart that makes any
+    // other route change live.
+    const { isCursorModelEnabled, setCursorModelEnabled } = await import(
+      "./cursor-models.mjs"
+    );
+    const enabled = positional === "on";
+    const wasEnabled = isCursorModelEnabled(value);
+    setCursorModelEnabled(value, enabled);
+    refreshModelSettingsCatalog({ routes: true });
+    if (wasEnabled !== enabled) await restartRouterForLocalRoutes();
   } else {
     throw new Error(
       "Usage: control local-models list [--json]|inspect <tag-or-url>|" +
         "install <tag-or-url> [--yes] [--force]|benchmark <tag>|" +
         "runtime status|runtime start [--yes]|runtime update --yes|" +
         "uninstall <tag> --yes|cancel [<tag>]|set <tag> <on|off>|" +
-        "lmstudio-set <id> <on|off>\n" +
+        "lmstudio-set <id> <on|off>|cursor-set <id> <on|off>\n" +
         "  --yes    consent to installing/starting Ollama itself (headless)\n" +
         "  --force  download a model rated too large for this machine anyway",
     );
