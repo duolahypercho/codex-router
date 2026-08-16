@@ -450,6 +450,28 @@ Run `./bin/enable` again after updating, fully quit Codex, and reopen it so the
 managed realtime overrides take effect. User-owned realtime endpoint overrides
 are preserved.
 
+## Retained tool results are using disk
+
+Tool-result compaction can park the exact original bytes of a result it rewrote
+in `<state dir>/retained-tool-results`. That store is owner-only, is excluded
+from support bundles, and is bounded rather than evicting — at its cap it stops
+accepting new results and eligible results pass through uncompacted — but
+nothing ever removes what is already in it.
+
+`./bin/doctor` reports the store on every run: file count, total size, and the
+age of the oldest entry. To empty it:
+
+```sh
+./bin/control tool-result-aging purge          # what it would remove
+./bin/control tool-result-aging purge --yes    # remove it
+```
+
+Without `--yes` nothing is deleted. The purge removes only files the store
+itself wrote, only inside that one directory, and refuses to follow a symlink
+out of it; anything else that ends up there is reported and left alone. Deleting
+retained bytes is not reversible — a compacted result in an open session keeps
+its hash and head/tail evidence, but the original is gone.
+
 ## Uninstall retained files
 
 This is intentional. `./bin/uninstall` removes only the active integration and

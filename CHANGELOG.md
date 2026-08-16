@@ -118,6 +118,33 @@
   5-hour and weekly caps, and a coding plan runs out of the first long before it
   stops hitting the second. Plan, purchased, and free credits now surface as a
   balance metric, and the plan's own low-credit threshold marks it unavailable.
+- **Retained tool results had no way to be seen and no way to be cleared.**
+  Tool-result compaction parks the exact original bytes of a result it rewrote
+  in `<state dir>/retained-tool-results`. That store is bounded and fails safe —
+  at its cap it stops accepting new results and eligible results pass through
+  uncompacted — but it has no eviction and no TTL, so the only way to empty it
+  was `rm -rf`, and the first time most operators would learn it existed was
+  while hunting disk usage. It also matters more than its byte count: tool
+  results carry file contents, command output, and API responses, and this is
+  the one place the router keeps model-visible *content* on disk rather than the
+  counts and bytes its telemetry is limited to.
+
+  `./bin/doctor` now reports the store on every run — file count, total size,
+  and the age of the oldest entry — and reports it whether or not the directory
+  exists, because "nothing retained" is the answer most installs should see and
+  seeing it is what makes the directory discoverable at all. A store parked at
+  its cap is reported as a warning rather than as healthy, since that state is
+  permanent until somebody empties it.
+
+  `./bin/control tool-result-aging purge` empties it. It is a report by default:
+  without `--yes` it prints what it would remove and removes nothing, and
+  `--dry-run` says the same thing explicitly and outranks `--yes` so a wrapper
+  that always consents can still preview. Deletion is confined to the store by
+  construction rather than by intent — only names retention itself produces,
+  only entries whose parent resolves to that one directory, no recursion, and no
+  symlink is followed or removed. Anything else that ends up in there is left in
+  place and named. The directory itself is kept: emptying it is the whole job,
+  and removing it under a concurrent write buys nothing.
 
 - **The free Qwen3.8 endpoint refused any conversation whose system message
   arrived late or twice.** Its chat template answers those with a 400 reading

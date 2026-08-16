@@ -684,6 +684,26 @@ to OpenAI's own endpoint, and an install that has never run it keeps the
 pre-existing behavior. Set `CODEX_ROUTER_TOOL_RESULT_AGING=0` for a hard
 environment-level override that disables both the routed and the native path.
 
+Where compaction parks the exact original bytes of a result it rewrote, they go
+to an owner-private store at `<state dir>/retained-tool-results` (override with
+`MODEL_ROUTER_TOOL_RESULT_RETENTION_DIR`). Nothing evicts that store and it has
+no TTL, so both a way to see it and a way to empty it are part of the feature:
+
+```sh
+./bin/doctor                                   # reports count, size, oldest entry
+./bin/control tool-result-aging purge          # says what it would remove
+./bin/control tool-result-aging purge --yes    # removes it
+```
+
+The doctor row appears whether or not the store exists, because an install that
+has never retained anything is the answer most people should see and seeing it
+is how the directory becomes discoverable at all. The purge is a report by
+default: without `--yes` it prints what it would remove and removes nothing, and
+`--dry-run` says the same thing explicitly and outranks `--yes`. It removes only
+files this store wrote, only inside that one directory, never recursing and
+never following a symlink out of it; anything else that ends up there is left in
+place and named.
+
 To estimate the effect without spending provider quota, run:
 
 ```bash

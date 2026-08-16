@@ -944,7 +944,51 @@ async function handleSubagents(action, value, flag, rest = []) {
   process.stdout.write(`${JSON.stringify(subagentSettingsSnapshot())}\n`);
 }
 
-async function handleToolResultAging(action, nativeAction) {
+const TOOL_RESULT_AGING_USAGE =
+  "Usage: control tool-result-aging status|on|off|native <on|off>|purge [--yes] [--dry-run]";
+
+// Emptying the store deletes the only copy of bytes the model already saw, so
+// the default is the report and not the deletion: an invocation without --yes
+// says exactly what it would remove and removes nothing. --dry-run says the
+// same thing on purpose rather than by omission, and outranks --yes so a
+// wrapper that always passes consent can still preview.
+async function handleToolResultAgingPurge(flags) {
+  const {
+    describeRetentionAge,
+    formatRetentionBytes,
+    purgeRetainedToolResults,
+  } = await import("./tool-result-retention.mjs");
+  const requested = new Set(flags);
+  const previewOnly = requested.has("--dry-run") || !(requested.has("--yes") || requested.has("-y"));
+  const result = purgeRetainedToolResults({ dryRun: previewOnly });
+  const age =
+    result.oldestAgeMs === undefined ? "" : `, oldest ${describeRetentionAge(result.oldestAgeMs)} old`;
+  if (!result.exists || result.files === 0) {
+    process.stderr.write(`No retained tool results in ${result.path}; nothing to purge.\n`);
+  } else if (previewOnly) {
+    process.stderr.write(
+      `Would remove ${result.removed} file(s) (${result.results} retained result(s)${age}) ` +
+        `and reclaim ${formatRetentionBytes(result.reclaimedBytes)} from ${result.path}.\n` +
+        `Nothing was deleted. Re-run with --yes to empty it: ` +
+        `./bin/control tool-result-aging purge --yes\n`,
+    );
+  } else {
+    process.stderr.write(
+      `Removed ${result.removed} file(s) and reclaimed ` +
+        `${formatRetentionBytes(result.reclaimedBytes)} from ${result.path}.\n`,
+    );
+  }
+  if (result.foreign.length) {
+    process.stderr.write(
+      `Left ${result.foreign.length} entry/entries this store did not write in place: ` +
+        `${result.foreign.slice(0, 5).join(", ")}\n`,
+    );
+  }
+  process.stdout.write(`${JSON.stringify(result)}\n`);
+  if (result.failed.length) process.exitCode = 1;
+}
+
+async function handleToolResultAging(action, nativeAction, flags = []) {
   const {
     setNativeToolResultAgingEnabled,
     setToolResultAgingEnabled,
@@ -955,16 +999,20 @@ async function handleToolResultAging(action, nativeAction) {
     process.stdout.write(`${JSON.stringify(toolResultAgingSnapshot())}\n`);
     return;
   }
+  if (desired === "purge") {
+    await handleToolResultAgingPurge(flags);
+    return;
+  }
   if (desired === "native") {
     if (nativeAction !== "on" && nativeAction !== "off") {
-      throw new Error("Usage: control tool-result-aging status|on|off|native <on|off>");
+      throw new Error(TOOL_RESULT_AGING_USAGE);
     }
     setNativeToolResultAgingEnabled(nativeAction === "on");
     process.stdout.write(`${JSON.stringify(toolResultAgingSnapshot())}\n`);
     return;
   }
   if (desired !== "on" && desired !== "off") {
-    throw new Error("Usage: control tool-result-aging status|on|off|native <on|off>");
+    throw new Error(TOOL_RESULT_AGING_USAGE);
   }
   setToolResultAgingEnabled(desired === "on");
   process.stdout.write(`${JSON.stringify(toolResultAgingSnapshot())}\n`);
@@ -2029,7 +2077,7 @@ if (args.includes("--probe")) {
 } else if (args[0] === "subagents") {
   await handleSubagents(args[1], args[2], args[3], args.slice(2));
 } else if (args[0] === "tool-result-aging") {
-  await handleToolResultAging(args[1], args[2]);
+  await handleToolResultAging(args[1], args[2], args.slice(2));
 } else if (args[0] === "local-models") {
   await handleLocalModels(args[1], args[2], ...args.slice(3));
 } else if (args[0] === "vision-bridge") {

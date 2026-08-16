@@ -66,6 +66,11 @@ import {
   dependencyRepairHint,
   isHomebrewManaged,
 } from "./dependency-repair.mjs";
+import {
+  describeRetentionAge,
+  formatRetentionBytes,
+  retainedToolResultsUsage,
+} from "./tool-result-retention.mjs";
 
 const checks = [];
 const add = (status, name, detail, fix) => checks.push({ status, name, detail, fix });
@@ -696,6 +701,39 @@ add(
         : `mode ${callerSecretMode.toString(8)}`,
   "Run ./bin/doctor --fix; this capability is generated locally and is not a provider key.",
 );
+
+// Tool-result retention is the one place this router keeps model-visible
+// *content* on disk rather than counts and bytes, and it has no eviction and no
+// TTL. Reporting it here is the difference between an operator learning about
+// the store from this line and learning about it while hunting disk usage. The
+// row exists whether or not the store does: "nothing retained" is the answer
+// most installs should see, and seeing it is how the directory becomes
+// discoverable at all.
+try {
+  const retention = retainedToolResultsUsage();
+  const retentionDetail = !retention.exists
+    ? `nothing retained; no store at ${retention.path}`
+    : `${retention.results} retained result(s), ${formatRetentionBytes(retention.bytes)}` +
+      `${retention.oldestAgeMs === undefined ? "" : `, oldest ${describeRetentionAge(retention.oldestAgeMs)} old`}` +
+      ` in ${retention.path}`;
+  add(
+    retention.capacityReached || retention.foreign.length ? "warn" : "ok",
+    "Retained tool results",
+    retention.capacityReached
+      ? `${retentionDetail} -- at capacity, so new eligible results now pass through uncompacted`
+      : retention.foreign.length
+        ? `${retentionDetail}; ${retention.foreign.length} entry/entries this store did not write`
+        : retentionDetail,
+    "Run ./bin/control tool-result-aging purge to see what would be removed, then --yes to empty it.",
+  );
+} catch (error) {
+  add(
+    "warn",
+    "Retained tool results",
+    error instanceof Error ? error.message : String(error),
+    "Run ./bin/control tool-result-aging purge to inspect the store.",
+  );
+}
 
 // Per-provider credential rows are themselves discovery: each one resolves the
 // provider's credential. Under --no-discovery the resolvers answer nothing by
