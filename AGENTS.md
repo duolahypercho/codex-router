@@ -1574,6 +1574,18 @@ purpose.
   that can echo either. Regressions require fragmented/mislabeled SSE tests and
   real marker-return probes through every installed routed agent plus a
   same-thread follow-up.
+- A test that isolates the state directory must isolate `CODEX_HOME` with it.
+  `MODEL_ROUTER_STATE_DIR` and `CODEX_ROUTER_STATE_DIR` do not redirect
+  `CODEX_AGENTS_DIR`, which is `$CODEX_HOME/agents`, and `src/catalog.mjs`
+  prunes that directory to whatever the state it just read promotes to `v2`.
+  Point the state at a scratch directory while inheriting the real home and the
+  run deletes the operator's own routed agent definitions — every model
+  promoted by a local capability proof rather than by the shipped registry —
+  while `multi-agent-settings.json` and `multi-agent-proofs.json`, which live in
+  the scratch state, survive intact to report the models as still enabled. The
+  operator sees subagents that reset themselves after an unrelated command.
+  `test/state-owner.test.mjs` pins this: no test file may spawn the catalog
+  without setting `CODEX_HOME`.
 
 ## Installing the harness is one action, and it is never a side effect
 

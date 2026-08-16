@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- **Running the test suite no longer resets your subagents.**
+  `test/state-owner.test.mjs` ran the real `src/catalog.mjs` against a scratch
+  state directory while inheriting the developer's own `CODEX_HOME`. No
+  state-directory override redirects `$CODEX_HOME/agents`, so the catalog read
+  an empty state — no proofs, no selection, no picker — and pruned the real
+  agents directory to the handful of models the shipped registry promotes on
+  its own, deleting the definition of every model this machine had promoted
+  through a local capability probe. The settings naming those models live in
+  the state directory and survived, so `subagents status` kept reporting them
+  as enabled while Codex had nothing left to spawn: subagents that appeared to
+  reset themselves after an unrelated command. The test now isolates the home
+  with the state, and a guard in the same file fails if any test spawns the
+  catalog without doing so. If your routed agents are already missing, one
+  catalog refresh from the owning checkout restores them.
+
 - **GPT-5.6 Sol can now run at the 1M context window OpenAI documents for it.**
   The catalog Codex ships declares 272,000 tokens against a documented
   1,050,000, and that figure has already moved twice

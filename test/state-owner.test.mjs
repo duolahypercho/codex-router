@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -34,6 +42,25 @@ function withState({ owner }, run) {
   }
 }
 
+// Overriding the state directory does not redirect everything a run writes.
+// `CODEX_AGENTS_DIR` is `$CODEX_HOME/agents`, and `src/catalog.mjs` prunes it
+// to whatever the state directory it just read promotes as a subagent. A test
+// that isolates the state but inherits the real home therefore deletes the
+// operator's own routed agent definitions -- every model promoted by a local
+// capability proof rather than by the shipped registry -- while their settings
+// files, which live in the isolated state, survive to say the models are still
+// enabled. Isolate both, on every spawn in this file.
+function isolatedEnv(stateDir, extraEnv = {}) {
+  const codexHome = path.join(stateDir, "codex-home");
+  mkdirSync(codexHome, { recursive: true });
+  return {
+    ...process.env,
+    CODEX_HOME: codexHome,
+    MODEL_ROUTER_STATE_DIR: stateDir,
+    ...extraEnv,
+  };
+}
+
 function ownershipStatus(stateDir, extraEnv = {}) {
   const result = spawnSync(
     process.execPath,
@@ -46,7 +73,7 @@ function ownershipStatus(stateDir, extraEnv = {}) {
     {
       cwd: root,
       encoding: "utf8",
-      env: { ...process.env, MODEL_ROUTER_STATE_DIR: stateDir, ...extraEnv },
+      env: isolatedEnv(stateDir, extraEnv),
     },
   );
   assert.equal(result.status, 0, result.stderr);
@@ -88,7 +115,7 @@ test("writing the catalog from a foreign checkout fails with guidance, not a sta
     const result = spawnSync(process.execPath, [path.join(root, "src", "catalog.mjs")], {
       cwd: root,
       encoding: "utf8",
-      env: { ...process.env, MODEL_ROUTER_STATE_DIR: stateDir },
+      env: isolatedEnv(stateDir),
     });
     assert.equal(result.status, 1);
     assert.match(result.stderr, /owned by another checkout/);
@@ -111,7 +138,7 @@ test("writing the gateway config from a foreign checkout is refused", () => {
       {
         cwd: root,
         encoding: "utf8",
-        env: { ...process.env, MODEL_ROUTER_STATE_DIR: stateDir },
+        env: isolatedEnv(stateDir),
       },
     );
     assert.equal(result.stdout, "foreign_state_owner");
@@ -133,7 +160,7 @@ test("rendering the gateway config to an explicit path stays unguarded", () => {
       {
         cwd: root,
         encoding: "utf8",
-        env: { ...process.env, MODEL_ROUTER_STATE_DIR: stateDir },
+        env: isolatedEnv(stateDir),
       },
     );
     assert.equal(result.stdout, "wrote", result.stderr);
@@ -143,15 +170,13 @@ test("rendering the gateway config to an explicit path stays unguarded", () => {
 test("the installer is allowed to take ownership", () => {
   withState({ owner: FOREIGN_OWNER }, (stateDir) => {
     // bin/install exports the override for its whole run because it rebuilds
-    // generated state before recording the new owner.
+    // generated state before recording the new owner. This is the one case in
+    // this file that clears the guard and runs the catalog for real, so it is
+    // the one that used to reach the operator's own `~/.codex/agents`.
     const result = spawnSync(process.execPath, [path.join(root, "src", "catalog.mjs")], {
       cwd: root,
       encoding: "utf8",
-      env: {
-        ...process.env,
-        MODEL_ROUTER_STATE_DIR: stateDir,
-        MODEL_ROUTER_ALLOW_FOREIGN_STATE: "1",
-      },
+      env: isolatedEnv(stateDir, { MODEL_ROUTER_ALLOW_FOREIGN_STATE: "1" }),
     });
     assert.doesNotMatch(result.stderr || "", /owned by another checkout/);
   });
@@ -176,7 +201,7 @@ test("doctor --fix from a foreign checkout delegates to the recorded owner", () 
         {
           cwd: root,
           encoding: "utf8",
-          env: { ...process.env, MODEL_ROUTER_STATE_DIR: stateDir },
+          env: isolatedEnv(stateDir),
         },
       );
       assert.equal(result.status, 0, result.stderr);
@@ -186,4 +211,32 @@ test("doctor --fix from a foreign checkout delegates to the recorded owner", () 
   } finally {
     rmSync(owner, { recursive: true, force: true });
   }
+});
+
+// The defect this replaces: this file ran the real catalog with a scratch state
+// directory and the developer's own `CODEX_HOME`, so `npm test` deleted every
+// routed subagent definition the machine had earned through a local capability
+// proof. The settings that named those models live in the state directory and
+// survived, which is what made it look like a router update had reset the
+// subagents rather than a test run having removed the files Codex reads.
+//
+// Scoped to `path.join(..., "src", "catalog.mjs")` on purpose: that is how a
+// spawn of the catalog is spelled here, and matching the bare path string would
+// also catch the files that only read `src/catalog.mjs` as source text.
+test("no test spawns the catalog without isolating CODEX_HOME", () => {
+  const offenders = readdirSync(path.join(root, "test"))
+    .filter((entry) => entry.endsWith(".mjs"))
+    .filter((entry) => {
+      const source = readFileSync(path.join(root, "test", entry), "utf8");
+      return (
+        /["']src["']\s*,\s*["']catalog\.mjs["']/.test(source) &&
+        !source.includes("CODEX_HOME")
+      );
+    });
+  assert.deepEqual(
+    offenders,
+    [],
+    `${offenders.join(", ")} run the catalog against the real Codex home, whose ` +
+      "agents directory no state-directory override redirects",
+  );
 });
