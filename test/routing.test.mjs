@@ -4726,3 +4726,97 @@ test("a subagent effort reaches child turns and leaves parent turns alone", asyn
     rmSync(stateDir, { recursive: true, force: true });
   }
 });
+
+// Codex never sends a flat `reasoning_effort`: on the Responses API the depth
+// travels inside `reasoning`, as `{ effort, summary }`. The gateway derives its
+// own effort from that object whenever it is present and that derived value
+// wins, so an override written only to the flat field is dropped before any
+// provider sees it -- measured against the real LiteLLM adapter, where the
+// child turn reached the provider at the parent's effort. Drive the authentic
+// client shape so the override has to survive the same precedence.
+test("a subagent effort overrides the effort Codex nested in the reasoning object", async () => {
+  const stateDir = mkdtempSync(path.join(os.tmpdir(), "subagent-effort-nested-"));
+  // Written directly rather than through setSubagentEffort: paths.mjs resolves
+  // the state directory once per process, so a second in-process import lands
+  // in whichever directory the first test claimed.
+  writeFileSync(
+    path.join(stateDir, "multi-agent-settings.json"),
+    `${JSON.stringify({
+      version: 2,
+      mode: "all",
+      enabled: [],
+      disabled: [],
+      efforts: { "deepseek/deepseek-v4-pro": "max" },
+    })}\n`,
+    { mode: 0o600 },
+  );
+
+  const seen = [];
+  const gateway = await mockServer(async (request, response) => {
+    if (request.url === "/health") {
+      json(response, 200, { ok: true });
+      return;
+    }
+    const body = await bodyJson(request);
+    seen.push({ reasoning: body.reasoning, effort: body.reasoning_effort });
+    json(response, 200, {
+      id: "resp_effort_nested",
+      output: [{ type: "message", content: [{ type: "output_text", text: "ok" }] }],
+      usage: { input_tokens: 5, output_tokens: 1 },
+    });
+  });
+  const routerPort = await openPort();
+  const router = run("router.mjs", {
+    MODEL_ROUTER_STATE_DIR: stateDir,
+    CODEX_ROUTER_PORT: String(routerPort),
+    CODEX_ROUTER_GATEWAY_BASE_URL: `http://127.0.0.1:${gateway.port}/v1`,
+    CODEX_ROUTER_OAUTH_HEALTH_URL: `http://127.0.0.1:${gateway.port}/health`,
+    CODEX_ROUTER_API_HEALTH_URL: `http://127.0.0.1:${gateway.port}/health`,
+    CODEX_ROUTER_GATEWAY_HEALTH_URL: `http://127.0.0.1:${gateway.port}/health`,
+    CODEX_ROUTER_QUIET: "1",
+  });
+
+  // Exactly what Codex puts on the wire: a reasoning object, no flat field.
+  const turn = (headers = {}) =>
+    fetch(`${routerBase(routerPort)}/responses`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...headers },
+      body: JSON.stringify({
+        model: "deepseek/deepseek-v4-pro",
+        input: "go",
+        reasoning: { effort: "low", summary: "auto" },
+      }),
+    });
+
+  try {
+    await waitFor(`${routerBase(routerPort)}/models`, router);
+
+    const child = await turn({ "x-openai-subagent": "review-child" });
+    assert.equal(child.status, 200);
+    const parent = await turn();
+    assert.equal(parent.status, 200);
+
+    assert.equal(seen.length, 2);
+    assert.equal(
+      seen[0].reasoning?.effort,
+      "max",
+      "the child turn still carried the parent's nested effort",
+    );
+    assert.equal(
+      seen[0].reasoning?.summary,
+      "auto",
+      "the override discarded the rest of the reasoning object",
+    );
+    assert.equal(seen[0].effort, "max", "the flat field lost the override");
+    assert.equal(
+      seen[1].reasoning?.effort,
+      "low",
+      "the parent turn was re-tuned by a subagent setting",
+    );
+    assert.equal(seen[1].effort, undefined, "the parent turn grew a flat effort field");
+  } finally {
+    router.kill("SIGTERM");
+    gateway.server.close();
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});

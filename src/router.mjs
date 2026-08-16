@@ -1947,7 +1947,18 @@ async function handleResponses(request, response, requestUrl) {
       const childEffort = request.headers["x-openai-subagent"]
         ? subagentEffort(route.slug)
         : undefined;
-      if (childEffort) routed.reasoning_effort = childEffort;
+      // This leaves on the Responses API, where the effort travels inside
+      // `reasoning`. A flat `reasoning_effort` is a Chat Completions field:
+      // LiteLLM's Responses bridge derives its own effort from `reasoning`
+      // whenever the client sent one -- and Codex always does -- then that
+      // derived value overwrites anything flat the router set, so a flat-only
+      // override never reaches the provider. Set both: `reasoning.effort` is
+      // what actually travels, and the flat field is what a bare
+      // chat-completions gateway would read.
+      if (childEffort) {
+        routed.reasoning_effort = childEffort;
+        routed.reasoning = { ...(routed.reasoning || {}), effort: childEffort };
+      }
       normalizeAutoToolChoice(routed, route);
       // Native OpenAI traffic keeps client_metadata; routed providers do not
       // consume it and the strict ones reject the unknown field.
