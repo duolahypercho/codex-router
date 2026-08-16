@@ -14,7 +14,11 @@ import { STATE_DIR } from "./paths.mjs";
 export const USER_MODELS_PATH =
   process.env.MODEL_ROUTER_USER_MODELS || path.join(STATE_DIR, "user-models.json");
 
-const DEFAULT_CONTEXT_WINDOW = 131072;
+// Only reached when the provider's own catalog said nothing about the model's
+// size. Curation prefers the advertised context length precisely because this
+// number is a guess, and a guess eight times too small compacts a session that
+// had the room (#266).
+export const DEFAULT_CONTEXT_WINDOW = 131072;
 const DEFAULT_AUTO_COMPACT = 110000;
 
 // Curation may adjust presentation, sizing, and effort metadata only;

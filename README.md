@@ -296,7 +296,11 @@ the ones you want, and stores them as user models in protected state
 command and deselecting). Curation asks for each new model's context window,
 image support, and reasoning efforts — so curated models get the effort
 switcher in the picker — and everything defaults conservatively when
-unanswered. The non-interactive `--models id1,id2` form is additive: it keeps
+unanswered. The context window is not guessed when the provider publishes one:
+the `context_length` its catalog advertises for the model is offered as the
+default and stored by both curation forms, so a million-token model is not
+filed as a 131K one and told to compact at 110K. The non-interactive
+`--models id1,id2` form is additive: it keeps
 existing curated entries and their metadata while adding the named models;
 `--efforts minimal,low,medium,high,xhigh` sets the new entries' ladder. Remove
 entries explicitly with `--remove id1,id2`. Every value stays editable in
@@ -584,8 +588,10 @@ Add a key, then pick the models you want from the provider's live catalog:
 ```
 
 Curated entries use the context window, image support, and reasoning efforts
-you provide during curation (conservative defaults otherwise) and are local
-to your machine. Verify a model before relying on it:
+you provide during curation — the context window falling back to the one the
+provider's catalog advertises, and to a conservative default only when it
+advertises none — and are local to your machine. Verify a model before relying
+on it:
 
 ```sh
 ./bin/test-model 'groq/MODEL_ID' --live --yes

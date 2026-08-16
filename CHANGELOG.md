@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+- **Curated models were filed at 131072 tokens however big they actually
+  were, and the million-token ones compacted on every turn.** Curation stored
+  one conservative window for every model it added, so a model OpenRouter
+  advertises at 1,050,000 was told to auto-compact at 110,000 — eight times
+  below its real capacity. That is not a cosmetic understatement: when a
+  provider answers with `prompt_tokens: 0` the router substitutes an estimate
+  of the prompt it just sent, and that estimate errs high on purpose, so
+  against a threshold this low it landed above the compaction limit turn after
+  turn. The session summarized itself, lost its working state, redid the same
+  opening work, and summarized again without ever finishing (#266). The
+  provider's catalog already carries the answer, so discovery now reads it:
+  `context_length`, the figure the serving endpoint reports under
+  `top_provider`, `context_window`, or Copilot's
+  `capabilities.limits.max_context_window_tokens`, taking the smallest of the
+  ones present because those are limits at different scopes and only the
+  narrowest is the one the request path can rely on. Both curation forms store
+  it, and `autoCompact` follows from it; the interactive prompt offers it as
+  the default rather than making the user retype a number the provider already
+  published. A model the catalog sizes in silence still falls back to 131072,
+  and an entry curated earlier keeps what it was given — an additive run never
+  rewrites metadata a user may have tuned by hand, so repair it in
+  `user-models.json` or `--remove` and curate it again.
+
 - **The free Qwen3.8 endpoint refused any conversation whose system message
   arrived late or twice.** Its chat template answers those with a 400 reading
   "System message must be at the beginning", and a real Codex session reaches

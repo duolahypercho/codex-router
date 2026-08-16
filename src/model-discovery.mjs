@@ -40,6 +40,49 @@ export function modelIds(payload, provider) {
   return [...new Set(candidates.map((item) => String(item?.id || "").trim()).filter(Boolean))].sort();
 }
 
+// What a provider says one model's context window is, or undefined when it says
+// nothing usable. OpenAI-compatible catalogs disagree about the key: OpenRouter
+// and most resellers publish `context_length` and repeat the figure the chosen
+// endpoint actually serves under `top_provider`, Copilot puts it in
+// `capabilities.limits`, and a few spell it `context_window`.
+//
+// When more than one is present they are not alternatives, they are limits at
+// different scopes, and the smallest one is the only one the request path can
+// rely on: a model that can do 200K reached through an endpoint that serves
+// 131K is a 131K model here. Anything that is not a positive integer is treated
+// as silence -- a string, a float, or a zero is a catalog quirk, not a size.
+function advertisedContextLength(item) {
+  let smallest;
+  for (const value of [
+    item?.context_length,
+    item?.top_provider?.context_length,
+    item?.context_window,
+    item?.capabilities?.limits?.max_context_window_tokens,
+  ]) {
+    if (!Number.isInteger(value) || value < 1) continue;
+    if (smallest === undefined || value < smallest) smallest = value;
+  }
+  return smallest;
+}
+
+// Model id -> advertised context window, for the models `modelIds` kept. A
+// model the provider filtered out has no answer worth carrying, and a model
+// the provider sized in silence is absent rather than guessed: curation falls
+// back to its conservative default only when nothing was advertised.
+export function modelContextLengths(payload, provider) {
+  const data = Array.isArray(payload) ? payload : payload?.data;
+  if (!Array.isArray(data)) return {};
+  const kept = new Set(modelIds(payload, provider));
+  const lengths = {};
+  for (const item of data) {
+    const id = String(item?.id || "").trim();
+    if (!id || !kept.has(id) || id in lengths) continue;
+    const length = advertisedContextLength(item);
+    if (length !== undefined) lengths[id] = length;
+  }
+  return lengths;
+}
+
 async function providerPayload(provider) {
   const fixture = option("--fixture");
   if (fixture) return JSON.parse(readFileSync(path.resolve(fixture), "utf8"));
@@ -88,7 +131,8 @@ export async function discoverProviderModels(providerId) {
   if (provider.kind !== "openai-compatible") {
     throw new Error(`${provider.displayName} does not expose a supported model-list endpoint.`);
   }
-  const discovered = modelIds(await providerPayload(provider), provider);
+  const payload = await providerPayload(provider);
+  const discovered = modelIds(payload, provider);
   const registered = MODELS
     .filter((model) => model.provider === providerId)
     .map((model) => model.upstreamModel)
@@ -101,6 +145,9 @@ export async function discoverProviderModels(providerId) {
     registered,
     unregistered: discovered.filter((id) => !registeredSet.has(id)),
     unavailable: registered.filter((id) => !discoveredSet.has(id)),
+    // Sizing the provider published for itself. Curation stores it rather than
+    // guessing a window for a model whose catalog entry already names one.
+    contextLengths: modelContextLengths(payload, provider),
     note: "Discovery never edits the registry. New models must pass the live compatibility test before they are listed in Codex.",
   };
 }

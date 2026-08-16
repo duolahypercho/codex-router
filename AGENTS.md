@@ -312,7 +312,15 @@ to ship tested support to every installer.
    effort in the picker); the deterministic `--models` form takes
    conservative defaults, `--efforts minimal,low,medium,high,xhigh` sets the
    effort ladder, and every stored value stays editable in
-   `user-models.json`. An optional `availabilityNux` string on a model becomes
+   `user-models.json`. The context window is the exception to "conservative
+   default": both forms store the `context_length` the provider's own catalog
+   advertises for that model (`modelContextLengths` in
+   `src/model-discovery.mjs`), because `autoCompact` is derived from it and an
+   understated window makes Codex compact a session that had the room. Only a
+   model the catalog sizes in silence falls back to 131072. An entry curated
+   before this landed keeps its stored window — an additive run never rewrites
+   existing metadata — so repair it by editing `user-models.json` or by
+   `--remove`-ing and re-curating the model. An optional `availabilityNux` string on a model becomes
    the Codex "Introducing {model}" announcement (shown a limited number of
    times per slug, tracked by the Codex client itself); leave it unset unless
    the model is genuinely news to the operator. Curated models are not

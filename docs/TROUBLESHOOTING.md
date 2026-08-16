@@ -197,9 +197,16 @@ release, curate it for your own machine:
 
 Curated entries live in the state directory's `user-models.json` with the
 context window, image support, and reasoning efforts you provide during
-curation (conservative defaults otherwise), are skipped automatically if a
-later registry update ships the same model, and are removed by re-running
-the command and deselecting them.
+curation — the context window taken from the provider's advertised
+`context_length` when you do not name one, and from a conservative default only
+when the provider advertises none — are skipped automatically if a later
+registry update ships the same model, and are removed by re-running the command
+and deselecting them.
+
+An entry curated before the router read that advertised size keeps whatever it
+was given: an additive `--models` run deliberately leaves existing metadata
+alone. Edit `contextWindow` and `autoCompact` in `user-models.json` directly, or
+`--remove` the model and curate it again, then regenerate with `./bin/install`.
 
 ## A session ran past the context window instead of compacting
 
@@ -227,6 +234,30 @@ grep -c estimatedInputTokens "$CODEX_HOME/codex-router/usage-events.jsonl"
 Report zero-token responses to the provider; only they can fix the source. To
 see the provider's own numbers in Codex again, set
 `CODEX_ROUTER_ZERO_INPUT_ESTIMATE=0` in the service environment.
+
+## A session compacts on every turn instead of getting work done
+
+The same substitution read against a window that is too small. Check what the
+model is declared as:
+
+```sh
+grep -A2 '"contextWindow"' "$CODEX_HOME/codex-router/user-models.json"
+```
+
+Curation now stores the `context_length` the provider's catalog advertises, but
+a model curated before that landed kept the conservative 131072 default — and a
+model that really carries a million tokens was then told to compact at 110,000,
+which a high-erring estimate clears on turn after turn. Compare it against what
+the provider says:
+
+```sh
+./bin/discover-models PROVIDER --json
+```
+
+Fix it by editing `contextWindow` and `autoCompact` (85% of the window) in
+`user-models.json`, or by `./bin/curate-models PROVIDER --remove MODEL_ID` and
+curating the model again. Either way run `./bin/install` and restart the
+service so the picker catalog and the gateway routes carry the new figures.
 
 ## Finished subagents stay Working
 

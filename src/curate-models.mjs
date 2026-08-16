@@ -7,7 +7,12 @@ import { MODELS, PROVIDERS, USER_MODEL_WARNINGS } from "./model-registry.mjs";
 import { SOURCE_ROOT } from "./paths.mjs";
 import { confirm, promptLine } from "./setup-shared.mjs";
 import { toggleSelection } from "./setup-ui.mjs";
-import { readUserModels, userModelEntry, writeUserModels } from "./user-models.mjs";
+import {
+  DEFAULT_CONTEXT_WINDOW,
+  readUserModels,
+  userModelEntry,
+  writeUserModels,
+} from "./user-models.mjs";
 
 // Interactive curation: list the provider's live models that are not part of
 // the checked-in registry, let the user toggle the ones they want, and persist
@@ -56,6 +61,27 @@ const REQUEST_PROFILE_DESCRIPTIONS = {
   [AUTO_TOOL_CHOICE]:
     'reject a forced tool_choice ("required") while still calling tools under "auto"',
 };
+
+// Codex compacts at this fraction of the declared window.
+const AUTO_COMPACT_RATIO = 0.85;
+
+// The sizing to store for a context window, from the provider's catalog or from
+// the interactive prompt. Both have to derive `autoCompact` the same way: it is
+// the number Codex actually reads to decide when to summarize, and a window
+// stored without it keeps whatever the conservative default said.
+//
+// Guessing 131072 for a model the provider advertises at 1,050,000 does not
+// fail safe. The estimate the router substitutes when an upstream reports zero
+// prompt tokens errs high on purpose, so against an eight-times-too-small
+// threshold it lands above the compaction limit on turn after turn and the
+// session compacts forever without finishing anything (#266).
+export function curatedSizing(contextLength) {
+  if (!Number.isInteger(contextLength) || contextLength < 1) return undefined;
+  return {
+    contextWindow: contextLength,
+    autoCompact: Math.floor(contextLength * AUTO_COMPACT_RATIO),
+  };
+}
 
 function usage() {
   console.error(
@@ -263,16 +289,22 @@ async function main() {
 
   const metadataFor = (id) => {
     const metadata = { ...(flagEfforts || {}) };
-    if (!interactive) return flagEfforts ? metadata : undefined;
+    // The provider already published this model's size; asking the user to
+    // retype it, or defaulting past it, is how a million-token model ends up
+    // stored as a 131K one. A catalog that said nothing still falls back.
+    const advertised = curatedSizing(discovery.contextLengths?.[id]);
+    if (advertised) Object.assign(metadata, advertised);
+    if (!interactive) return Object.keys(metadata).length > 0 ? metadata : undefined;
     process.stdout.write(`\nMetadata for ${id} (Enter keeps the default):\n`);
-    const rawContext = promptLine("  Context window in tokens [131072]").trim();
+    const suggested = advertised?.contextWindow ?? DEFAULT_CONTEXT_WINDOW;
+    const rawContext = promptLine(
+      `  Context window in tokens [${suggested}${advertised ? ", advertised" : ""}]`,
+    ).trim();
     if (rawContext) {
       const context = Number.parseInt(rawContext, 10);
-      if (!Number.isInteger(context) || context < 1) {
-        throw new Error(`Invalid context window: ${rawContext}`);
-      }
-      metadata.contextWindow = context;
-      metadata.autoCompact = Math.floor(context * 0.85);
+      const sizing = curatedSizing(context);
+      if (!sizing) throw new Error(`Invalid context window: ${rawContext}`);
+      Object.assign(metadata, sizing);
     }
     if (confirm(`  Does ${id} accept image input?`)) {
       metadata.inputModalities = ["text", "image"];

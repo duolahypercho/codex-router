@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const { PROVIDERS } = await import("../src/model-registry.mjs");
-const { modelIds } = await import("../src/model-discovery.mjs");
+const { modelContextLengths, modelIds } = await import("../src/model-discovery.mjs");
 
 test("model discovery compares fixtures without needing or exposing a key", () => {
   const testRoot = mkdtempSync(path.join(os.tmpdir(), "codex-router-discovery-"));
@@ -144,5 +144,87 @@ test("anonymous discovery keeps only each provider's documented free models", ()
       { id: "z-ai/glm-5" },
     ] }, kilo),
     ["minimax/minimax-m2.1:free", "z-ai/glm-5:free"],
+  );
+});
+
+test("discovery reports the context length the provider advertises", () => {
+  // Curation used to store 131072 for every model it added, including the
+  // million-token ones, and Codex reads the auto-compact figure derived from
+  // that number to decide when to summarize (#266). The catalog already says
+  // how big each model is; the only reason it was guessed is that discovery
+  // threw the answer away.
+  const openrouter = PROVIDERS.get("openrouter");
+  assert.deepEqual(
+    modelContextLengths(
+      {
+        data: [
+          { id: "openai/gpt-5.6-luna", context_length: 1_050_000 },
+          { id: "deepseek/deepseek-v4-flash", context_length: 1_048_576 },
+          // Silence is a legitimate answer and must not become a guess.
+          { id: "vendor/unsized" },
+          { id: "vendor/nonsense", context_length: "lots" },
+          { id: "vendor/negative", context_length: -1 },
+          { id: "vendor/fractional", context_length: 1024.5 },
+        ],
+      },
+      openrouter,
+    ),
+    {
+      "openai/gpt-5.6-luna": 1_050_000,
+      "deepseek/deepseek-v4-flash": 1_048_576,
+    },
+  );
+});
+
+test("the served context length wins over the model's nominal one", () => {
+  // OpenRouter records carry both: `context_length` is what the model can do
+  // and `top_provider.context_length` is what the endpoint behind this id will
+  // actually accept. Storing the larger one would advertise capacity the
+  // request path cannot use.
+  assert.deepEqual(
+    modelContextLengths(
+      { data: [{ id: "z-ai/glm-5", context_length: 200_000, top_provider: { context_length: 131_072 } }] },
+      PROVIDERS.get("openrouter"),
+    ),
+    { "z-ai/glm-5": 131_072 },
+  );
+});
+
+test("context lengths are reported only for models discovery kept", () => {
+  // A filtered-out record's size is not this provider's answer about anything,
+  // and storing it would size a model the picker never offers.
+  assert.deepEqual(
+    modelContextLengths(
+      {
+        data: [
+          { id: "z-ai/glm-5:free", context_length: 200_000 },
+          { id: "z-ai/glm-5", context_length: 200_000 },
+        ],
+      },
+      PROVIDERS.get("kilo-free"),
+    ),
+    { "z-ai/glm-5:free": 200_000 },
+  );
+});
+
+test("Copilot advertises its window under the capability limits", () => {
+  assert.deepEqual(
+    modelContextLengths(
+      {
+        data: [
+          {
+            id: "gpt-responses",
+            policy: { state: "enabled" },
+            supported_endpoints: ["/responses"],
+            capabilities: {
+              supports: { tool_calls: true, streaming: true },
+              limits: { max_context_window_tokens: 128_000 },
+            },
+          },
+        ],
+      },
+      PROVIDERS.get("github-copilot"),
+    ),
+    { "gpt-responses": 128_000 },
   );
 });
