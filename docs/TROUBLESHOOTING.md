@@ -246,9 +246,9 @@ grep -A2 '"contextWindow"' "$CODEX_HOME/codex-router/user-models.json"
 
 Curation now stores the `context_length` the provider's catalog advertises, but
 a model curated before that landed kept the conservative 131072 default — and a
-model that really carries a million tokens was then told to compact at 110,000,
-which a high-erring estimate clears on turn after turn. Compare it against what
-the provider says:
+model that really carries a million tokens is then told to compact at 110,000,
+which a real conversation reaches long before it needs to. Compare it against
+what the provider says:
 
 ```sh
 ./bin/discover-models PROVIDER --json

@@ -4545,6 +4545,113 @@ test("router substitutes a prompt-token estimate a provider reported as zero", a
   }
 });
 
+// Issue #266: the estimate above is calibrated against text a model reads, but
+// it was measuring the whole serialized body -- and most of a Codex body is
+// `encrypted_content`, the sealed chain of thought on every reasoning item that
+// no routed provider can read. The estimate came out 3.9x-4.7x high and cleared
+// the compaction threshold on every zero-report turn, so the session summarized
+// itself instead of working. End to end because the premise is about the body
+// the router actually builds: reasoning items survive into it, so the bytes are
+// really there to be discounted.
+test("reasoning ciphertext is not billed to the prompt-token estimate", async () => {
+  const gatewayBodies = [];
+  const gateway = await mockServer(async (request, response) => {
+    gatewayBodies.push(await bodyJson(request));
+    const completed = {
+      type: "response.completed",
+      response: {
+        id: "resp_routed",
+        usage: { input_tokens: 0, output_tokens: 12, total_tokens: 12 },
+      },
+    };
+    response.writeHead(200, { "Content-Type": "text/event-stream" });
+    response.end(
+      `event: response.output_text.delta\ndata: ${JSON.stringify({ type: "response.output_text.delta", delta: "ok" })}\n\n` +
+        `event: response.completed\ndata: ${JSON.stringify(completed)}\n\ndata: [DONE]\n\n`,
+    );
+  });
+  const stateDir = mkdtempSync(path.join(os.tmpdir(), "routing-ciphertext-"));
+  const routerPort = await openPort();
+  const router = run("router.mjs", {
+    CODEX_ROUTER_PORT: String(routerPort),
+    CODEX_ROUTER_GATEWAY_BASE_URL: `http://127.0.0.1:${gateway.port}/v1`,
+    MODEL_ROUTER_STATE_DIR: stateDir,
+  });
+  const headers = {
+    Authorization: "Bearer CODEX_CALLER_SECRET",
+    "Content-Type": "application/json",
+  };
+  // One conversation, sent twice: once as the provider stores it, and once with
+  // the ciphertext removed. The model reads the same words either way.
+  const conversation = "the quick brown fox jumps over the lazy dog. ".repeat(400);
+  const transcript = (ciphertext) => {
+    const input = [];
+    for (let turn = 0; turn < 6; turn += 1) {
+      input.push({
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: `${turn}: ${conversation}` }],
+      });
+      // No summary, which is what a provider returns when it has none to give.
+      // `carryReasoningThroughInput` rewrites a summarized reasoning item into
+      // assistant text and the ciphertext leaves with it -- these are the items
+      // that survive into the body, and the only ones the estimate can get
+      // wrong. The premise assertion below proves they really did survive.
+      input.push({
+        type: "reasoning",
+        id: `rs_${turn}`,
+        summary: [],
+        ...(ciphertext ? { encrypted_content: `gAAAAAB${"x".repeat(40_000)}` } : {}),
+      });
+    }
+    return JSON.stringify({ model: "opencode-go/deepseek-v4-flash", input });
+  };
+  const estimateFor = async (body) => {
+    const response = await fetch(`${routerBase(routerPort)}/responses`, {
+      method: "POST",
+      headers,
+      body,
+    });
+    assert.equal(response.status, 200, router.testErrors());
+    const completed = JSON.parse(
+      (await response.text())
+        .split("\n")
+        .find((line) => line.startsWith("data:") && line.includes("response.completed"))
+        .slice(5),
+    );
+    return completed.response.usage.input_tokens;
+  };
+
+  try {
+    await waitFor(`${routerBase(routerPort)}/models`, router);
+    const sealed = await estimateFor(transcript(true));
+    const plain = await estimateFor(transcript(false));
+
+    // The premise: the router really does forward the ciphertext, so it really
+    // was on the bill. Without this the test would pass on a body that never
+    // carried the bytes in the first place.
+    const forwarded = JSON.stringify(gatewayBodies[0]);
+    assert.ok(
+      forwarded.length > JSON.stringify(gatewayBodies[1]).length * 2,
+      "the routed body did not carry the reasoning ciphertext",
+    );
+
+    // Before the fix the sealed body estimated over 80,000 against the plain
+    // body's ~34,000. The words are identical, so the estimates must be too.
+    assert.ok(
+      Math.abs(sealed - plain) <= 100,
+      `ciphertext moved the estimate: ${sealed} vs ${plain}`,
+    );
+    // And the visible conversation is still counted in full, not discarded
+    // along with the ciphertext.
+    assert.ok(sealed >= Math.ceil((conversation.length * 6) / 4), `estimate ${sealed} too low`);
+  } finally {
+    await stopChild(router);
+    await closeServer(gateway.server);
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
 // Inventing token counts is a heuristic, however tightly gated, so an operator
 // has to be able to see the provider's own numbers again without downgrading.
 test("the prompt-token estimate can be switched off", async () => {

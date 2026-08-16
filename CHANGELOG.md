@@ -78,6 +78,37 @@
   and an entry curated earlier keeps what it was given — an additive run never
   rewrites metadata a user may have tuned by hand, so repair it in
   `user-models.json` or `--remove` and curate it again.
+
+- **The substituted prompt-token estimate charged the session for reasoning no
+  model ever reads.** When a provider answers with `prompt_tokens: 0` the
+  router substitutes an estimate of the prompt it just sent, dividing the
+  serialized request body by 3.3 bytes per token. That divisor is calibrated
+  against text a model reads, and the body is not: most of a Codex turn is
+  `encrypted_content`, the sealed chain of thought carried on every reasoning
+  item. The gateway's Responses-to-chat bridge drops reasoning items outright
+  and no routed provider can decrypt another vendor's token, so those bytes buy
+  zero prompt tokens — but they were counted, and there can be a lot of them.
+  The router already sheds some: a reasoning item that carries summary text and
+  sits immediately before the turn it belongs to is rewritten into assistant
+  text, ciphertext and all. An item with an empty summary, which is what a
+  provider returns when it has none to give, is forwarded whole. Measured
+  through the router itself on a twelve-turn tool loop: with summaries no
+  ciphertext reaches the gateway at all, and without them every blob does and
+  they are 64% of the body the router sends. Charging that 64% at 3.3 bytes per
+  token is where the field reports of 3.9x–4.7x come from, and an estimate that
+  high clears `autoCompact` on a window the session is nowhere near, so it
+  compacted on every turn the provider reported as zero (#266). The
+  estimate now discounts `encrypted_content` and counts everything else. The
+  subtraction is deliberately one-sided: an unrecognized field is still counted,
+  so a body shape nobody anticipated errs high rather than estimating near zero,
+  and JSON escaping, structural scaffolding, and base64 image data all stay on
+  the bill for the same reason. The clamp to the declared context window is
+  unchanged, but it now means something. It used to fire on conversations at a
+  quarter of the limit, and since `autoCompact` is 85% of the window a clamped
+  estimate compacts by construction. Counting only model-visible bytes puts a
+  floor under it: the estimate can only reach the window if the visible text
+  does, so a clamped estimate now means the conversation really is between 82.5%
+  and 100% of the limit, where compacting is the right answer.
 - **A subagent on a thinking model poisoned the conversation that spawned it.**
   Every request after the child finished came back as a 400 reading "The
   `reasoning_content` in the thinking mode must be passed back to the API",

@@ -5,7 +5,7 @@ import { HeaderlessSseDetector } from "./sse-prefix.mjs";
 
 const MAX_JSON_CAPTURE_BYTES = 8 * 1024 * 1024;
 
-// Bytes of forwarded request body per prompt token.
+// Bytes of *model-visible* request body per prompt token.
 //
 // The familiar rule is four characters per token, which is roughly where plain
 // English lands. Source code and tool output -- what a Codex session is mostly
@@ -23,6 +23,10 @@ const MAX_JSON_CAPTURE_BYTES = 8 * 1024 * 1024;
 // the session can be summarized out of. Against real text this lands between
 // about 1.0x (code-heavy) and 1.3x (prose-heavy) of the true count, so
 // compaction fires somewhere between 690,000 and 900,000 real tokens.
+//
+// That band only holds if the bytes handed to it are bytes the model reads.
+// See NON_VISIBLE_KEY below for the one class that is not, and issue #266 for
+// what happened when it was counted anyway.
 const ESTIMATE_BYTES_PER_TOKEN = 3.3;
 
 // Below this the substitution could not affect compaction anyway, and leaving
@@ -31,6 +35,104 @@ const ESTIMATE_BYTES_PER_TOKEN = 3.3;
 // safety property is that only an explicit zero is ever replaced, and no
 // tokenizer returns zero for a prompt that serializes to kilobytes.
 const MIN_ESTIMATED_INPUT_TOKENS = 1_000;
+
+// The one field of a routed body that is provably not prompt content.
+//
+// `encrypted_content` carries a reasoning item's ciphertext -- the hidden chain
+// of thought, sealed by whoever produced it. No routed provider reads it: the
+// gateway's Responses -> Chat Completions bridge drops reasoning items outright,
+// and a Responses-native routed provider cannot decrypt another vendor's token.
+// The router's own uses are already gone by the time a body is built --
+// `normalizeRoutedInput` turns compaction items into visible text, and
+// `normalizeRoutedAgentInput` inlines every collaboration payload as
+// `input_text` -- so what remains here is ciphertext and nothing else.
+//
+// It is also the largest thing left in the body when it survives at all.
+// `carryReasoningThroughInput` rewrites a reasoning item into assistant text
+// when it can, and the ciphertext goes with it -- but only for an item that
+// carries summary text and is immediately followed by the turn it belongs to.
+// A reasoning item with an empty summary, which is what a provider returns when
+// it has no summary to give, is forwarded whole. Measured through the router
+// itself on a twelve-turn tool loop: with summaries, no ciphertext reaches the
+// gateway at all; without them, every blob does and they are 64% of the body
+// the router sends. That is the regime issue #266 was reported from, and 64%
+// of the bytes charged at 3.3 each is where 3.9x-4.7x comes from.
+//
+// Everything else stays counted. JSON escaping (0.2%-3%) and structural
+// scaffolding (1%-5%) are small and keep the estimate erring high, which is the
+// direction that matters. Base64 image data is far larger than the tokens an
+// image really costs, but what it really costs is a per-provider tiling formula
+// the router has no business inventing, so it too stays counted at the byte
+// rate -- wrong, but wrong upward.
+//
+// Subtracting what is provably invisible rather than summing what is visible is
+// the point. An unrecognized field is counted by default, so a body shape
+// nobody anticipated errs high instead of estimating near zero.
+const NON_VISIBLE_KEY = Buffer.from('"encrypted_content"', "utf8");
+const QUOTE = 0x22;
+const BACKSLASH = 0x5c;
+const COLON = 0x3a;
+
+function isJsonSpace(byte) {
+  return byte === 0x20 || byte === 0x09 || byte === 0x0a || byte === 0x0d;
+}
+
+// Bytes occupied by `encrypted_content` string values in a serialized body.
+//
+// A scan rather than a parse: these bodies reach a megabyte and a half, and the
+// estimate runs on every routed turn, so building a second object graph to
+// throw away is a cost with no answer attached. The scan is exact, not
+// heuristic. Inside a JSON string every quote is escaped, so the unescaped byte
+// sequence `"encrypted_content"` followed by a colon can only be a key -- a
+// tool result that happens to quote this very JSON appears escaped and cannot
+// match. The colon check is what separates the key from the identically named
+// content-part `type` value that sits beside it.
+function nonVisibleBytes(buffer) {
+  let total = 0;
+  let index = 0;
+  while (index < buffer.length) {
+    const key = buffer.indexOf(NON_VISIBLE_KEY, index);
+    if (key === -1) break;
+    let cursor = key + NON_VISIBLE_KEY.length;
+    index = cursor;
+    while (cursor < buffer.length && isJsonSpace(buffer[cursor])) cursor += 1;
+    if (buffer[cursor] !== COLON) continue;
+    cursor += 1;
+    while (cursor < buffer.length && isJsonSpace(buffer[cursor])) cursor += 1;
+    // `null`, or any non-string value, carries no bytes worth discounting.
+    if (buffer[cursor] !== QUOTE) continue;
+    const start = cursor;
+    const end = endOfJsonString(buffer, start);
+    // A body with no closing quote is truncated or not JSON at all. Discount
+    // nothing rather than guess where the value stopped: over-counting is the
+    // safe error, and this one would be unbounded.
+    if (end === -1) break;
+    total += end - start;
+    index = end;
+  }
+  return total;
+}
+
+// The byte after the closing quote of the JSON string opening at `start`, or -1
+// if it never closes. Hops quote to quote natively -- a ciphertext blob is tens
+// of kilobytes with nothing to escape in it, and walking that a byte at a time
+// in JS costs more than parsing the whole document.
+function endOfJsonString(buffer, start) {
+  let cursor = start + 1;
+  while (cursor < buffer.length) {
+    const quote = buffer.indexOf(QUOTE, cursor);
+    if (quote === -1) return -1;
+    // A quote is part of the value when an odd number of backslashes precede
+    // it, and closes the value otherwise.
+    let slashes = 0;
+    while (quote - slashes - 1 > start && buffer[quote - slashes - 1] === BACKSLASH) {
+      slashes += 1;
+    }
+    if (slashes % 2 === 0) return quote + 1;
+    cursor = quote + 1;
+  }
+  return -1;
+}
 
 function tokenCount(value) {
   const number = Number(value);
@@ -99,14 +201,36 @@ export function tokenUsageFromPayload(payload) {
 // bytes that went upstream rather than against a model of the conversation.
 // Returns undefined when the request is too small for the estimate to matter,
 // which is also what keeps it away from genuinely small turns.
+//
+// The bytes counted are the body minus its `encrypted_content` ciphertext.
+// Anything that is not JSON -- a compressed frame, an opaque buffer, a plain
+// string -- simply finds no key to discount and is counted whole, exactly as
+// before.
 export function estimateInputTokens(body, { contextWindow } = {}) {
-  const bytes = Buffer.isBuffer(body)
-    ? body.byteLength
-    : Buffer.byteLength(String(body ?? ""), "utf8");
+  const buffer = Buffer.isBuffer(body) ? body : Buffer.from(String(body ?? ""), "utf8");
+  const bytes = buffer.byteLength - nonVisibleBytes(buffer);
   const estimate = Math.ceil(bytes / ESTIMATE_BYTES_PER_TOKEN);
   if (estimate < MIN_ESTIMATED_INPUT_TOKENS) return undefined;
   // A request the provider answered cannot have exceeded the window, so the
   // estimate is never allowed to claim it did.
+  //
+  // Clamping to the window is the same value it always was, but it no longer
+  // means the same thing. It used to fire on conversations nowhere near the
+  // limit -- a body three quarters ciphertext crossed the window at a quarter
+  // of its real size -- and because `autoCompact` is 85% of the window, a
+  // clamped estimate sits above the compaction threshold by construction, so
+  // every one of those turns compacted for nothing. That was the bug: not the
+  // clamp, but what was allowed to reach it.
+  //
+  // Counting only model-visible bytes puts a floor under it. For the estimate
+  // to exceed the window the visible text must exceed `contextWindow * 3.3`
+  // bytes, and real text tokenizes between 3.3 (code) and 4.0 (prose) bytes per
+  // token -- so a clamped estimate means the true count is between 82.5% and
+  // 100% of the window. `autoCompact` sits at 85%. Compacting there is correct:
+  // the conversation really is against the limit, and the alternative, reporting
+  // something below the threshold, would skip the compaction and hand the next
+  // turn to the provider to reject. Erring high costs a summary; erring low
+  // costs the turn.
   return Number.isInteger(contextWindow) && contextWindow > 0
     ? Math.min(estimate, contextWindow)
     : estimate;
