@@ -813,14 +813,18 @@ bridge that runs `cursor-agent` per request and speaks chat completions back:
 
 ```sh
 cursor-agent login          # once, in an interactive terminal
-./bin/cursor-bridge &       # serves http://127.0.0.1:4209/v1
 ./bin/model-router codex providers enable cursor-cli
 ./bin/curate-models cursor-cli
 ```
 
-Models land in the `cursor-cli/<model-id>` namespace. Set
-`MODEL_ROUTER_CURSOR_BRIDGE_PORT` and `MODEL_ROUTER_CURSOR_BASE_URL` together
-if 4209 is taken.
+The router service starts and supervises the bridge on
+`http://127.0.0.1:4209/v1`, so there is nothing to launch and nothing to
+restart after a reboot. Set `MODEL_ROUTER_CURSOR_BRIDGE_PORT` if 4209 is taken;
+the service derives the provider's address from it. `./bin/cursor-bridge` runs
+one in the foreground for debugging — that standalone form is the only case
+that also needs `MODEL_ROUTER_CURSOR_BASE_URL`.
+
+Models land in the `cursor-cli/<model-id>` namespace.
 
 Two limits are worth knowing before you enable it. `cursor-agent` returns text
 and never OpenAI tool calls, so a Cursor model answers questions but cannot

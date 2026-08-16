@@ -1015,9 +1015,17 @@ bridge is the integration.
    bridge not running both surface as "every Cursor model 502s", so the doctor
    names them separately -- and probes neither unless the provider is selected,
    because `cursor-agent models` is a network round trip to Cursor.
-8. The bridge default port (4209) and the `baseUrl` checked into
-   `config/cursor/cursor.json` are one fact in two files. Change both or
-   neither.
+8. **The service owns the bridge's lifetime, not the operator.** `start.mjs`
+   launches and health-gates it beside the other forwarders. A bridge somebody
+   starts by hand is one reboot away from every Cursor model 502ing while the
+   router reports itself healthy; `bin/cursor-bridge` is for debugging one in
+   the foreground, not the supported way to run it.
+9. The bridge default port (4209) and the `baseUrl` checked into
+   `config/cursor/cursor.json` are one fact in two files, and `start.mjs`
+   republishes the resolved address through the provider's own
+   `MODEL_ROUTER_CURSOR_BASE_URL` so a moved port cannot strand the registry
+   entry on the old one. `test/cursor-cli-bridge.test.mjs` asserts all three
+   agree; do not change one and leave the others.
 
 ## Codex safety boundaries
 
