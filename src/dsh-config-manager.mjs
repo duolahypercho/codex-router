@@ -22,7 +22,6 @@ import {
   DSH_HOME,
   DSH_SETTINGS_PATH,
   CALLER_SECRET_PATH,
-  NATIVE_CATALOG_PATH,
   PORTS,
 } from "./paths.mjs";
 import { protectPrivateFile } from "./file-security.mjs";
@@ -30,20 +29,13 @@ import {
   DSH_CREDENTIAL_REF,
   DSH_ROUTE_ID,
   buildDshRoute,
-  dshCatalogModels,
   dshDefaultModel,
-  dshNativeModels,
   renderDshRouteLines,
   unmappableEfforts,
 } from "./dsh-catalog.mjs";
-import { readHiddenModels } from "./model-picker-state.mjs";
 import { readMultiAgentSettings, subagentEligibleModels } from "./multi-agent-state.mjs";
-import { applySubagentProofs, subagentProofSnapshot } from "./subagent-proofs.mjs";
-import { selectedConfiguredListedModels } from "./provider-selection.mjs";
 import { assertStateOwnership } from "./state-owner.mjs";
-import { nativeSessionAvailable } from "./codex-native-session.mjs";
-import { resolveVisionEngine } from "./vision-bridge.mjs";
-import { readVisionBridgeSettings } from "./vision-bridge-state.mjs";
+import { routedClientModels } from "./routed-client-models.mjs";
 import { scanYamlDocument, spliceYamlBlock, yamlNode, yamlScalar } from "./yaml-structure.mjs";
 
 const ROUTE_PATH = ["llm-pi-ai", "providers", DSH_ROUTE_ID];
@@ -253,44 +245,17 @@ function restoreDefaultModel(contents) {
   return { contents: joinLines(normalizeTrailing(lines)), restored: true };
 }
 
-// The native catalog Codex itself published, captured by `catalog.mjs`. Read
-// rather than re-derived: it is the same document the Codex picker is built
-// from, so the harness cannot end up advertising a native model Codex does not
-// have. Absent simply means no native models are offered.
-function readNativeCatalogModels() {
-  if (!existsSync(NATIVE_CATALOG_PATH)) return [];
-  try {
-    const parsed = JSON.parse(readFileSync(NATIVE_CATALOG_PATH, "utf8"));
-    return Array.isArray(parsed?.models) ? parsed.models : [];
-  } catch {
-    return [];
-  }
-}
-
-/** The routed models the harness should be offered, vision bridge included. */
+/**
+ * The routed models the harness should be offered, vision bridge included.
+ *
+ * The rule is not the harness's own -- what may be published to a client that
+ * carries no ChatGPT session of its own is the same question for every such
+ * client -- so it lives in `routed-client-models.mjs` and both integrations
+ * read it. Two copies would drift, and the way that shows is one picker
+ * offering a model the other just lost.
+ */
 export function dshRoutedModels() {
-  const hidden = readHiddenModels();
-  // The same machine-local capability proofs the Codex catalog honors: a
-  // model this machine verified as a subagent is one everywhere the proven
-  // set is consumed, or the harness's tool-subagent preset silently disagrees
-  // with the picker about which children exist.
-  const selected = applySubagentProofs(
-    selectedConfiguredListedModels().filter((model) => !hidden.has(String(model.slug))),
-    subagentProofSnapshot(),
-    { hidden, disabled: readMultiAgentSettings().disabled },
-  );
-  // Native GPT models are authorized by a ChatGPT session rather than an API
-  // key. The harness carries none of its own -- but this machine is signed in
-  // to Codex, and the router relays that session for a caller that brought
-  // nothing (see `codex-native-session.mjs`). So they are publishable exactly
-  // while that fallback can supply one, and withheld the moment it cannot.
-  const native = nativeSessionAvailable() ? dshNativeModels(readNativeCatalogModels()) : [];
-  // The vision engine still resolves over routed candidates only. A native
-  // engine is spent per-caller, and `vision-engines` wants each call site to
-  // name its evidence; this one's is that a bridge read is issued by the router
-  // on the caller's behalf, which is not the same as relaying their turn.
-  const engine = resolveVisionEngine(() => selected, readVisionBridgeSettings());
-  return { models: [...dshCatalogModels(selected, engine), ...native], engine };
+  return routedClientModels();
 }
 
 function buildRoute() {

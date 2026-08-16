@@ -2,20 +2,22 @@
 
 Use Anthropic, Kimi, DeepSeek, xAI, GitHub Copilot, opencode Go, Command Code,
 and future external models inside the Codex App and CLI — or inside
-[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) — through
+[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) or
+[Gemini CLI](https://github.com/google-gemini/gemini-cli) — through
 one local, credential-isolating router.
 The integration speaks the Responses API and merges external entries into
 Codex's native model catalog, so routed models appear in the normal picker
 next to the native GPT models. The same routed models publish into the
-harness as one provider route, so they appear in its Models page too.
+harness as one provider route, so they appear in its Models page too, and into
+Gemini CLI through a Gemini-shaped endpoint the router serves for it.
 
-Both clients share one installation: one background service, one gateway, one
-set of provider credentials, one provider selection. Installing the second
-integration does not ask for a single key again.
+Every client shares one installation: one background service, one gateway, one
+set of provider credentials, one provider selection. Installing a second or
+third integration does not ask for a single key again.
 
 Codex Router is an independent community project. It is not affiliated with or
 endorsed by OpenAI, GitHub, Anthropic, Moonshot AI, DeepSeek, OpenRouter,
-opencode, or the referenced opencodex project.
+opencode, Google, or the referenced opencodex project.
 
 ## Give the link to your agent
 
@@ -1296,6 +1298,59 @@ is the default. To put children on a *different* routed model, paste the block
 from `./bin/model-router dsh subagent-preset` into your preset's
 `agent.cordis.yml` — the router will not edit a preset it does not own.
 
+## Make models appear in Gemini CLI
+
+[Gemini CLI](https://github.com/google-gemini/gemini-cli) (`gemini`) speaks only
+the Gemini API, so the router serves it one: a Gemini-shaped endpoint that
+translates each turn into the same Responses request Codex makes and answers
+with the same models. Google ships no bring-your-own-provider setting, but the
+CLI does read its endpoint, its credential, and its default model from the
+environment — which is the whole integration.
+
+```sh
+./install.sh --target gemini --auto --providers configured
+# or, on an install that already serves Codex:
+./bin/model-router gemini enable
+```
+
+That writes one marker block into `~/.gemini/.env`:
+
+```sh
+# BEGIN codex-router-gemini
+GOOGLE_GEMINI_BASE_URL=http://127.0.0.1:4202/_codex-router/<caller-key>/gemini
+GEMINI_API_KEY=<caller-key>
+GEMINI_MODEL=anthropic/claude-opus-4-6
+# END codex-router-gemini
+```
+
+The next `gemini` run picks it up — there is nothing to restart. If the CLI asks
+how to authenticate, choose **Use Gemini API key** once; the key is this
+router's local caller capability, not a Google one, and it never leaves the
+machine.
+
+**What is preserved.** Your `settings.json` is never opened for writing: it is
+JSONC and carries your comments, and this integration does not need it. Every
+other line of `~/.gemini/.env` is left exactly as it was, and
+`./bin/model-router gemini disable` removes the block and restores the file. An
+assignment of one of those three keys *outside* the block stops the publish with
+the line named rather than being silently overwritten — `dotenv` lets the last
+assignment win, so a duplicate would quietly decide which endpoint is in force.
+
+**Picking a model.** `--model vendor/slug` overrides the published default for
+one run; `GEMINI_MODEL` in the block is the default for the rest. Pass
+`--no-default-model` to `src/gemini-config-manager.mjs install` to leave the key
+out entirely, in which case the CLI falls back to its own Gemini default — which
+this router does not route, so a turn without `--model` will be refused by name.
+
+**What is not served.** Embeddings (`:embedContent`) are refused with a named
+501: no routed provider exposes an embedding endpoint through the router, and a
+fabricated vector would be worse than an error. `:countTokens` is answered from
+a byte-count estimate rather than by spending a real turn upstream.
+
+**Native GPT models** publish here under the same rule as the harness, described
+above: while this machine has a usable Codex session, and withheld the moment it
+does not.
+
 ## macOS tray control panel
 
 On macOS, build and open the native menu-bar control panel with:
@@ -1431,6 +1486,15 @@ integration instead:
 ./bin/model-router dsh status
 ./bin/model-router dsh subagent-preset   # block to paste for a routed child model
 ./bin/model-router dsh disable           # remove the route, keep everything else
+```
+
+…or `gemini` to act on the Gemini CLI integration:
+
+```sh
+./bin/model-router gemini enable         # publish the routed models
+./bin/model-router gemini doctor
+./bin/model-router gemini status
+./bin/model-router gemini disable        # remove the managed block, keep the rest
 ```
 
 The optional live check makes one small request per selected provider and may

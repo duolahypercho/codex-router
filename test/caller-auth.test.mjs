@@ -14,7 +14,9 @@ import { fileURLToPath } from "node:url";
 import {
   authenticatedRoute,
   callerBaseUrl,
+  geminiBaseUrl,
   isManagedCallerBaseUrl,
+  isManagedGeminiBaseUrl,
   redactCallerUrl,
 } from "../src/caller-auth.mjs";
 import { privateFileIsProtected } from "../src/file-security.mjs";
@@ -49,6 +51,34 @@ test("caller capability helpers accept only the secret-bearing path and redact i
     redactCallerUrl(baseUrl),
     "http://127.0.0.1:46192/_codex-router/[REDACTED]/v1",
   );
+});
+
+test("the gemini leaf sits behind the same capability and is redacted with it", () => {
+  // Gemini CLI appends `/v1beta/models/...` to whatever base URL it is given,
+  // so the capability has to be a path prefix here exactly as it is for `/v1`.
+  // A leaf that redaction does not know about is a caller key printed verbatim
+  // into doctor output, status output, and support bundles.
+  const baseUrl = geminiBaseUrl(46192, CALLER_KEY);
+  assert.equal(baseUrl, `http://127.0.0.1:46192/_codex-router/${CALLER_KEY}/gemini`);
+  assert.equal(
+    authenticatedRoute(
+      `/_codex-router/${CALLER_KEY}/gemini/v1beta/models/vendor/model:generateContent`,
+      CALLER_KEY,
+    ),
+    "/gemini/v1beta/models/vendor/model:generateContent",
+  );
+  assert.equal(
+    redactCallerUrl(baseUrl),
+    "http://127.0.0.1:46192/_codex-router/[REDACTED]/gemini",
+  );
+  assert.equal(
+    redactCallerUrl(`${baseUrl}/v1beta/models`),
+    "http://127.0.0.1:46192/_codex-router/[REDACTED]/gemini/v1beta/models",
+  );
+  assert.equal(isManagedGeminiBaseUrl(baseUrl, 46192), true);
+  assert.equal(isManagedGeminiBaseUrl(baseUrl, 4102), false);
+  assert.equal(isManagedGeminiBaseUrl(callerBaseUrl(46192, CALLER_KEY), 46192), false);
+  assert.equal(isManagedGeminiBaseUrl(`${baseUrl}?key=x`, 46192), false);
 });
 
 test("secret setup creates stable, separate, current-user-only keys", () => {

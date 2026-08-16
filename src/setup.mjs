@@ -473,6 +473,9 @@ async function main() {
 
   nextStep("Review and install");
   const dshTarget = TARGET === "dsh";
+  // Like the harness, Gemini CLI has no native catalog to adopt: that list is
+  // the ChatGPT-plan model set Codex publishes for itself.
+  const geminiTarget = TARGET === "gemini";
   if (guided) {
     process.stdout.write(
       `\nReady to install:\n` +
@@ -480,8 +483,10 @@ async function main() {
         `  Migration: ${migration ? "recognized older router (rollback snapshot kept)" : "none needed"}\n` +
         (dshTarget
           ? `  Changes: per-user background service and one provider route in the harness settings document\n`
-          : `  Native catalog: ${adoptNativeCatalog ? "adopt existing user catalog" : "capture from Codex"}\n` +
-            `  Changes: per-user background service and the managed Codex config block\n`),
+          : geminiTarget
+            ? `  Changes: per-user background service and one managed block in Gemini CLI's environment file\n`
+            : `  Native catalog: ${adoptNativeCatalog ? "adopt existing user catalog" : "capture from Codex"}\n` +
+              `  Changes: per-user background service and the managed Codex config block\n`),
     );
     if (!confirm("Proceed?")) {
       throw incomplete("Setup was cancelled before installing the service.");
@@ -529,7 +534,11 @@ async function main() {
     dshTarget
       ? `\nDeepSeek Harness is ready with: ${providerSummary}\n` +
         `It reloads its settings document on the next request, so there is nothing to restart.\n`
-      : `\nCodex Router is ready with: ${providerSummary}\nFully quit Codex, reopen it, and start a new task.\n`,
+      : geminiTarget
+        ? `\nGemini CLI is ready with: ${providerSummary}\n` +
+          `It reads its environment at startup, so the next \`gemini\` run picks this up.\n` +
+          `If it asks how to authenticate, choose "Use Gemini API key" once -- the key is this router's local caller capability.\n`
+        : `\nCodex Router is ready with: ${providerSummary}\nFully quit Codex, reopen it, and start a new task.\n`,
   );
   if (visionBridge?.enabled && visionBridge.engine) {
     process.stdout.write(

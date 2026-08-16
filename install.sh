@@ -26,7 +26,8 @@ Install external model routes for Codex or DeepSeek Harness.
 
 Options:
   --install-dir PATH  Stable checkout used by the background service
-  --target APP        Install for "codex" (default) or "dsh" (DeepSeek Harness)
+  --target APP        Install for "codex" (default), "dsh" (DeepSeek Harness),
+                      or "gemini" (Gemini CLI)
   --prepare-only      Install dependencies without changing either app
   --api-key           Alias for --kimi-api-key
   --kimi-api-key      Prompt securely for a Kimi Platform API key
@@ -99,7 +100,7 @@ local_modifications_message() {
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --target)
-      [ "$#" -ge 2 ] || die "--target requires codex or dsh"
+      [ "$#" -ge 2 ] || die "--target requires codex, dsh, or gemini"
       target=$2
       shift 2
       ;;
@@ -185,8 +186,8 @@ while [ "$#" -gt 0 ]; do
 done
 
 case "$target" in
-  codex|dsh) ;;
-  *) die "--target must be codex or dsh" ;;
+  codex|dsh|gemini) ;;
+  *) die "--target must be codex, dsh, or gemini" ;;
 esac
 # Legacy migration replaces an older router's managed Codex config block, and
 # the native catalog is the ChatGPT-plan model list Codex adopts. Neither has a

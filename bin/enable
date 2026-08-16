@@ -5,8 +5,8 @@ repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$repo_dir"
 target=${MODEL_ROUTER_TARGET:-codex}
 case "$target" in
-  codex|dsh) ;;
-  *) echo "MODEL_ROUTER_TARGET must be codex or dsh." >&2; exit 2 ;;
+  codex|dsh|gemini) ;;
+  *) echo "MODEL_ROUTER_TARGET must be codex, dsh, or gemini." >&2; exit 2 ;;
 esac
 CODEX_ROUTER_NODE_BIN=${CODEX_ROUTER_NODE_BIN:-$(command -v node)}
 export CODEX_ROUTER_NODE_BIN
@@ -17,7 +17,7 @@ for argument in "$@"; do
     *) echo "Usage: $0 [--adopt-native-catalog]" >&2; exit 2 ;;
   esac
 done
-if [ "$target" = dsh ] && [ "$adopt_native_catalog" = true ]; then
+if [ "$target" != codex ] && [ "$adopt_native_catalog" = true ]; then
   echo "--adopt-native-catalog applies to the Codex integration only." >&2
   exit 2
 fi
@@ -30,6 +30,10 @@ fi
 # selection, the gateway route table, and the service are one shared plane.
 if [ "$target" = dsh ]; then
   config_manager=src/dsh-config-manager.mjs
+  config_enable_command=install
+  config_disable_command=uninstall
+elif [ "$target" = gemini ]; then
+  config_manager=src/gemini-config-manager.mjs
   config_enable_command=install
   config_disable_command=uninstall
 else
@@ -67,6 +71,9 @@ node src/litellm-config.mjs
 if [ "$target" != dsh ] && [ -s "$state_dir/dsh-models.json" ]; then
   node src/dsh-config-manager.mjs install >/dev/null
 fi
+if [ "$target" != gemini ] && [ -s "$state_dir/gemini-models.json" ]; then
+  node src/gemini-config-manager.mjs install >/dev/null
+fi
 config_enabled=true
 if [ "$adopt_native_catalog" = true ]; then
   node "$config_manager" "$config_enable_command" --adopt-native-catalog
@@ -81,6 +88,9 @@ service_installed=false
 trap - EXIT HUP INT TERM
 if [ "$target" = dsh ]; then
   echo "External model routes published to DeepSeek Harness. It reloads them on the next request."
+elif [ "$target" = gemini ]; then
+  echo "External model routes published to Gemini CLI. The next \`gemini\` run picks them up."
+  echo "Choose \"Use Gemini API key\" once if it asks how to authenticate; the key is this router's local caller capability."
 else
   echo "External model routes enabled. Fully quit and reopen Codex."
 fi

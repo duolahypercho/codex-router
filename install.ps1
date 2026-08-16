@@ -3,7 +3,7 @@ param(
   [switch]$CheckoutInstall,
   [switch]$PrepareOnly,
   [switch]$ForceDeps,
-  [ValidateSet("codex", "dsh")]
+  [ValidateSet("codex", "dsh", "gemini")]
   [string]$Target = "codex",
   [switch]$Guided,
   [switch]$Auto,
@@ -233,9 +233,13 @@ if ([int]$VersionParts[0] -lt 22 -or
 
 # Each target enables its own client configuration; everything around that one
 # step is the shared router plane.
-$ConfigManager = if ($Target -eq "dsh") { "src\dsh-config-manager.mjs" } else { "src\config-manager.mjs" }
-$ConfigEnableCommand = if ($Target -eq "dsh") { "install" } else { "enable" }
-$ConfigDisableCommand = if ($Target -eq "dsh") { "uninstall" } else { "disable" }
+$ConfigManager = switch ($Target) {
+  "dsh" { "src\dsh-config-manager.mjs" }
+  "gemini" { "src\gemini-config-manager.mjs" }
+  default { "src\config-manager.mjs" }
+}
+$ConfigEnableCommand = if ($Target -eq "codex") { "enable" } else { "install" }
+$ConfigDisableCommand = if ($Target -eq "codex") { "disable" } else { "uninstall" }
 $ConfigEnabled = $false
 $ServiceInstalled = $false
 $AdoptionPending = $false
@@ -377,6 +381,9 @@ try {
   # The router plane is shared, so an install for one client changes the routable
   # set for the other. Republish whichever integration is already installed here
   # rather than leaving it advertising a stale model list.
+  if ($Target -ne "gemini" -and (Test-NonEmptyFile (Join-Path $StateRoot "gemini-models.json"))) {
+    & node src/gemini-config-manager.mjs install | Out-Null
+  }
   if ($Target -ne "dsh" -and (Test-NonEmptyFile (Join-Path $StateRoot "dsh-models.json"))) {
     & node src/dsh-config-manager.mjs install | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "DeepSeek Harness republish failed." }
@@ -402,6 +409,9 @@ try {
   if ($LASTEXITCODE -ne 0) { throw "Install-manifest recording failed." }
   if ($Target -eq "dsh") {
     Write-Host "Published the selected external model routes to DeepSeek Harness. It reloads them on the next request."
+  } elseif ($Target -eq "gemini") {
+    Write-Host "Published the selected external model routes to Gemini CLI. The next 'gemini' run picks them up."
+    Write-Host "Choose 'Use Gemini API key' once if it asks how to authenticate; the key is this router's local caller capability."
   } else {
     Write-Host "Installed the selected external model routes. Fully quit and reopen Codex."
   }

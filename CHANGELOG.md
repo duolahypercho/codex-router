@@ -2,6 +2,53 @@
 
 ## Unreleased
 
+- **Gemini CLI is a target.** It speaks only the Gemini API and Google ships no
+  bring-your-own-provider setting, so pointing it at this router used to be
+  impossible — the endpoint it wants does not exist anywhere in the codebase.
+  It does, however, read its endpoint, its credential, and its default model
+  from the environment, and `createContentGenerator` builds a plain
+  `@google/genai` client from them. So the router now serves
+  `/_codex-router/<key>/gemini/v1beta/models/{model}:{method}` and writes one
+  marker block into `~/.gemini/.env`. `./install.sh --target gemini` or
+  `./bin/model-router gemini enable` sets it up; the next `gemini` run has the
+  routed models, with nothing to restart.
+  The surface reaches no provider of its own. It translates the turn into a
+  Responses request and sends it through the router's existing `/v1/responses`
+  over the loopback, so tool-result ageing, the vision bridge, prompt-token
+  substitution, upstream retry, model failover, and usage accounting all still
+  sit on one request path rather than two that would drift. Tools, system
+  instructions, inline images, streaming deltas, reasoning summaries, tool calls
+  and their results, usage counts, and finish reasons all cross in both
+  directions. A stream the upstream drops still ends with a finish reason,
+  because the SDK waits for one before it considers a turn over.
+  `settings.json` is never opened for writing: it is JSONC carrying the user's
+  own comments, and this integration does not need it. The `.env` block is the
+  only thing written, it is 0600 because it holds the caller key, publishing
+  twice is byte-identical, and removing it restores the file exactly. A managed
+  key assigned outside the block stops the publish with the line named rather
+  than being silently overwritten — `dotenv` lets the last assignment win, so a
+  duplicate would quietly decide which endpoint is in force and nothing in the
+  file would say so.
+  The default model is written, unlike the harness integration's opt-in
+  equivalent, because Gemini CLI's own default is a Gemini model this router
+  does not route: an install that left it alone would 404 on the first turn.
+  `--model` still outranks it and `--no-default-model` omits it.
+  Embeddings are refused with a named 501 rather than faked, and `countTokens`
+  is estimated rather than answered by spending a real turn upstream.
+  None of this is documented by Google. The contract was read out of the
+  installed `@google/genai` and `@google/gemini-cli-core` bundles and then
+  proved by driving the real `gemini -p` at a real provider: a routed turn came
+  back through the CLI verbatim, and a tool-calling turn completed the whole
+  loop — ten tool schemas out, a tool call in, its result back out, and the
+  model's answer in. That live run is what caught the one bug the unit tests
+  could not: a Gemini tool declares its schema as `parametersJsonSchema`, not
+  `parameters`, so the first cut sent every tool upstream with no schema at all
+  and the CLI rejected each call the model made with "params must have required
+  property 'file_path'".
+- The rule for which models may be published to a client that carries no ChatGPT
+  session of its own now lives in `src/routed-client-models.mjs` instead of
+  inside the harness manager. It was always a general rule; a second client
+  wanting it verbatim is what made a second copy the wrong answer.
 - **Grok OAuth no longer loses late or custom tool calls.** The forwarder now
   accepts `function_call` and `custom_tool_call` items that first appear in
   `response.output_item.done`, restores final arguments when argument deltas

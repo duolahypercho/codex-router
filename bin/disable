@@ -31,5 +31,11 @@ case "${MODEL_ROUTER_TARGET:-codex}" in
     echo "The codex-router provider route was removed from DeepSeek Harness."
     echo "Every other settings section, provider route, and stored credential was preserved."
     ;;
-  *) echo "MODEL_ROUTER_TARGET must be codex or dsh." >&2; exit 2 ;;
+  gemini)
+    node src/gemini-config-manager.mjs uninstall >/dev/null
+    retire_service_if_unused
+    echo "The router's managed block was removed from Gemini CLI's environment file."
+    echo "Every other line in that file, and its settings.json, were left untouched."
+    ;;
+  *) echo "MODEL_ROUTER_TARGET must be codex, dsh, or gemini." >&2; exit 2 ;;
 esac

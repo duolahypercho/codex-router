@@ -8,7 +8,7 @@ import { promoteNativeMultiAgent } from "./catalog.mjs";
 // The publish marker lives under the shared state directory, which does not
 // vary by target, so reading it here does not disturb the per-target probes
 // below that re-import paths with their own MODEL_ROUTER_TARGET.
-import { DSH_CATALOG_PATH } from "./paths.mjs";
+import { DSH_CATALOG_PATH, GEMINI_CATALOG_PATH } from "./paths.mjs";
 // Same reasoning: presence is a property of the shared plane, not of a target,
 // so the overview can resolve it statically without perturbing those probes.
 import { presenceSnapshot } from "./presence-state.mjs";
@@ -27,7 +27,12 @@ const REPO_ROOT = path.resolve(path.dirname(SELF), "..");
 // run. `dsh-models.json` is written by the publish and removed by the
 // uninstall, so its presence is exactly the question being asked.
 const DSH_PUBLISHED = DSH_CATALOG_PATH;
-const TARGETS = existsSync(DSH_PUBLISHED) ? ["codex", "dsh"] : ["codex"];
+const GEMINI_PUBLISHED = GEMINI_CATALOG_PATH;
+const TARGETS = [
+  "codex",
+  ...(existsSync(DSH_PUBLISHED) ? ["dsh"] : []),
+  ...(existsSync(GEMINI_PUBLISHED) ? ["gemini"] : []),
+];
 const args = process.argv.slice(2);
 
 function targetIsActive(target) {
@@ -35,6 +40,9 @@ function targetIsActive(target) {
   // service's own status for more than one of them. For the harness it is
   // whether the route has been published into its settings document.
   if (target === "dsh") return existsSync(DSH_PUBLISHED);
+  // Same question for Gemini CLI: whether this router published its `.env`
+  // block. The CLI itself is not a resident process there is anything to poll.
+  if (target === "gemini") return existsSync(GEMINI_PUBLISHED);
   const result = spawnSync(process.execPath, [path.join(REPO_ROOT, "src", "service.mjs"), "status"], {
     env: { ...process.env, MODEL_ROUTER_TARGET: target },
     encoding: "utf8",
@@ -403,7 +411,9 @@ function refreshActiveTarget(target) {
       ? [process.execPath, [path.join(REPO_ROOT, "src", "catalog.mjs")]]
       : target === "dsh"
         ? [process.execPath, [path.join(REPO_ROOT, "src", "dsh-config-manager.mjs"), "install"]]
-        : undefined;
+        : target === "gemini"
+          ? [process.execPath, [path.join(REPO_ROOT, "src", "gemini-config-manager.mjs"), "install"]]
+          : undefined;
   if (!command) return;
   const result = spawnSync(command[0], command[1], {
     env: { ...process.env, MODEL_ROUTER_TARGET: target },

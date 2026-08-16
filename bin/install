@@ -15,8 +15,8 @@ MODEL_ROUTER_ALLOW_FOREIGN_STATE=1
 export MODEL_ROUTER_ALLOW_FOREIGN_STATE
 
 case "$target" in
-  codex|dsh) ;;
-  *) echo "MODEL_ROUTER_TARGET must be codex or dsh." >&2; exit 2 ;;
+  codex|dsh|gemini) ;;
+  *) echo "MODEL_ROUTER_TARGET must be codex, dsh, or gemini." >&2; exit 2 ;;
 esac
 
 for argument in "$@"; do

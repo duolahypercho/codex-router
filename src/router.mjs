@@ -13,9 +13,11 @@ import { promisify } from "node:util";
 import {
   assertCallerSecret,
   authenticatedRoute,
+  callerBaseUrl,
   secretEqual,
 } from "./caller-auth.mjs";
 import { handlePanelRequest, isPanelRoute } from "./desktop-panel.mjs";
+import { handleGeminiRequest, isGeminiRoute } from "./gemini-surface.mjs";
 import {
   applyKeepAliveTimeouts,
   endStreamedResponse,
@@ -1799,6 +1801,25 @@ async function handleModels(response) {
   writeJson(response, 200, { object: "list", data });
 }
 
+// What the Gemini surface will accept a turn for.
+//
+// Deliberately the catalog the router already serves on `/v1/models`, not the
+// narrower set the Gemini settings document was published with. The gate exists
+// so a typo cannot fall through to the native path and quietly become a
+// ChatGPT-session request; being *stricter* than the published list would
+// instead refuse a model the user was legitimately offered, and a native model
+// whose session has since expired is better served by the provider's own 401
+// than by a 404 that misdescribes why.
+function geminiRoutedModels() {
+  return catalogModels().map((model) => ({
+    slug: String(model.slug),
+    displayName: model.display_name || model.displayName || String(model.slug),
+    contextWindow: Number.isFinite(model.context_window)
+      ? model.context_window
+      : model.contextWindow,
+  }));
+}
+
 function requireCodexTransport(request, response) {
   if (request.headers.origin || request.headers["sec-fetch-site"]) {
     writeJson(response, 403, {
@@ -3040,6 +3061,17 @@ async function handleRequest(request, response) {
   }
   if (request.method === "GET" && ["/models", "/v1/models"].includes(requestUrl.pathname)) {
     await handleModels(response);
+    return;
+  }
+  // Gemini CLI speaks nothing but the Gemini API, so it gets its own leaf
+  // behind the same capability. The handler translates and re-enters
+  // `/v1/responses` over the loopback rather than reaching a provider itself --
+  // there is still exactly one request path to keep correct.
+  if (isGeminiRoute(requestUrl.pathname)) {
+    await handleGeminiRequest(request, response, requestUrl.pathname, {
+      responsesUrl: `${callerBaseUrl(LISTEN_PORT, CALLER_KEY)}/responses`,
+      routedModels: geminiRoutedModels,
+    });
     return;
   }
   if (request.method === "OPTIONS") {

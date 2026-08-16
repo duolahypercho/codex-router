@@ -11,7 +11,8 @@ cd "$repo_dir"
 case "${MODEL_ROUTER_TARGET:-codex}" in
   codex) ;;
   dsh) echo "Native subagent overrides are a Codex concept. For DeepSeek Harness run: ./bin/model-router dsh subagent-preset" >&2; exit 2 ;;
-  *) echo "MODEL_ROUTER_TARGET must be codex or dsh." >&2; exit 2 ;;
+  gemini) echo "Native subagent overrides are a Codex concept. Gemini CLI delegates through its own subagents, which the router does not configure." >&2; exit 2 ;;
+  *) echo "MODEL_ROUTER_TARGET must be codex, dsh, or gemini." >&2; exit 2 ;;
 esac
 
 command=${1:-status}

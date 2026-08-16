@@ -28,6 +28,8 @@ import {
   CONFIG_PATH,
   DSH_CATALOG_PATH,
   DSH_SETTINGS_PATH,
+  GEMINI_CATALOG_PATH,
+  GEMINI_ENV_PATH,
   INTERNAL_SECRET_PATH,
   LITELLM_CONFIG_PATH,
   MERGED_CATALOG_PATH,
@@ -333,14 +335,22 @@ if (codexTarget) {
 }
 // Both clients hold the managed base URL, which is a local caller capability,
 // so both documents are held to the same privacy bound.
-const privacyTarget = codexTarget ? CONFIG_PATH : DSH_SETTINGS_PATH;
+const privacyTarget = codexTarget
+  ? CONFIG_PATH
+  : TARGET === "gemini"
+    ? GEMINI_ENV_PATH
+    : DSH_SETTINGS_PATH;
 const configMode = existsSync(privacyTarget)
   ? statSync(privacyTarget).mode & 0o777
   : undefined;
 const configProtected = privateFileIsProtected(privacyTarget);
 add(
   configProtected ? "ok" : "fail",
-  codexTarget ? "Codex config privacy" : "Harness settings privacy",
+  codexTarget
+    ? "Codex config privacy"
+    : TARGET === "gemini"
+      ? "Gemini environment privacy"
+      : "Harness settings privacy",
   configMode === undefined
     ? "missing"
     : process.platform === "win32"
@@ -359,7 +369,9 @@ let requiredModels = new Set();
 // model as unoffered on a machine that has no Codex at all.
 const routedTransportActive = codexTarget
   ? routedCatalogConfigured(existsSync(CONFIG_PATH) ? readFileSync(CONFIG_PATH, "utf8") : "")
-  : existsSync(DSH_CATALOG_PATH);
+  : TARGET === "gemini"
+    ? existsSync(GEMINI_CATALOG_PATH)
+    : existsSync(DSH_CATALOG_PATH);
 // An install made with --no-provider --no-discovery is idle on purpose: the
 // selection is an explicit empty list and the discovery marker is set. That
 // state is what the operator asked for, so the empty selection and the empty
@@ -814,7 +826,57 @@ for (const provider of PROVIDERS.values()) {
   }
 }
 
-if (TARGET === "dsh") {
+if (TARGET === "gemini") {
+  try {
+    const gemini = childJson("gemini-config-manager.mjs", ["status"]);
+    add(
+      gemini.installed && gemini.baseUrlManaged ? "ok" : "fail",
+      "Gemini routing config",
+      gemini.installed
+        ? gemini.baseUrlManaged
+          ? `${gemini.managedKeys.join(", ")} in ${gemini.envPath}`
+          : `${gemini.envPath} names a base URL this router does not serve (${gemini.baseUrl})`
+        : `no managed block in ${gemini.envPath}`,
+      "Run ./bin/model-router gemini enable.",
+    );
+    // A managed key assigned outside the block is the failure mode this
+    // integration has that the others do not: dotenv lets the last assignment
+    // of a key win, so a duplicate silently decides the endpoint or the
+    // credential and nothing about the file says which one is in force.
+    add(
+      gemini.documentReadable && !gemini.conflicts.length ? "ok" : "fail",
+      "Gemini environment conflicts",
+      !gemini.documentReadable
+        ? `${gemini.envPath} could not be read plainly; its managed block markers are damaged`
+        : gemini.conflicts.length
+          ? gemini.conflicts.map(({ key, line }) => `${key} (line ${line})`).join(", ")
+          : "no competing assignments",
+      `Remove or comment out the competing assignments in ${gemini.envPath}, then run ./bin/model-router gemini enable.`,
+    );
+    // The model list is served live off the router's own catalog, so it cannot
+    // drift. The published default model can: it is one slug, written once, and
+    // a default naming a model the routable set has lost puts every fresh
+    // session on a 404 before the user has typed anything.
+    const drift = childJson("gemini-config-manager.mjs", ["drift"]);
+    add(
+      drift.defaultMissing ? "warn" : "ok",
+      "Gemini default model",
+      gemini.defaultModel
+        ? drift.defaultMissing
+          ? `${gemini.defaultModel} is no longer routable`
+          : gemini.defaultModel
+        : "not set; Gemini CLI will use its own default unless --model is passed",
+      "Run ./bin/model-router gemini enable to republish.",
+    );
+  } catch (error) {
+    add(
+      "fail",
+      "Gemini routing config",
+      error instanceof Error ? error.message : String(error),
+      `Inspect ${GEMINI_ENV_PATH}, then run ./bin/model-router gemini enable.`,
+    );
+  }
+} else if (TARGET === "dsh") {
   try {
     const dsh = childJson("dsh-config-manager.mjs", ["status"]);
     add(

@@ -36,6 +36,11 @@ case "${MODEL_ROUTER_TARGET:-codex}" in
     retire_service_if_unused
     echo "The DeepSeek Harness integration was removed."
     ;;
-  *) echo "MODEL_ROUTER_TARGET must be codex or dsh." >&2; exit 2 ;;
+  gemini)
+    node src/gemini-config-manager.mjs uninstall >/dev/null
+    retire_service_if_unused
+    echo "The Gemini CLI integration was removed."
+    ;;
+  *) echo "MODEL_ROUTER_TARGET must be codex, dsh, or gemini." >&2; exit 2 ;;
 esac
 echo "The repository, cached native catalog, logs, and provider credentials were retained."
