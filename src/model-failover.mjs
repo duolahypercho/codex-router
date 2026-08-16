@@ -164,14 +164,31 @@ export function providerCooldown(providerId, { now } = {}) {
 // Only ever records a window the provider itself reported. A verdict with no
 // `until` records nothing: the turn fails over, and the next one asks the
 // operator's chosen provider again rather than guessing on its behalf.
+//
+// The one exception is naming, not timing. Two hops see the same failure and
+// know different amounts about it: `api-forwarder` sees the provider's real
+// headers -- including the `Retry-After` LiteLLM does not relay, which is the
+// only reason a window is ever known at all -- but it has already piped the
+// body away and can classify by status alone. The router sees the body and can
+// tell an exhausted plan from a burst rate limit. So a later caller with no
+// window of its own may sharpen the reason on a window that already exists.
+// It may never create one.
 export function recordProviderCooldown(providerId, { until, reason, now } = {}) {
   const id = canonicalProviderId(String(providerId || "").trim());
+  if (!id) return undefined;
   const at = nowMs(now);
+  const document = readCooldownDocument();
+  const existing = document[id];
+  const live = existing && Date.parse(existing.until) > at ? existing : undefined;
   const expiry = isoOrUndefined(until);
-  if (!id || !expiry) return undefined;
+  if (!expiry) {
+    if (!live || !reason || live.reason === reason) return undefined;
+    document[id] = { ...live, reason };
+    writeCooldownDocument(document);
+    return document[id];
+  }
   const capped = new Date(Math.min(Date.parse(expiry), at + MAX_COOLDOWN_MS)).toISOString();
   if (Date.parse(capped) <= at) return undefined;
-  const document = readCooldownDocument();
   document[id] = {
     until: capped,
     ...(reason ? { reason } : {}),

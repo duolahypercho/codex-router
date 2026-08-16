@@ -164,6 +164,24 @@ test("a cooldown is recorded against the whole variant family", (t) => {
   assert.ok(providerCooldown("opencode-go", { now: NOW }));
 });
 
+test("a later hop may sharpen the reason but never invent the window", (t) => {
+  t.after(() => clearAllProviderCooldowns());
+  // api-forwarder sees the provider's Retry-After but not its body, so it can
+  // only say "429". The router reads the body and knows the plan is exhausted.
+  recordProviderCooldown("zai-coding", {
+    until: new Date(NOW + 1_800_000).toISOString(),
+    reason: "rate_limited",
+    now: NOW,
+  });
+  const refined = recordProviderCooldown("zai-coding", { reason: "out_of_usage", now: NOW });
+  assert.equal(refined.reason, "out_of_usage");
+  // The window itself is untouched by the refinement.
+  assert.equal(refined.until, new Date(NOW + 1_800_000).toISOString());
+  // And a reason alone still cannot cool a provider that is not already cooled.
+  assert.equal(recordProviderCooldown("kimi-api", { reason: "out_of_usage", now: NOW }), undefined);
+  assert.equal(providerCooldown("kimi-api", { now: NOW }), undefined);
+});
+
 test("clearProviderCooldown lets a provider back in on its first success", (t) => {
   t.after(() => clearAllProviderCooldowns());
   recordProviderCooldown("zai-coding", { until: new Date(NOW + 60_000).toISOString(), now: NOW });

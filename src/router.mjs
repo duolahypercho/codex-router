@@ -1581,6 +1581,8 @@ async function summarize(request, payload, route, signal) {
   // rather than asked, exactly as on the turn path. Nothing is sent while this
   // list is built.
   const attempts = compactionAttempts(route, aged);
+  // Attempts that were sent and rejected, kept so the caller can meter each one.
+  const failed = [];
   let last;
   for (let index = 0; index < attempts.length; index += 1) {
     const attemptRoute = attempts[index];
@@ -1609,9 +1611,15 @@ async function summarize(request, payload, route, signal) {
         usage,
         toolResultAging: aged.stats,
         route: attemptRoute,
+        failed,
         ...(attemptRoute === route ? {} : { failoverFrom: route.slug }),
       };
     }
+    // Each attempt that failed was still sent and still billed, so it is
+    // metered on its own row exactly as on the turn path -- otherwise a
+    // compaction the router rescued would leave no trace of the provider that
+    // could not serve it.
+    failed.push({ route: attemptRoute, status: sent.upstream.status, usage });
     // The first failure is the one reported if every attempt fails: it came
     // from the model the conversation is actually on, which is the one the
     // operator can do something about.
@@ -1628,13 +1636,13 @@ async function summarize(request, payload, route, signal) {
       bodyText: bytes.toString("utf8"),
       retryAfterSeconds: Number(sent.upstream.headers.get("retry-after")),
     });
-    if (!verdict.swap) return last;
+    if (!verdict.swap) return { ...last, failed };
     recordProviderCooldown(attemptRoute.provider, verdict);
     if (index + 1 < attempts.length) {
       logFailover(attemptRoute, attempts[index + 1], `compaction/${verdict.reason}`, sent.upstream.status);
     }
   }
-  return last;
+  return last && { ...last, failed };
 }
 
 function compactionSnapshot(model, item, status = "completed") {
@@ -1683,6 +1691,8 @@ async function handleRoutedCompaction(request, response, payload, route, signal,
   // actually produced the summary, the same as any other turn.
   const served = {
     route: result.route,
+    // Only the attempts that lost; the winner is metered by the caller.
+    failed: (result.failed || []).filter((entry) => entry.route !== result.route),
     ...(result.failoverFrom ? { failoverFrom: result.failoverFrom } : {}),
   };
   if (!result.ok) {
@@ -2171,6 +2181,18 @@ async function handleResponses(request, response, requestUrl) {
       // a successful nor a failed one appeared anywhere in the router's own
       // telemetry. Mirror the ordinary request path exactly.
       const compacted = compaction.route || route;
+      // A compaction the router moved was still charged by the provider that
+      // refused it, so each losing attempt gets its own row before the serving
+      // one -- the same shape the turn path records.
+      for (const attempt of compaction.failed || []) {
+        recordUsageEvent({
+          model: attempt.route.slug,
+          provider: canonicalProviderId(attempt.route.provider),
+          status: attempt.status,
+          durationMs: Date.now() - startedAt,
+          ...attempt.usage,
+        });
+      }
       recordUsageEvent({
         model: compacted.slug,
         provider: canonicalProviderId(compacted.provider),
@@ -2184,9 +2206,15 @@ async function handleResponses(request, response, requestUrl) {
       finalStatus = compaction.status;
       activityStatus = compaction.status;
       usageRecorded = true;
+      // The compaction chose its own model inside `summarize`, so the outer
+      // route still names the one the conversation is on. Adopt what actually
+      // served before returning, or the timing line emitted in `finally` would
+      // credit the exhausted provider with this turn's 200.
+      route = compacted;
+      failoverFrom ??= compaction.failoverFrom;
       if (!QUIET) {
         console.error(
-          `[codex-router] model=${requestedModel || "unknown"} provider=${compacted.provider} status=${compaction.status}${
+          `[codex-router] model=${compacted.slug} provider=${compacted.provider} status=${compaction.status}${
             compaction.failoverFrom ? ` failover-from=${compaction.failoverFrom}` : ""
           }`,
         );
@@ -2660,7 +2688,7 @@ async function handleResponses(request, response, requestUrl) {
       // The substitution is named in the log line as well as the usage event:
       // a router that quietly invents token counts is its own trap.
       console.error(
-        `[codex-router] model=${requestedModel || "unknown"} provider=${route?.provider || "openai"} status=${finalStatus}${
+        `[codex-router] model=${route?.slug || requestedModel || "unknown"} provider=${route?.provider || "openai"} status=${finalStatus}${
           upstreamRetries ? ` retries=${upstreamRetries}` : ""
         }${estimatedInputTokens ? ` estimated-input-tokens=${estimatedInputTokens}` : ""}${
           toolResultAging?.toolResultBytesSaved
@@ -2758,10 +2786,15 @@ async function handleResponses(request, response, requestUrl) {
     // QUIET: the production LaunchAgent hard-sets CODEX_ROUTER_QUIET=1. A
     // missing provider count is logged as unknown, not zero; an explicit zero
     // remains zero so a real cache miss is distinguishable from absent data.
+    // `model` and `provider` always name the pair that actually served the
+    // turn, so the two never disagree. On a turn the router moved, that is the
+    // fallback -- and `failover_from` carries what was asked for. Reading them
+    // the other way round (the asked-for model beside the serving provider)
+    // describes a combination that never ran.
     console.error(
-      `[codex-router] timing at=${new Date().toISOString()} model=${requestedModel || "unknown"} provider=${route?.provider || "openai"} status=${status} total_ms=${Date.now() - startedAt} upstream_ms=${timingMetric(upstreamLatencyMs)} out_tokens=${timingMetric(usage?.outputTokens)} cached_tokens=${timingMetric(usage?.cachedInputTokens)}${
+      `[codex-router] timing at=${new Date().toISOString()} model=${route?.slug || requestedModel || "unknown"} provider=${route?.provider || "openai"} status=${status} total_ms=${Date.now() - startedAt} upstream_ms=${timingMetric(upstreamLatencyMs)} out_tokens=${timingMetric(usage?.outputTokens)} cached_tokens=${timingMetric(usage?.cachedInputTokens)}${
         estimatedInputTokens ? ` est_input=${estimatedInputTokens}` : ""
-      }`,
+      }${failoverFrom ? ` failover_from=${failoverFrom}` : ""}`,
     );
   }
 }
