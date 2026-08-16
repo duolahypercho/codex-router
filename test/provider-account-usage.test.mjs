@@ -256,6 +256,14 @@ test("Command Code usage reads plan windows from the billing credits API", async
     assert.equal(snapshot.commandcode.dashboardUrl, "https://commandcode.ai/studio");
     assert.deepEqual(snapshot.commandcode.metrics, [
       {
+        kind: "balance",
+        label: "Plan credits",
+        value: 10,
+        currency: "USD",
+        detail: "Plan 10.00",
+        available: true,
+      },
+      {
         kind: "quota",
         label: "5-hour limit",
         usedPercent: (1 / 3) * 100,
@@ -763,6 +771,16 @@ test("normalizes Command Code plan windows and skips a zero resetAt", () => {
       weekly: { used: 0, cap: 6, exceeded: false, resetAt: 1_786_579_200_000 },
     },
   }), [
+    // The credit pool leads: a coding plan runs out of credits long before it
+    // stops hitting the windows, so it is the number that ends the afternoon.
+    {
+      kind: "balance",
+      label: "Plan credits",
+      value: 10,
+      currency: "USD",
+      detail: "Plan 10.00",
+      available: true,
+    },
     {
       kind: "quota",
       label: "5-hour limit",
@@ -785,6 +803,31 @@ test("normalizes Command Code plan windows and skips a zero resetAt", () => {
       resetAt: 1_786_579_200,
     },
   ]);
+});
+
+test("Command Code top-ups and a low-credit warning reach the balance metric", () => {
+  const [balance] = commandCodeCreditsMetrics({
+    credits: {
+      belowThreshold: true,
+      creditThreshold: 2,
+      monthlyCredits: 1.5,
+      purchasedCredits: 20,
+      freeCredits: 0.25,
+    },
+    windowLimits: { fiveHour: { used: 0, cap: 3 } },
+  });
+  assert.equal(balance.value, 21.75);
+  assert.equal(balance.detail, "Plan 1.50 · Purchased 20.00 · Free 0.25");
+  assert.equal(balance.available, false);
+});
+
+// Nothing to report is reported as nothing. A zero-valued balance would read
+// as an empty account rather than as an answer the provider did not give.
+test("Command Code windows without a credit pool report only the windows", () => {
+  assert.deepEqual(
+    commandCodeCreditsMetrics({ windowLimits: { weekly: { used: 1, cap: 6 } } }).map((m) => m.kind),
+    ["quota"],
+  );
 });
 
 test("normalizes Grok prepaid credits and pay-as-you-go balance", () => {

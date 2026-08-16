@@ -76,6 +76,48 @@
   The launcher now goes through the same `spawnableCommand` helper every other
   external command in the repository uses. The shipped installer produces
   `litellm.exe`, so a normal Windows install is unaffected.
+- **Command Code was unusable on every plan but one, which is not the plan most
+  of its customers buy.** The provider only ever spoke `/provider/v1`, and that
+  surface is an entitlement rather than a credential: a $1 Go account signs in,
+  mints a real key, runs the official CLI all day, and is still answered `403
+  upgrade_required` — "Your Go plan doesn't include API access". The router's
+  only response was a plan note explaining why nothing worked. The `command-code`
+  CLI itself does not use that surface; every turn it takes goes to
+  `/alpha/generate`, which is not plan-gated. The forwarder now answers the
+  entitlement refusal by moving the turn there, so Go, GOAT, Pro, and Max are
+  served with the same key, the same catalog, and no upgrade. Both protocols are
+  covered: the chat-completions catalog and the Messages variant that carries the
+  Claude models. The refusal is remembered against a fingerprint of the
+  credential — never the key — so it is bought once rather than once per turn,
+  re-probed when the key changes, and re-checked every six hours in case the plan
+  did. Only a real `upgrade_required` may move a turn; a timeout, a 500, or any
+  other 403 is relayed with the provider's own message, because reading one of
+  those as a refusal would quietly move a paying Provider-plan account onto its
+  coding-plan credits. The fallback happens before the first relayed byte, the
+  same boundary the upstream-retry and model-failover rules draw.
+
+  That route carries the CLI's own envelope, not an OpenAI or Anthropic body, so
+  both directions are translated: a schema-strict `config` block where every
+  field is required and `memory` is a string rather than an object, messages in
+  the Vercel AI SDK `ModelMessage` schema, snake_case `input_schema` tools, and a
+  newline-delimited JSON response — despite its `text/event-stream` content type
+  — whose blocks interleave and whose trailing `tool-call` event keys on
+  `toolCallId` where every incremental event keys on `id`. Command Code publishes
+  no reference for any of it; the shapes were derived from the shipped CLI bundle
+  (v1.14.1) and confirmed against the live gateway.
+
+  One measurement changed the design. An empty `system` field is not "no system
+  prompt" to that route — it is a cue to splice in the Command Code agent's own
+  preamble. The same one-line turn cost 92 prompt tokens with a system prompt and
+  7,637 without, spent telling the model it was a different product with
+  different tools. A turn carrying no system prompt of its own now gets a neutral
+  one instead of the agent's.
+
+- **The tray showed Command Code's spending windows but not what was left to
+  spend.** The billing route it already polls reports the credit pool beside the
+  5-hour and weekly caps, and a coding plan runs out of the first long before it
+  stops hitting the second. Plan, purchased, and free credits now surface as a
+  balance metric, and the plan's own low-credit threshold marks it unavailable.
 
 - **The free Qwen3.8 endpoint refused any conversation whose system message
   arrived late or twice.** Its chat template answers those with a 400 reading

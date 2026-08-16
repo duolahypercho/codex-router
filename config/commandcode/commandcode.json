@@ -8,7 +8,7 @@
       "ownedBy": "commandcode",
       "baseUrl": "https://api.commandcode.ai/provider/v1",
       "baseUrlEnv": "COMMANDCODE_BASE_URL",
-      "planNote": "Needs the Command Code Provider plan.",
+      "planNote": "Any Command Code plan works. Provider-plan accounts use the documented API and pay as they go; Go, GOAT, Pro, and Max accounts are served through the CLI's own route and spend plan credits, including the 5-hour and weekly window caps.",
       "credential": {
         "environment": [
           "COMMAND_CODE_API_KEY",

@@ -303,7 +303,31 @@ export function commandCodeCreditsMetrics(payload) {
       "credits",
     );
   };
+  // The window caps say how fast the plan may be spent; the credit pool says
+  // how much is left to spend at all. A coding plan runs out of the second one
+  // long before it stops hitting the first, so reporting only the windows
+  // hides the number that actually ends someone's afternoon.
+  const credits = payload?.credits;
+  const monthly = numberValue(credits?.monthlyCredits);
+  const purchased = numberValue(credits?.purchasedCredits);
+  const free = numberValue(credits?.freeCredits);
+  const total = [monthly, purchased, free].filter(Number.isFinite).reduce((sum, part) => sum + part, 0);
+  const balance = Number.isFinite(monthly)
+    ? [{
+        kind: "balance",
+        label: "Plan credits",
+        value: total,
+        currency: "USD",
+        detail: [
+          Number.isFinite(monthly) ? `Plan ${monthly.toFixed(2)}` : undefined,
+          Number.isFinite(purchased) && purchased > 0 ? `Purchased ${purchased.toFixed(2)}` : undefined,
+          Number.isFinite(free) && free > 0 ? `Free ${free.toFixed(2)}` : undefined,
+        ].filter(Boolean).join(" · "),
+        available: credits?.belowThreshold !== true,
+      }]
+    : [];
   return [
+    ...balance,
     windowMetric("5-hour limit", windows.fiveHour),
     windowMetric("Weekly limit", windows.weekly),
   ].filter(Boolean);

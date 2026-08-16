@@ -316,10 +316,13 @@ test("a CLI session descriptor may not escape its own home directory", () => {
   }
 });
 
-// Connecting succeeds and then every request 403s unless the account holds the
-// Provider plan. That gap is invisible at connect time, so the note has to
-// reach the surfaces where someone decides to connect.
-test("the Provider plan requirement is stated wherever Command Code is connected", () => {
+// Every Command Code plan is served, but not the same way and not on the same
+// money: a Provider-plan account pays as it goes through the documented API,
+// while a coding plan is served through the CLI's own route and spends the
+// plan's credits against its 5-hour and weekly window caps. Which one an
+// account gets is invisible at connect time, so the note has to reach the
+// surfaces where someone decides to connect.
+test("how a Command Code plan is billed is stated wherever it is connected", () => {
   const { testRoot, sessionDirectory } = sessionRoot(SESSION_KEY);
   const environmentValues = environment(testRoot, sessionDirectory);
   try {
@@ -329,7 +332,8 @@ test("the Provider plan requirement is stated wherever Command Code is connected
       { cwd: root, encoding: "utf8", env: environmentValues },
     );
     assert.equal(enabled.status, 0, enabled.stderr);
-    assert.match(enabled.stdout, /Provider plan/);
+    assert.match(enabled.stdout, /Any Command Code plan works/);
+    assert.match(enabled.stdout, /plan credits/);
 
     const doctor = spawnSync(process.execPath, [path.join(root, "src", "doctor.mjs"), "--json"], {
       cwd: root,
@@ -347,7 +351,7 @@ test("the Provider plan requirement is stated wherever Command Code is connected
       { cwd: root, encoding: "utf8", env: environmentValues },
     );
     const row = JSON.parse(snapshot.stdout).providers.find((p) => p.id === "commandcode");
-    assert.match(row.planNote, /Provider plan/);
+    assert.match(row.planNote, /Any Command Code plan works/);
     // Providers without the gate must stay silent about plans.
     const deepseek = JSON.parse(snapshot.stdout).providers.find((p) => p.id === "deepseek");
     assert.equal("planNote" in deepseek, false);

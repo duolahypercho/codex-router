@@ -456,27 +456,42 @@ entry — the key or the address is already the boundary.
 > something to depend on: nothing in this repository can keep them working, and
 > a failure here is not a bug the project can fix.
 
-### Command Code Provider API
+### Command Code
 
 Command Code's official Provider API is an OpenAI-compatible chat completions
 surface plus an Anthropic Messages surface at `https://api.commandcode.ai/provider/v1`
 (`COMMAND_CODE_API_KEY` or `COMMANDCODE_API_KEY` in the environment, or store
-the key once, or reuse a `command-code login` session). It requires the
-Provider plan or higher and uses the same key that authenticates the Command
-Code CLI. Everything appears as one
+the key once, or reuse a `command-code login` session). It uses the same key
+that authenticates the Command Code CLI. Everything appears as one
 "Command Code" provider; internally the catalog is split between
 `commandcode` for Chat Completions models and `commandcode-messages` for
 models that require the Messages protocol (Claude).
 
-**The Provider plan is required, and signing in does not grant it.** A Go-plan
-account can run the Command Code CLI but is refused by `/provider/v1` with
-`Your Go plan doesn't include API access`. That is an entitlement, not a
-credential problem: no sign-in, key, or reinstall changes it. Check the plan
-at [commandcode.ai/billing](https://commandcode.ai/billing) before enabling
-this provider.
+**Every Command Code plan is served, but not on the same money.** The Provider
+API is an entitlement rather than a credential: a Go-plan account signs in
+fine, mints a real key, runs the CLI all day, and is still refused by
+`/provider/v1` with `Your Go plan doesn't include API access`. The router
+answers that refusal by moving the turn to `/alpha/generate` — the route the
+`command-code` CLI itself uses, which is not plan-gated — so a $1 Go plan, a
+$10 GOAT plan, Pro, and Max all route here without an upgrade. The refusal is
+remembered per credential, so it is bought once rather than once per turn, and
+re-checked every six hours in case the plan changed.
 
-Given the Provider plan, there are two ways to authenticate, and either one is
-enough.
+What differs is the billing, which is why the note appears at connect time and
+in `doctor`:
+
+| Plan | Route | Cost |
+| --- | --- | --- |
+| Provider | `/provider/v1` | Pay as you go at API rates, no window caps |
+| Go, GOAT, Pro, Max, Team | `/alpha/generate` | Plan credits, subject to the plan's 5-hour and weekly caps |
+
+A coding plan also carries per-model allowances — Go reaches the open models
+plus GPT-5.6 Luna, Grok 4.5, and Qwen Max/Plus, while Claude and the rest of
+the GPT line need Pro or above — so a model outside the plan is refused by
+Command Code with its own message rather than by the router. Check the plan at
+[commandcode.ai/billing](https://commandcode.ai/billing).
+
+There are two ways to authenticate, and either one is enough.
 
 **Sign in through the browser (OAuth).** `command-code login` opens the
 Command Code authorization page, receives the callback on a temporary local
@@ -537,9 +552,11 @@ enabling or disabling either toggles the whole family together. The live
 catalog is available without authentication from
 `https://api.commandcode.ai/provider/v1/models`, and additional models can be
 added per machine with `./bin/curate-models commandcode`. Point
-`COMMANDCODE_BASE_URL` elsewhere to override the endpoint. Command Code does
-not document an account-balance API, so the tray links to Command Code Studio
-for credits and usage.
+`COMMANDCODE_BASE_URL` elsewhere to override the endpoint — both routes follow
+it, so a redirected provider stays coherent. The tray reports the plan's
+remaining credits and its 5-hour and weekly windows from the same undocumented
+billing route the official CLI polls, and links to Command Code Studio when
+that route is unavailable.
 
 ### Meta Model API
 
