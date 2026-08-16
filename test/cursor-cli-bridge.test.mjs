@@ -11,8 +11,9 @@ const stateDir = mkdtempSync(path.join(os.tmpdir(), "cursor-bridge-test-"));
 process.env.MODEL_ROUTER_STATE_DIR = stateDir;
 
 const {
-  assistantDelta,
+  assistantText,
   buildCursorPrompt,
+  createAssistantAccumulator,
   createEventReader,
   resultError,
   usageFromResult,
@@ -136,7 +137,7 @@ test("the event reader reassembles objects split across chunk boundaries", () =>
   assert.equal(collected.length, 0, "nothing is emitted before the newline arrives");
   collected.push(...reader.push("\n"));
   assert.equal(collected.length, 1);
-  assert.equal(assistantDelta(collected[0]), "hello world");
+  assert.equal(assistantText(collected[0]), "hello world");
 });
 
 test("a non-JSON line on stdout is skipped instead of failing the turn", () => {
@@ -209,12 +210,57 @@ test("a turn is always read-only: ask mode, sandbox on, and never --force", () =
     "ask",
     "--sandbox",
     "enabled",
+    "--trust",
     "--model",
     "gpt-5",
   ]);
-  for (const forbidden of ["--force", "--yolo", "--trust", "--auto-review"]) {
+  // --trust used to be on this list. cursor-agent refuses any directory it has
+  // not been told to trust -- "Workspace Trust Required", exit 1, before it
+  // reads the prompt -- so without it every live turn failed. It grants
+  // nothing here: the workspace is an empty directory the router owns, and
+  // running commands is still governed by ask mode and the sandbox.
+  for (const forbidden of ["--force", "--yolo", "--auto-review"]) {
     assert.ok(!args.includes(forbidden), `${forbidden} must never be passed`);
   }
+});
+
+// Regression for the first live turn: --stream-partial-output does not replace
+// the message-level emitter, it runs beside it. A turn answering "391"
+// produced two assistant events both reading "391", and concatenating them
+// streamed "391391".
+test("the final whole-message flush is not streamed a second time", () => {
+  const assistant = createAssistantAccumulator();
+  const event = (text) => ({
+    type: "assistant",
+    message: { role: "assistant", content: [{ type: "text", text }] },
+  });
+  assert.equal(assistant.push(event("391")), "391", "the delta is new text");
+  assert.equal(assistant.push(event("391")), "", "the flush repeats it and must be dropped");
+  assert.equal(assistant.text(), "391");
+});
+
+test("a flush that restates everything and adds a tail emits only the tail", () => {
+  const assistant = createAssistantAccumulator();
+  const event = (text) => ({
+    type: "assistant",
+    message: { role: "assistant", content: [{ type: "text", text }] },
+  });
+  assert.equal(assistant.push(event("Hel")), "Hel");
+  assert.equal(assistant.push(event("lo")), "lo");
+  assert.equal(assistant.push(event("Hello world")), " world");
+  assert.equal(assistant.text(), "Hello world");
+});
+
+test("usage is read under both spellings cursor-agent uses", () => {
+  // The bundle emits snake_case; the first live turn returned camelCase, and
+  // reading only one meant real turns reported no usage at all.
+  const camel = usageFromResult({
+    type: "result",
+    usage: { inputTokens: 18_951, outputTokens: 53, cacheReadTokens: 3_200, cacheWriteTokens: 0 },
+  });
+  assert.equal(camel.completion_tokens, 53);
+  assert.equal(camel.prompt_tokens, 18_951 + 3_200);
+  assert.equal(camel.prompt_tokens_details.cached_tokens, 3_200);
 });
 
 test("a non-streaming completion returns the result text and usage", async () => {

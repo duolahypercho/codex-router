@@ -13,8 +13,8 @@ import {
 import { PORTS, STATE_DIR } from "./paths.mjs";
 import { cursorAgentPath, cursorCliStatus, validCursorModelId } from "./cursor-cli.mjs";
 import {
-  assistantDelta,
   buildCursorPrompt,
+  createAssistantAccumulator,
   createEventReader,
   isResult,
   resultError,
@@ -73,10 +73,24 @@ export function bridgeWorkspace(environment = process.env) {
 /**
  * The argv for one turn.
  *
- * `--mode ask` and `--sandbox enabled` are not configurable and `--force` is
- * never passed. The router hands this process prompt text that arrived over a
- * socket; read-only is the only mode in which that is a safe thing to do, and
- * an operator who wants an editing agent has cursor-agent itself for that.
+ * `--mode ask` and `--sandbox enabled` are not configurable and `--force` /
+ * `--yolo` are never passed. The router hands this process prompt text that
+ * arrived over a socket; read-only is the only mode in which that is a safe
+ * thing to do, and an operator who wants an editing agent has cursor-agent
+ * itself for that.
+ *
+ * `--trust` is the exception, and it is required rather than optional:
+ * cursor-agent refuses any directory it has not been told to trust, answering
+ * "Workspace Trust Required" and exiting 1 before it reads the prompt. The
+ * first live turn through this bridge failed on exactly that.
+ *
+ * Trusting is sound here because of what the workspace is: an empty directory
+ * this router created and owns (see `bridgeWorkspace`). Trust governs whether
+ * the agent will act on the contents of a tree -- and there are none. It is
+ * not permission to run commands; `--mode ask` and `--sandbox enabled` still
+ * hold. The one case that deserves a second look is an operator who points
+ * `MODEL_ROUTER_CURSOR_WORKSPACE` at a real repository, which is an explicit
+ * decision to let the agent see that tree.
  */
 export function turnArguments(model, { stream = true } = {}) {
   const id = validCursorModelId(model);
@@ -89,6 +103,7 @@ export function turnArguments(model, { stream = true } = {}) {
     "ask",
     "--sandbox",
     "enabled",
+    "--trust",
     ...(id ? ["--model", id] : []),
   ];
 }
@@ -173,7 +188,7 @@ export function runCursorTurn({
       windowsHide: true,
     });
     const reader = createEventReader();
-    let streamed = "";
+    const assistant = createAssistantAccumulator();
     let final = "";
     let failure;
     let usage;
@@ -189,11 +204,10 @@ export function runCursorTurn({
     signal?.addEventListener("abort", abort, { once: true });
 
     const consume = (event) => {
-      const delta = assistantDelta(event);
-      if (delta) {
-        streamed += delta;
-        onDelta(delta);
-      }
+      // Only what is genuinely new: cursor-agent restates the whole message in
+      // a final `assistant` event alongside the per-delta ones.
+      const delta = assistant.push(event);
+      if (delta) onDelta(delta);
       if (!isResult(event)) return;
       failure = failure || resultError(event);
       final = resultText(event);
@@ -228,6 +242,7 @@ export function runCursorTurn({
       // `result` is the authority; `streamed` is what the caller already saw.
       // They agree in every observed run, and when they do not, the complete
       // text wins over a partial one.
+      const streamed = assistant.text();
       const text = final || streamed;
       if (failure) return settle({ ok: false, error: failure, streamed, usage });
       if (code !== 0 && !text) {

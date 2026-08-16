@@ -152,13 +152,9 @@ export function createEventReader() {
 }
 
 /**
- * The text an event contributes to the assistant's answer, if any.
- *
- * With `--stream-partial-output` an `assistant` event carries a delta; without
- * it, the same event carries a whole message. The bridge always asks for
- * deltas, so this returns the delta as-is.
+ * The text an `assistant` event carries, whether delta or whole message.
  */
-export function assistantDelta(event) {
+export function assistantText(event) {
   if (event?.type !== "assistant") return "";
   const content = event?.message?.content;
   if (typeof content === "string") return content;
@@ -169,12 +165,66 @@ export function assistantDelta(event) {
     .join("");
 }
 
+/**
+ * Accumulates assistant text without counting the same words twice.
+ *
+ * `--stream-partial-output` does not replace the message-level emitter, it
+ * runs *alongside* it: cursor-agent writes one `assistant` event per text
+ * delta and then a final one carrying the whole accumulated message. A live
+ * turn answering "391" produces two `assistant` events both reading "391", so
+ * concatenating every one of them streams "391391" to the caller. Reading the
+ * bundle suggested the emitters were alternatives; they are not, and only a
+ * real turn showed it.
+ *
+ * The flush is identified by what makes it a flush: its text is everything
+ * accumulated so far. Compared against the accumulator rather than keyed on
+ * `timestamp_ms`, which the message-level emitter sets conditionally and so
+ * cannot be relied on to tell the two apart.
+ */
+export function createAssistantAccumulator() {
+  let accumulated = "";
+  return {
+    /** The new text this event contributes -- "" when it is a repeat flush. */
+    push(event) {
+      const text = assistantText(event);
+      if (!text) return "";
+      // The whole message again: nothing new to emit.
+      if (accumulated && text === accumulated) return "";
+      // A flush that restates everything and adds a tail: emit only the tail.
+      if (accumulated && text.startsWith(accumulated)) {
+        const tail = text.slice(accumulated.length);
+        accumulated = text;
+        return tail;
+      }
+      accumulated += text;
+      return text;
+    },
+    text() {
+      return accumulated;
+    },
+  };
+}
+
 export function isResult(event) {
   return event?.type === "result";
 }
 
 function positiveInteger(value) {
   return Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
+}
+
+// cursor-agent reports usage under two spellings depending on which emitter
+// produced the result. The bundle's snake_case form is what a read of the
+// source suggests; the first live turn through this bridge returned camelCase
+// (`{"inputTokens":18951,"outputTokens":53,"cacheReadTokens":3200}`), and
+// reading only the documented one meant every real turn silently reported no
+// usage at all. Accept both rather than betting on which emitter runs.
+function usageField(usage, ...names) {
+  for (const name of names) {
+    const value = positiveInteger(usage[name]);
+    if (value) return value;
+  }
+  return 0;
 }
 
 /**
@@ -189,10 +239,10 @@ function positiveInteger(value) {
 export function usageFromResult(event) {
   const usage = event?.usage;
   if (!usage || typeof usage !== "object") return undefined;
-  const prompt = positiveInteger(usage.input_tokens);
-  const completion = positiveInteger(usage.output_tokens);
-  const cacheRead = positiveInteger(usage.cache_read_tokens);
-  const cacheWrite = positiveInteger(usage.cache_write_tokens);
+  const prompt = usageField(usage, "input_tokens", "inputTokens");
+  const completion = usageField(usage, "output_tokens", "outputTokens");
+  const cacheRead = usageField(usage, "cache_read_tokens", "cacheReadTokens");
+  const cacheWrite = usageField(usage, "cache_write_tokens", "cacheWriteTokens");
   if (!prompt && !completion && !cacheRead && !cacheWrite) return undefined;
   return {
     prompt_tokens: prompt + cacheRead + cacheWrite,
