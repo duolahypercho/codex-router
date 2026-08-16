@@ -129,3 +129,40 @@ test("a disabled pass stays distinguishable from one that ran and found nothing"
   const on = ageToolResults(input);
   assert.equal(on.stats.toolResultsEvaluated, 0, "every result here sits inside the frontier");
 });
+
+// Reported alongside #256: the 400 was seen with "Compact old tool results"
+// switched on, so the pass had to be cleared of rewriting the reasoning that
+// a thinking provider demands back. It only ever replaces the `output` of a
+// tool result; reasoning items and assistant messages come out by reference.
+test("a pass that ages a result leaves the reasoning and assistant turns around it untouched", () => {
+  const reasoning = {
+    type: "reasoning",
+    id: "rs_1",
+    summary: [{ type: "summary_text", text: "The user wants the log tail." }],
+    content: null,
+  };
+  const answer = {
+    type: "message",
+    role: "assistant",
+    content: [{ type: "output_text", text: "Here is what the log says." }],
+  };
+  const input = [
+    reasoning,
+    call("old", "exec_command"),
+    output("old", `HEAD\n${"middle\n".repeat(8_000)}TAIL`),
+    answer,
+    ...Array.from({ length: 4 }, (_, index) => [
+      call(`new-${index}`),
+      output(`new-${index}`, "small"),
+    ]).flat(),
+  ];
+
+  const result = ageToolResults(input);
+  assert.equal(result.stats.toolResultsAged, 1, "the old result did qualify");
+  assert.equal(result.input[0], reasoning, "the reasoning item is passed through by reference");
+  assert.equal(result.input[3], answer, "the assistant turn is passed through by reference");
+  assert.deepEqual(
+    result.input.filter((item) => item.type === "reasoning"),
+    [reasoning],
+  );
+});

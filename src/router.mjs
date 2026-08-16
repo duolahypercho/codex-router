@@ -1192,47 +1192,84 @@ async function readVisionEvidence({ url, engine, nativeCall, effort, question, k
   }
 }
 
-// DeepSeek thinking mode rejects a tool-call turn whose assistant message
-// carries no reasoning_content. LiteLLM's Responses->chat translation drops
-// `reasoning` input items entirely, so the reasoning text never reaches the
-// provider. Replace each reasoning item with a synthetic assistant message
-// carrying the reasoning text; LiteLLM merges it into the following
-// function_call's assistant message, and the forwarder's replay attaches it as
-// `reasoning_content` on the tool-call message. In-place, no-op when there is
-// nothing to carry.
+// DeepSeek thinking mode rejects a turn whose assistant message carries no
+// reasoning_content. LiteLLM's Responses->chat translation drops `reasoning`
+// input items entirely (`_transform_responses_api_input_item_to_chat_completion_message`
+// returns nothing for an item whose `content` is null, which is the shape
+// Codex stores), so the reasoning text never reaches the provider at all.
+// Carry each run of reasoning items onto the assistant turn it belongs to, and
+// the translation keeps it as that message's content. In-place, no-op when
+// there is nothing to carry.
+//
+// Every assistant turn needs covering, not only the ones that call a tool.
+// This used to carry the reasoning solely into a following `function_call` or
+// an empty assistant filler, which is the shape of a tool loop -- so a turn
+// that answers in prose lost its reasoning, and the provider refused the
+// *next* request for a reasoning_content it had never been given. A subagent
+// always ends that way, which is why spawning one failed every time and an
+// ordinary tool loop did not (#256).
 function carryReasoningThroughInput(input) {
   if (!Array.isArray(input) || input.length < 2) return;
-  for (let i = 0; i < input.length - 1; i += 1) {
-    const item = input[i];
-    if (item?.type !== "reasoning") continue;
-    const text = reasoningItemText(item);
-    if (!text) continue;
-    const next = input[i + 1];
-    // DeepSeek emits reasoning directly before a function_call, or before an
-    // empty assistant message that announces the call. Carry the reasoning in
-    // both cases; otherwise LiteLLM's Responses->chat translation drops it and
-    // the tool-call turn 400s for missing `reasoning_content`.
-    const nextIsCall = next?.type === "function_call";
-    const nextIsEmptyAssistant =
-      next?.type === "message" &&
-      next?.role === "assistant" &&
-      assistantMessageText(next) === "";
-    if (!nextIsCall && !nextIsEmptyAssistant) continue;
-    // Replace the reasoning item with an assistant message carrying its text.
-    input[i] = {
-      type: "message",
-      role: "assistant",
-      content: [{ type: "output_text", text }],
-    };
+  for (let index = 0; index < input.length - 1; index += 1) {
+    if (input[index]?.type !== "reasoning") continue;
+    // One assistant turn can emit several reasoning items in a row, and they
+    // all belong to the turn that follows. Carrying only the item nearest the
+    // turn dropped everything the model thought before it.
+    let end = index;
+    const texts = [];
+    while (end < input.length && input[end]?.type === "reasoning") {
+      const text = reasoningItemText(input[end]);
+      if (text) texts.push(text);
+      end += 1;
+    }
+    const text = texts.join("\n");
+    const next = input[end];
+    // Only the last item of the run is rewritten. The earlier ones stay
+    // `reasoning` items, which the translation drops -- their text is already
+    // in the joined value, and leaving them in place keeps the array the same
+    // length for every other pass over it.
+    if (text && next) {
+      if (next.type === "function_call" || next.type === "custom_tool_call") {
+        input[end - 1] = assistantTextItem(text);
+      } else if (next.type === "message" && next.role === "assistant") {
+        // Merged into the assistant message rather than inserted in front of
+        // it. A separate message would put two assistant turns back to back,
+        // which the same strict chat-completions providers reject outright --
+        // and the tool-call branch above ends up merged anyway, because
+        // LiteLLM folds a following function_call into the assistant message
+        // it already emitted.
+        input[end] = mergeAssistantText(next, text);
+      }
+    }
+    index = end - 1;
   }
 }
 
-// Text of an assistant message item, or "" when it has no readable text.
-function assistantMessageText(item) {
-  if (!Array.isArray(item?.content)) return "";
-  return item.content
-    .map((part) => (part && typeof part.text === "string" ? part.text : ""))
-    .join("");
+function assistantTextItem(text) {
+  return {
+    type: "message",
+    role: "assistant",
+    content: [{ type: "output_text", text }],
+  };
+}
+
+// The reasoning goes in front of the answer it produced. `content` is an array
+// of parts on everything Codex stores, but a bare string is equally legal on
+// the Responses API, so both shapes are handled rather than assumed away.
+function mergeAssistantText(item, text) {
+  const part = { type: "output_text", text };
+  if (typeof item.content === "string") {
+    return {
+      ...item,
+      content: item.content
+        ? [part, { type: "output_text", text: item.content }]
+        : [part],
+    };
+  }
+  return {
+    ...item,
+    content: [part, ...(Array.isArray(item.content) ? item.content : [])],
+  };
 }
 
 function reasoningItemText(item) {
@@ -1856,12 +1893,10 @@ async function buildRoutedRequest({ request, payload, route, agedInput }) {
   // -- a turn that still reaches the provider, and still reads as a 200,
   // having quietly replaced the prompt with its own letters.
   const input = Array.isArray(bridged) ? [...bridged] : bridged;
-  // DeepSeek thinking mode requires the assistant's reasoning to be replayed on
-  // tool-call turns, but LiteLLM's Responses->chat translation drops
-  // `reasoning` input items entirely. Merge each reasoning summary into the
-  // following assistant function_call message's content so the translation
-  // carries it; the forwarder then attaches it as `reasoning_content` on the
-  // tool-call message.
+  // DeepSeek thinking mode requires the assistant's reasoning to be replayed,
+  // but LiteLLM's Responses->chat translation drops `reasoning` input items
+  // entirely. Merge each reasoning run into the assistant message of the turn
+  // it belongs to so the translation carries it there.
   carryReasoningThroughInput(input);
   const provider = providerForModel(route);
   const chatCompletionsProvider = provider?.protocol !== "openai-responses";

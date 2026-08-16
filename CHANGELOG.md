@@ -24,6 +24,23 @@
   and an entry curated earlier keeps what it was given — an additive run never
   rewrites metadata a user may have tuned by hand, so repair it in
   `user-models.json` or `--remove` and curate it again.
+- **A subagent on a thinking model poisoned the conversation that spawned it.**
+  Every request after the child finished came back as a 400 reading "The
+  `reasoning_content` in the thinking mode must be passed back to the API",
+  seen on DeepSeek V4 Flash through the opencode Go subscription. LiteLLM's
+  Responses-to-chat translation drops `reasoning` input items outright, and the
+  carry that compensates for that only recognised a tool loop — reasoning
+  sitting immediately before a `function_call`. A subagent ends in prose, so
+  the reasoning behind its final answer was thrown away and the provider was
+  asked to continue a thinking turn it had never been shown. The carry now
+  covers every assistant turn: prose answers and custom tool calls as well as
+  function calls, and the whole run of reasoning items a turn emits rather than
+  only the last of them. It merges into the assistant message instead of
+  inserting a second one, because two assistant turns back to back are their
+  own rejection on the same providers. "Compact old tool results" was reported
+  alongside this and is not involved — the aging pass only ever rewrites the
+  `output` of a tool result, and now has a test proving the reasoning and
+  assistant turns around it come through by reference.
 
 - **The free Qwen3.8 endpoint refused any conversation whose system message
   arrived late or twice.** Its chat template answers those with a 400 reading

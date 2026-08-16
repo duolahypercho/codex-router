@@ -5231,3 +5231,110 @@ test("a subagent effort overrides the effort Codex nested in the reasoning objec
     rmSync(stateDir, { recursive: true, force: true });
   }
 });
+
+// #256: spawning a subagent on opencode-go/deepseek-v4-flash made every
+// following parent request 400 with "The `reasoning_content` in the thinking
+// mode must be passed back to the API". LiteLLM's Responses->chat translation
+// drops `reasoning` input items outright, and the carry that compensates for
+// that only recognized a tool loop -- reasoning immediately before a
+// function_call. A subagent ends in prose, so its reasoning was thrown away
+// and the provider was asked to continue a thinking turn it had never been
+// shown. The second reporter saw the same 400 with "Compact old tool results"
+// on, so aging is switched on here as well: it must age the tool result and
+// still leave every reasoning run carried.
+test("reasoning survives the replay onto tool-call and prose assistant turns alike", async () => {
+  const gatewayBodies = [];
+  const gateway = await mockServer(async (request, response) => {
+    gatewayBodies.push(await bodyJson(request));
+    json(response, 200, { output: [{ type: "message", role: "assistant", content: "ok" }] });
+  });
+  const stateDir = mkdtempSync(path.join(os.tmpdir(), "reasoning-replay-state-"));
+  writeFileSync(
+    path.join(stateDir, "tool-result-aging.json"),
+    `${JSON.stringify({ version: 1, enabled: true })}\n`,
+    "utf8",
+  );
+  const routerPort = await openPort();
+  const router = run("router.mjs", {
+    CODEX_ROUTER_PORT: String(routerPort),
+    CODEX_ROUTER_GATEWAY_BASE_URL: `http://127.0.0.1:${gateway.port}/v1`,
+    MODEL_ROUTER_STATE_DIR: stateDir,
+    CODEX_ROUTER_QUIET: "1",
+  });
+  const reasoning = (id, text) => ({
+    type: "reasoning",
+    id,
+    summary: [{ type: "summary_text", text }],
+    content: null,
+  });
+  const input = [
+    { type: "message", role: "user", content: [{ type: "input_text", text: "check the log" }] },
+    // A single turn can emit several reasoning items before it acts.
+    reasoning("rs_1", "The log lives under /var/log."),
+    reasoning("rs_2", "Tail it rather than read the whole file."),
+    { type: "function_call", call_id: "old", name: "exec_command", arguments: "{}" },
+    { type: "function_call_output", call_id: "old", output: "x".repeat(40_000) },
+    ...[1, 2, 3, 4].map((n) => ({
+      type: "function_call_output",
+      call_id: `call-${n}`,
+      output: `small result ${n}`,
+    })),
+    // The shape a subagent always ends on, and the one that used to be lost.
+    reasoning("rs_3", "Nothing in the tail looks wrong, so I can say so."),
+    { type: "message", role: "assistant", content: [{ type: "output_text", text: "All clear." }] },
+    { type: "message", role: "user", content: [{ type: "input_text", text: "and now?" }] },
+  ];
+
+  try {
+    await waitFor(`${routerBase(routerPort)}/models`, router);
+    const response = await fetch(`${routerBase(routerPort)}/responses`, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer CODEX_CALLER_SECRET",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ model: "deepseek/deepseek-v4-pro", stream: false, input }),
+    });
+    assert.equal(response.status, 200, await response.text());
+    const forwarded = gatewayBodies[0].input;
+    const text = (item) =>
+      (Array.isArray(item?.content) ? item.content : [])
+        .map((part) => (typeof part?.text === "string" ? part.text : ""))
+        .join("\n");
+
+    // The aging pass really ran: without it this assertion passes for the
+    // wrong reason, and the compaction half of the report goes untested.
+    const older = forwarded.find(
+      (item) => item?.type === "function_call_output" && item.call_id === "old",
+    );
+    assert.match(older.output, /compacted by Codex Router/);
+
+    // The whole reasoning run reaches the assistant message LiteLLM will fold
+    // the tool call into, not just the item nearest the call.
+    const callIndex = forwarded.findIndex((item) => item?.type === "function_call");
+    const beforeCall = forwarded[callIndex - 1];
+    assert.equal(beforeCall.type, "message");
+    assert.equal(beforeCall.role, "assistant");
+    assert.match(text(beforeCall), /The log lives under \/var\/log\./);
+    assert.match(text(beforeCall), /Tail it rather than read the whole file\./);
+
+    // The prose answer carries its own reasoning and still says what it said.
+    const answer = forwarded.find(
+      (item) => item?.type === "message" && item.role === "assistant" && /All clear\./.test(text(item)),
+    );
+    assert.match(text(answer), /Nothing in the tail looks wrong/);
+
+    // One assistant message per turn: two in a row is what several strict
+    // chat-completions providers reject.
+    for (let index = 1; index < forwarded.length; index += 1) {
+      const previous = forwarded[index - 1];
+      const current = forwarded[index];
+      if (previous?.role !== "assistant" || current?.role !== "assistant") continue;
+      assert.fail("two assistant messages ended up back to back");
+    }
+  } finally {
+    await stopChild(router);
+    await closeServer(gateway.server);
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
