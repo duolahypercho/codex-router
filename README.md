@@ -809,10 +809,19 @@ Ollama keeps its existing native route and local model controls.
 ### Use your Cursor subscription in Codex (experimental)
 
 Cursor CLI has no OpenAI-compatible endpoint, so the router ships a local
-bridge that runs `cursor-agent` per request and speaks chat completions back:
+bridge that runs `cursor-agent` per request and speaks chat completions back.
+
+**From the tray, with no terminal:** open **Connections**, find **Cursor CLI
+(Local)**, and press **Install & Sign In**. That installs `cursor-agent` if it
+is missing, then opens a Terminal window that takes you through Cursor's
+browser sign-in. Once you are signed in, the **Cursor CLI** section lists every
+model the account can spend; tick the ones you want and they appear in the
+Codex picker.
+
+The same thing from a terminal, if you prefer:
 
 ```sh
-cursor-agent login          # once, in an interactive terminal
+cursor-agent login          # once, interactively
 ./bin/model-router codex providers enable cursor-cli
 ./bin/curate-models cursor-cli
 ```

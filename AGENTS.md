@@ -1020,7 +1020,17 @@ bridge is the integration.
    starts by hand is one reboot away from every Cursor model 502ing while the
    router reports itself healthy; `bin/cursor-bridge` is for debugging one in
    the foreground, not the supported way to run it.
-9. The bridge default port (4209) and the `baseUrl` checked into
+9. **The tray installs it, and fetches before it runs.** Cursor is the one
+   sign-in CLI npm does not carry, so `installScriptCli` downloads the vendor
+   script and then executes it. Do not "simplify" that back into
+   `curl | sh`: a piped install that dies halfway still runs everything that
+   arrived, and what runs is whatever landed. The URL is a constant pinned
+   against `installHost` before anything executes, and the response is checked
+   for a shell shebang because a captive portal answers HTML with a 200.
+   Refusing to install at all was tried first and was wrong -- every other
+   sign-in CLI here is installed by the same button, and handing a user a
+   shell command instead of doing the work is a dead end.
+10. The bridge default port (4209) and the `baseUrl` checked into
    `config/cursor/cursor.json` are one fact in two files, and `start.mjs`
    republishes the resolved address through the provider's own
    `MODEL_ROUTER_CURSOR_BASE_URL` so a moved port cannot strand the registry
