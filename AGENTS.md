@@ -550,21 +550,61 @@ so the unit of evidence is always the slug, never the model name.
    turn for that slug completed cleanly, so the model can hold the child role;
    it does not say the child finished what it was delegated. The router
    observes HTTP turns, not agent lifecycles — a child makes one turn per
-   tool-call round trip, and the loop that strings them together is Codex's —
-   so a model that answers turn after turn without converging still reaches
-   `proven` and keeps it until `control subagents verify` re-researches it.
+   tool-call round trip, and the loop that strings them together is Codex's.
    Do not write copy anywhere (log lines, tray, docs) that reads `proven` as
-   "the delegated task succeeded"; demoting a looping child needs a
-   convergence signal the request path does not yet have (issue #257).
-4. Local settings still never manufacture a v2 claim. The only writers of
+   "the delegated task succeeded".
+4. **`proven` is revocable, and only downward automatically** (issue #257).
+   Promotion is a one-time event, but the window in which machine-local
+   evidence can be taken away stays open for as long as that evidence is what
+   the v2 advertisement rests on. A 400/422 on any child turn demotes the slug,
+   before or after promotion and without needing to repeat: it is the same
+   structural refusal the capability probe treats as disqualifying, the
+   transient statuses that prove nothing are already excluded, and the
+   alternative is letting the oldest observation beat the newest. A registry-v2
+   model is untouched — its claim is the shipped native collaboration proof,
+   not this machine's traffic. Re-promotion is never automatic: it costs live
+   requests, so it happens only through `control subagents verify` or switching
+   the model off and on.
+5. **A looping child is demoted against its own compaction budget**, because a
+   child that answers forever emits nothing but 200s and no status-shaped
+   branch can ever see it. `src/subagent-turns.mjs` accounts each spawn
+   separately, keyed on the `thread-id` header, and adds up the *new* input
+   tokens it produces (every child turn resends the whole conversation, so the
+   growth in the prompt count is what the child newly made; a compaction makes
+   the count fall and everything after the fall is work being done twice). The
+   ceiling is twice the larger of the model's declared `autoCompact` budget and
+   the largest prompt this spawn has actually had accepted. Nothing there is
+   invented: `autoCompact` is per model and comes from the provider's published
+   window, and the multiple comes from the pathology
+   `src/context-window-drift.mjs` already names — one budget is a large but
+   legitimate task, it is *compacting again without ever finishing* that is the
+   runaway. Measuring against the observed peak as well as the declaration is
+   what makes a false demotion impossible rather than merely unlikely: an
+   uncompacted spawn's total is exactly half its own ceiling however long its
+   task runs, which matters because the registry validator permits any
+   `1 <= autoCompact <= contextWindow` and one oversized tool result can carry a
+   single turn past the compaction limit in one step. A child thread reused for
+   a `FOLLOWUP_TASK` is deliberately one spawn here — its context really does
+   carry across — and an idle one expires rather than accumulating forever.
+   No positive "terminal turn" detector is needed or possible: the
+   turn that ended a spawn is only knowable by no further turn arriving, and a
+   ceiling can only ever be crossed by a spawn that is still producing turns.
+   Only a prompt count the provider actually reported may move the total —
+   substituted estimates and retry-doubled counts are refused here for exactly
+   the reasons `context-window-drift.mjs` refuses them as capacity evidence. A
+   model that declares no `autoCompact` has no derived ceiling and is counted
+   but never condemned; do not give it one by guessing. Both demotion paths log
+   unconditionally and record the turn and token counts in the proofs file, so
+   `control subagents status` and the tray can say what happened.
+6. Local settings still never manufacture a v2 claim. The only writers of
    promotion evidence are the probe worker and the router's observation of
    real traffic; an unreadable proofs file promotes nothing, and a hidden or
    switched-off slug stays v1 whatever evidence it carries.
-5. `control subagents verify [SLUG ...]` re-researches explicitly (foreground,
+7. `control subagents verify [SLUG ...]` re-researches explicitly (foreground,
    ~2 requests per candidate); with no slugs it sweeps the enabled list.
    Select-all and mode changes never trigger probes — a sweep across every
    provider is quota the operator must ask for.
-6. Machine-local proofs are exactly that. Shipping a default to every
+8. Machine-local proofs are exactly that. Shipping a default to every
    installer still requires the full native collaboration proof and a registry
    change (below); never edit the checked-in `config/` tree because one
    machine's probe passed.

@@ -28,9 +28,23 @@ import { STATE_DIR } from "./paths.mjs";
 // role. The router observes HTTP turns, not agent lifecycles — a child makes
 // one turn per tool-call round trip and the loop that strings them together is
 // Codex's, not the router's — so nothing here can say the child reached done.
-// A model that keeps answering turns without ever converging still reaches
-// "proven" and stays there until `control subagents verify` re-researches it
-// (issue #257).
+//
+// "proven" is therefore revocable (issue #257). It was written as a terminal
+// state, which meant the newest evidence on the wire lost to the oldest: a
+// slug promoted by one clean turn kept the v2 advertisement through every
+// structural rejection that followed, because the observer stopped listening
+// the moment it promoted. Nothing about a 400/422 is weaker after promotion
+// than before it — it is the same structural refusal the probe treats as
+// disqualifying, and the transient statuses that prove nothing (429, 5xx) are
+// already excluded elsewhere. So the same evidence demotes at any point in the
+// lifecycle, and the router's per-spawn accounting (subagent-turns.mjs) can
+// condemn a child that runs past its model's own compaction budget without
+// converging.
+//
+// Demotion is automatic; re-promotion is not. A demoted slug only comes back
+// through `control subagents verify` or a switch off and on, both of which
+// spend live requests re-researching it — the direction that costs quota is
+// the direction that stays under the operator's hand.
 export const SUBAGENT_PROOFS_PATH =
   process.env.MODEL_ROUTER_SUBAGENT_PROOFS ||
   path.join(STATE_DIR, "multi-agent-proofs.json");
@@ -98,10 +112,25 @@ export function recordSpawnObserved(slug, { status, at = new Date().toISOString(
   return updateProof(slug, { status: "proven", spawn: { ok: true, status, at } });
 }
 
-export function recordSpawnFailure(slug, { status, reason, at = new Date().toISOString() } = {}) {
+// `turns` and `newInputTokens` are carried so the recorded evidence says how
+// much of a spawn it took, not just that one failed: the proofs snapshot is
+// what `control subagents verify`, `control subagents status` and the tray
+// render, so this is where a demotion becomes something an operator can read.
+export function recordSpawnFailure(
+  slug,
+  { status, reason, turns, newInputTokens, at = new Date().toISOString() } = {},
+) {
   return updateProof(slug, {
     status: "failed",
-    spawn: { ok: false, status, at },
+    spawn: {
+      ok: false,
+      status,
+      at,
+      ...(Number.isInteger(turns) && turns > 0 ? { turns } : {}),
+      ...(Number.isInteger(newInputTokens) && newInputTokens > 0
+        ? { newInputTokens }
+        : {}),
+    },
     reason: reason || `spawn failed with HTTP ${status}`,
   });
 }
@@ -143,8 +172,19 @@ export function applySubagentProofs(models, proofs, { hidden, disabled } = {}) {
   });
 }
 
-// Whether an observed child turn for this slug should settle a verdict:
-// only models sitting in the experimental window are listening.
+// Whether an observed child turn for this slug can *promote* it: only models
+// sitting in the experimental window are waiting on a first clean turn.
 export function awaitingSpawnProof(slug, proofs = subagentProofSnapshot()) {
   return proofs[String(slug)]?.status === "experimental";
+}
+
+// Whether an observed child turn for this slug can *demote* it. Everything the
+// v2 advertisement currently rests on is revocable — the experimental window
+// and the durable proof alike — because both are claims about the same wire
+// the failing turn just came off. A slug already `failed`, still `checking`,
+// or carrying no local proof at all (including a registry-v2 model, whose
+// claim is the shipped native collaboration proof and not this machine's
+// traffic) has nothing here to take away.
+export function spawnProofRevocable(slug, proofs = subagentProofSnapshot()) {
+  return PROMOTED_STATUSES.has(proofs[String(slug)]?.status);
 }

@@ -19,6 +19,7 @@ const {
   recordProbeStarted,
   recordSpawnFailure,
   recordSpawnObserved,
+  spawnProofRevocable,
   subagentProofSnapshot,
   SUBAGENT_PROOFS_PATH,
 } = await import("../src/subagent-proofs.mjs");
@@ -56,6 +57,44 @@ test("a proof walks checking -> experimental -> proven, and failures carry reaso
 
   clearSubagentProof("example/gamma");
   assert.equal(subagentProofSnapshot()["example/gamma"], undefined);
+});
+
+// Issue #257(b): `proven` was terminal, so the oldest observation on the wire
+// beat every later one. Promotion is still a one-time event, but the window in
+// which evidence can be *taken away* stays open for as long as this machine's
+// traffic is what the v2 advertisement rests on.
+test("a proven slug stays revocable while an unproven or settled one is untouchable", () => {
+  const slug = "example/revocable";
+  recordProbeResult(slug, { ok: true, checks: [] });
+  assert.equal(spawnProofRevocable(slug), true, "the experimental window is revocable");
+
+  recordSpawnObserved(slug, { status: 200 });
+  assert.equal(awaitingSpawnProof(slug), false, "a first clean turn is only news once");
+  assert.equal(spawnProofRevocable(slug), true, "promotion must not close the demotion path");
+
+  // The counts that condemned it travel with the record, so `control subagents
+  // status` and the tray can say how much of a spawn it took.
+  const demoted = recordSpawnFailure(slug, {
+    status: 200,
+    reason: "one child spawn ran 6 turns without converging",
+    turns: 6,
+    newInputTokens: 2_100,
+  });
+  assert.equal(demoted.status, "failed");
+  assert.equal(demoted.spawn.turns, 6);
+  assert.equal(demoted.spawn.newInputTokens, 2_100);
+  assert.equal(
+    spawnProofRevocable(slug),
+    false,
+    "a slug already demoted has nothing left for traffic to take",
+  );
+
+  // Nothing local to revoke: a checking slug is not advertised yet, and a
+  // registry-v2 model's claim is the shipped native proof, not this machine.
+  recordProbeStarted(slug);
+  assert.equal(spawnProofRevocable(slug), false);
+  assert.equal(spawnProofRevocable("kimi-oauth/k3"), false);
+  clearSubagentProof(slug);
 });
 
 test("a proofs file that cannot be read promotes nothing", () => {

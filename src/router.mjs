@@ -76,11 +76,16 @@ import {
   awaitingSpawnProof,
   recordSpawnFailure,
   recordSpawnObserved,
+  spawnProofRevocable,
   subagentProofSnapshot,
 } from "./subagent-proofs.mjs";
+import { forgetChildSpawn, observeChildTurn } from "./subagent-turns.mjs";
 import { subagentEffort } from "./multi-agent-state.mjs";
 import { mergeCodexAppTools } from "./codex-app-tools.mjs";
-import { activityMetadataFromHeaders } from "./codex-session-names.mjs";
+import {
+  activityMetadataFromHeaders,
+  threadIdFromHeaders,
+} from "./codex-session-names.mjs";
 import { translateGatewayError } from "./error-translation.mjs";
 import { recordUsageEvent } from "./usage-events.mjs";
 import {
@@ -1849,10 +1854,10 @@ function requireCodexTransport(request, response) {
 // A model in the experimental subagent window earns its durable proof — or
 // its demotion — from real traffic: Codex marks child turns with
 // x-openai-subagent, so the first clean completion of one settles "this model
-// can hold the child role" without a dedicated probe session. Only structural
+// can hold the child role" without a dedicated probe session. Structural
 // rejections demote (400/422, the shape a schema or encrypted-payload refusal
 // takes); transient failures — 429s, 5xx, disconnects — prove nothing either
-// way and leave the window open. Neither line is QUIET-gated: a promotion or
+// way and leave the window open. No line here is QUIET-gated: a promotion or
 // demotion that happens silently is how a picker entry becomes unexplainable.
 //
 // What the promotion claims is exactly one HTTP turn, and the log line has to
@@ -1861,34 +1866,77 @@ function requireCodexTransport(request, response) {
 // that strings them together, so "the child reached done" is not a fact
 // available here. An operator who read the old "subagent proven … completed a
 // live child turn" as *the delegated work finished* was reading a promise the
-// router cannot make (issue #257). A model that speaks the protocol turn after
-// turn without ever converging therefore still carries this proof: it returns
-// 200s, so nothing above demotes it, and only `control subagents verify` — run
-// by hand — re-examines it. Closing that needs a convergence signal this
-// function does not have; naming the claim honestly is the part that does not
-// require inventing one.
+// router cannot make (issue #257).
+//
+// The two halves of that issue meet here, and both are about the gate rather
+// than the thresholds. The gate used to be `awaitingSpawnProof`, true only for
+// `experimental` — so the instant turn one promoted a slug this function
+// stopped looking at it, and a hard 400/422 on turn two was discarded along
+// with everything else. That made the *oldest* observation win over the
+// newest, which no comment ever argued for. The gate is now revocability, so a
+// slug keeps being watched for as long as this machine's traffic is what the
+// v2 advertisement rests on; promotion alone stays scoped to the experimental
+// window, because a first clean turn is only news once.
+//
+// Watching a `proven` slug is also what makes the convergence signal usable. A
+// looping child emits 200s forever, so no status-shaped branch could ever fire
+// for it; the evidence is instead how much of its own budget one spawn burns
+// without stopping, accounted per child thread in subagent-turns.mjs against
+// the model's declared auto-compact limit.
 
-function observeSubagentOutcome(request, route, status, { emptyCompletion = false } = {}) {
+function observeSubagentOutcome(request, route, status, options = {}) {
   if (!route) return;
   try {
     if (!request.headers["x-openai-subagent"]) return;
-    if (!awaitingSpawnProof(route.slug, subagentProofSnapshot())) return;
-    if (status === 200 && !emptyCompletion) {
+    const proofs = subagentProofSnapshot();
+    if (!spawnProofRevocable(route.slug, proofs)) return;
+    const spawnId = threadIdFromHeaders(request.headers);
+    const settle = (reason, detail = { status }) => {
+      recordSpawnFailure(route.slug, { reason, ...detail });
+      forgetChildSpawn(spawnId);
+      console.error(
+        `[codex-router] subagent demoted: ${route.slug} ${reason}; ` +
+          "it stays v1 until 'control subagents verify' passes again",
+      );
+    };
+    if (status === 400 || status === 422) {
+      settle(
+        `child turn rejected with HTTP ${status}` +
+          (proofs[route.slug]?.status === "proven"
+            ? ", revoking the child role it had already served"
+            : ""),
+      );
+      return;
+    }
+    if (status !== 200 || options.emptyCompletion) return;
+    if (awaitingSpawnProof(route.slug, proofs)) {
       recordSpawnObserved(route.slug, { status });
       console.error(
         `[codex-router] subagent child role verified: ${route.slug} served a live child turn; ` +
           "the model holds the child role on the wire, which is not a claim the child finished its task",
       );
-    } else if (status === 400 || status === 422) {
-      recordSpawnFailure(route.slug, {
-        status,
-        reason: `child turn rejected with HTTP ${status}`,
-      });
-      console.error(
-        `[codex-router] subagent demoted: ${route.slug} child turn rejected with HTTP ${status}; ` +
-          "it stays v1 until 'control subagents verify' passes again",
-      );
     }
+    const spawn = observeChildTurn({
+      spawnId,
+      slug: route.slug,
+      autoCompact: route.autoCompact,
+      event: {
+        status,
+        inputTokens: options.usage?.inputTokens,
+        estimatedInputTokens: options.estimatedInputTokens,
+        emptyCompletionRetried: options.emptyCompletionRetried,
+      },
+    });
+    if (!spawn?.exceeded) return;
+    settle(
+      `one child spawn ran ${spawn.turns} turns and produced ${spawn.newInputTokens} new input ` +
+        `tokens without converging, past the ${spawn.budget}-token ceiling this model's own ` +
+        "auto-compact budget sets",
+      // Deliberately no `status`: every turn of this spawn answered 200, and
+      // recording one of them as the failure would read as a rejection that
+      // never happened. The counts are the evidence.
+      { turns: spawn.turns, newInputTokens: spawn.newInputTokens },
+    );
   } catch {
     // Observation is bookkeeping; it must never fail the turn it watched.
   }
@@ -2793,7 +2841,15 @@ async function handleResponses(request, response, requestUrl) {
       ...(guardReleasedForBudget ? { emptyCompletionGuardReleased: true } : {}),
       ...(failoverFrom ? { failoverFrom } : {}),
     });
-    observeSubagentOutcome(request, route, finalStatus, { emptyCompletion });
+    // The same usage this turn just metered, and the same two disqualifiers
+    // context-window-drift.mjs applies to it: a substituted estimate and a
+    // retry-doubled count are not measurements of what the child sent.
+    observeSubagentOutcome(request, route, finalStatus, {
+      emptyCompletion,
+      usage,
+      estimatedInputTokens,
+      emptyCompletionRetried,
+    });
     usageRecorded = true;
     activityStatus = finalStatus;
     if (!QUIET) {

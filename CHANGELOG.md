@@ -49,6 +49,46 @@
   session of its own now lives in `src/routed-client-models.mjs` instead of
   inside the harness manager. It was always a general rule; a second client
   wanting it verbatim is what made a second copy the wrong answer.
+- **A subagent that had been proven once could never be un-proven, however
+  badly it behaved afterwards.** The observer that settles a locally verified
+  subagent gated itself on `awaitingSpawnProof`, which is true only while a
+  slug sits in the experimental window — so the instant turn one promoted a
+  model, the router stopped watching it. A hard 400/422 on turn two was
+  discarded with everything else, and the only thing that could re-examine the
+  slug was a hand-run `control subagents verify` (#257). Two changes, both
+  about the gate rather than the thresholds. `proven` is now revocable: the
+  same structural rejection that would have blocked promotion takes it back
+  afterwards, without needing to repeat, because nothing makes a 400 weaker
+  after a 200 than before it and the transient statuses that prove nothing
+  (429, 5xx, disconnects) were already excluded. Registry-v2 models are
+  untouched — their claim is the shipped native collaboration proof, not one
+  machine's traffic — and re-promotion stays manual, since that is the
+  direction that spends quota. And a child that answers turn after turn
+  without converging is now demotable at all: it emits nothing but 200s, so no
+  status-shaped branch could ever see it, and the evidence instead is how much
+  of its own budget one spawn burns while still going. `src/subagent-turns.mjs`
+  accounts each spawn separately by `thread-id` and adds up the new input
+  tokens it produces — every child turn resends the whole conversation, so
+  growth in the prompt count is what the child newly made, and a compaction
+  makes the count fall so everything after it is work being done twice. The
+  ceiling is twice the larger of the model's declared `autoCompact` budget and
+  the largest prompt the spawn has actually had accepted: one budget is a large
+  but legitimate task, and it is compacting *again* without ever finishing that
+  names the runaway, which is the same pathology
+  `context-window-drift.mjs` and #266 already describe. No round number was
+  invented — `autoCompact` is per model and comes from the provider's own
+  published window, and a model that declares none is counted but never
+  condemned. Measuring against the spawn's own observed peak as well as the
+  declaration makes a false demotion impossible rather than merely unlikely: an
+  uncompacted spawn's total is exactly half its own ceiling however long its
+  task runs, so neither a model whose declared budget sits far below its window
+  nor a single oversized tool result can condemn anything. Only prompt counts
+  the provider actually reported move the total,
+  so substituted estimates and retry-doubled counts cannot manufacture a
+  demotion. Both paths log unconditionally and record the turn and token
+  counts in the proofs file, so `control subagents status` and the tray say
+  what happened rather than a picker entry quietly disappearing.
+
 - **Grok OAuth no longer loses late or custom tool calls.** The forwarder now
   accepts `function_call` and `custom_tool_call` items that first appear in
   `response.output_item.done`, restores final arguments when argument deltas

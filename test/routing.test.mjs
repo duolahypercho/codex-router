@@ -5068,6 +5068,138 @@ test("a live child turn settles an experimental subagent's proof", async () => {
   }
 });
 
+// Issue #257(b). Two things a `proven` slug could not do before: be taken back
+// by a structural rejection on a later turn, and be taken back by a child that
+// answers forever. The first was unreachable because the observer's gate was
+// the experimental window, so promotion on turn one closed the demotion path
+// with it; the second had no signal at all, because a looping child emits
+// nothing but 200s.
+test("a proven subagent is demoted by a later rejection and by a child that never converges", async () => {
+  const stateDir = mkdtempSync(path.join(os.tmpdir(), "subagent-demote-e2e-"));
+  const proofsPath = path.join(stateDir, "multi-agent-proofs.json");
+  // Both already carry the durable proof: this is the state the old observer
+  // stopped looking at.
+  writeFileSync(
+    proofsPath,
+    JSON.stringify({
+      version: 1,
+      proofs: {
+        "deepseek/deepseek-v4-pro": { status: "proven", spawn: { ok: true, status: 200 } },
+        "deepseek/deepseek-v4-flash": { status: "proven", spawn: { ok: true, status: 200 } },
+      },
+    }),
+    { mode: 0o600 },
+  );
+
+  // deepseek-v4-pro declares autoCompact 900000, so its derived ceiling is two
+  // budgets — 1,800,000 tokens of new input — with the child still going. This
+  // series is the runaway shape: grow, get compacted (the prompt count falls),
+  // redo the same opening work, compact again. It crosses on the sixth turn.
+  const promptCounts = [400_000, 900_000, 300_000, 900_000, 300_000, 900_000];
+  let served = 0;
+  const gateway = await mockServer(async (request, response) => {
+    if (request.url === "/health") {
+      json(response, 200, { ok: true });
+      return;
+    }
+    const body = await bodyJson(request);
+    if (String(body.model || "").includes("flash")) {
+      json(response, 400, { error: { message: "encrypted payload rejected" } });
+      return;
+    }
+    const inputTokens = promptCounts[Math.min(served, promptCounts.length - 1)];
+    served += 1;
+    json(response, 200, {
+      id: `resp_child_${served}`,
+      output: [{ type: "message", content: [{ type: "output_text", text: "still working" }] }],
+      usage: { input_tokens: inputTokens, output_tokens: 4 },
+    });
+  });
+  const routerPort = await openPort();
+  const router = run("router.mjs", {
+    MODEL_ROUTER_STATE_DIR: stateDir,
+    CODEX_ROUTER_PORT: String(routerPort),
+    CODEX_ROUTER_GATEWAY_BASE_URL: `http://127.0.0.1:${gateway.port}/v1`,
+    CODEX_ROUTER_OAUTH_HEALTH_URL: `http://127.0.0.1:${gateway.port}/health`,
+    CODEX_ROUTER_API_HEALTH_URL: `http://127.0.0.1:${gateway.port}/health`,
+    CODEX_ROUTER_GATEWAY_HEALTH_URL: `http://127.0.0.1:${gateway.port}/health`,
+    MODEL_ROUTER_SUBAGENT_PROOFS: proofsPath,
+    // Thread identity resolves against rollout files; point it at empty state
+    // so the test never walks the developer's own ~/.codex/sessions.
+    CODEX_ROUTER_SESSIONS_PATH: path.join(stateDir, "sessions"),
+    CODEX_ROUTER_SESSION_INDEX: path.join(stateDir, "session_index.jsonl"),
+    CODEX_ROUTER_QUIET: "1",
+  });
+
+  const spawnThread = "11111111-2222-4333-8444-555555555555";
+  const childTurn = (model, headers = {}) =>
+    fetch(`${routerBase(routerPort)}/responses`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-openai-subagent": "review-child",
+        ...headers,
+      },
+      body: JSON.stringify({ model, input: "finish the task" }),
+    });
+
+  const proofFor = async (slug, predicate) => {
+    const deadline = Date.now() + 3_000;
+    let proof;
+    while (Date.now() < deadline) {
+      proof = JSON.parse(readFileSync(proofsPath, "utf8")).proofs[slug];
+      if (predicate(proof)) return proof;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    return proof;
+  };
+
+  try {
+    await waitFor(`${routerBase(routerPort)}/models`, router);
+
+    // A structural rejection after promotion is the same evidence it was
+    // before it, so it takes the proof back.
+    const rejected = await childTurn("deepseek/deepseek-v4-flash", {
+      "thread-id": "99999999-8888-4777-8666-555555555555",
+    });
+    assert.equal(rejected.status, 400);
+    const flash = await proofFor(
+      "deepseek/deepseek-v4-flash",
+      (proof) => proof?.status === "failed",
+    );
+    assert.equal(flash.status, "failed");
+    assert.match(flash.reason, /400/);
+    assert.match(flash.reason, /revoking the child role it had already served/);
+
+    // The looping child. Every turn is a clean 200, so nothing status-shaped
+    // could ever fire; what condemns it is how much of its own budget one
+    // spawn burns while still going.
+    for (let index = 0; index < promptCounts.length; index += 1) {
+      const looping = await childTurn("deepseek/deepseek-v4-pro", {
+        "thread-id": spawnThread,
+      });
+      assert.equal(looping.status, 200, `child turn ${index + 1} failed`);
+    }
+    const pro = await proofFor("deepseek/deepseek-v4-pro", (proof) => proof?.status === "failed");
+    assert.equal(pro.status, "failed", "a child that never converged kept its proof");
+    assert.equal(pro.spawn.turns, promptCounts.length);
+    assert.equal(pro.spawn.newInputTokens, 2_100_000);
+    assert.match(pro.reason, /without converging/);
+    assert.match(pro.reason, /1800000-token ceiling/);
+
+    // Both demotions have to be readable in the log, even under the QUIET the
+    // production LaunchAgent hard-sets: a picker entry that vanishes with no
+    // line explaining it is unexplainable.
+    const errors = router.testErrors();
+    assert.match(errors, /subagent demoted: deepseek\/deepseek-v4-flash/);
+    assert.match(errors, /subagent demoted: deepseek\/deepseek-v4-pro/);
+  } finally {
+    await stopChild(router);
+    await closeServer(gateway.server);
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
 // The whole value of a per-model subagent effort is that it applies in one
 // role and not the other: the same model must keep its normal depth when it is
 // the parent. A setting that leaked into parent turns would quietly re-tune
