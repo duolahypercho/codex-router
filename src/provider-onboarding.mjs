@@ -9,6 +9,7 @@ import {
   grokCliPreflight,
 } from "./grok-cli.mjs";
 import { cliSessionPath, cliSessionStatus } from "./cli-session-credential.mjs";
+import { CURSOR_PROVIDER_ID, cursorAgentPath, cursorSignedIn } from "./cursor-cli.mjs";
 import { grokOAuthStatus } from "./grok-oauth-status.mjs";
 import { KIMI_CLI_NPM_PACKAGE } from "./kimi-oauth-onboarding.mjs";
 import { MODELS, PROVIDERS, providerNeedsNoKey } from "./model-registry.mjs";
@@ -55,6 +56,26 @@ const SIGN_IN_CLIS = Object.freeze({
     // to be handed a real terminal.
     needsTerminal: true,
   },
+  // Cursor is the one sign-in CLI here that npm does not ship: it installs
+  // through `curl https://cursor.com/install | bash`, and the tray must not
+  // run that on someone's behalf from a button press -- fetching and executing
+  // a remote script is a decision its owner makes, not a side effect of
+  // clicking "Sign in". `installCommand` exists so the refusal can name the
+  // exact line to run instead of failing at an npm package that does not
+  // exist.
+  "cursor-cli": {
+    executable: "cursor-agent",
+    installCommand: "curl https://cursor.com/install -fsS | bash",
+    loginArgs: ["login"],
+    // `cursor-agent login` opens a browser and then holds the terminal until
+    // the callback lands. Spawned from the tray with no TTY it has nothing to
+    // hold, so it gets a real Terminal window the way Command Code does.
+    needsTerminal: true,
+    // Cursor keeps its session in the OS credential store, not in a file under
+    // ~/.cursor, so the file-mtime probe the other CLIs use has nothing to
+    // watch. Ask the CLI instead -- `cursor-agent status` is local and fast.
+    signedInProbe: true,
+  },
 });
 
 function commandPath(name) {
@@ -74,6 +95,9 @@ export function oauthCliPath(providerId) {
   const cli = SIGN_IN_CLIS[providerId];
   if (!cli) throw new Error(`Unknown OAuth provider: ${providerId}`);
   if (providerId === "grok-oauth") return grokCliPath();
+  // Cursor's installer symlinks into ~/.local/bin, which is not on the bare
+  // PATH launchd hands the tray, and npm has never heard of it.
+  if (providerId === CURSOR_PROVIDER_ID) return cursorAgentPath();
   const discovered = commandPath(cli.executable);
   if (discovered) return discovered;
   const candidate = (cli.candidates || []).find((path) => existsSync(path));
@@ -93,6 +117,7 @@ export function oauthLoginArgs(providerId) {
 function oauthConfigured(providerId) {
   if (providerId === "kimi-oauth") return kimiOAuthStatus().configured;
   if (providerId === "grok-oauth") return grokOAuthStatus().configured;
+  if (providerId === CURSOR_PROVIDER_ID) return cursorSignedIn().signedIn;
   const provider = PROVIDERS.get(providerId);
   return provider ? cliSessionStatus(provider).configured : false;
 }
@@ -124,6 +149,30 @@ export function providerOnboardingSnapshot() {
               : configured
                 ? "ready"
                 : "login",
+        };
+      }
+      // A keyless provider whose usefulness depends on somebody else's CLI
+      // being signed in. `providerNeedsNoKey` is true here and would otherwise
+      // report the row as ready forever -- which is exactly what it did: the
+      // tray showed Cursor "connected" with cursor-agent signed out, and the
+      // only way to find out was every model 502ing.
+      //
+      // Presented as an oauth row because that is what it behaves like: there
+      // is nothing to paste, one button signs you in, and the credential is
+      // never the router's to store or delete. The tray's existing oauth
+      // rendering then applies unchanged.
+      if (providerNeedsNoKey(provider) && hasSignInCli(provider.id)) {
+        const cliInstalled = Boolean(oauthCliPath(provider.id));
+        const signedIn = cliInstalled && oauthConfigured(provider.id);
+        return {
+          id: provider.id,
+          displayName: provider.displayName,
+          kind: "oauth",
+          configured: signedIn,
+          cliInstalled,
+          cliRunnable: cliInstalled,
+          action: !cliInstalled ? "install" : signedIn ? "ready" : "login",
+          ...(provider.planNote ? { planNote: provider.planNote } : {}),
         };
       }
       const configured = providerNeedsNoKey(provider)
@@ -195,6 +244,14 @@ export function installOauthCli(providerId) {
   } else if (oauthCliPath(providerId)) {
     return;
   }
+  // Nothing to install *through npm*. Naming the command is the whole answer:
+  // running it here would mean the router fetching and executing a remote
+  // script because someone pressed a button.
+  if (!cli.npmPackage) {
+    throw new Error(
+      `${cli.executable} is not installed, and it does not come from npm. Install it yourself with: ${cli.installCommand}`,
+    );
+  }
   npmInstallGlobal(cli.npmPackage, { label: `the official ${cli.executable} CLI` });
   if (providerId === "grok-oauth") {
     const preflight = grokCliPreflight();
@@ -233,6 +290,12 @@ function sessionWrittenAt(providerId) {
 }
 
 function signedInSince(providerId, before) {
+  // Cursor keeps its session in the OS credential store, so there is no file
+  // whose mtime could mark the moment a sign-in landed. Asking the CLI is the
+  // only observation available. It is sound only because the caller below
+  // refuses to use it unless the operator was signed *out* when the window
+  // opened -- otherwise "already true" would read as "just finished".
+  if (SIGN_IN_CLIS[providerId]?.signedInProbe) return oauthConfigured(providerId);
   return sessionWrittenAt(providerId) > before && oauthConfigured(providerId);
 }
 
@@ -266,6 +329,12 @@ function signInThroughTerminal(providerId, executable) {
   if (opened.error || opened.status !== 0) {
     throw new Error(`Could not open Terminal to run ${cli.executable}.`);
   }
+  // Reconnecting a CLI whose only signal is "are you signed in?" has no signal
+  // at all: it was true before the window opened and stays true throughout, so
+  // polling would report success the instant the Terminal appeared and claim a
+  // sign-in nobody performed. The window is open and the operator can finish
+  // there; saying so beats inventing a result.
+  if (cli.signedInProbe && oauthConfigured(providerId)) return;
   const deadline = Date.now() + TERMINAL_LOGIN_TIMEOUT_MS;
   while (Date.now() < deadline) {
     if (signedInSince(providerId, before)) return;

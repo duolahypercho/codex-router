@@ -110,6 +110,50 @@ export function parseCursorModels(output) {
 const AUTH_FAILURE = /authentication (?:required|failed)|not logged in|run ['"`]?(?:cursor-)?agent login/i;
 
 /**
+ * Signed in? Answered locally, without asking Cursor.
+ *
+ * `cursorCliStatus()` below settles this too, but it does so with
+ * `cursor-agent models`, which is a network round trip. The tray rebuilds its
+ * provider rows on every refresh, so that call belongs on a doctor run and
+ * nowhere near a poll loop. `cursor-agent status` reads the local credential
+ * store and returns in about half a second.
+ *
+ * It also exits 0 either way, so the answer is in the output and not in the
+ * status code -- and the output is read conservatively: only text that plainly
+ * says signed out counts as signed out, and empty output counts as unknown
+ * rather than signed in, so a future release that reworks this message
+ * degrades to "cannot tell" instead of to a confident wrong answer.
+ */
+export function cursorSignedIn({
+  environment = process.env,
+  platform = process.platform,
+  exec = execFileSync,
+  timeoutMs = 10_000,
+} = {}) {
+  const binary = cursorAgentPath({ environment, platform });
+  if (!binary) return { installed: false, signedIn: false };
+  const { command, args, options } = spawnableCommand(binary, ["status"], platform);
+  let output = "";
+  try {
+    output = String(
+      exec(command, args, {
+        ...options,
+        encoding: "utf8",
+        timeout: timeoutMs,
+        stdio: ["ignore", "pipe", "pipe"],
+        windowsHide: true,
+        env: { ...environment, NO_COLOR: "1" },
+      }) || "",
+    );
+  } catch (error) {
+    output = [error?.stdout, error?.stderr].map((value) => String(value || "")).join("\n");
+  }
+  const text = output.replace(ANSI, "").trim();
+  if (!text) return { installed: true, signedIn: false, binary, unknown: true };
+  return { installed: true, signedIn: !AUTH_FAILURE.test(text), binary };
+}
+
+/**
  * Installed / signed-in / which models, from one call.
  *
  * `cursor-agent status` answers only the middle question, and answering all

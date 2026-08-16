@@ -10,7 +10,7 @@
       "baseUrl": "http://127.0.0.1:4209/v1",
       "baseUrlEnv": "MODEL_ROUTER_CURSOR_BASE_URL",
       "keyless": true,
-      "planNote": "Runs `cursor-agent` on this machine through the router's local bridge. Sign in with `cursor-agent login`, start the bridge with `bin/cursor-bridge`, then curate models with `bin/curate-models cursor-cli`."
+      "planNote": "Spends your Cursor plan through `cursor-agent` on this machine. Sign in, then curate models with `bin/curate-models cursor-cli`. These models answer questions but cannot run tool calls."
     }
   ]
 }
