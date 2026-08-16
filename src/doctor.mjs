@@ -54,6 +54,7 @@ import {
   readVisionBridgeSettings,
   visionBridgeConfigured,
 } from "./vision-bridge-state.mjs";
+import { readFailoverSettings, readProviderCooldowns } from "./model-failover.mjs";
 import { contextWindowDrift, describeContextWindowDrift } from "./context-window-drift.mjs";
 import { observedInputCeilings } from "./usage-events.mjs";
 import { venvRuntimeProblem } from "./venv-runtime.mjs";
@@ -518,6 +519,39 @@ if (visionSettings.enabled && !visionEngine) {
     "Vision bridge",
     visionEngine ? `text-only models read images via ${visionEngine.slug}` : "off",
     "Run ./bin/model-router codex control vision-bridge on to let text-only models read pasted images.",
+  );
+}
+// A cooldown is the router declining to send to a provider, which looks
+// exactly like the provider being broken if nobody says so out loud. Report
+// every live one with its expiry, so "why is my model not being used" has an
+// answer here rather than in the log.
+const failoverSettings = readFailoverSettings();
+const activeCooldowns = Object.entries(readProviderCooldowns());
+if (!failoverSettings.enabled) {
+  add(
+    "ok",
+    "Model failover",
+    "off -- a provider that runs out of usage ends the turn",
+    "Run ./bin/model-router codex control failover on to let a turn continue on another enabled model.",
+  );
+} else if (activeCooldowns.length) {
+  add(
+    "warn",
+    "Model failover",
+    `holding off ${activeCooldowns
+      .map(([id, entry]) => `${id} until ${entry.until} (${entry.reason || "reported empty"})`)
+      .join(", ")}`,
+    "Each clears itself at that time, or on the provider's next successful answer. " +
+      "Run ./bin/model-router codex control failover reset to clear them now.",
+  );
+} else {
+  add(
+    "ok",
+    "Model failover",
+    failoverSettings.chain.length
+      ? `on, in the order you set: ${failoverSettings.chain.join(" -> ")}`
+      : "on, free models first then your other enabled providers",
+    "Run ./bin/model-router codex control failover chain <model-slug,...> to choose the order yourself.",
   );
 }
 // The same list the catalog writes definitions from, so a model switched off

@@ -1033,6 +1033,87 @@ merely failing them.
    the status or the transport error's own name and code — never a response
    body, and never the caller capability path.
 
+## Moving a turn to another model is legal only before the first relayed byte
+
+`src/model-failover.mjs` decides when a turn whose provider reported it has no
+usage left is rebuilt for a different model, and `buildRoutedRequest` in
+`src/router.mjs` is what makes rebuilding it possible. The rules are narrow on
+purpose; several of them exist because the obvious wider version is wrong.
+
+1. The **same relayed-byte rule as upstream retries**, for the same reason. The
+   failover branch lives before `pipeResponse`, and `nothingRelayed(response)`
+   is re-checked before every hop. Never move it around `pipeResponse`: a
+   mid-stream swap grafts a second response onto a stream the client is reading,
+   and duplicates any tool call the client has already executed. That second
+   hazard is worse than the duplicated stream and has no equivalent in the retry
+   path.
+2. Only **"your usage is gone"** qualifies: `upstreamFailureKind` returning
+   `out_of_usage`, a 402, or a 429 whose `Retry-After` exceeds sixty seconds. Do
+   not add 401 or 403 — a swap would hide the rejected credential that is the
+   only thing worth telling the operator. Do not add 404 or 400, which are
+   deterministic. Do not add 5xx: `upstream-retry.mjs` already absorbs the
+   transient shapes, and masking a provider outage costs an incident somebody
+   would want to see. Do not lower the 429 threshold; trading a twenty-second
+   wait for a cold prompt cache is a bad deal for the rest of the session.
+   Entitlement failures are classified **before** quota ones and never swap,
+   because "upgrade your plan" appears in both vocabularies and no other
+   provider's quota makes a missing entitlement true.
+   Claude Code excludes billing errors from its own fallback on the reasoning
+   that they usually mean misconfiguration. That reasoning does not hold here:
+   with thirty providers configured, an exhausted plan is a daily event and
+   having somewhere else to go is the whole point of the install.
+3. **Never trade a quota error for a context error.** A candidate is eligible
+   only when its `contextWindow` can hold `estimateInputTokens` of the bytes the
+   turn was about to send. That estimate errs high by design, which is the safe
+   direction. Falling from a 1M-context model onto a 262K one mid-session is a
+   strictly worse turn than the one it replaced.
+4. **Never fail over inside the same provider family.** Compare
+   `canonicalProviderId`: protocol variants share one credential and therefore
+   one quota, so a sibling is guaranteed to fail the same way.
+5. **A cooldown is only ever a window the provider itself named.** Derived from
+   `Retry-After` and `cooldownUntil`, never invented, capped at six hours, and
+   cleared on that provider's next successful answer. A provider under cooldown
+   is skipped before dispatch, which is the entire saving — so a cooldown that
+   is wrong strands the operator's chosen model, and that is why nothing may
+   record one from a guess. `control failover reset` and the doctor's report
+   exist so a wrong one is visible and removable.
+6. **Bounded**: at most two hops, a thirty-second budget for the whole sequence,
+   abort-aware, stop on the first success. When nothing is eligible, return the
+   failure the operator's own model gave — it is the one they can act on.
+7. **Never silent, and never in the transcript.** The log line is not gated on
+   `CODEX_ROUTER_QUIET`, which a production LaunchAgent hard-sets. Both attempts
+   are metered and the serving row carries `failoverFrom`. Do not "helpfully"
+   inject a notice into the stream: Codex replays assistant output as input, so
+   a router-authored sentence comes back next turn as something the model
+   believes it said.
+8. **The rebuild must start from the pristine payload.** `buildRoutedRequest`
+   writes to neither `payload` nor the aged input, and this is load-bearing in
+   two places. `flattenNamespaceTools` only recognizes `type: "namespace"`
+   items, so a second pass over already-flattened tools returns an *empty*
+   namespace map — plausible tools with no way to map the model's calls back.
+   And `carryReasoningThroughInput` replaces reasoning items in place, so a
+   responses-native second pass would find them already gone. The input array is
+   copied before it is rewritten — and copied **only when it is an array**,
+   because `input` is equally legal as a bare string and spreading one produces
+   an array of single characters, which reaches the provider and still reads as
+   a 200. `test/router-timing-log.test.mjs` caught exactly that.
+9. `selectedConfiguredListedModels()` is **not** cheap: it probes every
+   provider's credential synchronously and spawns `/usr/bin/security` per
+   keychain service on macOS. Call it only once a failure or a cooldown is
+   already known, never on the happy path.
+10. Coverage lives in `test/model-failover.test.mjs` (classifier, ranking,
+    cooldown store) and `test/model-failover-router.test.mjs` (end to end,
+    including that the failed attempt's bytes never reach the client). A change
+    to the trigger set, the ranking, or the cooldown rules needs a test there.
+
+**Not implemented: the native ChatGPT tier.** Falling back to the signed-in
+ChatGPT plan is deliberately absent. It is not a body swap but the other branch
+entirely, and it crosses the routed/native boundary this file governs
+elsewhere — `encrypted_content` rewriting, the compatibility relay, the
+collaboration envelope. Those rules require live marker-return probes through
+every installed routed agent before a change ships, so the tier cannot be added
+from the test suite alone. Add it with those proofs or not at all.
+
 ## Substituting a prompt-token count a provider reported as zero
 
 Codex decides when to compact from the `input_tokens` each response reports, so

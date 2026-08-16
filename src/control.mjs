@@ -970,6 +970,45 @@ async function handleToolResultAging(action, nativeAction) {
   process.stdout.write(`${JSON.stringify(toolResultAgingSnapshot())}\n`);
 }
 
+// Failover has one switch, one optional order, and one escape hatch. The
+// escape hatch matters most: a cooldown is the router refusing to send to a
+// provider, and an operator who believes it is wrong needs a way to say so
+// without waiting out a window somebody else's clock chose.
+async function handleFailover(action, ...rest) {
+  const {
+    clearAllProviderCooldowns,
+    readFailoverSettings,
+    readProviderCooldowns,
+    setFailoverChain,
+    setFailoverEnabled,
+  } = await import("./model-failover.mjs");
+  const snapshot = () => ({
+    ...readFailoverSettings(),
+    cooldowns: readProviderCooldowns(),
+  });
+  const desired = action || "status";
+  if (desired === "status") {
+    process.stdout.write(`${JSON.stringify(snapshot(), null, 2)}\n`);
+    return;
+  }
+  if (desired === "on" || desired === "off") {
+    setFailoverEnabled(desired === "on");
+  } else if (desired === "chain") {
+    setFailoverChain(rest);
+  } else if (desired === "auto") {
+    setFailoverChain([]);
+  } else if (desired === "reset") {
+    // Every recorded window at once. A provider is asked again on the very
+    // next turn, and answers for itself.
+    clearAllProviderCooldowns();
+  } else {
+    throw new Error(
+      "Usage: control failover status|on|off|chain <model-slug,...>|auto|reset",
+    );
+  }
+  process.stdout.write(`${JSON.stringify(snapshot(), null, 2)}\n`);
+}
+
 // The bridge changes what the picker advertises (image input on text-only
 // models), so every mutation rebuilds the catalog the way the subagent and
 // picker toggles do.
@@ -1995,6 +2034,8 @@ if (args.includes("--probe")) {
   await handleLocalModels(args[1], args[2], ...args.slice(3));
 } else if (args[0] === "vision-bridge") {
   await handleVisionBridge(args[1] || "status", args[2], args[3]);
+} else if (args[0] === "failover") {
+  await handleFailover(args[1], ...args.slice(2));
 } else if (args[0] === "picker") {
   await handlePicker(...pickerCommandArgs(args));
 } else if (args[0] === "service") {

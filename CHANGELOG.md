@@ -33,6 +33,39 @@
   The entry is also renamed to **Qwen3.8-27-free-victor**, crediting `victor`,
   who publishes the endpoint, in the name the picker shows rather than only in
   the endpoint note.
+- **A turn whose provider has run out of usage now continues on another model.**
+  An install with thirty providers configured runs out of one of them most days:
+  a coding-plan window closes, a weekly quota lands, a balance empties. The
+  router named that failure clearly and then stopped — Codex has nothing to do
+  with a billing error, so a session mid-task simply ended, subagents included,
+  while every other model the operator could reach sat unused. The turn is now
+  rebuilt for the next eligible model and sent again, and the client sees one
+  clean answer.
+
+  What qualifies is deliberately narrow: an exhausted balance or plan limit, a
+  402, or a 429 whose `Retry-After` is longer than a minute. A rejected
+  credential, an unknown model, a malformed request, and every 5xx keep exactly
+  the error they returned before — swapping models to dodge a bad key would hide
+  the one fact that fixes it, and a short rate limit is cheaper to wait out than
+  a cold prompt cache is to pay for. Free models are tried before paid ones,
+  then the rest in the registry's own preference order; a model on your own
+  machine is never chosen automatically, because the runtime might not be
+  running. A candidate whose context window cannot hold the conversation is
+  skipped, so a quota failure is never traded for a context-window rejection.
+
+  When a provider says when it will be back, that window is believed: the next
+  turn skips it outright instead of buying the same rejection again, and it is
+  used again by itself once the window passes or the next time it answers. A
+  reset time is never invented, only ever read from the provider, and it is
+  capped at six hours so a malformed one cannot strand a model.
+
+  Nothing about the swap is silent, and nothing is injected into the transcript.
+  The router logs it (never gated on `CODEX_ROUTER_QUIET`), the tray Island names
+  the model actually answering, and the usage event carries `failoverFrom` so a
+  rescued turn stays distinguishable from one that never failed. Compaction gets
+  the same treatment, because a compaction that fails ends a session just as
+  hard. `./bin/control failover status|on|off|chain <slugs>|auto|reset`; the
+  doctor reports any provider currently being held off and when it clears.
 
 - **The GLM-5.3 1M entry routed to a model code Z.ai does not serve.** Shipping
   `glm-5.3[1m]` took the vendor's documented 1M suffix at its word, and the

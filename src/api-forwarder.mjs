@@ -19,8 +19,9 @@ import {
   endpointForModel,
   resolveProviderBaseUrl,
 } from "./model-registry.mjs";
-import { parseRateLimitHeaders } from "./rate-limit-headers.mjs";
+import { cooldownUntil, parseRateLimitHeaders } from "./rate-limit-headers.mjs";
 import { recordRateLimitSnapshot } from "./rate-limit-state.mjs";
+import { recordProviderCooldown } from "./model-failover.mjs";
 import { canonicalProviderId, readProviderSelection } from "./provider-selection.mjs";
 import { stripImages, supportsImageInput } from "./vision-bridge.mjs";
 import {
@@ -863,6 +864,22 @@ async function handleRequest(request, response) {
   // Variant-routed responses meter the same upstream subscription, so quota
   // headers land under the family's canonical provider id.
   if (rateLimit) recordRateLimitSnapshot(canonicalProviderId(normalized.provider.id), rateLimit);
+  // This hop is the only place the provider's own status and headers are seen
+  // before LiteLLM restates them, so it is the only place a reset time the
+  // gateway does not relay can still be read. A failure that names when the
+  // caller may return is worth recording: the router reads it to skip a
+  // provider it already knows is empty instead of buying the same rejection
+  // once per turn. Only a failure, and only a window the provider itself
+  // named -- a healthy response is never a reason to stop using a provider.
+  if (!upstream.ok) {
+    const until = cooldownUntil(rateLimit);
+    if (until) {
+      recordProviderCooldown(canonicalProviderId(normalized.provider.id), {
+        until,
+        reason: upstream.status === 429 ? "rate_limited" : "out_of_usage",
+      });
+    }
+  }
   if (!QUIET) {
     console.error(
       `[api-forwarder] provider=${normalized.provider.id} model=${normalized.model.upstreamModel} status=${upstream.status} duration_ms=${Date.now() - startedAt}`,

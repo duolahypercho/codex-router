@@ -110,6 +110,27 @@ function isOutOfUsage(detail, errorType) {
   return QUOTA_PATTERNS.some((pattern) => pattern.test(detail));
 }
 
+// The same two questions `describeFailure` asks, in the same order, answered for
+// a caller that needs to *act* on the distinction rather than word it. Exported
+// as one function rather than as the two predicates, because the order is the
+// load-bearing part: "upgrade your plan" appears in both pattern sets, so a
+// caller that asked about quota first would read a permanent entitlement failure
+// as an exhausted balance. Keeping the ordering here means there is one place it
+// can be got right.
+//
+// Returns "entitlement" (a plan that never included this API -- nothing the
+// operator does with keys or top-ups changes it), "out_of_usage" (an exhausted
+// balance or plan limit, which time or a top-up fixes), or undefined for
+// everything else, including every 5xx: the origin ran, and what it said about
+// quota is not evidence about the caller's.
+export function upstreamFailureKind({ status, bodyText }) {
+  if (!(Number(status) < 500)) return undefined;
+  const detail = extractUpstreamDetail(bodyText);
+  if (isPlanEntitlement(detail)) return "entitlement";
+  if (isOutOfUsage(detail, parseUpstreamError(bodyText).type)) return "out_of_usage";
+  return undefined;
+}
+
 function describeFailure({
   status,
   detail,

@@ -131,6 +131,13 @@ export function recordUsageEvent({
   // two: compare it against the eligibility floor.
   toolResultsEvaluated,
   toolResultBytesLargest,
+  // Present only on a turn the router moved to another model because the one
+  // the operator asked for reported it had no usage left. `model` and
+  // `provider` above name what actually served the turn; this names what was
+  // asked for. Without it a rescued turn is indistinguishable from an operator
+  // who simply changed models, which is the difference between "your provider
+  // is empty" and "you switched".
+  failoverFrom,
   at = Date.now(),
 }) {
   const event = {
@@ -156,6 +163,9 @@ export function recordUsageEvent({
       ? { emptyCompletionGuardReleased: true }
       : {}),
     ...(safeRetryCount(retries) !== undefined ? { retries: safeRetryCount(retries) } : {}),
+    ...(typeof failoverFrom === "string" && failoverFrom.trim()
+      ? { failoverFrom: safeText(failoverFrom, "unknown") }
+      : {}),
     ...(safeTokenCount(inputTokens) !== undefined
       ? { inputTokens: safeTokenCount(inputTokens) }
       : {}),
