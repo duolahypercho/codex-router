@@ -56,7 +56,9 @@ export function aggregateProviderUsage(events, { days = 90, now = Date.now() } =
           ? "oauth"
           : provider.authMode === "anonymous"
             ? "anonymous"
-            : "api",
+            : provider.authMode === "per-model"
+              ? "per-model"
+              : "api",
         scope: "local-router",
         requests: 0,
         successfulRequests: 0,

@@ -2779,6 +2779,118 @@ test("API forwarder downgrades forced tool choices only for models that declare 
 });
 
 
+// The free Qwen3.8 community endpoint validates reasoning_effort against a
+// literal set and 400s on anything outside it. `ultra` is the one rung of the
+// Codex ladder that set omits, so the profile folds exactly that value and
+// leaves the rest alone. The profile is a property of the model, not of the
+// provider, so this exercises it through a curated model on a provider whose
+// base URL can be pointed at a local mock -- an anonymous provider is pinned
+// to its official endpoint by construction and has none.
+function curatedQwen38EffortModel() {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "routing-qwen38-community-models-"));
+  const file = path.join(dir, "user-models.json");
+  writeFileSync(
+    file,
+    JSON.stringify({
+      version: 1,
+      models: [
+        {
+          slug: "openrouter/qwen-3.8-27b-effort",
+          gatewayModel: "openrouter-qwen-3-8-27b-effort",
+          upstreamModel: "qwen/qwen3.8-27b",
+          provider: "openrouter",
+          listed: true,
+          displayName: "Qwen3.8 27B (effort fixture)",
+          description: "Test fixture.",
+          priority: 500,
+          defaultEffort: "medium",
+          reasoningLevels: [{ effort: "medium", description: "Balanced reasoning" }],
+          contextWindow: 262144,
+          autoCompact: 230000,
+          inputModalities: ["text"],
+          requestProfile: "qwen38-community",
+          compHash: "openrouter-qwen-3-8-27b-effort-user-v1",
+        },
+      ],
+    }),
+    "utf8",
+  );
+  return { dir, file, gatewayModel: "openrouter-qwen-3-8-27b-effort" };
+}
+
+test("API forwarder folds only the effort tier the free Qwen3.8 endpoint rejects", async () => {
+  const upstreamRequests = [];
+  const upstream = await mockServer(async (request, response) => {
+    upstreamRequests.push({ headers: request.headers, body: await bodyJson(request) });
+    json(response, 200, { choices: [] });
+  });
+  const curated = curatedQwen38EffortModel();
+  const forwarderPort = await openPort();
+  const forwarder = run("api-forwarder.mjs", {
+    CODEX_ROUTER_API_PORT: String(forwarderPort),
+    MODEL_ROUTER_USER_MODELS: curated.file,
+    OPENROUTER_API_BASE_URL: `http://127.0.0.1:${upstream.port}`,
+    OPENROUTER_API_KEY: "TEST_OPENROUTER_API_KEY",
+    CODEX_ROUTER_QUIET: "1",
+  });
+
+  try {
+    await waitFor(`http://127.0.0.1:${forwarderPort}/health`, forwarder, {
+      Authorization: `Bearer ${INTERNAL_KEY}`,
+    });
+    for (const [sentEffort, expectedEffort] of [
+      ["ultra", "max"],
+      ["max", "max"],
+      ["xhigh", "xhigh"],
+      ["high", "high"],
+      ["medium", "medium"],
+      ["low", "low"],
+      ["minimal", "minimal"],
+      ["none", "none"],
+    ]) {
+      const response = await fetch(`http://127.0.0.1:${forwarderPort}/v1/chat/completions`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${INTERNAL_KEY}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: curated.gatewayModel,
+          reasoning_effort: sentEffort,
+          tool_choice: "required",
+          messages: [{ role: "user", content: "test" }],
+        }),
+      });
+      assert.equal(response.status, 200);
+      const request = upstreamRequests.at(-1);
+      assert.equal(request.body.reasoning_effort, expectedEffort);
+      // The endpoint answers a forced tool choice with a real tool call
+      // (verified live), so the profile must not downgrade it -- the
+      // compatibility probe and the subagent payload relay both depend on it.
+      assert.equal(request.body.tool_choice, "required");
+    }
+
+    // An absent effort stays absent so the endpoint applies its own default.
+    const response = await fetch(`http://127.0.0.1:${forwarderPort}/v1/chat/completions`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${INTERNAL_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: curated.gatewayModel,
+        messages: [{ role: "user", content: "test" }],
+      }),
+    });
+    assert.equal(response.status, 200);
+    assert.equal("reasoning_effort" in upstreamRequests.at(-1).body, false);
+  } finally {
+    await stopChild(forwarder);
+    await closeServer(upstream.server);
+    rmSync(curated.dir, { recursive: true, force: true });
+  }
+});
+
 test("API forwarder routes MiniMax M3 streaming tool calls with adaptive thinking", async () => {
   const upstreamRequests = [];
   const upstream = await mockServer(async (request, response) => {

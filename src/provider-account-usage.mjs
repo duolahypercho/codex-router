@@ -804,7 +804,10 @@ async function accountUsageFor(providerId, fetchImpl) {
     if (providerId === "commandcode") return await commandCodeAccount(fetchImpl);
     if (providerId === "minimax-token-plan") return await minimaxTokenPlanAccount(fetchImpl);
     if (providerId === "opencode-go") return await opencodeGoAccount(fetchImpl);
-    if (providerId === "opencode-free" || providerId === "kilo-free") {
+    // Keyed on the auth mode rather than on a list of ids: an anonymous
+    // provider has no account to query by construction, so a new one must not
+    // be able to fall through to a branch that would try.
+    if (["anonymous", "per-model"].includes(PROVIDERS.get(providerId)?.authMode)) {
       return withHeaderQuota(providerId, localOnly("Anonymous free-provider quota is not exposed; showing router traffic"));
     }
     if (providerId === "github-copilot") return await githubCopilotAccount(fetchImpl);

@@ -11,7 +11,7 @@ import {
 import { cliSessionPath, cliSessionStatus } from "./cli-session-credential.mjs";
 import { grokOAuthStatus } from "./grok-oauth-status.mjs";
 import { KIMI_CLI_NPM_PACKAGE } from "./kimi-oauth-onboarding.mjs";
-import { MODELS, PROVIDERS } from "./model-registry.mjs";
+import { MODELS, PROVIDERS, providerNeedsNoKey } from "./model-registry.mjs";
 import { kimiOAuthStatus } from "./oauth-status.mjs";
 import { STATE_DIR } from "./paths.mjs";
 import {
@@ -126,7 +126,7 @@ export function providerOnboardingSnapshot() {
                 : "login",
         };
       }
-      const configured = provider.keyless || provider.authMode === "anonymous"
+      const configured = providerNeedsNoKey(provider)
         ? true
         : credentialStatus(provider, { persistent: true }).configured;
       const entry = {
@@ -140,6 +140,16 @@ export function providerOnboardingSnapshot() {
         // moment someone decides to connect, not after Codex 403s.
         ...(provider.planNote ? { planNote: provider.planNote } : {}),
       };
+      // A container has no key field of its own. Saying so is the whole card:
+      // an "Add Key" button here would store a secret nothing ever reads.
+      if (provider.authMode === "per-model") {
+        entry.kind = "per-model";
+        entry.action = "per-model";
+        entry.credentialLabel = "Per-model endpoints";
+        entry.perModelNote =
+          "Each model here names its own endpoint and its own auth. Enabling this provider costs nothing.";
+        return entry;
+      }
       if (provider.authMode === "anonymous") {
         entry.kind = "anonymous";
         // Guided setup pre-checks every `ready` row. An off-box endpoint must

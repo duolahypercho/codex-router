@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "providers": [
+    {
+      "id": "custom",
+      "displayName": "Custom",
+      "kind": "openai-compatible",
+      "ownedBy": "custom",
+      "authMode": "per-model",
+      "perModelEndpoint": true,
+      "planNote": "Each model here names its own endpoint. Enabling the provider costs nothing; a model that needs a key says so on its own row."
+    }
+  ]
+}

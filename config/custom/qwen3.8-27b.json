@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "slug": "custom/qwen3.8-27b",
+      "gatewayModel": "custom-qwen3-8-27b",
+      "upstreamModel": "Qwen/Qwen3.8-27B",
+      "provider": "custom",
+      "endpoint": {
+        "baseUrl": "https://g9hnto0u7lvbu837.us-east-2.aws.endpoints.huggingface.cloud/v1",
+        "authMode": "anonymous",
+        "note": "No API key is needed: this is a free community Hugging Face Inference Endpoint for Qwen3.8-27B, published by an individual rather than by Qwen or Hugging Face. Use at your own risk: it is shared, rate limited to roughly 30 requests per minute per IP, and its owner says it will be retired once launch interest fades."
+      },
+      "listed": true,
+      "displayName": "Qwen3.8 27B (Free)",
+      "description": "Qwen3.8-27B on a free, rate-limited community Hugging Face Inference Endpoint: 262K context, image input, tool calling, and a dialable thinking budget. Shared with everyone behind your IP, so expect 429s under load.",
+      "priority": 140,
+      "defaultEffort": "medium",
+      "reasoningLevels": [
+        {
+          "effort": "minimal",
+          "description": "Least thinking"
+        },
+        {
+          "effort": "low",
+          "description": "Brief reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced reasoning"
+        },
+        {
+          "effort": "high",
+          "description": "Deep reasoning"
+        },
+        {
+          "effort": "xhigh",
+          "description": "Extended reasoning"
+        },
+        {
+          "effort": "max",
+          "description": "Maximum reasoning depth"
+        }
+      ],
+      "contextWindow": 262144,
+      "autoCompact": 230000,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "requestProfile": "qwen38-community",
+      "compHash": "custom-qwen3-8-27b-v1"
+    }
+  ]
+}

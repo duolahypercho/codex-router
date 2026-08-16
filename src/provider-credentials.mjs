@@ -27,7 +27,11 @@ import {
 
 export function apiProvider(providerId) {
   const provider = PROVIDERS.get(providerId);
-  if (!provider || provider.kind !== "openai-compatible" || provider.authMode === "anonymous") {
+  if (
+    !provider ||
+    provider.kind !== "openai-compatible" ||
+    ["anonymous", "per-model"].includes(provider.authMode)
+  ) {
     throw new Error(`Unknown API-key provider: ${providerId}`);
   }
   return provider;
@@ -148,6 +152,14 @@ export function resolveProviderCredential(providerOrId, options = {}) {
   if (provider.authMode === "anonymous") {
     return { value: undefined, source: "official anonymous endpoint", persistent: true };
   }
+  // A per-model-endpoint provider holds no credential of its own: each of its
+  // models resolves through this same function with its own endpoint
+  // descriptor. Answering "configured" here is what lets the container take
+  // part in selection, health, and the catalog; a model whose own endpoint
+  // needs a key still reports that against the key it actually wants.
+  if (provider.authMode === "per-model") {
+    return { value: undefined, source: "per-model endpoints", persistent: true };
+  }
   // Nothing to resolve for a loopback provider: it authenticates no one. The
   // placeholder keeps the forwarder's header shape uniform, and the registry
   // guarantees keyless providers are loopback-only, so it never leaves the
@@ -201,6 +213,7 @@ export function resolveProviderCredential(providerOrId, options = {}) {
 // prints this sentence (doctor, discovery errors, the enable gate).
 export function credentialSetupHint(provider) {
   if (provider.authMode === "anonymous") return "No key needed; free models are rate limited by the provider.";
+  if (provider.authMode === "per-model") return "No key needed here; each model names its own endpoint.";
   if (provider.keyless) return "No key needed; it runs on this machine.";
   const keyCommand = targetCli(`provider-key ${provider.id} set`);
   const session = cliSessionDescriptor(provider);
@@ -211,6 +224,7 @@ export function credentialSetupHint(provider) {
 
 export function credentialLabel(provider) {
   if (provider.authMode === "anonymous") return "No API key";
+  if (provider.authMode === "per-model") return "Per-model endpoints";
   return provider.credential?.label || "API key";
 }
 

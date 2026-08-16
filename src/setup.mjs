@@ -6,7 +6,7 @@ import path from "node:path";
 import { cliSessionDescriptor } from "./cli-session-credential.mjs";
 import { detectLegacyInstallations, applyKnownMigrations, rollbackLatestMigration } from "./legacy-migration.mjs";
 import { grokOAuthStatus } from "./grok-oauth-status.mjs";
-import { PROVIDERS } from "./model-registry.mjs";
+import { PROVIDERS, providerNeedsNoKey } from "./model-registry.mjs";
 import { kimiOAuthStatus } from "./oauth-status.mjs";
 import { SOURCE_ROOT, TARGET } from "./paths.mjs";
 import { credentialStatus } from "./provider-credentials.mjs";
@@ -202,7 +202,7 @@ function providerConfigured(provider) {
     if (provider.id === "grok-oauth") return grokOAuthStatus().configured;
     return false;
   }
-  return provider.keyless || provider.authMode === "anonymous"
+  return providerNeedsNoKey(provider)
     ? true
     : credentialStatus(provider, { persistent: true }).configured;
 }
@@ -291,7 +291,7 @@ function configureProvider(provider) {
       throw incomplete(`${provider.displayName} sign-in did not produce a usable credential.`);
     }
   } else {
-    if (provider.authMode === "anonymous") return;
+    if (["anonymous", "per-model"].includes(provider.authMode)) return;
     // A provider whose CLI mints its key in the browser gets that offer first,
     // because most people have an account long before they have a key. Saying
     // no falls through to the key prompt rather than failing the install.

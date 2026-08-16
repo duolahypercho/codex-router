@@ -1,7 +1,7 @@
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
-import { PROVIDERS } from "./model-registry.mjs";
+import { PROVIDERS, providerNeedsNoKey } from "./model-registry.mjs";
 import { cliSessionDescriptor } from "./cli-session-credential.mjs";
 import { grokOAuthStatus } from "./grok-oauth-status.mjs";
 import { kimiOAuthStatus } from "./oauth-status.mjs";
@@ -31,7 +31,7 @@ function configured(provider) {
   if (provider.kind === "oauth") {
     return Boolean(SIGN_IN_STATUS[provider.id]?.status().configured);
   }
-  return provider.keyless || provider.authMode === "anonymous"
+  return providerNeedsNoKey(provider)
     ? true
     : credentialStatus(provider, { persistent: true }).configured;
 }

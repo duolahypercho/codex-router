@@ -75,6 +75,16 @@ async function providerPayload(provider) {
 export async function discoverProviderModels(providerId) {
   const provider = PROVIDERS.get(providerId);
   if (!provider) throw new Error(`Unknown provider: ${providerId}`);
+  // Discovery asks one endpoint what it serves. A per-model-endpoint provider
+  // is not an endpoint, so there is no single host to ask and no answer that
+  // would mean anything for the models under it. Refusing beats picking one of
+  // its models' addresses and reporting that as the provider's catalog.
+  if (provider.perModelEndpoint) {
+    throw new Error(
+      `${provider.displayName} has no endpoint of its own; each of its models names one. ` +
+        "Discovery runs against a single endpoint, so there is nothing to list here.",
+    );
+  }
   if (provider.kind !== "openai-compatible") {
     throw new Error(`${provider.displayName} does not expose a supported model-list endpoint.`);
   }

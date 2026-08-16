@@ -1020,6 +1020,10 @@ struct ProviderIcon: View {
     if providerID == "chutes" { return "Chutes" }
     if providerID == "opencode-free" { return "OpenCode Free" }
     if providerID == "kilo-free" { return "Kilo Free" }
+    // Deliberately not a vendor name: this provider is a container for
+    // whatever endpoints the operator put in it, and its models come from
+    // different places.
+    if providerID == "custom" { return "Custom" }
     return routerLocalized("Model provider")
   }
 }

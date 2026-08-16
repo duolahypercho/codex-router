@@ -14,6 +14,62 @@
   exists. A `config.toml` still naming the removed slug has nothing to route to
   and fails at the native target; reselect the plain GLM-5.3 entry.
 
+- **A `custom` provider whose models each name their own endpoint.** Every other
+  provider owns one address, which is why "route this one model from that one
+  host" has always meant inventing a whole provider for it. `custom` owns none:
+  each of its models carries its own `baseUrl`, its own auth, and its own
+  metadata, so one picker entry can hold a free community endpoint, a
+  self-hosted server, and a paid API with a key, at once. Enabling it asks for
+  nothing and it is never in the default set, because what it holds is whatever
+  somebody put in it.
+
+  Its first model is the free community Hugging Face Inference Endpoint for
+  `Qwen/Qwen3.8-27B`: no API key, 262K context, image input, tool calling, and a
+  thinking budget the effort picker dials. Every capability was measured against
+  the live endpoint rather than read off its model card — including the one
+  divergence, that its vLLM build validates `reasoning_effort` against a literal
+  set omitting the Codex ladder's `ultra`, so the request profile folds exactly
+  that rung onto `max` and leaves every other tier alone. It is shared, rate
+  limited per IP, and its owner says it will be retired once launch interest
+  fades: a model to try, not one to depend on.
+
+  The security rule follows the address down rather than staying at the provider.
+  A `custom` endpoint reached with no credential must have that address
+  allowlisted in code, exactly as an anonymous provider's is — otherwise adding a
+  JSON file under `config/custom/` would be enough to send prompts to any host on
+  the internet with nothing to authenticate them. A keyless endpoint stays
+  loopback-only, neither may declare an environment override that would walk
+  around those two rules, and an endpoint's identity is derived from its model so
+  one model's credential file can never be pointed at another model's secret.
+
+- **The GLM-5.3 1M entry routed to a model code Z.ai does not serve.** Shipping
+  `glm-5.3[1m]` took the vendor's documented 1M suffix at its word, and the
+  suffix answers `1214` on both the OpenAI-compatible and Anthropic endpoints --
+  every request through that entry failed, while plain `glm-5.3` on the same
+  endpoint and credential succeeded. The entry is gone rather than repaired,
+  because there is nothing behind it to repair. The window it was invented to
+  reach turned out to be served on the plain entry all along: a 990,020-token
+  prompt was accepted, so `zai-coding/glm-5.3` declares 1M and its picker
+  description says so instead of directing readers to an entry that no longer
+  exists. A `config.toml` still naming the removed slug has nothing to route to
+  and fails at the native target; reselect the plain GLM-5.3 entry.
+
+- **A free Qwen3.8-27B provider that needs no account.** `qwen38-free` routes
+  the community Hugging Face Inference Endpoint for `Qwen/Qwen3.8-27B`: no API
+  key, 262K context, image input, tool calling, and a thinking budget the
+  effort picker dials. It joins `opencode-free` and `kilo-free` as an anonymous
+  provider, so it is never selected on anyone's behalf and never defaulted --
+  `./bin/model-router codex providers enable qwen38-free` is the whole setup.
+  Unlike those two it is not catalog-only: a single-model endpoint has no
+  naming rule to filter by, so its one documented free ID lives in code beside
+  the endpoint allowlist and the model ships with metadata verified against the
+  live endpoint rather than guessed by `curate-models`. The endpoint validates
+  `reasoning_effort` against a literal set that omits the Codex ladder's
+  `ultra`, so its request profile folds exactly that rung onto `max` and leaves
+  every other tier -- and forced tool choices, which it answers correctly --
+  alone. It is shared, rate limited per IP, and its owner says it will be
+  retired once launch interest fades: a model to try, not one to depend on.
+
 - **The panel's local-model view surfaces LM Studio.** LM Studio arrived as a
   provider with exactly one door: `./bin/curate-models lmstudio` in an
   interactive terminal, while the panel's Local LLMs section read only

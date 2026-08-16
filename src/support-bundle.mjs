@@ -15,7 +15,7 @@ import { redactCallerUrl } from "./caller-auth.mjs";
 import { readInstallManifest } from "./install-manifest.mjs";
 import { protectPrivateFile } from "./file-security.mjs";
 import { detectLegacyInstallations } from "./legacy-migration.mjs";
-import { PROVIDERS } from "./model-registry.mjs";
+import { PROVIDERS, providerNeedsNoKey } from "./model-registry.mjs";
 import {
   CALLER_SECRET_PATH,
   CONFIG_PATH,
@@ -89,7 +89,7 @@ function knownLocalSecrets() {
     if (provider.kind !== "openai-compatible") continue;
     // A keyless provider holds no secret, so there is nothing to collect and
     // nothing to redact for it.
-    if (provider.keyless || provider.authMode === "anonymous") continue;
+    if (providerNeedsNoKey(provider)) continue;
     files.push(...credentialPaths(provider));
     for (const name of provider.credential.environment) {
       const value = process.env[name]?.trim();

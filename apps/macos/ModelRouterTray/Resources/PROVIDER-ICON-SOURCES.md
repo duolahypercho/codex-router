@@ -26,6 +26,8 @@ blue accent and DeepSeek's original blue mark are preserved.
 
 The Z.AI, Qwen, Ollama, Cline, MiniMax, and Meta AI marks were fetched on
 2026-08-15. The opencode-go routes reuse the OpenCode Free mark rather than
-shipping a duplicate asset.
+shipping a duplicate asset. `custom` deliberately ships no mark at all: it is a
+container for whatever endpoints an operator puts in it, and its models come
+from different vendors, so any single logo would misattribute the rest.
 
 The marks remain trademarks of their respective owners.

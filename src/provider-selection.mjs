@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 import { discoveryDisabled } from "./discovery-mode.mjs";
 import { protectPrivateFile } from "./file-security.mjs";
 import { PROVIDER_SELECTION_PATH, STATE_DIR, TARGET } from "./paths.mjs";
-import { LISTED_MODELS, PROVIDERS } from "./model-registry.mjs";
+import { LISTED_MODELS, PROVIDERS, providerNeedsNoKey } from "./model-registry.mjs";
 import { targetCli } from "./target-integration.mjs";
 import { kimiOAuthStatus } from "./oauth-status.mjs";
 import { grokOAuthStatus } from "./grok-oauth-status.mjs";
@@ -93,7 +93,7 @@ export function configuredProviderIds() {
       } else if (provider.id === "grok-oauth" && grokOAuthStatus().configured) {
         configured.push(provider.id);
       }
-    } else if (provider.keyless || provider.authMode === "anonymous") {
+    } else if (providerNeedsNoKey(provider)) {
       // Nothing to configure: local providers run on this machine, while
       // anonymous providers authenticate by the provider's free-model policy.
       // Reachability and rate limits remain health questions, not reasons to
@@ -113,8 +113,12 @@ export function configuredProviderIds() {
 // third-party endpoint, so it must be an explicit choice. Loopback keyless
 // providers remain safe to include in the default.
 export function defaultProviderIds() {
+  // A per-model-endpoint container is excluded on the same reasoning: it holds
+  // whatever endpoints someone put in it, and at least one of them today is a
+  // third-party address reached with no credential. "Enabling this sends
+  // prompts off-box" has to stay a choice somebody made.
   return configuredProviderIds().filter(
-    (id) => PROVIDERS.get(id)?.authMode !== "anonymous",
+    (id) => !["anonymous", "per-model"].includes(PROVIDERS.get(id)?.authMode),
   );
 }
 

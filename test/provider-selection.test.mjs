@@ -56,11 +56,24 @@ test("provider selection keeps backward compatibility and can hide the final pro
     // Local backends are keyless: they serve from this machine, so there is no
     // credential to configure and they are always available. Everything else
     // has to authenticate before it counts.
-    assert.deepEqual(configuredProviderIds(), ["kilo-free", "lmstudio", "local", "opencode-free"]);
+    assert.deepEqual(configuredProviderIds(), [
+      "custom",
+      "kilo-free",
+      "lmstudio",
+      "local",
+      "opencode-free",
+    ]);
     assert.deepEqual(defaultProviderIds(), ["lmstudio", "local"]);
     delete process.env.KIMI_API_KEY;
     writeProviderCredential("deepseek", "TEST_DEEPSEEK_SELECTION_KEY");
-    assert.deepEqual(configuredProviderIds(), ["deepseek", "kilo-free", "lmstudio", "local", "opencode-free"]);
+    assert.deepEqual(configuredProviderIds(), [
+      "custom",
+      "deepseek",
+      "kilo-free",
+      "lmstudio",
+      "local",
+      "opencode-free",
+    ]);
     assert.deepEqual(defaultProviderIds(), ["deepseek", "lmstudio", "local"]);
 
     writeProviderSelection(["chatgpt-oauth"]);

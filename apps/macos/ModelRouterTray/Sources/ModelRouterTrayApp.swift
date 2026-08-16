@@ -639,6 +639,7 @@ final class RouterStore: ObservableObject {
   private static let providerShortNames: [String: String] = [
     "opencode-free": "OpenCode Free",
     "kilo-free": "Kilo Free",
+    "custom": "Custom",
     "grok-oauth": "Grok",
     "kimi-oauth": "Kimi",
     "deepseek": "DeepSeek",

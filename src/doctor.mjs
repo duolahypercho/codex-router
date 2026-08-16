@@ -715,6 +715,8 @@ for (const provider of PROVIDERS.values()) {
       ? `${provider.displayName} endpoint`
       : provider.authMode === "anonymous"
         ? `${provider.displayName} anonymous endpoint`
+      : provider.authMode === "per-model"
+        ? `${provider.displayName} per-model endpoints`
       : `${provider.displayName} ${credentialNoun}`,
     status.configured ? status.source : "not configured",
     provider.keyless
@@ -723,6 +725,8 @@ for (const provider of PROVIDERS.values()) {
         : `Start ${provider.displayName}, then run ./bin/curate-models ${provider.id}.`
       : provider.authMode === "anonymous"
         ? provider.anonymousNote || "No key needed; only the provider's free models are available."
+      : provider.authMode === "per-model"
+        ? "Each model here names its own endpoint; a model that needs a key reports it on its own row."
       : session
         ? `Run ${session.loginCommand}, or ./bin/provider-key ${provider.id} set.`
         : `Run ./bin/provider-key ${provider.id} set.`,

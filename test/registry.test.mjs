@@ -17,10 +17,12 @@ const { renderLiteLlmConfig } = await import("../src/litellm-config.mjs");
 const {
   API_MODELS,
   anonymousModelAllowed,
+  endpointForModel,
   LISTED_MODELS,
   MODEL_BY_SLUG,
   MODELS,
   PROVIDERS,
+  providerNeedsNoKey,
   readRegistryDocument,
   resolveProviderBaseUrl,
 } = await import("../src/model-registry.mjs");
@@ -79,6 +81,7 @@ test("provider registry exposes configured API and OAuth model families", () => 
       "commandcode/qwen3.7-plus",
       "commandcode/qwen3.8-max",
       "commandcode/step-3.7-flash",
+      "custom/qwen3.8-27b",
       "deepseek/deepseek-v4-flash",
       "deepseek/deepseek-v4-pro",
       "grok-api/grok-4.5",
@@ -268,6 +271,42 @@ test("provider registry exposes configured API and OAuth model families", () => 
   assert.equal(kiloFree.baseUrl, "https://api.kilo.ai/api/gateway");
   assert.equal(anonymousModelAllowed(kiloFree, "z-ai/glm-5:free"), true);
   assert.equal(anonymousModelAllowed(kiloFree, "z-ai/glm-5"), false);
+  // The `custom` provider is a container: it has no address, no credential, and
+  // nothing to authenticate, because each of its models carries all three.
+  const custom = PROVIDERS.get("custom");
+  assert.equal(custom.perModelEndpoint, true);
+  assert.equal(custom.authMode, "per-model");
+  assert.equal(custom.baseUrl, undefined);
+  assert.equal(custom.baseUrlEnv, undefined);
+  assert.equal(custom.credential, undefined);
+  assert.equal(providerNeedsNoKey(custom), true);
+  // Its first model names the free community endpoint and reaches it with no
+  // credential, so the address is the security boundary and lives in code.
+  const customModels = LISTED_MODELS.filter(({ provider }) => provider === "custom");
+  assert.deepEqual(
+    customModels.map(({ slug }) => slug),
+    ["custom/qwen3.8-27b"],
+  );
+  const [qwen38] = customModels;
+  assert.equal(
+    qwen38.endpoint.baseUrl,
+    "https://g9hnto0u7lvbu837.us-east-2.aws.endpoints.huggingface.cloud/v1",
+  );
+  assert.equal(qwen38.endpoint.authMode, "anonymous");
+  assert.equal(qwen38.endpoint.credential, undefined);
+  assert.equal(qwen38.endpoint.baseUrlEnv, undefined);
+  // Identity is derived from the model, never read from the fragment, so one
+  // model's credential file can never be pointed at another model's secret.
+  assert.equal(qwen38.endpoint.id, "custom/qwen3.8-27b");
+  assert.equal(qwen38.endpoint.kind, "openai-compatible");
+  assert.equal(endpointForModel(qwen38), qwen38.endpoint);
+  // Metadata verified against the live endpoint rather than guessed.
+  assert.equal(qwen38.contextWindow, 262144);
+  assert.deepEqual(qwen38.inputModalities, ["text", "image"]);
+  assert.equal(qwen38.requestProfile, "qwen38-community");
+  // Every other provider is its own endpoint, so the two answers coincide.
+  const deepseekModel = LISTED_MODELS.find(({ provider }) => provider === "deepseek");
+  assert.equal(endpointForModel(deepseekModel), PROVIDERS.get("deepseek"));
   const clinepass = PROVIDERS.get("clinepass");
   assert.equal(clinepass.baseUrl, "https://api.cline.bot/api/v1");
   assert.equal(clinepass.baseUrlEnv, "CLINE_API_BASE_URL");
@@ -773,7 +812,7 @@ test("a keyless provider must be loopback and must not carry a credential", asyn
   }
 });
 
-test("anonymous providers are fixed official endpoints without credentials", async () => {
+test("credential-free endpoints are allowlisted addresses, at the provider and at the model", async () => {
   const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");
   const nodePath = (await import("node:path")).default;
@@ -810,6 +849,100 @@ test("anonymous providers are fixed official endpoints without credentials", asy
     });
     assert.equal(keyed.status, 1);
     assert.match(keyed.stderr, /anonymous provider kilo-free must not declare keyless or credential metadata/);
+
+    // Everything below is the same guarantee one level down. A per-model
+    // endpoint moves the address out of the provider and into the model, so a
+    // JSON fragment is the thing that must not be able to widen it.
+    const customModel = (mutate) => (registry) => {
+      registry.models = registry.models.map((model) =>
+        model.provider === "custom" ? mutate(model) : model,
+      );
+    };
+
+    // The address is the security boundary for a credential-free endpoint, so
+    // it is allowlisted in code and a fragment cannot repoint it.
+    const redirectedModel = load(customModel((model) => ({
+      ...model,
+      endpoint: { ...model.endpoint, baseUrl: "https://example.com/v1" },
+    })));
+    assert.equal(redirectedModel.status, 1);
+    assert.match(
+      redirectedModel.stderr,
+      /model custom\/qwen3\.8-27b anonymous endpoint must use its allowlisted address/,
+    );
+
+    // An environment override would walk straight around that allowlist.
+    const overridden = load(customModel((model) => ({
+      ...model,
+      endpoint: { ...model.endpoint, baseUrlEnv: "CUSTOM_BASE_URL" },
+    })));
+    assert.equal(overridden.status, 1);
+    assert.match(
+      overridden.stderr,
+      /must not allow a baseUrl override without a credential/,
+    );
+
+    // Exactly one auth story per endpoint: two would leave a silent winner.
+    const doubled = load(customModel((model) => ({
+      ...model,
+      endpoint: {
+        ...model.endpoint,
+        credential: { file: "custom.secret", environment: ["CUSTOM_API_KEY"] },
+      },
+    })));
+    assert.equal(doubled.status, 1);
+    assert.match(
+      doubled.stderr,
+      /must declare exactly one of anonymous, keyless, or credential/,
+    );
+
+    // The keyless rule is about the address, not the flag: an endpoint that
+    // sends no credential may only talk to this machine.
+    const offBox = load(customModel((model) => ({
+      ...model,
+      endpoint: { baseUrl: "https://example.com/v1", keyless: true },
+    })));
+    assert.equal(offBox.status, 1);
+    assert.match(offBox.stderr, /keyless endpoint must use a loopback baseUrl/);
+
+    // Identity is derived from the model. A fragment that set it could point
+    // one model's credential file at another model's secret.
+    const forged = load(customModel((model) => ({
+      ...model,
+      endpoint: { ...model.endpoint, id: "deepseek" },
+    })));
+    assert.equal(forged.status, 1);
+    assert.match(forged.stderr, /endpoint must not declare id or kind/);
+
+    // A container has no address of its own; two answers to "where does this
+    // go" would have a silent winner.
+    const addressedContainer = load((registry) => {
+      registry.providers = registry.providers.map((provider) =>
+        provider.id === "custom"
+          ? { ...provider, baseUrl: "https://example.com/v1" }
+          : provider,
+      );
+    });
+    assert.equal(addressedContainer.status, 1);
+    assert.match(
+      addressedContainer.stderr,
+      /per-model-endpoint provider custom must not declare baseUrl/,
+    );
+
+    // And the reverse: an endpoint on a provider that already is one would be
+    // silently ignored today and quietly obeyed after any future refactor.
+    const strayEndpoint = load((registry) => {
+      registry.models = registry.models.map((model) =>
+        model.provider === "deepseek"
+          ? { ...model, endpoint: { baseUrl: "https://example.com/v1" } }
+          : model,
+      );
+    });
+    assert.equal(strayEndpoint.status, 1);
+    assert.match(
+      strayEndpoint.stderr,
+      /declares an endpoint but deepseek is not a per-model-endpoint provider/,
+    );
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

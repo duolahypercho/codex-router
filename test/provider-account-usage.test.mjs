@@ -221,15 +221,15 @@ test("does not poll account endpoints for disabled providers", async () => {
 
 test("anonymous free providers degrade to traffic-only usage without a balance API", async () => {
   const snapshot = await providerAccountUsageSnapshot({
-    providerIds: ["opencode-free", "kilo-free"],
+    providerIds: ["opencode-free", "kilo-free", "custom"],
     fetchImpl: async () => {
       throw new Error("anonymous providers must not poll a private account endpoint");
     },
   });
-  assert.equal(snapshot["opencode-free"].status, "local-only");
-  assert.equal(snapshot["kilo-free"].status, "local-only");
-  assert.match(snapshot["opencode-free"].message, /quota is not exposed/);
-  assert.match(snapshot["kilo-free"].message, /quota is not exposed/);
+  for (const id of ["opencode-free", "kilo-free", "custom"]) {
+    assert.equal(snapshot[id].status, "local-only");
+    assert.match(snapshot[id].message, /quota is not exposed/);
+  }
 });
 
 test("Command Code usage reads plan windows from the billing credits API", async () => {

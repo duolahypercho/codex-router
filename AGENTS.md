@@ -60,11 +60,14 @@ user.
    interactive terminal to choose models. If they did not specify and
    credentials already exist, use
    `configured` rather than showing providers that cannot authenticate.
-   The anonymous catalog-only providers `opencode-free` and `kilo-free` are
-   also selectable, but they need no credential only for their documented free
-   model subsets. They ship no preselected models and must be explicitly
-   selected before `bin/curate-models PROVIDER` is run; never select either one
-   on the user's behalf just because it can authenticate without a key.
+   The anonymous providers `opencode-free` and `kilo-free` are also selectable,
+   but they need no credential only for their documented free model subsets.
+   Both are catalog-only: they ship no preselected models and need
+   `bin/curate-models PROVIDER` after selection. `custom` is selectable on the
+   same terms and is a container whose models each name their own endpoint, so
+   enabling it asks for nothing and curating it is unnecessary. All three must
+   be selected explicitly; never select one on the user's behalf just because
+   it can authenticate without a key.
    `kimi-api` and `kimi-api-cn` are two different Moonshot platforms, not a
    fallback pair: the global console at platform.moonshot.ai and the mainland
    one at platform.moonshot.cn have separate accounts, separate billing, and
@@ -778,12 +781,64 @@ override, and the registry loader keeps its endpoint allowlisted.
 
 Anonymous providers are **configured but never defaulted**: the credential
 resolver may report them as ready, and an explicit `--providers` choice may
-route a curated free model, but `defaultProviderIds()`, the no-argument setup
-path, `--providers configured`, and `ensure-configured` must not add them when
-the operator did not ask. They are catalog-only, so discovery filters the
-provider's live `/models` response to its documented free IDs and the user
-must curate models locally. Never check in a paid model ID or silently turn on
-an anonymous endpoint during installation.
+route a free model, but `defaultProviderIds()`, the no-argument setup path,
+`--providers configured`, and `ensure-configured` must not add them when the
+operator did not ask. Never check in a paid model ID or silently turn on an
+anonymous endpoint during installation.
+
+Which free IDs a reseller gateway serves is decided by `anonymousModelAllowed`
+in `src/model-registry.mjs`, never by the registry fragment alone, and the
+`ANONYMOUS_ENDPOINTS` table beside it is the reason a fragment edit cannot
+point a credential-free provider at a model somebody would be billed for.
+`opencode-free` and `kilo-free` each expose a large free subset picked out by a
+naming rule that changes without notice, so both stay catalog-only: discovery
+filters the provider's live `/models` response and the user curates locally.
+
+## A provider whose models each name their own endpoint
+
+`custom` is a **container, not a destination**. It declares no `baseUrl`, no
+`credential`, and no `protocol`; each of its models carries all three in an
+`endpoint` block, and `endpointForModel()` is what every consumer asks instead
+of reading `provider.baseUrl`. The loader refuses a container that declares any
+of them, because two answers to "where does this go" have a silent winner.
+
+1. **The endpoint descriptor is provider-shaped on purpose.** `baseUrl`,
+   `authMode`, `keyless`, and `credential` mean exactly what they mean on a
+   provider, so `resolveProviderBaseUrl` and the whole credential chain accept
+   one unchanged. Do not grow a parallel resolver: the moment the two
+   implementations differ, one of them is the one nobody audited.
+2. **Identity is derived, never declared.** `id` is the model slug and `kind`
+   is fixed, both injected at load; a fragment that set either could point one
+   model's credential file and Keychain entry at another model's secret. The
+   loader refuses a fragment that spells them.
+3. **Exactly one auth story per endpoint** — anonymous, keyless, or a
+   credential. Two would leave a silent winner; none would send an
+   unauthenticated request to an address nobody vetted.
+4. **The allowlist follows the address down.** An `authMode: "anonymous"`
+   endpoint reaches a third party with no credential, so its address must
+   appear in `ANONYMOUS_MODEL_ENDPOINTS`, keyed by slug. Without that, adding a
+   JSON file under `config/custom/` would be enough to send an operator's
+   prompts to any HTTPS host on earth with nothing to authenticate them — which
+   is the exact hazard the provider-level allowlist exists to prevent, one level
+   down. A `keyless` endpoint stays loopback-only for the same reason, and
+   neither may declare a `baseUrlEnv`, because an environment override walks
+   around whichever of the two rules applied. An endpoint that carries a
+   credential needs no allowlist entry: the key is already the boundary.
+5. **Never defaulted.** `defaultProviderIds()` excludes `per-model` alongside
+   `anonymous`. What the container holds is whatever somebody put in it, and at
+   least one of those addresses is reached with no credential, so "enabling this
+   sends prompts off-box" stays a choice a person made.
+6. **Nothing offers a key at the container level.** `apiProvider()` refuses it,
+   the onboarding card is informational, and `resolveProviderCredential()`
+   returns a persistent marker so selection, health, and the catalog still work.
+   A key stored against `custom` would be read by nothing.
+7. **Discovery refuses it.** Discovery asks one endpoint what it serves, and a
+   container is not an endpoint. Picking one of its models' addresses and
+   reporting that as the provider's catalog would be worse than the refusal.
+8. **Check in metadata you measured.** A `custom` model ships with a verified
+   context window, modality set, and effort ladder rather than the conservative
+   defaults `curate-models` would guess. An anonymous endpoint answers without a
+   credential, so there is no excuse for inferring any of it.
 
 ## Local models as a provider
 

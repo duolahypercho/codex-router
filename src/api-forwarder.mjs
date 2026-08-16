@@ -16,6 +16,7 @@ import {
   MODEL_BY_GATEWAY_ID,
   PROVIDERS,
   providerForModel,
+  endpointForModel,
   resolveProviderBaseUrl,
 } from "./model-registry.mjs";
 import { parseRateLimitHeaders } from "./rate-limit-headers.mjs";
@@ -516,6 +517,15 @@ function normalizeBody(buffer, contentType, route) {
     delete payload.reasoning_effort;
     payload.thinking = { type: "adaptive" };
     payload.output_config = { effort };
+  } else if (model.requestProfile === "qwen38-community") {
+    // The community endpoint's vLLM build validates reasoning_effort against a
+    // literal set -- none, minimal, low, medium, high, xhigh, max -- and
+    // answers anything else with a 400 naming the whole enum (measured against
+    // the live endpoint, not read off the model card). The Codex ladder is
+    // that set plus `ultra`, so `ultra` is the one value that has to be folded,
+    // and it folds onto `max` because that is the tier it is asking for.
+    // Everything else passes through as the literal the endpoint accepts.
+    if (payload.reasoning_effort === "ultra") payload.reasoning_effort = "max";
   } else if (model.requestProfile === "minimax-m3") {
     // MiniMax uses its own thinking control on the OpenAI-compatible
     // Chat Completions endpoint instead of reasoning_effort.
@@ -544,10 +554,14 @@ function normalizeBody(buffer, contentType, route) {
       payload.tool_choice = "auto";
     }
   }
-  return { body: Buffer.from(JSON.stringify(payload), "utf8"), model, provider, payload };
+  // The provider still answers protocol, auth profile, and identity; the
+  // endpoint answers where the request goes and what authenticates it. For
+  // every provider but a per-model-endpoint one they are the same object.
+  const endpoint = endpointForModel(model);
+  return { body: Buffer.from(JSON.stringify(payload), "utf8"), model, provider, endpoint, payload };
 }
 
-function upstreamHeaders(requestHeaders, body, apiKey, provider, extraHeaders = {}) {
+function upstreamHeaders(requestHeaders, body, apiKey, provider, extraHeaders = {}, endpoint = provider) {
   const headers = {};
   const providerIdentityHeaders = new Set([
     "copilot-integration-id",
@@ -571,9 +585,10 @@ function upstreamHeaders(requestHeaders, body, apiKey, provider, extraHeaders = 
     }
     if (value !== undefined) headers[name] = Array.isArray(value) ? value.join(", ") : value;
   }
-  if (provider.authMode === "anonymous") {
-    // The upstream explicitly permits anonymous access for the provider's
-    // free-model subset. Never forward the gateway's internal bearer token.
+  if (endpoint.authMode === "anonymous") {
+    // The upstream explicitly permits anonymous access -- for a reseller's
+    // free-model subset, or for a single allowlisted community endpoint.
+    // Never forward the gateway's internal bearer token to either.
   } else if (provider.protocol === "anthropic") {
     headers["x-api-key"] = apiKey;
     headers["anthropic-version"] ||= "2023-06-01";
@@ -589,9 +604,9 @@ function upstreamHeaders(requestHeaders, body, apiKey, provider, extraHeaders = 
   return headers;
 }
 
-async function upstreamSession(provider, credential, payload, options = {}) {
+async function upstreamSession(provider, credential, payload, options = {}, endpoint = provider) {
   if (provider.authProfile !== "github-copilot") {
-    return { apiKey: credential.value, baseUrl: providerBaseUrl(provider), headers: {} };
+    return { apiKey: credential.value, baseUrl: providerBaseUrl(endpoint), headers: {} };
   }
   const session = await ensureFreshGitHubCopilotSession(credential.value, options);
   return {
@@ -659,18 +674,27 @@ async function handleRequest(request, response) {
 
   const original = await readRequestBody(request);
   const normalized = normalizeBody(original, request.headers["content-type"], route);
-  const credential = resolveProviderCredential(normalized.provider);
+  // Resolved against the endpoint, not the provider: a per-model endpoint keeps
+  // its credential under its own slug, so two custom models on two hosts never
+  // share a key and one missing key never blocks the other model.
+  const credential = resolveProviderCredential(normalized.endpoint);
   if (!credential) {
-    const setup = credentialStatus(normalized.provider).setup;
-    const credentialType = credentialLabel(normalized.provider);
+    const setup = credentialStatus(normalized.endpoint).setup;
+    const credentialType = credentialLabel(normalized.endpoint);
     const label = credentialType === "API key" ? "key" : credentialType.toLowerCase();
+    // Name whichever of the two the operator would go and configure. For a
+    // per-model endpoint the provider is a container, so "Custom key is not
+    // configured" would not say which model to fix.
+    const subject = normalized.provider.perModelEndpoint
+      ? normalized.model.displayName || normalized.model.slug
+      : normalized.provider.displayName;
     writeJson(response, 503, {
       error: {
         type: credentialType === "API key"
           ? "provider_api_key_missing"
           : "provider_credential_missing",
         provider: normalized.provider.id,
-        message: `${normalized.provider.displayName} ${label} is not configured. ${setup}.`,
+        message: `${subject} ${label} is not configured. ${setup}.`,
       },
     });
     return;
@@ -687,7 +711,13 @@ async function handleRequest(request, response) {
   const upstreamBody = normalized.provider.authProfile === "github-copilot"
     ? normalized.body.toString("utf8")
     : normalized.body;
-  let session = await upstreamSession(normalized.provider, credential, normalized.payload);
+  let session = await upstreamSession(
+    normalized.provider,
+    credential,
+    normalized.payload,
+    {},
+    normalized.endpoint,
+  );
   let target = `${session.baseUrl}${route}${requestUrl.search}`;
   let upstream = await fetch(target, {
     method: request.method,
@@ -697,6 +727,7 @@ async function handleRequest(request, response) {
       session.apiKey,
       normalized.provider,
       session.headers,
+      normalized.endpoint,
     ),
     body: upstreamBody,
     signal: controller.signal,
@@ -710,6 +741,7 @@ async function handleRequest(request, response) {
       credential,
       normalized.payload,
       { force: true },
+      normalized.endpoint,
     );
     target = `${session.baseUrl}${route}${requestUrl.search}`;
     upstream = await fetch(target, {
@@ -720,6 +752,7 @@ async function handleRequest(request, response) {
         session.apiKey,
         normalized.provider,
         session.headers,
+        normalized.endpoint,
       ),
       body: upstreamBody,
       signal: controller.signal,

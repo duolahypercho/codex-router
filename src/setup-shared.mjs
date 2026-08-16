@@ -14,7 +14,7 @@ import {
   MAX_LOGIN_ATTEMPTS,
   kimiCliInstallGuidance,
 } from "./kimi-oauth-onboarding.mjs";
-import { PROVIDERS } from "./model-registry.mjs";
+import { PROVIDERS, providerNeedsNoKey } from "./model-registry.mjs";
 import { kimiOAuthStatus } from "./oauth-status.mjs";
 import { grokOAuthStatus } from "./grok-oauth-status.mjs";
 import { SOURCE_ROOT } from "./paths.mjs";
@@ -123,7 +123,7 @@ export function providerConfigured(provider) {
     if (provider.id === "grok-oauth") return grokOAuthStatus().configured;
     return false;
   }
-  return provider.keyless || provider.authMode === "anonymous"
+  return providerNeedsNoKey(provider)
     ? true
     : credentialStatus(provider, { persistent: true }).configured;
 }
@@ -289,7 +289,7 @@ export function configureProvider(provider, { guided, providerKeyCommand }) {
     if (provider.id === "grok-oauth") onboardGrokOauth();
     else onboardKimiOauth();
   } else {
-    if (provider.authMode === "anonymous") return;
+    if (["anonymous", "per-model"].includes(provider.authMode)) return;
     const prompt = provider.credential?.prompt || `${provider.displayName} API key`;
     if (!confirm(`Enter ${prompt} securely now?`)) {
       throw new Error(`${provider.displayName} setup was cancelled.`);
