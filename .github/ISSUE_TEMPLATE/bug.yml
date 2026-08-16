@@ -6,6 +6,12 @@ body:
   - type: markdown
     attributes:
       value: |
+        **This tracker is for codex-router itself** — installation, routing, providers, models, and the codex-router menu-bar panel.
+
+        It is not the right place for bugs in the apps you route *through*. If the Codex desktop app or Claude Desktop is misbehaving on its own — window rendering, animations, its sidebar or composer, crashes unrelated to routing — please file that with the app's own project. A quick way to tell: disable codex-router (`./bin/disable`) and see whether the problem persists. If it does, it is not ours.
+  - type: markdown
+    attributes:
+      value: |
         Never paste API keys, OAuth files, the full managed `openai_base_url`, full prompts, or unredacted logs. Run `./bin/support-bundle` and attach the generated JSON if you are comfortable sharing its metadata. Report security issues through [Private Vulnerability Reporting](https://github.com/duolahypercho/codex-router/security/advisories/new), not a public issue.
   - type: textarea
     id: problem
@@ -17,7 +23,8 @@ body:
   - type: dropdown
     id: target
     attributes:
-      label: App target
+      label: Which app do you route through?
+      description: The harness codex-router is installed into — not which app is showing the problem.
       options: [Codex, Claude Desktop experimental]
     validations:
       required: true
