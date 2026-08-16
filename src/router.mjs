@@ -1776,6 +1776,20 @@ function requireCodexTransport(request, response) {
 // takes); transient failures — 429s, 5xx, disconnects — prove nothing either
 // way and leave the window open. Neither line is QUIET-gated: a promotion or
 // demotion that happens silently is how a picker entry becomes unexplainable.
+//
+// What the promotion claims is exactly one HTTP turn, and the log line has to
+// say so. A child agent makes many turns — one per tool-call round trip — and
+// this observer sees each of them separately; it never sees the agent loop
+// that strings them together, so "the child reached done" is not a fact
+// available here. An operator who read the old "subagent proven … completed a
+// live child turn" as *the delegated work finished* was reading a promise the
+// router cannot make (issue #257). A model that speaks the protocol turn after
+// turn without ever converging therefore still carries this proof: it returns
+// 200s, so nothing above demotes it, and only `control subagents verify` — run
+// by hand — re-examines it. Closing that needs a convergence signal this
+// function does not have; naming the claim honestly is the part that does not
+// require inventing one.
+
 function observeSubagentOutcome(request, route, status, { emptyCompletion = false } = {}) {
   if (!route) return;
   try {
@@ -1784,7 +1798,8 @@ function observeSubagentOutcome(request, route, status, { emptyCompletion = fals
     if (status === 200 && !emptyCompletion) {
       recordSpawnObserved(route.slug, { status });
       console.error(
-        `[codex-router] subagent proven: ${route.slug} completed a live child turn`,
+        `[codex-router] subagent child role verified: ${route.slug} served a live child turn; ` +
+          "the model holds the child role on the wire, which is not a claim the child finished its task",
       );
     } else if (status === 400 || status === 422) {
       recordSpawnFailure(route.slug, {

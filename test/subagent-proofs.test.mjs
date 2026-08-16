@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -221,4 +221,26 @@ test("a plan-entitlement refusal defers every model it gated, condemning none", 
   });
   assert.equal(gated[0].status, "deferred");
   assert.equal(subagentProofSnapshot()[slug], undefined);
+});
+
+// Issue #257: an operator watched "subagent proven: <slug> completed a live
+// child turn" and read it as the child finishing the work it was delegated.
+// The observer sees one HTTP turn — a child makes one per tool-call round trip
+// and the loop stringing them together is Codex's — so the promotion cannot
+// mean that, and the line it prints has to scope its own claim. Guarded at the
+// source because the wording *is* the fix: nothing else in the process states
+// what `proven` promises to the person reading the router log.
+test("the subagent promotion log line claims the wire role, not a finished task", () => {
+  const source = readFileSync(new URL("../src/router.mjs", import.meta.url), "utf8");
+  const start = source.indexOf("function observeSubagentOutcome");
+  assert.ok(start > 0, "observeSubagentOutcome moved; re-point this guard at the promotion path");
+  // Scoped to the one function, so an unrelated router line cannot satisfy it.
+  const body = source.slice(start).split(/\r?\n\}/)[0];
+  assert.match(body, /child role verified/);
+  assert.match(body, /not a claim the child finished its task/);
+  assert.doesNotMatch(
+    body,
+    /subagent proven/,
+    "the promotion line claims more than one observed turn proves",
+  );
 });

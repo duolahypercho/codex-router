@@ -22,6 +22,15 @@ import { STATE_DIR } from "./paths.mjs";
 //   failed        the probe failed, or an observed spawn failed structurally;
 //                 the model stays v1 and the reason is shown where it was
 //                 switched on
+//
+// "proven" is a claim about the wire, not about the work: it means one child
+// turn for this slug completed cleanly, so the model can hold the v2 child
+// role. The router observes HTTP turns, not agent lifecycles — a child makes
+// one turn per tool-call round trip and the loop that strings them together is
+// Codex's, not the router's — so nothing here can say the child reached done.
+// A model that keeps answering turns without ever converging still reaches
+// "proven" and stays there until `control subagents verify` re-researches it
+// (issue #257).
 export const SUBAGENT_PROOFS_PATH =
   process.env.MODEL_ROUTER_SUBAGENT_PROOFS ||
   path.join(STATE_DIR, "multi-agent-proofs.json");

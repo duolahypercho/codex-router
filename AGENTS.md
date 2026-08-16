@@ -356,15 +356,25 @@ so the unit of evidence is always the slug, never the model name.
    (`proven`) or a structural rejection — HTTP 400/422 — as a demotion back to
    v1 with the reason kept where it was switched on. Transient failures (429,
    5xx, disconnects) prove nothing and leave the window open.
-3. Local settings still never manufacture a v2 claim. The only writers of
+3. `proven` is a claim about the wire, not about the work. It says one child
+   turn for that slug completed cleanly, so the model can hold the child role;
+   it does not say the child finished what it was delegated. The router
+   observes HTTP turns, not agent lifecycles — a child makes one turn per
+   tool-call round trip, and the loop that strings them together is Codex's —
+   so a model that answers turn after turn without converging still reaches
+   `proven` and keeps it until `control subagents verify` re-researches it.
+   Do not write copy anywhere (log lines, tray, docs) that reads `proven` as
+   "the delegated task succeeded"; demoting a looping child needs a
+   convergence signal the request path does not yet have (issue #257).
+4. Local settings still never manufacture a v2 claim. The only writers of
    promotion evidence are the probe worker and the router's observation of
    real traffic; an unreadable proofs file promotes nothing, and a hidden or
    switched-off slug stays v1 whatever evidence it carries.
-4. `control subagents verify [SLUG ...]` re-researches explicitly (foreground,
+5. `control subagents verify [SLUG ...]` re-researches explicitly (foreground,
    ~2 requests per candidate); with no slugs it sweeps the enabled list.
    Select-all and mode changes never trigger probes — a sweep across every
    provider is quota the operator must ask for.
-5. Machine-local proofs are exactly that. Shipping a default to every
+6. Machine-local proofs are exactly that. Shipping a default to every
    installer still requires the full native collaboration proof and a registry
    change (below); never edit the checked-in `config/` tree because one
    machine's probe passed.
