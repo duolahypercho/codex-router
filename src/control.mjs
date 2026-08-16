@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import { pickerCommandArgs } from "./control-args.mjs";
 import { promoteNativeMultiAgent } from "./catalog.mjs";
+import { withNativeContextVariants } from "./native-context-variants.mjs";
 // The publish marker lives under the shared state directory, which does not
 // vary by target, so reading it here does not disturb the per-target probes
 // below that re-import paths with their own MODEL_ROUTER_TARGET.
@@ -92,12 +93,25 @@ async function shippedNativeVisionEngines(hidden) {
   return installedNativeVisionEngines({ hidden });
 }
 
-function nativeCodexModels(catalogPath, hiddenModels = new Set(), subagentSettings = {}) {
+function nativeCodexModels(
+  catalogPath,
+  hiddenModels = new Set(),
+  subagentSettings = {},
+  { contextVariants = true } = {},
+) {
   if (!existsSync(catalogPath)) return [];
   try {
     const parsed = JSON.parse(readFileSync(catalogPath, "utf8"));
     return promoteNativeMultiAgent(
-      Array.isArray(parsed.models) ? parsed.models : [],
+      // The capture holds what Codex published; the extended-window variants
+      // are the router's own additions to the same group, and the tray is
+      // where they are switched on, so they have to be drawn here too. The
+      // catalog build derives them from this same list, so the rows the
+      // operator sees and the entries Codex reads cannot drift apart.
+      withNativeContextVariants(
+        Array.isArray(parsed.models) ? parsed.models : [],
+        { enabled: contextVariants },
+      ),
       subagentSettings,
       hiddenModels,
     )
@@ -211,14 +225,20 @@ async function emitProbe() {
     // a ladder keeps the exact shape it always had.
     ...reasoningLevelField(model.reasoningLevels),
   }));
+  const selectedModel = TARGET === "codex" ? configuredDefaultModel(CONFIG_PATH) : undefined;
+  const codexConfig = TARGET === "codex" ? codexConfigSnapshot() : undefined;
   const models = TARGET === "codex"
     ? [
-        ...nativeCodexModels(NATIVE_CATALOG_PATH, hiddenModels, subagentSettings),
+        ...nativeCodexModels(NATIVE_CATALOG_PATH, hiddenModels, subagentSettings, {
+          // A login-free install republishes external models under the native
+          // slugs Codex allowlists, and a synthesized slug is not one of them.
+          // The catalog build drops the variants there for the same reason, so
+          // the tray must not offer a row the picker will never show.
+          contextVariants: !codexConfig?.login_free,
+        }),
         ...routedModels,
       ]
     : routedModels;
-  const selectedModel = TARGET === "codex" ? configuredDefaultModel(CONFIG_PATH) : undefined;
-  const codexConfig = TARGET === "codex" ? codexConfigSnapshot() : undefined;
 
   process.stdout.write(
     JSON.stringify({
@@ -1854,12 +1874,11 @@ async function handlePicker(action, value, flag) {
     let slugs;
     if (provider === "openai") {
       const { NATIVE_CATALOG_PATH } = await import("./paths.mjs");
-      const parsed = JSON.parse(readFileSync(NATIVE_CATALOG_PATH, "utf8"));
-      slugs = Array.isArray(parsed.models)
-        ? parsed.models
-            .filter((model) => model.visibility === "list")
-            .map((model) => String(model.slug))
-        : [];
+      // Through the same helper the tray draws its rows with, so the group's
+      // Show all / Hide all covers every row in the group. Reading the capture
+      // straight off disk skipped the extended-window variants, which left
+      // "Hide all" with one row still showing.
+      slugs = nativeCodexModels(NATIVE_CATALOG_PATH).map((model) => model.slug);
     } else {
       const { canonicalProviderId, readProviderSelection } = await import(
         "./provider-selection.mjs"

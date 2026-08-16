@@ -617,6 +617,43 @@ so the unit of evidence is always the slug, never the model name.
    `./bin/test-model 'provider/model' --live --yes`, reinstall, fully restart
    Codex, and perform the native subagent probe before claiming support.
 
+### Republish a native model at a different context window
+
+`src/native-context-variants.mjs` publishes a native GPT model under a second
+slug carrying a different context window — `gpt-5.6-sol-1m` is the first. It is
+not a new model and never becomes one: the entry is copied wholesale from the
+capture, the router translates the slug back to its base on the way out, and
+the only fields overridden are the slug, the display name, the description, and
+the window/compaction pair.
+
+1. The window is read from the provider's current official documentation, the
+   same rule as any other model. Never raise one because a request happened to
+   be accepted, and never guess from the family name. `bin/doctor` reports
+   windows a provider has already disproved; that check does not authorize the
+   opposite direction.
+2. A variant ships hidden. `seedModelsHidden` applies that default exactly once
+   per slug, so it can never re-apply itself over an operator's choice — which
+   is why `model-picker.json` records `seeded` alongside `hidden`, and why
+   every writer in `src/model-picker-state.mjs` must preserve it. A variant
+   that costs more per turn than the model it shadows must never arrive
+   switched on in an update.
+3. Derive only from a base the capture actually shipped as `visibility: "list"`,
+   and never in a login-free install: signed-out Codex surfaces display native
+   slugs from a server-supplied allowlist, so a synthesized slug would consume
+   an alias slot and then be invisible.
+4. Every surface that enumerates the OpenAI group goes through
+   `withNativeContextVariants` — the catalog build, the tray probe, and the
+   group's Show all / Hide all. A surface that reads `native-models.json`
+   directly will silently omit variants. Published clients
+   (`src/routed-client-models.mjs`, serving DeepSeek Harness and Gemini CLI)
+   are deliberately not among them: they read the capture and do not apply the
+   picker's hidden set to native models, so a variant would arrive switched on
+   in a surface that has no switch. Publishing one there means fixing that
+   first.
+5. Cover the derivation, the slug translation on a live native turn, the
+   hidden-by-default seeding, and the survival of an explicit choice across a
+   rebuild. `test/native-context-variants.test.mjs` is the existing shape.
+
 ### Ship a new provider to every installer
 
 A new provider is only complete when all of the following are true. Do not

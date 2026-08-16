@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+- **GPT-5.6 Sol can now run at the 1M context window OpenAI documents for it.**
+  The catalog Codex ships declares 272,000 tokens against a documented
+  1,050,000, and that figure has already moved twice
+  (openai/codex#31860, #32806). Editing `model_context_window` and
+  `model_auto_compact_token_limit` in `config.toml` answers this for a whole
+  machine; the picker now answers it per task. **GPT-5.6-Sol (1M context)**
+  (`gpt-5.6-sol-1m`) is the same upstream model published under a second slug
+  with a 1,000,000-token window and compaction starting at 900,000 —
+  instructions, reasoning ladder, image input, and subagent behavior are copied
+  from `gpt-5.6-sol`, and the router rewrites the slug back to its base before
+  the turn leaves, so OpenAI only ever sees the model it published. It ships
+  **switched off**, because a turn resends the whole conversation and a request
+  above 272,000 input tokens is billed at a higher rate in full: a model that
+  costs more than the one it shadows has to be chosen, not discovered after the
+  bill. Switch it on under OpenAI in the Settings model list, or with
+  `./bin/control picker set gpt-5.6-sol-1m show`. That answer is remembered —
+  later catalog rebuilds never re-apply the default to a model already decided,
+  in either direction — and a login-free install does not get the entry at all,
+  because its native slugs come from a server-supplied allowlist.
+
 - **Gemini CLI is a target.** It speaks only the Gemini API and Google ships no
   bring-your-own-provider setting, so pointing it at this router used to be
   impossible — the endpoint it wants does not exist anywhere in the codebase.

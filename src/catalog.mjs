@@ -29,8 +29,12 @@ import {
   readMultiAgentSettings,
   subagentEligibleModels,
 } from "./multi-agent-state.mjs";
-import { readHiddenModels } from "./model-picker-state.mjs";
+import { readHiddenModels, seedModelsHidden } from "./model-picker-state.mjs";
 import { buildNativeAliasAssignments } from "./native-alias.mjs";
+import {
+  NATIVE_CONTEXT_VARIANT_SLUGS,
+  withNativeContextVariants,
+} from "./native-context-variants.mjs";
 import { selectedConfiguredListedModels, configuredProviderIds } from "./provider-selection.mjs";
 import { assertStateOwnership } from "./state-owner.mjs";
 import { scanTomlDocument, tomlStringValue } from "./toml-structure.mjs";
@@ -769,6 +773,11 @@ function main() {
   // advertising models the running gateway has no route for.
   assertStateOwnership("write the Codex model catalog");
   const userSlugs = new Set(readUserModels().map((model) => String(model.slug)));
+  // Before the hidden set is read, not after: an extended-window variant costs
+  // more per turn than the model it shadows, so it arrives switched off and
+  // stays off until the operator says otherwise. Only slugs with no recorded
+  // decision are touched, so this cannot undo a choice already made.
+  seedModelsHidden(NATIVE_CONTEXT_VARIANT_SLUGS);
   const hiddenModels = readHiddenModels();
   const selectedModels = selectedConfiguredListedModels();
   const multiAgentSettings = readMultiAgentSettings();
@@ -791,9 +800,18 @@ function main() {
     Date.now(),
   );
   const captured = nativeCatalog();
+  const loginFree = loginFreeConfigured();
   const native = {
     ...captured,
-    models: promoteNativeMultiAgent(captured.models, multiAgentSettings, hiddenModels),
+    // Variants join before the multi-agent pass so a switched-off one is
+    // demoted exactly like every other hidden model, and a switched-on one
+    // inherits its base model's verified backend version rather than a
+    // separate claim about the same upstream.
+    models: promoteNativeMultiAgent(
+      withNativeContextVariants(captured.models, { enabled: !loginFree }),
+      multiAgentSettings,
+      hiddenModels,
+    ),
   };
   // Dropping every native model is destructive, so only do it when Codex
   // actually answered that the session is signed out. If the probe could not
@@ -808,7 +826,6 @@ function main() {
     );
   }
   const openaiAuthenticated = auth.authenticated;
-  const loginFree = loginFreeConfigured();
   const routedCatalog = routedCatalogActive();
   // Advertised last, and only while an engine actually resolves: Codex gates
   // the paste on `input_modalities`, so a bridge that has gone away must take

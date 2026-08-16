@@ -113,7 +113,22 @@ wire_api = "responses"
       const merged = JSON.parse(
         readFileSync(path.join(stateDir, "merged-models.json"), "utf8"),
       );
-      assert.deepEqual(merged.models.map((model) => model.slug), ["gpt-5.6-sol"]);
+      // The captured native model, plus the extended-window variant the
+      // router derives from it. Nothing routed, which is what this test is
+      // about — and the variant ships switched off, so a build that publishes
+      // it has still changed nothing the operator did not ask for.
+      assert.deepEqual(merged.models.map((model) => model.slug), [
+        "gpt-5.6-sol",
+        "gpt-5.6-sol-1m",
+      ]);
+      assert.equal(
+        merged.models.find((model) => model.slug === "gpt-5.6-sol-1m").visibility,
+        "hide",
+      );
+      assert.equal(
+        merged.models.find((model) => model.slug === "gpt-5.6-sol").visibility,
+        "list",
+      );
       assert.equal(
         readdirSync(path.join(codexHome, "agents")).filter((name) =>
           name.startsWith("router-model-"),

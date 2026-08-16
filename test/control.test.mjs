@@ -45,6 +45,17 @@ function probe(target, providers, usageEvents = [], options = {}) {
       { mode: 0o600 },
     );
   }
+  if (options.hiddenModels) {
+    writeFileSync(
+      path.join(stateDir, "model-picker.json"),
+      `${JSON.stringify({
+        version: 1,
+        hidden: options.hiddenModels,
+        seeded: options.hiddenModels,
+      })}\n`,
+      { mode: 0o600 },
+    );
+  }
   if (options.loginFree) {
     writeFileSync(
       path.join(stateDir, "config.toml"),
@@ -173,6 +184,40 @@ test("codex probe includes native GPT models and the configured default", () => 
   assert.equal(slice.modelSettings.localModels.lmstudio.provider, "lmstudio");
   assert.equal(typeof slice.modelSettings.localModels.lmstudio.reachable, "boolean");
   assert.ok(Array.isArray(slice.modelSettings.localModels.lmstudio.models));
+});
+
+// The row is the whole feature: an entry the operator cannot find is an entry
+// that ships off forever. It belongs in the OpenAI group, drawn unchecked.
+test("codex probe draws the extended-context variant under OpenAI, switched off", () => {
+  const slice = probe("codex", [], [], {
+    hiddenModels: ["gpt-5.6-sol-1m"],
+    nativeModels: [
+      { slug: "gpt-5.6-sol", display_name: "GPT-5.6-Sol", visibility: "list" },
+    ],
+  });
+
+  const variant = slice.models.find((model) => model.slug === "gpt-5.6-sol-1m");
+  assert.equal(variant.provider, "openai");
+  assert.equal(variant.native, true);
+  assert.equal(variant.visible, false);
+  assert.equal(variant.displayName, "GPT-5.6-Sol (1M context)");
+  // And it has not displaced the model it was derived from.
+  assert.equal(slice.models.find((model) => model.slug === "gpt-5.6-sol").visible, true);
+});
+
+test("a login-free probe draws no extended-context variant", () => {
+  const slice = probe("codex", ["deepseek"], [], {
+    loginFree: true,
+    nativeModels: [
+      { slug: "gpt-5.6-sol", display_name: "GPT-5.6-Sol", visibility: "list" },
+    ],
+  });
+
+  assert.equal(slice.loginFree, true);
+  // Signed-out Codex only displays allowlisted native slugs, so the row would
+  // offer a model the picker can never show.
+  assert.equal(slice.models.some((model) => model.slug === "gpt-5.6-sol-1m"), false);
+  assert.ok(slice.models.some((model) => model.slug === "gpt-5.6-sol"));
 });
 
 test("codex probe reports the effective v2 state of selected native GPT models", () => {

@@ -41,6 +41,7 @@ import { MODEL_BY_SLUG, PROVIDERS, providerForModel } from "./model-registry.mjs
 import { createHealthCache } from "./health-cache.mjs";
 import { discoveryDisabled } from "./discovery-mode.mjs";
 import { readNativeAliases } from "./native-alias.mjs";
+import { nativeContextVariantBase } from "./native-context-variants.mjs";
 import { readNativeRedirect } from "./native-redirect.mjs";
 import {
   canonicalProviderId,
@@ -2405,6 +2406,15 @@ async function handleResponses(request, response, requestUrl) {
       }
     } else {
       const native = { ...payload };
+      // An extended-window variant is the model it was derived from, published
+      // under a second slug so the picker can offer a different context
+      // window (`src/native-context-variants.mjs`). chatgpt.com has never
+      // heard of that slug, so it is translated back here -- the last point
+      // before the turn leaves. Everything the operator reads keeps the slug
+      // they picked: `requestedModel` is untouched, so activity, usage, and
+      // the log still name the model the picker showed.
+      const variantBase = nativeContextVariantBase(native.model);
+      if (variantBase) native.model = variantBase;
       if (Array.isArray(payload.input)) {
         native.input = normalizeNativeInput(payload.input);
         // Native turns leave here as stateless full conversations (the
@@ -2948,9 +2958,19 @@ async function handleNativeRequest(request, response, requestUrl, defaultModel) 
     });
 
     const headers = nativeHeaders(request);
+    // The same slug translation the turn path does, for the same reason: these
+    // endpoints normally carry their own model ("gpt-image-2", the search
+    // model), but nothing stops a client from naming the picked one, and an
+    // extended-window slug means nothing to chatgpt.com. The bytes are only
+    // re-encoded when a variant is actually present, so every other request on
+    // this path is forwarded exactly as it arrived.
+    const variantBase = nativeContextVariantBase(payload.model);
+    const outgoing = variantBase
+      ? Buffer.from(JSON.stringify({ ...payload, model: variantBase }), "utf8")
+      : body;
     // Same replayable-Buffer rule as the turn path: encode once, outside the
     // retry, so every attempt carries identical bytes under identical headers.
-    const imageBody = await compressedNativeBody(body, headers);
+    const imageBody = await compressedNativeBody(outgoing, headers);
     const { response: upstream, retries: upstreamRetries } = await fetchWithRetry(
       nativeTarget(requestUrl.pathname, nativeRequestSearch(requestUrl)),
       {
