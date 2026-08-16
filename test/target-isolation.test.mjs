@@ -37,6 +37,7 @@ test("codex owns the default port block", () => {
     router: 4202,
     api: 4203,
     grokOauth: 4208,
+    devinCli: 4210,
   });
 });
 
@@ -60,7 +61,16 @@ test("operators can keep an explicitly configured legacy block during migration"
       },
     ),
   );
-  assert.deepEqual(ports, { gateway: 4100, oauth: 4101, router: 4102, api: 4103, grokOauth: 4108 });
+  // The Devin CLI forwarder postdates the legacy block, so an operator
+  // migrating from it never pinned that port and keeps the current default.
+  assert.deepEqual(ports, {
+    gateway: 4100,
+    oauth: 4101,
+    router: 4102,
+    api: 4103,
+    grokOauth: 4108,
+    devinCli: 4210,
+  });
 });
 
 test("removed targets are rejected rather than silently mapped to codex", () => {

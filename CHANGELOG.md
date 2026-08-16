@@ -119,6 +119,44 @@
   stops hitting the second. Plan, purchased, and free credits now surface as a
   balance metric, and the plan's own low-credit threshold marks it unavailable.
 
+- **Devin's models are reachable from the session its CLI already stored, and
+  this adds the provider that reaches them — untested against a real account.**
+  `devin auth login` writes a persistent token to `credentials.toml`, so
+  `devin-cli` reuses it exactly as `kimi-oauth` and `grok-oauth` reuse theirs.
+  The transport is the part with no precedent here: Cognition publishes a
+  session API, not a chat API, and the models answer only on Cascade —
+  `exa.api_server_pb.ApiServerService` over Connect RPC — so this ships a small
+  protobuf wire codec, the message subset transcribed from the descriptor set
+  embedded in the shipped `devin` binary, a Connect streaming client, and a
+  forwarder translating OpenAI Chat Completions into a `GetChatMessage` turn
+  and its deltas back. Reasoning and tool calls are mapped; images ride only on
+  the current turn, because replaying an older one fails the whole request.
+  Thirty-seven tests cover the codec against hand-computed bytes, the request
+  mapping, the credential reader, and envelope framing including a split frame
+  and an error carried in the end-of-stream terminator. None of that proves
+  Cascade accepts the request: no maintainer holds a Devin account, so the
+  provider ships catalog-only with no checked-in models and is documented as
+  unverified. `bin/devin-probe` is the way to find out — it checks the
+  credential and lists the account's models for free, and `--live --tools`
+  spends one turn to prove a streamed answer and a forced tool call.
+
+  Nobody who has not asked for Devin pays anything for it being here. The
+  forwarder is spawned only when the registry actually holds a `devin-cli`
+  model, so an install that never ran `bin/curate-models devin-cli` starts no
+  fourth child, binds no fourth port, and waits on no fourth health probe —
+  startup is byte-for-byte the work it was before. The gate is the curated
+  model rather than the stored credential on purpose: a curated model is
+  precisely what puts a `DEVIN_CLI_FORWARD_BASE_URL` route in the generated
+  gateway config, and the route and the listener are decided from the same
+  model list on the same boot, so a live route can never point at a port
+  nothing is listening on. Gating on `credentials.toml` would have been the
+  wrong trade — someone who curated a model but has not run `devin auth login`
+  gets a 401 naming that command, which a missing forwarder would have turned
+  into a bare connection error. When Devin *is* routed, everything is as
+  before: the forwarder is health-waited alongside the other three, an
+  unbindable port still aborts startup naming the forwarder, and a forwarder
+  that dies still ends the service so the OS supervisor rebuilds it.
+
 - **The free Qwen3.8 endpoint refused any conversation whose system message
   arrived late or twice.** Its chat template answers those with a 400 reading
   "System message must be at the beginning", and a real Codex session reaches

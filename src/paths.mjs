@@ -150,6 +150,7 @@ export const DEFAULT_PORTS = Object.freeze({
   router: 4202,
   api: 4203,
   grokOauth: 4208,
+  devinCli: 4210,
 });
 
 // Ports used before the BrlAPI-safe defaults shipped. They remain recognized
@@ -181,6 +182,7 @@ export const PORTS = {
     process.env.CODEX_ROUTER_API_PORT || process.env.KIMI_API_FORWARD_PORT || DEFAULT_PORTS.api,
   ),
   grokOauth: port("MODEL_ROUTER_GROK_OAUTH_PORT", DEFAULT_PORTS.grokOauth),
+  devinCli: port("MODEL_ROUTER_DEVIN_CLI_PORT", DEFAULT_PORTS.devinCli),
 };
 
 export function loopback(portNumber, suffix = "") {

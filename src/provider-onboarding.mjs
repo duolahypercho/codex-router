@@ -9,6 +9,7 @@ import {
   grokCliPreflight,
 } from "./grok-cli.mjs";
 import { cliSessionPath, cliSessionStatus } from "./cli-session-credential.mjs";
+import { devinCliStatus } from "./devin-cli-status.mjs";
 import { grokOAuthStatus } from "./grok-oauth-status.mjs";
 import { KIMI_CLI_NPM_PACKAGE } from "./kimi-oauth-onboarding.mjs";
 import { MODELS, PROVIDERS, providerNeedsNoKey } from "./model-registry.mjs";
@@ -55,6 +56,18 @@ const SIGN_IN_CLIS = Object.freeze({
     // to be handed a real terminal.
     needsTerminal: true,
   },
+  // Devin ships no npm package: it is a Rust binary installed by Cognition's
+  // own script or Homebrew cask. `installCommand` is what the tray offers
+  // instead of an npm install it cannot perform.
+  "devin-cli": {
+    executable: "devin",
+    loginArgs: ["auth", "login"],
+    candidates: [path.join(os.homedir(), ".local", "bin", "devin")],
+    installCommand: "curl -fsSL https://cli.devin.ai/install.sh | bash",
+    // `devin auth login` draws a full-screen terminal interface, so a piped
+    // stdio pair kills it before it opens the browser.
+    needsTerminal: true,
+  },
 });
 
 function commandPath(name) {
@@ -93,6 +106,7 @@ export function oauthLoginArgs(providerId) {
 function oauthConfigured(providerId) {
   if (providerId === "kimi-oauth") return kimiOAuthStatus().configured;
   if (providerId === "grok-oauth") return grokOAuthStatus().configured;
+  if (providerId === "devin-cli") return devinCliStatus().configured;
   const provider = PROVIDERS.get(providerId);
   return provider ? cliSessionStatus(provider).configured : false;
 }
@@ -194,6 +208,14 @@ export function installOauthCli(providerId) {
     }
   } else if (oauthCliPath(providerId)) {
     return;
+  }
+  // Not every official CLI is an npm package. Naming the vendor's own
+  // installer is honest; running it unattended from the tray would fetch and
+  // execute a remote script the operator never saw.
+  if (!cli.npmPackage) {
+    throw new Error(
+      `The ${cli.executable} CLI is not installed and is not distributed through npm. Install it with: ${cli.installCommand}`,
+    );
   }
   npmInstallGlobal(cli.npmPackage, { label: `the official ${cli.executable} CLI` });
   if (providerId === "grok-oauth") {

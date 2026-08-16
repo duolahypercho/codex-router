@@ -968,6 +968,61 @@ minutes later. Do not quietly drop the label because a check happened to pass.
    answering every request with `local_router_error`, suspect a process still
    holding pre-change state rather than the new code.
 
+## The Devin CLI provider is unverified, and says so
+
+`devin-cli` reuses the session `devin auth login` writes and spends that
+account's ACU credits, the same shape as `kimi-oauth` and `grok-oauth`. What is
+not the same is the transport, and that difference governs everything else
+about it.
+
+1. **There is no model API.** Cognition documents a *session* API
+   (`api.devin.ai`), not a chat API. The models answer only on Cascade —
+   `exa.api_server_pb.ApiServerService` over Connect RPC at the
+   `api_server_url` the CLI stored. The schemas in `src/devin-proto.mjs` are
+   transcribed from the descriptor set embedded in the shipped `devin` binary,
+   which is the only published source for them. Treat every field number as
+   evidence from one binary version, not as a contract.
+2. **Unverified until someone with an account proves it.** No maintainer has
+   run a live turn. The registry entry ships no models, the provider is
+   catalog-only, and nothing may claim support until `bin/devin-probe --live
+   --tools` passes for a real account. Do not set `multiAgentVersion`, do not
+   check in model fragments, and do not describe this provider as working in
+   README or release notes on the strength of the unit tests alone.
+3. **The unit tests prove translation, not the protocol.** `protobuf-wire`,
+   `devin-cli-turn`, `devin-cli-status`, and `devin-connect` cover the wire
+   codec, the request mapping, the credential reader, and the envelope framing
+   against fixtures. They cannot prove Cascade accepts the request. A green
+   suite here is necessary and nowhere near sufficient.
+4. **The decoder must stay permissive and the credential reader strict.**
+   Unknown protobuf fields are skipped, because the upstream adds them without
+   notice and a strict decoder would fail whole turns. `credentials.toml` is the
+   opposite: it is read through `toml-structure.mjs`, so a duplicate key or a
+   value the scanner cannot read plainly is refused rather than guessed at.
+5. **The router reads that file and never writes it.** No code path may create,
+   move, copy, or delete another tool's credential file, and the token never
+   reaches a log, an argument, or an error message. `--no-discovery` must keep
+   the file closed entirely.
+6. **Entitlement is the account's, not the registry's.** Which models an
+   operator may run is decided server-side by `GetCascadeModelConfigs` and team
+   settings. Discovery asks; the registry never guesses. A model that appears
+   for one account may be absent or refused for another.
+7. **Expect drift, and fail loudly when it happens.** An unversioned transport
+   can change under a `devin` update. When it does, the symptom is a Connect
+   `invalid_argument` on every turn, not a subtle wrong answer — keep it that
+   way rather than adding tolerant parsing that would mask a schema change.
+8. **An operator who never curated a Devin model pays nothing for it.** Unlike
+   the three forwarders that always run, `src/devin-cli-forwarder.mjs` is
+   spawned only when `MODELS` contains a `devin-cli` model, so an unconfigured
+   install starts no fourth child, binds no fourth port, and waits on no fourth
+   health probe. The gate is deliberately the curated model and not the stored
+   credential: a curated model is exactly what makes `writeLiteLlmConfig()`
+   emit a `DEVIN_CLI_FORWARD_BASE_URL` route, and both are read from the same
+   `MODELS` array on the same boot, so a live gateway route can never point at
+   a port nothing bound. Gating on `credentials.toml` instead would trade the
+   forwarder's actionable 401 naming `devin auth login` for a bare connection
+   error. An unverified provider must stay free for the people not using it —
+   apply the same rule to any future provider that needs its own forwarder.
+
 ## Codex safety boundaries
 
 - The config manager owns its marked root `openai_base_url` and

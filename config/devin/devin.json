@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "providers": [
+    {
+      "id": "devin-cli",
+      "displayName": "Devin CLI (Cascade)",
+      "kind": "oauth",
+      "ownedBy": "cognition",
+      "proxyBaseEnv": "DEVIN_CLI_FORWARD_BASE_URL",
+      "planNote": "Reuses the session `devin auth login` stores in the official Devin CLI and spends that account's ACU credits. Which models the account may run is decided server-side, so this provider ships no preselected models: run `bin/curate-models devin-cli` after signing in. Cognition publishes no model API, so the transport is unversioned and can change without notice."
+    }
+  ]
+}

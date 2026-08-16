@@ -17,6 +17,7 @@ import {
 import { waitForHealth as pollHealth } from "./health-probe.mjs";
 import { gatewaySupervisorLimits, superviseGateway } from "./gateway-supervisor.mjs";
 import { writeLiteLlmConfig } from "./litellm-config.mjs";
+import { MODELS } from "./model-registry.mjs";
 import { readLocalModelSelection } from "./local-models.mjs";
 import { spawnableCommand } from "./spawnable-command.mjs";
 import { ensureOllamaHeadless } from "./ollama-runtime.mjs";
@@ -95,6 +96,21 @@ if (readLocalModelSelection().enabled.length) {
   }
 }
 
+// Same rule, one layer up: a curated model is what gives a provider a gateway
+// route, so it is also what makes that provider's own forwarder worth a
+// process and a port. `writeLiteLlmConfig()` above emits the
+// `DEVIN_CLI_FORWARD_BASE_URL` route from this same MODELS array on this same
+// boot, so the route and the listener cannot disagree -- no curated Devin
+// model means no route to the port and nothing bound to it. Devin ships
+// catalog-only (`bin/curate-models devin-cli`), so an operator who never asked
+// for it pays nothing: no fourth child, no fourth port, no fourth health wait.
+//
+// The stored credential is deliberately *not* the gate. Someone who curated a
+// model but has not run `devin auth login` should get the forwarder's 401
+// naming that command, not a bare connection error from a port nobody is
+// listening on.
+const devinCliRouted = MODELS.some((model) => model.provider === "devin-cli");
+
 const commonEnv = {
   MODEL_ROUTER_TARGET: TARGET,
   MODEL_ROUTER_STATE_DIR: STATE_DIR,
@@ -114,6 +130,8 @@ const commonEnv = {
   MODEL_ROUTER_PORT: String(PORTS.router),
   MODEL_ROUTER_GROK_OAUTH_PORT: String(PORTS.grokOauth),
   GROK_OAUTH_FORWARD_BASE_URL: loopback(PORTS.grokOauth, "/v1"),
+  MODEL_ROUTER_DEVIN_CLI_PORT: String(PORTS.devinCli),
+  DEVIN_CLI_FORWARD_BASE_URL: loopback(PORTS.devinCli, "/v1"),
   MODEL_ROUTER_QUIET: "1",
   CODEX_ROUTER_CALLER_KEY: callerKey,
   CODEX_ROUTER_INTERNAL_KEY: internalKey,
@@ -210,6 +228,9 @@ async function main() {
   const kimiForwarder = run(process.execPath, [path.join(SOURCE_ROOT, "src", "oauth-forwarder.mjs")]);
   const api = run(process.execPath, [path.join(SOURCE_ROOT, "src", "api-forwarder.mjs")]);
   const grokForwarder = run(process.execPath, [path.join(SOURCE_ROOT, "src", "grok-oauth-forwarder.mjs")]);
+  const devinForwarder = devinCliRouted
+    ? run(process.execPath, [path.join(SOURCE_ROOT, "src", "devin-cli-forwarder.mjs")])
+    : undefined;
   await Promise.all([
     waitForHealth(
       "OAuth forwarder",
@@ -235,6 +256,22 @@ async function main() {
       undefined,
       grokForwarder,
     ),
+    // Spread rather than a conditional inside the wait: an unrouted Devin adds
+    // no entry at all, so it cannot add latency. A routed one is waited on
+    // exactly as the other three are, and a forwarder that cannot bind still
+    // aborts startup by name instead of being skipped quietly.
+    ...(devinForwarder
+      ? [
+        waitForHealth(
+          "Devin CLI forwarder",
+          loopback(PORTS.devinCli, "/health"),
+          { Authorization: `Bearer ${internalKey}` },
+          30_000,
+          undefined,
+          devinForwarder,
+        ),
+      ]
+      : []),
   ]);
 
   const startGateway = () =>
@@ -283,6 +320,13 @@ async function main() {
     waitForExit(kimiForwarder, "OAuth forwarder"),
     waitForExit(api, "API forwarder"),
     waitForExit(grokForwarder, "Grok OAuth forwarder"),
+    // Only when it is actually running. A forwarder of ours that dies is a bug
+    // report, and the rule above is that the service exits so the OS supervisor
+    // rebuilds it -- leaving this one out of the race would instead strand a
+    // Devin user on connection errors with nothing to notice them. An install
+    // that never spawned it adds no entry, so this cannot end anyone else's
+    // session.
+    ...(devinForwarder ? [waitForExit(devinForwarder, "Devin CLI forwarder")] : []),
     superviseGateway({
       label: "LiteLLM gateway",
       child: gateway,
