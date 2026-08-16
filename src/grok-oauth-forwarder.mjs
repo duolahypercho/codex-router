@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -214,8 +214,43 @@ export function toResponsesRequest(chat, options = {}) {
   return request;
 }
 
-function upstreamHeaders(accessToken, model) {
-  const sessionId = randomUUID();
+// xAI routes by `x-grok-conv-id` so that every turn of one conversation lands
+// on the server holding its KV cache; their docs name a wrong or changing
+// conversation id as the first thing to check when `cached_tokens` stays at
+// zero. A fresh UUID per request sends each turn somewhere else, and the cache
+// is never read: measured over a four-turn append-only session, 128 / 4608 /
+// 128 / 0 cached tokens against a 31k prompt that was identical up to the
+// appended tail every time.
+//
+// The conversation's own opening messages are the stable key. Codex appends and
+// never rewrites them, so hashing the first two pins every turn of a session to
+// one server while keeping separate sessions apart. Formatted as a UUID because
+// that is what the header carries everywhere else.
+export function conversationIdForTest(messages) {
+  return conversationId(messages);
+}
+
+function conversationId(messages) {
+  const anchor = [];
+  for (const message of Array.isArray(messages) ? messages : []) {
+    const content =
+      typeof message?.content === "string" ? message.content : JSON.stringify(message?.content);
+    anchor.push(`${message?.role}:${content}`);
+    if (anchor.length === 2) break;
+  }
+  if (anchor.length === 0) return randomUUID();
+  const digest = createHash("sha256").update(anchor.join("\n")).digest("hex");
+  return [
+    digest.slice(0, 8),
+    digest.slice(8, 12),
+    digest.slice(12, 16),
+    digest.slice(16, 20),
+    digest.slice(20, 32),
+  ].join("-");
+}
+
+function upstreamHeaders(accessToken, model, messages) {
+  const sessionId = conversationId(messages);
   return {
     Authorization: `Bearer ${accessToken}`,
     "Content-Type": "application/json",
@@ -290,7 +325,7 @@ async function handleChatCompletions(request, response) {
 
   const requestUpstream = (accessToken) => fetch(`${GROK_BASE}/responses`, {
     method: "POST",
-    headers: upstreamHeaders(accessToken, model),
+    headers: upstreamHeaders(accessToken, model, chat?.messages),
     body: JSON.stringify(responsesRequest),
     signal: controller.signal,
   });
@@ -408,6 +443,19 @@ async function handleChatCompletions(request, response) {
             completion_tokens: u.output_tokens ?? 0,
             total_tokens: (u.input_tokens ?? 0) + (u.output_tokens ?? 0),
           };
+          // xAI caches prompts automatically and reports the hit under
+          // `input_tokens_details`. Dropping it here is what makes every routed
+          // Grok turn log `cached_tokens=unknown`, so the one number that says
+          // whether the cache is working is invisible -- and `response-usage.mjs`
+          // is already looking for it under both spellings.
+          const cached = u.input_tokens_details?.cached_tokens;
+          if (typeof cached === "number") {
+            usage.prompt_tokens_details = { cached_tokens: cached };
+          }
+          const reasoning = u.output_tokens_details?.reasoning_tokens;
+          if (typeof reasoning === "number") {
+            usage.completion_tokens_details = { reasoning_tokens: reasoning };
+          }
         }
         break;
       }

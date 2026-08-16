@@ -419,3 +419,30 @@ test("toResponsesRequest preserves the client's image detail level", () => {
   // Absent detail must stay absent, not default to a resolution choice.
   assert.equal("detail" in images[1], false);
 });
+
+// xAI routes by `x-grok-conv-id` so a conversation stays on the server holding
+// its KV cache. A fresh id per request scatters the turns and the cache is
+// never read: measured at 3.9% cached across an append-only session, against
+// 78.4% once the id was derived from the conversation.
+test("upstream headers keep one conversation on one conv-id", async () => {
+  const { conversationIdForTest } = await import("../src/grok-oauth-forwarder.mjs");
+  const opening = [
+    { role: "system", content: "You are Codex." },
+    { role: "user", content: "run the thing" },
+  ];
+  const turnOne = conversationIdForTest(opening);
+  // The next turn appends a tool call and its result; the opening is untouched.
+  const turnTwo = conversationIdForTest([
+    ...opening,
+    { role: "assistant", content: "", tool_calls: [{ id: "c1", function: { name: "sh" } }] },
+    { role: "tool", tool_call_id: "c1", content: "ok" },
+    { role: "user", content: "and again" },
+  ]);
+  assert.equal(turnTwo, turnOne);
+  assert.match(turnOne, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+  // A different conversation must not share the cache slot.
+  assert.notEqual(
+    conversationIdForTest([{ role: "system", content: "You are Codex." }, { role: "user", content: "other" }]),
+    turnOne,
+  );
+});
