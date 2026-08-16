@@ -418,7 +418,7 @@ because what it holds is whatever somebody put in it.
 
 | Model | Endpoint | Auth |
 | --- | --- | --- |
-| Qwen3.8 27B (Free) | `https://g9hnto0u7lvbu837.us-east-2.aws.endpoints.huggingface.cloud/v1` | none |
+| Qwen3.8-27-free-victor | `https://g9hnto0u7lvbu837.us-east-2.aws.endpoints.huggingface.cloud/v1` | none |
 
 That first model is a free community [Hugging Face Inference
 Endpoint](https://huggingface.co/spaces/victor/Qwen3.8-27B-free-endpoint) for

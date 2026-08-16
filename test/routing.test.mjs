@@ -2818,6 +2818,24 @@ function curatedQwen38EffortModel() {
   return { dir, file, gatewayModel: "openrouter-qwen-3-8-27b-effort" };
 }
 
+// One real tool, so a forced choice has something to choose from. The endpoint
+// rejects `tool_choice` sent on its own, so every request here that names a
+// choice names this list too.
+const QWEN38_TOOLS = [
+  {
+    type: "function",
+    function: {
+      name: "shell",
+      description: "Run a command.",
+      parameters: {
+        type: "object",
+        properties: { command: { type: "string" } },
+        required: ["command"],
+      },
+    },
+  },
+];
+
 test("API forwarder folds only the effort tier the free Qwen3.8 endpoint rejects", async () => {
   const upstreamRequests = [];
   const upstream = await mockServer(async (request, response) => {
@@ -2857,6 +2875,7 @@ test("API forwarder folds only the effort tier the free Qwen3.8 endpoint rejects
         body: JSON.stringify({
           model: curated.gatewayModel,
           reasoning_effort: sentEffort,
+          tools: QWEN38_TOOLS,
           tool_choice: "required",
           messages: [{ role: "user", content: "test" }],
         }),
@@ -2867,6 +2886,8 @@ test("API forwarder folds only the effort tier the free Qwen3.8 endpoint rejects
       // The endpoint answers a forced tool choice with a real tool call
       // (verified live), so the profile must not downgrade it -- the
       // compatibility probe and the subagent payload relay both depend on it.
+      // The choice travels with the tool it is forcing, because the endpoint
+      // rejects a tool_choice that has nothing to choose from.
       assert.equal(request.body.tool_choice, "required");
     }
 
@@ -2884,6 +2905,77 @@ test("API forwarder folds only the effort tier the free Qwen3.8 endpoint rejects
     });
     assert.equal(response.status, 200);
     assert.equal("reasoning_effort" in upstreamRequests.at(-1).body, false);
+  } finally {
+    await stopChild(forwarder);
+    await closeServer(upstream.server);
+    rmSync(curated.dir, { recursive: true, force: true });
+  }
+});
+
+// The same endpoint rejects an empty tool list ("`tools` must not be an empty
+// array ... or omit the field entirely") and a tool choice with no tools
+// ("When using `tool_choice`, `tools` must be set"), both measured live.
+// `summarize()` sends `tools: []` on every compaction and this model
+// auto-compacts well inside its window, so the pair arrives together and the
+// profile has to omit both fields rather than forward either.
+test("API forwarder omits the empty tool list the free Qwen3.8 endpoint rejects", async () => {
+  const upstreamRequests = [];
+  const upstream = await mockServer(async (request, response) => {
+    upstreamRequests.push({ headers: request.headers, body: await bodyJson(request) });
+    json(response, 200, { choices: [] });
+  });
+  const curated = curatedQwen38EffortModel();
+  const forwarderPort = await openPort();
+  const forwarder = run("api-forwarder.mjs", {
+    CODEX_ROUTER_API_PORT: String(forwarderPort),
+    MODEL_ROUTER_USER_MODELS: curated.file,
+    OPENROUTER_API_BASE_URL: `http://127.0.0.1:${upstream.port}`,
+    OPENROUTER_API_KEY: "TEST_OPENROUTER_API_KEY",
+    CODEX_ROUTER_QUIET: "1",
+  });
+
+  try {
+    await waitFor(`http://127.0.0.1:${forwarderPort}/health`, forwarder, {
+      Authorization: `Bearer ${INTERNAL_KEY}`,
+    });
+    // The compaction shape: an empty list plus the choice that goes with it.
+    // Both fields have to be gone, not one of them.
+    const compaction = await fetch(`http://127.0.0.1:${forwarderPort}/v1/chat/completions`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${INTERNAL_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: curated.gatewayModel,
+        tools: [],
+        tool_choice: "none",
+        messages: [{ role: "user", content: "summarize" }],
+      }),
+    });
+    assert.equal(compaction.status, 200);
+    const compacted = upstreamRequests.at(-1).body;
+    assert.equal("tools" in compacted, false);
+    assert.equal("tool_choice" in compacted, false);
+
+    // A real tool list is the normal turn, and the strip must not touch it.
+    const turn = await fetch(`http://127.0.0.1:${forwarderPort}/v1/chat/completions`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${INTERNAL_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: curated.gatewayModel,
+        tools: QWEN38_TOOLS,
+        tool_choice: "auto",
+        messages: [{ role: "user", content: "test" }],
+      }),
+    });
+    assert.equal(turn.status, 200);
+    const forwarded = upstreamRequests.at(-1).body;
+    assert.deepEqual(forwarded.tools, QWEN38_TOOLS);
+    assert.equal(forwarded.tool_choice, "auto");
   } finally {
     await stopChild(forwarder);
     await closeServer(upstream.server);

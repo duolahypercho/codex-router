@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- **Every compaction against the free Qwen3.8 endpoint failed on an empty tool
+  list.** Compaction disables tool use by sending `tools: []`, which every other
+  forwarder reads as "no tools" — this endpoint's vLLM build answers it with a
+  400 saying the array must not be empty and the field should be omitted
+  instead, and answers the tool choice sent alongside it with a second 400
+  saying `tools` must be set. The model carries a 262K window that auto-compacts
+  at 230K, so the failure was not an edge case: it was every long session. The
+  request profile now omits an empty list and then drops the tool choice that
+  strip leaves with nothing to choose from. The repair sits at the last hop
+  before this one endpoint, because an empty tool list stays the correct way to
+  disable tools everywhere else, and a real tool list still forwards untouched.
+
+  The entry is also renamed to **Qwen3.8-27-free-victor**, crediting `victor`,
+  who publishes the endpoint, in the name the picker shows rather than only in
+  the endpoint note.
+
 - **The GLM-5.3 1M entry routed to a model code Z.ai does not serve.** Shipping
   `glm-5.3[1m]` took the vendor's documented 1M suffix at its word, and the
   suffix answers `1214` on both the OpenAI-compatible and Anthropic endpoints --

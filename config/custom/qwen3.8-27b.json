@@ -12,8 +12,8 @@
         "note": "No API key is needed: this is a free community Hugging Face Inference Endpoint for Qwen3.8-27B, published by an individual rather than by Qwen or Hugging Face. Use at your own risk: it is shared, rate limited to roughly 30 requests per minute per IP, and its owner says it will be retired once launch interest fades."
       },
       "listed": true,
-      "displayName": "Qwen3.8 27B (Free)",
-      "description": "Qwen3.8-27B on a free, rate-limited community Hugging Face Inference Endpoint: 262K context, image input, tool calling, and a dialable thinking budget. Shared with everyone behind your IP, so expect 429s under load.",
+      "displayName": "Qwen3.8-27-free-victor",
+      "description": "Qwen3.8-27B on the free, rate-limited community Hugging Face Inference Endpoint published by victor: 262K context, image input, tool calling, and a dialable thinking budget. Shared with everyone behind your IP, so expect 429s under load.",
       "priority": 140,
       "defaultEffort": "medium",
       "reasoningLevels": [

@@ -526,6 +526,22 @@ function normalizeBody(buffer, contentType, route) {
     // and it folds onto `max` because that is the tier it is asking for.
     // Everything else passes through as the literal the endpoint accepts.
     if (payload.reasoning_effort === "ultra") payload.reasoning_effort = "max";
+    // The same build refuses two tool shapes Codex sends routinely, both
+    // measured live: an empty list answers "`tools` must not be an empty
+    // array. Either provide at least one tool or omit the field entirely",
+    // and a choice with nothing to choose from answers "When using
+    // `tool_choice`, `tools` must be set". `summarize()` in the router sends
+    // `tools: []` on every compaction, and this model auto-compacts at 230K of
+    // its 262K window, so left alone every compaction against it 400s. Strip
+    // the empty list first, then drop the tool choice that strip leaves
+    // dangling -- the order is what keeps the second rejection from replacing
+    // the first. The repair belongs at this last hop rather than in the
+    // compaction path because an empty tool list is legal on every other
+    // forwarder, and it is exactly how compaction disables tool use there.
+    if (Array.isArray(payload.tools) && payload.tools.length === 0) delete payload.tools;
+    if (!Array.isArray(payload.tools) || payload.tools.length === 0) {
+      delete payload.tool_choice;
+    }
   } else if (model.requestProfile === "minimax-m3") {
     // MiniMax uses its own thinking control on the OpenAI-compatible
     // Chat Completions endpoint instead of reasoning_effort.
