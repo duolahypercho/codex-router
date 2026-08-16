@@ -66,6 +66,8 @@ import {
   subagentProofSnapshot,
 } from "./subagent-proofs.mjs";
 import { mergeCodexAppTools } from "./codex-app-tools.mjs";
+import { connectorToolCatalog, mergeConnectorTools } from "./codex-apps-connectors.mjs";
+import { readConnectorSelection } from "./connector-tools-state.mjs";
 import { activityMetadataFromHeaders } from "./codex-session-names.mjs";
 import { translateGatewayError } from "./error-translation.mjs";
 import { recordUsageEvent } from "./usage-events.mjs";
@@ -1898,6 +1900,15 @@ async function handleResponses(request, response, requestUrl) {
         // and navigation state -- it only relays definitions and results.
         const merged = mergeCodexAppTools(payload.tools);
         if (merged.merged) payload.tools = merged.tools;
+        // App connectors (Outlook, GitHub, Notion, ...) are deferred the same
+        // way, but through `tool_search`, which flattening drops. Fill the
+        // remainder back in for the connectors the operator opted into; with
+        // no selection this is a no-op and the request is untouched.
+        const connectors = mergeConnectorTools(payload.tools, {
+          catalog: connectorToolCatalog(),
+          enabled: readConnectorSelection(),
+        });
+        if (connectors.merged) payload.tools = connectors.tools;
         const flattened = flattenNamespaceTools(payload.tools);
         namespacesFlattened = flattened.flattened;
         if (namespacesFlattened) {
