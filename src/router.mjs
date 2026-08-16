@@ -1639,7 +1639,13 @@ async function summarize(request, payload, route, signal) {
     if (!verdict.swap) return { ...last, failed };
     recordProviderCooldown(attemptRoute.provider, verdict);
     if (index + 1 < attempts.length) {
-      logFailover(attemptRoute, attempts[index + 1], `compaction/${verdict.reason}`, sent.upstream.status);
+      logFailover(
+        attemptRoute,
+        attempts[index + 1],
+        `compaction/${verdict.reason}`,
+        sent.upstream.status,
+        "retrying",
+      );
     }
   }
   return last && { ...last, failed };
@@ -1968,14 +1974,21 @@ function failoverCandidates({ route, routedBody, agedInput, flattenedNamespaces,
   );
 }
 
-function logFailover(from, to, reason, status) {
-  // Never gated on CODEX_ROUTER_QUIET, which a production LaunchAgent hard-sets.
-  // A silent swap makes an exhausted provider look healthy and leaves the
-  // operator wondering why the answers changed character.
+// `status` is always what the *asked-for* model said; `outcome` is what the
+// candidate did about it. Reporting one number for both was actively
+// misleading: a hop rejected with its own 400 printed
+// `reason=out_of_usage status=400`, which reads as the exhausted provider
+// having answered 400 and sent a reader looking for a quota bug that was not
+// there. They are two different events and now say so.
+//
+// Never gated on CODEX_ROUTER_QUIET, which a production LaunchAgent hard-sets.
+// A silent swap makes an exhausted provider look healthy and leaves the
+// operator wondering why the answers changed character.
+function logFailover(from, to, reason, status, outcome) {
   console.error(
-    `[codex-router] failover model=${from.slug} reason=${reason} status=${status} -> ${
+    `[codex-router] failover model=${from.slug} status=${status} reason=${reason} -> ${
       to ? to.slug : "none"
-    }`,
+    } outcome=${outcome}`,
   );
 }
 
@@ -2007,7 +2020,7 @@ async function attemptModelFailover({
     chain: settings.chain,
   }).slice(0, MAX_FAILOVER_HOPS);
   if (!candidates.length) {
-    logFailover(route, undefined, verdict.reason, status);
+    logFailover(route, undefined, verdict.reason, status, "no-candidate");
     return undefined;
   }
   const startedAt = Date.now();
@@ -2032,11 +2045,11 @@ async function attemptModelFailover({
       });
     } catch (error) {
       if (signal.aborted) throw error;
-      logFailover(route, model, verdict.reason, `transport/${error?.name || "Error"}`);
+      logFailover(route, model, verdict.reason, status, `transport/${error?.name || "Error"}`);
       continue;
     }
     if (upstream.ok) {
-      logFailover(route, model, verdict.reason, status);
+      logFailover(route, model, verdict.reason, status, upstream.status);
       return { route: model, built, upstream };
     }
     // The candidate failed too. If it failed the same way, believe it and take
@@ -2048,7 +2061,7 @@ async function attemptModelFailover({
       retryAfterSeconds: Number(upstream.headers.get("retry-after")),
     });
     if (hopVerdict.swap) recordProviderCooldown(model.provider, hopVerdict);
-    logFailover(route, model, verdict.reason, upstream.status);
+    logFailover(route, model, verdict.reason, status, upstream.status);
   }
   return undefined;
 }
@@ -2286,7 +2299,7 @@ async function handleResponses(request, response, requestUrl) {
           chain: settings.chain,
         });
         if (next) {
-          logFailover(route, next.model, `cooled_until_${cooled.until}`, "skipped");
+          logFailover(route, next.model, `cooled_until_${cooled.until}`, "not-sent", "swapped");
           adoptRoute(
             next.model,
             await buildRoutedRequest({ request, payload, route: next.model, agedInput }),

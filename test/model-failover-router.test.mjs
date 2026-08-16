@@ -125,6 +125,12 @@ function run(env, { chain = [FALLBACK.slug], enabled = true, cooldowns } = {}) {
     encoding: "utf8",
     mode: 0o600,
   });
+  // The responses-native provider used by the protocol-crossing cases. It is a
+  // variant of opencode-go, so it authenticates with that family's credential.
+  writeFileSync(path.join(stateDir, "opencode-go-api-key.secret"), "test-opencode-go-key\n", {
+    encoding: "utf8",
+    mode: 0o600,
+  });
   const child = spawn(process.execPath, [path.join(root, "src", "router.mjs")], {
     cwd: root,
     env: {
@@ -299,7 +305,7 @@ test("a turn whose provider is out of usage is served by the next model", async 
     // The swap is never silent, even with the quiet flag a LaunchAgent sets.
     assert.match(child.testErrors(), /failover model=deepseek\/deepseek-v4-pro/);
     assert.match(child.testErrors(), /reason=out_of_usage/);
-    assert.match(child.testErrors(), /-> zai-api\/glm-5\.2/);
+    assert.match(child.testErrors(), /-> zai-api\/glm-5\.2 outcome=200/);
   } finally {
     await stopChild(child);
     await closeServer(gw.server);
@@ -406,7 +412,7 @@ test("with nothing eligible the original failure is returned unchanged", async (
     assert.equal(payload.error.type, "billing_error");
     assert.match(payload.error.message, /run out of usage/i);
     // The turn still says out loud that it looked and found nothing.
-    assert.match(child.testErrors(), /failover model=deepseek\/deepseek-v4-pro.*-> none/s);
+    assert.match(child.testErrors(), /failover model=deepseek\/deepseek-v4-pro.*-> none outcome=no-candidate/s);
   } finally {
     await stopChild(child);
     await closeServer(gw.server);
@@ -529,6 +535,384 @@ test("a fallback rebuild carries the full request, not a model swap", async () =
     // own letters, which reaches the provider and still reads as a 200.
     assert.equal(first.input, "hello");
     assert.equal(second.input, "hello");
+  } finally {
+    await stopChild(child);
+    await closeServer(gw.server);
+  }
+});
+
+// -- crossing the protocol line ----------------------------------------------
+//
+// The rebuild trap in AGENTS.md, exercised. A chat-completions provider needs
+// every namespace flattened into ordinary functions; a responses-native one
+// needs the namespace shape kept. A failover that crosses that line has to
+// rebuild for the *destination*, not reship the first build's tools -- and a
+// second pass over an already-flattened list would return an empty namespace
+// map, shipping plausible tools the response transform can no longer map back.
+
+const RESPONSES_MODEL = {
+  slug: "opencode-go-responses/gpt-5.6-luna",
+  gatewayModel: "opencode-go-responses-gpt-5-6-luna",
+};
+
+const NAMESPACE_TOOLS = [
+  {
+    type: "namespace",
+    name: "collaboration",
+    tools: [
+      {
+        type: "function",
+        name: "spawn_agent",
+        description: "Spawn a child agent.",
+        parameters: {
+          type: "object",
+          properties: { task: { type: "string" } },
+          required: ["task"],
+          additionalProperties: false,
+        },
+      },
+    ],
+  },
+];
+
+function toolNames(body) {
+  return (body.tools || []).map((tool) => `${tool.type}:${tool.name}`).sort();
+}
+
+test("a chat-completions turn failing over to a responses provider keeps the namespace", async () => {
+  const seen = [];
+  const gw = await gateway(async (request, response) => {
+    const body = await bodyJson(request);
+    seen.push(body);
+    if (body.model === PRIMARY.gatewayModel) {
+      const payload = Buffer.from(QUOTA_BODY, "utf8");
+      response.writeHead(429, {
+        "Content-Type": "application/json",
+        "Content-Length": String(payload.length),
+      });
+      response.end(payload);
+      return;
+    }
+    response.writeHead(200, { "Content-Type": "text/event-stream" });
+    response.end(contentSse("responses-fallback"));
+  });
+  const routerPort = await openPort();
+  const child = run(routerEnv(gw.port, routerPort), { chain: [RESPONSES_MODEL.slug] });
+  try {
+    await waitFor(`http://127.0.0.1:${routerPort}/health`, child);
+    const result = await readRouted(routerPort, { ...TURN_BODY, tools: NAMESPACE_TOOLS });
+    assert.equal(result.status, 200);
+    assert.equal(seen.length, 2);
+    const [first, second] = seen;
+    assert.equal(first.model, PRIMARY.gatewayModel);
+    assert.equal(second.model, RESPONSES_MODEL.gatewayModel);
+
+    // The chat-completions attempt flattened the namespace into plain functions
+    // (alongside the merged codex_app toolset, which only that branch adds).
+    assert.ok(toolNames(first).includes("function:collaboration__spawn_agent"));
+    assert.ok(!toolNames(first).some((name) => name.startsWith("namespace:")));
+    // The responses-native attempt must have been rebuilt from the pristine
+    // payload and kept the namespace intact. A flattened name here is the exact
+    // regression this guards: the second build reusing the first's rewritten
+    // tool list, which also yields an empty namespace map.
+    assert.deepEqual(toolNames(second), ["namespace:collaboration"]);
+    assert.equal(second.tools[0].tools[0].name, "spawn_agent");
+  } finally {
+    await stopChild(child);
+    await closeServer(gw.server);
+  }
+});
+
+test("a responses turn failing over to a chat-completions provider flattens it", async () => {
+  const seen = [];
+  const gw = await gateway(async (request, response) => {
+    const body = await bodyJson(request);
+    seen.push(body);
+    if (body.model === RESPONSES_MODEL.gatewayModel) {
+      const payload = Buffer.from(QUOTA_BODY, "utf8");
+      response.writeHead(429, {
+        "Content-Type": "application/json",
+        "Content-Length": String(payload.length),
+      });
+      response.end(payload);
+      return;
+    }
+    response.writeHead(200, { "Content-Type": "text/event-stream" });
+    response.end(contentSse("chat-fallback"));
+  });
+  const routerPort = await openPort();
+  const child = run(routerEnv(gw.port, routerPort), { chain: [FALLBACK.slug] });
+  try {
+    await waitFor(`http://127.0.0.1:${routerPort}/health`, child);
+    const result = await readRouted(routerPort, {
+      model: RESPONSES_MODEL.slug,
+      input: "hello",
+      stream: true,
+      tools: NAMESPACE_TOOLS,
+    });
+    assert.equal(result.status, 200);
+    assert.equal(seen.length, 2);
+    const [first, second] = seen;
+    assert.deepEqual(toolNames(first), ["namespace:collaboration"]);
+    // Rebuilt for a chat-completions destination: the namespace is gone and the
+    // call is an ordinary function the provider can actually invoke.
+    assert.ok(toolNames(second).includes("function:collaboration__spawn_agent"));
+    assert.ok(!toolNames(second).some((name) => name.startsWith("namespace:")));
+  } finally {
+    await stopChild(child);
+    await closeServer(gw.server);
+  }
+});
+
+// A fallback that answers with a flattened tool call. The response transform has
+// to map it back to the client's namespace shape using the *fallback's* map and
+// slug -- the ones adopted during the swap, not the exhausted model's.
+function toolCallSse(name) {
+  const args = JSON.stringify({ task: "audit the map" });
+  const events = [
+    { type: "response.created", response: { id: "r-tool" } },
+    {
+      type: "response.output_item.added",
+      item: { type: "function_call", id: "fc_1", name, arguments: "" },
+    },
+    { type: "response.function_call_arguments.delta", item_id: "fc_1", delta: args },
+    { type: "response.function_call_arguments.done", item_id: "fc_1", arguments: args },
+    {
+      type: "response.output_item.done",
+      item: { type: "function_call", id: "fc_1", name, arguments: args },
+    },
+    {
+      type: "response.completed",
+      response: {
+        id: "r-tool",
+        output: [{ type: "function_call", id: "fc_1", name, arguments: args }],
+        usage: { input_tokens: 10, output_tokens: 3, total_tokens: 13 },
+      },
+    },
+  ];
+  return `${events
+    .map((entry) => `event: ${entry.type}\ndata: ${JSON.stringify(entry)}\n\n`)
+    .join("")}data: [DONE]\n\n`;
+}
+
+test("a tool call from the fallback is mapped back to the client's namespace", async () => {
+  const seen = [];
+  const gw = await gateway(async (request, response) => {
+    const body = await bodyJson(request);
+    seen.push(body);
+    if (body.model === PRIMARY.gatewayModel) {
+      const payload = Buffer.from(QUOTA_BODY, "utf8");
+      response.writeHead(429, {
+        "Content-Type": "application/json",
+        "Content-Length": String(payload.length),
+      });
+      response.end(payload);
+      return;
+    }
+    response.writeHead(200, { "Content-Type": "text/event-stream" });
+    response.end(toolCallSse("collaboration__spawn_agent"));
+  });
+  const routerPort = await openPort();
+  const child = run(routerEnv(gw.port, routerPort));
+  try {
+    await waitFor(`http://127.0.0.1:${routerPort}/health`, child);
+    const result = await readRouted(routerPort, { ...TURN_BODY, tools: NAMESPACE_TOOLS });
+    assert.equal(result.status, 200);
+    assert.equal(seen.length, 2);
+    // Restored to the namespaced shape Codex registered, not the flattened name
+    // the provider was given. Without the swap adopting the fallback's namespace
+    // map, the call would reach the client as `collaboration__spawn_agent` and
+    // Codex would reject a tool it never registered.
+    assert.match(result.body, /"namespace":"collaboration"/);
+    assert.match(result.body, /"name":"spawn_agent"/);
+    assert.doesNotMatch(result.body, /"name":"collaboration__spawn_agent"/);
+  } finally {
+    await stopChild(child);
+    await closeServer(gw.server);
+  }
+});
+
+test("failover walks past a candidate that is also out of usage", async () => {
+  const seen = [];
+  const gw = await gateway(async (request, response) => {
+    const body = await bodyJson(request);
+    seen.push(body.model);
+    if (body.model === RESPONSES_MODEL.gatewayModel) {
+      response.writeHead(200, { "Content-Type": "text/event-stream" });
+      response.end(contentSse("second-candidate"));
+      return;
+    }
+    // Both the asked-for model and the first candidate report empty.
+    const payload = Buffer.from(QUOTA_BODY, "utf8");
+    response.writeHead(429, {
+      "Content-Type": "application/json",
+      "Content-Length": String(payload.length),
+    });
+    response.end(payload);
+  });
+  const routerPort = await openPort();
+  const child = run(routerEnv(gw.port, routerPort), {
+    chain: [FALLBACK.slug, RESPONSES_MODEL.slug],
+  });
+  try {
+    await waitFor(`http://127.0.0.1:${routerPort}/health`, child);
+    const result = await readRouted(routerPort, TURN_BODY);
+    assert.equal(result.status, 200);
+    assert.match(result.body, /answered-by-second-candidate/);
+    // Asked model, first candidate, second candidate -- and no further, because
+    // the hop bound stops there.
+    assert.deepEqual(seen, [
+      PRIMARY.gatewayModel,
+      FALLBACK.gatewayModel,
+      RESPONSES_MODEL.gatewayModel,
+    ]);
+    // The candidate that also reported empty is cooled down on its own account.
+    const events = await waitForUsageEvents(child.stateDir, 2, child);
+    assert.equal(events.at(-1).failoverFrom, PRIMARY.slug);
+    assert.equal(events.at(-1).model, RESPONSES_MODEL.slug);
+  } finally {
+    await stopChild(child);
+    await closeServer(gw.server);
+  }
+});
+
+test("the hop bound stops after two candidates rather than walking the catalog", async () => {
+  const seen = [];
+  const gw = await gateway(async (request, response) => {
+    const body = await bodyJson(request);
+    seen.push(body.model);
+    const payload = Buffer.from(QUOTA_BODY, "utf8");
+    response.writeHead(429, {
+      "Content-Type": "application/json",
+      "Content-Length": String(payload.length),
+    });
+    response.end(payload);
+  });
+  const routerPort = await openPort();
+  const child = run(routerEnv(gw.port, routerPort), {
+    chain: [FALLBACK.slug, RESPONSES_MODEL.slug, "kimi-api/kimi-k3"],
+  });
+  try {
+    await waitFor(`http://127.0.0.1:${routerPort}/health`, child);
+    const result = await readRouted(routerPort, TURN_BODY);
+    // Everything failed, so the operator reads the failure their own model gave.
+    assert.equal(result.status, 429);
+    assert.equal(JSON.parse(result.body).error.type, "billing_error");
+    // One asked-for attempt plus at most MAX_FAILOVER_HOPS candidates.
+    assert.equal(seen.length, 3);
+    assert.equal(seen[0], PRIMARY.gatewayModel);
+  } finally {
+    await stopChild(child);
+    await closeServer(gw.server);
+  }
+});
+
+test("a non-streaming turn fails over the same way", async () => {
+  const seen = [];
+  const gw = await gateway(async (request, response) => {
+    const body = await bodyJson(request);
+    seen.push(body);
+    if (body.model === PRIMARY.gatewayModel) {
+      const payload = Buffer.from(QUOTA_BODY, "utf8");
+      response.writeHead(429, {
+        "Content-Type": "application/json",
+        "Content-Length": String(payload.length),
+      });
+      response.end(payload);
+      return;
+    }
+    const payload = Buffer.from(
+      JSON.stringify({
+        id: "r-json",
+        object: "response",
+        model: body.model,
+        output: [
+          {
+            type: "message",
+            role: "assistant",
+            content: [{ type: "output_text", text: "answered-by-json-fallback" }],
+          },
+        ],
+        usage: { input_tokens: 10, output_tokens: 4, total_tokens: 14 },
+      }),
+      "utf8",
+    );
+    response.writeHead(200, {
+      "Content-Type": "application/json",
+      "Content-Length": String(payload.length),
+    });
+    response.end(payload);
+  });
+  const routerPort = await openPort();
+  const child = run(routerEnv(gw.port, routerPort));
+  try {
+    await waitFor(`http://127.0.0.1:${routerPort}/health`, child);
+    const result = await readRouted(routerPort, { ...TURN_BODY, stream: false });
+    assert.equal(result.status, 200);
+    assert.equal(seen.length, 2);
+    assert.equal(seen[1].model, FALLBACK.gatewayModel);
+    assert.match(result.body, /answered-by-json-fallback/);
+  } finally {
+    await stopChild(child);
+    await closeServer(gw.server);
+  }
+});
+
+test("a client that leaves mid-failover does not hang or crash the router", async () => {
+  let fallbackStarted = 0;
+  const gw = await gateway(async (request, response) => {
+    const body = await bodyJson(request);
+    if (body.model === PRIMARY.gatewayModel) {
+      const payload = Buffer.from(QUOTA_BODY, "utf8");
+      response.writeHead(429, {
+        "Content-Type": "application/json",
+        "Content-Length": String(payload.length),
+      });
+      response.end(payload);
+      return;
+    }
+    // The fallback is slow, so the abort lands while the hop is in flight --
+    // the window the failover loop has to notice the caller is gone.
+    fallbackStarted += 1;
+    setTimeout(() => {
+      if (response.writableEnded) return;
+      response.writeHead(200, { "Content-Type": "text/event-stream" });
+      response.end(contentSse("late"));
+    }, 3_000);
+  });
+  const routerPort = await openPort();
+  const child = run(routerEnv(gw.port, routerPort));
+  try {
+    await waitFor(`http://127.0.0.1:${routerPort}/health`, child);
+    const base = new URL(`${callerBaseUrl(routerPort, CALLER_KEY)}/responses`);
+    const aborted = new Promise((resolve) => {
+      const outbound = http.request(
+        {
+          host: "127.0.0.1",
+          port: routerPort,
+          path: base.pathname,
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: "Bearer x" },
+        },
+        (response) => response.resume(),
+      );
+      outbound.on("error", () => resolve());
+      outbound.end(JSON.stringify(TURN_BODY));
+      setTimeout(() => {
+        outbound.destroy();
+        resolve();
+      }, 800);
+    });
+    await aborted;
+
+    // The router must still be serving, and a later turn must behave normally.
+    await waitFor(`http://127.0.0.1:${routerPort}/health`, child);
+    assert.equal(child.exitCode, null, `router exited: ${child.testErrors()}`);
+    assert.ok(fallbackStarted >= 1, "the failover hop should have been attempted");
+    // A departed caller meters as 0 rather than as a committed success.
+    const events = await waitForUsageEvents(child.stateDir, 1, child);
+    assert.ok(events.length >= 1);
+    assert.doesNotMatch(child.testErrors(), /UnhandledPromiseRejection|FATAL/);
   } finally {
     await stopChild(child);
     await closeServer(gw.server);
