@@ -5,10 +5,15 @@
 // sequence of length-prefixed envelopes. That is small enough to implement
 // directly, which keeps the router's dependency list where it is.
 
+import { COMPRESSED_FLAG, END_STREAM_FLAG, connectStatusFor } from "./connect-stream-audit.mjs";
 import { decodeMessage, encodeMessage } from "./protobuf-wire.mjs";
 
 const CONNECT_VERSION = "1";
-const END_STREAM_FLAG = 0x02;
+
+// The client asks for uncompressed envelopes and refuses compressed ones, so
+// there is no `zlib` here and no half-supported encoding list to keep in step
+// with a server nobody has met. See `connectServerStream` for why.
+const ENVELOPE_ENCODING = "identity";
 
 function connectError(message, { status = 502, code = "devin_upstream_error" } = {}) {
   const error = new Error(message);
@@ -17,21 +22,20 @@ function connectError(message, { status = 502, code = "devin_upstream_error" } =
   return error;
 }
 
-// Connect maps its error codes onto HTTP status codes. Preserving the
-// distinction matters upstream of here: the router retries a 429 or a 5xx and
-// must not retry an `invalid_argument`.
-const STATUS_BY_CONNECT_CODE = Object.freeze({
-  unauthenticated: 401,
-  permission_denied: 403,
-  not_found: 404,
-  invalid_argument: 400,
-  failed_precondition: 400,
-  resource_exhausted: 429,
-  unavailable: 503,
-  deadline_exceeded: 504,
-  internal: 502,
-  unknown: 502,
-});
+// The Connect code -> HTTP status table lives in `connect-stream-audit.mjs`,
+// which carries all sixteen codes the protocol defines together with which of
+// them are worth another attempt. It is imported rather than restated because
+// two tables drift, and the half-table that used to live here is what drift
+// looks like: six codes were missing, so a permanent refusal left this module
+// as a 502.
+//
+// 502 is not a neutral default. It is the first entry in
+// `RETRYABLE_STATUSES` (`upstream-retry.mjs`), the vision bridge treats any
+// 5xx as transient and reads the image again, and Codex answers a relayed 5xx
+// by spending one of its own reconnects. None of that can help a request the
+// upstream will refuse identically next time, so `already_exists`, `aborted`,
+// `out_of_range`, `canceled`, and `unimplemented` now leave here wearing
+// statuses that say so.
 
 export function connectAuthorization(token) {
   // Transcribed from the shipped client: the token is repeated either side of
@@ -59,7 +63,7 @@ async function failureFromResponse(response) {
   const code = typeof parsed?.code === "string" ? parsed.code : undefined;
   const message = parsed?.message || body.slice(0, 500) || `HTTP ${response.status}`;
   return connectError(`Devin upstream refused the request: ${message}`, {
-    status: STATUS_BY_CONNECT_CODE[code] || response.status || 502,
+    status: connectStatusFor(code, response.status || 502),
     code: code ? `devin_${code}` : "devin_upstream_error",
   });
 }
@@ -81,6 +85,7 @@ export async function connectUnary({
     headers: {
       "content-type": "application/proto",
       "connect-protocol-version": CONNECT_VERSION,
+      "connect-accept-encoding": ENVELOPE_ENCODING,
       authorization: connectAuthorization(token),
     },
     body: encodeMessage(requestSchema, message),
@@ -101,6 +106,17 @@ function envelope(payload) {
 // Yields decoded response messages until the upstream sends its end-of-stream
 // envelope. A Connect stream reports failure *inside* that final envelope with
 // HTTP 200 already sent, so the terminator is inspected rather than ignored.
+//
+// Envelope compression is refused rather than implemented, and the request says
+// so with `connect-accept-encoding: identity`. Connect allows a message to be
+// compressed independently of the HTTP body, and those bytes are not protobuf:
+// handing them to the decoder ends the turn with no text at all, or with a wire
+// type nobody can act on. Decompressing them instead would mean shipping gzip,
+// br, zstd, snappy, and deflate against a backend no maintainer has ever
+// reached -- untestable code covering a case a compliant server will never
+// produce once it has been told identity. So the transport asks for identity
+// and names the violation if one arrives, which is the answer this provider's
+// rules ask for everywhere else: fail loudly rather than parse tolerantly.
 export async function* connectServerStream({
   baseUrl,
   service,
@@ -118,6 +134,7 @@ export async function* connectServerStream({
     headers: {
       "content-type": "application/connect+proto",
       "connect-protocol-version": CONNECT_VERSION,
+      "connect-accept-encoding": ENVELOPE_ENCODING,
       authorization: connectAuthorization(token),
     },
     body: envelope(encodeMessage(requestSchema, message)),
@@ -142,6 +159,16 @@ export async function* connectServerStream({
       if (buffered.length < length + 5) break;
       const payload = buffered.subarray(5, length + 5);
       buffered = buffered.subarray(length + 5);
+      // Checked before the end-of-stream branch: the terminator carries the
+      // flag too, and a compressed one would otherwise be read as the empty
+      // `{}` that means the turn succeeded.
+      if ((flags & COMPRESSED_FLAG) !== 0) {
+        throw connectError(
+          "Devin upstream sent a compressed Connect frame; this transport asked for identity " +
+            "envelope encoding and cannot decompress one.",
+          { status: connectStatusFor("unimplemented"), code: "devin_compressed_frame" },
+        );
+      }
       if ((flags & END_STREAM_FLAG) !== 0) {
         let terminator;
         try {
@@ -154,7 +181,7 @@ export async function* connectServerStream({
           throw connectError(
             `Devin upstream ended the stream: ${terminator.error.message || code || "unknown error"}`,
             {
-              status: STATUS_BY_CONNECT_CODE[code] || 502,
+              status: connectStatusFor(code),
               code: code ? `devin_${code}` : "devin_upstream_error",
             },
           );

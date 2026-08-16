@@ -1,23 +1,35 @@
-// Connect-protocol stream inspection, kept separate from any Connect client.
+// Connect-protocol facts, owned in one place: the envelope frame layout, the
+// full error-code table, and a scanner that reads a stream without decoding it.
+//
+// The scanner exists for the probe, which must not test a transport with the
+// transport. The constants and the code table are shared with the client in
+// `devin-connect.mjs`, because the alternative -- a second table restated there
+// -- is exactly the drift this module was written to catch. Nothing here
+// imports the client, so the direction stays one-way.
 //
 // A transport reads frames in order to yield messages, and drops everything it
 // does not need: the compression bit, the frames it never completed, the shape
 // of the end-of-stream terminator. Those are exactly the things a probe has to
 // report, because each one has a quiet failure mode:
 //
-//   * A frame flagged compressed and handed straight to a protobuf decoder
-//     decodes to an empty message. No error is raised anywhere; the turn simply
-//     produces no text and no tool calls.
+//   * A frame flagged compressed carries bytes that are not protobuf. Handed
+//     straight to a decoder they yield no fields, or a wire-type error naming
+//     nothing the reader can act on; either way the turn produces no text and
+//     no tool calls. The client refuses such a frame by name and asks for
+//     `connect-accept-encoding: identity` so a compliant server never sends
+//     one.
 //   * A stream that ends mid-frame yields every complete message before it and
 //     then stops, which reads as a short answer.
 //   * A Connect stream reports failure inside the terminator with HTTP 200
 //     already sent, so a client that ignores the terminator reports success.
 //
 // The status table below is the full set of Connect error codes. An incomplete
-// table is not a cosmetic gap: a code that falls through to 502 is treated as a
-// transient upstream fault and retried, and `unimplemented` -- the code an
-// upstream returns when the service path or method name is wrong -- must never
-// be retried, because it will never succeed.
+// table is not a cosmetic gap: a code that falls through lands on 502, which is
+// the first entry in `RETRYABLE_STATUSES` (`upstream-retry.mjs`), is transient
+// to the vision bridge's "any 5xx" rule, and costs Codex one of its own
+// reconnects when relayed. `unimplemented` -- the code an upstream returns when
+// the service path or method name is wrong -- must never arrive dressed that
+// way, because it will never succeed.
 
 export const COMPRESSED_FLAG = 0x01;
 export const END_STREAM_FLAG = 0x02;

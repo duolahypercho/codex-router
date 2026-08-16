@@ -121,7 +121,7 @@ usually a `fix:` line. Those two lines are the useful part — please include th
 | `FAIL live turn … connect-code=invalid_argument` | The request shape is wrong. The upstream's message usually names the offending field — paste it verbatim, it is the single most useful thing in this document. |
 | `FAIL live turn … connect-code=permission_denied` or `failed_precondition` | Often a team setting (`disable_cascade`, `allowed_model_uids`) rather than a bug. Please say which plan you are on. |
 | `FAIL stream framing` | The upstream accepted the request and then sent no message frame. |
-| `FAIL frame compression` | The upstream compressed the stream. This transport cannot decompress and would decode every turn to nothing. |
+| `FAIL frame compression` | The upstream compressed the stream even though both the probe and the transport ask for `connect-accept-encoding: identity`. This transport cannot decompress; it refuses such a frame outright (`devin_compressed_frame`), so every turn would fail loudly rather than answer. Say which encoding the upstream used. |
 | `FAIL stream completeness` | The connection died part-way through a frame. |
 | `FAIL end-of-stream terminator` | A Connect stream reports failure *inside* its last frame, after HTTP 200 has already been sent. This line is that failure. |
 | `FAIL turn produced output` | Frames arrived and decoded to no text, no reasoning and no tool call. Check the `field census` line for `UNKNOWN` entries. |

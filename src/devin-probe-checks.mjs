@@ -197,14 +197,15 @@ export function streamFrameChecks({ frames = [], pending = 0, sawEndOfStream = f
   checks.push(
     compressed.length
       ? {
-          // The shipped client sends no `connect-accept-encoding`, so this
-          // should never fire. If it does, the transport hands compressed bytes
-          // to the protobuf decoder and every turn silently produces nothing.
+          // The shipped client asks for `connect-accept-encoding: identity`, so
+          // this should never fire. If it does, the upstream compressed anyway
+          // and every turn ends in the transport's `devin_compressed_frame`
+          // refusal -- loud, but no answer.
           status: "fail",
           name: "frame compression",
-          detail: "the upstream compressed frames; this transport cannot decompress and would decode them to empty messages",
+          detail: "the upstream compressed frames despite connect-accept-encoding: identity; this transport cannot decompress and refuses them",
           observed: `${compressed.length} of ${frames.length} frames carry the compressed flag`,
-          fix: "Report this. The transport must send connect-accept-encoding: identity or learn to decompress.",
+          fix: "Report this, with the encoding the upstream used. The transport would have to learn to decompress.",
         }
       : { status: "pass", name: "frame compression", detail: "no frame carried the compressed flag" },
   );

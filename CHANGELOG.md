@@ -131,6 +131,32 @@
   token, because it is written to be pasted into a public issue.
   `docs/DEVIN-CLI-PROBE.md` is the tester's copy of all of it.
 
+- **The Devin CLI transport now reports a refusal as a refusal.** Its Connect
+  client carried ten of the protocol's sixteen error codes, and the six it did
+  not — `canceled`, `already_exists`, `aborted`, `out_of_range`, `data_loss`,
+  and `unimplemented` — fell through to 502. Every layer above reads a 5xx as a
+  bad moment in the chain rather than an answer: the vision bridge retries it,
+  and Codex spends its own reconnects on it. `unimplemented` is what Cascade
+  answers when the service path or method name has drifted from the binary these
+  schemas were transcribed from, so the one code that can never succeed was the
+  one dressed as worth another try. The client now imports the full table from
+  `src/connect-stream-audit.mjs` instead of restating half of it, so
+  `unimplemented` arrives as 501, `already_exists` and `aborted` as 409,
+  `out_of_range` as 400, and `canceled` as 499 — none of them retryable — on
+  both the HTTP failure path and the end-of-stream terminator.
+- **A compressed Connect frame is no longer a silently empty answer.** Each
+  Connect envelope has a flags byte whose low bit marks the message compressed,
+  and the client ignored it: the frame went to the protobuf decoder, which is
+  not being handed protobuf, and the turn ended with no text and no tool calls
+  or with a wire-type error naming nothing anyone could act on. The client now
+  asks for `connect-accept-encoding: identity` on both call shapes and, if a
+  frame arrives compressed regardless, fails with a named
+  `devin_compressed_frame` (501) instead of guessing — including on the
+  end-of-stream terminator, where a compressed frame would otherwise have read
+  as the empty `{}` that means the turn succeeded. Decompression is deliberately
+  not implemented: no maintainer can reach Cascade to test it, and a compliant
+  server has no reason to compress once it has been told identity.
+
 - **Grok OAuth no longer loses late or custom tool calls.** The forwarder now
   accepts `function_call` and `custom_tool_call` items that first appear in
   `response.output_item.done`, restores final arguments when argument deltas

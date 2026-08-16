@@ -1205,6 +1205,18 @@ about it.
    can change under a `devin` update. When it does, the symptom is a Connect
    `invalid_argument` on every turn, not a subtle wrong answer — keep it that
    way rather than adding tolerant parsing that would mask a schema change.
+   Two rules make "loudly" mean something. First, a Connect error code must
+   reach the router as the HTTP status the protocol assigns it: the sixteen-code
+   table in `src/connect-stream-audit.mjs` is the single source, imported by the
+   client rather than restated, and a code that fell through to 502 would be
+   read one layer up as a transient fault in the chain and sent again — which is
+   precisely wrong for `unimplemented`, the answer to a service path or method
+   name that drifted. Second, the client asks for
+   `connect-accept-encoding: identity` and refuses a frame that carries the
+   compressed bit anyway (`devin_compressed_frame`). Compressed bytes are not
+   protobuf, so decoding them produces an empty turn or an unactionable wire
+   error; do not add decompression to this transport on the strength of a
+   fixture, because no maintainer can test it against Cascade.
 8. **An operator who never curated a Devin model pays nothing for it.** Unlike
    the three forwarders that always run, `src/devin-cli-forwarder.mjs` is
    spawned only when `MODELS` contains a `devin-cli` model, so an unconfigured
