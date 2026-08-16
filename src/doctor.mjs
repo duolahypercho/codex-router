@@ -963,6 +963,13 @@ try {
 }
 
 const health = await waitForRouterHealth({ timeoutMs: serviceLoaded ? 30_000 : 2_000 });
+// A router that answers while a dependency is down is not the same outcome as
+// a router that never answered, and saying "not ready" for both sent operators
+// looking for a dead service when the gateway was the thing that died. The
+// gateway is restarted in place, so this state is usually transient.
+const degradedDependencies = Array.isArray(health.degradedPayload?.degraded)
+  ? health.degradedPayload.degraded
+  : [];
 add(
   health.ok ? "ok" : serviceStoppedByDesign ? "warn" : "fail",
   "Router health",
@@ -970,7 +977,12 @@ add(
     ? `version ${health.payload.version}`
     : serviceStoppedByDesign
       ? "not serving; the background service is following Codex"
-      : `not ready on 127.0.0.1:${PORTS.router} after ${serviceLoaded ? 30 : 2} seconds; ${health.error}`,
+      : degradedDependencies.length
+        ? `serving on 127.0.0.1:${PORTS.router} but ${health.error}` +
+          (degradedDependencies.includes("gateway")
+            ? "; the service restarts a crashed gateway in place, so check the log for its restart lines"
+            : "")
+        : `not ready on 127.0.0.1:${PORTS.router} after ${serviceLoaded ? 30 : 2} seconds; ${health.error}`,
   "Run ./bin/doctor --fix. If it still fails, create a support bundle.",
 );
 

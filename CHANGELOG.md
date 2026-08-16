@@ -41,6 +41,26 @@
   alongside this and is not involved — the aging pass only ever rewrites the
   `output` of a tool result, and now has a test proving the reasoning and
   assistant turns around it come through by reference.
+- **A single bad upstream response could take the whole router down.** LiteLLM
+  1.96.0 raises out of its own request handler while mapping an upstream 429 —
+  opencode Zen's exhausted free tier is one reliable way to reach it — and the
+  gateway process ends with exit code 1. The service raced every child's exit,
+  so that one failed request also killed the router and all three forwarders,
+  and from then on every client got a bare `Connection error` naming nothing
+  (#261). The gateway is now supervised: it is restarted in place, with a
+  doubling backoff and at most five restarts inside ten minutes, while the
+  router keeps listening — so a crash costs one stalled request instead of the
+  session, and the next one is answered by a live gateway. Every crash, every
+  restart, and the decision to stop restarting are logged unconditionally, and
+  when the bound is exhausted the service exits exactly as before so the OS
+  supervisor performs a clean restart. Supervision starts only once the gateway
+  has been healthy: a gateway that never came up is still a startup failure, not
+  a retry loop. `/health` now names which local service is unreachable, so
+  doctor reports "serving but reports gateway unreachable" instead of "not
+  ready", and `CODEX_ROUTER_GATEWAY_RESTARTS=0` restores the old behaviour for
+  an investigation that wants the process to die where it died. The pinned
+  litellm version is unchanged: a router that survives its gateway is worth
+  having whichever version is installed.
 
 - **The free Qwen3.8 endpoint refused any conversation whose system message
   arrived late or twice.** Its chat template answers those with a 400 reading

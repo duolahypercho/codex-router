@@ -758,11 +758,24 @@ async function healthPayload() {
     apiEnabled ? serviceHealth(API_HEALTH) : { reachable: true, enabled: false },
     serviceHealth(GATEWAY_HEALTH),
   ]);
+  // Naming the unreachable dependency is the difference between "the router is
+  // broken" and "the gateway is restarting". It costs nothing to carry: these
+  // are three fixed local service names, so it is safe on the unauthenticated
+  // leaf too, which is the only one `waitForRouterHealth` and therefore doctor
+  // can read.
+  const degraded = [
+    ["oauth", oauth],
+    ["api", api],
+    ["gateway", gateway],
+  ]
+    .filter(([, service]) => !service.reachable)
+    .map(([name]) => name);
   return {
-    ok: oauth.reachable && api.reachable && gateway.reachable,
+    ok: degraded.length === 0,
     service: "codex-router",
     version: VERSION,
     router: "ready",
+    degraded,
     activity: activityPayload(),
     oauth,
     api,
@@ -2993,6 +3006,7 @@ async function handleRequest(request, response) {
       ok: health.ok,
       service: health.service,
       version: health.version,
+      degraded: health.degraded,
       activity: health.activity,
     });
     return;

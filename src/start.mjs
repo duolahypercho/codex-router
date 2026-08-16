@@ -15,6 +15,7 @@ import {
   loopback,
 } from "./paths.mjs";
 import { waitForHealth as pollHealth } from "./health-probe.mjs";
+import { gatewaySupervisorLimits, superviseGateway } from "./gateway-supervisor.mjs";
 import { writeLiteLlmConfig } from "./litellm-config.mjs";
 import { readLocalModelSelection } from "./local-models.mjs";
 import { ensureOllamaHeadless } from "./ollama-runtime.mjs";
@@ -224,25 +225,29 @@ async function main() {
     ),
   ]);
 
-  const gateway = run(litellm, [
-    "--config",
-    LITELLM_CONFIG_PATH,
-    "--host",
-    "127.0.0.1",
-    "--port",
-    String(PORTS.gateway),
-  ]);
+  const startGateway = () =>
+    run(litellm, [
+      "--config",
+      LITELLM_CONFIG_PATH,
+      "--host",
+      "127.0.0.1",
+      "--port",
+      String(PORTS.gateway),
+    ]);
   // LiteLLM cold starts can take minutes when launchd starves the job under
   // system load; killing it mid-import restarts the import from scratch and
   // the service loops forever, so wait long enough for a starved import.
-  await waitForHealth(
-    "LiteLLM gateway",
-    loopback(PORTS.gateway, "/health/liveliness"),
-    { Authorization: `Bearer ${internalKey}` },
-    300_000,
-    undefined,
-    gateway,
-  );
+  const gatewayHealthy = (child) =>
+    waitForHealth(
+      "LiteLLM gateway",
+      loopback(PORTS.gateway, "/health/liveliness"),
+      { Authorization: `Bearer ${internalKey}` },
+      300_000,
+      undefined,
+      child,
+    );
+  const gateway = startGateway();
+  await gatewayHealthy(gateway);
 
   const frontend = FRONTEND;
   const frontendService = frontend.service;
@@ -257,11 +262,25 @@ async function main() {
   );
 
   console.error(`[${frontendService}] ready (authenticated loopback endpoint)`);
+  // Only the gateway is supervised. The forwarders and the router are ours and
+  // are restarted by rebuilding the whole service; the gateway is a third-party
+  // Python process that can end itself on a single bad upstream response
+  // (issue #261, a 429 raised out of LiteLLM's exception mapping), and taking
+  // the router down with it turned one failed request into a dead session.
   const result = await Promise.race([
     waitForExit(kimiForwarder, "OAuth forwarder"),
     waitForExit(api, "API forwarder"),
     waitForExit(grokForwarder, "Grok OAuth forwarder"),
-    waitForExit(gateway, "LiteLLM gateway"),
+    superviseGateway({
+      label: "LiteLLM gateway",
+      child: gateway,
+      start: startGateway,
+      waitForExit,
+      waitForHealth: gatewayHealthy,
+      isShuttingDown: () => shuttingDown,
+      log: (message) => console.error(`[${frontendService}] ${message}`),
+      ...gatewaySupervisorLimits(),
+    }),
     waitForExit(router, frontend.label),
   ]);
   if (!shuttingDown) {

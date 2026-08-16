@@ -277,6 +277,57 @@ dependency tree. That tree is pinned and hashed rather than re-resolved.
    meaningless. Do not add a resolver cache there; a cache hit can serve an
    already-unpacked wheel and skip the hash check the job exists to perform.
 
+## The gateway is restarted in place; the router is not taken down with it
+
+`src/gateway-supervisor.mjs` watches the LiteLLM child and replaces it when it
+dies. It exists because the gateway is the one child of the service that is not
+ours: a bug anywhere in that pinned Python tree can end the process rather than
+the request, and issue #261 is exactly that — mapping an upstream 429 raised out
+of LiteLLM's own request handler and the proxy exited 1. `start.mjs` raced every
+child's exit, so one failed request killed the router and all three forwarders
+and every client saw a bare "Connection error" naming nothing.
+
+1. **Only the gateway is supervised.** The forwarders and the router are ours;
+   when one of them dies the service still exits and the OS supervisor rebuilds
+   it. Do not extend the supervisor to them to "be consistent" — a crash in our
+   own code is a bug report, and papering over it costs the incident.
+2. **Supervision starts only after the gateway has been healthy once.** A
+   gateway that never came up is a dependency or configuration failure, and
+   retrying it buries the message the operator needs. Startup failure is
+   unchanged: it throws out of `main()` and takes the service down, which is
+   what `test/startup-cleanup.test.mjs` asserts.
+3. **Bounded, and bounded *in a window*.** At most five restarts inside ten
+   minutes, backing off 1s, 2s, 4s, 8s, 16s, capped at 30s. The window is
+   load-bearing in both directions: a lifetime budget would eventually stop
+   restarting an install that crashes once a month, and no bound at all turns a
+   gateway that dies on every request into a spawn loop. Past the bound the
+   supervisor returns and the service exits exactly as it used to, so launchd's
+   `KeepAlive`, systemd's `Restart=always`, and Task Scheduler get their clean
+   restart. `CODEX_ROUTER_GATEWAY_RESTARTS=0` disables it entirely and restores
+   the pre-#261 behaviour, which is what a crash investigation wants.
+4. **Never silent.** The production LaunchAgent hard-sets `CODEX_ROUTER_QUIET`,
+   and a router that quietly resurrects a crashing gateway is indistinguishable
+   from one that never failed. Every crash, every restart, and the decision to
+   stop restarting are logged unconditionally.
+5. **A replacement that never becomes healthy is stopped, not left parked.**
+   Otherwise the loop waits on an exit that only an external kill can produce,
+   and a hung gateway looks like a healthy one.
+6. **`/health` names the unreachable dependency.** The unauthenticated leaf
+   carries `degraded: ["gateway"]` — a closed set of three fixed local service
+   names, never a URL, a credential, or the per-service payloads the protected
+   leaf carries, and `test/routing.test.mjs` asserts that boundary. It is what
+   lets doctor report "serving but reports gateway unreachable" instead of "not
+   ready", which sent operators looking for a dead service when the gateway was
+   the thing that died.
+7. **Do not answer a gateway crash by moving the litellm pin.** The pin is a
+   security floor and a wheel-availability decision (see the lock section
+   above), any change to it has to be proven by booting the proxy rather than by
+   a successful resolve, and a router that survives its gateway is worth having
+   at every version. Coverage lives in `test/gateway-supervisor.test.mjs` (the
+   loop, the bound, the window, the backoff) and `test/gateway-restart.test.mjs`
+   (end to end: a stand-in gateway exits 1 mid-request, the service does not,
+   and the router is still serving afterwards).
+
 ## Requests to install or expose more models
 
 First distinguish a local model addition from a repository-wide model change.

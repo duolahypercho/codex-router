@@ -23,6 +23,11 @@ export async function waitForRouterHealth({
 
   const deadline = Date.now() + Math.max(0, timeoutMs);
   let lastError = "service unavailable";
+  // A router that answers but reports a dependency down is a different failure
+  // from a router that is not listening, and only the first one is survivable
+  // (the gateway is restarted in place). Keep the last such payload so the
+  // caller can say which of the two happened instead of "not ready".
+  let lastPayload;
   do {
     try {
       const response = await fetchImpl(url, {
@@ -40,6 +45,12 @@ export async function waitForRouterHealth({
       }
       if (payload.service && payload.service !== expectedService) {
         lastError = `a different service (${payload.service}) is listening on the router port`;
+      } else if (payload.service === expectedService) {
+        lastPayload = payload;
+        const down = Array.isArray(payload.degraded) ? payload.degraded : [];
+        lastError = down.length
+          ? `it is listening but reports ${down.join(", ")} unreachable (HTTP ${response.status})`
+          : `it is listening but answered HTTP ${response.status}`;
       } else if (response.status) {
         lastError = `HTTP ${response.status}`;
       }
@@ -52,5 +63,5 @@ export async function waitForRouterHealth({
     await new Promise((resolve) => setTimeout(resolve, Math.min(intervalMs, remainingMs)));
   } while (Date.now() <= deadline);
 
-  return { ok: false, error: lastError };
+  return { ok: false, error: lastError, degradedPayload: lastPayload };
 }

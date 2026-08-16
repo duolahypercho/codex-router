@@ -308,7 +308,18 @@ test("router requires the configured path capability before any model route", as
     const publicHealth = await fetch(`http://127.0.0.1:${routerPort}/health`);
     assert.equal(publicHealth.status, 200);
     const publicPayload = await publicHealth.json();
-    assert.deepEqual(Object.keys(publicPayload).sort(), ["activity", "ok", "service", "version"]);
+    assert.deepEqual(
+      Object.keys(publicPayload).sort(),
+      ["activity", "degraded", "ok", "service", "version"],
+    );
+    // `degraded` names which local service is unreachable so doctor can say the
+    // gateway died rather than "the router is not ready". It is a closed set of
+    // three fixed local service names -- never a URL, a credential, or the
+    // per-service payloads the protected leaf carries.
+    assert.ok(
+      publicPayload.degraded.every((name) => ["oauth", "api", "gateway"].includes(name)),
+      JSON.stringify(publicPayload.degraded),
+    );
     assert.equal(publicPayload.activity.state, "error");
 
     const protectedHealth = await fetch(`${routerBase(routerPort)}/health`);

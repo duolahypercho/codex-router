@@ -23,6 +23,25 @@ test("router health waits through a transient startup failure", async () => {
   assert.equal(health.payload.version, "test");
 });
 
+// A router that answers while the gateway is being restarted is a different
+// failure from a router that is not listening, and doctor says so only if the
+// payload survives the non-ok response.
+test("router health names the unreachable dependency behind a 503", async () => {
+  const health = await waitForRouterHealth({
+    target: "codex",
+    timeoutMs: 0,
+    fetchImpl: async () =>
+      new Response(
+        JSON.stringify({ ok: false, service: "codex-router", version: "test", degraded: ["gateway"] }),
+        { status: 503 },
+      ),
+  });
+
+  assert.equal(health.ok, false);
+  assert.match(health.error, /listening but reports gateway unreachable \(HTTP 503\)/);
+  assert.deepEqual(health.degradedPayload.degraded, ["gateway"]);
+});
+
 test("router health rejects a different service on the configured port", async () => {
   const health = await waitForRouterHealth({
     target: "codex",
