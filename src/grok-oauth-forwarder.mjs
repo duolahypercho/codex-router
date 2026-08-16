@@ -18,6 +18,12 @@ import { MODELS } from "./model-registry.mjs";
 import { ensureFreshGrokOAuthToken } from "./grok-oauth-session.mjs";
 import { grokOAuthStatus } from "./grok-oauth-status.mjs";
 import { normalizeSchemaLiterals, objectRootToolSchema } from "./tool-schema-root.mjs";
+import {
+  applyResponsesEvent,
+  createTurnState,
+  finalizeTurn,
+  sseDataFromBlock,
+} from "./grok-oauth-turn.mjs";
 import { VERSION } from "./version.mjs";
 import { installStableFetchTransport } from "./fetch-transport.mjs";
 
@@ -271,6 +277,25 @@ function upstreamHeaders(accessToken, model, messages) {
 }
 
 // Parse the upstream Responses SSE and invoke callbacks per normalized event.
+function nextSseBoundary(buffer) {
+  const crlf = buffer.indexOf("\r\n\r\n");
+  const lf = buffer.indexOf("\n\n");
+  if (crlf === -1 && lf === -1) return null;
+  if (crlf === -1) return { at: lf, size: 2 };
+  if (lf === -1) return { at: crlf, size: 4 };
+  return crlf < lf ? { at: crlf, size: 4 } : { at: lf, size: 2 };
+}
+
+function dispatchSseBlock(rawEvent, handlers) {
+  const data = sseDataFromBlock(rawEvent);
+  if (!data || data === "[DONE]") return;
+  try {
+    handlers(JSON.parse(data));
+  } catch {
+    // Ignore malformed upstream events while preserving the rest of the stream.
+  }
+}
+
 async function consumeResponsesStream(upstreamBody, handlers) {
   const reader = upstreamBody.getReader();
   const decoder = new TextDecoder();
@@ -280,24 +305,14 @@ async function consumeResponsesStream(upstreamBody, handlers) {
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
     let boundary;
-    while ((boundary = buffer.indexOf("\n\n")) !== -1) {
-      const rawEvent = buffer.slice(0, boundary);
-      buffer = buffer.slice(boundary + 2);
-      const dataLine = rawEvent
-        .split("\n")
-        .find((line) => line.startsWith("data:"));
-      if (!dataLine) continue;
-      const data = dataLine.slice(5).trim();
-      if (!data || data === "[DONE]") continue;
-      let event;
-      try {
-        event = JSON.parse(data);
-      } catch {
-        continue;
-      }
-      handlers(event);
+    while ((boundary = nextSseBoundary(buffer))) {
+      const rawEvent = buffer.slice(0, boundary.at);
+      buffer = buffer.slice(boundary.at + boundary.size);
+      dispatchSseBlock(rawEvent, handlers);
     }
   }
+  buffer += decoder.decode();
+  if (buffer.trim()) dispatchSseBlock(buffer, handlers);
 }
 
 const OPENAI_ROLE_CHUNK = (id, created, model, delta, finishReason = null) =>
@@ -378,10 +393,8 @@ async function handleChatCompletions(request, response) {
 
   const id = `chatcmpl-${randomUUID()}`;
   const created = Math.floor(Date.now() / 1_000);
-  const toolIndex = new Map();
-  let contentText = "";
-  let finishReason = "stop";
-  let usage;
+  const turnState = createTurnState();
+  let emittedDeltaCount = 0;
 
   if (wantsStream) {
     response.writeHead(200, {
@@ -392,116 +405,44 @@ async function handleChatCompletions(request, response) {
     response.write(OPENAI_ROLE_CHUNK(id, created, model, { role: "assistant", content: "" }));
   }
 
+  const emitPendingDeltas = () => {
+    if (!wantsStream) return;
+    while (emittedDeltaCount < turnState.deltas.length) {
+      response.write(
+        OPENAI_ROLE_CHUNK(id, created, model, turnState.deltas[emittedDeltaCount]),
+      );
+      emittedDeltaCount += 1;
+    }
+  };
+
   const onEvent = (event) => {
-    switch (event.type) {
-      case "response.output_text.delta": {
-        contentText += event.delta || "";
-        if (wantsStream && event.delta) {
-          response.write(OPENAI_ROLE_CHUNK(id, created, model, { content: event.delta }));
-        }
-        break;
-      }
-      case "response.output_item.added": {
-        const item = event.item;
-        if (item?.type === "function_call") {
-          const index = toolIndex.size;
-          toolIndex.set(item.id, index);
-          finishReason = "tool_calls";
-          if (wantsStream) {
-            response.write(
-              OPENAI_ROLE_CHUNK(id, created, model, {
-                tool_calls: [
-                  {
-                    index,
-                    id: item.call_id || item.id,
-                    type: "function",
-                    function: { name: item.name || "", arguments: "" },
-                  },
-                ],
-              }),
-            );
-          }
-        }
-        break;
-      }
-      case "response.function_call_arguments.delta": {
-        const index = toolIndex.get(event.item_id) ?? 0;
-        if (wantsStream && event.delta) {
-          response.write(
-            OPENAI_ROLE_CHUNK(id, created, model, {
-              tool_calls: [{ index, function: { arguments: event.delta } }],
-            }),
-          );
-        }
-        break;
-      }
-      case "response.completed": {
-        const u = event.response?.usage;
-        if (u) {
-          usage = {
-            prompt_tokens: u.input_tokens ?? 0,
-            completion_tokens: u.output_tokens ?? 0,
-            total_tokens: (u.input_tokens ?? 0) + (u.output_tokens ?? 0),
-          };
-          // xAI caches prompts automatically and reports the hit under
-          // `input_tokens_details`. Dropping it here is what makes every routed
-          // Grok turn log `cached_tokens=unknown`, so the one number that says
-          // whether the cache is working is invisible -- and `response-usage.mjs`
-          // is already looking for it under both spellings.
-          const cached = u.input_tokens_details?.cached_tokens;
-          if (typeof cached === "number") {
-            usage.prompt_tokens_details = { cached_tokens: cached };
-          }
-          const reasoning = u.output_tokens_details?.reasoning_tokens;
-          if (typeof reasoning === "number") {
-            usage.completion_tokens_details = { reasoning_tokens: reasoning };
-          }
-        }
-        break;
-      }
-      default:
-        break;
-    }
+    applyResponsesEvent(turnState, event);
+    emitPendingDeltas();
   };
 
-  // For a non-streaming client we still need the tool-call structure, so collect
-  // the full output items from the completed event.
-  const collectedToolCalls = [];
-  const onEventCollecting = (event) => {
-    onEvent(event);
-    if (event.type === "response.output_item.done" && event.item?.type === "function_call") {
-      collectedToolCalls.push({
-        id: event.item.call_id || event.item.id,
-        type: "function",
-        function: { name: event.item.name, arguments: event.item.arguments || "" },
-      });
-    }
-  };
-
-  await consumeResponsesStream(upstream.body, wantsStream ? onEvent : onEventCollecting);
+  await consumeResponsesStream(upstream.body, onEvent);
+  const turn = finalizeTurn(turnState);
+  emitPendingDeltas();
 
   if (wantsStream) {
-    response.write(OPENAI_ROLE_CHUNK(id, created, model, {}, finishReason));
-    if (usage) {
+    response.write(OPENAI_ROLE_CHUNK(id, created, model, {}, turn.finishReason));
+    if (turn.usage) {
       response.write(
-        `data: ${JSON.stringify({ id, object: "chat.completion.chunk", created, model, choices: [], usage })}\n\n`,
+        `data: ${JSON.stringify({ id, object: "chat.completion.chunk", created, model, choices: [], usage: turn.usage })}\n\n`,
       );
     }
     response.write("data: [DONE]\n\n");
     response.end();
   } else {
-    const message = { role: "assistant", content: contentText || null };
-    if (collectedToolCalls.length) {
-      message.tool_calls = collectedToolCalls;
-      finishReason = "tool_calls";
-    }
+    const message = { role: "assistant", content: turn.contentText || null };
+    if (turn.toolCalls.length) message.tool_calls = turn.toolCalls;
     writeJson(response, 200, {
       id,
       object: "chat.completion",
       created,
       model,
-      choices: [{ index: 0, message, finish_reason: finishReason }],
-      usage: usage || { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+      choices: [{ index: 0, message, finish_reason: turn.finishReason }],
+      usage: turn.usage || { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
     });
   }
 

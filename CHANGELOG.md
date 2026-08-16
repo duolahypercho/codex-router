@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **Grok OAuth no longer loses late or custom tool calls.** The forwarder now
+  accepts `function_call` and `custom_tool_call` items that first appear in
+  `response.output_item.done`, restores final arguments when argument deltas
+  are absent, joins repeated SSE `data:` fields, and consumes the final event
+  even when the upstream omits its trailing blank line. Streaming remains live
+  while the upstream turn is running.
+
 - **Curated models were filed at 131072 tokens however big they actually
   were, and the million-token ones compacted on every turn.** Curation stored
   one conservative window for every model it added, so a model OpenRouter

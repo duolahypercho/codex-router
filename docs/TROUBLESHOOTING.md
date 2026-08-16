@@ -296,6 +296,13 @@ empty response as a completed turn and the agent appears to stop for no reason.
 Reasoning-only turns count — a model that thinks and then says nothing produces
 exactly this.
 
+Grok OAuth previously had a nearby parser failure with the same visible shape:
+the upstream could put a `function_call` only in `response.output_item.done`,
+emit a `custom_tool_call`, or end the final SSE block without a trailing blank
+line. The forwarder now accepts all three shapes and restores final tool
+arguments without holding the full turn, so Codex sees the tool call instead of
+mistaking the preceding status text for the completed task.
+
 The router holds the entire response until it knows the turn produced something.
 When nothing arrives it discards that attempt and retries the identical request
 once, so the client sees only one response head, response ID, and sequence space.

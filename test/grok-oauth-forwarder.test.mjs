@@ -446,3 +446,161 @@ test("upstream headers keep one conversation on one conv-id", async () => {
     turnOne,
   );
 });
+
+test("streams visible output before the upstream turn completes", async () => {
+  let releaseCompletion;
+  const completionGate = new Promise((resolve) => {
+    releaseCompletion = resolve;
+  });
+  const backend = await mockBackend(async (_req, res) => {
+    res.writeHead(200, { "Content-Type": "text/event-stream" });
+    res.write(sse([{ type: "response.output_text.delta", delta: "working" }]));
+    await completionGate;
+    res.end(
+      sse([
+        { type: "response.completed", response: { usage: { input_tokens: 10, output_tokens: 2 } } },
+      ]),
+    );
+  });
+  const port = await openPort();
+  const dir = mkdtempSync(path.join(os.tmpdir(), "grok-oauth-live-stream-"));
+  const child = startForwarder(port, backend.port, writeSession(dir));
+  const base = `http://127.0.0.1:${port}`;
+  try {
+    await waitHealth(base, child);
+    const resp = await fetch(`${base}/v1/chat/completions`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({
+        model: "grok-4.6",
+        messages: [{ role: "user", content: "continue" }],
+        stream: true,
+      }),
+    });
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let body = "";
+    let timeout;
+    await Promise.race([
+      (async () => {
+        while (!body.includes('"content":"working"')) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          body += decoder.decode(value, { stream: true });
+        }
+      })(),
+      new Promise((_, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error("visible output was buffered until completion")),
+          2_000,
+        );
+      }),
+    ]);
+    clearTimeout(timeout);
+    assert.match(body, /"content":"working"/);
+    releaseCompletion();
+    for (;;) {
+      const { done } = await reader.read();
+      if (done) break;
+    }
+  } finally {
+    releaseCompletion?.();
+    await stop(child);
+    await new Promise((r) => backend.server.close(r));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("streams a function call that appears only in a final unterminated SSE block", async () => {
+  let inbound = 0;
+  const backend = await mockBackend(async (_req, res) => {
+    inbound += 1;
+    res.writeHead(200, { "Content-Type": "text/event-stream" });
+    const event = {
+      type: "response.output_item.done",
+      item: {
+        type: "function_call",
+        id: "fc_done",
+        call_id: "call_done",
+        name: "exec_command",
+        arguments: '{"cmd":"dir"}',
+      },
+    };
+    res.end(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n`);
+  });
+  const port = await openPort();
+  const dir = mkdtempSync(path.join(os.tmpdir(), "grok-oauth-final-block-"));
+  const child = startForwarder(port, backend.port, writeSession(dir));
+  const base = `http://127.0.0.1:${port}`;
+  try {
+    await waitHealth(base, child);
+    const resp = await fetch(`${base}/v1/chat/completions`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({
+        model: "grok-4.6",
+        messages: [{ role: "user", content: "run it" }],
+        tools: [{ type: "function", function: { name: "exec_command", parameters: { type: "object" } } }],
+        stream: true,
+      }),
+    });
+    const body = await resp.text();
+    assert.match(body, /"finish_reason":"tool_calls"/);
+    assert.match(body, /exec_command/);
+    assert.match(body, /\\"cmd\\":\\"dir\\"/);
+    assert.equal(inbound, 1);
+  } finally {
+    await stop(child);
+    await new Promise((r) => backend.server.close(r));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("forwards a short reasoning-heavy answer once without retrying", async () => {
+  let inbound = 0;
+  const backend = await mockBackend(async (_req, res) => {
+    inbound += 1;
+    res.writeHead(200, { "Content-Type": "text/event-stream" });
+    res.end(
+      sse([
+        { type: "response.output_text.delta", delta: "Next I will update the deck." },
+        {
+          type: "response.completed",
+          response: {
+            usage: {
+              input_tokens: 105_882,
+              output_tokens: 1_660,
+              output_tokens_details: { reasoning_tokens: 1_620 },
+            },
+          },
+        },
+      ]),
+    );
+  });
+  const port = await openPort();
+  const dir = mkdtempSync(path.join(os.tmpdir(), "grok-oauth-short-answer-"));
+  const child = startForwarder(port, backend.port, writeSession(dir));
+  const base = `http://127.0.0.1:${port}`;
+  try {
+    await waitHealth(base, child);
+    const resp = await fetch(`${base}/v1/chat/completions`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({
+        model: "grok-4.6",
+        messages: [{ role: "user", content: "update the deck" }],
+        tools: [{ type: "function", function: { name: "exec_command", parameters: { type: "object" } } }],
+        stream: false,
+      }),
+    });
+    const json = await resp.json();
+    assert.equal(json.choices[0].message.content, "Next I will update the deck.");
+    assert.equal(json.choices[0].finish_reason, "stop");
+    assert.equal(json.usage.completion_tokens_details.reasoning_tokens, 1_620);
+    assert.equal(inbound, 1);
+  } finally {
+    await stop(child);
+    await new Promise((r) => backend.server.close(r));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
