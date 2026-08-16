@@ -42,6 +42,47 @@ export const NAMESPACE_DELIMITER = "__";
 // Map in a WeakMap preserves the Map's public shape for existing callers while
 // letting the response path validate model-generated overrides.
 const SPAWN_AGENT_MODELS = new WeakMap();
+const TOOL_SEARCH_RELAYS = new WeakMap();
+
+const TOOL_SEARCH_FUNCTION_NAME = "tool_search";
+
+function providerFunctionName(tool) {
+  return tool?.name ?? tool?.function?.name;
+}
+
+function providerVisibleToolNames(tools) {
+  const names = new Set();
+  if (!Array.isArray(tools)) return names;
+  for (const tool of tools) {
+    if (tool?.type === "namespace" && Array.isArray(tool.tools)) {
+      for (const fn of tool.tools) {
+        if (fn?.name) names.add(`${tool.name}${NAMESPACE_DELIMITER}${fn.name}`);
+      }
+      continue;
+    }
+    const name = providerFunctionName(tool);
+    if (typeof name === "string" && name) names.add(name);
+  }
+  return names;
+}
+
+function availableToolSearchName(tools) {
+  const names = providerVisibleToolNames(tools);
+  if (!names.has(TOOL_SEARCH_FUNCTION_NAME)) return TOOL_SEARCH_FUNCTION_NAME;
+  let suffix = 1;
+  while (names.has(`codex_tool_search_${suffix}`)) suffix += 1;
+  return `codex_tool_search_${suffix}`;
+}
+
+function providerToolSearchDescription(description, providerName) {
+  if (typeof description !== "string") return undefined;
+  if (providerName === TOOL_SEARCH_FUNCTION_NAME) return description;
+  const rewritten = description.replaceAll(
+    `\`${TOOL_SEARCH_FUNCTION_NAME}\``,
+    `\`${providerName}\``,
+  );
+  return `${rewritten}\n\nFor this routed request, call \`${providerName}\` for deferred tool discovery; \`${TOOL_SEARCH_FUNCTION_NAME}\` is a separate ordinary function.`;
+}
 
 function schemaStringValues(schema, values = new Set()) {
   if (!schema || typeof schema !== "object") return values;
@@ -128,23 +169,51 @@ export function repairToolSchemaRoots(tools) {
   return changed ? repaired : tools;
 }
 
+function flattenNamespaceChild(namespace, fn) {
+  const clientSchema = fn.parameters ?? fn.inputSchema;
+  const parameters =
+    clientSchema === undefined ? undefined : providerToolSchema(clientSchema);
+  return {
+    ...fn,
+    name: `${namespace}${NAMESPACE_DELIMITER}${fn.name}`,
+    ...(parameters === undefined ? {} : { parameters }),
+  };
+}
+
 // Flatten every namespace entry into plain functions named
 // `<namespace>__<tool>`. Returns the set of namespaces that were flattened
 // (name -> tool names) so callers can rename history and restore calls.
-export function flattenNamespaceTools(tools) {
+export function flattenNamespaceTools(tools, { bridgeToolSearch = true } = {}) {
   if (!Array.isArray(tools)) return { tools, flattened: false, namespaces: new Map() };
   const flattened = [];
   const namespaces = new Map();
   const spawnAgentModels = new Set();
+  const toolSearchName = bridgeToolSearch ? availableToolSearchName(tools) : undefined;
+  let toolSearchRelay;
   let changed = false;
   for (const tool of tools) {
-    // Codex adds this control tool when one or more namespace tools use
-    // deferred loading. By this boundary every namespace is expanded below,
-    // so the search control is redundant; chat-completions providers accept
-    // only ordinary function tools and reject `type: "tool_search"` before
-    // the model can call any MCP function.
+    // Codex registers deferred tools client-side and exposes this native
+    // control so the model can search them on demand. Chat-completions
+    // providers reject the native type, so present the same request-local
+    // capability as an ordinary function and restore its calls on the
+    // response path. Only the native client-executed shape enables the relay;
+    // an unrelated function named `tool_search` never does. When such a plain
+    // function already exists, use a deterministic alias so neither call can
+    // hijack the other.
     if (tool?.type === "tool_search") {
       changed = true;
+      if (bridgeToolSearch && tool.execution === "client" && !toolSearchRelay) {
+        const parameters =
+          tool.parameters === undefined ? undefined : providerToolSchema(tool.parameters);
+        const description = providerToolSearchDescription(tool.description, toolSearchName);
+        flattened.push({
+          type: "function",
+          name: toolSearchName,
+          ...(description === undefined ? {} : { description }),
+          ...(parameters === undefined ? {} : { parameters }),
+        });
+        toolSearchRelay = { providerName: toolSearchName };
+      }
       continue;
     }
     if (tool?.type === "namespace" && Array.isArray(tool.tools)) {
@@ -166,14 +235,7 @@ export function flattenNamespaceTools(tools) {
         // never touches automations still dies on its first message. Normalize
         // only the provider-facing copy; `inputSchema` stays exactly as the
         // client sent it.
-        const clientSchema = fn.parameters ?? fn.inputSchema;
-        const parameters =
-          clientSchema === undefined ? undefined : providerToolSchema(clientSchema);
-        flattened.push({
-          ...fn,
-          name: `${tool.name}${NAMESPACE_DELIMITER}${fn.name}`,
-          ...(parameters === undefined ? {} : { parameters }),
-        });
+        flattened.push(flattenNamespaceChild(tool.name, fn));
         names.add(fn.name);
         if (tool.name === "collaboration" && fn.name === "spawn_agent") {
           schemaStringValues(fn.inputSchema?.properties?.model, spawnAgentModels);
@@ -198,7 +260,198 @@ export function flattenNamespaceTools(tools) {
     flattened.push(repaired);
   }
   if (spawnAgentModels.size > 0) SPAWN_AGENT_MODELS.set(namespaces, spawnAgentModels);
+  if (toolSearchRelay) TOOL_SEARCH_RELAYS.set(namespaces, toolSearchRelay);
   return { tools: flattened, flattened: changed, namespaces };
+}
+
+function plainObject(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : undefined;
+}
+
+function validToolSearchHistoryArguments(value) {
+  const argumentsObject = plainObject(value);
+  if (!argumentsObject || typeof argumentsObject.query !== "string") return false;
+  if (!argumentsObject.query.trim()) return false;
+  const { limit } = argumentsObject;
+  return limit === undefined || (Number.isInteger(limit) && limit > 0);
+}
+
+function discoveredProviderTools(toolSpecs) {
+  if (!Array.isArray(toolSpecs)) return [];
+  const discovered = [];
+  for (const tool of toolSpecs) {
+    if (tool?.type === "namespace" && typeof tool.name === "string" && Array.isArray(tool.tools)) {
+      for (const fn of tool.tools) {
+        if (fn?.type !== "function" || !fn.name) continue;
+        discovered.push({
+          tool: flattenNamespaceChild(tool.name, fn),
+          native: { namespace: tool.name, name: fn.name },
+        });
+      }
+      continue;
+    }
+    if (tool?.type !== "function" || !providerFunctionName(tool)) continue;
+    discovered.push({ tool: repairToolSchemaRoot(tool) });
+  }
+  return discovered;
+}
+
+function addDiscoveredNamespace(namespaces, native) {
+  if (!native) return;
+  let names = namespaces.get(native.namespace);
+  if (!names) {
+    names = new Set();
+    namespaces.set(native.namespace, names);
+  }
+  names.add(native.name);
+}
+
+// A native tool_search output changes what the model may call on the next
+// turn. The Responses API understands that special history item directly;
+// LiteLLM's chat-completions bridge does not. Translate matched call/output
+// pairs into ordinary function history and add the returned definitions to
+// this request's provider-facing tool list. Live top-level schemas win on a
+// name collision. Native items that do not form one unique, ordered,
+// well-formed pair are dropped: a chat-completions provider cannot consume
+// them, and forwarding one would make the transcript promise unavailable
+// tools.
+export function flattenToolSearchHistory(input, tools, namespaces) {
+  const relay = TOOL_SEARCH_RELAYS.get(namespaces);
+  if (!Array.isArray(input)) {
+    return { input, tools, flattened: false };
+  }
+  if (!Array.isArray(tools)) {
+    const routedInput = input.filter(
+      (item) => item?.type !== "tool_search_call" && item?.type !== "tool_search_output",
+    );
+    return {
+      input: routedInput.length === input.length ? input : routedInput,
+      tools,
+      flattened: routedInput.length !== input.length,
+    };
+  }
+
+  const callsById = new Map();
+  const invalidIds = new Set();
+  let nativeItems = 0;
+  // Pair in one forward walk. Outputs may follow several parallel calls, but
+  // they may never reach backwards past an orphan, duplicate, or malformed
+  // item with the same id. Records are materialized only after the walk, so a
+  // duplicate discovered late invalidates the entire id before any tool can be
+  // added to the provider request.
+  for (let index = 0; index < input.length; index += 1) {
+    const item = input[index];
+    const isCall = item?.type === "tool_search_call";
+    const isOutput = item?.type === "tool_search_output";
+    if (!isCall && !isOutput) continue;
+    nativeItems += 1;
+
+    const id = typeof item.call_id === "string" && item.call_id ? item.call_id : undefined;
+    if (!id) continue;
+    if (invalidIds.has(id)) continue;
+
+    if (isCall) {
+      const valid =
+        item.execution === "client" && validToolSearchHistoryArguments(item.arguments);
+      if (!valid || callsById.has(id)) {
+        callsById.delete(id);
+        invalidIds.add(id);
+        continue;
+      }
+      callsById.set(id, { call: item, callIndex: index });
+      continue;
+    }
+
+    const call = callsById.get(id);
+    const valid =
+      item.execution === "client" &&
+      item.status === "completed" &&
+      Array.isArray(item.tools);
+    if (!valid || !call || call.output) {
+      callsById.delete(id);
+      invalidIds.add(id);
+      continue;
+    }
+    call.output = item;
+    call.outputIndex = index;
+  }
+
+  if (nativeItems === 0) return { input, tools, flattened: false };
+
+  const callsByIndex = new Map();
+  const outputsByIndex = new Map();
+  if (relay) {
+    for (const [id, record] of callsById) {
+      if (!record.output || invalidIds.has(id)) continue;
+      callsByIndex.set(record.callIndex, record);
+      outputsByIndex.set(record.outputIndex, record);
+    }
+  }
+
+  const visibleNames = providerVisibleToolNames(tools);
+  let routedTools = tools;
+  const routedInput = [];
+  for (let index = 0; index < input.length; index += 1) {
+    const item = input[index];
+    if (item?.type === "tool_search_call") {
+      if (!callsByIndex.has(index)) continue;
+      const {
+        type: _type,
+        execution: _execution,
+        status: _status,
+        arguments: searchArguments,
+        ...rest
+      } = item;
+      routedInput.push({
+        ...rest,
+        type: "function_call",
+        name: relay.providerName,
+        arguments: JSON.stringify(searchArguments),
+      });
+      continue;
+    }
+
+    if (item?.type !== "tool_search_output") {
+      routedInput.push(item);
+      continue;
+    }
+    if (!outputsByIndex.has(index)) continue;
+
+    const accepted = [];
+    for (const candidate of discoveredProviderTools(item.tools)) {
+      const name = providerFunctionName(candidate.tool);
+      if (!name || visibleNames.has(name)) continue;
+      visibleNames.add(name);
+      accepted.push(candidate.tool);
+      addDiscoveredNamespace(namespaces, candidate.native);
+    }
+    // Keep the live-name set across outputs. The first valid discovery wins;
+    // later outputs omit a duplicate from both their result and the request's
+    // tool list instead of advertising a schema that cannot take precedence.
+    if (accepted.length) {
+      if (routedTools === tools) routedTools = [...tools];
+      routedTools.push(...accepted);
+    }
+
+    const {
+      type: _type,
+      execution: _execution,
+      status: _status,
+      tools: _tools,
+      ...rest
+    } = item;
+    routedInput.push({
+      ...rest,
+      type: "function_call_output",
+      output: JSON.stringify({ tools: accepted }),
+    });
+  }
+
+  return {
+    input: routedInput,
+    tools: routedTools,
+    flattened: true,
+  };
 }
 
 // Flattening only the tool list leaves the model reading two names for one
@@ -264,6 +517,7 @@ export function buildNamespaceLookups(namespaces) {
     flatToNative,
     bareToNamespaces,
     spawnAgentModels: SPAWN_AGENT_MODELS.get(namespaces),
+    toolSearch: TOOL_SEARCH_RELAYS.get(namespaces),
   };
 }
 
@@ -297,8 +551,60 @@ function rewriteFunctionCallArguments(item) {
   return { ...item, arguments: argumentsText };
 }
 
-function rewriteNamespaceFunctionCallItem(item, lookups, sessionModel) {
+function toolSearchArguments(value, allowPlaceholder) {
+  if (plainObject(value)) return value;
+  if (typeof value !== "string") return undefined;
+  if (allowPlaceholder && value.trim() === "") return {};
+  try {
+    return plainObject(JSON.parse(value));
+  } catch {
+    return undefined;
+  }
+}
+
+function rewriteToolSearchFunctionCallItem(item, lookups, allowPlaceholder) {
+  const relay = lookups.toolSearch;
+  if (
+    !relay ||
+    item?.type !== "function_call" ||
+    item.name !== relay.providerName ||
+    item.namespace !== undefined ||
+    typeof item.call_id !== "string" ||
+    !item.call_id
+  ) {
+    return undefined;
+  }
+  const argumentsObject = toolSearchArguments(item.arguments, allowPlaceholder);
+  if (!argumentsObject) return undefined;
+  const {
+    type: _type,
+    name: _name,
+    namespace: _namespace,
+    arguments: _arguments,
+    encrypted_function_args: _encryptedFunctionArgs,
+    ...rest
+  } = item;
+  return {
+    ...rest,
+    type: "tool_search_call",
+    execution: "client",
+    arguments: argumentsObject,
+  };
+}
+
+function rewriteNamespaceFunctionCallItem(
+  item,
+  lookups,
+  sessionModel,
+  { allowIncompleteToolSearch = false } = {},
+) {
   if (!item || item.type !== "function_call") return undefined;
+  const toolSearch = rewriteToolSearchFunctionCallItem(
+    item,
+    lookups,
+    allowIncompleteToolSearch,
+  );
+  if (toolSearch) return toolSearch;
   let rewritten = item;
   const resolved = lookups.flatToNative.get(item.name);
   if (resolved) {
@@ -324,7 +630,9 @@ function rewriteNamespaceFunctionCallItem(item, lookups, sessionModel) {
 }
 
 export function rewriteNamespaceFunctionCall(event, lookups, sessionModel) {
-  const item = rewriteNamespaceFunctionCallItem(event?.item, lookups, sessionModel);
+  const item = rewriteNamespaceFunctionCallItem(event?.item, lookups, sessionModel, {
+    allowIncompleteToolSearch: event?.type === "response.output_item.added",
+  });
   return item ? { ...event, item } : undefined;
 }
 

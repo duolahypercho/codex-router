@@ -139,7 +139,20 @@ function routedRequestPayload(stream = true, model = "opencode-go/deepseek-v4-fl
       { type: "function_call_output", call_id: "call_hist", output: "{}" },
     ],
     tools: [
-      { type: "tool_search" },
+      {
+        type: "tool_search",
+        execution: "client",
+        description: "Search deferred tools.",
+        parameters: {
+          type: "object",
+          properties: {
+            query: { type: "string" },
+            limit: { type: "number" },
+          },
+          required: ["query"],
+          additionalProperties: false,
+        },
+      },
       { type: "function", name: "exec_command" },
       { type: "function", name: "view_image" },
       {
@@ -189,6 +202,86 @@ function routedRequestPayload(stream = true, model = "opencode-go/deepseek-v4-fl
       },
     ],
   };
+}
+
+function routedToolSearchHistoryPayload(
+  stream = true,
+  model = "opencode-go/deepseek-v4-flash",
+) {
+  const payload = routedRequestPayload(stream, model);
+  payload.tools.push({
+    type: "function",
+    name: "mcp__calendar__create_event",
+    description: "Current live schema.",
+    parameters: {
+      type: "object",
+      properties: { live: { type: "boolean" } },
+    },
+  });
+  payload.input.push(
+    {
+      type: "tool_search_call",
+      call_id: "search-history-1",
+      execution: "client",
+      arguments: { query: "calendar", limit: 2 },
+    },
+    {
+      type: "tool_search_call",
+      call_id: "search-history-2",
+      execution: "client",
+      arguments: { query: "mail", limit: 1 },
+    },
+    {
+      type: "tool_search_output",
+      call_id: "search-history-1",
+      status: "completed",
+      execution: "client",
+      tools: [
+        {
+          type: "namespace",
+          name: "mcp__calendar",
+          description: "Calendar tools.",
+          tools: [
+            {
+              type: "function",
+              name: "create_event",
+              parameters: {
+                type: "object",
+                properties: { stale: { type: "string" } },
+              },
+            },
+            {
+              type: "function",
+              name: "delete_event",
+              parameters: {
+                type: "object",
+                properties: { id: { type: "string" } },
+                required: ["id"],
+                additionalProperties: false,
+              },
+            },
+          ],
+        },
+      ],
+    },
+    {
+      type: "tool_search_output",
+      call_id: "search-history-2",
+      status: "completed",
+      execution: "client",
+      tools: [
+        {
+          type: "function",
+          name: "list_messages",
+          parameters: {
+            type: "object",
+            properties: { query: { type: "string" } },
+          },
+        },
+      ],
+    },
+  );
+  return payload;
 }
 
 function sseEvent(event) {
@@ -274,6 +367,15 @@ function gatewaySseBody() {
         arguments: "{}",
       },
     }),
+    sseEvent({
+      type: "response.output_item.done",
+      item: {
+        type: "function_call",
+        name: "tool_search",
+        call_id: "call_search",
+        arguments: JSON.stringify({ query: "calendar", limit: 2 }),
+      },
+    }),
     sseEvent({ type: "response.completed" }),
     "data: [DONE]\n\n",
   ].join("");
@@ -322,6 +424,12 @@ function gatewayJsonBody() {
         call_id: "call_exec",
         arguments: "{}",
       },
+      {
+        type: "function_call",
+        name: "tool_search",
+        call_id: "call_search",
+        arguments: JSON.stringify({ query: "calendar", limit: 2 }),
+      },
     ],
   };
 }
@@ -358,8 +466,8 @@ function responsesProviderJsonBody() {
   };
 }
 
-function functionCallsFromSse(body) {
-  const calls = new Map();
+function responseItemsFromSse(body) {
+  const items = [];
   for (const line of body.split(/\r?\n/)) {
     if (!line.startsWith("data:")) continue;
     const data = line.slice(5).trimStart();
@@ -370,7 +478,14 @@ function functionCallsFromSse(body) {
     } catch {
       continue;
     }
-    const item = event?.item;
+    if (event?.item) items.push(event.item);
+  }
+  return items;
+}
+
+function functionCallsFromSse(body) {
+  const calls = new Map();
+  for (const item of responseItemsFromSse(body)) {
     if (item?.type === "function_call") calls.set(item.call_id, item);
   }
   return calls;
@@ -382,6 +497,7 @@ async function scenario(
     model = "opencode-go/deepseek-v4-flash",
     sseBody = gatewaySseBody,
     jsonBody = gatewayJsonBody,
+    requestPayload = routedRequestPayload,
   } = {},
 ) {
   const gatewayBodies = [];
@@ -417,7 +533,7 @@ async function scenario(
         Authorization: "Bearer CODEX_CALLER_SECRET",
         "Content-Type": "application/json",
       },
-      body: JSON.stringify(routedRequestPayload(stream, model)),
+      body: JSON.stringify(requestPayload(stream, model)),
     });
     assert.equal(response.status, 200, `router status ${response.status}`);
     const clientBody = await response.text();
@@ -448,6 +564,7 @@ test("routed request flattens every namespace to the gateway and restores calls 
   assert.ok(names.includes("codex_app__create_thread"), "merged codex_app tool flattened");
   assert.ok(names.includes("mcp__node_repl__js"), "node_repl js flattened");
   assert.ok(names.includes("mcp__node_repl__js_reset"), "node_repl js_reset flattened");
+  assert.ok(names.includes("tool_search"), "native tool_search exposed as a function");
   assert.ok(
     names.includes("mcp__codex_apps__github__fetch_issue"),
     "nested-namespace MCP tool flattened",
@@ -459,8 +576,11 @@ test("routed request flattens every namespace to the gateway and restores calls 
   );
   assert.ok(
     outgoing.tools.every((tool) => tool?.type !== "tool_search"),
-    "deferred tool search does not reach a function-only provider",
+    "native deferred-search controls do not reach a function-only provider",
   );
+  const toolSearch = outgoing.tools.find((tool) => tool.name === "tool_search");
+  assert.equal(toolSearch.type, "function");
+  assert.deepEqual(toolSearch.parameters.required, ["query"]);
   // The merged codex_app tool definitions keep their schema.
   const createThread = outgoing.tools.find((tool) => tool.name === "codex_app__create_thread");
   assert.ok(createThread?.inputSchema, "create_thread schema survives the relay");
@@ -520,6 +640,15 @@ test("routed request flattens every namespace to the gateway and restores calls 
   // Ordinary calls pass through untouched -- no namespace invented.
   assert.equal(calls.get("call_exec").name, "exec_command");
   assert.equal(calls.get("call_exec").namespace, undefined);
+  const searchCall = responseItemsFromSse(first.clientBody).find(
+    (item) => item.call_id === "call_search",
+  );
+  assert.deepEqual(searchCall, {
+    type: "tool_search_call",
+    call_id: "call_search",
+    execution: "client",
+    arguments: { query: "calendar", limit: 2 },
+  });
   // The router never executed any app tool: the gateway saw exactly one
   // request and the client saw exactly the relayed calls.
   assert.equal(first.gatewayBodies.length, 1);
@@ -567,6 +696,103 @@ test("non-streaming routed responses restore namespace calls before client dispa
   );
   assert.equal(client.output[5].name, "exec_command");
   assert.equal(client.output[5].namespace, undefined);
+  assert.deepEqual(client.output[6], {
+    type: "tool_search_call",
+    call_id: "call_search",
+    execution: "client",
+    arguments: { query: "calendar", limit: 2 },
+  });
+});
+
+test("routed tool_search history declares discovered tools and restores their calls", async () => {
+  const searchedCall = {
+    type: "function_call",
+    name: "mcp__calendar__delete_event",
+    call_id: "delete-1",
+    arguments: JSON.stringify({ id: "evt-1" }),
+  };
+  const options = {
+    requestPayload: routedToolSearchHistoryPayload,
+    sseBody: () =>
+      [
+        sseEvent({ type: "response.output_item.done", item: searchedCall }),
+        sseEvent({
+          type: "response.completed",
+          response: { id: "resp-search", output: [searchedCall] },
+        }),
+        "data: [DONE]\n\n",
+      ].join(""),
+    jsonBody: () => ({ id: "resp-search-json", output: [searchedCall] }),
+  };
+
+  for (const stream of [true, false]) {
+    const result = await scenario(stream, options);
+    const outgoing = result.gatewayBodies[0];
+    const historyCall = outgoing.input.find(
+      (item) => item.call_id === "search-history-1" && item.type === "function_call",
+    );
+    assert.deepEqual(historyCall, {
+      type: "function_call",
+      name: "tool_search",
+      call_id: "search-history-1",
+      arguments: '{"query":"calendar","limit":2}',
+    });
+    assert.deepEqual(
+      outgoing.input.find(
+        (item) => item.call_id === "search-history-2" && item.type === "function_call",
+      ),
+      {
+        type: "function_call",
+        name: "tool_search",
+        call_id: "search-history-2",
+        arguments: '{"query":"mail","limit":1}',
+      },
+    );
+    const historyOutput = outgoing.input.find(
+      (item) =>
+        item.call_id === "search-history-1" && item.type === "function_call_output",
+    );
+    assert.deepEqual(
+      JSON.parse(historyOutput.output).tools.map((tool) => tool.name),
+      ["mcp__calendar__delete_event"],
+    );
+    const secondHistoryOutput = outgoing.input.find(
+      (item) =>
+        item.call_id === "search-history-2" && item.type === "function_call_output",
+    );
+    assert.deepEqual(
+      JSON.parse(secondHistoryOutput.output).tools.map((tool) => tool.name),
+      ["list_messages"],
+    );
+    assert.equal(
+      outgoing.input.some(
+        (item) => item.type === "tool_search_call" || item.type === "tool_search_output",
+      ),
+      false,
+      "batched native search history never leaks to a chat-completions provider",
+    );
+    assert.equal(
+      outgoing.tools.filter((tool) => tool.name === "mcp__calendar__create_event").length,
+      1,
+      "live top-level schemas take precedence over searched history",
+    );
+    assert.ok(
+      outgoing.tools.some((tool) => tool.name === "mcp__calendar__delete_event"),
+      "the searched tool is declared to the chat-completions provider",
+    );
+    assert.ok(outgoing.tools.some((tool) => tool.name === "list_messages"));
+
+    const clientCall = stream
+      ? responseItemsFromSse(result.clientBody).find((item) => item.call_id === "delete-1")
+      : JSON.parse(result.clientBody).output[0];
+    assert.deepEqual(clientCall, {
+      type: "function_call",
+      name: "delete_event",
+      namespace: "mcp__calendar",
+      call_id: "delete-1",
+      arguments: '{"id":"evt-1"}',
+    });
+  }
 });
 
 test("Responses-native routed providers inherit the model on fresh local thread calls", async () => {
@@ -574,12 +800,26 @@ test("Responses-native routed providers inherit the model on fresh local thread 
     model: "opencode-go-responses/gpt-5.6-luna",
     sseBody: responsesProviderSseBody,
     jsonBody: responsesProviderJsonBody,
+    requestPayload: routedToolSearchHistoryPayload,
   };
   const streamed = await scenario(true, options);
   assert.equal(streamed.gatewayBodies[0].model, "opencode-go-responses-gpt-5-6-luna");
   assert.ok(
     streamed.gatewayBodies[0].tools.some((tool) => tool?.type === "namespace"),
     "Responses-native tools stay namespaced",
+  );
+  assert.ok(
+    streamed.gatewayBodies[0].tools.some((tool) => tool?.type === "tool_search"),
+    "Responses-native tool_search stays native",
+  );
+  assert.ok(
+    streamed.gatewayBodies[0].input.some((item) => item?.type === "tool_search_call"),
+    "Responses-native search history is not translated",
+  );
+  assert.equal(
+    streamed.gatewayBodies[0].tools.some((tool) => tool?.name === "list_messages"),
+    false,
+    "native tool_search_output history remains authoritative without top-level injection",
   );
   const streamedCall = functionCallsFromSse(streamed.clientBody).get("call_native_thread");
   assert.deepEqual(JSON.parse(streamedCall.arguments), {

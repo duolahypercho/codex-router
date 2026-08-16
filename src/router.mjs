@@ -56,6 +56,7 @@ import {
   NamespaceToolCallTransform,
   flattenNamespacedHistory,
   flattenNamespaceTools,
+  flattenToolSearchHistory,
   repairToolSchemaRoots,
 } from "./namespace-relay.mjs";
 import { collaborationToolAvailable, pendingInterruptTargets } from "./subagent-completion.mjs";
@@ -1842,6 +1843,7 @@ async function buildRoutedRequest({ request, payload, route, agedInput }) {
   // tool-call message.
   carryReasoningThroughInput(input);
   const provider = providerForModel(route);
+  const chatCompletionsProvider = provider?.protocol !== "openai-responses";
   let tools = payload.tools;
   // LiteLLM's Responses -> Chat Completions bridge drops namespace tools, which
   // is how the client ships the collaboration runtime, the app toolset
@@ -1849,7 +1851,7 @@ async function buildRoutedRequest({ request, payload, route, agedInput }) {
   // peekaboo, github, ...). Chat-completions providers need every namespace
   // flattened into ordinary functions; the response transform maps calls back
   // to the client's native namespace shape.
-  if (provider?.protocol !== "openai-responses") {
+  if (chatCompletionsProvider) {
     // Relay the app's full native toolset (threads, automations, app
     // navigation) to the provider. The client registers these tools with
     // deferLoading and executes the calls natively, but only sends a reduced
@@ -1861,9 +1863,9 @@ async function buildRoutedRequest({ request, payload, route, agedInput }) {
     if (merged.merged) tools = merged.tools;
     const flattened = flattenNamespaceTools(tools);
     namespacesFlattened = flattened.flattened;
+    flattenedNamespaces = flattened.namespaces;
     if (namespacesFlattened) {
       tools = flattened.tools;
-      flattenedNamespaces = flattened.namespaces;
     }
   } else {
     // Responses-native providers keep the namespace tools untouched, so nothing
@@ -1871,7 +1873,9 @@ async function buildRoutedRequest({ request, payload, route, agedInput }) {
     // because the response transform reads the exact spawn_agent model enum off
     // it to drop an invented or stale optional override before Codex validates
     // the call.
-    flattenedNamespaces = flattenNamespaceTools(tools).namespaces;
+    flattenedNamespaces = flattenNamespaceTools(tools, {
+      bridgeToolSearch: false,
+    }).namespaces;
     // Keeping the namespace shape is not the same as keeping a root the
     // upstream rejects. `opencode-go-responses/gpt-5.6-luna` 400s a
     // `type: ["object","null"]` parameter root while accepting the same request
@@ -1880,6 +1884,15 @@ async function buildRoutedRequest({ request, payload, route, agedInput }) {
     tools = repairToolSchemaRoots(tools);
   }
   let routedInput = input;
+  if (chatCompletionsProvider) {
+    const searchHistory = flattenToolSearchHistory(
+      routedInput,
+      tools,
+      flattenedNamespaces,
+    );
+    routedInput = searchHistory.input;
+    tools = searchHistory.tools;
+  }
   // The stored call history must use the same tool names as the tool list, or
   // the model copies the bare names out of its own transcript.
   if (namespacesFlattened) {
@@ -2313,7 +2326,9 @@ async function handleResponses(request, response, requestUrl) {
       // SF and other native multi-agent parents hit this path (model_provider
       // openai). They have the same Working-badge bug, so inventory the tools
       // and queue missing interrupt_agent closes the same way as routed turns.
-      flattenedNamespaces = flattenNamespaceTools(payload.tools).namespaces;
+      flattenedNamespaces = flattenNamespaceTools(payload.tools, {
+        bridgeToolSearch: false,
+      }).namespaces;
       pendingInterrupts = pendingInterruptTargets(native.input ?? payload.input, {
         namespaces: flattenedNamespaces,
       });

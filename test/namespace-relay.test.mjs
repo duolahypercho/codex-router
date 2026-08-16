@@ -7,6 +7,7 @@ import {
   buildNamespaceLookups,
   flattenNamespacedHistory,
   flattenNamespaceTools,
+  flattenToolSearchHistory,
   rewriteNamespaceFunctionCall,
   rewriteNamespaceResponsePayload,
   repairToolSchemaRoots,
@@ -79,6 +80,23 @@ function clientRoutedTools() {
   ];
 }
 
+function clientToolSearchControl() {
+  return {
+    type: "tool_search",
+    execution: "client",
+    description: "Search deferred tools.",
+    parameters: {
+      type: "object",
+      properties: {
+        query: { type: "string" },
+        limit: { type: "number" },
+      },
+      required: ["query"],
+      additionalProperties: false,
+    },
+  };
+}
+
 test("flattenNamespaceTools flattens every namespace, including MCP ones", () => {
   const { tools, flattened, namespaces } = flattenNamespaceTools(clientRoutedTools());
   assert.equal(flattened, true);
@@ -145,9 +163,9 @@ test("flattenNamespaceTools preserves a supplied provider parameter schema", () 
   assert.deepEqual(tools[0].inputSchema, inputSchema);
 });
 
-test("flattenNamespaceTools drops the deferred-loading control after expanding namespaces", () => {
+test("flattenNamespaceTools exposes client tool_search as an ordinary provider function", () => {
   const { tools, flattened } = flattenNamespaceTools([
-    { type: "tool_search" },
+    clientToolSearchControl(),
     {
       type: "namespace",
       name: "mcp__example",
@@ -155,7 +173,66 @@ test("flattenNamespaceTools drops the deferred-loading control after expanding n
     },
   ]);
   assert.equal(flattened, true);
-  assert.deepEqual(tools, [{ type: "function", name: "mcp__example__read" }]);
+  assert.deepEqual(tools, [
+    {
+      type: "function",
+      name: "tool_search",
+      description: "Search deferred tools.",
+      parameters: clientToolSearchControl().parameters,
+    },
+    { type: "function", name: "mcp__example__read" },
+  ]);
+});
+
+test("tool_search bridge uses a collision-safe request-local name", () => {
+  const { tools, namespaces } = flattenNamespaceTools([
+    {
+      type: "function",
+      name: "tool_search",
+      description: "An unrelated application function.",
+      parameters: { type: "object" },
+    },
+    clientToolSearchControl(),
+  ]);
+  assert.deepEqual(
+    tools.map((tool) => tool.name),
+    ["tool_search", "codex_tool_search_1"],
+  );
+  assert.match(tools[1].description, /call `codex_tool_search_1`/);
+  assert.match(tools[1].description, /`tool_search` is a separate ordinary function/);
+
+  const lookups = buildNamespaceLookups(namespaces);
+  const bridged = rewriteNamespaceResponsePayload(
+    {
+      output: [
+        {
+          type: "function_call",
+          name: "codex_tool_search_1",
+          call_id: "search-1",
+          arguments: '{"query":"calendar"}',
+        },
+        {
+          type: "function_call",
+          name: "tool_search",
+          call_id: "ordinary-1",
+          arguments: "{}",
+        },
+      ],
+    },
+    lookups,
+  );
+  assert.deepEqual(bridged.output[0], {
+    type: "tool_search_call",
+    call_id: "search-1",
+    execution: "client",
+    arguments: { query: "calendar" },
+  });
+  assert.deepEqual(bridged.output[1], {
+    type: "function_call",
+    name: "tool_search",
+    call_id: "ordinary-1",
+    arguments: "{}",
+  });
 });
 
 test("flattenNamespaceTools handles non-array and empty input", () => {
@@ -250,6 +327,316 @@ test("stored namespaced calls are renamed to match the flattened tools", () => {
   assert.deepEqual(input[5], { type: "function_call_output", call_id: "call_1", output: "{}" });
 });
 
+test("matched tool_search history declares discovered tools and expands namespace lookup", () => {
+  const flattened = flattenNamespaceTools([
+    clientToolSearchControl(),
+    {
+      type: "function",
+      name: "mcp__calendar__create_event",
+      description: "Live schema wins.",
+      parameters: { type: "object", properties: { live: { type: "boolean" } } },
+    },
+  ]);
+  const history = [
+    {
+      type: "tool_search_call",
+      call_id: "search-1",
+      execution: "client",
+      arguments: { query: "calendar", limit: 2 },
+    },
+    {
+      type: "tool_search_output",
+      call_id: "search-1",
+      status: "completed",
+      execution: "client",
+      tools: [
+        {
+          type: "namespace",
+          name: "mcp__calendar",
+          tools: [
+            {
+              type: "function",
+              name: "create_event",
+              parameters: { type: "object", properties: { stale: { type: "string" } } },
+            },
+            {
+              type: "function",
+              name: "delete_event",
+              parameters: {
+                type: "object",
+                properties: { id: { type: "string" } },
+                required: ["id"],
+              },
+            },
+            { type: "custom", name: "freeform_is_not_a_function" },
+          ],
+        },
+        {
+          type: "function",
+          name: "weather",
+          parameters: { type: "object", properties: { city: { type: "string" } } },
+        },
+      ],
+    },
+    {
+      type: "tool_search_output",
+      call_id: "orphan",
+      status: "completed",
+      execution: "client",
+      tools: [{ type: "function", name: "must_not_be_injected" }],
+    },
+  ];
+
+  const routed = flattenToolSearchHistory(history, flattened.tools, flattened.namespaces);
+  assert.deepEqual(routed.input[0], {
+    type: "function_call",
+    name: "tool_search",
+    call_id: "search-1",
+    arguments: '{"query":"calendar","limit":2}',
+  });
+  const output = JSON.parse(routed.input[1].output);
+  assert.equal(routed.input[1].type, "function_call_output");
+  assert.deepEqual(
+    output.tools.map((tool) => tool.name),
+    ["mcp__calendar__delete_event", "weather"],
+  );
+  assert.equal(routed.input.length, 2, "orphan native history is dropped, not forwarded");
+  assert.deepEqual(
+    routed.tools.map((tool) => tool.name),
+    [
+      "tool_search",
+      "mcp__calendar__create_event",
+      "mcp__calendar__delete_event",
+      "weather",
+    ],
+  );
+  assert.equal(
+    routed.tools.filter((tool) => tool.name === "mcp__calendar__create_event").length,
+    1,
+    "the current live schema wins over searched history",
+  );
+  assert.equal(
+    routed.tools.some((tool) => tool.name === "freeform_is_not_a_function"),
+    false,
+  );
+  assert.equal(routed.tools.some((tool) => tool.name === "must_not_be_injected"), false);
+
+  const restored = rewriteNamespaceResponsePayload(
+    {
+      output: [
+        {
+          type: "function_call",
+          name: "mcp__calendar__delete_event",
+          call_id: "delete-1",
+          arguments: '{"id":"evt-1"}',
+        },
+      ],
+    },
+    buildNamespaceLookups(flattened.namespaces),
+  );
+  assert.deepEqual(restored.output[0], {
+    type: "function_call",
+    name: "delete_event",
+    namespace: "mcp__calendar",
+    call_id: "delete-1",
+    arguments: '{"id":"evt-1"}',
+  });
+});
+
+test("parallel tool_search calls pair by call_id when all outputs follow the calls", () => {
+  const flattened = flattenNamespaceTools([clientToolSearchControl()]);
+  const history = [
+    {
+      type: "tool_search_call",
+      call_id: "search-mail",
+      execution: "client",
+      arguments: { query: "mail" },
+    },
+    {
+      type: "tool_search_call",
+      call_id: "search-calendar",
+      execution: "client",
+      arguments: { query: "calendar" },
+    },
+    { type: "message", role: "assistant", content: [] },
+    {
+      type: "tool_search_output",
+      call_id: "search-mail",
+      status: "completed",
+      execution: "client",
+      tools: [{ type: "function", name: "list_messages" }],
+    },
+    {
+      type: "tool_search_output",
+      call_id: "search-calendar",
+      status: "completed",
+      execution: "client",
+      tools: [{ type: "function", name: "list_events" }],
+    },
+  ];
+  const routed = flattenToolSearchHistory(history, flattened.tools, flattened.namespaces);
+  assert.deepEqual(
+    routed.input.map((item) => [item.type, item.call_id]),
+    [
+      ["function_call", "search-mail"],
+      ["function_call", "search-calendar"],
+      ["message", undefined],
+      ["function_call_output", "search-mail"],
+      ["function_call_output", "search-calendar"],
+    ],
+  );
+  assert.deepEqual(
+    routed.tools.map((tool) => tool.name),
+    ["tool_search", "list_messages", "list_events"],
+  );
+  assert.equal(
+    routed.input.some(
+      (item) => item.type === "tool_search_call" || item.type === "tool_search_output",
+    ),
+    false,
+  );
+  assert.equal(routed.flattened, true);
+});
+
+test("orphaned, malformed, and no-control native tool_search history is dropped", () => {
+  const flattened = flattenNamespaceTools([clientToolSearchControl()]);
+  const marker = { type: "message", role: "assistant", content: [] };
+  const history = [
+    marker,
+    {
+      type: "tool_search_call",
+      call_id: "call-only",
+      execution: "client",
+      arguments: { query: "lost output" },
+    },
+    {
+      type: "tool_search_output",
+      call_id: "output-only",
+      status: "completed",
+      execution: "client",
+      tools: [{ type: "function", name: "orphan_injection" }],
+    },
+    {
+      type: "tool_search_call",
+      call_id: "malformed",
+      execution: "client",
+      arguments: "not-an-object",
+    },
+    {
+      type: "tool_search_output",
+      call_id: "malformed",
+      status: "completed",
+      execution: "client",
+      tools: [{ type: "function", name: "malformed_injection" }],
+    },
+  ];
+  const routed = flattenToolSearchHistory(history, flattened.tools, flattened.namespaces);
+  assert.deepEqual(routed.input, [marker]);
+  assert.equal(routed.tools, flattened.tools);
+  assert.equal(routed.flattened, true);
+
+  const withoutControl = flattenNamespaceTools([
+    {
+      type: "namespace",
+      name: "mcp__example",
+      tools: [{ type: "function", name: "read" }],
+    },
+  ]);
+  const noControl = flattenToolSearchHistory(
+    [
+      history[1],
+      {
+        type: "tool_search_output",
+        call_id: "call-only",
+        status: "completed",
+        execution: "client",
+        tools: [{ type: "function", name: "no_control_injection" }],
+      },
+      marker,
+    ],
+    withoutControl.tools,
+    withoutControl.namespaces,
+  );
+  assert.deepEqual(noControl.input, [marker]);
+  assert.equal(noControl.tools, withoutControl.tools);
+});
+
+test("compacted tool_search history keeps an ordered pair without reviving tool schemas", () => {
+  const flattened = flattenNamespaceTools([clientToolSearchControl()]);
+  const history = [
+    {
+      type: "tool_search_call",
+      call_id: "compacted-search",
+      execution: "client",
+      arguments: { query: "calendar" },
+    },
+    {
+      type: "tool_search_output",
+      call_id: "compacted-search",
+      status: "completed",
+      execution: "client",
+      tools: [],
+    },
+  ];
+
+  const routed = flattenToolSearchHistory(history, flattened.tools, flattened.namespaces);
+  assert.deepEqual(
+    routed.input.map((item) => item.type),
+    ["function_call", "function_call_output"],
+  );
+  assert.deepEqual(JSON.parse(routed.input[1].output), { tools: [] });
+  assert.equal(routed.tools, flattened.tools);
+});
+
+test("duplicate ids, reversed order, and malicious outputs invalidate the whole id", () => {
+  const call = (call_id) => ({
+    type: "tool_search_call",
+    call_id,
+    execution: "client",
+    arguments: { query: call_id },
+  });
+  const output = (call_id, name, overrides = {}) => ({
+    type: "tool_search_output",
+    call_id,
+    status: "completed",
+    execution: "client",
+    tools: [{ type: "function", name }],
+    ...overrides,
+  });
+  const cases = [
+    [call("duplicate-call"), call("duplicate-call"), output("duplicate-call", "attack_a")],
+    [
+      call("duplicate-output"),
+      output("duplicate-output", "attack_b"),
+      output("duplicate-output", "attack_c"),
+    ],
+    [
+      output("reversed", "attack_d"),
+      call("reversed"),
+      output("reversed", "attack_e"),
+    ],
+    [call("bad-tools"), output("bad-tools", "attack_f", { tools: { name: "attack_f" } })],
+    [call("server-output"), output("server-output", "attack_g", { execution: "server" })],
+    [
+      { ...call("empty-query"), arguments: { query: "   " } },
+      output("empty-query", "attack_h"),
+    ],
+    [
+      { ...call("bad-limit"), arguments: { query: "mail", limit: 0 } },
+      output("bad-limit", "attack_i"),
+    ],
+    [call("missing-status"), output("missing-status", "attack_j", { status: undefined })],
+  ];
+
+  for (const history of cases) {
+    const flattened = flattenNamespaceTools([clientToolSearchControl()]);
+    const routed = flattenToolSearchHistory(history, flattened.tools, flattened.namespaces);
+    assert.deepEqual(routed.input, []);
+    assert.equal(routed.tools, flattened.tools);
+    assert.equal(routed.flattened, true);
+  }
+});
+
 test("history rename is idempotent and leaves other namespaces alone", () => {
   const { namespaces } = flattenNamespaceTools(clientRoutedTools());
   const alreadyFlat = {
@@ -337,6 +724,131 @@ test("response transform restores flattened calls to the native namespace shape"
   assert.match(output, /"name":"fetch_issue"/);
   assert.match(output, /"namespace":"mcp__codex_apps__github"/);
   assert.doesNotMatch(output, /collaboration__spawn_agent|codex_app__create_thread|mcp__node_repl__js/);
+});
+
+test("tool_search response bridge covers SSE added, delta, done, and completed", async () => {
+  const { namespaces } = flattenNamespaceTools([clientToolSearchControl()]);
+  const events = [
+    {
+      type: "response.output_item.added",
+      item: {
+        type: "function_call",
+        name: "tool_search",
+        call_id: "search-1",
+        arguments: "",
+      },
+    },
+    {
+      type: "response.function_call_arguments.delta",
+      item_id: "fc_search_1",
+      call_id: "search-1",
+      delta: '{"query":"cal',
+    },
+    {
+      type: "response.output_item.done",
+      item: {
+        type: "function_call",
+        name: "tool_search",
+        call_id: "search-1",
+        arguments: '{"query":"calendar","limit":2.0}',
+      },
+    },
+    {
+      type: "response.completed",
+      response: {
+        id: "resp-1",
+        output: [
+          {
+            type: "function_call",
+            name: "tool_search",
+            call_id: "search-1",
+            arguments: '{"query":"calendar","limit":2}',
+          },
+        ],
+      },
+    },
+  ].map((event) => `data: ${JSON.stringify(event)}\n\n`);
+  const output = await collect(
+    Readable.from(events).pipe(
+      new NamespaceToolCallTransform(namespaces, "text/event-stream"),
+    ),
+  );
+  const parsed = output
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith("data:"))
+    .map((line) => JSON.parse(line.slice(5).trimStart()));
+
+  assert.deepEqual(parsed[0].item, {
+    type: "tool_search_call",
+    call_id: "search-1",
+    execution: "client",
+    arguments: {},
+  });
+  assert.deepEqual(parsed[1], {
+    type: "response.function_call_arguments.delta",
+    item_id: "fc_search_1",
+    call_id: "search-1",
+    delta: '{"query":"cal',
+  });
+  assert.deepEqual(parsed[2].item, {
+    type: "tool_search_call",
+    call_id: "search-1",
+    execution: "client",
+    arguments: { query: "calendar", limit: 2 },
+  });
+  assert.deepEqual(parsed[3].response.output[0], {
+    type: "tool_search_call",
+    call_id: "search-1",
+    execution: "client",
+    arguments: { query: "calendar", limit: 2 },
+  });
+});
+
+test("tool_search response bridge fails closed without native control or valid arguments", () => {
+  const ordinary = flattenNamespaceTools([
+    { type: "function", name: "tool_search", parameters: { type: "object" } },
+  ]);
+  const ordinaryPayload = {
+    output: [
+      {
+        type: "function_call",
+        name: "tool_search",
+        call_id: "ordinary-1",
+        arguments: '{"query":"calendar"}',
+      },
+    ],
+  };
+  assert.equal(
+    rewriteNamespaceResponsePayload(
+      ordinaryPayload,
+      buildNamespaceLookups(ordinary.namespaces),
+    ),
+    undefined,
+  );
+
+  const bridged = flattenNamespaceTools([clientToolSearchControl()]);
+  const malformed = {
+    output: [
+      {
+        type: "function_call",
+        name: "tool_search",
+        call_id: "bad-1",
+        arguments: "{not-json",
+      },
+      {
+        type: "function_call",
+        name: "tool_search",
+        arguments: '{"query":"missing call id"}',
+      },
+    ],
+  };
+  assert.equal(
+    rewriteNamespaceResponsePayload(
+      malformed,
+      buildNamespaceLookups(bridged.namespaces),
+    ),
+    undefined,
+  );
 });
 
 test("response transform restores namespace on unambiguous unprefixed calls", async () => {
