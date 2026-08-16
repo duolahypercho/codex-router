@@ -377,6 +377,25 @@
   not disable expiry — it stops the router rewriting request context, and expiry
   is disk hygiene for bytes that are already written.
 
+- **Every turn against a Meta model failed on the web search tool.** Meta's
+  Responses surface answered each one with a 400 reading
+  "`tools[].search_content_types` is only supported for web_search_preview
+  tools", so Muse Spark 1.1, 1.2, and 1.2 Contributor were unusable rather than
+  degraded — the tool is declared on the turn whenever web search is enabled,
+  so this had nothing to do with whether the model actually searched. Codex
+  sends the current spelling of
+  that tool (`type: "web_search"`, carrying `search_content_types` beside
+  `external_web_access`, `filters`, and `user_location`); Meta validates it
+  against the legacy `web_search_preview` schema, which is the one place it
+  accepts the field. The forwarder now drops `search_content_types` from a Meta
+  request, and nothing else: the search tool itself still reaches the model with
+  the rest of its settings, and a caller that sends Meta a real
+  `web_search_preview` tool keeps the field on it. Scoped to Meta on purpose —
+  OpenAI documents `search_content_types` on `web_search` and not on
+  `web_search_preview`, the reverse of what this endpoint enforces, so the other
+  Responses-native providers keep a parameter the current spec grants them.
+  (#286)
+
 - **The free Qwen3.8 endpoint refused any conversation whose system message
   arrived late or twice.** Its chat template answers those with a 400 reading
   "System message must be at the beginning", and a real Codex session reaches

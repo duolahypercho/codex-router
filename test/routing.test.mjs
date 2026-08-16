@@ -3962,6 +3962,103 @@ test("API forwarder keeps Xiaomi MiMo web search options on chat completions", a
   }
 });
 
+// The exact tool Codex 0.147 serializes when web search is on: `web_search`
+// (the binary contains no occurrence of `web_search_preview`), carrying
+// search_content_types beside the rest of the current hosted-search schema.
+// Meta answers that with HTTP 400 "`tools[].search_content_types` is only
+// supported for web_search_preview tools", which fails every turn (#286).
+const CODEX_WEB_SEARCH_TOOL = Object.freeze({
+  type: "web_search",
+  external_web_access: true,
+  indexed_web_access: true,
+  filters: { allowed_domains: ["example.com"] },
+  search_context_size: "medium",
+  search_content_types: ["text", "image"],
+  user_location: { type: "approximate", country: "US" },
+});
+
+test("API forwarder drops the search_content_types Meta refuses, and only for Meta", async () => {
+  const upstreamRequests = [];
+  const upstream = await mockServer(async (request, response) => {
+    upstreamRequests.push({ url: request.url, body: await bodyJson(request) });
+    json(response, 200, {
+      id: "resp_test",
+      object: "response",
+      status: "completed",
+      model: "test",
+      output: [],
+    });
+  });
+  const forwarderPort = await openPort();
+  const forwarder = run("api-forwarder.mjs", {
+    CODEX_ROUTER_API_PORT: String(forwarderPort),
+    META_BASE_URL: `http://127.0.0.1:${upstream.port}/v1`,
+    META_API_KEY: "TEST_META_API_KEY",
+    OPENCODE_GO_BASE_URL: `http://127.0.0.1:${upstream.port}/v1`,
+    OPENCODE_API_KEY: "TEST_OPENCODE_GO_API_KEY",
+    OPENCODE_GO_API_KEY: "TEST_OPENCODE_GO_API_KEY",
+    CODEX_ROUTER_QUIET: "1",
+  });
+  const send = async (model, tools) => {
+    const response = await fetch(`http://127.0.0.1:${forwarderPort}/v1/responses`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${INTERNAL_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ model, input: "test", tools }),
+    });
+    assert.equal(response.status, 200, forwarder.testErrors());
+    return upstreamRequests.at(-1).body.tools;
+  };
+
+  try {
+    await waitFor(`http://127.0.0.1:${forwarderPort}/health`, forwarder, {
+      Authorization: `Bearer ${INTERNAL_KEY}`,
+    });
+
+    // The reported turn: the one refused field goes, the rest of the hosted
+    // search tool and every function tool beside it arrive unchanged. The tool
+    // itself is never dropped -- web search still reaches the model.
+    const shell = { type: "function", name: "shell", parameters: { type: "object" } };
+    const metaTools = await send("meta-muse-spark-1-2-contributor", [
+      CODEX_WEB_SEARCH_TOOL,
+      shell,
+    ]);
+    assert.deepEqual(metaTools, [
+      {
+        type: "web_search",
+        external_web_access: true,
+        indexed_web_access: true,
+        filters: { allowed_domains: ["example.com"] },
+        search_context_size: "medium",
+        user_location: { type: "approximate", country: "US" },
+      },
+      shell,
+    ]);
+
+    // The one tool this endpoint does accept the field on keeps it, so a
+    // caller that speaks Meta's own spelling is not quietly downgraded.
+    const previewTools = await send("meta-muse-spark-1-2-contributor", [
+      { type: "web_search_preview", search_content_types: ["text", "image"] },
+    ]);
+    assert.deepEqual(previewTools, [
+      { type: "web_search_preview", search_content_types: ["text", "image"] },
+    ]);
+
+    // Provider-scoped, not global: OpenAI documents search_content_types on
+    // `web_search`, so the other responses-native providers keep it.
+    const opencodeTools = await send(
+      "responses/opencode-go-responses-gpt-5-6-luna",
+      [CODEX_WEB_SEARCH_TOOL],
+    );
+    assert.deepEqual(opencodeTools, [CODEX_WEB_SEARCH_TOOL]);
+  } finally {
+    await stopChild(forwarder);
+    await closeServer(upstream.server);
+  }
+});
+
 test("router strips Fireworks web_search_options on routed and compaction requests", async () => {
   const gatewayRequests = [];
   const gateway = await mockServer(async (request, response) => {

@@ -406,6 +406,39 @@ function normalizeQwen38SystemMessages(messages) {
   return [...rest.slice(0, insertAt), merged, ...rest.slice(insertAt)];
 }
 
+// Meta's Responses surface validates the hosted search tool against the legacy
+// `web_search_preview` schema: any other tool carrying `search_content_types`
+// is answered with HTTP 400 "`tools[].search_content_types` is only supported
+// for web_search_preview tools" (param `tools[].search_content_types`).
+//
+// The field is dropped, never renamed and never moved onto another tool. What
+// the caller asked for is a search-result content filter; the endpoint that
+// refuses the field is telling us it will not apply it, and inventing a
+// `web_search_preview` tool to carry it would change which hosted tool the
+// model is offered.
+//
+// The returned array is a copy only when something was actually removed, so a
+// request with no such tool is forwarded byte-identical to what arrived.
+function stripSearchContentTypes(tools) {
+  if (!Array.isArray(tools)) return tools;
+  let stripped = false;
+  const repaired = tools.map((tool) => {
+    if (
+      !tool ||
+      typeof tool !== "object" ||
+      Array.isArray(tool) ||
+      tool.type === "web_search_preview" ||
+      !("search_content_types" in tool)
+    ) {
+      return tool;
+    }
+    stripped = true;
+    const { search_content_types: _refused, ...rest } = tool;
+    return rest;
+  });
+  return stripped ? repaired : tools;
+}
+
 function normalizeBody(buffer, contentType, route) {
   if (!buffer.length || !String(contentType || "").includes("application/json")) {
     const error = new Error("API-provider requests require a JSON body.");
@@ -465,6 +498,28 @@ function normalizeBody(buffer, contentType, route) {
   // Fireworks rejects this OpenAI search parameter instead of ignoring it.
   // Other provider payloads keep it unchanged.
   if (provider.id === "fireworks") delete payload.web_search_options;
+  // Meta refuses `search_content_types` on anything but a `web_search_preview`
+  // tool, and Codex only ever sends the current spelling: its hosted search
+  // tool is `type: "web_search"`, carrying search_content_types beside
+  // external_web_access, indexed_web_access, filters, user_location, and
+  // search_context_size (read out of the shipped 0.147 binary, which contains
+  // no occurrence of `web_search_preview` at all). The tool is declared on the
+  // turn whenever web search is enabled, not only when the model searches, so
+  // the reporter's "running anything" is literal: every turn 400s and the
+  // provider is unusable rather than degraded (#286).
+  //
+  // Deliberately scoped to Meta and not applied everywhere. OpenAI documents
+  // `search_content_types` on `web_search` and *not* on `web_search_preview`,
+  // which is the reverse of what this endpoint enforces, so Meta is running an
+  // older fork of the schema rather than being the strict reader of it.
+  // Stripping the field for every provider would take a documented parameter
+  // away from the responses-native providers that do follow the current spec
+  // (github-copilot, opencode-go-responses), and neither has been observed to
+  // refuse it. A caller that does send Meta a real `web_search_preview` tool
+  // keeps the field, because that is the one tool this endpoint accepts it on.
+  if (provider.id === "meta" && Array.isArray(payload.tools)) {
+    payload.tools = stripSearchContentTypes(payload.tools);
+  }
   if (Array.isArray(payload.messages)) {
     payload.messages = sanitizeChatToolHistory(payload.messages, provider);
   }
