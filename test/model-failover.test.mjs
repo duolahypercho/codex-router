@@ -16,6 +16,7 @@ const {
   clearAllProviderCooldowns,
   clearProviderCooldown,
   failoverTier,
+  failoverTierCounts,
   providerCooldown,
   rankFailoverCandidates,
   readFailoverSettings,
@@ -324,6 +325,29 @@ test("a named chain is used verbatim, minus entries this build cannot route to",
     ranked.map((entry) => entry.model.slug),
     ["kimi/k3", "opencode-free/big-pickle"],
   );
+});
+
+test("failoverTierCounts separates free, local, and paid rather than promising an order", () => {
+  const counts = failoverTierCounts([
+    model("opencode-free/big-pickle", "opencode-free"),
+    model("kilo-free/x:free", "kilo-free"),
+    model("local/qwen3", "local"),
+    model("kimi-api/kimi-k3", "kimi-api"),
+    model("zai-api/glm-5.2", "zai-api"),
+  ]);
+  // Local is counted apart from free: it costs nothing and is still never
+  // chosen automatically, so folding it into `free` would let a surface promise
+  // a first stop that cannot happen.
+  assert.deepEqual(counts, { free: 2, local: 1, subscription: 2 });
+  // The case every install starts in: nothing curated, so nothing cheaper to
+  // try first, and no surface may claim otherwise.
+  assert.deepEqual(failoverTierCounts([model("kimi-api/kimi-k3", "kimi-api")]), {
+    free: 0,
+    local: 0,
+    subscription: 1,
+  });
+  assert.deepEqual(failoverTierCounts([]), { free: 0, local: 0, subscription: 0 });
+  assert.deepEqual(failoverTierCounts(undefined), { free: 0, local: 0, subscription: 0 });
 });
 
 test("failoverTier reads free from the registry rather than a name", () => {

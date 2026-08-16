@@ -54,7 +54,11 @@ import {
   readVisionBridgeSettings,
   visionBridgeConfigured,
 } from "./vision-bridge-state.mjs";
-import { readFailoverSettings, readProviderCooldowns } from "./model-failover.mjs";
+import {
+  failoverTierCounts,
+  readFailoverSettings,
+  readProviderCooldowns,
+} from "./model-failover.mjs";
 import { contextWindowDrift, describeContextWindowDrift } from "./context-window-drift.mjs";
 import { observedInputCeilings } from "./usage-events.mjs";
 import { venvRuntimeProblem } from "./venv-runtime.mjs";
@@ -544,14 +548,30 @@ if (!failoverSettings.enabled) {
     "Each clears itself at that time, or on the provider's next successful answer. " +
       "Run ./bin/model-router codex control failover reset to clear them now.",
   );
-} else {
+} else if (failoverSettings.chain.length) {
   add(
     "ok",
     "Model failover",
-    failoverSettings.chain.length
-      ? `on, in the order you set: ${failoverSettings.chain.join(" -> ")}`
-      : "on, free models first then your other enabled providers",
-    "Run ./bin/model-router codex control failover chain <model-slug,...> to choose the order yourself.",
+    `on, in the order you set: ${failoverSettings.chain.join(" -> ")}`,
+    "Run ./bin/model-router codex control failover auto to hand the order back to the ranking.",
+  );
+} else {
+  // Count what the ranking can actually reach rather than restating the tier
+  // order. "Free models first" is only true where a free model exists, and on
+  // a machine that has curated none it describes an order that cannot happen.
+  const failoverHidden = readHiddenModels();
+  const failoverCounts = failoverTierCounts(
+    requiredRoutedModels.filter((model) => !failoverHidden.has(model.slug)),
+  );
+  add(
+    "ok",
+    "Model failover",
+    failoverCounts.free
+      ? `on, ${failoverCounts.free} free model(s) first then ${failoverCounts.subscription} of your own`
+      : `on, ${failoverCounts.subscription} of your own providers -- no free model is curated, so nothing cheaper is tried first`,
+    failoverCounts.free
+      ? "Run ./bin/model-router codex control failover chain <model-slug,...> to choose the order yourself."
+      : "Free catalogs change without notice so none are checked in. Run ./bin/model-router codex curate-models opencode-free to give failover a free first stop.",
   );
 }
 // The same list the catalog writes definitions from, so a model switched off

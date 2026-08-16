@@ -280,6 +280,30 @@ export function failoverTier(model, providers = PROVIDERS) {
     : FAILOVER_TIER.subscription;
 }
 
+// What the ranking will actually be able to do, counted rather than promised.
+//
+// The tier order is free-then-paid, but `opencode-free` and `kilo-free` are
+// catalog-only by design: their free subsets are picked out by a naming rule
+// their vendors change without notice, so nothing is checked in and the free
+// tier is empty until the operator curates a model locally. Reporting
+// "free models first" on an install that has curated none describes an order
+// that cannot happen. Every surface that talks about failover asks this
+// instead, and says only what is true here.
+//
+// A model served from this machine is counted apart: it is free, and it is
+// still never chosen automatically, so promising it would be the same mistake
+// in a different place.
+export function failoverTierCounts(models, providers = PROVIDERS) {
+  const counts = { free: 0, local: 0, subscription: 0 };
+  for (const model of Array.isArray(models) ? models : []) {
+    const provider = providers.get(model?.provider);
+    if (provider?.keyless) counts.local += 1;
+    else if (provider?.authMode === "anonymous") counts.free += 1;
+    else counts.subscription += 1;
+  }
+  return counts;
+}
+
 function supportsImageInput(model) {
   return Array.isArray(model?.inputModalities) && model.inputModalities.includes("image");
 }

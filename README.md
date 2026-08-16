@@ -1162,8 +1162,21 @@ only bury the one fact that fixes it.
 
 **Which model answers instead**, in order:
 
-1. Free models — the anonymous gateways, if you have any enabled
+1. Free models — the anonymous gateways, if you have curated any
 2. Everything else you have enabled, in the picker's own preference order
+
+**A free first stop is not automatic, and that is deliberate.** The free
+catalogs at `opencode-free` and `kilo-free` are picked out by naming rules their
+vendors change without notice, so none are checked in, and an anonymous provider
+is never enabled for you — turning one on sends your prompts to a third-party
+endpoint with no credential, which has to be your choice. Until you make it,
+failover goes straight to your own providers. `doctor` says which of the two
+you are in. To give failover a free first stop:
+
+```sh
+./bin/providers enable opencode-free
+./bin/model-router codex curate-models opencode-free
+```
 
 A model served from your own machine is never chosen automatically, for the same
 reason the vision bridge does not choose one: your runtime might not be running.
