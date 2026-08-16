@@ -1676,6 +1676,7 @@ streaming, image-input, tool-call, and context behavior are verified. See
 - [Architecture and request flow](docs/HOW-IT-WORKS.md)
 - [Security and credential handling](SECURITY.md)
 - [Provider development and tests](docs/DEVELOPMENT.md)
+- [Verifying the Devin CLI provider](docs/DEVIN-CLI-PROBE.md)
 - [Changelog](CHANGELOG.md)
 
 References: [Kimi Code CLI OAuth](https://www.kimi.com/help/kimi-code/cli-getting-started),

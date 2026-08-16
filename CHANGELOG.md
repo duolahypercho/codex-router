@@ -108,6 +108,28 @@
   demotion. Both paths log unconditionally and record the turn and token
   counts in the proofs file, so `control subagents status` and the tray say
   what happened rather than a picker entry quietly disappearing.
+- **A passing Devin CLI probe now means something.** The provider's Cascade
+  transport was transcribed from a shipped binary and has never met Cognition's
+  backend, so #270 asks a volunteer with an account to settle it. The probe that
+  ask points at printed one line per stage, and every one of those lines could
+  pass while the thing it was meant to prove had failed: an empty model list
+  read as `OK: account advertises 0 model(s)`, a stream that decoded to nothing
+  read as `OK: streamed 0 character(s)`, and a tool call that arrived under a
+  field number this build does not know was skipped in silence and reported as a
+  model that chose not to call a tool — the one failure that decides whether
+  Codex can drive the provider at all. The probe now audits the raw bytes
+  alongside the schema and prints a PASS/FAIL line per assumption with the
+  observed value on each failure, so a run that reports success has confirmed
+  each one separately: request encoding, model list decoding, envelope framing,
+  the compression flag, the end-of-stream terminator, stop reason, usage,
+  tool-call ids and arguments, and a replay of the captured bytes through the
+  client a routed turn actually runs. Where a tool call goes missing, three
+  distinct lines separate a renumbered field from a model that declined. The
+  live turn is now capped at 64 output tokens and 90 seconds, `--live` remains
+  the only flag that spends anything, a mistyped flag fails the run instead of
+  quietly downgrading it, and the output folds `$HOME` to `~` and carries no
+  token, because it is written to be pasted into a public issue.
+  `docs/DEVIN-CLI-PROBE.md` is the tester's copy of all of it.
 
 - **Grok OAuth no longer loses late or custom tool calls.** The forwarder now
   accepts `function_call` and `custom_tool_call` items that first appear in
