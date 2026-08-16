@@ -114,6 +114,12 @@ const commonEnv = {
   MODEL_ROUTER_PORT: String(PORTS.router),
   MODEL_ROUTER_GROK_OAUTH_PORT: String(PORTS.grokOauth),
   GROK_OAUTH_FORWARD_BASE_URL: loopback(PORTS.grokOauth, "/v1"),
+  MODEL_ROUTER_CURSOR_BRIDGE_PORT: String(PORTS.cursorBridge),
+  // The `cursor-cli` provider's registry entry carries a checked-in loopback
+  // `baseUrl`, and an operator who moves the bridge port would otherwise leave
+  // the provider pointing at the old one. Publishing the resolved address as
+  // the provider's own override keeps the two in step from one source.
+  MODEL_ROUTER_CURSOR_BASE_URL: loopback(PORTS.cursorBridge, "/v1"),
   MODEL_ROUTER_QUIET: "1",
   CODEX_ROUTER_CALLER_KEY: callerKey,
   CODEX_ROUTER_INTERNAL_KEY: internalKey,
@@ -210,6 +216,13 @@ async function main() {
   const kimiForwarder = run(process.execPath, [path.join(SOURCE_ROOT, "src", "oauth-forwarder.mjs")]);
   const api = run(process.execPath, [path.join(SOURCE_ROOT, "src", "api-forwarder.mjs")]);
   const grokForwarder = run(process.execPath, [path.join(SOURCE_ROOT, "src", "grok-oauth-forwarder.mjs")]);
+  // Started unconditionally, like every forwarder above. Binding the port is
+  // all it does until a request arrives -- `cursor-agent` is spawned per turn,
+  // never at startup -- so a machine with no Cursor install pays a socket and
+  // nothing else, and answers 503 with the reason if anything does ask.
+  // Supervising it here is the point: a manually started bridge is one reboot
+  // away from every Cursor model 502ing with the service otherwise healthy.
+  const cursorBridge = run(process.execPath, [path.join(SOURCE_ROOT, "src", "cursor-cli-bridge.mjs")]);
   await Promise.all([
     waitForHealth(
       "OAuth forwarder",
@@ -234,6 +247,19 @@ async function main() {
       30_000,
       undefined,
       grokForwarder,
+    ),
+    // No Authorization header: unlike the forwarders above, the bridge holds
+    // no credential and the `cursor-cli` provider is `keyless`, so the router
+    // reaches it with a placeholder the way it reaches LM Studio. Requiring
+    // internal auth on /health would only diverge from the surface the
+    // provider actually uses.
+    waitForHealth(
+      "Cursor CLI bridge",
+      loopback(PORTS.cursorBridge, "/health"),
+      undefined,
+      30_000,
+      undefined,
+      cursorBridge,
     ),
   ]);
 

@@ -322,3 +322,53 @@ test("the bridge answers /health without touching cursor-agent", async () => {
     assert.deepEqual(await response.json(), { ok: true, bridge: "cursor-cli" });
   });
 });
+
+// --- wiring guards -------------------------------------------------------
+// The bridge is useless if the service does not supervise it and the registry
+// does not point at the port it actually binds. Both are cross-file facts no
+// runtime test in this file can see, so they are asserted against the sources
+// the way fetch-transport.test.mjs asserts its own invariant.
+
+const { readFileSync: readSource } = await import("node:fs");
+const { fileURLToPath: toPath } = await import("node:url");
+const repoRoot = toPath(new URL("..", import.meta.url));
+
+test("the service starts and health-gates the bridge", () => {
+  const start = readSource(path.join(repoRoot, "src", "start.mjs"), "utf8");
+  assert.match(
+    start,
+    /cursor-cli-bridge\.mjs/,
+    "start.mjs must spawn the bridge; a manually started one is a reboot away from every Cursor model 502ing",
+  );
+  assert.match(
+    start,
+    /waitForHealth\(\s*"Cursor CLI bridge"/,
+    "the bridge must be health-gated like every other forwarder",
+  );
+});
+
+test("the port the service publishes is the port the provider is pointed at", async () => {
+  const { DEFAULT_PORTS } = await import("../src/paths.mjs");
+  const { PROVIDERS } = await import("../src/model-registry.mjs");
+  const provider = PROVIDERS.get("cursor-cli");
+  assert.ok(provider, "the cursor-cli provider must be registered");
+
+  // The registry entry carries a checked-in address; DEFAULT_PORTS carries the
+  // port the bridge binds. They are one fact written in two files, and nothing
+  // else would notice them drifting apart.
+  assert.equal(
+    new URL(provider.baseUrl).port,
+    String(DEFAULT_PORTS.cursorBridge),
+    "config/cursor/cursor.json baseUrl and DEFAULT_PORTS.cursorBridge must name the same port",
+  );
+
+  // And an operator who moves the port must not be left with a provider still
+  // pointed at the default, so start.mjs republishes the resolved address
+  // through this provider's own override variable.
+  const start = readSource(path.join(repoRoot, "src", "start.mjs"), "utf8");
+  assert.match(
+    start,
+    new RegExp(`${provider.baseUrlEnv}:\\s*loopback\\(PORTS\\.cursorBridge`),
+    `start.mjs must publish ${provider.baseUrlEnv} from PORTS.cursorBridge`,
+  );
+});
