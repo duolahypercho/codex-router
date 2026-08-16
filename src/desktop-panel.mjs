@@ -90,7 +90,23 @@ export function panelCommandAllowed(command, { readOnly = true } = {}) {
 // failing: the UI asks for them on load and would otherwise paint an error
 // over a panel that is working.
 const LOCAL = {
-  platform_info: () => ({ platform: process.platform, island: false, shell: "web" }),
+  platform_info: () => ({
+    platform: process.platform,
+    island: false,
+    shell: "web",
+    // What this surface will and will not run, said out loud. The UI could
+    // infer it from `shell`, but then two places would encode the same policy
+    // and only one of them is the gate. Both lists are the real ones -- a
+    // command in neither is precisely what /panel/invoke answers 403 for -- so
+    // a control the UI leaves live cannot disagree with what the panel permits.
+    // The tray and the Electron shell advertise nothing here and keep the full
+    // table, which is why this field is additive rather than a mode switch.
+    capabilities: {
+      readOnly: true,
+      allowedCommands: [...READ_ONLY],
+      localCommands: Object.keys(LOCAL),
+    },
+  }),
   desktop_settings: () => ({ islandEnabled: false, islandExpanded: false }),
   // The router is answering this request, so it is by definition reachable.
   router_health: () => ({ ok: true, service: "codex-router", status: "ok" }),

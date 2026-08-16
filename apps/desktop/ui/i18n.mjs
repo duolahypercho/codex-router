@@ -214,6 +214,8 @@ const MESSAGES = {
     "general.keyRemoved": "{provider} key removed.",
     "general.anotherSource": "another source",
     "general.provider": "The provider",
+    "general.readOnlySurface": "This browser panel can show the router's state but not change it. Open the Model Router tray or desktop app to change a setting.",
+    "general.readOnlyControl": "Read-only in the browser panel · change this from the Model Router tray or desktop app",
   },
   "zh-CN": {
     "app.title": "Codex 模型路由",
@@ -419,6 +421,8 @@ const MESSAGES = {
     "general.keyRemoved": "{provider} 密钥已移除。",
     "general.anotherSource": "其他来源",
     "general.provider": "该提供商",
+    "general.readOnlySurface": "此浏览器面板只能查看路由状态，无法进行更改。请打开模型路由托盘或桌面应用来修改设置。",
+    "general.readOnlyControl": "浏览器面板为只读 · 请在模型路由托盘或桌面应用中更改",
   },
   ar: {
     "app.title": "موجّه نماذج Codex",
@@ -624,6 +628,8 @@ const MESSAGES = {
     "general.keyRemoved": "تمت إزالة مفتاح {provider}.",
     "general.anotherSource": "مصدر آخر",
     "general.provider": "هذا المزوّد",
+    "general.readOnlySurface": "تعرض لوحة المتصفح هذه حالة الموجّه دون أن تتمكن من تغييرها. افتح شريط موجّه النماذج أو تطبيق سطح المكتب لتغيير أي إعداد.",
+    "general.readOnlyControl": "لوحة المتصفح للقراءة فقط · غيّر هذا من شريط موجّه النماذج أو تطبيق سطح المكتب",
   },
   hi: {
     "app.title": "Codex मॉडल राउटर",
@@ -829,6 +835,8 @@ const MESSAGES = {
     "general.keyRemoved": "{provider} कुंजी हटा दी गई।",
     "general.anotherSource": "अन्य स्रोत",
     "general.provider": "यह प्रदाता",
+    "general.readOnlySurface": "यह ब्राउज़र पैनल राउटर की स्थिति दिखा सकता है, बदल नहीं सकता। कोई सेटिंग बदलने के लिए मॉडल राउटर ट्रे या डेस्कटॉप ऐप खोलें।",
+    "general.readOnlyControl": "ब्राउज़र पैनल केवल पढ़ने के लिए · इसे मॉडल राउटर ट्रे या डेस्कटॉप ऐप से बदलें",
   },
   ja: {
     "app.title": "Codex モデルルーター",
@@ -1034,6 +1042,8 @@ const MESSAGES = {
     "general.keyRemoved": "{provider} のキーを削除しました。",
     "general.anotherSource": "別のソース",
     "general.provider": "このプロバイダー",
+    "general.readOnlySurface": "このブラウザーパネルはルーターの状態を表示できますが、変更はできません。設定を変更するにはモデルルーターのトレイまたはデスクトップアプリを開いてください。",
+    "general.readOnlyControl": "ブラウザーパネルは読み取り専用です · モデルルーターのトレイまたはデスクトップアプリから変更してください",
   },
   ko: {
     "app.title": "Codex 모델 라우터",
@@ -1239,6 +1249,8 @@ const MESSAGES = {
     "general.keyRemoved": "{provider} 키가 제거되었습니다.",
     "general.anotherSource": "다른 소스",
     "general.provider": "해당 제공업체",
+    "general.readOnlySurface": "이 브라우저 패널은 라우터 상태를 보여줄 수는 있지만 변경할 수는 없습니다. 설정을 바꾸려면 모델 라우터 트레이나 데스크톱 앱을 여세요.",
+    "general.readOnlyControl": "브라우저 패널은 읽기 전용입니다 · 모델 라우터 트레이나 데스크톱 앱에서 변경하세요",
   },
 };
 

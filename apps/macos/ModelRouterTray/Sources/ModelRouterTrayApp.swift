@@ -3517,7 +3517,11 @@ private struct TrayView: View {
         : (target.modelSettings?.toolResultAging?.stats?.savingsSummary
           ?? routerLocalized("Off by default · replaces consumed tool results on external models")),
       isOn: Binding(
-        get: { target.modelSettings?.toolResultAging?.enabled ?? true },
+        // Off when the snapshot has not arrived, because that is what the
+        // router does with no state file (tool-result-aging-state.mjs). The row
+        // says "Off by default" a line above; showing the switch on while
+        // nothing is being aged contradicted it on every fresh install.
+        get: { target.modelSettings?.toolResultAging?.enabled ?? false },
         set: { enabled in Task { await store.setToolResultAgingEnabled(enabled) } }
       ),
       isDisabled: store.providerOperation != nil

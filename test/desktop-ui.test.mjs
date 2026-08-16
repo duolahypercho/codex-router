@@ -1,16 +1,24 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import {
   buildQuotaCards,
   chartGeometry,
+  commandRefused,
   compactTokens,
   dailySeries,
   metricRemainingPercent,
   observedModelSpeed,
   quotaWindow,
+  readOnlyCapabilities,
+  toolResultAgingChecked,
   visibleLocalDownload,
 } from "../apps/desktop/ui/model.mjs";
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 import { availableLanguages, getLanguage, setLanguage, t, translationKeys } from "../apps/desktop/ui/i18n.mjs";
 
 test("desktop usage series fills missing local calendar days", () => {
@@ -172,6 +180,77 @@ test("active model speed prefers its provider and matches qualified slugs", () =
   assert.equal(observedModelSpeed(usage, "deepseek", "missing/model"), null);
 });
 
+// src/tool-result-aging-state.mjs defaults the feature off when no state file
+// exists, so an absent snapshot has to render off. Rendering on told every
+// fresh install that ageing was happening when nothing was.
+test("the tool-result-aging switch renders off when the snapshot is absent", () => {
+  assert.equal(toolResultAgingChecked(undefined), false);
+  assert.equal(toolResultAgingChecked(null), false);
+  assert.equal(toolResultAgingChecked({}), false);
+});
+
+test("the tool-result-aging switch follows the snapshot when it is present", () => {
+  assert.equal(toolResultAgingChecked({ enabled: true }), true);
+  assert.equal(toolResultAgingChecked({ enabled: false }), false);
+  assert.equal(toolResultAgingChecked({ enabled: true, environmentOverride: false }), true);
+});
+
+// A control the surface will refuse must be dead before it is clicked, and the
+// UI decides that from the surface's own lists rather than a copy of them.
+test("a read-only surface refuses only what it did not advertise", () => {
+  const capabilities = {
+    readOnly: true,
+    allowedCommands: ["control_snapshot"],
+    localCommands: ["hide_panel"],
+  };
+  assert.equal(commandRefused(capabilities, "set_tool_result_aging"), true);
+  assert.equal(commandRefused(capabilities, "control_snapshot"), false);
+  assert.equal(commandRefused(capabilities, "hide_panel"), false);
+  // A shell that advertises no limit carries the full table and refuses
+  // nothing, which is how the tray and the Electron window stay unaffected.
+  assert.equal(commandRefused(null, "set_tool_result_aging"), false);
+  assert.equal(readOnlyCapabilities({ os: "darwin" }), null);
+  assert.equal(readOnlyCapabilities({ capabilities: { readOnly: false } }), null);
+});
+
+test("the macOS tray tool-result-aging switch mirrors the same off default", () => {
+  const source = readFileSync(
+    path.join(root, "apps", "macos", "ModelRouterTray", "Sources", "ModelRouterTrayApp.swift"),
+    "utf8",
+  );
+  assert.match(source, /toolResultAging\?\.enabled \?\? false/);
+  assert.doesNotMatch(source, /toolResultAging\?\.enabled \?\? true/);
+});
+
+// The disabled set is derived from data-command, so a control that drives a
+// command without carrying one would stay live on a surface that refuses it.
+test("every mutating control in the desktop UI names the command it drives", () => {
+  const markup = [
+    readFileSync(path.join(root, "apps", "desktop", "ui", "index.html"), "utf8"),
+    readFileSync(path.join(root, "apps", "desktop", "ui", "app.js"), "utf8"),
+  ].join("\n");
+  for (const command of [
+    "set_tool_result_aging",
+    "set_login_free",
+    "set_signed_routing",
+    "set_presence_mode",
+    "set_vision_bridge",
+    "set_subagent_mode",
+    "set_subagent_model",
+    "set_picker_model",
+    "set_provider_enabled",
+    "save_api_key",
+    "remove_api_key",
+    "install_local_model",
+    "set_local_model_enabled",
+  ]) {
+    assert.ok(
+      markup.includes(`data-command="${command}"`),
+      `no control declares data-command="${command}"`,
+    );
+  }
+});
+
 test("desktop UI exposes translations with matching keys for every language", () => {
   assert.deepEqual(
     availableLanguages().map(({ id }) => id),
@@ -181,6 +260,13 @@ test("desktop UI exposes translations with matching keys for every language", ()
   const englishKeys = [...keys.en].sort();
   for (const language of Object.keys(keys)) {
     assert.deepEqual([...keys[language]].sort(), englishKeys, `translation keys diverge for ${language}`);
+  }
+  // Stated separately from the parity check above, which would also pass if a
+  // new string were left out of all six.
+  for (const language of Object.keys(keys)) {
+    for (const key of ["general.readOnlySurface", "general.readOnlyControl"]) {
+      assert.ok([...keys[language]].includes(key), `${key} is missing from ${language}`);
+    }
   }
   const samples = [
     ["zh-CN", "用量"],

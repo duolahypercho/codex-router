@@ -1,14 +1,17 @@
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import http from "node:http";
 import test from "node:test";
 
+import { COMMANDS } from "../src/desktop-commands.mjs";
 import { writeJson } from "../src/http-utils.mjs";
 import {
   handlePanelRequest,
   isPanelRoute,
   panelCommandAllowed,
+  panelLocalCommand,
 } from "../src/desktop-panel.mjs";
+import { commandRefused, readOnlyCapabilities } from "../apps/desktop/ui/model.mjs";
 
 // The panel is served by the router, so these drive the real handler over a
 // real socket rather than calling it in-process: the routing, the headers and
@@ -84,7 +87,15 @@ test("the panel serves each asset the UI loads", async () => {
 test("the panel refuses the commands that change credentials or state", async () => {
   const { url, close } = await serve();
   try {
-    for (const command of ["save_api_key", "remove_api_key", "set_provider_enabled", "connect_oauth"]) {
+    for (const command of [
+      "save_api_key",
+      "remove_api_key",
+      "set_provider_enabled",
+      "connect_oauth",
+      // The toggle the UI used to render live: the panel refused it silently
+      // and the click came back as a generic failure.
+      "set_tool_result_aging",
+    ]) {
       const response = await fetch(url("/panel/invoke"), {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -101,6 +112,88 @@ test("the panel refuses the commands that change credentials or state", async ()
   } finally {
     await close();
   }
+});
+
+// The refusal is correct; the UI not knowing about it is what turned a
+// deliberate posture into a broken-looking switch. platform_info is the one
+// call the UI already makes on load, so the panel says so there.
+test("the panel tells the UI it is read-only over the same command bridge", async () => {
+  const { url, close } = await serve();
+  try {
+    const response = await fetch(url("/panel/invoke"), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ command: "platform_info", args: {} }),
+    });
+    assert.equal(response.status, 200);
+    const { value } = await response.json();
+    assert.equal(value.capabilities.readOnly, true);
+    assert.equal(readOnlyCapabilities(value)?.readOnly, true);
+    // What a shell that carries the full table sends: no capabilities block,
+    // so nothing is refused and the tray and Electron window are unaffected.
+    assert.equal(readOnlyCapabilities({ os: "darwin", islandSupported: true }), null);
+  } finally {
+    await close();
+  }
+});
+
+// Two lists that describe one policy drift. This asserts they cannot: what the
+// panel advertises has to agree with what the gate actually permits, for every
+// command in the shared table.
+test("the advertised allowed commands are exactly the ones the panel permits", () => {
+  const { capabilities } = panelLocalCommand("platform_info")();
+  assert.deepEqual(
+    [...capabilities.allowedCommands].sort(),
+    Object.keys(COMMANDS).filter((command) => panelCommandAllowed(command)).sort(),
+  );
+  for (const command of Object.keys(COMMANDS)) {
+    assert.equal(
+      commandRefused(capabilities, command),
+      !panelCommandAllowed(command),
+      `${command} is advertised differently from how it is gated`,
+    );
+  }
+  // Commands the panel answers from its own process are not refusals: the UI
+  // must keep offering Close and the activity pill, which do work here.
+  for (const command of capabilities.localCommands) {
+    assert.equal(commandRefused(capabilities, command), false, command);
+  }
+  assert.equal(commandRefused(capabilities, "set_tool_result_aging"), true);
+  assert.equal(commandRefused(capabilities, "control_snapshot"), false);
+});
+
+// The two halves joined: the commands the shipped markup declares, answered by
+// the capabilities the panel actually sends. Asserting each side separately
+// would still pass if a control named a command nobody gates.
+test("the panel's own answer marks the settings in the shipped markup dead", () => {
+  const { capabilities } = panelLocalCommand("platform_info")();
+  const markup = readFileSync(new URL("../apps/desktop/ui/index.html", import.meta.url), "utf8");
+  const declared = new Set([...markup.matchAll(/data-command="([a-z_]+)"/g)].map(([, name]) => name));
+  assert.ok(declared.size >= 15, `only ${declared.size} controls declare a command`);
+  for (const command of declared) {
+    assert.ok(
+      Object.hasOwn(COMMANDS, command) || capabilities.localCommands.includes(command),
+      `${command} is not a command any surface answers`,
+    );
+  }
+  // The switch this whole change is about, plus the two the panel does answer.
+  assert.equal(declared.has("set_tool_result_aging"), true);
+  assert.equal(commandRefused(capabilities, "set_tool_result_aging"), true);
+  assert.equal(commandRefused(capabilities, "set_island_enabled"), false);
+});
+
+// Reaching the tray or the Electron window means already running code on this
+// machine, so neither is narrowed by any of the above.
+test("a shell that is not the browser panel still carries the full table", () => {
+  for (const command of Object.keys(COMMANDS)) {
+    assert.equal(panelCommandAllowed(command, { readOnly: false }), true, command);
+  }
+  assert.equal(panelCommandAllowed("rm_minus_rf", { readOnly: false }), false);
+  // The Electron shell runs the table directly rather than through the panel's
+  // gate, which is what keeps the read-only posture local to the browser.
+  const electron = readFileSync(new URL("../apps/electron/main.js", import.meta.url), "utf8");
+  assert.doesNotMatch(electron, /panelCommandAllowed/);
+  assert.match(electron, /runDesktopCommand\(command, args \?\? \{\}, \{ root \}\)/);
 });
 
 test("an unknown command is refused rather than shelled out", async () => {

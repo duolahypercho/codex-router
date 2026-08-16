@@ -230,6 +230,33 @@ export function observedModelSpeed(providerUsage, providerId, modelSlug) {
     : null;
 }
 
+// The router's own browser panel serves this same UI but answers only the
+// reading half of the command table, and says so in platform_info. A surface
+// that advertises nothing -- the Tauri tray, the Electron window -- carries the
+// full table, so nothing is refused there and nothing about it changes.
+export function readOnlyCapabilities(platform) {
+  const capabilities = platform?.capabilities;
+  return capabilities?.readOnly === true ? capabilities : null;
+}
+
+// Answered from the lists the surface sent, never from a copy of the allowlist
+// kept here: a second copy is the drift this exists to prevent. The commands a
+// read-only surface answers from its own process (show/hide, island state) are
+// permitted too, because it does answer them.
+export function commandRefused(capabilities, command) {
+  if (!capabilities || !command) return false;
+  const allowed = capabilities.allowedCommands || [];
+  const local = capabilities.localCommands || [];
+  return !allowed.includes(command) && !local.includes(command);
+}
+
+// Absent is not "on". src/tool-result-aging-state.mjs defaults the feature off
+// when nobody has answered, so a snapshot the panel could not read has to
+// render off rather than promise ageing that is not happening.
+export function toolResultAgingChecked(aging) {
+  return aging?.enabled === true;
+}
+
 function smoothPath(points) {
   if (!points.length) return "";
   if (points.length === 1) return `M ${points[0].x.toFixed(2)} ${points[0].y.toFixed(2)}`;

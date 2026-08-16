@@ -220,6 +220,20 @@ button {
   color: var(--ink);
 }
 
+/* Sits under the tabs so the whole surface is qualified before a tab is
+   chosen. Muted rather than alarming: a read-only panel is working correctly,
+   it just is not where settings are changed. */
+.read-only-note {
+  margin: 10px 16px 0;
+  padding: 8px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.075);
+  border-radius: 9px;
+  background: rgba(1, 4, 8, 0.26);
+  color: var(--muted-strong);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
 .view {
   min-height: 0;
   padding: 18px 16px 12px;
