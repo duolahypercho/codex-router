@@ -688,13 +688,17 @@ environment-level override that disables both the routed and the native path.
 
 Where compaction parks the exact original bytes of a result it rewrote, they go
 to an owner-private store at `<state dir>/retained-tool-results` (override with
-`MODEL_ROUTER_TOOL_RESULT_RETENTION_DIR`). Nothing evicts that store and it has
-no TTL, so both a way to see it and a way to empty it are part of the feature:
+`MODEL_ROUTER_TOOL_RESULT_RETENTION_DIR`). Nothing evicts that store, so both a
+way to see it and a way to empty it are part of the feature:
 
 ```sh
-./bin/doctor                                   # reports count, size, oldest entry
-./bin/control tool-result-aging purge          # says what it would remove
-./bin/control tool-result-aging purge --yes    # removes it
+./bin/doctor                                     # count, size, oldest entry, TTL
+./bin/control tool-result-aging purge            # says what it would remove
+./bin/control tool-result-aging purge --yes      # removes it
+./bin/control tool-result-aging purge --expired  # only what the TTL outlived
+./bin/control tool-result-aging ttl 30           # keep retained results 30 days
+./bin/control tool-result-aging ttl off          # keep them until purged
+./bin/control tool-result-aging ttl default      # back to 7 days
 ```
 
 The doctor row appears whether or not the store exists, because an install that
@@ -705,6 +709,21 @@ default: without `--yes` it prints what it would remove and removes nothing, and
 files this store wrote, only inside that one directory, never recursing and
 never following a symlink out of it; anything else that ends up there is left in
 place and named.
+
+**Retained results expire after 7 days.** Nothing ever reads those bytes back
+into a turn — the receipt tells the model to repeat the tool call — so a
+retained original's only reader is you, and only while the session that produced
+it still matters. A week is also what keeps the store's caps from becoming
+permanent: at 512 files or 512 MiB retention stops accepting new results, and
+with a TTL that state drains by itself instead of waiting for somebody to notice
+it. Nothing sweeps on a timer: the store expires when it is next written to, and
+`purge --expired` runs the same sweep by hand, with the same `--yes` consent and
+the same containment as a full purge. The key that binds the store to this
+install is never expired, only purged. `ttl off` keeps everything until an
+explicit purge and is remembered verbatim, and the
+`CODEX_ROUTER_TOOL_RESULT_AGING=0` kill switch does not disable expiry — it
+stops the router rewriting context, while expiry is disk hygiene for bytes that
+are already written.
 
 To estimate the effect without spending provider quota, run:
 

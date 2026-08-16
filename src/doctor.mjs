@@ -70,9 +70,11 @@ import {
 } from "./dependency-repair.mjs";
 import {
   describeRetentionAge,
+  describeRetentionTtl,
   formatRetentionBytes,
   retainedToolResultsUsage,
 } from "./tool-result-retention.mjs";
+import { retentionTtlMs } from "./tool-result-aging-state.mjs";
 
 const checks = [];
 const add = (status, name, detail, fix) => checks.push({ status, name, detail, fix });
@@ -722,11 +724,24 @@ add(
 // most installs should see, and seeing it is how the directory becomes
 // discoverable at all.
 try {
-  const retention = retainedToolResultsUsage();
+  const ttlMs = retentionTtlMs();
+  const retention = retainedToolResultsUsage({ ttlMs });
+  // The TTL expires on the next write to the store, so a count here is what is
+  // already dead rather than what has been removed -- the same way a cooldown
+  // reads as gone before anything deletes it. Naming it is what tells an
+  // operator whose install stopped compacting that `purge --expired` is the
+  // sweep, not a wait.
+  const expiry =
+    !retention.exists || ttlMs === 0
+      ? ""
+      : retention.expired
+        ? `, ${retention.expired} past the ${describeRetentionTtl(ttlMs)} TTL`
+        : `, TTL ${describeRetentionTtl(ttlMs)}`;
   const retentionDetail = !retention.exists
     ? `nothing retained; no store at ${retention.path}`
     : `${retention.results} retained result(s), ${formatRetentionBytes(retention.bytes)}` +
       `${retention.oldestAgeMs === undefined ? "" : `, oldest ${describeRetentionAge(retention.oldestAgeMs)} old`}` +
+      `${expiry}` +
       ` in ${retention.path}`;
   add(
     retention.capacityReached || retention.foreign.length ? "warn" : "ok",

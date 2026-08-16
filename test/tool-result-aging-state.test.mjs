@@ -11,11 +11,16 @@ const {
   TOOL_RESULT_AGING_STATE_PATH,
   nativeToolResultAgingEnabled,
   readToolResultAgingSettings,
+  retentionTtlMs,
   setNativeToolResultAgingEnabled,
+  setRetentionTtlDays,
   setToolResultAgingEnabled,
   toolResultAgingEnabled,
   toolResultAgingSnapshot,
 } = await import("../src/tool-result-aging-state.mjs");
+
+const { RETENTION_DEFAULT_TTL_DAYS } = await import("../src/tool-result-retention.mjs");
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 function forgetState() {
   rmSync(TOOL_RESULT_AGING_STATE_PATH, { force: true });
@@ -30,6 +35,7 @@ test("tool-result aging defaults off until it is configured", () => {
     version: 1,
     enabled: false,
     nativeEnabled: false,
+    retentionTtlDays: RETENTION_DEFAULT_TTL_DAYS,
     defaulted: true,
   });
   assert.equal(toolResultAgingSnapshot().configured, false);
@@ -43,6 +49,7 @@ test("tool-result aging toggle round-trips through protected state", () => {
     version: 1,
     enabled: false,
     nativeEnabled: false,
+    retentionTtlDays: RETENTION_DEFAULT_TTL_DAYS,
   });
   assert.equal(toolResultAgingEnabled(), false);
   assert.equal(toolResultAgingSnapshot().configured, true);
@@ -80,6 +87,9 @@ test("a pre-native state file reads as native off, not as corrupt", () => {
     version: 1,
     enabled: true,
     nativeEnabled: false,
+    // A file written before the TTL existed never answered the question, so it
+    // reads as the default rather than as "keep them forever".
+    retentionTtlDays: RETENTION_DEFAULT_TTL_DAYS,
   });
 });
 
@@ -120,7 +130,65 @@ test("corrupt explicit state fails closed", () => {
     version: 1,
     enabled: false,
     nativeEnabled: false,
+    retentionTtlDays: RETENTION_DEFAULT_TTL_DAYS,
   });
   assert.equal(toolResultAgingEnabled(), false);
   assert.equal(nativeToolResultAgingEnabled(), false);
+});
+
+// The TTL deletes bytes the model already saw, so an operator's answer is kept
+// verbatim in both directions: a shorter lifetime and "keep them" alike.
+test("the retention TTL defaults to a week and round-trips through protected state", () => {
+  forgetState();
+  assert.equal(readToolResultAgingSettings().retentionTtlDays, RETENTION_DEFAULT_TTL_DAYS);
+  assert.equal(retentionTtlMs(), RETENTION_DEFAULT_TTL_DAYS * DAY_MS);
+
+  setRetentionTtlDays(2);
+  assert.equal(readToolResultAgingSettings().retentionTtlDays, 2);
+  assert.equal(retentionTtlMs(), 2 * DAY_MS);
+  assert.equal(toolResultAgingSnapshot().retentionTtlDays, 2);
+
+  // Zero is an answer, not an absence: it means keep them until an explicit
+  // purge, and no default may overwrite it.
+  setRetentionTtlDays(0);
+  assert.equal(readToolResultAgingSettings().retentionTtlDays, 0);
+  assert.equal(retentionTtlMs(), 0);
+
+  setRetentionTtlDays(undefined);
+  assert.equal(readToolResultAgingSettings().retentionTtlDays, RETENTION_DEFAULT_TTL_DAYS);
+});
+
+test("the TTL survives the aging toggles, and they survive it", () => {
+  forgetState();
+  setRetentionTtlDays(3);
+  setToolResultAgingEnabled(true);
+  setNativeToolResultAgingEnabled(true);
+  assert.equal(readToolResultAgingSettings().retentionTtlDays, 3);
+
+  setRetentionTtlDays(0);
+  assert.equal(toolResultAgingEnabled(), true);
+  assert.equal(nativeToolResultAgingEnabled(), true);
+  forgetState();
+});
+
+test("a TTL that is not a number of days is refused rather than stored", () => {
+  forgetState();
+  assert.throws(() => setRetentionTtlDays("soon"), /number of days/u);
+  assert.throws(() => setRetentionTtlDays(-1), /number of days/u);
+  assert.throws(() => setRetentionTtlDays(0.5), /between 1 and 3650 days/u);
+  assert.throws(() => setRetentionTtlDays(4_000), /between 1 and 3650 days/u);
+  assert.equal(readToolResultAgingSettings().retentionTtlDays, RETENTION_DEFAULT_TTL_DAYS);
+});
+
+// The kill switch stops the router rewriting request context. Expiry is disk
+// hygiene for bytes already written, so silencing compaction must not strand an
+// aging archive on disk forever.
+test("the environment kill switch does not disable the retention TTL", () => {
+  forgetState();
+  setRetentionTtlDays(2);
+  process.env.CODEX_ROUTER_TOOL_RESULT_AGING = "0";
+  assert.equal(toolResultAgingEnabled(), false);
+  assert.equal(retentionTtlMs(), 2 * DAY_MS);
+  delete process.env.CODEX_ROUTER_TOOL_RESULT_AGING;
+  forgetState();
 });

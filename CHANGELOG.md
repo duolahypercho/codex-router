@@ -230,6 +230,39 @@
   before: the forwarder is health-waited alongside the other three, an
   unbindable port still aborts startup naming the forwarder, and a forwarder
   that dies still ends the service so the OS supervisor rebuilds it.
+- **A retained tool result kept forever was an archive nobody chose.** The store
+  had a cap but no lifetime, so bytes retained today were still on disk a year
+  from now, and a store that reached 512 files or 512 MiB stopped retaining
+  anything new permanently — until somebody noticed and emptied it by hand.
+  Retained originals now expire after **7 days**.
+
+  The number is derived rather than round. Nothing ever reads those bytes back
+  into a turn: the receipt tells the model to repeat the tool call, so a
+  retained original's only reader is the operator, forensically, and only while
+  the session that produced it still matters. The caps say the same thing about
+  intent — 512 files and 512 MiB against a 32 KiB compaction floor is a working
+  set of a few long sessions, not a history. And a week is already this
+  repository's horizon for "recent enough to still act on", in the catalog's
+  announce window and the vision host's size cache alike.
+
+  Nothing sweeps on a timer and nothing is added to startup. Entries expire when
+  the store is next written to — the way the cooldown store is trimmed on its
+  next write, and the way a provider cooldown reads as gone long before anything
+  deletes it. `./bin/doctor` therefore reports what has already aged out rather
+  than what has been removed, and `./bin/control tool-result-aging purge
+  --expired` runs that sweep by hand for an install where compaction is off and
+  nothing is going to write again. It carries the same `--yes` consent, the same
+  `--dry-run`, and the same containment as a full purge, and it never removes
+  the key that binds the store's names to the install — expiring that would
+  orphan the entries the TTL just decided to keep.
+
+  `./bin/control tool-result-aging ttl <days|off|default>` sets the lifetime.
+  `off` is a real answer, kept verbatim: an operator who wants the archive keeps
+  it, and no later default overwrites that. A state file written before the TTL
+  existed never answered the question, so it reads as the default rather than as
+  "keep them forever". The `CODEX_ROUTER_TOOL_RESULT_AGING=0` kill switch does
+  not disable expiry — it stops the router rewriting request context, and expiry
+  is disk hygiene for bytes that are already written.
 
 - **The free Qwen3.8 endpoint refused any conversation whose system message
   arrived late or twice.** Its chat template answers those with a 400 reading

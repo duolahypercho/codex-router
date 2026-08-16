@@ -955,36 +955,62 @@ async function handleSubagents(action, value, flag, rest = []) {
 }
 
 const TOOL_RESULT_AGING_USAGE =
-  "Usage: control tool-result-aging status|on|off|native <on|off>|purge [--yes] [--dry-run]";
+  "Usage: control tool-result-aging status|on|off|native <on|off>|ttl <days|off|default>|" +
+  "purge [--yes] [--dry-run] [--expired]";
 
 // Emptying the store deletes the only copy of bytes the model already saw, so
 // the default is the report and not the deletion: an invocation without --yes
 // says exactly what it would remove and removes nothing. --dry-run says the
 // same thing on purpose rather than by omission, and outranks --yes so a
 // wrapper that always passes consent can still preview.
+//
+// --expired removes only what the TTL has outlived. The store expires on the
+// next write to it, so this is the same sweep run by hand: it is what an
+// operator uses to reclaim a store that filled before the TTL existed, or one
+// on an install where compaction is off and nothing is going to write again.
 async function handleToolResultAgingPurge(flags) {
   const {
     describeRetentionAge,
+    describeRetentionTtl,
+    expireRetainedToolResults,
     formatRetentionBytes,
     purgeRetainedToolResults,
   } = await import("./tool-result-retention.mjs");
+  const { retentionTtlMs } = await import("./tool-result-aging-state.mjs");
   const requested = new Set(flags);
   const previewOnly = requested.has("--dry-run") || !(requested.has("--yes") || requested.has("-y"));
-  const result = purgeRetainedToolResults({ dryRun: previewOnly });
+  const expiredOnly = requested.has("--expired");
+  const ttlMs = retentionTtlMs();
+  if (expiredOnly && ttlMs === 0) {
+    throw new Error(
+      "Retained tool results have no TTL: this install was told to keep them. " +
+        "Set one with ./bin/control tool-result-aging ttl <days>, or purge without --expired.",
+    );
+  }
+  const result = expiredOnly
+    ? expireRetainedToolResults({ dryRun: previewOnly, ttlMs })
+    : purgeRetainedToolResults({ dryRun: previewOnly });
   const age =
     result.oldestAgeMs === undefined ? "" : `, oldest ${describeRetentionAge(result.oldestAgeMs)} old`;
+  const scope = expiredOnly ? ` older than ${describeRetentionTtl(ttlMs)}` : "";
   if (!result.exists || result.files === 0) {
     process.stderr.write(`No retained tool results in ${result.path}; nothing to purge.\n`);
+  } else if (expiredOnly && result.expired === 0) {
+    process.stderr.write(
+      `Nothing in ${result.path} is older than ${describeRetentionTtl(ttlMs)}` +
+        ` (${result.results} retained result(s)${age}); nothing to purge.\n`,
+    );
   } else if (previewOnly) {
     process.stderr.write(
-      `Would remove ${result.removed} file(s) (${result.results} retained result(s)${age}) ` +
+      `Would remove ${result.removed} file(s)${scope} ` +
+        `(${result.results} retained result(s)${age}) ` +
         `and reclaim ${formatRetentionBytes(result.reclaimedBytes)} from ${result.path}.\n` +
         `Nothing was deleted. Re-run with --yes to empty it: ` +
-        `./bin/control tool-result-aging purge --yes\n`,
+        `./bin/control tool-result-aging purge${expiredOnly ? " --expired" : ""} --yes\n`,
     );
   } else {
     process.stderr.write(
-      `Removed ${result.removed} file(s) and reclaimed ` +
+      `Removed ${result.removed} file(s)${scope} and reclaimed ` +
         `${formatRetentionBytes(result.reclaimedBytes)} from ${result.path}.\n`,
     );
   }
@@ -1001,6 +1027,7 @@ async function handleToolResultAgingPurge(flags) {
 async function handleToolResultAging(action, nativeAction, flags = []) {
   const {
     setNativeToolResultAgingEnabled,
+    setRetentionTtlDays,
     setToolResultAgingEnabled,
     toolResultAgingSnapshot,
   } = await import("./tool-result-aging-state.mjs");
@@ -1011,6 +1038,22 @@ async function handleToolResultAging(action, nativeAction, flags = []) {
   }
   if (desired === "purge") {
     await handleToolResultAgingPurge(flags);
+    return;
+  }
+  // How long a retained original lives. `off` is a real answer and is kept
+  // verbatim -- an operator who wants the archive keeps it -- while `default`
+  // clears the answer so a later release's number applies again.
+  if (desired === "ttl") {
+    const requested = String(nativeAction ?? "").trim();
+    if (!requested) throw new Error(TOOL_RESULT_AGING_USAGE);
+    if (requested === "default") {
+      setRetentionTtlDays(undefined);
+    } else if (requested === "off" || requested === "never") {
+      setRetentionTtlDays(0);
+    } else {
+      setRetentionTtlDays(requested.replace(/d$/u, ""));
+    }
+    process.stdout.write(`${JSON.stringify(toolResultAgingSnapshot())}\n`);
     return;
   }
   if (desired === "native") {

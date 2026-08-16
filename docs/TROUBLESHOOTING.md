@@ -455,11 +455,10 @@ are preserved.
 Tool-result compaction can park the exact original bytes of a result it rewrote
 in `<state dir>/retained-tool-results`. That store is owner-only, is excluded
 from support bundles, and is bounded rather than evicting — at its cap it stops
-accepting new results and eligible results pass through uncompacted — but
-nothing ever removes what is already in it.
+accepting new results and eligible results pass through uncompacted.
 
-`./bin/doctor` reports the store on every run: file count, total size, and the
-age of the oldest entry. To empty it:
+`./bin/doctor` reports the store on every run: file count, total size, the age
+of the oldest entry, and the TTL. To empty it:
 
 ```sh
 ./bin/control tool-result-aging purge          # what it would remove
@@ -471,6 +470,24 @@ itself wrote, only inside that one directory, and refuses to follow a symlink
 out of it; anything else that ends up there is reported and left alone. Deleting
 retained bytes is not reversible — a compacted result in an open session keeps
 its hash and head/tail evidence, but the original is gone.
+
+Retained results expire after 7 days by default, so most stores never need a
+purge at all. Nothing sweeps on a timer: entries expire when the store is next
+written to. On an install where compaction is off, or one that filled before the
+TTL existed, nothing is going to write again — run the sweep by hand:
+
+```sh
+./bin/control tool-result-aging purge --expired        # what has aged out
+./bin/control tool-result-aging purge --expired --yes  # remove it
+```
+
+`--expired` removes only entries past the TTL, under the same containment as a
+full purge, and never removes the store's key. Change the lifetime with
+`./bin/control tool-result-aging ttl <days>`, keep everything with `ttl off`, or
+return to the shipped default with `ttl default`. If doctor reports the store at
+its cap and the entries are recent, the TTL has nothing to drain yet: purge it
+or shorten the TTL. `CODEX_ROUTER_TOOL_RESULT_AGING=0` stops compaction but does
+not stop expiry.
 
 ## Uninstall retained files
 
