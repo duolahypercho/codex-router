@@ -144,12 +144,17 @@ function port(name, fallback) {
 // protocol response during GNOME login. gateway/oauth/router/api are the
 // original four; grokOauth is a fifth forwarder port for the Grok OAuth
 // provider.
+// cursorBridge is not a forwarder: it is the loopback chat-completions
+// endpoint the `cursor-cli` provider's registry entry points at, so its
+// default has to stay in step with the `baseUrl` checked into
+// config/cursor/cursor.json.
 export const DEFAULT_PORTS = Object.freeze({
   gateway: 4200,
   oauth: 4201,
   router: 4202,
   api: 4203,
   grokOauth: 4208,
+  cursorBridge: 4209,
 });
 
 // Ports used before the BrlAPI-safe defaults shipped. They remain recognized
@@ -181,6 +186,7 @@ export const PORTS = {
     process.env.CODEX_ROUTER_API_PORT || process.env.KIMI_API_FORWARD_PORT || DEFAULT_PORTS.api,
   ),
   grokOauth: port("MODEL_ROUTER_GROK_OAUTH_PORT", DEFAULT_PORTS.grokOauth),
+  cursorBridge: port("MODEL_ROUTER_CURSOR_BRIDGE_PORT", DEFAULT_PORTS.cursorBridge),
 };
 
 export function loopback(portNumber, suffix = "") {

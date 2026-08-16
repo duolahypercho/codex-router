@@ -806,6 +806,28 @@ The default endpoint is `http://127.0.0.1:1234/v1`. Set
 reads `/v1/models` and publishes only models explicitly chosen by the user.
 Ollama keeps its existing native route and local model controls.
 
+### Use your Cursor subscription in Codex (experimental)
+
+Cursor CLI has no OpenAI-compatible endpoint, so the router ships a local
+bridge that runs `cursor-agent` per request and speaks chat completions back:
+
+```sh
+cursor-agent login          # once, in an interactive terminal
+./bin/cursor-bridge &       # serves http://127.0.0.1:4209/v1
+./bin/model-router codex providers enable cursor-cli
+./bin/curate-models cursor-cli
+```
+
+Models land in the `cursor-cli/<model-id>` namespace. Set
+`MODEL_ROUTER_CURSOR_BRIDGE_PORT` and `MODEL_ROUTER_CURSOR_BASE_URL` together
+if 4209 is taken.
+
+Two limits are worth knowing before you enable it. `cursor-agent` returns text
+and never OpenAI tool calls, so a Cursor model answers questions but cannot
+drive an agentic Codex turn the way a routed Kimi or GLM model does. And every
+turn runs `--mode ask --sandbox enabled` in an empty scratch workspace, so the
+model reads only what your prompt contains — it will not touch your repository.
+
 Models running on this machine can appear in Codex's picker like any other
 provider. They are labelled **experimental** there, and the label is earned:
 using a local model as the *vision reader* is reliable, but using one as a

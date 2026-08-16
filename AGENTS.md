@@ -9,6 +9,16 @@ These instructions apply when a user asks an agent to install this repository.
   explain that those targets were removed and the router does not have them;
   the opencode provider (the Go subscription and the pay-per-use Zen endpoint)
   remains available as a provider inside both targets.
+- **Cursor cannot be a target, and this is not a gap waiting to be filled.**
+  Cursor CLI (`cursor-agent`) has no BYOK and no custom base URL: its
+  `~/.cursor/cli-config.json` reference carries `model`, `permissions`,
+  `sandbox`, and display keys and nothing that names an endpoint. `--endpoint`
+  exists but speaks Cursor's own protocol rather than anything OpenAI-shaped,
+  and Bedrock mode validates the credential against Cursor's backend. The
+  IDE's "Override OpenAI Base URL" is IDE-only and refuses private-network
+  addresses besides. Nobody should spend another afternoon re-deriving this.
+  Cursor runs the other way round instead — as the `cursor-cli` provider, see
+  below.
 - **A target is a client, not a router.** One installation serves both: one
   background service, one gateway, one set of provider credentials, one
   provider selection, one set of ports. `MODEL_ROUTER_TARGET` selects which
@@ -960,6 +970,54 @@ minutes later. Do not quietly drop the label because a check happened to pass.
    the registry and gateway config load at startup. If the router starts
    answering every request with `local_router_error`, suspect a process still
    holding pre-change state rather than the new code.
+
+## Cursor CLI as a provider
+
+`cursor-cli` is a keyless provider like `local` and `lmstudio`, but what sits
+behind its loopback address is not a server the user started -- it is
+`src/cursor-cli-bridge.mjs`, which spawns `cursor-agent -p` per request and
+adapts it to chat completions. Cursor has no inference API to point at, so the
+bridge is the integration.
+
+1. **It answers turns; it does not drive them.** `cursor-agent` emits text and
+   its own tool events, never OpenAI `tool_calls`. Codex dispatches every turn
+   through tool calls, so a Cursor model is a consultant -- ask it a question,
+   get prose -- and cannot run an agentic Codex turn the way a routed Kimi or
+   GLM model does. Say so when someone asks why their Cursor model "does
+   nothing"; it is the design, not a bug to chase.
+2. **Read-only, always.** `turnArguments()` pins `--mode ask` and
+   `--sandbox enabled` and never passes `--force`, `--yolo`, `--trust`, or
+   `--auto-review`. This process receives prompt text over a socket and hands
+   it to an agent with shell and file tools; read-only is the only mode in
+   which that is defensible. `test/cursor-cli-bridge.test.mjs` asserts the
+   exact argv. Do not add an "agent mode" switch.
+3. **The workspace is an empty directory the router owns**, not the caller's
+   repository and not the checkout. A chat-completions request is a prompt:
+   everything the model should see was put there by the caller. Pointing the
+   agent at a tree nobody named is how "summarize this text" becomes "read
+   that private repo". `MODEL_ROUTER_CURSOR_WORKSPACE` exists for operators who
+   genuinely want otherwise.
+4. **Every turn is stateless.** Cursor keeps its own sessions, but the router
+   owns conversation state here and each request arrives complete. Reusing a
+   Cursor session would make identical requests answer differently depending on
+   what an unrelated caller said earlier, so history is rendered into the
+   prompt by `buildCursorPrompt()` and `--resume` is never passed.
+5. **The event schema is Cursor's, and it moves.** The shapes in
+   `cursor-cli-turn.mjs` were read out of cursor-agent 2026.08.11-e8db854's own
+   bundle rather than guessed. An unrecognized event type is ignored, never
+   fatal: Cursor adds types between releases, and a router that 500s on a new
+   one turns a cosmetic upstream change into an outage.
+6. **`result` is the authority, deltas are the optimization.** The `result`
+   event always carries the complete answer; `assistant` deltas may be absent
+   for a short turn. A stream that emitted nothing still forwards the result
+   text, or the caller sees a successful empty turn.
+7. **Two failure modes, two doctor rows.** cursor-agent signed out and the
+   bridge not running both surface as "every Cursor model 502s", so the doctor
+   names them separately -- and probes neither unless the provider is selected,
+   because `cursor-agent models` is a network round trip to Cursor.
+8. The bridge default port (4209) and the `baseUrl` checked into
+   `config/cursor/cursor.json` are one fact in two files. Change both or
+   neither.
 
 ## Codex safety boundaries
 

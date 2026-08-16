@@ -10,7 +10,8 @@ import { privateFileIsProtected } from "./file-security.mjs";
 import { grokCliPreflight } from "./grok-cli.mjs";
 import { detectLegacyInstallations } from "./legacy-migration.mjs";
 import { routedCatalogConfigured } from "./catalog.mjs";
-import { MODEL_BY_SLUG, PROVIDERS } from "./model-registry.mjs";
+import { MODEL_BY_SLUG, PROVIDERS, resolveProviderBaseUrl } from "./model-registry.mjs";
+import { CURSOR_PROVIDER_ID, cursorCliStatus } from "./cursor-cli.mjs";
 import { grokOAuthStatus } from "./grok-oauth-status.mjs";
 import { kimiOAuthHealth } from "./oauth-status.mjs";
 import {
@@ -750,6 +751,38 @@ if (!credentialDiscoveryOff) {
         ? grokOauth.source
         : `not configured; ${grokOauth.setup}`,
     !grokCli.runnable ? grokCli.fix : "Run grok login, then rerun the doctor.",
+  );
+}
+
+// Cursor CLI has two moving parts the generic keyless provider row below
+// cannot see: cursor-agent's own sign-in, which lives in its credential store
+// and not in anything the router holds, and the local bridge that turns it
+// into the chat-completions endpoint the registry entry points at. Either one
+// being down produces the same symptom -- every Cursor model 502s -- so both
+// get their own row.
+//
+// Probed only while the provider is selected. `cursor-agent models` is a
+// network round trip to Cursor, and an operator who never enabled Cursor
+// should not pay for one on every doctor run.
+if (!credentialDiscoveryOff && selection.providers.includes(CURSOR_PROVIDER_ID)) {
+  const cursor = cursorCliStatus();
+  add(
+    cursor.signedIn ? "ok" : "fail",
+    "Cursor CLI sign-in",
+    cursor.detail,
+    cursor.fix || "Run cursor-agent login in an interactive terminal.",
+  );
+  const { baseUrl } = resolveProviderBaseUrl(PROVIDERS.get(CURSOR_PROVIDER_ID));
+  const bridgeUp = await fetch(`${baseUrl.replace(/\/v1$/, "")}/health`, {
+    signal: AbortSignal.timeout(3_000),
+  })
+    .then((response) => response.ok)
+    .catch(() => false);
+  add(
+    bridgeUp ? "ok" : "fail",
+    "Cursor CLI bridge",
+    bridgeUp ? `reachable at ${baseUrl}` : `nothing is serving ${baseUrl}`,
+    "Start it with ./bin/cursor-bridge.",
   );
 }
 

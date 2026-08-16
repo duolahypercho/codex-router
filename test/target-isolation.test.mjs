@@ -37,6 +37,7 @@ test("codex owns the default port block", () => {
     router: 4202,
     api: 4203,
     grokOauth: 4208,
+    cursorBridge: 4209,
   });
 });
 
@@ -60,7 +61,17 @@ test("operators can keep an explicitly configured legacy block during migration"
       },
     ),
   );
-  assert.deepEqual(ports, { gateway: 4100, oauth: 4101, router: 4102, api: 4103, grokOauth: 4108 });
+  // cursorBridge stays on its default here on purpose: the legacy block
+  // predates it, so there is no 41xx port it could migrate back to. An
+  // operator pinned to the old block still reaches the bridge on 4209.
+  assert.deepEqual(ports, {
+    gateway: 4100,
+    oauth: 4101,
+    router: 4102,
+    api: 4103,
+    grokOauth: 4108,
+    cursorBridge: 4209,
+  });
 });
 
 test("removed targets are rejected rather than silently mapped to codex", () => {

@@ -57,16 +57,18 @@ test("provider selection keeps backward compatibility and can hide the final pro
     // credential to configure and they are always available. Everything else
     // has to authenticate before it counts.
     assert.deepEqual(configuredProviderIds(), [
+      "cursor-cli",
       "custom",
       "kilo-free",
       "lmstudio",
       "local",
       "opencode-free",
     ]);
-    assert.deepEqual(defaultProviderIds(), ["lmstudio", "local"]);
+    assert.deepEqual(defaultProviderIds(), ["cursor-cli", "lmstudio", "local"]);
     delete process.env.KIMI_API_KEY;
     writeProviderCredential("deepseek", "TEST_DEEPSEEK_SELECTION_KEY");
     assert.deepEqual(configuredProviderIds(), [
+      "cursor-cli",
       "custom",
       "deepseek",
       "kilo-free",
@@ -74,7 +76,7 @@ test("provider selection keeps backward compatibility and can hide the final pro
       "local",
       "opencode-free",
     ]);
-    assert.deepEqual(defaultProviderIds(), ["deepseek", "lmstudio", "local"]);
+    assert.deepEqual(defaultProviderIds(), ["cursor-cli", "deepseek", "lmstudio", "local"]);
 
     writeProviderSelection(["chatgpt-oauth"]);
     assert.deepEqual(readProviderSelection(), ["grok-oauth"]);
