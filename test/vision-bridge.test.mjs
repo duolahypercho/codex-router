@@ -1445,15 +1445,31 @@ test("every surface asks the one shared helper for native vision candidates", as
   }
 });
 
+// Scopes a source guard to one top-level function.
+//
+// These guards assert on how a caller is *written*, so they have to see that
+// caller's body and nothing else. Slicing to the next `\n}\n` did that on a
+// checkout with LF endings and silently failed on one with CRLF: `indexOf`
+// returned -1, `slice(start, -1)` swallowed the rest of the file, and the guard
+// quietly widened to every function defined below it. That is how a negative
+// assertion turns into a Windows-only failure naming code it was never meant to
+// police. Normalize first, and refuse to guess when the end is not found.
+function routerFunctionBody(source, signature) {
+  const normalized = source.replace(/\r\n/g, "\n");
+  const start = normalized.indexOf(signature);
+  assert.notEqual(start, -1, `router.mjs must still define ${signature}`);
+  const end = normalized.indexOf("\n}\n", start);
+  assert.notEqual(end, -1, `${signature} must be a top-level function this guard can scope to`);
+  return normalized.slice(start, end);
+}
+
 test("the request path will not nominate a native engine without a live session", async () => {
   // The gate cannot be an on-disk artifact alone: `nativeCatalog()` reuses a
   // cached capture when a fresh probe fails, and the merged catalog is only
   // rewritten on an explicit rebuild, so after a sign-out both still name the
   // engine. The caller's own session is the evidence that cannot go stale.
   const source = await readFile(path.join(repoRoot, "src/router.mjs"), "utf8");
-  const start = source.indexOf("async function bridgeVisionInput");
-  assert.notEqual(start, -1, "router.mjs must still resolve the engine in bridgeVisionInput");
-  const body = source.slice(start, source.indexOf("\n}\n", start));
+  const body = routerFunctionBody(source, "async function bridgeVisionInput");
   assert.match(
     body,
     /hasNativeSession\(nativeHeaders\(request\)\)/,
@@ -1473,9 +1489,7 @@ test("the request path will not nominate a native engine without a live session"
 // how the caller is written, and nothing else observes it from outside.
 test("the request path hands the engine resolver a list it has not built yet", async () => {
   const source = await readFile(path.join(repoRoot, "src/router.mjs"), "utf8");
-  const start = source.indexOf("async function bridgeVisionInput");
-  assert.notEqual(start, -1, "router.mjs must still resolve the engine in bridgeVisionInput");
-  const body = source.slice(start, source.indexOf("\n}\n", start));
+  const body = routerFunctionBody(source, "async function bridgeVisionInput");
   assert.match(
     body,
     /resolveVisionEngines\(\s*\(\)\s*=>/,
@@ -1562,9 +1576,7 @@ test("a cached native transcript is not replayed for a different account", () =>
   // caller's live session, so a hit on another account's entry would skip the
   // call and with it any re-check that this session may spend that model.
   const source = readFileSync(path.join(repoRoot, "src/router.mjs"), "utf8");
-  const start = source.indexOf("async function visionEvidenceFor");
-  assert.notEqual(start, -1);
-  const body = source.slice(start, source.indexOf("\n}\n", start));
+  const body = routerFunctionBody(source, "async function visionEvidenceFor");
   assert.match(body, /engine\.native \? nativeAccountKey\(/);
   assert.match(body, /const key = .*\$\{account\}/);
 });
