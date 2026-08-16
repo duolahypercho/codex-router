@@ -319,7 +319,20 @@ and every client saw a bare "Connection error" naming nothing.
    lets doctor report "serving but reports gateway unreachable" instead of "not
    ready", which sent operators looking for a dead service when the gateway was
    the thing that died.
-7. **Do not answer a gateway crash by moving the litellm pin.** The pin is a
+7. **The launcher is spawned through `spawnableCommand`, like every other
+   external command.** The installer produces `litellm.exe` on Windows, so the
+   shipped path is untouched pass-through — but `MODEL_ROUTER_LITELLM_BIN` and
+   `CODEX_ROUTER_LITELLM_BIN` are operator-set, and Node has refused to spawn a
+   `.cmd`/`.bat` without a shell since CVE-2024-27980. A batch launcher there
+   used to end the service before it spawned anything, with an EINVAL naming
+   neither the file nor the reason. Never reintroduce a bare
+   `spawn(command, args)` in `start.mjs`; `test/gateway-restart.test.mjs` guards
+   the shape, because the behaviour itself cannot be exercised on POSIX. Note
+   the one cost of the batch path: the service then holds the `cmd.exe` hop
+   rather than the gateway, so a signal reaches the hop and the real process is
+   orphaned. That is strictly better than not starting at all, and it is another
+   reason the installer produces an `.exe`.
+8. **Do not answer a gateway crash by moving the litellm pin.** The pin is a
    security floor and a wheel-availability decision (see the lock section
    above), any change to it has to be proven by booting the proxy rather than by
    a successful resolve, and a router that survives its gateway is worth having

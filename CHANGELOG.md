@@ -62,6 +62,14 @@
   litellm version is unchanged: a router that survives its gateway is worth
   having whichever version is installed.
 
+  Startup also stopped refusing a Windows batch launcher. Node has declined to
+  spawn a `.cmd`/`.bat` without a shell since CVE-2024-27980, so pointing
+  `MODEL_ROUTER_LITELLM_BIN` at a batch wrapper ended the service before it
+  spawned anything, with an `EINVAL` naming neither the file nor the reason.
+  The launcher now goes through the same `spawnableCommand` helper every other
+  external command in the repository uses. The shipped installer produces
+  `litellm.exe`, so a normal Windows install is unaffected.
+
 - **The free Qwen3.8 endpoint refused any conversation whose system message
   arrived late or twice.** Its chat template answers those with a 400 reading
   "System message must be at the beginning", and a real Codex session reaches

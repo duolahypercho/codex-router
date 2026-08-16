@@ -18,6 +18,7 @@ import { waitForHealth as pollHealth } from "./health-probe.mjs";
 import { gatewaySupervisorLimits, superviseGateway } from "./gateway-supervisor.mjs";
 import { writeLiteLlmConfig } from "./litellm-config.mjs";
 import { readLocalModelSelection } from "./local-models.mjs";
+import { spawnableCommand } from "./spawnable-command.mjs";
 import { ensureOllamaHeadless } from "./ollama-runtime.mjs";
 import { venvRuntimeProblem } from "./venv-runtime.mjs";
 import { dependencyRepairHint } from "./dependency-repair.mjs";
@@ -142,11 +143,22 @@ const commonEnv = {
 const children = [];
 let shuttingDown = false;
 
+// Every child goes through `spawnableCommand` for the one case that needs it:
+// a Windows `.cmd`/`.bat` launcher, which Node has refused to spawn without a
+// shell since the CVE-2024-27980 fix and answers with a bare EINVAL. The
+// installer produces `litellm.exe`, so the shipped path is untouched
+// pass-through -- but `MODEL_ROUTER_LITELLM_BIN` and `CODEX_ROUTER_LITELLM_BIN`
+// are operator-set, and a batch wrapper there used to take the whole service
+// down before it spawned anything, with an error naming neither the file nor
+// the reason. Our own Node children resolve to `process.execPath`, so they are
+// pass-through on every platform.
 function run(command, args, extraEnv = {}) {
-  const child = spawn(command, args, {
+  const spawnable = spawnableCommand(command, args);
+  const child = spawn(spawnable.command, spawnable.args, {
     cwd: SOURCE_ROOT,
     env: { ...process.env, ...commonEnv, ...extraEnv },
     stdio: "inherit",
+    ...spawnable.options,
   });
   children.push(child);
   return child;
