@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- **The free Qwen3.8 endpoint refused any conversation whose system message
+  arrived late or twice.** Its chat template answers those with a 400 reading
+  "System message must be at the beginning", and a real Codex session reaches
+  that shape routinely — a second system message, or one appended after the
+  conversation is already under way. Probing the live endpoint pinned the rule
+  to at most one `system` message sitting ahead of the first user, assistant, or
+  tool turn; the `developer` role is outside it entirely, so
+  `[developer, system, user]` is accepted and "the beginning" means before the
+  first turn rather than index 0. The request profile now coalesces the system
+  messages into one and places it ahead of the first turn, handling both plain
+  string content and content-parts arrays, and leaves developer messages exactly
+  where they are. A conversation the rule already allows is forwarded unchanged.
+  Hoisting is a compatibility repair with a real cost — instructions the caller
+  placed mid-conversation are read as opening context instead — accepted only
+  because the alternative from this endpoint is no answer at all.
+
 - **Every compaction against the free Qwen3.8 endpoint failed on an empty tool
   list.** Compaction disables tool use by sending `tools: []`, which every other
   forwarder reads as "no tools" — this endpoint's vLLM build answers it with a

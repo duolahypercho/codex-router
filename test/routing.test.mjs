@@ -2983,6 +2983,214 @@ test("API forwarder omits the empty tool list the free Qwen3.8 endpoint rejects"
   }
 });
 
+// The third refusal measured on the same endpoint: "System message must be at
+// the beginning." Probing it with one-token requests pinned the rule to at most
+// one `system` message, sitting ahead of the first user/assistant/tool turn --
+// `[user, system, user]`, `[user, assistant, system]`, and
+// `[system, system, user]` all 400, `[system, user]` 200. The `developer` role
+// is outside the rule entirely (`[developer, system, user]`,
+// `[user, developer, user]`, `[developer, developer, user]` all 200), which is
+// why "the beginning" is measured as "before the first turn" and why the
+// profile never touches a developer message.
+test("API forwarder hoists and coalesces the system messages the free Qwen3.8 endpoint refuses", async () => {
+  const upstreamRequests = [];
+  const upstream = await mockServer(async (request, response) => {
+    upstreamRequests.push({ headers: request.headers, body: await bodyJson(request) });
+    json(response, 200, { choices: [] });
+  });
+  const curated = curatedQwen38EffortModel();
+  const forwarderPort = await openPort();
+  const forwarder = run("api-forwarder.mjs", {
+    CODEX_ROUTER_API_PORT: String(forwarderPort),
+    MODEL_ROUTER_USER_MODELS: curated.file,
+    OPENROUTER_API_BASE_URL: `http://127.0.0.1:${upstream.port}`,
+    OPENROUTER_API_KEY: "TEST_OPENROUTER_API_KEY",
+    CODEX_ROUTER_QUIET: "1",
+  });
+  const send = async (messages) => {
+    const response = await fetch(`http://127.0.0.1:${forwarderPort}/v1/chat/completions`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${INTERNAL_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ model: curated.gatewayModel, messages }),
+    });
+    assert.equal(response.status, 200);
+    return upstreamRequests.at(-1).body.messages;
+  };
+
+  try {
+    await waitFor(`http://127.0.0.1:${forwarderPort}/health`, forwarder, {
+      Authorization: `Bearer ${INTERNAL_KEY}`,
+    });
+
+    // Two leading system messages: one arrives, carrying both texts in the
+    // order the caller wrote them.
+    assert.deepEqual(
+      await send([
+        { role: "system", content: "You are Codex." },
+        { role: "system", content: "Answer in English." },
+        { role: "user", content: "hello" },
+      ]),
+      [
+        { role: "system", content: "You are Codex.\n\nAnswer in English." },
+        { role: "user", content: "hello" },
+      ],
+    );
+
+    // A late system message is hoisted ahead of the first turn; every other
+    // message keeps its place, including the assistant turn behind it.
+    assert.deepEqual(
+      await send([
+        { role: "user", content: "hello" },
+        { role: "assistant", content: "hi" },
+        { role: "system", content: "Be brief." },
+        { role: "user", content: "and now?" },
+      ]),
+      [
+        { role: "system", content: "Be brief." },
+        { role: "user", content: "hello" },
+        { role: "assistant", content: "hi" },
+        { role: "user", content: "and now?" },
+      ],
+    );
+
+    // Content parts are the other shape Codex sends. They concatenate instead
+    // of being flattened into a string, and a mixed merge promotes the plain
+    // string to a text part rather than stringifying the parts list.
+    assert.deepEqual(
+      await send([
+        { role: "system", content: [{ type: "text", text: "You are Codex." }] },
+        { role: "user", content: "hello" },
+        { role: "system", content: [{ type: "text", text: "Be brief." }] },
+      ]),
+      [
+        {
+          role: "system",
+          content: [
+            { type: "text", text: "You are Codex." },
+            { type: "text", text: "Be brief." },
+          ],
+        },
+        { role: "user", content: "hello" },
+      ],
+    );
+    assert.deepEqual(
+      await send([
+        { role: "system", content: "You are Codex." },
+        { role: "system", content: [{ type: "text", text: "Be brief." }] },
+        { role: "user", content: "hello" },
+      ]),
+      [
+        {
+          role: "system",
+          content: [
+            { type: "text", text: "You are Codex." },
+            { type: "text", text: "Be brief." },
+          ],
+        },
+        { role: "user", content: "hello" },
+      ],
+    );
+
+    // A leading developer message keeps its lead: the coalesced system message
+    // lands ahead of the first turn, not at index 0.
+    assert.deepEqual(
+      await send([
+        { role: "developer", content: "Repo rules." },
+        { role: "system", content: "You are Codex." },
+        { role: "user", content: "hello" },
+        { role: "system", content: "Be brief." },
+      ]),
+      [
+        { role: "developer", content: "Repo rules." },
+        { role: "system", content: "You are Codex.\n\nBe brief." },
+        { role: "user", content: "hello" },
+      ],
+    );
+  } finally {
+    await stopChild(forwarder);
+    await closeServer(upstream.server);
+    rmSync(curated.dir, { recursive: true, force: true });
+  }
+});
+
+// Hoisting moves instructions the caller placed mid-conversation, so it only
+// runs when the endpoint would otherwise refuse the request. A conversation the
+// measured rule already allows has to reach the upstream exactly as it was
+// sent -- including the developer-role orderings that are legal only because
+// developer is outside the rule.
+test("API forwarder leaves an already-legal Qwen3.8 message order untouched", async () => {
+  const upstreamRequests = [];
+  const upstream = await mockServer(async (request, response) => {
+    upstreamRequests.push({ headers: request.headers, body: await bodyJson(request) });
+    json(response, 200, { choices: [] });
+  });
+  const curated = curatedQwen38EffortModel();
+  const forwarderPort = await openPort();
+  const forwarder = run("api-forwarder.mjs", {
+    CODEX_ROUTER_API_PORT: String(forwarderPort),
+    MODEL_ROUTER_USER_MODELS: curated.file,
+    OPENROUTER_API_BASE_URL: `http://127.0.0.1:${upstream.port}`,
+    OPENROUTER_API_KEY: "TEST_OPENROUTER_API_KEY",
+    CODEX_ROUTER_QUIET: "1",
+  });
+
+  try {
+    await waitFor(`http://127.0.0.1:${forwarderPort}/health`, forwarder, {
+      Authorization: `Bearer ${INTERNAL_KEY}`,
+    });
+    for (const messages of [
+      // The shape the endpoint documents as correct.
+      [
+        { role: "system", content: "You are Codex." },
+        { role: "user", content: "hello" },
+      ],
+      // Legal because developer is not a turn: the lone system message still
+      // precedes the first user message.
+      [
+        { role: "developer", content: "Repo rules." },
+        { role: "system", content: "You are Codex." },
+        { role: "user", content: "hello" },
+      ],
+      // Two developer messages after a turn -- measured 200, and nothing here
+      // may merge or move them.
+      [
+        { role: "user", content: "hello" },
+        { role: "developer", content: "Repo rules." },
+        { role: "developer", content: "Answer in English." },
+        { role: "user", content: "and now?" },
+      ],
+      // No system message at all is legal by construction.
+      [{ role: "user", content: "hello" }],
+      // Content parts on an already-legal list are forwarded as written.
+      [
+        { role: "system", content: [{ type: "text", text: "You are Codex." }] },
+        { role: "user", content: [{ type: "text", text: "hello" }] },
+      ],
+    ]) {
+      const response = await fetch(`http://127.0.0.1:${forwarderPort}/v1/chat/completions`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${INTERNAL_KEY}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ model: curated.gatewayModel, messages }),
+      });
+      assert.equal(response.status, 200);
+      assert.equal(
+        JSON.stringify(upstreamRequests.at(-1).body.messages),
+        JSON.stringify(messages),
+      );
+    }
+  } finally {
+    await stopChild(forwarder);
+    await closeServer(upstream.server);
+    rmSync(curated.dir, { recursive: true, force: true });
+  }
+});
+
 test("API forwarder routes MiniMax M3 streaming tool calls with adaptive thinking", async () => {
   const upstreamRequests = [];
   const upstream = await mockServer(async (request, response) => {

@@ -320,6 +320,78 @@ function sanitizeChatToolHistory(messages, provider) {
     : repaired;
 }
 
+// The Qwen3.8 chat template counts a turn as one of these three roles. Probing
+// the live community endpoint with one-message-token requests measured the rule
+// exactly: `[system, user]` 200s, while `[user, system, user]`,
+// `[user, assistant, system]`, and `[system, system, user]` each 400 with
+// "System message must be at the beginning." So: at most one `system`, and it
+// must sit ahead of the first turn. `developer` is not a turn and is not
+// counted -- `[developer, system, user]`, `[user, developer, user]`, and
+// `[developer, developer, user]` all 200 -- which is why "the beginning" means
+// "before the first turn" rather than index 0, and why nothing here moves,
+// merges, or rewrites a developer message.
+const QWEN38_TURN_ROLES = new Set(["user", "assistant", "tool"]);
+
+function qwen38SystemOrderIsLegal(messages) {
+  let systems = 0;
+  let sawTurn = false;
+  for (const message of messages) {
+    const role = message?.role;
+    if (role === "system") {
+      systems += 1;
+      if (systems > 1 || sawTurn) return false;
+    } else if (QWEN38_TURN_ROLES.has(role)) {
+      sawTurn = true;
+    }
+  }
+  return true;
+}
+
+// Content arrives as a plain string or as OpenAI content parts, and Codex sends
+// both shapes on this route. Strings join with a blank line so the merged
+// instructions read as separate paragraphs; parts lists concatenate. A mixed
+// merge promotes the strings to text parts rather than stringifying the parts,
+// because flattening a parts list would drop everything that is not text.
+function combineQwen38SystemContent(contents) {
+  if (contents.every((content) => typeof content === "string")) return contents.join("\n\n");
+  return contents.flatMap((content) =>
+    typeof content === "string" ? [{ type: "text", text: content }] : content,
+  );
+}
+
+// A compatibility repair, and it is not free: instructions the caller placed
+// mid-conversation end up hoisted ahead of the first turn, so the model reads
+// them as opening context instead of as a later correction. That is a real
+// change in meaning, accepted only because this endpoint answers the original
+// ordering with a 400 and no answer at all. Every non-system message keeps its
+// position, and the merged text keeps the callers' relative order.
+function normalizeQwen38SystemMessages(messages) {
+  if (!Array.isArray(messages) || qwen38SystemOrderIsLegal(messages)) return messages;
+  const rest = [];
+  const contents = [];
+  let first;
+  let firstSystemSlot = -1;
+  for (const message of messages) {
+    if (message?.role !== "system") {
+      rest.push(message);
+      continue;
+    }
+    if (firstSystemSlot === -1) {
+      firstSystemSlot = rest.length;
+      first = message;
+    }
+    const content = message.content;
+    if (content === undefined || content === null || content === "") continue;
+    contents.push(content);
+  }
+  const firstTurn = rest.findIndex((message) => QWEN38_TURN_ROLES.has(message?.role));
+  // Ahead of the first turn, and no earlier than where the caller's own first
+  // system message sat -- so a leading `developer` message keeps its lead.
+  const insertAt = firstTurn === -1 ? firstSystemSlot : Math.min(firstSystemSlot, firstTurn);
+  const merged = { ...first, content: combineQwen38SystemContent(contents) };
+  return [...rest.slice(0, insertAt), merged, ...rest.slice(insertAt)];
+}
+
 function normalizeBody(buffer, contentType, route) {
   if (!buffer.length || !String(contentType || "").includes("application/json")) {
     const error = new Error("API-provider requests require a JSON body.");
@@ -541,6 +613,13 @@ function normalizeBody(buffer, contentType, route) {
     if (Array.isArray(payload.tools) && payload.tools.length === 0) delete payload.tools;
     if (!Array.isArray(payload.tools) || payload.tools.length === 0) {
       delete payload.tool_choice;
+    }
+    // Third measured refusal on the same endpoint: "System message must be at
+    // the beginning." A conversation that already satisfies the rule is left
+    // byte-identical -- see normalizeQwen38SystemMessages for the rule, the
+    // developer-role exemption, and what the repair costs.
+    if (Array.isArray(payload.messages)) {
+      payload.messages = normalizeQwen38SystemMessages(payload.messages);
     }
   } else if (model.requestProfile === "minimax-m3") {
     // MiniMax uses its own thinking control on the OpenAI-compatible
