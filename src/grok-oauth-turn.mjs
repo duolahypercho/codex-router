@@ -48,18 +48,16 @@ export function isProgressOnlyStop(
   return Number.isFinite(tokens) && tokens >= minOutputTokens;
 }
 
-export function shouldReleaseProgressOnlyHold(
-  state,
-  { maxText = DEFAULT_PROGRESS_ONLY_MAX_TEXT } = {},
-) {
-  if (state?.toolCalls?.length) return true;
-  return (state?.contentText || "").length > maxText;
-}
-
 // Prefer the retry only when it actually called a tool. A second short
 // status sentence is not an improvement; keep the first answer.
 export function shouldPreferRetryTurn(second) {
   return Boolean(second?.toolCalls?.length);
+}
+
+export function toolCallDeltas(turn) {
+  return (turn?.deltas || []).filter(
+    (delta) => Array.isArray(delta.tool_calls) && delta.tool_calls.length > 0,
+  );
 }
 
 export function withProgressOnlyNudge(chat) {
@@ -70,9 +68,14 @@ export function withProgressOnlyNudge(chat) {
   };
 }
 
+function markProgressOnlyUsage(usage) {
+  if (!usage) return { retries: 1, progress_only_retried: true };
+  return { ...usage, retries: 1, progress_only_retried: true };
+}
+
 export function mergeMappedUsage(first, second) {
-  if (!first) return second;
-  if (!second) return first;
+  if (!first) return markProgressOnlyUsage(second);
+  if (!second) return markProgressOnlyUsage(first);
   const prompt = (first.prompt_tokens || 0) + (second.prompt_tokens || 0);
   const completion = (first.completion_tokens || 0) + (second.completion_tokens || 0);
   const cached =
@@ -92,6 +95,7 @@ export function mergeMappedUsage(first, second) {
     completion_tokens: completion,
     total_tokens: prompt + completion,
     retries: 1,
+    progress_only_retried: true,
   };
   if (cached !== undefined) merged.prompt_tokens_details = { cached_tokens: cached };
   if (reasoning !== undefined) {

@@ -1926,6 +1926,7 @@ function observeSubagentOutcome(request, route, status, options = {}) {
         inputTokens: options.usage?.inputTokens,
         estimatedInputTokens: options.estimatedInputTokens,
         emptyCompletionRetried: options.emptyCompletionRetried,
+        progressOnlyRetried: options.progressOnlyRetried === true,
       },
     });
     if (!spawn?.exceeded) return;
@@ -2841,12 +2842,13 @@ async function handleResponses(request, response, requestUrl) {
       durationMs: Date.now() - startedAt,
       responseStartMs: upstreamLatencyMs,
       firstTokenMs,
-      retries: upstreamRetries,
       ...usage,
       estimatedInputTokens,
       ...toolResultAging,
+      retries: (upstreamRetries || 0) + (usage?.retries || 0) || undefined,
       ...(emptyCompletion ? { emptyCompletion: true } : {}),
       ...(emptyCompletionRetried ? { emptyCompletionRetried: true } : {}),
+      ...(usage?.progressOnlyRetried ? { progressOnlyRetried: true } : {}),
       ...(emptyCompletionUnrepairable ? { emptyCompletionUnrepairable: true } : {}),
       ...(guardReleasedForBudget ? { emptyCompletionGuardReleased: true } : {}),
       ...(failoverFrom ? { failoverFrom } : {}),
@@ -2859,6 +2861,7 @@ async function handleResponses(request, response, requestUrl) {
       usage,
       estimatedInputTokens,
       emptyCompletionRetried,
+      progressOnlyRetried: usage?.progressOnlyRetried === true,
     });
     usageRecorded = true;
     activityStatus = finalStatus;

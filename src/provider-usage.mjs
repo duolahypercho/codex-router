@@ -153,7 +153,8 @@ export function aggregateProviderUsage(events, { days = 90, now = Date.now() } =
       event.status < 400 &&
       !event.retries &&
       event.emptyCompletion !== true &&
-      event.emptyCompletionRetried !== true;
+      event.emptyCompletionRetried !== true &&
+      event.progressOnlyRetried !== true;
     // Detection can fail on a converted stream -- the first token is noticed
     // near the end, so thousands of tokens appear to arrive in milliseconds.
     // No served model streams anywhere near this fast, so treat it as a broken

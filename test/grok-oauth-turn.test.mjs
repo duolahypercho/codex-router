@@ -10,8 +10,8 @@ import {
   parseSseBlockEvent,
   requestOffersClientTools,
   shouldPreferRetryTurn,
-  shouldReleaseProgressOnlyHold,
   sseDataFromBlock,
+  toolCallDeltas,
   withProgressOnlyNudge,
 } from "../src/grok-oauth-turn.mjs";
 
@@ -185,18 +185,6 @@ test("requestOffersClientTools ignores hosted-only or empty tool lists", () => {
   );
 });
 
-test("shouldReleaseProgressOnlyHold trips on a tool call or long visible text", () => {
-  assert.equal(shouldReleaseProgressOnlyHold({ contentText: "short", toolCalls: [] }), false);
-  assert.equal(
-    shouldReleaseProgressOnlyHold({ contentText: "x".repeat(121), toolCalls: [] }),
-    true,
-  );
-  assert.equal(
-    shouldReleaseProgressOnlyHold({ contentText: "short", toolCalls: [{ id: "c1" }] }),
-    true,
-  );
-});
-
 test("shouldPreferRetryTurn keeps the first answer when the retry also has no tools", () => {
   assert.equal(shouldPreferRetryTurn({ toolCalls: [] }), false);
   assert.equal(shouldPreferRetryTurn({ toolCalls: [{ id: "c1" }] }), true);
@@ -238,4 +226,28 @@ test("mergeMappedUsage adds both attempts and marks retries", () => {
   assert.equal(merged.prompt_tokens_details.cached_tokens, 160);
   assert.equal(merged.completion_tokens_details.reasoning_tokens, 1610);
   assert.equal(merged.retries, 1);
+  assert.equal(merged.progress_only_retried, true);
+});
+
+test("mergeMappedUsage still marks retries when one attempt reported no usage", () => {
+  const onlySecond = mergeMappedUsage(undefined, {
+    prompt_tokens: 10,
+    completion_tokens: 4,
+    total_tokens: 14,
+  });
+  assert.equal(onlySecond.prompt_tokens, 10);
+  assert.equal(onlySecond.retries, 1);
+  assert.equal(onlySecond.progress_only_retried, true);
+});
+
+test("toolCallDeltas drops text and keeps only tool-call chunks", () => {
+  const deltas = toolCallDeltas({
+    deltas: [
+      { content: "Next I will update the deck." },
+      { tool_calls: [{ index: 0, function: { name: "exec_command", arguments: "{" } }] },
+      { content: "ignored retry prose" },
+    ],
+  });
+  assert.equal(deltas.length, 1);
+  assert.equal(deltas[0].tool_calls[0].function.name, "exec_command");
 });

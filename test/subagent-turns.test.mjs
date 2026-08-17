@@ -126,13 +126,22 @@ test("estimated, retry-doubled, and failed turns count as turns but not as token
   assert.equal(retried.turns, 2);
   assert.equal(retried.newInputTokens, 0);
 
+  const progressOnly = observeChildTurn({
+    spawnId: "spawn-d",
+    slug: "vendor/looper",
+    autoCompact: AUTO_COMPACT,
+    event: { status: 200, inputTokens: 5_000, progressOnlyRetried: true },
+  });
+  assert.equal(progressOnly.turns, 3);
+  assert.equal(progressOnly.newInputTokens, 0);
+
   const failed = observeChildTurn({
     spawnId: "spawn-d",
     slug: "vendor/looper",
     autoCompact: AUTO_COMPACT,
     event: { status: 503, inputTokens: 5_000 },
   });
-  assert.equal(failed.turns, 3);
+  assert.equal(failed.turns, 4);
   assert.equal(failed.newInputTokens, 0);
 
   // The next believable sample folds in the growth the skipped ones hid, so a

@@ -160,12 +160,15 @@ export function normalizeTokenUsage(value) {
       value.prompt_cache_hit_tokens,
   );
   const retries = tokenCount(value.retries);
+  const progressOnlyRetried =
+    value.progress_only_retried === true || value.progressOnlyRetried === true;
   return {
     inputTokens: inputTokens || 0,
     outputTokens: outputTokens || 0,
     totalTokens,
     ...(cachedInputTokens !== undefined ? { cachedInputTokens } : {}),
     ...(retries !== undefined && retries > 0 ? { retries } : {}),
+    ...(progressOnlyRetried ? { progressOnlyRetried: true } : {}),
   };
 }
 

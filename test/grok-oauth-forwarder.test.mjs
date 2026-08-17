@@ -660,10 +660,12 @@ test("retries a progress-only stop once and prefers a retry that calls tools", a
     const json = await resp.json();
     assert.equal(inbound, 2);
     assert.equal(json.choices[0].finish_reason, "tool_calls");
+    assert.equal(json.choices[0].message.content, "Next I will update the deck.");
     assert.equal(json.choices[0].message.tool_calls[0].function.name, "exec_command");
     assert.equal(json.usage.prompt_tokens, 105_882 + 106_000);
     assert.equal(json.usage.completion_tokens, 1_660 + 40);
     assert.equal(json.usage.retries, 1);
+    assert.equal(json.usage.progress_only_retried, true);
     const retryBody = JSON.parse(bodies[1]);
     assert.equal(retryBody.instructions, "You are Codex.");
     assert.match(JSON.stringify(retryBody.input), /Continue the same task by calling tools now/);
@@ -868,6 +870,175 @@ test("streams a long tool-offered answer before the upstream turn completes", as
     }
   } finally {
     releaseCompletion?.();
+    await stop(child);
+    await new Promise((r) => backend.server.close(r));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+async function readAll(resp) {
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let body = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    body += decoder.decode(value, { stream: true });
+  }
+  return body;
+}
+
+test("streams a short tool-offered answer before the upstream turn completes", async () => {
+  let releaseCompletion;
+  const completionGate = new Promise((resolve) => {
+    releaseCompletion = resolve;
+  });
+  const backend = await mockBackend(async (_req, res) => {
+    res.writeHead(200, { "Content-Type": "text/event-stream" });
+    res.write(sse([{ type: "response.output_text.delta", delta: "Done." }]));
+    await completionGate;
+    res.end(
+      sse([
+        {
+          type: "response.completed",
+          response: { usage: { input_tokens: 20, output_tokens: 5 } },
+        },
+      ]),
+    );
+  });
+  const port = await openPort();
+  const dir = mkdtempSync(path.join(os.tmpdir(), "grok-oauth-live-short-"));
+  const child = startForwarder(port, backend.port, writeSession(dir));
+  const base = `http://127.0.0.1:${port}`;
+  try {
+    await waitHealth(base, child);
+    const resp = await fetch(`${base}/v1/chat/completions`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({
+        model: "grok-4.6",
+        messages: [{ role: "user", content: "say done" }],
+        tools: [{ type: "function", function: { name: "exec_command", parameters: { type: "object" } } }],
+        stream: true,
+      }),
+    });
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let body = "";
+    let timeout;
+    await Promise.race([
+      (async () => {
+        while (!body.includes('"content":"Done."')) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          body += decoder.decode(value, { stream: true });
+        }
+      })(),
+      new Promise((_, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error("short visible output was buffered until completion")),
+          2_000,
+        );
+      }),
+    ]);
+    clearTimeout(timeout);
+    assert.match(body, /"content":"Done\."/);
+    releaseCompletion();
+    for (;;) {
+      const { done } = await reader.read();
+      if (done) break;
+    }
+  } finally {
+    releaseCompletion?.();
+    await stop(child);
+    await new Promise((r) => backend.server.close(r));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("appends retry tool-call deltas onto a live progress-only stream", async () => {
+  let inbound = 0;
+  const backend = await mockBackend(async (_req, res) => {
+    inbound += 1;
+    res.writeHead(200, { "Content-Type": "text/event-stream" });
+    res.end(sse(inbound === 1 ? PROGRESS_EVENTS : TOOL_EVENTS));
+  });
+  const port = await openPort();
+  const dir = mkdtempSync(path.join(os.tmpdir(), "grok-oauth-stream-retry-"));
+  const child = startForwarder(port, backend.port, writeSession(dir));
+  const base = `http://127.0.0.1:${port}`;
+  try {
+    await waitHealth(base, child);
+    const resp = await fetch(`${base}/v1/chat/completions`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({
+        model: "grok-4.6",
+        messages: [{ role: "user", content: "update the deck" }],
+        tools: [{ type: "function", function: { name: "exec_command", parameters: { type: "object" } } }],
+        stream: true,
+      }),
+    });
+    const body = await readAll(resp);
+    assert.equal(inbound, 2);
+    assert.match(body, /Next I will update the deck/);
+    assert.match(body, /exec_command/);
+    assert.match(body, /"finish_reason":"tool_calls"/);
+    assert.match(body, /"progress_only_retried":true/);
+  } finally {
+    await stop(child);
+    await new Promise((r) => backend.server.close(r));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("keeps the first streamed answer when the retry also has no tools", async () => {
+  let inbound = 0;
+  const backend = await mockBackend(async (_req, res) => {
+    inbound += 1;
+    res.writeHead(200, { "Content-Type": "text/event-stream" });
+    res.end(
+      sse(
+        inbound === 1
+          ? PROGRESS_EVENTS
+          : [
+              { type: "response.output_text.delta", delta: "Still thinking about it." },
+              {
+                type: "response.completed",
+                response: {
+                  usage: {
+                    input_tokens: 106_000,
+                    output_tokens: 500,
+                    output_tokens_details: { reasoning_tokens: 480 },
+                  },
+                },
+              },
+            ],
+      ),
+    );
+  });
+  const port = await openPort();
+  const dir = mkdtempSync(path.join(os.tmpdir(), "grok-oauth-stream-keep-"));
+  const child = startForwarder(port, backend.port, writeSession(dir));
+  const base = `http://127.0.0.1:${port}`;
+  try {
+    await waitHealth(base, child);
+    const resp = await fetch(`${base}/v1/chat/completions`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({
+        model: "grok-4.6",
+        messages: [{ role: "user", content: "update the deck" }],
+        tools: [{ type: "function", function: { name: "exec_command", parameters: { type: "object" } } }],
+        stream: true,
+      }),
+    });
+    const body = await readAll(resp);
+    assert.equal(inbound, 2);
+    assert.match(body, /Next I will update the deck/);
+    assert.doesNotMatch(body, /Still thinking about it/);
+    assert.match(body, /"finish_reason":"stop"/);
+  } finally {
     await stop(child);
     await new Promise((r) => backend.server.close(r));
     rmSync(dir, { recursive: true, force: true });

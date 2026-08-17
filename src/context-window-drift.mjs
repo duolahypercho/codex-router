@@ -35,11 +35,15 @@ function positiveInteger(value) {
 // retry -- and the remediation this check prints is "raise the window", so the
 // bad sample would talk an operator into doubling a correct number.
 // provider-usage.mjs drops these same events from its throughput math for the
-// same reason: a merged pair is not one measurement.
+// same reason: a merged pair is not one measurement. `progressOnlyRetried` is
+// the Grok OAuth equivalent: two billed attempts summed, not one measurement.
+// Bare `retries` is not excluded — a transport retry records only the
+// successful attempt's tokens.
 export function acceptedInputTokens(event) {
   if (event?.status !== 200) return undefined;
   if (event?.estimatedInputTokens !== undefined) return undefined;
   if (event?.emptyCompletionRetried === true) return undefined;
+  if (event?.progressOnlyRetried === true) return undefined;
   return positiveInteger(event?.inputTokens);
 }
 

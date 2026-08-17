@@ -30,7 +30,7 @@ import {
   parseSseBlockEvent,
   requestOffersClientTools,
   shouldPreferRetryTurn,
-  shouldReleaseProgressOnlyHold,
+  toolCallDeltas,
   withProgressOnlyNudge,
 } from "./grok-oauth-turn.mjs";
 import { VERSION } from "./version.mjs";
@@ -57,8 +57,6 @@ const PROGRESS_ONLY_MIN_OUTPUT_TOKENS = envNonNegativeInt(
   "CODEX_ROUTER_GROK_PROGRESS_ONLY_MIN_OUTPUT_TOKENS",
   DEFAULT_PROGRESS_ONLY_MIN_OUTPUT_TOKENS,
 );
-const MAX_PROGRESS_HOLD_BYTES = 1024 * 1024;
-const MAX_PROGRESS_HOLD_MS = 30_000;
 
 function envNonNegativeInt(name, fallback) {
   const parsed = Number(process.env[name]);
@@ -334,14 +332,13 @@ function dispatchSseBlock(rawEvent, handlers) {
   handlers(event);
 }
 
-async function consumeResponsesStream(upstreamBody, handlers, { onBytes } = {}) {
+async function consumeResponsesStream(upstreamBody, handlers) {
   const reader = upstreamBody.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
   for (;;) {
     const { value, done } = await reader.read();
     if (done) break;
-    if (value) onBytes?.(value.byteLength);
     buffer += decoder.decode(value, { stream: true });
     let boundary;
     while ((boundary = nextSseBoundary(buffer))) {
@@ -436,30 +433,20 @@ async function handleChatCompletions(request, response) {
 
   const id = `chatcmpl-${randomUUID()}`;
   const created = Math.floor(Date.now() / 1_000);
-  let turnState = createTurnState();
+  const turnState = createTurnState();
   let emittedDeltaCount = 0;
-  let holding = Boolean(mayRetry && wantsStream);
-  let holdBytes = 0;
-  let holdTimer;
 
-  const beginStream = () => {
-    if (!wantsStream || response.headersSent) return;
-    holding = false;
-    if (holdTimer) {
-      clearTimeout(holdTimer);
-      holdTimer = undefined;
-    }
+  if (wantsStream) {
     response.writeHead(200, {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache",
       Connection: "keep-alive",
     });
     response.write(OPENAI_ROLE_CHUNK(id, created, model, { role: "assistant", content: "" }));
-  };
+  }
 
   const emitPendingDeltas = () => {
-    if (!wantsStream || holding) return;
-    beginStream();
+    if (!wantsStream) return;
     while (emittedDeltaCount < turnState.deltas.length) {
       response.write(
         OPENAI_ROLE_CHUNK(id, created, model, turnState.deltas[emittedDeltaCount]),
@@ -468,42 +455,16 @@ async function handleChatCompletions(request, response) {
     }
   };
 
-  const releaseHold = () => {
-    if (!holding) return;
-    holding = false;
-    emitPendingDeltas();
-  };
-
-  const onEvent = (event) => {
+  await consumeResponsesStream(upstream.body, (event) => {
     applyResponsesEvent(turnState, event);
-    if (holding && shouldReleaseProgressOnlyHold(turnState, holdOptions)) {
-      releaseHold();
-      return;
-    }
     emitPendingDeltas();
-  };
-
-  if (wantsStream && !holding) beginStream();
-  if (holding) {
-    holdTimer = setTimeout(() => releaseHold(), MAX_PROGRESS_HOLD_MS);
-    if (typeof holdTimer.unref === "function") holdTimer.unref();
-  }
-
-  await consumeResponsesStream(upstream.body, onEvent, {
-    onBytes: (n) => {
-      holdBytes += n;
-      if (holding && holdBytes > MAX_PROGRESS_HOLD_BYTES) releaseHold();
-    },
   });
-  if (holdTimer) {
-    clearTimeout(holdTimer);
-    holdTimer = undefined;
-  }
 
   let turn = finalizeTurn(turnState);
+  emitPendingDeltas();
   let retried = false;
 
-  if (mayRetry && !response.headersSent && isProgressOnlyStop(turn, holdOptions)) {
+  if (mayRetry && isProgressOnlyStop(turn, holdOptions)) {
     const retryChat = withProgressOnlyNudge(chat);
     const retryRequest = toResponsesRequest(retryChat, { hostedSearchEnabled });
     let secondUpstream;
@@ -528,23 +489,30 @@ async function handleChatCompletions(request, response) {
       const second = finalizeTurn(secondState);
       const mergedUsage = mergeMappedUsage(turn.usage, second.usage);
       retried = true;
+      const preferTools = shouldPreferRetryTurn(second);
       console.error(
-        `[grok-oauth] progress-only-retried=true retries=1 model=${model} prefer=${shouldPreferRetryTurn(second) ? "retry" : "first"}`,
+        `[grok-oauth] progress-only-retried=true retries=1 model=${model} prefer=${preferTools ? "retry" : "first"}`,
       );
-      if (shouldPreferRetryTurn(second)) {
-        turn = { ...second, usage: mergedUsage || second.usage };
-        turnState = secondState;
-        emittedDeltaCount = 0;
+      if (preferTools) {
+        if (wantsStream) {
+          for (const delta of toolCallDeltas(second)) {
+            response.write(OPENAI_ROLE_CHUNK(id, created, model, delta));
+          }
+        }
+        turn = {
+          contentText: turn.contentText,
+          toolCalls: second.toolCalls,
+          usage: mergedUsage,
+          deltas: [...turn.deltas, ...toolCallDeltas(second)],
+          finishReason: "tool_calls",
+        };
       } else {
-        turn = { ...turn, usage: mergedUsage || turn.usage };
+        turn = { ...turn, usage: mergedUsage };
       }
     }
   }
 
-  emitPendingDeltas();
-
   if (wantsStream) {
-    beginStream();
     response.write(OPENAI_ROLE_CHUNK(id, created, model, {}, turn.finishReason));
     if (turn.usage) {
       response.write(

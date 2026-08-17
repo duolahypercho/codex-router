@@ -34,8 +34,20 @@ test("normalizes Responses and Chat Completions token usage", () => {
     { inputTokens: 9, outputTokens: 4, totalTokens: 13 },
   );
   assert.deepEqual(
-    normalizeTokenUsage({ prompt_tokens: 10, completion_tokens: 4, total_tokens: 14, retries: 1 }),
-    { inputTokens: 10, outputTokens: 4, totalTokens: 14, retries: 1 },
+    normalizeTokenUsage({
+      prompt_tokens: 10,
+      completion_tokens: 4,
+      total_tokens: 14,
+      retries: 1,
+      progress_only_retried: true,
+    }),
+    {
+      inputTokens: 10,
+      outputTokens: 4,
+      totalTokens: 14,
+      retries: 1,
+      progressOnlyRetried: true,
+    },
   );
 });
 

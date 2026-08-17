@@ -304,17 +304,16 @@ arguments without holding the full turn, so Codex sees the tool call instead of
 mistaking the preceding status text for the completed task.
 
 A remaining Grok OAuth shape is a genuine progress-only stop: the model
-reasons, emits a short status sentence, and never calls a tool. When the
-client actually offered tools, the forwarder holds the first relayed byte
-until it can classify that turn (or until the 1 MiB / 30 s hold budget), then
-retries once with a trailing user nudge. The first answer is kept unless the
-retry produces a tool call. Both attempts are billed; the usage object sums
-them and sets `retries: 1`, and the log line
-`progress-only-retried=true` is never gated on `MODEL_ROUTER_QUIET`. To pay
-once and see the raw first attempt, set
-`CODEX_ROUTER_GROK_PROGRESS_ONLY_RETRY=0`. The retry does not run when the
-request offered no tools, after the first byte has already been relayed, or
-after the hold budget trips.
+reasons, emits a short status sentence, and never calls a tool. Attempt 1
+still streams live. When the client actually offered tools, the forwarder
+retries once with a trailing user nudge and appends only the retry's tool
+calls onto the same open stream, so Codex sees the status sentence followed
+by the tool call. The first answer is kept if the retry also produces no
+tools. Both attempts are billed; the usage object sums them and sets
+`progress_only_retried: true`, and the log line `progress-only-retried=true`
+is never gated on `MODEL_ROUTER_QUIET`. To pay once and see the raw first
+attempt, set `CODEX_ROUTER_GROK_PROGRESS_ONLY_RETRY=0`. The retry does not
+run when the request offered no tools.
 
 The router holds the entire response until it knows the turn produced something.
 When nothing arrives it discards that attempt and retries the identical request
