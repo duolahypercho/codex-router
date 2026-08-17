@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- **Grok OAuth retries a genuine progress-only stop once, under the same
+  contract as empty-completion retry.** When the client offered tools and the
+  first turn ends with short visible text, no tool calls, and enough output
+  tokens to be reasoning-heavy, the forwarder holds the first byte, retries
+  once with a trailing user nudge (not a developer/system prefix rewrite),
+  keeps the first answer unless the retry actually calls a tool, sums both
+  attempts into `usage` with `retries: 1`, and logs the retry even when
+  `MODEL_ROUTER_QUIET=1`. The hold is capped at 1 MiB / 30 s and ends as soon
+  as a tool call or a long visible answer appears. Set
+  `CODEX_ROUTER_GROK_PROGRESS_ONLY_RETRY=0` to pay once and see the raw
+  first attempt. `dispatchSseBlock` now catches only `JSON.parse`, so a
+  handler bug is no longer swallowed as a malformed event.
+
 - **The Devin CLI probe no longer reports "unknown" for a Devin CLI that is
   installed and working.** `devinCliVersion` was the one call site out of
   twenty that took `command` and `args` from `spawnableCommand` and threw away

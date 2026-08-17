@@ -159,11 +159,13 @@ export function normalizeTokenUsage(value) {
       value.prompt_tokens_details?.cached_tokens ??
       value.prompt_cache_hit_tokens,
   );
+  const retries = tokenCount(value.retries);
   return {
     inputTokens: inputTokens || 0,
     outputTokens: outputTokens || 0,
     totalTokens,
     ...(cachedInputTokens !== undefined ? { cachedInputTokens } : {}),
+    ...(retries !== undefined && retries > 0 ? { retries } : {}),
   };
 }
 
@@ -177,11 +179,16 @@ export function mergeTokenUsage(first, second) {
     first.cachedInputTokens === undefined && second.cachedInputTokens === undefined
       ? undefined
       : (first.cachedInputTokens || 0) + (second.cachedInputTokens || 0);
+  const retries =
+    first.retries === undefined && second.retries === undefined
+      ? undefined
+      : (first.retries || 0) + (second.retries || 0);
   return {
     inputTokens: (first.inputTokens || 0) + (second.inputTokens || 0),
     outputTokens: (first.outputTokens || 0) + (second.outputTokens || 0),
     totalTokens: (first.totalTokens || 0) + (second.totalTokens || 0),
     ...(cachedInputTokens !== undefined ? { cachedInputTokens } : {}),
+    ...(retries !== undefined && retries > 0 ? { retries } : {}),
   };
 }
 

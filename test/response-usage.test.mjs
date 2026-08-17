@@ -33,6 +33,10 @@ test("normalizes Responses and Chat Completions token usage", () => {
     tokenUsageFromPayload({ usage: { prompt_tokens: 9, completion_tokens: 4, total_tokens: 13 } }),
     { inputTokens: 9, outputTokens: 4, totalTokens: 13 },
   );
+  assert.deepEqual(
+    normalizeTokenUsage({ prompt_tokens: 10, completion_tokens: 4, total_tokens: 14, retries: 1 }),
+    { inputTokens: 10, outputTokens: 4, totalTokens: 14, retries: 1 },
+  );
 });
 
 test("captures provider-reported prefix-cache hits when they exist", () => {

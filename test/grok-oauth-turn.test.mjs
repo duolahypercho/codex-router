@@ -5,7 +5,14 @@ import {
   applyResponsesEvent,
   collectResponsesEvents,
   createTurnState,
+  isProgressOnlyStop,
+  mergeMappedUsage,
+  parseSseBlockEvent,
+  requestOffersClientTools,
+  shouldPreferRetryTurn,
+  shouldReleaseProgressOnlyHold,
   sseDataFromBlock,
+  withProgressOnlyNudge,
 } from "../src/grok-oauth-turn.mjs";
 
 test("collectResponsesEvents keeps a function_call that only appears in output_item.done", () => {
@@ -134,4 +141,101 @@ test("sseDataFromBlock joins repeated data fields the way SSE requires", () => {
 test("sseDataFromBlock keeps a single data field", () => {
   assert.equal(sseDataFromBlock("data: [DONE]"), "[DONE]");
   assert.equal(sseDataFromBlock("event: ping"), undefined);
+});
+
+test("parseSseBlockEvent skips malformed JSON and leaves handlers to throw", () => {
+  assert.equal(parseSseBlockEvent("data: {not json"), undefined);
+  assert.equal(parseSseBlockEvent("data: [DONE]"), undefined);
+  assert.deepEqual(parseSseBlockEvent('data: {"type":"response.output_text.delta","delta":"x"}'), {
+    type: "response.output_text.delta",
+    delta: "x",
+  });
+});
+
+test("isProgressOnlyStop requires short text, no tools, and enough output tokens", () => {
+  const progress = {
+    contentText: "Next I will update the deck.",
+    toolCalls: [],
+    usage: { completion_tokens: 1660 },
+  };
+  assert.equal(isProgressOnlyStop(progress), true);
+  assert.equal(isProgressOnlyStop({ ...progress, toolCalls: [{ id: "c1" }] }), false);
+  assert.equal(
+    isProgressOnlyStop({ ...progress, contentText: "x".repeat(121) }),
+    false,
+  );
+  assert.equal(
+    isProgressOnlyStop({ ...progress, usage: { completion_tokens: 12 } }),
+    false,
+  );
+});
+
+test("requestOffersClientTools ignores hosted-only or empty tool lists", () => {
+  assert.equal(requestOffersClientTools({}), false);
+  assert.equal(requestOffersClientTools({ tools: [] }), false);
+  assert.equal(
+    requestOffersClientTools({ tools: [{ type: "web_search" }] }),
+    false,
+  );
+  assert.equal(
+    requestOffersClientTools({
+      tools: [{ type: "function", function: { name: "exec_command" } }],
+    }),
+    true,
+  );
+});
+
+test("shouldReleaseProgressOnlyHold trips on a tool call or long visible text", () => {
+  assert.equal(shouldReleaseProgressOnlyHold({ contentText: "short", toolCalls: [] }), false);
+  assert.equal(
+    shouldReleaseProgressOnlyHold({ contentText: "x".repeat(121), toolCalls: [] }),
+    true,
+  );
+  assert.equal(
+    shouldReleaseProgressOnlyHold({ contentText: "short", toolCalls: [{ id: "c1" }] }),
+    true,
+  );
+});
+
+test("shouldPreferRetryTurn keeps the first answer when the retry also has no tools", () => {
+  assert.equal(shouldPreferRetryTurn({ toolCalls: [] }), false);
+  assert.equal(shouldPreferRetryTurn({ toolCalls: [{ id: "c1" }] }), true);
+});
+
+test("withProgressOnlyNudge appends a user message so the instructions prefix stays put", () => {
+  const nudged = withProgressOnlyNudge({
+    model: "grok-4.6",
+    messages: [
+      { role: "system", content: "You are Codex." },
+      { role: "user", content: "update the deck" },
+    ],
+  });
+  assert.equal(nudged.messages[0].role, "system");
+  assert.equal(nudged.messages.at(-1).role, "user");
+  assert.match(nudged.messages.at(-1).content, /calling tools now/);
+});
+
+test("mergeMappedUsage adds both attempts and marks retries", () => {
+  const merged = mergeMappedUsage(
+    {
+      prompt_tokens: 100,
+      completion_tokens: 1660,
+      total_tokens: 1760,
+      prompt_tokens_details: { cached_tokens: 80 },
+      completion_tokens_details: { reasoning_tokens: 1600 },
+    },
+    {
+      prompt_tokens: 110,
+      completion_tokens: 40,
+      total_tokens: 150,
+      prompt_tokens_details: { cached_tokens: 80 },
+      completion_tokens_details: { reasoning_tokens: 10 },
+    },
+  );
+  assert.equal(merged.prompt_tokens, 210);
+  assert.equal(merged.completion_tokens, 1700);
+  assert.equal(merged.total_tokens, 1910);
+  assert.equal(merged.prompt_tokens_details.cached_tokens, 160);
+  assert.equal(merged.completion_tokens_details.reasoning_tokens, 1610);
+  assert.equal(merged.retries, 1);
 });
