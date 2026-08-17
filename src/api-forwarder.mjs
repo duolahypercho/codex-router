@@ -167,6 +167,12 @@ function coalesceAssistantMessages(messages) {
       previous?.role === "assistant" &&
       (Array.isArray(previous.tool_calls) || Array.isArray(message.tool_calls))
     ) {
+      if (
+        previous.reasoning_content === undefined &&
+        message.reasoning_content !== undefined
+      ) {
+        previous.reasoning_content = message.reasoning_content;
+      }
       combineAssistantContent(previous, message);
       if (Array.isArray(message.tool_calls) && message.tool_calls.length) {
         previous.tool_calls = [...(previous.tool_calls || []), ...message.tool_calls];
@@ -311,9 +317,29 @@ function sanitizeGeminiImageContent(messages) {
   });
 }
 
-function sanitizeChatToolHistory(messages, provider) {
+// DeepSeek thinking mode requires an assistant `reasoning_content` field on
+// every replayed assistant message, including messages whose reasoning was
+// empty. Preserve a real value when the upstream translator supplied one and
+// use the protocol-valid empty string when the history has no trace to replay.
+// The model profile is the capability declaration; this is intentionally not
+// a provider-wide rule because other models behind the same reseller may not
+// accept the field.
+function ensureDeepSeekReasoningContent(messages, model) {
+  if (model?.requestProfile !== "deepseek-thinking") return messages;
+  return messages.map((message) => {
+    if (message?.role !== "assistant" || message.reasoning_content !== undefined) {
+      return message;
+    }
+    return { ...message, reasoning_content: "" };
+  });
+}
+
+function sanitizeChatToolHistory(messages, provider, model) {
   if (!Array.isArray(messages)) return messages;
-  const repaired = ensureToolResultsForCalls(coalesceAssistantMessages(messages));
+  const repaired = ensureDeepSeekReasoningContent(
+    ensureToolResultsForCalls(coalesceAssistantMessages(messages)),
+    model,
+  );
   return isGeminiProvider(provider)
     ? ensureGeminiThoughtSignatures(sanitizeGeminiImageContent(repaired))
     : repaired;
@@ -379,7 +405,7 @@ function normalizeBody(buffer, contentType, route) {
   // Other provider payloads keep it unchanged.
   if (provider.id === "fireworks") delete payload.web_search_options;
   if (Array.isArray(payload.messages)) {
-    payload.messages = sanitizeChatToolHistory(payload.messages, provider);
+    payload.messages = sanitizeChatToolHistory(payload.messages, provider, model);
   }
   if (provider.authProfile === "github-copilot") {
     // This is native ChatGPT account metadata, not an upstream scheduling

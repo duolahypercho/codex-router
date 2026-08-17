@@ -3243,6 +3243,64 @@ test("API forwarder routes opencode Go chat, Messages, and Responses surfaces", 
   }
 });
 
+test("API forwarder replays DeepSeek reasoning fields for opencode Go V4", async () => {
+  const upstreamRequests = [];
+  const upstream = await mockServer(async (request, response) => {
+    upstreamRequests.push({ body: await bodyJson(request) });
+    json(response, 200, { choices: [] });
+  });
+  const forwarderPort = await openPort();
+  const forwarder = run("api-forwarder.mjs", {
+    CODEX_ROUTER_API_PORT: String(forwarderPort),
+    OPENCODE_GO_BASE_URL: `http://127.0.0.1:${upstream.port}/v1`,
+    OPENCODE_API_KEY: "TEST_OPENCODE_GO_API_KEY",
+    OPENCODE_GO_API_KEY: "TEST_OPENCODE_GO_API_KEY",
+    CODEX_ROUTER_QUIET: "1",
+  });
+  const toolCall = {
+    id: "call_deepseek",
+    type: "function",
+    function: { name: "exec_command", arguments: "{}" },
+  };
+
+  try {
+    await waitFor(`http://127.0.0.1:${forwarderPort}/health`, forwarder, {
+      Authorization: `Bearer ${INTERNAL_KEY}`,
+    });
+    const response = await fetch(
+      `http://127.0.0.1:${forwarderPort}/v1/chat/completions`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${INTERNAL_KEY}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "opencode-go-deepseek-v4-flash",
+          messages: [
+            { role: "user", content: "run it" },
+            { role: "assistant", tool_calls: [toolCall] },
+            { role: "tool", tool_call_id: "call_deepseek", content: "done" },
+            {
+              role: "assistant",
+              content: "continuing",
+              reasoning_content: "preserved reasoning",
+            },
+          ],
+        }),
+      },
+    );
+    assert.equal(response.status, 200);
+    const messages = upstreamRequests[0].body.messages;
+    assert.equal(upstreamRequests[0].body.model, "deepseek-v4-flash");
+    assert.equal(messages[1].reasoning_content, "");
+    assert.equal(messages[3].reasoning_content, "preserved reasoning");
+  } finally {
+    await stopChild(forwarder);
+    await closeServer(upstream.server);
+  }
+});
+
 test("API forwarder routes Command Code chat and Messages surfaces", async () => {
   const upstreamRequests = [];
   const upstream = await mockServer(async (request, response) => {
