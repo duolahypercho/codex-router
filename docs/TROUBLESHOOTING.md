@@ -303,13 +303,27 @@ line. The forwarder now accepts all three shapes and restores final tool
 arguments without holding the full turn, so Codex sees the tool call instead of
 mistaking the preceding status text for the completed task.
 
-A remaining Grok OAuth shape is a genuine progress-only stop: the model
-reasons, emits a short status sentence, and never calls a tool. Attempt 1
-still streams live. When the client actually offered tools, the forwarder
-retries once with a trailing user nudge and appends only the retry's tool
-calls onto the same open stream, so Codex sees the status sentence followed
-by the tool call. The first answer is kept if the retry also produces no
-tools. Both attempts are billed; the usage object sums them and sets
+A remaining Grok OAuth shape is a progress-only stop: the model reasons,
+emits a short status sentence, and never calls a tool. Attempt 1 still
+streams live. When the client actually offered tools, the forwarder retries
+once with a trailing user nudge and appends only the retry's tool calls onto
+the same open stream, so Codex sees the status sentence followed by the tool
+call. The first answer is kept if the retry also produces no tools.
+
+The trigger is a shape, not a diagnosis, and it is worth knowing which turns
+pay for it. Nothing in a finished turn distinguishes it from a stalled one, so
+**a completed task answered in one line is retried too** — "Yes, that is
+correct." with 1,500 reasoning-heavy output tokens looks exactly like "Next I
+will update the deck.". Because grok-4.6 reasons by default, the
+`output_tokens` floor is met on essentially every turn, so what actually
+decides is the 120-character text limit. That is why the nudge offers the
+no-tool branch first: a finished turn restates its answer, calls nothing, and
+keeps the first answer rather than being talked into a tool call the client
+would then run. The cost of a false positive is one extra round trip, not a
+wrong action. Raise `CODEX_ROUTER_GROK_PROGRESS_ONLY_MIN_OUTPUT_TOKENS` or
+lower `CODEX_ROUTER_GROK_PROGRESS_ONLY_MAX_TEXT` to fire less often.
+
+Both attempts are billed; the usage object sums them and sets
 `progress_only_retried: true`, and the log line `progress-only-retried=true`
 is never gated on `MODEL_ROUTER_QUIET`. To pay once and see the raw first
 attempt, set `CODEX_ROUTER_GROK_PROGRESS_ONLY_RETRY=0`. The retry does not

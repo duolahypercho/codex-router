@@ -2,18 +2,27 @@
 
 ## Unreleased
 
-- **Grok OAuth retries a genuine progress-only stop once, without holding
-  the first byte.** Attempt 1 streams live. If the client offered tools and
-  the turn ends with short visible text, no tool calls, and enough output
-  tokens to be reasoning-heavy, the forwarder retries once with a trailing
-  user nudge and *appends* only the retry's tool-call deltas plus
-  `finish_reason: "tool_calls"` onto the same open stream. The first answer
-  is kept when the retry also has no tools. Both attempts are summed into
-  `usage` with `progress_only_retried: true`; that marker is what
-  `acceptedInputTokens` excludes, not a bare transport `retries` count. The
-  retry log is not gated on `MODEL_ROUTER_QUIET`. Set
-  `CODEX_ROUTER_GROK_PROGRESS_ONLY_RETRY=0` to pay once and see the raw
-  first attempt. `dispatchSseBlock` now catches only `JSON.parse`.
+- **Grok OAuth retries a progress-only stop once, without holding the first
+  byte.** Attempt 1 streams live. If the client offered tools and the turn
+  ends with short visible text, no tool calls, and enough output tokens to be
+  reasoning-heavy, the forwarder retries once with a trailing user nudge and
+  *appends* only the retry's tool-call deltas plus `finish_reason:
+  "tool_calls"` onto the same open stream. The first answer is kept when the
+  retry also has no tools. Both attempts are summed into `usage` with
+  `progress_only_retried: true`; that marker is what `acceptedInputTokens`
+  excludes, not a bare transport `retries` count. The retry log is not gated
+  on `MODEL_ROUTER_QUIET`. Set `CODEX_ROUTER_GROK_PROGRESS_ONLY_RETRY=0` to
+  pay once and see the raw first attempt. `dispatchSseBlock` now catches only
+  `JSON.parse`.
+
+  The trigger is a shape and cannot be anything else: a finished task answered
+  in one line — "Yes, that is correct." after 1,500 reasoning tokens — is
+  indistinguishable from a turn that stopped early, so it is retried too. The
+  nudge therefore offers the no-tool branch first ("if that already completed
+  the task, restate the final answer and call no tool"), which routes the
+  finished case into keep-first. An imperative nudge makes such a turn invent
+  a tool call, and the forwarder would graft it onto the answer for the client
+  to run. A false positive now costs one round trip, not a wrong action.
 
 - **The Devin CLI probe no longer reports "unknown" for a Devin CLI that is
   installed and working.** `devinCliVersion` was the one call site out of

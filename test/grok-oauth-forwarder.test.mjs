@@ -668,7 +668,13 @@ test("retries a progress-only stop once and prefers a retry that calls tools", a
     assert.equal(json.usage.progress_only_retried, true);
     const retryBody = JSON.parse(bodies[1]);
     assert.equal(retryBody.instructions, "You are Codex.");
-    assert.match(JSON.stringify(retryBody.input), /Continue the same task by calling tools now/);
+    // The nudge offers the no-tool branch first so a finished turn can decline
+    // instead of inventing a call. See "a finished task ... declines".
+    assert.match(
+      JSON.stringify(retryBody.input),
+      /already completed the task, restate the final answer and call no tool/,
+    );
+    assert.match(JSON.stringify(retryBody.input), /Otherwise continue the same task now/);
     assert.match(child.testErrors(), /progress-only-retried=true/);
   } finally {
     await stop(child);
@@ -724,6 +730,85 @@ test("keeps the first progress-only answer when the retry also has no tools", as
     assert.equal(json.choices[0].finish_reason, "stop");
     assert.equal(json.usage.completion_tokens, 1_660 + 500);
     assert.equal(json.usage.retries, 1);
+  } finally {
+    await stop(child);
+    await new Promise((r) => backend.server.close(r));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// A finished task answered in one line is byte-for-byte the shape the trigger
+// looks for, so the retry fires on it and always will. What must not happen is
+// the retry manufacturing a tool call the model never meant to make and the
+// forwarder grafting it onto the answer -- the client would then run it. The
+// nudge's no-tool branch is what routes this into keep-first.
+test("a finished task answered in one line declines the retry instead of calling a tool", async () => {
+  let inbound = 0;
+  const bodies = [];
+  const backend = await mockBackend(async (req, res) => {
+    inbound += 1;
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    bodies.push(Buffer.concat(chunks).toString("utf8"));
+    res.writeHead(200, { "Content-Type": "text/event-stream" });
+    res.end(
+      sse(
+        inbound === 1
+          ? [
+              { type: "response.output_text.delta", delta: "Yes, that is correct." },
+              {
+                type: "response.completed",
+                response: {
+                  usage: {
+                    input_tokens: 5_000,
+                    output_tokens: 1_500,
+                    output_tokens_details: { reasoning_tokens: 1_490 },
+                  },
+                },
+              },
+            ]
+          : // The model takes the no-tool branch the nudge offers.
+            [
+              { type: "response.output_text.delta", delta: "Yes. Nothing further to do." },
+              {
+                type: "response.completed",
+                response: { usage: { input_tokens: 5_010, output_tokens: 60 } },
+              },
+            ],
+      ),
+    );
+  });
+  const port = await openPort();
+  const dir = mkdtempSync(path.join(os.tmpdir(), "grok-oauth-finished-"));
+  const child = startForwarder(port, backend.port, writeSession(dir));
+  const base = `http://127.0.0.1:${port}`;
+  try {
+    await waitHealth(base, child);
+    const resp = await fetch(`${base}/v1/chat/completions`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({
+        model: "grok-4.6",
+        messages: [{ role: "user", content: "Is the config right?" }],
+        tools: [
+          { type: "function", function: { name: "exec_command", parameters: { type: "object" } } },
+        ],
+        stream: false,
+      }),
+    });
+    const json = await resp.json();
+    assert.equal(inbound, 2);
+    assert.equal(json.choices[0].finish_reason, "stop");
+    assert.equal(json.choices[0].message.content, "Yes, that is correct.");
+    assert.equal(json.choices[0].message.tool_calls, undefined);
+    // Both attempts were billed, and the marker says so.
+    assert.equal(json.usage.prompt_tokens, 5_000 + 5_010);
+    assert.equal(json.usage.progress_only_retried, true);
+    const retryBody = JSON.parse(bodies[1]);
+    assert.match(
+      JSON.stringify(retryBody.input),
+      /already completed the task, restate the final answer and call no tool/,
+    );
   } finally {
     await stop(child);
     await new Promise((r) => backend.server.close(r));

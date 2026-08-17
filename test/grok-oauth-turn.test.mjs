@@ -200,7 +200,11 @@ test("withProgressOnlyNudge appends a user message so the instructions prefix st
   });
   assert.equal(nudged.messages[0].role, "system");
   assert.equal(nudged.messages.at(-1).role, "user");
-  assert.match(nudged.messages.at(-1).content, /calling tools now/);
+  // The no-tool branch comes first so a finished turn can decline rather than
+  // invent a call the client would run.
+  assert.match(nudged.messages.at(-1).content, /^If your previous message already completed/);
+  assert.match(nudged.messages.at(-1).content, /call no tool/);
+  assert.match(nudged.messages.at(-1).content, /Otherwise continue the same task now/);
 });
 
 test("mergeMappedUsage adds both attempts and marks retries", () => {

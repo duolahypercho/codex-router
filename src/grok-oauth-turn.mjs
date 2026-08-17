@@ -25,7 +25,16 @@ export function parseSseBlockEvent(rawEvent) {
 
 export const DEFAULT_PROGRESS_ONLY_MAX_TEXT = 120;
 export const DEFAULT_PROGRESS_ONLY_MIN_OUTPUT_TOKENS = 400;
-const PROGRESS_ONLY_NUDGE = "Continue the same task by calling tools now.";
+// The trigger below cannot tell a stalled turn from a finished one -- a task
+// that ends "Done." is byte-for-byte the same shape as one that stops after
+// "Next I will update the deck.". So the nudge must let the model decline. An
+// imperative "call tools now" makes a finished turn invent a tool call, and
+// `shouldPreferRetryTurn` would then graft that call onto the answer and the
+// client would run it. Offering the no-tool branch first routes the finished
+// case into keep-first instead.
+const PROGRESS_ONLY_NUDGE =
+  "If your previous message already completed the task, restate the final answer " +
+  "and call no tool. Otherwise continue the same task now by calling the tools you need.";
 
 export function requestOffersClientTools(chat) {
   return (
@@ -34,6 +43,11 @@ export function requestOffersClientTools(chat) {
   );
 }
 
+// Not a detector for "the model stalled" -- no such signal exists in the turn.
+// This matches the observable shape: short visible text, no client tool call,
+// and enough output tokens that the model clearly reasoned. A finished task
+// answered in one line matches too, which is why the retry has to be safe to
+// lose rather than accurate to fire. See PROGRESS_ONLY_NUDGE.
 export function isProgressOnlyStop(
   turn,
   {
