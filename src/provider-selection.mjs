@@ -17,6 +17,7 @@ import { targetCli } from "./target-integration.mjs";
 import { kimiOAuthStatus } from "./oauth-status.mjs";
 import { grokOAuthStatus } from "./grok-oauth-status.mjs";
 import { credentialStatus } from "./provider-credentials.mjs";
+import { poolAwareCredentialStatus } from "./credential-pool.mjs";
 
 const RETIRED_PROVIDER_ALIASES = new Map([["chatgpt-oauth", "grok-oauth"]]);
 
@@ -99,8 +100,18 @@ export function configuredProviderIds() {
       // Reachability and rate limits remain health questions, not reasons to
       // hide a provider from the picker.
       configured.push(provider.id);
-    } else if (credentialStatus(provider, { persistent: true }).configured) {
-      configured.push(provider.id);
+    } else {
+      // Credential pools are checked first: a provider with a pool is configured
+      // when the pool has at least one credential, even when the primary single
+      // file is absent. This preserves single-credential behaviour when no pool
+      // exists, while making pooled providers visible to the picker and to
+      // `ensure-configured`.
+      const pooled = poolAwareCredentialStatus(provider.id);
+      if (pooled) {
+        if (pooled.configured) configured.push(provider.id);
+      } else if (credentialStatus(provider, { persistent: true }).configured) {
+        configured.push(provider.id);
+      }
     }
   }
   return configured;

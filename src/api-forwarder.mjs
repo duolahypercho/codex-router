@@ -868,7 +868,19 @@ async function handleRequest(request, response) {
   // Resolved against the endpoint, not the provider: a per-model endpoint keeps
   // its credential under its own slug, so two custom models on two hosts never
   // share a key and one missing key never blocks the other model.
-  const credential = resolveProviderCredential(normalized.endpoint);
+  // Credential pools: if provider has a pool, select from it (strategy + cooldown aware); otherwise single-key path.
+  const poolIdForRequest = (() => {
+    try {
+      const prov = normalized.provider;
+      if (!prov?.credential?.file) return null;
+      if (prov.keyless || prov.authMode === "anonymous" || prov.authMode === "per-model") return null;
+      const cand = prov.id;
+      const canon = (prov.variantOf) ? prov.variantOf : cand;
+      return hasCredentialPool(canon) ? canon : null;
+    } catch { return null; }
+  })();
+  const poolCred = poolIdForRequest ? selectCredential(poolIdForRequest) : null;
+  const credential = poolCred ? { value: poolCred.value, source: poolCred.source, persistent: true } : resolveProviderCredential(normalized.endpoint);
   if (!credential) {
     const setup = credentialStatus(normalized.endpoint).setup;
     const credentialType = credentialLabel(normalized.endpoint);
@@ -1021,6 +1033,21 @@ async function handleRequest(request, response) {
   // this state once per turn to repeat what it already said.
   if (commandCode?.recheck && upstream.ok) {
     recordCommandCodeRoute(commandCode.id, credential.value, { providerApi: true });
+  }
+  // Credential pool bookkeeping: on success clear retry/cooldown, on pool-rotatable error mark exhausted.
+  if (poolIdForRequest && poolCred) {
+    if (upstream.ok) {
+      try { markCredentialSuccess(poolIdForRequest, poolCred.id); } catch {}
+    } else {
+      try {
+        const raw = await upstream.clone().text().catch(() => "");
+        markCredentialFailure(poolIdForRequest, poolCred.id, {
+          status: upstream.status,
+          bodyText: raw,
+          retryAfterSeconds: Number(upstream.headers.get("retry-after")),
+        });
+      } catch {}
+    }
   }
   await pipeResponse(upstream, response);
   recordUpstreamLimits(normalized, upstream);
