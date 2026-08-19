@@ -8,7 +8,7 @@ import { installStableFetchTransport } from "../src/fetch-transport.mjs";
 
 const SRC_DIR = fileURLToPath(new URL("../src", import.meta.url));
 
-test("the router disables HTTP/2 on its process-wide fetch dispatcher", () => {
+test("the router disables HTTP/2 on its direct process-wide fetch dispatcher", () => {
   const created = [];
   const installed = [];
 
@@ -21,6 +21,39 @@ test("the router disables HTTP/2 on its process-wide fetch dispatcher", () => {
 
   const dispatcher = installStableFetchTransport({
     AgentClass: FakeAgent,
+    env: {},
+    setDispatcher(value) {
+      installed.push(value);
+    },
+  });
+
+  assert.equal(created.length, 1);
+  assert.deepEqual(created[0].options, { allowH2: false });
+  assert.equal(dispatcher, created[0]);
+  assert.deepEqual(installed, [dispatcher]);
+});
+
+test("the router preserves the environment proxy in its stable fetch dispatcher", () => {
+  const created = [];
+  const installed = [];
+
+  class UnexpectedDirectAgent {
+    constructor() {
+      assert.fail("the direct dispatcher must not replace a configured proxy");
+    }
+  }
+
+  class FakeEnvProxyAgent {
+    constructor(options) {
+      this.options = options;
+      created.push(this);
+    }
+  }
+
+  const dispatcher = installStableFetchTransport({
+    AgentClass: UnexpectedDirectAgent,
+    EnvProxyClass: FakeEnvProxyAgent,
+    env: { HTTPS_PROXY: "http://127.0.0.1:7897" },
     setDispatcher(value) {
       installed.push(value);
     },

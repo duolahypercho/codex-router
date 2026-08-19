@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **Stable fetch transport preserves an explicitly configured environment
+  proxy.** `installStableFetchTransport` used to replace Node's
+  `NODE_USE_ENV_PROXY` dispatcher with a plain HTTP/1.1 agent, causing native
+  Responses traffic to bypass `HTTP_PROXY` / `HTTPS_PROXY`. It now installs an
+  `EnvHttpProxyAgent` when either proxy variable is set while retaining the
+  existing HTTP/2-disable policy.
+
 - **A Codex Stop hook continues grok-oauth mid-task stops once.** After a
   tool result, a short status sentence with no follow-up tool call used to
   hand control back. `hooks/codex-stop-grok-oauth.mjs` is a user-level Stop
