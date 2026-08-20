@@ -156,8 +156,11 @@ approval_policy = "never"
 
     const reenabled = run("enable", codexHome);
     assert.equal(reenabled.mode, "router");
+    const reenabledConfig = readFileSync(configPath, "utf8");
+    assert.match(reenabledConfig, /^model = "gpt-5\.6-sol"$/m);
+    assert.match(reenabledConfig, /^model_reasoning_effort = "xhigh"$/m);
     assert.equal(
-      (readFileSync(configPath, "utf8").match(/# BEGIN codex-router-managed/g) || [])
+      (reenabledConfig.match(/# BEGIN codex-router-managed/g) || [])
         .length,
       1,
     );

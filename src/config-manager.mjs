@@ -513,6 +513,20 @@ function replaceRootValue(contents, key, value) {
     .trimEnd();
 }
 
+// Enabling the router owns only its integration settings.  The selected Codex
+// model and reasoning effort belong to the user and must survive catalog
+// refreshes and reinstalls, even if a future managed-block rewrite changes
+// the surrounding root document.
+function preserveCodexDefaults(before, after) {
+  const { rootLines } = splitRoot(before);
+  let preserved = after;
+  for (const key of ["model", "model_reasoning_effort"]) {
+    const value = rootValue(rootLines, key);
+    if (value !== undefined) preserved = replaceRootValue(preserved, key, value);
+  }
+  return preserved;
+}
+
 function providerTableRanges(contents, providerId) {
   const { lines, headers } = scanTomlDocument(contents);
   const starts = headers.filter(({ path: header }) =>
@@ -1317,6 +1331,12 @@ if (existsSync(BACKUP_PATH)) protectPrivateFile(BACKUP_PATH);
 const previousSignedProviderModeState = pendingSignedProviderModeState
   ? readSignedProviderModeState()
   : undefined;
+// Normal installs and signed routing must never select a model on the user's
+// behalf. `login-free-enable` is intentionally excluded because its explicit
+// model argument is an opt-in model switch used by the control plane.
+if (command === "enable" || command === "signed-enable") {
+  next = preserveCodexDefaults(current, next);
+}
 if (pendingProviderModeState) writeProviderModeState(pendingProviderModeState);
 if (pendingSignedProviderModeState) writeSignedProviderModeState(pendingSignedProviderModeState);
 try {
