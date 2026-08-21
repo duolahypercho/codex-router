@@ -1,5 +1,5 @@
 --- a/venv/lib/python3.12/site-packages/litellm/responses/litellm_completion_transformation/streaming_iterator.py
-+++ .venv/lib/python3.12/site-packages/litellm/responses/litellm_completion_transformation/streaming_iterator.py	2026-08-21 22:33:19
++++ .venv/lib/python3.12/site-packages/litellm/responses/litellm_completion_transformation/streaming_iterator.py	2026-08-21 23:04:50
 @@ -82,6 +82,7 @@
          self.sent_output_item_done_event: bool = False
          self.sent_annotation_events: bool = False
@@ -8,7 +8,16 @@
          self.final_text: str = ""
          self._cached_item_id: str | None = None
          self._cached_response_id: str | None = None
-@@ -690,6 +691,8 @@
+@@ -125,6 +126,8 @@
+             return None
+ 
+     def _is_reasoning_end(self, chunk):
++        if not chunk.choices:
++            return False
+         delta = chunk.choices[0].delta
+ 
+         # if this indicates reasoning content, don't consider reasoning ended
+@@ -690,6 +693,8 @@
          if not self.litellm_model_response or isinstance(self.litellm_model_response, TextCompletionResponse):
              self.litellm_model_response = self.create_litellm_model_response()
          if self.litellm_model_response:
@@ -17,7 +26,16 @@
              # If tool calls exist, emit tool events before finishing/response.completed.
              if isinstance(self.litellm_model_response, ModelResponse):
                  self._queue_final_tool_call_done_events(self.litellm_model_response)
-@@ -806,6 +809,9 @@
+@@ -722,6 +727,8 @@
+         # Change: Never return a value, just enqueue output item events
+         if self.sent_output_item_added_event:
+             return
++        if not chunk.choices:
++            return
+         delta = chunk.choices[0].delta
+ 
+         self._sequence_number += 1
+@@ -806,6 +813,9 @@
                      chunk = await self.litellm_custom_stream_wrapper.__anext__()
                      if chunk is not None:
                          chunk = cast(ModelResponseStream, chunk)
@@ -27,7 +45,7 @@
                          self._ensure_output_item_for_chunk(chunk)
                          # Accumulate provider_specific_fields from chunk and delta
                          for src in (
-@@ -904,6 +910,9 @@
+@@ -904,6 +914,9 @@
                      return self._pending_tool_events.pop(0)
                  try:
                      chunk = self.litellm_custom_stream_wrapper.__next__()
@@ -37,3 +55,12 @@
                      self._ensure_output_item_for_chunk(chunk)
                      # Accumulate provider_specific_fields from chunk and delta
                      for src in (
+@@ -1033,6 +1046,8 @@
+ 
+         It's unclear how users expect litellm to translate multiple-choices-per-chunk to the responses API output.
+         """
++        if not choices:
++            return ""
+         choice = choices[0]
+         chat_completion_delta: ChatCompletionDelta = choice.delta
+         return chat_completion_delta.content or ""
