@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "slug": "deepseek/deepseek-v4-flash-vision-exp",
+      "gatewayModel": "deepseek-v4-flash-vision-exp",
+      "upstreamModel": "deepseek-v4-flash-vision-exp",
+      "provider": "deepseek",
+      "listed": true,
+      "displayName": "DeepSeek V4 Flash Vision Exp (API)",
+      "description": "DeepSeek V4 Flash Vision Exp via the DeepSeek API; fast reasoning, image understanding, tool calls, and a 1M context window.",
+      "priority": 6,
+      "defaultEffort": "high",
+      "reasoningLevels": [
+        {
+          "effort": "low",
+          "description": "Faster reasoning"
+        },
+        {
+          "effort": "high",
+          "description": "Deep reasoning"
+        },
+        {
+          "effort": "max",
+          "description": "Maximum reasoning for complex agent work"
+        }
+      ],
+      "contextWindow": 1048576,
+      "autoCompact": 900000,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "searchTool": {
+        "mode": "standalone"
+      },
+      "requestProfile": "deepseek-thinking",
+      "supportsReasoningSummaries": true,
+      "compHash": "deepseek-v4-flash-vision-exp-v1"
+    }
+  ]
+}
