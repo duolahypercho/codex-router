@@ -419,6 +419,7 @@ test("provider registry exposes configured API and OAuth model families", () => 
   const standaloneSearchSlugs = new Set([
     "deepseek/deepseek-v4-flash",
     "opencode-go/deepseek-v4-flash",
+    "opencode-go/glm-5.3",
     "xiaomi-mimo/mimo-v2.5",
     "zai-coding/glm-5.3",
   ]);
@@ -537,6 +538,13 @@ test("DeepSeek V4 Flash routes opt in to Codex standalone web search", () => {
   ]) {
     assert.deepEqual(MODEL_BY_SLUG.get(slug)?.searchTool, { mode: "standalone" }, slug);
   }
+});
+
+test("GLM-5.3 on OpenCode Go exposes its 1M context and standalone search", () => {
+  const model = MODEL_BY_SLUG.get("opencode-go/glm-5.3");
+  assert.equal(model?.contextWindow, 1_000_000);
+  assert.equal(model?.autoCompact, 900_000);
+  assert.deepEqual(model?.searchTool, { mode: "standalone" });
 });
 
 test("GLM-5.3 Coding Plan opts in to GPT-5.6 behavior, concise execution, and standalone search", () => {
