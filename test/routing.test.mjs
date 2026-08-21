@@ -1239,6 +1239,18 @@ test("router synthesizes routed compaction and safely replays it to native model
     await waitFor(`${routerBase(routerPort)}/models`, router);
     const input = [
       { type: "message", role: "user", content: [{ type: "input_text", text: "keep me" }] },
+      {
+        type: "custom_tool_call",
+        id: "ctc_non_opencode",
+        call_id: "call_non_opencode",
+        name: "apply_patch",
+        input: "*** Begin Patch\n*** End Patch",
+      },
+      {
+        type: "custom_tool_call_output",
+        call_id: "call_non_opencode",
+        output: "Done!",
+      },
     ];
     const v1 = await fetch(`${routerBase(routerPort)}/responses/compact`, {
       method: "POST",
@@ -1249,6 +1261,9 @@ test("router synthesizes routed compaction and safely replays it to native model
     const v1Body = await v1.json();
     assert.equal(v1Body.output.at(-1).role, "user");
     assert.match(v1Body.output.at(-1).content[0].text, /compact summary/);
+    assert.equal(gatewayRequests[0].body.input[1].type, "custom_tool_call");
+    assert.equal(gatewayRequests[0].body.input[1].name, "apply_patch");
+    assert.equal(gatewayRequests[0].body.input[2].type, "custom_tool_call_output");
 
     const v2 = await fetch(`${routerBase(routerPort)}/responses`, {
       method: "POST",
@@ -6054,5 +6069,952 @@ test("router repairs malformed Z.ai message envelopes after LiteLLM Responses tr
     await stopChild(router);
     await closeServer(gateway.server);
     rmSync(testRoot, { recursive: true, force: true });
+  }
+});
+
+function curatedZenFreeCompatibilityModels() {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "routing-opencode-tool-model-"));
+  const file = path.join(dir, "user-models.json");
+  const ox = {
+    slug: "opencode-free/x-preview-f-free",
+    gatewayModel: "opencode-free-x-preview-f-free",
+    upstreamModel: "x-preview-f-free",
+    provider: "opencode-free",
+  };
+  const muse = {
+    slug: "opencode-free-responses/muse-spark-1.2-contributor-free",
+    gatewayModel: "opencode-free-responses-muse-spark-1-2-contributor-free",
+    upstreamModel: "muse-spark-1.2-contributor-free",
+    provider: "opencode-free-responses",
+  };
+  writeFileSync(
+    file,
+    JSON.stringify({
+      version: 1,
+      models: [
+        {
+          ...ox,
+          listed: true,
+          displayName: "Ox Preview (compatibility fixture)",
+          description: "Test fixture.",
+          priority: 500,
+          defaultEffort: "high",
+          reasoningLevels: [{ effort: "high", description: "Deep reasoning" }],
+          contextWindow: 131072,
+          autoCompact: 110000,
+          inputModalities: ["text", "image"],
+          compHash: "opencode-free-x-preview-f-free-user-v1",
+        },
+        {
+          ...muse,
+          listed: true,
+          displayName: "Muse Contributor Free (compatibility fixture)",
+          description: "Test fixture.",
+          priority: 499,
+          defaultEffort: "high",
+          reasoningLevels: [{ effort: "high", description: "Deep reasoning" }],
+          contextWindow: 131072,
+          autoCompact: 110000,
+          inputModalities: ["text", "image"],
+          compHash: "opencode-free-responses-muse-contributor-free-user-v1",
+        },
+      ],
+    }),
+    "utf8",
+  );
+  return { dir, file, ox, muse };
+}
+
+function zenFreeCompatibilityTools() {
+  const recursiveSchema = {
+    type: "object",
+    properties: { task: { $ref: "#/$defs/task" } },
+    $defs: {
+      task: {
+        type: "object",
+        properties: {
+          label: { type: "string" },
+          child: { $ref: "#/$defs/task" },
+        },
+      },
+    },
+  };
+  return [
+    {
+      type: "custom",
+      name: "apply_patch",
+      description: "Apply a patch to the workspace.",
+      format: { type: "grammar", syntax: "lark", definition: "start: /.+/" },
+    },
+    {
+      type: "function",
+      name: "read_file",
+      parameters: {
+        type: "object",
+        properties: { path: { type: "string" } },
+        required: ["path"],
+      },
+    },
+    {
+      type: "namespace",
+      name: "collaboration",
+      tools: [
+        {
+          type: "function",
+          name: "spawn_agent",
+          description: "Spawn a worker.",
+          inputSchema: recursiveSchema,
+        },
+      ],
+    },
+    {
+      type: "namespace",
+      name: "apply_patch",
+      tools: [
+        {
+          type: "function",
+          name: "inspect",
+          inputSchema: { type: "object", properties: {} },
+        },
+      ],
+    },
+    {
+      type: "web_search",
+      search_content_types: ["text", "image"],
+      filters: { allowed_domains: ["example.com"] },
+    },
+    {
+      type: "web_search_preview",
+      search_content_types: ["text"],
+    },
+  ];
+}
+
+function openCodeAgentMessage(marker) {
+  return {
+    type: "agent_message",
+    id: `amsg_${marker}`,
+    author: "/root",
+    recipient: "/root/worker",
+    content: [
+      { type: "input_text", text: marker },
+      {
+        type: "input_image",
+        image_url: "data:image/png;base64,AA==",
+        detail: "original",
+      },
+    ],
+  };
+}
+
+function jsonFunctionCallResponse(name, patch, callId = "call_patch_json") {
+  return {
+    id: "resp_patch_json",
+    object: "response",
+    status: "completed",
+    output: [
+      {
+        type: "function_call",
+        id: "fc_patch_json",
+        call_id: callId,
+        name,
+        arguments: JSON.stringify({ input: patch }),
+      },
+    ],
+    usage: { input_tokens: 10, output_tokens: 4, total_tokens: 14 },
+  };
+}
+
+async function writeFragmentedFunctionCallSse(response, { model, patch }) {
+  const id = "fc_patch_sse";
+  const callId = "call_patch_sse";
+  const argumentsText = JSON.stringify({ input: patch });
+  const argumentDeltas = [];
+  for (let index = 0; index < argumentsText.length; index += 3) {
+    argumentDeltas.push(argumentsText.slice(index, index + 3));
+  }
+  const functionCall = {
+    type: "function_call",
+    id,
+    call_id: callId,
+    name: "apply_patch",
+    arguments: argumentsText,
+  };
+  const events = [
+    {
+      type: "response.output_item.added",
+      output_index: 0,
+      item: { ...functionCall, arguments: "", status: "in_progress" },
+    },
+    ...argumentDeltas.map((delta) => ({
+      type: "response.function_call_arguments.delta",
+      item_id: id,
+      output_index: 0,
+      delta,
+    })),
+    {
+      type: "response.function_call_arguments.done",
+      item_id: id,
+      output_index: 0,
+      arguments: argumentsText,
+    },
+    {
+      type: "response.output_item.done",
+      output_index: 0,
+      item: { ...functionCall, status: "completed" },
+    },
+    {
+      type: "response.completed",
+      response: {
+        id: "resp_patch_sse",
+        model,
+        status: "completed",
+        output: [functionCall],
+        usage: { input_tokens: 12, output_tokens: 5, total_tokens: 17 },
+      },
+    },
+  ];
+  const source = events
+    .map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`)
+    .join("");
+  response.writeHead(200, { "Content-Type": "text/event-stream" });
+  for (let index = 0; index < source.length; index += 5) {
+    response.write(source.slice(index, index + 5));
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  response.end();
+}
+
+test("Zen Free Muse and Ox bridge custom tools across JSON, history, SSE, and errors", async () => {
+  const curated = curatedZenFreeCompatibilityModels();
+  const { muse, ox } = curated;
+  const stateDir = path.join(curated.dir, "state");
+  mkdirSync(stateDir, { recursive: true });
+  writeFileSync(
+    path.join(stateDir, "enabled-providers.json"),
+    `${JSON.stringify({
+      version: 1,
+      providers: ["opencode-free", "opencode-go", "grok-api"],
+    })}\n`,
+  );
+  writeFileSync(
+    path.join(stateDir, "failover.json"),
+    `${JSON.stringify({
+      version: 1,
+      enabled: true,
+      chain: ["grok-api/grok-4.5"],
+    })}\n`,
+  );
+  writeFileSync(path.join(stateDir, "xai-api-key.secret"), "TEST_XAI_API_KEY\n");
+  const museSlug = muse.slug;
+  const museGatewayModel = muse.gatewayModel;
+  const jsonPatch =
+    "*** Begin Patch\n*** Update File: seed.txt\n@@\n-before\n+after\n*** End Patch";
+  const ssePatch =
+    "*** Begin Patch\n*** Update File: seed.txt\n@@\n-old\n+quoted=\\\"yes\\\" and snowman=☃\n*** End Patch";
+  const gatewayRequests = [];
+  const gateway = await mockServer(async (request, response) => {
+    if (request.method === "GET") {
+      json(response, 200, {
+        ok: true,
+        credential_present: true,
+        credential_source: "test",
+      });
+      return;
+    }
+    const body = await bodyJson(request);
+    gatewayRequests.push(body);
+    const inputText = JSON.stringify(body.input);
+    if (inputText.includes("REJECT_TOOL_REQUEST_400")) {
+      json(response, 400, {
+        error: {
+          message: "STRICT_TOOL_SCHEMA_SENTINEL",
+          type: "invalid_request_error",
+          param: "tools",
+        },
+      });
+      return;
+    }
+    if (
+      inputText.includes("FAILOVER_CONTROL_402") &&
+      body.model === ox.gatewayModel
+    ) {
+      json(response, 402, {
+        error: { message: "insufficient credits", type: "billing_error" },
+      });
+      return;
+    }
+    if (
+      inputText.includes("FAILOVER_CONTROL_402") &&
+      body.model === "grok-api-grok-4-5"
+    ) {
+      json(response, 200, {
+        id: "resp_failover_control",
+        object: "response",
+        status: "completed",
+        output: [
+          {
+            type: "message",
+            role: "assistant",
+            content: [{ type: "output_text", text: "eligible alternate reached" }],
+          },
+        ],
+      });
+      return;
+    }
+    if (inputText.includes("CONTEXT CHECKPOINT COMPACTION")) {
+      if (
+        body.input.some((item) =>
+          ["custom_tool_call", "custom_tool_call_output"].includes(item?.type),
+        )
+      ) {
+        json(response, 400, {
+          error: { message: "CUSTOM_HISTORY_NOT_BRIDGED", type: "invalid_request_error" },
+        });
+        return;
+      }
+      const compactCall = body.input.find(
+        (item) => item?.type === "function_call" && item.call_id === "call_compact_patch",
+      );
+      const compactOutput = body.input.find(
+        (item) =>
+          item?.type === "function_call_output" &&
+          item.call_id === "call_compact_patch",
+      );
+      if (!compactCall || !compactOutput) {
+        json(response, 400, {
+          error: { message: "FUNCTION_HISTORY_MISSING", type: "invalid_request_error" },
+        });
+        return;
+      }
+      json(response, 200, {
+        id: "resp_compact_tools",
+        object: "response",
+        status: "completed",
+        output: [
+          {
+            type: "message",
+            role: "assistant",
+            content: [{ type: "output_text", text: "custom history compacted" }],
+          },
+        ],
+        usage: { input_tokens: 30, output_tokens: 3, total_tokens: 33 },
+      });
+      return;
+    }
+    if (
+      body.model === ox.gatewayModel &&
+      inputText.includes("OX_TEXT_ENVELOPE")
+    ) {
+      response.writeHead(200, { "Content-Type": "text/event-stream" });
+      const events = [
+        {
+          type: "response.output_item.added",
+          output_index: 0,
+          model: ox.gatewayModel,
+          item: { id: "rs_ox", type: "reasoning", status: "in_progress", summary: [] },
+        },
+        {
+          type: "response.output_item.done",
+          output_index: 0,
+          model: ox.gatewayModel,
+          item: { id: "rs_ox", type: "reasoning", status: "completed", summary: [] },
+        },
+        {
+          type: "response.output_text.delta",
+          output_index: 0,
+          content_index: 0,
+          item_id: "msg_ox",
+          model: ox.gatewayModel,
+          delta: "OX_OK",
+        },
+      ];
+      response.end(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""));
+      return;
+    }
+    if (body.model === ox.gatewayModel) {
+      await writeFragmentedFunctionCallSse(response, {
+        model: ox.gatewayModel,
+        patch: ssePatch,
+      });
+      return;
+    }
+    if (
+      Array.isArray(body.input) &&
+      body.input.some(
+        (item) =>
+          item?.type === "function_call_output" &&
+          item.call_id === "call_patch_json",
+      )
+    ) {
+      json(response, 200, {
+        id: "resp_readback",
+        object: "response",
+        status: "completed",
+        output: [
+          {
+            type: "message",
+            role: "assistant",
+            content: [{ type: "output_text", text: "readback confirmed" }],
+          },
+        ],
+        usage: { input_tokens: 20, output_tokens: 2, total_tokens: 22 },
+      });
+      return;
+    }
+    const forcedFunction =
+      body.tool_choice?.type === "function" ? body.tool_choice.name : "apply_patch";
+    json(response, 200, jsonFunctionCallResponse(forcedFunction, jsonPatch));
+  });
+  const routerPort = await openPort();
+  const router = run("router.mjs", {
+    CODEX_ROUTER_PORT: String(routerPort),
+    CODEX_ROUTER_STATE_DIR: stateDir,
+    CODEX_ROUTER_SHOW_ALL_MODELS: "0",
+    MODEL_ROUTER_USER_MODELS: curated.file,
+    CODEX_ROUTER_GATEWAY_BASE_URL: `http://127.0.0.1:${gateway.port}/v1`,
+    CODEX_ROUTER_GATEWAY_HEALTH_URL: `http://127.0.0.1:${gateway.port}/health`,
+    CODEX_ROUTER_API_HEALTH_URL: `http://127.0.0.1:${gateway.port}/health`,
+    XAI_API_KEY: "TEST_XAI_API_KEY",
+    CODEX_ROUTER_QUIET: "1",
+  });
+
+  const send = (payload, signal) =>
+    fetch(`${routerBase(routerPort)}/responses`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      signal,
+    });
+
+  try {
+    await waitFor(`${routerBase(routerPort)}/models`, router);
+
+    const first = await send({
+      model: museSlug,
+      stream: false,
+      tool_choice: { type: "custom", name: "apply_patch" },
+      tools: zenFreeCompatibilityTools(),
+      input: [openCodeAgentMessage("MUSE_JSON")],
+    });
+    assert.equal(first.status, 200, router.testErrors());
+    const firstPayload = await first.json();
+    assert.deepEqual(firstPayload.output[0], {
+      type: "custom_tool_call",
+      id: "fc_patch_json",
+      call_id: "call_patch_json",
+      name: "apply_patch",
+      input: jsonPatch,
+    });
+
+    const museRequest = gatewayRequests[0];
+    assert.equal(museRequest.model, museGatewayModel);
+    assert.deepEqual(museRequest.tool_choice, {
+      type: "function",
+      name: "codex_custom_apply_patch",
+    });
+    const musePatchTool = museRequest.tools.find(
+      (tool) => tool.type === "function" && tool.name === "codex_custom_apply_patch",
+    );
+    assert.deepEqual(musePatchTool.parameters.required, ["input"]);
+    assert.equal(musePatchTool.parameters.properties.input.type, "string");
+    assert.equal(musePatchTool.format, undefined);
+    assert.deepEqual(
+      museRequest.tools.find((tool) => tool.name === "read_file").parameters.required,
+      ["path"],
+    );
+    const museNamespace = museRequest.tools.find(
+      (tool) => tool.type === "namespace" && tool.name === "collaboration",
+    );
+    assert.ok(museNamespace, "Responses provider lost the native namespace");
+    const museSpawn = museNamespace.tools.find((tool) => tool.name === "spawn_agent");
+    assert.equal(museSpawn.inputSchema.properties.task.$ref, "#/$defs/task");
+    assert.deepEqual(museSpawn.inputSchema.$defs.task.properties.child, {});
+    assert.ok(
+      museRequest.tools.some(
+        (tool) => tool.type === "namespace" && tool.name === "apply_patch",
+      ),
+      "Responses provider lost the colliding native namespace",
+    );
+    assert.equal(
+      "search_content_types" in
+        museRequest.tools.find((tool) => tool.type === "web_search"),
+      false,
+    );
+    assert.deepEqual(
+      museRequest.tools.find((tool) => tool.type === "web_search_preview")
+        .search_content_types,
+      ["text"],
+    );
+    const museMessage = museRequest.input.find(
+      (item) =>
+        item.type === "message" &&
+        item.role === "user" &&
+        item.content?.some((part) => part.text === "MUSE_JSON"),
+    );
+    assert.ok(museMessage, "agent_message was not converted on the owned provider route");
+    assert.equal(
+      museMessage.content.find((part) => part.type === "input_image").detail,
+      "auto",
+    );
+
+    const followup = await send({
+      model: museSlug,
+      stream: false,
+      tools: zenFreeCompatibilityTools(),
+      input: [
+        { type: "message", role: "user", content: "Edit the seed." },
+        firstPayload.output[0],
+        {
+          type: "custom_tool_call_output",
+          call_id: "call_patch_json",
+          output: "Done!",
+        },
+      ],
+    });
+    assert.equal(followup.status, 200, router.testErrors());
+    const followupPayload = await followup.json();
+    assert.equal(followupPayload.output[0].type, "message");
+    assert.equal(followupPayload.output[0].content[0].text, "readback confirmed");
+    const forwardedHistory = gatewayRequests[1].input;
+    const functionCall = forwardedHistory.find(
+      (item) => item.type === "function_call" && item.call_id === "call_patch_json",
+    );
+    assert.equal(functionCall.name, "codex_custom_apply_patch");
+    assert.deepEqual(JSON.parse(functionCall.arguments), { input: jsonPatch });
+    assert.equal(
+      forwardedHistory.find((item) => item.call_id === "call_patch_json" && "output" in item)
+        .type,
+      "function_call_output",
+    );
+
+    const oxResponse = await send({
+      model: ox.slug,
+      stream: true,
+      tool_choice: "required",
+      tools: zenFreeCompatibilityTools(),
+      input: [
+        openCodeAgentMessage("OX_SSE"),
+        {
+          type: "custom_tool_call",
+          id: "ctc_prior_ox",
+          call_id: "call_prior_ox",
+          name: "apply_patch",
+          input: "*** Begin Patch\n*** End Patch",
+        },
+        {
+          type: "custom_tool_call_output",
+          call_id: "call_prior_ox",
+          output: "Done!",
+        },
+      ],
+    });
+    assert.equal(oxResponse.status, 200, router.testErrors());
+    const oxText = await oxResponse.text();
+    const oxEvents = oxText
+      .split(/\r?\n/)
+      .filter((line) => line.startsWith("data: {"))
+      .map((line) => JSON.parse(line.slice(5).trim()));
+    assert.equal(oxEvents[0].item.type, "custom_tool_call");
+    assert.equal(oxEvents[0].item.name, "apply_patch");
+    assert.equal(
+      oxEvents
+        .filter((event) => event.type === "response.custom_tool_call_input.delta")
+        .map((event) => event.delta)
+        .join(""),
+      ssePatch,
+    );
+    assert.equal(
+      oxEvents.find((event) => event.type === "response.custom_tool_call_input.done")
+        .input,
+      ssePatch,
+    );
+    assert.equal(
+      oxEvents.find((event) => event.type === "response.output_item.done").item.input,
+      ssePatch,
+    );
+    assert.equal(
+      oxEvents.find((event) => event.type === "response.completed").response.output[0]
+        .type,
+      "custom_tool_call",
+    );
+    assert.doesNotMatch(oxText, /response\.function_call_arguments/);
+    assert.match(oxText, /event: response\.custom_tool_call_input\.delta/);
+
+    const oxRequest = gatewayRequests[2];
+    assert.equal(oxRequest.model, ox.gatewayModel);
+    assert.equal(oxRequest.tool_choice, "required");
+    const flattenedSpawn = oxRequest.tools.find(
+      (tool) => tool.name === "collaboration__spawn_agent",
+    );
+    assert.ok(flattenedSpawn, "Chat provider did not receive the flattened namespace tool");
+    assert.equal(flattenedSpawn.parameters.properties.task.$ref, "#/$defs/task");
+    assert.deepEqual(flattenedSpawn.parameters.$defs.task.properties.child, {});
+    assert.equal(flattenedSpawn.inputSchema.properties.task.$ref, "#/$defs/task");
+    assert.deepEqual(flattenedSpawn.inputSchema.$defs.task.properties.child, {});
+    assert.equal(
+      oxRequest.input.find((item) => item.call_id === "call_prior_ox").type,
+      "function_call",
+    );
+    assert.equal(
+      oxRequest.input.find(
+        (item) => item.call_id === "call_prior_ox" && "output" in item,
+      ).type,
+      "function_call_output",
+    );
+
+    // LiteLLM 1.96's Chat -> Responses bridge consumes its only
+    // output_item.added marker on the reasoning item, then starts assistant
+    // text without a message or content-part envelope. That live Ox shape must
+    // be repaired before Codex sees the first text delta.
+    const oxTextResponse = await send({
+      model: ox.slug,
+      stream: true,
+      input: [{ type: "message", role: "user", content: "OX_TEXT_ENVELOPE" }],
+    });
+    assert.equal(oxTextResponse.status, 200, router.testErrors());
+    const oxTextEvents = (await oxTextResponse.text())
+      .split(/\r?\n/)
+      .filter((line) => line.startsWith("data: {"))
+      .map((line) => JSON.parse(line.slice(5).trim()));
+    const oxTextDelta = oxTextEvents.findIndex(
+      (event) => event.type === "response.output_text.delta",
+    );
+    assert.equal(oxTextEvents[oxTextDelta - 2]?.type, "response.output_item.added");
+    assert.equal(oxTextEvents[oxTextDelta - 2]?.item?.type, "message");
+    assert.equal(oxTextEvents[oxTextDelta - 1]?.type, "response.content_part.added");
+    assert.equal(oxTextEvents[oxTextDelta]?.output_index, 1);
+
+    const compactPatch = "*** Begin Patch\n*** Update File: seed.txt\n*** End Patch";
+    const beforeCompaction = gatewayRequests.length;
+    const compacted = await fetch(`${routerBase(routerPort)}/responses/compact`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: museSlug,
+        input: [
+          { type: "message", role: "user", content: "Preserve the edit history." },
+          {
+            type: "custom_tool_call",
+            id: "ctc_compact",
+            call_id: "call_compact_patch",
+            name: "apply_patch",
+            input: compactPatch,
+          },
+          {
+            type: "custom_tool_call_output",
+            call_id: "call_compact_patch",
+            output: "Done!",
+          },
+        ],
+      }),
+    });
+    assert.equal(compacted.status, 200, router.testErrors());
+    const compactedPayload = await compacted.json();
+    assert.equal(compactedPayload.output.at(-1).role, "user");
+    assert.match(compactedPayload.output.at(-1).content[0].text, /custom history compacted/);
+    const compactRequest = gatewayRequests[beforeCompaction];
+    assert.equal(compactRequest.model, museGatewayModel);
+    assert.deepEqual(compactRequest.tools, []);
+    const compactFunctionCall = compactRequest.input.find(
+      (item) => item.call_id === "call_compact_patch" && item.type === "function_call",
+    );
+    assert.deepEqual(JSON.parse(compactFunctionCall.arguments), { input: compactPatch });
+    assert.equal(
+      compactRequest.input.find(
+        (item) =>
+          item.call_id === "call_compact_patch" && item.type === "function_call_output",
+      ).output,
+      "Done!",
+    );
+
+    const beforeRejection = gatewayRequests.length;
+    const rejected = await send({
+      model: ox.slug,
+      stream: false,
+      tools: zenFreeCompatibilityTools(),
+      input: [{ type: "message", role: "user", content: "REJECT_TOOL_REQUEST_400" }],
+    });
+    assert.equal(rejected.status, 400);
+    const rejection = await rejected.json();
+    assert.match(rejection.error.message, /STRICT_TOOL_SCHEMA_SENTINEL/);
+    assert.equal(rejection.error.code, "400");
+    assert.equal(gatewayRequests.length, beforeRejection + 1);
+    assert.equal(gatewayRequests.at(-1).model, ox.gatewayModel);
+    assert.ok(
+      !gatewayRequests
+        .slice(beforeRejection)
+        .some((request) => request.model === "grok-api-grok-4-5"),
+      "generic HTTP 400 contacted the configured failover route",
+    );
+
+    // Positive control: the same selected, credentialed, v2-capable alternate
+    // is genuinely eligible when the provider reports exhausted usage. This
+    // keeps the preceding no-failover assertion from passing vacuously.
+    const beforeControl = gatewayRequests.length;
+    const control = await send({
+      model: ox.slug,
+      stream: false,
+      tools: zenFreeCompatibilityTools(),
+      input: [{ type: "message", role: "user", content: "FAILOVER_CONTROL_402" }],
+    });
+    assert.equal(control.status, 200, router.testErrors());
+    assert.deepEqual(
+      gatewayRequests.slice(beforeControl).map((request) => request.model),
+      [ox.gatewayModel, "grok-api-grok-4-5"],
+    );
+  } finally {
+    await stopChild(router);
+    await closeServer(gateway.server);
+    rmSync(curated.dir, { recursive: true, force: true });
+  }
+});
+
+test("Go, paid Zen, and other Free routes keep compatibility-sensitive wire shapes", async () => {
+  const testRoot = mkdtempSync(path.join(os.tmpdir(), "routing-opencode-identity-"));
+  const stateDir = path.join(testRoot, "state");
+  mkdirSync(stateDir, { recursive: true });
+  const specs = [
+    ["opencode-go", "identity-chat"],
+    ["opencode-go-messages", "identity-messages"],
+    ["opencode-go-responses", "identity-responses"],
+    ["opencode-zen", "identity-paid-zen"],
+    ["opencode-free", "identity-other-free"],
+  ].map(([provider, upstreamModel], index) => ({
+    slug: `${provider}/${upstreamModel}`,
+    gatewayModel: `${provider}-${upstreamModel}`,
+    upstreamModel,
+    provider,
+    listed: true,
+    displayName: `${provider} identity fixture`,
+    description: "Compatibility boundary fixture.",
+    priority: 450 - index,
+    defaultEffort: "high",
+    reasoningLevels: [{ effort: "high", description: "Deep reasoning" }],
+    contextWindow: 131072,
+    autoCompact: 110000,
+    inputModalities: ["text", "image"],
+    compHash: `${provider}-${upstreamModel}-identity-v1`,
+  }));
+  const userModels = path.join(testRoot, "user-models.json");
+  writeFileSync(userModels, JSON.stringify({ version: 1, models: specs }), "utf8");
+  writeFileSync(
+    path.join(stateDir, "enabled-providers.json"),
+    `${JSON.stringify({ version: 1, providers: ["opencode-go", "opencode-free"] })}\n`,
+  );
+  writeFileSync(path.join(stateDir, "opencode-go-api-key.secret"), "TEST_OPENCODE_KEY\n");
+
+  const gatewayRequests = [];
+  const gateway = await mockServer(async (request, response) => {
+    if (request.method === "GET") {
+      json(response, 200, { ok: true, credential_present: true });
+      return;
+    }
+    const body = await bodyJson(request);
+    gatewayRequests.push(body);
+    await writeFragmentedFunctionCallSse(response, {
+      model: body.model,
+      patch: "*** Begin Patch\n*** End Patch",
+    });
+  });
+  const routerPort = await openPort();
+  const router = run("router.mjs", {
+    CODEX_ROUTER_PORT: String(routerPort),
+    CODEX_ROUTER_STATE_DIR: stateDir,
+    MODEL_ROUTER_USER_MODELS: userModels,
+    CODEX_ROUTER_GATEWAY_BASE_URL: `http://127.0.0.1:${gateway.port}/v1`,
+    CODEX_ROUTER_GATEWAY_HEALTH_URL: `http://127.0.0.1:${gateway.port}/health`,
+    CODEX_ROUTER_API_HEALTH_URL: `http://127.0.0.1:${gateway.port}/health`,
+    CODEX_ROUTER_QUIET: "1",
+  });
+  const recursiveSchema = {
+    type: "object",
+    properties: { node: { $ref: "#/$defs/node" } },
+    $defs: {
+      node: {
+        type: "object",
+        properties: { child: { $ref: "#/$defs/node" } },
+      },
+    },
+  };
+  const customChoice = { type: "custom", name: "apply_patch" };
+  const customCall = {
+    type: "custom_tool_call",
+    id: "ctc_identity",
+    call_id: "call_identity",
+    name: "apply_patch",
+    input: "*** Begin Patch\n*** End Patch",
+  };
+
+  try {
+    await waitFor(`${routerBase(routerPort)}/models`, router);
+    for (const spec of specs) {
+      const response = await fetch(`${routerBase(routerPort)}/responses`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: spec.slug,
+          stream: true,
+          tool_choice: customChoice,
+          tools: [
+            {
+              type: "custom",
+              name: "apply_patch",
+              format: { type: "grammar", syntax: "lark", definition: "start: /.+/" },
+            },
+            { type: "function", name: "recursive", parameters: recursiveSchema },
+            { type: "web_search", search_content_types: ["text", "image"] },
+          ],
+          input: [
+            {
+              type: "agent_message",
+              role: "assistant",
+              content: [
+                { type: "input_text", text: `identity ${spec.provider}` },
+                {
+                  type: "input_image",
+                  image_url: "data:image/png;base64,AAA",
+                  detail: "original",
+                },
+              ],
+            },
+            customCall,
+            {
+              type: "custom_tool_call_output",
+              call_id: "call_identity",
+              output: "Done!",
+            },
+          ],
+        }),
+      });
+      assert.equal(response.status, 200, `${spec.provider}: ${router.testErrors()}`);
+      const responseText = await response.text();
+      assert.match(responseText, /response\.function_call_arguments\.delta/);
+      assert.doesNotMatch(responseText, /response\.custom_tool_call_input/);
+
+      const forwarded = gatewayRequests.at(-1);
+      assert.equal(forwarded.model, spec.gatewayModel);
+      assert.deepEqual(forwarded.tool_choice, customChoice);
+      assert.equal(
+        forwarded.tools.find((tool) => tool.name === "apply_patch").type,
+        "custom",
+      );
+      const recursive = forwarded.tools.find((tool) => tool.name === "recursive");
+      assert.equal(recursive.parameters.$defs.node.properties.child.$ref, "#/$defs/node");
+      assert.deepEqual(
+        forwarded.tools.find((tool) => tool.type === "web_search").search_content_types,
+        ["text", "image"],
+      );
+      assert.equal(forwarded.input[0].type, "agent_message");
+      assert.equal(forwarded.input[0].content[1].detail, "original");
+      assert.deepEqual(forwarded.input[1], customCall);
+      assert.equal(forwarded.input[2].type, "custom_tool_call_output");
+    }
+  } finally {
+    await stopChild(router);
+    await closeServer(gateway.server);
+    rmSync(testRoot, { recursive: true, force: true });
+  }
+});
+
+test("canceling a Zen Free Ox custom-tool stream stops the transformed pipeline", async () => {
+  const curated = curatedZenFreeCompatibilityModels();
+  const { ox } = curated;
+  const stateDir = path.join(curated.dir, "state");
+  mkdirSync(stateDir, { recursive: true });
+  writeFileSync(
+    path.join(stateDir, "enabled-providers.json"),
+    `${JSON.stringify({ version: 1, providers: ["opencode-free"] })}\n`,
+  );
+  let gatewayRequests = 0;
+  let gatewayClosed = false;
+  let terminalWritten = false;
+  const gateway = await mockServer(async (request, response) => {
+    if (request.method === "GET") {
+      json(response, 200, { ok: true, credential_present: true });
+      return;
+    }
+    await bodyJson(request);
+    gatewayRequests += 1;
+    response.once("close", () => {
+      gatewayClosed = true;
+    });
+    response.writeHead(200, { "Content-Type": "text/event-stream" });
+    response.write(
+      `event: response.output_item.added\ndata: ${JSON.stringify({
+        type: "response.output_item.added",
+        output_index: 0,
+        item: {
+          type: "function_call",
+          id: "fc_cancel",
+          call_id: "call_cancel",
+          name: "apply_patch",
+          arguments: "",
+        },
+      })}\n\n`,
+    );
+    await Promise.race([
+      new Promise((resolve) => response.once("close", resolve)),
+      new Promise((resolve) => setTimeout(resolve, 1_000)),
+    ]);
+    if (!response.destroyed) {
+      terminalWritten = true;
+      response.end(
+        `event: response.function_call_arguments.done\ndata: ${JSON.stringify({
+          type: "response.function_call_arguments.done",
+          item_id: "fc_cancel",
+          arguments: JSON.stringify({ input: "*** Begin Patch\n*** End Patch" }),
+        })}\n\n`,
+      );
+    }
+  });
+  const routerPort = await openPort();
+  const router = run("router.mjs", {
+    CODEX_ROUTER_PORT: String(routerPort),
+    CODEX_ROUTER_STATE_DIR: stateDir,
+    CODEX_ROUTER_SHOW_ALL_MODELS: "0",
+    MODEL_ROUTER_USER_MODELS: curated.file,
+    CODEX_ROUTER_GATEWAY_BASE_URL: `http://127.0.0.1:${gateway.port}/v1`,
+    CODEX_ROUTER_GATEWAY_HEALTH_URL: `http://127.0.0.1:${gateway.port}/health`,
+    CODEX_ROUTER_API_HEALTH_URL: `http://127.0.0.1:${gateway.port}/health`,
+    CODEX_ROUTER_QUIET: "1",
+  });
+  try {
+    await waitFor(`${routerBase(routerPort)}/models`, router);
+    const canceler = new AbortController();
+    const routed = await fetch(`${routerBase(routerPort)}/responses`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: ox.slug,
+        stream: true,
+        tools: zenFreeCompatibilityTools(),
+        input: [{ type: "message", role: "user", content: "Begin, then wait." }],
+      }),
+      signal: canceler.signal,
+    });
+    assert.equal(routed.status, 200, router.testErrors());
+    const reader = routed.body.getReader();
+    let received = "";
+    while (!received.includes("response.output_item.added")) {
+      const { done, value } = await reader.read();
+      assert.equal(done, false);
+      received += Buffer.from(value).toString("utf8");
+    }
+    assert.match(received, /"type":"custom_tool_call"/);
+    canceler.abort();
+    await reader.read().catch(() => undefined);
+    const closeDeadline = Date.now() + 1_200;
+    while (!gatewayClosed && Date.now() < closeDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    assert.equal(gatewayClosed, true);
+    assert.equal(terminalWritten, false);
+    assert.equal(gatewayRequests, 1);
+    assert.doesNotMatch(received, /custom_tool_call_input\.done/);
+  } finally {
+    await stopChild(router);
+    await closeServer(gateway.server);
+    rmSync(curated.dir, { recursive: true, force: true });
   }
 });

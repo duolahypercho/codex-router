@@ -6,6 +6,15 @@ const CURATION_ROUTES = Object.freeze({
     providers: Object.freeze(["opencode-free", "opencode-free-responses"]),
     responsesProvider: "opencode-free-responses",
     responsesModels: Object.freeze(["muse-spark-1.2-contributor-free"]),
+    // Zen's live /models response currently publishes only ids. OpenCode's
+    // published model metadata sizes these exact free routes, so
+    // keep scripted curation from falling back to the generic 131K guess and
+    // making Codex compact every tool-bearing turn. A future catalog value is
+    // still preferred by curate-models because it describes the served route.
+    contextWindows: Object.freeze({
+      "muse-spark-1.2-contributor-free": 1_048_576,
+      "x-preview-f-free": 1_000_000,
+    }),
   }),
 });
 
@@ -29,4 +38,9 @@ export function curatedModelProviderId(providerId, upstreamModel) {
   const route = CURATION_ROUTES[primary];
   if (route?.responsesModels.includes(upstreamModel)) return route.responsesProvider;
   return primary;
+}
+
+export function curatedModelContextLength(providerId, upstreamModel) {
+  const primary = curationPrimaryProviderId(providerId);
+  return CURATION_ROUTES[primary]?.contextWindows?.[upstreamModel];
 }

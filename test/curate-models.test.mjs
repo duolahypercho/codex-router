@@ -24,9 +24,11 @@ const {
   renderRows,
 } =
   await import("../src/curate-models.mjs");
-const { curatedModelProviderId, curationProviderIds } = await import(
-  "../src/opencode-curation.mjs"
-);
+const {
+  curatedModelContextLength,
+  curatedModelProviderId,
+  curationProviderIds,
+} = await import("../src/opencode-curation.mjs");
 const { userModelEntry } = await import("../src/user-models.mjs");
 process.argv = savedArgv;
 process.exitCode = 0;
@@ -84,6 +86,18 @@ test("OpenCode curation pairs only the anonymous Free protocol variants", () => 
   );
 });
 
+test("OpenCode Free curation knows the documented windows its live catalog omits", () => {
+  assert.equal(
+    curatedModelContextLength("opencode-free", "muse-spark-1.2-contributor-free"),
+    1_048_576,
+  );
+  assert.equal(
+    curatedModelContextLength("opencode-free", "x-preview-f-free"),
+    1_000_000,
+  );
+  assert.equal(curatedModelContextLength("opencode-free", "mimo-v2.5-free"), undefined);
+});
+
 test("paid Zen curation identity remains byte-for-byte unchanged", () => {
   const paidZen = userModelEntry({
     providerId: "opencode-zen",
@@ -132,6 +146,18 @@ test("OpenCode protocol normalization preserves metadata and deduplicates old ro
     normalizeCurationModels([old, correct], "opencode-free"),
     [correct],
   );
+
+  const defaultOx = userModelEntry({
+    providerId: "opencode-free",
+    upstreamId: "x-preview-f-free",
+    priority: 149,
+  });
+  const [sizedOx] = normalizeCurationModels([defaultOx], "opencode-free");
+  assert.equal(sizedOx.contextWindow, 1_000_000);
+  assert.equal(sizedOx.autoCompact, 850_000);
+
+  const tunedOx = { ...defaultOx, autoCompact: 100_000 };
+  assert.strictEqual(normalizeCurationModels([tunedOx], "opencode-free")[0], tunedOx);
 });
 
 test("an additive model run keeps unrelated curated metadata", () => {
@@ -397,7 +423,9 @@ test("OpenCode Free curation migrates Muse to Responses while Ox stays on Chat",
   writeFileSync(fixture, JSON.stringify({
     data: [
       { id: museId, context_length: 1_048_576 },
-      { id: oxId, context_length: 262_144 },
+      // Zen currently serves this exact id-only record. The documented
+      // fallback must keep a fresh scripted curation from storing 131K.
+      { id: oxId },
     ],
   }));
   const env = {
@@ -454,6 +482,8 @@ test("OpenCode Free curation migrates Muse to Responses while Ox stays on Chat",
     assert.equal(muse.requestProfile, oldMuse.requestProfile);
     assert.equal(ox.provider, "opencode-free");
     assert.equal(ox.slug, `opencode-free/${oxId}`);
+    assert.equal(ox.contextWindow, 1_000_000);
+    assert.equal(ox.autoCompact, 850_000);
 
     const picker = JSON.parse(readFileSync(pickerFile, "utf8"));
     assert.deepEqual(picker.visible, [muse.slug, ox.slug].sort());
