@@ -111,7 +111,14 @@ test("start is detached, private, and idempotent while the worker is active", ()
   });
   assert.equal(first.started, true);
   assert.equal(unrefed, true);
-  assert.equal(statSync(LOCAL_MLX_OPERATION_PATH).mode & 0o777, 0o600);
+  const mode = statSync(LOCAL_MLX_OPERATION_PATH).mode;
+  if (process.platform === "win32") {
+    // Windows reports permissive synthetic group bits for NTFS files. The
+    // owner-readable/writable contract is the portable part of this check.
+    assert.equal(mode & 0o600, 0o600);
+  } else {
+    assert.equal(mode & 0o777, 0o600);
+  }
 
   const second = startLocalMlxOperation({
     yes: true,
@@ -272,7 +279,7 @@ test("a refused stop keeps the operation active instead of reporting false cance
     error.code = "EPERM";
     throw error;
   };
-  assert.throws(() => cancelLocalMlxOperation({ kill }), /not permitted/);
+  assert.throws(() => cancelLocalMlxOperation({ kill, platform: "linux" }), /not permitted/);
   assert.equal(readLocalMlxOperation({ kill, persist: false }).status, "downloading");
 });
 
@@ -289,12 +296,37 @@ test("cancellation stops the detached worker process group before recording succ
   });
   const calls = [];
   const kill = (pid, signal) => { calls.push({ pid, signal }); };
-  const result = cancelLocalMlxOperation({ kill });
+  const result = cancelLocalMlxOperation({ kill, platform: "linux" });
   assert.equal(result.cancelled, true);
   assert.deepEqual(calls, [
     { pid: 525252, signal: 0 },
     { pid: -525252, signal: "SIGTERM" },
   ]);
+  assert.equal(readLocalMlxOperation().status, "cancelled");
+});
+
+test("Windows cancellation stops the whole detached worker tree", () => {
+  writeLocalMlxOperation({
+    version: 1,
+    status: "downloading",
+    detail: "Downloading",
+    percent: 5,
+    startedAt: Date.now(),
+    updatedAt: Date.now(),
+    workerPid: 525253,
+    controllerPid: null,
+  });
+  const result = cancelLocalMlxOperation({
+    platform: "win32",
+    kill: () => {},
+    spawnSyncImpl: (command, args, options) => {
+      assert.equal(command, "taskkill");
+      assert.deepEqual(args, ["/PID", "525253", "/T", "/F"]);
+      assert.equal(options.windowsHide, true);
+      return { status: 0 };
+    },
+  });
+  assert.equal(result.cancelled, true);
   assert.equal(readLocalMlxOperation().status, "cancelled");
 });
 
