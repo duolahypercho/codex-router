@@ -56,6 +56,7 @@ test("provider selection keeps backward compatibility and can hide the final pro
       "lmstudio",
       "local",
       "opencode-free",
+      "opencode-free-responses",
     ]);
     assert.deepEqual(defaultProviderIds(), ["lmstudio", "local"]);
     delete process.env.KIMI_API_KEY;
@@ -67,6 +68,7 @@ test("provider selection keeps backward compatibility and can hide the final pro
       "lmstudio",
       "local",
       "opencode-free",
+      "opencode-free-responses",
     ]);
     assert.deepEqual(defaultProviderIds(), ["deepseek", "lmstudio", "local"]);
 
@@ -129,6 +131,23 @@ test("opencode Go protocol variants follow their parent as one family", () => {
         .map((model) => model.slug)
         .includes("opencode-go-messages/minimax-m2.7"),
     );
+  } finally {
+    rmSync(testRoot, { recursive: true, force: true });
+  }
+});
+
+test("OpenCode Free protocol variants follow the anonymous parent as one family", () => {
+  try {
+    writeProviderSelection(["opencode-free-responses"]);
+    assert.deepEqual(
+      JSON.parse(readFileSync(PROVIDER_SELECTION_PATH, "utf8")).providers,
+      ["opencode-free"],
+    );
+    assert.deepEqual(readProviderSelection(), [
+      "opencode-free",
+      "opencode-free-responses",
+    ]);
+    assert.deepEqual(disableProvider("opencode-free-responses"), []);
   } finally {
     rmSync(testRoot, { recursive: true, force: true });
   }

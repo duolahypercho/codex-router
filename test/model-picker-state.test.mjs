@@ -9,6 +9,7 @@ process.env.CODEX_ROUTER_STATE_DIR = stateDir;
 
 const {
   MODEL_PICKER_STATE_PATH,
+  migrateModelVisibility,
   modelPickerSnapshot,
   readHiddenModels,
   setAllModelsVisible,
@@ -56,6 +57,16 @@ test("provider-sized picker changes preserve other providers", () => {
   assert.deepEqual(modelPickerSnapshot().hidden, ["kimi-oauth/k3"]);
   assert.ok(modelPickerSnapshot().visible.includes("commandcode/kimi-k3"));
   assert.ok(modelPickerSnapshot().visible.includes("commandcode-messages/claude-opus-4.8"));
+});
+
+test("a protocol migration carries the existing picker decision to the new slug", () => {
+  const oldSlug = "opencode-free/muse-spark-1.2-contributor-free";
+  const newSlug = "opencode-free-responses/muse-spark-1.2-contributor-free";
+  setModelVisible(oldSlug, true);
+  migrateModelVisibility([{ from: oldSlug, to: newSlug }]);
+  const migrated = modelPickerSnapshot();
+  assert.equal(migrated.visible.includes(oldSlug), false);
+  assert.equal(migrated.visible.includes(newSlug), true);
 });
 
 test("legacy hidden-only state becomes an allowlist when a picker decision is made", () => {

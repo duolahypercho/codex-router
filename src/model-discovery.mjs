@@ -12,6 +12,7 @@ import {
   PROVIDERS,
   resolveProviderBaseUrl,
 } from "./model-registry.mjs";
+import { curationProviderIds } from "./opencode-curation.mjs";
 import { credentialStatus, resolveProviderCredential } from "./provider-credentials.mjs";
 import {
   ensureFreshGitHubCopilotSession,
@@ -214,8 +215,9 @@ export async function discoverProviderModels(providerId, { refresh = false, cach
     fetchedAt = new Date().toISOString();
     if (storeAnswer) writeProviderCatalogCache(providerId, { discovered, free, contextLengths, fetchedAt });
   }
+  const curationProviders = new Set(curationProviderIds(providerId));
   const registered = MODELS
-    .filter((model) => model.provider === providerId)
+    .filter((model) => curationProviders.has(model.provider))
     .map((model) => model.upstreamModel)
     .sort();
   const discoveredSet = new Set(discovered);

@@ -10,6 +10,21 @@
       "authMode": "anonymous",
       "anonymousModelPolicy": "opencode-console",
       "anonymousNote": "No API key is needed for OpenCode Zen free models. Use at your own risk: access is a published exception, not an entitlement, and the free catalog and limits can change without notice."
+    },
+    {
+      "id": "opencode-free-responses",
+      "displayName": "OpenCode Free Responses",
+      "kind": "openai-compatible",
+      "ownedBy": "opencode",
+      "variantOf": "opencode-free",
+      "protocol": "openai-responses",
+      "baseUrl": "https://opencode.ai/zen/v1",
+      "authMode": "anonymous",
+      "anonymousModelPolicy": "explicit-models",
+      "anonymousModels": [
+        "muse-spark-1.2-contributor-free"
+      ],
+      "anonymousNote": "No API key is needed for Muse Spark 1.2 Contributor Free. This internal Responses route accepts only that documented free model. Use at your own risk: access is a published exception, not an entitlement, and limits can change without notice."
     }
   ]
 }

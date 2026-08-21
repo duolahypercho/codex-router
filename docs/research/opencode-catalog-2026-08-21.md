@@ -26,6 +26,21 @@ without notice. Both catalogs are fetched by `discover-models` / `curate-models`
 from their official `/models` endpoints; the repository does not turn their
 live contents into an implicit provider selection.
 
+The anonymous endpoint table is model-specific:
+`muse-spark-1.2-contributor-free` uses `/responses`, while Ox Alpha Free
+(`x-preview-f-free`) uses `/chat/completions`. Local OpenCode Free curation
+therefore stores only that exact Muse Contributor Free ID on an internal
+Responses variant and leaves Ox and every other free ID on the existing Chat
+Completions route. The variant accepts no other anonymous model ID and shares
+the base provider's selection.
+
+The paid `/zen` catalog and the subscription `/zen/go` catalog are separate
+server surfaces with separate billing semantics. This change deliberately does
+not add a paid Zen variant or alter the existing Go/Zen selection, routes,
+gateway model IDs, or cooldown scopes. Migration of an older Chat-routed free
+Muse entry occurs only inside an explicit `curate-models opencode-free` run;
+install, update, registry load, and catalog discovery remain read-only.
+
 The Go documentation names 20 current subscription models. The checked-in
 registry contains those exact upstream IDs and uses the endpoint family the
 official table specifies (`chat/completions`, `messages`, or `responses`). The

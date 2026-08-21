@@ -131,6 +131,50 @@ export function setModelsVisible(slugs, visible) {
   return writePickerState({ hidden, visible: visibleSet, seeded });
 }
 
+// Move an operator's picker decision when a curated model's routing identity
+// changes. Protocol migrations change the slug even though the upstream model
+// is the same; dropping the old decision would make an explicitly selected
+// model disappear from the allowlisted picker on the next catalog rebuild.
+// A decision already recorded on the destination wins over stale source state.
+export function migrateModelVisibility(replacements) {
+  const pairs = (Array.isArray(replacements) ? replacements : [])
+    .map(({ from, to }) => ({
+      from: String(from || "").trim(),
+      to: String(to || "").trim(),
+    }))
+    .filter(({ from, to }) => from && to && from !== to);
+  if (pairs.length === 0) return modelPickerSnapshot();
+
+  const { hidden, visible, seeded, hasExplicitVisibility } = readPickerState();
+  let changed = false;
+  for (const { from, to } of pairs) {
+    const sourceHidden = hidden.has(from);
+    const sourceVisible = visible.has(from);
+    const sourceSeeded = seeded.has(from);
+    if (!sourceHidden && !sourceVisible && !sourceSeeded) continue;
+
+    const destinationDecided = seeded.has(to);
+    hidden.delete(from);
+    visible.delete(from);
+    seeded.delete(from);
+    changed = true;
+
+    if (!destinationDecided) {
+      if (sourceHidden) {
+        hidden.add(to);
+        visible.delete(to);
+      } else if (sourceVisible) {
+        hidden.delete(to);
+        visible.add(to);
+      }
+    }
+    if (sourceSeeded) seeded.add(to);
+  }
+  return changed
+    ? writePickerState({ hidden, visible, seeded, hasExplicitVisibility })
+    : modelPickerSnapshot();
+}
+
 export function setAllModelsVisible(slugs, visible) {
   const known = [...new Set(slugs.map((slug) => String(slug).trim()).filter(Boolean))];
   const { hidden: currentHidden, visible: currentVisible, seeded } = readPickerState();

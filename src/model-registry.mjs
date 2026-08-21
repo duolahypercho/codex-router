@@ -20,6 +20,7 @@ function fail(message) {
 // credential-free exfiltration path.
 const ANONYMOUS_ENDPOINTS = Object.freeze({
   "opencode-free": "https://opencode.ai/zen/v1",
+  "opencode-free-responses": "https://opencode.ai/zen/v1",
   "kilo-free": "https://api.kilo.ai/api/gateway",
 });
 
@@ -41,6 +42,9 @@ export function anonymousModelAllowed(provider, modelId) {
     return id === "big-pickle" || id.endsWith("-free");
   }
   if (provider.anonymousModelPolicy === "suffix-free") return id.endsWith(":free");
+  if (provider.anonymousModelPolicy === "explicit-models") {
+    return Array.isArray(provider.anonymousModels) && provider.anonymousModels.includes(id);
+  }
   return false;
 }
 
@@ -260,15 +264,36 @@ function loadRegistry() {
         if (provider.keyless || provider.credential !== undefined) {
           fail(`anonymous provider ${provider.id} must not declare keyless or credential metadata`);
         }
-        if (
-          !["opencode-console", "suffix-free"].includes(provider.anonymousModelPolicy)
-        ) {
+        if (![
+          "explicit-models",
+          "opencode-console",
+          "suffix-free",
+        ].includes(provider.anonymousModelPolicy)) {
           fail(`anonymous provider ${provider.id} requires a supported anonymousModelPolicy`);
+        }
+        if (provider.anonymousModelPolicy === "explicit-models") {
+          const models = provider.anonymousModels;
+          if (
+            !Array.isArray(models) ||
+            models.length === 0 ||
+            models.some((model) =>
+              typeof model !== "string" || !model.trim() || model !== model.trim()
+            ) ||
+            new Set(models).size !== models.length
+          ) {
+            fail(`anonymous provider ${provider.id} requires a valid anonymousModels allowlist`);
+          }
+        } else if (provider.anonymousModels !== undefined) {
+          fail(`anonymous provider ${provider.id} may declare anonymousModels only with explicit-models policy`);
         }
         if (typeof provider.anonymousNote !== "string" || !provider.anonymousNote.trim()) {
           fail(`anonymous provider ${provider.id} requires an anonymousNote`);
         }
-      } else if (provider.anonymousModelPolicy !== undefined || provider.anonymousNote !== undefined) {
+      } else if (
+        provider.anonymousModelPolicy !== undefined ||
+        provider.anonymousModels !== undefined ||
+        provider.anonymousNote !== undefined
+      ) {
         fail(`provider ${provider.id} has anonymous metadata without authMode anonymous`);
       }
       if (
