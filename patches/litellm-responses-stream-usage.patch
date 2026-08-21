@@ -1,0 +1,39 @@
+--- a/venv/lib/python3.12/site-packages/litellm/responses/litellm_completion_transformation/streaming_iterator.py
++++ .venv/lib/python3.12/site-packages/litellm/responses/litellm_completion_transformation/streaming_iterator.py	2026-08-21 22:33:19
+@@ -82,6 +82,7 @@
+         self.sent_output_item_done_event: bool = False
+         self.sent_annotation_events: bool = False
+         self.litellm_model_response: ModelResponse | TextCompletionResponse | None = None
++        self._upstream_chunk_usage = None
+         self.final_text: str = ""
+         self._cached_item_id: str | None = None
+         self._cached_response_id: str | None = None
+@@ -690,6 +691,8 @@
+         if not self.litellm_model_response or isinstance(self.litellm_model_response, TextCompletionResponse):
+             self.litellm_model_response = self.create_litellm_model_response()
+         if self.litellm_model_response:
++            if isinstance(self.litellm_model_response, ModelResponse) and self._upstream_chunk_usage is not None:
++                self.litellm_model_response.usage = self._upstream_chunk_usage
+             # If tool calls exist, emit tool events before finishing/response.completed.
+             if isinstance(self.litellm_model_response, ModelResponse):
+                 self._queue_final_tool_call_done_events(self.litellm_model_response)
+@@ -806,6 +809,9 @@
+                     chunk = await self.litellm_custom_stream_wrapper.__anext__()
+                     if chunk is not None:
+                         chunk = cast(ModelResponseStream, chunk)
++                        _cu = getattr(chunk, "usage", None)
++                        if _cu is not None and getattr(_cu, "total_tokens", 0):
++                            self._upstream_chunk_usage = _cu
+                         self._ensure_output_item_for_chunk(chunk)
+                         # Accumulate provider_specific_fields from chunk and delta
+                         for src in (
+@@ -904,6 +910,9 @@
+                     return self._pending_tool_events.pop(0)
+                 try:
+                     chunk = self.litellm_custom_stream_wrapper.__next__()
++                    _cu = getattr(chunk, "usage", None)
++                    if _cu is not None and getattr(_cu, "total_tokens", 0):
++                        self._upstream_chunk_usage = _cu
+                     self._ensure_output_item_for_chunk(chunk)
+                     # Accumulate provider_specific_fields from chunk and delta
+                     for src in (
