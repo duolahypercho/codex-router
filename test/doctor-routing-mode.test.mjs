@@ -183,6 +183,20 @@ test(
       })}\n`,
       { mode: 0o600 },
     );
+    // The catalog now publishes routed models only after an explicit picker
+    // selection. Keep this test focused on the doctor detecting a missing
+    // managed agent definition, rather than relying on the old implicit-show
+    // behavior.
+    writeFileSync(
+      path.join(stateDir, "model-picker.json"),
+      `${JSON.stringify({
+        version: 1,
+        hidden: [],
+        visible: ["deepseek/deepseek-v4-pro"],
+        seeded: ["deepseek/deepseek-v4-pro"],
+      })}\n`,
+      { mode: 0o600 },
+    );
     writeFileSync(path.join(stateDir, "caller-secret"), `${callerSecret}\n`, {
       mode: 0o600,
     });

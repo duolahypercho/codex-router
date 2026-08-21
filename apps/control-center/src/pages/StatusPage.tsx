@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Activity,
   BrainCircuit,
@@ -63,6 +63,13 @@ type StatusModelUsage = ProviderModelUsage & {
 };
 
 const STATUS_MODEL_PAGE_SIZE = 12;
+const CONTEXT_SAVINGS_RANGES = [
+  { key: "24h", label: "24H", bucketLabel: "hour" },
+  { key: "7d", label: "7D", bucketLabel: "day" },
+  { key: "30d", label: "30D", bucketLabel: "day" },
+] as const;
+
+type ContextSavingsRangeKey = typeof CONTEXT_SAVINGS_RANGES[number]["key"];
 
 interface ResetRow {
   id: string;
@@ -95,6 +102,8 @@ export function StatusPage({
   const [modelQuery, setModelQuery] = useState("");
   const [modelLimit, setModelLimit] = useState(STATUS_MODEL_PAGE_SIZE);
   const [repairing, setRepairing] = useState(false);
+  const [contextSavingsRange, setContextSavingsRange] = useState<ContextSavingsRangeKey>("24h");
+  const [contextSavingsRangeSelectedByUser, setContextSavingsRangeSelectedByUser] = useState(false);
   // The same repair Settings runs, reached from the panel where a stopped
   // service first becomes visible. Settings stays the only page that renders
   // the diagnostic report; here the toast plus the refreshed health rows are
@@ -198,6 +207,24 @@ export function StatusPage({
     contextEfficiency?.last24hCachedInputTokens ?? (hasEventCacheTelemetry ? eventCachedInputTokens : undefined),
     hasCacheTelemetry,
   );
+  const compactionStats = target?.modelSettings?.toolResultAging?.stats;
+  const compactionRange = compactionStats?.ranges?.[contextSavingsRange];
+  const compactionBuckets = compactionRange?.buckets ?? [];
+  const hasCompactionBuckets = compactionBuckets.some((bucket) => bucket > 0);
+  const selectedCompactionRange = CONTEXT_SAVINGS_RANGES.find((range) => range.key === contextSavingsRange)!;
+
+  // The snapshot arrives after the first render, so a state initializer cannot
+  // choose a populated range. Prefer 24H when it has data, otherwise reveal
+  // the nearest useful history once; an explicit operator selection is never
+  // overwritten.
+  useEffect(() => {
+    if (contextSavingsRangeSelectedByUser || !compactionStats?.ranges) return;
+    if ((compactionStats.ranges[contextSavingsRange]?.requests ?? 0) > 0) return;
+    const firstPopulated = CONTEXT_SAVINGS_RANGES.find((range) =>
+      (compactionStats.ranges?.[range.key]?.requests ?? 0) > 0,
+    );
+    if (firstPopulated) setContextSavingsRange(firstPopulated.key);
+  }, [compactionStats, contextSavingsRange, contextSavingsRangeSelectedByUser]);
 
   const resetRows = buildResetRows(account, providerUsage);
   const nextReset = resetRows.find((row) => timestampFor(row.resetAt) > Date.now()) ?? resetRows[0];
@@ -376,13 +403,45 @@ export function StatusPage({
               body="Recent routed events have not reported cached input tokens."
             />
           )}
-          <div className="st-compaction-note">
-            <BrainCircuit aria-hidden size={15} strokeWidth={1.7} />
-            <span>
-              <strong>Compaction telemetry</strong>
-              <small>Compaction events are not identified separately by the current status API.</small>
-            </span>
-          </div>
+          <section className="st-context-savings" aria-labelledby="context-savings-title">
+            <header>
+              <div>
+                <h3 id="context-savings-title">Tool-result compaction savings</h3>
+                <p>Tokens removed from old tool results before the next upstream request.</p>
+              </div>
+              <div className="st-context-range-picker" role="radiogroup" aria-label="Compaction savings date range">
+                {CONTEXT_SAVINGS_RANGES.map((range) => (
+                  <button
+                    type="button"
+                    key={range.key}
+                    role="radio"
+                    aria-checked={contextSavingsRange === range.key}
+                    className={contextSavingsRange === range.key ? "is-active" : ""}
+                    onClick={() => {
+                      setContextSavingsRange(range.key);
+                      setContextSavingsRangeSelectedByUser(true);
+                    }}
+                  >
+                    {range.label}
+                  </button>
+                ))}
+              </div>
+            </header>
+            {compactionStats && hasCompactionBuckets ? (
+              <ContextSavingsChart
+                buckets={compactionBuckets}
+                range={selectedCompactionRange}
+                savedTokens={compactionRange?.savedTokens ?? 0}
+                requests={compactionRange?.requests ?? 0}
+              />
+            ) : (
+              <p className="st-context-savings-empty">
+                {compactionStats
+                  ? `No compactions in this window${(compactionStats.requests ?? 0) > 0 ? ` · ${exactNumber(compactionStats.requests)} recorded all-time` : ""}.`
+                  : "Compaction savings will appear after the router records its first eligible result."}
+              </p>
+            )}
+          </section>
         </section>
       </div>
 
@@ -746,6 +805,43 @@ function liveElapsedLabel(request: ActiveRequestTelemetry): string {
   const seconds = Math.floor(Math.max(0, milliseconds) / 1_000);
   if (seconds < 60) return `${seconds}s`;
   return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+}
+
+function ContextSavingsChart({
+  buckets,
+  range,
+  savedTokens,
+  requests,
+}: {
+  buckets: number[];
+  range: typeof CONTEXT_SAVINGS_RANGES[number];
+  savedTokens: number;
+  requests: number;
+}) {
+  const peak = Math.max(...buckets, 1);
+  return (
+    <div className="st-context-savings-chart">
+      <div
+        className="st-context-savings-bars"
+        role="img"
+        aria-label={`${exactNumber(savedTokens)} tokens saved across ${exactNumber(requests)} compacted requests in the last ${range.label}, with a peak of ${exactNumber(peak)} tokens per ${range.bucketLabel}`}
+        style={{ gridTemplateColumns: `repeat(${Math.max(1, buckets.length)}, minmax(0, 1fr))` }}
+      >
+        {buckets.map((bucket, index) => (
+          <span
+            key={index}
+            className={bucket > 0 ? "is-populated" : ""}
+            style={{ height: bucket > 0 ? `${Math.max(5, (bucket / peak) * 54)}px` : "2px" }}
+            title={`${exactNumber(bucket)} tokens saved`}
+          />
+        ))}
+      </div>
+      <footer>
+        <span>{exactNumber(savedTokens)} tokens saved · {exactNumber(requests)} requests</span>
+        <span>Peak {compactNumber(peak)}/{range.bucketLabel}</span>
+      </footer>
+    </div>
+  );
 }
 
 function buildContextWindowRows(

@@ -783,19 +783,66 @@ textarea::placeholder {
 }
 
 .service-health-panel {
-  padding: 19px 22px 8px;
+  padding: 0;
+  overflow: hidden;
 }
 
-.service-health-panel .section-heading {
-  margin-bottom: 7px;
+.service-health-accordion > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 20px;
+  cursor: pointer;
+  list-style: none;
 }
 
-/* The repair button only renders while a service needs attention, so this
-   row is a badge on its own most of the time and must not reserve space. */
+.service-health-accordion > summary::-webkit-details-marker { display: none; }
+
+.service-health-summary-copy {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.service-health-summary-copy strong {
+  color: var(--ink-strong);
+  font-size: 11px;
+  font-weight: 620;
+}
+
+.service-health-summary-copy small {
+  overflow: hidden;
+  color: var(--ink-faint);
+  font-size: 8.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.service-health-summary-status {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink-faint);
+}
+
+.service-health-accordion[open] > summary {
+  border-bottom: 1px solid var(--line);
+}
+
+.service-health-accordion[open] > summary svg { transform: rotate(180deg); }
+
+.service-health-summary-status svg { transition: transform 160ms ease; }
+
+.service-health-details { padding: 0 20px 8px; }
+
 .service-health-actions {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 8px;
+  padding-top: 10px;
 }
 
 .service-health-list {

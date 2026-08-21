@@ -98,7 +98,13 @@ export function runtimeEnvironment(
   { platform = process.platform } = {},
 ) {
   const node = discoverExecutable(environment, "node", platform);
-  if (!node) return { ...environment };
+  if (!node) {
+    // Do not hand an invalid explicit path to the installer. It would look
+    // deliberate in the generated service definition and fail on every boot.
+    const cleaned = { ...environment };
+    delete cleaned.CODEX_ROUTER_NODE_BIN;
+    return cleaned;
+  }
   const npm = discoverExecutable(environment, "npm", platform);
   const runtimeDirectories = [
     path.dirname(node),

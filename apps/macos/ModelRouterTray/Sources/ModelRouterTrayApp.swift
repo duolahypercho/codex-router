@@ -2400,9 +2400,14 @@ final class RouterStore: ObservableObject {
         }
       }
       if previousActivityState == .generating, health.activity.state != .generating {
-        // Pull the just-finished request into the status speed without waiting
-        // for the normal 30-second account polling interval.
-        Task { await refreshProviderUsage() }
+        // A completed request writes its usage event before the health activity
+        // clears. Pull both the provider aggregate and the snapshot now, so
+        // speed, cache reuse, and tool-result savings update with this turn
+        // instead of waiting for their normal background polling intervals.
+        Task {
+          await refreshProviderUsage()
+          await refresh()
+        }
       }
     } catch {
       recordActivityHealthFailure()
@@ -3650,6 +3655,7 @@ private struct TrayView: View {
   @AppStorage("trayTab") private var tab: TrayTab = .usage
   @State private var providersExpanded = true
   @State private var savingsRange: SavingsRange = .day
+  @State private var savingsRangeSelectedByUser = false
 
   private var target: RouterTarget? { store.snapshot.targets["codex"] }
   // Rows come from the registry snapshot, not from the models in the picker.
@@ -3786,7 +3792,34 @@ private struct TrayView: View {
     }
     .preferredColorScheme(.dark)
     .foregroundStyle(routerText)
-    .task { await store.refresh() }
+    .task {
+      await store.refresh()
+      selectInitialSavingsRange()
+    }
+    .onChange(of: savingsRangeDataFingerprint) { _ in
+      selectInitialSavingsRange()
+    }
+  }
+
+  // A quiet most-recent day should not hide the savings that are already in a
+  // longer window. Keep 24H as the default when it has data, but start on the
+  // first populated range otherwise; a manual range choice always wins.
+  private func selectInitialSavingsRange() {
+    guard !savingsRangeSelectedByUser,
+          let ranges = target?.modelSettings?.toolResultAging?.stats?.ranges,
+          (ranges[savingsRange.rawValue]?.requests ?? 0) == 0,
+          let firstPopulated = SavingsRange.allCases.first(where: {
+            (ranges[$0.rawValue]?.requests ?? 0) > 0
+          }) else { return }
+    savingsRange = firstPopulated
+  }
+
+  private var savingsRangeDataFingerprint: String {
+    guard let ranges = target?.modelSettings?.toolResultAging?.stats?.ranges else { return "" }
+    return SavingsRange.allCases.map { range in
+      let value = ranges[range.rawValue]
+      return "\(range.rawValue):\(value?.requests ?? 0):\(value?.savedTokens ?? 0)"
+    }.joined(separator: "|")
   }
 
 
@@ -3968,6 +4001,8 @@ private struct TrayView: View {
     if let agingStats = target?.modelSettings?.toolResultAging?.stats,
        let agedRequests = agingStats.requests, agedRequests > 0 {
       let range = agingStats.ranges?[savingsRange.rawValue]
+      let rangeRequests = range?.requests ?? 0
+      let allTimeTokens = agingStats.estimatedTokensSaved ?? 0
       sectionLabel("Context savings", detail: "\(agedRequests) requests compacted all-time")
       VStack(alignment: .leading, spacing: 8) {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -3975,7 +4010,9 @@ private struct TrayView: View {
             Text("Old tool results replaced with receipts")
               .font(.system(size: 10, weight: .medium))
               .lineLimit(1)
-            Text("\(range?.requests ?? 0) compacted requests in this window")
+            Text(rangeRequests > 0
+              ? "\(rangeRequests) compacted requests in this window"
+              : "No compactions in this window")
               .font(.system(size: 8))
               .foregroundStyle(routerMuted)
               .lineLimit(1)
@@ -3986,6 +4023,7 @@ private struct TrayView: View {
               ForEach(SavingsRange.allCases, id: \.rawValue) { candidate in
                 Button {
                   savingsRange = candidate
+                  savingsRangeSelectedByUser = true
                 } label: {
                   Text(candidate.label)
                     .font(.system(size: 8, weight: savingsRange == candidate ? .bold : .regular))
@@ -4000,10 +4038,13 @@ private struct TrayView: View {
                 .buttonStyle(.plain)
               }
             }
-            Text("~\(compactTokenCount(Double(range?.savedTokens ?? 0))) tok")
+            Text("~\(compactTokenCount(Double(allTimeTokens))) tok")
               .font(.system(size: 15, weight: .semibold, design: .monospaced))
               .foregroundStyle(routerMint)
               .monospacedDigit()
+            Text("saved all-time")
+              .font(.system(size: 7.5))
+              .foregroundStyle(routerMuted)
           }
         }
         if let buckets = range?.buckets, buckets.contains(where: { $0 > 0 }) {

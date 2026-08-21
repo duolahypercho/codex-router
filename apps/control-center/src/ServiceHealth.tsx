@@ -1,5 +1,6 @@
-import { ArrowUpRight, CheckCircle2, CircleAlert, CircleDashed, CircleOff } from "lucide-react";
-import { Badge, Button, SectionHeading } from "./components";
+import { useEffect, useRef, useState } from "react";
+import { ArrowUpRight, CheckCircle2, ChevronDown, CircleAlert, CircleDashed, CircleOff } from "lucide-react";
+import { Badge, Button } from "./components";
 import { serviceHealthRows, type ServiceHealthRow } from "./service-health";
 import type { RouterHealth } from "./types";
 
@@ -13,6 +14,16 @@ export function ServiceHealthPanel({ health, compact = false, onOpen, onRepair, 
   const rows = serviceHealthRows(health);
   const attention = rows.filter((row) => row.state === "offline" || row.state === "degraded").length;
   const summary = attention ? `${attention} needs attention` : rows.every((row) => row.state === "ready" || row.state === "standby") ? "All clear" : "Checking";
+  const [detailsOpen, setDetailsOpen] = useState(attention > 0);
+  const previousAttention = useRef(attention);
+
+  // A new problem should reveal its detail, but polling health every second
+  // must never override the operator's own open/closed choice.
+  useEffect(() => {
+    if (attention > previousAttention.current) setDetailsOpen(true);
+    previousAttention.current = attention;
+  }, [attention]);
+
   return compact ? (
     <section className="service-health-strip" aria-label="Service health">
       <div className="service-health-strip-heading">
@@ -26,28 +37,34 @@ export function ServiceHealthPanel({ health, compact = false, onOpen, onRepair, 
     </section>
   ) : (
     <section className="panel-section service-health-panel">
-      <SectionHeading
-        title="Service health"
-        description="The local route and its enabled dependencies, checked together."
-        action={
-          // Repair is offered here only while something is actually wrong.
-          // This panel is where a stopped router first becomes visible, and
-          // sending the user to Settings to find the same button is the
-          // detour the button exists to remove. A healthy panel keeps just
-          // the badge so repair never reads as routine maintenance.
+      <details
+        className="service-health-accordion"
+        open={detailsOpen}
+        onToggle={(event) => setDetailsOpen(event.currentTarget.open)}
+      >
+        <summary>
+          <span className="service-health-summary-copy">
+            <strong>Service health</strong>
+            <small>{attention ? "A local dependency needs attention." : "Router and local dependencies."}</small>
+          </span>
+          <span className="service-health-summary-status">
+            <Badge tone={attention ? "warning" : health ? "success" : "neutral"}>{summary}</Badge>
+            <ChevronDown aria-hidden size={15} strokeWidth={1.7} />
+          </span>
+        </summary>
+        <div className="service-health-details">
           <div className="service-health-actions">
             {onRepair && attention ? (
               <Button variant="secondary" disabled={repairing} onClick={onRepair}>
                 {repairing ? "Repairing…" : "Fix"}
               </Button>
             ) : null}
-            <Badge tone={attention ? "warning" : health ? "success" : "neutral"}>{summary}</Badge>
           </div>
-        }
-      />
-      <div className="service-health-list" role="list" aria-label="Router service health">
-        {rows.map((row) => <ServiceHealthRowView key={row.id} row={row} />)}
-      </div>
+          <div className="service-health-list" role="list" aria-label="Router service health">
+            {rows.map((row) => <ServiceHealthRowView key={row.id} row={row} />)}
+          </div>
+        </div>
+      </details>
     </section>
   );
 }

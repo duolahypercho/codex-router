@@ -881,7 +881,6 @@
 .usage-page .us-source-list > button.is-active {
   border-color: color-mix(in srgb, var(--accent) 48%, var(--line));
   background: var(--accent-soft);
-  box-shadow: inset 3px 0 var(--accent);
 }
 
 .usage-page .us-source-name,
@@ -1150,13 +1149,56 @@
 }
 
 .status-page .st-status-orb.state-generating i {
+  position: relative;
+  width: 10px;
+  height: 10px;
   background: var(--success);
-  animation: st-breathe 1.25s ease-in-out infinite;
+  filter: drop-shadow(0 0 6px color-mix(in srgb, var(--success) 44%, transparent));
+  animation: st-thinking-core 1.35s ease-in-out infinite;
+}
+
+.status-page .st-status-orb.state-generating i::before,
+.status-page .st-status-orb.state-generating i::after {
+  position: absolute;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  content: "";
+}
+
+.status-page .st-status-orb.state-generating i::before {
+  top: -6px;
+  right: -5px;
+  background: color-mix(in srgb, var(--accent) 68%, var(--success));
+  box-shadow: 0 0 9px color-mix(in srgb, var(--accent) 30%, transparent);
+  animation: st-thinking-orbit-one 1.35s ease-in-out infinite;
+}
+
+.status-page .st-status-orb.state-generating i::after {
+  bottom: -5px;
+  left: -6px;
+  background: color-mix(in srgb, var(--success) 55%, white);
+  animation: st-thinking-orbit-two 1.35s ease-in-out infinite;
 }
 
 .status-page .st-status-orb.state-starting i { background: var(--warning); }
 .status-page .st-status-orb.state-error i,
 .status-page .st-status-orb.state-offline i { background: var(--danger); }
+
+@keyframes st-thinking-core {
+  0%, 100% { transform: scale(0.78); opacity: 0.72; }
+  50% { transform: scale(1.1); opacity: 1; }
+}
+
+@keyframes st-thinking-orbit-one {
+  0%, 100% { transform: translate(-2px, 2px) scale(0.72); opacity: 0.52; }
+  50% { transform: translate(2px, -2px) scale(1.08); opacity: 1; }
+}
+
+@keyframes st-thinking-orbit-two {
+  0%, 100% { transform: translate(2px, -2px) scale(1.04); opacity: 0.84; }
+  50% { transform: translate(-2px, 2px) scale(0.68); opacity: 0.42; }
+}
 
 .status-page .st-subsection-heading {
   display: flex;
@@ -1384,34 +1426,90 @@
   line-height: 1.45;
 }
 
-.status-page .st-compaction-note {
+.status-page .st-context-savings {
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-1);
+}
+
+.status-page .st-context-savings > header {
   display: flex;
   align-items: flex-start;
-  gap: 8px;
-  margin-top: 10px;
-  padding: 9px;
-  border-radius: 8px;
-  background: var(--surface-2);
-  color: var(--ink-subtle);
+  justify-content: space-between;
+  gap: 10px;
 }
 
-.status-page .st-compaction-note > span,
-.status-page .st-compaction-note strong,
-.status-page .st-compaction-note small {
-  display: block;
-}
-
-.status-page .st-compaction-note strong {
+.status-page .st-context-savings h3 {
+  margin: 0;
   color: var(--ink-strong);
   font-size: 8.5px;
-  font-weight: 600;
+  font-weight: 620;
 }
 
-.status-page .st-compaction-note small {
-  margin-top: 3px;
+.status-page .st-context-savings header p,
+.status-page .st-context-savings-empty {
+  margin: 3px 0 0;
   color: var(--ink-faint);
   font-size: 7.8px;
   line-height: 1.4;
+}
+
+.status-page .st-context-range-picker {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 1px;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-0);
+}
+
+.status-page .st-context-range-picker button {
+  min-height: 20px;
+  padding: 2px 5px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--ink-faint);
+  font-size: 7px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.status-page .st-context-range-picker button:hover,
+.status-page .st-context-range-picker button.is-active {
+  color: var(--ink-strong);
+}
+
+.status-page .st-context-range-picker button.is-active { background: var(--surface-3); }
+
+.status-page .st-context-savings-chart { margin-top: 10px; }
+
+.status-page .st-context-savings-bars {
+  display: grid;
+  align-items: end;
+  gap: 2px;
+  height: 54px;
+}
+
+.status-page .st-context-savings-bars > span {
+  display: block;
+  min-width: 0;
+  border-radius: 2px 2px 1px 1px;
+  background: color-mix(in srgb, var(--ink-faint) 24%, transparent);
+}
+
+.status-page .st-context-savings-bars > span.is-populated { background: var(--success); }
+
+.status-page .st-context-savings-chart footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 4px;
+  color: var(--ink-faint);
+  font-size: 7.5px;
 }
 
 .status-page .st-reset-list,
@@ -1756,6 +1854,8 @@
 @media (prefers-reduced-motion: reduce) {
   .usage-page .us-loading .skeleton-block,
   .status-page .st-status-orb i,
+  .status-page .st-status-orb i::before,
+  .status-page .st-status-orb i::after,
   .usage-page .us-chart-hit-grid button .us-chart-tooltip {
     animation: none;
     transition: none;

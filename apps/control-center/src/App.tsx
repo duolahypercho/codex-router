@@ -108,6 +108,7 @@ export default function App() {
   const [toast, setToast] = useState<{ tone: "success" | "danger"; message: string } | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const downloadPollInFlight = useRef(false);
+  const previousActivityState = useRef<string | undefined>(undefined);
 
   const target = snapshot?.targets.codex;
   const localDownloadActive = target?.modelSettings?.localModels?.download?.status === "downloading";
@@ -198,6 +199,22 @@ export default function App() {
     setLoading(false);
     setRefreshing(false);
   }, [api, refreshCore, refreshUsage]);
+
+  // The router appends the usage event before it clears a completed request
+  // from health. Use that transition as a local completion signal: it gives
+  // the status graph the just-saved tokens without tightening the five-minute
+  // idle polling interval that protects large retained ledgers.
+  useEffect(() => {
+    const currentState = health?.activity?.state;
+    if (!currentState) return;
+    const finishedGenerating = previousActivityState.current === "generating"
+      && currentState !== "generating"
+      && currentState !== "offline";
+    previousActivityState.current = currentState;
+    if (!finishedGenerating) return;
+    void Promise.all([refreshCore(), refreshUsage()])
+      .catch((error) => setLoadError(readableError(error)));
+  }, [health?.activity?.state, refreshCore, refreshUsage]);
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", theme === "dark");

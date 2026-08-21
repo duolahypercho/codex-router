@@ -293,7 +293,12 @@ async fn router_health(state: State<'_, RouterState>) -> Result<Value, String> {
     // `control health` reads the protected router health leaf with the local
     // caller capability and projects away credential metadata. The public
     // `/health` endpoint intentionally carries only the degraded names.
-    run_json_command(state.inner().clone(), vec!["health".into(), "--json".into()], None).await
+    run_json_command(
+        state.inner().clone(),
+        vec!["health".into(), "--json".into()],
+        None,
+    )
+    .await
 }
 
 #[tauri::command]
