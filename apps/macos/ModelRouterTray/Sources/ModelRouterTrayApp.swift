@@ -203,6 +203,11 @@ final class RouterStore: ObservableObject {
   @Published private(set) var providerUsage: ProviderUsageSnapshot?
   @Published private(set) var providerUsageError: String?
   @Published private(set) var providerSetup: [String: ProviderSetupState] = [:]
+  // Provider discovery is deliberately on-demand. Unlike router status, this
+  // may make a network request to a provider, so the tray only does it after
+  // the user presses Load/Reload models for that provider.
+  @Published private(set) var providerCatalogs: [String: ProviderModelCatalog] = [:]
+  @Published private(set) var providerCatalogLoading = Set<String>()
   @Published private(set) var providerOperation: String?
   @Published private(set) var visionDownload: VisionDownloadState?
   @Published private(set) var localDownload: VisionDownloadState?
@@ -1391,6 +1396,55 @@ final class RouterStore: ObservableObject {
     } catch {
       let nextMessage = error.localizedDescription
       if message != nextMessage { message = nextMessage }
+    }
+  }
+
+  func reloadProviderCatalog(_ provider: String) async {
+    guard !providerCatalogLoading.contains(provider) else { return }
+    providerCatalogLoading.insert(provider)
+    defer { providerCatalogLoading.remove(provider) }
+    do {
+      let output = try await runRouterScript(
+        "model-discovery.mjs",
+        arguments: [provider, "--refresh", "--json"]
+      )
+      let catalog = try JSONDecoder().decode(ProviderModelCatalog.self, from: output)
+      providerCatalogs[provider] = catalog
+      message = "\(catalog.discovered.count) current \(provider) models loaded. Select the ones to add below."
+    } catch {
+      message = "\(provider): \(error.localizedDescription)"
+    }
+  }
+
+  func reloadAvailableProviderCatalogs() async {
+    let providers = providerSetup.values
+      .filter { $0.configured && $0.supportsLiveModelCatalog }
+      .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
+    guard !providers.isEmpty, providerCatalogLoading.isEmpty else { return }
+    for provider in providers {
+      await reloadProviderCatalog(provider.id)
+    }
+    message = "Reloaded current models for \(providers.count) provider\(providers.count == 1 ? "" : "s")."
+  }
+
+  func addProviderCatalogModels(_ provider: String, modelIDs: [String]) async {
+    let unique = Array(Set(modelIDs)).sorted()
+    guard !unique.isEmpty, unique.count <= 200, !providerCatalogLoading.contains(provider) else { return }
+    providerCatalogLoading.insert(provider)
+    do {
+      // Curation repeats a live discovery before committing, then atomically
+      // republishes every installed client. Never turn a cached list directly
+      // into routes that may already have been withdrawn upstream.
+      _ = try await runRouterScript("curate-models.mjs", arguments: [
+        provider, "--models", unique.joined(separator: ","), "--refresh", "--apply",
+      ])
+      await refresh()
+      providerCatalogLoading.remove(provider)
+      await reloadProviderCatalog(provider)
+      message = "\(unique.count) \(provider) model\(unique.count == 1 ? "" : "s") added. Restart Codex to refresh its picker."
+    } catch {
+      providerCatalogLoading.remove(provider)
+      message = "\(provider): \(error.localizedDescription)"
     }
   }
 
@@ -2592,6 +2646,49 @@ final class RouterStore: ObservableObject {
     }.value
   }
 
+  // These are two UI-owned entry points that the generic control plane does
+  // not expose. Keep the allow-list here: provider ids and model ids are data,
+  // never a command path, and the tray must not become an arbitrary script
+  // launcher just to mirror Electron's catalog controls.
+  private func runRouterScript(_ script: String, arguments: [String]) async throws -> Data {
+    guard ["model-discovery.mjs", "curate-models.mjs"].contains(script) else {
+      throw RouterError("Unsupported Model Router script.")
+    }
+    let root = try sourceRoot()
+    let scriptURL = root.appendingPathComponent("src").appendingPathComponent(script)
+    return try await Task.detached {
+      let task = Process()
+      task.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+      task.arguments = ["node", scriptURL.path] + arguments
+      task.currentDirectoryURL = root
+      var environment = ProcessInfo.processInfo.environment
+      let home = FileManager.default.homeDirectoryForCurrentUser.path
+      let preferredPaths = [
+        "\(home)/.npm-global/bin",
+        "\(home)/.local/bin",
+        "/opt/homebrew/bin",
+        "/usr/local/bin",
+      ]
+      environment["PATH"] = (preferredPaths + [environment["PATH"] ?? ""]).joined(separator: ":")
+      task.environment = environment
+      let output = Pipe()
+      let errors = Pipe()
+      task.standardOutput = output
+      task.standardError = errors
+      try task.run()
+      let stdoutReader = Task.detached { output.fileHandleForReading.readDataToEndOfFile() }
+      let stderrReader = Task.detached { errors.fileHandleForReading.readDataToEndOfFile() }
+      task.waitUntilExit()
+      let stdout = await stdoutReader.value
+      let stderr = await stderrReader.value
+      guard task.terminationStatus == 0 else {
+        let detail = String(data: stderr, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        throw RouterError(detail?.isEmpty == false ? detail! : "Model Router command failed.")
+      }
+      return stdout
+    }.value
+  }
+
   private func sourceRoot() throws -> URL {
     guard let configured = Bundle.main.object(forInfoDictionaryKey: "ModelRouterSourceRoot") as? String,
       !configured.isEmpty
@@ -3505,6 +3602,25 @@ struct ProviderSetupState: Decodable, Identifiable, Equatable {
   // rather than after a 403 lands in Codex.
   let planNote: String?
   let anonymousNote: String?
+
+  // Match the Electron catalog surface: these sources either have no single
+  // provider endpoint to interrogate or are owned by the client/runtime.
+  // Showing a Load button for them would promise a request that discovery
+  // correctly refuses.
+  var supportsLiveModelCatalog: Bool {
+    !["openai", "local", "lmstudio", "custom", "devin-cli", "anthropic-api"].contains(id)
+  }
+}
+
+struct ProviderModelCatalog: Decodable, Equatable {
+  let provider: String
+  let discovered: [String]
+  let registered: [String]
+  let unregistered: [String]
+  let unavailable: [String]
+  let cached: Bool?
+  let stale: Bool?
+  let fetchedAt: String?
 }
 
 private struct MenuBarIconView: View {
@@ -4649,6 +4765,7 @@ private struct TrayView: View {
     let target: RouterTarget
     @State private var subagentsExpanded = true
     @State private var pickerExpanded = true
+    @State private var providerCatalogsExpanded = true
     @State private var visionExpanded = true
     // Local models are a first-class install surface. Keep this section open
     // on launch so the catalog is not hidden behind the other settings cards.
@@ -4705,6 +4822,10 @@ private struct TrayView: View {
           if $0.provider != $1.provider { return $0.provider < $1.provider }
           return $0.slug < $1.slug
         }
+    }
+
+    private var canReloadProviderCatalogs: Bool {
+      store.providerSetup.values.contains { $0.configured && $0.supportsLiveModelCatalog }
     }
 
     private func providerGroups(_ models: [RouterModel]) -> [ProviderModels] {
@@ -4837,9 +4958,24 @@ private struct TrayView: View {
           expanded: $pickerExpanded
         ) {
           VStack(alignment: .leading, spacing: 8) {
-            Text(routerLocalized("Hidden models stay connected but are not offered by Codex."))
-              .font(.system(size: 9))
-              .foregroundStyle(routerMuted)
+            HStack(alignment: .top, spacing: 8) {
+              Text(routerLocalized("Hidden models stay connected but are not offered by Codex."))
+                .font(.system(size: 9))
+                .foregroundStyle(routerMuted)
+              Spacer(minLength: 0)
+              Button(
+                store.providerCatalogLoading.isEmpty
+                  ? routerLocalized("Reload provider models")
+                  : routerLocalized("Reloading provider models…")
+              ) {
+                Task { await store.reloadAvailableProviderCatalogs() }
+              }
+              .buttonStyle(.borderless)
+              .font(.system(size: 9, weight: .medium))
+              .foregroundStyle(routerMint)
+              .disabled(!canReloadProviderCatalogs || !store.providerCatalogLoading.isEmpty)
+              .help(routerLocalized("Fetch the current catalog from every connected provider that supports live model discovery."))
+            }
             toolbar(
               buttons: [
                 ("Show all", { Task { await store.showAllPickerModels() } }),
@@ -4890,6 +5026,14 @@ private struct TrayView: View {
           localLlmPanel
         }
 
+        AccordionPanel(
+          title: routerLocalized("Provider catalogs"),
+          summary: routerLocalized("Load the latest provider models"),
+          expanded: $providerCatalogsExpanded
+        ) {
+          providerCatalogPanel
+        }
+
         // Header says "Vision" and nothing else; the state it used to summarise
         // is one line below, in the toggle's own detail.
         AccordionPanel(
@@ -4933,9 +5077,20 @@ private struct TrayView: View {
     // phrases truncate in place instead of making the panel wider or taller.
     @ViewBuilder private var localLlmPanel: some View {
       VStack(alignment: .leading, spacing: 10) {
-        Text(routerLocalized("Run local models through Ollama or the curated MLX runtime. Installed models are wired into the same Codex proxy."))
-          .font(.system(size: 9))
-          .foregroundStyle(routerMuted)
+        HStack(alignment: .top, spacing: 8) {
+          Text(routerLocalized("Run local models through Ollama or the curated MLX runtime. Installed models are wired into the same Codex proxy."))
+            .font(.system(size: 9))
+            .foregroundStyle(routerMuted)
+          Spacer(minLength: 0)
+          Button(store.isRefreshing ? routerLocalized("Refreshing…") : routerLocalized("Refresh models")) {
+            Task { await store.refresh() }
+          }
+          .buttonStyle(.borderless)
+          .font(.system(size: 9, weight: .medium))
+          .foregroundStyle(routerMint)
+          .disabled(store.isRefreshing)
+          .help(routerLocalized("Reload installed and available local models from the router."))
+        }
         localMlxSection
         if let operation = store.localModelOperation {
           localModelOperationStatus(operation)
@@ -4961,6 +5116,35 @@ private struct TrayView: View {
         }
       }
       .animation(.easeOut(duration: 0.2), value: store.localModelOperation)
+    }
+
+    private var catalogProviders: [ProviderSetupState] {
+      store.providerSetup.values
+        .filter { $0.configured && $0.supportsLiveModelCatalog }
+        .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
+    }
+
+    @ViewBuilder private var providerCatalogPanel: some View {
+      VStack(alignment: .leading, spacing: 8) {
+        if catalogProviders.isEmpty {
+          Text(routerLocalized("Connect a supported provider to load its latest models."))
+            .font(.system(size: 9))
+            .foregroundStyle(routerMuted)
+        } else {
+          Text(routerLocalized("Load models asks that provider for its current list. Choosing models adds them to the router and republishes every installed client."))
+            .font(.system(size: 9))
+            .foregroundStyle(routerMuted)
+          ForEach(catalogProviders) { provider in
+            ProviderCatalogRow(
+              provider: provider,
+              catalog: store.providerCatalogs[provider.id],
+              isLoading: store.providerCatalogLoading.contains(provider.id),
+              onReload: { Task { await store.reloadProviderCatalog(provider.id) } },
+              onAdd: { models in Task { await store.addProviderCatalogModels(provider.id, modelIDs: models) } }
+            )
+          }
+        }
+      }
     }
 
     /// The curated MLX install is deliberately separate from Ollama: it has a
@@ -6467,6 +6651,132 @@ private struct TrayView: View {
         Color.primary.opacity(0.045),
         in: RoundedRectangle(cornerRadius: 10, style: .continuous)
       )
+    }
+  }
+
+  private struct ProviderCatalogRow: View {
+    let provider: ProviderSetupState
+    let catalog: ProviderModelCatalog?
+    let isLoading: Bool
+    let onReload: () -> Void
+    let onAdd: ([String]) -> Void
+
+    @State private var query = ""
+    @State private var selected = Set<String>()
+
+    private var matchingModels: [String] {
+      guard let catalog else { return [] }
+      let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+      return catalog.discovered.filter { needle.isEmpty || $0.lowercased().contains(needle) }
+    }
+
+    var body: some View {
+      VStack(alignment: .leading, spacing: 7) {
+        HStack(spacing: 8) {
+          VStack(alignment: .leading, spacing: 2) {
+            Text(provider.displayName)
+              .font(.system(size: 10, weight: .medium))
+            Text(catalogDetail)
+              .font(.system(size: 8))
+              .foregroundStyle(routerMutedStrong)
+          }
+          Spacer()
+          Button(isLoading ? routerLocalized("Loading models") : routerLocalized(catalog == nil ? "Load models" : "Reload models"), action: onReload)
+            .buttonStyle(.borderless)
+            .font(.system(size: 9, weight: .medium))
+            .foregroundStyle(routerMint)
+            .disabled(isLoading)
+        }
+
+        if let catalog {
+          let registered = Set(catalog.registered)
+          TextField(routerLocalized("Search available models"), text: $query)
+            .textFieldStyle(.roundedBorder)
+            .font(.system(size: 9))
+
+          if matchingModels.isEmpty {
+            Text(routerLocalized("No provider models match this search."))
+              .font(.system(size: 8))
+              .foregroundStyle(routerMutedStrong)
+              .padding(.vertical, 2)
+          } else {
+            VStack(spacing: 0) {
+              ForEach(Array(matchingModels.prefix(80)), id: \.self) { model in
+                HStack(spacing: 7) {
+                  if registered.contains(model) {
+                    Image(systemName: "checkmark.circle.fill")
+                      .font(.system(size: 10))
+                      .foregroundStyle(routerMint)
+                      .frame(width: 14)
+                  } else {
+                    Toggle("", isOn: Binding(
+                      get: { selected.contains(model) },
+                      set: { checked in
+                        if checked { selected.insert(model) } else { selected.remove(model) }
+                      }
+                    ))
+                    .labelsHidden()
+                    .toggleStyle(.checkbox)
+                    .controlSize(.mini)
+                    .frame(width: 14)
+                    .disabled(isLoading)
+                  }
+                  Text(model)
+                    .font(.system(size: 8, design: .monospaced))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                  Spacer(minLength: 0)
+                  if registered.contains(model) {
+                    Text(routerLocalized("Added"))
+                      .font(.system(size: 8, weight: .medium))
+                      .foregroundStyle(routerMutedStrong)
+                  }
+                }
+                .padding(.vertical, 3)
+                if model != matchingModels.prefix(80).last {
+                  Divider()
+                }
+              }
+            }
+            .padding(.horizontal, 3)
+            .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+            if matchingModels.count > 80 {
+              Text(routerLocalized("Showing the first 80 matches. Search to narrow the list."))
+                .font(.system(size: 8))
+                .foregroundStyle(routerMutedStrong)
+            }
+          }
+
+          if !selected.isEmpty {
+            HStack(spacing: 8) {
+              Text("\(selected.count) \(routerLocalized("selected"))")
+                .font(.system(size: 8))
+                .foregroundStyle(routerMutedStrong)
+              Spacer()
+              Button(routerLocalized("Add selected")) {
+                onAdd(selected.sorted())
+              }
+              .buttonStyle(.borderless)
+              .font(.system(size: 9, weight: .medium))
+              .foregroundStyle(routerMint)
+              .disabled(isLoading)
+            }
+          }
+        }
+      }
+      .padding(8)
+      .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+      .onChange(of: catalog?.fetchedAt) { _ in
+        selected.formIntersection(Set(catalog?.unregistered ?? []))
+      }
+    }
+
+    private var catalogDetail: String {
+      guard let catalog else { return routerLocalized("Load the current list from this provider.") }
+      let available = catalog.discovered.count
+      let added = catalog.registered.count
+      let freshness = catalog.cached == true ? routerLocalized("saved list") : routerLocalized("live list")
+      return "\(available) \(routerLocalized("models")) · \(added) \(routerLocalized("added")) · \(freshness)"
     }
   }
 

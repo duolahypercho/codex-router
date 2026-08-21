@@ -37,34 +37,38 @@ export function ServiceHealthPanel({ health, compact = false, onOpen, onRepair, 
     </section>
   ) : (
     <section className="panel-section service-health-panel">
-      <details
-        className="service-health-accordion"
-        open={detailsOpen}
-        onToggle={(event) => setDetailsOpen(event.currentTarget.open)}
-      >
-        <summary>
+      <div className="service-health-accordion">
+        <div className="service-health-accordion-header">
+          <button
+            type="button"
+            className="service-health-toggle"
+            aria-expanded={detailsOpen}
+            aria-controls="service-health-details"
+            onClick={() => setDetailsOpen((open) => !open)}
+          >
           <span className="service-health-summary-copy">
             <strong>Service health</strong>
             <small>{attention ? "A local dependency needs attention." : "Router and local dependencies."}</small>
           </span>
-          <span className="service-health-summary-status">
+            <ChevronDown className={detailsOpen ? "is-open" : undefined} aria-hidden size={15} strokeWidth={1.7} />
+          </button>
+          <div className="service-health-header-actions">
             <Badge tone={attention ? "warning" : health ? "success" : "neutral"}>{summary}</Badge>
-            <ChevronDown aria-hidden size={15} strokeWidth={1.7} />
-          </span>
-        </summary>
-        <div className="service-health-details">
-          <div className="service-health-actions">
             {onRepair && attention ? (
               <Button variant="secondary" disabled={repairing} onClick={onRepair}>
                 {repairing ? "Repairing…" : "Fix"}
               </Button>
             ) : null}
           </div>
+        </div>
+        {detailsOpen ? (
+          <div id="service-health-details" className="service-health-details">
           <div className="service-health-list" role="list" aria-label="Router service health">
             {rows.map((row) => <ServiceHealthRowView key={row.id} row={row} />)}
           </div>
-        </div>
-      </details>
+          </div>
+        ) : null}
+      </div>
     </section>
   );
 }

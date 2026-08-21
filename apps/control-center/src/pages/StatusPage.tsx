@@ -289,7 +289,7 @@ export function StatusPage({
             description="Live work from the local health endpoint, grouped by chat and named agent."
           />
           <div className="st-router-state">
-            <span className={`st-status-orb state-${state}`} aria-hidden="true"><i /></span>
+            <RouterActivityOrb state={state} />
             <div>
               <strong>{activityLabel(state)}</strong>
               <small>{activity?.model || (health?.ok
@@ -602,6 +602,20 @@ export function StatusPage({
         )}
       </section>
     </div>
+  );
+}
+
+function RouterActivityOrb({ state }: { state: string }) {
+  return (
+    <span className={`st-status-orb state-${state}`} aria-hidden="true">
+      <i className="st-orb-core" />
+      <span className="st-orb-particle" />
+      <span className="st-orb-particle" />
+      <span className="st-orb-particle" />
+      <span className="st-orb-particle" />
+      <span className="st-orb-particle" />
+      <span className="st-orb-particle" />
+    </span>
   );
 }
 
