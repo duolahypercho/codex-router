@@ -528,6 +528,14 @@ function normalizeBody(buffer, contentType, route) {
   // Codex tags outbound payloads with caller identity that no upstream
   // provider consumes; strict providers reject the unknown field outright.
   delete payload.client_metadata;
+  if (route === "/chat/completions") {
+    if (payload.stream === true) {
+      payload.stream_options = { ...(payload.stream_options ?? {}), include_usage: true };
+    }
+    if (Array.isArray(payload.tools) && payload.tools.length === 0) {
+      delete payload.tools;
+    }
+  }
   const requestedModel = String(payload.model || "");
   // LiteLLM's Responses bridge prefixes the gateway id with `responses/` on
   // the upstream wire format; the forwarder still owns the id translation.
