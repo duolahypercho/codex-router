@@ -8,7 +8,7 @@
       "provider": "opencode-go",
       "listed": true,
       "displayName": "GLM-5.3 (opencode Go)",
-      "description": "GLM-5.3 through the opencode Go subscription.",
+      "description": "GLM-5.3 through the opencode Go subscription. Serves the GLM-5.3 1M context lineage; the 200K figure it previously carried belongs to GLM-5.1.",
       "priority": 30,
       "defaultEffort": "max",
       "reasoningLevels": [
@@ -21,12 +21,12 @@
           "description": "Maximum reasoning depth"
         }
       ],
-      "contextWindow": 200000,
-      "autoCompact": 180000,
+      "contextWindow": 1000000,
+      "autoCompact": 900000,
       "inputModalities": [
         "text"
       ],
-      "compHash": "opencode-go-glm-5-3-v1"
+      "compHash": "opencode-go-glm-5-3-v2"
     }
   ]
 }

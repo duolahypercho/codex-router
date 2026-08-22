@@ -190,8 +190,10 @@ history. The managed Codex provider table must also set
 field); older clients ignore the field and continue without standalone search.
 
 The checked-in registry currently enables this mode for DeepSeek V4 Flash on
-its direct API and opencode Go routes. Other provider/model pairs stay off
-until verified. User-model curation can opt in locally without changing the
+its direct API and opencode Go routes, DeepSeek V4 Flash Vision Exp, Xiaomi
+MiMo v2.5, and GLM-5.3 on the Z.ai Coding Plan. Other provider/model pairs
+stay off until verified -- including GLM-5.3 on the opencode Go relay, which
+is a different transport from the Z.ai route the capability was proven on. User-model curation can opt in locally without changing the
 shared registry.
 
 ## Transport and compaction

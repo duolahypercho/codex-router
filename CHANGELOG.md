@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **GLM-5.3 on opencode Go serves its real 1M context.** The entry still
+  carried 200,000/180,000 -- the GLM-5.1 lineage default that #244 established
+  is wrong for 5.3, where a live probe accepted 990,020 prompt tokens. Both
+  Z.ai GLM-5.3 entries were corrected then; this opencode Go entry was missed,
+  so a session was compacting at 180K against a model that serves a million.
+  Its GLM-5.1 and GLM-5.2 siblings on the same gateway already declare
+  1,048,576, so 1,000,000/900,000 stays conservative against the relay.
+  Standalone web search stays off for this route until the opencode Go relay
+  is verified to preserve tool/function-call history.
+
 - **Grok 4.6 can select Codex's native image viewer.** xAI stopped without a
   function call when the tool was named `view_image`, even when selection was
   required. The Grok OAuth boundary now presents that tool as `inspect_image`

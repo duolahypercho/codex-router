@@ -581,6 +581,24 @@ test("DeepSeek V4 Flash Vision Exp advertises only verified direct-API capabilit
   assert.ok(API_MODELS.includes(model));
 });
 
+test("GLM-5.3 on OpenCode Go carries the 1M GLM-5.3 window, not GLM-5.1's 200K", () => {
+  const model = MODEL_BY_SLUG.get("opencode-go/glm-5.3");
+  assert.equal(model?.contextWindow, 1_000_000);
+  assert.equal(model?.autoCompact, 900_000);
+  // The sibling GLM entries on this same gateway already serve 1,048,576, so
+  // the gateway does not clamp the family; 1M stays conservative against them.
+  for (const sibling of ["opencode-go/glm-5.1", "opencode-go/glm-5.2"]) {
+    assert.ok(
+      MODEL_BY_SLUG.get(sibling)?.contextWindow >= model.contextWindow,
+      `${sibling} should not serve less than glm-5.3`,
+    );
+  }
+  // Standalone search stays off: docs/HOW-IT-WORKS.md requires per-route
+  // verification that the upstream preserves tool/function-call history, and
+  // no probe of the opencode Go relay has been recorded.
+  assert.equal(model?.searchTool, undefined);
+});
+
 test("GLM-5.3 Coding Plan opts in to GPT-5.6 behavior, concise execution, and standalone search", () => {
   const model = MODEL_BY_SLUG.get("zai-coding/glm-5.3");
   assert.equal(model?.behaviorTemplate, "gpt-5.6-sol");
