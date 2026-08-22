@@ -376,5 +376,28 @@ enum RouterKoreanText {
     "External forwarders": "외부 포워더",
     "Subagent": "서브에이전트",
     "thinking": "추론",
+
+    // Provider catalogs: the on-demand panel that asks a configured
+    // provider for its current model list and curates from it.
+    "Provider catalogs": "제공자 카탈로그",
+    "Load the latest provider models": "제공자의 최신 모델 불러오기",
+    "Connect a supported provider to load its latest models.": "지원되는 제공자를 연결하면 최신 모델을 불러올 수 있습니다.",
+    "Load models asks that provider for its current list. Choosing models adds them to the router and republishes every installed client.": "\"모델 불러오기\"는 해당 제공자에게 현재 목록을 요청합니다. 모델을 선택하면 라우터에 추가되고 설치된 모든 클라이언트가 다시 게시됩니다.",
+    "Reload provider models": "제공자 모델 다시 불러오기",
+    "Reloading provider models…": "제공자 모델을 다시 불러오는 중…",
+    "Fetch the current catalog from every connected provider that supports live model discovery.": "실시간 모델 검색을 지원하는 연결된 모든 제공자에서 현재 카탈로그를 가져옵니다.",
+    "Refresh models": "모델 새로 고침",
+    "Reload installed and available local models from the router.": "라우터에서 설치된 로컬 모델과 사용 가능한 로컬 모델을 다시 불러옵니다.",
+    "Loading models": "모델 불러오는 중",
+    "Search available models": "사용 가능한 모델 검색",
+    "No provider models match this search.": "이 검색과 일치하는 제공자 모델이 없습니다.",
+    "Added": "추가됨",
+    "Showing the first 80 matches. Search to narrow the list.": "일치하는 항목 중 처음 80개만 표시합니다. 검색해 목록을 좁히세요.",
+    "%d selected": "%d개 선택됨",
+    "Add selected": "선택 항목 추가",
+    "Load the current list from this provider.": "이 제공자에서 현재 목록을 불러옵니다.",
+    "saved list": "저장된 목록",
+    "live list": "실시간 목록",
+    "%d models · %d added · %@": "모델 %d개 · %d개 추가됨 · %@",
   ]
 }

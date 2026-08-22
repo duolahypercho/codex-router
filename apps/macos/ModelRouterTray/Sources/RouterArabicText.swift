@@ -376,5 +376,28 @@ enum RouterArabicText {
     "External forwarders": "وكلاء التمرير الخارجيون",
     "Subagent": "وكيل فرعي",
     "thinking": "التفكير",
+
+    // Provider catalogs: the on-demand panel that asks a configured
+    // provider for its current model list and curates from it.
+    "Provider catalogs": "كتالوجات المزوّدين",
+    "Load the latest provider models": "حمّل أحدث نماذج المزوّد",
+    "Connect a supported provider to load its latest models.": "اتصل بمزوّد مدعوم لتحميل أحدث نماذجه.",
+    "Load models asks that provider for its current list. Choosing models adds them to the router and republishes every installed client.": "يطلب «تحميل النماذج» من المزوّد قائمته الحالية. واختيار النماذج يضيفها إلى الموجّه ويعيد نشر كل عميل مثبَّت.",
+    "Reload provider models": "إعادة تحميل نماذج المزوّدين",
+    "Reloading provider models…": "جارٍ إعادة تحميل نماذج المزوّدين…",
+    "Fetch the current catalog from every connected provider that supports live model discovery.": "اجلب الكتالوج الحالي من كل مزوّد متصل يدعم اكتشاف النماذج المباشر.",
+    "Refresh models": "تحديث النماذج",
+    "Reload installed and available local models from the router.": "أعد تحميل النماذج المحلية المثبَّتة والمتاحة من الموجّه.",
+    "Loading models": "جارٍ تحميل النماذج",
+    "Search available models": "ابحث في النماذج المتاحة",
+    "No provider models match this search.": "لا توجد نماذج مزوّد تطابق هذا البحث.",
+    "Added": "مُضاف",
+    "Showing the first 80 matches. Search to narrow the list.": "يتم عرض أول 80 نتيجة مطابقة. ابحث لتضييق القائمة.",
+    "%d selected": "%d محدَّد",
+    "Add selected": "أضف المحدَّد",
+    "Load the current list from this provider.": "حمّل القائمة الحالية من هذا المزوّد.",
+    "saved list": "قائمة محفوظة",
+    "live list": "قائمة مباشرة",
+    "%d models · %d added · %@": "%d نموذج · %d مُضاف · %@",
   ]
 }

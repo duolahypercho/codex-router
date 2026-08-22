@@ -376,5 +376,28 @@ enum RouterJapaneseText {
     "External forwarders": "外部フォワーダー",
     "Subagent": "サブエージェント",
     "thinking": "思考",
+
+    // Provider catalogs: the on-demand panel that asks a configured
+    // provider for its current model list and curates from it.
+    "Provider catalogs": "プロバイダーカタログ",
+    "Load the latest provider models": "プロバイダーの最新モデルを読み込む",
+    "Connect a supported provider to load its latest models.": "対応プロバイダーを接続すると最新モデルを読み込めます。",
+    "Load models asks that provider for its current list. Choosing models adds them to the router and republishes every installed client.": "「モデルを読み込む」はプロバイダーに現在の一覧を問い合わせます。モデルを選ぶとルーターに追加され、インストール済みのすべてのクライアントが再発行されます。",
+    "Reload provider models": "プロバイダーモデルを再読み込み",
+    "Reloading provider models…": "プロバイダーモデルを再読み込み中…",
+    "Fetch the current catalog from every connected provider that supports live model discovery.": "ライブのモデル探索に対応する接続済みプロバイダーすべてから現在のカタログを取得します。",
+    "Refresh models": "モデルを更新",
+    "Reload installed and available local models from the router.": "ルーターからインストール済みおよび利用可能なローカルモデルを再読み込みします。",
+    "Loading models": "モデルを読み込み中",
+    "Search available models": "利用可能なモデルを検索",
+    "No provider models match this search.": "この検索に一致するプロバイダーモデルはありません。",
+    "Added": "追加済み",
+    "Showing the first 80 matches. Search to narrow the list.": "最初の 80 件の一致のみ表示しています。検索して絞り込んでください。",
+    "%d selected": "%d 件選択中",
+    "Add selected": "選択項目を追加",
+    "Load the current list from this provider.": "このプロバイダーから現在の一覧を読み込みます。",
+    "saved list": "保存済みの一覧",
+    "live list": "最新の一覧",
+    "%d models · %d added · %@": "%d 個のモデル · %d 個追加済み · %@",
   ]
 }

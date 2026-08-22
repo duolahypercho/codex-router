@@ -203,6 +203,11 @@ final class RouterStore: ObservableObject {
   @Published private(set) var providerUsage: ProviderUsageSnapshot?
   @Published private(set) var providerUsageError: String?
   @Published private(set) var providerSetup: [String: ProviderSetupState] = [:]
+  // Provider discovery is deliberately on-demand. Unlike router status, this
+  // may make a network request to a provider, so the tray only does it after
+  // the user presses Load/Reload models for that provider.
+  @Published private(set) var providerCatalogs: [String: ProviderModelCatalog] = [:]
+  @Published private(set) var providerCatalogLoading = Set<String>()
   @Published private(set) var providerOperation: String?
   @Published private(set) var visionDownload: VisionDownloadState?
   @Published private(set) var localDownload: VisionDownloadState?
@@ -1391,6 +1396,87 @@ final class RouterStore: ObservableObject {
     } catch {
       let nextMessage = error.localizedDescription
       if message != nextMessage { message = nextMessage }
+    }
+  }
+
+  /// `refresh` re-asks the provider; without it the router answers from its
+  /// stored list, so opening a provider costs no round trip and still works
+  /// offline. That is the same split `discoverProviderModels` makes in
+  /// apps/control-center/electron/ipc.mjs, and the reason the decoded
+  /// `cached`/`stale` fields exist at all.
+  func reloadProviderCatalog(_ provider: String, refresh: Bool = false) async {
+    let providerID: String
+    do {
+      providerID = try ProviderCatalogInput.validatedProviderID(provider)
+    } catch {
+      message = "\(provider): \(error.localizedDescription)"
+      return
+    }
+    guard !providerCatalogLoading.contains(providerID) else { return }
+    providerCatalogLoading.insert(providerID)
+    defer { providerCatalogLoading.remove(providerID) }
+    do {
+      let output = try await runRouterScript(
+        "model-discovery.mjs",
+        arguments: [providerID, "--json"] + (refresh ? ["--refresh"] : []),
+        timeout: RouterScriptWatchdog.discoveryTimeout
+      )
+      let catalog = try JSONDecoder().decode(ProviderModelCatalog.self, from: output)
+      providerCatalogs[providerID] = catalog
+      let origin = catalog.cached == true ? "saved" : "current"
+      message = "\(catalog.discovered.count) \(origin) \(providerID) models loaded. Select the ones to add below."
+    } catch {
+      message = "\(providerID): \(error.localizedDescription)"
+    }
+  }
+
+  func reloadAvailableProviderCatalogs() async {
+    let providers = providerSetup.values
+      .filter { $0.configured && $0.supportsLiveModelCatalog }
+      .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
+    guard !providers.isEmpty, providerCatalogLoading.isEmpty else { return }
+    for provider in providers {
+      // The button says "Reload", so this one is the explicit re-ask. Every
+      // other entry point is cache-first.
+      await reloadProviderCatalog(provider.id, refresh: true)
+    }
+    message = "Reloaded current models for \(providers.count) provider\(providers.count == 1 ? "" : "s")."
+  }
+
+  func addProviderCatalogModels(_ provider: String, modelIDs: [String]) async {
+    // Model ids arrive from the provider's own HTTP response and end up in a
+    // single comma-separated `--models` argument, so they are validated to the
+    // same shape Electron's `addProviderModels` enforces before any of them is
+    // allowed to reach curation.
+    let providerID: String
+    let unique: [String]
+    do {
+      providerID = try ProviderCatalogInput.validatedProviderID(provider)
+      unique = try ProviderCatalogInput.validatedModelIDs(modelIDs)
+    } catch {
+      message = "\(provider): \(error.localizedDescription)"
+      return
+    }
+    guard !providerCatalogLoading.contains(providerID) else { return }
+    providerCatalogLoading.insert(providerID)
+    do {
+      // Curation repeats a live discovery before committing, then atomically
+      // republishes every installed client. Never turn a cached list directly
+      // into routes that may already have been withdrawn upstream.
+      _ = try await runRouterScript(
+        "curate-models.mjs",
+        arguments: [providerID, "--models", unique.joined(separator: ","), "--refresh", "--apply"],
+        timeout: RouterScriptWatchdog.catalogMutationTimeout
+      )
+      await refresh()
+      providerCatalogLoading.remove(providerID)
+      // Curation just re-asked upstream and rewrote the stored list, so the
+      // cache-first read here is the fresh answer without a second round trip.
+      await reloadProviderCatalog(providerID)
+      message = "\(unique.count) \(providerID) model\(unique.count == 1 ? "" : "s") added. Restart Codex to refresh its picker."
+    } catch {
+      providerCatalogLoading.remove(providerID)
+      message = "\(providerID): \(error.localizedDescription)"
     }
   }
 
@@ -2592,6 +2678,70 @@ final class RouterStore: ObservableObject {
     }.value
   }
 
+  // These are two UI-owned entry points that the generic control plane does
+  // not expose. Keep the allow-list here: provider ids and model ids are data,
+  // never a command path, and the tray must not become an arbitrary script
+  // launcher just to mirror Electron's catalog controls.
+  private func runRouterScript(
+    _ script: String,
+    arguments: [String],
+    timeout: TimeInterval
+  ) async throws -> Data {
+    guard ["model-discovery.mjs", "curate-models.mjs"].contains(script) else {
+      throw RouterError("Unsupported Model Router script.")
+    }
+    let root = try sourceRoot()
+    let scriptURL = root.appendingPathComponent("src").appendingPathComponent(script)
+    return try await Task.detached {
+      let task = Process()
+      task.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+      task.arguments = ["node", scriptURL.path] + arguments
+      task.currentDirectoryURL = root
+      var environment = ProcessInfo.processInfo.environment
+      let home = FileManager.default.homeDirectoryForCurrentUser.path
+      let preferredPaths = [
+        "\(home)/.npm-global/bin",
+        "\(home)/.local/bin",
+        "/opt/homebrew/bin",
+        "/usr/local/bin",
+      ]
+      environment["PATH"] = (preferredPaths + [environment["PATH"] ?? ""]).joined(separator: ":")
+      task.environment = environment
+      let output = Pipe()
+      let errors = Pipe()
+      task.standardOutput = output
+      task.standardError = errors
+      try task.run()
+      // Drain both pipes before waiting. A provider list easily exceeds the
+      // 64KB pipe buffer, and a child blocked on a full pipe never exits, so
+      // waiting first would deadlock even without a hostile endpoint.
+      let stdoutReader = Task.detached { output.fileHandleForReading.readDataToEndOfFile() }
+      let stderrReader = Task.detached { errors.fileHandleForReading.readDataToEndOfFile() }
+      // A provider that accepts the connection and then never answers would
+      // otherwise park `waitUntilExit` forever, and with it the caller's
+      // `defer` that clears the loading flag -- which permanently disables
+      // both catalog buttons for the rest of the app's life. Terminating the
+      // child closes the pipes, so the readers finish and the wait returns.
+      let watchdog = RouterScriptWatchdog(task: task)
+      watchdog.arm(after: timeout)
+      task.waitUntilExit()
+      watchdog.disarm()
+      let stdout = await stdoutReader.value
+      let stderr = await stderrReader.value
+      if watchdog.didTimeOut {
+        throw RouterError(
+          "\(script) did not answer within \(Int(timeout.rounded())) seconds and was stopped. "
+            + "The provider may be unreachable; try again."
+        )
+      }
+      guard task.terminationStatus == 0 else {
+        let detail = String(data: stderr, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        throw RouterError(detail?.isEmpty == false ? detail! : "Model Router command failed.")
+      }
+      return stdout
+    }.value
+  }
+
   private func sourceRoot() throws -> URL {
     guard let configured = Bundle.main.object(forInfoDictionaryKey: "ModelRouterSourceRoot") as? String,
       !configured.isEmpty
@@ -2673,6 +2823,75 @@ struct RouterActiveRequest: Decodable, Identifiable, Equatable {
   let agentNickname: String?
   let isSubagent: Bool?
   let startedAt: Double
+}
+
+/// Bounds a child `Process` so a wedged provider cannot hold the tray's
+/// catalog UI hostage. `arm` schedules a SIGTERM, escalating to SIGKILL if the
+/// child ignores it, and `disarm` cancels the timer once the process is gone.
+/// The `finished` flag is what makes `disarm` safe: it is set under the same
+/// lock the watchdog takes, so a timer firing during teardown cannot signal a
+/// process the caller has already reaped.
+final class RouterScriptWatchdog: @unchecked Sendable {
+  /// Electron's discovery budget (`{ timeoutMs: 45_000 }` in
+  /// apps/control-center/electron/ipc.mjs). One provider HTTP round trip.
+  static let discoveryTimeout: TimeInterval = 45
+  /// Electron's `CATALOG_MUTATION_TIMEOUT_MS` (330_000). Curation waits on a
+  /// cross-process publish lock and rebuilds every installed client, so it
+  /// gets the same long budget rather than a discovery-sized one.
+  static let catalogMutationTimeout: TimeInterval = 330
+  /// Grace period between SIGTERM and SIGKILL, for a child that traps TERM.
+  static let terminationGrace: TimeInterval = 5
+
+  private let task: Process
+  private let lock = NSLock()
+  private var finished = false
+  private var timedOut = false
+  private var timer: DispatchWorkItem?
+
+  init(task: Process) { self.task = task }
+
+  var didTimeOut: Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    return timedOut
+  }
+
+  func arm(after timeout: TimeInterval) {
+    let item = DispatchWorkItem { [weak self] in self?.fire() }
+    lock.lock()
+    timer = item
+    lock.unlock()
+    DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeout, execute: item)
+  }
+
+  func disarm() {
+    lock.lock()
+    finished = true
+    let item = timer
+    timer = nil
+    lock.unlock()
+    item?.cancel()
+  }
+
+  private func fire() {
+    lock.lock()
+    guard !finished, task.isRunning else {
+      lock.unlock()
+      return
+    }
+    timedOut = true
+    let pid = task.processIdentifier
+    task.terminate()
+    lock.unlock()
+    guard pid > 0 else { return }
+    DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + Self.terminationGrace) { [weak self] in
+      guard let self else { return }
+      self.lock.lock()
+      defer { self.lock.unlock() }
+      guard !self.finished, self.task.isRunning else { return }
+      kill(pid, SIGKILL)
+    }
+  }
 }
 
 private struct RouterError: LocalizedError {
@@ -3506,6 +3725,119 @@ struct ProviderSetupState: Decodable, Identifiable, Equatable {
   // rather than after a 403 lands in Codex.
   let planNote: String?
   let anonymousNote: String?
+
+  // Match the Electron catalog surface: these sources either have no single
+  // provider endpoint to interrogate or are owned by the client/runtime.
+  // Showing a Load button for them would promise a request that discovery
+  // correctly refuses.
+  //
+  // The authority is `NO_LIVE_CATALOG` in
+  // apps/control-center/src/pages/ModelsPage.tsx. ProviderCatalogTests reads
+  // that file and fails if the two ever diverge.
+  static let liveModelCatalogExclusions: Set<String> = [
+    "openai", "local", "lmstudio", "custom", "devin-cli", "anthropic-api",
+  ]
+
+  var supportsLiveModelCatalog: Bool {
+    !Self.liveModelCatalogExclusions.contains(id)
+  }
+}
+
+/// The Swift half of the catalog input contract that
+/// `apps/control-center/electron/ipc.mjs` enforces for the same two scripts.
+/// Both surfaces hand provider-supplied ids straight to `curate-models.mjs`,
+/// so both have to agree on what an id may contain.
+///
+/// There is no shell here -- `Process` runs `/usr/bin/env` with an argv array
+/// -- so this is not about command injection. It is about the wire format:
+/// `--models` takes one comma-separated list, so a single id containing a
+/// comma silently becomes two ids the user never selected, and a leading `-`
+/// would be read as another flag.
+enum ProviderCatalogInput {
+  /// Mirrors `MODEL_SLUG` in ipc.mjs: `^[A-Za-z0-9][A-Za-z0-9._/:+-]{0,200}$`.
+  static let maxModelIDLength = 201
+  /// Mirrors `PROVIDER_ID` in ipc.mjs: `^[a-z0-9][a-z0-9-]{0,80}$`.
+  static let maxProviderIDLength = 81
+  /// Mirrors the 1...200 array bound ipc.mjs puts on `addProviderModels`.
+  static let maxModelIDCount = 200
+
+  private static let asciiAlphanumerics = Set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789")
+  private static let modelIDBody = asciiAlphanumerics.union("._/:+-")
+  private static let providerIDBody = Set("abcdefghijklmnopqrstuvwxyz0123456789-")
+  private static let providerIDHead = Set("abcdefghijklmnopqrstuvwxyz0123456789")
+
+  static func isValidModelID(_ value: String) -> Bool {
+    matches(value, head: asciiAlphanumerics, body: modelIDBody, maxLength: maxModelIDLength)
+  }
+
+  static func isValidProviderID(_ value: String) -> Bool {
+    matches(value, head: providerIDHead, body: providerIDBody, maxLength: maxProviderIDLength)
+  }
+
+  private static func matches(
+    _ value: String,
+    head: Set<Character>,
+    body: Set<Character>,
+    maxLength: Int
+  ) -> Bool {
+    guard let first = value.first, head.contains(first) else { return false }
+    guard value.count <= maxLength else { return false }
+    return value.dropFirst().allSatisfy { body.contains($0) }
+  }
+
+  enum Failure: LocalizedError, Equatable {
+    case emptySelection
+    case tooManyModels(Int)
+    case invalidModelID(String)
+    case duplicateModelID
+    case invalidProviderID(String)
+
+    var errorDescription: String? {
+      switch self {
+      case .emptySelection, .tooManyModels:
+        return "Choose between 1 and \(ProviderCatalogInput.maxModelIDCount) provider models."
+      case .invalidModelID(let id):
+        return "Model id is invalid: \(id)"
+      case .duplicateModelID:
+        return "Provider model ids must be unique."
+      case .invalidProviderID(let id):
+        return "Provider is invalid: \(id)"
+      }
+    }
+  }
+
+  /// Rejects, rather than silently repairs, a selection Electron would refuse.
+  /// Deduplicating here would hide a catalog that served the same id twice.
+  static func validatedModelIDs(_ modelIDs: [String]) throws -> [String] {
+    guard !modelIDs.isEmpty else { throw Failure.emptySelection }
+    guard modelIDs.count <= maxModelIDCount else { throw Failure.tooManyModels(modelIDs.count) }
+    var seen = Set<String>()
+    for id in modelIDs {
+      let trimmed = id.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard isValidModelID(trimmed) else { throw Failure.invalidModelID(id) }
+      guard seen.insert(trimmed).inserted else { throw Failure.duplicateModelID }
+    }
+    return modelIDs
+      .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+      .sorted()
+  }
+
+  static func validatedProviderID(_ provider: String) throws -> String {
+    let trimmed = provider.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard isValidProviderID(trimmed) else { throw Failure.invalidProviderID(provider) }
+    return trimmed
+  }
+}
+
+struct ProviderModelCatalog: Decodable, Equatable {
+  let provider: String
+  let discovered: [String]
+  let registered: [String]
+  let unregistered: [String]
+  let unavailable: [String]
+  let cached: Bool?
+  let stale: Bool?
+  let fetchedAt: String?
 }
 
 private struct MenuBarIconView: View {
@@ -4650,6 +4982,7 @@ private struct TrayView: View {
     let target: RouterTarget
     @State private var subagentsExpanded = true
     @State private var pickerExpanded = true
+    @State private var providerCatalogsExpanded = true
     @State private var visionExpanded = true
     // Local models are a first-class install surface. Keep this section open
     // on launch so the catalog is not hidden behind the other settings cards.
@@ -4706,6 +5039,10 @@ private struct TrayView: View {
           if $0.provider != $1.provider { return $0.provider < $1.provider }
           return $0.slug < $1.slug
         }
+    }
+
+    private var canReloadProviderCatalogs: Bool {
+      store.providerSetup.values.contains { $0.configured && $0.supportsLiveModelCatalog }
     }
 
     private func providerGroups(_ models: [RouterModel]) -> [ProviderModels] {
@@ -4838,9 +5175,24 @@ private struct TrayView: View {
           expanded: $pickerExpanded
         ) {
           VStack(alignment: .leading, spacing: 8) {
-            Text(routerLocalized("Hidden models stay connected but are not offered by Codex."))
-              .font(.system(size: 9))
-              .foregroundStyle(routerMuted)
+            HStack(alignment: .top, spacing: 8) {
+              Text(routerLocalized("Hidden models stay connected but are not offered by Codex."))
+                .font(.system(size: 9))
+                .foregroundStyle(routerMuted)
+              Spacer(minLength: 0)
+              Button(
+                store.providerCatalogLoading.isEmpty
+                  ? routerLocalized("Reload provider models")
+                  : routerLocalized("Reloading provider models…")
+              ) {
+                Task { await store.reloadAvailableProviderCatalogs() }
+              }
+              .buttonStyle(.borderless)
+              .font(.system(size: 9, weight: .medium))
+              .foregroundStyle(routerMint)
+              .disabled(!canReloadProviderCatalogs || !store.providerCatalogLoading.isEmpty)
+              .help(routerLocalized("Fetch the current catalog from every connected provider that supports live model discovery."))
+            }
             toolbar(
               buttons: [
                 ("Show all", { Task { await store.showAllPickerModels() } }),
@@ -4891,6 +5243,14 @@ private struct TrayView: View {
           localLlmPanel
         }
 
+        AccordionPanel(
+          title: routerLocalized("Provider catalogs"),
+          summary: routerLocalized("Load the latest provider models"),
+          expanded: $providerCatalogsExpanded
+        ) {
+          providerCatalogPanel
+        }
+
         // Header says "Vision" and nothing else; the state it used to summarise
         // is one line below, in the toggle's own detail.
         AccordionPanel(
@@ -4934,9 +5294,20 @@ private struct TrayView: View {
     // phrases truncate in place instead of making the panel wider or taller.
     @ViewBuilder private var localLlmPanel: some View {
       VStack(alignment: .leading, spacing: 10) {
-        Text(routerLocalized("Run local models through Ollama or the curated MLX runtime. Installed models are wired into the same Codex proxy."))
-          .font(.system(size: 9))
-          .foregroundStyle(routerMuted)
+        HStack(alignment: .top, spacing: 8) {
+          Text(routerLocalized("Run local models through Ollama or the curated MLX runtime. Installed models are wired into the same Codex proxy."))
+            .font(.system(size: 9))
+            .foregroundStyle(routerMuted)
+          Spacer(minLength: 0)
+          Button(store.isRefreshing ? routerLocalized("Refreshing…") : routerLocalized("Refresh models")) {
+            Task { await store.refresh() }
+          }
+          .buttonStyle(.borderless)
+          .font(.system(size: 9, weight: .medium))
+          .foregroundStyle(routerMint)
+          .disabled(store.isRefreshing)
+          .help(routerLocalized("Reload installed and available local models from the router."))
+        }
         localMlxSection
         if let operation = store.localModelOperation {
           localModelOperationStatus(operation)
@@ -4962,6 +5333,42 @@ private struct TrayView: View {
         }
       }
       .animation(.easeOut(duration: 0.2), value: store.localModelOperation)
+    }
+
+    private var catalogProviders: [ProviderSetupState] {
+      store.providerSetup.values
+        .filter { $0.configured && $0.supportsLiveModelCatalog }
+        .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
+    }
+
+    @ViewBuilder private var providerCatalogPanel: some View {
+      VStack(alignment: .leading, spacing: 8) {
+        if catalogProviders.isEmpty {
+          Text(routerLocalized("Connect a supported provider to load its latest models."))
+            .font(.system(size: 9))
+            .foregroundStyle(routerMuted)
+        } else {
+          Text(routerLocalized("Load models asks that provider for its current list. Choosing models adds them to the router and republishes every installed client."))
+            .font(.system(size: 9))
+            .foregroundStyle(routerMuted)
+          ForEach(catalogProviders) { provider in
+            ProviderCatalogRow(
+              provider: provider,
+              catalog: store.providerCatalogs[provider.id],
+              isLoading: store.providerCatalogLoading.contains(provider.id),
+              // Any catalog run in flight -- including a bulk reload started
+              // from the picker panel -- freezes every row. Otherwise a user
+              // can stack concurrent `Process` runs and starve the pipe
+              // readers draining them.
+              isBusy: !store.providerCatalogLoading.isEmpty,
+              onReload: { refresh in
+                Task { await store.reloadProviderCatalog(provider.id, refresh: refresh) }
+              },
+              onAdd: { models in Task { await store.addProviderCatalogModels(provider.id, modelIDs: models) } }
+            )
+          }
+        }
+      }
     }
 
     /// The curated MLX install is deliberately separate from Ollama: it has a
@@ -6511,6 +6918,147 @@ private struct TrayView: View {
       .background(
         Color.primary.opacity(0.045),
         in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+      )
+    }
+  }
+
+  private struct ProviderCatalogRow: View {
+    let provider: ProviderSetupState
+    let catalog: ProviderModelCatalog?
+    let isLoading: Bool
+    let isBusy: Bool
+    /// `true` re-asks the provider. The first load is cache-first; only an
+    /// explicit Reload spends a round trip.
+    let onReload: (Bool) -> Void
+    let onAdd: ([String]) -> Void
+
+    @State private var query = ""
+    @State private var selected = Set<String>()
+
+    private var matchingModels: [String] {
+      guard let catalog else { return [] }
+      let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+      return catalog.discovered.filter { needle.isEmpty || $0.lowercased().contains(needle) }
+    }
+
+    var body: some View {
+      VStack(alignment: .leading, spacing: 7) {
+        HStack(spacing: 8) {
+          VStack(alignment: .leading, spacing: 2) {
+            Text(provider.displayName)
+              .font(.system(size: 10, weight: .medium))
+            Text(catalogDetail)
+              .font(.system(size: 8))
+              .foregroundStyle(routerMutedStrong)
+          }
+          Spacer()
+          Button(
+            isLoading
+              ? routerLocalized("Loading models")
+              : routerLocalized(catalog == nil ? "Load models" : "Reload models")
+          ) {
+            onReload(catalog != nil)
+          }
+          .buttonStyle(.borderless)
+          .font(.system(size: 9, weight: .medium))
+          .foregroundStyle(routerMint)
+          .disabled(isLoading || isBusy)
+        }
+
+        if let catalog {
+          let registered = Set(catalog.registered)
+          TextField(routerLocalized("Search available models"), text: $query)
+            .textFieldStyle(.roundedBorder)
+            .font(.system(size: 9))
+
+          if matchingModels.isEmpty {
+            Text(routerLocalized("No provider models match this search."))
+              .font(.system(size: 8))
+              .foregroundStyle(routerMutedStrong)
+              .padding(.vertical, 2)
+          } else {
+            VStack(spacing: 0) {
+              ForEach(Array(matchingModels.prefix(80)), id: \.self) { model in
+                HStack(spacing: 7) {
+                  if registered.contains(model) {
+                    Image(systemName: "checkmark.circle.fill")
+                      .font(.system(size: 10))
+                      .foregroundStyle(routerMint)
+                      .frame(width: 14)
+                  } else {
+                    Toggle("", isOn: Binding(
+                      get: { selected.contains(model) },
+                      set: { checked in
+                        if checked { selected.insert(model) } else { selected.remove(model) }
+                      }
+                    ))
+                    .labelsHidden()
+                    .toggleStyle(.checkbox)
+                    .controlSize(.mini)
+                    .frame(width: 14)
+                    .disabled(isLoading || isBusy)
+                  }
+                  Text(model)
+                    .font(.system(size: 8, design: .monospaced))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                  Spacer(minLength: 0)
+                  if registered.contains(model) {
+                    Text(routerLocalized("Added"))
+                      .font(.system(size: 8, weight: .medium))
+                      .foregroundStyle(routerMutedStrong)
+                  }
+                }
+                .padding(.vertical, 3)
+                if model != matchingModels.prefix(80).last {
+                  Divider()
+                }
+              }
+            }
+            .padding(.horizontal, 3)
+            .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+            if matchingModels.count > 80 {
+              Text(routerLocalized("Showing the first 80 matches. Search to narrow the list."))
+                .font(.system(size: 8))
+                .foregroundStyle(routerMutedStrong)
+            }
+          }
+
+          if !selected.isEmpty {
+            HStack(spacing: 8) {
+              Text(routerFormat("%d selected", selected.count))
+                .font(.system(size: 8))
+                .foregroundStyle(routerMutedStrong)
+              Spacer()
+              Button(routerLocalized("Add selected")) {
+                onAdd(selected.sorted())
+              }
+              .buttonStyle(.borderless)
+              .font(.system(size: 9, weight: .medium))
+              .foregroundStyle(routerMint)
+              .disabled(isLoading || isBusy)
+            }
+          }
+        }
+      }
+      .padding(8)
+      .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+      .onChange(of: catalog?.fetchedAt) { _ in
+        selected.formIntersection(Set(catalog?.unregistered ?? []))
+      }
+    }
+
+    // One format string rather than number + noun fragments glued together:
+    // a translator can move the nouns around the numbers, which concatenation
+    // makes impossible and which reads wrong in Arabic.
+    private var catalogDetail: String {
+      guard let catalog else { return routerLocalized("Load the current list from this provider.") }
+      let freshness = catalog.cached == true ? routerLocalized("saved list") : routerLocalized("live list")
+      return routerFormat(
+        "%d models · %d added · %@",
+        catalog.discovered.count,
+        catalog.registered.count,
+        freshness
       )
     }
   }

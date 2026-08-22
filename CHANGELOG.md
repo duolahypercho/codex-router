@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- **The macOS tray can load a provider's current model list and curate from
+  it.** A new Provider catalogs panel asks any configured provider that
+  supports live discovery for the models it serves right now, marks the ones
+  already routed, and adds a selection through the same `curate-models.mjs`
+  path the desktop app uses -- so the tray no longer has to hand people back
+  to a terminal to pick up a model their provider shipped after install. The
+  first open is answered from the router's stored list, so it costs no round
+  trip and works offline; only Reload re-asks upstream. Model ids coming back
+  from a provider are held to the same slug rule the Electron app enforces
+  before any of them reaches curation, and every discovery or curation run is
+  bounded by the Electron timeouts, so a provider that accepts the connection
+  and never answers can no longer wedge the panel's buttons for the rest of
+  the session. The panel is translated in all six tray languages.
+
 - **Grok 4.6 can select Codex's native image viewer.** xAI stopped without a
   function call when the tool was named `view_image`, even when selection was
   required. The Grok OAuth boundary now presents that tool as `inspect_image`

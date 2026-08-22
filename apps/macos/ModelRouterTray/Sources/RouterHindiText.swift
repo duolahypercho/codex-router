@@ -376,5 +376,28 @@ enum RouterHindiText {
     "External forwarders": "बाहरी फ़ॉरवर्डर",
     "Subagent": "उप-एजेंट",
     "thinking": "विचार",
+
+    // Provider catalogs: the on-demand panel that asks a configured
+    // provider for its current model list and curates from it.
+    "Provider catalogs": "प्रदाता कैटलॉग",
+    "Load the latest provider models": "प्रदाता के नवीनतम मॉडल लोड करें",
+    "Connect a supported provider to load its latest models.": "इसके नवीनतम मॉडल लोड करने के लिए एक समर्थित प्रदाता कनेक्ट करें।",
+    "Load models asks that provider for its current list. Choosing models adds them to the router and republishes every installed client.": "\"मॉडल लोड करें\" उस प्रदाता से उसकी वर्तमान सूची माँगता है। मॉडल चुनने पर वे राउटर में जुड़ते हैं और हर इंस्टॉल किए गए क्लाइंट को फिर से प्रकाशित किया जाता है।",
+    "Reload provider models": "प्रदाता मॉडल फिर से लोड करें",
+    "Reloading provider models…": "प्रदाता मॉडल फिर से लोड हो रहे हैं…",
+    "Fetch the current catalog from every connected provider that supports live model discovery.": "लाइव मॉडल खोज का समर्थन करने वाले हर कनेक्टेड प्रदाता से वर्तमान कैटलॉग प्राप्त करें।",
+    "Refresh models": "मॉडल रीफ़्रेश करें",
+    "Reload installed and available local models from the router.": "राउटर से इंस्टॉल किए गए और उपलब्ध लोकल मॉडल फिर से लोड करें।",
+    "Loading models": "मॉडल लोड हो रहे हैं",
+    "Search available models": "उपलब्ध मॉडल खोजें",
+    "No provider models match this search.": "इस खोज से कोई प्रदाता मॉडल मेल नहीं खाता।",
+    "Added": "जोड़ा गया",
+    "Showing the first 80 matches. Search to narrow the list.": "पहले 80 मिलान दिखाए जा रहे हैं। सूची सीमित करने के लिए खोजें।",
+    "%d selected": "%d चयनित",
+    "Add selected": "चयनित जोड़ें",
+    "Load the current list from this provider.": "इस प्रदाता से वर्तमान सूची लोड करें।",
+    "saved list": "सहेजी गई सूची",
+    "live list": "लाइव सूची",
+    "%d models · %d added · %@": "%d मॉडल · %d जोड़े गए · %@",
   ]
 }

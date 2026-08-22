@@ -787,17 +787,36 @@ textarea::placeholder {
   overflow: hidden;
 }
 
-.service-health-accordion > summary {
+.service-health-accordion-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 16px 20px;
-  cursor: pointer;
-  list-style: none;
+  min-height: 62px;
+  padding: 10px 12px 10px 20px;
 }
 
-.service-health-accordion > summary::-webkit-details-marker { display: none; }
+.service-health-toggle {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 10px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.service-health-toggle > svg {
+  flex: 0 0 auto;
+  color: var(--ink-faint);
+  transition: transform 160ms ease;
+}
+
+.service-health-toggle > svg.is-open { transform: rotate(180deg); }
 
 .service-health-summary-copy {
   display: grid;
@@ -819,31 +838,21 @@ textarea::placeholder {
   white-space: nowrap;
 }
 
-.service-health-summary-status {
+.service-health-header-actions {
   display: inline-flex;
   flex: 0 0 auto;
   align-items: center;
   gap: 8px;
-  color: var(--ink-faint);
 }
 
-.service-health-accordion[open] > summary {
-  border-bottom: 1px solid var(--line);
+.service-health-details {
+  padding: 0 20px 5px;
+  border-top: 1px solid var(--line);
 }
 
-.service-health-accordion[open] > summary svg { transform: rotate(180deg); }
-
-.service-health-summary-status svg { transition: transform 160ms ease; }
-
-.service-health-details { padding: 0 20px 8px; }
-
-.service-health-actions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
-  padding-top: 10px;
-}
+/* The collapsed region stays mounted so the toggle's aria-controls resolves;
+   this keeps `hidden` authoritative if the rule above ever gains a display. */
+.service-health-details[hidden] { display: none; }
 
 .service-health-list {
   display: grid;
@@ -855,9 +864,12 @@ textarea::placeholder {
   gap: 9px;
   min-width: 0;
   align-items: center;
-  padding: 12px 0;
-  border-top: 1px solid var(--line);
+  min-height: 54px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--line);
 }
+
+.service-health-row:last-child { border-bottom: 0; }
 
 .service-health-row > svg {
   color: var(--ink-faint);
@@ -876,7 +888,7 @@ textarea::placeholder {
 .service-health-row strong {
   overflow: hidden;
   color: var(--ink-strong);
-  font-size: 10.5px;
+  font-size: 11px;
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -885,7 +897,7 @@ textarea::placeholder {
 .service-health-row small {
   overflow: hidden;
   color: var(--ink-faint);
-  font-size: 9.5px;
+  font-size: 9px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }

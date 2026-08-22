@@ -1132,72 +1132,115 @@
 }
 
 .status-page .st-status-orb {
-  display: grid;
-  width: 38px;
-  height: 38px;
+  position: relative;
+  display: block;
+  width: 42px;
+  height: 42px;
   flex: 0 0 auto;
-  place-items: center;
   border-radius: 50%;
-  background: var(--surface-2);
+  border: 1px solid color-mix(in srgb, var(--line-strong) 72%, transparent);
+  background: radial-gradient(circle at 38% 32%, color-mix(in srgb, var(--surface-0) 78%, transparent), var(--surface-2));
+  overflow: hidden;
 }
 
-.status-page .st-status-orb i {
-  width: 9px;
-  height: 9px;
+.status-page .st-orb-core,
+.status-page .st-orb-particle {
+  position: absolute;
+  top: 50%;
+  left: 50%;
   border-radius: 50%;
+  transform: translate(-50%, -50%);
+}
+
+.status-page .st-orb-core {
+  width: 10px;
+  height: 10px;
   background: var(--ink-faint);
 }
 
-.status-page .st-status-orb.state-generating i {
-  position: relative;
-  width: 10px;
-  height: 10px;
+.status-page .st-orb-particle {
+  width: 4px;
+  height: 4px;
+  background: color-mix(in srgb, var(--ink-faint) 70%, var(--surface-0));
+  opacity: 0.54;
+}
+
+.status-page .st-orb-particle:nth-of-type(1) { --orb-angle: 12deg; --orb-delay: -0.12s; }
+.status-page .st-orb-particle:nth-of-type(2) { --orb-angle: 72deg; --orb-delay: -0.45s; }
+.status-page .st-orb-particle:nth-of-type(3) { --orb-angle: 132deg; --orb-delay: -0.83s; }
+.status-page .st-orb-particle:nth-of-type(4) { --orb-angle: 192deg; --orb-delay: -0.26s; }
+.status-page .st-orb-particle:nth-of-type(5) { --orb-angle: 252deg; --orb-delay: -1.04s; }
+.status-page .st-orb-particle:nth-of-type(6) { --orb-angle: 312deg; --orb-delay: -0.64s; }
+
+.status-page .st-status-orb.state-idle .st-orb-core {
+  animation: st-orb-idle-core 4.4s ease-in-out infinite;
+}
+
+.status-page .st-status-orb.state-idle .st-orb-particle {
+  transform: translate(-50%, -50%) rotate(var(--orb-angle)) translateY(-13px);
+  animation: st-orb-idle-particle 4.4s ease-in-out var(--orb-delay) infinite;
+}
+
+.status-page .st-status-orb.state-generating {
+  border-color: color-mix(in srgb, var(--success) 35%, var(--line));
+  background: radial-gradient(circle at 42% 36%, color-mix(in srgb, var(--success) 16%, var(--surface-0)), var(--surface-2));
+}
+
+.status-page .st-status-orb.state-generating .st-orb-core {
   background: var(--success);
-  filter: drop-shadow(0 0 6px color-mix(in srgb, var(--success) 44%, transparent));
-  animation: st-thinking-core 1.35s ease-in-out infinite;
+  animation: st-orb-working-core 1.45s cubic-bezier(.42, 0, .2, 1) infinite;
 }
 
-.status-page .st-status-orb.state-generating i::before,
-.status-page .st-status-orb.state-generating i::after {
-  position: absolute;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  content: "";
+.status-page .st-status-orb.state-generating .st-orb-particle {
+  background: color-mix(in srgb, var(--success) 72%, var(--accent));
+  animation: st-orb-working-particle 1.8s cubic-bezier(.42, 0, .2, 1) var(--orb-delay) infinite;
 }
 
-.status-page .st-status-orb.state-generating i::before {
-  top: -6px;
-  right: -5px;
-  background: color-mix(in srgb, var(--accent) 68%, var(--success));
-  box-shadow: 0 0 9px color-mix(in srgb, var(--accent) 30%, transparent);
-  animation: st-thinking-orbit-one 1.35s ease-in-out infinite;
+.status-page .st-status-orb.state-starting .st-orb-core {
+  background: var(--warning);
+  animation: st-orb-connecting-core 1.6s ease-in-out infinite;
 }
 
-.status-page .st-status-orb.state-generating i::after {
-  bottom: -5px;
-  left: -6px;
-  background: color-mix(in srgb, var(--success) 55%, white);
-  animation: st-thinking-orbit-two 1.35s ease-in-out infinite;
+.status-page .st-status-orb.state-starting .st-orb-particle {
+  background: color-mix(in srgb, var(--warning) 76%, var(--surface-0));
+  animation: st-orb-working-particle 2.2s linear var(--orb-delay) infinite;
 }
 
-.status-page .st-status-orb.state-starting i { background: var(--warning); }
-.status-page .st-status-orb.state-error i,
-.status-page .st-status-orb.state-offline i { background: var(--danger); }
+.status-page .st-status-orb.state-error .st-orb-core,
+.status-page .st-status-orb.state-offline .st-orb-core { background: var(--danger); }
 
-@keyframes st-thinking-core {
-  0%, 100% { transform: scale(0.78); opacity: 0.72; }
-  50% { transform: scale(1.1); opacity: 1; }
+.status-page .st-status-orb.state-error .st-orb-particle,
+.status-page .st-status-orb.state-offline .st-orb-particle { display: none; }
+
+@keyframes st-orb-idle-core {
+  0%, 100% { transform: translate(-50%, -50%) scale(.88); opacity: .7; }
+  50% { transform: translate(-50%, -50%) scale(1); opacity: .92; }
 }
 
-@keyframes st-thinking-orbit-one {
-  0%, 100% { transform: translate(-2px, 2px) scale(0.72); opacity: 0.52; }
-  50% { transform: translate(2px, -2px) scale(1.08); opacity: 1; }
+@keyframes st-orb-idle-particle {
+  0%, 100% { opacity: .25; }
+  50% { opacity: .58; }
 }
 
-@keyframes st-thinking-orbit-two {
-  0%, 100% { transform: translate(2px, -2px) scale(1.04); opacity: 0.84; }
-  50% { transform: translate(-2px, 2px) scale(0.68); opacity: 0.42; }
+@keyframes st-orb-working-core {
+  0%, 100% { transform: translate(-50%, -50%) scale(.76); }
+  48% { transform: translate(-50%, -50%) scale(1.08); }
+}
+
+@keyframes st-orb-working-particle {
+  0% { transform: translate(-50%, -50%) rotate(var(--orb-angle)) translateY(-8px) scale(.55); opacity: .22; }
+  48% { transform: translate(-50%, -50%) rotate(calc(var(--orb-angle) + 82deg)) translateY(-15px) scale(1.1); opacity: 1; }
+  100% { transform: translate(-50%, -50%) rotate(calc(var(--orb-angle) + 164deg)) translateY(-8px) scale(.55); opacity: .22; }
+}
+
+@keyframes st-orb-connecting-core {
+  0%, 100% { transform: translate(-50%, -50%) scale(.74); opacity: .68; }
+  50% { transform: translate(-50%, -50%) scale(1.04); opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .status-page .st-status-orb *,
+  .status-page .st-status-orb { animation: none !important; }
 }
 
 .status-page .st-subsection-heading {

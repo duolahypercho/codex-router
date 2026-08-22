@@ -512,5 +512,28 @@ enum RouterChineseText {
     // "思考强度" is the vocabulary already used for effort elsewhere here.
     "Subagent": "子代理",
     "thinking": "思考强度",
+
+    // Provider catalogs: the on-demand panel that asks a configured
+    // provider for its current model list and curates from it.
+    "Provider catalogs": "服务商模型目录",
+    "Load the latest provider models": "加载服务商的最新模型",
+    "Connect a supported provider to load its latest models.": "先连接受支持的服务商，才能加载其最新模型。",
+    "Load models asks that provider for its current list. Choosing models adds them to the router and republishes every installed client.": "“加载模型”会向该服务商索取当前列表。选择模型后会将其加入路由，并重新发布所有已安装的客户端。",
+    "Reload provider models": "重新加载服务商模型",
+    "Reloading provider models…": "正在重新加载服务商模型…",
+    "Fetch the current catalog from every connected provider that supports live model discovery.": "从每个支持实时模型发现的已连接服务商获取当前目录。",
+    "Refresh models": "刷新模型",
+    "Reload installed and available local models from the router.": "从路由重新加载已安装和可用的本地模型。",
+    "Loading models": "正在加载模型",
+    "Search available models": "搜索可用模型",
+    "No provider models match this search.": "没有服务商模型匹配此搜索。",
+    "Added": "已添加",
+    "Showing the first 80 matches. Search to narrow the list.": "仅显示前 80 条匹配结果。请搜索以缩小范围。",
+    "%d selected": "已选择 %d 个",
+    "Add selected": "添加所选",
+    "Load the current list from this provider.": "从该服务商加载当前列表。",
+    "saved list": "已保存列表",
+    "live list": "实时列表",
+    "%d models · %d added · %@": "%d 个模型 · 已添加 %d 个 · %@",
   ]
 }
