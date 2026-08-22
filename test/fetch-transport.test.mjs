@@ -6,7 +6,12 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { getGlobalDispatcher, setGlobalDispatcher } from "undici";
 
-import { installStableFetchTransport } from "../src/fetch-transport.mjs";
+import {
+  createLoopbackProbeDispatcher,
+  fetchDispatcherOptions,
+  installStableFetchTransport,
+  loopbackProbeFetch,
+} from "../src/fetch-transport.mjs";
 
 const SRC_DIR = fileURLToPath(new URL("../src", import.meta.url));
 
@@ -48,7 +53,9 @@ test("the router disables HTTP/2 on its process-wide fetch dispatcher", () => {
 
   assert.equal(created.length, 1);
   assert.equal(dispatcher.kind, "direct");
-  assert.deepEqual(created[0].options, { allowH2: false });
+  assert.deepEqual(created[0].options, fetchDispatcherOptions());
+  assert.equal(created[0].options.allowH2, false);
+  assert.equal("connections" in created[0].options, false);
   assert.equal(dispatcher, created[0]);
   assert.deepEqual(installed, [dispatcher]);
 });
@@ -65,7 +72,7 @@ test("the router uses the environment proxy dispatcher only with explicit opt-in
     assert.equal(created.length, 1);
     assert.equal(dispatcher.kind, "environment-proxy");
     assert.equal(dispatcher, created[0]);
-    assert.deepEqual(dispatcher.options, { allowH2: false });
+    assert.deepEqual(dispatcher.options, fetchDispatcherOptions());
   }
 });
 
@@ -77,7 +84,7 @@ test("proxy variables alone do not opt the router into proxying", () => {
 
   assert.equal(created.length, 1);
   assert.equal(dispatcher.kind, "direct");
-  assert.deepEqual(dispatcher.options, { allowH2: false });
+  assert.deepEqual(dispatcher.options, fetchDispatcherOptions());
 });
 
 test("the router accepts the NODE_OPTIONS and command-line opt-in forms", () => {
@@ -88,7 +95,7 @@ test("the router accepts the NODE_OPTIONS and command-line opt-in forms", () => 
     const { created, dispatcher } = installFakeTransport(environment, execArgv);
     assert.equal(created.length, 1);
     assert.equal(dispatcher.kind, "environment-proxy");
-    assert.deepEqual(dispatcher.options, { allowH2: false });
+    assert.deepEqual(dispatcher.options, fetchDispatcherOptions());
   }
 });
 
@@ -105,7 +112,7 @@ test("NO_PROXY or ALL_PROXY alone keeps the lower-overhead direct agent", () => 
     assert.equal(created.length, 1);
     assert.equal(dispatcher.kind, "direct");
     assert.equal(dispatcher, created[0]);
-    assert.deepEqual(dispatcher.options, { allowH2: false });
+    assert.deepEqual(dispatcher.options, fetchDispatcherOptions());
   }
 });
 
@@ -194,5 +201,60 @@ test("every long-lived server process installs the stable transport", () => {
       source.includes("installStableFetchTransport()"),
       `${name} creates a server but never installs the stable fetch transport`,
     );
+  }
+});
+
+test("loopback health probes use the same proxy opt-in as routed traffic", () => {
+  const created = [];
+  class FakeAgent {
+    constructor(options) {
+      this.kind = "direct";
+      this.options = options;
+      created.push(this);
+    }
+  }
+  class FakeEnvHttpProxyAgent {
+    constructor(options) {
+      this.kind = "environment-proxy";
+      this.options = options;
+      created.push(this);
+    }
+  }
+
+  const proxied = createLoopbackProbeDispatcher({
+    AgentClass: FakeAgent,
+    EnvHttpProxyAgentClass: FakeEnvHttpProxyAgent,
+    environment: { NODE_USE_ENV_PROXY: "1", HTTP_PROXY: "http://proxy.example:8080" },
+  });
+  assert.equal(proxied.kind, "environment-proxy");
+
+  created.length = 0;
+  const direct = createLoopbackProbeDispatcher({
+    AgentClass: FakeAgent,
+    EnvHttpProxyAgentClass: FakeEnvHttpProxyAgent,
+    environment: { HTTP_PROXY: "http://proxy.example:8080" },
+  });
+  assert.equal(direct.kind, "direct");
+});
+
+test("loopback probes use undici fetch so a separate Agent is accepted", async () => {
+  const server = http.createServer((_request, response) => {
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({ ok: true, service: "gateway" }));
+  });
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  try {
+    const port = server.address().port;
+    const response = await loopbackProbeFetch(`http://127.0.0.1:${port}/health/liveliness`, {
+      headers: { Authorization: "Bearer test" },
+      signal: AbortSignal.timeout(2_000),
+    });
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { ok: true, service: "gateway" });
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
   }
 });
