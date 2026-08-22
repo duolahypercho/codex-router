@@ -12,6 +12,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { redactCallerUrl } from "./caller-auth.mjs";
+import { antigravityTokenPath } from "./antigravity-oauth-session.mjs";
 import { readInstallManifest } from "./install-manifest.mjs";
 import { redactProxyCredentials } from "./proxy-environment.mjs";
 import { protectPrivateFile } from "./file-security.mjs";
@@ -100,6 +101,19 @@ function knownLocalSecrets() {
     if (!existsSync(target)) continue;
     const value = readFileSync(target, "utf8").trim();
     if (value) values.add(value);
+  }
+  const oauthPath = antigravityTokenPath();
+  if (existsSync(oauthPath)) {
+    try {
+      const token = JSON.parse(readFileSync(oauthPath, "utf8"));
+      for (const field of ["access_token", "refresh_token"]) {
+        const value = token?.[field];
+        if (typeof value === "string" && value.trim()) values.add(value.trim());
+      }
+    } catch {
+      // An invalid credential is reported by doctor; never copy it into a
+      // support bundle merely to discover whether it contains a secret.
+    }
   }
   return [...values].filter((value) => value.length >= 8);
 }

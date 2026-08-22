@@ -111,6 +111,60 @@ test("background service definitions render for macOS, Linux, and Windows", () =
   }
 });
 
+test("background services persist every dedicated forwarder port", () => {
+  const testRoot = mkdtempSync(path.join(os.tmpdir(), "codex-router-service-ports-"));
+  const ports = {
+    MODEL_ROUTER_GROK_OAUTH_PORT: "5308",
+    MODEL_ROUTER_DEVIN_CLI_PORT: "5310",
+    MODEL_ROUTER_ANTIGRAVITY_OAUTH_PORT: "5312",
+  };
+  try {
+    const launchd = serviceCommand(
+      "service-macos.mjs",
+      "darwin",
+      testRoot,
+      "render",
+      "codex",
+      root,
+      ports,
+    );
+    const systemd = serviceCommand(
+      "service-linux.mjs",
+      "linux",
+      testRoot,
+      "render",
+      "codex",
+      root,
+      ports,
+    );
+    const windows = serviceCommand(
+      "service-windows.mjs",
+      "win32",
+      testRoot,
+      "render",
+      "codex",
+      root,
+      ports,
+    );
+    for (const [name, value] of Object.entries(ports)) {
+      assert.ok(
+        launchd.includes(`<key>${name}</key>\n    <string>${value}</string>`),
+        `launchd did not persist ${name}`,
+      );
+      assert.ok(
+        systemd.includes(`Environment="${name}=${value}"`),
+        `systemd did not persist ${name}`,
+      );
+      assert.ok(
+        windows.includes(`set "${name}=${value}"`),
+        `Task Scheduler did not persist ${name}`,
+      );
+    }
+  } finally {
+    rmSync(testRoot, { recursive: true, force: true });
+  }
+});
+
 test("background services preserve the installer's proxy environment", () => {
   const testRoot = mkdtempSync(path.join(os.tmpdir(), "codex-router-service-proxy-"));
   const proxyEnvironment = {

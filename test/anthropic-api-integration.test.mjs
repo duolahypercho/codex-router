@@ -66,8 +66,15 @@ test(
     timeout: 90_000,
   },
   async () => {
-    const [mockPort, routerPort, gatewayPort, oauthPort, apiPort, grokOauthPort] =
-      await freePorts(6);
+    const [
+      mockPort,
+      routerPort,
+      gatewayPort,
+      oauthPort,
+      apiPort,
+      grokOauthPort,
+      antigravityOauthPort,
+    ] = await freePorts(7);
     const testRoot = mkdtempSync(path.join(os.tmpdir(), "codex-anthropic-e2e-"));
     const stateDir = path.join(testRoot, "state");
     mkdirSync(stateDir, { recursive: true, mode: 0o700 });
@@ -124,6 +131,7 @@ test(
         MODEL_ROUTER_OAUTH_PORT: String(oauthPort),
         MODEL_ROUTER_API_PORT: String(apiPort),
         MODEL_ROUTER_GROK_OAUTH_PORT: String(grokOauthPort),
+        MODEL_ROUTER_ANTIGRAVITY_OAUTH_PORT: String(antigravityOauthPort),
         ANTHROPIC_API_BASE_URL: `http://127.0.0.1:${mockPort}/v1`,
       },
       stdio: ["ignore", "pipe", "pipe"],

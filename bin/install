@@ -207,6 +207,7 @@ case "$(install_step python-deps)" in
 esac
 
 node src/secret.mjs ensure
+node src/antigravity-oauth-session.mjs protect
 config_enabled=false
 service_installed=false
 # Each target enables its own client configuration; everything above and below

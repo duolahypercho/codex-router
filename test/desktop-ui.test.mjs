@@ -296,6 +296,18 @@ test("native credential actions do not race atomic selection publication", () =>
   }
 });
 
+test("desktop keeps invalid router-managed OAuth sessions removable", () => {
+  const source = readFileSync(
+    path.join(root, "apps", "desktop", "ui", "app.js"),
+    "utf8",
+  );
+  assert.match(
+    source,
+    /const canRemove = \(provider\.kind === "api" && provider\.configured\) \|\| provider\.disconnectable;/,
+  );
+  assert.doesNotMatch(source, /provider\.configured && \([^\n]*provider\.disconnectable/);
+});
+
 // The disabled set is derived from data-command, so a control that drives a
 // command without carrying one would stay live on a surface that refuses it.
 test("every mutating control in the desktop UI names the command it drives", () => {

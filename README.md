@@ -135,6 +135,10 @@ Linux installations support the Codex CLI.
 | Kimi K3 (China API) | `kimi-api-cn/kimi-k3` | Separately billed Moonshot **China** platform key |
 | DeepSeek V4 Flash (API) | `deepseek/deepseek-v4-flash` | DeepSeek API key |
 | DeepSeek V4 Pro (API) | `deepseek/deepseek-v4-pro` | DeepSeek API key |
+| Gemini 3.1 Pro (Antigravity) | `antigravity-oauth/gemini-3.1-pro` | Router-managed Google OAuth; Google AI Pro/Ultra usage |
+| Gemini 3.5 Flash (Antigravity) | `antigravity-oauth/gemini-3.5-flash` | Router-managed Google OAuth; Google AI Pro/Ultra usage |
+| Gemini 3.6 Flash (Antigravity) | `antigravity-oauth/gemini-3.6-flash` | Router-managed Google OAuth; Google AI Pro/Ultra usage |
+| Gemini 3.7 Flash (Antigravity) | `antigravity-oauth/gemini-3.7-flash` | Router-managed Google OAuth; Google AI Pro/Ultra usage |
 | Grok 4.5 (OAuth) | `grok-oauth/grok-4.5` | Official Grok CLI OAuth session |
 | Grok 4.5 (API) | `grok-api/grok-4.5` | Separately billed xAI API key |
 | Claude Opus 4.8 (API) | `anthropic-api/claude-opus-4.8` | Separately billed Anthropic API key |
@@ -222,6 +226,27 @@ endpoint.
 npm install -g @xai-official/grok
 grok login --oauth
 ```
+
+Antigravity OAuth uses the router's own browser sign-in and the Google AI
+Pro/Ultra entitlement on the signed-in account. It needs neither a Gemini API
+key nor a separate Antigravity CLI. Signing in and enabling are separate so a
+re-authentication never replaces the rest of the provider selection:
+
+```sh
+./bin/model-router codex providers login antigravity-oauth
+./bin/model-router codex providers enable antigravity-oauth
+```
+
+On Windows PowerShell, use the matching wrapper:
+
+```powershell
+.\model-router.ps1 codex providers login antigravity-oauth
+.\model-router.ps1 codex providers enable antigravity-oauth
+```
+
+The credential stays in the router's owner-only state directory. This is an
+unofficial compatibility route over Google's internal Antigravity service,
+not a public Gemini API contract, so availability and wire behavior can change.
 
 MiMo (Xiaomi API) uses Xiaomi's official OpenAI-compatible endpoint at
 `https://api.xiaomimimo.com/v1`. Unlike MiMo reseller routes, the direct API

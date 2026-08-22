@@ -9,6 +9,8 @@
 - `src/router.mjs` dispatches native and namespaced external model IDs.
 - `src/oauth-forwarder.mjs` owns Kimi CLI OAuth loading and refresh.
 - `src/grok-oauth-forwarder.mjs` adapts Grok CLI OAuth to OpenAI-compatible chat.
+- `src/antigravity-oauth-forwarder.mjs` adapts router-managed Google OAuth and
+  Antigravity's Gemini event stream to OpenAI-compatible chat.
 - `src/api-forwarder.mjs` is shared by all API-key providers.
 - `src/provider-credentials.mjs` isolates environment, file, and Keychain lookup.
 - `src/rate-limit-headers.mjs` parses provider rate-limit headers into snapshots.

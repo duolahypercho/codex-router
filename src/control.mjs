@@ -634,7 +634,7 @@ async function installProviderCli(providerId) {
 
 async function loginProvider(providerId) {
   const { loginOauthProvider, providerOnboardingSnapshot } = await import("./provider-onboarding.mjs");
-  loginOauthProvider(providerId);
+  await loginOauthProvider(providerId);
   process.stdout.write(`${JSON.stringify(providerOnboardingSnapshot())}\n`);
 }
 
@@ -679,7 +679,7 @@ async function deleteProviderCredential(providerId) {
   // local-model mutations; status reads remain outside the lock.
   let removal;
   await withModelOverlayLock(async () => {
-    removal = removeApiCredential(providerId);
+    removal = await removeApiCredential(providerId);
     if (removal.removedFiles) {
       const { refreshTargetPickerIfInstalled } = await import("./target-integration.mjs");
       refreshTargetPickerIfInstalled();
@@ -2513,7 +2513,7 @@ if (args.includes("--probe")) {
   if (!args[1]) throw new Error("Usage: control login <oauth-provider>");
   await loginProvider(args[1]);
 } else if (args[0] === "credential") {
-  if (!args[1]) throw new Error("Usage: control credential <api-provider> [--remove]");
+  if (!args[1]) throw new Error("Usage: control credential <provider> [--remove]");
   if (args.includes("--remove")) {
     await deleteProviderCredential(args[1]);
   } else {

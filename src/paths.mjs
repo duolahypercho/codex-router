@@ -175,8 +175,7 @@ function port(name, fallback) {
 // Keep the defaults in an unassigned IANA range. 4101-4104 are the registered
 // BrlAPI ports on Linux; binding an HTTP service there makes xbrlapi wait for a
 // protocol response during GNOME login. gateway/oauth/router/api are the
-// original four; grokOauth is a fifth forwarder port for the Grok OAuth
-// provider.
+// original four; the remaining entries are dedicated provider forwarders.
 export const DEFAULT_PORTS = Object.freeze({
   gateway: 4200,
   oauth: 4201,
@@ -184,6 +183,7 @@ export const DEFAULT_PORTS = Object.freeze({
   api: 4203,
   grokOauth: 4208,
   devinCli: 4210,
+  antigravityOauth: 4212,
 });
 
 // Ports used before the BrlAPI-safe defaults shipped. They remain recognized
@@ -216,6 +216,7 @@ export const PORTS = {
   ),
   grokOauth: port("MODEL_ROUTER_GROK_OAUTH_PORT", DEFAULT_PORTS.grokOauth),
   devinCli: port("MODEL_ROUTER_DEVIN_CLI_PORT", DEFAULT_PORTS.devinCli),
+  antigravityOauth: port("MODEL_ROUTER_ANTIGRAVITY_OAUTH_PORT", DEFAULT_PORTS.antigravityOauth),
 };
 
 export function loopback(portNumber, suffix = "") {

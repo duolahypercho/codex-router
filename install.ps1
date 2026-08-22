@@ -245,6 +245,7 @@ $ServiceInstalled = $false
 $AdoptionPending = $false
 $ConfigWasEnabled = $false
 $ServiceWasInstalled = $false
+$TrayWasInstalled = $false
 Push-Location $ScriptDirectory
 
 # What this run found before it changed anything, so the catch block can undo
@@ -271,6 +272,7 @@ try {
     default { (Get-InstallerStateField @($ConfigManager, "status") "mode") -eq "router" }
   }
   $ServiceWasInstalled = (Get-InstallerStateField @("src\service.mjs", "status") "installed") -eq $true
+  $TrayWasInstalled = (Get-InstallerStateField @("src\tray-service.mjs", "status") "installed") -eq $true
   if ($Target -eq "codex") {
     $CodexHome = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $HOME ".codex" }
     New-Item -ItemType Directory -Force -Path $CodexHome | Out-Null
@@ -370,6 +372,8 @@ try {
 
   & node src/secret.mjs ensure
   if ($LASTEXITCODE -ne 0) { throw "Local router-key setup failed." }
+  & node src/antigravity-oauth-session.mjs protect
+  if ($LASTEXITCODE -ne 0) { throw "Antigravity OAuth credential protection failed." }
   if ($AdoptNativeCatalog) {
     & node src/native-catalog-source.mjs prepare-from-config | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "Existing native model-catalog adoption failed." }
@@ -440,6 +444,47 @@ try {
   if ($LASTEXITCODE -ne 0) { throw "Install-manifest recording failed." }
   & node src/wait-health.mjs
   if ($LASTEXITCODE -ne 0) { throw "The router did not become healthy." }
+
+  # Keep an existing companion in step with the checkout, but never turn a
+  # fresh router install into a tray install the operator did not request.
+  # Run the wrapper in a child PowerShell process because its deliberate
+  # `exit` would otherwise terminate this installer before the status could be
+  # checked. This remains best effort, matching bin/install: an optional Rust
+  # or Electron build failure must not roll back a healthy router update.
+  if ($TrayWasInstalled) {
+    $SavedRouterTarget = $env:MODEL_ROUTER_TARGET
+    try {
+      # The tray belongs to the shared router plane. codex-router.ps1 is the
+      # Windows companion entry point and deliberately accepts only its Codex
+      # spelling, even when this update was initiated for DSH or Gemini CLI.
+      $env:MODEL_ROUTER_TARGET = "codex"
+      & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $ScriptDirectory "codex-router.ps1") tray install
+      $TrayExitCode = $LASTEXITCODE
+      if ($TrayExitCode -ne 0) {
+        Write-Warning "Desktop companion refresh failed with exit code $TrayExitCode; the router is installed. Run '.\codex-router.ps1 tray repair' if an earlier elevated install owns the task."
+      }
+    } catch {
+      Write-Warning "Desktop companion refresh failed; the router is installed: $($_.Exception.Message) Run '.\codex-router.ps1 tray repair' if an earlier elevated install owns the task."
+    } finally {
+      $env:MODEL_ROUTER_TARGET = $SavedRouterTarget
+    }
+  }
+
+  # Managed Codex skills are an integration convenience, not part of router
+  # health. Refresh them after the service transaction and keep a failure from
+  # entering the rollback path, exactly like the POSIX installer.
+  if ($Target -eq "codex") {
+    try {
+      & node src/skills-install.mjs install
+      $SkillsExitCode = $LASTEXITCODE
+      if ($SkillsExitCode -ne 0) {
+        Write-Warning "Managed Codex skills could not be refreshed (exit $SkillsExitCode); the router is installed."
+      }
+    } catch {
+      Write-Warning "Managed Codex skills could not be refreshed; the router is installed: $($_.Exception.Message)"
+    }
+  }
+
   if ($Target -eq "dsh") {
     Write-Host "Published the selected external model routes to DeepSeek Harness. It reloads them on the next request."
   } elseif ($Target -eq "gemini") {

@@ -44,7 +44,8 @@ user.
 3. Never ask the user to paste OAuth tokens or API keys into chat, command
    arguments, logs, environment snippets, or tracked files.
 4. Determine which provider IDs the user requested: `anthropic-api`,
-   `kimi-oauth`, `kimi-api`, `kimi-api-cn`, `deepseek`, `grok-oauth`, `grok-api`, `qwen-plan`,
+   `kimi-oauth`, `kimi-api`, `kimi-api-cn`, `deepseek`, `grok-oauth`, `grok-api`,
+   `antigravity-oauth`, `qwen-plan`,
    `zai-coding`, `ollama-cloud`, `minimax-token-plan`, `meta`, `clinepass`, and/or
    `opencode-go`
    (shown to users as "opencode Go/Zen"; its `opencode-go-messages`,
@@ -78,7 +79,11 @@ user.
    keys that each host rejects from the other. Ask which platform the user's
    key came from rather than defaulting, and never copy a stored key between
    the two.
-5. For Kimi OAuth, reuse a valid `kimi login` session. If login is needed, run
+5. For Antigravity OAuth, use the router-managed browser sign-in and never
+   request or expose the Google access or refresh token. This integration uses
+   Google's internal Antigravity surface and Google AI Pro/Ultra entitlement;
+   it is not a Gemini API-key replacement guaranteed by a public Google API.
+   For Kimi OAuth, reuse a valid `kimi login` session. If login is needed, run
    the official CLI only in an interactive terminal. For API providers, invoke
    `bin/model-router codex provider-key PROVIDER set` in a PTY so the hidden
    prompt receives the value directly; do not relay it through chat. GitHub

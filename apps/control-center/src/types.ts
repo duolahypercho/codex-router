@@ -239,6 +239,7 @@ export interface ProviderSetup {
   displayName: string;
   kind: "oauth" | "api" | "anonymous" | "per-model";
   configured: boolean;
+  disconnectable?: boolean;
   action: string;
   planNote?: string;
   credentialLabel?: string;

@@ -135,6 +135,30 @@ The OAuth token remains in `~/.grok/auth.json` and is sent only to xAI's Grok
 CLI inference proxy. The separate `grok-api` provider continues to use a
 separately billed xAI API key.
 
+Antigravity OAuth uses a router-managed browser sign-in; it does not require a
+Gemini API key or a separate CLI. Sign in first, then enable the provider; the
+login command does not replace or disable any provider already selected.
+
+macOS/Linux:
+
+```sh
+./bin/model-router codex providers login antigravity-oauth
+./bin/model-router codex providers enable antigravity-oauth
+```
+
+Windows PowerShell:
+
+```powershell
+.\model-router.ps1 codex providers login antigravity-oauth
+.\model-router.ps1 codex providers enable antigravity-oauth
+```
+
+The access and refresh tokens are stored in the router's owner-only state
+directory and can be removed from the desktop connection panel. This is an
+unofficial compatibility path over Google's internal Antigravity service, so
+model availability and wire behavior may change independently of the public
+Gemini API.
+
 Windows:
 
 ```powershell
