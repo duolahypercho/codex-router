@@ -582,6 +582,13 @@ test("the model directory combines provider setup and models in accessible singl
   assert.match(models, /saveProviderCredential/);
   assert.match(models, /setProviderEnabled/);
   assert.match(models, /setPickerModel/);
+  // A router-managed OAuth file can be rejected while it still needs a
+  // disconnect action. Removal must not be gated on configured status.
+  assert.match(
+    models,
+    /\(entry\.setup\.kind === "api" && entry\.setup\.configured\) \|\| entry\.setup\.disconnectable/,
+  );
+  assert.doesNotMatch(models, /entry\.setup\.configured && \([^\n]*entry\.setup\.disconnectable/);
 
   // Adding republishes the whole catalog to every installed client and is the
   // slowest thing this page starts. Placeholder rows carrying the chosen slugs
@@ -803,8 +810,12 @@ test("provider writes republish all installed targets and roll selection back on
   assert.ok(save, "credential-save handler should be readable");
   assert.doesNotMatch(save, /updateProviderSelection/);
   assert.match(save, /CATALOG_MUTATION_TIMEOUT_MS/);
+  const connect = source.match(/handleAction\("connectProvider"[\s\S]*?\n  \}\);/)?.[0];
+  assert.ok(connect, "provider-connect handler should be readable");
+  assert.match(connect, /id === "antigravity-oauth"[\s\S]*?\["login", id\]/);
   const removal = source.match(/handleAction\("removeProviderCredential"[\s\S]*?\n  \}\);/)?.[0];
   assert.ok(removal, "credential-removal handler should be readable");
+  assert.match(removal, /validateProvider\(providerId, "disconnect"\)/);
   assert.doesNotMatch(removal, /updateProviderSelection/);
   assert.match(removal, /\["credential", id, "--remove"\]/);
   assert.match(removal, /CATALOG_MUTATION_TIMEOUT_MS/);

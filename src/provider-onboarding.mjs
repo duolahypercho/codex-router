@@ -10,6 +10,9 @@ import {
 } from "./grok-cli.mjs";
 import { devinCliStatus } from "./devin-cli-status.mjs";
 import { grokOAuthStatus } from "./grok-oauth-status.mjs";
+import { antigravityOAuthStatus } from "./antigravity-oauth-status.mjs";
+import { signInAntigravity } from "./antigravity-oauth-onboarding.mjs";
+import { removeAntigravityToken } from "./antigravity-oauth-session.mjs";
 import { KIMI_CLI_NPM_PACKAGE } from "./kimi-oauth-onboarding.mjs";
 import { MODELS, PROVIDERS, providerNeedsNoKey } from "./model-registry.mjs";
 import { kimiOAuthStatus } from "./oauth-status.mjs";
@@ -83,6 +86,7 @@ export function oauthLoginArgs(providerId) {
 function oauthConfigured(providerId) {
   if (providerId === "kimi-oauth") return kimiOAuthStatus().configured;
   if (providerId === "grok-oauth") return grokOAuthStatus().configured;
+  if (providerId === "antigravity-oauth") return antigravityOAuthStatus().configured;
   if (providerId === "devin-cli") return devinCliStatus().configured;
   return false;
 }
@@ -94,6 +98,25 @@ export function providerOnboardingSnapshot() {
   return {
     providers: selectable.map((provider) => {
       if (provider.kind === "oauth") {
+        // Antigravity has no vendor CLI to install or reuse: its sign-in is
+        // this router's own browser OAuth flow.
+        if (provider.id === "antigravity-oauth") {
+          const status = antigravityOAuthStatus();
+          const configured = status.configured;
+          return {
+            id: provider.id,
+            displayName: provider.displayName,
+            kind: "oauth",
+            credentialLabel: "OAuth session",
+            configured,
+            // A rejected or damaged session is not configured, but its
+            // router-managed file must remain removable from every UI.
+            disconnectable: status.credentialPresent,
+            cliInstalled: true,
+            cliRunnable: true,
+            action: configured ? "ready" : "login",
+          };
+        }
         const cliPath = oauthCliPath(provider.id);
         const cli = provider.id === "grok-oauth"
           ? grokCliPreflight({ executable: cliPath })
@@ -198,7 +221,14 @@ export function installOauthCli(providerId) {
 // CLI waits on a terminal it will never get.
 const LOGIN_TIMEOUT_MS = 10 * 60_000;
 
-export function loginOauthProvider(providerId) {
+export async function loginOauthProvider(providerId) {
+  if (providerId === "antigravity-oauth") {
+    await signInAntigravity();
+    if (!oauthConfigured(providerId)) {
+      throw new Error("Sign-in finished without a usable Antigravity OAuth session. Please try again.");
+    }
+    return;
+  }
   const executable = oauthCliPath(providerId);
   if (!executable) throw new Error("Install the provider CLI before signing in.");
   if (providerId === "grok-oauth") {
@@ -240,7 +270,22 @@ export function saveApiCredential(providerId, value) {
 // Deleting the managed key files cannot reach a key that also lives in the
 // macOS Keychain or the environment, so report what still resolves afterwards
 // instead of claiming the credential itself is gone.
-export function removeApiCredential(providerId) {
+export async function removeApiCredential(providerId) {
+  if (providerId === "antigravity-oauth") {
+    const provider = PROVIDERS.get(providerId);
+    const removedFiles = (await removeAntigravityToken()) ? 1 : 0;
+    // Disconnect is also a routing decision. Withdraw the provider even when
+    // the credential vanished between the snapshot and this action.
+    disableProvider(providerId);
+    const remaining = antigravityOAuthStatus();
+    return {
+      provider: providerId,
+      displayName: provider?.displayName || "Google Antigravity OAuth",
+      removedFiles,
+      stillConfigured: remaining.configured === true,
+      remainingSource: remaining.configured ? remaining.source : undefined,
+    };
+  }
   const provider = apiProvider(providerId);
   const removedFiles = removeProviderCredential(provider);
   if (removedFiles) disableProvider(provider.id);

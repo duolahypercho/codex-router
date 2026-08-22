@@ -109,9 +109,9 @@ function waitFor(readErrors, readExit, pattern, timeoutMs = 60_000) {
 }
 
 test("a gateway that dies mid-request is restarted and the router keeps serving", { timeout: 180_000 }, async () => {
-  const ports = await Promise.all(Array.from({ length: 5 }, () => freePort()));
+  const ports = await Promise.all(Array.from({ length: 6 }, () => freePort()));
   assert.equal(new Set(ports).size, ports.length);
-  const [routerPort, gatewayPort, oauthPort, apiPort, grokOauthPort] = ports;
+  const [routerPort, gatewayPort, oauthPort, apiPort, grokOauthPort, antigravityOauthPort] = ports;
   const rootDir = mkdtempSync(path.join(os.tmpdir(), "model-router-gateway-restart-"));
   const stateDir = path.join(rootDir, "state");
   mkdirSync(stateDir, { recursive: true, mode: 0o700 });
@@ -131,6 +131,7 @@ test("a gateway that dies mid-request is restarted and the router keeps serving"
       MODEL_ROUTER_OAUTH_PORT: String(oauthPort),
       MODEL_ROUTER_API_PORT: String(apiPort),
       MODEL_ROUTER_GROK_OAUTH_PORT: String(grokOauthPort),
+      MODEL_ROUTER_ANTIGRAVITY_OAUTH_PORT: String(antigravityOauthPort),
       MODEL_ROUTER_LITELLM_BIN: gatewayBin,
       // Keep the backoff out of the run time; the sequencing is what matters.
       CODEX_ROUTER_GATEWAY_RESTART_BACKOFF_MS: "50",

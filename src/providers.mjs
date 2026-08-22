@@ -4,9 +4,13 @@ import path from "node:path";
 import { PROVIDERS, providerNeedsNoKey } from "./model-registry.mjs";
 import { devinCliStatus } from "./devin-cli-status.mjs";
 import { grokOAuthStatus } from "./grok-oauth-status.mjs";
+import { antigravityOAuthStatus } from "./antigravity-oauth-status.mjs";
 import { kimiOAuthStatus } from "./oauth-status.mjs";
 import { credentialStatus } from "./provider-credentials.mjs";
-import { providerNeedsCuration } from "./provider-onboarding.mjs";
+import {
+  loginOauthProvider,
+  providerNeedsCuration,
+} from "./provider-onboarding.mjs";
 import {
   canonicalProviderId,
   disableProvider,
@@ -21,11 +25,21 @@ import {
 } from "./target-integration.mjs";
 import { withModelOverlayLock } from "./model-overlay-lock.mjs";
 
+function providersCommand(action, providerId) {
+  return process.platform === "win32"
+    ? `.\\codex-router.ps1 providers ${action} ${providerId}`
+    : `./bin/providers ${action} ${providerId}`;
+}
+
 // One entry per OAuth vendor keeps adding a provider a registry-plus-map
 // change instead of another branch in a nested conditional.
 const SIGN_IN_STATUS = Object.freeze({
   "kimi-oauth": { status: kimiOAuthStatus, setup: "run `kimi login`" },
   "grok-oauth": { status: grokOAuthStatus, setup: "run `grok login --oauth`" },
+  "antigravity-oauth": {
+    status: antigravityOAuthStatus,
+    setup: `run \`${providersCommand("login", "antigravity-oauth")}\``,
+  },
   "devin-cli": { status: devinCliStatus, setup: "run `devin auth login`" },
 });
 
@@ -71,8 +85,27 @@ async function main() {
   // Toggling a protocol variant toggles its whole family, so report the
   // canonical provider the user actually changed.
   const provider = PROVIDERS.get(canonicalProviderId(providerId ?? ""));
+  if (command === "login") {
+    if (provider?.id !== "antigravity-oauth") {
+      throw new Error("Usage: providers login antigravity-oauth");
+    }
+    // Antigravity is the one OAuth provider whose browser flow belongs to the
+    // router. Kimi and Grok retain their official CLI sessions, which need a
+    // real terminal instead of a child with piped stdio.
+    await loginOauthProvider(provider.id);
+    if (readProviderSelection().includes(provider.id)) {
+      process.stdout.write(`${provider.displayName} sign-in completed; the provider remains enabled.\n`);
+    } else {
+      process.stdout.write(
+        `${provider.displayName} sign-in completed. Run \`${providersCommand("enable", provider.id)}\` to add its models without changing any other provider.\n`,
+      );
+    }
+    return;
+  }
   if (!provider || !["enable", "disable"].includes(command)) {
-    throw new Error("Usage: providers [list [--json]|enable ID|disable ID]");
+    throw new Error(
+      "Usage: providers [list [--json]|login antigravity-oauth|enable ID|disable ID]",
+    );
   }
   if (command === "enable" && !configured(provider)) {
     const keySetup = `run \`${targetCli(`provider-key ${provider.id} set`)}\``;

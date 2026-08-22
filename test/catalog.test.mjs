@@ -428,6 +428,39 @@ test("merged catalog preserves native GPT identity while rewriting routed models
   assert.doesNotMatch(bySlug.get("grok-oauth/grok-4.5").base_instructions, /GPT-5/);
 });
 
+test("merged catalog gives native models first and keeps routed providers contiguous", () => {
+  const nativeOlder = {
+    ...template,
+    slug: "gpt-5.4",
+    display_name: "GPT-5.4",
+    priority: 29,
+  };
+  const routed = [
+    { ...grok, slug: "opencode-go/glm-5.3", provider: "opencode-go", priority: 7 },
+    { ...grok, slug: "deepseek/deepseek-v4-pro", provider: "deepseek", priority: 1 },
+    { ...grok, slug: "antigravity-oauth/gemini-3.7-flash", provider: "antigravity-oauth", priority: 9 },
+    { ...grok, slug: "opencode-go-responses/gpt-5.6-luna", provider: "opencode-go-responses", priority: 2 },
+    { ...grok, slug: "grok-oauth/grok-4.5", provider: "grok-oauth", priority: 0 },
+    { ...grok, slug: "antigravity-oauth/gemini-3.1-pro", provider: "antigravity-oauth", priority: 3 },
+  ];
+  const merged = buildMergedCatalog({ models: [nativeOlder, template] }, routed);
+
+  assert.deepEqual(merged.map((model) => model.slug), [
+    "gpt-5.5",
+    "gpt-5.4",
+    "antigravity-oauth/gemini-3.1-pro",
+    "antigravity-oauth/gemini-3.7-flash",
+    "deepseek/deepseek-v4-pro",
+    "opencode-go-responses/gpt-5.6-luna",
+    "opencode-go/glm-5.3",
+    "grok-oauth/grok-4.5",
+  ]);
+  assert.deepEqual(
+    merged.map((model) => model.priority),
+    [10, 29, 30, 31, 32, 33, 34, 35],
+  );
+});
+
 test("native gpt-5.2 stays parseable by older Codex catalog readers", () => {
   const native52 = { ...template, slug: "gpt-5.2" };
   delete native52.supports_parallel_tool_calls;

@@ -12,6 +12,7 @@ import { detectLegacyInstallations } from "./legacy-migration.mjs";
 import { routedCatalogConfigured } from "./catalog.mjs";
 import { MODEL_BY_SLUG, PROVIDERS } from "./model-registry.mjs";
 import { grokOAuthStatus } from "./grok-oauth-status.mjs";
+import { antigravityOAuthHealth } from "./antigravity-oauth-status.mjs";
 import { kimiOAuthHealth } from "./oauth-status.mjs";
 import {
   applyMultiAgentCapabilities,
@@ -823,6 +824,19 @@ if (!credentialDiscoveryOff) {
         ? grokOauth.source
         : `not configured; ${grokOauth.setup}`,
     !grokCli.runnable ? grokCli.fix : "Run grok login, then rerun the doctor.",
+  );
+  const antigravityHealth = antigravityOAuthHealth();
+  const antigravitySelected = selection.providers.includes("antigravity-oauth");
+  const antigravityStatus = !antigravitySelected
+    ? "warn"
+    : antigravityHealth.status === "ok" || antigravityHealth.status === "stale"
+      ? "ok"
+      : "fail";
+  add(
+    antigravityStatus,
+    "Antigravity OAuth",
+    antigravityHealth.detail,
+    antigravityHealth.fix,
   );
 }
 

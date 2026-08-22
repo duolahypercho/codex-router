@@ -508,6 +508,13 @@ async function validateProvider(providerId, capability) {
   if (capability === "credential" && provider.kind !== "api") {
     throw new Error(`${provider.displayName || id} does not accept an API credential.`);
   }
+  if (
+    capability === "disconnect" &&
+    provider.kind !== "api" &&
+    provider.disconnectable !== true
+  ) {
+    throw new Error(`${provider.displayName || id} does not expose a router-managed credential.`);
+  }
   if (capability === "sign-in" && provider.kind !== "oauth") {
     throw new Error(`${provider.displayName || id} does not support CLI sign-in.`);
   }
@@ -760,10 +767,14 @@ export function registerIpcHandlers({ ipcMain, BrowserWindow, shell, fetchImpl =
     return { provider: id, added: unique };
   });
   handleAction("connectProvider", async ({ providerId } = {}) => {
+    const { id } = await validateProvider(providerId, "sign-in");
+    if (id === "antigravity-oauth") {
+      await runControl(["login", id], { timeoutMs: 10 * 60_000 });
+      return runJson(["providers"]);
+    }
     if (!terminalAvailable()) {
       throw new Error("Provider CLI sign-in must be run in your own terminal on Windows or Linux.");
     }
-    const { id } = await validateProvider(providerId, "sign-in");
     await runControl(["install-cli", id], { timeoutMs: 120_000 });
     const login = OAUTH_LOGIN_COMMANDS[id];
     if (!login) throw new Error(`Interactive sign-in is not available for ${id}.`);
@@ -793,7 +804,7 @@ export function registerIpcHandlers({ ipcMain, BrowserWindow, shell, fetchImpl =
     return runJson(["providers"]);
   });
   handleAction("removeProviderCredential", async ({ providerId } = {}) => {
-    const { id } = await validateProvider(providerId, "credential");
+    const { id } = await validateProvider(providerId, "disconnect");
     // The control command owns credential deletion, provider withdrawal, and
     // publication under the same lock as credential setup. Splitting a
     // pre-disable/apply here would reopen the inter-process race and publish

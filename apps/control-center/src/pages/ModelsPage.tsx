@@ -376,6 +376,7 @@ export function ModelsPage({ target, catalog, setup, usage, api, refreshing, onR
                 {filteredDirectory.map((entry) => {
                   const providerUsage = usageById.get(entry.id);
                   const configured = providerConnected(entry, enabledProviders);
+                  const browserOAuth = entry.id === "antigravity-oauth";
                   const authoritativeEnabled = enabledProviders.has(entry.id) || entry.models.some((model) => model.native);
                   const isEnabled = optimisticProviders.value(entry.id, authoritativeEnabled);
                   const needsCuration = configured && entry.models.length === 0 && catalogEligible(entry);
@@ -416,9 +417,9 @@ export function ModelsPage({ target, catalog, setup, usage, api, refreshing, onR
                             <div className="pm-provider-controls">
                               <div className="pm-provider-actions">
                                 {entry.setup.kind === "oauth" || entry.setup.signIn ? (
-                                  <Button variant="ghost" disabled={!api || api.platform !== "darwin"} title={api?.platform === "darwin" ? undefined : "Open the provider CLI in your own terminal on Windows or Linux."} onClick={() => api && void runAction(`Start ${entry.displayName} sign-in`, () => api.connectProvider(entry.id))}>
+                                  <Button variant="ghost" disabled={!api || (!browserOAuth && api.platform !== "darwin")} title={browserOAuth || api?.platform === "darwin" ? undefined : "Open the provider CLI in your own terminal on Windows or Linux."} onClick={() => api && void runAction(`Start ${entry.displayName} sign-in`, () => api.connectProvider(entry.id))}>
                                     <LogIn aria-hidden size={14} strokeWidth={1.7} />
-                                    {entry.setup.configured ? "Reconnect in terminal" : entry.setup.cliInstalled === false ? "Install and open sign-in" : "Open sign-in"}
+                                    {browserOAuth ? (entry.setup.configured ? "Reconnect" : "Sign in with Google") : entry.setup.configured ? "Reconnect in terminal" : entry.setup.cliInstalled === false ? "Install and open sign-in" : "Open sign-in"}
                                   </Button>
                                 ) : null}
                                 {entry.setup.kind === "api" && entry.id !== "local" ? (
@@ -426,7 +427,7 @@ export function ModelsPage({ target, catalog, setup, usage, api, refreshing, onR
                                     <KeyRound aria-hidden size={14} strokeWidth={1.7} /> {entry.setup.configured ? "Replace key" : "Add key"}
                                   </Button>
                                 ) : null}
-                                {entry.setup.kind === "api" && entry.setup.configured && entry.id !== "local" ? (
+                                {((entry.setup.kind === "api" && entry.setup.configured) || entry.setup.disconnectable) && entry.id !== "local" ? (
                                   <Button variant="ghost" disabled={!api} aria-label={`Remove ${entry.displayName} credential`} title="Remove credential" onClick={() => setRemoveProvider(entry.setup!)}>
                                     <Trash2 aria-hidden size={14} strokeWidth={1.7} />
                                   </Button>
@@ -760,6 +761,7 @@ function connectionDetail(entry: ProviderDirectoryEntry, accountStatus?: string,
   if (needsCuration) return "The credential is ready, but this catalog-only provider has no locally selected models.";
   if (accountStatus === "unavailable") return accountMessage || "Account usage is unavailable. Reconnect if the session expired.";
   if (entry.setup.configured) return "Credential ready. You can disable routing without disconnecting the account.";
+  if (entry.id === "antigravity-oauth") return "Sign in with Google in your browser to use the Antigravity subscription route.";
   if (entry.setup.kind === "oauth") {
     if (!canOpenTerminal) return "Run the official provider sign-in command in your own terminal, then refresh this page.";
     return entry.setup.cliInstalled === false ? "The official CLI will be installed, then sign-in will open in your system terminal." : "Sign in through the official provider CLI in your system terminal, then refresh to enable it.";

@@ -18,6 +18,7 @@ delete process.env.KIMI_API_KEY;
 delete process.env.MOONSHOT_API_KEY;
 
 const { createSupportBundle } = await import("../src/support-bundle.mjs");
+const { LOG_PATH } = await import("../src/paths.mjs");
 
 test("support bundle reports credential presence without including values", () => {
   const stateDir = process.env.CODEX_ROUTER_STATE_DIR;
@@ -27,6 +28,8 @@ test("support bundle reports credential presence without including values", () =
   const copilotSentinel = "github_pat_TEST_SUPPORT_COPILOT_SECRET_MUST_NOT_APPEAR";
   const callerSentinel =
     "TEST_SUPPORT_CALLER_CAPABILITY_MUST_NOT_APPEAR_ANYWHERE";
+  const oauthAccessSentinel = "TEST_SUPPORT_ANTIGRAVITY_ACCESS_MUST_NOT_APPEAR";
+  const oauthRefreshSentinel = "TEST_SUPPORT_ANTIGRAVITY_REFRESH_MUST_NOT_APPEAR";
   writeFileSync(path.join(stateDir, "deepseek-api-key.secret"), `${sentinel}\n`, {
     mode: 0o600,
   });
@@ -37,6 +40,20 @@ test("support bundle reports credential presence without including values", () =
     mode: 0o600,
   });
   writeFileSync(path.join(stateDir, "caller-secret"), `${callerSentinel}\n`, {
+    mode: 0o600,
+  });
+  writeFileSync(
+    path.join(stateDir, "antigravity-oauth.json"),
+    `${JSON.stringify({
+      version: 1,
+      access_token: oauthAccessSentinel,
+      refresh_token: oauthRefreshSentinel,
+      expires_at: 2_000_000_000,
+      expires_in: 3600,
+    })}\n`,
+    { mode: 0o600 },
+  );
+  writeFileSync(LOG_PATH, `oauth ${oauthAccessSentinel} refresh ${oauthRefreshSentinel}\n`, {
     mode: 0o600,
   });
   writeFileSync(
@@ -57,7 +74,7 @@ model_catalog_json = ${JSON.stringify(path.join(stateDir, "merged-models.json"))
   );
 
   try {
-    const result = createSupportBundle();
+    const result = createSupportBundle({ includeLogs: true });
     const contents = readFileSync(result.path, "utf8");
     const bundle = JSON.parse(contents);
     assert.equal(bundle.credentialSources.deepseek.configured, true);
@@ -67,8 +84,10 @@ model_catalog_json = ${JSON.stringify(path.join(stateDir, "merged-models.json"))
     assert.doesNotMatch(contents, new RegExp(chutesSentinel));
     assert.doesNotMatch(contents, new RegExp(copilotSentinel));
     assert.doesNotMatch(contents, new RegExp(callerSentinel));
+    assert.doesNotMatch(contents, new RegExp(oauthAccessSentinel));
+    assert.doesNotMatch(contents, new RegExp(oauthRefreshSentinel));
     assert.match(bundle.config.openai_base_url, /\[REDACTED\]/);
-    assert.equal("redactedLogTail" in bundle, false);
+    assert.match(bundle.redactedLogTail, /\[REDACTED\]/);
   } finally {
     rmSync(testRoot, { recursive: true, force: true });
   }

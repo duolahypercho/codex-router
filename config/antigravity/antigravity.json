@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "providers": [
+    {
+      "id": "antigravity-oauth",
+      "displayName": "Google Antigravity OAuth",
+      "kind": "oauth",
+      "ownedBy": "google",
+      "proxyBaseEnv": "ANTIGRAVITY_OAUTH_FORWARD_BASE_URL"
+    }
+  ]
+}

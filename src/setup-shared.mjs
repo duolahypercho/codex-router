@@ -17,6 +17,8 @@ import {
 import { PROVIDERS, providerNeedsNoKey } from "./model-registry.mjs";
 import { kimiOAuthStatus } from "./oauth-status.mjs";
 import { grokOAuthStatus } from "./grok-oauth-status.mjs";
+import { antigravityOAuthStatus } from "./antigravity-oauth-status.mjs";
+import { signInAntigravity } from "./antigravity-oauth-onboarding.mjs";
 import { SOURCE_ROOT } from "./paths.mjs";
 import { credentialStatus } from "./provider-credentials.mjs";
 import { providerOnboardingSnapshot } from "./provider-onboarding.mjs";
@@ -121,6 +123,7 @@ export function providerConfigured(provider) {
   if (provider.kind === "oauth") {
     if (provider.id === "kimi-oauth") return kimiOAuthStatus().configured;
     if (provider.id === "grok-oauth") return grokOAuthStatus().configured;
+    if (provider.id === "antigravity-oauth") return antigravityOAuthStatus().configured;
     return false;
   }
   return providerNeedsNoKey(provider)
@@ -132,6 +135,9 @@ export function providerConfigured(provider) {
 function oauthSetupHint(provider) {
   if (provider.id === "grok-oauth") {
     return "install the official Grok CLI and run `grok login --oauth`";
+  }
+  if (provider.id === "antigravity-oauth") {
+    return "run the Antigravity sign-in flow";
   }
   return `run \`kimi login\` (install the Kimi Code CLI from ${KIMI_CLI_INSTALL_URL} first if needed)`;
 }
@@ -181,7 +187,7 @@ function guidedSelection(appName) {
   if (selected.size === 0) selected = new Set([1]);
   process.stdout.write(`\nChoose the providers to show in ${appName}:\n`);
   process.stdout.write(
-    "OAuth entries reuse official Kimi or Grok CLI sessions; API entries use a provider credential.\n",
+    "OAuth entries reuse Kimi, Grok, or Antigravity sign-in; API entries use a provider credential.\n",
   );
   for (;;) {
     process.stdout.write(`${renderProviderChoices(snapshots, selected, colorEnabled)}\n`);
@@ -274,9 +280,21 @@ function onboardGrokOauth() {
   throw new Error("Grok OAuth login did not produce a usable credential after several attempts.");
 }
 
+async function onboardAntigravityOauth() {
+  for (let attempt = 0; attempt < MAX_LOGIN_ATTEMPTS; attempt += 1) {
+    if (!confirm("Open a browser to sign in to Antigravity now?")) {
+      throw new Error("Antigravity OAuth setup was cancelled.");
+    }
+    await signInAntigravity();
+    if (antigravityOAuthStatus().configured) return;
+    process.stdout.write("Antigravity sign-in did not produce a usable credential yet.\n");
+  }
+  throw new Error("Antigravity OAuth sign-in did not produce a usable credential after several attempts.");
+}
+
 // Ensure a selected provider has a usable credential, onboarding it when guided.
 // providerKeyCommand(id) yields the target-specific hint for the non-guided path.
-export function configureProvider(provider, { guided, providerKeyCommand }) {
+export async function configureProvider(provider, { guided, providerKeyCommand }) {
   if (providerConfigured(provider)) return;
   if (!guided) {
     const setup =
@@ -287,6 +305,7 @@ export function configureProvider(provider, { guided, providerKeyCommand }) {
   }
   if (provider.kind === "oauth") {
     if (provider.id === "grok-oauth") onboardGrokOauth();
+    else if (provider.id === "antigravity-oauth") await onboardAntigravityOauth();
     else onboardKimiOauth();
   } else {
     if (["anonymous", "per-model"].includes(provider.authMode)) return;

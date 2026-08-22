@@ -25,6 +25,11 @@ const renderCommands = new Set(["render", "render-task", "render-electron"]);
 // Resolved from the effective platform, not process.platform, so a render on
 // a POSIX machine shows the Windows path it would actually register.
 const TRAY_BINARY = desktopTrayBinary(effectivePlatform, SOURCE_ROOT);
+const TASK_STOP_TIMEOUT_MS = 10_000;
+const TASK_START_TIMEOUT_MS = 10_000;
+const TASK_STATE_POLL_MS = 250;
+const TASK_COMMAND_TIMEOUT_MS = 4_000;
+const TASK_FULL_CONTROL_MASK = 0x1f01ff;
 
 if (effectivePlatform !== "win32" && !renderCommands.has(command)) {
   throw new Error("The Task Scheduler tray manager runs on Windows only.");
@@ -35,6 +40,7 @@ function schtasks(args, options = {}) {
     encoding: "utf8",
     windowsHide: true,
     stdio: options.quiet ? ["ignore", "ignore", "ignore"] : ["ignore", "pipe", "pipe"],
+    timeout: options.timeoutMs || TASK_COMMAND_TIMEOUT_MS,
   });
 }
 
@@ -57,6 +63,7 @@ export function electronTaskAction() {
 // the same conditional-KeepAlive intent the macOS agent spells out.
 function installTask(action = trayTaskAction()) {
   const script = [
+    "$principalSid = ([Security.Principal.WindowsIdentity]::GetCurrent().User.Value)",
     // Only passed when there is one: `-Argument ""` registers an empty
     // argument rather than none, which the Tauri binary must never receive.
     action.argument
@@ -66,58 +73,136 @@ function installTask(action = trayTaskAction()) {
     "$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew",
     "$principal = New-ScheduledTaskPrincipal -UserId ([Security.Principal.WindowsIdentity]::GetCurrent().Name) -LogonType Interactive -RunLevel Limited",
     "Register-ScheduledTask -TaskName $env:CODEX_ROUTER_TRAY_TASK -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force | Out-Null",
+    // An elevated install otherwise leaves the unelevated account with only
+    // read/run access to its own tray task. Preserve Task Scheduler's existing
+    // descriptor and add one explicit full-control ACE for the task principal,
+    // so later updates neither need elevation nor rewrite SYSTEM/Admin rights.
+    "$service = New-Object -ComObject 'Schedule.Service'",
+    "$service.Connect()",
+    "$registered = $service.GetFolder('\\').GetTask($env:CODEX_ROUTER_TRAY_TASK)",
+    "$descriptor = [Security.AccessControl.RawSecurityDescriptor]::new($registered.GetSecurityDescriptor(7))",
+    "$sid = [Security.Principal.SecurityIdentifier]::new($principalSid)",
+    `$fullControl = ${TASK_FULL_CONTROL_MASK}`,
+    "$hasFullControl = $false",
+    "foreach ($ace in $descriptor.DiscretionaryAcl) { if ($ace -is [Security.AccessControl.CommonAce] -and $ace.AceQualifier -eq [Security.AccessControl.AceQualifier]::AccessAllowed -and $ace.SecurityIdentifier.Value -eq $sid.Value -and ($ace.AccessMask -band $fullControl) -eq $fullControl) { $hasFullControl = $true; break } }",
+    "if (-not $hasFullControl) { $newAce = [Security.AccessControl.CommonAce]::new([Security.AccessControl.AceFlags]::None, [Security.AccessControl.AceQualifier]::AccessAllowed, $fullControl, $sid, $false, $null); $descriptor.DiscretionaryAcl.InsertAce($descriptor.DiscretionaryAcl.Count, $newAce); $sections = [Security.AccessControl.AccessControlSections]::Owner -bor [Security.AccessControl.AccessControlSections]::Group -bor [Security.AccessControl.AccessControlSections]::Access; $registered.SetSecurityDescriptor($descriptor.GetSddlForm($sections), 0x10) }",
   ].join("; ");
-  execFileSync(
-    "powershell.exe",
-    ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
-    {
-      env: {
-        ...process.env,
-        CODEX_ROUTER_TRAY_TASK: TRAY_TASK_NAME,
-        CODEX_ROUTER_TRAY_EXECUTE: action.execute,
-        CODEX_ROUTER_TRAY_ARGUMENT: action.argument,
+  try {
+    execFileSync(
+      "powershell.exe",
+      ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          CODEX_ROUTER_TRAY_TASK: TRAY_TASK_NAME,
+          CODEX_ROUTER_TRAY_EXECUTE: action.execute,
+          CODEX_ROUTER_TRAY_ARGUMENT: action.argument,
+        },
+        stdio: ["ignore", "ignore", "pipe"],
+        windowsHide: true,
+        timeout: TASK_COMMAND_TIMEOUT_MS,
       },
-      stdio: ["ignore", "ignore", "ignore"],
-      windowsHide: true,
-    },
-  );
+    );
+  } catch (error) {
+    const detail = String(error?.stderr || "").trim();
+    throw new Error(
+      "Task Scheduler could not replace the tray task. " +
+        "If an earlier elevated install owns it, run `.\\codex-router.ps1 tray repair` once." +
+        (detail ? ` ${detail}` : ""),
+      { cause: error },
+    );
+  }
 }
 
-function taskExists() {
+function taskExists(timeoutMs = TASK_COMMAND_TIMEOUT_MS) {
   try {
-    schtasks(["/Query", "/TN", TRAY_TASK_NAME], { quiet: true });
+    schtasks(["/Query", "/TN", TRAY_TASK_NAME], { quiet: true, timeoutMs });
     return true;
   } catch {
     return false;
   }
 }
 
-function taskRunning() {
+function sleep(milliseconds) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
+}
+
+function taskState(timeoutMs = TASK_COMMAND_TIMEOUT_MS) {
   // `schtasks` output is localized ("En ejecución" on Spanish Windows), so a
   // regex on its text reads a running task as stopped. Task Scheduler's own
   // State property is an enum that renders the same in every locale.
   const script =
     "try { [Console]::Out.Write((Get-ScheduledTask -TaskName $env:CODEX_ROUTER_TRAY_TASK).State.ToString()) } catch { exit 1 }";
+  const perHostTimeout = Math.max(50, Math.floor(timeoutMs / 2));
   for (const executable of ["powershell.exe", "pwsh.exe"]) {
     try {
-      return (
-        execFileSync(
-          executable,
-          ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
-          {
-            encoding: "utf8",
-            env: { ...process.env, CODEX_ROUTER_TRAY_TASK: TRAY_TASK_NAME },
-            stdio: ["ignore", "pipe", "ignore"],
-          },
-        )
-          .trim()
-          .toLowerCase() === "running"
-      );
+      return execFileSync(
+        executable,
+        ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
+        {
+          encoding: "utf8",
+          env: { ...process.env, CODEX_ROUTER_TRAY_TASK: TRAY_TASK_NAME },
+          stdio: ["ignore", "pipe", "ignore"],
+          timeout: perHostTimeout,
+          windowsHide: true,
+        },
+      ).trim().toLowerCase();
     } catch {
-      // Try Windows PowerShell after PowerShell Core, or fall back to schtasks.
+      // Try the other PowerShell host. A missing task is handled by taskExists.
     }
   }
-  return false;
+  return undefined;
+}
+
+function registeredTaskAction() {
+  const script = [
+    "$task = Get-ScheduledTask -TaskName $env:CODEX_ROUTER_TRAY_TASK -ErrorAction Stop",
+    "$action = @($task.Actions)[0]",
+    "if ($null -eq $action) { exit 1 }",
+    "[Console]::Out.Write((@{ execute = [string]$action.Execute; argument = [string]$action.Arguments } | ConvertTo-Json -Compress))",
+  ].join("; ");
+  const perHostTimeout = Math.floor(TASK_COMMAND_TIMEOUT_MS / 2);
+  for (const executable of ["powershell.exe", "pwsh.exe"]) {
+    try {
+      const value = JSON.parse(execFileSync(
+        executable,
+        ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
+        {
+          encoding: "utf8",
+          env: { ...process.env, CODEX_ROUTER_TRAY_TASK: TRAY_TASK_NAME },
+          stdio: ["ignore", "pipe", "ignore"],
+          timeout: perHostTimeout,
+          windowsHide: true,
+        },
+      ));
+      if (typeof value?.execute === "string" && value.execute) return value;
+    } catch {
+      // Try the other PowerShell host before reporting an unreadable action.
+    }
+  }
+  return undefined;
+}
+
+function waitForTaskState(predicate, timeoutMs, action) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) {
+      throw new Error(`The tray task did not ${action} within ${timeoutMs}ms.`);
+    }
+    const probeTimeout = Math.min(TASK_COMMAND_TIMEOUT_MS, remaining);
+    const state = taskState(probeTimeout);
+    if (state !== undefined && predicate(state)) return state;
+    if (state === undefined && !taskExists(Math.min(TASK_COMMAND_TIMEOUT_MS, Math.max(50, deadline - Date.now())))) {
+      if (action === "stop") return "missing";
+      throw new Error(`The tray task disappeared while waiting for it to ${action}.`);
+    }
+    if (Date.now() >= deadline) {
+      throw new Error(`The tray task did not ${action} within ${timeoutMs}ms.`);
+    }
+    sleep(TASK_STATE_POLL_MS);
+  }
 }
 
 function endTask() {
@@ -126,6 +211,12 @@ function endTask() {
   } catch {
     // Missing or already idle: the state the caller asked for either way.
   }
+  waitForTaskState((state) => state !== "running", TASK_STOP_TIMEOUT_MS, "stop");
+}
+
+function startTask() {
+  schtasks(["/Run", "/TN", TRAY_TASK_NAME], { quiet: true });
+  waitForTaskState((state) => state === "running", TASK_START_TIMEOUT_MS, "start");
 }
 
 function requireBuiltTray() {
@@ -201,34 +292,48 @@ if (command === "render" || command === "render-task") {
   requireBuiltElectron();
   endTask();
   installTask(electronTaskAction());
-  schtasks(["/Run", "/TN", TRAY_TASK_NAME], { quiet: true });
+  startTask();
   process.stdout.write(
     `${JSON.stringify({ installed: true, ...electronTaskAction() })}\n`,
   );
 } else if (command === "status") {
   const installed = taskExists();
+  const taskStatus = installed ? taskState() : undefined;
+  const action = installed ? registeredTaskAction() : undefined;
+  const companionPath = action?.execute || (!installed ? builtCompanionPath() : undefined);
+  const loaded = installed && taskStatus === "running";
   process.stdout.write(
     `${JSON.stringify({
       installed,
       supported: true,
-      loaded: installed && taskRunning(),
-      appPresent: builtCompanionExists(),
-      state: installed && taskRunning() ? "running" : "stopped",
-      path: builtCompanionPath(),
+      loaded,
+      appPresent: Boolean(companionPath && existsSync(companionPath)),
+      state: loaded ? "running" : "stopped",
+      path: companionPath,
     })}\n`,
   );
 } else if (command === "install") {
   requireBuiltTray();
   endTask();
   installTask();
-  schtasks(["/Run", "/TN", TRAY_TASK_NAME], { quiet: true });
+  startTask();
   process.stdout.write(`${JSON.stringify({ installed: true, path: TRAY_BINARY })}\n`);
 } else if (command === "uninstall") {
   endTask();
   try {
     schtasks(["/Delete", "/TN", TRAY_TASK_NAME, "/F"], { quiet: true });
-  } catch {
-    // The task may not exist.
+  } catch (error) {
+    // Missing is already the requested state. A task that still exists means
+    // Task Scheduler rejected the deletion, which must not be reported as a
+    // successful uninstall.
+    if (taskExists()) {
+      const failure = new Error("Task Scheduler did not remove the tray task.");
+      failure.cause = error;
+      throw failure;
+    }
+  }
+  if (taskExists()) {
+    throw new Error("Task Scheduler still reports the tray task after deletion.");
   }
   process.stdout.write(`${JSON.stringify({ installed: false })}\n`);
 } else if (command === "stop") {
@@ -242,6 +347,6 @@ if (command === "render" || command === "render-task") {
     throw new Error(`The tray task is not installed. Run: control tray enable`);
   }
   if (command === "restart") endTask();
-  schtasks(["/Run", "/TN", TRAY_TASK_NAME], { quiet: true });
+  startTask();
   process.stdout.write(`${JSON.stringify({ state: "running" })}\n`);
 }

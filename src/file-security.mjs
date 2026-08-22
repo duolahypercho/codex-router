@@ -10,38 +10,31 @@ import {
 } from "node:fs";
 import path from "node:path";
 
-let windowsSid;
-
-function currentWindowsSid() {
-  if (windowsSid) return windowsSid;
-  const script =
-    "[Console]::Out.Write([Security.Principal.WindowsIdentity]::GetCurrent().User.Value)";
-  windowsSid = execFileSync(
-    "powershell.exe",
-    ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
-    { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
-  ).trim();
-  if (!windowsSid) throw new Error("Could not resolve the current Windows user SID.");
-  return windowsSid;
-}
-
-export function windowsFullControlGrant(sid) {
-  if (!/^S-\d+(?:-\d+)+$/i.test(sid)) {
-    throw new Error("Could not format an invalid Windows user SID.");
-  }
-  // icacls requires an asterisk before a numeric SID so it is not resolved as
-  // an account name. Without it, hosted runners fail with system error 1332.
-  return `*${sid}:(F)`;
-}
-
 export function protectPrivateFile(target) {
   chmodSync(target, 0o600);
   if (process.platform !== "win32") return target;
-  const sid = currentWindowsSid();
+  const script = [
+    "$target = $env:CODEX_ROUTER_PRIVATE_FILE",
+    "$sid = [Security.Principal.WindowsIdentity]::GetCurrent().User",
+    "$acl = [System.IO.File]::GetAccessControl($target)",
+    "$acl.SetAccessRuleProtection($true, $false)",
+    "$rules = @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]))",
+    "foreach ($rule in $rules) { [void]$acl.RemoveAccessRuleSpecific($rule) }",
+    "$fullControl = [System.Security.AccessControl.FileSystemRights]::FullControl",
+    "$none = [System.Security.AccessControl.InheritanceFlags]::None",
+    "$propagationNone = [System.Security.AccessControl.PropagationFlags]::None",
+    "$allow = [System.Security.AccessControl.AccessControlType]::Allow",
+    "$rule = [System.Security.AccessControl.FileSystemAccessRule]::new($sid, $fullControl, $none, $propagationNone, $allow)",
+    "[void]$acl.AddAccessRule($rule)",
+    "[System.IO.File]::SetAccessControl($target, $acl)",
+  ].join("; ");
   execFileSync(
-    "icacls.exe",
-    [target, "/inheritance:r", "/grant:r", windowsFullControlGrant(sid)],
-    { stdio: "ignore" },
+    "powershell.exe",
+    ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
+    {
+      env: { ...process.env, CODEX_ROUTER_PRIVATE_FILE: target },
+      stdio: "ignore",
+    },
   );
   return target;
 }
@@ -78,12 +71,14 @@ export function privateFileIsProtected(target) {
     // concurrent Windows processes. The .NET API returns the same FileSecurity
     // object without importing a PowerShell module.
     "$acl = [System.IO.File]::GetAccessControl($env:CODEX_ROUTER_PRIVATE_FILE)",
-    "$identity = [Security.Principal.WindowsIdentity]::GetCurrent()",
-    "$sid = $identity.User.Value",
-    "$name = $identity.Name",
-    "$allowed = $false",
-    "foreach ($rule in $acl.Access) { $ruleIdentity = $rule.IdentityReference.Value; $matches = $ruleIdentity -eq $sid -or $ruleIdentity -eq $name; if (-not $matches) { try { $matches = $rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value -eq $sid } catch { $matches = $false } }; if ($matches -and $rule.AccessControlType -eq 'Allow') { $allowed = $true } }",
-    "[Console]::Out.Write(($acl.AreAccessRulesProtected -and $allowed).ToString())",
+    "$sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value",
+    "$rules = @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]))",
+    "$fullControl = [System.Security.AccessControl.FileSystemRights]::FullControl",
+    "$hasFullControl = $false",
+    "$hasForeignAllow = $false",
+    "$hasInheritedRule = $false",
+    "foreach ($rule in $rules) { if ($rule.IsInherited) { $hasInheritedRule = $true }; if ($rule.AccessControlType -eq [System.Security.AccessControl.AccessControlType]::Allow) { if ($rule.IdentityReference.Value -eq $sid) { if (($rule.FileSystemRights -band $fullControl) -eq $fullControl) { $hasFullControl = $true } } else { $hasForeignAllow = $true } } }",
+    "[Console]::Out.Write(($acl.AreAccessRulesProtected -and -not $hasInheritedRule -and $hasFullControl -and -not $hasForeignAllow).ToString())",
   ].join("; ");
   try {
     return execFileSync(

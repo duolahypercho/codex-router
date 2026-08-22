@@ -95,9 +95,17 @@ async function squat(port) {
 }
 
 async function runStartup({ curatedDevinModel = false, occupyDevinPort = false } = {}) {
-  const ports = await Promise.all(Array.from({ length: 6 }, () => freePort()));
+  const ports = await Promise.all(Array.from({ length: 7 }, () => freePort()));
   assert.equal(new Set(ports).size, ports.length);
-  const [routerPort, gatewayPort, oauthPort, apiPort, grokOauthPort, devinPort] = ports;
+  const [
+    routerPort,
+    gatewayPort,
+    oauthPort,
+    apiPort,
+    grokOauthPort,
+    antigravityOauthPort,
+    devinPort,
+  ] = ports;
 
   const rootDir = mkdtempSync(path.join(os.tmpdir(), "model-router-devin-gate-"));
   const stateDir = path.join(rootDir, "state");
@@ -140,6 +148,7 @@ async function runStartup({ curatedDevinModel = false, occupyDevinPort = false }
       MODEL_ROUTER_OAUTH_PORT: String(oauthPort),
       MODEL_ROUTER_API_PORT: String(apiPort),
       MODEL_ROUTER_GROK_OAUTH_PORT: String(grokOauthPort),
+      MODEL_ROUTER_ANTIGRAVITY_OAUTH_PORT: String(antigravityOauthPort),
       MODEL_ROUTER_DEVIN_CLI_PORT: String(devinPort),
       MODEL_ROUTER_LITELLM_BIN: process.execPath,
     },

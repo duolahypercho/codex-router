@@ -266,7 +266,7 @@ if (command === "status") {
     // is no rollback of credential files, so a publication failure leaves the
     // coherent result (credential gone, provider disabled) rather than a
     // selection restored next to a deleted secret.
-    removal = removeApiCredential(provider.id);
+    removal = await removeApiCredential(provider.id);
     refreshed = removal.removedFiles ? refreshTargetPickerIfInstalled() : false;
   });
   process.stdout.write(

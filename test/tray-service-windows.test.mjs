@@ -81,6 +81,49 @@ test("the dispatcher routes Windows to the Task Scheduler manager", () => {
   assert.doesNotMatch(result.stdout, /"supported":false/);
 });
 
+test("tray restarts wait for Task Scheduler to stop before starting again", () => {
+  const source = readFileSync(path.join(root, "src", "tray-service-windows.mjs"), "utf8");
+  assert.match(source, /function waitForTaskState\(/);
+  assert.match(source, /timeout: options\.timeoutMs \|\| TASK_COMMAND_TIMEOUT_MS/);
+  assert.match(source, /const probeTimeout = Math\.min\(TASK_COMMAND_TIMEOUT_MS, remaining\)/);
+  assert.match(source, /Register-ScheduledTask[\s\S]*?timeout: TASK_COMMAND_TIMEOUT_MS/);
+  assert.match(source, /endTask\(\)[\s\S]*?waitForTaskState\([^\n]+TASK_STOP_TIMEOUT_MS/);
+  assert.match(source, /function startTask\(\)[\s\S]*?waitForTaskState\([^\n]+TASK_START_TIMEOUT_MS/);
+  assert.doesNotMatch(source, /if \(command === "restart"\) endTask\(\);\s*\n\s*schtasks\(\["\/Run"/);
+});
+
+test("tray uninstall verifies that Task Scheduler removed the task", () => {
+  const source = readFileSync(path.join(root, "src", "tray-service-windows.mjs"), "utf8");
+  const uninstall = source.slice(
+    source.indexOf('command === "uninstall"'),
+    source.indexOf('command === "stop"'),
+  );
+  assert.match(uninstall, /schtasks\(\["\/Delete"/);
+  assert.match(uninstall, /if \(taskExists\(\)\)[\s\S]*?throw/);
+  assert.doesNotMatch(uninstall, /catch \{\s*\/\/ The task may not exist/);
+});
+
+test("tray status reports the registered action and reads task state once", () => {
+  const source = readFileSync(path.join(root, "src", "tray-service-windows.mjs"), "utf8");
+  assert.match(source, /function registeredTaskAction\(/);
+  assert.match(source, /const action = installed \? registeredTaskAction\(\) : undefined/);
+  assert.match(source, /const companionPath = action\?\.execute/);
+  assert.match(source, /const taskStatus = installed \? taskState\(\) : undefined/);
+  assert.doesNotMatch(source, /loaded: installed && taskRunning\(\)/);
+});
+
+test("tray registration leaves its interactive principal able to update the task", () => {
+  const source = readFileSync(path.join(root, "src", "tray-service-windows.mjs"), "utf8");
+  assert.match(source, /WindowsIdentity\]\:\:GetCurrent\(\)\.User\.Value/);
+  assert.match(source, /GetSecurityDescriptor\(7\)/);
+  assert.match(source, /RawSecurityDescriptor/);
+  assert.match(source, /TASK_FULL_CONTROL_MASK\s*=\s*0x1f01ff/);
+  assert.match(source, /DiscretionaryAcl\.InsertAce/);
+  assert.match(source, /SetSecurityDescriptor\([^\n]+0x10\)/);
+  assert.match(source, /earlier elevated install owns it[\s\S]*?tray repair/);
+  assert.doesNotMatch(source, /icacls|takeown/i);
+});
+
 test("a platform with no supervisor says so instead of reporting success", () => {
   const result = trayDispatch("install", "linux");
   assert.equal(result.status, 0, "an install must not fail over an unsupervised companion");
@@ -107,6 +150,31 @@ test("the Windows CLI exposes tray as a first-class command", () => {
   for (const action of ["install", "status", "start", "stop", "restart", "uninstall"]) {
     assert.ok(script.includes(`"${action}"`), `tray action ${action} is unreachable`);
   }
+});
+
+test("tray rebuild registers the artifact it just built", () => {
+  const script = readFileSync(path.join(root, "codex-router.ps1"), "utf8");
+  const rebuild = script.slice(
+    script.indexOf('if ($Action -eq "rebuild")'),
+    script.indexOf('if ($Action -eq "install" -and'),
+  );
+  assert.match(rebuild, /tray-service\.mjs" @\("install"\)/);
+  assert.match(rebuild, /tray-service\.mjs" @\("install-electron"\)/);
+  assert.doesNotMatch(rebuild, /tray-service\.mjs" @\("restart"\)/);
+});
+
+test("tray repair validates the task and grants only its current principal control", () => {
+  const script = readFileSync(path.join(root, "codex-router.ps1"), "utf8");
+  assert.match(script, /"repair"/);
+  assert.match(script, /function Get-ValidatedTrayTask/);
+  assert.match(script, /principal is not the current user/);
+  assert.match(script, /action is not this checkout's tray companion/);
+  assert.match(script, /CODEX_ROUTER_TRAY_REPAIR_SID/);
+  assert.match(script, /RawSecurityDescriptor/);
+  assert.match(script, /SetSecurityDescriptor\([^\n]+0x10\)/);
+  assert.match(script, /Start-Process[^\n]+-Verb RunAs[^\n]+-Wait[^\n]+-WindowStyle Hidden/);
+  assert.match(script, /if \(-not \(Test-TrayTaskFullControl/);
+  assert.doesNotMatch(script, /icacls|takeown/i);
 });
 
 test("the POSIX tray launcher points Windows at that command", () => {

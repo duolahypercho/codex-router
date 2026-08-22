@@ -721,8 +721,59 @@ function writeAnnouncedAt(announcedAt) {
   });
 }
 
+// Codex renders its picker by `priority`, not by the JSON array order. Keep
+// the vendor groups in one named policy so the file itself and the visible
+// picker agree. The three groups below are the operators' primary routes;
+// every other provider remains grouped deterministically after them.
+function pickerProviderGroup(provider) {
+  const value = String(provider || "");
+  if (value === "antigravity-oauth") return { rank: 0, key: "antigravity" };
+  if (value === "deepseek") return { rank: 1, key: "deepseek" };
+  if (value.startsWith("opencode-go")) return { rank: 2, key: "opencode" };
+  return { rank: 3, key: value };
+}
+
+function pickerSlugGroup(slug) {
+  const value = String(slug || "");
+  if (!value.includes("/")) return { rank: -1, key: "native" };
+  return pickerProviderGroup(value.slice(0, value.indexOf("/")));
+}
+
+function routedPickerPriorities(nativeModels, routedModelsList) {
+  const nativeMaximum = nativeModels.reduce(
+    (maximum, model) =>
+      Math.max(maximum, Number.isFinite(Number(model.priority)) ? Number(model.priority) : -1),
+    -1,
+  );
+  const groups = new Map();
+  for (const model of routedModelsList) {
+    const group = pickerProviderGroup(model.provider);
+    const key = `${group.rank}:${group.key}`;
+    if (!groups.has(key)) groups.set(key, { ...group, models: [] });
+    groups.get(key).models.push(model);
+  }
+
+  let nextPriority = nativeMaximum + 1;
+  return [...groups.values()]
+    .sort((left, right) =>
+      left.rank - right.rank || left.key.localeCompare(right.key),
+    )
+    .flatMap((group) =>
+      group.models
+        .sort((left, right) =>
+          Number(left.priority) - Number(right.priority) ||
+          String(left.slug).localeCompare(String(right.slug)),
+        )
+        .map((model) => ({ ...model, priority: nextPriority++ })),
+    );
+}
+
 function sortCatalogModels(models) {
   return [...models].sort((left, right) => {
+    const leftGroup = pickerSlugGroup(left.slug);
+    const rightGroup = pickerSlugGroup(right.slug);
+    const group = leftGroup.rank - rightGroup.rank || leftGroup.key.localeCompare(rightGroup.key);
+    if (group) return group;
     const priority = Number(left.priority ?? 999) - Number(right.priority ?? 999);
     return priority || String(left.slug).localeCompare(String(right.slug));
   });
@@ -791,7 +842,7 @@ export function buildMergedCatalog(native, routedModelsList, { includeNative = t
       ? native.models.map((model) => [model.slug, normalizeNativeModel(model)])
       : [],
   );
-  for (const model of routedModelsList) {
+  for (const model of routedPickerPriorities(native.models, routedModelsList)) {
     const behaviorTemplate = behaviorTemplateFor(native.models, model, template);
     models.set(model.slug, routedModel(template, model, behaviorTemplate));
   }

@@ -25,6 +25,8 @@ function pathsForTarget(target) {
         MODEL_ROUTER_PORT: "",
         MODEL_ROUTER_API_PORT: "",
         MODEL_ROUTER_GROK_OAUTH_PORT: "",
+        MODEL_ROUTER_DEVIN_CLI_PORT: "",
+        MODEL_ROUTER_ANTIGRAVITY_OAUTH_PORT: "",
       },
     },
   );
@@ -38,6 +40,7 @@ test("codex owns the default port block", () => {
     api: 4203,
     grokOauth: 4208,
     devinCli: 4210,
+    antigravityOauth: 4212,
   });
 });
 
@@ -57,12 +60,15 @@ test("operators can keep an explicitly configured legacy block during migration"
           MODEL_ROUTER_PORT: "4102",
           MODEL_ROUTER_API_PORT: "4103",
           MODEL_ROUTER_GROK_OAUTH_PORT: "4108",
+          MODEL_ROUTER_DEVIN_CLI_PORT: "",
+          MODEL_ROUTER_ANTIGRAVITY_OAUTH_PORT: "",
         },
       },
     ),
   );
-  // The Devin CLI forwarder postdates the legacy block, so an operator
-  // migrating from it never pinned that port and keeps the current default.
+  // The Devin CLI and Antigravity forwarders postdate the legacy block, so an
+  // operator migrating from it never pinned those ports and keeps their current
+  // defaults.
   assert.deepEqual(ports, {
     gateway: 4100,
     oauth: 4101,
@@ -70,6 +76,7 @@ test("operators can keep an explicitly configured legacy block during migration"
     api: 4103,
     grokOauth: 4108,
     devinCli: 4210,
+    antigravityOauth: 4212,
   });
 });
 
