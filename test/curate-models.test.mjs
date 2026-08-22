@@ -17,12 +17,19 @@ process.argv = [process.argv[0], "curate-models.mjs", "gemini-api"];
 const {
   curatedSizing,
   mergeCurationIntoCurrent,
+  normalizeCurationModels,
   parseEfforts,
   parseRequestProfile,
   planCuration,
   renderRows,
 } =
   await import("../src/curate-models.mjs");
+const {
+  curatedModelContextLength,
+  curatedModelProviderId,
+  curationProviderIds,
+} = await import("../src/opencode-curation.mjs");
+const { userModelEntry } = await import("../src/user-models.mjs");
 process.argv = savedArgv;
 process.exitCode = 0;
 
@@ -51,6 +58,106 @@ test("curation merges current unrelated providers and rejects stale same-provide
     ),
     /changed while this command was running/,
   );
+});
+
+test("OpenCode curation pairs only the anonymous Free protocol variants", () => {
+  assert.deepEqual(curationProviderIds("opencode-free"), [
+    "opencode-free",
+    "opencode-free-responses",
+  ]);
+  assert.deepEqual(curationProviderIds("opencode-free-responses"), [
+    "opencode-free",
+    "opencode-free-responses",
+  ]);
+  assert.deepEqual(curationProviderIds("opencode-zen"), ["opencode-zen"]);
+  assert.deepEqual(curationProviderIds("opencode-go"), ["opencode-go"]);
+  assert.deepEqual(curationProviderIds("opencode-go-messages"), ["opencode-go-messages"]);
+  assert.equal(
+    curatedModelProviderId("opencode-free", "muse-spark-1.2-contributor-free"),
+    "opencode-free-responses",
+  );
+  assert.equal(
+    curatedModelProviderId("opencode-zen", "muse-spark-1.2"),
+    "opencode-zen",
+  );
+  assert.equal(
+    curatedModelProviderId("opencode-free", "x-preview-f-free"),
+    "opencode-free",
+  );
+});
+
+test("OpenCode Free curation knows the documented windows its live catalog omits", () => {
+  assert.equal(
+    curatedModelContextLength("opencode-free", "muse-spark-1.2-contributor-free"),
+    1_048_576,
+  );
+  assert.equal(
+    curatedModelContextLength("opencode-free", "x-preview-f-free"),
+    1_000_000,
+  );
+  assert.equal(curatedModelContextLength("opencode-free", "mimo-v2.5-free"), undefined);
+});
+
+test("paid Zen curation identity remains byte-for-byte unchanged", () => {
+  const paidZen = userModelEntry({
+    providerId: "opencode-zen",
+    upstreamId: "muse-spark-1.2",
+    priority: 151,
+    requestProfile: "auto-tool-choice",
+    metadata: { contextWindow: 1_048_576 },
+  });
+  const [normalized] = normalizeCurationModels([paidZen], "opencode-zen");
+  assert.strictEqual(normalized, paidZen);
+  assert.equal(normalized.slug, "opencode-zen/muse-spark-1.2");
+  assert.equal(normalized.gatewayModel, "opencode-zen-muse-spark-1-2");
+});
+
+test("OpenCode protocol normalization preserves metadata and deduplicates old routes", () => {
+  const upstreamModel = "muse-spark-1.2-contributor-free";
+  const old = userModelEntry({
+    providerId: "opencode-free",
+    upstreamId: upstreamModel,
+    priority: 147,
+    requestProfile: "auto-tool-choice",
+    metadata: {
+      contextWindow: 1_048_576,
+      autoCompact: 900_000,
+      inputModalities: ["text", "image"],
+      isFree: true,
+    },
+  });
+  old.displayName = "Preserved Muse metadata";
+  const correct = userModelEntry({
+    providerId: "opencode-free-responses",
+    upstreamId: upstreamModel,
+    priority: 148,
+    metadata: { contextWindow: 262_144 },
+  });
+
+  const [migrated] = normalizeCurationModels([old], "opencode-free");
+  assert.equal(migrated.provider, "opencode-free-responses");
+  assert.equal(migrated.slug, `opencode-free-responses/${upstreamModel}`);
+  assert.equal(migrated.gatewayModel, "opencode-free-responses-muse-spark-1-2-contributor-free");
+  assert.equal(migrated.displayName, old.displayName);
+  assert.equal(migrated.contextWindow, old.contextWindow);
+  assert.equal(migrated.requestProfile, old.requestProfile);
+
+  assert.deepEqual(
+    normalizeCurationModels([old, correct], "opencode-free"),
+    [correct],
+  );
+
+  const defaultOx = userModelEntry({
+    providerId: "opencode-free",
+    upstreamId: "x-preview-f-free",
+    priority: 149,
+  });
+  const [sizedOx] = normalizeCurationModels([defaultOx], "opencode-free");
+  assert.equal(sizedOx.contextWindow, 1_000_000);
+  assert.equal(sizedOx.autoCompact, 850_000);
+
+  const tunedOx = { ...defaultOx, autoCompact: 100_000 };
+  assert.strictEqual(normalizeCurationModels([tunedOx], "opencode-free")[0], tunedOx);
 });
 
 test("an additive model run keeps unrelated curated metadata", () => {
@@ -281,6 +388,193 @@ test("scripted curation stores the advertised window, not the conservative guess
     const unsized = stored.models.find((model) => model.upstreamModel === "vendor/unsized");
     assert.equal(unsized.contextWindow, 131072);
     assert.ok(unsized.autoCompact <= unsized.contextWindow);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("OpenCode Free curation migrates Muse to Responses while Ox stays on Chat", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "curate-opencode-free-protocol-"));
+  const file = path.join(dir, "user-models.json");
+  const pickerFile = path.join(dir, "model-picker.json");
+  const fixture = path.join(dir, "models.json");
+  const museId = "muse-spark-1.2-contributor-free";
+  const oxId = "x-preview-f-free";
+  const oldMuse = userModelEntry({
+    providerId: "opencode-free",
+    upstreamId: museId,
+    priority: 147,
+    requestProfile: "auto-tool-choice",
+    metadata: {
+      contextWindow: 1_048_576,
+      autoCompact: 900_000,
+      inputModalities: ["text", "image"],
+      isFree: true,
+    },
+  });
+  oldMuse.displayName = "Muse metadata from the existing curation";
+  writeFileSync(file, JSON.stringify({ version: 1, models: [oldMuse] }));
+  writeFileSync(pickerFile, JSON.stringify({
+    version: 1,
+    hidden: [],
+    visible: [oldMuse.slug],
+    seeded: [oldMuse.slug],
+  }));
+  writeFileSync(fixture, JSON.stringify({
+    data: [
+      { id: museId, context_length: 1_048_576 },
+      // Zen currently serves this exact id-only record. The documented
+      // fallback must keep a fresh scripted curation from storing 131K.
+      { id: oxId },
+    ],
+  }));
+  const env = {
+    ...process.env,
+    CODEX_HOME: path.join(dir, "codex"),
+    MODEL_ROUTER_STATE_DIR: dir,
+    MODEL_ROUTER_USER_MODELS: file,
+    MODEL_ROUTER_MODEL_PICKER_STATE: pickerFile,
+    OPENCODE_API_KEY: "",
+    OPENCODE_GO_API_KEY: "",
+  };
+  const run = () => spawnSync(
+    process.execPath,
+    [
+      path.join(root, "src", "curate-models.mjs"),
+      "opencode-free",
+      "--models",
+      `${museId},${oxId}`,
+      "--fixture",
+      fixture,
+      "--no-apply",
+    ],
+    { cwd: root, encoding: "utf8", env },
+  );
+  try {
+    const modelsBeforeDiscovery = readFileSync(file, "utf8");
+    const pickerBeforeDiscovery = readFileSync(pickerFile, "utf8");
+    const discovery = spawnSync(
+      process.execPath,
+      [
+        path.join(root, "src", "model-discovery.mjs"),
+        "opencode-free",
+        "--fixture",
+        fixture,
+        "--json",
+      ],
+      { cwd: root, encoding: "utf8", env },
+    );
+    assert.equal(discovery.status, 0, discovery.stderr);
+    assert.equal(readFileSync(file, "utf8"), modelsBeforeDiscovery);
+    assert.equal(readFileSync(pickerFile, "utf8"), pickerBeforeDiscovery);
+
+    const first = run();
+    assert.equal(first.status, 0, first.stderr);
+    const stored = JSON.parse(readFileSync(file, "utf8"));
+    assert.equal(stored.models.length, 2);
+    const muse = stored.models.find((model) => model.upstreamModel === museId);
+    const ox = stored.models.find((model) => model.upstreamModel === oxId);
+    assert.equal(muse.provider, "opencode-free-responses");
+    assert.equal(muse.slug, `opencode-free-responses/${museId}`);
+    assert.equal(muse.displayName, oldMuse.displayName);
+    assert.equal(muse.contextWindow, oldMuse.contextWindow);
+    assert.deepEqual(muse.inputModalities, oldMuse.inputModalities);
+    assert.equal(muse.requestProfile, oldMuse.requestProfile);
+    assert.equal(ox.provider, "opencode-free");
+    assert.equal(ox.slug, `opencode-free/${oxId}`);
+    assert.equal(ox.contextWindow, 1_000_000);
+    assert.equal(ox.autoCompact, 850_000);
+
+    const picker = JSON.parse(readFileSync(pickerFile, "utf8"));
+    assert.deepEqual(picker.visible, [muse.slug, ox.slug].sort());
+    assert.equal(picker.visible.includes(oldMuse.slug), false);
+
+    const configResult = spawnSync(
+      process.execPath,
+      [
+        "-e",
+        "const { renderLiteLlmConfig } = await import('./src/litellm-config.mjs');" +
+          "process.stdout.write(renderLiteLlmConfig());",
+      ],
+      { cwd: root, encoding: "utf8", env },
+    );
+    assert.equal(configResult.status, 0, configResult.stderr);
+    const blockFor = (gatewayModel) => {
+      const start = configResult.stdout.indexOf(`model_name: "${gatewayModel}"`);
+      assert.ok(start >= 0, `missing LiteLLM route for ${gatewayModel}`);
+      const next = configResult.stdout.indexOf("model_name:", start + 1);
+      return configResult.stdout.slice(start, next === -1 ? undefined : next);
+    };
+    const museBlock = blockFor(muse.gatewayModel);
+    assert.match(
+      museBlock,
+      /model: "openai\/responses\/opencode-free-responses-muse-spark-1-2-contributor-free"/,
+    );
+    assert.doesNotMatch(museBlock, /use_chat_completions_api/);
+    const oxBlock = blockFor(ox.gatewayModel);
+    assert.match(oxBlock, /model: "openai\/opencode-free-x-preview-f-free"/);
+    assert.match(oxBlock, /use_chat_completions_api: true/);
+
+    const beforeRepeat = readFileSync(file, "utf8");
+    const pickerBeforeRepeat = readFileSync(pickerFile, "utf8");
+    const second = run();
+    assert.equal(second.status, 0, second.stderr);
+    assert.equal(readFileSync(file, "utf8"), beforeRepeat);
+    assert.equal(readFileSync(pickerFile, "utf8"), pickerBeforeRepeat);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("removing an old Chat-routed Muse does not create a stale Responses picker entry", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "curate-opencode-free-remove-"));
+  const file = path.join(dir, "user-models.json");
+  const pickerFile = path.join(dir, "model-picker.json");
+  const museId = "muse-spark-1.2-contributor-free";
+  const oldMuse = userModelEntry({
+    providerId: "opencode-free",
+    upstreamId: museId,
+    priority: 147,
+  });
+  writeFileSync(file, JSON.stringify({ version: 1, models: [oldMuse] }));
+  writeFileSync(pickerFile, JSON.stringify({
+    version: 1,
+    hidden: [],
+    visible: [oldMuse.slug],
+    seeded: [oldMuse.slug],
+  }));
+  try {
+    const result = spawnSync(
+      process.execPath,
+      [
+        path.join(root, "src", "curate-models.mjs"),
+        "opencode-free",
+        "--remove",
+        museId,
+        "--no-apply",
+      ],
+      {
+        cwd: root,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          CODEX_HOME: path.join(dir, "codex"),
+          MODEL_ROUTER_STATE_DIR: dir,
+          MODEL_ROUTER_USER_MODELS: file,
+          MODEL_ROUTER_MODEL_PICKER_STATE: pickerFile,
+          OPENCODE_API_KEY: "",
+          OPENCODE_GO_API_KEY: "",
+        },
+      },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(JSON.parse(readFileSync(file, "utf8")).models, []);
+    const picker = JSON.parse(readFileSync(pickerFile, "utf8"));
+    assert.deepEqual(picker.visible, [oldMuse.slug]);
+    assert.equal(
+      picker.visible.includes(`opencode-free-responses/${museId}`),
+      false,
+    );
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

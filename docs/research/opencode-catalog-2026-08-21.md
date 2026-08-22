@@ -6,6 +6,7 @@ Primary sources:
 - Go live catalog: https://opencode.ai/zen/go/v1/models
 - Zen documentation, endpoint table, free pricing, and deprecations: https://opencode.ai/docs/zen
 - Zen live catalog: https://opencode.ai/zen/v1/models
+- OpenCode Zen model metadata (`opencode` provider): https://models.dev/api.json
 
 The anonymous `opencode-free` provider remains catalog-only. Its live Zen
 catalog currently exposes these nine IDs through the router's documented
@@ -25,6 +26,29 @@ Zen also remains catalog-only because it is pay-as-you-go and its list changes
 without notice. Both catalogs are fetched by `discover-models` / `curate-models`
 from their official `/models` endpoints; the repository does not turn their
 live contents into an implicit provider selection.
+
+The Zen `/models` records currently contain ids but no context limits. The
+OpenCode Zen metadata record publishes `1,048,576` for Muse Contributor Free
+and `1,000,000` for Ox Alpha Free. Scripted curation uses those values only for
+the two exact ids instead of the generic 131K fallback; if Zen later publishes
+a served context limit in `/models`, that live value takes precedence.
+
+The anonymous endpoint table is model-specific:
+`muse-spark-1.2-contributor-free` uses `/responses`, while Ox Alpha Free
+(`x-preview-f-free`) uses `/chat/completions`. Local OpenCode Free curation
+therefore stores only that exact Muse Contributor Free ID on an internal
+Responses variant and leaves Ox and every other free ID on the existing Chat
+Completions route. The variant accepts no other anonymous model ID and shares
+the base provider's selection.
+
+The paid `/zen` catalog and the subscription `/zen/go` catalog are separate
+server surfaces with separate billing semantics. This change deliberately does
+not add a paid Zen variant or alter the existing Go/Zen selection, routes,
+gateway model IDs, or cooldown scopes. Migration of an older Chat-routed free
+Muse entry occurs only inside an explicit `curate-models opencode-free` run;
+the same run upgrades the exact generic `131072` / `110000` sizing pair on
+these two ids while preserving any user-tuned value. Install, update, registry
+load, and catalog discovery remain read-only.
 
 The Go documentation names 20 current subscription models. The checked-in
 registry contains those exact upstream IDs and uses the endpoint family the

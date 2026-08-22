@@ -12,6 +12,7 @@ import { devinCliStatus } from "./devin-cli-status.mjs";
 import { grokOAuthStatus } from "./grok-oauth-status.mjs";
 import { KIMI_CLI_NPM_PACKAGE } from "./kimi-oauth-onboarding.mjs";
 import { MODELS, PROVIDERS, providerNeedsNoKey } from "./model-registry.mjs";
+import { curationProviderIds } from "./opencode-curation.mjs";
 import { kimiOAuthStatus } from "./oauth-status.mjs";
 import {
   apiProvider,
@@ -259,5 +260,6 @@ export function removeApiCredential(providerId) {
 // use this to name the curation step instead of reporting a provider that
 // looks enabled but shows nothing.
 export function providerNeedsCuration(providerId, models = MODELS) {
-  return !models.some((model) => model.provider === providerId);
+  const providers = new Set(curationProviderIds(providerId));
+  return !models.some((model) => providers.has(model.provider));
 }

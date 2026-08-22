@@ -64,7 +64,9 @@ user.
    interactive terminal to choose models. If they did not specify and
    credentials already exist, use
    `configured` rather than showing providers that cannot authenticate.
-   The anonymous providers `opencode-free` and `kilo-free` are also selectable,
+   The anonymous providers `opencode-free` and `kilo-free` are also selectable
+   (`opencode-free-responses` is an internal, single-model protocol variant of
+   the former and is never selected or curated separately),
    but they need no credential only for their documented free model subsets.
    Both are catalog-only: they ship no preselected models and need
    `bin/curate-models PROVIDER` after selection. `custom` is selectable on the
