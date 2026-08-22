@@ -203,9 +203,61 @@ the model ID.
 
 Codex can compact history through `/responses/compact` or a
 `compaction_trigger`. External Chat Completions providers cannot create OpenAI's
-opaque encrypted compaction payload, so the router asks the selected external
-model for a continuation summary and wraps it in a router-owned `kcr1:` payload.
-On replay, it converts that payload back to a plain continuation message.
+opaque encrypted compaction payload. The router therefore assigns stable source
+IDs to the visible transcript, asks the selected external model for a structured
+selection of those IDs, and validates the selection before creating a
+router-owned `kcr2:` checkpoint. `U` entries preserve user requirements, `C`
+entries record only that the model requested a tool call and do not prove that
+execution started or completed, and `R` entries preserve the tool's returned
+status and a bounded, redacted excerpt. Assistant-authored `A` entries and every
+free-form model conclusion remain unverified navigation.
+
+`kcr2` is Base64-encoded JSON, not encryption or a tamper-evident signature. Its
+trust boundary prevents model-authored summaries from becoming evidence; it does
+not defend against a client that deliberately rewrites request history. It
+carries at most 32 referenced sources, a 32 KiB recent tail, stable counters for
+repeated compaction, and an explicit warning that historical evidence does not
+prove mutable current state. The router preserves unresolved unknowns across
+another compaction and never asks a second model to bless the first model's
+prose. Invalid JSON or schema produces a safe checkpoint with no newly trusted
+references. Source IDs and counters must remain positive safe integers, and the
+source catalog sent to the model is capped at 96 KiB after JSON encoding. A model
+may select only IDs present in that catalog; fabricated, misclassified, or
+undisclosed IDs are rejected and recorded as an unverified warning. Providers
+that wrap their answer in prose or a Markdown fence are tolerated only when the
+response is at most 256 KiB and contains exactly one complete object that passes
+the checkpoint contract; incomplete or ambiguous JSON still fails closed. The
+router reads that contract only from the final Responses `message` (or the Chat
+Completions message fallback); separate `reasoning` output is a draft and never
+participates in KCR2 parsing. The latest two user messages are offered ahead of
+early requirements and newer tool traffic, and they are reserved in the bounded
+recent tail as well. The v1 compact replacement history replays at most those
+latest two ordinary user messages, subject to its existing 80,000-character
+complete-message budget, before the rendered checkpoint. Older user messages
+survive only when selected into bounded KCR2 evidence; otherwise their state is
+unknown rather than silently replayed as a current instruction. An over-budget
+message is represented by the checkpoint's explicitly truncated head-and-tail
+excerpt rather than by an unmarked tail fragment. KCR2 is intentionally lossy:
+its goal is to prevent unsupported conclusions, not to reconstruct a complete
+transcript.
+
+Existing `kcr1:` payloads and the plain continuation messages emitted by the old
+v1 compact endpoint remain readable for compatibility, but replay labels their
+model-written text `UNVERIFIED_LEGACY_SUMMARY`. Native OpenAI compaction items
+remain opaque and byte-preserved on native OpenAI requests. When a routed model
+first receives one, the router treats it only as a history boundary and creates
+a KCR2 checkpoint from original messages that are still visible before that
+boundary. The opaque content is never decoded or promoted to evidence, and the
+checkpoint records that earlier OpenAI-compacted history is unknown. A usable
+checkpoint then replaces pre-boundary history with at most two fully matched
+user requirements, the rendered KCR2, and all post-boundary items. Generation
+failure or a checkpoint with no trusted user requirement fails open: the router
+keeps the original input and follows its existing unreadable-compaction path.
+The generated KCR2 is cached in memory by thread and boundary fingerprint for up
+to 24 hours (64 entries and 8 MiB); concurrent requests share the same
+generation. The cache stores neither complete transcripts nor opaque OpenAI
+payloads. A router restart simply causes the first routed request to generate
+the bridge again. Conversations with no compaction boundary remain unchanged.
 
 Standalone `/images/generations` and `/images/edits` requests always pass through
 to the native OpenAI Codex backend with filtered Codex authentication headers.

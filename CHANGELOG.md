@@ -2,6 +2,40 @@
 
 ## Unreleased
 
+- **External-model compaction now carries evidence-backed `kcr2`
+  checkpoints.** The router assigns stable `U/C/R/A` source IDs before tool
+  results are aged, accepts only a bounded structured source selection from the
+  summarizing model, and derives the trusted section from redacted original
+  excerpts and machine-readable tool outcomes. Model prose remains explicitly
+  unverified; missing, fabricated, or misclassified references are rejected;
+  unresolved unknowns survive repeated compaction; and replay tells the next
+  model to re-read mutable state before changing it. New checkpoints are capped
+  at 96 KiB after final JSON serialization, with a 32 KiB recent tail. Existing
+  source IDs and counters are rejected unless they are positive safe integers;
+  the source catalog sent to the model has its own 96 KiB JSON limit, and only
+  IDs actually present in that catalog can be selected. Wrapped provider output
+  is accepted only when it contains exactly one contract-valid JSON object and
+  is no larger than 256 KiB. The latest two user messages are reserved in both
+  the source catalog and recent tail. The v1 compact endpoint now replays at
+  most those two complete ordinary user messages before the checkpoint instead
+  of carrying every short historical instruction that fits its character
+  budget; a message that does not fit is never replayed as an unmarked fragment.
+  Responses `reasoning` output is now treated only as a draft: KCR2 parses the
+  final `message` instead of concatenating both channels and mistaking their
+  separate JSON objects for an ambiguous answer. Existing `kcr1` payloads and
+  old v1 plain-summary messages still replay but are labeled
+  `UNVERIFIED_LEGACY_SUMMARY`. On routed requests, a native OpenAI encrypted
+  compaction item now acts as an automatic history boundary: the router creates
+  KCR2 once from the original messages still visible before it, records the
+  unreadable earlier history as unknown, and continues the current turn without
+  asking for a manual compact. Valid KCR2 boundaries then remove unrelated
+  pre-boundary history while preserving at most two fully matched requirements
+  and every post-boundary item. Failed or evidence-free bridge generation keeps
+  the original history. A bounded 24-hour in-memory cache (64 entries, 8 MiB)
+  deduplicates identical and concurrent bridge work without retaining the
+  native ciphertext or full transcript. Native OpenAI requests still forward
+  their encrypted compaction bytes unchanged.
+
 - **Grok 4.6 can select Codex's native image viewer.** xAI stopped without a
   function call when the tool was named `view_image`, even when selection was
   required. The Grok OAuth boundary now presents that tool as `inspect_image`

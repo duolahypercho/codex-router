@@ -16,6 +16,13 @@ import { fileURLToPath } from "node:url";
 import { zstdCompressSync, zstdDecompressSync } from "node:zlib";
 
 import { callerBaseUrl } from "../src/caller-auth.mjs";
+import {
+  CHECKPOINT_WARNING,
+  decodeCompaction,
+  encodeCheckpoint,
+  KCR1_PREFIX,
+  LEGACY_V1_SUMMARY_PREFIX,
+} from "../src/compaction-checkpoint.mjs";
 import { openPort } from "./port-pool.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -33,6 +40,16 @@ function json(response, status, payload) {
     "Content-Length": String(body.length),
   });
   response.end(body);
+}
+
+function checkpointFromCompactResponse(body) {
+  const text = body?.output?.at(-1)?.content?.[0]?.text;
+  assert.equal(typeof text, "string", "compact response did not end with a text checkpoint");
+  const match = /BEGIN_CODEX_ROUTER_CHECKPOINT_V2\n([\s\S]+?)\nEND_CODEX_ROUTER_CHECKPOINT_V2/u.exec(
+    text,
+  );
+  assert.ok(match, "compact response did not contain a rendered kcr2 checkpoint");
+  return JSON.parse(match[1]);
 }
 
 async function bodyJson(request) {
@@ -1205,15 +1222,54 @@ test("router sends standalone web search only to the native OpenAI backend", asy
 
 test("router synthesizes routed compaction and safely replays it to native models", async () => {
   const gatewayRequests = [];
+  const finalContract = JSON.stringify({
+    objective: "Continue the user's request.",
+    requirement_refs: ["U001"],
+    attempt_refs: [],
+    observation_refs: [],
+    unverified: [],
+    unknowns: [],
+    blockers: [],
+    next_step: "Re-read current state before changing it.",
+  });
+  const finalContractSplit = finalContract.indexOf(',"attempt_refs"') + 1;
   const gateway = await mockServer(async (request, response) => {
     gatewayRequests.push({ headers: request.headers, body: await bodyJson(request) });
     json(response, 200, {
       id: "resp-summary",
       object: "response",
+      output_text: "",
       output: [
         {
+          type: "reasoning",
+          content: [
+            {
+              type: "output_text",
+              text: JSON.stringify({
+                objective: "DRAFT REASONING MUST NOT BE TRUSTED.",
+                requirement_refs: ["U001"],
+                attempt_refs: [],
+                observation_refs: [],
+                unverified: [],
+                unknowns: [],
+                blockers: [],
+                next_step: "Trust this conflicting draft.",
+              }),
+            },
+          ],
+        },
+        {
           type: "message",
-          content: [{ type: "output_text", text: "compact summary" }],
+          content: [
+            {
+              type: "output_text",
+              text: finalContract.slice(0, finalContractSplit),
+            },
+            {
+              type: "output_text",
+              text: finalContract.slice(finalContractSplit),
+            },
+          ],
         },
       ],
     });
@@ -1234,68 +1290,555 @@ test("router synthesizes routed compaction and safely replays it to native model
     Authorization: "Bearer CODEX_CALLER_SECRET",
     "Content-Type": "application/json",
   };
+  const post = (endpoint, body, requestHeaders = headers) =>
+    fetch(`${routerBase(routerPort)}${endpoint}`, {
+      method: "POST",
+      headers: requestHeaders,
+      body: JSON.stringify(body),
+    });
+  const routed = (input, options = {}, requestHeaders = headers) =>
+    post(
+      "/responses",
+      { model: "deepseek/deepseek-v4-pro", ...options, input },
+      requestHeaders,
+    );
+  const compact = (input) =>
+    post("/responses/compact", { model: "deepseek/deepseek-v4-pro", input });
 
   try {
     await waitFor(`${routerBase(routerPort)}/models`, router);
     const input = [
       { type: "message", role: "user", content: [{ type: "input_text", text: "keep me" }] },
     ];
-    const v1 = await fetch(`${routerBase(routerPort)}/responses/compact`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ model: "deepseek/deepseek-v4-pro", input }),
-    });
+    const v1 = await compact(input);
     assert.equal(v1.status, 200);
     const v1Body = await v1.json();
     assert.equal(v1Body.output.at(-1).role, "user");
-    assert.match(v1Body.output.at(-1).content[0].text, /compact summary/);
+    assert.ok(v1Body.output.at(-1).content[0].text.startsWith(CHECKPOINT_WARNING));
+    assert.match(v1Body.output.at(-1).content[0].text, /"requirements": \[/);
+    assert.match(gatewayRequests[0].body.input.at(-2).content[0].text, /ROUTER SOURCE CATALOG/);
+    assert.match(gatewayRequests[0].body.input.at(-1).content[0].text, /Return exactly one JSON object/);
 
-    const v2 = await fetch(`${routerBase(routerPort)}/responses`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        model: "deepseek/deepseek-v4-pro",
-        stream: false,
-        input: [...input, { type: "compaction_trigger" }],
-      }),
-    });
+    const v2 = await routed([...input, { type: "compaction_trigger" }], { stream: false });
     assert.equal(v2.status, 200);
     const v2Body = await v2.json();
     assert.equal(v2Body.output[0].type, "compaction");
-    assert.match(v2Body.output[0].encrypted_content, /^kcr1:/);
+    assert.match(v2Body.output[0].encrypted_content, /^kcr2:/);
+    const decodedV2 = decodeCompaction(v2Body.output[0].encrypted_content);
+    assert.equal(decodedV2?.kind, "checkpoint");
+    assert.deepEqual(decodedV2.checkpoint.source_refs.requirements, ["U001"]);
+    assert.deepEqual(Object.keys(decodedV2.checkpoint.sources), ["U001"]);
+    assert.equal(decodedV2.checkpoint.orientation.objective, "Continue the user's request.");
+    assert.doesNotMatch(JSON.stringify(decodedV2.checkpoint), /DRAFT REASONING MUST NOT BE TRUSTED/u);
 
-    const replay = await fetch(`${routerBase(routerPort)}/responses`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        model: "deepseek/deepseek-v4-pro",
-        input: [v2Body.output[0], ...input],
-      }),
-    });
+    const streamed = await routed([...input, { type: "compaction_trigger" }], { stream: true });
+    assert.equal(streamed.status, 200);
+    assert.match(await streamed.text(), /"encrypted_content":"kcr2:/);
+
+    const replay = await routed([v2Body.output[0], ...input]);
     assert.equal(replay.status, 200);
     assert.equal(gatewayRequests.at(-1).body.input[0].type, "message");
-    assert.match(gatewayRequests.at(-1).body.input[0].content[0].text, /compact summary/);
+    assert.ok(gatewayRequests.at(-1).body.input[0].content[0].text.startsWith(CHECKPOINT_WARNING));
+    assert.match(gatewayRequests.at(-1).body.input[0].content[0].text, /"U001"/);
 
     const nativeCompaction = {
       type: "compaction",
       id: "cmp_native",
       encrypted_content: "genuine-openai-encrypted-content",
     };
-    const nativeReplay = await fetch(`${routerBase(routerPort)}/responses`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        model: "gpt-5.6-sol",
-        input: [v2Body.output[0], nativeCompaction, ...input],
-      }),
+    const unreadableRouterCompaction = {
+      type: "compaction",
+      id: "cmp_broken_router",
+      encrypted_content: "kcr2:not-valid-base64",
+    };
+    const nativeReplay = await post("/responses", {
+      model: "gpt-5.6-sol",
+      input: [v2Body.output[0], unreadableRouterCompaction, nativeCompaction, ...input],
     });
     assert.equal(nativeReplay.status, 200);
     assert.equal(nativeRequests[0].body.input[0].type, "message");
-    assert.match(nativeRequests[0].body.input[0].content[0].text, /compact summary/);
-    assert.deepEqual(nativeRequests[0].body.input[1], nativeCompaction);
+    assert.ok(nativeRequests[0].body.input[0].content[0].text.startsWith(CHECKPOINT_WARNING));
+    assert.equal(nativeRequests[0].body.input[1].type, "message");
+    assert.match(nativeRequests[0].body.input[1].content[0].text, /unreadable format/);
+    assert.deepEqual(nativeRequests[0].body.input[2], nativeCompaction);
+
+    const legacyCompaction = {
+      type: "compaction",
+      id: "cmp_legacy",
+      encrypted_content: `kcr1:${Buffer.from("old summary", "utf8").toString("base64")}`,
+    };
+    const legacyReplay = await routed([legacyCompaction, ...input]);
+    assert.equal(legacyReplay.status, 200);
+    assert.match(
+      gatewayRequests.at(-1).body.input[0].content[0].text,
+      /UNVERIFIED_LEGACY_SUMMARY/,
+    );
+
+    const oldV1Replay = await compact([
+      {
+        type: "message",
+        role: "user",
+        content: [
+          {
+            type: "input_text",
+            text: `${LEGACY_V1_SUMMARY_PREFIX}\n\nProduction was definitely untouched.`,
+          },
+        ],
+      },
+    ]);
+    assert.equal(oldV1Replay.status, 200);
+    const oldV1Body = await oldV1Replay.json();
+    assert.equal(oldV1Body.output.length, 1, "legacy summary is not retained as a user message");
+    assert.match(oldV1Body.output[0].content[0].text, /UNVERIFIED_LEGACY_SUMMARY/);
+    assert.doesNotMatch(oldV1Body.output[0].content[0].text, /"requirements": \[\s*"U001"/u);
+
+    const historicalUsers = Array.from({ length: 129 }, (_, index) => ({
+      type: "message",
+      role: "user",
+      content: [
+        {
+          type: "input_text",
+          text: `historical user ${String(index + 1).padStart(3, "0")}`,
+        },
+      ],
+    }));
+    const crowdedV1 = await compact(historicalUsers);
+    assert.equal(crowdedV1.status, 200);
+    const crowdedV1Body = await crowdedV1.json();
+    assert.deepEqual(
+      crowdedV1Body.output.slice(0, -1).map((item) => item.content[0].text),
+      ["historical user 128", "historical user 129"],
+      "only the latest two complete user messages remain outside kcr2",
+    );
+    assert.equal(crowdedV1Body.output.length, 3);
+    const crowdedCheckpoint = checkpointFromCompactResponse(crowdedV1Body);
+    assert.equal(crowdedCheckpoint.counters.U, 130);
+    const latestRequirements = Object.fromEntries(
+      crowdedCheckpoint.recent_tail.map(({ id, ...source }) => [id, source]),
+    );
+    const replayCheckpoint = {
+      ...crowdedCheckpoint,
+      source_refs: {
+        ...crowdedCheckpoint.source_refs,
+        requirements: Object.keys(latestRequirements),
+      },
+      sources: latestRequirements,
+    };
+
+    const filteredReplay = await routed([
+      ...historicalUsers,
+      { type: "compaction", encrypted_content: encodeCheckpoint(replayCheckpoint) },
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "continue after kcr2" }],
+      },
+    ]);
+    assert.equal(filteredReplay.status, 200);
+    const filteredInput = gatewayRequests.at(-1).body.input;
+    assert.deepEqual(
+      filteredInput.slice(0, 2).map((item) => item.content[0].text),
+      ["historical user 128", "historical user 129"],
+    );
+    assert.match(filteredInput[2].content[0].text, /BEGIN_CODEX_ROUTER_CHECKPOINT_V2/u);
+    assert.equal(filteredInput[3].content[0].text, "continue after kcr2");
+    assert.equal(filteredInput.length, 4);
+
+    const nativeBoundary = {
+      type: "compaction",
+      id: "cmp_openai_native",
+      encrypted_content: "gAAAAAOpenAINativeBridgeToken1234567890",
+    };
+    const bridgeInput = [
+      ...historicalUsers,
+      nativeBoundary,
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "continue after native compaction" }],
+      },
+    ];
+    const beforeBridge = gatewayRequests.length;
+    const bridgeHeaders = {
+      ...headers,
+      "Thread-Id": "11111111-2222-4333-8444-555555555555",
+    };
+    const nativeBridge = await routed(bridgeInput, {}, bridgeHeaders);
+    assert.equal(nativeBridge.status, 200);
+    assert.equal(gatewayRequests.length - beforeBridge, 2, "first bridge summarizes then answers");
+    const bridgedInput = gatewayRequests.at(-1).body.input;
+    assert.equal(bridgedInput[0].content[0].text, "historical user 001");
+    assert.match(bridgedInput[1].content[0].text, /BEGIN_CODEX_ROUTER_CHECKPOINT_V2/u);
+    assert.equal(bridgedInput[2].content[0].text, "continue after native compaction");
+    assert.equal(bridgedInput.length, 3);
+    assert.doesNotMatch(JSON.stringify(bridgedInput), /gAAAAAOpenAINativeBridgeToken/u);
+    const bridgedCheckpoint = checkpointFromCompactResponse({ output: [bridgedInput[1]] });
+    assert.ok(
+      bridgedCheckpoint.orientation.unknowns.some((entry) =>
+        entry.includes("OpenAI native compaction content is opaque"),
+      ),
+    );
+
+    const beforeCacheHit = gatewayRequests.length;
+    const cachedBridge = await routed(bridgeInput, {}, bridgeHeaders);
+    assert.equal(cachedBridge.status, 200);
+    assert.equal(gatewayRequests.length - beforeCacheHit, 1, "cached bridge only answers");
+
+    const concurrentBoundary = {
+      ...nativeBoundary,
+      id: "cmp_openai_native_concurrent",
+      encrypted_content: "gAAAAAConcurrentNativeBridgeToken1234567890",
+    };
+    const concurrentInput = [
+      ...historicalUsers,
+      concurrentBoundary,
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "continue concurrently" }],
+      },
+    ];
+    const beforeConcurrent = gatewayRequests.length;
+    const concurrentRequests = await Promise.all(
+      [1, 2].map(() =>
+        routed(concurrentInput, {}, {
+          ...headers,
+          "Thread-Id": "66666666-7777-4888-8999-000000000000",
+        }),
+      ),
+    );
+    assert.deepEqual(concurrentRequests.map((response) => response.status), [200, 200]);
+    assert.equal(
+      gatewayRequests.length - beforeConcurrent,
+      3,
+      "concurrent requests share one bridge generation and send two answers",
+    );
+
+    const repeatedV1 = await compact(crowdedV1Body.output);
+    assert.equal(repeatedV1.status, 200);
+    const repeatedV1Body = await repeatedV1.json();
+    assert.deepEqual(
+      repeatedV1Body.output.slice(0, -1).map((item) => item.content[0].text),
+      ["historical user 128", "historical user 129"],
+    );
+    assert.equal(checkpointFromCompactResponse(repeatedV1Body).counters.U, 130);
+
+    const continuedV1 = await compact([
+      ...repeatedV1Body.output,
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "new user 130" }],
+      },
+    ]);
+    assert.equal(continuedV1.status, 200);
+    const continuedV1Body = await continuedV1.json();
+    assert.deepEqual(
+      continuedV1Body.output.slice(0, -1).map((item) => item.content[0].text),
+      ["historical user 129", "new user 130"],
+    );
+    assert.equal(checkpointFromCompactResponse(continuedV1Body).counters.U, 131);
+
+    const mixedV1 = await compact([
+          {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: "older ordinary user" }],
+          },
+          {
+            type: "message",
+            role: "assistant",
+            content: [{ type: "output_text", text: "assistant reply" }],
+          },
+          v1Body.output.at(-1),
+          {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: `${LEGACY_V1_SUMMARY_PREFIX}\nold summary` }],
+          },
+          {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: "penultimate ordinary user" }],
+          },
+          {
+            type: "function_call",
+            call_id: "call-mixed-compaction",
+            name: "exec_command",
+            arguments: "{}",
+          },
+          {
+            type: "function_call_output",
+            call_id: "call-mixed-compaction",
+            output: JSON.stringify({ exit_code: 0 }),
+          },
+          {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: "latest ordinary user" }],
+          },
+        ]);
+    assert.equal(mixedV1.status, 200);
+    const mixedV1Body = await mixedV1.json();
+    assert.deepEqual(
+      mixedV1Body.output.slice(0, -1).map((item) => item.content[0].text),
+      ["penultimate ordinary user", "latest ordinary user"],
+    );
+
+    const firstBudgetUser = `FIRST-BUDGET-USER-${"a".repeat(45_000)}-END-FIRST`;
+    const latestBudgetUser = `LATEST-BUDGET-USER-${"b".repeat(45_000)}-END-LATEST`;
+    const budgetV1 = await compact([
+          {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: firstBudgetUser }],
+          },
+          {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: latestBudgetUser }],
+          },
+        ]);
+    assert.equal(budgetV1.status, 200);
+    const budgetV1Body = await budgetV1.json();
+    assert.deepEqual(
+      budgetV1Body.output.slice(0, -1).map((item) => item.content[0].text),
+      [latestBudgetUser],
+      "the budget keeps only complete messages, newest first",
+    );
+
+    const oversizedUserMessage = `BEGIN-LONG-USER-${"x".repeat(81_000)}-END-LONG-USER`;
+    const oversizedV1 = await compact([
+          {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: oversizedUserMessage }],
+          },
+        ]);
+    assert.equal(oversizedV1.status, 200);
+    const oversizedV1Body = await oversizedV1.json();
+    assert.equal(
+      oversizedV1Body.output.length,
+      1,
+      "an oversized user message is retained only inside the bounded checkpoint",
+    );
+    const oversizedCheckpoint = oversizedV1Body.output[0].content[0].text;
+    assert.match(oversizedCheckpoint, /BEGIN-LONG-USER/u);
+    assert.match(oversizedCheckpoint, /END-LONG-USER/u);
+    assert.match(oversizedCheckpoint, /"truncated": true/u);
   } finally {
     await stopChild(router);
     await Promise.all([closeServer(native.server), closeServer(gateway.server)]);
+  }
+});
+
+test("history bridge fails open and upgrades legacy summaries without trusting them", async () => {
+  const gatewayRequests = [];
+  const validContract = JSON.stringify({
+    objective: "Continue only from visible evidence.",
+    requirement_refs: ["U001"],
+    attempt_refs: [],
+    observation_refs: [],
+    unverified: [],
+    unknowns: [],
+    blockers: [],
+    next_step: "Re-read current state.",
+  });
+  const responses = ["not a checkpoint", "native request continued", validContract, "legacy request continued"];
+  const gateway = await mockServer(async (request, response) => {
+    gatewayRequests.push({ body: await bodyJson(request) });
+    const text = responses[gatewayRequests.length - 1] || "unexpected request";
+    json(response, 200, {
+      id: `resp-${gatewayRequests.length}`,
+      object: "response",
+      status: "completed",
+      output: [
+        {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text }],
+        },
+      ],
+    });
+  });
+  const routerPort = await openPort();
+  const router = run("router.mjs", {
+    CODEX_ROUTER_PORT: String(routerPort),
+    CODEX_ROUTER_GATEWAY_BASE_URL: `http://127.0.0.1:${gateway.port}/v1`,
+    CODEX_ROUTER_QUIET: "1",
+  });
+  const headers = {
+    Authorization: "Bearer CODEX_CALLER_SECRET",
+    "Content-Type": "application/json",
+  };
+  try {
+    await waitFor(`${routerBase(routerPort)}/models`, router);
+    const native = await fetch(`${routerBase(routerPort)}/responses`, {
+      method: "POST",
+      headers: { ...headers, "Thread-Id": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee" },
+      body: JSON.stringify({
+        model: "deepseek/deepseek-v4-pro",
+        input: [
+          {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: "visible request before native compaction" }],
+          },
+          { type: "compaction", encrypted_content: "gAAAAAFailOpenNativeToken1234567890" },
+          {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: "continue after failed bridge" }],
+          },
+        ],
+      }),
+    });
+    assert.equal(native.status, 200);
+    assert.equal(gatewayRequests.length, 2);
+    const failOpenInput = JSON.stringify(gatewayRequests[1].body.input);
+    assert.match(failOpenInput, /visible request before native compaction/u);
+    assert.match(failOpenInput, /continue after failed bridge/u);
+    assert.match(failOpenInput, /compacted in an unreadable format/u);
+
+    const legacySummary = "A model previously claimed deployment succeeded.";
+    const legacy = await fetch(`${routerBase(routerPort)}/responses`, {
+      method: "POST",
+      headers: { ...headers, "Thread-Id": "ffffffff-1111-4222-8333-444444444444" },
+      body: JSON.stringify({
+        model: "deepseek/deepseek-v4-pro",
+        input: [
+          {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: "visible request before legacy compaction" }],
+          },
+          {
+            type: "compaction",
+            encrypted_content: KCR1_PREFIX + Buffer.from(legacySummary, "utf8").toString("base64"),
+          },
+          {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: "continue after legacy compaction" }],
+          },
+        ],
+      }),
+    });
+    assert.equal(legacy.status, 200);
+    assert.equal(gatewayRequests.length, 4);
+    const upgradedInput = gatewayRequests[3].body.input;
+    assert.equal(upgradedInput[0].content[0].text, "visible request before legacy compaction");
+    assert.match(upgradedInput[1].content[0].text, /BEGIN_CODEX_ROUTER_CHECKPOINT_V2/u);
+    assert.equal(upgradedInput[2].content[0].text, "continue after legacy compaction");
+    assert.equal(upgradedInput.length, 3);
+    const checkpoint = checkpointFromCompactResponse({ output: [upgradedInput[1]] });
+    assert.ok(
+      checkpoint.orientation.unverified.some((entry) =>
+        entry.text.includes(`UNVERIFIED_LEGACY_SUMMARY: ${legacySummary}`),
+      ),
+    );
+  } finally {
+    await stopChild(router);
+    await closeServer(gateway.server);
+  }
+});
+
+test("compaction never treats reasoning as final text and falls back to chat content", async () => {
+  let requestCount = 0;
+  const contract = (objective) => JSON.stringify({
+    objective,
+    requirement_refs: ["U001"],
+    attempt_refs: [],
+    observation_refs: [],
+    unverified: [],
+    unknowns: [],
+    blockers: [],
+    next_step: "Re-read current state before changing it.",
+  });
+  const gateway = await mockServer(async (request, response) => {
+    await bodyJson(request);
+    requestCount += 1;
+    if (requestCount === 1) {
+      json(response, 200, {
+        id: "resp-reasoning-only",
+        object: "response",
+        output: [
+          {
+            type: "reasoning",
+            content: [{ type: "output_text", text: contract("REASONING ONLY DRAFT") }],
+          },
+        ],
+      });
+      return;
+    }
+    if (requestCount === 2) {
+      json(response, 200, {
+        id: "chat-summary",
+        choices: [{ message: { content: contract("Chat fallback final answer.") } }],
+      });
+      return;
+    }
+    json(response, 200, {
+      id: "top-level-summary",
+      object: "response",
+      output_text: contract("Top-level final answer."),
+      output: [
+        {
+          type: "message",
+          content: [{ type: "output_text", text: contract("MESSAGE MUST NOT WIN") }],
+        },
+      ],
+    });
+  });
+  const routerPort = await openPort();
+  const router = run("router.mjs", {
+    CODEX_ROUTER_PORT: String(routerPort),
+    CODEX_ROUTER_GATEWAY_BASE_URL: `http://127.0.0.1:${gateway.port}/v1`,
+    CODEX_ROUTER_QUIET: "1",
+  });
+  const headers = {
+    Authorization: "Bearer CODEX_CALLER_SECRET",
+    "Content-Type": "application/json",
+  };
+  const compact = async () => {
+    const response = await fetch(`${routerBase(routerPort)}/responses`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        model: "deepseek/deepseek-v4-pro",
+        stream: false,
+        input: [
+          { type: "message", role: "user", content: [{ type: "input_text", text: "keep me" }] },
+          { type: "compaction_trigger" },
+        ],
+      }),
+    });
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    const decoded = decodeCompaction(body.output[0].encrypted_content);
+    assert.equal(decoded?.kind, "checkpoint");
+    return decoded.checkpoint;
+  };
+
+  try {
+    await waitFor(`${routerBase(routerPort)}/models`, router);
+    const reasoningOnly = await compact();
+    assert.deepEqual(reasoningOnly.source_refs.requirements, []);
+    assert.deepEqual(reasoningOnly.sources, {});
+    assert.doesNotMatch(JSON.stringify(reasoningOnly), /REASONING ONLY DRAFT/u);
+
+    const chatFallback = await compact();
+    assert.deepEqual(chatFallback.source_refs.requirements, ["U001"]);
+    assert.deepEqual(Object.keys(chatFallback.sources), ["U001"]);
+    assert.equal(chatFallback.orientation.objective, "Chat fallback final answer.");
+
+    const topLevel = await compact();
+    assert.deepEqual(topLevel.source_refs.requirements, ["U001"]);
+    assert.equal(topLevel.orientation.objective, "Top-level final answer.");
+    assert.doesNotMatch(JSON.stringify(topLevel), /MESSAGE MUST NOT WIN/u);
+  } finally {
+    await stopChild(router);
+    await closeServer(gateway.server);
   }
 });
 
