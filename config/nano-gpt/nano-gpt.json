@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "providers": [
+    {
+      "id": "nano-gpt",
+      "displayName": "NanoGPT",
+      "kind": "openai-compatible",
+      "ownedBy": "nano-gpt",
+      "baseUrl": "https://nano-gpt.com/api/v1",
+      "baseUrlEnv": "NANOGPT_API_BASE_URL",
+      "credential": {
+        "environment": [
+          "NANOGPT_API_KEY"
+        ],
+        "file": "nano-gpt-api-key.secret",
+        "legacyFiles": [],
+        "keychainServices": [
+          "codex-router-nano-gpt"
+        ],
+        "prompt": "NanoGPT API key"
+      }
+    }
+  ]
+}
