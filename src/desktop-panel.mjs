@@ -29,6 +29,7 @@ const ASSETS = new Map([
   ["/panel/styles.css", { file: "styles.css", type: "text/css; charset=utf-8" }],
   ["/panel/app.js", { file: "app.js", type: "text/javascript; charset=utf-8" }],
   ["/panel/model.mjs", { file: "model.mjs", type: "text/javascript; charset=utf-8" }],
+  ["/panel/i18n.mjs", { file: "i18n.mjs", type: "text/javascript; charset=utf-8" }],
   [
     "/panel/thinking-orb.mjs",
     { file: "thinking-orb.mjs", type: "text/javascript; charset=utf-8" },

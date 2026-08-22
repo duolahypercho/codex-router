@@ -71,11 +71,43 @@ test("the panel serves each asset the UI loads", async () => {
       ["/panel/styles.css", /text\/css/],
       ["/panel/app.js", /javascript/],
       ["/panel/model.mjs", /javascript/],
+      ["/panel/i18n.mjs", /javascript/],
       ["/panel/thinking-orb.mjs", /javascript/],
     ]) {
       const response = await fetch(url(asset));
       assert.equal(response.status, 200, `${asset} did not serve`);
       assert.match(response.headers.get("content-type"), pattern, asset);
+    }
+  } finally {
+    await close();
+  }
+});
+
+// #350: i18n.mjs shipped in apps/desktop/ui and was imported by both app.js and
+// model.mjs, but was never added to the panel's allowlist, so the module graph
+// failed to load and the panel rendered blank. The list above is hand-written
+// and drifted; this derives the expectation from what the UI actually imports,
+// so the next module added to the graph cannot repeat it.
+test("every module the panel UI imports is on the allowlist", async () => {
+  const entryPoints = ["app.js", "model.mjs", "thinking-orb.mjs", "i18n.mjs"];
+  const required = new Set();
+  for (const entry of entryPoints) {
+    const source = readFileSync(new URL(`../apps/desktop/ui/${entry}`, import.meta.url), "utf8");
+    for (const [, specifier] of source.matchAll(/from\s+"\.\/([\w.-]+\.m?js)"/g)) {
+      required.add(specifier);
+    }
+  }
+  assert.ok(required.has("i18n.mjs"), "expected the UI to import i18n.mjs");
+
+  const { url, close } = await serve();
+  try {
+    for (const file of required) {
+      const response = await fetch(url(`/panel/${file}`));
+      assert.equal(
+        response.status,
+        200,
+        `${file} is imported by the panel UI but is not served; add it to ASSETS in src/desktop-panel.mjs`,
+      );
     }
   } finally {
     await close();
