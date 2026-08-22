@@ -16,6 +16,22 @@ import {
   callerBaseUrl,
   secretEqual,
 } from "./caller-auth.mjs";
+import {
+  CHECKPOINT_WARNING,
+  checkpointWithUnknown,
+  COMPACTION_PROMPT,
+  decodeCompaction,
+  encodeCheckpoint,
+  finalizeCheckpoint,
+  isRouterCompactionValue,
+  latestHistoryBoundary,
+  LEGACY_V1_SUMMARY_PREFIX,
+  LEGACY_WARNING,
+  prepareCompaction,
+  renderCheckpoint,
+  renderCompactionValue,
+  rewriteHistoryFromCheckpoint,
+} from "./compaction-checkpoint.mjs";
 import { handlePanelRequest, isPanelRoute } from "./desktop-panel.mjs";
 import { handleGeminiRequest, isGeminiRoute } from "./gemini-surface.mjs";
 import {
@@ -194,6 +210,12 @@ const AGENT_PAYLOAD_CACHE_MAX_BYTES = 8 * 1024 * 1024;
 const AGENT_PAYLOAD_CACHE_MAX_ENTRIES = 256;
 const agentPayloadCache = new Map();
 let agentPayloadCacheBytes = 0;
+const HISTORY_BRIDGE_CACHE_TTL_MS = 24 * 60 * 60 * 1_000;
+const HISTORY_BRIDGE_CACHE_MAX_BYTES = 8 * 1024 * 1024;
+const HISTORY_BRIDGE_CACHE_MAX_ENTRIES = 64;
+const historyBridgeCache = new Map();
+const historyBridgeInFlight = new Map();
+let historyBridgeCacheBytes = 0;
 
 let requestSequence = 0;
 const activeRequests = new Map();
@@ -286,13 +308,6 @@ const FORWARD_HEADERS = new Set([
   "x-openai-subagent",
   "x-responsesapi-include-timing-metrics",
 ]);
-
-const COMPACT_PROMPT = `You are performing a CONTEXT CHECKPOINT COMPACTION. Create a handoff summary for another language model that will resume the task.
-
-Include current progress, key decisions, constraints, user preferences, remaining steps, and critical data or references. Be concise, structured, and focused on seamless continuation.`;
-const SUMMARY_PREFIX =
-  "Another language model started this task and produced a continuation summary. Use it to continue without repeating completed work:";
-const COMPACTION_PREFIX = "kcr1:";
 
 function parseBody(buffer) {
   try {
@@ -809,19 +824,6 @@ async function healthPayload() {
   };
 }
 
-function encodeSummary(summary) {
-  return COMPACTION_PREFIX + Buffer.from(summary, "utf8").toString("base64");
-}
-
-function decodeSummary(value) {
-  if (typeof value !== "string" || !value.startsWith(COMPACTION_PREFIX)) return undefined;
-  try {
-    return Buffer.from(value.slice(COMPACTION_PREFIX.length), "base64").toString("utf8");
-  } catch {
-    return undefined;
-  }
-}
-
 function messageItem(text) {
   return {
     type: "message",
@@ -836,12 +838,7 @@ function normalizeRoutedInput(input) {
     .filter((item) => item?.type !== "compaction_trigger")
     .map((item) => {
       if (item?.type !== "compaction") return item;
-      const summary = decodeSummary(item.encrypted_content);
-      return messageItem(
-        summary
-          ? `${SUMMARY_PREFIX}\n\n${summary}`
-          : "[Earlier conversation history was compacted in an unreadable format.]",
-      );
+      return messageItem(renderCompactionValue(item.encrypted_content));
     })
     .map((item) => {
       // LiteLLM rejects messages whose text content is empty; Codex emits
@@ -1037,6 +1034,67 @@ function rememberAgentPayload(encrypted, plaintext) {
     const oldest = agentPayloadCache.get(oldestKey);
     agentPayloadCache.delete(oldestKey);
     agentPayloadCacheBytes -= oldest?.bytes || 0;
+  }
+}
+
+function historyBridgeKey(request, boundary, prefixInput) {
+  const hash = createHash("sha256");
+  hash.update(boundary.kind);
+  hash.update("\0");
+  const threadId = ["thread-id", "session-id", "session_id"]
+    .map((name) => request.headers[name])
+    .find((value) => typeof value === "string" && value.length > 0);
+  if (threadId) {
+    hash.update(threadId.slice(0, 512));
+    hash.update("\0");
+  }
+  if (typeof boundary.value === "string") hash.update(boundary.value);
+  else if (typeof boundary.summary === "string") hash.update(boundary.summary);
+  if (!threadId && typeof boundary.value !== "string") {
+    hash.update("\0");
+    hash.update(JSON.stringify(prefixInput));
+  }
+  return hash.digest("base64url");
+}
+
+function cachedHistoryBridge(key) {
+  const entry = historyBridgeCache.get(key);
+  if (!entry) return undefined;
+  if (entry.expiresAt <= Date.now()) {
+    historyBridgeCache.delete(key);
+    historyBridgeCacheBytes -= entry.bytes;
+    return undefined;
+  }
+  const decoded = decodeCompaction(entry.encoded);
+  if (decoded?.kind !== "checkpoint") {
+    historyBridgeCache.delete(key);
+    historyBridgeCacheBytes -= entry.bytes;
+    return undefined;
+  }
+  historyBridgeCache.delete(key);
+  historyBridgeCache.set(key, entry);
+  return decoded.checkpoint;
+}
+
+function rememberHistoryBridge(key, checkpoint) {
+  const encoded = encodeCheckpoint(checkpoint);
+  const bytes = Buffer.byteLength(encoded, "utf8");
+  const existing = historyBridgeCache.get(key);
+  if (existing) historyBridgeCacheBytes -= existing.bytes;
+  historyBridgeCache.set(key, {
+    encoded,
+    bytes,
+    expiresAt: Date.now() + HISTORY_BRIDGE_CACHE_TTL_MS,
+  });
+  historyBridgeCacheBytes += bytes;
+  while (
+    historyBridgeCache.size > HISTORY_BRIDGE_CACHE_MAX_ENTRIES ||
+    historyBridgeCacheBytes > HISTORY_BRIDGE_CACHE_MAX_BYTES
+  ) {
+    const oldestKey = historyBridgeCache.keys().next().value;
+    const oldest = historyBridgeCache.get(oldestKey);
+    historyBridgeCache.delete(oldestKey);
+    historyBridgeCacheBytes -= oldest?.bytes || 0;
   }
 }
 
@@ -1596,10 +1654,9 @@ function normalizeNativeInput(input) {
   return input.map((item) => {
     if (item?.type === "reasoning") return sanitizeReasoningForNative(item);
     if (item?.type !== "compaction") return sanitizeCollaborationForNative(item);
-    const summary = decodeSummary(item.encrypted_content);
-    return summary === undefined
-      ? item
-      : messageItem(`${SUMMARY_PREFIX}\n\n${summary}`);
+    return isRouterCompactionValue(item.encrypted_content)
+      ? messageItem(renderCompactionValue(item.encrypted_content))
+      : item;
   });
 }
 
@@ -1620,50 +1677,65 @@ function extractUserMessages(input) {
       : typeof item.content === "string"
         ? item.content
         : "";
-    if (text.trim()) messages.push(text);
+    if (
+      text.trim() &&
+      !text.startsWith(CHECKPOINT_WARNING) &&
+      !text.startsWith(LEGACY_WARNING) &&
+      !text.startsWith(LEGACY_V1_SUMMARY_PREFIX)
+    ) {
+      messages.push(text);
+    }
   }
   return messages;
 }
 
 // The v1 compact response shape follows Codex's replacement-history contract.
-function compactOutput(input, summary) {
+function compactOutput(input, checkpoint) {
   const budget = 80_000;
   const selected = [];
   let remaining = budget;
-  const messages = extractUserMessages(input);
+  // Older requirements survive through bounded KCR2 evidence, not as stale
+  // ordinary messages that can be mistaken for the user's current request.
+  const messages = extractUserMessages(input).slice(-2);
   for (let index = messages.length - 1; index >= 0 && remaining > 0; index -= 1) {
     const value = messages[index];
     if (value.length <= remaining) {
       selected.push(value);
       remaining -= value.length;
     } else {
-      selected.push(value.slice(value.length - remaining));
       break;
     }
   }
   selected.reverse();
   return [
     ...selected.map(messageItem),
-    messageItem(summary.trim() ? `${SUMMARY_PREFIX}\n${summary}` : "(no summary available)"),
+    messageItem(renderCheckpoint(checkpoint)),
   ];
 }
 
 function extractResponseText(payload) {
-  if (typeof payload?.output_text === "string") return payload.output_text;
+  if (typeof payload?.output_text === "string" && payload.output_text.length > 0) {
+    return payload.output_text;
+  }
   const text = [];
   for (const item of Array.isArray(payload?.output) ? payload.output : []) {
+    // Responses providers expose private reasoning separately from the final
+    // assistant message. Only the message is the model's contract answer;
+    // reasoning, tool items, and unknown output types are drafts or metadata.
+    if (item?.type !== "message") continue;
     for (const part of Array.isArray(item?.content) ? item.content : []) {
       if (
         ["output_text", "text"].includes(part?.type) &&
-        typeof part.text === "string"
+        typeof part.text === "string" &&
+        part.text.length > 0
       ) {
         text.push(part.text);
       }
     }
   }
+  if (text.length > 0) return text.join("\n");
   const chatText = payload?.choices?.[0]?.message?.content;
-  if (typeof chatText === "string") text.push(chatText);
-  return text.join("\n");
+  return typeof chatText === "string" ? chatText : "";
 }
 
 // The models a compaction may be tried on, best first, without sending
@@ -1695,7 +1767,7 @@ function compactionAttempts(route, aged) {
 // here so a compaction can be moved to another model exactly like an ordinary
 // turn -- a compaction that fails ends the session just as hard, because the
 // conversation cannot get under its context limit without one.
-async function summarizeWith(request, payload, route, aged, signal) {
+async function summarizeWith(request, payload, route, aged, prepared, signal) {
   const bridged = await bridgeVisionInput(aged.input, route, request);
   const body = {
     ...payload,
@@ -1705,7 +1777,11 @@ async function summarizeWith(request, payload, route, aged, signal) {
     // xAI rejects tool_choice "none" paired with it, so the field is omitted
     // rather than sent redundantly.
     tools: [],
-    input: [...bridged, messageItem(COMPACT_PROMPT)],
+    input: [
+      ...bridged,
+      messageItem(prepared.catalogText),
+      messageItem(COMPACTION_PROMPT),
+    ],
   };
   normalizeAutoToolChoice(body, route);
   delete body.previous_response_id;
@@ -1735,6 +1811,10 @@ async function summarize(request, payload, route, signal) {
   // is cached by ciphertext, so a conversation whose turns already resolved
   // costs nothing extra here.
   const normalized = await normalizeRoutedAgentInput(request, originalInput, signal);
+  // Evidence is extracted before tool-result aging rewrites old output bytes.
+  // The summarizer may select source IDs, but only this deterministic pass can
+  // decide which source types and machine outcomes enter a kcr2 checkpoint.
+  const prepared = prepareCompaction(normalized);
   const aged = ageToolResults(normalized, { enabled: toolResultAgingEnabled() });
 
   // The models this compaction may be moved to, in order, starting with the one
@@ -1747,7 +1827,7 @@ async function summarize(request, payload, route, signal) {
   let last;
   for (let index = 0; index < attempts.length; index += 1) {
     const attemptRoute = attempts[index];
-    const sent = await summarizeWith(request, payload, attemptRoute, aged, signal);
+    const sent = await summarizeWith(request, payload, attemptRoute, aged, prepared, signal);
     const bytes = Buffer.from(await sent.upstream.arrayBuffer());
     if (bytes.length > 32 * 1024 * 1024) {
       return {
@@ -1767,7 +1847,7 @@ async function summarize(request, payload, route, signal) {
       clearProviderCooldown(attemptRoute.provider);
       return {
         ok: true,
-        summary: extractResponseText(parsed),
+        checkpoint: finalizeCheckpoint(extractResponseText(parsed), prepared),
         input: originalInput,
         usage,
         toolResultAging: aged.stats,
@@ -1812,6 +1892,113 @@ async function summarize(request, payload, route, signal) {
   return last && { ...last, failed };
 }
 
+function recordCompactionUsage(result, route, startedAt) {
+  const servedRoute = result?.route || route;
+  const failed = (result?.failed || []).filter((entry) => entry.route !== servedRoute);
+  for (const attempt of failed) {
+    recordUsageEvent({
+      model: attempt.route.slug,
+      provider: canonicalProviderId(attempt.route.provider),
+      status: attempt.status,
+      durationMs: Date.now() - startedAt,
+      ...attempt.usage,
+    });
+  }
+  recordUsageEvent({
+    model: servedRoute.slug,
+    provider: canonicalProviderId(servedRoute.provider),
+    status: result?.ok ? 200 : result?.status || 502,
+    durationMs: Date.now() - startedAt,
+    ...result?.usage,
+    ...result?.toolResultAging,
+    ...(result?.failoverFrom ? { failoverFrom: result.failoverFrom } : {}),
+  });
+}
+
+async function bridgedRoutedHistory(request, payload, route, signal) {
+  const input = Array.isArray(payload.input) ? payload.input : [];
+  const boundary = latestHistoryBoundary(input);
+  if (!boundary) return { input };
+  if (boundary.kind === "checkpoint") {
+    return rewriteHistoryFromCheckpoint(input, boundary, boundary.checkpoint);
+  }
+
+  const native =
+    boundary.kind === "opaque" && isNativeEncryptedToken(boundary.value);
+  if (!native && boundary.kind !== "legacy") return { input };
+
+  const prefixInput = input.slice(0, boundary.index + (native ? 0 : 1));
+  const key = historyBridgeKey(request, boundary, prefixInput);
+  let checkpoint = cachedHistoryBridge(key);
+  let cacheHit = Boolean(checkpoint);
+  if (!checkpoint) {
+    let work = historyBridgeInFlight.get(key);
+    if (!work && historyBridgeInFlight.size < HISTORY_BRIDGE_CACHE_MAX_ENTRIES) {
+      work = (async () => {
+        const startedAt = Date.now();
+        try {
+          const result = await summarize(
+            request,
+            { ...payload, input: prefixInput },
+            route,
+            signal,
+          );
+          recordCompactionUsage(result, route, startedAt);
+          if (!result?.ok) return undefined;
+          let generated = result.checkpoint;
+          if (native) {
+            generated = checkpointWithUnknown(
+              generated,
+              "Earlier OpenAI native compaction content is opaque to Codex Router and external models; only retained visible history was available for this checkpoint.",
+            );
+          }
+          if (!generated?.source_refs?.requirements?.length) return undefined;
+          rememberHistoryBridge(key, generated);
+          if (!QUIET) {
+            console.error(
+              `[codex-router] history-bridge generated model=${route.slug} boundary=${native ? "openai-native" : "legacy"}`,
+            );
+          }
+          return generated;
+        } catch (error) {
+          if (signal.aborted) throw error;
+          if (!QUIET) {
+            console.error(
+              `[codex-router] history-bridge fallback model=${route.slug} reason=${error?.name || "Error"}`,
+            );
+          }
+          return undefined;
+        }
+      })();
+      historyBridgeInFlight.set(key, work);
+      void work.then(
+        () => {
+          if (historyBridgeInFlight.get(key) === work) historyBridgeInFlight.delete(key);
+        },
+        () => {
+          if (historyBridgeInFlight.get(key) === work) historyBridgeInFlight.delete(key);
+        },
+      );
+    }
+    try {
+      checkpoint = work ? await work : undefined;
+    } catch (error) {
+      // The shared generation may have inherited another request's abort
+      // signal. Only abort this request when its own caller cancelled;
+      // otherwise fail open and keep the original history.
+      if (signal.aborted) throw error;
+      checkpoint = undefined;
+    }
+    cacheHit = false;
+  }
+  if (!checkpoint) return { input };
+  const rewritten = rewriteHistoryFromCheckpoint(input, boundary, checkpoint);
+  if (!QUIET && cacheHit && rewritten.input !== input) {
+    console.error(`[codex-router] history-bridge cache-hit model=${route.slug}`);
+  }
+  return rewritten;
+}
+
 function compactionSnapshot(model, item, status = "completed") {
   return {
     id: `resp_${randomUUID().replaceAll("-", "")}`,
@@ -1824,11 +2011,11 @@ function compactionSnapshot(model, item, status = "completed") {
   };
 }
 
-function writeCompactionSse(response, model, summary) {
+function writeCompactionSse(response, model, checkpoint) {
   const item = {
     type: "compaction",
     id: `cmp_${randomUUID().replaceAll("-", "")}`,
-    encrypted_content: encodeSummary(summary),
+    encrypted_content: encodeCheckpoint(checkpoint),
   };
   const created = compactionSnapshot(model, undefined, "in_progress");
   const completed = { ...created, status: "completed", output: [item] };
@@ -1872,11 +2059,11 @@ async function handleRoutedCompaction(request, response, payload, route, signal,
       const item = {
         type: "compaction",
         id: `cmp_${randomUUID().replaceAll("-", "")}`,
-        encrypted_content: encodeSummary(result.summary),
+        encrypted_content: encodeCheckpoint(result.checkpoint),
       };
       writeJson(response, 200, compactionSnapshot(payload.model, item));
     } else {
-      writeCompactionSse(response, payload.model, result.summary);
+      writeCompactionSse(response, payload.model, result.checkpoint);
     }
     return {
       status: 200,
@@ -1885,7 +2072,7 @@ async function handleRoutedCompaction(request, response, payload, route, signal,
       ...served,
     };
   }
-  writeJson(response, 200, { output: compactOutput(result.input, result.summary) });
+  writeJson(response, 200, { output: compactOutput(result.input, result.checkpoint) });
   return {
     status: 200,
     usage: result.usage,
@@ -2429,31 +2616,8 @@ async function handleResponses(request, response, requestUrl) {
         controller.signal,
         compactV2,
       );
-      // Compaction used to return here without metering or logging, so neither
-      // a successful nor a failed one appeared anywhere in the router's own
-      // telemetry. Mirror the ordinary request path exactly.
       const compacted = compaction.route || route;
-      // A compaction the router moved was still charged by the provider that
-      // refused it, so each losing attempt gets its own row before the serving
-      // one -- the same shape the turn path records.
-      for (const attempt of compaction.failed || []) {
-        recordUsageEvent({
-          model: attempt.route.slug,
-          provider: canonicalProviderId(attempt.route.provider),
-          status: attempt.status,
-          durationMs: Date.now() - startedAt,
-          ...attempt.usage,
-        });
-      }
-      recordUsageEvent({
-        model: compacted.slug,
-        provider: canonicalProviderId(compacted.provider),
-        status: compaction.status,
-        durationMs: Date.now() - startedAt,
-        ...compaction.usage,
-        ...compaction.toolResultAging,
-        ...(compaction.failoverFrom ? { failoverFrom: compaction.failoverFrom } : {}),
-      });
+      recordCompactionUsage(compaction, route, startedAt);
       usage = compaction.usage;
       finalStatus = compaction.status;
       activityStatus = compaction.status;
@@ -2506,9 +2670,15 @@ async function handleResponses(request, response, requestUrl) {
       });
     };
     if (route) {
+      const history = await bridgedRoutedHistory(
+        request,
+        payload,
+        route,
+        controller.signal,
+      );
       const normalized = await normalizeRoutedAgentInput(
         request,
-        payload.input,
+        history.input,
         controller.signal,
       );
       const aged = ageToolResults(normalized, { enabled: toolResultAgingEnabled() });
