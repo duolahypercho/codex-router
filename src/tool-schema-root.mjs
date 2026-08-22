@@ -22,17 +22,181 @@ function isPlainObject(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-// Resolves the local `#/$defs/...` and `#/definitions/...` pointers Codex
-// emits. Anything else (remote refs, unusual pointers) resolves to undefined
-// and the branch is skipped rather than guessed at.
+// Resolves only local URI-fragment JSON Pointers: `#` and `#/...`. RFC 6901
+// fragment decoding happens before `~1` / `~0` token decoding. Object own keys
+// and canonical in-range array indexes are traversable; malformed fragments,
+// anchors such as `#node`, and unsupported targets remain unresolved. The
+// cycle repair deliberately does not infer semantics for `$dynamicRef` or
+// `$recursiveRef` -- only an actual `$ref` crosses this boundary.
 function resolveRef(ref, root) {
-  if (typeof ref !== "string" || !ref.startsWith("#/")) return undefined;
+  if (typeof ref !== "string" || !ref.startsWith("#")) return undefined;
+  let pointer;
+  try {
+    pointer = decodeURIComponent(ref.slice(1));
+  } catch {
+    return undefined;
+  }
+  if (pointer === "") return isPlainObject(root) ? root : undefined;
+  if (!pointer.startsWith("/")) return undefined;
+
   let node = root;
-  for (const rawSegment of ref.slice(2).split("/")) {
-    if (!isPlainObject(node)) return undefined;
-    node = node[rawSegment.replace(/~1/g, "/").replace(/~0/g, "~")];
+  for (const rawSegment of pointer.slice(1).split("/")) {
+    if (/~(?:[^01]|$)/.test(rawSegment)) return undefined;
+    const segment = rawSegment.replace(/~1/g, "/").replace(/~0/g, "~");
+    if (Array.isArray(node)) {
+      if (!/^(?:0|[1-9]\d*)$/.test(segment)) return undefined;
+      const index = Number(segment);
+      if (!Number.isSafeInteger(index) || index >= node.length || !(index in node)) {
+        return undefined;
+      }
+      node = node[index];
+      continue;
+    }
+    if (!isPlainObject(node) || !Object.hasOwn(node, segment)) return undefined;
+    node = node[segment];
   }
   return isPlainObject(node) ? node : undefined;
+}
+
+// OpenCode's Responses-compatible surfaces reject recursive local refs in a
+// tool schema before the model sees the request. Keep definitions and every
+// acyclic, boolean, or unresolved ref intact: expanding a shared ref DAG can
+// grow exponentially, while deleting `$defs` leaves those refs dangling.
+//
+// A graph DFS marks only ref occurrences whose targets are still on the active
+// stack. It follows only JSON Schema keywords that actually contain schemas;
+// `$ref` strings inside const/default/examples/enum objects are literal data.
+// Removing the marked back edges makes the reference graph acyclic. The second
+// pass clones once and removes `$ref` only from the marked occurrence,
+// preserving any sibling constraints. Both passes are iterative so a valid
+// deeply nested tool schema cannot exhaust the JavaScript call stack. Schemas
+// with no cycle keep identity.
+const REF_SCHEMA_MAP_KEYWORDS = [
+  "$defs",
+  "definitions",
+  "properties",
+  "patternProperties",
+  "dependentSchemas",
+];
+const REF_SCHEMA_ARRAY_KEYWORDS = ["allOf", "anyOf", "oneOf", "prefixItems"];
+const REF_SCHEMA_CHILD_KEYWORDS = [
+  "additionalItems",
+  "additionalProperties",
+  "contains",
+  "contentSchema",
+  "else",
+  "if",
+  "items",
+  "not",
+  "propertyNames",
+  "then",
+  "unevaluatedItems",
+  "unevaluatedProperties",
+];
+
+function schemaEdges(node, root) {
+  const edges = [];
+  const resolved = resolveRef(node.$ref, root);
+  if (isPlainObject(resolved)) edges.push({ node: resolved, ref: true });
+
+  for (const keyword of REF_SCHEMA_MAP_KEYWORDS) {
+    const schemas = node[keyword];
+    if (!isPlainObject(schemas)) continue;
+    for (const schema of Object.values(schemas)) {
+      if (isPlainObject(schema)) edges.push({ node: schema, ref: false });
+    }
+  }
+  for (const keyword of REF_SCHEMA_ARRAY_KEYWORDS) {
+    const schemas = node[keyword];
+    if (!Array.isArray(schemas)) continue;
+    for (const schema of schemas) {
+      if (isPlainObject(schema)) edges.push({ node: schema, ref: false });
+    }
+  }
+  for (const keyword of REF_SCHEMA_CHILD_KEYWORDS) {
+    const schema = node[keyword];
+    if (Array.isArray(schema)) {
+      // Drafts before 2020-12 allowed tuple schemas directly under `items`.
+      for (const entry of schema) {
+        if (isPlainObject(entry)) edges.push({ node: entry, ref: false });
+      }
+    } else if (isPlainObject(schema)) {
+      edges.push({ node: schema, ref: false });
+    }
+  }
+  // Draft-07 `dependencies` mixes property-name arrays with schema values.
+  const dependencies = node.dependencies;
+  if (isPlainObject(dependencies)) {
+    for (const schema of Object.values(dependencies)) {
+      if (isPlainObject(schema)) edges.push({ node: schema, ref: false });
+    }
+  }
+  return edges;
+}
+
+function cycleClosingLocalRefs(schema) {
+  const state = new WeakMap();
+  const closing = new WeakSet();
+  let count = 0;
+  state.set(schema, 1);
+  const stack = [{ node: schema, edges: schemaEdges(schema, schema), index: 0 }];
+  while (stack.length) {
+    const frame = stack.at(-1);
+    if (frame.index >= frame.edges.length) {
+      state.set(frame.node, 2);
+      stack.pop();
+      continue;
+    }
+    const edge = frame.edges[frame.index];
+    frame.index += 1;
+    const targetState = state.get(edge.node);
+    if (targetState === 1) {
+      if (edge.ref && !closing.has(frame.node)) {
+        closing.add(frame.node);
+        count += 1;
+      }
+      continue;
+    }
+    if (targetState === 2) continue;
+    state.set(edge.node, 1);
+    stack.push({ node: edge.node, edges: schemaEdges(edge.node, schema), index: 0 });
+  }
+  return { closing, count };
+}
+
+function cloneWithoutClosingRefs(root, closing) {
+  const clones = new WeakMap();
+  const rootCopy = {};
+  clones.set(root, rootCopy);
+  const stack = [{ source: root, target: rootCopy }];
+  while (stack.length) {
+    const { source, target } = stack.pop();
+    const entries = Array.isArray(source)
+      ? source.map((value, index) => [index, value])
+      : Object.entries(source);
+    for (const [key, value] of entries) {
+      if (key === "$ref" && closing.has(source)) continue;
+      if (!Array.isArray(value) && !isPlainObject(value)) {
+        target[key] = value;
+        continue;
+      }
+      let copy = clones.get(value);
+      if (!copy) {
+        copy = Array.isArray(value) ? [] : {};
+        clones.set(value, copy);
+        stack.push({ source: value, target: copy });
+      }
+      target[key] = copy;
+    }
+  }
+  return rootCopy;
+}
+
+export function nonRecursiveToolSchema(schema) {
+  if (!isPlainObject(schema)) return schema;
+  const { closing, count } = cycleClosingLocalRefs(schema);
+  if (!count) return schema;
+  return cloneWithoutClosingRefs(schema, closing);
 }
 
 // Every object-typed leaf reachable from `schema` through unions and local

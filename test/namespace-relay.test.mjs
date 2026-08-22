@@ -4,13 +4,17 @@ import test from "node:test";
 
 import {
   NamespaceToolCallTransform,
+  agentMessagesAsUserMessages,
+  bridgeCustomTools,
   buildNamespaceLookups,
+  downgradeOriginalImageDetail,
   flattenNamespacedHistory,
   flattenNamespaceTools,
   flattenToolSearchHistory,
   rewriteNamespaceFunctionCall,
   rewriteNamespaceResponsePayload,
   repairToolSchemaRoots,
+  stripSearchContentTypes,
 } from "../src/namespace-relay.mjs";
 import { mergeCodexAppTools } from "../src/codex-app-tools.mjs";
 
@@ -1242,4 +1246,235 @@ test("repairToolSchemaRoots fixes roots without flattening", () => {
 test("repairToolSchemaRoots returns the original array when nothing needs repair", () => {
   const tools = [{ type: "function", name: "fine", parameters: { type: "object", properties: { a: {} } } }];
   assert.equal(repairToolSchemaRoots(tools), tools);
+});
+
+test("OpenCode search repair strips only search_content_types on web_search", () => {
+  const webSearch = {
+    type: "web_search",
+    search_content_types: ["text", "image"],
+    filters: { allowed_domains: ["example.com"] },
+  };
+  const preview = { type: "web_search_preview", search_content_types: ["text"] };
+  const ordinary = {
+    type: "function",
+    name: "ordinary",
+    search_content_types: ["application-specific"],
+  };
+  const stripped = stripSearchContentTypes([webSearch, preview, ordinary]);
+  assert.deepEqual(stripped[0], {
+    type: "web_search",
+    filters: { allowed_domains: ["example.com"] },
+  });
+  assert.deepEqual(stripped[1], preview);
+  assert.deepEqual(stripped[2], ordinary);
+});
+
+test("OpenCode input repair preserves collaboration text and inherited images", () => {
+  const agent = {
+    type: "agent_message",
+    id: "amsg_1",
+    author: "/root",
+    recipient: "/root/reviewer",
+    content: [
+      { type: "input_text", text: "Message Type: NEW_TASK\nPayload:\nEdit it." },
+      {
+        type: "input_image",
+        image_url: "data:image/png;base64,AAA",
+        detail: "original",
+      },
+    ],
+  };
+  const publicInput = agentMessagesAsUserMessages([agent]);
+  assert.deepEqual(publicInput[0], {
+    type: "message",
+    role: "user",
+    content: agent.content,
+  });
+  const compatible = downgradeOriginalImageDetail(publicInput);
+  assert.deepEqual(compatible[0].content[0], agent.content[0]);
+  assert.equal(compatible[0].content[1].image_url, "data:image/png;base64,AAA");
+  assert.equal(compatible[0].content[1].detail, "auto");
+});
+
+test("custom-tool bridge maps apply_patch definitions and paired history losslessly", () => {
+  const namespaces = new Map();
+  const patch = "*** Begin Patch\n*** Update File: seed.txt\n@@\n-before\n+after\n*** End Patch";
+  const ordinary = { type: "function", name: "read_file", parameters: { type: "object" } };
+  const unrelatedCall = {
+    type: "function_call",
+    name: "read_file",
+    call_id: "call_read",
+    arguments: '{"path":"seed.txt"}',
+  };
+  const bridged = bridgeCustomTools(
+    [
+      {
+        type: "custom",
+        name: "apply_patch",
+        description: "Apply a patch.",
+        format: { type: "grammar", syntax: "lark", definition: "start: /.+/" },
+      },
+      ordinary,
+    ],
+    [
+      {
+        type: "custom_tool_call",
+        id: "ctc_1",
+        call_id: "call_patch_1",
+        name: "apply_patch",
+        input: patch,
+      },
+      { type: "custom_tool_call_output", call_id: "call_patch_1", output: "Done!" },
+      unrelatedCall,
+    ],
+    namespaces,
+    { type: "custom", name: "apply_patch" },
+  );
+  assert.deepEqual(bridged.tools[0].parameters.required, ["input"]);
+  assert.equal(bridged.tools[0].format, undefined);
+  assert.deepEqual(bridged.tools[1], ordinary);
+  assert.deepEqual(bridged.toolChoice, { type: "function", name: "apply_patch" });
+  assert.deepEqual(bridged.input[0], {
+    id: "ctc_1",
+    call_id: "call_patch_1",
+    type: "function_call",
+    name: "apply_patch",
+    arguments: JSON.stringify({ input: patch }),
+  });
+  assert.equal(bridged.input[1].type, "function_call_output");
+  assert.deepEqual(bridged.input[2], unrelatedCall);
+  assert.equal(buildNamespaceLookups(namespaces).customTools.get("apply_patch"), "apply_patch");
+});
+
+test("custom-tool bridge avoids hijacking an ordinary apply_patch function", () => {
+  const namespaces = new Map();
+  const ordinary = { type: "function", name: "apply_patch", parameters: { type: "object" } };
+  const bridged = bridgeCustomTools(
+    [ordinary, { type: "custom", name: "apply_patch" }],
+    [],
+    namespaces,
+  );
+  assert.deepEqual(bridged.tools[0], ordinary);
+  assert.equal(bridged.tools[1].name, "codex_custom_apply_patch");
+  assert.equal(
+    buildNamespaceLookups(namespaces).customTools.get("codex_custom_apply_patch"),
+    "apply_patch",
+  );
+});
+
+test("custom-tool bridge reserves native namespace names and restores the aliased call", () => {
+  const namespaces = new Map();
+  const namespace = {
+    type: "namespace",
+    name: "apply_patch",
+    tools: [{ type: "function", name: "inspect", inputSchema: { type: "object" } }],
+  };
+  const bridged = bridgeCustomTools(
+    [namespace, { type: "custom", name: "apply_patch" }],
+    [],
+    namespaces,
+    { type: "custom", name: "apply_patch" },
+  );
+
+  assert.deepEqual(bridged.tools[0], namespace);
+  assert.equal(bridged.tools[1].name, "codex_custom_apply_patch");
+  assert.deepEqual(bridged.toolChoice, {
+    type: "function",
+    name: "codex_custom_apply_patch",
+  });
+  const rewritten = rewriteNamespaceResponsePayload(
+    {
+      output: [
+        {
+          type: "function_call",
+          id: "fc_patch_json",
+          call_id: "call_patch_json",
+          name: "codex_custom_apply_patch",
+          arguments: JSON.stringify({ input: "*** Begin Patch\n*** End Patch" }),
+        },
+      ],
+    },
+    buildNamespaceLookups(namespaces),
+  );
+  assert.deepEqual(rewritten.output[0], {
+    type: "custom_tool_call",
+    id: "fc_patch_json",
+    call_id: "call_patch_json",
+    name: "apply_patch",
+    input: "*** Begin Patch\n*** End Patch",
+  });
+});
+
+test("one-byte fragmented SSE preserves escaped and multibyte custom input", async () => {
+  const namespaces = new Map();
+  bridgeCustomTools([{ type: "custom", name: "apply_patch" }], [], namespaces);
+  const patch =
+    "*** Begin Patch\n+quote=\"yes\" slash=\\ tab=\t snowman=☃ emoji=🧩\n*** End Patch";
+  const argumentsText = JSON.stringify({ input: patch });
+  const fragments = [];
+  for (let index = 0; index < argumentsText.length; index += 1) {
+    fragments.push(argumentsText.slice(index, index + 1));
+  }
+  const events = [
+    {
+      type: "response.output_item.added",
+      item: {
+        type: "function_call",
+        id: "fc_1",
+        call_id: "call_patch_1",
+        name: "apply_patch",
+        arguments: "",
+      },
+    },
+    ...fragments.map((delta) => ({
+      type: "response.function_call_arguments.delta",
+      item_id: "fc_1",
+      delta,
+    })),
+    {
+      type: "response.function_call_arguments.done",
+      item_id: "fc_1",
+      arguments: argumentsText,
+    },
+    {
+      type: "response.output_item.done",
+      item: {
+        type: "function_call",
+        id: "fc_1",
+        call_id: "call_patch_1",
+        name: "apply_patch",
+        arguments: argumentsText,
+      },
+    },
+  ];
+  const source = events
+    .map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`)
+    .join("");
+  const sourceBytes = Buffer.from(source, "utf8");
+  const chunks = [];
+  for (let index = 0; index < sourceBytes.length; index += 1) {
+    chunks.push(sourceBytes.subarray(index, index + 1));
+  }
+  const transform = new NamespaceToolCallTransform(namespaces, "text/event-stream");
+  const output = await collect(Readable.from(chunks).pipe(transform));
+  const blocks = output.split(/\n\n/).filter(Boolean);
+  const payloads = blocks.map((block) => {
+    const data = block.split("\n").find((line) => line.startsWith("data: "));
+    return JSON.parse(data.slice(6));
+  });
+  assert.equal(payloads[0].item.type, "custom_tool_call");
+  const deltas = payloads
+    .filter((event) => event.type === "response.custom_tool_call_input.delta")
+    .map((event) => event.delta)
+    .join("");
+  assert.equal(deltas, patch);
+  const done = payloads.find(
+    (event) => event.type === "response.custom_tool_call_input.done",
+  );
+  assert.equal(done.input, patch);
+  assert.equal(payloads.at(-1).item.type, "custom_tool_call");
+  assert.equal(payloads.at(-1).item.input, patch);
+  assert.doesNotMatch(output, /response\.function_call_arguments/);
+  assert.match(output, /event: response\.custom_tool_call_input\.delta/);
+  assert.match(output, /event: response\.custom_tool_call_input\.done/);
 });

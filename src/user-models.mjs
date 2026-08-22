@@ -19,7 +19,7 @@ export const USER_MODELS_PATH =
 // number is a guess, and a guess eight times too small compacts a session that
 // had the room (#266).
 export const DEFAULT_CONTEXT_WINDOW = 131072;
-const DEFAULT_AUTO_COMPACT = 110000;
+export const DEFAULT_AUTO_COMPACT = 110000;
 
 // Curation may adjust presentation, sizing, and effort metadata only;
 // identity and routing fields always come from the provider id and the

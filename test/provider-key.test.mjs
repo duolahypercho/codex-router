@@ -206,3 +206,16 @@ test("a curated model silences the curation hint", () => {
   const models = [{ provider: "gemini-api", slug: "gemini-api/curated" }];
   assert.equal(providerNeedsCuration("gemini-api", models), false);
 });
+
+test("the OpenCode Free Responses sibling does not widen paid curation sets", () => {
+  const models = [
+    { provider: "opencode-free-responses", slug: "opencode-free-responses/muse" },
+    { provider: "opencode-go", slug: "opencode-go/kimi-k3" },
+  ];
+  assert.equal(providerNeedsCuration("opencode-free", models), false);
+  assert.equal(providerNeedsCuration("opencode-free-responses", models), false);
+  assert.equal(providerNeedsCuration("opencode-zen", models), true);
+  // Checked-in Go models remain their own exact set and do not populate paid
+  // Zen curation just because those providers share a selection credential.
+  assert.equal(providerNeedsCuration("opencode-go", models), false);
+});
