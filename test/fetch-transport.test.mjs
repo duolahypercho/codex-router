@@ -6,7 +6,13 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { getGlobalDispatcher, setGlobalDispatcher } from "undici";
 
-import { installStableFetchTransport } from "../src/fetch-transport.mjs";
+import {
+  createLoopbackProbeDispatcher,
+  fetchDispatcherOptions,
+  installStableFetchTransport,
+  loopbackProbeDispatcher,
+  loopbackProbeFetch,
+} from "../src/fetch-transport.mjs";
 
 const SRC_DIR = fileURLToPath(new URL("../src", import.meta.url));
 
@@ -48,9 +54,31 @@ test("the router disables HTTP/2 on its process-wide fetch dispatcher", () => {
 
   assert.equal(created.length, 1);
   assert.equal(dispatcher.kind, "direct");
-  assert.deepEqual(created[0].options, { allowH2: false });
+  assert.deepEqual(created[0].options, { allowH2: false, pipelining: 1 });
   assert.equal(dispatcher, created[0]);
   assert.deepEqual(installed, [dispatcher]);
+});
+
+// Every outbound provider request shares this pool. Holding idle sockets
+// longer than an upstream does hands the next POST a half-closed connection
+// that surfaces as UND_ERR_SOCKET, and Undici will not retry it -- so the
+// process-wide pool keeps Undici's own 4s default and only the loopback
+// probe pool, which talks to our own server, raises it.
+test("the process-wide pool does not hold idle sockets past the undici default", () => {
+  const { created } = installFakeTransport({});
+
+  assert.equal("keepAliveTimeout" in created[0].options, false);
+  assert.equal("connections" in created[0].options, false);
+
+  const probe = createLoopbackProbeDispatcher({
+    AgentClass: class {
+      constructor(options) {
+        this.options = options;
+      }
+    },
+    environment: {},
+  });
+  assert.equal(probe.options.keepAliveTimeout, 10_000);
 });
 
 test("the router uses the environment proxy dispatcher only with explicit opt-in", () => {
@@ -65,7 +93,7 @@ test("the router uses the environment proxy dispatcher only with explicit opt-in
     assert.equal(created.length, 1);
     assert.equal(dispatcher.kind, "environment-proxy");
     assert.equal(dispatcher, created[0]);
-    assert.deepEqual(dispatcher.options, { allowH2: false });
+    assert.deepEqual(dispatcher.options, fetchDispatcherOptions());
   }
 });
 
@@ -77,7 +105,7 @@ test("proxy variables alone do not opt the router into proxying", () => {
 
   assert.equal(created.length, 1);
   assert.equal(dispatcher.kind, "direct");
-  assert.deepEqual(dispatcher.options, { allowH2: false });
+  assert.deepEqual(dispatcher.options, fetchDispatcherOptions());
 });
 
 test("the router accepts the NODE_OPTIONS and command-line opt-in forms", () => {
@@ -88,7 +116,7 @@ test("the router accepts the NODE_OPTIONS and command-line opt-in forms", () => 
     const { created, dispatcher } = installFakeTransport(environment, execArgv);
     assert.equal(created.length, 1);
     assert.equal(dispatcher.kind, "environment-proxy");
-    assert.deepEqual(dispatcher.options, { allowH2: false });
+    assert.deepEqual(dispatcher.options, fetchDispatcherOptions());
   }
 });
 
@@ -105,7 +133,7 @@ test("NO_PROXY or ALL_PROXY alone keeps the lower-overhead direct agent", () => 
     assert.equal(created.length, 1);
     assert.equal(dispatcher.kind, "direct");
     assert.equal(dispatcher, created[0]);
-    assert.deepEqual(dispatcher.options, { allowH2: false });
+    assert.deepEqual(dispatcher.options, fetchDispatcherOptions());
   }
 });
 
@@ -195,4 +223,109 @@ test("every long-lived server process installs the stable transport", () => {
       `${name} creates a server but never installs the stable fetch transport`,
     );
   }
+});
+
+test("loopback health probes use the same proxy opt-in as routed traffic", () => {
+  const created = [];
+  class FakeAgent {
+    constructor(options) {
+      this.kind = "direct";
+      this.options = options;
+      created.push(this);
+    }
+  }
+  class FakeEnvHttpProxyAgent {
+    constructor(options) {
+      this.kind = "environment-proxy";
+      this.options = options;
+      created.push(this);
+    }
+  }
+
+  const proxied = createLoopbackProbeDispatcher({
+    AgentClass: FakeAgent,
+    EnvHttpProxyAgentClass: FakeEnvHttpProxyAgent,
+    environment: { NODE_USE_ENV_PROXY: "1", HTTP_PROXY: "http://proxy.example:8080" },
+  });
+  assert.equal(proxied.kind, "environment-proxy");
+
+  created.length = 0;
+  const direct = createLoopbackProbeDispatcher({
+    AgentClass: FakeAgent,
+    EnvHttpProxyAgentClass: FakeEnvHttpProxyAgent,
+    environment: { HTTP_PROXY: "http://proxy.example:8080" },
+  });
+  assert.equal(direct.kind, "direct");
+});
+
+test("loopback probes use undici fetch so a separate Agent is accepted", async () => {
+  const server = http.createServer((_request, response) => {
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({ ok: true, service: "gateway" }));
+  });
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  try {
+    const port = server.address().port;
+    const response = await loopbackProbeFetch(`http://127.0.0.1:${port}/health/liveliness`, {
+      headers: { Authorization: "Bearer test" },
+      signal: AbortSignal.timeout(2_000),
+    });
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { ok: true, service: "gateway" });
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+// A default parameter that called the factory built a new Agent -- a whole
+// connection pool -- on every probe, and the router polls /health continuously.
+test("repeated loopback probes share one dispatcher", async () => {
+  const server = http.createServer((_request, response) => {
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({ ok: true }));
+  });
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const seen = [];
+  const original = loopbackProbeDispatcher();
+  try {
+    const port = server.address().port;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const response = await loopbackProbeFetch(`http://127.0.0.1:${port}/health`, {
+        signal: AbortSignal.timeout(2_000),
+      });
+      await response.json();
+      seen.push(loopbackProbeDispatcher());
+    }
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+
+  assert.equal(seen.length, 3);
+  for (const dispatcher of seen) assert.equal(dispatcher, original);
+  // The accessor returns the one singleton; the factory still makes new pools,
+  // which is what the default parameter used to do on every single probe.
+  const separate = createLoopbackProbeDispatcher();
+  try {
+    assert.notEqual(original, separate);
+  } finally {
+    await separate.close();
+  }
+});
+
+// Importing the module must not open a pool; only a probe should.
+test("the shared probe dispatcher is built on first use, not at import", () => {
+  const source = readFileSync(path.join(SRC_DIR, "fetch-transport.mjs"), "utf8");
+  assert.match(source, /let sharedProbeDispatcher;/);
+  assert.match(source, /sharedProbeDispatcher \?\?= createLoopbackProbeDispatcher\(\)/);
+  assert.doesNotMatch(
+    source,
+    /^(const|let) \w+ = createLoopbackProbeDispatcher\(\)/m,
+    "a module-level call would open a connection pool for every importer",
+  );
 });
