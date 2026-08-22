@@ -274,6 +274,9 @@ command -v node >/dev/null 2>&1 ||
 command -v npm >/dev/null 2>&1 ||
   die "npm is required and is normally included with Node.js"
 
+if [ -n "$configure_provider_keys" ]; then
+  node "$repo_dir/src/node-dependency-install.mjs"
+fi
 for provider_id in $configure_provider_keys; do
   "$repo_dir/bin/provider-key" "$provider_id" set
 done

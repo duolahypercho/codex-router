@@ -55,6 +55,16 @@ export function renderProviderChoices(snapshots, selected, colorEnabled = false)
     .join("\n");
 }
 
+export function renderModelChoices(models, selected) {
+  return models
+    .map((model, index) => {
+      const position = index + 1;
+      const mark = selected.has(position) ? "[x]" : "[ ]";
+      return `  ${mark} ${position}. ${model.displayName}`;
+    })
+    .join("\n");
+}
+
 export function toggleSelection(selected, input, count, { allowEmpty = false } = {}) {
   const trimmed = String(input || "").trim().toLowerCase();
   if (trimmed === "") {

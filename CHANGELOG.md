@@ -2,6 +2,41 @@
 
 ## Unreleased
 
+- **An update no longer empties the picker on a pre-allowlist install.** The
+  routed picker became an allowlist in `v0.4.0-beta.4`; on an install written
+  by an older build, every routed model was absent from `seeded` rather than
+  recorded as visible, so the first catalog rebuild read "on, but never
+  written down" as "never decided" and applied the opt-in default to models
+  that were plainly already showing (issue #338). The catalog build now
+  migrates that file once, before the default runs: a routed slug in neither
+  `hidden` nor `seeded` is recorded visible, so the picker the operator was
+  looking at survives the update. Models switched off on purpose stay off, and
+  a fresh install still opts in model by model.
+
+  **If an update already hid your models,** the migration cannot tell them
+  apart from a deliberate hide -- both now sit in `hidden` and `seeded` -- and
+  deliberately does not guess. Restore a provider's models with the picker
+  command, which republishes the catalog on the way out:
+
+  ```sh
+  ./bin/control picker provider opencode-go show
+  ```
+
+  Substitute your provider ID (`./bin/model-router codex providers list --json`
+  lists them), repeat per provider, then fully quit and reopen Codex.
+
+- **Guided setup asks which models go in the picker.** `./bin/setup --guided`
+  now has a model step between choosing providers and connecting credentials.
+  It starts from the picker the machine already has -- nothing on a first
+  install, the operator's existing selection on a re-run -- so enabling a
+  provider still offers its models rather than choosing them, and pressing
+  Enter through the step never changes what is already there. The selection is
+  written after the "Proceed?" confirmation, so a cancelled setup and a
+  `--selection-only` run both leave `model-picker.json` untouched, and it
+  records `hidden`/`seeded` rather than an allowlist on a pre-allowlist file,
+  because one screen of models cannot answer for the providers it never
+  showed.
+
 - **Grok 4.6 can select Codex's native image viewer.** xAI stopped without a
   function call when the tool was named `view_image`, even when selection was
   required. The Grok OAuth boundary now presents that tool as `inspect_image`

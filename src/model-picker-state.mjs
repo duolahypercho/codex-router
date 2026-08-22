@@ -34,6 +34,10 @@ function readPickerState() {
     visible: new Set(),
     seeded: new Set(),
     hasExplicitVisibility: false,
+    // "Nothing has ever been recorded here" and "the file says nothing is
+    // hidden" are different machines, and only the second one has a history
+    // worth preserving (see `migrateLegacyVisibleModels`).
+    recognized: false,
   };
   if (!existsSync(MODEL_PICKER_STATE_PATH)) return empty;
   try {
@@ -51,7 +55,7 @@ function readPickerState() {
       ? slugs(parsed.visible)
       : new Set([...seeded].filter((slug) => !hidden.has(slug)));
     for (const slug of hidden) visible.delete(slug);
-    return { hidden, visible, seeded, hasExplicitVisibility };
+    return { hidden, visible, seeded, hasExplicitVisibility, recognized: true };
   } catch {
     return empty;
   }
@@ -67,6 +71,23 @@ export function readHiddenModels() {
 // selection and is what every client publisher uses to decide what to show.
 export function readVisibleModels() {
   return readPickerState().visible;
+}
+
+// Answers "which of these models is the picker showing right now" with the
+// same rule every publisher applies, so a surface that offers the operator a
+// pre-filled list starts from what they are actually looking at rather than
+// from one of the two representations. A machine with no picker state has
+// decided nothing, and new router models are opt-in, so the answer there is
+// "none" -- not "all of them", which is what `hidden` being empty would say.
+export function effectiveVisibleModels(slugs) {
+  const values = [...new Set(
+    (Array.isArray(slugs) ? slugs : []).map((slug) => String(slug || "").trim()).filter(Boolean),
+  )];
+  const { hidden, visible, hasExplicitVisibility, recognized } = readPickerState();
+  if (!recognized) return new Set();
+  return new Set(
+    values.filter((value) => (hasExplicitVisibility ? visible.has(value) : !hidden.has(value))),
+  );
 }
 
 function writePickerState({ hidden, visible, seeded, hasExplicitVisibility = true }) {
@@ -145,6 +166,78 @@ export function setAllModelsVisible(slugs, visible) {
     visible: visibleModels,
     seeded: new Set([...seeded, ...known]),
   });
+}
+
+// Applies one explicit picker selection to the supplied models while leaving
+// every other provider's visibility untouched.
+//
+// `hasExplicitVisibility` is threaded through for the same reason
+// `seedModelsHidden` threads it: this call sees one screen's worth of models,
+// and turning a legacy file into an allowlist answers for every provider it
+// never looked at -- with "off", because they are absent from `visible`. The
+// selection is still durable on such a file, through `hidden` and `seeded`,
+// which is the representation that file already speaks. A file the catalog
+// build has migrated is an allowlist already and stays one.
+export function setModelSelection(slugs, selectedSlugs) {
+  const values = [...new Set(
+    (Array.isArray(slugs) ? slugs : []).map((slug) => String(slug || "").trim()).filter(Boolean),
+  )];
+  if (values.length === 0) return modelPickerSnapshot();
+  const selected = new Set(
+    (Array.isArray(selectedSlugs) ? selectedSlugs : [])
+      .map((slug) => String(slug || "").trim())
+      .filter(Boolean),
+  );
+  const { hidden, visible, seeded, hasExplicitVisibility } = readPickerState();
+  for (const value of values) {
+    if (selected.has(value)) {
+      hidden.delete(value);
+      visible.add(value);
+    } else {
+      hidden.add(value);
+      visible.delete(value);
+    }
+    seeded.add(value);
+  }
+  return writePickerState({ hidden, visible, seeded, hasExplicitVisibility });
+}
+
+// Bridges one install from the pre-allowlist file format, exactly once.
+//
+// Before `visible` existed, "absent from `hidden`" was the whole answer to "is
+// this model in the picker", so every routed model the operator had not
+// switched off was showing. The allowlist asks a different question, and a
+// slug that was never recorded at all answers it "off" -- which is how the
+// first catalog rebuild after an update emptied a whole provider out of the
+// picker (issue #338): `seedModelsHidden` read those slugs as never-decided
+// and applied the opt-in default to models that were visibly already on.
+//
+// So record the old answer for the models that had one, in the moment before
+// the default gets to speak. Deliberately hidden stays hidden, and a slug
+// already in `seeded` has been decided by someone -- neither is this
+// function's business. A machine with no picker state has no history to
+// preserve, so opt-in stays opt-in on a fresh install.
+//
+// This cannot repair an install that has already run the new build: there the
+// slugs sit in `hidden` and `seeded`, which is byte-for-byte what a deliberate
+// hide looks like. That machine needs `control picker provider <id> show`, and
+// guessing on its behalf would switch models back on that someone switched
+// off.
+export function migrateLegacyVisibleModels(slugs) {
+  const { hidden, visible, seeded, hasExplicitVisibility, recognized } = readPickerState();
+  if (!recognized || hasExplicitVisibility) return modelPickerSnapshot();
+  const values = [...new Set(
+    (Array.isArray(slugs) ? slugs : []).map((slug) => String(slug || "").trim()).filter(Boolean),
+  )];
+  const legacy = values.filter((value) => !hidden.has(value) && !seeded.has(value));
+  if (legacy.length === 0) return modelPickerSnapshot();
+  for (const value of legacy) {
+    visible.add(value);
+    // Recording the decision is the point: without it the opt-in default
+    // immediately below would still read these slugs as never-decided.
+    seeded.add(value);
+  }
+  return writePickerState({ hidden, visible, seeded });
 }
 
 // Applies a shipped default to models the operator has never decided, and only

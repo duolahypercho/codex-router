@@ -30,7 +30,12 @@ import {
   readMultiAgentSettings,
   subagentEligibleModels,
 } from "./multi-agent-state.mjs";
-import { modelPickerSnapshot, readHiddenModels, seedModelsHidden } from "./model-picker-state.mjs";
+import {
+  migrateLegacyVisibleModels,
+  modelPickerSnapshot,
+  readHiddenModels,
+  seedModelsHidden,
+} from "./model-picker-state.mjs";
 import { buildNativeAliasAssignments } from "./native-alias.mjs";
 import {
   NATIVE_CONTEXT_VARIANT_SLUGS,
@@ -866,10 +871,17 @@ function main() {
   // native-looking slots are router aliases and retain the existing behavior.
   // Only slugs with no recorded decision are touched, so no later rebuild can
   // undo an operator's choice.
-  seedModelsHidden([
-    ...NATIVE_CONTEXT_VARIANT_SLUGS,
-    ...(loginFree ? [] : selectedModels.map((model) => String(model.slug))),
-  ]);
+  const routedSeedSlugs = loginFree ? [] : selectedModels.map((model) => String(model.slug));
+  // First, though: an install that predates the allowlist recorded only what
+  // was switched off, so its routed models are absent from `seeded` and the
+  // opt-in default below would read "visible, never written down" as "never
+  // decided" and empty the picker on the first rebuild after an update
+  // (issue #338). This writes the old answer down once, for those slugs only,
+  // and is a no-op on a fresh install and on every later rebuild.  Native
+  // context variants are deliberately not offered to it: they have never been
+  // visible by default under either set of semantics.
+  migrateLegacyVisibleModels(routedSeedSlugs);
+  seedModelsHidden([...NATIVE_CONTEXT_VARIANT_SLUGS, ...routedSeedSlugs]);
   const hiddenModels = readHiddenModels();
   const pickerState = modelPickerSnapshot();
   const visibleModels = new Set(pickerState.visible);
