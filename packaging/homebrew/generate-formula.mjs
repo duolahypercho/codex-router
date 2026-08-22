@@ -303,6 +303,12 @@ ${exclusionComment}${resourceBlocks}
       end
     end
 
+    # bin/codex-router is the dispatcher written for exactly this case: a
+    # package manager puts one name on PATH, not a directory of them. Routing
+    # through "bin/model-router codex" instead stranded every command outside
+    # that script's fixed whitelist -- curate-models, discover-models,
+    # refresh-catalog, test-model, support-bundle, control -- and made a bare
+    # "codex-router" or "codex-router --help" print model-router's usage.
     (bin/"codex-router").write <<~SH
       #!/bin/sh
       source_root=$(CDPATH= cd -- "#{opt_libexec}" && pwd -P)
@@ -310,8 +316,24 @@ ${exclusionComment}${resourceBlocks}
       export CODEX_ROUTER_SOURCE_ROOT="$source_root"
       export CODEX_ROUTER_NODE_BIN="#{formula_opt_bin("node")}/node"
       export CODEX_ROUTER_PACKAGE_MANAGER=homebrew
-      exec "$source_root/bin/model-router" codex "$@"
+      exec "$source_root/bin/codex-router" "$@"
     SH
+
+    # bin/codex-router deliberately refuses "install": a packaged install has
+    # no writable checkout to rewrite, so it must never be a user-facing verb.
+    # post_install still legitimately needs the installer after brew upgrade,
+    # so it gets its own private entry point rather than a hole in the
+    # dispatcher.
+    (libexec/"packaged-install").write <<~SH
+      #!/bin/sh
+      source_root=$(CDPATH= cd -- "#{opt_libexec}" && pwd -P)
+      export PATH="#{formula_opt_bin("node")}:$PATH"
+      export CODEX_ROUTER_SOURCE_ROOT="$source_root"
+      export CODEX_ROUTER_NODE_BIN="#{formula_opt_bin("node")}/node"
+      export CODEX_ROUTER_PACKAGE_MANAGER=homebrew
+      exec "$source_root/bin/install" "$@"
+    SH
+    chmod 0755, libexec/"packaged-install"
   end
 
   def post_install
@@ -323,7 +345,7 @@ ${exclusionComment}${resourceBlocks}
     manifest = JSON.parse(manifest_path.read)
     return if manifest.dig("current", "packageManager") != "homebrew"
 
-    system bin/"codex-router", "install"
+    system libexec/"packaged-install"
   rescue JSON::ParserError
     opoo "Existing Codex Router install manifest is invalid; run \`codex-router setup\`."
   end
@@ -332,6 +354,10 @@ ${exclusionComment}${resourceBlocks}
     <<~EOS
       Finish the one-time Codex integration with:
         codex-router setup --guided
+
+      List every available command, including \`codex-router curate-models\`
+      for adding a custom provider's models, with:
+        codex-router help
 
       Before \`brew uninstall codex-router\`, remove the per-user service and
       managed Codex config with:

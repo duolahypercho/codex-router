@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **Homebrew installs can reach every command again.** The formula's PATH shim
+  exec'd `bin/model-router codex`, whose fixed whitelist has no entry for
+  `curate-models`, `discover-models`, `refresh-catalog`, `test-model`,
+  `support-bundle`, or `control` -- so a packaged user had no way to add a
+  custom provider's models, and a bare `codex-router` or `codex-router --help`
+  printed `model-router`'s usage instead of the packaged command list. The shim
+  now dispatches through `bin/codex-router`, which exists for exactly this
+  case. `post_install` gets its own private entry point, because
+  `bin/codex-router` refuses `install` by design. Reported in #334.
+
 - **Grok 4.6 can select Codex's native image viewer.** xAI stopped without a
   function call when the tool was named `view_image`, even when selection was
   required. The Grok OAuth boundary now presents that tool as `inspect_image`

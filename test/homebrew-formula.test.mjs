@@ -156,7 +156,18 @@ test("the generated formula owns upgrades and preserves one-time setup", () => {
   assert.match(formula, /install_plan = libexec\/"src\/install-plan\.mjs"/);
   assert.match(formula, /if install_plan\.exist\?/);
   assert.match(formula, /install_plan, "record", "node-deps"/);
-  assert.match(formula, /exec "\$source_root\/bin\/model-router" codex "\$@"/);
+  // #334: the PATH shim used to exec `bin/model-router codex`, whose fixed
+  // whitelist stranded curate-models, discover-models, refresh-catalog,
+  // test-model, support-bundle and control, and made a bare `codex-router`
+  // print the wrong usage. It must go through the packaged dispatcher.
+  assert.match(formula, /exec "\$source_root\/bin\/codex-router" "\$@"/);
+  assert.doesNotMatch(formula, /bin\/model-router" codex/);
+  // bin/codex-router refuses `install` on purpose, so post_install must not
+  // reach the installer through the dispatcher -- that pairing would break
+  // every `brew upgrade` the moment the shim was repointed.
+  assert.match(formula, /system libexec\/"packaged-install"/);
+  assert.doesNotMatch(formula, /system bin\/"codex-router", "install"/);
+  assert.match(formula, /exec "\$source_root\/bin\/install" "\$@"/);
   assert.match(formula, /manifest\.dig\("current", "packageManager"\) != "homebrew"/);
   assert.match(formula, /codex-router setup --guided/);
   assert.match(formula, /codex-router uninstall/);

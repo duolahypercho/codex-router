@@ -72,6 +72,33 @@ Upgrade an existing Homebrew installation with:
 brew upgrade codex-router
 ```
 
+#### Homebrew command equivalents
+
+A Homebrew install puts a single `codex-router` command on your PATH instead
+of this repository's `bin/` directory. Wherever the rest of this README shows
+`./bin/model-router codex <command>` or `./bin/<command>`, run:
+
+```sh
+codex-router <command>
+```
+
+List everything the packaged build exposes with:
+
+```sh
+codex-router help
+```
+
+To add a custom provider's models — the packaged equivalent of
+`./bin/curate-models <provider>` — run:
+
+```sh
+codex-router curate-models <provider>
+```
+
+`codex-router install` is deliberately unavailable: a Homebrew install has no
+writable checkout to rewrite, and `brew upgrade codex-router` performs that
+step itself.
+
 Before removing the formula, remove the per-user service and managed Codex
 configuration that Homebrew does not own:
 
