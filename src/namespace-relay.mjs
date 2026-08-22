@@ -3,7 +3,7 @@ import { StringDecoder } from "node:string_decoder";
 
 import { HeaderlessSseDetector } from "./sse-prefix.mjs";
 import { coerceFunctionCallArguments } from "./tool-arguments.mjs";
-import { providerToolSchema } from "./tool-schema-root.mjs";
+import { nonRecursiveToolSchema, providerToolSchema } from "./tool-schema-root.mjs";
 import {
   buildInterruptAgentCall,
   filterAlreadyInterrupted,
@@ -43,8 +43,10 @@ export const NAMESPACE_DELIMITER = "__";
 // letting the response path validate model-generated overrides.
 const SPAWN_AGENT_MODELS = new WeakMap();
 const TOOL_SEARCH_RELAYS = new WeakMap();
+const CUSTOM_TOOL_RELAYS = new WeakMap();
 
 const TOOL_SEARCH_FUNCTION_NAME = "tool_search";
+const CUSTOM_TOOL_INPUT_PROPERTY = "input";
 
 function providerFunctionName(tool) {
   return tool?.name ?? tool?.function?.name;
@@ -55,6 +57,7 @@ function providerVisibleToolNames(tools) {
   if (!Array.isArray(tools)) return names;
   for (const tool of tools) {
     if (tool?.type === "namespace" && Array.isArray(tool.tools)) {
+      if (typeof tool.name === "string" && tool.name) names.add(tool.name);
       for (const fn of tool.tools) {
         if (fn?.name) names.add(`${tool.name}${NAMESPACE_DELIMITER}${fn.name}`);
       }
@@ -64,6 +67,165 @@ function providerVisibleToolNames(tools) {
     if (typeof name === "string" && name) names.add(name);
   }
   return names;
+}
+
+function availableCustomToolName(nativeName, visibleNames) {
+  if (!visibleNames.has(nativeName)) return nativeName;
+  const stem = `codex_custom_${nativeName}`;
+  if (!visibleNames.has(stem)) return stem;
+  let suffix = 1;
+  while (visibleNames.has(`${stem}_${suffix}`)) suffix += 1;
+  return `${stem}_${suffix}`;
+}
+
+// A custom tool's `format` is the model's only specification of the freeform
+// payload it must emit: Codex ships apply_patch's V4A dialect as a lark
+// grammar and describes the format nowhere else. A function tool has no
+// grammar slot, so dropping `format.definition` on the way through would hand
+// the model a bare "raw input" string and leave any model that has not
+// memorised V4A emitting patches Codex cannot parse. Carry the definition in
+// the bridged description instead -- that is the one field every
+// function-tool provider does put in front of the model.
+export function bridgedCustomToolDescription(tool) {
+  const sections = [];
+  if (typeof tool?.description === "string" && tool.description.trim()) {
+    sections.push(tool.description.trim());
+  }
+  const format = tool?.format;
+  const definition = typeof format?.definition === "string" ? format.definition.trim() : "";
+  if (definition) {
+    const syntax = typeof format?.syntax === "string" && format.syntax.trim()
+      ? format.syntax.trim()
+      : "grammar";
+    sections.push(
+      `The \`${CUSTOM_TOOL_INPUT_PROPERTY}\` string is freeform text, not JSON, and must parse ` +
+        `against this ${syntax} grammar:\n\n${definition}`,
+    );
+  }
+  return sections.length ? sections.join("\n\n") : undefined;
+}
+
+// OpenCode accepts ordinary JSON-schema function tools but rejects OpenAI's
+// freeform `type: "custom"` definition. Codex exposes apply_patch only in that
+// native form. Present the same raw-patch contract as one required string
+// property, translate matching history and a forced native custom choice, and
+// retain a request-local reverse map so the response path can restore the exact
+// custom-tool shape Codex executes. An unrelated function or native namespace
+// with the same name receives a collision-safe alias and is otherwise untouched.
+export function bridgeCustomTools(
+  tools,
+  input,
+  namespaces,
+  toolChoice,
+  names = ["apply_patch"],
+) {
+  if (!(namespaces instanceof Map)) {
+    return { tools, input, toolChoice, bridged: false };
+  }
+  const requested = new Set(names);
+  const nativeNames = [];
+  const remember = (name) => {
+    if (requested.has(name) && !nativeNames.includes(name)) nativeNames.push(name);
+  };
+  if (Array.isArray(tools)) {
+    for (const tool of tools) if (tool?.type === "custom") remember(tool.name);
+  }
+  if (Array.isArray(input)) {
+    for (const item of input) if (item?.type === "custom_tool_call") remember(item.name);
+  }
+  if (toolChoice?.type === "custom") remember(toolChoice.name);
+  if (!nativeNames.length) return { tools, input, toolChoice, bridged: false };
+
+  const ordinaryTools = Array.isArray(tools)
+    ? tools.filter((tool) => !(tool?.type === "custom" && requested.has(tool.name)))
+    : tools;
+  const visibleNames = providerVisibleToolNames(ordinaryTools);
+  const nativeToProvider = new Map();
+  const providerToNative = new Map();
+  for (const nativeName of nativeNames) {
+    const providerName = availableCustomToolName(nativeName, visibleNames);
+    visibleNames.add(providerName);
+    nativeToProvider.set(nativeName, providerName);
+    providerToNative.set(providerName, nativeName);
+  }
+  CUSTOM_TOOL_RELAYS.set(namespaces, providerToNative);
+
+  let changedTools = false;
+  const routedTools = Array.isArray(tools)
+    ? tools.map((tool) => {
+        const providerName =
+          tool?.type === "custom" ? nativeToProvider.get(tool.name) : undefined;
+        if (!providerName) return tool;
+        changedTools = true;
+        const description = bridgedCustomToolDescription(tool);
+        return {
+          type: "function",
+          name: providerName,
+          ...(description ? { description } : {}),
+          parameters: {
+            type: "object",
+            properties: {
+              [CUSTOM_TOOL_INPUT_PROPERTY]: {
+                type: "string",
+                description: "The complete raw freeform input for this tool, preserved verbatim.",
+              },
+            },
+            required: [CUSTOM_TOOL_INPUT_PROPERTY],
+            additionalProperties: false,
+          },
+        };
+      })
+    : tools;
+
+  const providerChoiceName =
+    toolChoice?.type === "custom" ? nativeToProvider.get(toolChoice.name) : undefined;
+  const routedToolChoice = providerChoiceName
+    ? { ...toolChoice, type: "function", name: providerChoiceName }
+    : toolChoice;
+  const changedToolChoice = routedToolChoice !== toolChoice;
+
+  if (!Array.isArray(input)) {
+    return {
+      tools: routedTools,
+      input,
+      toolChoice: routedToolChoice,
+      bridged: changedTools || changedToolChoice,
+    };
+  }
+  const bridgedCallIds = new Set();
+  let changedInput = false;
+  const routedInput = input.map((item) => {
+    const providerName =
+      item?.type === "custom_tool_call" ? nativeToProvider.get(item.name) : undefined;
+    if (providerName && typeof item.input === "string") {
+      const { type: _type, input: customInput, name: _name, ...rest } = item;
+      if (typeof item.call_id === "string" && item.call_id) {
+        bridgedCallIds.add(item.call_id);
+      }
+      changedInput = true;
+      return {
+        ...rest,
+        type: "function_call",
+        name: providerName,
+        arguments: JSON.stringify({ [CUSTOM_TOOL_INPUT_PROPERTY]: customInput }),
+      };
+    }
+    if (
+      item?.type === "custom_tool_call_output" &&
+      typeof item.call_id === "string" &&
+      bridgedCallIds.has(item.call_id)
+    ) {
+      changedInput = true;
+      return { ...item, type: "function_call_output" };
+    }
+    return item;
+  });
+  return {
+    tools: routedTools,
+    input: changedInput ? routedInput : input,
+    toolChoice: routedToolChoice,
+    bridged: changedTools || changedInput || changedToolChoice,
+  };
 }
 
 function availableToolSearchName(tools) {
@@ -144,29 +306,121 @@ const MAX_JSON_CAPTURE_BYTES = 64 * 1024 * 1024;
 // tool arrived inside a namespace. `providerToolSchema` returns anything it
 // does not recognize by identity, so an ordinary root costs one call and no
 // copy.
-export function repairToolSchemaRoot(tool) {
-  const parameters = tool?.function?.parameters ?? tool?.parameters;
-  if (parameters === undefined) return tool;
-  const repaired = providerToolSchema(parameters);
-  if (repaired === parameters) return tool;
-  return tool.function
-    ? { ...tool, function: { ...tool.function, parameters: repaired } }
-    : { ...tool, parameters: repaired };
+export function repairToolSchemaRoot(tool, { nonRecursive = false } = {}) {
+  // Preserve the established shared-provider behavior byte-for-byte. Native
+  // namespace traversal and inputSchema rewriting belong only to the OpenCode
+  // compatibility pass below; other providers keep the original root repair.
+  if (!nonRecursive) {
+    const parameters = tool?.function?.parameters ?? tool?.parameters;
+    if (parameters === undefined) return tool;
+    const repaired = providerToolSchema(parameters);
+    if (repaired === parameters) return tool;
+    return tool.function
+      ? { ...tool, function: { ...tool.function, parameters: repaired } }
+      : { ...tool, parameters: repaired };
+  }
+
+  if (tool?.type === "namespace" && Array.isArray(tool.tools)) {
+    let changed = false;
+    const children = tool.tools.map((child) => {
+      const repaired = repairToolSchemaRoot(child, { nonRecursive });
+      if (repaired !== child) changed = true;
+      return repaired;
+    });
+    return changed ? { ...tool, tools: children } : tool;
+  }
+
+  let repairedTool = tool;
+  let changed = false;
+  const repair = (schema) => nonRecursiveToolSchema(providerToolSchema(schema));
+
+  if (tool?.function?.parameters !== undefined) {
+    const parameters = repair(tool.function.parameters);
+    if (parameters !== tool.function.parameters) {
+      repairedTool = {
+        ...repairedTool,
+        function: { ...repairedTool.function, parameters },
+      };
+      changed = true;
+    }
+  }
+  // Flattened namespace children deliberately carry both inputSchema (the
+  // client-native declaration) and parameters (the Chat Completions alias).
+  // Repair both: choosing inputSchema first would leave the provider-facing
+  // parameters recursive on Ox even though the Responses branch was fixed.
+  for (const field of ["parameters", "inputSchema"]) {
+    if (tool?.[field] === undefined) continue;
+    const schema = repair(tool[field]);
+    if (schema === tool[field]) continue;
+    repairedTool = { ...repairedTool, [field]: schema };
+    changed = true;
+  }
+  return changed ? repairedTool : tool;
 }
 
 // Array form for callers that relay tools without flattening them --
 // Responses-native providers keep the namespace shape but still need a root
 // their upstream accepts. Returns the original array when nothing needed
 // repair, so the common request is not copied.
-export function repairToolSchemaRoots(tools) {
+export function repairToolSchemaRoots(tools, options) {
   if (!Array.isArray(tools)) return tools;
   let changed = false;
   const repaired = tools.map((tool) => {
-    const next = repairToolSchemaRoot(tool);
+    const next = repairToolSchemaRoot(tool, options);
     if (next !== tool) changed = true;
     return next;
   });
   return changed ? repaired : tools;
+}
+
+// OpenCode currently accepts search_content_types only on the legacy
+// web_search_preview shape. Codex sends the field on web_search, so remove only
+// that unsupported extension and preserve every other search-tool option.
+export function stripSearchContentTypes(tools) {
+  if (!Array.isArray(tools)) return tools;
+  let changed = false;
+  const stripped = tools.map((tool) => {
+    if (tool?.type !== "web_search" || !("search_content_types" in tool)) return tool;
+    changed = true;
+    const { search_content_types: _unsupported, ...rest } = tool;
+    return rest;
+  });
+  return changed ? stripped : tools;
+}
+
+// agent_message is a Codex collaboration input item, not part of the public
+// Responses schema OpenCode implements. The readable handoff has already been
+// recovered before this boundary, so keep its content and present it as the
+// equivalent user message strict compatible endpoints accept.
+export function agentMessagesAsUserMessages(input) {
+  if (!Array.isArray(input)) return input;
+  let changed = false;
+  const converted = input.map((item) => {
+    if (item?.type !== "agent_message" || !Array.isArray(item.content)) return item;
+    changed = true;
+    return { type: "message", role: "user", content: item.content };
+  });
+  return changed ? converted : input;
+}
+
+// Codex can inherit an image with detail:"original" from the parent thread.
+// OpenCode rejects that OpenAI-only hint but accepts the same image as auto.
+// Preserve the image bytes and surrounding transcript; change only the hint.
+export function downgradeOriginalImageDetail(input) {
+  if (!Array.isArray(input)) return input;
+  let changed = false;
+  const converted = input.map((item) => {
+    if (!Array.isArray(item?.content)) return item;
+    let contentChanged = false;
+    const content = item.content.map((part) => {
+      if (part?.type !== "input_image" || part.detail !== "original") return part;
+      changed = true;
+      contentChanged = true;
+      return { ...part, detail: "auto" };
+    });
+    return contentChanged ? { ...item, content } : item;
+  });
+  return changed ? converted : input;
 }
 
 function flattenNamespaceChild(namespace, fn) {
@@ -518,6 +772,7 @@ export function buildNamespaceLookups(namespaces) {
     bareToNamespaces,
     spawnAgentModels: SPAWN_AGENT_MODELS.get(namespaces),
     toolSearch: TOOL_SEARCH_RELAYS.get(namespaces),
+    customTools: CUSTOM_TOOL_RELAYS.get(namespaces),
   };
 }
 
@@ -592,6 +847,47 @@ function rewriteToolSearchFunctionCallItem(item, lookups, allowPlaceholder) {
   };
 }
 
+function customToolInput(value, allowPlaceholder = false) {
+  if (allowPlaceholder && (value === undefined || value === "")) return "";
+  const argumentsText = coerceFunctionCallArguments(value);
+  if (typeof argumentsText !== "string") return undefined;
+  try {
+    const parsed = JSON.parse(argumentsText);
+    return typeof parsed?.[CUSTOM_TOOL_INPUT_PROPERTY] === "string"
+      ? parsed[CUSTOM_TOOL_INPUT_PROPERTY]
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function rewriteCustomToolFunctionCallItem(item, lookups, allowPlaceholder) {
+  if (
+    item?.type !== "function_call" ||
+    item.namespace !== undefined ||
+    !(lookups.customTools instanceof Map)
+  ) {
+    return undefined;
+  }
+  const nativeName = lookups.customTools.get(item.name);
+  if (!nativeName) return undefined;
+  const input = customToolInput(item.arguments, allowPlaceholder);
+  if (input === undefined) return undefined;
+  const {
+    type: _type,
+    name: _name,
+    arguments: _arguments,
+    encrypted_function_args: _encryptedFunctionArgs,
+    ...rest
+  } = item;
+  return {
+    ...rest,
+    type: "custom_tool_call",
+    name: nativeName,
+    ...(allowPlaceholder && input === "" ? {} : { input }),
+  };
+}
+
 function rewriteNamespaceFunctionCallItem(
   item,
   lookups,
@@ -599,6 +895,12 @@ function rewriteNamespaceFunctionCallItem(
   { allowIncompleteToolSearch = false } = {},
 ) {
   if (!item || item.type !== "function_call") return undefined;
+  const customTool = rewriteCustomToolFunctionCallItem(
+    item,
+    lookups,
+    allowIncompleteToolSearch,
+  );
+  if (customTool) return customTool;
   const toolSearch = rewriteToolSearchFunctionCallItem(
     item,
     lookups,
@@ -712,6 +1014,90 @@ function appendInterruptCallsToOutput(output, pending, interrupted) {
   return { output: base, injected: still.length, remaining: still };
 }
 
+const CUSTOM_TOOL_OPENING_LIMIT = 1024;
+const JSON_ESCAPES = Object.freeze({
+  '"': '"',
+  "\\": "\\",
+  "/": "/",
+  b: "\b",
+  f: "\f",
+  n: "\n",
+  r: "\r",
+  t: "\t",
+});
+
+// Decode one new function-argument fragment into the native custom-tool input.
+// The wrapper prefix is bounded and every encoded patch character is visited
+// once. Only an incomplete escape (at most six characters) is retained between
+// calls, avoiding the quadratic full-patch rescans that large streamed patches
+// would otherwise trigger.
+function customToolInputDelta(state, fragment) {
+  if (typeof fragment !== "string" || state.invalid || state.closed) return undefined;
+  let encoded = fragment;
+  if (!state.opened) {
+    state.opening += encoded;
+    const opening = state.opening.match(/^\s*\{\s*"input"\s*:\s*"/);
+    if (!opening) {
+      if (state.opening.length > CUSTOM_TOOL_OPENING_LIMIT) {
+        state.opening = "";
+        state.invalid = true;
+      }
+      return undefined;
+    }
+    state.opened = true;
+    encoded = state.opening.slice(opening[0].length);
+    state.opening = "";
+  }
+
+  if (state.escape) {
+    encoded = state.escape + encoded;
+    state.escape = "";
+  }
+  const decoded = [];
+  for (let index = 0; index < encoded.length; index += 1) {
+    const character = encoded[index];
+    if (character === '"') {
+      state.closed = true;
+      break;
+    }
+    if (character !== "\\") {
+      if (character.charCodeAt(0) < 0x20) {
+        state.invalid = true;
+        break;
+      }
+      decoded.push(character);
+      continue;
+    }
+
+    const escape = encoded[index + 1];
+    if (escape === undefined) {
+      state.escape = "\\";
+      break;
+    }
+    if (escape === "u") {
+      const digits = encoded.slice(index + 2, index + 6);
+      if (!/^[0-9a-fA-F]*$/.test(digits)) {
+        state.invalid = true;
+        break;
+      }
+      if (digits.length < 4) {
+        state.escape = encoded.slice(index);
+        break;
+      }
+      decoded.push(String.fromCharCode(Number.parseInt(digits, 16)));
+      index += 5;
+      continue;
+    }
+    if (!(escape in JSON_ESCAPES)) {
+      state.invalid = true;
+      break;
+    }
+    decoded.push(JSON_ESCAPES[escape]);
+    index += 1;
+  }
+  return decoded.length ? decoded.join("") : undefined;
+}
+
 // Rewrites LiteLLM's flattened `<namespace>__<tool>` function calls back to
 // the namespace + name shape Codex dispatches through its app runtime.
 export class NamespaceToolCallTransform extends Transform {
@@ -731,6 +1117,8 @@ export class NamespaceToolCallTransform extends Transform {
   #injectQueue = [];
   #injectionsDone = false;
   #lastInjectedCalls = [];
+  #customItemIds = new Set();
+  #customDeltaStates = new Map();
 
   constructor(namespaces, contentType = "", sessionModel, options = {}) {
     super();
@@ -874,12 +1262,72 @@ export class NamespaceToolCallTransform extends Transform {
     }
     try {
       let event = JSON.parse(dataText);
+      const originalEventType = event?.type;
+      if (
+        !this.#injectOnly &&
+        event?.type === "response.function_call_arguments.delta" &&
+        this.#customItemIds.has(event.item_id)
+      ) {
+        const state = this.#customDeltaStates.get(event.item_id);
+        const delta = state ? customToolInputDelta(state, event.delta) : undefined;
+        if (delta === undefined) return [];
+        event = {
+          ...event,
+          type: "response.custom_tool_call_input.delta",
+          delta,
+        };
+      }
+      if (
+        !this.#injectOnly &&
+        event?.type === "response.function_call_arguments.done" &&
+        this.#customItemIds.has(event.item_id)
+      ) {
+        const input = customToolInput(event.arguments);
+        if (input !== undefined) {
+          const { arguments: _arguments, ...rest } = event;
+          event = {
+            ...rest,
+            type: "response.custom_tool_call_input.done",
+            input,
+          };
+        }
+      }
       if (!this.#injectOnly) {
         const next = rewriteNamespaceResponsePayload(event, this.#lookups, this.#sessionModel);
         if (next) event = next;
       }
+      if (
+        event?.type === "response.output_item.added" &&
+        event.item?.type === "custom_tool_call" &&
+        typeof event.item.id === "string"
+      ) {
+        this.#customItemIds.add(event.item.id);
+        this.#customDeltaStates.set(event.item.id, {
+          opening: "",
+          opened: false,
+          escape: "",
+          closed: false,
+          invalid: false,
+        });
+      }
+      if (
+        event?.type === "response.output_item.done" &&
+        event.item?.type === "custom_tool_call" &&
+        typeof event.item.id === "string"
+      ) {
+        this.#customItemIds.delete(event.item.id);
+        this.#customDeltaStates.delete(event.item.id);
+      }
       this.#observeEvent(event);
       const rebuilt = [...lines];
+      const eventLineIndex = rebuilt.findIndex((line) => line.startsWith("event:"));
+      if (
+        eventLineIndex !== -1 &&
+        typeof event?.type === "string" &&
+        event.type !== originalEventType
+      ) {
+        rebuilt[eventLineIndex] = `event: ${event.type}`;
+      }
       rebuilt[dataLineIndex] = `data: ${JSON.stringify(event)}`;
       // Inject finished-child interrupts before the response closes so Codex
       // still executes them as ordinary tool calls in this turn.

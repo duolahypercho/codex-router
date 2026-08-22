@@ -5,10 +5,194 @@ import { CODEX_APP_TOOLS } from "../src/codex-app-tools.mjs";
 import { toResponsesRequest } from "../src/grok-oauth-forwarder.mjs";
 import {
   hasObjectRoot,
+  nonRecursiveToolSchema,
   normalizeSchemaLiterals,
   objectRootToolSchema,
   providerToolSchema,
 } from "../src/tool-schema-root.mjs";
+
+test("recursive local refs keep definitions and only the cycle edge becomes permissive", () => {
+  const schema = {
+    type: "object",
+    properties: { node: { $ref: "#/$defs/node" } },
+    $defs: {
+      node: {
+        type: "object",
+        properties: {
+          label: { type: "string" },
+          child: { $ref: "#/$defs/node", description: "optional child" },
+        },
+      },
+    },
+  };
+  const repaired = nonRecursiveToolSchema(schema);
+  assert.notEqual(repaired, schema);
+  assert.equal(repaired.properties.node.$ref, "#/$defs/node");
+  assert.equal(repaired.$defs.node.type, "object");
+  assert.equal(repaired.$defs.node.properties.label.type, "string");
+  assert.deepEqual(repaired.$defs.node.properties.child, {
+    description: "optional child",
+  });
+});
+
+test("mutually recursive refs retain their shared definitions and break one back edge", () => {
+  const schema = {
+    type: "object",
+    properties: { first: { $ref: "#/$defs/a" } },
+    $defs: {
+      a: {
+        type: "object",
+        properties: { name: { type: "string" }, next: { $ref: "#/$defs/b" } },
+      },
+      b: {
+        type: "object",
+        properties: { count: { type: "integer" }, previous: { $ref: "#/$defs/a" } },
+      },
+    },
+  };
+  const repaired = nonRecursiveToolSchema(schema);
+  assert.equal(repaired.properties.first.$ref, "#/$defs/a");
+  assert.equal(repaired.$defs.a.properties.next.$ref, "#/$defs/b");
+  assert.deepEqual(repaired.$defs.b.properties.previous, {});
+});
+
+test("local ref pointers repair root and array cycles without resolving anchors", () => {
+  const root = nonRecursiveToolSchema({
+    properties: { self: { $ref: "#", description: "recursive root" } },
+  });
+  assert.deepEqual(root.properties.self, { description: "recursive root" });
+
+  const array = nonRecursiveToolSchema({
+    anyOf: [
+      {
+        properties: {
+          self: { $ref: "#/anyOf/0" },
+          anchor: { $ref: "#node" },
+        },
+      },
+    ],
+  });
+  assert.deepEqual(array.anyOf[0].properties.self, {});
+  assert.equal(array.anyOf[0].properties.anchor.$ref, "#node");
+});
+
+test("shared ref DAGs stay bounded when another definition is recursive", () => {
+  const $defs = {
+    d0: { type: "string" },
+  };
+  for (let depth = 1; depth <= 18; depth += 1) {
+    $defs[`d${depth}`] = {
+      anyOf: [
+        { $ref: `#/$defs/d${depth - 1}` },
+        { $ref: `#/$defs/d${depth - 1}` },
+      ],
+    };
+  }
+  $defs.recursive = {
+    type: "object",
+    properties: { child: { $ref: "#/$defs/recursive" } },
+  };
+  const schema = {
+    type: "object",
+    properties: {
+      dag: { $ref: "#/$defs/d18" },
+      recursive: { $ref: "#/$defs/recursive" },
+    },
+    $defs,
+  };
+  const sourceBytes = Buffer.byteLength(JSON.stringify(schema));
+  const repaired = nonRecursiveToolSchema(schema);
+  const repairedBytes = Buffer.byteLength(JSON.stringify(repaired));
+
+  assert.equal(repaired.properties.dag.$ref, "#/$defs/d18");
+  assert.equal(repaired.$defs.d18.anyOf[0].$ref, "#/$defs/d17");
+  assert.deepEqual(repaired.$defs.recursive.properties.child, {});
+  assert.ok(
+    repairedBytes < sourceBytes * 2,
+    `shared DAG expanded from ${sourceBytes} to ${repairedBytes} bytes`,
+  );
+});
+
+test("cycle repair preserves boolean and unresolved local refs", () => {
+  const schema = {
+    type: "object",
+    properties: {
+      allowed: { $ref: "#/$defs/allowed" },
+      unknown: { $ref: "#/$defs/missing" },
+      recursive: { $ref: "#/$defs/recursive" },
+    },
+    $defs: {
+      allowed: true,
+      recursive: {
+        type: "object",
+        properties: { next: { $ref: "#/$defs/recursive" } },
+      },
+    },
+  };
+  const repaired = nonRecursiveToolSchema(schema);
+  assert.equal(repaired.$defs.allowed, true);
+  assert.equal(repaired.properties.allowed.$ref, "#/$defs/allowed");
+  assert.equal(repaired.properties.unknown.$ref, "#/$defs/missing");
+  assert.deepEqual(repaired.$defs.recursive.properties.next, {});
+});
+
+// The recursive implementation overflowed at depth 2,000 on the supported
+// Node 22 runtime. Use 4,000 so this regression remains effective on runtimes
+// whose JavaScript stack happens to be larger.
+test("a 4,000-level recursive schema is repaired", () => {
+  const depth = 4_000;
+  let node = {
+    properties: { cycle: { $ref: "#/$defs/node" } },
+  };
+  for (let index = 0; index < depth; index += 1) {
+    node = { properties: { next: node } };
+  }
+  const repaired = nonRecursiveToolSchema({ $defs: { node } });
+  let cursor = repaired.$defs.node;
+  for (let index = 0; index < depth; index += 1) {
+    cursor = cursor.properties.next;
+  }
+  assert.deepEqual(cursor.properties.cycle, {});
+});
+
+test("cycle repair never interprets refs inside literal JSON Schema payloads", () => {
+  const literalPayloads = {
+    const: {
+      $ref: "#/$defs/recursive",
+      nested: { $ref: "#/properties/payload" },
+    },
+    default: { $ref: "#/$defs/recursive" },
+    examples: [{ $ref: "#/$defs/recursive" }],
+    enum: [{ $ref: "#/$defs/recursive" }, { ordinary: true }],
+  };
+  const schema = {
+    type: "object",
+    properties: {
+      payload: { type: "object", ...literalPayloads },
+      recursive: { $ref: "#/$defs/recursive" },
+    },
+    $defs: {
+      recursive: {
+        type: "object",
+        properties: { next: { $ref: "#/$defs/recursive" } },
+      },
+    },
+  };
+  const before = JSON.stringify(literalPayloads);
+
+  const repaired = nonRecursiveToolSchema(schema);
+  const payload = repaired.properties.payload;
+  assert.equal(
+    JSON.stringify({
+      const: payload.const,
+      default: payload.default,
+      examples: payload.examples,
+      enum: payload.enum,
+    }),
+    before,
+  );
+  assert.deepEqual(repaired.$defs.recursive.properties.next, {});
+});
 
 test("object-rooted schemas are returned untouched", () => {
   const schema = { type: "object", properties: { path: { type: "string" } }, required: ["path"] };

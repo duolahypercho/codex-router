@@ -399,7 +399,18 @@ in code to its official endpoint.
 
 Both are catalog-only and deliberately ship no checked-in model metadata: the
 provider's live `/models` response is filtered to the free subset and then added
-locally with `./bin/curate-models`.
+locally with `./bin/curate-models`. OpenCode Free curation routes
+`muse-spark-1.2-contributor-free` through its internal Responses sibling while
+keeping Ox Alpha Free (`x-preview-f-free`) and the other free IDs on Chat
+Completions; the provider remains one selection in setup and the picker. An
+existing Chat-routed copy of that one Muse model is migrated only when the
+operator explicitly runs `curate-models`; install, update, and catalog reads do
+not rewrite the user model or picker state. Zen's `/models` response publishes
+no context limits, so those two IDs are sized from OpenCode's own published
+per-free-ID metadata instead of the conservative 131K fallback, and each stored
+entry's `description` records where its window came from. Every other free ID
+keeps the conservative default, and any window is editable in
+`user-models.json`.
 
 ```sh
 ./bin/model-router codex providers enable opencode-free

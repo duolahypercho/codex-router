@@ -19,7 +19,7 @@ export const USER_MODELS_PATH =
 // number is a guess, and a guess eight times too small compacts a session that
 // had the room (#266).
 export const DEFAULT_CONTEXT_WINDOW = 131072;
-const DEFAULT_AUTO_COMPACT = 110000;
+export const DEFAULT_AUTO_COMPACT = 110000;
 
 // Curation may adjust presentation, sizing, and effort metadata only;
 // identity and routing fields always come from the provider id and the
@@ -81,6 +81,14 @@ export function userModelIdentity({ providerId, upstreamId, metadata }) {
   };
 }
 
+// The picker text a curated entry carries until someone gives it a better
+// one. Exported so curation can tell "nobody has written a description here"
+// apart from a description the user edited, the same way the untouched
+// DEFAULT_CONTEXT_WINDOW/DEFAULT_AUTO_COMPACT pair marks untuned sizing.
+export function defaultUserModelDescription(providerId) {
+  return `User-curated ${providerId} model; conservative default metadata that can be edited in the user model file.`;
+}
+
 export function userModelEntry({ providerId, upstreamId, requestProfile, priority, metadata }) {
   const identity = userModelIdentity({ providerId, upstreamId, metadata });
   const entry = {
@@ -89,7 +97,7 @@ export function userModelEntry({ providerId, upstreamId, requestProfile, priorit
     provider: providerId,
     listed: true,
     displayName: officialModelDisplayName(providerId, upstreamId) || `${upstreamId} (curated)`,
-    description: `User-curated ${providerId} model; conservative default metadata that can be edited in the user model file.`,
+    description: defaultUserModelDescription(providerId),
     priority,
     defaultEffort: "high",
     reasoningLevels: [{ effort: "high", description: "Adaptive reasoning" }],
