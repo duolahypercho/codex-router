@@ -489,6 +489,41 @@ test("bounds evidence, keeps UTF-8 valid, and redacts obvious credentials", () =
   assert.ok(Buffer.byteLength(JSON.stringify(checkpoint.recent_tail), "utf8") <= 32 * 1024);
 });
 
+test("redacts managed caller URLs and known GitHub token prefixes", () => {
+  const callerCapability = ["caller", "capability", "fixture", "value"].join("-");
+  const fineGrainedToken = [["github", "pat"].join("_"), "fixture", "credential", "value"].join("_");
+  const classicToken = `${["gh", "p"].join("")}_${"a".repeat(24)}`;
+  const callerUrl = `http://127.0.0.1:4202/_codex-router/${callerCapability}/v1/responses`;
+  const prepared = prepareCompaction([
+    message(
+      "user",
+      [
+        "Keep this non-secret route context.",
+        "https://github.com/example/repository",
+        callerUrl,
+        fineGrainedToken,
+        classicToken,
+      ].join("\n"),
+    ),
+  ]);
+  const checkpoint = finalizeCheckpoint(
+    modelSummary({
+      requirement_refs: ["U001"],
+      attempt_refs: [],
+      observation_refs: [],
+    }),
+    prepared,
+  );
+  const rendered = renderCheckpoint(checkpoint);
+
+  assert.match(rendered, /Keep this non-secret route context\./u);
+  assert.match(rendered, /https:\/\/github\.com\/example\/repository/u);
+  assert.match(rendered, /\/_codex-router\/\[REDACTED\]\/v1\/responses/u);
+  assert.ok(!rendered.includes(callerCapability));
+  assert.ok(!rendered.includes(fineGrainedToken));
+  assert.ok(!rendered.includes(classicToken));
+});
+
 test("reserves the latest two user messages when the last two turns exceed 32 KiB", () => {
   const input = [message("user", "first retained turn")];
   for (let index = 0; index < 40; index += 1) {

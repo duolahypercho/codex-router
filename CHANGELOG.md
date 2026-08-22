@@ -33,8 +33,10 @@
   and every post-boundary item. Failed or evidence-free bridge generation keeps
   the original history. A bounded 24-hour in-memory cache (64 entries, 8 MiB)
   deduplicates identical and concurrent bridge work without retaining the
-  native ciphertext or full transcript. Native OpenAI requests still forward
-  their encrypted compaction bytes unchanged.
+  native ciphertext or full transcript. Checkpoint excerpts reuse the managed
+  caller-URL redactor and remove recognized GitHub token prefixes before they
+  reach either the source catalog or serialized checkpoint. Native OpenAI
+  requests still forward their encrypted compaction bytes unchanged.
 
 - **Grok 4.6 can select Codex's native image viewer.** xAI stopped without a
   function call when the tool was named `view_image`, even when selection was

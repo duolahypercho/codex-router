@@ -212,6 +212,11 @@ execution started or completed, and `R` entries preserve the tool's returned
 status and a bounded, redacted excerpt. Assistant-authored `A` entries and every
 free-form model conclusion remain unverified navigation.
 
+Excerpt redaction reuses the router's managed caller-URL sanitizer and removes
+obvious named credentials and recognized token prefixes before either the
+source catalog or checkpoint is serialized. This is a narrow secret-safety
+control, not a general PII or arbitrary-string data-loss-prevention system.
+
 `kcr2` is Base64-encoded JSON, not encryption or a tamper-evident signature. Its
 trust boundary prevents model-authored summaries from becoming evidence; it does
 not defend against a client that deliberately rewrites request history. It

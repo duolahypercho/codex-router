@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 
+import { redactCallerUrl } from "./caller-auth.mjs";
+
 export const KCR1_PREFIX = "kcr1:";
 export const KCR2_PREFIX = "kcr2:";
 
@@ -106,7 +108,7 @@ function messageText(item) {
 }
 
 function redactSecrets(value) {
-  return String(value)
+  return redactCallerUrl(String(value))
     .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/giu, "Bearer [REDACTED]")
     .replace(/\bBasic\s+[A-Za-z0-9._~+/=-]+/giu, "Basic [REDACTED]")
     .replace(
@@ -122,7 +124,9 @@ function redactSecrets(value) {
       "$1[REDACTED]",
     )
     .replace(/([?&](?:api[_-]?key|token|secret)=)[^&\s]+/giu, "$1[REDACTED]")
-    .replace(/\bsk-[A-Za-z0-9_-]{8,}\b/gu, "[REDACTED]");
+    .replace(/\bsk-[A-Za-z0-9_-]{8,}\b/gu, "[REDACTED]")
+    .replace(/\bgithub_pat_[A-Za-z0-9_]{8,}\b/gu, "[REDACTED]")
+    .replace(/\bgh[pousr]_[A-Za-z0-9]{20,}\b/gu, "[REDACTED]");
 }
 
 function safeUtf8Prefix(buffer, limit) {
