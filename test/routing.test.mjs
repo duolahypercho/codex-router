@@ -3353,6 +3353,7 @@ test("API forwarder routes MiniMax M3 streaming tool calls with adaptive thinkin
     assert.equal(request.body.stream, true);
     assert.equal(request.body.reasoning_effort, undefined);
     assert.deepEqual(request.body.thinking, { type: "adaptive" });
+    assert.equal(request.body.reasoning_split, true);
     assert.equal(request.body.tools[0].function.name, "get_weather");
     assert.deepEqual(request.body.tools[0].function.parameters.required, ["city"]);
   } finally {

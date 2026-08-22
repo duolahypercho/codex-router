@@ -34,6 +34,7 @@ import {
 } from "./http-utils.mjs";
 import { EmptyCompletionGuard } from "./empty-completion-guard.mjs";
 import { zaiResponsesCompatTransform } from "./zai-responses-compat.mjs";
+import { minimaxResponsesCompatTransform } from "./minimax-responses-compat.mjs";
 import {
   MERGED_CATALOG_PATH,
   NATIVE_CATALOG_PATH,
@@ -2750,6 +2751,10 @@ async function handleResponses(request, response, requestUrl) {
         ? zaiResponsesCompatTransform(route.provider, contentType)
         : undefined;
       if (zaiCompat) transforms.push(zaiCompat);
+      const minimaxCompat = route
+        ? minimaxResponsesCompatTransform(route, contentType)
+        : undefined;
+      if (minimaxCompat) transforms.push(minimaxCompat);
       // Restore flattened namespace calls for routed chat-completions providers,
       // and inject missing finished-child interrupts for both routed and native
       // multi-agent parents (San Francisco uses native GPT).

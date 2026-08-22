@@ -788,9 +788,13 @@ function normalizeBody(buffer, contentType, route) {
     }
   } else if (model.requestProfile === "minimax-m3") {
     // MiniMax uses its own thinking control on the OpenAI-compatible
-    // Chat Completions endpoint instead of reasoning_effort.
+    // Chat Completions endpoint instead of reasoning_effort. Without
+    // reasoning_split, MiniMax embeds the chain of thought in `content` as
+    // literal <think>...</think> markup, which makes it visible as ordinary
+    // assistant text in clients that do not recognize the vendor format.
     delete payload.reasoning_effort;
     payload.thinking = { type: "adaptive" };
+    payload.reasoning_split = true;
   } else if (model.requestProfile === "auto-tool-choice") {
     // Some models call tools happily under "auto" but reject being forced to,
     // the way DeepSeek and Qwen do in thinking mode. Their vendor profiles
