@@ -108,6 +108,22 @@ test("a credential is set beside the user's other keys and removed cleanly", () 
   assert.equal(removeCredential(after, "CODEX_ROUTER_CALLER_KEY"), before);
 });
 
+test("a current harness refs envelope is updated without touching its wrapper", () => {
+  const before = [
+    "version: 1",
+    "refs:",
+    "  OTHER_KEY: existing",
+    "",
+  ].join("\n");
+  const after = applyCredential(before, "CODEX_ROUTER_CALLER_KEY", "secret-value");
+  assert.match(after, /^version: 1\nrefs:\n  OTHER_KEY: existing\n  CODEX_ROUTER_CALLER_KEY: "secret-value"\n/m);
+  assert.equal(
+    applyCredential(after, "CODEX_ROUTER_CALLER_KEY", "secret-value"),
+    after,
+  );
+  assert.equal(removeCredential(after, "CODEX_ROUTER_CALLER_KEY"), before);
+});
+
 test("rotating a credential replaces the value in place", () => {
   const first = applyCredential("", "CODEX_ROUTER_CALLER_KEY", "one");
   const second = applyCredential(first, "CODEX_ROUTER_CALLER_KEY", "two");

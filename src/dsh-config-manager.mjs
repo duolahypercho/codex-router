@@ -87,6 +87,12 @@ function normalizeTrailing(lines) {
   return copy;
 }
 
+function credentialPath(document, reference) {
+  return document.root.children.has("refs")
+    ? ["refs", reference]
+    : [reference];
+}
+
 /**
  * Splices the router's route into the settings document text.
  *
@@ -140,31 +146,42 @@ export function removeRouteFromSettings(contents) {
 /**
  * Sets one credential reference in the harness's credentials document.
  *
- * The document is a flat mapping of reference to value and nothing else, so a
- * nested or sequence root is somebody else's file under the harness's name and
- * is refused rather than replaced.
+ * Current DeepSeek Harness credentials use a small envelope (`version` and
+ * `refs`) around the reference map. Older harness builds used the map at the
+ * document root. Support both known schemas while refusing unrelated nested
+ * documents rather than replacing somebody else's file.
  */
 export function applyCredential(contents, reference, value) {
   const document = scanYamlDocument(contents);
+  const refs = document.root.children.get("refs");
+  const nestedRefs = Boolean(refs);
+  if (refs?.inline) {
+    throw new Error(
+      'Refusing to edit the harness credentials document: "refs" is written as an inline value.',
+    );
+  }
   for (const node of document.root.children.values()) {
     // A multi-line value is legal here (the harness round-trips those), a
     // nested mapping is not: that is a different document wearing this file's
     // name, and rewriting it would be a guess.
-    if (node.children.size) {
+    if (node.children.size && node.key !== "refs") {
       throw new Error(
         `Refusing to edit the harness credentials document: "${node.key}" holds a nested mapping, ` +
           "so this file is not a flat credential reference document.",
       );
     }
   }
-  const rendered = [`${reference}: ${yamlScalar(value)}`];
-  return joinLines(normalizeTrailing(spliceYamlBlock(document, [reference], rendered)));
+  const path = credentialPath(document, reference);
+  const indent = nestedRefs ? " ".repeat(refs.indent + 2) : "";
+  const rendered = [`${indent}${reference}: ${yamlScalar(value)}`];
+  return joinLines(normalizeTrailing(spliceYamlBlock(document, path, rendered)));
 }
 
 /** Removes one credential reference, leaving every other entry in place. */
 export function removeCredential(contents, reference) {
   const document = scanYamlDocument(contents);
-  const node = yamlNode(document, [reference]);
+  const path = credentialPath(document, reference);
+  const node = yamlNode(document, path);
   if (!node) return joinLines(normalizeTrailing(document.lines));
   const lines = [...document.lines];
   lines.splice(node.index, node.endIndex - node.index + 1);
@@ -397,7 +414,8 @@ export function status() {
   const credentials = readDocument(DSH_CREDENTIALS_PATH);
   let credentialPresent = false;
   try {
-    credentialPresent = Boolean(yamlNode(scanYamlDocument(credentials), [DSH_CREDENTIAL_REF]));
+    const document = scanYamlDocument(credentials);
+    credentialPresent = Boolean(yamlNode(document, credentialPath(document, DSH_CREDENTIAL_REF)));
   } catch {
     credentialPresent = false;
   }
