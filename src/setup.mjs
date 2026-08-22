@@ -6,6 +6,7 @@ import path from "node:path";
 import { detectLegacyInstallations, applyKnownMigrations, rollbackLatestMigration } from "./legacy-migration.mjs";
 import { grokOAuthStatus } from "./grok-oauth-status.mjs";
 import { PROVIDERS, providerNeedsNoKey } from "./model-registry.mjs";
+import { ensureNodeDependencies } from "./node-dependency-install.mjs";
 import { kimiOAuthStatus } from "./oauth-status.mjs";
 import { SOURCE_ROOT, TARGET } from "./paths.mjs";
 import { credentialStatus } from "./provider-credentials.mjs";
@@ -291,6 +292,7 @@ function configureProvider(provider) {
     if (!confirm(`Enter ${prompt} securely now?`)) {
       throw incomplete(`${provider.displayName} setup was cancelled.`);
     }
+    ensureNodeDependencies();
     run(process.execPath, [path.join(SOURCE_ROOT, "src", "provider-key.mjs"), provider.id, "set"]);
   }
 }
