@@ -13,6 +13,7 @@ const {
   readHiddenModels,
   setAllModelsVisible,
   setModelVisible,
+  setModelSelection,
   setModelsVisible,
 } = await import("../src/model-picker-state.mjs");
 
@@ -56,6 +57,32 @@ test("provider-sized picker changes preserve other providers", () => {
   assert.deepEqual(modelPickerSnapshot().hidden, ["kimi-oauth/k3"]);
   assert.ok(modelPickerSnapshot().visible.includes("commandcode/kimi-k3"));
   assert.ok(modelPickerSnapshot().visible.includes("commandcode-messages/claude-opus-4.8"));
+});
+
+test("an explicit model selection changes only the supplied provider models", () => {
+  writeFileSync(
+    MODEL_PICKER_STATE_PATH,
+    `${JSON.stringify({
+      version: 1,
+      hidden: ["deepseek/deepseek-v4-pro", "kimi-oauth/k3"],
+      visible: ["deepseek/deepseek-v4-flash"],
+      seeded: [
+        "deepseek/deepseek-v4-flash",
+        "deepseek/deepseek-v4-pro",
+        "kimi-oauth/k3",
+      ],
+    })}\n`,
+    { mode: 0o600 },
+  );
+
+  setModelSelection(
+    ["deepseek/deepseek-v4-flash", "deepseek/deepseek-v4-pro"],
+    ["deepseek/deepseek-v4-pro"],
+  );
+
+  const picker = modelPickerSnapshot();
+  assert.deepEqual(picker.hidden, ["deepseek/deepseek-v4-flash", "kimi-oauth/k3"]);
+  assert.deepEqual(picker.visible, ["deepseek/deepseek-v4-pro"]);
 });
 
 test("legacy hidden-only state becomes an allowlist when a picker decision is made", () => {

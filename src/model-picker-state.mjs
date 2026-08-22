@@ -147,6 +147,32 @@ export function setAllModelsVisible(slugs, visible) {
   });
 }
 
+// Applies one explicit picker selection to the supplied models while leaving
+// every other provider's visibility untouched.
+export function setModelSelection(slugs, selectedSlugs) {
+  const values = [...new Set(
+    (Array.isArray(slugs) ? slugs : []).map((slug) => String(slug || "").trim()).filter(Boolean),
+  )];
+  if (values.length === 0) return modelPickerSnapshot();
+  const selected = new Set(
+    (Array.isArray(selectedSlugs) ? selectedSlugs : [])
+      .map((slug) => String(slug || "").trim())
+      .filter(Boolean),
+  );
+  const { hidden, visible, seeded } = readPickerState();
+  for (const value of values) {
+    if (selected.has(value)) {
+      hidden.delete(value);
+      visible.add(value);
+    } else {
+      hidden.add(value);
+      visible.delete(value);
+    }
+    seeded.add(value);
+  }
+  return writePickerState({ hidden, visible, seeded });
+}
+
 // Applies a shipped default to models the operator has never decided, and only
 // to those. Used by the catalog build for entries that must arrive switched off
 // (`src/native-context-variants.mjs`): they cost more per turn than the model
