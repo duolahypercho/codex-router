@@ -58,6 +58,20 @@ die() {
   exit 1
 }
 
+# The single restore path for a step that runs after the pull. Every such step
+# can leave the checkout on code the machine cannot run -- `npm ci` empties
+# node_modules before it refills it -- so failing one has to return the managed
+# checkout to the revision the service was last known to work on, exactly as a
+# failed setup does. Steps that run before the pull have nothing to restore and
+# keep using die() directly.
+restore_previous_revision() {
+  if [ -n "$previous_revision" ]; then
+    git -C "$repo_dir" switch --detach "$previous_revision" >/dev/null 2>&1 || true
+    die "$1; the managed source checkout was restored to $previous_revision"
+  fi
+  die "$1"
+}
+
 # Mirrors DIRTY_PREVIEW_LIMIT in src/update.mjs and $DirtyPreviewLimit in
 # install.ps1. test/installer-scripts.test.mjs compares all three, so they
 # cannot drift apart.
@@ -274,6 +288,14 @@ command -v node >/dev/null 2>&1 ||
 command -v npm >/dev/null 2>&1 ||
   die "npm is required and is normally included with Node.js"
 
+# The key prompt imports modules from node_modules, which a fresh clone does
+# not have yet: bin/install installs them, and it runs later. Doing it here is
+# what makes the prompt work at all, and the failure has to reach the restore
+# path rather than abort under `set -e`.
+if [ -n "$configure_provider_keys" ]; then
+  node "$repo_dir/src/node-dependency-install.mjs" ||
+    restore_previous_revision "installing Node dependencies failed"
+fi
 for provider_id in $configure_provider_keys; do
   "$repo_dir/bin/provider-key" "$provider_id" set
 done
@@ -309,11 +331,7 @@ if [ "$setup_status" -eq 2 ]; then
   printf 'setup did not finish configuring; the update was kept. Re-run setup to continue, or ./bin/rollback to return to the previous revision.\n' >&2
   exit 2
 elif [ "$setup_status" -ne 0 ]; then
-  if [ -n "$previous_revision" ]; then
-    git -C "$repo_dir" switch --detach "$previous_revision" >/dev/null 2>&1 || true
-    die "setup failed; the managed source checkout was restored to $previous_revision"
-  fi
-  die "setup failed"
+  restore_previous_revision "setup failed"
 fi
 
 cat <<'EOF'

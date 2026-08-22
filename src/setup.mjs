@@ -6,6 +6,7 @@ import path from "node:path";
 import { detectLegacyInstallations, applyKnownMigrations, rollbackLatestMigration } from "./legacy-migration.mjs";
 import { grokOAuthStatus } from "./grok-oauth-status.mjs";
 import { PROVIDERS, providerNeedsNoKey } from "./model-registry.mjs";
+import { ensureNodeDependencies, isNodeDependencyFailure } from "./node-dependency-install.mjs";
 import { kimiOAuthStatus } from "./oauth-status.mjs";
 import { SOURCE_ROOT, TARGET } from "./paths.mjs";
 import { credentialStatus } from "./provider-credentials.mjs";
@@ -291,6 +292,7 @@ function configureProvider(provider) {
     if (!confirm(`Enter ${prompt} securely now?`)) {
       throw incomplete(`${provider.displayName} setup was cancelled.`);
     }
+    ensureNodeDependencies();
     run(process.execPath, [path.join(SOURCE_ROOT, "src", "provider-key.mjs"), provider.id, "set"]);
   }
 }
@@ -400,6 +402,12 @@ async function main() {
       configureProvider(provider);
     } catch (error) {
       if (!guided) throw error;
+      // The leniency above is about credential prompts. A dependency install
+      // that failed has emptied node_modules, so nothing later in this run
+      // works and no key the user could add afterwards would fix it; reporting
+      // it as "this provider still needs a credential" sends them after the
+      // wrong thing. Let it out so the installer restores the checkout.
+      if (isNodeDependencyFailure(error)) throw error;
       const reason = error instanceof Error ? error.message : String(error);
       pendingCredentials.push({ provider, reason });
       process.stderr.write(`\nWarning: ${provider.displayName} was not configured (${reason})\n`);
