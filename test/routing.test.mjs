@@ -6714,6 +6714,137 @@ test("a plain follow-up after a thinking turn replays its reasoning", async () =
   }
 });
 
+test("router drops LiteLLM's announced blank message from a tool-only response", async () => {
+  const blankMessage = {
+    id: "msg_blank",
+    type: "message",
+    status: "completed",
+    role: "assistant",
+    content: [{ type: "output_text", text: "", annotations: [] }],
+  };
+  const functionCall = {
+    id: "call_list",
+    type: "function_call",
+    call_id: "call_list",
+    name: "exec_command",
+    arguments: "{}",
+    status: "completed",
+  };
+  const gateway = await mockServer(async (request, response) => {
+    await bodyJson(request);
+    response.writeHead(200, { "Content-Type": "text/event-stream" });
+    const events = [
+      {
+        type: "response.output_item.added",
+        output_index: 0,
+        item: {
+          id: "msg_blank",
+          type: "message",
+          status: "in_progress",
+          role: "assistant",
+          content: [],
+        },
+      },
+      {
+        type: "response.content_part.added",
+        item_id: "msg_blank",
+        output_index: 0,
+        content_index: 0,
+        part: { type: "output_text", text: "", annotations: [] },
+      },
+      {
+        type: "response.output_item.added",
+        output_index: 1,
+        item: { ...functionCall, arguments: "", status: "in_progress" },
+      },
+      {
+        type: "response.function_call_arguments.done",
+        item_id: "call_list",
+        output_index: 1,
+        arguments: "{}",
+      },
+      { type: "response.output_item.done", output_index: 1, item: functionCall },
+      {
+        type: "response.output_text.done",
+        item_id: "msg_blank",
+        output_index: 0,
+        content_index: 0,
+        text: "",
+      },
+      {
+        type: "response.content_part.done",
+        item_id: "msg_blank",
+        output_index: 0,
+        content_index: 0,
+        part: {
+          type: "reasoning_text",
+          reasoning: "I should call the requested diagnostic tool.",
+        },
+      },
+      {
+        type: "response.output_item.done",
+        output_index: 0,
+        item: blankMessage,
+      },
+      {
+        type: "response.completed",
+        response: {
+          id: "resp_tool_only",
+          status: "completed",
+          output: [blankMessage, functionCall],
+          usage: { input_tokens: 5, output_tokens: 2, total_tokens: 7 },
+        },
+      },
+    ];
+    response.end(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""));
+  });
+  const routerPort = await openPort();
+  const router = run("router.mjs", {
+    CODEX_ROUTER_PORT: String(routerPort),
+    CODEX_ROUTER_GATEWAY_BASE_URL: `http://127.0.0.1:${gateway.port}/v1`,
+    CODEX_ROUTER_QUIET: "1",
+  });
+
+  try {
+    await waitFor(`${routerBase(routerPort)}/models`, router);
+    const response = await fetch(`${routerBase(routerPort)}/responses`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "deepseek/deepseek-v4-flash-vision-exp",
+        input: "list files",
+        stream: true,
+      }),
+    });
+    const text = await response.text();
+    assert.equal(response.status, 200, text);
+    const events = text.split(/\r?\n/)
+      .filter((line) => line.startsWith("data: {"))
+      .map((line) => JSON.parse(line.slice(5).trim()));
+
+    assert.ok(events.some((event) => event.item?.type === "function_call"));
+    assert.equal(
+      events.some((event) => event.item?.type === "message"),
+      false,
+      "blank message item reached the Codex client",
+    );
+    assert.equal(
+      events.some(
+        (event) =>
+          event.item_id === "msg_blank" &&
+          ["response.output_text.done", "response.content_part.done"].includes(event.type),
+      ),
+      false,
+      "blank message close events reached the Codex client",
+    );
+    const completed = events.find((event) => event.type === "response.completed");
+    assert.deepEqual(completed.response.output, [functionCall]);
+  } finally {
+    await stopChild(router);
+    await closeServer(gateway.server);
+  }
+});
+
 
 test("router repairs malformed Z.ai message envelopes after LiteLLM Responses translation", async () => {
   const testRoot = mkdtempSync(path.join(os.tmpdir(), "zai-responses-compat-router-"));

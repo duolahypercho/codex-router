@@ -45,6 +45,7 @@ import {
   writeStreamErrorEvent,
 } from "./http-utils.mjs";
 import { EmptyCompletionGuard } from "./empty-completion-guard.mjs";
+import { toolMessageCompatTransform } from "./tool-message-compat.mjs";
 import {
   ZaiResponsesCompatTransform,
   zaiResponsesCompatTransform,
@@ -2912,6 +2913,10 @@ async function handleResponses(request, response, requestUrl) {
             : undefined,
       });
       const transforms = [usageObserver];
+      const toolMessageCompat = route
+        ? toolMessageCompatTransform(contentType)
+        : undefined;
+      if (toolMessageCompat) transforms.push(toolMessageCompat);
       let envelopeCompat = route
         ? zaiResponsesCompatTransform(route.provider, contentType)
         : undefined;
