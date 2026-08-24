@@ -30,7 +30,7 @@ import { stripImages, supportsImageInput } from "./vision-bridge.mjs";
 import {
   credentialLabel,
   credentialStatus,
-  resolveProviderCredential,
+  resolveProviderCredentialReference,
 } from "./provider-credentials.mjs";
 import {
   ensureFreshGitHubCopilotSession,
@@ -45,6 +45,12 @@ import { relayCommandCodeGenerate } from "./commandcode-relay.mjs";
 import { VERSION } from "./version.mjs";
 import { installStableFetchTransport } from "./fetch-transport.mjs";
 import { zaiCacheUsageTransform } from "./zai-cache-usage.mjs";
+import { threadIdFromHeaders } from "./codex-session-names.mjs";
+import {
+  recordProviderApiKeyRequestOutcome,
+  resolveProviderApiKeyForRequest,
+} from "./provider-api-key-routing.mjs";
+import { runProviderApiKeyAttempts } from "./provider-api-key-pool.mjs";
 
 installStableFetchTransport();
 
@@ -1003,10 +1009,17 @@ async function handleRequest(request, response) {
   const normalized = normalizeBody(original, request.headers["content-type"], route);
   // Resolved against the endpoint, not the provider: a per-model endpoint keeps
   // its credential under its own slug, so two custom models on two hosts never
-  // share a key and one missing key never blocks the other model.
-  const credential = resolveProviderCredential(normalized.endpoint);
+  // share a key and one missing key never blocks the other model. A configured
+  // pool is authoritative; the routing helper deliberately refuses to fall
+  // back to the legacy single key when the pool has no usable entry.
+  const poolRouting = await resolveProviderApiKeyForRequest(normalized.endpoint, {
+    sessionId: threadIdFromHeaders(request.headers),
+  });
+  const credential = poolRouting.credential;
   if (!credential) {
-    const setup = credentialStatus(normalized.endpoint).setup;
+    const setup = poolRouting.pooled
+      ? "Add a usable credential reference to the provider API-key pool."
+      : credentialStatus(normalized.endpoint).setup;
     const credentialType = credentialLabel(normalized.endpoint);
     const label = credentialType === "API key" ? "key" : credentialType.toLowerCase();
     // Name whichever of the two the operator would go and configure. For a
@@ -1017,9 +1030,11 @@ async function handleRequest(request, response) {
       : normalized.provider.displayName;
     writeJson(response, 503, {
       error: {
-        type: credentialType === "API key"
-          ? "provider_api_key_missing"
-          : "provider_credential_missing",
+        type: poolRouting.pooled
+          ? "provider_api_key_pool_unavailable"
+          : credentialType === "API key"
+            ? "provider_api_key_missing"
+            : "provider_credential_missing",
         provider: normalized.provider.id,
         message: `${subject} ${label} is not configured. ${setup}.`,
       },
@@ -1057,6 +1072,12 @@ async function handleRequest(request, response) {
     // headers, so it reports limits and cooldowns exactly as the documented
     // one does. Skipping this would leave the router blind to an exhausted
     // plan on the very accounts this route exists to serve.
+    await recordProviderApiKeyRequestOutcome(poolRouting, normalized.endpoint, {
+      status: outcome.status,
+      ok: outcome.ok,
+      committed: true,
+      error: outcome.ok ? undefined : `upstream status ${outcome.status}`,
+    });
     recordUpstreamLimits(normalized, outcome);
     if (!QUIET) {
       console.error(
@@ -1075,30 +1096,107 @@ async function handleRequest(request, response) {
   const upstreamBody = normalized.provider.authProfile === "github-copilot"
     ? normalized.body.toString("utf8")
     : normalized.body;
-  let session = await upstreamSession(
-    normalized.provider,
-    credential,
-    normalized.payload,
-    {},
-    normalized.endpoint,
-  );
-  let target = `${session.baseUrl}${route}${requestUrl.search}`;
-  let upstream = await fetch(target, {
-    method: request.method,
-    headers: upstreamHeaders(
-      request.headers,
-      upstreamBody,
-      session.apiKey,
+  let session;
+  let target;
+  let upstream;
+  if (poolRouting.pooled) {
+    const pooled = await runProviderApiKeyAttempts(normalized.endpoint.id, {
+      filePath: undefined,
+      resolveSecret: (reference) =>
+        // The first selection already resolved this reference. The resolver
+        // is repeated only for a pre-commit failover candidate and remains
+        // constrained by the provider's registry-declared sources.
+        resolveProviderCredentialReference(normalized.endpoint, reference),
+      initialSelection: poolRouting.selection,
+      sessionId: threadIdFromHeaders(request.headers),
+      isResponseCommitted: () => response.headersSent || response.writableEnded || response.writableFinished,
+      send: async ({ apiKey }) => {
+        const attemptCredential = { ...credential, value: apiKey };
+        const attemptSession = await upstreamSession(
+          normalized.provider,
+          attemptCredential,
+          normalized.payload,
+          {},
+          normalized.endpoint,
+        );
+        const attemptTarget = `${attemptSession.baseUrl}${route}${requestUrl.search}`;
+        const attemptResponse = await fetch(attemptTarget, {
+          method: request.method,
+          headers: upstreamHeaders(
+            request.headers,
+            upstreamBody,
+            attemptSession.apiKey,
+            normalized.provider,
+            attemptSession.headers,
+            normalized.endpoint,
+          ),
+          body: upstreamBody,
+          signal: controller.signal,
+        });
+        if (!attemptResponse.ok) {
+          const bodyText = await attemptResponse.text().catch(() => "");
+          return {
+            status: attemptResponse.status,
+            ok: false,
+            committed: false,
+            bodyText,
+            headers: attemptResponse.headers,
+            session: attemptSession,
+            target: attemptTarget,
+          };
+        }
+        return {
+          status: attemptResponse.status,
+          ok: true,
+          committed: false,
+          response: attemptResponse,
+          session: attemptSession,
+          target: attemptTarget,
+        };
+      },
+    });
+    const result = pooled.result;
+    if (!result || (result.response === undefined && result.bodyText === undefined)) {
+      writeJson(response, 503, {
+        error: {
+          type: "provider_api_key_pool_unavailable",
+          message: "The provider API-key pool could not complete this request before response bytes were committed.",
+        },
+      });
+      return;
+    }
+    session = result.session;
+    target = result.target;
+    upstream = result.response || new Response(result.bodyText || "", {
+      status: result.status,
+      headers: result.headers,
+    });
+  } else {
+    session = await upstreamSession(
       normalized.provider,
-      session.headers,
+      credential,
+      normalized.payload,
+      {},
       normalized.endpoint,
-    ),
-    body: upstreamBody,
-    signal: controller.signal,
-  });
+    );
+    target = `${session.baseUrl}${route}${requestUrl.search}`;
+    upstream = await fetch(target, {
+      method: request.method,
+      headers: upstreamHeaders(
+        request.headers,
+        upstreamBody,
+        session.apiKey,
+        normalized.provider,
+        session.headers,
+        normalized.endpoint,
+      ),
+      body: upstreamBody,
+      signal: controller.signal,
+    });
+  }
   // Account routing can change with plan or policy. Re-resolve and replay once
   // before any response byte reaches the caller; every other status is relayed.
-  if (normalized.provider.authProfile === "github-copilot" && upstream.status === 401) {
+  if (!poolRouting.pooled && normalized.provider.authProfile === "github-copilot" && upstream.status === 401) {
     await upstream.body?.cancel().catch(() => undefined);
     session = await upstreamSession(
       normalized.provider,

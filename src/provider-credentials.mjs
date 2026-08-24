@@ -118,6 +118,84 @@ function keychainSecret(service, now) {
   return result;
 }
 
+const PROVIDER_REFERENCE_TYPES = Object.freeze([
+  "provider-file",
+  "keychain",
+  "environment",
+]);
+
+function providerReferenceText(value, field, max = 256) {
+  if (typeof value !== "string") {
+    throw new Error(`${field} must be a string.`);
+  }
+  const normalized = value.trim();
+  if (!normalized || normalized.length > max || /[\u0000-\u001f\u007f]/.test(normalized)) {
+    throw new Error(`${field} is invalid.`);
+  }
+  return normalized;
+}
+
+/**
+ * Resolve a pool reference only against sources declared by this provider.
+ *
+ * A pool stores descriptors, never values. The descriptor is intentionally
+ * constrained to the provider registry: callers cannot turn it into an
+ * arbitrary file, environment variable, or Keychain lookup. This function is
+ * the only boundary that turns one of those descriptors into an in-memory
+ * credential for a request.
+ */
+export function resolveProviderCredentialReference(providerOrId, reference, { persistent = true } = {}) {
+  const provider =
+    typeof providerOrId === "string" ? apiProvider(providerOrId) : providerOrId;
+  if (!provider?.credential || provider.authMode === "anonymous" || provider.authMode === "per-model") {
+    return undefined;
+  }
+  if (!reference || typeof reference !== "object" || Array.isArray(reference)) {
+    throw new Error("Credential reference must be an object.");
+  }
+  const type = providerReferenceText(reference.type, "credential reference type", 40);
+  if (!PROVIDER_REFERENCE_TYPES.includes(type)) {
+    throw new Error(`Unsupported credential reference type: ${type}`);
+  }
+  const referenceProvider = reference.providerId === undefined
+    ? provider.id
+    : providerReferenceText(reference.providerId, "credential reference provider", 100);
+  if (referenceProvider !== provider.id && referenceProvider !== provider.variantOf) {
+    throw new Error("Credential reference belongs to a different provider.");
+  }
+
+  if (type === "environment") {
+    const name = providerReferenceText(reference.name, "credential environment name", 100);
+    if (!provider.credential.environment.includes(name)) {
+      throw new Error(`Environment variable ${name} is not declared by ${provider.id}.`);
+    }
+    const value = process.env[name]?.trim();
+    return value ? resolvedCredential(provider, value, `environment (${name})`, false) : undefined;
+  }
+
+  if (type === "keychain") {
+    const service = providerReferenceText(reference.service, "credential Keychain service", 200);
+    if (!provider.credential.keychainServices?.includes(service)) {
+      throw new Error(`Keychain service ${service} is not declared by ${provider.id}.`);
+    }
+    if (process.platform !== "darwin" || TARGET !== "codex") return undefined;
+    const found = keychainSecret(service, Date.now());
+    return found ? resolvedCredential(provider, found.value, found.source, true) : undefined;
+  }
+
+  const name = providerReferenceText(reference.name, "credential file name", 200);
+  const allowed = [provider.credential.file, ...(provider.credential.legacyFiles || [])];
+  if (!allowed.includes(name)) {
+    throw new Error(`Credential file ${name} is not declared by ${provider.id}.`);
+  }
+  const candidate = credentialPaths(provider).find((entry) => path.basename(entry) === name);
+  if (!candidate || !existsSync(candidate)) return undefined;
+  const value = readFileSync(candidate, "utf8").trim();
+  if (!value) return undefined;
+  const credential = resolvedCredential(provider, value, `protected file (${candidate})`, persistent);
+  return credential;
+}
+
 function keyFromKeychain(provider) {
   if (process.platform !== "darwin" || TARGET !== "codex") return undefined;
   const now = Date.now();
