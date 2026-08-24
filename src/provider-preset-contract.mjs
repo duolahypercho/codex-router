@@ -57,6 +57,14 @@ function isPrivateHostname(hostname) {
     return true;
   }
   if (host === "::1" || host === "0:0:0:0:0:0:0:1") return true;
+  if (host.startsWith("::ffff:")) {
+    const mapped = host.slice("::ffff:".length).split(":");
+    if (mapped.length === 2 && mapped.every((part) => /^[0-9a-f]{1,4}$/.test(part))) {
+      const value = Number.parseInt(mapped[0], 16) * 0x10000 + Number.parseInt(mapped[1], 16);
+      const ipv4 = [24, 16, 8, 0].map((shift) => (value >>> shift) & 0xff).join(".");
+      return isPrivateHostname(ipv4);
+    }
+  }
   if (/^(?:fc|fd)[0-9a-f]{2}:/.test(host) || host.startsWith("fe80:")) return true;
   const parts = host.split(".");
   if (parts.length !== 4 || parts.some((part) => !/^\d+$/.test(part) || Number(part) > 255)) {
@@ -99,6 +107,7 @@ function validateBaseUrl(value, allowPrivate) {
     parsed.password ||
     parsed.search ||
     parsed.hash ||
+    parsed.pathname.includes("%") ||
     DOT_OR_ESCAPED_PATH.test(parsed.pathname)
   ) {
     fail("baseUrl must not contain credentials, query strings, fragments, or traversal paths.");
@@ -124,6 +133,7 @@ function validateDiscoveryPath(value) {
     path.includes("\\") ||
     path.includes("?") ||
     path.includes("#") ||
+    path.includes("%") ||
     DOT_OR_ESCAPED_PATH.test(path)
   ) {
     fail("discoveryPath must be a short absolute path without traversal or URL components.");
@@ -197,4 +207,3 @@ export function validateProviderPresetContract(input, { knownProviderIds = [] } 
     auth,
   });
 }
-

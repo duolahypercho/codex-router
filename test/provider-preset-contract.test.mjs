@@ -53,6 +53,10 @@ test("fails closed for unsafe endpoints and path patterns", () => {
     /allowPrivate=true/,
   );
   assert.throws(
+    () => validateProviderPresetContract({ ...publicPreset, baseUrl: "https://[::ffff:127.0.0.1]:8000/v1" }),
+    /allowPrivate=true/,
+  );
+  assert.throws(
     () => validateProviderPresetContract({ ...publicPreset, allowPrivate: true, baseUrl: "https://api.example.test/v1?key=secret" }),
     /credentials, query strings, fragments/,
   );
@@ -63,6 +67,10 @@ test("fails closed for unsafe endpoints and path patterns", () => {
   assert.throws(
     () => validateProviderPresetContract({ ...publicPreset, discoveryPath: "//evil.example/models" }),
     /absolute path/,
+  );
+  assert.throws(
+    () => validateProviderPresetContract({ ...publicPreset, discoveryPath: "/v1/%252e%252e/admin" }),
+    /traversal/,
   );
 });
 
@@ -93,4 +101,3 @@ test("rejects capability and runtime fields until a proven caller exists", () =>
     /already used by the registry/,
   );
 });
-
