@@ -7,7 +7,9 @@ import test, { after, before } from "node:test";
 
 import {
   antigravityCallbackTarget,
+  antigravityClientSecretEnvironment,
   antigravityUserAgent,
+  requireAntigravityClientSecret,
   validateAntigravityRedirectUri,
 } from "../src/antigravity-oauth-constants.mjs";
 import {
@@ -59,19 +61,64 @@ test("builds an authorization URL with PKCE and offline access", () => {
   assert.ok(url.searchParams.get("code_challenge"));
 });
 
-test("uses the current Antigravity CLI identity on every host platform", () => {
+test("uses the current Antigravity IDE identity on every host platform", () => {
   assert.equal(
     antigravityUserAgent("win32", "x64"),
-    "antigravity/cli/1.1.13 (aidev_client; os_type=windows; arch=amd64; cl=964361259; auth_method=consumer)",
+    "antigravity/ide/2.5.5 (os_type=windows; arch=amd64; aidev_client; auth_method=oauth)",
   );
   assert.equal(
     antigravityUserAgent("linux", "ia32"),
-    "antigravity/cli/1.1.13 (aidev_client; os_type=linux; arch=386; cl=964361259; auth_method=consumer)",
+    "antigravity/ide/2.5.5 (os_type=linux; arch=386; aidev_client; auth_method=oauth)",
   );
   assert.equal(
     antigravityUserAgent("darwin", "arm64"),
-    "antigravity/cli/1.1.13 (aidev_client; os_type=darwin; arch=arm64; cl=964361259; auth_method=consumer)",
+    "antigravity/ide/2.5.5 (os_type=darwin; arch=arm64; aidev_client; auth_method=oauth)",
   );
+});
+
+test("client secret pairing rules match their documented semantics", () => {
+  const previousId = process.env.ANTIGRAVITY_CLIENT_ID;
+  const previousSecret = process.env.ANTIGRAVITY_CLIENT_SECRET;
+  try {
+    // A custom client id without its matching secret must not silently pair
+    // with the bundled secret: Google rejects that pair with invalid_client.
+    process.env.ANTIGRAVITY_CLIENT_ID = "custom-client-id.apps.googleusercontent.com";
+    delete process.env.ANTIGRAVITY_CLIENT_SECRET;
+    assert.throws(
+      () => requireAntigravityClientSecret(),
+      /ANTIGRAVITY_CLIENT_SECRET must also be set/,
+    );
+
+    // The custom pair is used verbatim.
+    process.env.ANTIGRAVITY_CLIENT_SECRET = "custom-secret";
+    assert.equal(requireAntigravityClientSecret(), "custom-secret");
+
+    // The environment allowlist keeps a custom id next to its secret so a
+    // background refresh submits the same pair the browser flow used.
+    const carried = antigravityClientSecretEnvironment(process.env);
+    assert.deepEqual(carried, {
+      ANTIGRAVITY_CLIENT_SECRET: "custom-secret",
+      ANTIGRAVITY_CLIENT_ID: "custom-client-id.apps.googleusercontent.com",
+    });
+
+    // An ANTIGRAVITY_DEFAULT_CLIENT_SECRET override (a rotated replacement for
+    // the built-in value) must survive into the allowlist even when no custom
+    // pair is set, so a service that boots with that override refreshes with
+    // the replacement instead of the source-bundled secret. (The value is a
+    // module-load constant inside any one process, which is why the allowlist
+    // keeps it: the child service samples it at startup.)
+    assert.deepEqual(
+      antigravityClientSecretEnvironment({
+        ANTIGRAVITY_DEFAULT_CLIENT_SECRET: "rotated-default",
+      }),
+      { ANTIGRAVITY_DEFAULT_CLIENT_SECRET: "rotated-default" },
+    );
+  } finally {
+    if (previousId === undefined) delete process.env.ANTIGRAVITY_CLIENT_ID;
+    else process.env.ANTIGRAVITY_CLIENT_ID = previousId;
+    if (previousSecret === undefined) delete process.env.ANTIGRAVITY_CLIENT_SECRET;
+    else process.env.ANTIGRAVITY_CLIENT_SECRET = previousSecret;
+  }
 });
 
 test("validates and derives the complete loopback callback target", () => {

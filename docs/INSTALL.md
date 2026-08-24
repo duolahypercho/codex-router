@@ -144,12 +144,14 @@ login command does not replace or disable any provider already selected.
 
 macOS/Linux:
 
-Set the integration client secret before installing/signing in. The generated
-service definition preserves it for token refreshes, and login fails before
-opening Google consent if it is absent.
+Login works out of the box: the router ships with the public installed-app
+OAuth client of the vendor's tooling, so no manual Google Cloud client is
+needed. To instead use your own Google OAuth client, set
+`ANTIGRAVITY_CLIENT_ID` and `ANTIGRAVITY_CLIENT_SECRET` before signing in; the
+generated service definition preserves them for token refreshes. The built-in
+client is used only when the variables are unset.
 
 ```sh
-export ANTIGRAVITY_CLIENT_SECRET='your-integration-client-secret'
 ./bin/model-router codex providers login antigravity-oauth
 ./bin/model-router codex providers enable antigravity-oauth
 ```
@@ -157,10 +159,48 @@ export ANTIGRAVITY_CLIENT_SECRET='your-integration-client-secret'
 Windows PowerShell:
 
 ```powershell
-$env:ANTIGRAVITY_CLIENT_SECRET = 'your-integration-client-secret'
 .\model-router.ps1 codex providers login antigravity-oauth
 .\model-router.ps1 codex providers enable antigravity-oauth
 ```
+
+To bring your own Google OAuth client (optional), create a "Desktop app"
+client in Google Cloud Console (loopback redirects are handled by the client
+type itself, so no Authorized redirect URI needs to be registered), then set
+both variables before login:
+
+```sh
+export ANTIGRAVITY_CLIENT_ID='<your client id>'
+export ANTIGRAVITY_CLIENT_SECRET='<your client secret>'
+./bin/model-router codex providers login antigravity-oauth
+```
+
+Windows PowerShell:
+
+```powershell
+$env:ANTIGRAVITY_CLIENT_ID = '<your client id>'
+$env:ANTIGRAVITY_CLIENT_SECRET = '<your client secret>'
+.\model-router.ps1 codex providers login antigravity-oauth
+```
+
+The generated background-service definition is only rewritten by the service
+install command, not by `login` — the login opens the browser and stores the
+token but leaves an already-installed service untouched. So a bring-your-own
+client also needs the service reinstalled **in the same environment** so token
+refreshes keep using your client:
+
+```sh
+ANTIGRAVITY_CLIENT_ID='<your client id>' ANTIGRAVITY_CLIENT_SECRET='<your client secret>' \
+  ./bin/model-router control service install
+```
+
+```powershell
+$env:ANTIGRAVITY_CLIENT_ID = '<your client id>'; $env:ANTIGRAVITY_CLIENT_SECRET = '<your client secret>'; .\model-router.ps1 control service install
+```
+
+Logging in without bringing your own client needs no reinstall: the built-in
+client is already the bundled default the service refreshes with. An unset
+secret with a custom client id is rejected at sign-in rather than silently
+paired with the bundled secret.
 
 The access and refresh tokens are stored in the router's owner-only state
 directory and can be removed from the desktop connection panel. This is an

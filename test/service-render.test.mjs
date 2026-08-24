@@ -137,6 +137,56 @@ test("background services preserve the Antigravity client secret", () => {
   }
 });
 
+test("background services keep a custom Antigravity client id with its secret", () => {
+  const testRoot = mkdtempSync(path.join(os.tmpdir(), "codex-router-antigravity-service-byoc-"));
+  const secret = "test-antigravity-client-secret";
+  const clientId = "custom-client-id.apps.googleusercontent.com";
+  try {
+    const env = { ANTIGRAVITY_CLIENT_SECRET: secret, ANTIGRAVITY_CLIENT_ID: clientId };
+    const launchd = serviceCommand(
+      "service-macos.mjs", "darwin", testRoot, "render", "codex", root, env,
+    );
+    assert.match(launchd, new RegExp(`<key>ANTIGRAVITY_CLIENT_ID</key>\\s*<string>${clientId}</string>`));
+    assert.match(launchd, new RegExp(`<key>ANTIGRAVITY_CLIENT_SECRET</key>\\s*<string>${secret}</string>`));
+
+    const systemd = serviceCommand(
+      "service-linux.mjs", "linux", testRoot, "render", "codex", root, env,
+    );
+    assert.match(systemd, new RegExp(`Environment="ANTIGRAVITY_CLIENT_ID=${clientId}"`));
+
+    const windows = serviceCommand(
+      "service-windows.mjs", "win32", testRoot, "render", "codex", root, env,
+    );
+    assert.match(windows, new RegExp(`set "ANTIGRAVITY_CLIENT_ID=${clientId}"`));
+  } finally {
+    rmSync(testRoot, { recursive: true, force: true });
+  }
+});
+
+test("background services preserve an ANTIGRAVITY_DEFAULT_CLIENT_SECRET override", () => {
+  const testRoot = mkdtempSync(path.join(os.tmpdir(), "codex-router-antigravity-service-override-"));
+  const defaultSecret = "rotated-default-secret";
+  try {
+    const env = { ANTIGRAVITY_DEFAULT_CLIENT_SECRET: defaultSecret };
+    const launchd = serviceCommand(
+      "service-macos.mjs", "darwin", testRoot, "render", "codex", root, env,
+    );
+    assert.match(launchd, new RegExp(`<key>ANTIGRAVITY_DEFAULT_CLIENT_SECRET</key>\\s*<string>${defaultSecret}</string>`));
+
+    const systemd = serviceCommand(
+      "service-linux.mjs", "linux", testRoot, "render", "codex", root, env,
+    );
+    assert.match(systemd, new RegExp(`Environment="ANTIGRAVITY_DEFAULT_CLIENT_SECRET=${defaultSecret}"`));
+
+    const windows = serviceCommand(
+      "service-windows.mjs", "win32", testRoot, "render", "codex", root, env,
+    );
+    assert.match(windows, new RegExp(`set "ANTIGRAVITY_DEFAULT_CLIENT_SECRET=${defaultSecret}"`));
+  } finally {
+    rmSync(testRoot, { recursive: true, force: true });
+  }
+});
+
 test("background services preserve the installer's proxy environment", () => {
   const testRoot = mkdtempSync(path.join(os.tmpdir(), "codex-router-service-proxy-"));
   const proxyEnvironment = {

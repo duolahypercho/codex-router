@@ -99,10 +99,12 @@ user.
    never read or copy the official Copilot CLI credential store. Command
    Command Code is API-key-only: invoke `bin/model-router codex provider-key
     commandcode set` in a PTY so the hidden prompt receives the value directly.
-   For Antigravity OAuth, require `ANTIGRAVITY_CLIENT_SECRET` in the installer
-   environment, disclose that sign-in may provision a Google Cloud project for
-   the account when none exists, then run `bin/model-router codex providers
-   login antigravity-oauth`; never ask the user to paste the secret into chat.
+   For Antigravity OAuth, the built-in public OAuth client is used by default;
+   an operator bringing their own Google OAuth client sets
+   `ANTIGRAVITY_CLIENT_ID` and `ANTIGRAVITY_CLIENT_SECRET` in the installer
+   environment. Either way, disclose that sign-in may provision a Google Cloud project for
+   the account when none exists, then run `bin/model-router codex providers login
+   antigravity-oauth`; never ask the user to paste the secret into chat.
    A key does not mean every account may use the Provider API: the Go plan is
    refused with "Your Go plan doesn't include API access". GOAT, Pro, Max, Team,
    and Provider plans do have API access and meter against their own credits.

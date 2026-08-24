@@ -60,7 +60,7 @@ test("loads project metadata from daily before production with current headers",
   assert.match(calls[0].url, /^https:\/\/daily-cloudcode-pa\.googleapis\.com/);
   assert.match(calls[1].url, /^https:\/\/cloudcode-pa\.googleapis\.com/);
   assert.deepEqual(calls[0].options.headers, {
-    "User-Agent": `antigravity/cli/1.1.13 (aidev_client; os_type=${process.platform === "win32" ? "windows" : process.platform}; arch=${process.arch === "x64" ? "amd64" : process.arch === "ia32" ? "386" : process.arch}; cl=964361259; auth_method=consumer)`,
+    "User-Agent": `antigravity/ide/2.5.5 (os_type=${process.platform === "win32" ? "windows" : process.platform}; arch=${process.arch === "x64" ? "amd64" : process.arch === "ia32" ? "386" : process.arch}; aidev_client; auth_method=oauth)`,
     Authorization: "Bearer access",
     "Content-Type": "application/json",
     "Accept-Encoding": "gzip",

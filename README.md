@@ -253,15 +253,17 @@ grok login --oauth
 Antigravity OAuth uses the router's own browser sign-in and the Google AI
 Pro/Ultra entitlement on the signed-in account. It needs neither a Gemini API
 key nor a separate Antigravity CLI. Signing in and enabling are separate so a
-re-authentication never replaces the rest of the provider selection:
+re-authentication never replaces the rest of the provider selection.
 
-Antigravity OAuth requires an integration client secret. Set
-`ANTIGRAVITY_CLIENT_SECRET` in the environment used for installation and
-sign-in; the generated background-service definition preserves it for token
-refreshes. The command fails before opening Google consent when it is absent.
+The router ships with the public installed-app OAuth client that the vendor's
+own tooling uses, so login works out of the box with no manually created
+Google Cloud client. To use your own Google OAuth client instead, set
+`ANTIGRAVITY_CLIENT_ID` and `ANTIGRAVITY_CLIENT_SECRET` in the environment
+used for installation and sign-in; the packaged background-service definition
+preserves them for token refreshes. The built-in client is used only when they
+are unset.
 
 ```sh
-export ANTIGRAVITY_CLIENT_SECRET='your-integration-client-secret'
 ./bin/model-router codex providers login antigravity-oauth
 ./bin/model-router codex providers enable antigravity-oauth
 ```
@@ -269,10 +271,24 @@ export ANTIGRAVITY_CLIENT_SECRET='your-integration-client-secret'
 On Windows PowerShell, use the matching wrapper:
 
 ```powershell
-$env:ANTIGRAVITY_CLIENT_SECRET = 'your-integration-client-secret'
 .\model-router.ps1 codex providers login antigravity-oauth
 .\model-router.ps1 codex providers enable antigravity-oauth
 ```
+
+To bring your own Google OAuth client (optional), create a "Desktop app"
+client in Google Cloud Console (loopback redirects are handled by the client
+type itself, so no Authorized redirect URI needs to be registered), then set
+both variables before login:
+
+```sh
+export ANTIGRAVITY_CLIENT_ID='<your client id>'
+export ANTIGRAVITY_CLIENT_SECRET='<your client secret>'
+./bin/model-router codex providers login antigravity-oauth
+```
+
+Both values are preserved in the packaged background-service definition so
+token refreshes keep using your client; an unset secret with a custom client id
+is rejected at sign-in rather than silently paired with the bundled secret.
 
 The credential stays in the router's owner-only state directory. This is an
 unofficial compatibility route over Google's internal Antigravity service,

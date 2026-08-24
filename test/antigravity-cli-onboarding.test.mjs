@@ -104,17 +104,37 @@ test("providers login enters browser OAuth without changing provider selection",
   }
 });
 
-test("providers login reports a missing client secret before opening consent", () => {
+test("providers login falls back to the bundled public client without an env secret", async () => {
   const testRoot = mkdtempSync(path.join(os.tmpdir(), "antigravity-cli-secret-"));
+  const occupied = net.createServer();
+  await new Promise((resolve, reject) => {
+    occupied.once("error", reject);
+    occupied.listen(0, "127.0.0.1", resolve);
+  });
+  const port = occupied.address().port;
   try {
+    // The env secret is deliberately left unset: the built-in public client
+    // secret must let the flow reach the callback-URL stage instead of
+    // aborting before consent. Occupying the callback port stops the child
+    // before it opens a browser or contacts Google.
+    //
+    // isolatedEnvironment() inherits the host shell's environment, and an
+    // ambient ANTIGRAVITY_CLIENT_SECRET would turn this into an ordinary
+    // override test, hiding a regression in the bundled fallback. Pin it to an
+    // empty string so the child always exercises the built-in default.
     const result = runNode(
       ["src/providers.mjs", "login", "antigravity-oauth"],
-      isolatedEnvironment(testRoot, { ANTIGRAVITY_CLIENT_SECRET: "" }),
+      isolatedEnvironment(testRoot, {
+        ANTIGRAVITY_REDIRECT_URI: `http://127.0.0.1:${port}/oauth-callback`,
+        ANTIGRAVITY_CLIENT_SECRET: "",
+      }),
     );
-    assert.equal(result.status, 1);
-    assert.equal(result.stdout, "");
-    assert.match(result.stderr, /ANTIGRAVITY_CLIENT_SECRET/);
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(result.stdout, /Open this URL to sign in to Antigravity/);
+    assert.doesNotMatch(result.stderr, /ANTIGRAVITY_CLIENT_SECRET is not set/);
+    assert.match(result.stderr, /EADDRINUSE|address already in use/i);
   } finally {
+    await new Promise((resolve) => occupied.close(resolve));
     rmSync(testRoot, { recursive: true, force: true });
   }
 });
