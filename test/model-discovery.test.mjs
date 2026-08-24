@@ -22,7 +22,7 @@ after(() => {
 
 const { MODELS, PROVIDERS } = await import("../src/model-registry.mjs");
 const { modelCatalogMetadata } = await import("../src/model-catalog-metadata.mjs");
-const { modelContextLengths, modelIds } = await import("../src/model-discovery.mjs");
+const { discoverProviderModels, modelContextLengths, modelIds } = await import("../src/model-discovery.mjs");
 
 test("model discovery compares fixtures without needing or exposing a key", () => {
   const testRoot = mkdtempSync(path.join(os.tmpdir(), "codex-router-discovery-"));
@@ -445,4 +445,23 @@ test("documented supplements do not invent MiniMax or OpenCode effort controls",
   );
   assert.deepEqual(opencode["x-preview-f-free"].reasoning.supportedEfforts, ["low", "high", "max"]);
   assert.equal(opencode["big-pickle"], undefined);
+});
+
+test("live discovery never rewrites native GPT catalog metadata", async () => {
+  const nativeModel = MODELS.find((model) => model.slug === "commandcode/gpt-5.6-sol");
+  assert.ok(nativeModel, "the checked-in GPT model is present");
+  const before = structuredClone(nativeModel);
+  const testRoot = mkdtempSync(path.join(os.tmpdir(), "codex-router-native-preservation-"));
+  const fixture = path.join(testRoot, "models.json");
+  writeFileSync(fixture, JSON.stringify({ data: [{ id: "gpt-5.6-sol", context_length: 8 }] }));
+  const previousArgv = process.argv.slice();
+  process.argv.push("--fixture", fixture);
+  try {
+    const result = await discoverProviderModels("commandcode", { cache: false });
+    assert.deepEqual(result.discovered, ["gpt-5.6-sol"]);
+    assert.deepEqual(MODELS.find((model) => model.slug === nativeModel.slug), before);
+  } finally {
+    process.argv.splice(0, process.argv.length, ...previousArgv);
+    rmSync(testRoot, { recursive: true, force: true });
+  }
 });

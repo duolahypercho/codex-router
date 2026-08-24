@@ -5,6 +5,7 @@ import path from "node:path";
 import { writePrivateJson } from "./file-security.mjs";
 import { INTERNAL_SECRET_PATH, PROVIDER_CATALOG_CACHE_PATH } from "./paths.mjs";
 import { withProviderCatalogLock } from "./provider-catalog-lock.mjs";
+import { normalizeModelMetadata } from "./model-capabilities.mjs";
 
 // Asking a provider what it serves is a network round trip against a live
 // credential, and the answer barely moves between releases. Re-asking it every
@@ -24,8 +25,12 @@ const CACHE_VERSION = 1;
 // re-ask in the background. Without this a provider that shipped a new model
 // would never surface it until somebody thought to press Reload.
 export const CATALOG_STALE_AFTER_MS = 24 * 60 * 60 * 1000;
-const MAX_FILE_BYTES = 8 * 1024 * 1024;
+export const PROVIDER_CATALOG_CACHE_MAX_BYTES = 8 * 1024 * 1024;
 const MAX_PROVIDERS = 80;
+// A provider can have several API keys/accounts. Keep those snapshots
+// isolated, but bound the number retained per provider so rotating keys cannot
+// grow the cache forever. The scope is an opaque caller-owned id, never a key.
+export const MAX_SCOPES_PER_PROVIDER = 16;
 const MAX_MODELS = 4000;
 const PROVIDER_ID = /^[a-z0-9][a-z0-9._-]{0,80}$/i;
 const IDENTITY_FINGERPRINT = /^[a-f0-9]{64}$/;
@@ -59,10 +64,19 @@ export function providerCatalogIdentityFingerprint(parts) {
   ).toString("hex");
 }
 
+const SCOPE_ID = /^[a-z0-9][a-z0-9._:-]{0,127}$/i;
+
+function normalizedScope(value) {
+  if (value === undefined || value === null || value === "") return undefined;
+  if (typeof value !== "string") return undefined;
+  const scope = value.trim();
+  return SCOPE_ID.test(scope) ? scope : undefined;
+}
+
 function readCacheDocument() {
   if (!existsSync(PROVIDER_CATALOG_CACHE_PATH)) return { version: CACHE_VERSION, providers: {} };
   try {
-    if (statSync(PROVIDER_CATALOG_CACHE_PATH).size > MAX_FILE_BYTES) {
+    if (statSync(PROVIDER_CATALOG_CACHE_PATH).size > PROVIDER_CATALOG_CACHE_MAX_BYTES) {
       return { version: CACHE_VERSION, providers: {} };
     }
     const parsed = JSON.parse(readFileSync(PROVIDER_CATALOG_CACHE_PATH, "utf8"));
@@ -179,6 +193,23 @@ function normalizedEntry(entry) {
   const known = new Set(discovered);
   const free = stringList(entry.free)?.filter((id) => known.has(id));
   const metadata = metadataMap(entry.metadata, known);
+  let modelMetadata;
+  if (entry.modelMetadata !== undefined) {
+    if (entry.modelMetadata && typeof entry.modelMetadata === "object" && !Array.isArray(entry.modelMetadata)) {
+      const valid = {};
+      for (const [id, value] of Object.entries(entry.modelMetadata)) {
+        if (!known.has(id)) continue;
+        try {
+          valid[id] = normalizeModelMetadata(value, { upstreamId: id });
+        } catch {
+          // A malformed optional record must not poison metadata for the other
+          // models in the same provider snapshot. The published id list is
+          // still a valid cache entry and is retained below.
+        }
+      }
+      if (Object.keys(valid).length) modelMetadata = valid;
+    }
+  }
   return {
     identityFingerprint,
     fetchedAt,
@@ -186,7 +217,61 @@ function normalizedEntry(entry) {
     ...(free?.length ? { free } : {}),
     ...(contextMap(entry.contextLengths, known) ? { contextLengths: contextMap(entry.contextLengths, known) } : {}),
     ...(metadata ? { metadata } : {}),
+    ...(modelMetadata ? { modelMetadata } : {}),
   };
+}
+
+function normalizedScopedEntries(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const entries = {};
+  for (const [scope, entry] of Object.entries(value)) {
+    const normalized = normalizedScope(scope);
+    const parsed = normalizedEntry(entry);
+    if (!normalized || !parsed) continue;
+    entries[normalized] = parsed;
+  }
+  return entries;
+}
+
+function providerRecordEntry(providerRecord, scope) {
+  const normalized = normalizedScope(scope);
+  if (normalized) return normalizedEntry(providerRecord?.scopes?.[normalized]);
+  return normalizedEntry(providerRecord);
+}
+
+function latestProviderTimestamp(providerRecord) {
+  const timestamps = [
+    providerRecord?.fetchedAt,
+    ...Object.values(providerRecord?.scopes || {}).map((entry) => entry?.fetchedAt),
+  ].filter(Boolean);
+  return timestamps.sort().at(-1) || "";
+}
+
+function serializedProviderDocument(providers) {
+  return JSON.stringify({ version: CACHE_VERSION, providers }, null, 2);
+}
+
+/**
+ * Keep the cache file below its read-side safety limit. Provider catalogs are
+ * untrusted input: a large model list or verbose capability metadata must not
+ * make the next process discard the entire cache. Entries are already ordered
+ * newest-first, so the newest complete provider snapshots win and older ones
+ * are evicted first. If one provider alone is too large, it is skipped rather
+ * than writing a document that cannot be read back.
+ */
+function boundedProviderDocument(ordered) {
+  const kept = {};
+  for (const [providerId, entry] of ordered) {
+    const candidate = { ...kept, [providerId]: entry };
+    // writePrivateJson appends one trailing newline, so include it in the
+    // safety check rather than letting an exact-boundary document become a
+    // read-side miss on the next process.
+    if (Buffer.byteLength(serializedProviderDocument(candidate), "utf8") + 1 > PROVIDER_CATALOG_CACHE_MAX_BYTES) {
+      continue;
+    }
+    kept[providerId] = entry;
+  }
+  return { version: CACHE_VERSION, providers: kept };
 }
 
 /**
@@ -201,9 +286,13 @@ export function catalogEntryIsStale(fetchedAt, now = Date.now()) {
 }
 
 /** The provider's last known published model list, or undefined on a miss. */
-export function readProviderCatalogCache(providerId) {
+export function readProviderCatalogCache(providerId, { scope } = {}) {
   if (!PROVIDER_ID.test(String(providerId || ""))) return undefined;
-  const entry = normalizedEntry(readCacheDocument().providers[providerId]);
+  const normalized = normalizedScope(scope);
+  // A malformed non-empty scope must never silently fall back to another
+  // account's catalog. Undefined is the only unscoped request.
+  if (scope !== undefined && scope !== null && scope !== "" && !normalized) return undefined;
+  const entry = providerRecordEntry(readCacheDocument().providers[providerId], normalized);
   // Age is derived from the timestamp on every read, never stored: a document
   // that carried its own staleness would be answering a question about a
   // moment that has already passed.
@@ -217,36 +306,54 @@ export function readProviderCatalogCache(providerId) {
  */
 function writeProviderCatalogCacheInTransaction(
   providerId,
-  { discovered, free, contextLengths, metadata, fetchedAt, identityFingerprint } = {},
+  { discovered, free, contextLengths, metadata, modelMetadata, fetchedAt, scope, identityFingerprint } = {},
 ) {
   if (!PROVIDER_ID.test(String(providerId || ""))) return undefined;
+  const normalized = normalizedScope(scope);
+  if (scope !== undefined && scope !== null && scope !== "" && !normalized) return undefined;
   const entry = normalizedEntry({
     discovered,
     free,
     contextLengths,
     metadata,
+    modelMetadata,
     fetchedAt: fetchedAt || new Date().toISOString(),
     identityFingerprint,
   });
   if (!entry) return undefined;
   const document = readCacheDocument();
-  const providers = { ...document.providers, [providerId]: entry };
+  const previous = document.providers[providerId];
+  const previousScopes = normalizedScopedEntries(previous?.scopes);
+  const providerRecord = normalized
+    ? {
+        ...(normalizedEntry(previous) || {}),
+        scopes: { ...previousScopes, [normalized]: entry },
+      }
+    : {
+        ...entry,
+        ...(Object.keys(previousScopes).length ? { scopes: previousScopes } : {}),
+      };
+  const scopes = providerRecord.scopes;
+  if (scopes) {
+    providerRecord.scopes = Object.fromEntries(
+      Object.entries(scopes)
+        .sort(([, left], [, right]) => String(right.fetchedAt).localeCompare(String(left.fetchedAt)))
+        .slice(0, MAX_SCOPES_PER_PROVIDER),
+    );
+  }
+  const providers = { ...document.providers, [providerId]: providerRecord };
   // Bound the document so a long-lived installation that has touched many
   // providers cannot grow it without limit. The oldest entries are the ones
   // whose provider has not been opened in the longest time.
   const ordered = Object.entries(providers)
-    .sort(([, left], [, right]) => String(right.fetchedAt).localeCompare(String(left.fetchedAt)))
+    .sort(([, left], [, right]) => latestProviderTimestamp(right).localeCompare(latestProviderTimestamp(left)))
     .slice(0, MAX_PROVIDERS);
-  writePrivateJson(
-    PROVIDER_CATALOG_CACHE_PATH,
-    { version: CACHE_VERSION, providers: Object.fromEntries(ordered) },
-    { directoryMode: 0o700 },
-  );
+  writePrivateJson(PROVIDER_CATALOG_CACHE_PATH, boundedProviderDocument(ordered), { directoryMode: 0o700 });
   return entry;
 }
 
 /** Drop several providers' cached lists with one protected document rewrite. */
-function forgetProviderCatalogCachesInTransaction(providerIds) {
+function forgetProviderCatalogCachesInTransaction(providerIds, { scope } = {}) {
   const ids = [...new Set(
     (Array.isArray(providerIds) ? providerIds : [])
       .map((providerId) => String(providerId || ""))
@@ -256,12 +363,31 @@ function forgetProviderCatalogCachesInTransaction(providerIds) {
   const document = readCacheDocument();
   let removed = 0;
   for (const providerId of ids) {
-    if (!(providerId in document.providers)) continue;
-    delete document.providers[providerId];
+    const existing = document.providers[providerId];
+    if (!existing) continue;
+    const normalized = normalizedScope(scope);
+    if (scope !== undefined && scope !== null && scope !== "" && !normalized) continue;
+    if (!normalized) {
+      delete document.providers[providerId];
+      removed += 1;
+      continue;
+    }
+    const scopes = normalizedScopedEntries(existing.scopes);
+    if (!(normalized in scopes)) continue;
+    delete scopes[normalized];
+    const root = normalizedEntry(existing);
+    if (!root && !Object.keys(scopes).length) delete document.providers[providerId];
+    else document.providers[providerId] = {
+      ...(root || {}),
+      ...(Object.keys(scopes).length ? { scopes } : {}),
+    };
     removed += 1;
   }
   if (removed === 0) return 0;
-  writePrivateJson(PROVIDER_CATALOG_CACHE_PATH, document, { directoryMode: 0o700 });
+  const ordered = Object.entries(document.providers)
+    .sort(([, left], [, right]) => latestProviderTimestamp(right).localeCompare(latestProviderTimestamp(left)))
+    .slice(0, MAX_PROVIDERS);
+  writePrivateJson(PROVIDER_CATALOG_CACHE_PATH, boundedProviderDocument(ordered), { directoryMode: 0o700 });
   return removed;
 }
 
@@ -288,8 +414,8 @@ export function forgetProviderCatalogCaches(providerIds) {
 }
 
 /** Drop one provider's cached list, for example after its credential changes. */
-export async function forgetProviderCatalogCache(providerId) {
-  return await forgetProviderCatalogCaches([providerId]) > 0;
+export async function forgetProviderCatalogCache(providerId, options = {}) {
+  return await withProviderCatalogCacheTransaction((cache) => cache.forget([providerId], options)) > 0;
 }
 
 export const PROVIDER_CATALOG_CACHE_FILE = path.basename(PROVIDER_CATALOG_CACHE_PATH);

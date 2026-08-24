@@ -3,18 +3,28 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
+  readProviderCatalogCache,
   providerCatalogIdentityFingerprint,
   withProviderCatalogCacheTransaction,
+  writeProviderCatalogCache,
 } from "./model-catalog-cache.mjs";
 import { modelCatalogMetadata } from "./model-catalog-metadata.mjs";
 import {
+  mergeDiscoveredModels,
+  modelMetadataFromPreset,
+  modelMetadataFromProviderRecord,
+} from "./model-capabilities.mjs";
+import { genericProviderDescriptor } from "./generic-providers.mjs";
+import {
   anonymousModelAllowed,
+  CHECKED_IN_MODELS,
   MODELS,
   PROVIDERS,
   resolveProviderBaseUrl,
 } from "./model-registry.mjs";
 import { curatedModelBlockReason } from "./opencode-curation.mjs";
 import { providerCatalogRouteIds } from "./provider-catalogs.mjs";
+import { readUserModels } from "./user-models.mjs";
 import { credentialStatus, resolveProviderCredential } from "./provider-credentials.mjs";
 import {
   ensureFreshGitHubCopilotSession,
@@ -62,7 +72,72 @@ export function modelIds(payload, provider) {
         item.supported_endpoints.includes("/responses")
       )
     : data;
-  return [...new Set(candidates.map((item) => String(item?.id || "").trim()).filter(Boolean))].sort();
+  return [...new Set(candidates.map(modelRecordId).filter(Boolean))].sort();
+}
+
+// OpenAI's documented `/models` response uses `id`, but compatible local
+// servers commonly return `model` (and a few return the canonical name as
+// `upstreamId`). Keep discovery provider-agnostic without changing the
+// filtering policy for built-in providers.
+function modelRecordId(item) {
+  return String(item?.id ?? item?.model ?? item?.upstreamId ?? "").trim();
+}
+
+function modelRecords(payload, provider) {
+  const data = Array.isArray(payload) ? payload : payload?.data;
+  if (!Array.isArray(data)) throw new Error("The provider returned an invalid model list.");
+  const ids = new Set(modelIds(payload, provider));
+  return data.filter((item) => ids.has(modelRecordId(item)));
+}
+
+function metadataFromRecords(payload, provider) {
+  const metadata = {};
+  for (const record of modelRecords(payload, provider)) {
+    try {
+      const entry = modelMetadataFromProviderRecord(record);
+      metadata[entry.upstreamId] = entry;
+    } catch {
+      // Model ids remain useful even when an optional provider capability
+      // record is malformed. Discovery must not discard the whole catalog.
+    }
+  }
+  return metadata;
+}
+
+function providerPresetMetadata(providerId) {
+  return CHECKED_IN_MODELS
+    .filter((model) => model.provider === providerId)
+    .flatMap((model) => {
+      try {
+        return [modelMetadataFromPreset(model)];
+      } catch {
+        return [];
+      }
+    });
+}
+
+function providerUserMetadata(providerId) {
+  return readUserModels()
+    .filter((model) => model.provider === providerId)
+    .flatMap((model) => {
+      try {
+        return [modelMetadataFromPreset(model)];
+      } catch {
+        // A malformed user-owned override must not block discovery for the
+        // provider or affect native GPT entries in the merged catalog.
+        return [];
+      }
+    });
+}
+
+function mergedProviderModels(providerId, liveMetadata, defaults) {
+  return mergeDiscoveredModels({
+    providerId,
+    live: Object.values(liveMetadata || {}),
+    verifiedPresets: providerPresetMetadata(providerId),
+    userOverrides: providerUserMetadata(providerId),
+    defaults,
+  });
 }
 
 function zeroPrice(value) {
@@ -129,7 +204,7 @@ export function modelContextLengths(payload, provider) {
   const kept = new Set(modelIds(payload, provider));
   const lengths = {};
   for (const item of data) {
-    const id = String(item?.id || "").trim();
+    const id = modelRecordId(item);
     if (!id || !kept.has(id) || id in lengths) continue;
     const length = advertisedContextLength(item);
     if (length !== undefined) lengths[id] = length;
@@ -240,7 +315,7 @@ async function providerPayload(provider, identity) {
  */
 export async function discoverProviderModels(
   providerId,
-  { refresh = false, cache = true, fixture = false, loadPayload = providerPayload } = {},
+  { refresh = false, cache = true, fixture = false, scope, loadPayload = providerPayload } = {},
 ) {
   const provider = PROVIDERS.get(providerId);
   if (!provider) throw new Error(`Unknown provider: ${providerId}`);
@@ -271,11 +346,11 @@ export async function discoverProviderModels(
     ({ cached, identity } = await withProviderCatalogCacheTransaction(async (catalog) => {
       const currentIdentity = await providerDiscoveryIdentity(provider);
       const currentFingerprint = providerDiscoveryIdentityFingerprint(currentIdentity);
-      const held = refresh ? undefined : catalog.read(providerId);
+      const held = refresh ? undefined : catalog.read(providerId, { scope });
       if (held?.identityFingerprint === currentFingerprint) {
         return { cached: held, identity: currentIdentity };
       }
-      if (held) catalog.forget([providerId]);
+      if (held) catalog.forget([providerId], { scope });
       return { cached: undefined, identity: currentIdentity };
     }));
   }
@@ -283,12 +358,14 @@ export async function discoverProviderModels(
   let free;
   let contextLengths;
   let metadata;
+  let modelMetadata;
   let fetchedAt;
   if (cached) {
     discovered = cached.discovered;
     free = cached.free || [];
     contextLengths = cached.contextLengths || {};
     metadata = cached.metadata || {};
+    modelMetadata = cached.modelMetadata || {};
     fetchedAt = cached.fetchedAt;
   } else {
     identity ||= usingFixture ? undefined : await providerDiscoveryIdentity(provider);
@@ -301,6 +378,7 @@ export async function discoverProviderModels(
       Object.entries(modelCatalogMetadata(payload, provider))
         .filter(([id]) => discoveredIds.has(id)),
     );
+    modelMetadata = metadataFromRecords(payload, provider);
     fetchedAt = new Date().toISOString();
     if (storeAnswer) {
       await withProviderCatalogCacheTransaction(async (catalog) => {
@@ -313,7 +391,9 @@ export async function discoverProviderModels(
           free,
           contextLengths,
           metadata,
+          modelMetadata,
           fetchedAt,
+          scope,
           identityFingerprint: providerDiscoveryIdentityFingerprint(identity),
         });
       });
@@ -355,6 +435,7 @@ export async function discoverProviderModels(
     // Missing fields stay missing: discovery is an evidence record, not a
     // reason to invent curation defaults or enable a route automatically.
     ...(Object.keys(metadata || {}).length ? { metadata } : {}),
+    modelMetadata: mergedProviderModels(providerId, modelMetadata),
     // Whether this list came from the provider just now or from the last time
     // it was asked. The surfaces that show it say which, so a stale list is
     // never mistaken for a live one.
@@ -367,6 +448,95 @@ export async function discoverProviderModels(
     fetchedAt,
     ...(provider.id === "orca" ? { free } : {}),
     note: "Discovery never edits the registry. New models must pass the live compatibility test before they are listed in Codex.",
+  };
+}
+
+/**
+ * Discover a user-owned generic provider. Built-in provider credentials use
+ * provider-credentials.mjs above; generic credentials are supplied by the
+ * caller as an already-redacted header map from P02's credential layer.
+ */
+function genericProviderIdentityFingerprint(descriptor, headers) {
+  const headerPairs = Object.entries(headers || {})
+    .map(([name, value]) => [String(name), String(value)])
+    .sort(([left], [right]) => left.localeCompare(right));
+  return providerCatalogIdentityFingerprint([
+    "generic",
+    descriptor.id,
+    descriptor.baseUrl,
+    headerPairs,
+  ]);
+}
+
+export async function discoverGenericProviderModels(
+  providerId,
+  {
+    fetchImpl = globalThis.fetch,
+    headers = {},
+    timeoutMs = 30_000,
+    fixture,
+    refresh = false,
+    cache = true,
+    scope,
+  } = {},
+) {
+  const descriptor = genericProviderDescriptor(providerId);
+  if (!descriptor.enabled) throw new Error(`Generic provider ${providerId} is disabled.`);
+  const requestHeaders = { ...descriptor.headers, ...headers };
+  const identityFingerprint = genericProviderIdentityFingerprint(descriptor, requestHeaders);
+  // Fixtures are test/operator input and must never become a persistent
+  // catalog answer. Live generic catalogs use the same bounded, provider- and
+  // account-scoped cache as built-in discovery, so opening a dashboard does
+  // not repeatedly hit a local or remote endpoint.
+  const usingFixture = fixture !== undefined;
+  const storeAnswer = cache && !usingFixture;
+  const held = refresh || !storeAnswer ? undefined : readProviderCatalogCache(providerId, { scope });
+  const cached = held?.identityFingerprint === identityFingerprint ? held : undefined;
+  let discovered;
+  let modelMetadata;
+  let fetchedAt;
+  if (cached) {
+    discovered = cached.discovered;
+    modelMetadata = cached.modelMetadata || {};
+    fetchedAt = cached.fetchedAt;
+  } else {
+    const payload = usingFixture
+      ? (typeof fixture === "string" ? JSON.parse(fixture) : fixture)
+      : await (async () => {
+          const response = await fetchImpl(`${descriptor.baseUrl}/models`, {
+            headers: { Accept: "application/json", ...requestHeaders },
+            signal: AbortSignal.timeout(timeoutMs),
+          });
+          const body = await response.json().catch(() => ({}));
+          if (!response.ok) throw new Error(body?.error?.message || `Generic provider discovery returned HTTP ${response.status}.`);
+          return body;
+        })();
+    discovered = modelIds(payload, descriptor);
+    modelMetadata = metadataFromRecords(payload, descriptor);
+    fetchedAt = new Date().toISOString();
+    if (storeAnswer) {
+      await writeProviderCatalogCache(providerId, {
+        discovered,
+        modelMetadata,
+        fetchedAt,
+        scope,
+        identityFingerprint,
+      });
+    }
+  }
+  const merged = mergeDiscoveredModels({
+    providerId,
+    live: Object.values(modelMetadata),
+    defaults: {},
+  });
+  return {
+    provider: providerId,
+    descriptor: { ...descriptor, headers: undefined },
+    discovered,
+    modelMetadata: merged,
+    cached: Boolean(cached),
+    stale: Boolean(cached?.stale),
+    fetchedAt,
   };
 }
 
