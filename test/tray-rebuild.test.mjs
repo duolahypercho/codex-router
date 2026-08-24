@@ -1267,8 +1267,9 @@ test("the status item keeps a reserved width in both menu-bar modes", () => {
   assert.match(source, /static let iconOnlyWidth: CGFloat = 28/);
   assert.match(
     source,
-    /\.frame\(width: MenuBarLayoutMetrics\.statusItemWidth\(displayMode: store\.menuBarDisplayMode\)/,
+    /statusItemWidth\(\s*displayMode: store\.menuBarDisplayMode/,
   );
+  assert.match(source, /statusItemHeight\(\s*displayMode: store\.menuBarDisplayMode/);
   assert.doesNotMatch(
     source,
     /\.frame\(width: store\.menuBarShowModelName \? Self\.reservedWidth : nil/,
