@@ -5,7 +5,15 @@
 // this work — its pin drifted twelve minor versions behind main and nothing
 // noticed.
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -151,13 +159,25 @@ test("the lock workflow is gated on every input that can invalidate the lock", (
 test("a regenerated lock reinstalls even when the pins are unchanged", () => {
   const root = mkdtempSync(path.join(tmpdir(), "python-lock-"));
   try {
+    const platform = process.platform === "win32" ? "win32" : "darwin";
     mkdirSync(path.join(root, "requirements"), { recursive: true });
     const lock = path.join(root, "requirements", "python.txt");
     writeFileSync(lock, lockText());
-    const site = path.join(root, ".venv", "lib", "python3.12", "site-packages");
+    const site = platform === "win32"
+      ? path.join(root, ".venv", "Lib", "site-packages")
+      : path.join(root, ".venv", "lib", "python3.12", "site-packages");
     mkdirSync(site, { recursive: true });
-    mkdirSync(path.join(root, ".venv", "bin"), { recursive: true });
-    writeFileSync(path.join(root, ".venv", "bin", "python"), "");
+    const pythonDirectory = platform === "win32" ? "Scripts" : "bin";
+    const pythonName = platform === "win32" ? "python.exe" : "python";
+    const python = path.join(root, ".venv", pythonDirectory, pythonName);
+    mkdirSync(path.dirname(python), { recursive: true });
+    if (platform === "win32") {
+      copyFileSync(process.execPath, python);
+    } else {
+      const quotedExecPath = `'${process.execPath.replaceAll("'", "'\\''")}'`;
+      writeFileSync(python, `#!/bin/sh\nexec ${quotedExecPath} "$@"\n`, "utf8");
+      chmodSync(python, 0o755);
+    }
     writeFileSync(path.join(root, ".venv", "pyvenv.cfg"), "version_info = 3.12\n");
     for (const requirement of PYTHON_REQUIREMENTS) {
       const [specifier, version] = requirement.split("==");
@@ -166,13 +186,13 @@ test("a regenerated lock reinstalls even when the pins are unchanged", () => {
     }
 
     recordStep("python-deps", { root });
-    assert.equal(stepStatus("python-deps", { root, platform: "darwin" }), "skip");
+    assert.equal(stepStatus("python-deps", { root, platform }), "skip");
 
     // A transitive-only bump leaves PYTHON_REQUIREMENTS untouched. Without the
     // lock in the fingerprint the installer would report "already matches" and
     // never apply it.
     writeFileSync(lock, `${lockText()}\n# transitive bump\n`);
-    assert.equal(stepStatus("python-deps", { root, platform: "darwin" }), "run");
+    assert.equal(stepStatus("python-deps", { root, platform }), "run");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
