@@ -488,9 +488,13 @@ enum ControlCenterLauncher {
   }
 
   nonisolated static func embeddedEnvironment(
-    processEnvironment: [String: String]
+    processEnvironment: [String: String],
+    userVisible: Bool = true
   ) -> [String: String] {
-    var environment = ["CODEX_ROUTER_EMBEDDED_CONTROL_CENTER": "1"]
+    var environment = [
+      "CODEX_ROUTER_EMBEDDED_CONTROL_CENTER": "1",
+      "CODEX_ROUTER_USER_VISIBLE_CONTROL_CENTER": userVisible ? "1" : "0",
+    ]
     // Keep source ownership identical across the native host and embedded
     // Electron process. These are the complete aliases both sides accept for
     // the checkout, shared state plane, and Codex client home. Forward only
@@ -613,6 +617,7 @@ final class RouterStore: ObservableObject {
   // handle it would clear is still its own.
   private var serviceStopGeneration = 0
   private var hostAppRecheck: Task<Void, Never>?
+  private var profileReconcileNeeded = true
   private var serviceWork: Task<Void, Never>?
   private var serviceIntent: ServiceIntent = .unknown
   private struct PendingToggleOperation {
@@ -953,6 +958,16 @@ final class RouterStore: ObservableObject {
 
   private func refreshHostAppRunning() {
     let detected = hostAppRunningNow()
+    if detected {
+      profileReconcileNeeded = true
+    } else if profileReconcileNeeded {
+      profileReconcileNeeded = false
+      enqueueServiceWork { [weak self] in
+        guard let self else { return }
+        _ = try? await self.runControl(arguments: ["chatgpt-account-pool", "profile", "reconcile"])
+        await self.refresh()
+      }
+    }
     if hostAppRunning != detected { hostAppRunning = detected }
     refreshSurfacesVisible()
     reconcileService()
@@ -1925,6 +1940,123 @@ final class RouterStore: ObservableObject {
       successMessage: "\(label) removed. Restart Codex to refresh its model picker."
     ) {
       _ = try await runControl(arguments: ["credential", provider, "--remove"])
+    }
+  }
+
+  func setProviderPoolStrategy(_ provider: String, strategy: String) async {
+    providerOperation = "pool:\(provider)"
+    defer { providerOperation = nil }
+    do {
+      _ = try await runControl(arguments: ["provider-pools", "policy", provider, strategy])
+      await refresh()
+      message = routerLocalized("Provider pool policy saved.")
+    } catch {
+      message = error.localizedDescription
+    }
+  }
+
+  func setProviderPoolCredentialPaused(
+    provider: String,
+    credential: String,
+    paused: Bool
+  ) async {
+    providerOperation = "pool:\(provider)"
+    defer { providerOperation = nil }
+    do {
+      _ = try await runControl(arguments: [
+        "provider-pools", paused ? "pause" : "resume", provider, credential
+      ])
+      await refresh()
+      message = paused
+        ? routerLocalized("Pool credential paused.")
+        : routerLocalized("Pool credential resumed.")
+    } catch {
+      message = error.localizedDescription
+    }
+  }
+
+  func setChatGPTAccountPoolEnabled(_ enabled: Bool) async {
+    providerOperation = "chatgpt-account-pool"
+    defer { providerOperation = nil }
+    do {
+      _ = try await runControl(arguments: [
+        "chatgpt-account-pool", enabled ? "enable" : "disable"
+      ])
+      await refresh()
+      message = enabled
+        ? routerLocalized("ChatGPT account pool enabled.")
+        : routerLocalized("ChatGPT account pool disabled.")
+    } catch {
+      message = error.localizedDescription
+    }
+  }
+
+  func setChatGPTAccountPoolMode(_ mode: String) async {
+    guard mode == "switch" || mode == "pool" else { return }
+    providerOperation = "chatgpt-account-pool"
+    defer { providerOperation = nil }
+    do {
+      _ = try await runControl(arguments: ["chatgpt-account-pool", "mode", mode])
+      await refresh()
+      message = mode == "pool"
+        ? routerLocalized("ChatGPT account pool mode enabled.")
+        : routerLocalized("ChatGPT account switch mode enabled.")
+    } catch {
+      message = error.localizedDescription
+    }
+  }
+
+  func setChatGPTAccountSelection(_ selection: String) async {
+    providerOperation = "chatgpt-account-pool"
+    defer { providerOperation = nil }
+    do {
+      _ = try await runControl(arguments: ["chatgpt-account-pool", "select", selection])
+      await refresh()
+      message = routerLocalized("ChatGPT account selection saved.")
+    } catch {
+      message = error.localizedDescription
+    }
+  }
+
+  func setSearchSidecarEnabled(_ enabled: Bool) async {
+    providerOperation = "routing-policy"
+    defer { providerOperation = nil }
+    do {
+      _ = try await runControl(arguments: ["routing-policy", "sidecar", enabled ? "on" : "off"])
+      await refresh()
+      message = enabled
+        ? routerLocalized("Search sidecar enabled.")
+        : routerLocalized("Search sidecar disabled.")
+    } catch {
+      message = error.localizedDescription
+    }
+  }
+
+  func setSubagentAllowUnverified(_ enabled: Bool) async {
+    providerOperation = "routing-policy"
+    defer { providerOperation = nil }
+    do {
+      _ = try await runControl(arguments: [
+        "routing-policy", "subagents", "allow-unverified", enabled ? "on" : "off"
+      ])
+      await refresh()
+      message = routerLocalized("Subagent routing policy saved.")
+    } catch {
+      message = error.localizedDescription
+    }
+  }
+
+  func setComboEnabled(_ combo: String, enabled: Bool) async {
+    providerOperation = "routing-policy"
+    defer { providerOperation = nil }
+    do {
+      _ = try await runControl(arguments: [
+        "routing-policy", "combo", enabled ? "enable" : "disable", combo
+      ])
+      await refresh()
+      message = routerLocalized("Routing policy saved.")
+    } catch {
+      message = error.localizedDescription
     }
   }
 
@@ -3632,6 +3764,7 @@ enum ChatGptSessionControlPolicy {
 
 struct RouterSnapshot: Decodable {
   let targets: [String: RouterTarget]
+  let catalog: RouterDashboardSnapshot?
   // Absent from an older router's output, so the tray keeps working against one
   // rather than failing the whole decode over a field it gained later.
   let presence: RouterPresence?
@@ -3646,6 +3779,7 @@ struct RouterSnapshot: Decodable {
     case presence
     case harness
     case chatgptSession
+    case catalog
   }
 
   init(from decoder: Decoder) throws {
@@ -3661,26 +3795,170 @@ struct RouterSnapshot: Decodable {
     } catch {
       chatgptSession = nil
     }
+    catalog = try values.decodeIfPresent(RouterDashboardSnapshot.self, forKey: .catalog)
   }
 
   init(
     targets: [String: RouterTarget],
     presence: RouterPresence?,
     harness: RouterHarness?,
-    chatgptSession: ChatGptSessionStatus?
+    chatgptSession: ChatGptSessionStatus?,
+    catalog: RouterDashboardSnapshot? = nil
   ) {
     self.targets = targets
     self.presence = presence
     self.harness = harness
     self.chatgptSession = chatgptSession
+    self.catalog = catalog
   }
 
   static let empty = RouterSnapshot(
     targets: [:],
     presence: nil,
     harness: nil,
-    chatgptSession: nil
+    chatgptSession: nil,
+    catalog: nil
   )
+}
+
+struct RouterDashboardSnapshot: Decodable {
+  let pools: [RouterApiKeyPool]
+  let accountPool: RouterAccountPoolSnapshot?
+  let routingPolicies: RouterRoutingPolicies?
+
+  private enum CodingKeys: String, CodingKey {
+    case pools
+    case accountPool
+    case routingPolicies
+  }
+
+  init(from decoder: Decoder) throws {
+    let values = try decoder.container(keyedBy: CodingKeys.self)
+    pools = try values.decodeIfPresent([RouterApiKeyPool].self, forKey: .pools) ?? []
+    accountPool = try values.decodeIfPresent(RouterAccountPoolSnapshot.self, forKey: .accountPool)
+    routingPolicies = try values.decodeIfPresent(RouterRoutingPolicies.self, forKey: .routingPolicies)
+  }
+}
+
+struct RouterApiKeyPool: Decodable, Identifiable {
+  let providerId: String
+  let policy: RouterPoolPolicy
+  let credentials: [RouterApiKeyPoolCredential]
+  var id: String { providerId }
+}
+
+struct RouterPoolPolicy: Decodable {
+  let strategy: String
+}
+
+struct RouterApiKeyPoolCredential: Decodable, Identifiable {
+  let id: String
+  let paused: Bool
+  let health: RouterPoolHealth?
+}
+
+struct RouterPoolHealth: Decodable {
+  let state: String
+  let lastStatus: Int?
+}
+
+struct RouterAccountPoolSnapshot: Decodable {
+  let policy: RouterAccountPoolPolicy
+  let accounts: [String: RouterAccountPoolEntry]
+  let sessions: RouterPoolSessionCount?
+  let profile: RouterProfileSwitchSnapshot?
+}
+
+struct RouterAccountPoolPolicy: Decodable {
+  let enabled: Bool
+  let mode: String?
+  let strategy: String
+  let selectedAccountId: String?
+}
+
+struct RouterAccountPoolEntry: Decodable {
+  let label: String?
+  let subscription: RouterAccountPoolSubscription?
+  let paused: Bool
+  let health: RouterPoolHealth?
+}
+
+struct RouterAccountPoolSubscription: Decodable {
+  let usable: Bool?
+  let email: String?
+}
+
+struct RouterPoolSessionCount: Decodable {
+  let count: Int
+}
+
+struct RouterProfileSwitchSnapshot: Decodable {
+  let desired: String?
+  let active: String?
+  let pending: Bool
+  let running: Bool?
+}
+
+struct RouterRoutingPolicies: Decodable {
+  let combos: [RouterComboPolicy]
+  let searchSidecar: RouterSearchSidecar
+  let subagent: RouterSubagentRoutingPolicy
+
+  private enum CodingKeys: String, CodingKey {
+    case combos
+    case searchSidecar
+    case subagent
+  }
+
+  init(
+    combos: [RouterComboPolicy] = [],
+    searchSidecar: RouterSearchSidecar = RouterSearchSidecar(),
+    subagent: RouterSubagentRoutingPolicy = RouterSubagentRoutingPolicy()
+  ) {
+    self.combos = combos
+    self.searchSidecar = searchSidecar
+    self.subagent = subagent
+  }
+
+  init(from decoder: Decoder) throws {
+    let values = try decoder.container(keyedBy: CodingKeys.self)
+    combos = try values.decodeIfPresent([RouterComboPolicy].self, forKey: .combos) ?? []
+    searchSidecar = try values.decodeIfPresent(RouterSearchSidecar.self, forKey: .searchSidecar)
+      ?? RouterSearchSidecar()
+    subagent = try values.decodeIfPresent(RouterSubagentRoutingPolicy.self, forKey: .subagent)
+      ?? RouterSubagentRoutingPolicy()
+  }
+}
+
+struct RouterComboPolicy: Decodable, Identifiable {
+  let id: String
+  let displayName: String
+  let strategy: String
+  let sticky: Bool
+  let stickyLimit: Int
+  let enabled: Bool?
+}
+
+struct RouterSearchSidecar: Decodable {
+  let enabled: Bool
+  let providerId: String?
+  let credentialRef: String?
+
+  init(enabled: Bool = false, providerId: String? = nil, credentialRef: String? = nil) {
+    self.enabled = enabled
+    self.providerId = providerId
+    self.credentialRef = credentialRef
+  }
+}
+
+struct RouterSubagentRoutingPolicy: Decodable {
+  let allowUnverifiedModels: Bool
+  let requiredCapabilities: [String]
+
+  init(allowUnverifiedModels: Bool = false, requiredCapabilities: [String] = []) {
+    self.allowUnverifiedModels = allowUnverifiedModels
+    self.requiredCapabilities = requiredCapabilities
+  }
 }
 
 struct HarnessStopResult: Decodable {
@@ -3767,6 +4045,9 @@ enum TokenDisplayUnit: String, CaseIterable, Identifiable {
 
 struct CodexAccountUsage: Decodable, Equatable {
   let fetchedAt: String
+  let accountSelection: String?
+  let accountEmail: String?
+  let profilePending: Bool?
   let planType: String?
   let limitId: String?
   let primary: CodexRateLimitWindow?
@@ -3776,6 +4057,9 @@ struct CodexAccountUsage: Decodable, Equatable {
 
   static func == (lhs: CodexAccountUsage, rhs: CodexAccountUsage) -> Bool {
     lhs.planType == rhs.planType
+      && lhs.accountSelection == rhs.accountSelection
+      && lhs.accountEmail == rhs.accountEmail
+      && lhs.profilePending == rhs.profilePending
       && lhs.limitId == rhs.limitId
       && lhs.primary == rhs.primary
       && lhs.secondary == rhs.secondary
@@ -4451,7 +4735,7 @@ struct MenuBarSettings: Equatable {
 
 enum MenuBarLayoutMetrics {
   static let standardReservedWidth: CGFloat = 180
-  static let iconOnlyWidth: CGFloat = 24
+  static let iconOnlyWidth: CGFloat = 28
 
   nonisolated static func statusItemWidth(displayMode: TrayMenuBarDisplayMode) -> CGFloat {
     displayMode == .iconOnly ? iconOnlyWidth : standardReservedWidth
@@ -4624,6 +4908,30 @@ struct ProviderModelCatalog: Decodable, Equatable {
   }
 }
 
+private struct ActivityDotView: View {
+  let state: RouterActivityState
+  let diameter: CGFloat
+  let slot: CGFloat?
+
+  init(state: RouterActivityState, diameter: CGFloat = 6, slot: CGFloat? = nil) {
+    self.state = state
+    self.diameter = diameter
+    self.slot = slot
+  }
+
+  var body: some View {
+    // MenuBarExtra status-item labels are rasterized by AppKit. A SwiftUI
+    // Shape can disappear during that conversion even though it renders in
+    // the panel; use the system symbol path that status items handle reliably.
+    Image(systemName: "circle.fill")
+      .font(.system(size: diameter, weight: .regular))
+      .symbolRenderingMode(.monochrome)
+      .foregroundStyle(state.tint)
+      .frame(width: slot ?? diameter, height: slot ?? diameter)
+      .accessibilityLabel(state.label)
+  }
+}
+
 private struct MenuBarIconView: View {
   @ObservedObject var store: RouterStore
   var size: CGFloat = 13
@@ -4633,9 +4941,7 @@ private struct MenuBarIconView: View {
     case .provider:
       ProviderIcon(providerID: providerID, size: size, showsHelp: false)
     case .indicator:
-      Circle()
-        .fill(store.activityState.tint)
-        .frame(width: 6, height: 6)
+      ActivityDotView(state: store.activityState, diameter: 7, slot: size)
     case .preset:
       Image(systemName: store.menuBarPresetIcon)
         .font(.system(size: size, weight: .medium))
@@ -4671,9 +4977,7 @@ private struct StatusItemLabel: View {
   var body: some View {
     if store.menuBarDisplayMode == .iconOnly {
       HStack(spacing: 4) {
-        MenuBarIconView(store: store, size: 14)
-          .scaleEffect(pulsing ? 1.4 : 1)
-          .animation(.easeOut(duration: 0.45), value: pulsing)
+        MenuBarIconView(store: store, size: 17)
         if MenuBarLayoutMetrics.showsActivityBadge(
           iconStyle: store.menuBarIconStyle,
           isIdle: store.activityState == .idle
@@ -4681,6 +4985,8 @@ private struct StatusItemLabel: View {
           Circle()
             .fill(store.activityState.tint)
             .frame(width: 5, height: 5)
+            .scaleEffect(pulsing ? 1.6 : 1)
+            .animation(.easeOut(duration: 0.45), value: pulsing)
         }
       }
       .frame(width: MenuBarLayoutMetrics.statusItemWidth(displayMode: store.menuBarDisplayMode), height: 22)
@@ -4697,16 +5003,12 @@ private struct StatusItemLabel: View {
     } else {
       HStack(spacing: 5) {
         if store.menuBarIconStyle == .indicator {
-          Circle()
-            .fill(store.activityState.tint)
-            .frame(width: 6, height: 6)
-            .scaleEffect(pulsing ? 2.1 : 1)
+          ActivityDotView(state: store.activityState)
+            .scaleEffect(pulsing ? 1.6 : 1)
             .opacity(pulsing ? 0.55 : 1)
             .animation(.easeOut(duration: 0.45), value: pulsing)
         } else {
-          MenuBarIconView(store: store, size: 13)
-            .scaleEffect(pulsing ? 1.4 : 1)
-            .animation(.easeOut(duration: 0.45), value: pulsing)
+          MenuBarIconView(store: store, size: 15)
         }
         if store.menuBarShowModelName {
           Text(store.hasConcurrentActivity ? store.activitySummaryLabel : store.selectedUsageProvider.shortName)
@@ -5833,7 +6135,249 @@ private struct TrayView: View {
         }
       }
     }
+    ProviderPoolsPanel(store: store)
+    RoutingPoliciesPanel(store: store)
     ModelSettingsAccordion(store: store, target: target)
+  }
+
+  private struct ProviderPoolsPanel: View {
+    @ObservedObject var store: RouterStore
+    @State private var expanded = false
+
+    private var pools: [RouterApiKeyPool] { store.snapshot.catalog?.pools ?? [] }
+    private var accountPool: RouterAccountPoolSnapshot? { store.snapshot.catalog?.accountPool }
+
+    var body: some View {
+      AccordionPanel(
+        title: routerLocalized("Provider pools"),
+        summary: pools.isEmpty
+          ? routerLocalized("No API-key pool configured")
+          : routerFormat("%d provider pools", pools.count),
+        expanded: $expanded
+      ) {
+        VStack(alignment: .leading, spacing: 8) {
+          Text(routerLocalized("Pool controls change routing metadata only. API keys and account tokens stay in their secure stores."))
+            .font(.system(size: 9))
+            .foregroundStyle(routerMuted)
+            .fixedSize(horizontal: false, vertical: true)
+          if let accountPool {
+            HStack(spacing: 10) {
+              VStack(alignment: .leading, spacing: 2) {
+                Text(routerLocalized("ChatGPT account pool"))
+                  .font(.system(size: 11, weight: .medium))
+                Text(accountPool.accounts.isEmpty
+                  ? routerLocalized("No pooled accounts registered")
+                  : routerFormat("%d accounts · %@", accountPool.accounts.count, accountPool.policy.strategy))
+                  .font(.system(size: 9))
+                  .foregroundStyle(routerMuted)
+              }
+              Spacer()
+              Picker("", selection: Binding(
+                get: { accountPool.policy.mode == "pool" ? "pool" : "switch" },
+                set: { mode in Task { await store.setChatGPTAccountPoolMode(mode) } }
+              )) {
+                Text(routerLocalized("Switch")).tag("switch")
+                Text(routerLocalized("Pool")).tag("pool")
+              }
+              .pickerStyle(.menu)
+              .labelsHidden()
+              .frame(width: 86)
+              .disabled(store.providerOperation != nil)
+              Picker("", selection: Binding(
+                get: {
+                  accountPool.policy.enabled
+                    ? accountPool.policy.selectedAccountId ?? "auto"
+                    : accountPool.profile?.active ?? accountPool.accounts.keys.sorted().first ?? "auto"
+                },
+                set: { selection in Task { await store.setChatGPTAccountSelection(selection) } }
+              )) {
+                Text(routerLocalized("Automatic")).tag("auto")
+                ForEach(accountPool.accounts.keys.sorted(), id: \.self) { accountId in
+                  if let account = accountPool.accounts[accountId], account.subscription?.usable == true {
+                    Text(account.subscription?.email ?? account.label ?? accountId).tag(accountId)
+                  }
+                }
+              }
+              .pickerStyle(.menu)
+              .labelsHidden()
+              .frame(width: 170)
+              .disabled(store.providerOperation != nil)
+            }
+          }
+          if pools.isEmpty {
+            Text(routerLocalized("Add a second provider credential to use health-aware rotation."))
+              .font(.system(size: 9))
+              .foregroundStyle(routerMutedStrong)
+          } else {
+            ForEach(pools) { pool in
+              VStack(alignment: .leading, spacing: 5) {
+                HStack(spacing: 7) {
+                  ProviderIcon(providerID: pool.providerId, size: 14)
+                  Text(pool.providerId)
+                    .font(.system(size: 10, weight: .semibold))
+                  Spacer()
+                  Picker("", selection: Binding(
+                    get: { pool.policy.strategy },
+                    set: { strategy in Task { await store.setProviderPoolStrategy(pool.providerId, strategy: strategy) } }
+                  )) {
+                    Text("Quota").tag("quota")
+                    Text("Round robin").tag("round-robin")
+                    Text("Fill first").tag("fill-first")
+                  }
+                  .pickerStyle(.menu)
+                  .labelsHidden()
+                  .frame(width: 112)
+                  .disabled(store.providerOperation != nil)
+                }
+                ForEach(pool.credentials) { credential in
+                  HStack(spacing: 6) {
+                    Circle()
+                      .fill(credential.paused ? routerMuted : routerMint)
+                      .frame(width: 5, height: 5)
+                    Text(credential.id)
+                      .font(.system(size: 8, design: .monospaced))
+                      .lineLimit(1)
+                      .truncationMode(.middle)
+                    Spacer()
+                    Toggle(
+                      "",
+                      isOn: Binding(
+                        get: { !credential.paused },
+                        set: { enabled in
+                          Task {
+                            await store.setProviderPoolCredentialPaused(
+                              provider: pool.providerId,
+                              credential: credential.id,
+                              paused: !enabled
+                            )
+                          }
+                        }
+                      )
+                    )
+                    .toggleStyle(.switch)
+                    .controlSize(.mini)
+                    .labelsHidden()
+                    .disabled(store.providerOperation != nil)
+                  }
+                }
+              }
+              .padding(8)
+              .background(
+                Color.primary.opacity(0.045),
+                in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+              )
+            }
+          }
+        }
+      }
+    }
+  }
+
+  private struct RoutingPoliciesPanel: View {
+    @ObservedObject var store: RouterStore
+    @State private var expanded = false
+
+    private var policies: RouterRoutingPolicies? { store.snapshot.catalog?.routingPolicies }
+
+    var body: some View {
+      AccordionPanel(
+        title: routerLocalized("Routing policies"),
+        summary: policies == nil ? routerLocalized("Optional") : routerLocalized("Capability aware"),
+        expanded: $expanded
+      ) {
+        if let policies {
+          VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+              VStack(alignment: .leading, spacing: 2) {
+                Text(routerLocalized("Search sidecar"))
+                  .font(.system(size: 11, weight: .medium))
+                Text(policies.searchSidecar.enabled
+                  ? routerLocalized("Used only for models without native search")
+                  : routerLocalized("Disabled · native search is unchanged"))
+                  .font(.system(size: 9))
+                  .foregroundStyle(routerMuted)
+              }
+              Spacer()
+              Toggle(
+                "",
+                isOn: Binding(
+                  get: { policies.searchSidecar.enabled },
+                  set: { enabled in Task { await store.setSearchSidecarEnabled(enabled) } }
+                )
+              )
+              .toggleStyle(.switch)
+              .controlSize(.mini)
+              .labelsHidden()
+              .disabled(store.providerOperation != nil
+                || (policies.searchSidecar.providerId == nil && !policies.searchSidecar.enabled)
+                || (policies.searchSidecar.credentialRef == nil && !policies.searchSidecar.enabled))
+            }
+            HStack(spacing: 10) {
+              VStack(alignment: .leading, spacing: 2) {
+                Text(routerLocalized("Allow unverified subagents"))
+                  .font(.system(size: 11, weight: .medium))
+                Text(policies.subagent.allowUnverifiedModels
+                  ? routerLocalized("Explicit opt-in · capability checks still apply")
+                  : routerLocalized("Verified models only"))
+                  .font(.system(size: 9))
+                  .foregroundStyle(routerMuted)
+              }
+              Spacer()
+              Toggle(
+                "",
+                isOn: Binding(
+                  get: { policies.subagent.allowUnverifiedModels },
+                  set: { enabled in Task { await store.setSubagentAllowUnverified(enabled) } }
+                )
+              )
+              .toggleStyle(.switch)
+              .controlSize(.mini)
+              .labelsHidden()
+              .disabled(store.providerOperation != nil)
+            }
+            if !policies.combos.isEmpty {
+              Divider().opacity(0.5)
+              Text(routerLocalized("Model combos"))
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(routerMuted)
+              ForEach(policies.combos) { combo in
+                HStack(spacing: 8) {
+                  VStack(alignment: .leading, spacing: 2) {
+                    Text(combo.displayName)
+                      .font(.system(size: 10, weight: .medium))
+                      .lineLimit(1)
+                    Text("\(combo.strategy) · \(combo.id)")
+                      .font(.system(size: 8, design: .monospaced))
+                      .foregroundStyle(routerMuted)
+                      .lineLimit(1)
+                  }
+                  Spacer()
+                  Toggle(
+                    "",
+                    isOn: Binding(
+                      get: { combo.enabled ?? true },
+                      set: { enabled in Task { await store.setComboEnabled(combo.id, enabled: enabled) } }
+                    )
+                  )
+                  .toggleStyle(.switch)
+                  .controlSize(.mini)
+                  .labelsHidden()
+                  .disabled(store.providerOperation != nil)
+                }
+              }
+            } else {
+              Text(routerLocalized("No model combos configured."))
+                .font(.system(size: 9))
+                .foregroundStyle(routerMutedStrong)
+            }
+          }
+        } else {
+          Text(routerLocalized("Routing policy status is unavailable until the router is updated."))
+            .font(.system(size: 9))
+            .foregroundStyle(routerMuted)
+        }
+      }
+    }
   }
 
   private struct ModelSettingsAccordion: View {

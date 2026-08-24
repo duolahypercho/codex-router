@@ -133,6 +133,19 @@ export const PROVIDER_CATALOG_CACHE_PATH = path.join(STATE_DIR, "provider-catalo
 export const INSTALL_MANIFEST_PATH = path.join(STATE_DIR, "install-manifest.json");
 export const SKILL_OWNERSHIP_PATH = path.join(STATE_DIR, "managed-skills.json");
 export const MIGRATIONS_DIR = path.join(STATE_DIR, "migrations");
+// Account-pool policy contains only opaque account ids and routing metadata;
+// native OAuth credentials stay owned by the Codex login implementation.
+export const CHATGPT_ACCOUNT_POOL_PATH =
+  process.env.MODEL_ROUTER_CHATGPT_ACCOUNT_POOL ||
+  path.join(STATE_DIR, "chatgpt-account-pool.json");
+// Each ChatGPT subscription account gets its own Codex home.  The home keeps
+// the OAuth refresh state under Codex's normal ownership boundary instead of
+// copying a token into the router's pool metadata.  The account id is always
+// validated before it is appended to this directory.
+export const CHATGPT_ACCOUNT_HOMES_DIR =
+  process.env.MODEL_ROUTER_CHATGPT_ACCOUNT_HOMES ||
+  path.join(STATE_DIR, "chatgpt-accounts");
+export const CHATGPT_PROFILE_SWITCH_PATH = path.join(STATE_DIR, "chatgpt-profile-switch.json");
 export const SUPPORT_DIR = path.join(STATE_DIR, "support");
 export const LOG_PATH = path.join(STATE_DIR, "router.log");
 export const SERVICE_PROCESS_STATE_PATH = path.join(STATE_DIR, "service-process.json");

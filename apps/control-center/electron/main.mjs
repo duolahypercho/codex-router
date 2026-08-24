@@ -57,6 +57,12 @@ function embeddedInNativeHost() {
 
 const nativeTrayOwnedByHost = process.platform === "darwin"
   && (process.env.CODEX_ROUTER_EMBEDDED_CONTROL_CENTER === "1" || embeddedInNativeHost());
+// The native host starts this child in two different ways: supervised in the
+// background, or visibly after the user opens Codex Router.  Only the latter
+// should have a Dock icon.  Keeping the distinction in the launch contract
+// avoids changing the tray host's LSUIElement/accessory behavior.
+const userVisibleEmbeddedControlCenter = nativeTrayOwnedByHost
+  && process.env.CODEX_ROUTER_USER_VISIBLE_CONTROL_CENTER === "1";
 const trayOnlyInvocation = process.argv.includes("--tray-only");
 const quitForUpdateInvocation = process.argv.includes("--quit-for-update");
 const lifecycleQueryInvocation = process.argv.includes(LIFECYCLE_QUERY_ARGUMENT);
@@ -278,8 +284,11 @@ if (primaryInstance && !quitForUpdateInvocation) {
   publishLifecycleState();
   app.whenReady().then(() => {
     if (process.platform === "darwin") {
-      if (nativeTrayOwnedByHost) app.dock?.hide();
-      else app.dock?.setIcon(appIconPath());
+      if (nativeTrayOwnedByHost && !userVisibleEmbeddedControlCenter) app.dock?.hide();
+      else {
+        app.dock?.setIcon(appIconPath());
+        app.dock?.show();
+      }
     }
     session.defaultSession.setPermissionCheckHandler(() => false);
     session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));

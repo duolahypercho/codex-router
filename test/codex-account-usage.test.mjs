@@ -99,6 +99,7 @@ test("the usage panel reaches an npm-installed Codex through cmd.exe", () => {
   let invocation;
   readCodexAccountUsage({
     binary: "C:\\Users\\ann\\AppData\\Roaming\\npm\\codex.cmd",
+    codexHome: "C:\\Users\\ann\\.codex-secondary",
     platform: "win32",
     spawnImpl: (command, args, options) => {
       invocation = { command, args, options };
@@ -116,6 +117,7 @@ test("the usage panel reaches an npm-installed Codex through cmd.exe", () => {
   assert.ok(invocation.args[3].includes("codex.cmd"), invocation.args[3]);
   assert.equal(invocation.options.windowsVerbatimArguments, true);
   assert.equal(invocation.options.windowsHide, true);
+  assert.equal(invocation.options.env.CODEX_HOME, "C:\\Users\\ann\\.codex-secondary");
 });
 
 test("the usage panel names a missing Codex instead of blaming the app-server", async () => {

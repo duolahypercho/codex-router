@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import {
   accessSync,
   closeSync,
@@ -42,6 +42,7 @@ const RETENTION_MIN_TTL_DAYS = 1;
 const RETENTION_MAX_TTL_DAYS = 3_650;
 const MODEL_SLUG = /^[A-Za-z0-9][A-Za-z0-9._/:+-]{0,200}$/;
 const PROVIDER_ID = /^[a-z0-9][a-z0-9-]{0,80}$/;
+const CHATGPT_ACCOUNT_ID = /^acct_[A-Za-z0-9_-]{8,80}$/;
 const LOCAL_TAG = /^[A-Za-z0-9][A-Za-z0-9._/-]*(?::[A-Za-z0-9][A-Za-z0-9._-]*)?$/;
 const SESSION_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const SESSION_UUID_IN_FILENAME = /[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i;
@@ -69,6 +70,7 @@ const OAUTH_LOGIN_COMMANDS = Object.freeze({
   "devin-cli": { executable: "devin", args: ["auth", "login"] },
 });
 const WINDOWS_EXECUTABLE_EXTENSIONS = [".exe", ".com", ".cmd", ".bat"];
+const CHATGPT_LOGIN_URL = /^https:\/\/auth\.openai\.com\/oauth\/authorize\?[^\s"'<>]+$/;
 
 function cleanText(value, fallback = "", limit = 240) {
   if (typeof value !== "string") return fallback;
@@ -206,12 +208,20 @@ function shellQuote(value) {
   return `'${String(value).replaceAll("'", "'\\''")}'`;
 }
 
-function openTerminalCommand(executable, args, cwd) {
+function openTerminalCommand(executable, args, cwd, { environment = {} } = {}) {
   if (!terminalAvailable()) throw new Error("Opening a terminal from the Control Center is currently available on macOS only.");
   if (!executable || !path.isAbsolute(executable) || !Array.isArray(args)) throw new Error("Harness command is unavailable.");
   if (args.some((arg) => typeof arg !== "string" || arg.includes("\0"))) throw new Error("Harness command is invalid.");
   const resolvedCwd = cwd ? realpathSync(cwd) : discoverSourceRoot();
   if (!statSync(resolvedCwd).isDirectory()) throw new Error("The session workspace is unavailable.");
+  if (!environment || typeof environment !== "object" || Array.isArray(environment)) {
+    throw new Error("Terminal environment is invalid.");
+  }
+  for (const [name, value] of Object.entries(environment)) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) || typeof value !== "string" || value.includes("\0")) {
+      throw new Error("Terminal environment is invalid.");
+    }
+  }
   const directory = mkdtempSync(path.join(os.tmpdir(), "codex-router-terminal-"));
   const script = path.join(directory, "launch.command");
   const executableDirectory = path.dirname(executable);
@@ -221,13 +231,14 @@ function openTerminalCommand(executable, args, cwd) {
     "#!/bin/sh",
     `cd -- ${shellQuote(resolvedCwd)} || exit 1`,
     ...(searchDirectories.length ? [`export PATH=${shellQuote(searchDirectories.join(":"))}:"$PATH"`] : []),
+    ...Object.entries(environment).map(([name, value]) => `export ${name}=${shellQuote(value)}`),
     `rm -f -- ${shellQuote(script)}`,
     `rmdir -- ${shellQuote(directory)} 2>/dev/null || true`,
     `exec ${[executable, ...args].map(shellQuote).join(" ")}`,
     "",
   ].join("\n");
   writeFileSync(script, body, { encoding: "utf8", mode: 0o700, flag: "wx" });
-  const opened = spawnSync("/usr/bin/open", ["-a", "Terminal", script], {
+  const opened = spawnSync("/usr/bin/open", ["-a", "Terminal", path.resolve(script)], {
     encoding: "utf8",
     env: process.env,
     timeout: 5_000,
@@ -236,6 +247,117 @@ function openTerminalCommand(executable, args, cwd) {
   });
   if (opened.error || opened.status !== 0) throw new Error("Could not open Terminal.");
   return { opened: true, surface: "terminal" };
+}
+
+// Codex owns the OAuth callback and browser hand-off for ChatGPT login. Spawn
+// it detached instead of wrapping it in Terminal: the CLI starts its local
+// callback server, opens the system browser, and keeps the isolated
+// CODEX_HOME profile while the user completes sign-in.
+export function openBrowserCommand(executable, args, cwd, { environment = {}, onExit, openExternal } = {}) {
+  if (!executable || !path.isAbsolute(executable) || !Array.isArray(args)) throw new Error("Browser command is unavailable.");
+  if (args.some((arg) => typeof arg !== "string" || arg.includes("\0"))) throw new Error("Browser command is invalid.");
+  if (typeof openExternal !== "function") throw new Error("The default browser opener is unavailable.");
+  const resolvedCwd = cwd ? realpathSync(cwd) : discoverSourceRoot();
+  if (!statSync(resolvedCwd).isDirectory()) throw new Error("The session workspace is unavailable.");
+  if (!environment || typeof environment !== "object" || Array.isArray(environment)) {
+    throw new Error("Browser environment is invalid.");
+  }
+  for (const [name, value] of Object.entries(environment)) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) || typeof value !== "string" || value.includes("\0")) {
+      throw new Error("Browser environment is invalid.");
+    }
+  }
+  const node = executablePath("node");
+  const childPath = [...new Set([
+    path.dirname(executable),
+    node && path.dirname(node),
+    ...String(environment.PATH || process.env.PATH || "").split(path.delimiter),
+  ].filter(Boolean))].join(path.delimiter);
+  const child = spawn(executable, args, {
+    cwd: resolvedCwd,
+    env: { ...process.env, ...environment, PATH: childPath },
+    // Codex prints the OAuth authorize URL before waiting for the callback.
+    // Keep its own process detached, but observe that bounded output so the
+    // router can explicitly hand the URL to macOS's default browser when the
+    // CLI's best-effort opener is unavailable from a GUI-launched process.
+    stdio: ["ignore", "pipe", "pipe"],
+    detached: true,
+    windowsHide: true,
+    shell: false,
+  });
+  let browserOpened = false;
+  let urlObserved = false;
+  let childExited = false;
+  let openingBrowser = false;
+  let loginOutput = "";
+  let finished = false;
+  let settled = false;
+  let resolveOpen;
+  let rejectOpen;
+  const opened = new Promise((resolve, reject) => {
+    resolveOpen = resolve;
+    rejectOpen = reject;
+  });
+  const finish = () => {
+    if (finished) return;
+    finished = true;
+    if (typeof onExit === "function") onExit();
+  };
+  const fail = (error) => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(timeout);
+    rejectOpen(error instanceof Error ? error : new Error(String(error)));
+  };
+  const maybeFailAfterExit = () => {
+    if (childExited && !urlObserved && !openingBrowser) {
+      fail(new Error("Codex login exited before providing an OAuth browser URL."));
+    }
+  };
+  const inspectLoginOutput = (chunk) => {
+    if (urlObserved || settled) return;
+    // A GUI-launched child can still emit terminal styling; remove it before
+    // extracting the URL so the browser hand-off does not depend on a TTY.
+    loginOutput = `${loginOutput}${String(chunk).replace(/\u001b\[[0-?]*[ -\/]*[@-~]/g, "")}`.slice(-128 * 1024);
+    const match = loginOutput.match(/https:\/\/auth\.openai\.com\/oauth\/authorize\?[^\s"'<>]+/);
+    if (!match) return;
+    urlObserved = true;
+    openingBrowser = true;
+    Promise.resolve()
+      .then(() => openExternal(match[0]))
+      .then(() => {
+        openingBrowser = false;
+        if (settled) return;
+        browserOpened = true;
+        settled = true;
+        clearTimeout(timeout);
+        resolveOpen({ opened: true, surface: "browser" });
+      })
+      .catch((error) => {
+        openingBrowser = false;
+        fail(new Error(`Could not open the default browser: ${error instanceof Error ? error.message : String(error)}`));
+      });
+  };
+  child.stdout?.on("data", inspectLoginOutput);
+  child.stderr?.on("data", inspectLoginOutput);
+  const timeout = setTimeout(() => {
+    if (!browserOpened) {
+      try { child.kill("SIGTERM"); } catch { /* process may have exited */ }
+      fail(new Error("Codex login did not provide an OAuth browser URL."));
+    }
+  }, 15_000);
+  child.once("error", (error) => {
+    console.error(`Browser login process failed: ${error.message}`);
+    finish();
+    fail(error);
+  });
+  child.once("close", () => {
+    childExited = true;
+    finish();
+    maybeFailAfterExit();
+  });
+  child.unref();
+  return opened;
 }
 
 function readBounded(filePath, limit = SESSION_INDEX_LIMIT) {
@@ -595,6 +717,9 @@ export function registerIpcHandlers({ ipcMain, BrowserWindow, shell, fetchImpl =
   // each other's snapshots or restore stale state. Reads remain concurrent.
   let mutationTail = Promise.resolve();
   let pendingMutations = 0;
+  // A detached OAuth process can outlive the IPC call. Keep one browser login
+  // per isolated account so a double-click cannot race two Codex callbacks.
+  const subscriptionLoginInFlight = new Set();
   const idleWaiters = new Set();
   const enqueueMutation = (task) => {
     pendingMutations += 1;
@@ -646,6 +771,7 @@ export function registerIpcHandlers({ ipcMain, BrowserWindow, shell, fetchImpl =
 
   handle("getSnapshot", async () => snapshot());
   handle("getChatGptSession", async () => runJson(["chatgpt-session", "status"]));
+  handle("getChatGptAccountPool", async () => runJson(["chatgpt-account-pool", "status"]));
   const windowFor = (event) => {
     const window = BrowserWindow?.fromWebContents?.(event.sender);
     if (!window || window.isDestroyed?.()) throw new Error("Application window is unavailable.");
@@ -966,6 +1092,85 @@ export function registerIpcHandlers({ ipcMain, BrowserWindow, shell, fetchImpl =
       ["chatgpt-session", enabled ? "enable" : "disable"],
       { timeoutMs: CATALOG_MUTATION_TIMEOUT_MS },
     );
+  });
+  handleAction("addChatGptSubscriptionAccount", async ({ label = "" } = {}) => {
+    if (typeof label !== "string" || label.length > 120 || /[\u0000]/.test(label)) {
+      throw new Error("Account label is invalid.");
+    }
+    return runJson(["chatgpt-account-pool", "add", label.trim()], { timeoutMs: 60_000 });
+  });
+  handleAction("loginChatGptSubscriptionAccount", async ({ accountId } = {}) => {
+    const id = stringValue(accountId, "Account id", CHATGPT_ACCOUNT_ID);
+    const pool = await runJson(["chatgpt-account-pool", "status"], { timeoutMs: 20_000 });
+    const account = pool?.accounts?.[id];
+    if (!account) throw new Error("The subscription account is not registered.");
+    if (account.state !== "active") throw new Error("The subscription account is not active.");
+    if (account.subscription?.usable === true) {
+      return {
+        accountId: id,
+        opened: false,
+        surface: "browser",
+        pending: false,
+        alreadyAuthenticated: true,
+      };
+    }
+    if (subscriptionLoginInFlight.has(id)) {
+      return {
+        accountId: id,
+        opened: false,
+        surface: "browser",
+        pending: true,
+        inProgress: true,
+      };
+    }
+    const codex = executablePath("codex");
+    if (!codex) throw new Error("Codex CLI is not installed.");
+    const profile = await runJson(["chatgpt-account-pool", "home", id], { timeoutMs: 20_000 });
+    if (typeof profile?.home !== "string" || !path.isAbsolute(profile.home)) {
+      throw new Error("The subscription account profile is unavailable.");
+    }
+    const profileHome = path.resolve(profile.home);
+    const primaryHome = path.resolve(process.env.CODEX_HOME || path.join(os.homedir(), ".codex"));
+    if (path.basename(profileHome) !== id || profileHome === primaryHome) {
+      throw new Error("The subscription account profile is not isolated from the primary Codex login.");
+    }
+    subscriptionLoginInFlight.add(id);
+    try {
+      return {
+        ...await openBrowserCommand(codex, ["login"], discoverSourceRoot(), {
+          environment: { CODEX_HOME: profileHome },
+          openExternal: shell?.openExternal?.bind(shell),
+          onExit: () => subscriptionLoginInFlight.delete(id),
+        }),
+        accountId: id,
+        pending: true,
+      };
+    } catch (error) {
+      subscriptionLoginInFlight.delete(id);
+      throw error;
+    }
+  });
+  handleAction("removeChatGptSubscriptionAccount", async ({ accountId } = {}) => {
+    const id = stringValue(accountId, "Account id", CHATGPT_ACCOUNT_ID);
+    return runJson(["chatgpt-account-pool", "remove", id], { timeoutMs: 60_000 });
+  });
+  handleAction("setChatGptAccountPoolEnabled", async ({ enabled } = {}) => {
+    if (typeof enabled !== "boolean") throw new Error("enabled must be boolean.");
+    return runJson(["chatgpt-account-pool", enabled ? "enable" : "disable"], { timeoutMs: 60_000 });
+  });
+  handleAction("setChatGptAccountPoolMode", async ({ mode } = {}) => {
+    oneOf(mode, ["switch", "pool"], "Account mode");
+    return runJson(["chatgpt-account-pool", "mode", mode], { timeoutMs: 60_000 });
+  });
+  handleAction("setChatGptAccountPoolStrategy", async ({ strategy } = {}) => {
+    oneOf(strategy, ["quota", "round-robin", "fill-first"], "Account-pool strategy");
+    return runJson(["chatgpt-account-pool", "strategy", strategy], { timeoutMs: 60_000 });
+  });
+  handleAction("setChatGptAccountSelection", async ({ selection } = {}) => {
+    const value = selection === "auto"
+      ? selection
+      : stringValue(selection, "Account selection", CHATGPT_ACCOUNT_ID);
+    return runJson(["chatgpt-account-pool", "select", value], { timeoutMs: 60_000 });
   });
   handleAction("setPresence", async ({ mode } = {}) => runJson(["presence", "set", oneOf(mode, PRESENCE_MODES, "Presence mode")]));
   handleAction("controlService", async ({ action = "status" } = {}) => {

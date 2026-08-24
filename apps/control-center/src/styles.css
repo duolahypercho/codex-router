@@ -1833,6 +1833,26 @@ progress::-webkit-progress-value { border-radius: 999px; background: var(--accen
   margin-top: 13px;
 }
 
+.subscription-account-create {
+  margin-bottom: 15px;
+}
+
+/* Account rows contain inline actions, unlike the standalone action strip
+   above. Keep a little vertical air around the account divider and do not
+   inherit the strip's top margin. */
+.subscription-account-row {
+  min-height: 60px;
+  padding-block: 16px;
+}
+
+.subscription-account-row > .settings-actions {
+  flex-shrink: 0;
+  align-self: center;
+  gap: 10px;
+  margin-top: 0;
+  padding-block: 4px;
+}
+
 .surface-summary {
   display: flex;
   align-items: flex-start;

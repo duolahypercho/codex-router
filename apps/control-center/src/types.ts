@@ -245,6 +245,7 @@ export interface RouterSnapshot {
   catalog?: RouterCatalogSnapshot;
   /** Safe consent/login projection. Never contains token, account, or path data. */
   chatgptSession?: ChatGptSessionStatus;
+  accountPool?: ChatGptAccountPool;
 }
 
 export interface ChatGptSessionStatus {
@@ -252,6 +253,43 @@ export interface ChatGptSessionStatus {
   session: "usable" | "expired" | "unavailable";
   present: boolean;
   expiresInHours?: number;
+  email?: string;
+}
+
+export interface ChatGptSubscriptionAccount {
+  id: string;
+  state: "active" | "paused" | "revoked" | string;
+  paused: boolean;
+  priority: number;
+  label?: string;
+  createdAt?: string;
+  subscription?: {
+    status?: "pending" | "usable" | "expired" | "invalid" | string;
+    authenticated?: boolean;
+    usable?: boolean;
+    expired?: boolean;
+    hasAccountId?: boolean;
+    expiresInHours?: number;
+    email?: string;
+  };
+  health?: { state?: string; lastStatus?: number; lastError?: string };
+  turns: number;
+  requests: number;
+}
+
+export interface ChatGptAccountPool {
+  version: number;
+  policy: { enabled: boolean; mode?: "switch" | "pool" | string; strategy: "quota" | "round-robin" | "fill-first" | string; selectedAccountId?: string };
+  accounts: Record<string, ChatGptSubscriptionAccount>;
+  sessions: { count: number };
+  profile?: ChatGptProfileSwitch;
+}
+
+export interface ChatGptProfileSwitch {
+  desired: string;
+  active: string;
+  pending: boolean;
+  running?: boolean;
 }
 
 export interface RouterCatalogSnapshot {
@@ -339,6 +377,9 @@ export interface UsageMetric {
 
 export interface AccountUsage {
   fetchedAt?: string;
+  accountSelection?: string;
+  accountEmail?: string | null;
+  profilePending?: boolean;
   planType?: string;
   primary?: UsageMetric | null;
   secondary?: UsageMetric | null;
@@ -568,6 +609,7 @@ export interface RouterControlApi {
   closeWindow(): Promise<unknown>;
   getSnapshot(): Promise<RouterSnapshot>;
   getChatGptSession(): Promise<ChatGptSessionStatus>;
+  getChatGptAccountPool(): Promise<ChatGptAccountPool>;
   getHealth(): Promise<RouterHealth>;
   getProviders(): Promise<ProviderSetupSnapshot>;
   discoverProviderModels(provider: string, options?: { refresh?: boolean }): Promise<ProviderCatalog>;
@@ -614,6 +656,13 @@ export interface RouterControlApi {
   clearRouterDefault(): Promise<unknown>;
   setSignedRouting(enabled: boolean): Promise<unknown>;
   setChatGptSessionSharing(enabled: boolean): Promise<ChatGptSessionStatus>;
+  addChatGptSubscriptionAccount(label?: string): Promise<unknown>;
+  loginChatGptSubscriptionAccount(accountId: string): Promise<unknown>;
+  removeChatGptSubscriptionAccount(accountId: string): Promise<unknown>;
+  setChatGptAccountPoolEnabled(enabled: boolean): Promise<unknown>;
+  setChatGptAccountPoolMode(mode: "switch" | "pool"): Promise<unknown>;
+  setChatGptAccountPoolStrategy(strategy: "quota" | "round-robin" | "fill-first"): Promise<unknown>;
+  setChatGptAccountSelection(selection: "auto" | string): Promise<unknown>;
   setPresence(mode: "always" | "follow-codex"): Promise<PresenceSnapshot>;
   controlService(action: "status" | "start"): Promise<unknown>;
   controlTray(action: "enable" | "disable" | "status" | "restart"): Promise<unknown>;

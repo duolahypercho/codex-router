@@ -40,6 +40,8 @@ import {
 } from "./i18n";
 import type {
   AccountUsage,
+  ChatGptAccountPool,
+  ChatGptSessionStatus,
   ModelViewFocus,
   ModelViewFocusRequest,
   OperationEvent,
@@ -100,6 +102,8 @@ export default function App() {
   const [health, setHealth] = useState<RouterHealth>();
   const [providers, setProviders] = useState<ProviderSetupSnapshot>();
   const [accountUsage, setAccountUsage] = useState<AccountUsage>();
+  const [accountPool, setAccountPool] = useState<ChatGptAccountPool>();
+  const [chatgptSession, setChatgptSession] = useState<ChatGptSessionStatus>();
   const [providerUsage, setProviderUsage] = useState<ProviderUsageSnapshot>();
   const [presence, setPresence] = useState<PresenceSnapshot>();
   const [loading, setLoading] = useState(true);
@@ -127,16 +131,29 @@ export default function App() {
 
   const refreshCore = useCallback(async () => {
     if (!api) return;
-    const [nextSnapshot, nextProviders, nextPresence, nextHealth] = await Promise.allSettled([
+    const [nextSnapshot, nextProviders, nextPresence, nextHealth, nextAccountPool, nextChatgptSession] = await Promise.allSettled([
       api.getSnapshot(),
       api.getProviders(),
       api.getPresence(),
       api.getHealth(),
+      typeof api.getChatGptAccountPool === "function"
+        ? api.getChatGptAccountPool()
+        : Promise.resolve(undefined),
+      typeof api.getChatGptSession === "function"
+        ? api.getChatGptSession()
+        : Promise.resolve(undefined),
     ]);
     if (nextSnapshot.status === "fulfilled") setSnapshot(nextSnapshot.value);
     if (nextProviders.status === "fulfilled") setProviders(nextProviders.value);
     if (nextPresence.status === "fulfilled") setPresence(nextPresence.value);
     if (nextHealth.status === "fulfilled") setHealth(nextHealth.value);
+    if (nextAccountPool.status === "fulfilled") setAccountPool(nextAccountPool.value);
+    if (nextChatgptSession.status === "fulfilled" && nextChatgptSession.value !== undefined) {
+      setChatgptSession(nextChatgptSession.value);
+    }
+    // Account-pool support is additive; an older installed router may not
+    // expose the read command yet, so do not make the whole dashboard fail to
+    // load when that optional surface is unavailable.
     const failure = [nextSnapshot, nextProviders, nextPresence, nextHealth]
       .find((result) => result.status === "rejected") as PromiseRejectedResult | undefined;
     if (failure) throw failure.reason;
@@ -270,10 +287,32 @@ export default function App() {
     setOperation({ action: label, status: "started", message: label });
     try {
       const result = await action();
+      const actionResult = result !== null && typeof result === "object"
+        ? result as { accepted?: unknown; pending?: unknown; alreadyAuthenticated?: unknown; inProgress?: unknown }
+        : undefined;
+      if (actionResult?.alreadyAuthenticated === true || actionResult?.pending === true) {
+        const message = actionResult.alreadyAuthenticated === true
+          ? `${label} is already signed in.`
+          : actionResult.inProgress === true
+            ? `${label} is already open in the browser.`
+            : `${label} opened in the browser. Finish sign-in there.`;
+        setToast({ tone: "neutral", message });
+        // The detached Codex OAuth process updates the isolated profile after
+        // the browser callback. Reconcile a few times without keeping a
+        // permanent spinner or claiming that OAuth has already finished.
+        await Promise.allSettled([refreshCore()]);
+        if (actionResult.pending === true && actionResult.alreadyAuthenticated !== true) {
+          for (const delay of [1_000, 3_000, 10_000, 30_000]) {
+            window.setTimeout(() => {
+              void refreshCore().catch((error) => setLoadError(readableError(error)));
+            }, delay);
+          }
+        }
+        setOperation({ action: label, status: "completed", message });
+        return;
+      }
       if (
-        result !== null
-        && typeof result === "object"
-        && (result as { accepted?: unknown }).accepted === true
+        actionResult?.accepted === true
       ) {
         // Detached tray work can outlive (and intentionally close) this app.
         // Spawn acceptance is not scheduler/build success, so never render the
@@ -347,7 +386,7 @@ export default function App() {
       case "local": return <LocalPage {...shared} operation={operation} />;
       case "harness": return <HarnessPage {...shared} />;
       case "context": return <ContextPage {...shared} />;
-      case "settings": return <SettingsPage {...shared} health={health} presence={presence} chatgptSession={snapshot?.chatgptSession} theme={theme} onTheme={setTheme} language={language} onLanguage={setLanguage} t={t} />;
+      case "settings": return <SettingsPage {...shared} health={health} presence={presence} chatgptSession={chatgptSession ?? snapshot?.chatgptSession} accountPool={accountPool} theme={theme} onTheme={setTheme} language={language} onLanguage={setLanguage} t={t} />;
     }
   })();
 

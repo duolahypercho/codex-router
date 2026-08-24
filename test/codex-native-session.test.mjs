@@ -16,6 +16,10 @@ const home = mkdtempSync(path.join(os.tmpdir(), "native-session-"));
 const authPath = path.join(home, "auth.json");
 process.env.MODEL_ROUTER_CODEX_AUTH = authPath;
 process.env.MODEL_ROUTER_STATE_DIR = path.join(home, "state");
+const accountPoolPath = path.join(home, "state", "chatgpt-account-pool.json");
+const accountHomesDir = path.join(home, "state", "chatgpt-accounts");
+process.env.MODEL_ROUTER_CHATGPT_ACCOUNT_POOL = accountPoolPath;
+process.env.MODEL_ROUTER_CHATGPT_ACCOUNT_HOMES = accountHomesDir;
 delete process.env.CODEX_ROUTER_NATIVE_SESSION_FALLBACK;
 
 // Every test shares one fixture home; take it down once the file finishes so
@@ -28,10 +32,17 @@ const {
   nativeSessionSharingEnabled,
   nativeSessionAvailable,
   nativeSessionHeaders,
+  nativeSubscriptionPoolHeaders,
   nativeSessionStatus,
   setNativeSessionSharingEnabled,
   tokenExpiryMs,
 } = await import("../src/codex-native-session.mjs");
+const {
+  chatGPTSubscriptionAccountAuthPath,
+  createChatGPTSubscriptionAccount,
+  readChatGPTAccountPoolState,
+  writeChatGPTAccountPoolState,
+} = await import("../src/chatgpt-account-pool.mjs");
 const { NATIVE_SESSION_CONSENT_PATH } = await import("../src/paths.mjs");
 
 const { dshNativeModels } = await import("../src/dsh-catalog.mjs");
@@ -332,6 +343,56 @@ test("status reports the remaining life, never the token", () => {
   const status = nativeSessionStatus();
   assert.ok(status.expiresInHours > 9 && status.expiresInHours <= 10);
   assert.doesNotMatch(JSON.stringify(status), new RegExp(ACCOUNT));
+});
+
+test("a subscription pool is available only through the native Codex override", () => {
+  clearAuth();
+  const account = createChatGPTSubscriptionAccount({
+    label: "Pool account",
+    filePath: accountPoolPath,
+    homesDir: accountHomesDir,
+  });
+  const accountAuth = chatGPTSubscriptionAccountAuthPath(account.id, { homesDir: accountHomesDir });
+  const payload = Buffer.from(JSON.stringify({ exp: Math.floor((Date.now() + 3_600_000) / 1000) })).toString("base64url");
+  writeFileSync(accountAuth, JSON.stringify({ tokens: { access_token: `pool.${payload}.token`, account_id: "pool-account" } }), { mode: 0o600 });
+  const state = readChatGPTAccountPoolState(accountPoolPath);
+  state.policy.enabled = true;
+  writeChatGPTAccountPoolState(state, accountPoolPath);
+  assert.equal(nativeSessionSharingEnabled(), false, "primary CODEX_HOME consent remains independent");
+  assert.equal(nativeSessionHeaders(), undefined, "the pool is not a shared-session fallback");
+  assert.deepEqual(nativeSubscriptionPoolHeaders(), {
+    authorization: `Bearer pool.${payload}.token`,
+    "chatgpt-account-id": "pool-account",
+  });
+  assert.equal(nativeSessionAvailable(), false);
+  state.policy.enabled = false;
+  writeChatGPTAccountPoolState(state, accountPoolPath);
+});
+
+test("no-discovery blocks subscription fallback before reading pooled credentials", () => {
+  const account = createChatGPTSubscriptionAccount({
+    label: "No-discovery account",
+    filePath: accountPoolPath,
+    homesDir: accountHomesDir,
+  });
+  const accountAuth = chatGPTSubscriptionAccountAuthPath(account.id, { homesDir: accountHomesDir });
+  const payload = Buffer.from(JSON.stringify({ exp: Math.floor((Date.now() + 3_600_000) / 1000) })).toString("base64url");
+  writeFileSync(accountAuth, JSON.stringify({ tokens: { access_token: `pool.${payload}.token`, account_id: "pool-account" } }), { mode: 0o600 });
+  const state = readChatGPTAccountPoolState(accountPoolPath);
+  state.policy.enabled = true;
+  writeChatGPTAccountPoolState(state, accountPoolPath);
+
+  process.env.CODEX_ROUTER_NO_DISCOVERY = "1";
+  try {
+    assert.equal(nativeSubscriptionPoolHeaders(), undefined);
+    assert.equal(nativeSessionHeaders(), undefined);
+    assert.equal(nativeSessionAvailable(), false);
+    assert.equal(nativeSessionStatus().present, false);
+  } finally {
+    delete process.env.CODEX_ROUTER_NO_DISCOVERY;
+    state.policy.enabled = false;
+    writeChatGPTAccountPoolState(state, accountPoolPath);
+  }
 });
 
 test("the bearer parser is linear and rejects the shapes it should", () => {

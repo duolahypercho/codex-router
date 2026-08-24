@@ -61,6 +61,48 @@ export interface ChatGptSessionStatus {
   session: "usable" | "expired" | "unavailable";
   present: boolean;
   expiresInHours?: number;
+  email?: string;
+}
+
+export interface ChatGptSubscriptionAccount {
+  id: string;
+  state: "active" | "paused" | "revoked" | string;
+  paused: boolean;
+  priority: number;
+  label?: string;
+  createdAt?: string;
+  subscription?: {
+    status?: "pending" | "usable" | "expired" | "invalid" | string;
+    authenticated?: boolean;
+    usable?: boolean;
+    expired?: boolean;
+    hasAccountId?: boolean;
+    expiresInHours?: number;
+    email?: string;
+  };
+  health?: { state?: string; lastStatus?: number; lastError?: string };
+  turns: number;
+  requests: number;
+}
+
+export interface ChatGptAccountPool {
+  version: number;
+  policy: {
+    enabled: boolean;
+    mode?: "switch" | "pool" | string;
+    strategy: "quota" | "round-robin" | "fill-first" | string;
+    selectedAccountId?: string;
+  };
+  accounts: Record<string, ChatGptSubscriptionAccount>;
+  sessions: { count: number };
+  profile?: ChatGptProfileSwitch;
+}
+
+export interface ChatGptProfileSwitch {
+  desired: string;
+  active: string;
+  pending: boolean;
+  running?: boolean;
 }
 
 export interface RouterControl {
@@ -70,6 +112,7 @@ export interface RouterControl {
   closeWindow(): Promise<unknown>;
   getSnapshot(): Promise<unknown>;
   getChatGptSession(): Promise<ChatGptSessionStatus>;
+  getChatGptAccountPool(): Promise<ChatGptAccountPool>;
   getHealth(): Promise<unknown>;
   getProviders(): Promise<unknown>;
   discoverProviderModels(provider: string, options?: { refresh?: boolean }): Promise<unknown>;
@@ -115,6 +158,13 @@ export interface RouterControl {
   clearRouterDefault(): Promise<unknown>;
   setSignedRouting(enabled: boolean): Promise<unknown>;
   setChatGptSessionSharing(enabled: boolean): Promise<ChatGptSessionStatus>;
+  addChatGptSubscriptionAccount(label?: string): Promise<unknown>;
+  loginChatGptSubscriptionAccount(accountId: string): Promise<unknown>;
+  removeChatGptSubscriptionAccount(accountId: string): Promise<unknown>;
+  setChatGptAccountPoolEnabled(enabled: boolean): Promise<unknown>;
+  setChatGptAccountPoolMode(mode: "switch" | "pool"): Promise<unknown>;
+  setChatGptAccountPoolStrategy(strategy: "quota" | "round-robin" | "fill-first"): Promise<unknown>;
+    setChatGptAccountSelection(selection: "auto" | string): Promise<unknown>;
   setPresence(mode: PresenceMode): Promise<unknown>;
   controlService(action: ServiceAction): Promise<unknown>;
   controlTray(action: TrayAction): Promise<unknown>;

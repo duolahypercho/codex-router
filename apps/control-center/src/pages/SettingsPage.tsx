@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
-import { AppWindow, Eye, Moon, RefreshCw, Server, Sun, Wrench } from "lucide-react";
+import { AppWindow, Eye, LogIn, Moon, Plus, RefreshCw, Server, ShieldCheck, Sun, Trash2, UserRound, Wrench } from "lucide-react";
 import { Badge, Button, Dialog, InlineNotice, PageHeader, SectionHeading, Toggle } from "../components";
 import { compactNumber } from "../lib";
 import { LANGUAGE_OPTIONS, type LanguageId, type Translate } from "../i18n";
-import type { ChatGptSessionStatus, DoctorSnapshot, PresenceSnapshot, RouterControlApi, RouterHealth, RouterTarget, VisionEngine } from "../types";
+import type { ChatGptAccountPool, ChatGptSessionStatus, DoctorSnapshot, PresenceSnapshot, RouterControlApi, RouterHealth, RouterTarget, VisionEngine } from "../types";
 import { useOptimisticValues, type RunAction } from "../useOptimisticValues";
 
 // Mirrors RETENTION_MIN/MAX/DEFAULT_TTL_DAYS in src/tool-result-retention.mjs.
@@ -25,11 +25,12 @@ function formatBytes(value: number | null | undefined): string {
   return `${size >= 10 || unit === 0 ? Math.round(size) : size.toFixed(1)} ${units[unit]}`;
 }
 
-export function SettingsPage({ target, health, presence, chatgptSession, api, theme, onTheme, language, onLanguage, t, refreshing, onRefresh, runAction }: {
+export function SettingsPage({ target, health, presence, chatgptSession, accountPool, api, theme, onTheme, language, onLanguage, t, refreshing, onRefresh, runAction }: {
   target?: RouterTarget;
   health?: RouterHealth;
   presence?: PresenceSnapshot;
   chatgptSession?: ChatGptSessionStatus;
+  accountPool?: ChatGptAccountPool;
   api?: RouterControlApi;
   theme: "light" | "dark";
   onTheme: (theme: "light" | "dark") => void;
@@ -45,6 +46,8 @@ export function SettingsPage({ target, health, presence, chatgptSession, api, th
   const [confirmRepair, setConfirmRepair] = useState(false);
   const [repairing, setRepairing] = useState(false);
   const [repairReport, setRepairReport] = useState<DoctorSnapshot | null>(null);
+  const [newAccountLabel, setNewAccountLabel] = useState("");
+  const [removeAccountId, setRemoveAccountId] = useState<string | null>(null);
   const [trayCapability, setTrayCapability] = useState<{ supported?: boolean; why?: string }>();
   useEffect(() => {
     let active = true;
@@ -81,6 +84,17 @@ export function SettingsPage({ target, health, presence, chatgptSession, api, th
       ? "settings.chatgptSession.status.sharingEnabled"
       : "settings.chatgptSession.status.sharingDisabled")} · ${sessionLoginLabel}`
     : t("settings.chatgptSession.status.unavailable");
+  // Revoked records are cleanup tombstones from older router versions. They
+  // are not usable accounts and must never reappear as "Account 1/2" rows.
+  // Keep paused records visible so a future resume control can explain them.
+  const subscriptionAccounts = Object.values(accountPool?.accounts || {})
+    .filter((account) => account.state !== "revoked");
+  const usableSubscriptionAccounts = subscriptionAccounts.filter((account) => account.state === "active" && account.subscription?.usable === true);
+  const activeAccountId = accountPool?.profile?.active;
+  const accountMode = accountPool?.policy.mode === "pool" ? "pool" : "switch";
+  const accountSelection = accountPool?.policy.enabled
+    ? accountPool.policy.selectedAccountId || "auto"
+    : activeAccountId || usableSubscriptionAccounts[0]?.id || "auto";
 
   // Repair reinstalls and restarts the service, so it can outlast several
   // ordinary actions. `runAction` owns the toast and the refresh; the report
@@ -159,6 +173,18 @@ export function SettingsPage({ target, health, presence, chatgptSession, api, th
             <SectionHeading title={t("settings.routing.title")} description={t("settings.routing.description")} />
             <div className="settings-list">
               <div className="setting-row">
+                <div><strong>Account mode</strong><small>{accountMode === "pool" ? "Keep the selected login active and route native requests through the other saved accounts automatically." : "Activate the selected login in Codex. Other saved accounts remain untouched."}</small></div>
+                <select
+                  aria-label="ChatGPT account mode"
+                  value={accountMode}
+                  disabled={!api || !accountPool}
+                  onChange={(event) => api && void runAction("Change ChatGPT account mode", () => api.setChatGptAccountPoolMode(event.target.value as "switch" | "pool"))}
+                >
+                  <option value="switch">Switch account</option>
+                  <option value="pool">Pool (automatic)</option>
+                </select>
+              </div>
+              <div className="setting-row">
                 <div><strong>{t("settings.signedRouting.title")}</strong><small>{t("settings.signedRouting.detail")}</small></div>
                 <Toggle checked={optimisticToggles.value("signed-routing", target?.signedRouting === true)} disabled={!api || !target} label={t("settings.signedRouting.title")} onChange={(enabled) => api && void optimisticToggles.mutate("signed-routing", enabled, "Change signed routing", () => api.setSignedRouting(enabled))} />
               </div>
@@ -180,6 +206,96 @@ export function SettingsPage({ target, health, presence, chatgptSession, api, th
               </div>
             </div>
             <InlineNotice tone="neutral" title={t("settings.restart.title")}>{t("settings.restart.body")}</InlineNotice>
+          </section>
+
+          <section className="panel-section">
+            <SectionHeading
+              title="ChatGPT subscription pool"
+              description="Save multiple ChatGPT logins and choose which one native Codex chats use. Provider routes keep their own credentials."
+            />
+            {accountPool?.profile?.pending ? (
+              <InlineNotice tone="neutral" title="Account switch pending">
+                Close Codex completely. The selected login will be activated before the next launch.
+              </InlineNotice>
+            ) : null}
+            <div className="settings-list">
+              <div className="setting-row">
+                <div><strong>Account to use</strong><small>Choose one saved login or let the account pool select automatically.</small></div>
+                <select
+                  aria-label="ChatGPT account to use"
+                  value={accountSelection}
+                  disabled={!api || !accountPool}
+                  onChange={(event) => api && void runAction("Change ChatGPT account", () => api.setChatGptAccountSelection(event.target.value))}
+                >
+                  <option value="auto" disabled={usableSubscriptionAccounts.length === 0}>Automatic pool</option>
+                  {subscriptionAccounts.map((account) => (
+                    <option key={account.id} value={account.id} disabled={account.subscription?.usable !== true}>
+                      {account.subscription?.email || account.label || account.id}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="setting-row">
+                <div><strong>Selection strategy</strong><small>Quota prefers the account with more remaining capacity.</small></div>
+                <select
+                  aria-label="ChatGPT subscription pool strategy"
+                  value={accountPool?.policy.strategy || "quota"}
+                  disabled={!api || !accountPool || accountMode !== "pool"}
+                  onChange={(event) => api && void runAction("Change ChatGPT pool strategy", () => api.setChatGptAccountPoolStrategy(event.target.value as "quota" | "round-robin" | "fill-first"))}
+                >
+                  <option value="quota">Quota</option>
+                  <option value="round-robin">Round-robin</option>
+                  <option value="fill-first">Fill first</option>
+                </select>
+              </div>
+            </div>
+            <div className="settings-actions subscription-account-create">
+              <input
+                aria-label="New ChatGPT account label"
+                value={newAccountLabel}
+                maxLength={120}
+                placeholder="Account label (optional)"
+                onChange={(event) => setNewAccountLabel(event.target.value)}
+              />
+              <Button
+                variant="secondary"
+                disabled={!api}
+                onClick={() => {
+                  if (!api) return;
+                  void runAction("Add ChatGPT subscription account", async () => {
+                    const result = await api.addChatGptSubscriptionAccount(newAccountLabel.trim());
+                    setNewAccountLabel("");
+                    return result;
+                  });
+                }}
+              ><Plus aria-hidden size={14} strokeWidth={1.7} /> Add account</Button>
+            </div>
+            <div className="settings-list">
+              {subscriptionAccounts.map((account) => {
+                const status = account.subscription?.usable ? "Ready" : account.subscription?.expired ? "Session expired" : "Sign-in required";
+                const title = account.subscription?.email || account.label || account.id;
+                const label = account.subscription?.email && account.label ? `${account.label} · ` : "";
+                return (
+                  <div className="setting-row subscription-account-row" key={account.id}>
+                    <div>
+                      <strong><UserRound aria-hidden size={14} strokeWidth={1.7} /> {title} {accountSelection === account.id ? <Badge tone="accent">Selected</Badge> : null}</strong>
+                      <small>{label}{status} · {account.id} · {account.subscription?.expiresInHours !== undefined ? `${account.subscription.expiresInHours}h remaining` : ""}</small>
+                    </div>
+                    <div className="settings-actions">
+                      <Button
+                        variant="ghost"
+                        disabled={!api || account.state !== "active" || account.subscription?.usable === true}
+                        onClick={() => api && void runAction(`Login ${account.label || account.id}`, () => api.loginChatGptSubscriptionAccount(account.id))}
+                      ><LogIn aria-hidden size={13} strokeWidth={1.7} /> Login</Button>
+                      <Button variant="ghost" disabled={!api || account.state === "revoked"} onClick={() => setRemoveAccountId(account.id)}><Trash2 aria-hidden size={13} strokeWidth={1.7} /> Remove</Button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            {!subscriptionAccounts.length ? (
+              <div className="surface-summary"><ShieldCheck aria-hidden size={20} strokeWidth={1.6} /><div><strong>No saved ChatGPT accounts</strong><small>Add a login to create its isolated account profile.</small></div></div>
+            ) : null}
           </section>
 
           <section className="panel-section">
@@ -423,6 +539,23 @@ export function SettingsPage({ target, health, presence, chatgptSession, api, th
             setConfirmTrayDisable(false);
             if (api) void runAction("Disable desktop tray", () => api.controlTray("disable"));
           }}>{t("settings.desktop.disable")}</Button>
+        </div>
+      </Dialog>
+
+      <Dialog
+        open={Boolean(removeAccountId)}
+        title="Remove ChatGPT subscription account?"
+        description="This revokes the pool entry and deletes its isolated Codex login profile."
+        onClose={() => setRemoveAccountId(null)}
+      >
+        <p className="dialog-copy">The account's local OAuth profile will be removed. Your main Codex login is not changed.</p>
+        <div className="dialog-actions">
+          <Button variant="secondary" onClick={() => setRemoveAccountId(null)}>Cancel</Button>
+          <Button variant="danger" disabled={!api || !removeAccountId} onClick={() => {
+            const id = removeAccountId;
+            setRemoveAccountId(null);
+            if (api && id) void runAction("Remove ChatGPT subscription account", () => api.removeChatGptSubscriptionAccount(id));
+          }}>Remove account</Button>
         </div>
       </Dialog>
     </>

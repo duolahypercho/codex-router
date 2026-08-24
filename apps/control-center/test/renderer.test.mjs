@@ -141,9 +141,33 @@ const bridgeSource = String.raw`
   window.routerControl = Object.freeze({
     platform: navigator.platform.toLowerCase().includes("mac") ? "darwin" : "linux",
     getSnapshot: async () => snapshot,
+    getChatGptSession: async () => ({ sharing: "disabled", session: "usable", present: true, email: "primary@example.com" }),
+    getChatGptAccountPool: async () => ({
+      version: 1,
+      policy: {
+        enabled: true,
+        mode: "switch",
+        strategy: "quota",
+        autoSwitchThreshold: 0.1,
+        sticky: true,
+        stickyLimit: 50,
+        maxCooldownSeconds: 300,
+        priorityOrder: [],
+        pausedAccountIds: [],
+        selectedAccountId: "active",
+      },
+      accounts: {
+        revoked: { id: "revoked", state: "revoked", paused: true, priority: 50, label: "Removed account", health: { state: "healthy" }, turns: 0, requests: 0 },
+        active: { id: "active", state: "active", paused: false, priority: 50, label: "Secondary account", subscription: { status: "usable", authenticated: true, usable: true, expired: false, email: "secondary@example.com" }, health: { state: "healthy" }, turns: 0, requests: 0 },
+        current: { id: "current", state: "active", paused: false, priority: 50, label: "Current account", subscription: { status: "usable", authenticated: true, usable: true, expired: false, email: "primary@example.com" }, health: { state: "healthy" }, turns: 0, requests: 0 },
+      },
+      sessions: { count: 0 },
+      profile: { desired: "active", active: "active", pending: false, running: false },
+    }),
     getProviders: async () => providers,
     getPresence: async () => ({ mode: "always" }),
     getHealth: async () => ({ ok: true, activity: { state: "idle", active: [], activeCount: 0 } }),
+    controlTray: async () => ({ status: { supported: true } }),
     getAccountUsage: async () => ({}),
     getProviderUsage: async () => ({ providers: [] }),
     discoverProviderModels: async (providerId) => catalog(providerId),
@@ -157,6 +181,14 @@ const bridgeSource = String.raw`
     },
     setPickerModel: async () => ({ ok: true }),
     setProviderEnabled: async () => ({ ok: true }),
+    setChatGptAccountSelection: async (selection) => {
+      record("setChatGptAccountSelection", selection);
+      return { ok: true };
+    },
+    setChatGptAccountPoolMode: async (mode) => {
+      record("setChatGptAccountPoolMode", mode);
+      return { ok: true };
+    },
     setSubagentModel: async () => ({ ok: true }),
     setSubagentEffort: async () => ({ ok: true }),
     onOperation: () => () => {},
@@ -321,6 +353,18 @@ test("the production renderer exposes model discovery and picker actions", { tim
       ["catalog-addable"],
     ]);
     assert.equal(calls.some((call) => call.name === "setPickerModels" && call.args[0] === true), true);
+
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    const accountRows = page.locator(".subscription-account-row");
+    await page.getByText("ChatGPT subscription pool", { exact: true }).waitFor();
+    assert.equal(await accountRows.count(), 2, "two logged-in accounts should be visible");
+    assert.equal(await accountRows.filter({ hasText: "Removed account" }).count(), 0, "revoked accounts stay hidden");
+    assert.equal(await accountRows.filter({ hasText: "secondary@example.com" }).count(), 1, "secondary email should be visible");
+    const readySecondary = accountRows.filter({ hasText: "Secondary account" });
+    assert.equal(await readySecondary.getByRole("button", { name: "Login", exact: true }).isDisabled(), true, "ready accounts cannot start a duplicate login");
+    await page.getByRole("combobox", { name: "ChatGPT account to use" }).selectOption("active");
+    await page.waitForFunction(() => window.routerControlTest.calls()
+      .some((call) => call.name === "setChatGptAccountSelection" && call.args[0] === "active"));
     assert.deepEqual(pageErrors, [], `renderer errors: ${pageErrors.join("; ")}`);
   } finally {
     await browser.close();

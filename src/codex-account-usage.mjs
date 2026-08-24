@@ -106,6 +106,7 @@ export function readCodexAccountUsage({
   timeoutMs = DEFAULT_TIMEOUT_MS,
   binary = codexBinary(),
   platform = process.platform,
+  codexHome = process.env.CODEX_HOME,
   spawnImpl = spawn,
 } = {}) {
   return new Promise((resolve, reject) => {
@@ -125,6 +126,7 @@ export function readCodexAccountUsage({
     const target = spawnableCommand(binary, ["app-server"], platform);
     const processHandle = spawnImpl(target.command, target.args, {
       ...target.options,
+      env: codexHome ? { ...process.env, CODEX_HOME: codexHome } : process.env,
       stdio: ["pipe", "pipe", "ignore"],
       windowsHide: true,
     });

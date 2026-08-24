@@ -3,7 +3,11 @@ import path from "node:path";
 
 import { discoveryDisabled } from "./discovery-mode.mjs";
 import { writePrivateJson } from "./file-security.mjs";
-import { CODEX_HOME, NATIVE_SESSION_CONSENT_PATH } from "./paths.mjs";
+import { CHATGPT_PROFILE_SWITCH_PATH, CODEX_HOME, NATIVE_SESSION_CONSENT_PATH } from "./paths.mjs";
+import {
+  chatGPTSubscriptionPoolHeaders,
+} from "./chatgpt-account-pool.mjs";
+import { readChatGPTProfileSwitchState } from "./chatgpt-profile-switch.mjs";
 
 // The ChatGPT session the local Codex install already holds.
 //
@@ -17,12 +21,12 @@ import { CODEX_HOME, NATIVE_SESSION_CONSENT_PATH } from "./paths.mjs";
 // shared router plane. The authorization is one owner-only marker carrying no
 // credential. DeepSeek Harness, Gemini CLI, and any future local client then
 // share that decision; asking the same OS user to sign in once per harness buys
-// nothing. It is still a *fallback*: a caller that presents its own credential
-// is always relayed unchanged, so Codex is untouched by this.
+// nothing. The subscription account pool is separate: it can replace the
+// session attached to native Codex traffic when the user enables it.
 //
-// The values are never logged, never returned by a status call, and never put
-// in an error message. `nativeSessionStatus` reports presence and age only,
-// which is the same bound the rest of the router holds credentials to.
+// Access and refresh tokens are never logged, returned by a status call, or
+// put in an error message. The desktop status may include the verified email
+// claim from the id_token so the user can identify the signed-in profile.
 export const CODEX_AUTH_PATH =
   process.env.MODEL_ROUTER_CODEX_AUTH || path.join(CODEX_HOME, "auth.json");
 
@@ -74,6 +78,20 @@ export function tokenExpiryMs(accessToken) {
   }
 }
 
+const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function tokenEmail(idToken) {
+  try {
+    const payload = String(idToken).split(".")[1];
+    if (!payload) return undefined;
+    const claims = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+    const email = typeof claims?.email === "string" ? claims.email.trim() : "";
+    return email.length <= 320 && EMAIL.test(email) ? email : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 // Treated as expired slightly early: a token that dies mid-flight costs a whole
 // turn, and there is nothing to gain from spending the last seconds of one.
 const EXPIRY_SKEW_MS = 120_000;
@@ -88,11 +106,13 @@ function readSession() {
     const tokens = parsed?.tokens;
     const accessToken = typeof tokens?.access_token === "string" ? tokens.access_token : "";
     const accountId = typeof tokens?.account_id === "string" ? tokens.account_id : "";
+    const idToken = typeof tokens?.id_token === "string" ? tokens.id_token : "";
     if (!accessToken) return undefined;
     const expiresAtMs = tokenExpiryMs(accessToken);
     return {
       accessToken,
       accountId,
+      email: tokenEmail(idToken),
       lastRefresh: parsed?.last_refresh,
       expiresAtMs,
       expired: expiresAtMs !== undefined && expiresAtMs - EXPIRY_SKEW_MS <= Date.now(),
@@ -201,7 +221,20 @@ export async function refreshViaCodex({ now = Date.now() } = {}) {
  * `undefined` when there is nothing to fall back to, so call sites can leave
  * the request exactly as it arrived.
  */
+export function nativeSubscriptionPoolHeaders({ sessionId } = {}) {
+  if (discoveryDisabled()) return undefined;
+  const profile = readChatGPTProfileSwitchState(CHATGPT_PROFILE_SWITCH_PATH);
+  if (profile.pending && profile.desired !== "auto") return undefined;
+  const pooled = chatGPTSubscriptionPoolHeaders({ sessionId });
+  if (pooled) {
+    const { accountId: _accountId, ...headers } = pooled;
+    return headers;
+  }
+  return undefined;
+}
+
 export function nativeSessionHeaders() {
+  if (discoveryDisabled()) return undefined;
   if (!nativeSessionSharingEnabled()) return undefined;
   const session = readSession();
   if (!session) return undefined;
@@ -220,6 +253,7 @@ export function nativeSessionHeaders() {
 }
 
 export function nativeSessionAvailable() {
+  if (discoveryDisabled()) return false;
   return Boolean(nativeSessionHeaders());
 }
 
@@ -265,6 +299,7 @@ export function nativeSessionStatus() {
     // which `nativeSessionAvailable()` applies.
     usable: Boolean(session) && !session.expired,
     hasAccountId: Boolean(session?.accountId),
+    ...(session?.email ? { email: session.email } : {}),
     expired: Boolean(session?.expired),
     // The one number worth reporting: a session is only as good as the days
     // left on it, and "signed in but stale" is a different problem from

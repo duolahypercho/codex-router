@@ -42,6 +42,32 @@ import {
   shouldQuitOnLastWindowClosed,
   writeLifecycleState,
 } from "../apps/control-center/electron/lifecycle-state.mjs";
+import { openBrowserCommand } from "../apps/control-center/electron/ipc.mjs";
+
+test("ChatGPT browser login waits for the OAuth URL after child close", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "router-browser-login-"));
+  const executable = path.join(directory, "codex-test");
+  const openedUrls = [];
+  let exited = false;
+  try {
+    await writeFile(
+      executable,
+      "#!/usr/bin/env node\nprocess.stdout.write('https://auth.openai.com/oauth/authorize?state=test')\n",
+    );
+    await chmod(executable, 0o755);
+    const result = await openBrowserCommand(executable, [], process.cwd(), {
+      environment: { PATH: "/usr/bin:/bin:/usr/sbin:/sbin" },
+      openExternal: async (url) => { openedUrls.push(url); },
+      onExit: () => { exited = true; },
+    });
+    assert.deepEqual(result, { opened: true, surface: "browser" });
+    assert.deepEqual(openedUrls, ["https://auth.openai.com/oauth/authorize?state=test"]);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(exited, true);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 test("Control Center groups provider routes under one model family", () => {
   const families = groupModelFamilies([
@@ -704,6 +730,8 @@ test("electron boundary does not enable node integration or shell argv", async (
   assert.match(main, /trafficLightPosition:\s*\{\s*x:\s*16,\s*y:\s*16\s*\}/);
   assert.match(main, /icon:\s*appIconPath\(\)/);
   assert.match(main, /app\.dock\?\.setIcon\(appIconPath\(\)\)/);
+  assert.match(main, /CODEX_ROUTER_USER_VISIBLE_CONTROL_CENTER/);
+  assert.match(main, /app\.dock\?\.show\(\)/);
   assert.match(main, /setWindowOpenHandler\(\(\) => \(\{ action: "deny" \}\)\)/);
   assert.match(main, /if \(app\.isPackaged \|\| !requested\)/);
   assert.match(main, /\["127\.0\.0\.1", "localhost", "\[::1\]"\]\.includes\(parsed\.hostname\)/);
@@ -801,6 +829,7 @@ test("preload exposes only the named control operations", async () => {
   const source = await readFile(new URL("../apps/control-center/electron/preload.cjs", import.meta.url), "utf8");
   for (const method of [
     "getSnapshot",
+    "getChatGptAccountPool",
     "getHarnesses",
     "getContextSessions",
     "minimizeWindow",
@@ -858,6 +887,7 @@ test("preload constructs exact positional IPC payloads", async () => {
     },
   });
   const cases = [
+    ["getChatGptAccountPool", [], null],
     ["discoverProviderModels", ["provider"], { providerId: "provider", refresh: false }],
     ["discoverProviderModels", ["provider", { refresh: true }], { providerId: "provider", refresh: true }],
     ["setProviderEnabled", ["provider", false], { providerId: "provider", enabled: false }],
@@ -889,6 +919,13 @@ test("preload constructs exact positional IPC payloads", async () => {
     ["setToolResultRetentionTtl", [7], { days: 7 }],
     ["setDefaultModel", ["model"], { slug: "model" }],
     ["setSignedRouting", [false], { enabled: false }],
+    ["addChatGptSubscriptionAccount", ["Work"], { label: "Work" }],
+    ["loginChatGptSubscriptionAccount", ["acct_example_123456"], { accountId: "acct_example_123456" }],
+    ["removeChatGptSubscriptionAccount", ["acct_example_123456"], { accountId: "acct_example_123456" }],
+    ["setChatGptAccountPoolEnabled", [true], { enabled: true }],
+    ["setChatGptAccountPoolMode", ["pool"], { mode: "pool" }],
+    ["setChatGptAccountPoolStrategy", ["round-robin"], { strategy: "round-robin" }],
+    ["setChatGptAccountSelection", ["acct_example_123456"], { selection: "acct_example_123456" }],
     ["setPresence", ["always"], { mode: "always" }],
     ["controlService", ["start"], { action: "start" }],
     ["controlTray", ["status"], { action: "status" }],
@@ -1017,6 +1054,13 @@ test("settings keeps model choice out and exposes durable app preferences", asyn
   assert.match(settings, /setVisionBridgeEnabled\(/);
   assert.match(settings, /setVisionBridgeEngine\(/);
   assert.match(settings, /setVisionBridgeEffort\(/);
+  assert.match(settings, /ChatGPT subscription pool/);
+  assert.match(settings, /subscription-account-row/);
+  assert.match(settings, /No saved ChatGPT accounts/);
+  assert.match(settings, /addChatGptSubscriptionAccount\(/);
+  assert.match(settings, /loginChatGptSubscriptionAccount\(/);
+  assert.match(settings, /removeChatGptSubscriptionAccount\(/);
+  assert.doesNotMatch(settings, /access_token|refresh_token/);
   assert.doesNotMatch(settings, /runMaintenance/);
   assert.doesNotMatch(settings, /setLoginFree/);
   // Repair used to be terminal-only. It is an in-app button now, but it still
@@ -1301,6 +1345,28 @@ test("harness and context IPC remain fixed and session-scoped", async () => {
   assert.match(source, /stringValue\(sessionId, "Session", SESSION_UUID\)/);
   assert.match(source, /codex:\/\/threads\/\$\{id\}/);
   assert.doesNotMatch(source, /readFileSync\(deepcodeSettings/);
+  const chatgptLogin = source.match(/handleAction\("loginChatGptSubscriptionAccount"[\s\S]*?\n  \}\);/)?.[0];
+  assert.ok(chatgptLogin, "ChatGPT subscription login handler should be readable");
+  assert.match(chatgptLogin, /openBrowserCommand\(codex, \["login"\]/);
+  assert.match(chatgptLogin, /\["chatgpt-account-pool", "status"\]/);
+  assert.match(chatgptLogin, /account\.subscription\?\.usable === true/);
+  assert.match(chatgptLogin, /profileHome === primaryHome/);
+  assert.match(chatgptLogin, /subscriptionLoginInFlight/);
+  assert.doesNotMatch(chatgptLogin, /openTerminalCommand/);
+  assert.match(source, /const CHATGPT_LOGIN_URL/);
+  assert.match(source, /stdio: \["ignore", "pipe", "pipe"\]/);
+  assert.match(source, /openExternal\(match\[0\]\)/);
+  assert.match(source, /openExternal: shell\?\.openExternal\?\.bind\(shell\)/);
+  assert.match(source, /await openBrowserCommand\(codex, \["login"\]/);
+  assert.match(source, /did not provide an OAuth browser URL/);
+  assert.match(source, /surface: "browser"/);
+
+  const app = await readFile(new URL("../apps/control-center/src/App.tsx", import.meta.url), "utf8");
+  assert.match(app, /api\.getChatGptSession\(\)/);
+  assert.match(app, /alreadyAuthenticated/);
+  const settings = await readFile(new URL("../apps/control-center/src/pages/SettingsPage.tsx", import.meta.url), "utf8");
+  assert.match(settings, /filter\(\(account\) => account\.state !== "revoked"\)/);
+  assert.match(settings, /account\.subscription\?\.usable === true/);
 });
 
 test("credential input stays off argv and is delivered over stdin", async () => {
@@ -1434,7 +1500,9 @@ test("detached tray acceptance is labeled started, never completed", async () =>
   const action = source.slice(source.indexOf("const runAction"), source.indexOf("const t = useCallback"));
   assert.match(action, /accepted[^\n]+=== true/);
   assert.match(action, /`\$\{label\} started\.`/);
-  const accepted = action.slice(action.indexOf("accepted"), action.indexOf("return;", action.indexOf("accepted")));
+  const acceptedStart = action.indexOf("if (\n        actionResult?.accepted === true");
+  assert.notEqual(acceptedStart, -1, "runAction should keep a dedicated detached-acceptance branch");
+  const accepted = action.slice(acceptedStart, action.indexOf("return;", acceptedStart));
   assert.doesNotMatch(accepted, /status: "completed"/);
   assert.match(source, /<Badge tone="neutral">Started<\/Badge>/);
 });
