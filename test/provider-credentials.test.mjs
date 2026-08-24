@@ -24,8 +24,10 @@ const {
   removeProviderCredential,
   resetKeychainCache,
   resolveProviderCredential,
+  resolveProviderCredentialReference,
   writeProviderCredential,
 } = await import("../src/provider-credentials.mjs");
+const { PROVIDERS } = await import("../src/model-registry.mjs");
 const { privateFileIsProtected } = await import("../src/file-security.mjs");
 
 test("provider credentials use protected files and remove legacy managed keys", () => {
@@ -125,6 +127,14 @@ test("--no-discovery blinds the resolver to stored keys without a single keychai
     const before = keychainProbeCount();
     assert.equal(resolveProviderCredential("deepseek"), undefined);
     assert.equal(resolveProviderCredential("openrouter", { persistent: true }), undefined);
+    assert.equal(
+      resolveProviderCredentialReference("deepseek", {
+        type: "provider-file",
+        name: PROVIDERS.get("deepseek").credential.file,
+      }),
+      undefined,
+      "the pool reference resolver bypassed --no-discovery",
+    );
     assert.equal(keychainProbeCount(), before, "the kill-switch still spawned /usr/bin/security");
 
     // Sources that read nothing keep answering: anonymous and keyless

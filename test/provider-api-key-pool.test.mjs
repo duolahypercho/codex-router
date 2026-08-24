@@ -77,14 +77,23 @@ test("a configured pool is authoritative and never falls back when empty or inva
 
 test("duplicate secret references are rejected rather than selecting one arbitrarily", async () => {
   const filePath = path.join(root, "duplicates.json");
-  const first = metadata(credential("first", "A"));
-  const second = metadata({ ...credential("second", "B"), secretRef: first.secretRef });
+  const first = metadata({
+    ...credential("first", "A"),
+    secretRef: { type: "provider-file", name: "openrouter-api-key.secret" },
+  });
+  const second = metadata({
+    ...credential("second", "B"),
+    secretRef: { ...first.secretRef, providerId: "openrouter" },
+  });
   await upsertProviderApiKey("openrouter", first, { filePath });
   await assert.rejects(
     upsertProviderApiKey("openrouter", second, { filePath }),
     /already contains this secret reference/,
   );
-  assert.equal(providerApiKeySecretRefIdentity(first.secretRef), providerApiKeySecretRefIdentity(second.secretRef));
+  assert.equal(
+    providerApiKeySecretRefIdentity(first.secretRef, "openrouter"),
+    providerApiKeySecretRefIdentity(second.secretRef, "openrouter"),
+  );
 });
 
 test("resolution refuses duplicate secret values even when references differ", async () => {
@@ -96,7 +105,7 @@ test("resolution refuses duplicate secret values even when references differ", a
     resolveSecret: () => "SAME",
   });
   assert.equal(result.credentialId, null);
-  assert.equal(result.reason, "no_eligible_credentials");
+  assert.equal(result.reason, "duplicate_secret_reference");
 });
 
 test("quota and round-robin selection never returns the secret value in metadata", async () => {
@@ -205,6 +214,22 @@ test("runProviderApiKeyAttempts retries before relay and stops after relay begin
   assert.equal(lateCalls, 1);
   assert.equal(late.attempts[0].committed, true);
   assert.equal(late.reason, "failed");
+});
+
+test("duplicate resolved secrets remain blocked after a failed candidate is excluded", async () => {
+  const filePath = path.join(root, "duplicate-failover.json");
+  const first = metadata(credential("first", "SAME", { priority: 2 }));
+  const second = metadata(credential("second", "SAME", { priority: 1 }));
+  await upsertProviderApiKey("openrouter", first, { filePath });
+  await upsertProviderApiKey("openrouter", second, { filePath });
+  const result = await runProviderApiKeyAttempts("openrouter", {
+    filePath,
+    resolveSecret: () => "SAME",
+    send: async () => ({ status: 401, ok: false, committed: false }),
+    now: () => NOW,
+  });
+  assert.equal(result.attempts.length, 0);
+  assert.equal(result.reason, "duplicate_secret_reference");
 });
 
 test("lock serializes concurrent state updates and preserves every session turn", async () => {

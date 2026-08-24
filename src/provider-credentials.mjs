@@ -150,6 +150,7 @@ export function resolveProviderCredentialReference(providerOrId, reference, { pe
   if (!provider?.credential || provider.authMode === "anonymous" || provider.authMode === "per-model") {
     return undefined;
   }
+  if (discoveryDisabled()) return undefined;
   if (!reference || typeof reference !== "object" || Array.isArray(reference)) {
     throw new Error("Credential reference must be an object.");
   }

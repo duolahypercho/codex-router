@@ -10,6 +10,7 @@ import lockfile from "proper-lockfile";
 
 import { writePrivateJson } from "./file-security.mjs";
 import { PROVIDER_API_KEY_POOL_PATH, STATE_DIR } from "./paths.mjs";
+import { canonicalProviderId } from "./provider-selection.mjs";
 
 export const PROVIDER_API_KEY_POOL_SCHEMA_VERSION = 1;
 export const PROVIDER_API_KEY_POOL_STRATEGIES = Object.freeze([
@@ -84,7 +85,7 @@ function text(value, field, { max = 256, required = false } = {}) {
 function providerId(value) {
   const normalized = text(value, "provider id", { max: 100, required: true }).toLowerCase();
   if (!PROVIDER_ID.test(normalized)) throw new Error(`Invalid provider id: ${normalized}`);
-  return normalized;
+  return canonicalProviderId(normalized);
 }
 
 function credentialId(value) {
@@ -159,10 +160,13 @@ export function normalizeProviderApiKeySecretRef(value) {
   return { type, name, ...(providerIdValue ? { providerId: providerIdValue } : {}) };
 }
 
-export function providerApiKeySecretRefIdentity(value) {
+export function providerApiKeySecretRefIdentity(value, providerScope) {
   const ref = normalizeProviderApiKeySecretRef(value);
   const source = ref.id || ref.name || ref.service;
-  return `${ref.providerId || ""}:${ref.type}:${source}`;
+  const scope = providerScope === undefined
+    ? ref.providerId || ""
+    : providerId(providerScope);
+  return `${scope}:${ref.type}:${source}`;
 }
 
 function normalizeQuota(value) {
@@ -314,7 +318,7 @@ function normalizePool(value, provider, now = Date.now()) {
   const refs = new Set();
   for (const [id, raw] of credentials.slice(0, MAX_CREDENTIALS)) {
     const normalized = normalizeCredential({ ...(record(raw) ? raw : {}), id }, provider, now);
-    const refIdentity = providerApiKeySecretRefIdentity(normalized.secretRef);
+    const refIdentity = providerApiKeySecretRefIdentity(normalized.secretRef, provider);
     if (refs.has(refIdentity)) throw new Error(`Provider ${provider} contains duplicate secret references.`);
     refs.add(refIdentity);
     result.credentials[normalized.id] = normalized;
@@ -498,7 +502,7 @@ function duplicateResolvedSecrets(entries) {
 async function resolvedCandidates(pool, { resolveSecret, now, exclude }) {
   if (typeof resolveSecret !== "function") return { entries: [], reason: "secret_resolver_required" };
   const entries = [];
-  for (const meta of eligibleMeta(pool, now, exclude)) {
+  for (const meta of eligibleMeta(pool, now)) {
     let resolved;
     try {
       resolved = await resolveSecret({ ...meta.secretRef });
@@ -509,7 +513,7 @@ async function resolvedCandidates(pool, { resolveSecret, now, exclude }) {
     if (value) entries.push({ meta, value });
   }
   if (duplicateResolvedSecrets(entries)) return { entries: [], reason: "duplicate_secret_reference" };
-  return { entries };
+  return { entries: entries.filter((entry) => !exclude.has(entry.meta.id)) };
 }
 
 function sessionCanStay(pool, session, meta, at) {
@@ -551,7 +555,9 @@ async function selectFromState(providerOrId, options = {}) {
     exclude: excluded,
   });
   if (!resolved.entries.length) {
-    return selectedResult(provider, pool, undefined, undefined, undefined);
+    const result = selectedResult(provider, pool, undefined, undefined, undefined);
+    if (resolved.reason) result.reason = resolved.reason;
+    return result;
   }
   const session = sessionId(options.sessionId);
   const bound = session ? pool.sessions[session] : undefined;
@@ -683,7 +689,11 @@ export async function upsertProviderApiKey(providerOrId, credential, {
       sessions: {},
     };
     for (const current of Object.values(pool.credentials)) {
-      if (current.id !== normalized.id && providerApiKeySecretRefIdentity(current.secretRef) === providerApiKeySecretRefIdentity(normalized.secretRef)) {
+      if (
+        current.id !== normalized.id &&
+        providerApiKeySecretRefIdentity(current.secretRef, provider) ===
+          providerApiKeySecretRefIdentity(normalized.secretRef, provider)
+      ) {
         throw new Error(`Provider ${provider} already contains this secret reference.`);
       }
     }

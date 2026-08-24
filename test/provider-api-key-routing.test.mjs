@@ -15,6 +15,7 @@ const { resolveProviderApiKeyForRequest } = await import("../src/provider-api-ke
 const { setProviderApiKeyPaused, upsertProviderApiKey } = await import("../src/provider-api-key-pool.mjs");
 
 const provider = PROVIDERS.get("openrouter");
+const opencodeMessages = PROVIDERS.get("opencode-go-messages");
 const statePath = path.join(root, "pool.json");
 const credentialId = "cred_primary_12345678";
 
@@ -47,4 +48,22 @@ test("an empty configured pool refuses the legacy key instead of silently using 
   assert.equal(routing.pooled, true);
   assert.equal(routing.credential, undefined);
   assert.equal(routing.fallbackAllowed, false);
+});
+
+test("protocol variants use the canonical provider pool", async () => {
+  const opencodeStatePath = path.join(root, "opencode-pool.json");
+  writeProviderCredential(PROVIDERS.get("opencode-go"), "OPENCODE_POOL_SECRET");
+  await upsertProviderApiKey("opencode-go", {
+    id: "cred_opencode_12345678",
+    secretRef: {
+      type: "provider-file",
+      name: opencodeMessages.credential.file,
+    },
+  }, { filePath: opencodeStatePath });
+  const routing = await resolveProviderApiKeyForRequest(opencodeMessages, {
+    poolStatePath: opencodeStatePath,
+  });
+  assert.equal(routing.pooled, true);
+  assert.equal(routing.credential?.value, "OPENCODE_POOL_SECRET");
+  assert.equal(routing.selection?.providerId, "opencode-go");
 });
