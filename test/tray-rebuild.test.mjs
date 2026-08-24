@@ -1264,7 +1264,7 @@ test("the status item keeps a reserved width in both menu-bar modes", () => {
     path.join(root, "apps", "macos", "ModelRouterTray", "Sources", "ModelRouterTrayApp.swift"),
     "utf8",
   );
-  assert.match(source, /static let iconOnlyWidth: CGFloat = 24/);
+  assert.match(source, /static let iconOnlyWidth: CGFloat = 28/);
   assert.match(
     source,
     /\.frame\(width: MenuBarLayoutMetrics\.statusItemWidth\(displayMode: store\.menuBarDisplayMode\)/,
