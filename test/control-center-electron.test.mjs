@@ -791,6 +791,8 @@ test("background usage polling is conservative while manual refresh stays immedi
   assert.match(source, /Promise\.allSettled\(\[refreshCore\(\), refreshUsage\(\)\]\)/);
   assert.match(source, /Promise\.allSettled\(\[[\s\S]*api\.getSnapshot\(\)[\s\S]*api\.getHealth\(\)/);
   assert.match(source, /downloadPollInFlight\.current/);
+  assert.match(source, /healthPollInFlight\.current/);
+  assert.match(source, /document\.visibilityState !== "visible"/);
   assert.match(source, /localDownloadActive(?: \|\| mlxOperationActive)? \? api\.getLocalModels\(\)/);
   assert.match(source, /visionDownloadActive \? api\.getVisionBridge\(\)/);
   assert.match(source, /downloadTimer = window\.setInterval\(\(\) => void refreshDownloadProgress\(\), 4_000\)/);

@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { pickerCommandArgs } from "./control-args.mjs";
+import { readControlHealth } from "./control-health.mjs";
 import { nativeSubagentCertification, promoteNativeMultiAgent } from "./catalog.mjs";
 import {
   applyModelOverlayPublication,
@@ -15,10 +16,8 @@ import { withNativeContextVariants } from "./native-context-variants.mjs";
 // vary by target, so reading it here does not disturb the per-target probes
 // below that re-import paths with their own MODEL_ROUTER_TARGET.
 import {
-  CALLER_SECRET_PATH,
   DSH_CATALOG_PATH,
   GEMINI_CATALOG_PATH,
-  PORTS,
   PROVIDER_SELECTION_PATH,
 } from "./paths.mjs";
 // Same reasoning: presence is a property of the shared plane, not of a target,
@@ -2627,55 +2626,7 @@ async function handleChatGptSession(action) {
 // metadata. Read the protected health leaf here, then project it to the small
 // contract the tray and Control Center render.
 async function printHealth() {
-  const { assertCallerSecret, callerBaseUrl } = await import("./caller-auth.mjs");
-  let callerSecret;
-  try {
-    callerSecret = assertCallerSecret(readFileSync(CALLER_SECRET_PATH, "utf8").trim());
-  } catch {
-    process.stdout.write(`${JSON.stringify({
-      ok: false,
-      status: 0,
-      error: "The local router caller key is unavailable.",
-      activity: { state: "offline", active: [], activeCount: 0 },
-    })}\n`);
-    return;
-  }
-
-  const safeService = (service) => {
-    if (!service || typeof service !== "object") return undefined;
-    return {
-      reachable: service.reachable === true,
-      ...(typeof service.enabled === "boolean" ? { enabled: service.enabled } : {}),
-    };
-  };
-  try {
-    const response = await fetch(`${callerBaseUrl(PORTS.router, callerSecret)}/health`, {
-      headers: { Accept: "application/json" },
-      signal: AbortSignal.timeout(3_000),
-    });
-    const raw = await response.json().catch(() => ({}));
-    const body = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
-    process.stdout.write(`${JSON.stringify({
-      ok: response.ok,
-      status: response.status,
-      ...(typeof body.service === "string" ? { service: body.service } : {}),
-      ...(typeof body.version === "string" ? { version: body.version } : {}),
-      ...(typeof body.router === "string" ? { router: body.router } : {}),
-      ...(Array.isArray(body.degraded) ? { degraded: body.degraded } : {}),
-      ...(body.activity && typeof body.activity === "object" ? { activity: body.activity } : {}),
-      ...(safeService(body.gateway) ? { gateway: safeService(body.gateway) } : {}),
-      ...(safeService(body.oauth) ? { oauth: safeService(body.oauth) } : {}),
-      ...(safeService(body.api) ? { api: safeService(body.api) } : {}),
-      ...(safeService(body.grokOauth) ? { grokOauth: safeService(body.grokOauth) } : {}),
-    })}\n`);
-  } catch (error) {
-    process.stdout.write(`${JSON.stringify({
-      ok: false,
-      status: 0,
-      error: error?.name === "AbortError" ? "Health check timed out." : "Router is unreachable.",
-      activity: { state: "offline", active: [], activeCount: 0 },
-    })}\n`);
-  }
+  process.stdout.write(`${JSON.stringify(await readControlHealth())}\n`);
 }
 
 // --- dispatch ---------------------------------------------------------------

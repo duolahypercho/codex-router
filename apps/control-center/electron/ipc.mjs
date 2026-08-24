@@ -17,6 +17,7 @@ import {
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import {
   assertMutationCompatibility,
   discoverSourceRoot,
@@ -473,6 +474,15 @@ async function snapshot() {
   return runControlJson(["--json"]);
 }
 
+async function readInstalledControlHealth({ fetchImpl = globalThis.fetch } = {}) {
+  const modulePath = path.join(discoverSourceRoot(), "src", "control-health.mjs");
+  const module = await import(pathToFileURL(modulePath).href);
+  if (typeof module.readControlHealth !== "function") {
+    throw new Error("The installed router does not expose direct health reads.");
+  }
+  return module.readControlHealth({ fetchImpl });
+}
+
 async function modelEntries() {
   const result = await snapshot();
   const entries = [];
@@ -587,7 +597,14 @@ async function updateProviderSelection(id, enabled) {
   return snapshot();
 }
 
-export function registerIpcHandlers({ ipcMain, BrowserWindow, shell, fetchImpl = globalThis.fetch, senderGuard = () => true } = {}) {
+export function registerIpcHandlers({
+  ipcMain,
+  BrowserWindow,
+  shell,
+  fetchImpl = globalThis.fetch,
+  healthReader = readInstalledControlHealth,
+  senderGuard = () => true,
+} = {}) {
   if (!ipcMain?.handle) throw new TypeError("ipcMain.handle is required.");
   const operations = new Map();
   // Every mutation is a fresh control.mjs process. Keep their read/modify/
@@ -744,10 +761,10 @@ export function registerIpcHandlers({ ipcMain, BrowserWindow, shell, fetchImpl =
     }
     return response;
   }, { requiresCompatibleRouter: false });
-  // The public health leaf deliberately omits per-service payloads. The
-  // control command reads the protected leaf with the local caller capability
-  // and returns only the redacted service summary the UI needs.
-  handle("getHealth", async () => runJson(["health"]));
+  // Read health in this trusted process instead of spawning a fresh
+  // ELECTRON_RUN_AS_NODE child for every one-second renderer poll. The shared
+  // reader owns the caller capability and preserves the CLI's redacted shape.
+  handle("getHealth", async () => healthReader({ fetchImpl }));
   handle("refreshAll", async () => ({
     snapshot: await snapshot(),
     providers: await runJson(["providers"]),

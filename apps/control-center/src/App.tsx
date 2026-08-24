@@ -108,6 +108,7 @@ export default function App() {
   const [toast, setToast] = useState<{ tone: "neutral" | "success" | "danger"; message: string } | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const downloadPollInFlight = useRef(false);
+  const healthPollInFlight = useRef(false);
   const previousActivityState = useRef<string | undefined>(undefined);
 
   const target = snapshot?.targets.codex;
@@ -117,11 +118,14 @@ export default function App() {
   const downloadActive = localDownloadActive || mlxOperationActive || visionDownloadActive;
 
   const refreshHealth = useCallback(async () => {
-    if (!api) return;
+    if (!api || healthPollInFlight.current || document.visibilityState !== "visible") return;
+    healthPollInFlight.current = true;
     try {
       setHealth(await api.getHealth());
     } catch (error) {
       setHealth({ ok: false, error: readableError(error), activity: { state: "offline", active: [], activeCount: 0 } });
+    } finally {
+      healthPollInFlight.current = false;
     }
   }, [api]);
 
