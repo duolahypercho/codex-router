@@ -56,7 +56,7 @@ struct MenuBarSettingsTests {
   @Test("standard mode keeps a reserved width even when the name is hidden")
   func standardWidthIsReserved() {
     #expect(MenuBarLayoutMetrics.statusItemWidth(displayMode: .standard) == 180)
-    #expect(MenuBarLayoutMetrics.statusItemWidth(displayMode: .iconOnly) == 24)
+    #expect(MenuBarLayoutMetrics.statusItemWidth(displayMode: .iconOnly) == 28)
   }
 
   @Test("the activity badge is not a second dot on the indicator style")

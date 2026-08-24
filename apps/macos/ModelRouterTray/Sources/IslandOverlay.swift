@@ -957,7 +957,7 @@ struct ProviderIcon: View {
           .clipped()
       } else {
         Image(systemName: "cpu")
-          .font(.system(size: size * 0.5, weight: .semibold))
+          .font(.system(size: size * 0.82, weight: .semibold))
           .foregroundStyle(routerMuted)
           .frame(width: size, height: size)
       }
@@ -985,7 +985,75 @@ struct ProviderIcon: View {
       withExtension: assetExtension,
       subdirectory: "ProviderIcons"
     ) ?? resources.url(forResource: assetName, withExtension: assetExtension)
-    return url.flatMap(NSImage.init(contentsOf:))
+    guard let image = url.flatMap(NSImage.init(contentsOf:)) else { return nil }
+    return fittedProviderImage(image)
+  }
+
+  private func fittedProviderImage(_ image: NSImage) -> NSImage {
+    let targetSize = NSSize(width: max(1, size), height: max(1, size))
+    let sourceRect = visibleImageRect(image)
+    let scale = min(
+      targetSize.width / max(sourceRect.width, 1),
+      targetSize.height / max(sourceRect.height, 1)
+    )
+    let drawSize = NSSize(width: sourceRect.width * scale, height: sourceRect.height * scale)
+    let drawRect = NSRect(
+      x: (targetSize.width - drawSize.width) / 2,
+      y: (targetSize.height - drawSize.height) / 2,
+      width: drawSize.width,
+      height: drawSize.height
+    )
+    let fitted = NSImage(size: targetSize)
+    fitted.lockFocus()
+    NSGraphicsContext.current?.imageInterpolation = .high
+    image.draw(
+      in: drawRect,
+      from: sourceRect,
+      operation: .sourceOver,
+      fraction: 1,
+      respectFlipped: true,
+      hints: [.interpolation: NSImageInterpolation.high]
+    )
+    fitted.unlockFocus()
+    return fitted
+  }
+
+  private func visibleImageRect(_ image: NSImage) -> NSRect {
+    guard let representation = image.representations
+      .compactMap({ $0 as? NSBitmapImageRep })
+      .max(by: { ($0.pixelsWide * $0.pixelsHigh) < ($1.pixelsWide * $1.pixelsHigh) }),
+      let data = representation.bitmapData,
+      representation.hasAlpha
+    else {
+      return NSRect(origin: .zero, size: image.size)
+    }
+
+    let bytesPerPixel = max(1, representation.bitsPerPixel / 8)
+    let alphaIndex = representation.samplesPerPixel - 1
+    var minX = representation.pixelsWide
+    var minY = representation.pixelsHigh
+    var maxX = -1
+    var maxY = -1
+    for y in 0..<representation.pixelsHigh {
+      for x in 0..<representation.pixelsWide {
+        let offset = y * representation.bytesPerRow + x * bytesPerPixel
+        if data[offset + alphaIndex] > 8 {
+          minX = min(minX, x)
+          minY = min(minY, y)
+          maxX = max(maxX, x)
+          maxY = max(maxY, y)
+        }
+      }
+    }
+    guard maxX >= minX, maxY >= minY else {
+      return NSRect(origin: .zero, size: image.size)
+    }
+    return NSRect(
+      x: image.size.width * CGFloat(minX) / CGFloat(representation.pixelsWide),
+      y: image.size.height * CGFloat(minY) / CGFloat(representation.pixelsHigh),
+      width: image.size.width * CGFloat(maxX - minX + 1) / CGFloat(representation.pixelsWide),
+      height: image.size.height * CGFloat(maxY - minY + 1) / CGFloat(representation.pixelsHigh)
+    )
   }
 
   private var assetName: String? {

@@ -4451,7 +4451,7 @@ struct MenuBarSettings: Equatable {
 
 enum MenuBarLayoutMetrics {
   static let standardReservedWidth: CGFloat = 180
-  static let iconOnlyWidth: CGFloat = 24
+  static let iconOnlyWidth: CGFloat = 28
 
   nonisolated static func statusItemWidth(displayMode: TrayMenuBarDisplayMode) -> CGFloat {
     displayMode == .iconOnly ? iconOnlyWidth : standardReservedWidth
@@ -4671,9 +4671,7 @@ private struct StatusItemLabel: View {
   var body: some View {
     if store.menuBarDisplayMode == .iconOnly {
       HStack(spacing: 4) {
-        MenuBarIconView(store: store, size: 14)
-          .scaleEffect(pulsing ? 1.4 : 1)
-          .animation(.easeOut(duration: 0.45), value: pulsing)
+        MenuBarIconView(store: store, size: 17)
         if MenuBarLayoutMetrics.showsActivityBadge(
           iconStyle: store.menuBarIconStyle,
           isIdle: store.activityState == .idle
@@ -4681,6 +4679,8 @@ private struct StatusItemLabel: View {
           Circle()
             .fill(store.activityState.tint)
             .frame(width: 5, height: 5)
+            .scaleEffect(pulsing ? 1.6 : 1)
+            .animation(.easeOut(duration: 0.45), value: pulsing)
         }
       }
       .frame(width: MenuBarLayoutMetrics.statusItemWidth(displayMode: store.menuBarDisplayMode), height: 22)
@@ -4700,13 +4700,13 @@ private struct StatusItemLabel: View {
           Circle()
             .fill(store.activityState.tint)
             .frame(width: 6, height: 6)
-            .scaleEffect(pulsing ? 2.1 : 1)
+            .aspectRatio(1, contentMode: .fit)
+            .clipShape(Circle())
+            .scaleEffect(pulsing ? 1.6 : 1)
             .opacity(pulsing ? 0.55 : 1)
             .animation(.easeOut(duration: 0.45), value: pulsing)
         } else {
-          MenuBarIconView(store: store, size: 13)
-            .scaleEffect(pulsing ? 1.4 : 1)
-            .animation(.easeOut(duration: 0.45), value: pulsing)
+          MenuBarIconView(store: store, size: 15)
         }
         if store.menuBarShowModelName {
           Text(store.hasConcurrentActivity ? store.activitySummaryLabel : store.selectedUsageProvider.shortName)
