@@ -639,6 +639,11 @@ async function printProviderOnboarding() {
   process.stdout.write(`${JSON.stringify(providerOnboardingSnapshot(), null, 2)}\n`);
 }
 
+async function handleGenericProviders(...commandArgs) {
+  const { runGenericProviderCli } = await import("./generic-providers.mjs");
+  await runGenericProviderCli(commandArgs, { output: process.stdout });
+}
+
 async function installProviderCli(providerId) {
   const { installOauthCli, providerOnboardingSnapshot } = await import("./provider-onboarding.mjs");
   installOauthCli(providerId);
@@ -2681,6 +2686,8 @@ if (args.includes("--probe")) {
   await printProviderUsage();
 } else if (args[0] === "providers") {
   await printProviderOnboarding();
+} else if (args[0] === "generic-providers") {
+  await handleGenericProviders(...args.slice(1));
 } else if (args[0] === "install-cli") {
   if (!args[1]) throw new Error("Usage: control install-cli <oauth-provider>");
   await installProviderCli(args[1]);
