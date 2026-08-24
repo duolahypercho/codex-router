@@ -42,7 +42,11 @@ test("generic provider CRUD is versioned, atomic and redacted", () => {
   assert.equal(added.id, "local-vllm");
   assert.deepEqual(added.headers, { "X-Organization": "[redacted]" });
   assert.deepEqual(readGenericProviders()[0].headers, { "X-Organization": "test-org" });
-  assert.equal(statSync(GENERIC_PROVIDERS_PATH).mode & 0o777, 0o600);
+  // Windows does not expose POSIX permission bits. The private writer still
+  // uses the restrictive mode on POSIX, while the ACL is the Windows boundary.
+  if (process.platform !== "win32") {
+    assert.equal(statSync(GENERIC_PROVIDERS_PATH).mode & 0o777, 0o600);
+  }
   assert.equal(JSON.parse(readFileSync(GENERIC_PROVIDERS_PATH, "utf8")).version, 1);
 
   const listed = listGenericProviders();
