@@ -141,6 +141,11 @@ export const PROVIDER_CREDENTIAL_STORE_PATH =
 export const PROVIDER_CREDENTIAL_MIGRATIONS_DIR =
   process.env.MODEL_ROUTER_PROVIDER_CREDENTIAL_MIGRATIONS ||
   path.join(MIGRATIONS_DIR, "provider-credentials");
+// User-defined OpenAI-compatible provider descriptors. The document contains
+// no raw credentials; credentialRef values point to the provider-neutral store.
+export const GENERIC_PROVIDERS_PATH =
+  process.env.MODEL_ROUTER_GENERIC_PROVIDERS ||
+  path.join(STATE_DIR, "generic-providers.json");
 export const SUPPORT_DIR = path.join(STATE_DIR, "support");
 export const LOG_PATH = path.join(STATE_DIR, "router.log");
 export const SERVICE_PROCESS_STATE_PATH = path.join(STATE_DIR, "service-process.json");

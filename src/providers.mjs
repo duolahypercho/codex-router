@@ -24,6 +24,7 @@ import {
   targetRestartHint,
 } from "./target-integration.mjs";
 import { withModelOverlayLock } from "./model-overlay-lock.mjs";
+import { runGenericProviderCli } from "./generic-providers.mjs";
 
 function providersCommand(action, providerId) {
   return process.platform === "win32"
@@ -69,6 +70,10 @@ function list() {
 async function main() {
   const command = process.argv[2] || "list";
   const providerId = process.argv[3];
+  if (command === "generic") {
+    await runGenericProviderCli(process.argv.slice(3));
+    return;
+  }
   if (command === "list") {
     const providers = list();
     if (process.argv.includes("--json")) {
@@ -110,7 +115,9 @@ async function main() {
     return;
   }
   if (!provider || !["enable", "disable"].includes(command)) {
-    throw new Error("Usage: providers [list [--json]|login antigravity-oauth|enable ID|disable ID]");
+    throw new Error(
+      "Usage: providers [list [--json]|login antigravity-oauth|enable ID|disable ID|generic ...]",
+    );
   }
   if (command === "enable" && !configured(provider)) {
     const keySetup = `run \`${targetCli(`provider-key ${provider.id} set`)}\``;
