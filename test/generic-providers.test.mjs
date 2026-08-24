@@ -21,12 +21,14 @@ const {
   getGenericProvider,
   genericProviderDescriptor,
   listGenericProviders,
+  requestGenericProvider,
   readGenericProviders,
   removeGenericProvider,
   setGenericProviderEnabled,
   testGenericProvider,
   updateGenericProvider,
 } = await import("../src/generic-providers.mjs");
+const { addCredentialReference } = await import("../src/provider-credential-store.mjs");
 test.after(() => rmSync(testRoot, { recursive: true, force: true }));
 
 test("generic provider CRUD is versioned, atomic and redacted", () => {
@@ -60,7 +62,7 @@ test("generic provider CRUD is versioned, atomic and redacted", () => {
     baseUrl: "https://inference.example.test/v1",
     adapter: "openai-chat",
     protocol: "openai",
-    headers: { "X-Organization": "test-org" },
+    headers: { "X-Organization": "[redacted]" },
     allowPrivate: false,
     credentialRef: "cred_local_vllm_01",
     generic: true,
@@ -126,6 +128,68 @@ test("generic provider test checks private resolution and never prints headers",
   assert.equal(calls[0].url, "http://127.0.0.1:8000/v1/models");
   assert.equal(calls[0].options.headers.Accept, "application/json");
   assert.equal(calls[0].options.headers.Authorization, undefined);
+});
+
+test("generic requests revalidate DNS, reject redirects, and bound response reads", async () => {
+  addGenericProvider({
+    id: "remote-boundary",
+    displayName: "Remote boundary",
+    baseUrl: "https://provider.example.test/v1",
+  });
+  await assert.rejects(
+    () => requestGenericProvider("remote-boundary", "/models", {
+      lookup: async () => ["192.168.10.12"],
+      fetchImpl: async () => ({ ok: true, status: 200 }),
+    }),
+    /private or link-local/,
+  );
+  await assert.rejects(
+    () => requestGenericProvider("remote-boundary", "/models", {
+      lookup: async () => ["8.8.8.8"],
+      fetchImpl: async () => ({ ok: false, status: 302, body: { cancel: async () => undefined } }),
+    }),
+    /redirects are disabled/,
+  );
+  await assert.rejects(
+    () => testGenericProvider("remote-boundary", {
+      lookup: async () => ["8.8.8.8"],
+      fetchImpl: async () => ({
+        ok: true,
+        status: 200,
+        headers: new Headers({ "content-length": "65537" }),
+      }),
+    }),
+    /65536-byte|read limit/,
+  );
+});
+
+test("generic credential references are resolved only at request time", async () => {
+  process.env.GENERIC_PROVIDER_TEST_TOKEN = "TEST_GENERIC_PROVIDER_TOKEN";
+  addCredentialReference({
+    id: "cred_generic_provider_01",
+    providerId: "credential-boundary",
+    kind: "api_key",
+    secretRef: { type: "environment", name: "GENERIC_PROVIDER_TEST_TOKEN" },
+  });
+  addGenericProvider({
+    id: "credential-boundary",
+    displayName: "Credential boundary",
+    baseUrl: "https://provider.example.test/v1",
+    credentialRef: "cred_generic_provider_01",
+    headers: { "X-Organization": "safe-metadata" },
+  });
+  const calls = [];
+  await requestGenericProvider("credential-boundary", "/models", {
+    lookup: async () => ["8.8.8.8"],
+    fetchImpl: async (url, options) => {
+      calls.push({ url, options });
+      return { ok: true, status: 200 };
+    },
+  });
+  assert.equal(calls[0].options.headers.Authorization, "Bearer TEST_GENERIC_PROVIDER_TOKEN");
+  assert.equal(calls[0].options.headers["X-Organization"], "safe-metadata");
+  assert.equal(JSON.stringify(listGenericProviders()).includes("TEST_GENERIC_PROVIDER_TOKEN"), false);
+  delete process.env.GENERIC_PROVIDER_TEST_TOKEN;
 });
 
 test("providers CLI exposes generic CRUD with sanitized JSON", () => {

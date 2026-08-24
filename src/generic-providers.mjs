@@ -1,10 +1,15 @@
 import { promises as dns } from "node:dns";
+import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
+import { isIP } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { Agent, fetch as undiciFetch } from "undici";
 
 import { PROVIDERS } from "./model-registry.mjs";
 import { GENERIC_PROVIDERS_PATH } from "./paths.mjs";
+import { withAtomicStateLock } from "./atomic-state-lock.mjs";
+import { readProviderCredentialStore } from "./provider-credential-store.mjs";
 
 export { GENERIC_PROVIDERS_PATH } from "./paths.mjs";
 import { writePrivateJson } from "./file-security.mjs";
@@ -44,6 +49,9 @@ const HEADER_NAME_PATTERN = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
 const MAX_HEADERS = 64;
 const MAX_HEADER_VALUE_LENGTH = 4_096;
 const MAX_DESCRIPTION_LENGTH = 240;
+const MAX_RESPONSE_BYTES = 64 * 1024;
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+const SECRET_HEADER_PATTERN = /(?:^|[-_])(auth|authorization|api[-_]?key|key|token|secret|credential|cookie|password|session|signature)(?:$|[-_])/i;
 
 function text(value) {
   return typeof value === "string" ? value.trim() : "";
@@ -66,32 +74,42 @@ function isPrivateIpv4(value) {
   if (!isIpv4(value)) return false;
   const [a, b] = value.split(".").map(Number);
   return (
+    a === 0 ||
     a === 10 ||
     a === 127 ||
-    a === 0 ||
+    (a === 100 && b >= 64 && b <= 127) ||
     (a === 169 && b === 254) ||
     (a === 172 && b >= 16 && b <= 31) ||
-    (a === 192 && b === 168)
+    (a === 192 && [0, 2, 168].includes(b)) ||
+    (a === 198 && b >= 18 && b <= 19) ||
+    (a === 198 && b === 51) ||
+    (a === 203 && b === 0) ||
+    a >= 224
   );
+}
+
+function isPrivateAddress(value) {
+  const address = String(value || "").toLowerCase();
+  const family = isIP(address);
+  if (family === 4) return isPrivateIpv4(address);
+  if (family !== 6) return false;
+  if (address === "::1" || address === "0:0:0:0:0:0:0:1") return true;
+  if (address.startsWith("fc") || address.startsWith("fd") || address.startsWith("fe80:")) return true;
+  const mapped = address.match(/^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/);
+  return Boolean(mapped && isPrivateIpv4(mapped[1]));
 }
 
 function isPrivateHostname(hostname) {
   const host = String(hostname || "").toLowerCase().replace(/^\[|\]$/g, "");
   if (!host) return false;
-  if (isPrivateIpv4(host)) return true;
+  if (isPrivateAddress(host)) return true;
   if (host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local")) {
     return true;
   }
   // IPv6 loopback, link-local and unique-local ranges. This intentionally
   // does not try to parse every IPv6 spelling; DNS lookup in testGenericProvider
   // catches resolved private addresses before a request is sent.
-  return (
-    host === "::1" ||
-    host.startsWith("fc") ||
-    host.startsWith("fd") ||
-    host.startsWith("fe80:") ||
-    host === "0:0:0:0:0:0:0:1"
-  );
+  return false;
 }
 
 function validateEndpoint(urlValue, allowPrivate) {
@@ -134,7 +152,7 @@ function validateHeaders(raw) {
     const lower = name.toLowerCase();
     const value = typeof valueValue === "string" ? valueValue : "";
     if (!HEADER_NAME_PATTERN.test(name)) throw new Error(`Invalid header name: ${nameValue}`);
-    if (FORBIDDEN_HEADER_NAMES.has(lower)) {
+    if (FORBIDDEN_HEADER_NAMES.has(lower) || SECRET_HEADER_PATTERN.test(lower)) {
       throw new Error(`Header ${name} is reserved for credential or transport handling.`);
     }
     if (!value || value.length > MAX_HEADER_VALUE_LENGTH || /[\r\n]/.test(value)) {
@@ -256,38 +274,47 @@ function saveProviders(providers) {
 }
 
 function mutateProviders(mutator) {
-  const current = readGenericProviders();
-  const next = mutator(current.map((provider) => ({ ...provider, headers: { ...provider.headers } })));
-  if (!Array.isArray(next)) throw new Error("Generic provider mutation returned an invalid list.");
-  const validated = parseDocument({ version: GENERIC_PROVIDER_SCHEMA_VERSION, providers: next }).providers;
-  saveProviders(validated);
-  return validated;
+  return withAtomicStateLock(GENERIC_PROVIDERS_PATH, () => {
+    const current = readGenericProviders();
+    const next = mutator(current.map((provider) => ({ ...provider, headers: { ...provider.headers } })));
+    if (!Array.isArray(next)) throw new Error("Generic provider mutation returned an invalid list.");
+    const validated = parseDocument({ version: GENERIC_PROVIDER_SCHEMA_VERSION, providers: next }).providers;
+    saveProviders(validated);
+    return validated;
+  });
 }
 
 export function addGenericProvider(input) {
   const provider = validateProvider(input);
-  const current = readGenericProviders();
-  if (current.some((entry) => entry.id === provider.id)) {
-    throw new Error(`Generic provider ${provider.id} already exists.`);
-  }
-  mutateProviders((providers) => [...providers, provider]);
-  return redactGenericProvider(provider);
+  const providers = mutateProviders((current) => {
+    if (current.some((entry) => entry.id === provider.id)) {
+      throw new Error(`Generic provider ${provider.id} already exists.`);
+    }
+    return [...current, provider];
+  });
+  return redactGenericProvider(providers.find((entry) => entry.id === provider.id));
 }
 
 export function updateGenericProvider(id, patch) {
-  const current = readGenericProviders();
-  const existing = current.find((entry) => entry.id === text(id));
-  if (!existing) throw new Error(`Unknown generic provider: ${id}`);
-  const next = validateProvider({ ...existing, ...patch, id: existing.id }, { existingId: existing.id });
-  mutateProviders((providers) => providers.map((entry) => entry.id === existing.id ? next : entry));
-  return redactGenericProvider(next);
+  const providerId = text(id);
+  let updated;
+  mutateProviders((current) => {
+    const existing = current.find((entry) => entry.id === providerId);
+    if (!existing) throw new Error(`Unknown generic provider: ${id}`);
+    updated = validateProvider({ ...existing, ...patch, id: existing.id }, { existingId: existing.id });
+    return current.map((entry) => entry.id === existing.id ? updated : entry);
+  });
+  return redactGenericProvider(updated);
 }
 
 export function removeGenericProvider(id) {
   const providerId = text(id);
-  const current = readGenericProviders();
-  if (!current.some((entry) => entry.id === providerId)) throw new Error(`Unknown generic provider: ${id}`);
-  const next = mutateProviders((providers) => providers.filter((entry) => entry.id !== providerId));
+  const next = mutateProviders((providers) => {
+    if (!providers.some((entry) => entry.id === providerId)) {
+      throw new Error(`Unknown generic provider: ${id}`);
+    }
+    return providers.filter((entry) => entry.id !== providerId);
+  });
   return { removed: providerId, remaining: next.length };
 }
 
@@ -311,7 +338,10 @@ export function genericProviderDescriptor(providerOrId) {
     baseUrl: provider.baseUrl,
     adapter: provider.adapter,
     protocol: provider.adapter === "openai-responses" ? "openai-responses" : "openai",
-    headers: { ...provider.headers },
+    // The descriptor is safe to hand to catalogs and UI surfaces. Raw static
+    // header values stay inside the request boundary and never become a model
+    // descriptor or loggable catalog field.
+    headers: Object.fromEntries(Object.keys(provider.headers).map((name) => [name, "[redacted]"])),
     allowPrivate: provider.allowPrivate,
     enabled: provider.enabled,
     ...(provider.credentialRef ? { credentialRef: provider.credentialRef } : {}),
@@ -328,24 +358,191 @@ async function lookupHost(hostname) {
   }
 }
 
-export async function testGenericProvider(id, { fetchImpl = globalThis.fetch, timeoutMs = 10_000 } = {}) {
-  const provider = getGenericProvider(id);
-  const endpoint = new URL(provider.baseUrl);
-  const resolved = await lookupHost(endpoint.hostname);
-  if (!provider.allowPrivate && resolved.some(isPrivateHostname)) {
-    throw new Error("Provider host resolved to a private or loopback address; set allowPrivate=true explicitly.");
+function destinationUrl(provider, requestPath) {
+  const suffix = String(requestPath || "");
+  if (!suffix.startsWith("/") || suffix.startsWith("//") || /^[a-z][a-z\d+.-]*:/i.test(suffix)) {
+    throw new Error("Generic provider request paths must be relative to the configured baseUrl.");
   }
-  const response = await fetchImpl(`${provider.baseUrl}/models`, {
-    method: "GET",
-    headers: { Accept: "application/json", ...provider.headers },
-    signal: AbortSignal.timeout(timeoutMs),
-  });
-  return {
-    ok: response.ok,
-    status: response.status,
-    endpoint: `${provider.baseUrl}/models`,
-    ...(response.ok ? { message: "Provider endpoint is reachable." } : { message: "Provider endpoint returned an error." }),
+  const endpoint = new URL(provider.baseUrl);
+  const target = new URL(`${provider.baseUrl}${suffix}`);
+  if (target.origin !== endpoint.origin || target.username || target.password) {
+    throw new Error("Generic provider request cannot change the configured origin.");
+  }
+  return target;
+}
+
+async function validateResolvedDestination(endpoint, provider, lookup = lookupHost) {
+  if (isPrivateHostname(endpoint.hostname) && !provider.allowPrivate) {
+    throw new Error("Provider host is private or loopback; set allowPrivate=true explicitly.");
+  }
+  const resolved = await lookup(endpoint.hostname);
+  if (!resolved.length) throw new Error(`Provider host ${endpoint.hostname} has no addresses.`);
+  if (!provider.allowPrivate && resolved.some(isPrivateAddress)) {
+    throw new Error("Provider host resolved to a private or link-local address; set allowPrivate=true explicitly.");
+  }
+  return resolved;
+}
+
+function safeHeaderEntries(headers) {
+  const values = headers instanceof Headers ? [...headers.entries()] : Object.entries(headers || {});
+  const result = {};
+  for (const [nameValue, valueValue] of values) {
+    const name = text(nameValue);
+    const lower = name.toLowerCase();
+    const value = String(valueValue ?? "");
+    if (FORBIDDEN_HEADER_NAMES.has(lower) || SECRET_HEADER_PATTERN.test(lower)) {
+      throw new Error(`Header ${name} is reserved for credential or transport handling.`);
+    }
+    if (!HEADER_NAME_PATTERN.test(name) || !value || value.length > MAX_HEADER_VALUE_LENGTH || /[\r\n]/.test(value)) {
+      throw new Error(`Header ${name} has an invalid value.`);
+    }
+    result[name] = value;
+  }
+  return result;
+}
+
+function credentialSecret(provider) {
+  if (!provider.credentialRef) return undefined;
+  const entry = readProviderCredentialStore().credentials.find((candidate) => candidate.id === provider.credentialRef);
+  if (!entry || entry.state !== "active") return undefined;
+  if (entry.providerId !== provider.id) return undefined;
+  const reference = entry.secretRef;
+  if (reference.type === "environment") return process.env[reference.name]?.trim() || undefined;
+  if (reference.type === "keychain") {
+    if (process.platform !== "darwin") return undefined;
+    try {
+      const value = execFileSync(
+        "/usr/bin/security",
+        ["find-generic-password", "-s", reference.service, "-a", "default", "-w"],
+        { encoding: "utf8", timeout: 2_000, stdio: ["ignore", "pipe", "ignore"] },
+      ).trim();
+      return value || undefined;
+    } catch {
+      return undefined;
+    }
+  }
+  // provider-file and oauth-session references belong to provider-specific
+  // credential/session code. A generic descriptor cannot turn them into a raw
+  // bearer token, so fail closed until a provider adapter owns that lookup.
+  return undefined;
+}
+
+function requestSignal(signal, timeoutMs) {
+  const timeout = AbortSignal.timeout(timeoutMs);
+  return signal ? AbortSignal.any([signal, timeout]) : timeout;
+}
+
+function createDestinationDispatcher(endpoint, provider, timeoutMs) {
+  const lookup = (hostname, options, callback) => {
+    lookupHost(hostname)
+      .then((addresses) => {
+        if (!provider.allowPrivate && addresses.some(isPrivateAddress)) {
+          throw new Error("Provider host resolved to a private or link-local address.");
+        }
+        if (options?.all) {
+          callback(null, addresses.map((address) => ({ address, family: isIP(address) })));
+        } else {
+          const address = addresses[0];
+          callback(null, address, isIP(address));
+        }
+      })
+      .catch((error) => callback(error));
   };
+  return new Agent({
+    allowH2: false,
+    pipelining: 1,
+    headersTimeout: timeoutMs,
+    bodyTimeout: timeoutMs,
+    connect: { lookup },
+  });
+}
+
+async function boundedResponseBody(response, maxBytes = MAX_RESPONSE_BYTES) {
+  const contentLength = Number(response.headers?.get?.("content-length"));
+  if (Number.isFinite(contentLength) && contentLength > maxBytes) {
+    throw new Error(`Generic provider response exceeds the ${maxBytes}-byte limit.`);
+  }
+  if (!response.body) {
+    if (typeof response.text === "function") {
+      const value = await response.text();
+      if (Buffer.byteLength(value, "utf8") > maxBytes) throw new Error("Generic provider response exceeds the read limit.");
+      return value;
+    }
+    return "";
+  }
+  const reader = response.body.getReader();
+  const chunks = [];
+  let size = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > maxBytes) {
+        await reader.cancel().catch(() => undefined);
+        throw new Error(`Generic provider response exceeds the ${maxBytes}-byte limit.`);
+      }
+      chunks.push(Buffer.from(value));
+    }
+  } finally {
+    reader.releaseLock?.();
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+export async function requestGenericProvider(
+  id,
+  requestPath,
+  { fetchImpl = undiciFetch, lookup = lookupHost, timeoutMs = 10_000, ...init } = {},
+) {
+  const provider = getGenericProvider(id);
+  if (!provider.enabled) throw new Error(`Generic provider ${provider.id} is disabled.`);
+  const endpoint = destinationUrl(provider, requestPath);
+  await validateResolvedDestination(endpoint, provider, lookup);
+  const requestHeaders = safeHeaderEntries(init.headers);
+  const headers = { ...provider.headers, ...requestHeaders };
+  const secret = credentialSecret(provider);
+  if (secret) headers.Authorization = `Bearer ${secret}`;
+  const useDispatcher = fetchImpl === undiciFetch;
+  const dispatcher = useDispatcher ? createDestinationDispatcher(endpoint, provider, timeoutMs) : undefined;
+  try {
+    const response = await fetchImpl(endpoint.toString(), {
+      ...init,
+      headers,
+      redirect: "manual",
+      signal: requestSignal(init.signal, timeoutMs),
+      ...(dispatcher ? { dispatcher } : {}),
+    });
+    if (REDIRECT_STATUSES.has(response.status)) {
+      await Promise.resolve(response.body?.cancel?.()).catch(() => undefined);
+      throw new Error("Generic provider redirects are disabled.");
+    }
+    return { response, endpoint: endpoint.toString(), dispatcher };
+  } catch (error) {
+    await dispatcher?.close().catch(() => undefined);
+    throw error;
+  }
+}
+
+export async function testGenericProvider(id, { fetchImpl = undiciFetch, lookup = lookupHost, timeoutMs = 10_000 } = {}) {
+  const { response, endpoint, dispatcher } = await requestGenericProvider(id, "/models", {
+    fetchImpl,
+    lookup,
+    timeoutMs,
+    method: "GET",
+    headers: { Accept: "application/json" },
+  });
+  try {
+    await boundedResponseBody(response);
+    return {
+      ok: response.ok,
+      status: response.status,
+      endpoint,
+      ...(response.ok ? { message: "Provider endpoint is reachable." } : { message: "Provider endpoint returned an error." }),
+    };
+  } finally {
+    await dispatcher?.close().catch(() => undefined);
+  }
 }
 
 function parseHeader(raw) {
