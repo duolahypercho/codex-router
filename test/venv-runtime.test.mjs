@@ -3,11 +3,34 @@ import test from "node:test";
 
 import { venvRuntimeProblem } from "../src/venv-runtime.mjs";
 
-// process.execPath is the current Node binary: present on every platform
-// (Windows runners have no /usr/bin/true), and `--version` exits 0 with
-// stdout, so it is a portable "working interpreter".
+// The injected success keeps this test platform-independent while the probe
+// arguments below verify that production forces real Python initialization.
 test("a working interpreter has no runtime problem", () => {
-  assert.equal(venvRuntimeProblem(process.execPath, { timeoutMs: 5_000 }), undefined);
+  const calls = [];
+  const spawn = (python, args) => {
+    calls.push({ python, args });
+    return { error: undefined, status: 0, stderr: "", stdout: "/venv\n" };
+  };
+  assert.equal(venvRuntimeProblem("python", { spawn, timeoutMs: 5_000 }), undefined);
+  assert.deepEqual(calls, [
+    {
+      python: "python",
+      args: ["-I", "-c", "import encodings, sys; print(sys.prefix)"],
+    },
+  ]);
+});
+
+test("the probe catches a runtime whose version command would still succeed", () => {
+  const spawn = (_python, args) => {
+    assert.notDeepEqual(args, ["--version"]);
+    return {
+      error: undefined,
+      status: 1,
+      stderr: "Fatal Python error: init_fs_encoding: No module named 'encodings'\n",
+      stdout: "",
+    };
+  };
+  assert.match(venvRuntimeProblem("python", { spawn }), /encodings/);
 });
 
 test("a transient interpreter timeout is retried with a wider hard bound", () => {

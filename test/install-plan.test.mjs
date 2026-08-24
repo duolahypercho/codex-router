@@ -36,11 +36,16 @@ const PINNED_VERSIONS = Object.fromEntries(
   }),
 );
 const TEST_PLATFORM = process.platform === "win32" ? "win32" : "darwin";
+const healthyRuntime = () => undefined;
 
-function installVenv(root, versions = PINNED_VERSIONS) {
-  const site = TEST_PLATFORM === "win32"
+function sitePackages(root) {
+  return TEST_PLATFORM === "win32"
     ? path.join(root, ".venv", "Lib", "site-packages")
     : path.join(root, ".venv", "lib", "python3.12", "site-packages");
+}
+
+function installVenv(root, versions = PINNED_VERSIONS) {
+  const site = sitePackages(root);
   mkdirSync(site, { recursive: true });
   const pythonBin = TEST_PLATFORM === "win32" ? "Scripts" : "bin";
   const pythonName = TEST_PLATFORM === "win32" ? "python.exe" : "python";
@@ -82,7 +87,14 @@ test("recorded steps are skipped until their inputs change", () => {
     recordStep("python-deps", { root });
 
     assert.equal(stepStatus("node-deps", { root, platform: TEST_PLATFORM }), "skip");
-    assert.equal(stepStatus("python-deps", { root, platform: TEST_PLATFORM }), "skip");
+    assert.equal(
+      stepStatus("python-deps", {
+        root,
+        platform: TEST_PLATFORM,
+        runtimeProblem: healthyRuntime,
+      }),
+      "skip",
+    );
 
     writeFileSync(path.join(root, "package-lock.json"), '{"lockfileVersion":3,"x":1}\n');
     assert.equal(stepStatus("node-deps", { root, platform: TEST_PLATFORM }), "run");
@@ -102,17 +114,17 @@ test("a stamp cannot vouch for dependencies that are no longer installed", () =>
     // A drifted transitive upgrade that downgraded a pinned distribution must
     // reinstall even though the stamp still matches the pins.
     rmSync(
-      path.join(
-        root,
-        ".venv",
-        "lib",
-        "python3.12",
-        "site-packages",
-        `litellm-${PINNED_VERSIONS.litellm}.dist-info`,
-      ),
+      path.join(sitePackages(root), `litellm-${PINNED_VERSIONS.litellm}.dist-info`),
       { recursive: true, force: true },
     );
-    assert.equal(stepStatus("python-deps", { root, platform: TEST_PLATFORM }), "run");
+    assert.equal(
+      stepStatus("python-deps", {
+        root,
+        platform: TEST_PLATFORM,
+        runtimeProblem: healthyRuntime,
+      }),
+      "run",
+    );
 
     rmSync(path.join(root, "node_modules", ".package-lock.json"), { force: true });
     assert.equal(stepStatus("node-deps", { root, platform: TEST_PLATFORM }), "run");
@@ -127,7 +139,14 @@ test("a rebuilt virtual environment on another Python reinstalls", () => {
     installVenv(root);
     recordStep("python-deps", { root });
     writeFileSync(path.join(root, ".venv", "pyvenv.cfg"), "version = 3.13.1\n");
-    assert.equal(stepStatus("python-deps", { root, platform: TEST_PLATFORM }), "run");
+    assert.equal(
+      stepStatus("python-deps", {
+        root,
+        platform: TEST_PLATFORM,
+        runtimeProblem: healthyRuntime,
+      }),
+      "run",
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -145,22 +164,42 @@ test("a virtual environment whose interpreter home was cleared reinstalls", () =
       path.join(root, ".venv", "pyvenv.cfg"),
       "home = /private/tmp/codex-router-python-bin\nversion = 3.12.12\n",
     );
-    assert.equal(stepStatus("python-deps", { root, platform: TEST_PLATFORM }), "run");
+    assert.equal(
+      stepStatus("python-deps", {
+        root,
+        platform: TEST_PLATFORM,
+        runtimeProblem: healthyRuntime,
+      }),
+      "run",
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
 test("a venv launcher that cannot start Python reinstalls", () => {
-  if (process.platform === "win32") return;
   const root = checkout();
   try {
     installVenv(root);
     recordStep("python-deps", { root });
-    const python = path.join(root, ".venv", "bin", "python");
-    writeFileSync(python, "#!/bin/sh\nprintf 'No module named encodings\\n' >&2\nexit 1\n");
-    chmodSync(python, 0o755);
-    assert.equal(stepStatus("python-deps", { root, platform: TEST_PLATFORM }), "run");
+    let probed;
+    const runtimeProblem = (python) => {
+      probed = python;
+      return "No module named encodings";
+    };
+    assert.equal(
+      stepStatus("python-deps", { root, platform: TEST_PLATFORM, runtimeProblem }),
+      "run",
+    );
+    assert.equal(
+      probed,
+      path.join(
+        root,
+        ".venv",
+        TEST_PLATFORM === "win32" ? "Scripts" : "bin",
+        TEST_PLATFORM === "win32" ? "python.exe" : "python",
+      ),
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

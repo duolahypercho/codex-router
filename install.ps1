@@ -314,10 +314,15 @@ try {
     Write-Host "LiteLLM already matches the pinned versions; skipping the Python install."
   } elseif (Get-Command "uv" -ErrorAction SilentlyContinue) {
     $VenvHomeOk = (& node src/install-plan.mjs venv-home-ok 2>$null | Select-Object -Last 1) -eq "ok"
+    $VenvRuntimeOk = $false
+    if (Test-Path $Python) {
+      & $Python -I -c "import encodings, sys" 2>$null | Out-Null
+      $VenvRuntimeOk = $LASTEXITCODE -eq 0
+    }
     if (-not (Test-Path $Python)) {
       & uv venv --python 3.12 .venv
       if ($LASTEXITCODE -ne 0) { throw "uv could not create the Python environment." }
-    } elseif (-not $VenvHomeOk) {
+    } elseif (-not $VenvHomeOk -or -not $VenvRuntimeOk) {
       # A venv whose interpreter home was cleared (macOS wipes /private/tmp,
       # and installers that recorded a temporary Python as the venv home end
       # up with a dangling interpreter) must be recreated, not pip-installed
@@ -338,7 +343,12 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "Recording the Python dependency state failed." }
   } else {
     $VenvHomeOk = (& node src/install-plan.mjs venv-home-ok 2>$null | Select-Object -Last 1) -eq "ok"
-    $RecreateVenv = -not $VenvHomeOk
+    $VenvRuntimeOk = $false
+    if (Test-Path $Python) {
+      & $Python -I -c "import encodings, sys" 2>$null | Out-Null
+      $VenvRuntimeOk = $LASTEXITCODE -eq 0
+    }
+    $RecreateVenv = -not $VenvHomeOk -or -not $VenvRuntimeOk
     if (Get-Command "py" -ErrorAction SilentlyContinue) {
       & py -3 -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)"
       if ($LASTEXITCODE -ne 0) { throw "Python 3.10 or newer is required." }

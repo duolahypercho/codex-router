@@ -373,7 +373,7 @@ export const STEPS = {
           readFile(repoPath(root, PYTHON_LOCK)) ?? "",
         ].join("\0"),
       ),
-    installed: (root, platform) => {
+    installed: (root, platform, { runtimeProblem = venvRuntimeProblem } = {}) => {
       // A venv whose interpreter home was cleared (macOS wipes /private/tmp,
       // and installers that recorded a temporary Python as the venv home end
       // up with a dangling interpreter) must read as "not installed" so the
@@ -384,7 +384,7 @@ export const STEPS = {
       // A launcher can remain after its stdlib or recorded interpreter home
       // has disappeared. Use the same startup probe as doctor/start so an
       // update repairs a venv that exists on disk but cannot execute Python.
-      if (venvRuntimeProblem(python)) return false;
+      if (runtimeProblem(python)) return false;
       return PYTHON_REQUIREMENTS.every((requirement) => {
         const { name, version } = requirementParts(requirement);
         return installedDistributionVersion(name, { root, platform }) === version;
@@ -464,10 +464,17 @@ export function recordTrayBuild({
   return target;
 }
 
-export function stepStatus(step, { root = SOURCE_ROOT, platform = process.platform } = {}) {
+export function stepStatus(
+  step,
+  {
+    root = SOURCE_ROOT,
+    platform = process.platform,
+    runtimeProblem = venvRuntimeProblem,
+  } = {},
+) {
   const definition = STEPS[step];
   if (!definition) throw new Error(`Unknown install step: ${step}`);
-  if (!definition.installed(root, platform)) return "run";
+  if (!definition.installed(root, platform, { runtimeProblem })) return "run";
   const stamp = readFile(definition.stamp(root));
   if (!stamp) return "run";
   try {

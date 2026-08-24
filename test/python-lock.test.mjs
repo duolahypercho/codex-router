@@ -186,13 +186,19 @@ test("a regenerated lock reinstalls even when the pins are unchanged", () => {
     }
 
     recordStep("python-deps", { root });
-    assert.equal(stepStatus("python-deps", { root, platform }), "skip");
+    assert.equal(
+      stepStatus("python-deps", { root, platform, runtimeProblem: () => undefined }),
+      "skip",
+    );
 
     // A transitive-only bump leaves PYTHON_REQUIREMENTS untouched. Without the
     // lock in the fingerprint the installer would report "already matches" and
     // never apply it.
     writeFileSync(lock, `${lockText()}\n# transitive bump\n`);
-    assert.equal(stepStatus("python-deps", { root, platform }), "run");
+    assert.equal(
+      stepStatus("python-deps", { root, platform, runtimeProblem: () => undefined }),
+      "run",
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

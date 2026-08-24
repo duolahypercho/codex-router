@@ -21,9 +21,14 @@ export function venvRuntimeProblem(
   // is not evidence that the interpreter or its venv is damaged. Retry once
   // with a wider hard bound before reporting a condition that can be transient
   // under process-launch contention.
-  let probe = spawn(python, ["--version"], { ...options, timeout: timeoutMs });
+  // `--version` is handled before CPython initializes its standard library,
+  // so it can succeed even when the venv cannot import `encodings` and every
+  // real invocation fails. Isolated mode also keeps an operator's PYTHONHOME
+  // or PYTHONPATH from making a healthy managed environment look damaged.
+  const probeArgs = ["-I", "-c", "import encodings, sys; print(sys.prefix)"];
+  let probe = spawn(python, probeArgs, { ...options, timeout: timeoutMs });
   if (probe.error?.code === "ETIMEDOUT") {
-    probe = spawn(python, ["--version"], { ...options, timeout: retryTimeoutMs });
+    probe = spawn(python, probeArgs, { ...options, timeout: retryTimeoutMs });
   }
   if (probe.error) {
     return probe.error.code === "ETIMEDOUT"

@@ -167,7 +167,7 @@ case "$(install_step python-deps)" in
     if command -v uv >/dev/null 2>&1; then
       if [ ! -x .venv/bin/python ]; then
         uv venv --python 3.12 .venv
-      elif ! .venv/bin/python --version >/dev/null 2>&1; then
+      elif ! .venv/bin/python -I -c 'import encodings, sys' >/dev/null 2>&1; then
         # A venv can have a present launcher whose interpreter cannot start
         # (for example after its temporary Python home was removed). Reusing it
         # lets uv install packages into a runtime that will never boot.
@@ -199,7 +199,7 @@ case "$(install_step python-deps)" in
       # Same clearing logic as the uv branch: a venv with a vanished interpreter
       # home must be recreated from scratch instead of installed over.
       if node src/install-plan.mjs venv-home-ok >/dev/null 2>&1 &&
-        .venv/bin/python --version >/dev/null 2>&1; then
+        .venv/bin/python -I -c 'import encodings, sys' >/dev/null 2>&1; then
         # Keep a healthy venv as-is. Re-running `python3 -m venv` here can
         # rewrite pyvenv.cfg with a different system Python while preserving
         # the existing launcher, creating a mixed and unusable environment.
