@@ -27,6 +27,10 @@ import { providerCatalogRouteIds } from "./provider-catalogs.mjs";
 import { readUserModels } from "./user-models.mjs";
 import { credentialStatus, resolveProviderCredential } from "./provider-credentials.mjs";
 import {
+  fetchUntrustedModelCatalog,
+  validateModelCatalogPayload,
+} from "./untrusted-model-discovery.mjs";
+import {
   ensureFreshGitHubCopilotSession,
   githubCopilotCatalogHeaders,
 } from "./github-copilot-session.mjs";
@@ -231,6 +235,11 @@ function sameProviderDiscoveryIdentity(left, right) {
     === providerDiscoveryIdentityFingerprint(right);
 }
 
+function discoveryEndpoint(identity) {
+  const baseUrl = identity?.baseUrl || identity?.session?.apiServerUrl;
+  return typeof baseUrl === "string" && baseUrl.trim() ? `${baseUrl.replace(/\/+$/, "")}/models` : undefined;
+}
+
 export function providerDiscoveryIdentityFingerprint(identity) {
   if (!identity || typeof identity !== "object") {
     return providerCatalogIdentityFingerprint(["missing"]);
@@ -260,7 +269,11 @@ function credentialChangedError(provider) {
 
 async function providerPayload(provider, identity) {
   const fixture = option("--fixture");
-  if (fixture) return JSON.parse(readFileSync(path.resolve(fixture), "utf8"));
+  if (fixture) {
+    const payload = JSON.parse(readFileSync(path.resolve(fixture), "utf8"));
+    validateModelCatalogPayload(payload);
+    return payload;
+  }
   if (provider.id === "devin-cli") {
     const { listCascadeModels } = await import("./devin-cli-forwarder.mjs");
     const models = await listCascadeModels({
@@ -294,15 +307,10 @@ async function providerPayload(provider, identity) {
       ...githubCopilotCatalogHeaders(session.token),
     };
   }
-  const response = await fetch(`${baseUrl}/models`, {
+  return fetchUntrustedModelCatalog(`${baseUrl}/models`, {
     headers,
-    signal: AbortSignal.timeout(30_000),
+    allowPrivate: Boolean(provider.keyless),
   });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    throw new Error(payload?.error?.message || `Provider model discovery returned HTTP ${response.status}.`);
-  }
-  return payload;
 }
 
 /**
@@ -370,6 +378,7 @@ export async function discoverProviderModels(
   } else {
     identity ||= usingFixture ? undefined : await providerDiscoveryIdentity(provider);
     const payload = await loadPayload(provider, identity);
+    validateModelCatalogPayload(payload);
     discovered = modelIds(payload, provider);
     free = freeModelIds(payload, provider);
     contextLengths = modelContextLengths(payload, provider);
@@ -395,6 +404,13 @@ export async function discoverProviderModels(
           fetchedAt,
           scope,
           identityFingerprint: providerDiscoveryIdentityFingerprint(identity),
+          provenance: {
+            schema: "codex-router/provider-catalog/v1",
+            providerId,
+            endpoint: discoveryEndpoint(identity),
+            identityFingerprint: providerDiscoveryIdentityFingerprint(identity),
+            ...(scope ? { scope } : {}),
+          },
         });
       });
     }
@@ -502,15 +518,13 @@ export async function discoverGenericProviderModels(
   } else {
     const payload = usingFixture
       ? (typeof fixture === "string" ? JSON.parse(fixture) : fixture)
-      : await (async () => {
-          const response = await fetchImpl(`${descriptor.baseUrl}/models`, {
-            headers: { Accept: "application/json", ...requestHeaders },
-            signal: AbortSignal.timeout(timeoutMs),
-          });
-          const body = await response.json().catch(() => ({}));
-          if (!response.ok) throw new Error(body?.error?.message || `Generic provider discovery returned HTTP ${response.status}.`);
-          return body;
-        })();
+      : await fetchUntrustedModelCatalog(`${descriptor.baseUrl}/models`, {
+          fetchImpl,
+          headers: requestHeaders,
+          timeoutMs,
+          allowPrivate: descriptor.allowPrivate,
+        });
+    validateModelCatalogPayload(payload);
     discovered = modelIds(payload, descriptor);
     modelMetadata = metadataFromRecords(payload, descriptor);
     fetchedAt = new Date().toISOString();
@@ -521,6 +535,13 @@ export async function discoverGenericProviderModels(
         fetchedAt,
         scope,
         identityFingerprint,
+        provenance: {
+          schema: "codex-router/provider-catalog/v1",
+          providerId,
+          endpoint: `${descriptor.baseUrl}/models`,
+          identityFingerprint,
+          ...(scope ? { scope } : {}),
+        },
       });
     }
   }

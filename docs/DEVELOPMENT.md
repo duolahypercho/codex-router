@@ -18,6 +18,25 @@
 - `src/service-*.mjs` install per-user services for macOS, Linux, and Windows.
 - `src/paths.mjs` defines state roots, ports, and service names.
 
+### Model catalog discovery
+
+`src/untrusted-model-discovery.mjs` is the only network boundary for live
+`/models` discovery. It resolves every destination before a request, follows
+only same-origin redirects with a small hop limit, revalidates each hop, and
+bounds both the response body and individual records. It returns a catalog
+only after the response has the supported list shape; provider error bodies
+are never copied into router errors.
+
+`src/model-discovery.mjs` and generic-provider discovery are callers of that
+library. Discovery metadata is advisory and cannot set a router request
+profile unless it comes from a trusted checked-in or user-curated record.
+Snapshots are written with the atomic private JSON writer and include a
+provider/account fingerprint plus endpoint provenance. The versioned cache
+rejects legacy, future, malformed, and symlinked documents instead of
+normalizing them into a usable catalog. A cache hit is therefore scoped to
+the same provider endpoint and credential identity; changing either causes a
+live miss.
+
 ## Add an API-key provider
 
 1. Add a provider fragment under `config/<vendor>/` with a unique lowercase ID,

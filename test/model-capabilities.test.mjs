@@ -28,6 +28,17 @@ test("model metadata accepts canonical records and ignores null pricing", () => 
   );
 });
 
+test("untrusted provider metadata cannot select a router request profile", () => {
+  assert.equal(
+    modelMetadataFromProviderRecord({ id: "provider/model", requestProfile: "glm-thinking" }).requestProfile,
+    undefined,
+  );
+  assert.equal(
+    modelMetadataFromProviderRecord({ id: "provider/model", requestProfile: "glm-thinking" }, { trusted: true }).requestProfile,
+    "glm-thinking",
+  );
+});
+
 test("metadata precedence is user, verified, live, then conservative defaults", () => {
   const merged = mergeModelMetadata({
     providerId: "example",

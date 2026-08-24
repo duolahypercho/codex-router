@@ -164,11 +164,23 @@ raise SystemExit(os.waitstatus_to_exitcode(status))
 `;
     try {
       mkdirSync(stateDir, { recursive: true });
+      const identityFingerprint = "a".repeat(64);
+      const catalogEntry = (providerId, discovered) => ({
+        discovered,
+        fetchedAt: new Date().toISOString(),
+        identityFingerprint,
+        provenance: {
+          schema: "codex-router/provider-catalog/v1",
+          providerId,
+          endpoint: `https://${providerId}.example.test/models`,
+          identityFingerprint,
+        },
+      });
       writeFileSync(cachePath, JSON.stringify({
-        version: 1,
+        version: 2,
         providers: {
-          deepseek: { discovered: ["old-account-model"], fetchedAt: new Date().toISOString() },
-          unrelated: { discovered: ["keep-me"], fetchedAt: new Date().toISOString() },
+          deepseek: catalogEntry("deepseek", ["old-account-model"]),
+          unrelated: catalogEntry("unrelated", ["keep-me"]),
         },
       }));
       const result = spawnSync(

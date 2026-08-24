@@ -13,6 +13,7 @@ import { resolveGenericProviderCredentialReference } from "./provider-credential
 
 export { GENERIC_PROVIDERS_PATH } from "./paths.mjs";
 import { writePrivateJson } from "./file-security.mjs";
+import { fetchUntrustedModelCatalog } from "./untrusted-model-discovery.mjs";
 
 // Generic providers are deliberately kept in a separate user-owned document.
 // The checked-in registry remains the authority for native and curated models;
@@ -463,8 +464,6 @@ function createDestinationDispatcher(endpoint, provider, timeoutMs) {
           callback(null, address, isIP(address));
         }
       })
-      .catch((error) => callback(error));
-  };
   return new Agent({
     allowH2: false,
     pipelining: 1,

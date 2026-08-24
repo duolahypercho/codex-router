@@ -150,7 +150,7 @@ function modalitiesFrom(source, keys) {
 }
 
 /** Convert a provider's OpenAI-compatible `/models` record into canonical metadata. */
-export function modelMetadataFromProviderRecord(record) {
+export function modelMetadataFromProviderRecord(record, { trusted = false } = {}) {
   if (!record || typeof record !== "object" || Array.isArray(record)) {
     throw new Error("Provider model metadata must be an object.");
   }
@@ -208,7 +208,11 @@ export function modelMetadataFromProviderRecord(record) {
     };
     if (Object.keys(cost).length) metadata.cost = cost;
   }
-  if (record.requestProfile !== undefined) metadata.requestProfile = record.requestProfile;
+  // Request profiles select router wire behavior. A provider catalog is an
+  // untrusted account response and cannot grant that authority; only
+  // checked-in/user-curated metadata may set one. Callers importing a
+  // separately verified record may opt in explicitly.
+  if (trusted && record.requestProfile !== undefined) metadata.requestProfile = record.requestProfile;
   return normalizeModelMetadata(metadata);
 }
 

@@ -59,12 +59,24 @@ function isolatedEnvironment(testRoot) {
 
 function seedCatalogCache(stateDir) {
   mkdirSync(stateDir, { recursive: true });
+  const identityFingerprint = "a".repeat(64);
+  const catalogEntry = (providerId, discovered) => ({
+    discovered,
+    fetchedAt: new Date().toISOString(),
+    identityFingerprint,
+    provenance: {
+      schema: "codex-router/provider-catalog/v1",
+      providerId,
+      endpoint: `https://${providerId}.example.test/models`,
+      identityFingerprint,
+    },
+  });
   writeFileSync(path.join(stateDir, "provider-catalog-cache.json"), JSON.stringify({
-    version: 1,
+    version: 2,
     providers: {
-      "opencode-go": { discovered: ["go-old-account"], fetchedAt: new Date().toISOString() },
-      "opencode-zen": { discovered: ["zen-old-account"], fetchedAt: new Date().toISOString() },
-      deepseek: { discovered: ["keep-me"], fetchedAt: new Date().toISOString() },
+      "opencode-go": catalogEntry("opencode-go", ["go-old-account"]),
+      "opencode-zen": catalogEntry("opencode-zen", ["zen-old-account"]),
+      deepseek: catalogEntry("deepseek", ["keep-me"]),
     },
   }));
 }

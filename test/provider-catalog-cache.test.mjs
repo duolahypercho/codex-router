@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash, scryptSync } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -31,8 +31,18 @@ const {
 const TEST_IDENTITY = providerCatalogIdentityFingerprint(["test-account"]);
 
 function writeProviderCatalogCache(providerId, entry = {}) {
+  const identityFingerprint = entry.identityFingerprint || TEST_IDENTITY;
+  const endpoint = entry.provenance?.endpoint || `https://${providerId}.example.test/v1/models`;
   return rawWriteProviderCatalogCache(providerId, {
-    identityFingerprint: TEST_IDENTITY,
+    identityFingerprint,
+    provenance: {
+      schema: "codex-router/provider-catalog/v1",
+      providerId,
+      endpoint,
+      identityFingerprint,
+      ...(entry.scope ? { scope: entry.scope } : {}),
+      ...entry.provenance,
+    },
     ...entry,
   });
 }
@@ -68,7 +78,7 @@ test("a provider's published list survives for the next visit", async () => {
   await writeProviderCatalogCache("deepseek", {
     discovered: ["deepseek-v5", "deepseek-v4-flash"],
     free: ["deepseek-v5"],
-    contextLengths: { "deepseek-v5": 262_144, unlisted: 4096 },
+    contextLengths: { "deepseek-v5": 262_144 },
     metadata: {
       "deepseek-v5": {
         contextWindow: 262_144,
@@ -102,7 +112,6 @@ test("a provider's published list survives for the next visit", async () => {
   assert.equal(readProviderCatalogCache("fresh-provider").stale, false);
   assert.deepEqual(entry.discovered, ["deepseek-v5", "deepseek-v4-flash"]);
   assert.deepEqual(entry.free, ["deepseek-v5"]);
-  // Sizes for models the provider did not list are not part of its answer.
   assert.deepEqual(entry.contextLengths, { "deepseek-v5": 262_144 });
   assert.deepEqual(entry.metadata, {
     "deepseek-v5": {
@@ -160,14 +169,22 @@ test("parallel catalog transactions preserve every provider entry", async () => 
     overlap = Math.max(overlap, active);
     firstEntered.resolve();
     await releaseFirst.promise;
-    catalog.write("parallel-one", { discovered: ["one"], identityFingerprint: TEST_IDENTITY });
+    catalog.write("parallel-one", {
+      discovered: ["one"],
+      identityFingerprint: TEST_IDENTITY,
+      provenance: { schema: "codex-router/provider-catalog/v1", providerId: "parallel-one", endpoint: "https://parallel-one.example.test/v1/models", identityFingerprint: TEST_IDENTITY },
+    });
     active -= 1;
   });
   await firstEntered.promise;
   const second = withProviderCatalogCacheTransaction(async (catalog) => {
     active += 1;
     overlap = Math.max(overlap, active);
-    catalog.write("parallel-two", { discovered: ["two"], identityFingerprint: TEST_IDENTITY });
+    catalog.write("parallel-two", {
+      discovered: ["two"],
+      identityFingerprint: TEST_IDENTITY,
+      provenance: { schema: "codex-router/provider-catalog/v1", providerId: "parallel-two", endpoint: "https://parallel-two.example.test/v1/models", identityFingerprint: TEST_IDENTITY },
+    });
     active -= 1;
   });
   await new Promise((resolve) => setTimeout(resolve, 25));
@@ -257,11 +274,23 @@ test("a damaged or foreign cache document reads as a miss", () => {
     JSON.stringify({ version: 99, providers: { deepseek: { discovered: ["x"], fetchedAt: "now" } } }),
     JSON.stringify({ version: 1, providers: { deepseek: { discovered: [] } } }),
     JSON.stringify({ version: 1, providers: { deepseek: { discovered: ["x"] } } }),
+    JSON.stringify({ version: 2, providers: { deepseek: { discovered: ["x"], identityFingerprint: TEST_IDENTITY } } }),
+    JSON.stringify({ version: 2, providers: { deepseek: { discovered: ["x"], identityFingerprint: TEST_IDENTITY, fetchedAt: new Date().toISOString(), provenance: { schema: "codex-router/provider-catalog/v1", providerId: "other", endpoint: "https://other.example.test/models", identityFingerprint: TEST_IDENTITY } } } }),
   ]) {
     writeFileSync(cachePath, contents, "utf8");
     assert.equal(readProviderCatalogCache("deepseek"), undefined);
   }
   rmSync(cachePath, { force: true });
+});
+
+test("a cache symlink is never followed", () => {
+  if (process.platform === "win32") return;
+  const foreign = path.join(stateRoot, "foreign-cache.json");
+  writeFileSync(foreign, JSON.stringify({ version: 2, providers: {} }));
+  symlinkSync(foreign, cachePath);
+  assert.equal(readProviderCatalogCache("deepseek"), undefined);
+  rmSync(cachePath, { force: true });
+  rmSync(foreign, { force: true });
 });
 
 test("a provider id that is not one is never a cache key", async () => {
@@ -333,7 +362,7 @@ test("malformed scope types never fall back to the unscoped catalog", async () =
   await forgetProviderCatalogCache("scope-type-provider");
 });
 
-test("one malformed metadata record does not discard valid cached metadata", async () => {
+test("one malformed metadata record invalidates the whole untrusted snapshot", async () => {
   await forgetProviderCatalogCache("metadata-provider");
   await writeProviderCatalogCache("metadata-provider", {
     discovered: ["valid", "invalid"],
@@ -343,10 +372,7 @@ test("one malformed metadata record does not discard valid cached metadata", asy
       unknown: { upstreamId: "unknown", supportsTools: true },
     },
   });
-  const entry = readProviderCatalogCache("metadata-provider");
-  assert.deepEqual(entry.modelMetadata, {
-    valid: { upstreamId: "valid", supportsTools: true },
-  });
+  assert.equal(readProviderCatalogCache("metadata-provider"), undefined);
   await forgetProviderCatalogCache("metadata-provider");
 });
 
@@ -439,7 +465,7 @@ test("a same-account stored list answers discovery without a network", async () 
     writeFileSync(
       path.join(offlineRoot, "provider-catalog-cache.json"),
       `${JSON.stringify({
-        version: 1,
+        version: 2,
         providers: {
           deepseek: {
             fetchedAt: "2020-01-01T00:00:00.000Z",
@@ -450,6 +476,16 @@ test("a same-account stored list answers discovery without a network", async () 
               baseUrl,
               credential: { value: credential },
             }),
+            provenance: {
+              schema: "codex-router/provider-catalog/v1",
+              providerId: "deepseek",
+              endpoint: `${baseUrl}/models`,
+              identityFingerprint: providerDiscoveryIdentityFingerprint({
+                kind: "api",
+                baseUrl,
+                credential: { value: credential },
+              }),
+            },
           },
         },
       })}\n`,
