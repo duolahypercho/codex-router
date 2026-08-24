@@ -376,6 +376,31 @@ test("one malformed metadata record invalidates the whole untrusted snapshot", a
   await forgetProviderCatalogCache("metadata-provider");
 });
 
+test("a cached provider request profile is rejected as untrusted wire authority", async () => {
+  await forgetProviderCatalogCache("profile-provider");
+  writeFileSync(cachePath, `${JSON.stringify({
+    version: 2,
+    providers: {
+      "profile-provider": {
+        discovered: ["model"],
+        fetchedAt: new Date().toISOString(),
+        identityFingerprint: TEST_IDENTITY,
+        modelMetadata: {
+          model: { upstreamId: "model", requestProfile: "auto-tool-choice" },
+        },
+        provenance: {
+          schema: "codex-router/provider-catalog/v1",
+          providerId: "profile-provider",
+          endpoint: "https://profile-provider.example.test/models",
+          identityFingerprint: TEST_IDENTITY,
+        },
+      },
+    },
+  })}\n`, { mode: 0o600 });
+  assert.equal(readProviderCatalogCache("profile-provider"), undefined);
+  await forgetProviderCatalogCache("profile-provider");
+});
+
 test("oversized provider snapshots are evicted before the cache crosses its read limit", async () => {
   await forgetProviderCatalogCache("oversized-provider");
   const modelCount = 4_000;

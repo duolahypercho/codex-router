@@ -266,6 +266,11 @@ function normalizedEntry(entry, providerId, scope) {
       const valid = {};
       for (const [id, value] of Object.entries(entry.modelMetadata)) {
         if (!known.has(id) || typeof id !== "string" || id.length > MAX_MODEL_ID_LENGTH) return undefined;
+        // Live provider metadata is intentionally capability-only. A cached
+        // request profile would select router wire behavior on the next run;
+        // reject it even when the rest of the record is account-bound, rather
+        // than allowing a hand-edited or legacy cache to grant that authority.
+        if (value?.requestProfile !== undefined) return undefined;
         try {
           valid[id] = normalizeModelMetadata(value, { upstreamId: id });
         } catch {

@@ -1,6 +1,10 @@
 import { promises as dns } from "node:dns";
 import net from "node:net";
 
+import { Agent, EnvHttpProxyAgent, fetch as undiciFetch } from "undici";
+
+import { environmentHttpProxyConfigured } from "./proxy-environment.mjs";
+
 // A provider's model endpoint is an untrusted boundary. The response is used
 // for picker metadata only; it must never be allowed to turn discovery into a
 // general-purpose HTTP client or an unbounded JSON parser.
@@ -10,6 +14,7 @@ export const MODEL_DISCOVERY_MAX_RECORD_BYTES = 256 * 1024;
 export const MODEL_DISCOVERY_MAX_REDIRECTS = 3;
 
 const PRIVATE_IPV4_RANGES = [
+  [0, 0, 0, 0, 8],
   [10, 0, 0, 0, 8],
   [100, 64, 0, 0, 10],
   [127, 0, 0, 0, 8],
@@ -124,7 +129,60 @@ export async function validateDiscoveryUrl(value, {
   if (!allowPrivate && (isPrivateHostname(parsed.hostname) || addresses.some(isPrivateAddress))) {
     throw new Error("Model discovery refused a private or loopback endpoint.");
   }
-  return { url: parsed, origin };
+  return { url: parsed, origin, addresses };
+}
+
+function pinnedLookup(hostname, addresses, targetHostname) {
+  const target = String(targetHostname || "").toLowerCase().replace(/^\[|\]$/g, "");
+  const pinned = [...addresses];
+  return (requested, options, callback) => {
+    const requestedHost = String(requested || "").toLowerCase().replace(/^\[|\]$/g, "");
+    if (requestedHost !== target) {
+      // An explicitly enabled proxy may need to resolve its own host. That
+      // host is outside the provider trust decision and must use the normal
+      // resolver; direct requests to the provider stay pinned below.
+      dns.lookup(requested, options || {})
+        .then((result) => {
+          if (options?.all) callback(null, result);
+          else callback(null, result.address, result.family);
+        })
+        .catch((error) => callback(error));
+      return;
+    }
+    const family = Number(options?.family) || 0;
+    const candidates = family === 0
+      ? pinned
+      : pinned.filter((address) => net.isIP(address) === family);
+    if (!candidates.length) {
+      callback(new Error("Provider host has no address for the requested network family."));
+      return;
+    }
+    if (options?.all) {
+      callback(null, candidates.map((address) => ({ address, family: net.isIP(address) })));
+      return;
+    }
+    callback(null, candidates[0], net.isIP(candidates[0]));
+  };
+}
+
+function createPinnedDispatcher({ url, addresses }) {
+  const options = {
+    connect: {
+      lookup: pinnedLookup(url.hostname, addresses, url.hostname),
+    },
+  };
+  const Dispatcher = environmentHttpProxyConfigured() ? EnvHttpProxyAgent : Agent;
+  return new Dispatcher(options);
+}
+
+async function closeDispatcher(dispatcher) {
+  if (!dispatcher || typeof dispatcher.close !== "function") return;
+  try {
+    await dispatcher.close();
+  } catch {
+    // A failed discovery must not mask its bounded request error with a
+    // best-effort connection-pool cleanup failure.
+  }
 }
 
 function responseHeader(response, name) {
@@ -212,35 +270,50 @@ export async function fetchUntrustedModelCatalog(endpoint, {
   if (typeof fetchImpl !== "function") throw new Error("Model discovery requires a fetch implementation.");
   let current = await validateDiscoveryUrl(endpoint, { allowPrivate, resolveHost });
   const originalOrigin = current.origin;
-  for (let redirect = 0; ; redirect += 1) {
-    const response = await fetchImpl(current.url.toString(), {
-      method: "GET",
-      headers: { Accept: "application/json", ...headers },
-      redirect: "manual",
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-    if (REDIRECT_STATUSES.has(response?.status)) {
-      if (redirect >= maxRedirects) throw new Error("Provider model discovery exceeded the redirect limit.");
-      const location = responseHeader(response, "location");
-      if (!location) throw new Error("Provider model discovery returned a redirect without a location.");
-      current = await validateDiscoveryUrl(new URL(location, current.url), {
-        allowPrivate,
-        expectedOrigin: originalOrigin,
-        resolveHost,
+  let dispatcher;
+  try {
+    for (let redirect = 0; ; redirect += 1) {
+      // The built-in Node fetch cannot consume an npm-undici dispatcher. Use
+      // the package fetch for the real request so the resolver result is
+      // pinned to the addresses checked above; injected test fetchers remain
+      // untouched and receive the same small init object as before.
+      const usePinnedFetch = fetchImpl === globalThis.fetch;
+      const requestFetch = usePinnedFetch ? undiciFetch : fetchImpl;
+      dispatcher = usePinnedFetch ? createPinnedDispatcher(current) : undefined;
+      const response = await requestFetch(current.url.toString(), {
+        method: "GET",
+        headers: { Accept: "application/json", ...headers },
+        redirect: "manual",
+        signal: AbortSignal.timeout(timeoutMs),
+        ...(dispatcher ? { dispatcher } : {}),
       });
-      continue;
+      if (REDIRECT_STATUSES.has(response?.status)) {
+        await closeDispatcher(dispatcher);
+        dispatcher = undefined;
+        if (redirect >= maxRedirects) throw new Error("Provider model discovery exceeded the redirect limit.");
+        const location = responseHeader(response, "location");
+        if (!location) throw new Error("Provider model discovery returned a redirect without a location.");
+        current = await validateDiscoveryUrl(new URL(location, current.url), {
+          allowPrivate,
+          expectedOrigin: originalOrigin,
+          resolveHost,
+        });
+        continue;
+      }
+      if (response?.ok && !validatePayload) return { ok: true, status: response.status };
+      const body = await boundedBody(response, maxBytes);
+      if (!response?.ok) {
+        if (acceptNonOk) return { ok: false, status: response.status };
+        throw new Error(`Provider model discovery returned HTTP ${response.status}.`);
+      }
+      let payload;
+      const contentType = responseHeader(response, "content-type");
+      if (contentType && !/\bjson\b/i.test(contentType)) throw new Error("Provider model catalog did not return JSON.");
+      try { payload = JSON.parse(body); } catch { throw new Error("Provider returned invalid JSON for its model catalog."); }
+      validateModelCatalogPayload(payload, { maxModels, maxRecordBytes });
+      return payload;
     }
-    if (response?.ok && !validatePayload) return { ok: true, status: response.status };
-    const body = await boundedBody(response, maxBytes);
-    if (!response?.ok) {
-      if (acceptNonOk) return { ok: false, status: response.status };
-      throw new Error(`Provider model discovery returned HTTP ${response.status}.`);
-    }
-    let payload;
-    const contentType = responseHeader(response, "content-type");
-    if (contentType && !/\bjson\b/i.test(contentType)) throw new Error("Provider model catalog did not return JSON.");
-    try { payload = JSON.parse(body); } catch { throw new Error("Provider returned invalid JSON for its model catalog."); }
-    validateModelCatalogPayload(payload, { maxModels, maxRecordBytes });
-    return payload;
+  } finally {
+    await closeDispatcher(dispatcher);
   }
 }

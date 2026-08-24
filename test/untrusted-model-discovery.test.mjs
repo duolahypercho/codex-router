@@ -1,13 +1,19 @@
 import assert from "node:assert/strict";
+import http from "node:http";
 import test from "node:test";
 
 import {
   fetchUntrustedModelCatalog,
   validateDiscoveryUrl,
   validateModelCatalogPayload,
+  isPrivateAddress,
 } from "../src/untrusted-model-discovery.mjs";
 
 const PUBLIC_IP = "93.184.216.34";
+
+test("unspecified addresses are private and cannot be used as discovery targets", () => {
+  assert.equal(isPrivateAddress("0.0.0.0"), true);
+});
 
 function jsonResponse(value, init = {}) {
   return new Response(JSON.stringify(value), {
@@ -120,3 +126,20 @@ test("explicitly configured private providers remain available", async () => {
   assert.deepEqual(result.data, [{ id: "local/model" }]);
 });
 
+test("the real discovery request pins the validated DNS answer", async () => {
+  const server = http.createServer((_request, response) => {
+    response.setHeader("content-type", "application/json");
+    response.end(JSON.stringify({ data: [{ id: "local/pinned" }] }));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const port = server.address().port;
+    const result = await fetchUntrustedModelCatalog(`http://discovery.test:${port}/models`, {
+      allowPrivate: true,
+      resolveHost: async () => ["127.0.0.1"],
+    });
+    assert.deepEqual(result.data, [{ id: "local/pinned" }]);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
