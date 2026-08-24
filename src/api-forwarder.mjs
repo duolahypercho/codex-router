@@ -45,6 +45,7 @@ import { relayCommandCodeGenerate } from "./commandcode-relay.mjs";
 import { VERSION } from "./version.mjs";
 import { installStableFetchTransport } from "./fetch-transport.mjs";
 import { zaiCacheUsageTransform } from "./zai-cache-usage.mjs";
+import { normalizeOpenAIRequest } from "./openai-adapters.mjs";
 
 installStableFetchTransport();
 
@@ -523,7 +524,7 @@ function normalizeBody(buffer, contentType, route) {
     error.status = 400;
     throw error;
   }
-  const payload = JSON.parse(buffer.toString("utf8"));
+  let payload = JSON.parse(buffer.toString("utf8"));
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
     const error = new Error("Request JSON must be an object.");
     error.status = 400;
@@ -544,16 +545,26 @@ function normalizeBody(buffer, contentType, route) {
     error.status = 400;
     throw error;
   }
+  const adapter = model.adapter || provider.adapter || provider.protocol;
   const expectedRoute =
-    provider.protocol === "anthropic"
+    adapter === "anthropic"
       ? "/messages"
-      : provider.protocol === "openai-responses"
+      : ["openai-responses", "responses"].includes(adapter)
         ? "/responses"
         : "/chat/completions";
   if (route !== expectedRoute) {
     const error = new Error(`Model ${model.gatewayModel} does not support ${route}.`);
     error.status = 400;
     throw error;
+  }
+
+  // Generic providers may opt into an explicit adapter capability profile.
+  // Curated routes without this metadata keep their established path
+  // unchanged. Capability conversion is pure, so a retry can reuse the
+  // original request body.
+  const capabilities = model.capabilities || model.adapterCapabilities || provider.capabilities;
+  if (model.adapter || provider.adapter || capabilities || model.adapterCapabilities) {
+    payload = normalizeOpenAIRequest(payload, { adapter, capabilities });
   }
 
   // OpenAI Chat Completions providers place terminal usage in a final empty
