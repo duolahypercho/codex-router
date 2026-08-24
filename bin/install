@@ -167,6 +167,12 @@ case "$(install_step python-deps)" in
     if command -v uv >/dev/null 2>&1; then
       if [ ! -x .venv/bin/python ]; then
         uv venv --python 3.12 .venv
+      elif ! .venv/bin/python --version >/dev/null 2>&1; then
+        # A venv can have a present launcher whose interpreter cannot start
+        # (for example after its temporary Python home was removed). Reusing it
+        # lets uv install packages into a runtime that will never boot.
+        echo "The virtual environment's Python cannot run; recreating the venv."
+        uv venv --clear --python 3.12 .venv
       elif ! node src/install-plan.mjs venv-home-ok >/dev/null 2>&1; then
         # A venv whose interpreter home was cleared (macOS wipes /private/tmp,
         # and installers that recorded a temporary Python as the venv home end
@@ -192,7 +198,8 @@ case "$(install_step python-deps)" in
       python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else "Python 3.10 or newer is required.")'
       # Same clearing logic as the uv branch: a venv with a vanished interpreter
       # home must be recreated from scratch instead of installed over.
-      if node src/install-plan.mjs venv-home-ok >/dev/null 2>&1; then
+      if node src/install-plan.mjs venv-home-ok >/dev/null 2>&1 &&
+        .venv/bin/python --version >/dev/null 2>&1; then
         python3 -m venv .venv
       else
         echo "The virtual environment's interpreter home is missing; recreating the venv."

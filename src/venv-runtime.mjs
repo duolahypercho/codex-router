@@ -14,7 +14,7 @@ export function venvRuntimeProblem(
 ) {
   const options = {
     encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
+    stdio: ["ignore", "pipe", "pipe"],
   };
 
   // A spawnSync timeout means Windows never finished scheduling the child; it
