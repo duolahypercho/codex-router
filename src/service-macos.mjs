@@ -32,6 +32,16 @@ const userId = typeof process.getuid === "function" ? process.getuid() : 501;
 const domain = `gui/${userId}`;
 const service = `${domain}/${SERVICE_LABEL}`;
 const launchctl = "/bin/launchctl";
+// A redirected LaunchAgents directory is a fixture boundary, not a second
+// launchd installation. Always keep launchctl out of that path: otherwise a
+// test can write a harmless temporary plist and still bootstrap it into the
+// user's real gui domain. The explicit flag remains useful for tests that keep
+// the normal path but only want to render/write files.
+const launchAgentsRedirected = Boolean(
+  process.env.MODEL_ROUTER_LAUNCH_AGENTS_DIR || process.env.CODEX_ROUTER_LAUNCH_AGENTS_DIR,
+);
+const skipLaunchctl =
+  process.env.CODEX_ROUTER_SKIP_LAUNCHCTL === "1" || launchAgentsRedirected;
 const launchctlRetryWait = new Int32Array(new SharedArrayBuffer(4));
 const nodeBinary = process.env.CODEX_ROUTER_NODE_BIN || process.execPath;
 if (!path.isAbsolute(nodeBinary)) {
@@ -139,6 +149,7 @@ function loaded(targetService = service) {
 }
 
 function bootout(targetService = service) {
+  if (skipLaunchctl) return;
   const description = loaded(targetService);
   if (!description) return;
   try {
@@ -177,6 +188,7 @@ function writePlist() {
 }
 
 function bootstrap() {
+  if (skipLaunchctl) return;
   if (!existsSync(LAUNCH_AGENT_PATH)) {
     throw new Error(`LaunchAgent is not installed at ${LAUNCH_AGENT_PATH}.`);
   }
@@ -216,6 +228,9 @@ if (command === "render") {
     })}\n`,
   );
 } else if (command === "install") {
+  // Validate before bootout too: a rejected test or redirected write must not
+  // unload the real service as a side effect.
+  guardPlistWrite();
   bootout();
   // Only safe here. launchd opens StandardOutPath before it execs the service,
   // so a rotation performed by the started process renames a file the process
@@ -228,6 +243,7 @@ if (command === "render") {
   bootstrap();
   process.stdout.write(`${JSON.stringify({ installed: true, path: LAUNCH_AGENT_PATH })}\n`);
 } else if (command === "uninstall") {
+  guardPlistWrite();
   bootout();
   try {
     run(["disable", service], { quiet: true });
@@ -236,7 +252,6 @@ if (command === "render") {
   }
   // Removal damages the machine exactly as a write does: the observed failure
   // included a test deleting the real LaunchAgent outright.
-  guardPlistWrite();
   if (existsSync(LAUNCH_AGENT_PATH)) unlinkSync(LAUNCH_AGENT_PATH);
   process.stdout.write(`${JSON.stringify({ installed: false })}\n`);
 } else if (command === "stop") {

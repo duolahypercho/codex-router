@@ -45,6 +45,31 @@ test("a redirected write is allowed inside a test run", () => {
   );
 });
 
+test("a redirected service path never reaches the real launchd domain", () => {
+  const fixture = mkdtempSync(path.join(os.tmpdir(), "codex-router-guard-redirect-"));
+  try {
+    const result = spawnSync(
+      process.execPath,
+      [path.join(root, "src", "service-macos.mjs"), "render"],
+      {
+        cwd: root,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          CODEX_ROUTER_SERVICE_PLATFORM: "darwin",
+          MODEL_ROUTER_LAUNCH_AGENTS_DIR: fixture,
+        },
+      },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    // The renderer shares the same boundary as install/uninstall. A redirected
+    // path may be rendered, but the service manager must never bootstrap it.
+    assert.match(result.stdout, /io\.github\.codex-router/);
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
 test("installing the macOS service from a test refuses instead of writing", () => {
   // The end-to-end shape of the accident this guards: a test spawns the real
   // service installer, which rewrites the developer's own LaunchAgent to point
@@ -106,7 +131,6 @@ test("a redirected install is still able to write its fixture", () => {
           MODEL_ROUTER_STATE_DIR: path.join(fixture, "state"),
           CODEX_ROUTER_SERVICE_PLATFORM: "darwin",
           CODEX_ROUTER_NODE_BIN: process.execPath,
-          CODEX_ROUTER_SKIP_LAUNCHCTL: "1",
           NODE_TEST_CONTEXT: "child-v8",
           MODEL_ROUTER_LAUNCH_AGENTS_DIR: agents,
         },
