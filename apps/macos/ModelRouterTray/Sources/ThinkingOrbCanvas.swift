@@ -443,6 +443,13 @@ final class ThinkingOrbNSView: NSView {
   private var running = false
   private let redrawLock = NSLock()
   private var redrawScheduled = false
+  private var lastRedrawTime: CFTimeInterval = 0
+  /// The orb animates on wall-clock time, so redraw rate only affects smoothness,
+  /// not speed. The display link fires at the panel's refresh rate (120 Hz on
+  /// ProMotion), and each fire repaints an 18 pt status-bar view and commits it
+  /// to WindowServer — measured at over 15% of a core while a model is thinking.
+  /// 20 fps is indistinguishable at this size and cuts that by ~6x.
+  private static let redrawInterval: CFTimeInterval = 1.0 / 20.0
   private var mode: ThinkingOrbMode = .shaping
   var reduceMotion = false {
     didSet {
@@ -535,11 +542,13 @@ final class ThinkingOrbNSView: NSView {
 
   private func scheduleRedraw() {
     redrawLock.lock()
-    guard !redrawScheduled else {
+    let now = CACurrentMediaTime()
+    guard !redrawScheduled, now - lastRedrawTime >= Self.redrawInterval else {
       redrawLock.unlock()
       return
     }
     redrawScheduled = true
+    lastRedrawTime = now
     redrawLock.unlock()
 
     DispatchQueue.main.async { [weak self] in
