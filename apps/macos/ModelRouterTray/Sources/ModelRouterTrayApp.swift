@@ -4451,7 +4451,9 @@ struct MenuBarSettings: Equatable {
 
 enum MenuBarLayoutMetrics {
   static let standardReservedWidth: CGFloat = 180
+  static let standardHeight: CGFloat = 22
   static let iconOnlyWidth: CGFloat = 28
+  static let iconOnlyHeight: CGFloat = 22
   static let iconOnlyIconSize: CGFloat = 17
   static let attentionPulseScale: CGFloat = 1.4
   static let activityBadgeSize: CGFloat = 5
@@ -4470,6 +4472,16 @@ enum MenuBarLayoutMetrics {
     let badgeWidth = showsActivityBadge ? activityBadgeSize * activityBadgePulseScale : 0
     let spacing = showsActivityBadge ? iconOnlySpacing : 0
     return max(iconOnlyWidth, ceil(iconWidth + spacing + badgeWidth))
+  }
+
+  nonisolated static func statusItemHeight(
+    displayMode: TrayMenuBarDisplayMode,
+    pulsing: Bool = false
+  ) -> CGFloat {
+    guard displayMode == .iconOnly, pulsing else {
+      return standardHeight
+    }
+    return max(iconOnlyHeight, ceil(iconOnlyIconSize * attentionPulseScale))
   }
 
   nonisolated static func showsActivityBadge(iconStyle: TrayMenuBarIconStyle, isIdle: Bool) -> Bool {
@@ -4710,7 +4722,10 @@ private struct StatusItemLabel: View {
             isIdle: store.activityState == .idle
           )
         ),
-        height: 22
+        height: MenuBarLayoutMetrics.statusItemHeight(
+          displayMode: store.menuBarDisplayMode,
+          pulsing: pulsing
+        )
       )
       .clipped()
       .contentShape(Rectangle())
@@ -4758,7 +4773,14 @@ private struct StatusItemLabel: View {
             .truncationMode(.tail)
         }
       }
-      .frame(width: MenuBarLayoutMetrics.statusItemWidth(displayMode: store.menuBarDisplayMode, pulsing: pulsing), alignment: .leading)
+      .frame(
+        width: MenuBarLayoutMetrics.statusItemWidth(displayMode: store.menuBarDisplayMode, pulsing: pulsing),
+        height: MenuBarLayoutMetrics.statusItemHeight(
+          displayMode: store.menuBarDisplayMode,
+          pulsing: pulsing
+        ),
+        alignment: .leading
+      )
       .clipped()
       .help(tooltipText)
       .onChange(of: store.attentionPulse) { _ in

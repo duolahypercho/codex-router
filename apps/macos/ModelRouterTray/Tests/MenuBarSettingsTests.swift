@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Testing
 
@@ -57,6 +58,8 @@ struct MenuBarSettingsTests {
   func standardWidthIsReserved() {
     #expect(MenuBarLayoutMetrics.statusItemWidth(displayMode: .standard) == 180)
     #expect(MenuBarLayoutMetrics.statusItemWidth(displayMode: .iconOnly) == 28)
+    #expect(MenuBarLayoutMetrics.statusItemHeight(displayMode: .standard) == 22)
+    #expect(MenuBarLayoutMetrics.statusItemHeight(displayMode: .iconOnly) == 22)
   }
 
   @Test("the icon-only pulse reserves space for the rendered mark and badge")
@@ -75,7 +78,9 @@ struct MenuBarSettingsTests {
         showsActivityBadge: true
       ) == 36
     )
+    #expect(MenuBarLayoutMetrics.statusItemHeight(displayMode: .iconOnly, pulsing: true) == 24)
     #expect(MenuBarLayoutMetrics.statusItemWidth(displayMode: .standard, pulsing: true) == 180)
+    #expect(MenuBarLayoutMetrics.statusItemHeight(displayMode: .standard, pulsing: true) == 22)
   }
 
   @Test("provider marks fit transparent crops without leaving the target slot")
@@ -90,6 +95,33 @@ struct MenuBarSettingsTests {
     #expect(drawRect.maxX <= 20)
     #expect(drawRect.minY >= 0)
     #expect(drawRect.maxY <= 20)
+  }
+
+  @Test("provider layout finds visible content in a transparent bitmap")
+  func providerLayoutFindsVisibleContent() {
+    let url = URL(fileURLWithPath: #filePath)
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .appendingPathComponent("Sources/Resources/ProviderIcons/openai.png")
+    guard let image = NSImage(contentsOf: url) else {
+      Issue.record("Provider icon fixture could not be loaded")
+      return
+    }
+
+    let visibleRect = ProviderIconLayout.visibleImageRect(image)
+    #expect(visibleRect.width > 0)
+    #expect(visibleRect.height > 0)
+    #expect(visibleRect.width <= image.size.width)
+    #expect(visibleRect.height <= image.size.height)
+    #expect(visibleRect.width < image.size.width || visibleRect.height < image.size.height)
+    let drawRect = ProviderIconLayout.fittedRect(
+      sourceRect: visibleRect,
+      targetSize: NSSize(width: 18, height: 18)
+    )
+    #expect(drawRect.minX >= 0)
+    #expect(drawRect.maxX <= 18)
+    #expect(drawRect.minY >= 0)
+    #expect(drawRect.maxY <= 18)
   }
 
   @Test("the activity badge is not a second dot on the indicator style")
