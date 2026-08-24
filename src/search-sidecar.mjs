@@ -1,7 +1,6 @@
-// Explicit, provider-agnostic web search for models that cannot consume the
-// native search tool.  This module only coordinates a caller-supplied search
-// adapter: credentials stay in the provider boundary and ordinary text turns
-// never reach it by accident.
+// Explicit, provider-agnostic web search. This module is intentionally not
+// wired into the router until a caller supplies an authorization gate and a
+// provider adapter.
 
 export const SEARCH_SIDECAR_DEFAULTS = Object.freeze({
   timeoutMs: 10_000,
@@ -17,10 +16,19 @@ const MAX_RESULT_LENGTH = 2_000;
 const MAX_URL_LENGTH = 4_096;
 const RETRYABLE_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
 const SEARCH_MODES = new Set(["auto", "native", "sidecar"]);
-
-function own(value, key) {
-  return value !== null && typeof value === "object" && Object.hasOwn(value, key);
-}
+const CONFIG_KEYS = new Set([
+  "enabled",
+  "providerId",
+  "credentialRef",
+  "destination",
+  "timeoutMs",
+  "maxResults",
+  "cacheTtlMs",
+  "cacheMaxEntries",
+  "maxAttempts",
+  "retryDelayMs",
+]);
+const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f]/;
 
 function positiveInteger(value, name, { max } = {}) {
   if (!Number.isInteger(value) || value < 1 || (max !== undefined && value > max)) {
@@ -37,10 +45,52 @@ function nonNegativeInteger(value, name, { max } = {}) {
 }
 
 function cleanString(value, name, max) {
-  if (typeof value !== "string" || !value.trim() || value.length > max) {
+  if (typeof value !== "string" || !value.trim() || value.length > max || CONTROL_CHARACTERS.test(value)) {
     throw new Error(`${name} must be a non-empty string of at most ${max} characters.`);
   }
   return value.trim();
+}
+
+function opaqueRef(value, name, max) {
+  const result = cleanString(value, name, max);
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:/-]*$/.test(result)) {
+    throw new Error(`${name} must be an opaque reference without whitespace or special characters.`);
+  }
+  return result;
+}
+
+function unsafeHostname(hostname) {
+  const normalized = hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  if (normalized === "localhost" || normalized.endsWith(".localhost") || normalized.includes(":")) return true;
+  const ipv4 = normalized.split(".").map((part) => Number(part));
+  if (ipv4.length !== 4 || !ipv4.every((part) => Number.isInteger(part) && part >= 0 && part <= 255)) return false;
+  return ipv4[0] === 0 || ipv4[0] === 10 || ipv4[0] === 127 || (ipv4[0] === 169 && ipv4[1] === 254)
+    || (ipv4[0] === 172 && ipv4[1] >= 16 && ipv4[1] <= 31) || (ipv4[0] === 192 && ipv4[1] === 168);
+}
+
+function normalizeDestination(value) {
+  const raw = cleanString(value, "destination", MAX_URL_LENGTH);
+  let parsed;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new Error("destination must be an absolute HTTPS URL.");
+  }
+  if (parsed.protocol !== "https:" || parsed.username || parsed.password || parsed.hash) {
+    throw new Error("destination must be an HTTPS URL without credentials or a fragment.");
+  }
+  if (unsafeHostname(parsed.hostname)) throw new Error("destination must not target localhost or a private address.");
+  return parsed.toString();
+}
+
+function sanitizeText(value, name, max) {
+  if (typeof value !== "string" || !value.trim() || value.length > max) {
+    throw new Error(`${name} must be a non-empty string of at most ${max} characters.`);
+  }
+  const text = value.replace(/[\u0000-\u001f\u007f]/g, " ");
+  const sanitized = text.replace(/<\s*(script|style)[^>]*>[\s\S]*?<\/\s*\1\s*>/gi, " ").replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+  if (!sanitized) throw new Error(`${name} must contain visible text.`);
+  return sanitized;
 }
 
 /**
@@ -51,8 +101,8 @@ export function normalizeSearchSidecarConfig(value = {}) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("Search sidecar config must be an object.");
   }
-  for (const key of ["apiKey", "token", "secret", "password", "authorization"]) {
-    if (own(value, key)) throw new Error(`Search sidecar config cannot contain ${key}.`);
+  for (const key of Object.keys(value)) {
+    if (!CONFIG_KEYS.has(key)) throw new Error(`Search sidecar config does not accept ${key}.`);
   }
   const enabled = value.enabled === true;
   if (value.enabled !== undefined && typeof value.enabled !== "boolean") {
@@ -60,8 +110,9 @@ export function normalizeSearchSidecarConfig(value = {}) {
   }
   const result = {
     enabled,
-    ...(value.providerId !== undefined ? { providerId: cleanString(value.providerId, "providerId", 128) } : {}),
-    ...(value.credentialRef !== undefined ? { credentialRef: cleanString(value.credentialRef, "credentialRef", 256) } : {}),
+    ...(value.providerId !== undefined ? { providerId: opaqueRef(value.providerId, "providerId", 128) } : {}),
+    ...(value.credentialRef !== undefined ? { credentialRef: opaqueRef(value.credentialRef, "credentialRef", 256) } : {}),
+    ...(value.destination !== undefined ? { destination: normalizeDestination(value.destination) } : {}),
     timeoutMs: value.timeoutMs === undefined ? SEARCH_SIDECAR_DEFAULTS.timeoutMs : positiveInteger(value.timeoutMs, "timeoutMs", { max: 120_000 }),
     maxResults: value.maxResults === undefined ? SEARCH_SIDECAR_DEFAULTS.maxResults : positiveInteger(value.maxResults, "maxResults", { max: 50 }),
     cacheTtlMs: value.cacheTtlMs === undefined ? SEARCH_SIDECAR_DEFAULTS.cacheTtlMs : nonNegativeInteger(value.cacheTtlMs, "cacheTtlMs", { max: 86_400_000 }),
@@ -71,18 +122,19 @@ export function normalizeSearchSidecarConfig(value = {}) {
   };
   if (result.enabled && !result.providerId) throw new Error("An enabled search sidecar needs providerId.");
   if (result.enabled && !result.credentialRef) throw new Error("An enabled search sidecar needs credentialRef.");
+  if (result.enabled && !result.destination) throw new Error("An enabled search sidecar needs destination.");
   return Object.freeze(result);
 }
 
-/** Resolve native/sidecar transport without model-name conditionals. */
-export function resolveSearchTransport({ modelCapabilities = {}, sidecar, mode = "auto" } = {}) {
+/** Resolve only an explicitly requested sidecar; auto mode never falls back. */
+export function resolveSearchTransport({ modelCapabilities = {}, sidecar, mode = "auto", invocationAuthorized = false } = {}) {
   if (!SEARCH_MODES.has(mode)) throw new Error(`Unknown search mode ${mode}.`);
   const native = modelCapabilities?.supportsSearch === true;
   const configured = sidecar?.enabled === true;
   if (mode === "native") return native ? "native" : "disabled";
-  if (mode === "sidecar") return configured ? "sidecar" : "disabled";
+  if (mode === "sidecar") return configured && invocationAuthorized === true ? "sidecar" : "disabled";
   if (native) return "native";
-  return configured ? "sidecar" : "disabled";
+  return "disabled";
 }
 
 export function normalizeSearchRequest(request, maxResults = SEARCH_SIDECAR_DEFAULTS.maxResults) {
@@ -109,21 +161,25 @@ function normalizeResult(value, index) {
   } catch {
     throw new Error(`results[${index}].url must be an absolute URL.`);
   }
-  if (!/^https?:$/.test(parsed.protocol)) throw new Error(`results[${index}].url must use http or https.`);
+  if (!/^https?:$/.test(parsed.protocol) || parsed.username || parsed.password || parsed.hash) {
+    throw new Error(`results[${index}].url must be an HTTP(S) URL without credentials or a fragment.`);
+  }
+  if (unsafeHostname(parsed.hostname)) throw new Error(`results[${index}].url must not target localhost or a private address.`);
   return {
-    title: cleanString(value.title || parsed.hostname, `results[${index}].title`, MAX_RESULT_LENGTH),
-    url,
-    ...(value.snippet === undefined ? {} : { snippet: cleanString(value.snippet, `results[${index}].snippet`, MAX_RESULT_LENGTH) }),
-    ...(value.publishedAt === undefined ? {} : { publishedAt: cleanString(value.publishedAt, `results[${index}].publishedAt`, 128) }),
+    title: sanitizeText(value.title || parsed.hostname, `results[${index}].title`, MAX_RESULT_LENGTH),
+    url: parsed.toString(),
+    ...(value.snippet === undefined ? {} : { snippet: sanitizeText(value.snippet, `results[${index}].snippet`, MAX_RESULT_LENGTH) }),
+    ...(value.publishedAt === undefined ? {} : { publishedAt: sanitizeText(value.publishedAt, `results[${index}].publishedAt`, 128) }),
   };
 }
 
 export function normalizeSearchResponse(payload, request) {
   const raw = Array.isArray(payload) ? payload : payload?.results;
   if (!Array.isArray(raw)) throw new Error("Search sidecar returned no results array.");
-  const results = raw.slice(0, request.maxResults).map(normalizeResult);
+  const normalizedRequest = normalizeSearchRequest(request);
+  const results = raw.slice(0, normalizedRequest.maxResults).map(normalizeResult);
   return {
-    query: request.query,
+    query: normalizedRequest.query,
     results,
     citations: results.map((result, index) => ({ index: index + 1, title: result.title, url: result.url })),
   };
@@ -141,21 +197,6 @@ function retryable(error) {
   return error?.retryable === true || (status !== undefined && RETRYABLE_STATUSES.has(status));
 }
 
-function combinedSignal(signal, timeoutMs) {
-  const timeout = AbortSignal.timeout(timeoutMs);
-  if (!signal) return timeout;
-  return AbortSignal.any([signal, timeout]);
-}
-
-function abortReason(signal, timeoutMs) {
-  if (signal?.aborted) {
-    return signal.reason?.name === "TimeoutError" || signal.reason?.code === "ERR_ABORTED"
-      ? "timeout"
-      : "cancelled";
-  }
-  return timeoutMs ? "timeout" : "cancelled";
-}
-
 export class SearchSidecarError extends Error {
   constructor(message, { code = "search_sidecar_failed", status, telemetry, cause } = {}) {
     super(message, { cause });
@@ -163,6 +204,36 @@ export class SearchSidecarError extends Error {
     this.code = code;
     if (status !== undefined) this.status = status;
     this.telemetry = telemetry;
+  }
+}
+
+function abortError(code) {
+  return new SearchSidecarError(
+    code === "search_sidecar_timeout" ? "Search sidecar timed out." : "Search sidecar was cancelled.",
+    { code },
+  );
+}
+
+async function invokeBounded(fn, input, { signal, timeoutMs }) {
+  if (signal?.aborted) throw abortError("search_sidecar_cancelled");
+  const controller = new AbortController();
+  let timeoutHandle;
+  let onParentAbort;
+  let rejectAbort;
+  const abortPromise = new Promise((_, reject) => { rejectAbort = reject; });
+  const abort = (error) => {
+    if (!controller.signal.aborted) controller.abort(error);
+    rejectAbort(error);
+  };
+  onParentAbort = () => abort(abortError("search_sidecar_cancelled"));
+  signal?.addEventListener("abort", onParentAbort, { once: true });
+  timeoutHandle = setTimeout(() => abort(abortError("search_sidecar_timeout")), timeoutMs);
+  try {
+    const result = Promise.resolve().then(() => fn({ ...input, signal: controller.signal }));
+    return await Promise.race([result, abortPromise]);
+  } finally {
+    clearTimeout(timeoutHandle);
+    signal?.removeEventListener("abort", onParentAbort);
   }
 }
 
@@ -192,37 +263,55 @@ export function createSearchCache({ maxEntries = SEARCH_SIDECAR_DEFAULTS.cacheMa
   };
 }
 
-/** Execute one explicit sidecar search. The adapter owns credential lookup. */
-export async function searchWithSidecar({ config, request, searchImpl, signal, cache, now = () => Date.now(), sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) } = {}) {
+/** Execute one authorized sidecar search. The adapter owns credential lookup. */
+export async function searchWithSidecar({ config, request, accountId, model, authorize, searchImpl, signal, cache, now = () => Date.now(), sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) } = {}) {
   const sidecar = normalizeSearchSidecarConfig(config);
   if (!sidecar.enabled) throw new SearchSidecarError("Search sidecar is disabled.", { code: "search_sidecar_disabled" });
+  if (typeof authorize !== "function") throw new SearchSidecarError("Search sidecar invocation is not authorized.", { code: "search_sidecar_unauthorized" });
   if (typeof searchImpl !== "function") throw new Error("searchImpl must be a function.");
   const normalized = normalizeSearchRequest(request, sidecar.maxResults);
-  const key = `${sidecar.providerId}:${normalized.query}:${normalized.maxResults}`;
+  const normalizedAccountId = cleanString(accountId, "accountId", 256);
+  const normalizedModel = cleanString(model, "model", 256);
+  const authorizationInput = {
+    accountId: normalizedAccountId,
+    model: normalizedModel,
+    providerId: sidecar.providerId,
+    destination: sidecar.destination,
+    request: normalized,
+  };
+  let authorized;
+  try {
+    authorized = await invokeBounded(authorize, authorizationInput, { signal, timeoutMs: sidecar.timeoutMs });
+  } catch (error) {
+    if (error instanceof SearchSidecarError) throw error;
+    throw new SearchSidecarError("Search sidecar invocation is not authorized.", { code: "search_sidecar_unauthorized", cause: error });
+  }
+  if (authorized !== true) throw new SearchSidecarError("Search sidecar invocation is not authorized.", { code: "search_sidecar_unauthorized" });
+  const key = JSON.stringify({
+    accountId: normalizedAccountId,
+    model: normalizedModel,
+    providerId: sidecar.providerId,
+    credentialRef: sidecar.credentialRef,
+    destination: sidecar.destination,
+    query: normalized.query,
+    maxResults: normalized.maxResults,
+  });
   const cached = cache?.get(key);
   if (cached) return { ...cached, telemetry: { ...(cached.telemetry || {}), cacheHit: true } };
 
   const started = now();
   let attempts = 0;
   for (; attempts < sidecar.maxAttempts; attempts += 1) {
-    const requestSignal = combinedSignal(signal, sidecar.timeoutMs);
     try {
-      const payload = await searchImpl({
+      const payload = await invokeBounded(searchImpl, {
         query: normalized.query,
         maxResults: normalized.maxResults,
+        accountId: normalizedAccountId,
+        model: normalizedModel,
         credentialRef: sidecar.credentialRef,
         providerId: sidecar.providerId,
-        signal: requestSignal,
-      });
-      // An adapter may resolve after aborting if its underlying client does
-      // not propagate AbortSignal. Never turn that late payload into a
-      // successful result after the sidecar deadline/caller cancellation.
-      if (requestSignal.aborted || signal?.aborted) {
-        const reason = abortReason(requestSignal, sidecar.timeoutMs);
-        throw new SearchSidecarError(`Search sidecar ${reason}.`, {
-          code: reason === "timeout" ? "search_sidecar_timeout" : "search_sidecar_cancelled",
-        });
-      }
+        destination: sidecar.destination,
+      }, { signal, timeoutMs: sidecar.timeoutMs });
       const output = normalizeSearchResponse(payload, normalized);
       const result = {
         ...output,
@@ -231,27 +320,25 @@ export async function searchWithSidecar({ config, request, searchImpl, signal, c
           attempts: attempts + 1,
           durationMs: Math.max(0, now() - started),
           providerId: sidecar.providerId,
+          model: normalizedModel,
         },
       };
       cache?.set(key, result);
       return result;
     } catch (error) {
-      if (requestSignal.aborted || signal?.aborted) {
-        const reason = abortReason(requestSignal, sidecar.timeoutMs);
-        throw new SearchSidecarError(`Search sidecar ${reason}.`, {
-          code: reason === "timeout" ? "search_sidecar_timeout" : "search_sidecar_cancelled",
-          telemetry: { cacheHit: false, attempts: attempts + 1, durationMs: Math.max(0, now() - started), providerId: sidecar.providerId },
-          cause: error,
-        });
+      if (error instanceof SearchSidecarError && ["search_sidecar_timeout", "search_sidecar_cancelled"].includes(error.code)) {
+        error.telemetry = { cacheHit: false, attempts: attempts + 1, durationMs: Math.max(0, now() - started), providerId: sidecar.providerId, model: normalizedModel };
+        throw error;
       }
       if (!retryable(error) || attempts + 1 >= sidecar.maxAttempts) {
         throw new SearchSidecarError(error?.message || "Search sidecar request failed.", {
           status: statusOf(error),
-          telemetry: { cacheHit: false, attempts: attempts + 1, durationMs: Math.max(0, now() - started), providerId: sidecar.providerId },
+          telemetry: { cacheHit: false, attempts: attempts + 1, durationMs: Math.max(0, now() - started), providerId: sidecar.providerId, model: normalizedModel },
           cause: error,
         });
       }
-      await sleep(sidecar.retryDelayMs * 2 ** attempts);
+      const delayMs = sidecar.retryDelayMs * 2 ** attempts;
+      await invokeBounded(() => sleep(delayMs), {}, { signal, timeoutMs: Math.max(sidecar.timeoutMs, delayMs + 10) });
     }
   }
   throw new SearchSidecarError("Search sidecar request failed.");
