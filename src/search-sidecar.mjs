@@ -59,13 +59,25 @@ function opaqueRef(value, name, max) {
   return result;
 }
 
+function credentialReference(value) {
+  const result = opaqueRef(value, "credentialRef", 256);
+  if (/^(?:sk|rk|pk)-[A-Za-z0-9]{16,}$/i.test(result)
+    || /^(?:bearer|token)[:_-][A-Za-z0-9._~-]{16,}$/i.test(result)
+    || /^eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(result)) {
+    throw new Error("credentialRef must identify stored credentials, not contain a secret.");
+  }
+  return result;
+}
+
 function unsafeHostname(hostname) {
   const normalized = hostname.toLowerCase().replace(/^\[|\]$/g, "");
   if (normalized === "localhost" || normalized.endsWith(".localhost") || normalized.includes(":")) return true;
   const ipv4 = normalized.split(".").map((part) => Number(part));
   if (ipv4.length !== 4 || !ipv4.every((part) => Number.isInteger(part) && part >= 0 && part <= 255)) return false;
-  return ipv4[0] === 0 || ipv4[0] === 10 || ipv4[0] === 127 || (ipv4[0] === 169 && ipv4[1] === 254)
-    || (ipv4[0] === 172 && ipv4[1] >= 16 && ipv4[1] <= 31) || (ipv4[0] === 192 && ipv4[1] === 168);
+  return ipv4[0] === 0 || ipv4[0] === 10 || ipv4[0] === 127 || (ipv4[0] === 100 && ipv4[1] >= 64 && ipv4[1] <= 127)
+    || (ipv4[0] === 169 && ipv4[1] === 254) || (ipv4[0] === 172 && ipv4[1] >= 16 && ipv4[1] <= 31)
+    || (ipv4[0] === 192 && (ipv4[1] === 168 || (ipv4[1] === 0 && ipv4[2] === 0)))
+    || (ipv4[0] === 198 && ipv4[1] >= 18 && ipv4[1] <= 19) || ipv4[0] >= 224;
 }
 
 function normalizeDestination(value) {
@@ -111,7 +123,7 @@ export function normalizeSearchSidecarConfig(value = {}) {
   const result = {
     enabled,
     ...(value.providerId !== undefined ? { providerId: opaqueRef(value.providerId, "providerId", 128) } : {}),
-    ...(value.credentialRef !== undefined ? { credentialRef: opaqueRef(value.credentialRef, "credentialRef", 256) } : {}),
+    ...(value.credentialRef !== undefined ? { credentialRef: credentialReference(value.credentialRef) } : {}),
     ...(value.destination !== undefined ? { destination: normalizeDestination(value.destination) } : {}),
     timeoutMs: value.timeoutMs === undefined ? SEARCH_SIDECAR_DEFAULTS.timeoutMs : positiveInteger(value.timeoutMs, "timeoutMs", { max: 120_000 }),
     maxResults: value.maxResults === undefined ? SEARCH_SIDECAR_DEFAULTS.maxResults : positiveInteger(value.maxResults, "maxResults", { max: 50 }),
@@ -147,6 +159,14 @@ export function normalizeSearchRequest(request, maxResults = SEARCH_SIDECAR_DEFA
   return Object.freeze({
     query,
     maxResults: positiveInteger(requested, "maxResults", { max: 50 }),
+  });
+}
+
+function capSearchRequest(request, maxResults) {
+  const normalized = normalizeSearchRequest(request, maxResults);
+  return Object.freeze({
+    query: normalized.query,
+    maxResults: Math.min(normalized.maxResults, maxResults),
   });
 }
 
@@ -269,9 +289,17 @@ export async function searchWithSidecar({ config, request, accountId, model, aut
   if (!sidecar.enabled) throw new SearchSidecarError("Search sidecar is disabled.", { code: "search_sidecar_disabled" });
   if (typeof authorize !== "function") throw new SearchSidecarError("Search sidecar invocation is not authorized.", { code: "search_sidecar_unauthorized" });
   if (typeof searchImpl !== "function") throw new Error("searchImpl must be a function.");
-  const normalized = normalizeSearchRequest(request, sidecar.maxResults);
+  const normalized = capSearchRequest(request, sidecar.maxResults);
   const normalizedAccountId = cleanString(accountId, "accountId", 256);
   const normalizedModel = cleanString(model, "model", 256);
+  const started = now();
+  const deadline = started + sidecar.timeoutMs;
+  const remainingTimeout = () => Math.max(0, deadline - now());
+  const bounded = (fn, input = {}) => {
+    const timeoutMs = remainingTimeout();
+    if (timeoutMs <= 0) throw abortError("search_sidecar_timeout");
+    return invokeBounded(fn, input, { signal, timeoutMs });
+  };
   const authorizationInput = {
     accountId: normalizedAccountId,
     model: normalizedModel,
@@ -281,12 +309,13 @@ export async function searchWithSidecar({ config, request, accountId, model, aut
   };
   let authorized;
   try {
-    authorized = await invokeBounded(authorize, authorizationInput, { signal, timeoutMs: sidecar.timeoutMs });
+    authorized = await bounded(authorize, authorizationInput);
   } catch (error) {
     if (error instanceof SearchSidecarError) throw error;
     throw new SearchSidecarError("Search sidecar invocation is not authorized.", { code: "search_sidecar_unauthorized", cause: error });
   }
   if (authorized !== true) throw new SearchSidecarError("Search sidecar invocation is not authorized.", { code: "search_sidecar_unauthorized" });
+  if (remainingTimeout() <= 0) throw abortError("search_sidecar_timeout");
   const key = JSON.stringify({
     accountId: normalizedAccountId,
     model: normalizedModel,
@@ -299,11 +328,10 @@ export async function searchWithSidecar({ config, request, accountId, model, aut
   const cached = cache?.get(key);
   if (cached) return { ...cached, telemetry: { ...(cached.telemetry || {}), cacheHit: true } };
 
-  const started = now();
   let attempts = 0;
   for (; attempts < sidecar.maxAttempts; attempts += 1) {
     try {
-      const payload = await invokeBounded(searchImpl, {
+      const payload = await bounded(searchImpl, {
         query: normalized.query,
         maxResults: normalized.maxResults,
         accountId: normalizedAccountId,
@@ -311,7 +339,7 @@ export async function searchWithSidecar({ config, request, accountId, model, aut
         credentialRef: sidecar.credentialRef,
         providerId: sidecar.providerId,
         destination: sidecar.destination,
-      }, { signal, timeoutMs: sidecar.timeoutMs });
+      });
       const output = normalizeSearchResponse(payload, normalized);
       const result = {
         ...output,
@@ -338,7 +366,20 @@ export async function searchWithSidecar({ config, request, accountId, model, aut
         });
       }
       const delayMs = sidecar.retryDelayMs * 2 ** attempts;
-      await invokeBounded(() => sleep(delayMs), {}, { signal, timeoutMs: Math.max(sidecar.timeoutMs, delayMs + 10) });
+      try {
+        await bounded(() => sleep(delayMs));
+      } catch (backoffError) {
+        if (backoffError instanceof SearchSidecarError) {
+          backoffError.telemetry = {
+            cacheHit: false,
+            attempts: attempts + 1,
+            durationMs: Math.max(0, now() - started),
+            providerId: sidecar.providerId,
+            model: normalizedModel,
+          };
+        }
+        throw backoffError;
+      }
     }
   }
   throw new SearchSidecarError("Search sidecar request failed.");

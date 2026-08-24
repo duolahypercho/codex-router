@@ -32,8 +32,10 @@ test("enabled config contains only opaque credential and destination metadata", 
   assert.throws(() => normalizeSearchSidecarConfig({ ...config, destination: "http://search.example.test" }), /HTTPS/);
   assert.throws(() => normalizeSearchSidecarConfig({ ...config, destination: "https://user:pass@search.example.test" }), /credentials/);
   assert.throws(() => normalizeSearchSidecarConfig({ ...config, destination: "https://127.0.0.1/search" }), /private address/);
+  assert.throws(() => normalizeSearchSidecarConfig({ ...config, destination: "https://100.64.0.1/search" }), /private address/);
   assert.throws(() => normalizeSearchSidecarConfig({ ...config, credentialRef: "secret value" }), /opaque reference/);
   assert.throws(() => normalizeSearchSidecarConfig({ ...config, credentialRef: "secret\nvalue" }), /at most/);
+  assert.throws(() => normalizeSearchSidecarConfig({ ...config, credentialRef: "sk-12345678901234567890" }), /stored credentials/);
   assert.equal(normalizeSearchSidecarConfig(config).enabled, true);
 });
 
@@ -60,6 +62,26 @@ test("success returns bounded results, citations and telemetry", async () => {
   assert.equal(result.results.length, 1);
   assert.deepEqual(result.citations, [{ index: 1, title: "One", url: "https://example.com/1" }]);
   assert.equal(result.telemetry.cacheHit, false);
+});
+
+test("configured maxResults is a hard cap for explicit request limits", async () => {
+  let requested;
+  const result = await searchWithSidecar({
+    config: { ...config, maxResults: 1 },
+    request: { query: "bounded", maxResults: 50 },
+    accountId: "account-a",
+    model: "model-a",
+    authorize: authorized,
+    searchImpl: async (input) => {
+      requested = input.maxResults;
+      return [
+        { title: "One", url: "https://example.com/1" },
+        { title: "Two", url: "https://example.com/2" },
+      ];
+    },
+  });
+  assert.equal(requested, 1);
+  assert.equal(result.results.length, 1);
 });
 
 test("cache keys isolate account, provider and model", async () => {
@@ -172,6 +194,27 @@ test("a hung retry backoff is bounded and cancellable", async () => {
     }),
     (error) => error.code === "search_sidecar_timeout",
   );
+});
+
+test("the timeout is a total operation budget across retries", async () => {
+  const started = Date.now();
+  let calls = 0;
+  await assert.rejects(
+    () => searchWithSidecar({
+      config: { ...config, timeoutMs: 15, maxAttempts: 2, retryDelayMs: 1 },
+      request: "total-timeout",
+      accountId: "account-a",
+      model: "model-a",
+      authorize: authorized,
+      searchImpl: async ({ signal }) => new Promise((resolve, reject) => {
+        calls += 1;
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      }),
+    }),
+    (error) => error.code === "search_sidecar_timeout" && error.telemetry.attempts === 1,
+  );
+  assert.equal(calls, 1);
+  assert.ok(Date.now() - started < 100, "operation should not restart the full timeout for another attempt");
 });
 
 test("authorization is mandatory and runs before cache access", async () => {
