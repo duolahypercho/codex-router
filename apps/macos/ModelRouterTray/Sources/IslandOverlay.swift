@@ -961,22 +961,18 @@ enum ProviderIconLayout {
     guard let representation = image.representations
       .compactMap({ $0 as? NSBitmapImageRep })
       .max(by: { ($0.pixelsWide * $0.pixelsHigh) < ($1.pixelsWide * $1.pixelsHigh) }),
-      let data = representation.bitmapData,
       representation.hasAlpha
     else {
       return NSRect(origin: .zero, size: image.size)
     }
 
-    let bytesPerPixel = max(1, representation.bitsPerPixel / 8)
-    let alphaIndex = representation.samplesPerPixel - 1
     var minX = representation.pixelsWide
     var minY = representation.pixelsHigh
     var maxX = -1
     var maxY = -1
     for y in 0..<representation.pixelsHigh {
       for x in 0..<representation.pixelsWide {
-        let offset = y * representation.bytesPerRow + x * bytesPerPixel
-        if data[offset + alphaIndex] > 8 {
+        if representation.colorAt(x: x, y: y)?.alphaComponent ?? 0 > 8.0 / 255.0 {
           minX = min(minX, x)
           minY = min(minY, y)
           maxX = max(maxX, x)

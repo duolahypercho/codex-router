@@ -124,6 +124,49 @@ struct MenuBarSettingsTests {
     #expect(drawRect.maxY <= 18)
   }
 
+  @Test("provider layout handles alpha-first bitmap representations")
+  func providerLayoutHandlesAlphaFirstBitmaps() {
+    guard let representation = NSBitmapImageRep(
+      bitmapDataPlanes: nil,
+      pixelsWide: 10,
+      pixelsHigh: 8,
+      bitsPerSample: 8,
+      samplesPerPixel: 4,
+      hasAlpha: true,
+      isPlanar: false,
+      colorSpaceName: .deviceRGB,
+      bitmapFormat: .alphaFirst,
+      bytesPerRow: 0,
+      bitsPerPixel: 0
+    ) else {
+      Issue.record("Alpha-first bitmap fixture could not be created")
+      return
+    }
+
+    func setPixel(_ values: [Int], atX x: Int, y: Int) {
+      var values = values
+      values.withUnsafeMutableBufferPointer { buffer in
+        representation.setPixel(buffer.baseAddress!, atX: x, y: y)
+      }
+    }
+
+    for y in 0..<representation.pixelsHigh {
+      for x in 0..<representation.pixelsWide {
+        setPixel([0, 0, 0, 0], atX: x, y: y)
+      }
+    }
+    setPixel([255, 255, 255, 255], atX: 2, y: 1)
+    setPixel([255, 255, 255, 255], atX: 7, y: 6)
+    let image = NSImage(size: NSSize(width: 10, height: 8))
+    image.addRepresentation(representation)
+
+    let visibleRect = ProviderIconLayout.visibleImageRect(image)
+    #expect(visibleRect.minX == 2)
+    #expect(visibleRect.minY == 1)
+    #expect(visibleRect.width == 6)
+    #expect(visibleRect.height == 6)
+  }
+
   @Test("the activity badge is not a second dot on the indicator style")
   func indicatorHasNoSideBadge() {
     #expect(MenuBarLayoutMetrics.showsActivityBadge(iconStyle: .indicator, isIdle: false) == false)
