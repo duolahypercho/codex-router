@@ -200,7 +200,10 @@ case "$(install_step python-deps)" in
       # home must be recreated from scratch instead of installed over.
       if node src/install-plan.mjs venv-home-ok >/dev/null 2>&1 &&
         .venv/bin/python --version >/dev/null 2>&1; then
-        python3 -m venv .venv
+        # Keep a healthy venv as-is. Re-running `python3 -m venv` here can
+        # rewrite pyvenv.cfg with a different system Python while preserving
+        # the existing launcher, creating a mixed and unusable environment.
+        :
       else
         echo "The virtual environment's interpreter home is missing; recreating the venv."
         python3 -m venv --clear .venv
