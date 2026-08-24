@@ -93,10 +93,42 @@ function isPrivateAddress(value) {
   const family = isIP(address);
   if (family === 4) return isPrivateIpv4(address);
   if (family !== 6) return false;
-  if (address === "::1" || address === "0:0:0:0:0:0:0:1") return true;
-  if (address.startsWith("fc") || address.startsWith("fd") || address.startsWith("fe80:")) return true;
-  const mapped = address.match(/^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/);
-  return Boolean(mapped && isPrivateIpv4(mapped[1]));
+  const withoutZone = address.split("%")[0];
+  const parts = withoutZone.split("::");
+  if (parts.length > 2) return false;
+  const expand = (segment) => {
+    if (!segment) return [];
+    const values = segment.split(":");
+    const result = [];
+    for (const valuePart of values) {
+      if (valuePart.includes(".")) {
+        if (!isIpv4(valuePart)) return undefined;
+        const [first, second, third, fourth] = valuePart.split(".").map(Number);
+        result.push(((first << 8) | second).toString(16), ((third << 8) | fourth).toString(16));
+      } else if (/^[0-9a-f]{1,4}$/.test(valuePart)) {
+        result.push(valuePart);
+      } else {
+        return undefined;
+      }
+    }
+    return result;
+  };
+  const left = expand(parts[0]);
+  const right = expand(parts[1] || "");
+  if (!left || !right) return false;
+  const hextets = parts.length === 2
+    ? [...left, ...Array(8 - left.length - right.length).fill("0"), ...right]
+    : left;
+  if (hextets.length !== 8) return false;
+  const first = Number.parseInt(hextets[0], 16);
+  const high = hextets.map((part) => BigInt(`0x${part}`)).reduce((valuePart, part) => (valuePart << 16n) | part, 0n);
+  if (high === 0n || high === 1n) return true;
+  if ((high >> 32n) === 0xffffn) {
+    const mapped = Number(high & 0xffffffffn);
+    const mappedAddress = `${mapped >>> 24}.${(mapped >>> 16) & 255}.${(mapped >>> 8) & 255}.${mapped & 255}`;
+    return isPrivateIpv4(mappedAddress);
+  }
+  return (first & 0xfe00) === 0xfc00 || (first & 0xffc0) === 0xfe80 || (first & 0xff00) === 0xff00;
 }
 
 function isPrivateHostname(hostname) {
@@ -406,6 +438,7 @@ function credentialSecret(provider) {
   const entry = readProviderCredentialStore().credentials.find((candidate) => candidate.id === provider.credentialRef);
   if (!entry || entry.state !== "active") return undefined;
   if (entry.providerId !== provider.id) return undefined;
+  if (entry.kind !== "api_key") return undefined;
   const reference = entry.secretRef;
   if (reference.type === "environment") return process.env[reference.name]?.trim() || undefined;
   if (reference.type === "keychain") {
@@ -502,6 +535,9 @@ export async function requestGenericProvider(
   const requestHeaders = safeHeaderEntries(init.headers);
   const headers = { ...provider.headers, ...requestHeaders };
   const secret = credentialSecret(provider);
+  if (provider.credentialRef && !secret) {
+    throw new Error(`Credential ${provider.credentialRef} is unavailable for generic provider ${provider.id}.`);
+  }
   if (secret) headers.Authorization = `Bearer ${secret}`;
   const useDispatcher = fetchImpl === undiciFetch;
   const dispatcher = useDispatcher ? createDestinationDispatcher(endpoint, provider, timeoutMs) : undefined;

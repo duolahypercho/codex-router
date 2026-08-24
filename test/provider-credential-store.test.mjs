@@ -153,6 +153,23 @@ test("credential metadata parsing fails closed for unknown or secret-bearing fie
   );
 });
 
+test("secret references cannot cross provider boundaries", () => {
+  const filePath = path.join(root, "state", "cross-provider.json");
+  assert.throws(
+    () => addCredentialReference({
+      providerId: "deepseek",
+      kind: "api_key",
+      secretRef: {
+        type: "environment",
+        providerId: "openrouter",
+        name: "DEEPSEEK_API_KEY",
+      },
+    }, filePath),
+    /must match providerId/,
+  );
+  assert.equal(existsSync(filePath), false);
+});
+
 test("redaction covers headers, URLs, errors, nested objects, and known secrets", () => {
   const text = [
     "Authorization: Bearer TEST_BEARER_TOKEN",

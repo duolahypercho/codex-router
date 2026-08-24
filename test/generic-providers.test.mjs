@@ -113,6 +113,22 @@ test("private endpoints and secret transport headers require explicit handling",
     }),
     /already used by the built-in registry/,
   );
+  assert.throws(
+    () => addGenericProvider({
+      id: "ipv6-link-local",
+      displayName: "Invalid",
+      baseUrl: "https://[fe90::1]/v1",
+    }),
+    /private or loopback|allowPrivate=true/,
+  );
+  assert.throws(
+    () => addGenericProvider({
+      id: "ipv4-mapped-loopback",
+      displayName: "Invalid",
+      baseUrl: "https://[::ffff:7f00:1]/v1",
+    }),
+    /private or loopback|allowPrivate=true/,
+  );
 });
 
 test("generic provider test checks private resolution and never prints headers", async () => {
@@ -142,6 +158,13 @@ test("generic requests revalidate DNS, reject redirects, and bound response read
       fetchImpl: async () => ({ ok: true, status: 200 }),
     }),
     /private or link-local/,
+  );
+  await assert.rejects(
+    () => requestGenericProvider("remote-boundary", "https://attacker.example/models", {
+      lookup: async () => ["8.8.8.8"],
+      fetchImpl: async () => ({ ok: true, status: 200 }),
+    }),
+    /request paths must be relative/,
   );
   await assert.rejects(
     () => requestGenericProvider("remote-boundary", "/models", {
@@ -190,6 +213,50 @@ test("generic credential references are resolved only at request time", async ()
   assert.equal(calls[0].options.headers["X-Organization"], "safe-metadata");
   assert.equal(JSON.stringify(listGenericProviders()).includes("TEST_GENERIC_PROVIDER_TOKEN"), false);
   delete process.env.GENERIC_PROVIDER_TEST_TOKEN;
+});
+
+test("generic requests fail closed when a credential is unavailable or not an API key", async () => {
+  addCredentialReference({
+    id: "cred_generic_missing_01",
+    providerId: "missing-credential",
+    kind: "api_key",
+    secretRef: { type: "environment", name: "MISSING_GENERIC_PROVIDER_TOKEN" },
+  });
+  addGenericProvider({
+    id: "missing-credential",
+    displayName: "Missing credential",
+    baseUrl: "https://provider.example.test/v1",
+    credentialRef: "cred_generic_missing_01",
+  });
+  await assert.rejects(
+    () => requestGenericProvider("missing-credential", "/models", {
+      lookup: async () => ["8.8.8.8"],
+      fetchImpl: async () => ({ ok: true, status: 200 }),
+    }),
+    /Credential cred_generic_missing_01 is unavailable/,
+  );
+
+  addCredentialReference({
+    id: "cred_generic_account_01",
+    providerId: "account-credential",
+    kind: "account",
+    secretRef: { type: "environment", name: "ACCOUNT_GENERIC_PROVIDER_TOKEN" },
+  });
+  process.env.ACCOUNT_GENERIC_PROVIDER_TOKEN = "TEST_ACCOUNT_TOKEN";
+  addGenericProvider({
+    id: "account-credential",
+    displayName: "Account credential",
+    baseUrl: "https://provider.example.test/v1",
+    credentialRef: "cred_generic_account_01",
+  });
+  await assert.rejects(
+    () => requestGenericProvider("account-credential", "/models", {
+      lookup: async () => ["8.8.8.8"],
+      fetchImpl: async () => ({ ok: true, status: 200 }),
+    }),
+    /Credential cred_generic_account_01 is unavailable/,
+  );
+  delete process.env.ACCOUNT_GENERIC_PROVIDER_TOKEN;
 });
 
 test("providers CLI exposes generic CRUD with sanitized JSON", () => {
