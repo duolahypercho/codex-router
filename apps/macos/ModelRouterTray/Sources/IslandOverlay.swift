@@ -939,6 +939,22 @@ private struct IslandUsageLineChart: View {
 
 // Internal rather than private: the status panel's quota-reset rows in
 // ModelRouterTrayApp.swift render the same provider mark.
+enum ProviderIconLayout {
+  static func fittedRect(sourceRect: NSRect, targetSize: NSSize) -> NSRect {
+    let scale = min(
+      targetSize.width / max(sourceRect.width, 1),
+      targetSize.height / max(sourceRect.height, 1)
+    )
+    let drawSize = NSSize(width: sourceRect.width * scale, height: sourceRect.height * scale)
+    return NSRect(
+      x: (targetSize.width - drawSize.width) / 2,
+      y: (targetSize.height - drawSize.height) / 2,
+      width: drawSize.width,
+      height: drawSize.height
+    )
+  }
+}
+
 struct ProviderIcon: View {
   let providerID: String
   let size: CGFloat
@@ -992,17 +1008,7 @@ struct ProviderIcon: View {
   private func fittedProviderImage(_ image: NSImage) -> NSImage {
     let targetSize = NSSize(width: max(1, size), height: max(1, size))
     let sourceRect = visibleImageRect(image)
-    let scale = min(
-      targetSize.width / max(sourceRect.width, 1),
-      targetSize.height / max(sourceRect.height, 1)
-    )
-    let drawSize = NSSize(width: sourceRect.width * scale, height: sourceRect.height * scale)
-    let drawRect = NSRect(
-      x: (targetSize.width - drawSize.width) / 2,
-      y: (targetSize.height - drawSize.height) / 2,
-      width: drawSize.width,
-      height: drawSize.height
-    )
+    let drawRect = ProviderIconLayout.fittedRect(sourceRect: sourceRect, targetSize: targetSize)
     let fitted = NSImage(size: targetSize)
     fitted.lockFocus()
     NSGraphicsContext.current?.imageInterpolation = .high

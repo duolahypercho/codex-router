@@ -59,6 +59,39 @@ struct MenuBarSettingsTests {
     #expect(MenuBarLayoutMetrics.statusItemWidth(displayMode: .iconOnly) == 28)
   }
 
+  @Test("the icon-only pulse reserves space for the rendered mark and badge")
+  func iconOnlyPulseKeepsScaledContentInsideBounds() {
+    #expect(
+      MenuBarLayoutMetrics.statusItemWidth(
+        displayMode: .iconOnly,
+        pulsing: true,
+        showsActivityBadge: false
+      ) == 28
+    )
+    #expect(
+      MenuBarLayoutMetrics.statusItemWidth(
+        displayMode: .iconOnly,
+        pulsing: true,
+        showsActivityBadge: true
+      ) == 36
+    )
+    #expect(MenuBarLayoutMetrics.statusItemWidth(displayMode: .standard, pulsing: true) == 180)
+  }
+
+  @Test("provider marks fit transparent crops without leaving the target slot")
+  func providerMarkCropFitsTargetSlot() {
+    let drawRect = ProviderIconLayout.fittedRect(
+      sourceRect: NSRect(x: 2, y: 1, width: 6, height: 8),
+      targetSize: NSSize(width: 20, height: 20)
+    )
+    #expect(drawRect.width == 15)
+    #expect(drawRect.height == 20)
+    #expect(drawRect.minX >= 0)
+    #expect(drawRect.maxX <= 20)
+    #expect(drawRect.minY >= 0)
+    #expect(drawRect.maxY <= 20)
+  }
+
   @Test("the activity badge is not a second dot on the indicator style")
   func indicatorHasNoSideBadge() {
     #expect(MenuBarLayoutMetrics.showsActivityBadge(iconStyle: .indicator, isIdle: false) == false)
