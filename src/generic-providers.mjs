@@ -464,6 +464,8 @@ function createDestinationDispatcher(endpoint, provider, timeoutMs) {
           callback(null, address, isIP(address));
         }
       })
+      .catch((error) => callback(error));
+  };
   return new Agent({
     allowH2: false,
     pipelining: 1,
