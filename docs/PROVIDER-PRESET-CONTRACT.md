@@ -35,4 +35,3 @@ An implementation that consumes this contract must be a separate change with:
 5. catalog tests proving that only capabilities observed by the runtime are published.
 
 This keeps the current router unchanged while preserving a reviewable boundary for a later, proven integration.
-
