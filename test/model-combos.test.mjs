@@ -64,6 +64,12 @@ test("health is explicit and unknown health fails closed", () => {
   assert.ok(missing.diagnostics.skipped.every((item) => item.reason === "health-unknown"));
   const selected = resolveComboTarget(failoverCombo(), { models, health: health(), requiredCapabilities: ["tools"] });
   assert.equal(selected.targetKey, "openrouter/qwen-max");
+  const contradictory = resolveComboTarget(failoverCombo(), {
+    models,
+    health: health({ "openrouter/qwen-max": { healthy: true, status: "unhealthy" } }),
+    requiredCapabilities: ["tools"],
+  });
+  assert.equal(contradictory.targetKey, "local/qwen");
 });
 
 test("a successful attempt commits stickiness, while failure clears it for recovery", () => {
@@ -101,6 +107,20 @@ test("sticky affinity expires only after its committed success limit", () => {
   assert.equal(expired.diagnostics.stickyHit, false);
 });
 
+test("retryable failure clears expired affinity so failover can recover", () => {
+  const combo = failoverCombo();
+  let state = createComboState();
+  for (let i = 0; i < combo.stickyLimit; i += 1) {
+    const attempt = beginComboAttempt(combo, { models, health: health(), requiredCapabilities: ["tools"], sessionKey: "session-1", state });
+    state = completeComboAttempt(combo, state, attempt.attempt, { outcome: "success" });
+  }
+  const moved = beginComboAttempt(combo, { models, health: health(), requiredCapabilities: ["tools"], sessionKey: "session-1", state });
+  assert.equal(moved.targetKey, "local/qwen");
+  state = completeComboAttempt(combo, state, moved.attempt, { outcome: "retryable_failure" });
+  const recovered = beginComboAttempt(combo, { models, health: health(), requiredCapabilities: ["tools"], sessionKey: "session-1", state });
+  assert.equal(recovered.targetKey, "openrouter/qwen-max");
+});
+
 test("round-robin persists weighted cursor and skips a failed target's remaining weight", () => {
   const combo = failoverCombo({
     strategy: "round-robin",
@@ -134,6 +154,15 @@ test("stale concurrent attempts cannot overwrite the persisted cursor", () => {
   assert.throws(() => completeComboAttempt(combo, committed, second.attempt, { outcome: "success" }), /stale/);
 });
 
+test("stale concurrent failover attempts cannot overwrite affinity", () => {
+  const combo = failoverCombo();
+  const state = createComboState();
+  const first = beginComboAttempt(combo, { models, health: health(), requiredCapabilities: ["tools"], sessionKey: "session-1", state });
+  const second = beginComboAttempt(combo, { models, health: health(), requiredCapabilities: ["tools"], sessionKey: "session-1", state });
+  const committed = completeComboAttempt(combo, state, first.attempt, { outcome: "success" });
+  assert.throws(() => completeComboAttempt(combo, committed, second.attempt, { outcome: "success" }), /stale/);
+});
+
 test("tool capability accepts declared capability metadata and rejects unknown declarations", () => {
   const compatible = resolveComboTarget(failoverCombo({ sticky: false }), { models, health: health(), requiredCapabilities: ["tools"] });
   assert.equal(compatible.targetKey, "openrouter/qwen-max");
@@ -142,6 +171,24 @@ test("tool capability accepts declared capability metadata and rejects unknown d
   assert.equal(unknown.diagnostics.skipped[0].reason, "missing-capability:tools");
   const undeclared = resolveComboTarget(failoverCombo({ targets: [{ provider: "local", slug: "local/qwen" }] }), { models: [{ provider: "local", slug: "local/qwen", contextWindow: 50_000 }], health: health(), requiredCapabilities: ["tools"] });
   assert.equal(undeclared.diagnostics.skipped[0].reason, "capability-unknown:tools");
+  const snakeCase = resolveComboTarget(failoverCombo({ sticky: false, targets: [{ provider: "local", slug: "local/qwen" }] }), {
+    models: [{ provider: "local", slug: "local/qwen", supports_tools: true, contextWindow: 50_000 }],
+    health: health(),
+    requiredCapabilities: ["tools"],
+  });
+  assert.equal(snakeCase.targetKey, "local/qwen");
+});
+
+test("health callback failures fail closed", () => {
+  const result = resolveComboTarget(failoverCombo(), {
+    models,
+    isHealthy() {
+      throw new Error("provider probe failed");
+    },
+    requiredCapabilities: ["tools"],
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, "no-healthy-target");
 });
 
 test("state normalization drops malformed and oversized session records", () => {

@@ -23,9 +23,10 @@ Targets use the canonical registry `slug` and its owning `provider`:
 
 Use `beginComboAttempt` to select a target without changing state. Call
 `completeComboAttempt` only after the request attempt has ended. Successful
-attempts commit bounded stickiness; retryable failures clear the affinity and
-advance the weighted cursor past the failed target. A stale concurrent attempt
-is rejected instead of overwriting the persisted cursor.
+attempts commit bounded stickiness; retryable failures clear the session
+affinity and, for round-robin, advance the weighted cursor past the failed
+target. Every completion advances a per-combo revision, so a stale concurrent
+attempt is rejected instead of overwriting persisted state.
 
 Health is fail-closed: every candidate needs an explicit healthy snapshot (or
 an `isHealthy` callback returning `true`). Missing health, missing model

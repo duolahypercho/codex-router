@@ -45,16 +45,30 @@ function normalizedCapabilities(value) {
 }
 
 function declaredCapability(model, capability) {
-  if (typeof model?.supportsTools === "boolean" && capability === "tools") return model.supportsTools;
+  if (capability === "tools") {
+    for (const key of [
+      "supportsTools",
+      "supports_tools",
+      "supportsToolCalling",
+      "supports_tool_calling",
+      "toolCalling",
+      "tool_calling",
+      "tools",
+    ]) {
+      if (typeof model?.[key] === "boolean") return model[key];
+    }
+  }
   if (typeof model?.supportsVision === "boolean" && capability === "vision") return model.supportsVision;
+  if (typeof model?.supports_vision === "boolean" && capability === "vision") return model.supports_vision;
   if (typeof model?.supportsSearch === "boolean" && capability === "search") return model.supportsSearch;
-  if (typeof model?.toolCalling === "boolean" && capability === "tools") return model.toolCalling;
-  if (typeof model?.tools === "boolean" && capability === "tools") return model.tools;
+  if (typeof model?.supports_search === "boolean" && capability === "search") return model.supports_search;
   if (Array.isArray(model?.capabilities)) return model.capabilities.map((item) => text(item).toLowerCase()).includes(capability);
   if (Array.isArray(model?.supportedCapabilities)) return model.supportedCapabilities.map((item) => text(item).toLowerCase()).includes(capability);
   if (Array.isArray(model?.experimentalSupportedTools) && capability === "tools") return model.experimentalSupportedTools.length > 0;
   if (Array.isArray(model?.supportedTools) && capability === "tools") return model.supportedTools.length > 0;
+  if (Array.isArray(model?.supported_tools) && capability === "tools") return model.supported_tools.length > 0;
   if (Array.isArray(model?.inputModalities) && capability === "vision") return model.inputModalities.some((item) => text(item).toLowerCase() === "image");
+  if (Array.isArray(model?.input_modalities) && capability === "vision") return model.input_modalities.some((item) => text(item).toLowerCase() === "image");
   if (capability === "search" && model?.searchTool && typeof model.searchTool === "object" && !Array.isArray(model.searchTool)) return true;
   return undefined;
 }
@@ -80,11 +94,12 @@ function healthForTarget(target, health) {
   if (value === true) return { healthy: true };
   if (value === false) return { healthy: false, reason: "unhealthy" };
   if (!value || typeof value !== "object" || Array.isArray(value)) return { healthy: false, reason: "health-unknown" };
-  if (value.healthy === true || ["healthy", "ready", "ok", "available"].includes(text(value.status).toLowerCase())) return { healthy: true };
-  if (value.healthy === false || ["unhealthy", "cooldown", "unavailable"].includes(text(value.status).toLowerCase())) {
+  const status = text(value.status).toLowerCase();
+  if (value.healthy === false || ["unhealthy", "cooldown", "unavailable", "degraded"].includes(status)) {
     const reason = text(value.reason).toLowerCase();
-    return { healthy: false, reason: /^[a-z0-9][a-z0-9._:-]{0,63}$/.test(reason) ? reason : text(value.status).toLowerCase() || "unhealthy" };
+    return { healthy: false, reason: /^[a-z0-9][a-z0-9._:-]{0,63}$/.test(reason) ? reason : status || "unhealthy" };
   }
+  if (value.healthy === true || ["healthy", "ready", "ok", "available"].includes(status)) return { healthy: true };
   return { healthy: false, reason: "health-unknown" };
 }
 
@@ -133,10 +148,13 @@ export function validateComboDefinition(raw) {
 }
 
 function cloneState(raw) {
-  const state = { version: 1, cursors: {}, affinity: {} };
+  const state = { version: 1, cursors: {}, affinity: {}, revisions: {} };
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return state;
   for (const [comboId, value] of Object.entries(raw.cursors || {})) {
     if (COMBO_ID.test(comboId) && Number.isInteger(value) && value >= 0) state.cursors[comboId] = value;
+  }
+  for (const [comboId, value] of Object.entries(raw.revisions || {})) {
+    if (COMBO_ID.test(comboId) && Number.isInteger(value) && value >= 0) state.revisions[comboId] = value;
   }
   for (const [comboId, sessions] of Object.entries(raw.affinity || {})) {
     if (!COMBO_ID.test(comboId) || !sessions || typeof sessions !== "object" || Array.isArray(sessions)) continue;
@@ -202,10 +220,14 @@ function resolveWithState(combo, options) {
     }
     let health;
     if (typeof options.isHealthy === "function") {
-      const observed = options.isHealthy(target, model);
-      health = observed === true
-        ? { healthy: true }
-        : { healthy: false, reason: observed === false ? "unhealthy" : "health-unknown" };
+      try {
+        const observed = options.isHealthy(target, model);
+        health = observed === true
+          ? { healthy: true }
+          : { healthy: false, reason: observed === false ? "unhealthy" : "health-unknown" };
+      } catch {
+        health = { healthy: false, reason: "health-unknown" };
+      }
     } else {
       health = healthForTarget(target, options.health);
     }
@@ -259,7 +281,8 @@ function resolveWithState(combo, options) {
     return { ok: false, reason: diagnostics.reason, state, affinityState: state.affinity, diagnostics };
   }
   const selectedKey = targetKey(selected);
-  const attempt = Object.freeze({ version: 1, comboId: combo.id, targetKey: selectedKey, sessionKey: requestedSession || undefined, cursor });
+  const revision = Number.isInteger(state.revisions[combo.id]) ? state.revisions[combo.id] : 0;
+  const attempt = Object.freeze({ version: 1, comboId: combo.id, targetKey: selectedKey, sessionKey: requestedSession || undefined, cursor, revision });
   diagnostics.selected = selectedKey;
   diagnostics.reason = diagnostics.stickyHit ? "sticky" : "selected";
   return {
@@ -289,6 +312,10 @@ export function completeComboAttempt(definition, rawState, attempt, { outcome = 
   if (!OUTCOMES.has(outcome)) throw new Error("Combo attempt outcome is invalid.");
   const target = combo.targets.find((candidate) => targetKey(candidate) === attempt.targetKey);
   if (!target) throw new Error("Combo attempt target is not part of this combo.");
+  const currentRevision = Number.isInteger(state.revisions[combo.id]) ? state.revisions[combo.id] : 0;
+  if (!Number.isInteger(attempt.revision) || currentRevision !== attempt.revision) {
+    throw new Error("Combo attempt is stale; refusing to overwrite persisted state.");
+  }
   if (combo.strategy === "round-robin") {
     const current = Number.isInteger(state.cursors[combo.id]) ? state.cursors[combo.id] : 0;
     if (Number.isInteger(attempt.cursor) && current !== attempt.cursor) throw new Error("Combo attempt is stale; refusing to overwrite the persisted cursor.");
@@ -301,10 +328,11 @@ export function completeComboAttempt(definition, rawState, attempt, { outcome = 
       const previous = state.affinity[combo.id][session];
       const count = previous?.target === attempt.targetKey ? Math.min(combo.stickyLimit, previous.count + 1) : 1;
       state.affinity[combo.id][session] = { target: attempt.targetKey, count };
-    } else if (state.affinity[combo.id]?.[session]?.target === attempt.targetKey) {
-      delete state.affinity[combo.id][session];
+    } else {
+      if (state.affinity[combo.id]) delete state.affinity[combo.id][session];
     }
   }
+  state.revisions[combo.id] = currentRevision + 1;
   return state;
 }
 
