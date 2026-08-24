@@ -22,11 +22,20 @@ const {
   forgetProviderCatalogCache,
   forgetProviderCatalogCaches,
   providerCatalogIdentityFingerprint,
+  MAX_SCOPES_PER_PROVIDER,
+  PROVIDER_CATALOG_CACHE_MAX_BYTES,
   readProviderCatalogCache,
   withProviderCatalogCacheTransaction,
-  writeProviderCatalogCache,
+  writeProviderCatalogCache: rawWriteProviderCatalogCache,
 } = await import("../src/model-catalog-cache.mjs");
 const TEST_IDENTITY = providerCatalogIdentityFingerprint(["test-account"]);
+
+function writeProviderCatalogCache(providerId, entry = {}) {
+  return rawWriteProviderCatalogCache(providerId, {
+    identityFingerprint: TEST_IDENTITY,
+    ...entry,
+  });
+}
 
 test.after(() => rmSync(stateRoot, { recursive: true, force: true }));
 
@@ -241,6 +250,96 @@ test("a provider id that is not one is never a cache key", async () => {
     identityFingerprint: TEST_IDENTITY,
   }), undefined);
   assert.equal(existsSync(cachePath), false);
+});
+
+test("account scopes never reuse another account's catalog and stay bounded", async () => {
+  await forgetProviderCatalogCache("scoped-provider");
+  await writeProviderCatalogCache("scoped-provider", {
+    discovered: ["shared-default"],
+    fetchedAt: "2026-08-20T00:00:00.000Z",
+  });
+  await writeProviderCatalogCache("scoped-provider", {
+    scope: "cred_alpha",
+    discovered: ["alpha-only"],
+    fetchedAt: "2026-08-21T00:00:00.000Z",
+  });
+  await writeProviderCatalogCache("scoped-provider", {
+    scope: "cred_beta",
+    discovered: ["beta-only"],
+    fetchedAt: "2026-08-22T00:00:00.000Z",
+  });
+
+  assert.deepEqual(readProviderCatalogCache("scoped-provider").discovered, ["shared-default"]);
+  assert.deepEqual(readProviderCatalogCache("scoped-provider", { scope: "cred_alpha" }).discovered, ["alpha-only"]);
+  assert.deepEqual(readProviderCatalogCache("scoped-provider", { scope: "cred_beta" }).discovered, ["beta-only"]);
+  assert.equal(readProviderCatalogCache("scoped-provider", { scope: "cred_missing" }), undefined);
+  // An invalid scope must not fall back to the unscoped entry either.
+  assert.equal(readProviderCatalogCache("scoped-provider", { scope: "../escape" }), undefined);
+
+  for (let index = 0; index < MAX_SCOPES_PER_PROVIDER + 4; index += 1) {
+    await writeProviderCatalogCache("scoped-provider", {
+      scope: `cred_${String(index).padStart(2, "0")}`,
+      discovered: [`model-${index}`],
+      fetchedAt: new Date(Date.parse("2026-08-23T00:00:00.000Z") + index * 1_000).toISOString(),
+    });
+  }
+  const stored = JSON.parse(readFileSync(cachePath, "utf8"));
+  assert.equal(Object.keys(stored.providers["scoped-provider"].scopes).length, MAX_SCOPES_PER_PROVIDER);
+  assert.equal(readProviderCatalogCache("scoped-provider", { scope: "cred_00" }), undefined);
+  assert.deepEqual(
+    readProviderCatalogCache("scoped-provider", { scope: "cred_19" }).discovered,
+    ["model-19"],
+  );
+  assert.equal(await forgetProviderCatalogCache("scoped-provider", { scope: "cred_19" }), true);
+  assert.equal(readProviderCatalogCache("scoped-provider", { scope: "cred_19" }), undefined);
+  await forgetProviderCatalogCache("scoped-provider");
+});
+
+test("malformed scope types never fall back to the unscoped catalog", async () => {
+  await forgetProviderCatalogCache("scope-type-provider");
+  await writeProviderCatalogCache("scope-type-provider", {
+    discovered: ["default-model"],
+    fetchedAt: "2026-08-20T00:00:00.000Z",
+  });
+  for (const scope of [123, [], {}, "../escape"]) {
+    assert.equal(readProviderCatalogCache("scope-type-provider", { scope }), undefined);
+    assert.equal(
+      await rawWriteProviderCatalogCache("scope-type-provider", { scope, discovered: ["should-not-write"], identityFingerprint: TEST_IDENTITY }),
+      undefined,
+    );
+  }
+  assert.deepEqual(readProviderCatalogCache("scope-type-provider").discovered, ["default-model"]);
+  await forgetProviderCatalogCache("scope-type-provider");
+});
+
+test("one malformed metadata record does not discard valid cached metadata", async () => {
+  await forgetProviderCatalogCache("metadata-provider");
+  await writeProviderCatalogCache("metadata-provider", {
+    discovered: ["valid", "invalid"],
+    modelMetadata: {
+      valid: { upstreamId: "valid", supportsTools: true },
+      invalid: { upstreamId: "invalid", contextWindow: -1 },
+      unknown: { upstreamId: "unknown", supportsTools: true },
+    },
+  });
+  const entry = readProviderCatalogCache("metadata-provider");
+  assert.deepEqual(entry.modelMetadata, {
+    valid: { upstreamId: "valid", supportsTools: true },
+  });
+  await forgetProviderCatalogCache("metadata-provider");
+});
+
+test("oversized provider snapshots are evicted before the cache crosses its read limit", async () => {
+  await forgetProviderCatalogCache("oversized-provider");
+  const modelCount = 4_000;
+  await writeProviderCatalogCache("oversized-provider", {
+    discovered: Array.from({ length: modelCount }, (_, index) => `model-${index}-${"x".repeat(3_000)}`),
+  });
+  assert.ok(statSync(cachePath).size <= PROVIDER_CATALOG_CACHE_MAX_BYTES);
+  // A snapshot too large to fit is deliberately not reported as a cache hit;
+  // the next discovery can ask the provider again instead of trusting a
+  // silently truncated list.
+  assert.equal(readProviderCatalogCache("oversized-provider"), undefined);
 });
 
 test("a fixture comparison never becomes the stored answer", () => {
