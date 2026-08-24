@@ -198,6 +198,49 @@ export function resolveProviderCredential(providerOrId, options = {}) {
   return undefined;
 }
 
+/**
+ * Resolve one metadata-only credential reference without changing the
+ * provider's existing single-credential path. The reference is an opaque
+ * pointer to a provider-owned file, Keychain item, or environment variable;
+ * this helper never accepts a raw secret or an arbitrary filesystem path.
+ */
+export function resolveProviderCredentialReference(providerOrId, secretRef) {
+  const provider =
+    typeof providerOrId === "string" ? PROVIDERS.get(providerOrId) : providerOrId;
+  if (!provider || provider.kind !== "openai-compatible") return undefined;
+  if (!secretRef || typeof secretRef !== "object" || Array.isArray(secretRef)) {
+    return undefined;
+  }
+  if (secretRef.providerId && secretRef.providerId !== provider.id && secretRef.providerId !== provider.variantOf) {
+    return undefined;
+  }
+  if (discoveryDisabled()) return undefined;
+  const type = typeof secretRef.type === "string" ? secretRef.type.trim() : "";
+  if (type === "provider-file") {
+    return resolveProviderCredential(provider, { persistent: true });
+  }
+  if (type === "environment") {
+    const name = typeof secretRef.name === "string" ? secretRef.name.trim() : "";
+    if (!/^[A-Z][A-Z0-9_]*$/.test(name)) return undefined;
+    const value = process.env[name]?.trim();
+    if (!value) return undefined;
+    return resolvedCredential(provider, value, `environment (${name})`, false);
+  }
+  if (type === "keychain") {
+    if (process.platform !== "darwin") return undefined;
+    const service = typeof secretRef.service === "string" ? secretRef.service.trim() : "";
+    if (!service || service.length > 200) return undefined;
+    const found = keychainSecret(service, Date.now());
+    return found
+      ? resolvedCredential(provider, found.value, `macOS Keychain (${service})`, true)
+      : undefined;
+  }
+  // OAuth sessions are provider-specific and remain owned by their existing
+  // refresh/session implementations. Returning undefined keeps a pool entry
+  // from accidentally forwarding an opaque session id as an API key.
+  return undefined;
+}
+
 export function credentialSetupHint(provider) {
   if (provider.authMode === "anonymous") return "No key needed; free models are rate limited by the provider.";
   if (provider.authMode === "per-model") return "No key needed here; each model names its own endpoint.";
