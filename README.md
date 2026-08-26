@@ -1055,9 +1055,12 @@ mapped external provider. Models beyond the available native slots stay listed
 under their own slugs, and signing back in restores the native catalog
 untouched.
 
-Turning the switch off restores the exact root `model` and `model_provider`
-values that were present before the mode was enabled. The router does not
-modify or delete ChatGPT credentials. Native GPT models, ChatGPT usage, cloud
+For custom providers, the switch preserves the root `model_provider`,
+temporarily owns that provider's complete table, and restores the exact table
+plus the prior root `model`. Codex reserves the built-in `openai` provider id,
+so root-OpenAI configurations use the compatible `codex-router` provider while
+login-free mode is active and restore the prior provider afterward. The router
+does not modify or delete ChatGPT credentials. Native GPT models, ChatGPT usage, cloud
 tasks, and other account-backed features still require OpenAI authentication
 and are not available while signed out. The equivalent local control command is
 `./bin/control auth-mode on` or `./bin/control auth-mode off`; when using the

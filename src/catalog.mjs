@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   existsSync,
@@ -15,6 +16,7 @@ import { isManagedCallerBaseUrl } from "./caller-auth.mjs";
 import { applyInstructionOverlay } from "./instruction-overlays.mjs";
 import {
   ANNOUNCED_MODELS_PATH,
+  CODEX_PROVIDER_MODE_PATH,
   CONFIG_PATH,
   MERGED_CATALOG_PATH,
   MODELS_CACHE_PATH,
@@ -420,9 +422,30 @@ function loginFreeConfigured() {
   if (!existsSync(CONFIG_PATH)) return false;
   try {
     const document = scanTomlDocument(readFileSync(CONFIG_PATH, "utf8"));
-    return tomlStringValue(document, [], "model_provider") === "codex-router";
+    if (tomlStringValue(document, [], "model_provider") === "codex-router") {
+      return true;
+    }
+    if (!existsSync(CODEX_PROVIDER_MODE_PATH)) return false;
+    // Identity-preserving login-free mode deliberately leaves model_provider
+    // unchanged, so the root assignment alone can no longer identify it.
+    // Ask the config manager for its ownership-validated snapshot rather than
+    // trusting state-file presence: a drifted provider table or base URL must
+    // not publish external aliases onto a transport the router no longer owns.
+    const result = spawnSync(
+      process.execPath,
+      [fileURLToPath(new URL("./config-manager.mjs", import.meta.url)), "status"],
+      { encoding: "utf8", env: process.env },
+    );
+    if (result.status !== 0) {
+      throw new Error(
+        (result.stderr || "Codex provider-mode state could not be validated.").trim(),
+      );
+    }
+    return JSON.parse(result.stdout).login_free === true;
   } catch {
-    return false;
+    throw new Error(
+      "Could not validate Codex login-free provider ownership; refusing to rebuild the catalog.",
+    );
   }
 }
 

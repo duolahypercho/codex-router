@@ -24,9 +24,16 @@ function checked(run, script, args) {
   return result;
 }
 
-function restoreTransport(run, signed) {
+function restoreTransport(run, { signed, loginFree, loginFreeModel }) {
   checked(run, "config-manager.mjs", ["enable"]);
   if (signed) checked(run, "config-manager.mjs", ["signed-enable"]);
+  if (loginFree) {
+    checked(
+      run,
+      "config-manager.mjs",
+      ["login-free-enable", ...(loginFreeModel ? [loginFreeModel] : [])],
+    );
+  }
   checked(run, "catalog.mjs", []);
 }
 
@@ -40,6 +47,12 @@ export function refreshCatalog({ run = nodeRunner } = {}) {
   }
   const routed = status.mode === "router";
   const signed = status.signed_routing === true;
+  const loginFree = status.login_free === true;
+  const transport = {
+    signed,
+    loginFree,
+    loginFreeModel: loginFree ? status.model : undefined,
+  };
   let restoreNeeded = false;
   let catalogResult;
   try {
@@ -49,13 +62,13 @@ export function refreshCatalog({ run = nodeRunner } = {}) {
     }
     catalogResult = checked(run, "catalog.mjs", ["--refresh-native"]);
     if (restoreNeeded) {
-      restoreTransport(run, signed);
+      restoreTransport(run, transport);
       restoreNeeded = false;
     }
   } catch (error) {
     if (restoreNeeded) {
       try {
-        restoreTransport(run, signed);
+        restoreTransport(run, transport);
         restoreNeeded = false;
       } catch (restoreError) {
         throw new AggregateError(

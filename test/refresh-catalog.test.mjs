@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { refreshCatalog } from "../src/refresh-catalog.mjs";
 
-function recordingRunner({ signed = true, failAt } = {}) {
+function recordingRunner({ signed = true, loginFree = false, model, failAt } = {}) {
   const calls = [];
   return {
     calls,
@@ -16,7 +16,12 @@ function recordingRunner({ signed = true, failAt } = {}) {
       if (script === "config-manager.mjs" && args[0] === "status") {
         return {
           status: 0,
-          stdout: `${JSON.stringify({ mode: "router", signed_routing: signed })}\n`,
+          stdout: `${JSON.stringify({
+            mode: "router",
+            signed_routing: signed,
+            login_free: loginFree,
+            model: model || null,
+          })}\n`,
           stderr: "",
         };
       }
@@ -67,6 +72,23 @@ test("ordinary routed refresh also republishes external models after restore", (
     ["config-manager.mjs", ["disable"]],
     ["catalog.mjs", ["--refresh-native"]],
     ["config-manager.mjs", ["enable"]],
+    ["catalog.mjs", []],
+  ]);
+});
+
+test("refresh orchestration restores identity-preserving login-free mode and its model", () => {
+  const runner = recordingRunner({
+    signed: false,
+    loginFree: true,
+    model: "gpt-5.6-sol",
+  });
+  refreshCatalog({ run: runner.run });
+  assert.deepEqual(runner.calls, [
+    ["config-manager.mjs", ["status"]],
+    ["config-manager.mjs", ["disable"]],
+    ["catalog.mjs", ["--refresh-native"]],
+    ["config-manager.mjs", ["enable"]],
+    ["config-manager.mjs", ["login-free-enable", "gpt-5.6-sol"]],
     ["catalog.mjs", []],
   ]);
 });

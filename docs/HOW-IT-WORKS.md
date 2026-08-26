@@ -119,17 +119,25 @@ The integration deliberately keeps the built-in `openai` provider and points
 it at a loopback `openai_base_url`. This makes named models appear in the normal
 picker instead of replacing the provider with a generic `Custom` entry.
 
-The same managed config also defines an inert `codex-router` custom provider.
-The tray's login-free switch selects that provider for new Codex sessions, so
-Codex can send Responses requests to the local router without first acquiring
-OpenAI authentication. Model selection stays in the native Codex picker in
-both modes: login-free catalogs alias external models onto native slugs, and
-`control model-set` switches the active model from the command line. The switch snapshots the previous root
-`model_provider` in protected state and restores it when disabled. It never
-changes any ChatGPT credential. It keeps an already selected external model or
-selects the first model from a connected, enabled provider, snapshots the prior
-root model, and restores that model when disabled. External routes continue to
-replace incoming authentication with only the chosen provider's credential.
+For a selected custom provider, the tray's login-free switch keeps the provider
+id unchanged and temporarily replaces its complete table with a router-owned,
+auth-free table that points Responses requests at the local router. The
+built-in `openai` id is the deliberate
+exception: Codex 0.141 requires authentication for its implicit definition,
+while current Desktop builds reject any explicit `[model_providers.openai]`
+override as reserved. A root-OpenAI configuration therefore keeps the proven
+`codex-router` provider switch instead of writing a config one supported build
+cannot load. Model selection stays in the native Codex picker: login-free
+catalogs alias external models onto native slugs, and `control model-set`
+switches the active model from the command line.
+
+The switch snapshots every replaced custom-provider section and the prior root
+model in protected state, then restores them exactly after an ownership check.
+For the OpenAI fallback it also snapshots and restores the root
+`model_provider`. It never changes any ChatGPT credential. It keeps an already
+selected external model or selects the first model from a connected, enabled
+provider. External routes continue to replace incoming authentication with only
+the chosen provider's credential.
 
 The managed base URL contains a separate random caller capability. The router
 validates it before reading a model request or contacting any upstream. Codex
