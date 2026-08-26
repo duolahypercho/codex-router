@@ -14,6 +14,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { pickerCommandArgs } from "../src/control-args.mjs";
+import { writePrivateJson } from "../src/file-security.mjs";
 import { userModelEntry } from "../src/user-models.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -101,9 +102,9 @@ function probe(target, providers, usageEvents = [], options = {}) {
       `model = ${JSON.stringify(options.selectedModel || "deepseek/deepseek-v4-pro")}\nmodel_provider = ${JSON.stringify(loginFreeProvider)}\n\n# codex-router-signed-provider-tree-slot ${ownershipId} 0\n# BEGIN codex-router-signed-provider-managed\n[model_providers.${loginFreeProvider}]\nname = "Codex Router (external models)"\nbase_url = "http://127.0.0.1:4202/v1"\nwire_api = "responses"\nrequires_openai_auth = false\nsupports_standalone_web_search = true\nsupports_websockets = false\n# END codex-router-signed-provider-managed\n`,
       { mode: 0o600 },
     );
-    writeFileSync(
+    writePrivateJson(
       path.join(stateDir, "codex-provider-mode.json"),
-      `${JSON.stringify({
+      {
         version: 3,
         mode: "provider-table",
         managedProvider: loginFreeProvider,
@@ -112,8 +113,7 @@ function probe(target, providers, usageEvents = [], options = {}) {
         previousProviderSections: [],
         previousModelPresent: false,
         loginFree: true,
-      })}\n`,
-      { mode: 0o600 },
+      },
     );
   }
   try {

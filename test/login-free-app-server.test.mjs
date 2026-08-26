@@ -153,7 +153,7 @@ function responseStream(model) {
   ].join("\n");
 }
 
-function runAppServerTurn(binary, env, model) {
+function runAppServerTurn(binary, env, model, modelProvider) {
   return new Promise((resolve, reject) => {
     const target = spawnableCommand(binary, ["app-server"]);
     const child = spawn(target.command, target.args, {
@@ -210,7 +210,7 @@ function runAppServerTurn(binary, env, model) {
             cwd: root,
             ephemeral: true,
             model,
-            modelProvider: "codex-router",
+            modelProvider,
             sandbox: "read-only",
           },
         });
@@ -246,7 +246,7 @@ function runAppServerTurn(binary, env, model) {
   });
 }
 
-async function verifySignedOutTurn(binary) {
+async function verifySignedOutTurn(binary, { initialProvider = "openai" } = {}) {
   const codexHome = mkdtempSync(path.join(os.tmpdir(), "codex-router-login-free-app-server-"));
   const stateDir = path.join(codexHome, "router-state");
   mkdirSync(stateDir, { recursive: true, mode: 0o700 });
@@ -281,18 +281,34 @@ async function verifySignedOutTurn(binary) {
       `${JSON.stringify(bundled)}\n`,
       { mode: 0o600 },
     );
+    if (initialProvider !== "openai") {
+      writeFileSync(
+        path.join(codexHome, "config.toml"),
+        `model_provider = ${JSON.stringify(initialProvider)}\n\n` +
+          `[model_providers.${initialProvider}]\n` +
+          `name = "Direct test provider"\n` +
+          `base_url = "https://direct.invalid/v1"\n` +
+          `wire_api = "responses"\n`,
+        { mode: 0o600 },
+      );
+    }
 
     managerSync("enable", [], env);
     const enabled = managerSync("login-free-enable", [model], env);
-    assert.equal(enabled.model_provider, "codex-router");
+    const expectedProvider = initialProvider === "openai" ? "codex-router" : initialProvider;
+    assert.equal(enabled.model_provider, expectedProvider);
     assert.equal(enabled.login_free, true);
     assert.equal(existsSync(path.join(codexHome, "auth.json")), false);
     const config = readFileSync(path.join(codexHome, "config.toml"), "utf8");
-    assert.match(config, /^model_provider = "codex-router"$/m);
-    assert.match(config, /\[model_providers\.codex-router\]/);
+    assert.match(config, new RegExp(`^model_provider = ${JSON.stringify(expectedProvider)}$`, "m"));
+    assert.match(config, new RegExp(`\\[model_providers\\.${expectedProvider}\\]`));
     assert.doesNotMatch(config, /\[model_providers\.openai\]/);
+    if (initialProvider !== "openai") {
+      assert.match(config, /requires_openai_auth = false/);
+      assert.doesNotMatch(config, /direct\.invalid/);
+    }
 
-    const notifications = await runAppServerTurn(binary, env, model);
+    const notifications = await runAppServerTurn(binary, env, model, expectedProvider);
     assert.equal(requests.length, 1);
     assert.match(requests[0].url, /\/_codex-router\/[^/]+\/v1\/responses$/);
     assert.equal(requests[0].headers.authorization, undefined);
@@ -304,7 +320,7 @@ async function verifySignedOutTurn(binary) {
   }
 }
 
-test("real Codex app-server completes a signed-out turn from a root-openai config", async (t) => {
+test("real Codex app-server completes signed-out turns through fallback and preserved providers", async (t) => {
   const candidates = [...new Set(
     [findCodexBinary(), ...codexCandidatePaths()]
       .filter((candidate) => candidate && existsSync(candidate))
@@ -325,6 +341,8 @@ test("real Codex app-server completes a signed-out turn from a root-openai confi
     return;
   }
   for (const { binary, version } of binaries) {
-    await t.test(version, () => verifySignedOutTurn(binary));
+    await t.test(`${version} root-openai fallback`, () => verifySignedOutTurn(binary));
+    await t.test(`${version} preserved custom provider`, () =>
+      verifySignedOutTurn(binary, { initialProvider: "custom" }));
   }
 });

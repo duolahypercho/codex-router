@@ -835,6 +835,22 @@ function switchedProviderModeState(rootLines, restoreState) {
   };
 }
 
+function restoreProviderModeModel(contents, state) {
+  const { rootLines } = splitRoot(contents);
+  const present = rootHasValue(rootLines, "model");
+  if (
+    present === state.previousModelPresent &&
+    (!present || rootValue(rootLines, "model") === state.previousModel)
+  ) {
+    return contents;
+  }
+  return `${replaceRootValue(
+    contents,
+    "model",
+    state.previousModelPresent ? state.previousModel : undefined,
+  )}\n`;
+}
+
 function signedProviderStateIsOwned(contents, state) {
   const { rootLines } = splitRoot(contents);
   const activeProvider = rootValue(rootLines, "model_provider") || "openai";
@@ -1066,6 +1082,39 @@ function providerModeStateIsOwned(contents, state) {
     return signedProviderStateIsOwned(contents, state);
   }
   return false;
+}
+
+function providerModeRestoreSourceIsOwned(contents, state) {
+  if (!state) return false;
+  const { rootLines } = splitRoot(contents);
+  const providerPresent = rootHasValue(rootLines, "model_provider");
+  const modelPresent = rootHasValue(rootLines, "model");
+  if (state.version === 1) {
+    return (
+      providerPresent === state.previousPresent &&
+      (!providerPresent || rootValue(rootLines, "model_provider") === state.previousModelProvider) &&
+      modelPresent === state.previousModelPresent &&
+      (!modelPresent || rootValue(rootLines, "model") === state.previousModel)
+    );
+  }
+  if (state.version !== 3) return false;
+  const activeProvider = rootValue(rootLines, "model_provider") || "openai";
+  if (
+    activeProvider !== state.managedProvider ||
+    modelPresent !== state.previousModelPresent ||
+    (modelPresent && rootValue(rootLines, "model") !== state.previousModel)
+  ) {
+    return false;
+  }
+  const actualSections = providerTableRanges(contents, state.managedProvider).map((range) =>
+    range.lines.slice(range.start, range.end).join("\n").trimEnd()
+  );
+  return (
+    actualSections.length === state.previousProviderSections.length &&
+    actualSections.every(
+      (section, index) => section === state.previousProviderSections[index].trimEnd(),
+    )
+  );
 }
 
 function snapshot(contents) {
@@ -1402,9 +1451,21 @@ if (command === "enable") {
   const { rootLines } = splitRoot(defaultRestored);
   const currentProvider = rootValue(rootLines, "model_provider") || "openai";
   const loginFreeModel = String(process.argv[3] || "").trim();
+  const withLoginFreeModel = (contents) => {
+    if (!loginFreeModel) return contents;
+    if (rootValue(splitRoot(contents).rootLines, "model") === loginFreeModel) {
+      return contents;
+    }
+    return `${replaceRootValue(contents, "model", loginFreeModel)}\n`;
+  };
+  const restoreDisabledLoginFree = process.argv.includes("--restore-disabled-login-free");
   const state = readProviderModeState();
   if (state?.version === 1) {
-    if (!providerModeStateIsOwned(current, state)) {
+    const active = providerModeStateIsOwned(current, state);
+    if (
+      !active &&
+      !(restoreDisabledLoginFree && providerModeRestoreSourceIsOwned(defaultRestored, state))
+    ) {
       throw new Error(
         "Login-free mode lost ownership of model_provider codex-router; refusing to update it.",
       );
@@ -1412,15 +1473,22 @@ if (command === "enable") {
     // A v1 install already selected codex-router. Refresh it without changing
     // the old restore record; disabling remains able to put both original
     // root assignments back exactly.
-    next = enabledContents(defaultRestored);
+    next = enabledContents(withLoginFreeModel(defaultRestored));
+    if (!active) next = `${replaceRootValue(next, "model_provider", routerProviderId)}\n`;
   } else if (state) {
-    if (!providerModeStateIsOwned(current, state)) {
+    const active = providerModeStateIsOwned(current, state);
+    if (
+      !active &&
+      !(restoreDisabledLoginFree && providerModeRestoreSourceIsOwned(defaultRestored, state))
+    ) {
       throw new Error(
         `Login-free mode lost ownership while model_provider is ${currentProvider}; refusing to update it.`,
       );
     }
-    const restored = restoreSignedProviderTable(defaultRestored, state);
-    const enabled = enabledContents(restored);
+    const restored = active
+      ? restoreSignedProviderTable(defaultRestored, state)
+      : defaultRestored;
+    const enabled = enabledContents(withLoginFreeModel(restored));
     if (state.mode === "root-openai") {
       pendingProviderModeState = switchedProviderModeState(rootLines, state);
       next = `${replaceRootValue(enabled, "model_provider", routerProviderId)}\n`;
@@ -1435,7 +1503,7 @@ if (command === "enable") {
       pendingProviderModeState = providerModeStateFromManaged(refreshed.state, state);
     }
   } else {
-    const enabled = enabledContents(defaultRestored);
+    const enabled = enabledContents(withLoginFreeModel(defaultRestored));
     if (currentProvider === "openai") {
       pendingProviderModeState = switchedProviderModeState(rootLines);
       next = `${replaceRootValue(enabled, "model_provider", routerProviderId)}\n`;
@@ -1455,7 +1523,6 @@ if (command === "enable") {
       next = managed.contents;
     }
   }
-  if (loginFreeModel) next = `${replaceRootValue(next, "model", loginFreeModel)}\n`;
 } else if (command === "signed-enable") {
   if (existsSync(CODEX_PROVIDER_MODE_PATH)) {
     throw new Error("Turn off login-free mode before enabling signed routing.");
@@ -1542,11 +1609,7 @@ if (command === "enable") {
         "model_provider",
         state.previousPresent ? state.previousModelProvider : undefined,
       )}\n`;
-      restored = `${replaceRootValue(
-        restored,
-        "model",
-        state.previousModelPresent ? state.previousModel : undefined,
-      )}\n`;
+      restored = restoreProviderModeModel(restored, state);
     } else if (state.version === 3) {
       const effectiveProvider = currentProvider || "openai";
       if (!providerModeStateIsOwned(current, state)) {
@@ -1555,16 +1618,19 @@ if (command === "enable") {
         );
       }
       restored = restoreSignedProviderTable(current, state);
-      restored = `${replaceRootValue(
-        restored,
-        "model",
-        state.previousModelPresent ? state.previousModel : undefined,
-      )}\n`;
+      restored = restoreProviderModeModel(restored, state);
     }
   } else if (command === "login-free-disable" && currentProvider === routerProviderId) {
     throw new Error("Codex login-free mode is not managed by this router.");
   }
-  if (command === "login-free-disable" || command === "signed-disable") {
+  if (command === "login-free-disable") {
+    // Login-free mode removes the ordinary inert codex-router provider block
+    // while it temporarily owns the selected provider table. Rebuild the
+    // enabled router document after restoring that table so turning the mode
+    // off returns to the exact pre-toggle routing surface instead of leaving
+    // the standard provider definition missing.
+    next = enabledContents(restored);
+  } else if (command === "signed-disable") {
     next = restored;
   } else {
     if (signedState?.version === 1) {
@@ -1661,7 +1727,12 @@ try {
   }
   throw error;
 }
-if (command === "disable" || command === "login-free-disable") clearProviderModeState();
+if (
+  command === "login-free-disable" ||
+  (command === "disable" && !process.argv.includes("--preserve-login-free-state"))
+) {
+  clearProviderModeState();
+}
 if (clearNativeCatalogSourceAfterWrite) clearNativeCatalogSource();
 if (command === "disable" || command === "signed-disable") clearSignedProviderModeState();
 if (clearRouterDefaultState) clearCodexRouterDefault();

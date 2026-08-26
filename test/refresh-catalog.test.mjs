@@ -82,13 +82,24 @@ test("refresh orchestration restores identity-preserving login-free mode and its
     loginFree: true,
     model: "gpt-5.6-sol",
   });
-  refreshCatalog({ run: runner.run });
+  refreshCatalog({
+    run: runner.run,
+    aliases: () => ({ "gpt-5.6-sol": "deepseek/deepseek-v4-pro" }),
+    aliasFor: (slug) => slug === "deepseek/deepseek-v4-pro" ? "gpt-5.6-terra" : undefined,
+  });
   assert.deepEqual(runner.calls, [
     ["config-manager.mjs", ["status"]],
-    ["config-manager.mjs", ["disable"]],
+    ["config-manager.mjs", ["disable", "--preserve-login-free-state"]],
     ["catalog.mjs", ["--refresh-native"]],
-    ["config-manager.mjs", ["enable"]],
-    ["config-manager.mjs", ["login-free-enable", "gpt-5.6-sol"]],
+    [
+      "config-manager.mjs",
+      [
+        "login-free-enable",
+        "deepseek/deepseek-v4-pro",
+        "--restore-disabled-login-free",
+      ],
+    ],
     ["catalog.mjs", []],
+    ["config-manager.mjs", ["login-free-enable", "gpt-5.6-terra"]],
   ]);
 });
