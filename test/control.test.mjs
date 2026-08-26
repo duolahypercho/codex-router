@@ -65,16 +65,22 @@ function probe(target, providers, usageEvents = [], options = {}) {
     );
   }
   if (options.loginFree) {
+    const loginFreeProvider = options.loginFreeProvider || "custom";
+    const ownershipId = "00000000000000000000000000000000";
     writeFileSync(
       path.join(stateDir, "config.toml"),
-      `model = ${JSON.stringify(options.selectedModel || "deepseek/deepseek-v4-pro")}\nmodel_provider = "codex-router"\n`,
+      `model = ${JSON.stringify(options.selectedModel || "deepseek/deepseek-v4-pro")}\nmodel_provider = ${JSON.stringify(loginFreeProvider)}\n\n# codex-router-signed-provider-tree-slot ${ownershipId} 0\n# BEGIN codex-router-signed-provider-managed\n[model_providers.${loginFreeProvider}]\nname = "Codex Router (with ChatGPT)"\nbase_url = "http://127.0.0.1:4202/v1"\nwire_api = "responses"\nrequires_openai_auth = true\nsupports_standalone_web_search = true\nsupports_websockets = false\n# END codex-router-signed-provider-managed\n`,
       { mode: 0o600 },
     );
     writeFileSync(
       path.join(stateDir, "codex-provider-mode.json"),
       `${JSON.stringify({
-        version: 1,
-        previousPresent: false,
+        version: 3,
+        mode: loginFreeProvider === "openai" ? "root-openai" : "provider-table",
+        managedProvider: loginFreeProvider,
+        managedBaseUrl: "http://127.0.0.1:4202/v1",
+        ownershipId,
+        previousProviderSections: [],
         previousModelPresent: false,
       })}\n`,
       { mode: 0o600 },
@@ -648,7 +654,8 @@ test("login-free control selects a ready external model and restores Codex defau
     const enabled = runMode("on");
     assert.equal(enabled.login_free, true);
     assert.equal(enabled.model, "gpt-5.6-sol");
-    assert.equal(enabled.model_provider, "codex-router");
+    // Login-free mode preserves the existing provider identity (openai is the default)
+    assert.equal(enabled.model_provider, "openai");
     const catalog = JSON.parse(readFileSync(path.join(stateDir, "merged-models.json"), "utf8"));
     const aliasEntry = catalog.models.find((model) => model.slug === "gpt-5.6-sol");
     assert.match(aliasEntry.display_name, /DeepSeek/);
@@ -801,7 +808,8 @@ test("model-set switches the login-free model and rejects unavailable models", (
     runControl("auth-mode", "on");
     const switched = runControl("model-set", "deepseek/deepseek-v4-flash");
     assert.equal(switched.model, "gpt-5.6-sol");
-    assert.equal(switched.model_provider, "codex-router");
+    // Login-free mode preserves the existing provider identity (openai is the default)
+    assert.equal(switched.model_provider, "openai");
     assert.equal(switched.login_free, true);
 
     const overflow = runControl("model-set", "deepseek/deepseek-v4-pro");
