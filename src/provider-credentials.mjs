@@ -14,7 +14,14 @@ import path from "node:path";
 
 import { discoveryDisabled } from "./discovery-mode.mjs";
 import { protectPrivateFile } from "./file-security.mjs";
-import { LEGACY_STATE_DIRS, ROUTER_PLANE_TARGET, STATE_DIR, TARGET } from "./paths.mjs";
+import { normalizeGenericProviderId } from "./generic-provider-identity.mjs";
+import {
+  GENERIC_PROVIDER_CREDENTIALS_DIR,
+  LEGACY_STATE_DIRS,
+  ROUTER_PLANE_TARGET,
+  STATE_DIR,
+  TARGET,
+} from "./paths.mjs";
 import { targetCli } from "./target-integration.mjs";
 import { PROVIDERS } from "./model-registry.mjs";
 import {
@@ -139,6 +146,24 @@ function resolvedCredential(provider, value, source, persistent) {
 
 function canonicalProviderId(provider) {
   return provider.variantOf || provider.id;
+}
+
+function genericCredentialProvider(providerId) {
+  const id = normalizeGenericProviderId(providerId);
+  return {
+    id,
+    kind: "openai-compatible",
+    credential: {
+      file: path.relative(STATE_DIR, path.join(GENERIC_PROVIDER_CREDENTIALS_DIR, `${id}.key`)),
+      label: "API key",
+      environment: [],
+      keychainServices: [],
+    },
+  };
+}
+
+export function genericProviderCredentialPath(providerId) {
+  return primaryCredentialPath(genericCredentialProvider(providerId));
 }
 
 function configuredProviderFileCredential(provider) {
@@ -291,6 +316,34 @@ export function resolveProviderCredentialReference(providerOrId, secretRef) {
   return undefined;
 }
 
+/**
+ * Resolve a generic provider's deliberately narrow protected-file reference.
+ * Built-in provider resolution remains registry-bound above; this separate
+ * entry point cannot name environment variables, Keychain services, or paths.
+ */
+export function resolveGenericProviderCredentialReference(providerId, secretRef) {
+  let provider;
+  try {
+    provider = genericCredentialProvider(providerId);
+  } catch {
+    return undefined;
+  }
+  if (!secretRef || typeof secretRef !== "object" || Array.isArray(secretRef)) return undefined;
+  const referenceKeys = new Set(["type", "providerId", "target", "service", "name"]);
+  if (Object.keys(secretRef).some((key) => !referenceKeys.has(key))) return undefined;
+  if (
+    secretRef.type !== "provider-file" ||
+    secretRef.providerId !== provider.id ||
+    secretRef.target !== ROUTER_PLANE_TARGET ||
+    secretRef.service !== undefined ||
+    secretRef.name !== undefined ||
+    discoveryDisabled()
+  ) {
+    return undefined;
+  }
+  return configuredProviderFileCredential(provider);
+}
+
 export function credentialSetupHint(provider) {
   if (provider.authMode === "anonymous") return "No key needed; free models are rate limited by the provider.";
   if (provider.authMode === "per-model") return "No key needed here; each model names its own endpoint.";
@@ -328,6 +381,8 @@ export function writeProviderCredential(providerOrId, value) {
   mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 });
   chmodSync(STATE_DIR, 0o700);
   const target = primaryCredentialPath(provider);
+  mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
+  chmodSync(path.dirname(target), 0o700);
   const temporary = `${target}.tmp.${process.pid}`;
   writeFileSync(temporary, `${key}\n`, { encoding: "utf8", mode: 0o600 });
   try {
@@ -340,6 +395,10 @@ export function writeProviderCredential(providerOrId, value) {
   }
   resetKeychainCache();
   return target;
+}
+
+export function writeGenericProviderCredential(providerId, value) {
+  return writeProviderCredential(genericCredentialProvider(providerId), value);
 }
 
 export function removeProviderCredential(providerOrId) {
@@ -356,6 +415,10 @@ export function removeProviderCredential(providerOrId) {
   // has to come from a fresh look.
   resetKeychainCache();
   return removed;
+}
+
+export function removeGenericProviderCredential(providerId) {
+  return removeProviderCredential(genericCredentialProvider(providerId));
 }
 
 export function credentialFileMode(providerOrId) {

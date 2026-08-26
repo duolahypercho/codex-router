@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
+import { once } from "node:events";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -24,11 +26,35 @@ const {
   requestGenericProvider,
   readGenericProviders,
   removeGenericProvider,
+  runGenericProviderCli,
   setGenericProviderEnabled,
   testGenericProvider,
   updateGenericProvider,
 } = await import("../src/generic-providers.mjs");
+const {
+  addCredentialReference,
+  addGenericProviderCredentialReference,
+  readProviderCredentialStore,
+} = await import("../src/provider-credential-store.mjs");
+const {
+  genericProviderCredentialPath,
+  writeGenericProviderCredential,
+} = await import("../src/provider-credentials.mjs");
+const { LOG_PATH } = await import("../src/paths.mjs");
+const { createSupportBundle } = await import("../src/support-bundle.mjs");
 test.after(() => rmSync(testRoot, { recursive: true, force: true }));
+
+async function listen(server) {
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  return server.address().port;
+}
+
+async function closeServer(server) {
+  if (!server.listening) return;
+  server.close();
+  await once(server, "close");
+}
 
 test("generic provider CRUD is versioned, atomic and redacted", () => {
   const added = addGenericProvider({
@@ -166,6 +192,13 @@ test("generic requests revalidate DNS, reject redirects, and bound response read
     /request paths must be relative/,
   );
   await assert.rejects(
+    () => requestGenericProvider("remote-boundary", "/../admin", {
+      lookup: async () => ["8.8.8.8"],
+      fetchImpl: async () => { throw new Error("escaped base path reached fetch"); },
+    }),
+    /cannot escape the configured baseUrl path/,
+  );
+  await assert.rejects(
     () => requestGenericProvider("remote-boundary", "/models", {
       lookup: async () => ["8.8.8.8"],
       fetchImpl: async () => ({ ok: false, status: 302, body: { cancel: async () => undefined } }),
@@ -231,6 +264,96 @@ test("generic requests fail closed when a credential is unavailable or not an AP
     }),
     /Credential cred_generic_account_01 is unavailable/,
   );
+});
+
+test("public APIs confine a generic credential to its permitted endpoint", async () => {
+  const providerId = "public-api-provider";
+  const secret = "TEST_GENERIC_PUBLIC_API_TOKEN_82f6f31a";
+  const permittedRequests = [];
+  const trappedRequests = [];
+  const trap = createServer((request, response) => {
+    trappedRequests.push({ url: request.url, authorization: request.headers.authorization });
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end("{}");
+  });
+  const trapPort = await listen(trap);
+  const permitted = createServer((request, response) => {
+    permittedRequests.push({ url: request.url, authorization: request.headers.authorization });
+    if (request.url === "/v1/redirect") {
+      response.writeHead(302, { location: `http://127.0.0.1:${trapPort}/stolen` });
+      response.end();
+      return;
+    }
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end('{"data":[]}');
+  });
+  const permittedPort = await listen(permitted);
+
+  try {
+    assert.throws(
+      () => addCredentialReference({ providerId, kind: "api_key", secretRef: { type: "provider-file" } }),
+      /Invalid providerId/,
+      "the built-in credential API must remain registry-bound",
+    );
+    assert.throws(
+      () => addGenericProviderCredentialReference({ providerId: "deepseek" }),
+      /already used by the built-in registry/,
+      "the generic credential API must not bypass built-in validation",
+    );
+
+    const credential = addGenericProviderCredentialReference({
+      id: "cred_public_generic_credential_01",
+      providerId,
+      label: "Public API fixture",
+    });
+    const credentialPath = writeGenericProviderCredential(providerId, secret);
+    assert.equal(credentialPath, genericProviderCredentialPath(providerId));
+    if (process.platform !== "win32") assert.equal(statSync(credentialPath).mode & 0o777, 0o600);
+
+    const provider = addGenericProvider({
+      id: providerId,
+      displayName: "Public API provider",
+      baseUrl: `http://127.0.0.1:${permittedPort}/v1`,
+      allowPrivate: true,
+      credentialRef: credential.id,
+    });
+    const result = await testGenericProvider(providerId);
+    assert.equal(result.ok, true);
+    assert.deepEqual(permittedRequests, [{
+      url: "/v1/models",
+      authorization: `Bearer ${secret}`,
+    }]);
+
+    await assert.rejects(
+      () => requestGenericProvider(providerId, "/redirect"),
+      /redirects are disabled/,
+    );
+    assert.equal(trappedRequests.length, 0, "a redirect received the generic credential");
+    assert.equal(permittedRequests.length, 2);
+    assert.ok(permittedRequests.every((request) => request.authorization === `Bearer ${secret}`));
+
+    let cliOutput = "";
+    await runGenericProviderCli(["show", providerId, "--json"], {
+      output: { write(chunk) { cliOutput += chunk; return true; } },
+    });
+    const publicSurfaces = JSON.stringify({
+      credential,
+      provider,
+      descriptor: genericProviderDescriptor(providerId),
+      listed: listGenericProviders(),
+      result,
+      cliOutput,
+      credentialStore: readProviderCredentialStore(),
+    });
+    assert.equal(publicSurfaces.includes(secret), false, "a descriptor or public output exposed the credential");
+
+    writeFileSync(LOG_PATH, `upstream diagnostic accidentally included ${secret}\n`, { mode: 0o600 });
+    const bundlePath = path.join(testRoot, "generic-provider-support.json");
+    createSupportBundle({ includeLogs: true, output: bundlePath });
+    assert.equal(readFileSync(bundlePath, "utf8").includes(secret), false, "support output exposed the credential");
+  } finally {
+    await Promise.all([closeServer(permitted), closeServer(trap)]);
+  }
 });
 
 test("providers CLI exposes generic CRUD with sanitized JSON", () => {

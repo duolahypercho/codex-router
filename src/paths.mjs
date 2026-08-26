@@ -146,6 +146,7 @@ export const PROVIDER_CREDENTIAL_MIGRATIONS_DIR =
 export const GENERIC_PROVIDERS_PATH =
   process.env.MODEL_ROUTER_GENERIC_PROVIDERS ||
   path.join(STATE_DIR, "generic-providers.json");
+export const GENERIC_PROVIDER_CREDENTIALS_DIR = path.join(STATE_DIR, "generic-provider-credentials");
 export const SUPPORT_DIR = path.join(STATE_DIR, "support");
 export const LOG_PATH = path.join(STATE_DIR, "router.log");
 export const SERVICE_PROCESS_STATE_PATH = path.join(STATE_DIR, "service-process.json");

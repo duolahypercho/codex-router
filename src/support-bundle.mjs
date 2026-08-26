@@ -30,9 +30,13 @@ import {
 import {
   credentialPaths,
   credentialStatus,
+  genericProviderCredentialPath,
 } from "./provider-credentials.mjs";
 import { providerSelectionStatus } from "./provider-selection.mjs";
-import { redactCredentialText } from "./provider-credential-store.mjs";
+import {
+  readProviderCredentialStore,
+  redactCredentialText,
+} from "./provider-credential-store.mjs";
 
 function runJson(script, args = []) {
   const result = spawnSync(
@@ -103,6 +107,14 @@ function knownLocalSecrets() {
     for (const name of provider.credential.environment) {
       const value = process.env[name]?.trim();
       if (value) values.add(value);
+    }
+  }
+  for (const entry of readProviderCredentialStore().credentials) {
+    if (entry.providerType !== "generic") continue;
+    try {
+      files.push(genericProviderCredentialPath(entry.providerId));
+    } catch {
+      // Invalid generic metadata is already ignored by the fail-closed store reader.
     }
   }
   for (const target of files) {

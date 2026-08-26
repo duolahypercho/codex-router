@@ -14,6 +14,7 @@ import path from "node:path";
 import { withAtomicStateLock } from "./atomic-state-lock.mjs";
 import { credentialPaths } from "./provider-credentials.mjs";
 import { protectPrivateFile } from "./file-security.mjs";
+import { normalizeGenericProviderId } from "./generic-provider-identity.mjs";
 import { PROVIDERS } from "./model-registry.mjs";
 import {
   CODEX_HOME,
@@ -45,6 +46,7 @@ const LEGACY_STORE_KEYS = new Set(["version", "credentials"]);
 const CREDENTIAL_KEYS = new Set([
   "id",
   "providerId",
+  "providerType",
   "kind",
   "secretRef",
   "state",
@@ -55,6 +57,9 @@ const CREDENTIAL_KEYS = new Set([
 ]);
 const ACCOUNT_KEYS = new Set(["alias", "plan"]);
 const SECRET_REF_KEYS = new Set(["type", "providerId", "target", "service", "name"]);
+const CREDENTIAL_INPUT_KEYS = new Set([
+  "providerId", "kind", "secretRef", "label", "account", "id", "state", "createdAt", "updatedAt",
+]);
 
 function sensitiveKey(key) {
   // `secretRef` is a safe descriptor, not a secret-bearing field.
@@ -246,7 +251,7 @@ function assertNoSecretFields(value, context = "credential metadata") {
   }
 }
 
-function normalizeSecretRef(value, providerId, { legacy = false } = {}) {
+function normalizeSecretRef(value, providerId, { legacy = false, providerType } = {}) {
   plainObject(value, "secretRef");
   assertNoSecretFields(value, "secretRef");
   assertAllowedKeys(value, SECRET_REF_KEYS, "secretRef");
@@ -256,7 +261,9 @@ function normalizeSecretRef(value, providerId, { legacy = false } = {}) {
   }
   const referenceProviderId = value.providerId === undefined
     ? providerId
-    : validateProviderId(value.providerId);
+    : providerType === "generic"
+      ? normalizeGenericProviderId(value.providerId)
+      : validateProviderId(value.providerId);
   if (referenceProviderId !== providerId) {
     throw new Error("secretRef.providerId must match providerId.");
   }
@@ -267,6 +274,15 @@ function normalizeSecretRef(value, providerId, { legacy = false } = {}) {
   );
   if (target !== ROUTER_PLANE_TARGET) throw new Error("secretRef.target does not match this router plane.");
   const normalized = { type, providerId: referenceProviderId, target };
+  if (providerType === "generic") {
+    if (type !== "provider-file") {
+      throw new Error("Generic providers support only protected provider-file credential references.");
+    }
+    if (value.service !== undefined || value.name !== undefined) {
+      throw new Error("Generic provider-file secretRef cannot include service or name.");
+    }
+    return normalized;
+  }
   const provider = PROVIDERS.get(referenceProviderId);
   if (!provider?.credential) throw new Error(`Provider ${referenceProviderId} has no credential policy.`);
   if (type === "keychain") {
@@ -298,7 +314,18 @@ function normalizeCredential(raw, { legacy = false } = {}) {
   plainObject(raw, "credential");
   assertNoSecretFields(raw, "credential metadata");
   assertAllowedKeys(raw, CREDENTIAL_KEYS, "credential");
-  const providerId = validateProviderId(raw.providerId);
+  const providerType = raw.providerType === undefined
+    ? undefined
+    : normalizeText(raw.providerType, "providerType", { max: 20, required: true });
+  if (providerType !== undefined && providerType !== "generic") {
+    throw new Error(`Unsupported providerType: ${providerType}`);
+  }
+  if (legacy && providerType !== undefined) {
+    throw new Error("Legacy credentials cannot declare providerType.");
+  }
+  const providerId = providerType === "generic"
+    ? normalizeGenericProviderId(raw.providerId)
+    : validateProviderId(raw.providerId);
   const kind = normalizeText(raw.kind || (legacy ? "api_key" : undefined), "credential kind", {
     max: 20,
     required: true,
@@ -306,8 +333,11 @@ function normalizeCredential(raw, { legacy = false } = {}) {
   if (!PROVIDER_CREDENTIAL_KINDS.includes(kind)) {
     throw new Error(`Unsupported credential kind: ${kind}`);
   }
+  if (providerType === "generic" && kind !== "api_key") {
+    throw new Error("Generic providers support only api_key credentials.");
+  }
   const id = validateCredentialId(raw.id);
-  const secretRef = normalizeSecretRef(raw.secretRef, providerId, { legacy });
+  const secretRef = normalizeSecretRef(raw.secretRef, providerId, { legacy, providerType });
   const state = normalizeText(raw.state || "active", "credential state", { max: 20, required: true });
   if (!["active", "paused", "revoked"].includes(state)) {
     throw new Error(`Unsupported credential state: ${state}`);
@@ -317,6 +347,7 @@ function normalizeCredential(raw, { legacy = false } = {}) {
   const result = {
     id,
     providerId,
+    ...(providerType ? { providerType } : {}),
     kind,
     secretRef,
     state,
@@ -416,12 +447,10 @@ export function writeProviderCredentialStore(store, filePath = PROVIDER_CREDENTI
   return normalized;
 }
 
-export function createCredentialReference(input = {}) {
+function createCredentialReferenceForType(input = {}, providerType) {
   assertNoSecretFields(input, "credential metadata");
   plainObject(input, "credential metadata");
-  assertAllowedKeys(input, new Set([
-    "providerId", "kind", "secretRef", "label", "account", "id", "state", "createdAt", "updatedAt",
-  ]), "credential metadata");
+  assertAllowedKeys(input, CREDENTIAL_INPUT_KEYS, "credential metadata");
   const {
     providerId,
     kind,
@@ -433,14 +462,19 @@ export function createCredentialReference(input = {}) {
     createdAt,
     updatedAt,
   } = input;
-  const normalizedProviderId = validateProviderId(providerId);
+  const normalizedProviderId = providerType === "generic"
+    ? normalizeGenericProviderId(providerId)
+    : validateProviderId(providerId);
   const credential = normalizeCredential({
     id: id || generatedCredentialId(normalizedProviderId, kind),
     providerId: normalizedProviderId,
-    kind,
+    ...(providerType ? { providerType } : {}),
+    kind: providerType === "generic" ? (kind || "api_key") : kind,
     secretRef: secretRef && typeof secretRef === "object"
       ? { ...secretRef, target: secretRef.target ?? ROUTER_PLANE_TARGET }
-      : secretRef,
+      : providerType === "generic"
+        ? { type: "provider-file", providerId: normalizedProviderId, target: ROUTER_PLANE_TARGET }
+        : secretRef,
     label,
     account,
     state,
@@ -450,17 +484,33 @@ export function createCredentialReference(input = {}) {
   return credential;
 }
 
-export function addCredentialReference(input, filePath = PROVIDER_CREDENTIAL_STORE_PATH) {
+export function createCredentialReference(input = {}) {
+  return createCredentialReferenceForType(input);
+}
+
+export function createGenericProviderCredentialReference(input = {}) {
+  return createCredentialReferenceForType(input, "generic");
+}
+
+function addCredentialReferenceWith(input, filePath, create) {
   const target = managedStatePath(filePath, "credential store path");
   return withAtomicStateLock(target, () => {
     const store = readProviderCredentialStoreStrict(target);
-    const credential = createCredentialReference(input);
+    const credential = create(input);
     if (store.credentials.some((entry) => entry.id === credential.id)) {
       throw new Error(`Credential id already exists: ${credential.id}`);
     }
     store.credentials.push(credential);
     return writeProviderCredentialStore(store, target).credentials.at(-1);
   });
+}
+
+export function addCredentialReference(input, filePath = PROVIDER_CREDENTIAL_STORE_PATH) {
+  return addCredentialReferenceWith(input, filePath, createCredentialReference);
+}
+
+export function addGenericProviderCredentialReference(input, filePath = PROVIDER_CREDENTIAL_STORE_PATH) {
+  return addCredentialReferenceWith(input, filePath, createGenericProviderCredentialReference);
 }
 
 export function removeCredentialReference(id, filePath = PROVIDER_CREDENTIAL_STORE_PATH) {
@@ -486,6 +536,7 @@ export function sanitizeCredentialStatus(entry) {
   return {
     id: credential.id,
     providerId: credential.providerId,
+    ...(credential.providerType ? { providerType: credential.providerType } : {}),
     kind: credential.kind,
     state: credential.state,
     label: credential.label || null,

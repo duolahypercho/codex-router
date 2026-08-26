@@ -1,15 +1,15 @@
 import { promises as dns } from "node:dns";
-import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { isIP } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Agent, fetch as undiciFetch } from "undici";
 
-import { PROVIDERS } from "./model-registry.mjs";
+import { normalizeGenericProviderId } from "./generic-provider-identity.mjs";
 import { GENERIC_PROVIDERS_PATH } from "./paths.mjs";
 import { withAtomicStateLock } from "./atomic-state-lock.mjs";
 import { readProviderCredentialStore } from "./provider-credential-store.mjs";
+import { resolveGenericProviderCredentialReference } from "./provider-credentials.mjs";
 
 export { GENERIC_PROVIDERS_PATH } from "./paths.mjs";
 import { writePrivateJson } from "./file-security.mjs";
@@ -44,7 +44,6 @@ const FORBIDDEN_HEADER_NAMES = new Set([
   "upgrade",
 ]);
 
-const ID_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
 const HEADER_NAME_PATTERN = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
 const MAX_HEADERS = 64;
 const MAX_HEADER_VALUE_LENGTH = 4_096;
@@ -208,12 +207,10 @@ function validateProvider(input, { existingId } = {}) {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
     throw new Error("A generic provider must be an object.");
   }
-  const id = text(input.id);
-  if (!ID_PATTERN.test(id)) throw new Error("Provider id must match [a-z0-9][a-z0-9-]*.");
+  const id = normalizeGenericProviderId(input.id);
   if (existingId !== undefined && id !== existingId) {
     throw new Error("Provider id cannot be changed; remove and add a new provider instead.");
   }
-  if (PROVIDERS.has(id)) throw new Error(`Provider id ${id} is already used by the built-in registry.`);
   const displayName = text(input.displayName);
   if (!displayName || displayName.length > 120) {
     throw new Error("displayName must be a non-empty string of at most 120 characters.");
@@ -400,6 +397,10 @@ function destinationUrl(provider, requestPath) {
   if (target.origin !== endpoint.origin || target.username || target.password) {
     throw new Error("Generic provider request cannot change the configured origin.");
   }
+  const basePath = endpoint.pathname.endsWith("/") ? endpoint.pathname : `${endpoint.pathname}/`;
+  if (!target.pathname.startsWith(basePath)) {
+    throw new Error("Generic provider request cannot escape the configured baseUrl path.");
+  }
   return target;
 }
 
@@ -437,27 +438,10 @@ function credentialSecret(provider) {
   if (!provider.credentialRef) return undefined;
   const entry = readProviderCredentialStore().credentials.find((candidate) => candidate.id === provider.credentialRef);
   if (!entry || entry.state !== "active") return undefined;
+  if (entry.providerType !== "generic") return undefined;
   if (entry.providerId !== provider.id) return undefined;
   if (entry.kind !== "api_key") return undefined;
-  const reference = entry.secretRef;
-  if (reference.type === "environment") return process.env[reference.name]?.trim() || undefined;
-  if (reference.type === "keychain") {
-    if (process.platform !== "darwin") return undefined;
-    try {
-      const value = execFileSync(
-        "/usr/bin/security",
-        ["find-generic-password", "-s", reference.service, "-a", "default", "-w"],
-        { encoding: "utf8", timeout: 2_000, stdio: ["ignore", "pipe", "ignore"] },
-      ).trim();
-      return value || undefined;
-    } catch {
-      return undefined;
-    }
-  }
-  // provider-file and oauth-session references belong to provider-specific
-  // credential/session code. A generic descriptor cannot turn them into a raw
-  // bearer token, so fail closed until a provider adapter owns that lookup.
-  return undefined;
+  return resolveGenericProviderCredentialReference(provider.id, entry.secretRef)?.value;
 }
 
 function requestSignal(signal, timeoutMs) {
