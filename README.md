@@ -625,8 +625,8 @@ available on Command Code and Venice.
 | ~~Ox Alpha (Nous Research)~~ | `nousresearch/ox-alpha` | ~~Nous Portal~~ | Withdrawn |
 
 The checked-in OpenCode Free pin (`opencode-free/ox-alpha`, upstream
-`x-preview-f-free`) is stale versus the live `/models` catalog and will fail if
-enabled.
+`x-preview-f-free`) is stale versus the live `/models` catalog; the endpoint may
+still answer or start failing without notice.
 
 Reasoning effort is **low · high · max** on the remaining routes, defaulting to
 `max`. Only three rungs exist because the model always thinks and its upstream
