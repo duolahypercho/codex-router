@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- **README: Ox Alpha availability updated.** The preview was withdrawn from
+  OpenCode Zen, OpenCode Go, OpenRouter, and Nous Research as of 2026-08-26.
+  It remains available on Command Code and Venice. The checked-in
+  `opencode-free/ox-alpha` pin is now stale versus the live catalog.
+
 ## 0.5.0
 
 - **Grok 4.6 ships on opencode Go.** OpenCode's current Go list and endpoint

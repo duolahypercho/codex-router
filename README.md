@@ -460,21 +460,19 @@ in code to its official endpoint.
 | OpenCode Free | `opencode-free` | `https://opencode.ai/zen/v1` | `big-pickle` and IDs ending in `-free` |
 | Kilo Free | `kilo-free` | `https://api.kilo.ai/api/gateway` | IDs ending in `:free` |
 
-Neither ships its free subset as checked-in metadata, with a single exception:
-**Ox Alpha** on OpenCode Free is checked in — see [Ox Alpha](#ox-alpha) below.
-Everything else comes from the provider's live `/models` response, filtered to
-the free subset and then added locally with `./bin/curate-models`. OpenCode Free
-curation routes `muse-spark-1.2-contributor-free` through its internal Responses
-sibling while keeping Ox Alpha Free (`x-preview-f-free`) and the other free IDs
-on Chat Completions; the provider remains one selection in setup and the picker.
-An existing Chat-routed copy of that one Muse model is migrated only when the
-operator explicitly runs `curate-models`; install, update, and catalog reads do
-not rewrite the user model or picker state. Zen's `/models` response publishes
-no context limits, so those two IDs are sized from OpenCode's own published
-per-free-ID metadata instead of the conservative 131K fallback, and each stored
-entry's `description` records where its window came from. Every other free ID
-keeps the conservative default, and any window is editable in
-`user-models.json`.
+Neither ships its free subset as checked-in metadata: everything comes from the
+provider's live `/models` response, filtered to the free subset and then added
+locally with `./bin/curate-models`. OpenCode Free curation routes
+`muse-spark-1.2-contributor-free` through its internal Responses sibling while
+keeping the other free IDs on Chat Completions; the provider remains one
+selection in setup and the picker. An existing Chat-routed copy of that one Muse
+model is migrated only when the operator explicitly runs `curate-models`;
+install, update, and catalog reads do not rewrite the user model or picker
+state. Zen's `/models` response publishes no context limits, so free IDs that
+OpenCode documents are sized from its published metadata instead of the
+conservative 131K fallback, and each stored entry's `description` records where
+its window came from. Every other free ID keeps the conservative default, and
+any window is editable in `user-models.json`.
 
 ```sh
 ./bin/model-router codex providers enable opencode-free
@@ -613,34 +611,31 @@ that route is unavailable.
 
 Ox Alpha is a stealth reasoning model for coding and long-horizon agentic work:
 a 1,048,576-token context window, 131,072 tokens of output, text and image
-input, and tool calling. Six of this repository's routes resell the same model,
-and it is priced at zero on all of them during the preview, so the entries carry
-a **Free** badge in the control center.
+input, and tool calling. **The free preview was withdrawn from OpenCode Zen,
+OpenCode Go, OpenRouter, and Nous Research as of 2026-08-26.** It remains
+available on Command Code and Venice.
 
-| Picker label | Model ID | Needs a key |
-| --- | --- | --- |
-| Ox Alpha (OpenCode Free) | `opencode-free/ox-alpha` | no |
-| Ox Alpha (opencode Go) | `opencode-go/ox-alpha` | opencode |
-| Ox Alpha (OpenRouter) | `openrouter/ox-alpha` | OpenRouter |
-| Ox Alpha (Command Code) | `commandcode/ox-alpha` | Command Code |
-| Ox Alpha (Nous Research) | `nousresearch/ox-alpha` | Nous Portal |
-| Ox Alpha (Venice) | `venice/ox-alpha` | Venice |
+| Picker label | Model ID | Needs a key | Status |
+| --- | --- | --- | --- |
+| Ox Alpha (Command Code) | `commandcode/ox-alpha` | Command Code | Available |
+| Ox Alpha (Venice) | `venice/ox-alpha` | Venice | Available |
+| ~~Ox Alpha (OpenCode Free)~~ | `opencode-free/ox-alpha` | ~~no~~ | Withdrawn |
+| ~~Ox Alpha (opencode Go)~~ | `opencode-go/ox-alpha` | ~~opencode~~ | Withdrawn |
+| ~~Ox Alpha (OpenRouter)~~ | `openrouter/ox-alpha` | ~~OpenRouter~~ | Withdrawn |
+| ~~Ox Alpha (Nous Research)~~ | `nousresearch/ox-alpha` | ~~Nous Portal~~ | Withdrawn |
 
-Reasoning effort is **low · high · max** on every route, defaulting to `max`.
-Only three rungs exist because the model always thinks and its upstream says so
-outright — anything else comes back as `400 — This model always engages in
-thinking and cannot be disabled; please use low, high, or max`. Codex has more
-rungs than that, and a Codex older than 0.143 has no `max` at all, so the router
-clamps whatever effort you pick onto the three the model accepts. Switching
-effort in the picker is safe on all six routes.
+The checked-in OpenCode Free pin (`opencode-free/ox-alpha`, upstream
+`x-preview-f-free`) is stale versus the live `/models` catalog and will fail if
+enabled.
 
-The quickest route needs nothing at all:
+Reasoning effort is **low · high · max** on the remaining routes, defaulting to
+`max`. Only three rungs exist because the model always thinks and its upstream
+says so outright — anything else comes back as `400 — This model always engages
+in thinking and cannot be disabled; please use low, high, or max`. Codex has
+more rungs than that, and a Codex older than 0.143 has no `max` at all, so the
+router clamps whatever effort you pick onto the three the model accepts.
 
-```sh
-./bin/model-router codex providers enable opencode-free
-```
-
-For the credentialed routes, store the key and enable the provider:
+For the remaining routes, store the key and enable the provider:
 
 ```sh
 ./bin/model-router codex provider-key venice set
@@ -649,7 +644,7 @@ For the credentialed routes, store the key and enable the provider:
 
 > **The free preview is a preview.** No lab has claimed this model, the routes
 > that serve it can narrow or withdraw it without notice, and the retention
-> terms differ per provider — OpenCode advertises zero data retention, Venice
+> terms differ per provider — OpenCode advertised zero data retention, Venice
 > anonymizes, and other resellers say less. Treat it as a way to try a model,
 > not as something to depend on.
 
@@ -699,7 +694,9 @@ configuration available to that account through the installed Devin CLI; the
 provider still ships no preselected models.
 
 Three more providers work the same way but arrive with the single checked-in
-[Ox Alpha](#ox-alpha) entry, so their picker is not empty once a key is stored:
+[Ox Alpha](#ox-alpha) entry (which is currently available on Command Code and
+Venice but has been withdrawn from OpenCode, OpenRouter, and Nous), so their
+picker is not empty once a key is stored:
 
 | Provider | Provider ID | Base URL | Key from |
 | --- | --- | --- | --- |
