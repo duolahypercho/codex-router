@@ -38,6 +38,11 @@ import {
   readNativeCatalogSource,
 } from "./native-catalog-source.mjs";
 import {
+  loginFreeRefreshJournalMatchesState,
+  readLoginFreeRefreshJournal,
+} from "./login-free-refresh-journal.mjs";
+import { readNativeAliases } from "./native-alias.mjs";
+import {
   BACKUP_PATH,
   CALLER_SECRET_PATH,
   CODEX_PROVIDER_MODE_PATH,
@@ -521,6 +526,19 @@ function replaceRootValue(contents, key, value) {
   return [...trimBlankEdges(filtered), "", ...trimBlankEdges(tableLines)]
     .join("\n")
     .trimEnd();
+}
+
+function replaceRootValueInPlace(contents, key, value) {
+  if (value === undefined) return replaceRootValue(contents, key, value);
+  const lines = contents.split("\n");
+  const firstTable = scanTomlDocument(contents).headers[0]?.index ?? lines.length;
+  const expression = new RegExp(`^\\s*${key}\\s*=`);
+  const index = lines.findIndex((line, lineIndex) =>
+    lineIndex < firstTable && expression.test(line)
+  );
+  if (index === -1) return replaceRootValue(contents, key, value);
+  lines[index] = `${key} = ${JSON.stringify(value)}`;
+  return lines.join("\n").trimEnd();
 }
 
 function providerTableRanges(contents, providerId) {
@@ -1117,6 +1135,27 @@ function providerModeRestoreSourceIsOwned(contents, state) {
   );
 }
 
+function refreshJournalOwnsModel(model, journal) {
+  if (!model) return false;
+  if (model === journal.displayModel || model === journal.canonicalModel) return true;
+  const aliases = readNativeAliases();
+  return (aliases[model] || model) === journal.canonicalModel;
+}
+
+function refreshJournalOwnsActiveModel(contents, journal) {
+  return refreshJournalOwnsModel(
+    rootValue(splitRoot(contents).rootLines, "model"),
+    journal,
+  );
+}
+
+function applyRefreshJournalModel(contents, journal) {
+  if (rootValue(splitRoot(contents).rootLines, "model") === journal.canonicalModel) {
+    return contents;
+  }
+  return `${replaceRootValueInPlace(contents, "model", journal.canonicalModel)}\n`;
+}
+
 function snapshot(contents) {
   const { rootLines } = splitRoot(contents);
   const baseUrl = rootValue(rootLines, "openai_base_url");
@@ -1333,6 +1372,44 @@ if (command === "status") {
   process.exit(0);
 }
 
+const refreshJournal = readLoginFreeRefreshJournal();
+const resumeLoginFreeRefresh = process.argv.includes("--resume-login-free-refresh");
+const parkLoginFreeRefresh = process.argv.includes("--park-login-free-refresh");
+const restoreDisabledLoginFree = process.argv.includes("--restore-disabled-login-free");
+const completeLoginFreeRefresh = process.argv.includes("--complete-login-free-refresh");
+if (restoreDisabledLoginFree && completeLoginFreeRefresh) {
+  throw new Error("A login-free refresh step cannot restore and complete at once.");
+}
+const internalRefreshStep =
+  (command === "enable" &&
+    resumeLoginFreeRefresh &&
+    !parkLoginFreeRefresh &&
+    !restoreDisabledLoginFree &&
+    !completeLoginFreeRefresh) ||
+  (command === "disable" &&
+    process.argv.includes("--preserve-login-free-state") &&
+    parkLoginFreeRefresh &&
+    !resumeLoginFreeRefresh &&
+    !restoreDisabledLoginFree &&
+    !completeLoginFreeRefresh) ||
+  (command === "login-free-enable" &&
+    !resumeLoginFreeRefresh &&
+    !parkLoginFreeRefresh &&
+    (restoreDisabledLoginFree || completeLoginFreeRefresh));
+if (refreshJournal && !internalRefreshStep) {
+  throw new Error(
+    "A login-free catalog refresh is pending; rerun bin/refresh-catalog before changing Codex routing.",
+  );
+}
+if (
+  !refreshJournal &&
+  (resumeLoginFreeRefresh ||
+    parkLoginFreeRefresh ||
+    restoreDisabledLoginFree ||
+    completeLoginFreeRefresh)
+) {
+  throw new Error("No login-free catalog refresh is pending; refusing internal refresh step.");
+}
 let next;
 let pendingProviderModeState;
 let clearNativeCatalogSourceAfterWrite = false;
@@ -1343,6 +1420,11 @@ let clearRouterDefaultState = false;
 if (command === "enable") {
   const signedState = readSignedProviderModeState();
   const providerState = readProviderModeState();
+  if (refreshJournal && !providerState) {
+    throw new Error(
+      "The login-free refresh journal has no matching provider state; refusing recovery.",
+    );
+  }
   if (signedState && providerState) {
     throw new Error(
       "Signed routing and login-free provider state cannot both be active; turn one off before updating the router.",
@@ -1371,24 +1453,47 @@ if (command === "enable") {
     next = refreshed.contents;
     pendingSignedProviderModeState = refreshed.state;
   } else if (providerState?.version === 1) {
-    if (!providerModeStateIsOwned(current, providerState)) {
+    const active = providerModeStateIsOwned(current, providerState);
+    const journal = refreshJournal;
+    const journalOwned = journal && loginFreeRefreshJournalMatchesState(journal);
+    const resumable =
+      journalOwned && providerModeRestoreSourceIsOwned(current, providerState);
+    if (
+      (!active && !resumable) ||
+      (active && journal && (!journalOwned || !refreshJournalOwnsActiveModel(current, journal)))
+    ) {
       throw new Error(
         "Login-free mode lost ownership of model_provider codex-router; refusing to update it.",
       );
     }
     // Keep the v1 state intact so login-free-disable can still restore the
     // provider and model captured by the older router.
-    next = enabledContents(current);
+    next = enabledContents(resumable ? applyRefreshJournalModel(current, journal) : current);
+    if (resumable) {
+      next = `${replaceRootValueInPlace(next, "model_provider", routerProviderId)}\n`;
+    }
   } else if (providerState) {
-    if (!providerModeStateIsOwned(current, providerState)) {
+    const active = providerModeStateIsOwned(current, providerState);
+    const journal = refreshJournal;
+    const journalOwned = journal && loginFreeRefreshJournalMatchesState(journal);
+    const resumable =
+      journalOwned && providerModeRestoreSourceIsOwned(current, providerState);
+    if (
+      (!active && !resumable) ||
+      (active && journal && (!journalOwned || !refreshJournalOwnsActiveModel(current, journal)))
+    ) {
       throw new Error(
         `Login-free mode lost ownership while model_provider is ${
           rootValue(splitRoot(current).rootLines, "model_provider") || "openai"
         }; refusing to update it.`,
       );
     }
-    const restored = restoreSignedProviderTable(current, providerState);
-    const enabled = enabledContents(restored);
+    const restored = active
+      ? restoreSignedProviderTable(current, providerState)
+      : current;
+    const enabled = enabledContents(
+      resumable ? applyRefreshJournalModel(restored, journal) : restored,
+    );
     if (providerState.mode === "root-openai") {
       // Current Codex Desktop builds reserve the built-in `openai` provider id,
       // so an explicit auth-free [model_providers.openai] table makes the whole
@@ -1456,15 +1561,52 @@ if (command === "enable") {
     if (rootValue(splitRoot(contents).rootLines, "model") === loginFreeModel) {
       return contents;
     }
-    return `${replaceRootValue(contents, "model", loginFreeModel)}\n`;
+    return `${replaceRootValueInPlace(contents, "model", loginFreeModel)}\n`;
   };
-  const restoreDisabledLoginFree = process.argv.includes("--restore-disabled-login-free");
   const state = readProviderModeState();
+  if (
+    restoreDisabledLoginFree &&
+    refreshJournal &&
+    loginFreeModel !== refreshJournal.canonicalModel
+  ) {
+    throw new Error(
+      "The login-free refresh model does not match its protected journal; refusing recovery.",
+    );
+  }
+  const journalOwned =
+    refreshJournal && loginFreeRefreshJournalMatchesState(refreshJournal);
+  if (
+    restoreDisabledLoginFree &&
+    (!journalOwned ||
+      !state ||
+      providerModeStateIsOwned(current, state) ||
+      !providerModeRestoreSourceIsOwned(defaultRestored, state))
+  ) {
+    throw new Error(
+      "The login-free refresh no longer owns its inactive restore source; refusing recovery.",
+    );
+  }
+  if (
+    completeLoginFreeRefresh &&
+    (!journalOwned ||
+      !state ||
+      !providerModeStateIsOwned(current, state) ||
+      !refreshJournalOwnsActiveModel(current, refreshJournal) ||
+      !refreshJournalOwnsModel(loginFreeModel, refreshJournal))
+  ) {
+    throw new Error(
+      "The login-free refresh no longer owns its provider state or model route; refusing completion.",
+    );
+  }
   if (state?.version === 1) {
     const active = providerModeStateIsOwned(current, state);
+    const resumable =
+      restoreDisabledLoginFree &&
+      journalOwned &&
+      providerModeRestoreSourceIsOwned(defaultRestored, state);
     if (
       !active &&
-      !(restoreDisabledLoginFree && providerModeRestoreSourceIsOwned(defaultRestored, state))
+      !resumable
     ) {
       throw new Error(
         "Login-free mode lost ownership of model_provider codex-router; refusing to update it.",
@@ -1477,9 +1619,13 @@ if (command === "enable") {
     if (!active) next = `${replaceRootValue(next, "model_provider", routerProviderId)}\n`;
   } else if (state) {
     const active = providerModeStateIsOwned(current, state);
+    const resumable =
+      restoreDisabledLoginFree &&
+      journalOwned &&
+      providerModeRestoreSourceIsOwned(defaultRestored, state);
     if (
       !active &&
-      !(restoreDisabledLoginFree && providerModeRestoreSourceIsOwned(defaultRestored, state))
+      !resumable
     ) {
       throw new Error(
         `Login-free mode lost ownership while model_provider is ${currentProvider}; refusing to update it.`,
@@ -1567,6 +1713,18 @@ if (command === "enable") {
   const signedState = readSignedProviderModeState();
   const { rootLines } = splitRoot(current);
   const currentProvider = rootValue(rootLines, "model_provider");
+  if (parkLoginFreeRefresh) {
+    if (
+      !state ||
+      !loginFreeRefreshJournalMatchesState(refreshJournal) ||
+      !providerModeStateIsOwned(current, state) ||
+      !refreshJournalOwnsActiveModel(current, refreshJournal)
+    ) {
+      throw new Error(
+        "The login-free refresh no longer owns its provider state or model route; refusing to park it.",
+      );
+    }
+  }
   let restored = current;
   if (command === "signed-disable") {
     if (!signedState) {

@@ -3,6 +3,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { SOURCE_ROOT } from "./paths.mjs";
+import {
+  beginLoginFreeRefresh,
+  clearLoginFreeRefreshJournal,
+  readLoginFreeRefreshJournal,
+} from "./login-free-refresh-journal.mjs";
+import { withLoginFreeRefreshLock } from "./login-free-refresh-lock.mjs";
 import { nativeAliasFor, readNativeAliases } from "./native-alias.mjs";
 
 function nodeRunner(script, args) {
@@ -52,6 +58,7 @@ function restoreTransport(
         checked(run, "config-manager.mjs", [
           "login-free-enable",
           loginFreeDisplayModel,
+          "--complete-login-free-refresh",
         ]);
       } catch (restoreError) {
         throw new AggregateError(
@@ -71,15 +78,29 @@ function restoreTransport(
     checked(run, "config-manager.mjs", [
       "login-free-enable",
       aliasFor(loginFreeModel) || loginFreeModel,
+      "--complete-login-free-refresh",
     ]);
   }
 }
 
-export function refreshCatalog({
+async function refreshCatalogUnlocked({
   run = nodeRunner,
   aliases = readNativeAliases,
   aliasFor = nativeAliasFor,
+  journal = {
+    begin: beginLoginFreeRefresh,
+    clear: clearLoginFreeRefreshJournal,
+    read: readLoginFreeRefreshJournal,
+  },
 } = {}) {
+  // A killed refresh can leave the exact direct provider source parked while
+  // the login-free provider state is intentionally retained. Only the private
+  // journal written by this operation makes that otherwise ambiguous pair
+  // recoverable; config-manager keeps all no-journal cases fail-closed.
+  const pendingJournal = journal.read();
+  if (pendingJournal) {
+    checked(run, "config-manager.mjs", ["enable", "--resume-login-free-refresh"]);
+  }
   const statusResult = checked(run, "config-manager.mjs", ["status"]);
   let status;
   try {
@@ -90,34 +111,54 @@ export function refreshCatalog({
   const routed = status.mode === "router";
   const signed = status.signed_routing === true;
   const loginFree = status.login_free === true;
+  if (pendingJournal && !loginFree) {
+    throw new Error("The pending login-free refresh could not restore its managed transport.");
+  }
   const transport = {
     signed,
     loginFree,
-    loginFreeDisplayModel: loginFree ? status.model : undefined,
+    loginFreeDisplayModel: loginFree
+      ? pendingJournal?.displayModel || status.model
+      : undefined,
     loginFreeModel: loginFree
-      ? aliases()[status.model] || status.model
+      ? pendingJournal?.canonicalModel || aliases()[status.model] || status.model
       : undefined,
   };
   let restoreNeeded = false;
   let catalogResult;
   try {
     if (routed) {
+      if (loginFree) {
+        journal.begin({
+          canonicalModel: transport.loginFreeModel,
+          displayModel: transport.loginFreeDisplayModel,
+        });
+      }
       checked(run, "config-manager.mjs", [
         "disable",
         ...(loginFree ? ["--preserve-login-free-state"] : []),
+        ...(loginFree ? ["--park-login-free-refresh"] : []),
       ]);
       restoreNeeded = true;
+      if (
+        loginFree &&
+        process.env.MODEL_ROUTER_TEST_EXIT_AFTER_LOGIN_FREE_PARK === "1"
+      ) {
+        process.exit(86);
+      }
     }
     catalogResult = checked(run, "catalog.mjs", ["--refresh-native"]);
     if (restoreNeeded) {
       restoreTransport(run, transport, aliasFor);
       restoreNeeded = false;
+      if (loginFree) journal.clear();
     }
   } catch (error) {
     if (restoreNeeded) {
       try {
         restoreTransport(run, transport, aliasFor);
         restoreNeeded = false;
+        if (loginFree) journal.clear();
       } catch (restoreError) {
         throw new AggregateError(
           [error, restoreError],
@@ -130,15 +171,23 @@ export function refreshCatalog({
   return { catalogOutput: catalogResult.stdout || "" };
 }
 
-function main() {
-  const { catalogOutput } = refreshCatalog();
+export async function refreshCatalog({
+  lock = withLoginFreeRefreshLock,
+  lockOptions,
+  ...options
+} = {}) {
+  return lock(() => refreshCatalogUnlocked(options), lockOptions);
+}
+
+async function main() {
+  const { catalogOutput } = await refreshCatalog();
   if (catalogOutput) process.stdout.write(catalogOutput);
   process.stdout.write("Native and external model catalogs refreshed. Fully quit and reopen Codex.\n");
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
-    main();
+    await main();
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     process.exit(1);

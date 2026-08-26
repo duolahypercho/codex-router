@@ -155,6 +155,85 @@ test("POSIX updates republish every installed companion client", () => {
   assert.match(windows, /\$Target -ne "gemini"[\s\S]*gemini-models\.json[\s\S]*gemini-config-manager\.mjs install/);
 });
 
+test("both installers preflight pending login-free refreshes before catalog publication", () => {
+  const posix = withoutComments(readScript("bin", "install"));
+  assert.ok(
+    posix.indexOf("login-free-refresh-journal.mjs assert-clear") <
+      posix.indexOf("node src/catalog.mjs"),
+  );
+  const windows = withoutComments(readScript("install.ps1"));
+  assert.ok(
+    windows.indexOf("login-free-refresh-journal.mjs assert-clear") <
+      windows.indexOf("src/catalog.mjs"),
+  );
+  const doctor = readScript("src", "doctor.mjs");
+  assert.match(doctor, /path\.join\(SOURCE_ROOT, "bin", "install"\)/);
+  assert.match(doctor, /path\.join\(SOURCE_ROOT, "install\.ps1"\)/);
+});
+
+test("POSIX installer refuses a pending login-free refresh before catalog publication", {
+  skip: process.platform === "win32" || !POSIX_SHELL_AVAILABLE,
+}, () => {
+  const testRoot = mkdtempSync(path.join(os.tmpdir(), "codex-router-pending-install-"));
+  const runtimeDir = path.join(testRoot, "bin");
+  const stateDir = path.join(testRoot, "state");
+  const callLog = path.join(testRoot, "calls.log");
+  const nodeWrapper = path.join(runtimeDir, "node");
+  try {
+    mkdirSync(runtimeDir, { recursive: true });
+    mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+    writeFileSync(
+      path.join(stateDir, "login-free-refresh.json"),
+      `${JSON.stringify({
+        version: 1,
+        phase: "refreshing",
+        operationId: "1".repeat(32),
+        providerStateVersion: 1,
+        ownershipId: null,
+        providerStateSha256: "2".repeat(64),
+        canonicalModel: "external/model",
+        displayModel: "native-alias",
+      })}\n`,
+      { mode: 0o600 },
+    );
+    writeFileSync(
+      nodeWrapper,
+      `#!/bin/sh
+printf '%s\n' "$*" >>"$CODEX_ROUTER_TEST_CALL_LOG"
+case "\${1:-}" in
+  -e) exec "$CODEX_ROUTER_TEST_REAL_NODE" "$@" ;;
+  src/install-plan.mjs) [ "\${2:-}" = status ] && printf 'skip\n'; exit 0 ;;
+  src/login-free-refresh-journal.mjs) exec "$CODEX_ROUTER_TEST_REAL_NODE" "$@" ;;
+  *) exit 0 ;;
+esac
+`,
+      { mode: 0o755 },
+    );
+    const result = spawnSync(path.join(root, "bin", "install"), [], {
+      cwd: root,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        PATH: `${runtimeDir}:${process.env.PATH || "/usr/bin:/bin"}`,
+        HOME: testRoot,
+        CODEX_HOME: path.join(testRoot, "codex-home"),
+        CODEX_ROUTER_STATE_DIR: stateDir,
+        MODEL_ROUTER_STATE_DIR: stateDir,
+        CODEX_ROUTER_TEST_CALL_LOG: callLog,
+        CODEX_ROUTER_TEST_REAL_NODE: process.execPath,
+      },
+    });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /rerun bin\/refresh-catalog/);
+    const calls = readFileSync(callLog, "utf8");
+    assert.match(calls, /login-free-refresh-journal\.mjs assert-clear/);
+    assert.doesNotMatch(calls, /src\/catalog\.mjs/);
+
+  } finally {
+    rmSync(testRoot, { recursive: true, force: true });
+  }
+});
+
 test("Homebrew force-deps fails early with the package-manager repair command", { skip: !POSIX_SHELL_AVAILABLE }, () => {
   const result = spawnSync("sh", [path.join(root, "bin", "install"), "--force-deps"], {
     encoding: "utf8",

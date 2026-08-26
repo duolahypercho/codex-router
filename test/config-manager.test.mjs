@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import os from "node:os";
@@ -737,6 +738,51 @@ base_url = "https://rollback.invalid/v1"
   }
 });
 
+test("inactive login-free state without a refresh journal never auto-resumes", () => {
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), "codex-router-login-free-no-journal-"));
+  const stateDir = path.join(codexHome, "router-state");
+  const configPath = path.join(codexHome, "config.toml");
+  const providerModePath = path.join(stateDir, "codex-provider-mode.json");
+  writeFileSync(
+    configPath,
+    `model = "native-before-interruption"
+model_provider = "custom"
+
+[model_providers.custom]
+name = "Direct provider"
+base_url = "https://direct.invalid/v1"
+`,
+    { mode: 0o600 },
+  );
+
+  try {
+    run("enable", codexHome, stateDir);
+    run("login-free-enable", codexHome, stateDir, ["external/selected-model"]);
+    run("disable", codexHome, stateDir, ["--preserve-login-free-state"]);
+    const parkedConfig = readFileSync(configPath, "utf8");
+    const parkedState = readFileSync(providerModePath, "utf8");
+
+    assert.throws(
+      () => run("enable", codexHome, stateDir),
+      /lost ownership/,
+    );
+    assert.throws(
+      () => run(
+        "login-free-enable",
+        codexHome,
+        stateDir,
+        ["external/selected-model", "--restore-disabled-login-free"],
+      ),
+      /No login-free catalog refresh is pending/,
+    );
+    assert.equal(readFileSync(configPath, "utf8"), parkedConfig);
+    assert.equal(readFileSync(providerModePath, "utf8"), parkedState);
+    assert.equal(existsSync(path.join(stateDir, "login-free-refresh.json")), false);
+  } finally {
+    rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
 test("login-free disable still restores a valid v1 provider-mode snapshot", () => {
   const codexHome = mkdtempSync(path.join(os.tmpdir(), "codex-router-login-free-v1-"));
   const stateDir = path.join(codexHome, "router-state");
@@ -853,6 +899,136 @@ model_provider = "openai"
     assert.equal(disabled.model_provider, "openai");
     assert.equal(disabled.login_free, false);
     assert.equal(disabled.model, "gpt-5.6-sol");
+  } finally {
+    rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
+test("root-openai login-free refresh journal recovers a killed park window", () => {
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), "codex-router-login-free-openai-refresh-"));
+  const stateDir = path.join(codexHome, "router-state");
+  const configPath = path.join(codexHome, "config.toml");
+  const providerModePath = path.join(stateDir, "codex-provider-mode.json");
+  const journalPath = path.join(stateDir, "login-free-refresh.json");
+  const codexStub = writeCatalogCodexStub(codexHome);
+  const original = `model = "gpt-5.6-sol"
+model_provider = "openai"
+`;
+  writeFileSync(configPath, original, { mode: 0o600 });
+  const environment = {
+    CODEX_BIN: codexStub,
+    CODEX_HOME: codexHome,
+    CODEX_ROUTER_PORT: "46192",
+    CODEX_ROUTER_STATE_DIR: stateDir,
+    MODEL_ROUTER_STATE_DIR: stateDir,
+    MODEL_ROUTER_TARGET: "codex",
+  };
+  const refresh = (extraEnv = {}) => spawnSync(
+    process.execPath,
+    [path.join(root, "src", "refresh-catalog.mjs")],
+    {
+      cwd: root,
+      encoding: "utf8",
+      env: { ...process.env, ...environment, ...extraEnv },
+    },
+  );
+
+  try {
+    run("enable", codexHome, stateDir, [], environment);
+    writeFileSync(
+      path.join(stateDir, "enabled-providers.json"),
+      `${JSON.stringify({ version: 1, providers: ["deepseek"] })}\n`,
+      { mode: 0o600 },
+    );
+    writeFileSync(path.join(stateDir, "deepseek-api-key.secret"), "test-key\n", {
+      mode: 0o600,
+    });
+    run("login-free-enable", codexHome, stateDir, ["gpt-5.6-sol"], environment);
+    const activeState = readFileSync(providerModePath, "utf8");
+
+    const killed = refresh({ MODEL_ROUTER_TEST_EXIT_AFTER_LOGIN_FREE_PARK: "1" });
+    assert.equal(killed.status, 86);
+    assert.equal(privateFileIsProtected(journalPath), true);
+    const journal = JSON.parse(readFileSync(journalPath, "utf8"));
+    assert.equal(journal.phase, "refreshing");
+    assert.equal(journal.providerStateVersion, 1);
+    assert.equal(journal.ownershipId, null);
+    assert.equal(readFileSync(providerModePath, "utf8"), activeState);
+    assert.equal(run("status", codexHome, stateDir, [], environment).login_free, false);
+
+    const parkedConfig = readFileSync(configPath, "utf8");
+    const parkedJournal = readFileSync(journalPath, "utf8");
+    for (const [command, args] of [
+      ["enable", []],
+      ["disable", []],
+      ["login-free-disable", []],
+      ["login-free-enable", ["different/route"]],
+    ]) {
+      assert.throws(
+        () => run(command, codexHome, stateDir, args, environment),
+        /rerun bin\/refresh-catalog/,
+      );
+      assert.equal(readFileSync(configPath, "utf8"), parkedConfig);
+      assert.equal(readFileSync(providerModePath, "utf8"), activeState);
+      assert.equal(readFileSync(journalPath, "utf8"), parkedJournal);
+    }
+
+    run(
+      "enable",
+      codexHome,
+      stateDir,
+      ["--resume-login-free-refresh"],
+      environment,
+    );
+    writeFileSync(
+      path.join(stateDir, "native-aliases.json"),
+      `${JSON.stringify({
+        version: 1,
+        aliases: { "fresh-native-alias": "gpt-5.6-sol" },
+      })}\n`,
+      { mode: 0o600 },
+    );
+    const aliased = run(
+      "login-free-enable",
+      codexHome,
+      stateDir,
+      ["fresh-native-alias", "--complete-login-free-refresh"],
+      environment,
+    );
+    assert.equal(aliased.model, "fresh-native-alias");
+    assert.equal(aliased.model_provider, "codex-router");
+    assert.equal(readFileSync(providerModePath, "utf8"), activeState);
+    assert.equal(readFileSync(journalPath, "utf8"), parkedJournal);
+    const activeAliasedConfig = readFileSync(configPath, "utf8");
+    for (const command of ["disable", "login-free-disable"]) {
+      assert.throws(
+        () => run(command, codexHome, stateDir, [], environment),
+        /rerun bin\/refresh-catalog/,
+      );
+      assert.equal(readFileSync(configPath, "utf8"), activeAliasedConfig);
+      assert.equal(readFileSync(providerModePath, "utf8"), activeState);
+      assert.equal(readFileSync(journalPath, "utf8"), parkedJournal);
+    }
+
+    const abandonedLock = path.join(
+      stateDir,
+      "login-free-refresh-operation.lock",
+    );
+    if (!existsSync(abandonedLock)) mkdirSync(abandonedLock, { mode: 0o700 });
+    const staleLockTime = new Date(Date.now() - 11 * 60_000);
+    utimesSync(abandonedLock, staleLockTime, staleLockTime);
+    const completed = refresh();
+    assert.equal(completed.status, 0, completed.stderr);
+    assert.equal(existsSync(journalPath), false);
+    assert.equal(readFileSync(providerModePath, "utf8"), activeState);
+    assert.match(readFileSync(configPath, "utf8"), /model_providers\.codex-router/);
+
+    run("login-free-disable", codexHome, stateDir, [], environment);
+    const restored = readFileSync(configPath, "utf8");
+    assert.match(restored, /^model = "gpt-5\.6-sol"$/m);
+    assert.match(restored, /^model_provider = "openai"$/m);
+    assert.match(restored, /# BEGIN codex-router-managed/);
+    assert.equal(existsSync(providerModePath), false);
   } finally {
     rmSync(codexHome, { recursive: true, force: true });
   }
@@ -1692,21 +1868,105 @@ ${originalProviderSection}`,
     assert.doesNotMatch(activeConfig, /REFRESH_LOGIN_FREE_SECRET|direct\.invalid/);
     assert.match(activeConfig, /requires_openai_auth = false/);
 
-    run(
-      "disable",
-      codexHome,
-      stateDir,
-      ["--preserve-login-free-state"],
-      environment,
+    const killed = spawnSync(
+      process.execPath,
+      [path.join(root, "src", "refresh-catalog.mjs")],
+      {
+        cwd: root,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          ...environment,
+          MODEL_ROUTER_TEST_EXIT_AFTER_LOGIN_FREE_PARK: "1",
+        },
+      },
     );
-    assert.equal(existsSync(providerModePath), true);
-    run(
-      "login-free-enable",
-      codexHome,
-      stateDir,
-      ["gpt-5.6-sol", "--restore-disabled-login-free"],
-      environment,
+    assert.equal(killed.status, 86);
+    const journalPath = path.join(stateDir, "login-free-refresh.json");
+    assert.equal(existsSync(journalPath), true);
+    assert.equal(privateFileIsProtected(journalPath), true);
+    const journal = JSON.parse(readFileSync(journalPath, "utf8"));
+    assert.equal(journal.phase, "refreshing");
+    assert.equal(journal.providerStateVersion, 3);
+    assert.match(journal.ownershipId, /^[0-9a-f]{32}$/);
+    assert.equal(journal.canonicalModel, "gpt-5.6-sol");
+    assert.doesNotMatch(JSON.stringify(journal), /REFRESH_LOGIN_FREE_SECRET|direct\.invalid/);
+    assert.equal(readFileSync(providerModePath, "utf8"), activeState);
+    const parkedConfig = readFileSync(configPath, "utf8");
+    assert.match(parkedConfig, /REFRESH_LOGIN_FREE_SECRET/);
+    const parkedJournal = readFileSync(journalPath, "utf8");
+    assert.throws(
+      () => run(
+        "login-free-enable",
+        codexHome,
+        stateDir,
+        ["different/route", "--restore-disabled-login-free"],
+        environment,
+      ),
+      /does not match its protected journal/,
     );
+    assert.equal(readFileSync(configPath, "utf8"), parkedConfig);
+    assert.equal(readFileSync(providerModePath, "utf8"), activeState);
+    assert.equal(readFileSync(journalPath, "utf8"), parkedJournal);
+
+    for (const [command, args] of [
+      ["enable", []],
+      ["disable", []],
+      ["login-free-disable", []],
+      ["login-free-enable", ["different/route"]],
+    ]) {
+      assert.throws(
+        () => run(command, codexHome, stateDir, args, environment),
+        /rerun bin\/refresh-catalog/,
+      );
+      assert.equal(readFileSync(configPath, "utf8"), parkedConfig);
+      assert.equal(readFileSync(providerModePath, "utf8"), activeState);
+      assert.equal(readFileSync(journalPath, "utf8"), parkedJournal);
+    }
+
+    writeFileSync(
+      configPath,
+      readFileSync(configPath, "utf8").replace(
+        'model = "gpt-5.6-sol"',
+        'model = "user-drifted-model"',
+      ),
+      { mode: 0o600 },
+    );
+    const driftedConfig = readFileSync(configPath, "utf8");
+    const driftedState = readFileSync(providerModePath, "utf8");
+    const driftedJournal = readFileSync(journalPath, "utf8");
+    assert.throws(() => refresh(), /lost ownership|no longer owns/i);
+    assert.equal(readFileSync(configPath, "utf8"), driftedConfig);
+    assert.equal(readFileSync(providerModePath, "utf8"), driftedState);
+    assert.equal(readFileSync(journalPath, "utf8"), driftedJournal);
+    writeFileSync(configPath, parkedConfig, { mode: 0o600 });
+
+    writeFileSync(
+      configPath,
+      parkedConfig.replace("REFRESH_LOGIN_FREE_SECRET", "USER_CHANGED_SECRET"),
+      { mode: 0o600 },
+    );
+    const tableDrift = readFileSync(configPath, "utf8");
+    assert.throws(() => refresh(), /lost ownership|no longer owns/i);
+    assert.equal(readFileSync(configPath, "utf8"), tableDrift);
+    assert.equal(readFileSync(providerModePath, "utf8"), driftedState);
+    assert.equal(readFileSync(journalPath, "utf8"), driftedJournal);
+    writeFileSync(configPath, parkedConfig, { mode: 0o600 });
+
+    const changedState = JSON.parse(driftedState);
+    changedState.ownershipId = `${changedState.ownershipId[0] === "0" ? "1" : "0"}${changedState.ownershipId.slice(1)}`;
+    writeFileSync(providerModePath, `${JSON.stringify(changedState, null, 2)}\n`, {
+      mode: 0o600,
+    });
+    const ownershipDrift = readFileSync(providerModePath, "utf8");
+    assert.throws(() => refresh(), /lost ownership|no longer owns/i);
+    assert.equal(readFileSync(configPath, "utf8"), parkedConfig);
+    assert.equal(readFileSync(providerModePath, "utf8"), ownershipDrift);
+    assert.equal(readFileSync(journalPath, "utf8"), driftedJournal);
+    writeFileSync(providerModePath, driftedState, { mode: 0o600 });
+
+    refresh();
+    assert.equal(existsSync(journalPath), false);
     assert.equal(readFileSync(configPath, "utf8"), activeConfig);
     assert.equal(readFileSync(providerModePath, "utf8"), activeState);
 

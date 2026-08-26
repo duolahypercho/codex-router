@@ -113,6 +113,10 @@ export const LITELLM_CONFIG_PATH = path.join(STATE_DIR, "litellm.yaml");
 export const INTERNAL_SECRET_PATH = path.join(STATE_DIR, "internal-secret");
 export const CALLER_SECRET_PATH = path.join(STATE_DIR, "caller-secret");
 export const CODEX_PROVIDER_MODE_PATH = path.join(STATE_DIR, "codex-provider-mode.json");
+export const LOGIN_FREE_REFRESH_JOURNAL_PATH = path.join(
+  STATE_DIR,
+  "login-free-refresh.json",
+);
 export const SIGNED_PROVIDER_MODE_PATH = path.join(STATE_DIR, "signed-provider-mode.json");
 // An opt-in routed default for signed-in Codex. The router owns this small
 // state file, while Codex continues to own the actual config document.

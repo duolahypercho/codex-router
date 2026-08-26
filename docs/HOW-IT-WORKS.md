@@ -139,6 +139,15 @@ selected external model or selects the first model from a connected, enabled
 provider. External routes continue to replace incoming authentication with only
 the chosen provider's credential.
 
+Catalog refresh writes a protected operation journal before it temporarily
+parks this login-free transport. If the process or host stops in that window,
+rerunning `bin/refresh-catalog` resumes only when the journal still matches the
+exact provider state, provider tree, and model route. Ordinary config changes,
+install, and doctor repair refuse while that journal is pending and name the
+refresh command as the recovery path. State plus an inactive configuration
+without that journal remains ambiguous and fails closed; edits made during an
+interrupted refresh are never overwritten.
+
 The managed base URL contains a separate random caller capability. The router
 validates it before reading a model request or contacting any upstream. Codex
 cannot attach an arbitrary router-specific header to the built-in provider, so

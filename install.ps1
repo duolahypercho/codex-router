@@ -395,11 +395,6 @@ try {
 
   & node src/secret.mjs ensure
   if ($LASTEXITCODE -ne 0) { throw "Local router-key setup failed." }
-  if ($AdoptNativeCatalog) {
-    & node src/native-catalog-source.mjs prepare-from-config | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw "Existing native model-catalog adoption failed." }
-    $AdoptionPending = $true
-  }
   # The state root is read by both arms below, so it is computed once rather
   # than inside the Codex branch: the harness arm needs it to find an existing
   # native catalog, and the republish step needs it to find the harness's own.
@@ -408,6 +403,16 @@ try {
     elseif ($env:KIMI_CODEX_STATE_DIR) { $env:KIMI_CODEX_STATE_DIR }
     elseif ($env:CODEX_HOME) { Join-Path $env:CODEX_HOME "codex-router" }
     else { Join-Path $HOME ".codex\codex-router" }
+  # Only refresh-catalog can safely resume the provider-state/journal pair left
+  # by an interrupted login-free catalog refresh. Refuse install and doctor
+  # repair before either can publish another catalog and report false recovery.
+  & node src/login-free-refresh-journal.mjs assert-clear
+  if ($LASTEXITCODE -ne 0) { throw "Finish the pending login-free catalog refresh before installing or repairing." }
+  if ($AdoptNativeCatalog) {
+    & node src/native-catalog-source.mjs prepare-from-config | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "Existing native model-catalog adoption failed." }
+    $AdoptionPending = $true
+  }
   # `-s` in the POSIX scripts: present *and* non-empty. A zero-byte state file
   # is a half-written one, and treating it as real publishes an empty catalog.
   function Test-NonEmptyFile([string] $Path) {

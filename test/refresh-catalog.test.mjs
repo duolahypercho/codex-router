@@ -3,6 +3,13 @@ import test from "node:test";
 
 import { refreshCatalog } from "../src/refresh-catalog.mjs";
 
+const noJournal = {
+  begin() {},
+  clear() {},
+  read() { return undefined; },
+};
+const noLock = (operation) => operation();
+
 function recordingRunner({ signed = true, loginFree = false, model, failAt } = {}) {
   const calls = [];
   return {
@@ -34,9 +41,9 @@ function recordingRunner({ signed = true, loginFree = false, model, failAt } = {
   };
 }
 
-test("refresh orchestration restores signed routing and republishes the routed catalog", () => {
+test("refresh orchestration restores signed routing and republishes the routed catalog", async () => {
   const runner = recordingRunner();
-  const result = refreshCatalog({ run: runner.run });
+  const result = await refreshCatalog({ run: runner.run, lock: noLock });
   assert.deepEqual(runner.calls, [
     ["config-manager.mjs", ["status"]],
     ["config-manager.mjs", ["disable"]],
@@ -48,10 +55,10 @@ test("refresh orchestration restores signed routing and republishes the routed c
   assert.equal(result.catalogOutput, '{"models":1}\n');
 });
 
-test("refresh orchestration restores the active transport after catalog failure", () => {
+test("refresh orchestration restores the active transport after catalog failure", async () => {
   const runner = recordingRunner({ failAt: 3 });
-  assert.throws(
-    () => refreshCatalog({ run: runner.run }),
+  await assert.rejects(
+    refreshCatalog({ run: runner.run, lock: noLock }),
     /catalog\.mjs exited with status 75.*forced catalog failure/s,
   );
   assert.deepEqual(runner.calls, [
@@ -64,9 +71,9 @@ test("refresh orchestration restores the active transport after catalog failure"
   ]);
 });
 
-test("ordinary routed refresh also republishes external models after restore", () => {
+test("ordinary routed refresh also republishes external models after restore", async () => {
   const runner = recordingRunner({ signed: false });
-  refreshCatalog({ run: runner.run });
+  await refreshCatalog({ run: runner.run, lock: noLock });
   assert.deepEqual(runner.calls, [
     ["config-manager.mjs", ["status"]],
     ["config-manager.mjs", ["disable"]],
@@ -76,20 +83,25 @@ test("ordinary routed refresh also republishes external models after restore", (
   ]);
 });
 
-test("refresh orchestration restores identity-preserving login-free mode and its model", () => {
+test("refresh orchestration restores identity-preserving login-free mode and its model", async () => {
   const runner = recordingRunner({
     signed: false,
     loginFree: true,
     model: "gpt-5.6-sol",
   });
-  refreshCatalog({
+  await refreshCatalog({
     run: runner.run,
     aliases: () => ({ "gpt-5.6-sol": "deepseek/deepseek-v4-pro" }),
     aliasFor: (slug) => slug === "deepseek/deepseek-v4-pro" ? "gpt-5.6-terra" : undefined,
+    journal: noJournal,
+    lock: noLock,
   });
   assert.deepEqual(runner.calls, [
     ["config-manager.mjs", ["status"]],
-    ["config-manager.mjs", ["disable", "--preserve-login-free-state"]],
+    [
+      "config-manager.mjs",
+      ["disable", "--preserve-login-free-state", "--park-login-free-refresh"],
+    ],
     ["catalog.mjs", ["--refresh-native"]],
     [
       "config-manager.mjs",
@@ -100,6 +112,54 @@ test("refresh orchestration restores identity-preserving login-free mode and its
       ],
     ],
     ["catalog.mjs", []],
-    ["config-manager.mjs", ["login-free-enable", "gpt-5.6-terra"]],
+    [
+      "config-manager.mjs",
+      ["login-free-enable", "gpt-5.6-terra", "--complete-login-free-refresh"],
+    ],
+  ]);
+});
+
+test("pending refresh resumes and completes only with an alias for the same canonical route", async () => {
+  const runner = recordingRunner({
+    signed: false,
+    loginFree: true,
+    model: "old-alias",
+  });
+  const pending = {
+    canonicalModel: "deepseek/deepseek-v4-pro",
+    displayModel: "old-alias",
+  };
+  await refreshCatalog({
+    run: runner.run,
+    aliases: () => ({ "old-alias": pending.canonicalModel }),
+    aliasFor: (slug) => slug === pending.canonicalModel ? "fresh-alias" : undefined,
+    journal: {
+      begin() {},
+      clear() {},
+      read() { return pending; },
+    },
+    lock: noLock,
+  });
+  assert.deepEqual(runner.calls, [
+    ["config-manager.mjs", ["enable", "--resume-login-free-refresh"]],
+    ["config-manager.mjs", ["status"]],
+    [
+      "config-manager.mjs",
+      ["disable", "--preserve-login-free-state", "--park-login-free-refresh"],
+    ],
+    ["catalog.mjs", ["--refresh-native"]],
+    [
+      "config-manager.mjs",
+      [
+        "login-free-enable",
+        pending.canonicalModel,
+        "--restore-disabled-login-free",
+      ],
+    ],
+    ["catalog.mjs", []],
+    [
+      "config-manager.mjs",
+      ["login-free-enable", "fresh-alias", "--complete-login-free-refresh"],
+    ],
   ]);
 });
