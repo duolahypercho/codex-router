@@ -54,18 +54,70 @@ test("redirects are same-origin, bounded, and revalidated at every hop", async (
 
 test("cross-origin redirects cannot carry discovery credentials", async () => {
   let calls = 0;
+  const secret = "Bearer redirect-secret";
   await assert.rejects(
     fetchUntrustedModelCatalog("https://provider.example.test/models", {
-      headers: { Authorization: "Bearer secret" },
+      headers: { Authorization: secret },
       resolveHost: async () => [PUBLIC_IP],
       fetchImpl: async () => {
         calls += 1;
         return new Response(null, { status: 302, headers: { location: "https://other.example.test/models" } });
       },
     }),
-    /cross-origin redirect/,
+    (error) => {
+      assert.match(error.message, /cross-origin redirect/);
+      assert.doesNotMatch(error.message, /redirect-secret/);
+      return true;
+    },
   );
   assert.equal(calls, 1);
+});
+
+test("credential-bearing public discovery requires HTTPS before sending a request", async () => {
+  let calls = 0;
+  await assert.rejects(
+    fetchUntrustedModelCatalog("http://provider.example.test/models", {
+      headers: { Authorization: "Bearer plaintext-secret" },
+      resolveHost: async () => [PUBLIC_IP],
+      fetchImpl: async () => {
+        calls += 1;
+        return jsonResponse({ data: [] });
+      },
+    }),
+    (error) => {
+      assert.match(error.message, /requires HTTPS/);
+      assert.doesNotMatch(error.message, /plaintext-secret/);
+      return true;
+    },
+  );
+  assert.equal(calls, 0);
+
+  const publicResult = await fetchUntrustedModelCatalog("http://provider.example.test/models", {
+    resolveHost: async () => [PUBLIC_IP],
+    fetchImpl: async () => jsonResponse({ data: [{ id: "public/no-credential" }] }),
+  });
+  assert.deepEqual(publicResult.data, [{ id: "public/no-credential" }]);
+});
+
+test("proxy transports that independently resolve the provider fail before credentials leave", async () => {
+  let calls = 0;
+  await assert.rejects(
+    fetchUntrustedModelCatalog("https://provider.example.test/models", {
+      headers: { Authorization: "Bearer proxy-secret" },
+      resolveHost: async () => [PUBLIC_IP],
+      proxyResolvesDestination: true,
+      fetchImpl: async () => {
+        calls += 1;
+        return jsonResponse({ data: [] });
+      },
+    }),
+    (error) => {
+      assert.match(error.message, /proxy transport.*independently resolves/);
+      assert.doesNotMatch(error.message, /proxy-secret/);
+      return true;
+    },
+  );
+  assert.equal(calls, 0);
 });
 
 test("catalog bodies are bounded before JSON parsing and provider errors do not echo credentials", async () => {
@@ -121,6 +173,7 @@ test("the response schema has bounded records and safe model identities", async 
 test("explicitly configured private providers remain available", async () => {
   const result = await fetchUntrustedModelCatalog("http://127.0.0.1:8000/models", {
     allowPrivate: true,
+    headers: { Authorization: "Bearer local-only-secret" },
     fetchImpl: async () => jsonResponse({ data: [{ id: "local/model" }] }),
   });
   assert.deepEqual(result.data, [{ id: "local/model" }]);
@@ -134,11 +187,17 @@ test("the real discovery request pins the validated DNS answer", async () => {
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   try {
     const port = server.address().port;
+    let resolutions = 0;
     const result = await fetchUntrustedModelCatalog(`http://discovery.test:${port}/models`, {
       allowPrivate: true,
-      resolveHost: async () => ["127.0.0.1"],
+      proxyResolvesDestination: false,
+      resolveHost: async () => {
+        resolutions += 1;
+        return resolutions === 1 ? ["127.0.0.1"] : ["169.254.169.254"];
+      },
     });
     assert.deepEqual(result.data, [{ id: "local/pinned" }]);
+    assert.equal(resolutions, 1, "the transport performed an unpinned second DNS lookup");
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }

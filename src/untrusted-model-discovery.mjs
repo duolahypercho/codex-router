@@ -1,7 +1,7 @@
 import { promises as dns } from "node:dns";
 import net from "node:net";
 
-import { Agent, EnvHttpProxyAgent, fetch as undiciFetch } from "undici";
+import { Agent, fetch as undiciFetch } from "undici";
 
 import { environmentHttpProxyConfigured } from "./proxy-environment.mjs";
 
@@ -31,6 +31,19 @@ const PRIVATE_IPV4_RANGES = [
 ];
 
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+const CREDENTIAL_HEADER_PATTERN = /(?:^|[-_])(auth|authorization|api[-_]?key|key|token|secret|credential|cookie|password|session|signature)(?:$|[-_])/i;
+
+function headerEntries(headers) {
+  if (headers instanceof Headers) return [...headers.entries()];
+  if (Array.isArray(headers)) return headers;
+  return Object.entries(headers || {});
+}
+
+function credentialBearingHeaders(headers) {
+  return headerEntries(headers).some(([name, value]) => (
+    CREDENTIAL_HEADER_PATTERN.test(String(name || "").toLowerCase()) && String(value ?? "").length > 0
+  ));
+}
 
 function ipv4ToInteger(value) {
   const parts = value.split(".").map(Number);
@@ -109,6 +122,7 @@ function endpointOrigin(url) {
 
 export async function validateDiscoveryUrl(value, {
   allowPrivate = false,
+  credentialBearing = false,
   expectedOrigin,
   resolveHost = lookupHost,
 } = {}) {
@@ -129,6 +143,13 @@ export async function validateDiscoveryUrl(value, {
   if (!allowPrivate && (isPrivateHostname(parsed.hostname) || addresses.some(isPrivateAddress))) {
     throw new Error("Model discovery refused a private or loopback endpoint.");
   }
+  if (
+    credentialBearing &&
+    parsed.protocol !== "https:" &&
+    addresses.some((address) => !isPrivateAddress(address))
+  ) {
+    throw new Error("Credential-bearing model discovery requires HTTPS for non-private endpoints.");
+  }
   return { url: parsed, origin, addresses };
 }
 
@@ -138,15 +159,7 @@ function pinnedLookup(hostname, addresses, targetHostname) {
   return (requested, options, callback) => {
     const requestedHost = String(requested || "").toLowerCase().replace(/^\[|\]$/g, "");
     if (requestedHost !== target) {
-      // An explicitly enabled proxy may need to resolve its own host. That
-      // host is outside the provider trust decision and must use the normal
-      // resolver; direct requests to the provider stay pinned below.
-      dns.lookup(requested, options || {})
-        .then((result) => {
-          if (options?.all) callback(null, result);
-          else callback(null, result.address, result.family);
-        })
-        .catch((error) => callback(error));
+      callback(new Error("Model discovery transport requested an unvalidated hostname."));
       return;
     }
     const family = Number(options?.family) || 0;
@@ -166,13 +179,11 @@ function pinnedLookup(hostname, addresses, targetHostname) {
 }
 
 function createPinnedDispatcher({ url, addresses }) {
-  const options = {
+  return new Agent({
     connect: {
       lookup: pinnedLookup(url.hostname, addresses, url.hostname),
     },
-  };
-  const Dispatcher = environmentHttpProxyConfigured() ? EnvHttpProxyAgent : Agent;
-  return new Dispatcher(options);
+  });
 }
 
 async function closeDispatcher(dispatcher) {
@@ -264,11 +275,13 @@ export async function fetchUntrustedModelCatalog(endpoint, {
   maxRecordBytes = MODEL_DISCOVERY_MAX_RECORD_BYTES,
   maxRedirects = MODEL_DISCOVERY_MAX_REDIRECTS,
   resolveHost = lookupHost,
+  proxyResolvesDestination = fetchImpl === globalThis.fetch && environmentHttpProxyConfigured(),
   acceptNonOk = false,
   validatePayload = true,
 } = {}) {
   if (typeof fetchImpl !== "function") throw new Error("Model discovery requires a fetch implementation.");
-  let current = await validateDiscoveryUrl(endpoint, { allowPrivate, resolveHost });
+  const credentialBearing = credentialBearingHeaders(headers);
+  let current = await validateDiscoveryUrl(endpoint, { allowPrivate, credentialBearing, resolveHost });
   const originalOrigin = current.origin;
   let dispatcher;
   try {
@@ -278,6 +291,14 @@ export async function fetchUntrustedModelCatalog(endpoint, {
       // pinned to the addresses checked above; injected test fetchers remain
       // untouched and receive the same small init object as before.
       const usePinnedFetch = fetchImpl === globalThis.fetch;
+      if (proxyResolvesDestination) {
+        // EnvHttpProxyAgent connects to the proxy and sends the provider
+        // hostname for the proxy to resolve. Its connect.lookup hook therefore
+        // cannot pin the destination address validated above. Refuse the
+        // request rather than treating validation of one address as proof of
+        // the address a separate resolver will actually reach.
+        throw new Error("Model discovery refused a proxy transport that independently resolves the provider destination.");
+      }
       const requestFetch = usePinnedFetch ? undiciFetch : fetchImpl;
       dispatcher = usePinnedFetch ? createPinnedDispatcher(current) : undefined;
       const response = await requestFetch(current.url.toString(), {
@@ -295,6 +316,7 @@ export async function fetchUntrustedModelCatalog(endpoint, {
         if (!location) throw new Error("Provider model discovery returned a redirect without a location.");
         current = await validateDiscoveryUrl(new URL(location, current.url), {
           allowPrivate,
+          credentialBearing,
           expectedOrigin: originalOrigin,
           resolveHost,
         });

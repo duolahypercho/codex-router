@@ -259,7 +259,15 @@ function normalizedEntry(entry, providerId, scope) {
   const contextLengths = entry.contextLengths === undefined ? undefined : contextMap(entry.contextLengths, known);
   if (entry.contextLengths !== undefined && !contextLengths) return undefined;
   const metadata = entry.metadata === undefined ? undefined : metadataMap(entry.metadata, known);
-  if (entry.metadata !== undefined && !metadata) return undefined;
+  if (
+    entry.metadata !== undefined &&
+    (
+      !entry.metadata ||
+      typeof entry.metadata !== "object" ||
+      Array.isArray(entry.metadata) ||
+      (Object.keys(entry.metadata).length > 0 && !metadata)
+    )
+  ) return undefined;
   let modelMetadata;
   if (entry.modelMetadata !== undefined) {
     if (entry.modelMetadata && typeof entry.modelMetadata === "object" && !Array.isArray(entry.modelMetadata)) {

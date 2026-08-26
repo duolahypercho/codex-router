@@ -14,7 +14,7 @@ import {
   modelMetadataFromPreset,
   modelMetadataFromProviderRecord,
 } from "./model-capabilities.mjs";
-import { genericProviderDescriptor } from "./generic-providers.mjs";
+import { genericProviderDiscoverySnapshot } from "./generic-providers.mjs";
 import {
   anonymousModelAllowed,
   CHECKED_IN_MODELS,
@@ -467,39 +467,21 @@ export async function discoverProviderModels(
   };
 }
 
-/**
- * Discover a user-owned generic provider. Built-in provider credentials use
- * provider-credentials.mjs above; generic credentials are supplied by the
- * caller as an already-redacted header map from P02's credential layer.
- */
-function genericProviderIdentityFingerprint(descriptor, headers) {
-  const headerPairs = Object.entries(headers || {})
-    .map(([name, value]) => [String(name), String(value)])
-    .sort(([left], [right]) => left.localeCompare(right));
-  return providerCatalogIdentityFingerprint([
-    "generic",
-    descriptor.id,
-    descriptor.baseUrl,
-    headerPairs,
-  ]);
-}
-
 export async function discoverGenericProviderModels(
   providerId,
   {
     fetchImpl = globalThis.fetch,
-    headers = {},
     timeoutMs = 30_000,
+    resolveHost,
+    proxyResolvesDestination,
     fixture,
     refresh = false,
     cache = true,
     scope,
   } = {},
 ) {
-  const descriptor = genericProviderDescriptor(providerId);
-  if (!descriptor.enabled) throw new Error(`Generic provider ${providerId} is disabled.`);
-  const requestHeaders = { ...descriptor.headers, ...headers };
-  const identityFingerprint = genericProviderIdentityFingerprint(descriptor, requestHeaders);
+  const snapshot = genericProviderDiscoverySnapshot(providerId);
+  const { descriptor, identityFingerprint } = snapshot;
   // Fixtures are test/operator input and must never become a persistent
   // catalog answer. Live generic catalogs use the same bounded, provider- and
   // account-scoped cache as built-in discovery, so opening a dashboard does
@@ -518,17 +500,20 @@ export async function discoverGenericProviderModels(
   } else {
     const payload = usingFixture
       ? (typeof fixture === "string" ? JSON.parse(fixture) : fixture)
-      : await fetchUntrustedModelCatalog(`${descriptor.baseUrl}/models`, {
+      : await snapshot.fetchCatalog({
           fetchImpl,
-          headers: requestHeaders,
           timeoutMs,
-          allowPrivate: descriptor.allowPrivate,
+          resolveHost,
+          proxyResolvesDestination,
         });
     validateModelCatalogPayload(payload);
     discovered = modelIds(payload, descriptor);
     modelMetadata = metadataFromRecords(payload, descriptor);
     fetchedAt = new Date().toISOString();
     if (storeAnswer) {
+      if (genericProviderDiscoverySnapshot(providerId).identityFingerprint !== identityFingerprint) {
+        throw new Error(`Generic provider ${providerId} credentials changed while its model catalog was loading.`);
+      }
       await writeProviderCatalogCache(providerId, {
         discovered,
         modelMetadata,

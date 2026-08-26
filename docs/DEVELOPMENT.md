@@ -25,7 +25,10 @@
 only same-origin redirects with a small hop limit, revalidates each hop, and
 bounds both the response body and individual records. It returns a catalog
 only after the response has the supported list shape; provider error bodies
-are never copied into router errors.
+are never copied into router errors. Credential-bearing public endpoints must
+use HTTPS. Direct requests pin the validated address into the connection; a
+proxy transport that would resolve the provider hostname independently is
+refused because its destination cannot be proven by the router's DNS check.
 
 `src/model-discovery.mjs` and generic-provider discovery are callers of that
 library. Discovery metadata is advisory and cannot set a router request

@@ -42,6 +42,7 @@ const {
 } = await import("../src/provider-credentials.mjs");
 const { LOG_PATH } = await import("../src/paths.mjs");
 const { createSupportBundle } = await import("../src/support-bundle.mjs");
+const { discoverGenericProviderModels } = await import("../src/model-discovery.mjs");
 test.after(() => rmSync(testRoot, { recursive: true, force: true }));
 
 async function listen(server) {
@@ -324,12 +325,21 @@ test("public APIs confine a generic credential to its permitted endpoint", async
       authorization: `Bearer ${secret}`,
     }]);
 
+    const discovery = await discoverGenericProviderModels(providerId, {
+      cache: false,
+      proxyResolvesDestination: false,
+    });
+    assert.deepEqual(discovery.discovered, []);
+    assert.equal(permittedRequests.length, 2);
+    assert.equal(permittedRequests[1].url, "/v1/models");
+    assert.equal(permittedRequests[1].authorization, `Bearer ${secret}`);
+
     await assert.rejects(
       () => requestGenericProvider(providerId, "/redirect"),
       /redirects are disabled/,
     );
     assert.equal(trappedRequests.length, 0, "a redirect received the generic credential");
-    assert.equal(permittedRequests.length, 2);
+    assert.equal(permittedRequests.length, 3);
     assert.ok(permittedRequests.every((request) => request.authorization === `Bearer ${secret}`));
 
     let cliOutput = "";
@@ -342,6 +352,7 @@ test("public APIs confine a generic credential to its permitted endpoint", async
       descriptor: genericProviderDescriptor(providerId),
       listed: listGenericProviders(),
       result,
+      discovery,
       cliOutput,
       credentialStore: readProviderCredentialStore(),
     });

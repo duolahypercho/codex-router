@@ -8,6 +8,7 @@ import { Agent, fetch as undiciFetch } from "undici";
 import { normalizeGenericProviderId } from "./generic-provider-identity.mjs";
 import { GENERIC_PROVIDERS_PATH } from "./paths.mjs";
 import { withAtomicStateLock } from "./atomic-state-lock.mjs";
+import { providerCatalogIdentityFingerprint } from "./model-catalog-cache.mjs";
 import { readProviderCredentialStore } from "./provider-credential-store.mjs";
 import { resolveGenericProviderCredentialReference } from "./provider-credentials.mjs";
 
@@ -443,6 +444,50 @@ function credentialSecret(provider) {
   if (entry.providerId !== provider.id) return undefined;
   if (entry.kind !== "api_key") return undefined;
   return resolveGenericProviderCredentialReference(provider.id, entry.secretRef)?.value;
+}
+
+/**
+ * Capture one credential-bound discovery attempt without exposing its secret.
+ * The returned loader closes over the raw headers while callers receive only
+ * the redacted descriptor and an installation-keyed identity fingerprint.
+ */
+export function genericProviderDiscoverySnapshot(id) {
+  const provider = getGenericProvider(id);
+  if (!provider.enabled) throw new Error(`Generic provider ${provider.id} is disabled.`);
+  const secret = credentialSecret(provider);
+  if (provider.credentialRef && !secret) {
+    throw new Error(`Credential ${provider.credentialRef} is unavailable for generic provider ${provider.id}.`);
+  }
+  const headers = { ...provider.headers };
+  if (secret) headers.Authorization = `Bearer ${secret}`;
+  const headerPairs = Object.entries(headers)
+    .map(([name, value]) => [String(name).toLowerCase(), String(value)])
+    .sort(([left], [right]) => left.localeCompare(right));
+  const identityFingerprint = providerCatalogIdentityFingerprint([
+    "generic",
+    provider.id,
+    provider.baseUrl,
+    provider.adapter,
+    headerPairs,
+  ]);
+  const descriptor = genericProviderDescriptor(provider);
+  return Object.freeze({
+    descriptor,
+    identityFingerprint,
+    fetchCatalog: ({
+      fetchImpl = globalThis.fetch,
+      timeoutMs = 30_000,
+      resolveHost,
+      proxyResolvesDestination,
+    } = {}) => fetchUntrustedModelCatalog(`${provider.baseUrl}/models`, {
+      fetchImpl,
+      headers,
+      timeoutMs,
+      allowPrivate: provider.allowPrivate,
+      ...(resolveHost ? { resolveHost } : {}),
+      ...(proxyResolvesDestination !== undefined ? { proxyResolvesDestination } : {}),
+    }),
+  });
 }
 
 function requestSignal(signal, timeoutMs) {
