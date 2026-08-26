@@ -773,7 +773,7 @@ function restoreSignedProviderTable(contents, state) {
   );
 }
 
-function managedSignedProviderContents(contents, managedProvider, managedBaseUrl, loginFree = false) {
+function managedSignedProviderContents(contents, managedProvider, managedBaseUrl, loginFree = false, existingOwnershipId = undefined) {
   // Remove the legacy codex-router provider table if present, since we're creating
   // an identity-preserving provider table
   const legacyProvider = legacyManagedRouterProvider(contents);
@@ -786,7 +786,7 @@ function managedSignedProviderContents(contents, managedProvider, managedBaseUrl
     mode: managedProvider === "openai" ? "root-openai" : "provider-table",
     managedProvider,
     managedBaseUrl,
-    ownershipId: randomBytes(16).toString("hex"),
+    ownershipId: existingOwnershipId || randomBytes(16).toString("hex"),
     previousProviderSections: [],
     loginFree,
   };
@@ -1252,30 +1252,40 @@ let pendingSignedProviderModeState;
 let pendingRouterDefaultState;
 let clearRouterDefaultState = false;
 if (command === "enable") {
+  // Check for both signed routing and login-free mode state
   const signedState = readSignedProviderModeState();
-  if (signedState?.version === 1) {
+  const providerState = readProviderModeState();
+  if (signedState?.version === 1 || providerState?.version === 1) {
     throw new Error(
       "A recognized older signed-routing mode is still active; turn it off before updating the router.",
     );
   }
-  if (signedState) {
-    if (!signedProviderStateIsOwned(current, signedState)) {
+  // Prefer signed state if both exist (though they should be mutually exclusive)
+  const activeState = signedState || providerState;
+  if (activeState) {
+    if (!signedProviderStateIsOwned(current, activeState)) {
       throw new Error(
         `Signed routing lost ownership while model_provider is ${
           rootValue(splitRoot(current).rootLines, "model_provider") || "openai"
         }; refusing to update it.`,
       );
     }
-    const restored = restoreSignedProviderTable(current, signedState);
+    const restored = restoreSignedProviderTable(current, activeState);
     const enabled = enabledContents(restored);
     const refreshed = managedSignedProviderContents(
       enabled,
-      signedState.managedProvider,
+      activeState.managedProvider,
       configuredRouterBaseUrl(),
-      signedState.loginFree,
+      activeState.loginFree,
+      activeState.ownershipId,
     );
     next = refreshed.contents;
-    pendingSignedProviderModeState = refreshed.state;
+    // Write to the appropriate state file
+    if (signedState) {
+      pendingSignedProviderModeState = refreshed.state;
+    } else {
+      pendingProviderModeState = refreshed.state;
+    }
   } else {
     next = enabledContents(current);
   }
@@ -1323,6 +1333,7 @@ if (command === "enable") {
       currentProvider,
       configuredRouterBaseUrl(),
       true, // loginFree = true
+      state.ownershipId,
     );
     next = refreshed.contents;
     pendingProviderModeState = {
