@@ -511,7 +511,7 @@ test("an opt-in router default survives rebuilds and restores Codex's prior defa
   }
 });
 
-test("login-free mode selects the managed provider and restores the previous provider", () => {
+test("login-free mode preserves model_provider and does not require OpenAI auth", () => {
   const codexHome = mkdtempSync(path.join(os.tmpdir(), "codex-router-login-free-"));
   const stateDir = path.join(codexHome, "router-state");
   const configPath = path.join(codexHome, "config.toml");
@@ -532,15 +532,16 @@ approval_policy = "never"
     run("enable", codexHome, stateDir);
     const enabled = run("login-free-enable", codexHome, stateDir, ["deepseek/deepseek-v4-pro"]);
     assert.equal(enabled.mode, "router");
-    assert.equal(enabled.model_provider, "codex-router");
+    assert.equal(enabled.model_provider, "openai");
     assert.equal(enabled.login_free, true);
     assert.equal(enabled.login_free_managed, true);
     assert.equal(enabled.model, "deepseek/deepseek-v4-pro");
     assert.equal(privateFileIsProtected(providerModePath), true);
 
     const loginFreeConfig = readFileSync(configPath, "utf8");
-    assert.match(loginFreeConfig, /^model_provider = "codex-router"$/m);
-    assert.match(loginFreeConfig, /\[model_providers\.codex-router\]/);
+    assert.match(loginFreeConfig, /^model_provider = "openai"$/m);
+    assert.match(loginFreeConfig, /name = "Codex Router \(external models\)"/);
+    assert.match(loginFreeConfig, /requires_openai_auth = false/);
     assert.match(loginFreeConfig, /model = "deepseek\/deepseek-v4-pro"/);
     assert.match(loginFreeConfig, /model_reasoning_effort = "high"/);
     assert.match(loginFreeConfig, /\[profiles\.work\]/);
@@ -570,7 +571,7 @@ test("disabling the router from login-free mode restores an originally unset pro
 
   try {
     run("login-free-enable", codexHome, stateDir, ["kimi-api/kimi-k3"]);
-    assert.match(readFileSync(configPath, "utf8"), /^model_provider = "codex-router"$/m);
+    assert.match(readFileSync(configPath, "utf8"), /^model_provider = "openai"$/m);
 
     const disabled = run("disable", codexHome, stateDir);
     assert.equal(disabled.mode, "native");
@@ -579,6 +580,44 @@ test("disabling the router from login-free mode restores an originally unset pro
     assert.doesNotMatch(restored, /^model_provider\s*=/m);
     assert.doesNotMatch(restored, /model_providers\.codex-router|codex-router-managed/);
     assert.match(restored, /model = "kimi-api\/kimi-k3"/);
+  } finally {
+    rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
+test("login-free mode with root-openai preserves openai provider without requiring auth", () => {
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), "codex-router-login-free-openai-"));
+  const stateDir = path.join(codexHome, "router-state");
+  const configPath = path.join(codexHome, "config.toml");
+  writeFileSync(
+    configPath,
+    `model = "gpt-5.6-sol"
+model_provider = "openai"
+`,
+    { mode: 0o600 },
+  );
+
+  try {
+    run("enable", codexHome, stateDir);
+    const enabled = run("login-free-enable", codexHome, stateDir, ["deepseek/deepseek-v4-pro"]);
+    assert.equal(enabled.mode, "router");
+    assert.equal(enabled.model_provider, "openai");
+    assert.equal(enabled.login_free, true);
+    assert.equal(enabled.login_free_managed, true);
+    assert.equal(enabled.model, "deepseek/deepseek-v4-pro");
+
+    const loginFreeConfig = readFileSync(configPath, "utf8");
+    // In root-openai mode, openai_base_url is rewritten but model_provider stays "openai"
+    assert.match(loginFreeConfig, /^model_provider = "openai"$/m);
+    assert.match(loginFreeConfig, /^openai_base_url = "http:\/\/127\.0\.0\.1:4202\/v1"$/m);
+    // No provider table should be present for root-openai mode
+    assert.doesNotMatch(loginFreeConfig, /\[model_providers\.openai\]/);
+    
+    const disabled = run("disable", codexHome, stateDir);
+    assert.equal(disabled.mode, "native");
+    assert.equal(disabled.model_provider, "openai");
+    assert.equal(disabled.login_free, false);
+    assert.equal(disabled.model, "gpt-5.6-sol");
   } finally {
     rmSync(codexHome, { recursive: true, force: true });
   }

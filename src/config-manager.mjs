@@ -568,6 +568,23 @@ function managedSignedProviderBlock(providerId, baseUrl) {
   ].join("\n");
 }
 
+function managedLoginFreeProviderBlock(providerId, baseUrl) {
+  const headerId = /^[A-Za-z0-9_-]+$/.test(providerId)
+    ? providerId
+    : JSON.stringify(providerId);
+  return [
+    signedProviderStartMarker,
+    `[model_providers.${headerId}]`,
+    'name = "Codex Router (external models)"',
+    `base_url = ${JSON.stringify(baseUrl)}`,
+    'wire_api = "responses"',
+    "requires_openai_auth = false",
+    "supports_standalone_web_search = true",
+    "supports_websockets = false",
+    signedProviderEndMarker,
+  ].join("\n");
+}
+
 // Keep accepting the pre-standalone-search managed block while upgrading it
 // in place. Existing signed state must not become user-owned merely because
 // this optional Codex capability was added.
@@ -587,10 +604,33 @@ function managedSignedProviderBlockLegacy(providerId, baseUrl) {
   ].join("\n");
 }
 
+function managedLoginFreeProviderBlockLegacy(providerId, baseUrl) {
+  const headerId = /^[A-Za-z0-9_-]+$/.test(providerId)
+    ? providerId
+    : JSON.stringify(providerId);
+  return [
+    signedProviderStartMarker,
+    `[model_providers.${headerId}]`,
+    'name = "Codex Router (external models)"',
+    `base_url = ${JSON.stringify(baseUrl)}`,
+    'wire_api = "responses"',
+    "requires_openai_auth = false",
+    "supports_websockets = false",
+    signedProviderEndMarker,
+  ].join("\n");
+}
+
 function managedSignedProviderBlockMatches(actual, providerId, baseUrl) {
   return [
     managedSignedProviderBlock(providerId, baseUrl),
     managedSignedProviderBlockLegacy(providerId, baseUrl),
+  ].includes(actual);
+}
+
+function managedLoginFreeProviderBlockMatches(actual, providerId, baseUrl) {
+  return [
+    managedLoginFreeProviderBlock(providerId, baseUrl),
+    managedLoginFreeProviderBlockLegacy(providerId, baseUrl),
   ].includes(actual);
 }
 
@@ -603,6 +643,9 @@ function replaceProviderTreeWithManaged(contents, state) {
   const ranges = providerTableRanges(contents, state.managedProvider);
   state.previousProviderSections = ranges.map((range) =>
     range.lines.slice(range.start, range.end).join("\n"));
+  const blockGenerator = state.loginFree
+    ? managedLoginFreeProviderBlock
+    : managedSignedProviderBlock;
   const replacements = new Map(
     ranges.map((range, index) => [
       range.start,
@@ -611,7 +654,7 @@ function replaceProviderTreeWithManaged(contents, state) {
         text: [
           signedProviderSlot(state, index),
           ...(state.mode === "provider-table" && index === 0
-            ? [managedSignedProviderBlock(state.managedProvider, state.managedBaseUrl)]
+            ? [blockGenerator(state.managedProvider, state.managedBaseUrl)]
             : []),
         ].join("\n"),
       },
@@ -630,7 +673,7 @@ function replaceProviderTreeWithManaged(contents, state) {
   }
   let next = output.join("\n");
   if (state.mode === "provider-table" && ranges.length === 0) {
-    next = `${next.trimEnd()}\n\n${signedProviderSlot(state, 0)}\n${managedSignedProviderBlock(
+    next = `${next.trimEnd()}\n\n${signedProviderSlot(state, 0)}\n${blockGenerator(
       state.managedProvider,
       state.managedBaseUrl,
     )}\n`;
@@ -681,8 +724,11 @@ function signedProviderBlockIsOwned(contents, state) {
   if (!range) return false;
   const actual = range.lines.slice(range.start, range.end).join("\n");
   const slotIndex = lines.indexOf(signedProviderSlot(state, 0));
+  const blockMatches = state.loginFree
+    ? managedLoginFreeProviderBlockMatches(actual, state.managedProvider, state.managedBaseUrl)
+    : managedSignedProviderBlockMatches(actual, state.managedProvider, state.managedBaseUrl);
   return (
-    managedSignedProviderBlockMatches(actual, state.managedProvider, state.managedBaseUrl) &&
+    blockMatches &&
     slotIndex + 1 === range.start &&
     providerRanges.length === 1 &&
     providerRanges[0].start === range.start + 1
@@ -727,7 +773,14 @@ function restoreSignedProviderTable(contents, state) {
   );
 }
 
-function managedSignedProviderContents(contents, managedProvider, managedBaseUrl) {
+function managedSignedProviderContents(contents, managedProvider, managedBaseUrl, loginFree = false) {
+  // Remove the legacy codex-router provider table if present, since we're creating
+  // an identity-preserving provider table
+  const legacyProvider = legacyManagedRouterProvider(contents);
+  const contentsWithoutLegacy = legacyProvider
+    ? removeLegacyManagedRouterProvider(contents, legacyProvider)
+    : contents;
+  
   const state = {
     version: 3,
     mode: managedProvider === "openai" ? "root-openai" : "provider-table",
@@ -735,10 +788,11 @@ function managedSignedProviderContents(contents, managedProvider, managedBaseUrl
     managedBaseUrl,
     ownershipId: randomBytes(16).toString("hex"),
     previousProviderSections: [],
+    loginFree,
   };
   return {
     state,
-    contents: replaceProviderTreeWithManaged(contents, state),
+    contents: replaceProviderTreeWithManaged(contentsWithoutLegacy, state),
   };
 }
 
@@ -1262,6 +1316,7 @@ if (command === "enable") {
       enabled,
       currentProvider,
       configuredRouterBaseUrl(),
+      true, // loginFree = true
     );
     next = refreshed.contents;
     pendingProviderModeState = {
@@ -1272,11 +1327,12 @@ if (command === "enable") {
       ownershipId: refreshed.state.ownershipId,
       previousProviderSections: refreshed.state.previousProviderSections,
       previousModelPresent: state.previousModelPresent,
+      loginFree: true,
       ...(state.previousModelPresent ? { previousModel: state.previousModel } : {}),
     };
   } else {
     const enabled = enabledContents(defaultRestored);
-    const managed = managedSignedProviderContents(enabled, currentProvider, configuredRouterBaseUrl());
+    const managed = managedSignedProviderContents(enabled, currentProvider, configuredRouterBaseUrl(), true);
     pendingProviderModeState = {
       version: 3,
       mode: managed.state.mode,
@@ -1285,6 +1341,7 @@ if (command === "enable") {
       ownershipId: managed.state.ownershipId,
       previousProviderSections: managed.state.previousProviderSections,
       previousModelPresent: rootHasValue(rootLines, "model"),
+      loginFree: true,
       ...(rootHasValue(rootLines, "model")
         ? { previousModel: rootValue(rootLines, "model") }
         : {}),
