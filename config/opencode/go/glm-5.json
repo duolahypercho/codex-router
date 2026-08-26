@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "slug": "opencode-go/glm-5",
+      "gatewayModel": "opencode-go-glm-5",
+      "upstreamModel": "glm-5",
+      "provider": "opencode-go",
+      "listed": true,
+      "displayName": "GLM-5 (opencode Go, legacy)",
+      "description": "GLM-5 through the opencode Go Chat Completions route. OpenCode marks this exact Go id as deprecated and publishes a 202,752-token context window with a 32,768-token output limit; auto-compaction preserves that output reserve. OpenCode publishes no named effort ladder for this id, so high remains the conservative default.",
+      "priority": 90,
+      "defaultEffort": "high",
+      "reasoningLevels": [
+        {
+          "effort": "high",
+          "description": "Adaptive reasoning"
+        }
+      ],
+      "contextWindow": 202752,
+      "autoCompact": 165000,
+      "inputModalities": [
+        "text"
+      ],
+      "compHash": "opencode-go-glm-5-v1"
+    }
+  ]
+}

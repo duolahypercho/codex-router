@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "slug": "opencode-go/longcat-2.0",
+      "gatewayModel": "opencode-go-longcat-2-0",
+      "upstreamModel": "longcat-2.0",
+      "provider": "opencode-go",
+      "listed": true,
+      "displayName": "LongCat-2.0 (opencode Go)",
+      "description": "LongCat-2.0 through the opencode Go Chat Completions route. OpenCode publishes a 1,000,000-token context window and a 131,072-token output limit for this exact Go id; auto-compaction preserves that output reserve. OpenCode documents toggle reasoning but no named effort ladder, so high remains the conservative default.",
+      "priority": 39,
+      "defaultEffort": "high",
+      "reasoningLevels": [
+        {
+          "effort": "high",
+          "description": "Adaptive reasoning"
+        }
+      ],
+      "contextWindow": 1000000,
+      "autoCompact": 850000,
+      "inputModalities": [
+        "text"
+      ],
+      "compHash": "opencode-go-longcat-2-0-v1"
+    }
+  ]
+}

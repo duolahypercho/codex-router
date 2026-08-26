@@ -92,9 +92,13 @@ test("OpenCode curation keeps each endpoint family on its documented protocol", 
     "opencode-go-messages",
     "opencode-go-responses",
   ]);
-  assert.equal(curatedModelProviderId("opencode-go", "minimax-m2.5"), "opencode-go-messages");
-  assert.equal(curatedModelProviderId("opencode-go", "grok-4.5"), "opencode-go-responses");
-  assert.equal(curatedModelProviderId("opencode-go", "deepseek-v4-flash-vision-exp"), "opencode-go");
+  for (const model of CHECKED_IN_MODELS.filter(({ provider }) => provider.startsWith("opencode-go"))) {
+    assert.equal(
+      curatedModelProviderId("opencode-go", model.upstreamModel),
+      model.provider,
+      model.slug,
+    );
+  }
   assert.equal(
     curatedModelProviderId("opencode-free", "muse-spark-1.2-contributor-free"),
     "opencode-free-responses",

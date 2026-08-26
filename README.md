@@ -416,14 +416,18 @@ the operator explicitly selects them.
 
 | Picker label | Model ID |
 | --- | --- |
+| Grok 4.6 (opencode Go) | `opencode-go-responses/grok-4.6` |
 | Grok 4.5 (opencode Go) | `opencode-go-responses/grok-4.5` |
 | GLM-5.3-Flash (opencode Go) | `opencode-go/glm-5.3-flash` |
 | GLM-5.3 (opencode Go) | `opencode-go/glm-5.3` |
 | GLM-5.2 (opencode Go) | `opencode-go/glm-5.2` |
 | GLM-5.1 (opencode Go) | `opencode-go/glm-5.1` |
+| GLM-5 (opencode Go, legacy) | `opencode-go/glm-5` |
 | Kimi K3 (opencode Go) | `opencode-go/kimi-k3` |
 | Kimi K2.7 Code (opencode Go) | `opencode-go/kimi-k2.7-code` |
 | Kimi K2.6 (opencode Go) | `opencode-go/kimi-k2.6` |
+| Kimi K2.5 (opencode Go, legacy) | `opencode-go/kimi-k2.5` |
+| LongCat-2.0 (opencode Go) | `opencode-go/longcat-2.0` |
 | DeepSeek V4 Pro (opencode Go) | `opencode-go/deepseek-v4-pro` |
 | DeepSeek V4 Flash (opencode Go) | `opencode-go/deepseek-v4-flash` |
 | DeepSeek V4 Flash Vision Exp (opencode Go) | `opencode-go/deepseek-v4-flash-vision-exp` |
@@ -437,11 +441,12 @@ the operator explicitly selects them.
 | Qwen3.7 Max (opencode Go) | `opencode-go-messages/qwen3.7-max` |
 | Qwen3.7 Plus (opencode Go) | `opencode-go-messages/qwen3.7-plus` |
 | Qwen3.6 Plus (opencode Go) | `opencode-go-messages/qwen3.6-plus` |
+| Qwen3.5 Plus (opencode Go, legacy) | `opencode-go/qwen3.5-plus` |
 | GPT 5.6 Luna (opencode Go) | `opencode-go-responses/gpt-5.6-luna` |
 
 `opencode-go` carries the Chat Completions models, `opencode-go-messages` the
 Anthropic Messages models, `opencode-go-responses` the Responses models
-(including Grok 4.5), and
+(including Grok 4.5 and Grok 4.6), and
 `opencode-zen` the pay-per-use Zen endpoint (no preselected models — curate
 the ones you want). All four are one selectable family: they share a single
 stored key, and enabling or disabling any of them toggles all of them

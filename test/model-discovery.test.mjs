@@ -57,6 +57,7 @@ test("OpenCode Go discovery blocks live ids whose protocol route is not certifie
       { id: "grok-4.5" },
       { id: "future-responses-only-model" },
       { id: "glm-5" },
+      { id: "hy3-preview" },
     ] }),
   );
   try {
@@ -66,9 +67,10 @@ test("OpenCode Go discovery blocks live ids whose protocol route is not certifie
       { cwd: root, encoding: "utf8", env: { ...process.env, OPENCODE_API_KEY: "" } },
     );
     const result = JSON.parse(output);
-    assert.deepEqual(result.unregistered, ["future-responses-only-model", "glm-5"]);
+    assert.deepEqual(result.unregistered, ["future-responses-only-model", "hy3-preview"]);
     assert.deepEqual(result.addable, []);
     assert.deepEqual(Object.keys(result.blocked).sort(), result.unregistered);
+    assert.ok(result.registered.includes("glm-5"));
     assert.match(
       result.blocked["future-responses-only-model"],
       /provider catalog lists future-responses-only-model.*has not verified whether the model uses Chat, Messages, or Responses.*router compatibility limitation.*future update/s,
@@ -218,7 +220,7 @@ test("anonymous discovery keeps only each provider's documented free models", ()
 });
 
 test("the current OpenCode catalogs remain fully fetchable without preselecting Zen", () => {
-  // Captured from the two official endpoints on 2026-08-21. Free/Zen stay
+  // Captured from the two official endpoints on 2026-08-26. Free/Zen stay
   // catalog-only, so this proves the live response is filtered at discovery
   // time instead of turning a changing remote list into checked-in defaults.
   const zenIds = [
@@ -252,7 +254,7 @@ test("the current OpenCode catalogs remain fully fetchable without preselecting 
   const goLive = [
     "deepseek-v4-flash", "deepseek-v4-flash-vision-exp", "deepseek-v4-pro", "glm-5", "glm-5.1", "glm-5.2", "glm-5.3", "glm-5.3-flash",
     "gpt-5.6-luna", "grok-4.5", "grok-4.6", "hy3", "hy3-preview", "kimi-k2.5", "kimi-k2.6",
-    "kimi-k2.7-code", "kimi-k3", "mimo-v2-omni", "mimo-v2-pro", "mimo-v2.5",
+    "kimi-k2.7-code", "kimi-k3", "longcat-2.0", "mimo-v2-omni", "mimo-v2-pro", "mimo-v2.5",
     "mimo-v2.5-pro", "minimax-m2.5", "minimax-m2.7", "minimax-m3",
     "muse-spark-1.2-contributor", "qwen3.5-plus", "qwen3.6-plus",
     "qwen3.7-max", "qwen3.7-plus", "qwen3.8-max",
@@ -265,10 +267,10 @@ test("the current OpenCode catalogs remain fully fetchable without preselecting 
 
 test("the checked-in OpenCode Go set matches the official current-model table", () => {
   const documented = [
-    "deepseek-v4-flash", "deepseek-v4-flash-vision-exp", "deepseek-v4-pro", "glm-5.1", "glm-5.2", "glm-5.3", "glm-5.3-flash",
-    "gpt-5.6-luna", "grok-4.5", "grok-4.6", "hy3", "kimi-k2.6", "kimi-k2.7-code", "kimi-k3",
+    "deepseek-v4-flash", "deepseek-v4-flash-vision-exp", "deepseek-v4-pro", "glm-5", "glm-5.1", "glm-5.2", "glm-5.3", "glm-5.3-flash",
+    "gpt-5.6-luna", "grok-4.5", "grok-4.6", "hy3", "kimi-k2.5", "kimi-k2.6", "kimi-k2.7-code", "kimi-k3", "longcat-2.0",
     "mimo-v2.5", "mimo-v2.5-pro", "minimax-m2.5", "minimax-m2.7", "minimax-m3",
-    "muse-spark-1.2-contributor", "qwen3.6-plus", "qwen3.7-max",
+    "muse-spark-1.2-contributor", "qwen3.5-plus", "qwen3.6-plus", "qwen3.7-max",
     "qwen3.7-plus", "qwen3.8-max",
   ].sort();
   const registered = MODELS
