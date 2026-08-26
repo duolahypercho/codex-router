@@ -66,10 +66,6 @@ const agentConcurrencyStartMarker = "# BEGIN codex-router-agent-concurrency-mana
 const agentConcurrencyEndMarker = "# END codex-router-agent-concurrency-managed";
 const multiAgentV2StartMarker = "# BEGIN codex-router-multi-agent-v2-managed";
 const multiAgentV2EndMarker = "# END codex-router-multi-agent-v2-managed";
-const standaloneWebSearchStartMarker =
-  "# BEGIN codex-router-standalone-web-search-managed";
-const standaloneWebSearchEndMarker =
-  "# END codex-router-standalone-web-search-managed";
 const createdAgentsTableMarker = "# codex-router-created-agents-table";
 const managedAgentMaxConcurrency = 6;
 // Codex 0.147 records a child's FINAL_ANSWER as subAgentActivity
@@ -114,7 +110,6 @@ const markerPairs = [
   ],
   [agentConcurrencyStartMarker, agentConcurrencyEndMarker],
   [multiAgentV2StartMarker, multiAgentV2EndMarker],
-  [standaloneWebSearchStartMarker, standaloneWebSearchEndMarker],
   ["# BEGIN kimi-codex-router-managed", "# END kimi-codex-router-managed"],
   ["# BEGIN kimi-codex-proxy-managed", "# END kimi-codex-proxy-managed"],
 ];
@@ -558,10 +553,10 @@ function managedSignedProviderBlock(providerId, baseUrl) {
     `base_url = ${JSON.stringify(baseUrl)}`,
     'wire_api = "responses"',
     "requires_openai_auth = true",
-    // Current Codex builds expose the standalone web-search client tool only
-    // when both the provider and the selected model advertise support. Keep
-    // the provider half enabled; the catalog's supports_search_tool field is
-    // the per-model gate.
+    // Codex 0.146+ performs standalone web search on the client and sends
+    // the resulting items back through the selected custom provider. Keep
+    // this opt-in on the managed provider table; older Codex versions ignore
+    // the unknown field and retain their existing behavior.
     "supports_standalone_web_search = true",
     "supports_websockets = false",
     signedProviderEndMarker,
@@ -586,7 +581,7 @@ function managedLoginFreeProviderBlock(providerId, baseUrl) {
 }
 
 // Keep accepting the pre-standalone-search managed block while upgrading it
-// in place. Existing signed state must not become user-owned merely because
+// in place. Existing signed state must not become "user-owned" merely because
 // this optional Codex capability was added.
 function managedSignedProviderBlockLegacy(providerId, baseUrl) {
   const headerId = /^[A-Za-z0-9_-]+$/.test(providerId)
@@ -773,30 +768,6 @@ function restoreSignedProviderTable(contents, state) {
   );
 }
 
-function removeWrappedCodexRouterProvider(contents) {
-  // Remove the wrapped [model_providers.codex-router] block created by enabledContents
-  const lines = contents.split("\n");
-  const startIndex = lines.findIndex((line) => line.trim() === providerStartMarker);
-  if (startIndex === -1) return contents;
-
-  const endIndex = lines.findIndex(
-    (line, idx) => idx > startIndex && line.trim() === providerEndMarker,
-  );
-  if (endIndex === -1) return contents;
-
-  // Check if this block contains [model_providers.codex-router]
-  const blockContent = lines.slice(startIndex + 1, endIndex).join("\n");
-  if (!/^\s*\[model_providers\.codex-router\]\s*$/m.test(blockContent)) {
-    return contents;
-  }
-
-  // Remove the entire block including markers
-  return [
-    ...lines.slice(0, startIndex),
-    ...lines.slice(endIndex + 1),
-  ].join("\n");
-}
-
 function managedSignedProviderContents(contents, managedProvider, managedBaseUrl, loginFree = false, existingOwnershipId = undefined) {
   // Remove the legacy codex-router provider table if present, since we're creating
   // an identity-preserving provider table
@@ -804,9 +775,6 @@ function managedSignedProviderContents(contents, managedProvider, managedBaseUrl
   const contentsWithoutLegacy = legacyProvider
     ? removeLegacyManagedRouterProvider(contents, legacyProvider)
     : contents;
-  
-  // Also remove any wrapped codex-router provider block created by enabledContents
-  const contentsWithoutWrapped = removeWrappedCodexRouterProvider(contentsWithoutLegacy);
   
   const state = {
     version: 3,
@@ -819,7 +787,7 @@ function managedSignedProviderContents(contents, managedProvider, managedBaseUrl
   };
   return {
     state,
-    contents: replaceProviderTreeWithManaged(contentsWithoutWrapped, state),
+    contents: replaceProviderTreeWithManaged(contentsWithoutLegacy, state),
   };
 }
 
@@ -1200,9 +1168,6 @@ function enabledContents(contents) {
     'name = "Codex Router (external models)"',
     `base_url = ${JSON.stringify(routerBaseUrl)}`,
     'wire_api = "responses"',
-    // Provider support is necessary but not sufficient: Codex also reads the
-    // selected catalog model's supports_search_tool value before exposing the
-    // standalone web-search client tool.
     "supports_standalone_web_search = true",
     providerEndMarker,
   ];

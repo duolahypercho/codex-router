@@ -1,0 +1,10 @@
+--- src/config-manager.mjs
++++ src/config-manager.mjs
+@@ -1259,7 +1254,6 @@ if (command === "enable") {
+       enabled,
+       signedState.managedProvider,
+       configuredRouterBaseUrl(),
+-      signedState.loginFree,
+     );
+     next = refreshed.contents;
+     pendingSignedProviderModeState = refreshed.state;
