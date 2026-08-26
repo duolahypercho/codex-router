@@ -760,13 +760,26 @@ function readProviderModeState() {
   if (!existsSync(CODEX_PROVIDER_MODE_PATH)) return undefined;
   try {
     const parsed = JSON.parse(readFileSync(CODEX_PROVIDER_MODE_PATH, "utf8"));
-    if (
-      parsed?.version !== 1 ||
-      typeof parsed.previousPresent !== "boolean" ||
-      (parsed.previousPresent && typeof parsed.previousModelProvider !== "string") ||
-      typeof parsed.previousModelPresent !== "boolean" ||
-      (parsed.previousModelPresent && typeof parsed.previousModel !== "string")
-    ) {
+    const recognizedV1 =
+      parsed?.version === 1 &&
+      typeof parsed.previousPresent === "boolean" &&
+      (!parsed.previousPresent || typeof parsed.previousModelProvider === "string") &&
+      typeof parsed.previousModelPresent === "boolean" &&
+      (!parsed.previousModelPresent || typeof parsed.previousModel === "string");
+    const recognizedV3 =
+      parsed?.version === 3 &&
+      (parsed.mode === "root-openai" || parsed.mode === "provider-table") &&
+      typeof parsed.managedProvider === "string" &&
+      parsed.managedProvider.length > 0 &&
+      typeof parsed.managedBaseUrl === "string" &&
+      isManagedRouterBaseUrl(parsed.managedBaseUrl) &&
+      typeof parsed.ownershipId === "string" &&
+      /^[0-9a-f]{32}$/.test(parsed.ownershipId) &&
+      Array.isArray(parsed.previousProviderSections) &&
+      parsed.previousProviderSections.every((section) => typeof section === "string") &&
+      typeof parsed.previousModelPresent === "boolean" &&
+      (!parsed.previousModelPresent || typeof parsed.previousModel === "string");
+    if (!recognizedV1 && !recognizedV3) {
       throw new Error("invalid state");
     }
     return parsed;
@@ -949,6 +962,18 @@ function clean(contents) {
   return { rootLines: filtered, tableLines };
 }
 
+function providerModeStateIsOwned(contents, state) {
+  if (!state) return false;
+  if (state.version === 1) {
+    const { rootLines } = splitRoot(contents);
+    return rootValue(rootLines, "model_provider") === routerProviderId;
+  }
+  if (state.version === 3) {
+    return signedProviderBlockIsOwned(contents, state);
+  }
+  return false;
+}
+
 function snapshot(contents) {
   const { rootLines } = splitRoot(contents);
   const baseUrl = rootValue(rootLines, "openai_base_url");
@@ -958,6 +983,10 @@ function snapshot(contents) {
   const signedActive = signedState
     ? signedProviderStateIsOwned(contents, signedState)
     : false;
+  const providerModeState = readProviderModeState();
+  const loginFreeActive = providerModeState
+    ? providerModeStateIsOwned(contents, providerModeState)
+    : false;
   const routerDefault = readCodexRouterDefault();
   return {
     mode:
@@ -966,10 +995,10 @@ function snapshot(contents) {
         : "native",
     model: rootValue(rootLines, "model") || null,
     model_provider: activeProvider,
-    login_free: rootValue(rootLines, "model_provider") === routerProviderId,
-    login_free_managed:
-      rootValue(rootLines, "model_provider") === routerProviderId &&
-      existsSync(CODEX_PROVIDER_MODE_PATH),
+    login_free: Boolean(loginFreeActive),
+    login_free_managed: Boolean(
+      loginFreeActive && privateFileIsProtected(CODEX_PROVIDER_MODE_PATH),
+    ),
     provider_mode_state_present: existsSync(CODEX_PROVIDER_MODE_PATH),
     signed_routing: Boolean(signedActive),
     signed_routing_managed: Boolean(
@@ -1223,26 +1252,45 @@ if (command === "enable") {
   }
   const defaultRestored = restoreRouterDefault(current);
   clearRouterDefaultState = Boolean(readCodexRouterDefault());
-  const enabled = enabledContents(defaultRestored);
   const { rootLines } = splitRoot(defaultRestored);
+  const currentProvider = rootValue(rootLines, "model_provider") || "openai";
   const loginFreeModel = String(process.argv[3] || "").trim();
-  const alreadyManaged =
-    rootValue(rootLines, "model_provider") === routerProviderId &&
-    existsSync(CODEX_PROVIDER_MODE_PATH);
-  if (!alreadyManaged) {
+  const state = readProviderModeState();
+  if (state) {
+    const enabled = enabledContents(defaultRestored);
+    const refreshed = managedSignedProviderContents(
+      enabled,
+      currentProvider,
+      configuredRouterBaseUrl(),
+    );
+    next = refreshed.contents;
     pendingProviderModeState = {
-      version: 1,
-      previousPresent: rootHasValue(rootLines, "model_provider"),
-      ...(rootHasValue(rootLines, "model_provider")
-        ? { previousModelProvider: rootValue(rootLines, "model_provider") }
-        : {}),
+      version: 3,
+      mode: refreshed.state.mode,
+      managedProvider: currentProvider,
+      managedBaseUrl: configuredRouterBaseUrl(),
+      ownershipId: refreshed.state.ownershipId,
+      previousProviderSections: refreshed.state.previousProviderSections,
+      previousModelPresent: state.previousModelPresent,
+      ...(state.previousModelPresent ? { previousModel: state.previousModel } : {}),
+    };
+  } else {
+    const enabled = enabledContents(defaultRestored);
+    const managed = managedSignedProviderContents(enabled, currentProvider, configuredRouterBaseUrl());
+    pendingProviderModeState = {
+      version: 3,
+      mode: managed.state.mode,
+      managedProvider: currentProvider,
+      managedBaseUrl: configuredRouterBaseUrl(),
+      ownershipId: managed.state.ownershipId,
+      previousProviderSections: managed.state.previousProviderSections,
       previousModelPresent: rootHasValue(rootLines, "model"),
       ...(rootHasValue(rootLines, "model")
         ? { previousModel: rootValue(rootLines, "model") }
         : {}),
     };
+    next = managed.contents;
   }
-  next = `${replaceRootValue(enabled, "model_provider", routerProviderId)}\n`;
   if (loginFreeModel) next = `${replaceRootValue(next, "model", loginFreeModel)}\n`;
 } else if (command === "signed-enable") {
   if (existsSync(CODEX_PROVIDER_MODE_PATH)) {
@@ -1318,21 +1366,36 @@ if (command === "enable") {
       restored = restoreSignedProviderTable(current, signedState);
     }
   } else if (state) {
-    if (currentProvider !== routerProviderId) {
-      throw new Error(
-        `Refusing to replace user-owned model_provider: ${currentProvider || "unset"}.`,
-      );
+    if (state.version === 1) {
+      if (currentProvider !== routerProviderId) {
+        throw new Error(
+          `Refusing to replace user-owned model_provider: ${currentProvider || "unset"}.`,
+        );
+      }
+      restored = `${replaceRootValue(
+        current,
+        "model_provider",
+        state.previousPresent ? state.previousModelProvider : undefined,
+      )}\n`;
+      restored = `${replaceRootValue(
+        restored,
+        "model",
+        state.previousModelPresent ? state.previousModel : undefined,
+      )}\n`;
+    } else if (state.version === 3) {
+      const effectiveProvider = currentProvider || "openai";
+      if (effectiveProvider !== state.managedProvider) {
+        throw new Error(
+          `Login-free mode lost ownership to model_provider ${effectiveProvider}; refusing to replace it.`,
+        );
+      }
+      restored = restoreSignedProviderTable(current, state);
+      restored = `${replaceRootValue(
+        restored,
+        "model",
+        state.previousModelPresent ? state.previousModel : undefined,
+      )}\n`;
     }
-    restored = `${replaceRootValue(
-      current,
-      "model_provider",
-      state.previousPresent ? state.previousModelProvider : undefined,
-    )}\n`;
-    restored = `${replaceRootValue(
-      restored,
-      "model",
-      state.previousModelPresent ? state.previousModel : undefined,
-    )}\n`;
   } else if (command === "login-free-disable" && currentProvider === routerProviderId) {
     throw new Error("Codex login-free mode is not managed by this router.");
   }
