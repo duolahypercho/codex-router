@@ -930,7 +930,10 @@ function hasUnmanagedRouterProvider(contents) {
 }
 
 function legacyManagedRouterProvider(contents) {
-  if (!contents.includes(startMarker) || !contents.includes(endMarker)) {
+  // Check for both old v1 markers and newer provider-managed markers
+  const hasOldMarkers = contents.includes(startMarker) && contents.includes(endMarker);
+  const hasProviderMarkers = contents.includes(providerStartMarker) && contents.includes(providerEndMarker);
+  if (!hasOldMarkers && !hasProviderMarkers) {
     return undefined;
   }
   const lines = contents.split("\n");
@@ -944,9 +947,9 @@ function legacyManagedRouterProvider(contents) {
   const start = headers[0];
   const managedStart = lines.findIndex((line) => line.trim() === providerStartMarker);
   const managedEnd = lines.findIndex((line) => line.trim() === providerEndMarker);
-  if (managedStart !== -1 && managedStart < start && managedEnd > start) {
-    return undefined;
-  }
+  // If wrapped in provider markers, include them in the removal range
+  const actualStart = managedStart !== -1 && managedStart < start ? managedStart : start;
+  const wrappedInProviderMarkers = managedStart !== -1 && managedStart < start && managedEnd > start;
   let end = start + 1;
   while (
     end < lines.length &&
@@ -955,6 +958,8 @@ function legacyManagedRouterProvider(contents) {
   ) {
     end += 1;
   }
+  // If wrapped in provider markers, extend end to include the end marker
+  const actualEnd = wrappedInProviderMarkers && managedEnd >= end ? managedEnd + 1 : end;
 
   const fields = new Map();
   for (const line of lines.slice(start + 1, end)) {
@@ -981,7 +986,7 @@ function legacyManagedRouterProvider(contents) {
     fields.get("name") === "Codex Router (extra providers)" &&
     fields.get("requires_openai_auth") === "true";
   return commonFieldsMatch && (currentShape || prototypeShape)
-    ? { lines, start, end }
+    ? { lines, start: actualStart, end: actualEnd }
     : undefined;
 }
 
@@ -1267,6 +1272,7 @@ if (command === "enable") {
       enabled,
       signedState.managedProvider,
       configuredRouterBaseUrl(),
+      signedState.loginFree,
     );
     next = refreshed.contents;
     pendingSignedProviderModeState = refreshed.state;

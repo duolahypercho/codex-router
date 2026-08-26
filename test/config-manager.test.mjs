@@ -511,7 +511,7 @@ test("an opt-in router default survives rebuilds and restores Codex's prior defa
   }
 });
 
-test("login-free mode preserves model_provider and does not require OpenAI auth", () => {
+test("login-free mode with provider-table preserves custom provider and does not require OpenAI auth", () => {
   const codexHome = mkdtempSync(path.join(os.tmpdir(), "codex-router-login-free-"));
   const stateDir = path.join(codexHome, "router-state");
   const configPath = path.join(codexHome, "config.toml");
@@ -519,7 +519,7 @@ test("login-free mode preserves model_provider and does not require OpenAI auth"
   writeFileSync(
     configPath,
     `model = "gpt-5.6-sol"
-model_provider = "openai"
+model_provider = "custom"
 model_reasoning_effort = "high"
 
 [profiles.work]
@@ -532,14 +532,14 @@ approval_policy = "never"
     run("enable", codexHome, stateDir);
     const enabled = run("login-free-enable", codexHome, stateDir, ["deepseek/deepseek-v4-pro"]);
     assert.equal(enabled.mode, "router");
-    assert.equal(enabled.model_provider, "openai");
+    assert.equal(enabled.model_provider, "custom");
     assert.equal(enabled.login_free, true);
     assert.equal(enabled.login_free_managed, true);
     assert.equal(enabled.model, "deepseek/deepseek-v4-pro");
     assert.equal(privateFileIsProtected(providerModePath), true);
 
     const loginFreeConfig = readFileSync(configPath, "utf8");
-    assert.match(loginFreeConfig, /^model_provider = "openai"$/m);
+    assert.match(loginFreeConfig, /^model_provider = "custom"$/m);
     assert.match(loginFreeConfig, /name = "Codex Router \(external models\)"/);
     assert.match(loginFreeConfig, /requires_openai_auth = false/);
     assert.match(loginFreeConfig, /model = "deepseek\/deepseek-v4-pro"/);
@@ -552,11 +552,11 @@ approval_policy = "never"
 
     const restored = run("login-free-disable", codexHome, stateDir);
     assert.equal(restored.mode, "router");
-    assert.equal(restored.model_provider, "openai");
+    assert.equal(restored.model_provider, "custom");
     assert.equal(restored.login_free, false);
     assert.equal(restored.model, "gpt-5.6-sol");
     assert.equal(existsSync(providerModePath), false);
-    assert.match(readFileSync(configPath, "utf8"), /^model_provider = "openai"$/m);
+    assert.match(readFileSync(configPath, "utf8"), /^model_provider = "custom"$/m);
     assert.match(readFileSync(configPath, "utf8"), /^model = "gpt-5.6-sol"$/m);
   } finally {
     rmSync(codexHome, { recursive: true, force: true });
@@ -571,7 +571,12 @@ test("disabling the router from login-free mode restores an originally unset pro
 
   try {
     run("login-free-enable", codexHome, stateDir, ["kimi-api/kimi-k3"]);
-    assert.match(readFileSync(configPath, "utf8"), /^model_provider = "openai"$/m);
+    const enabledConfig = readFileSync(configPath, "utf8");
+    // In root-openai mode, model_provider is not explicitly written (defaults to openai)
+    assert.match(enabledConfig, /^openai_base_url = "http:\/\/127\.0\.0\.1:\d+\/_codex-router\/[^"]+\/v1"$/m);
+    // No provider table should exist for root-openai mode
+    assert.doesNotMatch(enabledConfig, /\[model_providers\.openai\]/);
+    assert.doesNotMatch(enabledConfig, /\[model_providers\.codex-router\]/);
 
     const disabled = run("disable", codexHome, stateDir);
     assert.equal(disabled.mode, "native");
@@ -609,7 +614,7 @@ model_provider = "openai"
     const loginFreeConfig = readFileSync(configPath, "utf8");
     // In root-openai mode, openai_base_url is rewritten but model_provider stays "openai"
     assert.match(loginFreeConfig, /^model_provider = "openai"$/m);
-    assert.match(loginFreeConfig, /^openai_base_url = "http:\/\/127\.0\.0\.1:4202\/v1"$/m);
+    assert.match(loginFreeConfig, /^openai_base_url = "http:\/\/127\.0\.0\.1:\d+\/_codex-router\/[^"]+\/v1"$/m);
     // No provider table should be present for root-openai mode
     assert.doesNotMatch(loginFreeConfig, /\[model_providers\.openai\]/);
     
