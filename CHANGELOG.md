@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **OpenCode Go Kimi K2.7 Code now accepts current Codex tool schemas.** Its
+  Moonshot-backed validator receives the same bounded decorated-`$defs` repair
+  as the first-party Kimi routes. The compatibility gate names only this
+  observed Console Go model, so unrelated OpenCode Go routes keep their tool
+  payloads unchanged.
+
 - **Translated tool streams no longer expose bridge-only assistant turns.**
   Bounded, fail-open normalization removes only empty assistant envelopes that
   LiteLLM's Chat Completions and Anthropic Messages bridges corroborate with a

@@ -5502,6 +5502,83 @@ test("router normalizes forced tool choices before LiteLLM for auto-tool-choice 
   }
 });
 
+test("router applies Moonshot ref repair only to the proven Console Go Kimi route", async () => {
+  const gatewayRequests = [];
+  const gateway = await mockServer(async (request, response) => {
+    gatewayRequests.push(await bodyJson(request));
+    json(response, 200, { id: "resp_test", object: "response", output: [] });
+  });
+  const routerPort = await openPort();
+  const router = run("router.mjs", {
+    CODEX_ROUTER_PORT: String(routerPort),
+    CODEX_ROUTER_GATEWAY_BASE_URL: `http://127.0.0.1:${gateway.port}/v1`,
+    CODEX_ROUTER_QUIET: "1",
+  });
+  const headers = {
+    Authorization: `Bearer ${CALLER_KEY}`,
+    "Content-Type": "application/json",
+  };
+  const decoratedRefTool = {
+    type: "function",
+    name: "review_change",
+    description: "Review one proposed change.",
+    parameters: {
+      type: "object",
+      properties: {
+        change: {
+          $ref: "#/$defs/change",
+          description: "The change to review.",
+        },
+      },
+      required: ["change"],
+      $defs: {
+        change: {
+          type: "object",
+          properties: { path: { type: "string" } },
+          required: ["path"],
+          additionalProperties: false,
+        },
+      },
+    },
+  };
+
+  async function route(model) {
+    const response = await fetch(`${routerBase(routerPort)}/responses`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ model, input: "test", tools: [decoratedRefTool] }),
+    });
+    assert.equal(response.status, 200, router.testErrors());
+    return gatewayRequests.at(-1);
+  }
+
+  try {
+    await waitFor(`${routerBase(routerPort)}/models`, router);
+
+    const kimi = await route("opencode-go/kimi-k2.7-code");
+    assert.equal(kimi.model, "opencode-go-kimi-k2-7-code");
+    assert.deepEqual(kimi.tools[0].parameters.properties.change, {
+      type: "object",
+      properties: { path: { type: "string" } },
+      required: ["path"],
+      additionalProperties: false,
+      description: "The change to review.",
+    });
+
+    // The evidence is route-specific. Another Chat model on the same provider
+    // keeps the caller's schema unchanged instead of inheriting a Kimi quirk.
+    const glm = await route("opencode-go/glm-5.2");
+    assert.equal(glm.model, "opencode-go-glm-5-2");
+    assert.deepEqual(
+      glm.tools.find((tool) => tool.name === decoratedRefTool.name),
+      decoratedRefTool,
+    );
+  } finally {
+    await stopChild(router);
+    await closeServer(gateway.server);
+  }
+});
+
 test("router redirects native background turns to the configured routed model", async () => {
   const gatewayRequests = [];
   const gateway = await mockServer(async (request, response) => {

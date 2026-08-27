@@ -757,11 +757,19 @@ function needsStrictOpenCodeToolCompatibility(route) {
 // whole request -- not the one tool -- over any other pointer (issue #353) or a
 // definition reference carrying sibling keywords. The OAuth and platform-key
 // routes are separate products, but their first-party validators share this
-// schema flavor. Keep the rewrite off every non-Moonshot provider.
+// schema flavor. Console Go's Kimi K2.7 Code route has now returned the same
+// validator error (#488), so include that exact measured route without
+// projecting the behavior onto unrelated OpenCode Go models.
 const MOONSHOT_PROVIDER_IDS = new Set(["kimi-oauth", "kimi-api", "kimi-api-cn"]);
+const OPENCODE_GO_MOONSHOT_MODELS = new Set(["kimi-k2.7-code"]);
 
 function needsMoonshotSchemaCompatibility(route) {
-  return MOONSHOT_PROVIDER_IDS.has(providerForModel(route)?.id);
+  const providerId = providerForModel(route)?.id;
+  return (
+    MOONSHOT_PROVIDER_IDS.has(providerId) ||
+    (providerId === "opencode-go" &&
+      OPENCODE_GO_MOONSHOT_MODELS.has(route.upstreamModel))
+  );
 }
 
 function zenFreeCompatibleInput(input, route) {
