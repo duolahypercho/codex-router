@@ -7,7 +7,7 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { openPort } from "./port-pool.mjs";
-import { credentialFingerprint, ROUTE_RECHECK_MS } from "../src/commandcode-plan.mjs";
+import { commandCodeCredentialVerifier, ROUTE_RECHECK_MS } from "../src/commandcode-plan.mjs";
 import { upsertProviderApiKey } from "../src/provider-api-key-pool.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -153,7 +153,7 @@ test("a plan-refused Command Code account is served through the CLI route", asyn
     const planPath = path.join(stateDir, "commandcode-plan.json");
     assert.ok(existsSync(planPath));
     const remembered = JSON.parse(readFileSync(planPath, "utf8")).commandcode.credentials;
-    assert.equal(remembered[credentialFingerprint("user_test_key")].providerApi, false);
+    assert.equal(Object.values(remembered)[0].providerApi, false);
 
     const second = await turn();
     assert.equal(second.status, 200);
@@ -344,11 +344,14 @@ test("pooled Command Code failover uses the winning key for its plan route", asy
     assert.equal(calls[2].authorization, calls[1].authorization);
     assert.equal(calls[2].url, "/alpha/generate");
     const plan = JSON.parse(readFileSync(path.join(stateDir, "commandcode-plan.json"), "utf8"));
-    const winningFingerprint = credentialFingerprint(calls[1].authorization.replace(/^Bearer /, ""));
+    const winningFingerprint = commandCodeCredentialVerifier(
+      calls[1].authorization.replace(/^Bearer /, ""),
+      { salt: plan.commandcode.credentialDerivation.salt },
+    ).verifier;
     assert.equal(
-      plan.commandcode.credentials[winningFingerprint].credential,
-      winningFingerprint,
-      "the exact winning credential fingerprint is retained",
+      plan.commandcode.credentials[winningFingerprint].providerApi,
+      false,
+      "the winning credential keeps its independently derived route",
     );
     const limitsPath = path.join(stateDir, "rate-limits.json");
     await waitForFile(limitsPath, child, () => stderr);
@@ -399,12 +402,12 @@ test("an intermediate pooled plan limit stays per-key until the winning response
   const secondId = references.find((entry) => entry.secretRef.name === "COMMANDCODE_API_KEY").id;
   await upsertProviderApiKey("commandcode", { id: firstId, priority: 2 }, { filePath: poolStatePath });
   await upsertProviderApiKey("commandcode", { id: secondId, priority: 1 }, { filePath: poolStatePath });
-  const firstFingerprint = credentialFingerprint("PLAN_A");
+  const firstVerifier = commandCodeCredentialVerifier("PLAN_A", { salt: Buffer.alloc(16, 1) });
   writeFileSync(path.join(stateDir, "commandcode-plan.json"), `${JSON.stringify({
     commandcode: {
+      credentialDerivation: { version: firstVerifier.version, salt: firstVerifier.salt },
       credentials: {
-        [firstFingerprint]: {
-          credential: firstFingerprint,
+        [firstVerifier.verifier]: {
           providerApi: false,
           observedAt: new Date().toISOString(),
         },
@@ -561,11 +564,16 @@ test("pooled Command Code recheck success is cached against the exact winning ke
   await upsertProviderApiKey("commandcode", { id: firstId, priority: 2 }, { filePath: poolStatePath });
   await upsertProviderApiKey("commandcode", { id: secondId, priority: 1 }, { filePath: poolStatePath });
   const planPath = path.join(stateDir, "commandcode-plan.json");
+  const poolBVerifier = commandCodeCredentialVerifier("POOL_B", { salt: Buffer.alloc(16, 2) });
   writeFileSync(planPath, `${JSON.stringify({
     commandcode: {
-      credential: credentialFingerprint("POOL_B"),
-      providerApi: false,
-      observedAt: new Date(Date.now() - ROUTE_RECHECK_MS - 1_000).toISOString(),
+      credentialDerivation: { version: poolBVerifier.version, salt: poolBVerifier.salt },
+      credentials: {
+        [poolBVerifier.verifier]: {
+          providerApi: false,
+          observedAt: new Date(Date.now() - ROUTE_RECHECK_MS - 1_000).toISOString(),
+        },
+      },
     },
   }, null, 2)}\n`, { mode: 0o600 });
 
@@ -629,10 +637,14 @@ test("pooled Command Code recheck success is cached against the exact winning ke
     assert.equal((await response.json()).choices[0].message.content, "WINNER_B");
     assert.deepEqual(authorizations, ["Bearer POOL_A", "Bearer POOL_B"]);
     const plan = JSON.parse(readFileSync(planPath, "utf8"));
-    const winnerFingerprint = credentialFingerprint("POOL_B");
+    const winnerFingerprint = commandCodeCredentialVerifier("POOL_B", {
+      salt: plan.commandcode.credentialDerivation.salt,
+    }).verifier;
     assert.equal(plan.commandcode.credentials[winnerFingerprint].providerApi, true);
-    assert.equal(plan.commandcode.credentials[winnerFingerprint].credential, winnerFingerprint);
-    assert.equal(plan.commandcode.credentials[credentialFingerprint("POOL_A")], undefined);
+    const losingFingerprint = commandCodeCredentialVerifier("POOL_A", {
+      salt: plan.commandcode.credentialDerivation.salt,
+    }).verifier;
+    assert.equal(plan.commandcode.credentials[losingFingerprint], undefined);
   } finally {
     if (child.exitCode === null) {
       child.kill("SIGTERM");

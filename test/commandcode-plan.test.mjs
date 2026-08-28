@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -11,7 +12,6 @@ const {
   COMMANDCODE_PLAN_PATH,
   ROUTE_RECHECK_MS,
   commandCodeRoute,
-  credentialFingerprint,
   isUpgradeRequired,
   readCommandCodePlanState,
   recordCommandCodeRoute,
@@ -72,16 +72,35 @@ test("the refusal is re-checked once its window comes due", () => {
   });
 });
 
-test("the state file records a fingerprint and never the key", () => {
+test("the state file records a memory-hard versioned verifier and never a fast key digest", () => {
   forget();
   recordCommandCodeRoute("commandcode", "user_supersecret_value", { providerApi: false, at: AT });
   const raw = readFileSync(COMMANDCODE_PLAN_PATH, "utf8");
   assert.doesNotMatch(raw, /supersecret/);
-  const fingerprint = credentialFingerprint("user_supersecret_value");
-  const entry = readCommandCodePlanState().commandcode.credentials[fingerprint];
-  assert.match(entry.credential, /^[0-9a-f]{16}$/);
+  const fastDigest = createHash("sha256").update("user_supersecret_value").digest("hex").slice(0, 16);
+  assert.doesNotMatch(raw, new RegExp(fastDigest));
+  const providerState = readCommandCodePlanState().commandcode;
+  const entries = Object.values(providerState.credentials);
+  assert.equal(entries.length, 1);
+  const entry = entries[0];
+  assert.equal(providerState.credentialDerivation.version, "scrypt-v1");
+  assert.match(providerState.credentialDerivation.salt, /^[A-Za-z0-9_-]{22}$/);
+  assert.match(Object.keys(providerState.credentials)[0], /^[A-Za-z0-9_-]{43}$/);
   assert.equal(entry.providerApi, false);
   assert.equal(entry.observedAt, new Date(AT).toISOString());
+});
+
+test("legacy fast verifier entries miss safely", () => {
+  forget();
+  const legacy = createHash("sha256").update("key-a").digest("hex").slice(0, 16);
+  writeFileSync(COMMANDCODE_PLAN_PATH, `${JSON.stringify({
+    commandcode: { credentials: { [legacy]: {
+      credential: legacy,
+      providerApi: false,
+      observedAt: new Date(AT).toISOString(),
+    } } },
+  })}\n`, { mode: 0o600 });
+  assert.equal(commandCodeRoute("commandcode", "key-a", { at: AT }).route, "provider-api");
 });
 
 test("a corrupt state file costs one 403, not routing", () => {

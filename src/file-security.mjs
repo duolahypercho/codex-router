@@ -118,6 +118,17 @@ function powershellPrivateWorkerScript() {
   ].join("\n");
 }
 
+export function windowsPrivateWorkerInvocation() {
+  // Windows PowerShell's `-Command` mode owns stdin while parsing the command,
+  // so it cannot also provide a reliable persistent line protocol. Encoding
+  // the bounded script as an argument leaves stdin exclusively to requests.
+  const encoded = Buffer.from(powershellPrivateWorkerScript(), "utf16le").toString("base64");
+  return {
+    executable: "powershell.exe",
+    args: ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded],
+  };
+}
+
 function windowsWorkerEnvironment() {
   // Do not copy provider API keys into a helper that only needs Windows and a
   // temporary directory. PowerShell itself may need any of these canonical
@@ -191,9 +202,10 @@ function completeWindowsPrivateWorkerLine(worker, line) {
 }
 
 function startWindowsPrivateWorker() {
+  const invocation = windowsPrivateWorkerInvocation();
   const child = spawn(
-    "powershell.exe",
-    ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", powershellPrivateWorkerScript()],
+    invocation.executable,
+    invocation.args,
     {
       env: windowsWorkerEnvironment(),
       stdio: ["pipe", "pipe", "pipe"],

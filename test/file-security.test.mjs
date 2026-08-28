@@ -12,8 +12,16 @@ import {
   writePrivateJson,
   writePrivateJsonAsync,
   writePrivateFile,
+  windowsPrivateWorkerInvocation,
   windowsPrivateFileWorkerSpawnCount,
 } from "../src/file-security.mjs";
+
+test("Windows ACL worker reserves stdin for its bounded request protocol", () => {
+  const invocation = windowsPrivateWorkerInvocation();
+  assert.equal(invocation.executable, "powershell.exe");
+  assert.ok(invocation.args.includes("-EncodedCommand"));
+  assert.equal(invocation.args.includes("-Command"), false);
+});
 
 test("private JSON state uses one owner-only atomic writer", () => {
   const directory = mkdtempSync(path.join(os.tmpdir(), "codex-router-private-json-"));

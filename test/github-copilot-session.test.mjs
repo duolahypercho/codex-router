@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
@@ -9,6 +10,11 @@ import {
   githubCopilotRequestHeaders,
   resetGitHubCopilotSessionForTests,
 } from "../src/github-copilot-session.mjs";
+
+test("Copilot session reuse does not retain a reusable fast token digest", () => {
+  const source = readFileSync(new URL("../src/github-copilot-session.mjs", import.meta.url), "utf8");
+  assert.doesNotMatch(source, /tokenFingerprint|createHash\("sha256"\)\.update\(token\)/);
+});
 
 test("Copilot validates once and reuses fresh account routing", async () => {
   resetGitHubCopilotSessionForTests();

@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import {
   closeSync,
   constants as fsConstants,
@@ -486,6 +485,29 @@ export function providerApiKeyPoolsSnapshot({
   };
 }
 
+export function providerApiKeyPoolsSupportSnapshot(options = {}) {
+  const snapshot = providerApiKeyPoolsSnapshot(options);
+  return {
+    configured: snapshot.configured,
+    valid: snapshot.valid,
+    usable: snapshot.usable,
+    providers: Object.fromEntries(
+      Object.entries(snapshot.providers).map(([provider, pool]) => {
+        const readiness = pool.readiness || {};
+        return [provider, {
+          readiness: {
+            usable: readiness.usable === true,
+            reason: String(readiness.reason || "unknown"),
+          },
+          credentialCount: Number(readiness.credentialCount || 0),
+          eligibleCredentialCount: Number(readiness.eligibleCredentialCount || 0),
+          resolvableCredentialCount: Number(readiness.resolvableCredentialCount || 0),
+        }];
+      }),
+    ),
+  };
+}
+
 function quotaRatio(meta, at) {
   if (!meta?.quota || !(meta.quota.limit > 0) || !Number.isFinite(meta.quota.remaining)) return undefined;
   const reset = Date.parse(meta.quota.resetAt || "");
@@ -558,10 +580,9 @@ function resolveValue(result) {
 function duplicateResolvedSecrets(entries) {
   const seen = new Map();
   for (const entry of entries) {
-    const digest = createHash("sha256").update(entry.value).digest("hex");
-    const previous = seen.get(digest);
+    const previous = seen.get(entry.value);
     if (previous && previous !== entry.meta.id) return true;
-    seen.set(digest, entry.meta.id);
+    seen.set(entry.value, entry.meta.id);
   }
   return false;
 }

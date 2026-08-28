@@ -37,7 +37,7 @@ import {
   readProviderCredentialStore,
   redactCredentialText,
 } from "./provider-credential-store.mjs";
-import { providerApiKeyPoolsSnapshot } from "./provider-api-key-pool.mjs";
+import { providerApiKeyPoolsSupportSnapshot } from "./provider-api-key-pool.mjs";
 import { resolveStoredCredential } from "./provider-api-key-routing.mjs";
 
 function runJson(script, args = []) {
@@ -219,7 +219,7 @@ export function createSupportBundle(options = {}) {
     service: runJson("service.mjs", ["status"]),
     selection,
     credentialSources,
-    apiKeyPools: providerApiKeyPoolsSnapshot({
+    apiKeyPools: providerApiKeyPoolsSupportSnapshot({
       resolveCredential: (providerId, credentialId) => {
         const provider = PROVIDERS.get(providerId);
         return provider ? resolveStoredCredential(provider, credentialId) : undefined;
