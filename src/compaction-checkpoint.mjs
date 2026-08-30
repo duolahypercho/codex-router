@@ -515,7 +515,7 @@ export function renderCompactionValue(value) {
   return renderCheckpoint(decoded.checkpoint);
 }
 
-function checkpointFromRenderedText(text) {
+export function checkpointFromRenderedText(text) {
   if (typeof text !== "string" || !text.startsWith(CHECKPOINT_WARNING)) return undefined;
   const start = text.indexOf(`${CHECKPOINT_BEGIN}\n`);
   const end = text.indexOf(`\n${CHECKPOINT_END}`, start + CHECKPOINT_BEGIN.length);

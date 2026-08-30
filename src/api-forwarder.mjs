@@ -815,6 +815,30 @@ function normalizeBody(buffer, contentType, route) {
       if (effort) payload.reasoning_effort = effort;
       else delete payload.reasoning_effort;
     }
+  } else if (
+    ["ollama-cloud-glm-5-3", "ollama-cloud-glm-5-3-flash"].includes(model.requestProfile)
+  ) {
+    // GLM-5.3 and GLM-5.3-Flash always think and reject every rung outside low/high/max.
+    // Clamp Codex-only rungs onto the ladder this entry declares instead of
+    // letting the generic Ollama map send none/medium and get a 400. The
+    // router can send both the flat chat-completions field and the nested
+    // Responses spelling; the nested value is authoritative, so clamp it and
+    // synchronize the flat field to the same rung.
+    const levels = (model.reasoningLevels || []).map((level) => level.effort);
+    if (payload.reasoning?.effort !== undefined) {
+      const effort = declaredEffort(payload.reasoning.effort, levels);
+      if (effort) payload.reasoning.effort = effort;
+      else delete payload.reasoning.effort;
+    }
+    if (payload.reasoning_effort !== undefined) {
+      const effort = declaredEffort(payload.reasoning_effort, levels);
+      if (effort) payload.reasoning_effort = effort;
+      else delete payload.reasoning_effort;
+    }
+    if (payload.reasoning?.effort !== undefined) {
+      payload.reasoning_effort = payload.reasoning.effort;
+    }
+    delete payload.think;
   } else if (model.requestProfile === "qwen-plan") {
     // DashScope documents reasoning_effort only for the cross-vendor
     // DeepSeek/GLM models it resells (high/max; low/medium collapse to high,

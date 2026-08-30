@@ -1205,9 +1205,9 @@ In particular, Venice curation retains the provider-advertised effort metadata;
 the repository does not replace it with a cross-provider inference for a route
 it could not execute.
 
-The named GLM-5.3-Flash routes on OpenCode Go, OpenRouter, and Z.ai Coding did
-pass direct basic, streaming, forced-tool, stateless tool-result, and compact
-probes. Their recorded effort ladder is `low`/`high`/`max`, and it is the
+The named GLM-5.3-Flash routes on OpenCode Go, OpenRouter, Z.ai API, and Z.ai
+Coding did pass direct basic, streaming, forced-tool, stateless tool-result,
+and compact probes. Their recorded effort ladder is `low`/`high`/`max`, and it is the
 **model's** ladder rather than a generic reseller default. The model always
 thinks, and its upstream refuses an off-ladder rung by name:
 
@@ -1224,9 +1224,24 @@ loop for the OpenCode Go and OpenRouter named routes: it clamps whatever Codex
 sent onto the rungs the registry entry declares, so `xhigh` and `ultra` land on
 `max`, while `medium` and `minimal` land on `low`. An absent effort stays absent
 so the upstream default applies, and undocumented `thinking` is stripped. Z.ai
-Coding uses its own `glm-thinking` profile. All three named routes advertise a
+Coding uses its own `glm-thinking` profile. These named routes advertise a
 1,000,000-token window, compact at the directly proved conservative 400,000
 threshold, and preserve forced `tool_choice: "required"`.
+
+`ollama-cloud/glm-5.3-flash` is checked in as candidate registry metadata with a
+model-scoped request profile that clamps both flat and nested reasoning effort
+onto the same `low`/`high`/`max` ladder. It must not be called certified until
+the public slug passes the router-level exact-route suite for basic, streaming,
+forced-tool, stateless tool-result, and compact requests with failover disabled.
+
+`ollama-cloud/glm-5.3` is also checked in as candidate registry metadata on the
+same low/high/max ladder and the sibling `ollama-cloud-glm-5-3` clamp profile,
+advertising 1,000,000 context and an 880,000 conservative compact threshold
+matching the existing Ollama Cloud GLM-5.2 policy. It requires its own run of
+the router-level exact-route suite before it is called certified. That
+threshold is not a provider-measured boundary. It is text-only: GLM-5.3's
+multimodal variant is GLM-5.3-Flash, so the full-size route declares `text`
+modality instead of inheriting Flash's image path.
 
 ## A provider whose models each name their own endpoint
 

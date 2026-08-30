@@ -20,11 +20,14 @@ const QWEN_FLASH_ROUTES = [
   ["nousresearch/qwen3.8-flash", "qwen/qwen3.8-flash", 1_000_000, 900_000],
 ];
 
-// GLM-5.3 full routes confirmed 2026-08-27.
+// The first three GLM-5.3 full routes were confirmed 2026-08-27. The Ollama
+// Cloud entry is checked-in candidate metadata added later; these assertions
+// do not replace its required current-head router-level live certificate.
 const GLM_FULL_ROUTES = [
   ["openrouter/glm-5.3", "z-ai/glm-5.3", 1_048_576, 943_000],
   ["commandcode/glm-5.3", "zai-org/GLM-5.3", 1_000_000, 900_000],
   ["venice/glm-5.3", "z-ai-glm-5-3", 1_000_000, 900_000],
+  ["ollama-cloud/glm-5.3", "glm-5.3:cloud", 1_000_000, 880_000],
 ];
 
 // GLM-5.3-Flash zai-api route confirmed 2026-08-27.
@@ -43,7 +46,7 @@ test("every Qwen3.8 Flash route records the upstream id and window", () => {
   }
 });
 
-test("every GLM-5.3 full route records the upstream id and window", () => {
+test("confirmed and candidate GLM-5.3 full routes record their static metadata", () => {
   for (const [slug, upstreamModel, contextWindow, autoCompact] of GLM_FULL_ROUTES) {
     const model = MODEL_BY_SLUG.get(slug);
     assert.ok(model, `${slug} is missing from the registry`);

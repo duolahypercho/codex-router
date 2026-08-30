@@ -1,13 +1,26 @@
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { redactCallerUrl } from "./caller-auth.mjs";
+import {
+  checkpointFromRenderedText,
+  decodeCompaction,
+} from "./compaction-checkpoint.mjs";
 import { EXACT_ROUTE_PROBE_HEADER } from "./exact-route-probe.mjs";
 import { MODEL_BY_SLUG } from "./model-registry.mjs";
-import {
-  installedRouterBaseUrl,
-  smokeTestModel,
-} from "./smoke-test.mjs";
+import { installedRouterBaseUrl } from "./smoke-test.mjs";
+
+const REASONING_EFFORTS = new Set([
+  "none",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+  "ultra",
+]);
 
 function responseText(payload) {
   if (typeof payload?.output_text === "string") return payload.output_text;
@@ -33,7 +46,34 @@ async function request(suffix, body, timeoutMs = 180_000) {
   return { response, payload };
 }
 
-async function toolCall(model) {
+function reasoningFields(reasoningEffort) {
+  return reasoningEffort
+    ? {
+        reasoning: { effort: reasoningEffort },
+        reasoning_effort: reasoningEffort,
+      }
+    : {};
+}
+
+async function basicResponse(model, reasoningEffort) {
+  const marker = "CODEX_ROUTER_SMOKE_OK";
+  const { response, payload } = await request("/responses", {
+    model,
+    stream: false,
+    input: `Reply with exactly ${marker} and nothing else.`,
+    ...reasoningFields(reasoningEffort),
+  });
+  const text = responseText(payload);
+  return {
+    ok: response.ok && text.includes(marker),
+    status: response.status,
+    detail: response.ok && text.includes(marker)
+      ? "live response marker verified"
+      : payload?.error?.message || `HTTP ${response.status}`,
+  };
+}
+
+async function toolCall(model, reasoningEffort) {
   const { response, payload } = await request("/responses", {
     model,
     stream: false,
@@ -53,6 +93,7 @@ async function toolCall(model) {
       },
     ],
     tool_choice: "required",
+    ...reasoningFields(reasoningEffort),
   });
   const call = (payload?.output || []).find(
     (item) => item?.type === "function_call" && item?.name === "codex_router_probe",
@@ -70,7 +111,7 @@ async function toolCall(model) {
   };
 }
 
-async function streaming(model) {
+async function streaming(model, reasoningEffort) {
   const marker = "CODEX_ROUTER_STREAM_OK";
   const response = await fetch(`${installedRouterBaseUrl()}/responses`, {
     method: "POST",
@@ -83,6 +124,7 @@ async function streaming(model) {
       model,
       stream: true,
       input: `Reply with exactly ${marker} and nothing else.`,
+      ...reasoningFields(reasoningEffort),
     }),
     signal: AbortSignal.timeout(180_000),
   });
@@ -109,22 +151,116 @@ async function streaming(model) {
   };
 }
 
-async function compaction(model) {
+async function statelessToolResult(model, reasoningEffort) {
+  // The marker exists only in the tool result. If a translation layer drops
+  // the call/result pair, a plausible ordinary answer must not pass this
+  // check merely because the user prompt disclosed the expected value.
+  const marker = `CODEX_ROUTER_TOOL_RESULT_${randomUUID().replaceAll("-", "")}`;
+  const { response, payload } = await request("/responses", {
+    model,
+    stream: false,
+    input: [
+      {
+        type: "message",
+        role: "user",
+        content: [{
+          type: "input_text",
+          text: "Read the completed codex_router_probe result below and reply with exactly its output value.",
+        }],
+      },
+      {
+        type: "function_call",
+        id: "fc_codex_router_probe",
+        call_id: "call_codex_router_probe",
+        name: "codex_router_probe",
+        arguments: "{\"value\":\"pending\"}",
+      },
+      {
+        type: "function_call_output",
+        call_id: "call_codex_router_probe",
+        output: marker,
+      },
+    ],
+    tools: [
+      {
+        type: "function",
+        name: "codex_router_probe",
+        description: "Compatibility probe",
+        parameters: {
+          type: "object",
+          properties: { value: { type: "string" } },
+          required: ["value"],
+          additionalProperties: false,
+        },
+        strict: true,
+      },
+    ],
+    ...reasoningFields(reasoningEffort),
+  });
+  const text = responseText(payload);
+  const markerReceived = text.includes(marker);
+  return {
+    ok: response.ok && markerReceived,
+    status: response.status,
+    detail: response.ok && markerReceived
+      ? "stateless tool-result-backed response verified"
+      : payload?.error?.message || (response.ok
+          ? "stateless tool-result marker missing"
+          : `HTTP ${response.status}`),
+  };
+}
+
+function itemText(item) {
+  if (typeof item?.content === "string") return item.content;
+  if (!Array.isArray(item?.content)) return "";
+  return item.content
+    .filter((part) =>
+      ["input_text", "output_text", "text"].includes(part?.type) &&
+      typeof part.text === "string",
+    )
+    .map((part) => part.text)
+    .join("");
+}
+
+function compactionCheckpoint(payload) {
+  for (const item of Array.isArray(payload?.output) ? payload.output : []) {
+    if (item?.type === "compaction") {
+      const decoded = decodeCompaction(item.encrypted_content);
+      if (decoded?.kind === "checkpoint") return decoded.checkpoint;
+      continue;
+    }
+    const checkpoint = checkpointFromRenderedText(itemText(item));
+    if (checkpoint) return checkpoint;
+  }
+  return undefined;
+}
+
+async function compaction(model, reasoningEffort) {
+  const marker = `CODEX_ROUTER_COMPACT_${randomUUID().replaceAll("-", "")}`;
   const { response, payload } = await request("/responses/compact", {
     model,
     input: [
       {
         type: "message",
         role: "user",
-        content: [{ type: "input_text", text: "Remember that the probe value is 42." }],
+        content: [{
+          type: "input_text",
+          text: `Preserve the exact opaque token ${marker} verbatim in the checkpoint objective.`,
+        }],
       },
     ],
+    ...reasoningFields(reasoningEffort),
   });
-  const text = responseText(payload);
+  const checkpoint = compactionCheckpoint(payload);
+  const markerReceived = checkpoint?.orientation?.objective?.includes(marker) === true;
   return {
-    ok: response.ok && Boolean(text),
+    ok: response.ok && markerReceived,
     status: response.status,
-    detail: response.ok && text ? "compaction response verified" : payload?.error?.message || `HTTP ${response.status}`,
+    detail: response.ok && markerReceived
+      ? "compaction checkpoint objective verified"
+      : payload?.error?.message || (response.ok
+          ? "compaction checkpoint objective marker missing"
+          : `HTTP ${response.status}`),
   };
 }
 
@@ -152,24 +288,33 @@ export async function subagentCapabilityProbe(model) {
 
 export async function compatibilityTest(model, options = {}) {
   if (!MODEL_BY_SLUG.has(model)) throw new Error(`Unknown registry model: ${model}`);
+  const reasoningEffort = options.reasoningEffort;
+  if (reasoningEffort && !REASONING_EFFORTS.has(reasoningEffort)) {
+    throw new Error(`Unknown reasoning effort: ${reasoningEffort}`);
+  }
   const results = [];
-  const basic = await smokeTestModel(model);
-  results.push({ name: "basic response", ...basic });
+  results.push({ name: "basic response", ...(await basicResponse(model, reasoningEffort)) });
   if (!options.quick) {
-    results.push({ name: "streaming", ...(await streaming(model)) });
-    results.push({ name: "tool calling", ...(await toolCall(model)) });
-    results.push({ name: "compaction", ...(await compaction(model)) });
+    results.push({ name: "streaming", ...(await streaming(model, reasoningEffort)) });
+    results.push({ name: "tool calling", ...(await toolCall(model, reasoningEffort)) });
+    results.push({
+      name: "stateless tool result",
+      ...(await statelessToolResult(model, reasoningEffort)),
+    });
+    results.push({ name: "compaction", ...(await compaction(model, reasoningEffort)) });
   }
   return { model, ok: results.every((result) => result.ok), results };
 }
 
 async function main() {
   if (process.argv.includes("--help")) {
-    process.stdout.write(`Usage: test-model MODEL --live --yes [--quick] [--json]
+    process.stdout.write(`Usage: test-model MODEL --live --yes [--quick] [--json] [--effort=RUNG]
 
-Runs billed live checks for text, streaming, tool calling, and compaction through
-the installed router. Both --live and --yes are required to prevent accidental
-provider charges. --quick runs only the basic response check.
+Runs billed live checks for text, streaming, tool calling, stateless tool-result
+replay, and compaction through the installed router. Both --live and --yes are
+required to prevent accidental provider charges. --quick runs only the basic
+response check. --effort sends both Codex effort spellings so a model-scoped
+request profile is exercised on the live route.
 `);
     return;
   }
@@ -178,7 +323,11 @@ provider charges. --quick runs only the basic response check.
   if (!process.argv.includes("--live") || !process.argv.includes("--yes")) {
     throw new Error("Live compatibility checks may use provider quota; pass --live --yes to confirm.");
   }
-  const result = await compatibilityTest(model, { quick: process.argv.includes("--quick") });
+  const effortArgument = process.argv.find((value) => value.startsWith("--effort="));
+  const result = await compatibilityTest(model, {
+    quick: process.argv.includes("--quick"),
+    reasoningEffort: effortArgument?.slice("--effort=".length),
+  });
   if (process.argv.includes("--json")) {
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   } else {

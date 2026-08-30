@@ -204,6 +204,8 @@ Linux installations support the Codex CLI.
 | Grok 4.5 (API) | `grok-api/grok-4.5` | Separately billed xAI API key |
 | Claude Opus 4.8 (API) | `anthropic-api/claude-opus-4.8` | Separately billed Anthropic API key |
 | GLM-5.2 (Ollama Cloud) | `ollama-cloud/glm-5.2` | Ollama Cloud API key |
+| GLM-5.3 (Ollama Cloud) | `ollama-cloud/glm-5.3` | Ollama Cloud API key |
+| GLM-5.3-Flash (Ollama Cloud) | `ollama-cloud/glm-5.3-flash` | Ollama Cloud API key |
 | Kimi K2.7 Code (Ollama Cloud) | `ollama-cloud/kimi-k2.7-code` | Ollama Cloud API key |
 | Kimi K3 (Ollama Cloud) | `ollama-cloud/kimi-k3` | Ollama Cloud API key |
 | MiniMax M3 (Ollama Cloud) | `ollama-cloud/minimax-m3` | Ollama Cloud API key |
@@ -223,6 +225,7 @@ Linux installations support the Codex CLI.
 | GLM-5.3 (Coding Plan) | `zai-coding/glm-5.3` | Z.ai GLM Coding Plan API key |
 | GLM-5.2 (Coding Plan) | `zai-coding/glm-5.2` | Z.ai GLM Coding Plan API key |
 | GLM-5-Turbo (Coding Plan) | `zai-coding/glm-5-turbo` | Z.ai GLM Coding Plan API key |
+| GLM-5.3-Flash (Z.ai API) | `zai-api/glm-5.3-flash` | Separately billed Z.ai platform API key |
 | GLM-5.3 (Z.ai API) | `zai-api/glm-5.3` | Separately billed Z.ai platform API key |
 | GLM-5.2 (Z.ai API) | `zai-api/glm-5.2` | Separately billed Z.ai platform API key |
 | GLM-4.7 (Z.ai API) | `zai-api/glm-4.7` | Separately billed Z.ai platform API key |
@@ -788,7 +791,7 @@ a 1,048,576-token context window, 131,072 tokens of output, text and image
 input, and tool calling. No checked-in Ox Alpha route remains. OpenCode Go
 graduated the preview to the named, metered `glm-5.3-flash` model; direct
 exact-route probes also certified that named model on OpenRouter and Z.ai
-Coding.
+Coding, and the Z.ai API route is shipped with the same direct-proven ladder.
 
 | Picker label | Model ID | Needs a key | Status |
 | --- | --- | --- | --- |
@@ -797,16 +800,22 @@ Coding.
 | ~~Ox Alpha (OpenCode Free)~~ | `opencode-free/ox-alpha` | ~~no~~ | Withdrawn |
 | GLM-5.3-Flash (opencode Go) | `opencode-go/glm-5.3-flash` | opencode | Named replacement |
 | GLM-5.3-Flash (OpenRouter) | `openrouter/glm-5.3-flash` | OpenRouter | Available |
+| GLM-5.3-Flash (Z.ai API) | `zai-api/glm-5.3-flash` | Z.ai API | Available |
 | GLM-5.3-Flash (Z.ai Coding) | `zai-coding/glm-5.3-flash` | Z.ai Coding | Available |
+| GLM-5.3-Flash (Ollama Cloud) | `ollama-cloud/glm-5.3-flash` | Ollama Cloud | Candidate — exact-route proof required |
 | ~~Ox Alpha (OpenRouter)~~ | `openrouter/ox-alpha` | ~~OpenRouter~~ | Withdrawn |
 | ~~Ox Alpha (Nous Research)~~ | `nousresearch/ox-alpha` | ~~Nous Portal~~ | Withdrawn |
 
 The exact-route certification run sent basic, streaming, forced-tool,
-stateless tool-result, and compact requests without failover. Command Code's
-`stealth/ox-alpha` rejected every surface as unavailable. The available Venice
-account stopped at its API billing gate before `stealth-ox-alpha` could be
-wire-certified. Publishing either preset would therefore claim more than the
-evidence supports.
+stateless tool-result, and compact requests without failover for the named
+OpenCode Go, OpenRouter, Z.ai API, and Z.ai Coding routes. The Ollama Cloud
+candidate must pass that same router-level suite before it is called certified.
+The full `ollama-cloud/glm-5.3` entry is candidate registry metadata too and
+requires its own run of the same suite.
+Command Code's `stealth/ox-alpha` rejected every surface as unavailable. The
+available Venice account stopped at its API billing gate before
+`stealth-ox-alpha` could be wire-certified. Publishing either preset would
+therefore claim more than the evidence supports.
 
 Reasoning effort is **low · high · max** on the certified named Flash routes,
 defaulting to `max`. Only three rungs exist because

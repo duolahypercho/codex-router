@@ -3852,9 +3852,15 @@ test("API forwarder routes Ollama Cloud models without unsupported parameters", 
       ["ollama-cloud-glm-5-2", "glm-5.2", "xhigh", "max"],
       ["ollama-cloud-glm-5-2", "glm-5.2", "minimal", "none"],
       ["ollama-cloud-glm-5-2", "glm-5.2", "bogus", "high"],
+      ["ollama-cloud-glm-5-3-flash", "glm-5.3-flash:cloud", "minimal", "low"],
+      ["ollama-cloud-glm-5-3-flash", "glm-5.3-flash:cloud", "medium", "low"],
+      ["ollama-cloud-glm-5-3-flash", "glm-5.3-flash:cloud", "xhigh", "max"],
       ["ollama-cloud-kimi-k2-7-code", "kimi-k2.7-code", "high", "high"],
       ["ollama-cloud-kimi-k3", "kimi-k3:cloud", "low", "low"],
       ["ollama-cloud-kimi-k3", "kimi-k3:cloud", "max", "max"],
+      ["ollama-cloud-glm-5-3", "glm-5.3:cloud", "minimal", "low"],
+      ["ollama-cloud-glm-5-3", "glm-5.3:cloud", "medium", "low"],
+      ["ollama-cloud-glm-5-3", "glm-5.3:cloud", "xhigh", "max"],
     ]) {
       const response = await fetch(
         `http://127.0.0.1:${forwarderPort}/v1/chat/completions`,
@@ -3881,6 +3887,42 @@ test("API forwarder routes Ollama Cloud models without unsupported parameters", 
       assert.equal(request.body.model, upstreamModel);
       assert.equal(request.body.reasoning_effort, expectedEffort);
       assert.equal(request.body.think, undefined);
+    }
+
+    // The router can send both spellings; nested is authoritative and the flat
+    // field must be synchronized to the same clamped rung.
+    for (const [gatewayModel, upstreamModel] of [
+      ["ollama-cloud-glm-5-3", "glm-5.3:cloud"],
+      ["ollama-cloud-glm-5-3-flash", "glm-5.3-flash:cloud"],
+    ]) {
+      for (const [nestedEffort, flatEffort, expectedEffort] of [
+        ["medium", "max", "low"],
+        ["minimal", "high", "low"],
+        ["xhigh", "low", "max"],
+      ]) {
+        const response = await fetch(
+          `http://127.0.0.1:${forwarderPort}/v1/chat/completions`,
+          {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${INTERNAL_KEY}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              model: gatewayModel,
+              reasoning: { effort: nestedEffort },
+              reasoning_effort: flatEffort,
+              messages: [{ role: "user", content: "test" }],
+            }),
+          },
+        );
+        assert.equal(response.status, 200);
+        const request = upstreamRequests.at(-1);
+        assert.equal(request.body.model, upstreamModel);
+        assert.equal(request.body.reasoning?.effort, expectedEffort);
+        assert.equal(request.body.reasoning_effort, expectedEffort);
+        assert.equal(request.body.think, undefined);
+      }
     }
 
     // An absent effort stays absent so Ollama applies the model's own default.

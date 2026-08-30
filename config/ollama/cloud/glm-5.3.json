@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "slug": "ollama-cloud/glm-5.3",
+      "gatewayModel": "ollama-cloud-glm-5-3",
+      "upstreamModel": "glm-5.3:cloud",
+      "provider": "ollama-cloud",
+      "listed": true,
+      "displayName": "GLM-5.3 (Ollama Cloud)",
+      "description": "GLM-5.3 hosted on Ollama Cloud, Z.ai's 753B flagship open-weights coding model with long-horizon agentic gains, adjustable reasoning effort, and a 1M-token context window.",
+      "priority": 24,
+      "defaultEffort": "max",
+      "reasoningLevels": [
+        {
+          "effort": "low",
+          "description": "Fast reasoning for simple edits"
+        },
+        {
+          "effort": "high",
+          "description": "Deep reasoning with thinking enabled"
+        },
+        {
+          "effort": "max",
+          "description": "Maximum reasoning depth"
+        }
+      ],
+      "contextWindow": 1000000,
+      "autoCompact": 880000,
+      "inputModalities": [
+        "text"
+      ],
+      "requestProfile": "ollama-cloud-glm-5-3",
+      "compHash": "ollama-cloud-glm-5-3-v1"
+    }
+  ]
+}
