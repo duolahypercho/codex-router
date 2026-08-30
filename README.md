@@ -289,10 +289,14 @@ the selected model has been verified for it. DeepSeek V4 Flash is enabled on
 its direct API and opencode Go routes. A compatible model declares
 `"searchTool": { "mode": "standalone" }` in its registry or user-model
 metadata. This capability is resolved from the selected model/provider pair;
-the router does not enable a global web-search switch or infer compatibility
-from an OpenAI-compatible endpoint. A model is advertised only after its
+the managed Codex provider block enables the provider half of standalone
+search so verified models can use it, while the merged catalog remains the
+per-model gate. The router never infers compatibility from an
+OpenAI-compatible endpoint. A model is advertised only after its exact
 provider path has been verified to preserve Codex search-result items and
-tool-call history.
+tool-call history. If Codex attaches hosted-search fields to an unsupported
+runtime-generic route anyway, the managed Responses boundary removes only
+those search extensions before the strict upstream sees them.
 
 For a routed model that has no verified standalone or provider-hosted search,
 Codex can instead use an explicit Perplexity Search sidecar. This is not a
@@ -483,9 +487,19 @@ but answer HTTP 400 when one is required, which fails the compatibility check
 and the routed-subagent handoff even though tool calling works. Answering yes
 stores `"requestProfile": "auto-tool-choice"`, and the router downgrades the
 forced choice for that model only (`--request-profile auto-tool-choice` in the
-`--models` form). The provider's own `/v1/models` endpoint always decides
-which models exist. Curated models are local to your machine and are not
-vetted by the repository's compatibility tests.
+`--models` form), for example:
+
+```sh
+./bin/curate-models PROVIDER --models MODEL_ID --request-profile auto-tool-choice
+```
+
+For an already-curated model, edit only that entry's `requestProfile` in the
+protected `user-models.json`, preserving its existing context, modalities,
+efforts, and other hand-tuned metadata; do not remove and re-add it or apply a
+broader vendor profile just to repair `tool_choice`. The provider's own
+`/v1/models` endpoint always decides which models exist. Curated models are
+local to your machine and are not vetted by the repository's compatibility
+tests.
 
 The same managed OpenAI base URL also serves `/v1/embeddings`, but only for a
 model whose local or checked-in metadata explicitly names the capability. A

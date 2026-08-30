@@ -7,6 +7,10 @@ import { upstreamFailureKind } from "./error-translation.mjs";
 import { PROVIDERS } from "./model-registry.mjs";
 import { canonicalProviderId } from "./provider-selection.mjs";
 import { hasProviderTransportError } from "./transport-failure.mjs";
+import {
+  routedModelPreservesSearchContract,
+  routedModelSearchMode,
+} from "./search-capability.mjs";
 
 // Keeping a turn alive when the provider it was routed to has no usage left.
 //
@@ -322,7 +326,18 @@ function supportsImageInput(model) {
 // (estimateInputTokens), which errs high by design -- the safe direction here,
 // because trading a quota failure for a context-window rejection is a strictly
 // worse turn than the one it replaced.
-function eligible(model, { fromProvider, estimatedTokens, needsImage, needsMultiAgentV2, cooled }) {
+function eligible(
+  model,
+  {
+    fromProvider,
+    estimatedTokens,
+    needsImage,
+    needsMultiAgentV2,
+    requiredSearchMode,
+    hasSearchHistory,
+    cooled,
+  },
+) {
   if (!model?.slug) return false;
   if (canonicalProviderId(model.provider) === fromProvider) return false;
   if (cooled.has(canonicalProviderId(model.provider))) return false;
@@ -334,6 +349,15 @@ function eligible(model, { fromProvider, estimatedTokens, needsImage, needsMulti
   // is the registry saying this model must never be handed transcribed images.
   if (needsImage && !supportsImageInput(model) && model.visionBridge === false) return false;
   if (needsMultiAgentV2 && (model.multiAgentVersion || "v1") !== "v2") return false;
+  // Search is an execution contract, not just another tool label. Crossing
+  // from hosted to standalone search (or to no search) can strand an active
+  // call or replay history a destination never proved it accepts. If the
+  // original capability has disappeared while history still uses it, no
+  // candidate is safer than guessing.
+  if (!routedModelPreservesSearchContract(model, {
+    requiredMode: requiredSearchMode,
+    hasSearchHistory,
+  })) return false;
   return true;
 }
 
@@ -348,14 +372,41 @@ function eligible(model, { fromProvider, estimatedTokens, needsImage, needsMulti
 // caller, which is the only place that knows whether a session exists.
 export function rankFailoverCandidates(
   models,
-  { from, estimatedTokens, needsImage = false, needsMultiAgentV2 = false, chain = [], now } = {},
+  options = {},
 ) {
+  const {
+    from,
+    estimatedTokens,
+    needsImage = false,
+    needsMultiAgentV2 = false,
+    needsSearch = false,
+    hasSearchHistory = false,
+    requiredSearchMode: requiredSearchModeOverride,
+    chain = [],
+    now,
+  } = options;
   const fromProvider = canonicalProviderId(from?.provider || "");
+  // An explicitly captured absence is part of the request contract. `??`
+  // would mistake it for an omitted override and re-read mutable sidecar
+  // state after the source snapshot.
+  const requiredSearchMode = Object.hasOwn(options, "requiredSearchMode")
+    ? requiredSearchModeOverride
+    : needsSearch || hasSearchHistory
+      ? routedModelSearchMode(from)
+      : undefined;
   const cooled = new Set(Object.keys(readProviderCooldowns({ now })));
   const available = (Array.isArray(models) ? models : []).filter(
     (model) =>
       model.slug !== from?.slug &&
-      eligible(model, { fromProvider, estimatedTokens, needsImage, needsMultiAgentV2, cooled }),
+      eligible(model, {
+        fromProvider,
+        estimatedTokens,
+        needsImage,
+        needsMultiAgentV2,
+        requiredSearchMode,
+        hasSearchHistory,
+        cooled,
+      }),
   );
 
   if (chain.length) {

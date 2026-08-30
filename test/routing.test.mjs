@@ -6104,6 +6104,233 @@ function curatedFireworksModel() {
   return { dir, file, gatewayModel: "fireworks-test-model" };
 }
 
+function genericSearchModelFixture() {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "routing-generic-search-"));
+  const providersFile = path.join(dir, "generic-providers.json");
+  const userModelsFile = path.join(dir, "user-models.json");
+  const entry = (upstreamModel, priority) => ({
+    slug: `strict-gateway/${upstreamModel}`,
+    gatewayModel: `strict-gateway-${upstreamModel}`,
+    compHash: `strict-gateway-${upstreamModel}-user-v1`,
+    upstreamModel,
+    provider: "strict-gateway",
+    listed: true,
+    displayName: `${upstreamModel} (curated)`,
+    description: "Strict generic search routing fixture.",
+    priority,
+    defaultEffort: "high",
+    reasoningLevels: [{ effort: "high", description: "Adaptive reasoning" }],
+    contextWindow: 131_072,
+    autoCompact: 110_000,
+    inputModalities: ["text"],
+  });
+  const plain = entry("plain-model", 100);
+  const searchable = {
+    ...entry("search-model", 101),
+    searchTool: { mode: "hosted" },
+  };
+  writeFileSync(providersFile, `${JSON.stringify({
+    version: 1,
+    providers: [{
+      id: "strict-gateway",
+      displayName: "Strict Gateway",
+      baseUrl: "https://strict.example.test/v1",
+      adapter: "openai-chat",
+      headers: {},
+      allowPrivate: false,
+      enabled: true,
+    }],
+  })}\n`);
+  writeFileSync(userModelsFile, `${JSON.stringify({
+    version: 1,
+    models: [plain, searchable],
+  })}\n`);
+  return { dir, providersFile, userModelsFile, plain, searchable };
+}
+
+test("router enforces generic model search capability on ordinary and compact turns", async () => {
+  const gatewayRequests = [];
+  const gateway = await mockServer(async (request, response) => {
+    gatewayRequests.push(await bodyJson(request));
+    json(response, 200, {
+      id: `resp-${gatewayRequests.length}`,
+      object: "response",
+      status: "completed",
+      output: [{
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: "ok" }],
+      }],
+    });
+  });
+  const fixture = genericSearchModelFixture();
+  const routerPort = await openPort();
+  const router = run("router.mjs", {
+    CODEX_ROUTER_PORT: String(routerPort),
+    MODEL_ROUTER_STATE_DIR: fixture.dir,
+    MODEL_ROUTER_GENERIC_PROVIDERS: fixture.providersFile,
+    MODEL_ROUTER_USER_MODELS: fixture.userModelsFile,
+    CODEX_ROUTER_GATEWAY_BASE_URL: `http://127.0.0.1:${gateway.port}/v1`,
+    CODEX_ROUTER_QUIET: "1",
+  });
+  const headers = {
+    Authorization: `Bearer ${CALLER_KEY}`,
+    "Content-Type": "application/json",
+  };
+  const shell = { type: "function", name: "shell", parameters: { type: "object" } };
+  const functionNamedSearch = {
+    type: "function",
+    name: "web_search",
+    parameters: { type: "object" },
+  };
+  const webSearch = { type: "web_search", search_context_size: "medium" };
+  const preview = { type: "web_search_preview" };
+  const ambientSearch = {
+    web_search_options: { search_context_size: "medium" },
+    include: ["reasoning.encrypted_content", "web_search_call.action.sources"],
+    tools: [webSearch, shell, preview, functionNamedSearch],
+    tool_choice: "required",
+  };
+
+  try {
+    await waitFor(`${routerBase(routerPort)}/models`, router);
+    for (const model of [fixture.plain, fixture.searchable]) {
+      const response = await fetch(`${routerBase(routerPort)}/responses`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ model: model.slug, input: "test", ...ambientSearch }),
+      });
+      assert.equal(response.status, 200, router.testErrors());
+    }
+
+    assert.equal(gatewayRequests[0].web_search_options, undefined);
+    assert.deepEqual(gatewayRequests[0].include, ["reasoning.encrypted_content"]);
+    assert.deepEqual(
+      gatewayRequests[0].tools.slice(0, 2).map((tool) => tool.name),
+      ["shell", "web_search"],
+    );
+    assert.equal(
+      gatewayRequests[0].tools.some((tool) => ["web_search", "web_search_preview"].includes(tool.type)),
+      false,
+    );
+    assert.equal(gatewayRequests[0].tool_choice, "required");
+    assert.deepEqual(gatewayRequests[1].web_search_options, ambientSearch.web_search_options);
+    assert.deepEqual(gatewayRequests[1].include, ambientSearch.include);
+    assert.deepEqual(gatewayRequests[1].tools.slice(0, ambientSearch.tools.length), ambientSearch.tools);
+
+    const compact = await fetch(`${routerBase(routerPort)}/responses/compact`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        model: fixture.plain.slug,
+        input: [{
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "remember this" }],
+        }],
+        web_search_options: ambientSearch.web_search_options,
+        include: ambientSearch.include,
+        tools: [webSearch],
+        tool_choice: "required",
+      }),
+    });
+    assert.equal(compact.status, 200, router.testErrors());
+    assert.equal(gatewayRequests[2].web_search_options, undefined);
+    assert.deepEqual(gatewayRequests[2].include, ["reasoning.encrypted_content"]);
+    assert.deepEqual(gatewayRequests[2].tools, []);
+
+    for (const toolChoice of [{ type: "web_search" }, "required"]) {
+      const before = gatewayRequests.length;
+      const response = await fetch(`${routerBase(routerPort)}/responses`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          model: fixture.plain.slug,
+          input: "test",
+          tools: [webSearch],
+          tool_choice: toolChoice,
+        }),
+      });
+      assert.equal(response.status, 400);
+      assert.equal((await response.json()).error.type, "model_search_not_supported");
+      assert.equal(gatewayRequests.length, before);
+    }
+  } finally {
+    await stopChild(router);
+    await closeServer(gateway.server);
+    rmSync(fixture.dir, { recursive: true, force: true });
+  }
+});
+
+test("router refuses unsupported search history on selected generic turns and compaction", async () => {
+  const gatewayRequests = [];
+  const gateway = await mockServer(async (request, response) => {
+    gatewayRequests.push(await bodyJson(request));
+    json(response, 200, {
+      id: `resp-${gatewayRequests.length}`,
+      object: "response",
+      status: "completed",
+      output: [{
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: "ok" }],
+      }],
+    });
+  });
+  const fixture = genericSearchModelFixture();
+  const routerPort = await openPort();
+  const router = run("router.mjs", {
+    CODEX_ROUTER_PORT: String(routerPort),
+    MODEL_ROUTER_STATE_DIR: fixture.dir,
+    MODEL_ROUTER_GENERIC_PROVIDERS: fixture.providersFile,
+    MODEL_ROUTER_USER_MODELS: fixture.userModelsFile,
+    CODEX_ROUTER_GATEWAY_BASE_URL: `http://127.0.0.1:${gateway.port}/v1`,
+    CODEX_ROUTER_QUIET: "1",
+  });
+  const headers = {
+    Authorization: `Bearer ${CALLER_KEY}`,
+    "Content-Type": "application/json",
+  };
+  const history = [{
+    type: "web_search_call",
+    id: "search-history",
+    status: "completed",
+    action: { type: "search", query: "router contract" },
+  }];
+
+  try {
+    await waitFor(`${routerBase(routerPort)}/models`, router);
+    for (const suffix of ["", "/compact"]) {
+      const beforeUnsupported = gatewayRequests.length;
+      const unsupported = await fetch(`${routerBase(routerPort)}/responses${suffix}`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ model: fixture.plain.slug, input: history }),
+      });
+      assert.equal(unsupported.status, 400);
+      assert.equal((await unsupported.json()).error.type, "model_search_not_supported");
+      assert.equal(
+        gatewayRequests.length,
+        beforeUnsupported,
+        "unsupported history must fail before the gateway",
+      );
+
+      const supported = await fetch(`${routerBase(routerPort)}/responses${suffix}`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ model: fixture.searchable.slug, input: history }),
+      });
+      assert.equal(supported.status, 200, router.testErrors());
+    }
+    assert.equal(gatewayRequests.length, 2);
+    assert.ok(gatewayRequests.every((request) => request.model === fixture.searchable.gatewayModel));
+  } finally {
+    await stopChild(router);
+    await closeServer(gateway.server);
+    rmSync(fixture.dir, { recursive: true, force: true });
+  }
+});
+
 test("API forwarder strips web_search_options for Fireworks", async () => {
   const upstreamRequests = [];
   const upstream = await mockServer(async (request, response) => {

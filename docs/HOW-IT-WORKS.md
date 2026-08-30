@@ -224,18 +224,24 @@ Codex sends the search result back through the normal routed Responses turn.
 This is a per-model compatibility declaration, not a claim that the upstream
 provider hosts search. Only enable it after verifying that the provider's
 model accepts Codex's web-search result items and preserves tool/function-call
-history. Do not enable a global Codex feature or provider flag for this: Codex
-does not use those settings to gate the tool per model, so they would expose
-`web.run` to unrelated routed models and could select a native OpenAI search
-path without the required ChatGPT session. The registry declaration is the
-only capability switch, and it is scoped to the exact model/provider route.
+history. The managed Codex provider block sets
+`supports_standalone_web_search = true` because Codex requires that provider
+half before any verified routed model can execute standalone search. It is not
+the advertisement gate: the merged catalog exposes search only for an exact
+model/provider route with a `searchTool` declaration (or a ready exact sidecar
+binding). An OpenAI-compatible endpoint proves neither capability. If Codex
+still sends ambient hosted-search extensions to an unsupported runtime-generic
+route, the router strips those extensions at its managed Responses boundary;
+it does not mutate direct gateway calls or ordinary caller-owned functions.
 
 The checked-in registry currently enables this mode for DeepSeek V4 Flash on
 its direct API and opencode Go routes, DeepSeek V4 Flash Vision Exp, Xiaomi
 MiMo v2.5, and GLM-5.3 on the Z.ai Coding Plan. Other provider/model pairs
 stay off until verified -- including GLM-5.3 on the opencode Go relay, which
-is a different transport from the Z.ai route the capability was proven on. User-model curation can opt in locally without changing the
-shared registry.
+is a different transport from the Z.ai route the capability was proven on. An
+operator can opt in locally only by adding `searchTool` to that exact entry in
+the protected `user-models.json` after verifying the route. The curation CLI
+does not ask for or infer search mode from an upstream catalog claim.
 
 ### Per-model search sidecar
 

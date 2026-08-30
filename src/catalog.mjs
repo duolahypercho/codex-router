@@ -31,7 +31,6 @@ import { syncRoutedCodexAgents } from "./codex-agent-catalog.mjs";
 import {
   MODEL_BY_SLUG,
   MODEL_SLUG_ALIASES,
-  RUNTIME_PROVIDERS,
 } from "./model-registry.mjs";
 import {
   applyMultiAgentCapabilities,
@@ -62,25 +61,7 @@ import {
 } from "./native-catalog-source.mjs";
 import { discoveryDisabled } from "./discovery-mode.mjs";
 import { withCatalogPublicationLock } from "./catalog-publication-lock.mjs";
-import { genericProviderConfigured } from "./generic-provider-readiness.mjs";
-import { searchSidecarBindingForModel } from "./search-sidecar-state.mjs";
-import { trustedSearchProviderDescriptor } from "./search-sidecar-policy.mjs";
-
-export function sidecarSearchAvailable(model, {
-  bindingForModel = searchSidecarBindingForModel,
-  providers = RUNTIME_PROVIDERS,
-  providerReady = genericProviderConfigured,
-} = {}) {
-  let binding;
-  try {
-    binding = bindingForModel(model.slug);
-  } catch {
-    return false;
-  }
-  if (!binding || model.searchTool !== undefined) return false;
-  const provider = providers.get(binding.providerId);
-  return trustedSearchProviderDescriptor(provider, { requireGeneric: true }) && providerReady(provider.id);
-}
+import { routedModelSearchAvailable } from "./search-capability.mjs";
 
 const refresh = process.argv.includes("--refresh-native");
 
@@ -648,9 +629,7 @@ export function routedModel(template, model, behaviorTemplate = template) {
     // executed by the provider backend; standalone search is executed by
     // Codex and its result is replayed through the routed conversation. An
     // absent declaration remains the conservative default.
-    supports_search_tool:
-      ["hosted", "standalone"].includes(model.searchTool?.mode) ||
-      sidecarSearchAvailable(model),
+    supports_search_tool: routedModelSearchAvailable(model),
     supports_image_detail_original: model.supportsImageDetailOriginal === true,
     // A routed model must never inherit a native template's capability. Codex
     // now requires the key, and `false` is both schema-valid and conservative
