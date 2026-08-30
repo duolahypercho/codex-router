@@ -100,6 +100,7 @@ import {
   flattenNamespaceTools,
   flattenToolChoice,
   flattenToolSearchHistory,
+  recoverPreflattenedMcpTools,
   repairToolSchemaRoots,
   strictOpenCodeCompactionInput,
   stripSearchContentTypes,
@@ -2827,6 +2828,19 @@ async function buildRoutedRequest({ request, payload, route, agedInput, tokenMax
     // strict Responses providers may reject. Run the shared root repair on the
     // tools alone without flattening their native representation.
     tools = repairToolSchemaRoots(tools);
+  }
+  // Recent Codex clients flatten namespace tools before sending them to a
+  // custom Responses provider. Their canonical turn metadata is the only
+  // request-local source that can distinguish that MCP identity from an
+  // ordinary function whose literal name happens to contain `__`.
+  if (
+    recoverPreflattenedMcpTools(
+      tools,
+      payload.client_metadata,
+      flattenedNamespaces,
+    )
+  ) {
+    namespacesFlattened = true;
   }
   if (needsZenFreeToolCompatibility(route)) {
     // Zen Free's measured schema boundary rejects recursive definition edges.

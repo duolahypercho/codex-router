@@ -14,6 +14,7 @@ import {
   flattenNamespaceTools,
   flattenToolChoice,
   flattenToolSearchHistory,
+  recoverPreflattenedMcpTools,
   rewriteNamespaceFunctionCall,
   rewriteNamespaceResponsePayload,
   repairToolSchemaRoots,
@@ -161,6 +162,130 @@ test("flattenNamespaceTools flattens every namespace, including MCP ones", () =>
   assert.deepEqual([...namespaces.get("collaboration")].sort(), ["spawn_agent", "wait_agent"]);
   assert.deepEqual([...namespaces.get("mcp__node_repl")].sort(), ["js", "js_reset"]);
   assert.deepEqual([...namespaces.get("mcp__codex_apps__github")], ["fetch_issue"]);
+});
+
+test("turn metadata recovers a namespace Codex flattened before the router", () => {
+  const wireName = "mcp__neon__apm__staging__snapshot__ro__get_monitor_snapshot";
+  const tools = [{ type: "function", name: wireName, parameters: { type: "object" } }];
+  const { namespaces } = flattenNamespaceTools(tools);
+  const clientMetadata = {
+    "x-codex-turn-metadata": JSON.stringify({
+      tool_namespaces_info: {
+        "mcp__neon__apm__staging__snapshot__ro": {
+          name: "mcp__neon__apm__staging__snapshot__ro",
+          functions: {
+            get_monitor_snapshot: {
+              name: "get_monitor_snapshot",
+              direct: true,
+              code_mode_name: null,
+              deferred: false,
+              source: { kind: "mcp", server_name: "neon__apm__staging__snapshot__ro" },
+            },
+          },
+        },
+      },
+    }),
+  };
+
+  assert.equal(
+    recoverPreflattenedMcpTools(tools, clientMetadata, namespaces),
+    true,
+  );
+  assert.deepEqual(
+    rewriteNamespaceResponsePayload(
+      {
+        output: [{
+          type: "function_call",
+          name: wireName,
+          call_id: "call_snapshot",
+          arguments: "{}",
+        }],
+      },
+      buildNamespaceLookups(namespaces),
+    ).output[0],
+    {
+      type: "function_call",
+      name: "get_monitor_snapshot",
+      namespace: "mcp__neon__apm__staging__snapshot__ro",
+      call_id: "call_snapshot",
+      arguments: "{}",
+    },
+  );
+});
+
+test("pre-flattened recovery does not reinterpret an ordinary function collision", () => {
+  const wireName = "mcp__calendar__create_event";
+  const tools = [{ type: "function", name: wireName }];
+  const { namespaces } = flattenNamespaceTools(tools);
+  const clientMetadata = {
+    "x-codex-turn-metadata": JSON.stringify({
+      tool_namespaces_info: {
+        functions: {
+          name: "functions",
+          functions: {
+            [wireName]: {
+              name: wireName,
+              direct: true,
+              source: { kind: "harness" },
+            },
+          },
+        },
+        mcp__calendar: {
+          name: "mcp__calendar",
+          functions: {
+            create_event: {
+              name: "create_event",
+              direct: true,
+              source: { kind: "mcp", server_name: "calendar" },
+            },
+          },
+        },
+      },
+    }),
+  };
+
+  assert.equal(
+    recoverPreflattenedMcpTools(tools, clientMetadata, namespaces),
+    false,
+  );
+  assert.equal(namespaces.size, 0);
+});
+
+test("pre-flattened recovery fails closed on ambiguous delimiter ownership", () => {
+  const tools = [{ type: "function", name: "mcp__calendar__admin__create" }];
+  const { namespaces } = flattenNamespaceTools(tools);
+  const clientMetadata = {
+    "x-codex-turn-metadata": JSON.stringify({
+      tool_namespaces_info: {
+        mcp__calendar: {
+          name: "mcp__calendar",
+          functions: {
+            admin__create: {
+              name: "admin__create",
+              direct: true,
+              source: { kind: "mcp", server_name: "calendar" },
+            },
+          },
+        },
+        mcp__calendar__admin: {
+          name: "mcp__calendar__admin",
+          functions: {
+            create: {
+              name: "create",
+              direct: true,
+              source: { kind: "mcp", server_name: "calendar__admin" },
+            },
+          },
+        },
+      },
+    }),
+  };
+
+  assert.equal(
+    recoverPreflattenedMcpTools(tools, clientMetadata, namespaces),
+    false,
+  );
+  assert.equal(namespaces.size, 0);
 });
 
 test("flattenNamespaceTools keeps the full tool schema on flattened entries", () => {

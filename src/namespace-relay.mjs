@@ -43,6 +43,7 @@ import {
 // built from the exact tools that were flattened -- never by splitting names.
 
 export const NAMESPACE_DELIMITER = "__";
+const DEFAULT_FUNCTION_NAMESPACE = "functions";
 
 // Metadata derived from the request's exact tool schema. Keeping it beside the
 // Map in a WeakMap preserves the Map's public shape for existing callers while
@@ -1041,6 +1042,131 @@ export function flattenNamespaceTools(
   if (spawnAgentModels.size > 0) SPAWN_AGENT_MODELS.set(namespaces, spawnAgentModels);
   if (toolSearchRelay) TOOL_SEARCH_RELAYS.set(namespaces, toolSearchRelay);
   return { tools: flattened, flattened: changed, namespaces };
+}
+
+// A Codex custom-provider request can arrive with MCP tools already
+// flattened. In that shape the tool list no longer contains a
+// `type: "namespace"` entry, so flattenNamespaceTools cannot build the reverse
+// map needed when the provider returns the ordinary function call. Codex keeps
+// the canonical native identities in its reserved turn metadata. Recover only
+// direct functions whose exact flattened spelling is present in this request.
+//
+// The metadata also inventories ordinary functions under the default
+// `functions` namespace. Treat that entry, and any delimiter collision between
+// two native identities, as ambiguous rather than reinterpreting a legitimate
+// plain function as an MCP call. Keep this recovery MCP-scoped: app and
+// collaboration tools carry additional router-side behavior that a bare name
+// map cannot reconstruct safely.
+export function recoverPreflattenedMcpTools(tools, clientMetadata, namespaces) {
+  if (!Array.isArray(tools) || !(namespaces instanceof Map)) return false;
+  const encoded = clientMetadata?.["x-codex-turn-metadata"];
+  if (typeof encoded !== "string") return false;
+  let metadata;
+  try {
+    metadata = JSON.parse(encoded);
+  } catch {
+    return false;
+  }
+  const inventory = metadata?.tool_namespaces_info;
+  if (!inventory || typeof inventory !== "object" || Array.isArray(inventory)) {
+    return false;
+  }
+
+  const providerNames = new Set();
+  for (const tool of tools) {
+    if (tool?.type !== "function") continue;
+    const name = providerFunctionName(tool);
+    if (typeof name === "string" && name) providerNames.add(name);
+  }
+
+  const ordinaryNames = new Set();
+  const ordinary = inventory[DEFAULT_FUNCTION_NAMESPACE];
+  if (
+    ordinary?.name === DEFAULT_FUNCTION_NAMESPACE &&
+    ordinary.functions &&
+    typeof ordinary.functions === "object" &&
+    !Array.isArray(ordinary.functions)
+  ) {
+    for (const [name, info] of Object.entries(ordinary.functions)) {
+      if (name && info?.name === name) ordinaryNames.add(name);
+    }
+  }
+
+  // `undefined` marks a wire spelling with more than one native owner.
+  const candidates = new Map();
+  const rememberCandidate = (wireName, native) => {
+    if (!candidates.has(wireName)) {
+      candidates.set(wireName, native);
+      return;
+    }
+    const previous = candidates.get(wireName);
+    if (
+      previous?.namespace !== native.namespace ||
+      previous?.name !== native.name
+    ) {
+      candidates.set(wireName, undefined);
+    }
+  };
+
+  for (const [namespace, namespaceInfo] of Object.entries(inventory)) {
+    if (
+      !namespace ||
+      namespace === DEFAULT_FUNCTION_NAMESPACE ||
+      namespaceInfo?.name !== namespace
+    ) {
+      continue;
+    }
+    const functions = namespaceInfo?.functions;
+    if (!functions || typeof functions !== "object" || Array.isArray(functions)) continue;
+    for (const [name, info] of Object.entries(functions)) {
+      if (
+        !name ||
+        info?.name !== name ||
+        info.direct !== true ||
+        info.source?.kind !== "mcp" ||
+        typeof info.source.server_name !== "string" ||
+        !info.source.server_name
+      ) {
+        continue;
+      }
+      const wireName = `${namespace}${NAMESPACE_DELIMITER}${name}`;
+      if (!providerNames.has(wireName) || ordinaryNames.has(wireName)) continue;
+      rememberCandidate(wireName, { namespace, name });
+    }
+  }
+
+  const existingOwners = new Map();
+  for (const [namespace, names] of namespaces) {
+    for (const name of names) {
+      rememberCandidate(
+        `${namespace}${NAMESPACE_DELIMITER}${name}`,
+        { namespace, name },
+      );
+      existingOwners.set(`${namespace}${NAMESPACE_DELIMITER}${name}`, { namespace, name });
+    }
+  }
+
+  let recovered = false;
+  for (const [wireName, native] of candidates) {
+    if (!native || !providerNames.has(wireName)) continue;
+    const existing = existingOwners.get(wireName);
+    if (
+      existing &&
+      (existing.namespace !== native.namespace || existing.name !== native.name)
+    ) {
+      continue;
+    }
+    let names = namespaces.get(native.namespace);
+    if (!names) {
+      names = new Set();
+      namespaces.set(native.namespace, names);
+    }
+    if (!names.has(native.name)) {
+      names.add(native.name);
+      recovered = true;
+    }
+  }
+  return recovered;
 }
 
 function plainObject(value) {

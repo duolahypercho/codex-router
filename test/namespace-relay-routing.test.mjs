@@ -207,6 +207,45 @@ function routedRequestPayload(stream = true, model = "opencode-go/deepseek-v4-fl
   };
 }
 
+// Reproduce the reported Codex 0.149.1 custom-provider shape: namespace tools
+// are already flat when they reach the router, while canonical turn metadata
+// still carries the native identity Codex will use for dispatch.
+function preflattenedCommandCodeMcpPayload(
+  stream = true,
+  model = "commandcode/deepseek-v4-flash",
+) {
+  const namespace = "mcp__apmneonsnapshotro";
+  const name = "get_monitor_snapshot";
+  return {
+    model,
+    stream,
+    input: "Call the monitor snapshot tool.",
+    tools: [{
+      type: "function",
+      name: `${namespace}__${name}`,
+      parameters: { type: "object", properties: {}, additionalProperties: false },
+    }],
+    client_metadata: {
+      "x-codex-turn-metadata": JSON.stringify({
+        tool_namespaces_info: {
+          [namespace]: {
+            name: namespace,
+            functions: {
+              [name]: {
+                name,
+                direct: true,
+                code_mode_name: null,
+                deferred: false,
+                source: { kind: "mcp", server_name: "apmneonsnapshotro" },
+              },
+            },
+          },
+        },
+      }),
+    },
+  };
+}
+
 function routedToolSearchHistoryPayload(
   stream = true,
   model = "opencode-go/deepseek-v4-flash",
@@ -1407,6 +1446,44 @@ test("routed request flattens every namespace to the gateway and restores calls 
   // The router never executed any app tool: the gateway saw exactly one
   // request and the client saw exactly the relayed calls.
   assert.equal(first.gatewayBodies.length, 1);
+});
+
+test("Command Code models restore MCP calls Codex pre-flattened before the router", async () => {
+  const flatName = "mcp__apmneonsnapshotro__get_monitor_snapshot";
+  for (const model of [
+    "commandcode/deepseek-v4-flash",
+    "commandcode/hy4-preview",
+  ]) {
+    const streamed = await scenario(true, {
+      model,
+      requestPayload: preflattenedCommandCodeMcpPayload,
+      sseBody: () => [
+        sseEvent({
+          type: "response.output_item.done",
+          item: {
+            type: "function_call",
+            name: flatName,
+            call_id: "call_snapshot",
+            arguments: "{}",
+          },
+        }),
+        sseEvent({ type: "response.completed" }),
+        "data: [DONE]\n\n",
+      ].join(""),
+    });
+    assert.equal(streamed.gatewayBodies.length, 1, model);
+    assert.equal(streamed.gatewayBodies[0].client_metadata, undefined, model);
+    assert.ok(
+      streamed.gatewayBodies[0].tools.some((tool) => tool.name === flatName),
+      model,
+    );
+    const call = functionCallsFromSse(streamed.clientBody).get("call_snapshot");
+    assert.deepEqual(
+      { name: call.name, namespace: call.namespace },
+      { name: "get_monitor_snapshot", namespace: "mcp__apmneonsnapshotro" },
+      model,
+    );
+  }
 });
 
 test("non-streaming routed responses restore namespace calls before client dispatch", async () => {
