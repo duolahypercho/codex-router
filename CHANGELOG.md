@@ -35,6 +35,7 @@
   cannot prove any historical tail safe. Bundles retain redacted generated
   diagnostics and log-file metadata without copying arbitrary log contents;
   the former `--include-logs` switch remains accepted as a deprecated no-op.
+
 - **Strict generic providers no longer receive unadvertised hosted-search
   extensions.** Codex may attach `web_search`, `web_search_preview`,
   `web_search_options`, and search-only `include` entries even when the chosen
