@@ -715,11 +715,14 @@ Provider accounts use the API. Everything appears as one
 `commandcode` for Chat Completions models and `commandcode-messages` for
 models that require the Messages protocol (Claude).
 
-**The Go plan is the exception.** A Go-plan account is refused by `/provider/v1`
-with `Your Go plan doesn't include API access`. That is an entitlement, not a
-credential problem: no key or reinstall changes it. Check the plan
-at [commandcode.ai/billing](https://commandcode.ai/billing) before enabling
-this provider.
+**The Go plan uses the coding-plan route.** A Go-plan account is refused by
+`/provider/v1` with `403 upgrade_required` even though its key is valid. When
+that exact entitlement response arrives before any response byte has been
+relayed, the router retries the turn through Command Code's `/alpha/generate`
+transport and remembers the result for that credential. Other 403s, timeouts,
+rate limits, and server failures do not trigger the fallback. The route is
+rechecked periodically so an upgraded account returns to the documented
+Provider API. Both paths use the same stored key and provider family.
 
 **Store an API key.** Create one in Command Code Studio and save it here:
 
@@ -730,8 +733,17 @@ this provider.
 
 When multiple API-key sources exist, the exported environment variable wins,
 then the key stored here, then the macOS Keychain. `doctor` names whichever
-source is live. The router does not install, launch, or read a Command Code
-CLI session.
+source is live. The router does not install, launch, or read a Command Code CLI
+session; `/alpha/generate` is called directly as an inference transport.
+
+Command Code's [headless CLI](https://commandcode.ai/docs/headless) is a
+complete autonomous coding agent with its own workspace, tools, permission
+decisions, sessions, and compaction. Launching it behind one Codex Responses
+request would create a second, hidden tool loop and would bypass Codex's tool
+events and approvals. It therefore cannot transparently replace the Codex
+harness or transfer CLI-only AST/context/taste optimizations into the Codex
+app. Codex remains the harness; this router only adapts the model transport and
+preserves Command Code's reported cached-token usage.
 
 | Picker label | Model ID |
 | --- | --- |
