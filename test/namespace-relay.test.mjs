@@ -288,6 +288,198 @@ test("pre-flattened recovery fails closed on ambiguous delimiter ownership", () 
   assert.equal(namespaces.size, 0);
 });
 
+test("pre-flattened recovery transfers a bounded provider alias to the MCP identity", () => {
+  const serverName = "neon__apm__production__snapshot__read_only";
+  const namespace = `mcp__${serverName}`;
+  const name = "get_monitor_snapshot_with_complete_context";
+  const wireName = `${namespace}__${name}`;
+  const flattened = flattenNamespaceTools(
+    [{ type: "function", name: wireName, parameters: { type: "object" } }],
+    { maxNameLength: 64 },
+  );
+  const providerName = flattened.tools[0].name;
+  assert.notEqual(providerName, wireName);
+  assert.ok(providerName.length <= 64);
+
+  assert.equal(
+    recoverPreflattenedMcpTools(
+      flattened.tools,
+      {
+        "x-codex-turn-metadata": JSON.stringify({
+          tool_namespaces_info: {
+            [namespace]: {
+              name: namespace,
+              functions: {
+                [name]: {
+                  name,
+                  direct: true,
+                  source: { kind: "mcp", server_name: serverName },
+                },
+              },
+            },
+          },
+        }),
+      },
+      flattened.namespaces,
+    ),
+    true,
+  );
+  assert.equal(
+    flattenNamespacedHistory(
+      [{ type: "function_call", namespace, name, call_id: "call_history", arguments: "{}" }],
+      flattened.namespaces,
+    )[0].name,
+    providerName,
+  );
+  assert.deepEqual(
+    rewriteNamespaceResponsePayload(
+      {
+        output: [{
+          type: "function_call",
+          name: providerName,
+          call_id: "call_live",
+          arguments: "{}",
+        }],
+      },
+      buildNamespaceLookups(flattened.namespaces),
+    ).output[0],
+    {
+      type: "function_call",
+      namespace,
+      name,
+      call_id: "call_live",
+      arguments: "{}",
+    },
+  );
+});
+
+test("pre-flattened recovery transfers collision-only alias ownership", () => {
+  const namespace = "mcp__calendar";
+  const name = "create_event";
+  const wireName = `${namespace}__${name}`;
+  const flattened = flattenNamespaceTools(
+    [{ type: "function", name: wireName }],
+    { aliasCollisions: true },
+  );
+  assert.equal(flattened.tools[0].name, wireName);
+  assert.equal(
+    recoverPreflattenedMcpTools(
+      flattened.tools,
+      {
+        "x-codex-turn-metadata": JSON.stringify({
+          tool_namespaces_info: {
+            [namespace]: {
+              name: namespace,
+              functions: {
+                [name]: {
+                  name,
+                  direct: true,
+                  source: { kind: "mcp", server_name: "calendar" },
+                },
+              },
+            },
+          },
+        }),
+      },
+      flattened.namespaces,
+    ),
+    true,
+  );
+  assert.equal(
+    flattenNamespacedHistory(
+      [{ type: "function_call", namespace, name, call_id: "call_history", arguments: "{}" }],
+      flattened.namespaces,
+    )[0].name,
+    wireName,
+  );
+  const restored = rewriteNamespaceResponsePayload(
+    {
+      output: [{
+        type: "function_call",
+        name: wireName,
+        call_id: "call_live",
+        arguments: "{}",
+      }],
+    },
+    buildNamespaceLookups(flattened.namespaces),
+  ).output[0];
+  assert.deepEqual(
+    { namespace: restored.namespace, name: restored.name },
+    { namespace, name },
+  );
+});
+
+test("pre-flattened recovery rejects malformed, duplicated, and non-MCP metadata", () => {
+  const namespace = "mcp__calendar";
+  const name = "create_event";
+  const wireName = `${namespace}__${name}`;
+  const mcpInfo = {
+    name: namespace,
+    functions: {
+      [name]: {
+        name,
+        direct: true,
+        source: { kind: "mcp", server_name: "calendar" },
+      },
+    },
+  };
+  const duplicateOrdinaryInventory =
+    `{"tool_namespaces_info":{` +
+    `"functions":{"name":"functions","functions":{"${wireName}":{"name":"${wireName}"}}},` +
+    `"functions":{"name":"functions","functions":{}},` +
+    `"${namespace}":${JSON.stringify(mcpInfo)}}}`;
+  const cases = [
+    JSON.stringify({
+      tool_namespaces_info: {
+        functions: { name: "functions", functions: [] },
+        [namespace]: mcpInfo,
+      },
+    }),
+    duplicateOrdinaryInventory,
+    JSON.stringify({
+      tool_namespaces_info: {
+        codex_app: {
+          name: "codex_app",
+          functions: {
+            create_thread: {
+              name: "create_thread",
+              direct: true,
+              source: { kind: "mcp", server_name: "calendar" },
+            },
+          },
+        },
+      },
+    }),
+    JSON.stringify({
+      tool_namespaces_info: {
+        [namespace]: {
+          ...mcpInfo,
+          functions: {
+            [name]: {
+              ...mcpInfo.functions[name],
+              source: { kind: "mcp", server_name: "different" },
+            },
+          },
+        },
+      },
+    }),
+  ];
+
+  for (const encoded of cases) {
+    const toolName = encoded.includes("codex_app") ? "codex_app__create_thread" : wireName;
+    const { namespaces } = flattenNamespaceTools([{ type: "function", name: toolName }]);
+    assert.equal(
+      recoverPreflattenedMcpTools(
+        [{ type: "function", name: toolName }],
+        { "x-codex-turn-metadata": encoded },
+        namespaces,
+      ),
+      false,
+    );
+    assert.equal(namespaces.size, 0);
+  }
+});
+
 test("flattenNamespaceTools keeps the full tool schema on flattened entries", () => {
   const schema = {
     type: "object",

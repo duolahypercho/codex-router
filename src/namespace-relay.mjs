@@ -44,6 +44,7 @@ import {
 
 export const NAMESPACE_DELIMITER = "__";
 const DEFAULT_FUNCTION_NAMESPACE = "functions";
+const MCP_NAMESPACE_PREFIX = "mcp__";
 
 // Metadata derived from the request's exact tool schema. Keeping it beside the
 // Map in a WeakMap preserves the Map's public shape for existing callers while
@@ -639,7 +640,7 @@ function trackedStateBytes(state) {
 // Audit the complete JSON grammar before parsing, compare decoded key values
 // so spellings such as `"name"` and `"\u006eame"` collide, and reject numeric
 // values whose parse/stringify semantics are known to be lossy.
-function jsonIsUnambiguousForRewrite(text) {
+function jsonIsUnambiguousForRewrite(text, { allowLossyNumbers = false } = {}) {
   if (typeof text !== "string") return false;
   let offset = 0;
 
@@ -697,7 +698,12 @@ function jsonIsUnambiguousForRewrite(text) {
     JSON_NUMBER_AT_OFFSET.lastIndex = offset;
     const match = JSON_NUMBER_AT_OFFSET.exec(text);
     if (!match) return false;
-    if (!jsonNumberIsStableForRewrite(match[0])) return false;
+    // Turn metadata is inspected only for string/bool namespace identities and
+    // is never reserialized here. Its unrelated numeric fields may therefore
+    // be lossy without changing the identity decision. Duplicate object keys
+    // remain forbidden in every mode: JSON.parse's last-wins behavior would
+    // otherwise let ambiguous metadata hide an ordinary-function collision.
+    if (!allowLossyNumbers && !jsonNumberIsStableForRewrite(match[0])) return false;
     offset = JSON_NUMBER_AT_OFFSET.lastIndex;
     return true;
   };
@@ -1061,6 +1067,7 @@ export function recoverPreflattenedMcpTools(tools, clientMetadata, namespaces) {
   if (!Array.isArray(tools) || !(namespaces instanceof Map)) return false;
   const encoded = clientMetadata?.["x-codex-turn-metadata"];
   if (typeof encoded !== "string") return false;
+  if (!jsonIsUnambiguousForRewrite(encoded, { allowLossyNumbers: true })) return false;
   let metadata;
   try {
     metadata = JSON.parse(encoded);
@@ -1080,15 +1087,21 @@ export function recoverPreflattenedMcpTools(tools, clientMetadata, namespaces) {
   }
 
   const ordinaryNames = new Set();
-  const ordinary = inventory[DEFAULT_FUNCTION_NAMESPACE];
-  if (
-    ordinary?.name === DEFAULT_FUNCTION_NAMESPACE &&
-    ordinary.functions &&
-    typeof ordinary.functions === "object" &&
-    !Array.isArray(ordinary.functions)
-  ) {
+  if (Object.hasOwn(inventory, DEFAULT_FUNCTION_NAMESPACE)) {
+    const ordinary = inventory[DEFAULT_FUNCTION_NAMESPACE];
+    if (
+      ordinary?.name !== DEFAULT_FUNCTION_NAMESPACE ||
+      !ordinary.functions ||
+      typeof ordinary.functions !== "object" ||
+      Array.isArray(ordinary.functions)
+    ) {
+      return false;
+    }
     for (const [name, info] of Object.entries(ordinary.functions)) {
-      if (name && info?.name === name) ordinaryNames.add(name);
+      if (!name || !info || typeof info !== "object" || Array.isArray(info) || info.name !== name) {
+        return false;
+      }
+      ordinaryNames.add(name);
     }
   }
 
@@ -1125,13 +1138,17 @@ export function recoverPreflattenedMcpTools(tools, clientMetadata, namespaces) {
         info.direct !== true ||
         info.source?.kind !== "mcp" ||
         typeof info.source.server_name !== "string" ||
-        !info.source.server_name
+        !info.source.server_name ||
+        namespace !== `${MCP_NAMESPACE_PREFIX}${info.source.server_name}`
       ) {
         continue;
       }
       const wireName = `${namespace}${NAMESPACE_DELIMITER}${name}`;
-      if (!providerNames.has(wireName) || ordinaryNames.has(wireName)) continue;
-      rememberCandidate(wireName, { namespace, name });
+      const plainIdentity = nativeToolKey(undefined, wireName);
+      const providerName =
+        NAME_ALIASES.get(namespaces)?.nativeToProvider.get(plainIdentity) || wireName;
+      if (!providerNames.has(providerName) || ordinaryNames.has(wireName)) continue;
+      rememberCandidate(wireName, { namespace, name, providerName });
     }
   }
 
@@ -1146,9 +1163,15 @@ export function recoverPreflattenedMcpTools(tools, clientMetadata, namespaces) {
     }
   }
 
-  let recovered = false;
+  // Validate every ownership transfer before mutating any request-local map.
+  // flattenNamespaceTools has already registered these definitions as plain
+  // functions, including any provider-bounded alias. Move that exact provider
+  // spelling to the canonical MCP identity rather than allocating a second
+  // alias that no live definition uses.
+  const recoveries = [];
+  const recoveryProviderNames = new Set();
   for (const [wireName, native] of candidates) {
-    if (!native || !providerNames.has(wireName)) continue;
+    if (!native || !providerNames.has(native.providerName)) continue;
     const existing = existingOwners.get(wireName);
     if (
       existing &&
@@ -1156,17 +1179,59 @@ export function recoverPreflattenedMcpTools(tools, clientMetadata, namespaces) {
     ) {
       continue;
     }
-    let names = namespaces.get(native.namespace);
+    if (namespaces.get(native.namespace)?.has(native.name)) continue;
+
+    const relay = NAME_ALIASES.get(namespaces);
+    const plainIdentity = nativeToolKey(undefined, wireName);
+    const nativeIdentity = nativeToolKey(native.namespace, native.name);
+    if (relay) {
+      if (
+        relay.nativeToProvider.get(plainIdentity) !== native.providerName ||
+        relay.providerOwners.get(native.providerName) !== plainIdentity ||
+        (relay.nativeToProvider.has(nativeIdentity) &&
+          relay.nativeToProvider.get(nativeIdentity) !== native.providerName)
+      ) {
+        return false;
+      }
+    }
+    if (recoveryProviderNames.has(native.providerName)) return false;
+    recoveryProviderNames.add(native.providerName);
+    recoveries.push({
+      wireName,
+      providerName: native.providerName,
+      namespace: native.namespace,
+      name: native.name,
+      plainIdentity,
+      nativeIdentity,
+    });
+  }
+
+  for (const recovery of recoveries) {
+    const relay = NAME_ALIASES.get(namespaces);
+    if (relay) {
+      relay.nativeToProvider.delete(recovery.plainIdentity);
+      relay.nativeToProvider.set(recovery.nativeIdentity, recovery.providerName);
+      relay.providerOwners.set(recovery.providerName, recovery.nativeIdentity);
+      relay.providerToNative.set(recovery.providerName, {
+        namespace: recovery.namespace,
+        name: recovery.name,
+      });
+      relay.plainProviderNames.delete(recovery.providerName);
+      const wireOwners = relay.wireOwners.get(recovery.wireName);
+      if (wireOwners) {
+        wireOwners.delete(recovery.plainIdentity);
+        wireOwners.add(recovery.nativeIdentity);
+      }
+    }
+    PLAIN_TOOL_NAMES.get(namespaces)?.delete(recovery.providerName);
+    let names = namespaces.get(recovery.namespace);
     if (!names) {
       names = new Set();
-      namespaces.set(native.namespace, names);
+      namespaces.set(recovery.namespace, names);
     }
-    if (!names.has(native.name)) {
-      names.add(native.name);
-      recovered = true;
-    }
+    names.add(recovery.name);
   }
-  return recovered;
+  return recoveries.length > 0;
 }
 
 function plainObject(value) {

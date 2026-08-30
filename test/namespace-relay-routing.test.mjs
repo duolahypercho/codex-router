@@ -246,6 +246,58 @@ function preflattenedCommandCodeMcpPayload(
   };
 }
 
+function preflattenedBoundedMcpPayload(
+  stream = true,
+  model = "opencode-go-responses/gpt-5.6-luna",
+) {
+  const serverName = "neon__apm__production__snapshot__read_only";
+  const namespace = `mcp__${serverName}`;
+  const name = "get_monitor_snapshot_with_complete_context";
+  return {
+    model,
+    stream,
+    input: [
+      { type: "message", role: "user", content: "Call the monitor snapshot tool." },
+      {
+        type: "function_call",
+        namespace,
+        name,
+        call_id: "call_previous_snapshot",
+        arguments: "{}",
+      },
+      {
+        type: "function_call_output",
+        call_id: "call_previous_snapshot",
+        output: "previous snapshot",
+      },
+    ],
+    tools: [{
+      type: "function",
+      name: `${namespace}__${name}`,
+      description: "Long preflattened MCP fixture.",
+      parameters: { type: "object", properties: {}, additionalProperties: false },
+    }],
+    client_metadata: {
+      "x-codex-turn-metadata": JSON.stringify({
+        tool_namespaces_info: {
+          [namespace]: {
+            name: namespace,
+            functions: {
+              [name]: {
+                name,
+                direct: true,
+                code_mode_name: null,
+                deferred: false,
+                source: { kind: "mcp", server_name: serverName },
+              },
+            },
+          },
+        },
+      }),
+    },
+  };
+}
+
 function routedToolSearchHistoryPayload(
   stream = true,
   model = "opencode-go/deepseek-v4-flash",
@@ -1482,6 +1534,71 @@ test("Command Code models restore MCP calls Codex pre-flattened before the route
       { name: call.name, namespace: call.namespace },
       { name: "get_monitor_snapshot", namespace: "mcp__apmneonsnapshotro" },
       model,
+    );
+  }
+});
+
+test("bounded routes preserve one alias for pre-flattened MCP definitions and history", async () => {
+  const namespace = "mcp__neon__apm__production__snapshot__read_only";
+  const name = "get_monitor_snapshot_with_complete_context";
+  const wireName = `${namespace}__${name}`;
+  for (const stream of [true, false]) {
+    const result = await scenario(stream, {
+      model: "opencode-go-responses/gpt-5.6-luna",
+      requestPayload: preflattenedBoundedMcpPayload,
+      sseBody: (outgoing) => {
+        const providerName = outgoing.tools.find(
+          (tool) => tool.description === "Long preflattened MCP fixture.",
+        ).name;
+        return [
+          sseEvent({
+            type: "response.output_item.done",
+            item: {
+              type: "function_call",
+              name: providerName,
+              call_id: "call_snapshot",
+              arguments: "{}",
+            },
+          }),
+          sseEvent({ type: "response.completed" }),
+          "data: [DONE]\n\n",
+        ].join("");
+      },
+      jsonBody: (outgoing) => {
+        const providerName = outgoing.tools.find(
+          (tool) => tool.description === "Long preflattened MCP fixture.",
+        ).name;
+        return {
+          id: "resp_preflattened_bounded",
+          output: [{
+            type: "function_call",
+            name: providerName,
+            call_id: "call_snapshot",
+            arguments: "{}",
+          }],
+        };
+      },
+    });
+    assert.equal(result.gatewayBodies.length, 1);
+    const outgoing = result.gatewayBodies[0];
+    assert.equal(outgoing.client_metadata, undefined);
+    const providerTool = outgoing.tools.find(
+      (tool) => tool.description === "Long preflattened MCP fixture.",
+    );
+    assert.notEqual(providerTool.name, wireName);
+    assert.ok(providerTool.name.length <= 64);
+    const historyCall = outgoing.input.find(
+      (item) => item.call_id === "call_previous_snapshot",
+    );
+    assert.equal(historyCall.name, providerTool.name);
+    assert.equal(historyCall.namespace, undefined);
+
+    const call = stream
+      ? functionCallsFromSse(result.clientBody).get("call_snapshot")
+      : JSON.parse(result.clientBody).output[0];
+    assert.deepEqual(
+      { namespace: call.namespace, name: call.name },
+      { namespace, name },
     );
   }
 });
