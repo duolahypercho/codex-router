@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -281,8 +282,9 @@ async function mockServer(handler) {
   return { server, port: server.address().port };
 }
 
-function run(env) {
+function run(env, setupState) {
   const stateDir = mkdtempSync(path.join(os.tmpdir(), "empty-completion-router-state-"));
+  setupState?.(stateDir);
   const child = spawn(process.execPath, [path.join(root, "src", "router.mjs")], {
     cwd: root,
     env: {
@@ -481,6 +483,119 @@ test("an empty completion is retried once and the retry's content reaches the cl
   } finally {
     await stopChild(router);
     await closeServer(gw.server);
+  }
+});
+
+test("an empty-completion retry stops when its search sidecar disappears", async () => {
+  const providerId = "perplexity-sidecar";
+  const credentialRef = "cred_perplexity_sidecar_01";
+  const model = "deepseek/deepseek-v4-pro";
+  let sidecarsFile;
+  let stateDir;
+  let posts = 0;
+  const gw = await gateway((_request, response) => {
+    posts += 1;
+    if (posts === 1) {
+      writeFileSync(
+        sidecarsFile,
+        `${JSON.stringify({ version: 1, bindings: [] })}\n`,
+        { mode: 0o600 },
+      );
+    }
+    response.writeHead(200, {
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "public, max-age=300",
+      "X-Upstream-Attempt": "discarded-first",
+    });
+    response.end(posts === 1 ? EMPTY_SSE_METERED : CONTENT_SSE);
+  });
+  const routerPort = await openPort();
+  const router = run(routerEnv(gw.port, routerPort), (directory) => {
+    stateDir = directory;
+    sidecarsFile = path.join(directory, "search-sidecars.json");
+    writeFileSync(
+      path.join(directory, "generic-providers.json"),
+      `${JSON.stringify({
+        version: 1,
+        providers: [{
+          id: providerId,
+          displayName: "Perplexity Search",
+          baseUrl: "https://api.perplexity.ai",
+          adapter: "openai-chat",
+          headers: {},
+          credentialRef,
+          allowPrivate: false,
+          enabled: true,
+        }],
+      })}\n`,
+      { mode: 0o600 },
+    );
+    writeFileSync(
+      sidecarsFile,
+      `${JSON.stringify({
+        version: 1,
+        bindings: [{
+          model,
+          providerId,
+          adapter: "perplexity-search",
+          enabled: true,
+          timeoutMs: 1_000,
+          maxResults: 8,
+          cacheTtlMs: 60_000,
+          cacheMaxEntries: 128,
+          maxAttempts: 2,
+          retryDelayMs: 100,
+        }],
+      })}\n`,
+      { mode: 0o600 },
+    );
+    writeFileSync(
+      path.join(directory, "provider-credentials.json"),
+      `${JSON.stringify({
+        schemaVersion: 2,
+        credentials: [{
+          id: credentialRef,
+          providerId,
+          providerType: "generic",
+          kind: "api_key",
+          secretRef: { type: "provider-file", providerId, target: "codex" },
+          state: "active",
+          createdAt: "2026-08-31T00:00:00.000Z",
+          updatedAt: "2026-08-31T00:00:00.000Z",
+        }],
+      })}\n`,
+      { mode: 0o600 },
+    );
+    mkdirSync(path.join(directory, "generic-provider-credentials"), { mode: 0o700 });
+    writeFileSync(
+      path.join(directory, "generic-provider-credentials", `${providerId}.key`),
+      "pplx-0123456789abcdefghijklmnopqrstuv\n",
+      { mode: 0o600 },
+    );
+  });
+
+  try {
+    await waitFor(`${callerBaseUrl(routerPort, CALLER_KEY)}/models`, router);
+    const result = await readRouted(routerPort, {
+      ...TURN_BODY,
+      tools: [{ type: "web_search" }],
+    });
+
+    assert.equal(result.status, 400, router.testErrors());
+    assert.equal(JSON.parse(result.body).error.type, "model_search_not_supported");
+    assert.equal(result.headers["cache-control"], undefined);
+    assert.equal(result.headers["x-upstream-attempt"], undefined);
+    assert.equal(posts, 1, "the retry must not reach the gateway after sidecar removal");
+    const [event] = await waitForUsageEvents(router.stateDir, 1, router);
+    assert.equal(event.status, 400);
+    assert.equal(event.inputTokens, 100);
+    assert.equal(event.cachedInputTokens, 60);
+    assert.equal(event.emptyCompletion, true);
+    assert.equal(event.emptyCompletionRetried, undefined);
+  } finally {
+    await stopChild(router);
+    await closeServer(gw.server);
+    rmSync(stateDir, { recursive: true, force: true });
   }
 });
 

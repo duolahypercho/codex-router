@@ -35,6 +35,18 @@
   cannot prove any historical tail safe. Bundles retain redacted generated
   diagnostics and log-file metadata without copying arbitrary log contents;
   the former `--include-logs` switch remains accepted as a deprecated no-op.
+- **Strict generic providers no longer receive unadvertised hosted-search
+  extensions.** Codex may attach `web_search`, `web_search_preview`,
+  `web_search_options`, and search-only `include` entries even when the chosen
+  routed model does not advertise search. The router now removes only those
+  hosted-search artifacts at its managed Responses boundary for unsupported
+  runtime-generic routes, while preserving ordinary functions (including one
+  named `web_search`), capable models, and direct gateway traffic. An explicit
+  request that can no longer satisfy `tool_choice` fails locally with a named
+  400 instead of reaching a strict upstream as an ambiguous request. Failover
+  also preserves the source model's hosted-versus-standalone search mode for
+  search-capable turns and refuses to guess after search history exists.
+
 - **Reinstalling over a state directory owned by another checkout no longer
   deadlocks.** The installers recorded the state directory's new owner only
   after the background service reported healthy, while the service itself

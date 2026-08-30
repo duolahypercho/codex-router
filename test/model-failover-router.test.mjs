@@ -39,6 +39,31 @@ const GROQ_CANDIDATE = {
   inputModalities: ["text"],
   compHash: "groq-tool-limit-failover-fixture-v1",
 };
+const GENERIC_SEARCH_INCOMPATIBLE = {
+  slug: "strict-generic/plain-search-incompatible",
+  gatewayModel: "strict-generic-plain-search-incompatible",
+  upstreamModel: "plain-search-incompatible",
+  provider: "strict-generic",
+  listed: true,
+  displayName: "Strict generic search-incompatible fixture",
+  description: "Local routing test fixture.",
+  priority: 501,
+  defaultEffort: "high",
+  reasoningLevels: [{ effort: "high", description: "Adaptive reasoning" }],
+  contextWindow: 131_072,
+  autoCompact: 111_411,
+  inputModalities: ["text"],
+  compHash: "strict-generic-search-incompatible-fixture-v1",
+};
+const STRICT_GENERIC_PROVIDER = {
+  id: "strict-generic",
+  displayName: "Strict generic fixture",
+  baseUrl: "https://strict.example.test/v1",
+  adapter: "openai-chat",
+  headers: {},
+  allowPrivate: false,
+  enabled: true,
+};
 
 const TURN_BODY = { model: PRIMARY.slug, input: "hello", stream: true };
 
@@ -142,6 +167,7 @@ function run(
     cooldowns,
     toolResultAging = false,
     userModels,
+    genericProviders,
     v2Credentials = false,
   } = {},
 ) {
@@ -171,6 +197,13 @@ function run(
     writeFileSync(
       path.join(stateDir, "user-models.json"),
       JSON.stringify({ version: 1, models: userModels }),
+      "utf8",
+    );
+  }
+  if (Array.isArray(genericProviders)) {
+    writeFileSync(
+      path.join(stateDir, "generic-providers.json"),
+      JSON.stringify({ version: 1, providers: genericProviders }),
       "utf8",
     );
   }
@@ -435,6 +468,39 @@ test("a marked provider transport failure moves a subagent to a checked-in v2 ro
     assert.match(result.body, /answered-by-subagent-transport-fallback/);
     assert.doesNotMatch(result.body, /provider_transport_error/);
     assert.match(child.testErrors(), /reason=transport/);
+  } finally {
+    await stopChild(child);
+    await closeServer(gw.server);
+  }
+});
+
+test("subagent transport failover preserves search history execution mode", async () => {
+  const seen = [];
+  const gw = await gateway(async (request, response) => {
+    seen.push(await bodyJson(request));
+    response.writeHead(502, { "Content-Type": "application/json" });
+    response.end(TRANSPORT_BODY);
+  });
+  const routerPort = await openPort();
+  const child = run(routerEnv(gw.port, routerPort), {
+    chain: [V2_FALLBACK.slug],
+    v2Credentials: true,
+  });
+  try {
+    await waitFor(`http://127.0.0.1:${routerPort}/health`, child);
+    const result = await readRouted(
+      routerPort,
+      {
+        ...TURN_BODY,
+        model: V2_THIRD.slug,
+        input: [{ type: "web_search_call", id: "search-history" }],
+      },
+      { headers: { "x-openai-subagent": "review-child" } },
+    );
+
+    assert.deepEqual(seen.map((body) => body.model), [V2_THIRD.gatewayModel]);
+    assert.equal(result.status, 502);
+    assert.match(child.testErrors(), /reason=transport -> none outcome=no-candidate/);
   } finally {
     await stopChild(child);
     await closeServer(gw.server);
@@ -888,6 +954,50 @@ test("cooldown failover skips a locally incompatible Groq candidate", async () =
     assert.equal(events[0].provider, "zai-api");
     assert.equal(events[0].failoverFrom, PRIMARY.slug);
     assert.equal(events[0].status, 200);
+  } finally {
+    await stopChild(child);
+    await closeServer(gw.server);
+  }
+});
+
+test("cooldown failover skips a generic candidate rejected by search compatibility", async () => {
+  const seen = [];
+  const gw = await gateway(async (request, response) => {
+    const body = await bodyJson(request);
+    seen.push(body);
+    response.writeHead(200, { "Content-Type": "text/event-stream" });
+    response.end(contentSse("safe-candidate"));
+  });
+  const routerPort = await openPort();
+  const child = run(routerEnv(gw.port, routerPort), {
+    chain: [GENERIC_SEARCH_INCOMPATIBLE.slug, FALLBACK.slug],
+    cooldowns: {
+      deepseek: {
+        until: new Date(Date.now() + 30 * 60_000).toISOString(),
+        reason: "out_of_usage",
+      },
+    },
+    userModels: [GENERIC_SEARCH_INCOMPATIBLE],
+    genericProviders: [STRICT_GENERIC_PROVIDER],
+  });
+  try {
+    await waitFor(`http://127.0.0.1:${routerPort}/health`, child);
+    const result = await readRouted(routerPort, {
+      ...TURN_BODY,
+      tools: [{ type: "web_search" }],
+      tool_choice: "required",
+    });
+    assert.equal(result.status, 200);
+    assert.match(result.body, /answered-by-safe-candidate/);
+    assert.equal(seen.length, 1, "neither the cooled route nor rejected generic candidate is sent");
+    assert.equal(seen[0].model, FALLBACK.gatewayModel);
+
+    const logs = child.testErrors();
+    assert.match(
+      logs,
+      /-> strict-generic\/plain-search-incompatible outcome=compatibility\/model_search_not_supported/,
+    );
+    assert.match(logs, /-> zai-api\/glm-5\.2 outcome=swapped/);
   } finally {
     await stopChild(child);
     await closeServer(gw.server);
