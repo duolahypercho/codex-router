@@ -81,6 +81,7 @@ const standaloneWebSearchEndMarker =
   "# END codex-router-standalone-web-search-managed";
 const createdAgentsTableMarker = "# codex-router-created-agents-table";
 const managedAgentMaxConcurrency = 6;
+const managedAutoCompactTokenLimitScope = "body_after_prefix";
 // Codex 0.147 records a child's FINAL_ANSWER as subAgentActivity
 // `interacted` and keeps that child visually working for the whole live
 // parent turn. close_agent is not in the v2 toolset; interrupt_agent is the
@@ -358,6 +359,48 @@ ${managedMultiAgentV2FeatureLine()}
     const probe = spawnableCommand(binary, ["login", "status"]);
     // `login status` exits non-zero when signed out, so the exit code says
     // nothing about the config; only the load-error message does.
+    const result = spawnSync(probe.command, probe.args, {
+      ...probe.options,
+      encoding: "utf8",
+      timeout: 10_000,
+      windowsHide: true,
+      env: { ...process.env, CODEX_HOME: probeHome },
+    });
+    if (result.error) return false;
+    return !/Error loading configuration/i.test(
+      `${result.stdout || ""}\n${result.stderr || ""}`,
+    );
+  } catch {
+    return false;
+  } finally {
+    rmSync(probeHome, { recursive: true, force: true });
+  }
+}
+
+// The compaction scope was added after the root-level token limit itself.
+// Older Codex builds reject unknown config keys and would become unusable if
+// the router wrote it unconditionally, so ask the installed binary before we
+// add the managed default.
+let codexSupportsBodyAfterPrefixScope;
+function installedCodexSupportsBodyAfterPrefixScope() {
+  if (codexSupportsBodyAfterPrefixScope !== undefined) {
+    return codexSupportsBodyAfterPrefixScope;
+  }
+  codexSupportsBodyAfterPrefixScope = probeBodyAfterPrefixScopeSupport();
+  return codexSupportsBodyAfterPrefixScope;
+}
+
+function probeBodyAfterPrefixScopeSupport() {
+  const binary = findCodexBinary();
+  if (!binary) return false;
+  const probeHome = mkdtempSync(path.join(os.tmpdir(), "codex-router-scope-probe-"));
+  try {
+    writeFileSync(
+      path.join(probeHome, "config.toml"),
+      `model_auto_compact_token_limit_scope = ${tomlValue(managedAutoCompactTokenLimitScope)}\n`,
+      { encoding: "utf8", mode: 0o600 },
+    );
+    const probe = spawnableCommand(binary, ["login", "status"]);
     const result = spawnSync(probe.command, probe.args, {
       ...probe.options,
       encoding: "utf8",
@@ -1371,6 +1414,20 @@ function enabledContents(contents, { loginFreeProvider = false } = {}) {
     nativeCatalogNeedsActivation = preparedSource.status === "pending";
   }
   const managedRealtimeOverrides = [];
+  // A routed compaction carries a large, stable prefix: system/developer
+  // instructions, tool schemas, and the router checkpoint. Counting that
+  // prefix again after every compaction can immediately retrigger compaction
+  // before the model has made meaningful progress. Codex's body-after-prefix
+  // scope exists for this exact window shape. Respect an explicit user value;
+  // otherwise own the safer routed-model default inside our managed block.
+  const managedAutoCompactScope = rootHasValue(
+    rootLines,
+    "model_auto_compact_token_limit_scope",
+  ) || !installedCodexSupportsBodyAfterPrefixScope()
+    ? []
+    : [
+        `model_auto_compact_token_limit_scope = ${tomlValue(managedAutoCompactTokenLimitScope)}`,
+      ];
   // Codex Voice uses a WebRTC call plus a sideband WebSocket. Keep both on
   // Codex's native endpoints instead of inheriting the Responses-only router URL.
   if (!rootHasValue(rootLines, realtimeCallBaseUrlKey)) {
@@ -1388,6 +1445,7 @@ function enabledContents(contents, { loginFreeProvider = false } = {}) {
     startMarker,
     `openai_base_url = ${JSON.stringify(routerBaseUrl)}`,
     `model_catalog_json = ${tomlValue(MERGED_CATALOG_PATH)}`,
+    ...managedAutoCompactScope,
     ...managedRealtimeOverrides,
     endMarker,
   );

@@ -62,6 +62,26 @@ exit 1
   return file;
 })();
 
+const preBodyScopeCodex = (() => {
+  const isWindows = process.platform === "win32";
+  const file = path.join(
+    codexStubDir,
+    isWindows ? "codex-pre-body-scope.cmd" : "codex-pre-body-scope",
+  );
+  const contents = isWindows
+    ? `@echo off\r\nfindstr /c:"model_auto_compact_token_limit_scope" "%CODEX_HOME%\\config.toml" >nul 2>&1\r\nif %errorlevel% equ 0 (\r\n  echo Error loading configuration: unknown field model_auto_compact_token_limit_scope 1>&2\r\n  exit /b 1\r\n)\r\necho Not logged in 1>&2\r\nexit /b 1\r\n`
+    : `#!/bin/sh
+if grep -q model_auto_compact_token_limit_scope "$CODEX_HOME/config.toml" 2>/dev/null; then
+  echo 'Error loading configuration: unknown field model_auto_compact_token_limit_scope' >&2
+  exit 1
+fi
+echo 'Not logged in' >&2
+exit 1
+`;
+  writeFileSync(file, contents, { mode: 0o755 });
+  return file;
+})();
+
 function writeCatalogCodexStub(directory) {
   const isWindows = process.platform === "win32";
   const file = path.join(directory, isWindows ? "codex-catalog.cmd" : "codex-catalog");
@@ -178,6 +198,10 @@ approval_policy = "never"
     assert.doesNotMatch(configured, /\[model_providers\.codex-router\.auth\]/);
     assert.doesNotMatch(configured, /caller-key-auth-command\.mjs/);
     assert.match(configured, /^openai_base_url = "http:\/\/127\.0\.0\.1:46192\/v1"$/m);
+    assert.match(
+      configured,
+      /^model_auto_compact_token_limit_scope = "body_after_prefix"$/m,
+    );
     assert.doesNotMatch(configured, new RegExp(CALLER_KEY));
     assert.doesNotMatch(configured, /\/_codex-router\/[A-Za-z0-9_-]+\/v1/);
     assert.match(
@@ -216,13 +240,57 @@ approval_policy = "never"
     const restored = readFileSync(configPath, "utf8");
     assert.doesNotMatch(
       restored,
-      /codex-router-(?:(?:provider|agent-concurrency|multi-agent-v2|standalone-web-search)-)?managed|codex-router-created-agents-table|openai_base_url|model_catalog_json|experimental_realtime_(?:webrtc_call|ws)_base_url/,
+      /codex-router-(?:(?:provider|agent-concurrency|multi-agent-v2|standalone-web-search)-)?managed|codex-router-created-agents-table|openai_base_url|model_catalog_json|model_auto_compact_token_limit_scope|experimental_realtime_(?:webrtc_call|ws)_base_url/,
     );
     assert.doesNotMatch(restored, /\[agents\]|max_concurrent_threads_per_session/);
     assert.match(restored, /model = "gpt-5\.6-sol"/);
     assert.match(restored, /model_provider = "openai"/);
     assert.match(restored, /model_reasoning_effort = "xhigh"/);
     assert.match(restored, /\[profiles\.work\]/);
+  } finally {
+    rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
+test("config manager preserves an explicit auto-compaction scope", () => {
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), "codex-router-config-"));
+  const configPath = path.join(codexHome, "config.toml");
+  writeFileSync(
+    configPath,
+    'model_auto_compact_token_limit_scope = "total"\nmodel = "gpt-5.6-sol"\n',
+    { mode: 0o600 },
+  );
+
+  try {
+    run("enable", codexHome);
+    const configured = readFileSync(configPath, "utf8");
+    assert.equal(
+      (configured.match(/^model_auto_compact_token_limit_scope\s*=/gm) || []).length,
+      1,
+    );
+    assert.match(configured, /^model_auto_compact_token_limit_scope = "total"$/m);
+
+    run("disable", codexHome);
+    assert.match(
+      readFileSync(configPath, "utf8"),
+      /^model_auto_compact_token_limit_scope = "total"$/m,
+    );
+  } finally {
+    rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
+test("config manager skips body-after-prefix scope on older Codex builds", () => {
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), "codex-router-config-"));
+  const configPath = path.join(codexHome, "config.toml");
+  writeFileSync(configPath, 'model = "gpt-5.6-sol"\n', { mode: 0o600 });
+
+  try {
+    run("enable", codexHome, undefined, [], { CODEX_BIN: preBodyScopeCodex });
+    assert.doesNotMatch(
+      readFileSync(configPath, "utf8"),
+      /^model_auto_compact_token_limit_scope\s*=/m,
+    );
   } finally {
     rmSync(codexHome, { recursive: true, force: true });
   }
