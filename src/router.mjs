@@ -80,6 +80,13 @@ import {
 } from "./search-sidecar.mjs";
 import { searchSidecarBindingForModel } from "./search-sidecar-state.mjs";
 import {
+  routedModelPreservesSearchContract,
+  routedModelSearchMode,
+  searchModePreservesSearchContract,
+  stripUnsupportedHostedSearch,
+  unsupportedSearchContractError,
+} from "./search-capability.mjs";
+import {
   canonicalProviderId,
   readProviderSelection,
   selectedConfiguredListedModels,
@@ -796,6 +803,59 @@ function normalizeAutoToolChoice(payload, route) {
   ) {
     payload.tool_choice = "auto";
   }
+}
+
+function routedSearchCompatibility(payload, route) {
+  const searchMode = routedModelSearchMode(route);
+  const provider = providerForModel(route);
+  const compatiblePayload = provider?.generic !== true || searchMode !== undefined
+    ? payload
+    : stripUnsupportedHostedSearch(payload, { model: route.slug });
+  return { payload: compatiblePayload, searchMode };
+}
+
+function inputHasWebSearchHistory(input) {
+  return Array.isArray(input) && input.some((item) => item?.type === "web_search_call");
+}
+
+function payloadHasHostedSearchIntent(payload) {
+  const tools = Array.isArray(payload?.tools) ? payload.tools : [];
+  const include = Array.isArray(payload?.include) ? payload.include : [];
+  return Boolean(
+    payload?.web_search_options !== undefined ||
+    tools.some((tool) => ["web_search", "web_search_preview"].includes(tool?.type)) ||
+    ["web_search", "web_search_preview"].includes(payload?.tool_choice?.type) ||
+    include.some(
+      (entry) => typeof entry === "string" && entry.startsWith("web_search_call."),
+    )
+  );
+}
+
+function snapshotRoutedSearch(payload, route) {
+  const compatible = routedSearchCompatibility(payload, route);
+  payload = compatible.payload;
+  return {
+    payload,
+    searchMode: compatible.searchMode,
+    needsSearch: payloadHasHostedSearchIntent(payload),
+  };
+}
+
+function routedSearchContract(snapshot, input) {
+  const hasSearchHistory = inputHasWebSearchHistory(input);
+  return {
+    needsSearch: snapshot.needsSearch,
+    hasSearchHistory,
+    requiredMode: snapshot.needsSearch || hasSearchHistory ? snapshot.searchMode : undefined,
+  };
+}
+
+function assertRoutedSearchContract(route, builtSearchMode, contract) {
+  if (
+    searchModePreservesSearchContract(builtSearchMode, contract) &&
+    routedModelPreservesSearchContract(route, contract)
+  ) return;
+  throw unsupportedSearchContractError(route?.slug);
 }
 
 // The documented Zen Free pair has two different wire contracts: Ox uses Chat
@@ -2248,7 +2308,7 @@ function extractResponseText(payload) {
 // The models a compaction may be tried on, best first, without sending
 // anything. The conversation's own model leads unless it has already said it
 // is empty, in which case asking it again only buys the same rejection.
-function compactionAttempts(route, aged, { allowFailover = true } = {}) {
+function compactionAttempts(route, aged, searchContract, { allowFailover = true } = {}) {
   if (!allowFailover) return [route];
   const settings = readFailoverSettings();
   if (!settings.enabled) return [route];
@@ -2260,6 +2320,9 @@ function compactionAttempts(route, aged, { allowFailover = true } = {}) {
       // serialized size is the honest measure of what a candidate must hold.
       estimatedTokens: estimateInputTokens(JSON.stringify(aged.input ?? [])),
       needsImage: inputHasImage(aged.input),
+      needsSearch: searchContract.needsSearch,
+      hasSearchHistory: searchContract.hasSearchHistory,
+      requiredSearchMode: searchContract.requiredMode,
       // Compaction sends `tools: []`, so no candidate needs the collaboration
       // proof to serve one.
       chain: settings.chain,
@@ -2275,7 +2338,15 @@ function compactionAttempts(route, aged, { allowFailover = true } = {}) {
 // here so a compaction can be moved to another model exactly like an ordinary
 // turn -- a compaction that fails ends the session just as hard, because the
 // conversation cannot get under its context limit without one.
-async function summarizeWith(request, payload, route, aged, prepared, signal) {
+async function summarizeWith(
+  request,
+  payload,
+  route,
+  aged,
+  prepared,
+  signal,
+  { searchContract } = {},
+) {
   const compatibleInput = zenFreeCompatibleInput(aged.input, route);
   const providerInput = needsConsoleGoResponsesToolCompatibility(route)
     ? strictOpenCodeCompactionInput(compatibleInput, payload.tools, {
@@ -2314,7 +2385,18 @@ async function summarizeWith(request, payload, route, aged, prepared, signal) {
   // Compaction re-enters the same provider as the routed turn; Fireworks
   // rejects this OpenAI search parameter at that boundary too.
   if (providerForModel(route)?.id === "fireworks") delete body.web_search_options;
-  const serialized = JSON.stringify(body);
+  const searchCompatibility = routedSearchCompatibility(body, route);
+  const serialized = JSON.stringify(searchCompatibility.payload);
+  // Candidate capability may depend on a sidecar credential or binding that
+  // changed while image bridging was in flight. Preserve both the mode used
+  // to construct this exact body and the live mode at the send boundary: a
+  // disappear/reappear cycle must not authorize an already-stripped request.
+  if (
+    !searchModePreservesSearchContract(searchCompatibility.searchMode, searchContract) ||
+    !routedModelPreservesSearchContract(route, searchContract)
+  ) {
+    return { searchCapabilityChanged: true };
+  }
   const upstream = await fetch(`${GATEWAY_BASE}/responses`, {
     method: "POST",
     headers: routedHeaders(),
@@ -2325,6 +2407,16 @@ async function summarizeWith(request, payload, route, aged, prepared, signal) {
 }
 
 async function summarize(request, payload, route, signal, { allowFailover = true } = {}) {
+  // The conversation's selected route owns the capability contract. Resolve
+  // it before normalization so a fallback cannot add back ambient search that
+  // the selected model never advertised. Compaction itself sends no tools or
+  // tool choice, so discard those turn-only declarations before checking the
+  // provider-bound compact shape; an impossible ordinary turn must fail, but
+  // an ambient choice that compaction never forwards must not end the session.
+  payload = { ...payload, tools: [] };
+  delete payload.tool_choice;
+  const searchSnapshot = snapshotRoutedSearch(payload, route);
+  payload = searchSnapshot.payload;
   const originalInput = Array.isArray(payload.input) ? payload.input : [];
   // Compaction replays the whole conversation, so any image still in it would
   // reach the text-only model unbridged and fail the compaction rather than
@@ -2336,6 +2428,7 @@ async function summarize(request, payload, route, signal, { allowFailover = true
   // is cached by ciphertext, so a conversation whose turns already resolved
   // costs nothing extra here.
   const normalized = await normalizeRoutedAgentInput(request, originalInput, signal);
+  const searchContract = routedSearchContract(searchSnapshot, normalized);
   // Evidence is extracted before tool-result aging rewrites old output bytes.
   // The summarizer may select source IDs, but only this deterministic pass can
   // decide which source types and machine outcomes enter a kcr2 checkpoint.
@@ -2353,13 +2446,35 @@ async function summarize(request, payload, route, signal, { allowFailover = true
   // the conversation is on. A provider already known to be empty is dropped
   // rather than asked, exactly as on the turn path. Nothing is sent while this
   // list is built.
-  const attempts = compactionAttempts(route, aged, { allowFailover });
+  const attempts = compactionAttempts(route, aged, searchContract, { allowFailover });
   // Attempts that were sent and rejected, kept so the caller can meter each one.
   const failed = [];
   let last;
   for (let index = 0; index < attempts.length; index += 1) {
     const attemptRoute = attempts[index];
-    const sent = await summarizeWith(request, payload, attemptRoute, aged, prepared, signal);
+    if (
+      !routedModelPreservesSearchContract(attemptRoute, searchContract)
+    ) {
+      if (attemptRoute === route) throw unsupportedSearchContractError(route.slug);
+      logFailover(route, attemptRoute, "compaction/search-capability-changed", "not-sent", "skipped");
+      if (index + 1 === attempts.length && !attempts.includes(route)) attempts.push(route);
+      continue;
+    }
+    const sent = await summarizeWith(
+      request,
+      payload,
+      attemptRoute,
+      aged,
+      prepared,
+      signal,
+      { searchContract },
+    );
+    if (sent.searchCapabilityChanged) {
+      if (attemptRoute === route) throw unsupportedSearchContractError(route.slug);
+      logFailover(route, attemptRoute, "compaction/search-capability-changed", "not-sent", "skipped");
+      if (index + 1 === attempts.length && !attempts.includes(route)) attempts.push(route);
+      continue;
+    }
     let bytes;
     try {
       bytes = await readResponseBody(sent.upstream, {
@@ -2707,6 +2822,8 @@ function observeSubagentOutcome(request, route, status, options = {}) {
 // `agedInput`. The tool list is a local, and the input array is copied before
 // anything rewrites it.
 async function buildRoutedRequest({ request, payload, route, agedInput, tokenMaxxing = false }) {
+  const searchCompatibility = routedSearchCompatibility(payload, route);
+  payload = searchCompatibility.payload;
   let namespacesFlattened = false;
   let flattenedNamespaces = new Map();
   const provider = providerForModel(route);
@@ -2976,6 +3093,10 @@ async function buildRoutedRequest({ request, payload, route, agedInput, tokenMax
     body: Buffer.from(JSON.stringify(routed), "utf8"),
     target: `${GATEWAY_BASE}/responses`,
     headers: routedHeaders(),
+    // The exact mode used while constructing this body. Failover compares it
+    // with the immutable source contract as well as live state immediately
+    // before send, so transient sidecar changes cannot validate stale bytes.
+    searchMode: searchCompatibility.searchMode,
     namespacesFlattened,
     flattenedNamespaces,
     // Close finished children the parent left Working. Only when the
@@ -3037,7 +3158,7 @@ async function prepareRoutedRequest({
 // probes every provider's credential synchronously and spawns
 // `/usr/bin/security` per keychain service on macOS, which would cost every
 // healthy turn about 250ms of blocked event loop for nothing.
-function failoverCandidates({ route, agedInput, flattenedNamespaces, chain }) {
+function failoverCandidates({ route, agedInput, flattenedNamespaces, searchContract, chain }) {
   const hidden = readHiddenModels();
   return rankFailoverCandidates(
     selectedConfiguredListedModels().filter((model) => !hidden.has(model.slug)),
@@ -3052,6 +3173,9 @@ function failoverCandidates({ route, agedInput, flattenedNamespaces, chain }) {
       // been through the collaboration proof. A child answering its own turn
       // does not.
       needsMultiAgentV2: collaborationToolAvailable(flattenedNamespaces),
+      needsSearch: searchContract.needsSearch,
+      hasSearchHistory: searchContract.hasSearchHistory,
+      requiredSearchMode: searchContract.requiredMode,
       chain,
     },
   );
@@ -3061,14 +3185,14 @@ function failoverCandidates({ route, agedInput, flattenedNamespaces, chain }) {
 // every destination must be the exact checked-in v2 route Codex was allowed to
 // spawn as an agent. Runtime health may remove a route, but it cannot certify
 // one or change its provider identity.
-function subagentTransportFailoverCandidates({ request, route, agedInput, chain }) {
+function subagentTransportFailoverCandidates({ request, route, agedInput, searchContract, chain }) {
   if (!request.headers["x-openai-subagent"]) return [];
   // The header describes the caller's turn; it is not certification evidence.
   // Require the failed route itself to carry the repository's exact v2 proof
   // before that metadata can select this stricter recovery path.
   if (subagentEligibility(route)) return [];
   const hidden = readHiddenModels();
-  const ranked = rankSubagentCandidates(
+  let ranked = rankSubagentCandidates(
     selectedConfiguredListedModels().filter((model) => !hidden.has(model.slug)),
     {
       chain,
@@ -3077,6 +3201,9 @@ function subagentTransportFailoverCandidates({ request, route, agedInput, chain 
         ...(inputHasImage(agedInput) ? ["vision"] : []),
       ],
     },
+  );
+  ranked = ranked.filter(
+    (candidate) => routedModelPreservesSearchContract(candidate.model, searchContract),
   );
   return subagentFallbackPlan(ranked, {
     failureKind: "transport",
@@ -3092,6 +3219,12 @@ function routedRequestFits(route, body) {
     !Number.isFinite(route?.contextWindow) ||
     route.contextWindow >= estimatedTokens
   );
+}
+
+function candidateBuildCompatibilityCode(error) {
+  if (error?.code === "model_search_not_supported") return error.code;
+  if (error?.code === GROQ_TOOL_LIMIT_CODE && error?.provider === "groq") return error.code;
+  return undefined;
 }
 
 // `status` is always what the *asked-for* model said; `outcome` is what the
@@ -3130,6 +3263,7 @@ async function attemptModelFailover({
   signal,
   normalizedInput,
   agingEnabled,
+  searchContract,
 }) {
   const settings = readFailoverSettings();
   if (!settings.enabled) return undefined;
@@ -3139,12 +3273,14 @@ async function attemptModelFailover({
         request,
         route,
         agedInput,
+        searchContract,
         chain: settings.chain,
       })
     : failoverCandidates({
         route,
         agedInput,
         flattenedNamespaces,
+        searchContract,
         chain: settings.chain,
       }).slice(0, MAX_FAILOVER_HOPS);
   if (!candidates.length) {
@@ -3175,6 +3311,13 @@ async function attemptModelFailover({
         logFailover(route, model, verdict.reason, status, "context-too-small");
         continue;
       }
+      if (
+        !searchModePreservesSearchContract(built.searchMode, searchContract) ||
+        !routedModelPreservesSearchContract(model, searchContract)
+      ) {
+        logFailover(route, model, verdict.reason, status, "search-capability-changed");
+        continue;
+      }
       upstream = await fetch(built.target, {
         method: "POST",
         headers: built.headers,
@@ -3183,7 +3326,16 @@ async function attemptModelFailover({
       });
     } catch (error) {
       if (signal.aborted) throw error;
-      logFailover(route, model, verdict.reason, status, `transport/${error?.name || "Error"}`);
+      const compatibilityCode = candidateBuildCompatibilityCode(error);
+      logFailover(
+        route,
+        model,
+        verdict.reason,
+        status,
+        compatibilityCode
+          ? `compatibility/${compatibilityCode}`
+          : `transport/${error?.name || "Error"}`,
+      );
       continue;
     }
     if (upstream.ok) {
@@ -3277,7 +3429,7 @@ async function handleResponses(request, response, requestUrl) {
     const exactRouteProbe = exactRouteProbeRequested(request.headers);
     const encoded = await readRequestBody(request, { signal: controller.signal });
     const body = decodeBody(encoded, request.headers["content-encoding"]);
-    const payload = await parseBodyAsync(body);
+    let payload = await parseBodyAsync(body);
     controller.signal.throwIfAborted();
     requestedModel = typeof payload.model === "string" ? payload.model : "";
     let registeredRoute =
@@ -3365,6 +3517,7 @@ async function handleResponses(request, response, requestUrl) {
     let target;
     let headers;
     let routedBody;
+    let builtSearchMode;
     let namespacesFlattened = false;
     let flattenedNamespaces = new Map();
     // The route-independent half of the input, computed once. Failing the turn
@@ -3374,6 +3527,7 @@ async function handleResponses(request, response, requestUrl) {
     let normalizedInput;
     let agingEnabled = false;
     let agedInput;
+    let searchContract;
     // Adopts a rebuilt request for a different model. Everything downstream --
     // the response transforms, the prompt-token estimate, the empty-completion
     // retry -- reads these, so all of them have to move together or the turn
@@ -3390,6 +3544,7 @@ async function handleResponses(request, response, requestUrl) {
       target = built.target;
       headers = built.headers;
       routedBody = built.body;
+      builtSearchMode = built.searchMode;
       // The tray Island has to name the model that is actually answering.
       activity.setRoute({
         provider: canonicalProviderId(route.provider),
@@ -3398,11 +3553,17 @@ async function handleResponses(request, response, requestUrl) {
       });
     };
     if (route) {
+      // Resolve the selected route's search contract once, before encrypted
+      // handoff normalization or any other external work. A later failover may
+      // not reintroduce ambient search that this route never advertised.
+      const searchSnapshot = snapshotRoutedSearch(payload, route);
+      payload = searchSnapshot.payload;
       normalizedInput = await normalizeRoutedAgentInput(
         request,
         payload.input,
         controller.signal,
       );
+      searchContract = routedSearchContract(searchSnapshot, normalizedInput);
       agingEnabled = toolResultAgingEnabled();
       const built = await prepareRoutedRequest({
         request,
@@ -3419,6 +3580,7 @@ async function handleResponses(request, response, requestUrl) {
       target = built.target;
       headers = built.headers;
       routedBody = built.body;
+      builtSearchMode = built.searchMode;
       // This provider has already said it would be empty until a named time.
       // Sending anyway buys one guaranteed rejection per turn for as long as
       // the window lasts, so move now and skip the dead round trip. The body
@@ -3434,6 +3596,7 @@ async function handleResponses(request, response, requestUrl) {
           route,
           agedInput,
           flattenedNamespaces,
+          searchContract,
           chain: settings.chain,
         }).slice(0, MAX_FAILOVER_HOPS);
         for (const next of candidates) {
@@ -3447,17 +3610,29 @@ async function handleResponses(request, response, requestUrl) {
               agingEnabled,
             });
           } catch (error) {
-            if (error?.code !== GROQ_TOOL_LIMIT_CODE || error?.provider !== "groq") throw error;
+            const compatibilityCode = candidateBuildCompatibilityCode(error);
+            if (!compatibilityCode) throw error;
             logFailover(
               route,
               next.model,
               `cooled_until_${cooled.until}`,
               "not-sent",
-              `compatibility/${error.code}`,
+              `compatibility/${compatibilityCode}`,
             );
             continue;
           }
-          if (routedRequestFits(next.model, candidate.body)) {
+          if (
+            !searchModePreservesSearchContract(candidate.searchMode, searchContract) ||
+            !routedModelPreservesSearchContract(next.model, searchContract)
+          ) {
+            logFailover(
+              route,
+              next.model,
+              `cooled_until_${cooled.until}`,
+              "not-sent",
+              "search-capability-changed",
+            );
+          } else if (routedRequestFits(next.model, candidate.body)) {
             logFailover(route, next.model, `cooled_until_${cooled.until}`, "not-sent", "swapped");
             adoptRoute(next.model, candidate);
             break;
@@ -3533,6 +3708,11 @@ async function handleResponses(request, response, requestUrl) {
     // attempt replays the identical bytes under the identical encoding. Nothing
     // here consumes a stream, which is what makes the request replayable at
     // all.
+    // The selected route is subject to the same immutable built-bytes and
+    // live capability contract as every fallback. This catches unsupported
+    // search history and sidecar changes after normalization before any
+    // provider-bound bytes leave the router.
+    if (route) assertRoutedSearchContract(route, builtSearchMode, searchContract);
     let { response: upstream, retries } = await fetchWithRetry(
       target,
       {
@@ -3590,6 +3770,7 @@ async function handleResponses(request, response, requestUrl) {
           signal: controller.signal,
           normalizedInput,
           agingEnabled,
+          searchContract,
         });
         if (moved) {
           // The attempt that failed is still a turn that happened and still
@@ -3823,8 +4004,16 @@ async function handleResponses(request, response, requestUrl) {
       // same bytes, same headers, same signal. The discarded first stream means
       // the retry supplies the only head, response id, sequence space,
       // reasoning, and output the client ever receives.
-      emptyCompletionRetried = true;
       let upstream2;
+      // The held first response creates another asynchronous boundary: a
+      // sidecar can be disabled or lose its credential while that stream is
+      // being classified. Revalidate immediately before replaying the exact
+      // bytes so the repair path cannot outlive the contract they encode. The
+      // discarded attempt's staged headers are no longer authoritative even
+      // when this check fails and the router writes its own local response.
+      clearStagedResponseHead(response);
+      if (route) assertRoutedSearchContract(route, builtSearchMode, searchContract);
+      emptyCompletionRetried = true;
       try {
         const retried = await fetchWithRetry(
           target,
@@ -4105,6 +4294,33 @@ async function handleResponses(request, response, requestUrl) {
         status: error.status,
         durationMs: Date.now() - startedAt,
         responseStartMs: upstreamLatencyMs,
+      });
+      usageRecorded = true;
+      return;
+    }
+    if (error?.code === "model_search_not_supported" && !response.headersSent) {
+      finalStatus = error.status;
+      activityStatus = error.status;
+      writeJson(response, error.status, {
+        error: {
+          type: error.code,
+          message: error.message,
+        },
+      });
+      recordUsageEvent({
+        model: route?.slug || requestedModel,
+        provider: route ? canonicalProviderId(route.provider) : "openai",
+        status: error.status,
+        durationMs: Date.now() - startedAt,
+        responseStartMs: upstreamLatencyMs,
+        ...usage,
+        estimatedInputTokens,
+        ...toolResultAging,
+        ...(emptyCompletion ? { emptyCompletion: true } : {}),
+        ...(emptyCompletionPreludeLimit
+          ? { emptyCompletionPreludeLimit }
+          : {}),
+        ...(failoverFrom ? { failoverFrom } : {}),
       });
       usageRecorded = true;
       return;

@@ -119,6 +119,12 @@ test("one generic gateway routes ordinary and explicitly profiled models without
     requestProfile: "codex-encrypted-schema",
     priority: 101,
   });
+  const autoToolChoice = userModelEntry({
+    providerId: "mixed-gateway",
+    upstreamId: "auto-tool-choice-model",
+    requestProfile: "auto-tool-choice",
+    priority: 102,
+  });
   writeFileSync(providersFile, `${JSON.stringify({
     version: 1,
     providers: [{
@@ -133,7 +139,7 @@ test("one generic gateway routes ordinary and explicitly profiled models without
   }, null, 2)}\n`);
   writeFileSync(userModelsFile, `${JSON.stringify({
     version: 1,
-    models: [ordinary, profiled],
+    models: [ordinary, profiled, autoToolChoice],
   }, null, 2)}\n`);
   const forwarderPort = await openPort();
   const forwarder = runForwarder({
@@ -166,7 +172,7 @@ test("one generic gateway routes ordinary and explicitly profiled models without
       credential_present: true,
       credential_source: "not required",
     });
-    for (const model of [ordinary, profiled]) {
+    for (const model of [ordinary, profiled, autoToolChoice]) {
       const response = await fetch(`http://127.0.0.1:${forwarderPort}/v1/chat/completions`, {
         method: "POST",
         headers: {
@@ -178,22 +184,28 @@ test("one generic gateway routes ordinary and explicitly profiled models without
         body: JSON.stringify({
           model: model.gatewayModel,
           messages: [{ role: "user", content: "Use the tool." }],
+          web_search_options: { search_context_size: "medium" },
           tools: [{
             type: "function",
             function: { name: "inspect", description: "Inspect data.", parameters: schema },
-          }],
+          }, { type: "web_search" }],
+          tool_choice: "required",
         }),
       });
       assert.equal(response.status, 200, forwarder.testErrors());
       assert.equal((await response.json()).choices[0].message.content, "ok");
     }
 
-    assert.equal(upstreamRequests.length, 2);
+    assert.equal(upstreamRequests.length, 3);
     assert.ok(upstreamRequests.every((entry) => entry.url === "/v1/chat/completions"));
     assert.ok(upstreamRequests.every((entry) => entry.headers.authorization === undefined));
     assert.ok(upstreamRequests.every((entry) => entry.headers["x-tenant"] === "operator-owned"));
     assert.ok(upstreamRequests.every((entry) => entry.headers["x-ordinary-metadata"] === "kept"));
     assert.equal(upstreamRequests[0].body.model, ordinary.upstreamModel);
+    assert.deepEqual(upstreamRequests[0].body.web_search_options, {
+      search_context_size: "medium",
+    });
+    assert.deepEqual(upstreamRequests[0].body.tools[1], { type: "web_search" });
     assert.deepEqual(upstreamRequests[0].body.tools[0].function.parameters, schema);
     assert.equal(upstreamRequests[1].body.model, profiled.upstreamModel);
     const normalized = upstreamRequests[1].body.tools[0].function.parameters;
@@ -201,6 +213,10 @@ test("one generic gateway routes ordinary and explicitly profiled models without
     assert.equal("encrypted" in normalized.properties.value, false);
     assert.deepEqual(normalized.properties.encrypted, schema.properties.encrypted);
     assert.deepEqual(normalized.required, ["value", "encrypted"]);
+    assert.equal(upstreamRequests[0].body.tool_choice, "required");
+    assert.equal(upstreamRequests[1].body.tool_choice, "required");
+    assert.equal(upstreamRequests[2].body.model, autoToolChoice.upstreamModel);
+    assert.equal(upstreamRequests[2].body.tool_choice, "auto");
   } finally {
     await stop(forwarder);
     await close(upstream.server);

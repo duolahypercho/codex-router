@@ -331,6 +331,65 @@ test("rankFailoverCandidates keeps a collaboration turn on a v2 model", () => {
   );
 });
 
+test("rankFailoverCandidates preserves the selected search execution mode", () => {
+  const from = model("source/hosted", "source", {
+    searchTool: { mode: "hosted" },
+  });
+  const ranked = rankFailoverCandidates(
+    [
+      model("hosted/compatible", "hosted", { searchTool: { mode: "hosted" } }),
+      model("standalone/incompatible", "standalone", {
+        searchTool: { mode: "standalone" },
+      }),
+      model("plain/incompatible", "plain"),
+    ],
+    { from, needsSearch: true },
+  );
+  assert.deepEqual(ranked.map((entry) => entry.model.slug), ["hosted/compatible"]);
+});
+
+test("rankFailoverCandidates leaves a search-capable model's ordinary turn unrestricted", () => {
+  const ranked = rankFailoverCandidates(
+    [model("plain/candidate", "plain")],
+    {
+      from: model("source/hosted", "source", { searchTool: { mode: "hosted" } }),
+    },
+  );
+  assert.deepEqual(ranked.map((entry) => entry.model.slug), ["plain/candidate"]);
+});
+
+test("rankFailoverCandidates ignores ambient search intent without source capability", () => {
+  const ranked = rankFailoverCandidates(
+    [model("plain/candidate", "plain")],
+    {
+      from: model("source/plain", "source"),
+      needsSearch: true,
+    },
+  );
+  assert.deepEqual(ranked.map((entry) => entry.model.slug), ["plain/candidate"]);
+});
+
+test("rankFailoverCandidates does not guess after search capability disappears", () => {
+  const ranked = rankFailoverCandidates(
+    [model("hosted/candidate", "hosted", { searchTool: { mode: "hosted" } })],
+    { from: model("source/plain", "source"), hasSearchHistory: true },
+  );
+  assert.deepEqual(ranked, []);
+});
+
+test("rankFailoverCandidates preserves an explicitly snapshotted absent mode", () => {
+  const ranked = rankFailoverCandidates(
+    [model("hosted/candidate", "hosted", { searchTool: { mode: "hosted" } })],
+    {
+      from: model("source/hosted", "source", { searchTool: { mode: "hosted" } }),
+      needsSearch: true,
+      hasSearchHistory: true,
+      requiredSearchMode: undefined,
+    },
+  );
+  assert.deepEqual(ranked, []);
+});
+
 test("rankFailoverCandidates refuses a model the registry bars from the vision bridge", () => {
   const ranked = rankFailoverCandidates(
     [
