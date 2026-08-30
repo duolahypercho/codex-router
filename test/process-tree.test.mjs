@@ -199,7 +199,9 @@ test("deadline termination removes the complete descendant process tree", async 
   // window, then wait long enough that a surviving grandchild would still
   // prove itself after the latest possible successful start.
   const startupBudgetMs = process.platform === "win32" ? 5_000 : 1_000;
-  const markerDelayMs = startupBudgetMs + 200;
+  // Stay well beyond the production 250 ms TERM-to-KILL grace so the marker
+  // cannot race legitimate cleanup on POSIX.
+  const markerDelayMs = startupBudgetMs + 1_000;
   const grandchild = [
     "const { writeFileSync } = require('node:fs')",
     "process.on('SIGTERM', () => {})",
