@@ -1874,6 +1874,7 @@ for (const ownerSignal of ["SIGINT", "SIGTERM"]) {
 async function startElectronBarrierTree({ mode, rollbackMs, barrierMs, depth = 0 }) {
   const root = await makeBarrierControlRoot();
   const readyPath = path.join(root, "barrier-ready.pid");
+  const ownerReadyPath = path.join(root, "owner-signal-ready");
   const completedPath = path.join(root, "barrier-complete");
   const moduleUrl = new URL(
     "../apps/control-center/electron/command-runner.mjs",
@@ -1881,8 +1882,9 @@ async function startElectronBarrierTree({ mode, rollbackMs, barrierMs, depth = 0
   ).href;
   const program = [
     `process.env.CODEX_ROUTER_SOURCE_ROOT = ${JSON.stringify(root)}`,
+    "const { writeFileSync } = await import('node:fs')",
     `const { runControl } = await import(${JSON.stringify(moduleUrl)})`,
-    `await runControl(${JSON.stringify([
+    `const running = runControl(${JSON.stringify([
       readyPath,
       completedPath,
       mode,
@@ -1890,6 +1892,9 @@ async function startElectronBarrierTree({ mode, rollbackMs, barrierMs, depth = 0
       String(barrierMs),
       String(depth),
     ])}, { timeoutMs: 10_000 })`,
+    "while (process.listenerCount('SIGTERM') === 0) await new Promise((resolve) => setImmediate(resolve))",
+    `writeFileSync(${JSON.stringify(ownerReadyPath)}, 'ready')`,
+    "await running",
   ].join(";");
   const owner = (await import("node:child_process")).spawn(
     process.execPath,
@@ -1902,14 +1907,19 @@ async function startElectronBarrierTree({ mode, rollbackMs, barrierMs, depth = 0
       },
     },
   );
-  const deadline = Date.now() + 3_000;
-  while (!existsSync(readyPath) && Date.now() < deadline) {
+  const deadline = Date.now() + 10_000;
+  while (
+    (!existsSync(readyPath) || !existsSync(ownerReadyPath))
+    && Date.now() < deadline
+  ) {
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
   assert.equal(existsSync(readyPath), true);
+  assert.equal(existsSync(ownerReadyPath), true);
   return {
     root,
     readyPath,
+    ownerReadyPath,
     completedPath,
     owner,
     childPid: Number.parseInt(await readFile(readyPath, "utf8"), 10),
