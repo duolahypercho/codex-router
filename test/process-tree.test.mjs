@@ -194,11 +194,17 @@ test("deadline termination removes the complete descendant process tree", async 
   const directory = mkdtempSync(path.join(os.tmpdir(), "router-process-tree-"));
   const ready = path.join(directory, "grandchild-ready");
   const marker = path.join(directory, "grandchild-survived");
+  // A saturated Windows hosted runner can spend more than 500 ms starting the
+  // PowerShell Job owner and its descendants. Give startup a platform-sized
+  // window, then wait long enough that a surviving grandchild would still
+  // prove itself after the latest possible successful start.
+  const startupBudgetMs = process.platform === "win32" ? 5_000 : 1_000;
+  const markerDelayMs = startupBudgetMs + 200;
   const grandchild = [
     "const { writeFileSync } = require('node:fs')",
     "process.on('SIGTERM', () => {})",
     `writeFileSync(${JSON.stringify(ready)}, 'ready')`,
-    `setTimeout(() => writeFileSync(${JSON.stringify(marker)}, 'unsafe'), 900)`,
+    `setTimeout(() => writeFileSync(${JSON.stringify(marker)}, 'unsafe'), ${markerDelayMs})`,
     "setInterval(() => {}, 1000)",
   ].join(";");
   const child = [
@@ -209,12 +215,12 @@ test("deadline termination removes the complete descendant process tree", async 
   ].join(";");
   try {
     const operation = runProcessTree(process.execPath, ["-e", child], {
-      deadline: Date.now() + 500,
+      deadline: Date.now() + startupBudgetMs,
     });
     const rejected = assert.rejects(operation, { code: "router_operation_timeout" });
-    await waitForFile(ready);
+    await waitForFile(ready, startupBudgetMs + 1_000);
     await rejected;
-    await new Promise((resolve) => setTimeout(resolve, 650));
+    await new Promise((resolve) => setTimeout(resolve, markerDelayMs + 100));
     assert.equal(existsSync(marker), false);
   } finally {
     rmSync(directory, { recursive: true, force: true });
