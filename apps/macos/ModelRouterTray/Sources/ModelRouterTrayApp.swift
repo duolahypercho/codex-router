@@ -5401,7 +5401,6 @@ private struct TrayView: View {
       }
       .padding(14)
     }
-    .preferredColorScheme(.dark)
     .foregroundStyle(routerText)
     .task {
       await store.refresh()
