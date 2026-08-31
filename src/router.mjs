@@ -1248,6 +1248,33 @@ function messageItem(text) {
   };
 }
 
+function normalizeOrphanAppToolOutput(item) {
+  if (
+    item?.type !== "function_call_output" ||
+    item.namespace !== "codex_app" ||
+    typeof item.name !== "string" ||
+    !item.name ||
+    (typeof item.call_id === "string" && item.call_id) ||
+    item.output === undefined
+  ) {
+    return item;
+  }
+  // Codex app-server can persist a standalone app-tool result without the
+  // originating call. A synthetic call_id would still have no matching call,
+  // while strict Responses providers reject the original item outright.
+  // Preserve the result as ordinary readable history instead. Scope the
+  // recovery to named codex_app outputs so every other malformed tool item
+  // continues to fail closed at the provider adapter.
+  const output =
+    typeof item.output === "string" ? item.output : JSON.stringify(item.output);
+  return messageItem(`[Codex app tool result: codex_app.${item.name}]\n${output}`);
+}
+
+function normalizeProviderAppToolOutputs(input) {
+  if (!Array.isArray(input)) return input;
+  return input.map(normalizeOrphanAppToolOutput);
+}
+
 function normalizeRoutedInput(input) {
   if (!Array.isArray(input)) return input;
   return input
@@ -2351,7 +2378,10 @@ async function summarizeWith(
   signal,
   { searchContract } = {},
 ) {
-  const compatibleInput = zenFreeCompatibleInput(aged.input, route);
+  const compatibleInput = zenFreeCompatibleInput(
+    normalizeProviderAppToolOutputs(aged.input),
+    route,
+  );
   const providerInput = needsConsoleGoResponsesToolCompatibility(route)
     ? strictOpenCodeCompactionInput(compatibleInput, payload.tools, {
         maxNameLength: 64,
@@ -2834,7 +2864,10 @@ async function buildRoutedRequest({ request, payload, route, agedInput, tokenMax
   const provider = providerForModel(route);
   const chatCompletionsProvider = provider?.protocol !== "openai-responses";
   const consoleGoResponsesCompatibility = needsConsoleGoResponsesToolCompatibility(route);
-  const compatibleInput = zenFreeCompatibleInput(agedInput, route);
+  const compatibleInput = zenFreeCompatibleInput(
+    normalizeProviderAppToolOutputs(agedInput),
+    route,
+  );
   // Image substitution may spend another provider's quota. Every Groq tool
   // limit that is already knowable from the client request and stored history
   // must fail locally before that work starts; the normal post-bridge pass

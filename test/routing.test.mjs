@@ -6031,6 +6031,100 @@ test("router strips empty text parts and drops the messages left with nothing", 
   }
 });
 
+test("router preserves orphan Codex app outputs as readable history", async () => {
+  const gatewayRequests = [];
+  const gateway = await mockServer(async (request, response) => {
+    gatewayRequests.push(await bodyJson(request));
+    json(response, 200, {
+      id: "resp-app-output",
+      object: "response",
+      output: [
+        {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "ok" }],
+        },
+      ],
+    });
+  });
+  const native = await mockServer(async (_request, response) => {
+    json(response, 200, { id: "unused", output: [] });
+  });
+  const routerPort = await openPort();
+  const router = run("router.mjs", {
+    CODEX_ROUTER_PORT: String(routerPort),
+    CODEX_NATIVE_BASE_URL: `http://127.0.0.1:${native.port}/backend-api/codex`,
+    CODEX_ROUTER_GATEWAY_BASE_URL: `http://127.0.0.1:${gateway.port}/v1`,
+    CODEX_ROUTER_QUIET: "1",
+  });
+  const delegation = "<codex_delegation>child finished</codex_delegation>";
+  const input = [
+    {
+      type: "function_call_output",
+      id: "fco_app_without_call_id",
+      call_id: null,
+      name: "send_message_to_thread",
+      namespace: "codex_app",
+      output: delegation,
+    },
+    { type: "function_call", call_id: "call-valid", name: "lookup", arguments: "{}" },
+    { type: "function_call_output", call_id: "call-valid", output: "kept byte-for-byte" },
+  ];
+
+  try {
+    await waitFor(`${routerBase(routerPort)}/models`, router);
+    for (const endpoint of ["/responses", "/responses/compact"]) {
+      const response = await fetch(`${routerBase(routerPort)}${endpoint}`, {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer CHATGPT_SESSION_TOKEN",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "kimi-oauth/k3",
+          stream: false,
+          input,
+        }),
+      });
+      assert.equal(response.status, 200, await response.text());
+    }
+
+    assert.equal(gatewayRequests.length, 2);
+    const recovered = gatewayRequests[0].input[0];
+    assert.equal(recovered.type, "message");
+    assert.equal(recovered.role, "user");
+    assert.deepEqual(recovered.content, [
+      {
+        type: "input_text",
+        text: `[Codex app tool result: codex_app.send_message_to_thread]\n${delegation}`,
+      },
+    ]);
+    assert.deepEqual(gatewayRequests[0].input.slice(-2), input.slice(-2));
+
+    for (const request of gatewayRequests) {
+      assert.equal(
+        request.input.some(
+          (item) => item?.type === "function_call_output" && !item.call_id,
+        ),
+        false,
+      );
+    }
+    assert.match(
+      JSON.stringify(gatewayRequests[1].input),
+      /Codex app tool result: codex_app\.send_message_to_thread/u,
+    );
+    assert.match(JSON.stringify(gatewayRequests[1].input), /child finished/u);
+    const catalog = gatewayRequests[1].input.at(-2).content[0].text;
+    assert.match(catalog, /"kind":"tool_result"/u);
+    assert.match(catalog, /"tool":"send_message_to_thread"/u);
+    assert.doesNotMatch(catalog, /"kind":"user_message"/u);
+  } finally {
+    await stopChild(router);
+    await closeServer(gateway.server);
+    await closeServer(native.server);
+  }
+});
+
 function curatedFireworksModel() {
   const dir = mkdtempSync(path.join(os.tmpdir(), "routing-fireworks-model-"));
   const file = path.join(dir, "user-models.json");
