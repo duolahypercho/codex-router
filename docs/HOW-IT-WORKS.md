@@ -58,7 +58,7 @@ catalog, router, gateway generator, API forwarder, and doctor.
 `enabled-providers.json` is a separate local policy owned by the router plane.
 It controls routed picker visibility and dispatcher access. `model-picker.json`
 stores the durable per-model decision, including explicit show choices, and the
-Codex, DeepSeek Harness, and Gemini publishers all consume that same state for
+Codex, DeepSeek Harness, Gemini, and Cursor publishers all consume that same state for
 external models. In a signed-in Codex install, the native GPT catalog and its
 base-entry visibility remain Codex-owned, so a router "hide all" action cannot
 erase the original native picker. A known namespaced model whose provider is hidden receives a local

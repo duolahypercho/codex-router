@@ -7,7 +7,7 @@ const PROCESS_PROBE_TIMEOUT_MS = 5_000;
 // Only those belong here. The DeepSeek Harness reloads `settings.yaml` on the
 // next request, so a running harness is never stale and naming it would be the
 // same busywork `targetRestartHint` already refuses to print.
-const STARTUP_CONFIGURED_TARGETS = new Set(["codex", "gemini"]);
+const STARTUP_CONFIGURED_TARGETS = new Set(["codex", "gemini", "cursor"]);
 
 // What a running client looks like in a process listing.
 //
@@ -17,6 +17,7 @@ const STARTUP_CONFIGURED_TARGETS = new Set(["codex", "gemini"]);
 const CLIENT_PROCESS_PATTERNS = {
   codex: [/Codex Framework/i, /ChatGPT\.app/i, /(^|\/)codex(\s|$)/],
   gemini: [/(^|\/)gemini(\s|$)/],
+  cursor: [/Cursor\.app/i, /(^|[\\/])Cursor(?:\.exe)?(?:\s|$)/i],
 };
 
 // This router's own processes carry `codex` in nearly every path they run
@@ -95,7 +96,7 @@ export function clientRestartNotice(
 ) {
   if (!STARTUP_CONFIGURED_TARGETS.has(target)) return undefined;
   const running = processes ?? runningClientProcesses(target, probeOptions);
-  const name = target === "gemini" ? "Gemini CLI" : "Codex";
+  const name = target === "gemini" ? "Gemini CLI" : target === "cursor" ? "Cursor" : "Codex";
   if (running.length === 0) {
     return `${name} is not running; it reads this configuration the next time it starts.`;
   }

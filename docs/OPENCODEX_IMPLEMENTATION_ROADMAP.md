@@ -20,7 +20,7 @@ current `main`:
 
 | Area | Shipped behavior | Evidence |
 | --- | --- | --- |
-| Client integrations | One shared router plane can publish routed models for Codex, DeepSeek Harness, and Gemini CLI. These are the only supported client targets on `main`; OpenCode and Cursor are not shipped targets. | `src/paths.mjs`, `src/target-integration.mjs`, `test/target-integration.test.mjs`, `README.md` |
+| Client integrations | One shared router plane can publish routed models for Codex, DeepSeek Harness, Gemini CLI, and Cursor. OpenCode is not a shipped client target. | `src/paths.mjs`, `src/target-integration.mjs`, `src/cursor-surface.mjs`, `README.md` |
 | Native Codex path | Native GPT catalog and login remain client-owned. The native default model, reasoning metadata, and speed controls remain client-owned by default; a routed default requires an explicit opt-in. | `src/native-catalog-source.mjs`, `src/catalog.mjs`, `src/config-manager.mjs`, `test/native-catalog-source.test.mjs`, `test/config-manager.test.mjs`, `README.md` |
 | Routed inference | Codex requests use the local Responses route. Supported providers are translated through Responses, Chat Completions, or Anthropic Messages adapters where their registry entry declares that protocol. | `src/router.mjs`, `src/api-forwarder.mjs`, `test/routing.test.mjs`, `test/anthropic-api-integration.test.mjs` |
 | Provider registry | Providers and model metadata are checked in under `config/`; local model files and explicit curation extend the catalog without adding request-path branches. | `src/model-registry.mjs`, `src/user-models.mjs`, `src/curate-models.mjs`, `README.md` |

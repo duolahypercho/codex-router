@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import {
   accessSync,
   closeSync,
@@ -17,6 +17,7 @@ import {
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
 import {
   assertMutationCompatibility,
@@ -45,9 +46,12 @@ const MODEL_SLUG = /^[A-Za-z0-9][A-Za-z0-9._/:+-]{0,200}$/;
 const PROVIDER_ID = /^[a-z0-9][a-z0-9-]{0,80}$/;
 const LOCAL_TAG = /^[A-Za-z0-9][A-Za-z0-9._/-]*(?::[A-Za-z0-9][A-Za-z0-9._-]*)?$/;
 const SESSION_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const CURSOR_SESSION_ID = /^(?:(?:draft|bc)-)?[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const SESSION_UUID_IN_FILENAME = /[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i;
-const HARNESS_IDS = ["codex", "deepcode"];
+const DSH_SESSION_ID = /^session-[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const HARNESS_IDS = ["codex", "dsh", "gemini", "cursor", "claude"];
 const HARNESS_SURFACES = ["app", "terminal"];
+const AGENT_BRIDGE_IDS = ["anthropic", "cursor", "gemini"];
 const SESSION_INDEX_LIMIT = 16 * 1024 * 1024;
 const SESSION_EDGE_BYTES = 256 * 1024;
 const SESSION_LIST_LIMIT = 500;
@@ -65,9 +69,14 @@ const SUBAGENT_CERTIFY_TIMEOUT_MS = 600_000;
 // can start, so it gets the runner's whole ceiling rather than a catalog-sized
 // budget; timing it out early would leave a half-rebuilt tree behind.
 const REPAIR_TIMEOUT_MS = 11 * 60_000;
-const DEEPCODE_PACKAGE = "@vegamo/deepcode-cli";
-const DEEPCODE_DOCS = "https://api-docs.deepseek.com/quick_start/agent_integrations/deepcode";
+const CURSOR_CONNECTOR_TIMEOUT_MS = 10 * 60_000;
+const CURSOR_QUIT_TIMEOUT_MS = 5 * 60_000;
+const DSH_DOCS = "https://github.com/deepseek-ai/deepseek-harness";
+const CURSOR_DOCS = "https://docs.cursor.com/en/cli/overview";
+const CLOUDFLARED_INSTALL_DOCS = "https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/";
 const CODEX_DOCS = "https://developers.openai.com/codex/cli/";
+const CLAUDE_CODE_DOCS = "https://code.claude.com/docs/en/overview";
+const GEMINI_CLI_DOCS = "https://github.com/google-gemini/gemini-cli";
 const OAUTH_LOGIN_COMMANDS = Object.freeze({
   "kimi-oauth": { executable: "kimi", args: ["login"] },
   "grok-oauth": { executable: "grok", args: ["login", "--oauth"] },
@@ -107,6 +116,7 @@ function executablePath(name) {
       ? [
           process.env.ProgramFiles ? path.join(process.env.ProgramFiles, "nodejs") : undefined,
           process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, "Programs", "nodejs") : undefined,
+          process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, "Microsoft", "WinGet", "Links") : undefined,
           process.env.APPDATA ? path.join(process.env.APPDATA, "npm") : undefined,
         ]
       : []),
@@ -153,19 +163,97 @@ function codexDesktopPath() {
   ].find((candidate) => existsSync(candidate));
 }
 
+function cursorDesktopPath() {
+  return [
+    "/Applications/Cursor.app",
+    path.join(os.homedir(), "Applications", "Cursor.app"),
+    ...(process.platform === "win32" && process.env.LOCALAPPDATA
+      ? [path.join(process.env.LOCALAPPDATA, "Programs", "cursor", "Cursor.exe")]
+      : []),
+  ].find((candidate) => existsSync(candidate));
+}
+
+function cursorConnectorInstallSpec() {
+  if (process.platform === "darwin") {
+    const brew = executablePath("brew");
+    return brew ? {
+      executable: brew,
+      args: ["install", "cloudflared"],
+      environment: { HOMEBREW_NO_AUTO_UPDATE: "1", HOMEBREW_NO_ENV_HINTS: "1" },
+    } : undefined;
+  }
+  if (process.platform === "win32") {
+    const winget = executablePath("winget");
+    return winget ? {
+      executable: winget,
+      args: [
+        "install", "--id", "Cloudflare.cloudflared", "--exact", "--silent",
+        "--accept-source-agreements", "--accept-package-agreements", "--disable-interactivity",
+      ],
+      environment: {},
+    } : undefined;
+  }
+  return undefined;
+}
+
+function routerStateDirectory() {
+  return process.env.MODEL_ROUTER_STATE_DIR || process.env.CODEX_ROUTER_STATE_DIR ||
+    process.env.KIMI_CODEX_STATE_DIR ||
+    path.join(process.env.CODEX_HOME || path.join(os.homedir(), ".codex"), "codex-router");
+}
+
+function cursorHome() {
+  return process.env.CURSOR_HOME || (
+    process.platform === "darwin"
+      ? path.join(os.homedir(), "Library", "Application Support", "Cursor")
+      : process.platform === "win32"
+        ? path.join(process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming"), "Cursor")
+        : path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config"), "Cursor")
+  );
+}
+
+function readJsonObject(filePath, limit = SESSION_INDEX_LIMIT) {
+  const text = readBounded(filePath, limit);
+  if (!text) return undefined;
+  try {
+    const parsed = JSON.parse(text);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function terminalAvailable() {
   return process.platform === "darwin" && existsSync("/usr/bin/open");
 }
 
 export function getHarnessSnapshot() {
   const codex = executablePath("codex");
-  const deepcode = executablePath("deepcode");
-  const npm = executablePath("npm");
-  const nodeVersion = executableVersion(executablePath("node"));
-  const nodeMajor = Number.parseInt(String(nodeVersion || "").replace(/^v/, "").split(".", 1)[0], 10);
+  const dsh = executablePath("dsh");
+  const cursorAgent = executablePath("cursor-agent");
+  const cursorLauncher = executablePath("cursor-router-agent");
+  const claude = executablePath("claude");
+  const claudeLauncher = executablePath("claude-router");
+  const gemini = executablePath("gemini");
   const codexVersion = executableVersion(codex);
-  const deepcodeVersion = executableVersion(deepcode);
-  const deepcodeSettings = path.join(os.homedir(), ".deepcode", "settings.json");
+  const dshVersion = executableVersion(dsh);
+  const cursorVersion = executableVersion(cursorAgent);
+  const claudeVersion = executableVersion(claude);
+  const geminiVersion = executableVersion(gemini);
+  const stateDirectory = routerStateDirectory();
+  const codexConfig = readBounded(path.join(process.env.CODEX_HOME || path.join(os.homedir(), ".codex"), "config.toml"), 2 * 1024 * 1024);
+  const cursorState = readJsonObject(path.join(stateDirectory, "cursor-models.json"), 2 * 1024 * 1024);
+  const claudeState = readJsonObject(path.join(stateDirectory, "claude-models.json"), 2 * 1024 * 1024);
+  const geminiState = readJsonObject(path.join(stateDirectory, "gemini-models.json"), 2 * 1024 * 1024);
+  const cursorTunnel = readJsonObject(path.join(stateDirectory, "cursor-tunnel.json"), 512 * 1024);
+  const cloudflared = executablePath("cloudflared");
+  const cloudflareLoggedIn = existsSync(
+    process.env.TUNNEL_ORIGIN_CERT || path.join(
+      process.env.MODEL_ROUTER_CLOUDFLARED_HOME || path.join(os.homedir(), ".cloudflared"),
+      "cert.pem",
+    ),
+  );
+  const cursorApp = cursorDesktopPath();
   return {
     platform: process.platform,
     terminalAvailable: terminalAvailable(),
@@ -178,30 +266,89 @@ export function getHarnessSnapshot() {
         cliInstalled: Boolean(codex),
         ...(codexVersion ? { cliVersion: codexVersion } : {}),
         appInstalled: Boolean(codexDesktopPath()),
-        configured: Boolean(codex),
-        canInstall: false,
-        installRequirement: codex ? undefined : "Install Codex from the official OpenAI download.",
+        configured: /# BEGIN (?:kimi-)?codex-(?:router|proxy)-/m.test(codexConfig || ""),
+        canInstall: Boolean(codex || codexDesktopPath()),
+        installRequirement: codex || codexDesktopPath()
+          ? "Publishes the shared router catalog into Codex."
+          : "Install Codex from the official OpenAI download.",
         docsUrl: CODEX_DOCS,
       },
       {
-        id: "deepcode",
-        displayName: "Deep Code",
-        ownership: "third-party",
-        description: "A third-party terminal harness optimized for DeepSeek models.",
-        cliInstalled: Boolean(deepcode),
-        ...(deepcodeVersion ? { cliVersion: deepcodeVersion } : {}),
+        id: "dsh",
+        displayName: "DeepSeek Harness",
+        ownership: "deepseek",
+        description: "DeepSeek's coding harness, sharing this router's model catalog and credentials.",
+        cliInstalled: Boolean(dsh),
+        ...(dshVersion ? { cliVersion: dshVersion } : {}),
+        appInstalled: Boolean(dsh),
+        configured: existsSync(path.join(stateDirectory, "dsh-models.json")),
+        canInstall: true,
+        installRequirement: "Setup installs @deepseek-ai/dsh when it is missing and publishes the shared route.",
+        docsUrl: DSH_DOCS,
+      },
+      {
+        id: "claude",
+        displayName: "Claude Code",
+        ownership: "anthropic",
+        description: "Anthropic's coding agent using every model selected in this router.",
+        cliInstalled: Boolean(claude),
+        ...(claudeVersion ? { cliVersion: claudeVersion } : {}),
         appInstalled: false,
-        // Presence only. The control center never opens this file because it can contain an API key.
-        configured: existsSync(deepcodeSettings),
-        canInstall: Boolean(npm) && Number.isInteger(nodeMajor) && nodeMajor >= 22 && terminalAvailable(),
-        installRequirement: !npm
-          ? "npm is required."
-          : !Number.isInteger(nodeMajor) || nodeMajor < 22
-            ? "Node.js 22 or newer is required."
-            : !terminalAvailable()
-              ? "Open an interactive terminal and install the package manually."
-              : undefined,
-        docsUrl: DEEPCODE_DOCS,
+        configured: Boolean(claudeLauncher && claudeState?.models?.length),
+        canInstall: Boolean(claude),
+        installRequirement: claude
+          ? "Creates a private claude-router launcher and publishes the shared routed catalog. Claude settings remain untouched."
+          : "Install the official Claude Code CLI first.",
+        docsUrl: CLAUDE_CODE_DOCS,
+      },
+      {
+        id: "gemini",
+        displayName: "Gemini CLI",
+        ownership: "google",
+        description: "Google's terminal coding agent using the shared routed model catalog.",
+        cliInstalled: Boolean(gemini),
+        ...(geminiVersion ? { cliVersion: geminiVersion } : {}),
+        appInstalled: false,
+        configured: Boolean(geminiState?.models?.length),
+        canInstall: Boolean(gemini),
+        installRequirement: gemini
+          ? "Publishes the shared router catalog into Gemini CLI. Its settings file remains untouched."
+          : "Install the official Gemini CLI first.",
+        docsUrl: GEMINI_CLI_DOCS,
+      },
+      {
+        id: "cursor",
+        displayName: "Cursor",
+        ownership: "cursor",
+        description: "Cursor Agent and Cursor App using the router's separate authenticated adapters.",
+        cliInstalled: Boolean(cursorAgent),
+        ...(cursorVersion ? { cliVersion: cursorVersion } : {}),
+        appInstalled: Boolean(cursorApp),
+        configured: Boolean(cursorLauncher && (!cursorApp || cursorState?.publicOrigin)),
+        agentConfigured: Boolean(cursorLauncher),
+        appConfigured: Boolean(cursorState?.publicOrigin),
+        canInstall: Boolean(cursorAgent || cursorApp),
+        installRequirement: cursorAgent || cursorApp
+          ? !cursorApp
+            ? "Cursor Agent connects locally and always reads the current routed catalog."
+            : cursorState?.publicOrigin
+              ? "Cursor App and Cursor Agent use the shared routed catalog."
+              : "Connect Cursor installs the connector when needed, opens Cloudflare authorization, creates an isolated hostname, publishes the catalog, verifies it, and reopens Cursor."
+          : "Install Cursor App or Cursor Agent first.",
+        tunnel: {
+          provider: "cloudflare",
+          binaryInstalled: Boolean(cloudflared),
+          loggedIn: cloudflareLoggedIn,
+          configured: Boolean(cursorTunnel?.hostname),
+          ...(cursorTunnel?.hostname ? { hostname: cursorTunnel.hostname } : {}),
+          nextAction: !cloudflared
+            ? "install-cloudflared"
+            : cursorTunnel?.hostname
+              ? "ready"
+              : !cloudflareLoggedIn ? "login" : "choose-hostname",
+        },
+        ...(typeof cursorState?.publicOrigin === "string" ? { publicOrigin: cursorState.publicOrigin } : {}),
+        docsUrl: CURSOR_DOCS,
       },
     ],
   };
@@ -241,6 +388,89 @@ function openTerminalCommand(executable, args, cwd) {
   });
   if (opened.error || opened.status !== 0) throw new Error("Could not open Terminal.");
   return { opened: true, surface: "terminal" };
+}
+
+function cursorConnectorStage(kind, chunk) {
+  const output = String(chunk || "");
+  if (kind === "login") {
+    return /https:\/\/|login|authorize|browser|waiting/i.test(output)
+      ? "Complete Cloudflare authorization in your browser…"
+      : undefined;
+  }
+  if (/download|fetch|manifest/i.test(output)) return "Downloading Cloudflare connector…";
+  if (/install|pour|link/i.test(output)) return "Installing Cloudflare connector…";
+  if (/cleanup|caveat|success|already installed/i.test(output)) return "Finishing Cloudflare connector setup…";
+  return undefined;
+}
+
+function runCursorConnectorCommand(executable, args, {
+  kind,
+  environment = {},
+  progress = () => {},
+  timeoutMs = CURSOR_CONNECTOR_TIMEOUT_MS,
+} = {}) {
+  if (!executable || !path.isAbsolute(executable) || !Array.isArray(args)) {
+    throw new Error("Cloudflare connector command is unavailable.");
+  }
+  if (args.some((arg) => typeof arg !== "string" || arg.includes("\0"))) {
+    throw new Error("Cloudflare connector command is invalid.");
+  }
+  const initial = kind === "login"
+    ? "Opening Cloudflare authorization in your browser…"
+    : "Preparing Cloudflare connector installation…";
+  progress(initial);
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let lastStage = initial;
+    const finish = (error, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      if (error) reject(error);
+      else resolve(value);
+    };
+    const child = spawn(executable, args, {
+      cwd: discoverSourceRoot(),
+      env: { ...process.env, ...environment },
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+      shell: false,
+    });
+    const readProgress = (chunk) => {
+      const stage = cursorConnectorStage(kind, chunk);
+      if (stage && stage !== lastStage) {
+        lastStage = stage;
+        progress(stage);
+      }
+    };
+    child.stdout?.on("data", readProgress);
+    child.stderr?.on("data", readProgress);
+    child.once("error", () => finish(new Error(
+      kind === "login"
+        ? "Cloudflare authorization could not start."
+        : "Cloudflare connector installation could not start.",
+    )));
+    child.once("close", (code, signal) => {
+      if (code === 0) return finish(undefined, { exitCode: 0 });
+      const suffix = signal ? ` (${signal})` : Number.isInteger(code) ? ` (exit ${code})` : "";
+      finish(new Error(
+        kind === "login"
+          ? `Cloudflare authorization did not complete${suffix}.`
+          : `Cloudflare connector installation failed${suffix}.`,
+      ));
+    });
+    const timeout = setTimeout(() => {
+      child.kill("SIGTERM");
+      const force = setTimeout(() => child.kill("SIGKILL"), 1_000);
+      force.unref?.();
+      finish(new Error(
+        kind === "login"
+          ? "Cloudflare authorization timed out."
+          : "Cloudflare connector installation timed out.",
+      ));
+    }, timeoutMs);
+    timeout.unref?.();
+  });
 }
 
 function readBounded(filePath, limit = SESSION_INDEX_LIMIT) {
@@ -392,71 +622,174 @@ function codexSessions() {
   return [...byId.values()];
 }
 
-function sumDeepcodeUsage(entry, modelNames) {
-  const records = entry?.usagePerModel && typeof entry.usagePerModel === "object"
-    ? modelNames.map((model) => entry.usagePerModel[model]).filter((value) => value && typeof value === "object")
-    : entry?.usage && typeof entry.usage === "object" ? [entry.usage] : [];
-  const sum = (key) => records.reduce((total, usage) => total + (finiteNumber(usage[key]) || 0), 0);
-  return {
-    inputTokens: sum("prompt_tokens") || undefined,
-    cachedInputTokens: sum("prompt_cache_hit_tokens") || undefined,
-    totalTokens: sum("total_tokens") || undefined,
-    requestCount: sum("total_reqs") || undefined,
+function dshWorkspaceIndex(dshHome) {
+  const document = readJsonObject(path.join(dshHome, "storages", "workspace.json"));
+  const workspaces = new Map();
+  const archived = new Set();
+  const visit = (value, depth = 0) => {
+    if (!value || typeof value !== "object" || depth > 8) return;
+    if (Array.isArray(value)) {
+      for (const item of value.slice(0, SESSION_LIST_LIMIT * 3)) visit(item, depth + 1);
+      return;
+    }
+    if (Array.isArray(value.archivedSessionIds)) {
+      for (const id of value.archivedSessionIds) if (typeof id === "string" && DSH_SESSION_ID.test(id)) archived.add(id.toLowerCase());
+    }
+    if (Array.isArray(value.sessionIds)) {
+      const workspace = cleanText(value.path || value.cwd, "", 1024) || undefined;
+      const workspaceLabel = cleanText(value.title, workspace ? path.basename(workspace) : "DeepSeek workspace", 100);
+      for (const id of value.sessionIds) {
+        if (typeof id === "string" && DSH_SESSION_ID.test(id)) workspaces.set(id.toLowerCase(), { workspace, workspaceLabel });
+      }
+    }
+    for (const child of Object.values(value)) visit(child, depth + 1);
   };
+  visit(document);
+  return { workspaces, archived };
 }
 
-function deepcodeSessions() {
-  const deepcodeHome = path.resolve(process.env.CODEX_ROUTER_DEEPCODE_HOME || path.join(os.homedir(), ".deepcode"));
-  const projectsRoot = path.join(deepcodeHome, "projects");
-  let projects;
-  try { projects = readdirSync(projectsRoot, { withFileTypes: true }); } catch { return []; }
+function walkDshSessions(root, files, depth = 0) {
+  if (depth > 5 || files.length >= SESSION_LIST_LIMIT * 2) return;
+  let entries;
+  try { entries = readdirSync(root, { withFileTypes: true }); } catch { return; }
+  for (const entry of entries) {
+    if (files.length >= SESSION_LIST_LIMIT * 2) break;
+    if (entry.isSymbolicLink()) continue;
+    const target = path.join(root, entry.name);
+    if (entry.isDirectory()) walkDshSessions(target, files, depth + 1);
+    else if (entry.isFile() && (entry.name === "session.jsonl.zstd" || entry.name === "session.jsonl")) {
+      const id = path.basename(path.dirname(target));
+      if (DSH_SESSION_ID.test(id)) files.push({ id: id.toLowerCase(), filePath: target });
+    }
+  }
+}
+
+function dshSessions() {
+  const dshHome = path.resolve(process.env.DSH_HOME || path.join(os.homedir(), ".dsh"));
+  const files = [];
+  walkDshSessions(path.join(dshHome, "sessions"), files);
+  const { workspaces, archived } = dshWorkspaceIndex(dshHome);
+  return files.map(({ id, filePath }) => {
+    let updatedAt = new Date(0).toISOString();
+    try { updatedAt = new Date(statSync(filePath).mtimeMs).toISOString(); } catch {}
+    const workspace = workspaces.get(id);
+    const isArchived = archived.has(id);
+    return {
+      id,
+      harnessId: "dsh",
+      title: workspace?.workspaceLabel || "DeepSeek Harness session",
+      updatedAt,
+      ...(workspace?.workspace ? { workspace: workspace.workspace } : {}),
+      ...(workspace?.workspaceLabel ? { workspaceLabel: workspace.workspaceLabel } : {}),
+      provider: "DeepSeek Harness",
+      status: isArchived ? "archived" : "saved",
+      archived: isArchived,
+      resumable: !isArchived,
+    };
+  });
+}
+
+function cursorAppSessions() {
+  const databasePath = process.env.CODEX_ROUTER_CURSOR_CONVERSATION_DB ||
+    path.join(cursorHome(), "User", "globalStorage", "conversation-search.db");
+  if (!existsSync(databasePath)) return [];
+  let database;
+  try {
+    database = new DatabaseSync(databasePath, { readOnly: true });
+    const rows = database.prepare(
+      "SELECT source, id, title, updated_at, is_archived FROM conversations ORDER BY updated_at DESC",
+    ).all();
+    const sessions = new Map();
+    for (const row of rows) {
+      const id = typeof row.id === "string" ? row.id.toLowerCase() : "";
+      if (!CURSOR_SESSION_ID.test(id) || sessions.has(id)) continue;
+      const archived = Boolean(row.is_archived);
+      const local = row.source === "local";
+      sessions.set(id, {
+        id,
+        harnessId: "cursor",
+        title: cleanText(row.title, "Untitled Cursor session", 240),
+        updatedAt: Number.isFinite(Number(row.updated_at))
+          ? new Date(Number(row.updated_at)).toISOString()
+          : new Date(0).toISOString(),
+        provider: local ? "Cursor" : "Cursor Cloud",
+        status: archived ? "archived" : local ? "saved" : "cloud_cache",
+        archived,
+        resumable: local && !archived && !id.startsWith("draft-"),
+      });
+    }
+    return [...sessions.values()];
+  } catch {
+    return [];
+  } finally {
+    try { database?.close(); } catch {}
+  }
+}
+
+function cursorAgentSessions() {
+  const chatsRoot = process.env.CODEX_ROUTER_CURSOR_AGENT_CHATS ||
+    path.join(os.homedir(), ".cursor", "chats");
+  let workspaceDirectories;
+  try { workspaceDirectories = readdirSync(chatsRoot, { withFileTypes: true }); } catch { return []; }
   const sessions = [];
-  for (const project of projects.slice(0, SESSION_LIST_LIMIT)) {
-    if (!project.isDirectory() || project.isSymbolicLink()) continue;
-    const text = readBounded(path.join(projectsRoot, project.name, "sessions-index.json"), 2 * 1024 * 1024);
-    if (!text) continue;
-    let index;
-    try { index = JSON.parse(text); } catch { continue; }
-    const workspace = cleanText(index?.originalPath, "", 1024) || undefined;
-    const entries = Array.isArray(index?.entries) ? index.entries.slice(0, 100) : [];
-    for (const entry of entries) {
-      if (typeof entry?.id !== "string" || !SESSION_UUID.test(entry.id)) continue;
-      const modelNames = entry?.usagePerModel && typeof entry.usagePerModel === "object"
-        ? Object.keys(entry.usagePerModel).filter((model) => typeof model === "string").slice(0, 12)
-        : [];
-      const createdAt = safeTimestamp(entry.createTime || entry.createdAt);
-      const updatedAt = safeTimestamp(entry.updateTime || entry.updatedAt, createdAt || new Date(0).toISOString());
+  for (const workspaceDirectory of workspaceDirectories.slice(0, SESSION_LIST_LIMIT)) {
+    if (!workspaceDirectory.isDirectory() || workspaceDirectory.isSymbolicLink()) continue;
+    const workspaceRoot = path.join(chatsRoot, workspaceDirectory.name);
+    let chatDirectories;
+    try { chatDirectories = readdirSync(workspaceRoot, { withFileTypes: true }); } catch { continue; }
+    for (const chatDirectory of chatDirectories.slice(0, SESSION_LIST_LIMIT)) {
+      if (!chatDirectory.isDirectory() || chatDirectory.isSymbolicLink() || !SESSION_UUID.test(chatDirectory.name)) continue;
+      const metadata = readJsonObject(path.join(workspaceRoot, chatDirectory.name, "meta.json"), 256 * 1024);
+      if (!metadata) continue;
+      const createdMs = finiteNumber(metadata.createdAtMs);
+      const updatedMs = finiteNumber(metadata.updatedAtMs) ?? createdMs;
+      const workspace = cleanText(metadata.cwd, "", 1024) || undefined;
       sessions.push({
-        id: entry.id.toLowerCase(),
-        harnessId: "deepcode",
-        title: cleanText(entry.summary || entry.title, "Untitled Deep Code task", 240),
-        updatedAt,
-        ...(createdAt ? { createdAt } : {}),
-        ...(workspace ? { workspace, workspaceLabel: cleanText(path.basename(workspace), workspace, 100) } : { workspaceLabel: cleanText(project.name, "Deep Code project", 100) }),
-        ...(modelNames.length ? { model: modelNames.at(-1), modelHistory: modelNames } : {}),
-        provider: "Deep Code",
-        status: cleanText(entry.status, "saved", 40),
+        id: chatDirectory.name.toLowerCase(),
+        harnessId: "cursor",
+        title: "Cursor Agent session",
+        updatedAt: updatedMs === undefined ? new Date(0).toISOString() : new Date(updatedMs).toISOString(),
+        ...(createdMs === undefined ? {} : { createdAt: new Date(createdMs).toISOString() }),
+        ...(workspace ? { workspace, workspaceLabel: cleanText(path.basename(workspace), workspace, 100) } : {}),
+        provider: "Cursor Agent",
+        status: "saved",
         archived: false,
         resumable: true,
-        activeTokens: finiteNumber(entry.activeTokens),
-        ...sumDeepcodeUsage(entry, modelNames),
       });
     }
   }
   return sessions;
 }
 
+function cursorSessions() {
+  const sessions = new Map(cursorAppSessions().map((session) => [session.id, session]));
+  for (const session of cursorAgentSessions()) {
+    if (!sessions.has(session.id)) sessions.set(session.id, session);
+  }
+  return [...sessions.values()];
+}
+
 export function getContextSessionsSnapshot() {
-  const sessions = [...codexSessions(), ...deepcodeSessions()]
-    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
-    .slice(0, SESSION_LIST_LIMIT);
+  // Each client owns its own bounded index. Applying one cap after merging
+  // them let a busy Codex history crowd every Cursor row out of the result.
+  // Cursor's conversation-search database already enforces its own configured
+  // cap, so return every row it exposes while keeping the filesystem walkers
+  // for Codex and DeepSeek bounded independently.
+  const sessions = [
+    ...codexSessions().sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)).slice(0, SESSION_LIST_LIMIT),
+    ...dshSessions().sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)).slice(0, SESSION_LIST_LIMIT),
+    ...cursorSessions(),
+  ].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
   return {
     fetchedAt: new Date().toISOString(),
     sessions,
     counts: {
       total: sessions.length,
       codex: sessions.filter((session) => session.harnessId === "codex").length,
-      deepcode: sessions.filter((session) => session.harnessId === "deepcode").length,
+      dsh: sessions.filter((session) => session.harnessId === "dsh").length,
+      cursor: sessions.filter((session) => session.harnessId === "cursor").length,
+      claude: sessions.filter((session) => session.harnessId === "claude").length,
+      gemini: sessions.filter((session) => session.harnessId === "gemini").length,
       archived: sessions.filter((session) => session.archived).length,
     },
   };
@@ -485,6 +818,32 @@ async function readInstalledControlHealth({ fetchImpl = globalThis.fetch } = {})
     throw new Error("The installed router does not expose direct health reads.");
   }
   return module.readControlHealth({ fetchImpl });
+}
+
+async function installedRouterModule(name) {
+  const packagedPath = typeof process.resourcesPath === "string" && process.resourcesPath
+    ? path.join(process.resourcesPath, "router-src", name)
+    : undefined;
+  const modulePath = packagedPath && existsSync(packagedPath)
+    ? packagedPath
+    : path.join(discoverSourceRoot(), "src", name);
+  return import(pathToFileURL(modulePath).href);
+}
+
+async function discoverInstalledCursorTunnelHostname(options) {
+  const module = await installedRouterModule("cursor-cloudflare-tunnel.mjs");
+  if (typeof module.discoverCursorTunnelHostname !== "function") {
+    throw new Error("The installed router does not support automatic Cursor hostname discovery.");
+  }
+  return module.discoverCursorTunnelHostname(options);
+}
+
+async function readRunningCursorProcesses() {
+  const module = await installedRouterModule("client-restart-notice.mjs");
+  if (typeof module.runningClientProcesses !== "function") {
+    throw new Error("The installed router cannot detect running Cursor processes.");
+  }
+  return module.runningClientProcesses("cursor");
 }
 
 async function modelEntries() {
@@ -607,6 +966,15 @@ export function registerIpcHandlers({
   shell,
   fetchImpl = globalThis.fetch,
   healthReader = readInstalledControlHealth,
+  cursorConnectorExecutable = () => executablePath("cloudflared"),
+  cursorConnectorInstaller = cursorConnectorInstallSpec,
+  cursorConnectorRunner = runCursorConnectorCommand,
+  cursorHostnameResolver = discoverInstalledCursorTunnelHostname,
+  cursorProcessReader = readRunningCursorProcesses,
+  cursorWait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
+  controlJsonRunner = runControlJson,
+  harnessSnapshotReader = getHarnessSnapshot,
+  cursorAppPath = cursorDesktopPath,
   senderGuard = () => true,
 } = {}) {
   if (!ipcMain?.handle) throw new TypeError("ipcMain.handle is required.");
@@ -642,7 +1010,14 @@ export function registerIpcHandlers({
     operations.set(id, name);
     emit({ id, name, action: name, status: "started", message: `${name} started` });
     try {
-      const value = await fn(input);
+      const progress = (message) => emit({
+        id,
+        name,
+        action: name,
+        status: "started",
+        message: cleanText(message, `${name} is running`, 240),
+      });
+      const value = await fn(input, { id, name, progress });
       emit({ id, name, action: name, status: "completed", message: `${name} completed` });
       return value;
     } catch (error) {
@@ -659,9 +1034,9 @@ export function registerIpcHandlers({
   });
   const handleAction = (name, fn, { requiresCompatibleRouter = true } = {}) => ipcMain.handle(`router-control:${name}`, (event, input) => {
     if (!senderGuard(event)) throw new Error("Untrusted IPC sender.");
-    return enqueueMutation(() => operation(name, async (value) => {
+    return enqueueMutation(() => operation(name, async (value, context) => {
       if (requiresCompatibleRouter) assertMutationCompatibility();
-      return fn(value);
+      return fn(value, context);
     })(event, input));
   });
 
@@ -719,6 +1094,24 @@ export function registerIpcHandlers({
   handle("getToolResultAging", async () => runJson(["tool-result-aging", "status"], { timeoutMs: 20_000 }));
   handle("getPresence", async () => runJson(["presence", "status"]));
   handle("getHarnesses", async () => getHarnessSnapshot());
+  handle("getAgentBridges", async () => {
+    const module = await installedRouterModule("agent-bridges.mjs");
+    if (typeof module.agentBridgeStatus !== "function") {
+      throw new Error("The Control Center does not include agent bridge status support.");
+    }
+    // Use the same desktop-safe executable resolution as the client rows.
+    // A packaged app has a narrower PATH than an interactive shell; allowing
+    // the bridge module to resolve commands again produced contradictory
+    // "router ready" and "not installed" states for the same client.
+    return module.agentBridgeStatus({
+      ...process.env,
+      ...(executablePath("claude") ? { MODEL_ROUTER_CLAUDE_BIN: executablePath("claude") } : {}),
+      ...(executablePath("agent") || executablePath("cursor-agent")
+        ? { MODEL_ROUTER_CURSOR_AGENT_BIN: executablePath("agent") || executablePath("cursor-agent") }
+        : {}),
+      ...(executablePath("gemini") ? { MODEL_ROUTER_GEMINI_BIN: executablePath("gemini") } : {}),
+    });
+  });
   handle("getContextSessions", async () => getContextSessionsSnapshot());
   handle("getDoctor", async () => {
     const result = await runRouterScript("doctor.mjs", ["--json"], { timeoutMs: 120_000, allowNonZero: true });
@@ -1033,9 +1426,6 @@ export function registerIpcHandlers({
   handleAction("launchHarness", async ({ harnessId, surface } = {}) => {
     const harness = oneOf(harnessId, HARNESS_IDS, "Harness");
     const destination = oneOf(surface, HARNESS_SURFACES, "Harness surface");
-    if (harness === "deepcode" && destination === "app") {
-      throw new Error("Deep Code is a third-party terminal harness and has no official desktop app.");
-    }
     if (harness === "codex" && destination === "app") {
       const appPath = codexDesktopPath();
       if (!appPath) throw new Error("Codex desktop is not installed. Open the official Codex documentation to download it.");
@@ -1044,30 +1434,193 @@ export function registerIpcHandlers({
       if (failure) throw new Error("Could not open the Codex desktop app.");
       return { opened: true, surface: "app" };
     }
-    const executable = executablePath(harness === "codex" ? "codex" : "deepcode");
-    if (!executable) throw new Error(`${harness === "codex" ? "Codex" : "Deep Code"} CLI is not installed.`);
+    if (harness === "cursor" && destination === "app") {
+      const appPath = cursorDesktopPath();
+      if (!appPath) throw new Error("Cursor App is not installed.");
+      if (!shell?.openPath) throw new Error("Opening desktop apps is unavailable.");
+      const failure = await shell.openPath(appPath);
+      if (failure) throw new Error("Could not open Cursor App.");
+      return { opened: true, surface: "app" };
+    }
+    if (harness === "dsh" && destination === "app") {
+      if (!shell?.openExternal) throw new Error("Opening DeepSeek Harness is unavailable.");
+      const state = await runControlJson(["harness", "start"], { timeoutMs: 120_000 });
+      if (!state?.url) throw new Error("DeepSeek Harness started without a browser URL.");
+      await shell.openExternal(state.url);
+      return { opened: true, surface: "app" };
+    }
+    const executable = executablePath(
+      harness === "codex" ? "codex"
+        : harness === "dsh" ? "dsh"
+          : harness === "claude" ? "claude-router"
+            : harness === "gemini" ? "gemini"
+              : "cursor-router-agent",
+    );
+    const label = harness === "codex" ? "Codex"
+      : harness === "dsh" ? "DeepSeek Harness"
+        : harness === "claude" ? "Claude Code Router"
+          : harness === "gemini" ? "Gemini CLI"
+            : "Cursor Router Agent";
+    if (!executable) throw new Error(`${label} CLI is not installed or configured.`);
     return openTerminalCommand(executable, [], discoverSourceRoot());
   }, { requiresCompatibleRouter: false });
-  handleAction("installHarness", async ({ harnessId } = {}) => {
-    const harness = oneOf(harnessId, ["deepcode"], "Installable harness");
-    const npm = executablePath("npm");
-    const nodeVersion = executableVersion(executablePath("node"));
-    const nodeMajor = Number.parseInt(String(nodeVersion || "").replace(/^v/, "").split(".", 1)[0], 10);
-    if (!npm) throw new Error("npm is required to install Deep Code.");
-    if (!Number.isInteger(nodeMajor) || nodeMajor < 22) throw new Error("Deep Code requires Node.js 22 or newer.");
-    // The fixed command is shown in a real terminal. No credential, cwd, package,
-    // or argv value crosses the renderer boundary.
-    return openTerminalCommand(npm, ["install", "-g", DEEPCODE_PACKAGE], discoverSourceRoot());
+  handleAction("probeAgentBridge", async ({ bridgeId } = {}) => {
+    const bridge = oneOf(bridgeId, AGENT_BRIDGE_IDS, "Agent bridge");
+    const module = await installedRouterModule("agent-bridges.mjs");
+    if (typeof module.probeAgentBridge !== "function") {
+      throw new Error("The Control Center does not include agent bridge probing support.");
+    }
+    return module.probeAgentBridge(bridge);
   }, { requiresCompatibleRouter: false });
+  handleAction("loginAgentBridge", async ({ bridgeId } = {}) => {
+    const bridge = oneOf(bridgeId, AGENT_BRIDGE_IDS, "Agent bridge");
+    const executable = bridge === "anthropic"
+      ? executablePath("claude")
+      : bridge === "cursor"
+        ? executablePath("agent") || executablePath("cursor-agent")
+        : executablePath("gemini");
+    if (!executable) throw new Error(`${bridge === "anthropic" ? "Claude Code" : bridge === "cursor" ? "Cursor Agent" : "Gemini CLI"} is not installed.`);
+    const args = bridge === "anthropic" ? ["auth", "login"] : bridge === "cursor" ? ["login"] : [];
+    return openTerminalCommand(executable, args, discoverSourceRoot());
+  }, { requiresCompatibleRouter: false });
+  handleAction("setupHarness", async ({ harnessId, hostname, publicUrl } = {}) => {
+    const harness = oneOf(harnessId, HARNESS_IDS, "Harness");
+    const args = ["client-setup", harness];
+    if (harness === "cursor") {
+      if (hostname !== undefined) {
+        const selected = stringValue(hostname, "Cursor hostname", /^[A-Za-z0-9](?:[A-Za-z0-9.-]{1,251}[A-Za-z0-9])?$/);
+        args.push("--hostname", selected);
+      }
+      if (publicUrl !== undefined) {
+        if (hostname !== undefined) throw new Error("Use either a managed hostname or an existing public URL, not both.");
+        const origin = stringValue(publicUrl, "Cursor public URL", /^https:\/\/[^\s]{1,1000}$/);
+        args.push("--public-url", origin);
+      }
+    } else if (publicUrl !== undefined || hostname !== undefined) {
+      throw new Error("A hostname or public URL applies only to Cursor setup.");
+    }
+    return runControlJson(args, { timeoutMs: REPAIR_TIMEOUT_MS });
+  });
+  handleAction("prepareCursorTunnel", async (_input, context) => {
+    const cloudflared = cursorConnectorExecutable();
+    if (!cloudflared) {
+      // Installing a system connector is intentionally a click-triggered
+      // action. Detection and page load never mutate the host. The renderer
+      // supplies no executable or argv; this fixed command reports sanitized
+      // stages through the existing in-app operation channel.
+      const installer = cursorConnectorInstaller();
+      if (installer) {
+        await cursorConnectorRunner(installer.executable, installer.args, {
+          kind: "install",
+          environment: installer.environment,
+          progress: context.progress,
+        });
+        const installed = cursorConnectorExecutable();
+        if (!installed) throw new Error("Cloudflare connector finished installing but could not be detected.");
+        context.progress("Cloudflare connector installed. Refreshing Cursor setup…");
+        return { installed: true };
+      }
+      if (!shell?.openExternal) throw new Error("Opening Cloudflare installation instructions is unavailable.");
+      await shell.openExternal(CLOUDFLARED_INSTALL_DOCS);
+      return { opened: true, destination: "install" };
+    }
+    const certificate = process.env.TUNNEL_ORIGIN_CERT || path.join(
+      process.env.MODEL_ROUTER_CLOUDFLARED_HOME || path.join(os.homedir(), ".cloudflared"),
+      "cert.pem",
+    );
+    if (existsSync(certificate)) return { loggedIn: true };
+    await cursorConnectorRunner(cloudflared, ["tunnel", "login"], {
+      kind: "login",
+      progress: context.progress,
+    });
+    if (!existsSync(certificate)) {
+      throw new Error("Cloudflare authorization finished without creating its local certificate.");
+    }
+    context.progress("Cloudflare authorization complete. Refreshing Cursor setup…");
+    return { loggedIn: true };
+  });
+  handleAction("connectCursor", async ({ hostname } = {}, context) => {
+    const appPath = cursorAppPath();
+    if (!appPath) throw new Error("Cursor App is not installed.");
+
+    let cloudflared = cursorConnectorExecutable();
+    if (!cloudflared) {
+      const installer = cursorConnectorInstaller();
+      if (!installer) {
+        throw new Error("Automatic Cloudflare connector installation is unavailable on this machine.");
+      }
+      await cursorConnectorRunner(installer.executable, installer.args, {
+        kind: "install",
+        environment: installer.environment,
+        progress: context.progress,
+      });
+      cloudflared = cursorConnectorExecutable();
+      if (!cloudflared) throw new Error("Cloudflare connector finished installing but could not be detected.");
+      context.progress("Cloudflare connector installed.");
+    }
+
+    const certificate = process.env.TUNNEL_ORIGIN_CERT || path.join(
+      process.env.MODEL_ROUTER_CLOUDFLARED_HOME || path.join(os.homedir(), ".cloudflared"),
+      "cert.pem",
+    );
+    if (!existsSync(certificate)) {
+      await cursorConnectorRunner(cloudflared, ["tunnel", "login"], {
+        kind: "login",
+        progress: context.progress,
+      });
+      if (!existsSync(certificate)) {
+        throw new Error("Cloudflare authorization finished without creating its local certificate.");
+      }
+      context.progress("Cloudflare authorization complete.");
+    }
+
+    const savedHostname = harnessSnapshotReader().harnesses.find((entry) => entry.id === "cursor")?.tunnel?.hostname;
+    const selectedHostname = hostname === undefined || !String(hostname).trim()
+      ? savedHostname || await cursorHostnameResolver({ environment: process.env, fetchImpl })
+      : stringValue(hostname, "Cursor hostname", /^[A-Za-z0-9](?:[A-Za-z0-9.-]{1,251}[A-Za-z0-9])?$/);
+    context.progress(`Using ${selectedHostname} for Cursor's private connector.`);
+
+    const quitDeadline = Date.now() + CURSOR_QUIT_TIMEOUT_MS;
+    let waitingAnnounced = false;
+    while ((await cursorProcessReader()).length) {
+      if (!waitingAnnounced) {
+        context.progress("Fully quit Cursor. Setup will resume here automatically…");
+        waitingAnnounced = true;
+      }
+      if (Date.now() >= quitDeadline) {
+        throw new Error("Cursor is still running. Fully quit it, then click Connect Cursor again.");
+      }
+      await cursorWait(1_000);
+    }
+
+    context.progress("Creating the isolated Cursor connector and publishing routed models…");
+    await controlJsonRunner(
+      ["client-setup", "cursor", "--hostname", selectedHostname],
+      { timeoutMs: REPAIR_TIMEOUT_MS },
+    );
+    const cursor = harnessSnapshotReader().harnesses.find((entry) => entry.id === "cursor");
+    if (!cursor?.agentConfigured || !cursor?.appConfigured) {
+      throw new Error("Cursor setup finished without publishing its routed model catalog.");
+    }
+    context.progress("Cursor routing verified. Opening Cursor…");
+    if (!shell?.openPath) throw new Error("Opening Cursor App is unavailable.");
+    const failure = await shell.openPath(appPath);
+    if (failure) throw new Error("Cursor was configured but could not be reopened.");
+    return { configured: true, hostname: selectedHostname, opened: true };
+  });
   handleAction("openHarnessSession", async ({ harnessId, sessionId, surface, model } = {}) => {
     const harness = oneOf(harnessId, HARNESS_IDS, "Harness");
     const destination = oneOf(surface, HARNESS_SURFACES, "Harness surface");
-    const id = stringValue(sessionId, "Session", SESSION_UUID).toLowerCase();
+    const id = stringValue(
+      sessionId,
+      "Session",
+      harness === "dsh" ? DSH_SESSION_ID : harness === "cursor" ? CURSOR_SESSION_ID : SESSION_UUID,
+    ).toLowerCase();
     const session = getContextSessionsSnapshot().sessions.find((entry) => entry.harnessId === harness && entry.id === id);
     if (!session) throw new Error("That session is not available in its harness store.");
     if (session.archived || !session.resumable) throw new Error("Restore this archived task in its owning harness before resuming it.");
-    if (harness === "deepcode" && destination !== "terminal") {
-      throw new Error("Deep Code sessions resume in an interactive terminal.");
+    if (harness !== "codex" && destination !== "terminal") {
+      throw new Error(`${harness === "dsh" ? "DeepSeek Harness" : "Cursor"} sessions resume in an interactive terminal.`);
     }
     if (model !== undefined && (harness !== "codex" || destination !== "terminal")) {
       throw new Error("A model override is supported only for Codex terminal resumes.");
@@ -1077,8 +1630,11 @@ export function registerIpcHandlers({
       await shell.openExternal(`codex://threads/${id}`);
       return { opened: true, surface: "app", sessionId: id };
     }
-    const executable = executablePath(harness === "codex" ? "codex" : "deepcode");
-    if (!executable) throw new Error(`${harness === "codex" ? "Codex" : "Deep Code"} CLI is not installed.`);
+    const executable = executablePath(
+      harness === "codex" ? "codex" : harness === "dsh" ? "dsh" : "cursor-router-agent",
+    );
+    const label = harness === "codex" ? "Codex" : harness === "dsh" ? "DeepSeek Harness" : "Cursor Router Agent";
+    if (!executable) throw new Error(`${label} CLI is not installed or configured.`);
     const args = harness === "codex"
       ? ["resume", id, ...(model === undefined || model === "" ? [] : ["-m", await validateModel(model)])]
       : ["--resume", id];

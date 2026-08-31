@@ -66,9 +66,11 @@ const flagOptions = new Set([
 let setupArgumentError;
 for (let index = 0; index < args.length; index += 1) {
   const argument = args[index];
-  if (argument === "--providers") {
+  if (argument === "--providers" || argument === "--public-url" || argument === "--hostname") {
     if (!args[index + 1] || args[index + 1].startsWith("--")) {
-      setupArgumentError = "--providers requires a comma-separated value.";
+      setupArgumentError = argument === "--providers"
+        ? "--providers requires a comma-separated value."
+        : `${argument} requires a value.`;
       break;
     }
     index += 1;
@@ -105,6 +107,12 @@ if (!setupArgumentError && TARGET !== "codex" && (migrateKnown || adoptNativeCat
   setupArgumentError = `${
     migrateKnown ? "--migrate-known" : "--adopt-native-catalog"
   } applies only to the Codex target.`;
+}
+if (!setupArgumentError && TARGET !== "cursor" && (args.includes("--public-url") || args.includes("--hostname"))) {
+  setupArgumentError = "--public-url and --hostname apply only to the Cursor target.";
+}
+if (!setupArgumentError && args.includes("--public-url") && args.includes("--hostname")) {
+  setupArgumentError = "Use either --hostname or --public-url, not both.";
 }
 if (!setupArgumentError) {
   setupArgumentError = traySetupError({
@@ -144,6 +152,8 @@ Options:
   --guided             Ask provider and migration questions interactively
   --auto               Use already configured credentials (default)
   --providers LIST     Comma-separated provider ids
+  --hostname HOST      Public hostname for a managed Cloudflare named tunnel
+  --public-url URL     Existing stable HTTPS tunnel origin for Cursor App
   --migrate-known      Safely migrate recognized earlier Codex Router installs
   --adopt-native-catalog  Use an existing user-owned native Codex catalog as the merge base
   --smoke-test         Make one small live request per enabled provider
@@ -548,11 +558,28 @@ async function main() {
     return;
   }
 
+  const cursorTarget = TARGET === "cursor";
+  let cursorHostname = option("--hostname") || process.env.MODEL_ROUTER_CURSOR_TUNNEL_HOSTNAME;
+  let cursorPublicUrl = option("--public-url") || process.env.MODEL_ROUTER_CURSOR_PUBLIC_BASE_URL;
+  if (cursorTarget && guided && !cursorHostname && !cursorPublicUrl) {
+    cursorHostname = promptLine(
+      "Cloudflare hostname for Cursor App (for example cursor-router.example.com)",
+    );
+  }
+  if (cursorTarget && !cursorHostname && !cursorPublicUrl) {
+    throw incomplete(
+      "Cursor App requires --hostname for a managed named tunnel, or --public-url for an existing stable tunnel; retail Cursor's BYOK backend cannot reach loopback addresses.",
+    );
+  }
+  if (cursorHostname) process.env.MODEL_ROUTER_CURSOR_TUNNEL_HOSTNAME = cursorHostname;
+  if (cursorPublicUrl) process.env.MODEL_ROUTER_CURSOR_PUBLIC_BASE_URL = cursorPublicUrl;
+
   nextStep("Review and install");
   const dshTarget = TARGET === "dsh";
   // Like the harness, Gemini CLI has no native catalog to adopt: that list is
   // the ChatGPT-plan model set Codex publishes for itself.
   const geminiTarget = TARGET === "gemini";
+  const claudeTarget = TARGET === "claude";
   if (guided) {
     process.stdout.write(
       `\nReady to install:\n` +
@@ -563,6 +590,11 @@ async function main() {
           ? `  Changes: per-user background service and one provider route in the harness settings document\n`
           : geminiTarget
             ? `  Changes: per-user background service and one managed block in Gemini CLI's environment file\n`
+            : cursorTarget
+              ? `  Changes: per-user background service, Cursor Agent launcher, and Cursor App model settings\n` +
+                `  Public edge: ${cursorPublicUrl} -> 127.0.0.1:${(await import("./paths.mjs")).PORTS.cursorPublic}\n`
+            : claudeTarget
+              ? `  Changes: per-user background service and a router-owned claude-router launcher; Claude settings stay untouched\n`
             : `  Native catalog: ${adoptNativeCatalog ? "adopt existing user catalog" : "capture from Codex"}\n` +
               `  Changes: per-user background service and the managed Codex config block\n`),
     );
@@ -633,6 +665,13 @@ async function main() {
           `It reads its environment at startup, so the next \`gemini\` run picks this up.\n` +
           `If it asks how to authenticate, choose "Use Gemini API key" once -- the key is this router's local caller capability.\n` +
           `For native GPT models, run \`codex login\`, then \`./bin/model-router codex chatgpt-session enable\` once; that authorization is shared by every local client.\n`
+        : cursorTarget
+          ? `\nCursor is ready with: ${providerSummary}\n` +
+            `Run \`cursor-router-agent\` for the CLI. Fully quit and reopen Cursor App, then choose a \`codex_router/...\` model.\n` +
+            `The HTTPS tunnel must keep forwarding to 127.0.0.1:${(await import("./paths.mjs")).PORTS.cursorPublic}.\n`
+        : claudeTarget
+          ? `\nClaude Code is ready with: ${providerSummary}\n` +
+            `Run \`claude-router\`, then choose any \`codex_router/anthropic/...\` model from /model.\n`
         : `\nCodex Router is ready with: ${providerSummary}\nFully quit Codex, reopen it, and start a new task.\n`,
   );
   if (visionBridge?.enabled && visionBridge.engine) {

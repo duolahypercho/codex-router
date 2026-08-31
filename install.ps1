@@ -3,8 +3,10 @@ param(
   [switch]$CheckoutInstall,
   [switch]$PrepareOnly,
   [switch]$ForceDeps,
-  [ValidateSet("codex", "dsh", "gemini")]
+  [ValidateSet("codex", "dsh", "gemini", "cursor", "claude")]
   [string]$Target = "codex",
+  [string]$CursorPublicUrl,
+  [string]$CursorHostname,
   [switch]$Guided,
   [switch]$Auto,
   [string]$Providers,
@@ -30,6 +32,15 @@ param(
 
 $ErrorActionPreference = "Stop"
 $env:MODEL_ROUTER_TARGET = $Target
+if ($CursorPublicUrl) {
+  if ($Target -ne "cursor") { throw "-CursorPublicUrl applies to -Target cursor only." }
+  $env:MODEL_ROUTER_CURSOR_PUBLIC_BASE_URL = $CursorPublicUrl
+}
+if ($CursorHostname) {
+  if ($Target -ne "cursor") { throw "-CursorHostname applies to -Target cursor only." }
+  if ($CursorPublicUrl) { throw "Use either -CursorHostname or -CursorPublicUrl, not both." }
+  $env:MODEL_ROUTER_CURSOR_TUNNEL_HOSTNAME = $CursorHostname
+}
 # Legacy migration replaces an older router's managed Codex config block, and
 # the native catalog is the ChatGPT-plan model list Codex adopts. Neither has a
 # counterpart in DeepSeek Harness, whose integration is one settings section.
@@ -236,6 +247,8 @@ if ([int]$VersionParts[0] -lt 22 -or
 $ConfigManager = switch ($Target) {
   "dsh" { "src\dsh-config-manager.mjs" }
   "gemini" { "src\gemini-config-manager.mjs" }
+  "cursor" { "src\cursor-config-manager.mjs" }
+  "claude" { "src\claude-code-config-manager.mjs" }
   default { "src\config-manager.mjs" }
 }
 $ConfigEnableCommand = if ($Target -eq "codex") { "enable" } else { "install" }
@@ -274,6 +287,8 @@ try {
   $ConfigWasEnabled = switch ($Target) {
     "dsh" { (Get-InstallerStateField @($ConfigManager, "status") "routeInstalled") -eq $true }
     "gemini" { (Get-InstallerStateField @($ConfigManager, "status") "installed") -eq $true }
+    "cursor" { (Get-InstallerStateField @($ConfigManager, "status") "appConfigured") -eq $true }
+    "claude" { (Get-InstallerStateField @($ConfigManager, "status") "installed") -eq $true }
     default { (Get-InstallerStateField @($ConfigManager, "status") "mode") -eq "router" }
   }
   $ServiceWasInstalled = (Get-InstallerStateField @("src\service.mjs", "status") "installed") -eq $true
@@ -461,6 +476,17 @@ try {
     & node src/dsh-config-manager.mjs install | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "DeepSeek Harness republish failed." }
   }
+  if ($Target -ne "cursor" -and (Test-NonEmptyFile (Join-Path $StateRoot "cursor-models.json"))) {
+    $CursorRunning = (Get-InstallerStateField @("src\cursor-config-manager.mjs", "status") "running") -eq $true
+    if (-not $CursorRunning) {
+      & node src/cursor-config-manager.mjs install | Out-Null
+      if ($LASTEXITCODE -ne 0) { throw "Cursor republish failed." }
+    }
+  }
+  if ($Target -ne "claude" -and (Test-NonEmptyFile (Join-Path $StateRoot "claude-models.json"))) {
+    & node src/claude-code-config-manager.mjs install | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "Claude Code republish failed." }
+  }
 
   if ($PrepareOnly) {
     Write-Host "Dependencies and generated files are prepared; application configuration was not changed."
@@ -545,6 +571,11 @@ try {
   } elseif ($Target -eq "gemini") {
     Write-Host "Published the selected external model routes to Gemini CLI. The next 'gemini' run picks them up."
     Write-Host "Choose 'Use Gemini API key' once if it asks how to authenticate; the key is this router's local caller capability."
+  } elseif ($Target -eq "cursor") {
+    Write-Host "Published all routed models to Cursor Agent and Cursor App."
+    Write-Host "Run cursor-router-agent for the CLI; fully quit and reopen Cursor for the app."
+  } elseif ($Target -eq "claude") {
+    Write-Host "Published all routed models to Claude Code. Run claude-router and choose a codex_router/anthropic/... model."
   } else {
     Write-Host "Installed the selected external model routes. Fully quit and reopen Codex."
   }

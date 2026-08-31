@@ -73,12 +73,12 @@ test("shared publication writes gateway routes before every installed target", a
       return "/private/router/litellm.yaml";
     },
     refreshTargets: () => {
-      for (const target of ["codex", "dsh", "gemini"]) events.push(target);
+      for (const target of ["codex", "dsh", "gemini", "cursor"]) events.push(target);
       return true;
     },
   });
 
-  assert.deepEqual(events, ["gateway", "codex", "dsh", "gemini"]);
+  assert.deepEqual(events, ["gateway", "codex", "dsh", "gemini", "cursor"]);
   assert.deepEqual(result, {
     gatewayPath: "/private/router/litellm.yaml",
     targetsRefreshed: true,

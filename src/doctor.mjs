@@ -36,9 +36,15 @@ import { serviceFollowsHostApps } from "./presence-state.mjs";
 import { waitForRouterHealth } from "./router-health.mjs";
 import {
   CALLER_SECRET_PATH,
+  CLAUDE_CATALOG_PATH,
+  CLAUDE_LAUNCHER_PATH,
   CODEX_AGENTS_DIR,
   CODEX_HOME,
   CONFIG_PATH,
+  CURSOR_CATALOG_PATH,
+  CURSOR_LAUNCHER_PATH,
+  CURSOR_PUBLIC_SECRET_PATH,
+  CURSOR_STATE_DB_PATH,
   DSH_CATALOG_PATH,
   DSH_SETTINGS_PATH,
   GEMINI_CATALOG_PATH,
@@ -379,7 +385,13 @@ const privacyTarget = codexTarget
   ? CONFIG_PATH
   : TARGET === "gemini"
     ? GEMINI_ENV_PATH
-    : DSH_SETTINGS_PATH;
+    : TARGET === "cursor"
+      ? CURSOR_CATALOG_PATH
+      : TARGET === "claude"
+        ? CLAUDE_CATALOG_PATH
+      : DSH_SETTINGS_PATH;
+const cursorAgentOnly = TARGET === "cursor" &&
+  !existsSync(CURSOR_CATALOG_PATH) && existsSync(CURSOR_LAUNCHER_PATH);
 const configMode = existsSync(privacyTarget)
   ? statSync(privacyTarget).mode & 0o777
   : undefined;
@@ -389,16 +401,23 @@ const codexConfigText = codexTarget && existsSync(CONFIG_PATH)
 const codexConfigCarriesCallerCapability =
   codexTarget && redactCallerUrl(codexConfigText) !== codexConfigText;
 const privacyRequired = !codexTarget || codexConfigCarriesCallerCapability;
-const configProtected =
-  configMode !== undefined && (!privacyRequired || privateFileIsProtected(privacyTarget));
+const configProtected = cursorAgentOnly || (
+  configMode !== undefined && (!privacyRequired || privateFileIsProtected(privacyTarget))
+);
 add(
   configProtected ? "ok" : "fail",
   codexTarget
     ? "Codex config privacy"
     : TARGET === "gemini"
       ? "Gemini environment privacy"
+      : TARGET === "cursor"
+        ? "Cursor router-state privacy"
+        : TARGET === "claude"
+          ? "Claude router-state privacy"
       : "Harness settings privacy",
-  configMode === undefined
+  cursorAgentOnly
+    ? "agent-only; no Cursor App router-state document"
+    : configMode === undefined
     ? "missing"
     : codexTarget && !privacyRequired
       ? "router credentials stay outside config.toml"
@@ -424,7 +443,11 @@ const routedTransportActive = codexTarget
   ? routedCatalogConfigured(existsSync(CONFIG_PATH) ? readFileSync(CONFIG_PATH, "utf8") : "")
   : TARGET === "gemini"
     ? existsSync(GEMINI_CATALOG_PATH)
-    : existsSync(DSH_CATALOG_PATH);
+    : TARGET === "cursor"
+      ? existsSync(CURSOR_CATALOG_PATH) || existsSync(CURSOR_LAUNCHER_PATH)
+      : TARGET === "claude"
+        ? existsSync(CLAUDE_CATALOG_PATH) && existsSync(CLAUDE_LAUNCHER_PATH)
+      : existsSync(DSH_CATALOG_PATH);
 // An install made with --no-provider --no-discovery is idle on purpose: the
 // selection is an explicit empty list and the discovery marker is set. That
 // state is what the operator asked for, so the empty selection and the empty
@@ -788,6 +811,25 @@ add(
         : `mode ${callerSecretMode.toString(8)}`,
   "Run ./bin/doctor --fix; this capability is generated locally and is not a provider key.",
 );
+
+if (TARGET === "cursor") {
+  const cursorSecretMode = existsSync(CURSOR_PUBLIC_SECRET_PATH)
+    ? statSync(CURSOR_PUBLIC_SECRET_PATH).mode & 0o777
+    : undefined;
+  const cursorSecretValid = readableSecret(CURSOR_PUBLIC_SECRET_PATH, validCallerSecret);
+  add(
+    cursorSecretValid && privateFileIsProtected(CURSOR_PUBLIC_SECRET_PATH) ? "ok" : "fail",
+    "Cursor public edge key",
+    cursorSecretMode === undefined
+      ? "missing"
+      : !cursorSecretValid
+        ? "invalid"
+        : process.platform === "win32"
+          ? "current-user Windows ACL"
+          : `mode ${cursorSecretMode.toString(8)}`,
+    "Run ./bin/model-router cursor doctor --fix; this capability is generated locally and is not a provider key.",
+  );
+}
 
 // Tool-result retention is the one place this router keeps model-visible
 // *content* on disk rather than counts and bytes, and it has no eviction and no
@@ -1192,6 +1234,97 @@ if (TARGET === "gemini") {
       error instanceof Error ? error.message : String(error),
       "Inspect $DSH_HOME/settings.yaml, then run ./bin/model-router dsh enable.",
     );
+  }
+} else if (TARGET === "cursor") {
+  try {
+    const cursor = childJson("cursor-config-manager.mjs", ["status"]);
+    add(
+      cursor.appConfigured ? "ok" : cursor.agentConfigured ? "warn" : "fail",
+      "Cursor App routing config",
+      cursor.appConfigured
+        ? `${cursor.publishedModels.length} codex_router/... models in ${cursor.stateDb}; ${cursor.publicBaseUrl}`
+        : cursor.agentConfigured
+          ? "Cursor App is not connected; Cursor Agent is ready locally"
+        : cursor.running
+          ? "Cursor is running with stale or incomplete router settings"
+          : `router settings are missing or stale in ${cursor.stateDb}`,
+      "Fully quit Cursor, then use Harness > Connect. The managed path asks for a hostname and configures the named tunnel itself.",
+    );
+    add(
+      cursor.launcherInstalled && cursor.cursorAgent.available ? "ok" : "fail",
+      "Cursor Agent launcher",
+      cursor.launcherInstalled
+        ? cursor.cursorAgent.available
+          ? `${cursor.launcher}; ${cursor.cursorAgent.version || cursor.cursorAgent.command}`
+          : `${cursor.launcher} is installed, but ${cursor.cursorAgent.command} is unavailable`
+        : `${cursor.launcher} is missing`,
+      "Install Cursor Agent, then use Harness > Set up & open. The local agent does not require Cursor App to quit.",
+    );
+    if (cursor.installed) {
+      const tunnel = childJson("cursor-cloudflare-tunnel.mjs", ["status"]);
+      add(
+        cursor.tunnelProvider === "cloudflare" ? (tunnel.ready ? "ok" : "fail") : "ok",
+        "Cursor App named tunnel",
+        cursor.tunnelProvider === "cloudflare"
+          ? tunnel.ready
+            ? `${tunnel.hostname}; app-only edge on 127.0.0.1:${PORTS.cursorPublic}`
+            : `managed tunnel is incomplete; next action: ${tunnel.nextAction}`
+          : "stable public endpoint is managed outside Codex Router",
+        "Use Harness > Cursor to install cloudflared, sign in once, and reconnect the hostname.",
+      );
+      const drift = childJson("cursor-config-manager.mjs", ["drift"]);
+      add(
+        !drift.missing?.length && !drift.added?.length ? "ok" : "warn",
+        "Cursor App catalog freshness",
+        !drift.missing?.length && !drift.added?.length
+          ? `published ${cursor.publishedModels.length}, routable ${cursor.routableModels.length}`
+          : `missing ${drift.missing?.join(", ") || "none"}; added ${drift.added?.join(", ") || "none"}`,
+        `Fully quit Cursor, then reconnect it from Harness. Cursor owns ${CURSOR_STATE_DB_PATH} while running.`,
+      );
+    } else {
+      add(
+        "ok",
+        "Cursor Agent catalog",
+        `${cursor.routableModels.length} routed models are read live at launch`,
+        "No republish is needed for Cursor Agent.",
+      );
+    }
+  } catch (error) {
+    add(
+      "fail",
+      "Cursor routing config",
+      error instanceof Error ? error.message : String(error),
+      "Fully quit Cursor, inspect its settings database, then run ./bin/model-router cursor enable.",
+    );
+  }
+} else if (TARGET === "claude") {
+  try {
+    const claude = childJson("claude-code-config-manager.mjs", ["status"]);
+    add(
+      claude.installed && claude.baseUrlManaged ? "ok" : "fail",
+      "Claude Code routing config",
+      claude.installed
+        ? `${claude.publishedModels.length} codex_router/anthropic/... models; ${claude.baseUrl}`
+        : "router-owned launcher or model snapshot is missing",
+      "Run ./bin/model-router claude enable.",
+    );
+    add(
+      claude.claude.available ? "ok" : "fail",
+      "Claude Code CLI",
+      claude.claude.available ? claude.claude.version || claude.claude.command : "official claude CLI not found",
+      "Install Claude Code, then run ./bin/model-router claude enable.",
+    );
+    const drift = childJson("claude-code-config-manager.mjs", ["drift"]);
+    add(
+      !drift.missing?.length && !drift.added?.length ? "ok" : "warn",
+      "Claude Code catalog freshness",
+      !drift.missing?.length && !drift.added?.length
+        ? `${claude.publishedModels.length} published models match the routed catalog`
+        : `missing ${drift.missing?.join(", ") || "none"}; added ${drift.added?.join(", ") || "none"}`,
+      "Run ./bin/model-router claude enable to republish.",
+    );
+  } catch (error) {
+    add("fail", "Claude Code routing config", error instanceof Error ? error.message : String(error), "Run ./bin/model-router claude enable.");
   }
 } else try {
   const config = childJson("config-manager.mjs", ["status"]);

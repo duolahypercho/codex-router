@@ -1,17 +1,35 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
 import {
   AppWindow,
   BookOpen,
   Boxes,
-  CheckCircle2,
-  Download,
-  ExternalLink,
+  BrainCircuit,
+  Globe2,
+  LoaderCircle,
   Route,
-  ShieldAlert,
+  Settings2,
   SquareTerminal,
 } from "lucide-react";
+import cursorLogo from "../assets/clients/cursor.svg";
+import cursorDarkLogo from "../assets/clients/cursor-dark.svg";
+import codexDarkLogo from "../assets/clients/codex-dark.svg";
+import codexLightLogo from "../assets/clients/codex-light.svg";
+import deepSeekHarnessLogo from "../assets/clients/deepseek-harness.svg";
+import claudeLogo from "../assets/clients/claude.svg";
+import geminiLogo from "../assets/providers/gemini.svg";
 import { Badge, Button, InlineNotice, PageHeader, PanelSkeleton, SectionHeading, StatStrip } from "../components";
-import type { HarnessDescriptor, HarnessSnapshot, RouterControlApi, RouterTarget } from "../types";
+import type {
+  AgentBridgeDescriptor,
+  AgentBridgeSnapshot,
+  ContextSessionsSnapshot,
+  HarnessDescriptor,
+  HarnessId,
+  HarnessSnapshot,
+  OperationEvent,
+  RouterControlApi,
+  RouterTarget,
+  ViewId,
+} from "../types";
 import "./local-harness-context.css";
 
 type RunAction = (label: string, action: () => Promise<unknown>) => Promise<void>;
@@ -20,33 +38,73 @@ interface HarnessPageProps {
   target?: RouterTarget;
   api?: RouterControlApi;
   refreshing: boolean;
+  operation?: OperationEvent | null;
   onRefresh: () => void;
   runAction: RunAction;
+  onNavigate: (view: ViewId) => void;
 }
 
-export function HarnessPage({ target, api, refreshing, onRefresh, runAction }: HarnessPageProps) {
+const CLIENT_ORDER: HarnessId[] = ["cursor", "claude", "gemini", "dsh", "codex"];
+const CLIENT_LOGOS: Record<HarnessId, { light: string; dark?: string; mode: "artwork" | "mask" }> = {
+  cursor: { light: cursorLogo, dark: cursorDarkLogo, mode: "artwork" },
+  dsh: { light: deepSeekHarnessLogo, mode: "mask" },
+  codex: { light: codexLightLogo, dark: codexDarkLogo, mode: "artwork" },
+  claude: { light: claudeLogo, mode: "artwork" },
+  gemini: { light: geminiLogo, mode: "artwork" },
+};
+
+export function HarnessPage({ target, api, refreshing, operation, onRefresh, runAction, onNavigate }: HarnessPageProps) {
   const [snapshot, setSnapshot] = useState<HarnessSnapshot>();
+  const [sessions, setSessions] = useState<ContextSessionsSnapshot>();
+  const [agentBridges, setAgentBridges] = useState<AgentBridgeSnapshot>();
   const [error, setError] = useState<string>();
+  const [cursorHostname, setCursorHostname] = useState("");
+  const [cursorActionPending, setCursorActionPending] = useState(false);
   const loadHarnesses = useCallback(async () => {
     if (!api) return;
     try {
-      setSnapshot(await api.getHarnesses());
+      const [nextHarnesses, nextSessions] = await Promise.all([
+        api.getHarnesses(),
+        api.getContextSessions(),
+      ]);
+      setSnapshot(nextHarnesses);
+      setSessions(nextSessions);
       setError(undefined);
+      if (typeof api.getAgentBridges === "function") {
+        try {
+          setAgentBridges(await api.getAgentBridges());
+        } catch {
+          // Agent bridges are optional client-owned sessions. Their detection
+          // must never hide the routed Cursor, DeepSeek, and Codex rows.
+          setAgentBridges(undefined);
+        }
+      }
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Harness detection failed.");
+      setError(reason instanceof Error ? reason.message : "Client detection failed.");
     }
   }, [api]);
 
   useEffect(() => { void loadHarnesses(); }, [loadHarnesses]);
+  useEffect(() => {
+    const saved = snapshot?.harnesses.find((harness) => harness.id === "cursor")?.tunnel?.hostname;
+    if (saved) setCursorHostname(saved);
+  }, [snapshot]);
 
-  const codex = snapshot?.harnesses.find((harness) => harness.id === "codex");
-  const deepcode = snapshot?.harnesses.find((harness) => harness.id === "deepcode");
-  const deepseekModels = useMemo(
-    () => (target?.models ?? []).filter((model) => (model.enabled || model.native) && `${model.provider}/${model.slug}`.toLowerCase().includes("deepseek")),
-    [target],
+  const clients = useMemo(
+    () => CLIENT_ORDER.map((id) => snapshot?.harnesses.find((harness) => harness.id === id)).filter(Boolean) as HarnessDescriptor[],
+    [snapshot],
   );
-  const provenModels = target?.models.filter((model) => model.enabled && model.multiAgentVersion === "v2") ?? [];
-
+  const routedModelCount = target?.models.filter(
+    (model) => model.visible && (model.enabled || model.native),
+  ).length ?? 0;
+  const cursorOperationActive = cursorActionPending || operation?.status === "started" && [
+    "connectCursor",
+    "Connect Cursor",
+    "prepareCursorTunnel",
+    "Install Cloudflare connector",
+    "Sign in to Cloudflare Tunnel",
+    "Configure Cursor",
+  ].includes(operation.action || "");
   const refresh = () => {
     onRefresh();
     void loadHarnesses();
@@ -55,140 +113,277 @@ export function HarnessPage({ target, api, refreshing, onRefresh, runAction }: H
     await runAction(label, action);
     await loadHarnesses();
   };
+  const runCursorSetup = async (label: string, action: () => Promise<unknown>) => {
+    setCursorActionPending(true);
+    try {
+      await act(label, action);
+    } finally {
+      setCursorActionPending(false);
+    }
+  };
+  const sessionCount = (id: HarnessId) => sessions?.counts[id] ?? 0;
+  const setup = async (harness: HarnessDescriptor) => {
+    if (!api) return;
+    if (harness.id === "cursor" && harness.configured) {
+      if (harness.appInstalled && harness.appConfigured) {
+        await act("Open Cursor", () => api.launchHarness("cursor", "app"));
+      } else {
+        await act("Open Cursor Agent", () => api.launchHarness("cursor", "terminal"));
+      }
+      return;
+    }
+    if (harness.id === "cursor") {
+      await runCursorSetup("Connect Cursor", () => api.connectCursor(cursorHostname.trim() || undefined));
+    } else if (harness.id === "claude" && harness.configured) {
+      await act("Open Claude Code", () => api.launchHarness("claude", "terminal"));
+    } else {
+      await act(`Configure ${harness.displayName}`, () => api.setupHarness(harness.id));
+    }
+  };
 
   return (
     <>
       <PageHeader
-        eyebrow="Coding environments"
+        eyebrow="Coding clients"
         title="Harness"
-        description="Launch each coding environment in the surface it actually supports."
+        description="Load local sessions and publish the same routed model catalog into each coding client."
         onRefresh={refresh}
         refreshing={refreshing}
       />
-      <StatStrip items={[
-        { label: "Detected", value: snapshot?.harnesses.filter((harness) => harness.cliInstalled || harness.appInstalled).length ?? 0, detail: "Supported harnesses" },
-        { label: "Codex app", value: codex?.appInstalled ? "Ready" : "Not found", detail: codex?.cliVersion || "Desktop task links" },
-        { label: "DeepSeek routes", value: deepseekModels.length, detail: target?.enabledProviders.includes("deepseek") ? "Provider connected" : "Via enabled providers" },
-        { label: "Subagent relay", value: provenModels.length, detail: "Proven v2 models" },
-      ]} />
+      <div className="lhc-harness-summary">
+        <StatStrip items={[
+          { label: "Clients", value: clients.length, detail: "Supported clients" },
+          { label: "Configured", value: clients.filter((client) => client.configured).length, detail: "Using this router" },
+          { label: "Sessions", value: sessions?.counts.total ?? 0, detail: "Indexed metadata" },
+          { label: "Routed models", value: routedModelCount, detail: "Shared picker" },
+        ]} />
+      </div>
 
-      {error ? <InlineNotice tone="warning" title="Harness detection is incomplete">{error}</InlineNotice> : null}
+      {error ? <InlineNotice tone="warning" title="Client detection is incomplete">{error}</InlineNotice> : null}
 
-      <div className="lhc-harness-grid">
-        {!snapshot && !error ? <PanelSkeleton label="Detecting harnesses" variant="cards" count={2} /> : null}
-        {codex ? (
-          <HarnessCard
-            harness={codex}
-            accent="codex"
-            status={codex.cliInstalled ? "CLI detected" : codex.appInstalled ? "App detected" : "Not installed"}
-            facts={[
-              codex.appInstalled ? "Desktop task links available" : "Desktop app not detected",
-              codex.cliInstalled ? codex.cliVersion || "Codex CLI available" : "Codex CLI not detected",
-              `${target?.models.filter((model) => model.enabled || model.native).length ?? 0} routed models available`,
-            ]}
+      <div className="lhc-harness-list">
+        {!snapshot && !error ? <PanelSkeleton label="Detecting coding clients" variant="list" count={5} /> : null}
+        {clients.length ? (
+          <div className="lhc-harness-table-head" aria-hidden>
+            <span>Client</span>
+            <span>Runtime</span>
+            <span>Models</span>
+            <span>Sessions</span>
+            <span>Actions</span>
+          </div>
+        ) : null}
+        {clients.map((harness) => (
+          <HarnessRow
+            key={harness.id}
+            harness={harness}
+            sessions={sessionCount(harness.id)}
+            facts={clientFacts(harness, routedModelCount)}
+            bridge={bridgeForHarness(harness.id, agentBridges)}
+            onSessions={() => onNavigate("context")}
+            setupControl={harness.id === "cursor" && cursorOperationActive ? (
+              <div className="lhc-harness-progress" role="status" aria-live="polite">
+                <div>
+                  <LoaderCircle aria-hidden size={14} strokeWidth={1.7} className="spin" />
+                  <span>{operation?.status === "started" ? operation.message || "Preparing Cursor setup…" : "Refreshing Cursor setup…"}</span>
+                </div>
+                <progress aria-label="Cursor setup progress" />
+              </div>
+            ) : harness.id === "cursor" && harness.appInstalled && !harness.appConfigured ? (
+              <div className="lhc-cursor-connect">
+                <div className="lhc-harness-prerequisite">
+                  <Globe2 aria-hidden size={14} strokeWidth={1.7} />
+                  <span>{cursorTunnelHelp(harness)}</span>
+                </div>
+                <details>
+                  <summary>Use an existing Cloudflare hostname</summary>
+                  <label className="lhc-harness-origin">
+                    <span>Hostname</span>
+                    <input
+                      value={cursorHostname}
+                      placeholder="cursor-router.example.com"
+                      spellCheck={false}
+                      autoCapitalize="none"
+                      onChange={(event) => setCursorHostname(event.target.value)}
+                    />
+                    <small>Optional. Leave blank to create one under the domain you authorize.</small>
+                  </label>
+                </details>
+              </div>
+            ) : undefined}
             actions={
               <>
-                {codex.appInstalled ? (
-                  <Button variant="primary" disabled={!api} onClick={() => api && void act("Open Codex app", () => api.launchHarness("codex", "app"))}>
-                    <AppWindow aria-hidden size={14} strokeWidth={1.7} /> Open app
+                <div className={`lhc-harness-actions${harness.id === "cursor" ? " is-cursor" : ""}`}>
+                  <Button
+                    variant="primary"
+                    disabled={
+                      !api || !harness.canInstall || cursorOperationActive
+                    }
+                    title={harness.installRequirement}
+                    onClick={() => void setup(harness)}
+                  >
+                    {harness.id === "cursor" && cursorOperationActive
+                      ? <><LoaderCircle aria-hidden size={14} strokeWidth={1.7} className="spin" /> Working…</>
+                      : harness.id === "cursor" && harness.configured
+                      ? harness.appInstalled && harness.appConfigured
+                        ? <><AppWindow aria-hidden size={14} strokeWidth={1.7} /> Open Cursor</>
+                        : <><SquareTerminal aria-hidden size={14} strokeWidth={1.7} /> Open agent</>
+                      : harness.id === "claude" && harness.configured
+                        ? <><SquareTerminal aria-hidden size={14} strokeWidth={1.7} /> Open Claude Code</>
+                        : <><Settings2 aria-hidden size={14} strokeWidth={1.7} /> {harness.id === "cursor" ? "Connect Cursor" : harness.configured ? "Refresh" : "Set up"}</>}
                   </Button>
-                ) : (
-                  <Button variant="primary" disabled={!api} onClick={() => api && void act("Open official Codex download", () => api.openExternal(codex.docsUrl))}>
-                    <Download aria-hidden size={14} strokeWidth={1.7} /> Get Codex
+                  {harness.id === "cursor" ? (
+                    <Button
+                      variant="ghost"
+                      aria-label="Open Cursor Agent"
+                      title="Open Cursor Agent"
+                      disabled={!api || !harness.configured || !harness.agentConfigured || !snapshot?.terminalAvailable}
+                      onClick={() => api && void act("Open Cursor Agent", () => api.launchHarness("cursor", "terminal"))}
+                    >
+                      <SquareTerminal aria-hidden size={14} strokeWidth={1.7} />
+                    </Button>
+                  ) : (
+                    <Button
+                      variant="secondary"
+                      disabled={!api || !harness.appInstalled}
+                      onClick={() => api && void act(`Open ${harness.displayName}`, () => api.launchHarness(harness.id, "app"))}
+                    >
+                      <AppWindow aria-hidden size={14} strokeWidth={1.7} /> Open
+                    </Button>
+                  )}
+                  {harness.id !== "cursor" ? (
+                    <Button
+                      variant="ghost"
+                      aria-label={`Open ${harness.displayName} terminal`}
+                      title={`Open ${harness.displayName} terminal`}
+                      disabled={!api || !snapshot?.terminalAvailable || !harness.cliInstalled}
+                      onClick={() => api && void act(`Open ${harness.displayName} terminal`, () => api.launchHarness(harness.id, "terminal"))}
+                    >
+                      <SquareTerminal aria-hidden size={14} strokeWidth={1.7} />
+                    </Button>
+                  ) : null}
+                  <Button
+                    variant="ghost"
+                    aria-label={`Open ${harness.displayName} documentation`}
+                    title={`Open ${harness.displayName} documentation`}
+                    disabled={!api}
+                    onClick={() => api && void act(`Open ${harness.displayName} documentation`, () => api.openExternal(harness.docsUrl))}
+                  >
+                    <BookOpen aria-hidden size={14} strokeWidth={1.7} />
                   </Button>
-                )}
-                <Button variant="secondary" disabled={!api || !codex.cliInstalled || !snapshot?.terminalAvailable} onClick={() => api && void act("Open Codex terminal", () => api.launchHarness("codex", "terminal"))}>
-                  <SquareTerminal aria-hidden size={14} strokeWidth={1.7} /> Open terminal
-                </Button>
-                <Button variant="ghost" disabled={!api} onClick={() => api && void act("Open Codex documentation", () => api.openExternal(codex.docsUrl))}>
-                  <BookOpen aria-hidden size={14} strokeWidth={1.7} /> Docs
-                </Button>
+                </div>
               </>
             }
           />
-        ) : null}
-
-        {deepcode ? (
-          <HarnessCard
-            harness={deepcode}
-            accent="deepcode"
-            status={deepcode.cliInstalled ? "CLI detected" : "Optional install"}
-            facts={[
-              deepcode.configured ? "Settings file detected" : "Configuration not detected",
-              deepcodeModelsLabel(deepseekModels.length),
-              "Sessions resume in a real terminal",
-            ]}
-            notice="Deep Code is a third-party reference integration listed by DeepSeek. It is not an official DeepSeek desktop app."
-            actions={
-              <>
-                {deepcode.cliInstalled ? (
-                  <Button variant="primary" disabled={!api || !snapshot?.terminalAvailable} onClick={() => api && void act("Open Deep Code terminal", () => api.launchHarness("deepcode", "terminal"))}>
-                    <SquareTerminal aria-hidden size={14} strokeWidth={1.7} /> Open terminal
-                  </Button>
-                ) : (
-                  <Button variant="primary" disabled={!api || !deepcode.canInstall} title={deepcode.installRequirement} onClick={() => api && void act("Open Deep Code installer", () => api.installHarness("deepcode"))}>
-                    <Download aria-hidden size={14} strokeWidth={1.7} /> Install in Terminal
-                  </Button>
-                )}
-                <Button variant="ghost" disabled={!api} onClick={() => api && void act("Open Deep Code reference", () => api.openExternal(deepcode.docsUrl))}>
-                  <ExternalLink aria-hidden size={14} strokeWidth={1.7} /> Reference
-                </Button>
-              </>
-            }
-          />
-        ) : null}
+        ))}
       </div>
 
       <section className="panel-section">
-        <SectionHeading title="Routing shared by the harnesses" description="The router exposes models to Codex. Deep Code keeps its own provider settings and session store." />
+        <SectionHeading title="One router plane, five client stores" description="Model routes and provider credentials are shared; sessions and client-owned settings remain separate." />
         <div className="lhc-continuity-map">
           <article>
             <Route aria-hidden size={18} strokeWidth={1.7} />
-            <div><strong>Codex Router catalog</strong><small>{target?.models.filter((model) => model.enabled || model.native).length ?? 0} models are available to new Codex tasks.</small></div>
+            <div><strong>Shared routed catalog</strong><small>{routedModelCount} selected models are republished into every configured client.</small></div>
             <Badge tone={target?.active ? "success" : "neutral"}>{target?.active ? "Active" : "Inactive"}</Badge>
           </article>
           <article>
-            <Boxes aria-hidden size={18} strokeWidth={1.7} />
-            <div><strong>DeepSeek models</strong><small>{deepseekModels.length ? deepseekModels.map((model) => model.displayName).slice(0, 3).join(", ") : "Connect a DeepSeek-capable provider to expose models in Codex."}</small></div>
-            <Badge tone={deepseekModels.length ? "success" : "neutral"}>{deepseekModels.length ? `${deepseekModels.length} ready` : "None"}</Badge>
+            <Globe2 aria-hidden size={18} strokeWidth={1.7} />
+            <div><strong>Cursor public edge</strong><small>Cursor App reaches only the separately keyed app edge; the main loopback capability stays private.</small></div>
+            <Badge tone={clients.find((client) => client.id === "cursor")?.configured ? "success" : "neutral"}>Isolated</Badge>
           </article>
           <article>
-            <ShieldAlert aria-hidden size={18} strokeWidth={1.7} />
-            <div><strong>Credential boundary</strong><small>The control center never copies a credential from one harness into another.</small></div>
-            <Badge tone="accent">Isolated</Badge>
+            <Boxes aria-hidden size={18} strokeWidth={1.7} />
+            <div><strong>Session ownership</strong><small>The index reads bounded metadata only. Conversation messages stay inside each coding client.</small></div>
+            <Badge tone="accent">Local</Badge>
           </article>
         </div>
       </section>
-
     </>
   );
 }
 
-function HarnessCard({ harness, accent, status, facts, notice, actions }: {
+function HarnessRow({ harness, sessions, facts, bridge, setupControl, actions, onSessions }: {
   harness: HarnessDescriptor;
-  accent: "codex" | "deepcode";
-  status: string;
+  sessions: number;
   facts: string[];
-  notice?: string;
+  bridge?: AgentBridgeDescriptor;
+  setupControl?: ReactNode;
   actions: ReactNode;
+  onSessions: () => void;
 }) {
   return (
-    <section className={`lhc-harness-card is-${accent}`}>
+    <section className={`lhc-harness-row is-${harness.id}`}>
       <header>
-        <span className="lhc-harness-mark" aria-hidden>{accent === "codex" ? <Boxes size={21} strokeWidth={1.6} /> : <Route size={21} strokeWidth={1.6} />}</span>
-        <div><h2>{harness.displayName}</h2><p>{harness.description}</p></div>
-        <Badge tone={harness.cliInstalled || harness.appInstalled ? "success" : "neutral"}>{status}</Badge>
+        <span className="lhc-harness-mark" aria-hidden><HarnessMark id={harness.id} /></span>
+        <div>
+          <div className="lhc-harness-title">
+            <h2>{harness.displayName}</h2>
+            <Badge tone={harness.configured ? "success" : harness.cliInstalled || harness.appInstalled ? "accent" : "neutral"}>
+              {harness.configured ? "Router ready" : harness.cliInstalled || harness.appInstalled ? "Detected" : "Not installed"}
+            </Badge>
+          </div>
+          <p>{harness.description}</p>
+          {bridge ? (
+            <div
+              className={`lhc-harness-bridge${bridge.installed ? " is-available" : ""}`}
+              title="Optional delegated runs use the official client's own login and never add subscription models to the router catalog."
+            >
+              <BrainCircuit aria-hidden size={11} strokeWidth={1.8} />
+              <span>Official-client agent</span>
+              <strong>{bridge.installed ? "Available" : "Not detected"}</strong>
+              <span>· {bridge.sessions} delegated {bridge.sessions === 1 ? "run" : "runs"}</span>
+            </div>
+          ) : null}
+        </div>
       </header>
       <div className="lhc-harness-facts">
-        {facts.map((fact) => <div key={fact}><CheckCircle2 aria-hidden size={13} strokeWidth={1.8} /><span>{fact}</span></div>)}
+        <div className="lhc-harness-runtime"><span>{facts[0]}</span></div>
+        <div className="lhc-harness-catalog"><span>{facts[1]}</span></div>
+        <button className="lhc-harness-sessions" type="button" onClick={onSessions}>
+          <BrainCircuit aria-hidden size={13} strokeWidth={1.8} />
+          <span>{sessions} indexed</span>
+        </button>
       </div>
-      {notice ? <p className="lhc-harness-notice">{notice}</p> : null}
+      {setupControl ? <div className="lhc-harness-setup">{setupControl}</div> : !harness.configured ? <div className="lhc-harness-setup"><small>{harness.installRequirement}</small></div> : null}
       <footer>{actions}</footer>
     </section>
   );
 }
 
-function deepcodeModelsLabel(count: number): string {
-  if (!count) return "No DeepSeek route is enabled in Codex";
-  return `${count} DeepSeek model${count === 1 ? "" : "s"} available in Codex`;
+function bridgeForHarness(id: HarnessId, snapshot?: AgentBridgeSnapshot): AgentBridgeDescriptor | undefined {
+  const bridgeId = id === "claude" ? "anthropic" : id === "cursor" || id === "gemini" ? id : undefined;
+  return bridgeId ? snapshot?.bridges.find((bridge) => bridge.id === bridgeId) : undefined;
+}
+
+function HarnessMark({ id }: { id: HarnessId }) {
+  const logo = CLIENT_LOGOS[id];
+  return (
+    <span
+      className={`lhc-harness-logo is-${logo.mode}`}
+      data-client-logo={id}
+      style={{
+        "--lhc-client-logo": `url("${logo.light}")`,
+        "--lhc-client-logo-dark": `url("${logo.dark || logo.light}")`,
+      } as CSSProperties}
+    />
+  );
+}
+
+function clientFacts(harness: HarnessDescriptor, modelCount: number): string[] {
+  const client = harness.cliInstalled
+    ? harness.cliVersion || "CLI detected"
+    : harness.appInstalled ? "Desktop app detected" : "Client not detected";
+  const config = harness.id === "cursor"
+    ? harness.configured ? `${modelCount} available` : "Ready after setup"
+    : harness.configured ? `${modelCount} published` : "Not published";
+  return [client, config];
+}
+
+function cursorTunnelHelp(harness: HarnessDescriptor): string {
+  if (!harness.tunnel?.binaryInstalled) {
+    return "One guided setup installs the connector, opens Cloudflare authorization, publishes every selected model, verifies it, and reopens Cursor.";
+  }
+  if (!harness.tunnel.loggedIn) {
+    return "Click Connect Cursor once, then authorize a domain in the browser. Setup resumes here automatically.";
+  }
+  return "Click Connect Cursor. The app chooses a private connector hostname, publishes every selected model, verifies it, and reopens Cursor.";
 }

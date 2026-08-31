@@ -30,6 +30,9 @@ import {
 } from "./compaction-checkpoint.mjs";
 import { handlePanelRequest, isPanelRoute } from "./desktop-panel.mjs";
 import { handleGeminiRequest, isGeminiRoute } from "./gemini-surface.mjs";
+import { handleCursorRequest, isCursorRoute } from "./cursor-surface.mjs";
+import { handleClaudeRequest, isClaudeRoute } from "./claude-surface.mjs";
+import { routedClientModels } from "./routed-client-models.mjs";
 import {
   applyKeepAliveTimeouts,
   copyResponseHeaders,
@@ -4891,6 +4894,30 @@ async function handleRequest(request, response) {
   // Behind the caller capability, like every other local endpoint: the panel
   // reads the same data the tray does, so it is gated the same way.
   if (isPanelRoute(route) && (await handlePanelRequest(request, response, route, { writeJson }))) {
+    return;
+  }
+
+  // Cursor has two different client protocols. The desktop app reaches the
+  // OpenAI-compatible `/cursor/v1` leaf, while Cursor Agent uses its Connect
+  // control plane. Both translate and re-enter this router's `/v1/responses`
+  // path, so providers, retries, failover, accounting, and caller authority
+  // remain shared with every other client.
+  if (isCursorRoute(route)) {
+    await handleCursorRequest(request, response, route, {
+      responsesUrl: `${callerBaseUrl(LISTEN_PORT, CALLER_KEY)}/responses`,
+      routedModels: routedClientModels,
+    });
+    return;
+  }
+
+  // Claude Code speaks Anthropic Messages. This leaf translates that protocol
+  // and re-enters the canonical Responses path, so routing, failover, usage,
+  // and provider credentials stay on the same shared plane as every client.
+  if (isClaudeRoute(route)) {
+    await handleClaudeRequest(request, response, route, {
+      responsesUrl: `${callerBaseUrl(LISTEN_PORT, CALLER_KEY)}/responses`,
+      routedModels: routedClientModels,
+    });
     return;
   }
 

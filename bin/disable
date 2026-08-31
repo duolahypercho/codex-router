@@ -14,6 +14,12 @@ retire_service_if_unused() {
     node src/service.mjs uninstall
     echo "No client integrations remain, so the background service was removed."
   else
+    if [ "${MODEL_ROUTER_TARGET:-codex}" = cursor ]; then
+      # The Cursor public edge is a child of the shared service. Restart the
+      # service after removing its marker so the externally tunneled listener
+      # does not survive while another local client keeps the plane alive.
+      node src/service.mjs install
+    fi
     echo "The background service is still running for: $remaining."
   fi
 }
@@ -37,5 +43,15 @@ case "${MODEL_ROUTER_TARGET:-codex}" in
     echo "The router's managed block was removed from Gemini CLI's environment file."
     echo "Every other line in that file, and its settings.json, were left untouched."
     ;;
-  *) echo "MODEL_ROUTER_TARGET must be codex, dsh, or gemini." >&2; exit 2 ;;
+  cursor)
+    node src/cursor-config-manager.mjs uninstall >/dev/null
+    retire_service_if_unused
+    echo "The router's models and endpoint were removed from Cursor; unrelated Cursor settings were preserved."
+    ;;
+  claude)
+    node src/claude-code-config-manager.mjs uninstall >/dev/null
+    retire_service_if_unused
+    echo "The router-owned claude-router launcher was removed; Claude Code settings were untouched."
+    ;;
+  *) echo "MODEL_ROUTER_TARGET must be codex, dsh, gemini, cursor, or claude." >&2; exit 2 ;;
 esac

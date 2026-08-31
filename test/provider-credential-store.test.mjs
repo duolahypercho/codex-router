@@ -357,7 +357,7 @@ test("credential references written by every client resolve through the shared r
       resolved: credential?.value === "TEST_SHARED_PLANE_SECRET",
     }));
   `;
-  for (const client of ["codex", "dsh", "gemini"]) {
+  for (const client of ["codex", "dsh", "gemini", "cursor"]) {
     const result = JSON.parse(execFileSync(process.execPath, [
       "--input-type=module",
       "--eval",
@@ -377,7 +377,7 @@ test("credential references written by every client resolve through the shared r
     });
   }
   const stored = JSON.parse(readFileSync(storePath, "utf8"));
-  assert.equal(stored.credentials.length, 3);
+  assert.equal(stored.credentials.length, 4);
   assert.deepEqual(new Set(stored.credentials.map((entry) => entry.secretRef.target)), new Set(["codex"]));
 });
 

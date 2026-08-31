@@ -14,9 +14,12 @@ import { fileURLToPath } from "node:url";
 import {
   authenticatedRoute,
   callerBaseUrl,
+  claudeBaseUrl,
+  cursorCliBaseUrl,
   geminiBaseUrl,
   isManagedCallerBaseUrl,
   isManagedCodexBaseUrl,
+  isManagedClaudeBaseUrl,
   isManagedGeminiBaseUrl,
   redactCallerUrl,
 } from "../src/caller-auth.mjs";
@@ -96,6 +99,27 @@ test("the gemini leaf sits behind the same capability and is redacted with it", 
   assert.equal(isManagedGeminiBaseUrl(`${baseUrl}?key=x`, 46192), false);
 });
 
+test("the Claude gateway leaf sits behind and redacts the same capability", () => {
+  const baseUrl = claudeBaseUrl(46192, CALLER_KEY);
+  assert.equal(baseUrl, `http://127.0.0.1:46192/_codex-router/${CALLER_KEY}/anthropic`);
+  assert.equal(isManagedClaudeBaseUrl(baseUrl, 46192), true);
+  assert.equal(isManagedClaudeBaseUrl(baseUrl, 4102), false);
+  assert.equal(
+    redactCallerUrl(`${baseUrl}/v1/messages`),
+    "http://127.0.0.1:46192/_codex-router/[REDACTED]/anthropic/v1/messages",
+  );
+});
+
+test("Cursor Agent uses the capability root and it is redacted", () => {
+  const baseUrl = cursorCliBaseUrl(46192, CALLER_KEY);
+  assert.equal(baseUrl, `http://127.0.0.1:46192/_codex-router/${CALLER_KEY}`);
+  assert.equal(redactCallerUrl(baseUrl), "http://127.0.0.1:46192/_codex-router/[REDACTED]");
+  assert.equal(
+    authenticatedRoute(`/_codex-router/${CALLER_KEY}/agent.v1.AgentService/RunSSE`, CALLER_KEY),
+    "/agent.v1.AgentService/RunSSE",
+  );
+});
+
 test("secret setup creates stable, separate, current-user-only keys", () => {
   const testRoot = mkdtempSync(path.join(os.tmpdir(), "codex-router-secrets-"));
   const codexHome = path.join(testRoot, "codex");
@@ -116,16 +140,22 @@ test("secret setup creates stable, separate, current-user-only keys", () => {
     );
     const internalPath = path.join(stateDir, "internal-secret");
     const callerPath = path.join(stateDir, "caller-secret");
+    const cursorPublicPath = path.join(stateDir, "cursor-public-secret");
     const internal = readFileSync(internalPath, "utf8").trim();
     const caller = readFileSync(callerPath, "utf8").trim();
+    const cursorPublic = readFileSync(cursorPublicPath, "utf8").trim();
     assert.equal(first.present, true);
     assert.equal(first.internal.present, true);
     assert.equal(first.caller.present, true);
+    assert.equal(first.cursorPublic.present, true);
     assert.notEqual(internal, caller);
+    assert.notEqual(cursorPublic, caller);
     assert.match(internal, /^[A-Za-z0-9_-]{64}$/);
     assert.match(caller, /^[A-Za-z0-9_-]{64}$/);
+    assert.match(cursorPublic, /^[A-Za-z0-9_-]{64}$/);
     assert.equal(privateFileIsProtected(internalPath), true);
     assert.equal(privateFileIsProtected(callerPath), true);
+    assert.equal(privateFileIsProtected(cursorPublicPath), true);
 
     execFileSync(process.execPath, [secretTool, "ensure"], {
       cwd: root,
@@ -134,6 +164,7 @@ test("secret setup creates stable, separate, current-user-only keys", () => {
     });
     assert.equal(readFileSync(internalPath, "utf8").trim(), internal);
     assert.equal(readFileSync(callerPath, "utf8").trim(), caller);
+    assert.equal(readFileSync(cursorPublicPath, "utf8").trim(), cursorPublic);
 
     writeFileSync(callerPath, "invalid\n", { mode: 0o600 });
     execFileSync(process.execPath, [secretTool, "ensure"], {

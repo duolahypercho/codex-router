@@ -13,6 +13,7 @@ import {
 import { protectPrivateFile } from "./file-security.mjs";
 import {
   CALLER_SECRET_PATH,
+  CURSOR_PUBLIC_SECRET_PATH,
   INTERNAL_SECRET_PATH,
   STATE_DIR,
 } from "./paths.mjs";
@@ -65,16 +66,19 @@ if (command === "ensure") {
   chmodSync(STATE_DIR, 0o700);
   ensureSecret(INTERNAL_SECRET_PATH);
   ensureSecret(CALLER_SECRET_PATH);
+  ensureSecret(CURSOR_PUBLIC_SECRET_PATH);
 }
 
 const internal = status(INTERNAL_SECRET_PATH);
 const caller = status(CALLER_SECRET_PATH);
+const cursorPublic = status(CURSOR_PUBLIC_SECRET_PATH);
 process.stdout.write(
   `${JSON.stringify({
-    present: internal.present && caller.present,
+    present: internal.present && caller.present && cursorPublic.present,
     mode: internal.mode,
     internal,
     caller,
+    cursorPublic,
   })}\n`,
 );
-if (!internal.present || !caller.present) process.exitCode = 1;
+if (!internal.present || !caller.present || !cursorPublic.present) process.exitCode = 1;

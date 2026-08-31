@@ -68,13 +68,14 @@ const NAV_ITEMS: Array<{
   label: string;
   description: string;
   icon: typeof Boxes;
+  experimental?: boolean;
 }> = [
   { id: "dashboard", label: "Dashboard", description: "Router at a glance", icon: LayoutDashboard },
   { id: "usage", label: "Usage", description: "Quotas, balance, traffic", icon: CircleGauge },
   { id: "status", label: "Status", description: "Agents, speed, savings, requests", icon: Activity },
   { id: "models", label: "Models", description: "Providers, credentials, and catalog", icon: Boxes },
   { id: "local", label: "Local", description: "Runtime and on-device models", icon: HardDrive },
-  { id: "harness", label: "Harness", description: "Codex and Deep Code", icon: Braces },
+  { id: "harness", label: "Harness", description: "Cursor, Claude, Gemini, DeepSeek, Codex", icon: Braces, experimental: true },
   { id: "context", label: "Context Manager", description: "Sessions across harnesses", icon: BrainCircuit },
   { id: "settings", label: "Settings", description: "Routing and desktop", icon: Settings },
 ];
@@ -419,7 +420,7 @@ export default function App() {
       case "status": return <StatusPage {...shared} health={health} account={accountUsage} providerUsage={providerUsage} />;
       case "models": return <ModelsPage {...shared} catalog={snapshot?.catalog} setup={providers} usage={providerUsage} focusRequest={modelFocusRequest} />;
       case "local": return <LocalPage {...shared} operation={operation} />;
-      case "harness": return <HarnessPage {...shared} />;
+      case "harness": return <HarnessPage {...shared} operation={operation} onNavigate={navigateTo} />;
       case "context": return <ContextPage {...shared} />;
       case "settings": return <SettingsPage {...shared} health={health} presence={presence} chatgptSession={snapshot?.chatgptSession} theme={theme} onTheme={setTheme} language={language} onLanguage={setLanguage} t={t} />;
     }
@@ -453,6 +454,7 @@ export default function App() {
                 <button title={item.description} className={selected ? "is-active" : ""} aria-current={selected ? "page" : undefined} onClick={() => navigateTo(item.id)}>
                   <Icon aria-hidden size={15} strokeWidth={1.7} />
                   <strong>{item.label}</strong>
+                  {item.experimental ? <Badge tone="warning">{t("nav.harness.experimental")}</Badge> : null}
                 </button>
               </div>
             );
@@ -474,7 +476,11 @@ export default function App() {
             </div>
           ) : null}
           {!sidebarOpen ? <button className="titlebar-toggle" type="button" aria-label="Expand sidebar" onClick={() => setSidebarOpen(true)}><PanelLeftOpen aria-hidden size={15} strokeWidth={1.7} /></button> : null}
-          <div className="title-tabs"><strong>{activeMeta.label}</strong><span>Overview</span></div>
+          <div className="title-tabs">
+            <strong>{activeMeta.label}</strong>
+            <span>Overview</span>
+            {activeMeta.experimental ? <Badge tone="warning">{t("nav.harness.experimental")}</Badge> : null}
+          </div>
           <div className="titlebar-spacer" />
           {operation?.status === "started" ? <span className="title-operation"><LoaderCircle aria-hidden size={12} strokeWidth={1.7} className="spin" />{operation.message || operation.action}</span> : null}
           <button className="title-refresh" type="button" aria-label="Refresh all data" disabled={refreshing} onClick={() => void refreshAll()}><RefreshCw aria-hidden size={13} strokeWidth={1.7} className={refreshing ? "spin" : ""} /></button>
