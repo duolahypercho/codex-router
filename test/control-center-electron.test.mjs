@@ -874,6 +874,38 @@ test("background usage polling is conservative while manual refresh stays immedi
   assert.doesNotMatch(source, /downloadTimer = window\.setInterval\([\s\S]{0,160}refreshCore/);
 });
 
+test("provider usage reads outlive optional account refreshes", async () => {
+  const source = await readFile(new URL("../apps/control-center/electron/ipc.mjs", import.meta.url), "utf8");
+  assert.match(source, /const PROVIDER_USAGE_TIMEOUT_MS = 120_000/);
+  assert.match(
+    source,
+    /handle\("getProviderUsage"[\s\S]{0,180}\["provider-usage"\][\s\S]{0,120}PROVIDER_USAGE_TIMEOUT_MS/,
+  );
+  assert.match(
+    source,
+    /providerUsage: await runJson\([\s\S]{0,120}\["provider-usage"\][\s\S]{0,120}PROVIDER_USAGE_TIMEOUT_MS/,
+  );
+  assert.doesNotMatch(source, /\["provider-usage"\], \{ timeoutMs: 20_000 \}/);
+});
+
+test("dashboard presents traffic statistics before route and service controls", async () => {
+  const source = await readFile(new URL("../apps/control-center/src/pages/DashboardPage.tsx", import.meta.url), "utf8");
+  const positions = {
+    summary: source.indexOf('className="db-summary-grid"'),
+    traffic: source.indexOf('className="db-traffic-grid"'),
+    activity: source.indexOf("<TokenActivity"),
+    breakdown: source.indexOf('className="db-panel-grid db-dashboard-details"'),
+    events: source.indexOf('className="panel-section db-events-panel"'),
+    routes: source.indexOf("<RouteDashboardPanel"),
+    health: source.indexOf("<ServiceHealthPanel"),
+  };
+  assert.ok(Object.values(positions).every((position) => position >= 0), "every dashboard section should be present");
+  assert.deepEqual(
+    Object.entries(positions).sort((left, right) => left[1] - right[1]).map(([name]) => name),
+    ["summary", "traffic", "activity", "breakdown", "events", "routes", "health"],
+  );
+});
+
 test("preload exposes only the named control operations", async () => {
   const source = await readFile(new URL("../apps/control-center/electron/preload.cjs", import.meta.url), "utf8");
   for (const method of [

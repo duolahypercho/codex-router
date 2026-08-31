@@ -334,12 +334,6 @@ export function DashboardPage({
         <InlineNotice tone="danger" title="Router health check failed">{health.error}</InlineNotice>
       ) : null}
 
-      {healthPending ? (
-        <SkeletonBlock className="db-skeleton-health" />
-      ) : (
-        <ServiceHealthPanel health={health} compact onOpen={() => onNavigate("status")} />
-      )}
-
       <div className="db-summary-grid" role="list" aria-label="Router summary">
         {tiles.map((tile) => {
           const Icon = tile.icon;
@@ -428,14 +422,6 @@ export function DashboardPage({
         loading={snapshotPending && !providerUsage}
       />
 
-      <RouteDashboardPanel
-        providers={routeProviders}
-        routeMutations={routeMutations}
-        api={api}
-        onNavigate={onNavigate}
-        loading={routesPending}
-      />
-
       <div className="db-panel-grid db-dashboard-details">
         <section className="panel-section db-breakdown-panel">
           <SectionHeading
@@ -497,6 +483,20 @@ export function DashboardPage({
           />
         )}
       </section>
+
+      <RouteDashboardPanel
+        providers={routeProviders}
+        routeMutations={routeMutations}
+        api={api}
+        onNavigate={onNavigate}
+        loading={routesPending}
+      />
+
+      {healthPending ? (
+        <SkeletonBlock className="db-skeleton-health" />
+      ) : (
+        <ServiceHealthPanel health={health} compact onOpen={() => onNavigate("status")} />
+      )}
     </div>
   );
 }

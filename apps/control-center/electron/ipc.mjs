@@ -60,6 +60,13 @@ const SESSION_LIST_LIMIT = 500;
 // lock wait and the build itself; killing the lock holder at the old 30/120s
 // limits would strand a stale lock and force a rollback to race recovery.
 const CATALOG_MUTATION_TIMEOUT_MS = 330_000;
+// Provider usage combines the local retained ledger with optional account
+// quota reads. OAuth refreshes alone may take 30 seconds, and a rejected token
+// can require a second refresh before the provider answers. Keep this aligned
+// with the control command's 120-second default: timing it out at 20 seconds
+// discards the already-computed ledger and makes the dashboard fall back to
+// its latest 1,000 event details.
+const PROVIDER_USAGE_TIMEOUT_MS = 120_000;
 // Five live checks, two of them a full Codex parent-and-child turn. The
 // catalog ceiling is not enough headroom for a slow provider, and a timeout
 // here reads to the operator as "your model failed" when it did not.
@@ -1088,7 +1095,10 @@ export function registerIpcHandlers({
     }
   });
   handle("getAccountUsage", async () => runJson(["account"], { timeoutMs: 20_000 }));
-  handle("getProviderUsage", async () => runJson(["provider-usage"], { timeoutMs: 20_000 }));
+  handle("getProviderUsage", async () => runJson(
+    ["provider-usage"],
+    { timeoutMs: PROVIDER_USAGE_TIMEOUT_MS },
+  ));
   handle("getLocalModels", async () => runJson(["local-models", "list", "--json"], { timeoutMs: 20_000 }));
   handle("getVisionBridge", async () => runJson(["vision-bridge", "status"], { timeoutMs: 20_000 }));
   handle("getToolResultAging", async () => runJson(["tool-result-aging", "status"], { timeoutMs: 20_000 }));
@@ -1166,7 +1176,10 @@ export function registerIpcHandlers({
     snapshot: await snapshot(),
     providers: await runJson(["providers"]),
     accountUsage: await runJson(["account"], { timeoutMs: 20_000 }),
-    providerUsage: await runJson(["provider-usage"], { timeoutMs: 20_000 }),
+    providerUsage: await runJson(
+      ["provider-usage"],
+      { timeoutMs: PROVIDER_USAGE_TIMEOUT_MS },
+    ),
     localModels: await runJson(["local-models", "list", "--json"], { timeoutMs: 20_000 }),
     visionBridge: await runJson(["vision-bridge", "status"]),
     presence: await runJson(["presence", "status"]),
