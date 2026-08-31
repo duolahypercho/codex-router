@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Muse Spark 1.2 Contributor no longer fails on recursive Codex tool
+  schemas through OpenCode Go.** Console Go rejects the whole Responses turn
+  before inference when this model receives a recursive local JSON-Schema
+  reference. The router now breaks only cycle-closing reference edges for the
+  paid Muse route, preserving definitions, acyclic references, and sibling
+  constraints. Other Console Go Responses models retain their existing schema
+  payloads until they demonstrate the same restriction.
+
 - **OpenCode Console Go chat models no longer reject ambient hosted-search
   options.** Codex can attach `web_search_options` even when the selected
   OpenCode Go model does not advertise hosted search; Console Go forwards the
