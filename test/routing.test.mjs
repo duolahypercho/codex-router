@@ -6794,30 +6794,44 @@ test("router normalizes forced tool choices before LiteLLM for auto-tool-choice 
 
     // LiteLLM does its Responses -> Chat Completions translation after the
     // router, so this must already be auto when it reaches the gateway.
-    const required = await route("ollama-cloud/minimax-m3", "required");
-    assert.equal(required.model, "ollama-cloud-minimax-m3");
-    assert.equal(required.tool_choice, "auto");
+    for (const [slug, gatewayModel] of [
+      ["ollama-cloud/minimax-m3", "ollama-cloud-minimax-m3"],
+      ["commandcode/muse-spark-1.2", "commandcode-muse-spark-1-2"],
+      [
+        "opencode-go-responses/muse-spark-1.2-contributor",
+        "opencode-go-responses-muse-spark-1-2-contributor",
+      ],
+    ]) {
+      const required = await route(slug, "required");
+      assert.equal(required.model, gatewayModel);
+      assert.equal(required.tool_choice, "auto");
+    }
 
     // The collaboration relay uses an object form; it has the same upstream
     // restriction and therefore must not survive the Responses hop either.
-    const forcedFunction = await route("ollama-cloud/minimax-m3", {
-      type: "function",
-      name: "relay_external_agent_payload",
-    });
-    assert.equal(forcedFunction.tool_choice, "auto");
+    for (const slug of ["ollama-cloud/minimax-m3", "commandcode/muse-spark-1.2"]) {
+      const forcedFunction = await route(slug, {
+        type: "function",
+        name: "relay_external_agent_payload",
+      });
+      assert.equal(forcedFunction.tool_choice, "auto");
+    }
 
     // Suppressing tools is not forcing one, and remains necessary for turns
     // such as compaction that deliberately disable tools.
-    const suppressed = await route("ollama-cloud/minimax-m3", "none");
+    const suppressed = await route("commandcode/muse-spark-1.2", "none");
     assert.equal(suppressed.tool_choice, "none");
 
-    const absent = await route("ollama-cloud/minimax-m3");
+    const absent = await route("commandcode/muse-spark-1.2");
     assert.equal("tool_choice" in absent, false);
 
-    // The profile remains model-scoped: other Ollama Cloud models preserve a
-    // forced choice so their capability probe and collaboration relay work.
-    const sibling = await route("ollama-cloud/glm-5.2", "required");
-    assert.equal(sibling.tool_choice, "required");
+    // The profile remains model-scoped: siblings behind both providers
+    // preserve a forced choice so their capability probes and collaboration
+    // relays keep the stronger contract they support.
+    for (const slug of ["ollama-cloud/glm-5.2", "commandcode/gpt-5.6-sol"]) {
+      const sibling = await route(slug, "required");
+      assert.equal(sibling.tool_choice, "required");
+    }
   } finally {
     await stopChild(router);
     await closeServer(gateway.server);

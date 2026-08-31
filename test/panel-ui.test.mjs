@@ -387,6 +387,22 @@ test("the macOS tray panel follows the system appearance", () => {
   );
 });
 
+test("the macOS tray does not redraw a hidden or unchanged settings tree", () => {
+  const source = readFileSync(
+    path.join(root, "apps", "macos", "ModelRouterTray", "Sources", "ModelRouterTrayApp.swift"),
+    "utf8",
+  );
+  const closePanel = source.match(/private func closePanel\(\)[\s\S]*?\r?\n  }/)?.[0];
+  const refreshActivity = source.match(/private func refreshActivity\(\)[\s\S]*?\r?\n  }\r?\n\r?\n  private func recordActivityHealthFailure/)?.[0];
+
+  assert.ok(closePanel, "tray close helper should be readable");
+  assert.match(closePanel, /panel\.contentViewController = nil/);
+  assert.ok(refreshActivity, "activity refresh helper should be readable");
+  assert.match(refreshActivity, /if routerHealth != health \{ routerHealth = health \}/);
+  assert.match(source, /private struct RouterHealth: Decodable, Equatable/);
+  assert.match(source, /private struct RouterActivity: Decodable, Equatable/);
+});
+
 test("the macOS tray provider toggle uses the atomic selection command", () => {
   const swift = readFileSync(
     path.join(root, "apps", "macos", "ModelRouterTray", "Sources", "ModelRouterTrayApp.swift"),

@@ -38,7 +38,8 @@
       "inputModalities": [
         "text"
       ],
-      "compHash": "nousresearch-muse-spark-1-2-contributor-v1"
+      "requestProfile": "auto-tool-choice",
+      "compHash": "nousresearch-muse-spark-1-2-contributor-v2"
     }
   ]
 }

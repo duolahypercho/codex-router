@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { commandOnPath, spawnableCommand } from "./spawnable-command.mjs";
+import { inheritedProxyEnvironment } from "./proxy-environment.mjs";
 
 // Installing a third-party CLI globally through npm, and finding the binary
 // afterwards. Extracted from provider-onboarding.mjs when the harness needed
@@ -15,11 +16,29 @@ import { commandOnPath, spawnableCommand } from "./spawnable-command.mjs";
 // Node's own directory has to be on PATH for the npm shim to find the runtime
 // it re-execs. A launchd/systemd service inherits neither a login shell's PATH
 // nor a terminal's.
-export function spawnEnvironment() {
+export function spawnEnvironment(
+  environment = process.env,
+  { recorded, manifestPath, execArgv = process.execArgv } = {},
+) {
+  // Provider CLIs are launched by tray/control processes, not only by the
+  // background service. A desktop launch can inherit neither the proxy address
+  // nor Node's opt-in even though the install manifest records both. Restore
+  // that explicit install decision before an OAuth CLI tries to fetch its
+  // discovery document; otherwise it waits before it can open the browser and
+  // the tray looks permanently stuck on "Finish sign-in in browser".
+  const restoredProxy = inheritedProxyEnvironment(environment, {
+    recorded,
+    manifestPath,
+    execArgv,
+  });
+  const effectiveEnvironment = { ...environment, ...restoredProxy };
   const nodeDir = path.dirname(process.execPath);
-  const existing = process.env.PATH || "";
-  if (existing.split(path.delimiter).includes(nodeDir)) return process.env;
-  return { ...process.env, PATH: existing ? `${nodeDir}${path.delimiter}${existing}` : nodeDir };
+  const existing = effectiveEnvironment.PATH || "";
+  if (existing.split(path.delimiter).includes(nodeDir)) return effectiveEnvironment;
+  return {
+    ...effectiveEnvironment,
+    PATH: existing ? `${nodeDir}${path.delimiter}${existing}` : nodeDir,
+  };
 }
 
 export function npmPath() {

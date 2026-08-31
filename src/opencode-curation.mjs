@@ -50,6 +50,7 @@ const OPENCODE_FREE_MODELS = Object.freeze({
     contextWindow: 1_048_576,
     outputLimit: 131_072,
     reasoningLevels: Object.freeze(["minimal", "low", "medium", "high", "xhigh"]),
+    requestProfile: "auto-tool-choice",
     summary:
       "Muse Spark 1.2 Contributor Free through OpenCode Zen's anonymous Responses route.",
     contextNote:
@@ -367,6 +368,13 @@ export function curatedModelOutputLimit(providerId, upstreamModel) {
 export function curatedModelReasoningLevels(providerId, upstreamModel) {
   const levels = curatedModelRecord(providerId, upstreamModel)?.reasoningLevels;
   return levels ? [...levels] : undefined;
+}
+
+// A documented, model-specific wire repair for curated routes. This is kept
+// beside the same exact-id metadata as context and effort because applying it
+// provider-wide would weaken forced tool choices for unrelated models.
+export function curatedModelRequestProfile(providerId, upstreamModel) {
+  return curatedModelRecord(providerId, upstreamModel)?.requestProfile;
 }
 
 // The picker text that carries the sourcing for every value this module knows

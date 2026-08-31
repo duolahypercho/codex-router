@@ -28,12 +28,14 @@ import {
   curatedModelDescription,
   curatedModelProviderId,
   curatedModelReasoningLevels,
+  curatedModelRequestProfile,
 } from "./opencode-curation.mjs";
 import {
   applyModelOverlayPublication,
   transactModelOverlayMutation,
 } from "./model-overlay-publication.mjs";
 import {
+  forgetModelVisibility,
   migrateModelVisibility,
   MODEL_PICKER_STATE_PATH,
   setModelsVisible,
@@ -252,6 +254,12 @@ export function normalizeCurationModels(models, providerId) {
       : undefined;
     const upgradeEfforts =
       Boolean(efforts) && untuned && hasDefaultUserModelReasoning(routed);
+    // A missing profile is another conservative default. Unlike sizing and
+    // effort metadata, this is a wire-compatibility repair: add a documented
+    // exact-model profile even when the operator tuned other metadata, while
+    // preserving any different non-empty profile they selected themselves.
+    const documentedProfile = curatedModelRequestProfile(providerId, model.upstreamModel);
+    const upgradeProfile = Boolean(documentedProfile) && !routed.requestProfile;
     // The stock description says the entry carries conservative defaults, so
     // it stops being true the moment any of them is upgraded. Replace it with
     // the sourcing note only while it is still the untouched stock string;
@@ -264,11 +272,12 @@ export function normalizeCurationModels(models, providerId) {
       // string naming the provider it was curated under, so accept either.
       (routed.description === defaultUserModelDescription(routed.provider) ||
         routed.description === defaultUserModelDescription(model.provider));
-    const sized = upgradeSizing || upgradeEfforts
+    const sized = upgradeSizing || upgradeEfforts || upgradeProfile
       ? {
           ...routed,
           ...(upgradeSizing ? documented : {}),
           ...(upgradeEfforts ? efforts : {}),
+          ...(upgradeProfile ? { requestProfile: documentedProfile } : {}),
           ...(upgradeDescription ? { description: documentedDescription } : {}),
         }
       : routed;
@@ -559,6 +568,8 @@ async function main() {
   // can still be selected explicitly below.
   const requestProfileFor = (id) => {
     if (flagRequestProfile) return flagRequestProfile;
+    const documentedProfile = curatedModelRequestProfile(providerId, id);
+    if (documentedProfile) return documentedProfile;
     if (inheritedProfile) return inheritedProfile;
     if (!interactive) return undefined;
     // Defaults to no: this weakens a forced tool choice into a request the
@@ -626,6 +637,10 @@ async function main() {
       to: normalizedByUpstream.get(model.upstreamModel)?.slug,
     }))
     .filter(({ from, to }) => to && from !== to);
+  const retainedUpstreams = new Set(nextMine.map((model) => model.upstreamModel));
+  const pickerRemovals = storedMine
+    .filter((model) => !retainedUpstreams.has(model.upstreamModel))
+    .map((model) => model.slug);
 
   const wantsApply =
     !noApply && (
@@ -648,6 +663,7 @@ async function main() {
         expectedMine: storedMine,
         nextMine,
       }));
+      if (pickerRemovals.length) forgetModelVisibility(pickerRemovals);
       if (pickerMigrations.length) migrateModelVisibility(pickerMigrations);
       if (pickerSelections.length) setModelsVisible(pickerSelections, true);
     },

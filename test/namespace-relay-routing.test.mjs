@@ -1919,13 +1919,16 @@ function goCompatibilityRequestPayload(
 }
 
 function goProviderCalls(body) {
+  const longTool = body.tools.find(
+    (tool) => tool.type === "function" && tool.parameters?.properties?.branch,
+  );
   const patchTool = body.tools.find(
     (tool) => tool.type === "function" && tool.parameters?.properties?.input,
   );
   return [
     {
       type: "function_call",
-      name: body.tool_choice.name,
+      name: body.tool_choice?.name || longTool.name,
       call_id: "call-long",
       arguments: '{"branch":"main"}',
     },
@@ -2106,9 +2109,10 @@ test("OpenCode Go Muse removes recursive tool refs in both response modes", asyn
       outgoing.model,
       "opencode-go-responses-muse-spark-1-2-contributor",
     );
+    assert.equal(outgoing.tool_choice, "auto");
 
     const liveTool = outgoing.tools.find(
-      (tool) => tool.name === outgoing.tool_choice.name,
+      (tool) => tool.parameters?.properties?.branch,
     );
     assert.equal(liveTool.parameters.properties.node.$ref, "#/$defs/node");
     assert.deepEqual(liveTool.parameters.$defs.node.properties.child, {});

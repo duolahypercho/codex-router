@@ -34,6 +34,20 @@ import {
   chatGptSessionStatus,
   setChatGptSessionSharingFromControl,
 } from "./chatgpt-session-control.mjs";
+import { inheritedProxyEnvironment } from "./proxy-environment.mjs";
+import { installStableFetchTransport } from "./fetch-transport.mjs";
+
+// The tray launches this control process from the desktop session, which can
+// be silent about the proxy even when installation explicitly recorded one.
+// Restore that decision before any dynamically imported network client builds
+// its dispatcher. This keeps OAuth login and the provider-usage refresh that
+// follows it on the same path instead of reconnecting successfully and then
+// immediately reporting a direct-connect timeout.
+const restoredProxyEnvironment = inheritedProxyEnvironment();
+for (const [name, value] of Object.entries(restoredProxyEnvironment)) {
+  process.env[name] = value;
+}
+installStableFetchTransport();
 
 // Cross-target control plane for a tray/UI (e.g. the planned pane fork). It
 // reads which registry models are enabled per target and toggles them. Toggling
