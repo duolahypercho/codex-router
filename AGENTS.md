@@ -223,8 +223,11 @@ settings, and leave Cursor stopped so the user can reopen it cleanly.
    launcher, catalog freshness, caller capability, separate public-edge key,
    service, router health, and selected credentials must be `OK`.
 5. Tell the user to run `cursor-router-agent` for Cursor Agent and to reopen
-   Cursor App and choose a `codex_router/...` model. The app override is global, so
-   they should turn it off before returning to Cursor-managed models.
+   Cursor App and choose a `codex_router/readable_name__digest/effort` model.
+   The neutralized name avoids Cursor's built-in-substring BYOK rejection, and
+   the suffix is how the user changes effort because Cursor gives ordinary
+   user-added models no native parameter controls. The app override is global,
+   so they should turn it off before returning to Cursor-managed models.
 6. Cursor Agent text turns and its local read, shell, edit, and write loop are
    supported. The adapter sends typed controlled-exec messages back to the
    official client, which performs the operation under Cursor's own permission
@@ -1366,9 +1369,13 @@ against Cursor Agent `2026.08.25-3e8eec8` and Cursor App `3.16.17`.
    translates both Chat Completions and Responses-shaped bodies, and re-enters
    the canonical router path. The main router port stays loopback-only.
 4. **Cursor's override is global.** Enabling it can also send Cursor-managed
-   model slugs to the custom edge. Routed models use `codex_router/...`
-   aliases so Claude/Gemini names do not select another BYOK provider; turn the
-   override off when returning to Cursor-managed models.
+   model slugs to the custom edge. Routed models use collision-safe
+   `codex_router/readable_name__digest/effort` aliases because Cursor rejects a
+   custom BYOK id containing a built-in model id before it reaches the edge.
+   Cursor gives user-added models no stable native parameter metadata, so each
+   supported reasoning effort is a separate picker row and the edge restores
+   it as `reasoning.effort`. Turn the override off when returning to
+   Cursor-managed models.
 5. **Cursor must be stopped for settings writes.** The manager transactionally
    updates the application-user JSON in `state.vscdb`, preserves unrelated
    state, records its owned aliases, and reverses only its own changes. A live

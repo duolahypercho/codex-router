@@ -8,7 +8,11 @@ import {
 
 import { readRequestBody, writeJson } from "./http-utils.mjs";
 import { directLoopbackFetch } from "./fetch-transport.mjs";
-import { cursorModelId, cursorRoutedSlug } from "./cursor-model-id.mjs";
+import {
+  cursorCatalogSelections,
+  cursorRoutedSlug,
+  resolveCursorModel,
+} from "./cursor-model-id.mjs";
 import {
   bytesField,
   connectEnvelope,
@@ -158,21 +162,30 @@ function cursorModels(routedModels) {
   }));
 }
 
-function defaultCursorModel(models) {
-  return [...models].sort(
+function cursorSelections(routedModels) {
+  return cursorCatalogSelections(cursorModels(routedModels));
+}
+
+function defaultCursorSelection(selections) {
+  const ranked = [...selections].sort(
     (left, right) =>
-      (right.priority ?? 0) - (left.priority ?? 0) || left.slug.localeCompare(right.slug),
-  )[0];
+      (right.model?.priority ?? 0) - (left.model?.priority ?? 0) ||
+      left.slug.localeCompare(right.slug),
+  );
+  const model = ranked[0]?.model;
+  return ranked.find((selection) =>
+    selection.model === model && selection.effort === model?.defaultEffort
+  ) || ranked.find((selection) => selection.model === model);
 }
 
 function assertRoutedCursorModel(model, routedModels) {
-  const slug = cursorRoutedSlug(model);
-  if (!cursorModels(routedModels).some((candidate) => candidate.slug === slug)) {
+  const selection = resolveCursorModel(model, cursorModels(routedModels));
+  if (!selection) {
     throw Object.assign(new Error(`${model || "The requested model"} is not published to Cursor.`), {
       status: 404,
     });
   }
-  return slug;
+  return selection;
 }
 
 function responseText(payload) {
@@ -270,13 +283,21 @@ function userInputContent(content) {
 export function cursorChatToResponses(payload) {
   const model = cursorRoutedSlug(payload?.model);
   if (!model) throw Object.assign(new Error("Cursor did not name a model."), { status: 400 });
+  const reasoning = payload?.reasoning?.effort
+    ? payload.reasoning
+    : payload?.reasoning_effort
+      ? { effort: payload.reasoning_effort }
+      : undefined;
   if (!Array.isArray(payload?.messages)) {
-    return {
+    const converted = {
       ...payload,
       model,
       stream: false,
       tools: chatTools(payload?.tools),
+      ...(reasoning ? { reasoning } : {}),
     };
+    delete converted.reasoning_effort;
+    return converted;
   }
 
   const input = [];
@@ -340,6 +361,7 @@ export function cursorChatToResponses(payload) {
       ? { max_output_tokens: payload.max_completion_tokens || payload.max_tokens }
       : {}),
     ...(payload.temperature !== undefined ? { temperature: payload.temperature } : {}),
+    ...(reasoning ? { reasoning } : {}),
     ...(chatTools(payload.tools) ? { tools: chatTools(payload.tools) } : {}),
     ...(payload.tool_choice !== undefined ? { tool_choice: chatToolChoice(payload.tool_choice) } : {}),
     stream: false,
@@ -417,8 +439,8 @@ async function callResponses(responsesUrl, payload, signal) {
 
 async function handleCursorApp(request, response, route, { responsesUrl, routedModels }) {
   if (request.method === "GET" && ["/cursor/models", "/cursor/v1/models"].includes(route)) {
-    const data = cursorModels(routedModels).map((model) => ({
-      id: cursorModelId(model.slug),
+    const data = cursorSelections(routedModels).map((selection) => ({
+      id: selection.alias,
       object: "model",
       owned_by: "codex-router",
     }));
@@ -431,8 +453,11 @@ async function handleCursorApp(request, response, route, { responsesUrl, routedM
   const encoded = await readRequestBody(request, { maxBytes: MAX_CURSOR_BODY_BYTES });
   const body = jsonBody(decodedRequestBody(encoded, request.headers));
   const requestedModel = String(body.model || "");
-  const payload = cursorChatToResponses(body);
-  payload.model = assertRoutedCursorModel(payload.model, routedModels);
+  const selection = assertRoutedCursorModel(requestedModel, routedModels);
+  const payload = cursorChatToResponses({ ...body, model: selection.slug });
+  if (selection.effort) {
+    payload.reasoning = { ...(payload.reasoning || {}), effort: selection.effort };
+  }
   const controller = new AbortController();
   request.once("aborted", () => controller.abort());
   try {
@@ -448,13 +473,14 @@ async function handleCursorApp(request, response, route, { responsesUrl, routedM
   return true;
 }
 
-function modelDetails(model) {
-  const id = cursorModelId(model.slug);
+function modelDetails(selection) {
+  const id = selection.alias;
+  const displayName = selection.displayName || selection.model?.displayName || selection.slug;
   return Buffer.concat([
     encodeStringField(1, id),
     encodeStringField(3, id),
-    encodeStringField(4, `${model.displayName} (Codex Router)`),
-    encodeStringField(5, `${model.displayName} (Codex Router)`),
+    encodeStringField(4, `${displayName} (Codex Router)`),
+    encodeStringField(5, `${displayName} (Codex Router)`),
     encodeStringField(6, id),
   ]);
 }
@@ -839,7 +865,11 @@ async function maybeRunSession(session, responsesUrl, routedModels) {
   session.running = true;
   try {
     if (!request.model) throw Object.assign(new Error("Cursor did not select a routed model."), { status: 400 });
-    request.model = assertRoutedCursorModel(request.model, routedModels);
+    const selection = assertRoutedCursorModel(request.model, routedModels);
+    request.model = selection.slug;
+    if (selection.effort) {
+      request.reasoning = { ...(request.reasoning || {}), effort: selection.effort };
+    }
     const usage = {
       input_tokens: 0,
       output_tokens: 0,
@@ -895,12 +925,13 @@ async function handleCursorCli(request, response, route, { responsesUrl, routedM
   }
   if (request.method !== "POST") return false;
   const models = cursorModels(routedModels);
+  const selections = cursorCatalogSelections(models);
   if (CLI_USABLE_MODELS_PATHS.has(route)) {
-    writeProto(response, usableModels(models));
+    writeProto(response, usableModels(selections));
     return true;
   }
   if (CLI_DEFAULT_MODEL_PATHS.has(route)) {
-    writeProto(response, defaultModel(defaultCursorModel(models)));
+    writeProto(response, defaultModel(defaultCursorSelection(selections)));
     return true;
   }
   if (route === "/aiserver.v1.ServerConfigService/GetServerConfig") {

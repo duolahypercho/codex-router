@@ -667,7 +667,7 @@ async function main() {
           `For native GPT models, run \`codex login\`, then \`./bin/model-router codex chatgpt-session enable\` once; that authorization is shared by every local client.\n`
         : cursorTarget
           ? `\nCursor is ready with: ${providerSummary}\n` +
-            `Run \`cursor-router-agent\` for the CLI. Fully quit and reopen Cursor App, then choose a \`codex_router/...\` model.\n` +
+            `Run \`cursor-router-agent --list-models\` for the CLI. Fully quit and reopen Cursor App, then choose a \`codex_router/.../EFFORT\` model.\n` +
             `The HTTPS tunnel must keep forwarding to 127.0.0.1:${(await import("./paths.mjs")).PORTS.cursorPublic}.\n`
         : claudeTarget
           ? `\nClaude Code is ready with: ${providerSummary}\n` +

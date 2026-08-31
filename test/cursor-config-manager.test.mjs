@@ -17,6 +17,7 @@ process.env.MODEL_ROUTER_CURSOR_LAUNCHER = launcherPath;
 
 const { installCursorAgentIntegration, nodeRuntimePath, publishCursorIntegration, removeCursorIntegration } =
   await import("../src/cursor-config-manager.mjs");
+const { cursorModelId } = await import("../src/cursor-model-id.mjs");
 
 const APPLICATION_STATE_KEY =
   "src.vs.platform.reactivestorage.browser.reactiveStorageServiceImpl.persistentStorage.applicationUser";
@@ -79,7 +80,13 @@ test("Cursor publication is additive, private, reversible, and records every rou
     aiSettings: {
       userAddedModels: ["user/model"],
       modelOverrideEnabled: ["user/model"],
-      modelOverrideDisabled: ["codex_router/provider/one"],
+      modelOverrideDisabled: [cursorModelId("provider/one", "low")],
+      modelConfig: {
+        composer: {
+          modelName: "user/model",
+          selectedModels: [{ modelId: "user/model", parameters: [] }],
+        },
+      },
     },
     unrelated: { keep: true },
   };
@@ -93,7 +100,10 @@ test("Cursor publication is additive, private, reversible, and records every rou
       () => publishCursorIntegration({
         origin: "https://127.0.0.1",
         assertStopped: () => {},
-        routedModels: () => ({ engine: "test", models: [{ slug: "provider/one" }] }),
+        routedModels: () => ({
+          engine: "test",
+          models: [{ slug: "provider/one", reasoningLevels: [{ effort: "low" }] }],
+        }),
       }),
       /must not use a loopback/,
     );
@@ -102,19 +112,29 @@ test("Cursor publication is additive, private, reversible, and records every rou
       assertStopped: () => {},
       routedModels: () => ({
         engine: "test",
-        models: [{ slug: "provider/one" }, { slug: "provider/two" }],
+        models: [
+          { slug: "provider/one", reasoningLevels: [{ effort: "low" }, { effort: "high" }] },
+          { slug: "provider/two", reasoningLevels: [{ effort: "medium" }] },
+        ],
       }),
     });
-    assert.deepEqual(result.aliases, ["codex_router/provider/one", "codex_router/provider/two"]);
+    assert.deepEqual(result.aliases, [
+      cursorModelId("provider/one", "low"),
+      cursorModelId("provider/one", "high"),
+      cursorModelId("provider/two", "medium"),
+    ]);
+    assert.equal(result.aliases.every((alias) => !alias.includes("provider/one")), true);
     const published = readApplicationState();
     assert.equal(published.useOpenAIKey, true);
     assert.match(published.openAIBaseUrl, /^https:\/\/cursor\.example\/_codex-router-cursor\//);
     assert.deepEqual(published.aiSettings.userAddedModels, [
       "user/model",
-      "codex_router/provider/one",
-      "codex_router/provider/two",
+      cursorModelId("provider/one", "low"),
+      cursorModelId("provider/one", "high"),
+      cursorModelId("provider/two", "medium"),
     ]);
     assert.deepEqual(published.aiSettings.modelOverrideDisabled, []);
+    assert.equal(published.aiSettings.modelConfig.composer.modelName, "user/model");
     assert.deepEqual(published.unrelated, { keep: true });
     assert.equal(hasRouterPlaceholder(), true);
     const launcher = readFileSync(launcherPath, "utf8");
@@ -128,6 +148,10 @@ test("Cursor publication is additive, private, reversible, and records every rou
     live.aiSettings.userAddedModels = live.aiSettings.userAddedModels
       .filter((model) => model !== "user/model")
       .concat("user/new-model");
+    live.aiSettings.modelConfig.composer = {
+      modelName: result.aliases[1],
+      selectedModels: [{ modelId: result.aliases[1], parameters: [] }],
+    };
     edited.prepare("UPDATE ItemTable SET value = ? WHERE key = ?")
       .run(JSON.stringify(live), APPLICATION_STATE_KEY);
     edited.close();
@@ -138,7 +162,8 @@ test("Cursor publication is additive, private, reversible, and records every rou
     assert.equal(restored.openAIBaseUrl, "https://user.example/v1");
     assert.deepEqual(restored.aiSettings.userAddedModels, ["user/new-model"]);
     assert.deepEqual(restored.aiSettings.modelOverrideEnabled, ["user/model"]);
-    assert.deepEqual(restored.aiSettings.modelOverrideDisabled, ["codex_router/provider/one"]);
+    assert.deepEqual(restored.aiSettings.modelOverrideDisabled, [cursorModelId("provider/one", "low")]);
+    assert.equal(restored.aiSettings.modelConfig.composer.modelName, "user/model");
     assert.deepEqual(restored.unrelated, { keep: true });
     assert.equal(hasRouterPlaceholder(), false);
 
@@ -148,7 +173,10 @@ test("Cursor publication is additive, private, reversible, and records every rou
     publishCursorIntegration({
       origin: "https://cursor.example",
       assertStopped: () => {},
-      routedModels: () => ({ engine: "test", models: [{ slug: "provider/one" }] }),
+      routedModels: () => ({
+        engine: "test",
+        models: [{ slug: "provider/one", reasoningLevels: [{ effort: "low" }] }],
+      }),
     });
     const changedEndpoint = new DatabaseSync(dbPath);
     const changed = readApplicationState();
@@ -167,7 +195,10 @@ test("Cursor publication is additive, private, reversible, and records every rou
       () => publishCursorIntegration({
         origin: "https://cursor.example",
         assertStopped: () => {},
-        routedModels: () => ({ engine: "test", models: [{ slug: "provider/one" }] }),
+        routedModels: () => ({
+          engine: "test",
+          models: [{ slug: "provider/one", reasoningLevels: [{ effort: "low" }] }],
+        }),
       }),
       /not owned by codex-router/,
     );

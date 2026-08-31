@@ -7,7 +7,7 @@ import { DatabaseSync } from "node:sqlite";
 
 import { assertCallerSecret, cursorCliBaseUrl, redactCallerUrl } from "./caller-auth.mjs";
 import { runningClientProcesses } from "./client-restart-notice.mjs";
-import { cursorModelId } from "./cursor-model-id.mjs";
+import { cursorCatalogSelections } from "./cursor-model-id.mjs";
 import {
   CALLER_SECRET_PATH,
   CURSOR_CATALOG_PATH,
@@ -68,10 +68,12 @@ function readJson(target) {
 
 function cursorAliases(routedModels = routedClientModels) {
   const { models, engine } = routedModels();
+  const selections = cursorCatalogSelections(models);
   return {
     engine,
     models,
-    aliases: models.map((model) => cursorModelId(model.slug)),
+    selections,
+    aliases: selections.map((selection) => selection.alias),
   };
 }
 
@@ -109,6 +111,40 @@ function addAll(values, additions) {
 function without(values, removals) {
   const removed = new Set(removals);
   return (Array.isArray(values) ? values : []).filter((value) => !removed.has(value));
+}
+
+function cloneJson(value) {
+  return value === undefined ? undefined : JSON.parse(JSON.stringify(value));
+}
+
+function selectedComposerAlias(state) {
+  const config = state?.aiSettings?.modelConfig?.composer;
+  return String(config?.selectedModels?.[0]?.modelId || config?.modelName || "");
+}
+
+function selectionForPreviousAlias(alias, previous) {
+  const recorded = previous?.selections?.find((selection) => selection?.alias === alias);
+  if (recorded?.slug) return recorded;
+  if (!String(alias).startsWith("codex_router/")) return undefined;
+  const slug = String(alias).slice("codex_router/".length);
+  return previous?.models?.includes(slug) ? { slug, effort: undefined } : undefined;
+}
+
+function preferredSelection(selections, previousSelection) {
+  if (!previousSelection?.slug) return undefined;
+  return selections.find((selection) =>
+    selection.slug === previousSelection.slug && selection.effort === previousSelection.effort
+  ) || selections.find((selection) =>
+    selection.slug === previousSelection.slug &&
+    selection.effort === selection.model?.defaultEffort
+  ) || selections.find((selection) => selection.slug === previousSelection.slug);
+}
+
+function setComposerAlias(state, alias) {
+  const config = state?.aiSettings?.modelConfig?.composer;
+  if (!config || !alias) return;
+  config.modelName = alias;
+  config.selectedModels = [{ modelId: alias, parameters: [] }];
 }
 
 function launcherContents() {
@@ -233,7 +269,7 @@ export function publishCursorIntegration({
     );
   }
   const publicBaseUrl = cursorPublicBaseUrl(selectedOrigin, publicEdgeSecret);
-  const { models, engine, aliases } = cursorAliases(routedModels);
+  const { models, engine, selections, aliases } = cursorAliases(routedModels);
   assertLauncherOwnership();
   const db = openDatabase();
   let wroteCatalog = false;
@@ -248,6 +284,7 @@ export function publishCursorIntegration({
       userAddedModels: state.aiSettings?.userAddedModels,
       modelOverrideEnabled: state.aiSettings?.modelOverrideEnabled,
       modelOverrideDisabled: state.aiSettings?.modelOverrideDisabled,
+      composerModelConfig: cloneJson(state.aiSettings?.modelConfig?.composer),
       insertedOpenAIKeyPlaceholder: !hasKey,
     };
     state.aiSettings ||= {};
@@ -263,6 +300,13 @@ export function publishCursorIntegration({
       aliases,
     );
     state.aiSettings.modelOverrideDisabled = without(state.aiSettings.modelOverrideDisabled, aliases);
+    const selectedAlias = selectedComposerAlias(state);
+    if (oldOwned.includes(selectedAlias)) {
+      setComposerAlias(
+        state,
+        preferredSelection(selections, selectionForPreviousAlias(selectedAlias, previous))?.alias,
+      );
+    }
     state.useOpenAIKey = true;
     state.openAIBaseUrl = publicBaseUrl;
     saveApplicationState(db, state);
@@ -281,6 +325,7 @@ export function publishCursorIntegration({
       publicBaseUrl,
       cliBaseUrl: cursorCliBaseUrl(PORTS.router, callerSecret),
       aliases,
+      selections: selections.map(({ alias, slug, effort }) => ({ alias, slug, effort })),
       models: models.map((model) => model.slug),
       restore,
     });
@@ -347,6 +392,10 @@ export function removeCursorIntegration({ assertStopped = assertCursorStopped } 
       without(state.aiSettings.modelOverrideDisabled, aliases.filter((alias) => !originalDisabled.has(alias))),
       aliases.filter((alias) => originalDisabled.has(alias)),
     );
+    if (aliases.includes(selectedComposerAlias(state)) && snapshot.composerModelConfig !== undefined) {
+      state.aiSettings.modelConfig ||= {};
+      state.aiSettings.modelConfig.composer = cloneJson(snapshot.composerModelConfig);
+    }
     const ownsEndpoint = state.openAIBaseUrl === published.publicBaseUrl;
     if (ownsEndpoint) {
       state.openAIBaseUrl = snapshot.openAIBaseUrl;
@@ -382,6 +431,7 @@ export function cursorIntegrationStatus() {
     try { state = applicationState(db); } finally { db.close(); }
   } catch {}
   const aliases = published?.aliases || [];
+  const expectedAliases = cursorAliases().aliases;
   const currentAliases = state?.aiSettings?.userAddedModels || [];
   const currentEnabled = state?.aiSettings?.modelOverrideEnabled || [];
   const currentDisabled = state?.aiSettings?.modelOverrideDisabled || [];
@@ -393,6 +443,7 @@ export function cursorIntegrationStatus() {
     stateReadable: Boolean(state),
     appConfigured: Boolean(
       published && state?.useOpenAIKey === true && state?.openAIBaseUrl === published.publicBaseUrl &&
+      aliases.length === expectedAliases.length && aliases.every((alias, index) => alias === expectedAliases[index]) &&
       aliases.every((alias) => currentAliases.includes(alias) && currentEnabled.includes(alias)) &&
       aliases.every((alias) => !currentDisabled.includes(alias))
     ),
@@ -408,6 +459,8 @@ export function cursorIntegrationStatus() {
     cursorAgent: agent,
     publishedModels: published?.models || [],
     routableModels: cursorAliases().models.map((model) => model.slug),
+    publishedAliases: aliases,
+    routableAliases: expectedAliases,
   };
 }
 
@@ -419,6 +472,8 @@ export function cursorCatalogDrift() {
   return {
     missing: [...published].filter((slug) => !routable.has(slug)),
     added: [...routable].filter((slug) => !published.has(slug)),
+    aliasesStale: status.publishedAliases.length !== status.routableAliases.length ||
+      status.publishedAliases.some((alias, index) => alias !== status.routableAliases[index]),
   };
 }
 

@@ -1242,7 +1242,7 @@ if (TARGET === "gemini") {
       cursor.appConfigured ? "ok" : cursor.agentConfigured ? "warn" : "fail",
       "Cursor App routing config",
       cursor.appConfigured
-        ? `${cursor.publishedModels.length} codex_router/... models in ${cursor.stateDb}; ${cursor.publicBaseUrl}`
+        ? `${cursor.publishedModels.length} models / ${cursor.publishedAliases.length} effort choices in ${cursor.stateDb}; ${cursor.publicBaseUrl}`
         : cursor.agentConfigured
           ? "Cursor App is not connected; Cursor Agent is ready locally"
         : cursor.running
@@ -1274,11 +1274,12 @@ if (TARGET === "gemini") {
       );
       const drift = childJson("cursor-config-manager.mjs", ["drift"]);
       add(
-        !drift.missing?.length && !drift.added?.length ? "ok" : "warn",
+        !drift.missing?.length && !drift.added?.length && !drift.aliasesStale ? "ok" : "warn",
         "Cursor App catalog freshness",
-        !drift.missing?.length && !drift.added?.length
-          ? `published ${cursor.publishedModels.length}, routable ${cursor.routableModels.length}`
-          : `missing ${drift.missing?.join(", ") || "none"}; added ${drift.added?.join(", ") || "none"}`,
+        !drift.missing?.length && !drift.added?.length && !drift.aliasesStale
+          ? `published ${cursor.publishedModels.length} models across ${cursor.publishedAliases.length} effort choices`
+          : `missing ${drift.missing?.join(", ") || "none"}; added ${drift.added?.join(", ") || "none"}; ` +
+            `picker aliases ${drift.aliasesStale ? "need the current Cursor-safe format" : "current"}`,
         `Fully quit Cursor, then reconnect it from Harness. Cursor owns ${CURSOR_STATE_DB_PATH} while running.`,
       );
     } else {

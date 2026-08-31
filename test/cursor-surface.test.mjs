@@ -5,6 +5,7 @@ import test from "node:test";
 import { gzipSync } from "node:zlib";
 
 import { handleCursorRequest } from "../src/cursor-surface.mjs";
+import { cursorModelId } from "../src/cursor-model-id.mjs";
 import {
   bytesField,
   connectEnvelope,
@@ -29,8 +30,20 @@ function close(server) {
 
 function routedModels() {
   return [
-    { slug: "anthropic-api/claude-test", displayName: "Claude Test", priority: 10 },
-    { slug: "deepseek/test", displayName: "DeepSeek Test", priority: 5 },
+    {
+      slug: "anthropic-api/claude-test",
+      displayName: "Claude Test",
+      priority: 10,
+      defaultEffort: "high",
+      reasoningLevels: [{ effort: "low" }, { effort: "high" }],
+    },
+    {
+      slug: "deepseek/test",
+      displayName: "DeepSeek Test",
+      priority: 5,
+      defaultEffort: "high",
+      reasoningLevels: [{ effort: "high" }],
+    },
   ];
 }
 
@@ -105,15 +118,17 @@ test("Cursor app catalog uses neutral aliases and normalizes Responses-shaped ch
   try {
     const catalog = await fetch(`${app.baseUrl}/cursor/v1/models`).then((response) => response.json());
     assert.deepEqual(catalog.data.map((model) => model.id), [
-      "codex_router/anthropic-api/claude-test",
-      "codex_router/deepseek/test",
+      cursorModelId("anthropic-api/claude-test", "low"),
+      cursorModelId("anthropic-api/claude-test", "high"),
+      cursorModelId("deepseek/test", "high"),
     ]);
+    assert.equal(catalog.data.some((model) => model.id.includes("claude-test")), false);
 
     const response = await fetch(`${app.baseUrl}/cursor/v1/chat/completions`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        model: "codex_router/anthropic-api/claude-test",
+        model: cursorModelId("anthropic-api/claude-test", "high"),
         input: "hello",
         instructions: "Be concise.",
         stream: true,
@@ -125,6 +140,7 @@ test("Cursor app catalog uses neutral aliases and normalizes Responses-shaped ch
     });
     const stream = await response.text();
     assert.equal(received.model, "anthropic-api/claude-test");
+    assert.deepEqual(received.reasoning, { effort: "high" });
     assert.equal(received.stream, false);
     assert.equal(received.tools[0].name, "read_file");
     assert.match(stream, /"content":"done"/);
@@ -217,13 +233,13 @@ test("Cursor Agent catalog and a RunSSE/BidiAppend turn use the current Connect 
     });
     const catalog = Buffer.from(await catalogResponse.arrayBuffer());
     const firstModel = bytesField(catalog, 1);
-    assert.equal(stringField(firstModel, 1), "codex_router/anthropic-api/claude-test");
+    assert.equal(stringField(firstModel, 1), cursorModelId("anthropic-api/claude-test", "low"));
 
     const requestId = "request-test";
     const userMessage = encodeStringField(1, "Reply with exactly OK.");
     const userAction = encodeMessageField(1, userMessage);
     const action = encodeMessageField(1, userAction);
-    const requestedModel = encodeStringField(1, "codex_router/deepseek/test");
+    const requestedModel = encodeStringField(1, cursorModelId("deepseek/test", "high"));
     const runRequest = Buffer.concat([
       encodeMessageField(2, action),
       encodeMessageField(9, requestedModel),
@@ -256,6 +272,7 @@ test("Cursor Agent catalog and a RunSSE/BidiAppend turn use the current Connect 
     assert.ok(bytesField(bytesField(envelopes[1].payload, 1), 14));
     assert.equal(envelopes[2].flags, 2);
     assert.equal(received.model, "deepseek/test");
+    assert.deepEqual(received.reasoning, { effort: "high" });
     assert.deepEqual(received.input, [{ role: "user", content: "Reply with exactly OK." }]);
   } finally {
     await app.close();

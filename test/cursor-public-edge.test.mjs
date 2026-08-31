@@ -7,6 +7,7 @@ import {
   cursorPublicBasePath,
   redactCursorPublicUrl,
 } from "../src/cursor-public-edge.mjs";
+import { cursorModelId } from "../src/cursor-model-id.mjs";
 
 const SECRET = "cursor-public-test-secret-with-sufficient-length";
 
@@ -37,7 +38,7 @@ test("Cursor public edge exposes only the secret-bearing app surface", async () 
     const prefix = cursorPublicBasePath(SECRET);
     const catalog = await fetch(`http://127.0.0.1:${port}${prefix}/models`);
     assert.equal(catalog.status, 200);
-    assert.deepEqual((await catalog.json()).data.map((model) => model.id), ["codex_router/provider/model"]);
+    assert.deepEqual((await catalog.json()).data.map((model) => model.id), [cursorModelId("provider/model")]);
     assert.equal((await fetch(`http://127.0.0.1:${port}/v1/models`)).status, 404);
     assert.equal((await fetch(`http://127.0.0.1:${port}${prefix}/responses`)).status, 404);
     assert.equal(

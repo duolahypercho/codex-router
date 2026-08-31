@@ -1991,13 +1991,18 @@ https://cursor-router.example.com`; that is the advanced/manual path.
 
 The public hostname must not point at the main router port. Port 4214 exposes
 only the secret-bearing `/v1/models` and `/v1/chat/completions` app surface;
-accepted requests re-enter the same `/v1/responses` path used by Codex. Models
-are published as `codex_router/provider/model`, preventing routed Claude or Gemini
-slugs from selecting a different BYOK provider inside Cursor.
+accepted requests re-enter the same `/v1/responses` path used by Codex. Cursor
+misclassifies a custom id that contains one of its built-in model ids and then
+rejects it with “This model does not support custom API keys.” The router
+therefore publishes readable, collision-safe ids such as
+`codex_router/gpt_5_6_sol__419255f2/high`. The suffix is the reasoning effort;
+choose another row for Low, Medium, High, and so on. Cursor does not expose its
+native effort control for ordinary user-added BYOK models.
 
 ```sh
 cursor-router-agent --list-models
-cursor-router-agent --model codex_router/zai-coding/glm-5.3-flash --print "Reply with OK"
+# Copy one exact id from that list, including its effort suffix.
+cursor-router-agent --model 'PASTE_ID_FROM_THE_LIST' --print "Reply with OK"
 ```
 
 Reopen Cursor App and choose a `codex_router/...` model. Cursor's base-URL override
