@@ -141,7 +141,9 @@ export function defaultProviderIds() {
   return configuredProviderIds().filter(
     (id) => {
       const provider = RUNTIME_PROVIDERS.get(id);
-      return provider?.generic !== true && !["anonymous", "per-model"].includes(provider?.authMode);
+      return provider?.generic !== true &&
+        provider?.explicitSelection !== true &&
+        !["anonymous", "per-model"].includes(provider?.authMode);
     },
   );
 }

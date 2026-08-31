@@ -61,6 +61,14 @@ const FLAGSHIP_VISION = {
   inputModalities: ["text", "image"],
   priority: 1,
 };
+const CHATGPT_WEB_VISION = {
+  slug: "chatgpt-web/light",
+  displayName: "ChatGPT Web — Instant",
+  provider: "chatgpt-web",
+  gatewayModel: "chatgpt-web-light",
+  inputModalities: ["text", "image"],
+  priority: 0,
+};
 
 function userTurn(parts) {
   return [{ type: "message", role: "user", content: parts }];
@@ -78,6 +86,17 @@ test("a cheap vision tier outranks a higher-priority flagship", () => {
   assert.deepEqual(
     ranked.map((model) => model.slug),
     [FLASH_VISION.slug, FLAGSHIP_VISION.slug],
+  );
+});
+
+test("browser-automation routes never become indirect vision engines", () => {
+  assert.deepEqual(rankVisionEngines([CHATGPT_WEB_VISION, FLASH_VISION]), [FLASH_VISION]);
+  assert.equal(
+    resolveVisionEngine(
+      () => [CHATGPT_WEB_VISION],
+      { enabled: true, engine: CHATGPT_WEB_VISION.slug },
+    ),
+    undefined,
   );
 });
 

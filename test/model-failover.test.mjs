@@ -411,6 +411,14 @@ test("rankFailoverCandidates returns nothing rather than something unsuitable", 
   assert.deepEqual(rankFailoverCandidates(undefined, { from: FROM }), []);
 });
 
+test("rankFailoverCandidates never turns a failure into a browser-automation turn", () => {
+  const browser = model("chatgpt-web/light", "chatgpt-web", { contextWindow: 41_000 });
+  assert.deepEqual(
+    rankFailoverCandidates([browser], { from: FROM, chain: [browser.slug] }),
+    [],
+  );
+});
+
 test("a named chain is used verbatim, minus entries this build cannot route to", () => {
   const ranked = rankFailoverCandidates(
     [

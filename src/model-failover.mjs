@@ -397,6 +397,7 @@ export function rankFailoverCandidates(
   const cooled = new Set(Object.keys(readProviderCooldowns({ now })));
   const available = (Array.isArray(models) ? models : []).filter(
     (model) =>
+      PROVIDERS.get(model.provider)?.directResponses !== true &&
       model.slug !== from?.slug &&
       eligible(model, {
         fromProvider,

@@ -42,6 +42,7 @@ const {
   defaultUserModelDescription,
   hasDefaultUserModelReasoning,
   userModelEntry,
+  userModelIdentity,
 } = await import("../src/user-models.mjs");
 process.argv = savedArgv;
 process.exitCode = 0;
@@ -123,6 +124,68 @@ test("OpenCode curation keeps each endpoint family on its documented protocol", 
     }),
     "opencode-go-responses",
   );
+});
+
+test("ChatGPT Web curation keeps the upstream slug and immutable account effort", () => {
+  assert.deepEqual(curationProviderIds("chatgpt-web"), ["chatgpt-web"]);
+  assert.equal(
+    userModelIdentity({ providerId: "chatgpt-web", upstreamId: "chatgpt-web/pro" }).slug,
+    "chatgpt-web/pro",
+  );
+  assert.deepEqual(curatedModelReasoningLevels("chatgpt-web", "chatgpt-web/light"), ["low"]);
+  assert.deepEqual(curatedModelReasoningLevels("chatgpt-web", "chatgpt-web/pro"), ["ultra"]);
+  assert.equal(parseEfforts("ultra").defaultEffort, "ultra");
+});
+
+test("ChatGPT Web curation preserves its live Codex catalog metadata", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "curate-chatgpt-web-"));
+  const file = path.join(dir, "user-models.json");
+  const fixture = path.join(dir, "models.json");
+  writeFileSync(fixture, JSON.stringify({
+    models: [
+      { slug: "gpt-5.6-sol", display_name: "Native row must stay out" },
+      {
+        slug: "chatgpt-web/pro",
+        display_name: "ChatGPT Web — Pro",
+        context_window: 112_193,
+        input_modalities: ["text", "image"],
+      },
+    ],
+  }));
+  try {
+    const result = spawnSync(
+      process.execPath,
+      [
+        path.join(root, "src", "curate-models.mjs"),
+        "chatgpt-web",
+        "--models",
+        "chatgpt-web/pro",
+        "--fixture",
+        fixture,
+        "--no-apply",
+      ],
+      {
+        cwd: root,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          MODEL_ROUTER_STATE_DIR: path.join(dir, "state"),
+          MODEL_ROUTER_USER_MODELS: file,
+        },
+      },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    const [model] = JSON.parse(readFileSync(file, "utf8")).models;
+    assert.equal(model.slug, "chatgpt-web/pro");
+    assert.equal(model.upstreamModel, "chatgpt-web/pro");
+    assert.equal(model.displayName, "ChatGPT Web — Pro");
+    assert.equal(model.contextWindow, 112_193);
+    assert.deepEqual(model.inputModalities, ["text", "image"]);
+    assert.deepEqual(model.reasoningLevels, [{ effort: "ultra", description: "Pro reasoning" }]);
+    assert.equal(model.defaultEffort, "ultra");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("Command Code curation accepts only its exact certified Chat and Messages routes", () => {

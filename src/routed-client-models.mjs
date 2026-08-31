@@ -11,7 +11,7 @@ import { existsSync, readFileSync } from "node:fs";
 
 import { NATIVE_CATALOG_PATH } from "./paths.mjs";
 import { nativeSessionAvailable } from "./codex-native-session.mjs";
-import { MODEL_SLUG_ALIASES } from "./model-registry.mjs";
+import { MODEL_SLUG_ALIASES, providerForModel } from "./model-registry.mjs";
 import { migrateModelVisibility } from "./model-picker-state.mjs";
 import { readMultiAgentSettings } from "./multi-agent-state.mjs";
 import { selectedConfiguredListedModels } from "./provider-selection.mjs";
@@ -79,7 +79,9 @@ export function routedClientModels() {
   const selected = applySubagentProofs(
     selectedConfiguredListedModels().filter((model) => {
       const slug = String(model.slug);
-      return !hidden.has(slug) && (!picker.hasExplicitVisibility || visible.has(slug));
+      return providerForModel(model)?.codexOnly !== true &&
+        !hidden.has(slug) &&
+        (!picker.hasExplicitVisibility || visible.has(slug));
     }),
     subagentProofSnapshot(),
     { hidden, disabled: readMultiAgentSettings().disabled },

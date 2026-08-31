@@ -173,11 +173,11 @@ function openCodeFreeMetadata(item) {
 }
 
 export function modelCatalogMetadata(payload, provider) {
-  const data = Array.isArray(payload) ? payload : payload?.data;
+  const data = Array.isArray(payload) ? payload : payload?.data ?? payload?.models;
   if (!Array.isArray(data)) return {};
   const metadata = Object.create(null);
   for (const item of data) {
-    const id = String(item?.id || "").trim();
+    const id = String(item?.id ?? item?.slug ?? "").trim();
     if (!id || Object.hasOwn(metadata, id)) continue;
     const value = provider?.id === "venice"
       ? veniceMetadata(item)

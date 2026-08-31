@@ -1279,6 +1279,49 @@ and are not available while signed out. The equivalent local control command is
 `./bin/control auth-mode on` or `./bin/control auth-mode off`; when using the
 command directly, restart Codex yourself.
 
+### Use ChatGPT Web models through Codex Router
+
+Codex Router can use the account-gated browser models exposed by
+[codex-chatgpt-web](https://github.com/miuuyy/codex-chatgpt-web) without letting
+the two projects compete for Codex's `openai_base_url`. The browser launcher
+owns its private Electron profile, ChatGPT sign-in, browser automation, and
+optional MCP tunnel. Codex Router remains the only owner of Codex routing,
+provider selection, model publication, usage records, and the background router
+plane.
+
+Install and open the upstream launcher, sign in inside its embedded browser,
+and pass its browser smoke test. **Do not press its Install models action**:
+that action points Codex directly at port 17841 and replaces the router's
+managed base URL. Leave the launcher running, then enable and curate the live,
+account-specific rows through this repository:
+
+```sh
+./bin/model-router codex providers enable chatgpt-web
+./bin/curate-models chatgpt-web --refresh
+```
+
+Curation reads the launcher's loopback `/v1/models` catalog, discards every
+native GPT row, and offers only the `chatgpt-web/*` models the signed-in account
+currently exposes. A chosen route keeps its fixed ChatGPT effort and advertised
+context/image metadata. The request path goes directly from the router to the
+loopback bridge so Codex's native tool, collaboration, image, and compaction
+envelope is not translated by LiteLLM. The user's Codex/ChatGPT bearer token is
+never sent to the launcher; the local hop receives only a non-secret placeholder.
+
+Browser-only mode works with no additional router credential. For the full
+Codex harness, finish the upstream launcher's MCP/tunnel setup and permissions;
+the router does not read or store that tunnel key. Browser/UI drift and
+account-gated model refusals are relayed exactly and are never retried or failed
+over to another provider, and the route is never recruited as another model's
+vision helper, because any of those actions could duplicate a browser turn.
+
+This provider is deliberately Codex-only and is not published into DeepSeek
+Harness or Gemini CLI. Its endpoint defaults to
+`http://127.0.0.1:17841/v1`; `MODEL_ROUTER_CHATGPT_WEB_BASE_URL` may change the
+port but a non-loopback override is refused. The upstream project is unofficial
+browser automation, so its own security notes, platform support, OpenAI terms,
+and workspace policies still apply.
+
 ### Use a local model in Codex (experimental)
 
 LM Studio can run as a second local backend alongside Ollama. Its models use

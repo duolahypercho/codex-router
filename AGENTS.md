@@ -55,7 +55,7 @@ user.
 4. Determine which provider IDs the user requested: `anthropic-api`,
     `kimi-oauth`, `antigravity-oauth`, `kimi-api`, `kimi-api-cn`, `deepseek`, `grok-oauth`, `grok-api`, `qwen-plan`,
     `zai-coding`, `ollama-cloud`, `minimax-token-plan`, `meta`, `clinepass`,
-    `venice`, `nousresearch`, and/or
+    `venice`, `nousresearch`, `chatgpt-web`, and/or
    `opencode-go`
    (shown to users as "opencode Go/Zen"; its `opencode-go-messages`,
    `opencode-go-responses`, and `opencode-zen` variants share its stored key
@@ -92,6 +92,12 @@ user.
    enabling it asks for nothing and curating it is unnecessary. All three must
    be selected explicitly; never select one on the user's behalf just because
    it can authenticate without a key.
+   `chatgpt-web` is also explicit and catalog-only, but local: it requires the
+   separately installed codex-chatgpt-web launcher, an in-launcher ChatGPT
+   sign-in, its browser smoke test, and `bin/curate-models chatgpt-web`. Never
+   run that launcher's Install models action, because Codex Router alone owns
+   `openai_base_url`; leave the launcher running as the loopback browser
+   sidecar. It is Codex-only and must not be published into DSH or Gemini.
    `kimi-api` and `kimi-api-cn` are two different Moonshot platforms, not a
    fallback pair: the global console at platform.moonshot.ai and the mainland
    one at platform.moonshot.cn have separate accounts, separate billing, and

@@ -464,6 +464,106 @@ test("plain Codex provider routes accept the caller key as a bearer token", asyn
   }
 });
 
+test("ChatGPT Web routes bypass the gateway and preserve the native Codex envelope", async () => {
+  const testRoot = mkdtempSync(path.join(os.tmpdir(), "chatgpt-web-direct-route-"));
+  const userModelsPath = path.join(testRoot, "user-models.json");
+  writeFileSync(userModelsPath, JSON.stringify({
+    version: 1,
+    models: [{
+      slug: "chatgpt-web/light",
+      gatewayModel: "chatgpt-web-light",
+      upstreamModel: "chatgpt-web/light",
+      provider: "chatgpt-web",
+      listed: true,
+      displayName: "ChatGPT Web — Instant",
+      description: "Test ChatGPT Web direct Responses route.",
+      priority: 100,
+      reasoningLevels: [{ effort: "low", description: "Quick reasoning" }],
+      defaultEffort: "low",
+      contextWindow: 41_000,
+      autoCompact: 32_000,
+      inputModalities: ["text", "image"],
+      compHash: "chatgpt-web-light-routing-test-v1"
+    }],
+  }));
+  const bridgeRequests = [];
+  const exactTurnResponse = '{ "id": "resp_chatgpt_web_test", "object": "response", "status": "completed", "model": "chatgpt-web/light", "output": [], "usage": { "input_tokens": 12, "output_tokens": 3, "total_tokens": 15 } }\n';
+  const bridge = await mockServer(async (request, response) => {
+    const body = await bodyJson(request);
+    bridgeRequests.push({ url: request.url, headers: request.headers, body });
+    if (request.url.startsWith("/v1/responses/compact")) {
+      json(response, 409, {
+        error: {
+          type: "invalid_request_error",
+          message: "browser bridge retained-source compaction is unavailable",
+        },
+      });
+      return;
+    }
+    response.writeHead(200, { "Content-Type": "application/json" });
+    response.end(exactTurnResponse);
+  });
+  const gatewayRequests = [];
+  const gateway = await mockServer(async (request, response) => {
+    gatewayRequests.push(request.url);
+    json(response, 200, { object: "response", status: "completed", output: [] });
+  });
+  const routerPort = await openPort();
+  const router = run("router.mjs", {
+    CODEX_ROUTER_PORT: String(routerPort),
+    CODEX_ROUTER_STATE_DIR: path.join(testRoot, "state"),
+    MODEL_ROUTER_USER_MODELS: userModelsPath,
+    MODEL_ROUTER_CHATGPT_WEB_BASE_URL: `http://127.0.0.1:${bridge.port}/v1`,
+    CODEX_ROUTER_GATEWAY_BASE_URL: `http://127.0.0.1:${gateway.port}/v1`,
+    CODEX_ROUTER_QUIET: "1",
+  });
+
+  try {
+    await waitFor(`${routerBase(routerPort)}/models`, router);
+    const turnPayload = {
+      model: "chatgpt-web/light",
+      input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "hello" }] }],
+      tools: [{ type: "function", name: "workspace_tool", parameters: { type: "object" } }],
+      client_metadata: { "x-codex-turn-metadata": "body-turn-authority" },
+      stream: false,
+    };
+    const turn = await fetch(`${routerBase(routerPort)}/responses`, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer CHATGPT_SESSION_MUST_NOT_LEAK",
+        "Content-Type": "application/json",
+        "X-Codex-Turn-Metadata": "header-turn-authority",
+      },
+      body: JSON.stringify(turnPayload),
+    });
+    const turnText = await turn.text();
+    assert.equal(turn.status, 200, turnText);
+    assert.equal(turnText, exactTurnResponse);
+    assert.equal(bridgeRequests.length, 1);
+    assert.equal(bridgeRequests[0].url, "/v1/responses");
+    assert.equal(bridgeRequests[0].headers.authorization, "Bearer local");
+    assert.equal(bridgeRequests[0].headers["x-codex-turn-metadata"], "header-turn-authority");
+    assert.deepEqual(bridgeRequests[0].body, turnPayload);
+    assert.deepEqual(gatewayRequests, []);
+
+    const compact = await fetch(`${routerBase(routerPort)}/responses/compact`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...turnPayload, stream: false }),
+    });
+    assert.equal(compact.status, 409);
+    assert.match(await compact.text(), /retained-source compaction is unavailable/);
+    assert.equal(bridgeRequests.length, 2, "a failed browser compaction was sent more than once");
+    assert.equal(bridgeRequests[1].url, "/v1/responses/compact");
+    assert.deepEqual(gatewayRequests, []);
+  } finally {
+    await stopChild(router);
+    await closeServer(bridge.server);
+    await closeServer(gateway.server);
+    rmSync(testRoot, { recursive: true, force: true });
+  }
+});
+
 test("plain signed Codex routes accept the current Codex API key", async () => {
   const testRoot = mkdtempSync(path.join(os.tmpdir(), "signed-codex-api-key-route-"));
   const authPath = path.join(testRoot, "auth.json");

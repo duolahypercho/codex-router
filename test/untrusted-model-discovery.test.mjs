@@ -170,6 +170,17 @@ test("the response schema has bounded records and safe model identities", async 
   assert.deepEqual(result.data, [{ id: "provider/model" }]);
 });
 
+test("a bounded Codex model catalog is accepted for the local ChatGPT Web bridge", () => {
+  assert.deepEqual(
+    validateModelCatalogPayload({ models: [{ slug: "chatgpt-web/light" }] }),
+    [{ slug: "chatgpt-web/light" }],
+  );
+  assert.throws(
+    () => validateModelCatalogPayload({ models: [{ slug: "chatgpt-web/\u0000bad" }] }),
+    /invalid model id/,
+  );
+});
+
 test("explicitly configured private providers remain available", async () => {
   const result = await fetchUntrustedModelCatalog("http://127.0.0.1:8000/models", {
     allowPrivate: true,

@@ -120,6 +120,51 @@ const OPENCODE_FREE_MODELS = Object.freeze({
 });
 
 const CURATION_ROUTES = Object.freeze({
+  "chatgpt-web": Object.freeze({
+    providers: Object.freeze(["chatgpt-web"]),
+    protocols: Object.freeze(["Responses"]),
+    messagesModels: Object.freeze([]),
+    responsesModels: Object.freeze([]),
+    primaryModels: Object.freeze([
+      "chatgpt-web/luna",
+      "chatgpt-web/think",
+      "chatgpt-web/light",
+      "chatgpt-web/medium",
+      "chatgpt-web/high",
+      "chatgpt-web/extra-high",
+      "chatgpt-web/pro",
+    ]),
+    models: Object.freeze({
+      "chatgpt-web/luna": Object.freeze({
+        reasoningLevels: Object.freeze(["low"]),
+        summary: "ChatGPT Web Luna through the account-bound local browser bridge.",
+      }),
+      "chatgpt-web/think": Object.freeze({
+        reasoningLevels: Object.freeze(["low"]),
+        summary: "ChatGPT Web Think through the account-bound local browser bridge.",
+      }),
+      "chatgpt-web/light": Object.freeze({
+        reasoningLevels: Object.freeze(["low"]),
+        summary: "ChatGPT Web Instant through the account-bound local browser bridge.",
+      }),
+      "chatgpt-web/medium": Object.freeze({
+        reasoningLevels: Object.freeze(["medium"]),
+        summary: "ChatGPT Web Medium through the account-bound local browser bridge.",
+      }),
+      "chatgpt-web/high": Object.freeze({
+        reasoningLevels: Object.freeze(["high"]),
+        summary: "ChatGPT Web High through the account-bound local browser bridge.",
+      }),
+      "chatgpt-web/extra-high": Object.freeze({
+        reasoningLevels: Object.freeze(["xhigh"]),
+        summary: "ChatGPT Web Extra High through the account-bound local browser bridge.",
+      }),
+      "chatgpt-web/pro": Object.freeze({
+        reasoningLevels: Object.freeze(["ultra"]),
+        summary: "ChatGPT Web Pro through the account-bound local browser bridge.",
+      }),
+    }),
+  }),
   "commandcode": Object.freeze({
     providers: Object.freeze(["commandcode", "commandcode-messages"]),
     protocols: Object.freeze(["Chat", "Messages"]),
