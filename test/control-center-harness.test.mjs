@@ -235,6 +235,55 @@ test("client setup is fixed to the five supported targets and keeps session bodi
   assert.doesNotMatch(preload, /cwd|argv|runCommand|spawn/);
 });
 
+test("Claude setup reuses the exact CLI path detected outside a GUI PATH", async () => {
+  const handlers = new Map();
+  const calls = [];
+  registerIpcHandlers({
+    ipcMain: { handle: (name, handler) => handlers.set(name, handler) },
+    BrowserWindow: { getAllWindows: () => [] },
+    shell: {},
+    harnessExecutableResolver: (name) => {
+      assert.equal(name, "claude");
+      return "/Users/test/.local/bin/claude";
+    },
+    controlJsonRunner: async (args, options) => {
+      calls.push({ args, options });
+      return { configured: true };
+    },
+    senderGuard: () => true,
+  });
+
+  const setup = handlers.get("router-control:setupHarness");
+  assert.deepEqual(await setup({}, { harnessId: "claude" }), { configured: true });
+  assert.deepEqual(calls, [{
+    args: ["client-setup", "claude"],
+    options: {
+      timeoutMs: 11 * 60_000,
+      environmentOverrides: { CLAUDE_CODE_BIN: "/Users/test/.local/bin/claude" },
+    },
+  }]);
+});
+
+test("Claude setup refuses a missing CLI before starting the router installer", async () => {
+  const handlers = new Map();
+  let called = false;
+  registerIpcHandlers({
+    ipcMain: { handle: (name, handler) => handlers.set(name, handler) },
+    BrowserWindow: { getAllWindows: () => [] },
+    shell: {},
+    harnessExecutableResolver: () => undefined,
+    controlJsonRunner: async () => { called = true; },
+    senderGuard: () => true,
+  });
+
+  const setup = handlers.get("router-control:setupHarness");
+  await assert.rejects(
+    setup({}, { harnessId: "claude" }),
+    /Claude Code is not installed.*refresh Harness/,
+  );
+  assert.equal(called, false);
+});
+
 test("Cursor connector installation reports in-app progress and refresh-ready completion", async () => {
   const handlers = new Map();
   const events = [];

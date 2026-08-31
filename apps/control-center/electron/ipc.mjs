@@ -981,6 +981,7 @@ export function registerIpcHandlers({
   cursorWait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
   controlJsonRunner = runControlJson,
   harnessSnapshotReader = getHarnessSnapshot,
+  harnessExecutableResolver = executablePath,
   cursorAppPath = cursorDesktopPath,
   senderGuard = () => true,
 } = {}) {
@@ -1499,6 +1500,7 @@ export function registerIpcHandlers({
   handleAction("setupHarness", async ({ harnessId, hostname, publicUrl } = {}) => {
     const harness = oneOf(harnessId, HARNESS_IDS, "Harness");
     const args = ["client-setup", harness];
+    const environmentOverrides = {};
     if (harness === "cursor") {
       if (hostname !== undefined) {
         const selected = stringValue(hostname, "Cursor hostname", /^[A-Za-z0-9](?:[A-Za-z0-9.-]{1,251}[A-Za-z0-9])?$/);
@@ -1512,7 +1514,21 @@ export function registerIpcHandlers({
     } else if (publicUrl !== undefined || hostname !== undefined) {
       throw new Error("A hostname or public URL applies only to Cursor setup.");
     }
-    return runControlJson(args, { timeoutMs: REPAIR_TIMEOUT_MS });
+    if (harness === "claude") {
+      // A desktop app does not inherit the login shell's PATH. Detection
+      // deliberately checks the standard per-user CLI directories, so hand
+      // the exact executable it validated to the fixed router command instead
+      // of asking a child with a narrower PATH to discover it a second time.
+      const claude = harnessExecutableResolver("claude");
+      if (!claude) {
+        throw new Error("Claude Code is not installed. Install the official Claude Code CLI, then refresh Harness.");
+      }
+      environmentOverrides.CLAUDE_CODE_BIN = claude;
+    }
+    return controlJsonRunner(args, {
+      timeoutMs: REPAIR_TIMEOUT_MS,
+      ...(Object.keys(environmentOverrides).length ? { environmentOverrides } : {}),
+    });
   });
   handleAction("prepareCursorTunnel", async (_input, context) => {
     const cloudflared = cursorConnectorExecutable();
