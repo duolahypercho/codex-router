@@ -818,6 +818,19 @@ function normalizeBody(buffer, contentType, route) {
       if (effort) payload.reasoning_effort = effort;
       else delete payload.reasoning_effort;
     }
+  } else if (model.requestProfile === "ollama-cloud-glm-5-3-flash") {
+    // GLM-5.3-Flash always thinks and rejects every rung outside low/high/max.
+    // Clamp Codex-only rungs onto the ladder this entry declares instead of
+    // letting the generic Ollama map send none/medium and get a 400.
+    if (payload.reasoning_effort !== undefined) {
+      const effort = declaredEffort(
+        payload.reasoning_effort,
+        (model.reasoningLevels || []).map((level) => level.effort),
+      );
+      if (effort) payload.reasoning_effort = effort;
+      else delete payload.reasoning_effort;
+    }
+    delete payload.think;
   } else if (model.requestProfile === "qwen-plan") {
     // DashScope documents reasoning_effort only for the cross-vendor
     // DeepSeek/GLM models it resells (high/max; low/medium collapse to high,

@@ -19,6 +19,7 @@ const { MODEL_BY_SLUG } = await import("../src/model-registry.mjs");
 // get past its plan balance check.
 const ROUTES = [
   ["opencode-go/glm-5.3-flash", "glm-5.3-flash", "ox-alpha"],
+  ["ollama-cloud/glm-5.3-flash", "glm-5.3-flash:cloud", "ollama-cloud-glm-5-3-flash"],
   ["openrouter/glm-5.3-flash", "z-ai/glm-5.3-flash", "ox-alpha"],
   ["zai-coding/glm-5.3-flash", "glm-5.3-flash", "glm-thinking"],
 ];
@@ -33,7 +34,10 @@ test("every GLM-5.3-Flash route records the upstream id, window and ladder", () 
     assert.equal(model.defaultEffort, "max");
     assert.equal(model.contextWindow, 1_000_000);
     assert.equal(model.autoCompact, 400_000);
-    assert.deepEqual(model.inputModalities, slug === "opencode-go/glm-5.3-flash" ? ["text", "image"] : ["text"]);
+    assert.deepEqual(
+      model.inputModalities,
+      ["opencode-go/glm-5.3-flash", "ollama-cloud/glm-5.3-flash"].includes(slug) ? ["text", "image"] : ["text"],
+    );
     assert.equal(model.requestProfile, requestProfile);
   }
 });
@@ -58,4 +62,5 @@ test("uncertified Ox Alpha routes stay absent while direct-proven Flash routes r
   assert.equal(MODEL_BY_SLUG.has("openrouter/glm-5.3-flash"), true);
   assert.equal(MODEL_BY_SLUG.has("zai-coding/glm-5.3-flash"), true);
   assert.equal(MODEL_BY_SLUG.has("opencode-go/glm-5.3-flash"), true);
+  assert.equal(MODEL_BY_SLUG.has("ollama-cloud/glm-5.3-flash"), true);
 });
