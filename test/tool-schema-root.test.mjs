@@ -74,6 +74,11 @@ test("recursive local refs keep definitions and only the cycle edge becomes perm
   assert.deepEqual(repaired.$defs.node.properties.child, {
     description: "optional child",
   });
+  assert.equal(
+    schema.$defs.node.properties.child.$ref,
+    "#/$defs/node",
+    "the caller's recursive schema is not mutated",
+  );
 });
 
 test("mutually recursive refs retain their shared definitions and break one back edge", () => {

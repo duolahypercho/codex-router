@@ -890,6 +890,20 @@ function needsStrictOpenCodeToolCompatibility(route) {
   );
 }
 
+// Both Muse Contributor Responses routes reject a tool list containing a
+// recursive local JSON-Schema reference before the model sees the request.
+// Keep the paid Console Go gate model-specific: its other Responses models
+// retain recursive schemas until their own endpoint establishes the same
+// restriction.
+function needsNonRecursiveOpenCodeToolCompatibility(route) {
+  const providerId = providerForModel(route)?.id;
+  return (
+    needsZenFreeToolCompatibility(route) ||
+    (providerId === "opencode-go-responses" &&
+      route.upstreamModel === "muse-spark-1.2-contributor")
+  );
+}
+
 // Moonshot accepts only pure `$ref` pointers into `#/$defs/`, and rejects the
 // whole request -- not the one tool -- over any other pointer (issue #353) or a
 // definition reference carrying sibling keywords. The OAuth and platform-key
@@ -2964,11 +2978,9 @@ async function buildRoutedRequest({ request, payload, route, agedInput, tokenMax
   ) {
     namespacesFlattened = true;
   }
-  if (needsZenFreeToolCompatibility(route)) {
-    // Zen Free's measured schema boundary rejects recursive definition edges.
-    // Console Go's evidence establishes different tool discriminators and
-    // fields only, so it must retain recursive refs until that endpoint proves
-    // otherwise.
+  if (needsNonRecursiveOpenCodeToolCompatibility(route)) {
+    // Run after namespace flattening so both native children and ordinary
+    // function tools are repaired in the exact shape the endpoint validates.
     tools = repairToolSchemaRoots(tools, { nonRecursive: true });
   }
   if (needsStrictOpenCodeToolCompatibility(route)) {
@@ -3030,7 +3042,9 @@ async function buildRoutedRequest({ request, payload, route, agedInput, tokenMax
     ) {
       namespacesFlattened = true;
     }
-    if (needsZenFreeToolCompatibility(route)) {
+    if (needsNonRecursiveOpenCodeToolCompatibility(route)) {
+      // Stored tool-search results can introduce definitions after the first
+      // repair pass, so enforce the same boundary on the expanded inventory.
       tools = repairToolSchemaRoots(tools, { nonRecursive: true });
     }
   }
