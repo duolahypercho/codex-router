@@ -4,15 +4,18 @@ import { createHash } from "node:crypto";
 // output can therefore cost its full size many times after the model has
 // already acted on it. Keep the policy deliberately narrow: only old, textual
 // results above this floor qualify, and the newest result frontier stays
-// byte-for-byte intact until the request crosses the token-maxxing pressure
-// threshold.
+// byte-for-byte intact on ordinary turns. RTK-style shaping is reserved for an
+// actual routed compaction request, after the client has decided it needs one.
 export const TOOL_RESULT_AGING_MIN_BYTES = 32 * 1024;
 export const TOOL_RESULT_AGING_FRONTIER = 4;
-export const TOKEN_MAXXING_MIN_BYTES = 8 * 1024;
+export const DENSE_SHAPING_MIN_BYTES = 8 * 1024;
 
 const PREVIEW_CODE_UNITS = 1_024;
-const TOKEN_MAXXING_MIN_SAVED_BYTES = 1_024;
-const TOKEN_MAXXING_RECEIPT_PREFIX = "[Tool result shaped by Codex Router token maxxing:";
+const DENSE_SHAPING_MIN_SAVED_BYTES = 1_024;
+const DENSE_SHAPING_RECEIPT_PREFIX =
+  "[Tool result shaped by Codex Router RTK-style compaction:";
+const LEGACY_TOKEN_MAXXING_RECEIPT_PREFIX =
+  "[Tool result shaped by Codex Router token maxxing:";
 const OUTPUT_TYPES = new Set(["function_call_output", "custom_tool_call_output"]);
 const MODEL_ACTION_TYPES = new Set([
   "function_call",
@@ -146,7 +149,7 @@ function collapseDeeplyIndentedBlocks(lines) {
 // A deliberately small, deterministic RTK-style shaper. It removes terminal
 // progress rewrites, exact repetition, blank-line runs, and deep boilerplate,
 // while preserving error-bearing lines. The caller keeps a digest and rerun
-// instruction because this is a high-pressure, lossy optimization.
+// instruction because this is a lossy compaction optimization.
 export function shapeToolResult(value) {
   if (typeof value !== "string" || !value) return value;
   const normalized = collapseTerminalRewrites(value);
@@ -162,21 +165,26 @@ function recoveryInstruction(toolName) {
 }
 
 function shapedResult(value, toolName) {
-  if (value.startsWith(TOKEN_MAXXING_RECEIPT_PREFIX)) return undefined;
+  if (
+    value.startsWith(DENSE_SHAPING_RECEIPT_PREFIX) ||
+    value.startsWith(LEGACY_TOKEN_MAXXING_RECEIPT_PREFIX)
+  ) {
+    return undefined;
+  }
   const shaped = shapeToolResult(value);
   if (shaped === value) return undefined;
   const before = Buffer.byteLength(value, "utf8");
   const shapedBytes = Buffer.byteLength(shaped, "utf8");
   const digest = createHash("sha256").update(value, "utf8").digest("hex");
   const receipt = [
-    `${TOKEN_MAXXING_RECEIPT_PREFIX} ${before} -> ${shapedBytes} bytes, sha256:${digest}.`,
+    `${DENSE_SHAPING_RECEIPT_PREFIX} ${before} -> ${shapedBytes} bytes, sha256:${digest}.`,
     `${recoveryInstruction(toolName)} if exact or omitted content is needed. ` +
       "The original result remains in Codex; only this routed copy was shaped.]",
     "",
     shaped,
   ].join("\n");
   const after = Buffer.byteLength(receipt, "utf8");
-  return before - after >= TOKEN_MAXXING_MIN_SAVED_BYTES ? receipt : undefined;
+  return before - after >= DENSE_SHAPING_MIN_SAVED_BYTES ? receipt : undefined;
 }
 
 function resultReceipt(value, toolName) {
@@ -214,7 +222,7 @@ export function ageToolResults(
     enabled = true,
     minBytes = TOOL_RESULT_AGING_MIN_BYTES,
     frontier = TOOL_RESULT_AGING_FRONTIER,
-    tokenMaxxing = false,
+    denseShaping = false,
   } = {},
 ) {
   const empty = {
@@ -257,7 +265,7 @@ export function ageToolResults(
   for (let index = 0; index < input.length; index += 1) {
     const item = input[index];
     const protectedResult = protectedIndexes.has(index);
-    if (protectedResult && !tokenMaxxing) continue;
+    if (protectedResult && !denseShaping) continue;
     const value = textualOutput(item);
     if (value === undefined) continue;
     const size = Buffer.byteLength(value, "utf8");
@@ -270,7 +278,7 @@ export function ageToolResults(
     let shaped = false;
     if (canAge) {
       receipt = resultReceipt(value, names.get(item.call_id));
-    } else if (tokenMaxxing && size > TOKEN_MAXXING_MIN_BYTES) {
+    } else if (denseShaping && size > DENSE_SHAPING_MIN_BYTES) {
       receipt = shapedResult(value, names.get(item.call_id));
       shaped = receipt !== undefined;
     }

@@ -1084,24 +1084,24 @@ so it is opted into rather than discovered after it has already altered a
 session. Turning it on is remembered: a stored answer is kept verbatim and is
 never re-defaulted by a later release.
 
-Toggle **Compact old tool results** in the router Settings;
+Toggle **Token maxxing** in the router Settings;
 the next external-model request sees the change without restarting Codex or the
 router. The equivalent CLI commands are `./bin/control tool-result-aging on`,
 `off`, and `status`.
 
-When the estimated request reaches 70% of that model's auto-compact budget, the
-same switch automatically enters **token maxxing** for the turn. It applies a
-small deterministic output shaper inspired by
-[RTK](https://github.com/rtk-ai/rtk): terminal progress rewrites, exact repeated
+That switch does not add a second context-pressure policy. Codex, DeepSeek
+Harness, and Gemini CLI decide when the whole conversation needs compaction.
+Ordinary routed turns only compact consumed old results, so the newest four
+results remain byte-for-byte exact regardless of context size.
+
+When a client actually requests routed context compaction, the same switch also
+applies a small deterministic output shaper inspired by
+[RTK](https://github.com/rtk-ai/rtk). Terminal progress rewrites, exact repeated
 lines, blank runs, and deep boilerplate are collapsed while error-bearing lines
-stay visible. The newest-result frontier remains intact below that pressure
-threshold. Under pressure, every shaped result carries its original byte count,
-SHA-256 digest, and an exact rerun instruction, and the router adds a terse
-execution overlay inspired by
-[Caveman](https://github.com/JuliusBrussee/caveman) so the model favors targeted
-reads, bounded command output, and concise prose. Routed compaction requests use
-the same dense shaping because they are already at the context boundary. No
-second toggle or restart is required.
+stay visible. Every shaped result carries its original byte count, SHA-256
+digest, and an exact rerun instruction. This makes noisy GitHub, build, test,
+and terminal output cheaper for the compaction model without changing the
+newest result during an ordinary turn. No second toggle or restart is required.
 
 Native OpenAI traffic is unchanged by default. `./bin/control
 tool-result-aging native on` extends the same compaction to native GPT models;

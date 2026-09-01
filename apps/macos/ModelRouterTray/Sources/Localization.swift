@@ -134,7 +134,7 @@ func routerFormat(_ english: String, _ arguments: CVarArg...) -> String {
 enum RouterChineseText {
   static let values: [String: String] = [
     "Uninstalling": "正在卸载",
-    "Off by default · token maxxing starts at 70% on external models": "默认关闭 · 外部模型达到 70% 时启动 token maxxing",
+    "Off by default · compacts old results; RTK shapes routed compaction": "默认关闭 · 压缩旧结果；RTK 精简路由压缩输出",
     "Fix Codex Router installation": "修复 Codex 路由安装",
     "Language": "语言",
     "System": "跟随系统",
@@ -262,7 +262,7 @@ enum RouterChineseText {
     "Use without OpenAI login": "不使用 OpenAI 登录",
     "External providers · Codex restarts automatically": "外部提供商 · Codex 会自动重启",
     "Use connected models and restart Codex": "使用已连接模型并重启 Codex",
-    "Compact old tool results": "压缩旧工具结果",
+    "Token maxxing": "Token maxxing",
     "Cannot run subagents": "无法运行子代理",
     "Effort as subagent": "作为子代理的思考强度",
     "Forced off by CODEX_ROUTER_TOOL_RESULT_AGING=0": "已被 CODEX_ROUTER_TOOL_RESULT_AGING=0 强制关闭",

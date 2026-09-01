@@ -3,7 +3,7 @@
 enum RouterHindiText {
   static let values: [String: String] = [
     "Uninstalling": "अनइंस्टॉल हो रहा है",
-    "Off by default · token maxxing starts at 70% on external models": "डिफ़ॉल्ट रूप से बंद · बाहरी मॉडलों पर 70% पर token maxxing शुरू होता है",
+    "Off by default · compacts old results; RTK shapes routed compaction": "डिफ़ॉल्ट रूप से बंद · पुराने परिणाम संपीड़ित करता है; RTK रूटेड संपीड़न को शेप करता है",
     "Fix Codex Router installation": "Codex राउटर इंस्टॉलेशन ठीक करें",
     "Language": "भाषा",
     "System": "सिस्टम के अनुसार",
@@ -131,7 +131,7 @@ enum RouterHindiText {
     "Use without OpenAI login": "OpenAI लॉगिन के बिना उपयोग करें",
     "External providers · Codex restarts automatically": "बाहरी प्रदाता · Codex स्वचालित रूप से पुनः आरंभ होता है",
     "Use connected models and restart Codex": "कनेक्टेड मॉडल उपयोग करें और Codex पुनः आरंभ करें",
-    "Compact old tool results": "पुराने टूल परिणाम संक्षिप्त करें",
+    "Token maxxing": "Token maxxing",
     "Forced off by CODEX_ROUTER_TOOL_RESULT_AGING=0": "CODEX_ROUTER_TOOL_RESULT_AGING=0 द्वारा जबरन बंद",
     "External models · applies on the next request": "बाहरी मॉडल · अगले अनुरोध पर लागू होता है",
     "Providers": "प्रदाता",

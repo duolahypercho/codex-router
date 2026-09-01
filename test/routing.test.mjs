@@ -6134,6 +6134,100 @@ test("router strips empty text parts and drops the messages left with nothing", 
   }
 });
 
+test("router preserves orphan Codex app outputs as readable history", async () => {
+  const gatewayRequests = [];
+  const gateway = await mockServer(async (request, response) => {
+    gatewayRequests.push(await bodyJson(request));
+    json(response, 200, {
+      id: "resp-app-output",
+      object: "response",
+      output: [
+        {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "ok" }],
+        },
+      ],
+    });
+  });
+  const native = await mockServer(async (_request, response) => {
+    json(response, 200, { id: "unused", output: [] });
+  });
+  const routerPort = await openPort();
+  const router = run("router.mjs", {
+    CODEX_ROUTER_PORT: String(routerPort),
+    CODEX_NATIVE_BASE_URL: `http://127.0.0.1:${native.port}/backend-api/codex`,
+    CODEX_ROUTER_GATEWAY_BASE_URL: `http://127.0.0.1:${gateway.port}/v1`,
+    CODEX_ROUTER_QUIET: "1",
+  });
+  const delegation = "<codex_delegation>child finished</codex_delegation>";
+  const input = [
+    {
+      type: "function_call_output",
+      id: "fco_app_without_call_id",
+      call_id: null,
+      name: "send_message_to_thread",
+      namespace: "codex_app",
+      output: delegation,
+    },
+    { type: "function_call", call_id: "call-valid", name: "lookup", arguments: "{}" },
+    { type: "function_call_output", call_id: "call-valid", output: "kept byte-for-byte" },
+  ];
+
+  try {
+    await waitFor(`${routerBase(routerPort)}/models`, router);
+    for (const endpoint of ["/responses", "/responses/compact"]) {
+      const response = await fetch(`${routerBase(routerPort)}${endpoint}`, {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer CHATGPT_SESSION_TOKEN",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "kimi-oauth/k3",
+          stream: false,
+          input,
+        }),
+      });
+      assert.equal(response.status, 200, await response.text());
+    }
+
+    assert.equal(gatewayRequests.length, 2);
+    const recovered = gatewayRequests[0].input[0];
+    assert.equal(recovered.type, "message");
+    assert.equal(recovered.role, "user");
+    assert.deepEqual(recovered.content, [
+      {
+        type: "input_text",
+        text: `[Codex app tool result: codex_app.send_message_to_thread]\n${delegation}`,
+      },
+    ]);
+    assert.deepEqual(gatewayRequests[0].input.slice(-2), input.slice(-2));
+
+    for (const request of gatewayRequests) {
+      assert.equal(
+        request.input.some(
+          (item) => item?.type === "function_call_output" && !item.call_id,
+        ),
+        false,
+      );
+    }
+    assert.match(
+      JSON.stringify(gatewayRequests[1].input),
+      /Codex app tool result: codex_app\.send_message_to_thread/u,
+    );
+    assert.match(JSON.stringify(gatewayRequests[1].input), /child finished/u);
+    const catalog = gatewayRequests[1].input.at(-2).content[0].text;
+    assert.match(catalog, /"kind":"tool_result"/u);
+    assert.match(catalog, /"tool":"send_message_to_thread"/u);
+    assert.doesNotMatch(catalog, /"kind":"user_message"/u);
+  } finally {
+    await stopChild(router);
+    await closeServer(gateway.server);
+    await closeServer(native.server);
+  }
+});
+
 function curatedFireworksModel() {
   const dir = mkdtempSync(path.join(os.tmpdir(), "routing-fireworks-model-"));
   const file = path.join(dir, "user-models.json");
@@ -7629,13 +7723,21 @@ test("router ages consumed large tool results but preserves the newest result fr
   }
 });
 
-test("token maxxing shapes the newest result and injects terse instructions only under pressure", async () => {
+test("RTK shaping is reserved for routed compaction and ordinary turns keep newest results exact", async () => {
   const gatewayBodies = [];
   const gateway = await mockServer(async (request, response) => {
     gatewayBodies.push(await bodyJson(request));
-    json(response, 200, { output: [{ type: "message", role: "assistant", content: "ok" }] });
+    json(response, 200, {
+      output: [
+        {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "compact summary" }],
+        },
+      ],
+    });
   });
-  const stateDir = mkdtempSync(path.join(os.tmpdir(), "routing-token-maxxing-"));
+  const stateDir = mkdtempSync(path.join(os.tmpdir(), "routing-rtk-compaction-"));
   writeFileSync(
     path.join(stateDir, "tool-result-aging.json"),
     JSON.stringify({ version: 1, enabled: true, nativeEnabled: false }),
@@ -7647,7 +7749,12 @@ test("token maxxing shapes the newest result and injects terse instructions only
     CODEX_ROUTER_QUIET: "1",
     MODEL_ROUTER_STATE_DIR: stateDir,
   });
-  const turn = (value) => ({
+  const value = [
+    "starting build",
+    ...Array(110_000).fill("repeated build progress"),
+    "ERROR final link failed",
+  ].join("\n");
+  const turn = {
     model: "deepseek/deepseek-v4-pro",
     stream: false,
     instructions: "Base instructions.",
@@ -7655,91 +7762,40 @@ test("token maxxing shapes the newest result and injects terse instructions only
       { type: "function_call", call_id: "latest", name: "exec_command", arguments: "{}" },
       { type: "function_call_output", call_id: "latest", output: value },
     ],
-  });
-  const lowPressure = "ordinary noise\n".repeat(10_000);
-  const highPressure = "repeated build progress\n".repeat(110_000);
+  };
 
   try {
     await waitFor(`${routerBase(routerPort)}/models`, router);
-    for (const value of [lowPressure, highPressure]) {
-      const response = await fetch(`${routerBase(routerPort)}/responses`, {
-        method: "POST",
-        headers: {
-          Authorization: "Bearer CODEX_CALLER_SECRET",
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(turn(value)),
-      });
-      assert.equal(response.status, 200, await response.text());
-    }
+    const headers = {
+      Authorization: "Bearer CODEX_CALLER_SECRET",
+      "Content-Type": "application/json",
+    };
+    const ordinary = await fetch(`${routerBase(routerPort)}/responses`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(turn),
+    });
+    assert.equal(ordinary.status, 200, await ordinary.text());
+    const compact = await fetch(`${routerBase(routerPort)}/responses/compact`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(turn),
+    });
+    assert.equal(compact.status, 200, await compact.text());
 
-    assert.equal(gatewayBodies[0].input[1].output, lowPressure);
+    assert.equal(gatewayBodies[0].input[1].output, value);
     assert.equal(gatewayBodies[0].instructions, "Base instructions.");
-    assert.match(gatewayBodies[1].input[1].output, /Tool result shaped by Codex Router token maxxing/u);
+    assert.doesNotMatch(gatewayBodies[0].instructions, /Token maxxing pressure|decision packet|Be terse/u);
+    assert.match(gatewayBodies[1].input[1].output, /Tool result shaped by Codex Router RTK-style compaction/u);
     assert.match(gatewayBodies[1].input[1].output, /same line repeated 109999 more times/u);
-    assert.match(gatewayBodies[1].instructions, /## Context pressure mode/u);
-    assert.match(gatewayBodies[1].instructions, /Be terse in commentary and final prose/u);
+    assert.match(gatewayBodies[1].input[1].output, /ERROR final link failed/u);
+    assert.match(gatewayBodies[1].input[1].output, /Repeat the preceding exec_command call/u);
+    assert.doesNotMatch(gatewayBodies[1].instructions, /Token maxxing pressure|decision packet|Be terse/u);
 
     const events = await waitForUsageEvents(stateDir, 2, router);
     assert.equal(events[0].toolResultsShaped, undefined);
     assert.equal(events[1].toolResultsShaped, 1);
     assert.ok(events[1].toolResultShapeBytesSaved > 2_000_000);
-  } finally {
-    await stopChild(router);
-    await closeServer(gateway.server);
-    rmSync(stateDir, { recursive: true, force: true });
-  }
-});
-
-test("token maxxing counts collaboration payloads after they become model-visible", async () => {
-  const gatewayBodies = [];
-  const gateway = await mockServer(async (request, response) => {
-    gatewayBodies.push(await bodyJson(request));
-    json(response, 200, { output: [{ type: "message", role: "assistant", content: "ok" }] });
-  });
-  const stateDir = mkdtempSync(path.join(os.tmpdir(), "routing-token-maxxing-agent-"));
-  writeFileSync(
-    path.join(stateDir, "tool-result-aging.json"),
-    JSON.stringify({ version: 1, enabled: true, nativeEnabled: false }),
-  );
-  const routerPort = await openPort();
-  const router = run("router.mjs", {
-    CODEX_ROUTER_PORT: String(routerPort),
-    CODEX_ROUTER_GATEWAY_BASE_URL: `http://127.0.0.1:${gateway.port}/v1`,
-    CODEX_ROUTER_QUIET: "1",
-    MODEL_ROUTER_STATE_DIR: stateDir,
-  });
-  const payloadText = "repeated delegated payload\n".repeat(100_000);
-  const input = [
-    {
-      type: "message",
-      role: "user",
-      content: [
-        { type: "input_text", text: "Message Type: NEW_TASK\nPayload:" },
-        { type: "encrypted_content", encrypted_content: payloadText },
-      ],
-    },
-  ];
-
-  try {
-    await waitFor(`${routerBase(routerPort)}/models`, router);
-    const response = await fetch(`${routerBase(routerPort)}/responses`, {
-      method: "POST",
-      headers: {
-        Authorization: "Bearer CODEX_CALLER_SECRET",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "deepseek/deepseek-v4-pro",
-        stream: false,
-        instructions: "Base instructions.",
-        input,
-      }),
-    });
-    assert.equal(response.status, 200, await response.text());
-    assert.equal(gatewayBodies.length, 1);
-    assert.equal(gatewayBodies[0].input[0].content.at(-1).text, payloadText);
-    assert.match(gatewayBodies[0].instructions, /## Context pressure mode/u);
   } finally {
     await stopChild(router);
     await closeServer(gateway.server);

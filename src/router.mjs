@@ -179,10 +179,6 @@ import { readVisionBridgeSettings } from "./vision-bridge-state.mjs";
 import { installedNativeVisionEngines } from "./vision-engines.mjs";
 import { ageToolResults } from "./tool-result-aging.mjs";
 import {
-  applyTokenMaxxingOverlay,
-  tokenMaxxingActive,
-} from "./instruction-overlays.mjs";
-import {
   nativeToolResultAgingEnabled,
   toolResultAgingEnabled,
 } from "./tool-result-aging-state.mjs";
@@ -1269,6 +1265,33 @@ function messageItem(text) {
     role: "user",
     content: [{ type: "input_text", text }],
   };
+}
+
+function normalizeOrphanAppToolOutput(item) {
+  if (
+    item?.type !== "function_call_output" ||
+    item.namespace !== "codex_app" ||
+    typeof item.name !== "string" ||
+    !item.name ||
+    (typeof item.call_id === "string" && item.call_id) ||
+    item.output === undefined
+  ) {
+    return item;
+  }
+  // Codex app-server can persist a standalone app-tool result without the
+  // originating call. A synthetic call_id would still have no matching call,
+  // while strict Responses providers reject the original item outright.
+  // Preserve the result as ordinary readable history instead. Scope the
+  // recovery to named codex_app outputs so every other malformed tool item
+  // continues to fail closed at the provider adapter.
+  const output =
+    typeof item.output === "string" ? item.output : JSON.stringify(item.output);
+  return messageItem(`[Codex app tool result: codex_app.${item.name}]\n${output}`);
+}
+
+function normalizeProviderAppToolOutputs(input) {
+  if (!Array.isArray(input)) return input;
+  return input.map(normalizeOrphanAppToolOutput);
 }
 
 function normalizeRoutedInput(input) {
@@ -2377,7 +2400,10 @@ async function summarizeWith(
   signal,
   { searchContract } = {},
 ) {
-  const compatibleInput = zenFreeCompatibleInput(aged.input, route);
+  const compatibleInput = zenFreeCompatibleInput(
+    normalizeProviderAppToolOutputs(aged.input),
+    route,
+  );
   const providerInput = needsConsoleGoResponsesToolCompatibility(route)
     ? strictOpenCodeCompactionInput(compatibleInput, payload.tools, {
         maxNameLength: 64,
@@ -2467,10 +2493,10 @@ async function summarize(request, payload, route, signal, { allowFailover = true
   const agingEnabled = toolResultAgingEnabled();
   const aged = ageToolResults(normalized, {
     enabled: agingEnabled,
-    // A compaction request is already at the context boundary. Dense shaping
-    // gives its summarizer more distinct evidence without changing low-pressure
-    // turns, and every shaped result keeps the exact rerun path.
-    tokenMaxxing: agingEnabled,
+    // The client has already decided this conversation needs compaction. Dense
+    // RTK-style shaping gives its summarizer more distinct evidence without
+    // changing ordinary turns, and every shaped result keeps the exact rerun path.
+    denseShaping: agingEnabled,
   });
 
   // The models this compaction may be moved to, in order, starting with the one
@@ -2852,7 +2878,7 @@ function observeSubagentOutcome(request, route, status, options = {}) {
 // Both are avoided the same way: nothing here writes to `payload` or to
 // `agedInput`. The tool list is a local, and the input array is copied before
 // anything rewrites it.
-async function buildRoutedRequest({ request, payload, route, agedInput, tokenMaxxing = false }) {
+async function buildRoutedRequest({ request, payload, route, agedInput }) {
   const searchCompatibility = routedSearchCompatibility(payload, route);
   payload = searchCompatibility.payload;
   let namespacesFlattened = false;
@@ -2860,7 +2886,10 @@ async function buildRoutedRequest({ request, payload, route, agedInput, tokenMax
   const provider = providerForModel(route);
   const chatCompletionsProvider = provider?.protocol !== "openai-responses";
   const consoleGoResponsesCompatibility = needsConsoleGoResponsesToolCompatibility(route);
-  const compatibleInput = zenFreeCompatibleInput(agedInput, route);
+  const compatibleInput = zenFreeCompatibleInput(
+    normalizeProviderAppToolOutputs(agedInput),
+    route,
+  );
   // Image substitution may spend another provider's quota. Every Groq tool
   // limit that is already knowable from the client request and stored history
   // must fail locally before that work starts; the normal post-bridge pass
@@ -3117,9 +3146,6 @@ async function buildRoutedRequest({ request, payload, route, agedInput, tokenMax
     delete routed.reasoning_effort;
   }
   if (rejectsWebSearchOptions(route)) delete routed.web_search_options;
-  routed.instructions = applyTokenMaxxingOverlay(routed.instructions, {
-    active: tokenMaxxing,
-  });
   return {
     body: Buffer.from(JSON.stringify(routed), "utf8"),
     target: `${GATEWAY_BASE}/responses`,
@@ -3141,16 +3167,9 @@ async function buildRoutedRequest({ request, payload, route, agedInput, tokenMax
   };
 }
 
-// Normalize once, but decide pressure and age from that pristine normalized
-// input for every route that may actually serve the turn. Collaboration
-// payloads are still carried as `encrypted_content` in the caller's body and
-// become model-visible text during normalization, so estimating the original
-// bytes would discount precisely the payload the routed model will read.
-//
-// Pressure is route-specific as well: failover candidates can have very
-// different auto-compaction budgets. Re-running the deterministic aging pass
-// on a hop keeps the destination's threshold honest without ever shaping an
-// already-shaped copy.
+// Normalize once and age from that pristine input for every route that may
+// actually serve the turn. Ordinary turns compact only consumed old results;
+// the client owns context-pressure detection and whole-history compaction.
 async function prepareRoutedRequest({
   request,
   payload,
@@ -3158,24 +3177,14 @@ async function prepareRoutedRequest({
   normalizedInput,
   agingEnabled,
 }) {
-  const tokenMaxxing = agingEnabled && tokenMaxxingActive({
-    enabled: true,
-    estimatedTokens: estimateInputTokens(
-      JSON.stringify({ ...payload, input: normalizedInput }),
-      { contextWindow: route.contextWindow },
-    ),
-    autoCompact: route.autoCompact,
-  });
   const aged = ageToolResults(normalizedInput, {
     enabled: agingEnabled,
-    tokenMaxxing,
   });
   const built = await buildRoutedRequest({
     request,
     payload,
     route,
     agedInput: aged.input,
-    tokenMaxxing,
   });
   return {
     ...built,
@@ -3200,7 +3209,7 @@ function failoverCandidates({ route, agedInput, flattenedNamespaces, searchContr
       from: route,
       // Context fit is checked after rebuilding the request for each
       // destination below. Using this route's body here can reject a candidate
-      // whose lower pressure threshold would shape that same conversation into
+      // whose provider-specific request shape fits that same conversation into
       // its smaller window.
       needsImage: inputHasImage(agedInput),
       // Only a turn that can actually spawn children needs a model that has
@@ -3562,9 +3571,8 @@ async function handleResponses(request, response, requestUrl) {
     let namespacesFlattened = false;
     let flattenedNamespaces = new Map();
     // The route-independent half of the input, computed once. Failing the turn
-    // over to another model rebuilds pressure shaping from these pristine
-    // normalized items, so an encrypted-payload relay is paid for once while
-    // every destination gets its own auto-compaction threshold.
+    // over to another model rebuilds its provider-specific request from these
+    // pristine normalized items, so an encrypted-payload relay is paid for once.
     let normalizedInput;
     let agingEnabled = false;
     let agedInput;

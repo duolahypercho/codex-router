@@ -3,7 +3,7 @@
 enum RouterKoreanText {
   static let values: [String: String] = [
     "Uninstalling": "제거 중",
-    "Off by default · token maxxing starts at 70% on external models": "기본적으로 꺼짐 · 외부 모델에서 70%에 token maxxing이 시작됩니다",
+    "Off by default · compacts old results; RTK shapes routed compaction": "기본적으로 꺼짐 · 오래된 결과를 압축하고 RTK가 라우팅 압축을 정리합니다",
     "Fix Codex Router installation": "Codex 라우터 설치 복구",
     "Language": "언어",
     "System": "시스템 따름",
@@ -131,7 +131,7 @@ enum RouterKoreanText {
     "Use without OpenAI login": "OpenAI 로그인 없이 사용",
     "External providers · Codex restarts automatically": "외부 제공업체 · Codex가 자동으로 재시작됩니다",
     "Use connected models and restart Codex": "연결된 모델을 사용하고 Codex 재시작",
-    "Compact old tool results": "오래된 도구 결과 압축",
+    "Token maxxing": "Token maxxing",
     "Forced off by CODEX_ROUTER_TOOL_RESULT_AGING=0": "CODEX_ROUTER_TOOL_RESULT_AGING=0에 의해 강제로 꺼짐",
     "External models · applies on the next request": "외부 모델 · 다음 요청부터 적용됩니다",
     "Providers": "제공업체",

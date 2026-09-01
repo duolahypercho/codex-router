@@ -3,7 +3,7 @@
 enum RouterArabicText {
   static let values: [String: String] = [
     "Uninstalling": "جارٍ الإزالة",
-    "Off by default · token maxxing starts at 70% on external models": "معطّل افتراضيًا · يبدأ token maxxing عند 70% على النماذج الخارجية",
+    "Off by default · compacts old results; RTK shapes routed compaction": "معطّل افتراضيًا · يضغط النتائج القديمة؛ ويشكّل RTK الضغط الموجّه",
     "Fix Codex Router installation": "إصلاح تثبيت موجّه Codex",
     "Language": "اللغة",
     "System": "حسب النظام",
@@ -131,7 +131,7 @@ enum RouterArabicText {
     "Use without OpenAI login": "الاستخدام بدون تسجيل الدخول إلى OpenAI",
     "External providers · Codex restarts automatically": "مزوّدون خارجيون · يُعاد تشغيل Codex تلقائيًا",
     "Use connected models and restart Codex": "استخدام النماذج المتصلة وإعادة تشغيل Codex",
-    "Compact old tool results": "ضغط نتائج الأدوات القديمة",
+    "Token maxxing": "Token maxxing",
     "Forced off by CODEX_ROUTER_TOOL_RESULT_AGING=0": "معطّل قسرًا بواسطة CODEX_ROUTER_TOOL_RESULT_AGING=0",
     "External models · applies on the next request": "النماذج الخارجية · يُطبَّق عند الطلب التالي",
     "Providers": "مزوّدو الخدمة",

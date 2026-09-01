@@ -2927,8 +2927,8 @@ final class RouterStore: ObservableObject {
       },
       success: { enabled in
         enabled
-        ? "Old tool-result compaction is on for the next external-model request."
-        : "Exact tool results will be sent on the next external-model request."
+        ? "Token maxxing is on for the next external-model request."
+        : "Token maxxing is off; exact tool results will be sent on the next external-model request."
       }
     )
   }
@@ -6344,11 +6344,11 @@ private struct TrayView: View {
       isDisabled: store.signedRoutingEnabled(authoritative: store.signedRouting)
     )
     settingRow(
-      title: routerLocalized("Compact old tool results"),
+      title: routerLocalized("Token maxxing"),
       detail: target.modelSettings?.toolResultAging?.environmentOverride == true
         ? routerLocalized("Forced off by CODEX_ROUTER_TOOL_RESULT_AGING=0")
         : (target.modelSettings?.toolResultAging?.stats?.savingsSummary
-          ?? routerLocalized("Off by default · token maxxing starts at 70% on external models")),
+          ?? routerLocalized("Off by default · compacts old results; RTK shapes routed compaction")),
       isOn: Binding(
         // Off when the snapshot has not arrived, because that is what the
         // router does with no state file (tool-result-aging-state.mjs). The row

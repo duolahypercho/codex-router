@@ -1723,7 +1723,16 @@ purpose; several of them exist because the obvious wider version is wrong.
    `canonicalProviderId`: protocol variants share one credential and therefore
    one quota, so a sibling is guaranteed to fail the same way.
 5. **A cooldown is only ever a window the provider itself named.** Derived from
-   `Retry-After` and `cooldownUntil`, never invented, capped at six hours, and
+   `Retry-After`, `cooldownUntil`, or a wall-clock reset the provider stated in
+   its own refusal body — Z.ai's Coding Plan sends "Your limit will reset at
+   2026-09-01 21:32:15" and no header, and without reading it an exhausted plan
+   is re-attempted once per turn for the whole window. A bare stamp carries no
+   zone, so it is resolved to the **earliest** instant any real UTC offset
+   allows that has not already passed, and ignored outright when no offset can
+   place it ahead. Waking early costs one refusal; waking late withholds a model
+   the operator is paying for, and reading a zoneless stamp as local time does
+   exactly that for anyone whose clock does not match the plan's. Never
+   invented, capped at six hours, and
    cleared on that provider's next successful answer. A provider under cooldown
    is skipped before dispatch, which is the entire saving — so a cooldown that
    is wrong strands the operator's chosen model, and that is why nothing may

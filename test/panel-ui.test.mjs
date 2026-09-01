@@ -513,6 +513,24 @@ test("browser panel exposes translations with matching keys for every language",
   assert.equal(t("nav.usage"), "Usage");
 });
 
+test("browser and macOS settings present the unified pipeline as Token maxxing", () => {
+  assert.equal(t("models.compactOldToolResults"), "Token maxxing");
+  assert.match(t("models.reduceRepeatedContext"), /RTK-shape noisy output.*routed compaction/i);
+  assert.doesNotMatch(t("models.reduceRepeatedContext"), /70%|pressure|reasoning packets/i);
+  assert.doesNotMatch(t("models.compactOldToolResults"), /compact old tool results/i);
+
+  const markup = readFileSync(path.join(root, "apps", "panel", "index.html"), "utf8");
+  assert.match(markup, />Token maxxing</u);
+  assert.match(markup, /Toggle Token maxxing for external models/u);
+
+  const swift = readFileSync(
+    path.join(root, "apps", "macos", "ModelRouterTray", "Sources", "ModelRouterTrayApp.swift"),
+    "utf8",
+  );
+  assert.match(swift, /title: routerLocalized\("Token maxxing"\)/u);
+  assert.doesNotMatch(swift, /title: routerLocalized\("Compact old tool results"\)/u);
+});
+
 test("browser panel marks Arabic as the only right-to-left language", () => {
   for (const { id, dir } of availableLanguages()) {
     if (id === "ar") assert.equal(dir, "rtl");

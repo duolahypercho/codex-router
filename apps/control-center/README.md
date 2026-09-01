@@ -32,7 +32,7 @@ credentials, or service logic in the renderer.
   actions in the session's owning client.
 - Settings: signed routing, presence, safe service start/status,
   tray, language,
-  appearance, old tool-result compaction, vision, and read-only maintenance
+  appearance, Token maxxing, vision, and read-only maintenance
   guidance. Updates and repairs remain interactive-terminal workflows.
 
 The Control Center and tray ship as one visible application on every platform.

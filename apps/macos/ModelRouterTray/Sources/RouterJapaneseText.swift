@@ -3,7 +3,7 @@
 enum RouterJapaneseText {
   static let values: [String: String] = [
     "Uninstalling": "アンインストール中",
-    "Off by default · token maxxing starts at 70% on external models": "デフォルトでオフ · 外部モデルでは 70% で token maxxing を開始します",
+    "Off by default · compacts old results; RTK shapes routed compaction": "デフォルトでオフ · 古い結果を圧縮し、RTK がルーティング圧縮を整形します",
     "Fix Codex Router installation": "Codex ルーターのインストールを修復",
     "Language": "言語",
     "System": "システムに従う",
@@ -131,7 +131,7 @@ enum RouterJapaneseText {
     "Use without OpenAI login": "OpenAI ログインなしで使用",
     "External providers · Codex restarts automatically": "外部プロバイダー · Codex は自動的に再起動します",
     "Use connected models and restart Codex": "接続済みモデルを使用して Codex を再起動",
-    "Compact old tool results": "古いツール結果を圧縮",
+    "Token maxxing": "Token maxxing",
     "Forced off by CODEX_ROUTER_TOOL_RESULT_AGING=0": "CODEX_ROUTER_TOOL_RESULT_AGING=0 により強制的に無効",
     "External models · applies on the next request": "外部モデル · 次回のリクエストから適用",
     "Providers": "プロバイダー",

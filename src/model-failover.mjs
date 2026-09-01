@@ -109,13 +109,17 @@ export function classifyRoutedFailure({ status, bodyText, retryAfterSeconds, now
     // is not a reason to invent a window: the turn still fails over, and the
     // next turn tries the operator's chosen model again, which is the honest
     // behaviour when nothing is known.
-    return {
-      swap: true,
-      reason: "out_of_usage",
-      ...(Number.isFinite(retryAfter) && retryAfter > 0
-        ? { until: cappedUntil(at, retryAfter * 1_000) }
-        : {}),
-    };
+    //
+    // Some do say, in the body rather than a header, and that sentence is the
+    // provider naming its own window exactly as `Retry-After` would. Reading it
+    // is what stops an exhausted plan from being re-attempted once per turn for
+    // the whole window -- observed as 225 quota refusals against one Z.ai
+    // Coding Plan window, each one a full round trip before the failover.
+    const until =
+      Number.isFinite(retryAfter) && retryAfter > 0
+        ? cappedUntil(at, retryAfter * 1_000)
+        : providerNamedResetUntil(bodyText, at);
+    return { swap: true, reason: "out_of_usage", ...(until ? { until } : {}) };
   }
 
   if (code === 429 && Number.isFinite(retryAfter) && retryAfter > MIN_RATE_LIMIT_COOLDOWN_SECONDS) {
@@ -127,6 +131,55 @@ export function classifyRoutedFailure({ status, bodyText, retryAfterSeconds, now
 
 function cappedUntil(at, durationMs) {
   return new Date(at + Math.min(durationMs, MAX_COOLDOWN_MS)).toISOString();
+}
+
+// Z.ai's Coding Plan refuses an exhausted window with code 1308 and the
+// sentence "Usage limit reached for 5 hour. Your limit will reset at
+// 2026-09-01 21:32:15", carrying no `Retry-After` at all. Narrow on purpose:
+// only a wall-clock stamp immediately after "reset at" counts, so prose that
+// merely mentions a reset never becomes a window.
+const PROVIDER_NAMED_RESET = /\breset(?:s)?\s+at\s+(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}:\d{2})/i;
+
+// Every real UTC offset, in minutes, including the quarter-hour ones. The
+// provider's stamp carries no zone, so this is the set of instants it could
+// possibly denote.
+const UTC_OFFSET_MINUTES = Object.freeze([
+  -720, -660, -600, -570, -540, -480, -420, -360, -300, -240, -210, -180, -120, -60, 0, 60, 120,
+  180, 210, 240, 270, 300, 330, 345, 360, 390, 420, 480, 525, 540, 570, 600, 630, 660, 720, 765,
+  780, 840,
+]);
+
+// Which instant a zoneless stamp names depends on a zone neither side states.
+// Reading it as this host's local time is right only when the operator's clock
+// happens to match the plan's, and wrong by up to a day for everyone else --
+// in the direction that stops the router dispatching to a model that is in fact
+// available again.
+//
+// The two errors are not symmetric. Waking early costs one extra refusal and
+// re-records the window. Waking late withholds a model the operator chose and
+// is paying for, for as long as the misreading runs. So take the *earliest*
+// instant the stamp could denote that has not already passed: the true reset is
+// always one of these candidates, so the window can never outlast it.
+//
+// This also makes the reading independent of the host's own timezone, which is
+// why these assertions hold wherever `TZ` is set.
+//
+// A stamp with no future candidate at all records nothing rather than a window
+// in the past. `cappedUntil` keeps the far side bounded by the same six hours
+// every other source is held to.
+function providerNamedResetUntil(bodyText, at) {
+  if (typeof bodyText !== "string") return undefined;
+  const match = PROVIDER_NAMED_RESET.exec(bodyText);
+  if (!match) return undefined;
+  const wallMs = Date.parse(`${match[1]}T${match[2]}Z`);
+  if (!Number.isFinite(wallMs)) return undefined;
+  let earliest;
+  for (const offsetMinutes of UTC_OFFSET_MINUTES) {
+    const instant = wallMs - offsetMinutes * 60_000;
+    if (instant <= at) continue;
+    if (earliest === undefined || instant < earliest) earliest = instant;
+  }
+  return earliest === undefined ? undefined : cappedUntil(at, earliest - at);
 }
 
 // -- how long an empty provider is believed ----------------------------------

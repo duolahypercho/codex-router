@@ -32,6 +32,10 @@ function quotaBody(message) {
   return JSON.stringify({ error: { message } });
 }
 
+function quotaResetBody(stamp) {
+  return quotaBody(`Usage limit reached for 5 hour. Your limit will reset at ${stamp}.`);
+}
+
 // -- classification ----------------------------------------------------------
 
 test("classifyRoutedFailure swaps on exhausted usage across provider dialects", () => {
@@ -84,6 +88,79 @@ test("classifyRoutedFailure recognizes the observed Z.ai five-hour window messag
     status: 429,
     bodyText: quotaBody(
       "Usage limit reached for 5 hour. Your limit will reset at 2026-08-21 04:40:42.",
+    ),
+    now: NOW,
+  });
+  // This body names a reset nearly a week out, so the window it produces is the
+  // shared six-hour cap rather than the stamp itself.
+  assert.deepEqual(verdict, {
+    swap: true,
+    reason: "out_of_usage",
+    until: new Date(NOW + MAX_COOLDOWN_MS).toISOString(),
+  });
+});
+
+test("classifyRoutedFailure honours a reset time the provider named in the body", () => {
+  // Z.ai sends no `Retry-After`; the window is a sentence. Without this the
+  // exhausted plan was re-attempted on every turn for the whole window.
+  // NOW is 12:00Z, so the earliest zone in which "13:00" is still ahead is
+  // UTC+0 itself.
+  const verdict = classifyRoutedFailure({
+    status: 429,
+    bodyText: quotaResetBody("2026-08-15 13:00:00"),
+    now: NOW,
+  });
+  assert.deepEqual(verdict, {
+    swap: true,
+    reason: "out_of_usage",
+    until: "2026-08-15T13:00:00.000Z",
+  });
+});
+
+test("classifyRoutedFailure never waits longer than the earliest zone the stamp allows", () => {
+  // The stamp names no zone. Read as this host's local time it could sit most
+  // of a day out and withhold a model that is already available again -- the
+  // one error worth engineering against, since waking early only costs a
+  // second refusal. "20:00" against a 12:00Z now is soonest in UTC+7, an hour
+  // away, and that is the window recorded no matter where the host runs.
+  const verdict = classifyRoutedFailure({
+    status: 429,
+    bodyText: quotaResetBody("2026-08-15 20:00:00"),
+    now: NOW,
+  });
+  assert.equal(verdict.until, "2026-08-15T13:00:00.000Z");
+  assert.ok(
+    Date.parse(verdict.until) - NOW <= 8 * 60 * 60_000,
+    "a zoneless stamp must never strand a model for the full offset spread",
+  );
+});
+
+test("classifyRoutedFailure prefers Retry-After over a reset named in the body", () => {
+  const verdict = classifyRoutedFailure({
+    status: 429,
+    bodyText: quotaResetBody("2026-08-15 13:00:00"),
+    retryAfterSeconds: 300,
+    now: NOW,
+  });
+  assert.equal(verdict.until, new Date(NOW + 300_000).toISOString());
+});
+
+test("classifyRoutedFailure ignores a named reset no zone can place ahead", () => {
+  // Two days behind `now` is past in every offset, so there is no window to
+  // record and the model stays reachable.
+  const verdict = classifyRoutedFailure({
+    status: 429,
+    bodyText: quotaResetBody("2026-08-13 00:00:00"),
+    now: NOW,
+  });
+  assert.deepEqual(verdict, { swap: true, reason: "out_of_usage" });
+});
+
+test("classifyRoutedFailure reads no window from prose that never names a time", () => {
+  const verdict = classifyRoutedFailure({
+    status: 429,
+    bodyText: quotaBody(
+      "usage limit reached for your GLM Coding Plan. Your limit will reset at the top of the hour.",
     ),
     now: NOW,
   });

@@ -28,3 +28,7 @@ apps/desktop/src-tauri/icons/icon.icns
 # object store in the first place.
 release-local/
 release-rebuild*/
+
+# Scratch imagegen output. The campaign PNGs it produces are committed
+# under docs-site/public/campaign/, which is the copy the site serves.
+output/

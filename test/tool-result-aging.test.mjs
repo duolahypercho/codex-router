@@ -41,7 +41,7 @@ test("ages a large consumed result while preserving its call pairing and recover
   );
 });
 
-test("ordinary aging keeps exact head and tail bytes without pressure shaping", () => {
+test("ordinary aging keeps exact head and tail bytes without RTK shaping", () => {
   const value = [
     "progress 10%\rprogress 20%",
     ...Array.from({ length: 5_000 }, (_, index) => `distinct line ${index}`),
@@ -57,7 +57,7 @@ test("ordinary aging keeps exact head and tail bytes without pressure shaping", 
     ]).flat(),
   ];
 
-  const result = ageToolResults(input, { tokenMaxxing: false });
+  const result = ageToolResults(input, { denseShaping: false });
   assert.equal(result.stats.toolResultsAged, 1);
   assert.equal(result.stats.toolResultsShaped, 0);
   assert.match(result.input[1].output, /progress 10%\rprogress 20%/u);
@@ -116,7 +116,7 @@ test("can be disabled without copying or changing the input", () => {
   });
 });
 
-test("token maxxing shapes a noisy newest result with a recoverable receipt", () => {
+test("dense compaction shapes a noisy newest result with a recoverable RTK receipt", () => {
   const value = [
     "starting build",
     ...Array(1_000).fill("compiled unchanged dependency"),
@@ -127,22 +127,34 @@ test("token maxxing shapes a noisy newest result with a recoverable receipt", ()
   const ordinary = ageToolResults(input);
   assert.equal(ordinary.input, input, "the ordinary frontier remains byte-for-byte intact");
 
-  const maxxed = ageToolResults(input, { tokenMaxxing: true });
-  assert.notEqual(maxxed.input, input);
-  assert.equal(maxxed.stats.toolResultsAged, 0);
-  assert.equal(maxxed.stats.toolResultsShaped, 1);
-  assert.equal(maxxed.stats.toolResultShapeBytesSaved, maxxed.stats.toolResultBytesSaved);
-  assert.match(maxxed.input[1].output, /same line repeated 999 more times/u);
-  assert.match(maxxed.input[1].output, /ERROR final link failed/u);
-  assert.match(maxxed.input[1].output, /Repeat the preceding exec_command call/u);
+  const compacted = ageToolResults(input, { denseShaping: true });
+  assert.notEqual(compacted.input, input);
+  assert.equal(compacted.stats.toolResultsAged, 0);
+  assert.equal(compacted.stats.toolResultsShaped, 1);
+  assert.equal(compacted.stats.toolResultShapeBytesSaved, compacted.stats.toolResultBytesSaved);
+  assert.match(compacted.input[1].output, /RTK-style compaction/u);
+  assert.match(compacted.input[1].output, /same line repeated 999 more times/u);
+  assert.match(compacted.input[1].output, /ERROR final link failed/u);
+  assert.match(compacted.input[1].output, /Repeat the preceding exec_command call/u);
   assert.match(
-    maxxed.input[1].output,
+    compacted.input[1].output,
     new RegExp(createHash("sha256").update(value).digest("hex")),
   );
 
-  const repeated = ageToolResults(maxxed.input, { tokenMaxxing: true });
-  assert.equal(repeated.input, maxxed.input, "a shaped frontier is not wrapped again");
+  const repeated = ageToolResults(compacted.input, { denseShaping: true });
+  assert.equal(repeated.input, compacted.input, "a shaped frontier is not wrapped again");
   assert.equal(repeated.stats.toolResultsShaped, 0);
+});
+
+test("dense compaction does not wrap a receipt written by the former pressure mode", () => {
+  const legacy = [
+    "[Tool result shaped by Codex Router token maxxing: 10000 -> 100 bytes, sha256:abc.]",
+    ...Array(1_000).fill("repeated legacy output"),
+  ].join("\n");
+  const input = [call("latest", "exec_command"), output("latest", legacy)];
+  const result = ageToolResults(input, { denseShaping: true });
+  assert.equal(result.input, input);
+  assert.equal(result.stats.toolResultsShaped, 0);
 });
 
 test("the RTK-style shaper is deterministic and keeps error-bearing evidence", () => {
