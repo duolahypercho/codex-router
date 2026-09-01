@@ -155,7 +155,7 @@ export function modelMetadataFromProviderRecord(record, { trusted = false } = {}
   if (!record || typeof record !== "object" || Array.isArray(record)) {
     throw new Error("Provider model metadata must be an object.");
   }
-  const upstreamId = first(record, ["id", "model", "upstreamId"]);
+  const upstreamId = first(record, ["id", "model", "upstreamId", "slug"]);
   if (typeof upstreamId !== "string" || !upstreamId.trim()) {
     throw new Error("Provider model metadata is missing id.");
   }

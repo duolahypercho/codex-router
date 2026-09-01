@@ -67,6 +67,7 @@ test("provider selection keeps backward compatibility and can hide the final pro
     // credential to configure and they are always available. Everything else
     // has to authenticate before it counts.
     assert.deepEqual(configuredProviderIds(), [
+      "chatgpt-web",
       "custom",
       "kilo-free",
       "lmstudio",
@@ -78,6 +79,7 @@ test("provider selection keeps backward compatibility and can hide the final pro
     delete process.env.KIMI_API_KEY;
     writeProviderCredential("deepseek", "TEST_DEEPSEEK_SELECTION_KEY");
     assert.deepEqual(configuredProviderIds(), [
+      "chatgpt-web",
       "custom",
       "deepseek",
       "kilo-free",

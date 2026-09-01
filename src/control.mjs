@@ -17,7 +17,10 @@ import { withNativeContextVariants } from "./native-context-variants.mjs";
 // below that re-import paths with their own MODEL_ROUTER_TARGET.
 import {
   DSH_CATALOG_PATH,
+  CLAUDE_CATALOG_PATH,
+  CURSOR_CATALOG_PATH,
   GEMINI_CATALOG_PATH,
+  OPENCLAW_CATALOG_PATH,
   PROVIDER_API_KEY_POOL_PATH,
   PROVIDER_CREDENTIAL_STORE_PATH,
   PROVIDER_SELECTION_PATH,
@@ -32,6 +35,20 @@ import {
   chatGptSessionStatus,
   setChatGptSessionSharingFromControl,
 } from "./chatgpt-session-control.mjs";
+import { inheritedProxyEnvironment } from "./proxy-environment.mjs";
+import { installStableFetchTransport } from "./fetch-transport.mjs";
+
+// The tray launches this control process from the desktop session, which can
+// be silent about the proxy even when installation explicitly recorded one.
+// Restore that decision before any dynamically imported network client builds
+// its dispatcher. This keeps OAuth login and the provider-usage refresh that
+// follows it on the same path instead of reconnecting successfully and then
+// immediately reporting a direct-connect timeout.
+const restoredProxyEnvironment = inheritedProxyEnvironment();
+for (const [name, value] of Object.entries(restoredProxyEnvironment)) {
+  process.env[name] = value;
+}
+installStableFetchTransport();
 
 // Cross-target control plane for a tray/UI (e.g. the planned pane fork). It
 // reads which registry models are enabled per target and toggles them. Toggling
@@ -47,10 +64,16 @@ const REPO_ROOT = path.resolve(path.dirname(SELF), "..");
 // uninstall, so its presence is exactly the question being asked.
 const DSH_PUBLISHED = DSH_CATALOG_PATH;
 const GEMINI_PUBLISHED = GEMINI_CATALOG_PATH;
+const CURSOR_PUBLISHED = CURSOR_CATALOG_PATH;
+const CLAUDE_PUBLISHED = CLAUDE_CATALOG_PATH;
+const OPENCLAW_PUBLISHED = OPENCLAW_CATALOG_PATH;
 const TARGETS = [
   "codex",
   ...(existsSync(DSH_PUBLISHED) ? ["dsh"] : []),
   ...(existsSync(GEMINI_PUBLISHED) ? ["gemini"] : []),
+  ...(existsSync(CURSOR_PUBLISHED) ? ["cursor"] : []),
+  ...(existsSync(CLAUDE_PUBLISHED) ? ["claude"] : []),
+  ...(existsSync(OPENCLAW_PUBLISHED) ? ["openclaw"] : []),
 ];
 const args = process.argv.slice(2);
 
@@ -62,6 +85,9 @@ function targetIsActive(target) {
   // Same question for Gemini CLI: whether this router published its `.env`
   // block. The CLI itself is not a resident process there is anything to poll.
   if (target === "gemini") return existsSync(GEMINI_PUBLISHED);
+  if (target === "cursor") return existsSync(CURSOR_PUBLISHED);
+  if (target === "claude") return existsSync(CLAUDE_PUBLISHED);
+  if (target === "openclaw") return existsSync(OPENCLAW_PUBLISHED);
   const result = spawnSync(process.execPath, [path.join(REPO_ROOT, "src", "service.mjs"), "status"], {
     env: { ...process.env, MODEL_ROUTER_TARGET: target },
     encoding: "utf8",
@@ -564,6 +590,12 @@ function refreshActiveTarget(target) {
         ? [process.execPath, [path.join(REPO_ROOT, "src", "dsh-config-manager.mjs"), "install"]]
         : target === "gemini"
           ? [process.execPath, [path.join(REPO_ROOT, "src", "gemini-config-manager.mjs"), "install"]]
+          : target === "cursor"
+            ? [process.execPath, [path.join(REPO_ROOT, "src", "cursor-config-manager.mjs"), "install"]]
+          : target === "claude"
+            ? [process.execPath, [path.join(REPO_ROOT, "src", "claude-code-config-manager.mjs"), "install"]]
+          : target === "openclaw"
+            ? [process.execPath, [path.join(REPO_ROOT, "src", "openclaw-config-manager.mjs"), "install"]]
           : undefined;
   if (!command) return;
   const result = spawnSync(command[0], command[1], {
@@ -2835,6 +2867,58 @@ async function handleHarness(action) {
   process.stdout.write(`${JSON.stringify(result)}\n`);
 }
 
+// Publish the shared router plane into one concrete coding client. The Control
+// Center exposes this as a fixed client-row setup surface; no executable, cwd,
+// or arbitrary argv crosses the renderer boundary. DeepSeek Harness retains
+// its install-if-missing path, while Codex and Cursor use the same transactional
+// enable entrypoint operators run from the terminal. OpenClaw's enable path
+// installs the official CLI when missing before it publishes the provider.
+async function handleClientSetup(target, publicUrl, hostname) {
+  if (!["codex", "dsh", "cursor", "claude", "openclaw"].includes(target)) {
+    throw new Error("Usage: control client-setup codex|dsh|cursor|claude|openclaw [--hostname PUBLIC_HOSTNAME|--public-url HTTPS_ORIGIN]");
+  }
+  if (target === "dsh") {
+    if (publicUrl || hostname) throw new Error("--hostname and --public-url apply to Cursor only.");
+    const { setupHarness } = await import("./dsh-install.mjs");
+    process.stdout.write(`${JSON.stringify(await setupHarness())}\n`);
+    return;
+  }
+  if (target === "cursor" && !publicUrl && !hostname) {
+    const { installCursorAgentIntegration } = await import("./cursor-config-manager.mjs");
+    process.stdout.write(`${JSON.stringify({
+      target,
+      configured: true,
+      surface: "agent",
+      ...installCursorAgentIntegration(),
+    })}\n`);
+    return;
+  }
+  if (target !== "cursor" && (publicUrl || hostname)) {
+    throw new Error(
+      "--hostname and --public-url apply to Cursor only.",
+    );
+  }
+  if (publicUrl && hostname) throw new Error("Use either --hostname or --public-url, not both.");
+  const { currentCheckoutInstaller } = await import("./update.mjs");
+  const enable = currentCheckoutInstaller(process.platform, target, { posixScript: "enable" });
+  const environment = { ...process.env, MODEL_ROUTER_TARGET: target };
+  if (publicUrl) environment.MODEL_ROUTER_CURSOR_PUBLIC_BASE_URL = publicUrl;
+  if (hostname) environment.MODEL_ROUTER_CURSOR_TUNNEL_HOSTNAME = hostname;
+  const result = spawnSync(enable.command, enable.args, {
+    cwd: REPO_ROOT,
+    env: environment,
+    encoding: "utf8",
+    windowsHide: true,
+  });
+  if (result.error) throw result.error;
+  if (result.status !== 0) {
+    throw new Error(
+      String(result.stderr || result.stdout || `${target} setup failed`).trim(),
+    );
+  }
+  process.stdout.write(`${JSON.stringify({ target, configured: true })}\n`);
+}
+
 async function handleClientExport() {
   const values = args.slice(1);
   let secretEnv;
@@ -2958,6 +3042,13 @@ if (args.includes("--probe")) {
   handleTray(args[1]);
 } else if (args[0] === "harness") {
   await handleHarness(args[1]);
+} else if (args[0] === "client-setup") {
+  const publicUrl = optionValue("--public-url");
+  const hostname = optionValue("--hostname");
+  if ((publicUrl && hostname) || ((publicUrl || hostname) && args.length !== 4) || (!publicUrl && !hostname && args.length !== 2)) {
+    throw new Error("Usage: control client-setup codex|dsh|cursor|claude|openclaw [--hostname PUBLIC_HOSTNAME|--public-url HTTPS_ORIGIN]");
+  }
+  await handleClientSetup(args[1], publicUrl, hostname);
 } else if (args[0] === "client-export") {
   await handleClientExport();
 } else if (args[0] === "presence") {

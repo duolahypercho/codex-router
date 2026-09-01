@@ -249,7 +249,7 @@ function validateRecordShape(record, index, maxRecordBytes) {
   if (Buffer.byteLength(serialized, "utf8") > maxRecordBytes) {
     throw new Error(`Provider model catalog record ${index} exceeds the record size limit.`);
   }
-  const id = record.id ?? record.model ?? record.upstreamId;
+  const id = record.id ?? record.model ?? record.upstreamId ?? record.slug;
   if (typeof id !== "string" || !id.trim() || id.length > 512 || /[\u0000-\u001f\u007f]/.test(id)) {
     throw new Error(`Provider model catalog record ${index} has an invalid model id.`);
   }
@@ -259,7 +259,7 @@ export function validateModelCatalogPayload(payload, {
   maxModels = MODEL_DISCOVERY_MAX_MODELS,
   maxRecordBytes = MODEL_DISCOVERY_MAX_RECORD_BYTES,
 } = {}) {
-  const data = Array.isArray(payload) ? payload : payload?.data;
+  const data = Array.isArray(payload) ? payload : payload?.data ?? payload?.models;
   if (!Array.isArray(data) || data.length > maxModels) throw new Error("Provider returned an invalid or oversized model catalog.");
   data.forEach((record, index) => validateRecordShape(record, index, maxRecordBytes));
   return data;

@@ -1697,3 +1697,29 @@ test("opencode's DeepSeek models never receive a forced tool_choice", () => {
   );
   assert.equal(MODEL_BY_SLUG.get("opencode-go/grok-4.5"), goGrok);
 });
+
+test("Muse Spark 1.2 routes normalize forced tool choices model-by-model", () => {
+  // Live probes on 2026-09-01 proved that Muse Spark 1.2 calls tools under
+  // `auto` but rejects `required` on both Command Code and Console Go. The
+  // restriction follows the upstream model, so every checked-in route for the
+  // regular or Contributor model carries the same narrow compatibility repair.
+  for (const slug of [
+    "commandcode/muse-spark-1.2",
+    "meta/muse-spark-1.2",
+    "meta/muse-spark-1.2-contributor",
+    "nousresearch/muse-spark-1.2-contributor",
+    "opencode-go-responses/muse-spark-1.2-contributor",
+  ]) {
+    assert.equal(MODEL_BY_SLUG.get(slug)?.requestProfile, "auto-tool-choice", slug);
+  }
+
+  // The repair is not a Command Code, Meta, Nous, or Console Go default.
+  for (const slug of [
+    "commandcode/gpt-5.6-sol",
+    "meta/muse-spark-1.1",
+    "nousresearch/glm-5.3",
+    "opencode-go-responses/gpt-5.6-luna",
+  ]) {
+    assert.equal(MODEL_BY_SLUG.get(slug)?.requestProfile, undefined, slug);
+  }
+});

@@ -6,6 +6,7 @@ formula_path="$source_root/Formula/codex-router.rb"
 tap_name="local/codex-router-readiness"
 install_formula=false
 installed_by_check=false
+official_probe_root=""
 
 case "${1:-}" in
   "") ;;
@@ -31,6 +32,9 @@ cleanup() {
     brew uninstall "$tap_name/codex-router" >/dev/null 2>&1 || true
   fi
   brew untap "$tap_name" >/dev/null 2>&1 || true
+  if [ -n "$official_probe_root" ]; then
+    rm -rf -- "$official_probe_root"
+  fi
 }
 trap cleanup EXIT
 trap 'exit 129' HUP
@@ -41,8 +45,19 @@ brew tap-new --no-git "$tap_name" >/dev/null
 tap_root=$(brew --repository "$tap_name")
 cp "$formula_path" "$tap_root/Formula/codex-router.rb"
 
+# Homebrew applies additional formula rules only when the path belongs to an
+# official tap. The temporary third-party tap below is still needed for install
+# and audit commands, but it cannot catch those rules by itself. Mirror the
+# formula into an isolated official-looking path so local checks exercise the
+# same style policy as homebrew/core CI.
+official_probe_root=$(mktemp -d "${TMPDIR:-/tmp}/codex-router-homebrew-core.XXXXXX")
+official_formula_dir="$official_probe_root/Taps/homebrew/homebrew-core/Formula/c"
+mkdir -p "$official_formula_dir"
+cp "$formula_path" "$official_formula_dir/codex-router.rb"
+
+brew style "$official_formula_dir/codex-router.rb"
 brew style "$tap_root/Formula/codex-router.rb"
-brew audit --new --formula "$tap_name/codex-router"
+brew audit --strict --new --online --formula "$tap_name/codex-router"
 
 if [ "$install_formula" = true ]; then
   if brew list --formula codex-router >/dev/null 2>&1; then

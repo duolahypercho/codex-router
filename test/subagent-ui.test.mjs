@@ -65,16 +65,20 @@ test("the macOS tray lists every model and varies only the switch", () => {
   // the rest here made the operator's own models look missing.
   assert.match(source, /private var subagentModels: \[RouterModel\]/);
   assert.match(source, /\.filter\(\\\.enabled\)/);
-  assert.match(source, /ForEach\(providerGroups\(subagentModels\)\)/);
+  assert.match(source, /ForEach\(providerGroups\(filteredSubagentModels\)\)/);
 
-  // Capability still comes only from the registry's certification.
+  // The switch reflects the effective router selection. Registry v2 routes
+  // are on by default, while selected/all mode deliberately promotes unknown
+  // routes and an explicit off still wins.
   assert.match(source, /let subagentCertification: String\?/);
   assert.match(source, /private func isCertifiedV2\(_ model: RouterModel\) -> Bool/);
   const activeCapability = source.slice(
     source.indexOf("private func isSubagent(_ model: RouterModel)"),
     source.indexOf("private func subagentToggleOn(_ model: RouterModel)"),
   );
-  assert.match(activeCapability, /isCertifiedV2\(model\)/);
+  assert.match(activeCapability, /TraySubagentSelectionPolicy\.isOn/);
+  assert.match(source, /mode == "all" \|\| \(mode == "selected" && explicitlyEnabled\)/);
+  assert.match(source, /guard !explicitlyDisabled, certification != "v1"/);
 
   // No local-proof vocabulary survives on this surface either.
   assert.doesNotMatch(source, /isKnownV1|isCertificationCandidate|selectedSubagentSet/);
@@ -84,7 +88,10 @@ test("the macOS tray lists every model and varies only the switch", () => {
 
   // Every row's switch means one thing, so it needs no state to decode.
   assert.match(source, /private func subagentToggleOn\(_ model: RouterModel\) -> Bool \{\s*isSubagent\(model\)\s*\}/);
-  assert.match(source, /!isPickerVisible\(model\) \|\| !isCertifiedV2\(model\)/);
+  assert.match(source, /TraySubagentTogglePolicy\.isDisabled/);
+  assert.match(source, /certification == "v1"/);
+  assert.doesNotMatch(source, /TraySubagentTogglePolicy\.isDisabled\([\s\S]{0,120}pickerVisible:/);
+  assert.doesNotMatch(source, /!isPickerVisible\(model\) \|\| !isCertifiedV2\(model\)/);
   assert.match(source, /routerLocalized\("Cannot run subagents"\)/);
   assert.match(source, /get: \{ subagentToggleOn\(model\) \}/);
   assert.match(source, /disabled: subagentToggleDisabled\(model\)/);
@@ -95,7 +102,7 @@ test("the macOS tray lists every model and varies only the switch", () => {
   assert.match(source, /subagentEffortRow\(for: model\)/);
 });
 
-test("the browser and macOS tray model pickers can search enabled models", () => {
+test("the browser and macOS tray accordions can search providers and enabled models", () => {
   const panel = readFileSync(path.join(root, "apps", "panel", "app.js"), "utf8");
   const html = readFileSync(path.join(root, "apps", "panel", "index.html"), "utf8");
   const macos = readFileSync(
@@ -104,6 +111,29 @@ test("the browser and macOS tray model pickers can search enabled models", () =>
   );
   assert.match(html, /id="picker-model-search"/);
   assert.match(panel, /modelMatchesQuery\(model, state\.pickerModelFilter/);
+  assert.match(macos, /private var filteredProviderVendorGroups: \[ProviderGroup\]/);
+  assert.match(macos, /let groups = filteredProviderVendorGroups/);
+  assert.match(macos, /placeholder: routerLocalized\("Search providers"\)/);
+  assert.match(macos, /private var filteredSubagentModels: \[RouterModel\]/);
+  assert.match(macos, /ForEach\(providerGroups\(filteredSubagentModels\)\)/);
+  assert.match(macos, /placeholder: routerLocalized\("Search subagent models"\)/);
   assert.match(macos, /private var filteredPickerModels: \[RouterModel\]/);
   assert.match(macos, /ForEach\(providerGroups\(filteredPickerModels\)\)/);
+  assert.match(macos, /private struct AccordionSearchField: View/);
+});
+
+test("the macOS tray OAuth reconnect action opens a visible browser-sign-in state", () => {
+  const macos = readFileSync(
+    path.join(root, "apps", "macos", "ModelRouterTray", "Sources", "ModelRouterTrayApp.swift"),
+    "utf8",
+  );
+  const login = macos.slice(
+    macos.indexOf("func loginProvider(_ provider: String) async"),
+    macos.indexOf("func saveProviderKey(_ provider: String, key: String) async"),
+  );
+  assert.match(login, /Opening \\\(displayName\) sign-in in your browser/);
+  assert.match(login, /runControl\(arguments: \["login", provider\]\)/);
+  assert.match(macos, /Image\(systemName: "arrow\.clockwise"\)[\s\S]*Text\(routerLocalized\("Reconnect"\)\)/);
+  assert.match(macos, /\.fixedSize\(horizontal: true, vertical: false\)/);
+  assert.match(macos, /routerLocalized\("Finish sign-in in browser"\)/);
 });

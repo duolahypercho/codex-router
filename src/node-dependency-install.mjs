@@ -43,6 +43,10 @@ export function ensureNodeDependencies({
   if (!npm) throw dependencyFailure("npm is required and is normally included with Node.js.");
   process.stdout.write("Installing Node dependencies needed for credential setup...\n");
   const invocation = spawnableCommand(npm, ["ci", "--omit=dev"], platform);
+  // CodeQL conflates spawnableCommand's direct-exec and escaped Windows-batch
+  // return shapes across unrelated callers. The helper rejects illegal batch
+  // paths and escapes every cmd.exe metacharacter before this spawn.
+  // codeql[js/shell-command-injection-from-environment]
   const result = spawnSync(invocation.command, invocation.args, {
     ...invocation.options,
     cwd: root,

@@ -14,8 +14,11 @@ const bridgeSource = String.raw`
 (() => {
   const calls = [];
   let navigationListener;
+  let operationListener;
   const searchParams = new URLSearchParams(location.search);
   let usageDelayMs = Number(searchParams.get("usageDelayMs")) || 0;
+  let cursorHarnessState = "configured";
+  let openclawHarnessConfigured = true;
   const snapshotDelayMs = Number(searchParams.get("snapshotDelayMs")) || 0;
   const providerDelayMs = Number(searchParams.get("providerDelayMs")) || 0;
   const accountDelay = searchParams.has("accountDelayMs")
@@ -214,6 +217,102 @@ const bridgeSource = String.raw`
         ? { ok: false, error: "Stale health response", activity: { state: "offline", active: [], activeCount: 0 } }
         : { ok: true, version: "health-" + read, activity: { state: "idle", active: [], activeCount: 0 } };
     },
+    getHarnesses: async () => ({
+      platform: "darwin",
+      terminalAvailable: true,
+      harnesses: [
+        {
+          id: "openclaw", displayName: "OpenClaw", ownership: "openclaw",
+          description: "OpenClaw's current agent runtime.", cliInstalled: true, appInstalled: false,
+          configured: openclawHarnessConfigured, canInstall: true, installRequirement: "Publish shared config.",
+          docsUrl: "https://docs.openclaw.ai/",
+        },
+        {
+          id: "codex", displayName: "Codex", ownership: "openai",
+          description: "OpenAI coding client.", cliInstalled: true, appInstalled: true,
+          configured: true, canInstall: true, installRequirement: "Publish shared config.",
+          docsUrl: "https://developers.openai.com/codex/",
+        },
+        {
+          id: "dsh", displayName: "DeepSeek Harness", ownership: "deepseek",
+          description: "DeepSeek coding client.", cliInstalled: true, appInstalled: true,
+          configured: true, canInstall: true, installRequirement: "Publish shared config.",
+          docsUrl: "https://github.com/deepseek-ai/DeepSeek-Harness",
+        },
+        {
+          id: "cursor", displayName: "Cursor", ownership: "cursor",
+          description: "Cursor Agent and Cursor App.", cliInstalled: true, appInstalled: true,
+          configured: cursorHarnessState === "configured",
+          agentConfigured: true,
+          appConfigured: cursorHarnessState === "configured",
+          canInstall: true,
+          installRequirement: cursorHarnessState === "configured" ? "Cursor App is connected." : "Continue Cursor setup.",
+          tunnel: cursorHarnessState === "configured"
+            ? { provider: "cloudflare", binaryInstalled: true, loggedIn: true, configured: true, nextAction: "ready" }
+            : cursorHarnessState === "login"
+              ? { provider: "cloudflare", binaryInstalled: true, loggedIn: false, configured: false, nextAction: "login" }
+              : { provider: "cloudflare", binaryInstalled: false, loggedIn: false, configured: false, nextAction: "install-cloudflared" },
+          docsUrl: "https://docs.cursor.com/",
+        },
+        {
+          id: "claude", displayName: "Claude Code", ownership: "anthropic",
+          description: "Anthropic coding client.", cliInstalled: true, appInstalled: false,
+          configured: true, canInstall: true, installRequirement: "Publish shared config.",
+          docsUrl: "https://code.claude.com/docs/en/overview",
+        },
+        {
+          id: "gemini", displayName: "Gemini CLI", ownership: "google",
+          description: "Google coding client.", cliInstalled: true, appInstalled: false,
+          configured: true, canInstall: true, installRequirement: "Publish shared config.",
+          docsUrl: "https://github.com/google-gemini/gemini-cli",
+        },
+      ],
+    }),
+    getAgentBridges: async () => ({
+      version: 1,
+      bridges: [
+        { id: "anthropic", displayName: "Claude", protocol: "claude-code", installed: true, sessions: 2, authentication: "client-owned" },
+        { id: "cursor", displayName: "Cursor Agent", protocol: "acp", installed: true, sessions: 1, authentication: "client-owned" },
+        { id: "gemini", displayName: "Gemini CLI", protocol: "acp", installed: false, sessions: 0, authentication: "unavailable" },
+      ],
+    }),
+    getContextSessions: async () => ({
+      fetchedAt: "2026-08-30T08:00:00.000Z",
+      counts: { total: 3, codex: 1, dsh: 1, cursor: 1, claude: 0, gemini: 0, openclaw: 0, archived: 0 },
+      sessions: [
+        { id: "11111111-1111-4111-8111-111111111111", harnessId: "cursor", title: "Cursor routing task", updatedAt: "2026-08-30T08:00:00.000Z", archived: false, resumable: true },
+        { id: "session-22222222-2222-4222-8222-222222222222", harnessId: "dsh", title: "DeepSeek routing task", updatedAt: "2026-08-30T07:00:00.000Z", archived: false, resumable: true },
+        { id: "33333333-3333-4333-8333-333333333333", harnessId: "codex", title: "Codex routing task", updatedAt: "2026-08-30T06:00:00.000Z", archived: false, resumable: true },
+      ],
+    }),
+    setupHarness: async (harnessId) => {
+      record("setupHarness", harnessId);
+      if (harnessId === "openclaw") openclawHarnessConfigured = true;
+      return { configured: true };
+    },
+    prepareCursorTunnel: async () => {
+      record("prepareCursorTunnel");
+      operationListener?.({ action: "prepareCursorTunnel", status: "started", message: "Downloading Cloudflare connector…" });
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      cursorHarnessState = "login";
+      operationListener?.({ action: "prepareCursorTunnel", status: "completed", message: "Cloudflare connector installed." });
+      return { installed: true };
+    },
+    connectCursor: async () => {
+      record("connectCursor");
+      operationListener?.({ action: "connectCursor", status: "started", message: "Installing Cloudflare connector…" });
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      cursorHarnessState = "configured";
+      operationListener?.({ action: "connectCursor", status: "completed", message: "Cursor routing verified." });
+      return { configured: true, opened: true };
+    },
+    launchHarness: async (harnessId, surface) => {
+      record("launchHarness", harnessId, surface);
+      return { opened: true };
+    },
+    probeAgentBridge: async (bridgeId) => { record("probeAgentBridge", bridgeId); return { handshake: "ok" }; },
+    loginAgentBridge: async (bridgeId) => { record("loginAgentBridge", bridgeId); return { opened: true }; },
+    openHarnessSession: async () => ({ opened: true }),
     getAccountUsage: async () => {
       accountUsageReads += 1;
       const read = accountUsageReads;
@@ -314,7 +413,10 @@ const bridgeSource = String.raw`
       navigationListener = listener;
       return () => { if (navigationListener === listener) navigationListener = undefined; };
     },
-    onOperation: () => () => {},
+    onOperation: (listener) => {
+      operationListener = listener;
+      return () => { if (operationListener === listener) operationListener = undefined; };
+    },
   });
   window.routerControlTest = Object.freeze({
     calls: () => calls.map((call) => ({ name: call.name, args: call.args })),
@@ -327,6 +429,8 @@ const bridgeSource = String.raw`
     setUsageDelay: (milliseconds) => { usageDelayMs = milliseconds; },
     usageReads: () => ({ account: accountUsageReads, provider: providerUsageReads }),
     healthReads: () => healthReads,
+    setCursorHarnessState: (state) => { cursorHarnessState = state; },
+    setOpenClawHarnessConfigured: (configured) => { openclawHarnessConfigured = configured; },
   });
 })();
 `;
@@ -448,6 +552,123 @@ test("the production renderer exposes model discovery and picker actions", { tim
     );
     await page.waitForFunction(() => document.activeElement?.getAttribute("aria-label") === "Usage overview");
     assert.equal(await page.getByLabel("Usage source").inputValue(), "chatgpt-subscription");
+
+    // Harness is one client per row, in the product order the operator uses,
+    // and the shared metadata index continues into Context Manager.
+    await page.getByRole("button", { name: "Harness Experimental", exact: true }).click();
+    assert.equal(await page.locator(".primary-nav .badge-warning", { hasText: "Experimental" }).count(), 1);
+    assert.equal(await page.locator(".title-tabs .badge-warning", { hasText: "Experimental" }).count(), 1);
+    assert.equal(await page.locator(".page-scroll-harness").evaluate((element) => getComputedStyle(element).display), "block");
+    const harnessRows = page.locator(".lhc-harness-row");
+    await harnessRows.first().waitFor();
+    assert.equal(await harnessRows.count(), 6);
+    assert.deepEqual(
+      (await harnessRows.locator("h2").allTextContents()).map((value) => value.trim()),
+      ["OpenClaw", "Cursor", "Claude Code", "Gemini CLI", "DeepSeek Harness", "Codex"],
+    );
+    assert.equal(await harnessRows.nth(0).locator('[data-client-logo="openclaw"]').count(), 1);
+    assert.equal(await harnessRows.nth(1).locator('[data-client-logo="cursor"]').count(), 1);
+    assert.equal(await harnessRows.nth(2).locator('[data-client-logo="claude"]').count(), 1);
+    assert.equal(await harnessRows.nth(3).locator('[data-client-logo="gemini"]').count(), 1);
+    assert.equal(await harnessRows.nth(4).locator('[data-client-logo="dsh"]').count(), 1);
+    assert.equal(await harnessRows.nth(5).locator('[data-client-logo="codex"]').count(), 1);
+    assert.deepEqual(
+      await page.locator(".lhc-harness-table-head span").allTextContents(),
+      ["Client", "Runtime", "Models", "Sessions", "Actions"],
+    );
+    assert.equal(await page.getByText("1 published", { exact: true }).count(), 5);
+    assert.equal(await page.getByText("1 available", { exact: true }).count(), 1);
+    assert.equal(await page.getByLabel("Stable public HTTPS origin").count(), 0);
+    assert.deepEqual(
+      (await page.locator(".lhc-harness-actions button").allTextContents()).map((label) => label.trim()),
+      ["Open", "Open", "Open", "Open", "Open", "Open"],
+    );
+    for (const client of ["OpenClaw", "Cursor", "Claude Code", "Gemini CLI", "DeepSeek Harness", "Codex"]) {
+      assert.equal(await page.getByRole("button", { name: `Open ${client}`, exact: true }).count(), 1);
+    }
+    assert.deepEqual(
+      await harnessRows.evaluateAll((rows) => rows.map((row) => row.querySelectorAll(".lhc-harness-actions button").length)),
+      [1, 1, 1, 1, 1, 1],
+    );
+    assert.equal(await page.getByRole("button", { name: /documentation|terminal|agent/i }).count(), 0);
+    await harnessRows.nth(0).getByRole("button", { name: "Open OpenClaw", exact: true }).click();
+    assert.deepEqual(
+      await page.evaluate(() => window.routerControlTest.calls().find((call) => call.name === "launchHarness")),
+      { name: "launchHarness", args: ["openclaw", "app"] },
+    );
+    await page.evaluate(() => window.routerControlTest.setOpenClawHarnessConfigured(false));
+    await page.getByRole("button", { name: "Context Manager", exact: true }).click();
+    await page.getByRole("button", { name: "Harness Experimental", exact: true }).click();
+    await harnessRows.nth(0).getByRole("button", { name: "Set up", exact: true }).click();
+    await harnessRows.nth(0).getByRole("button", { name: "Open OpenClaw", exact: true }).waitFor();
+    assert.equal(
+      await page.evaluate(() => window.routerControlTest.calls()
+        .filter((call) => call.name === "setupHarness" && call.args[0] === "openclaw").length),
+      1,
+    );
+    assert.equal(await page.locator(".lhc-agent-bridges").count(), 0);
+    assert.deepEqual(
+      await page.locator(".lhc-harness-bridge strong").allTextContents(),
+      ["Available", "Available", "Not detected"],
+    );
+    const rowBoxes = await harnessRows.evaluateAll((rows) => rows.map((row) => {
+      const box = row.getBoundingClientRect();
+      return { x: box.x, y: box.y, width: box.width, height: box.height };
+    }));
+    assert.equal(rowBoxes.every((box) => box.width === rowBoxes[0].width), true);
+    for (let index = 1; index < rowBoxes.length; index += 1) {
+      assert.equal(Math.abs(rowBoxes[index].y - (rowBoxes[index - 1].y + rowBoxes[index - 1].height)) < 1, true);
+    }
+    const listBox = await page.locator(".lhc-harness-list").boundingBox();
+    assert.ok(listBox);
+    const lastRow = rowBoxes.at(-1);
+    assert.ok(lastRow);
+    const listEndDelta = (listBox.y + listBox.height) - (lastRow.y + lastRow.height);
+    assert.ok(listEndDelta >= 0 && listEndDelta < 3, JSON.stringify({ listBox, rowBoxes, listEndDelta }));
+    const harnessColumns = await harnessRows.evaluateAll((rows) => rows.map((row) => {
+      const box = (selector) => {
+        const rect = row.querySelector(selector).getBoundingClientRect();
+        return { x: rect.x, y: rect.y, width: rect.width };
+      };
+      return {
+        identity: box(":scope > header"),
+        runtime: box(".lhc-harness-runtime"),
+        catalog: box(".lhc-harness-catalog"),
+        sessions: box(".lhc-harness-sessions"),
+        actions: box(":scope > footer"),
+      };
+    }));
+    for (const column of ["identity", "runtime", "catalog", "sessions", "actions"]) {
+      assert.equal(harnessColumns.every((row) => Math.abs(row[column].x - harnessColumns[0][column].x) < 1), true);
+      assert.equal(harnessColumns.every((row) => Math.abs(row[column].width - harnessColumns[0][column].width) < 1), true);
+    }
+    assert.equal(harnessColumns.every((row) => Math.abs(row.actions.y - harnessColumns[0].actions.y - (rowBoxes[harnessColumns.indexOf(row)].y - rowBoxes[0].y)) < 1), true);
+    await page.setViewportSize({ width: 880, height: 840 });
+    assert.equal(
+      await harnessRows.first().evaluate((row) => getComputedStyle(row).gridTemplateColumns.split(" ").length),
+      3,
+    );
+    await page.setViewportSize({ width: 1280, height: 840 });
+    await page.evaluate(() => window.routerControlTest.setCursorHarnessState("install"));
+    await page.getByRole("button", { name: "Context Manager", exact: true }).click();
+    await page.getByRole("button", { name: "Harness Experimental", exact: true }).click();
+    await page.getByRole("button", { name: "Connect Cursor", exact: true }).click();
+    const cursorProgress = page.getByRole("progressbar", { name: "Cursor setup progress" });
+    await cursorProgress.waitFor();
+    assert.match(await harnessRows.nth(1).innerText(), /Installing Cloudflare connector/);
+    await harnessRows.nth(1).getByRole("button", { name: "Open Cursor", exact: true }).waitFor();
+    assert.equal(await cursorProgress.count(), 0);
+    assert.equal(
+      await page.evaluate(() => window.routerControlTest.calls().filter((call) => call.name === "connectCursor").length),
+      1,
+    );
+    await page.getByRole("button", { name: "Context Manager", exact: true }).click();
+    await page.getByRole("heading", { name: "Context Manager", exact: true }).waitFor();
+    assert.equal(await page.locator(".lhc-session-row").count(), 3);
+    assert.deepEqual(
+      await page.locator('.segmented-control[aria-label="Filter sessions by harness"] button').allTextContents(),
+      ["All", "Cursor", "DeepSeek Harness", "Codex"],
+    );
     await page.getByRole("button", { name: "Models", exact: true }).click();
 
     // The connections strip carries every account: connected providers as

@@ -481,6 +481,141 @@ test("keeps unbounded tool inventory in the body and bounds its compatibility he
   peer.close();
 });
 
+test("relays a bounded successful JSON response without retrying the completed request", async (t) => {
+  let calls = 0;
+  const outputItem = {
+    type: "message",
+    id: "msg-json",
+    role: "assistant",
+    content: [{ type: "output_text", text: "ok" }],
+  };
+  const { server, port } = await startServer(async (request, response) => {
+    for await (const _chunk of request) {}
+    calls += 1;
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({
+      id: "resp-json",
+      object: "response",
+      status: "completed",
+      output: [outputItem],
+      usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+    }));
+  });
+  t.after(() => server.close());
+
+  const { peer } = await connect(port);
+  t.after(() => peer.socket.destroy());
+  peer.sendJson(createRequest());
+
+  const created = await peer.nextJson();
+  assert.equal(created.type, "response.created");
+  assert.equal(created.response.id, "resp-json");
+  const outputDone = await peer.nextJson();
+  assert.equal(outputDone.type, "response.output_item.done");
+  assert.equal(outputDone.item.id, "msg-json");
+  const completed = await peer.nextJson();
+  assert.equal(completed.type, "response.completed");
+  assert.equal(completed.response.id, "resp-json");
+  assert.equal(calls, 1, "a completed internal request must not be repeated by the adapter");
+  peer.close();
+});
+test("recognizes a headerless completed JSON response after inference", async (t) => {
+  let calls = 0;
+  const { server, port } = await startServer(async (request, response) => {
+    for await (const _chunk of request) {}
+    calls += 1;
+    response.end(JSON.stringify({
+      id: "resp-headerless-json",
+      object: "response",
+      status: "completed",
+      output: [],
+      usage: { input_tokens: 1, output_tokens: 0, total_tokens: 1 },
+    }));
+  });
+  t.after(() => server.close());
+
+  const { peer } = await connect(port);
+  t.after(() => peer.socket.destroy());
+  peer.sendJson(createRequest());
+  assert.equal((await peer.nextJson()).type, "response.created");
+  const completed = await peer.nextJson();
+  assert.equal(completed.type, "response.completed");
+  assert.equal(completed.response.id, "resp-headerless-json");
+  assert.equal(calls, 1);
+  peer.close();
+});
+
+test("recognizes a headerless SSE response after inference", async (t) => {
+  let calls = 0;
+  const { server, port } = await startServer(async (request, response) => {
+    for await (const _chunk of request) {}
+    calls += 1;
+    const events = [
+      { type: "response.created", response: { id: "resp-headerless-sse" } },
+      { type: "response.completed", response: { id: "resp-headerless-sse", usage: {} } },
+    ];
+    response.end(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""));
+  });
+  t.after(() => server.close());
+
+  const { peer } = await connect(port);
+  t.after(() => peer.socket.destroy());
+  peer.sendJson(createRequest());
+  assert.equal((await peer.nextJson()).type, "response.created");
+  const completed = await peer.nextJson();
+  assert.equal(completed.type, "response.completed");
+  assert.equal(completed.response.id, "resp-headerless-sse");
+  assert.equal(calls, 1);
+  peer.close();
+});
+
+test("recognizes a misdeclared completed JSON response after inference", async (t) => {
+  let calls = 0;
+  const { server, port } = await startServer(async (request, response) => {
+    for await (const _chunk of request) {}
+    calls += 1;
+    response.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
+    response.end(JSON.stringify({
+      id: "resp-misdeclared-json",
+      object: "response",
+      status: "completed",
+      output: [],
+      usage: { input_tokens: 1, output_tokens: 0, total_tokens: 1 },
+    }));
+  });
+  t.after(() => server.close());
+
+  const { peer } = await connect(port);
+  t.after(() => peer.socket.destroy());
+  peer.sendJson(createRequest());
+  assert.equal((await peer.nextJson()).type, "response.created");
+  const completed = await peer.nextJson();
+  assert.equal(completed.type, "response.completed");
+  assert.equal(completed.response.id, "resp-misdeclared-json");
+  assert.equal(calls, 1);
+  peer.close();
+});
+
+test("rejects an undeclared arbitrary body after one completed internal call", async (t) => {
+  let calls = 0;
+  const { server, port } = await startServer(async (request, response) => {
+    for await (const _chunk of request) {}
+    calls += 1;
+    response.writeHead(200, { "content-type": "text/plain" });
+    response.end("not a Responses payload");
+  });
+  t.after(() => server.close());
+
+  const { peer } = await connect(port);
+  t.after(() => peer.socket.destroy());
+  peer.sendJson(createRequest());
+  const error = await peer.nextJson();
+  assert.equal(error.type, "error");
+  assert.equal(error.error.type, "local_router_protocol_error");
+  assert.equal(calls, 1);
+  peer.close();
+});
+
 test("prewarms locally and reconstructs incremental turns without losing history", async (t) => {
   const bodies = [];
   const requestHeaders = [];
@@ -600,6 +735,58 @@ test("prewarms locally and reconstructs incremental turns without losing history
   peer.close();
 });
 
+test("continuation replay prefers the complete custom tool item over a conflicting completion snapshot", async (t) => {
+  const bodies = [];
+  const customCall = {
+    type: "custom_tool_call",
+    id: "ctc_custom",
+    status: "completed",
+    call_id: "call_custom",
+    name: "exec",
+    input: "text(await tools.exec_command({cmd: 'echo ok'}));",
+  };
+  const { server, port } = await startServer(async (request, response) => {
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk);
+    bodies.push(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+    const id = bodies.length === 1 ? "resp-custom" : "resp-after-tool";
+    sse(response, [
+      { type: "response.created", response: { id } },
+      ...(bodies.length === 1
+        ? [
+            { type: "response.output_item.done", item: customCall },
+            {
+              type: "response.completed",
+              response: {
+                id,
+                output: [{ type: "function_call", call_id: "call_custom", name: "exec" }],
+                usage: {},
+              },
+            },
+          ]
+        : [{ type: "response.completed", response: { id, usage: {} } }]),
+    ]);
+  });
+  t.after(() => server.close());
+  const { peer } = await connect(port);
+  t.after(() => peer.socket.destroy());
+
+  peer.sendJson(createRequest());
+  assert.equal((await peer.nextJson()).type, "response.created");
+  assert.equal((await peer.nextJson()).type, "response.output_item.done");
+  assert.equal((await peer.nextJson()).type, "response.completed");
+
+  const toolResult = {
+    type: "custom_tool_call_output",
+    call_id: "call_custom",
+    output: [{ type: "input_text", text: "ok" }],
+  };
+  peer.sendJson(createRequest({ previous_response_id: "resp-custom", input: [toolResult] }));
+  assert.equal((await peer.nextJson()).type, "response.created");
+  assert.equal((await peer.nextJson()).type, "response.completed");
+  assert.deepEqual(bodies[1].input, [...bodies[0].input, customCall, toolResult]);
+  peer.close();
+});
 test("wraps HTTP failures and serializes requests on a reused connection", async (t) => {
   let calls = 0;
   let active = 0;

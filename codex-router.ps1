@@ -1,8 +1,8 @@
 $ErrorActionPreference = "Stop"
 $Root = $PSScriptRoot
 $Target = if ($env:MODEL_ROUTER_TARGET) { $env:MODEL_ROUTER_TARGET } else { "codex" }
-if ($Target -ne "codex") {
-  throw "MODEL_ROUTER_TARGET must be codex."
+if ($Target -notin @("codex", "dsh", "gemini", "cursor", "claude", "openclaw")) {
+  throw "MODEL_ROUTER_TARGET must be codex, dsh, gemini, cursor, claude, or openclaw."
 }
 $Command = if ($args.Count) { [string]$args[0] } else { "status" }
 # The @() wraps the whole `if`, not its branches. PowerShell enumerates a
@@ -25,6 +25,26 @@ function Invoke-RouterNode([string]$Script, [string[]]$ScriptArguments = @()) {
   & node (Join-Path $Root $Script) @ScriptArguments
   if ($LASTEXITCODE -ne 0) {
     throw "$Script exited with status $LASTEXITCODE."
+  }
+}
+
+function Remove-TargetIntegration {
+  switch ($Target) {
+    "dsh" { Invoke-RouterNode "src\dsh-config-manager.mjs" @("uninstall") }
+    "gemini" { Invoke-RouterNode "src\gemini-config-manager.mjs" @("uninstall") }
+    "cursor" { Invoke-RouterNode "src\cursor-config-manager.mjs" @("uninstall") }
+    "claude" { Invoke-RouterNode "src\claude-code-config-manager.mjs" @("uninstall") }
+    "openclaw" { Invoke-RouterNode "src\openclaw-config-manager.mjs" @("uninstall") }
+    default { Invoke-RouterNode "src\config-manager.mjs" @("disable") }
+  }
+  $Remaining = [string](& node (Join-Path $Root "src\target-integration.mjs") "installed-targets")
+  if ($LASTEXITCODE -ne 0) { throw "Could not determine which router clients remain installed." }
+  if ([string]::IsNullOrWhiteSpace($Remaining)) {
+    Invoke-RouterNode "src\service.mjs" @("uninstall")
+  } elseif ($Target -eq "cursor") {
+    # Restart the shared service without Cursor's publication marker so its
+    # separately tunneled public-edge child is retired immediately.
+    Invoke-RouterNode "src\service.mjs" @("install")
   }
 }
 
@@ -870,12 +890,10 @@ switch ($Command) {
   "install" { & (Join-Path $Root "install.ps1") -CheckoutInstall -Target $Target @Arguments }
   "enable" { & (Join-Path $Root "install.ps1") -CheckoutInstall -Target $Target @Arguments }
   "disable" {
-    Invoke-RouterNode "src\config-manager.mjs" @("disable")
-    Invoke-RouterNode "src\service.mjs" @("uninstall")
+    Remove-TargetIntegration
   }
   "uninstall" {
-    Invoke-RouterNode "src\config-manager.mjs" @("disable")
-    Invoke-RouterNode "src\service.mjs" @("uninstall")
+    Remove-TargetIntegration
   }
   "update" {
     # `update check` stays a read-only comparison; a bare `update` installs.

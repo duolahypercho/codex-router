@@ -43,7 +43,8 @@
         "image"
       ],
       "supportsApplyPatchTool": false,
-      "compHash": "meta-muse-spark-1-2-v1"
+      "requestProfile": "auto-tool-choice",
+      "compHash": "meta-muse-spark-1-2-v2"
     }
   ]
 }

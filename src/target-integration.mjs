@@ -6,7 +6,10 @@ import { fileURLToPath } from "node:url";
 import {
   CONFIG_PATH,
   DSH_CATALOG_PATH,
+  CURSOR_CATALOG_PATH,
+  CLAUDE_CATALOG_PATH,
   GEMINI_CATALOG_PATH,
+  OPENCLAW_CATALOG_PATH,
   NATIVE_CATALOG_PATH,
   SOURCE_ROOT,
   TARGET,
@@ -36,6 +39,9 @@ export function targetCli(command) {
 const PICKER_NAMES = Object.freeze({
   dsh: "DeepSeek Harness",
   gemini: "Gemini CLI",
+  cursor: "Cursor",
+  claude: "Claude Code",
+  openclaw: "OpenClaw",
   codex: "Codex",
 });
 
@@ -60,6 +66,15 @@ export function targetRestartHint() {
   // Telling somebody to quit a CLI they may not have running would be busywork.
   if (TARGET === "gemini") {
     return "Gemini CLI reads its environment at startup; the next `gemini` run picks this up.";
+  }
+  if (TARGET === "cursor") {
+    return "Cursor Agent reads the endpoint at launch; fully quit and reopen Cursor App to reload its model settings.";
+  }
+  if (TARGET === "claude") {
+    return "Claude Code reads the router environment at launch; the next `claude-router` run picks this up.";
+  }
+  if (TARGET === "openclaw") {
+    return "OpenClaw reloads its configuration for the next agent run.";
   }
   return `Fully quit and reopen ${targetPickerName()} to refresh the model picker.`;
 }
@@ -90,6 +105,9 @@ export function installedTargets() {
   if (codexIntegrationInstalled()) installed.push("codex");
   if (existsSync(DSH_CATALOG_PATH)) installed.push("dsh");
   if (existsSync(GEMINI_CATALOG_PATH)) installed.push("gemini");
+  if (existsSync(CURSOR_CATALOG_PATH)) installed.push("cursor");
+  if (existsSync(CLAUDE_CATALOG_PATH)) installed.push("claude");
+  if (existsSync(OPENCLAW_CATALOG_PATH)) installed.push("openclaw");
   return installed;
 }
 
@@ -130,6 +148,28 @@ export function refreshTargetPickerIfInstalled() {
   // set just lost.
   if (existsSync(GEMINI_CATALOG_PATH)) {
     run("gemini-config-manager.mjs", ["install"]);
+    refreshed = true;
+  }
+  if (existsSync(CURSOR_CATALOG_PATH)) {
+    // Cursor's SQLite settings are process-owned. A running app can overwrite
+    // an external transaction on exit, so leave the existing publication in
+    // place and let doctor report catalog drift until the user quits Cursor.
+    const status = JSON.parse(
+      execFileSync(process.execPath, [path.join(SOURCE_ROOT, "src", "cursor-config-manager.mjs"), "status"], {
+        cwd: SOURCE_ROOT,
+        env: process.env,
+        encoding: "utf8",
+      }),
+    );
+    if (!status.running) run("cursor-config-manager.mjs", ["install"]);
+    refreshed = true;
+  }
+  if (existsSync(CLAUDE_CATALOG_PATH)) {
+    run("claude-code-config-manager.mjs", ["install"]);
+    refreshed = true;
+  }
+  if (existsSync(OPENCLAW_CATALOG_PATH)) {
+    run("openclaw-config-manager.mjs", ["install"]);
     refreshed = true;
   }
   return refreshed;

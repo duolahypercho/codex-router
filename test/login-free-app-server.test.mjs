@@ -41,6 +41,10 @@ function cleanCredentialEnvironment(extra = {}) {
 
 function codexSync(binary, args, env) {
   const target = spawnableCommand(binary, args);
+  // CodeQL conflates spawnableCommand's direct-exec and escaped Windows-batch
+  // return shapes across unrelated callers. The helper rejects illegal batch
+  // paths and escapes every cmd.exe metacharacter before this test spawn.
+  // codeql[js/shell-command-injection-from-environment]
   return execFileSync(target.command, target.args, {
     ...target.options,
     cwd: root,
@@ -157,6 +161,10 @@ function responseStream(model) {
 function runAppServerTurn(binary, env, model, modelProvider) {
   return new Promise((resolve, reject) => {
     const target = spawnableCommand(binary, ["app-server"]);
+    // CodeQL conflates spawnableCommand's direct-exec and escaped Windows-batch
+    // return shapes across unrelated callers. The helper rejects illegal batch
+    // paths and escapes every cmd.exe metacharacter before this test spawn.
+    // codeql[js/shell-command-injection-from-environment]
     const child = spawn(target.command, target.args, {
       ...target.options,
       cwd: root,

@@ -168,13 +168,13 @@
       <section id="models-view" class="view" hidden>
         <div class="mode-setting">
           <div>
-            <strong data-i18n="models.compactOldToolResults">Compact old tool results</strong>
-            <small id="tool-result-aging-note" data-i18n="models.reduceRepeatedContext">Reduce repeated context on external models</small>
+            <strong data-i18n="models.compactOldToolResults">Token maxxing</strong>
+            <small id="tool-result-aging-note" data-i18n="models.reduceRepeatedContext">Compact consumed old results; RTK-shape noisy output only during routed compaction</small>
           </div>
           <label class="switch" id="tool-result-aging-switch-label">
             <input id="tool-result-aging-switch" type="checkbox" data-command="set_tool_result_aging" />
             <span aria-hidden="true"></span>
-            <span class="sr-only" data-i18n="models.compactOldToolResultsAria">Compact old tool results for external models</span>
+            <span class="sr-only" data-i18n="models.compactOldToolResultsAria">Toggle Token maxxing for external models</span>
           </label>
         </div>
         <div class="accordion">

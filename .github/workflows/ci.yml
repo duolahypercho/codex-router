@@ -90,7 +90,7 @@ jobs:
       - name: Set up Homebrew
         id: set-up-homebrew
         if: steps.changed.outputs.run == 'true'
-        uses: Homebrew/actions/setup-homebrew@a657b8b0cd35d0f65cce41fce9b24cf054b49869 # 2026.08.24.1
+        uses: Homebrew/actions/setup-homebrew@3cdb78d0f62ad29dd32de765782654f4eedea607 # 2026.08.31.1
       - name: Cache Homebrew Bundler RubyGems
         id: cache-homebrew-gems
         if: steps.changed.outputs.run == 'true'
@@ -119,7 +119,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Set up Homebrew
-        uses: Homebrew/actions/setup-homebrew@a657b8b0cd35d0f65cce41fce9b24cf054b49869 # 2026.08.24.1
+        uses: Homebrew/actions/setup-homebrew@3cdb78d0f62ad29dd32de765782654f4eedea607 # 2026.08.31.1
       - name: Build and test the formula from source
         run: packaging/homebrew/check-core-readiness.sh --install
 

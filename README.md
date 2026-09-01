@@ -48,8 +48,57 @@ the app locally. If it asks for the Xcode Command Line Tools, run
 Use Anthropic, Kimi, DeepSeek, xAI, GitHub Copilot, and other external models
 inside the Codex App and CLI. One local installation can also serve
 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) and
-[Gemini CLI](https://github.com/google-gemini/gemini-cli). Your provider
+[Gemini CLI](https://github.com/google-gemini/gemini-cli), plus Cursor Agent
+and Cursor App, Claude Code, and [OpenClaw](https://github.com/openclaw/openclaw).
+Your provider
 credentials stay on your computer.
+
+### Subscription agent bridges (experimental)
+
+The Harness page also detects three optional, client-owned agent sessions:
+Claude Code, Cursor Agent, and Gemini CLI. These are deliberately separate from
+the `codex_router/...` model catalog:
+
+- Claude runs through the installed official `claude` process and its existing
+  Claude.ai login. A successful `claude auth status` proves login only; the
+  account must separately be entitled to use non-interactive/SDK turns. The
+  bridge reports Anthropic's refusal verbatim when it is not.
+- Cursor Agent runs through its official ACP stdio server (`agent acp`).
+- Gemini CLI runs through its official ACP stdio server (`gemini --acp`).
+
+The router never reads or copies those clients' OAuth tokens. It stores only
+bounded metadata for sessions created through the bridge: client, session ID,
+workspace path, and timestamps. Prompts and transcripts stay out of the bridge
+index. File-system and terminal capabilities are not advertised yet, and
+permission requests are rejected by default until the Control Center has a
+foreground approval surface.
+
+This is not an OpenAI-compatible subscription proxy. In particular, it does
+not implement CLIProxyAPI's token-to-model-endpoint behavior and does not add
+fake Claude, Cursor, or Gemini subscription models to another client's picker.
+
+Inspect the optional bridges without spending a model request:
+
+```sh
+./bin/model-router codex agents status
+./bin/model-router codex agents probe anthropic
+./bin/model-router codex agents probe cursor
+./bin/model-router codex agents probe gemini
+```
+
+Run a prompt only when you intend to spend the owning client's quota. Prompt
+text is read from stdin so it is absent from the process list:
+
+```sh
+printf '%s' 'Explain this repository.' |
+  ./bin/model-router codex agents prompt anthropic --cwd "$PWD"
+```
+
+The ACP integrations follow the official [Cursor ACP](https://prod.cursor.com/docs/cli/acp)
+and [Gemini CLI ACP](https://github.com/google-gemini/gemini-cli/blob/main/docs/cli/acp-mode.md)
+contracts. Direct reuse of Gemini CLI OAuth tokens in third-party software is
+not implemented; Google's published [Gemini CLI terms](https://github.com/google-gemini/gemini-cli/blob/main/docs/resources/tos-privacy.md)
+explicitly prohibit that access pattern.
 
 Codex Router is an independent community project. It is not affiliated with or
 endorsed by OpenAI, GitHub, Anthropic, Moonshot AI, DeepSeek, OpenRouter,
@@ -1044,24 +1093,24 @@ so it is opted into rather than discovered after it has already altered a
 session. Turning it on is remembered: a stored answer is kept verbatim and is
 never re-defaulted by a later release.
 
-Toggle **Compact old tool results** in the router Settings;
+Toggle **Token maxxing** in the router Settings;
 the next external-model request sees the change without restarting Codex or the
 router. The equivalent CLI commands are `./bin/control tool-result-aging on`,
 `off`, and `status`.
 
-When the estimated request reaches 70% of that model's auto-compact budget, the
-same switch automatically enters **token maxxing** for the turn. It applies a
-small deterministic output shaper inspired by
-[RTK](https://github.com/rtk-ai/rtk): terminal progress rewrites, exact repeated
+That switch does not add a second context-pressure policy. Codex, DeepSeek
+Harness, and Gemini CLI decide when the whole conversation needs compaction.
+Ordinary routed turns only compact consumed old results, so the newest four
+results remain byte-for-byte exact regardless of context size.
+
+When a client actually requests routed context compaction, the same switch also
+applies a small deterministic output shaper inspired by
+[RTK](https://github.com/rtk-ai/rtk). Terminal progress rewrites, exact repeated
 lines, blank runs, and deep boilerplate are collapsed while error-bearing lines
-stay visible. The newest-result frontier remains intact below that pressure
-threshold. Under pressure, every shaped result carries its original byte count,
-SHA-256 digest, and an exact rerun instruction, and the router adds a terse
-execution overlay inspired by
-[Caveman](https://github.com/JuliusBrussee/caveman) so the model favors targeted
-reads, bounded command output, and concise prose. Routed compaction requests use
-the same dense shaping because they are already at the context boundary. No
-second toggle or restart is required.
+stay visible. Every shaped result carries its original byte count, SHA-256
+digest, and an exact rerun instruction. This makes noisy GitHub, build, test,
+and terminal output cheaper for the compaction model without changing the
+newest result during an ordinary turn. No second toggle or restart is required.
 
 Native OpenAI traffic is unchanged by default. `./bin/control
 tool-result-aging native on` extends the same compaction to native GPT models;
@@ -1287,6 +1336,49 @@ tasks, and other account-backed features still require OpenAI authentication
 and are not available while signed out. The equivalent local control command is
 `./bin/control auth-mode on` or `./bin/control auth-mode off`; when using the
 command directly, restart Codex yourself.
+
+### Use ChatGPT Web models through Codex Router
+
+Codex Router can use the account-gated browser models exposed by
+[codex-chatgpt-web](https://github.com/miuuyy/codex-chatgpt-web) without letting
+the two projects compete for Codex's `openai_base_url`. The browser launcher
+owns its private Electron profile, ChatGPT sign-in, browser automation, and
+optional MCP tunnel. Codex Router remains the only owner of Codex routing,
+provider selection, model publication, usage records, and the background router
+plane.
+
+Install and open the upstream launcher, sign in inside its embedded browser,
+and pass its browser smoke test. **Do not press its Install models action**:
+that action points Codex directly at port 17841 and replaces the router's
+managed base URL. Leave the launcher running, then enable and curate the live,
+account-specific rows through this repository:
+
+```sh
+./bin/model-router codex providers enable chatgpt-web
+./bin/curate-models chatgpt-web --refresh
+```
+
+Curation reads the launcher's loopback `/v1/models` catalog, discards every
+native GPT row, and offers only the `chatgpt-web/*` models the signed-in account
+currently exposes. A chosen route keeps its fixed ChatGPT effort and advertised
+context/image metadata. The request path goes directly from the router to the
+loopback bridge so Codex's native tool, collaboration, image, and compaction
+envelope is not translated by LiteLLM. The user's Codex/ChatGPT bearer token is
+never sent to the launcher; the local hop receives only a non-secret placeholder.
+
+Browser-only mode works with no additional router credential. For the full
+Codex harness, finish the upstream launcher's MCP/tunnel setup and permissions;
+the router does not read or store that tunnel key. Browser/UI drift and
+account-gated model refusals are relayed exactly and are never retried or failed
+over to another provider, and the route is never recruited as another model's
+vision helper, because any of those actions could duplicate a browser turn.
+
+This provider is deliberately Codex-only and is not published into DeepSeek
+Harness or Gemini CLI. Its endpoint defaults to
+`http://127.0.0.1:17841/v1`; `MODEL_ROUTER_CHATGPT_WEB_BASE_URL` may change the
+port but a non-loopback override is refused. The upstream project is unofficial
+browser automation, so its own security notes, platform support, OpenAI terms,
+and workspace policies still apply.
 
 ### Use a local model in Codex (experimental)
 
@@ -1783,7 +1875,7 @@ codex login
 ./bin/model-router codex chatgpt-session enable
 ```
 
-DeepSeek Harness, Gemini CLI, and future clients installed for this same OS
+DeepSeek Harness, Gemini CLI, OpenClaw, and future clients installed for this same OS
 user then reuse that one authorization over the loopback; there is no login per
 harness and the marker stores no credential. Native models are withheld until
 both the authorization and a usable Codex session exist, and disappear again
@@ -1858,6 +1950,85 @@ estimate rather than by spending a real turn upstream.
 **Native GPT models** publish here under the same rule as the harness, described
 above: after the one-time shared-plane authorization, while this machine has a
 usable Codex session, and withheld the moment either condition stops holding.
+
+## Make models appear in Cursor
+
+The `cursor` target serves both official clients through different edges:
+
+- `cursor-router-agent` launches Cursor Agent against the router's authenticated
+  loopback Connect/protobuf adapter.
+- Cursor App uses OpenAI BYOK. Retail Cursor sends those requests through
+  Cursor's backend, so a loopback URL is rejected; the app needs a stable public
+  HTTPS tunnel forwarding to the app-only edge on `127.0.0.1:4214`.
+
+This is the same network shape used by CLIProxyAPI Cursor recipes: the proxy
+provides OpenAI-compatible endpoints, Cursor is pointed at their base URL, and
+a named tunnel makes the endpoint reachable by Cursor's backend. CLIProxyAPI
+does not contain a private local-Cursor connector that removes that public hop.
+Cursor Agent is different and remains fully local through `cursor-router-agent`.
+
+In the Control Center's Harness page, nothing Cloudflare-related runs during
+detection or page load. **Connect Cursor** is one resumable action: it installs
+the fixed connector when needed, opens `cloudflared tunnel login`, resolves the
+domain selected during browser authorization, creates a unique named hostname,
+waits for Cursor to be fully quit, publishes and verifies the routed catalog,
+then reopens Cursor. Progress stays inside the Cursor row. The Cloudflare token
+is used only for that one zone-name lookup and is never returned to the
+renderer, logged, or copied into router state.
+
+A domain managed by the user's Cloudflare account is the only external
+prerequisite. Cursor's retail BYOK backend cannot call a loopback-only service,
+and Cloudflare cannot create stable public DNS without a domain. Users who
+already have a preferred public hostname can expand **Use an existing
+Cloudflare hostname**; everyone else leaves it blank.
+The equivalent CLI path is to install `cloudflared`, run `cloudflared tunnel
+login` once, and then give the router a hostname on that Cloudflare account. It
+adds the DNS route, writes the edge-only ingress, and keeps the connector
+running with the router service:
+
+```sh
+./install.sh --target cursor --auto --providers configured \
+  --cursor-hostname cursor-router.example.com
+
+# Or add Cursor to an existing router. Fully quit Cursor first.
+./bin/model-router cursor enable \
+  --hostname cursor-router.example.com
+```
+
+An already-managed tunnel remains supported with `--cursor-public-url
+https://cursor-router.example.com`; that is the advanced/manual path.
+
+The public hostname must not point at the main router port. Port 4214 exposes
+only the secret-bearing `/v1/models` and `/v1/chat/completions` app surface;
+accepted requests re-enter the same `/v1/responses` path used by Codex. Cursor
+misclassifies a custom id that contains one of its built-in model ids and then
+rejects it with “This model does not support custom API keys.” The router
+therefore publishes readable, collision-safe ids such as
+`codex_router/gpt_5_6_sol__419255f2/high`. The suffix is the reasoning effort;
+choose another row for Low, Medium, High, and so on. Cursor does not expose its
+native effort control for ordinary user-added BYOK models.
+
+```sh
+cursor-router-agent --list-models
+# Copy one exact id from that list, including its effort suffix.
+cursor-router-agent --model 'PASTE_ID_FROM_THE_LIST' --print "Reply with OK"
+```
+
+Reopen Cursor App and choose a `codex_router/...` model. Cursor's base-URL override
+is global, so Cursor-managed models can also be sent to the custom endpoint
+while it is enabled; turn it off when switching back to Cursor's own models.
+
+Cursor Agent text turns are supported and verified against the official CLI.
+Its local read/shell/edit/write loop is also mapped onto Cursor's controlled-
+exec protocol: Cursor applies its permission mode and performs the operation,
+then the router resumes the selected model with the typed result. Cursor MCP
+tools use a separate exec shape and are not advertised yet. Cursor App Agent
+requests continue through Cursor's own orchestration.
+
+`./bin/model-router cursor disable` removes router-owned aliases and restores
+the prior base URL and BYOK toggle when they still match the published values.
+Cursor must be fully stopped for enable, repair, or disable because it owns its
+SQLite settings database while running.
 
 ## macOS native tray host and Control Center
 
@@ -2017,6 +2188,34 @@ integration instead:
 ./bin/model-router dsh disable           # remove the route, keep everything else
 ```
 
+## Make models appear in Claude Code
+
+The `claude` target adds a private `claude-router` launcher. It does not edit
+Claude Code's settings or replace its login. The launcher points only that
+process at the router's loopback Anthropic Messages surface and enables gateway
+model discovery:
+
+```sh
+./install.sh --target claude --auto --providers configured
+# or add Claude Code to an existing router
+./bin/model-router claude enable
+
+claude-router
+# then use /model and choose codex_router/anthropic/<provider>/<model>
+```
+
+All selected, credentialed routes are discoverable—not only Anthropic models.
+Messages, tools, tool results, images, streaming, and token estimates are
+translated into the router's canonical `/v1/responses` request path, so the
+same failover, usage accounting, provider credentials, and model selection
+apply. Anthropic documents gateways for Claude models; non-Claude routed models
+work through this compatibility layer but are not an Anthropic-supported Claude
+Code configuration.
+
+Claude models in Codex Router remain the other direction: enable
+`anthropic-api` and store an Anthropic API key through the hidden prompt. A
+Claude.ai subscription login is not converted into a reusable API credential.
+
 …or `gemini` to act on the Gemini CLI integration:
 
 ```sh
@@ -2026,6 +2225,64 @@ integration instead:
 ./bin/model-router gemini disable        # remove the managed block, keep the rest
 ```
 
+…or `cursor` for Cursor Agent and Cursor App (quit Cursor before mutations):
+
+```sh
+./bin/model-router cursor enable --hostname cursor-router.example.com
+./bin/model-router cursor doctor
+./bin/model-router cursor status
+./bin/model-router cursor disable
+```
+
+…or `claude` for Claude Code:
+
+```sh
+./bin/model-router claude enable
+./bin/model-router claude doctor
+./bin/model-router claude status
+./bin/model-router claude disable
+```
+
+## Make models appear in OpenClaw
+
+The `openclaw` target is the one-click path from the Control Center's Harness
+page. **Set up** installs the official `openclaw@latest` npm package when it is
+missing, then publishes every selected, credentialed router model under one
+OpenClaw provider:
+
+```sh
+./install.sh --target openclaw --auto --providers configured
+# or add OpenClaw to an existing router
+./bin/model-router openclaw enable
+
+openclaw
+```
+
+The router owns only `models.providers.codex-router` and a private publication
+marker. It writes the provider through `openclaw config patch --stdin`, so the
+local caller capability never appears in command arguments. Existing OpenClaw
+agents, channels, plugins, and other providers stay untouched. If no default
+model exists on first setup, the router selects its highest-priority route; an
+existing default or a later user override is preserved.
+
+OpenClaw model references use `codex-router/<router-slug>` and speak
+`openai-responses` to the same authenticated loopback path as the other local
+clients. Context windows, text/image input, and the router's exact reasoning
+effort ladder are published with each model. Disable removes only the managed
+provider and removes the default only when it is still the value the router
+set:
+
+```sh
+./bin/model-router openclaw doctor
+./bin/model-router openclaw status
+./bin/model-router openclaw disable
+```
+
+OpenClaw's AgentHarnessV2 API is a native runtime-plugin boundary, not a new
+HTTP model protocol. The router therefore remains an ordinary Responses model
+provider; when no native plugin claims the route, OpenClaw correctly uses its
+embedded runtime. No restart is required after publication.
+
 The optional live check makes one small request per selected provider and may
 consume paid quota:
 
@@ -2033,7 +2290,8 @@ consume paid quota:
 ./bin/model-router codex smoke-test --yes
 ```
 
-`disable` removes only the Codex integration and its current service.
+`disable` removes only the selected client integration and retires the shared
+service only when no installed client still uses it.
 `uninstall` intentionally retains the checkout, logs, backups, internal keys,
 and provider credentials so routine removal cannot destroy authentication or
 recovery data.

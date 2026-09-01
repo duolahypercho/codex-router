@@ -9,8 +9,8 @@ force_deps=false
 target=${MODEL_ROUTER_TARGET:-codex}
 
 case "$target" in
-  codex|dsh|gemini) ;;
-  *) echo "MODEL_ROUTER_TARGET must be codex, dsh, or gemini." >&2; exit 2 ;;
+  codex|dsh|gemini|cursor|claude|openclaw) ;;
+  *) echo "MODEL_ROUTER_TARGET must be codex, dsh, gemini, cursor, claude, or openclaw." >&2; exit 2 ;;
 esac
 
 for argument in "$@"; do
@@ -115,6 +115,9 @@ for tool in node npm; do
 done
 
 node -e 'const [a,b]=process.versions.node.split(".").map(Number); if (!(a>22 || (a===22 && b>=19))) { console.error("Node.js 22.19 or newer is required."); process.exit(1) }'
+if [ "$target" = openclaw ]; then
+  node "$repo_dir/src/openclaw-install.mjs" preflight >/dev/null
+fi
 
 # Preserve the launcher selected by the operator. A compatibility wrapper may
 # delegate to another runtime, so process.execPath is not necessarily the
@@ -240,6 +243,22 @@ if [ "$target" = dsh ]; then
   config_manager=src/dsh-config-manager.mjs
   config_enable_command=install
   config_disable_command=uninstall
+elif [ "$target" = gemini ]; then
+  config_manager=src/gemini-config-manager.mjs
+  config_enable_command=install
+  config_disable_command=uninstall
+elif [ "$target" = cursor ]; then
+  config_manager=src/cursor-config-manager.mjs
+  config_enable_command=install
+  config_disable_command=uninstall
+elif [ "$target" = claude ]; then
+  config_manager=src/claude-code-config-manager.mjs
+  config_enable_command=install
+  config_disable_command=uninstall
+elif [ "$target" = openclaw ]; then
+  config_manager=src/openclaw-config-manager.mjs
+  config_enable_command=install
+  config_disable_command=uninstall
 else
   config_manager=src/config-manager.mjs
   config_enable_command=enable
@@ -268,6 +287,18 @@ process.stdin.on("end", () => {
 # settings document.
 if [ "$target" = dsh ]; then
   config_state_field=routeInstalled
+  config_state_enabled=true
+elif [ "$target" = gemini ]; then
+  config_state_field=installed
+  config_state_enabled=true
+elif [ "$target" = cursor ]; then
+  config_state_field=appConfigured
+  config_state_enabled=true
+elif [ "$target" = claude ]; then
+  config_state_field=installed
+  config_state_enabled=true
+elif [ "$target" = openclaw ]; then
+  config_state_field=installed
   config_state_enabled=true
 else
   config_state_field=mode
@@ -328,10 +359,27 @@ fi
 if [ "$target" != gemini ] && [ -s "$state_dir/gemini-models.json" ]; then
   node src/gemini-config-manager.mjs install >/dev/null
 fi
+if [ "$target" != cursor ] && [ -s "$state_dir/cursor-models.json" ]; then
+  # Cursor owns a live SQLite settings document. Republish only while it is
+  # stopped; a running app can overwrite the external transaction on exit.
+  if ! node src/cursor-config-manager.mjs status | grep -q '"running": true'; then
+    node src/cursor-config-manager.mjs install >/dev/null
+  fi
+fi
+if [ "$target" != claude ] && [ -s "$state_dir/claude-models.json" ]; then
+  node src/claude-code-config-manager.mjs install >/dev/null
+fi
+if [ "$target" != openclaw ] && [ -s "$state_dir/openclaw-models.json" ]; then
+  node src/openclaw-config-manager.mjs install >/dev/null
+fi
 
 if [ "$prepare_only" = true ]; then
   echo "Dependencies and local Codex router files are prepared. Application configuration was not changed."
   exit 0
+fi
+
+if [ "$target" = openclaw ]; then
+  node src/openclaw-install.mjs install >/dev/null
 fi
 
 config_enabled=true
@@ -424,6 +472,16 @@ fi
 if [ "$target" = dsh ]; then
   echo "Published the selected external model routes to DeepSeek Harness."
   echo "The harness reloads its settings document on the next request; no restart is needed."
+elif [ "$target" = cursor ]; then
+  echo "Published all routed models to Cursor Agent and Cursor App."
+  echo "Run cursor-router-agent for the CLI; fully quit and reopen Cursor for the app."
+elif [ "$target" = gemini ]; then
+  echo "Published all routed models to Gemini CLI. The next gemini run picks them up."
+elif [ "$target" = claude ]; then
+  echo "Published all routed models to Claude Code. Run claude-router and choose a codex_router/anthropic/... model."
+elif [ "$target" = openclaw ]; then
+  echo "Installed OpenClaw and published every routed model under its codex-router provider."
+  echo "Run openclaw to start; OpenClaw reads the route on the next agent run."
 else
   echo "Installed the selected external model routes for Codex."
   # The configuration this install just rewrote is read once, at client start.

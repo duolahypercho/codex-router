@@ -42,7 +42,8 @@
         "image"
       ],
       "supportsApplyPatchTool": false,
-      "compHash": "opencode-go-responses-muse-spark-1-2-contributor-v1"
+      "requestProfile": "auto-tool-choice",
+      "compHash": "opencode-go-responses-muse-spark-1-2-contributor-v2"
     }
   ]
 }

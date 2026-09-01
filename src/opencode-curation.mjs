@@ -50,6 +50,7 @@ const OPENCODE_FREE_MODELS = Object.freeze({
     contextWindow: 1_048_576,
     outputLimit: 131_072,
     reasoningLevels: Object.freeze(["minimal", "low", "medium", "high", "xhigh"]),
+    requestProfile: "auto-tool-choice",
     summary:
       "Muse Spark 1.2 Contributor Free through OpenCode Zen's anonymous Responses route.",
     contextNote:
@@ -120,6 +121,51 @@ const OPENCODE_FREE_MODELS = Object.freeze({
 });
 
 const CURATION_ROUTES = Object.freeze({
+  "chatgpt-web": Object.freeze({
+    providers: Object.freeze(["chatgpt-web"]),
+    protocols: Object.freeze(["Responses"]),
+    messagesModels: Object.freeze([]),
+    responsesModels: Object.freeze([]),
+    primaryModels: Object.freeze([
+      "chatgpt-web/luna",
+      "chatgpt-web/think",
+      "chatgpt-web/light",
+      "chatgpt-web/medium",
+      "chatgpt-web/high",
+      "chatgpt-web/extra-high",
+      "chatgpt-web/pro",
+    ]),
+    models: Object.freeze({
+      "chatgpt-web/luna": Object.freeze({
+        reasoningLevels: Object.freeze(["low"]),
+        summary: "ChatGPT Web Luna through the account-bound local browser bridge.",
+      }),
+      "chatgpt-web/think": Object.freeze({
+        reasoningLevels: Object.freeze(["low"]),
+        summary: "ChatGPT Web Think through the account-bound local browser bridge.",
+      }),
+      "chatgpt-web/light": Object.freeze({
+        reasoningLevels: Object.freeze(["low"]),
+        summary: "ChatGPT Web Instant through the account-bound local browser bridge.",
+      }),
+      "chatgpt-web/medium": Object.freeze({
+        reasoningLevels: Object.freeze(["medium"]),
+        summary: "ChatGPT Web Medium through the account-bound local browser bridge.",
+      }),
+      "chatgpt-web/high": Object.freeze({
+        reasoningLevels: Object.freeze(["high"]),
+        summary: "ChatGPT Web High through the account-bound local browser bridge.",
+      }),
+      "chatgpt-web/extra-high": Object.freeze({
+        reasoningLevels: Object.freeze(["xhigh"]),
+        summary: "ChatGPT Web Extra High through the account-bound local browser bridge.",
+      }),
+      "chatgpt-web/pro": Object.freeze({
+        reasoningLevels: Object.freeze(["ultra"]),
+        summary: "ChatGPT Web Pro through the account-bound local browser bridge.",
+      }),
+    }),
+  }),
   "commandcode": Object.freeze({
     providers: Object.freeze(["commandcode", "commandcode-messages"]),
     protocols: Object.freeze(["Chat", "Messages"]),
@@ -322,6 +368,13 @@ export function curatedModelOutputLimit(providerId, upstreamModel) {
 export function curatedModelReasoningLevels(providerId, upstreamModel) {
   const levels = curatedModelRecord(providerId, upstreamModel)?.reasoningLevels;
   return levels ? [...levels] : undefined;
+}
+
+// A documented, model-specific wire repair for curated routes. This is kept
+// beside the same exact-id metadata as context and effort because applying it
+// provider-wide would weaken forced tool choices for unrelated models.
+export function curatedModelRequestProfile(providerId, upstreamModel) {
+  return curatedModelRecord(providerId, upstreamModel)?.requestProfile;
 }
 
 // The picker text that carries the sourcing for every value this module knows

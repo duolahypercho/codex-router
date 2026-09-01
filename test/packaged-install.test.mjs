@@ -170,7 +170,12 @@ test("doctor --fix rebuilds dependencies in a checkout", () => {
   // everyone in the course of exempting packaged installs.
   const { result, argv } = runFix({ CODEX_ROUTER_PACKAGE_MANAGER: "" });
   assert.notEqual(argv, undefined, `installer was never invoked: ${result.stderr}`);
-  assert.deepEqual(argv, process.platform === "win32" ? ["-CheckoutInstall", "-ForceDeps"] : ["--force-deps"]);
+  assert.deepEqual(
+    argv,
+    process.platform === "win32"
+      ? ["-CheckoutInstall", "-Target", "codex", "-ForceDeps"]
+      : ["--force-deps"],
+  );
 });
 
 test("doctor --fix repairs a packaged install without rebuilding dependencies", () => {
@@ -179,7 +184,10 @@ test("doctor --fix repairs a packaged install without rebuilding dependencies", 
   // is dropped rather than the whole repair being refused.
   const { result, argv } = runFix({ CODEX_ROUTER_PACKAGE_MANAGER: "homebrew" });
   assert.notEqual(argv, undefined, `installer was never invoked: ${result.stderr}`);
-  assert.deepEqual(argv, process.platform === "win32" ? ["-CheckoutInstall"] : []);
+  assert.deepEqual(
+    argv,
+    process.platform === "win32" ? ["-CheckoutInstall", "-Target", "codex"] : [],
+  );
   assert.match(result.stdout, /brew reinstall codex-router/);
 });
 

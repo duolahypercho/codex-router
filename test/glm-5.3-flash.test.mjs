@@ -63,6 +63,7 @@ test("withdrawn or uncertified reseller routes stay absent while direct-proven r
   assert.equal(MODEL_BY_SLUG.has("zai-api/glm-5.3-flash"), true);
   assert.equal(MODEL_BY_SLUG.has("zai-coding/glm-5.3-flash"), true);
   assert.equal(MODEL_BY_SLUG.has("opencode-go/glm-5.3-flash"), true);
+  assert.equal(MODEL_BY_SLUG.has("ollama-cloud/glm-5.3-flash"), true);
 });
 
 test("Ollama Cloud Flash candidate records its upstream id and request profile", () => {

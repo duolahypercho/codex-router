@@ -691,9 +691,12 @@ function normalizeBody(buffer, contentType, route) {
     delete payload.store;
     delete payload.logit_bias;
   }
-  // Fireworks rejects this OpenAI search parameter instead of ignoring it.
-  // Other provider payloads keep it unchanged.
-  if (provider.id === "fireworks") delete payload.web_search_options;
+  // Fireworks and OpenCode Console Go reject this OpenAI search parameter
+  // instead of ignoring it. Keep the repair provider-scoped: other compatible
+  // chat surfaces use the option and must retain it.
+  if (["fireworks", "opencode-go"].includes(provider.id)) {
+    delete payload.web_search_options;
+  }
   // Meta refuses `search_content_types` on anything but a `web_search_preview`
   // tool, and Codex only ever sends the current spelling: its hosted search
   // tool is `type: "web_search"`, carrying search_content_types beside

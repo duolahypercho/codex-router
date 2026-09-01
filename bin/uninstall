@@ -13,6 +13,11 @@ retire_service_if_unused() {
     node src/service.mjs uninstall
     echo "No client integrations remain, so the background service was removed."
   else
+    if [ "${MODEL_ROUTER_TARGET:-codex}" = cursor ]; then
+      # Removing Cursor must also retire its tunneled child listener even when
+      # another client still needs the shared router service.
+      node src/service.mjs install
+    fi
     echo "The background service is still running for: $remaining."
   fi
 }
@@ -41,6 +46,21 @@ case "${MODEL_ROUTER_TARGET:-codex}" in
     retire_service_if_unused
     echo "The Gemini CLI integration was removed."
     ;;
-  *) echo "MODEL_ROUTER_TARGET must be codex, dsh, or gemini." >&2; exit 2 ;;
+  cursor)
+    node src/cursor-config-manager.mjs uninstall >/dev/null
+    retire_service_if_unused
+    echo "The Cursor integration was removed."
+    ;;
+  claude)
+    node src/claude-code-config-manager.mjs uninstall >/dev/null
+    retire_service_if_unused
+    echo "The Claude Code integration was removed."
+    ;;
+  openclaw)
+    node src/openclaw-config-manager.mjs uninstall >/dev/null
+    retire_service_if_unused
+    echo "The OpenClaw integration was removed. OpenClaw itself and all unrelated settings were retained."
+    ;;
+  *) echo "MODEL_ROUTER_TARGET must be codex, dsh, gemini, cursor, claude, or openclaw." >&2; exit 2 ;;
 esac
 echo "The repository, cached native catalog, logs, and provider credentials were retained."

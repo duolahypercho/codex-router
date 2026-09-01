@@ -7,7 +7,10 @@ case "${MODEL_ROUTER_TARGET:-codex}" in
   codex) node src/config-manager.mjs status ;;
   dsh) node src/dsh-config-manager.mjs status ;;
   gemini) node src/gemini-config-manager.mjs status ;;
-  *) echo "MODEL_ROUTER_TARGET must be codex, dsh, or gemini." >&2; exit 2 ;;
+  cursor) node src/cursor-config-manager.mjs status ;;
+  claude) node src/claude-code-config-manager.mjs status ;;
+  openclaw) node src/openclaw-config-manager.mjs status ;;
+  *) echo "MODEL_ROUTER_TARGET must be codex, dsh, gemini, cursor, claude, or openclaw." >&2; exit 2 ;;
 esac
 node src/service.mjs status
 node --input-type=module -e 'import { PORTS } from "./src/paths.mjs"; fetch(`http://127.0.0.1:${PORTS.router}/health`).then(async r=>{console.log(await r.text()); process.exitCode=r.ok?0:1}).catch(()=>{console.log(JSON.stringify({ok:false,router:"unavailable"})); process.exitCode=1})'

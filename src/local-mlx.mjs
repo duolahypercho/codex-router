@@ -223,6 +223,10 @@ export async function ensureLocalMlxPrerequisites({
 export function runProcess(command, args, options = {}) {
   return new Promise((resolve, reject) => {
     const target = spawnableCommand(command, args, options.platform || process.platform);
+    // CodeQL conflates spawnableCommand's direct-exec and escaped Windows-batch
+    // return shapes across unrelated callers. The helper rejects illegal batch
+    // paths and escapes every cmd.exe metacharacter before this spawn.
+    // codeql[js/shell-command-injection-from-environment]
     const child = spawn(target.command, target.args, {
       ...target.options,
       cwd: options.cwd,
