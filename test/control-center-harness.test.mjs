@@ -77,7 +77,7 @@ test("context manager reads bounded metadata without returning conversation mess
     process.env.CODEX_ROUTER_CURSOR_AGENT_CHATS = cursorAgentChats;
     const snapshot = getContextSessionsSnapshot();
 
-    assert.deepEqual(snapshot.counts, { total: 4, codex: 1, dsh: 1, cursor: 2, claude: 0, gemini: 0, archived: 0 });
+    assert.deepEqual(snapshot.counts, { total: 4, codex: 1, dsh: 1, cursor: 2, claude: 0, gemini: 0, openclaw: 0, archived: 0 });
     assert.equal(snapshot.sessions.find((session) => session.id === CODEX_ID)?.model, "deepseek/deepseek-v4-pro");
     assert.equal(snapshot.sessions.find((session) => session.id === DSH_ID)?.workspaceLabel, "DeepSeek workspace");
     assert.equal(snapshot.sessions.find((session) => session.id === CURSOR_ID)?.title, "Cursor session");
@@ -210,9 +210,9 @@ test("health IPC reads in-process and preserves the injected fetch boundary", as
   assert.doesNotMatch(source, /handle\("getHealth"[\s\S]{0,100}runJson\(\["health"\]\)/);
 });
 
-test("client setup is fixed to the five supported targets and keeps session bodies unread", async () => {
+test("client setup is fixed to the six supported targets and keeps session bodies unread", async () => {
   const source = await readFile(new URL("../apps/control-center/electron/ipc.mjs", import.meta.url), "utf8");
-  assert.match(source, /const HARNESS_IDS = \["codex", "dsh", "gemini", "cursor", "claude"\]/);
+  assert.match(source, /const HARNESS_IDS = \["codex", "dsh", "gemini", "cursor", "claude", "openclaw"\]/);
   assert.match(source, /const args = \["client-setup", harness\]/);
   assert.match(source, /Cursor public URL/);
   assert.match(source, /cursorConnectorRunner\(installer\.executable, installer\.args/);
@@ -282,6 +282,87 @@ test("Claude setup refuses a missing CLI before starting the router installer", 
     /Claude Code is not installed.*refresh Harness/,
   );
   assert.equal(called, false);
+});
+
+test("OpenClaw setup stays a fixed one-click router command even when the CLI is missing", async () => {
+  const handlers = new Map();
+  const calls = [];
+  registerIpcHandlers({
+    ipcMain: { handle: (name, handler) => handlers.set(name, handler) },
+    BrowserWindow: { getAllWindows: () => [] },
+    shell: {},
+    harnessExecutableResolver: () => undefined,
+    controlJsonRunner: async (args, options) => {
+      calls.push({ args, options });
+      return { installedNow: true, configured: true };
+    },
+    senderGuard: () => true,
+  });
+
+  const setup = handlers.get("router-control:setupHarness");
+  assert.deepEqual(
+    await setup({}, { harnessId: "openclaw" }),
+    { installedNow: true, configured: true },
+  );
+  assert.deepEqual(calls, [{
+    args: ["client-setup", "openclaw"],
+    options: { timeoutMs: 11 * 60_000 },
+  }]);
+});
+
+test("app actions open the official site when a client has no app surface", async () => {
+  const handlers = new Map();
+  const opened = [];
+  registerIpcHandlers({
+    ipcMain: { handle: (name, handler) => handlers.set(name, handler) },
+    BrowserWindow: { getAllWindows: () => [] },
+    shell: { openExternal: async (url) => { opened.push(url); } },
+    cursorAppPath: () => undefined,
+    openclawAppPath: () => undefined,
+    harnessExecutableResolver: () => undefined,
+    senderGuard: () => true,
+  });
+
+  const launch = handlers.get("router-control:launchHarness");
+  assert.deepEqual(
+    await launch({}, { harnessId: "openclaw", surface: "app" }),
+    { opened: true, surface: "site" },
+  );
+  assert.deepEqual(
+    await launch({}, { harnessId: "cursor", surface: "app" }),
+    { opened: true, surface: "site" },
+  );
+  assert.deepEqual(
+    await launch({}, { harnessId: "dsh", surface: "app" }),
+    { opened: true, surface: "site" },
+  );
+  assert.deepEqual(opened, [
+    "https://openclaw.ai/",
+    "https://cursor.com/",
+    "https://github.com/deepseek-ai/deepseek-harness",
+  ]);
+});
+
+test("OpenClaw app actions prefer the installed desktop companion", async () => {
+  const handlers = new Map();
+  const opened = [];
+  registerIpcHandlers({
+    ipcMain: { handle: (name, handler) => handlers.set(name, handler) },
+    BrowserWindow: { getAllWindows: () => [] },
+    shell: {
+      openExternal: async (url) => { opened.push({ type: "site", value: url }); },
+      openPath: async (appPath) => { opened.push({ type: "app", value: appPath }); return ""; },
+    },
+    openclawAppPath: () => "/Applications/OpenClaw.app",
+    senderGuard: () => true,
+  });
+
+  const launch = handlers.get("router-control:launchHarness");
+  assert.deepEqual(
+    await launch({}, { harnessId: "openclaw", surface: "app" }),
+    { opened: true, surface: "app" },
+  );
+  assert.deepEqual(opened, [{ type: "app", value: "/Applications/OpenClaw.app" }]);
 });
 
 test("Cursor connector installation reports in-app progress and refresh-ready completion", async () => {

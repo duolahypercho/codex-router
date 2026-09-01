@@ -9,6 +9,7 @@ import {
   CURSOR_CATALOG_PATH,
   CLAUDE_CATALOG_PATH,
   GEMINI_CATALOG_PATH,
+  OPENCLAW_CATALOG_PATH,
   NATIVE_CATALOG_PATH,
   SOURCE_ROOT,
   TARGET,
@@ -40,6 +41,7 @@ const PICKER_NAMES = Object.freeze({
   gemini: "Gemini CLI",
   cursor: "Cursor",
   claude: "Claude Code",
+  openclaw: "OpenClaw",
   codex: "Codex",
 });
 
@@ -70,6 +72,9 @@ export function targetRestartHint() {
   }
   if (TARGET === "claude") {
     return "Claude Code reads the router environment at launch; the next `claude-router` run picks this up.";
+  }
+  if (TARGET === "openclaw") {
+    return "OpenClaw reloads its configuration for the next agent run.";
   }
   return `Fully quit and reopen ${targetPickerName()} to refresh the model picker.`;
 }
@@ -102,6 +107,7 @@ export function installedTargets() {
   if (existsSync(GEMINI_CATALOG_PATH)) installed.push("gemini");
   if (existsSync(CURSOR_CATALOG_PATH)) installed.push("cursor");
   if (existsSync(CLAUDE_CATALOG_PATH)) installed.push("claude");
+  if (existsSync(OPENCLAW_CATALOG_PATH)) installed.push("openclaw");
   return installed;
 }
 
@@ -160,6 +166,10 @@ export function refreshTargetPickerIfInstalled() {
   }
   if (existsSync(CLAUDE_CATALOG_PATH)) {
     run("claude-code-config-manager.mjs", ["install"]);
+    refreshed = true;
+  }
+  if (existsSync(OPENCLAW_CATALOG_PATH)) {
+    run("openclaw-config-manager.mjs", ["install"]);
     refreshed = true;
   }
   return refreshed;

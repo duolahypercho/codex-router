@@ -1,14 +1,12 @@
 import { useCallback, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
 import {
   AppWindow,
-  BookOpen,
   Boxes,
   BrainCircuit,
   Globe2,
   LoaderCircle,
   Route,
   Settings2,
-  SquareTerminal,
 } from "lucide-react";
 import cursorLogo from "../assets/clients/cursor.svg";
 import cursorDarkLogo from "../assets/clients/cursor-dark.svg";
@@ -17,6 +15,7 @@ import codexLightLogo from "../assets/clients/codex-light.svg";
 import deepSeekHarnessLogo from "../assets/clients/deepseek-harness.svg";
 import claudeLogo from "../assets/clients/claude.svg";
 import geminiLogo from "../assets/providers/gemini.svg";
+import openclawLogo from "../assets/clients/openclaw.svg";
 import { Badge, Button, InlineNotice, PageHeader, PanelSkeleton, SectionHeading, StatStrip } from "../components";
 import type {
   AgentBridgeDescriptor,
@@ -44,13 +43,14 @@ interface HarnessPageProps {
   onNavigate: (view: ViewId) => void;
 }
 
-const CLIENT_ORDER: HarnessId[] = ["cursor", "claude", "gemini", "dsh", "codex"];
+const CLIENT_ORDER: HarnessId[] = ["openclaw", "cursor", "claude", "gemini", "dsh", "codex"];
 const CLIENT_LOGOS: Record<HarnessId, { light: string; dark?: string; mode: "artwork" | "mask" }> = {
   cursor: { light: cursorLogo, dark: cursorDarkLogo, mode: "artwork" },
   dsh: { light: deepSeekHarnessLogo, mode: "mask" },
   codex: { light: codexLightLogo, dark: codexDarkLogo, mode: "artwork" },
   claude: { light: claudeLogo, mode: "artwork" },
   gemini: { light: geminiLogo, mode: "artwork" },
+  openclaw: { light: openclawLogo, mode: "artwork" },
 };
 
 export function HarnessPage({ target, api, refreshing, operation, onRefresh, runAction, onNavigate }: HarnessPageProps) {
@@ -124,18 +124,12 @@ export function HarnessPage({ target, api, refreshing, operation, onRefresh, run
   const sessionCount = (id: HarnessId) => sessions?.counts[id] ?? 0;
   const setup = async (harness: HarnessDescriptor) => {
     if (!api) return;
-    if (harness.id === "cursor" && harness.configured) {
-      if (harness.appInstalled && harness.appConfigured) {
-        await act("Open Cursor", () => api.launchHarness("cursor", "app"));
-      } else {
-        await act("Open Cursor Agent", () => api.launchHarness("cursor", "terminal"));
-      }
+    if (harness.configured) {
+      await act(`Open ${harness.displayName}`, () => api.launchHarness(harness.id, "app"));
       return;
     }
     if (harness.id === "cursor") {
       await runCursorSetup("Connect Cursor", () => api.connectCursor(cursorHostname.trim() || undefined));
-    } else if (harness.id === "claude" && harness.configured) {
-      await act("Open Claude Code", () => api.launchHarness("claude", "terminal"));
     } else {
       await act(`Configure ${harness.displayName}`, () => api.setupHarness(harness.id));
     }
@@ -162,7 +156,7 @@ export function HarnessPage({ target, api, refreshing, operation, onRefresh, run
       {error ? <InlineNotice tone="warning" title="Client detection is incomplete">{error}</InlineNotice> : null}
 
       <div className="lhc-harness-list">
-        {!snapshot && !error ? <PanelSkeleton label="Detecting coding clients" variant="list" count={5} /> : null}
+        {!snapshot && !error ? <PanelSkeleton label="Detecting coding clients" variant="list" count={6} /> : null}
         {clients.length ? (
           <div className="lhc-harness-table-head" aria-hidden>
             <span>Client</span>
@@ -211,74 +205,28 @@ export function HarnessPage({ target, api, refreshing, operation, onRefresh, run
               </div>
             ) : undefined}
             actions={
-              <>
-                <div className={`lhc-harness-actions${harness.id === "cursor" ? " is-cursor" : ""}`}>
-                  <Button
-                    variant="primary"
-                    disabled={
-                      !api || !harness.canInstall || cursorOperationActive
-                    }
-                    title={harness.installRequirement}
-                    onClick={() => void setup(harness)}
-                  >
-                    {harness.id === "cursor" && cursorOperationActive
-                      ? <><LoaderCircle aria-hidden size={14} strokeWidth={1.7} className="spin" /> Working…</>
-                      : harness.id === "cursor" && harness.configured
-                      ? harness.appInstalled && harness.appConfigured
-                        ? <><AppWindow aria-hidden size={14} strokeWidth={1.7} /> Open Cursor</>
-                        : <><SquareTerminal aria-hidden size={14} strokeWidth={1.7} /> Open agent</>
-                      : harness.id === "claude" && harness.configured
-                        ? <><SquareTerminal aria-hidden size={14} strokeWidth={1.7} /> Open Claude Code</>
-                        : <><Settings2 aria-hidden size={14} strokeWidth={1.7} /> {harness.id === "cursor" ? "Connect Cursor" : harness.configured ? "Refresh" : "Set up"}</>}
-                  </Button>
-                  {harness.id === "cursor" ? (
-                    <Button
-                      variant="ghost"
-                      aria-label="Open Cursor Agent"
-                      title="Open Cursor Agent"
-                      disabled={!api || !harness.configured || !harness.agentConfigured || !snapshot?.terminalAvailable}
-                      onClick={() => api && void act("Open Cursor Agent", () => api.launchHarness("cursor", "terminal"))}
-                    >
-                      <SquareTerminal aria-hidden size={14} strokeWidth={1.7} />
-                    </Button>
-                  ) : (
-                    <Button
-                      variant="secondary"
-                      disabled={!api || !harness.appInstalled}
-                      onClick={() => api && void act(`Open ${harness.displayName}`, () => api.launchHarness(harness.id, "app"))}
-                    >
-                      <AppWindow aria-hidden size={14} strokeWidth={1.7} /> Open
-                    </Button>
-                  )}
-                  {harness.id !== "cursor" ? (
-                    <Button
-                      variant="ghost"
-                      aria-label={`Open ${harness.displayName} terminal`}
-                      title={`Open ${harness.displayName} terminal`}
-                      disabled={!api || !snapshot?.terminalAvailable || !harness.cliInstalled}
-                      onClick={() => api && void act(`Open ${harness.displayName} terminal`, () => api.launchHarness(harness.id, "terminal"))}
-                    >
-                      <SquareTerminal aria-hidden size={14} strokeWidth={1.7} />
-                    </Button>
-                  ) : null}
-                  <Button
-                    variant="ghost"
-                    aria-label={`Open ${harness.displayName} documentation`}
-                    title={`Open ${harness.displayName} documentation`}
-                    disabled={!api}
-                    onClick={() => api && void act(`Open ${harness.displayName} documentation`, () => api.openExternal(harness.docsUrl))}
-                  >
-                    <BookOpen aria-hidden size={14} strokeWidth={1.7} />
-                  </Button>
-                </div>
-              </>
+              <div className="lhc-harness-actions">
+                <Button
+                  variant="primary"
+                  aria-label={harness.configured ? `Open ${harness.displayName}` : undefined}
+                  disabled={!api || cursorOperationActive || (!harness.configured && !harness.canInstall)}
+                  title={harness.configured ? `Open ${harness.displayName} or its official site` : harness.installRequirement}
+                  onClick={() => void setup(harness)}
+                >
+                  {harness.id === "cursor" && cursorOperationActive
+                    ? <><LoaderCircle aria-hidden size={14} strokeWidth={1.7} className="spin" /> Working…</>
+                    : harness.configured
+                      ? <><AppWindow aria-hidden size={14} strokeWidth={1.7} /> Open</>
+                      : <><Settings2 aria-hidden size={14} strokeWidth={1.7} /> {harness.id === "cursor" ? "Connect Cursor" : "Set up"}</>}
+                </Button>
+              </div>
             }
           />
         ))}
       </div>
 
       <section className="panel-section">
-        <SectionHeading title="One router plane, five client stores" description="Model routes and provider credentials are shared; sessions and client-owned settings remain separate." />
+        <SectionHeading title="One router plane, six client stores" description="Model routes and provider credentials are shared; sessions and client-owned settings remain separate." />
         <div className="lhc-continuity-map">
           <article>
             <Route aria-hidden size={18} strokeWidth={1.7} />

@@ -53,5 +53,10 @@ case "${MODEL_ROUTER_TARGET:-codex}" in
     retire_service_if_unused
     echo "The router-owned claude-router launcher was removed; Claude Code settings were untouched."
     ;;
-  *) echo "MODEL_ROUTER_TARGET must be codex, dsh, gemini, cursor, or claude." >&2; exit 2 ;;
+  openclaw)
+    node src/openclaw-config-manager.mjs uninstall >/dev/null
+    retire_service_if_unused
+    echo "The router-owned provider was removed from OpenClaw; every other OpenClaw setting was preserved."
+    ;;
+  *) echo "MODEL_ROUTER_TARGET must be codex, dsh, gemini, cursor, claude, or openclaw." >&2; exit 2 ;;
 esac

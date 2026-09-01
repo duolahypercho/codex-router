@@ -75,7 +75,7 @@ const NAV_ITEMS: Array<{
   { id: "status", label: "Status", description: "Agents, speed, savings, requests", icon: Activity },
   { id: "models", label: "Models", description: "Providers, credentials, and catalog", icon: Boxes },
   { id: "local", label: "Local", description: "Runtime and on-device models", icon: HardDrive },
-  { id: "harness", label: "Harness", description: "Cursor, Claude, Gemini, DeepSeek, Codex", icon: Braces, experimental: true },
+  { id: "harness", label: "Harness", description: "OpenClaw, Cursor, Claude, Gemini, DeepSeek, Codex", icon: Braces, experimental: true },
   { id: "context", label: "Context Manager", description: "Sessions across harnesses", icon: BrainCircuit },
   { id: "settings", label: "Settings", description: "Routing and desktop", icon: Settings },
 ];

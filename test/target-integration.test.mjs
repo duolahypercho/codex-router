@@ -15,6 +15,7 @@ const {
   CURSOR_CATALOG_PATH,
   DSH_CATALOG_PATH,
   NATIVE_CATALOG_PATH,
+  OPENCLAW_CATALOG_PATH,
 } = await import("../src/paths.mjs");
 
 function stageFile(filePath, contents) {
@@ -23,7 +24,7 @@ function stageFile(filePath, contents) {
 }
 
 function clearStagedFiles() {
-  for (const filePath of [CONFIG_PATH, CLAUDE_CATALOG_PATH, CURSOR_CATALOG_PATH, DSH_CATALOG_PATH, NATIVE_CATALOG_PATH]) {
+  for (const filePath of [CONFIG_PATH, CLAUDE_CATALOG_PATH, CURSOR_CATALOG_PATH, DSH_CATALOG_PATH, NATIVE_CATALOG_PATH, OPENCLAW_CATALOG_PATH]) {
     rmSync(filePath, { force: true });
   }
 }
@@ -107,6 +108,17 @@ test("the Claude publication snapshot marks the Claude Code integration", () => 
     assert.deepEqual(installedTargets(), ["claude"]);
     stageFile(CONFIG_PATH, "# BEGIN codex-router-managed\n# END codex-router-managed\n");
     assert.deepEqual(installedTargets(), ["codex", "claude"]);
+  } finally {
+    clearStagedFiles();
+  }
+});
+
+test("the OpenClaw publication snapshot marks the OpenClaw integration", () => {
+  try {
+    stageFile(OPENCLAW_CATALOG_PATH, "{}");
+    assert.deepEqual(installedTargets(), ["openclaw"]);
+    stageFile(CONFIG_PATH, "# BEGIN codex-router-managed\n# END codex-router-managed\n");
+    assert.deepEqual(installedTargets(), ["codex", "openclaw"]);
   } finally {
     clearStagedFiles();
   }

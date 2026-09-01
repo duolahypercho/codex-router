@@ -81,7 +81,7 @@ test("operators can keep an explicitly configured legacy block during migration"
 });
 
 test("all client targets share the same port block", () => {
-  for (const target of ["dsh", "gemini", "cursor", "claude"]) {
+  for (const target of ["dsh", "gemini", "cursor", "claude", "openclaw"]) {
     assert.deepEqual(JSON.parse(pathsForTarget(target)), JSON.parse(pathsForTarget("codex")));
   }
 });

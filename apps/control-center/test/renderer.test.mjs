@@ -18,6 +18,7 @@ const bridgeSource = String.raw`
   const searchParams = new URLSearchParams(location.search);
   let usageDelayMs = Number(searchParams.get("usageDelayMs")) || 0;
   let cursorHarnessState = "configured";
+  let openclawHarnessConfigured = true;
   const snapshotDelayMs = Number(searchParams.get("snapshotDelayMs")) || 0;
   const providerDelayMs = Number(searchParams.get("providerDelayMs")) || 0;
   const accountDelay = searchParams.has("accountDelayMs")
@@ -221,6 +222,12 @@ const bridgeSource = String.raw`
       terminalAvailable: true,
       harnesses: [
         {
+          id: "openclaw", displayName: "OpenClaw", ownership: "openclaw",
+          description: "OpenClaw's current agent runtime.", cliInstalled: true, appInstalled: false,
+          configured: openclawHarnessConfigured, canInstall: true, installRequirement: "Publish shared config.",
+          docsUrl: "https://docs.openclaw.ai/",
+        },
+        {
           id: "codex", displayName: "Codex", ownership: "openai",
           description: "OpenAI coding client.", cliInstalled: true, appInstalled: true,
           configured: true, canInstall: true, installRequirement: "Publish shared config.",
@@ -271,14 +278,18 @@ const bridgeSource = String.raw`
     }),
     getContextSessions: async () => ({
       fetchedAt: "2026-08-30T08:00:00.000Z",
-      counts: { total: 3, codex: 1, dsh: 1, cursor: 1, archived: 0 },
+      counts: { total: 3, codex: 1, dsh: 1, cursor: 1, claude: 0, gemini: 0, openclaw: 0, archived: 0 },
       sessions: [
         { id: "11111111-1111-4111-8111-111111111111", harnessId: "cursor", title: "Cursor routing task", updatedAt: "2026-08-30T08:00:00.000Z", archived: false, resumable: true },
         { id: "session-22222222-2222-4222-8222-222222222222", harnessId: "dsh", title: "DeepSeek routing task", updatedAt: "2026-08-30T07:00:00.000Z", archived: false, resumable: true },
         { id: "33333333-3333-4333-8333-333333333333", harnessId: "codex", title: "Codex routing task", updatedAt: "2026-08-30T06:00:00.000Z", archived: false, resumable: true },
       ],
     }),
-    setupHarness: async () => ({ configured: true }),
+    setupHarness: async (harnessId) => {
+      record("setupHarness", harnessId);
+      if (harnessId === "openclaw") openclawHarnessConfigured = true;
+      return { configured: true };
+    },
     prepareCursorTunnel: async () => {
       record("prepareCursorTunnel");
       operationListener?.({ action: "prepareCursorTunnel", status: "started", message: "Downloading Cloudflare connector…" });
@@ -295,7 +306,10 @@ const bridgeSource = String.raw`
       operationListener?.({ action: "connectCursor", status: "completed", message: "Cursor routing verified." });
       return { configured: true, opened: true };
     },
-    launchHarness: async () => ({ opened: true }),
+    launchHarness: async (harnessId, surface) => {
+      record("launchHarness", harnessId, surface);
+      return { opened: true };
+    },
     probeAgentBridge: async (bridgeId) => { record("probeAgentBridge", bridgeId); return { handshake: "ok" }; },
     loginAgentBridge: async (bridgeId) => { record("loginAgentBridge", bridgeId); return { opened: true }; },
     openHarnessSession: async () => ({ opened: true }),
@@ -416,6 +430,7 @@ const bridgeSource = String.raw`
     usageReads: () => ({ account: accountUsageReads, provider: providerUsageReads }),
     healthReads: () => healthReads,
     setCursorHarnessState: (state) => { cursorHarnessState = state; },
+    setOpenClawHarnessConfigured: (configured) => { openclawHarnessConfigured = configured; },
   });
 })();
 `;
@@ -546,26 +561,51 @@ test("the production renderer exposes model discovery and picker actions", { tim
     assert.equal(await page.locator(".page-scroll-harness").evaluate((element) => getComputedStyle(element).display), "block");
     const harnessRows = page.locator(".lhc-harness-row");
     await harnessRows.first().waitFor();
-    assert.equal(await harnessRows.count(), 5);
+    assert.equal(await harnessRows.count(), 6);
     assert.deepEqual(
       (await harnessRows.locator("h2").allTextContents()).map((value) => value.trim()),
-      ["Cursor", "Claude Code", "Gemini CLI", "DeepSeek Harness", "Codex"],
+      ["OpenClaw", "Cursor", "Claude Code", "Gemini CLI", "DeepSeek Harness", "Codex"],
     );
-    assert.equal(await harnessRows.nth(0).locator('[data-client-logo="cursor"]').count(), 1);
-    assert.equal(await harnessRows.nth(1).locator('[data-client-logo="claude"]').count(), 1);
-    assert.equal(await harnessRows.nth(2).locator('[data-client-logo="gemini"]').count(), 1);
-    assert.equal(await harnessRows.nth(3).locator('[data-client-logo="dsh"]').count(), 1);
-    assert.equal(await harnessRows.nth(4).locator('[data-client-logo="codex"]').count(), 1);
+    assert.equal(await harnessRows.nth(0).locator('[data-client-logo="openclaw"]').count(), 1);
+    assert.equal(await harnessRows.nth(1).locator('[data-client-logo="cursor"]').count(), 1);
+    assert.equal(await harnessRows.nth(2).locator('[data-client-logo="claude"]').count(), 1);
+    assert.equal(await harnessRows.nth(3).locator('[data-client-logo="gemini"]').count(), 1);
+    assert.equal(await harnessRows.nth(4).locator('[data-client-logo="dsh"]').count(), 1);
+    assert.equal(await harnessRows.nth(5).locator('[data-client-logo="codex"]').count(), 1);
     assert.deepEqual(
       await page.locator(".lhc-harness-table-head span").allTextContents(),
       ["Client", "Runtime", "Models", "Sessions", "Actions"],
     );
-    assert.equal(await page.getByText("1 published", { exact: true }).count(), 4);
+    assert.equal(await page.getByText("1 published", { exact: true }).count(), 5);
     assert.equal(await page.getByText("1 available", { exact: true }).count(), 1);
     assert.equal(await page.getByLabel("Stable public HTTPS origin").count(), 0);
-    assert.equal(await page.getByRole("button", { name: "Open Cursor", exact: true }).count(), 1);
-    assert.equal(await page.getByRole("button", { name: "Open agent" }).count(), 0);
-    assert.equal(await page.getByRole("button", { name: "Open Cursor documentation" }).count(), 1);
+    assert.deepEqual(
+      (await page.locator(".lhc-harness-actions button").allTextContents()).map((label) => label.trim()),
+      ["Open", "Open", "Open", "Open", "Open", "Open"],
+    );
+    for (const client of ["OpenClaw", "Cursor", "Claude Code", "Gemini CLI", "DeepSeek Harness", "Codex"]) {
+      assert.equal(await page.getByRole("button", { name: `Open ${client}`, exact: true }).count(), 1);
+    }
+    assert.deepEqual(
+      await harnessRows.evaluateAll((rows) => rows.map((row) => row.querySelectorAll(".lhc-harness-actions button").length)),
+      [1, 1, 1, 1, 1, 1],
+    );
+    assert.equal(await page.getByRole("button", { name: /documentation|terminal|agent/i }).count(), 0);
+    await harnessRows.nth(0).getByRole("button", { name: "Open OpenClaw", exact: true }).click();
+    assert.deepEqual(
+      await page.evaluate(() => window.routerControlTest.calls().find((call) => call.name === "launchHarness")),
+      { name: "launchHarness", args: ["openclaw", "app"] },
+    );
+    await page.evaluate(() => window.routerControlTest.setOpenClawHarnessConfigured(false));
+    await page.getByRole("button", { name: "Context Manager", exact: true }).click();
+    await page.getByRole("button", { name: "Harness Experimental", exact: true }).click();
+    await harnessRows.nth(0).getByRole("button", { name: "Set up", exact: true }).click();
+    await harnessRows.nth(0).getByRole("button", { name: "Open OpenClaw", exact: true }).waitFor();
+    assert.equal(
+      await page.evaluate(() => window.routerControlTest.calls()
+        .filter((call) => call.name === "setupHarness" && call.args[0] === "openclaw").length),
+      1,
+    );
     assert.equal(await page.locator(".lhc-agent-bridges").count(), 0);
     assert.deepEqual(
       await page.locator(".lhc-harness-bridge strong").allTextContents(),
@@ -615,8 +655,8 @@ test("the production renderer exposes model discovery and picker actions", { tim
     await page.getByRole("button", { name: "Connect Cursor", exact: true }).click();
     const cursorProgress = page.getByRole("progressbar", { name: "Cursor setup progress" });
     await cursorProgress.waitFor();
-    assert.match(await harnessRows.first().innerText(), /Installing Cloudflare connector/);
-    await page.getByRole("button", { name: "Open Cursor", exact: true }).waitFor();
+    assert.match(await harnessRows.nth(1).innerText(), /Installing Cloudflare connector/);
+    await harnessRows.nth(1).getByRole("button", { name: "Open Cursor", exact: true }).waitFor();
     assert.equal(await cursorProgress.count(), 0);
     assert.equal(
       await page.evaluate(() => window.routerControlTest.calls().filter((call) => call.name === "connectCursor").length),

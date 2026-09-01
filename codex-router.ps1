@@ -1,8 +1,8 @@
 $ErrorActionPreference = "Stop"
 $Root = $PSScriptRoot
 $Target = if ($env:MODEL_ROUTER_TARGET) { $env:MODEL_ROUTER_TARGET } else { "codex" }
-if ($Target -notin @("codex", "dsh", "gemini", "cursor", "claude")) {
-  throw "MODEL_ROUTER_TARGET must be codex, dsh, gemini, cursor, or claude."
+if ($Target -notin @("codex", "dsh", "gemini", "cursor", "claude", "openclaw")) {
+  throw "MODEL_ROUTER_TARGET must be codex, dsh, gemini, cursor, claude, or openclaw."
 }
 $Command = if ($args.Count) { [string]$args[0] } else { "status" }
 # The @() wraps the whole `if`, not its branches. PowerShell enumerates a
@@ -34,6 +34,7 @@ function Remove-TargetIntegration {
     "gemini" { Invoke-RouterNode "src\gemini-config-manager.mjs" @("uninstall") }
     "cursor" { Invoke-RouterNode "src\cursor-config-manager.mjs" @("uninstall") }
     "claude" { Invoke-RouterNode "src\claude-code-config-manager.mjs" @("uninstall") }
+    "openclaw" { Invoke-RouterNode "src\openclaw-config-manager.mjs" @("uninstall") }
     default { Invoke-RouterNode "src\config-manager.mjs" @("disable") }
   }
   $Remaining = [string](& node (Join-Path $Root "src\target-integration.mjs") "installed-targets")

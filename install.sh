@@ -24,12 +24,12 @@ usage() {
   cat <<'EOF'
 Usage: install.sh [options]
 
-Install external model routes for Codex, DeepSeek Harness, Gemini CLI, or Cursor.
+Install external model routes for Codex, DeepSeek Harness, Gemini CLI, Cursor, Claude Code, or OpenClaw.
 
 Options:
   --install-dir PATH  Stable checkout used by the background service
   --target APP        Install for "codex" (default), "dsh" (DeepSeek Harness),
-                      "gemini" (Gemini CLI), or "cursor"
+                      "gemini" (Gemini CLI), "cursor", "claude", or "openclaw"
   --cursor-public-url URL
                       Stable HTTPS tunnel origin for Cursor App; forward it
                       to the local Cursor edge port printed during setup
@@ -121,7 +121,7 @@ local_modifications_message() {
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --target)
-      [ "$#" -ge 2 ] || die "--target requires codex, dsh, gemini, cursor, or claude"
+      [ "$#" -ge 2 ] || die "--target requires codex, dsh, gemini, cursor, claude, or openclaw"
       target=$2
       shift 2
       ;;
@@ -217,8 +217,8 @@ while [ "$#" -gt 0 ]; do
 done
 
 case "$target" in
-  codex|dsh|gemini|cursor|claude) ;;
-  *) die "--target must be codex, dsh, gemini, cursor, or claude" ;;
+  codex|dsh|gemini|cursor|claude|openclaw) ;;
+  *) die "--target must be codex, dsh, gemini, cursor, claude, or openclaw" ;;
 esac
 if [ -n "$cursor_public_url" ]; then
   [ "$target" = cursor ] || die "--cursor-public-url applies to --target cursor only"
@@ -374,6 +374,9 @@ case "$target" in
     ;;
   claude)
     printf '\nCodex Router is installed for Claude Code. Run claude-router and choose a codex_router/anthropic/... model.\n'
+    ;;
+  openclaw)
+    printf '\nCodex Router installed OpenClaw and published every routed model under its codex-router provider. Run openclaw to start.\n'
     ;;
   *)
     printf '\nCodex Router is installed. Fully quit Codex, reopen it, and start a new task.\n'

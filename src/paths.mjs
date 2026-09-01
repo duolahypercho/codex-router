@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 
 import { trayBundleDir } from "./tray-install.mjs";
 
-const supportedTargets = new Set(["codex", "dsh", "gemini", "cursor", "claude"]);
+const supportedTargets = new Set(["codex", "dsh", "gemini", "cursor", "claude", "openclaw"]);
 
 export const TARGET = process.env.MODEL_ROUTER_TARGET || "codex";
 if (!supportedTargets.has(TARGET)) {
@@ -30,6 +30,7 @@ const TARGET_DISPLAY_NAMES = Object.freeze({
   gemini: "Gemini CLI Router",
   cursor: "Cursor Router",
   claude: "Claude Code Router",
+  openclaw: "OpenClaw Router",
   codex: "Codex Router",
 });
 export const TARGET_DISPLAY_NAME = TARGET_DISPLAY_NAMES[TARGET] || TARGET_DISPLAY_NAMES.codex;
@@ -133,6 +134,7 @@ export const DSH_CATALOG_PATH = path.join(STATE_DIR, "dsh-models.json");
 export const GEMINI_CATALOG_PATH = path.join(STATE_DIR, "gemini-models.json");
 export const CURSOR_CATALOG_PATH = path.join(STATE_DIR, "cursor-models.json");
 export const CLAUDE_CATALOG_PATH = path.join(STATE_DIR, "claude-models.json");
+export const OPENCLAW_CATALOG_PATH = path.join(STATE_DIR, "openclaw-models.json");
 // Router-owned Cloudflare named-tunnel metadata. The tunnel exposes only the
 // separately keyed Cursor App edge on 4214; it never points at the main router.
 export const CURSOR_TUNNEL_STATE_PATH = path.join(STATE_DIR, "cursor-tunnel.json");

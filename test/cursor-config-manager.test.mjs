@@ -55,15 +55,22 @@ test("Cursor Agent setup is local, one-step, and does not require Cursor App sta
 });
 
 test("packaged setup writes a real Node runtime instead of the Electron host", () => {
-  const nodeName = process.platform === "win32" ? "node.exe" : "node";
-  const runtime = "/test/runtime/bin";
+  // nodeRuntimePath looks for the platform's own executable name, so the
+  // fixture has to name the same one. Hard-coding the POSIX "node" made this
+  // assert that Windows finds a file it never looks for, and the lookup then
+  // failed as "Node.js is unavailable" on a runner that has Node installed.
+  const runtimeDir = process.platform === "win32" ? "C:\\test\\runtime\\bin" : "/test/runtime/bin";
+  const runtime = path.join(runtimeDir, process.platform === "win32" ? "node.exe" : "node");
   const node = nodeRuntimePath({
-    execPath: "/Applications/Codex Router.app/Contents/MacOS/Codex Router",
+    execPath:
+      process.platform === "win32"
+        ? "C:\\Program Files\\Codex Router\\Codex Router.exe"
+        : "/Applications/Codex Router.app/Contents/MacOS/Codex Router",
     electron: true,
-    environment: { PATH: runtime },
-    exists: (candidate) => candidate === path.join(runtime, nodeName),
+    environment: { PATH: runtimeDir },
+    exists: (candidate) => candidate === runtime,
   });
-  assert.equal(node, path.join(runtime, nodeName));
+  assert.equal(node, runtime);
 });
 
 test("Cursor doctor recognizes the launcher as a complete agent-only integration", () => {

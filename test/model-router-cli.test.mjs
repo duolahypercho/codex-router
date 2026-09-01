@@ -95,7 +95,7 @@ test(
   },
 );
 
-for (const args of [["--version"], ["codex", "--version"]]) {
+for (const args of [["--version"], ["codex", "--version"], ["openclaw", "--version"]]) {
   test(
     `model-router ${args.join(" ")} reports the package version`,
     { skip: process.platform === "win32" },

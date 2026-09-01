@@ -3,7 +3,7 @@ param(
   [switch]$CheckoutInstall,
   [switch]$PrepareOnly,
   [switch]$ForceDeps,
-  [ValidateSet("codex", "dsh", "gemini", "cursor", "claude")]
+  [ValidateSet("codex", "dsh", "gemini", "cursor", "claude", "openclaw")]
   [string]$Target = "codex",
   [string]$CursorPublicUrl,
   [string]$CursorHostname,
@@ -241,6 +241,10 @@ if ([int]$VersionParts[0] -lt 22 -or
     ([int]$VersionParts[0] -eq 22 -and [int]$VersionParts[1] -lt 19)) {
   throw "Node.js 22.19 or newer is required; Node.js 24 LTS is recommended."
 }
+if ($Target -eq "openclaw") {
+  & node (Join-Path $ScriptDirectory "src\openclaw-install.mjs") preflight | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw "OpenClaw requires a supported Node.js release." }
+}
 
 # Each target enables its own client configuration; everything around that one
 # step is the shared router plane.
@@ -249,6 +253,7 @@ $ConfigManager = switch ($Target) {
   "gemini" { "src\gemini-config-manager.mjs" }
   "cursor" { "src\cursor-config-manager.mjs" }
   "claude" { "src\claude-code-config-manager.mjs" }
+  "openclaw" { "src\openclaw-config-manager.mjs" }
   default { "src\config-manager.mjs" }
 }
 $ConfigEnableCommand = if ($Target -eq "codex") { "enable" } else { "install" }
@@ -289,6 +294,7 @@ try {
     "gemini" { (Get-InstallerStateField @($ConfigManager, "status") "installed") -eq $true }
     "cursor" { (Get-InstallerStateField @($ConfigManager, "status") "appConfigured") -eq $true }
     "claude" { (Get-InstallerStateField @($ConfigManager, "status") "installed") -eq $true }
+    "openclaw" { (Get-InstallerStateField @($ConfigManager, "status") "installed") -eq $true }
     default { (Get-InstallerStateField @($ConfigManager, "status") "mode") -eq "router" }
   }
   $ServiceWasInstalled = (Get-InstallerStateField @("src\service.mjs", "status") "installed") -eq $true
@@ -487,6 +493,10 @@ try {
     & node src/claude-code-config-manager.mjs install | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "Claude Code republish failed." }
   }
+  if ($Target -ne "openclaw" -and (Test-NonEmptyFile (Join-Path $StateRoot "openclaw-models.json"))) {
+    & node src/openclaw-config-manager.mjs install | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "OpenClaw republish failed." }
+  }
 
   if ($PrepareOnly) {
     Write-Host "Dependencies and generated files are prepared; application configuration was not changed."
@@ -495,6 +505,11 @@ try {
     # an invoked prepare-only install must hand control back so its caller can
     # observe that restoration.
     return
+  }
+
+  if ($Target -eq "openclaw") {
+    & node src/openclaw-install.mjs install | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "OpenClaw installation failed." }
   }
 
   $ConfigEnabled = $true
@@ -576,6 +591,8 @@ try {
     Write-Host "Run cursor-router-agent for the CLI; fully quit and reopen Cursor for the app."
   } elseif ($Target -eq "claude") {
     Write-Host "Published all routed models to Claude Code. Run claude-router and choose a codex_router/anthropic/... model."
+  } elseif ($Target -eq "openclaw") {
+    Write-Host "Installed OpenClaw and published every routed model under its codex-router provider. Run openclaw to start."
   } else {
     Write-Host "Installed the selected external model routes. Fully quit and reopen Codex."
   }

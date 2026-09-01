@@ -49,7 +49,8 @@ Use Anthropic, Kimi, DeepSeek, xAI, GitHub Copilot, and other external models
 inside the Codex App and CLI. One local installation can also serve
 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) and
 [Gemini CLI](https://github.com/google-gemini/gemini-cli), plus Cursor Agent
-and Cursor App. Your provider
+and Cursor App, Claude Code, and [OpenClaw](https://github.com/openclaw/openclaw).
+Your provider
 credentials stay on your computer.
 
 ### Subscription agent bridges (experimental)
@@ -1866,7 +1867,7 @@ codex login
 ./bin/model-router codex chatgpt-session enable
 ```
 
-DeepSeek Harness, Gemini CLI, and future clients installed for this same OS
+DeepSeek Harness, Gemini CLI, OpenClaw, and future clients installed for this same OS
 user then reuse that one authorization over the loopback; there is no login per
 harness and the marker stores no credential. Native models are withheld until
 both the authorization and a usable Codex session exist, and disappear again
@@ -2234,6 +2235,46 @@ Claude.ai subscription login is not converted into a reusable API credential.
 ./bin/model-router claude disable
 ```
 
+## Make models appear in OpenClaw
+
+The `openclaw` target is the one-click path from the Control Center's Harness
+page. **Set up** installs the official `openclaw@latest` npm package when it is
+missing, then publishes every selected, credentialed router model under one
+OpenClaw provider:
+
+```sh
+./install.sh --target openclaw --auto --providers configured
+# or add OpenClaw to an existing router
+./bin/model-router openclaw enable
+
+openclaw
+```
+
+The router owns only `models.providers.codex-router` and a private publication
+marker. It writes the provider through `openclaw config patch --stdin`, so the
+local caller capability never appears in command arguments. Existing OpenClaw
+agents, channels, plugins, and other providers stay untouched. If no default
+model exists on first setup, the router selects its highest-priority route; an
+existing default or a later user override is preserved.
+
+OpenClaw model references use `codex-router/<router-slug>` and speak
+`openai-responses` to the same authenticated loopback path as the other local
+clients. Context windows, text/image input, and the router's exact reasoning
+effort ladder are published with each model. Disable removes only the managed
+provider and removes the default only when it is still the value the router
+set:
+
+```sh
+./bin/model-router openclaw doctor
+./bin/model-router openclaw status
+./bin/model-router openclaw disable
+```
+
+OpenClaw's AgentHarnessV2 API is a native runtime-plugin boundary, not a new
+HTTP model protocol. The router therefore remains an ordinary Responses model
+provider; when no native plugin claims the route, OpenClaw correctly uses its
+embedded runtime. No restart is required after publication.
+
 The optional live check makes one small request per selected provider and may
 consume paid quota:
 
@@ -2241,7 +2282,8 @@ consume paid quota:
 ./bin/model-router codex smoke-test --yes
 ```
 
-`disable` removes only the Codex integration and its current service.
+`disable` removes only the selected client integration and retires the shared
+service only when no installed client still uses it.
 `uninstall` intentionally retains the checkout, logs, backups, internal keys,
 and provider credentials so routine removal cannot destroy authentication or
 recovery data.

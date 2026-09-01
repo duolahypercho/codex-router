@@ -49,7 +49,7 @@ const SESSION_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3
 const CURSOR_SESSION_ID = /^(?:(?:draft|bc)-)?[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const SESSION_UUID_IN_FILENAME = /[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i;
 const DSH_SESSION_ID = /^session-[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const HARNESS_IDS = ["codex", "dsh", "gemini", "cursor", "claude"];
+const HARNESS_IDS = ["codex", "dsh", "gemini", "cursor", "claude", "openclaw"];
 const HARNESS_SURFACES = ["app", "terminal"];
 const AGENT_BRIDGE_IDS = ["anthropic", "cursor", "gemini"];
 const SESSION_INDEX_LIMIT = 16 * 1024 * 1024;
@@ -84,6 +84,15 @@ const CLOUDFLARED_INSTALL_DOCS = "https://developers.cloudflare.com/cloudflare-o
 const CODEX_DOCS = "https://developers.openai.com/codex/cli/";
 const CLAUDE_CODE_DOCS = "https://code.claude.com/docs/en/overview";
 const GEMINI_CLI_DOCS = "https://github.com/google-gemini/gemini-cli";
+const OPENCLAW_DOCS = "https://docs.openclaw.ai/";
+const HARNESS_SITES = Object.freeze({
+  openclaw: "https://openclaw.ai/",
+  codex: "https://openai.com/codex/",
+  dsh: DSH_DOCS,
+  cursor: "https://cursor.com/",
+  claude: "https://claude.com/product/claude-code",
+  gemini: "https://google-gemini.github.io/gemini-cli/",
+});
 const OAUTH_LOGIN_COMMANDS = Object.freeze({
   "kimi-oauth": { executable: "kimi", args: ["login"] },
   "grok-oauth": { executable: "grok", args: ["login", "--oauth"] },
@@ -180,6 +189,31 @@ function cursorDesktopPath() {
   ].find((candidate) => existsSync(candidate));
 }
 
+function openclawDesktopPath() {
+  const localAppData = process.env.LOCALAPPDATA;
+  const programFiles = process.env.PROGRAMFILES;
+  return [
+    "/Applications/OpenClaw.app",
+    path.join(os.homedir(), "Applications", "OpenClaw.app"),
+    ...(process.platform === "linux"
+      ? [
+          executablePath("openclaw-desktop"),
+          "/usr/bin/openclaw-desktop",
+          "/usr/local/bin/openclaw-desktop",
+          path.join(os.homedir(), ".local", "bin", "openclaw-desktop"),
+        ]
+      : []),
+    ...(process.platform === "win32"
+      ? [
+          localAppData && path.join(localAppData, "Programs", "OpenClaw Companion", "OpenClaw Companion.exe"),
+          localAppData && path.join(localAppData, "Programs", "OpenClawCompanion", "OpenClawCompanion.exe"),
+          localAppData && path.join(localAppData, "Programs", "OpenClaw", "OpenClaw.exe"),
+          programFiles && path.join(programFiles, "OpenClaw Companion", "OpenClaw Companion.exe"),
+        ]
+      : []),
+  ].filter(Boolean).find((candidate) => existsSync(candidate));
+}
+
 function cursorConnectorInstallSpec() {
   if (process.platform === "darwin") {
     const brew = executablePath("brew");
@@ -242,16 +276,20 @@ export function getHarnessSnapshot() {
   const claude = executablePath("claude");
   const claudeLauncher = executablePath("claude-router");
   const gemini = executablePath("gemini");
+  const openclaw = executablePath("openclaw");
   const codexVersion = executableVersion(codex);
   const dshVersion = executableVersion(dsh);
   const cursorVersion = executableVersion(cursorAgent);
   const claudeVersion = executableVersion(claude);
   const geminiVersion = executableVersion(gemini);
+  const openclawVersion = executableVersion(openclaw);
+  const openclawApp = openclawDesktopPath();
   const stateDirectory = routerStateDirectory();
   const codexConfig = readBounded(path.join(process.env.CODEX_HOME || path.join(os.homedir(), ".codex"), "config.toml"), 2 * 1024 * 1024);
   const cursorState = readJsonObject(path.join(stateDirectory, "cursor-models.json"), 2 * 1024 * 1024);
   const claudeState = readJsonObject(path.join(stateDirectory, "claude-models.json"), 2 * 1024 * 1024);
   const geminiState = readJsonObject(path.join(stateDirectory, "gemini-models.json"), 2 * 1024 * 1024);
+  const openclawState = readJsonObject(path.join(stateDirectory, "openclaw-models.json"), 2 * 1024 * 1024);
   const cursorTunnel = readJsonObject(path.join(stateDirectory, "cursor-tunnel.json"), 512 * 1024);
   const cloudflared = executablePath("cloudflared");
   const cloudflareLoggedIn = existsSync(
@@ -265,6 +303,21 @@ export function getHarnessSnapshot() {
     platform: process.platform,
     terminalAvailable: terminalAvailable(),
     harnesses: [
+      {
+        id: "openclaw",
+        displayName: "OpenClaw",
+        ownership: "openclaw",
+        description: "OpenClaw's current agent runtime using every model selected in this router.",
+        cliInstalled: Boolean(openclaw),
+        ...(openclawVersion ? { cliVersion: openclawVersion } : {}),
+        appInstalled: Boolean(openclawApp),
+        configured: Boolean(openclawState?.models?.length),
+        canInstall: true,
+        installRequirement: openclaw
+          ? "Publishes every routed model into OpenClaw's router-owned provider. Other OpenClaw settings remain untouched."
+          : "Setup installs openclaw@latest and publishes every routed model in one action.",
+        docsUrl: OPENCLAW_DOCS,
+      },
       {
         id: "codex",
         displayName: "Codex",
@@ -797,6 +850,7 @@ export function getContextSessionsSnapshot() {
       cursor: sessions.filter((session) => session.harnessId === "cursor").length,
       claude: sessions.filter((session) => session.harnessId === "claude").length,
       gemini: sessions.filter((session) => session.harnessId === "gemini").length,
+      openclaw: 0,
       archived: sessions.filter((session) => session.archived).length,
     },
   };
@@ -983,6 +1037,7 @@ export function registerIpcHandlers({
   harnessSnapshotReader = getHarnessSnapshot,
   harnessExecutableResolver = executablePath,
   cursorAppPath = cursorDesktopPath,
+  openclawAppPath = openclawDesktopPath,
   senderGuard = () => true,
 } = {}) {
   if (!ipcMain?.handle) throw new TypeError("ipcMain.handle is required.");
@@ -1440,40 +1495,57 @@ export function registerIpcHandlers({
   handleAction("launchHarness", async ({ harnessId, surface } = {}) => {
     const harness = oneOf(harnessId, HARNESS_IDS, "Harness");
     const destination = oneOf(surface, HARNESS_SURFACES, "Harness surface");
+    const openOfficialSite = async () => {
+      if (!shell?.openExternal) throw new Error("Opening the official client site is unavailable.");
+      await shell.openExternal(HARNESS_SITES[harness]);
+      return { opened: true, surface: "site" };
+    };
     if (harness === "codex" && destination === "app") {
       const appPath = codexDesktopPath();
-      if (!appPath) throw new Error("Codex desktop is not installed. Open the official Codex documentation to download it.");
+      if (!appPath) return openOfficialSite();
       if (!shell?.openPath) throw new Error("Opening desktop apps is unavailable.");
       const failure = await shell.openPath(appPath);
       if (failure) throw new Error("Could not open the Codex desktop app.");
       return { opened: true, surface: "app" };
     }
     if (harness === "cursor" && destination === "app") {
-      const appPath = cursorDesktopPath();
-      if (!appPath) throw new Error("Cursor App is not installed.");
+      const appPath = cursorAppPath();
+      if (!appPath) return openOfficialSite();
       if (!shell?.openPath) throw new Error("Opening desktop apps is unavailable.");
       const failure = await shell.openPath(appPath);
       if (failure) throw new Error("Could not open Cursor App.");
       return { opened: true, surface: "app" };
     }
+    if (harness === "openclaw" && destination === "app") {
+      const appPath = openclawAppPath();
+      if (!appPath) return openOfficialSite();
+      if (!shell?.openPath) throw new Error("Opening desktop apps is unavailable.");
+      const failure = await shell.openPath(appPath);
+      if (failure) throw new Error("Could not open OpenClaw.");
+      return { opened: true, surface: "app" };
+    }
     if (harness === "dsh" && destination === "app") {
+      if (!harnessExecutableResolver("dsh")) return openOfficialSite();
       if (!shell?.openExternal) throw new Error("Opening DeepSeek Harness is unavailable.");
       const state = await runControlJson(["harness", "start"], { timeoutMs: 120_000 });
       if (!state?.url) throw new Error("DeepSeek Harness started without a browser URL.");
       await shell.openExternal(state.url);
       return { opened: true, surface: "app" };
     }
+    if (destination === "app") return openOfficialSite();
     const executable = executablePath(
       harness === "codex" ? "codex"
         : harness === "dsh" ? "dsh"
           : harness === "claude" ? "claude-router"
             : harness === "gemini" ? "gemini"
+              : harness === "openclaw" ? "openclaw"
               : "cursor-router-agent",
     );
     const label = harness === "codex" ? "Codex"
       : harness === "dsh" ? "DeepSeek Harness"
         : harness === "claude" ? "Claude Code Router"
           : harness === "gemini" ? "Gemini CLI"
+            : harness === "openclaw" ? "OpenClaw"
             : "Cursor Router Agent";
     if (!executable) throw new Error(`${label} CLI is not installed or configured.`);
     return openTerminalCommand(executable, [], discoverSourceRoot());
@@ -1524,6 +1596,10 @@ export function registerIpcHandlers({
         throw new Error("Claude Code is not installed. Install the official Claude Code CLI, then refresh Harness.");
       }
       environmentOverrides.CLAUDE_CODE_BIN = claude;
+    }
+    if (harness === "openclaw") {
+      const openclaw = harnessExecutableResolver("openclaw");
+      if (openclaw) environmentOverrides.OPENCLAW_BIN = openclaw;
     }
     return controlJsonRunner(args, {
       timeoutMs: REPAIR_TIMEOUT_MS,

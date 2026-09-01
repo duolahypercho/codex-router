@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **OpenClaw is now a one-click routed client.** The Harness page can install
+  the official `openclaw@latest` package when it is missing and publish every
+  selected router model through a private `codex-router` Responses provider.
+  The integration preserves unrelated OpenClaw config and user-selected
+  defaults, participates in shared catalog refresh and caller-key rotation,
+  and is available as `--target openclaw` on POSIX and Windows.
+
 - **Muse Spark 1.2 Contributor no longer fails on recursive Codex tool
   schemas through OpenCode Go.** Console Go rejects the whole Responses turn
   before inference when this model receives a recursive local JSON-Schema

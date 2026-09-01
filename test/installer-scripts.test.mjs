@@ -151,9 +151,45 @@ test("POSIX updates republish every installed companion client", () => {
   const installer = readScript("bin", "install");
   assert.match(installer, /\$target" != dsh[\s\S]*dsh-models\.json[\s\S]*dsh-config-manager\.mjs install/);
   assert.match(installer, /\$target" != gemini[\s\S]*gemini-models\.json[\s\S]*gemini-config-manager\.mjs install/);
+  assert.match(installer, /\$target" != cursor[\s\S]*cursor-models\.json[\s\S]*cursor-config-manager\.mjs install/);
+  assert.match(installer, /\$target" != claude[\s\S]*claude-models\.json[\s\S]*claude-code-config-manager\.mjs install/);
+  assert.match(installer, /\$target" != openclaw[\s\S]*openclaw-models\.json[\s\S]*openclaw-config-manager\.mjs install/);
   const windows = readScript("install.ps1");
   assert.match(windows, /\$Target -ne "dsh"[\s\S]*dsh-models\.json[\s\S]*dsh-config-manager\.mjs install/);
   assert.match(windows, /\$Target -ne "gemini"[\s\S]*gemini-models\.json[\s\S]*gemini-config-manager\.mjs install/);
+  assert.match(windows, /\$Target -ne "cursor"[\s\S]*cursor-models\.json[\s\S]*cursor-config-manager\.mjs install/);
+  assert.match(windows, /\$Target -ne "claude"[\s\S]*claude-models\.json[\s\S]*claude-code-config-manager\.mjs install/);
+  assert.match(windows, /\$Target -ne "openclaw"[\s\S]*openclaw-models\.json[\s\S]*openclaw-config-manager\.mjs install/);
+});
+
+test("guided Windows setup forwards the selected client target to the installer", () => {
+  const setup = readScript("src", "setup.mjs");
+  assert.match(setup, /"-File",[\s\S]*"install\.ps1"[\s\S]*"-CheckoutInstall",[\s\S]*"-Target",[\s\S]*TARGET/);
+});
+
+test("OpenClaw installers enforce its Node matrix before dependency or catalog work", () => {
+  const posixInstall = withoutComments(readScript("bin", "install"));
+  assert.ok(
+    posixInstall.indexOf("openclaw-install.mjs\" preflight") < posixInstall.indexOf("npm ci --omit=dev"),
+  );
+  const windowsInstall = withoutComments(readScript("install.ps1"));
+  assert.ok(
+    windowsInstall.indexOf("openclaw-install.mjs\") preflight") < windowsInstall.indexOf("npm ci --omit=dev"),
+  );
+  const enable = withoutComments(readScript("bin", "enable"));
+  assert.ok(
+    enable.indexOf("openclaw-install.mjs preflight") < enable.indexOf("provider-selection.mjs ensure-configured"),
+  );
+});
+
+test("Windows doctor repair forwards the active client target", () => {
+  const doctor = readScript("src", "doctor.mjs");
+  assert.match(doctor, /const windowsArguments = \[[\s\S]*"-Target",[\s\S]*TARGET/);
+});
+
+test("client-independent smoke tests accept every supported target", () => {
+  const smoke = readScript("bin", "smoke-test");
+  assert.match(smoke, /codex\|dsh\|gemini\|cursor\|claude\|openclaw/);
 });
 
 test("both installers preflight pending login-free refreshes before catalog publication", () => {

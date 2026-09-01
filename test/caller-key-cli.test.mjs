@@ -19,6 +19,15 @@ test("caller-key rotation selects only complete managed integrations", () => {
     gemini: { installed: true, baseUrlManaged: true, envExists: true, documentReadable: true, conflicts: [], managedBlockPresent: true },
   }), ["codex", "dsh", "gemini"]);
   assert.deepEqual(installedTargetsFromStatus({
+    openclaw: {
+      installed: true, providerInstalled: true, baseUrlManaged: true,
+      configValid: true, configProtected: true,
+    },
+  }), ["openclaw"]);
+  assert.throws(() => installedTargetsFromStatus({
+    openclaw: { installed: true, providerInstalled: true, baseUrlManaged: false },
+  }), /OpenClaw.*partial/i);
+  assert.deepEqual(installedTargetsFromStatus({
     codex: { mode: "native" }, dsh: {}, gemini: {},
   }), []);
   assert.throws(() => installedTargetsFromStatus({

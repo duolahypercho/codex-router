@@ -19,11 +19,15 @@ credentials, or service logic in the renderer.
   without an explicit model selection.
 - Local: Ollama runtime controls, installable and installed models, downloads,
   enablement, removal, benchmarks, and local image readers.
-- Harness: one row each for Cursor, Claude Code, Gemini CLI, DeepSeek Harness, and Codex. Every row
+- Harness: one row each for OpenClaw, Cursor, Claude Code, Gemini CLI, DeepSeek Harness, and Codex. Every row
   reports client detection, router publication, routed models, and indexed
-  sessions, then exposes fixed setup, launch, terminal, session, and
-  documentation actions. Setup publishes the same shared router plane into the
-  selected client instead of creating another credential or service store.
+  sessions. An unconfigured row exposes setup; a configured row has one Open
+  action that launches the desktop app when present and otherwise opens the
+  official client site. Terminal and document access stay in their dedicated
+  surfaces. Setup publishes the same shared router plane into the selected
+  client instead of creating another credential or service store.
+  OpenClaw setup installs the official npm package when absent and publishes
+  the router-owned `codex-router` provider in the same click.
   Claude Code publishes routed models through `claude-router`. Claude Code,
   Cursor Agent, and Gemini CLI show optional official-client agent availability
   inside the matching row, separate from the routed-model count.

@@ -566,13 +566,13 @@ export interface OperationEvent {
   error?: string;
 }
 
-export type HarnessId = "codex" | "dsh" | "gemini" | "cursor" | "claude";
+export type HarnessId = "codex" | "dsh" | "gemini" | "cursor" | "claude" | "openclaw";
 export type HarnessSurface = "app" | "terminal";
 
 export interface HarnessDescriptor {
   id: HarnessId;
   displayName: string;
-  ownership: "openai" | "deepseek" | "google" | "cursor" | "anthropic";
+  ownership: "openai" | "deepseek" | "google" | "cursor" | "anthropic" | "openclaw";
   description: string;
   cliInstalled: boolean;
   cliVersion?: string;
@@ -650,6 +650,7 @@ export interface ContextSessionsSnapshot {
     cursor: number;
     claude: number;
     gemini: number;
+    openclaw: number;
     archived: number;
   };
 }

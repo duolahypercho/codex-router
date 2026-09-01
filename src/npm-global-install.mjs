@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { commandOnPath, spawnableCommand } from "./spawnable-command.mjs";
+import { commandOnPath, preferSpawnablePath, spawnableCommand } from "./spawnable-command.mjs";
 import { inheritedProxyEnvironment } from "./proxy-environment.mjs";
 
 // Installing a third-party CLI globally through npm, and finding the binary
@@ -81,13 +81,24 @@ export function readNpmGlobalBinDir() {
   }
 }
 
+export function npmGlobalBinaryAt(
+  directory,
+  executable,
+  { platform = process.platform, exists = existsSync } = {},
+) {
+  const base = path.join(directory, executable);
+  const candidates = platform === "win32"
+    ? [".exe", ".com", ".cmd", ".bat", ""].map((extension) => `${base}${extension}`)
+    : [base];
+  return preferSpawnablePath(candidates.filter((candidate) => exists(candidate)), platform) || undefined;
+}
+
 export function npmGlobalBinary(executable) {
   if (npmGlobalBinDir === undefined) {
     npmGlobalBinDir = readNpmGlobalBinDir() ?? "";
   }
   if (!npmGlobalBinDir) return undefined;
-  const candidate = path.join(npmGlobalBinDir, executable);
-  return existsSync(candidate) ? candidate : undefined;
+  return npmGlobalBinaryAt(npmGlobalBinDir, executable);
 }
 
 // npm prints its diagnosis over several lines and ends with log-file paths
@@ -105,10 +116,13 @@ export function installFailureDetail(result) {
 // Throws with the reason rather than the fact: "EACCES on /usr/local/lib" and
 // "network unreachable" need opposite fixes, and a bare "could not install"
 // sent the last one of these into a debugging session.
-export function npmInstallGlobal(npmPackage, { label = npmPackage, timeoutMs } = {}) {
+export function npmInstallGlobal(
+  npmPackage,
+  { label = npmPackage, timeoutMs, extraArgs = [] } = {},
+) {
   const npm = npmPath();
   if (!npm) throw new Error("Node.js and npm are required to install this CLI.");
-  const install = spawnableCommand(npm, ["install", "-g", npmPackage]);
+  const install = spawnableCommand(npm, ["install", "-g", npmPackage, ...extraArgs]);
   const result = spawnSync(install.command, install.args, {
     ...install.options,
     windowsHide: true,

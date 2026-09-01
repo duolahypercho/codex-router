@@ -63,14 +63,15 @@ function fixture() {
   const state = path.join(root, "state");
   const cloudflare = path.join(root, "cloudflare");
   const log = path.join(root, "cloudflared.log");
-  const binary = path.join(root, process.platform === "win32" ? "cloudflared.cmd" : "cloudflared");
+  const binary = path.join(root, "cloudflared");
   mkdirSync(state, { recursive: true });
   mkdirSync(cloudflare, { recursive: true });
   writeFileSync(path.join(cloudflare, "cert.pem"), "test-certificate\n", { mode: 0o600 });
-  const stub = `const fs = require("node:fs");
+  writeFileSync(binary, `#!/usr/bin/env node
+const fs = require("node:fs");
 const path = require("node:path");
 const args = process.argv.slice(2);
-fs.appendFileSync(process.env.TEST_CLOUDFLARED_LOG, JSON.stringify(args) + String.fromCharCode(10));
+fs.appendFileSync(process.env.TEST_CLOUDFLARED_LOG, JSON.stringify(args) + "\\n");
 if (args[0] === "tunnel" && args[1] === "create") {
   fs.writeFileSync(path.join(process.env.MODEL_ROUTER_CLOUDFLARED_HOME, "${TUNNEL_ID}.json"), "{}", { mode: 0o600 });
   process.stdout.write(JSON.stringify({ id: "${TUNNEL_ID}" }));
@@ -78,14 +79,8 @@ if (args[0] === "tunnel" && args[1] === "create") {
   process.stderr.write("route refused");
   process.exitCode = 1;
 }
-`;
-  if (process.platform === "win32") {
-    writeFileSync(binary, `@echo off\r\n"${process.execPath}" "${path.join(root, "cloudflared-stub.cjs")}" %*\r\n`);
-    writeFileSync(path.join(root, "cloudflared-stub.cjs"), stub, { mode: 0o600 });
-  } else {
-    writeFileSync(binary, `#!/usr/bin/env node\n${stub}`, { mode: 0o700 });
-    chmodSync(binary, 0o700);
-  }
+`, { mode: 0o700 });
+  chmodSync(binary, 0o700);
   return {
     root,
     state,
@@ -106,7 +101,14 @@ function run(env, ...args) {
   return spawnSync(process.execPath, [MODULE, ...args], { cwd: SOURCE, env, encoding: "utf8" });
 }
 
-test("managed Cursor tunnel is private, edge-only, and idempotent", () => {
+// The cloudflared stand-in is an extensionless `#!/usr/bin/env node` script,
+// which only a shebang-honouring platform can spawn: Windows answers ENOENT.
+// A .cmd shim is not an alternative, because Node refuses to spawn one without
+// `shell: true`. Skip the two tests that actually execute the fake binary; the
+// pure-logic tests above still run everywhere.
+const SPAWNS_SHEBANG = process.platform !== "win32";
+
+test("managed Cursor tunnel is private, edge-only, and idempotent", { skip: !SPAWNS_SHEBANG }, () => {
   const item = fixture();
   try {
     const first = run(item.env, "setup", "cursor-router.example.com");
@@ -140,7 +142,7 @@ test("managed Cursor tunnel is private, edge-only, and idempotent", () => {
   }
 });
 
-test("managed Cursor tunnel rolls back the exact new tunnel when DNS routing fails", () => {
+test("managed Cursor tunnel rolls back the exact new tunnel when DNS routing fails", { skip: !SPAWNS_SHEBANG }, () => {
   const item = fixture();
   try {
     const result = run({ ...item.env, TEST_FAIL_ROUTE: "1" }, "setup", "cursor-router.example.com");

@@ -580,6 +580,7 @@ async function main() {
   // the ChatGPT-plan model set Codex publishes for itself.
   const geminiTarget = TARGET === "gemini";
   const claudeTarget = TARGET === "claude";
+  const openclawTarget = TARGET === "openclaw";
   if (guided) {
     process.stdout.write(
       `\nReady to install:\n` +
@@ -595,6 +596,8 @@ async function main() {
                 `  Public edge: ${cursorPublicUrl} -> 127.0.0.1:${(await import("./paths.mjs")).PORTS.cursorPublic}\n`
             : claudeTarget
               ? `  Changes: per-user background service and a router-owned claude-router launcher; Claude settings stay untouched\n`
+            : openclawTarget
+              ? `  Changes: installs OpenClaw when missing, starts the shared background service, and owns only models.providers.codex-router\n`
             : `  Native catalog: ${adoptNativeCatalog ? "adopt existing user catalog" : "capture from Codex"}\n` +
               `  Changes: per-user background service and the managed Codex config block\n`),
     );
@@ -621,6 +624,8 @@ async function main() {
         "-File",
         path.join(SOURCE_ROOT, "install.ps1"),
         "-CheckoutInstall",
+        "-Target",
+        TARGET,
         ...(adoptNativeCatalog ? ["-AdoptNativeCatalog"] : []),
       ]);
     } else {
@@ -672,6 +677,9 @@ async function main() {
         : claudeTarget
           ? `\nClaude Code is ready with: ${providerSummary}\n` +
             `Run \`claude-router\`, then choose any \`codex_router/anthropic/...\` model from /model.\n`
+        : openclawTarget
+          ? `\nOpenClaw is ready with: ${providerSummary}\n` +
+            `Run \`openclaw\`; every routed model is available under the \`codex-router\` provider.\n`
         : `\nCodex Router is ready with: ${providerSummary}\nFully quit Codex, reopen it, and start a new task.\n`,
   );
   if (visionBridge?.enabled && visionBridge.engine) {

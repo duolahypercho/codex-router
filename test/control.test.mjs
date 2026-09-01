@@ -609,6 +609,17 @@ test("set-apply keeps provider mutation, publication, and rollback in one transa
   assert.match(source, /args\[0\] === "set-apply"[\s\S]{0,260}runSetApply\(args\[1\], args\[2\]\)/);
 });
 
+test("OpenClaw client setup uses the shared transactional enable path", () => {
+  const source = readFileSync(path.join(root, "src", "control.mjs"), "utf8");
+  const setup = source.match(
+    /async function handleClientSetup[\s\S]*?\r?\n}\r?\n\r?\nasync function handleClientExport/,
+  )?.[0];
+  assert.ok(setup, "client setup helper should be readable");
+  assert.match(setup, /"openclaw"/);
+  assert.match(setup, /currentCheckoutInstaller\(process\.platform, target, \{ posixScript: "enable" \}\)/);
+  assert.doesNotMatch(setup, /setupOpenClaw/);
+});
+
 test("login-free control selects a ready external model and restores Codex defaults", () => {
   const stateDir = mkdtempSync(path.join(os.tmpdir(), "control-login-free-"));
   const signedOutCodex = writeSignedOutCodexStub(stateDir);

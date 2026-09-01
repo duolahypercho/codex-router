@@ -13,6 +13,7 @@ Targets:
   gemini  Gemini CLI (its ~/.gemini/.env, read at startup)
   cursor  Cursor Agent CLI and Cursor desktop app
   claude  Claude Code through the local Anthropic-compatible gateway
+  openclaw OpenClaw through a router-owned Responses provider
 
 Every target shares one router: one service, one set of provider credentials,
 one provider selection. The target chooses which client's configuration a
@@ -41,6 +42,8 @@ Examples:
   ./bin/model-router cursor status
   ./bin/model-router claude enable
   ./bin/model-router claude status
+  ./bin/model-router openclaw enable
+  ./bin/model-router openclaw status
 EOF
 }
 
@@ -53,7 +56,7 @@ if [ "$#" -eq 1 ] && [ "$1" = "--version" ]; then
   exit 0
 fi
 
-if [ "$#" -eq 2 ] && { [ "$1" = "codex" ] || [ "$1" = "dsh" ] || [ "$1" = "gemini" ] || [ "$1" = "cursor" ] || [ "$1" = "claude" ]; } && [ "$2" = "--version" ]; then
+if [ "$#" -eq 2 ] && { [ "$1" = "codex" ] || [ "$1" = "dsh" ] || [ "$1" = "gemini" ] || [ "$1" = "cursor" ] || [ "$1" = "claude" ] || [ "$1" = "openclaw" ]; } && [ "$2" = "--version" ]; then
   version
   exit 0
 fi
@@ -68,7 +71,7 @@ command=$2
 shift 2
 
 case "$target" in
-  codex|dsh|gemini|cursor|claude) ;;
+  codex|dsh|gemini|cursor|claude|openclaw) ;;
   *) echo "Unknown target: $target" >&2; usage >&2; exit 2 ;;
 esac
 

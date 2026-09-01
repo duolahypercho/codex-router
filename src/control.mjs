@@ -20,6 +20,7 @@ import {
   CLAUDE_CATALOG_PATH,
   CURSOR_CATALOG_PATH,
   GEMINI_CATALOG_PATH,
+  OPENCLAW_CATALOG_PATH,
   PROVIDER_API_KEY_POOL_PATH,
   PROVIDER_CREDENTIAL_STORE_PATH,
   PROVIDER_SELECTION_PATH,
@@ -65,12 +66,14 @@ const DSH_PUBLISHED = DSH_CATALOG_PATH;
 const GEMINI_PUBLISHED = GEMINI_CATALOG_PATH;
 const CURSOR_PUBLISHED = CURSOR_CATALOG_PATH;
 const CLAUDE_PUBLISHED = CLAUDE_CATALOG_PATH;
+const OPENCLAW_PUBLISHED = OPENCLAW_CATALOG_PATH;
 const TARGETS = [
   "codex",
   ...(existsSync(DSH_PUBLISHED) ? ["dsh"] : []),
   ...(existsSync(GEMINI_PUBLISHED) ? ["gemini"] : []),
   ...(existsSync(CURSOR_PUBLISHED) ? ["cursor"] : []),
   ...(existsSync(CLAUDE_PUBLISHED) ? ["claude"] : []),
+  ...(existsSync(OPENCLAW_PUBLISHED) ? ["openclaw"] : []),
 ];
 const args = process.argv.slice(2);
 
@@ -84,6 +87,7 @@ function targetIsActive(target) {
   if (target === "gemini") return existsSync(GEMINI_PUBLISHED);
   if (target === "cursor") return existsSync(CURSOR_PUBLISHED);
   if (target === "claude") return existsSync(CLAUDE_PUBLISHED);
+  if (target === "openclaw") return existsSync(OPENCLAW_PUBLISHED);
   const result = spawnSync(process.execPath, [path.join(REPO_ROOT, "src", "service.mjs"), "status"], {
     env: { ...process.env, MODEL_ROUTER_TARGET: target },
     encoding: "utf8",
@@ -590,6 +594,8 @@ function refreshActiveTarget(target) {
             ? [process.execPath, [path.join(REPO_ROOT, "src", "cursor-config-manager.mjs"), "install"]]
           : target === "claude"
             ? [process.execPath, [path.join(REPO_ROOT, "src", "claude-code-config-manager.mjs"), "install"]]
+          : target === "openclaw"
+            ? [process.execPath, [path.join(REPO_ROOT, "src", "openclaw-config-manager.mjs"), "install"]]
           : undefined;
   if (!command) return;
   const result = spawnSync(command[0], command[1], {
@@ -2865,10 +2871,11 @@ async function handleHarness(action) {
 // Center exposes this as a fixed client-row setup surface; no executable, cwd,
 // or arbitrary argv crosses the renderer boundary. DeepSeek Harness retains
 // its install-if-missing path, while Codex and Cursor use the same transactional
-// enable entrypoint operators run from the terminal.
+// enable entrypoint operators run from the terminal. OpenClaw's enable path
+// installs the official CLI when missing before it publishes the provider.
 async function handleClientSetup(target, publicUrl, hostname) {
-  if (!["codex", "dsh", "cursor", "claude"].includes(target)) {
-    throw new Error("Usage: control client-setup codex|dsh|cursor|claude [--hostname PUBLIC_HOSTNAME|--public-url HTTPS_ORIGIN]");
+  if (!["codex", "dsh", "cursor", "claude", "openclaw"].includes(target)) {
+    throw new Error("Usage: control client-setup codex|dsh|cursor|claude|openclaw [--hostname PUBLIC_HOSTNAME|--public-url HTTPS_ORIGIN]");
   }
   if (target === "dsh") {
     if (publicUrl || hostname) throw new Error("--hostname and --public-url apply to Cursor only.");
@@ -3039,7 +3046,7 @@ if (args.includes("--probe")) {
   const publicUrl = optionValue("--public-url");
   const hostname = optionValue("--hostname");
   if ((publicUrl && hostname) || ((publicUrl || hostname) && args.length !== 4) || (!publicUrl && !hostname && args.length !== 2)) {
-    throw new Error("Usage: control client-setup codex|dsh|cursor [--hostname PUBLIC_HOSTNAME|--public-url HTTPS_ORIGIN]");
+    throw new Error("Usage: control client-setup codex|dsh|cursor|claude|openclaw [--hostname PUBLIC_HOSTNAME|--public-url HTTPS_ORIGIN]");
   }
   await handleClientSetup(args[1], publicUrl, hostname);
 } else if (args[0] === "client-export") {

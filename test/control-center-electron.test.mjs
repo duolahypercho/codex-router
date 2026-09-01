@@ -1479,7 +1479,7 @@ test("control center focus feedback uses state changes without focus rings", asy
 
 test("harness and context IPC remain fixed and session-scoped", async () => {
   const source = await readFile(new URL("../apps/control-center/electron/ipc.mjs", import.meta.url), "utf8");
-  assert.match(source, /const HARNESS_IDS = \["codex", "dsh", "gemini", "cursor", "claude"\]/);
+  assert.match(source, /const HARNESS_IDS = \["codex", "dsh", "gemini", "cursor", "claude", "openclaw"\]/);
   assert.match(source, /const HARNESS_SURFACES = \["app", "terminal"\]/);
   assert.match(source, /const SESSION_UUID = \/\^\[0-9a-f\]/);
   assert.match(source, /const DSH_SESSION_ID = \/\^session-/);
@@ -1501,7 +1501,7 @@ test("Harness page renders fixed client rows backed by the shared session index"
     "utf8",
   );
 
-  assert.match(harness, /const CLIENT_ORDER: HarnessId\[\] = \["cursor", "claude", "gemini", "dsh", "codex"\]/);
+  assert.match(harness, /const CLIENT_ORDER: HarnessId\[\] = \["openclaw", "cursor", "claude", "gemini", "dsh", "codex"\]/);
   assert.match(harness, /api\.getContextSessions\(\)/);
   assert.match(harness, /api\.getAgentBridges\(\)/);
   assert.match(harness, /Official-client agent/);
@@ -1512,8 +1512,9 @@ test("Harness page renders fixed client rows backed by the shared session index"
   assert.match(harness, /Connect Cursor/);
   assert.match(harness, /One guided setup/);
   assert.match(harness, /Cursor setup progress/);
-  assert.match(harness, /Open Cursor/);
-  assert.match(harness, /Open agent/);
+  assert.match(harness, /api\.launchHarness\(harness\.id, "app"\)/);
+  assert.match(harness, /<AppWindow[^>]*\/> Open/);
+  assert.doesNotMatch(harness, /BookOpen|SquareTerminal|Open agent/);
   assert.doesNotMatch(harness, /Stable public HTTPS origin|127\.0\.0\.1:4214/);
   assert.match(harness, /assets\/clients\/cursor\.svg/);
   assert.match(harness, /assets\/clients\/deepseek-harness\.svg/);
@@ -1521,7 +1522,7 @@ test("Harness page renders fixed client rows backed by the shared session index"
   assert.match(harness, /assets\/clients\/claude\.svg/);
   assert.match(harness, /assets\/providers\/gemini\.svg/);
   assert.match(harness, /model\.visible && \(model\.enabled \|\| model\.native\)/);
-  assert.match(app, /Cursor, Claude, Gemini, DeepSeek, Codex/);
+  assert.match(app, /OpenClaw, Cursor, Claude, Gemini, DeepSeek, Codex/);
   assert.match(styles, /\.lhc-harness-list/);
   assert.match(styles, /\.lhc-harness-row/);
   assert.match(styles, /\.lhc-harness-logo/);

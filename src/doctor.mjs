@@ -53,6 +53,7 @@ import {
   LITELLM_CONFIG_PATH,
   MERGED_CATALOG_PATH,
   NATIVE_CATALOG_PATH,
+  OPENCLAW_CATALOG_PATH,
   PORTS,
   SEARCH_SIDECARS_PATH,
   SOURCE_ROOT,
@@ -271,7 +272,12 @@ function repair() {
   // environment. Homebrew has already validated its package-owned tree above,
   // so its repair only regenerates configuration and services.
   const posixArguments = homebrewManaged ? [] : ["--force-deps"];
-  const windowsArguments = homebrewManaged ? ["-CheckoutInstall"] : ["-CheckoutInstall", "-ForceDeps"];
+  const windowsArguments = [
+    "-CheckoutInstall",
+    "-Target",
+    TARGET,
+    ...(homebrewManaged ? [] : ["-ForceDeps"]),
+  ];
   const result = process.platform === "win32"
     ? spawnSync(
         "powershell.exe",
@@ -389,6 +395,8 @@ const privacyTarget = codexTarget
       ? CURSOR_CATALOG_PATH
       : TARGET === "claude"
         ? CLAUDE_CATALOG_PATH
+        : TARGET === "openclaw"
+          ? OPENCLAW_CATALOG_PATH
       : DSH_SETTINGS_PATH;
 const cursorAgentOnly = TARGET === "cursor" &&
   !existsSync(CURSOR_CATALOG_PATH) && existsSync(CURSOR_LAUNCHER_PATH);
@@ -414,6 +422,8 @@ add(
         ? "Cursor router-state privacy"
         : TARGET === "claude"
           ? "Claude router-state privacy"
+          : TARGET === "openclaw"
+            ? "OpenClaw router-state privacy"
       : "Harness settings privacy",
   cursorAgentOnly
     ? "agent-only; no Cursor App router-state document"
@@ -447,6 +457,8 @@ const routedTransportActive = codexTarget
       ? existsSync(CURSOR_CATALOG_PATH) || existsSync(CURSOR_LAUNCHER_PATH)
       : TARGET === "claude"
         ? existsSync(CLAUDE_CATALOG_PATH) && existsSync(CLAUDE_LAUNCHER_PATH)
+        : TARGET === "openclaw"
+          ? existsSync(OPENCLAW_CATALOG_PATH)
       : existsSync(DSH_CATALOG_PATH);
 // An install made with --no-provider --no-discovery is idle on purpose: the
 // selection is an explicit empty list and the discovery marker is set. That
@@ -1326,6 +1338,45 @@ if (TARGET === "gemini") {
     );
   } catch (error) {
     add("fail", "Claude Code routing config", error instanceof Error ? error.message : String(error), "Run ./bin/model-router claude enable.");
+  }
+} else if (TARGET === "openclaw") {
+  try {
+    const openclaw = childJson("openclaw-config-manager.mjs", ["status"]);
+    add(
+      openclaw.installed && openclaw.providerInstalled && openclaw.baseUrlManaged && openclaw.configValid ? "ok" : "fail",
+      "OpenClaw routing config",
+      openclaw.configError
+        ? openclaw.configError
+        : openclaw.providerInstalled
+        ? `${openclaw.publishedModels} models in models.providers.codex-router; ${openclaw.baseUrl || "unmanaged endpoint"}`
+        : "the router-owned OpenClaw provider is missing",
+      "Run ./bin/model-router openclaw enable.",
+    );
+    add(
+      openclaw.cliInstalled ? "ok" : "fail",
+      "OpenClaw CLI",
+      openclaw.cliInstalled ? openclaw.cli || "openclaw" : "not installed",
+      "Use Harness > OpenClaw > Set up, or run ./bin/model-router openclaw enable.",
+    );
+    add(
+      openclaw.configProtected ? "ok" : "fail",
+      "OpenClaw config privacy",
+      openclaw.configProtected ? `${openclaw.config} is private` : openclaw.config || "config path unavailable",
+      "Run ./bin/model-router openclaw enable; its provider carries the local caller capability.",
+    );
+    add(
+      openclaw.catalogFresh ? "ok" : "warn",
+      "OpenClaw catalog freshness",
+      `published ${openclaw.publishedModels}, routable ${openclaw.routableModels}`,
+      "Run ./bin/model-router openclaw enable to republish.",
+    );
+  } catch (error) {
+    add(
+      "fail",
+      "OpenClaw routing config",
+      error instanceof Error ? error.message : String(error),
+      "Run ./bin/model-router openclaw enable.",
+    );
   }
 } else try {
   const config = childJson("config-manager.mjs", ["status"]);

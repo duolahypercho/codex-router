@@ -698,23 +698,14 @@
 
 .lhc-harness-actions {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 62px 32px 32px;
+  grid-template-columns: minmax(84px, 110px);
+  justify-content: end;
   width: 260px;
-  gap: 6px;
-}
-
-.lhc-harness-actions.is-cursor {
-  grid-template-columns: minmax(0, 1fr) 32px 32px;
 }
 
 .lhc-harness-actions .button {
   width: 100%;
   justify-content: center;
-}
-
-.lhc-harness-actions .button:nth-child(n + 3) {
-  min-height: 28px;
-  padding-inline: 0;
 }
 
 .lhc-harness-row footer .button,
@@ -976,14 +967,6 @@
   .lhc-harness-row > footer,
   .lhc-harness-actions {
     width: 242px;
-  }
-
-  .lhc-harness-actions {
-    grid-template-columns: minmax(0, 1fr) 58px 30px 30px;
-  }
-
-  .lhc-harness-actions.is-cursor {
-    grid-template-columns: minmax(0, 1fr) 58px 30px;
   }
 
   .lhc-session-row {
