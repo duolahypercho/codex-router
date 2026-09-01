@@ -4,6 +4,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -251,7 +252,13 @@ test(
     const testRoot = mkdtempSync(path.join(os.tmpdir(), "codex-router-node-wrapper-"));
     const wrapperDir = path.join(testRoot, "runtime bin % wrapper");
     const wrapper = path.join(wrapperDir, "node");
-    const callLog = path.join(testRoot, "wrapper calls.log");
+    // One file per call rather than appends to a shared log. `bin/install`
+    // invokes the wrapper more than once, and two `printf` appends of four
+    // NUL-separated fields interleave: the field count stays a multiple of
+    // four while the values shift, so a PATH lands where the marker belongs
+    // and the run fails with a torn record. Order is irrelevant here -- every
+    // assertion below is `some`/`filter` over the calls.
+    const callDir = path.join(testRoot, "wrapper calls");
     const servicePath = `${wrapperDir}:${process.env.PATH || "/usr/local/bin:/usr/bin:/bin"}`;
     const baseEnv = { ...process.env };
     delete baseEnv.CODEX_ROUTER_NODE_BIN;
@@ -264,7 +271,8 @@ logged_arguments=
 for argument in "$@"; do
   logged_arguments="\${logged_arguments}<\${argument}>"
 done
-printf 'codex-router-wrapper-call\\0%s\\0%s\\0%s\\0' "$CODEX_ROUTER_NODE_BIN" "$PATH" "$logged_arguments" >>"$CODEX_ROUTER_WRAPPER_LOG"
+record="$(mktemp "$CODEX_ROUTER_WRAPPER_DIR/call.XXXXXX")"
+printf 'codex-router-wrapper-call\\0%s\\0%s\\0%s\\0' "$CODEX_ROUTER_NODE_BIN" "$PATH" "$logged_arguments" >"$record"
 if [ "\${1:-}" = src/install-plan.mjs ] && [ "\${2:-}" = status ]; then
   printf 'skip\\n'
 fi
@@ -278,23 +286,24 @@ fi
         CODEX_HOME: path.join(testRoot, "codex home"),
         CODEX_ROUTER_STATE_DIR: path.join(testRoot, "router state"),
         MODEL_ROUTER_STATE_DIR: path.join(testRoot, "router state"),
-        CODEX_ROUTER_WRAPPER_LOG: callLog,
+        CODEX_ROUTER_WRAPPER_DIR: callDir,
       };
 
       for (const [script, args, expectedCall] of [
         [path.join(root, "bin", "install"), ["--prepare-only"], "<src/catalog.mjs>"],
         [path.join(root, "bin", "enable"), [], "<src/service.mjs><install>"],
       ]) {
-        writeFileSync(callLog, "", "utf8");
+        rmSync(callDir, { recursive: true, force: true });
+        mkdirSync(callDir, { recursive: true });
         const result = spawnSync(script, args, { cwd: root, encoding: "utf8", env });
         assert.equal(result.status, 0, result.stderr || result.stdout);
-        const fields = readFileSync(callLog, "utf8").split("\0");
-        assert.equal(fields.pop(), "", `unterminated wrapper log: ${JSON.stringify(fields)}`);
-        assert.equal(fields.length % 4, 0, `malformed wrapper log: ${JSON.stringify(fields)}`);
         const callRecords = [];
-        for (let index = 0; index < fields.length; index += 4) {
-          const [marker, nodeBin, pathValue, loggedArguments] = fields.slice(index, index + 4);
-          assert.equal(marker, "codex-router-wrapper-call", `malformed wrapper log at ${index}`);
+        for (const entry of readdirSync(callDir).sort()) {
+          const fields = readFileSync(path.join(callDir, entry), "utf8").split("\0");
+          assert.equal(fields.pop(), "", `unterminated wrapper record ${entry}`);
+          assert.equal(fields.length, 4, `malformed wrapper record ${entry}`);
+          const [marker, nodeBin, pathValue, loggedArguments] = fields;
+          assert.equal(marker, "codex-router-wrapper-call", `malformed wrapper record ${entry}`);
           callRecords.push({ nodeBin, pathValue, loggedArguments });
         }
         const renderedCalls = JSON.stringify(callRecords, null, 2);
