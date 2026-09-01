@@ -63,15 +63,14 @@ function fixture() {
   const state = path.join(root, "state");
   const cloudflare = path.join(root, "cloudflare");
   const log = path.join(root, "cloudflared.log");
-  const binary = path.join(root, "cloudflared");
+  const binary = path.join(root, process.platform === "win32" ? "cloudflared.cmd" : "cloudflared");
   mkdirSync(state, { recursive: true });
   mkdirSync(cloudflare, { recursive: true });
   writeFileSync(path.join(cloudflare, "cert.pem"), "test-certificate\n", { mode: 0o600 });
-  writeFileSync(binary, `#!/usr/bin/env node
-const fs = require("node:fs");
+  const stub = `const fs = require("node:fs");
 const path = require("node:path");
 const args = process.argv.slice(2);
-fs.appendFileSync(process.env.TEST_CLOUDFLARED_LOG, JSON.stringify(args) + "\\n");
+fs.appendFileSync(process.env.TEST_CLOUDFLARED_LOG, JSON.stringify(args) + String.fromCharCode(10));
 if (args[0] === "tunnel" && args[1] === "create") {
   fs.writeFileSync(path.join(process.env.MODEL_ROUTER_CLOUDFLARED_HOME, "${TUNNEL_ID}.json"), "{}", { mode: 0o600 });
   process.stdout.write(JSON.stringify({ id: "${TUNNEL_ID}" }));
@@ -79,8 +78,14 @@ if (args[0] === "tunnel" && args[1] === "create") {
   process.stderr.write("route refused");
   process.exitCode = 1;
 }
-`, { mode: 0o700 });
-  chmodSync(binary, 0o700);
+`;
+  if (process.platform === "win32") {
+    writeFileSync(binary, `@echo off\r\n"${process.execPath}" "${path.join(root, "cloudflared-stub.cjs")}" %*\r\n`);
+    writeFileSync(path.join(root, "cloudflared-stub.cjs"), stub, { mode: 0o600 });
+  } else {
+    writeFileSync(binary, `#!/usr/bin/env node\n${stub}`, { mode: 0o700 });
+    chmodSync(binary, 0o700);
+  }
   return {
     root,
     state,

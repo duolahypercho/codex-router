@@ -11,6 +11,7 @@ import {
   PORTS,
 } from "./paths.mjs";
 import { writePrivateFile, writePrivateJson } from "./file-security.mjs";
+import { spawnableCommand } from "./spawnable-command.mjs";
 
 function readJson(target) {
   if (!existsSync(target)) return undefined;
@@ -120,11 +121,13 @@ export async function discoverCursorTunnelHostname({
 }
 
 function commandResult(binary, args, { runner = spawnSync, environment = process.env } = {}) {
-  const result = runner(binary, args, {
+  const spawnable = spawnableCommand(binary, args);
+  const result = runner(spawnable.command, spawnable.args, {
     encoding: "utf8",
     env: environment,
     windowsHide: true,
     timeout: 120_000,
+    ...spawnable.options,
   });
   if (result.error) throw result.error;
   if (result.status !== 0) {

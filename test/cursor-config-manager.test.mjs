@@ -55,13 +55,15 @@ test("Cursor Agent setup is local, one-step, and does not require Cursor App sta
 });
 
 test("packaged setup writes a real Node runtime instead of the Electron host", () => {
+  const nodeName = process.platform === "win32" ? "node.exe" : "node";
+  const runtime = "/test/runtime/bin";
   const node = nodeRuntimePath({
     execPath: "/Applications/Codex Router.app/Contents/MacOS/Codex Router",
     electron: true,
-    environment: { PATH: "/test/runtime/bin" },
-    exists: (candidate) => candidate === "/test/runtime/bin/node",
+    environment: { PATH: runtime },
+    exists: (candidate) => candidate === path.join(runtime, nodeName),
   });
-  assert.equal(node, "/test/runtime/bin/node");
+  assert.equal(node, path.join(runtime, nodeName));
 });
 
 test("Cursor doctor recognizes the launcher as a complete agent-only integration", () => {
