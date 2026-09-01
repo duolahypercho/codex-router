@@ -25,6 +25,7 @@ function pathsForTarget(target) {
         MODEL_ROUTER_PORT: "",
         MODEL_ROUTER_API_PORT: "",
         MODEL_ROUTER_GROK_OAUTH_PORT: "",
+        MODEL_ROUTER_CURSOR_PUBLIC_PORT: "",
       },
     },
   );
@@ -39,6 +40,7 @@ test("codex owns the default port block", () => {
     grokOauth: 4208,
     devinCli: 4210,
     antigravityOauth: 4212,
+    cursorPublic: 4214,
   });
 });
 
@@ -58,6 +60,7 @@ test("operators can keep an explicitly configured legacy block during migration"
           MODEL_ROUTER_PORT: "4102",
           MODEL_ROUTER_API_PORT: "4103",
           MODEL_ROUTER_GROK_OAUTH_PORT: "4108",
+          MODEL_ROUTER_CURSOR_PUBLIC_PORT: "",
         },
       },
     ),
@@ -73,11 +76,18 @@ test("operators can keep an explicitly configured legacy block during migration"
     grokOauth: 4108,
     devinCli: 4210,
     antigravityOauth: 4212,
+    cursorPublic: 4214,
   });
 });
 
+test("all client targets share the same port block", () => {
+  for (const target of ["dsh", "gemini", "cursor", "claude", "openclaw"]) {
+    assert.deepEqual(JSON.parse(pathsForTarget(target)), JSON.parse(pathsForTarget("codex")));
+  }
+});
+
 test("removed targets are rejected rather than silently mapped to codex", () => {
-  for (const target of ["cursor", "opencode"]) {
+  for (const target of ["opencode"]) {
     assert.throws(
       () => pathsForTarget(target),
       /MODEL_ROUTER_TARGET must be one of/,

@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "slug": "ollama-cloud/glm-5.3-flash",
+      "gatewayModel": "ollama-cloud-glm-5-3-flash",
+      "upstreamModel": "glm-5.3-flash:cloud",
+      "provider": "ollama-cloud",
+      "listed": true,
+      "displayName": "GLM-5.3-Flash (Ollama Cloud)",
+      "description": "GLM-5.3-Flash hosted on Ollama Cloud, Z.ai's first natively multimodal model with 320B total and 18B active parameters, tool use, reasoning, and a 1M-token context window.",
+      "priority": 19,
+      "defaultEffort": "max",
+      "reasoningLevels": [
+        {
+          "effort": "low",
+          "description": "Fast reasoning for simple edits"
+        },
+        {
+          "effort": "high",
+          "description": "Deep reasoning with thinking enabled"
+        },
+        {
+          "effort": "max",
+          "description": "Maximum reasoning depth"
+        }
+      ],
+      "contextWindow": 1000000,
+      "autoCompact": 400000,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "requestProfile": "ollama-cloud-glm-5-3-flash",
+      "compHash": "ollama-cloud-glm-5-3-flash-v1"
+    }
+  ]
+}

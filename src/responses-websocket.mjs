@@ -7,6 +7,7 @@ import {
   MAX_BUFFERED_RESPONSE_BYTES,
   readResponseBody,
 } from "./http-utils.mjs";
+import { HeaderlessSseDetector } from "./sse-prefix.mjs";
 
 export const RESPONSES_WEBSOCKET_BETA = "responses_websockets=2026-02-06";
 
@@ -557,6 +558,35 @@ function continuationState(input, output, maxBytes) {
   return encoded.length <= maxBytes ? { input, output } : undefined;
 }
 
+function continuationItemKey(item) {
+  if (typeof item?.call_id === "string" && item.call_id) return `call:${item.call_id}`;
+  if (typeof item?.id === "string" && item.id) return `id:${item.id}`;
+  return undefined;
+}
+
+function reconciledContinuationOutput(completedOutput, outputItems) {
+  if (!Array.isArray(completedOutput)) return outputItems;
+  if (!Array.isArray(outputItems) || outputItems.length === 0) return completedOutput;
+
+  const doneByKey = new Map();
+  for (const item of outputItems) {
+    const key = continuationItemKey(item);
+    if (key) doneByKey.set(key, item);
+  }
+
+  const used = new Set();
+  const reconciled = completedOutput.map((item) => {
+    const key = continuationItemKey(item);
+    const done = key ? doneByKey.get(key) : undefined;
+    if (!done) return item;
+    used.add(done);
+    return done;
+  });
+  for (const item of outputItems) {
+    if (!used.has(item)) reconciled.push(item);
+  }
+  return reconciled;
+}
 function errorShape(body, fallback) {
   let parsed;
   try {
@@ -584,6 +614,42 @@ function errorShape(body, fallback) {
     message: typeof source.message === "string" ? source.message : fallback.message,
     ...(planType !== undefined ? { plan_type: planType } : {}),
     ...(resetsAt !== undefined ? { resets_at: resetsAt } : {}),
+  };
+}
+
+function responseWithBody(upstream, body) {
+  return new Response(body, {
+    status: upstream.status,
+    statusText: upstream.statusText,
+    headers: upstream.headers,
+  });
+}
+
+async function sniffUndeclaredResponse(upstream, signal) {
+  if (!upstream.body) return { kind: "other", response: upstream };
+  const [probe, relay] = upstream.body.tee();
+  const reader = probe.getReader();
+  const detector = new HeaderlessSseDetector();
+  let decision = "pending";
+  try {
+    while (decision === "pending") {
+      signal?.throwIfAborted();
+      const result = await reader.read();
+      if (result.done) {
+        decision = detector.end().decision;
+        break;
+      }
+      decision = detector.write(result.value).decision;
+    }
+  } catch (error) {
+    void relay.cancel().catch(() => {});
+    throw error;
+  } finally {
+    void reader.cancel().catch(() => {});
+  }
+  return {
+    kind: decision === "event-stream" ? "event-stream" : "other",
+    response: responseWithBody(upstream, relay),
   };
 }
 
@@ -999,15 +1065,72 @@ class ResponsesWebSocketPeer {
       ) {
         this.turnState = { value: responseTurnState, turnId: currentTurnId };
       }
-      if (!String(upstream.headers.get("content-type") || "").toLowerCase().includes("text/event-stream")) {
-        await readResponseBody(upstream, {
-          maxBytes: this.options.maxErrorBytes,
+      let contentType = String(upstream.headers.get("content-type") || "").toLowerCase();
+      const declaredMediaType = contentType.split(";", 1)[0].trim();
+      const declaredJson =
+        declaredMediaType === "application/json" || declaredMediaType.endsWith("+json");
+      if (!contentType.includes("text/event-stream") && !declaredJson) {
+        // A completed internal request must not be discarded solely because a
+        // loopback hop omitted or misdeclared Content-Type. Sniff only enough
+        // bytes to prove SSE framing; otherwise retain the untouched body and
+        // validate it through the bounded completed-JSON path below.
+        const detected = await sniffUndeclaredResponse(upstream, controller.signal);
+        upstream = detected.response;
+        if (detected.kind === "event-stream") contentType = "text/event-stream";
+      }
+      if (!contentType.includes("text/event-stream")) {
+        const body = await readResponseBody(upstream, {
+          maxBytes: this.options.maxEventBytes,
           signal: controller.signal,
         });
-        this.sendError(502, {
-          type: "local_router_protocol_error",
-          message: "The internal Responses endpoint returned a non-streaming response.",
-        });
+        let completedResponse;
+        try {
+          completedResponse = JSON.parse(body.toString("utf8"));
+        } catch {
+          this.sendError(502, {
+            type: "local_router_protocol_error",
+            message: "The internal Responses endpoint returned invalid response JSON.",
+          });
+          return;
+        }
+        if (
+          !completedResponse ||
+          typeof completedResponse !== "object" ||
+          Array.isArray(completedResponse) ||
+          typeof completedResponse.id !== "string" ||
+          completedResponse.id.length === 0 ||
+          completedResponse.status !== "completed" ||
+          !Array.isArray(completedResponse.output)
+        ) {
+          this.sendError(502, {
+            type: "local_router_protocol_error",
+            message: "The internal Responses endpoint returned an invalid completed response.",
+          });
+          return;
+        }
+        if (!(await sendSuccessfulResponseHeaders(this, upstream))) return;
+        if (!(await this.sendJsonWithBackpressure({
+          type: "response.created",
+          response: { ...completedResponse, status: "in_progress", output: [] },
+        }))) return;
+        for (const [outputIndex, item] of completedResponse.output.entries()) {
+          if (!(await this.sendJsonWithBackpressure({
+            type: "response.output_item.done",
+            output_index: outputIndex,
+            item,
+          }))) return;
+        }
+        if (!(await this.sendJsonWithBackpressure({
+          type: "response.completed",
+          response: completedResponse,
+        }))) return;
+        this.continuations.clear();
+        const continuation = continuationState(
+          fullRequest.input,
+          completedResponse.output,
+          this.options.maxContinuationBytes,
+        );
+        if (continuation) this.continuations.set(completedResponse.id, continuation);
         return;
       }
       if (!(await sendSuccessfulResponseHeaders(this, upstream))) return;
@@ -1062,7 +1185,7 @@ class ResponsesWebSocketPeer {
         },
       );
       if (completed?.id && !terminalFailure) {
-        const output = Array.isArray(completed.output) ? completed.output : outputItems;
+        const output = reconciledContinuationOutput(completed.output, outputItems);
         this.continuations.clear();
         const continuation = !continuationOverflow
           ? continuationState(

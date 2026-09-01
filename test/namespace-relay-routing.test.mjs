@@ -1919,13 +1919,16 @@ function goCompatibilityRequestPayload(
 }
 
 function goProviderCalls(body) {
+  const longTool = body.tools.find(
+    (tool) => tool.type === "function" && tool.parameters?.properties?.branch,
+  );
   const patchTool = body.tools.find(
     (tool) => tool.type === "function" && tool.parameters?.properties?.input,
   );
   return [
     {
       type: "function_call",
-      name: body.tool_choice.name,
+      name: body.tool_choice?.name || longTool.name,
       call_id: "call-long",
       arguments: '{"branch":"main"}',
     },
@@ -2014,7 +2017,7 @@ test("OpenCode Go Responses uses one bounded function-tool contract in both resp
     assert.equal(
       longTool.parameters.$defs.node.properties.child.$ref,
       "#/$defs/node",
-      "Console Go keeps recursive refs because no upstream rejection established otherwise",
+      "other Console Go models keep recursive refs without model-specific evidence",
     );
     assert.equal(
       outgoing.input.find((item) => item.call_id === "history-long").name,
@@ -2066,6 +2069,65 @@ test("OpenCode Go Responses uses one bounded function-tool contract in both resp
       name: "apply_patch",
       call_id: "call-patch",
       input: GO_PATCH,
+    });
+  }
+});
+
+test("OpenCode Go Muse removes recursive tool refs in both response modes", async () => {
+  for (const stream of [true, false]) {
+    const result = await scenario(stream, {
+      model: "opencode-go-responses/muse-spark-1.2-contributor",
+      requestPayload: (requestStream, model) => {
+        const payload = goCompatibilityRequestPayload(requestStream, model);
+        const discovered = payload.input
+          .find((item) => item.type === "tool_search_output")
+          .tools[0].tools[0];
+        discovered.description = "MUSE_RECURSIVE_DISCOVERED_SENTINEL";
+        discovered.inputSchema = {
+          type: "object",
+          properties: { node: { $ref: "#/$defs/node" } },
+          $defs: {
+            node: {
+              type: "object",
+              properties: {
+                label: { type: "string" },
+                child: {
+                  $ref: "#/$defs/node",
+                  description: "optional child",
+                },
+              },
+            },
+          },
+        };
+        return payload;
+      },
+      sseBody: goCompatibilitySseBody,
+      jsonBody: goCompatibilityJsonBody,
+    });
+    const outgoing = result.gatewayBodies[0];
+    assert.equal(
+      outgoing.model,
+      "opencode-go-responses-muse-spark-1-2-contributor",
+    );
+    assert.equal(outgoing.tool_choice, "auto");
+
+    const liveTool = outgoing.tools.find(
+      (tool) => tool.parameters?.properties?.branch,
+    );
+    assert.equal(liveTool.parameters.properties.node.$ref, "#/$defs/node");
+    assert.deepEqual(liveTool.parameters.$defs.node.properties.child, {});
+    assert.deepEqual(liveTool.inputSchema.$defs.node.properties.child, {});
+
+    const discovered = outgoing.tools.find(
+      (tool) => tool.description === "MUSE_RECURSIVE_DISCOVERED_SENTINEL",
+    );
+    assert.ok(discovered, "stored tool-search definitions remain available");
+    assert.equal(discovered.parameters.properties.node.$ref, "#/$defs/node");
+    assert.deepEqual(discovered.parameters.$defs.node.properties.child, {
+      description: "optional child",
+    });
+    assert.deepEqual(discovered.inputSchema.$defs.node.properties.child, {
+      description: "optional child",
     });
   }
 });

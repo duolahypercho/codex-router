@@ -32,6 +32,7 @@ import {
 } from "./provider-api-key-routing.mjs";
 import { disableProvider } from "./provider-selection.mjs";
 import {
+  installFailureDetail,
   npmGlobalBinary,
   npmInstallGlobal,
   spawnEnvironment,

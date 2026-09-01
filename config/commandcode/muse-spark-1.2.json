@@ -22,7 +22,8 @@
       "inputModalities": [
         "text"
       ],
-      "compHash": "commandcode-muse-spark-1-2-v1"
+      "requestProfile": "auto-tool-choice",
+      "compHash": "commandcode-muse-spark-1-2-v2"
     }
   ]
 }

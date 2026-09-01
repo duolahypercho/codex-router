@@ -59,6 +59,7 @@ export async function ensureNodeDependencies({
   if (!npm) throw dependencyFailure("npm is required and is normally included with Node.js.");
   process.stdout.write("Installing Node dependencies needed for credential setup...\n");
   const invocation = spawnableCommand(npm, ["ci", "--omit=dev"], platform);
+<<<<<<< HEAD
   const operationDeadline = nodeDependencyInstallDeadline(deadline, env);
   let result;
   try {
@@ -76,6 +77,19 @@ export async function ensureNodeDependencies({
       ...(error?.code ? { code: error.code } : {}),
     });
   }
+=======
+  // CodeQL conflates spawnableCommand's direct-exec and escaped Windows-batch
+  // return shapes across unrelated callers. The helper rejects illegal batch
+  // paths and escapes every cmd.exe metacharacter before this spawn.
+  // codeql[js/shell-command-injection-from-environment]
+  const result = spawnSync(invocation.command, invocation.args, {
+    ...invocation.options,
+    cwd: root,
+    env,
+    stdio: "inherit",
+  });
+  if (result.error) throw dependencyFailure(result.error.message, { cause: result.error });
+>>>>>>> origin/main
   if (result.status !== 0) {
     // A signalled npm reports a null status, and "exited with status null"
     // hides which signal ended it.

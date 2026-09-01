@@ -40,6 +40,7 @@ import { genericProviderConfigured } from "./generic-provider-readiness.mjs";
 import {
   CALLER_SECRET_PATH,
   CONFIG_PATH,
+  CURSOR_PUBLIC_SECRET_PATH,
   INTERNAL_SECRET_PATH,
   LOG_PATH,
   SOURCE_ROOT,
@@ -171,7 +172,7 @@ function knownLocalSecrets() {
   // and relies on structural redaction for the remaining generated fields.
   if (discoveryDisabled()) return { status: "disabled", values: [] };
   const values = new Set();
-  const files = [CALLER_SECRET_PATH, INTERNAL_SECRET_PATH];
+  const files = [CALLER_SECRET_PATH, INTERNAL_SECRET_PATH, CURSOR_PUBLIC_SECRET_PATH];
   for (const provider of PROVIDERS.values()) {
     if (provider.kind !== "openai-compatible") continue;
     // A keyless provider holds no secret, so there is nothing to collect and

@@ -63,6 +63,18 @@ injecting the selected provider key. It supports the registry's tested
 OpenAI-compatible and Anthropic protocols; do not create a new listener merely
 to add another provider using one of those protocols.
 
+The narrow exception is a checked-in `directResponses` provider. It is for a
+Codex-specific loopback bridge whose contract depends on the unflattened native
+Responses body and `x-codex-*` authority headers. Registry validation requires
+that provider to be keyless, loopback-only, `openai-responses`, and `codexOnly`.
+`src/direct-responses-provider.mjs` strips caller/account credentials, preserves
+the native authority envelope, and supplies only a non-secret local bearer.
+The router must not apply gateway failover, empty-completion replay, namespace
+translation, or error-body rewriting to this path: those can duplicate a
+browser turn or erase the bridge's actionable UI/login failure. It must also be
+excluded from indirect vision-engine ranking. Add a direct provider only with
+an end-to-end router test proving all of those boundaries.
+
 OAuth schemes usually need a dedicated adapter because refresh and identity
 rules are provider-specific. Never infer that an API key can replace an OAuth
 credential or vice versa.

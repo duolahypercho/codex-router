@@ -139,6 +139,7 @@ test("provider registry exposes configured API and OAuth model families", () => 
       "ollama-cloud/deepseek-v4-flash",
       "ollama-cloud/deepseek-v4-pro",
       "ollama-cloud/glm-5.2",
+      "ollama-cloud/glm-5.3-flash",
       "ollama-cloud/kimi-k2.7-code",
       "ollama-cloud/kimi-k3",
       "ollama-cloud/minimax-m3",
@@ -807,6 +808,17 @@ test("OpenCode Go routes retain upstream windows instead of the generic fallback
   );
 });
 
+test("GLM-5.3-Flash on Ollama Cloud uses the :cloud tag and shared profile", () => {
+  const model = MODEL_BY_SLUG.get("ollama-cloud/glm-5.3-flash");
+  assert.equal(model?.upstreamModel, "glm-5.3-flash:cloud");
+  assert.equal(model?.requestProfile, "ollama-cloud-glm-5-3-flash");
+  assert.equal(model?.contextWindow, 1_000_000);
+  assert.equal(model?.autoCompact, 400_000);
+  assert.deepEqual(model?.reasoningLevels.map((level) => level.effort), ["low", "high", "max"]);
+  assert.equal(model?.defaultEffort, "max");
+  assert.deepEqual(model?.inputModalities, ["text", "image"]);
+});
+
 test("four additional OpenCode Go Chat routes retain their documented limits and conservative controls", () => {
   const expected = {
     "opencode-go/glm-5": {
@@ -949,7 +961,7 @@ test("resellers of one upstream model share a default effort when their ladders 
 test("Ollama Cloud models advertise only levels the forwarder maps to Ollama", () => {
   const accepted = new Set(["minimal", "low", "medium", "high", "max"]);
   for (const model of MODELS) {
-    if (model.requestProfile !== "ollama-cloud") continue;
+    if (!model.requestProfile?.startsWith("ollama-cloud")) continue;
     for (const level of model.reasoningLevels || []) {
       assert.ok(
         accepted.has(level.effort),
@@ -1672,4 +1684,30 @@ test("opencode's DeepSeek models never receive a forced tool_choice", () => {
     "opencode-go/glm-5.3-flash",
   );
   assert.equal(MODEL_BY_SLUG.get("opencode-go/grok-4.5"), goGrok);
+});
+
+test("Muse Spark 1.2 routes normalize forced tool choices model-by-model", () => {
+  // Live probes on 2026-09-01 proved that Muse Spark 1.2 calls tools under
+  // `auto` but rejects `required` on both Command Code and Console Go. The
+  // restriction follows the upstream model, so every checked-in route for the
+  // regular or Contributor model carries the same narrow compatibility repair.
+  for (const slug of [
+    "commandcode/muse-spark-1.2",
+    "meta/muse-spark-1.2",
+    "meta/muse-spark-1.2-contributor",
+    "nousresearch/muse-spark-1.2-contributor",
+    "opencode-go-responses/muse-spark-1.2-contributor",
+  ]) {
+    assert.equal(MODEL_BY_SLUG.get(slug)?.requestProfile, "auto-tool-choice", slug);
+  }
+
+  // The repair is not a Command Code, Meta, Nous, or Console Go default.
+  for (const slug of [
+    "commandcode/gpt-5.6-sol",
+    "meta/muse-spark-1.1",
+    "nousresearch/glm-5.3",
+    "opencode-go-responses/gpt-5.6-luna",
+  ]) {
+    assert.equal(MODEL_BY_SLUG.get(slug)?.requestProfile, undefined, slug);
+  }
 });

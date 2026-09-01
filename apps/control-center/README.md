@@ -19,15 +19,24 @@ credentials, or service logic in the renderer.
   without an explicit model selection.
 - Local: Ollama runtime controls, installable and installed models, downloads,
   enablement, removal, benchmarks, and local image readers.
-- Harness: launch Codex in its app or a terminal, and install or launch the
-  third-party Deep Code terminal harness. Future harness adapters can share
-  the same router ledger and be broken down by client without mixing provider
-  billing with account-reported history.
-- Context Manager: one metadata-only session index across Codex and Deep Code,
-  with search, filters, context use, and resume actions in the owning harness.
+- Harness: one row each for OpenClaw, Cursor, Claude Code, Gemini CLI, DeepSeek Harness, and Codex. Every row
+  reports client detection, router publication, routed models, and indexed
+  sessions. An unconfigured row exposes setup; a configured row has one Open
+  action that launches the desktop app when present and otherwise opens the
+  official client site. Terminal and document access stay in their dedicated
+  surfaces. Setup publishes the same shared router plane into the selected
+  client instead of creating another credential or service store.
+  OpenClaw setup installs the official npm package when absent and publishes
+  the router-owned `codex-router` provider in the same click.
+  Claude Code publishes routed models through `claude-router`. Claude Code,
+  Cursor Agent, and Gemini CLI show optional official-client agent availability
+  inside the matching row, separate from the routed-model count.
+- Context Manager: one metadata-only session index across Cursor, DeepSeek
+  Harness, and Codex, with search, client filters, context use, and resume
+  actions in the session's owning client.
 - Settings: signed routing, presence, safe service start/status,
   tray, language,
-  appearance, old tool-result compaction, vision, and read-only maintenance
+  appearance, Token maxxing, vision, and read-only maintenance
   guidance. Updates and repairs remain interactive-terminal workflows.
 
 The Control Center and tray ship as one visible application on every platform.
@@ -69,11 +78,25 @@ control protocol. This prevents a newer UI from sending changed command
 arguments to an older installation.
 
 Convenience actions that must open another native application are deliberately
-narrower. This beta opens Codex.app, provider OAuth CLIs, Codex/Deep Code CLI
-sessions, and the Deep Code installer in macOS Terminal only. On Windows and
-Linux, run those interactive CLI sign-in, install, or resume commands in your
-own terminal, then refresh the Control Center. The UI disables actions it cannot
+narrower. This beta opens Cursor.app, Codex.app, the DeepSeek Harness web UI,
+provider OAuth CLIs, and Cursor/DeepSeek/Codex CLI sessions from macOS. On
+Windows and Linux, run interactive CLI sign-in or resume commands in your own
+terminal, then refresh the Control Center. The UI disables actions it cannot
 launch instead of guessing a terminal or constructing a platform shell command.
+
+The Harness page configures Cursor Agent locally and Cursor App through one
+managed named-tunnel flow. Detection is read-only: no Cloudflare command runs
+when the page loads. On macOS and Windows, **Install connector** runs the fixed
+platform package-manager command in the background and shows sanitized progress
+inside the Cursor row; unsupported platforms open the official installer
+instructions. **Sign in** runs the fixed `cloudflared tunnel login` command in
+the background while browser authorization and progress remain visible in the
+app. After those explicit, one-time actions, entering a
+hostname and pressing **Connect** creates the tunnel and DNS route, publishes
+every selected `codex_router/...` model, and supervises the connector with the
+router service. Cursor must be fully quit while its settings database is
+updated. Only the separately keyed app edge at `127.0.0.1:4214` is exposed;
+the main router port and caller capability remain private.
 
 The main window keeps the operating system's native window controls. On macOS,
 the frameless window uses a hidden-inset title bar so native traffic lights sit
@@ -126,10 +149,15 @@ Developer ID signing/notarization, and Windows requires Authenticode.
   output, timeouts, and whole-process-tree termination on either bound.
 - Harness actions accept fixed harness and surface identifiers. Session resume
   accepts validated session IDs and opens only known app or terminal commands.
+- Agent-bridge actions accept only `anthropic`, `cursor`, or `gemini`. OAuth
+  remains in the official client; the renderer receives no token, account
+  identity, arbitrary executable, or argv.
 - API credentials are delivered once over IPC and then through child stdin.
   They never enter argv, browser storage, or returned snapshots.
-- Context Manager reads bounded session metadata and never reads Deep Code
-  settings or message files into the renderer.
+- Context Manager reads bounded metadata only: Codex rollout headers, DeepSeek
+  workspace/session file names and timestamps, and selected Cursor conversation
+  index columns. DeepSeek compressed transcripts and Cursor branch/message
+  payloads are never read into the renderer.
 - Navigation and new renderer windows are denied. External links are HTTPS-only
   and open through the operating system.
 - Packaged builds ignore development-server environment variables, IPC accepts

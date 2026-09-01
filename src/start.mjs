@@ -5,6 +5,7 @@ import path from "node:path";
 import { assertCallerSecret } from "./caller-auth.mjs";
 import {
   CALLER_SECRET_PATH,
+  CURSOR_CATALOG_PATH,
   INTERNAL_SECRET_PATH,
   LITELLM_CONFIG_PATH,
   MERGED_CATALOG_PATH,
@@ -32,6 +33,8 @@ import {
   inheritedProxyEnvironment,
   redactProxyCredentials,
 } from "./proxy-environment.mjs";
+import { antigravityOAuthStatus } from "./antigravity-oauth-status.mjs";
+import { cursorTunnelRunSpec } from "./cursor-cloudflare-tunnel.mjs";
 
 // Before anything reads the environment or spawns a child. A service manager
 // hands this process the proxy the install recorded; a shell hands it whatever
@@ -145,6 +148,7 @@ if (readLocalModelSelection().enabled.length) {
 // naming that command, not a bare connection error from a port nobody is
 // listening on.
 const devinCliRouted = MODELS.some((model) => model.provider === "devin-cli");
+const cursorInstalled = existsSync(CURSOR_CATALOG_PATH);
 
 const commonEnv = {
   MODEL_ROUTER_TARGET: TARGET,
@@ -169,6 +173,7 @@ const commonEnv = {
   ANTIGRAVITY_OAUTH_FORWARD_BASE_URL: loopback(PORTS.antigravityOauth, "/v1"),
   MODEL_ROUTER_DEVIN_CLI_PORT: String(PORTS.devinCli),
   DEVIN_CLI_FORWARD_BASE_URL: loopback(PORTS.devinCli, "/v1"),
+  MODEL_ROUTER_CURSOR_PUBLIC_PORT: String(PORTS.cursorPublic),
   MODEL_ROUTER_QUIET: "1",
   CODEX_ROUTER_CALLER_KEY: callerKey,
   CODEX_ROUTER_INTERNAL_KEY: internalKey,
@@ -400,6 +405,26 @@ async function main() {
       );
     }
   }
+  const cursorEdge = cursorInstalled
+    ? run(process.execPath, [path.join(SOURCE_ROOT, "src", "cursor-public-edge.mjs")])
+    : undefined;
+  if (cursorEdge) {
+    await waitForHealth(
+      "Cursor public edge",
+      loopback(PORTS.cursorPublic, "/health"),
+      {},
+      30_000,
+      "codex-router-cursor-edge",
+      cursorEdge,
+    );
+  }
+  // Cursor App sends BYOK requests from Cursor's backend, so its loopback edge
+  // is paired with a user-owned named tunnel when one has been provisioned.
+  // The generated ingress points only at port 4214 and ends in a 404 catch-all.
+  const cursorTunnelSpec = cursorEdge ? cursorTunnelRunSpec() : undefined;
+  const cursorTunnel = cursorTunnelSpec
+    ? run(cursorTunnelSpec.command, cursorTunnelSpec.args)
+    : undefined;
 
   console.error(`[${frontendService}] ready (authenticated loopback endpoint)`);
   // Only the gateway is supervised. The forwarders and the router are ours and
@@ -421,6 +446,8 @@ async function main() {
     // that never spawned it adds no entry, so this cannot end anyone else's
     // session.
     ...(devinForwarder ? [waitForExit(devinForwarder, "Devin CLI forwarder")] : []),
+    ...(cursorEdge ? [waitForExit(cursorEdge, "Cursor public edge")] : []),
+    ...(cursorTunnel ? [waitForExit(cursorTunnel, "Cursor named tunnel")] : []),
     superviseGateway({
       label: "LiteLLM gateway",
       child: gateway,

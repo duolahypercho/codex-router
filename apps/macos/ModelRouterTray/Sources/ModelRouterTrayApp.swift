@@ -309,7 +309,7 @@ struct NativeMutationDrain: Equatable {
   }
 }
 
-enum RouterActivityState: String, Decodable {
+enum RouterActivityState: String, Decodable, Equatable {
   case idle
   case generating
   case starting
@@ -382,6 +382,69 @@ struct ModelRouterTrayApp: App {
   }
 }
 
+// A borderless NSWindow refuses key status by default. The tray deliberately
+// uses a borderless, non-activating panel so opening it does not steal the
+// foreground app, but its search, credential, and local-model fields still
+// need a first responder once the operator clicks them. Opting into key status
+// keeps that keyboard focus inside the panel without turning it into a normal
+// activating application window.
+final class TrayInputPanel: NSPanel {
+  override var canBecomeKey: Bool { true }
+  override var canBecomeMain: Bool { false }
+}
+
+enum TrayControlAppearance {
+  // The tray is a non-activating panel, so SwiftUI otherwise reports every
+  // control as belonging to an inactive window and macOS removes the tint
+  // from enabled switches. The panel is visible only while it is key; publish
+  // that actual state to the hosted controls so on/off remains legible.
+  static let activeState: ControlActiveState = .key
+}
+
+enum TraySubagentTogglePolicy {
+  // An unknown route is intentionally selectable: that explicit choice is
+  // what publishes it as a candidate and starts the compatibility check. Only
+  // a repository-reviewed v1-only route is a genuine dead end. Picker
+  // visibility is a separate setting: Codex can run a route as a subagent
+  // without showing it in the top-level model picker.
+  static func isDisabled(certification: String) -> Bool {
+    certification == "v1"
+  }
+}
+
+// The switch reflects the effective router selection, not only the registry's
+// provenance label. `selected` and `all` deliberately promote otherwise
+// unknown routes when the operator opts in; recomputing the switch from the
+// registry alone made a successful click snap back to off after refresh.
+enum TraySubagentSelectionPolicy {
+  static func isOn(
+    certification: String,
+    mode: String,
+    explicitlyEnabled: Bool,
+    explicitlyDisabled: Bool
+  ) -> Bool {
+    guard !explicitlyDisabled, certification != "v1" else { return false }
+    if certification == "v2" { return true }
+    return mode == "all" || (mode == "selected" && explicitlyEnabled)
+  }
+}
+
+enum TrayPanelClickPolicy {
+  // A non-activating status panel can surface its own mouse-down through the
+  // global monitor on some macOS releases. Closing on every global event tears
+  // the panel down before a SwiftUI switch receives mouse-up, so inside clicks
+  // must be excluded explicitly in screen coordinates.
+  static func shouldClose(
+    screenPoint: NSPoint,
+    panelFrame: NSRect,
+    statusItemFrame: NSRect?
+  ) -> Bool {
+    if panelFrame.contains(screenPoint) { return false }
+    if statusItemFrame?.contains(screenPoint) == true { return false }
+    return true
+  }
+}
+
 @MainActor
 final class TrayMenuController: NSObject {
   private let store: RouterStore
@@ -404,7 +467,7 @@ final class TrayMenuController: NSObject {
     hosting.wantsLayer = true
     hosting.layer?.masksToBounds = true
     statusHostingView = hosting
-    panel = NSPanel(
+    panel = TrayInputPanel(
       contentRect: NSRect(origin: .zero, size: TrayPanelPlacement.panelSize),
       styleMask: [.borderless, .nonactivatingPanel, .fullSizeContentView],
       backing: .buffered,
@@ -422,6 +485,14 @@ final class TrayMenuController: NSObject {
           self.reposition()
         }
       }
+    // Local UI verification launches the real tray binary without requiring a
+    // synthetic click on macOS's otherwise inaccessible status-item window.
+    // The production launch agent never supplies this private test argument.
+    if CommandLine.arguments.contains("--ui-test-show-panel") {
+      DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+        self?.showPanel()
+      }
+    }
   }
 
   func setVisible(_ visible: Bool) {
@@ -469,6 +540,7 @@ final class TrayMenuController: NSObject {
     guard panel.contentViewController == nil else { return }
     let content = NSHostingController(
       rootView: TrayView(store: store)
+        .environment(\.controlActiveState, TrayControlAppearance.activeState)
         .frame(
           width: TrayPanelPlacement.panelSize.width,
           height: TrayPanelPlacement.panelSize.height
@@ -510,6 +582,11 @@ final class TrayMenuController: NSObject {
 
   private func closePanel() {
     panel.orderOut(nil)
+    // The settings tree can contain hundreds of model and provider rows. It
+    // observes RouterStore, so retaining it after the panel closes makes every
+    // background health update re-evaluate a large, invisible SwiftUI graph.
+    // Recreate it lazily on the next open instead of paying that cost forever.
+    panel.contentViewController = nil
     statusItem.button?.highlight(false)
     removeMonitors()
   }
@@ -535,7 +612,17 @@ final class TrayMenuController: NSObject {
     globalEventMonitor = NSEvent.addGlobalMonitorForEvents(
       matching: [.leftMouseDown, .rightMouseDown]
     ) { [weak self] _ in
-      Task { @MainActor in self?.closePanel() }
+      let screenPoint = NSEvent.mouseLocation
+      Task { @MainActor in
+        guard let self else { return }
+        let statusItemFrame = self.statusItem.button?.window?.frame
+        guard TrayPanelClickPolicy.shouldClose(
+          screenPoint: screenPoint,
+          panelFrame: self.panel.frame,
+          statusItemFrame: statusItemFrame
+        ) else { return }
+        self.closePanel()
+      }
     }
     localEventMonitor = NSEvent.addLocalMonitorForEvents(
       matching: [.leftMouseDown, .rightMouseDown, .keyDown]
@@ -2207,9 +2294,13 @@ final class RouterStore: ObservableObject {
     }
     let reconnecting = providerSetup[provider]?.configured == true
     let needsInstall = providerSetup[provider]?.cliInstalled != true
+    let displayName = providerSetup[provider]?.displayName ?? provider
     let awaitsAntigravityProbe = provider == "antigravity-oauth" && setupAction == "login"
     await performProviderOperation(
       provider,
+      progressMessage: reconnecting
+        ? "Opening \(displayName) sign-in in your browser…"
+        : "Starting \(displayName) sign-in…",
       successMessage: awaitsAntigravityProbe
         ? "Signed in. Run the live compatibility test before enabling this provider."
         : reconnecting
@@ -2231,8 +2322,12 @@ final class RouterStore: ObservableObject {
 
   func loginProvider(_ provider: String) async {
     let reconnecting = providerSetup[provider]?.configured == true
+    let displayName = providerSetup[provider]?.displayName ?? provider
     await performProviderOperation(
       provider,
+      progressMessage: reconnecting
+        ? "Opening \(displayName) sign-in in your browser…"
+        : "Starting \(displayName) sign-in…",
       successMessage: provider == "antigravity-oauth"
         ? "Signed in again. Run the live compatibility test before re-enabling this provider."
         : reconnecting
@@ -2849,8 +2944,8 @@ final class RouterStore: ObservableObject {
       },
       success: { enabled in
         enabled
-        ? "Old tool-result compaction is on for the next external-model request."
-        : "Exact tool results will be sent on the next external-model request."
+        ? "Token maxxing is on for the next external-model request."
+        : "Token maxxing is off; exact tool results will be sent on the next external-model request."
       }
     )
   }
@@ -3204,6 +3299,7 @@ final class RouterStore: ObservableObject {
 
   private func performProviderOperation(
     _ provider: String,
+    progressMessage: String? = nil,
     successMessage: String,
     operation: () async throws -> Void
   ) async {
@@ -3215,6 +3311,7 @@ final class RouterStore: ObservableObject {
     // is still authoritative.
     invalidateProviderCatalogs(catalogSourceIDs)
     providerOperation = provider
+    if let progressMessage { message = progressMessage }
     defer { providerOperation = nil }
     do {
       try await operation()
@@ -3258,7 +3355,11 @@ final class RouterStore: ObservableObject {
       let nextActiveRequests = health.activity.active ?? []
       let nextActiveRequestCount = health.activity.activeCount ?? nextActiveRequests.count
       activityHealthFailureStartedAt = nil
-      routerHealth = health
+      // Health is polled once a second so activity changes stay responsive.
+      // Publishing an identical value still invalidates every observed SwiftUI
+      // tree (and schedules a widget snapshot), which made an open settings
+      // panel visibly hitch while the router was idle.
+      if routerHealth != health { routerHealth = health }
       if activityState != health.activity.state { activityState = health.activity.state }
       if activeRequests != nextActiveRequests { activeRequests = nextActiveRequests }
       if activeRequestCount != nextActiveRequestCount {
@@ -3830,7 +3931,7 @@ final class RouterStore: ObservableObject {
   }
 }
 
-private struct RouterHealth: Decodable {
+private struct RouterHealth: Decodable, Equatable {
   let ok: Bool?
   let error: String?
   let degraded: [String]?
@@ -3871,7 +3972,7 @@ private struct TrayServiceHealthRow: Identifiable {
   let detail: String
 }
 
-private struct RouterActivity: Decodable {
+private struct RouterActivity: Decodable, Equatable {
   let state: RouterActivityState
   let provider: String?
   let model: String?
@@ -5353,6 +5454,7 @@ private struct TrayView: View {
   @ObservedObject var store: RouterStore
   @AppStorage("trayTab") private var tab: TrayTab = .usage
   @State private var providersExpanded = true
+  @State private var providerFilter = ""
   @State private var savingsRange: SavingsRange = .day
   @State private var savingsRangeSelectedByUser = false
   @State private var confirmSessionSharing = false
@@ -5459,6 +5561,31 @@ private struct TrayView: View {
       .sorted { ($0.vendorLabel ?? $0.members[0].id) < ($1.vendorLabel ?? $1.members[0].id) }
   }
 
+  // Search preserves the vendor grouping rather than flattening a matching
+  // account out of it. A vendor-name match keeps every account in that group;
+  // a provider-name or id match keeps only the matching account rows.
+  private var filteredProviderVendorGroups: [ProviderGroup] {
+    let query = providerFilter.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    guard !query.isEmpty else { return providerVendorGroups }
+    let displayNames = Dictionary(
+      uniqueKeysWithValues: (target?.providers ?? []).map { ($0.id, $0.displayName) }
+    )
+    return providerVendorGroups.compactMap { group in
+      if group.vendorLabel?.lowercased().contains(query) == true {
+        return group
+      }
+      let members = group.members.filter { member in
+        [member.id, member.shortName, displayNames[member.id]]
+          .compactMap { $0 }
+          .joined(separator: " ")
+          .lowercased()
+          .contains(query)
+      }
+      guard !members.isEmpty else { return nil }
+      return ProviderGroup(id: group.id, vendorLabel: group.vendorLabel, members: members)
+    }
+  }
+
   // The vendor name is the leading words every display name in the group
   // shares: "Z.ai GLM Coding Plan" + "Z.ai API" -> "Z.ai", and "xAI Grok OAuth"
   // + "xAI Grok API" -> "xAI Grok". Whole words only, so a group that happens to
@@ -5526,7 +5653,6 @@ private struct TrayView: View {
       }
       .padding(14)
     }
-    .preferredColorScheme(.dark)
     .foregroundStyle(routerText)
     .task {
       await store.refresh()
@@ -6343,11 +6469,11 @@ private struct TrayView: View {
       isDisabled: store.signedRoutingEnabled(authoritative: store.signedRouting)
     )
     settingRow(
-      title: routerLocalized("Compact old tool results"),
+      title: routerLocalized("Token maxxing"),
       detail: target.modelSettings?.toolResultAging?.environmentOverride == true
         ? routerLocalized("Forced off by CODEX_ROUTER_TOOL_RESULT_AGING=0")
         : (target.modelSettings?.toolResultAging?.stats?.savingsSummary
-          ?? routerLocalized("Off by default · token maxxing starts at 70% on external models")),
+          ?? routerLocalized("Off by default · compacts old results; RTK shapes routed compaction")),
       isOn: Binding(
         // Off when the snapshot has not arrived, because that is what the
         // router does with no state file (tool-result-aging-state.mjs). The row
@@ -6374,15 +6500,39 @@ private struct TrayView: View {
       // re-runs on each store publish, so the cost would be paid continuously
       // rather than once: measured at 89us a pass, that is 2.4ms of a render
       // spent on nothing.
-      let groups = providerVendorGroups
-      VStack(spacing: 0) {
+      let groups = filteredProviderVendorGroups
+      VStack(alignment: .leading, spacing: 0) {
+        AccordionSearchField(
+          placeholder: routerLocalized("Search providers"),
+          query: $providerFilter
+        )
+        .padding(.bottom, 6)
+        HStack(alignment: .top, spacing: 5) {
+          Image(systemName: "arrow.triangle.2.circlepath.circle")
+            .font(.system(size: 9, weight: .semibold))
+          Text(routerLocalized("OAuth sessions refresh automatically. Reconnect opens browser sign-in when approval is required."))
+            .font(.system(size: 9))
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        .foregroundStyle(routerMuted)
+        .padding(.bottom, 4)
+        if groups.isEmpty {
+          Text(routerLocalized("No providers match this search."))
+            .font(.system(size: 9))
+            .foregroundStyle(routerMuted)
+            .padding(.vertical, 8)
+        }
         ForEach(groups) { group in
           if let vendorLabel = group.vendorLabel {
             HStack(spacing: 6) {
               Text(vendorLabel)
                 .font(.system(size: 10, weight: .semibold))
                 .foregroundStyle(routerMuted)
-              Text(routerFormat("%d accounts", group.members.count))
+              Text(
+                group.members.count == 1
+                  ? routerLocalized("1 account")
+                  : routerFormat("%d accounts", group.members.count)
+              )
                 .font(.system(size: 9))
                 .foregroundStyle(routerMuted.opacity(0.7))
               Spacer()
@@ -6441,6 +6591,7 @@ private struct TrayView: View {
     @State private var expandedLocalVariants = Set<String>()
     @State private var variantHelpExpanded = false
     @State private var localCatalogFilter = ""
+    @State private var subagentModelFilter = ""
     @State private var pickerModelFilter = ""
     @State private var installTag = ""
     @State private var armedRemoval: String?
@@ -6494,6 +6645,17 @@ private struct TrayView: View {
         }
     }
 
+    private var filteredSubagentModels: [RouterModel] {
+      let query = subagentModelFilter.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+      guard !query.isEmpty else { return subagentModels }
+      return subagentModels.filter { model in
+        [model.displayName, model.slug, model.provider, providerName(model.provider)]
+          .joined(separator: " ")
+          .lowercased()
+          .contains(query)
+      }
+    }
+
     private var filteredPickerModels: [RouterModel] {
       let query = pickerModelFilter.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
       guard !query.isEmpty else { return enabledModels }
@@ -6542,7 +6704,7 @@ private struct TrayView: View {
     // Per-provider counts, so a click that lands on the wrong panel is visible
     // in the header it did not change instead of only in Codex's picker.
     private func subagentGroupSummary(_ group: ProviderModels) -> String {
-      "\(group.models.filter { isSubagent($0) }.count) of \(group.models.count) on"
+      "\(group.models.filter { subagentToggleOn($0) }.count) of \(group.models.count) on"
     }
 
     private func pickerGroupSummary(_ group: ProviderModels) -> String {
@@ -6579,13 +6741,22 @@ private struct TrayView: View {
             Text(routerLocalized("Subagent choices do not hide models from Codex's picker — use Model picker below for that."))
               .font(.system(size: 9))
               .foregroundStyle(routerMuted)
+            AccordionSearchField(
+              placeholder: routerLocalized("Search subagent models"),
+              query: $subagentModelFilter
+            )
             toolbar(
               buttons: [
                 ("Subagents on", { Task { await store.selectAllSubagents() } }),
                 ("Subagents off", { Task { await store.unselectAllSubagents() } }),
               ]
             )
-            ForEach(providerGroups(subagentModels)) { group in
+            if filteredSubagentModels.isEmpty && !subagentModelFilter.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+              Text(routerLocalized("No subagent models match this search."))
+                .font(.system(size: 9))
+                .foregroundStyle(routerMuted)
+            }
+            ForEach(providerGroups(filteredSubagentModels)) { group in
               AccordionPanel(
                 title: providerName(group.provider),
                 summary: subagentGroupSummary(group),
@@ -6663,9 +6834,10 @@ private struct TrayView: View {
                 ("Hide all", { Task { await store.hideAllPickerModels() } }),
               ]
             )
-            TextField(routerLocalized("Search available models"), text: $pickerModelFilter)
-              .textFieldStyle(.roundedBorder)
-              .font(.system(size: 10))
+            AccordionSearchField(
+              placeholder: routerLocalized("Search available models"),
+              query: $pickerModelFilter
+            )
             if filteredPickerModels.isEmpty && !pickerModelFilter.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
               Text(routerLocalized("No provider models match this search."))
                 .font(.system(size: 9))
@@ -8166,6 +8338,10 @@ private struct TrayView: View {
       Set(settings?.subagents.disabled ?? [])
     }
 
+    private var enabledSubagentSet: Set<String> {
+      Set(settings?.subagents.enabled ?? [])
+    }
+
     // The capability the catalog actually published wins. A route the operator
     // selected is v2 to Codex even though the registry never certified it, and
     // asking the registry first told them a spawnable route could not be used.
@@ -8180,25 +8356,31 @@ private struct TrayView: View {
       subagentCertification(for: model) == "v2"
     }
 
-    // Status tags, effort controls, and enabled counts must reflect only the
-    // capability Codex receives. A selected compatibility-test candidate is
-    // not a usable subagent until the exact registry route is certified v2.
+    // This is the capability Codex receives after the router applies the
+    // operator's selection. Registry v2 routes are on by default; selected or
+    // all mode promotes an unknown route, while an explicit off wins over all.
     private func isSubagent(_ model: RouterModel) -> Bool {
-      if !isPickerVisible(model) { return false }
-      let authoritative = !disabledSubagentSet.contains(model.slug)
-        && isCertifiedV2(model)
+      let authoritative = TraySubagentSelectionPolicy.isOn(
+        certification: subagentCertification(for: model),
+        mode: settings?.subagents.mode ?? "proven",
+        explicitlyEnabled: enabledSubagentSet.contains(model.slug),
+        explicitlyDisabled: disabledSubagentSet.contains(model.slug)
+      )
       return store.subagentModelEnabled(model.slug, authoritative: authoritative)
     }
 
     // The switch says one thing wherever it can be used: run this route as a
-    // subagent, or do not. On a route that cannot, it is simply unavailable --
-    // there is no test to request and no candidate state to decode.
+    // subagent, or do not. An unknown route remains interactive because that
+    // explicit selection is what asks the control plane to publish and verify
+    // it; only a reviewed v1-only route is incapable of becoming a subagent.
     private func subagentToggleOn(_ model: RouterModel) -> Bool {
       isSubagent(model)
     }
 
     private func subagentToggleDisabled(_ model: RouterModel) -> Bool {
-      !isPickerVisible(model) || !isCertifiedV2(model)
+      TraySubagentTogglePolicy.isDisabled(
+        certification: subagentCertification(for: model)
+      )
     }
 
     // Codex chooses which model a child runs on; this chooses how hard it
@@ -8264,7 +8446,7 @@ private struct TrayView: View {
     }
 
   private var subagentSummary: String {
-      let count = subagentModels.filter { isSubagent($0) }.count
+      let count = subagentModels.filter { subagentToggleOn($0) }.count
       let mode = store.subagentModeAll(authoritative: settings?.subagents.mode == "all")
         ? "all"
         : (settings?.subagents.mode ?? "proven")
@@ -8374,6 +8556,42 @@ private struct TrayView: View {
         Color.primary.opacity(0.045),
         in: RoundedRectangle(cornerRadius: 10, style: .continuous)
       )
+    }
+  }
+
+  // A single compact search treatment for the three large settings
+  // accordions. The clear affordance matters in a menu-bar popover where a
+  // stale query can otherwise make an entire provider/model section appear
+  // empty the next time it is opened.
+  private struct AccordionSearchField: View {
+    let placeholder: String
+    @Binding var query: String
+
+    var body: some View {
+      HStack(spacing: 6) {
+        Image(systemName: "magnifyingglass")
+          .font(.system(size: 9, weight: .medium))
+          .foregroundStyle(routerMuted)
+        TextField(placeholder, text: $query)
+          .textFieldStyle(.plain)
+          .font(.system(size: 10))
+        if !query.isEmpty {
+          Button(action: { query = "" }) {
+            Image(systemName: "xmark.circle.fill")
+              .font(.system(size: 10))
+              .foregroundStyle(routerMuted)
+          }
+          .buttonStyle(.plain)
+          .help(routerLocalized("Clear search"))
+        }
+      }
+      .padding(.horizontal, 8)
+      .padding(.vertical, 6)
+      .background(Color.primary.opacity(0.055), in: RoundedRectangle(cornerRadius: 6))
+      .overlay {
+        RoundedRectangle(cornerRadius: 6)
+          .stroke(Color.primary.opacity(0.08), lineWidth: 0.5)
+      }
     }
   }
 
@@ -9027,18 +9245,41 @@ private struct ProviderSetupRow: View {
   @ViewBuilder
   private var actionControl: some View {
     if isBusy {
-      ProgressView()
-        .controlSize(.small)
-        .tint(routerAccent)
-        .frame(width: 42)
+      HStack(spacing: 6) {
+        if setup?.kind == "oauth" {
+          Text(routerLocalized("Finish sign-in in browser"))
+            .font(.system(size: 9, weight: .medium))
+            .foregroundStyle(routerAccent)
+            .lineLimit(1)
+        }
+        ProgressView()
+          .controlSize(.small)
+          .tint(routerAccent)
+      }
     } else if setup?.configured == true {
-      HStack(spacing: 8) {
+      HStack(spacing: 6) {
         if setup?.kind == "oauth" {
           if oauthNeedsReconnect {
-            Button(routerLocalized("Reconnect"), action: onLogin)
+            Button(action: onLogin) {
+              HStack(spacing: 4) {
+                Image(systemName: "arrow.clockwise")
+                  .font(.system(size: 9, weight: .semibold))
+                Text(routerLocalized("Reconnect"))
+                  .font(.system(size: 9, weight: .semibold))
+                  .lineLimit(1)
+              }
+                .fixedSize(horizontal: true, vertical: false)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 4)
+                .contentShape(Rectangle())
+            }
               .buttonStyle(.plain)
-              .font(.system(size: 10, weight: .medium))
               .foregroundStyle(routerYellow)
+              .background(routerYellow.opacity(0.08), in: Capsule())
+              .overlay {
+                Capsule().stroke(routerYellow.opacity(0.18), lineWidth: 0.5)
+              }
+              .help(routerLocalized("Open browser sign-in"))
               .disabled(controlsDisabled)
           } else {
             Button(action: onLogin) {

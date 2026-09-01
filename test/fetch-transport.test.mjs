@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { getGlobalDispatcher, setGlobalDispatcher } from "undici";
 
 import {
+  directLoopbackFetch,
   createLoopbackProbeDispatcher,
   fetchDispatcherOptions,
   installStableFetchTransport,
@@ -183,11 +184,16 @@ test("the installed transport proxies requests and honors NO_PROXY", async () =>
     assert.equal(proxiedRequests, 1);
     assert.equal(directRequests, 0);
 
+    response = await directLoopbackFetch(`http://127.0.0.1:${targetPort}/router-reentry`);
+    assert.equal(await response.text(), "direct");
+    assert.equal(proxiedRequests, 1);
+    assert.equal(directRequests, 1);
+
     process.env.NO_PROXY = "127.0.0.1";
     response = await fetch(`http://127.0.0.1:${targetPort}/bypass-proxy`);
     assert.equal(await response.text(), "direct");
     assert.equal(proxiedRequests, 1);
-    assert.equal(directRequests, 1);
+    assert.equal(directRequests, 2);
   } finally {
     setGlobalDispatcher(originalDispatcher);
     await dispatcher?.close();

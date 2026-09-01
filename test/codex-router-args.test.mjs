@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { copyFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -54,4 +56,27 @@ test("an action is never truncated, whatever its length", { skip }, () => {
 test("multi-argument subcommands are still passed through whole", { skip }, () => {
   const result = runCli("panel", "--help");
   assert.match(result.stdout, /--print/, "the flag did not reach panel.mjs");
+});
+
+test("model-router wrapper does not invent an empty trailing argument", { skip }, () => {
+  const fixture = mkdtempSync(path.join(os.tmpdir(), "model-router-args-"));
+  try {
+    copyFileSync(path.join(root, "model-router.ps1"), path.join(fixture, "model-router.ps1"));
+    writeFileSync(
+      path.join(fixture, "codex-router.ps1"),
+      'Write-Output ("ARG_COUNT=" + $args.Count)\n' +
+        'for ($i = 0; $i -lt $args.Count; $i += 1) { Write-Output ("ARG_" + $i + "=<" + [string]$args[$i] + ">") }\n',
+      "utf8",
+    );
+    const result = spawnSync(
+      "powershell.exe",
+      ["-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", path.join(fixture, "model-router.ps1"), "codex", "start"],
+      { encoding: "utf8", cwd: fixture },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /ARG_COUNT=1/);
+    assert.match(result.stdout, /ARG_0=<start>/);
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
 });

@@ -9,6 +9,7 @@ import {
   Tray,
 } from "electron";
 import path from "node:path";
+import { writeFileSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { registerIpcHandlers } from "./ipc.mjs";
 import {
@@ -299,11 +300,19 @@ if (lifecycleQueryInvocation) {
   // Query contract: one compact JSON object on stdout and status 0, including
   // for absent/stale state. This is directly consumable by jq or
   // ConvertFrom-Json without making "not running" a shell error.
-  process.stdout.write(`${JSON.stringify(queryLifecycleState(lifecycleFile))}\n`, () => app.exit(0));
+  // A packaged GUI may have a pipe that never reports its write callback even
+  // after the small lifecycle document is accepted. Exiting immediately after
+  // the synchronous write handoff keeps rebuild verification from parking a
+  // query helper forever.
+  writeFileSync(1, `${JSON.stringify(queryLifecycleState(lifecycleFile))}\n`);
+  process.exit(0);
 }
 
 const primaryInstance = !lifecycleQueryInvocation && app.requestSingleInstanceLock();
-if (!lifecycleQueryInvocation && (!primaryInstance || quitForUpdateInvocation)) app.quit();
+// These are helper invocations, not application sessions. app.quit() before
+// ready can remain alive in packaged Electron when there is no primary GUI to
+// receive the update request, which blocks the transactional bundle swap.
+if (!lifecycleQueryInvocation && (!primaryInstance || quitForUpdateInvocation)) process.exit(0);
 
 if (primaryInstance) app.on("open-url", (event, url) => {
   event.preventDefault();

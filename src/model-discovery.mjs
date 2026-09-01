@@ -41,9 +41,11 @@ function option(name) {
 }
 
 export function modelIds(payload, provider) {
-  const data = Array.isArray(payload) ? payload : payload?.data;
+  const data = Array.isArray(payload) ? payload : payload?.data ?? payload?.models;
   if (!Array.isArray(data)) throw new Error("The provider returned an invalid model list.");
-  const candidates = provider?.authMode === "anonymous"
+  const candidates = provider?.id === "chatgpt-web"
+    ? data.filter((item) => modelRecordId(item).startsWith("chatgpt-web/"))
+    : provider?.authMode === "anonymous"
     ? data.filter((item) => anonymousModelAllowed(provider, item?.id))
     : provider?.id === "orca"
     ? data.filter((item) => {
@@ -84,11 +86,11 @@ export function modelIds(payload, provider) {
 // `upstreamId`). Keep discovery provider-agnostic without changing the
 // filtering policy for built-in providers.
 function modelRecordId(item) {
-  return String(item?.id ?? item?.model ?? item?.upstreamId ?? "").trim();
+  return String(item?.id ?? item?.model ?? item?.upstreamId ?? item?.slug ?? "").trim();
 }
 
 function modelRecords(payload, provider) {
-  const data = Array.isArray(payload) ? payload : payload?.data;
+  const data = Array.isArray(payload) ? payload : payload?.data ?? payload?.models;
   if (!Array.isArray(data)) throw new Error("The provider returned an invalid model list.");
   const ids = new Set(modelIds(payload, provider));
   return data.filter((item) => ids.has(modelRecordId(item)));
@@ -157,7 +159,7 @@ function zeroPrice(value) {
 // price, or zero input and output token prices.
 export function freeModelIds(payload, provider) {
   if (provider?.id !== "orca") return [];
-  const data = Array.isArray(payload) ? payload : payload?.data;
+  const data = Array.isArray(payload) ? payload : payload?.data ?? payload?.models;
   if (!Array.isArray(data)) throw new Error("The provider returned an invalid model list.");
   const callable = new Set(modelIds(payload, provider));
   return data
@@ -203,7 +205,7 @@ function advertisedContextLength(item) {
 // the provider sized in silence is absent rather than guessed: curation falls
 // back to its conservative default only when nothing was advertised.
 export function modelContextLengths(payload, provider) {
-  const data = Array.isArray(payload) ? payload : payload?.data;
+  const data = Array.isArray(payload) ? payload : payload?.data ?? payload?.models;
   if (!Array.isArray(data)) return {};
   const kept = new Set(modelIds(payload, provider));
   const lengths = {};

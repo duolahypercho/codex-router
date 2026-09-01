@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "providers": [
+    {
+      "id": "chatgpt-web",
+      "displayName": "ChatGPT Web",
+      "kind": "openai-compatible",
+      "ownedBy": "openai",
+      "protocol": "openai-responses",
+      "baseUrl": "http://127.0.0.1:17841/v1",
+      "baseUrlEnv": "MODEL_ROUTER_CHATGPT_WEB_BASE_URL",
+      "keyless": true,
+      "directResponses": true,
+      "codexOnly": true,
+      "explicitSelection": true,
+      "planNote": "Requires the codex-chatgpt-web launcher, its private ChatGPT sign-in, and its browser smoke test. Do not use that launcher's Install models action; Codex Router owns openai_base_url."
+    }
+  ]
+}

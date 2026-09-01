@@ -84,3 +84,14 @@ export function loopbackProbeDispatcher() {
 export function loopbackProbeFetch(url, init = {}, dispatcher = loopbackProbeDispatcher()) {
   return undiciFetch(url, { ...init, dispatcher });
 }
+
+// Re-entry surfaces carry the caller capability in their loopback URL. Unlike
+// health probes, that hop must never honor an environment proxy: doing so can
+// disclose the local capability to a corporate or user-configured proxy. Keep
+// one direct HTTP/1.1 pool for those authenticated same-machine requests.
+let sharedDirectLoopbackDispatcher;
+
+export function directLoopbackFetch(url, init = {}) {
+  sharedDirectLoopbackDispatcher ??= new Agent(fetchDispatcherOptions());
+  return undiciFetch(url, { ...init, dispatcher: sharedDirectLoopbackDispatcher });
+}

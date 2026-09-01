@@ -1075,12 +1075,8 @@ const RESPONSES_MODEL = {
   slug: "meta/muse-spark-1.2",
   gatewayModel: "meta-muse-spark-1-2",
 };
-const PRESSURE_RESPONSES_MODEL = {
-  slug: "opencode-go-responses/gpt-5.6-luna",
-  gatewayModel: "opencode-go-responses-gpt-5-6-luna",
-};
 
-test("failover recalculates token-maxxing pressure for the serving model", async () => {
+test("failover keeps the newest tool result exact for the serving model", async () => {
   const seen = [];
   const gw = await gateway(async (request, response) => {
     const body = await bodyJson(request);
@@ -1095,17 +1091,14 @@ test("failover recalculates token-maxxing pressure for the serving model", async
       return;
     }
     response.writeHead(200, { "Content-Type": "text/event-stream" });
-    response.end(contentSse("pressure-fallback"));
+    response.end(contentSse("exact-fallback"));
   });
   const routerPort = await openPort();
   const child = run(routerEnv(gw.port, routerPort), {
-    chain: [PRESSURE_RESPONSES_MODEL.slug],
+    chain: [RESPONSES_MODEL.slug],
     toolResultAging: true,
   });
-  // The pristine request is larger than the fallback's context window. It can
-  // still serve the turn because its lower auto-compaction threshold shapes
-  // the result before the route-specific fit check.
-  const value = "repeated candidate progress\n".repeat(45_000);
+  const value = "repeated candidate progress\n".repeat(12_000);
   const input = [
     { type: "function_call", call_id: "latest", name: "exec_command", arguments: "{}" },
     { type: "function_call_output", call_id: "latest", output: value },
@@ -1123,13 +1116,13 @@ test("failover recalculates token-maxxing pressure for the serving model", async
     assert.equal(seen[0].model, PRIMARY.gatewayModel);
     assert.equal(seen[0].input[1].output, value);
     assert.equal(seen[0].instructions, "Base instructions.");
-    assert.equal(seen[1].model, PRESSURE_RESPONSES_MODEL.gatewayModel);
-    assert.match(seen[1].input[1].output, /Tool result shaped by Codex Router token maxxing/u);
-    assert.match(seen[1].instructions, /## Context pressure mode/u);
+    assert.equal(seen[1].model, RESPONSES_MODEL.gatewayModel);
+    assert.equal(seen[1].input[1].output, value);
+    assert.equal(seen[1].instructions, "Base instructions.");
     const events = await waitForUsageEvents(child.stateDir, 2, child);
     assert.equal(
-      events.find((event) => event.model === PRESSURE_RESPONSES_MODEL.slug).toolResultsShaped,
-      1,
+      events.find((event) => event.model === RESPONSES_MODEL.slug).toolResultsShaped,
+      undefined,
     );
   } finally {
     await stopChild(child);

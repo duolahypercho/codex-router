@@ -28,12 +28,14 @@ import {
   curatedModelDescription,
   curatedModelProviderId,
   curatedModelReasoningLevels,
+  curatedModelRequestProfile,
 } from "./opencode-curation.mjs";
 import {
   applyModelOverlayPublication,
   transactModelOverlayMutation,
 } from "./model-overlay-publication.mjs";
 import {
+  forgetModelVisibility,
   migrateModelVisibility,
   MODEL_PICKER_STATE_PATH,
   setModelsVisible,
@@ -78,6 +80,7 @@ const EFFORT_DESCRIPTIONS = {
   high: "Deep reasoning",
   xhigh: "Extended reasoning",
   max: "Maximum reasoning",
+  ultra: "Pro reasoning",
 };
 
 // Request profiles a curated model may opt into. The vendor profiles in
@@ -123,7 +126,7 @@ function usage() {
   console.error(
     "Usage: curate-models.mjs PROVIDER [--models id1,id2 | interactive] " +
       "[--free-only] [--remove id1,id2] [--refresh] [--apply|--no-apply] " +
-      "[--efforts minimal,low,medium,high,xhigh] " +
+      `[--efforts ${Object.keys(EFFORT_DESCRIPTIONS).join(",")}] ` +
       `[--request-profile ${Object.keys(REQUEST_PROFILE_DESCRIPTIONS).join("|")}]`,
   );
   process.exit(2);
@@ -251,6 +254,12 @@ export function normalizeCurationModels(models, providerId) {
       : undefined;
     const upgradeEfforts =
       Boolean(efforts) && untuned && hasDefaultUserModelReasoning(routed);
+    // A missing profile is another conservative default. Unlike sizing and
+    // effort metadata, this is a wire-compatibility repair: add a documented
+    // exact-model profile even when the operator tuned other metadata, while
+    // preserving any different non-empty profile they selected themselves.
+    const documentedProfile = curatedModelRequestProfile(providerId, model.upstreamModel);
+    const upgradeProfile = Boolean(documentedProfile) && !routed.requestProfile;
     // The stock description says the entry carries conservative defaults, so
     // it stops being true the moment any of them is upgraded. Replace it with
     // the sourcing note only while it is still the untouched stock string;
@@ -263,11 +272,12 @@ export function normalizeCurationModels(models, providerId) {
       // string naming the provider it was curated under, so accept either.
       (routed.description === defaultUserModelDescription(routed.provider) ||
         routed.description === defaultUserModelDescription(model.provider));
-    const sized = upgradeSizing || upgradeEfforts
+    const sized = upgradeSizing || upgradeEfforts || upgradeProfile
       ? {
           ...routed,
           ...(upgradeSizing ? documented : {}),
           ...(upgradeEfforts ? efforts : {}),
+          ...(upgradeProfile ? { requestProfile: documentedProfile } : {}),
           ...(upgradeDescription ? { description: documentedDescription } : {}),
         }
       : routed;
@@ -465,6 +475,21 @@ async function main() {
       ...(flagEfforts || {}),
       ...(discovery.free?.includes(id) ? { isFree: true } : {}),
     };
+    // The ChatGPT Web launcher owns these catalog rows and derives them from
+    // the signed-in account. Its clean labels and input modalities are part of
+    // the same local contract as the account-gated model ids, so preserve them
+    // instead of turning every row into a generic text-only curated model.
+    if (providerId === "chatgpt-web") {
+      const live = Array.isArray(discovery.modelMetadata)
+        ? discovery.modelMetadata.find((entry) => entry?.upstreamId === id)
+        : discovery.modelMetadata?.[id];
+      if (typeof live?.displayName === "string" && live.displayName) {
+        metadata.displayName = live.displayName;
+      }
+      if (Array.isArray(live?.inputModalities) && live.inputModalities.length) {
+        metadata.inputModalities = live.inputModalities;
+      }
+    }
     // The served catalog value wins when present. OpenCode's exact documented
     // free-model size is the fallback for its id-only Zen catalog; every other
     // silent catalog still gets the conservative generic default.
@@ -543,6 +568,8 @@ async function main() {
   // can still be selected explicitly below.
   const requestProfileFor = (id) => {
     if (flagRequestProfile) return flagRequestProfile;
+    const documentedProfile = curatedModelRequestProfile(providerId, id);
+    if (documentedProfile) return documentedProfile;
     if (inheritedProfile) return inheritedProfile;
     if (!interactive) return undefined;
     // Defaults to no: this weakens a forced tool choice into a request the
@@ -610,6 +637,10 @@ async function main() {
       to: normalizedByUpstream.get(model.upstreamModel)?.slug,
     }))
     .filter(({ from, to }) => to && from !== to);
+  const retainedUpstreams = new Set(nextMine.map((model) => model.upstreamModel));
+  const pickerRemovals = storedMine
+    .filter((model) => !retainedUpstreams.has(model.upstreamModel))
+    .map((model) => model.slug);
 
   const wantsApply =
     !noApply && (
@@ -632,6 +663,7 @@ async function main() {
         expectedMine: storedMine,
         nextMine,
       }));
+      if (pickerRemovals.length) forgetModelVisibility(pickerRemovals);
       if (pickerMigrations.length) migrateModelVisibility(pickerMigrations);
       if (pickerSelections.length) setModelsVisible(pickerSelections, true);
     },

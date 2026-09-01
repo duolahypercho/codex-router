@@ -6,7 +6,7 @@ import { STATE_DIR } from "./paths.mjs";
 
 export const CALLER_KEY_ROTATION_JOURNAL_PATH = path.join(STATE_DIR, "caller-key-rotation.json");
 const PHASES = new Set(["prepared", "service-stopped", "secret-swapped", "clients-refreshed", "service-started", "verified"]);
-const TARGETS = new Set(["codex", "dsh", "gemini"]);
+const TARGETS = new Set(["codex", "dsh", "gemini", "openclaw"]);
 const TRANSITIONS = Object.freeze({
   prepared: new Set(["service-stopped", "secret-swapped"]),
   "service-stopped": new Set(["secret-swapped"]),

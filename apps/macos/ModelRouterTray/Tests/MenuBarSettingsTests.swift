@@ -6,6 +6,105 @@ import Testing
 
 @Suite("Menu bar settings", .serialized)
 struct MenuBarSettingsTests {
+  @Test("the borderless tray panel accepts text-field focus")
+  @MainActor
+  func trayPanelCanBecomeKeyWithoutBecomingMain() {
+    let panel = TrayInputPanel(
+      contentRect: .zero,
+      styleMask: [.borderless, .nonactivatingPanel],
+      backing: .buffered,
+      defer: false
+    )
+    #expect(panel.canBecomeKey)
+    #expect(!panel.canBecomeMain)
+    #expect(panel.styleMask.contains(.nonactivatingPanel))
+  }
+
+  @Test("the visible tray keeps enabled controls in their colored key state")
+  func trayControlsUseKeyAppearance() {
+    #expect(TrayControlAppearance.activeState == .key)
+  }
+
+  @Test("visible unverified subagent models remain selectable")
+  func subagentTogglePolicyKeepsTheVerificationPathReachable() {
+    #expect(!TraySubagentTogglePolicy.isDisabled(certification: "unknown"))
+    #expect(!TraySubagentTogglePolicy.isDisabled(certification: "v2"))
+    #expect(TraySubagentTogglePolicy.isDisabled(certification: "v1"))
+  }
+
+  @Test("subagent switches follow the effective router selection")
+  func subagentSelectionDoesNotSnapBackToRegistryProvenance() {
+    #expect(TraySubagentSelectionPolicy.isOn(
+      certification: "unknown",
+      mode: "selected",
+      explicitlyEnabled: true,
+      explicitlyDisabled: false
+    ))
+    #expect(TraySubagentSelectionPolicy.isOn(
+      certification: "unknown",
+      mode: "all",
+      explicitlyEnabled: false,
+      explicitlyDisabled: false
+    ))
+    #expect(!TraySubagentSelectionPolicy.isOn(
+      certification: "unknown",
+      mode: "proven",
+      explicitlyEnabled: false,
+      explicitlyDisabled: false
+    ))
+    #expect(TraySubagentSelectionPolicy.isOn(
+      certification: "v2",
+      mode: "proven",
+      explicitlyEnabled: false,
+      explicitlyDisabled: false
+    ))
+    #expect(!TraySubagentSelectionPolicy.isOn(
+      certification: "v2",
+      mode: "all",
+      explicitlyEnabled: true,
+      explicitlyDisabled: true
+    ))
+    #expect(!TraySubagentSelectionPolicy.isOn(
+      certification: "v1",
+      mode: "selected",
+      explicitlyEnabled: true,
+      explicitlyDisabled: false
+    ))
+  }
+
+  @Test("picker-hidden models remain independently selectable as subagents")
+  func pickerVisibilityDoesNotDisableSubagents() {
+    #expect(!TraySubagentTogglePolicy.isDisabled(certification: "unknown"))
+    #expect(TraySubagentSelectionPolicy.isOn(
+      certification: "unknown",
+      mode: "selected",
+      explicitlyEnabled: true,
+      explicitlyDisabled: false
+    ))
+  }
+
+  @Test("global click dismissal preserves tray controls")
+  func globalClickDismissalIgnoresPanelAndStatusItem() {
+    let panel = NSRect(x: 100, y: 100, width: 320, height: 500)
+    let statusItem = NSRect(x: 390, y: 610, width: 30, height: 20)
+
+    #expect(!TrayPanelClickPolicy.shouldClose(
+      screenPoint: NSPoint(x: 400, y: 350),
+      panelFrame: panel,
+      statusItemFrame: statusItem
+    ))
+    #expect(!TrayPanelClickPolicy.shouldClose(
+      screenPoint: NSPoint(x: 400, y: 615),
+      panelFrame: panel,
+      statusItemFrame: statusItem
+    ))
+    #expect(TrayPanelClickPolicy.shouldClose(
+      screenPoint: NSPoint(x: 50, y: 50),
+      panelFrame: panel,
+      statusItemFrame: statusItem
+    ))
+  }
+
   @Test("activity dot keeps an explicit state color")
   func activityDotUsesNonTemplateImage() {
     let image = MenuBarActivityDotImage.make(state: .generating, size: 6)

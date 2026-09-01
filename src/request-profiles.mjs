@@ -16,6 +16,7 @@ export const REQUEST_PROFILES = Object.freeze([
   "minimax-m3",
   "ollama-cloud",
   "ollama-cloud-auto-tool-choice",
+  "ollama-cloud-glm-5-3-flash",
   "ox-alpha",
   "qwen-plan",
   "qwen38-community",

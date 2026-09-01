@@ -53,6 +53,7 @@ export function hasDefaultUserModelReasoning(entry) {
 // identity and routing fields always come from the provider id and the
 // discovered model id.
 const METADATA_FIELDS = new Set([
+  "displayName",
   "description",
   "contextWindow",
   "autoCompact",
@@ -94,6 +95,9 @@ function gatewaySafe(value) {
 // who serves the call and the `isFree` tag carries the price distinction.
 // Keep the exact catalog id in `upstreamModel`, where the forwarder reads it.
 export function userModelPublicId(providerId, upstreamId, metadata) {
+  if (providerId === "chatgpt-web" && String(upstreamId).startsWith("chatgpt-web/")) {
+    return String(upstreamId).slice("chatgpt-web/".length);
+  }
   if (providerId !== "orca" || metadata?.isFree !== true) return upstreamId;
   const modelId = String(upstreamId).split("/").filter(Boolean).at(-1) || String(upstreamId);
   return modelId.replace(/-free$/, "");

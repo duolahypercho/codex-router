@@ -31,6 +31,15 @@ test("managed target detection refuses partial client state", () => {
     dsh: { routeInstalled: true, credentialInstalled: true },
     gemini: { installed: true, baseUrlManaged: true, envExists: true, documentReadable: true, conflicts: [], managedBlockPresent: true },
   }), ["codex", "dsh", "gemini"]);
+  assert.deepEqual(cli.installedTargetsFromStatus({
+    openclaw: {
+      installed: true, providerInstalled: true, baseUrlManaged: true,
+      configValid: true, configProtected: true,
+    },
+  }), ["openclaw"]);
+  assert.throws(() => cli.installedTargetsFromStatus({
+    openclaw: { installed: true, providerInstalled: false },
+  }), /OpenClaw.*partial/i);
   assert.throws(() => cli.installedTargetsFromStatus({
     codex: { mode: "native" },
     dsh: { routeInstalled: true, credentialInstalled: false },

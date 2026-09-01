@@ -372,6 +372,37 @@ test("the macOS tray tool-result-aging switch mirrors the same off default", () 
   assert.doesNotMatch(source, /toolResultAging\?\.enabled \?\? true/);
 });
 
+test("the macOS tray panel follows the system appearance", () => {
+  const source = readFileSync(
+    path.join(root, "apps", "macos", "ModelRouterTray", "Sources", "ModelRouterTrayApp.swift"),
+    "utf8",
+  );
+  const trayStart = source.indexOf("private struct TrayView");
+  const trayEnd = source.indexOf("private struct ProviderSetupRow", trayStart);
+  assert.ok(trayStart > 0 && trayEnd > trayStart, "TrayView should remain readable");
+  assert.doesNotMatch(
+    source.slice(trayStart, trayEnd),
+    /\.preferredColorScheme\(\.dark\)/,
+    "the menu-bar panel must not override the operator's macOS appearance",
+  );
+});
+
+test("the macOS tray does not redraw a hidden or unchanged settings tree", () => {
+  const source = readFileSync(
+    path.join(root, "apps", "macos", "ModelRouterTray", "Sources", "ModelRouterTrayApp.swift"),
+    "utf8",
+  );
+  const closePanel = source.match(/private func closePanel\(\)[\s\S]*?\r?\n  }/)?.[0];
+  const refreshActivity = source.match(/private func refreshActivity\(\)[\s\S]*?\r?\n  }\r?\n\r?\n  private func recordActivityHealthFailure/)?.[0];
+
+  assert.ok(closePanel, "tray close helper should be readable");
+  assert.match(closePanel, /panel\.contentViewController = nil/);
+  assert.ok(refreshActivity, "activity refresh helper should be readable");
+  assert.match(refreshActivity, /if routerHealth != health \{ routerHealth = health \}/);
+  assert.match(source, /private struct RouterHealth: Decodable, Equatable/);
+  assert.match(source, /private struct RouterActivity: Decodable, Equatable/);
+});
+
 test("the macOS tray provider toggle uses the atomic selection command", () => {
   const swift = readFileSync(
     path.join(root, "apps", "macos", "ModelRouterTray", "Sources", "ModelRouterTrayApp.swift"),
@@ -480,6 +511,24 @@ test("browser panel exposes translations with matching keys for every language",
     setLanguage("en");
   }
   assert.equal(t("nav.usage"), "Usage");
+});
+
+test("browser and macOS settings present the unified pipeline as Token maxxing", () => {
+  assert.equal(t("models.compactOldToolResults"), "Token maxxing");
+  assert.match(t("models.reduceRepeatedContext"), /RTK-shape noisy output.*routed compaction/i);
+  assert.doesNotMatch(t("models.reduceRepeatedContext"), /70%|pressure|reasoning packets/i);
+  assert.doesNotMatch(t("models.compactOldToolResults"), /compact old tool results/i);
+
+  const markup = readFileSync(path.join(root, "apps", "panel", "index.html"), "utf8");
+  assert.match(markup, />Token maxxing</u);
+  assert.match(markup, /Toggle Token maxxing for external models/u);
+
+  const swift = readFileSync(
+    path.join(root, "apps", "macos", "ModelRouterTray", "Sources", "ModelRouterTrayApp.swift"),
+    "utf8",
+  );
+  assert.match(swift, /title: routerLocalized\("Token maxxing"\)/u);
+  assert.doesNotMatch(swift, /title: routerLocalized\("Compact old tool results"\)/u);
 });
 
 test("browser panel marks Arabic as the only right-to-left language", () => {

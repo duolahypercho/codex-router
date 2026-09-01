@@ -35,6 +35,29 @@
   cannot prove any historical tail safe. Bundles retain redacted generated
   diagnostics and log-file metadata without copying arbitrary log contents;
   the former `--include-logs` switch remains accepted as a deprecated no-op.
+- **OpenClaw is now a one-click routed client.** The Harness page can install
+  the official `openclaw@latest` package when it is missing and publish every
+  selected router model through a private `codex-router` Responses provider.
+  The integration preserves unrelated OpenClaw config and user-selected
+  defaults, participates in shared catalog refresh and caller-key rotation,
+  and is available as `--target openclaw` on POSIX and Windows.
+
+- **Muse Spark 1.2 Contributor no longer fails on recursive Codex tool
+  schemas through OpenCode Go.** Console Go rejects the whole Responses turn
+  before inference when this model receives a recursive local JSON-Schema
+  reference. The router now breaks only cycle-closing reference edges for the
+  paid Muse route, preserving definitions, acyclic references, and sibling
+  constraints. Other Console Go Responses models retain their existing schema
+  payloads until they demonstrate the same restriction.
+
+- **OpenCode Console Go chat models no longer reject ambient hosted-search
+  options.** Codex can attach `web_search_options` even when the selected
+  OpenCode Go model does not advertise hosted search; Console Go forwards the
+  unknown field to its strict Chat Completions backend, which rejects the
+  entire turn with HTTP 400. The router now removes only that unsupported
+  option for the `opencode-go` provider on ordinary and compaction requests,
+  with the API forwarder enforcing the same boundary. Other search payloads
+  and providers that accept the option remain unchanged.
 
 - **Strict generic providers no longer receive unadvertised hosted-search
   extensions.** Codex may attach `web_search`, `web_search_preview`,

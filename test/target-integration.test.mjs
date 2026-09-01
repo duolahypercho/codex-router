@@ -13,7 +13,14 @@ const {
   refreshTargetPickerIfInstalled,
   runTargetPublicationProcess,
 } = await import("../src/target-integration.mjs");
-const { CONFIG_PATH, DSH_CATALOG_PATH, NATIVE_CATALOG_PATH } = await import("../src/paths.mjs");
+const {
+  CONFIG_PATH,
+  CLAUDE_CATALOG_PATH,
+  CURSOR_CATALOG_PATH,
+  DSH_CATALOG_PATH,
+  NATIVE_CATALOG_PATH,
+  OPENCLAW_CATALOG_PATH,
+} = await import("../src/paths.mjs");
 
 function stageFile(filePath, contents) {
   mkdirSync(path.dirname(filePath), { recursive: true });
@@ -21,7 +28,7 @@ function stageFile(filePath, contents) {
 }
 
 function clearStagedFiles() {
-  for (const filePath of [CONFIG_PATH, DSH_CATALOG_PATH, NATIVE_CATALOG_PATH]) {
+  for (const filePath of [CONFIG_PATH, CLAUDE_CATALOG_PATH, CURSOR_CATALOG_PATH, DSH_CATALOG_PATH, NATIVE_CATALOG_PATH, OPENCLAW_CATALOG_PATH]) {
     rmSync(filePath, { force: true });
   }
 }
@@ -141,6 +148,40 @@ test("target publication honors and caps an injected operation environment", asy
     Number(invocation.env.CODEX_ROUTER_OPERATION_DEADLINE_MS),
     invocation.deadline - 10_000,
   );
+});
+
+test("the Cursor publication snapshot marks the Cursor integration", () => {
+  try {
+    stageFile(CURSOR_CATALOG_PATH, "{}");
+    assert.deepEqual(installedTargets(), ["cursor"]);
+
+    stageFile(CONFIG_PATH, "# BEGIN codex-router-managed\n# END codex-router-managed\n");
+    assert.deepEqual(installedTargets(), ["codex", "cursor"]);
+  } finally {
+    clearStagedFiles();
+  }
+});
+
+test("the Claude publication snapshot marks the Claude Code integration", () => {
+  try {
+    stageFile(CLAUDE_CATALOG_PATH, "{}");
+    assert.deepEqual(installedTargets(), ["claude"]);
+    stageFile(CONFIG_PATH, "# BEGIN codex-router-managed\n# END codex-router-managed\n");
+    assert.deepEqual(installedTargets(), ["codex", "claude"]);
+  } finally {
+    clearStagedFiles();
+  }
+});
+
+test("the OpenClaw publication snapshot marks the OpenClaw integration", () => {
+  try {
+    stageFile(OPENCLAW_CATALOG_PATH, "{}");
+    assert.deepEqual(installedTargets(), ["openclaw"]);
+    stageFile(CONFIG_PATH, "# BEGIN codex-router-managed\n# END codex-router-managed\n");
+    assert.deepEqual(installedTargets(), ["codex", "openclaw"]);
+  } finally {
+    clearStagedFiles();
+  }
 });
 
 test.after(() => {

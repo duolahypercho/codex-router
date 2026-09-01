@@ -49,6 +49,7 @@ export function ContextPage({ target, api, refreshing, onRefresh, runAction }: C
   const [harnessFilter, setHarnessFilter] = useState<"all" | HarnessId>("all");
   const [showArchived, setShowArchived] = useState(false);
   const [codexModel, setCodexModel] = useState("");
+  const [visibleCount, setVisibleCount] = useState(200);
   const [error, setError] = useState<string>();
 
   const loadSessions = useCallback(async () => {
@@ -75,6 +76,9 @@ export function ContextPage({ target, api, refreshing, onRefresh, runAction }: C
       return `${session.title} ${session.model || ""} ${session.workspace || ""} ${session.harnessId}`.toLowerCase().includes(needle);
     });
   }, [harnessFilter, search, showArchived, snapshot]);
+  const visibleSessions = filtered.slice(0, visibleCount);
+
+  useEffect(() => { setVisibleCount(200); }, [harnessFilter, search, showArchived]);
 
   const workspaceCount = new Set((snapshot?.sessions ?? []).map((session) => session.workspace).filter(Boolean)).size;
   const modelCount = new Set((snapshot?.sessions ?? []).flatMap((session) => session.modelHistory?.length ? session.modelHistory : session.model ? [session.model] : [])).size;
@@ -97,12 +101,12 @@ export function ContextPage({ target, api, refreshing, onRefresh, runAction }: C
       <PageHeader
         eyebrow="Cross-harness history"
         title="Context Manager"
-        description="Find and resume Codex and Deep Code sessions from one continuity view."
+        description="Find and resume Codex, DeepSeek Harness, and Cursor sessions from one continuity view."
         onRefresh={refresh}
         refreshing={refreshing}
       />
       <StatStrip items={[
-        { label: "Sessions", value: snapshot?.counts.total ?? 0, detail: `${snapshot?.counts.codex ?? 0} Codex, ${snapshot?.counts.deepcode ?? 0} Deep Code` },
+        { label: "Sessions", value: snapshot?.counts.total ?? 0, detail: `${snapshot?.counts.codex ?? 0} Codex · ${snapshot?.counts.dsh ?? 0} DeepSeek · ${snapshot?.counts.cursor ?? 0} Cursor` },
         { label: "Workspaces", value: workspaceCount, detail: "Local project roots" },
         { label: "Models used", value: modelCount, detail: "Across indexed sessions" },
         { label: "Cached context", value: inputTokens ? `${cachePercent}%` : "Unreported", detail: inputTokens ? `${compactNumber(cachedTokens)} reused tokens` : "Session metadata only" },
@@ -126,19 +130,19 @@ export function ContextPage({ target, api, refreshing, onRefresh, runAction }: C
           </label>
           <div className="lhc-context-boundary">
             <Waypoints aria-hidden size={19} strokeWidth={1.6} />
-            <div><strong>One index, separate stores</strong><small>Codex and Deep Code continue to own their files, permissions, compaction, and credentials.</small></div>
+            <div><strong>One index, separate stores</strong><small>Codex, DeepSeek Harness, and Cursor continue to own their files, permissions, compaction, and credentials.</small></div>
           </div>
         </div>
       </section>
 
       <section className="panel-section">
-        <SectionHeading title="Sessions" description="Titles come from harness indexes. Token details use bounded Codex rollout metadata and Deep Code index totals; conversation messages are never returned to this view." />
+        <SectionHeading title="Sessions" description="Titles and timestamps come from bounded client indexes. Conversation messages are never returned to this view." />
         <div className="lhc-session-toolbar">
           <SearchField value={search} onChange={setSearch} placeholder="Search sessions, models, or workspaces" />
           <div className="segmented-control compact" role="radiogroup" aria-label="Filter sessions by harness">
-            {(["all", "codex", "deepcode"] as const).map((value) => (
+            {(["all", "cursor", "dsh", "codex"] as const).map((value) => (
               <button key={value} role="radio" aria-checked={harnessFilter === value} className={harnessFilter === value ? "is-active" : ""} onClick={() => setHarnessFilter(value)}>
-                {value === "all" ? "All" : value === "codex" ? "Codex" : "Deep Code"}
+                {value === "all" ? "All" : harnessName(value)}
               </button>
             ))}
           </div>
@@ -150,7 +154,7 @@ export function ContextPage({ target, api, refreshing, onRefresh, runAction }: C
           <PanelSkeleton label="Loading task history" variant="list" count={5} />
         ) : filtered.length ? (
           <div className="lhc-session-list" role="list">
-            {filtered.map((session) => (
+            {visibleSessions.map((session) => (
               <SessionRow
                 key={`${session.harnessId}:${session.id}`}
                 session={session}
@@ -160,9 +164,17 @@ export function ContextPage({ target, api, refreshing, onRefresh, runAction }: C
                 onOpen={openSession}
               />
             ))}
+            {visibleSessions.length < filtered.length ? (
+              <div className="lhc-session-more">
+                <Button variant="secondary" onClick={() => setVisibleCount((count) => count + 200)}>
+                  Show 200 more
+                </Button>
+                <span>{visibleSessions.length} of {filtered.length} rendered</span>
+              </div>
+            ) : null}
           </div>
         ) : (
-          <EmptyState icon={<SearchX size={20} />} title="No sessions match" body={snapshot?.sessions.length ? "Clear a filter or include archived tasks." : "Start a task in Codex or Deep Code, then refresh this view."} />
+          <EmptyState icon={<SearchX size={20} />} title="No sessions match" body={snapshot?.sessions.length ? "Clear a filter or include archived tasks." : "Start a task in Codex, DeepSeek Harness, or Cursor, then refresh this view."} />
         )}
       </section>
     </>
@@ -194,7 +206,7 @@ function SessionRow({ session, appAvailable, terminalAvailable, modelOverride, o
       <div className="lhc-session-main">
         <div className="lhc-session-title">
           <strong>{session.title}</strong>
-          <Badge tone={session.harnessId === "codex" ? "accent" : "neutral"}>{session.harnessId === "codex" ? "Codex" : "Deep Code"}</Badge>
+          <Badge tone={session.harnessId === "codex" ? "accent" : "neutral"}>{harnessName(session.harnessId)}</Badge>
           {session.status ? <Badge tone={tone}>{session.archived ? "Archived" : readableStatus(session.status)}</Badge> : null}
         </div>
         <div className="lhc-session-meta">
@@ -210,13 +222,18 @@ function SessionRow({ session, appAvailable, terminalAvailable, modelOverride, o
       </div>
       <div className="lhc-session-actions">
         {session.archived ? (
-          <span className="lhc-archived-note"><Archive aria-hidden size={13} strokeWidth={1.7} /> Restore in {session.harnessId === "codex" ? "Codex" : "Deep Code"} first</span>
+          <span className="lhc-archived-note"><Archive aria-hidden size={13} strokeWidth={1.7} /> Restore in {harnessName(session.harnessId)} first</span>
         ) : (
           <>
             {session.harnessId === "codex" ? (
               <Button variant="secondary" disabled={!appAvailable} onClick={() => void onOpen(session, "app")}><AppWindow aria-hidden size={13} strokeWidth={1.7} /> Open app</Button>
             ) : null}
-            <Button variant={session.harnessId === "deepcode" ? "primary" : "ghost"} disabled={!terminalAvailable} title={modelOverride ? `Resume with ${modelOverride}` : undefined} onClick={() => void onOpen(session, "terminal")}>
+            <Button
+              variant={session.harnessId === "codex" ? "ghost" : "primary"}
+              disabled={!terminalAvailable || !session.resumable}
+              title={!session.resumable ? "Open this session in its owning Cursor app first." : modelOverride ? `Resume with ${modelOverride}` : undefined}
+              onClick={() => void onOpen(session, "terminal")}
+            >
               <SquareTerminal aria-hidden size={13} strokeWidth={1.7} /> Resume
             </Button>
           </>
@@ -228,4 +245,10 @@ function SessionRow({ session, appAvailable, terminalAvailable, modelOverride, o
 
 function readableStatus(status: string): string {
   return status.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function harnessName(harnessId: HarnessId): string {
+  if (harnessId === "codex") return "Codex";
+  if (harnessId === "dsh") return "DeepSeek Harness";
+  return "Cursor";
 }

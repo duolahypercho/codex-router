@@ -563,18 +563,20 @@ export interface PresenceSnapshot {
 
 export interface OperationEvent {
   id?: string;
+  name?: string;
   action?: string;
   status?: "started" | "completed" | "failed" | string;
   message?: string;
+  error?: string;
 }
 
-export type HarnessId = "codex" | "deepcode";
+export type HarnessId = "codex" | "dsh" | "gemini" | "cursor" | "claude" | "openclaw";
 export type HarnessSurface = "app" | "terminal";
 
 export interface HarnessDescriptor {
   id: HarnessId;
   displayName: string;
-  ownership: "openai" | "third-party";
+  ownership: "openai" | "deepseek" | "google" | "cursor" | "anthropic" | "openclaw";
   description: string;
   cliInstalled: boolean;
   cliVersion?: string;
@@ -582,6 +584,17 @@ export interface HarnessDescriptor {
   configured: boolean;
   canInstall: boolean;
   installRequirement?: string;
+  publicOrigin?: string;
+  agentConfigured?: boolean;
+  appConfigured?: boolean;
+  tunnel?: {
+    provider: "cloudflare";
+    binaryInstalled: boolean;
+    loggedIn: boolean;
+    configured: boolean;
+    hostname?: string;
+    nextAction: "install-cloudflared" | "login" | "choose-hostname" | "ready";
+  };
   docsUrl: string;
 }
 
@@ -589,6 +602,22 @@ export interface HarnessSnapshot {
   platform: string;
   terminalAvailable: boolean;
   harnesses: HarnessDescriptor[];
+}
+
+export type AgentBridgeId = "anthropic" | "cursor" | "gemini";
+
+export interface AgentBridgeDescriptor {
+  id: AgentBridgeId;
+  displayName: string;
+  protocol: "claude-code" | "acp" | string;
+  installed: boolean;
+  sessions: number;
+  authentication: "client-owned" | "unavailable" | string;
+}
+
+export interface AgentBridgeSnapshot {
+  version: 1;
+  bridges: AgentBridgeDescriptor[];
 }
 
 export interface HarnessSession {
@@ -621,7 +650,11 @@ export interface ContextSessionsSnapshot {
   counts: {
     total: number;
     codex: number;
-    deepcode: number;
+    dsh: number;
+    cursor: number;
+    claude: number;
+    gemini: number;
+    openclaw: number;
     archived: number;
   };
 }
@@ -645,6 +678,7 @@ export interface RouterControlApi {
   repairInstall(): Promise<DoctorSnapshot>;
   getPresence(): Promise<PresenceSnapshot>;
   getHarnesses(): Promise<HarnessSnapshot>;
+  getAgentBridges(): Promise<AgentBridgeSnapshot>;
   getContextSessions(): Promise<ContextSessionsSnapshot>;
   refreshAll(): Promise<unknown>;
   setProviderEnabled(provider: string, enabled: boolean): Promise<unknown>;
@@ -694,7 +728,11 @@ export interface RouterControlApi {
   controlService(action: "status" | "start"): Promise<unknown>;
   controlTray(action: "enable" | "disable" | "status" | "restart"): Promise<unknown>;
   launchHarness(harnessId: HarnessId, surface: HarnessSurface): Promise<unknown>;
-  installHarness(harnessId: "deepcode"): Promise<unknown>;
+  probeAgentBridge(bridgeId: AgentBridgeId): Promise<unknown>;
+  loginAgentBridge(bridgeId: AgentBridgeId): Promise<unknown>;
+  setupHarness(harnessId: HarnessId, hostname?: string): Promise<unknown>;
+  prepareCursorTunnel(): Promise<unknown>;
+  connectCursor(hostname?: string): Promise<unknown>;
   openHarnessSession(harnessId: HarnessId, sessionId: string, surface: HarnessSurface, model?: string): Promise<unknown>;
   openExternal(url: string): Promise<void>;
   onNavigation?(listener: (request: {

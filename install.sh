@@ -17,17 +17,24 @@ no_discovery=false
 previous_revision=
 force=false
 target=codex
+cursor_public_url=
+cursor_hostname=
 
 usage() {
   cat <<'EOF'
 Usage: install.sh [options]
 
-Install external model routes for Codex or DeepSeek Harness.
+Install external model routes for Codex, DeepSeek Harness, Gemini CLI, Cursor, Claude Code, or OpenClaw.
 
 Options:
   --install-dir PATH  Stable checkout used by the background service
   --target APP        Install for "codex" (default), "dsh" (DeepSeek Harness),
-                      or "gemini" (Gemini CLI)
+                      "gemini" (Gemini CLI), "cursor", "claude", or "openclaw"
+  --cursor-public-url URL
+                      Stable HTTPS tunnel origin for Cursor App; forward it
+                      to the local Cursor edge port printed during setup
+  --cursor-hostname HOST
+                      Public hostname for a router-managed Cloudflare named tunnel
   --prepare-only      Install dependencies without changing either app
   --api-key           Alias for --kimi-api-key
   --kimi-api-key      Prompt securely for a Kimi Platform API key
@@ -114,13 +121,23 @@ local_modifications_message() {
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --target)
-      [ "$#" -ge 2 ] || die "--target requires codex, dsh, or gemini"
+      [ "$#" -ge 2 ] || die "--target requires codex, dsh, gemini, cursor, claude, or openclaw"
       target=$2
       shift 2
       ;;
     --install-dir)
       [ "$#" -ge 2 ] || die "--install-dir requires a path"
       install_dir=$2
+      shift 2
+      ;;
+    --cursor-public-url)
+      [ "$#" -ge 2 ] || die "--cursor-public-url requires an HTTPS origin"
+      cursor_public_url=$2
+      shift 2
+      ;;
+    --cursor-hostname)
+      [ "$#" -ge 2 ] || die "--cursor-hostname requires a public hostname"
+      cursor_hostname=$2
       shift 2
       ;;
     --prepare-only)
@@ -200,9 +217,20 @@ while [ "$#" -gt 0 ]; do
 done
 
 case "$target" in
-  codex|dsh|gemini) ;;
-  *) die "--target must be codex, dsh, or gemini" ;;
+  codex|dsh|gemini|cursor|claude|openclaw) ;;
+  *) die "--target must be codex, dsh, gemini, cursor, claude, or openclaw" ;;
 esac
+if [ -n "$cursor_public_url" ]; then
+  [ "$target" = cursor ] || die "--cursor-public-url applies to --target cursor only"
+  MODEL_ROUTER_CURSOR_PUBLIC_BASE_URL=$cursor_public_url
+  export MODEL_ROUTER_CURSOR_PUBLIC_BASE_URL
+fi
+if [ -n "$cursor_hostname" ]; then
+  [ "$target" = cursor ] || die "--cursor-hostname applies to --target cursor only"
+  [ -z "$cursor_public_url" ] || die "use either --cursor-hostname or --cursor-public-url, not both"
+  MODEL_ROUTER_CURSOR_TUNNEL_HOSTNAME=$cursor_hostname
+  export MODEL_ROUTER_CURSOR_TUNNEL_HOSTNAME
+fi
 # Legacy migration replaces an older router's managed Codex config block, and
 # the native catalog is the ChatGPT-plan model list Codex adopts. Neither has a
 # counterpart in the harness, whose integration is one settings section.
@@ -334,9 +362,24 @@ elif [ "$setup_status" -ne 0 ]; then
   restore_previous_revision "setup failed"
 fi
 
-cat <<'EOF'
-
-Codex Router is installed. Fully quit Codex, reopen it, and start a new task.
-The model picker will show only the providers you enabled while preserving
-native GPT models.
-EOF
+case "$target" in
+  dsh)
+    printf '\nCodex Router is installed for DeepSeek Harness. Its route is live on the next request; no restart is needed.\n'
+    ;;
+  gemini)
+    printf '\nCodex Router is installed for Gemini CLI. The next gemini invocation reads the new route.\n'
+    ;;
+  cursor)
+    printf '\nCodex Router is installed for Cursor. Run cursor-router-agent for the CLI; fully quit and reopen Cursor App for its router/... models.\n'
+    ;;
+  claude)
+    printf '\nCodex Router is installed for Claude Code. Run claude-router and choose a codex_router/anthropic/... model.\n'
+    ;;
+  openclaw)
+    printf '\nCodex Router installed OpenClaw and published every routed model under its codex-router provider. Run openclaw to start.\n'
+    ;;
+  *)
+    printf '\nCodex Router is installed. Fully quit Codex, reopen it, and start a new task.\n'
+    printf 'The model picker will show only the providers you enabled while preserving native GPT models.\n'
+    ;;
+esac

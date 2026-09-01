@@ -913,9 +913,11 @@ test("electron boundary does not enable node integration or shell argv", async (
   assert.match(main, /rendererReady\.didFailLoad/);
   assert.match(main, /app\.exit\(1\)/);
   assert.match(main, /commandLine\.includes\("--quit-for-update"\)/);
+  assert.match(main, /\(!primaryInstance \|\| quitForUpdateInvocation\)\) process\.exit\(0\)/);
   assert.match(main, /shouldQuitOnLastWindowClosed\([\s\S]{0,120}app\.quit\(\)/);
   assert.match(main, /LIFECYCLE_QUERY_ARGUMENT/);
   assert.match(main, /queryLifecycleState\(lifecycleFile\)/);
+  assert.match(main, /writeFileSync\(1, `\$\{JSON\.stringify\(queryLifecycleState\(lifecycleFile\)\)\}\\n`\)/);
   assert.match(main, /createdWindow\.on\("hide"[\s\S]{0,140}windowVisible = false/);
   assert.match(main, /app\.on\("will-quit"[\s\S]{0,160}applicationReady = false/);
   assert.match(main, /app\.on\("before-quit"/);
@@ -925,6 +927,7 @@ test("electron boundary does not enable node integration or shell argv", async (
   assert.doesNotMatch(main, /script-src[^;]*'unsafe-inline'/);
   const builder = await readFile(new URL("../apps/control-center/electron-builder.yml", import.meta.url), "utf8");
   assert.match(builder, /extraResources:[\s\S]*icon\.png/);
+  assert.match(builder, /extraResources:[\s\S]*from: \.\.\/\.\.\/src[\s\S]*to: router-src/);
   assert.match(builder, /runAsNode:\s*true/);
   assert.match(builder, /enableEmbeddedAsarIntegrityValidation:\s*true/);
   assert.match(builder, /onlyLoadAppFromAsar:\s*true/);
@@ -984,6 +987,38 @@ test("background usage polling is conservative while manual refresh stays immedi
   assert.doesNotMatch(source, /downloadTimer = window\.setInterval\([\s\S]{0,160}refreshCore/);
 });
 
+test("provider usage reads outlive optional account refreshes", async () => {
+  const source = await readFile(new URL("../apps/control-center/electron/ipc.mjs", import.meta.url), "utf8");
+  assert.match(source, /const PROVIDER_USAGE_TIMEOUT_MS = 120_000/);
+  assert.match(
+    source,
+    /handle\("getProviderUsage"[\s\S]{0,180}\["provider-usage"\][\s\S]{0,120}PROVIDER_USAGE_TIMEOUT_MS/,
+  );
+  assert.match(
+    source,
+    /providerUsage: await runJson\([\s\S]{0,120}\["provider-usage"\][\s\S]{0,120}PROVIDER_USAGE_TIMEOUT_MS/,
+  );
+  assert.doesNotMatch(source, /\["provider-usage"\], \{ timeoutMs: 20_000 \}/);
+});
+
+test("dashboard presents traffic statistics before route and service controls", async () => {
+  const source = await readFile(new URL("../apps/control-center/src/pages/DashboardPage.tsx", import.meta.url), "utf8");
+  const positions = {
+    summary: source.indexOf('className="db-summary-grid"'),
+    traffic: source.indexOf('className="db-traffic-grid"'),
+    activity: source.indexOf("<TokenActivity"),
+    breakdown: source.indexOf('className="db-panel-grid db-dashboard-details"'),
+    events: source.indexOf('className="panel-section db-events-panel"'),
+    routes: source.indexOf("<RouteDashboardPanel"),
+    health: source.indexOf("<ServiceHealthPanel"),
+  };
+  assert.ok(Object.values(positions).every((position) => position >= 0), "every dashboard section should be present");
+  assert.deepEqual(
+    Object.entries(positions).sort((left, right) => left[1] - right[1]).map(([name]) => name),
+    ["summary", "traffic", "activity", "breakdown", "events", "routes", "health"],
+  );
+});
+
 test("preload exposes only the named control operations", async () => {
   const source = await readFile(new URL("../apps/control-center/electron/preload.cjs", import.meta.url), "utf8");
   for (const method of [
@@ -1009,7 +1044,9 @@ test("preload exposes only the named control operations", async () => {
     "setDefaultModel",
     "repairInstall",
     "launchHarness",
-    "installHarness",
+    "setupHarness",
+    "prepareCursorTunnel",
+    "connectCursor",
     "openHarnessSession",
     "openExternal",
   ]) {
@@ -1080,7 +1117,9 @@ test("preload constructs exact positional IPC payloads", async () => {
     ["controlService", ["start"], { action: "start" }],
     ["controlTray", ["status"], { action: "status" }],
     ["launchHarness", ["codex", "app"], { harnessId: "codex", surface: "app" }],
-    ["installHarness", ["deepcode"], { harnessId: "deepcode" }],
+    ["setupHarness", ["cursor", "cursor-router.example.com"], { harnessId: "cursor", hostname: "cursor-router.example.com" }],
+    ["prepareCursorTunnel", [], null],
+    ["connectCursor", ["cursor-router.example.com"], { hostname: "cursor-router.example.com" }],
     ["openHarnessSession", ["codex", "session", "terminal", "model"], { harnessId: "codex", sessionId: "session", surface: "terminal", model: "model" }],
     ["openExternal", ["https://example.com"], { url: "https://example.com" }],
   ];
@@ -1553,14 +1592,54 @@ test("control center focus feedback uses state changes without focus rings", asy
 
 test("harness and context IPC remain fixed and session-scoped", async () => {
   const source = await readFile(new URL("../apps/control-center/electron/ipc.mjs", import.meta.url), "utf8");
-  assert.match(source, /const HARNESS_IDS = \["codex", "deepcode"\]/);
+  assert.match(source, /const HARNESS_IDS = \["codex", "dsh", "gemini", "cursor", "claude", "openclaw"\]/);
   assert.match(source, /const HARNESS_SURFACES = \["app", "terminal"\]/);
   assert.match(source, /const SESSION_UUID = \/\^\[0-9a-f\]/);
-  assert.match(source, /const DEEPCODE_PACKAGE = "@vegamo\/deepcode-cli"/);
+  assert.match(source, /const DSH_SESSION_ID = \/\^session-/);
   assert.match(source, /oneOf\(harnessId, HARNESS_IDS, "Harness"\)/);
-  assert.match(source, /stringValue\(sessionId, "Session", SESSION_UUID\)/);
+  assert.match(source, /harness === "dsh" \? DSH_SESSION_ID : harness === "cursor" \? CURSOR_SESSION_ID : SESSION_UUID/);
   assert.match(source, /codex:\/\/threads\/\$\{id\}/);
-  assert.doesNotMatch(source, /readFileSync\(deepcodeSettings/);
+  assert.match(source, /\["client-setup", harness\]/);
+  assert.doesNotMatch(source, /readFileSync\([^\n]*session\.jsonl\.zstd/);
+});
+
+test("Harness page renders fixed client rows backed by the shared session index", async () => {
+  const harness = await readFile(
+    new URL("../apps/control-center/src/pages/HarnessPage.tsx", import.meta.url),
+    "utf8",
+  );
+  const app = await readFile(new URL("../apps/control-center/src/App.tsx", import.meta.url), "utf8");
+  const styles = await readFile(
+    new URL("../apps/control-center/src/pages/local-harness-context.css", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(harness, /const CLIENT_ORDER: HarnessId\[\] = \["openclaw", "cursor", "claude", "gemini", "dsh", "codex"\]/);
+  assert.match(harness, /api\.getContextSessions\(\)/);
+  assert.match(harness, /api\.getAgentBridges\(\)/);
+  assert.match(harness, /Official-client agent/);
+  assert.match(harness, /bridgeForHarness\(harness\.id, agentBridges\)/);
+  assert.doesNotMatch(harness, /Subscription agent bridges|Credentials.*Unavailable/);
+  assert.match(harness, /api\.connectCursor\(cursorHostname\.trim\(\) \|\| undefined\)/);
+  assert.match(harness, /Use an existing Cloudflare hostname/);
+  assert.match(harness, /Connect Cursor/);
+  assert.match(harness, /One guided setup/);
+  assert.match(harness, /Cursor setup progress/);
+  assert.match(harness, /api\.launchHarness\(harness\.id, "app"\)/);
+  assert.match(harness, /<AppWindow[^>]*\/> Open/);
+  assert.doesNotMatch(harness, /BookOpen|SquareTerminal|Open agent/);
+  assert.doesNotMatch(harness, /Stable public HTTPS origin|127\.0\.0\.1:4214/);
+  assert.match(harness, /assets\/clients\/cursor\.svg/);
+  assert.match(harness, /assets\/clients\/deepseek-harness\.svg/);
+  assert.match(harness, /assets\/clients\/codex-light\.svg/);
+  assert.match(harness, /assets\/clients\/claude\.svg/);
+  assert.match(harness, /assets\/providers\/gemini\.svg/);
+  assert.match(harness, /model\.visible && \(model\.enabled \|\| model\.native\)/);
+  assert.match(app, /OpenClaw, Cursor, Claude, Gemini, DeepSeek, Codex/);
+  assert.match(styles, /\.lhc-harness-list/);
+  assert.match(styles, /\.lhc-harness-row/);
+  assert.match(styles, /\.lhc-harness-logo/);
+  assert.doesNotMatch(`${harness}\n${app}`, /Deep Code/);
 });
 
 test("credential input stays off argv and is delivered over stdin", async () => {

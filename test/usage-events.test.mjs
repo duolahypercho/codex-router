@@ -355,7 +355,7 @@ test("totals separate a pass that ran and aged nothing from one that never ran",
   }
 });
 
-test("token-maxxing shaping contributes savings without being reported as aged", async () => {
+test("RTK compaction shaping contributes savings without being reported as aged", async () => {
   const stateDir = mkdtempSync(path.join(os.tmpdir(), "model-router-usage-"));
   const previousStateDir = process.env.MODEL_ROUTER_STATE_DIR;
   process.env.MODEL_ROUTER_STATE_DIR = stateDir;

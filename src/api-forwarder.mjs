@@ -691,9 +691,12 @@ function normalizeBody(buffer, contentType, route) {
     delete payload.store;
     delete payload.logit_bias;
   }
-  // Fireworks rejects this OpenAI search parameter instead of ignoring it.
-  // Other provider payloads keep it unchanged.
-  if (provider.id === "fireworks") delete payload.web_search_options;
+  // Fireworks and OpenCode Console Go reject this OpenAI search parameter
+  // instead of ignoring it. Keep the repair provider-scoped: other compatible
+  // chat surfaces use the option and must retain it.
+  if (["fireworks", "opencode-go"].includes(provider.id)) {
+    delete payload.web_search_options;
+  }
   // Meta refuses `search_content_types` on anything but a `web_search_preview`
   // tool, and Codex only ever sends the current spelling: its hosted search
   // tool is `type: "web_search"`, carrying search_content_types beside
@@ -815,6 +818,19 @@ function normalizeBody(buffer, contentType, route) {
       if (effort) payload.reasoning_effort = effort;
       else delete payload.reasoning_effort;
     }
+  } else if (model.requestProfile === "ollama-cloud-glm-5-3-flash") {
+    // GLM-5.3-Flash always thinks and rejects every rung outside low/high/max.
+    // Clamp Codex-only rungs onto the ladder this entry declares instead of
+    // letting the generic Ollama map send none/medium and get a 400.
+    if (payload.reasoning_effort !== undefined) {
+      const effort = declaredEffort(
+        payload.reasoning_effort,
+        (model.reasoningLevels || []).map((level) => level.effort),
+      );
+      if (effort) payload.reasoning_effort = effort;
+      else delete payload.reasoning_effort;
+    }
+    delete payload.think;
   } else if (model.requestProfile === "qwen-plan") {
     // DashScope documents reasoning_effort only for the cross-vendor
     // DeepSeek/GLM models it resells (high/max; low/medium collapse to high,

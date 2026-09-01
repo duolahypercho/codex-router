@@ -389,6 +389,13 @@ button {
   font-weight: 520;
 }
 
+.primary-nav .badge {
+  min-height: 16px;
+  padding: 1px 5px;
+  font-size: 7px;
+  letter-spacing: 0.035em;
+}
+
 .nav-group-label {
   margin: 14px 8px 4px;
   color: var(--ink-faint);
@@ -502,6 +509,13 @@ button {
 .title-tabs span {
   color: var(--ink-subtle);
   font-size: 10.5px;
+}
+
+.title-tabs .badge {
+  min-height: 17px;
+  padding: 1px 5px;
+  color: var(--warning);
+  font-size: 7.5px;
 }
 
 .titlebar-spacer {

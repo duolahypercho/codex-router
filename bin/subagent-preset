@@ -7,7 +7,8 @@ case "${MODEL_ROUTER_TARGET:-codex}" in
   dsh) ;;
   codex) echo "Codex configures native subagents with ./bin/multi-agent." >&2; exit 2 ;;
   gemini) echo "The router does not configure Gemini CLI subagents; it publishes models, not agent definitions." >&2; exit 2 ;;
-  *) echo "MODEL_ROUTER_TARGET must be codex, dsh, or gemini." >&2; exit 2 ;;
+  cursor) echo "The router does not configure Cursor subagents; it publishes routed models to Cursor." >&2; exit 2 ;;
+  *) echo "MODEL_ROUTER_TARGET must be codex, dsh, gemini, or cursor." >&2; exit 2 ;;
 esac
 node --input-type=module -e '
 import { subagentPreset } from "./src/dsh-config-manager.mjs";

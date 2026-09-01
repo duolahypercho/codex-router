@@ -519,6 +519,11 @@ h2 {
   r: 4.5;
 }
 
+.chart-point.router-fallback {
+  stroke: var(--amber);
+  stroke-dasharray: 2 2;
+}
+
 .chart-tooltip {
   position: absolute;
   z-index: 3;

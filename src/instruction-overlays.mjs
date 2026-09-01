@@ -17,14 +17,7 @@ const OVERLAYS = {
 - Treat ordinary local filesystem paths as files, never as MCP resource URIs. Use an available filesystem or shell tool, such as exec_command, to inspect local files.
 - Call read_mcp_resource only with a server name and URI returned by MCP resource or resource-template discovery in the current session. Never invent an MCP server name such as file.
 - If an MCP read reports an unknown server or invalid URI, do not repeat the same invalid call for other local paths. Return to the available filesystem tools. Keep using read_mcp_resource for valid resources returned by MCP discovery.`,
-  "token-maxxing": `## Context pressure mode
-- Be terse in commentary and final prose while keeping code, commands, errors, and required evidence exact.
-- Prefer targeted reads, bounded output, and commands that report failures or summaries. Do not reread context already present.
-- Continue through routine work without narration. Use tools only when they materially advance the task.
-- Treat shaped tool output as a compact view. Repeat its named source call only when omitted detail is necessary.`,
 };
-
-export const TOKEN_MAXXING_PRESSURE_RATIO = 0.7;
 
 export function instructionOverlayExists(name) {
   return typeof name === "string" && Object.hasOwn(OVERLAYS, name);
@@ -34,25 +27,4 @@ export function applyInstructionOverlay(text, name) {
   if (typeof text !== "string" || !name) return text;
   const overlay = OVERLAYS[name];
   return overlay ? `${text}\n\n${overlay}` : text;
-}
-
-export function tokenMaxxingActive({
-  enabled = false,
-  estimatedTokens,
-  autoCompact,
-  pressureRatio = TOKEN_MAXXING_PRESSURE_RATIO,
-} = {}) {
-  if (!enabled) return false;
-  if (!Number.isFinite(estimatedTokens) || estimatedTokens < 0) return false;
-  if (!Number.isFinite(autoCompact) || autoCompact <= 0) return false;
-  if (!Number.isFinite(pressureRatio) || pressureRatio <= 0 || pressureRatio > 1) return false;
-  return estimatedTokens >= Math.ceil(autoCompact * pressureRatio);
-}
-
-export function applyTokenMaxxingOverlay(text, options = {}) {
-  if (options.active !== true && !tokenMaxxingActive(options)) return text;
-  const overlay = OVERLAYS["token-maxxing"];
-  return typeof text === "string" && text
-    ? `${text}\n\n${overlay}`
-    : overlay;
 }

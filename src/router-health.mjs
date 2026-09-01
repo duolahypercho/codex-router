@@ -14,7 +14,7 @@ const SERVICE_BY_TARGET = {
 // alongside `supportedTargets` in paths.mjs; a target missing here fails
 // `doctor` and `wait-health` with "Unknown router target" long before anything
 // about the integration itself is exercised.
-const SUPPORTED_TARGETS = new Set(["codex", "dsh", "gemini"]);
+const SUPPORTED_TARGETS = new Set(["codex", "dsh", "gemini", "cursor", "claude", "openclaw"]);
 const MAX_ERROR_GRAPH_DEPTH = 8;
 
 function transportCodes(error) {

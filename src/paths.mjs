@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 
 import { trayBundleDir } from "./tray-install.mjs";
 
-const supportedTargets = new Set(["codex", "dsh", "gemini"]);
+const supportedTargets = new Set(["codex", "dsh", "gemini", "cursor", "claude", "openclaw"]);
 
 export const TARGET = process.env.MODEL_ROUTER_TARGET || "codex";
 if (!supportedTargets.has(TARGET)) {
@@ -28,6 +28,9 @@ export const ROUTER_PLANE_TARGET = "codex";
 const TARGET_DISPLAY_NAMES = Object.freeze({
   dsh: "DeepSeek Harness Router",
   gemini: "Gemini CLI Router",
+  cursor: "Cursor Router",
+  claude: "Claude Code Router",
+  openclaw: "OpenClaw Router",
   codex: "Codex Router",
 });
 export const TARGET_DISPLAY_NAME = TARGET_DISPLAY_NAMES[TARGET] || TARGET_DISPLAY_NAMES.codex;
@@ -78,6 +81,28 @@ export const GEMINI_HOME = path.join(
 export const GEMINI_ENV_PATH =
   process.env.MODEL_ROUTER_GEMINI_ENV || path.join(GEMINI_HOME, ".env");
 
+export const CURSOR_HOME = process.env.CURSOR_HOME || (
+  process.platform === "darwin"
+    ? path.join(os.homedir(), "Library", "Application Support", "Cursor")
+    : process.platform === "win32"
+      ? path.join(process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming"), "Cursor")
+      : path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config"), "Cursor")
+);
+export const CURSOR_STATE_DB_PATH = process.env.MODEL_ROUTER_CURSOR_STATE_DB ||
+  path.join(CURSOR_HOME, "User", "globalStorage", "state.vscdb");
+export const CURSOR_LAUNCHER_PATH = process.env.MODEL_ROUTER_CURSOR_LAUNCHER || (
+  process.platform === "win32"
+    ? path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local"), "codex-router", "bin", "cursor-router-agent.cmd")
+    : path.join(os.homedir(), ".local", "bin", "cursor-router-agent")
+);
+export const CLAUDE_HOME = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude");
+export const CLAUDE_SETTINGS_PATH = path.join(CLAUDE_HOME, "settings.json");
+export const CLAUDE_LAUNCHER_PATH = process.env.MODEL_ROUTER_CLAUDE_LAUNCHER || (
+  process.platform === "win32"
+    ? path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local"), "codex-router", "bin", "claude-router.cmd")
+    : path.join(os.homedir(), ".local", "bin", "claude-router")
+);
+
 function managedStateDir() {
   return (
     process.env.CODEX_ROUTER_STATE_DIR ||
@@ -107,11 +132,19 @@ export const DSH_CATALOG_PATH = path.join(STATE_DIR, "dsh-models.json");
 // be there and trusting the answer. Its presence is what says the integration
 // is installed.
 export const GEMINI_CATALOG_PATH = path.join(STATE_DIR, "gemini-models.json");
+export const CURSOR_CATALOG_PATH = path.join(STATE_DIR, "cursor-models.json");
+export const CLAUDE_CATALOG_PATH = path.join(STATE_DIR, "claude-models.json");
+export const OPENCLAW_CATALOG_PATH = path.join(STATE_DIR, "openclaw-models.json");
+// Router-owned Cloudflare named-tunnel metadata. The tunnel exposes only the
+// separately keyed Cursor App edge on 4214; it never points at the main router.
+export const CURSOR_TUNNEL_STATE_PATH = path.join(STATE_DIR, "cursor-tunnel.json");
+export const CURSOR_TUNNEL_CONFIG_PATH = path.join(STATE_DIR, "cursor-cloudflared.yml");
 export const NATIVE_ALIAS_PATH = path.join(STATE_DIR, "native-aliases.json");
 export const ANNOUNCED_MODELS_PATH = path.join(STATE_DIR, "announced-models.json");
 export const LITELLM_CONFIG_PATH = path.join(STATE_DIR, "litellm.yaml");
 export const INTERNAL_SECRET_PATH = path.join(STATE_DIR, "internal-secret");
 export const CALLER_SECRET_PATH = path.join(STATE_DIR, "caller-secret");
+export const CURSOR_PUBLIC_SECRET_PATH = path.join(STATE_DIR, "cursor-public-secret");
 export const CODEX_PROVIDER_MODE_PATH = path.join(STATE_DIR, "codex-provider-mode.json");
 export const LOGIN_FREE_REFRESH_JOURNAL_PATH = path.join(
   STATE_DIR,
@@ -225,6 +258,7 @@ export const DEFAULT_PORTS = Object.freeze({
   grokOauth: 4208,
   devinCli: 4210,
   antigravityOauth: 4212,
+  cursorPublic: 4214,
 });
 
 // Ports used before the BrlAPI-safe defaults shipped. They remain recognized
@@ -258,6 +292,7 @@ export const PORTS = {
   grokOauth: port("MODEL_ROUTER_GROK_OAUTH_PORT", DEFAULT_PORTS.grokOauth),
   devinCli: port("MODEL_ROUTER_DEVIN_CLI_PORT", DEFAULT_PORTS.devinCli),
   antigravityOauth: port("MODEL_ROUTER_ANTIGRAVITY_OAUTH_PORT", DEFAULT_PORTS.antigravityOauth),
+  cursorPublic: port("MODEL_ROUTER_CURSOR_PUBLIC_PORT", DEFAULT_PORTS.cursorPublic),
 };
 
 export function loopback(portNumber, suffix = "") {
