@@ -174,6 +174,13 @@ function protectPrivateFilesWin32(paths) {
         env: windowsPowerShellEnvironment(list),
         stdio: ["ignore", "ignore", "pipe"],
         timeout: 15_000,
+        // Every private write reaches this helper, including the ones a
+        // Control Center status refresh performs. A console child of a GUI
+        // parent gets its own window unless this is set, which is how a
+        // routine refresh produced a burst of visible PowerShell windows
+        // (issue #565). The script is non-interactive and its stdio is
+        // already redirected, so nothing is hidden from the operator.
+        windowsHide: true,
       },
     );
   } catch (error) {
@@ -345,6 +352,9 @@ export function privateFileIsProtected(target) {
         env: { ...process.env, CODEX_ROUTER_PRIVATE_FILE: target },
         stdio: ["ignore", "pipe", "ignore"],
         timeout: 15_000,
+        // Verification runs from the same GUI-parented paths as the write
+        // above; see issue #565.
+        windowsHide: true,
       },
     ).trim().toLowerCase() === "true";
   } catch {

@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **The Windows Control Center no longer flashes PowerShell windows.** A console
+  process spawned by a parent that has no console of its own — the Electron
+  Control Center and the tray — gets its own window unless `windowsHide` is set,
+  and four background helpers were missing it. The one every private write
+  reaches meant a burst of visible windows on each status refresh, which is why
+  it showed up on every message sent (#565). The private-file ACL writer and its
+  verifier, scheduled-task registration, and the tray's task-state poll now all
+  hide. Interactive prompts are untouched: they inherit a console the operator is
+  already looking at, and hiding it would ask for input through a window nobody
+  can see. A source-level test holds the line, since the failure is invisible off
+  Windows.
 - **Request bodies are decompressed off the event loop, and an oversize zstd
   frame is refused from its header.** Codex zstd-compresses every request, so
   the router inflated a buffer that grows with the conversation on the thread
