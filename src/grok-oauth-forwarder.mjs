@@ -68,10 +68,23 @@ const PROGRESS_ONLY_MIN_OUTPUT_TOKENS = envNonNegativeInt(
   "CODEX_ROUTER_GROK_PROGRESS_ONLY_MIN_OUTPUT_TOKENS",
   DEFAULT_PROGRESS_ONLY_MIN_OUTPUT_TOKENS,
 );
+const MAX_PROGRESS_ONLY_CONVERSATIONS = 1_024;
+const progressOnlyConversations = new Set();
 
 function envNonNegativeInt(name, fallback) {
   const parsed = Number(process.env[name]);
   return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : fallback;
+}
+
+function rememberProgressOnlyConversation(id) {
+  if (!id) return;
+  // Refresh insertion order so the bounded set retains recently affected
+  // conversations rather than the first conversations seen by the process.
+  progressOnlyConversations.delete(id);
+  progressOnlyConversations.add(id);
+  while (progressOnlyConversations.size > MAX_PROGRESS_ONLY_CONVERSATIONS) {
+    progressOnlyConversations.delete(progressOnlyConversations.values().next().value);
+  }
 }
 
 async function drainUpstreamBody(body) {
@@ -511,6 +524,16 @@ async function handleChatCompletions(request, response) {
   const mayRetry =
     PROGRESS_ONLY_RETRY && (afterToolResult || requestOffersClientTools(chat));
   const strictAfterToolRepair = PROGRESS_ONLY_RETRY && afterToolResult;
+  const conversationKey = conversationId(chat?.messages);
+  // Attempt 1 normally stays live. Once this exact conversation has actually
+  // produced a progress-only stop, buffer only its next short visible prefix.
+  // That prevents an aborted/retried turn from committing the same status
+  // sentence again without imposing the old first-byte hold on healthy chats.
+  let bufferShortProgress =
+    wantsStream &&
+    mayRetry &&
+    !strictAfterToolRepair &&
+    progressOnlyConversations.has(conversationKey);
 
   const controller = new AbortController();
   request.once("aborted", () => controller.abort());
@@ -597,8 +620,17 @@ async function handleChatCompletions(request, response) {
   const emitPendingDeltas = () => {
     if (!wantsStream || !streamStarted) return;
     while (emittedDeltaCount < turnState.deltas.length) {
+      const delta = turnState.deltas[emittedDeltaCount];
+      if (
+        bufferShortProgress &&
+        Object.hasOwn(delta, "content") &&
+        turnState.toolCalls.length === 0 &&
+        turnState.contentText.length <= PROGRESS_ONLY_MAX_TEXT
+      ) {
+        return;
+      }
       response.write(
-        OPENAI_ROLE_CHUNK(id, created, model, turnState.deltas[emittedDeltaCount]),
+        OPENAI_ROLE_CHUNK(id, created, model, delta),
       );
       emittedDeltaCount += 1;
     }
@@ -615,6 +647,7 @@ async function handleChatCompletions(request, response) {
   let repairFailure;
 
   const progressOnly = isProgressOnlyStop(turn, { ...holdOptions, afterToolResult });
+  if (progressOnly) rememberProgressOnlyConversation(conversationKey);
   if (progressOnly && strictAfterToolRepair && !mayRetry) {
     repairFailure = {
       code: "progress_only_no_client_tools",
@@ -719,6 +752,11 @@ async function handleChatCompletions(request, response) {
     });
     return;
   }
+
+  // A normal short answer, a failed optional repair, or the keep-first branch
+  // must still deliver attempt 1. The retry-tools branch has already advanced
+  // emittedDeltaCount past the suppressed prefix, so releasing is a no-op there.
+  bufferShortProgress = false;
 
   if (wantsStream) {
     const wasStarted = streamStarted;

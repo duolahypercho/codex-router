@@ -13,6 +13,15 @@
   small spawn-model override window; renumbering it would crowd it out. Only
   the published entry changes: failover ranking, the vision bridge, and every
   other client keep reading the registry's authored value.
+- **Grok OAuth no longer replays a known progress-only sentence after an
+  aborted follow-up.** The first affected turn remains fully live. Once a
+  conversation has actually produced the progress-only shape, later
+  user-message turns buffer only a short visible prefix while leaving the
+  response head and preceding reasoning live. A real tool call or longer
+  answer releases that prefix immediately; an upstream abort reports its terminal
+  stream error without first committing the same status sentence to Codex
+  again. Evidence is retained in a bounded in-memory conversation set.
+
 - **Request bodies are decompressed off the event loop, and an oversize zstd
   frame is refused from its header.** Codex zstd-compresses every request, so
   the router inflated a buffer that grows with the conversation on the thread
