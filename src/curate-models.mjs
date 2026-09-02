@@ -18,6 +18,7 @@ import {
   hasDefaultUserModelReasoning,
   readUserModels,
   userModelEntry,
+  userModelEntryFromCatalog,
   userModelIdentity,
   writeUserModels,
 } from "./user-models.mjs";
@@ -354,10 +355,12 @@ function chooseInteractively(candidates, curated) {
   let selected = new Set(
     candidates.map((id, index) => (curated.has(id) ? index + 1 : undefined)).filter(Boolean),
   );
+  const metadataNotice = provider.modelGarden
+    ? "Verified Vertex support metadata will be applied automatically.\n"
+    : "You will be asked for each new model's context window, image support,\n" +
+      "and reasoning efforts; every value stays editable later.\n";
   process.stdout.write(
-    `\nChoose ${provider.displayName} models to add to the picker.\n` +
-      "You will be asked for each new model's context window, image support,\n" +
-      "and reasoning efforts; every value stays editable later.\n",
+    `\nChoose ${provider.displayName} models to add to the picker.\n${metadataNotice}`,
   );
   for (;;) {
     process.stdout.write(`${renderRows(candidates, curated, selected)}\n`);
@@ -592,9 +595,18 @@ async function main() {
     removals: effectiveRemovals,
     interactive: interactiveSelection,
   });
+  const vertexCatalogModels = new Map(
+    (discovery.supportedModels || []).map((model) => [model.id, model]),
+  );
   const nextMine = [
     ...surviving,
     ...additions.map((id, index) => {
+      if (providerId === "vertex") {
+        return userModelEntryFromCatalog({
+          providerId,
+          catalogModel: vertexCatalogModels.get(id),
+        });
+      }
       // Ask for metadata before the profile so interactive prompts stay under
       // one model heading and in the order they are printed.
       const metadata = metadataFor(id);

@@ -771,8 +771,10 @@ async function main() {
             if (provider.kind === "oauth") {
               return `  ${provider.displayName}: ${oauthSetupHint(provider)}\n`;
             }
-            const key = `./bin/provider-key ${provider.id} set`;
-            return `  ${provider.displayName}: ${key}\n`;
+            const setup = provider.credential?.resolver
+              ? credentialSetupHint(provider)
+              : `./bin/provider-key ${provider.id} set`;
+            return `  ${provider.displayName}: ${setup}\n`;
           })
           .join("") +
         (retainedPending.length

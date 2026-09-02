@@ -1080,6 +1080,7 @@ struct ProviderIcon: View {
 
   private var assetName: String? {
     if providerID == "openai" { return "openai" }
+    if providerID == "vertex" { return "google" }
     if providerID.hasPrefix("grok") { return "grok" }
     if providerID.hasPrefix("kimi") { return "kimi" }
     if providerID == "deepseek" { return "deepseek" }
@@ -1107,11 +1108,12 @@ struct ProviderIcon: View {
   private var assetExtension: String {
     // Keyed off the asset, not the provider id, so every route sharing a mark
     // (opencode-go and friends) resolves the same file type.
-    ["github-copilot", "chutes", "opencode-free", "kilo-free", "nano-gpt"].contains(assetName ?? "") ? "svg" : "png"
+    ["github-copilot", "chutes", "google", "opencode-free", "kilo-free", "nano-gpt"].contains(assetName ?? "") ? "svg" : "png"
   }
 
   private var providerName: String {
     if providerID == "openai" { return "ChatGPT" }
+    if providerID == "vertex" { return "Google Cloud Vertex AI" }
     if providerID.hasPrefix("grok") { return "Grok" }
     if providerID.hasPrefix("kimi") { return "Kimi" }
     if providerID == "deepseek" { return "DeepSeek" }

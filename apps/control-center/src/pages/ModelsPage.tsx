@@ -159,6 +159,7 @@ export function ModelsPage({ target, catalog, setup, usage, api, refreshing, dat
   const [addModelsOpen, setAddModelsOpen] = useState(false);
   const [loadingConnectedCatalogs, setLoadingConnectedCatalogs] = useState(false);
   const [credentialProvider, setCredentialProvider] = useState<ProviderSetup | null>(null);
+  const [configurationProvider, setConfigurationProvider] = useState<ProviderSetup | null>(null);
   const [removeProvider, setRemoveProvider] = useState<ProviderSetup | null>(null);
   const [catalogStates, setCatalogStates] = useState<Record<string, CatalogViewState>>({});
   const catalogRequestGenerations = useRef<Record<string, number>>({});
@@ -461,6 +462,7 @@ export function ModelsPage({ target, catalog, setup, usage, api, refreshing, dat
           : `Start ${entry.displayName} sign-in`;
         void runProviderCredentialAction(entry.setup, label, () => api.connectProvider(entry.id));
       }}
+      onConfigure={(entry) => entry.setup && setConfigurationProvider(entry.setup)}
       onKey={(entry) => entry.setup && setCredentialProvider(entry.setup)}
       onRemove={(entry) => entry.setup && setRemoveProvider(entry.setup)}
     />
@@ -474,6 +476,20 @@ export function ModelsPage({ target, catalog, setup, usage, api, refreshing, dat
           : Promise.resolve()}
         onClose={() => setCredentialProvider(null)}
       />
+      <Dialog
+        open={Boolean(configurationProvider)}
+        title={`Configure ${configurationProvider?.displayName || "provider"}`}
+        description="This provider uses local configuration rather than an API key."
+        onClose={() => setConfigurationProvider(null)}
+      >
+        <div className="pm-credential-warning">
+          <ShieldCheck aria-hidden size={17} strokeWidth={1.7} />
+          <p>{configurationProvider?.configurationNote || "Run the provider's local configuration command, then refresh this page."}</p>
+        </div>
+        <div className="dialog-actions">
+          <Button variant="secondary" onClick={() => setConfigurationProvider(null)}>Close</Button>
+        </div>
+      </Dialog>
       <Dialog open={Boolean(removeProvider)} title="Disconnect provider" description="The provider is withdrawn from installed clients before its managed credential is deleted." onClose={() => setRemoveProvider(null)}>
         <div className="pm-credential-warning"><ShieldCheck aria-hidden size={17} strokeWidth={1.7} /><p>{removeProvider?.id === "antigravity-oauth"
           ? "This removes only the router-owned OAuth client, session, and live proof. Official Antigravity or agy credentials are never read or changed."
@@ -608,6 +624,7 @@ export function ModelsPage({ target, catalog, setup, usage, api, refreshing, dat
         const entry = directoryById.get(providerId);
         if (!entry?.setup) return;
         if (entry.setup.kind === "oauth" || entry.setup.signIn) openProviderMenu(providerId);
+        else if (entry.setup.kind === "configuration") setConfigurationProvider(entry.setup);
         else setCredentialProvider(entry.setup);
       }}
     />
@@ -825,6 +842,7 @@ function ConnectionsBar({
   isEnabled,
   onEnabledChange,
   onSignIn,
+  onConfigure,
   onKey,
   onRemove,
 }: {
@@ -841,6 +859,7 @@ function ConnectionsBar({
   isEnabled: (entry: ProviderDirectoryEntry) => boolean;
   onEnabledChange: (entry: ProviderDirectoryEntry, checked: boolean) => void;
   onSignIn: (entry: ProviderDirectoryEntry) => void;
+  onConfigure: (entry: ProviderDirectoryEntry) => void;
   onKey: (entry: ProviderDirectoryEntry) => void;
   onRemove: (entry: ProviderDirectoryEntry) => void;
 }) {
@@ -929,6 +948,7 @@ function ConnectionsBar({
                       setConnectMenuOpen(false);
                       if (!entry.setup) return;
                       if (entry.setup.kind === "oauth" || entry.setup.signIn) onSignIn(entry);
+                      else if (entry.setup.kind === "configuration") onConfigure(entry);
                       else if (entry.setup.kind === "anonymous") onEnabledChange(entry, true);
                       else onKey(entry);
                     }}
@@ -1699,6 +1719,7 @@ function connectionMethod(entry: ProviderDirectoryEntry): string {
   if (entry.setup.action === "probe") return "Live test required";
   if (entry.setup.action === "blocked") return "Disconnect required";
   if (entry.setup.kind === "oauth") return "Sign-in";
+  if (entry.setup.kind === "configuration") return "Local configuration";
   if (entry.setup.kind === "anonymous") return "No key needed";
   if (entry.setup.signIn) return "Key or sign-in";
   return entry.setup.credentialLabel || "API key";
@@ -1707,6 +1728,11 @@ function connectionMethod(entry: ProviderDirectoryEntry): string {
 function connectionDetail(entry: ProviderDirectoryEntry, accountStatus?: string, accountMessage?: string, canOpenTerminal?: boolean): string {
   if (entry.id === "openai") return "Uses the signed-in ChatGPT session available to this Codex installation.";
   if (!entry.setup) return "This provider catalog is managed by the router and has no separate credential action here.";
+  if (entry.setup.kind === "configuration") {
+    return entry.setup.configured
+      ? "Google Cloud Application Default Credentials and the protected Vertex project/location are ready."
+      : entry.setup.configurationNote || "Run the provider's local configuration command, then refresh this page.";
+  }
   if (entry.setup.kind === "anonymous") return "No API key is required. Make it available before routed prompts or catalog loading can use its endpoint.";
   if (entry.setup.action === "probe") return entry.setup.probeNote || "Run the explicit live compatibility test; it sends a small prompt and uses provider quota.";
   if (entry.setup.action === "blocked") return entry.setup.blockedNote || "Disconnect the incompatible router record before signing in again.";

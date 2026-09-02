@@ -433,6 +433,7 @@ enum RouterArabicText {
     "%d selected": "%d محدَّد",
     "Add selected": "أضف المحدَّد",
     "Load the current list from this provider.": "حمّل القائمة الحالية من هذا المزوّد.",
+    "Run the provider's local configuration command, then refresh": "شغّل أمر الإعداد المحلي لمزوّد الخدمة، ثم حدّث",
     "saved list": "قائمة محفوظة",
     "live list": "قائمة مباشرة",
     "%d models · %d added · %@": "%d نموذج · %d مُضاف · %@",

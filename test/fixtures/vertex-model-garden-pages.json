@@ -1,0 +1,40 @@
+{
+  "publishers": {
+    "anthropic": {
+      "pages": [
+        {
+          "publisherModels": [
+            {
+              "name": "publishers/anthropic/models/claude-sonnet-5@20250514"
+            },
+            {
+              "name": "publishers/anthropic/models/claude-not-supported@20260101"
+            }
+          ],
+          "nextPageToken": "anthropic-page-two"
+        },
+        {
+          "publisherModels": [
+            {
+              "name": "publishers/anthropic/models/claude-opus-5@20250201"
+            }
+          ]
+        }
+      ]
+    },
+    "google": {
+      "pages": [
+        {
+          "publisherModels": [
+            {
+              "name": "publishers/google/models/gemini-2.5-flash"
+            },
+            {
+              "name": "publishers/google/models/gemini-not-supported"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

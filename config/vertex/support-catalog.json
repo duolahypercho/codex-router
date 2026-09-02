@@ -1,0 +1,85 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "id": "claude-opus-5@20250201",
+      "adapter": "vertex-anthropic-messages",
+      "publisher": "anthropic",
+      "displayName": "Claude Opus 5 (Vertex AI)",
+      "description": "Claude Opus 5 through Google Cloud Vertex AI.",
+      "priority": 27,
+      "capabilities": {
+        "defaultEffort": "high",
+        "reasoningLevels": [
+          { "effort": "low", "description": "Minimal thinking, fastest responses" },
+          { "effort": "medium", "description": "Balanced adaptive thinking" },
+          { "effort": "high", "description": "Adaptive deep reasoning for agentic work" },
+          { "effort": "xhigh", "description": "Extended thinking, recommended for coding" },
+          { "effort": "max", "description": "Maximum reasoning depth" }
+        ],
+        "contextWindow": 1048576,
+        "autoCompact": 900000,
+        "inputModalities": ["text", "image"]
+      }
+    },
+    {
+      "id": "claude-sonnet-5@20250514",
+      "adapter": "vertex-anthropic-messages",
+      "publisher": "anthropic",
+      "displayName": "Claude Sonnet 5 (Vertex AI)",
+      "description": "Claude Sonnet 5 through Google Cloud Vertex AI.",
+      "priority": 28,
+      "capabilities": {
+        "defaultEffort": "high",
+        "reasoningLevels": [
+          { "effort": "low", "description": "Faster reasoning" },
+          { "effort": "medium", "description": "Balanced reasoning" },
+          { "effort": "high", "description": "Deep reasoning" },
+          { "effort": "xhigh", "description": "Extended reasoning" },
+          { "effort": "max", "description": "Maximum reasoning depth" }
+        ],
+        "contextWindow": 1000000,
+        "autoCompact": 900000,
+        "inputModalities": ["text", "image"]
+      }
+    },
+    {
+      "id": "gemini-2.5-flash",
+      "adapter": "vertex-openai-chat",
+      "publisher": "google",
+      "displayName": "Gemini 2.5 Flash (Vertex AI)",
+      "description": "Gemini 2.5 Flash through the Vertex AI OpenAI-compatible endpoint.",
+      "priority": 29,
+      "capabilities": {
+        "defaultEffort": "high",
+        "reasoningLevels": [
+          { "effort": "low", "description": "Fast responses" },
+          { "effort": "medium", "description": "Balanced responses" },
+          { "effort": "high", "description": "Deeper reasoning" }
+        ],
+        "contextWindow": 1048576,
+        "autoCompact": 900000,
+        "inputModalities": ["text", "image"]
+      }
+    },
+    {
+      "id": "gemini-2.5-pro",
+      "adapter": "vertex-openai-chat",
+      "publisher": "google",
+      "displayName": "Gemini 2.5 Pro (Vertex AI)",
+      "description": "Gemini 2.5 Pro through the Vertex AI OpenAI-compatible endpoint.",
+      "priority": 30,
+      "capabilities": {
+        "defaultEffort": "high",
+        "reasoningLevels": [
+          { "effort": "medium", "description": "Balanced reasoning" },
+          { "effort": "high", "description": "Deep reasoning" },
+          { "effort": "xhigh", "description": "Extended reasoning" }
+        ],
+        "contextWindow": 1048576,
+        "autoCompact": 900000,
+        "inputModalities": ["text", "image"]
+      }
+    }
+  ]
+}

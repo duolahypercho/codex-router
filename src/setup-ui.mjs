@@ -9,6 +9,7 @@ const ACTION_LABELS = Object.freeze({
   install: "needs CLI install",
   blocked: "CLI blocked by Windows",
   anonymous: "no API key",
+  configure: "needs local configuration",
 });
 
 const COLOR_CODES = Object.freeze({

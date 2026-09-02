@@ -308,7 +308,7 @@ export interface RouterCatalogSnapshot {
 export interface ProviderSetup {
   id: string;
   displayName: string;
-  kind: "oauth" | "api" | "anonymous" | "per-model";
+  kind: "oauth" | "api" | "anonymous" | "per-model" | "configuration";
   configured: boolean;
   action: string;
   planNote?: string;
@@ -318,6 +318,7 @@ export interface ProviderSetup {
     kind: "models-endpoint" | "devin" | string;
   }>;
   credentialLabel?: string;
+  configurationNote?: string;
   cliInstalled?: boolean;
   cliRunnable?: boolean;
   signIn?: boolean;

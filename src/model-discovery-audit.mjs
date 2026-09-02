@@ -68,6 +68,12 @@ function defaultReadiness(provider) {
       reason: "This catalog requires a local Devin CLI session and cannot use a repository API-key secret.",
     };
   }
+  if (provider.credential?.resolver) {
+    return {
+      ready: false,
+      reason: "This catalog requires local Google Cloud ADC and cannot use a repository API-key secret.",
+    };
+  }
   if (provider.kind !== "openai-compatible") {
     return { ready: false, reason: "This provider has no repository-auditable model endpoint." };
   }

@@ -123,6 +123,7 @@ function endpointOrigin(url) {
 export async function validateDiscoveryUrl(value, {
   allowPrivate = false,
   credentialBearing = false,
+  allowQuery = false,
   expectedOrigin,
   resolveHost = lookupHost,
 } = {}) {
@@ -132,7 +133,13 @@ export async function validateDiscoveryUrl(value, {
   } catch {
     throw new Error("Model discovery endpoint must be an absolute HTTP(S) URL.");
   }
-  if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password || parsed.hash || parsed.search) {
+  if (
+    !['http:', 'https:'].includes(parsed.protocol) ||
+    parsed.username ||
+    parsed.password ||
+    parsed.hash ||
+    (!allowQuery && parsed.search)
+  ) {
     throw new Error("Model discovery endpoint must be a credential-free HTTP(S) URL without query or fragment.");
   }
   const origin = endpointOrigin(parsed);
@@ -240,7 +247,7 @@ async function boundedBody(response, maxBytes) {
   throw new Error("Provider model catalog response has no readable body.");
 }
 
-function validateRecordShape(record, index, maxRecordBytes) {
+function validateRecordShape(record, index, maxRecordBytes, recordIdFields) {
   if (!record || typeof record !== "object" || Array.isArray(record)) {
     throw new Error(`Provider model catalog record ${index} is invalid.`);
   }
@@ -249,7 +256,9 @@ function validateRecordShape(record, index, maxRecordBytes) {
   if (Buffer.byteLength(serialized, "utf8") > maxRecordBytes) {
     throw new Error(`Provider model catalog record ${index} exceeds the record size limit.`);
   }
-  const id = record.id ?? record.model ?? record.upstreamId ?? record.slug;
+  const id = recordIdFields
+    .map((field) => record[field])
+    .find((value) => value !== undefined && value !== null);
   if (typeof id !== "string" || !id.trim() || id.length > 512 || /[\u0000-\u001f\u007f]/.test(id)) {
     throw new Error(`Provider model catalog record ${index} has an invalid model id.`);
   }
@@ -258,10 +267,14 @@ function validateRecordShape(record, index, maxRecordBytes) {
 export function validateModelCatalogPayload(payload, {
   maxModels = MODEL_DISCOVERY_MAX_MODELS,
   maxRecordBytes = MODEL_DISCOVERY_MAX_RECORD_BYTES,
+  collectionFields = ["data", "models"],
+  recordIdFields = ["id", "model", "upstreamId", "slug"],
 } = {}) {
-  const data = Array.isArray(payload) ? payload : payload?.data ?? payload?.models;
+  const data = Array.isArray(payload)
+    ? payload
+    : collectionFields.map((field) => payload?.[field]).find(Array.isArray);
   if (!Array.isArray(data) || data.length > maxModels) throw new Error("Provider returned an invalid or oversized model catalog.");
-  data.forEach((record, index) => validateRecordShape(record, index, maxRecordBytes));
+  data.forEach((record, index) => validateRecordShape(record, index, maxRecordBytes, recordIdFields));
   return data;
 }
 
@@ -274,6 +287,9 @@ export async function fetchUntrustedModelCatalog(endpoint, {
   maxModels = MODEL_DISCOVERY_MAX_MODELS,
   maxRecordBytes = MODEL_DISCOVERY_MAX_RECORD_BYTES,
   maxRedirects = MODEL_DISCOVERY_MAX_REDIRECTS,
+  allowQuery = false,
+  collectionFields,
+  recordIdFields,
   resolveHost = lookupHost,
   proxyResolvesDestination = fetchImpl === globalThis.fetch && environmentHttpProxyConfigured(),
   acceptNonOk = false,
@@ -281,7 +297,12 @@ export async function fetchUntrustedModelCatalog(endpoint, {
 } = {}) {
   if (typeof fetchImpl !== "function") throw new Error("Model discovery requires a fetch implementation.");
   const credentialBearing = credentialBearingHeaders(headers);
-  let current = await validateDiscoveryUrl(endpoint, { allowPrivate, credentialBearing, resolveHost });
+  let current = await validateDiscoveryUrl(endpoint, {
+    allowPrivate,
+    credentialBearing,
+    allowQuery,
+    resolveHost,
+  });
   const originalOrigin = current.origin;
   let dispatcher;
   try {
@@ -317,6 +338,7 @@ export async function fetchUntrustedModelCatalog(endpoint, {
         current = await validateDiscoveryUrl(new URL(location, current.url), {
           allowPrivate,
           credentialBearing,
+          allowQuery,
           expectedOrigin: originalOrigin,
           resolveHost,
         });
@@ -332,7 +354,12 @@ export async function fetchUntrustedModelCatalog(endpoint, {
       const contentType = responseHeader(response, "content-type");
       if (contentType && !/\bjson\b/i.test(contentType)) throw new Error("Provider model catalog did not return JSON.");
       try { payload = JSON.parse(body); } catch { throw new Error("Provider returned invalid JSON for its model catalog."); }
-      validateModelCatalogPayload(payload, { maxModels, maxRecordBytes });
+      validateModelCatalogPayload(payload, {
+        maxModels,
+        maxRecordBytes,
+        ...(collectionFields ? { collectionFields } : {}),
+        ...(recordIdFields ? { recordIdFields } : {}),
+      });
       return payload;
     }
   } finally {

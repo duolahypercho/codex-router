@@ -146,6 +146,7 @@ const PROVIDER_BRANDS: Record<string, string> = {
   siliconflow: "siliconflow",
   together: "together",
   venice: "venice",
+  vertex: "google",
   "xiaomi-mimo": "xiaomi",
   "zai-api": "zai",
   "zai-coding": "zai",

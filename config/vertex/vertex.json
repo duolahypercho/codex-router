@@ -11,7 +11,10 @@
       "modelGarden": {
         "apiVersion": "v1beta1",
         "baseUrl": "https://aiplatform.googleapis.com",
-        "parent": "publishers",
+        "publishers": [
+          "anthropic",
+          "google"
+        ],
         "listAllVersions": true
       },
       "credential": {

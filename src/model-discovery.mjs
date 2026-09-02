@@ -30,6 +30,7 @@ import {
   fetchUntrustedModelCatalog,
   validateModelCatalogPayload,
 } from "./untrusted-model-discovery.mjs";
+import { discoverVertexProviderModels } from "./vertex-model-discovery.mjs";
 import {
   ensureFreshGitHubCopilotSession,
   githubCopilotCatalogHeaders,
@@ -325,10 +326,43 @@ async function providerPayload(provider, identity) {
  */
 export async function discoverProviderModels(
   providerId,
-  { refresh = false, cache = true, fixture = false, scope, loadPayload = providerPayload } = {},
+  {
+    refresh = false,
+    cache = true,
+    fixture = false,
+    fixturePayload,
+    fixturePath,
+    scope,
+    loadPayload = providerPayload,
+    fetchImpl,
+    timeoutMs,
+    allowPrivate,
+    resolveHost,
+    proxyResolvesDestination,
+    credential,
+    catalog,
+  } = {},
 ) {
   const provider = RUNTIME_PROVIDERS.get(providerId);
   if (!provider) throw new Error(`Unknown provider: ${providerId}`);
+  if (provider.protocol === "vertex") {
+    const cliFixture = option("--fixture");
+    return discoverVertexProviderModels(provider, {
+      refresh,
+      cache,
+      scope,
+      ...(fixture !== false && fixture !== undefined ? { fixture } : {}),
+      ...(fixturePayload !== undefined ? { fixturePayload } : {}),
+      ...(fixturePath || cliFixture ? { fixturePath: fixturePath || cliFixture } : {}),
+      ...(fetchImpl ? { fetchImpl } : {}),
+      ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+      ...(allowPrivate !== undefined ? { allowPrivate } : {}),
+      ...(resolveHost ? { resolveHost } : {}),
+      ...(proxyResolvesDestination !== undefined ? { proxyResolvesDestination } : {}),
+      ...(credential ? { credential } : {}),
+      ...(catalog ? { catalog } : {}),
+    });
+  }
   if (provider.generic === true) {
     const fixturePath = option("--fixture");
     const genericFixture = fixturePath

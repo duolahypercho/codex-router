@@ -13,6 +13,7 @@ import { instructionOverlayExists } from "./instruction-overlays.mjs";
 import { SOURCE_ROOT } from "./paths.mjs";
 import { officialModelDisplayName, readUserModels } from "./user-models.mjs";
 import { curatableRequestProfile, requestProfileKnown } from "./request-profiles.mjs";
+import { VERTEX_ADAPTERS } from "./vertex-adapters.mjs";
 
 export const REGISTRY_PATH =
   process.env.MODEL_ROUTER_REGISTRY ||
@@ -121,7 +122,11 @@ function registryFragmentFiles(root) {
   for (const entry of readdirSync(root, { withFileTypes: true }).sort(byName)) {
     const full = path.join(root, entry.name);
     if (entry.isDirectory()) files.push(...registryFragmentFiles(full));
-    else if (entry.isFile() && entry.name.endsWith(".json")) files.push(full);
+    else if (
+      entry.isFile() &&
+      entry.name.endsWith(".json") &&
+      entry.name !== "support-catalog.json"
+    ) files.push(full);
   }
   return files;
 }
@@ -592,6 +597,27 @@ function modelProblem(model, providers, slugs, gatewayModels) {
   }
   if (!model.slug.startsWith(`${model.provider}/`)) {
     return `model ${model.slug} must be namespaced under ${model.provider}/`;
+  }
+  if (model.adapter !== undefined && typeof model.adapter !== "string") {
+    return "model " + model.slug + " has an invalid adapter";
+  }
+  if (provider.protocol === "vertex") {
+    if (!Object.hasOwn(VERTEX_ADAPTERS, model.adapter)) {
+      return "model " + model.slug + " requires a supported Vertex adapter";
+    }
+    if (
+      model.vertexPublisher !== undefined &&
+      (
+        typeof model.vertexPublisher !== "string" ||
+        !/^[a-z][a-z0-9._-]{0,127}$/i.test(model.vertexPublisher)
+      )
+    ) {
+      return "model " + model.slug + " has an invalid Vertex publisher";
+    }
+  } else if (model.adapter !== undefined) {
+    return "model " + model.slug + " may only set an adapter for a Vertex provider";
+  } else if (model.vertexPublisher !== undefined) {
+    return "model " + model.slug + " may only set a Vertex publisher for a Vertex provider";
   }
   if (provider.authMode === "anonymous" && !anonymousModelAllowed(provider, model.upstreamModel)) {
     return `anonymous provider ${provider.id} only accepts its documented free-model ids`;
