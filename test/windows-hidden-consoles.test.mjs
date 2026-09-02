@@ -97,7 +97,12 @@ function powershellCalls() {
       if (!/powershell|pwsh/i.test(argumentText)) continue;
       const options = resolvedOptions(source, argumentText);
       calls.push({
-        where: `${path.relative(root, file)}:${source.slice(0, match.index).split("\n").length}`,
+        // path.relative yields backslashes on Windows; normalise so the
+        // reported location and the assertions below read the same on every
+        // platform.
+        where: `${path.relative(root, file).split(path.sep).join("/")}:${
+          source.slice(0, match.index).split("\n").length
+        }`,
         // The stdio value may be a literal, a variable, or a ternary over
         // both; what matters is whether any branch inherits a console.
         interactive: /stdio:[^\n]*inherit/.test(options),
