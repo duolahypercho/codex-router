@@ -20,6 +20,7 @@ import { grokOAuthStatus } from "./grok-oauth-status.mjs";
 import { antigravityOAuthStatus } from "./antigravity-oauth-status.mjs";
 import { SOURCE_ROOT } from "./paths.mjs";
 import { effectiveProviderCredentialStatus } from "./provider-api-key-routing.mjs";
+import { credentialSetupHint } from "./provider-credentials.mjs";
 import { providerOnboardingSnapshot } from "./provider-onboarding.mjs";
 import { defaultProviderIds, validateProviderIds } from "./provider-selection.mjs";
 import { commandOnPath, spawnableCommand } from "./spawnable-command.mjs";
@@ -277,4 +278,30 @@ function onboardGrokOauth() {
     process.stdout.write("Grok login did not produce a usable OAuth credential yet.\n");
   }
   throw new Error("Grok OAuth login did not produce a usable credential after several attempts.");
+}
+
+export function configureProvider(provider, { guided, providerKeyCommand }) {
+  if (providerConfigured(provider)) return;
+  if (!guided) {
+    const setup = provider.kind === "oauth"
+      ? oauthSetupHint(provider)
+      : provider.credential?.resolver
+        ? credentialSetupHint(provider)
+        : `run \`${providerKeyCommand(provider.id)}\``;
+    throw new Error(`${provider.displayName} is selected but not configured; ${setup} first.`);
+  }
+  if (provider.credential?.resolver) {
+    throw new Error(
+      `${provider.displayName} is selected but not configured; ${credentialSetupHint(provider)} first.`,
+    );
+  }
+  if (provider.kind === "oauth") {
+    if (provider.id === "grok-oauth") onboardGrokOauth();
+    else onboardKimiOauth();
+    return;
+  }
+  if (!confirm(`Enter a ${provider.displayName} key securely now?`)) {
+    throw new Error(`${provider.displayName} setup was cancelled.`);
+  }
+  run(process.execPath, [path.join(SOURCE_ROOT, "src", "provider-key.mjs"), provider.id, "set"]);
 }

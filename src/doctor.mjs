@@ -1119,6 +1119,8 @@ for (const provider of PROVIDERS.values()) {
         ? `${provider.displayName} anonymous endpoint`
       : provider.authMode === "per-model"
         ? `${provider.displayName} per-model endpoints`
+      : provider.credential?.resolver
+        ? `${provider.displayName} credentials`
       : `${provider.displayName} ${credentialNoun}`,
     status.configured ? status.source : "not configured",
     provider.keyless

@@ -90,18 +90,6 @@ if (command === "status") {
       return result;
     });
     refreshed = removal.removedFiles ? await refreshTargetPickerIfInstalled() : false;
-  if (provider.credential?.resolver) {
-    throw new Error(`${provider.displayName} does not accept API keys; ${credentialSetupHint(provider)}`);
-  }
-  let removal;
-  let refreshed;
-  await withModelOverlayLock(async () => {
-    removal = await withProviderCatalogCacheTransaction(async (catalog) => {
-      const result = await removeApiCredential(provider.id);
-      if (result.removedFiles) catalog.forget(providerCatalogFamilyCacheIds(provider.id));
-      return result;
-    });
-    refreshed = removal.removedFiles ? await refreshTargetPickerIfInstalled() : false;
   });
   process.stdout.write(
     removal.removedFiles

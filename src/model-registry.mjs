@@ -353,7 +353,7 @@ function loadRegistry() {
       }
       if (
         provider.protocol !== undefined &&
-        !["openai", "anthropic", "openai-responses"].includes(provider.protocol)
+        !["openai", "anthropic", "openai-responses", "vertex"].includes(provider.protocol)
       ) {
         fail(`provider ${provider.id} has an unsupported API protocol`);
       }

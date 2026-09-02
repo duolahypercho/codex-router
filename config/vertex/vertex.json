@@ -6,6 +6,7 @@
       "displayName": "Google Cloud Vertex AI",
       "kind": "openai-compatible",
       "protocol": "vertex",
+      "ownedBy": "google",
       "baseUrl": "https://aiplatform.googleapis.com",
       "modelGarden": {
         "apiVersion": "v1beta1",
