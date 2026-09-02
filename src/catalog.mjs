@@ -791,12 +791,26 @@ function pickerSlugGroup(slug) {
   return pickerProviderGroup(value.slice(0, value.indexOf("/")));
 }
 
-// Orders routed models for the picker by the vendor-group policy WITHOUT
-// rewriting each model's `priority`. The `priority` field feeds Codex's
-// spawn_agent override window (AGENTS.md step 5), where certified native v2
-// routes keep intentionally low values; renumbering every routed model to
-// nativeMax+1 would crowd those certified routes out of the window. Grouping
-// only reorders the published array while every model keeps its own priority.
+// Orders routed models for the picker by the vendor-group policy. Codex
+// renders its picker by each entry's `priority`, never by array order, so
+// grouping the array alone never reached the screen: routed models reuse the
+// same low integers as native GPT entries and interleave with them (issue
+// #544). Two numberings therefore coexist in the published catalog, assigned
+// by `publishedPickerPriorities` below:
+//
+//  - A certified v2 spawn route keeps the priority its registry entry
+//    authored. That field also feeds Codex's spawn_agent override window
+//    (AGENTS.md step 5), which shows only a small priority-ordered subset, so
+//    those routes must keep their intentionally low values or they are
+//    crowded out of the window.
+//  - Every other routed model is published in a band above the highest
+//    visible native priority, in vendor-group order. Codex never offers a v1
+//    route as a spawn override, so moving it can crowd nothing out, and the
+//    picker finally shows the vendor grouping the array always carried.
+//
+// Only the published entry is renumbered. Failover ranking, the vision
+// bridge, and every other client read the registry's authored priority and
+// are unaffected.
 function routedPickerPriorities(nativeModels, routedModelsList) {
   const groups = new Map();
   for (const model of routedModelsList) {
@@ -892,11 +906,41 @@ export function buildMergedCatalog(native, routedModelsList, { includeNative = t
       ? native.models.map((model) => [model.slug, normalizeNativeModel(model)])
       : [],
   );
-  for (const model of routedPickerPriorities(native.models, routedModelsList)) {
+  const ordered = routedPickerPriorities(native.models, routedModelsList);
+  const published = publishedPickerPriorities(native.models, ordered);
+  for (const model of ordered) {
     const behaviorTemplate = behaviorTemplateFor(native.models, model, template);
-    models.set(model.slug, routedModel(template, model, behaviorTemplate));
+    const entry = routedModel(template, model, behaviorTemplate);
+    models.set(
+      model.slug,
+      published.has(model.slug) ? { ...entry, priority: published.get(model.slug) } : entry,
+    );
   }
   return sortCatalogModels(models.values());
+}
+
+// The picker priority each routed model is published under, keyed by slug,
+// for every model that is renumbered. Certified v2 spawn routes are absent
+// from the map and keep their authored value; see `routedPickerPriorities`.
+// The band starts above the highest *visible* native priority: a hidden
+// native entry can carry an arbitrary number that would otherwise push every
+// routed model far down the picker for no reason a user can see.
+function publishedPickerPriorities(nativeModels, orderedRoutedModels) {
+  const visible = nativeModels.filter((model) => model.visibility === "list");
+  const nativeMax = Math.max(
+    0,
+    ...(visible.length ? visible : nativeModels)
+      .map((model) => Number(model.priority))
+      .filter(Number.isFinite),
+  );
+  const published = new Map();
+  let next = nativeMax + 1;
+  for (const model of orderedRoutedModels) {
+    if (model.multiAgentVersion === "v2") continue;
+    published.set(model.slug, next);
+    next += 1;
+  }
+  return published;
 }
 
 // Login-free Codex surfaces only list allowlisted native slugs, so external

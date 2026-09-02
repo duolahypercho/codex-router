@@ -12,6 +12,17 @@
   incomplete checkout. When the log carries no such evidence the original
   wording is kept rather than a cause being invented. This improves the
   diagnosis only; the underlying ACL condition is not yet reproduced.
+- **The Codex picker now shows vendor groups.** Codex sorts its model picker by
+  each entry's `priority`, never by catalog order, and routed models reused
+  the same low integers as native GPT entries, so DeepSeek and Grok routes
+  interleaved with GPT models and the vendor grouping the catalog always
+  carried never reached the screen (#544). Routed models that are not
+  certified v2 spawn routes are now published in a band above the highest
+  visible native priority, in vendor-group order. A certified v2 route keeps
+  its authored priority, because that value is what keeps it inside Codex's
+  small spawn-model override window; renumbering it would crowd it out. Only
+  the published entry changes: failover ranking, the vision bridge, and every
+  other client keep reading the registry's authored value.
 - **Grok OAuth no longer replays a known progress-only sentence after an
   aborted follow-up.** The first affected turn remains fully live. Once a
   conversation has actually produced the progress-only shape, later

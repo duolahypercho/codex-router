@@ -50,6 +50,49 @@ function projectUnavailable(message, { code = "project_required", status = 502 }
   return error;
 }
 
+// Google answers a disabled private API with a structured reason that names
+// the service. Discarding the body reduced that to `HTTP 403`, which reads as
+// a credential problem and sends the operator back through sign-in that is
+// already working (issue #566).
+//
+// Only the structured fields are read. The free-text `message` embeds the
+// caller's project number and a console URL built from it, and an error string
+// the router prints and logs is the wrong place for either.
+const PRIVATE_BOOTSTRAP_SERVICE = "cloudcode-pa.googleapis.com";
+const MAX_ERROR_BODY_BYTES = 16 * 1024;
+
+export function antigravityBootstrapFailure(status, bodyText) {
+  const base = `HTTP ${status}`;
+  if (typeof bodyText !== "string" || bodyText.length === 0) return base;
+  let parsed;
+  try {
+    parsed = JSON.parse(bodyText.slice(0, MAX_ERROR_BODY_BYTES));
+  } catch {
+    return base;
+  }
+  const error = parsed?.error;
+  if (!error || typeof error !== "object") return base;
+  const details = Array.isArray(error.details) ? error.details : [];
+  const disabled = details.find((detail) => detail?.reason === "SERVICE_DISABLED");
+  const service = String(disabled?.metadata?.service || "");
+  if (disabled && service === PRIVATE_BOOTSTRAP_SERVICE) {
+    // Binding this service is gated by a producer-side permission
+    // (`servicemanagement.services.bind`), so no IAM role an operator can
+    // grant themselves enables it. Saying "enable the API" here would send
+    // them to a console page that does not exist for a private API.
+    return (
+      `${base}: the OAuth client's Google Cloud project is not allowlisted for ` +
+      `${service}, which is a private Google API that an ordinary project cannot ` +
+      "enable. Antigravity sign-in succeeded; only the project behind the " +
+      "operator-owned OAuth client is unauthorized"
+    );
+  }
+  const status_ = typeof error.status === "string" ? error.status : undefined;
+  const reason = typeof disabled?.reason === "string" ? disabled.reason : undefined;
+  const detail = [status_, reason, service].filter(Boolean).join(", ");
+  return detail ? `${base} (${detail})` : base;
+}
+
 function projectIdFrom(payload) {
   const project = payload?.cloudaicompanionProject;
   if (typeof project === "string" && project) return project;
@@ -180,7 +223,11 @@ export async function loadAntigravityProject(
         signal: combinedSignal(signal, timeoutMs),
       });
       if (!response.ok) {
-        failures.push(`HTTP ${response.status}`);
+        // The body carries the only actionable part of this failure; a bare
+        // status cannot distinguish "your project is not allowlisted" from
+        // "your credential is bad".
+        const bodyText = await response.text().catch(() => "");
+        failures.push(antigravityBootstrapFailure(response.status, bodyText));
         continue;
       }
       const payload = await response.json().catch(() => undefined);

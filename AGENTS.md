@@ -912,7 +912,14 @@ so the unit of evidence is always the slug, never the model name.
 5. Remember that Codex advertises only a small priority-ordered subset of native
    spawn-model overrides. Adjust priority intentionally and keep the desired
    Kimi/Grok/GPT choices in that visible subset; do not crowd them out
-   accidentally when adding a model.
+   accidentally when adding a model. The published catalog carries two
+   numberings for exactly this reason (`publishedPickerPriorities` in
+   `src/catalog.mjs`): a certified v2 route keeps its authored priority so it
+   stays inside that window, while every v1 routed model is published in a
+   band above the highest visible native priority so the picker shows vendor
+   groups instead of interleaving routed entries among native GPT models
+   (issue #544). Only the published entry is renumbered; failover, the vision
+   bridge, and the other clients keep reading the registry value.
 6. Add registry, catalog, routing/request-profile, and failure-path regression
    tests. Run `npm run check` and `npm test`. With explicit quota approval, run
    `./bin/test-model 'provider/model' --live --yes`, reinstall, fully restart
