@@ -101,10 +101,13 @@ case $(uname -s) in
     ;;
 esac
 
-npm ci --prefix "$app_dir" >&2
-npm run check --prefix "$app_dir" >&2
-npm test --prefix "$app_dir" >&2
-npm run build --prefix "$app_dir" >&2
+(
+  cd "$app_dir"
+  npm ci >&2
+  npm run check >&2
+  npm test >&2
+  npm run build >&2
+)
 CSC_IDENTITY_AUTO_DISCOVERY=false \
   "$app_dir/node_modules/.bin/electron-builder" --linux dir --publish never \
     "--config.directories.output=$staging_root" >&2

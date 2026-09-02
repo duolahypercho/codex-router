@@ -181,6 +181,19 @@ export const PROVIDER_CREDENTIAL_STORE_PATH =
 export const PROVIDER_CREDENTIAL_MIGRATIONS_DIR =
   process.env.MODEL_ROUTER_PROVIDER_CREDENTIAL_MIGRATIONS ||
   path.join(MIGRATIONS_DIR, "provider-credentials");
+// Account-pool policy contains only opaque account ids and routing metadata;
+// native OAuth credentials stay owned by the Codex login implementation.
+export const CHATGPT_ACCOUNT_POOL_PATH =
+  process.env.MODEL_ROUTER_CHATGPT_ACCOUNT_POOL ||
+  path.join(STATE_DIR, "chatgpt-account-pool.json");
+// Each ChatGPT subscription account gets its own Codex home.  The home keeps
+// the OAuth refresh state under Codex's normal ownership boundary instead of
+// copying a token into the router's pool metadata.  The account id is always
+// validated before it is appended to this directory.
+export const CHATGPT_ACCOUNT_HOMES_DIR =
+  process.env.MODEL_ROUTER_CHATGPT_ACCOUNT_HOMES ||
+  path.join(STATE_DIR, "chatgpt-accounts");
+export const CHATGPT_PROFILE_SWITCH_PATH = path.join(STATE_DIR, "chatgpt-profile-switch.json");
 // User-defined OpenAI-compatible provider descriptors. The document contains
 // no raw credentials; credentialRef values point to the provider-neutral store.
 export const GENERIC_PROVIDERS_PATH =

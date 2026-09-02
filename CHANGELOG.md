@@ -13,6 +13,19 @@
   small spawn-model override window; renumbering it would crowd it out. Only
   the published entry changes: failover ranking, the vision bridge, and every
   other client keep reading the registry's authored value.
+- **Request bodies are decompressed off the event loop, and an oversize zstd
+  frame is refused from its header.** Codex zstd-compresses every request, so
+  the router inflated a buffer that grows with the conversation on the thread
+  serving every other request, through the one-shot synchronous decoder. That
+  path is the one implicated in an intermittent native abort on Windows
+  (#465: exit `0xC0000409` with no JavaScript frame, always late in a long
+  session, always right after a successful turn), which took every listener
+  down with it. The router now reads the size a Zstandard frame declares and
+  answers 413 before any native decoder runs when it exceeds the decode cap,
+  and inflates everything else through the asynchronous decoder under the same
+  cap. The crash has not been reproduced outside Windows, so this is
+  defensive hardening rather than a confirmed fix; the issue stays open for a
+  crash dump.
 - **Antigravity OAuth now uses an operator-owned, fail-closed sign-in.** The
   router requires one matching Google Desktop-app client ID/secret pair,
   collects it through an ephemeral IPv4 loopback listener, and stores the pair

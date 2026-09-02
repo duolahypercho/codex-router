@@ -6,6 +6,8 @@ import { discoveryDisabled } from "./discovery-mode.mjs";
 import { spawnableCommand } from "./spawnable-command.mjs";
 
 const DEFAULT_TIMEOUT_MS = 10_000;
+export const ACCOUNT_POOL_USAGE_PROBE_LIMIT = 8;
+export const ACCOUNT_POOL_USAGE_TIMEOUT_MS = 2_000;
 
 // This used to keep its own two-line search -- an undocumented CODEX_BINARY
 // override, a hardcoded macOS app path, then the bare name "codex". None of
@@ -102,10 +104,48 @@ export function normalizeCodexAccountUsage(rateLimitResponse, usageResponse, now
   };
 }
 
+export async function attachBoundedChatGPTAccountUsage(pool, {
+  readUsage = readCodexAccountUsage,
+  accountHome,
+  probeLimit = ACCOUNT_POOL_USAGE_PROBE_LIMIT,
+  timeoutMs = ACCOUNT_POOL_USAGE_TIMEOUT_MS,
+} = {}) {
+  if (!pool?.accounts || typeof accountHome !== "function") return pool;
+  const selectedId = pool.policy?.selectedAccountId;
+  const candidates = Object.values(pool.accounts)
+    .filter((account) => account?.subscription?.usable === true)
+    .sort((left, right) => Number(right.id === selectedId) - Number(left.id === selectedId))
+    .slice(0, Math.max(0, Math.floor(probeLimit)));
+  await Promise.all(candidates.map(async (account) => {
+    try {
+      const usage = await readUsage({ codexHome: accountHome(account.id), timeoutMs });
+      const windows = [usage.primary, usage.secondary].filter(Boolean);
+      const monthly = windows.find((window) => window.windowDurationMins >= 28 * 24 * 60);
+      const weekly = windows.find(
+        (window) => window.windowDurationMins >= 7 * 24 * 60
+          && window.windowDurationMins < 28 * 24 * 60,
+      );
+      const selected = weekly || monthly || windows[0];
+      if (selected) {
+        account.subscription.usage = {
+          period: selected === weekly ? "weekly" : selected === monthly ? "monthly" : "current",
+          remainingPercent: selected.remainingPercent,
+          ...(selected.resetsAt ? { resetsAt: selected.resetsAt } : {}),
+        };
+      }
+    } catch {
+      // Per-account usage is optional. Core account/session state remains
+      // available even when the bounded app-server probe cannot answer.
+    }
+  }));
+  return pool;
+}
+
 export function readCodexAccountUsage({
   timeoutMs = DEFAULT_TIMEOUT_MS,
   binary = codexBinary(),
   platform = process.platform,
+  codexHome = process.env.CODEX_HOME,
   spawnImpl = spawn,
 } = {}) {
   return new Promise((resolve, reject) => {
@@ -125,6 +165,7 @@ export function readCodexAccountUsage({
     const target = spawnableCommand(binary, ["app-server"], platform);
     const processHandle = spawnImpl(target.command, target.args, {
       ...target.options,
+      env: codexHome ? { ...process.env, CODEX_HOME: codexHome } : process.env,
       stdio: ["pipe", "pipe", "ignore"],
       windowsHide: true,
     });

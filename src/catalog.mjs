@@ -98,7 +98,11 @@ export function deriveBaseInstructions(modelMessages) {
 // newer schema or models absent from a stale account cache. Preserve the
 // account entry for every slug it lists (first occurrence wins on a
 // duplicate), then append bundled-only entries.
-export function mergeNativeCatalogs(accountCatalog, bundledCatalog) {
+export function mergeNativeCatalogs(
+  accountCatalog,
+  bundledCatalog,
+  { includeBundledOnly = true } = {},
+) {
   const account = validNativeCatalog(accountCatalog) ? accountCatalog.models : [];
   const fallback = validNativeCatalog(bundledCatalog) ? bundledCatalog.models : [];
   const fallbackBySlug = new Map(
@@ -125,7 +129,9 @@ export function mergeNativeCatalogs(accountCatalog, bundledCatalog) {
   return {
     models: [
       ...normalizedAccount,
-      ...fallback.filter((model) => !seen.has(String(model?.slug || ""))),
+      ...(includeBundledOnly
+        ? fallback.filter((model) => !seen.has(String(model?.slug || "")))
+        : []),
     ],
   };
 }
@@ -310,7 +316,7 @@ export function nativeCatalogIsReusable(
   return true;
 }
 
-function nativeCatalog() {
+function nativeCatalog({ refreshNative = refresh } = {}) {
   const source = readNativeCatalogSource();
   if (source) {
     const catalog = readNativeCatalogFile(source.path);
@@ -325,7 +331,7 @@ function nativeCatalog() {
   // so a discovery-disabled install leaves it unread like every other
   // account-derived artifact.
   const cache = discoveryDisabled() ? {} : readModelsCache();
-  if (!existsSync(NATIVE_CATALOG_PATH) || refresh) return captureNative(cache);
+  if (!existsSync(NATIVE_CATALOG_PATH) || refreshNative) return captureNative(cache);
   const parsed = JSON.parse(readFileSync(NATIVE_CATALOG_PATH, "utf8"));
   if (nativeCatalogIsReusable(parsed, codexVersion(), cache.fingerprint)) {
     return parsed;
@@ -988,7 +994,7 @@ export function effectivePickerHiddenModels(hiddenModels, nativeBaseSlugs, { log
   return new Set([...hidden].filter((slug) => !native.has(slug)));
 }
 
-function main() {
+export function publishCatalog({ refreshNative = refresh, output = true } = {}) {
   // The catalog is what Codex offers in its picker. Writing it from a checkout
   // that does not own this state directory is how the picker ends up
   // advertising models the running gateway has no route for.
@@ -1042,7 +1048,7 @@ function main() {
     userSlugs,
     Date.now(),
   );
-  const captured = nativeCatalog();
+  const captured = nativeCatalog({ refreshNative });
   // The router picker overlay is for routed models.  In a normal signed-in
   // Codex install the account's native entries remain Codex-owned; applying a
   // stale router `hidden` decision to them can erase the original Codex picker
@@ -1186,28 +1192,28 @@ function main() {
     if (error && typeof error === "object") error.catalogRollbackSafe = true;
     throw error;
   }
-  process.stdout.write(
-    `${JSON.stringify({
-      path: MERGED_CATALOG_PATH,
-      models: merged.length,
-      routed_models: routedModels.length,
-      routed_agents: routedAgents.written.length,
-      removed_agents: routedAgents.removed.length,
-      vision_bridge_engine: visionEngine?.slug || null,
-      vision_bridged_models: catalogModels.filter(
-        (model) => model.visionBridgeEngine !== undefined,
-      ).length,
-      native_models: !loginFree && openaiAuthenticated
-        ? merged.filter((model) => !MODEL_BY_SLUG.has(String(model.slug))).length
-        : 0,
-      aliased_models: Object.keys(aliases).length,
-      login_free: loginFree,
-      routed_catalog_active: routedCatalog || loginFree,
-      openai_authenticated: openaiAuthenticated,
-      openai_auth_reason: auth.reason,
-      selected_model: selectedModel() || null,
-    })}\n`,
-  );
+  const result = {
+    path: MERGED_CATALOG_PATH,
+    models: merged.length,
+    routed_models: routedModels.length,
+    routed_agents: routedAgents.written.length,
+    removed_agents: routedAgents.removed.length,
+    vision_bridge_engine: visionEngine?.slug || null,
+    vision_bridged_models: catalogModels.filter(
+      (model) => model.visionBridgeEngine !== undefined,
+    ).length,
+    native_models: !loginFree && openaiAuthenticated
+      ? merged.filter((model) => !MODEL_BY_SLUG.has(String(model.slug))).length
+      : 0,
+    aliased_models: Object.keys(aliases).length,
+    login_free: loginFree,
+    routed_catalog_active: routedCatalog || loginFree,
+    openai_authenticated: openaiAuthenticated,
+    openai_auth_reason: auth.reason,
+    selected_model: selectedModel() || null,
+  };
+  if (output) process.stdout.write(`${JSON.stringify(result)}\n`);
+  return result;
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
@@ -1215,7 +1221,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     // The lock begins before the first ownership or mutable-state read and is
     // released only after probes and the coupled catalog-file transaction are
     // complete. Every app/CLI/autonomous caller executes this same entrypoint.
-    await withCatalogPublicationLock(main);
+    await withCatalogPublicationLock(() => publishCatalog());
   } catch (error) {
     // Ownership conflicts are an operator mistake with a specific remedy, so
     // print the guidance rather than a stack trace.

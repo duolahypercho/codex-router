@@ -10668,3 +10668,74 @@ test("API forwarder clamps proven Flash routes onto the ladder the model accepts
     await closeServer(upstream.server);
   }
 });
+
+test("an oversize zstd body is refused with 413 before decoding and the router stays up", async () => {
+  // Issue #465: on Windows the router intermittently died with a native abort
+  // (0xC0000409, no JS frame) inflating a large zstd request body on the
+  // event loop, taking every listener down with it. Decoding now runs through
+  // the asynchronous decoder, and a frame whose declared size exceeds the cap
+  // is refused from its header alone. The assertion that matters is the last
+  // one: the process that just refused the body is still serving.
+  const nativeRequests = [];
+  const routedRequests = [];
+  const native = await mockServer(async (request, response) => {
+    nativeRequests.push(request.url);
+    json(response, 200, { route: "native" });
+  });
+  const gateway = await mockServer(async (request, response) => {
+    routedRequests.push(request.url);
+    json(response, 200, { route: "external" });
+  });
+  const routerPort = await openPort();
+  const router = run("router.mjs", {
+    CODEX_ROUTER_PORT: String(routerPort),
+    CODEX_NATIVE_BASE_URL: `http://127.0.0.1:${native.port}/backend-api/codex`,
+    CODEX_ROUTER_GATEWAY_BASE_URL: `http://127.0.0.1:${gateway.port}/v1`,
+    CODEX_ROUTER_MAX_DECODED_BODY_BYTES: "4096",
+    CODEX_ROUTER_QUIET: "1",
+  });
+
+  try {
+    await waitFor(`${routerBase(routerPort)}/models`, router);
+    const headers = {
+      Authorization: "Bearer CODEX_CALLER_SECRET",
+      "Content-Type": "application/json",
+      "Content-Encoding": "zstd",
+    };
+    // Compresses to well under the 64 MB transport cap while declaring an
+    // inflated size far past the 4 KB decode cap set above.
+    const oversize = zstdCompressSync(
+      Buffer.from(JSON.stringify({ model: "gpt-5.6-sol", input: "x".repeat(200_000) })),
+    );
+    const refused = await fetch(`${routerBase(routerPort)}/responses`, {
+      method: "POST",
+      headers,
+      body: oversize,
+    });
+    assert.equal(refused.status, 413);
+    // The handler keeps internal messages out of response bodies by design;
+    // the status is the contract, and the specific cause goes to the log.
+    assert.equal((await refused.json()).error.type, "local_router_error");
+    assert.equal(nativeRequests.length, 0, "an oversize body must never reach upstream");
+    assert.equal(routedRequests.length, 0);
+
+    // A body inside the cap still decodes and routes on the asynchronous path.
+    const small = zstdCompressSync(
+      Buffer.from(JSON.stringify({ model: "gpt-5.6-sol", input: "small" })),
+    );
+    const accepted = await fetch(`${routerBase(routerPort)}/responses`, {
+      method: "POST",
+      headers,
+      body: small,
+    });
+    assert.equal(accepted.status, 200);
+    assert.equal(nativeRequests.length, 1);
+
+    const alive = await fetch(`${routerBase(routerPort)}/models`);
+    assert.equal(alive.status, 200, "the router that refused the body must still be serving");
+  } finally {
+    await stopChild(router);
+    await closeServer(native.server);
+    await closeServer(gateway.server);
+  }
+});

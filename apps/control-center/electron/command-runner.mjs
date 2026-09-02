@@ -730,7 +730,7 @@ async function waitForChildClose(child, timeoutMs = TREE_EXIT_WAIT_MS) {
  * mutating the installation after the UI reports failure. Keep the command in
  * its own POSIX process group or a kill-on-close Windows Job Object.
  */
-async function terminateProcessTree(
+export async function terminateProcessTree(
   child,
   {
     initialSignal = "SIGTERM",

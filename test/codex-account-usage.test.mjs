@@ -1,10 +1,80 @@
 import assert from "node:assert/strict";
+import path from "node:path";
 import test from "node:test";
 
 import {
+  ACCOUNT_POOL_USAGE_PROBE_LIMIT,
+  attachBoundedChatGPTAccountUsage,
   normalizeCodexAccountUsage,
   readCodexAccountUsage,
 } from "../src/codex-account-usage.mjs";
+
+test("64 slow account probes stay within one capped concurrent usage budget", async () => {
+  const accounts = Object.fromEntries(Array.from({ length: 64 }, (_, index) => [
+    `acct_${String(index).padStart(8, "0")}`,
+    {
+      id: `acct_${String(index).padStart(8, "0")}`,
+      subscription: { usable: true },
+    },
+  ]));
+  const pool = { accounts };
+  let active = 0;
+  let maximumActive = 0;
+  let calls = 0;
+  const startedAt = Date.now();
+  await attachBoundedChatGPTAccountUsage(pool, {
+    accountHome: (id) => `/isolated/${id}`,
+    timeoutMs: 25,
+    readUsage: async ({ timeoutMs }) => {
+      calls += 1;
+      active += 1;
+      maximumActive = Math.max(maximumActive, active);
+      await new Promise((resolve) => setTimeout(resolve, timeoutMs));
+      active -= 1;
+      throw new Error("slow optional probe");
+    },
+  });
+  assert.equal(calls, ACCOUNT_POOL_USAGE_PROBE_LIMIT);
+  assert.equal(maximumActive, ACCOUNT_POOL_USAGE_PROBE_LIMIT);
+  assert.ok(Date.now() - startedAt < 500, "optional usage probes exceeded their single bounded batch");
+  assert.equal(Object.values(accounts).some((account) => account.subscription.usage), false);
+});
+
+test("the selected account is included before the optional usage probe cap", async () => {
+  const selectedId = "acct_00000063";
+  const accounts = Object.fromEntries(Array.from({ length: 64 }, (_, index) => {
+    const id = `acct_${String(index).padStart(8, "0")}`;
+    return [id, { id, subscription: { usable: true } }];
+  }));
+  const calls = [];
+  await attachBoundedChatGPTAccountUsage({
+    policy: { selectedAccountId: selectedId },
+    accounts,
+  }, {
+    accountHome: (id) => `/isolated/${id}`,
+    readUsage: async ({ codexHome }) => {
+      calls.push(path.basename(codexHome));
+      return {};
+    },
+  });
+  assert.equal(calls.length, ACCOUNT_POOL_USAGE_PROBE_LIMIT);
+  assert.equal(calls[0], selectedId);
+});
+
+test("weekly and monthly account usage windows are classified disjointly", async () => {
+  const accounts = {
+    acct_weekly_0001: { id: "acct_weekly_0001", subscription: { usable: true } },
+    acct_monthly_001: { id: "acct_monthly_001", subscription: { usable: true } },
+  };
+  await attachBoundedChatGPTAccountUsage({ accounts }, {
+    accountHome: (id) => `/isolated/${id}`,
+    readUsage: async ({ codexHome }) => path.basename(codexHome) === "acct_weekly_0001"
+      ? { primary: { windowDurationMins: 7 * 24 * 60, remainingPercent: 70 } }
+      : { primary: { windowDurationMins: 30 * 24 * 60, remainingPercent: 30 } },
+  });
+  assert.equal(accounts.acct_weekly_0001.subscription.usage.period, "weekly");
+  assert.equal(accounts.acct_monthly_001.subscription.usage.period, "monthly");
+});
 
 test("normalizes Codex limits and daily usage without account credentials", () => {
   const value = normalizeCodexAccountUsage(
@@ -99,6 +169,7 @@ test("the usage panel reaches an npm-installed Codex through cmd.exe", () => {
   let invocation;
   readCodexAccountUsage({
     binary: "C:\\Users\\ann\\AppData\\Roaming\\npm\\codex.cmd",
+    codexHome: "C:\\Users\\ann\\.codex-secondary",
     platform: "win32",
     spawnImpl: (command, args, options) => {
       invocation = { command, args, options };
@@ -116,6 +187,7 @@ test("the usage panel reaches an npm-installed Codex through cmd.exe", () => {
   assert.ok(invocation.args[3].includes("codex.cmd"), invocation.args[3]);
   assert.equal(invocation.options.windowsVerbatimArguments, true);
   assert.equal(invocation.options.windowsHide, true);
+  assert.equal(invocation.options.env.CODEX_HOME, "C:\\Users\\ann\\.codex-secondary");
 });
 
 test("the usage panel names a missing Codex instead of blaming the app-server", async () => {

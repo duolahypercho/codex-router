@@ -13,11 +13,20 @@ export function processStartIdentity(
   pid,
   { spawn = spawnSync, platform = process.platform } = {},
 ) {
-  if (!Number.isSafeInteger(pid) || pid < 1) return undefined;
+  const result = processStartIdentityProbe(pid, { spawn, platform });
+  return result.state === "alive" ? result.identity : undefined;
+}
+
+export function processStartIdentityProbe(
+  pid,
+  { spawn = spawnSync, platform = process.platform } = {},
+) {
+  if (!Number.isSafeInteger(pid) || pid < 1) return { state: "unknown" };
   try {
     if (platform === "win32") {
       const script =
-        `$p = Get-Process -Id ${pid} -ErrorAction Stop; ` +
+        `$p = Get-Process -Id ${pid} -ErrorAction SilentlyContinue; ` +
+        "if ($null -eq $p) { exit 3 }; " +
         `[Console]::Out.Write($p.StartTime.ToUniversalTime().Ticks.ToString() + '|' + $p.Path)`;
       const result = spawn(
         "powershell.exe",
@@ -28,14 +37,20 @@ export function processStartIdentity(
           timeout: WINDOWS_PROCESS_PROBE_TIMEOUT_MS,
         },
       );
-      return result.status === 0 ? String(result.stdout || "").trim() || undefined : undefined;
+      const identity = String(result.stdout || "").trim();
+      if (result.status === 0 && identity) return { state: "alive", identity };
+      if (result.status === 3) return { state: "absent" };
+      return { state: "unknown" };
     }
     const result = spawn("ps", ["-p", String(pid), "-o", "lstart=", "-o", "comm="], {
       encoding: "utf8",
     });
-    return result.status === 0 ? String(result.stdout || "").trim() || undefined : undefined;
+    const identity = String(result.stdout || "").trim();
+    if (result.status === 0 && identity) return { state: "alive", identity };
+    if (result.status === 1) return { state: "absent" };
+    return { state: "unknown" };
   } catch {
-    return undefined;
+    return { state: "unknown" };
   }
 }
 

@@ -28,6 +28,10 @@ const bridgeSource = String.raw`
     ? Number(searchParams.get("providerUsageDelayMs")) || 0
     : null;
   const rejectAccountUsageRead = Number(searchParams.get("rejectAccountUsageRead")) || 0;
+  const rejectAccountPool = searchParams.get("rejectAccountPool") === "1";
+  const terminalLoginFailure = searchParams.get("terminalLoginFailure") === "1";
+  const rejectLoginImmediately = searchParams.get("rejectLoginImmediately") === "1";
+  const loginStaysPending = searchParams.get("loginStaysPending") === "1";
   const staleAccountFailure = searchParams.get("staleAccountFailure") === "1";
   const staleProviderUsage = searchParams.get("staleProviderUsage") === "1";
   const fallbackUsage = searchParams.get("fallbackUsage") === "1";
@@ -35,6 +39,8 @@ const bridgeSource = String.raw`
   const healthPollOnceMs = Number(searchParams.get("healthPollOnceMs")) || 0;
   const staleHealth = searchParams.get("staleHealth") === "1";
   let accountUsageReads = 0;
+  let accountPoolReads = 0;
+  let subscriptionLoginRequested = false;
   let providerUsageReads = 0;
   let healthReads = 0;
   if (pollOnceMs > 0 || healthPollOnceMs > 0) {
@@ -203,6 +209,24 @@ const bridgeSource = String.raw`
     getSnapshot: async () => {
       await new Promise((resolve) => setTimeout(resolve, snapshotDelayMs));
       return snapshot;
+    },
+    getChatGptSession: async () => ({ sharing: "disabled", session: "usable", present: true, email: "primary@example.com" }),
+    getChatGptAccountPool: async () => {
+      if (rejectAccountPool) throw new Error("The saved ChatGPT account list could not be read as JSON.");
+      accountPoolReads += 1;
+      if (terminalLoginFailure) record("getChatGptAccountPool", accountPoolReads);
+      return {
+        version: 1,
+        policy: { enabled: true, mode: "switch", selectedAccountId: "active" },
+        accounts: {
+          revoked: { id: "revoked", state: "revoked", paused: true, priority: 50, label: "Removed account", health: { state: "healthy" }, turns: 0, requests: 0 },
+          active: { id: "active", state: "active", paused: false, priority: 50, label: "Secondary account", subscription: { status: "usable", authenticated: true, usable: true, expired: false, email: "secondary@example.com" }, health: { state: "healthy" }, turns: 0, requests: 0 },
+          current: { id: "current", state: "active", paused: false, priority: 50, label: "Current account", subscription: terminalLoginFailure || loginStaysPending ? { status: "invalid", authenticated: false, usable: false, expired: false, email: "primary@example.com" } : { status: "usable", authenticated: true, usable: true, expired: false, email: "primary@example.com" }, health: { state: "healthy" }, turns: 0, requests: 0 },
+        },
+        ...(terminalLoginFailure && subscriptionLoginRequested ? { loginAttempts: { current: { status: "failed", error: "Codex login closed before this account became usable.", retryable: true } } } : {}),
+        sessions: { count: 0 },
+        profile: { desired: "active", active: "active", pending: false, running: false },
+      };
     },
     getProviders: async () => {
       await new Promise((resolve) => setTimeout(resolve, providerDelayMs));
@@ -396,6 +420,7 @@ const bridgeSource = String.raw`
         ],
       };
     },
+    controlTray: async () => ({ status: { supported: true } }),
     discoverProviderModels: async (providerId) => catalog(providerId),
     addProviderModels: async (providerId, modelIds) => {
       record("addProviderModels", providerId, [...modelIds]);
@@ -407,6 +432,16 @@ const bridgeSource = String.raw`
     },
     setPickerModel: async () => ({ ok: true }),
     setProviderEnabled: async () => ({ ok: true }),
+    setChatGptAccountSelection: async (selection) => {
+      record("setChatGptAccountSelection", selection);
+      return { ok: true };
+    },
+    loginChatGptSubscriptionAccount: async (accountId) => {
+      record("loginChatGptSubscriptionAccount", accountId);
+      if (rejectLoginImmediately) throw new Error("Codex login could not be launched.");
+      subscriptionLoginRequested = true;
+      return { accountId, opened: true, surface: "browser", pending: true };
+    },
     setSubagentModel: async () => ({ ok: true }),
     setSubagentEffort: async () => ({ ok: true }),
     onNavigation: (listener) => {
@@ -785,6 +820,18 @@ test("the production renderer exposes model discovery and picker actions", { tim
     ]);
     assert.equal(calls.some((call) => call.name === "setPickerModels" && call.args[0] === true), true);
 
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    const accountRows = page.locator(".subscription-account-row");
+    await page.getByText("ChatGPT accounts", { exact: true }).waitFor();
+    assert.equal(await accountRows.count(), 2, "two logged-in accounts should be visible");
+    assert.equal(await accountRows.filter({ hasText: "Removed account" }).count(), 0, "revoked accounts stay hidden");
+    assert.equal(await accountRows.filter({ hasText: "secondary@example.com" }).count(), 1, "secondary email should be visible");
+    const readySecondary = accountRows.filter({ hasText: "Secondary account" });
+    assert.equal(await readySecondary.getByRole("button", { name: "Login", exact: true }).isDisabled(), true, "ready accounts cannot start a duplicate login");
+    await page.getByRole("button", { name: "Select ChatGPT account: primary@example.com", exact: true }).click();
+    await page.waitForFunction(() => window.routerControlTest.calls()
+      .some((call) => call.name === "setChatGptAccountSelection" && call.args[0] === "current"));
+
     // Huge community GGUFs stay guarded, but the explicit oversized-model
     // acknowledgement must make their exact Ollama tag selectable. Otherwise
     // the catalog advertises GLM while forcing the operator to retype it.
@@ -802,6 +849,98 @@ test("the production renderer exposes model discovery and picker actions", { tim
       await page.getByRole("textbox", { name: "Model tag or Ollama URL" }).inputValue(),
       "hf.co/unsloth/GLM-5.3-Flash-GGUF:UD-IQ1_S",
     );
+
+    const cancelledLoginPage = await browser.newPage({ viewport: { width: 1280, height: 840 } });
+    const cancelledLoginErrors = [];
+    cancelledLoginPage.setDefaultTimeout(10_000);
+    cancelledLoginPage.on("pageerror", (error) => cancelledLoginErrors.push(error.message));
+    await cancelledLoginPage.goto(`${url}?terminalLoginFailure=1`, { waitUntil: "domcontentloaded" });
+    await cancelledLoginPage.getByRole("button", { name: "Settings", exact: true }).click();
+    const currentAccount = cancelledLoginPage.locator(".subscription-account-row").filter({ hasText: "Current account" });
+    await currentAccount.getByRole("button", { name: "Login", exact: true }).click();
+    await cancelledLoginPage.getByText("ChatGPT login did not complete", { exact: true }).waitFor();
+    // One refresh may already be queued when React observes the terminal
+    // projection. Give that in-flight poll one interval to settle, then prove
+    // the interval itself was cleared.
+    await cancelledLoginPage.waitForTimeout(1_800);
+    const readsAfterFailure = await cancelledLoginPage.evaluate(() => window.routerControlTest.calls()
+      .filter((call) => call.name === "getChatGptAccountPool").length);
+    await cancelledLoginPage.waitForTimeout(1_800);
+    assert.equal(
+      await cancelledLoginPage.evaluate(() => window.routerControlTest.calls()
+        .filter((call) => call.name === "getChatGptAccountPool").length),
+      readsAfterFailure,
+      "a terminal backend login result must stop the 1.5 second renderer poll",
+    );
+    await currentAccount.getByRole("button", { name: "Login", exact: true }).click();
+    await cancelledLoginPage.waitForFunction(() => window.routerControlTest.calls()
+      .filter((call) => call.name === "loginChatGptSubscriptionAccount").length === 2);
+    assert.deepEqual(cancelledLoginErrors, []);
+    await cancelledLoginPage.close();
+
+    const rejectedLoginPage = await browser.newPage({ viewport: { width: 1280, height: 840 } });
+    const rejectedLoginErrors = [];
+    rejectedLoginPage.setDefaultTimeout(10_000);
+    rejectedLoginPage.on("pageerror", (error) => rejectedLoginErrors.push(error.message));
+    await rejectedLoginPage.goto(`${url}?terminalLoginFailure=1&rejectLoginImmediately=1`, { waitUntil: "domcontentloaded" });
+    await rejectedLoginPage.getByRole("button", { name: "Settings", exact: true }).click();
+    const rejectedAccount = rejectedLoginPage.locator(".subscription-account-row").filter({ hasText: "Current account" });
+    const rejectedLoginButton = rejectedAccount.getByRole("button", { name: "Login", exact: true });
+    await rejectedLoginButton.click();
+    await rejectedLoginPage.getByText("Codex login could not be launched.", { exact: true }).waitFor();
+    await rejectedLoginButton.waitFor({ state: "visible" });
+    assert.equal(await rejectedLoginButton.isEnabled(), true, "an immediate launch rejection must release renderer pending state");
+    await rejectedLoginPage.waitForTimeout(1_800);
+    const readsAfterRejection = await rejectedLoginPage.evaluate(() => window.routerControlTest.calls()
+      .filter((call) => call.name === "getChatGptAccountPool").length);
+    await rejectedLoginPage.waitForTimeout(1_800);
+    assert.equal(
+      await rejectedLoginPage.evaluate(() => window.routerControlTest.calls()
+        .filter((call) => call.name === "getChatGptAccountPool").length),
+      readsAfterRejection,
+      "an immediate launch rejection must not leave the completion poll running",
+    );
+    await rejectedLoginButton.click();
+    await rejectedLoginPage.waitForFunction(() => window.routerControlTest.calls()
+      .filter((call) => call.name === "loginChatGptSubscriptionAccount").length === 2);
+    assert.deepEqual(rejectedLoginErrors, []);
+    await rejectedLoginPage.close();
+
+    const pendingRemovalPage = await browser.newPage({ viewport: { width: 1280, height: 840 } });
+    pendingRemovalPage.setDefaultTimeout(10_000);
+    await pendingRemovalPage.goto(`${url}?loginStaysPending=1`, { waitUntil: "domcontentloaded" });
+    await pendingRemovalPage.getByRole("button", { name: "Settings", exact: true }).click();
+    const pendingAccount = pendingRemovalPage.locator(".subscription-account-row").filter({ hasText: "Current account" });
+    await pendingAccount.getByRole("button", { name: "Login", exact: true }).click();
+    await pendingRemovalPage.waitForFunction(() => window.routerControlTest.calls()
+      .some((call) => call.name === "loginChatGptSubscriptionAccount"));
+    assert.equal(
+      await pendingAccount.getByRole("button", { name: "Remove", exact: true }).isDisabled(),
+      true,
+      "an account with a detached OAuth lifecycle must not be removable",
+    );
+    await pendingRemovalPage.close();
+
+    const corruptPoolPage = await browser.newPage({ viewport: { width: 1280, height: 840 } });
+    const corruptPoolErrors = [];
+    corruptPoolPage.setDefaultTimeout(10_000);
+    corruptPoolPage.on("pageerror", (error) => corruptPoolErrors.push(error.message));
+    await corruptPoolPage.goto(`${url}?rejectAccountPool=1`, { waitUntil: "domcontentloaded" });
+    await corruptPoolPage.getByRole("button", { name: "Settings", exact: true }).click();
+    const accountFailure = corruptPoolPage.getByText("ChatGPT account state unavailable", { exact: true });
+    await accountFailure.waitFor();
+    assert.match(await corruptPoolPage.locator("body").innerText(), /could not be read as JSON/i);
+    assert.equal(
+      await corruptPoolPage.getByText("No saved ChatGPT accounts", { exact: true }).count(),
+      0,
+      "a corrupt protected pool must not be rendered as an empty first-run pool",
+    );
+    assert.equal(
+      await corruptPoolPage.getByRole("button", { name: "Add account", exact: true }).isDisabled(),
+      true,
+    );
+    assert.deepEqual(corruptPoolErrors, []);
+    await corruptPoolPage.close();
     assert.deepEqual(pageErrors, [], `renderer errors: ${pageErrors.join("; ")}`);
   } finally {
     await browser.close();

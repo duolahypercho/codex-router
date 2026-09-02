@@ -950,6 +950,20 @@ test("native catalog merge preserves account visibility and bundled-only models"
   ]);
 });
 
+test("an account catalog can be authoritative about model availability", () => {
+  const merged = mergeNativeCatalogs(
+    { models: [{ slug: "gpt-free", visibility: "list" }] },
+    {
+      models: [
+        { slug: "gpt-free", visibility: "list" },
+        { slug: "gpt-plus-only", visibility: "list" },
+      ],
+    },
+    { includeBundledOnly: false },
+  );
+  assert.deepEqual(merged.models, [{ slug: "gpt-free", visibility: "list" }]);
+});
+
 test("native catalog merge never loses non-empty bundled metadata", () => {
   const merged = mergeNativeModel(
     {

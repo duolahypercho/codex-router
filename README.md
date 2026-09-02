@@ -1364,6 +1364,20 @@ and are not available while signed out. The equivalent local control command is
 `./bin/control auth-mode on` or `./bin/control auth-mode off`; when using the
 command directly, restart Codex yourself.
 
+### Native ChatGPT account switching
+
+Codex Router can keep multiple ChatGPT subscription logins in isolated
+profiles. Select an account in Control Center; the selection is
+applied to native Codex after Codex is closed and restarted. The previous
+login remains saved, and switching never removes another account's session.
+
+Each account keeps its own native model catalog and routed overlay. Usage is
+read from up to eight saved, usable accounts' isolated `CODEX_HOME`
+directories, prioritizing the selected account and using the weekly
+window when available and the monthly window otherwise. This is an explicit
+switch-only feature: it does not perform automatic quota or round-robin
+routing. See [the account switching guide](docs/CHATGPT-ACCOUNT-MODES.md) for
+the safety and token-refresh details.
 ### Use ChatGPT Web models through Codex Router
 
 Codex Router can use the account-gated browser models exposed by

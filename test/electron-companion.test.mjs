@@ -131,6 +131,18 @@ test("compatibility build entrypoints package the full Control Center", () => {
   }
 });
 
+test("Control Center packaging runs npm from its project directory", () => {
+  const shell = readFileSync(path.join(root, "scripts", "build-electron-companion.sh"), "utf8");
+  const macos = readFileSync(path.join(root, "scripts", "build-macos-tray-app.sh"), "utf8");
+  const windows = readFileSync(path.join(root, "scripts", "build-electron-companion.ps1"), "utf8");
+  assert.match(shell, /\(\s*\n\s*cd "\$app_dir"\s*\n\s*npm ci/);
+  assert.match(macos, /\(\s*\n\s*cd "\$control_center_dir"\s*\n\s*npm ci/);
+  assert.match(windows, /Push-Location \$App[\s\S]*?& npm ci/);
+  assert.doesNotMatch(shell, /npm (?:ci|run|test).*--prefix/);
+  assert.doesNotMatch(macos, /npm (?:ci|run|test).*--prefix/);
+  assert.doesNotMatch(windows, /npm (?:ci|run|test).*--prefix/);
+});
+
 test("the Linux packager can stage without touching the live package", () => {
   const scriptPath = path.join(root, "scripts", "build-electron-companion.sh");
   const script = readFileSync(scriptPath, "utf8");

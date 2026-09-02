@@ -547,6 +547,38 @@ function readWithAbort(reader, signal) {
   });
 }
 
+// The decompressed size a Zstandard frame header declares, or undefined when
+// the frame omits it (streaming encoders may) or the bytes are not a zstd frame
+// at all. Only the header is read; nothing is decoded, so this is safe to run
+// on an untrusted body before any native decompressor sees it.
+//
+// Layout, RFC 8878 §3.1.1: the magic number 0xFD2FB528 (little-endian), then
+// a Frame_Header_Descriptor byte whose top two bits size the content-size
+// field (0, 2, 4, or 8 bytes -- with 0 meaning a 1-byte field only when the
+// Single_Segment bit, bit 5, is set), and whose low two bits size the
+// Dictionary_ID (0, 1, 2, or 4 bytes). A Window_Descriptor byte sits between
+// them unless Single_Segment is set. The 2-byte size form stores the value
+// minus 256.
+export function zstdFrameContentSize(buffer) {
+  if (!Buffer.isBuffer(buffer) || buffer.length < 6) return undefined;
+  if (buffer.readUInt32LE(0) !== 0xfd2fb528) return undefined;
+  const descriptor = buffer[4];
+  const singleSegment = (descriptor & 0x20) !== 0;
+  const sizeFlag = descriptor >> 6;
+  const sizeBytes = sizeFlag === 0 ? (singleSegment ? 1 : 0) : [0, 2, 4, 8][sizeFlag];
+  if (sizeBytes === 0) return undefined;
+  const dictionaryBytes = [0, 1, 2, 4][descriptor & 0x03];
+  const offset = 5 + (singleSegment ? 0 : 1) + dictionaryBytes;
+  if (buffer.length < offset + sizeBytes) return undefined;
+  if (sizeBytes === 1) return buffer[offset];
+  if (sizeBytes === 2) return buffer.readUInt16LE(offset) + 256;
+  if (sizeBytes === 4) return buffer.readUInt32LE(offset);
+  const declared = buffer.readBigUInt64LE(offset);
+  return declared > BigInt(Number.MAX_SAFE_INTEGER)
+    ? Number.MAX_SAFE_INTEGER
+    : Number(declared);
+}
+
 export async function readRequestBody(
   request,
   { maxBytes = MAX_BODY_BYTES, signal } = {},

@@ -6,7 +6,7 @@ import {
   gunzipSync,
   inflateSync,
   zstdCompress,
-  zstdDecompressSync,
+  zstdDecompress,
 } from "node:zlib";
 import { promisify } from "node:util";
 
@@ -49,6 +49,7 @@ import {
   writeEventStreamHead,
   writeJson,
   writeStreamErrorEvent,
+  zstdFrameContentSize,
 } from "./http-utils.mjs";
 import {
   EmptyCompletionGuard,
@@ -552,7 +553,19 @@ function bindClientAbort(request, response, onAbort) {
   if (request.aborted || response.destroyed) abort();
 }
 
-function decodeBody(
+// Codex zstd-compresses every request body, so this runs on every turn and
+// the buffer grows with the conversation. The one-shot synchronous decoder
+// inflated it on the event loop, and that path is the one implicated in an
+// intermittent native abort on Windows (issue #465: exit 0xC0000409 with no JS
+// frame, always at the end of a long session with a large accumulated
+// context, always right after a successful turn). It has not been reproduced
+// here, so the change is defensive rather than a confirmed fix: the declared
+// frame size is checked before any native code runs, and the decoder itself is
+// the asynchronous one, which keeps a multi-megabyte inflate off the thread
+// that is serving every other request.
+const decompressZstd = promisify(zstdDecompress);
+
+async function decodeBody(
   body,
   contentEncoding,
   { maxBytes = MAX_DECODED_BODY_BYTES } = {},
@@ -569,8 +582,18 @@ function decodeBody(
   try {
     for (const encoding of encodings) {
       const options = { maxOutputLength: maxBytes };
-      if (encoding === "zstd") decoded = zstdDecompressSync(decoded, options);
-      else if (encoding === "gzip" || encoding === "x-gzip") {
+      if (encoding === "zstd") {
+        // A frame that announces an oversize payload gets the same 413 the
+        // output cap would produce, reached without handing the native decoder
+        // a body it was never going to be allowed to finish.
+        const declared = zstdFrameContentSize(decoded);
+        if (declared !== undefined && declared > maxBytes) {
+          const error = new Error(`Decoded request body exceeds ${maxBytes} bytes.`);
+          error.status = 413;
+          throw error;
+        }
+        decoded = await decompressZstd(decoded, options);
+      } else if (encoding === "gzip" || encoding === "x-gzip") {
         decoded = gunzipSync(decoded, options);
       } else if (encoding === "deflate") decoded = inflateSync(decoded, options);
       else if (encoding === "br") decoded = brotliDecompressSync(decoded, options);
@@ -3475,7 +3498,7 @@ async function handleResponses(request, response, requestUrl) {
     if (!requireCodexTransport(request, response)) return;
     const exactRouteProbe = exactRouteProbeRequested(request.headers);
     const encoded = await readRequestBody(request, { signal: controller.signal });
-    const body = decodeBody(encoded, request.headers["content-encoding"]);
+    const body = await decodeBody(encoded, request.headers["content-encoding"]);
     let payload = await parseBodyAsync(body);
     controller.signal.throwIfAborted();
     requestedModel = typeof payload.model === "string" ? payload.model : "";
@@ -4541,7 +4564,7 @@ async function handleNativeRequest(request, response, requestUrl, defaultModel) 
     // and leak the request to ChatGPT. Image requests keep their old ordering.
     if (searchRequest) {
       const encoded = await readRequestBody(request, { signal: controller.signal });
-      body = decodeBody(encoded, request.headers["content-encoding"]);
+      body = await decodeBody(encoded, request.headers["content-encoding"]);
       payload = await parseBodyAsync(body);
       requestedModel = typeof payload.model === "string" ? payload.model : defaultModel;
       const binding = searchSidecarBindingForModel(requestedModel);
@@ -4619,7 +4642,7 @@ async function handleNativeRequest(request, response, requestUrl, defaultModel) 
     }
     if (!payload) {
       const encoded = await readRequestBody(request, { signal: controller.signal });
-      body = decodeBody(encoded, request.headers["content-encoding"]);
+      body = await decodeBody(encoded, request.headers["content-encoding"]);
       payload = await parseBodyAsync(body);
     }
     controller.signal.throwIfAborted();
@@ -4775,7 +4798,7 @@ async function handleEmbeddings(request, response, requestUrl) {
       maxBytes: EMBEDDINGS_MAX_BODY_BYTES,
       signal: controller.signal,
     });
-    const body = decodeBody(encoded, request.headers["content-encoding"], {
+    const body = await decodeBody(encoded, request.headers["content-encoding"], {
       maxBytes: EMBEDDINGS_MAX_BODY_BYTES,
     });
     const payload = await parseBodyAsync(body);
