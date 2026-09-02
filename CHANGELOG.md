@@ -13,6 +13,27 @@
   already looking at, and hiding it would ask for input through a window nobody
   can see. A source-level test holds the line, since the failure is invisible off
   Windows.
+- **A failed Windows scheduled-task launch now explains itself.** Node reports a
+  module it cannot *read* exactly as it reports one that is not there —
+  `Cannot find module` with `MODULE_NOT_FOUND` — so an install whose checkout
+  the task's own token cannot read looked like a missing `src\start.mjs` that
+  the operator could open in front of them (#548). Readiness failure now checks
+  whether the path the loader named exists: if it does, it reports a permission
+  or token problem and how to confirm it, and if it does not, it reports an
+  incomplete checkout. When the log carries no such evidence the original
+  wording is kept rather than a cause being invented. This improves the
+  diagnosis only; the underlying ACL condition is not yet reproduced.
+- **The Codex picker now shows vendor groups.** Codex sorts its model picker by
+  each entry's `priority`, never by catalog order, and routed models reused
+  the same low integers as native GPT entries, so DeepSeek and Grok routes
+  interleaved with GPT models and the vendor grouping the catalog always
+  carried never reached the screen (#544). Routed models that are not
+  certified v2 spawn routes are now published in a band above the highest
+  visible native priority, in vendor-group order. A certified v2 route keeps
+  its authored priority, because that value is what keeps it inside Codex's
+  small spawn-model override window; renumbering it would crowd it out. Only
+  the published entry changes: failover ranking, the vision bridge, and every
+  other client keep reading the registry's authored value.
 - **Grok OAuth no longer replays a known progress-only sentence after an
   aborted follow-up.** The first affected turn remains fully live. Once a
   conversation has actually produced the progress-only shape, later

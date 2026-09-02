@@ -1,6 +1,7 @@
 import { waitForRouterHealth } from "./router-health.mjs";
-import { STATE_DIR } from "./paths.mjs";
+import { LOG_PATH, STATE_DIR } from "./paths.mjs";
 import { windowsScheduledTaskState } from "./windows-task-state.mjs";
+import { diagnoseWindowsLaunchFailure, readLogTail } from "./windows-launch-diagnosis.mjs";
 
 const TASK_LAUNCH_GRACE_MS = 15_000;
 const TASK_STATE_POLL_MS = 1_000;
@@ -67,6 +68,7 @@ export async function waitForServiceReadiness({
   getWindowsTaskState = windowsScheduledTaskState,
   getServiceRestarts,
   waitForHealth = waitForRouterHealth,
+  logPath = LOG_PATH,
 } = {}) {
   const deadline = Date.now() + Math.max(0, timeoutMs);
   // Keep exactly one health attempt in flight for the whole operation; the
@@ -161,8 +163,14 @@ export async function waitForServiceReadiness({
         const result = Number.isSafeInteger(taskState.lastTaskResult)
           ? `0x${taskState.lastTaskResult.toString(16)}`
           : "unknown";
+        // The task's own result is a bare exit code. When the router log
+        // explains why the launch died, say that instead of leaving the
+        // operator to reconcile "no running launcher" against a Node error
+        // that names a file they can open (issue #548).
+        const diagnosis = diagnoseWindowsLaunchFailure({ logText: readLogTail(logPath) });
         throw new Error(
-          `Windows Scheduled Task has no running launcher process (LastTaskResult=${result}); router cannot become healthy.`,
+          `Windows Scheduled Task has no running launcher process (LastTaskResult=${result}); router cannot become healthy.` +
+            (diagnosis ? `\n${diagnosis}` : ""),
         );
       }
     } else if (launcherAlive) {
