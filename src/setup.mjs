@@ -12,6 +12,7 @@ import { effectiveVisibleModels, setModelSelection } from "./model-picker-state.
 import { kimiOAuthStatus } from "./oauth-status.mjs";
 import { SOURCE_ROOT, TARGET } from "./paths.mjs";
 import { effectiveProviderCredentialStatus } from "./provider-api-key-routing.mjs";
+import { credentialSetupHint } from "./provider-credentials.mjs";
 import {
   installOauthCli,
   oauthCliPath,
@@ -353,7 +354,9 @@ async function configureProvider(provider) {
     const setup =
       provider.kind === "oauth"
         ? oauthSetupHint(provider)
-        : `run \`./bin/provider-key ${provider.id} set\``;
+        : provider.credential?.resolver
+          ? credentialSetupHint(provider)
+          : `run \`./bin/provider-key ${provider.id} set\``;
     throw incomplete(`${provider.displayName} is selected but not configured; ${setup} first.`);
   }
   if (provider.kind === "oauth") {
@@ -415,6 +418,11 @@ async function configureProvider(provider) {
     }
   } else {
     if (["anonymous", "per-model"].includes(provider.authMode)) return;
+    if (provider.credential?.resolver) {
+      throw incomplete(
+        `${provider.displayName} is selected but not configured; ${credentialSetupHint(provider)} first.`,
+      );
+    }
     const prompt = provider.credential?.prompt || `${provider.displayName} API key`;
     if (!confirm(`Enter ${prompt} securely now?`)) {
       throw incomplete(`${provider.displayName} setup was cancelled.`);

@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "providers": [
+    {
+      "id": "vertex",
+      "displayName": "Google Cloud Vertex AI",
+      "kind": "openai-compatible",
+      "protocol": "vertex",
+      "baseUrl": "https://aiplatform.googleapis.com",
+      "modelGarden": {
+        "apiVersion": "v1beta1",
+        "baseUrl": "https://aiplatform.googleapis.com",
+        "parent": "publishers",
+        "listAllVersions": true
+      },
+      "credential": {
+        "resolver": "google-application-default"
+      }
+    }
+  ]
+}

@@ -873,6 +873,11 @@ async function readSecretFromStdin() {
 
 async function saveProviderCredential(providerId) {
   const { providerOnboardingSnapshot, saveApiCredential } = await import("./provider-onboarding.mjs");
+  const { apiProvider } = await import("./provider-credentials.mjs");
+  const provider = apiProvider(providerId);
+  if (provider.credential?.resolver) {
+    throw new Error(`${provider.displayName} does not accept API keys.`);
+  }
   const value = await readSecretFromStdin();
   // The control-center sends this command before it refreshes its provider
   // snapshot. Keep credential persistence, selection, and target publication
@@ -1017,6 +1022,35 @@ async function handleProviderKeyPool(providerId, action, value) {
       );
     }
   }
+}
+
+async function handleVertex(action, projectId, location) {
+  const {
+    clearVertexConfiguration,
+    setVertexConfiguration,
+    vertexConfigurationStatus,
+  } = await import("./vertex-state.mjs");
+  const { credentialStatus } = await import("./provider-credentials.mjs");
+  const status = () => ({
+    configuration: vertexConfigurationStatus({ persistent: true }),
+    credential: credentialStatus("vertex", { persistent: true }),
+  });
+
+  if (!action || action === "status") {
+    process.stdout.write(`${JSON.stringify(status())}\n`);
+    return;
+  }
+  if (action === "set" || action === "configure") {
+    if (!projectId || !location) {
+      throw new Error("Usage: control vertex set <project-id> <location>");
+    }
+    setVertexConfiguration({ projectId, location });
+  } else if (action === "clear") {
+    clearVertexConfiguration();
+  } else {
+    throw new Error("Usage: control vertex status|set <project-id> <location>|clear");
+  }
+  process.stdout.write(`${JSON.stringify(status())}\n`);
 }
 
 async function setLoginFreeMode(desired) {
@@ -3142,6 +3176,8 @@ if (args.includes("--probe")) {
   await printProviderOnboarding();
 } else if (args[0] === "generic-providers") {
   await handleGenericProviders(...args.slice(1));
+} else if (args[0] === "vertex") {
+  await handleVertex(args[1] || "status", args[2], args[3]);
 } else if (args[0] === "install-cli") {
   if (!args[1]) throw new Error("Usage: control install-cli <oauth-provider>");
   await installProviderCli(args[1]);

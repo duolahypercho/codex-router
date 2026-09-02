@@ -28,6 +28,11 @@ import {
   assertGitHubCopilotCredential,
   githubCopilotCredentialProblem,
 } from "./github-copilot-session.mjs";
+import {
+  resolveVertexCredential,
+  vertexCredentialSetupHint,
+  vertexCredentialStatus,
+} from "./vertex-credentials.mjs";
 
 export function apiProvider(providerId) {
   const provider = PROVIDERS.get(providerId);
@@ -51,7 +56,7 @@ export function primaryCredentialPath(provider) {
 export function credentialPaths(provider) {
   // A keyless provider stores nothing, so there is no file to look for and
   // nothing for a support bundle to redact.
-  if (!provider.credential) return [];
+  if (!provider.credential?.file) return [];
   const names = [provider.credential.file, ...(provider.credential.legacyFiles || [])];
   const candidates = names.flatMap((name) => [
     path.join(STATE_DIR, name),
@@ -214,6 +219,9 @@ export function resolveProviderCredential(providerOrId, options = {}) {
   if (provider.authMode === "per-model") {
     return { value: undefined, source: "per-model endpoints", persistent: true };
   }
+  if (provider.credential?.resolver === "google-application-default") {
+    return resolveVertexCredential(options);
+  }
   // Nothing to resolve for a loopback provider: it authenticates no one. The
   // placeholder keeps the forwarder's header shape uniform, and the registry
   // guarantees keyless providers are loopback-only, so it never leaves the
@@ -348,6 +356,9 @@ export function credentialSetupHint(provider) {
   if (provider.authMode === "anonymous") return "No key needed; free models are rate limited by the provider.";
   if (provider.authMode === "per-model") return "No key needed here; each model names its own endpoint.";
   if (provider.keyless) return "No key needed; it runs on this machine.";
+  if (provider.credential?.resolver === "google-application-default") {
+    return vertexCredentialSetupHint({ persistent: true });
+  }
   const keyCommand = targetCli(`provider-key ${provider.id} set`);
   return `Run ${keyCommand}`;
 }
@@ -364,6 +375,9 @@ export function credentialStatus(providerOrId, options = {}) {
   if (!provider || provider.kind !== "openai-compatible") {
     throw new Error(`Unknown API-key provider: ${typeof providerOrId === "string" ? providerOrId : "unknown"}`);
   }
+  if (provider.credential?.resolver === "google-application-default") {
+    return vertexCredentialStatus(options);
+  }
   const credential = resolveProviderCredential(provider, options);
   return credential
     ? { configured: true, source: credential.source, persistent: credential.persistent }
@@ -373,6 +387,11 @@ export function credentialStatus(providerOrId, options = {}) {
 export function writeProviderCredential(providerOrId, value) {
   const provider =
     typeof providerOrId === "string" ? apiProvider(providerOrId) : providerOrId;
+  if (provider.credential?.resolver === "google-application-default") {
+    throw new Error(
+      `${provider.displayName} does not accept API keys; ${credentialSetupHint(provider)}`,
+    );
+  }
   const key = String(value || "").trim();
   if (!key) throw new Error(`No ${credentialLabel(provider)} was entered; nothing changed.`);
   if (provider.authProfile === "github-copilot") {

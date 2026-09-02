@@ -261,6 +261,7 @@ function loadRegistry() {
       if (provider.keyless && !loopbackBaseUrl(provider.baseUrl)) {
         fail(`keyless provider ${provider.id} must use a loopback baseUrl`);
       }
+      const credentialResolver = provider.credential?.resolver;
       if (
         provider.authMode !== undefined &&
         !["anonymous", "per-model"].includes(provider.authMode)
@@ -311,6 +312,21 @@ function loadRegistry() {
         fail(`provider ${provider.id} has anonymous metadata without authMode anonymous`);
       }
       if (
+        credentialResolver !== undefined &&
+        credentialResolver !== "google-application-default"
+      ) {
+        fail(`provider ${provider.id} has an unsupported credential resolver`);
+      }
+      if (credentialResolver === "google-application-default") {
+        if (provider.protocol !== "vertex") {
+          fail(`provider ${provider.id} may only use Google Application Default Credentials with the vertex protocol`);
+        }
+        if (
+          Object.keys(provider.credential || {}).some((field) => field !== "resolver")
+        ) {
+          fail(`provider ${provider.id} Google credential metadata must only declare resolver`);
+        }
+      } else if (
         !provider.keyless &&
         !["anonymous", "per-model"].includes(provider.authMode) &&
         (!provider.credential?.file || !Array.isArray(provider.credential.environment))
