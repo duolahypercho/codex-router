@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **The Codex picker now shows vendor groups.** Codex sorts its model picker by
+  each entry's `priority`, never by catalog order, and routed models reused
+  the same low integers as native GPT entries, so DeepSeek and Grok routes
+  interleaved with GPT models and the vendor grouping the catalog always
+  carried never reached the screen (#544). Routed models that are not
+  certified v2 spawn routes are now published in a band above the highest
+  visible native priority, in vendor-group order. A certified v2 route keeps
+  its authored priority, because that value is what keeps it inside Codex's
+  small spawn-model override window; renumbering it would crowd it out. Only
+  the published entry changes: failover ranking, the vision bridge, and every
+  other client keep reading the registry's authored value.
 - **Antigravity OAuth now uses an operator-owned, fail-closed sign-in.** The
   router requires one matching Google Desktop-app client ID/secret pair,
   collects it through an ephemeral IPv4 loopback listener, and stores the pair
