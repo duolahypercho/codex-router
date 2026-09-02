@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **A failed Windows scheduled-task launch now explains itself.** Node reports a
+  module it cannot *read* exactly as it reports one that is not there —
+  `Cannot find module` with `MODULE_NOT_FOUND` — so an install whose checkout
+  the task's own token cannot read looked like a missing `src\start.mjs` that
+  the operator could open in front of them (#548). Readiness failure now checks
+  whether the path the loader named exists: if it does, it reports a permission
+  or token problem and how to confirm it, and if it does not, it reports an
+  incomplete checkout. When the log carries no such evidence the original
+  wording is kept rather than a cause being invented. This improves the
+  diagnosis only; the underlying ACL condition is not yet reproduced.
 - **Request bodies are decompressed off the event loop, and an oversize zstd
   frame is refused from its header.** Codex zstd-compresses every request, so
   the router inflated a buffer that grows with the conversation on the thread
