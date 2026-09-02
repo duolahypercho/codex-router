@@ -134,6 +134,7 @@ import {
   readFailoverSettings,
   recordProviderCooldown,
 } from "./model-failover.mjs";
+import { cooldownScope } from "./provider-cooldown.mjs";
 import { retryAfterSeconds } from "./rate-limit-headers.mjs";
 import {
   awaitingSpawnProof,
@@ -2073,7 +2074,9 @@ async function bridgeVisionInput(input, route, request) {
   const readWithAnyEngine = async (url, question) => {
     let lastError;
     for (const [index, engine] of engines.entries()) {
-      const provider = canonicalProviderId(visionEngineProvider(engine));
+      // The same identity the window was recorded under: a separately billed
+      // variant shares this account's credential but not its allowance.
+      const provider = cooldownScope(visionEngineProvider(engine));
       const cooled = providerCooldown(provider);
       if (cooled || exhaustedProviders.has(provider)) {
         lastError ??= new Error(

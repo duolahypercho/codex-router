@@ -1117,7 +1117,11 @@ function recordUpstreamLimits(normalized, upstream) {
   if (upstream.ok) return;
   const until = cooldownUntil(rateLimit);
   if (!until) return;
-  recordProviderCooldown(canonicalProviderId(normalized.provider.id), {
+  // The provider id is passed through unresolved: `recordProviderCooldown`
+  // keys the window by cooldown scope, and pre-canonicalizing here would file
+  // a separately billed variant's window under the subscription it does not
+  // share.
+  recordProviderCooldown(normalized.provider.id, {
     until,
     reason: upstream.status === 429 ? "rate_limited" : "out_of_usage",
   });
