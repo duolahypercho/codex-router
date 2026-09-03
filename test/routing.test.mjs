@@ -8801,6 +8801,160 @@ test("a plain follow-up after a thinking turn replays its reasoning", async () =
   }
 });
 
+test("router exposes Grok summaries as one canonical Codex reasoning item", async () => {
+  const model = "grok-oauth-grok-4-6";
+  const summary = "Проверяю контекст.";
+  const reasoning = {
+    id: "rs_grok_live",
+    type: "reasoning",
+    status: "completed",
+    summary: [{ type: "summary_text", text: summary }],
+  };
+  const message = {
+    id: "msg_grok_live",
+    type: "message",
+    status: "completed",
+    role: "assistant",
+    content: [{ type: "output_text", text: "Готово.", annotations: [] }],
+  };
+  const source = [
+    {
+      type: "response.created",
+      response: { id: "resp_grok_live", object: "response", status: "in_progress", output: [] },
+    },
+    {
+      type: "response.output_item.added",
+      output_index: 0,
+      item: { ...message, status: "in_progress", content: [] },
+    },
+    {
+      type: "response.content_part.added",
+      item_id: message.id,
+      output_index: 0,
+      content_index: 0,
+      part: { type: "output_text", text: "", annotations: [] },
+    },
+    {
+      type: "response.reasoning_summary_text.delta",
+      item_id: "rs_hash_first_delta",
+      output_index: 0,
+      delta: "Проверяю ",
+    },
+    {
+      type: "response.reasoning_summary_text.delta",
+      item_id: "rs_hash_second_delta",
+      output_index: 0,
+      delta: "контекст.",
+    },
+    {
+      type: "response.reasoning_summary_text.done",
+      item_id: "rs_hash_final",
+      output_index: 0,
+      summary_index: 0,
+      text: summary,
+    },
+    {
+      type: "response.reasoning_summary_part.done",
+      item_id: "rs_hash_final",
+      output_index: 0,
+      summary_index: 0,
+      part: { type: "summary_text", text: summary },
+    },
+    {
+      type: "response.output_text.delta",
+      item_id: message.id,
+      output_index: 0,
+      content_index: 0,
+      delta: "Готово.",
+    },
+    {
+      type: "response.output_text.done",
+      item_id: message.id,
+      output_index: 0,
+      content_index: 0,
+      text: "Готово.",
+    },
+    {
+      type: "response.content_part.done",
+      item_id: message.id,
+      output_index: 0,
+      content_index: 0,
+      part: { type: "reasoning_text", reasoning: summary },
+    },
+    { type: "response.output_item.done", output_index: 0, item: message },
+    {
+      type: "response.completed",
+      response: {
+        id: "resp_grok_live",
+        object: "response",
+        status: "completed",
+        output: [
+          {
+            type: "reasoning",
+            id: "rs_final_hash",
+            status: "completed",
+            role: "assistant",
+            content: [{ type: "output_text", text: summary, annotations: [] }],
+          },
+          { ...message, id: "chatcmpl_final" },
+        ],
+        usage: { input_tokens: 5, output_tokens: 8, total_tokens: 13 },
+      },
+    },
+  ].map((event) => `data: ${JSON.stringify({ ...event, model })}\n\n`).join("");
+  const gateway = await mockServer(async (request, response) => {
+    await bodyJson(request);
+    response.writeHead(200, { "Content-Type": "text/event-stream" });
+    response.end(`${source}data: [DONE]\n\n`);
+  });
+  const routerPort = await openPort();
+  const router = run("router.mjs", {
+    CODEX_ROUTER_PORT: String(routerPort),
+    CODEX_ROUTER_GATEWAY_BASE_URL: `http://127.0.0.1:${gateway.port}/v1`,
+    CODEX_ROUTER_QUIET: "1",
+  });
+
+  try {
+    await waitFor(`${routerBase(routerPort)}/models`, router);
+    const response = await fetch(`${routerBase(routerPort)}/responses`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "grok-oauth/grok-4.6",
+        input: "проверь",
+        stream: true,
+      }),
+    });
+    const text = await response.text();
+    assert.equal(response.status, 200, text);
+    const output = text.split(/\r?\n/u)
+      .filter((line) => line.startsWith("data: {"))
+      .map((line) => JSON.parse(line.slice(5).trimStart()));
+    const reasoningEvents = output.filter(
+      (event) => event.item?.type === "reasoning" || event.type.startsWith("response.reasoning_"),
+    );
+    assert.deepEqual(reasoningEvents.map((event) => event.type), [
+      "response.output_item.added",
+      "response.reasoning_summary_part.added",
+      "response.reasoning_summary_text.delta",
+      "response.reasoning_summary_text.delta",
+      "response.reasoning_summary_text.done",
+      "response.reasoning_summary_part.done",
+      "response.output_item.done",
+    ]);
+    assert.ok(reasoningEvents.every(
+      (event) => (event.item_id ?? event.item?.id) === "rs_hash_first_delta",
+    ));
+    assert.deepEqual(
+      output.find((event) => event.type === "response.completed").response.output[0],
+      { ...reasoning, id: "rs_hash_first_delta" },
+    );
+  } finally {
+    await stopChild(router);
+    await closeServer(gateway.server);
+  }
+});
+
 test("router normalizes direct DeepSeek's live reasoning bridge and removes its blank", async () => {
   const model = "deepseek-v4-flash";
   const reasoningText = "Inspect the request, then call the tool exactly once.";

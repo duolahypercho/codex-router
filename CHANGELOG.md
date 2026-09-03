@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **Grok OAuth reasoning summaries now appear in Codex while the model is
+  thinking.** LiteLLM can open an empty assistant message before Grok's first
+  reasoning delta, then assign a different item id to every delta and return
+  the terminal reasoning item in Chat Completions shape. Codex discarded that
+  orphaned lifecycle and showed no progress until answer text arrived. The
+  router now repairs only Grok OAuth event streams into one canonical Responses
+  reasoning item, preserves valid streams, and keeps the following message and
+  tool output indexes consistent.
+
 - **A `Retry-After` expressed as a date is now honored.** RFC 9110 allows
   `Retry-After` to carry either delay-seconds or an HTTP-date. The router read
   the header as a bare number, so a dated value became `NaN` and every consumer
