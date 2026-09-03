@@ -1311,6 +1311,55 @@ test("isFree is a boolean model tag", async () => {
   }
 });
 
+test("toolSchemaRecursion accepts only \"flatten\"", async () => {
+  const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const nodePath = (await import("node:path")).default;
+  const { spawnSync } = await import("node:child_process");
+  const dir = mkdtempSync(nodePath.join(tmpdir(), "registry-schema-recursion-test-"));
+  const load = (toolSchemaRecursion) => {
+    const registry = readRegistryDocument("config");
+    registry.models = [
+      { ...registry.models[0], toolSchemaRecursion },
+      ...registry.models.slice(1),
+    ];
+    const registryPath = nodePath.join(dir, "providers.json");
+    writeFileSync(registryPath, JSON.stringify(registry));
+    return spawnSync(
+      process.execPath,
+      ["-e", "import('./src/model-registry.mjs').catch((e)=>{console.error(e.message);process.exit(1);})"],
+      { encoding: "utf8", env: { ...process.env, MODEL_ROUTER_REGISTRY: registryPath } },
+    );
+  };
+  try {
+    // The field names an executable behavior, so an unrecognized verb has to
+    // fail the load rather than be ignored into a silently unrepaired route.
+    assert.match(load("sometimes").stderr, /may only set toolSchemaRecursion to "flatten"/);
+    assert.match(load(true).stderr, /may only set toolSchemaRecursion to "flatten"/);
+    assert.equal(load("flatten").status, 0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("every Muse Spark route on opencode flattens recursive tool schemas", () => {
+  // Meta's Console upstream refuses a $ref cycle on the free and the Go route
+  // alike -- both were measured returning the same 400 -- so a route added to
+  // one surface without the field would lose whole turns to a bare rejection.
+  const muse = MODELS.filter(
+    (model) =>
+      model.provider.startsWith("opencode") && /muse-spark/u.test(model.upstreamModel),
+  );
+  assert.ok(muse.length >= 2, "expected checked-in Muse Spark routes on opencode");
+  for (const model of muse) {
+    assert.equal(
+      model.toolSchemaRecursion,
+      "flatten",
+      `${model.slug} must flatten recursive tool schemas`,
+    );
+  }
+});
+
 test("Nous Research free models are tagged isFree, Hermes 4 is not", () => {
   // Six free portal routes via :free upstream ids should be tagged isFree: true
   const freeModels = [

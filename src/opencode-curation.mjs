@@ -51,6 +51,9 @@ const OPENCODE_FREE_MODELS = Object.freeze({
     outputLimit: 131_072,
     reasoningLevels: Object.freeze(["minimal", "low", "medium", "high", "xhigh"]),
     requestProfile: "auto-tool-choice",
+    // Meta's Console upstream refuses a tool schema whose $refs cycle,
+    // losing the whole turn to a 400 that names no tool.
+    toolSchemaRecursion: "flatten",
     // The `-free` suffix is the tier, not the model. Carrying it in the label
     // put this route in a family of its own, apart from the paid routes to the
     // same model. `isFree` is where the price distinction belongs; the picker
@@ -73,6 +76,9 @@ const OPENCODE_FREE_MODELS = Object.freeze({
     outputLimit: 131_072,
     reasoningLevels: Object.freeze(["minimal", "low", "medium", "high", "xhigh"]),
     requestProfile: "auto-tool-choice",
+    // Meta's Console upstream refuses a tool schema whose $refs cycle,
+    // losing the whole turn to a 400 that names no tool.
+    toolSchemaRecursion: "flatten",
     displayName: "Muse Spark 1.3 Contributor (OpenCode Free)",
     isFree: true,
     summary:
@@ -423,6 +429,13 @@ export function curatedModelDisplayName(providerId, upstreamModel) {
 // Undefined rather than false for an undocumented id, so a stored flag stands.
 export function curatedModelIsFree(providerId, upstreamModel) {
   return curatedModelRecord(providerId, upstreamModel)?.isFree;
+}
+
+// Applied for the same reason the name and the free tag are: an entry curated
+// before this was documented carries none of them, and re-curating is not
+// something an installed machine should have to do to stop losing turns.
+export function curatedModelToolSchemaRecursion(providerId, upstreamModel) {
+  return curatedModelRecord(providerId, upstreamModel)?.toolSchemaRecursion;
 }
 
 // The picker text that carries the sourcing for every value this module knows

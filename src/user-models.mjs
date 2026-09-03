@@ -69,6 +69,7 @@ const METADATA_FIELDS = new Set([
   "upgradeTo",
   "requiresTrailingUserTurn",
   "isFree",
+  "toolSchemaRecursion",
   "supportedEndpoints",
 ]);
 

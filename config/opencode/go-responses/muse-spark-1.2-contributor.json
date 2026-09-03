@@ -43,7 +43,8 @@
       ],
       "supportsApplyPatchTool": false,
       "requestProfile": "auto-tool-choice",
-      "compHash": "opencode-go-responses-muse-spark-1-2-contributor-v3"
+      "compHash": "opencode-go-responses-muse-spark-1-2-contributor-v3",
+      "toolSchemaRecursion": "flatten"
     }
   ]
 }

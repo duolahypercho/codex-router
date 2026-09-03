@@ -68,7 +68,10 @@ import {
 import {
   runProviderApiKeyAttempts,
 } from "./provider-api-key-pool.mjs";
-import { stripCodexEncryptedSchemaAnnotation } from "./tool-schema-root.mjs";
+import {
+  nonRecursiveToolSchema,
+  stripCodexEncryptedSchemaAnnotation,
+} from "./tool-schema-root.mjs";
 import { requestGenericProvider } from "./generic-providers.mjs";
 import { genericProviderConfigured } from "./generic-provider-readiness.mjs";
 import { providerTransportError } from "./transport-failure.mjs";
@@ -381,6 +384,42 @@ function stripEncryptedToolSchemaAnnotations(payload, protocol) {
     return { ...tool, function: { ...fn, parameters: repaired } };
   });
   if (changed) payload.tools = tools;
+}
+
+// Meta's Console API behind opencode answers a self-referencing tool schema
+// with a bare 400 naming neither the tool nor the definition, and the turn is
+// lost. Measured against that endpoint, an ordinary `$ref`/`$defs` pair is
+// accepted and only a reference re-entering its own ancestor is refused, so
+// `nonRecursiveToolSchema` -- which blanks exactly the cycle-closing edge and
+// returns any other schema by identity -- is the whole fix. The namespace relay
+// already uses it for the same reason.
+function flattenRecursiveToolSchemas(payload, protocol) {
+  if (!Array.isArray(payload.tools)) return;
+  let changed = false;
+  const tools = payload.tools.map((tool) => {
+    if (!tool || typeof tool !== "object" || Array.isArray(tool) || tool.type !== "function") {
+      return tool;
+    }
+    if (protocol === "openai-responses") {
+      const flattened = nonRecursiveToolSchema(tool.parameters);
+      if (flattened === tool.parameters) return tool;
+      changed = true;
+      return { ...tool, parameters: flattened };
+    }
+    const fn = tool.function;
+    if (!fn || typeof fn !== "object" || Array.isArray(fn)) return tool;
+    const flattened = nonRecursiveToolSchema(fn.parameters);
+    if (flattened === fn.parameters) return tool;
+    changed = true;
+    return { ...tool, function: { ...fn, parameters: flattened } };
+  });
+  if (!changed) return;
+  payload.tools = tools;
+  // Never quieted: a tool the model may call has lost part of its argument
+  // shape, and an unattended service is exactly where that must not be silent.
+  console.error(
+    "[api-forwarder] broke recursive $ref cycles in tool schema(s) for this request",
+  );
 }
 
 // A trailing model turn is a destructive rewrite: it discards part of the
@@ -801,6 +840,13 @@ function normalizeBody(buffer, contentType, route) {
   }
   if (model.requestProfile === "codex-encrypted-schema") {
     stripEncryptedToolSchemaAnnotations(payload, provider.protocol);
+  }
+  // Deliberately its own statement rather than a branch of the profile chain
+  // below: this is an upstream limitation, and every route that has it also
+  // needs a request profile of its own, which the single-valued field cannot
+  // express.
+  if (model.toolSchemaRecursion === "flatten") {
+    flattenRecursiveToolSchemas(payload, provider.protocol);
   }
   if (model.requestProfile === "clinepass") {
     delete payload.reasoning_effort;
