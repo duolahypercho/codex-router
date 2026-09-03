@@ -217,15 +217,26 @@ export async function refreshTargetPickerIfInstalled({ signal, deadline } = {}) 
         encoding: "utf8",
       }),
     );
-    if (!status.running) run("cursor-config-manager.mjs", ["install"]);
+    if (!status.running) {
+      await runTargetPublicationProcess("cursor-config-manager.mjs", ["install"], {
+        signal,
+        deadline: operationDeadline,
+      });
+    }
     refreshed = true;
   }
   if (existsSync(CLAUDE_CATALOG_PATH)) {
-    run("claude-code-config-manager.mjs", ["install"]);
+    await runTargetPublicationProcess("claude-code-config-manager.mjs", ["install"], {
+      signal,
+      deadline: operationDeadline,
+    });
     refreshed = true;
   }
   if (existsSync(OPENCLAW_CATALOG_PATH)) {
-    run("openclaw-config-manager.mjs", ["install"]);
+    await runTargetPublicationProcess("openclaw-config-manager.mjs", ["install"], {
+      signal,
+      deadline: operationDeadline,
+    });
     refreshed = true;
   }
   return refreshed;
