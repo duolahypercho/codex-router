@@ -25,6 +25,7 @@ async function transformed(input, chunkSize = 0, options) {
   let output = "";
   stream.setEncoding("utf8");
   stream.on("data", (chunk) => { output += chunk; });
+  const ended = once(stream, "end");
   const bytes = Buffer.from(input);
   if (chunkSize > 0) {
     for (let at = 0; at < bytes.length; at += chunkSize) {
@@ -34,7 +35,7 @@ async function transformed(input, chunkSize = 0, options) {
     stream.write(bytes);
   }
   stream.end();
-  await once(stream, "end");
+  await ended;
   return output;
 }
 
@@ -262,6 +263,160 @@ test("drops a late upstream reasoning close after a synthetic close", async () =
     1,
   );
   assert.equal(output.at(-1).type, "response.output_text.done");
+});
+
+test("flushes the held message after a real reasoning close", async () => {
+  const message = {
+    id: "msg_after_close",
+    type: "message",
+    role: "assistant",
+    status: "in_progress",
+    content: [],
+  };
+  const input = [
+    block({ type: "response.output_item.added", output_index: 0, item: message }),
+    block({ type: "response.content_part.added", item_id: message.id, output_index: 0, content_index: 0, part: { type: "output_text", text: "", annotations: [] } }),
+    block({ type: "response.reasoning_summary_text.delta", item_id: "rs_after_close", output_index: 0, delta: "Проверил." }),
+    block({ type: "response.output_item.done", output_index: 0, item: { id: "rs_final", type: "reasoning", status: "completed", summary: [{ type: "summary_text", text: "Проверил." }] } }),
+    block({ type: "response.output_text.delta", item_id: message.id, output_index: 0, content_index: 0, delta: "Готово." }),
+  ].join("");
+  const output = events(await transformed(input));
+  const messageAdded = output.findIndex(
+    (event) => event.type === "response.output_item.added" && event.item?.type === "message",
+  );
+  const textDelta = output.findIndex((event) => event.type === "response.output_text.delta");
+  assert.ok(messageAdded >= 0 && messageAdded < textDelta);
+  assert.equal(output[messageAdded].output_index, 1);
+  assert.equal(output[textDelta].output_index, 1);
+});
+
+test("normalizes a completed frame larger than the pre-commit limit", async () => {
+  const longText = "x".repeat(600);
+  const message = {
+    id: "msg_large",
+    type: "message",
+    role: "assistant",
+    status: "completed",
+    content: [{ type: "output_text", text: longText, annotations: [] }],
+  };
+  const terminal = {
+    type: "response.completed",
+    response: {
+      id: "resp_large",
+      status: "completed",
+      output: [
+        { id: "rs_large_final", type: "reasoning", status: "completed", content: [] },
+        { ...message, id: "chatcmpl_large" },
+      ],
+    },
+  };
+  assert.ok(Buffer.byteLength(block(terminal)) > 256);
+  const input = [
+    block({ type: "response.output_item.added", output_index: 0, item: { ...message, status: "in_progress", content: [] } }),
+    block({ type: "response.reasoning_summary_text.delta", item_id: "rs_large", output_index: 0, delta: "Проверяю." }),
+    block({ type: "response.output_text.delta", item_id: message.id, output_index: 0, content_index: 0, delta: longText }),
+    block(terminal),
+  ].join("");
+  const output = events(await transformed(input, 1, {
+    maxFrameBytes: 256,
+    maxCommittedFrameBytes: 4_096,
+  }));
+  const completed = output.find((event) => event.type === "response.completed");
+  assert.deepEqual(completed.response.output.map((item) => item.id), [
+    "rs_large",
+    message.id,
+  ]);
+  assert.deepEqual(completed.response.output[0].summary, [
+    { type: "summary_text", text: "Проверяю." },
+  ]);
+});
+
+test("fails closed when a post-mutation frame exceeds the committed limit", async () => {
+  const input = [
+    block({ type: "response.output_item.added", output_index: 0, item: { id: "msg_hard_limit", type: "message", role: "assistant", status: "in_progress", content: [] } }),
+    block({ type: "response.reasoning_summary_text.delta", item_id: "rs_hard_limit", output_index: 0, delta: "Начал." }),
+    `data: ${"x".repeat(512)}\n\n`,
+  ].join("");
+  await assert.rejects(
+    transformed(input, 1, { maxFrameBytes: 256, maxCommittedFrameBytes: 320 }),
+    /failed after stream mutation: SSE frame byte limit/u,
+  );
+});
+
+test("normalizes incomplete response output while preserving truncation details", async () => {
+  const message = {
+    id: "msg_incomplete",
+    type: "message",
+    role: "assistant",
+    status: "incomplete",
+    content: [{ type: "output_text", text: "Частичный ответ", annotations: [] }],
+  };
+  const input = [
+    block({ type: "response.output_item.added", output_index: 0, item: { ...message, status: "in_progress", content: [] } }),
+    block({ type: "response.reasoning_summary_text.delta", item_id: "rs_incomplete", output_index: 0, delta: "Не успел." }),
+    block({ type: "response.output_text.delta", item_id: message.id, output_index: 0, content_index: 0, delta: "Частичный ответ" }),
+    block({
+      type: "response.incomplete",
+      response: {
+        id: "resp_incomplete",
+        status: "incomplete",
+        incomplete_details: { reason: "max_output_tokens" },
+        output: [
+          { id: "rs_incomplete_final", type: "reasoning", status: "completed", content: [] },
+          { ...message, id: "chatcmpl_incomplete" },
+        ],
+      },
+    }),
+  ].join("");
+  const output = events(await transformed(input));
+  const incomplete = output.find((event) => event.type === "response.incomplete");
+  assert.equal(incomplete.response.status, "incomplete");
+  assert.deepEqual(incomplete.response.incomplete_details, { reason: "max_output_tokens" });
+  assert.deepEqual(incomplete.response.output.map((item) => item.id), [
+    "rs_incomplete",
+    message.id,
+  ]);
+});
+
+test("renumbers a moved message and synthetic reasoning monotonically", async () => {
+  const message = {
+    id: "msg_sequence",
+    type: "message",
+    role: "assistant",
+    status: "completed",
+    content: [{ type: "output_text", text: "Да.", annotations: [] }],
+  };
+  const input = [
+    block({ type: "response.created", sequence_number: 0, response: { id: "resp_sequence", status: "in_progress", output: [] } }),
+    block({ type: "response.output_item.added", sequence_number: 1, output_index: 0, item: { ...message, status: "in_progress", content: [] } }),
+    block({ type: "response.content_part.added", sequence_number: 2, item_id: message.id, output_index: 0, content_index: 0, part: { type: "output_text", text: "", annotations: [] } }),
+    block({ type: "response.reasoning_summary_text.delta", sequence_number: 3, item_id: "rs_sequence", output_index: 0, delta: "Думаю." }),
+    block({ type: "response.output_text.delta", sequence_number: 4, item_id: message.id, output_index: 0, content_index: 0, delta: "Да." }),
+    block({ type: "response.completed", sequence_number: 5, response: { id: "resp_sequence", status: "completed", output: [{ id: "rs_final", type: "reasoning", status: "completed", content: [] }, message] } }),
+  ].join("");
+  const output = events(await transformed(input));
+  assert.deepEqual(
+    output.map((event) => event.sequence_number),
+    output.map((_event, index) => index),
+  );
+});
+
+test("recovers a reasoning summary supplied only by the terminal item", async () => {
+  const input = [
+    block({ type: "response.output_item.added", output_index: 0, item: { id: "rs_terminal_only", type: "reasoning", status: "in_progress", summary: null } }),
+    block({ type: "response.output_item.done", output_index: 0, item: { id: "rs_terminal_only", type: "reasoning", status: "completed", summary: [{ type: "summary_text", text: "Только в конце." }] } }),
+  ].join("");
+  const output = events(await transformed(input));
+  assert.deepEqual(output.map((event) => event.type), [
+    "response.output_item.added",
+    "response.reasoning_summary_part.added",
+    "response.reasoning_summary_text.done",
+    "response.reasoning_summary_part.done",
+    "response.output_item.done",
+  ]);
+  assert.deepEqual(output.at(-1).item.summary, [
+    { type: "summary_text", text: "Только в конце." },
+  ]);
 });
 
 test("an oversized unterminated frame fails open without unbounded buffering", async () => {

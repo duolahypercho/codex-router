@@ -2,8 +2,16 @@ import { Transform } from "node:stream";
 import { TextDecoder } from "node:util";
 
 const MAX_FRAME_BYTES = 256 * 1024;
+const MAX_COMMITTED_FRAME_BYTES = 64 * 1024 * 1024;
 const LF_FRAME_SEPARATOR = Buffer.from("\n\n");
 const CRLF_FRAME_SEPARATOR = Buffer.from("\r\n\r\n");
+
+class GrokReasoningSummaryCommittedStreamError extends Error {
+  constructor(reason) {
+    super(`Grok reasoning summary repair failed after stream mutation: ${reason}`);
+    this.name = "GrokReasoningSummaryCommittedStreamError";
+  }
+}
 
 // Grow geometrically and inspect each byte once so fragmented or unterminated
 // frames cannot trigger repeated whole-buffer copies and delimiter scans.
@@ -13,6 +21,10 @@ class SseFrameAccumulator {
   #maxFrameBytes;
 
   constructor(maxFrameBytes) {
+    this.#maxFrameBytes = maxFrameBytes;
+  }
+
+  setMaxFrameBytes(maxFrameBytes) {
     this.#maxFrameBytes = maxFrameBytes;
   }
 
@@ -129,10 +141,15 @@ function syntheticBlock(type, event, parsed) {
   return lines.join(parsed.newline);
 }
 
+function summaryParts(item) {
+  if (!Array.isArray(item?.summary)) return [];
+  return item.summary.filter(
+    (part) => part?.type === "summary_text" && typeof part.text === "string",
+  );
+}
+
 function summaryText(item) {
-  if (!Array.isArray(item?.summary)) return "";
-  return item.summary
-    .filter((part) => part?.type === "summary_text" && typeof part.text === "string")
+  return summaryParts(item)
     .map((part) => part.text)
     .join("");
 }
@@ -150,42 +167,61 @@ export class GrokReasoningSummaryCompatTransform extends Transform {
   #currentSeparator = "";
   #message;
   #shiftOutputIndexes = false;
+  #maxCommittedFrameBytes;
+  #mutationCommitted = false;
+  #nextSequenceNumber;
 
-  constructor({ maxFrameBytes = MAX_FRAME_BYTES } = {}) {
+  constructor({
+    maxFrameBytes = MAX_FRAME_BYTES,
+    maxCommittedFrameBytes = MAX_COMMITTED_FRAME_BYTES,
+  } = {}) {
     super();
     const limit = Number.isInteger(maxFrameBytes) && maxFrameBytes > 0
       ? maxFrameBytes
       : MAX_FRAME_BYTES;
+    const committedLimit = Number.isInteger(maxCommittedFrameBytes)
+      && maxCommittedFrameBytes > 0
+      ? maxCommittedFrameBytes
+      : MAX_COMMITTED_FRAME_BYTES;
+    this.#maxCommittedFrameBytes = Math.max(limit, committedLimit);
     this.#frames = new SseFrameAccumulator(limit);
   }
 
   _transform(chunk, _encoding, callback) {
-    const piece = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    if (this.#disabled) {
-      this.push(Buffer.from(piece));
+    try {
+      const piece = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      if (this.#disabled) {
+        this.push(Buffer.from(piece));
+        callback();
+        return;
+      }
+      const outcome = this.#frames.write(piece, (block, separator, original) => (
+        this.#emitFrame(block, separator, original)
+      ));
+      if (outcome?.oversized) this.#unsafeFrame(outcome.oversized, "SSE frame byte limit");
+      if (outcome?.remainder?.length) this.push(outcome.remainder);
       callback();
-      return;
+    } catch (error) {
+      callback(error);
     }
-    const outcome = this.#frames.write(piece, (block, separator, original) => (
-      this.#emitFrame(block, separator, original)
-    ));
-    if (outcome?.oversized) this.#disable(outcome.oversized);
-    if (outcome?.remainder?.length) this.push(outcome.remainder);
-    callback();
   }
 
   _flush(callback) {
-    if (this.#disabled) {
-      const pending = this.#frames.take();
-      if (pending.length) this.push(pending);
+    try {
+      if (this.#disabled) {
+        const pending = this.#frames.take();
+        if (pending.length) this.push(pending);
+        callback();
+        return;
+      }
+      this.#frames.flush((block, separator, original) => {
+        this.#emitFrame(block, separator, original);
+      });
+      for (const piece of this.#flushPendingMessage(true)) this.push(Buffer.from(piece));
       callback();
-      return;
+    } catch (error) {
+      callback(error);
     }
-    this.#frames.flush((block, separator, original) => {
-      this.#emitFrame(block, separator, original);
-    });
-    for (const piece of this.#flushPendingMessage(true)) this.push(Buffer.from(piece));
-    callback();
   }
 
   #emitFrame(block, separator, original) {
@@ -193,7 +229,7 @@ export class GrokReasoningSummaryCompatTransform extends Transform {
     try {
       text = fatalUtf8(block);
     } catch {
-      this.#disable(original);
+      this.#unsafeFrame(original, "invalid UTF-8");
       return false;
     }
     this.#currentSeparator = separator.toString("ascii");
@@ -208,6 +244,39 @@ export class GrokReasoningSummaryCompatTransform extends Transform {
     for (const piece of this.#flushPendingMessage(true)) this.push(Buffer.from(piece));
     if (original?.length) this.push(original);
     this.#disabled = true;
+  }
+
+  #unsafeFrame(original, reason) {
+    if (this.#mutationCommitted) {
+      throw new GrokReasoningSummaryCommittedStreamError(reason);
+    }
+    this.#disable(original);
+  }
+
+  #commitMutation(parsed) {
+    if (this.#mutationCommitted) return;
+    const sequenceNumbers = [
+      ...this.#pendingMessage.map(({ parsed: pending }) => pending.event?.sequence_number),
+      parsed?.event?.sequence_number,
+    ].filter(Number.isSafeInteger);
+    if (sequenceNumbers.length) this.#nextSequenceNumber = Math.min(...sequenceNumbers);
+    this.#mutationCommitted = true;
+    this.#frames.setMaxFrameBytes(this.#maxCommittedFrameBytes);
+  }
+
+  #sequencedEvent(event) {
+    if (!Number.isSafeInteger(this.#nextSequenceNumber)) return event;
+    const next = { ...event, sequence_number: this.#nextSequenceNumber };
+    this.#nextSequenceNumber += 1;
+    return next;
+  }
+
+  #rewrittenBlock(parsed, event) {
+    return rewrittenBlock(parsed, this.#sequencedEvent(event));
+  }
+
+  #syntheticBlock(type, event, parsed) {
+    return syntheticBlock(type, this.#sequencedEvent(event), parsed);
   }
 
   #common(parsed) {
@@ -239,12 +308,13 @@ export class GrokReasoningSummaryCompatTransform extends Transform {
     const pending = this.#pendingMessage;
     this.#pendingMessage = [];
     return pending.map(({ parsed, separator }) => (
-      rewrittenBlock(parsed, this.#shiftedEvent(parsed.event))
+      this.#rewrittenBlock(parsed, this.#shiftedEvent(parsed.event))
       + (preserveSeparators ? separator : "")
     ));
   }
 
   #startOrphanReasoning(parsed) {
+    this.#commitMutation(parsed);
     const event = parsed.event;
     const outputIndex = this.#message?.outputIndex
       ?? (Number.isInteger(event.output_index) ? event.output_index : 0);
@@ -259,7 +329,7 @@ export class GrokReasoningSummaryCompatTransform extends Transform {
       itemDone: false,
       synthetic: true,
     };
-    return [syntheticBlock(
+    return [this.#syntheticBlock(
       "response.output_item.added",
       {
         output_index: outputIndex,
@@ -273,7 +343,7 @@ export class GrokReasoningSummaryCompatTransform extends Transform {
   #startSummaryPart(parsed) {
     if (this.#reasoning.partStarted) return [];
     this.#reasoning.partStarted = true;
-    return [syntheticBlock(
+    return [this.#syntheticBlock(
       "response.reasoning_summary_part.added",
       {
         ...this.#common(parsed),
@@ -289,7 +359,7 @@ export class GrokReasoningSummaryCompatTransform extends Transform {
     output.push(...this.#startSummaryPart(parsed));
     if (!this.#reasoning.textDone) {
       this.#reasoning.textDone = true;
-      output.push(syntheticBlock(
+      output.push(this.#syntheticBlock(
         "response.reasoning_summary_text.done",
         { ...this.#common(parsed), text: this.#reasoning.text },
         parsed,
@@ -297,7 +367,7 @@ export class GrokReasoningSummaryCompatTransform extends Transform {
     }
     if (!this.#reasoning.partDone) {
       this.#reasoning.partDone = true;
-      output.push(syntheticBlock(
+      output.push(this.#syntheticBlock(
         "response.reasoning_summary_part.done",
         {
           ...this.#common(parsed),
@@ -307,7 +377,7 @@ export class GrokReasoningSummaryCompatTransform extends Transform {
       ));
     }
     this.#reasoning.itemDone = true;
-    output.push(syntheticBlock(
+    output.push(this.#syntheticBlock(
       "response.output_item.done",
       {
         output_index: this.#reasoning.outputIndex,
@@ -361,6 +431,7 @@ export class GrokReasoningSummaryCompatTransform extends Transform {
       // A canonical Responses item already has an array-valued summary. Leave
       // that lifecycle byte-identical, including any additional summary parts.
       if (!id || Array.isArray(event.item.summary)) return [block];
+      this.#commitMutation(parsed);
       this.#reasoning = {
         id,
         outputIndex: Number.isInteger(event.output_index) ? event.output_index : 0,
@@ -371,10 +442,8 @@ export class GrokReasoningSummaryCompatTransform extends Transform {
         itemDone: false,
         synthetic: false,
       };
-      const item = Array.isArray(event.item.summary)
-        ? event.item
-        : { ...event.item, summary: [] };
-      return [rewrittenBlock(parsed, item === event.item ? event : { ...event, item })];
+      const item = { ...event.item, summary: [] };
+      return [this.#rewrittenBlock(parsed, { ...event, item })];
     }
 
     if (!this.#reasoning) return [block];
@@ -382,7 +451,7 @@ export class GrokReasoningSummaryCompatTransform extends Transform {
     if (type === "response.reasoning_summary_part.added") {
       if (this.#reasoning.partStarted) return [];
       this.#reasoning.partStarted = true;
-      return [rewrittenBlock(parsed, {
+      return [this.#rewrittenBlock(parsed, {
         ...event,
         ...this.#common(parsed),
         part: { type: "summary_text", text: "" },
@@ -393,7 +462,7 @@ export class GrokReasoningSummaryCompatTransform extends Transform {
       if (this.#reasoning.itemDone) return [];
       prefix.push(...this.#startSummaryPart(parsed));
       this.#reasoning.text += event.delta;
-      return [...prefix, rewrittenBlock(parsed, {
+      return [...prefix, this.#rewrittenBlock(parsed, {
         ...event,
         ...this.#common(parsed),
       })];
@@ -404,7 +473,7 @@ export class GrokReasoningSummaryCompatTransform extends Transform {
       const prefix = this.#startSummaryPart(parsed);
       if (typeof event.text === "string") this.#reasoning.text = event.text;
       this.#reasoning.textDone = true;
-      return [...prefix, rewrittenBlock(parsed, {
+      return [...prefix, this.#rewrittenBlock(parsed, {
         ...event,
         ...this.#common(parsed),
         text: this.#reasoning.text,
@@ -419,7 +488,7 @@ export class GrokReasoningSummaryCompatTransform extends Transform {
         : this.#reasoning.text;
       this.#reasoning.text = text;
       this.#reasoning.partDone = true;
-      return [...prefix, rewrittenBlock(parsed, {
+      return [...prefix, this.#rewrittenBlock(parsed, {
         ...event,
         ...this.#common(parsed),
         part: { type: "summary_text", text },
@@ -429,9 +498,14 @@ export class GrokReasoningSummaryCompatTransform extends Transform {
     if (type === "response.output_item.done" && event?.item?.type === "reasoning") {
       if (this.#reasoning.itemDone) return [];
       const prefix = [];
+      const terminalParts = summaryParts(event.item);
+      if (!this.#reasoning.partStarted && terminalParts.length) {
+        this.#reasoning.text = terminalParts.map((part) => part.text).join("");
+        prefix.push(...this.#startSummaryPart(parsed));
+      }
       if (this.#reasoning.partStarted && !this.#reasoning.textDone) {
         this.#reasoning.textDone = true;
-        prefix.push(syntheticBlock(
+        prefix.push(this.#syntheticBlock(
           "response.reasoning_summary_text.done",
           { ...this.#common(parsed), text: this.#reasoning.text },
           parsed,
@@ -439,7 +513,7 @@ export class GrokReasoningSummaryCompatTransform extends Transform {
       }
       if (this.#reasoning.partStarted && !this.#reasoning.partDone) {
         this.#reasoning.partDone = true;
-        prefix.push(syntheticBlock(
+        prefix.push(this.#syntheticBlock(
           "response.reasoning_summary_part.done",
           {
             ...this.#common(parsed),
@@ -457,7 +531,7 @@ export class GrokReasoningSummaryCompatTransform extends Transform {
           : [],
       };
       this.#reasoning.itemDone = true;
-      return [...prefix, rewrittenBlock(parsed, {
+      return [...prefix, this.#rewrittenBlock(parsed, {
         ...event,
         output_index: this.#reasoning.outputIndex,
         item,
@@ -468,8 +542,9 @@ export class GrokReasoningSummaryCompatTransform extends Transform {
       || type === "response.output_text.done"
       || (type === "response.output_item.added" && event?.item?.type !== "reasoning")
       || type === "response.function_call_arguments.delta";
-    if (startsVisibleOutput && !this.#reasoning.itemDone) {
-      prefix.push(...this.#finishReasoning(parsed), ...this.#flushPendingMessage());
+    if (startsVisibleOutput) {
+      if (!this.#reasoning.itemDone) prefix.push(...this.#finishReasoning(parsed));
+      prefix.push(...this.#flushPendingMessage());
     }
 
     if (
@@ -477,7 +552,7 @@ export class GrokReasoningSummaryCompatTransform extends Transform {
       && event.item_id === this.#message?.id
       && event.part?.type === "reasoning_text"
     ) {
-      return [...prefix, rewrittenBlock(parsed, this.#shiftedEvent({
+      return [...prefix, this.#rewrittenBlock(parsed, this.#shiftedEvent({
         ...event,
         part: {
           type: "output_text",
@@ -493,7 +568,8 @@ export class GrokReasoningSummaryCompatTransform extends Transform {
       if (typeof event.text === "string") this.#message.text = event.text;
     }
 
-    if (type === "response.completed" && Array.isArray(event.response?.output)) {
+    const terminalResponse = type === "response.completed" || type === "response.incomplete";
+    if (terminalResponse && Array.isArray(event.response?.output)) {
       prefix.push(...this.#finishReasoning(parsed), ...this.#flushPendingMessage());
       const nonReasoning = event.response.output
         .filter((item) => item?.type !== "reasoning")
@@ -508,12 +584,13 @@ export class GrokReasoningSummaryCompatTransform extends Transform {
       const next = unchanged
         ? event
         : { ...event, response: { ...event.response, output } };
+      const rewritten = this.#rewrittenBlock(parsed, next);
       this.#reasoning = undefined;
       this.#shiftOutputIndexes = false;
-      return [...prefix, rewrittenBlock(parsed, next)];
+      return [...prefix, rewritten];
     }
 
-    return [...prefix, rewrittenBlock(parsed, this.#shiftedEvent(event))];
+    return [...prefix, this.#rewrittenBlock(parsed, this.#shiftedEvent(event))];
   }
 }
 
