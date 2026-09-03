@@ -215,18 +215,18 @@ function withRequiredAppTools(tools, required) {
 export function chatProviderToolSurface(
   tools,
   providerId,
-  { input, toolChoice } = {},
+  { input, toolChoice, routedSubagentModels = [] } = {},
 ) {
   const merged = mergeCodexAppTools(tools);
-  if (providerId !== "groq") return flattenNamespaceTools(merged.tools);
+  if (providerId !== "groq") return flattenNamespaceTools(merged.tools, { routedSubagentModels });
 
   // Groq has no OpenCode-style length bound, but it still needs deterministic
   // aliases when two distinct native identities have the same flattened wire
   // spelling. Keep that collision safety independent from the 64-byte route.
-  const expanded = flattenNamespaceTools(merged.tools, { aliasCollisions: true });
+  const expanded = flattenNamespaceTools(merged.tools, { aliasCollisions: true, routedSubagentModels });
   if (!Array.isArray(expanded.tools) || expanded.tools.length <= GROQ_MAX_TOOLS) return expanded;
 
-  const client = flattenNamespaceTools(tools, { aliasCollisions: true });
+  const client = flattenNamespaceTools(tools, { aliasCollisions: true, routedSubagentModels });
   const clientToolCount = Array.isArray(client.tools) ? client.tools.length : 0;
   if (!Array.isArray(client.tools) || clientToolCount > GROQ_MAX_TOOLS) {
     throw new GroqToolLimitError({
@@ -252,7 +252,7 @@ export function chatProviderToolSurface(
 
   const selected = flattenNamespaceTools(
     withRequiredAppTools(tools, requiredDefinitions),
-    { aliasCollisions: true },
+    { aliasCollisions: true, routedSubagentModels },
   );
   if (!Array.isArray(selected.tools) || selected.tools.length > GROQ_MAX_TOOLS) {
     throw new GroqToolLimitError({

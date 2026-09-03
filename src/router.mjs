@@ -2922,6 +2922,9 @@ async function buildRoutedRequest({ request, payload, route, agedInput }) {
     const preflight = chatProviderToolSurface(payload.tools, provider.id, {
       input: compatibleInput,
       toolChoice: payload.tool_choice,
+      routedSubagentModels: routedClientModels().models
+        .filter((model) => !model.native)
+        .map((model) => model.slug),
     });
     try {
       flattenToolSearchHistory(
@@ -3002,6 +3005,9 @@ async function buildRoutedRequest({ request, payload, route, agedInput }) {
     const flattened = chatProviderToolSurface(tools, provider?.id, {
       input,
       toolChoice: payload.tool_choice,
+      routedSubagentModels: routedClientModels().models
+        .filter((model) => !model.native)
+        .map((model) => model.slug),
     });
     namespacesFlattened = flattened.flattened;
     flattenedNamespaces = flattened.namespaces;
@@ -3012,7 +3018,12 @@ async function buildRoutedRequest({ request, payload, route, agedInput }) {
     // Console Go exposes a Responses endpoint but rejects the native tool
     // discriminators Codex sends. Translate only its tool boundary; unlike the
     // chat-completions branch, do not inject the deferred codex_app snapshot.
-    const flattened = flattenNamespaceTools(tools, { maxNameLength: 64 });
+    const flattened = flattenNamespaceTools(tools, {
+      maxNameLength: 64,
+      routedSubagentModels: routedClientModels().models
+        .filter((model) => !model.native)
+        .map((model) => model.slug),
+    });
     namespacesFlattened = flattened.flattened;
     flattenedNamespaces = flattened.namespaces;
     tools = flattened.tools;
@@ -3764,6 +3775,9 @@ async function handleResponses(request, response, requestUrl) {
       // and queue missing interrupt_agent closes the same way as routed turns.
       flattenedNamespaces = flattenNamespaceTools(payload.tools, {
         bridgeToolSearch: false,
+        routedSubagentModels: routedClientModels().models
+          .filter((model) => !model.native)
+          .map((model) => model.slug),
       }).namespaces;
       pendingInterrupts = pendingInterruptTargets(native.input ?? payload.input, {
         namespaces: flattenedNamespaces,
