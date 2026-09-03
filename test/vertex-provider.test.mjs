@@ -444,7 +444,8 @@ test("Vertex provider is catalog-only and does not appear as an API-key prompt",
 });
 
 test("main Responses routing does not apply Gemini trailing-turn rewriting to Vertex", () => {
-  const source = readFileSync(path.join(root, "src", "router.mjs"), "utf8");
+  const source = readFileSync(path.join(root, "src", "router.mjs"), "utf8")
+    .replace(/\r\n/g, "\n");
   const start = source.indexOf("function requiresTrailingUserTurn(route)");
   const end = source.indexOf("\n}\n", start);
   assert.ok(start >= 0);
