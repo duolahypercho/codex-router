@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -32,6 +33,26 @@ const managedMarkerPattern = /^# BEGIN (?:kimi-)?codex-(?:router|proxy)-/m;
 const DEFAULT_TARGET_PUBLICATION_MS = 5 * 60_000;
 const MAX_TARGET_PUBLICATION_MS = 5 * 60_000;
 
+function publicationEnvironment(environment = process.env) {
+  const home = os.homedir();
+  const prepend = [
+    ...(environment.CODEX_ROUTER_NODE_BIN && path.isAbsolute(environment.CODEX_ROUTER_NODE_BIN)
+      ? [path.dirname(environment.CODEX_ROUTER_NODE_BIN)]
+      : []),
+    "/opt/homebrew/bin",
+    "/usr/local/bin",
+    "/usr/bin",
+    path.join(home, ".npm-global", "bin"),
+    path.join(home, ".local", "bin"),
+    path.join(home, ".volta", "bin"),
+    path.join(home, ".asdf", "shims"),
+  ];
+  const existing = String(environment.PATH || "").split(path.delimiter).filter(Boolean);
+  const PATH = [...new Set([...prepend.filter((entry) => path.isAbsolute(entry)), ...existing])]
+    .join(path.delimiter);
+  return PATH === environment.PATH ? environment : { ...environment, PATH };
+}
+
 function targetPublicationDeadline(deadline, environment = process.env) {
   const boundedEnvironment = Number.isSafeInteger(deadline)
     ? { ...environment, CODEX_ROUTER_OPERATION_DEADLINE_MS: String(deadline) }
@@ -60,7 +81,7 @@ export async function runTargetPublicationProcess(
     [path.join(sourceRoot, "src", script), ...args],
     {
       cwd: sourceRoot,
-      env: environment,
+      env: publicationEnvironment(environment),
       signal,
       deadline: operationDeadline,
       run,

@@ -184,6 +184,21 @@ test("the OpenClaw publication snapshot marks the OpenClaw integration", () => {
   }
 });
 
+test("target publication expands PATH for GUI-spawned client publishers", async () => {
+  let invocation;
+  await runTargetPublicationProcess("catalog.mjs", [], {
+    sourceRoot: "/stable/router",
+    executable: "/runtime/node",
+    environment: { PATH: "/usr/bin:/bin:/usr/sbin:/sbin" },
+    run: async (_command, _args, options) => {
+      invocation = options;
+      return { status: 0, stdout: "", stderr: "" };
+    },
+  });
+  assert.match(invocation.env.PATH, /\.local\/bin/);
+  assert.match(invocation.env.PATH, /\/usr\/local\/bin/);
+});
+
 test.after(() => {
   rmSync(testRoot, { recursive: true, force: true });
 });
