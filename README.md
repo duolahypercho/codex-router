@@ -2072,8 +2072,12 @@ cursor-router-agent --model 'PASTE_ID_FROM_THE_LIST' --print "Reply with OK"
 ```
 
 Reopen Cursor App and choose a `codex_router/...` model. Cursor's base-URL override
-is global, so Cursor-managed models can also be sent to the custom endpoint
-while it is enabled; turn it off when switching back to Cursor's own models.
+is global, so Cursor-managed models (`Auto`/`default`, `grok-4.6`, Claude, Composer,
+and other first-party ids) are also sent to the custom endpoint while it is enabled
+and then rejected with “This model does not support custom API keys.” Turn the
+override off when switching back to Cursor's own models. `cursor enable` switches
+the composer selection away from those Cursor-managed ids onto a published
+`codex_router/...` alias.
 
 Cursor Agent text turns are supported and verified against the official CLI.
 Its local read/shell/edit/write loop is also mapped onto Cursor's controlled-
