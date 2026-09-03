@@ -484,12 +484,16 @@ function killChildFallback(child, signal = "SIGKILL") {
   }
 }
 
-function windowsPowerShell(environment = process.env) {
-  const systemRoot = environment.SystemRoot || environment.WINDIR;
-  const systemPowerShell = systemRoot
-    ? path.join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
-    : undefined;
-  return systemPowerShell && existsSync(systemPowerShell) ? systemPowerShell : "powershell.exe";
+/**
+ * Returns the PowerShell executable path for process tree termination.
+ * Uses a bare command name to avoid environment taint while still working
+ * regardless of Windows installation drive.
+ */
+function windowsPowerShell() {
+  // Use bare "powershell.exe" which Windows will resolve via PATH
+  // This avoids reading SystemRoot/WINDIR from environment while still
+  // working on any Windows installation (C:, D:, etc.)
+  return "powershell.exe";
 }
 
 /**
@@ -519,7 +523,7 @@ export function windowsJobProcessInvocation(
     windowsVerbatimArguments: Boolean(windowsVerbatimArguments),
   }), "utf8").toString("base64");
   return {
-    command: windowsPowerShell(environment),
+    command: windowsPowerShell(),
     args: [
       "-NoLogo",
       "-NoProfile",

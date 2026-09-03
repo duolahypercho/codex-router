@@ -143,14 +143,14 @@ export function spawnableCommand(binary, args = [], platform = process.platform)
     escapeWindowsShellCommand(binary),
     ...argumentList.map((argument) => escapeWindowsShellArgument(argument, doubleEscape)),
   ].join(" ");
-  // Use hardcoded cmd.exe path instead of process.env.ComSpec to avoid CodeQL taint
-  const cmdExe = "C:\\Windows\\System32\\cmd.exe";
+  // Use cmd.exe as a bare command name with shell:false instead of reading from process.env.ComSpec
+  // This avoids the environment taint while still working regardless of Windows installation drive
   return {
-    command: cmdExe,
+    command: "cmd.exe",
     // `/d` skips AutoRun commands, `/s` makes cmd.exe strip only the outer
     // quote pair and take the rest verbatim, and verbatim arguments stop Node
     // from re-quoting a line that is already escaped for cmd.exe.
     args: ["/d", "/s", "/c", `"${line}"`],
-    options: { windowsVerbatimArguments: true },
+    options: { windowsVerbatimArguments: true, shell: false },
   };
 }

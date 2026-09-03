@@ -653,40 +653,25 @@ export async function readResponseBody(
   return Buffer.concat(chunks, total);
 }
 
-/**
- * Sanitizes a value to remove stack traces from Error objects before serialization.
- * Recursively processes objects and arrays to ensure no stack traces leak to clients.
- */
-function sanitizeForJson(value) {
-  if (value === null || value === undefined) {
-    return value;
-  }
-  if (value instanceof Error) {
-    // Only return safe error properties, never stack
-    return {
-      name: value.name,
-      message: String(value.message).split('\n')[0], // First line only
-      ...(value.code !== undefined ? { code: value.code } : {}),
-    };
-  }
-  if (Array.isArray(value)) {
-    return value.map(sanitizeForJson);
-  }
-  if (typeof value === 'object') {
-    const sanitized = {};
-    for (const [key, val] of Object.entries(value)) {
-      // Skip 'stack' properties entirely
-      if (key === 'stack') continue;
-      sanitized[key] = sanitizeForJson(val);
-    }
-    return sanitized;
-  }
-  return value;
-}
-
 export function writeJson(response, status, payload) {
-  const sanitized = sanitizeForJson(payload);
-  const body = Buffer.from(JSON.stringify(sanitized), "utf8");
+  // Use a JSON.stringify replacer to drop stack properties and sanitize Error objects
+  // This preserves normal JSON semantics for Date, Buffer, and other objects
+  const body = Buffer.from(JSON.stringify(payload, (key, value) => {
+    // Drop any 'stack' properties entirely
+    if (key === 'stack') return undefined;
+    
+    // Convert Error objects to safe representations
+    if (value instanceof Error) {
+      return {
+        name: value.name,
+        message: String(value.message).split('\n')[0], // First line only, no stack trace
+        ...(value.code !== undefined ? { code: value.code } : {}),
+      };
+    }
+    
+    return value;
+  }), "utf8");
+  
   response.writeHead(status, {
     "Content-Type": "application/json",
     "Content-Length": String(body.length),
