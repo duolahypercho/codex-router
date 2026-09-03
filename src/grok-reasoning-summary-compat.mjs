@@ -171,6 +171,7 @@ export class GrokReasoningSummaryCompatTransform extends Transform {
   #mutationCommitted = false;
   #nextSequenceNumber;
   #repairedReasoningItems = [];
+  #canonicalReasoningId;
 
   constructor({
     maxFrameBytes = MAX_FRAME_BYTES,
@@ -447,7 +448,17 @@ export class GrokReasoningSummaryCompatTransform extends Transform {
       const id = typeof event.item.id === "string" ? event.item.id : "";
       // A canonical Responses item already has an array-valued summary. Leave
       // that lifecycle byte-identical, including any additional summary parts.
-      if (!id || Array.isArray(event.item.summary)) return [block];
+      if (!id) return [block];
+      if (Array.isArray(event.item.summary)) {
+        const output = this.#reasoning && !this.#reasoning.itemDone
+          ? this.#finishReasoning(parsed)
+          : [];
+        if (this.#reasoning?.itemDone) {
+          this.#canonicalReasoningId = id;
+          return [...output, this.#rewrittenBlock(parsed, this.#shiftedEvent(event))];
+        }
+        return [block];
+      }
       this.#commitMutation(parsed);
       this.#reasoning = {
         id,
@@ -465,6 +476,22 @@ export class GrokReasoningSummaryCompatTransform extends Transform {
     }
 
     if (!this.#reasoning) return [block];
+
+    if (this.#canonicalReasoningId) {
+      const canonicalLifecycle = (
+        typeof type === "string"
+        && type.startsWith("response.reasoning_summary_")
+        && event.item_id === this.#canonicalReasoningId
+      ) || (
+        type === "response.output_item.done"
+        && event.item?.type === "reasoning"
+        && event.item.id === this.#canonicalReasoningId
+      );
+      if (canonicalLifecycle) {
+        if (type === "response.output_item.done") this.#canonicalReasoningId = undefined;
+        return [this.#rewrittenBlock(parsed, this.#shiftedEvent(event))];
+      }
+    }
 
     if (type === "response.reasoning_summary_part.added") {
       if (this.#reasoning.partStarted) return [];
@@ -565,6 +592,8 @@ export class GrokReasoningSummaryCompatTransform extends Transform {
 
     const startsVisibleOutput = type === "response.output_text.delta"
       || type === "response.output_text.done"
+      || type === "response.refusal.delta"
+      || type === "response.refusal.done"
       || (type === "response.output_item.added" && event?.item?.type !== "reasoning")
       || (type === "response.output_item.done" && event?.item?.type !== "reasoning")
       || type === "response.function_call_arguments.delta";
@@ -603,6 +632,7 @@ export class GrokReasoningSummaryCompatTransform extends Transform {
       const rewritten = this.#rewrittenBlock(parsed, event);
       this.#reasoning = undefined;
       this.#repairedReasoningItems = [];
+      this.#canonicalReasoningId = undefined;
       this.#shiftOutputIndexes = false;
       return [...prefix, rewritten];
     }
@@ -636,6 +666,7 @@ export class GrokReasoningSummaryCompatTransform extends Transform {
       const rewritten = this.#rewrittenBlock(parsed, next);
       this.#reasoning = undefined;
       this.#repairedReasoningItems = [];
+      this.#canonicalReasoningId = undefined;
       this.#shiftOutputIndexes = false;
       return [...prefix, rewritten];
     }

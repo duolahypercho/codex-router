@@ -575,6 +575,76 @@ test("retains every repaired reasoning item in terminal output order", async () 
   );
 });
 
+test("passes a canonical reasoning lifecycle after a repaired item", async () => {
+  const canonical = {
+    id: "rs_canonical_after_repair",
+    type: "reasoning",
+    status: "completed",
+    summary: [{ type: "summary_text", text: "Канонический итог." }],
+  };
+  const input = [
+    block({ type: "response.output_item.added", output_index: 0, item: { id: "rs_repaired_first", type: "reasoning", status: "in_progress", summary: null } }),
+    block({ type: "response.reasoning_summary_text.delta", item_id: "rs_repaired_hash", output_index: 0, delta: "Исправленный итог." }),
+    block({ type: "response.output_item.done", output_index: 0, item: { id: "rs_repaired_final", type: "reasoning", status: "completed", summary: [{ type: "summary_text", text: "Исправленный итог." }] } }),
+    block({ type: "response.output_item.added", output_index: 1, item: { ...canonical, status: "in_progress", summary: [] } }),
+    block({ type: "response.reasoning_summary_part.added", item_id: canonical.id, output_index: 1, summary_index: 0, part: { type: "summary_text", text: "" } }),
+    block({ type: "response.reasoning_summary_text.delta", item_id: canonical.id, output_index: 1, summary_index: 0, delta: "Канонический итог." }),
+    block({ type: "response.reasoning_summary_text.done", item_id: canonical.id, output_index: 1, summary_index: 0, text: "Канонический итог." }),
+    block({ type: "response.reasoning_summary_part.done", item_id: canonical.id, output_index: 1, summary_index: 0, part: canonical.summary[0] }),
+    block({ type: "response.output_item.done", output_index: 1, item: canonical }),
+    block({
+      type: "response.completed",
+      response: {
+        id: "resp_canonical_after_repair",
+        status: "completed",
+        output: [
+          { id: "rs_repaired_terminal", type: "reasoning", status: "completed", summary: [] },
+          canonical,
+        ],
+      },
+    }),
+  ].join("");
+  const output = events(await transformed(input));
+  const canonicalEvents = output.filter(
+    (event) => (event.item_id ?? event.item?.id) === canonical.id,
+  );
+  assert.deepEqual(canonicalEvents.map((event) => event.type), [
+    "response.output_item.added",
+    "response.reasoning_summary_part.added",
+    "response.reasoning_summary_text.delta",
+    "response.reasoning_summary_text.done",
+    "response.reasoning_summary_part.done",
+    "response.output_item.done",
+  ]);
+  assert.deepEqual(
+    output.find((event) => event.type === "response.completed").response.output.map((item) => item.id),
+    ["rs_repaired_first", canonical.id],
+  );
+});
+
+test("flushes the held message before refusal events", async () => {
+  const messageId = "msg_refusal";
+  const input = [
+    block({ type: "response.output_item.added", output_index: 0, item: { id: messageId, type: "message", role: "assistant", status: "in_progress", content: [] } }),
+    block({ type: "response.content_part.added", item_id: messageId, output_index: 0, content_index: 0, part: { type: "refusal", refusal: "" } }),
+    block({ type: "response.reasoning_summary_text.delta", item_id: "rs_before_refusal", output_index: 0, delta: "Проверил." }),
+    block({ type: "response.refusal.delta", item_id: messageId, output_index: 0, content_index: 0, delta: "Не могу." }),
+    block({ type: "response.refusal.done", item_id: messageId, output_index: 0, content_index: 0, refusal: "Не могу." }),
+  ].join("");
+  const output = events(await transformed(input));
+  const reasoningDone = output.findIndex(
+    (event) => event.type === "response.output_item.done" && event.item?.type === "reasoning",
+  );
+  const messageAdded = output.findIndex(
+    (event) => event.type === "response.output_item.added" && event.item?.type === "message",
+  );
+  const refusalDelta = output.findIndex((event) => event.type === "response.refusal.delta");
+  assert.ok(reasoningDone < messageAdded && messageAdded < refusalDelta);
+  assert.equal(output[messageAdded].output_index, 1);
+  assert.equal(output[refusalDelta].output_index, 1);
+  assert.equal(output.at(-1).output_index, 1);
+});
+
 test("resolves held lifecycles before failure terminals", async () => {
   for (const terminal of [
     { type: "response.failed", response: { id: "resp_failed", status: "failed" } },
