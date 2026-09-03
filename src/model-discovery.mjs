@@ -341,6 +341,7 @@ export async function discoverProviderModels(
     proxyResolvesDestination,
     credential,
     catalog,
+    staticCatalog = false,
   } = {},
 ) {
   const provider = RUNTIME_PROVIDERS.get(providerId);
@@ -361,6 +362,7 @@ export async function discoverProviderModels(
       ...(proxyResolvesDestination !== undefined ? { proxyResolvesDestination } : {}),
       ...(credential ? { credential } : {}),
       ...(catalog ? { catalog } : {}),
+      ...(staticCatalog ? { staticCatalog: true } : {}),
     });
   }
   if (provider.generic === true) {

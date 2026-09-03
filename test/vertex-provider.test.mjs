@@ -95,6 +95,31 @@ test("Vertex support catalog contains only models backed by explicit adapters", 
   }
 });
 
+test("Vertex static curation uses the checked-in catalog without credentials or Model Garden", async () => {
+  let fetchCalls = 0;
+  const result = await discoverProviderModels("vertex", {
+    staticCatalog: true,
+    cache: false,
+    fetchImpl: async () => {
+      fetchCalls += 1;
+      throw new Error("static Vertex curation must not contact Model Garden");
+    },
+  });
+
+  assert.equal(fetchCalls, 0);
+  assert.equal(result.staticCatalog, true);
+  assert.deepEqual(
+    result.supported,
+    readVertexSupportCatalog().models.map((model) => model.id).sort(),
+  );
+  assert.deepEqual(result.addable, result.supported);
+  assert.equal(
+    result.supportedModels.find((model) => model.adapter === "vertex-anthropic-messages")
+      .requestProfile,
+    "anthropic-reasoning",
+  );
+});
+
 test("Vertex publisher matching treats configured publisher names literally", () => {
   assert.equal(
     vertexPublisherModelId(
@@ -349,6 +374,41 @@ test("Vertex curation writes verified adapter and catalog metadata without promp
     assert.deepEqual(stored.models[0].inputModalities, ["text", "image"]);
     assert.equal(stored.models[0].contextWindow, 1048576);
     assert.equal(stored.models[0].autoCompact, 900000);
+  } finally {
+    rmSync(state, { recursive: true, force: true });
+  }
+});
+
+test("Vertex static curation adds a reviewed model without ADC or Model Garden", () => {
+  const state = mkdtempSync(path.join(os.tmpdir(), "vertex-static-curation-test-"));
+  const userModels = path.join(state, "user-models.json");
+  try {
+    execFileSync(
+      process.execPath,
+      [
+        "src/curate-models.mjs",
+        "vertex",
+        "--static",
+        "--models",
+        "gemini-2.5-pro",
+        "--no-apply",
+      ],
+      {
+        cwd: root,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          MODEL_ROUTER_STATE_DIR: state,
+          MODEL_ROUTER_USER_MODELS: userModels,
+          MODEL_ROUTER_MODEL_PICKER_STATE: path.join(state, "model-picker.json"),
+          GOOGLE_APPLICATION_CREDENTIALS: path.join(state, "missing-adc.json"),
+        },
+      },
+    );
+    const stored = JSON.parse(readFileSync(userModels, "utf8"));
+    assert.equal(stored.models[0].upstreamModel, "gemini-2.5-pro");
+    assert.equal(stored.models[0].adapter, "vertex-openai-chat");
+    assert.equal(stored.models[0].vertexPublisher, "google");
   } finally {
     rmSync(state, { recursive: true, force: true });
   }

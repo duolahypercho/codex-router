@@ -478,9 +478,66 @@ function metadataMap(catalog, ids) {
   );
 }
 
+function discoveryResult(
+  provider,
+  classified,
+  {
+    contextLengths,
+    modelMetadata,
+    cached = false,
+    fetchedAt,
+    staticCatalog = false,
+  } = {},
+) {
+  const routeIds = new Set(providerCatalogRouteIds(provider.id));
+  const registered = MODELS
+    .filter((model) => routeIds.has(model.provider))
+    .map((model) => model.upstreamModel)
+    .sort();
+  const registeredSet = new Set(registered);
+  const unregistered = classified.supported.filter((id) => !registeredSet.has(id));
+  const blocked = Object.fromEntries(classified.unsupported.map(({ id, reason }) => [id, reason]));
+  const discoveredSet = new Set(classified.discovered);
+  return {
+    provider: provider.id,
+    ...classified,
+    registered,
+    unregistered,
+    addable: unregistered,
+    blocked,
+    unavailable: registered.filter((id) => !discoveredSet.has(id)),
+    contextLengths,
+    modelMetadata: mergeDiscoveredModels({
+      providerId: provider.id,
+      live: Object.values(modelMetadata || {}),
+    }),
+    cached: Boolean(cached),
+    stale: Boolean(cached?.stale),
+    fetchedAt,
+    ...(staticCatalog ? { staticCatalog: true } : {}),
+    note: staticCatalog
+      ? "Vertex static curation uses the checked-in support catalog only. " +
+        "Model Garden discovery was not requested; runtime access still depends on " +
+        "Vertex permissions and model availability."
+      : "Vertex discovery reads Model Garden publisher models only. " +
+        "Only models in the local support catalog with implemented adapters are selectable; " +
+        "unsupported discoveries are reported but are not selectable or curated.",
+  };
+}
+
 export async function discoverVertexProviderModels(provider, options = {}) {
   const rawCatalog = options.catalog ?? readVertexSupportCatalog();
   const catalog = parseVertexSupportCatalog(rawCatalog);
+  if (options.staticCatalog === true) {
+    const classified = classifyCached(catalog.models.map((model) => model.id), catalog);
+    return discoveryResult(provider, classified, {
+      contextLengths: Object.fromEntries(
+        classified.supportedModels.map((model) => [model.id, model.capabilities.contextWindow]),
+      ),
+      modelMetadata: metadataMap(catalog, classified.supported),
+      staticCatalog: true,
+    });
+  }
   const settings = modelGardenSettings(provider, catalog);
   const fixture = fixtureValue(options);
   const credential = resolvedCredential(provider, options, fixture);
@@ -544,34 +601,10 @@ export async function discoverVertexProviderModels(provider, options = {}) {
     }
   }
 
-  const routeIds = new Set(providerCatalogRouteIds(provider.id));
-  const registered = MODELS
-    .filter((model) => routeIds.has(model.provider))
-    .map((model) => model.upstreamModel)
-    .sort();
-  const registeredSet = new Set(registered);
-  const unregistered = classified.supported.filter((id) => !registeredSet.has(id));
-  const blocked = Object.fromEntries(classified.unsupported.map(({ id, reason }) => [id, reason]));
-  const discoveredSet = new Set(classified.discovered);
-  return {
-    provider: provider.id,
-    ...classified,
-    registered,
-    unregistered,
-    addable: unregistered,
-    blocked,
-    unavailable: registered.filter((id) => !discoveredSet.has(id)),
+  return discoveryResult(provider, classified, {
     contextLengths,
-    modelMetadata: mergeDiscoveredModels({
-      providerId: provider.id,
-      live: Object.values(modelMetadata),
-    }),
-    cached: Boolean(cached),
-    stale: Boolean(cached?.stale),
+    modelMetadata,
+    cached,
     fetchedAt,
-    note:
-      "Vertex discovery reads Model Garden publisher models only. " +
-      "Only models in the local support catalog with implemented adapters are selectable; " +
-      "unsupported discoveries are reported but are not selectable or curated.",
-  };
+  });
 }

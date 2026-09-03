@@ -61,6 +61,7 @@ const apply = process.argv.includes("--apply");
 const noApply = process.argv.includes("--no-apply");
 const freeOnly = process.argv.includes("--free-only");
 const refreshCatalog = process.argv.includes("--refresh");
+const staticCatalog = process.argv.includes("--static");
 const effortsOption = (() => {
   const index = process.argv.indexOf("--efforts");
   return index === -1 ? undefined : process.argv[index + 1];
@@ -126,7 +127,7 @@ export function curatedSizing(contextLength) {
 function usage() {
   console.error(
     "Usage: curate-models.mjs PROVIDER [--models id1,id2 | interactive] " +
-      "[--free-only] [--remove id1,id2] [--refresh] [--apply|--no-apply] " +
+      "[--free-only] [--remove id1,id2] [--refresh] [--static] [--apply|--no-apply] " +
       `[--efforts ${Object.keys(EFFORT_DESCRIPTIONS).join(",")}] ` +
       `[--request-profile ${Object.keys(REQUEST_PROFILE_DESCRIPTIONS).join("|")}]`,
   );
@@ -324,6 +325,12 @@ if (provider.generic === true && provider.adapter === "openai-completions") {
   );
   process.exit(2);
 }
+if (staticCatalog && providerId !== "vertex") {
+  throw new Error("--static is supported only for Vertex; other providers use their live catalogs.");
+}
+if (staticCatalog && refreshCatalog) {
+  throw new Error("Use --static or --refresh, not both.");
+}
 const flagEfforts = (() => {
   try {
     return effortsOption ? parseEfforts(effortsOption) : undefined;
@@ -417,7 +424,10 @@ async function main() {
   // the caller chose from, and re-asking the provider makes every add pay for
   // a network round trip it does not need. `--refresh` re-asks.
   const discovery = removeOption === undefined
-    ? await discoverProviderModels(providerId, { refresh: refreshCatalog })
+    ? await discoverProviderModels(providerId, {
+        refresh: refreshCatalog,
+        ...(staticCatalog ? { staticCatalog: true } : {}),
+      })
     : { unregistered: [], addable: [], blocked: {} };
   const candidates = [...new Set([...(discovery.addable || discovery.unregistered), ...curated])].sort();
 
