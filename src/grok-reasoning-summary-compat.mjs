@@ -170,6 +170,7 @@ export class GrokReasoningSummaryCompatTransform extends Transform {
   #maxCommittedFrameBytes;
   #mutationCommitted = false;
   #nextSequenceNumber;
+  #repairedReasoningItems = [];
 
   constructor({
     maxFrameBytes = MAX_FRAME_BYTES,
@@ -233,8 +234,13 @@ export class GrokReasoningSummaryCompatTransform extends Transform {
       return false;
     }
     this.#currentSeparator = separator.toString("ascii");
-    for (const piece of this.#rewriteBlock(text)) {
-      this.push(Buffer.concat([Buffer.from(piece), separator]));
+    const pieces = this.#rewriteBlock(text);
+    const inferredSeparator = Buffer.from(text.includes("\r\n") ? "\r\n\r\n" : "\n\n");
+    for (let index = 0; index < pieces.length; index += 1) {
+      const trailing = separator.length || index === pieces.length - 1
+        ? separator
+        : inferredSeparator;
+      this.push(Buffer.concat([Buffer.from(pieces[index]), trailing]));
     }
     this.#currentSeparator = "";
     return !this.#disabled;
@@ -288,15 +294,22 @@ export class GrokReasoningSummaryCompatTransform extends Transform {
     };
   }
 
-  #reasoningItem(status = "completed") {
+  #reasoningItem(status = this.#reasoning.status || "completed") {
     return {
       id: this.#reasoning.id,
       type: "reasoning",
       status,
-      summary: status === "completed" && this.#reasoning.partStarted
+      summary: status !== "in_progress" && this.#reasoning.partStarted
         ? [{ type: "summary_text", text: this.#reasoning.text }]
         : [],
     };
+  }
+
+  #rememberReasoningItem(item) {
+    this.#repairedReasoningItems.push({
+      outputIndex: this.#reasoning.outputIndex,
+      item,
+    });
   }
 
   #shiftedEvent(event) {
@@ -327,6 +340,7 @@ export class GrokReasoningSummaryCompatTransform extends Transform {
       textDone: false,
       partDone: false,
       itemDone: false,
+      status: "in_progress",
       synthetic: true,
     };
     return [this.#syntheticBlock(
@@ -353,8 +367,9 @@ export class GrokReasoningSummaryCompatTransform extends Transform {
     )];
   }
 
-  #finishReasoning(parsed) {
+  #finishReasoning(parsed, status = "completed") {
     if (!this.#reasoning || this.#reasoning.itemDone) return [];
+    this.#reasoning.status = status;
     const output = [];
     output.push(...this.#startSummaryPart(parsed));
     if (!this.#reasoning.textDone) {
@@ -377,15 +392,17 @@ export class GrokReasoningSummaryCompatTransform extends Transform {
       ));
     }
     this.#reasoning.itemDone = true;
+    const item = this.#reasoningItem();
     output.push(this.#syntheticBlock(
       "response.output_item.done",
       {
         output_index: this.#reasoning.outputIndex,
-        item: this.#reasoningItem(),
+        item,
         ...(typeof parsed.event.model === "string" ? { model: parsed.event.model } : {}),
       },
       parsed,
     ));
+    this.#rememberReasoningItem(item);
     return output;
   }
 
@@ -440,6 +457,7 @@ export class GrokReasoningSummaryCompatTransform extends Transform {
         textDone: false,
         partDone: false,
         itemDone: false,
+        status: "in_progress",
         synthetic: false,
       };
       const item = { ...event.item, summary: [] };
@@ -499,8 +517,10 @@ export class GrokReasoningSummaryCompatTransform extends Transform {
       if (this.#reasoning.itemDone) return [];
       const prefix = [];
       const terminalParts = summaryParts(event.item);
-      if (!this.#reasoning.partStarted && terminalParts.length) {
+      if (terminalParts.length && !this.#reasoning.textDone) {
         this.#reasoning.text = terminalParts.map((part) => part.text).join("");
+      }
+      if (!this.#reasoning.partStarted && terminalParts.length) {
         prefix.push(...this.#startSummaryPart(parsed));
       }
       if (this.#reasoning.partStarted && !this.#reasoning.textDone) {
@@ -522,15 +542,20 @@ export class GrokReasoningSummaryCompatTransform extends Transform {
           parsed,
         ));
       }
+      const status = ["completed", "incomplete"].includes(event.item.status)
+        ? event.item.status
+        : "completed";
+      this.#reasoning.status = status;
       const item = {
         ...event.item,
         id: this.#reasoning.id,
-        status: "completed",
+        status,
         summary: this.#reasoning.partStarted
           ? [{ type: "summary_text", text: this.#reasoning.text }]
           : [],
       };
       this.#reasoning.itemDone = true;
+      this.#rememberReasoningItem(item);
       return [...prefix, this.#rewrittenBlock(parsed, {
         ...event,
         output_index: this.#reasoning.outputIndex,
@@ -541,6 +566,7 @@ export class GrokReasoningSummaryCompatTransform extends Transform {
     const startsVisibleOutput = type === "response.output_text.delta"
       || type === "response.output_text.done"
       || (type === "response.output_item.added" && event?.item?.type !== "reasoning")
+      || (type === "response.output_item.done" && event?.item?.type !== "reasoning")
       || type === "response.function_call_arguments.delta";
     if (startsVisibleOutput) {
       if (!this.#reasoning.itemDone) prefix.push(...this.#finishReasoning(parsed));
@@ -568,17 +594,40 @@ export class GrokReasoningSummaryCompatTransform extends Transform {
       if (typeof event.text === "string") this.#message.text = event.text;
     }
 
-    const terminalResponse = type === "response.completed" || type === "response.incomplete";
+    const failureTerminal = type === "response.failed"
+      || type === "response.error"
+      || type === "error";
+    if (failureTerminal && !Array.isArray(event.response?.output)) {
+      prefix.push(...this.#finishReasoning(parsed, "incomplete"));
+      this.#pendingMessage = [];
+      const rewritten = this.#rewrittenBlock(parsed, event);
+      this.#reasoning = undefined;
+      this.#repairedReasoningItems = [];
+      this.#shiftOutputIndexes = false;
+      return [...prefix, rewritten];
+    }
+
+    const terminalResponse = type === "response.completed"
+      || type === "response.incomplete"
+      || failureTerminal;
     if (terminalResponse && Array.isArray(event.response?.output)) {
-      prefix.push(...this.#finishReasoning(parsed), ...this.#flushPendingMessage());
-      const nonReasoning = event.response.output
-        .filter((item) => item?.type !== "reasoning")
-        .map((item) => (
-          item?.type === "message" && this.#message?.id
-            ? { ...item, id: this.#message.id }
-            : item
-        ));
-      const output = [this.#reasoningItem(), ...nonReasoning];
+      const itemStatus = type === "response.completed" ? "completed" : "incomplete";
+      prefix.push(
+        ...this.#finishReasoning(parsed, itemStatus),
+        ...this.#flushPendingMessage(),
+      );
+      const repaired = [...this.#repairedReasoningItems]
+        .sort((left, right) => left.outputIndex - right.outputIndex);
+      const output = event.response.output.map((item) => (
+        item?.type === "message" && this.#message?.id
+          ? { ...item, id: this.#message.id }
+          : item
+      ));
+      for (const repair of repaired) {
+        const index = Math.min(Math.max(repair.outputIndex, 0), output.length);
+        if (output[index]?.type === "reasoning") output[index] = repair.item;
+        else output.splice(index, 0, repair.item);
+      }
       const unchanged = !this.#reasoning.synthetic
         && JSON.stringify(output) === JSON.stringify(event.response.output);
       const next = unchanged
@@ -586,6 +635,7 @@ export class GrokReasoningSummaryCompatTransform extends Transform {
         : { ...event, response: { ...event.response, output } };
       const rewritten = this.#rewrittenBlock(parsed, next);
       this.#reasoning = undefined;
+      this.#repairedReasoningItems = [];
       this.#shiftOutputIndexes = false;
       return [...prefix, rewritten];
     }

@@ -419,6 +419,220 @@ test("recovers a reasoning summary supplied only by the terminal item", async ()
   ]);
 });
 
+test("separates synthesized lifecycle frames at an unterminated EOF", async () => {
+  const terminal = {
+    type: "response.output_item.done",
+    output_index: 0,
+    item: {
+      id: "rs_unterminated",
+      type: "reasoning",
+      status: "completed",
+      summary: [{ type: "summary_text", text: "Готово." }],
+    },
+  };
+  const input = [
+    block({ type: "response.output_item.added", output_index: 0, item: { ...terminal.item, status: "in_progress", summary: null } }),
+    block({ type: "response.reasoning_summary_text.delta", item_id: "rs_unterminated", output_index: 0, delta: "Готово." }),
+    `data: ${JSON.stringify(terminal)}`,
+  ].join("");
+  const raw = await transformed(input);
+  const output = events(raw);
+  assert.equal(raw.endsWith("\n\n"), false);
+  assert.deepEqual(output.map((event) => event.type), [
+    "response.output_item.added",
+    "response.reasoning_summary_part.added",
+    "response.reasoning_summary_text.delta",
+    "response.reasoning_summary_text.done",
+    "response.reasoning_summary_part.done",
+    "response.output_item.done",
+  ]);
+});
+
+test("preserves an incomplete reasoning status in stream and terminal output", async () => {
+  const repaired = {
+    id: "rs_incomplete_item",
+    type: "reasoning",
+    status: "incomplete",
+    summary: [{ type: "summary_text", text: "Оборвалось." }],
+  };
+  const input = [
+    block({ type: "response.output_item.added", output_index: 0, item: { ...repaired, status: "in_progress", summary: null } }),
+    block({ type: "response.reasoning_summary_text.delta", item_id: "wrong", output_index: 0, delta: "Оборвалось." }),
+    block({ type: "response.output_item.done", output_index: 0, item: repaired }),
+    block({
+      type: "response.incomplete",
+      response: {
+        id: "resp_incomplete_item",
+        status: "incomplete",
+        output: [{ ...repaired, id: "rs_incomplete_final" }],
+      },
+    }),
+  ].join("");
+  const output = events(await transformed(input));
+  const itemDone = output.find((event) => event.type === "response.output_item.done");
+  const incomplete = output.find((event) => event.type === "response.incomplete");
+  assert.equal(itemDone.item.status, "incomplete");
+  assert.equal(incomplete.response.output[0].status, "incomplete");
+  assert.equal(incomplete.response.output[0].id, repaired.id);
+});
+
+test("uses the terminal summary when streamed close events are missing", async () => {
+  const fullText = "Проверяю контекст полностью.";
+  const input = [
+    block({ type: "response.output_item.added", output_index: 0, item: { id: "rs_partial", type: "reasoning", status: "in_progress", summary: null } }),
+    block({ type: "response.reasoning_summary_text.delta", item_id: "rs_partial_hash", output_index: 0, delta: "Проверяю " }),
+    block({
+      type: "response.output_item.done",
+      output_index: 0,
+      item: {
+        id: "rs_partial_final",
+        type: "reasoning",
+        status: "completed",
+        summary: [{ type: "summary_text", text: fullText }],
+      },
+    }),
+  ].join("");
+  const output = events(await transformed(input));
+  assert.equal(
+    output.find((event) => event.type === "response.reasoning_summary_text.done").text,
+    fullText,
+  );
+  assert.equal(
+    output.find((event) => event.type === "response.reasoning_summary_part.done").part.text,
+    fullText,
+  );
+  assert.deepEqual(output.at(-1).item.summary, [{ type: "summary_text", text: fullText }]);
+});
+
+test("flushes the held message before a terminal-only message close", async () => {
+  const message = {
+    id: "msg_terminal_close",
+    type: "message",
+    role: "assistant",
+    status: "completed",
+    content: [{ type: "output_text", text: "Ответ.", annotations: [] }],
+  };
+  const input = [
+    block({ type: "response.output_item.added", output_index: 0, item: { ...message, status: "in_progress", content: [] } }),
+    block({ type: "response.content_part.added", item_id: message.id, output_index: 0, content_index: 0, part: { type: "output_text", text: "", annotations: [] } }),
+    block({ type: "response.reasoning_summary_text.delta", item_id: "rs_before_message_close", output_index: 0, delta: "Решил." }),
+    block({ type: "response.output_item.done", output_index: 0, item: message }),
+  ].join("");
+  const output = events(await transformed(input));
+  const reasoningDone = output.findIndex(
+    (event) => event.type === "response.output_item.done" && event.item?.type === "reasoning",
+  );
+  const messageAdded = output.findIndex(
+    (event) => event.type === "response.output_item.added" && event.item?.type === "message",
+  );
+  const messageDone = output.findIndex(
+    (event) => event.type === "response.output_item.done" && event.item?.type === "message",
+  );
+  assert.ok(reasoningDone < messageAdded && messageAdded < messageDone);
+  assert.equal(output[messageAdded].output_index, 1);
+  assert.equal(output[messageDone].output_index, 1);
+});
+
+test("retains every repaired reasoning item in terminal output order", async () => {
+  const reasoning = [
+    { id: "rs_first", text: "Первый итог." },
+    { id: "rs_second", text: "Второй итог." },
+  ];
+  const input = [
+    ...reasoning.flatMap(({ id, text }, index) => {
+      const outputIndex = index + 1;
+      return [
+        block({ type: "response.output_item.added", output_index: outputIndex, item: { id, type: "reasoning", status: "in_progress", summary: null } }),
+        block({ type: "response.reasoning_summary_text.delta", item_id: `${id}_hash`, output_index: outputIndex, delta: text }),
+        block({ type: "response.output_item.done", output_index: outputIndex, item: { id: `${id}_final`, type: "reasoning", status: "completed", summary: [{ type: "summary_text", text }] } }),
+      ];
+    }),
+    block({
+      type: "response.completed",
+      response: {
+        id: "resp_multiple_reasoning",
+        status: "completed",
+        output: [
+          { id: "rs_unstreamed", type: "reasoning", status: "completed", summary: [] },
+          { id: "raw_first", type: "reasoning", status: "completed", summary: [] },
+          { id: "raw_second", type: "reasoning", status: "completed", summary: [] },
+          { id: "msg_multiple", type: "message", role: "assistant", status: "completed", content: [] },
+        ],
+      },
+    }),
+  ].join("");
+  const output = events(await transformed(input));
+  const completed = output.find((event) => event.type === "response.completed");
+  assert.deepEqual(completed.response.output.map((item) => item.id), [
+    "rs_unstreamed",
+    "rs_first",
+    "rs_second",
+    "msg_multiple",
+  ]);
+  assert.deepEqual(
+    completed.response.output.slice(1, 3).map((item) => item.summary[0].text),
+    reasoning.map(({ text }) => text),
+  );
+});
+
+test("resolves held lifecycles before failure terminals", async () => {
+  for (const terminal of [
+    { type: "response.failed", response: { id: "resp_failed", status: "failed" } },
+    { type: "response.error", error: { code: "upstream_error", message: "failed" } },
+    { type: "error", code: "upstream_error", message: "failed", param: null },
+  ]) {
+    const messageId = `msg_${terminal.type}`;
+    const input = [
+      block({ type: "response.output_item.added", output_index: 0, item: { id: messageId, type: "message", role: "assistant", status: "in_progress", content: [] } }),
+      block({ type: "response.content_part.added", item_id: messageId, output_index: 0, content_index: 0, part: { type: "output_text", text: "", annotations: [] } }),
+      block({ type: "response.reasoning_summary_text.delta", item_id: `rs_${terminal.type}`, output_index: 0, delta: "Не завершено." }),
+      block(terminal),
+    ].join("");
+    const output = events(await transformed(input));
+    assert.equal(output.at(-1).type, terminal.type);
+    assert.equal(output.some((event) => event.item?.type === "message"), false);
+    assert.equal(output.some((event) => event.item_id === messageId), false);
+    const reasoningDone = output.find(
+      (event) => event.type === "response.output_item.done" && event.item?.type === "reasoning",
+    );
+    assert.equal(reasoningDone.item.status, "incomplete");
+  }
+
+  const message = {
+    id: "msg_failed_output",
+    type: "message",
+    role: "assistant",
+    status: "incomplete",
+    content: [],
+  };
+  const input = [
+    block({ type: "response.output_item.added", output_index: 0, item: { ...message, status: "in_progress" } }),
+    block({ type: "response.content_part.added", item_id: message.id, output_index: 0, content_index: 0, part: { type: "output_text", text: "", annotations: [] } }),
+    block({ type: "response.reasoning_summary_text.delta", item_id: "rs_failed_output", output_index: 0, delta: "Не завершено." }),
+    block({
+      type: "response.failed",
+      response: {
+        id: "resp_failed_output",
+        status: "failed",
+        output: [
+          { id: "rs_failed_final", type: "reasoning", status: "incomplete", summary: [] },
+          { ...message, id: "msg_failed_final" },
+        ],
+      },
+    }),
+  ].join("");
+  const output = events(await transformed(input));
+  const failedIndex = output.findIndex((event) => event.type === "response.failed");
+  const messageAddedIndex = output.findIndex(
+    (event) => event.type === "response.output_item.added" && event.item?.type === "message",
+  );
+  assert.ok(messageAddedIndex >= 0 && messageAddedIndex < failedIndex);
+  assert.deepEqual(output[failedIndex].response.output.map((item) => item.id), [
+    "rs_failed_output",
+    message.id,
+  ]);
+});
+
 test("an oversized unterminated frame fails open without unbounded buffering", async () => {
   const input = `${block({ type: "response.output_item.added", output_index: 0, item: { id: "msg_limit", type: "message", role: "assistant", status: "in_progress", content: [] } })}data: ${"x".repeat(512)}`;
   assert.equal(await transformed(input, 1, { maxFrameBytes: 256 }), input);
