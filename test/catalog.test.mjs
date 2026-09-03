@@ -20,6 +20,7 @@ import {
   clampModelEfforts,
   codexEffortVocabulary,
   effectivePickerHiddenModels,
+  liveAccountCatalogProbeAllowed,
   nativeCatalogIsReusable,
   deriveBaseInstructions,
   mergeNativeCatalogs,
@@ -63,6 +64,41 @@ const grok = {
   compHash: "grok-oauth-grok-4-5-v1",
   multiAgentVersion: "v2",
 };
+
+test("live account catalog probes stay off while the router owns the catalog", () => {
+  assert.equal(
+    liveAccountCatalogProbeAllowed({ discoveryDisabled: false, routedCatalogActive: false }),
+    true,
+  );
+  assert.equal(
+    liveAccountCatalogProbeAllowed({ discoveryDisabled: true, routedCatalogActive: false }),
+    false,
+  );
+  assert.equal(
+    liveAccountCatalogProbeAllowed({ discoveryDisabled: false, routedCatalogActive: true }),
+    false,
+  );
+  // ChatGPT account switching refreshes native while openai_base_url still
+  // points at this router. A live `debug models` probe would echo the merged
+  // catalog and abort the switch with "already-merged catalog".
+  assert.equal(
+    liveAccountCatalogProbeAllowed({ discoveryDisabled: false, routedCatalogActive: true }),
+    false,
+  );
+});
+
+test("native capture refuses to probe a live account catalog under a routed config", () => {
+  const source = readFileSync(new URL("../src/catalog.mjs", import.meta.url), "utf8");
+  assert.match(
+    source,
+    /liveAccountCatalogProbeAllowed\(\{\s*discoveryDisabled: idle,\s*routedCatalogActive: routedActive,\s*\}\)/,
+  );
+  assert.match(source, /catalogContainsRoutedSlugs\(account\)/);
+  assert.match(
+    source,
+    /Could not refresh the native model catalog \(\$\{error\.message\}\); reusing the cached capture\./,
+  );
+});
 
 test("signed-in picker overlay cannot hide Codex native base entries", () => {
   const hidden = new Set(["gpt-5.6-luna", "gpt-5.6-sol-1m", "grok-oauth/grok-4.5"]);

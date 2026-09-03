@@ -29,6 +29,7 @@ const bridgeSource = String.raw`
     : null;
   const rejectAccountUsageRead = Number(searchParams.get("rejectAccountUsageRead")) || 0;
   const rejectAccountPool = searchParams.get("rejectAccountPool") === "1";
+  const accountMutationDelayMs = Number(searchParams.get("accountMutationDelayMs")) || 0;
   const terminalLoginFailure = searchParams.get("terminalLoginFailure") === "1";
   const rejectLoginImmediately = searchParams.get("rejectLoginImmediately") === "1";
   const loginStaysPending = searchParams.get("loginStaysPending") === "1";
@@ -204,6 +205,24 @@ const bridgeSource = String.raw`
     };
   };
 
+  let accountSeq = 0;
+  const accountPoolState = {
+    version: 1,
+    policy: { enabled: true, mode: "switch", selectedAccountId: "active" },
+    accounts: {
+      revoked: { id: "revoked", state: "revoked", paused: true, priority: 50, label: "Removed account", health: { state: "healthy" }, turns: 0, requests: 0 },
+      active: { id: "active", state: "active", paused: false, priority: 50, label: "Secondary account", subscription: { status: "usable", authenticated: true, usable: true, expired: false, email: "secondary@example.com" }, health: { state: "healthy" }, turns: 0, requests: 0 },
+      current: { id: "current", state: "active", paused: false, priority: 50, label: "Current account", subscription: terminalLoginFailure || loginStaysPending ? { status: "invalid", authenticated: false, usable: false, expired: false, email: "primary@example.com" } : { status: "usable", authenticated: true, usable: true, expired: false, email: "primary@example.com" }, health: { state: "healthy" }, turns: 0, requests: 0 },
+    },
+    get loginAttempts() {
+      return terminalLoginFailure && subscriptionLoginRequested
+        ? { current: { status: "failed", error: "Codex login closed before this account became usable.", retryable: true } }
+        : undefined;
+    },
+    sessions: { count: 0 },
+    profile: { desired: "active", active: "active", pending: false, running: false },
+  };
+
   window.routerControl = Object.freeze({
     platform: navigator.platform.toLowerCase().includes("mac") ? "darwin" : "linux",
     getSnapshot: async () => {
@@ -215,18 +234,7 @@ const bridgeSource = String.raw`
       if (rejectAccountPool) throw new Error("The saved ChatGPT account list could not be read as JSON.");
       accountPoolReads += 1;
       if (terminalLoginFailure) record("getChatGptAccountPool", accountPoolReads);
-      return {
-        version: 1,
-        policy: { enabled: true, mode: "switch", selectedAccountId: "active" },
-        accounts: {
-          revoked: { id: "revoked", state: "revoked", paused: true, priority: 50, label: "Removed account", health: { state: "healthy" }, turns: 0, requests: 0 },
-          active: { id: "active", state: "active", paused: false, priority: 50, label: "Secondary account", subscription: { status: "usable", authenticated: true, usable: true, expired: false, email: "secondary@example.com" }, health: { state: "healthy" }, turns: 0, requests: 0 },
-          current: { id: "current", state: "active", paused: false, priority: 50, label: "Current account", subscription: terminalLoginFailure || loginStaysPending ? { status: "invalid", authenticated: false, usable: false, expired: false, email: "primary@example.com" } : { status: "usable", authenticated: true, usable: true, expired: false, email: "primary@example.com" }, health: { state: "healthy" }, turns: 0, requests: 0 },
-        },
-        ...(terminalLoginFailure && subscriptionLoginRequested ? { loginAttempts: { current: { status: "failed", error: "Codex login closed before this account became usable.", retryable: true } } } : {}),
-        sessions: { count: 0 },
-        profile: { desired: "active", active: "active", pending: false, running: false },
-      };
+      return JSON.parse(JSON.stringify(accountPoolState));
     },
     getProviders: async () => {
       await new Promise((resolve) => setTimeout(resolve, providerDelayMs));
@@ -435,6 +443,34 @@ const bridgeSource = String.raw`
     setChatGptAccountSelection: async (selection) => {
       record("setChatGptAccountSelection", selection);
       return { ok: true };
+    },
+    addChatGptSubscriptionAccount: async (label = "") => {
+      record("addChatGptSubscriptionAccount", label);
+      if (accountMutationDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, accountMutationDelayMs));
+      accountSeq += 1;
+      const id = "acct_test_" + String(accountSeq).padStart(8, "0");
+      const account = {
+        id,
+        state: "active",
+        paused: false,
+        priority: 50,
+        label: String(label || "").trim() || ("Account " + accountSeq),
+        subscription: { status: "pending", authenticated: false, usable: false, expired: false },
+        health: { state: "healthy" },
+        turns: 0,
+        requests: 0,
+      };
+      accountPoolState.accounts[id] = account;
+      return { account, loginRequired: true };
+    },
+    removeChatGptSubscriptionAccount: async (accountId) => {
+      record("removeChatGptSubscriptionAccount", accountId);
+      if (accountMutationDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, accountMutationDelayMs));
+      delete accountPoolState.accounts[accountId];
+      if (accountPoolState.policy.selectedAccountId === accountId) {
+        delete accountPoolState.policy.selectedAccountId;
+      }
+      return { id: accountId };
     },
     loginChatGptSubscriptionAccount: async (accountId) => {
       record("loginChatGptSubscriptionAccount", accountId);
@@ -831,6 +867,43 @@ test("the production renderer exposes model discovery and picker actions", { tim
     await page.getByRole("button", { name: "Select ChatGPT account: primary@example.com", exact: true }).click();
     await page.waitForFunction(() => window.routerControlTest.calls()
       .some((call) => call.name === "setChatGptAccountSelection" && call.args[0] === "current"));
+
+    // Add/remove must paint before the durable control round-trip finishes.
+    const optimisticPage = await browser.newPage({ viewport: { width: 1280, height: 840 } });
+    optimisticPage.setDefaultTimeout(10_000);
+    await optimisticPage.goto(`${url}?accountMutationDelayMs=1500`, { waitUntil: "domcontentloaded" });
+    await optimisticPage.getByRole("button", { name: "Settings", exact: true }).click();
+    await optimisticPage.getByText("ChatGPT accounts", { exact: true }).waitFor();
+    const optimisticRows = optimisticPage.locator(".subscription-account-row");
+    const rowsBeforeAdd = await optimisticRows.count();
+    await optimisticPage.getByRole("textbox", { name: "New ChatGPT account label" }).fill("Optimistic Work");
+    const optimisticAdd = optimisticRows.filter({ hasText: "Optimistic Work" });
+    const addStartedAt = Date.now();
+    await optimisticPage.getByRole("button", { name: "Add account", exact: true }).click();
+    await optimisticAdd.waitFor();
+    assert.ok(Date.now() - addStartedAt < 1200, "add row must appear before the delayed control returns");
+    assert.equal(await optimisticAdd.getAttribute("data-optimistic"), "true");
+    assert.equal(await optimisticRows.count(), rowsBeforeAdd + 1, "added account appears before the control returns");
+    await optimisticPage.waitForFunction(() => {
+      const row = [...document.querySelectorAll(".subscription-account-row")]
+        .find((node) => (node.textContent || "").includes("Optimistic Work"));
+      return Boolean(row && row.getAttribute("data-optimistic") !== "true");
+    });
+    assert.equal(await optimisticAdd.getByText("Sign-in required", { exact: false }).count(), 1);
+
+    await optimisticAdd.getByRole("button", { name: "Remove", exact: true }).click();
+    const removeStartedAt = Date.now();
+    await optimisticPage.getByRole("button", { name: "Remove account", exact: true }).click();
+    await optimisticAdd.waitFor({ state: "detached" });
+    assert.ok(Date.now() - removeStartedAt < 1200, "removed row must disappear before the delayed control returns");
+    assert.equal(
+      await optimisticRows.filter({ hasText: "Optimistic Work" }).count(),
+      0,
+      "removed account disappears before the control returns",
+    );
+    await optimisticPage.waitForFunction(() => window.routerControlTest.calls()
+      .some((call) => call.name === "removeChatGptSubscriptionAccount"));
+    await optimisticPage.close();
 
     // Huge community GGUFs stay guarded, but the explicit oversized-model
     // acknowledgement must make their exact Ollama tag selectable. Otherwise
