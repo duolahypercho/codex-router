@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **Empty `tools: []` is now stripped for all API-forwarder routes, not only
+  `qwen38-community`.** Strict upstreams (vLLM >=0.20 Pydantic) refuse an empty
+  tools array. Codex sends `tools: []` on compaction and plain chat, so without
+  this strip every compaction against strict providers 400s. The repair was
+  previously applied only to the `qwen38-community` profile; it is now applied
+  to all routes so compaction and plain chat work against any strict provider.
+  Dangling `tool_choice` is dropped only after stripping an empty `tools: []`
+  array (not when tools was never present). The `qwen38-community` profile
+  additionally drops tool_choice when tools is absent, as that endpoint refuses
+  "When using `tool_choice`, `tools` must be set". Real non-empty tool arrays
+  and their tool_choice are forwarded unchanged. (Fixes #588)
 - **Grok OAuth reasoning summaries now appear in Codex while the model is
   thinking.** LiteLLM can open an empty assistant message before Grok's first
   reasoning delta, then assign a different item id to every delta and return

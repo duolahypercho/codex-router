@@ -5033,6 +5033,106 @@ test("API forwarder omits the empty tool list the free Qwen3.8 endpoint rejects"
   }
 });
 
+// Empty tools stripping is not qwen38-specific -- strict upstreams (vLLM >=0.20
+// Pydantic) refuse both empty tools arrays and dangling tool_choice, and Codex
+// sends tools: [] on every compaction and plain chat. The strip applies to all
+// routes so compaction works against any strict provider.
+test("API forwarder strips empty tools for all routes, not only qwen38-community", async () => {
+  const upstreamRequests = [];
+  const upstream = await mockServer(async (request, response) => {
+    upstreamRequests.push({ headers: request.headers, body: await bodyJson(request) });
+    json(response, 200, { choices: [] });
+  });
+  const forwarderPort = await openPort();
+  const forwarder = run("api-forwarder.mjs", {
+    CODEX_ROUTER_API_PORT: String(forwarderPort),
+    OPENCODE_GO_BASE_URL: `http://127.0.0.1:${upstream.port}`,
+    OPENCODE_GO_API_KEY: "TEST_OPENCODE_GO_API_KEY",
+    CODEX_ROUTER_QUIET: "1",
+  });
+
+  try {
+    await waitFor(`http://127.0.0.1:${forwarderPort}/health`, forwarder, {
+      Authorization: `Bearer ${INTERNAL_KEY}`,
+    });
+    // OpenCode Go mimo is a Chat Completions route, not qwen38-community.
+    // Compaction sends empty tools + tool_choice, and both must be stripped.
+    const compaction = await fetch(`http://127.0.0.1:${forwarderPort}/v1/chat/completions`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${INTERNAL_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "opencode-go-mimo-v2-5",
+        tools: [],
+        tool_choice: "none",
+        messages: [{ role: "user", content: "summarize" }],
+      }),
+    });
+    assert.equal(compaction.status, 200);
+    const compacted = upstreamRequests.at(-1).body;
+    assert.equal("tools" in compacted, false);
+    assert.equal("tool_choice" in compacted, false);
+
+    // A real tool list is untouched: the strip is only for empty arrays.
+    const realTools = [
+      {
+        type: "function",
+        function: {
+          name: "test",
+          description: "Test function.",
+          parameters: {
+            type: "object",
+            properties: { arg: { type: "string" } },
+            required: ["arg"],
+          },
+        },
+      },
+    ];
+    const turn = await fetch(`http://127.0.0.1:${forwarderPort}/v1/chat/completions`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${INTERNAL_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "opencode-go-mimo-v2-5",
+        tools: realTools,
+        tool_choice: "auto",
+        messages: [{ role: "user", content: "test" }],
+      }),
+    });
+    assert.equal(turn.status, 200);
+    const forwarded = upstreamRequests.at(-1).body;
+    assert.deepEqual(forwarded.tools, realTools);
+    assert.equal(forwarded.tool_choice, "auto");
+
+    // A request with tool_choice but no tools field is forwarded as-is for
+    // non-qwen38 routes. The strip only drops tool_choice when it actually
+    // stripped an empty tools: [] array.
+    const choiceWithoutTools = await fetch(`http://127.0.0.1:${forwarderPort}/v1/chat/completions`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${INTERNAL_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "opencode-go-mimo-v2-5",
+        tool_choice: "auto",
+        messages: [{ role: "user", content: "test" }],
+      }),
+    });
+    assert.equal(choiceWithoutTools.status, 200);
+    const choiceForwarded = upstreamRequests.at(-1).body;
+    assert.equal("tools" in choiceForwarded, false);
+    assert.equal(choiceForwarded.tool_choice, "auto");
+  } finally {
+    await stopChild(forwarder);
+    await closeServer(upstream.server);
+  }
+});
+
 // The third refusal measured on the same endpoint: "System message must be at
 // the beginning." Probing it with one-token requests pinned the rule to at most
 // one `system` message, sitting ahead of the first user/assistant/tool turn --
@@ -5900,8 +6000,9 @@ test("API forwarder opts streamed Chat Completions into usage without changing l
     assert.equal(nonstream.status, 200);
     const nonstreamBody = upstreamRequests.at(-1).body;
     assert.deepEqual(nonstreamBody.stream_options, { custom_option: "keep" });
-    assert.deepEqual(nonstreamBody.tools, []);
-    assert.equal(nonstreamBody.tool_choice, "none");
+    // Empty tools and dangling tool_choice are stripped for all routes.
+    assert.equal(nonstreamBody.tools, undefined);
+    assert.equal(nonstreamBody.tool_choice, undefined);
 
     // An omitted stream flag is non-streaming too; it must not inherit the
     // streamed usage opt-in merely because the route is Chat Completions.
@@ -5919,8 +6020,9 @@ test("API forwarder opts streamed Chat Completions into usage without changing l
     assert.equal(implicitNonstream.status, 200);
     const implicitNonstreamBody = upstreamRequests.at(-1).body;
     assert.deepEqual(implicitNonstreamBody.stream_options, { custom_option: "keep" });
-    assert.deepEqual(implicitNonstreamBody.tools, []);
-    assert.equal(implicitNonstreamBody.tool_choice, "none");
+    // Empty tools and dangling tool_choice are stripped for all routes.
+    assert.equal(implicitNonstreamBody.tools, undefined);
+    assert.equal(implicitNonstreamBody.tool_choice, undefined);
 
     // Streamed Chat Completions requests opt in and retain every other option.
     const streamed = await fetch(`${base}/v1/chat/completions`, {
@@ -5942,8 +6044,9 @@ test("API forwarder opts streamed Chat Completions into usage without changing l
       custom_option: "keep",
       include_usage: true,
     });
-    assert.deepEqual(streamedBody.tools, []);
-    assert.equal(streamedBody.tool_choice, "none");
+    // Empty tools and dangling tool_choice are stripped for all routes.
+    assert.equal(streamedBody.tools, undefined);
+    assert.equal(streamedBody.tool_choice, undefined);
 
     // An explicit all-zero usage chunk is still relayed; only the request
     // option is normalized, not provider accounting.
@@ -6319,8 +6422,12 @@ function genericSearchModelFixture() {
     inputModalities: ["text"],
   });
   const plain = entry("plain-model", 100);
+  const historyCompatible = {
+    ...entry("history-compatible-model", 101),
+    supportsSearchHistory: true,
+  };
   const searchable = {
-    ...entry("search-model", 101),
+    ...entry("search-model", 102),
     searchTool: { mode: "hosted" },
   };
   writeFileSync(providersFile, `${JSON.stringify({
@@ -6337,9 +6444,9 @@ function genericSearchModelFixture() {
   })}\n`);
   writeFileSync(userModelsFile, `${JSON.stringify({
     version: 1,
-    models: [plain, searchable],
+    models: [plain, historyCompatible, searchable],
   })}\n`);
-  return { dir, providersFile, userModelsFile, plain, searchable };
+  return { dir, providersFile, userModelsFile, plain, historyCompatible, searchable };
 }
 
 test("router enforces generic model search capability on ordinary and compact turns", async () => {
@@ -6518,6 +6625,64 @@ test("router refuses unsupported search history on selected generic turns and co
     }
     assert.equal(gatewayRequests.length, 2);
     assert.ok(gatewayRequests.every((request) => request.model === fixture.searchable.gatewayModel));
+  } finally {
+    await stopChild(router);
+    await closeServer(gateway.server);
+    rmSync(fixture.dir, { recursive: true, force: true });
+  }
+});
+
+test("router replays verified search history without exposing a new search tool", async () => {
+  const gatewayRequests = [];
+  const gateway = await mockServer(async (request, response) => {
+    gatewayRequests.push(await bodyJson(request));
+    json(response, 200, {
+      id: `resp-${gatewayRequests.length}`,
+      object: "response",
+      status: "completed",
+      output: [{
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: "ok" }],
+      }],
+    });
+  });
+  const fixture = genericSearchModelFixture();
+  const routerPort = await openPort();
+  const router = run("router.mjs", {
+    CODEX_ROUTER_PORT: String(routerPort),
+    MODEL_ROUTER_STATE_DIR: fixture.dir,
+    MODEL_ROUTER_GENERIC_PROVIDERS: fixture.providersFile,
+    MODEL_ROUTER_USER_MODELS: fixture.userModelsFile,
+    CODEX_ROUTER_GATEWAY_BASE_URL: `http://127.0.0.1:${gateway.port}/v1`,
+    CODEX_ROUTER_QUIET: "1",
+  });
+  const headers = {
+    Authorization: `Bearer ${CALLER_KEY}`,
+    "Content-Type": "application/json",
+  };
+  const history = [{
+    type: "web_search_call",
+    id: "completed-search-history",
+    status: "completed",
+    action: { type: "search", query: "router contract" },
+  }];
+
+  try {
+    await waitFor(`${routerBase(routerPort)}/models`, router);
+    for (const suffix of ["", "/compact"]) {
+      const response = await fetch(`${routerBase(routerPort)}/responses${suffix}`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ model: fixture.historyCompatible.slug, input: history }),
+      });
+      assert.equal(response.status, 200, router.testErrors());
+    }
+    assert.equal(gatewayRequests.length, 2);
+    assert.ok(gatewayRequests.every((request) => (
+      request.model === fixture.historyCompatible.gatewayModel &&
+      (!Array.isArray(request.tools) || request.tools.every((tool) => tool.type !== "web_search"))
+    )));
   } finally {
     await stopChild(router);
     await closeServer(gateway.server);

@@ -39,17 +39,23 @@ export function routedModelPreservesSearchContract(
   { requiredMode, hasSearchHistory = false } = {},
   options,
 ) {
+  // Replaying a completed search call is a provider-input compatibility
+  // question, not proof that the destination can execute a new search. Keep
+  // that narrower capability separate so a model can accept prior
+  // `web_search_call` items without advertising a search tool to Codex.
+  if (hasSearchHistory && !requiredMode) {
+    return model?.supportsSearchHistory === true;
+  }
   return searchModePreservesSearchContract(
     routedModelSearchMode(model, options),
-    { requiredMode, hasSearchHistory },
+    { requiredMode },
   );
 }
 
 export function searchModePreservesSearchContract(
   searchMode,
-  { requiredMode, hasSearchHistory = false } = {},
+  { requiredMode } = {},
 ) {
-  if (hasSearchHistory && !requiredMode) return false;
   return !requiredMode || searchMode === requiredMode;
 }
 

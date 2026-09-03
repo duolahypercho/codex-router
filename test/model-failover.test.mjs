@@ -502,6 +502,17 @@ test("rankFailoverCandidates does not guess after search capability disappears",
   assert.deepEqual(ranked, []);
 });
 
+test("rankFailoverCandidates admits only verified search-history replay routes", () => {
+  const ranked = rankFailoverCandidates(
+    [
+      model("verified/candidate", "verified", { supportsSearchHistory: true }),
+      model("plain/incompatible", "plain"),
+    ],
+    { from: model("source/plain", "source"), hasSearchHistory: true },
+  );
+  assert.deepEqual(ranked.map((entry) => entry.model.slug), ["verified/candidate"]);
+});
+
 test("rankFailoverCandidates preserves an explicitly snapshotted absent mode", () => {
   const ranked = rankFailoverCandidates(
     [model("hosted/candidate", "hosted", { searchTool: { mode: "hosted" } })],

@@ -243,6 +243,14 @@ operator can opt in locally only by adding `searchTool` to that exact entry in
 the protected `user-models.json` after verifying the route. The curation CLI
 does not ask for or infer search mode from an upstream catalog claim.
 
+Accepting a completed `web_search_call` in conversation history is a narrower
+input-compatibility capability than executing a new search. A route that has
+been live-tested for history replay may declare `supportsSearchHistory: true`
+without a `searchTool`; this keeps new search unavailable while allowing that
+route to continue or compact an existing searched conversation. The flag is
+false by default and, like `searchTool`, belongs to the exact model/provider
+route rather than to an OpenAI-compatible protocol family.
+
 ### Per-model search sidecar
 
 A model without `searchTool` can be opted into the Perplexity Search sidecar.

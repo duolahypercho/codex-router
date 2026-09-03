@@ -655,6 +655,12 @@ function modelProblem(model, providers, slugs, gatewayModels) {
     return `model ${model.slug} has an invalid supportsParallelToolCalls`;
   }
   if (
+    model.supportsSearchHistory !== undefined &&
+    typeof model.supportsSearchHistory !== "boolean"
+  ) {
+    return `model ${model.slug} has an invalid supportsSearchHistory`;
+  }
+  if (
     model.experimentalSupportedTools !== undefined &&
     (!Array.isArray(model.experimentalSupportedTools) ||
       model.experimentalSupportedTools.some(

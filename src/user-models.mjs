@@ -61,6 +61,7 @@ const METADATA_FIELDS = new Set([
   "reasoningLevels",
   "defaultEffort",
   "serviceTiers",
+  "supportsSearchHistory",
   "supportsReasoningSummaries",
   "defaultReasoningSummary",
   "availabilityNux",
