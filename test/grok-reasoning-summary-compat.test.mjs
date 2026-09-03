@@ -20,8 +20,8 @@ function events(text) {
     .map((line) => JSON.parse(line.slice(5).trimStart()));
 }
 
-async function transformed(input, chunkSize = 0) {
-  const stream = new GrokReasoningSummaryCompatTransform();
+async function transformed(input, chunkSize = 0, options) {
+  const stream = new GrokReasoningSummaryCompatTransform(options);
   let output = "";
   stream.setEncoding("utf8");
   stream.on("data", (chunk) => { output += chunk; });
@@ -176,7 +176,7 @@ test("repairs one-byte CRLF chunks without changing their framing", async () => 
 
 test("adds missing reasoning terminal events before closing the item", async () => {
   const input = [
-    block({ type: "response.output_item.added", output_index: 0, item: { id: "rs_1", type: "reasoning", status: "in_progress", summary: [] } }),
+    block({ type: "response.output_item.added", output_index: 0, item: { id: "rs_1", type: "reasoning", status: "in_progress", summary: null } }),
     block({ type: "response.reasoning_summary_text.delta", item_id: "wrong", output_index: 0, delta: "Жду ответ." }),
     block({ type: "response.output_item.done", output_index: 0, item: { id: "rs_1", type: "reasoning", status: "completed", summary: [] } }),
   ].join("");
@@ -228,6 +228,50 @@ test("leaves an already canonical Grok reasoning stream byte-identical", async (
     block({ type: "response.output_item.done", output_index: 0, item: { id: "rs_ok", type: "reasoning", status: "completed", summary: [{ type: "summary_text", text: "Готовлю ответ." }] } }),
   ].join("");
   assert.equal(await transformed(input), input);
+});
+
+test("leaves canonical multi-part reasoning byte-identical", async () => {
+  const input = [
+    block({ type: "response.output_item.added", output_index: 0, item: { id: "rs_parts", type: "reasoning", status: "in_progress", summary: [] } }),
+    block({ type: "response.reasoning_summary_part.added", item_id: "rs_parts", output_index: 0, summary_index: 0, part: { type: "summary_text", text: "" } }),
+    block({ type: "response.reasoning_summary_text.delta", item_id: "rs_parts", output_index: 0, summary_index: 0, delta: "Первый." }),
+    block({ type: "response.reasoning_summary_text.done", item_id: "rs_parts", output_index: 0, summary_index: 0, text: "Первый." }),
+    block({ type: "response.reasoning_summary_part.done", item_id: "rs_parts", output_index: 0, summary_index: 0, part: { type: "summary_text", text: "Первый." } }),
+    block({ type: "response.reasoning_summary_part.added", item_id: "rs_parts", output_index: 0, summary_index: 1, part: { type: "summary_text", text: "" } }),
+    block({ type: "response.reasoning_summary_text.delta", item_id: "rs_parts", output_index: 0, summary_index: 1, delta: "Второй." }),
+    block({ type: "response.reasoning_summary_text.done", item_id: "rs_parts", output_index: 0, summary_index: 1, text: "Второй." }),
+    block({ type: "response.reasoning_summary_part.done", item_id: "rs_parts", output_index: 0, summary_index: 1, part: { type: "summary_text", text: "Второй." } }),
+    block({ type: "response.output_item.done", output_index: 0, item: { id: "rs_parts", type: "reasoning", status: "completed", summary: [{ type: "summary_text", text: "Первый." }, { type: "summary_text", text: "Второй." }] } }),
+  ].join("");
+  assert.equal(await transformed(input, 1), input);
+});
+
+test("drops a late upstream reasoning close after a synthetic close", async () => {
+  const message = { id: "msg_late", type: "message", role: "assistant", status: "completed", content: [{ type: "output_text", text: "Готово.", annotations: [] }] };
+  const input = [
+    block({ type: "response.output_item.added", output_index: 0, item: { ...message, status: "in_progress", content: [] } }),
+    block({ type: "response.content_part.added", item_id: message.id, output_index: 0, content_index: 0, part: { type: "output_text", text: "", annotations: [] } }),
+    block({ type: "response.reasoning_summary_text.delta", item_id: "rs_late", output_index: 0, delta: "Проверяю." }),
+    block({ type: "response.output_text.delta", item_id: message.id, output_index: 0, content_index: 0, delta: "Готово." }),
+    block({ type: "response.output_item.done", output_index: 0, item: { id: "rs_late_final", type: "reasoning", status: "completed", summary: [{ type: "summary_text", text: "Проверяю." }] } }),
+    block({ type: "response.output_text.done", item_id: message.id, output_index: 0, content_index: 0, text: "Готово." }),
+  ].join("");
+  const output = events(await transformed(input));
+  assert.equal(
+    output.filter((event) => event.type === "response.output_item.done" && event.item?.type === "reasoning").length,
+    1,
+  );
+  assert.equal(output.at(-1).type, "response.output_text.done");
+});
+
+test("an oversized unterminated frame fails open without unbounded buffering", async () => {
+  const input = `${block({ type: "response.output_item.added", output_index: 0, item: { id: "msg_limit", type: "message", role: "assistant", status: "in_progress", content: [] } })}data: ${"x".repeat(512)}`;
+  assert.equal(await transformed(input, 1, { maxFrameBytes: 256 }), input);
+});
+
+test("an oversized delimited frame and its tail pass through byte-identically", async () => {
+  const input = `data: ${"x".repeat(512)}\r\n\r\n${block({ type: "response.output_text.delta", item_id: "msg_tail", output_index: 0, delta: "ok" }, "\r\n")}`;
+  assert.equal(await transformed(input, 1, { maxFrameBytes: 256 }), input);
 });
 
 test("leaves malformed and non-reasoning SSE frames unchanged", async () => {

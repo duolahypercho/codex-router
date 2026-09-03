@@ -1,5 +1,104 @@
 import { Transform } from "node:stream";
-import { StringDecoder } from "node:string_decoder";
+import { TextDecoder } from "node:util";
+
+const MAX_FRAME_BYTES = 256 * 1024;
+const LF_FRAME_SEPARATOR = Buffer.from("\n\n");
+const CRLF_FRAME_SEPARATOR = Buffer.from("\r\n\r\n");
+
+// Grow geometrically and inspect each byte once so fragmented or unterminated
+// frames cannot trigger repeated whole-buffer copies and delimiter scans.
+class SseFrameAccumulator {
+  #storage = Buffer.alloc(0);
+  #length = 0;
+  #maxFrameBytes;
+
+  constructor(maxFrameBytes) {
+    this.#maxFrameBytes = maxFrameBytes;
+  }
+
+  write(value, onFrame) {
+    const bytes = Buffer.isBuffer(value) ? value : Buffer.from(value);
+    for (let index = 0; index < bytes.length; index += 1) {
+      this.#append(bytes[index]);
+      const separator = this.#separator();
+      if (separator) {
+        const original = this.take();
+        if (original.length > this.#maxFrameBytes) {
+          return {
+            oversized: original,
+            remainder: Buffer.from(bytes.subarray(index + 1)),
+          };
+        }
+        const block = original.subarray(0, original.length - separator.length);
+        if (onFrame(block, separator, original) === false) {
+          return {
+            stopped: true,
+            remainder: Buffer.from(bytes.subarray(index + 1)),
+          };
+        }
+        continue;
+      }
+      if (this.#length > this.#maxFrameBytes) {
+        return {
+          oversized: this.take(),
+          remainder: Buffer.from(bytes.subarray(index + 1)),
+        };
+      }
+    }
+    return undefined;
+  }
+
+  flush(onFrame) {
+    if (!this.#length) return;
+    const original = this.take();
+    onFrame(original, Buffer.alloc(0), original);
+  }
+
+  take() {
+    if (!this.#length) return Buffer.alloc(0);
+    const value = Buffer.from(this.#storage.subarray(0, this.#length));
+    this.#length = 0;
+    return value;
+  }
+
+  #append(byte) {
+    const required = this.#length + 1;
+    if (required > this.#storage.length) {
+      const maximum = this.#maxFrameBytes + 1;
+      const doubled = this.#storage.length ? this.#storage.length * 2 : 1024;
+      const capacity = Math.min(maximum, Math.max(required, doubled));
+      const next = Buffer.allocUnsafe(capacity);
+      if (this.#length) this.#storage.copy(next, 0, 0, this.#length);
+      this.#storage = next;
+    }
+    this.#storage[this.#length] = byte;
+    this.#length = required;
+  }
+
+  #separator() {
+    if (
+      this.#length >= LF_FRAME_SEPARATOR.length
+      && this.#storage[this.#length - 2] === 0x0a
+      && this.#storage[this.#length - 1] === 0x0a
+    ) {
+      return LF_FRAME_SEPARATOR;
+    }
+    if (
+      this.#length >= CRLF_FRAME_SEPARATOR.length
+      && this.#storage[this.#length - 4] === 0x0d
+      && this.#storage[this.#length - 3] === 0x0a
+      && this.#storage[this.#length - 2] === 0x0d
+      && this.#storage[this.#length - 1] === 0x0a
+    ) {
+      return CRLF_FRAME_SEPARATOR;
+    }
+    return undefined;
+  }
+}
+
+function fatalUtf8(buffer) {
+  return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(buffer);
+}
 
 function eventBlock(block) {
   const newline = block.includes("\r\n") ? "\r\n" : "\n";
@@ -44,55 +143,71 @@ function summaryText(item) {
 // silence while Grok is already streaming a summary. Normalize only that
 // summary lifecycle; other providers and non-SSE responses never enter here.
 export class GrokReasoningSummaryCompatTransform extends Transform {
-  #decoder = new StringDecoder("utf8");
-  #buffer = "";
+  #frames;
+  #disabled = false;
   #reasoning;
   #pendingMessage = [];
   #currentSeparator = "";
   #message;
   #shiftOutputIndexes = false;
 
+  constructor({ maxFrameBytes = MAX_FRAME_BYTES } = {}) {
+    super();
+    const limit = Number.isInteger(maxFrameBytes) && maxFrameBytes > 0
+      ? maxFrameBytes
+      : MAX_FRAME_BYTES;
+    this.#frames = new SseFrameAccumulator(limit);
+  }
+
   _transform(chunk, _encoding, callback) {
-    this.#buffer += this.#decoder.write(chunk);
-    this.#emitCompleteBlocks();
+    const piece = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    if (this.#disabled) {
+      this.push(Buffer.from(piece));
+      callback();
+      return;
+    }
+    const outcome = this.#frames.write(piece, (block, separator, original) => (
+      this.#emitFrame(block, separator, original)
+    ));
+    if (outcome?.oversized) this.#disable(outcome.oversized);
+    if (outcome?.remainder?.length) this.push(outcome.remainder);
     callback();
   }
 
   _flush(callback) {
-    this.#buffer += this.#decoder.end();
-    this.#emitCompleteBlocks(true);
+    if (this.#disabled) {
+      const pending = this.#frames.take();
+      if (pending.length) this.push(pending);
+      callback();
+      return;
+    }
+    this.#frames.flush((block, separator, original) => {
+      this.#emitFrame(block, separator, original);
+    });
     for (const piece of this.#flushPendingMessage(true)) this.push(Buffer.from(piece));
     callback();
   }
 
-  #emitCompleteBlocks(flush = false) {
-    while (this.#buffer.length) {
-      const crlf = this.#buffer.indexOf("\r\n\r\n");
-      const lf = this.#buffer.indexOf("\n\n");
-      let index = -1;
-      let separator = "";
-      if (crlf !== -1 && (lf === -1 || crlf <= lf)) {
-        index = crlf;
-        separator = "\r\n\r\n";
-      } else if (lf !== -1) {
-        index = lf;
-        separator = "\n\n";
-      }
-      if (index === -1) {
-        if (!flush) return;
-        const block = this.#buffer;
-        this.#buffer = "";
-        for (const piece of this.#rewriteBlock(block)) this.push(Buffer.from(piece));
-        return;
-      }
-      const block = this.#buffer.slice(0, index);
-      this.#buffer = this.#buffer.slice(index + separator.length);
-      this.#currentSeparator = separator;
-      for (const piece of this.#rewriteBlock(block)) {
-        this.push(Buffer.from(`${piece}${separator}`));
-      }
-      this.#currentSeparator = "";
+  #emitFrame(block, separator, original) {
+    let text;
+    try {
+      text = fatalUtf8(block);
+    } catch {
+      this.#disable(original);
+      return false;
     }
+    this.#currentSeparator = separator.toString("ascii");
+    for (const piece of this.#rewriteBlock(text)) {
+      this.push(Buffer.concat([Buffer.from(piece), separator]));
+    }
+    this.#currentSeparator = "";
+    return !this.#disabled;
+  }
+
+  #disable(original) {
+    for (const piece of this.#flushPendingMessage(true)) this.push(Buffer.from(piece));
+    if (original?.length) this.push(original);
+    this.#disabled = true;
   }
 
   #common(parsed) {
@@ -231,7 +346,11 @@ export class GrokReasoningSummaryCompatTransform extends Transform {
     }
 
     let prefix = [];
-    if (!this.#reasoning && type === "response.reasoning_summary_text.delta") {
+    if (
+      !this.#reasoning
+      && this.#pendingMessage.length > 0
+      && type === "response.reasoning_summary_text.delta"
+    ) {
       prefix = this.#startOrphanReasoning(parsed);
     } else if (!this.#reasoning && this.#pendingMessage.length > 0) {
       return [...this.#flushPendingMessage(), block];
@@ -239,7 +358,9 @@ export class GrokReasoningSummaryCompatTransform extends Transform {
 
     if (type === "response.output_item.added" && event?.item?.type === "reasoning") {
       const id = typeof event.item.id === "string" ? event.item.id : "";
-      if (!id) return [block];
+      // A canonical Responses item already has an array-valued summary. Leave
+      // that lifecycle byte-identical, including any additional summary parts.
+      if (!id || Array.isArray(event.item.summary)) return [block];
       this.#reasoning = {
         id,
         outputIndex: Number.isInteger(event.output_index) ? event.output_index : 0,
@@ -306,6 +427,7 @@ export class GrokReasoningSummaryCompatTransform extends Transform {
     }
 
     if (type === "response.output_item.done" && event?.item?.type === "reasoning") {
+      if (this.#reasoning.itemDone) return [];
       const prefix = [];
       if (this.#reasoning.partStarted && !this.#reasoning.textDone) {
         this.#reasoning.textDone = true;
