@@ -21,6 +21,11 @@ const GEMINI_38_FLASH_ROUTES = [
 ];
 
 // Muse Spark 1.3 routes confirmed 2026-09-03.
+const MUSE_12_ROUTES = [
+  ["openrouter/muse-spark-1.2", "meta/muse-spark-1.2", 1_048_576, 943_000],
+  ["openrouter/muse-spark-1.2-contributor", "meta/muse-spark-1.2-contributor", 1_048_576, 943_000],
+];
+
 const MUSE_13_ROUTES = [
   ["openrouter/muse-spark-1.3", "meta/muse-spark-1.3", 1_048_576, 943_000],
   ["openrouter/muse-spark-1.3-contributor", "meta/muse-spark-1.3-contributor", 1_048_576, 943_000],
@@ -46,6 +51,17 @@ const ADDITIONAL_ROUTES = [
 
 test("every Gemini 3.8 Flash route records the upstream id and window", () => {
   for (const [slug, upstreamModel, contextWindow, autoCompact] of GEMINI_38_FLASH_ROUTES) {
+    const model = MODEL_BY_SLUG.get(slug);
+    assert.ok(model, `${slug} is missing from the registry`);
+    assert.equal(model.upstreamModel, upstreamModel);
+    assert.equal(model.listed, true);
+    assert.equal(model.contextWindow, contextWindow);
+    assert.equal(model.autoCompact, autoCompact);
+  }
+});
+
+test("every Muse Spark 1.2 OpenRouter route records the upstream id and window", () => {
+  for (const [slug, upstreamModel, contextWindow, autoCompact] of MUSE_12_ROUTES) {
     const model = MODEL_BY_SLUG.get(slug);
     assert.ok(model, `${slug} is missing from the registry`);
     assert.equal(model.upstreamModel, upstreamModel);
@@ -111,6 +127,27 @@ test("Muse Spark 1.3 routes use auto-tool-choice request profile", () => {
   }
 });
 
+test("Muse Spark reseller routes advertise text and image input", () => {
+  const visionSlugs = [
+    "meta/muse-spark-1.2",
+    "meta/muse-spark-1.2-contributor",
+    "commandcode/muse-spark-1.2",
+    "openrouter/muse-spark-1.2",
+    "openrouter/muse-spark-1.2-contributor",
+    "openrouter/muse-spark-1.3",
+    "openrouter/muse-spark-1.3-contributor",
+    "nousresearch/muse-spark-1.3",
+    "nousresearch/muse-spark-1.3-contributor",
+    "nousresearch/muse-spark-1.2-contributor",
+    "opencode-go-responses/muse-spark-1.2-contributor",
+    "opencode-go-responses/muse-spark-1.3-contributor",
+  ];
+  for (const slug of visionSlugs) {
+    const model = MODEL_BY_SLUG.get(slug);
+    assert.deepEqual(model.inputModalities, ["text", "image"], slug);
+  }
+});
+
 test("Muse Spark 1.3 reasoning ladders have minimal/low/medium/high/xhigh", () => {
   const expectedEfforts = ["minimal", "low", "medium", "high", "xhigh"];
   for (const [slug] of MUSE_13_ROUTES) {
@@ -118,6 +155,29 @@ test("Muse Spark 1.3 reasoning ladders have minimal/low/medium/high/xhigh", () =
     assert.deepEqual(
       model.reasoningLevels.map((level) => level.effort),
       expectedEfforts,
+    );
+  }
+});
+
+test("Muse Spark xhigh is labeled as extra deep, not max, and defaults to high", () => {
+  const museSlugs = [
+    ...MUSE_13_ROUTES.map(([slug]) => slug),
+    ...MUSE_12_ROUTES.map(([slug]) => slug),
+    "meta/muse-spark-1.2",
+    "meta/muse-spark-1.2-contributor",
+    "meta/muse-spark-1.1",
+  ];
+  for (const slug of museSlugs) {
+    const model = MODEL_BY_SLUG.get(slug);
+    assert.ok(model, `${slug} is missing from the registry`);
+    assert.equal(model.defaultEffort, "high", slug);
+    const xhigh = model.reasoningLevels.find((level) => level.effort === "xhigh");
+    assert.ok(xhigh, `${slug} is missing xhigh`);
+    assert.equal(xhigh.description, "Extra deep reasoning", slug);
+    assert.notEqual(xhigh.description, "Maximum reasoning");
+    assert.ok(
+      !model.reasoningLevels.some((level) => level.effort === "max"),
+      `${slug} must not advertise Meta's unreleased max tier yet`,
     );
   }
 });
@@ -185,6 +245,7 @@ test("Command Code gemini-3.8-flash has requiresTrailingUserTurn", () => {
 test("no new route sets multiAgentVersion v2 without v2_agent/ artifact", () => {
   const allNewSlugs = [
     ...GEMINI_38_FLASH_ROUTES.map(([slug]) => slug),
+    ...MUSE_12_ROUTES.map(([slug]) => slug),
     ...MUSE_13_ROUTES.map(([slug]) => slug),
     ...FABLE_51_ROUTES.map(([slug]) => slug),
     ...ADDITIONAL_ROUTES.map(([slug]) => slug),

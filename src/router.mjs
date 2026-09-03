@@ -60,6 +60,7 @@ import {
   ZaiResponsesCompatTransform,
   zaiResponsesCompatTransform,
 } from "./zai-responses-compat.mjs";
+import { grokReasoningSummaryCompatTransform } from "./grok-reasoning-summary-compat.mjs";
 import { translatedToolMessageCompatTransform } from "./deepseek-tool-message-compat.mjs";
 import { exactRouteProbeRequested } from "./exact-route-probe.mjs";
 import {
@@ -3980,6 +3981,10 @@ async function handleResponses(request, response, requestUrl) {
         envelopeCompat = new ZaiResponsesCompatTransform();
       }
       if (envelopeCompat) transforms.push(envelopeCompat);
+      const grokReasoningSummaryCompat = !directResponses && route
+        ? grokReasoningSummaryCompatTransform(providerForModel(route), contentType)
+        : undefined;
+      if (grokReasoningSummaryCompat) transforms.push(grokReasoningSummaryCompat);
       // LiteLLM can add blank assistant envelopes while translating either
       // Chat Completions or Messages. The factory refuses native traffic and
       // providers that already speak Responses, so those paths gain no stage.

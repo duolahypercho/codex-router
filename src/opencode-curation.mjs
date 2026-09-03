@@ -51,6 +51,7 @@ const OPENCODE_FREE_MODELS = Object.freeze({
     outputLimit: 131_072,
     reasoningLevels: Object.freeze(["minimal", "low", "medium", "high", "xhigh"]),
     requestProfile: "auto-tool-choice",
+    displayName: "Muse Spark 1.2 Contributor Free (OpenCode Free)",
     summary:
       "Muse Spark 1.2 Contributor Free through OpenCode Zen's anonymous Responses route.",
     contextNote:
@@ -67,6 +68,7 @@ const OPENCODE_FREE_MODELS = Object.freeze({
     outputLimit: 131_072,
     reasoningLevels: Object.freeze(["minimal", "low", "medium", "high", "xhigh"]),
     requestProfile: "auto-tool-choice",
+    displayName: "Muse Spark 1.3 Contributor Free (OpenCode Free)",
     summary:
       "Muse Spark 1.3 Contributor Free through OpenCode Zen's anonymous Responses route.",
     contextNote:
@@ -400,6 +402,13 @@ export function curatedModelReasoningLevels(providerId, upstreamModel) {
 // provider-wide would weaken forced tool choices for unrelated models.
 export function curatedModelRequestProfile(providerId, upstreamModel) {
   return curatedModelRecord(providerId, upstreamModel)?.requestProfile;
+}
+
+// A stable picker label for ids whose upstream name is opaque. Curation reads
+// this when building user-model entries, and the registry applies it to
+// existing curated rows that still carry the generic "(curated)" fallback.
+export function curatedModelDisplayName(providerId, upstreamModel) {
+  return curatedModelRecord(providerId, upstreamModel)?.displayName;
 }
 
 // The picker text that carries the sourcing for every value this module knows

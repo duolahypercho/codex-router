@@ -2,13 +2,13 @@
   "version": 1,
   "models": [
     {
-      "slug": "nousresearch/muse-spark-1.2-contributor",
-      "gatewayModel": "nousresearch-muse-spark-1-2-contributor",
-      "upstreamModel": "meta/muse-spark-1.2-contributor",
-      "provider": "nousresearch",
+      "slug": "openrouter/muse-spark-1.2",
+      "gatewayModel": "openrouter-muse-spark-1-2",
+      "upstreamModel": "meta/muse-spark-1.2",
+      "provider": "openrouter",
       "listed": true,
-      "displayName": "Muse Spark 1.2 Contributor (Nous Research)",
-      "description": "Meta Muse Spark 1.2 Contributor through the Nous Portal.",
+      "displayName": "Muse Spark 1.2 (OpenRouter)",
+      "description": "Meta Muse Spark 1.2 through OpenRouter.",
       "priority": 72,
       "defaultEffort": "high",
       "reasoningLevels": [
@@ -40,7 +40,7 @@
         "image"
       ],
       "requestProfile": "auto-tool-choice",
-      "compHash": "nousresearch-muse-spark-1-2-contributor-v4"
+      "compHash": "openrouter-muse-spark-1-2-v2"
     }
   ]
 }
