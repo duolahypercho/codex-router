@@ -39,6 +39,8 @@ import {
 } from "./i18n";
 import type {
   AccountUsage,
+  ChatGptAccountPool,
+  ChatGptSessionStatus,
   ModelViewFocus,
   ModelViewFocusRequest,
   OperationEvent,
@@ -60,6 +62,7 @@ const INITIAL_DATA_READY: RouterDataReady = {
   presence: false,
   health: false,
   accountUsage: false,
+  accountPool: false,
   providerUsage: false,
 };
 
@@ -115,6 +118,8 @@ export default function App() {
   const [health, setHealth] = useState<RouterHealth>();
   const [providers, setProviders] = useState<ProviderSetupSnapshot>();
   const [accountUsage, setAccountUsage] = useState<AccountUsage>();
+  const [accountPool, setAccountPool] = useState<ChatGptAccountPool>();
+  const [chatgptSession, setChatgptSession] = useState<ChatGptSessionStatus>();
   const [providerUsage, setProviderUsage] = useState<ProviderUsageSnapshot>();
   const [presence, setPresence] = useState<PresenceSnapshot>();
   const [dataReady, setDataReady] = useState<RouterDataReady>(INITIAL_DATA_READY);
@@ -192,6 +197,15 @@ export default function App() {
         error: readableError(error),
         activity: { state: "offline", active: [], activeCount: 0 },
       })),
+      // Account switching is additive. An older installed router may not
+      // expose these reads yet, so their absence must not hold any existing
+      // page region in a loading state.
+      typeof api.getChatGptAccountPool === "function"
+        ? settleRead("accountPool", api.getChatGptAccountPool(), setAccountPool)
+        : Promise.resolve(),
+      typeof api.getChatGptSession === "function"
+        ? api.getChatGptSession().then(setChatgptSession)
+        : Promise.resolve(),
     ]);
   }, [api, settleRead]);
 
@@ -247,6 +261,7 @@ export default function App() {
         presence: true,
         health: true,
         accountUsage: true,
+        accountPool: true,
         providerUsage: true,
       });
       setLoadError("The Electron bridge is unavailable. Open this UI through the Codex Router desktop app.");
@@ -328,10 +343,27 @@ export default function App() {
     setOperation({ action: label, status: "started", message: label });
     try {
       const result = await action();
+      const actionResult = result !== null && typeof result === "object"
+        ? result as { accepted?: unknown; pending?: unknown; alreadyAuthenticated?: unknown; inProgress?: unknown }
+        : undefined;
+      if (actionResult?.alreadyAuthenticated === true || actionResult?.pending === true) {
+        const message = actionResult.alreadyAuthenticated === true
+          ? `${label} is already signed in.`
+          : actionResult.inProgress === true
+            ? `${label} is already open in the browser.`
+            : `${label} opened in the browser. Finish sign-in there.`;
+        setToast({ tone: "neutral", message });
+        // The detached Codex OAuth process updates the isolated profile after
+        // the browser callback. Refresh once; Settings owns the 1.5-second
+        // poll while the backend reports pending and stops it on the backend's
+        // bounded completed/failed projection. Unowned delayed refresh timers
+        // would keep polling after a cancelled login.
+        await Promise.allSettled([refreshCore()]);
+        setOperation({ action: label, status: "completed", message });
+        return;
+      }
       if (
-        result !== null
-        && typeof result === "object"
-        && (result as { accepted?: unknown }).accepted === true
+        actionResult?.accepted === true
       ) {
         // Detached tray work can outlive (and intentionally close) this app.
         // Spawn acceptance is not scheduler/build success, so never render the
@@ -422,7 +454,7 @@ export default function App() {
       case "local": return <LocalPage {...shared} operation={operation} />;
       case "harness": return <HarnessPage {...shared} operation={operation} onNavigate={navigateTo} />;
       case "context": return <ContextPage {...shared} />;
-      case "settings": return <SettingsPage {...shared} health={health} presence={presence} chatgptSession={snapshot?.chatgptSession} theme={theme} onTheme={setTheme} language={language} onLanguage={setLanguage} t={t} />;
+      case "settings": return <SettingsPage {...shared} onRefresh={refreshAll} health={health} presence={presence} chatgptSession={chatgptSession ?? snapshot?.chatgptSession} accountPool={accountPool} accountPoolError={readErrors.accountPool} theme={theme} onTheme={setTheme} language={language} onLanguage={setLanguage} t={t} />;
     }
   })();
 

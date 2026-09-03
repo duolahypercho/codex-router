@@ -51,8 +51,38 @@ const OPENCODE_FREE_MODELS = Object.freeze({
     outputLimit: 131_072,
     reasoningLevels: Object.freeze(["minimal", "low", "medium", "high", "xhigh"]),
     requestProfile: "auto-tool-choice",
+    // Meta's Console upstream refuses a tool schema whose $refs cycle,
+    // losing the whole turn to a 400 that names no tool.
+    toolSchemaRecursion: "flatten",
+    // The `-free` suffix is the tier, not the model. Carrying it in the label
+    // put this route in a family of its own, apart from the paid routes to the
+    // same model. `isFree` is where the price distinction belongs; the picker
+    // already renders it as a badge on the route.
+    displayName: "Muse Spark 1.2 Contributor (OpenCode Free)",
+    isFree: true,
     summary:
       "Muse Spark 1.2 Contributor Free through OpenCode Zen's anonymous Responses route.",
+    contextNote:
+      "The 1,048,576-token window is OpenCode's own published figure for this exact free id " +
+      "(the `opencode` provider in models.dev/api.json), not the paid model's: that dataset " +
+      "publishes a smaller window on free ids whose route is capped below their paid twin, " +
+      "and this one is not. Zen's /models endpoint publishes no context limits.",
+    reasoningNote:
+      "The minimal/low/medium/high/xhigh ladder is that same record's `reasoning_options` " +
+      "for this free id; Zen's /models endpoint advertises no effort control.",
+  }),
+  "muse-spark-1.3-contributor-free": Object.freeze({
+    contextWindow: 1_048_576,
+    outputLimit: 131_072,
+    reasoningLevels: Object.freeze(["minimal", "low", "medium", "high", "xhigh"]),
+    requestProfile: "auto-tool-choice",
+    // Meta's Console upstream refuses a tool schema whose $refs cycle,
+    // losing the whole turn to a 400 that names no tool.
+    toolSchemaRecursion: "flatten",
+    displayName: "Muse Spark 1.3 Contributor (OpenCode Free)",
+    isFree: true,
+    summary:
+      "Muse Spark 1.3 Contributor Free through OpenCode Zen's anonymous Responses route.",
     contextNote:
       "The 1,048,576-token window is OpenCode's own published figure for this exact free id " +
       "(the `opencode` provider in models.dev/api.json), not the paid model's: that dataset " +
@@ -172,6 +202,7 @@ const CURATION_ROUTES = Object.freeze({
     messagesProvider: "commandcode-messages",
     messagesModels: Object.freeze([
       "claude-fable-5",
+      "claude-fable-5-1",
       "claude-haiku-4-5-20251001",
       "claude-opus-4-8",
       "claude-opus-5",
@@ -186,10 +217,12 @@ const CURATION_ROUTES = Object.freeze({
       "Qwen/Qwen3.7-Plus",
       "Qwen/Qwen3.8-Flash",
       "Qwen/Qwen3.8-Max",
+      "Qwen/Qwen3.8-Max-0902",
       "deepseek/deepseek-v4-flash",
       "deepseek/deepseek-v4-pro",
       "google/gemini-3.5-flash",
       "google/gemini-3.7-flash",
+      "google/gemini-3.8-flash",
       "gpt-5.5",
       "gpt-5.6-luna",
       "gpt-5.6-sol",
@@ -210,6 +243,7 @@ const CURATION_ROUTES = Object.freeze({
       "xai/grok-4.5",
       "xai/grok-4.6",
       "xiaomi/mimo-v2.5-pro",
+      "z-ai/glm-5.3-flash",
       "zai-org/GLM-5.2",
       "zai-org/GLM-5.2-Fast",
       "zai-org/GLM-5.3",
@@ -231,6 +265,7 @@ const CURATION_ROUTES = Object.freeze({
       "qwen3.6-plus",
       "qwen3.7-max",
       "qwen3.7-plus",
+      "qwen3.8-flash",
       "qwen3.8-max",
     ]),
     responsesProvider: "opencode-go-responses",
@@ -239,6 +274,7 @@ const CURATION_ROUTES = Object.freeze({
       "grok-4.5",
       "grok-4.6",
       "muse-spark-1.2-contributor",
+      "muse-spark-1.3-contributor",
     ]),
     primaryModels: Object.freeze([
       "deepseek-v4-flash",
@@ -267,7 +303,10 @@ const CURATION_ROUTES = Object.freeze({
     providers: Object.freeze(["opencode-free", "opencode-free-responses"]),
     protocols: Object.freeze(["Chat", "Responses"]),
     responsesProvider: "opencode-free-responses",
-    responsesModels: Object.freeze(["muse-spark-1.2-contributor-free"]),
+    responsesModels: Object.freeze([
+      "muse-spark-1.2-contributor-free",
+      "muse-spark-1.3-contributor-free",
+    ]),
     primaryModels: Object.freeze([
       "big-pickle",
       "deepseek-v4-flash-free",
@@ -375,6 +414,28 @@ export function curatedModelReasoningLevels(providerId, upstreamModel) {
 // provider-wide would weaken forced tool choices for unrelated models.
 export function curatedModelRequestProfile(providerId, upstreamModel) {
   return curatedModelRecord(providerId, upstreamModel)?.requestProfile;
+}
+
+// A stable picker label for ids whose upstream name is opaque. Curation reads
+// this when building user-model entries, and the registry applies it to
+// existing curated rows that still carry the generic "(curated)" fallback.
+export function curatedModelDisplayName(providerId, upstreamModel) {
+  return curatedModelRecord(providerId, upstreamModel)?.displayName;
+}
+
+// Whether this module documents the id as a free tier. Read alongside the
+// display name so an entry curated before the tag existed still shows the
+// badge: the price is a fact about the route, not about when it was curated.
+// Undefined rather than false for an undocumented id, so a stored flag stands.
+export function curatedModelIsFree(providerId, upstreamModel) {
+  return curatedModelRecord(providerId, upstreamModel)?.isFree;
+}
+
+// Applied for the same reason the name and the free tag are: an entry curated
+// before this was documented carries none of them, and re-curating is not
+// something an installed machine should have to do to stop losing turns.
+export function curatedModelToolSchemaRecursion(providerId, upstreamModel) {
+  return curatedModelRecord(providerId, upstreamModel)?.toolSchemaRecursion;
 }
 
 // The picker text that carries the sourcing for every value this module knows

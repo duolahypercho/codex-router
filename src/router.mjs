@@ -60,6 +60,7 @@ import {
   ZaiResponsesCompatTransform,
   zaiResponsesCompatTransform,
 } from "./zai-responses-compat.mjs";
+import { grokReasoningSummaryCompatTransform } from "./grok-reasoning-summary-compat.mjs";
 import { translatedToolMessageCompatTransform } from "./deepseek-tool-message-compat.mjs";
 import { exactRouteProbeRequested } from "./exact-route-probe.mjs";
 import {
@@ -134,6 +135,8 @@ import {
   readFailoverSettings,
   recordProviderCooldown,
 } from "./model-failover.mjs";
+import { cooldownScope } from "./provider-cooldown.mjs";
+import { retryAfterSeconds } from "./rate-limit-headers.mjs";
 import {
   awaitingSpawnProof,
   recordSpawnFailure,
@@ -894,7 +897,8 @@ function needsZenFreeToolCompatibility(route) {
   const providerId = providerForModel(route)?.id;
   return (
     (providerId === "opencode-free-responses" &&
-      route.upstreamModel === "muse-spark-1.2-contributor-free")
+      (route.upstreamModel === "muse-spark-1.2-contributor-free" ||
+        route.upstreamModel === "muse-spark-1.3-contributor-free"))
   );
 }
 
@@ -2095,7 +2099,9 @@ async function bridgeVisionInput(input, route, request) {
   const readWithAnyEngine = async (url, question) => {
     let lastError;
     for (const [index, engine] of engines.entries()) {
-      const provider = canonicalProviderId(visionEngineProvider(engine));
+      // The same identity the window was recorded under: a separately billed
+      // variant shares this account's credential but not its allowance.
+      const provider = cooldownScope(visionEngineProvider(engine));
       const cooled = providerCooldown(provider);
       if (cooled || exhaustedProviders.has(provider)) {
         lastError ??= new Error(
@@ -2651,7 +2657,7 @@ async function summarize(request, payload, route, signal, { allowFailover = true
     const verdict = classifyRoutedFailure({
       status: sent.upstream.status,
       bodyText: bytes.toString("utf8"),
-      retryAfterSeconds: Number(sent.upstream.headers.get("retry-after")),
+      retryAfterSeconds: retryAfterSeconds(sent.upstream.headers),
     });
     if (!allowFailover) return { ...last, failed };
     if (!verdict.swap) return { ...last, failed };
@@ -3457,7 +3463,7 @@ async function attemptModelFailover({
     const hopVerdict = classifyRoutedFailure({
       status: upstream.status,
       bodyText: hopBodyText,
-      retryAfterSeconds: Number(upstream.headers.get("retry-after")),
+      retryAfterSeconds: retryAfterSeconds(upstream.headers),
     });
     // A transport retry stops as soon as another provider gives any real HTTP
     // answer. Walking onward would turn an application failure into a silent
@@ -3866,7 +3872,7 @@ async function handleResponses(request, response, requestUrl) {
       const verdict = classifyRoutedFailure({
         status: upstream.status,
         bodyText: failedBodyText,
-        retryAfterSeconds: Number(upstream.headers.get("retry-after")),
+        retryAfterSeconds: retryAfterSeconds(upstream.headers),
       });
       if (verdict.swap && !exactRouteProbe) {
         // Believe the provider about when it will be back before trying anyone
@@ -3935,7 +3941,7 @@ async function handleResponses(request, response, requestUrl) {
     if (route && !upstream.ok) {
       const provider = providerForModel(route);
       const retryAfterHeader = upstream.headers.get("retry-after");
-      const retryAfterSeconds = Number(retryAfterHeader);
+      const retrySeconds = retryAfterSeconds(upstream.headers);
       const translatedStatus = gatewayErrorStatus({
         status: upstream.status,
         bodyText: failedBodyText,
@@ -3956,9 +3962,7 @@ async function handleResponses(request, response, requestUrl) {
               : provider?.ownedBy || provider?.displayName || route.provider,
           providerKind: provider?.kind,
           providerAuthMode: provider?.authMode,
-          retryAfterSeconds: Number.isFinite(retryAfterSeconds)
-            ? retryAfterSeconds
-            : undefined,
+          retryAfterSeconds: retrySeconds,
         }),
       );
       recordUsageEvent({
@@ -4013,6 +4017,10 @@ async function handleResponses(request, response, requestUrl) {
         envelopeCompat = new ZaiResponsesCompatTransform();
       }
       if (envelopeCompat) transforms.push(envelopeCompat);
+      const grokReasoningSummaryCompat = !directResponses && route
+        ? grokReasoningSummaryCompatTransform(providerForModel(route), contentType)
+        : undefined;
+      if (grokReasoningSummaryCompat) transforms.push(grokReasoningSummaryCompat);
       // LiteLLM can add blank assistant envelopes while translating either
       // Chat Completions or Messages. The factory refuses native traffic and
       // providers that already speak Responses, so those paths gain no stage.

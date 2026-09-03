@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "slug": "opencode-go-responses/muse-spark-1.3-contributor",
+      "gatewayModel": "opencode-go-responses-muse-spark-1-3-contributor",
+      "upstreamModel": "muse-spark-1.3-contributor",
+      "provider": "opencode-go-responses",
+      "listed": true,
+      "displayName": "Muse Spark 1.3 Contributor (opencode Go)",
+      "description": "Muse Spark 1.3 Contributor through the opencode Go subscription using the Responses API. Meta may use inputs and outputs for training, and availability is region-limited.",
+      "priority": 49,
+      "defaultEffort": "high",
+      "reasoningLevels": [
+        {
+          "effort": "minimal",
+          "description": "Fastest responses"
+        },
+        {
+          "effort": "low",
+          "description": "Quick reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced reasoning"
+        },
+        {
+          "effort": "high",
+          "description": "Deep reasoning"
+        },
+        {
+          "effort": "xhigh",
+          "description": "Extra deep reasoning"
+        }
+      ],
+      "supportsReasoningSummaries": true,
+      "defaultReasoningSummary": "auto",
+      "contextWindow": 1048576,
+      "autoCompact": 900000,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "supportsApplyPatchTool": false,
+      "requestProfile": "auto-tool-choice",
+      "compHash": "opencode-go-responses-muse-spark-1-3-contributor-v3",
+      "toolSchemaRecursion": "flatten"
+    }
+  ]
+}

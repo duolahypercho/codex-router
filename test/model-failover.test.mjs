@@ -281,6 +281,32 @@ test("a cooldown is recorded against the whole variant family", (t) => {
   assert.ok(providerCooldown("opencode-go", { now: NOW }));
 });
 
+test("a separately billed variant keeps its own window", (t) => {
+  t.after(() => clearAllProviderCooldowns());
+  // opencode Zen shares Go's credential and selection toggle but is billed at
+  // its own endpoint, so neither one being empty says anything about the
+  // other. Keying both under the canonical parent withdrew a paid route for a
+  // window its provider never named.
+  recordProviderCooldown("opencode-go", {
+    until: new Date(NOW + 1_800_000).toISOString(),
+    reason: "out_of_usage",
+    now: NOW,
+  });
+  assert.ok(providerCooldown("opencode-go-messages", { now: NOW }));
+  assert.equal(providerCooldown("opencode-zen", { now: NOW }), undefined);
+
+  recordProviderCooldown("opencode-zen", {
+    until: new Date(NOW + 1_800_000).toISOString(),
+    reason: "out_of_usage",
+    now: NOW,
+  });
+  assert.ok(providerCooldown("opencode-zen", { now: NOW }));
+  // Clearing one leaves the other exactly as it was.
+  clearProviderCooldown("opencode-zen");
+  assert.equal(providerCooldown("opencode-zen", { now: NOW }), undefined);
+  assert.ok(providerCooldown("opencode-go", { now: NOW }));
+});
+
 test("a later hop may sharpen the reason but never invent the window", (t) => {
   t.after(() => clearAllProviderCooldowns());
   // api-forwarder sees the provider's Retry-After but not its body, so it can
@@ -394,6 +420,28 @@ test("rankFailoverCandidates skips a provider that is already cooled down", (t) 
   );
 });
 
+test("rankFailoverCandidates still offers a separately billed variant", (t) => {
+  t.after(() => clearAllProviderCooldowns());
+  // The Go plan is empty. Its protocol variants are empty with it; Zen is a
+  // different bill at a different endpoint and remains a candidate.
+  recordProviderCooldown("opencode-go", {
+    until: new Date(NOW + 600_000).toISOString(),
+    now: NOW,
+  });
+  const ranked = rankFailoverCandidates(
+    [
+      model("opencode-go/glm-5.3", "opencode-go"),
+      model("opencode-go-responses/glm-5.3", "opencode-go-responses"),
+      model("opencode-zen/glm-5.3", "opencode-zen"),
+    ],
+    { from: FROM, now: NOW },
+  );
+  assert.deepEqual(
+    ranked.map((entry) => entry.model.slug),
+    ["opencode-zen/glm-5.3"],
+  );
+});
+
 test("rankFailoverCandidates keeps a collaboration turn on a v2 model", () => {
   const ranked = rankFailoverCandidates(
     [
@@ -452,6 +500,17 @@ test("rankFailoverCandidates does not guess after search capability disappears",
     { from: model("source/plain", "source"), hasSearchHistory: true },
   );
   assert.deepEqual(ranked, []);
+});
+
+test("rankFailoverCandidates admits only verified search-history replay routes", () => {
+  const ranked = rankFailoverCandidates(
+    [
+      model("verified/candidate", "verified", { supportsSearchHistory: true }),
+      model("plain/incompatible", "plain"),
+    ],
+    { from: model("source/plain", "source"), hasSearchHistory: true },
+  );
+  assert.deepEqual(ranked.map((entry) => entry.model.slug), ["verified/candidate"]);
 });
 
 test("rankFailoverCandidates preserves an explicitly snapshotted absent mode", () => {

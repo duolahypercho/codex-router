@@ -137,6 +137,32 @@ test("bootstrap fails closed on auth errors, server errors, and malformed succes
   }
 });
 
+test("a 403 SERVICE_DISABLED body appears in the operator-visible error (issue #566)", async () => {
+  const serviceDisabledBody = JSON.stringify({
+    error: {
+      code: 403,
+      status: "PERMISSION_DENIED",
+      message: "Cloud Code Private API has not been used in project 123456789012...",
+      details: [{ reason: "SERVICE_DISABLED", metadata: { service: "cloudcode-pa.googleapis.com" } }],
+    },
+  });
+  let caughtError;
+  try {
+    await loadAntigravityProject("access", {
+      fetchImpl: async () => new Response(serviceDisabledBody, { status: 403 }),
+    });
+    assert.fail("should have thrown");
+  } catch (error) {
+    caughtError = error;
+  }
+  assert.equal(caughtError.code, "project_bootstrap_failed");
+  // The parsed body must reach the operator, not only HTTP 403
+  assert.match(caughtError.message, /not allowlisted/);
+  assert.match(caughtError.message, /cloudcode-pa\.googleapis\.com/);
+  assert.match(caughtError.message, /private Google API/);
+  assert.match(caughtError.message, /sign-in succeeded/);
+});
+
 test("project provisioning requires an explicitly advertised tier", async () => {
   let onboardCalls = 0;
   await assert.rejects(

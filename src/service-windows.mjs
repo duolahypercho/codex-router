@@ -21,7 +21,7 @@ import {
   readServiceProcessState,
   serviceProcessOwns,
 } from "./service-process.mjs";
-import { protectPrivateFile } from "./file-security.mjs";
+import { ensureCheckoutReadable, protectPrivateFile } from "./file-security.mjs";
 import { providerApiKeyServiceEnvironment } from "./provider-api-key-service-environment.mjs";
 import { serviceProxyEnvironment } from "./proxy-environment.mjs";
 import {
@@ -219,6 +219,9 @@ function installTask() {
           CODEX_ROUTER_TASK_EXECUTE: execute,
           CODEX_ROUTER_TASK_ARGUMENT: argument,
         },
+        // Registration also runs from the GUI installer and the Control
+        // Center, where a console child gets its own window (issue #565).
+        windowsHide: true,
         stdio: ["ignore", "ignore", "ignore"],
       },
     );
@@ -397,6 +400,9 @@ function taskState() {
           env: { ...process.env, CODEX_ROUTER_TASK: taskName },
           stdio: ["ignore", "pipe", "ignore"],
           timeout: TASK_STATE_TIMEOUT_MS,
+          // Status is polled from the tray on a timer, so an unhidden console
+          // here is a window that reappears on its own (issue #565).
+          windowsHide: true,
         },
       ).trim().toLowerCase();
     } catch {
@@ -454,6 +460,11 @@ if (command === "render") {
   // failure, and must exit non-zero without touching the host filesystem.
   guardLauncherWrite();
   try {
+    // Ensure the checkout directory is readable by the Limited-level scheduled
+    // task. An elevated installer creates files with ACLs that only allow the
+    // elevated account to read them, while the task runs at Limited level
+    // (issue #548). Grant Users read access so the task can load modules.
+    ensureCheckoutReadable(SOURCE_ROOT);
     // Writing the launchers belongs inside the try: renameSync over the .vbs
     // raises a sharing violation while a running wscript.exe still holds it
     // open, and that used to throw out of install with nothing to catch it.

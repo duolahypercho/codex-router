@@ -20,10 +20,11 @@
       "contextWindow": 1048576,
       "autoCompact": 900000,
       "inputModalities": [
-        "text"
+        "text",
+        "image"
       ],
       "requestProfile": "auto-tool-choice",
-      "compHash": "commandcode-muse-spark-1-2-v2"
+      "compHash": "commandcode-muse-spark-1-2-v3"
     }
   ]
 }

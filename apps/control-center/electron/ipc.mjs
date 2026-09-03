@@ -26,7 +26,22 @@ import {
   runControlDetached,
   runControlJson,
   runRouterScript,
+  terminateProcessTree,
 } from "./command-runner.mjs";
+
+const spawnableCommandUrl = import.meta.url.includes("/app.asar/")
+  ? new URL("../../src/spawnable-command.mjs", import.meta.url)
+  : new URL("../../../src/spawnable-command.mjs", import.meta.url);
+const { spawnableCommand } = await import(spawnableCommandUrl);
+const loginLeaseUrl = import.meta.url.includes("/app.asar/")
+  ? new URL("../../src/chatgpt-login-lease.mjs", import.meta.url)
+  : new URL("../../../src/chatgpt-login-lease.mjs", import.meta.url);
+const {
+  attachChatGPTLoginLease,
+  chatGPTLoginAuthChanged,
+  clearChatGPTLoginLease,
+  createChatGPTLoginLease,
+} = await import(loginLeaseUrl);
 
 // Codex is the one client-specific adapter this panel still exposes (native
 // GPT details and the current task default). Routed model identity and picker
@@ -44,6 +59,9 @@ const RETENTION_MIN_TTL_DAYS = 1;
 const RETENTION_MAX_TTL_DAYS = 3_650;
 const MODEL_SLUG = /^[A-Za-z0-9][A-Za-z0-9._/:+-]{0,200}$/;
 const PROVIDER_ID = /^[a-z0-9][a-z0-9-]{0,80}$/;
+const CHATGPT_ACCOUNT_ID = /^acct_[A-Za-z0-9_-]{8,80}$/;
+const CHATGPT_LOGIN_URL = /https:\/\/auth\.openai\.com\/oauth\/authorize\?[^\s"'<>]+/;
+const CHATGPT_LOGIN_COMPLETION_TIMEOUT_MS = 10 * 60_000;
 const LOCAL_TAG = /^[A-Za-z0-9][A-Za-z0-9._/-]*(?::[A-Za-z0-9][A-Za-z0-9._-]*)?$/;
 const SESSION_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const CURSOR_SESSION_ID = /^(?:(?:draft|bc)-)?[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -459,6 +477,213 @@ function openTerminalCommand(executable, args, cwd) {
   });
   if (opened.error || opened.status !== 0) throw new Error("Could not open Terminal.");
   return { opened: true, surface: "terminal" };
+}
+
+// Codex owns the OAuth callback and browser hand-off for ChatGPT login. Spawn
+// it detached instead of wrapping it in Terminal: the CLI starts its local
+// callback server, opens the system browser, and keeps the isolated
+// CODEX_HOME profile while the user completes sign-in.
+export function openBrowserCommand(executable, args, cwd, {
+  environment = {},
+  onSpawn,
+  onExit,
+  openExternal,
+  completionTimeoutMs = CHATGPT_LOGIN_COMPLETION_TIMEOUT_MS,
+} = {}) {
+  if (!executable || !path.isAbsolute(executable) || !Array.isArray(args)) throw new Error("Browser command is unavailable.");
+  if (args.some((arg) => typeof arg !== "string" || arg.includes("\0"))) throw new Error("Browser command is invalid.");
+  if (typeof openExternal !== "function") throw new Error("The default browser opener is unavailable.");
+  if (onSpawn !== undefined && typeof onSpawn !== "function") throw new Error("Browser process ownership callback is invalid.");
+  if (!Number.isFinite(completionTimeoutMs) || completionTimeoutMs <= 0 || completionTimeoutMs > 30 * 60_000) {
+    throw new Error("Browser login completion timeout is invalid.");
+  }
+  const resolvedCwd = cwd ? realpathSync(cwd) : discoverSourceRoot();
+  if (!statSync(resolvedCwd).isDirectory()) throw new Error("The session workspace is unavailable.");
+  if (!environment || typeof environment !== "object" || Array.isArray(environment)) {
+    throw new Error("Browser environment is invalid.");
+  }
+  for (const [name, value] of Object.entries(environment)) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) || typeof value !== "string" || value.includes("\0")) {
+      throw new Error("Browser environment is invalid.");
+    }
+  }
+  const node = executablePath("node");
+  const childPath = [...new Set([
+    path.dirname(executable),
+    node && path.dirname(node),
+    ...String(environment.PATH || process.env.PATH || "").split(path.delimiter),
+  ].filter(Boolean))].join(path.delimiter);
+  const command = spawnableCommand(executable, args);
+  const child = spawn(command.command, command.args, {
+    cwd: resolvedCwd,
+    env: { ...process.env, ...environment, PATH: childPath },
+    // Codex prints the OAuth authorize URL before waiting for the callback.
+    // Keep its own process detached, but observe that bounded output so the
+    // router can explicitly hand the URL to macOS's default browser when the
+    // CLI's best-effort opener is unavailable from a GUI-launched process.
+    stdio: ["ignore", "pipe", "pipe"],
+    detached: true,
+    windowsHide: true,
+    shell: false,
+    ...command.options,
+  });
+  let browserOpened = false;
+  let urlObserved = false;
+  let childExited = false;
+  let openingBrowser = false;
+  let loginOutput = "";
+  let finished = false;
+  let settled = false;
+  let aborting = false;
+  let terminalError;
+  let urlTimeout;
+  let completionTimeout;
+  let resolveOpen;
+  let rejectOpen;
+  const opened = new Promise((resolve, reject) => {
+    resolveOpen = resolve;
+    rejectOpen = reject;
+  });
+  const finish = (outcome = {}) => {
+    if (finished) return;
+    finished = true;
+    clearTimeout(completionTimeout);
+    if (typeof onExit === "function") onExit(outcome);
+  };
+  const fail = (error) => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(urlTimeout);
+    rejectOpen(error instanceof Error ? error : new Error(String(error)));
+  };
+  const abort = async (error) => {
+    // Promise settlement is independent from child cleanup. The Codex child
+    // may print its URL and exit while Electron's browser opener is still
+    // pending; a later opener rejection must still reject `opened`, even
+    // though close already delivered the exactly-once onExit notification.
+    if (finished) {
+      fail(error);
+      return;
+    }
+    if (aborting) return;
+    aborting = true;
+    terminalError = error instanceof Error ? error.message : String(error);
+    clearTimeout(urlTimeout);
+    clearTimeout(completionTimeout);
+    // The detached Codex CLI owns the OAuth callback listener and may have
+    // descendants. If browser hand-off fails, leaving that tree alive keeps
+    // the callback port and the per-account in-flight gate occupied forever.
+    try {
+      await terminateProcessTree(child);
+    } catch {
+      try { child.kill("SIGKILL"); } catch {}
+    } finally {
+      finish({ error: terminalError });
+      fail(error);
+    }
+  };
+  const maybeFailAfterExit = () => {
+    if (childExited && !urlObserved && !openingBrowser) {
+      fail(new Error("Codex login exited before providing an OAuth browser URL."));
+    }
+  };
+  const inspectLoginOutput = (chunk) => {
+    if (urlObserved || settled) return;
+    // A GUI-launched child can still emit terminal styling; remove it before
+    // extracting the URL so the browser hand-off does not depend on a TTY.
+    loginOutput = `${loginOutput}${String(chunk).replace(/\u001b\[[0-?]*[ -\/]*[@-~]/g, "")}`.slice(-128 * 1024);
+    const match = loginOutput.match(CHATGPT_LOGIN_URL);
+    if (!match) return;
+    urlObserved = true;
+    openingBrowser = true;
+    Promise.resolve()
+      .then(() => openExternal(match[0]))
+      .then(() => {
+        openingBrowser = false;
+        if (settled) return;
+        browserOpened = true;
+        settled = true;
+        clearTimeout(urlTimeout);
+        if (!finished) {
+          completionTimeout = setTimeout(() => {
+            void abort(new Error("Codex login did not finish before the browser sign-in deadline."));
+          }, completionTimeoutMs);
+          completionTimeout.unref?.();
+        }
+        resolveOpen({ opened: true, surface: "browser" });
+      })
+      .catch((error) => {
+        openingBrowser = false;
+        void abort(new Error(`Could not open the default browser: ${error instanceof Error ? error.message : String(error)}`));
+      });
+  };
+  child.stdout?.on("data", inspectLoginOutput);
+  child.stderr?.on("data", inspectLoginOutput);
+  urlTimeout = setTimeout(() => {
+    if (!browserOpened) {
+      void abort(new Error("Codex login did not provide an OAuth browser URL."));
+    }
+  }, 15_000);
+  urlTimeout.unref?.();
+  child.once("error", (error) => {
+    console.error(`Browser login process failed: ${error.message}`);
+    void abort(error);
+  });
+  child.once("close", (code, signal) => {
+    childExited = true;
+    finish({ code, signal, ...(terminalError ? { error: terminalError } : {}) });
+    maybeFailAfterExit();
+  });
+  try {
+    if (typeof onSpawn === "function") onSpawn(child);
+  } catch (error) {
+    void abort(error);
+  }
+  child.unref();
+  return opened;
+}
+
+export function projectChatGPTSubscriptionLoginAttempts(pool, attempts, now = Date.now()) {
+  const loginAttempts = pool?.loginAttempts && typeof pool.loginAttempts === "object"
+    ? { ...pool.loginAttempts }
+    : {};
+  for (const [accountId, attempt] of attempts || []) {
+    const account = pool?.accounts?.[accountId];
+    if (!account) {
+      attempts.delete(accountId);
+      continue;
+    }
+    if (account.subscription?.usable === true) {
+      attempts.delete(accountId);
+      continue;
+    }
+    const expired = Number.isFinite(attempt?.deadlineAt) && now >= attempt.deadlineAt;
+    if (
+      attempt?.status === "pending"
+      && (!expired || account.subscription?.loginInProgress === true)
+    ) {
+      loginAttempts[accountId] = { status: "pending" };
+      continue;
+    }
+    const detail = attempt?.error
+      || (attempt?.signal
+        ? `Codex login ended with ${attempt.signal}.`
+        : Number.isInteger(attempt?.code) && attempt.code !== 0
+          ? `Codex login exited with status ${attempt.code}.`
+          : "Codex login closed before this account became usable.");
+    const coreAttempt = loginAttempts[accountId];
+    loginAttempts[accountId] = {
+      ...(coreAttempt || {}),
+      status: "failed",
+      error: coreAttempt?.error || cleanText(detail, "Codex login did not complete. Try again."),
+      retryable: coreAttempt?.retryable !== false,
+      ...(coreAttempt?.removable === false ? { removable: false } : {}),
+    };
+  }
+  return {
+    ...pool,
+    ...(Object.keys(loginAttempts).length ? { loginAttempts } : {}),
+  };
 }
 
 function cursorConnectorStage(kind, chunk) {
@@ -1058,20 +1283,31 @@ export function registerIpcHandlers({
   // each other's snapshots or restore stale state. Reads remain concurrent.
   let mutationTail = Promise.resolve();
   let pendingMutations = 0;
+  // A detached OAuth process can outlive the IPC call. Keep one browser login
+  // per isolated account so a double-click cannot race two Codex callbacks.
+  const subscriptionLoginInFlight = new Set();
+  const subscriptionLoginAttempts = new Map();
   const idleWaiters = new Set();
+  const mutationsIdle = () => pendingMutations === 0 && subscriptionLoginInFlight.size === 0;
+  const settleIdleWaiters = () => {
+    if (!mutationsIdle()) return;
+    for (const resolve of idleWaiters) resolve();
+    idleWaiters.clear();
+  };
+  const releaseSubscriptionLogin = (id) => {
+    subscriptionLoginInFlight.delete(id);
+    settleIdleWaiters();
+  };
   const enqueueMutation = (task) => {
     pendingMutations += 1;
     const queued = mutationTail.then(task);
     mutationTail = queued.then(() => undefined, () => undefined);
     return queued.finally(() => {
       pendingMutations -= 1;
-      if (pendingMutations === 0) {
-        for (const resolve of idleWaiters) resolve();
-        idleWaiters.clear();
-      }
+      settleIdleWaiters();
     });
   };
-  const whenMutationsIdle = () => pendingMutations === 0
+  const whenMutationsIdle = () => mutationsIdle()
     ? Promise.resolve()
     : new Promise((resolve) => idleWaiters.add(resolve));
   const emit = (payload) => {
@@ -1116,6 +1352,13 @@ export function registerIpcHandlers({
 
   handle("getSnapshot", async () => snapshot());
   handle("getChatGptSession", async () => runJson(["chatgpt-session", "status"]));
+  handle("getChatGptAccountPool", async () => projectChatGPTSubscriptionLoginAttempts(
+    await runJson(
+      ["chatgpt-account-pool", "status"],
+      { timeoutMs: CATALOG_MUTATION_TIMEOUT_MS },
+    ),
+    subscriptionLoginAttempts,
+  ));
   const windowFor = (event) => {
     const window = BrowserWindow?.fromWebContents?.(event.sender);
     if (!window || window.isDestroyed?.()) throw new Error("Application window is unavailable.");
@@ -1512,6 +1755,192 @@ export function registerIpcHandlers({
       { timeoutMs: CATALOG_MUTATION_TIMEOUT_MS },
     );
   });
+  handleAction("addChatGptSubscriptionAccount", async ({ label = "" } = {}) => {
+    if (typeof label !== "string" || label.length > 120 || /[\u0000]/.test(label)) {
+      throw new Error("Account label is invalid.");
+    }
+    return runJson(["chatgpt-account-pool", "add", label.trim()], { timeoutMs: 60_000 });
+  });
+  handleAction("loginChatGptSubscriptionAccount", async ({ accountId } = {}) => {
+    const id = stringValue(accountId, "Account id", CHATGPT_ACCOUNT_ID);
+    const pool = await runJson(
+      ["chatgpt-account-pool", "status"],
+      { timeoutMs: CATALOG_MUTATION_TIMEOUT_MS },
+    );
+    const account = pool?.accounts?.[id];
+    if (!account) throw new Error("The subscription account is not registered.");
+    if (account.state !== "active") throw new Error("The subscription account is not active.");
+    if (subscriptionLoginInFlight.has(id)) {
+      return {
+        accountId: id,
+        opened: false,
+        surface: "browser",
+        pending: true,
+        inProgress: true,
+      };
+    }
+    if (
+      account.subscription?.usable === true
+      && subscriptionLoginAttempts.get(id)?.status !== "failed"
+    ) {
+      return {
+        accountId: id,
+        opened: false,
+        surface: "browser",
+        pending: false,
+        alreadyAuthenticated: true,
+      };
+    }
+    const codex = executablePath("codex");
+    if (!codex) throw new Error("Codex CLI is not installed.");
+    const profile = await runJson(["chatgpt-account-pool", "home", id], { timeoutMs: 20_000 });
+    if (typeof profile?.home !== "string" || !path.isAbsolute(profile.home)) {
+      throw new Error("The subscription account profile is unavailable.");
+    }
+    const profileHome = path.resolve(profile.home);
+    const primaryHome = path.resolve(process.env.CODEX_HOME || path.join(os.homedir(), ".codex"));
+    if (path.basename(profileHome) !== id || profileHome === primaryHome) {
+      throw new Error("The subscription account profile is not isolated from the primary Codex login.");
+    }
+    if (pool?.loginAttempts?.[id]?.status === "failed" && pool.loginAttempts[id].retryable === true) {
+      const reset = await runJson(["chatgpt-account-pool", "login-reset", id], { timeoutMs: 20_000 });
+      if (reset?.reset !== true) {
+        throw new Error("The saved login changed before retry. Refresh the account list and try again.");
+      }
+    }
+    subscriptionLoginInFlight.add(id);
+    subscriptionLoginAttempts.set(id, {
+      status: "pending",
+      deadlineAt: Date.now() + CHATGPT_LOGIN_COMPLETION_TIMEOUT_MS,
+    });
+    let loginLease;
+    let loginFinalization;
+    let resolveLoginExit;
+    const loginExited = new Promise((resolve) => { resolveLoginExit = resolve; });
+    try {
+      // Reserve ownership before spawning. A desktop crash can therefore
+      // never leave a credential writer with no durable pre-auth evidence.
+      loginLease = createChatGPTLoginLease(id, process.pid, {
+        accountHome: profileHome,
+        homesDir: path.dirname(profileHome),
+        phase: "reserved",
+      });
+      const processLoginExit = async (outcome = {}) => {
+        const current = subscriptionLoginAttempts.get(id);
+        if (!current) {
+          releaseSubscriptionLogin(id);
+          return;
+        }
+        if (!loginLease) {
+          releaseSubscriptionLogin(id);
+          subscriptionLoginAttempts.set(id, {
+            ...current,
+            status: "failed",
+            ...(outcome.error ? { error: outcome.error } : {}),
+            ...(outcome.signal ? { signal: outcome.signal } : {}),
+            ...(Number.isInteger(outcome.code) ? { code: outcome.code } : {}),
+          });
+          return;
+        }
+        // Exit status is not credential truth: Codex can persist a valid OAuth
+        // refresh before a later non-zero exit. The protected lease records
+        // the pre-login auth digest; core finalization compares that durable
+        // evidence and clears only an unchanged cancellation.
+        const completionLease = Buffer.from(JSON.stringify(loginLease), "utf8").toString("base64url");
+        subscriptionLoginAttempts.set(id, {
+          ...current,
+          status: "pending",
+          deadlineAt: Date.now() + CATALOG_MUTATION_TIMEOUT_MS + 30_000,
+        });
+        try {
+          const finalized = await enqueueMutation(() => runJson(
+            ["chatgpt-account-pool", "login-finalize", id, completionLease],
+            { timeoutMs: CATALOG_MUTATION_TIMEOUT_MS },
+          ),
+          );
+          const latest = subscriptionLoginAttempts.get(id);
+          if (latest && finalized?.loginFinalizationPending !== true) {
+            subscriptionLoginAttempts.set(id, { ...latest, status: "finished" });
+          }
+        } catch (error) {
+          const latest = subscriptionLoginAttempts.get(id);
+          if (latest) subscriptionLoginAttempts.set(id, {
+            ...latest,
+            status: "failed",
+            error: error instanceof Error ? error.message : "ChatGPT login finalization failed.",
+          });
+        } finally {
+          releaseSubscriptionLogin(id);
+        }
+      };
+      const openedPromise = openBrowserCommand(codex, ["login"], discoverSourceRoot(), {
+          environment: { CODEX_HOME: profileHome },
+          openExternal: shell?.openExternal?.bind(shell),
+          onSpawn: (child) => {
+            loginLease = attachChatGPTLoginLease(id, loginLease, child?.pid, {
+              accountHome: profileHome,
+              homesDir: path.dirname(profileHome),
+            });
+          },
+          onExit: (outcome = {}) => {
+            resolveLoginExit(outcome);
+          },
+        });
+      // A child may persist valid auth and exit before a delayed browser
+      // opener settles. Give every attached writer exactly one completion
+      // owner immediately; the handoff result is not credential truth.
+      loginFinalization = loginExited.then(processLoginExit);
+      const opened = await openedPromise;
+      return {
+        ...opened,
+        accountId: id,
+        pending: true,
+      };
+    } catch (error) {
+      if (loginFinalization) {
+        try { await loginFinalization; } catch {}
+      } else {
+        releaseSubscriptionLogin(id);
+        try {
+          // Synchronous validation can fail after reservation but before a
+          // child owns it. Clear only an unchanged reservation; changed auth
+          // remains durable attention evidence rather than being guessed away.
+          if (
+            loginLease
+            && !chatGPTLoginAuthChanged(id, loginLease, {
+              accountHome: profileHome,
+              homesDir: path.dirname(profileHome),
+            })
+          ) clearChatGPTLoginLease(id, loginLease, {
+            accountHome: profileHome,
+            homesDir: path.dirname(profileHome),
+          });
+        } catch {}
+      }
+      subscriptionLoginAttempts.delete(id);
+      throw error;
+    }
+  });
+  handleAction("removeChatGptSubscriptionAccount", async ({ accountId } = {}) => {
+    const id = stringValue(accountId, "Account id", CHATGPT_ACCOUNT_ID);
+    if (subscriptionLoginInFlight.has(id)) {
+      throw new Error("Cannot remove a ChatGPT account while its browser sign-in is in progress.");
+    }
+    const pool = await runJson(
+      ["chatgpt-account-pool", "status"],
+      { timeoutMs: CATALOG_MUTATION_TIMEOUT_MS },
+    );
+    if (pool?.loginAttempts?.[id]?.status === "failed" && pool.loginAttempts[id].retryable === true) {
+      const reset = await runJson(["chatgpt-account-pool", "login-reset", id], { timeoutMs: 20_000 });
+      if (reset?.reset !== true) {
+        throw new Error("The saved login changed before removal. Refresh the account list and try again.");
+      }
+    }
+    return runJson(["chatgpt-account-pool", "remove", id], { timeoutMs: 60_000 });
+  });
+  handleAction("setChatGptAccountSelection", async ({ selection } = {}) => {
+    return runJson(["chatgpt-account-pool", "select", stringValue(selection, "Account selection", CHATGPT_ACCOUNT_ID)], { timeoutMs: 60_000 });
+  });
   handleAction("setPresence", async ({ mode } = {}) => runJson(["presence", "set", oneOf(mode, PRESENCE_MODES, "Presence mode")]));
   handleAction("controlService", async ({ action = "status" } = {}) => {
     const value = oneOf(action, SERVICE_COMMANDS, "Service action");
@@ -1798,7 +2227,7 @@ export function registerIpcHandlers({
   }, { requiresCompatibleRouter: false });
   return {
     operationNames: [...operations.values()],
-    hasActiveMutations: () => pendingMutations > 0,
+    hasActiveMutations: () => !mutationsIdle(),
     whenMutationsIdle,
   };
 }

@@ -55,6 +55,25 @@ const GENERIC_SEARCH_INCOMPATIBLE = {
   inputModalities: ["text"],
   compHash: "strict-generic-search-incompatible-fixture-v1",
 };
+// The Go plan route the Zen fixture must stay independent of: a checked-in
+// model on the parent provider, credentialed by the same key file.
+const GO_PLAN_MODEL = { slug: "opencode-go/glm-5.3", gatewayModel: "opencode-go-glm-5-3" };
+const ZEN_CANDIDATE = {
+  slug: "opencode-zen/glm-5.3",
+  gatewayModel: "opencode-zen-glm-5-3",
+  upstreamModel: "glm-5.3",
+  provider: "opencode-zen",
+  listed: true,
+  displayName: "opencode Zen GLM 5.3",
+  description: "Local routing test fixture.",
+  priority: 502,
+  defaultEffort: "high",
+  reasoningLevels: [{ effort: "high", description: "Adaptive reasoning" }],
+  contextWindow: 131_072,
+  autoCompact: 111_411,
+  inputModalities: ["text"],
+  compHash: "opencode-zen-failover-fixture-v1",
+};
 const STRICT_GENERIC_PROVIDER = {
   id: "strict-generic",
   displayName: "Strict generic fixture",
@@ -98,6 +117,17 @@ const QUOTA_BODY = JSON.stringify({
     message:
       "litellm.RateLimitError: RateLimitError: OpenAIException - You have exceeded your current quota, please check your plan and billing details.",
     type: "insufficient_quota",
+    code: "429",
+  },
+});
+
+// A burst rate limit rather than an exhausted plan: nothing here reads as
+// quota, so the window the provider names in `Retry-After` is the only reason
+// the turn is allowed to move.
+const BURST_RATE_LIMIT_BODY = JSON.stringify({
+  error: {
+    message: "Rate limit reached for requests. Please slow down and try again.",
+    type: "rate_limit_error",
     code: "429",
   },
 });
@@ -1515,6 +1545,178 @@ test("a client that leaves mid-failover does not hang or crash the router", asyn
     const events = await waitForUsageEvents(child.stateDir, 1, child);
     assert.ok(events.length >= 1);
     assert.doesNotMatch(child.testErrors(), /UnhandledPromiseRejection|FATAL/);
+  } finally {
+    await stopChild(child);
+    await closeServer(gw.server);
+  }
+});
+
+test("a rate limit that names its window as an HTTP-date still fails over", async () => {
+  // RFC 9110 lets `Retry-After` be an HTTP-date as well as delay-seconds, and a
+  // gateway in front of an origin sends the date form. Read as a bare number it
+  // is NaN, which the classifier discards -- so the turn used to die on a
+  // provider that had said exactly when it would be back, and every later turn
+  // paid the same refusal again because no cooldown was recorded either.
+  const seen = [];
+  const gw = await gateway(async (request, response) => {
+    const body = await bodyJson(request);
+    seen.push(body);
+    if (body.model === PRIMARY.gatewayModel) {
+      const payload = Buffer.from(BURST_RATE_LIMIT_BODY, "utf8");
+      response.writeHead(429, {
+        "Content-Type": "application/json",
+        "Retry-After": new Date(Date.now() + 30 * 60_000).toUTCString(),
+        "Content-Length": String(payload.length),
+      });
+      response.end(payload);
+      return;
+    }
+    response.writeHead(200, { "Content-Type": "text/event-stream" });
+    response.end(contentSse("fallback"));
+  });
+  const routerPort = await openPort();
+  const child = run(routerEnv(gw.port, routerPort));
+  try {
+    await waitFor(`http://127.0.0.1:${routerPort}/health`, child);
+    const result = await readRouted(routerPort, TURN_BODY);
+    assert.equal(result.status, 200);
+    assert.match(result.body, /answered-by-fallback/);
+    assert.equal(seen.length, 2);
+    assert.equal(seen[1].model, FALLBACK.gatewayModel);
+
+    // The named window is believed, so the next turn skips the limited
+    // provider instead of spending another round trip on the same refusal.
+    const cooldowns = JSON.parse(
+      readFileSync(path.join(child.stateDir, "provider-cooldowns.json"), "utf8"),
+    );
+    assert.equal(cooldowns.deepseek.reason, "rate_limited");
+    assert.ok(Date.parse(cooldowns.deepseek.until) > Date.now());
+    const second = await readRouted(routerPort, TURN_BODY);
+    assert.equal(second.status, 200);
+    assert.equal(seen.length, 3);
+    assert.equal(seen[2].model, FALLBACK.gatewayModel);
+  } finally {
+    await stopChild(child);
+    await closeServer(gw.server);
+  }
+});
+
+test("a closed Go plan window does not withdraw the separately billed Zen route", async () => {
+  // opencode Zen shares Go's credential and selection toggle, so its provider
+  // id resolves to `opencode-go` everywhere selection is concerned. Its bill
+  // does not: Zen is metered at its own endpoint. A window recorded for the Go
+  // plan used to withdraw Zen too, and the operator's chosen model was
+  // silently answered by a different provider.
+  const seen = [];
+  const gw = await gateway(async (request, response) => {
+    const body = await bodyJson(request);
+    seen.push(body.model);
+    response.writeHead(200, { "Content-Type": "text/event-stream" });
+    response.end(contentSse(body.model));
+  });
+  const routerPort = await openPort();
+  const child = run(routerEnv(gw.port, routerPort), {
+    userModels: [ZEN_CANDIDATE],
+    cooldowns: {
+      "opencode-go": {
+        until: new Date(Date.now() + 30 * 60_000).toISOString(),
+        reason: "out_of_usage",
+      },
+    },
+  });
+  try {
+    await waitFor(`http://127.0.0.1:${routerPort}/health`, child);
+    const zen = await readRouted(routerPort, { ...TURN_BODY, model: ZEN_CANDIDATE.slug });
+    assert.equal(zen.status, 200);
+    assert.match(zen.body, new RegExp(`answered-by-${ZEN_CANDIDATE.gatewayModel}`));
+    assert.deepEqual(seen, [ZEN_CANDIDATE.gatewayModel]);
+    assert.doesNotMatch(child.testErrors(), /cooled_until_/);
+
+    // The plan the window was actually recorded for is still skipped: a
+    // protocol variant is the same subscription, and this test must not pass
+    // by disabling cooldowns.
+    const go = await readRouted(routerPort, { ...TURN_BODY, model: GO_PLAN_MODEL.slug });
+    assert.equal(go.status, 200);
+    assert.equal(seen.length, 2);
+    assert.equal(seen[1], FALLBACK.gatewayModel);
+    assert.match(child.testErrors(), /cooled_until_/);
+  } finally {
+    await stopChild(child);
+    await closeServer(gw.server);
+  }
+});
+
+test("an exhausted Zen balance cools Zen rather than the Go subscription", async () => {
+  const seen = [];
+  const gw = await gateway(async (request, response) => {
+    const body = await bodyJson(request);
+    seen.push(body.model);
+    if (body.model === ZEN_CANDIDATE.gatewayModel) {
+      const payload = Buffer.from(QUOTA_BODY, "utf8");
+      response.writeHead(429, {
+        "Content-Type": "application/json",
+        "Retry-After": "1800",
+        "Content-Length": String(payload.length),
+      });
+      response.end(payload);
+      return;
+    }
+    response.writeHead(200, { "Content-Type": "text/event-stream" });
+    response.end(contentSse(body.model));
+  });
+  const routerPort = await openPort();
+  const child = run(routerEnv(gw.port, routerPort), { userModels: [ZEN_CANDIDATE] });
+  try {
+    await waitFor(`http://127.0.0.1:${routerPort}/health`, child);
+    const zen = await readRouted(routerPort, { ...TURN_BODY, model: ZEN_CANDIDATE.slug });
+    assert.equal(zen.status, 200);
+    assert.deepEqual(seen, [ZEN_CANDIDATE.gatewayModel, FALLBACK.gatewayModel]);
+
+    const cooldowns = JSON.parse(
+      readFileSync(path.join(child.stateDir, "provider-cooldowns.json"), "utf8"),
+    );
+    assert.equal(cooldowns["opencode-zen"].reason, "out_of_usage");
+    assert.equal(cooldowns["opencode-go"], undefined);
+
+    // The Go plan was never asked about, so it is still served.
+    const go = await readRouted(routerPort, { ...TURN_BODY, model: GO_PLAN_MODEL.slug });
+    assert.equal(go.status, 200);
+    assert.equal(seen.at(-1), GO_PLAN_MODEL.gatewayModel);
+  } finally {
+    await stopChild(child);
+    await closeServer(gw.server);
+  }
+});
+
+test("a rate limit with no usable window asks for patience", async () => {
+  // Two ways a 429 can carry no wait worth quoting, and they used to be the
+  // same bug in opposite directions. `headers.get()` answers null for a header
+  // that was never sent and `Number(null)` is 0 -- finite, so the translated
+  // error advised retrying "in about 0s". An explicit `Retry-After: 0` is a
+  // real answer the parser now keeps as 0, and it must reach the operator as
+  // the same patient sentence rather than as that rounding-bug wording.
+  const gw = await gateway(async (request, response) => {
+    const body = await bodyJson(request);
+    const payload = Buffer.from(BURST_RATE_LIMIT_BODY, "utf8");
+    response.writeHead(429, {
+      "Content-Type": "application/json",
+      "Content-Length": String(payload.length),
+      // The first turn sends no header at all; the second names zero.
+      ...(body.instructions === "zero" ? { "Retry-After": "0" } : {}),
+    });
+    response.end(payload);
+  });
+  const routerPort = await openPort();
+  const child = run(routerEnv(gw.port, routerPort), { enabled: false, chain: [] });
+  try {
+    await waitFor(`http://127.0.0.1:${routerPort}/health`, child);
+    for (const instructions of ["absent", "zero"]) {
+      const result = await readRouted(routerPort, { ...TURN_BODY, instructions });
+      assert.equal(result.status, 429);
+      const message = JSON.parse(result.body).error.message;
+      assert.match(message, /Wait a bit and retry\./);
+      assert.doesNotMatch(message, /Retry in about 0s/);
+    }
   } finally {
     await stopChild(child);
     await closeServer(gw.server);

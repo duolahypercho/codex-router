@@ -28,6 +28,7 @@ import {
   cooldownUntil,
   parseRateLimitHeaders,
   requestQuotaFromRateLimitHeaders,
+  retryAfterSeconds,
 } from "./rate-limit-headers.mjs";
 import { recordRateLimitSnapshot } from "./rate-limit-state.mjs";
 import { recordProviderCooldown } from "./model-failover.mjs";
@@ -51,6 +52,7 @@ import { VERSION } from "./version.mjs";
 import { installStableFetchTransport } from "./fetch-transport.mjs";
 import { zaiCacheUsageTransform } from "./zai-cache-usage.mjs";
 import {
+  buildNamespaceLookupsFromTools,
   createResponsesJsonTransform,
   createResponsesStreamTransform,
   normalizeOpenAIRequest,
@@ -66,7 +68,10 @@ import {
 import {
   runProviderApiKeyAttempts,
 } from "./provider-api-key-pool.mjs";
-import { stripCodexEncryptedSchemaAnnotation } from "./tool-schema-root.mjs";
+import {
+  nonRecursiveToolSchema,
+  stripCodexEncryptedSchemaAnnotation,
+} from "./tool-schema-root.mjs";
 import { requestGenericProvider } from "./generic-providers.mjs";
 import { genericProviderConfigured } from "./generic-provider-readiness.mjs";
 import { providerTransportError } from "./transport-failure.mjs";
@@ -385,6 +390,42 @@ function stripEncryptedToolSchemaAnnotations(payload, protocol) {
   if (changed) payload.tools = tools;
 }
 
+// Meta's Console API behind opencode answers a self-referencing tool schema
+// with a bare 400 naming neither the tool nor the definition, and the turn is
+// lost. Measured against that endpoint, an ordinary `$ref`/`$defs` pair is
+// accepted and only a reference re-entering its own ancestor is refused, so
+// `nonRecursiveToolSchema` -- which blanks exactly the cycle-closing edge and
+// returns any other schema by identity -- is the whole fix. The namespace relay
+// already uses it for the same reason.
+function flattenRecursiveToolSchemas(payload, protocol) {
+  if (!Array.isArray(payload.tools)) return;
+  let changed = false;
+  const tools = payload.tools.map((tool) => {
+    if (!tool || typeof tool !== "object" || Array.isArray(tool) || tool.type !== "function") {
+      return tool;
+    }
+    if (protocol === "openai-responses") {
+      const flattened = nonRecursiveToolSchema(tool.parameters);
+      if (flattened === tool.parameters) return tool;
+      changed = true;
+      return { ...tool, parameters: flattened };
+    }
+    const fn = tool.function;
+    if (!fn || typeof fn !== "object" || Array.isArray(fn)) return tool;
+    const flattened = nonRecursiveToolSchema(fn.parameters);
+    if (flattened === fn.parameters) return tool;
+    changed = true;
+    return { ...tool, function: { ...fn, parameters: flattened } };
+  });
+  if (!changed) return;
+  payload.tools = tools;
+  // Never quieted: a tool the model may call has lost part of its argument
+  // shape, and an unattended service is exactly where that must not be silent.
+  console.error(
+    "[api-forwarder] broke recursive $ref cycles in tool schema(s) for this request",
+  );
+}
+
 // A trailing model turn is a destructive rewrite: it discards part of the
 // caller's conversation. Only Google's own provider gets that behavior from
 // identity. Resellers and custom endpoints must opt in per model after their
@@ -593,6 +634,35 @@ function stripSearchContentTypes(tools) {
   return stripped ? repaired : tools;
 }
 
+/**
+ * Strip empty `tools: []` and dangling `tool_choice` from a payload.
+ * Returns whether the payload was changed.
+ * 
+ * The vLLM build in qwen38-community and other strict upstreams (>=0.20 Pydantic)
+ * refuse an empty tools array. Codex sends `tools: []` on compaction and plain chat,
+ * so without this strip every compaction against strict providers 400s. An empty tools
+ * array is valid for lenient providers and explicitly permitted by OpenAI's schema, so
+ * the repair belongs at this last hop rather than in the compaction path. Omitting the
+ * empty field is also valid for providers like OpenCode Go.
+ * 
+ * Drops tool_choice only when an empty tools: [] was actually stripped, not when tools
+ * was never present. Requests with tool_choice but no tools field are forwarded as-is
+ * for profiles that need them.
+ */
+function stripEmptyTools(payload) {
+  let changed = false;
+  const hadEmptyTools = Array.isArray(payload.tools) && payload.tools.length === 0;
+  if (hadEmptyTools) {
+    delete payload.tools;
+    changed = true;
+    if ("tool_choice" in payload) {
+      delete payload.tool_choice;
+      changed = true;
+    }
+  }
+  return changed;
+}
+
 function normalizeBody(buffer, contentType, route) {
   if (!buffer.length || !String(contentType || "").includes("application/json")) {
     const error = new Error("API-provider requests require a JSON body.");
@@ -728,6 +798,16 @@ function normalizeBody(buffer, contentType, route) {
   if (provider.id === "meta" && Array.isArray(payload.tools)) {
     payload.tools = stripSearchContentTypes(payload.tools);
   }
+  // Strip empty tools array and dangling tool_choice for all routes.
+  // Strict upstreams (vLLM >=0.20 Pydantic) refuse both, and Codex sends
+  // tools: [] on compaction and plain chat. Log when a request is changed.
+  if (stripEmptyTools(payload)) {
+    if (!QUIET) {
+      console.error(
+        `[api-forwarder] model=${model.gatewayModel} stripped empty tools/tool_choice`,
+      );
+    }
+  }
   if (Array.isArray(payload.messages)) {
     payload.messages = sanitizeChatToolHistory(payload.messages, provider, model);
   }
@@ -768,6 +848,13 @@ function normalizeBody(buffer, contentType, route) {
   }
   if (model.requestProfile === "codex-encrypted-schema") {
     stripEncryptedToolSchemaAnnotations(payload, provider.protocol);
+  }
+  // Deliberately its own statement rather than a branch of the profile chain
+  // below: this is an upstream limitation, and every route that has it also
+  // needs a request profile of its own, which the single-valued field cannot
+  // express.
+  if (model.toolSchemaRecursion === "flatten") {
+    flattenRecursiveToolSchemas(payload, provider.protocol);
   }
   if (model.requestProfile === "clinepass") {
     delete payload.reasoning_effort;
@@ -912,19 +999,9 @@ function normalizeBody(buffer, contentType, route) {
     // and it folds onto `max` because that is the tier it is asking for.
     // Everything else passes through as the literal the endpoint accepts.
     if (payload.reasoning_effort === "ultra") payload.reasoning_effort = "max";
-    // The same build refuses two tool shapes Codex sends routinely, both
-    // measured live: an empty list answers "`tools` must not be an empty
-    // array. Either provide at least one tool or omit the field entirely",
-    // and a choice with nothing to choose from answers "When using
-    // `tool_choice`, `tools` must be set". `summarize()` in the router sends
-    // `tools: []` on every compaction, and this model auto-compacts at 230K of
-    // its 262K window, so left alone every compaction against it 400s. Strip
-    // the empty list first, then drop the tool choice that strip leaves
-    // dangling -- the order is what keeps the second rejection from replacing
-    // the first. The repair belongs at this last hop rather than in the
-    // compaction path because an empty tool list is legal on every other
-    // forwarder, and it is exactly how compaction disables tool use there.
-    if (Array.isArray(payload.tools) && payload.tools.length === 0) delete payload.tools;
+    // The same endpoint also refuses tool_choice when tools is absent or still
+    // empty after the global strip ("When using `tool_choice`, `tools` must be
+    // set"). Drop dangling tool_choice for this profile only.
     if (!Array.isArray(payload.tools) || payload.tools.length === 0) {
       delete payload.tool_choice;
     }
@@ -1077,9 +1154,17 @@ async function relayUpstreamResponse(
     upstream.ok && upstreamContentType.toLowerCase().includes("text/event-stream");
   const responsesJson = normalized.responseAdapter === "responses" &&
     upstream.ok && upstreamContentType.toLowerCase().includes("application/json");
+  
+  // Build namespace lookups from the flattened tools in the request payload
+  // to restore namespaced function calls (e.g., "multi_agent_v1__spawn_agent" 
+  // back to { namespace: "multi_agent_v1", name: "spawn_agent" })
+  const flatToNative = (responsesStream || responsesJson)
+    ? buildNamespaceLookupsFromTools(normalized.payload?.tools)
+    : new Map();
+  
   const transform = [
-    responsesStream ? createResponsesStreamTransform() : undefined,
-    responsesJson ? createResponsesJsonTransform() : undefined,
+    responsesStream ? createResponsesStreamTransform(flatToNative) : undefined,
+    responsesJson ? createResponsesJsonTransform(flatToNative) : undefined,
     zaiCacheUsageTransform(normalized.provider.id, upstreamContentType),
   ].filter(Boolean);
   const denylist = transform.length
@@ -1134,16 +1219,14 @@ function recordUpstreamLimits(normalized, upstream) {
   if (upstream.ok) return;
   const until = cooldownUntil(rateLimit);
   if (!until) return;
-  recordProviderCooldown(canonicalProviderId(normalized.provider.id), {
+  // The provider id is passed through unresolved: `recordProviderCooldown`
+  // keys the window by cooldown scope, and pre-canonicalizing here would file
+  // a separately billed variant's window under the subscription it does not
+  // share.
+  recordProviderCooldown(normalized.provider.id, {
     until,
     reason: upstream.status === 429 ? "rate_limited" : "out_of_usage",
   });
-}
-
-function responseRetryAfterSeconds(headers, now = Date.now()) {
-  const retryAt = Date.parse(parseRateLimitHeaders(headers, { now })?.retryAt || "");
-  if (!Number.isFinite(retryAt) || retryAt <= now) return undefined;
-  return Math.max(1, Math.ceil((retryAt - now) / 1_000));
 }
 
 function healthPayload() {
@@ -1389,7 +1472,7 @@ async function handleRequest(request, response) {
             ...outcome,
             headers: outcome.responseHeaders || upstreamHeaders,
             upstreamHeaders,
-            retryAfterSeconds: responseRetryAfterSeconds(upstreamHeaders),
+            retryAfterSeconds: retryAfterSeconds(upstreamHeaders),
             quota: requestQuotaFromRateLimitHeaders(upstreamHeaders),
             committed: outcome.committed === true,
             route: "plan",
@@ -1459,7 +1542,7 @@ async function handleRequest(request, response) {
                 ...outcome,
                 headers: outcome.responseHeaders || upstreamHeaders,
                 upstreamHeaders,
-                retryAfterSeconds: responseRetryAfterSeconds(upstreamHeaders),
+                retryAfterSeconds: retryAfterSeconds(upstreamHeaders),
                 quota: requestQuotaFromRateLimitHeaders(upstreamHeaders),
                 committed: outcome.committed === true,
                 route: "plan",
@@ -1471,7 +1554,7 @@ async function handleRequest(request, response) {
             status: attemptResponse.status,
             ok: false,
             committed: false,
-            retryAfterSeconds: responseRetryAfterSeconds(attemptResponse.headers),
+            retryAfterSeconds: retryAfterSeconds(attemptResponse.headers),
             quota: requestQuotaFromRateLimitHeaders(attemptResponse.headers),
             bodyText,
             headers: attemptResponse.headers,
@@ -1561,7 +1644,7 @@ async function handleRequest(request, response) {
         ok: upstream.ok,
         committed: false,
         error: upstream.ok ? undefined : `upstream status ${upstream.status}`,
-        retryAfterSeconds: responseRetryAfterSeconds(upstream.headers),
+        retryAfterSeconds: retryAfterSeconds(upstream.headers),
         quota: requestQuotaFromRateLimitHeaders(upstream.headers),
       });
     }

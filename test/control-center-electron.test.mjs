@@ -45,11 +45,222 @@ import {
   writeLifecycleState,
 } from "../apps/control-center/electron/lifecycle-state.mjs";
 import {
+  openBrowserCommand,
+  projectChatGPTSubscriptionLoginAttempts,
+} from "../apps/control-center/electron/ipc.mjs";
+import {
   controlCenterDestination,
   controlCenterNavigationURL,
   NAVIGATION_ARGUMENT,
   NAVIGATION_SOURCE_ARGUMENT,
 } from "../apps/control-center/electron/navigation.mjs";
+
+test("ChatGPT browser login reports a terminal retry after child close without auth", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "router-browser-login-"));
+  const windows = process.platform === "win32";
+  const executable = path.join(directory, windows ? "codex-test.cmd" : "codex-test");
+  const openedUrls = [];
+  let exited = false;
+  const accountId = "acct_example_123456";
+  const attempts = new Map([[accountId, { status: "pending", deadlineAt: Date.now() + 60_000 }]]);
+  try {
+    await writeFile(
+      executable,
+      windows
+        ? "@echo off\r\necho https://auth.openai.com/oauth/authorize?state=test\r\n"
+        : "#!/usr/bin/env node\nprocess.stdout.write('https://auth.openai.com/oauth/authorize?state=test')\n",
+    );
+    if (!windows) await chmod(executable, 0o755);
+    const result = await openBrowserCommand(executable, [], process.cwd(), {
+      environment: { PATH: windows ? process.env.PATH || "" : "/usr/bin:/bin:/usr/sbin:/sbin" },
+      openExternal: async (url) => { openedUrls.push(url); },
+      onExit: (outcome) => {
+        exited = true;
+        attempts.set(accountId, { ...attempts.get(accountId), ...outcome, status: "finished" });
+      },
+    });
+    assert.deepEqual(result, { opened: true, surface: "browser" });
+    assert.deepEqual(openedUrls, ["https://auth.openai.com/oauth/authorize?state=test"]);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(exited, true);
+    const projected = projectChatGPTSubscriptionLoginAttempts({
+      accounts: { [accountId]: { subscription: { usable: false } } },
+    }, attempts);
+    assert.deepEqual(projected.loginAttempts?.[accountId], {
+      status: "failed",
+      error: "Codex login closed before this account became usable.",
+      retryable: true,
+    });
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a usable OAuth profile closes the pending attempt after core finalization", () => {
+  const accountId = "acct_example_123456";
+  const attempts = new Map([[accountId, {
+    status: "pending",
+    deadlineAt: Date.now() + 60_000,
+  }]]);
+  const pool = { accounts: { [accountId]: { subscription: { usable: true } } } };
+  const finished = projectChatGPTSubscriptionLoginAttempts(pool, attempts);
+  assert.equal("loginAttempts" in finished, false);
+  assert.equal(attempts.has(accountId), false);
+});
+
+test("core login recovery failures survive the Control Center projection", () => {
+  const accountId = "acct_example_123456";
+  const coreFailure = {
+    status: "failed",
+    error: "The saved login is incomplete or invalid. Retry sign-in or remove this account.",
+    retryable: true,
+  };
+  const projected = projectChatGPTSubscriptionLoginAttempts({
+    accounts: { [accountId]: { subscription: { usable: false, attentionRequired: true } } },
+    loginAttempts: { [accountId]: coreFailure },
+  }, new Map());
+  assert.deepEqual(projected.loginAttempts?.[accountId], coreFailure);
+
+  const nonRetryable = projectChatGPTSubscriptionLoginAttempts({
+    accounts: { [accountId]: { subscription: { usable: false, attentionRequired: true } } },
+    loginAttempts: { [accountId]: { status: "failed", error: "Profile repair required.", retryable: false } },
+  }, new Map());
+  assert.equal(nonRetryable.loginAttempts?.[accountId]?.retryable, false);
+
+  const localAttempts = new Map([[accountId, {
+    status: "finished",
+    code: 1,
+    deadlineAt: Date.now() - 1,
+  }]]);
+  const collision = projectChatGPTSubscriptionLoginAttempts({
+    accounts: { [accountId]: { subscription: { usable: false, attentionRequired: true } } },
+    loginAttempts: {
+      [accountId]: {
+        status: "failed",
+        error: "The active account must be retried before removal.",
+        retryable: true,
+        removable: false,
+      },
+    },
+  }, localAttempts);
+  assert.deepEqual(collision.loginAttempts?.[accountId], {
+    status: "failed",
+    error: "The active account must be retried before removal.",
+    retryable: true,
+    removable: false,
+  });
+});
+
+test("browser opener settlement survives the Codex child exiting first", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "router-browser-exit-race-"));
+  const script = path.join(directory, "codex-login-fixture.mjs");
+  try {
+    await writeFile(
+      script,
+      "process.stdout.write('https://auth.openai.com/oauth/authorize?state=exit-race');\n",
+    );
+
+    for (const expected of ["reject", "resolve"]) {
+      let settleOpener;
+      let markOpenerCalled;
+      let markChildExited;
+      let exitCount = 0;
+      const openerCalled = new Promise((resolve) => { markOpenerCalled = resolve; });
+      const childExited = new Promise((resolve) => { markChildExited = resolve; });
+      const opener = new Promise((resolve, reject) => {
+        settleOpener = expected === "reject"
+          ? () => reject(new Error("delayed browser refusal"))
+          : resolve;
+      });
+      const opened = openBrowserCommand(process.execPath, [script], process.cwd(), {
+        environment: { PATH: process.env.PATH || "" },
+        openExternal: async () => {
+          markOpenerCalled();
+          return opener;
+        },
+        onExit: () => {
+          exitCount += 1;
+          markChildExited();
+        },
+      });
+      await openerCalled;
+      await childExited;
+      settleOpener();
+      const bounded = Promise.race([
+        opened,
+        new Promise((_, reject) => setTimeout(() => reject(new Error("browser opener remained pending")), 700)),
+      ]);
+      if (expected === "reject") {
+        await assert.rejects(bounded, /Could not open the default browser: delayed browser refusal/);
+      } else {
+        assert.deepEqual(await bounded, { opened: true, surface: "browser" });
+      }
+      assert.equal(exitCount, 1, "child exit notification must remain exactly once");
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("ChatGPT browser login has a bounded post-handoff completion deadline", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "router-browser-deadline-"));
+  const script = path.join(directory, "codex-login-fixture.mjs");
+  const pidPath = path.join(directory, "login.pid");
+  let outcome;
+  try {
+    await writeFile(script, `
+      import { writeFileSync } from "node:fs";
+      writeFileSync(${JSON.stringify(pidPath)}, String(process.pid));
+      process.stdout.write("https://auth.openai.com/oauth/authorize?state=deadline");
+      setInterval(() => {}, 1_000);
+    `);
+    const opened = await openBrowserCommand(process.execPath, [script], process.cwd(), {
+      environment: { PATH: process.env.PATH || "" },
+      openExternal: async () => {},
+      completionTimeoutMs: 40,
+      onExit: (value) => { outcome = value; },
+    });
+    assert.deepEqual(opened, { opened: true, surface: "browser" });
+    const deadline = Date.now() + 2_000;
+    while (!outcome && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    assert.match(outcome?.error || "", /browser sign-in deadline/);
+    const pid = Number(await readFile(pidPath, "utf8"));
+    assert.throws(() => process.kill(pid, 0), /ESRCH|no such process|not found/i);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a rejected browser handoff terminates the detached Codex login", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "router-browser-reject-"));
+  const script = path.join(directory, "codex-login-fixture.mjs");
+  const pidPath = path.join(directory, "login.pid");
+  let exited = false;
+  try {
+    await writeFile(script, `
+      import { writeFileSync } from "node:fs";
+      writeFileSync(${JSON.stringify(pidPath)}, String(process.pid));
+      process.stdout.write("https://auth.openai.com/oauth/authorize?state=rejected");
+      setInterval(() => {}, 1_000);
+    `);
+    await assert.rejects(
+      openBrowserCommand(process.execPath, [script], process.cwd(), {
+        environment: { PATH: process.env.PATH || "" },
+        openExternal: async () => { throw new Error("browser unavailable"); },
+        onExit: () => { exited = true; },
+      }),
+      /Could not open the default browser: browser unavailable/,
+    );
+    assert.equal(exited, true, "the in-flight account login must be released on handoff failure");
+    const pid = Number(await readFile(pidPath, "utf8"));
+    assert.ok(Number.isInteger(pid) && pid > 0);
+    assert.throws(() => process.kill(pid, 0), /ESRCH|no such process|not found/i);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 test("Control Center navigation accepts only one fixed widget destination", () => {
   assert.deepEqual(controlCenterDestination(["electron", ".", NAVIGATION_ARGUMENT, "usage"]), {
@@ -870,6 +1081,7 @@ test("electron boundary does not enable node integration or shell argv", async (
   assert.match(preload, /require\("electron"\)/);
   assert.doesNotMatch(preload, /executeJavaScript|node:child_process|node:fs|node:path/);
   const main = await readFile(new URL("../apps/control-center/electron/main.mjs", import.meta.url), "utf8");
+  const ipc = await readFile(new URL("../apps/control-center/electron/ipc.mjs", import.meta.url), "utf8");
   assert.match(main, /contextIsolation:\s*true/);
   assert.match(main, /nodeIntegration:\s*false/);
   assert.match(main, /sandbox:\s*true/);
@@ -892,6 +1104,10 @@ test("electron boundary does not enable node integration or shell argv", async (
   assert.match(main, /setPermissionCheckHandler\(\(\) => false\)/);
   assert.match(main, /setPermissionRequestHandler\([\s\S]*callback\(false\)/);
   assert.match(main, /requestSingleInstanceLock\(\)/);
+  // main.mjs now exits helper invocations with process.exit(0): app.quit()
+  // before ready can stay alive in packaged Electron with no primary GUI,
+  // which blocked the transactional bundle swap.
+  assert.match(main, /\(!primaryInstance \|\| quitForUpdateInvocation\)\) process\.exit\(0\)/);
   assert.match(main, /app\.on\("second-instance"/);
   assert.match(main, /else openRequests\.requestOpen\(\)/);
   assert.match(main, /new Tray\(/);
@@ -927,6 +1143,19 @@ test("electron boundary does not enable node integration or shell argv", async (
   assert.doesNotMatch(main, /script-src[^;]*'unsafe-inline'/);
   const builder = await readFile(new URL("../apps/control-center/electron-builder.yml", import.meta.url), "utf8");
   assert.match(builder, /extraResources:[\s\S]*icon\.png/);
+  assert.match(builder, /from:\s*\.\.\/\.\.\/src\/spawnable-command\.mjs[\s\S]*to:\s*src\/spawnable-command\.mjs/);
+  assert.match(builder, /from:\s*\.\.\/\.\.\/src\/chatgpt-login-lease\.mjs[\s\S]*to:\s*src\/chatgpt-login-lease\.mjs/);
+  assert.match(builder, /from:\s*\.\.\/\.\.\/src\/path-security\.mjs[\s\S]*to:\s*src\/path-security\.mjs/);
+  const packageImport = "file:///tmp/x.app/Contents/Resources/app.asar/electron/ipc.mjs";
+  assert.equal(
+    new URL("../../src/spawnable-command.mjs", packageImport).pathname,
+    "/tmp/x.app/Contents/Resources/src/spawnable-command.mjs",
+  );
+  const devImport = "file:///tmp/repo/apps/control-center/electron/ipc.mjs";
+  assert.equal(
+    new URL("../../../src/spawnable-command.mjs", devImport).pathname,
+    "/tmp/repo/src/spawnable-command.mjs",
+  );
   assert.match(builder, /extraResources:[\s\S]*from: \.\.\/\.\.\/src[\s\S]*to: router-src/);
   assert.match(builder, /runAsNode:\s*true/);
   assert.match(builder, /enableEmbeddedAsarIntegrityValidation:\s*true/);
@@ -1023,6 +1252,7 @@ test("preload exposes only the named control operations", async () => {
   const source = await readFile(new URL("../apps/control-center/electron/preload.cjs", import.meta.url), "utf8");
   for (const method of [
     "getSnapshot",
+    "getChatGptAccountPool",
     "getHarnesses",
     "getContextSessions",
     "minimizeWindow",
@@ -1082,6 +1312,7 @@ test("preload constructs exact positional IPC payloads", async () => {
     },
   });
   const cases = [
+    ["getChatGptAccountPool", [], null],
     ["discoverProviderModels", ["provider"], { providerId: "provider", refresh: false }],
     ["discoverProviderModels", ["provider", { refresh: true }], { providerId: "provider", refresh: true }],
     ["setProviderEnabled", ["provider", false], { providerId: "provider", enabled: false }],
@@ -1113,6 +1344,10 @@ test("preload constructs exact positional IPC payloads", async () => {
     ["setToolResultRetentionTtl", [7], { days: 7 }],
     ["setDefaultModel", ["model"], { slug: "model" }],
     ["setSignedRouting", [false], { enabled: false }],
+    ["addChatGptSubscriptionAccount", ["Work"], { label: "Work" }],
+    ["loginChatGptSubscriptionAccount", ["acct_example_123456"], { accountId: "acct_example_123456" }],
+    ["removeChatGptSubscriptionAccount", ["acct_example_123456"], { accountId: "acct_example_123456" }],
+    ["setChatGptAccountSelection", ["acct_example_123456"], { selection: "acct_example_123456" }],
     ["setPresence", ["always"], { mode: "always" }],
     ["controlService", ["start"], { action: "start" }],
     ["controlTray", ["status"], { action: "status" }],
@@ -1243,6 +1478,13 @@ test("settings keeps model choice out and exposes durable app preferences", asyn
   assert.match(settings, /setVisionBridgeEnabled\(/);
   assert.match(settings, /setVisionBridgeEngine\(/);
   assert.match(settings, /setVisionBridgeEffort\(/);
+  assert.match(settings, /ChatGPT accounts/);
+  assert.match(settings, /subscription-account-row/);
+  assert.match(settings, /No saved ChatGPT accounts/);
+  assert.match(settings, /addChatGptSubscriptionAccount\(/);
+  assert.match(settings, /loginChatGptSubscriptionAccount\(/);
+  assert.match(settings, /removeChatGptSubscriptionAccount\(/);
+  assert.doesNotMatch(settings, /access_token|refresh_token/);
   assert.doesNotMatch(settings, /runMaintenance/);
   assert.doesNotMatch(settings, /setLoginFree/);
   // Repair used to be terminal-only. It is an in-app button now, but it still
@@ -1599,6 +1841,80 @@ test("harness and context IPC remain fixed and session-scoped", async () => {
   assert.match(source, /oneOf\(harnessId, HARNESS_IDS, "Harness"\)/);
   assert.match(source, /harness === "dsh" \? DSH_SESSION_ID : harness === "cursor" \? CURSOR_SESSION_ID : SESSION_UUID/);
   assert.match(source, /codex:\/\/threads\/\$\{id\}/);
+  assert.doesNotMatch(source, /readFileSync\(deepcodeSettings/);
+  const chatgptLogin = source.match(/handleAction\("loginChatGptSubscriptionAccount"[\s\S]*?\n  \}\);/)?.[0];
+  assert.ok(chatgptLogin, "ChatGPT subscription login handler should be readable");
+  assert.match(chatgptLogin, /openBrowserCommand\(codex, \["login"\]/);
+  assert.match(chatgptLogin, /\["chatgpt-account-pool", "status"\]/);
+  assert.match(chatgptLogin, /\["chatgpt-account-pool", "status"\][\s\S]{0,120}CATALOG_MUTATION_TIMEOUT_MS/);
+  assert.match(chatgptLogin, /account\.subscription\?\.usable === true/);
+  assert.match(chatgptLogin, /subscriptionLoginAttempts\.get\(id\)\?\.status !== "failed"/);
+  assert.match(chatgptLogin, /profileHome === primaryHome/);
+  assert.match(chatgptLogin, /subscriptionLoginInFlight/);
+  assert.match(chatgptLogin, /createChatGPTLoginLease/);
+  assert.match(chatgptLogin, /attachChatGPTLoginLease/);
+  assert.match(chatgptLogin, /clearChatGPTLoginLease/);
+  assert.ok(
+    chatgptLogin.indexOf("createChatGPTLoginLease") < chatgptLogin.indexOf("openBrowserCommand"),
+    "durable login ownership must be reserved before the credential writer starts",
+  );
+  assert.match(chatgptLogin, /"login-finalize", id, completionLease/);
+  assert.match(chatgptLogin, /"login-reset", id/);
+  assert.match(chatgptLogin, /enqueueMutation\(\(\) => runJson\([\s\S]*?"login-finalize", id, completionLease/);
+  assert.ok(
+    chatgptLogin.indexOf("loginFinalization = loginExited.then(processLoginExit)")
+      < chatgptLogin.indexOf("const opened = await openedPromise"),
+    "every attached credential writer must own finalization before browser handoff settles",
+  );
+  assert.match(chatgptLogin, /if \(loginFinalization\) \{[\s\S]*?await loginFinalization/);
+  const chatgptRemove = source.match(/handleAction\("removeChatGptSubscriptionAccount"[\s\S]*?\n  \}\);/)?.[0];
+  assert.ok(chatgptRemove, "ChatGPT subscription removal handler should be readable");
+  assert.match(chatgptRemove, /"chatgpt-account-pool", "status"/);
+  assert.match(chatgptRemove, /"chatgpt-account-pool", "login-reset", id/);
+  assert.ok(
+    chatgptRemove.indexOf('"login-reset", id') < chatgptRemove.indexOf('"remove", id'),
+    "only a core-classified failed login is reset before removal",
+  );
+  assert.match(chatgptLogin, /!chatGPTLoginAuthChanged\(id, loginLease,[\s\S]*?clearChatGPTLoginLease/);
+  assert.ok(
+    chatgptLogin.indexOf("deadlineAt: Date.now() + CATALOG_MUTATION_TIMEOUT_MS + 30_000")
+      < chatgptLogin.indexOf('"login-finalize", id, completionLease'),
+    "finalization must receive a fresh bounded polling deadline",
+  );
+  assert.match(
+    chatgptLogin,
+    /await enqueueMutation\([\s\S]*?"login-finalize", id, completionLease[\s\S]*?finally \{[\s\S]*?releaseSubscriptionLogin\(id\)/,
+    "the durable/in-memory login owner must survive through exact-lease finalization",
+  );
+  const chatgptRemoval = source.match(/handleAction\("removeChatGptSubscriptionAccount"[\s\S]*?\n  \}\);/)?.[0];
+  assert.ok(chatgptRemoval, "ChatGPT subscription removal handler should be readable");
+  assert.match(chatgptRemoval, /subscriptionLoginInFlight\.has\(id\)/);
+  assert.ok(
+    chatgptRemoval.indexOf("subscriptionLoginInFlight.has(id)")
+      < chatgptRemoval.indexOf('["chatgpt-account-pool", "remove", id]'),
+    "the detached login owner must be checked before account removal starts",
+  );
+  assert.doesNotMatch(chatgptLogin, /openTerminalCommand/);
+  assert.match(source, /const CHATGPT_LOGIN_URL/);
+  assert.match(source, /stdio: \["ignore", "pipe", "pipe"\]/);
+  assert.match(source, /openExternal\(match\[0\]\)/);
+  assert.match(source, /openExternal: shell\?\.openExternal\?\.bind\(shell\)/);
+  assert.match(source, /const openedPromise = openBrowserCommand\(codex, \["login"\]/);
+  assert.match(source, /did not provide an OAuth browser URL/);
+  assert.match(source, /surface: "browser"/);
+
+  const app = await readFile(new URL("../apps/control-center/src/App.tsx", import.meta.url), "utf8");
+  assert.match(app, /api\.getChatGptSession\(\)/);
+  assert.match(app, /alreadyAuthenticated/);
+  const settings = await readFile(new URL("../apps/control-center/src/pages/SettingsPage.tsx", import.meta.url), "utf8");
+  assert.match(settings, /filter\(\(account\) => account\.state !== "revoked"\)/);
+  assert.match(settings, /account\.subscription\?\.usable === true/);
+  assert.match(settings, /subscription\?\.usable === true && !loginAttempt/);
+  assert.match(settings, /accountLoginAttempt\?\.status !== "failed"/);
+  assert.match(settings, /loginPendingId === loginRetryingId/);
+  assert.match(settings, /account\.state === "revoked" \|\| accountLoginAttempt\?\.retryable === false \|\| accountLoginAttempt\?\.removable === false \|\| loginPendingId === account\.id/);
+  assert.match(settings, /const poll = async \(\) => \{[\s\S]*?await refreshRef\.current\(\)[\s\S]*?setTimeout\(\(\) => void poll\(\), 1_500\)/);
+  assert.doesNotMatch(settings, /setInterval\(\(\) => refreshRef\.current\(\), 1_500\)/);
   assert.match(source, /\["client-setup", harness\]/);
   assert.doesNotMatch(source, /readFileSync\([^\n]*session\.jsonl\.zstd/);
 });
@@ -1747,6 +2063,7 @@ test("catalog-backed mutations preserve complete forward and rollback restart ep
   assert.match(source, /handleAction\("setPickerModel"[\s\S]{0,320}CATALOG_MUTATION_TIMEOUT_MS/);
   assert.match(source, /handleAction\("setVisionBridgeEnabled"[\s\S]{0,280}CATALOG_MUTATION_TIMEOUT_MS/);
   assert.match(source, /handleAction\("setSignedRouting"[\s\S]{0,280}CATALOG_MUTATION_TIMEOUT_MS/);
+  assert.match(source, /handle\("getChatGptAccountPool"[\s\S]{0,260}timeoutMs: CATALOG_MUTATION_TIMEOUT_MS/);
 });
 
 test("Antigravity probe IPC has one inner deadline and a larger tree-kill margin", async () => {
@@ -1793,11 +2110,14 @@ test("tray mutations detach before the GUI releases its mutation drain", async (
 });
 
 test("detached tray acceptance is labeled started, never completed", async () => {
-  const source = await readFile(new URL("../apps/control-center/src/App.tsx", import.meta.url), "utf8");
+  const source = (await readFile(new URL("../apps/control-center/src/App.tsx", import.meta.url), "utf8"))
+    .replaceAll("\r\n", "\n");
   const action = source.slice(source.indexOf("const runAction"), source.indexOf("const t = useCallback"));
   assert.match(action, /accepted[^\n]+=== true/);
   assert.match(action, /`\$\{label\} started\.`/);
-  const accepted = action.slice(action.indexOf("accepted"), action.indexOf("return;", action.indexOf("accepted")));
+  const acceptedStart = action.indexOf("if (\n        actionResult?.accepted === true");
+  assert.notEqual(acceptedStart, -1, "runAction should keep a dedicated detached-acceptance branch");
+  const accepted = action.slice(acceptedStart, action.indexOf("return;", acceptedStart));
   assert.doesNotMatch(accepted, /status: "completed"/);
   assert.match(source, /<Badge tone="neutral">Started<\/Badge>/);
 });

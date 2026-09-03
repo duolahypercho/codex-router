@@ -18,6 +18,16 @@ electronFuses:
 extraResources:
   - from: assets/icon.png
     to: icon.png
+  - from: ../../src/spawnable-command.mjs
+    to: src/spawnable-command.mjs
+  - from: ../../src/chatgpt-login-lease.mjs
+    to: src/chatgpt-login-lease.mjs
+  - from: ../../src/file-security.mjs
+    to: src/file-security.mjs
+  - from: ../../src/path-security.mjs
+    to: src/path-security.mjs
+  - from: ../../src/process-identity.mjs
+    to: src/process-identity.mjs
   # Read-only helpers used by the desktop UI must match the UI version even
   # when the shared router service is still owned by an older stable checkout.
   # They remain behind fixed IPC operations and are covered by the app's outer

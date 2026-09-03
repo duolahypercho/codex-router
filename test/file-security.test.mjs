@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import {
+  ensureCheckoutReadable,
   privateFileIsProtected,
   protectPrivateFile,
   writePrivateJson,
@@ -273,6 +274,47 @@ test(
       await writePrivateJsonAsync(target, { version: 1, value: "second" });
       assert.deepEqual(JSON.parse(readFileSync(target, "utf8")), { version: 1, value: "second" });
       assert.equal(privateFileIsProtected(target), true);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "ensureCheckoutReadable grants Users read access to the checkout directory on Windows",
+  { skip: process.platform !== "win32" },
+  () => {
+    const directory = mkdtempSync(path.join(os.tmpdir(), "codex-router-checkout-"));
+    const file = path.join(directory, "src", "start.mjs");
+    try {
+      mkdirSync(path.join(directory, "src"), { recursive: true });
+      writeFileSync(file, "// test file\n");
+      // Call ensureCheckoutReadable to grant Users read access
+      ensureCheckoutReadable(directory);
+      // Verify that Users (S-1-5-32-545) has ReadAndExecute access
+      const script = [
+        "$acl = [System.IO.Directory]::GetAccessControl($env:CODEX_ROUTER_CHECKOUT)",
+        "$usersId = [Security.Principal.SecurityIdentifier]::new('S-1-5-32-545')",
+        "$rules = @($acl.GetAccessRules($true, $false, [Security.Principal.SecurityIdentifier]))",
+        "$usersRule = $rules | Where-Object { $_.IdentityReference.Value -eq $usersId.Value -and $_.AccessControlType -eq 'Allow' } | Select-Object -First 1",
+        "if ($null -ne $usersRule) {",
+        "  $readExecute = [System.Security.AccessControl.FileSystemRights]::ReadAndExecute",
+        "  $hasReadExecute = ($usersRule.FileSystemRights -band $readExecute) -eq $readExecute",
+        "  [Console]::Out.Write($hasReadExecute.ToString())",
+        "} else {",
+        "  [Console]::Out.Write('False')",
+        "}",
+      ].join("\n");
+      const result = execFileSync(
+        "powershell.exe",
+        ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
+        {
+          encoding: "utf8",
+          env: { ...process.env, CODEX_ROUTER_CHECKOUT: directory },
+          stdio: ["ignore", "pipe", "ignore"],
+        },
+      ).trim().toLowerCase();
+      assert.equal(result, "true", "Users should have ReadAndExecute access to the checkout");
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }

@@ -507,11 +507,12 @@ test("merged catalog gives native models first and keeps routed providers contig
   ];
   const merged = buildMergedCatalog({ models: [nativeOlder, template] }, routed);
 
-  // Routed models stay grouped by the named vendor policy, and each model
-  // keeps the `priority` the operator chose. Picker grouping must not renumber
-  // every routed route past the native maximum, or the low priorities on
-  // certified native v2 spawn routes get crowded out of Codex's override
-  // window.
+  // Routed models stay grouped by the named vendor policy. Every routed entry
+  // in this fixture inherits `multiAgentVersion: "v2"` from `grok`, and a
+  // certified v2 spawn route keeps the `priority` the operator chose: those
+  // low values are what keep it inside Codex's spawn_agent override window,
+  // so publication must never renumber them. The band that v1 routed models
+  // do move into is covered by the next test.
   assert.deepEqual(merged.map((model) => model.slug), [
     "gpt-5.5",
     "gpt-5.4",
@@ -527,6 +528,61 @@ test("merged catalog gives native models first and keeps routed providers contig
     merged.map((model) => model.priority),
     [10, 29, 3, 9, 1, 2, 4, 7, 0],
   );
+});
+
+test("v1 routed models publish in a band above the visible native maximum while v2 routes keep their authored priority", () => {
+  // Issue #544: Codex sorts its picker by `priority`, so routed models that
+  // reuse the native GPT integers interleave with them and vendor grouping
+  // never appears. Renumbering everything would crowd certified v2 spawn
+  // routes out of Codex's override window, so only v1 routes move.
+  const nativeOlder = { ...template, slug: "gpt-5.4", display_name: "GPT-5.4", priority: 29 };
+  // A hidden native entry may carry any number; it must not set the band.
+  const hiddenNative = {
+    ...template,
+    slug: "gpt-5.3-internal",
+    display_name: "GPT-5.3",
+    priority: 500,
+    visibility: "hide",
+  };
+  const v1 = { ...grok, multiAgentVersion: "v1" };
+  const routed = [
+    { ...v1, slug: "opencode-go/glm-5.3", provider: "opencode-go", priority: 7 },
+    { ...v1, slug: "deepseek/deepseek-v4-pro", provider: "deepseek", priority: 1 },
+    { ...v1, slug: "deepseek/deepseek-v4-flash", provider: "deepseek", priority: 6 },
+    { ...grok, slug: "grok-oauth/grok-4.5", provider: "grok-oauth", priority: 2 },
+    { ...v1, slug: "grok-oauth/grok-4.6", provider: "grok-oauth", priority: 1 },
+  ];
+  const merged = buildMergedCatalog(
+    { models: [nativeOlder, template, hiddenNative] },
+    routed,
+  );
+  const bySlug = new Map(merged.map((model) => [model.slug, model]));
+
+  // Natives are never renumbered.
+  assert.equal(bySlug.get("gpt-5.5").priority, 10);
+  assert.equal(bySlug.get("gpt-5.4").priority, 29);
+  assert.equal(bySlug.get("gpt-5.3-internal").priority, 500);
+
+  // The certified v2 route keeps its authored priority and its certificate,
+  // and does not consume a slot in the band.
+  assert.equal(bySlug.get("grok-oauth/grok-4.5").priority, 2);
+  assert.equal(bySlug.get("grok-oauth/grok-4.5").multi_agent_version, "v2");
+
+  // v1 routes land directly above the highest *visible* native (29, not the
+  // hidden 500), in vendor-group order and then authored order within a
+  // vendor: DeepSeek (pro 1, flash 6), then opencode, then the catch-all.
+  assert.deepEqual(
+    [
+      "deepseek/deepseek-v4-pro",
+      "deepseek/deepseek-v4-flash",
+      "opencode-go/glm-5.3",
+      "grok-oauth/grok-4.6",
+    ].map((slug) => bySlug.get(slug).priority),
+    [30, 31, 32, 33],
+  );
+
+  // The published picker has no colliding integers left to interleave on.
+  assert.equal(new Set(merged.map((model) => model.priority)).size, merged.length);
 });
 
 test("native gpt-5.2 stays parseable by older Codex catalog readers", () => {
@@ -892,6 +948,20 @@ test("native catalog merge preserves account visibility and bundled-only models"
     },
     { slug: "gpt-bundled-only", visibility: "list" },
   ]);
+});
+
+test("an account catalog can be authoritative about model availability", () => {
+  const merged = mergeNativeCatalogs(
+    { models: [{ slug: "gpt-free", visibility: "list" }] },
+    {
+      models: [
+        { slug: "gpt-free", visibility: "list" },
+        { slug: "gpt-plus-only", visibility: "list" },
+      ],
+    },
+    { includeBundledOnly: false },
+  );
+  assert.deepEqual(merged.models, [{ slug: "gpt-free", visibility: "list" }]);
 });
 
 test("native catalog merge never loses non-empty bundled metadata", () => {

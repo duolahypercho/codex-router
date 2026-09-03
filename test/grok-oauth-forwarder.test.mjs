@@ -917,6 +917,93 @@ const TOOL_EVENTS = [
   },
 ];
 
+test("buffers a proven progress-only prefix without losing a healthy short answer", async () => {
+  let inbound = 0;
+  const backend = await mockBackend(async (_req, res) => {
+    inbound += 1;
+    res.writeHead(200, { "Content-Type": "text/event-stream" });
+    if (inbound <= 2) {
+      res.end(sse(PROGRESS_EVENTS));
+      return;
+    }
+    if (inbound === 3) {
+      res.end(
+        sse([
+          { type: "response.output_text.delta", delta: "Done." },
+          { type: "response.completed", response: { usage: { input_tokens: 20, output_tokens: 5 } } },
+        ]),
+      );
+      return;
+    }
+    res.write(sse([{ type: "response.output_text.delta", delta: "Next I will update the deck." }]));
+    setImmediate(() => res.destroy());
+  });
+  const port = await openPort();
+  const dir = mkdtempSync(path.join(os.tmpdir(), "grok-oauth-repeat-abort-"));
+  const child = startForwarder(port, backend.port, writeSession(dir));
+  const base = `http://127.0.0.1:${port}`;
+  const opening = [
+    { role: "system", content: "You are Codex." },
+    { role: "user", content: "update the deck" },
+  ];
+  const tools = [
+    { type: "function", function: { name: "exec_command", parameters: { type: "object" } } },
+  ];
+  try {
+    await waitHealth(base, child);
+    const first = await fetch(`${base}/v1/chat/completions`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({ model: "grok-4.6", messages: opening, tools, stream: false }),
+    });
+    assert.equal(first.status, 200);
+    assert.equal(inbound, 2);
+
+    const followUpMessages = [
+      ...opening,
+      { role: "assistant", content: "Next I will update the deck." },
+      { role: "user", content: "continue" },
+    ];
+    const healthy = await fetch(`${base}/v1/chat/completions`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({
+        model: "grok-4.6",
+        messages: followUpMessages,
+        tools,
+        stream: true,
+      }),
+    });
+    const healthyBody = await readAll(healthy);
+    assert.equal(healthy.status, 200);
+    assert.equal(inbound, 3);
+    assert.match(healthyBody, /"content":"Done\."/);
+    assert.match(healthyBody, /data: \[DONE\]/);
+
+    const repeated = await fetch(`${base}/v1/chat/completions`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({
+        model: "grok-4.6",
+        messages: followUpMessages,
+        tools,
+        stream: true,
+      }),
+    });
+    const body = await readAll(repeated);
+    assert.equal(repeated.status, 200);
+    assert.equal(inbound, 4);
+    assert.doesNotMatch(body, /Next I will update the deck/);
+    assert.equal((body.match(/event: error/g) || []).length, 1);
+    assert.match(body, /local_router_stream_failed/);
+    assert.doesNotMatch(body, /data: \[DONE\]/);
+  } finally {
+    await stop(child);
+    await new Promise((r) => backend.server.close(r));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("does not retry a short reasoning-heavy answer when the client offered no tools", async () => {
   let inbound = 0;
   const backend = await mockBackend(async (_req, res) => {

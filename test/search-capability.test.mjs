@@ -60,6 +60,22 @@ test("a disappearing sidecar invalidates a snapshotted failover contract", () =>
   assert.equal(routedModelPreservesSearchContract(model, contract, options), false);
 });
 
+test("verified models replay search history without advertising new search", () => {
+  const contract = { requiredMode: undefined, hasSearchHistory: true };
+
+  assert.equal(
+    routedModelPreservesSearchContract(
+      { slug: "generic/history-compatible", supportsSearchHistory: true },
+      contract,
+    ),
+    true,
+  );
+  assert.equal(
+    routedModelPreservesSearchContract({ slug: "generic/plain" }, contract),
+    false,
+  );
+});
+
 test("unsupported hosted search is removed without touching caller function tools", () => {
   const functionNamedSearch = {
     type: "function",

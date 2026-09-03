@@ -203,14 +203,15 @@ test("catalog publication lock releases after failure without losing rollback sa
   }
 });
 
-test("catalog CLI entrypoint wraps main in the publication lock", () => {
+test("catalog CLI entrypoint wraps publication in the publication lock", () => {
   const source = readFileSync(path.join(root, "src", "catalog.mjs"), "utf8");
   assert.match(
     source,
     /import \{ withCatalogPublicationLock \} from "\.\/catalog-publication-lock\.mjs";/,
   );
+  assert.match(source, /export function publishCatalog\(/);
   assert.match(
     source,
-    /if \(process\.argv\[1\][\s\S]*?await withCatalogPublicationLock\(main\);/,
+    /if \(process\.argv\[1\][\s\S]*?await withCatalogPublicationLock\(\(\) => publishCatalog\(\)\);/,
   );
 });

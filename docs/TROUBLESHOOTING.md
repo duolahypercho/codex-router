@@ -330,6 +330,13 @@ message, attempt 1 still streams live; when the client offered tools and the
 short-text/token trigger fires, the forwarder retries once and appends a
 retry tool call onto the same stream. On turns following a tool result, the
 stricter certified-repair path below stages the response before sending it.
+After a conversation has exhibited that shape once, later user-message turns
+buffer only a short visible prefix up to the same text threshold. Headers and
+preceding reasoning remain live, and a tool call or longer answer releases the
+prefix; if the upstream stream aborts instead, Codex receives the terminal
+stream error without first recording another partial progress sentence. Unaffected
+conversation IDs retain the fully live path, and the evidence set is bounded
+in memory.
 
 The trigger is a shape, not a diagnosis, and it is worth knowing which turns
 pay for it. After a tool result, every no-tool prose response is held and

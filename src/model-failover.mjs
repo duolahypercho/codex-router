@@ -5,6 +5,7 @@ import { writePrivateJson } from "./file-security.mjs";
 import { STATE_DIR } from "./paths.mjs";
 import { upstreamFailureKind } from "./error-translation.mjs";
 import { PROVIDERS } from "./model-registry.mjs";
+import { cooldownScope } from "./provider-cooldown.mjs";
 import { canonicalProviderId } from "./provider-selection.mjs";
 import { hasProviderTransportError } from "./transport-failure.mjs";
 import {
@@ -183,6 +184,17 @@ function providerNamedResetUntil(bodyText, at) {
 }
 
 // -- how long an empty provider is believed ----------------------------------
+//
+// Windows are keyed by `cooldownScope`, not by the canonical provider id.
+// Protocol variants of one subscription do share an allowance -- opencode's
+// Messages and Responses variants are the same plan behind a different wire
+// format, so one being empty means all of them are. opencode Zen is not:
+// it shares a credential and a selection toggle with Go, and is billed
+// separately at its own endpoint. Keying its window under the canonical parent
+// made a closed Go plan withdraw a Zen route the operator can still pay for,
+// and an exhausted Zen balance withdraw the whole Go subscription -- in both
+// directions a paid route silently swapped away for a window the provider
+// never named for it.
 
 function readCooldownDocument() {
   if (!existsSync(PROVIDER_COOLDOWNS_PATH)) return {};
@@ -223,7 +235,7 @@ export function readProviderCooldowns({ now } = {}) {
 // `undefined` once the window the provider named has passed, so expiry needs no
 // sweeper and a provider comes back by itself.
 export function providerCooldown(providerId, { now } = {}) {
-  const id = canonicalProviderId(String(providerId || "").trim());
+  const id = cooldownScope(String(providerId || "").trim());
   return id ? readProviderCooldowns({ now })[id] : undefined;
 }
 
@@ -240,7 +252,7 @@ export function providerCooldown(providerId, { now } = {}) {
 // window of its own may sharpen the reason on a window that already exists.
 // It may never create one.
 export function recordProviderCooldown(providerId, { until, reason, now } = {}) {
-  const id = canonicalProviderId(String(providerId || "").trim());
+  const id = cooldownScope(String(providerId || "").trim());
   if (!id) return undefined;
   const at = nowMs(now);
   const document = readCooldownDocument();
@@ -269,7 +281,7 @@ export function recordProviderCooldown(providerId, { until, reason, now } = {}) 
 // end the same way, with a real answer, and that answer is better evidence than
 // anything this file recorded.
 export function clearProviderCooldown(providerId) {
-  const id = canonicalProviderId(String(providerId || "").trim());
+  const id = cooldownScope(String(providerId || "").trim());
   if (!id) return false;
   const document = readCooldownDocument();
   if (!(id in document)) return false;
@@ -393,7 +405,7 @@ function eligible(
 ) {
   if (!model?.slug) return false;
   if (canonicalProviderId(model.provider) === fromProvider) return false;
-  if (cooled.has(canonicalProviderId(model.provider))) return false;
+  if (cooled.has(cooldownScope(model.provider))) return false;
   if (Number.isFinite(estimatedTokens) && Number(model.contextWindow) < estimatedTokens) {
     return false;
   }

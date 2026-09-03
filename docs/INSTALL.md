@@ -144,7 +144,14 @@ CLI inference proxy. The separate `grok-api` provider continues to use a
 separately billed xAI API key.
 
 Antigravity OAuth uses a router-managed browser sign-in; it does not require a
-Gemini API key or a separate CLI. Sign in, run the explicit live compatibility
+Gemini API key or a separate CLI. **The Google Cloud project behind your OAuth
+client must be allowlisted for `cloudcode-pa.googleapis.com`, a private Google
+API.** Most projects are not allowlisted, and you cannot enable this API
+yourself: it requires the producer-side `servicemanagement.services.bind`
+permission, so `gcloud services enable` fails even for the project owner.
+Sign-in will succeed, but the live probe will fail with `SERVICE_DISABLED` if
+your project is not allowlisted. If your project is not allowlisted, this
+provider cannot currently be used. Sign in, run the explicit live compatibility
 probe, then enable the provider; these commands do not replace or disable any
 other provider already selected.
 

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -27,6 +27,66 @@ test("a persistently dead Windows task fails readiness early with its result", a
     /no running launcher process \(LastTaskResult=0x1\)/,
   );
   assert.equal(stateQueries > 1, true);
+});
+
+test("a dead Windows task explains a MODULE_NOT_FOUND whose file exists", async () => {
+  // Issue #548: the bare LastTaskResult left the operator reconciling "no
+  // running launcher" against a Node error naming a file they can open. The
+  // readiness failure now carries the reason.
+  const logRoot = mkdtempSync(path.join(os.tmpdir(), "readiness-log-"));
+  const logPath = path.join(logRoot, "router.log");
+  const modulePath = path.join(logRoot, "start.mjs");
+  writeFileSync(modulePath, "// present but unreadable by the task token\n");
+  writeFileSync(logPath, `Error: Cannot find module '${modulePath}'\n  code: 'MODULE_NOT_FOUND'\n`);
+  try {
+    await assert.rejects(
+      waitForServiceReadiness({
+        platform: "win32",
+        timeoutMs: 60_000,
+        launchGraceMs: 20,
+        pollMs: 10,
+        logPath,
+        getWindowsTaskState: () => ({ instanceCount: 0, lastTaskResult: 1, launcherAlive: false }),
+        waitForHealth: () => new Promise(() => {}),
+      }),
+      (error) => {
+        // The original verdict is preserved; the diagnosis is added to it.
+        assert.match(error.message, /no running launcher process \(LastTaskResult=0x1\)/);
+        assert.match(error.message, /but that file exists/);
+        assert.match(error.message, /token could not read it/);
+        return true;
+      },
+    );
+  } finally {
+    rmSync(logRoot, { recursive: true, force: true });
+  }
+});
+
+test("a dead Windows task with no explanatory log keeps the original wording", async () => {
+  const logRoot = mkdtempSync(path.join(os.tmpdir(), "readiness-log-"));
+  const logPath = path.join(logRoot, "router.log");
+  writeFileSync(logPath, "[codex-router] listening on 127.0.0.1:4202\n");
+  try {
+    await assert.rejects(
+      waitForServiceReadiness({
+        platform: "win32",
+        timeoutMs: 60_000,
+        launchGraceMs: 20,
+        pollMs: 10,
+        logPath,
+        getWindowsTaskState: () => ({ instanceCount: 0, lastTaskResult: 1, launcherAlive: false }),
+        waitForHealth: () => new Promise(() => {}),
+      }),
+      (error) => {
+        assert.match(error.message, /no running launcher process \(LastTaskResult=0x1\)/);
+        // Nothing invented when the log carries no evidence.
+        assert.doesNotMatch(error.message, /token could not read it|in fact absent/);
+        return true;
+      },
+    );
+  } finally {
+    rmSync(logRoot, { recursive: true, force: true });
+  }
 });
 
 test("a stale instance entry with no live launcher process also fails readiness early", async () => {

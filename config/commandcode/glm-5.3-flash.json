@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "slug": "commandcode/glm-5.3-flash",
+      "gatewayModel": "commandcode-glm-5-3-flash",
+      "upstreamModel": "z-ai/glm-5.3-flash",
+      "provider": "commandcode",
+      "listed": true,
+      "displayName": "GLM-5.3-Flash (Command Code)",
+      "description": "GLM-5.3-Flash through the Command Code Provider API. The model's thinking is always enabled with low/high/max reasoning ladder.",
+      "priority": 103,
+      "defaultEffort": "max",
+      "reasoningLevels": [
+        {
+          "effort": "low",
+          "description": "Fast reasoning for simple edits"
+        },
+        {
+          "effort": "high",
+          "description": "Deep reasoning"
+        },
+        {
+          "effort": "max",
+          "description": "Maximum reasoning depth"
+        }
+      ],
+      "contextWindow": 1000000,
+      "autoCompact": 900000,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "compHash": "commandcode-glm-5-3-flash-v1"
+    }
+  ]
+}

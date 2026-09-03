@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "slug": "nousresearch/gemini-3.8-flash",
+      "gatewayModel": "nousresearch-gemini-3-8-flash",
+      "upstreamModel": "google/gemini-3.8-flash",
+      "provider": "nousresearch",
+      "listed": true,
+      "displayName": "Gemini 3.8 Flash (Nous Research)",
+      "description": "Google Gemini 3.8 Flash through the Nous Portal.",
+      "priority": 75,
+      "defaultEffort": "medium",
+      "reasoningLevels": [
+        {
+          "effort": "low",
+          "description": "Faster reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced reasoning"
+        },
+        {
+          "effort": "high",
+          "description": "Deep reasoning"
+        }
+      ],
+      "contextWindow": 1048576,
+      "autoCompact": 943000,
+      "inputModalities": [
+        "text"
+      ],
+      "compHash": "nousresearch-gemini-3-8-flash-v1"
+    }
+  ]
+}

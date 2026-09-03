@@ -1151,6 +1151,28 @@ test("Control Center fingerprints include JavaScript model helpers and build ent
   }
 });
 
+test("Control Center fingerprints include every packaged security helper", () => {
+  for (const relative of [
+    ["src", "spawnable-command.mjs"],
+    ["src", "chatgpt-login-lease.mjs"],
+    ["src", "file-security.mjs"],
+    ["src", "path-security.mjs"],
+    ["src", "process-identity.mjs"],
+  ]) {
+    const fakeRoot = scratch();
+    try {
+      const file = path.join(fakeRoot, ...relative);
+      mkdirSync(path.dirname(file), { recursive: true });
+      writeFileSync(file, "before\n", "utf8");
+      const before = traySourceFingerprint(fakeRoot, "linux");
+      writeFileSync(file, "after\n", "utf8");
+      assert.notEqual(traySourceFingerprint(fakeRoot, "linux"), before, relative.join("/"));
+    } finally {
+      rmSync(fakeRoot, { recursive: true, force: true });
+    }
+  }
+});
+
 test("Control Center fingerprints hash binary assets as bytes", () => {
   const fakeRoot = scratch();
   try {

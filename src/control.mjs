@@ -12,6 +12,7 @@ import {
 } from "./model-overlay-publication.mjs";
 import { withModelOverlayLock } from "./model-overlay-lock.mjs";
 import { withNativeContextVariants } from "./native-context-variants.mjs";
+import { discoveryDisabled } from "./discovery-mode.mjs";
 // The publish marker lives under the shared state directory, which does not
 // vary by target, so reading it here does not disturb the per-target probes
 // below that re-import paths with their own MODEL_ROUTER_TARGET.
@@ -735,8 +736,27 @@ async function runSetApply(provider, desired) {
 }
 
 async function printAccountUsage() {
+  if (discoveryDisabled()) {
+    throw new Error(
+      "ChatGPT account profiles are unavailable while credential discovery is disabled.",
+    );
+  }
   const { readCodexAccountUsage } = await import("./codex-account-usage.mjs");
-  process.stdout.write(`${JSON.stringify(await readCodexAccountUsage(), null, 2)}\n`);
+  const {
+    ensureChatGPTProfileAccounts,
+    selectedChatGPTUsageProfile,
+  } = await import("./chatgpt-profile-switch.mjs");
+  await ensureChatGPTProfileAccounts();
+  const profile = selectedChatGPTUsageProfile();
+  const usage = profile.home
+    ? await readCodexAccountUsage({ codexHome: profile.home })
+    : await readCodexAccountUsage();
+  process.stdout.write(`${JSON.stringify({
+    ...usage,
+    accountSelection: profile.selection,
+    accountEmail: profile.email || null,
+    profilePending: profile.pending === true,
+  }, null, 2)}\n`);
 }
 
 async function printProviderUsage() {
@@ -3143,6 +3163,176 @@ async function handleChatGptSession(action) {
   );
 }
 
+function decodeChatGPTLoginLease(value) {
+  if (typeof value !== "string" || value.length < 8 || value.length > 2_048 || !/^[A-Za-z0-9_-]+$/.test(value)) {
+    throw new Error("The ChatGPT login completion lease is invalid.");
+  }
+  let lease;
+  try {
+    lease = JSON.parse(Buffer.from(value, "base64url").toString("utf8"));
+  } catch (error) {
+    throw new Error("The ChatGPT login completion lease is invalid.", { cause: error });
+  }
+  if (
+    !lease
+    || typeof lease !== "object"
+    || Array.isArray(lease)
+    || ![2, 3].includes(lease.version)
+    || typeof lease.leaseId !== "string"
+    || !/^[0-9a-f-]{36}$/i.test(lease.leaseId)
+    || !Number.isSafeInteger(lease.pid)
+    || lease.pid < 1
+    || typeof lease.processIdentity !== "string"
+    || !lease.processIdentity
+    || !Number.isFinite(lease.createdAt)
+    || (lease.version === 3 && !["reserved", "running"].includes(lease.phase))
+    || (lease.version === 3 && lease.authDigestBefore !== null && !/^[0-9a-f]{64}$/.test(lease.authDigestBefore))
+  ) {
+    throw new Error("The ChatGPT login completion lease is invalid.");
+  }
+  return lease;
+}
+
+async function handleChatGptAccountSwitch(action, value, completionLease) {
+  // Keep this boundary ahead of both dynamic imports. The Control Center polls
+  // `status` automatically, and --no-discovery promises that even a background
+  // read cannot inspect auth files, create first-run pool state, or migrate the
+  // current Codex login into an isolated account home.
+  if (discoveryDisabled()) {
+    throw new Error(
+      "ChatGPT account profiles are unavailable while credential discovery is disabled.",
+    );
+  }
+  const {
+    chatGPTSubscriptionAccountHome,
+    chatGPTSubscriptionAccountPoolSnapshot,
+    createChatGPTSubscriptionAccount,
+    readChatGPTAccountPoolState,
+    refreshBoundedChatGPTSubscriptionAccounts,
+    withChatGPTAccountPoolLock,
+  } = await import("./chatgpt-account-pool.mjs");
+  const {
+    chatGPTProfileSwitchSnapshot,
+    discardCompletedChatGPTProfileLogin,
+    ensureChatGPTProfileAccounts,
+    finalizeChatGPTProfileLogin,
+    recoverCompletedChatGPTProfileLogins,
+    reconcileChatGPTProfileSwitch,
+    reconcileChatGPTProfileSwitchIfReady,
+    removeChatGPTProfileAccount,
+    selectChatGPTProfileAccount,
+  } = await import("./chatgpt-profile-switch.mjs");
+
+  if (!action || action === "status") {
+    // This is the single production reconcile poll, owned by the Control
+    // Center account view. It is read-only for settled state; after Codex has
+    // closed it completes an explicit pending handoff or durable crash phase.
+    const recovery = await recoverCompletedChatGPTProfileLogins();
+    await reconcileChatGPTProfileSwitchIfReady();
+    await ensureChatGPTProfileAccounts();
+    const beforeRefresh = chatGPTSubscriptionAccountPoolSnapshot();
+    await refreshBoundedChatGPTSubscriptionAccounts(beforeRefresh);
+    const safe = chatGPTSubscriptionAccountPoolSnapshot();
+    const profile = chatGPTProfileSwitchSnapshot();
+    const loginAttempts = {};
+    for (const failure of recovery.failures) {
+      const account = safe.accounts?.[failure.accountId];
+      if (!account) continue;
+      account.subscription = {
+        ...(account.subscription || {}),
+        loginInProgress: false,
+        attentionRequired: true,
+      };
+      const removable = profile.active !== failure.accountId && profile.desired !== failure.accountId;
+      loginAttempts[failure.accountId] = {
+        status: "failed",
+        retryable: failure.code !== "finalization-failed",
+        removable,
+        error: failure.code === "identity-conflict"
+          ? removable
+            ? "This saved login conflicts with another account identity. Retry sign-in with the intended account or remove it."
+            : "This active login conflicts with its saved account identity. Retry sign-in with the intended account; switch away before removing it."
+          : failure.code === "invalid-auth"
+            ? removable
+              ? "The saved login is incomplete or invalid. Retry sign-in or remove this account."
+              : "The active saved login is incomplete or invalid. Retry sign-in; switch away before removing it."
+            : "The saved login could not be finalized safely. Resolve the profile error, then refresh.",
+      };
+    }
+    for (const [accountId, account] of Object.entries(safe.accounts || {})) {
+      if (account.subscription?.attentionRequired !== true || loginAttempts[accountId]) continue;
+      loginAttempts[accountId] = {
+        status: "failed",
+        retryable: false,
+        removable: false,
+        error: "A previous sign-in may still be running. Verify that no Codex login process remains before manually clearing its saved ownership.",
+      };
+    }
+    const { attachBoundedChatGPTAccountUsage } = await import("./codex-account-usage.mjs");
+    await attachBoundedChatGPTAccountUsage(safe, {
+      accountHome: (accountId) => chatGPTSubscriptionAccountHome(accountId),
+    });
+    process.stdout.write(`${JSON.stringify({
+      ...safe,
+      ...(Object.keys(loginAttempts).length ? { loginAttempts } : {}),
+      profile,
+      sessions: { count: Object.keys(safe.sessions || {}).length },
+    })}\n`);
+    return;
+  }
+  if (action === "add") {
+    const account = await withChatGPTAccountPoolLock(
+      () => createChatGPTSubscriptionAccount({ label: value }),
+    );
+    process.stdout.write(`${JSON.stringify({ account, loginRequired: true })}\n`);
+    return;
+  }
+  if (action === "home") {
+    const state = readChatGPTAccountPoolState();
+    if (!value || !/^acct_[A-Za-z0-9_-]{8,80}$/.test(value)) throw new Error("Account id is invalid.");
+    if (!state.accounts[value]) throw new Error("Account id is not registered.");
+    process.stdout.write(`${JSON.stringify({ accountId: value, home: chatGPTSubscriptionAccountHome(value) })}\n`);
+    return;
+  }
+  if (action === "login-finalize") {
+    if (!value || !/^acct_[A-Za-z0-9_-]{8,80}$/.test(value)) throw new Error("Account id is invalid.");
+    process.stdout.write(`${JSON.stringify(await finalizeChatGPTProfileLogin(value, {
+      expectedLoginLease: decodeChatGPTLoginLease(completionLease),
+    }))}\n`);
+    return;
+  }
+  if (action === "login-reset") {
+    if (!value || !/^acct_[A-Za-z0-9_-]{8,80}$/.test(value)) throw new Error("Account id is invalid.");
+    process.stdout.write(`${JSON.stringify({ reset: await discardCompletedChatGPTProfileLogin(value) })}\n`);
+    return;
+  }
+  if (action === "remove") {
+    const result = await removeChatGPTProfileAccount(value);
+    process.stdout.write(`${JSON.stringify(result.removed)}\n`);
+    return;
+  }
+  if (action === "select") {
+    const selection = String(value || "").trim();
+    if (!/^acct_[A-Za-z0-9_-]{8,80}$/.test(selection)) {
+      throw new Error("Select a registered ChatGPT account id.");
+    }
+    const { pool, profile } = await selectChatGPTProfileAccount(selection);
+    process.stdout.write(`${JSON.stringify({ ...pool, profile })}\n`);
+    return;
+  }
+  if (action === "profile") {
+    if (value === "reconcile") {
+      process.stdout.write(`${JSON.stringify(await reconcileChatGPTProfileSwitch())}\n`);
+      return;
+    }
+    if (!value || value === "status") {
+      process.stdout.write(`${JSON.stringify(chatGPTProfileSwitchSnapshot())}\n`);
+      return;
+    }
+  }
+  throw new Error("Usage: control chatgpt-account-pool status|add [label]|home <acct_id>|login-finalize <acct_id> <lease>|remove <acct_id>|select <acct_id>|profile status|profile reconcile");
+}
+
 // The public `/health` leaf intentionally contains only the router summary and
 // a closed set of degraded dependency names. Desktop surfaces need the richer
 // local service view, but should not be handed the forwarders' credential
@@ -3246,6 +3436,8 @@ if (args.includes("--probe")) {
 } else if (args[0] === "chatgpt-session") {
   if (args.length > 2) throw new Error("Usage: control chatgpt-session status|enable|disable");
   await handleChatGptSession(args[1]);
+} else if (args[0] === "chatgpt-account-pool") {
+  await handleChatGptAccountSwitch(args[1], args[2], args[3]);
 } else if (args[0] === "health") {
   await printHealth();
 } else if (args[0] === "maintenance") {

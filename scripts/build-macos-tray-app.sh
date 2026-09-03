@@ -64,10 +64,13 @@ else
     *) printf 'Unsupported macOS architecture: %s\n' "$(uname -m)" >&2; exit 1 ;;
   esac
 fi
-npm ci --prefix "$control_center_dir" 1>&2
-npm run check --prefix "$control_center_dir" 1>&2
-npm test --prefix "$control_center_dir" 1>&2
-npm run build --prefix "$control_center_dir" 1>&2
+(
+  cd "$control_center_dir"
+  npm ci 1>&2
+  npm run check 1>&2
+  npm test 1>&2
+  npm run build 1>&2
+)
 electron_output=$(mktemp -d "${TMPDIR:-/tmp}/model-router-control-center.XXXXXX")
 cleanup_electron_output() {
   rm -rf "$electron_output"

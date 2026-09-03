@@ -9,6 +9,10 @@ import {
   normalizeSupportedEndpoints,
   providerModelEndpoint,
 } from "./openai-endpoint-policy.mjs";
+import {
+  curatedModelIsFree,
+  curatedModelToolSchemaRecursion,
+} from "./opencode-curation.mjs";
 import { instructionOverlayExists } from "./instruction-overlays.mjs";
 import { SOURCE_ROOT } from "./paths.mjs";
 import { officialModelDisplayName, readUserModels } from "./user-models.mjs";
@@ -566,9 +570,27 @@ function normalizedModel(model, provider, { curated = false } = {}) {
   const officialDisplayName = curated
     ? officialModelDisplayName(model.provider, model.upstreamModel)
     : undefined;
-  const presented = officialDisplayName && model.displayName !== officialDisplayName
+  // A documented free tier is applied for the same reason the name is: an entry
+  // curated before the tag existed carries neither, and re-curating is not
+  // something an installed machine should have to do to be told the price.
+  const documentedFree = curated
+    ? curatedModelIsFree(model.provider, model.upstreamModel)
+    : undefined;
+  const renamed = officialDisplayName && model.displayName !== officialDisplayName
     ? { ...model, displayName: officialDisplayName }
     : model;
+  const priced = documentedFree === true && renamed.isFree !== true
+    ? { ...renamed, isFree: true }
+    : renamed;
+  // Same rule again, and this one costs turns rather than clarity: without it
+  // an entry curated before the upstream's limitation was documented keeps
+  // sending cycles that come back as a 400 naming nothing.
+  const documentedRecursion = curated
+    ? curatedModelToolSchemaRecursion(model.provider, model.upstreamModel)
+    : undefined;
+  const presented = documentedRecursion && !priced.toolSchemaRecursion
+    ? { ...priced, toolSchemaRecursion: documentedRecursion }
+    : priced;
   if (!provider?.perModelEndpoint) return Object.freeze(presented);
   return Object.freeze({
     ...presented,
@@ -697,6 +719,12 @@ function modelProblem(model, providers, slugs, gatewayModels) {
     return `model ${model.slug} has an invalid supportsParallelToolCalls`;
   }
   if (
+    model.supportsSearchHistory !== undefined &&
+    typeof model.supportsSearchHistory !== "boolean"
+  ) {
+    return `model ${model.slug} has an invalid supportsSearchHistory`;
+  }
+  if (
     model.experimentalSupportedTools !== undefined &&
     (!Array.isArray(model.experimentalSupportedTools) ||
       model.experimentalSupportedTools.some(
@@ -718,6 +746,18 @@ function modelProblem(model, providers, slugs, gatewayModels) {
   // never needs it, so only false is accepted.
   if (model.visionBridge !== undefined && model.visionBridge !== false) {
     return `model ${model.slug} may only set visionBridge to false`;
+  }
+  // An upstream that refuses a tool schema whose `$ref`s cycle needs the cycle
+  // broken before dispatch. This is a property of the upstream, not of the
+  // model's abilities, and it is deliberately separate from `requestProfile`:
+  // that field holds one value, and every route needing this so far also needs
+  // a profile of its own. `flatten` is the only verb, because rejecting the
+  // turn is what already happens without it.
+  if (
+    model.toolSchemaRecursion !== undefined &&
+    model.toolSchemaRecursion !== "flatten"
+  ) {
+    return `model ${model.slug} may only set toolSchemaRecursion to "flatten"`;
   }
   if (model.isFree !== undefined && typeof model.isFree !== "boolean") {
     return `model ${model.slug} has an invalid isFree flag`;

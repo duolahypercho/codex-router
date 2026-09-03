@@ -52,6 +52,16 @@ test("describes C as a tool-call request without claiming execution started", ()
   assert.doesNotMatch(COMPACTION_PROMPT, /tool was attempted/u);
 });
 
+test("compaction prompt forbids copying example strings into objective", () => {
+  // Muse Spark 1.3 copied the old example objective "short navigation only"
+  // verbatim and failed the live compatibility probe; placeholders must stay
+  // visibly non-copyable and the prompt must say so.
+  assert.match(COMPACTION_PROMPT, /Angle-bracket placeholders above are shape only/u);
+  assert.match(COMPACTION_PROMPT, /Never copy them into the JSON/u);
+  assert.match(COMPACTION_PROMPT, /preserve an opaque token in the objective/u);
+  assert.doesNotMatch(COMPACTION_PROMPT, /"objective": "short navigation only"/u);
+});
+
 test("records process failure without inventing an SSH cause or external side effect", () => {
   const prepared = prepareCompaction([
     message("user", "Check the production SSH path."),

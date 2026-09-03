@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   processCommandLine,
   processStartIdentity,
+  processStartIdentityProbe,
 } from "../src/process-identity.mjs";
 
 test("Windows process identity probes are bounded", () => {
@@ -49,4 +50,21 @@ test("non-Windows process probes keep their existing spawn options", () => {
     "Mon Aug 18 00:00:00 2026 /usr/bin/node",
   );
   assert.equal(Object.hasOwn(options, "timeout"), false);
+});
+
+test("process identity probes distinguish an absent process from an unknown probe failure", () => {
+  assert.deepEqual(
+    processStartIdentityProbe(4242, {
+      platform: "linux",
+      spawn: () => ({ status: 1, stdout: "" }),
+    }),
+    { state: "absent" },
+  );
+  assert.deepEqual(
+    processStartIdentityProbe(4242, {
+      platform: "linux",
+      spawn: () => ({ status: null, stdout: "", error: new Error("probe failed") }),
+    }),
+    { state: "unknown" },
+  );
 });

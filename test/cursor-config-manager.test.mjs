@@ -217,3 +217,51 @@ test("Cursor publication is additive, private, reversible, and records every rou
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("Cursor publication switches Cursor-managed composer models to a BYOK-safe alias", () => {
+  mkdirSync(path.dirname(dbPath), { recursive: true });
+  mkdirSync(stateDir, { recursive: true });
+  mkdirSync(path.dirname(launcherPath), { recursive: true });
+  writeFileSync(path.join(stateDir, "caller-secret"), `${CALLER}\n`, { mode: 0o600 });
+  writeFileSync(path.join(stateDir, "cursor-public-secret"), `${PUBLIC}\n`, { mode: 0o600 });
+  const db = new DatabaseSync(dbPath);
+  db.exec("CREATE TABLE ItemTable (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB)");
+  db.prepare("INSERT INTO ItemTable(key, value) VALUES(?, ?)").run(APPLICATION_STATE_KEY, JSON.stringify({
+    useOpenAIKey: false,
+    openAIBaseUrl: "",
+    aiSettings: {
+      userAddedModels: [],
+      modelOverrideEnabled: [],
+      modelOverrideDisabled: [],
+      modelConfig: {
+        composer: {
+          modelName: "default",
+          selectedModels: [{ modelId: "default", parameters: [] }],
+        },
+      },
+    },
+  }));
+  db.close();
+
+  try {
+    const result = publishCursorIntegration({
+      origin: "https://cursor.example",
+      assertStopped: () => {},
+      routedModels: () => ({
+        engine: "test",
+        models: [
+          { slug: "provider/one", defaultEffort: "high", reasoningLevels: [{ effort: "low" }, { effort: "high" }] },
+        ],
+      }),
+    });
+    const published = readApplicationState();
+    const expected = cursorModelId("provider/one", "high");
+    assert.equal(result.aliases.includes(expected), true);
+    assert.equal(published.aiSettings.modelConfig.composer.modelName, expected);
+    assert.deepEqual(published.aiSettings.modelConfig.composer.selectedModels, [
+      { modelId: expected, parameters: [] },
+    ]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

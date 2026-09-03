@@ -242,7 +242,11 @@ function describeFailure({
     };
   }
   if (status === 429) {
-    const hint = Number.isFinite(retryAfterSeconds)
+    // A named window is quoted; anything else asks for patience. `Retry-After:
+    // 0` is a real answer ("now") but not a useful sentence -- "retry in about
+    // 0s" reads as a rounding bug, and a provider that just refused this turn
+    // is not owed an instant second one.
+    const hint = Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0
       ? `Retry in about ${retryAfterSeconds}s.`
       : "Wait a bit and retry.";
     return {

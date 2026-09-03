@@ -55,14 +55,19 @@ foreach ($CommandName in @("node", "npm")) {
   }
 }
 
-& npm ci --prefix $App
-if ($LASTEXITCODE -ne 0) { throw "Control Center npm dependency installation failed." }
-& npm run check --prefix $App
-if ($LASTEXITCODE -ne 0) { throw "Control Center checks failed." }
-& npm test --prefix $App
-if ($LASTEXITCODE -ne 0) { throw "Control Center tests failed." }
-& npm run build --prefix $App
-if ($LASTEXITCODE -ne 0) { throw "Control Center renderer build failed." }
+Push-Location $App
+try {
+  & npm ci
+  if ($LASTEXITCODE -ne 0) { throw "Control Center npm dependency installation failed." }
+  & npm run check
+  if ($LASTEXITCODE -ne 0) { throw "Control Center checks failed." }
+  & npm test
+  if ($LASTEXITCODE -ne 0) { throw "Control Center tests failed." }
+  & npm run build
+  if ($LASTEXITCODE -ne 0) { throw "Control Center renderer build failed." }
+} finally {
+  Pop-Location
+}
 
 try {
   New-Item -ItemType Directory -Path $StagingRoot | Out-Null

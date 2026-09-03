@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "slug": "openrouter/gemini-3.8-flash",
+      "gatewayModel": "openrouter-gemini-3-8-flash",
+      "upstreamModel": "google/gemini-3.8-flash",
+      "provider": "openrouter",
+      "listed": true,
+      "displayName": "Gemini 3.8 Flash (OpenRouter)",
+      "description": "Google Gemini 3.8 Flash through OpenRouter.",
+      "priority": 75,
+      "defaultEffort": "medium",
+      "reasoningLevels": [
+        {
+          "effort": "low",
+          "description": "Faster reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced reasoning"
+        },
+        {
+          "effort": "high",
+          "description": "Deep reasoning"
+        }
+      ],
+      "contextWindow": 1048576,
+      "autoCompact": 943000,
+      "inputModalities": [
+        "text"
+      ],
+      "compHash": "openrouter-gemini-3-8-flash-v1"
+    }
+  ]
+}

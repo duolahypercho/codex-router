@@ -119,35 +119,43 @@ user.
    For Antigravity OAuth, never read or reuse the official `agy`/IDE credential
    store and never use the vendor's OAuth client or identity. Require one
    coherent operator-owned Google OAuth client ID and secret pair: the operator
-   must create a Google OAuth **Desktop app** client they own. Run
-   `bin/model-router codex providers login antigravity-oauth`; the router first
-   binds `127.0.0.1` on an OS-assigned port, then opens a loopback-only setup
-   page where the client ID and matching secret are submitted without entering
-   shell history. Open only the local URL through the OS browser command and
-   redirect to Google inside that listener, so neither client value reaches
-   argv or terminal logs. The coherent pair and resulting tokens are stored together
-   in the router's owner-only credential file and used for refresh on macOS,
-   Linux, and Windows; they never belong in a service environment. Sign-in does
-   not call the private Antigravity service or enable the route. Run the
-   explicitly quota-consuming `providers probe antigravity-oauth --live --yes`
-   next; add `--provision-project` only when the operator separately authorizes
-   creation of a Google Cloud project. Provisioning still requires a successful,
-   schema-valid bootstrap response that explicitly advertises the selected tier;
-   auth errors, server errors, malformed responses, and missing tiers fail closed.
-   The probe identifies itself truthfully
-   as Codex Router, and only a successful proof makes the provider enableable.
-   The Antigravity forwarder is not spawned or health-gated before that proof,
-   so an unused provider port cannot fail the whole router. A passing probe
-   records a generation-bound `pending_activation` that every configured and
-   publication reader rejects. Startup alone may boot its exact pending proof;
-   only after the whole local stack is healthy does it atomically promote that
-   generation active. A failed restart, an early process death, a credential
-   replacement, or a disconnect leaves it nonpublishable. The probe restarts
-   an installed service through that sequence, and a foreground operator must
-   restart that process before enabling the provider. A v2 proof record with
-   no activation metadata is not grandfathered: it was written by the unsafe
-   pre-readiness path and must pass the explicit live probe again.
-   If Google accepts only an impersonated vendor client, leave it disabled.
+   must create a Google OAuth **Desktop app** client they own. **The Google
+   Cloud project behind that OAuth client must be allowlisted for
+   `cloudcode-pa.googleapis.com`, a private Google API.** Most projects are not
+   allowlisted, and operators cannot enable this API themselves: it requires
+   the producer-side `servicemanagement.services.bind` permission.
+   Run `bin/model-router codex providers login antigravity-oauth`; the router
+   first binds `127.0.0.1` on an OS-assigned port, then opens a loopback-only
+   setup page where the client ID and matching secret are submitted without
+   entering shell history. Open only the local URL through the OS browser
+   command and redirect to Google inside that listener, so neither client value
+   reaches argv or terminal logs. The coherent pair and resulting tokens are
+   stored together in the router's owner-only credential file and used for
+   refresh on macOS, Linux, and Windows; they never belong in a service
+   environment. Sign-in does not call the private Antigravity service or enable
+   the route. Run the explicitly quota-consuming
+   `providers probe antigravity-oauth --live --yes` next; add
+   `--provision-project` only when the operator separately authorizes creation
+   of a Google Cloud project. The live probe will fail with `SERVICE_DISABLED`
+   if the OAuth client's project is not allowlisted. Provisioning still
+   requires a successful, schema-valid bootstrap response that explicitly
+   advertises the selected tier; auth errors, server errors, malformed
+   responses, and missing tiers fail closed. The probe identifies itself
+   truthfully as Codex Router, and only a successful proof makes the provider
+   enableable. The Antigravity forwarder is not spawned or health-gated before
+   that proof, so an unused provider port cannot fail the whole router. A
+   passing probe records a generation-bound `pending_activation` that every
+   configured and publication reader rejects. Startup alone may boot its exact
+   pending proof; only after the whole local stack is healthy does it
+   atomically promote that generation active. A failed restart, an early
+   process death, a credential replacement, or a disconnect leaves it
+   nonpublishable. The probe restarts an installed service through that
+   sequence, and a foreground operator must restart that process before
+   enabling the provider. A v2 proof record with no activation metadata is not
+   grandfathered: it was written by the unsafe pre-readiness path and must pass
+   the explicit live probe again. If Google accepts only an impersonated vendor
+   client, leave it disabled. If the project is not allowlisted, this provider
+   cannot currently be used.
    A key does not mean every account may use the Provider API: the Go plan is
    refused with "Your Go plan doesn't include API access". GOAT, Pro, Max, Team,
    and Provider plans do have API access and meter against their own credits.
@@ -912,7 +920,14 @@ so the unit of evidence is always the slug, never the model name.
 5. Remember that Codex advertises only a small priority-ordered subset of native
    spawn-model overrides. Adjust priority intentionally and keep the desired
    Kimi/Grok/GPT choices in that visible subset; do not crowd them out
-   accidentally when adding a model.
+   accidentally when adding a model. The published catalog carries two
+   numberings for exactly this reason (`publishedPickerPriorities` in
+   `src/catalog.mjs`): a certified v2 route keeps its authored priority so it
+   stays inside that window, while every v1 routed model is published in a
+   band above the highest visible native priority so the picker shows vendor
+   groups instead of interleaving routed entries among native GPT models
+   (issue #544). Only the published entry is renumbered; failover, the vision
+   bridge, and the other clients keep reading the registry value.
 6. Add registry, catalog, routing/request-profile, and failure-path regression
    tests. Run `npm run check` and `npm test`. With explicit quota approval, run
    `./bin/test-model 'provider/model' --live --yes`, reinstall, fully restart

@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "slug": "opencode-go-messages/qwen3.8-flash",
+      "gatewayModel": "opencode-go-messages-qwen3-8-flash",
+      "upstreamModel": "qwen3.8-flash",
+      "provider": "opencode-go-messages",
+      "listed": true,
+      "displayName": "Qwen3.8 Flash (opencode Go)",
+      "description": "Qwen3.8 Flash through the opencode Go subscription using the Messages API.",
+      "priority": 43,
+      "defaultEffort": "high",
+      "reasoningLevels": [
+        {
+          "effort": "high",
+          "description": "Deep reasoning"
+        }
+      ],
+      "contextWindow": 262144,
+      "autoCompact": 235000,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "compHash": "opencode-go-messages-qwen3-8-flash-v3",
+      "requestProfile": "auto-tool-choice"
+    }
+  ]
+}

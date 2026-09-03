@@ -117,6 +117,24 @@ test("a 429 mentions rate limiting and the retry hint", () => {
   assert.equal(payload.error.type, "rate_limit_error");
 });
 
+test("a zero-second window asks for patience rather than quoting 0s", () => {
+  // `Retry-After: 0` parses to a real 0 rather than to "no window", which is
+  // the distinction the header parser exists to keep. It still must not become
+  // "retry in about 0s": that reads as a rounding bug, and it is the same
+  // advice as no window at all.
+  const payload = translateGatewayError({
+    status: 429,
+    bodyText: "",
+    modelName: "Kimi K3",
+    providerName: "kimi",
+    retryAfterSeconds: 0,
+  });
+  assert.equal(
+    payload.error.message,
+    "kimi is rate-limiting Kimi K3. Wait a bit and retry. (HTTP 429)",
+  );
+});
+
 test("a 429 without retry-after still reads cleanly", () => {
   const payload = translateGatewayError({
     status: 429,

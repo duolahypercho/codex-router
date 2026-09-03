@@ -8,9 +8,15 @@
 
 const SHARING_STATES = new Set(["enabled", "disabled"]);
 const SESSION_STATES = new Set(["usable", "expired", "unavailable"]);
+const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function finiteExpiry(value) {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function safeEmail(value) {
+  const email = typeof value === "string" ? value.trim() : "";
+  return email.length <= 320 && EMAIL.test(email) ? email : undefined;
 }
 
 export function projectChatGptSessionStatus(status) {
@@ -24,6 +30,7 @@ export function projectChatGptSessionStatus(status) {
     session: usable ? "usable" : expired ? "expired" : "unavailable",
     present: status?.present === true,
     expiresInHours: finiteExpiry(status?.expiresInHours),
+    ...(safeEmail(status?.email) ? { email: safeEmail(status.email) } : {}),
   };
 }
 
@@ -33,6 +40,7 @@ export function projectChatGptSessionAction(result) {
     session: SESSION_STATES.has(result?.session) ? result.session : "unavailable",
     present: result?.present === true,
     expiresInHours: finiteExpiry(result?.expiresInHours),
+    ...(safeEmail(result?.email) ? { email: safeEmail(result.email) } : {}),
     refreshed: result?.refreshed === true,
   };
 }
