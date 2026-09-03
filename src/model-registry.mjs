@@ -10,6 +10,7 @@ import {
   providerModelEndpoint,
 } from "./openai-endpoint-policy.mjs";
 import {
+  curatedModelInputModalities,
   curatedModelIsFree,
   curatedModelToolSchemaRecursion,
 } from "./opencode-curation.mjs";
@@ -567,9 +568,26 @@ function normalizedModel(model, provider, { curated = false } = {}) {
   const documentedRecursion = curated
     ? curatedModelToolSchemaRecursion(model.provider, model.upstreamModel)
     : undefined;
-  const presented = documentedRecursion && !priced.toolSchemaRecursion
+  const withRecursion = documentedRecursion && !priced.toolSchemaRecursion
     ? { ...priced, toolSchemaRecursion: documentedRecursion }
     : priced;
+  // Image input is another published free-id fact Zen's catalog omits. A
+  // text-only stored default would keep Codex refusing paste forever; widen
+  // only when the documented set includes image and the entry still lacks it,
+  // so an already-correct text+image row stays byte-identical.
+  const documentedModalities = curated
+    ? curatedModelInputModalities(model.provider, model.upstreamModel)
+    : undefined;
+  const modalitiesMissingImage =
+    Array.isArray(documentedModalities) &&
+    documentedModalities.includes("image") &&
+    !(
+      Array.isArray(withRecursion.inputModalities) &&
+      withRecursion.inputModalities.includes("image")
+    );
+  const presented = modalitiesMissingImage
+    ? { ...withRecursion, inputModalities: [...documentedModalities] }
+    : withRecursion;
   if (!provider?.perModelEndpoint) return Object.freeze(presented);
   return Object.freeze({
     ...presented,

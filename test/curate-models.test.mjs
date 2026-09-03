@@ -30,6 +30,7 @@ const {
   curatedModelContextLength,
   curatedModelDescription,
   curatedModelIds,
+  curatedModelInputModalities,
   curatedModelOutputLimit,
   curatedModelProviderId,
   curatedModelReasoningLevels,
@@ -1071,6 +1072,36 @@ test("curated free tagging is undefined for an undocumented id", async () => {
   assert.equal(curatedModelIsFree("opencode-free", "not-a-documented-id"), undefined);
 });
 
+// Zen's catalog never advertises modalities, so free Muse image input has to
+// live in the same documented table as the window and effort ladder. Both
+// free ids publish attachment/image on models.dev; every other free id stays
+// on the conservative text-only default until measured the same way.
+test("OpenCode Free Muse Spark routes document text and image input", () => {
+  for (const id of [
+    "muse-spark-1.2-contributor-free",
+    "muse-spark-1.3-contributor-free",
+  ]) {
+    assert.deepEqual(
+      curatedModelInputModalities("opencode-free", id),
+      ["text", "image"],
+      id,
+    );
+    assert.deepEqual(
+      curatedModelInputModalities("opencode-free-responses", id),
+      ["text", "image"],
+      `${id} responses variant`,
+    );
+  }
+  assert.equal(
+    curatedModelInputModalities("opencode-free", "nemotron-3-ultra-free"),
+    undefined,
+  );
+  assert.equal(
+    curatedModelInputModalities("opencode-free", "not-a-documented-id"),
+    undefined,
+  );
+});
+
 test("scripted OpenCode Free curation stores the documented window and its sourcing", () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), "curate-opencode-free-sourcing-"));
   const file = path.join(dir, "user-models.json");
@@ -1313,7 +1344,11 @@ test("a non-interactive OpenCode Free curation stores documented metadata and pr
     const muse = find(museId);
     assert.equal(muse.provider, "opencode-free-responses");
     assert.equal(muse.requestProfile, "auto-tool-choice");
+    // OpenCode publishes image input for this free id; without the documented
+    // modalities table, scripted curation would keep the text-only default.
+    assert.deepEqual(muse.inputModalities, ["text", "image"]);
     assert.equal(laguna.requestProfile, undefined);
+    assert.deepEqual(laguna.inputModalities, ["text"]);
 
     // Nothing documented: every value stays a conservative default, and the
     // stock description keeps saying exactly that.

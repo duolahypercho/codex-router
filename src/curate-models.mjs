@@ -26,6 +26,7 @@ import {
   curationProviderIds,
   curatedModelContextLength,
   curatedModelDescription,
+  curatedModelInputModalities,
   curatedModelProviderId,
   curatedModelReasoningLevels,
   curatedModelRequestProfile,
@@ -505,6 +506,14 @@ async function main() {
     if (!flagEfforts && documentedEfforts) {
       Object.assign(metadata, parseEfforts(documentedEfforts.join(",")) || {});
     }
+    // Zen's /models catalog publishes ids only, so image input has to come
+    // from the same documented free-id table as the window and effort ladder.
+    // Without this, scripted `--models` curation keeps the generic text-only
+    // default even when OpenCode publishes attachment/image for the id.
+    const documentedModalities = curatedModelInputModalities(providerId, id);
+    if (documentedModalities) {
+      metadata.inputModalities = [...documentedModalities];
+    }
     // A documented window or effort ladder is not a conservative default, and
     // this repository records where such a value came from in the entry's own
     // description rather than only in a source comment. The same note names
@@ -540,8 +549,13 @@ async function main() {
       // replaced it, so that clause no longer matches what is stored.
       if (context !== documented?.contextWindow) omitContextNote = true;
     }
-    if (confirm(`  Does ${id} accept image input?`)) {
+    const defaultImage = (metadata.inputModalities || []).includes("image");
+    if (confirm(`  Does ${id} accept image input?`, defaultImage)) {
       metadata.inputModalities = ["text", "image"];
+    } else if (documentedModalities) {
+      // Documented modalities were pre-filled above; an explicit no has to
+      // clear them or the stored entry would still advertise image paste.
+      metadata.inputModalities = ["text"];
     }
     if (!flagEfforts) {
       const ladder = metadata.reasoningLevels?.map((level) => level.effort).join(",") || "high";

@@ -54,6 +54,11 @@ const OPENCODE_FREE_MODELS = Object.freeze({
     // Meta's Console upstream refuses a tool schema whose $refs cycle,
     // losing the whole turn to a 400 that names no tool.
     toolSchemaRecursion: "flatten",
+    // OpenCode's models.dev record for this exact free id publishes
+    // modalities.input including image (plus video/pdf/audio the picker does
+    // not name) and attachment: true. Without this, scripted curation keeps
+    // the generic text-only default and Codex refuses image paste.
+    inputModalities: Object.freeze(["text", "image"]),
     // The `-free` suffix is the tier, not the model. Carrying it in the label
     // put this route in a family of its own, apart from the paid routes to the
     // same model. `isFree` is where the price distinction belongs; the picker
@@ -79,6 +84,11 @@ const OPENCODE_FREE_MODELS = Object.freeze({
     // Meta's Console upstream refuses a tool schema whose $refs cycle,
     // losing the whole turn to a 400 that names no tool.
     toolSchemaRecursion: "flatten",
+    // OpenCode's models.dev record for this exact free id publishes
+    // modalities.input including image (plus video/pdf/audio the picker does
+    // not name) and attachment: true. Without this, scripted curation keeps
+    // the generic text-only default and Codex refuses image paste.
+    inputModalities: Object.freeze(["text", "image"]),
     displayName: "Muse Spark 1.3 Contributor (OpenCode Free)",
     isFree: true,
     summary:
@@ -436,6 +446,13 @@ export function curatedModelIsFree(providerId, upstreamModel) {
 // something an installed machine should have to do to stop losing turns.
 export function curatedModelToolSchemaRecursion(providerId, upstreamModel) {
   return curatedModelRecord(providerId, upstreamModel)?.toolSchemaRecursion;
+}
+
+// Same overlay rule as the free tag: Zen's id-only /models catalog never
+// advertises modalities, so scripted curation stored text-only until this
+// module carried OpenCode's published image input for the free Muse ids.
+export function curatedModelInputModalities(providerId, upstreamModel) {
+  return curatedModelRecord(providerId, upstreamModel)?.inputModalities;
 }
 
 // The picker text that carries the sourcing for every value this module knows

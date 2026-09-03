@@ -1360,6 +1360,71 @@ test("every Muse Spark route on opencode flattens recursive tool schemas", () =>
   }
 });
 
+test("curated OpenCode Free Muse overlay upgrades text-only image modalities", async () => {
+  // An entry curated before modalities were documented keeps ["text"]. The
+  // registry overlay must widen it on load the same way it applies isFree and
+  // toolSchemaRecursion, or every installed machine would need a re-curate
+  // before Codex accepts image paste.
+  const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const nodePath = (await import("node:path")).default;
+  const { spawnSync } = await import("node:child_process");
+  const dir = mkdtempSync(nodePath.join(tmpdir(), "registry-muse-modalities-"));
+  const userModelsPath = nodePath.join(dir, "user-models.json");
+  const museId = "muse-spark-1.3-contributor-free";
+  writeFileSync(
+    userModelsPath,
+    JSON.stringify({
+      version: 1,
+      models: [
+        {
+          slug: `opencode-free-responses/${museId}`,
+          gatewayModel: "opencode-free-responses-muse-spark-1-3-contributor-free",
+          upstreamModel: museId,
+          provider: "opencode-free-responses",
+          listed: true,
+          displayName: "Muse Spark 1.3 Contributor (OpenCode Free)",
+          description: "text-only curated before modalities were documented",
+          priority: 148,
+          defaultEffort: "high",
+          reasoningLevels: [{ effort: "high", description: "Deep reasoning" }],
+          contextWindow: 1_048_576,
+          autoCompact: 900_000,
+          inputModalities: ["text"],
+          isFree: true,
+          requestProfile: "auto-tool-choice",
+          compHash: "opencode-free-responses-muse-spark-1-3-contributor-free-user-v1",
+        },
+      ],
+    }),
+  );
+  try {
+    const result = spawnSync(
+      process.execPath,
+      [
+        "-e",
+        `
+          const { MODEL_BY_SLUG } = await import('./src/model-registry.mjs');
+          const model = MODEL_BY_SLUG.get('opencode-free-responses/${museId}');
+          if (!model) { console.error('missing'); process.exit(2); }
+          console.log(JSON.stringify(model.inputModalities));
+        `,
+      ],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          MODEL_ROUTER_USER_MODELS: userModelsPath,
+        },
+      },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout.trim()), ["text", "image"]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("Nous Research free models are tagged isFree, Hermes 4 is not", () => {
   // Six free portal routes via :free upstream ids should be tagged isFree: true
   const freeModels = [
