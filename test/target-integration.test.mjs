@@ -195,8 +195,8 @@ test("target publication expands PATH for GUI-spawned client publishers", async 
       return { status: 0, stdout: "", stderr: "" };
     },
   });
-  assert.match(invocation.env.PATH, /\.local\/bin/);
-  assert.match(invocation.env.PATH, /\/usr\/local\/bin/);
+  assert.match(invocation.env.PATH, /\.local[\\/]bin/);
+  assert.match(invocation.env.PATH, /(?:^|[;:])(?:\/usr\/local\/bin|[A-Za-z]:\\Users\\[^;]+\\\.local\\bin)/);
 });
 
 test.after(() => {
