@@ -33,6 +33,7 @@ let mutationLifecycle = {
   whenMutationsIdle: () => Promise.resolve(),
 };
 let deferredQuit;
+let isQuitting = false;
 let applicationReady = false;
 let windowVisible = false;
 let windowContentReady = false;
@@ -188,7 +189,15 @@ function createWindow() {
   createdWindow.on("hide", () => {
     windowVisible = false;
     publishLifecycleState();
-    hideDockForHiddenWindow();
+    // Keep the Dock / Command-Tab tile while Control Center is merely hidden.
+    // Retiring it made Cmd+Tab and the Dock look like the app had quit.
+  });
+  createdWindow.on("close", (event) => {
+    // Close means hide: the menu-bar host (or an explicit quit) owns process
+    // lifetime. Destroying here removed the app from Dock and Command-Tab.
+    if (isQuitting || createdWindow.isDestroyed()) return;
+    event.preventDefault();
+    createdWindow.hide();
   });
   createdWindow.once("closed", () => {
     if (mainWindow !== createdWindow) return;
@@ -197,7 +206,7 @@ function createWindow() {
     showWhenContentReady = false;
     windowVisible = false;
     publishLifecycleState();
-    hideDockForHiddenWindow();
+    if (isQuitting) hideDockForHiddenWindow();
   });
   const loading = RENDERER.development
     ? createdWindow.loadURL(RENDERER.url)
@@ -211,8 +220,8 @@ function revealWindow() {
   if (mainWindow.isMinimized()) mainWindow.restore();
   // The native host is an LSUIElement and never owns a Dock tile. Let its
   // embedded Control Center represent the product in the Dock and Command-Tab
-  // while the actual application window is visible, then retire that tile
-  // when the window closes so the menu-bar host remains unobtrusive.
+  // for as long as this process is alive, including while the window is hidden,
+  // so switching away and back does not make the app look like it quit.
   showDockForVisibleWindow();
   mainWindow.show();
   mainWindow.focus();
@@ -389,26 +398,32 @@ if (primaryInstance) app.on("second-instance", (_event, commandLine) => {
 });
 
 if (primaryInstance) app.on("before-quit", (event) => {
+  isQuitting = true;
   if (!mutationLifecycle.hasActiveMutations()) return;
   event.preventDefault();
+  isQuitting = false;
   if (!deferredQuit) {
     deferredQuit = mutationLifecycle.whenMutationsIdle().then(() => {
       deferredQuit = undefined;
+      isQuitting = true;
       app.quit();
     });
   }
 });
 
 if (primaryInstance) app.on("will-quit", () => {
+  isQuitting = true;
   applicationReady = false;
   windowVisible = false;
   publishLifecycleState();
+  hideDockForHiddenWindow();
 });
 
 if (primaryInstance) app.on("window-all-closed", () => {
-  // The outer Swift app owns the only macOS tray, so its embedded Electron
-  // child has no useful tray-only lifetime. Windows/Linux (and standalone macOS
-  // development) retain their Electron tray and can reopen the window.
+  // Prefer close-to-hide above. If the window is destroyed anyway, keep the
+  // embedded macOS process (and Windows/Linux tray builds) alive so Dock,
+  // Command-Tab, or the tray can reopen it. Only quit when no recoverable
+  // owner remains.
   if (shouldQuitOnLastWindowClosed({
     platform: process.platform,
     nativeTrayOwnedByHost,

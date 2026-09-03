@@ -569,7 +569,8 @@ test("Electron lifecycle state is durable, queryable, and fail-closed", async ()
 });
 
 test("a windowless desktop process survives only while a real tray owner exists", () => {
-  assert.equal(shouldQuitOnLastWindowClosed({ platform: "darwin", nativeTrayOwnedByHost: true }), true);
+  // Embedded macOS keeps the Electron process so Dock / Command-Tab can return.
+  assert.equal(shouldQuitOnLastWindowClosed({ platform: "darwin", nativeTrayOwnedByHost: true }), false);
   assert.equal(shouldQuitOnLastWindowClosed({ platform: "darwin", nativeTrayOwnedByHost: false, trayAvailable: false }), false);
   assert.equal(shouldQuitOnLastWindowClosed({ platform: "win32", nativeTrayOwnedByHost: false, trayAvailable: true }), false);
   assert.equal(shouldQuitOnLastWindowClosed({ platform: "win32", nativeTrayOwnedByHost: false, trayAvailable: false }), true);
@@ -1095,8 +1096,11 @@ test("electron boundary does not enable node integration or shell argv", async (
   assert.match(main, /app\.dock\?\.setIcon\(appIconPath\(\)\)/);
   assert.match(main, /function showDockForVisibleWindow\(\)[\s\S]*app\.dock\.setIcon\(appIconPath\(\)\)[\s\S]*app\.dock\.show\(\)/);
   assert.match(main, /function hideDockForHiddenWindow\(\)[\s\S]*app\.dock\.hide\(\)/);
-  assert.match(main, /function revealWindow\(\)[\s\S]{0,420}showDockForVisibleWindow\(\)[\s\S]{0,120}mainWindow\.show\(\)/);
-  assert.match(main, /createdWindow\.on\("hide"[\s\S]{0,180}hideDockForHiddenWindow\(\)/);
+  assert.match(main, /function revealWindow\(\)[\s\S]{0,700}showDockForVisibleWindow\(\)[\s\S]{0,120}mainWindow\.show\(\)/);
+  assert.match(main, /createdWindow\.on\("close"[\s\S]{0,400}event\.preventDefault\(\)[\s\S]{0,80}createdWindow\.hide\(\)/);
+  assert.match(main, /let isQuitting = false/);
+  assert.match(main, /app\.on\("will-quit"[\s\S]{0,220}hideDockForHiddenWindow\(\)/);
+  assert.doesNotMatch(main, /createdWindow\.on\("hide"[\s\S]{0,180}hideDockForHiddenWindow\(\)/);
   assert.match(main, /setWindowOpenHandler\(\(\) => \(\{ action: "deny" \}\)\)/);
   assert.match(main, /if \(app\.isPackaged \|\| !requested\)/);
   assert.match(main, /\["127\.0\.0\.1", "localhost", "\[::1\]"\]\.includes\(parsed\.hostname\)/);

@@ -206,8 +206,9 @@ export function shouldQuitOnLastWindowClosed({
   nativeTrayOwnedByHost,
   trayAvailable = true,
 }) {
-  // The embedded macOS child delegates its lifetime to the outer native host.
-  if (platform === "darwin" && nativeTrayOwnedByHost === true) return true;
+  // The embedded macOS child stays alive after the window hides so Dock and
+  // Command-Tab can return to it. The outer Swift host owns process exit.
+  if (platform === "darwin" && nativeTrayOwnedByHost === true) return false;
   // On Windows/Linux a usable Electron tray is what makes a windowless
   // lifetime recoverable. If construction failed (or it was later destroyed),
   // closing the fallback window must not strand an invisible process.
