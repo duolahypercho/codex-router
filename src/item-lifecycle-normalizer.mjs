@@ -1,5 +1,4 @@
 import { Transform } from "node:stream";
-import { StringDecoder } from "node:string_decoder";
 
 // LiteLLM's chat-completions -> Responses bridge (use_chat_completions_api) can
 // emit output items with overlapping lifecycles when one Qwen turn carries both
@@ -18,6 +17,14 @@ import { StringDecoder } from "node:string_decoder";
 // closed in full before the next one begins. Blocks pass through byte-for-byte;
 // only their order changes, and only when the upstream actually interleaves.
 // Clean streams (each item added -> done before the next added) emit unchanged.
+// Invalid UTF-8 frames disable rewriting and relay the original bytes.
+const CRLF_SEP = Buffer.from("\r\n\r\n");
+const LF_SEP = Buffer.from("\n\n");
+
+function fatalUtf8(buffer) {
+  return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(buffer);
+}
+
 function parseBlock(block) {
   // The SSE spec joins repeated `data:` fields with a line feed before dispatch;
   // overwriting them would truncate valid multiline JSON.
@@ -42,9 +49,19 @@ function parseBlock(block) {
 // output item, so any held item events are flushed ahead of them.
 const TERMINAL_TYPES = new Set(["response.completed", "response.done"]);
 
+function findFrameEnd(buffer) {
+  const crlf = buffer.indexOf(CRLF_SEP);
+  const lf = buffer.indexOf(LF_SEP);
+  if (crlf !== -1 && (lf === -1 || crlf <= lf)) {
+    return { index: crlf, separator: CRLF_SEP };
+  }
+  if (lf !== -1) return { index: lf, separator: LF_SEP };
+  return undefined;
+}
+
 export class ItemLifecycleNormalizer extends Transform {
-  #decoder = new StringDecoder("utf8");
-  #buffer = "";
+  #buffer = Buffer.alloc(0);
+  #passthrough = false;
   // Output index of the item currently open in the *emitted* stream (its
   // `output_item.added` was pushed but its `output_item.done` has not), or
   // undefined when no item is open.
@@ -53,14 +70,25 @@ export class ItemLifecycleNormalizer extends Transform {
   // still open. Each group collects the blocks for one output index.
   #queue = [];
 
-  _transform(chunk, _encoding, callback) {
-    this.#buffer += this.#decoder.write(chunk);
+  _transform(chunk, encoding, callback) {
+    const piece = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, encoding);
+    if (this.#passthrough) {
+      this.push(piece);
+      callback();
+      return;
+    }
+    this.#buffer = this.#buffer.length ? Buffer.concat([this.#buffer, piece]) : piece;
     this.#drainBuffer(false);
     callback();
   }
 
   _flush(callback) {
-    this.#buffer += this.#decoder.end();
+    if (this.#passthrough) {
+      if (this.#buffer.length) this.push(this.#buffer);
+      this.#buffer = Buffer.alloc(0);
+      callback();
+      return;
+    }
     this.#drainBuffer(true);
     // Anything still held (an upstream that ended without closing its open item)
     // is emitted rather than dropped.
@@ -68,69 +96,82 @@ export class ItemLifecycleNormalizer extends Transform {
     callback();
   }
 
+  #disable(original) {
+    this.#flushHeld();
+    if (original?.length) this.push(original);
+    if (this.#buffer.length) {
+      this.push(this.#buffer);
+      this.#buffer = Buffer.alloc(0);
+    }
+    this.#passthrough = true;
+  }
+
   #drainBuffer(flush) {
-    while (this.#buffer.length) {
-      const crlf = this.#buffer.indexOf("\r\n\r\n");
-      const lf = this.#buffer.indexOf("\n\n");
-      let index = -1;
-      let separator = "";
-      if (crlf !== -1 && (lf === -1 || crlf <= lf)) {
-        index = crlf;
-        separator = "\r\n\r\n";
-      } else if (lf !== -1) {
-        index = lf;
-        separator = "\n\n";
-      }
-      if (index === -1) {
+    while (this.#buffer.length && !this.#passthrough) {
+      const found = findFrameEnd(this.#buffer);
+      if (!found) {
         if (!flush) return;
-        const block = this.#buffer;
-        this.#buffer = "";
-        this.#handle(block, "");
+        const original = this.#buffer;
+        this.#buffer = Buffer.alloc(0);
+        this.#handleFrame(original, Buffer.alloc(0));
         return;
       }
-      const block = this.#buffer.slice(0, index);
-      this.#buffer = this.#buffer.slice(index + separator.length);
-      this.#handle(block, separator);
+      const block = this.#buffer.subarray(0, found.index);
+      const separator = found.separator;
+      const original = this.#buffer.subarray(0, found.index + separator.length);
+      this.#buffer = this.#buffer.subarray(found.index + separator.length);
+      this.#handleFrame(original, separator, block);
     }
   }
 
-  #emit(text, separator) {
-    this.push(Buffer.from(`${text}${separator}`));
+  #handleFrame(original, separator, block = original) {
+    let text;
+    try {
+      text = fatalUtf8(block);
+    } catch {
+      this.#disable(original);
+      return;
+    }
+    this.#handle(text, separator, original, parseBlock(text));
   }
 
-  #handle(text, separator, parsed = parseBlock(text)) {
+  #emitOriginal(original) {
+    this.push(Buffer.from(original));
+  }
+
+  #handle(text, separator, original, parsed = parseBlock(text)) {
     // Comments, heartbeats, and unparseable blocks are not item-scoped; relay
     // them in place.
     if (!parsed) {
-      this.#emit(text, separator);
+      this.#emitOriginal(original);
       return;
     }
     if (parsed.terminal) {
       this.#flushHeld();
-      this.#emit(text, separator);
+      this.#emitOriginal(original);
       return;
     }
     const event = parsed.event;
     const type = event?.type;
     if (TERMINAL_TYPES.has(type)) {
       this.#flushHeld();
-      this.#emit(text, separator);
+      this.#emitOriginal(original);
       return;
     }
     const idx = Number.isInteger(event?.output_index) ? event.output_index : undefined;
     // Stream-level events (`response.created`, `response.in_progress`, error
     // frames) carry no output index and are relayed in order.
     if (idx === undefined) {
-      this.#emit(text, separator);
+      this.#emitOriginal(original);
       return;
     }
     if (this.#openIndex === undefined) {
-      this.#emit(text, separator);
+      this.#emitOriginal(original);
       if (type === "response.output_item.added") this.#openIndex = idx;
       return;
     }
     if (idx === this.#openIndex) {
-      this.#emit(text, separator);
+      this.#emitOriginal(original);
       if (type === "response.output_item.done") {
         this.#openIndex = undefined;
         this.#drainHeld();
@@ -139,7 +180,7 @@ export class ItemLifecycleNormalizer extends Transform {
     }
     // An event for a different item while one is still open: hold it until the
     // open item closes, preserving arrival order within its own index.
-    this.#hold(idx, { text, separator, type, index: idx });
+    this.#hold(idx, { original, type, index: idx });
   }
 
   #hold(idx, block) {
@@ -159,7 +200,7 @@ export class ItemLifecycleNormalizer extends Transform {
     while (this.#openIndex === undefined && this.#queue.length) {
       const group = this.#queue.shift();
       for (const block of group.blocks) {
-        this.#emit(block.text, block.separator);
+        this.#emitOriginal(block.original);
         if (block.type === "response.output_item.added") this.#openIndex = block.index;
         else if (block.type === "response.output_item.done") this.#openIndex = undefined;
       }
@@ -171,7 +212,7 @@ export class ItemLifecycleNormalizer extends Transform {
   // terminal event and at end of stream so no item events are lost.
   #flushHeld() {
     for (const group of this.#queue) {
-      for (const block of group.blocks) this.#emit(block.text, block.separator);
+      for (const block of group.blocks) this.#emitOriginal(block.original);
     }
     this.#queue = [];
     this.#openIndex = undefined;

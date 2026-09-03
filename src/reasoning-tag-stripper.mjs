@@ -1,5 +1,4 @@
 import { Transform } from "node:stream";
-import { StringDecoder } from "node:string_decoder";
 
 // Qwen (and other reasoning models bridged through LiteLLM's chat-completions
 // -> Responses path) sometimes emit their chain-of-thought inline in the
@@ -172,22 +171,59 @@ function cleanMessageItem(item) {
   return changed ? { ...item, content } : item;
 }
 
+const CRLF_SEP = Buffer.from("\r\n\r\n");
+const LF_SEP = Buffer.from("\n\n");
+
+function fatalUtf8(buffer) {
+  return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(buffer);
+}
+
+function findFrameEnd(buffer) {
+  const crlf = buffer.indexOf(CRLF_SEP);
+  const lf = buffer.indexOf(LF_SEP);
+  if (crlf !== -1 && (lf === -1 || crlf <= lf)) {
+    return { index: crlf, separator: CRLF_SEP };
+  }
+  if (lf !== -1) return { index: lf, separator: LF_SEP };
+  return undefined;
+}
+
 export class ReasoningTagStripper extends Transform {
-  #decoder = new StringDecoder("utf8");
-  #buffer = "";
+  #buffer = Buffer.alloc(0);
+  #passthrough = false;
   // One streaming stripper per message output index.
   #streams = new Map();
 
-  _transform(chunk, _encoding, callback) {
-    this.#buffer += this.#decoder.write(chunk);
+  _transform(chunk, encoding, callback) {
+    const piece = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, encoding);
+    if (this.#passthrough) {
+      this.push(piece);
+      callback();
+      return;
+    }
+    this.#buffer = this.#buffer.length ? Buffer.concat([this.#buffer, piece]) : piece;
     this.#emitBlocks(false);
     callback();
   }
 
   _flush(callback) {
-    this.#buffer += this.#decoder.end();
+    if (this.#passthrough) {
+      if (this.#buffer.length) this.push(this.#buffer);
+      this.#buffer = Buffer.alloc(0);
+      callback();
+      return;
+    }
     this.#emitBlocks(true);
     callback();
+  }
+
+  #disable(original) {
+    if (original?.length) this.push(original);
+    if (this.#buffer.length) {
+      this.push(this.#buffer);
+      this.#buffer = Buffer.alloc(0);
+    }
+    this.#passthrough = true;
   }
 
   #streamFor(index) {
@@ -201,31 +237,38 @@ export class ReasoningTagStripper extends Transform {
   }
 
   #emitBlocks(flush) {
-    while (this.#buffer.length) {
-      const crlf = this.#buffer.indexOf("\r\n\r\n");
-      const lf = this.#buffer.indexOf("\n\n");
-      let index = -1;
-      let separator = "";
-      if (crlf !== -1 && (lf === -1 || crlf <= lf)) {
-        index = crlf;
-        separator = "\r\n\r\n";
-      } else if (lf !== -1) {
-        index = lf;
-        separator = "\n\n";
-      }
-      if (index === -1) {
+    while (this.#buffer.length && !this.#passthrough) {
+      const found = findFrameEnd(this.#buffer);
+      if (!found) {
         if (!flush) return;
-        const block = this.#buffer;
-        this.#buffer = "";
-        const piece = this.#rewrite(block);
-        if (piece !== null) this.push(Buffer.from(piece));
+        const original = this.#buffer;
+        this.#buffer = Buffer.alloc(0);
+        this.#emitFrame(original, Buffer.alloc(0));
         return;
       }
-      const block = this.#buffer.slice(0, index);
-      this.#buffer = this.#buffer.slice(index + separator.length);
-      const piece = this.#rewrite(block);
-      if (piece !== null) this.push(Buffer.from(`${piece}${separator}`));
+      const block = this.#buffer.subarray(0, found.index);
+      const separator = found.separator;
+      const original = this.#buffer.subarray(0, found.index + separator.length);
+      this.#buffer = this.#buffer.subarray(found.index + separator.length);
+      this.#emitFrame(original, separator, block);
     }
+  }
+
+  #emitFrame(original, separator, block = original) {
+    let text;
+    try {
+      text = fatalUtf8(block);
+    } catch {
+      this.#disable(original);
+      return;
+    }
+    const piece = this.#rewrite(text);
+    if (piece === null) return;
+    if (piece === text) {
+      this.push(Buffer.from(original));
+      return;
+    }
+    this.push(Buffer.concat([Buffer.from(piece), separator]));
   }
 
   // Returns the (possibly rewritten) block text, or null to drop it (an
