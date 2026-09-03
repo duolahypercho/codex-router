@@ -214,12 +214,15 @@ export function readCodexAccountUsage({
         return;
       }
       if (message.id !== 2 && message.id !== 3) return;
+      // Both account reads are optional for the Control Center. A ChatGPT login
+      // can answer one and refuse the other (API-key sessions, transient
+      // app-server races). Hard-failing rateLimits used to paint the whole
+      // Models page with a stack trace while the snapshot itself was fine.
       if (message.error) {
-        if (message.id === 2) {
-          finish(new Error("Codex account limits are unavailable for this login."));
-          return;
-        }
-        responses.set(3, { summary: {}, dailyUsageBuckets: [] });
+        responses.set(
+          message.id,
+          message.id === 2 ? { rateLimits: {} } : { summary: {}, dailyUsageBuckets: [] },
+        );
       } else {
         responses.set(message.id, message.result);
       }
