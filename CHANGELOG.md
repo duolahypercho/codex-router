@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- **Routed turns that mix assistant text and a tool call no longer render
+  twice.** LiteLLM's chat-completions-to-Responses bridge
+  (`use_chat_completions_api`) could leave the assistant `message` item open
+  across a `function_call` item and emit its `output_item.done` late, so Codex
+  committed the streamed text once while it was live and again when the delayed
+  close arrived — the same sentence appeared twice, with the tool call after it.
+  It surfaced intermittently on qwen-plan turns that both speak and call a tool.
+  A new `ItemLifecycleNormalizer` egress transform (`src/item-lifecycle-normalizer.mjs`),
+  added last in the routed-provider response pipeline, holds events for a
+  newly-opened output item until the currently-open item closes, restoring the
+  Responses contract that every item is `done` before the next
+  `output_item.added`. It reorders only — no event body is added, dropped, or
+  rewritten — and engages only when the upstream actually interleaves; clean
+  streams and native OpenAI streams pass through unchanged.
+
 - **A Grok OAuth outage now terminates streamed Codex turns instead of leaving
   a stale Working badge.** After the local gateway has exhausted its bounded
   retries, a final Grok 5xx on an explicitly streamed Responses request is

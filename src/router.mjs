@@ -56,6 +56,7 @@ import {
   EmptyCompletionTerminalGuard,
   isEmptyCompletionPreludeLimitError,
 } from "./empty-completion-guard.mjs";
+import { itemLifecycleNormalizerTransform } from "./item-lifecycle-normalizer.mjs";
 import {
   ZaiResponsesCompatTransform,
   zaiResponsesCompatTransform,
@@ -4048,6 +4049,16 @@ async function handleResponses(request, response, requestUrl) {
           }),
         );
       }
+      // Restore sequential output-item lifecycles for routed providers, whose
+      // chat-completions -> Responses bridge can leave an assistant `message`
+      // item open across a `function_call` item and close it late, making Codex
+      // render the same turn's text twice. Runs last so it normalizes the final
+      // egress stream after every other rewrite/injection. Native OpenAI streams
+      // (no route) are already well-formed and left untouched.
+      const itemNormalizer = route
+        ? itemLifecycleNormalizerTransform(contentType)
+        : undefined;
+      if (itemNormalizer) transforms.push(itemNormalizer);
       return { transforms, usageObserver, guard };
     };
     const firstPipeline = createResponsePipeline(upstreamContentType);
