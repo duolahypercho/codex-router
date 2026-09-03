@@ -57,6 +57,7 @@ import {
   isEmptyCompletionPreludeLimitError,
 } from "./empty-completion-guard.mjs";
 import { itemLifecycleNormalizerTransform } from "./item-lifecycle-normalizer.mjs";
+import { reasoningTagStripperTransform } from "./reasoning-tag-stripper.mjs";
 import {
   ZaiResponsesCompatTransform,
   zaiResponsesCompatTransform,
@@ -4049,6 +4050,14 @@ async function handleResponses(request, response, requestUrl) {
           }),
         );
       }
+      // Strip inline `<think>...</think>` reasoning that routed providers leak
+      // into the visible answer, when their chat-completions -> Responses bridge
+      // relays the model's chain-of-thought as `output_text` instead of on the
+      // reasoning channel. Runs before the lifecycle normalizer so the reorder
+      // sees already-cleaned message text. Native OpenAI streams (no route) never
+      // carry these tags and are left untouched.
+      const tagStripper = route ? reasoningTagStripperTransform(contentType) : undefined;
+      if (tagStripper) transforms.push(tagStripper);
       // Restore sequential output-item lifecycles for routed providers, whose
       // chat-completions -> Responses bridge can leave an assistant `message`
       // item open across a `function_call` item and close it late, making Codex

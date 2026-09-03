@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- **Routed reasoning models no longer leak `<think>` chains into the visible
+  answer.** Qwen (and other reasoning models bridged through LiteLLM's
+  chat-completions path) sometimes emit their chain-of-thought inline in the
+  content channel as `<think>...</think>` instead of on the reasoning channel,
+  so LiteLLM relays it as `output_text` and the answer renders behind the
+  model's reasoning — or behind a bare `</think>` when the open tag is consumed
+  upstream but the close is not. A new `ReasoningTagStripper` egress transform
+  (`src/reasoning-tag-stripper.mjs`) removes `<think>...</think>` spans and
+  orphan tags from the message text across the streamed `output_text.delta`s
+  (buffering a tag split across deltas), the terminal `output_text.done`, and
+  the stored message item. It covers the reasoning-delimiter family the model
+  varies to (`think`/`thinking`/`reason`/`reasoning`), leaves the structured
+  reasoning channel and every non-message item untouched, and passes clean
+  answers through unchanged. Routed providers only.
+
 - **Routed turns that mix assistant text and a tool call no longer render
   twice.** LiteLLM's chat-completions-to-Responses bridge
   (`use_chat_completions_api`) could leave the assistant `message` item open
