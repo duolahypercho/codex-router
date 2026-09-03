@@ -1097,7 +1097,13 @@ test("electron boundary does not enable node integration or shell argv", async (
   assert.match(main, /function showDockForVisibleWindow\(\)[\s\S]*app\.dock\.setIcon\(appIconPath\(\)\)[\s\S]*app\.dock\.show\(\)/);
   assert.match(main, /function hideDockForHiddenWindow\(\)[\s\S]*app\.dock\.hide\(\)/);
   assert.match(main, /function revealWindow\(\)[\s\S]{0,700}showDockForVisibleWindow\(\)[\s\S]{0,120}mainWindow\.show\(\)/);
-  assert.match(main, /createdWindow\.on\("close"[\s\S]{0,400}event\.preventDefault\(\)[\s\S]{0,80}createdWindow\.hide\(\)/);
+  assert.match(
+    main,
+    /createdWindow\.on\("close"[\s\S]{0,500}nativeTrayOwnedByHost \|\| trayIsAvailable\(\)[\s\S]{0,120}event\.preventDefault\(\)[\s\S]{0,80}createdWindow\.hide\(\)/,
+  );
+  // Suppressing destroy without a recoverable owner strands Win/Linux when
+  // tray construction failed; the gate above is what keeps window-all-closed reachable.
+  assert.match(main, /if \(!\(nativeTrayOwnedByHost \|\| trayIsAvailable\(\)\)\) return;/);
   assert.match(main, /let isQuitting = false/);
   assert.match(main, /app\.on\("will-quit"[\s\S]{0,220}hideDockForHiddenWindow\(\)/);
   assert.doesNotMatch(main, /createdWindow\.on\("hide"[\s\S]{0,180}hideDockForHiddenWindow\(\)/);

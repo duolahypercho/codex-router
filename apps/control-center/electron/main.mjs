@@ -193,9 +193,11 @@ function createWindow() {
     // Retiring it made Cmd+Tab and the Dock look like the app had quit.
   });
   createdWindow.on("close", (event) => {
-    // Close means hide: the menu-bar host (or an explicit quit) owns process
-    // lifetime. Destroying here removed the app from Dock and Command-Tab.
+    // Close means hide only while a recoverable owner can bring the window
+    // back (embedded macOS host or a live tray). Without that owner, destroy
+    // so window-all-closed can quit instead of stranding an invisible process.
     if (isQuitting || createdWindow.isDestroyed()) return;
+    if (!(nativeTrayOwnedByHost || trayIsAvailable())) return;
     event.preventDefault();
     createdWindow.hide();
   });
