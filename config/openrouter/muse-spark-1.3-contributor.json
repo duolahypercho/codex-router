@@ -10,7 +10,7 @@
       "displayName": "Muse Spark 1.3 Contributor (OpenRouter)",
       "description": "Meta Muse Spark 1.3 Contributor through OpenRouter.",
       "priority": 73,
-      "defaultEffort": "medium",
+      "defaultEffort": "high",
       "reasoningLevels": [
         {
           "effort": "minimal",
@@ -40,7 +40,7 @@
         "image"
       ],
       "requestProfile": "auto-tool-choice",
-      "compHash": "openrouter-muse-spark-1-3-contributor-v2"
+      "compHash": "openrouter-muse-spark-1-3-contributor-v3"
     }
   ]
 }

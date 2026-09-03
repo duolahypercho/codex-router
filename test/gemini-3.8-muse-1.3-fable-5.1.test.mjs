@@ -159,6 +159,29 @@ test("Muse Spark 1.3 reasoning ladders have minimal/low/medium/high/xhigh", () =
   }
 });
 
+test("Muse Spark xhigh is labeled as extra deep, not max, and defaults to high", () => {
+  const museSlugs = [
+    ...MUSE_13_ROUTES.map(([slug]) => slug),
+    ...MUSE_12_ROUTES.map(([slug]) => slug),
+    "meta/muse-spark-1.2",
+    "meta/muse-spark-1.2-contributor",
+    "meta/muse-spark-1.1",
+  ];
+  for (const slug of museSlugs) {
+    const model = MODEL_BY_SLUG.get(slug);
+    assert.ok(model, `${slug} is missing from the registry`);
+    assert.equal(model.defaultEffort, "high", slug);
+    const xhigh = model.reasoningLevels.find((level) => level.effort === "xhigh");
+    assert.ok(xhigh, `${slug} is missing xhigh`);
+    assert.equal(xhigh.description, "Extra deep reasoning", slug);
+    assert.notEqual(xhigh.description, "Maximum reasoning");
+    assert.ok(
+      !model.reasoningLevels.some((level) => level.effort === "max"),
+      `${slug} must not advertise Meta's unreleased max tier yet`,
+    );
+  }
+});
+
 test("Gemini 3.8 Flash reasoning matches provider patterns", () => {
   // Nous has low/medium/high
   const nousModel = MODEL_BY_SLUG.get("nousresearch/gemini-3.8-flash");

@@ -31,7 +31,7 @@
         },
         {
           "effort": "xhigh",
-          "description": "Maximum reasoning"
+          "description": "Extra deep reasoning"
         }
       ],
       "supportsReasoningSummaries": true,
@@ -44,7 +44,7 @@
       ],
       "supportsApplyPatchTool": false,
       "requestProfile": "auto-tool-choice",
-      "compHash": "meta-muse-spark-1-2-v2"
+      "compHash": "meta-muse-spark-1-2-v3"
     }
   ]
 }
