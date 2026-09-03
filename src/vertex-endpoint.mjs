@@ -30,6 +30,41 @@ function alreadyScoped(value) {
   }
 }
 
+const DEFAULT_VERTEX_HOST = "aiplatform.googleapis.com";
+
+function vertexHostForLocation(location) {
+  if (location === "global") return DEFAULT_VERTEX_HOST;
+  if (location === "us" || location === "eu") {
+    return `aiplatform.${location}.rep.googleapis.com`;
+  }
+  return `${location}-aiplatform.googleapis.com`;
+}
+
+// Google uses a different hostname for multi-region Vertex endpoints. Keep
+// the configured location in the resource path, but select the matching host
+// when the registry uses the default global base URL. Explicit base URL
+// overrides and already-scoped URLs are handled by vertexForwardBaseUrl before
+// this helper is called.
+export function vertexEndpointBaseUrl(base, location) {
+  const candidate = normalized(base);
+  let parsed;
+  try {
+    parsed = new URL(candidate);
+  } catch {
+    return candidate;
+  }
+  if (
+    parsed.hostname !== DEFAULT_VERTEX_HOST ||
+    parsed.port ||
+    parsed.pathname !== "/" ||
+    parsed.search ||
+    parsed.hash
+  ) {
+    return candidate;
+  }
+  return normalized(`${parsed.protocol}//${vertexHostForLocation(location)}`);
+}
+
 export function vertexForwardBaseUrl(provider) {
   const resolved = resolveProviderBaseUrl(provider);
   const base = normalized(resolved.baseUrl);
@@ -48,8 +83,9 @@ export function vertexForwardBaseUrl(provider) {
       "Vertex project and location are not configured. Run ./bin/control vertex set PROJECT_ID LOCATION.",
     );
   }
+  const endpointBase = vertexEndpointBaseUrl(base, configuration.location);
   return (
-    base +
+    endpointBase +
     "/v1/projects/" +
     configuration.projectId +
     "/locations/" +

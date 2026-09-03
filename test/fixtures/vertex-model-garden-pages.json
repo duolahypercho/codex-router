@@ -5,7 +5,7 @@
         {
           "publisherModels": [
             {
-              "name": "publishers/anthropic/models/claude-sonnet-5@20250514"
+              "name": "publishers/anthropic/models/claude-sonnet-5"
             },
             {
               "name": "publishers/anthropic/models/claude-not-supported@20260101"
@@ -16,7 +16,7 @@
         {
           "publisherModels": [
             {
-              "name": "publishers/anthropic/models/claude-opus-5@20250201"
+              "name": "publishers/anthropic/models/claude-opus-5"
             }
           ]
         }

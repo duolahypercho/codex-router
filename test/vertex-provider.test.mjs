@@ -37,6 +37,7 @@ const {
   vertexModelGardenUrl,
   vertexPublisherModelId,
 } = await import("../src/vertex-model-discovery.mjs");
+const { vertexEndpointBaseUrl } = await import("../src/vertex-endpoint.mjs");
 const { PROVIDERS } = await import("../src/model-registry.mjs");
 
 test("Vertex adapters cover Anthropic Messages and OpenAI-compatible chat", () => {
@@ -59,10 +60,10 @@ test("Vertex adapters cover Anthropic Messages and OpenAI-compatible chat", () =
   assert.equal(anthropicPayload.anthropic_version, "vertex-2023-10-16");
   assert.equal(
     anthropic.targetPath({
-      model: { upstreamModel: "claude-sonnet-5@20250514" },
+      model: { upstreamModel: "claude-sonnet-5" },
       body: anthropicPayload,
     }),
-    "/publishers/anthropic/models/claude-sonnet-5@20250514:streamRawPredict",
+    "/publishers/anthropic/models/claude-sonnet-5:streamRawPredict",
   );
 
   const openai = vertexAdapterForModel(
@@ -145,14 +146,14 @@ test("Vertex discovery follows all configured Model Garden publishers and filter
 
   assert.deepEqual(result.discovered, [
     "claude-not-supported@20260101",
-    "claude-opus-5@20250201",
-    "claude-sonnet-5@20250514",
+    "claude-opus-5",
+    "claude-sonnet-5",
     "gemini-2.5-flash",
     "gemini-not-supported",
   ]);
   assert.deepEqual(result.supported, [
-    "claude-opus-5@20250201",
-    "claude-sonnet-5@20250514",
+    "claude-opus-5",
+    "claude-sonnet-5",
     "gemini-2.5-flash",
   ]);
   assert.deepEqual(result.addable, result.supported);
@@ -168,11 +169,11 @@ test("Vertex discovery accepts the legacy flat fixture shape with multiple publi
     cache: false,
     fixturePayload: {
       publisherModels: [
-        { name: "publishers/anthropic/models/claude-sonnet-5@20250514" },
+        { name: "publishers/anthropic/models/claude-sonnet-5" },
       ],
     },
   });
-  assert.deepEqual(result.supported, ["claude-sonnet-5@20250514"]);
+  assert.deepEqual(result.supported, ["claude-sonnet-5"]);
 });
 
 test("Vertex URL generation resolves the old publisher placeholder from the support catalog", () => {
@@ -203,6 +204,29 @@ test("Vertex URL generation does not duplicate an already versioned base", () =>
   );
 });
 
+test("Vertex endpoint base selects the hostname for the configured location", () => {
+  assert.equal(
+    vertexEndpointBaseUrl("https://aiplatform.googleapis.com", "global"),
+    "https://aiplatform.googleapis.com",
+  );
+  assert.equal(
+    vertexEndpointBaseUrl("https://aiplatform.googleapis.com", "eu"),
+    "https://aiplatform.eu.rep.googleapis.com",
+  );
+  assert.equal(
+    vertexEndpointBaseUrl("https://aiplatform.googleapis.com", "us"),
+    "https://aiplatform.us.rep.googleapis.com",
+  );
+  assert.equal(
+    vertexEndpointBaseUrl("https://aiplatform.googleapis.com", "europe-west1"),
+    "https://europe-west1-aiplatform.googleapis.com",
+  );
+  assert.equal(
+    vertexEndpointBaseUrl("https://vertex.example", "eu"),
+    "https://vertex.example",
+  );
+});
+
 test("Vertex catalog cache identity includes the configured publisher set", () => {
   const state = mkdtempSync(path.join(os.tmpdir(), "vertex-catalog-cache-test-"));
   const discoveryUrl = new URL("../src/vertex-model-discovery.mjs", import.meta.url).href;
@@ -223,7 +247,7 @@ test("Vertex catalog cache identity includes the configured publisher set", () =
     const fetchImpl = async () => {
       calls += 1;
       const name = calls === 1
-        ? "publishers/anthropic/models/claude-sonnet-5@20250514"
+        ? "publishers/anthropic/models/claude-sonnet-5"
         : "publishers/google/models/gemini-2.5-flash";
       return new Response(JSON.stringify({ publisherModels: [{ name }] }), {
         status: 200,
@@ -266,7 +290,7 @@ test("Vertex catalog cache identity includes the configured publisher set", () =
       },
     ));
     assert.equal(result.calls, 2);
-    assert.deepEqual(result.first, ["claude-sonnet-5@20250514"]);
+    assert.deepEqual(result.first, ["claude-sonnet-5"]);
     assert.deepEqual(result.second, ["gemini-2.5-flash"]);
     assert.equal(result.secondCached, false);
   } finally {
@@ -281,14 +305,14 @@ test("Vertex discovery paginates publisher lists and never uses the generic /mod
     const page = calls.length === 1
       ? {
           publisherModels: [
-            { name: "publishers/anthropic/models/claude-sonnet-5@20250514" },
+            { name: "publishers/anthropic/models/claude-sonnet-5" },
           ],
           nextPageToken: "next-page",
         }
       : calls.length === 2
         ? {
             publisherModels: [
-              { name: "publishers/anthropic/models/claude-opus-5@20250201" },
+            { name: "publishers/anthropic/models/claude-opus-5" },
             ],
           }
         : { publisherModels: [] };
@@ -307,8 +331,8 @@ test("Vertex discovery paginates publisher lists and never uses the generic /mod
   });
 
   assert.deepEqual(result.supported, [
-    "claude-opus-5@20250201",
-    "claude-sonnet-5@20250514",
+    "claude-opus-5",
+    "claude-sonnet-5",
   ]);
   assert.equal(calls.length, 3);
   assert.match(calls[0].url, /\/v1beta1\/publishers\/anthropic\/models\?/);
@@ -548,7 +572,7 @@ test("Vertex forwarder selects protocol adapters, bearer auth, and streaming pat
           {
             slug: "vertex/anthropic-fixture",
             gatewayModel: "vertex-anthropic-fixture",
-            upstreamModel: "claude-sonnet-5@20250514",
+            upstreamModel: "claude-sonnet-5",
             provider: "vertex",
             adapter: "vertex-anthropic-messages",
             vertexPublisher: "anthropic",
@@ -637,8 +661,8 @@ test("Vertex forwarder selects protocol adapters, bearer auth, and streaming pat
     assert.equal(openaiResponse.status, 200, await openaiResponse.text());
 
     assert.deepEqual(requests.map(({ url }) => url), [
-      "/v1/projects/project/locations/location/publishers/anthropic/models/claude-sonnet-5@20250514:rawPredict",
-      "/v1/projects/project/locations/location/publishers/anthropic/models/claude-sonnet-5@20250514:streamRawPredict",
+      "/v1/projects/project/locations/location/publishers/anthropic/models/claude-sonnet-5:rawPredict",
+      "/v1/projects/project/locations/location/publishers/anthropic/models/claude-sonnet-5:streamRawPredict",
       "/v1/projects/project/locations/location/endpoints/openapi/chat/completions",
     ]);
     for (const request of requests) {

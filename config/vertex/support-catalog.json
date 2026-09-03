@@ -2,7 +2,7 @@
   "version": 1,
   "models": [
     {
-      "id": "claude-opus-5@20250201",
+      "id": "claude-opus-5",
       "adapter": "vertex-anthropic-messages",
       "publisher": "anthropic",
       "displayName": "Claude Opus 5 (Vertex AI)",
@@ -17,13 +17,13 @@
           { "effort": "xhigh", "description": "Extended thinking, recommended for coding" },
           { "effort": "max", "description": "Maximum reasoning depth" }
         ],
-        "contextWindow": 1048576,
+        "contextWindow": 1000000,
         "autoCompact": 900000,
         "inputModalities": ["text", "image"]
       }
     },
     {
-      "id": "claude-sonnet-5@20250514",
+      "id": "claude-sonnet-5",
       "adapter": "vertex-anthropic-messages",
       "publisher": "anthropic",
       "displayName": "Claude Sonnet 5 (Vertex AI)",
