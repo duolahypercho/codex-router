@@ -36,10 +36,11 @@
       "contextWindow": 1048576,
       "autoCompact": 943000,
       "inputModalities": [
-        "text"
+        "text",
+        "image"
       ],
       "requestProfile": "auto-tool-choice",
-      "compHash": "nousresearch-muse-spark-1-3-contributor-v1"
+      "compHash": "nousresearch-muse-spark-1-3-contributor-v2"
     }
   ]
 }

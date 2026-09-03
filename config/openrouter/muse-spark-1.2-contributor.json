@@ -2,14 +2,14 @@
   "version": 1,
   "models": [
     {
-      "slug": "openrouter/muse-spark-1.3-contributor",
-      "gatewayModel": "openrouter-muse-spark-1-3-contributor",
-      "upstreamModel": "meta/muse-spark-1.3-contributor",
+      "slug": "openrouter/muse-spark-1.2-contributor",
+      "gatewayModel": "openrouter-muse-spark-1-2-contributor",
+      "upstreamModel": "meta/muse-spark-1.2-contributor",
       "provider": "openrouter",
       "listed": true,
-      "displayName": "Muse Spark 1.3 Contributor (OpenRouter)",
-      "description": "Meta Muse Spark 1.3 Contributor through OpenRouter.",
-      "priority": 73,
+      "displayName": "Muse Spark 1.2 Contributor (OpenRouter)",
+      "description": "Meta Muse Spark 1.2 Contributor through OpenRouter. Meta may use inputs and outputs for training.",
+      "priority": 72,
       "defaultEffort": "medium",
       "reasoningLevels": [
         {
@@ -40,7 +40,7 @@
         "image"
       ],
       "requestProfile": "auto-tool-choice",
-      "compHash": "openrouter-muse-spark-1-3-contributor-v2"
+      "compHash": "openrouter-muse-spark-1-2-contributor-v1"
     }
   ]
 }

@@ -189,6 +189,8 @@ test("provider registry exposes configured API and OAuth model families", () => 
       "openrouter/glm-5.3",
       "openrouter/grok-4.6",
       "openrouter/tencent/hy4-preview",
+      "openrouter/muse-spark-1.2-contributor",
+      "openrouter/muse-spark-1.2",
       "openrouter/muse-spark-1.3-contributor",
       "openrouter/muse-spark-1.3",
       "openrouter/qwen3.8-flash",
@@ -1727,6 +1729,8 @@ test("Muse Spark 1.2 routes normalize forced tool choices model-by-model", () =>
     "meta/muse-spark-1.2-contributor",
     "nousresearch/muse-spark-1.2-contributor",
     "opencode-go-responses/muse-spark-1.2-contributor",
+    "openrouter/muse-spark-1.2",
+    "openrouter/muse-spark-1.2-contributor",
   ]) {
     assert.equal(MODEL_BY_SLUG.get(slug)?.requestProfile, "auto-tool-choice", slug);
   }

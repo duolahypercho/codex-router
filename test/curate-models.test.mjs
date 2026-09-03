@@ -1031,6 +1031,28 @@ test("the Responses variant resolves the same sourcing as its base provider", ()
   );
 });
 
+test("OpenCode Free Muse Spark routes publish stable picker labels", async () => {
+  const { curatedModelDisplayName } = await import("../src/opencode-curation.mjs");
+  const { officialModelDisplayName } = await import("../src/user-models.mjs");
+  for (const [providerId, upstreamId, label] of [
+    [
+      "opencode-free",
+      "muse-spark-1.2-contributor-free",
+      "Muse Spark 1.2 Contributor Free (OpenCode Free)",
+    ],
+    [
+      "opencode-free",
+      "muse-spark-1.3-contributor-free",
+      "Muse Spark 1.3 Contributor Free (OpenCode Free)",
+    ],
+  ]) {
+    assert.equal(curatedModelDisplayName(providerId, upstreamId), label);
+    assert.equal(officialModelDisplayName(providerId, upstreamId), label);
+    assert.equal(curatedModelDisplayName("opencode-free-responses", upstreamId), label);
+    assert.equal(officialModelDisplayName("opencode-free-responses", upstreamId), label);
+  }
+});
+
 test("scripted OpenCode Free curation stores the documented window and its sourcing", () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), "curate-opencode-free-sourcing-"));
   const file = path.join(dir, "user-models.json");
