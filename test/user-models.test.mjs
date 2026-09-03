@@ -48,7 +48,7 @@ test("OpenCode Free Muse Spark curation uses the official picker label", () => {
     priority: 100,
     metadata: { isFree: true },
   });
-  assert.equal(entry.displayName, "Muse Spark 1.3 Contributor Free (OpenCode Free)");
+  assert.equal(entry.displayName, "Muse Spark 1.3 Contributor (OpenCode Free)");
 });
 
 test("curation metadata can set sizing and the effort ladder", () => {

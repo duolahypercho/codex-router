@@ -51,7 +51,12 @@ const OPENCODE_FREE_MODELS = Object.freeze({
     outputLimit: 131_072,
     reasoningLevels: Object.freeze(["minimal", "low", "medium", "high", "xhigh"]),
     requestProfile: "auto-tool-choice",
-    displayName: "Muse Spark 1.2 Contributor Free (OpenCode Free)",
+    // The `-free` suffix is the tier, not the model. Carrying it in the label
+    // put this route in a family of its own, apart from the paid routes to the
+    // same model. `isFree` is where the price distinction belongs; the picker
+    // already renders it as a badge on the route.
+    displayName: "Muse Spark 1.2 Contributor (OpenCode Free)",
+    isFree: true,
     summary:
       "Muse Spark 1.2 Contributor Free through OpenCode Zen's anonymous Responses route.",
     contextNote:
@@ -68,7 +73,8 @@ const OPENCODE_FREE_MODELS = Object.freeze({
     outputLimit: 131_072,
     reasoningLevels: Object.freeze(["minimal", "low", "medium", "high", "xhigh"]),
     requestProfile: "auto-tool-choice",
-    displayName: "Muse Spark 1.3 Contributor Free (OpenCode Free)",
+    displayName: "Muse Spark 1.3 Contributor (OpenCode Free)",
+    isFree: true,
     summary:
       "Muse Spark 1.3 Contributor Free through OpenCode Zen's anonymous Responses route.",
     contextNote:
@@ -409,6 +415,14 @@ export function curatedModelRequestProfile(providerId, upstreamModel) {
 // existing curated rows that still carry the generic "(curated)" fallback.
 export function curatedModelDisplayName(providerId, upstreamModel) {
   return curatedModelRecord(providerId, upstreamModel)?.displayName;
+}
+
+// Whether this module documents the id as a free tier. Read alongside the
+// display name so an entry curated before the tag existed still shows the
+// badge: the price is a fact about the route, not about when it was curated.
+// Undefined rather than false for an undocumented id, so a stored flag stands.
+export function curatedModelIsFree(providerId, upstreamModel) {
+  return curatedModelRecord(providerId, upstreamModel)?.isFree;
 }
 
 // The picker text that carries the sourcing for every value this module knows

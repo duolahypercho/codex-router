@@ -9,6 +9,7 @@ import {
   normalizeSupportedEndpoints,
   providerModelEndpoint,
 } from "./openai-endpoint-policy.mjs";
+import { curatedModelIsFree } from "./opencode-curation.mjs";
 import { instructionOverlayExists } from "./instruction-overlays.mjs";
 import { SOURCE_ROOT } from "./paths.mjs";
 import { officialModelDisplayName, readUserModels } from "./user-models.mjs";
@@ -545,9 +546,18 @@ function normalizedModel(model, provider, { curated = false } = {}) {
   const officialDisplayName = curated
     ? officialModelDisplayName(model.provider, model.upstreamModel)
     : undefined;
-  const presented = officialDisplayName && model.displayName !== officialDisplayName
+  // A documented free tier is applied for the same reason the name is: an entry
+  // curated before the tag existed carries neither, and re-curating is not
+  // something an installed machine should have to do to be told the price.
+  const documentedFree = curated
+    ? curatedModelIsFree(model.provider, model.upstreamModel)
+    : undefined;
+  const renamed = officialDisplayName && model.displayName !== officialDisplayName
     ? { ...model, displayName: officialDisplayName }
     : model;
+  const presented = documentedFree === true && renamed.isFree !== true
+    ? { ...renamed, isFree: true }
+    : renamed;
   if (!provider?.perModelEndpoint) return Object.freeze(presented);
   return Object.freeze({
     ...presented,
