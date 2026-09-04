@@ -254,6 +254,7 @@ const TRAY_PLATFORMS = {
       return [
         path.join(root, "scripts", "build-macos-tray-app.sh"),
         path.join(root, "scripts", "build-macos-widget.sh"),
+        path.join(root, "src", "macos-developer-tools.mjs"),
         path.join(base, "Package.swift"),
         path.join(base, "Resources", "Info.plist"),
         path.join(base, "Resources", "ModelRouterTray.entitlements"),

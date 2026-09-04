@@ -429,14 +429,6 @@ async function configureProvider(provider) {
 function installTray() {
   try {
     if (process.platform === "darwin") {
-      try {
-        execFileSync("xcrun", ["--find", "swift"], { stdio: "ignore" });
-      } catch {
-        process.stdout.write(
-          "The Swift toolchain is missing; run `xcode-select --install`, then `./bin/model-router-tray` to add the companion later.\n",
-        );
-        return;
-      }
       // One canonical transaction stages the signed bundle, drains any
       // running embedded Control Center, swaps atomically, stamps the build,
       // and hands the native host to launchd.
@@ -467,7 +459,7 @@ function installTray() {
     process.stdout.write(
       `Desktop companion install did not finish: ${error instanceof Error ? error.message : String(error)}\n` +
         (process.platform === "darwin"
-          ? "Recent macOS SDKs need the full Xcode app (not only the Command Line Tools) to build the menu-bar companion's SwiftUI macros.\n"
+          ? "The macOS companion needs the full Xcode app for its SwiftUI macros and WidgetKit extension. Select Xcode under Xcode > Settings > Locations > Command Line Tools, or set DEVELOPER_DIR for ./bin/model-router-tray.\n"
           : "") +
         (process.platform === "win32"
           ? "The router itself is installed; retry later with .\\codex-router.ps1 tray.\n"

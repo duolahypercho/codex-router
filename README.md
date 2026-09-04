@@ -40,8 +40,18 @@ menu-bar app to show it. It is a movable Codex Router panel rather than an item
 in macOS's **Edit Widgets** gallery.
 
 macOS does not have a public `.dmg` yet; the command above builds and installs
-the app locally. If it asks for the Xcode Command Line Tools, run
-`xcode-select --install` and repeat the command.
+the app locally. That build requires the full Xcode app, not only the standalone
+Command Line Tools, because it contains SwiftUI macro and WidgetKit targets. The
+installer honors `DEVELOPER_DIR` or the Xcode selected under **Xcode → Settings
+→ Locations → Command Line Tools**. If that selection still points at the
+standalone tools, it uses `/Applications/Xcode.app` or
+`/Applications/Xcode-beta.app` for this build only without changing the global
+selection. For an Xcode app in another location, retry the companion with:
+
+```sh
+env DEVELOPER_DIR="/path/to/Xcode.app/Contents/Developer" \
+  ~/.local/share/codex-router/bin/model-router-tray
+```
 
 ## What Codex Router does
 
