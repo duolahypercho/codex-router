@@ -1122,12 +1122,14 @@ function upstreamHeaders(requestHeaders, body, apiKey, provider, extraHeaders = 
   }
   headers["User-Agent"] = `codex-router/${VERSION}`;
   headers["Accept-Encoding"] = "identity";
+  Object.assign(headers, extraHeaders);
+  // OpenCode Go/Zen affinity must win over any session.headers merge above:
+  // starting 2026-09-06 their edge may refuse requests without this header.
   applyOpenCodeSessionHeaders(headers, {
     provider,
     requestHeaders,
     body,
   });
-  Object.assign(headers, extraHeaders);
   // Content-Length is fetch's to compute. An explicit copy is at best
   // redundant, and the HTTP/1.1 dispatcher rejects the request outright
   // (UND_ERR_INVALID_ARG) when a caller-supplied value accompanies a body.
