@@ -41,6 +41,9 @@ import {
 // tool itself. Namespace names themselves may contain the delimiter
 // (`mcp__codex_apps__github`), so restoration always resolves through the map
 // built from the exact tools that were flattened -- never by splitting names.
+// The same map may also index a dotted inventory alias (`namespace.tool`) when
+// a Responses-native model echoes that wire form (#611); that is still an
+// exact inventory hit, not a split.
 
 export const NAMESPACE_DELIMITER = "__";
 const DEFAULT_FUNCTION_NAMESPACE = "functions";
@@ -1930,15 +1933,34 @@ export function buildNamespaceLookups(namespaces) {
   const flatToNative = new Map();
   const bareToNamespaces = new Map();
   const nameAliases = NAME_ALIASES.get(namespaces);
+  // Dotted wire spellings (`namespace.tool`) some Responses-native models emit
+  // instead of `__` (#611). Collect candidates first; only an unambiguous
+  // inventory pair is registered — never invent identity by splitting a name
+  // (#568).
+  const dottedCandidates = new Map();
+  const rememberDotted = (dottedName, native) => {
+    if (!dottedCandidates.has(dottedName)) {
+      dottedCandidates.set(dottedName, native);
+      return;
+    }
+    const previous = dottedCandidates.get(dottedName);
+    if (
+      !previous ||
+      previous.namespace !== native.namespace ||
+      previous.name !== native.name
+    ) {
+      dottedCandidates.set(dottedName, undefined);
+    }
+  };
   for (const [namespace, names] of namespaces) {
     for (const name of names) {
       const providerName =
         nameAliases?.nativeToProvider.get(nativeToolKey(namespace, name)) ||
         `${namespace}${NAMESPACE_DELIMITER}${name}`;
-      flatToNative.set(providerName, {
-        namespace,
-        name,
-      });
+      const native = { namespace, name };
+      flatToNative.set(providerName, native);
+      const dottedName = `${namespace}.${name}`;
+      if (dottedName !== providerName) rememberDotted(dottedName, native);
       if (!bareToNamespaces.has(name)) bareToNamespaces.set(name, new Set());
       bareToNamespaces.get(name).add(namespace);
     }
@@ -1948,13 +1970,25 @@ export function buildNamespaceLookups(namespaces) {
       flatToNative.set(providerName, native);
     }
   }
+  const plainToolNames = new Set([
+    ...(PLAIN_TOOL_NAMES.get(namespaces) || []),
+    ...(nameAliases?.plainProviderNames || []),
+  ]);
+  for (const [dottedName, native] of dottedCandidates) {
+    if (!native || plainToolNames.has(dottedName)) continue;
+    const existing = flatToNative.get(dottedName);
+    if (
+      existing &&
+      (existing.namespace !== native.namespace || existing.name !== native.name)
+    ) {
+      continue;
+    }
+    flatToNative.set(dottedName, native);
+  }
   return {
     flatToNative,
     bareToNamespaces,
-    plainToolNames: new Set([
-      ...(PLAIN_TOOL_NAMES.get(namespaces) || []),
-      ...(nameAliases?.plainProviderNames || []),
-    ]),
+    plainToolNames,
     identityAliases: Boolean(nameAliases),
     spawnAgentModels: SPAWN_AGENT_MODELS.get(namespaces),
     toolSearch: TOOL_SEARCH_RELAYS.get(namespaces),

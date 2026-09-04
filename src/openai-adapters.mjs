@@ -35,6 +35,14 @@ export function buildNamespaceLookupsFromTools(tools) {
     }
   }
   
+  // Namespace containers alone are enough to restore calls (Responses-native
+  // providers keep that shape). Seed the map before scanning flat functions.
+  for (const [flattenedName, native] of namespaceTools) {
+    flatToNative.set(flattenedName, native);
+    const dotted = `${native.namespace}.${native.name}`;
+    if (!flatToNative.has(dotted)) flatToNative.set(dotted, native);
+  }
+
   // Second pass: look for flattened function names
   for (const tool of tools) {
     if (!tool || typeof tool !== "object" || Array.isArray(tool)) continue;
