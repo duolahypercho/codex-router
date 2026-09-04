@@ -55,6 +55,8 @@ import {
   NAVIGATION_SOURCE_ARGUMENT,
 } from "../apps/control-center/electron/navigation.mjs";
 
+import { LANGUAGE_OPTIONS } from "../apps/control-center/src/i18n.ts";
+
 test("ChatGPT browser login reports a terminal retry after child close without auth", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "router-browser-login-"));
   const windows = process.platform === "win32";
@@ -1520,7 +1522,7 @@ test("settings keeps model choice out and exposes durable app preferences", asyn
     "settings.maintenance.confirm.body",
   ]) {
     const occurrences = i18n.split(`"${key}"`).length - 1;
-    assert.equal(occurrences, 6, `${key} must be translated in all six locales`);
+    assert.equal(occurrences, LANGUAGE_OPTIONS.length, `${key} must be translated in every locale`);
   }
   // Sharing is an authorization to spend the user's subscription, so its
   // confirmation and live state cannot silently fall back to English.
@@ -1543,14 +1545,14 @@ test("settings keeps model choice out and exposes durable app preferences", asyn
     "settings.chatgptSession.action.disable",
   ]) {
     const occurrences = i18n.split(`"${key}"`).length - 1;
-    assert.equal(occurrences, 6, `${key} must be translated in all six locales`);
+    assert.equal(occurrences, LANGUAGE_OPTIONS.length, `${key} must be translated in every locale`);
   }
   for (const key of [
     "settings.desktop.unavailable.title",
     "settings.desktop.unavailable.body",
   ]) {
     const occurrences = i18n.split(`"${key}"`).length - 1;
-    assert.equal(occurrences, 6, `${key} must be translated in all six locales`);
+    assert.equal(occurrences, LANGUAGE_OPTIONS.length, `${key} must be translated in every locale`);
     assert.ok(settings.includes(`t("${key}")`), `${key} must be rendered through the translator`);
   }
   assert.doesNotMatch(settings, /["`]Sharing (?:enabled|disabled|status unavailable)/);

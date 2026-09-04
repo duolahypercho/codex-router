@@ -23,7 +23,14 @@ import {
 } from "../apps/panel/model.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-import { availableLanguages, getLanguage, setLanguage, t, translationKeys } from "../apps/panel/i18n.mjs";
+import {
+  LANGUAGE_OPTIONS,
+  availableLanguages,
+  getLanguage,
+  setLanguage,
+  t,
+  translationKeys,
+} from "../apps/panel/i18n.mjs";
 
 test("model picker search matches names, slugs, and provider labels", () => {
   const model = {
@@ -460,7 +467,7 @@ test("every mutating control in the browser panel names the command it drives", 
 test("browser panel exposes translations with matching keys for every language", () => {
   assert.deepEqual(
     availableLanguages().map(({ id }) => id),
-    ["en", "zh-CN", "ar", "hi", "ja", "ko"],
+    LANGUAGE_OPTIONS.map(({ id }) => id),
   );
   const keys = translationKeys();
   const englishKeys = [...keys.en].sort();
@@ -468,7 +475,7 @@ test("browser panel exposes translations with matching keys for every language",
     assert.deepEqual([...keys[language]].sort(), englishKeys, `translation keys diverge for ${language}`);
   }
   // Stated separately from the parity check above, which would also pass if a
-  // new string were left out of all six.
+  // new string were left out of every locale.
   for (const language of Object.keys(keys)) {
     for (const key of [
       "general.readOnlySurface",
@@ -490,6 +497,7 @@ test("browser panel exposes translations with matching keys for every language",
     ["hi", "उपयोग"],
     ["ja", "使用量"],
     ["ko", "사용량"],
+    ["es", "Uso"],
   ];
   try {
     for (const [language, navUsage] of samples) {
