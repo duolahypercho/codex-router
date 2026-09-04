@@ -99,9 +99,11 @@ test("context manager reads bounded metadata without returning conversation mess
 test("a busy Codex history cannot crowd Cursor sessions out of the shared index", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "router-context-fairness-"));
   const codexHome = path.join(root, "codex");
+  const dshHome = path.join(root, "dsh");
   const cursorDatabase = path.join(root, "conversation-search.db");
   const cursorAgentChats = path.join(root, "cursor-agent-chats");
   const priorCodexHome = process.env.CODEX_HOME;
+  const priorDshHome = process.env.DSH_HOME;
   const priorCursorDatabase = process.env.CODEX_ROUTER_CURSOR_CONVERSATION_DB;
   const priorCursorAgentChats = process.env.CODEX_ROUTER_CURSOR_AGENT_CHATS;
   try {
@@ -122,6 +124,10 @@ test("a busy Codex history cannot crowd Cursor sessions out of the shared index"
     cursor.close();
 
     process.env.CODEX_HOME = codexHome;
+    // Keep the aggregate count independent of the developer's real ~/.dsh.
+    // This test supplies only Codex and Cursor fixtures; every other client
+    // index must therefore resolve inside the same empty test root.
+    process.env.DSH_HOME = dshHome;
     process.env.CODEX_ROUTER_CURSOR_CONVERSATION_DB = cursorDatabase;
     process.env.CODEX_ROUTER_CURSOR_AGENT_CHATS = cursorAgentChats;
     const snapshot = getContextSessionsSnapshot();
@@ -134,6 +140,8 @@ test("a busy Codex history cannot crowd Cursor sessions out of the shared index"
   } finally {
     if (priorCodexHome === undefined) delete process.env.CODEX_HOME;
     else process.env.CODEX_HOME = priorCodexHome;
+    if (priorDshHome === undefined) delete process.env.DSH_HOME;
+    else process.env.DSH_HOME = priorDshHome;
     if (priorCursorDatabase === undefined) delete process.env.CODEX_ROUTER_CURSOR_CONVERSATION_DB;
     else process.env.CODEX_ROUTER_CURSOR_CONVERSATION_DB = priorCursorDatabase;
     if (priorCursorAgentChats === undefined) delete process.env.CODEX_ROUTER_CURSOR_AGENT_CHATS;
