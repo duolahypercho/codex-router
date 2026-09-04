@@ -253,10 +253,21 @@ function loadRegistry() {
       if (provider.keyless !== undefined && typeof provider.keyless !== "boolean") {
         fail(`provider ${provider.id} has an invalid keyless flag`);
       }
-      for (const field of ["directResponses", "codexOnly", "explicitSelection"]) {
+      for (const field of [
+        "directResponses",
+        "codexOnly",
+        "explicitSelection",
+        "allowPrivate",
+        "mirrorNativeModels",
+      ]) {
         if (provider[field] !== undefined && typeof provider[field] !== "boolean") {
           fail(`provider ${provider.id} has an invalid ${field} flag`);
         }
+      }
+      if (provider.mirrorNativeModels && provider.protocol !== "openai-responses") {
+        fail(
+          `provider ${provider.id} may mirror native models only through openai-responses`,
+        );
       }
       if (provider.keyless && provider.credential !== undefined) {
         fail(`keyless provider ${provider.id} must not declare a credential`);

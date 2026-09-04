@@ -243,6 +243,10 @@ function sameProviderDiscoveryIdentity(left, right) {
     === providerDiscoveryIdentityFingerprint(right);
 }
 
+export function providerAllowsPrivateDiscovery(provider) {
+  return Boolean(provider?.keyless || provider?.allowPrivate);
+}
+
 function discoveryEndpoint(identity) {
   const baseUrl = identity?.baseUrl || identity?.session?.apiServerUrl;
   return typeof baseUrl === "string" && baseUrl.trim() ? `${baseUrl.replace(/\/+$/, "")}/models` : undefined;
@@ -324,7 +328,11 @@ async function providerPayload(provider, identity) {
   }
   return fetchUntrustedModelCatalog(`${baseUrl}/models`, {
     headers,
-    allowPrivate: Boolean(provider.keyless),
+    // A credentialed LAN gateway is allowed only when its registry descriptor
+    // opts into the same private-network exception generic providers expose.
+    // Keeping the default false preserves the SSRF boundary for every existing
+    // public provider and for private fragments that did not make the choice.
+    allowPrivate: providerAllowsPrivateDiscovery(provider),
   });
 }
 

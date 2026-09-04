@@ -58,6 +58,16 @@ live miss.
    calls, and compaction before setting `listed: true`.
 8. Update the README model table and provider-specific setup documentation.
 
+Credentialed providers on a private network must explicitly declare
+`allowPrivate: true` before discovery may contact their `/models` endpoint.
+An `openai-responses` provider may also declare `mirrorNativeModels: true` when
+it intentionally serves the same GPT model ids as the signed-in Codex account.
+The refresh path then mirrors only the intersection of the live provider list
+and account-visible native catalog, using native capability metadata rather
+than guessing it. Existing manual curation is authoritative and is never
+overwritten; missing provider ids are retained so a transiently incomplete
+catalog cannot delete a working route.
+
 The shared API forwarder strips host and internal authentication before
 injecting the selected provider key. It supports the registry's tested
 OpenAI-compatible and Anthropic protocols; do not create a new listener merely

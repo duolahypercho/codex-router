@@ -10,7 +10,7 @@ const noJournal = {
 };
 const noLock = (operation) => operation();
 
-function recordingRunner({ signed = true, loginFree = false, model, failAt } = {}) {
+function recordingRunner({ mode = "router", signed = true, loginFree = false, model, failAt } = {}) {
   const calls = [];
   return {
     calls,
@@ -24,7 +24,7 @@ function recordingRunner({ signed = true, loginFree = false, model, failAt } = {
         return {
           status: 0,
           stdout: `${JSON.stringify({
-            mode: "router",
+            mode,
             signed_routing: signed,
             login_free: loginFree,
             model: model || null,
@@ -47,10 +47,11 @@ test("refresh orchestration restores signed routing and republishes the routed c
   assert.deepEqual(runner.calls, [
     ["config-manager.mjs", ["status"]],
     ["config-manager.mjs", ["disable"]],
-    ["catalog.mjs", ["--refresh-native"]],
+    ["catalog.mjs", ["--refresh-native", "--router-transport-parked"]],
     ["config-manager.mjs", ["enable"]],
     ["config-manager.mjs", ["signed-enable"]],
     ["catalog.mjs", []],
+    ["native-model-mirror.mjs", []],
   ]);
   assert.equal(result.catalogOutput, '{"models":1}\n');
 });
@@ -64,7 +65,7 @@ test("refresh orchestration restores the active transport after catalog failure"
   assert.deepEqual(runner.calls, [
     ["config-manager.mjs", ["status"]],
     ["config-manager.mjs", ["disable"]],
-    ["catalog.mjs", ["--refresh-native"]],
+    ["catalog.mjs", ["--refresh-native", "--router-transport-parked"]],
     ["config-manager.mjs", ["enable"]],
     ["config-manager.mjs", ["signed-enable"]],
     ["catalog.mjs", []],
@@ -77,9 +78,20 @@ test("ordinary routed refresh also republishes external models after restore", a
   assert.deepEqual(runner.calls, [
     ["config-manager.mjs", ["status"]],
     ["config-manager.mjs", ["disable"]],
-    ["catalog.mjs", ["--refresh-native"]],
+    ["catalog.mjs", ["--refresh-native", "--router-transport-parked"]],
     ["config-manager.mjs", ["enable"]],
     ["catalog.mjs", []],
+    ["native-model-mirror.mjs", []],
+  ]);
+});
+
+test("native-only refresh republishes models added by automatic mirroring", async () => {
+  const runner = recordingRunner({ mode: "native", signed: false });
+  await refreshCatalog({ run: runner.run, lock: noLock });
+  assert.deepEqual(runner.calls, [
+    ["config-manager.mjs", ["status"]],
+    ["catalog.mjs", ["--refresh-native", "--router-transport-parked"]],
+    ["native-model-mirror.mjs", []],
   ]);
 });
 
@@ -102,7 +114,7 @@ test("refresh orchestration restores identity-preserving login-free mode and its
       "config-manager.mjs",
       ["disable", "--preserve-login-free-state", "--park-login-free-refresh"],
     ],
-    ["catalog.mjs", ["--refresh-native"]],
+    ["catalog.mjs", ["--refresh-native", "--router-transport-parked"]],
     [
       "config-manager.mjs",
       [
@@ -116,6 +128,7 @@ test("refresh orchestration restores identity-preserving login-free mode and its
       "config-manager.mjs",
       ["login-free-enable", "gpt-5.6-terra", "--complete-login-free-refresh"],
     ],
+    ["native-model-mirror.mjs", []],
   ]);
 });
 
@@ -147,7 +160,7 @@ test("pending refresh resumes and completes only with an alias for the same cano
       "config-manager.mjs",
       ["disable", "--preserve-login-free-state", "--park-login-free-refresh"],
     ],
-    ["catalog.mjs", ["--refresh-native"]],
+    ["catalog.mjs", ["--refresh-native", "--router-transport-parked"]],
     [
       "config-manager.mjs",
       [
@@ -161,5 +174,6 @@ test("pending refresh resumes and completes only with an alias for the same cano
       "config-manager.mjs",
       ["login-free-enable", "fresh-alias", "--complete-login-free-refresh"],
     ],
+    ["native-model-mirror.mjs", []],
   ]);
 });

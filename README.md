@@ -593,6 +593,29 @@ broader vendor profile just to repair `tool_choice`. The provider's own
 local to your machine and are not vetted by the repository's compatibility
 tests.
 
+A private OpenAI Responses gateway can opt into automatic native-model
+mirroring in its local registry fragment:
+
+```json
+{
+  "protocol": "openai-responses",
+  "allowPrivate": true,
+  "mirrorNativeModels": true
+}
+```
+
+`allowPrivate` is required only for a private or loopback discovery endpoint.
+During `./bin/refresh-catalog`, the router asks the signed-in Codex account for
+its current native catalog and asks each opted-in provider for `/models`. It
+automatically adds or updates only exact model-id matches that are visible to
+the account and advertised by that provider. Provider-only ids, hidden native
+models, and manually curated entries are left untouched. Automatically
+mirrored routes remain conservative: client-only `ultra` reasoning is not advertised
+for an automatically mirrored upstream whose `/models` response cannot certify
+it. A manually curated route remains authoritative. Codex still loads the
+resulting `model_catalog_json` at startup, so fully quit and reopen the app to
+see a newly mirrored model.
+
 The same managed OpenAI base URL also serves `/v1/embeddings`, but only for a
 model whose local or checked-in metadata explicitly names the capability. A
 model that is both conversational and embedding-capable declares its normal
