@@ -58,6 +58,7 @@ import {
   normalizeOpenAIRequest,
 } from "./openai-adapters.mjs";
 import { threadIdFromHeaders } from "./codex-session-names.mjs";
+import { applyOpenCodeSessionHeaders } from "./opencode-session.mjs";
 import {
   effectiveProviderCredentialStatus,
   providerApiKeyAuthoritySnapshot,
@@ -1121,6 +1122,11 @@ function upstreamHeaders(requestHeaders, body, apiKey, provider, extraHeaders = 
   }
   headers["User-Agent"] = `codex-router/${VERSION}`;
   headers["Accept-Encoding"] = "identity";
+  applyOpenCodeSessionHeaders(headers, {
+    provider,
+    requestHeaders,
+    body,
+  });
   Object.assign(headers, extraHeaders);
   // Content-Length is fetch's to compute. An explicit copy is at best
   // redundant, and the HTTP/1.1 dispatcher rejects the request outright

@@ -10,6 +10,10 @@ import {
 import { kimiOAuthStatus } from "./oauth-status.mjs";
 import { PROVIDERS } from "./model-registry.mjs";
 import { resolveProviderCredential } from "./provider-credentials.mjs";
+import {
+  OPENCODE_SESSION_FALLBACKS,
+  openCodeSessionHeaders,
+} from "./opencode-session.mjs";
 import { cooldownUntil } from "./rate-limit-headers.mjs";
 import { rateLimitSnapshotFor } from "./rate-limit-state.mjs";
 import { VERSION } from "./version.mjs";
@@ -546,7 +550,10 @@ async function opencodeGoAccount(fetchImpl) {
   if (new URL(baseURL).origin !== "https://opencode.ai") {
     return localOnly("Plan usage is unavailable for a custom opencode endpoint");
   }
-  const payload = await requestJson(`${baseURL}/usage`, credential.value, {}, fetchImpl);
+  const payload = await requestJson(`${baseURL}/usage`, credential.value, {
+    "User-Agent": `codex-router/${VERSION}`,
+    ...openCodeSessionHeaders({ fallback: OPENCODE_SESSION_FALLBACKS.usage }),
+  }, fetchImpl);
   const metrics = opencodeGoUsageMetrics(payload);
   if (!metrics.length) throw new Error("opencode usage response was incomplete");
   return { status: "available", source: "official-api", metrics };
