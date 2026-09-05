@@ -410,6 +410,15 @@ async function main() {
     router,
   );
 
+  // After router is healthy, check for native catalog drift in background.
+  // If Codex updated models_cache.json (new native model), republish automatically.
+  // This runs async without blocking further startup or waiting for user commands.
+  import("./native-catalog-drift.mjs")
+    .then(({ republishOnNativeDrift }) => republishOnNativeDrift())
+    .catch((error) => {
+      console.error(`[codex-router] Native drift check failed: ${error.message}`);
+    });
+
   if (antigravityStartup.pendingActivationGeneration) {
     const promoted = await attemptAntigravityProbePromotionAfterReadiness({
       generation: antigravityStartup.pendingActivationGeneration,
