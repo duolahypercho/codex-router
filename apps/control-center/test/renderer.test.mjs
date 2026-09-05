@@ -570,6 +570,14 @@ const chromiumPath = [
   process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, "Google", "Chrome", "Application", "chrome.exe"),
 ].find((candidate) => candidate && existsSync(candidate));
 
+async function newEnglishTestPage(browser, options) {
+  const page = await browser.newPage(options);
+  await page.addInitScript(() => {
+    localStorage.setItem("codex-router-language", "en");
+  });
+  return page;
+}
+
 test("the production renderer exposes model discovery and picker actions", { timeout: 120_000 }, async () => {
   assert.equal(existsSync(path.join(dist, "index.html")), true, "npm test must build the renderer first");
   assert.ok(chromiumPath, "No Chromium executable is available for the Control Center renderer test.");
@@ -582,7 +590,7 @@ test("the production renderer exposes model discovery and picker actions", { tim
   });
   const pageErrors = [];
   try {
-    const page = await browser.newPage({ viewport: { width: 1280, height: 840 } });
+    const page = await newEnglishTestPage(browser, { viewport: { width: 1280, height: 840 } });
     // Windows hosted runners routinely spend about 30 seconds starting the
     // browser. Keep UI waits short and diagnostic without letting that startup
     // consume the whole integration-test deadline.
@@ -869,7 +877,7 @@ test("the production renderer exposes model discovery and picker actions", { tim
       .some((call) => call.name === "setChatGptAccountSelection" && call.args[0] === "current"));
 
     // Add/remove must paint before the durable control round-trip finishes.
-    const optimisticPage = await browser.newPage({ viewport: { width: 1280, height: 840 } });
+    const optimisticPage = await newEnglishTestPage(browser, { viewport: { width: 1280, height: 840 } });
     optimisticPage.setDefaultTimeout(10_000);
     await optimisticPage.goto(`${url}?accountMutationDelayMs=1500`, { waitUntil: "domcontentloaded" });
     await optimisticPage.getByRole("button", { name: "Settings", exact: true }).click();
@@ -923,7 +931,7 @@ test("the production renderer exposes model discovery and picker actions", { tim
       "hf.co/unsloth/GLM-5.3-Flash-GGUF:UD-IQ1_S",
     );
 
-    const cancelledLoginPage = await browser.newPage({ viewport: { width: 1280, height: 840 } });
+    const cancelledLoginPage = await newEnglishTestPage(browser, { viewport: { width: 1280, height: 840 } });
     const cancelledLoginErrors = [];
     cancelledLoginPage.setDefaultTimeout(10_000);
     cancelledLoginPage.on("pageerror", (error) => cancelledLoginErrors.push(error.message));
@@ -951,7 +959,7 @@ test("the production renderer exposes model discovery and picker actions", { tim
     assert.deepEqual(cancelledLoginErrors, []);
     await cancelledLoginPage.close();
 
-    const rejectedLoginPage = await browser.newPage({ viewport: { width: 1280, height: 840 } });
+    const rejectedLoginPage = await newEnglishTestPage(browser, { viewport: { width: 1280, height: 840 } });
     const rejectedLoginErrors = [];
     rejectedLoginPage.setDefaultTimeout(10_000);
     rejectedLoginPage.on("pageerror", (error) => rejectedLoginErrors.push(error.message));
@@ -979,7 +987,7 @@ test("the production renderer exposes model discovery and picker actions", { tim
     assert.deepEqual(rejectedLoginErrors, []);
     await rejectedLoginPage.close();
 
-    const pendingRemovalPage = await browser.newPage({ viewport: { width: 1280, height: 840 } });
+    const pendingRemovalPage = await newEnglishTestPage(browser, { viewport: { width: 1280, height: 840 } });
     pendingRemovalPage.setDefaultTimeout(10_000);
     await pendingRemovalPage.goto(`${url}?loginStaysPending=1`, { waitUntil: "domcontentloaded" });
     await pendingRemovalPage.getByRole("button", { name: "Settings", exact: true }).click();
@@ -994,7 +1002,7 @@ test("the production renderer exposes model discovery and picker actions", { tim
     );
     await pendingRemovalPage.close();
 
-    const corruptPoolPage = await browser.newPage({ viewport: { width: 1280, height: 840 } });
+    const corruptPoolPage = await newEnglishTestPage(browser, { viewport: { width: 1280, height: 840 } });
     const corruptPoolErrors = [];
     corruptPoolPage.setDefaultTimeout(10_000);
     corruptPoolPage.on("pageerror", (error) => corruptPoolErrors.push(error.message));
@@ -1033,7 +1041,7 @@ test("fallback-only splits do not claim account breakdown or a complete range mi
   });
   const pageErrors = [];
   try {
-    const page = await browser.newPage({ viewport: { width: 1280, height: 840 } });
+    const page = await newEnglishTestPage(browser, { viewport: { width: 1280, height: 840 } });
     page.setDefaultTimeout(10_000);
     page.on("pageerror", (error) => pageErrors.push(error.message));
     page.on("console", (message) => {
@@ -1086,7 +1094,7 @@ test("independent control-center reads reveal each ready page region", { timeout
   });
   const pageErrors = [];
   try {
-    const page = await browser.newPage({ viewport: { width: 1280, height: 840 } });
+    const page = await newEnglishTestPage(browser, { viewport: { width: 1280, height: 840 } });
     page.setDefaultTimeout(10_000);
     page.on("pageerror", (error) => pageErrors.push(error.message));
     page.on("console", (message) => {
@@ -1135,7 +1143,7 @@ test("usage polling surfaces current rejections, recovers, and ignores older res
   });
   const pageErrors = [];
   try {
-    const page = await browser.newPage({ viewport: { width: 1280, height: 840 } });
+    const page = await newEnglishTestPage(browser, { viewport: { width: 1280, height: 840 } });
     page.setDefaultTimeout(10_000);
     page.on("pageerror", (error) => pageErrors.push(error.message));
     page.on("console", (message) => {
@@ -1177,7 +1185,7 @@ test("an older rejected usage read cannot replace a newer success with a warning
   });
   const pageErrors = [];
   try {
-    const page = await browser.newPage({ viewport: { width: 1280, height: 840 } });
+    const page = await newEnglishTestPage(browser, { viewport: { width: 1280, height: 840 } });
     page.setDefaultTimeout(10_000);
     page.on("pageerror", (error) => pageErrors.push(error.message));
     page.on("console", (message) => {
@@ -1210,7 +1218,7 @@ test("health polling and core refresh share latest-wins ordering", { timeout: 12
   });
   const pageErrors = [];
   try {
-    const page = await browser.newPage({ viewport: { width: 1280, height: 840 } });
+    const page = await newEnglishTestPage(browser, { viewport: { width: 1280, height: 840 } });
     page.setDefaultTimeout(10_000);
     page.on("pageerror", (error) => pageErrors.push(error.message));
     page.on("console", (message) => {
