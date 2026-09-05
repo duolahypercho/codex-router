@@ -1,8 +1,0 @@
-#!/bin/sh
-set -eu
-
-repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-case "${MODEL_ROUTER_TARGET:-codex}" in
-  codex) exec node "$repo_dir/src/skills-install.mjs" "$@" ;;
-  *) echo "Skills are a Codex client integration." >&2; exit 2 ;;
-esac

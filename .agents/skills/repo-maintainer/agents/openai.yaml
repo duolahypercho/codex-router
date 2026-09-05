@@ -1,4 +1,0 @@
-interface:
-  display_name: "Repo Maintainer"
-  short_description: "Audit and maintain large repositories safely"
-  default_prompt: "Use $repo-maintainer to assess this repository change, fan out review when useful, and verify it proportionally."

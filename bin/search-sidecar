@@ -1,7 +1,0 @@
-#!/bin/sh
-set -eu
-
-repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-MODEL_ROUTER_TARGET=codex
-export MODEL_ROUTER_TARGET
-exec node "$repo_dir/src/search-sidecar-control.mjs" "$@"
