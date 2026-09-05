@@ -1378,7 +1378,7 @@ function writeCatalogCodexStub(directory, options = {}) {
   writeFileSync(
     target,
     windows
-      ? `@echo off\r\nif "%1"=="--version" (echo codex-cli 99.0.0& exit /b 0)\r\nif "%1"=="login" exit /b 0\r\nif "%1"=="debug" (if "%3"=="--bundled" (echo ${bundledModels}) else (echo ${liveModels})& exit /b 0)\r\nexit /b 1\r\n`
+      ? `@echo off\r\nif "%1"=="--version" (echo codex-cli 99.0.0& exit /b 0)\r\nif "%1"=="login" exit /b 0\r\nif "%1"=="debug" if "%3"=="--bundled" (echo ${bundledModels}& exit /b 0)\r\nif "%1"=="debug" (echo ${liveModels}& exit /b 0)\r\nexit /b 1\r\n`
       : `#!/bin/sh
 case "$1" in
   --version) echo 'codex-cli 99.0.0' ;;

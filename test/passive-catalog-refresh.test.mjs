@@ -52,7 +52,9 @@ test("a durable reservation coalesces attempts and success starts a fresh cooldo
     });
     assert.equal(first.reserved, true);
     assert.equal(first.state.nextEligibleAt, 1_500);
-    assert.equal(lstatSync(state.file).mode & 0o777, 0o600);
+    if (process.platform !== "win32") {
+      assert.equal(lstatSync(state.file).mode & 0o777, 0o600);
+    }
 
     const duplicate = reservePassiveCatalogRefresh({
       file: state.file,
