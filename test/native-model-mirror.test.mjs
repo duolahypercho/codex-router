@@ -49,6 +49,7 @@ test("native mirroring adds only account-visible models advertised by the provid
     provider: "private",
     priority: 100,
     supportsSearchHistory: true,
+    reasoningLevels: [{ effort: "ultra", description: "Verified elsewhere" }],
   };
   const result = planNativeModelMirror({
     provider,
@@ -85,7 +86,14 @@ test("native mirroring updates its own entries and preserves manual curation", (
     discovered: [astra.slug],
     existing: [],
   });
-  const managed = { ...first.models[0], supportsSearchHistory: true };
+  const managed = {
+    ...first.models[0],
+    supportsSearchHistory: true,
+    reasoningLevels: [
+      ...first.models[0].reasoningLevels,
+      { effort: "ultra", description: "Verified on this route" },
+    ],
+  };
   const updated = planNativeModelMirror({
     provider,
     nativeModels: [{ ...astra, context_window: 300_000 }],
@@ -96,6 +104,14 @@ test("native mirroring updates its own entries and preserves manual curation", (
   assert.deepEqual(updated.updated, ["private/gpt-6-astra"]);
   assert.equal(updated.models[0].contextWindow, 300_000);
   assert.equal(updated.models[0].supportsSearchHistory, true);
+  assert.deepEqual(
+    updated.models[0].reasoningLevels.map((level) => level.effort),
+    ["low", "medium", "high", "xhigh", "max", "ultra"],
+  );
+  assert.equal(
+    updated.models[0].reasoningLevels.at(-1).description,
+    "Verified on this route",
+  );
 
   const manual = { ...managed, managedBy: undefined, contextWindow: 123_456 };
   const preserved = planNativeModelMirror({
@@ -106,6 +122,38 @@ test("native mirroring updates its own entries and preserves manual curation", (
   });
   assert.deepEqual(preserved.preserved, ["private/gpt-6-astra"]);
   assert.equal(preserved.models[0].contextWindow, 123_456);
+});
+
+test("native mirroring drops a verified ultra rung when native metadata withdraws it", () => {
+  const current = planNativeModelMirror({
+    provider,
+    nativeModels: [astra],
+    discovered: [astra.slug],
+    existing: [],
+  }).models[0];
+  current.reasoningLevels = [
+    ...current.reasoningLevels,
+    { effort: "ultra", description: "Verified on this route" },
+  ];
+
+  const nativeWithoutUltra = {
+    ...astra,
+    supported_reasoning_levels: astra.supported_reasoning_levels.filter(
+      (level) => level.effort !== "ultra",
+    ),
+  };
+  const result = planNativeModelMirror({
+    provider,
+    nativeModels: [nativeWithoutUltra],
+    discovered: [astra.slug],
+    existing: [current],
+  });
+
+  assert.deepEqual(result.updated, ["private/gpt-6-astra"]);
+  assert.deepEqual(
+    result.models[0].reasoningLevels.map((level) => level.effort),
+    ["low", "medium", "high", "xhigh", "max"],
+  );
 });
 
 test("sync discovers opted-in providers, persists additions, and selects them", async () => {

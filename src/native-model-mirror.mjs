@@ -128,6 +128,21 @@ export function planNativeModelMirror({
     if (typeof current?.supportsSearchHistory === "boolean") {
       generated.supportsSearchHistory = current.supportsSearchHistory;
     }
+    // `/models` only certifies the model id, so new mirrors stay conservative.
+    // Once an operator verifies ultra on this exact route, preserve that rung
+    // while the signed-in native catalog continues to advertise it.
+    const currentUltra = Array.isArray(current?.reasoningLevels)
+      ? current.reasoningLevels.find((level) => (
+          level?.effort === "ultra" &&
+          typeof level.description === "string" &&
+          level.description.trim()
+        ))
+      : undefined;
+    const nativeHasUltra = Array.isArray(nativeModel.supported_reasoning_levels) &&
+      nativeModel.supported_reasoning_levels.some((level) => level?.effort === "ultra");
+    if (currentUltra && nativeHasUltra && Array.isArray(generated.reasoningLevels)) {
+      generated.reasoningLevels = [...generated.reasoningLevels, { ...currentUltra }];
+    }
     if (current) {
       if (JSON.stringify(current) !== JSON.stringify(generated)) {
         models[index] = generated;
