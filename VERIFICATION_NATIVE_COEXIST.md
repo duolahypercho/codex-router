@@ -1,6 +1,6 @@
 # Native Catalog Coexistence - Verification Guide
 
-This document outlines how to verify that the router correctly picks up new native models without requiring uninstall.
+This document outlines how to verify that the router correctly picks up **any and all new native OpenAI/Codex models** without requiring uninstall. The solution is completely general — it works for GPT-6 Astra, GPT-7, o5, or any future native model that appears in the signed-in account's catalog.
 
 ## Core Mechanism
 
@@ -9,6 +9,26 @@ The router now uses a safe in-place refresh when:
 2. Signed-in mode (not login-free)
 3. `models_cache.json` exists and is valid
 4. `models_cache.json` contains only native models (no routed slugs)
+
+**Key insight**: The fingerprint-based drift detection (`nativeCatalogIsReusable()`) automatically triggers recapture whenever `models_cache.json` changes. This means ANY new native model causes an automatic refresh on the next catalog publish — no model-specific logic needed.
+
+## How It Works (General for All Native Models)
+
+1. **Fingerprint tracking**: Every time the router captures the native catalog, it computes and stores a SHA-256 fingerprint of `models_cache.json` in `native-models.json` as `native_source_fingerprint`.
+
+2. **Automatic drift detection**: On every catalog publish, `nativeCatalogIsReusable()` compares:
+   - Current fingerprint of `models_cache.json`
+   - Stored `native_source_fingerprint` from last capture
+   - If they differ → automatic recapture triggered
+
+3. **Safe in-place refresh**: When conditions are met (see above), the recapture happens without rewriting `config.toml`:
+   - Reads `models_cache.json` directly
+   - Merges with bundled catalog
+   - Publishes merged catalog with ALL models (existing + new natives + routed)
+
+4. **Result**: Every new native model that Codex adds to `models_cache.json` is automatically picked up on the next catalog operation, regardless of which model or how many.
+
+**No hardcoded model names. No special cases. Just general fingerprint-based change detection.**
 
 When these conditions are met, `refresh-catalog` skips rewriting `config.toml` and just runs `catalog.mjs --refresh-native`, which:
 - Reads the account cache directly
@@ -25,7 +45,10 @@ When these conditions are met, `refresh-catalog` skips rewriting `config.toml` a
 4. Note the current models: `codex debug models | jq '.models[].slug'`
 
 ### Simulate New Native Model
-Since we can't actually make OpenAI release GPT-6 Astra, we simulate:
+
+**Important**: The examples below use "GPT-6 Astra" and "gpt-test-new-native" as *reproduction examples only*. The implementation is completely general and works for ANY native model that appears in the account's catalog — GPT-7, o5, claude-next via OpenAI, etc.
+
+Since we can't force OpenAI to release a new model on demand, we have two verification approaches:
 
 #### Option A: Add a test model to models_cache.json
 ```bash
@@ -52,10 +75,10 @@ node -e "
 ```
 
 #### Option B: Wait for real OpenAI update
-When OpenAI actually releases a new model:
+When OpenAI releases **any new native model** (GPT-6 Astra, GPT-7, o5, etc.):
 1. Use Codex CLI or desktop normally
-2. Codex will update its `models_cache.json` automatically
-3. The new model will appear there
+2. Codex will update its `models_cache.json` automatically with the new model(s)
+3. The new model(s) will appear there with native slugs
 
 ### Test Refresh
 ```bash
@@ -81,7 +104,7 @@ pkill -9 -i codex  # or use Activity Monitor
 codex  # or use Codex Desktop app
 
 # Create a new task and check picker
-# The new native model should appear
+# ANY new native model should appear (Astra, GPT-7, o5, etc.)
 ```
 
 ### Cleanup
@@ -167,7 +190,7 @@ bin/model-router codex doctor | grep "Codex routing"
 
 - PR #621: Original safe refresh implementation (config-free refresh when cache is safe)
 - PR #169: Custom catalog injection (why there's no second injection API)
-- Issue: User had to uninstall to see GPT Astra
-- `src/catalog.mjs`: Core catalog logic, native cache handling
+- Original issue: User had to uninstall to see new native models (GPT Astra was the reproduction case)
+- `src/catalog.mjs`: Core catalog logic, native cache handling, **fingerprint-based drift detection**
 - `src/refresh-catalog.mjs`: Refresh orchestration with in-place path
-- `src/native-catalog-freshness.mjs`: Fingerprint drift detection
+- `src/native-catalog-freshness.mjs`: Fingerprint drift detection (general for all models)
