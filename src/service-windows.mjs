@@ -394,6 +394,13 @@ function taskExists() {
   }
 }
 
+function setTaskEnabled(enabled) {
+  schtasks(
+    ["/Change", "/TN", taskName, enabled ? "/ENABLE" : "/DISABLE"],
+    { quiet: true, mutating: true },
+  );
+}
+
 function taskState() {
   const script =
     "try { [Console]::Out.Write((Get-ScheduledTask -TaskName $env:CODEX_ROUTER_TASK).State.ToString()) } catch { exit 1 }";
@@ -537,12 +544,17 @@ if (command === "render") {
     `${JSON.stringify({ installed, loaded, state })}\n`,
   );
 } else if (command === "stop") {
-  // Stopping is idempotent, like uninstall and restart: a task that is missing
-  // or already idle is the state the caller asked for, not an error to raise.
-  endTask();
+  // A heartbeat trigger must not undo an explicit stop. Disable the task before
+  // ending the active instance so scheduled ticks stay inert until start/restart.
+  // If the task is already missing, stopping remains idempotent.
+  if (taskExists()) {
+    setTaskEnabled(false);
+    endTask();
+  }
   process.stdout.write(`${JSON.stringify({ state: "stopped" })}\n`);
 } else {
   if (command === "restart") endTask();
+  setTaskEnabled(true);
   schtasks(["/Run", "/TN", taskName], { quiet: true, mutating: true });
   process.stdout.write(`${JSON.stringify({ state: "running" })}\n`);
 }

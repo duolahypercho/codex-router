@@ -425,6 +425,19 @@ test("Windows installTask registers a minute heartbeat beside logon", () => {
   assert.match(install, /-MultipleInstances IgnoreNew -StartWhenAvailable/);
 });
 
+test("Windows explicit stop disables heartbeat while start and restart re-enable it", () => {
+  const source = readFileSync(path.join(root, "src", "service-windows.mjs"), "utf8");
+  assert.match(source, /function setTaskEnabled\(enabled\)/);
+  assert.match(
+    source,
+    /command === "stop"\) \{[\s\S]*?setTaskEnabled\(false\);[\s\S]*?endTask\(\);/,
+  );
+  assert.match(
+    source,
+    /if \(command === "restart"\) endTask\(\);[\s\S]*?setTaskEnabled\(true\);[\s\S]*?schtasks\(\["\/Run"/,
+  );
+});
+
 // Propagating the wrapper exit code keeps LastTaskResult honest for doctor
 // and readiness. It is not what relaunches a dead router: RestartOnFailure
 // only covers actions that fail to start (issue #581). The minute heartbeat
@@ -671,6 +684,59 @@ function runWindowsService(testRoot, command, extraEnv = {}) {
     },
   );
 }
+
+test(
+  "Windows stop disables the heartbeat before ending the active task",
+  { skip: process.platform === "win32" },
+  () => {
+    const testRoot = mkdtempSync(path.join(os.tmpdir(), "codex-router-win-explicit-stop-"));
+    try {
+      const stubs = schedulerStubs(path.join(testRoot, "scheduler"));
+      const result = runWindowsService(testRoot, "stop", { PATH: stubs.path });
+      assert.equal(result.status, 0, result.stderr);
+      assert.deepEqual(JSON.parse(result.stdout), { state: "stopped" });
+
+      const calls = stubs.calls();
+      const disable = calls.findIndex((line) => line.includes("/Change") && line.includes("/DISABLE"));
+      const end = calls.findIndex((line) => line.includes("/End"));
+      assert.ok(disable >= 0, `explicit stop did not disable the task:\n${calls.join("\n")}`);
+      assert.ok(end > disable, `task must be disabled before /End:\n${calls.join("\n")}`);
+      assert.equal(calls.some((line) => line.includes("/Run")), false);
+    } finally {
+      rmSync(testRoot, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "Windows start and restart re-enable heartbeat recovery before running",
+  { skip: process.platform === "win32" },
+  async (context) => {
+    for (const command of ["start", "restart"]) {
+      await context.test(command, () => {
+        const testRoot = mkdtempSync(path.join(os.tmpdir(), `codex-router-win-${command}-enable-`));
+        try {
+          const stubs = schedulerStubs(path.join(testRoot, "scheduler"));
+          const result = runWindowsService(testRoot, command, { PATH: stubs.path });
+          assert.equal(result.status, 0, result.stderr);
+          assert.deepEqual(JSON.parse(result.stdout), { state: "running" });
+
+          const calls = stubs.calls();
+          const enable = calls.findIndex((line) => line.includes("/Change") && line.includes("/ENABLE"));
+          const run = calls.findIndex((line) => line.includes("/Run"));
+          assert.ok(enable >= 0, `${command} did not re-enable the task:\n${calls.join("\n")}`);
+          assert.ok(run > enable, `${command} must enable before /Run:\n${calls.join("\n")}`);
+          if (command === "restart") {
+            const end = calls.findIndex((line) => line.includes("/End"));
+            assert.ok(end >= 0 && end < enable, `restart must end before enabling:\n${calls.join("\n")}`);
+          }
+        } finally {
+          rmSync(testRoot, { recursive: true, force: true });
+        }
+      });
+    }
+  },
+);
 
 test(
   "Windows status trusts a live launcher when Task Scheduler reports Ready",
