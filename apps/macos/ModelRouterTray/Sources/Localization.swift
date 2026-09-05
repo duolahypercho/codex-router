@@ -569,6 +569,7 @@ enum RouterChineseText {
     "%d selected": "已选择 %d 个",
     "Add selected": "添加所选",
     "Load the current list from this provider.": "从该服务商加载当前列表。",
+    "Run the provider's local configuration command, then refresh": "运行服务商的本地配置命令，然后刷新",
     "saved list": "已保存列表",
     "live list": "实时列表",
     "%d models · %d added · %@": "%d 个模型 · 已添加 %d 个 · %@",

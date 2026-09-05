@@ -957,6 +957,28 @@ function needsMoonshotSchemaCompatibility(route) {
   );
 }
 
+// Building the routed catalog reads picker, credential, and proof state. It is
+// only needed when the client actually advertises collaboration.spawn_agent:
+// turns without that tool must not spend request-deadline budget on a schema
+// that cannot reach the provider.
+function routedSubagentModelSlugs(tools) {
+  if (
+    !Array.isArray(tools) ||
+    !tools.some(
+      (tool) =>
+        tool?.type === "namespace" &&
+        tool.name === "collaboration" &&
+        Array.isArray(tool.tools) &&
+        tool.tools.some((fn) => fn?.name === "spawn_agent"),
+    )
+  ) {
+    return [];
+  }
+  return routedClientModels().models
+    .filter((model) => !model.native)
+    .map((model) => model.slug);
+}
+
 function zenFreeCompatibleInput(input, route) {
   if (!needsZenFreeToolCompatibility(route)) return input;
   return downgradeOriginalImageDetail(agentMessagesAsUserMessages(input));
@@ -2002,6 +2024,7 @@ function requiresTrailingUserTurn(route) {
   const provider = providerForModel(route);
   if (
     provider?.generic !== true &&
+    provider?.protocol !== "vertex" &&
     (provider?.id === "gemini-api" || provider?.ownedBy?.toLowerCase?.() === "google")
   ) {
     return true;
@@ -2962,6 +2985,13 @@ async function buildRoutedRequest({ request, payload, route, agedInput }) {
   const provider = providerForModel(route);
   const chatCompletionsProvider = provider?.protocol !== "openai-responses";
   const consoleGoResponsesCompatibility = needsConsoleGoResponsesToolCompatibility(route);
+  let routedSubagentModels;
+  const getRoutedSubagentModels = () => {
+    if (routedSubagentModels === undefined) {
+      routedSubagentModels = routedSubagentModelSlugs(payload.tools);
+    }
+    return routedSubagentModels;
+  };
   const compatibleInput = zenFreeCompatibleInput(
     normalizeProviderAppToolOutputs(agedInput),
     route,
@@ -2974,6 +3004,7 @@ async function buildRoutedRequest({ request, payload, route, agedInput }) {
     const preflight = chatProviderToolSurface(payload.tools, provider.id, {
       input: compatibleInput,
       toolChoice: payload.tool_choice,
+      routedSubagentModels: getRoutedSubagentModels(),
     });
     try {
       flattenToolSearchHistory(
@@ -3054,6 +3085,7 @@ async function buildRoutedRequest({ request, payload, route, agedInput }) {
     const flattened = chatProviderToolSurface(tools, provider?.id, {
       input,
       toolChoice: payload.tool_choice,
+      routedSubagentModels: getRoutedSubagentModels(),
     });
     namespacesFlattened = flattened.flattened;
     flattenedNamespaces = flattened.namespaces;
@@ -3064,7 +3096,10 @@ async function buildRoutedRequest({ request, payload, route, agedInput }) {
     // Console Go exposes a Responses endpoint but rejects the native tool
     // discriminators Codex sends. Translate only its tool boundary; unlike the
     // chat-completions branch, do not inject the deferred codex_app snapshot.
-    const flattened = flattenNamespaceTools(tools, { maxNameLength: 64 });
+    const flattened = flattenNamespaceTools(tools, {
+      maxNameLength: 64,
+      routedSubagentModels: getRoutedSubagentModels(),
+    });
     namespacesFlattened = flattened.flattened;
     flattenedNamespaces = flattened.namespaces;
     tools = flattened.tools;
@@ -3816,6 +3851,7 @@ async function handleResponses(request, response, requestUrl) {
       // and queue missing interrupt_agent closes the same way as routed turns.
       flattenedNamespaces = flattenNamespaceTools(payload.tools, {
         bridgeToolSearch: false,
+        routedSubagentModels: routedSubagentModelSlugs(payload.tools),
       }).namespaces;
       pendingInterrupts = pendingInterruptTargets(native.input ?? payload.input, {
         namespaces: flattenedNamespaces,

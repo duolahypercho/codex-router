@@ -161,6 +161,24 @@ test("generic audit error redaction covers bearer and API-key assignments", () =
   assert.equal(message, "Bearer [redacted] API_KEY=[redacted]");
 });
 
+test("ADC-backed catalogs are skipped instead of borrowing repository secrets", async () => {
+  const audit = await auditProviderModels({
+    requested: "vertex",
+    discover: async () => {
+      throw new Error("Vertex discovery must not run in the repository audit.");
+    },
+    credentialResolver: () => {
+      throw new Error("Vertex must not ask the repository audit for an API key.");
+    },
+  });
+  assert.deepEqual(audit.results, [{
+    provider: "vertex",
+    displayName: "Google Cloud Vertex AI",
+    status: "skipped",
+    reason: "This catalog requires local Google Cloud ADC and cannot use a repository API-key secret.",
+  }]);
+});
+
 test("the discovery workflow keeps live secrets away from pull-request code", () => {
   const workflow = readFileSync(path.join(root, ".github/workflows/model-discovery.yml"), "utf8");
   assert.match(workflow, /^\s*pull_request:/m);
@@ -182,6 +200,7 @@ test("the discovery workflow keeps live secrets away from pull-request code", ()
   for (const provider of PROVIDERS.values()) {
     if (
       provider.variantOf ||
+      provider.credential?.resolver ||
       providerCatalogKind(provider) !== "models-endpoint" ||
       provider.authMode === "anonymous" ||
       provider.keyless

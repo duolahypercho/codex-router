@@ -433,6 +433,7 @@ enum RouterHindiText {
     "%d selected": "%d चयनित",
     "Add selected": "चयनित जोड़ें",
     "Load the current list from this provider.": "इस प्रदाता से वर्तमान सूची लोड करें।",
+    "Run the provider's local configuration command, then refresh": "प्रदाता का स्थानीय कॉन्फ़िगरेशन कमांड चलाएँ, फिर रीफ़्रेश करें",
     "saved list": "सहेजी गई सूची",
     "live list": "लाइव सूची",
     "%d models · %d added · %@": "%d मॉडल · %d जोड़े गए · %@",

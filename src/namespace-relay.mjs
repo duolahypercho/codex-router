@@ -934,10 +934,40 @@ export function downgradeOriginalImageDetail(input) {
   return changed ? converted : input;
 }
 
-function flattenNamespaceChild(namespace, fn, providerName) {
+function augmentSpawnAgentModelSchema(parameters, routedSubagentModels) {
+  if (!parameters || typeof parameters !== "object" || !Array.isArray(routedSubagentModels)) {
+    return parameters;
+  }
+  const model = parameters.properties?.model;
+  if (!model || typeof model !== "object") return parameters;
+  const additions = routedSubagentModels.filter((value) => typeof value === "string" && value);
+  if (!additions.length) return parameters;
+  const anyOf = Array.isArray(model.anyOf) ? model.anyOf : [model];
+  let changed = false;
+  const nextAnyOf = anyOf.map((branch) => {
+    if (!branch || typeof branch !== "object" || !Array.isArray(branch.enum)) return branch;
+    const enumValues = [...new Set([...branch.enum, ...additions])];
+    if (enumValues.length === branch.enum.length) return branch;
+    changed = true;
+    return { ...branch, enum: enumValues };
+  });
+  if (!changed) return parameters;
+  return {
+    ...parameters,
+    properties: {
+      ...parameters.properties,
+      model: { ...model, anyOf: nextAnyOf },
+    },
+  };
+}
+
+function flattenNamespaceChild(namespace, fn, providerName, options = {}) {
   const clientSchema = fn.parameters ?? fn.inputSchema;
-  const parameters =
+  let parameters =
     clientSchema === undefined ? undefined : providerToolSchema(clientSchema);
+  if (namespace === "collaboration" && fn.name === "spawn_agent") {
+    parameters = augmentSpawnAgentModelSchema(parameters, options.routedSubagentModels);
+  }
   return {
     ...fn,
     name: providerName ?? `${namespace}${NAMESPACE_DELIMITER}${fn.name}`,
@@ -950,7 +980,7 @@ function flattenNamespaceChild(namespace, fn, providerName) {
 // (name -> tool names) so callers can rename history and restore calls.
 export function flattenNamespaceTools(
   tools,
-  { bridgeToolSearch = true, maxNameLength, aliasCollisions = false } = {},
+  { bridgeToolSearch = true, maxNameLength, aliasCollisions = false, routedSubagentModels = [] } = {},
 ) {
   if (!Array.isArray(tools)) return { tools, flattened: false, namespaces: new Map() };
   const flattened = [];
@@ -1017,6 +1047,7 @@ export function flattenNamespaceTools(
             tool.name,
             fn,
             providerNameForNative(namespaces, tool.name, fn.name),
+            { routedSubagentModels },
           ),
         );
         names.add(fn.name);
@@ -1047,6 +1078,9 @@ export function flattenNamespaceTools(
     }
     if (repaired !== tool) changed = true;
     flattened.push(repaired);
+  }
+  for (const model of routedSubagentModels) {
+    if (typeof model === "string" && model) spawnAgentModels.add(model);
   }
   if (spawnAgentModels.size > 0) SPAWN_AGENT_MODELS.set(namespaces, spawnAgentModels);
   if (toolSearchRelay) TOOL_SEARCH_RELAYS.set(namespaces, toolSearchRelay);

@@ -1,6 +1,7 @@
 import {
   apiProvider,
   credentialLabel,
+  credentialSetupHint,
   credentialStatus,
   primaryCredentialPath,
   writeProviderCredential,
@@ -38,6 +39,7 @@ export {
 
 if (command === "status") {
   const status = credentialStatus(provider);
+  const credentialLabel = provider.credential?.resolver ? "authentication" : "key";
   process.stdout.write(
     status.configured
       ? `${provider.displayName} ${credentialNoun} is configured via ${status.source}.${
@@ -49,13 +51,13 @@ if (command === "status") {
   );
   if (!status.configured) process.exitCode = 1;
 } else if (command === "set") {
+  if (provider.credential?.resolver) {
+    throw new Error(`${provider.displayName} does not accept API keys; ${credentialSetupHint(provider)}`);
+  }
   const value = promptForSecret(provider.credential.prompt || `${provider.displayName} API key`);
   let target;
   let refreshed;
   await withModelOverlayLock(async () => {
-    // Keep the credential write and the provider selection in one cross-process
-    // critical section. A concurrent remove must not delete the key between
-    // these operations and leave an enabled credentialless provider behind.
     await withProviderCatalogCacheTransaction((catalog) => {
       target = writeProviderCredential(provider, value);
       catalog.forget(providerCatalogFamilyCacheIds(provider.id));
