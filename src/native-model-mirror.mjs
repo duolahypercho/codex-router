@@ -121,6 +121,13 @@ export function planNativeModelMirror({
       nativeModel,
       priority: current?.priority ?? nextPriority,
     });
+    // Discovery can refresh presentation metadata, but it cannot certify
+    // whether this exact provider/model route accepts completed search items.
+    // Preserve an operator's route-specific proof without inferring it for a
+    // newly mirrored model or copying it from another route.
+    if (typeof current?.supportsSearchHistory === "boolean") {
+      generated.supportsSearchHistory = current.supportsSearchHistory;
+    }
     if (current) {
       if (JSON.stringify(current) !== JSON.stringify(generated)) {
         models[index] = generated;

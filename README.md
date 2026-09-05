@@ -612,7 +612,11 @@ the account and advertised by that provider. Provider-only ids, hidden native
 models, and manually curated entries are left untouched. Automatically
 mirrored routes remain conservative: client-only `ultra` reasoning is not advertised
 for an automatically mirrored upstream whose `/models` response cannot certify
-it. A manually curated route remains authoritative. Codex still loads the
+it, and search-history replay is not inferred from another model or from
+Responses compatibility alone. After live-testing one exact managed route, an
+operator may set its `supportsSearchHistory` boolean in the protected
+`user-models.json`; later mirror refreshes preserve that route-specific proof.
+A manually curated route remains authoritative. Codex still loads the
 resulting `model_catalog_json` at startup, so fully quit and reopen the app to
 see a newly mirrored model.
 

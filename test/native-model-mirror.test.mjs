@@ -48,6 +48,7 @@ test("native mirroring adds only account-visible models advertised by the provid
     upstreamModel: "gpt-5.6-sol",
     provider: "private",
     priority: 100,
+    supportsSearchHistory: true,
   };
   const result = planNativeModelMirror({
     provider,
@@ -65,6 +66,7 @@ test("native mirroring adds only account-visible models advertised by the provid
   assert.equal(result.models[0], manual);
   const mirrored = result.models[1];
   assert.equal(mirrored.managedBy, NATIVE_MODEL_MIRROR_MARKER);
+  assert.equal(mirrored.supportsSearchHistory, undefined);
   assert.equal(mirrored.contextWindow, 272_000);
   assert.equal(mirrored.autoCompact, 231_200);
   assert.deepEqual(mirrored.inputModalities, ["text", "image"]);
@@ -83,7 +85,7 @@ test("native mirroring updates its own entries and preserves manual curation", (
     discovered: [astra.slug],
     existing: [],
   });
-  const managed = first.models[0];
+  const managed = { ...first.models[0], supportsSearchHistory: true };
   const updated = planNativeModelMirror({
     provider,
     nativeModels: [{ ...astra, context_window: 300_000 }],
@@ -93,6 +95,7 @@ test("native mirroring updates its own entries and preserves manual curation", (
   assert.deepEqual(updated.added, []);
   assert.deepEqual(updated.updated, ["private/gpt-6-astra"]);
   assert.equal(updated.models[0].contextWindow, 300_000);
+  assert.equal(updated.models[0].supportsSearchHistory, true);
 
   const manual = { ...managed, managedBy: undefined, contextWindow: 123_456 };
   const preserved = planNativeModelMirror({
