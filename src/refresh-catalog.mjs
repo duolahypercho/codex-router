@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { nativeCatalogCanRefreshInPlace } from "./catalog.mjs";
 import { SOURCE_ROOT } from "./paths.mjs";
 import {
   beginLoginFreeRefresh,
@@ -85,6 +86,7 @@ function restoreTransport(
 
 async function refreshCatalogUnlocked({
   run = nodeRunner,
+  canRefreshInPlace = nativeCatalogCanRefreshInPlace,
   aliases = readNativeAliases,
   aliasFor = nativeAliasFor,
   journal = {
@@ -126,6 +128,15 @@ async function refreshCatalogUnlocked({
   };
   let restoreNeeded = false;
   let catalogResult;
+  // Signed-in Codex keeps its account cache separate from model_catalog_json.
+  // When that cache is known-native, refresh the catalog without rewriting
+  // config.toml; this also avoids needless failures when another Windows
+  // process has the config open without delete sharing. Login-free mode still
+  // requires the journaled transport transition below.
+  if (routed && !loginFree && canRefreshInPlace()) {
+    catalogResult = checked(run, "catalog.mjs", ["--refresh-native"]);
+    return { catalogOutput: catalogResult.stdout || "" };
+  }
   try {
     if (routed) {
       if (loginFree) {

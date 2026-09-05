@@ -21,6 +21,7 @@ import {
   codexEffortVocabulary,
   effectivePickerHiddenModels,
   liveAccountCatalogProbeAllowed,
+  nativeCacheCanRefreshInPlace,
   nativeCatalogIsReusable,
   deriveBaseInstructions,
   mergeNativeCatalogs,
@@ -911,6 +912,20 @@ test("models stay untouched when the installed build understands their efforts",
   };
   const [unchanged] = clampModelEfforts([original], vocabulary);
   assert.equal(unchanged, original);
+});
+
+test("native cache permits in-place refresh only when it contains native models", () => {
+  assert.equal(
+    nativeCacheCanRefreshInPlace({ catalog: { models: [template] } }),
+    true,
+  );
+  assert.equal(
+    nativeCacheCanRefreshInPlace({
+      catalog: { models: [template, { ...template, slug: grok.slug }] },
+    }),
+    false,
+  );
+  assert.equal(nativeCacheCanRefreshInPlace({}), false);
 });
 
 test("native catalog cache is reusable only for the codex build that captured it", () => {
