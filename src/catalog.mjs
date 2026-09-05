@@ -64,6 +64,7 @@ import { withCatalogPublicationLock } from "./catalog-publication-lock.mjs";
 import { routedModelSearchAvailable } from "./search-capability.mjs";
 
 const refresh = process.argv.includes("--refresh-native");
+const routerTransportParked = process.argv.includes("--router-transport-parked");
 
 function validNativeCatalog(parsed) {
   return parsed && Array.isArray(parsed.models) && parsed.models.length > 0;
@@ -202,6 +203,13 @@ function readModelsCache() {
   }
 }
 
+function nativeCatalogFingerprint(catalog) {
+  if (!validNativeCatalog(catalog)) return undefined;
+  return createHash("sha256")
+    .update(JSON.stringify(catalog.models))
+    .digest("hex");
+}
+
 function atomicContents(target, contents) {
   mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
   const temporary = `${target}.tmp.${process.pid}`;
@@ -250,7 +258,7 @@ function catalogContainsRoutedSlugs(catalog) {
   );
 }
 
-function captureNative(cache) {
+function captureNative(cache, { preferLive = false } = {}) {
   // A discovery-disabled install promised that nothing account-derived is
   // read: `debug models` without --bundled reflects the signed-in account's
   // catalog, and `models_cache.json` is that same catalog written to disk, so
@@ -258,12 +266,17 @@ function captureNative(cache) {
   // This is the gate SECURITY.md's "the one Codex spawn that remains is
   // `codex debug models --bundled`" claim rests on.
   const idle = discoveryDisabled();
-  const routedActive = routedCatalogActive();
+  // Only refresh-catalog may assert that it transactionally parked the router
+  // transport. A direct `catalog --refresh-native` keeps probing disabled when
+  // routing ownership is active or ambiguous, so it cannot capture its own
+  // merged model_catalog_json as an account catalog.
+  const routedActive = routerTransportParked ? false : routedCatalogActive();
   const resolved = cache ?? (idle ? {} : readModelsCache());
   // This is the account-aware catalog Codex itself cached after signing in.
   // Reading it directly also avoids asking `codex debug models` while the
   // router catalog is active, which would merely return our own merged output.
-  let account = resolved.catalog;
+  const cachedAccount = resolved.catalog;
+  let account = cachedAccount;
   let fallback;
   let accountError;
   let fallbackError;
@@ -274,10 +287,18 @@ function captureNative(cache) {
       "models_cache.json contains routed model slugs; refusing to treat it as native.",
     );
   }
-  if (!account && liveAccountCatalogProbeAllowed({
+  const liveAllowed = liveAccountCatalogProbeAllowed({
     discoveryDisabled: idle,
     routedCatalogActive: routedActive,
-  })) {
+  });
+  // `--refresh-native` is an explicit request for the account's current
+  // catalog. A syntactically valid models_cache.json can still predate a
+  // server-side rollout by days, so it is a fallback here, not the authority.
+  // The refresh orchestrator parks the routed config before this call; direct
+  // refreshes made while routing is active remain cache-only so `debug models`
+  // cannot echo the merged router catalog back into the native capture.
+  if (preferLive && liveAllowed) account = undefined;
+  if (!account && liveAllowed) {
     try {
       account = JSON.parse(runCodex(["debug", "models"], {
         encoding: "utf8",
@@ -286,6 +307,9 @@ function captureNative(cache) {
       }));
     } catch (error) {
       accountError = error;
+      if (cachedAccount && !catalogContainsRoutedSlugs(cachedAccount)) {
+        account = cachedAccount;
+      }
     }
   }
   // The bundled source supplies schema fields that the remote cache is allowed
@@ -313,7 +337,7 @@ function captureNative(cache) {
     );
   }
   const capturedWith = codexVersion();
-  const sourceFingerprint = cache.fingerprint;
+  const sourceFingerprint = nativeCatalogFingerprint(account) || resolved.fingerprint;
   atomicJson(NATIVE_CATALOG_PATH, {
     ...(capturedWith ? { captured_with: capturedWith } : {}),
     ...(sourceFingerprint ? { native_source_fingerprint: sourceFingerprint } : {}),
@@ -374,7 +398,7 @@ function nativeCatalog({ refreshNative = refresh } = {}) {
   };
   if (!existsSync(NATIVE_CATALOG_PATH) || refreshNative) {
     try {
-      return captureNative(cache);
+      return captureNative(cache, { preferLive: refreshNative });
     } catch (error) {
       // Account switching refreshes native while the router still owns
       // model_catalog_json. Prefer a prior capture over aborting the switch.

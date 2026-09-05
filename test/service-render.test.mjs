@@ -174,6 +174,46 @@ test("background services never copy the Antigravity client secret", () => {
   }
 });
 
+test("background services preserve only an enabled passive-refresh kill switch", () => {
+  const testRoot = mkdtempSync(path.join(os.tmpdir(), "codex-router-passive-service-"));
+  const scripts = [
+    [
+      "service-macos.mjs",
+      "darwin",
+      /CODEX_ROUTER_DISABLE_PASSIVE_CATALOG_REFRESH<\/key>\s*<string>1<\/string>/,
+    ],
+    ["service-linux.mjs", "linux", /CODEX_ROUTER_DISABLE_PASSIVE_CATALOG_REFRESH=1/],
+    ["service-windows.mjs", "win32", /CODEX_ROUTER_DISABLE_PASSIVE_CATALOG_REFRESH=1/],
+  ];
+  try {
+    for (const [script, platform, enabledPattern] of scripts) {
+      const enabled = serviceCommand(
+        script,
+        platform,
+        testRoot,
+        "render",
+        "codex",
+        root,
+        { CODEX_ROUTER_DISABLE_PASSIVE_CATALOG_REFRESH: "1" },
+      );
+      assert.match(enabled, enabledPattern);
+
+      const rejected = serviceCommand(
+        script,
+        platform,
+        testRoot,
+        "render",
+        "codex",
+        root,
+        { CODEX_ROUTER_DISABLE_PASSIVE_CATALOG_REFRESH: "1 & unsafe" },
+      );
+      assert.doesNotMatch(rejected, /CODEX_ROUTER_DISABLE_PASSIVE_CATALOG_REFRESH/);
+    }
+  } finally {
+    rmSync(testRoot, { recursive: true, force: true });
+  }
+});
+
 test("background services preserve only environment credentials referenced by a pool", () => {
   const testRoot = mkdtempSync(path.join(os.tmpdir(), "codex-router-pool-environment-service-"));
   const secret = "test-pooled-opencode-secret";

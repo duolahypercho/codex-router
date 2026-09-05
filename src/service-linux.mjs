@@ -79,6 +79,9 @@ function unit() {
     CODEX_ROUTER_OAUTH_PORT: String(PORTS.oauth),
     CODEX_ROUTER_PORT: String(PORTS.router),
     CODEX_ROUTER_API_PORT: String(PORTS.api),
+    ...(process.env.CODEX_ROUTER_DISABLE_PASSIVE_CATALOG_REFRESH === "1"
+      ? { CODEX_ROUTER_DISABLE_PASSIVE_CATALOG_REFRESH: "1" }
+      : {}),
     ...serviceProxyEnvironment(),
     ...providerApiKeyServiceEnvironment(),
     ...(process.env.KIMI_CODE_HOME ? { KIMI_CODE_HOME: process.env.KIMI_CODE_HOME } : {}),

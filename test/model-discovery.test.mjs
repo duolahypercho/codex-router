@@ -22,7 +22,18 @@ after(() => {
 
 const { MODELS, PROVIDERS } = await import("../src/model-registry.mjs");
 const { modelCatalogMetadata } = await import("../src/model-catalog-metadata.mjs");
-const { discoverProviderModels, modelContextLengths, modelIds } = await import("../src/model-discovery.mjs");
+const {
+  discoverProviderModels,
+  modelContextLengths,
+  modelIds,
+  providerAllowsPrivateDiscovery,
+} = await import("../src/model-discovery.mjs");
+
+test("private model discovery requires an explicit provider opt-in", () => {
+  assert.equal(providerAllowsPrivateDiscovery({}), false);
+  assert.equal(providerAllowsPrivateDiscovery({ allowPrivate: true }), true);
+  assert.equal(providerAllowsPrivateDiscovery({ keyless: true }), true);
+});
 
 test("model discovery compares fixtures without needing or exposing a key", () => {
   const testRoot = mkdtempSync(path.join(os.tmpdir(), "codex-router-discovery-"));

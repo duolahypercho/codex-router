@@ -1497,6 +1497,59 @@ test("a keyless provider must be loopback and must not carry a credential", asyn
   }
 });
 
+test("native model mirroring is an explicit Responses-provider contract", async () => {
+  const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const nodePath = (await import("node:path")).default;
+  const { spawnSync } = await import("node:child_process");
+  const dir = mkdtempSync(nodePath.join(tmpdir(), "registry-native-mirror-test-"));
+  const load = (mutate) => {
+    const registry = readRegistryDocument("config");
+    mutate(registry);
+    const registryPath = nodePath.join(dir, `providers-${Math.random()}.json`);
+    writeFileSync(registryPath, JSON.stringify(registry));
+    return spawnSync(
+      process.execPath,
+      ["-e", "import('./src/model-registry.mjs').catch((e)=>{console.error(e.message);process.exit(1);})"],
+      { encoding: "utf8", env: { ...process.env, MODEL_ROUTER_REGISTRY: registryPath } },
+    );
+  };
+  try {
+    const invalidFlag = load((registry) => {
+      registry.providers = registry.providers.map((provider) =>
+        provider.id === "deepseek" ? { ...provider, allowPrivate: "yes" } : provider,
+      );
+    });
+    assert.equal(invalidFlag.status, 1);
+    assert.match(invalidFlag.stderr, /invalid allowPrivate flag/);
+
+    const wrongProtocol = load((registry) => {
+      registry.providers = registry.providers.map((provider) =>
+        provider.id === "deepseek" ? { ...provider, mirrorNativeModels: true } : provider,
+      );
+    });
+    assert.equal(wrongProtocol.status, 1);
+    assert.match(wrongProtocol.stderr, /may mirror native models only through openai-responses/);
+
+    const accepted = load((registry) => {
+      registry.providers.push({
+        id: "private-mirror",
+        displayName: "Private Mirror",
+        ownedBy: "operator",
+        kind: "openai-compatible",
+        protocol: "openai-responses",
+        baseUrl: "http://10.0.0.2:8000/v1",
+        credential: { file: "private-mirror.secret", environment: [] },
+        allowPrivate: true,
+        mirrorNativeModels: true,
+      });
+    });
+    assert.equal(accepted.status, 0, accepted.stderr);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("credential-free endpoints are allowlisted addresses, at the provider and at the model", async () => {
   const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");

@@ -1365,23 +1365,25 @@ test("efficient routed execution silently substitutes routine missing tools", ()
 // picker after an update (issue #338).
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
-function writeCatalogCodexStub(directory) {
+function writeCatalogCodexStub(directory, options = {}) {
   const windows = process.platform === "win32";
   const target = path.join(directory, windows ? "codex-picker.cmd" : "codex-picker");
-  const models = JSON.stringify({
+  const defaultCatalog = {
     models: [
       { slug: "gpt-5.6-sol", display_name: "GPT-5.6 Sol", visibility: "list", priority: 10 },
     ],
-  });
+  };
+  const liveModels = JSON.stringify(options.live || defaultCatalog);
+  const bundledModels = JSON.stringify(options.bundled || options.live || defaultCatalog);
   writeFileSync(
     target,
     windows
-      ? `@echo off\r\nif "%1"=="--version" (echo codex-cli 99.0.0& exit /b 0)\r\nif "%1"=="login" exit /b 0\r\nif "%1"=="debug" (echo ${models}& exit /b 0)\r\nexit /b 1\r\n`
+      ? `@echo off\r\nif "%1"=="--version" (echo codex-cli 99.0.0& exit /b 0)\r\nif "%1"=="login" exit /b 0\r\nif "%1"=="debug" if "%3"=="--bundled" (echo ${bundledModels}& exit /b 0)\r\nif "%1"=="debug" (echo ${liveModels}& exit /b 0)\r\nexit /b 1\r\n`
       : `#!/bin/sh
 case "$1" in
   --version) echo 'codex-cli 99.0.0' ;;
   login) exit 0 ;;
-  debug) printf '%s\\n' '${models}' ;;
+  debug) if [ "$3" = "--bundled" ]; then printf '%s\\n' '${bundledModels}'; else printf '%s\\n' '${liveModels}'; fi ;;
   *) exit 1 ;;
 esac
 `,
@@ -1389,6 +1391,53 @@ esac
   );
   return target;
 }
+
+test(
+  "explicit native refresh prefers the live account catalog over a valid stale cache",
+  { timeout: 30_000 },
+  () => {
+    const codexHome = mkdtempSync(path.join(os.tmpdir(), "codex-router-live-native-refresh-"));
+    const stateDir = path.join(codexHome, "router-state");
+    mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+    writeFileSync(path.join(codexHome, "config.toml"), 'model = "gpt-live"\n', { mode: 0o600 });
+    writeFileSync(
+      path.join(codexHome, "models_cache.json"),
+      `${JSON.stringify({ models: [{ slug: "gpt-stale", display_name: "Stale", visibility: "list", priority: 2 }] })}\n`,
+      { mode: 0o600 },
+    );
+    const live = {
+      models: [{ slug: "gpt-live", display_name: "Live", visibility: "list", priority: 1 }],
+    };
+    try {
+      const catalog = spawnSync(
+        process.execPath,
+        [
+          path.join(repoRoot, "src", "catalog.mjs"),
+          "--refresh-native",
+          "--router-transport-parked",
+        ],
+        {
+          cwd: repoRoot,
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            CODEX_BIN: writeCatalogCodexStub(codexHome, { live }),
+            CODEX_HOME: codexHome,
+            CODEX_ROUTER_STATE_DIR: stateDir,
+            MODEL_ROUTER_STATE_DIR: stateDir,
+            MODEL_ROUTER_TARGET: "codex",
+          },
+        },
+      );
+      assert.equal(catalog.status, 0, catalog.stderr);
+      const captured = JSON.parse(readFileSync(path.join(stateDir, "native-models.json"), "utf8"));
+      assert.deepEqual(captured.models.map((model) => model.slug), ["gpt-live"]);
+      assert.ok(captured.native_source_fingerprint);
+    } finally {
+      rmSync(codexHome, { recursive: true, force: true });
+    }
+  },
+);
 
 test(
   "an update publishes the models a pre-allowlist picker was already showing",
