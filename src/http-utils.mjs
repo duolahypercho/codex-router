@@ -654,7 +654,24 @@ export async function readResponseBody(
 }
 
 export function writeJson(response, status, payload) {
-  const body = Buffer.from(JSON.stringify(payload), "utf8");
+  // Use a JSON.stringify replacer to drop stack properties and sanitize Error objects
+  // This preserves normal JSON semantics for Date, Buffer, and other objects
+  const body = Buffer.from(JSON.stringify(payload, (key, value) => {
+    // Drop any 'stack' properties entirely
+    if (key === 'stack') return undefined;
+    
+    // Convert Error objects to safe representations
+    if (value instanceof Error) {
+      return {
+        name: value.name,
+        message: String(value.message).split('\n')[0], // First line only, no stack trace
+        ...(value.code !== undefined ? { code: value.code } : {}),
+      };
+    }
+    
+    return value;
+  }), "utf8");
+  
   response.writeHead(status, {
     "Content-Type": "application/json",
     "Content-Length": String(body.length),
