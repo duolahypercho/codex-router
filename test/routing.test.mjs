@@ -9463,7 +9463,7 @@ test("router normalizes direct DeepSeek's live reasoning bridge and removes its 
   }
 });
 
-test("router compacts translated OpenCode routes but leaves Responses-native routes unchanged", async () => {
+test("router compacts translated OpenCode routes and pins subagents on both route types", async () => {
   const blank = {
     id: "msg_blank",
     type: "message",
@@ -9484,11 +9484,12 @@ test("router compacts translated OpenCode routes but leaves Responses-native rou
     arguments: "{}",
     status: "completed",
   };
-  const restoredTool = {
+  const restoredTool = (model) => ({
     ...tool,
     name: "spawn_agent",
     namespace: "collaboration",
-  };
+    arguments: JSON.stringify({ model }),
+  });
   const tools = [{
     type: "namespace",
     name: "collaboration",
@@ -9574,7 +9575,7 @@ test("router compacts translated OpenCode routes but leaves Responses-native rou
     );
     assert.deepEqual(
       translatedEvents.find((event) => event.type === "response.completed").response.output,
-      [restoredTool],
+      [restoredTool("opencode-go/deepseek-v4-flash")],
     );
 
     const nativeResponse = await fetch(`${routerBase(routerPort)}/responses`, {
@@ -9599,7 +9600,7 @@ test("router compacts translated OpenCode routes but leaves Responses-native rou
     );
     assert.deepEqual(
       nativeEvents.find((event) => event.type === "response.completed").response.output,
-      [terminalBlank, restoredTool],
+      [terminalBlank, restoredTool("opencode-go-responses/gpt-5.6-luna")],
     );
   } finally {
     await stopChild(router);

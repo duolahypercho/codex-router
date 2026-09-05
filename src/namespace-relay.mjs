@@ -464,26 +464,33 @@ function schemaStringValues(schema, values = new Set()) {
   return values;
 }
 
-// A fresh local thread inherits the routed session model when the caller did
-// not choose one. Follow-up messages intentionally keep the target thread's
-// settings, and cloud tasks require model omission, so neither is rewritten.
-export const SPAWN_MODEL_TOOLS = new Set(["create_thread"]);
-const SPAWN_TOOL_PREFIX = `codex_app${NAMESPACE_DELIMITER}`;
+// A fresh local thread or in-session subagent inherits the routed session
+// model when the caller did not choose one. Follow-up messages intentionally
+// keep the target thread's settings, and cloud tasks require model omission,
+// so neither is rewritten.
+export const SPAWN_MODEL_TOOLS = new Set(["create_thread", "spawn_agent"]);
+const SPAWN_MODEL_NAMESPACES = new Map([
+  ["codex_app", new Set(["create_thread"])],
+  ["collaboration", new Set(["spawn_agent"])],
+]);
 
 function isSpawnModelCall(item) {
   if (!item || typeof item.name !== "string") return false;
-  // Flattened form the router sends to chat-completions bridges:
-  // `codex_app__create_thread`.
-  if (item.name.startsWith(SPAWN_TOOL_PREFIX)) {
-    return SPAWN_MODEL_TOOLS.has(item.name.slice(SPAWN_TOOL_PREFIX.length));
+  // Flattened forms the router sends to chat-completions bridges, such as
+  // `codex_app__create_thread` and `collaboration__spawn_agent`.
+  for (const [namespace, names] of SPAWN_MODEL_NAMESPACES) {
+    const prefix = `${namespace}${NAMESPACE_DELIMITER}`;
+    if (item.name.startsWith(prefix)) return names.has(item.name.slice(prefix.length));
   }
-  // Native namespace form openai-responses providers keep:
-  // `{ name: "create_thread", namespace: "codex_app" }`.
-  if (item.namespace === "codex_app") return SPAWN_MODEL_TOOLS.has(item.name);
-  return false;
+  // Native namespace form openai-responses providers keep.
+  return SPAWN_MODEL_NAMESPACES.get(item.namespace)?.has(item.name) === true;
 }
 
-// Inject the session model into local create_thread calls that omitted it.
+// Inject the session model into local create_thread and spawn_agent calls that
+// omitted it. For spawn_agent this runs after an unsupported explicit override
+// has been removed, so the child returns to its routed parent rather than the
+// client's native default. A parent not offered by the client then fails
+// closed at tool validation instead of silently crossing a billing boundary.
 // `model` is the routed session's model (route.slug). Returns a rewritten
 // item when the call is one of SPAWN_MODEL_TOOLS, carries no explicit model,
 // and a session model is available; otherwise returns the item untouched.

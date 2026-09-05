@@ -4039,10 +4039,12 @@ async function handleResponses(request, response, requestUrl) {
         ? translatedToolMessageCompatTransform(providerForModel(route), contentType)
         : undefined;
       if (translatedToolMessageCompat) transforms.push(translatedToolMessageCompat);
-      // Restore flattened namespace calls for routed chat-completions providers,
-      // and inject missing finished-child interrupts for both routed and native
-      // multi-agent parents (San Francisco uses native GPT).
-      if (!directResponses && (route || pendingInterrupts.length > 0)) {
+      // Restore flattened namespace calls for routed chat-completions providers
+      // and pin an omitted spawn_agent model to every routed parent, including
+      // providers that already speak Responses. Also inject missing finished-
+      // child interrupts for both routed and native multi-agent parents (San
+      // Francisco uses native GPT).
+      if (route || pendingInterrupts.length > 0) {
         transforms.push(
           new NamespaceToolCallTransform(
             flattenedNamespaces,

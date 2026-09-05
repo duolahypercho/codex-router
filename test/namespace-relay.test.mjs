@@ -2444,6 +2444,80 @@ test("response transform drops a spawn-agent model override not offered by the t
     message: "verify",
     model: "gpt-5.6-terra",
   });
+
+  const inherited = rewriteNamespaceResponsePayload(
+    {
+      output: [
+        {
+          type: "function_call",
+          name: "collaboration__spawn_agent",
+          arguments: JSON.stringify({ message: "verify", model: "gpt-5.6-luna" }),
+        },
+      ],
+    },
+    lookups,
+    "opencode-go/deepseek-v4-flash",
+  );
+  assert.deepEqual(JSON.parse(inherited.output[0].arguments), {
+    message: "verify",
+    model: "opencode-go/deepseek-v4-flash",
+  });
+});
+
+test("stream response keeps an omitted spawn-agent model on its routed parent", async () => {
+  const { namespaces } = flattenNamespaceTools(clientRoutedTools());
+  const event = {
+    type: "response.output_item.done",
+    item: {
+      type: "function_call",
+      name: "collaboration__spawn_agent",
+      call_id: "call_parent_model",
+      arguments: JSON.stringify({ message: "verify" }),
+    },
+  };
+  const transform = new NamespaceToolCallTransform(
+    namespaces,
+    "text/event-stream",
+    "opencode-go/deepseek-v4-flash",
+  );
+  const output = await collect(
+    Readable.from([`data: ${JSON.stringify(event)}\n\n`]).pipe(transform),
+  );
+  const payload = JSON.parse(output.toString("utf8").trim().slice(5));
+  assert.equal(payload.item.namespace, "collaboration");
+  assert.equal(payload.item.name, "spawn_agent");
+  assert.deepEqual(JSON.parse(payload.item.arguments), {
+    message: "verify",
+    model: "opencode-go/deepseek-v4-flash",
+  });
+});
+
+test("Responses-native stream keeps an omitted spawn-agent model on its routed parent", async () => {
+  const event = {
+    type: "response.output_item.done",
+    item: {
+      type: "function_call",
+      namespace: "collaboration",
+      name: "spawn_agent",
+      call_id: "call_native_parent_model",
+      arguments: JSON.stringify({ message: "verify" }),
+    },
+  };
+  const transform = new NamespaceToolCallTransform(
+    new Map(),
+    "text/event-stream",
+    "opencode-go/deepseek-v4-flash",
+  );
+  const output = await collect(
+    Readable.from([`data: ${JSON.stringify(event)}\n\n`]).pipe(transform),
+  );
+  const payload = JSON.parse(output.toString("utf8").trim().slice(5));
+  assert.equal(payload.item.namespace, "collaboration");
+  assert.equal(payload.item.name, "spawn_agent");
+  assert.deepEqual(JSON.parse(payload.item.arguments), {
+    message: "verify",
+    model: "opencode-go/deepseek-v4-flash",
+  });
 });
 
 test("response transform detects headerless SSE after split framing prelude", async () => {

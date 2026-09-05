@@ -19,8 +19,8 @@ function spawnCall(name, namespace, argumentsText) {
   return item;
 }
 
-test("only create_thread is eligible for routed model inheritance", () => {
-  assert.deepEqual([...SPAWN_MODEL_TOOLS], ["create_thread"]);
+test("local thread and subagent spawns are eligible for routed model inheritance", () => {
+  assert.deepEqual([...SPAWN_MODEL_TOOLS], ["create_thread", "spawn_agent"]);
 });
 
 test("routed session + omitted model injects the session model (flattened form)", () => {
@@ -30,6 +30,35 @@ test("routed session + omitted model injects the session model (flattened form)"
   assert.deepEqual(JSON.parse(next.arguments), {
     prompt: "hi",
     target: { type: "projectless" },
+    model: SESSION_MODEL,
+  });
+});
+
+test("routed session + omitted model keeps a flattened subagent on its parent model", () => {
+  const item = spawnCall(
+    "collaboration__spawn_agent",
+    undefined,
+    JSON.stringify({ task_name: "review", message: "inspect" }),
+  );
+  const next = injectSessionModelForSpawnCalls(item, SESSION_MODEL);
+  assert.notEqual(next, item);
+  assert.deepEqual(JSON.parse(next.arguments), {
+    task_name: "review",
+    message: "inspect",
+    model: SESSION_MODEL,
+  });
+});
+
+test("routed session + omitted model keeps a native subagent on its parent model", () => {
+  const item = spawnCall(
+    "spawn_agent",
+    "collaboration",
+    JSON.stringify({ task_name: "review", message: "inspect" }),
+  );
+  const next = injectSessionModelForSpawnCalls(item, SESSION_MODEL);
+  assert.deepEqual(JSON.parse(next.arguments), {
+    task_name: "review",
+    message: "inspect",
     model: SESSION_MODEL,
   });
 });
@@ -60,6 +89,13 @@ test("explicit model always wins and stays untouched", () => {
     JSON.stringify({ threadId: "t1", prompt: "continue", model: "gpt-5.5" }),
   );
   assert.equal(injectSessionModelForSpawnCalls(namespaced, SESSION_MODEL), namespaced);
+
+  const subagent = spawnCall(
+    "spawn_agent",
+    "collaboration",
+    JSON.stringify({ task_name: "review", message: "inspect", model: "gpt-5.6-terra" }),
+  );
+  assert.equal(injectSessionModelForSpawnCalls(subagent, SESSION_MODEL), subagent);
 });
 
 test("chatgptWorkCloud create_thread calls omit model", () => {
@@ -85,10 +121,12 @@ test("non-spawn tools are never touched", () => {
   for (const item of [
     spawnCall("codex_app__list_threads", undefined, "{}"),
     spawnCall("codex_app__read_thread", undefined, JSON.stringify({ threadId: "t1" })),
-    spawnCall("collaboration__spawn_agent", undefined, JSON.stringify({ task_name: "x" })),
     spawnCall("mcp__node_repl__js", undefined, "{}"),
     // A different namespace with the same tool name is not the app's tool.
     spawnCall("mcp__other__create_thread", undefined, JSON.stringify({ prompt: "hi" })),
+    spawnCall("mcp__other__spawn_agent", undefined, JSON.stringify({ task_name: "x" })),
+    // A bare spelling carries no namespace authority and stays untouched.
+    spawnCall("spawn_agent", undefined, JSON.stringify({ task_name: "x" })),
   ]) {
     assert.equal(injectSessionModelForSpawnCalls(item, SESSION_MODEL), item, item.name);
   }
