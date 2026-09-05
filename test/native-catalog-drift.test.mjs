@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-test("native catalog drift detection without mocking", async () => {
+test("drift detection triggers republish with new arbitrary native in merged output", async () => {
   // Create a temporary state directory
   const tempDir = mkdtempSync(path.join(os.tmpdir(), "native-drift-test-"));
   const stateDir = path.join(tempDir, "state");
@@ -25,8 +25,11 @@ test("native catalog drift detection without mocking", async () => {
     process.env.MODEL_ROUTER_TARGET = "codex";
 
     // Import after env is set
-    const { nativeCatalogDriftDetected } = await import("../src/native-catalog-drift.mjs");
-    const { NATIVE_CATALOG_PATH } = await import("../src/paths.mjs");
+    const { nativeCatalogDriftDetected, republishOnNativeDrift } = await import("../src/native-catalog-drift.mjs");
+    const { NATIVE_CATALOG_PATH, MERGED_CATALOG_PATH, CONFIG_PATH } = await import("../src/paths.mjs");
+
+    // Create minimal managed config so codexIntegrationInstalled returns true
+    writeFileSync(CONFIG_PATH, "# BEGIN codex-router\nopenai_base_url = \"http://test\"\n# END codex-router\n");
 
     // Simulate OLD native model in models_cache.json
     const oldNative = {
@@ -71,7 +74,7 @@ test("native catalog drift detection without mocking", async () => {
       JSON.stringify(updatedCache),
     );
 
-    // NOW drift should be detected (fingerprint changed, stored catalog stale)
+    // NOW drift should be detected
     assert.equal(nativeCatalogDriftDetected(), true, "drift detected when new native appears");
 
     // Verify NEW fingerprint differs from stored
@@ -79,6 +82,26 @@ test("native catalog drift detection without mocking", async () => {
       .update(JSON.stringify([oldNative, newNative]))
       .digest("hex");
     assert.notEqual(newFingerprint, oldFingerprint, "fingerprint changed");
+
+    // NOW TEST ACTUAL REPUBLISH: Call republishOnNativeDrift()
+    // This should detect drift and run the full publish path
+    const republished = await republishOnNativeDrift();
+    
+    // Republish should have succeeded
+    assert.equal(republished, true, "republish succeeded");
+
+    // VERIFY: merged-models.json or native-models.json should now contain NEW arbitrary native
+    const updated = JSON.parse(readFileSync(NATIVE_CATALOG_PATH, "utf8"));
+    const updatedSlugs = updated.models.map(m => m.slug);
+    
+    assert.ok(
+      updatedSlugs.includes("gpt-7-prime"),
+      "NEW arbitrary native (gpt-7-prime) appears in native-models.json after republish"
+    );
+    assert.ok(
+      updatedSlugs.includes("gpt-5.6-sol"),
+      "existing native (gpt-5.6-sol) preserved after republish"
+    );
   } finally {
     // Restore original env
     if (originalStateDir !== undefined) process.env.MODEL_ROUTER_STATE_DIR = originalStateDir;

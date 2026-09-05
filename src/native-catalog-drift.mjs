@@ -15,7 +15,10 @@ function codexIntegrationInstalled() {
   try {
     return managedMarkerPattern.test(readFileSync(CONFIG_PATH, "utf8"));
   } catch {
-    return true; // Cannot read but exists - count as installed
+    // Fail closed: if config exists but cannot be read, assume not installed.
+    // This is conservative for drift detection - missing a check is safer than
+    // attempting republish when integration state is unknown.
+    return false;
   }
 }
 

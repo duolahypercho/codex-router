@@ -1597,6 +1597,25 @@ const agentPayloadCachePurgeTimer = setInterval(
 );
 agentPayloadCachePurgeTimer.unref?.();
 
+// Periodically check for native catalog drift (new models in models_cache.json).
+// When Codex updates its cache while router is running, detect and republish
+// automatically without waiting for user to restart router or run provider commands.
+const nativeCatalogDriftCheckTimer = setInterval(
+  async () => {
+    try {
+      const { republishOnNativeDrift } = await import("./native-catalog-drift.mjs");
+      await republishOnNativeDrift();
+    } catch (error) {
+      // Drift check is best-effort; log but don't crash the router
+      if (!String(error.message).includes("Native catalog drift detected")) {
+        console.error(`[codex-router] Periodic native drift check failed: ${error.message}`);
+      }
+    }
+  },
+  5 * 60_000, // Every 5 minutes
+);
+nativeCatalogDriftCheckTimer.unref?.();
+
 async function relayEncryptedAgentPayloadOnce(
   item,
   cacheKey,
