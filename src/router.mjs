@@ -204,6 +204,7 @@ import {
   directResponsesTarget,
   isDirectResponsesProvider,
 } from "./direct-responses-provider.mjs";
+import { createPassiveCatalogRefreshScheduler } from "./passive-catalog-refresh.mjs";
 
 installStableFetchTransport();
 
@@ -373,6 +374,15 @@ const agentPayloadCacheMetrics = {
 let requestSequence = 0;
 const activityRecords = new Map();
 const inFlightRequests = new Map();
+const passiveCatalogRefresh = createPassiveCatalogRefreshScheduler({
+  enabled: (() => {
+    const selected = new Set(readProviderSelection());
+    return [...RUNTIME_PROVIDERS.values()].some(
+      (provider) => provider.mirrorNativeModels === true && selected.has(provider.id),
+    );
+  })(),
+  activeRequests: () => inFlightRequests.size,
+});
 let lastUsedProvider;
 let lastUsedModel;
 let lastUsedSessionName;
@@ -435,6 +445,7 @@ function resourceLimitsPayload() {
 }
 
 function beginRequestActivity({ request, response, controller } = {}) {
+  passiveCatalogRefresh.noteActivityStarted();
   pruneExpiredActivityRecords();
   if (inFlightRequests.size >= MAX_ACTIVE_REQUESTS) {
     request?.resume?.();
@@ -457,6 +468,7 @@ function beginRequestActivity({ request, response, controller } = {}) {
     activityRecords.delete(requestId);
     inFlightRequests.delete(requestId);
     if (status >= 400) errorStatusUntil = Date.now() + ERROR_STATUS_DURATION_MS;
+    passiveCatalogRefresh.noteActivityFinished();
   };
   const abortAtExecutionDeadline = () => {
     if (finished || deadlineExceeded) return;
@@ -5184,6 +5196,7 @@ server.requestTimeout = 0;
 applyKeepAliveTimeouts(server);
 server.listen(LISTEN_PORT, LISTEN_HOST, () => {
   console.error("[codex-router] listening");
+  passiveCatalogRefresh.schedule();
 });
 
 installGracefulShutdown(server, { label: "codex-router" });

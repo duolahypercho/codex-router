@@ -616,6 +616,18 @@ it. A manually curated route remains authoritative. Codex still loads the
 resulting `model_catalog_json` at startup, so fully quit and reopen the app to
 see a newly mirrored model.
 
+An opted-in mirror is also refreshed passively without a polling loop. Router
+startup and the end of normal traffic are local trigger points only: after 30
+seconds of continuous idle time, the first trigger whose durable cooldown has
+expired starts one detached refresh. Successful checks cool down for 24 hours,
+concurrent triggers coalesce, and failures back off for 1, 2, 4, 8, then at
+most 24 hours. A new request during the idle grace period cancels the pending
+check. No Router use means no repeated network checks, and an unchanged model
+intersection neither republishes routes nor restarts the service. An explicit
+`./bin/refresh-catalog` remains the immediate override and resets the success
+cooldown. Set `CODEX_ROUTER_DISABLE_PASSIVE_CATALOG_REFRESH=1` on the Router
+service to disable this behavior.
+
 The same managed OpenAI base URL also serves `/v1/embeddings`, but only for a
 model whose local or checked-in metadata explicitly names the capability. A
 model that is both conversational and embedding-capable declares its normal

@@ -167,6 +167,10 @@ export const NATIVE_SESSION_CONSENT_PATH = path.join(
 // cache for the curation surfaces, never an authority: what is registered
 // locally is always recomputed from the live registry.
 export const PROVIDER_CATALOG_CACHE_PATH = path.join(STATE_DIR, "provider-catalog-cache.json");
+export const PASSIVE_CATALOG_REFRESH_PATH = path.join(
+  STATE_DIR,
+  "passive-catalog-refresh.json",
+);
 export const PROVIDER_API_KEY_POOL_PATH =
   process.env.MODEL_ROUTER_API_KEY_POOL_PATH ||
   path.join(STATE_DIR, "provider-api-key-pools.json");

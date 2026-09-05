@@ -68,6 +68,15 @@ than guessing it. Existing manual curation is authoritative and is never
 overwritten; missing provider ids are retained so a transiently incomplete
 catalog cannot delete a working route.
 
+Passive mirroring is event-driven rather than periodic. The Router keeps only
+an in-memory next-eligible timestamp on the request path, resets one unref'ed
+idle timer when traffic resumes, and hands due work to a detached process.
+That worker reserves the attempt in an owner-private state document before any
+network IO. This durable reservation is the cross-process singleflight and the
+crash backstop; success uses a 24-hour cooldown and failures use capped
+exponential backoff. Never move provider discovery into the synchronous request
+path or let a failed worker retry on every turn.
+
 The shared API forwarder strips host and internal authentication before
 injecting the selected provider key. It supports the registry's tested
 OpenAI-compatible and Anthropic protocols; do not create a new listener merely

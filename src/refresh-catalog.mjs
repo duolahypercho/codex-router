@@ -10,6 +10,10 @@ import {
 } from "./login-free-refresh-journal.mjs";
 import { withLoginFreeRefreshLock } from "./login-free-refresh-lock.mjs";
 import { nativeAliasFor, readNativeAliases } from "./native-alias.mjs";
+import {
+  passiveMirrorSummary,
+  recordPassiveCatalogRefreshSuccess,
+} from "./passive-catalog-refresh.mjs";
 
 function nodeRunner(script, args) {
   return spawnSync(process.execPath, [path.join(SOURCE_ROOT, "src", script), ...args], {
@@ -193,6 +197,18 @@ export async function refreshCatalog({
 
 async function main() {
   const { catalogOutput, mirrorOutput } = await refreshCatalog();
+  if (process.env.CODEX_ROUTER_PASSIVE_REFRESH_WORKER !== "1") {
+    try {
+      recordPassiveCatalogRefreshSuccess(passiveMirrorSummary(mirrorOutput));
+    } catch {
+      // Scheduling metadata is not part of the catalog transaction. A failed
+      // bookkeeping write must not turn a successfully published model update
+      // into a reported failure or trigger rollback of an already-ready route.
+      console.error(
+        "Passive model-catalog cooldown could not be recorded; a later idle trigger may check again.",
+      );
+    }
+  }
   if (catalogOutput) process.stdout.write(catalogOutput);
   if (mirrorOutput) process.stdout.write(mirrorOutput);
   process.stdout.write("Native and external model catalogs refreshed. Fully quit and reopen Codex.\n");
