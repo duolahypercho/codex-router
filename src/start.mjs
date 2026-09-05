@@ -410,8 +410,8 @@ async function main() {
     router,
   );
 
-  // After router is healthy, check for native catalog drift in background.
-  // If Codex updated models_cache.json (new native model), republish automatically.
+  // After router is healthy, refresh the native account catalog and check its
+  // cache plus the installed Codex binary for drift in the background.
   // This runs async without blocking further startup or waiting for user commands.
   import("./native-catalog-drift.mjs")
     .then(({ republishOnNativeDrift }) => republishOnNativeDrift())

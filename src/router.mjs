@@ -1597,9 +1597,10 @@ const agentPayloadCachePurgeTimer = setInterval(
 );
 agentPayloadCachePurgeTimer.unref?.();
 
-// Periodically check for native catalog drift (new models in models_cache.json).
-// When Codex updates its cache while router is running, detect and republish
-// automatically without waiting for user to restart router or run provider commands.
+// Periodically refresh the native account catalog, compare it with the last
+// capture, and republish changes. Codex stops updating models_cache.json while
+// model_catalog_json points at the router, so the refresh cannot depend on
+// Codex rewriting that file itself.
 const nativeCatalogDriftCheckTimer = setInterval(
   async () => {
     try {

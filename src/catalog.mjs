@@ -1,5 +1,4 @@
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -20,7 +19,6 @@ import {
   CONFIG_PATH,
   LEGACY_PORTS,
   MERGED_CATALOG_PATH,
-  MODELS_CACHE_PATH,
   NATIVE_ALIAS_PATH,
   NATIVE_CATALOG_PATH,
   PORTS,
@@ -67,6 +65,11 @@ import {
 import { discoveryDisabled } from "./discovery-mode.mjs";
 import { withCatalogPublicationLock } from "./catalog-publication-lock.mjs";
 import { routedModelSearchAvailable } from "./search-capability.mjs";
+import {
+  readModelsCache,
+} from "./native-account-catalog.mjs";
+
+export { readModelsCache } from "./native-account-catalog.mjs";
 
 const refresh = process.argv.includes("--refresh-native");
 
@@ -188,28 +191,10 @@ export function mergeNativeModel(accountModel, bundledModel) {
   return merged;
 }
 
-// One read serves both the catalog contents and the fingerprint; reading the
-// file twice would hash a possibly different snapshot than the one merged.
-export function readModelsCache() {
-  const missing = { catalog: undefined, fingerprint: undefined };
-  if (!existsSync(MODELS_CACHE_PATH)) return missing;
-  try {
-    const parsed = JSON.parse(readFileSync(MODELS_CACHE_PATH, "utf8"));
-    if (!validNativeCatalog(parsed)) return missing;
-    return {
-      catalog: parsed,
-      fingerprint: createHash("sha256")
-        .update(JSON.stringify(parsed.models))
-        .digest("hex"),
-    };
-  } catch {
-    return missing;
-  }
-}
-
-// A routed custom catalog never rewrites Codex's account cache. When that cache
-// is valid and contains no routed slugs, it remains a safe native source even
-// while model_catalog_json points at the merged router catalog.
+// A valid account cache containing no routed slugs can be refreshed directly
+// and remains a safe native source while model_catalog_json points at the
+// merged router catalog. A missing or contaminated cache still takes the
+// conservative transport-transition path in refresh-catalog.
 export function nativeCacheCanRefreshInPlace(cache = readModelsCache()) {
   const catalog = cache?.catalog;
   return (

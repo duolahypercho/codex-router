@@ -133,6 +133,28 @@ function readSession() {
   return sessionFromAuthDocument(readAuthDocument());
 }
 
+/**
+ * Headers for the read-only ChatGPT account catalog request.
+ *
+ * This is deliberately separate from nativeSessionHeaders(): reading the
+ * catalog is part of Codex's own signed-in model discovery and does not widen
+ * the router caller capability to spend the subscription. The returned
+ * credential must only be used for that fixed account-catalog endpoint.
+ */
+export async function nativeAccountCatalogHeaders() {
+  if (discoveryDisabled()) return undefined;
+  let session = readSession();
+  if (session?.expired) {
+    await refreshViaCodex();
+    session = readSession();
+  }
+  if (!session || session.expired) return undefined;
+  return {
+    authorization: `Bearer ${session.accessToken}`,
+    ...(session.accountId ? { "chatgpt-account-id": session.accountId } : {}),
+  };
+}
+
 // Authenticate a bearer that claims to be the already-signed-in Codex client.
 // This never enables session sharing; it only verifies the caller's own token.
 export function nativeSessionTokenMatches(token) {

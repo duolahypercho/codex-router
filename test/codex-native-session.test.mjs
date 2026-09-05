@@ -28,6 +28,7 @@ const {
   nativeSessionSharingEnabled,
   nativeSessionAvailable,
   nativeSessionHeaders,
+  nativeAccountCatalogHeaders,
   nativeSessionTokenMatches,
   nativeSessionStatus,
   setNativeSessionSharingEnabled,
@@ -93,6 +94,16 @@ test("the current Codex session authenticates only its own bearer without enabli
   assert.equal(nativeSessionTokenMatches("different-session-token"), false);
   clearAuth();
   assert.equal(nativeSessionTokenMatches(ACCESS), false);
+});
+
+test("account catalog discovery uses the signed-in session without enabling route sharing", async () => {
+  writeAuth({ access_token: ACCESS, account_id: ACCOUNT });
+  assert.equal(nativeSessionSharingEnabled(), false);
+  assert.deepEqual(await nativeAccountCatalogHeaders(), {
+    authorization: `Bearer ${ACCESS}`,
+    "chatgpt-account-id": ACCOUNT,
+  });
+  assert.equal(nativeSessionHeaders(), undefined);
 });
 
 test("the current Codex API key authenticates requests but never becomes a shared session", () => {

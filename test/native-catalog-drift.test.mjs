@@ -91,9 +91,45 @@ test("drift detection triggers republish with new arbitrary native in merged out
       .digest("hex");
     assert.notEqual(newFingerprint, oldFingerprint, "fingerprint changed");
 
+    // Put the frozen input back. The automatic path must refresh it before it
+    // checks drift; comparing first would reproduce issue #628 forever.
+    writeFileSync(
+      path.join(codexHome, "models_cache.json"),
+      JSON.stringify(modelsCache),
+    );
+    assert.equal(nativeCatalogDriftDetected(), false, "frozen cache alone has no drift");
+
+    process.env.CODEX_ROUTER_NO_DISCOVERY = "1";
+    try {
+      writeFileSync(
+        path.join(codexHome, "models_cache.json"),
+        JSON.stringify(updatedCache),
+      );
+      assert.equal(
+        nativeCatalogDriftDetected(),
+        false,
+        "discovery-disabled drift checks do not read account-cache changes",
+      );
+    } finally {
+      delete process.env.CODEX_ROUTER_NO_DISCOVERY;
+      writeFileSync(
+        path.join(codexHome, "models_cache.json"),
+        JSON.stringify(modelsCache),
+      );
+    }
+
     // NOW TEST ACTUAL REPUBLISH: Call republishOnNativeDrift()
-    // This should detect drift and run the full publish path
-    const republished = await republishOnNativeDrift();
+    // This should refresh the account cache, detect drift, and run the full
+    // publish path in that order.
+    const republished = await republishOnNativeDrift({
+      refreshAccountCatalog: async () => {
+        writeFileSync(
+          path.join(codexHome, "models_cache.json"),
+          JSON.stringify(updatedCache),
+        );
+        return { status: "updated" };
+      },
+    });
     
     // Republish should have succeeded
     assert.equal(republished, true, "republish succeeded");

@@ -2,6 +2,8 @@ import { existsSync, readFileSync } from "node:fs";
 import { NATIVE_CATALOG_PATH, CONFIG_PATH } from "./paths.mjs";
 import { nativeCatalogIsReusable, readModelsCache } from "./catalog.mjs";
 import { codexBinaryFingerprint, codexVersion } from "./codex-binary.mjs";
+import { refreshNativeAccountCatalog } from "./native-account-catalog.mjs";
+import { discoveryDisabled } from "./discovery-mode.mjs";
 
 // Marker pattern from config-manager.mjs to detect managed Codex config
 const managedMarkerPattern = /^# BEGIN codex-router$/m;
@@ -27,6 +29,9 @@ function codexIntegrationInstalled() {
  * Returns true if drift detected (fingerprint/version mismatch).
  */
 export function nativeCatalogDriftDetected() {
+  // models_cache.json is account-derived. The discovery kill-switch applies
+  // to the comparison just as it does to the live refresh that precedes it.
+  if (discoveryDisabled()) return false;
   // Only applies when Codex integration is active
   if (!codexIntegrationInstalled() && !existsSync(NATIVE_CATALOG_PATH)) {
     return false;
@@ -66,15 +71,24 @@ export function nativeCatalogDriftDetected() {
  * Asynchronously republish catalog if native drift detected.
  * Runs in background after startup, does not block.
  */
-export async function republishOnNativeDrift() {
+export async function republishOnNativeDrift({
+  refreshAccountCatalog = refreshNativeAccountCatalog,
+  refreshTargetPicker,
+} = {}) {
+  // model_catalog_json stops Codex's own account cache writer. Refresh the
+  // fixed ChatGPT account endpoint first; on any failure the updater leaves
+  // the prior cache untouched and the local drift comparison remains safe.
+  await refreshAccountCatalog();
   if (!nativeCatalogDriftDetected()) {
     return false;
   }
 
   try {
     // Dynamic import to avoid startup dependency
-    const { refreshTargetPickerIfInstalled } = await import("./target-integration.mjs");
-    await refreshTargetPickerIfInstalled();
+    const refresh = refreshTargetPicker || (
+      await import("./target-integration.mjs")
+    ).refreshTargetPickerIfInstalled;
+    await refresh();
     console.error(
       "[codex-router] Native catalog drift detected and republished automatically."
     );

@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { nativeCatalogCanRefreshInPlace } from "./catalog.mjs";
+import { refreshNativeAccountCatalog } from "./native-account-catalog.mjs";
 import { SOURCE_ROOT } from "./paths.mjs";
 import {
   beginLoginFreeRefresh,
@@ -30,6 +31,16 @@ function checked(run, script, args) {
     );
   }
   return result;
+}
+
+export function refreshCatalogCompletionMessage(status) {
+  if (status === "disabled") {
+    return "Bundled native and external model catalogs refreshed. Fully quit and reopen Codex.\n";
+  }
+  if (status === "failed" || status === "unavailable") {
+    return "External models refreshed; native models were rebuilt from available cached and bundled data because the live account catalog could not be refreshed. Fully quit and reopen Codex.\n";
+  }
+  return "Native account, bundled, and external model catalogs refreshed. Fully quit and reopen Codex.\n";
 }
 
 function restoreTransport(
@@ -87,6 +98,7 @@ function restoreTransport(
 async function refreshCatalogUnlocked({
   run = nodeRunner,
   canRefreshInPlace = nativeCatalogCanRefreshInPlace,
+  refreshAccountCatalog = refreshNativeAccountCatalog,
   aliases = readNativeAliases,
   aliasFor = nativeAliasFor,
   journal = {
@@ -95,6 +107,7 @@ async function refreshCatalogUnlocked({
     read: readLoginFreeRefreshJournal,
   },
 } = {}) {
+  const nativeAccountRefresh = await refreshAccountCatalog({ force: true });
   // A killed refresh can leave the exact direct provider source parked while
   // the login-free provider state is intentionally retained. Only the private
   // journal written by this operation makes that otherwise ambiguous pair
@@ -128,14 +141,17 @@ async function refreshCatalogUnlocked({
   };
   let restoreNeeded = false;
   let catalogResult;
-  // Signed-in Codex keeps its account cache separate from model_catalog_json.
-  // When that cache is known-native, refresh the catalog without rewriting
-  // config.toml; this also avoids needless failures when another Windows
-  // process has the config open without delete sharing. Login-free mode still
-  // requires the journaled transport transition below.
+  // The router refreshes a known-native account cache directly, independently
+  // of model_catalog_json. Rebuild from it without rewriting config.toml; this
+  // also avoids needless failures when another Windows process has the config
+  // open without delete sharing. Login-free mode still requires the journaled
+  // transport transition below.
   if (routed && !loginFree && canRefreshInPlace()) {
     catalogResult = checked(run, "catalog.mjs", ["--refresh-native"]);
-    return { catalogOutput: catalogResult.stdout || "" };
+    return {
+      catalogOutput: catalogResult.stdout || "",
+      nativeAccountRefresh: nativeAccountRefresh.status,
+    };
   }
   try {
     if (routed) {
@@ -179,7 +195,10 @@ async function refreshCatalogUnlocked({
     }
     throw error;
   }
-  return { catalogOutput: catalogResult.stdout || "" };
+  return {
+    catalogOutput: catalogResult.stdout || "",
+    nativeAccountRefresh: nativeAccountRefresh.status,
+  };
 }
 
 export async function refreshCatalog({
@@ -191,9 +210,9 @@ export async function refreshCatalog({
 }
 
 async function main() {
-  const { catalogOutput } = await refreshCatalog();
+  const { catalogOutput, nativeAccountRefresh } = await refreshCatalog();
   if (catalogOutput) process.stdout.write(catalogOutput);
-  process.stdout.write("Native and external model catalogs refreshed. Fully quit and reopen Codex.\n");
+  process.stdout.write(refreshCatalogCompletionMessage(nativeAccountRefresh));
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
