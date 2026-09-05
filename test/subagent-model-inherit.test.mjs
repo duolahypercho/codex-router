@@ -73,7 +73,7 @@ test("send_message_to_thread keeps the target thread model settings", () => {
   assert.equal(next, item);
 });
 
-test("explicit model always wins and stays untouched", () => {
+test("explicit model on a fresh thread wins and stays untouched", () => {
   const item = spawnCall(
     "codex_app__create_thread",
     undefined,
@@ -89,13 +89,29 @@ test("explicit model always wins and stays untouched", () => {
     JSON.stringify({ threadId: "t1", prompt: "continue", model: "gpt-5.5" }),
   );
   assert.equal(injectSessionModelForSpawnCalls(namespaced, SESSION_MODEL), namespaced);
+});
 
-  const subagent = spawnCall(
-    "spawn_agent",
-    "collaboration",
-    JSON.stringify({ task_name: "review", message: "inspect", model: "gpt-5.6-terra" }),
-  );
-  assert.equal(injectSessionModelForSpawnCalls(subagent, SESSION_MODEL), subagent);
+test("explicit subagent model is pinned to its routed parent", () => {
+  for (const subagent of [
+    spawnCall(
+      "collaboration__spawn_agent",
+      undefined,
+      JSON.stringify({ task_name: "review", message: "inspect", model: "gpt-5.6-sol" }),
+    ),
+    spawnCall(
+      "spawn_agent",
+      "collaboration",
+      JSON.stringify({ task_name: "review", message: "inspect", model: "gpt-5.6-sol" }),
+    ),
+  ]) {
+    const next = injectSessionModelForSpawnCalls(subagent, SESSION_MODEL);
+    assert.notEqual(next, subagent);
+    assert.deepEqual(JSON.parse(next.arguments), {
+      task_name: "review",
+      message: "inspect",
+      model: SESSION_MODEL,
+    });
+  }
 });
 
 test("chatgptWorkCloud create_thread calls omit model", () => {

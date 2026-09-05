@@ -2411,7 +2411,7 @@ test("response transform restores namespace on unambiguous unprefixed calls", as
   assert.match(output, /"namespace":"codex_app"/);
 });
 
-test("response transform drops a spawn-agent model override not offered by the tool schema", async () => {
+test("response transform pins spawn-agent model overrides to the routed parent", async () => {
   const { namespaces } = flattenNamespaceTools(clientRoutedTools());
   const lookups = buildNamespaceLookups(namespaces);
   const invalid = rewriteNamespaceResponsePayload(
@@ -2459,6 +2459,24 @@ test("response transform drops a spawn-agent model override not offered by the t
     "opencode-go/deepseek-v4-flash",
   );
   assert.deepEqual(JSON.parse(inherited.output[0].arguments), {
+    message: "verify",
+    model: "opencode-go/deepseek-v4-flash",
+  });
+
+  const allowedButCrossProvider = rewriteNamespaceResponsePayload(
+    {
+      output: [
+        {
+          type: "function_call",
+          name: "collaboration__spawn_agent",
+          arguments: JSON.stringify({ message: "verify", model: "gpt-5.6-terra" }),
+        },
+      ],
+    },
+    lookups,
+    "opencode-go/deepseek-v4-flash",
+  );
+  assert.deepEqual(JSON.parse(allowedButCrossProvider.output[0].arguments), {
     message: "verify",
     model: "opencode-go/deepseek-v4-flash",
   });
