@@ -27,6 +27,7 @@ blue accent and DeepSeek's original blue mark are preserved.
 | Nous Research | https://nousresearch.com/ | https://nousresearch.com/apple-touch-icon.png |
 | OpenRouter | https://openrouter.ai/ | https://openrouter.ai/favicon/glyph.png |
 | NanoGPT | https://nano-gpt.com/ | https://nano-gpt.com/favicon.ico (same official diamond mark as https://nano-gpt.com/logo.png) |
+| Google Cloud Vertex AI | https://cloud.google.com/vertex-ai/ | https://www.google.com/s2/favicons?domain=cloud.google.com&sz=128 (Google mark, bundled as `google.svg`) |
 
 The Z.AI, Qwen, Ollama, Cline, MiniMax, and Meta AI marks were fetched on
 2026-08-15. The Venice, Nous Research, and OpenRouter marks were fetched on

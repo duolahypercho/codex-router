@@ -179,7 +179,7 @@ function knownLocalSecrets() {
     // nothing to redact for it.
     if (providerNeedsNoKey(provider)) continue;
     files.push(...credentialPaths(provider));
-    for (const name of provider.credential.environment) {
+    for (const name of provider.credential?.environment || []) {
       const value = process.env[name]?.trim();
       if (value) values.add(value);
     }

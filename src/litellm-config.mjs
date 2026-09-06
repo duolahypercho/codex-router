@@ -6,6 +6,7 @@ import { protectPrivateFile } from "./file-security.mjs";
 import { LITELLM_CONFIG_PATH } from "./paths.mjs";
 import { MODELS, providerForModel } from "./model-registry.mjs";
 import { assertStateOwnership } from "./state-owner.mjs";
+import { vertexAdapterForModel } from "./vertex-adapters.mjs";
 
 // Big enough for real Codex turns, small enough that a small model stays
 // entirely on the GPU of a 16 GB machine.
@@ -19,6 +20,7 @@ export function renderLiteLlmConfig() {
   const lines = ["model_list:"];
   for (const model of MODELS) {
     const provider = providerForModel(model);
+    const vertexAdapter = vertexAdapterForModel(model, provider);
     // A local model is routed with Ollama's own protocol rather than its
     // OpenAI-compatible surface, purely so `num_ctx` can be set. That surface
     // ignores it, and Ollama then reserves the model's maximum context: on a
@@ -45,14 +47,15 @@ export function renderLiteLlmConfig() {
       );
       continue;
     }
-    const apiBaseEnv = provider.kind === "oauth"
+    const apiBaseEnv = vertexAdapter?.liteLlmBaseEnv || (provider.kind === "oauth"
       ? provider.proxyBaseEnv
       : provider.protocol === "anthropic"
         ? "CODEX_ROUTER_ANTHROPIC_FORWARD_BASE_URL"
-        : "CODEX_ROUTER_API_FORWARD_BASE_URL";
+        : "CODEX_ROUTER_API_FORWARD_BASE_URL");
     const translatedModel =
       provider.kind === "oauth" ? model.upstreamModel : model.gatewayModel;
-    const protocol = provider.protocol === "anthropic" ? "anthropic" : "openai";
+    const protocol = vertexAdapter?.liteLlmProtocol ||
+      (provider.protocol === "anthropic" ? "anthropic" : "openai");
     const responsesSurface = provider.protocol === "openai-responses";
     lines.push(
       `  - model_name: ${yamlString(model.gatewayModel)}`,

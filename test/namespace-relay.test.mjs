@@ -119,6 +119,28 @@ function clientRoutedTools() {
   ];
 }
 
+test("routed subagent models are added to the collaboration schema", () => {
+  const flattened = flattenNamespaceTools(clientRoutedTools(), {
+    routedSubagentModels: ["vertex/claude-sonnet-5"],
+  });
+  const spawn = flattened.tools.find((tool) => tool.name === "collaboration__spawn_agent");
+  const modelSchema = spawn.parameters.properties.model;
+  assert.ok(modelSchema.anyOf.some((branch) => branch.enum?.includes("vertex/claude-sonnet-5")));
+
+  const event = rewriteNamespaceFunctionCall(
+    {
+      item: {
+        type: "function_call",
+        name: "collaboration__spawn_agent",
+        call_id: "call_vertex",
+        arguments: JSON.stringify({ task_name: "review", model: "vertex/claude-sonnet-5" }),
+      },
+    },
+    buildNamespaceLookups(flattened.namespaces),
+  );
+  assert.equal(JSON.parse(event.item.arguments).model, "vertex/claude-sonnet-5");
+});
+
 function clientToolSearchControl() {
   return {
     type: "tool_search",

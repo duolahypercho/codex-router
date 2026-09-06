@@ -433,6 +433,7 @@ enum RouterJapaneseText {
     "%d selected": "%d 件選択中",
     "Add selected": "選択項目を追加",
     "Load the current list from this provider.": "このプロバイダーから現在の一覧を読み込みます。",
+    "Run the provider's local configuration command, then refresh": "プロバイダーのローカル設定コマンドを実行してから更新",
     "saved list": "保存済みの一覧",
     "live list": "最新の一覧",
     "%d models · %d added · %@": "%d 個のモデル · %d 個追加済み · %@",

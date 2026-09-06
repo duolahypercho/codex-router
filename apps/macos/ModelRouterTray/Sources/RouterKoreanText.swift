@@ -433,6 +433,7 @@ enum RouterKoreanText {
     "%d selected": "%d개 선택됨",
     "Add selected": "선택 항목 추가",
     "Load the current list from this provider.": "이 제공자에서 현재 목록을 불러옵니다.",
+    "Run the provider's local configuration command, then refresh": "제공업체의 로컬 구성 명령을 실행한 후 새로 고침",
     "saved list": "저장된 목록",
     "live list": "실시간 목록",
     "%d models · %d added · %@": "모델 %d개 · %d개 추가됨 · %@",

@@ -80,6 +80,8 @@ import {
   endpointCapabilityError,
   supportsOpenAIModelEndpoint,
 } from "./openai-endpoint-policy.mjs";
+import { vertexAdapterForModel } from "./vertex-adapters.mjs";
+import { vertexForwardBaseUrl } from "./vertex-endpoint.mjs";
 
 installStableFetchTransport();
 
@@ -113,6 +115,7 @@ if (!INTERNAL_KEY) throw new Error("MODEL_ROUTER_INTERNAL_KEY is required.");
 const warnedBaseUrlOverrides = new Set();
 
 function providerBaseUrl(provider) {
+  if (provider.protocol === "vertex") return vertexForwardBaseUrl(provider);
   const { baseUrl, refusedOverride } = resolveProviderBaseUrl(provider);
   if (refusedOverride && !warnedBaseUrlOverrides.has(provider.id)) {
     warnedBaseUrlOverrides.add(provider.id);
@@ -350,6 +353,7 @@ const GEMINI_THOUGHT_SIGNATURE_SENTINEL = "skip_thought_signature_validator";
 
 function isGeminiProvider(provider, model) {
   if (provider?.generic === true) return false;
+  if (provider?.protocol === "vertex") return model?.adapter === "vertex-openai-chat";
   if (provider?.id === "gemini-api" || provider?.ownedBy?.toLowerCase?.() === "google") {
     return true;
   }
@@ -429,10 +433,12 @@ function flattenRecursiveToolSchemas(payload, protocol) {
 // endpoint has proved that it rejects a prefilled model turn.
 function requiresTrailingUserTurn(provider, model) {
   return (
-    (provider?.generic !== true && (
-      provider?.id === "gemini-api" ||
-      provider?.ownedBy?.toLowerCase?.() === "google"
-    )) ||
+    (provider?.generic !== true &&
+      provider?.protocol !== "vertex" &&
+      (
+        provider?.id === "gemini-api" ||
+        provider?.ownedBy?.toLowerCase?.() === "google"
+      )) ||
     model?.requiresTrailingUserTurn === true
   );
 }
@@ -680,17 +686,19 @@ function normalizeBody(buffer, contentType, route) {
     MODEL_BY_GATEWAY_ID.get(requestedModel.replace(/^responses\//, "")) ||
     MODEL_BY_GATEWAY_ID.get(requestedModel);
   const provider = model && providerForModel(model);
+  const adapter = vertexAdapterForModel(model, provider);
   if (!model || provider?.kind !== "openai-compatible") {
     const error = new Error(`Unknown API gateway model: ${String(payload.model || "missing")}`);
     error.status = 400;
     throw error;
   }
   const expectedRoute =
-    provider.protocol === "anthropic"
+    adapter?.route ||
+    (provider.protocol === "anthropic"
       ? "/messages"
       : provider.protocol === "openai-responses"
         ? "/responses"
-        : "/chat/completions";
+        : "/chat/completions");
   if (
     route === "/embeddings"
       ? !supportsOpenAIModelEndpoint(route, { model, provider })
@@ -753,7 +761,7 @@ function normalizeBody(buffer, contentType, route) {
   // upstream reasoning translation attaches for Gemini 3.x thinking models.
   // Left in place the 400 surfaces as a misleading native-ChatGPT fallback
   // error rather than a routing failure, so strip them before forwarding.
-  if (isGeminiProvider(provider)) {
+  if (isGeminiProvider(provider, model)) {
     delete payload.web_search_options;
     delete payload.thinking;
     delete payload.think;
@@ -1071,6 +1079,10 @@ function normalizeBody(buffer, contentType, route) {
       payload.tool_choice = "auto";
     }
   }
+  if (adapter) payload = adapter.normalizeBody(payload);
+  const targetPath = adapter?.targetPath
+    ? adapter.targetPath({ model, body: payload })
+    : undefined;
   // The provider still answers protocol, auth profile, and identity; the
   // endpoint answers where the request goes and what authenticates it. For
   // every provider but a per-model-endpoint one they are the same object.
@@ -1081,6 +1093,7 @@ function normalizeBody(buffer, contentType, route) {
     provider,
     endpoint,
     payload,
+    ...(targetPath ? { targetPath } : {}),
     responseAdapter: provider.protocol === "openai-responses" ? "responses" : undefined,
   };
 }
@@ -1101,6 +1114,7 @@ function upstreamHeaders(requestHeaders, body, apiKey, provider, extraHeaders = 
   for (const [name, value] of Object.entries(requestHeaders)) {
     const lower = name.toLowerCase();
     if (HOP_BY_HOP_HEADERS.has(lower) || lower === "authorization" || lower === "x-api-key") continue;
+    if (provider.protocol === "vertex" && lower === "anthropic-version") continue;
     if (provider.authProfile === "github-copilot" && providerIdentityHeaders.has(lower)) continue;
     if (lower.startsWith("x-msh-") || lower.startsWith("x-codex-")) continue;
     if (lower.startsWith("x-openai-") || lower === "chatgpt-account-id") continue;
@@ -1187,6 +1201,10 @@ async function upstreamSession(provider, credential, payload, options = {}, endp
       : session.baseUrl,
     headers: githubCopilotRequestHeaders(payload, session.token),
   };
+}
+
+function upstreamTarget(session, normalized, route, search = "") {
+  return session.baseUrl + (normalized.targetPath || route) + search;
 }
 
 // Harvest the provider's own quota report from the response it just sent.
@@ -1477,7 +1495,7 @@ async function handleRequest(request, response) {
           {},
           normalized.endpoint,
         );
-        let attemptTarget = `${attemptSession.baseUrl}${route}${requestUrl.search}`;
+        let attemptTarget = upstreamTarget(attemptSession, normalized, route, requestUrl.search);
         const sendAttempt = () => fetch(attemptTarget, {
           method: request.method,
           headers: upstreamHeaders(
@@ -1507,7 +1525,7 @@ async function handleRequest(request, response) {
             { force: true },
             normalized.endpoint,
           );
-          attemptTarget = `${attemptSession.baseUrl}${route}${requestUrl.search}`;
+          attemptTarget = upstreamTarget(attemptSession, normalized, route, requestUrl.search);
           attemptResponse = await sendAttempt();
         }
         if (!attemptResponse.ok) {
@@ -1608,7 +1626,7 @@ async function handleRequest(request, response) {
       {},
       normalized.endpoint,
     );
-    target = `${session.baseUrl}${route}${requestUrl.search}`;
+    target = upstreamTarget(session, normalized, route, requestUrl.search);
     upstream = await fetch(target, {
       method: request.method,
       headers: upstreamHeaders(
@@ -1655,7 +1673,7 @@ async function handleRequest(request, response) {
       { force: true },
       normalized.endpoint,
     );
-    target = `${session.baseUrl}${route}${requestUrl.search}`;
+    target = upstreamTarget(session, normalized, route, requestUrl.search);
     upstream = await fetch(target, {
       method: request.method,
       headers: upstreamHeaders(

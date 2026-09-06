@@ -15,6 +15,7 @@ import {
   providerNeedsCuration,
   removeApiCredential,
 } from "./provider-onboarding.mjs";
+import { credentialSetupHint } from "./provider-credentials.mjs";
 import {
   canonicalProviderId,
   disableProvider,
@@ -425,7 +426,9 @@ async function main() {
       : undefined;
     const setup = provider.kind === "oauth"
       ? oauthStatus?.setup || SIGN_IN_STATUS[provider.id]?.setup || "sign in with the provider CLI"
-      : keySetup;
+      : provider.credential?.resolver
+        ? credentialSetupHint(provider)
+        : keySetup;
     throw new Error(`${provider.displayName} is not configured; ${setup} first.`);
   }
   let providers;

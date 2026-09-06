@@ -8,6 +8,8 @@ test("provider and model-maker branding covers remote and local catalog families
   const branding = await readFile(new URL("apps/control-center/src/provider-branding.tsx", root), "utf8");
   const sources = await readFile(new URL("apps/control-center/src/assets/providers/SOURCES.md", root), "utf8");
   const local = await readFile(new URL("apps/control-center/src/pages/LocalPage.tsx", root), "utf8");
+  const tray = await readFile(new URL("apps/macos/ModelRouterTray/Sources/IslandOverlay.swift", root), "utf8");
+  const traySources = await readFile(new URL("apps/macos/ModelRouterTray/Resources/PROVIDER-ICON-SOURCES.md", root), "utf8");
 
   for (const asset of ["cognition", "deepreinforce", "kilo", "lmstudio", "nanogpt", "poolside", "tencent"]) {
     assert.match(branding, new RegExp(`assets/providers/${asset}\\.svg`), `${asset} logo is not bundled`);
@@ -26,6 +28,9 @@ test("provider and model-maker branding covers remote and local catalog families
   assert.match(branding, /hy\(\?:3\|4\)[^\n]+BRANDS\.tencent/);
   assert.match(branding, /laguna[^\n]+BRANDS\.poolside/);
   assert.match(branding, /export function brandForLocalModel/);
+  assert.match(branding, /vertex: "google"/);
+  assert.match(tray, /providerID == "vertex" \{ return "google" \}/);
+  assert.match(traySources, /Google Cloud Vertex AI.*google\.svg/s);
   assert.match(local, /brandForLocalModel/);
   assert.match(local, /<BrandLogo brand=\{brandForLocalModel\(model\)\}/);
   assert.match(sources, /tencent\.com\/newsroom\/media-resources/);

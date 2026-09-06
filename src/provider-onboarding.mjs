@@ -23,6 +23,7 @@ import { kimiOAuthStatus } from "./oauth-status.mjs";
 import {
   apiProvider,
   credentialLabel,
+  credentialSetupHint,
   removeProviderCredential,
   writeProviderCredential,
 } from "./provider-credentials.mjs";
@@ -185,18 +186,31 @@ export function providerOnboardingSnapshot() {
             persistent: true,
             poolAuthoritySnapshot,
           }).configured;
+      const credentialResolver = provider.credential?.resolver;
       const entry = {
         id: provider.id,
         displayName: provider.displayName,
-        kind: "api",
-        ...(provider.credential?.label ? { credentialLabel: credentialLabel(provider) } : {}),
+        // Resolver-backed providers have no secret field for this UI to collect.
+        // Keep them distinct from API-key providers so every desktop surface
+        // can show the local setup instruction without offering a dead key
+        // dialog or a misleading remove-key action.
+        kind: credentialResolver ? "configuration" : "api",
+        ...(credentialResolver
+          ? { credentialLabel: "Google Cloud ADC" }
+          : provider.credential?.label
+            ? { credentialLabel: credentialLabel(provider) }
+            : {}),
         configured,
-        action: configured ? "ready" : "add-key",
+        action: configured ? "ready" : credentialResolver ? "configure" : "add-key",
         ...(catalogSources.length ? { catalogSources } : {}),
         // Carried to the tray so the plan requirement is visible at the
         // moment someone decides to connect, not after Codex 403s.
         ...(provider.planNote ? { planNote: provider.planNote } : {}),
+        ...(credentialResolver
+          ? { configurationNote: credentialSetupHint(provider) }
+          : {}),
       };
+      if (credentialResolver) return entry;
       // A container has no key field of its own. Saying so is the whole card:
       // an "Add Key" button here would store a secret nothing ever reads.
       if (provider.authMode === "per-model") {

@@ -4,6 +4,7 @@ import path from "node:path";
 import { writePrivateJson } from "./file-security.mjs";
 import { curatedModelDisplayName } from "./opencode-curation.mjs";
 import { STATE_DIR } from "./paths.mjs";
+import { VERTEX_ADAPTERS } from "./vertex-adapters.mjs";
 
 // User-curated models live outside the checked-in config/ registry tree so a checkout update
 // never discards them. Entries carry the same shape as registry models;
@@ -147,6 +148,38 @@ export function userModelEntry({ providerId, upstreamId, requestProfile, priorit
   }
   if (requestProfile) entry.requestProfile = requestProfile;
   return entry;
+}
+
+// Vertex curation is different from an ordinary OpenAI-compatible catalog:
+// the support catalog is the reviewed source of wire behavior and
+// presentation metadata. Copy only that verified record so an interactive
+// prompt cannot turn an arbitrary Model Garden id into a routable adapter.
+export function userModelEntryFromCatalog({
+  providerId,
+  catalogModel,
+}) {
+  if (
+    providerId !== "vertex" ||
+    !catalogModel ||
+    typeof catalogModel !== "object" ||
+    !Object.hasOwn(VERTEX_ADAPTERS, catalogModel.adapter)
+  ) {
+    throw new Error("Vertex curation requires a model from the verified support catalog.");
+  }
+  const entry = userModelEntry({
+    providerId,
+    upstreamId: catalogModel.id,
+    requestProfile: catalogModel.requestProfile || VERTEX_ADAPTERS[catalogModel.adapter].requestProfile,
+    priority: catalogModel.priority,
+    metadata: catalogModel.capabilities,
+  });
+  return {
+    ...entry,
+    adapter: catalogModel.adapter,
+    displayName: catalogModel.displayName,
+    description: catalogModel.description,
+    ...(catalogModel.publisher ? { vertexPublisher: catalogModel.publisher } : {}),
+  };
 }
 
 export function readUserModels() {
