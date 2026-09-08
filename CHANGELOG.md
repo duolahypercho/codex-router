@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **Document the Kimi-to-OpenAI tool-call ID failure and recovery.**
+  `docs/OPENAI-TOOL-CALL-ID-REPAIR-PLAN.md` records reproduction steps, why
+  conversation shortening exposed the invalid ID, the repair rule, and test
+  results. A user-supplied screenshot illustrates the reported recovery after
+  a manual router restart.
+
 - **OpenAI requests omit incompatible IDs from saved function calls.**
   Before sending saved conversation history to OpenAI, the router now omits
   optional `function_call.id` strings that do not start with `fc`, which OpenAI
