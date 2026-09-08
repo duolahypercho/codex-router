@@ -2599,6 +2599,157 @@ test("compaction never treats reasoning as final text and falls back to chat con
   }
 });
 
+// ------------------------------------------------------------
+// Saved external calls must remain replayable on native turns and compaction.
+// The optional item ID is separate from the call_id that pairs each result.
+// ------------------------------------------------------------
+
+test("native function-call IDs omit incompatible IDs without changing call-result pairs", async (t) => {
+  const nativeRequests = [];
+  const gatewayRequests = [];
+  const native = await mockServer(async (request, response) => {
+    const body = await bodyJson(request);
+    nativeRequests.push({ url: request.url, headers: request.headers, body });
+    const invalid = body.input.find((item) =>
+      item?.type === "function_call" && typeof item.id === "string" && !item.id.startsWith("fc")
+    );
+    if (invalid) {
+      json(response, 400, { error: { type: "invalid_request_error", message: "Expected an ID that begins with 'fc'." } });
+      return;
+    }
+    json(response, 200, { route: "native" });
+  });
+  const gateway = await mockServer(async (request, response) => {
+    gatewayRequests.push(await bodyJson(request));
+    json(response, 200, { route: "external" });
+  });
+  const testRoot = mkdtempSync(path.join(os.tmpdir(), "native-function-call-ids-"));
+  const authPath = path.join(testRoot, "auth.json");
+  writeFileSync(authPath, JSON.stringify({
+    auth_mode: "chatgpt",
+    tokens: { access_token: "test-native-session-token", account_id: "test-native-account" },
+  }), { mode: 0o600 });
+  const routerPort = await openPort();
+  const router = run("router.mjs", {
+    CODEX_ROUTER_PORT: String(routerPort),
+    CODEX_NATIVE_BASE_URL: `http://127.0.0.1:${native.port}/backend-api/codex`,
+    CODEX_ROUTER_GATEWAY_BASE_URL: `http://127.0.0.1:${gateway.port}/v1`,
+    CODEX_ROUTER_NATIVE_SESSION_FALLBACK: "1",
+    MODEL_ROUTER_CODEX_AUTH: authPath,
+    MODEL_ROUTER_STATE_DIR: path.join(testRoot, "state"),
+    CODEX_HOME: path.join(testRoot, "codex"),
+    CODEX_ROUTER_QUIET: "1",
+  });
+
+  // ------------------------------------------------------------
+  // Explicit expected fields keep the test independent of the prefix check.
+  // Non-string IDs are outside this repair, not accepted by a full validator.
+  // ------------------------------------------------------------
+
+  const idCases = [
+    { input: { id: "tool_example_foreign" }, expected: {} },
+    { input: { id: "call_example_foreign" }, expected: {} },
+    { input: { id: "" }, expected: {} },
+    { input: { id: "fc_native_example" }, expected: { id: "fc_native_example" } },
+    { input: { id: "fcFutureFormat" }, expected: { id: "fcFutureFormat" } },
+    { input: {}, expected: {} },
+    { input: { id: null }, expected: { id: null } },
+    { input: { id: 42 }, expected: { id: 42 } },
+  ];
+  const input = [];
+  const expected = [];
+  for (const [index, fields] of idCases.entries()) {
+    const call = {
+      type: "function_call",
+      call_id: index === 0 ? "tool_example_foreign" : `call_pair_${index}`,
+      name: "read_fixture",
+      namespace: "functions",
+      arguments: JSON.stringify({ path: `fixture-${index}.txt` }),
+      status: "completed",
+    };
+    const output = {
+      type: "function_call_output",
+      id: `fco_result_${index}`,
+      call_id: call.call_id,
+      output: `fixture contents ${index}`,
+    };
+    input.push({ ...call, ...fields.input }, output);
+    expected.push({ ...call, ...fields.expected }, output);
+  }
+  const untouched = [
+    { type: "custom_tool_call", id: "tool_custom", call_id: "custom_pair", name: "custom_fixture", input: "fixture" },
+    { type: "custom_tool_call_output", id: "custom_result", call_id: "custom_pair", output: "fixture result" },
+    { type: "item_reference", id: "tool_reference" },
+    { type: "message", id: "tool_message", role: "user", content: [{ type: "input_text", text: "continue" }] },
+  ];
+  input.push(...untouched);
+  expected.push(...untouched);
+
+  try {
+    await waitFor(`${routerBase(routerPort)}/models`, router);
+
+    // ------------------------------------------------------------
+    // Each caller and endpoint receives old full history with no prior turn.
+    // Replaying the normalized result must not change the history again.
+    // ------------------------------------------------------------
+
+    for (const suppliedCredential of [true, false]) {
+      for (const [label, endpoint, trigger] of [
+        ["continuation", "/responses", []],
+        ["compaction V1", "/responses/compact", []],
+        ["compaction V2", "/responses", [{ type: "compaction_trigger" }]],
+      ]) {
+        await t.test(`${suppliedCredential ? "caller session" : "substituted session"}: ${label}`, async () => {
+          const expectedInput = [...expected, ...trigger];
+          for (const history of [[...input, ...trigger], expectedInput]) {
+            const requestCount = nativeRequests.length;
+            const response = await fetch(`${routerBase(routerPort)}${endpoint}`, {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${suppliedCredential ? "test-caller-session" : CALLER_KEY}`,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({ model: "gpt-5.6-sol", input: history, previous_response_id: "resp_previous" }),
+            });
+            const result = await response.json();
+            assert.equal(nativeRequests.length, requestCount + 1);
+            assert.equal(response.status, 200, JSON.stringify(result));
+            const sent = nativeRequests.at(-1);
+            assert.equal(sent.url, `/backend-api/codex${endpoint}`);
+            assert.equal(sent.headers.authorization, `Bearer ${suppliedCredential ? "test-caller-session" : "test-native-session-token"}`);
+            assert.deepEqual(sent.body.input, expectedInput);
+            assert.equal(sent.body.previous_response_id, endpoint === "/responses/compact" ? "resp_previous" : undefined);
+          }
+        });
+      }
+    }
+
+    // ------------------------------------------------------------
+    // Native preparation must not rewrite history sent to an external model.
+    // Use the original full call, not the already-normalized native result.
+    // ------------------------------------------------------------
+
+    await t.test("external replay preserves its provider item ID", async () => {
+      const nativeCount = nativeRequests.length;
+      const response = await fetch(`${routerBase(routerPort)}/responses`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${CALLER_KEY}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ model: "kimi-oauth/k3", input: input.slice(0, 2) }),
+      });
+      await response.json();
+      assert.equal(response.status, 200);
+      assert.equal(nativeRequests.length, nativeCount);
+      assert.equal(gatewayRequests.length, 1);
+      assert.deepEqual(gatewayRequests[0].input, input.slice(0, 2));
+    });
+  } finally {
+    await stopChild(router);
+    await closeServer(native.server);
+    await closeServer(gateway.server);
+    rmSync(testRoot, { recursive: true, force: true });
+  }
+});
+
 test("router drops foreign reasoning items before stateless native replay", async () => {
   const nativeRequests = [];
   const native = await mockServer(async (request, response) => {

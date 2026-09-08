@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **OpenAI requests omit incompatible IDs from saved function calls.**
+  Before sending saved conversation history to OpenAI, the router now omits
+  optional `function_call.id` strings that do not start with `fc`, which OpenAI
+  rejects. It preserves `call_id`, matching results, compatible IDs, and requests
+  to external providers. Tests cover continuing and shortening a conversation,
+  sessions supplied by the caller or the router, and sending saved history again.
+
 - **Command Code forced tool choices now use the same bounded alias as the tool definition.**
   The 64-character compatibility added in #643 shortened provider-facing tool names but
   left an object 	ool_choice at the client's original spelling, so a forced long tool

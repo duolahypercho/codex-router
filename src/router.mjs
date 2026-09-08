@@ -2310,6 +2310,17 @@ function normalizeNativeInput(
       // remain above; bare references cannot be made stateless and are dropped.
       return [];
     }
+
+    // ------------------------------------------------------------
+    // External providers can reuse their call_id as an item ID that OpenAI
+    // rejects. Omit only that optional ID on native replay, including saved
+    // history and compaction; call_id must still pair the call with its result.
+    // ------------------------------------------------------------
+
+    if (item?.type === "function_call" && typeof item.id === "string" && !item.id.startsWith("fc")) {
+      const { id: _providerId, ...call } = item;
+      item = call;
+    }
     if (item?.type !== "compaction") return [sanitizeCollaborationForNative(item)];
     return [isRouterCompactionValue(item.encrypted_content)
       ? messageItem(renderCompactionValue(item.encrypted_content))
