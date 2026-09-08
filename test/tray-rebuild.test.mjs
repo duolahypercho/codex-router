@@ -443,6 +443,20 @@ test("each companion fingerprints its own sources", () => {
   assert.equal(traySourceFingerprint(root, "aix"), "");
 });
 
+test("the macOS tray fingerprint includes its full-Xcode resolver", () => {
+  const fakeRoot = scratch();
+  try {
+    const resolver = path.join(fakeRoot, "src", "macos-developer-tools.mjs");
+    mkdirSync(path.dirname(resolver), { recursive: true });
+    writeFileSync(resolver, "before\n", "utf8");
+    const before = traySourceFingerprint(fakeRoot, "darwin");
+    writeFileSync(resolver, "after\n", "utf8");
+    assert.notEqual(traySourceFingerprint(fakeRoot, "darwin"), before);
+  } finally {
+    rmSync(fakeRoot, { recursive: true, force: true });
+  }
+});
+
 test("one companion location: the Node and shell sides name the same directory", () => {
   // Three copies of this path drifted apart before -- paths.mjs, the build
   // script default, and trayBundleDir -- which is how a machine ends up with a

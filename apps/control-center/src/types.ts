@@ -242,6 +242,7 @@ export interface RouterTarget {
   routerDefaultModel?: string;
   routerDefaultManaged?: boolean;
   usageEvents?: UsageEvent[];
+  usageEventHours?: UsageEventHour[];
   modelSettings?: {
     subagents: SubagentSettings;
     picker: { hidden: string[]; visible?: string[]; hasExplicitVisibility?: boolean; path?: string };
@@ -526,6 +527,21 @@ export interface ProviderUsageSnapshot {
   providers: ProviderUsage[];
 }
 
+// One local hour of router traffic, aggregated by the router over the whole
+// window rather than over the capped `usageEvents` sample. `usageEvents` still
+// carries the per-request detail the recent-activity list needs; these buckets
+// carry the totals a 24-hour chart cannot get from a bounded sample.
+export interface UsageEventHour {
+  startedAt: string;
+  tokens: number;
+  requests: number;
+  measuredTokens: boolean;
+  regularInputTokens: number;
+  cachedInputTokens: number;
+  outputTokens: number;
+  measuredBreakdown: boolean;
+}
+
 export interface UsageEvent {
   meteringVersion?: number;
   at: string;
@@ -542,6 +558,8 @@ export interface UsageEvent {
   cachedInputTokens?: number;
   outputTokens?: number;
   billedOutputTokens?: number;
+  /** Reasoning tokens (silent thinking) included in outputTokens. */
+  reasoningTokens?: number;
   totalTokens?: number;
   estimatedInputTokens?: number;
   retries?: number;

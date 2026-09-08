@@ -55,6 +55,8 @@ import {
   NAVIGATION_SOURCE_ARGUMENT,
 } from "../apps/control-center/electron/navigation.mjs";
 
+import { LANGUAGE_OPTIONS } from "../apps/control-center/src/i18n.ts";
+
 test("ChatGPT browser login reports a terminal retry after child close without auth", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "router-browser-login-"));
   const windows = process.platform === "win32";
@@ -569,7 +571,8 @@ test("Electron lifecycle state is durable, queryable, and fail-closed", async ()
 });
 
 test("a windowless desktop process survives only while a real tray owner exists", () => {
-  assert.equal(shouldQuitOnLastWindowClosed({ platform: "darwin", nativeTrayOwnedByHost: true }), true);
+  // Embedded macOS keeps the Electron process so Dock / Command-Tab can return.
+  assert.equal(shouldQuitOnLastWindowClosed({ platform: "darwin", nativeTrayOwnedByHost: true }), false);
   assert.equal(shouldQuitOnLastWindowClosed({ platform: "darwin", nativeTrayOwnedByHost: false, trayAvailable: false }), false);
   assert.equal(shouldQuitOnLastWindowClosed({ platform: "win32", nativeTrayOwnedByHost: false, trayAvailable: true }), false);
   assert.equal(shouldQuitOnLastWindowClosed({ platform: "win32", nativeTrayOwnedByHost: false, trayAvailable: false }), true);
@@ -1095,8 +1098,17 @@ test("electron boundary does not enable node integration or shell argv", async (
   assert.match(main, /app\.dock\?\.setIcon\(appIconPath\(\)\)/);
   assert.match(main, /function showDockForVisibleWindow\(\)[\s\S]*app\.dock\.setIcon\(appIconPath\(\)\)[\s\S]*app\.dock\.show\(\)/);
   assert.match(main, /function hideDockForHiddenWindow\(\)[\s\S]*app\.dock\.hide\(\)/);
-  assert.match(main, /function revealWindow\(\)[\s\S]{0,420}showDockForVisibleWindow\(\)[\s\S]{0,120}mainWindow\.show\(\)/);
-  assert.match(main, /createdWindow\.on\("hide"[\s\S]{0,180}hideDockForHiddenWindow\(\)/);
+  assert.match(main, /function revealWindow\(\)[\s\S]{0,700}showDockForVisibleWindow\(\)[\s\S]{0,120}mainWindow\.show\(\)/);
+  assert.match(
+    main,
+    /createdWindow\.on\("close"[\s\S]{0,500}nativeTrayOwnedByHost \|\| trayIsAvailable\(\)[\s\S]{0,120}event\.preventDefault\(\)[\s\S]{0,80}createdWindow\.hide\(\)/,
+  );
+  // Suppressing destroy without a recoverable owner strands Win/Linux when
+  // tray construction failed; the gate above is what keeps window-all-closed reachable.
+  assert.match(main, /if \(!\(nativeTrayOwnedByHost \|\| trayIsAvailable\(\)\)\) return;/);
+  assert.match(main, /let isQuitting = false/);
+  assert.match(main, /app\.on\("will-quit"[\s\S]{0,220}hideDockForHiddenWindow\(\)/);
+  assert.doesNotMatch(main, /createdWindow\.on\("hide"[\s\S]{0,180}hideDockForHiddenWindow\(\)/);
   assert.match(main, /setWindowOpenHandler\(\(\) => \(\{ action: "deny" \}\)\)/);
   assert.match(main, /if \(app\.isPackaged \|\| !requested\)/);
   assert.match(main, /\["127\.0\.0\.1", "localhost", "\[::1\]"\]\.includes\(parsed\.hostname\)/);
@@ -1510,7 +1522,7 @@ test("settings keeps model choice out and exposes durable app preferences", asyn
     "settings.maintenance.confirm.body",
   ]) {
     const occurrences = i18n.split(`"${key}"`).length - 1;
-    assert.equal(occurrences, 6, `${key} must be translated in all six locales`);
+    assert.equal(occurrences, LANGUAGE_OPTIONS.length, `${key} must be translated in every locale`);
   }
   // Sharing is an authorization to spend the user's subscription, so its
   // confirmation and live state cannot silently fall back to English.
@@ -1533,14 +1545,14 @@ test("settings keeps model choice out and exposes durable app preferences", asyn
     "settings.chatgptSession.action.disable",
   ]) {
     const occurrences = i18n.split(`"${key}"`).length - 1;
-    assert.equal(occurrences, 6, `${key} must be translated in all six locales`);
+    assert.equal(occurrences, LANGUAGE_OPTIONS.length, `${key} must be translated in every locale`);
   }
   for (const key of [
     "settings.desktop.unavailable.title",
     "settings.desktop.unavailable.body",
   ]) {
     const occurrences = i18n.split(`"${key}"`).length - 1;
-    assert.equal(occurrences, 6, `${key} must be translated in all six locales`);
+    assert.equal(occurrences, LANGUAGE_OPTIONS.length, `${key} must be translated in every locale`);
     assert.ok(settings.includes(`t("${key}")`), `${key} must be rendered through the translator`);
   }
   assert.doesNotMatch(settings, /["`]Sharing (?:enabled|disabled|status unavailable)/);

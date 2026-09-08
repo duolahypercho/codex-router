@@ -4,6 +4,7 @@ import {
   mkdirSync,
   readFileSync,
   renameSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
@@ -245,6 +246,54 @@ export function disableProvider(providerId) {
   return writeProviderSelection(
     current.filter((id) => canonicalProviderId(id) !== target),
   );
+}
+
+// Reconcile the on-disk enable list with what this build can authenticate.
+// Reads the file directly rather than readProviderSelectionDetail(): that
+// helper falls back to "every provider" when the file is missing, when
+// SHOW_ALL_MODELS is set, or when every stored id is unknown, and feeding
+// those virtual lists into disableProvider would create or rewrite policy
+// the operator never wrote. Discovery-disabled installs are left alone so
+// the kill-switch does not empty a stored selection by reporting nothing
+// configured. Idempotent: a second call finds nothing to remove.
+export function pruneUnconfiguredProviders() {
+  if (discoveryDisabled()) return [];
+  if (
+    process.env.MODEL_ROUTER_SHOW_ALL_MODELS === "1" ||
+    (TARGET === "codex" && process.env.CODEX_ROUTER_SHOW_ALL_MODELS === "1")
+  ) {
+    return [];
+  }
+  if (!existsSync(PROVIDER_SELECTION_PATH)) return [];
+
+  let parsed;
+  try {
+    parsed = JSON.parse(readFileSync(PROVIDER_SELECTION_PATH, "utf8"));
+  } catch {
+    return [];
+  }
+  if (parsed?.version !== 1 || !Array.isArray(parsed.providers)) return [];
+
+  const { known, unknown } = filterKnownProviderIds(parsed.providers);
+  const configured = new Set(configuredProviderIds());
+  const keep = known.filter((id) => configured.has(id));
+  const removed = [
+    ...unknown.map((id) => ({ id, reason: "unrecognised" })),
+    ...known
+      .filter((id) => !configured.has(id))
+      .map((id) => ({ id, reason: "no credential" })),
+  ];
+  if (removed.length === 0) return [];
+
+  // Only-unknown files currently read as the no-file default (show all).
+  // Deleting the file preserves that; writing [] would idle the install.
+  if (keep.length === 0 && known.length === 0) {
+    unlinkSync(PROVIDER_SELECTION_PATH);
+    return removed;
+  }
+
+  writeProviderSelection(keep);
+  return removed;
 }
 
 export function selectedListedModels() {

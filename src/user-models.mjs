@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 
 import { writePrivateJson } from "./file-security.mjs";
+import { curatedModelDisplayName } from "./opencode-curation.mjs";
 import { STATE_DIR } from "./paths.mjs";
 
 // User-curated models live outside the checked-in config/ registry tree so a checkout update
@@ -61,12 +62,14 @@ const METADATA_FIELDS = new Set([
   "reasoningLevels",
   "defaultEffort",
   "serviceTiers",
+  "supportsSearchHistory",
   "supportsReasoningSummaries",
   "defaultReasoningSummary",
   "availabilityNux",
   "upgradeTo",
   "requiresTrailingUserTurn",
   "isFree",
+  "toolSchemaRecursion",
   "supportedEndpoints",
 ]);
 
@@ -78,7 +81,10 @@ const OFFICIAL_MODEL_DISPLAY_NAMES = new Map([
 ]);
 
 export function officialModelDisplayName(providerId, upstreamId) {
-  return OFFICIAL_MODEL_DISPLAY_NAMES.get(`${providerId}/${upstreamId}`);
+  return (
+    OFFICIAL_MODEL_DISPLAY_NAMES.get(`${providerId}/${upstreamId}`) ||
+    curatedModelDisplayName(providerId, upstreamId)
+  );
 }
 
 function gatewaySafe(value) {

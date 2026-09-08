@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   mkdirSync,
   mkdtempSync,
@@ -20,6 +21,8 @@ import {
   clampModelEfforts,
   codexEffortVocabulary,
   effectivePickerHiddenModels,
+  liveAccountCatalogProbeAllowed,
+  nativeCacheCanRefreshInPlace,
   nativeCatalogIsReusable,
   deriveBaseInstructions,
   mergeNativeCatalogs,
@@ -63,6 +66,41 @@ const grok = {
   compHash: "grok-oauth-grok-4-5-v1",
   multiAgentVersion: "v2",
 };
+
+test("live account catalog probes stay off while the router owns the catalog", () => {
+  assert.equal(
+    liveAccountCatalogProbeAllowed({ discoveryDisabled: false, routedCatalogActive: false }),
+    true,
+  );
+  assert.equal(
+    liveAccountCatalogProbeAllowed({ discoveryDisabled: true, routedCatalogActive: false }),
+    false,
+  );
+  assert.equal(
+    liveAccountCatalogProbeAllowed({ discoveryDisabled: false, routedCatalogActive: true }),
+    false,
+  );
+  // ChatGPT account switching refreshes native while openai_base_url still
+  // points at this router. A live `debug models` probe would echo the merged
+  // catalog and abort the switch with "already-merged catalog".
+  assert.equal(
+    liveAccountCatalogProbeAllowed({ discoveryDisabled: false, routedCatalogActive: true }),
+    false,
+  );
+});
+
+test("native capture refuses to probe a live account catalog under a routed config", () => {
+  const source = readFileSync(new URL("../src/catalog.mjs", import.meta.url), "utf8");
+  assert.match(
+    source,
+    /liveAccountCatalogProbeAllowed\(\{\s*discoveryDisabled: idle,\s*routedCatalogActive: routedActive,\s*\}\)/,
+  );
+  assert.match(source, /catalogContainsRoutedSlugs\(account\)/);
+  assert.match(
+    source,
+    /Could not refresh the native model catalog \(\$\{error\.message\}\); reusing the cached capture\./,
+  );
+});
 
 test("signed-in picker overlay cannot hide Codex native base entries", () => {
   const hidden = new Set(["gpt-5.6-luna", "gpt-5.6-sol-1m", "grok-oauth/grok-4.5"]);
@@ -877,6 +915,104 @@ test("models stay untouched when the installed build understands their efforts",
   assert.equal(unchanged, original);
 });
 
+test("native cache permits in-place refresh only when it contains native models", () => {
+  assert.equal(
+    nativeCacheCanRefreshInPlace({ catalog: { models: [template] } }),
+    true,
+  );
+  assert.equal(
+    nativeCacheCanRefreshInPlace({
+      catalog: { models: [template, { ...template, slug: grok.slug }] },
+    }),
+    false,
+  );
+  assert.equal(nativeCacheCanRefreshInPlace({}), false);
+});
+
+test("fingerprint drift from new native model triggers automatic recapture", () => {
+  // Simulate a stored catalog with one native model
+  const oldNative = {
+    slug: "gpt-5.6-sol",
+    name: "GPT Sol",
+    visibility: "list",
+  };
+  const oldFingerprint = createHash("sha256")
+    .update(JSON.stringify([oldNative]))
+    .digest("hex");
+  
+  const oldCaptured = {
+    captured_with: "codex-cli 0.146.1",
+    native_source_fingerprint: oldFingerprint,
+    models: [oldNative],
+  };
+  
+  // Old fingerprint matches - cache is reusable
+  assert.equal(
+    nativeCatalogIsReusable(oldCaptured, "codex-cli 0.146.1", oldFingerprint),
+    true,
+  );
+  
+  // Simulate a NEW arbitrary native model appearing in models_cache.json
+  // (This could be gpt-7, o5, any future native - not hardcoded)
+  const newNative = {
+    slug: "gpt-7-nova",  // Arbitrary new native slug
+    name: "GPT Nova",
+    visibility: "list",
+  };
+  const newFingerprint = createHash("sha256")
+    .update(JSON.stringify([oldNative, newNative]))
+    .digest("hex");
+  
+  // New fingerprint differs - triggers recapture
+  assert.equal(
+    nativeCatalogIsReusable(oldCaptured, "codex-cli 0.146.1", newFingerprint),
+    false,
+  );
+  
+  // Verify fingerprints are actually different
+  assert.notEqual(oldFingerprint, newFingerprint);
+});
+
+test("new arbitrary native model appears in merged catalog after drift", () => {
+  // Existing native model
+  const existingNative = {
+    slug: "gpt-5.6-sol",
+    name: "GPT Sol",
+    visibility: "list",
+    priority: 100,
+  };
+  
+  // NEW arbitrary native model (could be gpt-7, o5, etc. - not hardcoded)
+  const newNative = {
+    slug: "gpt-7-quantum",  // Arbitrary future native
+    name: "GPT Quantum",
+    visibility: "list",
+    priority: 50,
+  };
+  
+  // Routed model for comparison
+  const routedModel = {
+    ...grok,
+    visibility: "list",
+  };
+  
+  // Merge with both natives present
+  const merged = buildMergedCatalog(
+    { models: [existingNative, newNative] },
+    [routedModel],
+  );
+  
+  // Verify BOTH natives appear in merged output
+  const slugs = merged.map((model) => model.slug);
+  assert.ok(slugs.includes("gpt-5.6-sol"), "existing native preserved");
+  assert.ok(slugs.includes("gpt-7-quantum"), "new arbitrary native appears");
+  assert.ok(slugs.includes(grok.slug), "routed model also present");
+  
+  // Verify natives come first
+  assert.equal(merged[0].slug, "gpt-7-quantum", "higher-priority native first");
+  assert.equal(merged[1].slug, "gpt-5.6-sol", "lower-priority native second");
+});
+
 test("native catalog cache is reusable only for the codex build that captured it", () => {
   const captured = {
     captured_with: "codex-cli 0.142.5",
@@ -903,6 +1039,34 @@ test("native catalog cache is reusable only for the codex build that captured it
   // Invalid or empty caches are never reusable.
   assert.equal(nativeCatalogIsReusable(undefined, undefined), false);
   assert.equal(nativeCatalogIsReusable({ models: [] }, "codex-cli 0.146.1"), false);
+});
+
+test("native catalog cache is invalidated when the Codex binary changes without a version change", () => {
+  const captured = {
+    captured_with: "codex-cli 0.153.3",
+    native_source_fingerprint: "account-a",
+    native_binary_fingerprint: "binary-a",
+    models: [template],
+  };
+
+  assert.equal(
+    nativeCatalogIsReusable(
+      captured,
+      "codex-cli 0.153.3",
+      "account-a",
+      "binary-a",
+    ),
+    true,
+  );
+  assert.equal(
+    nativeCatalogIsReusable(
+      captured,
+      "codex-cli 0.153.3",
+      "account-a",
+      "binary-b",
+    ),
+    false,
+  );
 });
 
 test("native catalog merge preserves account visibility and bundled-only models", () => {

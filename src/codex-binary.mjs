@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, readdirSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -100,6 +101,23 @@ export function findCodexBinary() {
   return resolveRealCodex()?.file;
 }
 
+export function codexBinaryFingerprint(binary = findCodexBinary()) {
+  if (!binary) return undefined;
+  try {
+    const stats = statSync(binary);
+    return createHash("sha256")
+      .update(JSON.stringify({
+        path: path.resolve(binary),
+        size: stats.size,
+        mtimeMs: stats.mtimeMs,
+        ctimeMs: stats.ctimeMs,
+      }))
+      .digest("hex");
+  } catch {
+    return undefined;
+  }
+}
+
 export function requireCodexBinary() {
   const binary = findCodexBinary();
   if (!binary) {
@@ -119,9 +137,11 @@ export function runCodex(args, options = {}) {
   });
 }
 
-// The version tells catalog code whether a cached native capture came from
-// the currently installed build. Undefined means "could not ask", which
-// callers must treat as unknown rather than as a mismatch.
+// The version is one compatibility signal for native catalog reuse, but
+// Desktop can replace its version-hashed runtime binary without changing this
+// string. codexBinaryFingerprint() supplies the complementary build identity.
+// Undefined means "could not ask", which callers treat as unknown rather than
+// as a mismatch.
 export function codexVersion() {
   try {
     const output = runCodex(["--version"], {

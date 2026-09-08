@@ -33,6 +33,7 @@ import type {
   RouterHealth,
   RouterTarget,
   UsageEvent,
+  UsageEventHour,
   UsageBucket,
   UsageMetric,
   ViewId,
@@ -191,17 +192,26 @@ export function DashboardPage({
     authoritativeRoutes,
     runAction ?? (async (_label, action) => { await action(); }),
   );
+  const eventHours: UsageEventHour[] | undefined = target?.usageEventHours;
   const telemetryEvents24h = recentWindowEvents(target?.usageEvents, Date.now());
   const eventTokens24h = sumEventTokens(telemetryEvents24h);
   const eventRequests24h = eventsCountOrNull(target?.usageEvents, telemetryEvents24h);
+  const rollupTokens24h = eventHours?.some((hour) => hour.measuredTokens)
+    ? eventHours.reduce((sum, hour) => sum + hour.tokens, 0)
+    : null;
+  const rollupRequests24h = eventHours?.length
+    ? eventHours.reduce((sum, hour) => sum + hour.requests, 0)
+    : null;
   const reportedTokens24h = sumReported(providers.map((provider) => provider.last24hTokens));
   const reportedRequests24h = sumReported(providers.map((provider) => provider.last24hRequests));
   // Older installed routers expose the same bounded event stream but predate
   // the provider-level rolling counters. Use it as a presentation fallback so
   // a real day of traffic is not painted as empty during an app/router update.
-  const tokens24h = reportedTokens24h ?? eventTokens24h;
-  const requests24h = reportedRequests24h ?? eventRequests24h;
-  const usageMeasured = Boolean(providerUsage || target?.usageEvents);
+  // The rollup sits between the two: it covers the whole window, where the
+  // event sample is capped and understates a busy day by an order of magnitude.
+  const tokens24h = reportedTokens24h ?? rollupTokens24h ?? eventTokens24h;
+  const requests24h = reportedRequests24h ?? rollupRequests24h ?? eventRequests24h;
+  const usageMeasured = Boolean(providerUsage || target?.usageEvents || eventHours?.length);
 
   const metrics = useMemo(() => collectMetrics(account, providerUsage), [account, providerUsage]);
   const quotaLoaded = Boolean(account || providerUsage);
@@ -231,7 +241,7 @@ export function DashboardPage({
   // event stream gives the dashboard an honest hourly shape. Keep this local to
   // the renderer: it is a presentation view and must not become a second
   // accounting ledger in the router.
-  const trafficBuckets = buildTrafficBuckets(events, providerUsage, trafficRange, Date.now());
+  const trafficBuckets = buildTrafficBuckets(events, providerUsage, eventHours, trafficRange, Date.now());
   const providerBreakdown = buildProviderBreakdown(providerUsage, events, Date.now());
   const modelBreakdown = buildModelBreakdown(providerUsage, events, Date.now());
   const trafficHasRequests = trafficBuckets.some((bucket) => bucket.requests > 0);
@@ -277,7 +287,7 @@ export function DashboardPage({
         ? "Waiting for router usage telemetry"
         : tokens24h === null
           ? "No provider or event reports a rolling 24-hour window"
-          : `${exactNumber(tokens24h)} router tokens${requests24h === null ? "" : ` · ${exactNumber(requests24h)} ${plural(requests24h, "request")}`} · ${reportedTokens24h !== null ? "sum of provider rows" : "sum of recent event details"}`,
+          : `${exactNumber(tokens24h)} router tokens${requests24h === null ? "" : ` · ${exactNumber(requests24h)} ${plural(requests24h, "request")}`} · ${reportedTokens24h !== null ? "sum of provider rows" : rollupTokens24h !== null ? "sum of the router's hourly rollup" : "sum of recent event details"}`,
       view: "usage",
       viewLabel: "Usage",
       pending: snapshotPending && !providerUsage,
@@ -405,7 +415,7 @@ export function DashboardPage({
           {events ? (
             <p className="db-panel-note db-traffic-note">
               {trafficHasTokens
-                ? `${exactNumber(trafficBuckets.reduce((sum, bucket) => sum + bucket.tokens, 0))} measured tokens across ${exactNumber(trafficBuckets.reduce((sum, bucket) => sum + bucket.requests, 0))} requests in ${trafficRangeLabel(trafficRange)}. ${trafficRange === 24 ? "Hourly bars use the latest 1,000 event details." : "Daily bars use the retained provider ledger when available."}`
+                ? `${exactNumber(trafficBuckets.reduce((sum, bucket) => sum + bucket.tokens, 0))} measured tokens across ${exactNumber(trafficBuckets.reduce((sum, bucket) => sum + bucket.requests, 0))} requests in ${trafficRangeLabel(trafficRange)}. ${trafficRange === 24 ? eventHours?.length ? "Hourly bars use the router's full 24-hour rollup." : "Hourly bars use the latest 1,000 event details; this router does not publish an hourly rollup." : "Daily bars use the retained provider ledger when available."}`
                 : trafficHasRequests
                   ? `${exactNumber(trafficBuckets.reduce((sum, bucket) => sum + bucket.requests, 0))} requests observed in ${trafficRangeLabel(trafficRange)}, but token counts were not reported by the upstream responses.`
                   : `The router returned an empty ${trafficRangeLabel(trafficRange)} telemetry window; this is different from a failed health check.`}
@@ -959,9 +969,9 @@ function buildTokenActivity(
   now: number,
 ): { days: TokenActivityDay[]; months: TokenActivityMonth[]; today: number } {
   const today = new Date(now);
-  today.setHours(0, 0, 0, 0);
+  today.setUTCHours(0, 0, 0, 0);
   const first = new Date(today);
-  first.setDate(first.getDate() - first.getDay() - ((TOKEN_ACTIVITY_WEEKS - 1) * 7));
+  first.setUTCDate(first.getUTCDate() - first.getUTCDay() - ((TOKEN_ACTIVITY_WEEKS - 1) * 7));
 
   const tokensByDay = new Map<string, number>();
   const measuredDays = new Set<string>();
@@ -985,7 +995,7 @@ function buildTokenActivity(
     for (const event of events ?? []) {
       const at = new Date(event.at);
       if (!Number.isFinite(at.getTime())) continue;
-      const dateKey = localDateKey(at);
+      const dateKey = usageDateKey(at);
       const tokens = tokenCountFromEvent(event);
       if (tokens === null) continue;
       measuredDays.add(dateKey);
@@ -995,26 +1005,26 @@ function buildTokenActivity(
 
   const days = Array.from({ length: TOKEN_ACTIVITY_WEEKS * 7 }, (_, index) => {
     const date = new Date(first);
-    date.setDate(first.getDate() + index);
-    const dateKey = localDateKey(date);
+    date.setUTCDate(first.getUTCDate() + index);
+    const dateKey = usageDateKey(date);
     return {
       date,
       dateKey,
       tokens: tokensByDay.get(dateKey) ?? 0,
       measured: measuredDays.has(dateKey),
       weekIndex: Math.floor(index / 7),
-      dayIndex: date.getDay(),
+      dayIndex: date.getUTCDay(),
     };
   });
 
-  const monthFormatter = new Intl.DateTimeFormat("en-US", { month: "short" });
+  const monthFormatter = new Intl.DateTimeFormat("en-US", { month: "short", timeZone: "UTC" });
   const months: TokenActivityMonth[] = [];
   let previousMonth = -1;
   for (const day of days) {
-    const month = day.date.getMonth();
+    const month = day.date.getUTCMonth();
     if (month === previousMonth) continue;
     previousMonth = month;
-    if (day.date.getDate() > 7) continue;
+    if (day.date.getUTCDate() > 7) continue;
     months.push({ label: monthFormatter.format(day.date), weekIndex: day.weekIndex });
   }
 
@@ -1029,6 +1039,7 @@ function tokenActivityForMode(
     month: "short",
     day: "numeric",
     year: "numeric",
+    timeZone: "UTC",
   });
   const weeklyTotals = new Map<number, number>();
   for (const day of days) {
@@ -1077,10 +1088,13 @@ function normalizeDateKey(value: string): string | null {
   return match ? `${match[1]}-${match[2]}-${match[3]}` : null;
 }
 
-function localDateKey(date: Date): string {
-  const year = date.getFullYear();
-  const month = `${date.getMonth() + 1}`.padStart(2, "0");
-  const day = `${date.getDate()}`.padStart(2, "0");
+// Usage day keys are UTC days wherever they come from -- the router writes them
+// that way and OpenAI's account stream reports them that way -- so the grid this
+// compares them against has to be built in the same day space.
+function usageDateKey(date: Date): string {
+  const year = date.getUTCFullYear();
+  const month = `${date.getUTCMonth() + 1}`.padStart(2, "0");
+  const day = `${date.getUTCDate()}`.padStart(2, "0");
   return `${year}-${month}-${day}`;
 }
 
@@ -1101,25 +1115,72 @@ function trafficDescription(range: TrafficRange): string {
 function buildTrafficBuckets(
   events: UsageEvent[] | undefined,
   providerUsage: ProviderUsageSnapshot | undefined,
+  hours: UsageEventHour[] | undefined,
   range: TrafficRange,
   now: number,
 ): TrafficBucket[] {
   return range === 24
-    ? buildHourlyTrafficBuckets(events, now)
+    ? buildHourlyTrafficBuckets(events, hours, now)
     : buildDailyTrafficBuckets(events, providerUsage, range, now);
 }
 
-function buildHourlyTrafficBuckets(events: UsageEvent[] | undefined, now: number): TrafficBucket[] {
-  const anchor = new Date(now);
-  anchor.setMinutes(0, 0, 0);
-  const first = anchor.getTime() - (23 * HOUR_MS);
+const HOUR_LABEL_FORMATTER = new Intl.DateTimeFormat("en-US", { hour: "numeric" });
+const HOUR_FULL_LABEL_FORMATTER = new Intl.DateTimeFormat("en-US", {
+  month: "short",
+  day: "numeric",
+  hour: "numeric",
+});
+
+// `events` is a bounded sample -- the router caps it at 1,000 rows -- so on a
+// busy day it covers a couple of hours, not twenty-four. Summing it drew most
+// of the day empty and printed a fraction of the day's tokens as the day's
+// total, right next to a summary tile that added up every provider row. The
+// router now publishes an hourly rollup over the uncapped window; the sample
+// remains the fallback for a router that predates it.
+function hourlyBucketsFromRollup(hours: UsageEventHour[]): TrafficBucket[] {
+  // Label each bar from the hour the router actually measured rather than from
+  // a grid anchored on the renderer's clock. The two agree until the hour turns
+  // over between the snapshot and the render, and then this keeps the newest
+  // measured hour on the chart instead of blanking it until the next poll.
+  return hours.map((hour) => {
+    const start = new Date(hour.startedAt);
+    return {
+      key: hour.startedAt,
+      label: HOUR_LABEL_FORMATTER.format(start),
+      fullLabel: HOUR_FULL_LABEL_FORMATTER.format(start),
+      tokens: hour.tokens,
+      requests: hour.requests,
+      measuredTokens: hour.measuredTokens,
+      regularInputTokens: hour.regularInputTokens,
+      cachedInputTokens: hour.cachedInputTokens,
+      outputTokens: hour.outputTokens,
+      measuredBreakdown: hour.measuredBreakdown,
+    };
+  });
+}
+
+function buildHourlyTrafficBuckets(
+  events: UsageEvent[] | undefined,
+  hours: UsageEventHour[] | undefined,
+  now: number,
+): TrafficBucket[] {
+  if (hours?.length) return hourlyBucketsFromRollup(hours);
+  const windowStart = now - 24 * HOUR_MS;
+  const firstAnchor = new Date(windowStart);
+  firstAnchor.setMinutes(0, 0, 0);
+  const lastAnchor = new Date(now);
+  lastAnchor.setMinutes(0, 0, 0);
+  const first = firstAnchor.getTime();
+  const lastHour = lastAnchor.getTime();
+  const lastBucket = now === lastHour ? lastHour - HOUR_MS : lastHour;
+  const bucketCount = Math.floor((lastBucket - first) / HOUR_MS) + 1;
   const formatter = new Intl.DateTimeFormat("en-US", { hour: "numeric" });
   const fullFormatter = new Intl.DateTimeFormat("en-US", {
     month: "short",
     day: "numeric",
     hour: "numeric",
   });
-  const buckets = Array.from({ length: 24 }, (_, index) => {
+  const buckets = Array.from({ length: bucketCount }, (_, index) => {
     const start = new Date(first + index * HOUR_MS);
     return {
       key: start.toISOString(),
@@ -1136,7 +1197,7 @@ function buildHourlyTrafficBuckets(events: UsageEvent[] | undefined, now: number
   });
   for (const event of events ?? []) {
     const at = Date.parse(event.at);
-    if (!Number.isFinite(at) || at < first || at >= anchor.getTime() + HOUR_MS) continue;
+    if (!Number.isFinite(at) || at < windowStart || at >= now) continue;
     const index = Math.floor((at - first) / HOUR_MS);
     if (index < 0 || index >= buckets.length) continue;
     const bucket = buckets[index];
@@ -1163,14 +1224,25 @@ function buildDailyTrafficBuckets(
   range: Exclude<TrafficRange, 24>,
   now: number,
 ): TrafficBucket[] {
+  // Daily buckets are keyed by UTC day, both by the router and by OpenAI's
+  // account stream. Anchoring this grid on local midnight put each bucket on
+  // the local day of the same name -- a different window than the one it
+  // measured, by the machine's offset -- and left the newest local day with no
+  // bucket to match until that offset had elapsed. Grid and labels are UTC so a
+  // bar names the day its number is from.
   const anchor = new Date(now);
-  anchor.setHours(0, 0, 0, 0);
+  anchor.setUTCHours(0, 0, 0, 0);
   const first = anchor.getTime() - (range - 1) * DAY_MS;
-  const labelFormatter = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" });
+  const labelFormatter = new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    timeZone: "UTC",
+  });
   const fullFormatter = new Intl.DateTimeFormat("en-US", {
     month: "short",
     day: "numeric",
     year: range === 30 ? "numeric" : undefined,
+    timeZone: "UTC",
   });
   const buckets = Array.from({ length: range }, (_, index) => {
     const start = new Date(first + index * DAY_MS);
@@ -1195,7 +1267,7 @@ function buildDailyTrafficBuckets(
   let providerBuckets = 0;
   for (const provider of providers) {
     for (const usageBucket of provider.dailyUsageBuckets ?? []) {
-      const index = indexForLocalDay(usageBucket.startDate, first, range);
+      const index = indexForUsageDay(usageBucket.startDate, first, range);
       if (index === null) continue;
       const bucket = buckets[index];
       providerBuckets += 1;
@@ -1244,8 +1316,9 @@ function buildDailyTrafficBuckets(
   return buckets;
 }
 
-function indexForLocalDay(value: string, first: number, count: number): number | null {
-  const date = new Date(`${value}T00:00:00`);
+function indexForUsageDay(value: string, first: number, count: number): number | null {
+  // `T00:00:00` with no zone is local midnight; the key is a UTC day.
+  const date = new Date(`${value}T00:00:00Z`);
   if (!Number.isFinite(date.getTime())) return null;
   const index = Math.floor((date.getTime() - first) / DAY_MS);
   return index >= 0 && index < count ? index : null;
@@ -1502,7 +1575,12 @@ function tokensPerSecondFromEvent(event: UsageEvent): number | null {
   ) return null;
   const generationDurationMs = durationMs - firstTokenMs;
   if (generationDurationMs <= 0) return null;
-  const rate = (output * 1_000) / generationDurationMs;
+  // Subtract reasoning tokens from output for tok/s numerator (same as provider-usage).
+  // Industry TTFT measures time to first visible token; reasoning tokens are generated
+  // during silent thinking before any visible output.
+  const reasoningTokens = optionalNumber(event.reasoningTokens) ?? 0;
+  const speedOutput = Math.max(0, output - reasoningTokens);
+  const rate = (speedOutput * 1_000) / generationDurationMs;
   return Number.isFinite(rate) && rate <= 500 ? Math.round(rate * 10) / 10 : null;
 }
 

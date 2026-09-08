@@ -21,7 +21,7 @@ import {
   readServiceProcessState,
   serviceProcessOwns,
 } from "./service-process.mjs";
-import { protectPrivateFile } from "./file-security.mjs";
+import { ensureCheckoutReadable, protectPrivateFile } from "./file-security.mjs";
 import { providerApiKeyServiceEnvironment } from "./provider-api-key-service-environment.mjs";
 import { serviceProxyEnvironment } from "./proxy-environment.mjs";
 import {
@@ -103,11 +103,13 @@ function wrapper() {
 // window style of 0. Without it the wrapper owned a console window that stayed
 // on screen for the router's lifetime and reappeared on every watchdog restart.
 //
-// The `True` wait flag is what keeps Task Scheduler's restart settings alive:
-// Run then blocks until the wrapper exits and returns its exit code, which the
-// script re-raises through WScript.Quit. Quitting with a fixed 0 (or letting the
-// script fall off the end) would report every crash as a clean exit and silently
-// disable RestartCount/RestartInterval.
+// The `True` wait flag keeps the task instance alive for the router's lifetime
+// so Task Scheduler state and `schtasks /End` track the real process tree.
+// Propagating the wrapper exit code still matters for diagnostics
+// (`LastTaskResult`), but it does not drive relaunch: Task Scheduler's
+// RestartOnFailure only covers actions that fail to start, not a non-zero
+// exit after a successful start (issue #581). Relaunch after exit or a power
+// event comes from the minute heartbeat trigger in installTask().
 function launcher() {
   // A Windows path cannot contain a double quote, but escape it anyway so a
   // hand-edited state directory can never break out of the string literal.
@@ -203,10 +205,15 @@ function installTask() {
     // around the launcher path never pass through powershell.exe's -Command
     // reparse or the schtasks argument escaper.
     "$action = New-ScheduledTaskAction -Execute $env:CODEX_ROUTER_TASK_EXECUTE -Argument $env:CODEX_ROUTER_TASK_ARGUMENT",
-    "$trigger = New-ScheduledTaskTrigger -AtLogOn -User ([Security.Principal.WindowsIdentity]::GetCurrent().Name)",
-    "$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew",
+    // Logon alone never re-fires on wake/fast-startup, and RestartOnFailure
+    // does not relaunch after a started action exits (issue #581). The minute
+    // heartbeat is the supervisor: MultipleInstances IgnoreNew drops it while
+    // the router is alive, and StartWhenAvailable catches ticks missed in sleep.
+    "$logon = New-ScheduledTaskTrigger -AtLogOn -User ([Security.Principal.WindowsIdentity]::GetCurrent().Name)",
+    "$heartbeat = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 1) -RepetitionDuration (New-TimeSpan -Days 9999)",
+    "$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -StartWhenAvailable",
     "$principal = New-ScheduledTaskPrincipal -UserId ([Security.Principal.WindowsIdentity]::GetCurrent().Name) -LogonType Interactive -RunLevel Limited",
-    "Register-ScheduledTask -TaskName $env:CODEX_ROUTER_TASK -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force | Out-Null",
+    "Register-ScheduledTask -TaskName $env:CODEX_ROUTER_TASK -Action $action -Trigger @($logon, $heartbeat) -Settings $settings -Principal $principal -Force | Out-Null",
   ].join("; ");
   try {
     execFileSync(
@@ -387,6 +394,13 @@ function taskExists() {
   }
 }
 
+function setTaskEnabled(enabled) {
+  schtasks(
+    ["/Change", "/TN", taskName, enabled ? "/ENABLE" : "/DISABLE"],
+    { quiet: true, mutating: true },
+  );
+}
+
 function taskState() {
   const script =
     "try { [Console]::Out.Write((Get-ScheduledTask -TaskName $env:CODEX_ROUTER_TASK).State.ToString()) } catch { exit 1 }";
@@ -460,6 +474,11 @@ if (command === "render") {
   // failure, and must exit non-zero without touching the host filesystem.
   guardLauncherWrite();
   try {
+    // Ensure the checkout directory is readable by the Limited-level scheduled
+    // task. An elevated installer creates files with ACLs that only allow the
+    // elevated account to read them, while the task runs at Limited level
+    // (issue #548). Grant Users read access so the task can load modules.
+    ensureCheckoutReadable(SOURCE_ROOT);
     // Writing the launchers belongs inside the try: renameSync over the .vbs
     // raises a sharing violation while a running wscript.exe still holds it
     // open, and that used to throw out of install with nothing to catch it.
@@ -525,12 +544,17 @@ if (command === "render") {
     `${JSON.stringify({ installed, loaded, state })}\n`,
   );
 } else if (command === "stop") {
-  // Stopping is idempotent, like uninstall and restart: a task that is missing
-  // or already idle is the state the caller asked for, not an error to raise.
-  endTask();
+  // A heartbeat trigger must not undo an explicit stop. Disable the task before
+  // ending the active instance so scheduled ticks stay inert until start/restart.
+  // If the task is already missing, stopping remains idempotent.
+  if (taskExists()) {
+    setTaskEnabled(false);
+    endTask();
+  }
   process.stdout.write(`${JSON.stringify({ state: "stopped" })}\n`);
 } else {
   if (command === "restart") endTask();
+  setTaskEnabled(true);
   schtasks(["/Run", "/TN", taskName], { quiet: true, mutating: true });
   process.stdout.write(`${JSON.stringify({ state: "running" })}\n`);
 }

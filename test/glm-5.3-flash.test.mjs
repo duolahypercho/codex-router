@@ -53,12 +53,12 @@ test("withdrawn or uncertified reseller routes stay absent while direct-proven r
     assert.equal(MODEL_BY_SLUG.has(slug), false, `${slug} should not exist`);
   }
   for (const slug of [
-    "commandcode/glm-5.3-flash",
     "nousresearch/glm-5.3-flash",
     "venice/glm-5.3-flash",
   ]) {
     assert.equal(MODEL_BY_SLUG.has(slug), false, `${slug} is not route-certified`);
   }
+  assert.equal(MODEL_BY_SLUG.has("commandcode/glm-5.3-flash"), true);
   assert.equal(MODEL_BY_SLUG.has("openrouter/glm-5.3-flash"), true);
   assert.equal(MODEL_BY_SLUG.has("zai-api/glm-5.3-flash"), true);
   assert.equal(MODEL_BY_SLUG.has("zai-coding/glm-5.3-flash"), true);

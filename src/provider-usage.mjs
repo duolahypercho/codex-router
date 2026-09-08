@@ -3,11 +3,19 @@ import { providerAccountUsageSnapshot } from "./provider-account-usage.mjs";
 import { canonicalProviderId, readProviderSelection } from "./provider-selection.mjs";
 import { allUsageEvents } from "./usage-events.mjs";
 
+// OpenAI's account stream reports dailyUsageBuckets keyed by UTC calendar day.
+// These router-derived buckets were keyed by the machine's local day, so the
+// two day spaces were merged by string in mergeAccountUsageBuckets() and drawn
+// on one chart as if they described the same window. East of UTC that silently
+// misattributed every bar by the zone's offset, and the current local day had
+// no account bucket to match at all until the offset elapsed -- a Pro account
+// mid-session showed "today: 0" every morning. One day space, and it has to be
+// the one the authoritative stream already uses.
 function dateKey(value) {
   const date = new Date(value);
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
+  const year = date.getUTCFullYear();
+  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(date.getUTCDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
 }
 
@@ -223,6 +231,12 @@ export function aggregateProviderUsage(events, { days = 90, now = Date.now() } =
     // 426-token one at 69 on the same model.
     const firstTokenMs = optionalNonnegative(event.firstTokenMs);
     const generationDurationMs = durationMs - (firstTokenMs ?? durationMs);
+    // Industry TTFT measures time to first *visible* token. Reasoning tokens
+    // are generated during silent thinking before any visible output. When the
+    // provider reports the split, subtract reasoning from output to get the
+    // tok/s numerator. Provider totals still count full output for billing.
+    const reasoningTokens = optionalNonnegative(event.reasoningTokens) ?? 0;
+    const speedOutputTokens = Math.max(0, selectedOutputTokens - reasoningTokens);
     // A long Codex turn can trip the empty-completion hold budget and still
     // finish as a normal 200 with streamed tokens. That flag means "we
     // stopped waiting to classify emptiness", not "this rate is unusable".
@@ -239,16 +253,16 @@ export function aggregateProviderUsage(events, { days = 90, now = Date.now() } =
     // No served model streams anywhere near this fast, so treat it as a broken
     // sample rather than a record-breaking one.
     const impossibleRate =
-      (selectedOutputTokens * 1_000) / generationDurationMs >
+      (speedOutputTokens * 1_000) / generationDurationMs >
       MAX_PLAUSIBLE_TOKENS_PER_SECOND;
     if (
       measurable &&
-      selectedOutputTokens > 0 &&
+      speedOutputTokens > 0 &&
       firstTokenMs !== undefined &&
       generationDurationMs > 0 &&
       !impossibleRate
     ) {
-      model.speedSamples.push({ outputTokens: selectedOutputTokens, generationDurationMs });
+      model.speedSamples.push({ outputTokens: speedOutputTokens, generationDurationMs });
       // Keep the displayed rate current instead of averaging the model's
       // entire 90-day usage history. Twenty replies smooth one-off bursts
       // without letting old sessions dominate the result.

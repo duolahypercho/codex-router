@@ -127,7 +127,9 @@ test("brief Task Scheduler launch lag does not reject a healthy start", async ()
   const health = await waitForServiceReadiness({
     platform: "win32",
     timeoutMs: 1_000,
-    launchGraceMs: 25,
+    // Leave a real scheduling margin between the healthy response and the
+    // dead-task verdict. Loaded Windows runners can coalesce 25ms/30ms timers.
+    launchGraceMs: 100,
     pollMs: 10,
     getWindowsTaskState: () => ({
       instanceCount: 0,

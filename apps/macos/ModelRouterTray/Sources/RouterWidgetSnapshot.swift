@@ -23,9 +23,46 @@ enum RouterWidgetTokenCount {
   }
 }
 
+/// An account stream can omit a date entirely -- OpenAI does not publish a
+/// bucket for the current day until it settles, and it drops quiet days
+/// outright. Router telemetry fills those gaps, but it only measures this Mac,
+/// so a filled point is not a global account total. This used to be published
+/// as a flat zero, which the widget then rendered as a confident "0 tokens
+/// today" on a day the account simply had not reported yet. Carry the
+/// provenance instead and let the presentation say which one it is showing.
 struct RouterWidgetDailyPoint: Codable, Equatable, Identifiable {
   let date: Date
   let tokens: Int64
+  let isRouterFallback: Bool
+
+  init(date: Date, tokens: Int64, isRouterFallback: Bool = false) {
+    self.date = date
+    self.tokens = tokens
+    self.isRouterFallback = isRouterFallback
+  }
+
+  private enum CodingKeys: String, CodingKey {
+    case date
+    case tokens
+    case isRouterFallback
+  }
+
+  // The flag is additive within schema 1: it is omitted for account points, so
+  // a host and an extension on either side of an app update keep reading each
+  // other's snapshots instead of falling back to "Waiting for router data".
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    date = try container.decode(Date.self, forKey: .date)
+    tokens = try container.decode(Int64.self, forKey: .tokens)
+    isRouterFallback = try container.decodeIfPresent(Bool.self, forKey: .isRouterFallback) ?? false
+  }
+
+  func encode(to encoder: Encoder) throws {
+    var container = encoder.container(keyedBy: CodingKeys.self)
+    try container.encode(date, forKey: .date)
+    try container.encode(tokens, forKey: .tokens)
+    if isRouterFallback { try container.encode(true, forKey: .isRouterFallback) }
+  }
 
   var id: Date { date }
 }
@@ -40,12 +77,22 @@ struct RouterWidgetUsageSource: Codable, Equatable, Identifiable {
     var total: Int64 = 0
     return daily.map { point in
       total = RouterWidgetTokenCount.adding(total, point.tokens)
-      return RouterWidgetDailyPoint(date: point.date, tokens: total)
+      return RouterWidgetDailyPoint(
+        date: point.date,
+        tokens: total,
+        isRouterFallback: point.isRouterFallback
+      )
     }
   }
 
   var periodTokens: Int64 {
     daily.reduce(0) { RouterWidgetTokenCount.adding($0, $1.tokens) }
+  }
+
+  /// Today is the point most likely to be router-only: the account stream lags
+  /// the current day, so a headline number for it usually measures this Mac.
+  var todayIsRouterFallback: Bool {
+    daily.last?.isRouterFallback ?? false
   }
 }
 

@@ -80,6 +80,43 @@ test("captures provider-reported prefix-cache hits when they exist", () => {
   );
 });
 
+test("extracts reasoning tokens from output_tokens_details when present", () => {
+  // OpenAI-compatible shape: reasoning tokens in output_tokens_details.
+  assert.deepEqual(
+    normalizeTokenUsage({
+      input_tokens: 100,
+      output_tokens: 502,
+      output_tokens_details: { reasoning_tokens: 98 },
+    }),
+    { inputTokens: 100, outputTokens: 502, totalTokens: 602, reasoningTokens: 98 },
+  );
+  // Chat-completions shape: completion_tokens_details.
+  assert.deepEqual(
+    tokenUsageFromPayload({
+      usage: {
+        prompt_tokens: 50,
+        completion_tokens: 200,
+        completion_tokens_details: { reasoning_tokens: 30 },
+      },
+    }),
+    { inputTokens: 50, outputTokens: 200, totalTokens: 250, reasoningTokens: 30 },
+  );
+  // Direct reasoning_tokens field.
+  assert.deepEqual(
+    normalizeTokenUsage({
+      input_tokens: 10,
+      output_tokens: 15,
+      reasoning_tokens: 5,
+    }),
+    { inputTokens: 10, outputTokens: 15, totalTokens: 25, reasoningTokens: 5 },
+  );
+  // No reasoning tokens: key absent, not zero.
+  assert.deepEqual(
+    normalizeTokenUsage({ input_tokens: 10, output_tokens: 5 }),
+    { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
+  );
+});
+
 test("adds up the usage of two attempts at one turn", () => {
   assert.deepEqual(
     mergeTokenUsage(
@@ -96,6 +133,14 @@ test("adds up the usage of two attempts at one turn", () => {
       { inputTokens: 10, outputTokens: 1, totalTokens: 11, cachedInputTokens: 8 },
     ),
     { inputTokens: 20, outputTokens: 2, totalTokens: 22, cachedInputTokens: 8 },
+  );
+  // Reasoning tokens merge the same way as cache tokens.
+  assert.deepEqual(
+    mergeTokenUsage(
+      { inputTokens: 50, outputTokens: 100, totalTokens: 150, reasoningTokens: 20 },
+      { inputTokens: 50, outputTokens: 100, totalTokens: 150, reasoningTokens: 30 },
+    ),
+    { inputTokens: 100, outputTokens: 200, totalTokens: 300, reasoningTokens: 50 },
   );
   // One-sided merges are the ordinary case: an attempt whose provider reported
   // nothing must not erase the one that did.
@@ -119,6 +164,20 @@ test("captures final SSE usage without changing streamed bytes", async () => {
     totalTokens: 29,
   });
   assert.equal(transform.completedResponseObserved(), true);
+  assert.equal(typeof transform.firstTokenAt(), "number");
+});
+
+test("detects first token from chat.completion.chunk without type field", async () => {
+  // Real chat.completion.chunk objects often have no `type` field, so checking
+  // type before delta meant chat first-token never fired and tray speed stayed null.
+  const body = [
+    'data: {"choices":[{"delta":{"content":"Hello"}}]}\n\n',
+    'data: {"choices":[{"delta":{"content":" world"}}]}\n\n',
+    "data: [DONE]\n\n",
+  ];
+  const transform = new ResponseUsageTransform("text/event-stream");
+  await passThrough(transform, body);
+  // First token should be detected from the first delta with content.
   assert.equal(typeof transform.firstTokenAt(), "number");
 });
 
@@ -388,6 +447,17 @@ test("a response with no estimate behind it is forwarded untouched", async () =>
   const transform = new ResponseUsageTransform("text/event-stream");
   assert.equal(await passThrough(transform, body), body.join(""));
   assert.equal(transform.substitutedInputTokens(), undefined);
+});
+
+test("observes a terminal SSE error without rewriting the stream", async () => {
+  const body = [
+    'event: error\n',
+    'data: {"type":"error","code":"local_router_stream_failed","message":"repair failed"}\n\n',
+  ];
+  const transform = new ResponseUsageTransform("text/event-stream");
+  assert.equal(await passThrough(transform, body), body.join(""));
+  assert.equal(transform.terminalErrorObserved(), true);
+  assert.equal(transform.completedResponseObserved(), false);
 });
 
 test("bytes the router is not rewriting survive rewrite mode exactly", async () => {

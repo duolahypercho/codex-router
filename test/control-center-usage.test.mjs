@@ -87,3 +87,19 @@ test("fallback provenance is translated in every control-center language", () =>
     }
   }
 });
+
+test("the daily window is walked in UTC days, the day space every bucket key uses", async () => {
+  const { bucketRange } = await import("../apps/control-center/src/lib.ts");
+  const utcToday = new Date().toISOString().slice(0, 10);
+  const range = bucketRange([{ startDate: utcToday, tokens: 4_242 }], 7);
+
+  assert.equal(range.length, 7);
+  // Keys must be plain UTC calendar days, ascending, ending on the current one.
+  assert.ok(range.every((bucket) => /^\d{4}-\d{2}-\d{2}$/.test(bucket.startDate)));
+  assert.deepEqual(range.map((bucket) => bucket.startDate).slice().sort(), range.map((bucket) => bucket.startDate));
+  assert.equal(range.at(-1).startDate, utcToday);
+  // The newest slot has to find today's account bucket. Walking local days
+  // asked for a key the UTC-keyed stream has not written yet whenever the
+  // machine is east of UTC, which read as a confident zero all morning.
+  assert.equal(range.at(-1).tokens, 4_242);
+});

@@ -8,8 +8,8 @@ import {
   readResponseBody,
 } from "../src/http-utils.mjs";
 
-test("request body handling keeps the established 64 MiB compatibility ceiling", () => {
-  assert.equal(MAX_BODY_BYTES, 64 * 1024 * 1024);
+test("request body handling permits large Codex histories up to 128 MiB", () => {
+  assert.equal(MAX_BODY_BYTES, 128 * 1024 * 1024);
 });
 
 test("an oversized request is rejected without retaining or abandoning its tail", async () => {

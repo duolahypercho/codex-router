@@ -1,15 +1,17 @@
 import Foundation
 import WidgetKit
 
-// The current widget schema has no provenance field and labels the default
-// source as Codex account usage. Until the schema and widget presentation can
-// disclose provenance together, publish an absent account date as zero rather
-// than misrepresenting this Mac's router-only fallback as global account use.
+// Publish the measured number together with where it came from. Zeroing the
+// router-only dates kept the snapshot from overstating account usage, but it
+// understated it instead: an account stream that has not reported today yet
+// rendered as a confident "0". The schema now carries provenance per point and
+// the widget marks the router-only ones, so neither side has to lie.
 func routerWidgetDailyPoints(_ points: [DailyUsagePoint]) -> [RouterWidgetDailyPoint] {
   points.map {
     RouterWidgetDailyPoint(
       date: $0.date,
-      tokens: $0.isRouterFallback ? 0 : RouterWidgetTokenCount.from($0.tokens)
+      tokens: RouterWidgetTokenCount.from($0.tokens),
+      isRouterFallback: $0.isRouterFallback
     )
   }
 }

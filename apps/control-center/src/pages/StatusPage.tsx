@@ -919,13 +919,14 @@ function cachedTokensForCalendarDays(
   hasTelemetry: boolean,
 ): number | null {
   if (!daily.length) return hasTelemetry ? 0 : null;
+  // Bucket keys are UTC days, so the window bounding them has to be as well.
   const start = new Date();
-  start.setHours(0, 0, 0, 0);
-  start.setDate(start.getDate() - Math.max(0, days - 1));
+  start.setUTCHours(0, 0, 0, 0);
+  start.setUTCDate(start.getUTCDate() - Math.max(0, days - 1));
   const startTimestamp = start.getTime();
   const now = Date.now();
   return daily.reduce((total, bucket) => {
-    const timestamp = Date.parse(`${bucket.startDate}T00:00:00`);
+    const timestamp = Date.parse(`${bucket.startDate}T00:00:00Z`);
     if (!Number.isFinite(timestamp) || timestamp < startTimestamp || timestamp > now) return total;
     return total + Math.max(0, Number(bucket.cachedInputTokens) || 0);
   }, 0);

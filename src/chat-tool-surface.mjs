@@ -212,13 +212,31 @@ function withRequiredAppTools(tools, required) {
 // definition is required; those definitions are added back before the request
 // is admitted. A client surface (or client + required definitions) over the cap
 // is refused locally rather than truncated.
+// Command Code validates the provider-facing tool `name` at 64 characters and
+// refuses the whole request over a longer one, so a client tool such as
+// `mcp__openai_api_key_local_confirmation__confirm_openai_api_key_local_destination`
+// (80 characters) fails the turn before generation (issue #626). Both provider
+// variants front the same validator. They opt into the router's existing
+// bounded alias route, which is deterministic and reversible, so
+// `rewriteNamespaceResponsePayload()` still restores the client's own identity.
+// Every other non-Groq provider keeps the unbounded surface byte for byte.
+const BOUNDED_TOOL_NAME_PROVIDERS = new Set(["commandcode", "commandcode-messages"]);
+const BOUNDED_TOOL_NAME_LENGTH = 64;
+
 export function chatProviderToolSurface(
   tools,
   providerId,
   { input, toolChoice } = {},
 ) {
   const merged = mergeCodexAppTools(tools);
-  if (providerId !== "groq") return flattenNamespaceTools(merged.tools);
+  if (providerId !== "groq") {
+    return flattenNamespaceTools(
+      merged.tools,
+      BOUNDED_TOOL_NAME_PROVIDERS.has(providerId)
+        ? { maxNameLength: BOUNDED_TOOL_NAME_LENGTH }
+        : {},
+    );
+  }
 
   // Groq has no OpenCode-style length bound, but it still needs deterministic
   // aliases when two distinct native identities have the same flattened wire

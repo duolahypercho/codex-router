@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { refreshCatalog } from "../src/refresh-catalog.mjs";
+import {
+  refreshCatalog,
+  refreshCatalogCompletionMessage,
+} from "../src/refresh-catalog.mjs";
 
 const noJournal = {
   begin() {},
@@ -9,6 +12,7 @@ const noJournal = {
   read() { return undefined; },
 };
 const noLock = (operation) => operation();
+const noAccountRefresh = async () => ({ status: "unavailable" });
 
 function recordingRunner({ signed = true, loginFree = false, model, failAt } = {}) {
   const calls = [];
@@ -41,9 +45,52 @@ function recordingRunner({ signed = true, loginFree = false, model, failAt } = {
   };
 }
 
+test("ordinary routed refresh avoids config mutation when the native cache is safe", async () => {
+  const runner = recordingRunner();
+  const result = await refreshCatalog({
+    canRefreshInPlace: () => true,
+    refreshAccountCatalog: noAccountRefresh,
+    run: runner.run,
+    lock: noLock,
+  });
+  assert.deepEqual(runner.calls, [
+    ["config-manager.mjs", ["status"]],
+    ["catalog.mjs", ["--refresh-native"]],
+  ]);
+  assert.equal(result.catalogOutput, '{"models":1}\n');
+});
+
+test("refresh orchestration carries the account refresh outcome to its completion message", async () => {
+  const runner = recordingRunner();
+  const result = await refreshCatalog({
+    canRefreshInPlace: () => true,
+    refreshAccountCatalog: async () => ({ status: "failed" }),
+    run: runner.run,
+    lock: noLock,
+  });
+  assert.equal(result.nativeAccountRefresh, "failed");
+  assert.match(
+    refreshCatalogCompletionMessage(result.nativeAccountRefresh),
+    /live account catalog could not be refreshed/,
+  );
+});
+
+test("refresh completion distinguishes live account success, fallback, and disabled discovery", () => {
+  assert.match(refreshCatalogCompletionMessage("updated"), /Native account, bundled/);
+  assert.match(refreshCatalogCompletionMessage("not-modified"), /Native account, bundled/);
+  assert.match(refreshCatalogCompletionMessage("failed"), /live account catalog could not be refreshed/);
+  assert.match(refreshCatalogCompletionMessage("unavailable"), /cached and bundled data/);
+  assert.match(refreshCatalogCompletionMessage("disabled"), /^Bundled native and external/);
+});
+
 test("refresh orchestration restores signed routing and republishes the routed catalog", async () => {
   const runner = recordingRunner();
-  const result = await refreshCatalog({ run: runner.run, lock: noLock });
+  const result = await refreshCatalog({
+    canRefreshInPlace: () => false,
+    refreshAccountCatalog: noAccountRefresh,
+    run: runner.run,
+    lock: noLock,
+  });
   assert.deepEqual(runner.calls, [
     ["config-manager.mjs", ["status"]],
     ["config-manager.mjs", ["disable"]],
@@ -58,7 +105,12 @@ test("refresh orchestration restores signed routing and republishes the routed c
 test("refresh orchestration restores the active transport after catalog failure", async () => {
   const runner = recordingRunner({ failAt: 3 });
   await assert.rejects(
-    refreshCatalog({ run: runner.run, lock: noLock }),
+    refreshCatalog({
+      canRefreshInPlace: () => false,
+      refreshAccountCatalog: noAccountRefresh,
+      run: runner.run,
+      lock: noLock,
+    }),
     /catalog\.mjs exited with status 75.*forced catalog failure/s,
   );
   assert.deepEqual(runner.calls, [
@@ -73,7 +125,12 @@ test("refresh orchestration restores the active transport after catalog failure"
 
 test("ordinary routed refresh also republishes external models after restore", async () => {
   const runner = recordingRunner({ signed: false });
-  await refreshCatalog({ run: runner.run, lock: noLock });
+  await refreshCatalog({
+    canRefreshInPlace: () => false,
+    refreshAccountCatalog: noAccountRefresh,
+    run: runner.run,
+    lock: noLock,
+  });
   assert.deepEqual(runner.calls, [
     ["config-manager.mjs", ["status"]],
     ["config-manager.mjs", ["disable"]],
@@ -90,6 +147,8 @@ test("refresh orchestration restores identity-preserving login-free mode and its
     model: "gpt-5.6-sol",
   });
   await refreshCatalog({
+    canRefreshInPlace: () => true,
+    refreshAccountCatalog: noAccountRefresh,
     run: runner.run,
     aliases: () => ({ "gpt-5.6-sol": "deepseek/deepseek-v4-pro" }),
     aliasFor: (slug) => slug === "deepseek/deepseek-v4-pro" ? "gpt-5.6-terra" : undefined,
@@ -130,6 +189,8 @@ test("pending refresh resumes and completes only with an alias for the same cano
     displayModel: "old-alias",
   };
   await refreshCatalog({
+    canRefreshInPlace: () => true,
+    refreshAccountCatalog: noAccountRefresh,
     run: runner.run,
     aliases: () => ({ "old-alias": pending.canonicalModel }),
     aliasFor: (slug) => slug === pending.canonicalModel ? "fresh-alias" : undefined,

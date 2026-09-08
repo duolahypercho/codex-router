@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "slug": "venice/gemini-3.8-flash",
+      "gatewayModel": "venice-gemini-3-8-flash",
+      "upstreamModel": "gemini-3-8-flash",
+      "provider": "venice",
+      "listed": true,
+      "displayName": "Gemini 3.8 Flash (Venice)",
+      "description": "Google Gemini 3.8 Flash through Venice AI with vision and reasoning support.",
+      "priority": 75,
+      "defaultEffort": "max",
+      "reasoningLevels": [
+        {
+          "effort": "low",
+          "description": "Fast reasoning for simple edits"
+        },
+        {
+          "effort": "high",
+          "description": "Deep reasoning with thinking enabled"
+        },
+        {
+          "effort": "max",
+          "description": "Maximum reasoning depth"
+        }
+      ],
+      "contextWindow": 1000000,
+      "autoCompact": 900000,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "compHash": "venice-gemini-3-8-flash-v1"
+    }
+  ]
+}

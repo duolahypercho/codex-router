@@ -5,6 +5,13 @@ repo_dir=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 tray_dir="$repo_dir/apps/macos/ModelRouterTray"
 widget_dir="$repo_dir/apps/macos/RouterUsageWidget"
 control_center_dir="$repo_dir/apps/control-center"
+# The macOS 27 SDK exposes SwiftUI state through platform macro plug-ins that
+# the standalone Command Line Tools do not ship. The bundled widget has always
+# needed xcodebuild as well. Honor an explicit or selected full Xcode first,
+# then use a standard Xcode installation for this child build only; never
+# change the machine-wide xcode-select setting as an installer side effect.
+developer_dir=$(node "$repo_dir/src/macos-developer-tools.mjs")
+export DEVELOPER_DIR="$developer_dir"
 signing_identity=${MODEL_ROUTER_CODESIGN_IDENTITY:--}
 if [ "$signing_identity" = "-" ]; then
   widget_storage_mode=local

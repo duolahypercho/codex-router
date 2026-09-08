@@ -185,8 +185,27 @@ export function readCodexAccountUsage({
     const send = (message) => {
       processHandle.stdin.write(`${JSON.stringify(message)}\n`);
     };
+    // An absent answer is the same class of event as a refused one, and the
+    // refused case is already tolerated below. Waiting for both meant one read
+    // that never came back discarded the other one's answer: on a machine where
+    // account/rateLimits/read hung and account/usage/read returned a full daily
+    // ledger, this rejected, the caller had no account usage at all, and every
+    // surface fell back to publishing zero. Keep whatever arrived; only a window
+    // that produced nothing is a failure.
+    const emptyResponse = (id) => (
+      id === 2 ? { rateLimits: {} } : { summary: {}, dailyUsageBuckets: [] }
+    );
     const timer = setTimeout(
-      () => finish(new Error("Codex account usage request timed out.")),
+      () => {
+        if (responses.size === 0) {
+          finish(new Error("Codex account usage request timed out."));
+          return;
+        }
+        finish(undefined, normalizeCodexAccountUsage(
+          responses.get(2) ?? emptyResponse(2),
+          responses.get(3) ?? emptyResponse(3),
+        ));
+      },
       timeoutMs,
     );
 
@@ -214,12 +233,12 @@ export function readCodexAccountUsage({
         return;
       }
       if (message.id !== 2 && message.id !== 3) return;
+      // Both account reads are optional for the Control Center. A ChatGPT login
+      // can answer one and refuse the other (API-key sessions, transient
+      // app-server races). Hard-failing rateLimits used to paint the whole
+      // Models page with a stack trace while the snapshot itself was fine.
       if (message.error) {
-        if (message.id === 2) {
-          finish(new Error("Codex account limits are unavailable for this login."));
-          return;
-        }
-        responses.set(3, { summary: {}, dailyUsageBuckets: [] });
+        responses.set(message.id, emptyResponse(message.id));
       } else {
         responses.set(message.id, message.result);
       }

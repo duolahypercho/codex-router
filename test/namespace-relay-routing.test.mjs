@@ -1538,6 +1538,44 @@ test("Command Code models restore MCP calls Codex pre-flattened before the route
   }
 });
 
+test("Command Code forced tool choice uses the same bounded alias as its tool", async () => {
+  const longName =
+    "mcp__openai_api_key_local_confirmation__confirm_openai_api_key_local_destination";
+  assert.equal(longName.length, 80);
+
+  for (const model of [
+    "commandcode/deepseek-v4-flash",
+    "commandcode-messages/claude-fable-5.1",
+  ]) {
+    const result = await scenario(false, {
+      model,
+      requestPayload: (stream, routeModel) => ({
+        model: routeModel,
+        stream,
+        input: "Call the required tool.",
+        tools: [{
+          type: "function",
+          name: longName,
+          parameters: { type: "object", properties: {}, additionalProperties: false },
+        }],
+        tool_choice: { type: "function", name: longName },
+      }),
+      jsonBody: () => ({ id: "commandcode_choice", output: [] }),
+    });
+
+    assert.equal(result.gatewayBodies.length, 1, model);
+    const outgoing = result.gatewayBodies[0];
+    const providerTool = outgoing.tools.find((tool) => tool.name !== "web_search");
+    assert.ok(providerTool.name.length <= 64, model);
+    assert.notEqual(providerTool.name, longName, model);
+    assert.deepEqual(
+      outgoing.tool_choice,
+      { type: "function", name: providerTool.name },
+      model,
+    );
+  }
+});
+
 test("bounded routes preserve one alias for pre-flattened MCP definitions and history", async () => {
   const namespace = "mcp__neon__apm__production__snapshot__read_only";
   const name = "get_monitor_snapshot_with_complete_context";

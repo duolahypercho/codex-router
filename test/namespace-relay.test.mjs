@@ -2161,6 +2161,91 @@ test("response transform restores flattened calls to the native namespace shape"
   assert.doesNotMatch(output, /collaboration__spawn_agent|codex_app__create_thread|mcp__node_repl__js/);
 });
 
+// Issue #611: Responses-native routes (e.g. opencode-free-responses Muse Spark)
+// keep type:"namespace" tools outbound. Some models then call with a dotted
+// wire name (`collaboration.spawn_agent`, `mcp__agentmemory.memory_sessions`)
+// instead of the `__` flattening the reverse map indexes. Restore only from
+// the request inventory — never by splitting an arbitrary dotted string
+// (#568 declined bare name-map recovery that bypasses spawn sanitisation).
+test("response transform restores dotted wire names from the request inventory", () => {
+  const { namespaces } = flattenNamespaceTools([
+    {
+      type: "namespace",
+      name: "collaboration",
+      tools: [
+        {
+          type: "function",
+          name: "spawn_agent",
+          inputSchema: {
+            type: "object",
+            properties: {
+              model: { type: "string", enum: ["gpt-5.6-sol"] },
+            },
+          },
+        },
+      ],
+    },
+    {
+      type: "namespace",
+      name: "mcp__agentmemory",
+      tools: [{ type: "function", name: "memory_sessions" }],
+    },
+  ]);
+  const lookups = buildNamespaceLookups(namespaces);
+
+  const spawn = rewriteNamespaceResponsePayload(
+    {
+      output: [
+        {
+          type: "function_call",
+          name: "collaboration.spawn_agent",
+          call_id: "call_dot_spawn",
+          arguments: JSON.stringify({ model: "gpt-5.6-sol", task: "x" }),
+        },
+      ],
+    },
+    lookups,
+  );
+  assert.deepEqual(
+    { namespace: spawn.output[0].namespace, name: spawn.output[0].name },
+    { namespace: "collaboration", name: "spawn_agent" },
+  );
+
+  const mcp = rewriteNamespaceResponsePayload(
+    {
+      output: [
+        {
+          type: "function_call",
+          name: "mcp__agentmemory.memory_sessions",
+          call_id: "call_dot_mcp",
+          arguments: "{}",
+        },
+      ],
+    },
+    lookups,
+  );
+  assert.deepEqual(
+    { namespace: mcp.output[0].namespace, name: mcp.output[0].name },
+    { namespace: "mcp__agentmemory", name: "memory_sessions" },
+  );
+
+  // An invented dotted spelling that is not an inventory pair stays untouched.
+  const invented = rewriteNamespaceResponsePayload(
+    {
+      output: [
+        {
+          type: "function_call",
+          name: "collaboration.not_a_real_tool",
+          call_id: "call_invented",
+          arguments: "{}",
+        },
+      ],
+    },
+    lookups,
+  );
+  assert.equal(invented, undefined);
+});
+
 test("tool_search response bridge suppresses function argument events across its lifecycle", async () => {
   const { namespaces } = flattenNamespaceTools([clientToolSearchControl()]);
   const events = [
@@ -2326,7 +2411,7 @@ test("response transform restores namespace on unambiguous unprefixed calls", as
   assert.match(output, /"namespace":"codex_app"/);
 });
 
-test("response transform drops a spawn-agent model override not offered by the tool schema", async () => {
+test("response transform pins spawn-agent model overrides to the routed parent", async () => {
   const { namespaces } = flattenNamespaceTools(clientRoutedTools());
   const lookups = buildNamespaceLookups(namespaces);
   const invalid = rewriteNamespaceResponsePayload(
@@ -2358,6 +2443,98 @@ test("response transform drops a spawn-agent model override not offered by the t
   assert.deepEqual(JSON.parse(valid.output[0].arguments), {
     message: "verify",
     model: "gpt-5.6-terra",
+  });
+
+  const inherited = rewriteNamespaceResponsePayload(
+    {
+      output: [
+        {
+          type: "function_call",
+          name: "collaboration__spawn_agent",
+          arguments: JSON.stringify({ message: "verify", model: "gpt-5.6-luna" }),
+        },
+      ],
+    },
+    lookups,
+    "opencode-go/deepseek-v4-flash",
+  );
+  assert.deepEqual(JSON.parse(inherited.output[0].arguments), {
+    message: "verify",
+    model: "opencode-go/deepseek-v4-flash",
+  });
+
+  const allowedButCrossProvider = rewriteNamespaceResponsePayload(
+    {
+      output: [
+        {
+          type: "function_call",
+          name: "collaboration__spawn_agent",
+          arguments: JSON.stringify({ message: "verify", model: "gpt-5.6-terra" }),
+        },
+      ],
+    },
+    lookups,
+    "opencode-go/deepseek-v4-flash",
+  );
+  assert.deepEqual(JSON.parse(allowedButCrossProvider.output[0].arguments), {
+    message: "verify",
+    model: "opencode-go/deepseek-v4-flash",
+  });
+});
+
+test("stream response keeps an omitted spawn-agent model on its routed parent", async () => {
+  const { namespaces } = flattenNamespaceTools(clientRoutedTools());
+  const event = {
+    type: "response.output_item.done",
+    item: {
+      type: "function_call",
+      name: "collaboration__spawn_agent",
+      call_id: "call_parent_model",
+      arguments: JSON.stringify({ message: "verify" }),
+    },
+  };
+  const transform = new NamespaceToolCallTransform(
+    namespaces,
+    "text/event-stream",
+    "opencode-go/deepseek-v4-flash",
+  );
+  const output = await collect(
+    Readable.from([`data: ${JSON.stringify(event)}\n\n`]).pipe(transform),
+  );
+  const payload = JSON.parse(output.toString("utf8").trim().slice(5));
+  assert.equal(payload.item.namespace, "collaboration");
+  assert.equal(payload.item.name, "spawn_agent");
+  assert.deepEqual(JSON.parse(payload.item.arguments), {
+    message: "verify",
+    model: "opencode-go/deepseek-v4-flash",
+  });
+});
+
+test("Responses-native stream keeps an omitted spawn-agent model on its routed parent", async () => {
+  const event = {
+    type: "response.output_item.done",
+    item: {
+      type: "function_call",
+      namespace: "collaboration",
+      name: "spawn_agent",
+      call_id: "call_native_parent_model",
+      arguments: JSON.stringify({ message: "verify" }),
+    },
+  };
+  const transform = new NamespaceToolCallTransform(
+    new Map(),
+    "text/event-stream",
+    "opencode-go/deepseek-v4-flash",
+  );
+  const output = await collect(
+    Readable.from([`data: ${JSON.stringify(event)}\n\n`]).pipe(transform),
+  );
+  const payload = JSON.parse(output.toString("utf8").trim().slice(5));
+  assert.equal(payload.item.namespace, "collaboration");
+  assert.equal(payload.item.name, "spawn_agent");
+  assert.deepEqual(JSON.parse(payload.item.arguments), {
+    message: "verify",
+    model: "opencode-go/deepseek-v4-flash",
   });
 });
 

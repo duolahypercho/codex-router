@@ -105,6 +105,11 @@ function environmentEntries() {
 
 function plist() {
   const start = path.join(SOURCE_ROOT, "src", "start.mjs");
+  // Background starved LiteLLM to ~4% CPU (fb40f8c). Adaptive was meant to
+  // boost under load, but it only does so on XPC transactions; this job is
+  // localhost HTTP, so Adaptive stays at Background. Node forwarders then miss
+  // the 30s OAuth health budget, KeepAlive crash-loops, and tray Update /
+  // doctor --fix wait 300s on /health. Standard is a normal user-agent class.
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -127,7 +132,7 @@ ${environmentEntries()}
   <key>KeepAlive</key>
   <true/>
   <key>ProcessType</key>
-  <string>Adaptive</string>
+  <string>Standard</string>
   <key>ThrottleInterval</key>
   <integer>10</integer>
   <key>StandardOutPath</key>

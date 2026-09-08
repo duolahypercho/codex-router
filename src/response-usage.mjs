@@ -159,6 +159,14 @@ export function normalizeTokenUsage(value) {
       value.prompt_tokens_details?.cached_tokens ??
       value.prompt_cache_hit_tokens,
   );
+  // Reasoning tokens are the silent thinking tokens generated before visible
+  // output. Providers report them in output_tokens_details.reasoning_tokens,
+  // completion_tokens_details.reasoning_tokens, or reasoning_tokens directly.
+  const reasoningTokens = tokenCount(
+    value.output_tokens_details?.reasoning_tokens ??
+      value.completion_tokens_details?.reasoning_tokens ??
+      value.reasoning_tokens,
+  );
   const retries = tokenCount(value.retries);
   const progressOnlyRetried =
     value.progress_only_retried === true || value.progressOnlyRetried === true;
@@ -173,6 +181,7 @@ export function normalizeTokenUsage(value) {
     outputTokens: outputTokens || 0,
     totalTokens,
     ...(cachedInputTokens !== undefined ? { cachedInputTokens } : {}),
+    ...(reasoningTokens !== undefined ? { reasoningTokens } : {}),
     ...(retries !== undefined && retries > 0 ? { retries } : {}),
     ...(progressOnlyRetried ? { progressOnlyRetried: true } : {}),
     ...(billedInputTokens !== undefined ? { billedInputTokens } : {}),
@@ -190,6 +199,10 @@ export function mergeTokenUsage(first, second) {
     first.cachedInputTokens === undefined && second.cachedInputTokens === undefined
       ? undefined
       : (first.cachedInputTokens || 0) + (second.cachedInputTokens || 0);
+  const reasoningTokens =
+    first.reasoningTokens === undefined && second.reasoningTokens === undefined
+      ? undefined
+      : (first.reasoningTokens || 0) + (second.reasoningTokens || 0);
   const retries =
     first.retries === undefined && second.retries === undefined
       ? undefined
@@ -199,6 +212,7 @@ export function mergeTokenUsage(first, second) {
     outputTokens: (first.outputTokens || 0) + (second.outputTokens || 0),
     totalTokens: (first.totalTokens || 0) + (second.totalTokens || 0),
     ...(cachedInputTokens !== undefined ? { cachedInputTokens } : {}),
+    ...(reasoningTokens !== undefined ? { reasoningTokens } : {}),
     ...(retries !== undefined && retries > 0 ? { retries } : {}),
   };
 }
@@ -321,6 +335,7 @@ export class ResponseUsageTransform extends Transform {
   // a fast model read as slow. See #192.
   #firstTokenAt;
   #completedResponseObserved = false;
+  #terminalErrorObserved = false;
 
   // `estimatedInputTokens` arrives only on routed requests large enough that a
   // reported zero cannot be true. Without it this transform observes and
@@ -511,6 +526,7 @@ export class ResponseUsageTransform extends Transform {
     if (!data || data === "[DONE]") return undefined;
     try {
       const payload = JSON.parse(data);
+      if (payload?.type === "error") this.#terminalErrorObserved = true;
       this.#observe(payload);
       return payload;
     } catch {
@@ -531,6 +547,15 @@ export class ResponseUsageTransform extends Transform {
   // count too -- what must not count is the wait before any of it starts.
   #noteFirstToken(payload) {
     if (this.#firstTokenAt !== undefined) return;
+    // Chat-completions bridges stream choices[].delta instead of typed events.
+    // Check this first because chat.completion.chunk often has no `type` field.
+    const chatDelta = payload?.choices?.[0]?.delta;
+    const chatProducesOutput =
+      typeof chatDelta?.content === "string" && chatDelta.content.length > 0;
+    if (chatProducesOutput) {
+      this.#firstTokenAt = Date.now();
+      return;
+    }
     const type = payload?.type;
     if (typeof type !== "string") return;
     const producesOutput =
@@ -538,11 +563,7 @@ export class ResponseUsageTransform extends Transform {
       type === "response.reasoning_summary_text.delta" ||
       type === "response.function_call_arguments.delta" ||
       type === "response.audio_transcript.delta";
-    // Chat-completions bridges stream choices[].delta instead of typed events.
-    const chatDelta = payload?.choices?.[0]?.delta;
-    const chatProducesOutput =
-      typeof chatDelta?.content === "string" && chatDelta.content.length > 0;
-    if (producesOutput || chatProducesOutput) this.#firstTokenAt = Date.now();
+    if (producesOutput) this.#firstTokenAt = Date.now();
   }
 
   // Epoch milliseconds of the first generated token, or undefined when the
@@ -553,5 +574,9 @@ export class ResponseUsageTransform extends Transform {
 
   completedResponseObserved() {
     return this.#completedResponseObserved;
+  }
+
+  terminalErrorObserved() {
+    return this.#terminalErrorObserved;
   }
 }

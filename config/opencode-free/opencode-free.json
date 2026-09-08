@@ -22,9 +22,10 @@
       "authMode": "anonymous",
       "anonymousModelPolicy": "explicit-models",
       "anonymousModels": [
-        "muse-spark-1.2-contributor-free"
+        "muse-spark-1.2-contributor-free",
+        "muse-spark-1.3-contributor-free"
       ],
-      "anonymousNote": "No API key is needed for Muse Spark 1.2 Contributor Free. This internal Responses route accepts only that documented free model. Use at your own risk: access is a published exception, not an entitlement, and limits can change without notice."
+      "anonymousNote": "No API key is needed for Muse Spark contributor free models. This internal Responses route accepts only documented free models. Use at your own risk: access is a published exception, not an entitlement, and limits can change without notice."
     }
   ]
 }

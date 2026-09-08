@@ -293,7 +293,7 @@ struct RouterUsageWidgetView: View {
     VStack(alignment: .leading, spacing: 0) {
       WidgetHeader(snapshot: snapshot, compact: true)
       Spacer(minLength: 9)
-      Text("Today · \(source.name)")
+      Text("Today · \(source.name) · UTC")
         .font(.caption2.weight(.semibold))
         .textCase(.uppercase)
         .tracking(0.35)
@@ -307,7 +307,9 @@ struct RouterUsageWidgetView: View {
       Text(Self.todayTokenLabel(for: source))
         .font(.caption2)
         .foregroundStyle(.secondary)
-        .lineLimit(1)
+        .lineLimit(2)
+        .minimumScaleFactor(0.8)
+        .fixedSize(horizontal: false, vertical: true)
       Spacer(minLength: 7)
       cumulativeLabel(source, compact: true)
       RouterWidgetCumulativeLineChart(points: source.cumulativeDaily)
@@ -321,7 +323,7 @@ struct RouterUsageWidgetView: View {
       WidgetHeader(snapshot: snapshot)
       HStack(alignment: .top, spacing: 15) {
         VStack(alignment: .leading, spacing: 1) {
-          Text("Today · \(source.name)")
+          Text("Today · \(source.name) · UTC")
             .font(.caption2.weight(.semibold))
             .textCase(.uppercase)
             .tracking(0.35)
@@ -333,6 +335,12 @@ struct RouterUsageWidgetView: View {
             .monospacedDigit()
             .lineLimit(1)
             .minimumScaleFactor(0.64)
+          Text(Self.todayTokenLabel(for: source))
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+            .lineLimit(2)
+            .minimumScaleFactor(0.8)
+            .fixedSize(horizontal: false, vertical: true)
           Spacer(minLength: 4)
           cumulativeLabel(source)
           RouterWidgetCumulativeLineChart(points: source.cumulativeDaily)
@@ -416,7 +424,11 @@ struct RouterUsageWidgetView: View {
   }
 
   static func todayTokenLabel(for source: RouterWidgetUsageSource) -> String {
-    source.id == RouterWidgetSnapshot.defaultUsageSourceID ? "account tokens" : "tokens routed"
+    // A router-only day is this Mac's traffic, not the account total, and
+    // saying so is the whole point of carrying provenance into the snapshot.
+    // Without it a lagging account stream reads as a real zero.
+    if source.todayIsRouterFallback { return "this Mac · account not reported yet" }
+    return source.id == RouterWidgetSnapshot.defaultUsageSourceID ? "account tokens" : "tokens routed"
   }
 }
 
@@ -684,9 +696,15 @@ private struct RouterWidgetQuotaRow: View {
 private struct RouterWidgetCumulativeLineChart: View {
   let points: [RouterWidgetDailyPoint]
 
+  private var visiblePoints: [RouterWidgetDailyPoint] { Array(points.suffix(7)) }
+
+  private var endsOnRouterFallback: Bool {
+    visiblePoints.last?.isRouterFallback == true
+  }
+
   var body: some View {
     GeometryReader { geometry in
-      let values = Array(points.suffix(7))
+      let values = visiblePoints
       let maximum = max(values.map(\.tokens).max() ?? 0, 1)
       let width = geometry.size.width
       let height = geometry.size.height
@@ -695,6 +713,17 @@ private struct RouterWidgetCumulativeLineChart: View {
         CGPoint(
           x: CGFloat(index) * step,
           y: height - height * CGFloat(Double(max(0, point.tokens)) / Double(maximum))
+        )
+      }
+      // A segment is drawn dashed when the day it arrives at was filled from
+      // router telemetry, matching how the tray hatches those bars. The line
+      // stays continuous so the shape still reads, while the dashes keep a
+      // router-only stretch from passing as account history.
+      let segments = coordinates.indices.dropFirst().map { index in
+        (
+          start: coordinates[index - 1],
+          end: coordinates[index],
+          isRouterFallback: values[index].isRouterFallback
         )
       }
 
@@ -723,16 +752,33 @@ private struct RouterWidgetCumulativeLineChart: View {
         ))
 
         Path { path in
-          guard let first = coordinates.first else { return }
-          path.move(to: first)
-          for point in coordinates.dropFirst() { path.addLine(to: point) }
+          for segment in segments where !segment.isRouterFallback {
+            path.move(to: segment.start)
+            path.addLine(to: segment.end)
+          }
         }
         .stroke(widgetAccent, style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
         .widgetAccentable()
 
+        Path { path in
+          for segment in segments where segment.isRouterFallback {
+            path.move(to: segment.start)
+            path.addLine(to: segment.end)
+          }
+        }
+        .stroke(widgetAccent, style: StrokeStyle(
+          lineWidth: 2,
+          lineCap: .round,
+          lineJoin: .round,
+          dash: [2.5, 2.5]
+        ))
+        .widgetAccentable()
+
         if let last = coordinates.last {
+          // A hollow cap says the newest point is this Mac's own count, which
+          // is the usual state: the account stream settles a day behind.
           Circle()
-            .fill(widgetAccent)
+            .strokeBorder(widgetAccent, lineWidth: endsOnRouterFallback ? 1.5 : 2.5)
             .frame(width: 5, height: 5)
             .position(last)
             .widgetAccentable()
@@ -740,7 +786,11 @@ private struct RouterWidgetCumulativeLineChart: View {
       }
     }
     .accessibilityElement(children: .ignore)
-    .accessibilityLabel("Seven day cumulative token usage")
+    .accessibilityLabel(
+      endsOnRouterFallback
+        ? "Seven day cumulative token usage, most recent day measured locally"
+        : "Seven day cumulative token usage"
+    )
   }
 }
 

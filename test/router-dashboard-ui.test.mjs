@@ -39,3 +39,30 @@ test("tray consumes only the dashboard route summary", async () => {
   const contract = source.match(/struct RouterDashboardSnapshot[\s\S]*?struct RouterDashboardModel[\s\S]*?\n}/)?.[0] || "";
   assert.doesNotMatch(contract, /credential|endpoint|session|accountId/);
 });
+
+test("the hourly traffic chart reads the router rollup instead of the capped event sample", async () => {
+  const page = (await readFile(new URL("../apps/control-center/src/pages/DashboardPage.tsx", import.meta.url), "utf8"))
+    .replace(/\r\n/g, "\n");
+  const hourly = page.match(/function buildHourlyTrafficBuckets[\s\S]*?\n}\n/)?.[0] || "";
+  assert.ok(hourly, "hourly traffic builder should be present");
+  // The rollup must be taken before the sample, and the sample must remain the
+  // fallback for a router that predates the rollup.
+  assert.ok(
+    hourly.indexOf("hourlyBucketsFromRollup(hours)") < hourly.indexOf("for (const event of events ?? [])"),
+    "the rollup should be preferred over the bounded event sample",
+  );
+  assert.match(page, /function hourlyBucketsFromRollup/);
+  assert.match(page, /buildTrafficBuckets\(events, providerUsage, eventHours, trafficRange/);
+  assert.match(page, /target\?\.usageEventHours/);
+  assert.match(hourly, /const windowStart = now - 24 \* HOUR_MS/);
+  assert.match(hourly, /Array\.from\(\{ length: bucketCount \}/);
+  assert.match(hourly, /at < windowStart \|\| at >= now/);
+
+  const control = (await readFile(new URL("../src/control.mjs", import.meta.url), "utf8"))
+    .replace(/\r\n/g, "\n");
+  // One ledger read per probe: the tray polls this constantly.
+  assert.match(control, /recentUsageEvents\(\{ limit: Number\.POSITIVE_INFINITY \}\)/);
+  assert.match(control, /hourlyUsageRollup\(\{ readEvents: \(\) => windowEvents \}\)/);
+  assert.match(control, /windowEvents\.slice\(-usageEventsModule\.RECENT_USAGE_EVENT_LIMIT\)/);
+  assert.match(control, /\n\s+usageEventHours,\n/);
+});

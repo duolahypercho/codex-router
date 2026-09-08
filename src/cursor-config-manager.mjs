@@ -147,6 +147,21 @@ function setComposerAlias(state, alias) {
   config.selectedModels = [{ modelId: alias, parameters: [] }];
 }
 
+function defaultPublishedAlias(selections, previousSelection) {
+  return preferredSelection(selections, previousSelection)?.alias
+    || selections.find((selection) => selection.effort === selection.model?.defaultEffort)?.alias
+    || selections[0]?.alias;
+}
+
+function composerNeedsByokSafeAlias(selectedAlias, { aliases, oldOwned, originallyAdded }) {
+  if (!selectedAlias) return true;
+  if (aliases.includes(selectedAlias) || oldOwned.includes(selectedAlias)) return false;
+  // Preserve the user's own pre-existing custom models. Cursor-managed ids
+  // (Auto/default, grok-4.6, Claude, Composer, …) reject the global OpenAI
+  // BYOK override with "This model does not support custom API keys."
+  return !originallyAdded.has(selectedAlias);
+}
+
 function launcherContents() {
   const nodeBinary = nodeRuntimePath();
   const launcher = path.join(SOURCE_ROOT, "src", "cursor-agent-launcher.mjs");
@@ -301,11 +316,11 @@ export function publishCursorIntegration({
     );
     state.aiSettings.modelOverrideDisabled = without(state.aiSettings.modelOverrideDisabled, aliases);
     const selectedAlias = selectedComposerAlias(state);
+    const previousSelection = selectionForPreviousAlias(selectedAlias, previous);
     if (oldOwned.includes(selectedAlias)) {
-      setComposerAlias(
-        state,
-        preferredSelection(selections, selectionForPreviousAlias(selectedAlias, previous))?.alias,
-      );
+      setComposerAlias(state, defaultPublishedAlias(selections, previousSelection));
+    } else if (composerNeedsByokSafeAlias(selectedAlias, { aliases, oldOwned, originallyAdded })) {
+      setComposerAlias(state, defaultPublishedAlias(selections, previousSelection));
     }
     state.useOpenAIKey = true;
     state.openAIBaseUrl = publicBaseUrl;

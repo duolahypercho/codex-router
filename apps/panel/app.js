@@ -405,7 +405,8 @@ function startPanel() {
     const model = active?.model || activity.model;
     const provider = active?.provider || activity.provider;
     const label = model ? String(model).split("/").at(-1) : t("status.noModelObserved");
-    const observed = observedModelSpeed(state.providerUsage, provider, model);
+    const isGenerating = activity.state === "generating" || (activity.active && activity.active.length > 0);
+    const observed = !isGenerating ? observedModelSpeed(state.providerUsage, provider, model) : null;
     elements.speedModel.textContent = label;
     elements.modelSpeed.textContent = observed ? `${observed.speed.toFixed(1)} tok/s` : t("status.noSpeed");
     elements.modelSpeed.classList.toggle("is-measured", Boolean(observed));

@@ -10,6 +10,7 @@ import {
   LITELLM_CONFIG_PATH,
   MERGED_CATALOG_PATH,
   PORTS,
+  PROVIDER_SELECTION_PATH,
   SOURCE_ROOT,
   STATE_DIR,
   TARGET,
@@ -35,6 +36,8 @@ import {
 } from "./proxy-environment.mjs";
 import { antigravityOAuthStatus } from "./antigravity-oauth-status.mjs";
 import { cursorTunnelRunSpec } from "./cursor-cloudflare-tunnel.mjs";
+import { pruneUnconfiguredProviders } from "./provider-selection.mjs";
+import { targetCli } from "./target-integration.mjs";
 
 // Before anything reads the environment or spawns a child. A service manager
 // hands this process the proxy the install recorded; a shell hands it whatever
@@ -121,6 +124,25 @@ const callerKey = assertCallerSecret(
   readFileSync(CALLER_SECRET_PATH, "utf8").trim(),
 );
 writeLiteLlmConfig();
+
+// Drop enabled providers this build cannot authenticate (missing credential,
+// retired/unknown id). Without this, enabled-providers.json accrues dead
+// entries and the next turn against them returns provider_api_key_missing
+// while the picker can still advertise a stale catalog row. Runs after the
+// gateway config write so a prune that rewrites selection cannot race a
+// concurrent config reader mid-start; forwarders spawned below see the
+// reconciled file.
+const prunedProviders = pruneUnconfiguredProviders();
+if (prunedProviders.length) {
+  console.error(
+    `[codex-router] pruned ${prunedProviders.length} provider(s) from ${PROVIDER_SELECTION_PATH}: ${
+      prunedProviders.map(({ id, reason }) => `${id} (${reason})`).join(", ")
+    }`,
+  );
+  console.error(
+    `[codex-router] restore with: ${targetCli("setup --guided")} or ${targetCli("providers enable <id>")} after storing a credential`,
+  );
+}
 
 // A checked local model means the operator intends to route through Ollama,
 // so keep its daemon available for the gateway. This never installs software
@@ -387,6 +409,15 @@ async function main() {
     frontendService,
     router,
   );
+
+  // After router is healthy, refresh the native account catalog and check its
+  // cache plus the installed Codex binary for drift in the background.
+  // This runs async without blocking further startup or waiting for user commands.
+  import("./native-catalog-drift.mjs")
+    .then(({ republishOnNativeDrift }) => republishOnNativeDrift())
+    .catch((error) => {
+      console.error(`[codex-router] Native drift check failed: ${error.message}`);
+    });
 
   if (antigravityStartup.pendingActivationGeneration) {
     const promoted = await attemptAntigravityProbePromotionAfterReadiness({

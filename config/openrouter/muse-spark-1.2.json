@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "slug": "openrouter/muse-spark-1.2",
+      "gatewayModel": "openrouter-muse-spark-1-2",
+      "upstreamModel": "meta/muse-spark-1.2",
+      "provider": "openrouter",
+      "listed": true,
+      "displayName": "Muse Spark 1.2 (OpenRouter)",
+      "description": "Meta Muse Spark 1.2 through OpenRouter.",
+      "priority": 72,
+      "defaultEffort": "high",
+      "reasoningLevels": [
+        {
+          "effort": "minimal",
+          "description": "Minimal reasoning"
+        },
+        {
+          "effort": "low",
+          "description": "Faster reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced reasoning"
+        },
+        {
+          "effort": "high",
+          "description": "Deep reasoning"
+        },
+        {
+          "effort": "xhigh",
+          "description": "Extra deep reasoning"
+        }
+      ],
+      "contextWindow": 1048576,
+      "autoCompact": 943000,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "requestProfile": "auto-tool-choice",
+      "compHash": "openrouter-muse-spark-1-2-v2"
+    }
+  ]
+}

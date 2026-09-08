@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "slug": "venice/claude-fable-5.1",
+      "gatewayModel": "venice-claude-fable-5-1",
+      "upstreamModel": "claude-fable-5-1",
+      "provider": "venice",
+      "listed": true,
+      "displayName": "Claude Fable 5.1 (Venice)",
+      "description": "Anthropic Claude Fable 5.1 through Venice AI.",
+      "priority": 77,
+      "defaultEffort": "max",
+      "reasoningLevels": [
+        {
+          "effort": "low",
+          "description": "Fast reasoning for simple edits"
+        },
+        {
+          "effort": "high",
+          "description": "Deep reasoning with thinking enabled"
+        },
+        {
+          "effort": "max",
+          "description": "Maximum reasoning depth"
+        }
+      ],
+      "contextWindow": 1000000,
+      "autoCompact": 900000,
+      "inputModalities": [
+        "text"
+      ],
+      "compHash": "venice-claude-fable-5-1-v1"
+    }
+  ]
+}

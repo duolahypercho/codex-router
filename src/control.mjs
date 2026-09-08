@@ -314,8 +314,20 @@ async function emitProbe() {
   const hiddenModels = new Set(picker.hidden);
   const visibleModels = new Set(picker.visible);
   const subagentSettings = subagentSettingsSnapshot();
-  const usageEvents = TARGET === "codex"
-    ? (await import("./usage-events.mjs")).recentUsageEvents()
+  const usageEventsModule = TARGET === "codex" ? await import("./usage-events.mjs") : undefined;
+  // The tray polls this probe constantly and the ledger is large, so read the
+  // window once and derive both views from it. The recent-activity list still
+  // gets the same bounded tail it always got; the hourly rollup needs the whole
+  // window, because a capped sample cannot answer "how much traffic did this
+  // router carry today" -- on a busy day 1,000 events is under two hours.
+  const windowEvents = usageEventsModule
+    ? usageEventsModule.recentUsageEvents({ limit: Number.POSITIVE_INFINITY })
+    : [];
+  const usageEvents = usageEventsModule
+    ? windowEvents.slice(-usageEventsModule.RECENT_USAGE_EVENT_LIMIT)
+    : [];
+  const usageEventHours = usageEventsModule
+    ? usageEventsModule.hourlyUsageRollup({ readEvents: () => windowEvents })
     : [];
   // Local proof records are surfaced for status only. They never alter the
   // registry capability sent to Codex.
@@ -398,6 +410,7 @@ async function emitProbe() {
       ...(TARGET === "codex"
         ? {
             usageEvents,
+            usageEventHours,
             nativeAliases: readNativeAliases(),
             modelSettings: {
               subagents: subagentSettings,
@@ -543,24 +556,59 @@ async function routerCatalogSnapshot() {
 
 // --- aggregate over all targets --------------------------------------------
 
-function probeTargets() {
-  const targets = {};
-  for (const target of TARGETS) {
-    const result = spawnSync(process.execPath, [SELF, "--probe"], {
+// Each probe is its own Node process, because a target is chosen by
+// MODEL_ROUTER_TARGET at import time and cannot be switched inside one
+// interpreter. They used to run one after another, so a four-target install
+// paid four sequential boots -- about a second each, measured, and the tray
+// pays the whole bill on every snapshot it asks for.
+//
+// Nothing in a probe depends on another finishing. `emitProbe` only reads, and
+// the one write it can reach refreshes the vision size cache for `codex`
+// alone, through a pid-named temporary and a rename. So start them together
+// and wait for the set: identical work, a quarter of the wall clock.
+function runProbe(target) {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [SELF, "--probe"], {
       env: { ...process.env, MODEL_ROUTER_TARGET: target },
-      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
     });
-    try {
-      targets[target] = result.status === 0 ? JSON.parse(result.stdout) : { target, error: (result.stderr || "").trim() || "probe failed" };
-    } catch {
-      targets[target] = { target, error: "probe returned invalid JSON" };
-    }
-  }
-  return targets;
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    // `error` fires when the spawn itself fails, and `close` may then never
+    // arrive; resolving twice is inert, so both paths report through here.
+    const settle = (status) => {
+      try {
+        resolve([
+          target,
+          status === 0
+            ? JSON.parse(stdout)
+            : { target, error: stderr.trim() || "probe failed" },
+        ]);
+      } catch {
+        resolve([target, { target, error: "probe returned invalid JSON" }]);
+      }
+    };
+    child.on("error", () => settle(null));
+    child.on("close", settle);
+  });
+}
+
+// Promise.all keeps its input order, so the targets are still reported in the
+// order TARGETS declares them rather than in whichever order they finished.
+async function probeTargets() {
+  return Object.fromEntries(await Promise.all(TARGETS.map(runProbe)));
 }
 
 async function printOverview(asJson) {
-  const targets = probeTargets();
+  const targets = await probeTargets();
   if (asJson) {
     // The tray polls this. Presence rides along so the rule that decides
     // whether the router may be stopped is computed once, here, rather than

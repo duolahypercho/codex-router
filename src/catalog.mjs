@@ -1,5 +1,4 @@
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -20,12 +19,16 @@ import {
   CONFIG_PATH,
   LEGACY_PORTS,
   MERGED_CATALOG_PATH,
-  MODELS_CACHE_PATH,
   NATIVE_ALIAS_PATH,
   NATIVE_CATALOG_PATH,
   PORTS,
 } from "./paths.mjs";
-import { codexAuthStatus, codexVersion, runCodex } from "./codex-binary.mjs";
+import {
+  codexAuthStatus,
+  codexBinaryFingerprint,
+  codexVersion,
+  runCodex,
+} from "./codex-binary.mjs";
 import { readUserModels } from "./user-models.mjs";
 import { syncRoutedCodexAgents } from "./codex-agent-catalog.mjs";
 import {
@@ -62,6 +65,11 @@ import {
 import { discoveryDisabled } from "./discovery-mode.mjs";
 import { withCatalogPublicationLock } from "./catalog-publication-lock.mjs";
 import { routedModelSearchAvailable } from "./search-capability.mjs";
+import {
+  readModelsCache,
+} from "./native-account-catalog.mjs";
+
+export { readModelsCache } from "./native-account-catalog.mjs";
 
 const refresh = process.argv.includes("--refresh-native");
 
@@ -183,23 +191,20 @@ export function mergeNativeModel(accountModel, bundledModel) {
   return merged;
 }
 
-// One read serves both the catalog contents and the fingerprint; reading the
-// file twice would hash a possibly different snapshot than the one merged.
-function readModelsCache() {
-  const missing = { catalog: undefined, fingerprint: undefined };
-  if (!existsSync(MODELS_CACHE_PATH)) return missing;
-  try {
-    const parsed = JSON.parse(readFileSync(MODELS_CACHE_PATH, "utf8"));
-    if (!validNativeCatalog(parsed)) return missing;
-    return {
-      catalog: parsed,
-      fingerprint: createHash("sha256")
-        .update(JSON.stringify(parsed.models))
-        .digest("hex"),
-    };
-  } catch {
-    return missing;
-  }
+// A valid account cache containing no routed slugs can be refreshed directly
+// and remains a safe native source while model_catalog_json points at the
+// merged router catalog. A missing or contaminated cache still takes the
+// conservative transport-transition path in refresh-catalog.
+export function nativeCacheCanRefreshInPlace(cache = readModelsCache()) {
+  const catalog = cache?.catalog;
+  return (
+    Boolean(validNativeCatalog(catalog)) &&
+    !catalog.models.some((model) => MODEL_BY_SLUG.has(String(model.slug)))
+  );
+}
+
+export function nativeCatalogCanRefreshInPlace() {
+  return discoveryDisabled() || nativeCacheCanRefreshInPlace();
 }
 
 function atomicContents(target, contents) {
@@ -232,6 +237,24 @@ function restoreFileSnapshot(target, snapshot) {
   }
 }
 
+// Live `codex debug models` (no --bundled) reads whatever model_catalog_json
+// Codex currently points at. While this router owns that path, the answer is
+// our merged catalog — never a native capture source. Account switching and
+// other in-place refreshes must not force operators to disable the router
+// just to rebuild native-models.json.
+export function liveAccountCatalogProbeAllowed({
+  discoveryDisabled: idle = false,
+  routedCatalogActive: routedActive = false,
+} = {}) {
+  return !idle && !routedActive;
+}
+
+function catalogContainsRoutedSlugs(catalog) {
+  return Boolean(
+    catalog?.models?.some((model) => MODEL_BY_SLUG.has(String(model.slug))),
+  );
+}
+
 function captureNative(cache) {
   // A discovery-disabled install promised that nothing account-derived is
   // read: `debug models` without --bundled reflects the signed-in account's
@@ -240,6 +263,7 @@ function captureNative(cache) {
   // This is the gate SECURITY.md's "the one Codex spawn that remains is
   // `codex debug models --bundled`" claim rests on.
   const idle = discoveryDisabled();
+  const routedActive = routedCatalogActive();
   const resolved = cache ?? (idle ? {} : readModelsCache());
   // This is the account-aware catalog Codex itself cached after signing in.
   // Reading it directly also avoids asking `codex debug models` while the
@@ -248,7 +272,17 @@ function captureNative(cache) {
   let fallback;
   let accountError;
   let fallbackError;
-  if (!account && !idle) {
+  if (account && catalogContainsRoutedSlugs(account)) {
+    // A prior merged echo written into models_cache.json is not native.
+    account = undefined;
+    accountError = new Error(
+      "models_cache.json contains routed model slugs; refusing to treat it as native.",
+    );
+  }
+  if (!account && liveAccountCatalogProbeAllowed({
+    discoveryDisabled: idle,
+    routedCatalogActive: routedActive,
+  })) {
     try {
       account = JSON.parse(runCodex(["debug", "models"], {
         encoding: "utf8",
@@ -285,9 +319,11 @@ function captureNative(cache) {
   }
   const capturedWith = codexVersion();
   const sourceFingerprint = cache.fingerprint;
+  const binaryFingerprint = codexBinaryFingerprint();
   atomicJson(NATIVE_CATALOG_PATH, {
     ...(capturedWith ? { captured_with: capturedWith } : {}),
     ...(sourceFingerprint ? { native_source_fingerprint: sourceFingerprint } : {}),
+    ...(binaryFingerprint ? { native_binary_fingerprint: binaryFingerprint } : {}),
     models: parsed.models,
   });
   return parsed;
@@ -302,6 +338,7 @@ export function nativeCatalogIsReusable(
   parsed,
   currentVersion,
   currentSourceFingerprint = undefined,
+  currentBinaryFingerprint = undefined,
 ) {
   if (!parsed || !Array.isArray(parsed.models) || parsed.models.length === 0) {
     return false;
@@ -310,6 +347,12 @@ export function nativeCatalogIsReusable(
   if (
     currentSourceFingerprint &&
     parsed.native_source_fingerprint !== currentSourceFingerprint
+  ) {
+    return false;
+  }
+  if (
+    currentBinaryFingerprint &&
+    parsed.native_binary_fingerprint !== currentBinaryFingerprint
   ) {
     return false;
   }
@@ -331,9 +374,43 @@ function nativeCatalog({ refreshNative = refresh } = {}) {
   // so a discovery-disabled install leaves it unread like every other
   // account-derived artifact.
   const cache = discoveryDisabled() ? {} : readModelsCache();
-  if (!existsSync(NATIVE_CATALOG_PATH) || refreshNative) return captureNative(cache);
+  const readCachedNative = () => {
+    if (!existsSync(NATIVE_CATALOG_PATH)) return undefined;
+    try {
+      const parsed = JSON.parse(readFileSync(NATIVE_CATALOG_PATH, "utf8"));
+      if (parsed && Array.isArray(parsed.models) && parsed.models.length > 0) {
+        return parsed;
+      }
+    } catch {
+      // Unreadable cache is treated as missing below.
+    }
+    return undefined;
+  };
+  if (!existsSync(NATIVE_CATALOG_PATH) || refreshNative) {
+    try {
+      return captureNative(cache);
+    } catch (error) {
+      // Account switching refreshes native while the router still owns
+      // model_catalog_json. Prefer a prior capture over aborting the switch.
+      const cached = readCachedNative();
+      if (cached) {
+        console.error(
+          `Could not refresh the native model catalog (${error.message}); reusing the cached capture.`,
+        );
+        return cached;
+      }
+      throw error;
+    }
+  }
   const parsed = JSON.parse(readFileSync(NATIVE_CATALOG_PATH, "utf8"));
-  if (nativeCatalogIsReusable(parsed, codexVersion(), cache.fingerprint)) {
+  if (
+    nativeCatalogIsReusable(
+      parsed,
+      codexVersion(),
+      cache.fingerprint,
+      codexBinaryFingerprint(),
+    )
+  ) {
     return parsed;
   }
   try {

@@ -223,6 +223,32 @@ test("stream transform injects interrupt_agent before response.completed", async
   assert.equal((output.match(/\/root\/visual_critic/g) || []).length >= 1, true);
 });
 
+test("separate stream transforms give router-injected interrupts distinct call ids", async () => {
+  const namespaces = collaborationNamespaces();
+  const event = `data: ${JSON.stringify({
+    type: "response.completed",
+    sequence_number: 1,
+    response: { output: [] },
+  })}\n\n`;
+
+  async function injectedCallId() {
+    const transform = new NamespaceToolCallTransform(
+      namespaces,
+      "text/event-stream",
+      "kimi-oauth/k3",
+      { pendingInterrupts: ["/root/visual_critic"] },
+    );
+    const output = await collect(Readable.from([event]).pipe(transform));
+    const match = output.match(/"call_id":"(call_router_interrupt_[^"]+)"/);
+    assert.ok(match, output);
+    return match[1];
+  }
+
+  const first = await injectedCallId();
+  const second = await injectedCallId();
+  assert.notEqual(first, second);
+});
+
 test("stream transform does not re-interrupt a target the model already closed", async () => {
   const namespaces = collaborationNamespaces();
   const events = [

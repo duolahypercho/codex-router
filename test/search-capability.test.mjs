@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { MODEL_BY_SLUG } from "../src/model-registry.mjs";
+
 import {
   routedModelPreservesSearchContract,
   routedModelSearchAvailable,
@@ -58,6 +60,36 @@ test("a disappearing sidecar invalidates a snapshotted failover contract", () =>
   assert.equal(routedModelPreservesSearchContract(model, contract, options), true);
   ready = false;
   assert.equal(routedModelPreservesSearchContract(model, contract, options), false);
+});
+
+test("checked-in opencode Muse Responses routes replay verified search history without advertising search", () => {
+  const contract = { requiredMode: undefined, hasSearchHistory: true };
+  for (const slug of [
+    "opencode-go-responses/muse-spark-1.2-contributor",
+    "opencode-go-responses/muse-spark-1.3-contributor",
+  ]) {
+    const model = MODEL_BY_SLUG.get(slug);
+    assert.ok(model, slug);
+    assert.equal(model.searchTool, undefined, `${slug} must not advertise a new search tool`);
+    assert.equal(routedModelSearchAvailable(model), false, slug);
+    assert.equal(routedModelPreservesSearchContract(model, contract), true, slug);
+  }
+});
+
+test("verified models replay search history without advertising new search", () => {
+  const contract = { requiredMode: undefined, hasSearchHistory: true };
+
+  assert.equal(
+    routedModelPreservesSearchContract(
+      { slug: "generic/history-compatible", supportsSearchHistory: true },
+      contract,
+    ),
+    true,
+  );
+  assert.equal(
+    routedModelPreservesSearchContract({ slug: "generic/plain" }, contract),
+    false,
+  );
 });
 
 test("unsupported hosted search is removed without touching caller function tools", () => {

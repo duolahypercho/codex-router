@@ -41,6 +41,16 @@ test("userModelEntry fills conservative picker metadata", () => {
 });
 
 
+test("OpenCode Free Muse Spark curation uses the official picker label", () => {
+  const entry = userModelEntry({
+    providerId: "opencode-free-responses",
+    upstreamId: "muse-spark-1.3-contributor-free",
+    priority: 100,
+    metadata: { isFree: true },
+  });
+  assert.equal(entry.displayName, "Muse Spark 1.3 Contributor (OpenCode Free)");
+});
+
 test("curation metadata can set sizing and the effort ladder", () => {
   const entry = userModelEntry({
     providerId: "deepseek",
@@ -57,6 +67,7 @@ test("curation metadata can set sizing and the effort ladder", () => {
       ],
       defaultEffort: "medium",
       serviceTiers: [{ id: "priority", name: "Fast" }],
+      supportsSearchHistory: true,
       requiresTrailingUserTurn: true,
       isFree: true,
     },
@@ -66,6 +77,7 @@ test("curation metadata can set sizing and the effort ladder", () => {
   assert.equal(entry.reasoningLevels.length, 3);
   assert.equal(entry.defaultEffort, "medium");
   assert.deepEqual(entry.serviceTiers, [{ id: "priority", name: "Fast" }]);
+  assert.equal(entry.supportsSearchHistory, true);
   assert.equal(entry.requiresTrailingUserTurn, true);
   assert.equal(entry.isFree, true);
 });
@@ -233,6 +245,10 @@ test("registry merges valid user models and skips collisions", async () => {
       ...userModelEntry({ providerId: "deepseek", upstreamId: "deepseek-bad-search", priority: 106 }),
       searchTool: { mode: "emulated" },
     },
+    {
+      ...userModelEntry({ providerId: "deepseek", upstreamId: "deepseek-bad-search-history", priority: 120 }),
+      supportsSearchHistory: "yes",
+    },
     // Standalone search is Codex-side execution; it remains an explicit
     // per-model opt-in rather than a provider-wide default.
     {
@@ -321,6 +337,7 @@ test("registry merges valid user models and skips collisions", async () => {
   assert.ok(!slugs.includes("no-such-provider/x-model"));
   assert.ok(!slugs.includes("deepseek/deepseek-blank-nux"));
   assert.ok(!slugs.includes("deepseek/deepseek-bad-search"));
+  assert.ok(!slugs.includes("deepseek/deepseek-bad-search-history"));
   assert.ok(slugs.includes("deepseek/deepseek-standalone-search"));
   assert.ok(!slugs.includes("deepseek/deepseek-bad-detail"));
   assert.ok(!slugs.includes("deepseek/deepseek-bad-trailing-turn"));

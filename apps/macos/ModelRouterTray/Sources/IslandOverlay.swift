@@ -346,7 +346,7 @@ private struct IslandOverlayView: View {
         }
         Spacer()
         HStack(spacing: 12) {
-          IslandHeaderMetric(value: todayTokenValue, label: routerLocalized("TODAY TOKENS"))
+          IslandHeaderMetric(value: todayTokenValue, label: "\(routerLocalized("TODAY TOKENS")) · UTC")
           if let accountHeaderValue {
             IslandHeaderMetric(value: accountHeaderValue, label: accountHeaderLabel)
           }
@@ -377,7 +377,7 @@ private struct IslandOverlayView: View {
         }
         Spacer()
         HStack(spacing: 12) {
-          IslandHeaderMetric(value: todayTokenValue, label: routerLocalized("TODAY TOKENS"))
+          IslandHeaderMetric(value: todayTokenValue, label: "\(routerLocalized("TODAY TOKENS")) · UTC")
           if let accountHeaderValue {
             IslandHeaderMetric(value: accountHeaderValue, label: accountHeaderLabel)
           }
@@ -866,7 +866,9 @@ private struct IslandUsageLineChart: View {
       }
     }
     .onAppear { animateReveal() }
-    .onChange(of: points.map(\.tokens)) { _ in animateReveal() }
+    // Compare the Equatable points value, not a freshly mapped array allocated
+    // on every body pass (which interacted poorly with store reads during layout).
+    .onChange(of: points) { _ in animateReveal() }
     .onChange(of: reduceMotion) { _ in animateReveal() }
     .accessibilityElement(children: .ignore)
     .accessibilityLabel(routerLocalized("Daily token usage line chart"))
@@ -939,13 +941,13 @@ private struct IslandUsageLineChart: View {
 
   private func axisLabel(for point: DailyUsagePoint) -> String {
     if points.count <= 7 {
-      return point.date.formatted(.dateTime.weekday(.abbreviated))
+      return point.date.usageDayLabel(.dateTime.weekday(.abbreviated))
     }
-    return point.date.formatted(.dateTime.month(.defaultDigits).day())
+    return point.date.usageDayLabel(.dateTime.month(.defaultDigits).day())
   }
 
   private func hoverText(for point: DailyUsagePoint) -> String {
-    let date = point.date.formatted(.dateTime.month(.abbreviated).day())
+    let date = point.date.usageDayLabel(.dateTime.month(.abbreviated).day())
     let tokens = Int64(point.tokens).formatted(.number.grouping(.automatic))
     let text = RouterLanguage.isSimplifiedChinese ? "\(date) · \(tokens) token" : "\(date) · \(tokens) tok"
     guard point.isRouterFallback else { return text }

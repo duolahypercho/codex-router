@@ -317,7 +317,7 @@ export const MAX_BODY_BYTES = Number(
     (TARGET === "codex"
       ? process.env.CODEX_ROUTER_MAX_BODY_BYTES || process.env.KIMI_PROXY_MAX_BODY_BYTES
       : undefined) ||
-    64 * 1024 * 1024,
+    128 * 1024 * 1024,
 );
 
 export const MAX_BUFFERED_RESPONSE_BYTES = Number(

@@ -30,7 +30,7 @@
         },
         {
           "effort": "xhigh",
-          "description": "Maximum reasoning"
+          "description": "Extra deep reasoning"
         }
       ],
       "contextWindow": 1000000,
@@ -40,7 +40,7 @@
         "image"
       ],
       "supportsApplyPatchTool": false,
-      "compHash": "meta-muse-spark-1-1-v1"
+      "compHash": "meta-muse-spark-1-1-v2"
     }
   ]
 }

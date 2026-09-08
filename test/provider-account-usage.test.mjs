@@ -552,6 +552,8 @@ test("opencode Go usage reads the Zen usage API", async () => {
       fetchImpl: async (url, options) => {
         assert.equal(url, "https://opencode.ai/zen/go/v1/usage");
         assert.equal(options.headers.Authorization, "Bearer TEST_OPENCODE_USAGE_KEY");
+        assert.equal(options.headers["x-opencode-session"], "codex-router-usage");
+        assert.match(options.headers["User-Agent"], /^codex-router\//);
         return new Response(JSON.stringify({
           usage: {
             rolling: { status: "ok", percent: 5, resetsAt: "2026-08-13T01:00:00Z" },

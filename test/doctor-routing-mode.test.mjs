@@ -48,10 +48,22 @@ esac
 }
 
 function child(script, args, env) {
+  const childEnv = {
+    ...env,
+    // This test redirects Codex/router state, but Windows service status reads
+    // the machine-wide Task Scheduler. A developer with the real router
+    // running would otherwise make fixture doctor calls wait on the live task.
+    ...(process.platform === "win32" && script === "doctor.mjs"
+      ? { CODEX_ROUTER_SERVICE_PLATFORM: "test-fixture" }
+      : {}),
+  };
   return spawnSync(process.execPath, [path.join(root, "src", script), ...args], {
     cwd: root,
-    env,
+    env: childEnv,
     encoding: "utf8",
+    // node:test cannot interrupt a synchronous child while the event loop is
+    // blocked, so bound the subprocess itself as the final isolation guard.
+    timeout: 20_000,
   });
 }
 

@@ -343,3 +343,67 @@ test("non-Groq providers preserve the normally expanded tool surface", () => {
   assert.deepEqual(routed.tools, expected.tools);
   assert.deepEqual([...routed.namespaces], [...expected.namespaces]);
 });
+
+// Issue #626: Command Code answers `HTTP 400: \`name\` must be at most 64
+// characters, got 80` before generation, so the exact reported tool has to
+// reach the provider under a bounded alias and come back as its client
+// identity. The tool below is the 80-character name from that report.
+const COMMAND_CODE_LONG_TOOL =
+  "mcp__openai_api_key_local_confirmation__confirm_openai_api_key_local_destination";
+
+function commandCodeSurface() {
+  return [
+    {
+      type: "function",
+      name: COMMAND_CODE_LONG_TOOL,
+      parameters: { type: "object" },
+    },
+    { type: "namespace", name: "codex_app", tools: [{ type: "function", name: "create_thread" }] },
+  ];
+}
+
+for (const providerId of ["commandcode", "commandcode-messages"]) {
+  test(`${providerId} bounds provider-facing tool names to 64 characters`, () => {
+    assert.equal(COMMAND_CODE_LONG_TOOL.length, 80, "regression fixture reproduces issue #626");
+    const routed = chatProviderToolSurface(commandCodeSurface(), providerId);
+    const names = routed.tools.map((tool) => tool.name);
+    for (const name of names) {
+      assert.ok(
+        name.length <= 64,
+        `${name} is ${name.length} characters, which Command Code rejects`,
+      );
+    }
+    const alias = names.find((name) => name !== "codex_app__create_thread");
+    assert.ok(alias, "the long client tool must still be offered");
+    assert.notEqual(alias, COMMAND_CODE_LONG_TOOL, "the alias must differ from the client name");
+
+    // The alias is only safe because it is reversible: a call the model makes
+    // under the bounded spelling has to come back as the client's own tool.
+    const restored = rewriteNamespaceResponsePayload(
+      {
+        output: [
+          { type: "function_call", name: alias, arguments: "{}" },
+        ],
+      },
+      buildNamespaceLookups(routed.namespaces),
+    );
+    assert.equal(restored.output[0].name, COMMAND_CODE_LONG_TOOL);
+  });
+
+  test(`${providerId} keeps the bounded alias deterministic across identical surfaces`, () => {
+    const first = chatProviderToolSurface(commandCodeSurface(), providerId);
+    const second = chatProviderToolSurface(commandCodeSurface(), providerId);
+    assert.deepEqual(
+      first.tools.map((tool) => tool.name),
+      second.tools.map((tool) => tool.name),
+    );
+  });
+}
+
+test("a non-Command Code chat provider keeps the unbounded 80-character name", () => {
+  const routed = chatProviderToolSurface(commandCodeSurface(), "openrouter");
+  assert.ok(
+    routed.tools.some((tool) => tool.name === COMMAND_CODE_LONG_TOOL),
+    "only Command Code opts into the 64-character bound",
+  );
+});

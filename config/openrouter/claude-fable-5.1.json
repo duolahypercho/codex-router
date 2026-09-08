@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "slug": "openrouter/claude-fable-5.1",
+      "gatewayModel": "openrouter-claude-fable-5-1",
+      "upstreamModel": "anthropic/claude-fable-5.1",
+      "provider": "openrouter",
+      "listed": true,
+      "displayName": "Claude Fable 5.1 (OpenRouter)",
+      "description": "Anthropic Claude Fable 5.1 through OpenRouter.",
+      "priority": 77,
+      "defaultEffort": "high",
+      "reasoningLevels": [
+        {
+          "effort": "low",
+          "description": "Faster reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced reasoning"
+        },
+        {
+          "effort": "high",
+          "description": "Deep reasoning"
+        },
+        {
+          "effort": "xhigh",
+          "description": "Extra deep reasoning"
+        },
+        {
+          "effort": "max",
+          "description": "Maximum reasoning depth"
+        }
+      ],
+      "contextWindow": 1000000,
+      "autoCompact": 900000,
+      "inputModalities": [
+        "text"
+      ],
+      "compHash": "openrouter-claude-fable-5-1-v1"
+    }
+  ]
+}

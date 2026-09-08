@@ -192,6 +192,24 @@ final class RouterUsageWidgetTests: XCTestCase {
     )
   }
 
+  func testRouterOnlyDaysAreNamedInsteadOfPassingAsAccountTotals() {
+    let snapshot = RouterWidgetSnapshot.previewWithRouterOnlyToday
+    let source = snapshot.usageSource(id: "openai")
+
+    XCTAssertTrue(source.todayIsRouterFallback)
+    XCTAssertEqual(
+      RouterUsageWidgetView.todayTokenLabel(for: source),
+      "this Mac · account not reported yet"
+    )
+    // The headline number is the measured one, not the zero this used to
+    // publish, and every earlier day keeps its account provenance.
+    XCTAssertEqual(source.todayTokens, 917_968_864)
+    XCTAssertEqual(source.daily.dropLast().filter(\.isRouterFallback).count, 0)
+    XCTAssertFalse(
+      RouterWidgetSnapshot.preview.usageSource(id: "openai").todayIsRouterFallback
+    )
+  }
+
   func testResetCountdownUsesCompactStableUnits() {
     let now = Date(timeIntervalSince1970: 1_000)
     XCTAssertEqual(RouterResetWidgetView.countdown(to: now.addingTimeInterval(59), now: now), "<1m")
@@ -242,6 +260,22 @@ final class RouterUsageWidgetTests: XCTestCase {
       family: .systemMedium,
       size: CGSize(width: 364, height: 170),
       entry: RouterUsageEntry(date: now, snapshot: .preview),
+      colorScheme: .light,
+      directory: directory
+    )
+    try render(
+      name: "router-widget-medium-router-only",
+      family: .systemMedium,
+      size: CGSize(width: 364, height: 170),
+      entry: RouterUsageEntry(date: now, snapshot: .previewWithRouterOnlyToday),
+      colorScheme: .light,
+      directory: directory
+    )
+    try render(
+      name: "router-widget-small-router-only",
+      family: .systemSmall,
+      size: CGSize(width: 170, height: 170),
+      entry: RouterUsageEntry(date: now, snapshot: .previewWithRouterOnlyToday),
       colorScheme: .light,
       directory: directory
     )
@@ -344,5 +378,43 @@ final class RouterUsageWidgetTests: XCTestCase {
       return
     }
     try png.write(to: directory.appendingPathComponent("\(name).png"), options: .atomic)
+  }
+}
+
+/// The state the widget is in most of the day: OpenAI has not published a
+/// bucket for today yet, so the newest point is this Mac's own router count.
+private extension RouterWidgetSnapshot {
+  static var previewWithRouterOnlyToday: RouterWidgetSnapshot {
+    let base = RouterWidgetSnapshot.preview
+    var daily = base.daily
+    if let last = daily.last {
+      daily[daily.count - 1] = RouterWidgetDailyPoint(
+        date: last.date,
+        tokens: 917_968_864,
+        isRouterFallback: true
+      )
+    }
+    let todayTokens = daily.last?.tokens ?? 0
+    return RouterWidgetSnapshot(
+      schemaVersion: base.schemaVersion,
+      generatedAt: base.generatedAt,
+      activityState: base.activityState,
+      activeChatCount: base.activeChatCount,
+      selectedProviderID: base.selectedProviderID,
+      selectedProviderName: base.selectedProviderName,
+      todayTokens: todayTokens,
+      daily: daily,
+      quotas: base.quotas,
+      usageSources: base.usageSources?.map { source in
+        source.id == RouterWidgetSnapshot.defaultUsageSourceID
+          ? RouterWidgetUsageSource(
+              id: source.id,
+              name: source.name,
+              todayTokens: todayTokens,
+              daily: daily
+            )
+          : source
+      }
+    )
   }
 }

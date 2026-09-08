@@ -30,7 +30,7 @@
         },
         {
           "effort": "xhigh",
-          "description": "Maximum reasoning"
+          "description": "Extra deep reasoning"
         }
       ],
       "supportsReasoningSummaries": true,
@@ -41,9 +41,11 @@
         "text",
         "image"
       ],
+      "supportsSearchHistory": true,
       "supportsApplyPatchTool": false,
       "requestProfile": "auto-tool-choice",
-      "compHash": "opencode-go-responses-muse-spark-1-2-contributor-v2"
+      "compHash": "opencode-go-responses-muse-spark-1-2-contributor-v4",
+      "toolSchemaRecursion": "flatten"
     }
   ]
 }

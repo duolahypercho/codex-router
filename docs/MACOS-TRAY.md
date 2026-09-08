@@ -60,12 +60,14 @@ assets are committed rather than rasterized during a normal tray build.
 
 The Swift host stays `LSUIElement`, so it does not add a Dock icon. A person
 opening `Codex Router.app` gets the embedded Control Center as a normal window;
-that window supplies the product's Dock and Command-Tab entry only while it is
-open. Opening the app also reveals the native tray surfaces for 20 seconds if
-**With Codex** would otherwise hide them. Closing the Control Center window
-leaves the native host running; reopen the app or choose **Control Center**
-from the menu-bar panel to restore it. The temporary reveal also starts the
-router and pulses the status dot, then follow mode resumes on its own.
+that process supplies the product's Dock and Command-Tab entry while Control
+Center is running, including after the window is closed or you switch away.
+Closing the window hides it rather than quitting, so Cmd+Tab and the Dock can
+bring it back. Opening the app also reveals the native tray surfaces for 20
+seconds if **With Codex** would otherwise hide them. The menu-bar host keeps
+running either way; choose **Control Center** from the panel to reopen if the
+Dock tile is not showing yet. The temporary reveal also starts the router and
+pulses the status dot, then follow mode resumes on its own.
 
 launchd passes `--supervised` when it starts the native host at login. That
 starts the menu-bar host without opening the Control Center window or forcing

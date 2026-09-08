@@ -56,10 +56,13 @@ import {
   EmptyCompletionTerminalGuard,
   isEmptyCompletionPreludeLimitError,
 } from "./empty-completion-guard.mjs";
+import { itemLifecycleNormalizerTransform } from "./item-lifecycle-normalizer.mjs";
+import { reasoningTagStripperTransform } from "./reasoning-tag-stripper.mjs";
 import {
   ZaiResponsesCompatTransform,
   zaiResponsesCompatTransform,
 } from "./zai-responses-compat.mjs";
+import { grokReasoningSummaryCompatTransform } from "./grok-reasoning-summary-compat.mjs";
 import { translatedToolMessageCompatTransform } from "./deepseek-tool-message-compat.mjs";
 import { exactRouteProbeRequested } from "./exact-route-probe.mjs";
 import {
@@ -134,6 +137,7 @@ import {
   readFailoverSettings,
   recordProviderCooldown,
 } from "./model-failover.mjs";
+import { cooldownScope } from "./provider-cooldown.mjs";
 import { retryAfterSeconds } from "./rate-limit-headers.mjs";
 import {
   awaitingSpawnProof,
@@ -355,8 +359,20 @@ const AGENT_PAYLOAD_CACHE_TTL_MS =
     : 15 * 60 * 1_000;
 const AGENT_PAYLOAD_CACHE_MAX_BYTES = 8 * 1024 * 1024;
 const AGENT_PAYLOAD_CACHE_MAX_ENTRIES = 256;
+const configuredAgentRelayFailureBackoffMs = Number(
+  process.env.MODEL_ROUTER_AGENT_RELAY_FAILURE_BACKOFF_MS ||
+    process.env.CODEX_ROUTER_AGENT_RELAY_FAILURE_BACKOFF_MS ||
+    60_000,
+);
+const AGENT_RELAY_FAILURE_BACKOFF_MS =
+  Number.isFinite(configuredAgentRelayFailureBackoffMs) &&
+  configuredAgentRelayFailureBackoffMs > 0
+    ? Math.floor(configuredAgentRelayFailureBackoffMs)
+    : 60_000;
+const AGENT_RELAY_FAILURE_MAX_ENTRIES = 128;
 const agentPayloadCache = new Map();
 const agentPayloadCacheInFlight = new Map();
+const agentPayloadRelayFailures = new Map();
 let agentPayloadCacheBytes = 0;
 const agentPayloadCacheMetrics = {
   hits: 0,
@@ -895,7 +911,8 @@ function needsZenFreeToolCompatibility(route) {
   const providerId = providerForModel(route)?.id;
   return (
     (providerId === "opencode-free-responses" &&
-      route.upstreamModel === "muse-spark-1.2-contributor-free")
+      (route.upstreamModel === "muse-spark-1.2-contributor-free" ||
+        route.upstreamModel === "muse-spark-1.3-contributor-free"))
   );
 }
 
@@ -923,10 +940,15 @@ function needsStrictOpenCodeToolCompatibility(route) {
 // recursive local JSON-Schema reference before the model sees the request.
 // Keep the paid Console Go gate model-specific: its other Responses models
 // retain recursive schemas until their own endpoint establishes the same
-// restriction.
-function needsNonRecursiveOpenCodeToolCompatibility(route) {
+// restriction. Command Code answers the identical `Recursive JSON schemas are
+// not currently supported` on every model behind either of its provider
+// variants (issue #626), so it is gated provider-wide rather than per model.
+const NON_RECURSIVE_SCHEMA_PROVIDER_IDS = new Set(["commandcode", "commandcode-messages"]);
+
+function needsNonRecursiveToolSchemaCompatibility(route) {
   const providerId = providerForModel(route)?.id;
   return (
+    NON_RECURSIVE_SCHEMA_PROVIDER_IDS.has(providerId) ||
     needsZenFreeToolCompatibility(route) ||
     (providerId === "opencode-go-responses" &&
       route.upstreamModel === "muse-spark-1.2-contributor")
@@ -1169,6 +1191,32 @@ function writeEmptyCompletionError(response, code, message) {
       message,
     },
   });
+}
+
+// Codex treats a streamed Responses `error` event as terminal, but can keep a
+// Grok OAuth turn open while its HTTP client retries a bare gateway 5xx. The
+// local Grok gateway has already exhausted its bounded retries by the time this
+// branch runs, so a second retry loop in the client only turns a stated outage
+// into a stale Working badge. Preserve every other provider's existing HTTP
+// contract, plus ordinary JSON errors for non-streaming Grok calls and its
+// actionable 4xx responses; only the observed terminal Grok shape crosses the
+// Responses SSE boundary this way.
+function writeTranslatedGatewayError(
+  response,
+  status,
+  payload,
+  { provider, stream = false } = {},
+) {
+  if (provider === "grok-oauth" && stream && status >= 500) {
+    writeEventStreamHead(response);
+    writeStreamErrorEvent(response, {
+      code: payload?.error?.type || "server_error",
+      message: payload?.error?.message || "The routed provider could not complete the request.",
+    });
+    response.end();
+    return;
+  }
+  writeJson(response, status, payload);
 }
 
 function timingMetric(value) {
@@ -1507,6 +1555,40 @@ function agentPayloadCacheKey(encrypted, accountScope) {
     .digest("base64url");
 }
 
+function nativeAgentRelayRateLimitError() {
+  const error = new Error("Native collaboration payload relay is rate limited.");
+  error.status = 429;
+  error.code = "ERR_NATIVE_AGENT_RELAY_RATE_LIMITED";
+  return error;
+}
+
+function nativeAgentRelayUnauthorizedError() {
+  const error = new Error("Native collaboration payload relay requires refreshed authentication.");
+  error.status = 401;
+  error.code = "ERR_NATIVE_AGENT_RELAY_UNAUTHORIZED";
+  return error;
+}
+
+function purgeExpiredAgentRelayFailures(now = Date.now()) {
+  for (const [key, expiresAt] of agentPayloadRelayFailures) {
+    if (expiresAt <= now) agentPayloadRelayFailures.delete(key);
+  }
+}
+
+function agentRelayFailureActive(key, now = Date.now()) {
+  purgeExpiredAgentRelayFailures(now);
+  return agentPayloadRelayFailures.has(key);
+}
+
+function rememberAgentRelayFailure(key, now = Date.now()) {
+  purgeExpiredAgentRelayFailures(now);
+  agentPayloadRelayFailures.delete(key);
+  agentPayloadRelayFailures.set(key, now + AGENT_RELAY_FAILURE_BACKOFF_MS);
+  while (agentPayloadRelayFailures.size > AGENT_RELAY_FAILURE_MAX_ENTRIES) {
+    agentPayloadRelayFailures.delete(agentPayloadRelayFailures.keys().next().value);
+  }
+}
+
 function evictAgentPayload(key, { expired = false, evicted = false } = {}) {
   const entry = agentPayloadCache.get(key);
   if (!entry) return;
@@ -1561,10 +1643,33 @@ function rememberAgentPayload(key, plaintext) {
 }
 
 const agentPayloadCachePurgeTimer = setInterval(
-  () => purgeExpiredAgentPayloads(),
+  () => {
+    purgeExpiredAgentPayloads();
+    purgeExpiredAgentRelayFailures();
+  },
   Math.min(AGENT_PAYLOAD_CACHE_TTL_MS, 60_000),
 );
 agentPayloadCachePurgeTimer.unref?.();
+
+// Periodically refresh the native account catalog, compare it with the last
+// capture, and republish changes. Codex stops updating models_cache.json while
+// model_catalog_json points at the router, so the refresh cannot depend on
+// Codex rewriting that file itself.
+const nativeCatalogDriftCheckTimer = setInterval(
+  async () => {
+    try {
+      const { republishOnNativeDrift } = await import("./native-catalog-drift.mjs");
+      await republishOnNativeDrift();
+    } catch (error) {
+      // Drift check is best-effort; log but don't crash the router
+      if (!String(error.message).includes("Native catalog drift detected")) {
+        console.error(`[codex-router] Periodic native drift check failed: ${error.message}`);
+      }
+    }
+  },
+  5 * 60_000, // Every 5 minutes
+);
+nativeCatalogDriftCheckTimer.unref?.();
 
 async function relayEncryptedAgentPayloadOnce(
   item,
@@ -1608,6 +1713,13 @@ async function relayEncryptedAgentPayloadOnce(
     signal,
   });
   if (!upstream.ok) {
+    if (upstream.status === 429) {
+      rememberAgentRelayFailure(cacheKey);
+      throw nativeAgentRelayRateLimitError();
+    }
+    if (upstream.status === 401) {
+      throw nativeAgentRelayUnauthorizedError();
+    }
     const error = new Error(
       `Native collaboration payload relay failed with HTTP ${upstream.status}.`,
     );
@@ -1681,6 +1793,7 @@ async function relayEncryptedAgentPayload(request, item, encrypted, signal) {
   const key = agentPayloadCacheKey(encrypted, accountScope);
   const cached = cachedAgentPayload(key);
   if (cached !== undefined) return cached;
+  if (agentRelayFailureActive(key)) throw nativeAgentRelayRateLimitError();
   const pending = agentPayloadCacheInFlight.get(key);
   if (pending) {
     agentPayloadCacheMetrics.coalesced += 1;
@@ -2073,7 +2186,9 @@ async function bridgeVisionInput(input, route, request) {
   const readWithAnyEngine = async (url, question) => {
     let lastError;
     for (const [index, engine] of engines.entries()) {
-      const provider = canonicalProviderId(visionEngineProvider(engine));
+      // The same identity the window was recorded under: a separately billed
+      // variant shares this account's credential but not its allowance.
+      const provider = cooldownScope(visionEngineProvider(engine));
       const cooled = providerCooldown(provider);
       if (cooled || exhaustedProviders.has(provider)) {
         lastError ??= new Error(
@@ -3043,7 +3158,7 @@ async function buildRoutedRequest({ request, payload, route, agedInput }) {
   ) {
     namespacesFlattened = true;
   }
-  if (needsNonRecursiveOpenCodeToolCompatibility(route)) {
+  if (needsNonRecursiveToolSchemaCompatibility(route)) {
     // Run after namespace flattening so both native children and ordinary
     // function tools are repaired in the exact shape the endpoint validates.
     tools = repairToolSchemaRoots(tools, { nonRecursive: true });
@@ -3107,17 +3222,21 @@ async function buildRoutedRequest({ request, payload, route, agedInput }) {
     ) {
       namespacesFlattened = true;
     }
-    if (needsNonRecursiveOpenCodeToolCompatibility(route)) {
+    if (needsNonRecursiveToolSchemaCompatibility(route)) {
       // Stored tool-search results can introduce definitions after the first
       // repair pass, so enforce the same boundary on the expanded inventory.
       tools = repairToolSchemaRoots(tools, { nonRecursive: true });
     }
   }
-  // The stored call history must use the same tool names as the tool list, or
-  // the model copies the bare names out of its own transcript.
+  // Stored call history and forced choices must use the same tool names as the
+  // provider-facing list, or the model/request validator sees two identities.
   if (namespacesFlattened) {
     routedInput = flattenNamespacedHistory(routedInput, flattenedNamespaces);
-    if (provider?.id === "groq") {
+    if (
+      provider?.id === "groq" ||
+      provider?.id === "commandcode" ||
+      provider?.id === "commandcode-messages"
+    ) {
       routedToolChoice = flattenToolChoice(
         routedToolChoice,
         flattenedNamespaces,
@@ -3828,12 +3947,51 @@ async function handleResponses(request, response, requestUrl) {
         MAX_BUFFERED_RESPONSE_BYTES,
         controller.signal,
       );
-      const verdict = classifyRoutedFailure({
+      let verdict = classifyRoutedFailure({
         status: upstream.status,
         bodyText: failedBodyText,
         retryAfterSeconds: retryAfterSeconds(upstream.headers),
       });
-      if (verdict.swap && !exactRouteProbe) {
+      // The provider forwarder emits the reserved transport marker only when
+      // it failed before any provider response was available. Cross-model
+      // failover already treats that marker as replay-safe, but an ordinary
+      // turn (or a single-provider install) has no fallback candidate. Retry
+      // the exact same materialized request once before changing models or
+      // surfacing the 502. Generic provider 5xx bodies never enter this branch,
+      // and nothing can be replayed after caller bytes have been sent.
+      if (
+        verdict.reason === "transport" &&
+        nothingRelayed(response) &&
+        !controller.signal.aborted
+      ) {
+        console.error(
+          `[codex-router] routed transport retry 1/1 model=${route.slug} path=${requestUrl.pathname}`,
+        );
+        upstream = await fetch(target, {
+          method: "POST",
+          headers,
+          body: routedBody,
+          signal: controller.signal,
+        });
+        upstreamRetries = (upstreamRetries || 0) + 1;
+        upstreamStatus = upstream.status;
+        upstreamLatencyMs = Date.now() - startedAt;
+        failedBodyText = upstream.ok
+          ? undefined
+          : await boundedResponseText(
+              upstream,
+              MAX_BUFFERED_RESPONSE_BYTES,
+              controller.signal,
+            );
+        verdict = upstream.ok
+          ? { swap: false }
+          : classifyRoutedFailure({
+              status: upstream.status,
+              bodyText: failedBodyText,
+              retryAfterSeconds: retryAfterSeconds(upstream.headers),
+            });
+      }
+      if (!upstream.ok && verdict.swap && !exactRouteProbe) {
         // Believe the provider about when it will be back before trying anyone
         // else, so the next turn skips it instead of paying for the same
         // rejection again.
@@ -3906,24 +4064,24 @@ async function handleResponses(request, response, requestUrl) {
         bodyText: failedBodyText,
       });
       if (retryAfterHeader) response.setHeader("Retry-After", retryAfterHeader);
-      writeJson(
-        response,
-        translatedStatus,
-        translateGatewayError({
-          status: upstream.status,
-          // Already drained above so the failover classifier could read it; a
-          // second `.text()` on the same response yields "".
-          bodyText: failedBodyText ?? "",
-          modelName: route.displayName || route.slug,
-          providerName:
-            provider?.transport === "ollama"
-              ? "Ollama"
-              : provider?.ownedBy || provider?.displayName || route.provider,
-          providerKind: provider?.kind,
-          providerAuthMode: provider?.authMode,
-          retryAfterSeconds: retrySeconds,
-        }),
-      );
+      const translatedError = translateGatewayError({
+        status: upstream.status,
+        // Already drained above so the failover classifier could read it; a
+        // second `.text()` on the same response yields "".
+        bodyText: failedBodyText ?? "",
+        modelName: route.displayName || route.slug,
+        providerName:
+          provider?.transport === "ollama"
+            ? "Ollama"
+            : provider?.ownedBy || provider?.displayName || route.provider,
+        providerKind: provider?.kind,
+        providerAuthMode: provider?.authMode,
+        retryAfterSeconds: retrySeconds,
+      });
+      writeTranslatedGatewayError(response, translatedStatus, translatedError, {
+        provider: route.provider,
+        stream: payload.stream === true,
+      });
       recordUsageEvent({
         model: route.slug,
         provider: canonicalProviderId(route.provider),
@@ -3976,6 +4134,10 @@ async function handleResponses(request, response, requestUrl) {
         envelopeCompat = new ZaiResponsesCompatTransform();
       }
       if (envelopeCompat) transforms.push(envelopeCompat);
+      const grokReasoningSummaryCompat = !directResponses && route
+        ? grokReasoningSummaryCompatTransform(providerForModel(route), contentType)
+        : undefined;
+      if (grokReasoningSummaryCompat) transforms.push(grokReasoningSummaryCompat);
       // LiteLLM can add blank assistant envelopes while translating either
       // Chat Completions or Messages. The factory refuses native traffic and
       // providers that already speak Responses, so those paths gain no stage.
@@ -3983,10 +4145,12 @@ async function handleResponses(request, response, requestUrl) {
         ? translatedToolMessageCompatTransform(providerForModel(route), contentType)
         : undefined;
       if (translatedToolMessageCompat) transforms.push(translatedToolMessageCompat);
-      // Restore flattened namespace calls for routed chat-completions providers,
-      // and inject missing finished-child interrupts for both routed and native
-      // multi-agent parents (San Francisco uses native GPT).
-      if (!directResponses && (route || pendingInterrupts.length > 0)) {
+      // Restore flattened namespace calls for routed chat-completions providers
+      // and pin an omitted spawn_agent model to every routed parent, including
+      // providers that already speak Responses. Also inject missing finished-
+      // child interrupts for both routed and native multi-agent parents (San
+      // Francisco uses native GPT).
+      if (route || pendingInterrupts.length > 0) {
         transforms.push(
           new NamespaceToolCallTransform(
             flattenedNamespaces,
@@ -4013,6 +4177,24 @@ async function handleResponses(request, response, requestUrl) {
           }),
         );
       }
+      // Strip inline `<think>...</think>` reasoning that routed providers leak
+      // into the visible answer, when their chat-completions -> Responses bridge
+      // relays the model's chain-of-thought as `output_text` instead of on the
+      // reasoning channel. Runs before the lifecycle normalizer so the reorder
+      // sees already-cleaned message text. Native OpenAI streams (no route) never
+      // carry these tags and are left untouched.
+      const tagStripper = route ? reasoningTagStripperTransform(contentType) : undefined;
+      if (tagStripper) transforms.push(tagStripper);
+      // Restore sequential output-item lifecycles for routed providers, whose
+      // chat-completions -> Responses bridge can leave an assistant `message`
+      // item open across a `function_call` item and close it late, making Codex
+      // render the same turn's text twice. Runs last so it normalizes the final
+      // egress stream after every other rewrite/injection. Native OpenAI streams
+      // (no route) are already well-formed and left untouched.
+      const itemNormalizer = route
+        ? itemLifecycleNormalizerTransform(contentType)
+        : undefined;
+      if (itemNormalizer) transforms.push(itemNormalizer);
       return { transforms, usageObserver, guard };
     };
     const firstPipeline = createResponsePipeline(upstreamContentType);
@@ -4066,6 +4248,16 @@ async function handleResponses(request, response, requestUrl) {
       (clientGone || (response.destroyed && !response.writableFinished)) &&
       !nativeCompletedBeforeClose;
     finalStatus = clientWalkedAway ? 0 : upstream.status;
+    if (
+      !clientWalkedAway &&
+      route?.provider === "grok-oauth" &&
+      usageTransform?.terminalErrorObserved?.() === true
+    ) {
+      // The Grok forwarder has already committed the HTTP 200 SSE head when a
+      // post-tool repair can fail. Keep the client-visible terminal event, but
+      // account for the turn as a provider failure rather than a success.
+      finalStatus = 502;
+    }
     if (streamedPreludeFailureKind && !clientWalkedAway) finalStatus = 502;
     emptyCompletion = emptyCompletionGuard?.isEmpty() === true && !clientWalkedAway;
     emptyCompletionPreludeLimit ||=

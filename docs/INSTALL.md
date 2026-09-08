@@ -82,13 +82,21 @@ Windows the matching options are `-WithTray` and `-NoTray`.
 
 On macOS one `Codex Router.app` bundle is placed in `~/Applications`. It keeps
 the Swift-native menu-bar tray and embeds the Electron Control Center, so the
-build needs the Swift toolchain plus the Node runtime the router already
-requires; a missing toolchain skips the step with guidance instead of failing
-setup. Opening the app shows the Control Center, while a supervised login start
-keeps only the native tray visible. On Windows the packaged Electron Control
-Center owns both the native tray and the full window and is registered as the
-single `Codex Router Tray` logon task. Linux uses the same packaged Control
-Center and native Electron tray. Neither platform requires Rust.
+build needs the full Xcode app plus the Node runtime the router already
+requires. The standalone Command Line Tools are insufficient for the SwiftUI
+macro plug-ins used by recent macOS SDKs and do not provide the `xcodebuild`
+needed by the WidgetKit extension. The build honors `DEVELOPER_DIR` and the
+Xcode selected under **Xcode → Settings → Locations → Command Line Tools**. If
+that selection names the standalone tools, a standard
+`/Applications/Xcode.app` or `/Applications/Xcode-beta.app` is used for this
+build only; nonstandard installations can be selected with `DEVELOPER_DIR`.
+A missing full Xcode installation skips the companion with guidance instead of
+failing the already-installed router. Opening the app shows the Control Center,
+while a supervised login start keeps only the native tray visible. On Windows
+the packaged Electron Control Center owns both the native tray and the full
+window and is registered as the single `Codex Router Tray` logon task. Linux
+uses the same packaged Control Center and native Electron tray. Neither
+platform requires Rust.
 Guided setup walks through numbered steps: a provider list you toggle by
 number (`a` selects all, `n` clears, Enter continues) with a live
 ready/needs-key/needs-sign-in status per provider, credential onboarding for
@@ -144,7 +152,14 @@ CLI inference proxy. The separate `grok-api` provider continues to use a
 separately billed xAI API key.
 
 Antigravity OAuth uses a router-managed browser sign-in; it does not require a
-Gemini API key or a separate CLI. Sign in, run the explicit live compatibility
+Gemini API key or a separate CLI. **The Google Cloud project behind your OAuth
+client must be allowlisted for `cloudcode-pa.googleapis.com`, a private Google
+API.** Most projects are not allowlisted, and you cannot enable this API
+yourself: it requires the producer-side `servicemanagement.services.bind`
+permission, so `gcloud services enable` fails even for the project owner.
+Sign-in will succeed, but the live probe will fail with `SERVICE_DISABLED` if
+your project is not allowlisted. If your project is not allowlisted, this
+provider cannot currently be used. Sign in, run the explicit live compatibility
 probe, then enable the provider; these commands do not replace or disable any
 other provider already selected.
 

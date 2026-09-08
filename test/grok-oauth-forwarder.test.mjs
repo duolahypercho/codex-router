@@ -68,6 +68,17 @@ async function waitHealth(base, child) {
   throw new Error(`health timeout: ${child.testErrors()}`);
 }
 
+async function waitChildError(child, pattern, timeoutMs = 2_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const errors = child.testErrors();
+    if (pattern.test(errors)) return errors;
+    if (child.exitCode !== null) throw new Error(`exited before log marker: ${errors}`);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error(`stderr marker timeout: ${child.testErrors()}`);
+}
+
 async function stop(child) {
   if (child.exitCode !== null) return;
   child.kill("SIGTERM");
@@ -328,6 +339,10 @@ test("emits one terminal SSE error when the upstream stream fails mid-turn", asy
     assert.equal((result.body.match(/event: error/g) || []).length, 1);
     assert.match(result.body, /local_router_stream_failed/);
     assert.doesNotMatch(result.body, /data: \[DONE\]/);
+    assert.match(
+      child.testErrors(),
+      /upstream-phase-failed=true phase=attempt model=grok-4\.6 attempt_req=[0-9a-f-]{36} attempt_headers_ms=\d+ attempt_first_event_ms=\d+ attempt_total_ms=\d+ error=(?:TypeError|AbortError)/,
+    );
   } finally {
     await stop(child);
     await new Promise((r) => backend.server.close(r));
@@ -1180,6 +1195,180 @@ test("a short stop after a tool result is nudged to continue, regardless of word
   }
 });
 
+test("opens a post-tool stream before classification while holding uncertified text", async () => {
+  let inbound = 0;
+  const uncertifiedProgress = "I will inspect the figure next. ".repeat(8);
+  assert.ok(uncertifiedProgress.length > 120);
+  let releaseFirstAttempt;
+  const firstAttemptGate = new Promise((resolve) => {
+    releaseFirstAttempt = resolve;
+  });
+  const backend = await mockBackend(async (_req, res) => {
+    inbound += 1;
+    res.writeHead(200, { "Content-Type": "text/event-stream" });
+    if (inbound === 1) {
+      res.flushHeaders();
+      res.write(
+        sse([
+          { type: "response.reasoning_summary_text.delta", delta: "Checking the tool result." },
+          { type: "response.output_text.delta", delta: uncertifiedProgress },
+        ]),
+      );
+      await firstAttemptGate;
+      res.end(
+        sse([
+          { type: "response.completed", response: { usage: { input_tokens: 150_000, output_tokens: 180 } } },
+        ]),
+      );
+      return;
+    }
+    res.end(
+      sse([
+        { type: "response.reasoning_summary_text.delta", delta: "Certifying the final answer." },
+        {
+          type: "response.output_item.done",
+          item: {
+            type: "function_call",
+            id: "fc_final",
+            call_id: "call_final",
+            name: "__codex_router_submit_final",
+            arguments: JSON.stringify({ answer: "The chart axis is months." }),
+          },
+        },
+        { type: "response.completed", response: { usage: { input_tokens: 151_000, output_tokens: 90 } } },
+      ]),
+    );
+  });
+  const port = await openPort();
+  const dir = mkdtempSync(path.join(os.tmpdir(), "grok-oauth-post-tool-live-"));
+  const child = startForwarder(port, backend.port, writeSession(dir));
+  try {
+    await waitHealth(`http://127.0.0.1:${port}`, child);
+    let responseTimeout;
+    const resp = await Promise.race([
+      fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+        method: "POST",
+        headers: auth,
+        body: JSON.stringify({
+          model: "grok-4.6",
+          messages: [
+            { role: "assistant", tool_calls: [{ id: "c1", type: "function", function: { name: "exec_command", arguments: "{}" } }] },
+            { role: "tool", tool_call_id: "c1", content: "rendered page" },
+          ],
+          tools: [{ type: "function", function: { name: "view_image", parameters: { type: "object" } } }],
+          stream: true,
+        }),
+      }),
+      new Promise((_, reject) => {
+        responseTimeout = setTimeout(
+          () => reject(new Error("post-tool response head stayed buffered")),
+          2_000,
+        );
+      }),
+    ]);
+    clearTimeout(responseTimeout);
+    assert.equal(resp.status, 200);
+
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let body = "";
+    let reasoningTimeout;
+    await Promise.race([
+      (async () => {
+        while (!body.includes("Checking the tool result.")) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          body += decoder.decode(value, { stream: true });
+        }
+      })(),
+      new Promise((_, reject) => {
+        reasoningTimeout = setTimeout(
+          () => reject(new Error("post-tool reasoning stayed buffered")),
+          2_000,
+        );
+      }),
+    ]);
+    clearTimeout(reasoningTimeout);
+    assert.match(body, /"role":"assistant"/);
+    assert.match(body, /"reasoning_content":"Checking the tool result\."/);
+    assert.doesNotMatch(body, /I will inspect the figure next/);
+
+    releaseFirstAttempt();
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      body += decoder.decode(value, { stream: true });
+    }
+    assert.equal(inbound, 2);
+    assert.doesNotMatch(body, /I will inspect the figure next/);
+    assert.match(body, /"reasoning_content":"Certifying the final answer\."/);
+    assert.match(body, /"content":"The chart axis is months\."/);
+    assert.doesNotMatch(body, /__codex_router_submit_final/);
+    assert.match(body, /data: \[DONE\]/);
+    await waitChildError(
+      child,
+      /progress-only-retried=true retries=1 model=grok-4\.6 prefer=final attempt_req=[0-9a-f-]{36} attempt_headers_ms=\d+ attempt_first_event_ms=\d+ attempt_total_ms=\d+ repair_req=[0-9a-f-]{36} repair_headers_ms=\d+ repair_first_event_ms=\d+ repair_total_ms=\d+/,
+    );
+  } finally {
+    releaseFirstAttempt?.();
+    await stop(child);
+    await new Promise((r) => backend.server.close(r));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a streamed post-tool repair exposes reasoning and only the certified tool call", async () => {
+  let inbound = 0;
+  const backend = await mockBackend(async (_req, res) => {
+    inbound += 1;
+    res.writeHead(200, { "Content-Type": "text/event-stream" });
+    res.end(
+      sse(
+        inbound === 1
+          ? [
+              { type: "response.output_text.delta", delta: "I will inspect the figure next." },
+              { type: "response.completed", response: { usage: { input_tokens: 150_000, output_tokens: 180 } } },
+            ]
+          : [
+              { type: "response.reasoning_summary_text.delta", delta: "Selecting the next tool." },
+              ...TOOL_EVENTS,
+            ],
+      ),
+    );
+  });
+  const port = await openPort();
+  const dir = mkdtempSync(path.join(os.tmpdir(), "grok-oauth-post-tool-live-call-"));
+  const child = startForwarder(port, backend.port, writeSession(dir));
+  try {
+    await waitHealth(`http://127.0.0.1:${port}`, child);
+    const resp = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({
+        model: "grok-4.6",
+        messages: [
+          { role: "assistant", tool_calls: [{ id: "c1", type: "function", function: { name: "exec_command", arguments: "{}" } }] },
+          { role: "tool", tool_call_id: "c1", content: "rendered page" },
+        ],
+        tools: [{ type: "function", function: { name: "exec_command", parameters: { type: "object" } } }],
+        stream: true,
+      }),
+    });
+    const body = await readAll(resp);
+    assert.equal(resp.status, 200);
+    assert.equal(inbound, 2);
+    assert.doesNotMatch(body, /I will inspect the figure next/);
+    assert.match(body, /"reasoning_content":"Selecting the next tool\."/);
+    assert.match(body, /"name":"exec_command"/);
+    assert.match(body, /"finish_reason":"tool_calls"/);
+    assert.match(body, /data: \[DONE\]/);
+  } finally {
+    await stop(child);
+    await new Promise((r) => backend.server.close(r));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("after-tool retry returns a certified final answer without leaking the internal tool", async () => {
   let inbound = 0;
   const backend = await mockBackend(async (_req, res) => {
@@ -1241,7 +1430,7 @@ test("after-tool retry returns a certified final answer without leaking the inte
   }
 });
 
-test("double-empty after a tool result is an explicit 502, never a clean stop", async () => {
+test("double-empty after a tool result is an explicit terminal error, never a clean stop", async () => {
   let inbound = 0;
   const backend = await mockBackend(async (_req, res) => {
     inbound += 1;
@@ -1274,10 +1463,18 @@ test("double-empty after a tool result is an explicit 502, never a clean stop", 
         }),
       });
       const body = await resp.text();
-      assert.equal(resp.status, 502);
       assert.equal(inbound, 2);
-      assert.match(body, /progress_only_unrepairable/);
-      assert.doesNotMatch(body, /finish_reason|\[DONE\]/);
+      if (stream) {
+        assert.equal(resp.status, 200);
+        assert.equal((body.match(/event: error/g) || []).length, 1);
+        assert.match(body, /local_router_stream_failed/);
+        assert.match(body, /Grok stopped after a tool result/);
+        assert.doesNotMatch(body, /"finish_reason":"(?:stop|tool_calls)"|\[DONE\]/);
+      } else {
+        assert.equal(resp.status, 502);
+        assert.match(body, /progress_only_unrepairable/);
+        assert.doesNotMatch(body, /finish_reason|\[DONE\]/);
+      }
     }
   } finally {
     await stop(child);

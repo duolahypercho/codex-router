@@ -23,9 +23,15 @@ import {
   resolveProviderBaseUrl,
 } from "./model-registry.mjs";
 import { curatedModelBlockReason } from "./opencode-curation.mjs";
+import {
+  OPENCODE_SESSION_FALLBACKS,
+  applyOpenCodeSessionHeaders,
+  isOpenCodeProvider,
+} from "./opencode-session.mjs";
 import { providerCatalogRouteIds } from "./provider-catalogs.mjs";
 import { readUserModels } from "./user-models.mjs";
 import { credentialStatus, resolveProviderCredential } from "./provider-credentials.mjs";
+import { VERSION } from "./version.mjs";
 import {
   fetchUntrustedModelCatalog,
   validateModelCatalogPayload,
@@ -308,6 +314,13 @@ async function providerPayload(provider, identity) {
     headers = {
       ...githubCopilotCatalogHeaders(session.token),
     };
+  }
+  if (isOpenCodeProvider(provider)) {
+    headers["User-Agent"] = `codex-router/${VERSION}`;
+    applyOpenCodeSessionHeaders(headers, {
+      provider,
+      fallback: OPENCODE_SESSION_FALLBACKS.discovery,
+    });
   }
   return fetchUntrustedModelCatalog(`${baseUrl}/models`, {
     headers,

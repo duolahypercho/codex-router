@@ -84,6 +84,7 @@ export function recordUsageEvent({
   cachedInputTokens,
   outputTokens,
   billedOutputTokens,
+  reasoningTokens,
   totalTokens,
   retries,
   // True when the upstream stream died after its 200 head was already
@@ -217,6 +218,9 @@ export function recordUsageEvent({
       : {}),
     ...(safeTokenCount(billedOutputTokens) !== undefined
       ? { billedOutputTokens: safeTokenCount(billedOutputTokens) }
+      : {}),
+    ...(safeTokenCount(reasoningTokens) !== undefined
+      ? { reasoningTokens: safeTokenCount(reasoningTokens) }
       : {}),
     ...(safeTokenCount(totalTokens) !== undefined
       ? { totalTokens: safeTokenCount(totalTokens) }
@@ -407,7 +411,15 @@ function lineOlderThan(line, cutoffIso) {
   return at < cutoffIso;
 }
 
-export function recentUsageEvents({ sinceMs = 24 * 60 * 60 * 1000, limit = 1_000 } = {}) {
+// The cap a caller gets when it does not choose one. Exported so a consumer
+// that reads the window once and derives several views from it can apply the
+// same bound without restating the number.
+export const RECENT_USAGE_EVENT_LIMIT = 1_000;
+
+export function recentUsageEvents({
+  sinceMs = 24 * 60 * 60 * 1000,
+  limit = RECENT_USAGE_EVENT_LIMIT,
+} = {}) {
   if (!existsSync(USAGE_EVENTS_PATH)) return [];
   const cutoff = Date.now() - sinceMs;
   let cutoffIso = "";
@@ -452,6 +464,7 @@ export function recentUsageEvents({ sinceMs = 24 * 60 * 60 * 1000, limit = 1_000
         const cachedInputTokens = safeTokenCount(event.cachedInputTokens);
         const outputTokens = safeTokenCount(event.outputTokens);
         const billedOutputTokens = safeTokenCount(event.billedOutputTokens);
+        const reasoningTokens = safeTokenCount(event.reasoningTokens);
         const totalTokens = safeTokenCount(event.totalTokens);
         const retries = safeRetryCount(event.retries);
         const estimatedInputTokens = safeTokenCount(event.estimatedInputTokens);
@@ -509,6 +522,7 @@ export function recentUsageEvents({ sinceMs = 24 * 60 * 60 * 1000, limit = 1_000
           ...(cachedInputTokens !== undefined ? { cachedInputTokens } : {}),
           ...(outputTokens !== undefined ? { outputTokens } : {}),
           ...(billedOutputTokens !== undefined ? { billedOutputTokens } : {}),
+          ...(reasoningTokens !== undefined ? { reasoningTokens } : {}),
           ...(totalTokens !== undefined ? { totalTokens } : {}),
           ...(estimatedInputTokens !== undefined ? { estimatedInputTokens } : {}),
           ...(toolResultsAged ? { toolResultsAged } : {}),
@@ -523,6 +537,101 @@ export function recentUsageEvents({ sinceMs = 24 * 60 * 60 * 1000, limit = 1_000
   } catch {
     return [];
   }
+}
+
+// The Control Center's hourly traffic chart was built entirely from
+// recentUsageEvents(), whose default cap is 1,000 rows. An ordinary busy day is
+// many times that -- 9,000 events in 24 hours is routine -- so the most recent
+// 1,000 covered under two hours: twenty-two of the twenty-four bars were drawn
+// empty, and the caption reported that truncated sum as the day's total while
+// the summary tile beside it added up every provider row. Aggregate the whole
+// window here and ship 24 small buckets instead. The chart gets an honest shape
+// and a total that agrees with the tile, and the payload stays bounded however
+// busy the router was.
+export const HOURLY_USAGE_ROLLUP_HOURS = 24;
+
+// Both helpers mirror the renderer's tokenCountFromEvent/trafficPartsFromEvent
+// exactly, including the billed-over-raw preference and the cached-share clamp.
+// recentUsageEvents() omits an absent count rather than writing a zero, so an
+// unreported field stays distinguishable from a measured zero.
+function rollupTokenCount(event) {
+  if (event.totalTokens !== undefined) return event.totalTokens;
+  const input = event.billedInputTokens ?? event.inputTokens;
+  const output = event.billedOutputTokens ?? event.outputTokens;
+  if (input === undefined && output === undefined) return undefined;
+  return (input ?? 0) + (output ?? 0);
+}
+
+function rollupTokenParts(event) {
+  const input = event.billedInputTokens ?? event.inputTokens;
+  const cached = event.cachedInputTokens;
+  const output = event.billedOutputTokens ?? event.outputTokens;
+  if (input === undefined && cached === undefined && output === undefined) return undefined;
+  const inputTokens = input ?? 0;
+  const cachedInputTokens = input === undefined
+    ? cached ?? 0
+    : Math.min(inputTokens, cached ?? 0);
+  return {
+    regularInputTokens: Math.max(0, inputTokens - cachedInputTokens),
+    cachedInputTokens,
+    outputTokens: output ?? 0,
+  };
+}
+
+export function hourlyUsageRollup({
+  hours = HOURLY_USAGE_ROLLUP_HOURS,
+  now = Date.now(),
+  readEvents = recentUsageEvents,
+} = {}) {
+  const span = Math.max(1, Math.min(24 * 31, Math.floor(hours) || 0));
+  // Keep clock-hour labels, but cover the exact rolling window. When `now`
+  // sits between hour boundaries, the window touches both an oldest partial
+  // hour and the current partial hour, so it can span `hours + 1` clock buckets.
+  const windowStart = now - span * HOUR_MS;
+  const firstAnchor = new Date(windowStart);
+  firstAnchor.setMinutes(0, 0, 0);
+  const lastAnchor = new Date(now);
+  lastAnchor.setMinutes(0, 0, 0);
+  const first = firstAnchor.getTime();
+  const lastHour = lastAnchor.getTime();
+  const lastBucket = now === lastHour ? lastHour - HOUR_MS : lastHour;
+  const bucketCount = Math.floor((lastBucket - first) / HOUR_MS) + 1;
+  const buckets = Array.from({ length: bucketCount }, (_, index) => ({
+    startedAt: new Date(first + index * HOUR_MS).toISOString(),
+    tokens: 0,
+    requests: 0,
+    measuredTokens: false,
+    regularInputTokens: 0,
+    cachedInputTokens: 0,
+    outputTokens: 0,
+    measuredBreakdown: false,
+  }));
+  // Reading the whole window is the point: the cap this replaces is the defect.
+  const events = readEvents({
+    sinceMs: Math.max(HOUR_MS, now - first),
+    limit: Number.POSITIVE_INFINITY,
+  });
+  for (const event of events) {
+    const at = Date.parse(event?.at);
+    if (!Number.isFinite(at) || at < windowStart || at >= now) continue;
+    const index = Math.floor((at - first) / HOUR_MS);
+    if (index < 0 || index >= buckets.length) continue;
+    const bucket = buckets[index];
+    bucket.requests += 1;
+    const tokens = rollupTokenCount(event);
+    if (tokens !== undefined) {
+      bucket.tokens += tokens;
+      bucket.measuredTokens = true;
+    }
+    const parts = rollupTokenParts(event);
+    if (parts) {
+      bucket.regularInputTokens += parts.regularInputTokens;
+      bucket.cachedInputTokens += parts.cachedInputTokens;
+      bucket.outputTokens += parts.outputTokens;
+      bucket.measuredBreakdown = true;
+    }
+  }
+  return buckets;
 }
 
 // The append-only ledger is the source of truth for "everything this router

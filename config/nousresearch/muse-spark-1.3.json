@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "slug": "nousresearch/muse-spark-1.3",
+      "gatewayModel": "nousresearch-muse-spark-1-3",
+      "upstreamModel": "meta/muse-spark-1.3",
+      "provider": "nousresearch",
+      "listed": true,
+      "displayName": "Muse Spark 1.3 (Nous Research)",
+      "description": "Meta Muse Spark 1.3 through the Nous Portal.",
+      "priority": 73,
+      "defaultEffort": "high",
+      "reasoningLevels": [
+        {
+          "effort": "minimal",
+          "description": "Minimal reasoning"
+        },
+        {
+          "effort": "low",
+          "description": "Faster reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced reasoning"
+        },
+        {
+          "effort": "high",
+          "description": "Deep reasoning"
+        },
+        {
+          "effort": "xhigh",
+          "description": "Extra deep reasoning"
+        }
+      ],
+      "contextWindow": 1048576,
+      "autoCompact": 943000,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "requestProfile": "auto-tool-choice",
+      "compHash": "nousresearch-muse-spark-1-3-v3"
+    }
+  ]
+}

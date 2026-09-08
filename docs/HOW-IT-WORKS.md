@@ -243,6 +243,14 @@ operator can opt in locally only by adding `searchTool` to that exact entry in
 the protected `user-models.json` after verifying the route. The curation CLI
 does not ask for or infer search mode from an upstream catalog claim.
 
+Accepting a completed `web_search_call` in conversation history is a narrower
+input-compatibility capability than executing a new search. A route that has
+been live-tested for history replay may declare `supportsSearchHistory: true`
+without a `searchTool`; this keeps new search unavailable while allowing that
+route to continue or compact an existing searched conversation. The flag is
+false by default and, like `searchTool`, belongs to the exact model/provider
+route rather than to an OpenAI-compatible protocol family.
+
 ### Per-model search sidecar
 
 A model without `searchTool` can be opted into the Perplexity Search sidecar.
@@ -355,6 +363,21 @@ external model. Ordinary routed prompts do not use this relay.
 The relay requires an active ChatGPT sign-in because only the native Codex
 backend can open its own opaque payload. In login-free mode the router fails
 closed instead of forwarding unreadable ciphertext to an external provider.
+A native relay `429` stays a `429` instead of becoming a gateway-style `502`,
+and the router remembers that exact account-and-ciphertext refusal for 60
+seconds so client retries do not repeatedly hit native quota. A native relay
+`401` likewise stays `401`, with the upstream body removed, so Codex's own
+ChatGPT authentication recovery can refresh the session and retry. The short
+429 backoff stores only the already-hashed cache key and an expiry timestamp;
+other accounts and delegated payloads remain independent. Operators can tune
+the window with `CODEX_ROUTER_AGENT_RELAY_FAILURE_BACKOFF_MS`.
+
+At service startup, the post-health reconciliation checks both native model
+metadata and the router-managed Codex agent definitions. If the native catalog
+is current but a routed `router-model-*.toml` definition is missing, stale,
+unprotected, or left over for a model that is no longer eligible, the installed
+picker is republished to restore the coupled catalog/agent state. An unreadable
+or foreign Codex transport is never repaired speculatively.
 
 Only registry-proven models are advertised as native v2 spawn-agent overrides.
 The Settings tab (desktop panel and macOS tray) exposes two local accordions:

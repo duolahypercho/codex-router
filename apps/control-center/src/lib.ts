@@ -74,14 +74,20 @@ export function remainingPercent(metric: UsageMetric): number | null {
   return null;
 }
 
+// The window has to be walked in UTC days, because that is the day space every
+// bucket key is written in -- the router keys its own buckets that way and
+// OpenAI's account stream reports them that way. Walking local days asked for
+// "the local day of the same name", which east of UTC is a different window
+// than the bucket measured, and left the newest slot with no bucket to match
+// until the offset had elapsed: an account mid-session read as zero all morning.
 export function bucketRange(buckets: UsageBucket[] = [], days: number): UsageBucket[] {
   const index = new Map(buckets.map((bucket) => [bucket.startDate, bucket]));
   const anchor = new Date();
-  anchor.setHours(12, 0, 0, 0);
+  anchor.setUTCHours(12, 0, 0, 0);
   return Array.from({ length: days }, (_, offset) => {
     const date = new Date(anchor);
-    date.setDate(anchor.getDate() - (days - offset - 1));
-    const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+    date.setUTCDate(anchor.getUTCDate() - (days - offset - 1));
+    const key = date.toISOString().slice(0, 10);
     const existing = index.get(key);
     return existing
       ? { ...existing, startDate: key, tokens: Number(existing.tokens) || 0 }

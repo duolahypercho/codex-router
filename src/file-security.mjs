@@ -326,6 +326,62 @@ export async function writePrivateJsonAsync(target, value, { space = 2, director
   return value;
 }
 
+// Ensure a directory and its contents are readable by the Limited-level
+// scheduled task. On Windows, an elevated installer creates directories and
+// files with ACLs that only allow the elevated account to read them. The
+// scheduled task runs at Limited level (issue #548), so it cannot read a
+// checkout created by an elevated shell. This function grants Users read and
+// execute access to the directory tree, so the Limited task can load modules.
+//
+// Only the checkout directory needs this treatment: STATE_DIR files are
+// deliberately owner-only and are never loaded by the task directly.
+export function ensureCheckoutReadable(checkoutPath) {
+  if (process.platform !== "win32") return;
+  // The script grants Users (BUILTIN\Users) ReadAndExecute on the checkout
+  // directory, recursively. This allows the Limited-level task to traverse
+  // directories and read files while keeping write access restricted.
+  const script = [
+    "$ErrorActionPreference = 'Stop'",
+    "try {",
+    "  $path = $env:CODEX_ROUTER_CHECKOUT_PATH",
+    "  $usersId = [Security.Principal.SecurityIdentifier]::new('S-1-5-32-545')",
+    "  $readExecute = [System.Security.AccessControl.FileSystemRights]::ReadAndExecute",
+    "  $containerInherit = [System.Security.AccessControl.InheritanceFlags]::ContainerInherit",
+    "  $objectInherit = [System.Security.AccessControl.InheritanceFlags]::ObjectInherit",
+    "  $propagationNone = [System.Security.AccessControl.PropagationFlags]::None",
+    "  $allow = [System.Security.AccessControl.AccessControlType]::Allow",
+    "  $acl = [System.IO.Directory]::GetAccessControl($path)",
+    "  $rule = [System.Security.AccessControl.FileSystemAccessRule]::new($usersId, $readExecute, ($containerInherit -bor $objectInherit), $propagationNone, $allow)",
+    "  $acl.AddAccessRule($rule)",
+    "  [System.IO.Directory]::SetAccessControl($path, $acl)",
+    "} catch {",
+    "  [Console]::Error.WriteLine($_.Exception.Message)",
+    "  exit 1",
+    "}",
+  ].join("\n");
+  const encoded = Buffer.from(script, "utf16le").toString("base64");
+  try {
+    execFileSync(
+      "powershell.exe",
+      ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded],
+      {
+        env: { ...process.env, CODEX_ROUTER_CHECKOUT_PATH: checkoutPath },
+        stdio: ["ignore", "ignore", "pipe"],
+        timeout: 15_000,
+        windowsHide: true,
+      },
+    );
+  } catch (error) {
+    const detail = String(error?.stderr?.trim?.() || error?.message || "").trim();
+    // This is a best-effort operation: if PowerShell is unavailable or the
+    // ACL cannot be modified, the operator can still fix it manually per the
+    // diagnostic message. Do not fail the install outright.
+    if (detail) {
+      console.warn(`Warning: Could not grant Users read access to checkout: ${detail}`);
+    }
+  }
+}
+
 export function privateFileIsProtected(target) {
   if (!existsSync(target)) return false;
   if (process.platform !== "win32") return (statSync(target).mode & 0o777) === 0o600;
