@@ -143,7 +143,7 @@ export function spawnableCommand(binary, args = [], platform = process.platform)
     escapeWindowsShellCommand(binary),
     ...argumentList.map((argument) => escapeWindowsShellArgument(argument, doubleEscape)),
   ].join(" ");
-  // Use cmd.exe as a bare command name with shell:false instead of reading from process.env.ComSpec
+  // Use cmd.exe as a bare command name instead of reading from process.env.ComSpec
   // This avoids the environment taint while still working regardless of Windows installation drive
   return {
     command: "cmd.exe",
@@ -151,6 +151,6 @@ export function spawnableCommand(binary, args = [], platform = process.platform)
     // quote pair and take the rest verbatim, and verbatim arguments stop Node
     // from re-quoting a line that is already escaped for cmd.exe.
     args: ["/d", "/s", "/c", `"${line}"`],
-    options: { windowsVerbatimArguments: true, shell: false },
+    options: { windowsVerbatimArguments: true },
   };
 }
