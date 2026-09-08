@@ -24,8 +24,16 @@ function writeCodexStub(directory, models, { authenticated = true } = {}) {
 }
 
 function isolatedEnvironment(codexHome, stateDir, launchAgents, codexBin) {
+  // On Windows, include the System32 directory on PATH so cmd.exe can be found
+  // even in isolated test environments with restricted PATH
+  const systemPaths = [];
+  if (process.platform === "win32") {
+    const systemRoot = process.env.SystemRoot || "C:\\Windows";
+    systemPaths.push(path.join(systemRoot, "System32"));
+  }
+  
   return {
-    PATH: path.dirname(process.execPath),
+    PATH: [path.dirname(process.execPath), ...systemPaths].filter(Boolean).join(path.delimiter),
     HOME: codexHome,
     USERPROFILE: codexHome,
     TEMP: codexHome,
