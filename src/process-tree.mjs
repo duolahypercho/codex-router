@@ -518,17 +518,24 @@ export function windowsJobProcessInvocation(
     windowsHide: Boolean(windowsHide),
     windowsVerbatimArguments: Boolean(windowsVerbatimArguments),
   }), "utf8").toString("base64");
-  return {
-    command: windowsPowerShell(environment),
-    args: [
-      "-NoLogo",
-      "-NoProfile",
-      "-NonInteractive",
-      "-ExecutionPolicy", "Bypass",
-      "-File", runner,
-      payload,
-    ],
-  };
+  const powershell = windowsPowerShell(environment);
+  const psArgs = [
+    "-NoLogo",
+    "-NoProfile",
+    "-NonInteractive",
+    "-ExecutionPolicy", "Bypass",
+    "-File", runner,
+    payload,
+  ];
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const pythonw = path.join(here, "..", ".venv", "Scripts", "pythonw.exe");
+  const host = path.join(here, "windows-job-host.pyw");
+  // powershell.exe is a console binary. Spawning it from the Control Center
+  // opens Windows Terminal even with windowsHide. pythonw.exe is GUI-subsystem.
+  if (existsSync(pythonw) && existsSync(host)) {
+    return { command: pythonw, args: [host, powershell, ...psArgs] };
+  }
+  return { command: powershell, args: psArgs };
 }
 
 function processGroupAlive(pid, kill = process.kill) {
@@ -749,7 +756,9 @@ export function runProcessTree(
   const childEnvironment = childSignalBudget === undefined
     ? coordinator.environment
     : { ...coordinator.environment, [OWNER_SIGNAL_BUDGET_ENV]: String(childSignalBudget) };
-  const effectiveWindowsHide = stdio === "inherit" ? false : windowsHide;
+  const effectiveWindowsHide = process.platform === "win32" && !process.stdout.isTTY
+    ? true
+    : stdio === "inherit" ? false : windowsHide;
   return new Promise((resolve, reject) => {
     const invocation = platform === "win32"
       ? windowsJobProcessInvocation(command, args, {

@@ -352,31 +352,32 @@ test("packaged services preserve wrapper and PATH values with service-safe quoti
   }
 });
 
-test("the Windows launcher starts the wrapper hidden and propagates its exit code", () => {
+test("the Windows launcher starts the wrapper without a console and waits for it", () => {
   const testRoot = mkdtempSync(path.join(os.tmpdir(), "codex-router-hidden-launcher-"));
   try {
     const stateDir = windowsStateDir(testRoot);
     assert.ok(stateDir.includes(" "), "the fixture state directory must contain a space");
-    const wrapperPath = path.join(stateDir, "start-codex-router.cmd");
+    const pythonwPath = path.join(root, ".venv", "Scripts", "pythonw.exe");
+    const pythonLauncherPath = path.join(stateDir, "start-codex-router.pyw");
     const script = serviceCommand("service-windows.mjs", "win32", testRoot, "render-launcher");
 
     assert.match(script, /^Option Explicit\r\n/);
+    // pythonw.exe is a GUI-subsystem binary, so Shell.Run does not attach
+    // Windows Terminal. cmd.exe/node.exe are console binaries and would.
+    assert.match(script, /Set fso = CreateObject\("Scripting\.FileSystemObject"\)/);
+    assert.match(script, /FileExists/);
     assert.match(script, /\r\nSet shell = CreateObject\("WScript\.Shell"\)\r\n/);
-    // Window style 0 hides the wrapper's console; True waits for it so that
-    // Run returns the wrapper's exit code instead of returning immediately.
     assert.ok(
       script.includes(
-        `status = shell.Run("cmd.exe /D /C " & quote & quote & "${wrapperPath}" & quote & quote, 0, True)\r\n`,
+        `command = quote & "${pythonwPath}" & quote & " " & quote & "${pythonLauncherPath}" & quote\r\n`,
       ),
-      `launcher did not embed the wrapper path correctly:\n${script}`,
+      `launcher did not embed pythonw and the .pyw path:\n${script}`,
     );
-    // LastTaskResult still needs the real exit code for doctor/readiness.
+    assert.match(script, /status = shell\.Run\(command, 0, True\)/);
     assert.match(script, /\r\nWScript\.Quit status\r\n$/);
-    // A failure to even start the wrapper must also surface as a failure.
     assert.match(script, /\r\nIf Err\.Number <> 0 Then\r\n {2}WScript\.Quit 1\r\nEnd If\r\n/);
+    assert.doesNotMatch(script, /cmd\.exe/);
 
-    // Every generated line must be a valid VBScript statement: string literals
-    // escape a double quote by doubling it, so quotes always come in pairs.
     for (const line of script.split("\r\n")) {
       assert.equal(
         (line.match(/"/g) || []).length % 2,
@@ -408,24 +409,19 @@ test("the Windows scheduled task runs the VBS launcher through wscript.exe", () 
   }
 });
 
-test("Windows installTask registers a minute heartbeat beside logon", () => {
-  // RestartOnFailure does not relaunch after a started action exits (issue #581).
-  // The heartbeat trigger is the supervisor; IgnoreNew drops it while Running.
+test("Windows installTask registers a logon trigger without a minute heartbeat", () => {
   const source = readFileSync(path.join(root, "src", "service-windows.mjs"), "utf8");
   const install = source.slice(
     source.indexOf("function installTask()"),
     source.indexOf("function waitForTaskToStop()"),
   );
   assert.match(install, /New-ScheduledTaskTrigger -AtLogOn/);
-  assert.match(
-    install,
-    /New-ScheduledTaskTrigger -Once -At \(Get-Date\) -RepetitionInterval \(New-TimeSpan -Minutes 1\)/,
-  );
-  assert.match(install, /-Trigger @\(\$logon, \$heartbeat\)/);
+  assert.doesNotMatch(install, /RepetitionInterval \(New-TimeSpan -Minutes 1\)/);
+  assert.match(install, /-Trigger \$logon/);
   assert.match(install, /-MultipleInstances IgnoreNew -StartWhenAvailable/);
 });
 
-test("Windows explicit stop disables heartbeat while start and restart re-enable it", () => {
+test("Windows explicit stop disables the task while start and restart re-enable it", () => {
   const source = readFileSync(path.join(root, "src", "service-windows.mjs"), "utf8");
   assert.match(source, /function setTaskEnabled\(enabled\)/);
   assert.match(
@@ -440,8 +436,9 @@ test("Windows explicit stop disables heartbeat while start and restart re-enable
 
 // Propagating the wrapper exit code keeps LastTaskResult honest for doctor
 // and readiness. It is not what relaunches a dead router: RestartOnFailure
-// only covers actions that fail to start (issue #581). The minute heartbeat
-// trigger in installTask() is the supervisor.
+// only covers actions that fail to start (issue #581). A one-minute heartbeat
+// trigger used to be the supervisor, but IgnoreNew ticks still flashed an
+// empty Windows Terminal window, so install now registers logon only.
 // Nothing off Windows can execute a .vbs, so -- exactly like
 // `install.ps1 parses under powershell.exe` in test/installer-scripts.test.mjs --
 // this is the only place that link is executed rather than reasoned about.
@@ -472,6 +469,7 @@ test(
       mkdirSync(stateDir, { recursive: true });
       const wrapperPath = path.join(stateDir, "start-codex-router.cmd");
       const launcherPath = path.join(stateDir, "start-codex-router-hidden.vbs");
+      const pythonLauncherPath = path.join(stateDir, "start-codex-router.pyw");
 
       // The shipped generator produces the source. Only the encoding is
       // repeated here: `install` is the code path that writes the file, and
@@ -489,6 +487,10 @@ test(
         Buffer.from(source, "utf16le"),
       ]);
       writeFileSync(launcherPath, encoded);
+      writeFileSync(
+        pythonLauncherPath,
+        serviceCommand("service-windows.mjs", "win32", testRoot, "render-python"),
+      );
 
       const report = (host, result, expectation, note) =>
         [
