@@ -22,6 +22,7 @@ import {
   NATIVE_ALIAS_PATH,
   NATIVE_CATALOG_PATH,
   PORTS,
+  SIGNED_PROVIDER_MODE_PATH,
 } from "./paths.mjs";
 import {
   codexAuthStatus,
@@ -504,16 +505,42 @@ function selectedModel() {
 // GPT slugs are unusable there even when a ChatGPT credential file exists.
 // Mode toggles pass the desired state via MODEL_ROUTER_LOGIN_FREE because they
 // rebuild the catalog before rewriting the Codex config.
+//
+// Signed routing also sets `model_provider = "codex-router"`. That is not
+// login-free: official GPT slugs must stay on the ChatGPT account.
+export function loginFreeFromSignals({
+  envLoginFree,
+  modelProvider,
+  signedRoutingStatePresent,
+  loginFreeStatePresent,
+}) {
+  if (envLoginFree === "1") return true;
+  if (envLoginFree === "0") return false;
+  if (signedRoutingStatePresent && !loginFreeStatePresent) return false;
+  if (modelProvider === "codex-router") return true;
+  return undefined;
+}
+
 function loginFreeConfigured() {
   const override = process.env.MODEL_ROUTER_LOGIN_FREE;
-  if (override === "1") return true;
-  if (override === "0") return false;
-  if (!existsSync(CONFIG_PATH)) return false;
+  if (!existsSync(CONFIG_PATH)) {
+    const fromSignals = loginFreeFromSignals({
+      envLoginFree: override,
+      modelProvider: undefined,
+      signedRoutingStatePresent: existsSync(SIGNED_PROVIDER_MODE_PATH),
+      loginFreeStatePresent: existsSync(CODEX_PROVIDER_MODE_PATH),
+    });
+    return fromSignals === true;
+  }
   try {
     const document = scanTomlDocument(readFileSync(CONFIG_PATH, "utf8"));
-    if (tomlStringValue(document, [], "model_provider") === "codex-router") {
-      return true;
-    }
+    const fromSignals = loginFreeFromSignals({
+      envLoginFree: override,
+      modelProvider: tomlStringValue(document, [], "model_provider"),
+      signedRoutingStatePresent: existsSync(SIGNED_PROVIDER_MODE_PATH),
+      loginFreeStatePresent: existsSync(CODEX_PROVIDER_MODE_PATH),
+    });
+    if (fromSignals !== undefined) return fromSignals;
     if (!existsSync(CODEX_PROVIDER_MODE_PATH)) return false;
     // Identity-preserving login-free mode deliberately leaves model_provider
     // unchanged, so the root assignment alone can no longer identify it.

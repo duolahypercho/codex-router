@@ -84,7 +84,11 @@ import {
 } from "./model-registry.mjs";
 import { createHealthCache } from "./health-cache.mjs";
 import { discoveryDisabled } from "./discovery-mode.mjs";
-import { readNativeAliases } from "./native-alias.mjs";
+import {
+  isOfficialNativeSlug,
+  officialModelsMustPassthrough,
+  readNativeAliases,
+} from "./native-alias.mjs";
 import { nativeContextVariantBase } from "./native-context-variants.mjs";
 import { readNativeRedirect } from "./native-redirect.mjs";
 import {
@@ -1420,6 +1424,22 @@ async function healthPayload() {
 function routeProviderEnabled(providerId) {
   const provider = RUNTIME_PROVIDERS.get(providerId);
   return provider?.generic === true || readProviderSelection().includes(providerId);
+}
+
+function resolveRegisteredRoute(requestedModel) {
+  const exact = MODEL_BY_SLUG.get(requestedModel);
+  if (exact) return exact;
+  // Signed-in official GPT slugs stay on ChatGPT. Aliases and native-redirect
+  // exist for login-free or exhausted-quota installs; they must not steal a
+  // model the operator selected as official.
+  if (officialModelsMustPassthrough() && isOfficialNativeSlug(requestedModel)) {
+    return undefined;
+  }
+  const aliased = MODEL_BY_SLUG.get(readNativeAliases()[requestedModel]);
+  if (aliased) return aliased;
+  const redirect = MODEL_BY_SLUG.get(readNativeRedirect());
+  if (redirect && routeProviderEnabled(redirect.provider)) return redirect;
+  return undefined;
 }
 
 function messageItem(text) {
@@ -2978,14 +2998,19 @@ async function handleRoutedCompaction(
 }
 
 async function handleModels(response) {
-  const data = catalogModels().map((model) => ({
+  const models = catalogModels();
+  const data = models.map((model) => ({
     id: model.slug,
     object: "model",
     owned_by: MODEL_BY_SLUG.has(model.slug)
       ? providerForModel(MODEL_BY_SLUG.get(model.slug)).ownedBy
       : "openai",
   }));
-  writeJson(response, 200, { object: "list", data });
+  // OpenAI-compatible clients read `data`; Codex 0.153.4's custom-provider
+  // discovery reads its native account-catalog shape from the same endpoint.
+  // Keep both views in one response so selecting the signed router provider
+  // does not trade request compatibility for a model-refresh decode error.
+  writeJson(response, 200, { object: "list", data, models });
 }
 
 // What the Gemini surface will accept a turn for.
@@ -3770,21 +3795,7 @@ async function handleResponses(request, response, requestUrl) {
     let payload = await parseBodyAsync(body);
     controller.signal.throwIfAborted();
     requestedModel = typeof payload.model === "string" ? payload.model : "";
-    let registeredRoute =
-      MODEL_BY_SLUG.get(requestedModel) ??
-      MODEL_BY_SLUG.get(readNativeAliases()[requestedModel]);
-    // An unregistered model on this endpoint is native GPT traffic -- Codex's
-    // background agent sessions arrive here hardwired to a native slug no
-    // matter which model the user picked. With the redirect opted in, send
-    // them to the configured routed model; a target that is unknown or whose
-    // provider is hidden leaves the turn native rather than trading a quota
-    // failure for a routing error.
-    if (!registeredRoute && requestedModel) {
-      const redirect = MODEL_BY_SLUG.get(readNativeRedirect());
-      if (redirect && routeProviderEnabled(redirect.provider)) {
-        registeredRoute = redirect;
-      }
-    }
+    let registeredRoute = resolveRegisteredRoute(requestedModel);
     route = registeredRoute && routeProviderEnabled(registeredRoute.provider)
       ? registeredRoute
       : undefined;
@@ -4007,12 +4018,18 @@ async function handleResponses(request, response, requestUrl) {
       if (variantBase) native.model = variantBase;
       normalizeNativePromptCacheCompatibility(native);
       if (Array.isArray(payload.input)) {
+        // Official ChatGPT turns are stateless on this hop. A mixed thread can
+        // still carry `rs_` ids from a private/Grok turn (`encrypted_content`
+        // null). Looking those up returns 404: "Items are not persisted when
+        // store is set to false." Signed-in official passthrough therefore uses
+        // the same provenance cleanup as a substituted caller, except V1
+        // compact which still has a stored-reference contract.
+        const officialPassthrough =
+          officialModelsMustPassthrough() && isOfficialNativeSlug(requestedModel);
+        const statelessNative = substitutedCaller || officialPassthrough;
         native.input = normalizeNativeInput(payload.input, {
-          // Every substituted caller needs provenance-safe full reasoning.
-          // V1 compaction alone has a stored-reference contract, so it keeps
-          // bare rs_ references while ordinary/V2 stateless replay drops them.
-          statelessReasoning: substitutedCaller,
-          dropUnstoredReasoningReferences: substitutedCaller && !compactV1,
+          statelessReasoning: statelessNative,
+          dropUnstoredReasoningReferences: statelessNative && !compactV1,
         });
         // Native turns leave here as stateless full conversations (the
         // previous_response_id below is stripped), so an old tool result costs

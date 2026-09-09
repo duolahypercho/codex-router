@@ -2104,10 +2104,105 @@ test("signed routing restores an originally unset provider", () => {
   const configPath = path.join(codexHome, "config.toml");
   writeFileSync(configPath, 'model = "gpt-5.6-sol"\n', { mode: 0o600 });
   try {
-    run("signed-enable", codexHome, stateDir);
-    assert.doesNotMatch(readFileSync(configPath, "utf8"), /^model_provider\s*=/m);
+    const enabled = run("signed-enable", codexHome, stateDir);
+    assert.equal(enabled.model_provider, "codex-router");
+    assert.equal(enabled.signed_routing, true);
+    assert.equal(enabled.login_free, false);
+    const configured = readFileSync(configPath, "utf8");
+    assert.match(configured, /^model_provider = "codex-router"$/m);
+    assert.match(configured, /^requires_openai_auth = true$/m);
+    assert.doesNotMatch(configured, /caller-key-auth-command\.mjs/);
+    const state = JSON.parse(
+      readFileSync(path.join(stateDir, "signed-provider-mode.json"), "utf8"),
+    );
+    assert.equal(state.version, 4);
+    assert.equal(state.mode, "provider-switch");
+    assert.equal(state.previousProviderPresent, false);
+
     run("signed-disable", codexHome, stateDir);
     assert.doesNotMatch(readFileSync(configPath, "utf8"), /^model_provider\s*=/m);
+  } finally {
+    rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
+test("signed routing keeps ChatGPT auth while routing an explicit openai provider", () => {
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), "codex-router-signed-openai-"));
+  const stateDir = path.join(codexHome, "router-state");
+  const configPath = path.join(codexHome, "config.toml");
+  const original = `model = "private/gpt-6-astra"
+model_provider = "openai"
+`;
+  writeFileSync(configPath, original, { mode: 0o600 });
+
+  try {
+    run("enable", codexHome, stateDir);
+    const routerBaseline = readFileSync(configPath, "utf8");
+    const enabled = run("signed-enable", codexHome, stateDir);
+    assert.equal(enabled.model_provider, "codex-router");
+    assert.equal(enabled.signed_routing, true);
+    assert.equal(enabled.signed_routing_managed, true);
+    assert.equal(enabled.login_free, false);
+    let active = readFileSync(configPath, "utf8");
+    assert.match(active, /^model_provider = "codex-router"$/m);
+    assert.match(active, /^requires_openai_auth = true$/m);
+    assert.doesNotMatch(active, /caller-key-auth-command\.mjs/);
+
+    const state = JSON.parse(
+      readFileSync(path.join(stateDir, "signed-provider-mode.json"), "utf8"),
+    );
+    assert.equal(state.version, 4);
+    assert.equal(state.mode, "provider-switch");
+    assert.equal(state.previousProviderPresent, true);
+    assert.equal(state.previousModelProvider, "openai");
+    assert.equal(privateFileIsProtected(path.join(stateDir, "signed-provider-mode.json")), true);
+
+    const updated = run("enable", codexHome, stateDir);
+    assert.equal(updated.model_provider, "codex-router");
+    assert.equal(updated.signed_routing_managed, true);
+    active = readFileSync(configPath, "utf8");
+    assert.equal((active.match(/^model_provider = "codex-router"$/gm) || []).length, 1);
+    assert.equal(
+      JSON.parse(readFileSync(path.join(stateDir, "signed-provider-mode.json"), "utf8")).version,
+      4,
+    );
+
+    const disabled = run("signed-disable", codexHome, stateDir);
+    assert.equal(disabled.model_provider, "openai");
+    assert.equal(disabled.signed_provider_state_present, false);
+    const restored = readFileSync(configPath, "utf8");
+    assert.match(restored, /^model = "private\/gpt-6-astra"$/m);
+    assert.match(restored, /^model_provider = "openai"$/m);
+    assert.match(restored, /# BEGIN codex-router-managed/);
+    assert.match(restored, /# BEGIN codex-router-provider-managed/);
+    assert.doesNotMatch(restored, /codex-router-signed-provider-managed/);
+    assert.equal(
+      restored.replace(/\s+/g, " ").trim(),
+      routerBaseline.replace(/\s+/g, " ").trim(),
+    );
+  } finally {
+    rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
+test("signed routing refuses to overwrite root-provider ownership drift", () => {
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), "codex-router-signed-root-drift-"));
+  const stateDir = path.join(codexHome, "router-state");
+  const configPath = path.join(codexHome, "config.toml");
+  writeFileSync(configPath, 'model_provider = "openai"\n', { mode: 0o600 });
+
+  try {
+    run("signed-enable", codexHome, stateDir);
+    const drifted = readFileSync(configPath, "utf8").replace(
+      /^model_provider = "codex-router"$/m,
+      'model_provider = "custom"',
+    );
+    writeFileSync(configPath, drifted, { mode: 0o600 });
+    assert.throws(
+      () => run("signed-disable", codexHome, stateDir),
+      /lost ownership to model_provider custom/i,
+    );
+    assert.equal(readFileSync(configPath, "utf8"), drifted);
   } finally {
     rmSync(codexHome, { recursive: true, force: true });
   }

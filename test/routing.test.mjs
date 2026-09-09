@@ -276,6 +276,17 @@ test("router requires the configured path capability before any model route", as
   try {
     await waitFor(`${routerBase(routerPort)}/models`, router);
 
+    const modelResponse = await fetch(`${routerBase(routerPort)}/models`);
+    assert.equal(modelResponse.status, 200);
+    const modelCatalog = await modelResponse.json();
+    assert.equal(modelCatalog.object, "list");
+    assert.ok(Array.isArray(modelCatalog.data));
+    assert.ok(Array.isArray(modelCatalog.models));
+    assert.deepEqual(
+      modelCatalog.data.map((model) => model.id),
+      modelCatalog.models.map((model) => model.slug),
+    );
+
     const oldRoute = await fetch(`http://127.0.0.1:${routerPort}/v1/responses`, {
       method: "POST",
       headers: {
@@ -7591,6 +7602,138 @@ test("native redirect falls back to native when the target cannot route", async 
     });
     assert.equal(response.status, 200);
     assert.equal(nativeRequests.at(-1).model, "gpt-5.6-luna");
+  } finally {
+    await stopChild(router);
+    await closeServer(native.server);
+    rmSync(testRoot, { recursive: true, force: true });
+  }
+});
+
+test("signed routing keeps official slugs off aliases and native redirect", async () => {
+  const nativeRequests = [];
+  const native = await mockServer(async (request, response) => {
+    nativeRequests.push(await bodyJson(request));
+    json(response, 200, { route: "native" });
+  });
+  const gatewayRequests = [];
+  const gateway = await mockServer(async (request, response) => {
+    gatewayRequests.push(await bodyJson(request));
+    json(response, 200, { route: "external" });
+  });
+  const routerPort = await openPort();
+  const testRoot = mkdtempSync(path.join(os.tmpdir(), "codex-router-official-passthrough-"));
+  const stateDir = path.join(testRoot, "state");
+  mkdirSync(stateDir, { recursive: true });
+  writeFileSync(
+    path.join(stateDir, "signed-provider-mode.json"),
+    `${JSON.stringify({ version: 4, mode: "provider-switch" })}\n`,
+  );
+  writeFileSync(
+    path.join(stateDir, "native-aliases.json"),
+    `${JSON.stringify({ version: 1, aliases: { "gpt-5.6-sol": "grok-oauth/grok-4.6" } })}\n`,
+  );
+  writeFileSync(
+    path.join(stateDir, "native-redirect.json"),
+    `${JSON.stringify({ version: 1, model: "kimi-oauth/k3" })}\n`,
+  );
+  const router = run("router.mjs", {
+    CODEX_ROUTER_PORT: String(routerPort),
+    CODEX_NATIVE_BASE_URL: `http://127.0.0.1:${native.port}/backend-api/codex`,
+    CODEX_ROUTER_GATEWAY_BASE_URL: `http://127.0.0.1:${gateway.port}/v1`,
+    CODEX_ROUTER_STATE_DIR: stateDir,
+    CODEX_ROUTER_QUIET: "1",
+  });
+
+  try {
+    await waitFor(`${routerBase(routerPort)}/models`, router);
+    const response = await fetch(`${routerBase(routerPort)}/responses`, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer CODEX_CALLER_SECRET",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ model: "gpt-5.6-sol", input: "official turn" }),
+    });
+    assert.equal(response.status, 200);
+    assert.equal(gatewayRequests.length, 0);
+    assert.equal(nativeRequests.at(-1).model, "gpt-5.6-sol");
+  } finally {
+    await stopChild(router);
+    await closeServer(native.server);
+    await closeServer(gateway.server);
+    rmSync(testRoot, { recursive: true, force: true });
+  }
+});
+
+test("official passthrough drops unstored private rs_ ids before ChatGPT compact", async () => {
+  const nativeRequests = [];
+  const native = await mockServer(async (request, response) => {
+    nativeRequests.push({ url: request.url, body: await bodyJson(request) });
+    json(response, 200, { route: "native" });
+  });
+  const testRoot = mkdtempSync(path.join(os.tmpdir(), "codex-router-official-rs-drop-"));
+  const stateDir = path.join(testRoot, "state");
+  mkdirSync(stateDir, { recursive: true });
+  writeFileSync(
+    path.join(stateDir, "signed-provider-mode.json"),
+    `${JSON.stringify({ version: 4, mode: "provider-switch" })}\n`,
+  );
+  const authPath = path.join(testRoot, "auth.json");
+  writeFileSync(
+    authPath,
+    JSON.stringify({
+      auth_mode: "chatgpt",
+      tokens: {
+        access_token: "test-native-session-token",
+        account_id: "test-native-account",
+      },
+    }),
+    { mode: 0o600 },
+  );
+  const routerPort = await openPort();
+  const router = run("router.mjs", {
+    CODEX_ROUTER_PORT: String(routerPort),
+    CODEX_NATIVE_BASE_URL: `http://127.0.0.1:${native.port}/backend-api/codex`,
+    MODEL_ROUTER_CODEX_AUTH: authPath,
+    MODEL_ROUTER_STATE_DIR: stateDir,
+    CODEX_ROUTER_QUIET: "1",
+  });
+
+  try {
+    await waitFor(`${routerBase(routerPort)}/models`, router);
+    const staleReasoning = {
+      type: "reasoning",
+      id: "rs_1765922398201381146",
+      summary: [{ type: "summary_text", text: "Continue the packaging work." }],
+      content: null,
+      encrypted_content: null,
+    };
+    const response = await fetch(`${routerBase(routerPort)}/responses`, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer test-native-session-token",
+        "chatgpt-account-id": "test-native-account",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "gpt-5.6-sol",
+        input: [
+          staleReasoning,
+          { type: "item_reference", id: "rs_1765922398201381146" },
+          { type: "message", role: "user", content: [{ type: "input_text", text: "start" }] },
+          { type: "compaction_trigger" },
+        ],
+      }),
+    });
+    assert.equal(response.status, 200, await response.text());
+    assert.equal(nativeRequests.at(-1).url, "/backend-api/codex/responses");
+    const sent = nativeRequests.at(-1).body.input;
+    assert.equal(sent.some((item) => item?.id === "rs_1765922398201381146"), false);
+    assert.equal(
+      sent.some((item) => item?.type === "item_reference" && item.id === "rs_1765922398201381146"),
+      false,
+    );
+    assert.deepEqual(sent.at(-1), { type: "compaction_trigger" });
   } finally {
     await stopChild(router);
     await closeServer(native.server);

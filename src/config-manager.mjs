@@ -743,6 +743,10 @@ function signedProviderSlot(state, index) {
   return `${signedProviderSlotPrefix} ${state.ownershipId} ${index}`;
 }
 
+function signedProviderUsesTable(state) {
+  return state.mode === "provider-table" || state.mode === "provider-switch";
+}
+
 function replaceProviderTreeWithManaged(contents, state) {
   const lines = contents.split("\n");
   const ranges = providerTableRanges(contents, state.managedProvider);
@@ -758,7 +762,7 @@ function replaceProviderTreeWithManaged(contents, state) {
         end: range.end,
         text: [
           signedProviderSlot(state, index),
-          ...(state.mode === "provider-table" && index === 0
+          ...(signedProviderUsesTable(state) && index === 0
             ? [blockGenerator(state.managedProvider, state.managedBaseUrl)]
             : []),
         ].join("\n"),
@@ -777,7 +781,7 @@ function replaceProviderTreeWithManaged(contents, state) {
     }
   }
   let next = output.join("\n");
-  if (state.mode === "provider-table" && ranges.length === 0) {
+  if (signedProviderUsesTable(state) && ranges.length === 0) {
     next = `${next.trimEnd()}\n\n${signedProviderSlot(state, 0)}\n${blockGenerator(
       state.managedProvider,
       state.managedBaseUrl,
@@ -811,9 +815,11 @@ function signedProviderBlockIsOwned(contents, state) {
     const actual = range.lines.slice(range.start, range.end).join("\n");
     return managedSignedProviderBlockMatches(actual, state.managedProvider, state.managedBaseUrl);
   }
-  if (state.version !== 3) return false;
+  if (state.version !== 3 && state.version !== 4) return false;
   const sections = state.previousProviderSections;
-  const expectedSlots = state.mode === "provider-table" ? Math.max(1, sections.length) : sections.length;
+  const expectedSlots = signedProviderUsesTable(state)
+    ? Math.max(1, sections.length)
+    : sections.length;
   const lines = contents.split("\n");
   const slots = lines.filter((line) => line.startsWith(`${signedProviderSlotPrefix} `));
   if (
@@ -850,7 +856,7 @@ function restoreSignedProviderTable(contents, state) {
       `Signed routing lost ownership of model_providers.${state.managedProvider}; refusing to replace it.`,
     );
   }
-  if (state.version === 3) {
+  if (state.version === 3 || state.version === 4) {
     let restored = contents;
     for (let index = state.previousProviderSections.length - 1; index >= 1; index -= 1) {
       restored = restored.replace(
@@ -879,6 +885,22 @@ function restoreSignedProviderTable(contents, state) {
     range,
     state.previousProviderTablePresent ? state.previousProviderTable : "",
   );
+}
+
+function restoreSignedRootProvider(contents, state) {
+  if (state.version !== 4) return contents;
+  const { rootLines } = splitRoot(contents);
+  const activeProvider = rootValue(rootLines, "model_provider") || "openai";
+  if (activeProvider !== state.managedProvider) {
+    throw new Error(
+      `Signed routing lost ownership to model_provider ${activeProvider}; refusing to replace it.`,
+    );
+  }
+  return `${replaceRootValue(
+    contents,
+    "model_provider",
+    state.previousProviderPresent ? state.previousModelProvider : undefined,
+  )}\n`;
 }
 
 function managedSignedProviderContents(
@@ -912,6 +934,41 @@ function managedSignedProviderContents(
   return {
     state,
     contents: replaceProviderTreeWithManaged(prepared, state),
+  };
+}
+
+function managedSignedProviderSwitchContents(
+  contents,
+  rootLines,
+  managedBaseUrl,
+  { ownershipId, restoreState } = {},
+) {
+  const managed = managedSignedProviderContents(
+    contents,
+    routerProviderId,
+    managedBaseUrl,
+    { ownershipId },
+  );
+  const previousProviderPresent =
+    restoreState?.previousProviderPresent ?? rootHasValue(rootLines, "model_provider");
+  return {
+    state: {
+      ...managed.state,
+      version: 4,
+      mode: "provider-switch",
+      previousProviderPresent,
+      ...(previousProviderPresent
+        ? {
+            previousModelProvider:
+              restoreState?.previousModelProvider ?? rootValue(rootLines, "model_provider"),
+          }
+        : {}),
+    },
+    contents: `${replaceRootValue(
+      managed.contents,
+      "model_provider",
+      routerProviderId,
+    )}\n`,
   };
 }
 
@@ -1058,7 +1115,21 @@ function readSignedProviderModeState() {
       /^[0-9a-f]{32}$/.test(parsed.ownershipId) &&
       Array.isArray(parsed.previousProviderSections) &&
       parsed.previousProviderSections.every((section) => typeof section === "string");
-    if (!recognizedV1 && !recognizedV2 && !recognizedV3) throw new Error("invalid state");
+    const recognizedV4 =
+      parsed?.version === 4 &&
+      parsed.mode === "provider-switch" &&
+      parsed.managedProvider === routerProviderId &&
+      typeof parsed.managedBaseUrl === "string" &&
+      isManagedRouterBaseUrl(parsed.managedBaseUrl) &&
+      typeof parsed.ownershipId === "string" &&
+      /^[0-9a-f]{32}$/.test(parsed.ownershipId) &&
+      Array.isArray(parsed.previousProviderSections) &&
+      parsed.previousProviderSections.every((section) => typeof section === "string") &&
+      typeof parsed.previousProviderPresent === "boolean" &&
+      (!parsed.previousProviderPresent || typeof parsed.previousModelProvider === "string");
+    if (!recognizedV1 && !recognizedV2 && !recognizedV3 && !recognizedV4) {
+      throw new Error("invalid state");
+    }
     return parsed;
   } catch {
     throw new Error(`Invalid signed router provider state at ${SIGNED_PROVIDER_MODE_PATH}.`);
@@ -1575,14 +1646,23 @@ if (command === "enable") {
         }; refusing to update it.`,
       );
     }
-    const restored = restoreSignedProviderTable(current, signedState);
+    let restored = restoreSignedProviderTable(current, signedState);
+    restored = restoreSignedRootProvider(restored, signedState);
     const enabled = enabledContents(restored);
-    const refreshed = managedSignedProviderContents(
-      enabled,
-      signedState.managedProvider,
-      configuredRouterBaseUrl(),
-      { ownershipId: signedState.ownershipId },
-    );
+    const restoredRootLines = splitRoot(restored).rootLines;
+    const refreshed = signedState.version === 4 || signedState.mode === "root-openai"
+      ? managedSignedProviderSwitchContents(
+          enabled,
+          restoredRootLines,
+          configuredRouterBaseUrl(),
+          { ownershipId: signedState.ownershipId, restoreState: signedState },
+        )
+      : managedSignedProviderContents(
+          enabled,
+          signedState.managedProvider,
+          configuredRouterBaseUrl(),
+          { ownershipId: signedState.ownershipId },
+        );
     next = refreshed.contents;
     pendingSignedProviderModeState = refreshed.state;
   } else if (providerState?.version === 1) {
@@ -1829,15 +1909,24 @@ if (command === "enable") {
         `Signed routing lost ownership while model_provider is ${currentProvider}; turn it off before enabling it again.`,
       );
     }
-    if (state.version === 2) {
-      const restored = restoreSignedProviderTable(current, state);
+    if (state.version === 2 || state.mode === "root-openai") {
+      let restored = restoreSignedProviderTable(current, state);
+      restored = restoreSignedRootProvider(restored, state);
       const enabled = enabledContents(restored);
-      const upgraded = managedSignedProviderContents(
-        enabled,
-        state.managedProvider,
-        configuredRouterBaseUrl(),
-        { ownershipId: state.ownershipId },
-      );
+      const restoredRootLines = splitRoot(restored).rootLines;
+      const upgraded = state.mode === "root-openai"
+        ? managedSignedProviderSwitchContents(
+            enabled,
+            restoredRootLines,
+            configuredRouterBaseUrl(),
+            { ownershipId: state.ownershipId, restoreState: state },
+          )
+        : managedSignedProviderContents(
+            enabled,
+            state.managedProvider,
+            configuredRouterBaseUrl(),
+            { ownershipId: state.ownershipId },
+          );
       next = upgraded.contents;
       pendingSignedProviderModeState = upgraded.state;
     } else {
@@ -1846,7 +1935,9 @@ if (command === "enable") {
   } else {
     const enabled = enabledContents(current);
     const routerBaseUrl = configuredRouterBaseUrl();
-    const managed = managedSignedProviderContents(enabled, currentProvider, routerBaseUrl);
+    const managed = currentProvider === "openai"
+      ? managedSignedProviderSwitchContents(enabled, rootLines, routerBaseUrl)
+      : managedSignedProviderContents(enabled, currentProvider, routerBaseUrl);
     pendingSignedProviderModeState = managed.state;
     next = managed.contents;
   }
@@ -1897,6 +1988,7 @@ if (command === "enable") {
         );
       }
       restored = restoreSignedProviderTable(current, signedState);
+      restored = restoreSignedRootProvider(restored, signedState);
     }
   } else if (state) {
     if (state.version === 1) {
@@ -1947,7 +2039,11 @@ if (command === "enable") {
         "model_provider",
         signedState.previousPresent ? signedState.previousModelProvider : undefined,
       )}\n`;
-    } else if (signedState?.version === 2 || signedState?.version === 3) {
+    } else if (
+      signedState?.version === 2 ||
+      signedState?.version === 3 ||
+      signedState?.version === 4
+    ) {
       const restoredRoot = splitRoot(restored).rootLines;
       const restoredProvider = rootValue(restoredRoot, "model_provider") || "openai";
       if (restoredProvider !== signedState.managedProvider) {
@@ -1956,6 +2052,7 @@ if (command === "enable") {
         );
       }
       restored = restoreSignedProviderTable(restored, signedState);
+      restored = restoreSignedRootProvider(restored, signedState);
     }
     const nativeCatalogContents = restoreNativeCatalog(restored);
     if (nativeCatalogContents) {

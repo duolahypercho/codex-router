@@ -29,6 +29,7 @@ import {
   mergeNativeModel,
   nativeSubagentCertification,
   promoteNativeMultiAgent,
+  loginFreeFromSignals,
   routedCatalogConfigured,
   routedModel,
 } from "../src/catalog.mjs";
@@ -114,6 +115,36 @@ test("signed-in picker overlay cannot hide Codex native base entries", () => {
   assert.deepEqual(
     [...effectivePickerHiddenModels(hidden, native, { loginFree: true })].sort(),
     [...hidden].sort(),
+  );
+});
+
+test("signed routing is not treated as login-free just because the provider id is the router", () => {
+  assert.equal(
+    loginFreeFromSignals({
+      envLoginFree: undefined,
+      modelProvider: "codex-router",
+      signedRoutingStatePresent: true,
+      loginFreeStatePresent: false,
+    }),
+    false,
+  );
+  assert.equal(
+    loginFreeFromSignals({
+      envLoginFree: undefined,
+      modelProvider: "codex-router",
+      signedRoutingStatePresent: false,
+      loginFreeStatePresent: false,
+    }),
+    true,
+  );
+  assert.equal(
+    loginFreeFromSignals({
+      envLoginFree: "0",
+      modelProvider: "codex-router",
+      signedRoutingStatePresent: false,
+      loginFreeStatePresent: false,
+    }),
+    false,
   );
 });
 

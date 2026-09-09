@@ -7,10 +7,14 @@ import test from "node:test";
 const stateDir = mkdtempSync(path.join(os.tmpdir(), "codex-router-alias-"));
 process.env.MODEL_ROUTER_STATE_DIR = stateDir;
 
-const { buildNativeAliasAssignments, nativeAliasFor, readNativeAliases } = await import(
-  "../src/native-alias.mjs"
-);
-const { NATIVE_ALIAS_PATH } = await import("../src/paths.mjs");
+const {
+  buildNativeAliasAssignments,
+  isOfficialNativeSlug,
+  nativeAliasFor,
+  officialModelsMustPassthrough,
+  readNativeAliases,
+} = await import("../src/native-alias.mjs");
+const { NATIVE_ALIAS_PATH, SIGNED_PROVIDER_MODE_PATH } = await import("../src/paths.mjs");
 
 test.after(() => rmSync(stateDir, { recursive: true, force: true }));
 
@@ -65,4 +69,19 @@ test("alias reads see a same-size rewrite made within one clock tick", () => {
   // difference distinguishes the two revisions.
   write("kimi-oauth/k9");
   assert.deepEqual(readNativeAliases(), { "gpt-5.5": "kimi-oauth/k9" });
+});
+
+test("official native slugs are unprefixed GPT ids", () => {
+  assert.equal(isOfficialNativeSlug("gpt-5.6-sol"), true);
+  assert.equal(isOfficialNativeSlug("gpt-5.6-sol-1m"), true);
+  assert.equal(isOfficialNativeSlug("private/gpt-5.6-sol"), false);
+  assert.equal(isOfficialNativeSlug("grok-oauth/grok-4.6"), false);
+});
+
+test("signed routing keeps official models on passthrough", () => {
+  assert.equal(officialModelsMustPassthrough(), false);
+  writeFileSync(SIGNED_PROVIDER_MODE_PATH, `${JSON.stringify({ version: 4, mode: "provider-switch" })}\n`, {
+    mode: 0o600,
+  });
+  assert.equal(officialModelsMustPassthrough(), true);
 });
