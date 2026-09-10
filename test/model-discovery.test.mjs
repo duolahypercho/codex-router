@@ -270,6 +270,7 @@ test("the current OpenCode catalogs remain fully fetchable without preselecting 
 
 test("the checked-in OpenCode Go set matches the official current-model table", () => {
   const documented = [
+    "deepseek-flash",
     "deepseek-v4-flash", "deepseek-v4-flash-vision-exp", "deepseek-v4-pro", "glm-5", "glm-5.1", "glm-5.2", "glm-5.3", "glm-5.3-flash",
     "gpt-5.6-luna", "grok-4.5", "grok-4.6", "hy3", "hy4-preview", "kimi-k2.5", "kimi-k2.6", "kimi-k2.7-code", "kimi-k3", "longcat-2.0",
     "mimo-v2.5", "mimo-v2.5-pro", "minimax-m2.5", "minimax-m2.7", "minimax-m3",
