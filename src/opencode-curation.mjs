@@ -242,6 +242,7 @@ const CURATION_ROUTES = Object.freeze({
       "muse-spark-1.3-contributor",
     ]),
     primaryModels: Object.freeze([
+      "deepseek-flash",
       "deepseek-v4-flash",
       "deepseek-v4-flash-vision-exp",
       "deepseek-v4-pro",

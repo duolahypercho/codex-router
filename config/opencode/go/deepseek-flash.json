@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "slug": "opencode-go/deepseek-flash",
+      "gatewayModel": "opencode-go-deepseek-flash",
+      "upstreamModel": "deepseek-flash",
+      "provider": "opencode-go",
+      "listed": true,
+      "displayName": "DeepSeek V4.1 Flash (opencode Go)",
+      "description": "DeepSeek V4.1 Flash through the opencode Go subscription, with image input and low/high/max reasoning.",
+      "priority": 37,
+      "defaultEffort": "high",
+      "reasoningLevels": [
+        {
+          "effort": "low",
+          "description": "Faster reasoning"
+        },
+        {
+          "effort": "high",
+          "description": "Deep reasoning"
+        },
+        {
+          "effort": "max",
+          "description": "Maximum reasoning depth"
+        }
+      ],
+      "contextWindow": 1000000,
+      "autoCompact": 600000,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "requestProfile": "auto-tool-choice",
+      "compHash": "opencode-go-deepseek-flash-v1"
+    }
+  ]
+}

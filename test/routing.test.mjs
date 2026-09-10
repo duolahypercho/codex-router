@@ -7283,6 +7283,7 @@ test("router normalizes forced tool choices before LiteLLM for auto-tool-choice 
     // LiteLLM does its Responses -> Chat Completions translation after the
     // router, so this must already be auto when it reaches the gateway.
     for (const [slug, gatewayModel] of [
+      ["opencode-go/deepseek-flash", "opencode-go-deepseek-flash"],
       ["ollama-cloud/minimax-m3", "ollama-cloud-minimax-m3"],
       ["commandcode/muse-spark-1.2", "commandcode-muse-spark-1-2"],
       [

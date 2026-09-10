@@ -152,6 +152,7 @@ test("provider registry exposes configured API and OAuth model families", () => 
       "ollama-cloud/kimi-k2.7-code",
       "ollama-cloud/kimi-k3",
       "ollama-cloud/minimax-m3",
+      "opencode-go/deepseek-flash",
       "opencode-go/deepseek-v4-flash-vision-exp",
       "opencode-go/deepseek-v4-flash",
       "opencode-go/deepseek-v4-pro",
