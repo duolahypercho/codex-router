@@ -16,6 +16,14 @@ import deepSeekHarnessLogo from "../assets/clients/deepseek-harness.svg";
 import claudeLogo from "../assets/clients/claude.svg";
 import geminiLogo from "../assets/providers/gemini.svg";
 import openclawLogo from "../assets/clients/openclaw.svg";
+import piLogo from "../assets/clients/pi.svg";
+import ompLogo from "../assets/clients/omp.svg";
+// opencode, Command Code, and Nous Research already ship a mark in this app as
+// *providers*. A client row is the same organization, so it reuses that asset
+// rather than committing a second copy that would then have to be kept in step.
+import opencodeLogo from "../assets/providers/opencode.png";
+import commandCodeLogo from "../assets/providers/commandcode.svg";
+import nousResearchLogo from "../assets/providers/nousresearch.png";
 import { Badge, Button, InlineNotice, PageHeader, PanelSkeleton, SectionHeading, StatStrip } from "../components";
 import type {
   AgentBridgeDescriptor,
@@ -43,7 +51,16 @@ interface HarnessPageProps {
   onNavigate: (view: ViewId) => void;
 }
 
-const CLIENT_ORDER: HarnessId[] = ["openclaw", "cursor", "claude", "gemini", "dsh", "codex"];
+// The six clients that predate the shared publisher keep their order; the five
+// document-configured harnesses follow, so an existing user's rows do not move
+// under them on upgrade.
+const CLIENT_ORDER: HarnessId[] = [
+  "openclaw", "cursor", "claude", "gemini", "dsh", "codex",
+  "opencode", "pi", "omp", "commandcode", "hermes",
+];
+// A routed harness has no desktop app, so its configured action opens a
+// terminal rather than falling through to the client's official website.
+const TERMINAL_ONLY_CLIENTS = new Set<HarnessId>(["opencode", "pi", "omp", "commandcode", "hermes"]);
 const CLIENT_LOGOS: Record<HarnessId, { light: string; dark?: string; mode: "artwork" | "mask" }> = {
   cursor: { light: cursorLogo, dark: cursorDarkLogo, mode: "artwork" },
   dsh: { light: deepSeekHarnessLogo, mode: "mask" },
@@ -51,6 +68,13 @@ const CLIENT_LOGOS: Record<HarnessId, { light: string; dark?: string; mode: "art
   claude: { light: claudeLogo, mode: "artwork" },
   gemini: { light: geminiLogo, mode: "artwork" },
   openclaw: { light: openclawLogo, mode: "artwork" },
+  opencode: { light: opencodeLogo, mode: "artwork" },
+  pi: { light: piLogo, mode: "artwork" },
+  // omp's official mark is drawn in near-white for a dark ground. Painting it
+  // in the surrounding text colour is what keeps it legible in both themes.
+  omp: { light: ompLogo, mode: "mask" },
+  commandcode: { light: commandCodeLogo, mode: "artwork" },
+  hermes: { light: nousResearchLogo, mode: "mask" },
 };
 
 export function HarnessPage({ target, api, refreshing, operation, onRefresh, runAction, onNavigate }: HarnessPageProps) {
@@ -125,7 +149,8 @@ export function HarnessPage({ target, api, refreshing, operation, onRefresh, run
   const setup = async (harness: HarnessDescriptor) => {
     if (!api) return;
     if (harness.configured) {
-      await act(`Open ${harness.displayName}`, () => api.launchHarness(harness.id, "app"));
+      const surface = TERMINAL_ONLY_CLIENTS.has(harness.id) && harness.cliInstalled ? "terminal" : "app";
+      await act(`Open ${harness.displayName}`, () => api.launchHarness(harness.id, surface));
       return;
     }
     if (harness.id === "cursor") {
@@ -156,7 +181,7 @@ export function HarnessPage({ target, api, refreshing, operation, onRefresh, run
       {error ? <InlineNotice tone="warning" title="Client detection is incomplete">{error}</InlineNotice> : null}
 
       <div className="lhc-harness-list">
-        {!snapshot && !error ? <PanelSkeleton label="Detecting coding clients" variant="list" count={6} /> : null}
+        {!snapshot && !error ? <PanelSkeleton label="Detecting coding clients" variant="list" count={CLIENT_ORDER.length} /> : null}
         {clients.length ? (
           <div className="lhc-harness-table-head" aria-hidden>
             <span>Client</span>
@@ -226,7 +251,7 @@ export function HarnessPage({ target, api, refreshing, operation, onRefresh, run
       </div>
 
       <section className="panel-section">
-        <SectionHeading title="One router plane, six client stores" description="Model routes and provider credentials are shared; sessions and client-owned settings remain separate." />
+        <SectionHeading title={`One router plane, ${clients.length} client stores`} description="Model routes and provider credentials are shared; sessions and client-owned settings remain separate." />
         <div className="lhc-continuity-map">
           <article>
             <Route aria-hidden size={18} strokeWidth={1.7} />

@@ -3092,8 +3092,20 @@ async function handleHarness(action) {
 // enable entrypoint operators run from the terminal. OpenClaw's enable path
 // installs the official CLI when missing before it publishes the provider.
 async function handleClientSetup(target, publicUrl, hostname) {
-  if (!["codex", "dsh", "cursor", "claude", "openclaw"].includes(target)) {
-    throw new Error("Usage: control client-setup codex|dsh|cursor|claude|openclaw [--hostname PUBLIC_HOSTNAME|--public-url HTTPS_ORIGIN]");
+  const { ROUTED_HARNESS_IDS } = await import("./routed-harness-catalog.mjs");
+  if (![...["codex", "dsh", "cursor", "claude", "openclaw"], ...ROUTED_HARNESS_IDS].includes(target)) {
+    throw new Error("Usage: control client-setup codex|dsh|cursor|claude|openclaw|opencode|pi|omp|commandcode|hermes [--hostname PUBLIC_HOSTNAME|--public-url HTTPS_ORIGIN]");
+  }
+  // opencode, pi, omp, Command Code, and Hermes are published *into* rather
+  // than installed *as*: there is no `MODEL_ROUTER_TARGET` for them and no
+  // second service. Setup installs the client's CLI when this router can, then
+  // writes the one provider key it owns inside that client's own document.
+  if (ROUTED_HARNESS_IDS.includes(target)) {
+    if (publicUrl || hostname) throw new Error("--hostname and --public-url apply to Cursor only.");
+    const { createRoutedHarnessManager } = await import("./routed-harness-manager.mjs");
+    const result = createRoutedHarnessManager(target).install({ installMissingCli: true });
+    process.stdout.write(`${JSON.stringify({ target, configured: true, ...result })}\n`);
+    return;
   }
   if (target === "dsh") {
     if (publicUrl || hostname) throw new Error("--hostname and --public-url apply to Cursor only.");
@@ -3135,6 +3147,18 @@ async function handleClientSetup(target, publicUrl, hostname) {
     );
   }
   process.stdout.write(`${JSON.stringify({ target, configured: true })}\n`);
+}
+
+// Removing one published client is never a reason to tear the shared plane
+// down: `bin/disable` retires the service only once `installedTargets()` is
+// empty, and this command deliberately never touches the service at all.
+async function handleClientDisconnect(target) {
+  const { ROUTED_HARNESS_IDS } = await import("./routed-harness-catalog.mjs");
+  if (!ROUTED_HARNESS_IDS.includes(target)) {
+    throw new Error("Usage: control client-disconnect opencode|pi|omp|commandcode|hermes");
+  }
+  const { createRoutedHarnessManager } = await import("./routed-harness-manager.mjs");
+  process.stdout.write(`${JSON.stringify(createRoutedHarnessManager(target).uninstall())}\n`);
 }
 
 async function handleClientExport() {
@@ -3439,9 +3463,14 @@ if (args.includes("--probe")) {
   const publicUrl = optionValue("--public-url");
   const hostname = optionValue("--hostname");
   if ((publicUrl && hostname) || ((publicUrl || hostname) && args.length !== 4) || (!publicUrl && !hostname && args.length !== 2)) {
-    throw new Error("Usage: control client-setup codex|dsh|cursor|claude|openclaw [--hostname PUBLIC_HOSTNAME|--public-url HTTPS_ORIGIN]");
+    throw new Error("Usage: control client-setup codex|dsh|cursor|claude|openclaw|opencode|pi|omp|commandcode|hermes [--hostname PUBLIC_HOSTNAME|--public-url HTTPS_ORIGIN]");
   }
   await handleClientSetup(args[1], publicUrl, hostname);
+} else if (args[0] === "client-disconnect") {
+  if (args.length !== 2) {
+    throw new Error("Usage: control client-disconnect opencode|pi|omp|commandcode|hermes");
+  }
+  await handleClientDisconnect(args[1]);
 } else if (args[0] === "client-export") {
   await handleClientExport();
 } else if (args[0] === "presence") {

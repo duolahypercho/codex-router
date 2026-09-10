@@ -12,9 +12,11 @@ import {
   GEMINI_CATALOG_PATH,
   OPENCLAW_CATALOG_PATH,
   NATIVE_CATALOG_PATH,
+  ROUTED_HARNESS_CATALOG_PATHS,
   SOURCE_ROOT,
   TARGET,
 } from "./paths.mjs";
+import { routedHarnesses } from "./routed-harness-catalog.mjs";
 
 // The begin markers config-manager.mjs writes around every block it owns,
 // including the legacy kimi-era pairs it still recognizes. config-manager.mjs
@@ -168,6 +170,15 @@ export function installedTargets() {
   if (existsSync(CURSOR_CATALOG_PATH)) installed.push("cursor");
   if (existsSync(CLAUDE_CATALOG_PATH)) installed.push("claude");
   if (existsSync(OPENCLAW_CATALOG_PATH)) installed.push("openclaw");
+  // The document-configured harnesses (opencode, pi, omp, Command Code,
+  // Hermes) are published clients like any other, so a live publication keeps
+  // the shared plane alive for them too. They are not `MODEL_ROUTER_TARGET`
+  // values -- nothing installs *as* one of them -- but `bin/disable` retires
+  // the service only once this list is empty, and forgetting them here is how
+  // turning Codex off would stop opencode working.
+  for (const harness of routedHarnesses()) {
+    if (existsSync(ROUTED_HARNESS_CATALOG_PATHS[harness.id])) installed.push(harness.id);
+  }
   return installed;
 }
 
@@ -255,6 +266,19 @@ export async function refreshTargetPickerIfInstalled({ signal, deadline } = {}) 
   }
   if (existsSync(OPENCLAW_CATALOG_PATH)) {
     await runTargetPublicationProcess("openclaw-config-manager.mjs", ["install"], {
+      signal,
+      deadline: operationDeadline,
+    });
+    refreshed = true;
+  }
+  // Same rule for the five document-configured harnesses: the marker in the
+  // router's own state directory says this router published there, so a
+  // provider being enabled, a key being stored, or a model being curated
+  // republishes each of them rather than leaving one picker advertising a
+  // model the others just lost.
+  for (const harness of routedHarnesses()) {
+    if (!existsSync(ROUTED_HARNESS_CATALOG_PATHS[harness.id])) continue;
+    await runTargetPublicationProcess("routed-harness-manager.mjs", [harness.id, "install"], {
       signal,
       deadline: operationDeadline,
     });

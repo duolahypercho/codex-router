@@ -3,13 +3,37 @@ export type SubagentMode = "all" | "selected" | "proven";
 export type VisionEffort = "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra" | "default";
 export type ServiceAction = "status" | "start";
 export type TrayAction = "enable" | "disable" | "status" | "restart";
-export type HarnessId = "codex" | "dsh" | "gemini" | "cursor" | "claude" | "openclaw";
+export type HarnessId =
+  | "codex"
+  | "dsh"
+  | "gemini"
+  | "cursor"
+  | "claude"
+  | "openclaw"
+  // Document-configured harnesses: published into rather than installed as.
+  // See `src/routed-harness-catalog.mjs`.
+  | "opencode"
+  | "pi"
+  | "omp"
+  | "commandcode"
+  | "hermes";
 export type HarnessSurface = "app" | "terminal";
 
 export interface HarnessDescriptor {
   id: HarnessId;
   displayName: string;
-  ownership: "openai" | "deepseek" | "google" | "cursor" | "anthropic" | "openclaw";
+  ownership:
+    | "openai"
+    | "deepseek"
+    | "google"
+    | "cursor"
+    | "anthropic"
+    | "openclaw"
+    | "opencode"
+    | "pi"
+    | "omp"
+    | "commandcode"
+    | "nousresearch";
   description: string;
   cliInstalled: boolean;
   cliVersion?: string;
@@ -75,7 +99,7 @@ export interface HarnessSession {
 export interface ContextSessionsSnapshot {
   fetchedAt: string;
   sessions: HarnessSession[];
-  counts: { total: number; codex: number; dsh: number; cursor: number; claude: number; gemini: number; openclaw: number; archived: number };
+  counts: { total: number; codex: number; dsh: number; cursor: number; claude: number; gemini: number; openclaw: number; opencode: number; pi: number; omp: number; commandcode: number; hermes: number; archived: number };
 }
 
 export interface ChatGptSessionStatus {

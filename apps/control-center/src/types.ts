@@ -637,13 +637,37 @@ export interface OperationEvent {
   error?: string;
 }
 
-export type HarnessId = "codex" | "dsh" | "gemini" | "cursor" | "claude" | "openclaw";
+export type HarnessId =
+  | "codex"
+  | "dsh"
+  | "gemini"
+  | "cursor"
+  | "claude"
+  | "openclaw"
+  // Document-configured harnesses: published into rather than installed as.
+  // See `src/routed-harness-catalog.mjs`.
+  | "opencode"
+  | "pi"
+  | "omp"
+  | "commandcode"
+  | "hermes";
 export type HarnessSurface = "app" | "terminal";
 
 export interface HarnessDescriptor {
   id: HarnessId;
   displayName: string;
-  ownership: "openai" | "deepseek" | "google" | "cursor" | "anthropic" | "openclaw";
+  ownership:
+    | "openai"
+    | "deepseek"
+    | "google"
+    | "cursor"
+    | "anthropic"
+    | "openclaw"
+    | "opencode"
+    | "pi"
+    | "omp"
+    | "commandcode"
+    | "nousresearch";
   description: string;
   cliInstalled: boolean;
   cliVersion?: string;
@@ -722,6 +746,11 @@ export interface ContextSessionsSnapshot {
     claude: number;
     gemini: number;
     openclaw: number;
+    opencode: number;
+    pi: number;
+    omp: number;
+    commandcode: number;
+    hermes: number;
     archived: number;
   };
 }

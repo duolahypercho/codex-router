@@ -253,6 +253,26 @@
   A native 401 is also preserved with a sanitized local error, allowing Codex's
   own ChatGPT authentication recovery to refresh the session and retry without
   exposing the upstream response body.
+- **Five more coding clients can be published to from the Harness page.**
+  opencode, pi, omp (oh-my-pi), Command Code, and Hermes Agent each keep their
+  providers in a configuration document the user also owns, so one shared
+  publisher (`src/routed-harness-*.mjs`) writes the single `codex-router`
+  provider key each of them reads and leaves every other byte alone.
+  **Set up** installs the client's CLI where this router can and publishes the
+  whole routed catalog in one action; `control client-setup <id>` and
+  `control client-disconnect <id>` are the same thing from a terminal. Clients
+  that speak the Responses API reach the authenticated loopback `/v1` path with
+  the router's own slugs; Command Code and Hermes, which have no Responses
+  client, reach the same Anthropic Messages surface Claude Code uses with
+  `codex_router/anthropic/<slug>` ids. Enabling a provider, storing a key, or
+  curating a model republishes all five alongside the existing clients, and a
+  caller-capability rotation refreshes them. YAML documents are spliced by line
+  range so comments and sibling providers survive; a JSON document the router
+  cannot round-trip is refused rather than reformatted; a `codex-router`
+  provider whose base URL this router did not issue is never replaced or
+  removed; and opencode's default model is claimed only when the user has not
+  chosen one. Devin CLI and T3 Code are deliberately not rows: Devin CLI has no
+  custom base URL, and T3 Code drives whichever official CLI is already routed.
 
 - **Command Code forced tool choices now use the same bounded alias as the tool definition.**
   The 64-character compatibility added in #643 shortened provider-facing tool names but

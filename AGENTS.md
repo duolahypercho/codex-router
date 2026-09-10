@@ -2238,6 +2238,75 @@ user has to find in the docs, so `src/dsh-install.mjs` owns the other half.
   `test/dsh-config-manager.test.mjs`.
 
 
+## Five clients, one publisher, one key each
+
+opencode, pi, omp, Command Code, and Hermes Agent all offer the same thing: a
+user-owned configuration document with a mapping of custom providers in it.
+That is why they share `src/routed-harness-*.mjs` rather than getting five
+near-identical managers. `routed-harness-catalog.mjs` is the part that
+genuinely differs and it is data; `routed-harness-document.mjs` edits one key
+of somebody else's file; `routed-harness-manager.mjs` is the publisher.
+
+- **The wire is one the router already serves, never a third one.** The caller
+  endpoint answers `/v1/responses` and, behind the `/anthropic` leaf, the
+  Anthropic Messages API. Nothing else — there is no `/chat/completions`. So
+  opencode, pi, and omp declare a Responses provider, while Command Code and
+  Hermes take the Anthropic surface with `claude-model-id.mjs` ids. Command
+  Code's BYOK wire is Chat Completions or Anthropic Messages and Hermes's
+  `codex_responses` is its xAI path, not a generic Responses client; picking
+  the "OpenAI-compatible" option for either would have published a provider
+  that 404s on its first turn. `test/routed-harness.test.mjs` asserts no
+  adapter ever emits `openai-completions`.
+- **The capability is the URL, not the key.** The caller secret is a path
+  segment, so a bearer is redundant. Where a client treats a keyless provider
+  as first-class it is declared keyless (`auth: none` for omp, `apiKey: false`
+  for Command Code, omitted for Hermes); where a client *hides* keyless models
+  from its own picker — pi loads them and leaves them unselectable — the same
+  secret is repeated in the field it reads. That difference is not cosmetic: it
+  decides whether the models show up at all. Every published document is
+  written 0600 either way, because the URL is the capability.
+- **These are not `MODEL_ROUTER_TARGET` values.** Nothing installs *as*
+  opencode. They are published into by `control client-setup <id>` and removed
+  by `control client-disconnect <id>`, and neither touches the service.
+  `installedTargets()` still counts them, so `bin/disable` will not retire the
+  shared plane while one of them is pointed at it.
+- **A `codex-router` provider we did not write is never replaced or removed.**
+  Ownership is decided by the base URL, not by the key name: a second checkout,
+  an older build, or a hand-written proxy can legitimately hold that name.
+  Install and disconnect both refuse rather than guess.
+- **YAML is spliced, JSON is round-tripped, and neither is reformatted.**
+  `omp` and Hermes are edited by line range through `yaml-structure.mjs`, which
+  is what preserves comments and hand-formatting. JSON documents go through
+  `JSON.parse`, which cannot preserve a `//` comment — so a document that is
+  not plain JSON is refused with an explanation, and an `opencode.jsonc` beside
+  `opencode.json` blocks publication rather than being rewritten or ignored.
+- **The default model is the user's.** opencode is the only one of the five
+  whose default key is a plain string in the same document; the others keep
+  theirs in a second file or behind a mapping whose schema changes shape on
+  first use, and guessing wrong there costs a user their configured model for
+  no gain. Even there it is claimed only over a value this router wrote, or
+  when nothing is set, and removed on disconnect only while it is still ours.
+- **A failed marker write rolls the document back.** A client pointed at a
+  route the router has no record of is the one state neither disconnect nor
+  drift detection can reason about.
+- **Rotation covers all five.** The secret is a path segment of every published
+  base URL, so `caller-key.mjs` refreshes each of them and
+  `installedTargetsFromStatus` refuses to rotate across one whose managed state
+  is partial.
+- **Installing the client CLI is still the explicit action it is for the
+  harness.** Only `client-setup` installs, and only from a package registry.
+  Hermes ships a `curl | bash` installer; this router does not run remote
+  installers on somebody's behalf, so that row reports the CLI as missing and
+  links to the official instructions. omp publishes darwin-arm64 and linux-x64
+  builds only, so the button is offered only where a build exists.
+- **Devin CLI and T3 Code are deliberately absent.** Devin CLI's config selects
+  from Cognition-hosted models and has no custom base URL, so routed models
+  cannot be published into it; the `devin-cli` *provider* is the other
+  direction and already exists. T3 Code drives official CLIs rather than
+  talking to models itself, so it inherits whatever routed client it drives —
+  see `docs/COMPATIBLE-APPS.md`. Neither gets a Harness row, because a row that
+  cannot publish is a row that lies.
+
 ## Native GPT for a client with no ChatGPT login of its own
 
 Native traffic is authorized by the caller's session: `nativeHeaders` copies

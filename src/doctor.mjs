@@ -1440,6 +1440,62 @@ if (TARGET === "gemini") {
   );
 }
 
+// The five document-configured harnesses are published *into* rather than
+// installed *as*, so they belong to no `MODEL_ROUTER_TARGET` and would
+// otherwise be checked by no doctor run at all. They are reported here
+// whenever their publication marker says this router wrote into one of them,
+// whichever target this command happens to be running under.
+try {
+  const { routedHarnesses } = await import("./routed-harness-catalog.mjs");
+  const { ROUTED_HARNESS_CATALOG_PATHS } = await import("./paths.mjs");
+  for (const harness of routedHarnesses()) {
+    if (!existsSync(ROUTED_HARNESS_CATALOG_PATHS[harness.id])) continue;
+    const publishHint = `Run ./bin/control client-setup ${harness.id} to republish.`;
+    try {
+      const status = childJson("routed-harness-manager.mjs", [harness.id, "status"]);
+      add(
+        status.installed && status.providerInstalled && status.baseUrlManaged && status.configValid
+          ? "ok"
+          : "fail",
+        `${harness.displayName} routing config`,
+        status.configError
+          ? status.configError
+          : status.providerInstalled
+            ? `${status.publishedModels} models in ${harness.providerPath.join(".")}; ${status.baseUrl || "unmanaged endpoint"}`
+            : `the router-owned provider is missing from ${status.document}`,
+        publishHint,
+      );
+      add(
+        status.cliInstalled ? "ok" : "warn",
+        `${harness.displayName} CLI`,
+        status.cliInstalled ? status.cli || harness.executables[0] : "not installed",
+        `Use Harness > ${harness.displayName} > Set up, or install it from ${harness.siteUrl}.`,
+      );
+      add(
+        status.documentProtected ? "ok" : "fail",
+        `${harness.displayName} config privacy`,
+        status.documentProtected ? `${status.document} is private` : status.document,
+        `${publishHint} Its provider carries the local caller capability.`,
+      );
+      add(
+        status.catalogFresh ? "ok" : "warn",
+        `${harness.displayName} catalog freshness`,
+        `published ${status.publishedModels}, routable ${status.routableModels}`,
+        publishHint,
+      );
+    } catch (error) {
+      add(
+        "fail",
+        `${harness.displayName} routing config`,
+        error instanceof Error ? error.message : String(error),
+        publishHint,
+      );
+    }
+  }
+} catch {
+  // Never let a diagnostic be the thing that fails the doctor.
+}
+
 const legacy = detectLegacyInstallations();
 add(
   legacy.unknownConflict ? "fail" : legacy.installations.length ? "fail" : "ok",

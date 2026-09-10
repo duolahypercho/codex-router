@@ -67,7 +67,90 @@ const SESSION_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3
 const CURSOR_SESSION_ID = /^(?:(?:draft|bc)-)?[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const SESSION_UUID_IN_FILENAME = /[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i;
 const DSH_SESSION_ID = /^session-[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const HARNESS_IDS = ["codex", "dsh", "gemini", "cursor", "claude", "openclaw"];
+// The five document-configured harnesses this router publishes into. The
+// authority is `src/routed-harness-catalog.mjs`; this table is the renderer's
+// copy of the parts a detection-only pass needs, kept here for the same reason
+// `HARNESS_SITES` and the docs URLs below are — the app must be able to draw
+// the Harness tab before it can load a module out of the installed router.
+const ROUTED_HARNESS_ROWS = Object.freeze([
+  Object.freeze({
+    id: "opencode",
+    binEnv: "OPENCODE_BIN",
+    displayName: "opencode",
+    ownership: "opencode",
+    description: "The opencode terminal agent, using every model selected in this router.",
+    executables: Object.freeze(["opencode"]),
+    marker: "opencode-models.json",
+    site: "https://opencode.ai/",
+    docs: "https://opencode.ai/docs/config/",
+    installable: true,
+    installHint: "Setup installs opencode-ai when it is missing and publishes every routed model.",
+    publishHint: "Publishes every routed model into opencode's router-owned provider. Other opencode settings remain untouched.",
+  }),
+  Object.freeze({
+    id: "pi",
+    binEnv: "PI_BIN",
+    displayName: "pi",
+    ownership: "pi",
+    description: "Mario Zechner's pi coding agent, using every model selected in this router.",
+    executables: Object.freeze(["pi"]),
+    marker: "pi-models.json",
+    site: "https://pi.dev/",
+    docs: "https://pi.dev/docs/latest/models",
+    installable: true,
+    installHint: "Setup installs @mariozechner/pi-coding-agent when it is missing and publishes every routed model.",
+    publishHint: "Publishes every routed model into pi's models.json. Every other provider in that file is preserved.",
+  }),
+  Object.freeze({
+    id: "omp",
+    binEnv: "OMP_BIN",
+    displayName: "omp",
+    ownership: "omp",
+    description: "The omp (oh-my-pi) terminal agent, using every model selected in this router.",
+    executables: Object.freeze(["omp", "oh-omp"]),
+    marker: "omp-models.json",
+    site: "https://github.com/open-horizon-labs/oh-omp",
+    docs: "https://github.com/open-horizon-labs/oh-omp/blob/main/docs/models.md",
+    // The published package carries prebuilt binaries for darwin-arm64 and
+    // linux-x64 only, so the install button is offered only where one exists.
+    installable: process.platform === "darwin" || process.platform === "linux",
+    installHint: "Setup installs @oh-labs/oh-omp when it is missing and publishes every routed model.",
+    publishHint: "Publishes every routed model into omp's models.yml. Comments and every other provider are preserved.",
+  }),
+  Object.freeze({
+    id: "commandcode",
+    binEnv: "COMMANDCODE_BIN",
+    displayName: "Command Code",
+    ownership: "commandcode",
+    description: "Command Code's CLI as a BYOK client of this router's Anthropic surface.",
+    executables: Object.freeze(process.platform === "win32" ? ["command-code", "cmdc"] : ["command-code", "cmd"]),
+    marker: "commandcode-models.json",
+    site: "https://commandcode.ai/",
+    docs: "https://commandcode.ai/docs/byok",
+    installable: true,
+    installHint: "Setup installs command-code when it is missing and publishes every routed model as a BYOK provider.",
+    publishHint: "Publishes every routed model into ~/.commandcode/providers.json. Your Command Code plan and its own models are untouched.",
+  }),
+  Object.freeze({
+    id: "hermes",
+    binEnv: "HERMES_BIN",
+    displayName: "Hermes Agent",
+    ownership: "nousresearch",
+    description: "Nous Research's Hermes Agent as a named custom provider on this router.",
+    executables: Object.freeze(["hermes"]),
+    marker: "hermes-models.json",
+    site: "https://hermes-agent.nousresearch.com/",
+    docs: "https://hermes-agent.nousresearch.com/docs/integrations/providers",
+    // Hermes installs from its own shell script rather than a package
+    // registry, and this router does not run remote installers on somebody's
+    // behalf. The row links to the official instructions instead.
+    installable: false,
+    installHint: "Install the official Hermes Agent first; setup then publishes every routed model into its config.yaml.",
+    publishHint: "Publishes every routed model as the codex-router provider in Hermes's config.yaml. Every other setting is preserved.",
+  }),
+]);
+const ROUTED_HARNESS_IDS = ROUTED_HARNESS_ROWS.map((row) => row.id);
+const HARNESS_IDS = ["codex", "dsh", "gemini", "cursor", "claude", "openclaw", ...ROUTED_HARNESS_IDS];
 const HARNESS_SURFACES = ["app", "terminal"];
 const AGENT_BRIDGE_IDS = ["anthropic", "cursor", "gemini"];
 const SESSION_INDEX_LIMIT = 16 * 1024 * 1024;
@@ -121,6 +204,7 @@ const HARNESS_SITES = Object.freeze({
   cursor: "https://cursor.com/",
   claude: "https://claude.com/product/claude-code",
   gemini: "https://google-gemini.github.io/gemini-cli/",
+  ...Object.fromEntries(ROUTED_HARNESS_ROWS.map((row) => [row.id, row.site])),
 });
 const OAUTH_LOGIN_COMMANDS = Object.freeze({
   "kimi-oauth": { executable: "kimi", args: ["login"] },
@@ -439,6 +523,27 @@ export function getHarnessSnapshot() {
         ...(typeof cursorState?.publicOrigin === "string" ? { publicOrigin: cursorState.publicOrigin } : {}),
         docsUrl: CURSOR_DOCS,
       },
+      // Detection only: this runs on every page load, so it reads a marker and
+      // looks for an executable and does nothing else. Whether a routed
+      // harness is *correctly* published is a question for its own status
+      // command, which costs a process and is asked when a row is acted on.
+      ...ROUTED_HARNESS_ROWS.map((row) => {
+        const binary = row.executables.map((name) => executablePath(name)).find(Boolean);
+        const version = executableVersion(binary);
+        return {
+          id: row.id,
+          displayName: row.displayName,
+          ownership: row.ownership,
+          description: row.description,
+          cliInstalled: Boolean(binary),
+          ...(version ? { cliVersion: version } : {}),
+          appInstalled: false,
+          configured: existsSync(path.join(stateDirectory, row.marker)),
+          canInstall: row.installable || Boolean(binary),
+          installRequirement: binary ? row.publishHint : row.installHint,
+          docsUrl: row.docs,
+        };
+      }),
     ],
   };
 }
@@ -1087,6 +1192,9 @@ export function getContextSessionsSnapshot() {
       claude: sessions.filter((session) => session.harnessId === "claude").length,
       gemini: sessions.filter((session) => session.harnessId === "gemini").length,
       openclaw: 0,
+      // None of the routed harnesses writes a session index this app can read,
+      // so their rows report no sessions rather than an invented number.
+      ...Object.fromEntries(ROUTED_HARNESS_IDS.map((id) => [id, 0])),
       archived: sessions.filter((session) => session.archived).length,
     },
   };
@@ -2012,20 +2120,24 @@ export function registerIpcHandlers({
       return { opened: true, surface: "app" };
     }
     if (destination === "app") return openOfficialSite();
-    const executable = executablePath(
-      harness === "codex" ? "codex"
-        : harness === "dsh" ? "dsh"
-          : harness === "claude" ? "claude-router"
-            : harness === "gemini" ? "gemini"
-              : harness === "openclaw" ? "openclaw"
-              : "cursor-router-agent",
-    );
-    const label = harness === "codex" ? "Codex"
-      : harness === "dsh" ? "DeepSeek Harness"
-        : harness === "claude" ? "Claude Code Router"
-          : harness === "gemini" ? "Gemini CLI"
-            : harness === "openclaw" ? "OpenClaw"
-            : "Cursor Router Agent";
+    const routed = ROUTED_HARNESS_ROWS.find((row) => row.id === harness);
+    const executable = routed
+      ? routed.executables.map((name) => harnessExecutableResolver(name)).find(Boolean)
+      : executablePath(
+        harness === "codex" ? "codex"
+          : harness === "dsh" ? "dsh"
+            : harness === "claude" ? "claude-router"
+              : harness === "gemini" ? "gemini"
+                : harness === "openclaw" ? "openclaw"
+                : "cursor-router-agent",
+      );
+    const label = routed ? routed.displayName
+      : harness === "codex" ? "Codex"
+        : harness === "dsh" ? "DeepSeek Harness"
+          : harness === "claude" ? "Claude Code Router"
+            : harness === "gemini" ? "Gemini CLI"
+              : harness === "openclaw" ? "OpenClaw"
+              : "Cursor Router Agent";
     if (!executable) throw new Error(`${label} CLI is not installed or configured.`);
     return openTerminalCommand(executable, [], discoverSourceRoot());
   }, { requiresCompatibleRouter: false });
@@ -2079,6 +2191,15 @@ export function registerIpcHandlers({
     if (harness === "openclaw") {
       const openclaw = harnessExecutableResolver("openclaw");
       if (openclaw) environmentOverrides.OPENCLAW_BIN = openclaw;
+    }
+    // A desktop app does not inherit the login shell's PATH. Detection above
+    // already checked the standard per-user CLI directories, so hand the exact
+    // executable it found to the router rather than asking a child with a
+    // narrower PATH to discover it a second time.
+    const routedSetup = ROUTED_HARNESS_ROWS.find((row) => row.id === harness);
+    if (routedSetup) {
+      const binary = routedSetup.executables.map((name) => harnessExecutableResolver(name)).find(Boolean);
+      if (binary) environmentOverrides[routedSetup.binEnv] = binary;
     }
     return controlJsonRunner(args, {
       timeoutMs: REPAIR_TIMEOUT_MS,
