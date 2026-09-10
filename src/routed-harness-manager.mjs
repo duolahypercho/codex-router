@@ -54,7 +54,12 @@ import {
   yamlLeafScalar,
   yamlValuePresent,
 } from "./routed-harness-document.mjs";
-import { routedHarnessCliPath, installRoutedHarness } from "./routed-harness-install.mjs";
+import {
+  installRoutedHarness,
+  routedHarnessCliPath,
+  routedHarnessOutdated,
+  routedHarnessVersion,
+} from "./routed-harness-install.mjs";
 import { routedClientModels } from "./routed-client-models.mjs";
 import { assertStateOwnership } from "./state-owner.mjs";
 
@@ -141,8 +146,10 @@ function markerPath(harness) {
   return target;
 }
 
-function readMarker(harness, port = PORTS.router, legacyPort = LEGACY_PORTS.router) {
-  const target = markerPath(harness);
+// The path is a parameter because the manager accepts an injected marker file:
+// reading the state directory's copy while writing the injected one made a
+// publish look stale and an uninstall look unmanaged.
+function readMarker(harness, target = markerPath(harness), port = PORTS.router, legacyPort = LEGACY_PORTS.router) {
   if (!existsSync(target)) return undefined;
   let state;
   try {
@@ -225,6 +232,7 @@ export function createRoutedHarnessManager(id, {
   modelSource = routedClientModels,
   assertOwnership = assertStateOwnership,
   findCli = routedHarnessCliPath,
+  cliVersion = routedHarnessVersion,
   installCli = installRoutedHarness,
   readDocument = readDocumentFile,
   writeDocument = writeHarnessDocument,
@@ -266,10 +274,12 @@ export function createRoutedHarnessManager(id, {
           "(`./bin/providers enable PROVIDER`), then publish again.",
       );
     }
-    if (installMissingCli && !findCli(harness.id)) installCli(harness.id);
+    // The installer decides: it returns at once for a present, current CLI and
+    // updates one too old to read the document published below.
+    if (installMissingCli) installCli(harness.id);
 
     const target = document();
-    const state = readMarker(harness, port, legacyPort);
+    const state = readMarker(harness, marker(), port, legacyPort);
     const before = readDocument(target);
     assertPublishable(before, state);
 
@@ -338,7 +348,7 @@ export function createRoutedHarnessManager(id, {
   function uninstall() {
     assertOwnership(`remove the ${harness.displayName} integration`);
     const target = document();
-    const state = readMarker(harness, port, legacyPort);
+    const state = readMarker(harness, marker(), port, legacyPort);
     const before = readDocument(target);
     const present = before ? providerPresent(harness, before) : false;
 
@@ -375,6 +385,8 @@ export function createRoutedHarnessManager(id, {
     const { models } = modelSource();
     const target = document();
     const cli = findCli(harness.id);
+    // Only a client with a minimum costs a `--version` spawn here.
+    const version = cli && harness.minimumVersion ? cliVersion(harness.id, cli) : undefined;
     const base = {
       harness: harness.id,
       displayName: harness.displayName,
@@ -382,11 +394,14 @@ export function createRoutedHarnessManager(id, {
       documentExists: existsSync(target),
       cliInstalled: Boolean(cli),
       ...(cli ? { cli } : {}),
+      ...(version ? { cliVersion: version } : {}),
+      ...(harness.minimumVersion ? { cliMinimumVersion: harness.minimumVersion } : {}),
+      cliOutdated: routedHarnessOutdated(harness.id, version),
       routableModels: models.length,
     };
     let state;
     try {
-      state = readMarker(harness, port, legacyPort);
+      state = readMarker(harness, marker(), port, legacyPort);
     } catch (error) {
       return {
         ...base,

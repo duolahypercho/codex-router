@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -112,22 +113,29 @@ export const OPENCODE_CONFIG_PATH =
     "opencode.json",
   );
 // pi keeps its agent state in `~/.pi/agent`; custom providers live in
-// `models.json` beside the session store.
-export const PI_AGENT_HOME = process.env.PI_AGENT_DIR || path.join(os.homedir(), ".pi", "agent");
+// `models.json` beside the session store. Its override is
+// `${APP_NAME.toUpperCase()}_CODING_AGENT_DIR`, i.e. `PI_CODING_AGENT_DIR`
+// (read from the shipped `dist/config.js`, not guessed from the docs).
+export const PI_AGENT_HOME =
+  process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent");
 export const PI_MODELS_PATH =
   process.env.MODEL_ROUTER_PI_MODELS || path.join(PI_AGENT_HOME, "models.json");
-// omp (oh-my-pi) resolves its agent directory from `PI_CODING_AGENT_DIR`,
-// defaulting to `~/.oh-omp/agent`. `models.yml` is the modern format; the
-// legacy `models.json` is still read but is not what a current install writes.
+// omp (can1357/oh-my-pi) inherits pi's `PI_CODING_AGENT_DIR` override and
+// defaults to `~/.omp/agent`. It reads `models.yml`, then `models.yaml`, so an
+// existing `models.yaml` with no `models.yml` beside it is the document to edit:
+// creating a `models.yml` would silently shadow the user's file.
 export const OMP_AGENT_HOME =
-  process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".oh-omp", "agent");
+  process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".omp", "agent");
+const OMP_MODELS_YML = path.join(OMP_AGENT_HOME, "models.yml");
+const OMP_MODELS_YAML = path.join(OMP_AGENT_HOME, "models.yaml");
 export const OMP_MODELS_PATH =
-  process.env.MODEL_ROUTER_OMP_MODELS || path.join(OMP_AGENT_HOME, "models.yml");
+  process.env.MODEL_ROUTER_OMP_MODELS ||
+  (!existsSync(OMP_MODELS_YML) && existsSync(OMP_MODELS_YAML) ? OMP_MODELS_YAML : OMP_MODELS_YML);
 // Command Code keeps BYOK provider declarations in their own document, apart
 // from `auth.json` where its own credentials live. The router only ever writes
-// the former, and never a raw secret into it.
-export const COMMANDCODE_HOME =
-  process.env.COMMANDCODE_HOME || path.join(os.homedir(), ".commandcode");
+// the former, and never a raw secret into it. Command Code has no directory
+// override: it joins the home directory with `.commandcode`.
+export const COMMANDCODE_HOME = path.join(os.homedir(), ".commandcode");
 export const COMMANDCODE_PROVIDERS_PATH =
   process.env.MODEL_ROUTER_COMMANDCODE_PROVIDERS ||
   path.join(COMMANDCODE_HOME, "providers.json");

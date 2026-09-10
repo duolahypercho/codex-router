@@ -12,10 +12,11 @@
 // per platform, which line of npm's output is worth showing) are exactly what
 // drifts between copies.
 //
-// Hermes Agent has no package-registry install: it ships a shell script the
-// user pipes into their shell. This router does not run remote installers on
-// somebody's behalf, so that row reports the CLI as missing and links to the
-// official instructions instead of offering a button that does it.
+// Hermes Agent and omp have no install this router can run: Hermes ships a
+// shell script the user pipes into their shell, and omp runs on Bun and
+// installs from its own script, Homebrew, or Bun. This router does not run
+// remote installers on somebody's behalf, so those rows report the CLI as
+// missing and link to the official instructions instead of offering a button.
 
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -75,17 +76,36 @@ export function routedHarnessVersion(id, binary = routedHarnessCliPath(id)) {
   }
 }
 
-/** Whether this router can install this harness itself on this platform. */
-export function routedHarnessInstallable(id, { platform = process.platform } = {}) {
-  const harness = assertRoutedHarness(id);
-  if (!harness.npmPackage) return false;
-  return !harness.installPlatforms || harness.installPlatforms.includes(platform);
+function versionParts(value) {
+  const match = String(value || "").match(/(\d+)\.(\d+)\.(\d+)/);
+  return match ? match.slice(1).map(Number) : undefined;
+}
+
+/**
+ * Whether this CLI reports a version below the one that reads what the router
+ * publishes. A version the CLI will not report is not called outdated: that is
+ * an unknown, and refusing a working client over it would be the worse error.
+ */
+export function routedHarnessOutdated(id, version) {
+  const minimum = versionParts(assertRoutedHarness(id).minimumVersion);
+  const actual = versionParts(version);
+  if (!minimum || !actual) return false;
+  for (let index = 0; index < minimum.length; index += 1) {
+    if (actual[index] !== minimum[index]) return actual[index] < minimum[index];
+  }
+  return false;
+}
+
+/** Whether this router can install this harness itself. */
+export function routedHarnessInstallable(id) {
+  return Boolean(assertRoutedHarness(id).npmPackage);
 }
 
 /** Detection only: never installs, never writes, safe to call on page load. */
 export function routedHarnessSnapshot(id, { environment = process.env } = {}) {
   const harness = assertRoutedHarness(id);
   const binary = routedHarnessCliPath(id, { environment });
+  const version = routedHarnessVersion(id, binary) || null;
   return {
     id: harness.id,
     displayName: harness.displayName,
@@ -93,12 +113,15 @@ export function routedHarnessSnapshot(id, { environment = process.env } = {}) {
     installable: routedHarnessInstallable(id),
     installed: Boolean(binary),
     binary: binary || null,
-    version: routedHarnessVersion(id, binary) || null,
+    version,
+    minimumVersion: harness.minimumVersion || null,
+    outdated: routedHarnessOutdated(id, version),
   };
 }
 
 /**
- * Installs the harness CLI globally when it is missing.
+ * Installs the harness CLI globally when it is missing, and updates one too old
+ * to read the document the router publishes into.
  *
  * Global, not `npx`: an `npx` process refetches per run, leaves no executable
  * behind, and is invisible to `presence-state.mjs`, which has to be able to see
@@ -107,22 +130,17 @@ export function routedHarnessSnapshot(id, { environment = process.env } = {}) {
 export function installRoutedHarness(id, {
   force = false,
   find = routedHarnessCliPath,
+  version = routedHarnessVersion,
   install = npmInstallGlobal,
-  platform = process.platform,
 } = {}) {
   const harness = assertRoutedHarness(id);
   const existing = find(id);
-  if (existing && !force) return { installed: true, binary: existing, changed: false };
+  const outdated = Boolean(existing && harness.minimumVersion) && routedHarnessOutdated(id, version(id, existing));
+  if (existing && !force && !outdated) return { installed: true, binary: existing, changed: false };
   if (!harness.npmPackage) {
     throw new Error(
       `${harness.displayName} is not installed and does not publish a package this router can install. ` +
         `Install it from ${harness.siteUrl}, then publish again.`,
-    );
-  }
-  if (!routedHarnessInstallable(id, { platform })) {
-    throw new Error(
-      `${harness.displayName} publishes no build for ${platform}. Install it yourself from ` +
-        `${harness.siteUrl} if it supports this platform, then publish again.`,
     );
   }
   install(harness.npmPackage, { label: harness.displayName, timeoutMs: INSTALL_TIMEOUT_MS });
@@ -133,7 +151,14 @@ export function installRoutedHarness(id, {
         "or in npm's global bin directory.",
     );
   }
-  return { installed: true, binary, changed: true };
+  if (harness.minimumVersion && routedHarnessOutdated(id, version(id, binary))) {
+    // npm updated its copy, but an older install elsewhere still wins on PATH.
+    throw new Error(
+      `${harness.displayName} at ${binary} is still older than ${harness.minimumVersion}, the first release ` +
+        "that reads the provider this router publishes. Update or remove that install, then publish again.",
+    );
+  }
+  return { installed: true, binary, changed: true, ...(outdated ? { upgraded: true } : {}) };
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

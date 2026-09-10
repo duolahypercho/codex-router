@@ -12,7 +12,7 @@ Research was refreshed on 2026-08-30.
 | `claude.svg` | Claude Code | https://claude.com/product/claude-code | Exact orange Claude mark bundled in the installed official Anthropic Claude app (`ion-dist/assets/v1/cd02a42d9-Vq_H3mgS.svg`) |
 | `openclaw.svg` | OpenClaw | https://github.com/openclaw/openclaw | Official `docs/assets/pixel-lobster.svg` from the OpenClaw repository |
 | `pi.svg` | pi | https://pi.dev/ | The official `favicon.svg` served by pi.dev, reflowed onto one line and otherwise unchanged |
-| `omp.svg` | omp (oh-my-pi) | https://github.com/open-horizon-labs/oh-omp | Official `assets/icon.svg` from the oh-omp repository, with its fills replaced by `currentColor` for the mask below |
+| `omp.svg` | omp (oh-my-pi) | https://omp.sh/ | Official `assets/icon.svg` from the can1357/oh-my-pi repository, with its fills replaced by `currentColor` for the mask below |
 
 Three client rows reuse a mark this app already bundles for the same
 organization as a *provider*, rather than committing a second copy of it:

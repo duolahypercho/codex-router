@@ -107,14 +107,14 @@ const ROUTED_HARNESS_ROWS = Object.freeze([
     displayName: "omp",
     ownership: "omp",
     description: "The omp (oh-my-pi) terminal agent, using every model selected in this router.",
-    executables: Object.freeze(["omp", "oh-omp"]),
+    executables: Object.freeze(["omp"]),
     marker: "omp-models.json",
-    site: "https://github.com/open-horizon-labs/oh-omp",
-    docs: "https://github.com/open-horizon-labs/oh-omp/blob/main/docs/models.md",
-    // The published package carries prebuilt binaries for darwin-arm64 and
-    // linux-x64 only, so the install button is offered only where one exists.
-    installable: process.platform === "darwin" || process.platform === "linux",
-    installHint: "Setup installs @oh-labs/oh-omp when it is missing and publishes every routed model.",
+    site: "https://omp.sh/",
+    docs: "https://github.com/can1357/oh-my-pi/blob/main/docs/models.md",
+    // omp runs on Bun and installs from its own script, Homebrew, or Bun, none
+    // of which this router runs on somebody's behalf. The row links to them.
+    installable: false,
+    installHint: "Install omp from omp.sh first; setup then publishes every routed model into ~/.omp/agent/models.yml.",
     publishHint: "Publishes every routed model into omp's models.yml. Comments and every other provider are preserved.",
   }),
   Object.freeze({
@@ -128,7 +128,7 @@ const ROUTED_HARNESS_ROWS = Object.freeze([
     site: "https://commandcode.ai/",
     docs: "https://commandcode.ai/docs/byok",
     installable: true,
-    installHint: "Setup installs command-code when it is missing and publishes every routed model as a BYOK provider.",
+    installHint: "Setup installs command-code 1.30.0 or later (the first release that reads providers.json) and publishes every routed model as a BYOK provider.",
     publishHint: "Publishes every routed model into ~/.commandcode/providers.json. Your Command Code plan and its own models are untouched.",
   }),
   Object.freeze({

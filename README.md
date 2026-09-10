@@ -2338,9 +2338,14 @@ write the one provider key the router owns into that document.
 | --- | --- | --- | --- |
 | opencode | `~/.config/opencode/opencode.json` | Responses | `opencode-ai` |
 | pi | `~/.pi/agent/models.json` | Responses | `@mariozechner/pi-coding-agent` |
-| omp (oh-my-pi) | `~/.oh-omp/agent/models.yml` | Responses | `@oh-labs/oh-omp` (macOS and Linux builds only) |
-| Command Code | `~/.commandcode/providers.json` | Anthropic Messages | `command-code` |
+| omp (oh-my-pi) | `~/.omp/agent/models.yml` | Responses | install omp yourself first ([omp.sh](https://omp.sh/); it runs on Bun) |
+| Command Code | `~/.commandcode/providers.json` | Anthropic Messages | `command-code` 1.30.0 or later (setup updates an older one) |
 | Hermes Agent | `~/.hermes/config.yaml` | Anthropic Messages | install Hermes yourself first |
+
+opencode honours `OPENCODE_CONFIG`, pi and omp both honour
+`PI_CODING_AGENT_DIR`, and omp's `models.yaml` is edited in place when it has
+no `models.yml` beside it, so the router writes the file each client actually
+reads.
 
 From the terminal, the same action is one command per client:
 

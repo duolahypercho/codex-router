@@ -2295,10 +2295,23 @@ of somebody else's file; `routed-harness-manager.mjs` is the publisher.
   is partial.
 - **Installing the client CLI is still the explicit action it is for the
   harness.** Only `client-setup` installs, and only from a package registry.
-  Hermes ships a `curl | bash` installer; this router does not run remote
-  installers on somebody's behalf, so that row reports the CLI as missing and
-  links to the official instructions. omp publishes darwin-arm64 and linux-x64
-  builds only, so the button is offered only where a build exists.
+  Hermes ships a `curl | bash` installer and omp (can1357/oh-my-pi, whose npm
+  package runs on Bun) installs from a script, Homebrew, or Bun; this router
+  does not run remote installers on somebody's behalf, so those rows report the
+  CLI as missing and link to the official instructions. Do not point the omp
+  row at `@oh-labs/oh-omp`: that fork installs `oh-omp` and reads `~/.oh-omp`,
+  not the `~/.omp` the `omp` command reads.
+- **A client too old to read the document is updated, not published past.**
+  Command Code first reads `providers.json` in 1.30.0, so `minimumVersion` on
+  its catalog entry makes setup update an older CLI and makes status and doctor
+  report one. A version the CLI will not report is unknown, not outdated.
+- **Prove a publication against the real client, not against its docs.** The
+  unit suite passed while opencode 1.18 rejected every published model, because
+  its schema requires `limit.output` whenever `limit` is present. opencode now
+  gets `limit.input` at the router's `autoCompact` and `limit.output` as the
+  headroom above it, or no `limit` when there is no threshold. A change to any
+  adapter needs the same check: publish into a scratch document, then have the
+  installed client list or use the models from it.
 - **Devin CLI and T3 Code are deliberately absent.** Devin CLI's config selects
   from Cognition-hosted models and has no custom base URL, so routed models
   cannot be published into it; the `devin-cli` *provider* is the other

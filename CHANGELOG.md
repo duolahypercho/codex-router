@@ -258,8 +258,10 @@
   providers in a configuration document the user also owns, so one shared
   publisher (`src/routed-harness-*.mjs`) writes the single `codex-router`
   provider key each of them reads and leaves every other byte alone.
-  **Set up** installs the client's CLI where this router can and publishes the
-  whole routed catalog in one action; `control client-setup <id>` and
+  **Set up** installs the client's CLI where this router can (updating a
+  Command Code older than 1.30.0, the first release that reads
+  `providers.json`) and publishes the whole routed catalog in one action; omp
+  and Hermes install from their own instructions first; `control client-setup <id>` and
   `control client-disconnect <id>` are the same thing from a terminal. Clients
   that speak the Responses API reach the authenticated loopback `/v1` path with
   the router's own slugs; Command Code and Hermes, which have no Responses

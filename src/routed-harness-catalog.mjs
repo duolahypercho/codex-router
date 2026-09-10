@@ -68,6 +68,22 @@ export function routedHarnessDefaultModel(models) {
 // the router serves only the latter — so this is `@ai-sdk/openai` pointed at
 // the caller base URL, not the "compatible" package the phrase
 // "OpenAI-compatible endpoint" suggests.
+//
+// opencode's schema requires `output` beside `context` whenever `limit` is
+// present and rejects the whole document otherwise: opencode 1.18 refused every
+// model of a `{ context }`-only publish. The router has no per-model output cap
+// to report, but it does know where Codex compacts (`autoCompact`). opencode
+// compacts at `limit.input` less a small reserve when `input` is set, so
+// `input` is that threshold and `output` is the headroom the registry leaves
+// above it; opencode caps a single request at 32k either way. A model with no
+// usable threshold publishes no limit, which opencode reads as unknown.
+function opencodeLimit(model) {
+  const context = contextWindow(model);
+  const threshold = model.autoCompact;
+  if (!context || !Number.isInteger(threshold) || threshold <= 0 || threshold >= context) return undefined;
+  return { context, input: threshold, output: context - threshold };
+}
+
 function opencodeProvider({ models, baseUrl, secret }) {
   return {
     npm: "@ai-sdk/openai",
@@ -81,10 +97,10 @@ function opencodeProvider({ models, baseUrl, secret }) {
       apiKey: secret,
     },
     models: Object.fromEntries(models.map((model) => {
-      const context = contextWindow(model);
+      const limit = opencodeLimit(model);
       return [String(model.slug), {
         name: String(model.displayName || model.slug),
-        ...(context ? { limit: { context } } : {}),
+        ...(limit ? { limit } : {}),
       }];
     })),
   };
@@ -158,7 +174,9 @@ function ompProvider({ models, baseUrl }) {
 // the ids are `claude-model-id.mjs` ids and the base URL is the `/anthropic`
 // leaf. `apiKey: false` is Command Code's own spelling for a keyless endpoint —
 // and the only correct value here, because it refuses a pasted raw secret in
-// that field outright.
+// that field outright. Its loader reads `name`, `contextWindow`, and
+// `reasoningEfforts` per model; a model with no efforts is non-reasoning by
+// omission, so nothing else is written.
 const COMMANDCODE_EFFORTS = new Set(["low", "medium", "high", "xhigh", "max"]);
 
 function commandCodeProvider({ models, baseUrl }) {
@@ -173,7 +191,7 @@ function commandCodeProvider({ models, baseUrl }) {
       return [claudeModelId(model.slug), {
         name: String(model.displayName || model.slug),
         ...(context ? { contextWindow: context } : {}),
-        ...(reasoning.length ? { reasoningEfforts: reasoning } : { reasoning: false }),
+        ...(reasoning.length ? { reasoningEfforts: reasoning } : {}),
       }];
     })),
   };
@@ -259,18 +277,18 @@ const HARNESSES = Object.freeze([
     displayName: "omp",
     ownership: "omp",
     description: "The omp (oh-my-pi) terminal agent, publishing every model selected in this router.",
-    docsUrl: "https://github.com/open-horizon-labs/oh-omp/blob/main/docs/models.md",
-    siteUrl: "https://github.com/open-horizon-labs/oh-omp",
-    // The npm package installs `oh-omp`; the documented command is `omp`.
-    // Detect both rather than picking one and reporting a present client as
-    // missing on whichever install path the user took.
-    executables: Object.freeze(["omp", "oh-omp"]),
+    docsUrl: "https://github.com/can1357/oh-my-pi/blob/main/docs/models.md",
+    siteUrl: "https://omp.sh/",
+    // can1357/oh-my-pi, the project the `omp` command names. A fork published
+    // as `@oh-labs/oh-omp` installs an `oh-omp` binary that reads `~/.oh-omp`,
+    // so detecting both while writing into one home was wrong for the other.
+    executables: Object.freeze(["omp"]),
     binEnv: "OMP_BIN",
-    npmPackage: "@oh-labs/oh-omp@latest",
-    // The published package carries prebuilt binaries for darwin-arm64 and
-    // linux-x64 only. Offering to install it on anything else would hand the
-    // user an npm failure with no explanation in it.
-    installPlatforms: Object.freeze(["darwin", "linux"]),
+    // `@oh-my-pi/pi-coding-agent` runs on Bun (`#!/usr/bin/env bun`, engines
+    // `bun>=1.3.14`), so an `npm install -g` without Bun leaves an `omp` that
+    // cannot start. Its supported installs are a `curl | sh` script, Homebrew,
+    // and Bun itself, none of which this router runs on somebody's behalf.
+    npmPackage: undefined,
     format: "yaml",
     documentKey: "OMP_MODELS_PATH",
     providerPath: Object.freeze(["providers", ROUTED_HARNESS_PROVIDER_ID]),
@@ -295,6 +313,10 @@ const HARNESSES = Object.freeze([
     ),
     binEnv: "COMMANDCODE_BIN",
     npmPackage: "command-code@latest",
+    // `providers.json` BYOK support first shipped in 1.30.0; 1.29.0 and earlier
+    // never read the file, so publishing into an older CLI changes nothing it
+    // can see. Setup updates such a CLI, and status reports it.
+    minimumVersion: "1.30.0",
     format: "json",
     documentKey: "COMMANDCODE_PROVIDERS_PATH",
     providerPath: Object.freeze(["provider", ROUTED_HARNESS_PROVIDER_ID]),

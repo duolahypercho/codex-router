@@ -32,7 +32,9 @@ const { ROUTED_HARNESS_IDS, routedHarness, routedHarnesses } = await import(
   "../src/routed-harness-catalog.mjs"
 );
 const { createRoutedHarnessManager } = await import("../src/routed-harness-manager.mjs");
-const { routedHarnessInstallable } = await import("../src/routed-harness-install.mjs");
+const { installRoutedHarness, routedHarnessInstallable, routedHarnessOutdated } = await import(
+  "../src/routed-harness-install.mjs"
+);
 const { applyYamlValue, removeYamlValue, yamlLeafScalar } = await import(
   "../src/routed-harness-document.mjs"
 );
@@ -43,6 +45,7 @@ const MODELS = [
     slug: "moonshot/kimi-k3",
     displayName: "Kimi K3",
     contextWindow: 262_144,
+    autoCompact: 222_822,
     inputModalities: ["text"],
     reasoningLevels: [{ effort: "low" }, { effort: "high" }],
     priority: 10,
@@ -301,9 +304,123 @@ test("the catalog names one wire, one document, and one provider key per client"
   // install it; the others are installable where their package has a build.
   assert.equal(routedHarness("hermes").npmPackage, undefined);
   assert.equal(routedHarnessInstallable("hermes"), false);
+  // omp's npm package runs on Bun, so an npm install without Bun would leave an
+  // `omp` that cannot start. It is installed from its own instructions.
+  assert.equal(routedHarnessInstallable("omp"), false);
+  assert.deepEqual(routedHarness("omp").executables, ["omp"]);
   assert.equal(routedHarnessInstallable("opencode"), true);
-  assert.equal(routedHarnessInstallable("omp", { platform: "win32" }), false);
-  assert.equal(routedHarnessInstallable("omp", { platform: "darwin" }), true);
+});
+
+test("opencode gets a limit its schema accepts, compacting where Codex does", () => {
+  reset();
+  manager("opencode").install();
+  const { models } = JSON.parse(readFileSync(DOCUMENTS.opencode, "utf8")).provider["codex-router"];
+  // opencode rejects the whole document when `limit` lacks `output`.
+  assert.deepEqual(models["moonshot/kimi-k3"].limit, { context: 262_144, input: 222_822, output: 39_322 });
+  // No compaction threshold, no limit: unknown rather than a guess.
+  assert.equal(models["x-ai/grok-4.6"].limit, undefined);
+});
+
+test("Command Code models carry only the fields its loader reads", () => {
+  reset();
+  manager("commandcode").install();
+  const { models } = JSON.parse(readFileSync(DOCUMENTS.commandcode, "utf8")).provider["codex-router"];
+  assert.deepEqual(models["codex_router/anthropic/moonshot/kimi-k3"], {
+    name: "Kimi K3",
+    contextWindow: 262_144,
+    reasoningEfforts: ["low", "high"],
+  });
+  assert.deepEqual(models["codex_router/anthropic/x-ai/grok-4.6"], { name: "Grok 4.6", contextWindow: 2_000_000 });
+});
+
+test("a Command Code too old to read providers.json is updated, not published past", () => {
+  const installs = [];
+  const upgraded = installRoutedHarness("commandcode", {
+    find: () => "/usr/local/bin/command-code",
+    version: () => (installs.length ? "1.53.0" : "1.26.0"),
+    install: (spec) => installs.push(spec),
+  });
+  assert.deepEqual(installs, ["command-code@latest"]);
+  assert.equal(upgraded.upgraded, true);
+
+  const current = installRoutedHarness("commandcode", {
+    find: () => "/usr/local/bin/command-code",
+    version: () => "1.30.0",
+    install: () => assert.fail("a current CLI must not be reinstalled"),
+  });
+  assert.equal(current.changed, false);
+
+  // npm updated its copy but an older install still wins on PATH.
+  assert.throws(
+    () => installRoutedHarness("commandcode", { find: () => "/opt/cc", version: () => "1.26.0", install: () => {} }),
+    /still older than 1\.30\.0/,
+  );
+  assert.throws(
+    () => installRoutedHarness("omp", { find: () => undefined, install: () => assert.fail("omp is never npm-installed") }),
+    /omp\.sh/,
+  );
+
+  assert.equal(routedHarnessOutdated("commandcode", "1.29.9"), true);
+  assert.equal(routedHarnessOutdated("commandcode", "command-code 1.30.0"), false);
+  assert.equal(routedHarnessOutdated("commandcode", undefined), false);
+  assert.equal(routedHarnessOutdated("opencode", "0.0.1"), false);
+
+  const status = manager("commandcode", { cliVersion: () => "1.26.0" }).status();
+  assert.equal(status.cliOutdated, true);
+  assert.equal(status.cliVersion, "1.26.0");
+  assert.equal(status.cliMinimumVersion, "1.30.0");
+});
+
+test("an injected marker file is the one read back, not the state directory's", () => {
+  reset();
+  const markerFile = path.join(root, "elsewhere", "pi-marker.json");
+  const client = manager("pi", { markerFile });
+  client.install();
+  assert.equal(existsSync(markerFile), true);
+  assert.equal(existsSync(path.join(stateDir, "pi-models.json")), false);
+  const status = client.status();
+  assert.equal(status.installed, true);
+  assert.equal(status.catalogFresh, true);
+  assert.equal(client.uninstall().removed, true);
+  assert.equal(existsSync(markerFile), false);
+  rmSync(path.dirname(markerFile), { recursive: true, force: true });
+});
+
+test("pi, omp, and Command Code documents resolve the way those clients resolve them", async () => {
+  const { execFileSync } = await import("node:child_process");
+  const home = path.join(root, "home");
+  const agentDir = path.join(root, "agent-override");
+  const resolve = (extra) => {
+    const env = { ...process.env, HOME: home, USERPROFILE: home, ...extra };
+    for (const key of ["MODEL_ROUTER_PI_MODELS", "MODEL_ROUTER_OMP_MODELS", "MODEL_ROUTER_COMMANDCODE_PROVIDERS"]) {
+      delete env[key];
+    }
+    if (!extra.PI_CODING_AGENT_DIR) delete env.PI_CODING_AGENT_DIR;
+    const script =
+      "const p = await import(process.argv[1]);" +
+      "console.log(JSON.stringify({ pi: p.PI_MODELS_PATH, omp: p.OMP_MODELS_PATH, commandcode: p.COMMANDCODE_PROVIDERS_PATH }));";
+    return JSON.parse(execFileSync(
+      process.execPath,
+      ["--input-type=module", "-e", script, new URL("../src/paths.mjs", import.meta.url).href],
+      { env, encoding: "utf8" },
+    ));
+  };
+
+  const defaults = resolve({});
+  assert.equal(defaults.pi, path.join(home, ".pi", "agent", "models.json"));
+  // `~/.omp`, the upstream's home -- not the `~/.oh-omp` a fork reads.
+  assert.equal(defaults.omp, path.join(home, ".omp", "agent", "models.yml"));
+  assert.equal(defaults.commandcode, path.join(home, ".commandcode", "providers.json"));
+
+  const overridden = resolve({ PI_CODING_AGENT_DIR: agentDir });
+  assert.equal(overridden.pi, path.join(agentDir, "models.json"));
+  assert.equal(overridden.omp, path.join(agentDir, "models.yml"));
+
+  // omp reads `models.yaml` when there is no `models.yml`; creating one would
+  // shadow the user's file.
+  mkdirSync(agentDir, { recursive: true });
+  writeFileSync(path.join(agentDir, "models.yaml"), "providers: {}\n");
+  assert.equal(resolve({ PI_CODING_AGENT_DIR: agentDir }).omp, path.join(agentDir, "models.yaml"));
 });
 
 test("the YAML helpers only ever touch the key they are given", () => {

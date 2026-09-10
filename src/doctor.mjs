@@ -1466,9 +1466,13 @@ try {
         publishHint,
       );
       add(
-        status.cliInstalled ? "ok" : "warn",
+        status.cliInstalled && !status.cliOutdated ? "ok" : "warn",
         `${harness.displayName} CLI`,
-        status.cliInstalled ? status.cli || harness.executables[0] : "not installed",
+        !status.cliInstalled
+          ? "not installed"
+          : status.cliOutdated
+            ? `${status.cliVersion} predates ${status.cliMinimumVersion}, the first release that reads the published provider`
+            : status.cli || harness.executables[0],
         `Use Harness > ${harness.displayName} > Set up, or install it from ${harness.siteUrl}.`,
       );
       add(
