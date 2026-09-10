@@ -698,6 +698,7 @@ test("login-free control selects a ready external model and restores Codex defau
         ["deepseek/deepseek-v4-flash", "hide"],
         ["deepseek/deepseek-v4-flash-vision-exp", "list"],
         ["deepseek/deepseek-v4-pro", "list"],
+        ["deepseek/deepseek-flash", "list"],
       ],
     );
     const aliases = JSON.parse(readFileSync(path.join(stateDir, "native-aliases.json"), "utf8"));

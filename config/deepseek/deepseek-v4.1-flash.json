@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "slug": "deepseek/deepseek-flash",
+      "gatewayModel": "deepseek-flash",
+      "upstreamModel": "deepseek-flash",
+      "provider": "deepseek",
+      "listed": true,
+      "displayName": "DeepSeek V4.1 Flash (API)",
+      "description": "DeepSeek V4.1 Flash through the official DeepSeek API. The live catalog exposes the model ID but not capability metadata, so Codex uses conservative text-only sizing and a live-verified non-thinking profile for tool-compatible stateless turns.",
+      "priority": 8,
+      "defaultEffort": "minimal",
+      "reasoningLevels": [
+        {
+          "effort": "minimal",
+          "description": "Tool-compatible non-thinking mode"
+        }
+      ],
+      "contextWindow": 131072,
+      "autoCompact": 110000,
+      "inputModalities": [
+        "text"
+      ],
+      "requestProfile": "deepseek-nonthinking",
+      "compHash": "deepseek-flash-v1"
+    }
+  ]
+}

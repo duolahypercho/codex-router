@@ -98,6 +98,7 @@ test("provider registry exposes configured API and OAuth model families", () => 
       "deepseek/deepseek-v4-flash",
       "deepseek/deepseek-v4-flash-vision-exp",
       "deepseek/deepseek-v4-pro",
+      "deepseek/deepseek-flash",
       "grok-api/grok-4.5",
       "grok-oauth/grok-4.5",
       "grok-oauth/grok-4.6",
@@ -774,6 +775,25 @@ test("DeepSeek V4 Flash Vision Exp advertises only verified direct-API capabilit
   assert.deepEqual(model.searchTool, { mode: "standalone" });
   assert.equal(model.supportsReasoningSummaries, true);
   assert.equal(endpointForModel(model), PROVIDERS.get("deepseek"));
+  assert.ok(API_MODELS.includes(model));
+});
+
+test("DeepSeek V4.1 Flash exposes only conservative, live-verified direct-API capabilities", () => {
+  const model = MODEL_BY_SLUG.get("deepseek/deepseek-flash");
+  assert.ok(model);
+  assert.equal(model.provider, "deepseek");
+  assert.equal(model.gatewayModel, "deepseek-flash");
+  assert.equal(model.upstreamModel, "deepseek-flash");
+  assert.equal(model.listed, true);
+  assert.equal(model.requestProfile, "deepseek-nonthinking");
+  assert.equal(model.defaultEffort, "minimal");
+  assert.deepEqual(model.reasoningLevels, [
+    { effort: "minimal", description: "Tool-compatible non-thinking mode" },
+  ]);
+  assert.equal(model.contextWindow, 131072);
+  assert.equal(model.autoCompact, 110000);
+  assert.deepEqual(model.inputModalities, ["text"]);
+  assert.equal(model.searchTool, undefined);
   assert.ok(API_MODELS.includes(model));
 });
 

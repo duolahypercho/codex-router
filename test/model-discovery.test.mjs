@@ -29,7 +29,13 @@ test("model discovery compares fixtures without needing or exposing a key", () =
   const fixture = path.join(testRoot, "models.json");
   writeFileSync(
     fixture,
-    JSON.stringify({ data: [{ id: "deepseek-v4-pro" }, { id: "deepseek-v5-preview" }] }),
+    JSON.stringify({
+      data: [
+        { id: "deepseek-flash" },
+        { id: "deepseek-v4-pro" },
+        { id: "deepseek-v5-preview" },
+      ],
+    }),
   );
   try {
     const output = execFileSync(
@@ -41,6 +47,7 @@ test("model discovery compares fixtures without needing or exposing a key", () =
     assert.deepEqual(result.unregistered, ["deepseek-v5-preview"]);
     assert.deepEqual(result.addable, ["deepseek-v5-preview"]);
     assert.deepEqual(result.blocked, {});
+    assert.ok(result.registered.includes("deepseek-flash"));
     assert.ok(result.unavailable.includes("deepseek-v4-flash"));
     assert.doesNotMatch(output, /Bearer|api[_-]?key/i);
   } finally {
