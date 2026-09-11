@@ -5,6 +5,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import {
+  accountRefusal,
   CHECK_LABELS,
   checksComplete,
   firstFailure,
@@ -46,6 +47,41 @@ test("the first failure is reported in reviewer order", () => {
   };
   assert.equal(firstFailure(checks).check, "toolCall");
   assert.equal(firstFailure(checks).detail, "no tool call");
+});
+
+test("account refusal detects ChatGPT blocking for custom provider models", () => {
+  // Issue #689: Custom provider models with GPT-6-like slugs are blocked by
+  // Codex server when signed in with a ChatGPT account.
+  const errorResponse = {
+    detail: "The 'unorouter/gpt-6-astra' model is not supported when using Codex with a ChatGPT account.",
+  };
+  const events = [errorResponse];
+  const refusal = accountRefusal(events);
+  assert.equal(typeof refusal, "string");
+  assert.match(refusal, /Codex will not spawn this route/i);
+  assert.match(refusal, /ChatGPT account/i);
+});
+
+test("account refusal detects renamed slug variants", () => {
+  // Issue #689: Even renaming the slug (e.g., unorouter/agi-1) doesn't help if
+  // the upstream model ID still triggers the pattern.
+  const errorResponse = {
+    detail: "The 'unorouter/agi-1' model is not supported when using Codex with a ChatGPT account.",
+  };
+  const events = [errorResponse];
+  const refusal = accountRefusal(events);
+  assert.equal(typeof refusal, "string");
+  assert.match(refusal, /Codex will not spawn this route/i);
+});
+
+test("account refusal does not trigger for other provider errors", () => {
+  const events = [
+    { error: "Rate limit exceeded" },
+    { error: "Invalid API key" },
+    { detail: "Model not found" },
+  ];
+  const refusal = accountRefusal(events);
+  assert.equal(refusal, undefined);
 });
 
 test("markers are unique per run so a stale transcript cannot pass a route", () => {

@@ -89,6 +89,49 @@ To deliberately switch ownership to the checkout you are running from:
 MODEL_ROUTER_ALLOW_FOREIGN_STATE=1 ./bin/model-router codex doctor --fix
 ```
 
+## Custom provider models blocked with ChatGPT account
+
+**Symptom:** A custom OpenAI-compatible provider model (for example,
+`unorouter/gpt-6-astra` or `private/gpt-6-astra`) is rejected with:
+
+```
+The '<provider>/<model>' model is not supported when using Codex with a
+ChatGPT account.
+```
+
+**Root cause:** This error originates from the **Codex client/server**, not from
+the router. Recent Codex builds validate custom-provider model slugs and reject
+slugs that resemble native OpenAI model names (particularly `gpt-6-*` patterns)
+when the user is signed in with a ChatGPT account.
+
+**Why it happens:**
+- Codex performs server-side validation on model slugs to prevent custom
+  providers from impersonating native OpenAI models.
+- The validation triggers for slug patterns like `gpt-6-astra`, `gpt-6-*`,
+  and other names that look like official OpenAI models.
+- Models with different naming patterns from the same provider (such as
+  `unorouter/grok-4.6`) work correctly because they do not trigger this
+  validation.
+
+**Workarounds:**
+1. **Sign out of ChatGPT** in Codex to use custom providers with GPT-6-like
+   model names. The router's login-free mode still provides access to external
+   providers without requiring ChatGPT authentication.
+2. **Use different model slugs** that do not resemble native OpenAI names. For
+   example, rename `unorouter/gpt-6-astra` to `unorouter/astra-model` in your
+   custom provider configuration (though the upstream model ID sent to the
+   provider can remain `gpt-6-astra`).
+3. **Wait for PR #673** which implements a provider-switch mechanism to work
+   around Codex's validation while keeping ChatGPT authentication active.
+
+**What the router cannot do:**
+- The router cannot bypass or disable this validation because it occurs in the
+  Codex client/server before the request reaches the router.
+- Model slug renaming in the router configuration does not help if the renamed
+  slug still resembles a native OpenAI model name.
+
+Related issues: #645, #673, #689.
+
 ## External models are missing from the picker
 
 ```sh
