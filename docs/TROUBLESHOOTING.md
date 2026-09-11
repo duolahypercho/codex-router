@@ -563,9 +563,14 @@ Get-ScheduledTask -TaskName "Codex Router"
 ```
 
 The task runs `start-codex-router-hidden.vbs` from the state directory under
-`wscript.exe`, which starts `start-codex-router.cmd` without a console window,
-so a missing window is not a sign that the router is down. Read `router.log` in
-the same directory for its output.
+`wscript.exe`. The script starts `start-codex-router.cmd` through the bundled
+venv's `pythonw.exe` and `start-codex-router.pyw`, which create the wrapper's
+console without a window (`CREATE_NO_WINDOW`), so no window appears even when
+Windows Terminal is the default terminal. An install without the venv falls back
+to starting the wrapper hidden the way conhost honors. A missing window is not
+a sign that the router is down; read `router.log` in the same directory for its
+output. Reinstall with `./codex-router.ps1 install` to regenerate the launchers
+after upgrading from a version that wrote only the `.cmd` and `.vbs` files.
 
 Keep the repository at the absolute path used during installation. Rerun setup
 from the new path if it was moved.

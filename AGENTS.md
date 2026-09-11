@@ -630,6 +630,66 @@ The service definition still looked correct at every glance.
    operation owns the shared lock. The same file keeps the silent-environment
    proxy restore regression.
 
+## Windows background children are created windowless, never hidden afterwards
+
+Windows 11 with Windows Terminal as the default terminal ignores the hidden
+window style (`SW_HIDE`, `WScript.Shell.Run(..., 0)`, `ShowWindow` on the
+console handle) that conhost honored. The only reliable way for a console
+binary to have no window is to be created with `CREATE_NO_WINDOW`, which is
+what conhost itself checks: a console created that way never gets a window,
+and every descendant that inherits that console stays windowless. Pull request
+#674 reported the symptoms -- an empty Terminal window on every Control Center
+refresh and a persistent one behind the scheduled task -- and this is the
+model that explains them.
+
+1. **A parent without a console is the trigger.** The Control Center runs
+   `control.mjs` inside its own GUI-subsystem executable, `wscript.exe` and
+   `pythonw.exe` have no console, and so does anything started with
+   `detached`. A console child spawned from such a parent allocates a fresh
+   console, and on Windows 11 that console is a visible Terminal window. From
+   a CLI with a real console, children inherit it and nothing new appears,
+   which is why POSIX CI and a Windows terminal session both stay green while
+   the desktop paths leak.
+2. **`windowsHide` only becomes `CREATE_NO_WINDOW` when no stdio is inherited.**
+   libuv sets `SW_HIDE` for `windowsHide` unconditionally but adds
+   `CREATE_NO_WINDOW` only when every stdio slot is `ignore` or `pipe`. A
+   spawn with `stdio: "inherit"` and `windowsHide: true` is therefore hidden
+   under conhost and visible under Windows Terminal. Do not add `windowsHide`
+   to an inherited-stdio spawn and call it fixed; either the child may keep
+   the caller's console (there is one) or the output must be relayed.
+   `runProcessTree` in `src/process-tree.mjs` does exactly that: when no
+   standard stream is a terminal it spawns the Job Object owner with pipes,
+   writes the child's output to its own streams, and passes `windowsHide`
+   through to the contained command. `test/process-tree.test.mjs` pins the
+   shape.
+3. **Every console helper on a desktop path passes `windowsHide: true` with
+   non-inherited stdio.** `test/windows-hidden-consoles.test.mjs` scans `src/`
+   for `powershell.exe`, `pwsh`, and `schtasks.exe` invocations and fails on
+   any background call without the flag. Extend the scan when a new console
+   binary joins a refresh or status path; a Task Scheduler query that lost the
+   flag is how the Control Center refresh window appeared.
+4. **The scheduled task starts the wrapper through `pythonw.exe`.**
+   `wscript.exe` cannot request `CREATE_NO_WINDOW`, so the generated launcher
+   prefers `.venv\Scripts\pythonw.exe` running `start-codex-router.pyw`, a
+   generated script whose only job is `cmd.exe /D /C start-codex-router.cmd`
+   with that flag. The CMD wrapper stays the single definition of the service
+   environment, the log redirect, and the exit code; do not fork it into a
+   second launcher that sets environment variables of its own. The direct
+   `cmd.exe` form remains the fallback for an install without the venv
+   (`MODEL_ROUTER_LITELLM_BIN`), where it is still hidden under conhost.
+   `test/service-render.test.mjs` renders both files and, on Windows, executes
+   the launcher under both script hosts to prove the exit code still reaches
+   Task Scheduler.
+5. **Do not trade a supervisor or a hardening step for silence.** The minute
+   heartbeat trigger (issue #581), the private-file ACL pass, and the Job
+   Object containment of Control Center commands all stay. A heartbeat tick
+   dropped by `MultipleInstances IgnoreNew` starts no process, and one that
+   does relaunch goes through the windowless launcher, so none of them draws
+   anything once the flags above are right. Skipping them under
+   `ELECTRON_RUN_AS_NODE` or replacing `service.mjs status` with a pid probe
+   was how an earlier draft of #674 went quiet, and each of those is a
+   regression in its own right.
+
 ## The gateway is restarted in place; the router is not taken down with it
 
 `src/gateway-supervisor.mjs` watches the LiteLLM child and replaces it when it

@@ -10,7 +10,10 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 // Electron Control Center and the tray -- gets its own window unless
 // `windowsHide` is set. The helpers those parents reach run on routine
 // refreshes, so one missing flag produced a burst of visible PowerShell
-// windows every time a message was sent (issue #565).
+// windows every time a message was sent (issue #565). schtasks.exe is the
+// other console binary on that path: Task Scheduler queries run on every
+// Control Center refresh, and on Windows 11 with Windows Terminal as the
+// default terminal each unflagged query opened a Terminal window (issue #674).
 //
 // A source assertion is the only cheap guard here: the failure is invisible on
 // macOS and Linux, and reproducing it needs a Windows desktop session.
@@ -94,7 +97,7 @@ function powershellCalls() {
     let match;
     while ((match = pattern.exec(source))) {
       const argumentText = callArguments(source, match.index);
-      if (!/powershell|pwsh/i.test(argumentText)) continue;
+      if (!/powershell|pwsh|schtasks/i.test(argumentText)) continue;
       const options = resolvedOptions(source, argumentText);
       calls.push({
         // path.relative yields backslashes on Windows; normalise so the
@@ -113,14 +116,14 @@ function powershellCalls() {
   return calls;
 }
 
-test("every background PowerShell invocation hides its console window", () => {
+test("every background PowerShell and schtasks invocation hides its console window", () => {
   const offenders = powershellCalls()
     .filter((call) => !call.interactive && !call.hidden)
     .map((call) => call.where);
   assert.deepEqual(
     offenders,
     [],
-    `PowerShell launched without windowsHide: true:\n  ${offenders.join("\n  ")}`,
+    `console helper launched without windowsHide: true:\n  ${offenders.join("\n  ")}`,
   );
 });
 
@@ -132,6 +135,11 @@ test("the scan actually finds the PowerShell call sites it is guarding", () => {
   assert.ok(
     calls.some((call) => call.where.startsWith("src/file-security.mjs")),
     "the helper every private write reaches must be covered",
+  );
+  assert.ok(
+    calls.some((call) => call.where.startsWith("src/service-windows.mjs"))
+      && calls.some((call) => call.where.startsWith("src/tray-service-windows.mjs")),
+    "both Task Scheduler query helpers must be covered",
   );
   assert.ok(
     calls.some((call) => call.interactive),

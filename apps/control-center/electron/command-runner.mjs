@@ -638,21 +638,6 @@ export function windowsJobProcessInvocation(
     windowsHide: Boolean(windowsHide),
     windowsVerbatimArguments: Boolean(windowsVerbatimArguments),
   }), "utf8").toString("base64");
-  const pythonw = path.join(sourceRoot, ".venv", "Scripts", "pythonw.exe");
-  // powershell.exe is a console binary. Spawning it from Electron opens a
-  // visible Windows Terminal window on Refresh even with windowsHide.
-  // pythonw.exe is GUI-subsystem and starts the Job Object runner hidden.
-  if (existsSync(pythonw)) {
-    return {
-      command: pythonw,
-      args: [
-        path.join(sourceRoot, "src", "windows-job-host.pyw"),
-        windowsPowerShell(environment),
-        path.join(sourceRoot, "src", "windows-process-tree.ps1"),
-        payload,
-      ],
-    };
-  }
   return {
     command: windowsPowerShell(environment),
     args: [
@@ -912,12 +897,12 @@ function runEntrypoint(entry, args = [], {
     // separately installed runtime. In CLI/tests process.execPath is already
     // Node; in the desktop host ELECTRON_RUN_AS_NODE switches that same signed
     // executable into its Node mode.
-    // Windows Control Center is already a GUI-subsystem executable. Wrapping
-    // it in powershell.exe (or pythonw -> powershell) opened a Terminal
-    // window on Refresh and, with pythonw, dropped stdout so JSON reads
-    // failed. Spawn this same GUI binary in Node mode; abort still uses
-    // taskkill /T. The Job Object helper remains for other console hosts.
-    const invocation = { command: process.execPath, args: [entry, ...args] };
+    const invocation = process.platform === "win32"
+      ? windowsJobProcessInvocation(process.execPath, [entry, ...args], {
+          sourceRoot,
+          environment: childEnvironment,
+        })
+      : { command: process.execPath, args: [entry, ...args] };
     let child;
     try {
       child = spawn(invocation.command, invocation.args, {

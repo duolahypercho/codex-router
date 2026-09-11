@@ -15,26 +15,6 @@ import path from "node:path";
 const WINDOWS_PRIVATE_ASYNC_TIMEOUT_MS = 30_000;
 const WINDOWS_PRIVATE_ASYNC_OUTPUT_LIMIT = 64 * 1024;
 
-function windowsPythonwHost() {
-  const sourceRoot = process.env.MODEL_ROUTER_SOURCE_ROOT;
-  if (!sourceRoot || process.platform !== "win32") return undefined;
-  const pythonw = path.join(sourceRoot, ".venv", "Scripts", "pythonw.exe");
-  const host = path.join(sourceRoot, "src", "windows-job-host.pyw");
-  if (!existsSync(pythonw) || !existsSync(host)) return undefined;
-  return { pythonw, host };
-}
-
-function execFileSyncHidden(command, args, options) {
-  if (process.env.ELECTRON_RUN_AS_NODE === "1") {
-    return Buffer.from("");
-  }
-  const hidden = windowsPythonwHost();
-  if (hidden) {
-    return execFileSync(hidden.pythonw, [hidden.host, command, ...args], options);
-  }
-  return execFileSync(command, args, options);
-}
-
 // Windows private-file hardening is one bounded PowerShell operation per
 // atomic write. Keeping the async path one-shot is deliberate: Windows
 // PowerShell does not provide a stable line-oriented stdin protocol when it is
@@ -187,13 +167,19 @@ function terminateWindowsChild(child) {
 function protectPrivateFilesWin32(paths) {
   const list = [...paths];
   try {
-    execFileSyncHidden(
+    execFileSync(
       "powershell.exe",
       powershellPrivateCommandArgs(),
       {
         env: windowsPowerShellEnvironment(list),
         stdio: ["ignore", "ignore", "pipe"],
         timeout: 15_000,
+        // Every private write reaches this helper, including the ones a
+        // Control Center status refresh performs. A console child of a GUI
+        // parent gets its own window unless this is set, which is how a
+        // routine refresh produced a burst of visible PowerShell windows
+        // (issue #565). The script is non-interactive and its stdio is
+        // already redirected, so nothing is hidden from the operator.
         windowsHide: true,
       },
     );
@@ -214,29 +200,19 @@ function protectPrivateFilesWin32(paths) {
 // credentials out of the helper environment and cap diagnostic output.
 function protectPrivateFilesWin32Async(paths) {
   const list = [...paths];
-  if (process.env.ELECTRON_RUN_AS_NODE === "1") {
-    return Promise.resolve(list);
-  }
   return new Promise((resolve, reject) => {
     let settled = false;
     let timer;
     let stderr = "";
-    const hidden = windowsPythonwHost();
-    const child = hidden
-      ? spawn(hidden.pythonw, [hidden.host, "powershell.exe", ...powershellPrivateArgs()], {
-          env: windowsPowerShellEnvironment(list),
-          stdio: ["ignore", "ignore", "pipe"],
-          windowsHide: true,
-        })
-      : spawn(
-          "powershell.exe",
-          powershellPrivateArgs(),
-          {
-            env: windowsPowerShellEnvironment(list),
-            stdio: ["ignore", "ignore", "pipe"],
-            windowsHide: true,
-          },
-        );
+    const child = spawn(
+      "powershell.exe",
+      powershellPrivateArgs(),
+      {
+        env: windowsPowerShellEnvironment(list),
+        stdio: ["ignore", "ignore", "pipe"],
+        windowsHide: true,
+      },
+    );
     const settle = (error) => {
       if (settled) return;
       settled = true;
@@ -385,7 +361,7 @@ export function ensureCheckoutReadable(checkoutPath) {
   ].join("\n");
   const encoded = Buffer.from(script, "utf16le").toString("base64");
   try {
-    execFileSyncHidden(
+    execFileSync(
       "powershell.exe",
       ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded],
       {
@@ -424,7 +400,7 @@ export function privateFileIsProtected(target) {
     "[Console]::Out.Write(($acl.AreAccessRulesProtected -and -not $hasInheritedRule -and $hasFullControl -and -not $hasForeignAllow).ToString())",
   ].join("; ");
   try {
-    return execFileSyncHidden(
+    return execFileSync(
       "powershell.exe",
       ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
       {
@@ -432,6 +408,8 @@ export function privateFileIsProtected(target) {
         env: { ...process.env, CODEX_ROUTER_PRIVATE_FILE: target },
         stdio: ["ignore", "pipe", "ignore"],
         timeout: 15_000,
+        // Verification runs from the same GUI-parented paths as the write
+        // above; see issue #565.
         windowsHide: true,
       },
     ).trim().toLowerCase() === "true";

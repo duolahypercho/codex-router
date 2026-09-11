@@ -518,24 +518,24 @@ export function windowsJobProcessInvocation(
     windowsHide: Boolean(windowsHide),
     windowsVerbatimArguments: Boolean(windowsVerbatimArguments),
   }), "utf8").toString("base64");
-  const powershell = windowsPowerShell(environment);
-  const psArgs = [
-    "-NoLogo",
-    "-NoProfile",
-    "-NonInteractive",
-    "-ExecutionPolicy", "Bypass",
-    "-File", runner,
-    payload,
-  ];
-  const here = path.dirname(fileURLToPath(import.meta.url));
-  const pythonw = path.join(here, "..", ".venv", "Scripts", "pythonw.exe");
-  const host = path.join(here, "windows-job-host.pyw");
-  // powershell.exe is a console binary. Spawning it from the Control Center
-  // opens Windows Terminal even with windowsHide. pythonw.exe is GUI-subsystem.
-  if (existsSync(pythonw) && existsSync(host)) {
-    return { command: pythonw, args: [host, powershell, ...psArgs] };
-  }
-  return { command: powershell, args: psArgs };
+  return {
+    command: windowsPowerShell(environment),
+    args: [
+      "-NoLogo",
+      "-NoProfile",
+      "-NonInteractive",
+      "-ExecutionPolicy", "Bypass",
+      "-File", runner,
+      payload,
+    ],
+  };
+}
+
+// A process owns a console when any standard stream is a terminal. Streams
+// that are all pipes or files mean either a GUI parent (no console at all) or
+// redirected output; in both cases a console child may start windowless.
+function callerHasConsole() {
+  return [process.stdin, process.stdout, process.stderr].some((stream) => stream?.isTTY === true);
 }
 
 function processGroupAlive(pid, kill = process.kill) {
@@ -756,9 +756,22 @@ export function runProcessTree(
   const childEnvironment = childSignalBudget === undefined
     ? coordinator.environment
     : { ...coordinator.environment, [OWNER_SIGNAL_BUDGET_ENV]: String(childSignalBudget) };
-  const effectiveWindowsHide = process.platform === "win32" && !process.stdout.isTTY
-    ? true
-    : stdio === "inherit" ? false : windowsHide;
+  // "inherit" keeps a command on the caller's own console when there is one:
+  // the child stays visible and Ctrl+C reaches it. Without a console (the
+  // Control Center's GUI-subsystem Node, a Task Scheduler launcher, piped CLI
+  // output) an inherited-stdio console child would allocate a fresh console of
+  // its own, and on Windows 11 that console is a visible Windows Terminal
+  // window: the default terminal ignores SW_HIDE, and Node only requests
+  // CREATE_NO_WINDOW when no stdio is inherited. So the console-less case
+  // relays the child's output through pipes instead, which is what lets the
+  // Job Object helper and the command inside it start windowless.
+  const relayInheritedStdio = stdio === "inherit"
+    && platform === "win32"
+    && !callerHasConsole();
+  const effectiveWindowsHide = stdio === "inherit" && !relayInheritedStdio ? false : windowsHide;
+  const childStdio = stdio === "inherit" && !relayInheritedStdio
+    ? "inherit"
+    : ["ignore", "pipe", "pipe"];
   return new Promise((resolve, reject) => {
     const invocation = platform === "win32"
       ? windowsJobProcessInvocation(command, args, {
@@ -778,7 +791,7 @@ export function runProcessTree(
         shell: false,
         windowsHide: effectiveWindowsHide,
         windowsVerbatimArguments: false,
-        stdio: stdio === "inherit" ? "inherit" : ["ignore", "pipe", "pipe"],
+        stdio: childStdio,
       });
     } catch (error) {
       coordinator.release();
@@ -886,6 +899,12 @@ export function runProcessTree(
     ), { barrierDirectory: coordinator.directory });
 
     const collect = (name, chunk) => {
+      if (relayInheritedStdio) {
+        // The caller asked for its own streams; hand every byte through
+        // unbounded, exactly as a shared console would have.
+        (name === "stdout" ? process.stdout : process.stderr).write(chunk);
+        return;
+      }
       if (settled || discardOutput) return;
       outputBytes += chunk.length;
       if (outputBytes > maxOutputBytes) {

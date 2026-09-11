@@ -2446,30 +2446,21 @@ test("Electron uses the installed Windows Job Object owner", () => {
       ownerPid: 4321,
     },
   );
-  const payload = JSON.parse(Buffer.from(invocation.args.at(-1), "base64").toString("utf8"));
-  assert.deepEqual(payload, {
-    command: "C:\\Program Files\\Codex Router\\router.exe",
-    arguments: ["control.mjs", "doctor"],
-    ownerProcessId: 4321,
-    windowsHide: true,
-    windowsVerbatimArguments: false,
-  });
-  if (invocation.command.toLowerCase().endsWith("pythonw.exe")) {
-    assert.equal(
-      invocation.args[0],
-      path.join("C:\\Users\\operator\\codex-router", "src", "windows-job-host.pyw"),
-    );
-    assert.equal(
-      invocation.args[2],
-      path.join("C:\\Users\\operator\\codex-router", "src", "windows-process-tree.ps1"),
-    );
-  } else {
-    assert.equal(invocation.command, "powershell.exe");
-    assert.equal(
-      invocation.args.at(-2),
-      path.join("C:\\Users\\operator\\codex-router", "src", "windows-process-tree.ps1"),
-    );
-  }
+  assert.equal(invocation.command, "powershell.exe");
+  assert.equal(
+    invocation.args.at(-2),
+    path.join("C:\\Users\\operator\\codex-router", "src", "windows-process-tree.ps1"),
+  );
+  assert.deepEqual(
+    JSON.parse(Buffer.from(invocation.args.at(-1), "base64").toString("utf8")),
+    {
+      command: "C:\\Program Files\\Codex Router\\router.exe",
+      arguments: ["control.mjs", "doctor"],
+      ownerProcessId: 4321,
+      windowsHide: true,
+      windowsVerbatimArguments: false,
+    },
+  );
 });
 
 test("router children inherit the proxy opt-in this install recorded", async () => {

@@ -489,24 +489,16 @@ test("Windows commands enter a suspended kill-on-close Job Object", () => {
       runner: "C:\\router\\src\\windows-process-tree.ps1",
     },
   );
-  const payloadArg = invocation.args.at(-1);
-  const prefix = invocation.args.slice(0, -1);
-  if (String(invocation.command).toLowerCase().endsWith("pythonw.exe")) {
-    assert.equal(path.basename(invocation.args[0]), "windows-job-host.pyw");
-    assert.equal(prefix.at(-2), "-File");
-    assert.equal(prefix.at(-1), "C:\\router\\src\\windows-process-tree.ps1");
-  } else {
-    assert.equal(invocation.command, "powershell.exe");
-    assert.deepEqual(prefix, [
-      "-NoLogo",
-      "-NoProfile",
-      "-NonInteractive",
-      "-ExecutionPolicy", "Bypass",
-      "-File", "C:\\router\\src\\windows-process-tree.ps1",
-    ]);
-  }
+  assert.equal(invocation.command, "powershell.exe");
+  assert.deepEqual(invocation.args.slice(0, -1), [
+    "-NoLogo",
+    "-NoProfile",
+    "-NonInteractive",
+    "-ExecutionPolicy", "Bypass",
+    "-File", "C:\\router\\src\\windows-process-tree.ps1",
+  ]);
   assert.deepEqual(
-    JSON.parse(Buffer.from(payloadArg, "base64").toString("utf8")),
+    JSON.parse(Buffer.from(invocation.args.at(-1), "base64").toString("utf8")),
     {
       command: "C:\\Program Files\\nodejs\\node.exe",
       arguments: ["worker.mjs", "argument with spaces"],
@@ -531,9 +523,35 @@ test("Windows commands enter a suspended kill-on-close Job Object", () => {
   assert.match(runner, /TerminateJobObject\(job, 1\)/);
   assert.match(runner, /WaitForEmptyJob\(job\)/);
   const processTree = readFileSync(new URL("../src/process-tree.mjs", import.meta.url), "utf8");
+  // "inherit" keeps a command on an existing console. Without one -- the
+  // Control Center's GUI-subsystem Node, a scheduled-task launcher, piped CLI
+  // output -- an inherited-stdio console child allocates its own console, and
+  // Windows 11's default terminal shows it: Windows Terminal ignores SW_HIDE
+  // and Node only requests CREATE_NO_WINDOW when no stdio is inherited
+  // (issue #674). That case must relay through pipes and hide both the
+  // PowerShell owner and the contained target.
   assert.match(
     processTree,
-    /const effectiveWindowsHide = process\.platform === "win32" && !process\.stdout\.isTTY/,
+    /const relayInheritedStdio = stdio === "inherit"\n\s+&& platform === "win32"\n\s+&& !callerHasConsole\(\);/,
+  );
+  assert.match(
+    processTree,
+    /const effectiveWindowsHide = stdio === "inherit" && !relayInheritedStdio \? false : windowsHide;/,
+  );
+  assert.match(
+    processTree,
+    /const childStdio = stdio === "inherit" && !relayInheritedStdio\n\s+\? "inherit"\n\s+: \["ignore", "pipe", "pipe"\];/,
+  );
+  assert.match(processTree, /stdio: childStdio,/);
+  assert.match(
+    processTree,
+    /function callerHasConsole\(\) \{\n\s+return \[process\.stdin, process\.stdout, process\.stderr\]\.some\(\(stream\) => stream\?\.isTTY === true\);/,
+  );
+  // Relayed output is the caller's own stream, so it is never capped or
+  // discarded the way captured output is.
+  assert.match(
+    processTree,
+    /if \(relayInheritedStdio\) \{[\s\S]*?\(name === "stdout" \? process\.stdout : process\.stderr\)\.write\(chunk\);\n\s+return;\n\s+\}\n\s+if \(settled \|\| discardOutput\) return;/,
   );
   assert.equal(
     processTree.match(/windowsHide: effectiveWindowsHide/g)?.length,

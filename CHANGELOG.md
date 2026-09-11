@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- **Windows background work no longer opens Windows Terminal windows.** On
+  Windows 11 with Windows Terminal as the default terminal, a Control Center
+  refresh opened an empty Terminal window and the scheduled task kept one on
+  screen for the router's lifetime, because the default terminal ignores the
+  hidden window style (`SW_HIDE`) that conhost honored. Console helpers are now
+  created with `CREATE_NO_WINDOW` instead: Task Scheduler queries pass
+  `windowsHide`, a control invocation that inherits stdio from a parent without
+  a console relays its output through pipes so the Job Object owner and its
+  command both start windowless, and the scheduled task starts the CMD wrapper
+  through the bundled venv's `pythonw.exe` and a generated
+  `start-codex-router.pyw`. The direct `cmd.exe` launcher remains the fallback
+  for an install without the venv. Reinstall the service
+  (`./codex-router.ps1 install`) to regenerate the launchers. The minute
+  heartbeat trigger, private-file ACL hardening, and Job Object containment of
+  Control Center commands are unchanged. (#674)
 - **DeepSeek V4.1 Flash is available on four providers, alongside V4.**
   DeepSeek released V4.1 Flash on 2026-09-10. New routes:
   `deepseek/deepseek-v4.1-flash` (1M window, image input, thinking with
