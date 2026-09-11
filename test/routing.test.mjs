@@ -7669,7 +7669,8 @@ test("signed routing routes custom provider models (issue #689)", async () => {
   // Issue #689: custom provider model `unorouter/gpt-6-astra` was rejected
   // under ChatGPT-account Codex with "The '...' model is not supported when
   // using Codex with a ChatGPT account." Provider-switch signed routing (v4)
-  // must route explicit custom models while keeping official GPT slugs native.
+  // must route named provider models like unorouter while keeping official
+  // GPT slugs native. This test uses the actual failing slug shape reported.
   const nativeRequests = [];
   const native = await mockServer(async (request, response) => {
     nativeRequests.push(await bodyJson(request));
@@ -7682,16 +7683,36 @@ test("signed routing routes custom provider models (issue #689)", async () => {
     json(response, 200, { route: "external", model: body.model });
   });
   const routerPort = await openPort();
-  const testRoot = mkdtempSync(path.join(os.tmpdir(), "codex-router-custom-route-"));
+  const testRoot = mkdtempSync(path.join(os.tmpdir(), "codex-router-unorouter-"));
   const stateDir = path.join(testRoot, "state");
   mkdirSync(stateDir, { recursive: true });
   writeFileSync(
     path.join(stateDir, "signed-provider-mode.json"),
     `${JSON.stringify({ version: 4, mode: "provider-switch" })}\n`,
   );
-  // Simulate a custom provider model that looks like a GPT model but isn't.
-  // Must use valid custom/ namespace, credential with file+environment,
-  // description, reasoningLevels, and priority for listed models.
+  // Register a generic OpenAI-compatible provider named "unorouter" exactly
+  // as a real user would in generic-providers.json. This matches the actual
+  // reported failing case, not the generic custom/ container.
+  const genericProvidersPath = path.join(stateDir, "generic-providers.json");
+  writeFileSync(
+    genericProvidersPath,
+    JSON.stringify({
+      version: 1,
+      providers: [
+        {
+          id: "unorouter",
+          displayName: "UnoRouter",
+          description: "OpenAI-compatible UnoRouter provider",
+          baseUrl: `http://127.0.0.1:${gateway.port}/v1`,
+          adapter: "openai-chat",
+          allowPrivate: true,
+          enabled: true,
+          credentialRef: "cred_unorouter_test",
+        },
+      ],
+    }),
+  );
+  // User model under the unorouter provider with GPT-like slug.
   const userModels = path.join(stateDir, "user-models.json");
   writeFileSync(
     userModels,
@@ -7699,15 +7720,15 @@ test("signed routing routes custom provider models (issue #689)", async () => {
       version: 1,
       models: [
         {
-          slug: "custom/gpt-6-astra",
-          provider: "custom",
+          slug: "unorouter/gpt-6-astra",
+          provider: "unorouter",
           upstreamModel: "gpt-6-astra",
-          gatewayModel: "custom-gpt-6-astra",
-          displayName: "Custom GPT-6 Astra",
-          description: "Custom provider GPT-6 model for testing issue #689",
+          gatewayModel: "unorouter-gpt-6-astra",
+          displayName: "UnoRouter GPT-6 Astra",
+          description: "GPT-6 Astra via UnoRouter provider (issue #689 case)",
           priority: 9999,
           defaultEffort: "medium",
-          compHash: "test-custom-gpt6",
+          compHash: "test-unorouter-gpt6",
           contextWindow: 131072,
           autoCompact: 111411,
           inputModalities: ["text"],
@@ -7717,21 +7738,14 @@ test("signed routing routes custom provider models (issue #689)", async () => {
             { effort: "high", description: "Deep reasoning" },
           ],
           listed: true,
-          endpoint: {
-            baseUrl: `http://127.0.0.1:${gateway.port}/v1`,
-            credential: {
-              file: "custom-gpt-6-astra.txt",
-              environment: [],
-            },
-          },
         },
       ],
     }),
   );
-  // Custom provider needs a credential file.
-  const credDir = path.join(stateDir, "credentials");
+  // Generic provider needs a credential file.
+  const credDir = path.join(stateDir, "generic-provider-credentials");
   mkdirSync(credDir, { recursive: true });
-  writeFileSync(path.join(credDir, "custom-gpt-6-astra.txt"), "TEST_CUSTOM_KEY");
+  writeFileSync(path.join(credDir, "cred_unorouter_test.txt"), "TEST_UNOROUTER_KEY");
   const router = run("router.mjs", {
     CODEX_ROUTER_PORT: String(routerPort),
     CODEX_NATIVE_BASE_URL: `http://127.0.0.1:${native.port}/backend-api/codex`,
@@ -7739,26 +7753,28 @@ test("signed routing routes custom provider models (issue #689)", async () => {
     CODEX_ROUTER_STATE_DIR: stateDir,
     MODEL_ROUTER_STATE_DIR: stateDir,
     MODEL_ROUTER_USER_MODELS: userModels,
+    MODEL_ROUTER_GENERIC_PROVIDERS: genericProvidersPath,
     CODEX_ROUTER_QUIET: "1",
   });
 
   try {
     await waitFor(`${routerBase(routerPort)}/models`, router);
-    // Custom provider model must route to gateway, not rejected or sent native.
-    const customResponse = await fetch(`${routerBase(routerPort)}/responses`, {
+    // Named provider model unorouter/gpt-6-astra must route to gateway,
+    // not be rejected or sent to native backend despite GPT-like name.
+    const unorouterResponse = await fetch(`${routerBase(routerPort)}/responses`, {
       method: "POST",
       headers: {
         Authorization: "Bearer CODEX_CALLER_SECRET",
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ model: "custom/gpt-6-astra", input: "custom turn" }),
+      body: JSON.stringify({ model: "unorouter/gpt-6-astra", input: "unorouter turn" }),
     });
-    assert.equal(customResponse.status, 200, "custom provider model must not be rejected");
-    assert.equal(nativeRequests.length, 0, "custom model must not go to native backend");
+    assert.equal(unorouterResponse.status, 200, "unorouter model must not be rejected");
+    assert.equal(nativeRequests.length, 0, "unorouter model must not go to native backend");
     assert.equal(gatewayRequests.length, 1);
-    assert.equal(gatewayRequests[0].model, "custom-gpt-6-astra");
+    assert.equal(gatewayRequests[0].model, "unorouter-gpt-6-astra");
 
-    // Official GPT model still goes native despite the custom route existing.
+    // Official GPT model still goes native despite unorouter route existing.
     const officialResponse = await fetch(`${routerBase(routerPort)}/responses`, {
       method: "POST",
       headers: {
