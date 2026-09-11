@@ -1970,10 +1970,16 @@ the most tools, and no mock gateway with a bare envelope shows it.
    skip part of a frame to fit a budget. Accumulator storage grown past an
    ordinary event is released once its frame is taken, so one large prelude
    does not pin that capacity for the whole stream.
-4. **The scan costs CPU in proportion to the frame.** Every byte of a large
-   prelude is scanned synchronously on the router's event loop. Raising a bound
-   again, or adding another pre-commit parser on the routed path, needs a
-   measurement against a frame at the new bound, not only a passing test.
+4. **The scan costs CPU in proportion to the frame, so keep it bulk.** A
+   pre-commit frame is decoded, uniqueness-scanned, and parsed synchronously on
+   the router's event loop. Measured on the 409 KiB prelude that prompted this:
+   3-6 ms, scaling at roughly 7 ms per MiB to 53 ms at 7.5 MiB. The frame
+   scanner reaches that by jumping between line feeds rather than walking every
+   byte -- the per-byte loop it replaced cost 49 ms on an 8 MiB frame on its
+   own. Raising a bound again, or adding another pre-commit parser to the
+   routed path, needs a measurement at the new bound rather than only a passing
+   test. Measure uncontended: on a loaded machine these numbers inflate by more
+   than an order of magnitude and invite a fix for a cost that is not there.
 5. **Fixtures for this path echo a large, dense tool list.** "router keeps
    DeepSeek message repairs behind a Desktop-sized prelude" in
    `test/routing.test.mjs` asserts that its echoed prelude crosses both old

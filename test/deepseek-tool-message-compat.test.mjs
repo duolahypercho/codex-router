@@ -2131,6 +2131,43 @@ test("default bounds admit LiteLLM's echoed Desktop-sized prelude", async () => 
   );
 });
 
+// The frame scanner jumps between line feeds instead of walking every byte,
+// so the bytes before a candidate separator can still sit in storage from an
+// earlier chunk. Splitting the same stream at every offset is what proves that
+// boundary: a CRLF separator can be cut in three places, and a missed frame
+// end silently changes what the repair sees.
+test("a frame split at any byte boundary repairs identically", async () => {
+  for (const newline of ["\n", "\r\n"]) {
+    for (const [label, build, make] of [
+      [
+        "translated",
+        () => phantomToolStream(newline),
+        () => new TranslatedToolMessageCompatTransform({ maxCandidateMs: 60_000 }),
+      ],
+      [
+        "direct",
+        () => currentDirectDeepseekStream().replaceAll("\n", newline),
+        () => new DeepseekToolMessageCompatTransform({ maxCandidateMs: 60_000 }),
+      ],
+    ]) {
+      const source = build();
+      const bytes = Buffer.from(source);
+      const whole = await transformedBy(make(), bytes);
+      for (let at = 1; at < bytes.length; at += 1) {
+        const stream = make();
+        let output = "";
+        stream.setEncoding("utf8");
+        stream.on("data", (chunk) => { output += chunk; });
+        stream.write(bytes.subarray(0, at));
+        stream.write(bytes.subarray(at));
+        stream.end();
+        await once(stream, "end");
+        assert.equal(output, whole, `${label} ${JSON.stringify(newline)} split at ${at}`);
+      }
+    }
+  }
+});
+
 test("one-byte fragmented frames use bounded concatenation in both SSE paths", async () => {
   const source = `event: opaque\ndata: ${"x".repeat(128 * 1024)}`;
   const options = {

@@ -193,31 +193,40 @@ class SseFrameAccumulator {
 
   write(value, onFrame) {
     const bytes = Buffer.isBuffer(value) ? value : Buffer.from(value);
-    for (let index = 0; index < bytes.length; index += 1) {
-      this.#append(bytes[index]);
-      const separator = this.#separator();
-      if (separator) {
-        const original = this.take();
-        if (original.length > this.#maxFrameBytes) {
+    let from = 0;
+    while (from < bytes.length) {
+      // The most this frame may still take before it crosses the bound. The
+      // byte at that position is the one a per-byte scan would refuse on, so
+      // never look for a separator past it: an oversized frame must be
+      // reported from there, with the rest of the chunk as the remainder.
+      const room = this.#maxFrameBytes + 1 - this.#length;
+      const limit = Math.min(bytes.length, from + room);
+      const found = this.#separatorEnd(bytes, from, limit);
+      if (!found) {
+        this.#appendRange(bytes, from, limit);
+        if (this.#length > this.#maxFrameBytes) {
           return {
-            oversized: original,
-            remainder: Buffer.from(bytes.subarray(index + 1)),
+            oversized: this.take(),
+            remainder: Buffer.from(bytes.subarray(limit)),
           };
         }
-        const block = original.subarray(0, original.length - separator.length);
-        if (onFrame(block, separator, original) === false) {
-          return {
-            stopped: true,
-            remainder: Buffer.from(bytes.subarray(index + 1)),
-          };
-        }
+        from = limit;
         continue;
       }
-      if (this.#length > this.#maxFrameBytes) {
-        const original = this.take();
+      this.#appendRange(bytes, from, found.end + 1);
+      from = found.end + 1;
+      const original = this.take();
+      if (original.length > this.#maxFrameBytes) {
         return {
           oversized: original,
-          remainder: Buffer.from(bytes.subarray(index + 1)),
+          remainder: Buffer.from(bytes.subarray(from)),
+        };
+      }
+      const block = original.subarray(0, original.length - found.separator.length);
+      if (onFrame(block, found.separator, original) === false) {
+        return {
+          stopped: true,
+          remainder: Buffer.from(bytes.subarray(from)),
         };
       }
     }
@@ -240,8 +249,10 @@ class SseFrameAccumulator {
     return value;
   }
 
-  #append(byte) {
-    const required = this.#length + 1;
+  #appendRange(bytes, start, end) {
+    const length = end - start;
+    if (length <= 0) return;
+    const required = this.#length + length;
     if (required > this.#storage.length) {
       const maximum = this.#maxFrameBytes + 1;
       const doubled = this.#storage.length ? this.#storage.length * 2 : 1024;
@@ -250,26 +261,42 @@ class SseFrameAccumulator {
       if (this.#length) this.#storage.copy(next, 0, 0, this.#length);
       this.#storage = next;
     }
-    this.#storage[this.#length] = byte;
+    bytes.copy(this.#storage, this.#length, start, end);
     this.#length = required;
   }
 
-  #separator() {
-    if (
-      this.#length >= LF_FRAME_SEPARATOR.length &&
-      this.#storage[this.#length - 2] === 0x0a &&
-      this.#storage[this.#length - 1] === 0x0a
+  // Every separator ends with LF, so jump between line feeds instead of
+  // touching each byte: the prelude LiteLLM echoes is hundreds of kilobytes,
+  // and a per-byte loop over it stalls the router's event loop. The bytes
+  // before a candidate may still sit in storage from an earlier chunk, so
+  // read those from there and keep the "first end wins" order a per-byte scan
+  // had. A trailing CRLF pair cannot also end with LF LF, so the two
+  // separators never match at the same position.
+  #separatorEnd(bytes, from, limit) {
+    for (
+      let newline = bytes.indexOf(0x0a, from);
+      newline !== -1 && newline < limit;
+      newline = bytes.indexOf(0x0a, newline + 1)
     ) {
-      return LF_FRAME_SEPARATOR;
-    }
-    if (
-      this.#length >= CRLF_FRAME_SEPARATOR.length &&
-      this.#storage[this.#length - 4] === 0x0d &&
-      this.#storage[this.#length - 3] === 0x0a &&
-      this.#storage[this.#length - 2] === 0x0d &&
-      this.#storage[this.#length - 1] === 0x0a
-    ) {
-      return CRLF_FRAME_SEPARATOR;
+      const accumulated = this.#length + (newline - from) + 1;
+      const byteBefore = (back) => {
+        const index = newline - back;
+        return index >= from ? bytes[index] : this.#storage[this.#length - (from - index)];
+      };
+      if (
+        accumulated >= LF_FRAME_SEPARATOR.length &&
+        byteBefore(1) === 0x0a
+      ) {
+        return { end: newline, separator: LF_FRAME_SEPARATOR };
+      }
+      if (
+        accumulated >= CRLF_FRAME_SEPARATOR.length &&
+        byteBefore(1) === 0x0d &&
+        byteBefore(2) === 0x0a &&
+        byteBefore(3) === 0x0d
+      ) {
+        return { end: newline, separator: CRLF_FRAME_SEPARATOR };
+      }
     }
     return undefined;
   }
