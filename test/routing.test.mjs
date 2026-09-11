@@ -9850,6 +9850,131 @@ test("router exposes Grok summaries as one canonical Codex reasoning item", asyn
   }
 });
 
+test("router exposes Chat Completions reasoning behind a Desktop-sized prelude", async () => {
+  // Shape captured from commandcode/hy4-preview through pinned LiteLLM: the
+  // message opens first, every reasoning delta carries a fresh hashed id, and
+  // response.created echoes the whole Codex tool list.
+  const model = "commandcode-hy4-preview";
+  const tools = Array.from({ length: 400 }, (_, index) => ({
+    type: "function",
+    name: `mcp__server__tool_${index}`,
+    description: "d".repeat(900),
+    parameters: { type: "object", properties: {} },
+  }));
+  const message = {
+    id: "msg_hy4_live",
+    type: "message",
+    status: "completed",
+    role: "assistant",
+    content: [{ type: "output_text", text: "17 × 23 = 391", annotations: [] }],
+  };
+  const deltas = ["We need ", "to multiply ", "17 by 23."];
+  const events = [
+    {
+      type: "response.created",
+      response: { id: "resp_hy4_live", object: "response", status: "in_progress", output: [], tools },
+    },
+    { type: "response.output_item.added", output_index: 0, item: { ...message, status: "in_progress", content: [] } },
+    {
+      type: "response.content_part.added",
+      item_id: message.id,
+      output_index: 0,
+      content_index: 0,
+      part: { type: "output_text", text: "", annotations: [] },
+    },
+    ...deltas.map((delta, index) => ({
+      type: "response.reasoning_summary_text.delta",
+      item_id: `rs_${index % 2 ? "-" : ""}${8812 + index}`,
+      output_index: 0,
+      delta,
+    })),
+    { type: "response.output_text.delta", item_id: message.id, output_index: 0, content_index: 0, delta: "17 × 23 = 391" },
+    { type: "response.output_text.done", item_id: message.id, output_index: 0, content_index: 0, text: "17 × 23 = 391" },
+    {
+      type: "response.content_part.done",
+      item_id: message.id,
+      output_index: 0,
+      content_index: 0,
+      part: { type: "output_text", text: "17 × 23 = 391", annotations: [] },
+    },
+    { type: "response.output_item.done", output_index: 0, item: message },
+    {
+      type: "response.completed",
+      response: {
+        id: "resp_hy4_live",
+        object: "response",
+        status: "completed",
+        output: [
+          {
+            type: "reasoning",
+            id: "rs_-3845156871622966097",
+            status: "completed",
+            role: "assistant",
+            content: [{ type: "output_text", text: deltas.join(""), annotations: [] }],
+          },
+          { ...message, id: "bc79c12a-17eb-40cf-a7a4-c36547db556d" },
+        ],
+        usage: { input_tokens: 5, output_tokens: 8, total_tokens: 13 },
+      },
+    },
+  ];
+  const source = events.map((event) => `data: ${JSON.stringify({ ...event, model })}\n\n`).join("");
+  assert.ok(Buffer.byteLength(source.split("\n\n", 1)[0]) > 256 * 1024);
+  const gateway = await mockServer(async (request, response) => {
+    await bodyJson(request);
+    response.writeHead(200, { "Content-Type": "text/event-stream" });
+    response.end(`${source}data: [DONE]\n\n`);
+  });
+  const routerPort = await openPort();
+  const router = run("router.mjs", {
+    CODEX_ROUTER_PORT: String(routerPort),
+    CODEX_ROUTER_GATEWAY_BASE_URL: `http://127.0.0.1:${gateway.port}/v1`,
+    CODEX_ROUTER_QUIET: "1",
+  });
+
+  try {
+    await waitFor(`${routerBase(routerPort)}/models`, router);
+    const response = await fetch(`${routerBase(routerPort)}/responses`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "commandcode/hy4-preview", input: "17*23?", stream: true }),
+    });
+    const text = await response.text();
+    assert.equal(response.status, 200, text);
+    const output = text.split(/\r?\n/u)
+      .filter((line) => line.startsWith("data: {"))
+      .map((line) => JSON.parse(line.slice(5).trimStart()));
+    const reasoningEvents = output.filter(
+      (event) => event.item?.type === "reasoning" || event.type.startsWith("response.reasoning_"),
+    );
+    assert.deepEqual(reasoningEvents.map((event) => event.type), [
+      "response.output_item.added",
+      "response.reasoning_summary_part.added",
+      "response.reasoning_summary_text.delta",
+      "response.reasoning_summary_text.delta",
+      "response.reasoning_summary_text.delta",
+      "response.reasoning_summary_text.done",
+      "response.reasoning_summary_part.done",
+      "response.output_item.done",
+    ]);
+    assert.ok(reasoningEvents.every((event) => (event.item_id ?? event.item?.id) === "rs_8812"));
+    assert.ok(reasoningEvents.every((event) => event.output_index === 0));
+    assert.ok(output
+      .filter((event) => event.item_id === message.id || event.item?.id === message.id)
+      .every((event) => event.output_index === 1));
+    const completed = output.find((event) => event.type === "response.completed").response.output;
+    assert.deepEqual(completed.map((item) => [item.type, item.id]), [
+      ["reasoning", "rs_8812"],
+      ["message", message.id],
+    ]);
+    assert.deepEqual(completed[0].summary, [{ type: "summary_text", text: deltas.join("") }]);
+    assert.equal(completed[1].content[0].text, "17 × 23 = 391");
+  } finally {
+    await stopChild(router);
+    await closeServer(gateway.server);
+  }
+});
+
 test("router normalizes direct DeepSeek's live reasoning bridge and removes its blank", async () => {
   const model = "deepseek-v4-flash";
   const reasoningText = "Inspect the request, then call the tool exactly once.";

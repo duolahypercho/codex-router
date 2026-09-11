@@ -2083,6 +2083,39 @@ label, so `src/message-phase.mjs` assigns one.
    already sequential. Coverage lives in `test/message-phase.test.mjs` and the
    routed case in `test/namespace-relay-routing.test.mjs`.
 
+## Chat Completions reasoning reaches Codex as one reasoning item
+
+LiteLLM 1.96's Chat Completions to Responses bridge opens the assistant message
+first, then streams `response.reasoning_summary_text.delta` under a fresh
+hashed `rs_…` id per delta (or the message's id), with no reasoning
+`output_item.added` or `reasoning_summary_part.added` and on the message's
+`output_index`. Codex drops deltas that belong to no open item, so reasoning
+never rendered and no reasoning item was saved to the thread. That held for
+every Chat Completions route (measured on `commandcode/hy4-preview` and
+`opencode-go/deepseek-v4.1-flash`), not only Grok.
+
+1. **One repair, scoped by protocol.** `reasoningSummaryCompatTransform` in
+   `src/grok-reasoning-summary-compat.mjs` attaches the lifecycle repair to
+   every provider whose `protocol` is Chat Completions (`openai`, the default).
+   Direct `deepseek` is excluded because `DeepseekToolMessageCompatTransform`
+   already repairs its bridge, and `anthropic` and `openai-responses`
+   providers do not reach this bridge. Widening it to another protocol needs a
+   captured stream from that protocol first.
+2. **Grok's gateway-error wording stays on Grok OAuth.** Only `grok-oauth`
+   replaces an untyped LiteLLM error envelope with the fixed local error. Other
+   routes relay that envelope byte-identical, after closing the reasoning item
+   as `incomplete` and releasing any message the repair was holding.
+3. **The pre-commit frame bound is 10 MiB, like the namespace relay's.**
+   LiteLLM echoes the request's `instructions` and full `tools` array in
+   `response.created`, and a Codex Desktop tool list exceeds 256 KiB. A smaller
+   bound releases that frame raw and disables the repair for the whole stream,
+   which no mock gateway with a tiny prelude reproduces. Any fixture for this
+   path must echo a Desktop-sized tool list.
+4. **Canonical streams pass byte-identical.** Coverage lives in
+   `test/grok-reasoning-summary-compat.test.mjs` and the Grok and Desktop-sized
+   Chat Completions router cases in `test/routing.test.mjs`. The regression
+   oracle is a live Codex turn whose rollout records a `reasoning` item.
+
 ## Routed subagent regression prevention
 
 - A normal `/responses` smoke test does not cover Codex collaboration. Current

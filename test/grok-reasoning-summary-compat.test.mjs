@@ -4,7 +4,7 @@ import test from "node:test";
 
 import {
   GrokReasoningSummaryCompatTransform,
-  grokReasoningSummaryCompatTransform,
+  reasoningSummaryCompatTransform,
 } from "../src/grok-reasoning-summary-compat.mjs";
 
 function block(event, newline = "\n") {
@@ -863,9 +863,79 @@ test("flushes a pending message-only envelope byte-identically at EOF", async ()
   assert.equal(await transformed(input), input);
 });
 
-test("compatibility factory is scoped to Grok OAuth event streams", () => {
-  assert.ok(grokReasoningSummaryCompatTransform({ id: "grok-oauth" }, "text/event-stream"));
-  assert.ok(grokReasoningSummaryCompatTransform("grok-oauth", "text/event-stream; charset=utf-8"));
-  assert.equal(grokReasoningSummaryCompatTransform("grok-api", "text/event-stream"), undefined);
-  assert.equal(grokReasoningSummaryCompatTransform("grok-oauth", "application/json"), undefined);
+test("compatibility factory covers LiteLLM Chat Completions event streams", () => {
+  assert.ok(reasoningSummaryCompatTransform({ id: "grok-oauth" }, "text/event-stream"));
+  assert.ok(reasoningSummaryCompatTransform("grok-oauth", "text/event-stream; charset=utf-8"));
+  assert.ok(reasoningSummaryCompatTransform({ id: "commandcode" }, "text/event-stream"));
+  assert.ok(reasoningSummaryCompatTransform({ id: "opencode-go", protocol: "openai" }, "text/event-stream"));
+  assert.ok(reasoningSummaryCompatTransform({ id: "grok-api" }, "text/event-stream"));
+  assert.equal(reasoningSummaryCompatTransform("grok-oauth", "application/json"), undefined);
+  assert.equal(reasoningSummaryCompatTransform({ id: "commandcode" }, "application/json"), undefined);
+  // Direct DeepSeek repairs its own bridge; Messages and Responses providers
+  // never pass through LiteLLM's Chat Completions translation.
+  assert.equal(reasoningSummaryCompatTransform({ id: "deepseek" }, "text/event-stream"), undefined);
+  assert.equal(reasoningSummaryCompatTransform({ id: "commandcode-messages", protocol: "anthropic" }, "text/event-stream"), undefined);
+  assert.equal(reasoningSummaryCompatTransform({ id: "opencode-go-responses", protocol: "openai-responses" }, "text/event-stream"), undefined);
+  assert.equal(reasoningSummaryCompatTransform(undefined, "text/event-stream"), undefined);
+  assert.equal(reasoningSummaryCompatTransform("commandcode", "text/event-stream"), undefined);
+});
+
+test("non-Grok routes relay gateway error envelopes instead of rewriting them", async () => {
+  const input = [
+    pendingGatewayMessage(),
+    block(GATEWAY_ERROR),
+    block({ type: "response.completed", response: { status: "completed", output: [] } }),
+  ].join("");
+  const raw = await transformed(input, 1, { normalizeGatewayErrors: false });
+  assert.doesNotMatch(raw, /local_router_stream_failed/u);
+  assert.ok(raw.includes(block(GATEWAY_ERROR)), "the envelope must be relayed byte-identical");
+  const output = events(raw);
+  assert.equal(output.some((event) => event.type === "error"), false);
+  const envelope = output.findIndex((event) => event.error?.stack === GATEWAY_ERROR.error.stack);
+  const reasoningDone = output.findIndex(
+    (event) => event.type === "response.output_item.done" && event.item?.type === "reasoning",
+  );
+  const messageAdded = output.findIndex(
+    (event) => event.type === "response.output_item.added" && event.item?.type === "message",
+  );
+  assert.ok(reasoningDone >= 0 && reasoningDone < envelope);
+  assert.ok(messageAdded >= 0 && messageAdded < envelope);
+  assert.equal(output[reasoningDone].item.status, "incomplete");
+  assert.deepEqual(output[reasoningDone].item.summary, [{ type: "summary_text", text: "Проверка ещё идёт." }]);
+  assert.ok(output.slice(envelope).some((event) => event.type === "response.completed"));
+});
+
+test("repairs reasoning after a response.created that echoes a Codex Desktop tool list", async () => {
+  // LiteLLM copies instructions and every tool into response.created. Desktop's
+  // MCP tool list pushes that frame past 256 KiB, which used to switch the
+  // repair off for the rest of the stream.
+  const tools = Array.from({ length: 400 }, (_, index) => ({
+    type: "function",
+    name: `mcp__server__tool_${index}`,
+    description: "d".repeat(900),
+    parameters: { type: "object", properties: {} },
+  }));
+  const created = block({
+    type: "response.created",
+    response: { id: "resp_desktop", status: "in_progress", output: [], tools },
+  });
+  assert.ok(Buffer.byteLength(created) > 256 * 1024);
+  const message = { id: "msg_desktop", type: "message", role: "assistant", status: "in_progress", content: [] };
+  const input = [
+    created,
+    block({ type: "response.output_item.added", output_index: 0, item: message }),
+    block({ type: "response.content_part.added", item_id: message.id, output_index: 0, content_index: 0, part: { type: "output_text", text: "", annotations: [] } }),
+    block({ type: "response.reasoning_summary_text.delta", item_id: "rs_101", output_index: 0, delta: "Think " }),
+    block({ type: "response.reasoning_summary_text.delta", item_id: "rs_-202", output_index: 0, delta: "first." }),
+    block({ type: "response.output_text.delta", item_id: message.id, output_index: 0, content_index: 0, delta: "Done." }),
+  ].join("");
+  const output = events(await transformed(input, 65_536));
+  assert.equal(output[0].type, "response.created");
+  const reasoningEvents = output.filter(
+    (event) => event.item?.type === "reasoning" || event.type.startsWith("response.reasoning_"),
+  );
+  assert.equal(reasoningEvents[0].type, "response.output_item.added");
+  assert.ok(reasoningEvents.every((event) => (event.item_id ?? event.item?.id) === "rs_101"));
+  assert.equal(reasoningEvents.at(-1).item.summary[0].text, "Think first.");
+  assert.equal(output.find((event) => event.type === "response.output_text.delta").output_index, 1);
 });

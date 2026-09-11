@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- **Reasoning from Chat Completions models now shows in Codex.** LiteLLM's
+  Chat Completions to Responses bridge opens the assistant message first and
+  streams the model's reasoning under a fresh hashed item id per delta, with no
+  reasoning item around it. Codex drops deltas that belong to no open item, so
+  routed models such as Hy4 Preview (Command Code), DeepSeek V4.1 Flash on
+  opencode Go, and every other Chat Completions route showed no reasoning at
+  all, and none was saved to the thread. The repair that already rebuilt one
+  reasoning item for Grok OAuth now runs for every Chat Completions route.
+  Direct DeepSeek keeps its own bridge repair, Responses and Messages providers
+  are untouched, canonical streams pass byte-identical, and the Grok-specific
+  gateway-error wording stays on Grok OAuth. Its first-frame bound also rises
+  from 256 KiB to 10 MiB: LiteLLM echoes the whole Codex tool list in
+  `response.created`, and in Codex Desktop that frame used to switch the repair
+  off for the entire stream.
 - **A routed model the router has not loaded now fails locally, not at
   ChatGPT.** A model added to or renamed in `user-models.json` shows up in the
   Codex picker as soon as the catalog is rebuilt, but the running router reads
