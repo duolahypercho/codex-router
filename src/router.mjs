@@ -57,6 +57,7 @@ import {
   isEmptyCompletionPreludeLimitError,
 } from "./empty-completion-guard.mjs";
 import { itemLifecycleNormalizerTransform } from "./item-lifecycle-normalizer.mjs";
+import { leakedToolCallRecoveryTransform } from "./leaked-tool-call-recovery.mjs";
 import { reasoningTagStripperTransform } from "./reasoning-tag-stripper.mjs";
 import {
   ZaiResponsesCompatTransform,
@@ -4341,6 +4342,17 @@ async function handleResponses(request, response, requestUrl) {
         ? translatedToolMessageCompatTransform(providerForModel(route), contentType)
         : undefined;
       if (translatedToolMessageCompat) transforms.push(translatedToolMessageCompat);
+      // Recover tool calls a routed model wrote as text. Hy4 Preview has a
+      // native `<tool_calls:NONCE>` syntax that some serving stacks fail to
+      // parse, so the calls arrive on the reasoning channel and the turn ends
+      // with an empty assistant message and no `function_call` -- Codex shows
+      // the "Worked for ..." group and no answer at all. Runs before the
+      // namespace transform so a recovered flattened call is restored like any
+      // other. Native streams (no route) never carry the markup.
+      const leakedToolCalls = route
+        ? leakedToolCallRecoveryTransform(contentType)
+        : undefined;
+      if (leakedToolCalls) transforms.push(leakedToolCalls);
       // Restore flattened namespace calls for routed chat-completions providers
       // and pin an omitted spawn_agent model to every routed parent, including
       // providers that already speak Responses. Also inject missing finished-
@@ -4408,11 +4420,12 @@ async function handleResponses(request, response, requestUrl) {
       ) {
         transforms.push(new ResponsesHeartbeatTransform({ intervalMs: GROK_HEARTBEAT_MS }));
       }
-      return { transforms, usageObserver, guard };
+      return { transforms, usageObserver, guard, leakedToolCalls };
     };
     const firstPipeline = createResponsePipeline(upstreamContentType);
     usageTransform = firstPipeline.usageObserver;
     emptyCompletionGuard = firstPipeline.guard;
+    const leakedToolCallRecovery = firstPipeline.leakedToolCalls;
     const relayOpen = Boolean(emptyCompletionGuard);
     let streamedPreludeFailureKind;
     try {
@@ -4442,6 +4455,15 @@ async function handleResponses(request, response, requestUrl) {
       } else {
         throw error;
       }
+    }
+    // A turn that leaked its tool calls as text would otherwise end silently,
+    // so say when the router put them back: without this the only evidence a
+    // recovery happened is the absence of a failure.
+    const recoveredToolCalls = leakedToolCallRecovery?.recoveredCalls() || 0;
+    if (recoveredToolCalls > 0) {
+      console.error(
+        `[codex-router] recovered ${recoveredToolCalls} tool call(s) the model wrote as text model=${requestedModel || "unknown"} provider=${route?.provider || "unknown"}`,
+      );
     }
     usage = usageTransform?.tokenUsage();
     // Time to the first generated token, which is what an output-tokens-per-
