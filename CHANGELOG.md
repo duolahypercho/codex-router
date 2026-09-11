@@ -59,6 +59,22 @@
   back to the model as an ordinary tool error. A non-string `content`, a
   completed item that disagrees, and streamed text contradicted by the final
   input still fail closed. Reproduced offline against pinned LiteLLM 1.96.0.
+- **A reseller's DeepSeek routes replay Chat reasoning again.** The Chat
+  reasoning carry was scoped to the vendor request profiles (`glm-thinking`,
+  `deepseek-thinking`) plus Command Code's single DeepSeek Flash slug, so any
+  DeepSeek route reached through a reseller was left unprotected. On
+  `opencode-go/deepseek-v4.1-flash` -- whose profile is `auto-tool-choice` --
+  neither hop ran. The provider rejects a follow-up whose prior assistant turn
+  is missing its `reasoning_content`, and that failure needs a prior turn, so
+  the error surfaced on the turn *after* any reply: HTTP 400 "The
+  `reasoning_content` in the thinking mode must be passed back to the API." A
+  subagent hand-off always ends in prose, which is why spawning one broke every
+  following request in the conversation. The check now keys on the upstream
+  model for reseller Chat routes. Only the DeepSeek upstream is covered -- the
+  same endpoint's GLM, Qwen, Kimi, MiniMax, Longcat and MiMo thinking models
+  keep their existing replay channel, because flipping theirs without evidence
+  would be a silent behaviour change. Regression coverage reads the shipped
+  registry in `test/chat-reasoning.test.mjs`.
 - **Switching a conversation back to OpenAI no longer fails on routed item IDs.**
   Routed providers mint their own item IDs (`call_...`, `tool_...`,
   `chatcmpl-...`), Codex saves them, and OpenAI rejects them on replay with

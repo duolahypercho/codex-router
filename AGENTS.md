@@ -1972,6 +1972,16 @@ retry rules on the shared path.
   source items or change other native Responses routes. Keep this policy shared
   between hops without applying direct DeepSeek sampling parameters to resellers.
   Command Code's schema-strict `/alpha/generate` fallback remains separate.
+- A reseller's DeepSeek routes carry reasoning the same way regardless of the
+  route's own request profile, because the rule belongs to the upstream model
+  and not to the profile or the reseller. OpenCode Go's DeepSeek routes carry
+  `auto-tool-choice`, which no profile check matches, so a profile-only policy
+  left them unprotected and the provider rejected the turn after any prose
+  reply with "The `reasoning_content` in the thinking mode must be passed back
+  to the API". Scope this to the DeepSeek upstream: the same endpoint serves
+  GLM, Qwen, Kimi, MiniMax, Longcat and MiMo thinking models, and moving their
+  replay from visible text to `reasoning_content` without evidence that they
+  require it would be a silent behaviour change.
 
 Regression coverage lives in `test/deepseek-responses-routing.test.mjs`,
 `test/namespace-relay-custom.test.mjs`, `test/chat-reasoning.test.mjs` and the
