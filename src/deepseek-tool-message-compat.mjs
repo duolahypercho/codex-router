@@ -6,13 +6,25 @@ import { jsonNumberIsStableForRewrite } from "./json-number-rewrite.mjs";
 const MAX_CANDIDATE_BYTES = 64 * 1024;
 const MAX_CANDIDATE_MS = 1_000;
 const MAX_DIRECT_CAPTURE_MS = 60_000;
-const MAX_FRAME_BYTES = 256 * 1024;
+// LiteLLM's Chat Completions bridge echoes the request's instructions and full
+// tools array in response.created and response.in_progress: measured against
+// the pinned 1.96.0, a 300-tool list makes each of those frames 409 KiB. A
+// frame over this pre-commit bound is released raw and turns the repair off
+// for the rest of the stream, so match the namespace relay's prelude bound.
+const MAX_FRAME_BYTES = 10 * 1024 * 1024;
 const MAX_JSON_BYTES = 8 * 1024 * 1024;
 const MAX_JSON_MS = 1_000;
 const MAX_JSON_DEPTH = 256;
-const MAX_FRAME_JSON_MEMBERS = 8 * 1024;
+// The uniqueness scan's per-frame budgets scale with the frame bound, at the
+// density the 256 KiB bound allowed: one member per 32 bytes and one key code
+// unit per 2 bytes. A Desktop tool list is member-dense JSON Schema, so a
+// fixed 8 KiB member budget would fail that same frame open.
+const MAX_FRAME_JSON_MEMBERS = MAX_FRAME_BYTES / 32;
 const MAX_BODY_JSON_MEMBERS = 64 * 1024;
-const MAX_FRAME_JSON_KEY_CODE_UNITS = 128 * 1024;
+const MAX_FRAME_JSON_KEY_CODE_UNITS = MAX_FRAME_BYTES / 2;
+// Frame storage above an ordinary event's size is dropped once its frame is
+// taken, so one large prelude does not pin that capacity for the whole stream.
+const RETAINED_FRAME_STORAGE_BYTES = 256 * 1024;
 const MAX_BODY_JSON_KEY_CODE_UNITS = 1024 * 1024;
 const LF_FRAME_SEPARATOR = Buffer.from("\n\n");
 const CRLF_FRAME_SEPARATOR = Buffer.from("\r\n\r\n");
@@ -222,6 +234,9 @@ class SseFrameAccumulator {
     if (!this.#length) return Buffer.alloc(0);
     const value = Buffer.from(this.#storage.subarray(0, this.#length));
     this.#length = 0;
+    if (this.#storage.length > RETAINED_FRAME_STORAGE_BYTES) {
+      this.#storage = Buffer.alloc(0);
+    }
     return value;
   }
 

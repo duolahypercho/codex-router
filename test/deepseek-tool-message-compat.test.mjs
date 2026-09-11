@@ -2069,6 +2069,68 @@ test("delimiter-terminated frames and single-frame cap crossings are bounded", a
   );
 });
 
+// LiteLLM echoes the request's instructions and whole tools array in
+// response.created and response.in_progress. Measured against the pinned
+// 1.96.0, a 300-tool list makes each of those frames 409 KiB: larger than the
+// old 256 KiB frame bound, and denser than its fixed 8 KiB member budget.
+// Either one released that prelude raw and switched the repair off for the
+// rest of the stream, which a bare mock envelope never reproduces.
+function echoedDesktopPrelude() {
+  return {
+    instructions: `You are Codex. ${"i".repeat(16 * 1024)}`,
+    tools: Array.from({ length: 300 }, (_, index) => ({
+      type: "function",
+      name: `mcp__server_${index % 12}__tool_${index}`,
+      description: `Tool ${index}. ${"d".repeat(600)}`,
+      parameters: {
+        type: "object",
+        properties: Object.fromEntries(Array.from({ length: 8 }, (_, field) => [
+          `field_${field}`,
+          { type: "string", description: `Field ${field} of tool ${index}.` },
+        ])),
+        required: ["field_0"],
+        additionalProperties: false,
+      },
+    })),
+  };
+}
+
+test("default bounds admit LiteLLM's echoed Desktop-sized prelude", async () => {
+  const echo = echoedDesktopPrelude();
+  const plain = responseCreated("resp_1", { sequenceNumber: 0 });
+  const echoed = responseCreated("resp_1", { sequenceNumber: 0, response: echo });
+  assert.ok(Buffer.byteLength(echoed) > 256 * 1024);
+  const source = phantomToolStream().replace(plain, echoed);
+
+  const translated = await transformed(source, { maxCandidateMs: 60_000 });
+  assert.ok(translated.startsWith(echoed));
+  assert.equal(translated.includes(blankMessage.id), false);
+  assert.deepEqual(
+    events(translated).find((event) => event.type === "response.completed").response.output,
+    [functionCall],
+  );
+
+  const direct = await transformedDirect(
+    currentDirectDeepseekStream((wireEvents) => {
+      for (const event of wireEvents.slice(0, 2)) Object.assign(event.response, echo);
+    }),
+    { maxCandidateMs: 60_000 },
+  );
+  assert.equal(direct.includes("msg_direct_live"), false);
+  const reasoning = events(direct)
+    .find((event) => event.type === "response.completed").response.output[0];
+  assert.equal(reasoning.type, "reasoning");
+  assert.ok(reasoning.summary[0].text.length > 0);
+
+  // The member budget is the second bound, and it is the one the byte bound
+  // alone does not cover: the old fixed 8 KiB budget fails this same prelude
+  // open byte-for-byte even though it fits the raised frame bound.
+  assert.equal(
+    await transformed(source, { maxJsonMembers: 8 * 1024, maxCandidateMs: 60_000 }),
+    source,
+  );
+});
+
 test("one-byte fragmented frames use bounded concatenation in both SSE paths", async () => {
   const source = `event: opaque\ndata: ${"x".repeat(128 * 1024)}`;
   const options = {

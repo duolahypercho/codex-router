@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **Blank tool-call messages and direct DeepSeek reasoning are repaired behind
+  large tool lists.** LiteLLM echoes the request's instructions and whole tool
+  list in `response.created` and `response.in_progress`. The stream repairs
+  that remove LiteLLM's blank assistant message before a tool call (every Chat
+  Completions and Messages route) and rebuild direct DeepSeek's reasoning item
+  gave up on any frame over 256 KiB or with more than 8,192 JSON members, so a
+  session whose tool list crossed either had both repairs switched off from
+  its first event. Mock gateways send a bare envelope and never showed it. The
+  frame bound now matches the namespace relay's 10 MiB, the JSON scan budgets
+  grow with it, and malformed, ambiguous, or over-budget streams still pass
+  through byte-identical.
 - **A routed model the router has not loaded now fails locally, not at
   ChatGPT.** A model added to or renamed in `user-models.json` shows up in the
   Codex picker as soon as the catalog is rebuilt, but the running router reads
