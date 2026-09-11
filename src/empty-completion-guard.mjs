@@ -5,10 +5,9 @@ import { HeaderlessSseDetector } from "./sse-prefix.mjs";
 
 const MAX_PRECONTENT_BYTES = 1024 * 1024;
 const MAX_PRECONTENT_MS = 30_000;
-// After liveness is established, allow much larger incomplete SSE blocks to
-// accommodate legitimate large reasoning deltas (issue #684), while still
-// protecting against unbounded/malformed streams.
-const MAX_POST_LIVENESS_INCOMPLETE_BYTES = 10 * 1024 * 1024; // 10MB
+// An individual event can echo tool schemas or carry a large reasoning delta.
+// Bound its unfinished frame separately from the accumulated prelude hold.
+const MAX_INCOMPLETE_EVENT_BYTES = 10 * 1024 * 1024;
 
 export class EmptyCompletionPreludeLimitError extends Error {
   constructor(kind) {
@@ -492,15 +491,12 @@ export class EmptyCompletionGuard extends Transform {
       // A liveness or time-limit release ends the hold, not the question. Keep
       // parsing from behind the relay so a turn that later produces nothing is
       // still recognized — it just gets reported instead of retried.
-      // After release, use a much higher limit for incomplete SSE blocks to allow
-      // legitimate large reasoning deltas (issue #684) while still protecting
-      // against unbounded/malformed streams.
       if (!this.#settled()) {
         this.#parseBuffer += this.#decoder.write(bytes);
         this.#consumeBlocks();
         if (
           !this.#settled() &&
-          Buffer.byteLength(this.#parseBuffer) > MAX_POST_LIVENESS_INCOMPLETE_BYTES
+          Buffer.byteLength(this.#parseBuffer) > MAX_INCOMPLETE_EVENT_BYTES
         ) {
           this.#failPrelude("bytes");
         }
@@ -513,15 +509,27 @@ export class EmptyCompletionGuard extends Transform {
     this.#parseBuffer += this.#decoder.write(bytes);
     this.#consumeBlocks();
     if (!this.#released && this.#bufferedBytes > this.#maxPreludeBytes) {
+      const pendingBytes = Buffer.byteLength(this.#parseBuffer);
+      // Let a fragmented first event finish before classifying it. Retain at
+      // most one bounded unfinished frame beyond the prelude budget; completed
+      // malformed blocks cannot accumulate behind a small unfinished tail.
+      if (
+        !this.#sawTerminal &&
+        pendingBytes > 0 &&
+        pendingBytes <= MAX_INCOMPLETE_EVENT_BYTES &&
+        this.#bufferedBytes - pendingBytes <= this.#maxPreludeBytes
+      ) {
+        return;
+      }
       // A large but well-framed prologue is not a broken stream. Providers can
       // echo substantial response metadata before the first delta; relaying a
       // completed JSON event bounds our staging memory while parsing behind
-      // the relay preserves the eventual empty/content verdict. An unframed or
-      // unparseable body still fails closed at the same byte limit.
+      // the relay preserves the eventual empty/content verdict. Oversized
+      // unfinished frames and unparseable completed bodies still fail closed.
       if (
         this.#sawParseableEvent &&
         !this.#sawTerminal &&
-        Buffer.byteLength(this.#parseBuffer) <= this.#maxPreludeBytes
+        pendingBytes <= MAX_INCOMPLETE_EVENT_BYTES
       ) {
         this.#release({ preludeLimit: "bytes" });
       } else {

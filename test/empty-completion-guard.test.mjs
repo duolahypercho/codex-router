@@ -677,6 +677,53 @@ test("a large parseable prologue is relayed at the byte budget and later content
   assert.equal(Buffer.concat(chunks).toString("utf8"), prologue + answer);
 });
 
+test("a fragmented initial event can finish before the prelude verdict", async () => {
+  const prologue = `event: response.created\ndata: ${JSON.stringify({
+    type: "response.created",
+    response: { id: "r1", tools: Array.from({ length: 32 }, (_, index) => ({
+      type: "function", name: `tool_${index}`, description: "x".repeat(45_000),
+      parameters: { type: "object", properties: {} },
+    })) },
+  })}\n\n`;
+  const answer = 'event: response.output_item.added\n'
+    + 'data: {"type":"response.output_item.added","item":{"type":"function_call","name":"tool_0","call_id":"call_1","arguments":"{}"}}\n\n';
+  assert.ok(Buffer.byteLength(prologue) > 1024 * 1024);
+  for (const chunkSize of [0, 1024, 64 * 1024]) {
+    const result = await runGuard(prologue + answer, { chunkSize });
+    assert.equal(result.body, prologue + answer);
+    assert.equal(result.empty, false);
+    assert.equal(result.suppressed, false);
+  }
+});
+
+test("a fragmented prelude still hides empty terminal events after release", async () => {
+  const prologue = `event: response.created\ndata: ${JSON.stringify({
+    type: "response.created", response: { id: "r1", metadata: "x".repeat(256) },
+  })}\n\n`;
+  const terminal = 'event: response.completed\n'
+    + 'data: {"type":"response.completed","response":{"id":"r1","output":[]}}\n\n';
+  async function* fragmentedTurn() {
+    for (let at = 0; at < prologue.length; at += 32) yield prologue.slice(at, at + 32);
+    yield terminal;
+  }
+  const guard = new EmptyCompletionGuard("text/event-stream", { maxPreludeBytes: 64 });
+  const chunks = [];
+  await pipeline(
+    Readable.from(fragmentedTurn()),
+    guard,
+    new EmptyCompletionTerminalGuard(guard, "text/event-stream"),
+    new Writable({
+      write(chunk, _encoding, callback) {
+        chunks.push(Buffer.from(chunk));
+        callback();
+      },
+    }),
+  );
+  assert.equal(Buffer.concat(chunks).toString("utf8"), prologue);
+  assert.equal(guard.isEmpty(), true);
+  assert.equal(guard.suppressedPrologue(), false);
+});
+
 test("a valid event does not excuse a later oversized unterminated event", async () => {
   const created = [
     "event: response.created",
@@ -692,7 +739,7 @@ test("a valid event does not excuse a later oversized unterminated event", async
   await assert.rejects(
     pipeline(
       Readable.from([
-        Buffer.from(created + `event: response.in_progress\ndata: ${"x".repeat(128)}`),
+        Buffer.from(created + `event: response.in_progress\ndata: ${"x".repeat(11 * 1024 * 1024)}`),
       ]),
       guard,
       new Writable({
@@ -707,6 +754,13 @@ test("a valid event does not excuse a later oversized unterminated event", async
   );
   assert.equal(guard.suppressedPrologue(), true);
   assert.equal(Buffer.concat(chunks).length, 0);
+});
+
+test("malformed completed blocks cannot accumulate behind an unfinished event", async () => {
+  await assert.rejects(
+    runGuard("data: invalid\n\n".repeat(16) + 'data: {', { maxPreludeBytes: 64 }),
+    (error) => error instanceof EmptyCompletionPreludeLimitError && error.kind === "bytes",
+  );
 });
 
 test("a time limit relays the staged stream but keeps its empty verdict", async () => {

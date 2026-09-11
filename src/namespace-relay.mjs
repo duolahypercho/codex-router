@@ -558,13 +558,14 @@ const INITIAL_SSE_CAPTURE_PART_BYTES = 1024;
 const MAX_TRACKED_OUTPUT_ITEMS = 4096;
 const MAX_TRACKED_STATE_BYTES = 8 * 1024 * 1024;
 const TRACKED_STATE_FIXED_BYTES = 512;
-// Before any semantic output, stop staging an undecided SSE frame before
-// downstream response guards lose sight of their own byte ceilings. Once a
+// Initial events can echo full tool schemas. Match the empty-completion
+// guard's 10 MiB unfinished-event allowance so those frames do not disable
+// namespace restoration for later calls. Once a
 // namespace rewrite, suppression, or injection has committed the wire shape,
 // a later terminal event may carry the complete response and therefore shares
 // the non-streaming JSON capture bound. Crossing either phase's bound releases
 // raw bytes before a commit and terminates the stream after one.
-const MAX_SSE_FRAME_BYTES = 256 * 1024;
+const MAX_SSE_FRAME_BYTES = 10 * 1024 * 1024;
 const MAX_COMMITTED_SSE_FRAME_BYTES = MAX_JSON_CAPTURE_BYTES;
 const LINE_FEED = 0x0a;
 const CARRIAGE_RETURN = 0x0d;

@@ -74,7 +74,7 @@ const CONTENT_SSE = [
   "",
 ].join("\n");
 
-// Large enough to force the guard past its 1 MiB pre-content hold budget
+// Large enough to exceed the guard's 10 MiB incomplete-event ceiling
 // before any client-visible output arrives. Deliberately not a reasoning event:
 // reasoning releases the hold on liveness long before the byte cap, so a
 // reasoning prelude would exercise the wrong release path.
@@ -85,7 +85,7 @@ const BUDGET_RELEASE_REASONING_SSE = [
   "event: response.in_progress",
   `data: ${JSON.stringify({
     type: "response.in_progress",
-    response: { id: "r-budget", status: "x".repeat(2 * 1024 * 1024) },
+    response: { id: "r-budget", status: "x".repeat(11 * 1024 * 1024) },
   })}`,
   "",
 ].join("\n");
@@ -432,6 +432,59 @@ const TURN_BODY = {
   input: "hello",
   stream: true,
 };
+
+test("a large initial event preserves a namespaced tool call without retrying", async () => {
+  const tool = {
+    type: "function_call", id: "fc_1", call_id: "call_1",
+    name: "fixture__probe", arguments: "{}",
+  };
+  const prologue = `event: response.created\ndata: ${JSON.stringify({
+    type: "response.created", response: { id: "r-large", metadata: "x".repeat(1_440_000) },
+  })}\n\n`;
+  const answer = [
+    { type: "response.output_item.added", output_index: 0, item: tool },
+    { type: "response.output_item.done", output_index: 0, item: tool },
+    { type: "response.completed", response: { id: "r-large", output: [tool] } },
+  ].map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join("");
+  for (const model of [TURN_BODY.model, "deepseek/deepseek-v4.1-flash"]) {
+    const paths = [];
+    const gw = await gateway((request, response) => {
+      paths.push(request.url);
+      response.writeHead(200, { "Content-Type": "text/event-stream" });
+      for (let at = 0; at < prologue.length; at += 4096) {
+        response.write(prologue.slice(at, at + 4096));
+      }
+      response.end(answer);
+    });
+    const routerPort = await openPort();
+    const router = run({
+      ...routerEnv(gw.port, routerPort),
+      CODEX_ROUTER_API_BASE_URL: `http://127.0.0.1:${gw.port}/native`,
+    });
+    try {
+      await waitFor(`${callerBaseUrl(routerPort, CALLER_KEY)}/models`, router);
+      const result = await readRouted(routerPort, {
+        ...TURN_BODY, model,
+        tools: [{ type: "namespace", name: "fixture", tools: [{ type: "function", name: "probe" }] }],
+      });
+      assert.equal(result.status, 200);
+      assert.equal(result.complete, true);
+      const calls = result.body.split("\n")
+        .filter((line) => line.startsWith("data: {"))
+        .map((line) => JSON.parse(line.slice(6)))
+        .flatMap((event) => event.item ? [event.item] : event.response?.output || []);
+      assert.deepEqual(
+        calls.map(({ name, namespace }) => ({ name, namespace })),
+        Array.from({ length: 3 }, () => ({ name: "probe", namespace: "fixture" })),
+      );
+      assert.ok(!result.body.includes("event: error"));
+      assert.deepEqual(paths, [model === TURN_BODY.model ? "/v1/responses" : "/native/responses"]);
+    } finally {
+      await stopChild(router);
+      await closeServer(gw.server);
+    }
+  }
+});
 
 // An empty completion used to reach the client as a clean 200 the app
 // recorded as a successful turn with no content. The router must retry the

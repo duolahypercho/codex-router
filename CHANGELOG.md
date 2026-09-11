@@ -2,14 +2,15 @@
 
 ## Unreleased
 
-- **DeepSeek empty-completion guard allows large reasoning after liveness
-  release.** Issue #684: Direct DeepSeek V4.1 Flash MCP turns with large
-  reasoning deltas no longer hit the empty-completion byte limit prematurely.
-  After liveness is established (by initial reasoning or content), the guard
-  uses a 10MB limit for incomplete SSE blocks instead of the 1MB pre-liveness
-  limit. This accommodates legitimate large reasoning events delivered in
-  small network chunks while still protecting against unbounded/malformed
-  streams. Fixes #684.
+- **Allow large fragmented events through the empty-completion guard.** A
+  Responses event carrying tool metadata or reasoning can now finish within a
+  separate 10 MiB incomplete-event bound, including before liveness starts.
+  Namespace restoration uses the same frame allowance so later tool calls
+  retain their client identities.
+  The 1 MiB accumulated-prelude hold budget and timeout remain in place, as do
+  empty-turn detection and the prohibition on retrying a relayed stream.
+  Covers the synthetic large-initial-event reproduction associated with #684;
+  the reporter's original provider stream was not available for verification.
 - **DeepSeek V4.1 Flash is available on four providers, alongside V4.**
   DeepSeek released V4.1 Flash on 2026-09-10. New routes:
   `deepseek/deepseek-v4.1-flash` (1M window, image input, thinking with
