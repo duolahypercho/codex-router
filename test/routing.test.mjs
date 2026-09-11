@@ -7690,8 +7690,8 @@ test("signed routing routes custom provider models (issue #689)", async () => {
     `${JSON.stringify({ version: 4, mode: "provider-switch" })}\n`,
   );
   // Simulate a custom provider model that looks like a GPT model but isn't.
-  // Must use valid custom/ namespace, credential with file+environment, and
-  // description for listed models.
+  // Must use valid custom/ namespace, credential with file+environment,
+  // description, reasoningLevels, and priority for listed models.
   const userModels = path.join(stateDir, "user-models.json");
   writeFileSync(
     userModels,
@@ -7705,12 +7705,17 @@ test("signed routing routes custom provider models (issue #689)", async () => {
           gatewayModel: "custom-gpt-6-astra",
           displayName: "Custom GPT-6 Astra",
           description: "Custom provider GPT-6 model for testing issue #689",
+          priority: 9999,
           defaultEffort: "medium",
           compHash: "test-custom-gpt6",
           contextWindow: 131072,
-          autoCompactThreshold: 111411,
+          autoCompact: 111411,
           inputModalities: ["text"],
-          reasoningEfforts: [],
+          reasoningLevels: [
+            { effort: "low", description: "Low reasoning" },
+            { effort: "medium", description: "Balanced reasoning" },
+            { effort: "high", description: "Deep reasoning" },
+          ],
           listed: true,
           endpoint: {
             baseUrl: `http://127.0.0.1:${gateway.port}/v1`,
