@@ -7665,6 +7665,107 @@ test("signed routing keeps official slugs off aliases and native redirect", asyn
   }
 });
 
+test("signed routing routes custom provider models (issue #689)", async () => {
+  // Issue #689: custom provider model `unorouter/gpt-6-astra` was rejected
+  // under ChatGPT-account Codex with "The '...' model is not supported when
+  // using Codex with a ChatGPT account." Provider-switch signed routing (v4)
+  // must route explicit custom models while keeping official GPT slugs native.
+  const nativeRequests = [];
+  const native = await mockServer(async (request, response) => {
+    nativeRequests.push(await bodyJson(request));
+    json(response, 200, { route: "native" });
+  });
+  const gatewayRequests = [];
+  const gateway = await mockServer(async (request, response) => {
+    const body = await bodyJson(request);
+    gatewayRequests.push(body);
+    json(response, 200, { route: "external", model: body.model });
+  });
+  const routerPort = await openPort();
+  const testRoot = mkdtempSync(path.join(os.tmpdir(), "codex-router-custom-route-"));
+  const stateDir = path.join(testRoot, "state");
+  mkdirSync(stateDir, { recursive: true });
+  writeFileSync(
+    path.join(stateDir, "signed-provider-mode.json"),
+    `${JSON.stringify({ version: 4, mode: "provider-switch" })}\n`,
+  );
+  // Simulate a custom provider model that looks like a GPT model but isn't.
+  const userModels = path.join(stateDir, "user-models.json");
+  writeFileSync(
+    userModels,
+    JSON.stringify({
+      version: 1,
+      models: [
+        {
+          slug: "private/gpt-6-astra",
+          provider: "custom",
+          upstreamModel: "gpt-6-astra",
+          gatewayModel: "custom-gpt-6-astra",
+          displayName: "Private GPT-6 Astra",
+          contextWindow: 131072,
+          autoCompactThreshold: 111411,
+          inputModalities: ["text"],
+          reasoningEfforts: [],
+          endpoint: {
+            baseUrl: `http://127.0.0.1:${gateway.port}/v1`,
+            authMode: "api-key",
+            credential: { file: "custom-api-key.txt" },
+          },
+        },
+      ],
+    }),
+  );
+  // Custom provider needs a credential file.
+  const credDir = path.join(stateDir, "credentials");
+  mkdirSync(credDir, { recursive: true });
+  writeFileSync(path.join(credDir, "custom-api-key.txt"), "TEST_CUSTOM_KEY");
+  const router = run("router.mjs", {
+    CODEX_ROUTER_PORT: String(routerPort),
+    CODEX_NATIVE_BASE_URL: `http://127.0.0.1:${native.port}/backend-api/codex`,
+    CODEX_ROUTER_GATEWAY_BASE_URL: `http://127.0.0.1:${gateway.port}/v1`,
+    CODEX_ROUTER_STATE_DIR: stateDir,
+    MODEL_ROUTER_STATE_DIR: stateDir,
+    MODEL_ROUTER_USER_MODELS: userModels,
+    CODEX_ROUTER_QUIET: "1",
+  });
+
+  try {
+    await waitFor(`${routerBase(routerPort)}/models`, router);
+    // Custom provider model must route to gateway, not rejected or sent native.
+    const customResponse = await fetch(`${routerBase(routerPort)}/responses`, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer CODEX_CALLER_SECRET",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ model: "private/gpt-6-astra", input: "custom turn" }),
+    });
+    assert.equal(customResponse.status, 200, "custom provider model must not be rejected");
+    assert.equal(nativeRequests.length, 0, "custom model must not go to native backend");
+    assert.equal(gatewayRequests.length, 1);
+    assert.equal(gatewayRequests[0].model, "custom-gpt-6-astra");
+
+    // Official GPT model still goes native despite the custom route existing.
+    const officialResponse = await fetch(`${routerBase(routerPort)}/responses`, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer CODEX_CALLER_SECRET",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ model: "gpt-5.6-sol", input: "official turn" }),
+    });
+    assert.equal(officialResponse.status, 200);
+    assert.equal(nativeRequests.length, 1);
+    assert.equal(nativeRequests[0].model, "gpt-5.6-sol");
+    assert.equal(gatewayRequests.length, 1, "official model must not route to gateway");
+  } finally {
+    await stopChild(router);
+    await closeServer(native.server);
+    await closeServer(gateway.server);
+    rmSync(testRoot, { recursive: true, force: true });
+  }
+});
+
 test("official passthrough drops unstored private rs_ ids before ChatGPT compact", async () => {
   const nativeRequests = [];
   const native = await mockServer(async (request, response) => {

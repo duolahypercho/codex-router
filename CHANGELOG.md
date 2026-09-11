@@ -31,6 +31,11 @@
   unfinished initial event within the existing 10 MiB bound and match the
   namespace relay's limit, so later MCP calls retain their client identities.
   Prelude timeouts, empty-completion checks and retry safety remain intact.
+- **Signed routing preserves native models under provider-switch mode.** Issue
+  #689: Custom provider models like `unorouter/gpt-6-astra` are now routed
+  correctly under ChatGPT-account Codex without rejection. Provider-switch
+  signed routing (v4) ensures official GPT slugs stay on the native backend
+  while custom provider models route through the gateway as intended. Fixes #689.
 - **DeepSeek empty-completion guard allows large reasoning after liveness
   release.** Issue #684: Direct DeepSeek V4.1 Flash MCP turns with large
   reasoning deltas no longer hit the empty-completion byte limit prematurely.
