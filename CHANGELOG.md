@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **Muse Spark Responses turns no longer end in a gateway error.** OpenCode Go
+  and Zen send `event: ping` (`{"type":"ping","cost":"0"}`) after every
+  `response.completed`. The API forwarder treated it as data after the terminal
+  event and appended `invalid_responses_stream`, which LiteLLM re-raised as
+  `Response API in-stream error` on every completed `opencode-go-responses` and
+  `opencode-free-responses` turn. Codex ignores bytes after a terminal event, so
+  it went unnoticed; opencode and pi validate them and failed every turn. A
+  keep-alive or SSE comment after the terminal event is now dropped; real data
+  after it is still refused.
 - **A routed model the router has not loaded now fails locally, not at
   ChatGPT.** A model added to or renamed in `user-models.json` shows up in the
   Codex picker as soon as the catalog is rebuilt, but the running router reads

@@ -2311,7 +2311,10 @@ of somebody else's file; `routed-harness-manager.mjs` is the publisher.
   gets `limit.input` at the router's `autoCompact` and `limit.output` as the
   headroom above it, or no `limit` when there is no threshold. A change to any
   adapter needs the same check: publish into a scratch document, then have the
-  installed client list or use the models from it.
+  installed client list the models from it and take one real turn (a free route
+  costs nothing). Listing alone missed that OpenCode's post-completion `ping`
+  had become a trailing gateway error: Codex ignores bytes after a terminal
+  event, and opencode and pi do not.
 - **Devin CLI and T3 Code are deliberately absent.** Devin CLI's config selects
   from Cognition-hosted models and has no custom base URL, so routed models
   cannot be published into it; the `devin-cli` *provider* is the other
