@@ -2,21 +2,20 @@
 
 ## Unreleased
 
-- **Custom provider model slugs resembling native OpenAI models are blocked
-  server-side when using a ChatGPT account.** Issue #689: Recent Codex builds
-  validate custom-provider model slugs server-side and reject slugs that
-  resemble native OpenAI model names (particularly `gpt-6-*` patterns, such as
-  `unorouter/gpt-6-astra` or `private/gpt-6-astra`) when the user is signed in
-  with a ChatGPT account. The error `"The '<provider>/<model>' model is not
-  supported when using Codex with a ChatGPT account."` originates from Codex
-  itself, not from the router. Models with different naming patterns from the
-  same provider (such as `unorouter/grok-4.6`) work correctly because they do
-  not trigger this validation. Workarounds: (1) sign out of ChatGPT in Codex
-  and use the router's login-free mode; (2) use custom provider model slugs
-  that do not resemble native OpenAI names; or (3) wait for PR #673 which
-  implements a provider-switch mechanism. This limitation is now documented in
-  `docs/TROUBLESHOOTING.md` with detailed explanation and workarounds.
-  Fixes #689.
+- **Document known Codex-side blocking of custom provider GPT-6-like slugs.**
+  Issue #689: Recent Codex builds validate custom-provider model slugs
+  server-side and reject slugs that resemble native OpenAI model names
+  (particularly `gpt-6-*` patterns, such as `unorouter/gpt-6-astra` or
+  `private/gpt-6-astra`) when the user is signed in with a ChatGPT account.
+  The error `"The '<provider>/<model>' model is not supported when using Codex
+  with a ChatGPT account."` originates from Codex itself, not from the router.
+  Models with different naming patterns from the same provider (such as
+  `unorouter/grok-4.6`) work correctly because they do not trigger this
+  validation. **This router release does not fix the block** — the actual code
+  fix is in PR #673's provider-switch mechanism, which allows signed routing to
+  coexist with ChatGPT authentication. Until that lands, sign out of ChatGPT in
+  Codex and use the router's login-free mode. This limitation is now documented
+  in `docs/TROUBLESHOOTING.md` with detailed explanation. Related #689, #673.
 - **DeepSeek empty-completion guard allows large reasoning after liveness
   release.** Issue #684: Direct DeepSeek V4.1 Flash MCP turns with large
   reasoning deltas no longer hit the empty-completion byte limit prematurely.

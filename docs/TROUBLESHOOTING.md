@@ -112,23 +112,24 @@ when the user is signed in with a ChatGPT account.
 - Models with different naming patterns from the same provider (such as
   `unorouter/grok-4.6`) work correctly because they do not trigger this
   validation.
+- **Renaming the slug does not reliably bypass the block**: Issue #689 reported
+  that renaming `unorouter/gpt-6-astra` to `unorouter/agi-1` still triggered
+  the same ChatGPT account error, indicating Codex's validation may examine more
+  than just the public slug.
 
-**Workarounds:**
-1. **Sign out of ChatGPT** in Codex to use custom providers with GPT-6-like
-   model names. The router's login-free mode still provides access to external
-   providers without requiring ChatGPT authentication.
-2. **Use different model slugs** that do not resemble native OpenAI names. For
-   example, rename `unorouter/gpt-6-astra` to `unorouter/astra-model` in your
-   custom provider configuration (though the upstream model ID sent to the
-   provider can remain `gpt-6-astra`).
-3. **Wait for PR #673** which implements a provider-switch mechanism to work
-   around Codex's validation while keeping ChatGPT authentication active.
+**Current workaround:**
+1. **Sign out of ChatGPT** in Codex to use custom providers with blocked model
+   names. The router's login-free mode provides access to external providers
+   without requiring ChatGPT authentication.
+2. **Wait for PR #673** which implements a provider-switch mechanism to work
+   around Codex's validation while keeping ChatGPT authentication active. This
+   is the planned code fix.
 
 **What the router cannot do:**
 - The router cannot bypass or disable this validation because it occurs in the
   Codex client/server before the request reaches the router.
-- Model slug renaming in the router configuration does not help if the renamed
-  slug still resembles a native OpenAI model name.
+- Model slug renaming in the router configuration may not help — the reporter
+  observed the same block after renaming.
 
 Related issues: #645, #673, #689.
 
