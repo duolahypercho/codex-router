@@ -7690,6 +7690,8 @@ test("signed routing routes custom provider models (issue #689)", async () => {
     `${JSON.stringify({ version: 4, mode: "provider-switch" })}\n`,
   );
   // Simulate a custom provider model that looks like a GPT model but isn't.
+  // Must use valid custom/ namespace, credential with file+environment, and
+  // description for listed models.
   const userModels = path.join(stateDir, "user-models.json");
   writeFileSync(
     userModels,
@@ -7697,19 +7699,25 @@ test("signed routing routes custom provider models (issue #689)", async () => {
       version: 1,
       models: [
         {
-          slug: "private/gpt-6-astra",
+          slug: "custom/gpt-6-astra",
           provider: "custom",
           upstreamModel: "gpt-6-astra",
           gatewayModel: "custom-gpt-6-astra",
-          displayName: "Private GPT-6 Astra",
+          displayName: "Custom GPT-6 Astra",
+          description: "Custom provider GPT-6 model for testing issue #689",
+          defaultEffort: "medium",
+          compHash: "test-custom-gpt6",
           contextWindow: 131072,
           autoCompactThreshold: 111411,
           inputModalities: ["text"],
           reasoningEfforts: [],
+          listed: true,
           endpoint: {
             baseUrl: `http://127.0.0.1:${gateway.port}/v1`,
-            authMode: "api-key",
-            credential: { file: "custom-api-key.txt" },
+            credential: {
+              file: "custom-gpt-6-astra.txt",
+              environment: [],
+            },
           },
         },
       ],
@@ -7718,7 +7726,7 @@ test("signed routing routes custom provider models (issue #689)", async () => {
   // Custom provider needs a credential file.
   const credDir = path.join(stateDir, "credentials");
   mkdirSync(credDir, { recursive: true });
-  writeFileSync(path.join(credDir, "custom-api-key.txt"), "TEST_CUSTOM_KEY");
+  writeFileSync(path.join(credDir, "custom-gpt-6-astra.txt"), "TEST_CUSTOM_KEY");
   const router = run("router.mjs", {
     CODEX_ROUTER_PORT: String(routerPort),
     CODEX_NATIVE_BASE_URL: `http://127.0.0.1:${native.port}/backend-api/codex`,
@@ -7738,7 +7746,7 @@ test("signed routing routes custom provider models (issue #689)", async () => {
         Authorization: "Bearer CODEX_CALLER_SECRET",
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ model: "private/gpt-6-astra", input: "custom turn" }),
+      body: JSON.stringify({ model: "custom/gpt-6-astra", input: "custom turn" }),
     });
     assert.equal(customResponse.status, 200, "custom provider model must not be rejected");
     assert.equal(nativeRequests.length, 0, "custom model must not go to native backend");
