@@ -236,6 +236,11 @@ const HARNESSES = Object.freeze([
     executables: Object.freeze(["opencode"]),
     binEnv: "OPENCODE_BIN",
     npmPackage: "opencode-ai@latest",
+    // `opencode upgrade` knows how this copy was installed — npm, Homebrew, or
+    // the `curl | bash` script — and updates it in place. Reinstalling over an
+    // npm package that was never the live one leaves a second copy that may
+    // lose on PATH, so the client's own updater is preferred to `npm -g`.
+    updateCommand: Object.freeze(["upgrade"]),
     format: "json",
     documentKey: "OPENCODE_CONFIG_PATH",
     providerPath: Object.freeze(["provider", ROUTED_HARNESS_PROVIDER_ID]),
@@ -263,7 +268,15 @@ const HARNESSES = Object.freeze([
     siteUrl: "https://pi.dev/",
     executables: Object.freeze(["pi"]),
     binEnv: "PI_BIN",
-    npmPackage: "@mariozechner/pi-coding-agent@latest",
+    // pi moved publishers: `@mariozechner/pi-coding-agent` stopped at 0.73.1
+    // and the maintained line is `@earendil-works/pi-coding-agent`. Installing
+    // the old name pins a months-stale agent that still answers `pi --version`,
+    // so nothing here would report it as wrong.
+    npmPackage: "@earendil-works/pi-coding-agent@latest",
+    // pi's own quick start passes this: it needs no dependency lifecycle
+    // scripts, and running them is the failure mode on a locked-down machine.
+    npmInstallArgs: Object.freeze(["--ignore-scripts"]),
+    updateCommand: Object.freeze(["update", "--self"]),
     format: "json",
     documentKey: "PI_MODELS_PATH",
     providerPath: Object.freeze(["providers", ROUTED_HARNESS_PROVIDER_ID]),
@@ -289,6 +302,15 @@ const HARNESSES = Object.freeze([
     // cannot start. Its supported installs are a `curl | sh` script, Homebrew,
     // and Bun itself, none of which this router runs on somebody's behalf.
     npmPackage: undefined,
+    // omp ships no self-update subcommand, so there is nothing to run and
+    // nothing to install. The row prints the project's own three supported
+    // installs rather than guessing which one this copy came from.
+    updateCommand: undefined,
+    manualInstall: Object.freeze([
+      "curl -fsSL https://omp.sh/install | sh",
+      "brew install can1357/tap/omp",
+      "bun install -g @oh-my-pi/pi-coding-agent",
+    ]),
     format: "yaml",
     documentKey: "OMP_MODELS_PATH",
     providerPath: Object.freeze(["providers", ROUTED_HARNESS_PROVIDER_ID]),
@@ -313,6 +335,11 @@ const HARNESSES = Object.freeze([
     ),
     binEnv: "COMMANDCODE_BIN",
     npmPackage: "command-code@latest",
+    // Command Code updates itself in the background unless `--no-auto-update`
+    // is set, so a stale copy usually catches up on its own. `cmd update` is
+    // the supported way to force it now, and it stages the new build the same
+    // way the background path does.
+    updateCommand: Object.freeze(["update"]),
     // `providers.json` BYOK support first shipped in 1.30.0; 1.29.0 and earlier
     // never read the file, so publishing into an older CLI changes nothing it
     // can see. Setup updates such a CLI, and status reports it.
@@ -339,6 +366,13 @@ const HARNESSES = Object.freeze([
     // on a user's behalf, so the row asks them to install it and then
     // publishes into the client they already have.
     npmPackage: undefined,
+    // Hermes has no package to reinstall, but it does maintain itself: `hermes
+    // update` pulls its checkout and reinstalls its dependencies. `--yes` is
+    // what makes it non-interactive; it keeps its own pre-update backup.
+    updateCommand: Object.freeze(["update", "--yes"]),
+    manualInstall: Object.freeze([
+      "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash",
+    ]),
     format: "yaml",
     documentKey: "HERMES_CONFIG_PATH",
     providerPath: Object.freeze(["providers", ROUTED_HARNESS_PROVIDER_ID]),

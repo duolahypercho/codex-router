@@ -2305,6 +2305,27 @@ of somebody else's file; `routed-harness-manager.mjs` is the publisher.
   Command Code first reads `providers.json` in 1.30.0, so `minimumVersion` on
   its catalog entry makes setup update an older CLI and makes status and doctor
   report one. A version the CLI will not report is unknown, not outdated.
+- **Staying current is its own action, and it runs the client's own updater.**
+  `@latest` in `npmPackage` only decides what a *first* install fetches;
+  `installRoutedHarness` deliberately leaves a CLI that is already there alone,
+  because bumping somebody's global coding agent must not be a consequence of
+  republishing a model list. `control client-update <id>|--all`, the Harness
+  row's **Update** button, and `updateRoutedHarness` are the paths that do it.
+  Each prefers the client's own updater (`opencode upgrade`, `pi update
+  --self`, `command-code update`, `hermes update --yes`) over `npm install -g`:
+  a CLI installed by Homebrew or a `curl | sh` script is not an npm package,
+  and reinstalling it as one leaves two copies whose winner is PATH order —
+  which shows up as a row reporting the new version while the shell keeps
+  running the old one. npm is the fallback only for a client that publishes a
+  package and ships no updater. `--all` skips a client that is not installed
+  (update what I have, not install five agents I never asked for) and reports
+  per client rather than stopping at the first failure. A client that reports
+  no version before and after is never called "updated".
+- **Check the package name is still the maintained one.** pi moved publishers:
+  `@mariozechner/pi-coding-agent` stopped at 0.73.1 and the live line is
+  `@earendil-works/pi-coding-agent`. An abandoned package still installs and
+  still answers `pi --version`, so nothing in this repository would have
+  reported it as wrong — only reading the client's own install docs does.
 - **Prove a publication against the real client, not against its docs.** The
   unit suite passed while opencode 1.18 rejected every published model, because
   its schema requires `limit.output` whenever `limit` is present. opencode now

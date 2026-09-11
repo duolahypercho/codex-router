@@ -32,9 +32,13 @@ const { ROUTED_HARNESS_IDS, routedHarness, routedHarnesses } = await import(
   "../src/routed-harness-catalog.mjs"
 );
 const { createRoutedHarnessManager } = await import("../src/routed-harness-manager.mjs");
-const { installRoutedHarness, routedHarnessInstallable, routedHarnessOutdated } = await import(
-  "../src/routed-harness-install.mjs"
-);
+const {
+  installRoutedHarness,
+  routedHarnessInstallable,
+  routedHarnessOutdated,
+  routedHarnessUpdatable,
+  updateRoutedHarness,
+} = await import("../src/routed-harness-install.mjs");
 const { applyYamlValue, removeYamlValue, yamlLeafScalar } = await import(
   "../src/routed-harness-document.mjs"
 );
@@ -451,6 +455,79 @@ test("the YAML helpers only ever touch the key they are given", () => {
   assert.match(cleared, /keep: 1/);
 });
 
+test("updating a client runs that client's own updater, not npm", () => {
+  // A CLI installed by Homebrew or a `curl | sh` script is not an npm package.
+  // Reinstalling it as one leaves two copies and lets PATH order decide which
+  // runs — the failure where the row reports the new version and the shell
+  // keeps running the old one. Every client that ships an updater gets it.
+  for (const [id, expected] of [
+    ["opencode", ["upgrade"]],
+    ["pi", ["update", "--self"]],
+    ["commandcode", ["update"]],
+    ["hermes", ["update", "--yes"]],
+  ]) {
+    const ran = [];
+    const result = updateRoutedHarness(id, {
+      find: () => `/usr/local/bin/${id}`,
+      version: () => (ran.length ? "9.9.9" : "1.0.0"),
+      install: () => assert.fail(`${id} must update through its own CLI, not npm`),
+      run: (command, args) => ran.push([command, args]),
+    });
+    assert.deepEqual(ran.at(-1)[1].slice(-expected.length), expected);
+    assert.deepEqual(
+      { from: result.from, to: result.to, changed: result.changed },
+      { from: "1.0.0", to: "9.9.9", changed: true },
+    );
+  }
+});
+
+test("a client with no updater of its own is reinstalled at latest, or explained", () => {
+  // pi moved publishers; installing the abandoned name pins a stale agent that
+  // still answers `pi --version`, so nothing downstream would call it wrong.
+  assert.equal(routedHarness("pi").npmPackage, "@earendil-works/pi-coding-agent@latest");
+
+  // omp has neither a package this router installs nor a self-update
+  // subcommand, so the only honest answer is the project's own instructions.
+  assert.equal(routedHarnessUpdatable("omp"), false);
+  assert.throws(
+    () => updateRoutedHarness("omp", {
+      find: () => "/usr/local/bin/omp",
+      version: () => "1.0.0",
+      install: () => assert.fail("omp is never npm-installed"),
+      run: () => assert.fail("omp has no updater to run"),
+    }),
+    /omp\.sh|brew install/,
+  );
+
+  // Hermes has no package but does maintain its own checkout.
+  assert.equal(routedHarnessInstallable("hermes"), false);
+  assert.equal(routedHarnessUpdatable("hermes"), true);
+
+  // A client that reports no version cannot be claimed to have changed.
+  const silent = updateRoutedHarness("opencode", {
+    find: () => "/usr/local/bin/opencode",
+    version: () => undefined,
+    install: () => {},
+    run: () => {},
+  });
+  assert.deepEqual(
+    { changed: silent.changed, versionReported: silent.versionReported },
+    { changed: false, versionReported: false },
+  );
+});
+
+test("a failing updater reports the command that failed", () => {
+  assert.throws(
+    () => updateRoutedHarness("opencode", {
+      find: () => "/usr/local/bin/opencode",
+      version: () => "1.0.0",
+      install: () => {},
+      run: () => { throw Object.assign(new Error("spawn failed"), { stderr: "network unreachable" }); },
+    }),
+    /opencode upgrade.*network unreachable/s,
+  );
+});
+
 test("the Control Center's copy of the harness table matches the router's", async () => {
   // The app must be able to draw the Harness tab before it can load a module
   // out of the installed router, so `ipc.mjs` keeps its own detection table.
@@ -474,6 +551,14 @@ test("the Control Center's copy of the harness table matches the router's", asyn
     assert.match(rows, new RegExp(`binEnv: "${harness.binEnv}"`));
     assert.match(rows, new RegExp(`docs: "${harness.docsUrl.replaceAll("/", "\\/")}"`));
     assert.match(rows, new RegExp(`site: "${harness.siteUrl.replaceAll("/", "\\/")}"`));
+    // The Update button's tooltip promises a specific command. If the app's
+    // copy drifts from the catalog the button lies about what it will run.
+    assert.match(
+      rows,
+      harness.updateCommand
+        ? new RegExp(`updater: "${harness.executables[0]} ${harness.updateCommand.join(" ")}"`)
+        : /updater: null/,
+    );
     // The marker filename the app looks for has to be the one the publisher
     // writes, or a published client renders as "Not published" forever.
     assert.equal(

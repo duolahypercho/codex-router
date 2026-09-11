@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
 import {
   AppWindow,
+  ArrowUpCircle,
   Boxes,
   BrainCircuit,
   Globe2,
@@ -159,6 +160,17 @@ export function HarnessPage({ target, api, refreshing, operation, onRefresh, run
       await act(`Configure ${harness.displayName}`, () => api.setupHarness(harness.id));
     }
   };
+  // Updating is its own action, never a step inside setup: publishing a model
+  // list must not be the reason somebody's global coding agent changed version.
+  const update = async (harness: HarnessDescriptor) => {
+    if (!api?.updateHarness) return;
+    await act(`Update ${harness.displayName}`, () => api.updateHarness(harness.id));
+  };
+  const updatableClients = clients.filter((client) => client.canUpdate);
+  const updateAll = async () => {
+    if (!api?.updateHarness) return;
+    await act("Update installed clients", () => api.updateHarness("all"));
+  };
 
   return (
     <>
@@ -176,6 +188,16 @@ export function HarnessPage({ target, api, refreshing, operation, onRefresh, run
           { label: "Sessions", value: sessions?.counts.total ?? 0, detail: "Indexed metadata" },
           { label: "Routed models", value: routedModelCount, detail: "Shared picker" },
         ]} />
+        {updatableClients.length ? (
+          <Button
+            variant="secondary"
+            disabled={!api?.updateHarness}
+            title={`Runs each client's own updater for: ${updatableClients.map((client) => client.displayName).join(", ")}. Clients that are not installed are skipped.`}
+            onClick={() => void updateAll()}
+          >
+            <ArrowUpCircle aria-hidden size={14} strokeWidth={1.7} /> Update all ({updatableClients.length})
+          </Button>
+        ) : null}
       </div>
 
       {error ? <InlineNotice tone="warning" title="Client detection is incomplete">{error}</InlineNotice> : null}
@@ -244,6 +266,19 @@ export function HarnessPage({ target, api, refreshing, operation, onRefresh, run
                       ? <><AppWindow aria-hidden size={14} strokeWidth={1.7} /> Open</>
                       : <><Settings2 aria-hidden size={14} strokeWidth={1.7} /> {harness.id === "cursor" ? "Connect Cursor" : "Set up"}</>}
                 </Button>
+                {harness.canUpdate ? (
+                  <Button
+                    variant="ghost"
+                    aria-label={`Update ${harness.displayName}`}
+                    disabled={!api?.updateHarness}
+                    title={harness.updateCommand
+                      ? `Runs \`${harness.updateCommand}\``
+                      : `Reinstalls ${harness.displayName} at its latest release`}
+                    onClick={() => void update(harness)}
+                  >
+                    <ArrowUpCircle aria-hidden size={14} strokeWidth={1.7} /> Update
+                  </Button>
+                ) : null}
               </div>
             }
           />

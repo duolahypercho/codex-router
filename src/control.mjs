@@ -3161,6 +3161,44 @@ async function handleClientDisconnect(target) {
   process.stdout.write(`${JSON.stringify(createRoutedHarnessManager(target).uninstall())}\n`);
 }
 
+// Move one routed harness CLI, or all of them, to its latest release.
+//
+// Separate from `client-setup` on purpose. Setup publishes models and installs
+// a missing CLI; it deliberately leaves a CLI that is already there alone,
+// because bumping somebody's global agent is not a thing to do as a
+// consequence of republishing a model list. This is the command that says
+// "update it", and it is the only path that does.
+//
+// `--all` reports per client rather than stopping at the first failure: one
+// client with no updater, or a network blip on one package, is not a reason to
+// leave the other four on yesterday's build.
+async function handleClientUpdate(target) {
+  const { ROUTED_HARNESS_IDS } = await import("./routed-harness-catalog.mjs");
+  if (target !== "--all" && !ROUTED_HARNESS_IDS.includes(target)) {
+    throw new Error("Usage: control client-update opencode|pi|omp|commandcode|hermes|--all");
+  }
+  const { routedHarnessCliPath, updateRoutedHarness } = await import("./routed-harness-install.mjs");
+  if (target !== "--all") {
+    process.stdout.write(`${JSON.stringify(updateRoutedHarness(target), null, 2)}\n`);
+    return;
+  }
+  const results = [];
+  for (const id of ROUTED_HARNESS_IDS) {
+    // An absent client is skipped rather than installed: "update everything I
+    // have" must not become "install five coding agents I never asked for".
+    if (!routedHarnessCliPath(id)) {
+      results.push({ harness: id, skipped: "not installed" });
+      continue;
+    }
+    try {
+      results.push(updateRoutedHarness(id));
+    } catch (error) {
+      results.push({ harness: id, failed: error instanceof Error ? error.message : String(error) });
+    }
+  }
+  process.stdout.write(`${JSON.stringify({ updated: results }, null, 2)}\n`);
+}
+
 async function handleClientExport() {
   const values = args.slice(1);
   let secretEnv;
@@ -3471,6 +3509,11 @@ if (args.includes("--probe")) {
     throw new Error("Usage: control client-disconnect opencode|pi|omp|commandcode|hermes");
   }
   await handleClientDisconnect(args[1]);
+} else if (args[0] === "client-update") {
+  if (args.length !== 2) {
+    throw new Error("Usage: control client-update opencode|pi|omp|commandcode|hermes|--all");
+  }
+  await handleClientUpdate(args[1]);
 } else if (args[0] === "client-export") {
   await handleClientExport();
 } else if (args[0] === "presence") {

@@ -41,6 +41,10 @@ export interface HarnessDescriptor {
   configured: boolean;
   canInstall: boolean;
   installRequirement?: string;
+  /** Whether this client is installed and has an updater this router can run. */
+  canUpdate?: boolean;
+  /** The command an update would run, e.g. `opencode upgrade`. */
+  updateCommand?: string;
   publicOrigin?: string;
   agentConfigured?: boolean;
   appConfigured?: boolean;
@@ -221,6 +225,8 @@ export interface RouterControl {
   probeAgentBridge(bridgeId: AgentBridgeId): Promise<unknown>;
   loginAgentBridge(bridgeId: AgentBridgeId): Promise<unknown>;
   setupHarness(harnessId: HarnessId, hostname?: string): Promise<unknown>;
+  /** Move one routed client, or every installed one ("all"), to its latest release. */
+  updateHarness(harnessId: HarnessId | "all"): Promise<unknown>;
   prepareCursorTunnel(): Promise<unknown>;
   connectCursor(hostname?: string): Promise<unknown>;
   openHarnessSession(harnessId: HarnessId, sessionId: string, surface: HarnessSurface, model?: string): Promise<unknown>;

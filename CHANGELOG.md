@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- **Routed coding clients can be kept current from the Harness page.**
+  `control client-update <id>` and `control client-update --all`, plus an
+  **Update** button on each row and **Update all** in the header, move
+  opencode, pi, Command Code, and Hermes Agent to their latest release. Each
+  runs that client's own updater (`opencode upgrade`, `pi update --self`,
+  `command-code update`, `hermes update --yes`) rather than `npm install -g`,
+  so a CLI installed by Homebrew or a `curl | sh` script is updated in place
+  instead of gaining a second npm copy that may win or lose on PATH. omp ships
+  neither a package this router installs nor a self-update subcommand, so its
+  row prints the project's own three installs. Updating stays a separate,
+  explicit action: publishing a model list never changes a client's version.
+  `--all` skips clients that are not installed and reports each one instead of
+  stopping at the first failure.
+- **pi is installed from its maintained package.** The pi coding agent moved
+  from `@mariozechner/pi-coding-agent` (last published at 0.73.1) to
+  `@earendil-works/pi-coding-agent`. Setup installed the abandoned name, which
+  still installs and still answers `pi --version`, so the stale agent looked
+  healthy. pi's own `--ignore-scripts` install flag is used as well.
 - **Muse Spark Responses turns no longer end in a gateway error.** OpenCode Go
   and Zen send `event: ping` (`{"type":"ping","cost":"0"}`) after every
   `response.completed`. The API forwarder treated it as data after the terminal

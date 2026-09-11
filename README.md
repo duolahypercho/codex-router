@@ -2337,7 +2337,7 @@ write the one provider key the router owns into that document.
 | Client | Document the router edits | Wire | Install |
 | --- | --- | --- | --- |
 | opencode | `~/.config/opencode/opencode.json` | Responses | `opencode-ai` |
-| pi | `~/.pi/agent/models.json` | Responses | `@mariozechner/pi-coding-agent` |
+| pi | `~/.pi/agent/models.json` | Responses | `@earendil-works/pi-coding-agent` |
 | omp (oh-my-pi) | `~/.omp/agent/models.yml` | Responses | install omp yourself first ([omp.sh](https://omp.sh/); it runs on Bun) |
 | Command Code | `~/.commandcode/providers.json` | Anthropic Messages | `command-code` 1.30.0 or later (setup updates an older one) |
 | Hermes Agent | `~/.hermes/config.yaml` | Anthropic Messages | install Hermes yourself first |
@@ -2358,6 +2358,25 @@ From the terminal, the same action is one command per client:
 
 ./bin/control client-disconnect opencode
 ```
+
+**Keeping them current is its own command.** Setup installs a client that is
+missing, but deliberately leaves one that is already there at the version you
+have — bumping a global coding agent is not something that should happen
+because you republished a model list. To move them:
+
+```sh
+./bin/control client-update opencode   # runs `opencode upgrade`
+./bin/control client-update --all      # every client you actually have
+```
+
+Each runs the client's *own* updater (`opencode upgrade`, `pi update --self`,
+`command-code update`, `hermes update --yes`) rather than `npm install -g`, so
+a CLI you installed with Homebrew or a `curl | sh` script is updated in place
+instead of gaining a second npm copy that may win or lose on PATH. omp has
+neither, so its row prints the project's own installs. `--all` skips clients
+you have not installed and reports each one rather than stopping at the first
+failure. The Harness page has the same thing as an **Update** button per row
+and **Update all** in the header.
 
 Each client is published *into* rather than installed *as*: there is no
 `MODEL_ROUTER_TARGET` for these five and no second service. They share the

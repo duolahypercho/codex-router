@@ -84,6 +84,7 @@ const ROUTED_HARNESS_ROWS = Object.freeze([
     site: "https://opencode.ai/",
     docs: "https://opencode.ai/docs/config/",
     installable: true,
+    updater: "opencode upgrade",
     installHint: "Setup installs opencode-ai when it is missing and publishes every routed model.",
     publishHint: "Publishes every routed model into opencode's router-owned provider. Other opencode settings remain untouched.",
   }),
@@ -98,7 +99,8 @@ const ROUTED_HARNESS_ROWS = Object.freeze([
     site: "https://pi.dev/",
     docs: "https://pi.dev/docs/latest/models",
     installable: true,
-    installHint: "Setup installs @mariozechner/pi-coding-agent when it is missing and publishes every routed model.",
+    updater: "pi update --self",
+    installHint: "Setup installs @earendil-works/pi-coding-agent when it is missing and publishes every routed model.",
     publishHint: "Publishes every routed model into pi's models.json. Every other provider in that file is preserved.",
   }),
   Object.freeze({
@@ -114,6 +116,7 @@ const ROUTED_HARNESS_ROWS = Object.freeze([
     // omp runs on Bun and installs from its own script, Homebrew, or Bun, none
     // of which this router runs on somebody's behalf. The row links to them.
     installable: false,
+    updater: null,
     installHint: "Install omp from omp.sh first; setup then publishes every routed model into ~/.omp/agent/models.yml.",
     publishHint: "Publishes every routed model into omp's models.yml. Comments and every other provider are preserved.",
   }),
@@ -128,6 +131,10 @@ const ROUTED_HARNESS_ROWS = Object.freeze([
     site: "https://commandcode.ai/",
     docs: "https://commandcode.ai/docs/byok",
     installable: true,
+    // `command-code`, not the `cmd` alias the docs use: `cmd` is the Windows
+    // command shell, so Command Code ships as `cmdc` there. The full name is
+    // the one that resolves on every platform, and the one this router runs.
+    updater: "command-code update",
     installHint: "Setup installs command-code 1.30.0 or later (the first release that reads providers.json) and publishes every routed model as a BYOK provider.",
     publishHint: "Publishes every routed model into ~/.commandcode/providers.json. Your Command Code plan and its own models are untouched.",
   }),
@@ -145,6 +152,7 @@ const ROUTED_HARNESS_ROWS = Object.freeze([
     // registry, and this router does not run remote installers on somebody's
     // behalf. The row links to the official instructions instead.
     installable: false,
+    updater: "hermes update --yes",
     installHint: "Install the official Hermes Agent first; setup then publishes every routed model into its config.yaml.",
     publishHint: "Publishes every routed model as the codex-router provider in Hermes's config.yaml. Every other setting is preserved.",
   }),
@@ -541,6 +549,11 @@ export function getHarnessSnapshot() {
           configured: existsSync(path.join(stateDirectory, row.marker)),
           canInstall: row.installable || Boolean(binary),
           installRequirement: binary ? row.publishHint : row.installHint,
+          // Updating is offered only for a client that is actually here and has
+          // something to run. It is never implied by setup: bumping a global
+          // coding agent is its own decision, so it gets its own button.
+          canUpdate: Boolean(binary) && Boolean(row.updater || row.installable),
+          ...(row.updater ? { updateCommand: row.updater } : {}),
           docsUrl: row.docs,
         };
       }),
@@ -2202,6 +2215,25 @@ export function registerIpcHandlers({
       if (binary) environmentOverrides[routedSetup.binEnv] = binary;
     }
     return controlJsonRunner(args, {
+      timeoutMs: REPAIR_TIMEOUT_MS,
+      ...(Object.keys(environmentOverrides).length ? { environmentOverrides } : {}),
+    });
+  });
+  // Move one routed client, or every installed one, to its latest release.
+  //
+  // A fixed command with a validated id; the renderer supplies no executable
+  // and no argv. It is deliberately not folded into `setupHarness`: publishing
+  // a model list must never be the reason somebody's global coding agent
+  // changed version underneath them.
+  handleAction("updateHarness", async ({ harnessId } = {}) => {
+    const harness = harnessId === "all" ? "--all" : oneOf(harnessId, ROUTED_HARNESS_IDS, "Harness");
+    const environmentOverrides = {};
+    const routed = ROUTED_HARNESS_ROWS.find((row) => row.id === harness);
+    if (routed) {
+      const binary = routed.executables.map((name) => harnessExecutableResolver(name)).find(Boolean);
+      if (binary) environmentOverrides[routed.binEnv] = binary;
+    }
+    return controlJsonRunner(["client-update", harness], {
       timeoutMs: REPAIR_TIMEOUT_MS,
       ...(Object.keys(environmentOverrides).length ? { environmentOverrides } : {}),
     });

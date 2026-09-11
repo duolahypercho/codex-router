@@ -70,6 +70,7 @@ const routerControl = Object.freeze({
   probeAgentBridge: (bridgeId) => call("probeAgentBridge", { bridgeId }),
   loginAgentBridge: (bridgeId) => call("loginAgentBridge", { bridgeId }),
   setupHarness: (harnessId, hostname) => call("setupHarness", { harnessId, hostname }),
+  updateHarness: (harnessId) => call("updateHarness", { harnessId }),
   prepareCursorTunnel: () => call("prepareCursorTunnel"),
   connectCursor: (hostname) => call("connectCursor", { hostname }),
   openHarnessSession: (harnessId, sessionId, surface, model) => call("openHarnessSession", { harnessId, sessionId, surface, model }),
