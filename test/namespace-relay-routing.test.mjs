@@ -2728,7 +2728,11 @@ test("a routed turn whose tool calls leaked into the reasoning channel still run
     content: [],
   };
   const result = await scenario(true, {
-    model: "opencode-go/deepseek-v4.1-flash",
+    // The route the capture came from. Recovery is Hy4-only on purpose: this
+    // markup is Hy4's native tool-call syntax, and scanning every routed
+    // provider's text for it would turn prose that merely quotes it into
+    // executed calls.
+    model: "opencode-go/hy4-preview",
     sseBody: () => [
       sseEvent({ type: "response.created", response: { id: "resp_leak" } }),
       sseEvent({

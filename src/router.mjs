@@ -57,7 +57,10 @@ import {
   isEmptyCompletionPreludeLimitError,
 } from "./empty-completion-guard.mjs";
 import { itemLifecycleNormalizerTransform } from "./item-lifecycle-normalizer.mjs";
-import { leakedToolCallRecoveryTransform } from "./leaked-tool-call-recovery.mjs";
+import {
+  leakedToolCallRecoveryTransform,
+  usesLeakedToolCallRecovery,
+} from "./leaked-tool-call-recovery.mjs";
 import { reasoningTagStripperTransform } from "./reasoning-tag-stripper.mjs";
 import {
   ZaiResponsesCompatTransform,
@@ -4348,8 +4351,9 @@ async function handleResponses(request, response, requestUrl) {
       // with an empty assistant message and no `function_call` -- Codex shows
       // the "Worked for ..." group and no answer at all. Runs before the
       // namespace transform so a recovered flattened call is restored like any
-      // other. Native streams (no route) never carry the markup.
-      const leakedToolCalls = route
+      // other. Native streams (no route) never carry the markup, and neither
+      // does any routed family but Hy4 -- see `usesLeakedToolCallRecovery`.
+      const leakedToolCalls = usesLeakedToolCallRecovery(route)
         ? leakedToolCallRecoveryTransform(contentType)
         : undefined;
       if (leakedToolCalls) transforms.push(leakedToolCalls);

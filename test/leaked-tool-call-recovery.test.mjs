@@ -7,6 +7,7 @@ import {
   LeakedToolCallRecovery,
   leakedToolCallRecoveryTransform,
   parseLeakedToolCalls,
+  usesLeakedToolCallRecovery,
 } from "../src/leaked-tool-call-recovery.mjs";
 
 const N = "6124c78e";
@@ -458,4 +459,74 @@ test("a stream that ends without a terminal event still hands over its calls", a
   });
   const { body } = await run(stream);
   assert.equal(functionCalls(body).length, 2);
+});
+
+test("recovery is offered to Hy4 routes and to nothing else", () => {
+  // This markup is Hy4's own tool-call syntax. Scanning every routed provider's
+  // text for it would make prose that merely *quotes* it -- a diff, a web page,
+  // this repository's own source -- into executed tool calls.
+  for (const upstreamModel of ["hy4-preview", "tencent/hy4-preview"]) {
+    assert.equal(usesLeakedToolCallRecovery({ upstreamModel }), true, upstreamModel);
+  }
+  for (const route of [
+    null,
+    undefined,
+    {},
+    { upstreamModel: "glm-5.3" },
+    { upstreamModel: "deepseek-v4-flash" },
+    { upstreamModel: "grok-4.6" },
+    { upstreamModel: "moonshotai/kimi-k2.6" },
+    { upstreamModel: "evil-hy4-preview-x" },
+    { upstreamModel: "hy4-preview-turbo" },
+  ]) {
+    assert.equal(usesLeakedToolCallRecovery(route), false, JSON.stringify(route));
+  }
+});
+
+test("one item's calls are recovered once even when both channels carry the span", async () => {
+  // `summary` and `content` are two renderings of one item's thinking. Sharing
+  // a span stream between them made the second reading look like a genuine
+  // extension of the first, and the call was recovered -- and executed -- twice.
+  const both =
+    block({ type: "response.reasoning_summary_text.delta", output_index: 0, delta: LIVE_REASONING }) +
+    block({ type: "response.reasoning_text.delta", output_index: 0, delta: LIVE_REASONING }) +
+    block({ type: "response.completed", response: { id: "r", output: [] } });
+  assert.equal(functionCalls((await run(both)).body).length, 2);
+
+  const storedBoth =
+    block({
+      type: "response.output_item.done",
+      output_index: 0,
+      item: {
+        type: "reasoning",
+        summary: [{ type: "summary_text", text: LIVE_REASONING }],
+        content: [{ type: "reasoning_text", text: LIVE_REASONING }],
+      },
+    }) +
+    block({ type: "response.completed", response: { id: "r", output: [] } });
+  assert.equal(functionCalls((await run(storedBoth)).body).length, 2);
+});
+
+test("an unterminated span is scanned once, not re-scanned per delta", async () => {
+  // Held as one growing string this was quadratic -- every indexOf re-flattened
+  // the rope -- and `_transform` is synchronous, so a 1.25 MB unterminated span
+  // blocked the router's event loop for 21.5 s against 0.8 s for the same bytes
+  // with no span open. Assert the shape of the curve, not a wall-clock number.
+  const chunk = "x".repeat(64);
+  async function elapsed(bytes) {
+    let stream = block({ type: "response.created", response: { id: "r" } }) +
+      block({ type: "response.reasoning_text.delta", output_index: 0, delta: `<tool_calls:${N}>` });
+    for (let sent = 0; sent < bytes; sent += chunk.length) {
+      stream += block({ type: "response.reasoning_text.delta", output_index: 0, delta: chunk });
+    }
+    stream += block({ type: "response.completed", response: { id: "r", output: [] } });
+    const started = process.hrtime.bigint();
+    await run(stream);
+    return Number(process.hrtime.bigint() - started) / 1e6;
+  }
+  const small = await elapsed(128 * 1024);
+  const large = await elapsed(512 * 1024);
+  // Four times the bytes. Linear would be ~4x; the quadratic version was ~16x.
+  // Allow generous slack for a loaded machine and still catch a return to O(n^2).
+  assert.ok(large < small * 9, `128 KiB took ${small} ms, 512 KiB took ${large} ms`);
 });

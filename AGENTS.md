@@ -2142,16 +2142,30 @@ content and no `function_call`. Codex ends the turn there and writes
    tag must repeat it. Do not hardcode it.
 3. **One item contributes its calls once.** The same span arrives on the delta
    channel, in the `.done` snapshot, and in the stored item; recovery is keyed
-   by output index so the call is emitted a single time.
+   by output index so the call is emitted a single time. The summary and content
+   channels are two renderings of one item's thinking, so they hold separate
+   span streams and the fuller reading wins -- sharing one stream between them
+   made the second channel look like a genuine extension of the first and
+   recovered, and executed, the call twice.
 4. **A leaked argument value is text.** It is read as JSON only when its text is
    exactly its own JSON form, so a declared `20000` or `true` survives while a
    shell command, a path, or `0755` stays the string the model wrote.
-5. **Routed streams only, before the namespace transform**, so a recovered
+5. **Hy4 routes only, before the namespace transform**, so a recovered
    flattened `mcp__server__tool` call is restored like any other, the empty-
    completion guard sees content, and the phase labeller reads the blank
    message as commentary instead of a final answer. Native streams gain no
-   stage. Coverage lives in `test/leaked-tool-call-recovery.test.mjs` and the
-   leaked-channel case in `test/namespace-relay-routing.test.mjs`.
+   stage, and neither does any other routed family: this is Hy4's own syntax,
+   and scanning every routed provider's text for it would turn prose that
+   merely *quotes* the markup -- a diff, a web page, this file -- into executed
+   tool calls. `usesLeakedToolCallRecovery` is the gate; widening it past
+   `hy4-preview` reopens that injection channel. Coverage lives in
+   `test/leaked-tool-call-recovery.test.mjs` and the leaked-channel case in
+   `test/namespace-relay-routing.test.mjs`.
+6. **A span is scanned once, not re-scanned per delta.** The capture is held
+   unjoined with a closing-tag overlap because `_transform` is synchronous:
+   re-scanning one growing string re-flattens the rope every delta, and a
+   1.25 MB unterminated span blocked the event loop for 21.5 s against 0.8 s
+   for the same bytes with no span open. The capture bound is 4 MiB.
 
 ## Routed subagent regression prevention
 

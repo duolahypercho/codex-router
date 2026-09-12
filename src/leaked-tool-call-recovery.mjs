@@ -33,6 +33,18 @@ import { Transform } from "node:stream";
 // dropped rather than relayed as half a tag. The item's own text is cleaned
 // independently, so the transcript still carries what the model wrote.
 
+// Hy4 Preview is the only family that emits this syntax, so it is the only one
+// whose text is reinterpreted. Scanning every routed provider would make any
+// prose that merely *quotes* the markup -- a diff, a web page, this repository's
+// own source -- into executed tool calls, which is a prompt-injection channel
+// rather than a repair. `upstreamModel` carries it on every shipped route
+// (`hy4-preview` on opencode Go, `tencent/hy4-preview` elsewhere), including
+// the Command Code route that ships no `requestProfile`.
+export function usesLeakedToolCallRecovery(route) {
+  const upstream = route?.upstreamModel;
+  return typeof upstream === "string" && /(?:^|\/)hy4-preview$/.test(upstream);
+}
+
 const OPEN_MARKER = "<tool_calls:";
 const NONCE = "[0-9a-zA-Z]{1,32}";
 const OPEN_RE = new RegExp(`^<tool_calls:(${NONCE})>`);
@@ -159,7 +171,23 @@ class LeakedSpanStream {
   calls = [];
   #mode = "normal";
   #carry = "";
-  #captured = "";
+  // A span arrives over many deltas. Holding it as one growing string and
+  // re-scanning it per delta is quadratic -- every `indexOf` re-flattens the
+  // concatenation rope -- and `_transform` is synchronous, so the cost is paid
+  // by every concurrent request on the router. Measured before this was made
+  // linear: a 1.25 MB unterminated span blocked the event loop for 21.5 s
+  // against 0.8 s for the same bytes with no span open, and the capture bound
+  // is 4 MiB. So the parts are kept unjoined and each delta is scanned once.
+  #parts = [];
+  #capturedLen = 0;
+  // First bytes only: enough to decide the opening tag, which cannot change.
+  #capturedHead = "";
+  #head = null;
+  // Content not yet scanned for the closing tag, and where it starts in the
+  // capture. Carries a closeTag-length overlap so a tag that straddles a delta
+  // boundary is still found.
+  #unsearched = "";
+  #unsearchedBase = 0;
   #bailed = false;
 
   // Longest suffix of `s` that could still become an opening marker.
@@ -187,35 +215,52 @@ class LeakedSpanStream {
           return out;
         }
         out += this.#carry.slice(0, at);
-        this.#captured = this.#carry.slice(at);
+        input = this.#carry.slice(at);
         this.#carry = "";
         this.#mode = "capture";
         continue;
       }
 
-      this.#captured += input;
-      input = "";
-      const head = OPEN_RE.exec(this.#captured);
+      if (input) {
+        this.#parts.push(input);
+        this.#capturedLen += input.length;
+        if (this.#capturedHead.length < MAX_OPEN_LEN) {
+          this.#capturedHead = (this.#capturedHead + input).slice(0, MAX_OPEN_LEN);
+        }
+        this.#unsearched += input;
+        input = "";
+      }
+      // Decided once: the opening tag cannot change as the capture grows.
+      const head = this.#head ?? (this.#head = OPEN_RE.exec(this.#capturedHead));
       if (!head) {
         // Still short of a decision, unless it can no longer become a marker.
-        if (this.#captured.length < MAX_OPEN_LEN) return out;
+        if (this.#capturedLen < MAX_OPEN_LEN) {
+          this.#head = null;
+          return out;
+        }
         out += this.#release();
         continue;
       }
       const closeTag = `</tool_calls:${head[1]}>`;
-      const closeAt = this.#captured.indexOf(closeTag, head[0].length);
-      if (closeAt === -1) {
-        if (this.#captured.length > MAX_CAPTURE_BYTES) {
+      const at = this.#unsearched.indexOf(closeTag);
+      if (at === -1) {
+        // Keep only enough to catch a tag split across this boundary.
+        const keep = Math.min(this.#unsearched.length, closeTag.length - 1);
+        this.#unsearchedBase += this.#unsearched.length - keep;
+        this.#unsearched = this.#unsearched.slice(this.#unsearched.length - keep);
+        if (this.#capturedLen > MAX_CAPTURE_BYTES) {
           this.#bailed = true;
           out += this.#release();
           return out;
         }
         return out;
       }
-      const span = this.#captured.slice(0, closeAt + closeTag.length);
-      const remainder = this.#captured.slice(closeAt + closeTag.length);
+      const closeAt = this.#unsearchedBase + at;
+      const all = this.#parts.join("");
+      const span = all.slice(0, closeAt + closeTag.length);
+      const remainder = all.slice(closeAt + closeTag.length);
       const parsed = parseLeakedToolCalls(span);
-      this.#captured = "";
+      this.#resetCapture();
       this.#mode = "normal";
       if (parsed) this.calls.push(...parsed.calls);
       else out += span;
@@ -229,11 +274,20 @@ class LeakedSpanStream {
     return out;
   }
 
+  #resetCapture() {
+    this.#parts = [];
+    this.#capturedLen = 0;
+    this.#capturedHead = "";
+    this.#head = null;
+    this.#unsearched = "";
+    this.#unsearchedBase = 0;
+  }
+
   // Return the buffered text to the visible channel and go back to scanning.
   #release() {
-    const out = this.#carry + this.#captured;
+    const out = this.#carry + this.#parts.join("");
     this.#carry = "";
-    this.#captured = "";
+    this.#resetCapture();
     this.#mode = "normal";
     return out;
   }
@@ -346,8 +400,13 @@ export class LeakedToolCallRecovery extends Transform {
     this.#passthrough = true;
   }
 
-  #streamFor(index) {
-    const key = Number.isInteger(index) ? index : 0;
+  // One stream per channel, not per item. The summary and content channels of a
+  // single reasoning item each carry their own delta sequence; sharing a stream
+  // between them appends the second channel's calls to the first's, and the
+  // cumulative-reading dedupe in `#collect` then reads the repeat as a genuine
+  // extension -- recovering, and executing, the same call twice.
+  #streamFor(index, channel) {
+    const key = `${Number.isInteger(index) ? index : 0}\u0000${channel}`;
     let stream = this.#streams.get(key);
     if (!stream) {
       stream = new LeakedSpanStream();
@@ -428,7 +487,7 @@ export class LeakedToolCallRecovery extends Transform {
         type === "response.output_text.delta") &&
       typeof event.delta === "string"
     ) {
-      const stream = this.#streamFor(event.output_index);
+      const stream = this.#streamFor(event.output_index, type);
       const before = stream.calls.length;
       const cleaned = stream.feed(event.delta);
       this.#take(event.output_index, stream, before);
@@ -443,7 +502,8 @@ export class LeakedToolCallRecovery extends Transform {
         type === "response.output_text.done") &&
       typeof event.text === "string"
     ) {
-      const stream = this.#streamFor(event.output_index);
+      // The `.done` snapshot closes the same channel its deltas opened.
+      const stream = this.#streamFor(event.output_index, type.replace(/\.done$/, ".delta"));
       const before = stream.calls.length;
       stream.flush();
       this.#take(event.output_index, stream, before);
@@ -469,7 +529,13 @@ export class LeakedToolCallRecovery extends Transform {
       const summary = cleanTextParts(item.summary, "text");
       const content = cleanTextParts(item.content, "text");
       if (!summary.changed && !content.changed) return item;
-      this.#collect(outputIndex, [...summary.calls, ...content.calls]);
+      // `summary` and `content` are two renderings of one item's thinking. When
+      // both carry the span they describe the same calls, so take the fuller
+      // reading rather than concatenating them into a duplicate.
+      this.#collect(
+        outputIndex,
+        summary.calls.length >= content.calls.length ? summary.calls : content.calls,
+      );
       return { ...item, summary: summary.parts, content: content.parts };
     }
     if (item?.type === "message") {
