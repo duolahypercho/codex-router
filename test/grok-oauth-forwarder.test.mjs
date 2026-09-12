@@ -76,6 +76,11 @@ async function waitHealth(base, child) {
   throw new Error(`health timeout: ${child.testErrors()}`);
 }
 
+// The forwarder writes its diagnostics to stderr after it has finished
+// answering the client, so a request that has already resolved proves nothing
+// about what the parent has read from the child's pipe yet. Wait for the
+// marker rather than asserting on one snapshot: that race turned into a
+// macOS-only CI flake whose stderr held only "[grok-oauth] listening".
 async function waitChildError(child, pattern, timeoutMs = 2_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -347,8 +352,8 @@ test("emits one terminal SSE error when the upstream stream fails mid-turn", asy
     assert.equal((result.body.match(/event: error/g) || []).length, 1);
     assert.match(result.body, /local_router_stream_failed/);
     assert.doesNotMatch(result.body, /data: \[DONE\]/);
-    assert.match(
-      child.testErrors(),
+    await waitChildError(
+      child,
       /upstream-phase-failed=true phase=attempt model=grok-4\.6 attempt_req=[0-9a-f-]{36} attempt_headers_ms=\d+ attempt_first_event_ms=\d+ attempt_total_ms=\d+ error=(?:TypeError|AbortError)/,
     );
   } finally {
@@ -1154,7 +1159,7 @@ test("retries a progress-only stop once and prefers a retry that calls tools", a
       /already completed the task, restate the final answer and call no tool/,
     );
     assert.match(JSON.stringify(retryBody.input), /Otherwise continue the same task now/);
-    assert.match(child.testErrors(), /progress-only-retried=true/);
+    await waitChildError(child, /progress-only-retried=true/);
   } finally {
     await stop(child);
     await new Promise((r) => backend.server.close(r));
@@ -1945,7 +1950,7 @@ test("drains a failed progress-only retry and keeps the first answer", async () 
     assert.equal(inbound, 2);
     assert.equal(secondBodyRead, true);
     assert.equal(json.choices[0].message.content, "Next I will update the deck.");
-    assert.match(child.testErrors(), /progress-only-retry-failed=true/);
+    await waitChildError(child, /progress-only-retry-failed=true/);
   } finally {
     await stop(child);
     await new Promise((r) => backend.server.close(r));
@@ -2026,7 +2031,7 @@ test("a streamed optional progress-only retry that fails keeps the first answer"
     assert.match(text, /Next I will update the deck\./);
     assert.match(text, /"finish_reason":"stop"/);
     assert.doesNotMatch(text, /"error"/);
-    assert.match(child.testErrors(), /progress-only-retry-failed=true .*terminal=failed/);
+    await waitChildError(child, /progress-only-retry-failed=true .*terminal=failed/);
   } finally {
     await stop(child);
     await new Promise((r) => backend.server.close(r));
@@ -2071,7 +2076,10 @@ test("an optional progress-only retry that does not complete keeps the first ans
       assert.equal(json.choices[0].message.content, "Next I will update the deck.", label);
       assert.equal(json.choices[0].finish_reason, "stop", label);
       assert.doesNotMatch(json.choices[0].message.content, /partial retry text/, label);
-      assert.match(child.testErrors(), new RegExp(`progress-only-retry-failed=true .*terminal=${label}`), label);
+      await waitChildError(
+        child,
+        new RegExp(`progress-only-retry-failed=true .*terminal=${label}`),
+      ).catch((error) => { throw new Error(`${label}: ${error.message}`); });
     } finally {
       await stop(child);
       await new Promise((r) => backend.server.close(r));

@@ -13,6 +13,21 @@
   frame bound now matches the namespace relay's 10 MiB, the JSON scan budgets
   grow with it, and malformed, ambiguous, or over-budget streams still pass
   through byte-identical.
+- **Kimi no longer rejects a tool schema whose union leaf declares no type.**
+  A nullable field written the ordinary way --
+  `{"anyOf":[{"type":"string"},{"type":"null"}]}` -- carries no `type` of its
+  own, and Moonshot's validator refuses the whole request with HTTP 400
+  `tools.function.parameters missing type in anyOf properties`, losing the turn
+  on every Kimi model (#641). Nothing in the pipeline supplied one:
+  `normalizeSchemaLiterals` only removes literals that contradict a type a node
+  already declares. The Moonshot compatibility pass now declares a type where
+  the node already implies one -- from `properties`/`required`, `items`, a
+  single-typed `enum`/`const`, or a union whose branches all agree -- alongside
+  the existing `$ref` inlining. A node that implies nothing (a bare `{}`, a
+  lone `not`, a mixed `enum`) is left open, because narrowing a schema the
+  client meant to leave open is worse than the rejection. Every other provider
+  keeps the exact wire payload it has today.
+
 - **A routed model the router has not loaded now fails locally, not at
   ChatGPT.** A model added to or renamed in `user-models.json` shows up in the
   Codex picker as soon as the catalog is rebuilt, but the running router reads
@@ -43,12 +58,18 @@
   calls) or `final_answer`, and Codex folds commentary into "Worked for ..."
   and shows the final answer below it. Routed providers never send the label,
   so every progress note rendered as a standalone answer. The router now labels
-  routed messages from the stream's item order: a message another item follows
-  is commentary, and the last message of a completed response is the final
-  answer. A phase the provider sent always wins, text still streams live, and
-  failed or unterminated responses are relayed unlabelled. The label costs no
-  model tokens, and LiteLLM drops it from history before any chat-completions
-  provider sees it.
+  routed messages from the stream's item order: a message a tool call or
+  another message follows is commentary, and the last message of a completed
+  response is the final answer, even when only reasoning follows it. A phase
+  the provider sent always wins, text still streams live, and failed,
+  incomplete, or unterminated responses are relayed unlabelled; a stream the
+  upstream breaks off loses the held message frame along with the rest of the
+  turn. The label costs no model tokens, but Codex sends it back on later
+  turns. Chat-translated routes drop it from history. Responses-surface
+  providers (Meta, OpenCode, OpenCode free, GitHub Copilot, DeepSeek Responses)
+  receive it, as OpenAI's Responses schema allows. Endpoints added with
+  `--adapter openai-responses` have it removed before the request leaves the
+  router, since nothing shows that their validators accept it.
 - **`apply_patch` calls no longer abort routed turns mid-stream when a model
   skips LiteLLM's wrapper.** LiteLLM sends native custom tools such as
   `apply_patch` to Chat Completions providers as a function with one `content`

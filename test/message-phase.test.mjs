@@ -7,6 +7,7 @@ import {
   labelResponseOutput,
   MessagePhaseTransform,
   messagePhaseTransform,
+  withoutInputMessagePhase,
 } from "../src/message-phase.mjs";
 
 function block(event, sep = "\n\n") {
@@ -51,6 +52,21 @@ const message = (id, text, extra = {}) => ({
   ...extra,
 });
 const call = (id) => ({ id, type: "function_call", call_id: id, name: "exec_command", arguments: "{}" });
+const reasoning = (id) => ({ id, type: "reasoning", summary: [{ type: "summary_text", text: "Thinking." }] });
+
+function reasoningFrames(index, item) {
+  return [
+    block({ type: "response.output_item.added", output_index: index, item: { ...item, summary: [] } }),
+    block({
+      type: "response.reasoning_summary_text.delta",
+      output_index: index,
+      item_id: item.id,
+      summary_index: 0,
+      delta: item.summary[0].text,
+    }),
+    block({ type: "response.output_item.done", output_index: index, item }),
+  ];
+}
 
 function messageFrames(index, item) {
   return [
@@ -157,10 +173,11 @@ test("tool-only and message-free streams pass through byte-for-byte", async () =
   assert.equal((await label(input)).toString("utf8"), input);
 });
 
-test("failed, errored, and unterminated responses release the message unlabelled", async () => {
+test("failed, incomplete, errored, and unterminated responses release the message unlabelled", async () => {
   const head = messageFrames(0, message("m1", "Partial.")).join("");
   for (const tail of [
     block({ type: "response.failed", response: { id: "r", error: { message: "boom" } } }),
+    block({ type: "response.incomplete", response: { id: "r", status: "incomplete", output: [] } }),
     block({ type: "error", error: { message: "boom" } }),
     "data: [DONE]\n\n",
     "",
@@ -222,6 +239,130 @@ test("labelResponseOutput leaves labelled and non-message output alone", () => {
   assert.equal(labelResponseOutput([call("c1")]), undefined);
   assert.equal(labelResponseOutput([message("m1", "x", { phase: "final_answer" })]), undefined);
   assert.equal(labelResponseOutput(undefined), undefined);
+});
+
+test("labelResponseOutput lets only tool calls and messages make a message commentary", () => {
+  const phases = (output) => labelResponseOutput(output).map((item) => item.phase);
+  assert.deepEqual(phases([message("m1", "x"), reasoning("rs1")]), ["final_answer", undefined]);
+  assert.deepEqual(phases([message("m1", "x"), reasoning("rs1"), call("c1")]), ["commentary", undefined, undefined]);
+  assert.deepEqual(phases([message("m1", "x"), reasoning("rs1"), message("m2", "y"), reasoning("rs2")]), [
+    "commentary",
+    undefined,
+    "final_answer",
+    undefined,
+  ]);
+});
+
+test("a message followed only by reasoning is still the final answer", async () => {
+  const input = [
+    block({ type: "response.created", response: { id: "r" } }),
+    ...messageFrames(0, message("m1", "Done.")),
+    ...reasoningFrames(1, reasoning("rs1")),
+    block({ type: "response.completed", response: { id: "r", output: [message("m1", "Done."), reasoning("rs1")] } }),
+    "data: [DONE]\n\n",
+  ].join("");
+  const out = await label(input);
+  assert.deepEqual(donePhases(out), ["m1:final_answer"]);
+  const completed = events(out).find((event) => event.type === "response.completed");
+  assert.deepEqual(completed.response.output.map((item) => item.phase), ["final_answer", undefined]);
+  assert.equal(out.toString("utf8").replaceAll(',"phase":"final_answer"', ""), input);
+});
+
+test("reasoning between a message and a tool call is held, and the message stays commentary", async () => {
+  const input = [
+    ...messageFrames(0, message("m1", "Checking.")),
+    ...reasoningFrames(1, reasoning("rs1")),
+    ...callFrames(2, call("c1")),
+    block({
+      type: "response.completed",
+      response: { id: "r", output: [message("m1", "Checking."), reasoning("rs1"), call("c1")] },
+    }),
+  ].join("");
+  const out = await label(input);
+  assert.deepEqual(donePhases(out), ["m1:commentary"]);
+  const completed = events(out).find((event) => event.type === "response.completed");
+  assert.deepEqual(completed.response.output.map((item) => item.phase), ["commentary", undefined, undefined]);
+  assert.equal(out.toString("utf8").replaceAll(',"phase":"commentary"', ""), input);
+  for (const chunkSize of [1, 13, 256]) {
+    assert.deepEqual(await label(input, { chunkSize }), out, `chunkSize=${chunkSize}`);
+  }
+});
+
+test("an incomplete response keeps earlier commentary but labels neither its last message nor its snapshot", async () => {
+  const output = [message("m1", "Checking."), call("c1"), message("m2", "Truncat")];
+  const input = [
+    ...messageFrames(0, output[0]),
+    ...callFrames(1, output[1]),
+    ...messageFrames(2, output[2]),
+    block({
+      type: "response.incomplete",
+      response: { id: "r", status: "incomplete", incomplete_details: { reason: "max_output_tokens" }, output },
+    }),
+  ].join("");
+  const out = await label(input);
+  assert.deepEqual(donePhases(out), ["m1:commentary", "m2:undefined"]);
+  const incomplete = events(out).find((event) => event.type === "response.incomplete");
+  assert.deepEqual(incomplete.response.output.map((item) => item.phase), [undefined, undefined, undefined]);
+});
+
+test("reasoning held behind a message still respects the hold bound", async () => {
+  const input = [
+    ...messageFrames(0, message("m1", "Slow.")),
+    block({ type: "response.output_item.added", output_index: 1, item: { ...reasoning("rs1"), summary: [] } }),
+    ...Array.from({ length: 20 }, (_, index) =>
+      block({
+        type: "response.reasoning_summary_text.delta",
+        output_index: 1,
+        item_id: "rs1",
+        summary_index: 0,
+        delta: `${"x".repeat(32)} ${index}`,
+      })),
+    block({ type: "response.output_item.done", output_index: 1, item: reasoning("rs1") }),
+    block({ type: "response.completed", response: { id: "r", output: [] } }),
+  ].join("");
+  assert.equal((await label(input, { maxHeldBytes: 512 })).toString("utf8"), input);
+});
+
+test("an upstream error destroys the stage with its held frame; a clean end releases it", async () => {
+  const head = messageFrames(0, message("m1", "Partial.")).join("");
+  const chunks = [];
+  const source = new Readable({ read() {} });
+  const collector = new Writable({
+    write(chunk, _encoding, callback) {
+      chunks.push(Buffer.from(chunk));
+      callback();
+    },
+  });
+  const run = pipeline(source, new MessagePhaseTransform(), collector);
+  source.push(head);
+  for (let turn = 0; turn < 1000 && !Buffer.concat(chunks).includes("response.output_text.delta"); turn += 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  source.destroy(new Error("upstream reset"));
+  await assert.rejects(run, /upstream reset/);
+  const relayed = Buffer.concat(chunks).toString("utf8");
+  assert.ok(relayed.includes('"response.output_text.delta"'), "frames before the message done were relayed");
+  assert.ok(!relayed.includes('"response.output_item.done"'), "the held done frame is lost with the stream");
+  // Control: the same frames ending cleanly release the held frame untouched.
+  assert.equal((await label(head)).toString("utf8"), head);
+});
+
+test("withoutInputMessagePhase omits phase from message input items only", () => {
+  const input = [
+    { type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] },
+    message("m1", "Checking.", { phase: "commentary" }),
+    { ...call("c1"), phase: "commentary" },
+    { role: "assistant", content: "Done.", phase: "final_answer" },
+  ];
+  const out = withoutInputMessagePhase(input);
+  assert.deepEqual(out.map((item) => Object.hasOwn(item, "phase")), [false, false, true, false]);
+  assert.equal(out[0], input[0]);
+  assert.deepEqual(out[1], message("m1", "Checking."));
+  assert.equal(input[1].phase, "commentary", "the caller's input is not mutated");
+  const clean = [input[0], call("c1")];
+  assert.equal(withoutInputMessagePhase(clean), clean);
+  assert.equal(withoutInputMessagePhase("text"), "text");
+  assert.equal(withoutInputMessagePhase(undefined), undefined);
 });
 
 test("the factory attaches only to event streams", () => {

@@ -306,7 +306,7 @@ test("direct DeepSeek Responses preserves images, reasoning, tools and stream bo
     const history = [
       { type: "message", role: "user", content: "Review the image." },
       { type: "reasoning", content: [{ type: "reasoning_text", text: "PRIOR_REASONING" }] },
-      { type: "message", role: "assistant", content: [{ type: "output_text", text: "PRIOR_ANSWER" }] },
+      { type: "message", role: "assistant", phase: "commentary", content: [{ type: "output_text", text: "PRIOR_ANSWER" }] },
       { type: "function_call", name: "probe", namespace: "fixture", call_id: "call_previous", arguments: "{}" },
       { type: "function_call_output", call_id: "call_previous", output: [{ type: "input_text", text: "fixture" }, { type: "input_image", image_url: IMAGE, detail: "original" }] },
     ];
@@ -319,6 +319,9 @@ test("direct DeepSeek Responses preserves images, reasoning, tools and stream bo
     assert.equal(requestText.split("PRIOR_REASONING").length - 1, 1);
     assert.equal(requestText.split("PRIOR_ANSWER").length - 1, 1);
     assert.deepEqual(requests.at(-1).body.input.find((item) => item.type === "reasoning"), history[1]);
+    // Built-in Responses providers keep Codex's message phase; only
+    // operator-configured Responses endpoints have it removed.
+    assert.equal(requests.at(-1).body.input.find((item) => item.role === "assistant")?.phase, "commentary");
     assert.deepEqual(requests.at(-1).body.input.at(-1).output, history.at(-1).output);
     const legacyHistory = structuredClone(history);
     legacyHistory[1] = { type: "reasoning", summary: [{ type: "summary_text", text: "PRIOR_REASONING" }], content: null };

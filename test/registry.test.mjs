@@ -152,6 +152,7 @@ test("provider registry exposes configured API and OAuth model families", () => 
       "nousresearch/step-3.7-flash-free",
       "ollama-cloud/deepseek-v4-flash",
       "ollama-cloud/deepseek-v4-pro",
+      "ollama-cloud/deepseek-v4.1-flash",
       "ollama-cloud/glm-5.2",
       "ollama-cloud/glm-5.3-flash",
       "ollama-cloud/glm-5.3",
