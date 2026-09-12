@@ -224,12 +224,61 @@ export function renderYamlMapping(value, indent = "", lines = []) {
 }
 
 /** Returns the document text with `keyPath` replaced by `value`, as block YAML. */
+// Lines inside `node`'s indented region that none of its registered children
+// account for.
+//
+// Two separate blind spots make `children.size` an unsafe proxy for "this node
+// holds nothing but ours":
+//
+//   - `children` is the lexer's map of mapping keys it was able to register. A
+//     block sequence, a merge key, or a key `PLAIN_KEY` declines is invisible
+//     there while still living inside the node. This is how removal came to
+//     splice away a whole `providers:` sequence and leave a zero-byte file.
+//   - `endIndex` deliberately stops before a trailing comment block, so a
+//     comment the publish step pushed below our key sits outside the node's
+//     own range while still being spliced away with it.
+//
+// So the region is walked by indentation -- every following line that is blank
+// or indented deeper than the node -- rather than read off `endIndex`.
+function unaccountedLines(document, node) {
+  const covered = new Set();
+  for (const child of node.children.values()) {
+    for (let index = child.index; index <= child.endIndex; index += 1) covered.add(index);
+  }
+  const rest = [];
+  for (let index = node.index + 1; index < document.lines.length; index += 1) {
+    const text = String(document.lines[index] ?? "");
+    if (/^\s*$/.test(text)) continue;
+    const indent = text.length - text.replace(/^\s*/, "").length;
+    if (indent <= node.indent) break;
+    if (covered.has(index)) continue;
+    rest.push({ index, text });
+  }
+  return rest;
+}
+
 export function applyYamlValue(contents, keyPath, value) {
   const document = scanYamlDocument(contents);
   const parent = keyPath.length > 1 ? yamlNode(document, keyPath.slice(0, -1)) : undefined;
   if (parent?.inline) {
     throw new Error(
       `Refusing to edit ${keyPath.slice(0, -1).join(".")}: it is written as an inline value rather than a block.`,
+    );
+  }
+  // The mapping we are about to add a key to must be one the lexer read whole.
+  // If it holds a line no registered child accounts for, the shape on disk is
+  // not the shape `children` describes -- a block sequence, or a key such as
+  // `openrouter/free:` that the key grammar declines -- and splicing a mapping
+  // entry in either produces invalid YAML or nests our key inside the user's
+  // provider while every status read agrees it went in cleanly. Refuse with the
+  // file untouched, as the rest of this module does.
+  const unreadable = parent && unaccountedLines(document, parent).filter(
+    (line) => !/^\s*#/.test(line.text),
+  );
+  if (unreadable?.length) {
+    throw new Error(
+      `Refusing to edit ${keyPath.slice(0, -1).join(".")}: line ${unreadable[0].index + 1} `
+        + `(${unreadable[0].text.trim()}) is not a mapping entry this reader can account for.`,
     );
   }
   // Follow whatever indentation the document already uses for a sibling entry
@@ -264,6 +313,11 @@ export function removeYamlValue(contents, keyPath) {
   for (let depth = keyPath.length - 1; depth > 0; depth -= 1) {
     const parent = yamlNode(document, keyPath.slice(0, depth));
     if (!parent || parent.children.size !== 1) break;
+    // `children.size === 1` only says one *registered* key lives here. Stop if
+    // anything else does -- a sequence item, a merge key, a key the grammar
+    // declined, or the user's own comment. Leaving an empty `providers:` behind
+    // is a cosmetic cost; splicing the user's content away is not recoverable.
+    if (unaccountedLines(document, parent).length) break;
     removal = parent;
   }
   const lines = [...document.lines];

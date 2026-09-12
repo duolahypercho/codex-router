@@ -179,6 +179,67 @@ test("publishing preserves comments, sibling providers, and unrelated settings",
   assert.match(restored, /backend: docker/);
 });
 
+test("a YAML shape this reader cannot account for is refused, never spliced", () => {
+  // `children` is the lexer's map of mapping keys it could register. A block
+  // sequence, or a key such as `openrouter/free:` that the key grammar
+  // declines, lives inside a node while being invisible there. Publishing into
+  // one produced a document the client could not parse, and removing it then
+  // judged the whole `providers:` block "ours alone" and spliced it away --
+  // the user's file came back zero bytes.
+  const unreadable = {
+    "a providers block written as a sequence": [
+      "providers:",
+      "  - name: mine",
+      "    api: http://localhost:8080/v1",
+      "",
+    ].join("\n"),
+    "a provider id the key grammar declines": [
+      "providers:",
+      "  openrouter/free:",
+      "    api: http://localhost:8080/v1",
+      "",
+    ].join("\n"),
+  };
+
+  for (const [shape, contents] of Object.entries(unreadable)) {
+    reset();
+    mkdirSync(path.dirname(DOCUMENTS.hermes), { recursive: true });
+    writeFileSync(DOCUMENTS.hermes, contents);
+    assert.throws(() => manager("hermes").install(), /account for|ambiguous/i, shape);
+    assert.equal(readFileSync(DOCUMENTS.hermes, "utf8"), contents, `${shape}: file must be untouched`);
+  }
+});
+
+test("removing the routed provider restores a YAML document byte for byte", () => {
+  // The substring assertions elsewhere pass even when bytes the router does
+  // not own are dropped. These compare the whole file.
+  const shapes = {
+    "a sibling provider": "providers:\n  local:\n    api: http://localhost:8080/v1\n",
+    "a comment beside our key": "providers:\n  local:\n    api: http://x\n  # keep me\n",
+    // The one that broke: `providers:` holding nothing but a comment. Our key
+    // is then its only *registered* child, and the comment sits outside the
+    // node's `endIndex`, so the ancestor collapse judged the block ours alone
+    // and took `providers:` with it, leaving the comment orphaned at the wrong
+    // indentation.
+    "a comment as the only thing beside our key":
+      'model:\n  default: "x"\nproviders:\n  # I plan to add one\n',
+    "settings on both sides": "model:\n  default: \"x\"\nproviders:\n  local:\n    api: http://x\nterminal:\n  backend: docker\n",
+  };
+
+  for (const [shape, contents] of Object.entries(shapes)) {
+    reset();
+    mkdirSync(path.dirname(DOCUMENTS.hermes), { recursive: true });
+    writeFileSync(DOCUMENTS.hermes, contents);
+
+    const client = manager("hermes");
+    client.install();
+    assert.match(readFileSync(DOCUMENTS.hermes, "utf8"), /codex-router:/, shape);
+
+    client.uninstall();
+    assert.equal(readFileSync(DOCUMENTS.hermes, "utf8"), contents, shape);
+  }
+});
+
 test("a JSON client keeps every provider it already had", () => {
   reset();
   mkdirSync(path.dirname(DOCUMENTS.opencode), { recursive: true });
