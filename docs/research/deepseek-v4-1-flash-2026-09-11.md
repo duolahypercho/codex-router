@@ -102,11 +102,29 @@ Route: `nousresearch/deepseek-v4.1-flash`, window 262,144 compacting at
 Sources: https://ollama.com/search?c=cloud, https://ollama.com/api/tags,
 https://github.com/ollama/ollama/issues/18360.
 
-- No V4.1 Flash as of 2026-09-11; `library/deepseek-v4.1-flash` returns 404
-  and the cloud API lists only `deepseek-v4-flash:0731` and
-  `deepseek-v4-pro:0813`. An open request asks for it.
-- No route added. The library page now lists V4 Pro at 1M context while the
-  checked-in route declares 524,288; not changed here.
+- Not served on 2026-09-11: `library/deepseek-v4.1-flash` returned 404 and the
+  cloud API listed only `deepseek-v4-flash:0731` and `deepseek-v4-pro:0813`.
+- **Rechecked 2026-09-12: it is served now.** The library publishes
+  `deepseek-v4.1-flash:cloud` (digest `72434d5a621f`, 1M context, text and
+  image input, tools, 552B MoE backbone), and `https://ollama.com/api/tags`
+  lists `deepseek-v4.1-flash` beside the two V4 ids. The cloud catalog shows
+  ~7.2K pulls against V4 Flash's 448K, so it landed within the last day.
+- Route: `ollama-cloud/deepseek-v4.1-flash`, window 1,048,576 compacting at
+  900,000, text and image, efforts low/high/max. It takes the plain
+  `ollama-cloud` profile rather than `ollama-cloud-auto-tool-choice`: Ollama
+  serves the weights itself, so the DeepSeek API's thinking-mode rejection of
+  forced tool choices is not known to apply, and the V4 Flash route on this
+  provider already runs without that exception. Move both if a live request
+  proves otherwise.
+- Not verified live. `ollama-cloud` has no stored credential here, so neither
+  `bin/discover-models ollama-cloud` nor `bin/test-model --live` could run, and
+  the `:cloud` tag is taken from the library page rather than from a served
+  response. Ollama's own `/api/tags` answers under the bare name, and the
+  checked-in V4 routes disagree with each other on this point already
+  (`deepseek-v4-flash:cloud` against a served `deepseek-v4-flash:0731`,
+  `deepseek-v4-pro` against `deepseek-v4-pro:0813`).
+- The library page now lists V4 Pro at 1M context while the checked-in route
+  declares 524,288; not changed here.
 
 ## Command Code (`commandcode`)
 

@@ -223,7 +223,9 @@ test("ChatGPT browser login has a bounded post-handoff completion deadline", asy
       onExit: (value) => { outcome = value; },
     });
     assert.deepEqual(opened, { opened: true, surface: "browser" });
-    const deadline = Date.now() + 2_000;
+    // The 40 ms completion deadline above is what is under test; this is only
+    // how long we are willing to wait for the process to report it.
+    const deadline = Date.now() + 20_000;
     while (!outcome && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
@@ -633,6 +635,25 @@ test("Linux tray-only mode trusts only a positively registered StatusNotifier ho
   }), false);
 });
 
+// The fixture records its descendant as soon as it is spawned, but the whole
+// command can be terminated before that write lands on a busy machine. Wait
+// briefly and say what happened: reading the file directly reported a bare
+// ENOENT that read as a missing temp directory rather than a descendant that
+// never started.
+async function readPidFile(pidFile, timeoutMs = 10_000) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    try { return await readFile(pidFile, "utf8"); }
+    catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+      if (Date.now() >= deadline) {
+        assert.fail(`the command fixture never recorded a descendant pid in ${pidFile}`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  }
+}
+
 async function waitForProcessExit(pid, timeoutMs = 4_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -661,8 +682,14 @@ async function makeProcessTreeControlRoot() {
       // Hold the command's stdout/stderr pipes open after its leader exits, so
       // the runner has to act on `exit` rather than waiting forever for `close`.
       'const descendant = spawn(process.execPath, ["-e", worker], { stdio: ["ignore", "inherit", "inherit", "ipc"] });',
+      // The timeout mode is killed on a deadline, so record the descendant as
+      // soon as it has a pid. Waiting for its IPC "ready" first put a second
+      // Node startup inside that deadline, and a loaded runner spent it: the
+      // tree was terminated correctly and the test then read no pid file at
+      // all. The other modes still report after the handshake.
+      'if (mode === "timeout") writeFileSync(pidFile, String(descendant.pid));',
       'descendant.once("message", () => {',
-      '  writeFileSync(pidFile, String(descendant.pid));',
+      '  if (mode !== "timeout") writeFileSync(pidFile, String(descendant.pid));',
       '  if (mode === "success") process.exit(0);',
       '  if (mode === "failure") process.exit(7);',
       '  if (mode === "overflow") process.stdout.write("x".repeat(4096));',
@@ -2216,11 +2243,15 @@ for (const mode of ["timeout", "overflow"]) {
       const command = runControl(
         [pidFile, mode],
         mode === "timeout"
-          ? { timeoutMs: process.platform === "win32" ? 2_000 : 250 }
+          // Long enough that the fixture's own Node startup fits inside it on
+          // a loaded runner -- the deadline is what is under test, not how
+          // fast a process can boot. A 250 ms budget failed outright once the
+          // machine was busy, and the tree was never the reason.
+          ? { timeoutMs: process.platform === "win32" ? 6_000 : 3_000 }
           : { timeoutMs: 5_000, maxOutputBytes: 32 },
       );
       await assert.rejects(command, mode === "timeout" ? /timed out/ : /output exceeded/);
-      descendantPid = Number.parseInt(await readFile(pidFile, "utf8"), 10);
+      descendantPid = Number.parseInt(await readPidFile(pidFile), 10);
       assert.ok(Number.isInteger(descendantPid) && descendantPid > 0);
       await waitForProcessExit(descendantPid);
     } finally {
@@ -2247,11 +2278,13 @@ for (const { mode, expectedCode } of [
     try {
       process.env.CODEX_ROUTER_SOURCE_ROOT = root;
       const result = await runControl([pidFile, mode], {
-        timeoutMs: 5_000,
+        // Only has to outlast two Node startups on a busy runner; a passing
+        // command returns as soon as it is done and never spends this.
+        timeoutMs: 30_000,
         allowNonZero: true,
       });
       assert.equal(result.code, expectedCode);
-      descendantPid = Number.parseInt(await readFile(pidFile, "utf8"), 10);
+      descendantPid = Number.parseInt(await readPidFile(pidFile), 10);
       assert.ok(Number.isInteger(descendantPid) && descendantPid > 0);
       await waitForProcessExit(descendantPid);
       await new Promise((resolve) => setTimeout(resolve, 700));
