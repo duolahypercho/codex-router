@@ -207,6 +207,17 @@ test("Responses stream drops a keep-alive after the terminal event instead of fa
   assert.equal(output.some((frame) => frame.event === "error"), false);
 });
 
+test("a stream of nothing but keep-alives still reports an incomplete stream", async () => {
+  // Comments are not forwarded, but they are proof the upstream was talking.
+  // Swallowing them silently would turn a stream that died before its terminal
+  // event into an empty, error-free turn.
+  const output = frames(await transformText(createResponsesStreamTransform(), [
+    ": keep-alive\n\n",
+  ]));
+  assert.equal(output.at(-1).event, "error");
+  assert.equal(output.at(-1).data.code, "upstream_stream_incomplete");
+});
+
 test("Responses provider errors stay structured and do not gain a second terminal frame", async () => {
   const output = frames(await transformText(createResponsesStreamTransform(), [
     "event: error\ndata: {\"type\":\"error\",\"code\":\"provider_failed\",\"message\":\"upstream rejected\"}\n\n",
