@@ -3772,6 +3772,94 @@ test("API forwarder fills only missing Gemini thought signatures", async () => {
   }
 });
 
+test("API forwarder inlines Gemini property refs that Google treats as undefined schemas", async () => {
+  const upstreamRequests = [];
+  const upstream = await mockServer(async (request, response) => {
+    upstreamRequests.push(await bodyJson(request));
+    json(response, 200, { choices: [] });
+  });
+  const curated = curatedGeminiModel();
+  const forwarderPort = await openPort();
+  const forwarder = run("api-forwarder.mjs", {
+    CODEX_ROUTER_API_PORT: String(forwarderPort),
+    MODEL_ROUTER_USER_MODELS: curated.file,
+    GEMINI_API_BASE_URL: `http://127.0.0.1:${upstream.port}/v1`,
+    GEMINI_API_KEY: "TEST_GEMINI_API_KEY",
+    KIMI_PROXY_QUIET: "1",
+  });
+
+  try {
+    await waitFor(`http://127.0.0.1:${forwarderPort}/health`, forwarder, {
+      Authorization: `Bearer ${INTERNAL_KEY}`,
+    });
+    const response = await fetch(`http://127.0.0.1:${forwarderPort}/v1/chat/completions`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${INTERNAL_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: curated.gatewayModel,
+        messages: [{ role: "user", content: "find a home" }],
+        tools: [
+          {
+            type: "function",
+            function: {
+              name: "property_search",
+              parameters: {
+                type: "object",
+                properties: {
+                  request: {
+                    $defs: {
+                      MinMaxInt: {
+                        type: "object",
+                        properties: {
+                          min: { type: "integer" },
+                          max: { type: "integer" },
+                        },
+                      },
+                    },
+                    type: "object",
+                    properties: {
+                      propertyFiltersRequest: {
+                        type: "object",
+                        properties: {
+                          bedrooms: {
+                            $ref: "#/$defs/MinMaxInt",
+                            description: "Bedrooms range filter",
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        ],
+      }),
+    });
+    assert.equal(response.status, 200);
+    const parameters = upstreamRequests[0].tools[0].function.parameters;
+    assert.equal(parameters.properties.request.properties.propertyFiltersRequest.properties.bedrooms.$ref, undefined);
+    assert.deepEqual(
+      parameters.properties.request.properties.propertyFiltersRequest.properties.bedrooms,
+      {
+        type: "object",
+        properties: {
+          min: { type: "integer" },
+          max: { type: "integer" },
+        },
+        description: "Bedrooms range filter",
+      },
+    );
+  } finally {
+    await stopChild(forwarder);
+    await closeServer(upstream.server);
+    rmSync(curated.dir, { recursive: true, force: true });
+  }
+});
+
 test("API forwarder leaves non-Gemini tool calls unsigned", async () => {
   const upstreamRequests = [];
   const upstream = await mockServer(async (request, response) => {

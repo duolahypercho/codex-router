@@ -507,6 +507,100 @@ export function inlineForeignRefs(schema) {
   return inlined;
 }
 
+// Some connector schemas place `$defs` on a nested object while referring to
+// them with a document-root pointer such as `#/$defs/MinMaxInt`. That pointer
+// is invalid JSON Schema, but its intended target is unambiguous when the
+// nearest enclosing `$defs` owns the requested name. Google rejects these as
+// undefined schemas, so inline only those dangling references. Valid root
+// `$defs` refs, ambiguous/missing targets, cycles, and conflicting assertions
+// are left unchanged.
+export function inlineDanglingNestedDefsRefs(schema) {
+  if (!isPlainObject(schema)) return schema;
+  const state = { expansions: 0, exceeded: false, inlined: false };
+  const activeTargets = new WeakSet();
+
+  const visit = (node, scopes, depth) => {
+    if (!isPlainObject(node) || depth > MAX_INLINE_DEPTH || state.exceeded) return node;
+    const nextScopes = isPlainObject(node.$defs) ? [node.$defs, ...scopes] : scopes;
+
+    if (
+      typeof node.$ref === "string" &&
+      node.$ref.startsWith(DEFS_REF_PREFIX) &&
+      resolveRef(node.$ref, schema) === undefined
+    ) {
+      let target;
+      for (const defs of nextScopes) {
+        target = resolveRef(node.$ref, { $defs: defs });
+        if (isPlainObject(target)) break;
+      }
+      if (isPlainObject(target) && !activeTargets.has(target)) {
+        state.expansions += 1;
+        if (state.expansions > MAX_INLINE_EXPANSIONS) {
+          state.exceeded = true;
+          return node;
+        }
+        activeTargets.add(target);
+        const expanded = visit(target, nextScopes, depth);
+        activeTargets.delete(target);
+        const { $ref: _ref, ...siblings } = node;
+        const rewrittenSiblings = visit(siblings, nextScopes, depth);
+        const conflicts = Object.keys(rewrittenSiblings).some((key) => (
+          !REF_OVERRIDE_ANNOTATIONS.has(key) &&
+          Object.hasOwn(expanded, key) &&
+          !isDeepStrictEqual(rewrittenSiblings[key], expanded[key])
+        ));
+        if (!conflicts) {
+          state.inlined = true;
+          return { ...expanded, ...rewrittenSiblings };
+        }
+      }
+    }
+
+    let next = node;
+    const replace = (key, value) => {
+      if (next === node) next = { ...node };
+      next[key] = value;
+    };
+    for (const keyword of [...REF_SCHEMA_MAP_KEYWORDS, "dependencies"]) {
+      const children = node[keyword];
+      if (!isPlainObject(children)) continue;
+      let changed = false;
+      const rewritten = { ...children };
+      for (const [name, child] of Object.entries(children)) {
+        if (!isPlainObject(child)) continue;
+        const repaired = visit(child, nextScopes, depth + 1);
+        if (repaired !== child) {
+          rewritten[name] = repaired;
+          changed = true;
+        }
+      }
+      if (changed) replace(keyword, rewritten);
+    }
+    for (const keyword of [...REF_SCHEMA_ARRAY_KEYWORDS, ...REF_SCHEMA_CHILD_KEYWORDS]) {
+      const children = node[keyword];
+      if (Array.isArray(children)) {
+        let changed = false;
+        const rewritten = children.map((child) => {
+          if (!isPlainObject(child)) return child;
+          const repaired = visit(child, nextScopes, depth + 1);
+          if (repaired !== child) changed = true;
+          return repaired;
+        });
+        if (changed) replace(keyword, rewritten);
+      } else if (isPlainObject(children)) {
+        const repaired = visit(children, nextScopes, depth + 1);
+        if (repaired !== children) replace(keyword, repaired);
+      }
+    }
+    return next;
+  };
+
+  const inlined = visit(schema, [], 0);
+  if (state.exceeded || !state.inlined || inlined === schema) return schema;
+  if (jsonByteLength(inlined) > MAX_INLINE_BYTES) return schema;
+  return inlined;
+}
+
 // Every object-typed leaf reachable from `schema` through unions and local
 // refs. `seen` guards the self-referential `$defs` Codex generates.
 function objectBranches(schema, root, seen, depth = 0) {

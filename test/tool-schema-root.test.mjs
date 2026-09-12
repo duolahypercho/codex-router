@@ -4,6 +4,7 @@ import test from "node:test";
 import { CODEX_APP_TOOLS } from "../src/codex-app-tools.mjs";
 import { toResponsesRequest } from "../src/grok-oauth-forwarder.mjs";
 import {
+  inlineDanglingNestedDefsRefs,
   hasObjectRoot,
   inlineForeignRefs,
   nonRecursiveToolSchema,
@@ -632,6 +633,60 @@ test("a $defs ref is the form Moonshot asks for and survives untouched", () => {
   // what it expands to is the `$defs` pointer the property itself carries.
   assert.equal(inlined.properties.alias.$ref, "#/$defs/range");
   assert.deepEqual(inlined.$defs, schema.$defs);
+});
+
+test("a dangling $defs ref resolves from the nearest enclosing schema", () => {
+  const schema = {
+    type: "object",
+    properties: {
+      request: {
+        $defs: {
+          MinMaxInt: {
+            type: "object",
+            properties: { min: { type: "integer" }, max: { type: "integer" } },
+          },
+        },
+        type: "object",
+        properties: {
+          bedrooms: {
+            $ref: "#/$defs/MinMaxInt",
+            description: "Bedrooms range filter.",
+          },
+        },
+      },
+    },
+  };
+  const inlined = inlineDanglingNestedDefsRefs(schema);
+  assert.deepEqual(inlined.properties.request.properties.bedrooms, {
+    type: "object",
+    properties: { min: { type: "integer" }, max: { type: "integer" } },
+    description: "Bedrooms range filter.",
+  });
+  assert.deepEqual(schema.properties.request.properties.bedrooms, {
+    $ref: "#/$defs/MinMaxInt",
+    description: "Bedrooms range filter.",
+  });
+});
+
+test("valid root $defs refs and unresolved nested refs stay untouched", () => {
+  const valid = {
+    type: "object",
+    properties: { value: { $ref: "#/$defs/value" } },
+    $defs: { value: { type: "string" } },
+  };
+  assert.equal(inlineDanglingNestedDefsRefs(valid), valid);
+
+  const unresolved = {
+    type: "object",
+    properties: {
+      request: {
+        $defs: { other: { type: "string" } },
+        type: "object",
+        properties: { value: { $ref: "#/$defs/missing" } },
+      },
+    },
+  };
+  assert.equal(inlineDanglingNestedDefsRefs(unresolved), unresolved);
 });
 
 test("a $defs ref with sibling keywords is inlined for Moonshot", () => {
