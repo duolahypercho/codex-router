@@ -280,6 +280,7 @@ export function createRoutedHarnessManager(id, {
 
     const target = document();
     const state = readMarker(harness, marker(), port, legacyPort);
+    const documentExisted = existsSync(target);
     const before = readDocument(target);
     assertPublishable(before, state);
 
@@ -322,7 +323,11 @@ export function createRoutedHarnessManager(id, {
       // is the one state neither uninstall nor drift detection can reason
       // about. Put the document back exactly as it was found.
       try {
-        writeDocument(target, before);
+        // "Back" for a client that had no document is absent, not empty: a
+        // zero-byte opencode.json or models.json is not valid JSON, which is
+        // worse for the client than the absence this path exists to restore.
+        if (documentExisted) writeDocument(target, before);
+        else if (existsSync(target)) unlinkSync(target);
       } catch (rollbackError) {
         throw new Error(
           `${redactFailure(error instanceof Error ? error.message : error, secret)} ` +

@@ -406,8 +406,13 @@ function keepAliveFrame(frame, data) {
 }
 
 function normalizeResponsesEvent(frame, state, flatToNative) {
-  // An SSE comment, or a frame with no data line and no event, is not an event.
-  if (frame.data === "" && !frame.event) return "";
+  // An SSE comment, or a frame with no data line and no event, is not an event
+  // and is not forwarded. It is still proof the upstream was talking, so a
+  // stream that ends before its terminal event is still reported by `flush`.
+  if (frame.data === "" && !frame.event) {
+    state.sawEvent = true;
+    return "";
+  }
   const data = frameData(frame);
   state.sawEvent = true;
   if (state.invalid) return "";

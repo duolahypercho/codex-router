@@ -135,8 +135,13 @@ test("a published document is private, because its base URL is the capability", 
   reset();
   for (const harness of routedHarnesses()) {
     manager(harness.id).install();
-    const mode = statSync(DOCUMENTS[harness.id]).mode & 0o777;
-    assert.equal(mode & 0o077, 0, `${harness.id} document is group/other readable`);
+    // Windows carries this as an ACL, not a POSIX mode: Node reports 0o666
+    // there whatever `protectPrivateFile` did. `privateFileIsProtected` is the
+    // check that is meaningful on both, and doctor already runs it.
+    if (process.platform !== "win32") {
+      const mode = statSync(DOCUMENTS[harness.id]).mode & 0o777;
+      assert.equal(mode & 0o077, 0, `${harness.id} document is group/other readable`);
+    }
   }
 });
 
@@ -275,6 +280,23 @@ test("a failed marker write puts the client's document back", () => {
   });
   assert.throws(() => client.install(), /marker write failed/);
   assert.equal(readFileSync(DOCUMENTS.pi, "utf8"), before);
+});
+
+test("a failed first publication leaves no document behind, not an empty one", () => {
+  // Rolling a never-published client "back" to an empty string leaves a
+  // zero-byte opencode.json or models.json, which is not valid JSON and is
+  // worse for the client than the absence this path exists to restore.
+  for (const harness of routedHarnesses()) {
+    reset();
+    assert.equal(existsSync(DOCUMENTS[harness.id]), false);
+    const client = manager(harness.id, {
+      writeMarker: () => {
+        throw new Error("marker write failed");
+      },
+    });
+    assert.throws(() => client.install(), /marker write failed/);
+    assert.equal(existsSync(DOCUMENTS[harness.id]), false, `${harness.id} left a document behind`);
+  }
 });
 
 test("a malformed publication marker refuses to change client state", () => {

@@ -17,7 +17,11 @@ These instructions apply when a user asks an agent to install this repository.
   (Gemini CLI), `cursor` (Cursor Agent plus Cursor App), and `claude` (Claude
   Code through the router-owned launcher), and `openclaw` (OpenClaw through a
   router-owned Responses provider) are supported
-  targets. OpenCode remains a provider rather than a client target.
+  targets. OpenCode is not a `MODEL_ROUTER_TARGET`: it is both a provider and
+  one of the five *published-into* clients described under "Five clients,
+  one publisher, one key each" below, which `control client-setup` writes a
+  custom provider into rather than installing a target for. A published-into client never gets its
+  own service, state directory, or credential store.
 - Cursor is asymmetric: Cursor Agent uses the router's authenticated loopback
   Connect adapter, while retail Cursor App sends BYOK traffic through Cursor's
   servers and therefore needs an explicit stable public HTTPS tunnel to the
