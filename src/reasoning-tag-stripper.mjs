@@ -30,6 +30,12 @@ const OPEN_TAGS = TAG_NAMES.map((name) => `<${name}>`);
 const CLOSE_TAGS = TAG_NAMES.map((name) => `</${name}>`);
 const ALL_TAGS = [...OPEN_TAGS, ...CLOSE_TAGS];
 const MAX_TAG_LEN = Math.max(...ALL_TAGS.map((tag) => tag.length));
+// Ceiling on the leading whitespace the streaming stripper will hold back while
+// it waits to learn whether a tag is coming. Every observed leak opens its
+// reasoning tag in the first delta, so a message that has produced this much
+// whitespace and nothing else is not a leak -- it is an answer whose own
+// indentation must be emitted rather than buffered without bound.
+const MAX_PENDING_LEAD = 8192;
 const NAMES_ALT = TAG_NAMES.join("|");
 // Open-to-nearest-close, any name to any name (non-greedy) -- matches the
 // streaming machine, which closes on the first close tag it sees.
@@ -68,11 +74,23 @@ export function stripThinkTags(text) {
 // Incremental stripper for the streamed delta channel. `feed` returns the text
 // safe to emit so far; `flush` returns whatever remains once the stream ends.
 // The concatenation of every `feed`/`flush` return equals `stripThinkTags` of
-// the concatenated input.
+// the concatenated input, with one unavoidable exception: `stripThinkTags`
+// drops the message's leading whitespace whenever it removed a tag *anywhere*,
+// including one that appears after visible text has already been streamed. A
+// stripper that has already emitted that text cannot retract it. Every case
+// where the removal is knowable by the time the first visible character is
+// emitted -- which is every observed leak, since the reasoning block is what
+// comes first -- does agree. A message that opens with more than
+// `MAX_PENDING_LEAD` bytes of unbroken whitespace settles the same way, for the
+// same reason. Both are display-only: `output_text.done` and `output_item.done`
+// bypass this class and clean the complete text through `stripThinkTags`, so
+// the stored and re-rendered message is correct regardless.
 class ThinkStreamStripper {
   #mode = "normal";
   #carry = "";
-  #emittedVisible = false;
+  #leadSettled = false;
+  #removedTag = false;
+  #pendingLead = "";
 
   // Longest suffix of `s` that is a proper prefix of any tag, so a tag split
   // across deltas is held back rather than emitted as literal text.
@@ -94,6 +112,7 @@ class ThinkStreamStripper {
         if (found) {
           out += this.#carry.slice(0, found.at);
           this.#carry = this.#carry.slice(found.at + found.tag.length);
+          this.#removedTag = true;
           // Opening a span enters think mode; an orphan close is just dropped.
           if (found.opening) this.#mode = "think";
           continue;
@@ -107,6 +126,7 @@ class ThinkStreamStripper {
       const close = firstTag(this.#carry, CLOSE_TAGS);
       if (close) {
         this.#carry = this.#carry.slice(close.at + close.tag.length);
+        this.#removedTag = true;
         this.#mode = "normal";
         continue;
       }
@@ -114,7 +134,7 @@ class ThinkStreamStripper {
       this.#carry = this.#carry.slice(this.#carry.length - hold);
       break;
     }
-    return this.#leadTrim(out);
+    return this.#lead(out);
   }
 
   flush() {
@@ -122,16 +142,58 @@ class ThinkStreamStripper {
     // remainder -- including a lone `<` that never became a tag -- is emitted.
     const out = this.#mode === "normal" ? this.#carry : "";
     this.#carry = "";
-    return this.#leadTrim(out);
+    const tail = this.#lead(out);
+    if (tail) return tail;
+    // A message that was only ever whitespace still ends as that whitespace
+    // unless a tag was stripped out of it.
+    const held = this.#removedTag ? "" : this.#pendingLead;
+    this.#pendingLead = "";
+    return held;
   }
 
-  // Trim leading whitespace only until the first visible character of the whole
-  // message, matching `stripThinkTags`'s single leading trim.
-  #leadTrim(out) {
-    if (this.#emittedVisible) return out;
-    const trimmed = out.replace(/^\s+/, "");
-    if (trimmed.length > 0) this.#emittedVisible = true;
-    return trimmed;
+  // `stripThinkTags` drops the message's leading whitespace only when it
+  // actually removed a tag; an untouched message keeps its own indentation and
+  // is returned by identity. The stream cannot know which case it is in until
+  // it reaches the first visible character, so hold that whitespace back rather
+  // than emitting it (which would keep it in text a tag is about to be stripped
+  // from) or dropping it (which would eat it from a message that has no tags at
+  // all -- every ordinary answer that happens to begin with a newline).
+  //
+  // Holding is bounded on both axes. Once a tag has been removed the answer is
+  // known to be trimmed, so nothing is held at all. Otherwise only the new
+  // chunk is scanned -- `#pendingLead` is whitespace by construction, so
+  // re-trimming the accumulation would cost O(n) per delta and O(n^2) over a
+  // run of whitespace-only ones -- and the accumulation gives up at
+  // `MAX_PENDING_LEAD`, emitting what it holds instead of growing further.
+  #lead(out) {
+    if (this.#leadSettled) return out;
+    if (!out) return "";
+    const visibleAt = out.search(/\S/);
+    if (this.#removedTag) {
+      // A tag is already gone, so this message's leading whitespace is trimmed
+      // either way and none of it needs keeping.
+      this.#pendingLead = "";
+      if (visibleAt === -1) return "";
+      this.#leadSettled = true;
+      return out.slice(visibleAt);
+    }
+    if (visibleAt === -1) {
+      if (this.#pendingLead.length + out.length > MAX_PENDING_LEAD) {
+        // Past the ceiling this is the answer's own whitespace, not a preamble
+        // to a tag. Emit it and stop holding; a tag arriving after this point
+        // is the documented case the stream cannot retract.
+        const settled = this.#pendingLead + out;
+        this.#pendingLead = "";
+        this.#leadSettled = true;
+        return settled;
+      }
+      this.#pendingLead += out;
+      return "";
+    }
+    this.#leadSettled = true;
+    const held = this.#pendingLead;
+    this.#pendingLead = "";
+    return held + out;
   }
 }
 
