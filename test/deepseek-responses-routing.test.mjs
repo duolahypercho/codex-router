@@ -8,6 +8,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { callerBaseUrl } from "../src/caller-auth.mjs";
+import { childOutput, waitForListeners } from "./listener-readiness.mjs";
 import { openPort } from "./port-pool.mjs";
 
 import {
@@ -249,10 +250,11 @@ test("direct DeepSeek Responses preserves images, reasoning, tools and stream bo
     DEEPSEEK_API_BASE_URL: `http://127.0.0.1:${upstream.address().port}`,
     DEEPSEEK_API_KEY: "TEST_DEEPSEEK_API_KEY",
   };
-  const children = ["api-forwarder.mjs", "router.mjs"].map((script) => {
-    const child = spawn(process.execPath, [path.join(root, "src", script)], { cwd: root, env, stdio: ["ignore", "ignore", "pipe"] });
-    child.stderr.resume(); return child;
-  });
+  // The router names a failed upstream connection only on stderr, so a
+  // discarded stream turned a CI failure into a bare "502 !== 200".
+  const output = childOutput();
+  const children = ["api-forwarder.mjs", "router.mjs"].map((script) => output.capture(script,
+    spawn(process.execPath, [path.join(root, "src", script)], { cwd: root, env, stdio: ["ignore", "ignore", "pipe"] })));
   const base = callerBaseUrl(routerPort, CALLER_KEY);
   const send = (input, options = {}) => fetch(`${base}/responses`, {
     method: "POST", headers: { "Content-Type": "application/json", "x-openai-subagent": "fixture" },
@@ -264,14 +266,14 @@ test("direct DeepSeek Responses preserves images, reasoning, tools and stream bo
     });
     assert.equal(rejectedString.status, 400, "the provider fixture must reject the shape rejected by the live API");
     await rejectedString.text();
-    for (let attempt = 0; attempt < 100; attempt += 1) {
-      try { if ((await fetch(`${base}/models`)).ok) break; } catch { /* starting */ }
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    }
+    await waitForListeners([
+      { name: "api-forwarder /health", url: `http://127.0.0.1:${forwarderPort}/health`, headers: { Authorization: `Bearer ${INTERNAL_KEY}` } },
+      { name: "router /models", url: `${base}/models` },
+    ], { children, output });
     for (const imagePart of [undefined, { type: "input_image", image_url: IMAGE, detail: "original" }, { type: "input_image", file_id: "file-api-fixture" }]) {
       const input = [{ type: "message", role: "user", content: [{ type: "input_text", text: "Inspect the synthetic pixel." }, ...(imagePart ? [imagePart] : [])] }];
       const result = await send(input);
-      assert.equal(result.status, 200);
+      assert.equal(result.status, 200, String(output));
       assertTranscript(parseEvents(await result.text()));
       assert.deepEqual(requests.at(-1).body.input, input);
       assert.equal(requests.at(-1).path, "/responses");
@@ -304,7 +306,7 @@ test("direct DeepSeek Responses preserves images, reasoning, tools and stream bo
     const history = [
       { type: "message", role: "user", content: "Review the image." },
       { type: "reasoning", content: [{ type: "reasoning_text", text: "PRIOR_REASONING" }] },
-      { type: "message", role: "assistant", content: [{ type: "output_text", text: "PRIOR_ANSWER" }] },
+      { type: "message", role: "assistant", phase: "commentary", content: [{ type: "output_text", text: "PRIOR_ANSWER" }] },
       { type: "function_call", name: "probe", namespace: "fixture", call_id: "call_previous", arguments: "{}" },
       { type: "function_call_output", call_id: "call_previous", output: [{ type: "input_text", text: "fixture" }, { type: "input_image", image_url: IMAGE, detail: "original" }] },
     ];
@@ -317,6 +319,9 @@ test("direct DeepSeek Responses preserves images, reasoning, tools and stream bo
     assert.equal(requestText.split("PRIOR_REASONING").length - 1, 1);
     assert.equal(requestText.split("PRIOR_ANSWER").length - 1, 1);
     assert.deepEqual(requests.at(-1).body.input.find((item) => item.type === "reasoning"), history[1]);
+    // Built-in Responses providers keep Codex's message phase; only
+    // operator-configured Responses endpoints have it removed.
+    assert.equal(requests.at(-1).body.input.find((item) => item.role === "assistant")?.phase, "commentary");
     assert.deepEqual(requests.at(-1).body.input.at(-1).output, history.at(-1).output);
     const legacyHistory = structuredClone(history);
     legacyHistory[1] = { type: "reasoning", summary: [{ type: "summary_text", text: "PRIOR_REASONING" }], content: null };

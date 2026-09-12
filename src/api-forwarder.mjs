@@ -82,6 +82,7 @@ import {
 } from "./tool-schema-root.mjs";
 import { requestGenericProvider } from "./generic-providers.mjs";
 import { genericProviderConfigured } from "./generic-provider-readiness.mjs";
+import { withoutInputMessagePhase } from "./message-phase.mjs";
 import { providerTransportError } from "./transport-failure.mjs";
 import {
   endpointCapabilityError,
@@ -762,6 +763,13 @@ function normalizeBody(buffer, contentType, route) {
       delete payload.thinking;
     }
     payload = normalizeOpenAIRequest(payload);
+    // The router labels routed assistant messages with Codex's `phase`, and
+    // Codex replays it on every later turn. An operator-configured Responses
+    // endpoint is an unknown validator, so it gets the pre-label history
+    // shape. Built-in Responses providers keep the field.
+    if (provider.generic === true) {
+      payload.input = withoutInputMessagePhase(payload.input);
+    }
   }
 
   // OpenAI Chat Completions providers place terminal usage in a final empty

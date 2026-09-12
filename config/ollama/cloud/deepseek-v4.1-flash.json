@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "slug": "ollama-cloud/deepseek-v4.1-flash",
+      "gatewayModel": "ollama-cloud-deepseek-v4-1-flash",
+      "upstreamModel": "deepseek-v4.1-flash:cloud",
+      "provider": "ollama-cloud",
+      "listed": true,
+      "displayName": "DeepSeek V4.1 Flash (Ollama Cloud)",
+      "description": "DeepSeek V4.1 Flash hosted on Ollama Cloud, a 552B Mixture-of-Experts model with tool support, image input, reasoning, and a 1M-token context window.",
+      "priority": 27,
+      "defaultEffort": "high",
+      "reasoningLevels": [
+        {
+          "effort": "low",
+          "description": "Faster reasoning"
+        },
+        {
+          "effort": "high",
+          "description": "Deep reasoning"
+        },
+        {
+          "effort": "max",
+          "description": "Maximum reasoning depth"
+        }
+      ],
+      "contextWindow": 1048576,
+      "autoCompact": 900000,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "requestProfile": "ollama-cloud",
+      "compHash": "ollama-cloud-deepseek-v4-1-flash-v1"
+    }
+  ]
+}

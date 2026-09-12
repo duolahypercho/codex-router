@@ -223,3 +223,91 @@ test("one generic gateway routes ordinary and explicitly profiled models without
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test("a generic Responses gateway receives replayed messages without Codex's phase label", async () => {
+  const directory = mkdtempSync(path.join(os.tmpdir(), "generic-responses-phase-"));
+  const providersFile = path.join(directory, "generic-providers.json");
+  const userModelsFile = path.join(directory, "user-models.json");
+  const stateDir = path.join(directory, "state");
+  const upstreamRequests = [];
+  const upstream = await listen(async (request, response) => {
+    upstreamRequests.push({ url: request.url, body: await requestJson(request) });
+    json(response, 200, {
+      id: "resp_generic_1",
+      object: "response",
+      status: "completed",
+      model: upstreamRequests.at(-1).body.model,
+      output: [{
+        id: "msg_generic_1",
+        type: "message",
+        role: "assistant",
+        status: "completed",
+        content: [{ type: "output_text", text: "ok", annotations: [] }],
+      }],
+    });
+  });
+  const model = userModelEntry({
+    providerId: "responses-gateway",
+    upstreamId: "responses-model",
+    priority: 100,
+  });
+  writeFileSync(providersFile, `${JSON.stringify({
+    version: 1,
+    providers: [{
+      id: "responses-gateway",
+      displayName: "Responses Gateway",
+      baseUrl: `http://127.0.0.1:${upstream.port}/v1`,
+      adapter: "openai-responses",
+      headers: {},
+      allowPrivate: true,
+      enabled: true,
+    }],
+  }, null, 2)}\n`);
+  writeFileSync(userModelsFile, `${JSON.stringify({ version: 1, models: [model] }, null, 2)}\n`);
+  const forwarderPort = await openPort();
+  const forwarder = runForwarder({
+    MODEL_ROUTER_API_PORT: String(forwarderPort),
+    MODEL_ROUTER_STATE_DIR: stateDir,
+    MODEL_ROUTER_GENERIC_PROVIDERS: providersFile,
+    MODEL_ROUTER_USER_MODELS: userModelsFile,
+  });
+  const commentary = {
+    type: "message",
+    role: "assistant",
+    content: [{ type: "output_text", text: "Checking." }],
+  };
+  const answer = {
+    type: "message",
+    role: "assistant",
+    content: [{ type: "output_text", text: "Done." }],
+  };
+  const input = [
+    { type: "message", role: "user", content: [{ type: "input_text", text: "Inspect it." }] },
+    { ...commentary, phase: "commentary" },
+    { type: "function_call", call_id: "call_1", name: "inspect", arguments: "{}" },
+    { type: "function_call_output", call_id: "call_1", output: "fine" },
+    { ...answer, phase: "final_answer" },
+    { type: "message", role: "user", content: [{ type: "input_text", text: "Again." }] },
+  ];
+
+  try {
+    await waitForForwarder(forwarderPort, forwarder);
+    const response = await fetch(`http://127.0.0.1:${forwarderPort}/v1/responses`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${INTERNAL_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ model: `responses/${model.gatewayModel}`, input }),
+    });
+    assert.equal(response.status, 200, forwarder.testErrors());
+    assert.equal((await response.json()).output[0].content[0].text, "ok");
+
+    assert.equal(upstreamRequests.length, 1);
+    assert.equal(upstreamRequests[0].url, "/v1/responses");
+    const sent = upstreamRequests[0].body;
+    assert.equal(sent.model, model.upstreamModel);
+    assert.deepEqual(sent.input, [input[0], commentary, input[2], input[3], answer, input[5]]);
+  } finally {
+    await stop(forwarder);
+    await close(upstream.server);
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
