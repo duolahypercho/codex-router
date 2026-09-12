@@ -40,10 +40,11 @@
         "image"
       ],
       "isFree": true,
+      "supportsSearchHistory": true,
       "supportsApplyPatchTool": false,
       "requestProfile": "auto-tool-choice",
       "toolSchemaRecursion": "flatten",
-      "compHash": "opencode-free-responses-muse-spark-1-3-contributor-free-v1"
+      "compHash": "opencode-free-responses-muse-spark-1-3-contributor-free-v2"
     }
   ]
 }
