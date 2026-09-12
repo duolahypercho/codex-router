@@ -160,7 +160,13 @@ export function parseLeakedToolCalls(text) {
   }
   if (!calls.length) return undefined;
   // The markup follows the model's last sentence; drop the gap it left behind.
-  return { cleaned: cleaned.replace(/\s+$/, ""), calls };
+  // `trimEnd` rather than /\s+$/: this runs on whole-provider text from the
+  // `.done` snapshot and stored-item paths, which MAX_CAPTURE_BYTES does not
+  // bound, and `\s+$` backtracks from every start offset of a long whitespace
+  // run that is not at end of string -- 200 KB of it blocked this synchronous
+  // transform, and so the whole router, for 15 s. `trimEnd` strips exactly the
+  // same set (WhiteSpace + LineTerminator) in one linear pass.
+  return { cleaned: cleaned.trimEnd(), calls };
 }
 
 // Incremental stripper for one output item's delta channel. `feed` returns the
