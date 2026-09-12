@@ -76,7 +76,12 @@ const QUOTA_PATTERNS = [
   // zai 1309/1314: a lapsed Coding Plan or enterprise package is renewed, not
   // waited out or re-keyed: "Your GLM Coding Plan package has expired and is
   // temporarily unavailable. You can resume using it after renewing...".
-  /(?:package|plan|subscription) has expired/i,
+  // Anchored on "your": both documented zai messages name the caller's own
+  // package, and the bare phrase also matched things that are not quota events
+  // at all -- "The uploaded file package has expired" would have silently
+  // failed the turn over to another provider instead of surfacing a request
+  // problem the operator has to fix.
+  /\byour\b[^.]{0,60}\b(?:package|plan|subscription) has expired/i,
   /reached your (?:usage|monthly|daily) limit/i,
   /(?:monthly|daily|plan) usage limit/i,
   /purchase extra usage/i,
