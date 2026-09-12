@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **Switching a routed conversation back to OpenAI no longer replays an
+  explicitly unstored reasoning item.** A routed response can leave both a
+  full `reasoning` item whose own `encrypted_content` is null or empty and a
+  following `item_reference` with the same `rs_` id. That request-local pair
+  came from a `store=false` turn, but the native replay path previously kept it
+  whenever the signed-in caller supplied its own credential. OpenAI then tried
+  to resolve an item that was never in its storage namespace. Native input
+  normalization now drops only the proven-unstored full item and its matching
+  reference. Unrelated bare `rs_` references, valid opaque reasoning items,
+  native-only history, and routed requests remain unchanged. The regression
+  test uses no signed-routing state.
 - **A routed model the router has not loaded now fails locally, not at
   ChatGPT.** A model added to or renamed in `user-models.json` shows up in the
   Codex picker as soon as the catalog is rebuilt, but the running router reads

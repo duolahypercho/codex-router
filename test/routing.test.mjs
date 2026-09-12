@@ -2897,6 +2897,7 @@ test("router drops foreign reasoning items before stateless native replay", asyn
     CODEX_ROUTER_NATIVE_SESSION_FALLBACK: "1",
     MODEL_ROUTER_CODEX_AUTH: authPath,
     MODEL_ROUTER_STATE_DIR: path.join(testRoot, "state"),
+    CODEX_HOME: path.join(testRoot, "codex"),
     CODEX_ROUTER_QUIET: "1",
   });
   const headers = {
@@ -2964,6 +2965,17 @@ test("router drops foreign reasoning items before stateless native replay", asyn
     const staleReasoningReference = {
       type: "item_reference",
       id: "rs_external_reference",
+    };
+    const explicitlyUnstoredReasoning = {
+      type: "reasoning",
+      id: "rs_routed_unstored",
+      summary: [{ type: "summary_text", text: "routed draft" }],
+      content: null,
+      encrypted_content: null,
+    };
+    const explicitlyUnstoredReference = {
+      type: "item_reference",
+      id: "rs_routed_unstored",
     };
     const nonReasoningReference = {
       type: "item_reference",
@@ -3102,7 +3114,10 @@ test("router drops foreign reasoning items before stateless native replay", asyn
           futureOpaqueReasoning,
           mixedSummaryReasoning,
           missingStatelessPayload,
+          ...invalidStatelessPayloads,
           staleReasoningReference,
+          explicitlyUnstoredReasoning,
+          explicitlyUnstoredReference,
           userMessage,
         ],
         store: true,
@@ -3123,10 +3138,14 @@ test("router drops foreign reasoning items before stateless native replay", asyn
       stored.input.find((item) => item?.id === "rs_unstored_without_ciphertext"),
       missingStatelessPayload,
     );
+    for (const item of invalidStatelessPayloads) {
+      assert.equal(stored.input.some((candidate) => candidate?.id === item.id), false);
+    }
     assert.deepEqual(
       stored.input.find((item) => item?.id === "rs_external_reference"),
       staleReasoningReference,
     );
+    assert.equal(stored.input.some((item) => item?.id === explicitlyUnstoredReasoning.id), false);
     assert.deepEqual(
       stored.input.find((item) => item?.id === unknownOpaqueReasoning.id),
       unknownOpaqueReasoning,
@@ -3138,6 +3157,10 @@ test("router drops foreign reasoning items before stateless native replay", asyn
     assert.deepEqual(
       stored.input.find((item) => item?.id === mixedSummaryReasoning.id),
       mixedSummaryReasoning,
+    );
+    assert.equal(
+      existsSync(path.join(testRoot, "state", "signed-provider-mode.json")),
+      false,
     );
   } finally {
     await stopChild(router);
