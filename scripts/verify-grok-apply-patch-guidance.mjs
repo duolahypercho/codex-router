@@ -752,13 +752,35 @@ try {
     const canceled = await held;
     assert.ok(cancelStreamClosed, "the canceled request must have reached the mock upstream");
     assert.equal(canceled?.name, "AbortError");
-    let closeTimer;
-    await Promise.race([
-      cancelStreamClosed,
-      new Promise((_, reject) => { closeTimer = setTimeout(() => reject(new Error("cancellation did not reach mock upstream")), 10_000); }),
-    ]).finally(() => clearTimeout(closeTimer));
+    // Check the replay invariant before waiting for the close. A late teardown
+    // must never pre-empt it: a cancelled turn that quietly issues a second
+    // upstream request is the costlier failure of the two.
     assert.equal(capturedGrok.length, 4, "client cancellation must not trigger a replay");
-    process.stdout.write(`ok semantic errors ${nativeHook ? "reach the client hook" : "fail closed"} without a hidden request; client cancellation closes the complete local upstream path\n`);
+    // A client abort has to tear down the whole local path -- Router, LiteLLM,
+    // Grok forwarder, upstream -- because that is what stops the provider
+    // generating (and billing) once the user cancels. Hosted macOS runners have
+    // needed more than the original 10 s for the mock to see that close (4 of
+    // ~51 runs by 2026-09-12; Linux and Windows never). Waiting longer keeps the
+    // guarantee on every platform instead of trading it away for quiet CI: the
+    // extra budget costs time only when teardown is late, and a close that never
+    // arrives still fails the run. Runs slower than the old budget report the
+    // measured time, so the lagging hop can be diagnosed from CI output.
+    const CANCEL_CLOSE_BUDGET_MS = 60_000;
+    const CANCEL_CLOSE_EXPECTED_MS = 10_000;
+    const cancelCloseStarted = Date.now();
+    let closeTimer;
+    const cancelClosed = await Promise.race([
+      cancelStreamClosed.then(() => true),
+      new Promise((resolve) => { closeTimer = setTimeout(() => resolve(false), CANCEL_CLOSE_BUDGET_MS); }),
+    ]).finally(() => clearTimeout(closeTimer));
+    const cancelCloseMs = Date.now() - cancelCloseStarted;
+    if (!cancelClosed) {
+      throw new Error(`cancellation did not reach mock upstream within ${CANCEL_CLOSE_BUDGET_MS} ms on ${process.platform}`);
+    }
+    if (cancelCloseMs > CANCEL_CLOSE_EXPECTED_MS) {
+      process.stdout.write(`::warning title=Grok cancellation::upstream close took ${cancelCloseMs} ms on ${process.platform}, over the ${CANCEL_CLOSE_EXPECTED_MS} ms this path used to need\n`);
+    }
+    process.stdout.write(`ok semantic errors ${nativeHook ? "reach the client hook" : "fail closed"} without a hidden request; client cancellation closes the complete local upstream path in ${cancelCloseMs} ms\n`);
   }
   if (nativeHook) {
     // Preserve original argument bytes, including whitespace, duplicate keys and

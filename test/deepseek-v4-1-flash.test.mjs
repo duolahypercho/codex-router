@@ -93,6 +93,34 @@ test("DeepSeek V4.1 Flash on OpenRouter takes the catalog window and DeepSeek's 
   assert.ok(model.priority > MODEL_BY_SLUG.get("deepseek/deepseek-v4.1-flash").priority);
 });
 
+test("DeepSeek V4.1 Flash on Ollama Cloud uses the cloud tag and the shared serving profile", () => {
+  const model = MODEL_BY_SLUG.get("ollama-cloud/deepseek-v4.1-flash");
+  assert.ok(model);
+  assert.equal(model.provider, "ollama-cloud");
+  // The library page publishes this as a cloud-only tag, the same shape every
+  // other cloud-only route on this provider already carries.
+  assert.equal(model.upstreamModel, "deepseek-v4.1-flash:cloud");
+  assert.equal(model.listed, true);
+  // Ollama serves the weights itself, so the DeepSeek API's thinking-mode
+  // tool_choice rejection is not known to apply here. The V4 Flash sibling on
+  // this provider carries the same plain profile; if a live request shows a
+  // forced tool choice failing, both move to ollama-cloud-auto-tool-choice.
+  assert.equal(model.requestProfile, "ollama-cloud");
+  assert.equal(
+    MODEL_BY_SLUG.get("ollama-cloud/deepseek-v4-flash").requestProfile,
+    "ollama-cloud",
+  );
+  assert.equal(model.defaultEffort, "high");
+  assert.deepEqual(model.reasoningLevels.map(({ effort }) => effort), ["low", "high", "max"]);
+  assert.equal(model.contextWindow, 1_048_576);
+  assert.equal(model.autoCompact, 900_000);
+  assert.ok(model.contextWindow - model.autoCompact >= MAX_EFFORT_DEFAULT_OUTPUT);
+  assert.deepEqual(model.inputModalities, ["text", "image"]);
+  assert.notEqual(model.multiAgentVersion, "v2");
+  // Appended after the V4 routes rather than displacing them in the picker.
+  assert.ok(model.priority > MODEL_BY_SLUG.get("ollama-cloud/deepseek-v4-flash").priority);
+});
+
 test("V4.1 Flash is added alongside the V4 routes rather than replacing them", () => {
   for (const [slug, upstreamModel] of [
     ["deepseek/deepseek-v4-flash", "deepseek-v4-flash"],
@@ -100,6 +128,8 @@ test("V4.1 Flash is added alongside the V4 routes rather than replacing them", (
     ["deepseek/deepseek-v4-pro", "deepseek-v4-pro"],
     ["opencode-go/deepseek-v4-flash", "deepseek-v4-flash"],
     ["opencode-go/deepseek-v4-pro", "deepseek-v4-pro"],
+    ["ollama-cloud/deepseek-v4-flash", "deepseek-v4-flash:cloud"],
+    ["ollama-cloud/deepseek-v4-pro", "deepseek-v4-pro"],
   ]) {
     const model = MODEL_BY_SLUG.get(slug);
     assert.ok(model, slug);

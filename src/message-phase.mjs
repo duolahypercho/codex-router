@@ -9,27 +9,40 @@ import { Transform } from "node:stream";
 // so every progress note rendered as a standalone answer.
 //
 // This stage assigns the label from the item order the stream already carries,
-// using the rule native turns follow: a message that another output item
-// follows is commentary, and the last message of a successfully completed
-// response is the final answer. It spends no model tokens, and a replayed label
-// never reaches a chat-completions provider: LiteLLM rebuilds assistant history
-// from role and content alone.
+// using the rule native turns follow: a message that a tool call or another
+// message follows is commentary, and the last message of a completed response
+// is the final answer. A reasoning item after a message decides nothing, so a
+// message followed only by reasoning is still the answer. It spends no model
+// tokens. Codex replays the label with the message on later turns: a
+// Chat-translated route drops it (LiteLLM rebuilds chat history from role and
+// content), but a Responses-surface provider receives it -- see
+// `withoutInputMessagePhase` for the one route that strips it.
 //
 // Only a message's `output_item.done` is rewritten, and only while its phase is
 // absent; a phase the provider sent always wins. Text deltas stream unchanged.
-// The done frame is held just until the next item opens (commentary) or the
-// response completes (final answer), and every frame that arrived in between is
-// replayed in order behind it. A failed, errored, or unterminated response
-// releases the held frame untouched, as does anything this stage cannot parse.
-// It runs after the item-lifecycle normalizer, so items are already sequential.
+// The done frame is held until a tool call or message opens (commentary) or the
+// response completes (final answer); a reasoning item in between is held with
+// it, and every held frame is replayed in order behind it. A failed, errored,
+// incomplete, or `[DONE]`-terminated response, a clean end of stream without a
+// terminal, or anything this stage cannot parse releases the held frame
+// untouched. An upstream error is different: the pipeline destroys this stage,
+// a destroyed stream cannot push, and the held frames are lost with the stream
+// -- as they are in every other holding stage -- before the router ends the
+// body with a stream error. It runs after the item-lifecycle normalizer, so
+// items are already sequential.
 const CRLF_SEP = Buffer.from("\r\n\r\n");
 const LF_SEP = Buffer.from("\n\n");
 const COMMENTARY = "commentary";
 const FINAL_ANSWER = "final_answer";
 // Terminals that settle a delivered response: its last message is the answer.
-const ANSWER_TERMINALS = new Set(["response.completed", "response.incomplete", "response.done"]);
-// Terminals that end the turn without an answer.
-const FAILURE_TERMINALS = new Set(["response.failed", "error"]);
+const ANSWER_TERMINALS = new Set(["response.completed", "response.done"]);
+// Terminals that end the turn without an answer. Codex treats
+// `response.incomplete` as a stream error, like `response.failed`.
+const FAILURE_TERMINALS = new Set(["response.failed", "response.incomplete", "error"]);
+// Output items that neither make a preceding message commentary nor end it as
+// the answer. Native turns never place one after a message; a routed provider
+// can, and labelling the message commentary then left the turn with no answer.
+const NEUTRAL_ITEM_TYPES = new Set(["reasoning"]);
 const DECISION_HINTS = [
   "response.output_item.added",
   "response.output_item.done",
@@ -115,16 +128,41 @@ function rewrittenFrame(text, separator, event) {
   return Buffer.concat([Buffer.from(lines.join(lineEnding), "utf8"), separator]);
 }
 
-// Labels the terminal snapshot's messages by the same rule the stream used.
+// Labels the terminal snapshot's messages by the same rule the stream used: a
+// message before the last non-reasoning item is commentary.
 export function labelResponseOutput(output) {
   if (!Array.isArray(output)) return undefined;
+  const lastDecisive = output.findLastIndex((item) => !NEUTRAL_ITEM_TYPES.has(item?.type));
   let changed = false;
   const labelled = output.map((item, index) => {
     if (!unlabelledAssistantMessage(item)) return item;
     changed = true;
-    return { ...item, phase: index < output.length - 1 ? COMMENTARY : FINAL_ANSWER };
+    return { ...item, phase: index < lastDecisive ? COMMENTARY : FINAL_ANSWER };
   });
   return changed ? labelled : undefined;
+}
+
+// Omits `phase` from replayed message input items. Used only for an
+// operator-configured Responses endpoint, whose validator nothing has shown to
+// accept the field; returns the input itself when no item carries one.
+export function withoutInputMessagePhase(input) {
+  if (!Array.isArray(input)) return input;
+  let changed = false;
+  const next = input.map((item) => {
+    if (
+      item === null ||
+      typeof item !== "object" ||
+      Array.isArray(item) ||
+      !Object.hasOwn(item, "phase") ||
+      !(item.type === "message" || (item.type === undefined && typeof item.role === "string"))
+    ) {
+      return item;
+    }
+    changed = true;
+    const { phase: _phase, ...rest } = item;
+    return rest;
+  });
+  return changed ? next : input;
 }
 
 export class MessagePhaseTransform extends Transform {
@@ -197,8 +235,10 @@ export class MessagePhaseTransform extends Transform {
     const type = parsed?.type;
 
     if (this.#pending) {
-      if (type === "response.output_item.added" || type === "response.output_item.done") {
-        // Another item follows the held message, so it was commentary.
+      const itemFrame = type === "response.output_item.added" || type === "response.output_item.done";
+      if (itemFrame && !NEUTRAL_ITEM_TYPES.has(parsed.event?.item?.type)) {
+        // A tool call or another message follows the held message, so it was
+        // commentary. An item this stage could not parse counts as one.
         this.#release(COMMENTARY);
       } else if (ANSWER_TERMINALS.has(type)) {
         this.#release(FINAL_ANSWER);

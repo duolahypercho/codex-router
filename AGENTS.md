@@ -2065,23 +2065,49 @@ answer below it, and finds a thread's answer with
 label, so `src/message-phase.mjs` assigns one.
 
 1. **The rule is the one native turns follow, read from item order.** A message
-   that another output item follows is commentary; the last message of a
-   `response.completed`, `response.incomplete`, or `response.done` is the final
-   answer. Never infer it from the text.
+   that a tool call or another message follows is commentary; the last message
+   of a `response.completed` or `response.done` is the final answer, even when
+   reasoning items follow it. Reasoning decides nothing: labelling that message
+   commentary left the turn without an answer, and Codex's thread-history
+   fallback reads only messages whose phase is null. `response.failed`,
+   `response.incomplete` (a stream error to Codex), and `error` leave the last
+   message unlabelled. Never infer the label from the text.
 2. **A provider's phase always wins.** Only an absent or null phase is filled,
    so a Responses provider that already labels messages passes through
    unchanged.
-3. **Hold one frame, briefly.** Only the message's `output_item.done` waits,
-   until the next item opens or the response settles; deltas stream live and
-   every frame held behind it is replayed in order. A failed, errored, or
-   unterminated response, invalid UTF-8, or an exhausted hold bound releases the
-   original bytes unlabelled.
-4. **It is metadata, not transcript.** It adds no text, costs no model tokens,
-   and LiteLLM rebuilds chat history from role and content, so a replayed label
-   never reaches a chat-completions provider.
+3. **Hold one message frame, briefly.** Only the message's `output_item.done`
+   waits, until a tool call or message opens or the response settles. A
+   reasoning item in between is held with it, deltas included, inside the
+   1 MiB bound; text deltas before the done frame stream live, and everything
+   held is replayed in order. A failed, incomplete, errored, or
+   `[DONE]`-terminated response, a clean end of stream without a terminal,
+   invalid UTF-8, or an exhausted hold bound releases the original bytes
+   unlabelled. An upstream error does not: `pipeResponse` destroys the stage, a
+   destroyed stream cannot push, and the held frames are lost with the stream
+   -- as they are in the item-lifecycle normalizer and the other holding stages
+   -- before the router ends the body with `local_router_stream_failed`.
+4. **It is metadata, not transcript, but Codex replays it.** It adds no text and
+   costs no model tokens. Codex stores the label and sends it back with the
+   message on every later turn. Chat-translated routes drop it: LiteLLM
+   rebuilds chat history from role and content, Anthropic-protocol routes are
+   rebuilt the same way, and Antigravity builds its messages from text and tool
+   calls. Providers with `protocol: "openai-responses"` receive it. Their
+   `openai/responses/<model>` deployments pass input items through, as do
+   `normalizeRoutedInput`, `normalizeResponsesRequest`,
+   `deepSeekResponsesInput`, and WebSocket continuation state. That covers Meta,
+   OpenCode, OpenCode free, GitHub Copilot, and DeepSeek Responses. OpenAI's
+   Responses schema defines the field, and native passthrough keeps it. Local
+   rollouts show OpenCode's Responses surface accepting it (Muse Spark emits it
+   itself); the other built-in Responses providers are unverified. An
+   operator-configured `--adapter openai-responses` endpoint is an unknown
+   validator, so `src/api-forwarder.mjs` omits `phase` from its message input
+   items with `withoutInputMessagePhase`. A built-in provider shown to reject
+   the field needs the same narrow input strip and a test, not a change to the
+   label.
 5. **Routed streams only, after the item-lifecycle normalizer**, so items are
-   already sequential. Coverage lives in `test/message-phase.test.mjs` and the
-   routed case in `test/namespace-relay-routing.test.mjs`.
+   already sequential. Coverage lives in `test/message-phase.test.mjs`, the
+   routed case in `test/namespace-relay-routing.test.mjs`, and the generic
+   Responses input case in `test/generic-routing.test.mjs`.
 
 ## Chat Completions reasoning reaches Codex as one reasoning item
 

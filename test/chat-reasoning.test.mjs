@@ -8,6 +8,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { usesNativeChatReasoning } from "../src/chat-reasoning.mjs";
+import { childOutput, waitForListeners } from "./listener-readiness.mjs";
 
 test("native chat reasoning stays scoped to established history contracts", () => {
   assert.equal(usesNativeChatReasoning({ requestProfile: "glm-thinking" }), true);
@@ -164,22 +165,22 @@ asyncio.run(main())
       ZAI_CODING_BASE_URL: `http://127.0.0.1:${upstream.address().port}/v1`, ZAI_API_KEY: "TEST_ZAI_KEY",
       COMMANDCODE_BASE_URL: `http://127.0.0.1:${upstream.address().port}/v1`, COMMAND_CODE_API_KEY: "TEST_COMMANDCODE_KEY",
     };
-    for (const script of ["api-forwarder.mjs", "router.mjs"]) {
-      const child = spawn(process.execPath, [path.join(root, "src", script)], { cwd: root, env, stdio: "ignore" });
-      children.push(child);
-    }
+    const output = childOutput();
+    const services = ["api-forwarder.mjs", "router.mjs"].map((script) => output.capture(script,
+      spawn(process.execPath, [path.join(root, "src", script)], { cwd: root, env, stdio: ["ignore", "ignore", "pipe"] })));
+    children.push(...services);
     const base = `http://127.0.0.1:${routerPort}/_codex-router/${caller}/v1`;
-    for (let attempt = 0; attempt < 100; attempt += 1) {
-      try { if ((await fetch(`${base}/models`)).ok) break; } catch { /* starting */ }
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    }
+    await waitForListeners([
+      { name: "api-forwarder /health", url: `http://127.0.0.1:${forwarderPort}/health`, headers: { Authorization: `Bearer ${internal}` } },
+      { name: "router /models", url: `${base}/models` },
+    ], { children: services, output });
     for (const model of ["zai-coding/glm-5.3", "deepseek/deepseek-v4-flash", "commandcode/deepseek-v4-flash"]) {
       for (negativeControl of [false, true]) {
         const response = await fetch(`${base}/responses`, {
           method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(30000),
           body: JSON.stringify({ model, input, stream: false, tools: [{ type: "function", name: "probe", parameters: { type: "object", properties: {} } }] }),
         });
-        assert.equal(response.status, 200, await response.text());
+        assert.equal(response.status, 200, `${await response.text()}\n${output}`);
         if (negativeControl) assert.throws(() => assertHistory(requests.at(-1).messages), /must occur exactly once/);
         else assertHistory(requests.at(-1).messages);
         t.diagnostic(JSON.stringify({ model, litellm: version, negativeControl, status: "passed" }));
