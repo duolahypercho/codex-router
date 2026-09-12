@@ -708,6 +708,90 @@ export function normalizeSchemaLiterals(schema, depth = 0) {
   return next;
 }
 
+// Moonshot's validator rejects a schema node that declares no `type` inside a
+// union, naming it as "tools.function.parameters missing type in anyOf
+// properties" (#641). Nothing else in the pipeline supplies one:
+// `normalizeSchemaLiterals` only removes literals that contradict a type a node
+// already declares. A nullable leaf written the ordinary way --
+// `{"anyOf":[{"type":"string"},{"type":"null"}]}` -- therefore reaches Moonshot
+// exactly as the client wrote it and loses the turn.
+//
+// Only declare a type the node already implies. Inferring one from `not`/`if`/
+// `then`/`else`, or guessing for a `$ref` whose target carries the type, would
+// narrow a schema the client meant to leave open, which is worse than the 400.
+// Returns `schema` by identity when every node already says what it is.
+function inferredType(schema) {
+  if ("type" in schema || "$ref" in schema) return undefined;
+  if ("properties" in schema || "required" in schema || "patternProperties" in schema) {
+    return "object";
+  }
+  if ("items" in schema || "prefixItems" in schema) return "array";
+  if (Array.isArray(schema.enum) && schema.enum.length) {
+    const types = [...new Set(schema.enum.map(jsonTypeOf))];
+    if (types.length === 1 && types[0] !== undefined) return types[0];
+    return undefined;
+  }
+  if ("const" in schema) return jsonTypeOf(schema.const);
+  // A union says what it is only when every branch does.
+  for (const keyword of ["anyOf", "oneOf"]) {
+    const branches = schema[keyword];
+    if (!Array.isArray(branches) || !branches.length) continue;
+    const types = [];
+    for (const branch of branches) {
+      if (!isPlainObject(branch)) return undefined;
+      const declared = declaredTypes(branch);
+      if (declared.length !== 1) return undefined;
+      if (!types.includes(declared[0])) types.push(declared[0]);
+    }
+    return types.length === 1 ? types[0] : types;
+  }
+  return undefined;
+}
+
+export function declareSchemaTypes(schema, depth = 0) {
+  if (!isPlainObject(schema) || depth > MAX_LITERAL_DEPTH) return schema;
+  let next = schema;
+  const replace = (key, value) => {
+    if (next === schema) next = { ...schema };
+    next[key] = value;
+  };
+
+  for (const keyword of SCHEMA_MAP_KEYWORDS) {
+    const node = schema[keyword];
+    if (!isPlainObject(node)) continue;
+    let changed = false;
+    const rewritten = {};
+    for (const [name, child] of Object.entries(node)) {
+      const declared = declareSchemaTypes(child, depth + 1);
+      if (declared !== child) changed = true;
+      rewritten[name] = declared;
+    }
+    if (changed) replace(keyword, rewritten);
+  }
+
+  for (const keyword of [...SCHEMA_LIST_KEYWORDS, ...SCHEMA_CHILD_KEYWORDS]) {
+    const node = schema[keyword];
+    if (Array.isArray(node)) {
+      let changed = false;
+      const rewritten = node.map((child) => {
+        const declared = declareSchemaTypes(child, depth + 1);
+        if (declared !== child) changed = true;
+        return declared;
+      });
+      if (changed) replace(keyword, rewritten);
+      continue;
+    }
+    if (!isPlainObject(node)) continue;
+    const declared = declareSchemaTypes(node, depth + 1);
+    if (declared !== node) replace(keyword, declared);
+  }
+
+  // After the children, so a union reads the types its branches just gained.
+  const inferred = inferredType(next);
+  if (inferred !== undefined) replace("type", inferred);
+  return next;
+}
+
 // The one provider-facing normalization: literals aligned with the type their
 // own node declares, and a union root merged into a plain object. Returns
 // `schema` unchanged when neither applies.
