@@ -67,6 +67,7 @@ import {
 import { mergeCodexAppTools } from "./codex-app-tools.mjs";
 import { activityMetadataFromHeaders } from "./codex-session-names.mjs";
 import { translateGatewayError } from "./error-translation.mjs";
+import { acceptWebSocketUpgrade } from "./websocket-server.mjs";
 import { recordUsageEvent } from "./usage-events.mjs";
 import {
   classifySsePrefix,
@@ -1728,6 +1729,86 @@ function writeIdleNoProviderError(response) {
   });
 }
 
+// Bridge a Codex Responses WebSocket message into the HTTP request pipeline.
+// The WebSocket carries one JSON request body per message; the SSE response
+// stream is relayed back as WebSocket text frames (one frame per SSE chunk).
+async function handleWebSocketResponses(ws, upgradeRequest, message) {
+  const body = Buffer.isBuffer(message) ? message : Buffer.from(message, "utf8");
+  const requestUrl = new URL(
+    upgradeRequest.url || "/",
+    `http://${upgradeRequest.headers.host || LISTEN_HOST}`,
+  );
+  const route = authenticatedRoute(requestUrl.pathname, CALLER_KEY);
+  if (!route) {
+    ws.sendText(
+      `data: ${JSON.stringify({ type: "error", code: "authentication_error", message: "This local router endpoint requires its configured caller capability." })}\n\n`,
+    );
+    ws.close(1008);
+    return;
+  }
+  requestUrl.pathname = route;
+
+  // A minimal fake IncomingMessage exposing only what handleResponses reads.
+  const request = {
+    method: "POST",
+    url: requestUrl.pathname,
+    headers: {
+      ...upgradeRequest.headers,
+      "content-type": "application/json",
+      "content-length": String(body.length),
+    },
+    once() {},
+    on() {},
+    // readRequestBody() iterates the request stream; yield the single body.
+    async *[Symbol.asyncIterator]() {
+      yield body;
+    },
+  };
+
+  // A minimal fake ServerResponse that forwards writes to the WebSocket.
+  // It must be a real Writable: pipeResponse() runs `pipeline(source, ...,
+  // response)` and pipeline requires a stream destination.
+  const { Writable } = await import("node:stream");
+  let headersSent = false;
+  let writableEnded = false;
+  const response = new Writable({
+    write(chunk, _enc, callback) {
+      if (this.destroyed) {
+        callback();
+        return;
+      }
+      const text = Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk);
+      ws.sendText(text);
+      callback();
+    },
+    final(callback) {
+      writableEnded = true;
+      ws.close(1000);
+      callback();
+    },
+  });
+  response.statusCode = 200;
+  response.headersSent = false;
+  response.setHeader = () => {};
+  response.writeHead = (status, headers) => {
+    response.statusCode = status;
+    response.headersSent = true;
+    headersSent = true;
+  };
+  response.on = () => response;
+  response.once = () => response;
+  response.emit = (event, ...args) => {
+    if (event === "close") {
+      // pipeResponse checks response.destroyed on premature close; keep it
+      // consistent with the socket state.
+      if (ws.closed) response.destroyed = true;
+    }
+    return false;
+  };
+
+  await handleResponses(request, response, requestUrl);
+}
+
 async function handleResponses(request, response, requestUrl) {
   const startedAt = Date.now();
   const activity = beginRequestActivity();
@@ -2592,11 +2673,31 @@ const server = http.createServer((request, response) => {
   });
 });
 
-server.on("upgrade", (_request, socket) => {
+server.on("upgrade", (request, socket) => {
   socket.on("error", () => {});
-  socket.end(
-    "HTTP/1.1 426 Upgrade Required\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
-  );
+  // Accept Codex's Responses WebSocket upgrade and relay the request through
+  // the same HTTP pipeline, streaming the SSE response back as WebSocket
+  // text frames. Previously this returned 426 and Codex fell back to HTTP;
+  // supporting the upgrade removes the fallback warning and the extra
+  // connection attempt on every turn.
+  const ws = acceptWebSocketUpgrade(request, socket);
+  if (!ws) return;
+  ws.onMessage = (message) => {
+    handleWebSocketResponses(ws, request, message).catch((error) => {
+      console.error(`[codex-router] websocket request failed: ${formatErrorChain(error)}`);
+      try {
+        ws.sendText(
+          `data: ${JSON.stringify({ type: "error", code: "local_router_error", message: "The local router could not complete the request." })}\n\n`,
+        );
+      } catch {
+        // ignore
+      }
+      ws.close(1011);
+    });
+  };
+  ws.onClose = () => {
+    // nothing to clean up; the request pipeline aborts on socket close
+  };
 });
 // Without this an 'error' event is unhandled and the process exits silently.
 // Under a supervisor that reads as a crash loop with the port never bound and
