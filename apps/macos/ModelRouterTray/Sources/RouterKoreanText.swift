@@ -110,6 +110,8 @@ enum RouterKoreanText {
     "Quotas and live activity pinned to the desktop": "할당량과 실시간 활동을 데스크톱에 고정",
     "Show provider usage and activity status": "제공업체 사용량과 활동 상태 표시",
     "Use Router with ChatGPT": "ChatGPT에서 라우터 사용",
+    "Turn off 'Use Router with ChatGPT' first": "먼저 'ChatGPT에서 라우터 사용'을 끄세요",
+    "Turn off 'Use without OpenAI login' first": "먼저 'OpenAI 로그인 없이 사용'을 끄세요",
     "Share ChatGPT subscription": "ChatGPT 구독 공유",
     "Sharing status unavailable": "공유 상태를 확인할 수 없음",
     "Sharing enabled": "공유가 활성화됨",

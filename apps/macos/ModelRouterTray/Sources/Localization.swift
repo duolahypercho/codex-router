@@ -241,6 +241,8 @@ enum RouterChineseText {
     "Quotas and live activity pinned to the desktop": "将额度和实时活动固定在桌面",
     "Show provider usage and activity status": "显示提供商用量和活动状态",
     "Use Router with ChatGPT": "在 ChatGPT 中使用路由",
+    "Turn off 'Use Router with ChatGPT' first": "请先关闭「在 ChatGPT 中使用路由」",
+    "Turn off 'Use without OpenAI login' first": "请先关闭「不使用 OpenAI 登录」",
     "Share ChatGPT subscription": "共享 ChatGPT 订阅",
     "Sharing status unavailable": "无法读取共享状态",
     "Sharing enabled": "共享已启用",
