@@ -110,6 +110,8 @@ enum RouterHindiText {
     "Quotas and live activity pinned to the desktop": "कोटा और लाइव गतिविधि डेस्कटॉप पर पिन की गई",
     "Show provider usage and activity status": "प्रदाता उपयोग और गतिविधि स्थिति दिखाएँ",
     "Use Router with ChatGPT": "ChatGPT के साथ राउटर का उपयोग करें",
+    "Turn off 'Use Router with ChatGPT' first": "पहले 'ChatGPT के साथ राउटर का उपयोग करें' बंद करें",
+    "Turn off 'Use without OpenAI login' first": "पहले 'OpenAI लॉगिन के बिना उपयोग करें' बंद करें",
     "Share ChatGPT subscription": "ChatGPT सदस्यता साझा करें",
     "Sharing status unavailable": "साझाकरण स्थिति उपलब्ध नहीं है",
     "Sharing enabled": "साझाकरण चालू है",

@@ -110,6 +110,8 @@ enum RouterJapaneseText {
     "Quotas and live activity pinned to the desktop": "割り当てとライブアクティビティをデスクトップに固定",
     "Show provider usage and activity status": "プロバイダーの使用量とアクティビティ状態を表示",
     "Use Router with ChatGPT": "ChatGPT でルーターを使用",
+    "Turn off 'Use Router with ChatGPT' first": "先に「ChatGPT でルーターを使用」をオフにしてください",
+    "Turn off 'Use without OpenAI login' first": "先に「OpenAI ログインなしで使用」をオフにしてください",
     "Share ChatGPT subscription": "ChatGPT サブスクリプションを共有",
     "Sharing status unavailable": "共有状態を取得できません",
     "Sharing enabled": "共有は有効です",

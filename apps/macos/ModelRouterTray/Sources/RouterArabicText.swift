@@ -110,6 +110,8 @@ enum RouterArabicText {
     "Quotas and live activity pinned to the desktop": "الحصص والنشاط المباشر مثبّتة على سطح المكتب",
     "Show provider usage and activity status": "إظهار استخدام مزوّد الخدمة وحالة النشاط",
     "Use Router with ChatGPT": "استخدام الموجّه مع ChatGPT",
+    "Turn off 'Use Router with ChatGPT' first": "أوقف «استخدام الموجّه مع ChatGPT» أولاً",
+    "Turn off 'Use without OpenAI login' first": "أوقف «الاستخدام بدون تسجيل الدخول إلى OpenAI» أولاً",
     "Share ChatGPT subscription": "مشاركة اشتراك ChatGPT",
     "Sharing status unavailable": "حالة المشاركة غير متاحة",
     "Sharing enabled": "المشاركة مفعّلة",

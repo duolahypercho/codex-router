@@ -6619,9 +6619,11 @@ private struct TrayView: View {
     .padding(.vertical, 2)
     settingRow(
       title: routerLocalized("Use Router with ChatGPT"),
-      detail: store.signedRoutingEnabled(authoritative: store.signedRouting)
-        ? routerLocalized("Native GPT + external models · task history preserved")
-        : routerLocalized("Keep ChatGPT login and the current task history"),
+      detail: store.loginFreeEnabled(authoritative: store.loginFree)
+        ? routerLocalized("Turn off 'Use without OpenAI login' first")
+        : (store.signedRoutingEnabled(authoritative: store.signedRouting)
+          ? routerLocalized("Native GPT + external models · task history preserved")
+          : routerLocalized("Keep ChatGPT login and the current task history")),
       isOn: Binding(
         get: { store.signedRoutingEnabled(authoritative: store.signedRouting) },
         set: { enabled in store.setSignedRouting(enabled) }
@@ -6676,9 +6678,11 @@ private struct TrayView: View {
     }
     settingRow(
       title: routerLocalized("Use without OpenAI login"),
-      detail: store.loginFreeEnabled(authoritative: store.loginFree)
-        ? routerLocalized("External providers · Codex restarts automatically")
-        : routerLocalized("Use connected models and restart Codex"),
+      detail: store.signedRoutingEnabled(authoritative: store.signedRouting)
+        ? routerLocalized("Turn off 'Use Router with ChatGPT' first")
+        : (store.loginFreeEnabled(authoritative: store.loginFree)
+          ? routerLocalized("External providers · Codex restarts automatically")
+          : routerLocalized("Use connected models and restart Codex")),
       isOn: Binding(
         get: { store.loginFreeEnabled(authoritative: store.loginFree) },
         set: { enabled in store.setLoginFree(enabled) }
