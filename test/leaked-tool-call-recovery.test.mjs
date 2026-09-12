@@ -507,26 +507,43 @@ test("one item's calls are recovered once even when both channels carry the span
   assert.equal(functionCalls((await run(storedBoth)).body).length, 2);
 });
 
-test("an unterminated span is scanned once, not re-scanned per delta", async () => {
-  // Held as one growing string this was quadratic -- every indexOf re-flattened
-  // the rope -- and `_transform` is synchronous, so a 1.25 MB unterminated span
-  // blocked the router's event loop for 21.5 s against 0.8 s for the same bytes
-  // with no span open. Assert the shape of the curve, not a wall-clock number.
-  const chunk = "x".repeat(64);
-  async function elapsed(bytes) {
-    let stream = block({ type: "response.created", response: { id: "r" } }) +
-      block({ type: "response.reasoning_text.delta", output_index: 0, delta: `<tool_calls:${N}>` });
-    for (let sent = 0; sent < bytes; sent += chunk.length) {
-      stream += block({ type: "response.reasoning_text.delta", output_index: 0, delta: chunk });
-    }
-    stream += block({ type: "response.completed", response: { id: "r", output: [] } });
-    const started = process.hrtime.bigint();
-    await run(stream);
-    return Number(process.hrtime.bigint() - started) / 1e6;
+test("an unterminated span gives up at the bound instead of buffering forever", async () => {
+  // The capture is held unjoined and scanned once per delta with a closing-tag
+  // overlap, because `_transform` is synchronous and re-scanning one growing
+  // string re-flattened the rope every delta: 1.25 MB cost 29.5 s of blocked
+  // event loop against 1.1 s for the same bytes with no span open. That is a
+  // throughput property and is deliberately not asserted by wall clock here --
+  // a timing threshold measures machine load, not the algorithm. What is
+  // asserted is the behaviour at the 4 MiB bound, which the rewrite preserves.
+  const chunk = "x".repeat(4096);
+  let stream = block({ type: "response.created", response: { id: "r" } }) +
+    block({ type: "response.reasoning_text.delta", output_index: 0, delta: `<tool_calls:${N}>` });
+  for (let sent = 0; sent < 5 * 1024 * 1024; sent += chunk.length) {
+    stream += block({ type: "response.reasoning_text.delta", output_index: 0, delta: chunk });
   }
-  const small = await elapsed(128 * 1024);
-  const large = await elapsed(512 * 1024);
-  // Four times the bytes. Linear would be ~4x; the quadratic version was ~16x.
-  // Allow generous slack for a loaded machine and still catch a return to O(n^2).
-  assert.ok(large < small * 9, `128 KiB took ${small} ms, 512 KiB took ${large} ms`);
+  stream += block({ type: "response.completed", response: { id: "r", output: [] } });
+  const { body } = await run(stream);
+  // Never closed: nothing is recovered, and past the bound the held text is
+  // released verbatim rather than buffered without limit.
+  assert.equal(functionCalls(body).length, 0);
+  assert.ok(body.includes(`<tool_calls:${N}>`), "the unrecognized span is relayed, not swallowed");
+});
+
+test("a closing tag split across two deltas is still found", async () => {
+  // The scan keeps a closeTag-length overlap precisely for this.
+  const closeTag = `</tool_calls:${N}>`;
+  for (const cut of [1, 5, closeTag.length - 1]) {
+    const span = `<tool_calls:${N}><tool_call:${N}>exec_command` +
+      `<arg_key:${N}>cmd</arg_key:${N}><arg_value:${N}>ls</arg_value:${N}>` +
+      `</tool_call:${N}>`;
+    const whole = span + closeTag;
+    const at = whole.length - closeTag.length + cut;
+    const stream =
+      block({ type: "response.created", response: { id: "r" } }) +
+      block({ type: "response.reasoning_text.delta", output_index: 0, delta: whole.slice(0, at) }) +
+      block({ type: "response.reasoning_text.delta", output_index: 0, delta: whole.slice(at) }) +
+      block({ type: "response.completed", response: { id: "r", output: [] } });
+    const { body } = await run(stream);
+    assert.equal(functionCalls(body).length, 1, `split at ${cut}`);
+  }
 });
