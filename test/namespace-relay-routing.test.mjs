@@ -2813,19 +2813,24 @@ test("hy4's prior reasoning is replayed as thinking, never as its own visible pr
     return result.gatewayBodies[0];
   };
 
-  const hy4 = await outgoingFor("opencode-go/hy4-preview");
-  const hy4Assistant = hy4.input.find((item) => item.type === "message" && item.role === "assistant");
-  assert.ok(hy4Assistant, "the assistant turn survives");
-  const hy4Parts = hy4Assistant.content.map((part) => `${part.type}:${part.text}`);
-  assert.deepEqual(hy4Parts, [
-    "thinking:PRIOR_THINKING: look at the locomotion code first.",
-    "output_text:Let me read the locomotion code.",
-  ]);
-  assert.equal(
-    hy4.input.some((item) => item.type === "reasoning"),
-    false,
-    "the carried reasoning item is consumed, so it cannot also become a user message",
-  );
+  // Hy4 by profile, and the same rule reached by upstream family on routes
+  // whose profiles say nothing about replay (GLM has no profile here, Kimi K3
+  // carries a sampling profile).
+  for (const slug of ["opencode-go/hy4-preview", "opencode-go/glm-5.3", "opencode-go/kimi-k3"]) {
+    const outgoing = await outgoingFor(slug);
+    const assistant = outgoing.input.find((item) => item.type === "message" && item.role === "assistant");
+    assert.ok(assistant, `${slug}: the assistant turn survives`);
+    const parts = assistant.content.map((part) => `${part.type}:${part.text}`);
+    assert.deepEqual(parts, [
+      "thinking:PRIOR_THINKING: look at the locomotion code first.",
+      "output_text:Let me read the locomotion code.",
+    ], slug);
+    assert.equal(
+      outgoing.input.some((item) => item.type === "reasoning"),
+      false,
+      `${slug}: the carried reasoning item is consumed, so it cannot also become a user message`,
+    );
+  }
 
   // A chat route with no thinking contract keeps the old shape: reasoning is
   // merged as text, since LiteLLM would otherwise drop it.

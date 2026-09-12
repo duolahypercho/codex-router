@@ -1971,8 +1971,14 @@ retry rules on the shared path.
   An interleaved-thinking model that instead sees its past reasoning replayed as
   visible assistant text moves new thinking into the answer channel and loops
   on its last progress note (Hy4 on opencode Go, 12 September 2026: 2, 4, 5,
-  8, 16 copies per message). Add a thinking model to this contract in
-  `src/chat-reasoning.mjs`, not by special-casing the carry. Remove only successfully carried
+  8, 16 copies per message). The rule belongs to the upstream model, not to
+  the reseller or its request profile, so `src/chat-reasoning.mjs` also keys
+  it on the upstream family (DeepSeek, GLM-5.x, Kimi K3, MiniMax M3, Tencent
+  Hy3/Hy4) for the Chat Completions resellers it lists. Add a family only with
+  evidence the vendor expects `reasoning_content` back, and a reseller only
+  after a live probe shows the route returns reasoning and accepts the
+  echo-back; Anthropic-protocol variants never enter it. Do not special-case
+  the carry instead. Remove only successfully carried
   reasoning runs so plaintext cannot also become a user message. Do not mutate
   source items or change other native Responses routes. Keep this policy shared
   between hops without applying direct DeepSeek sampling parameters to resellers.
