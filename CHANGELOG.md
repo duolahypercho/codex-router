@@ -59,6 +59,20 @@
   back to the model as an ordinary tool error. A non-string `content`, a
   completed item that disagrees, and streamed text contradicted by the final
   input still fail closed. Reproduced offline against pinned LiteLLM 1.96.0.
+- **A doubled assistant block is collapsed at egress.** On routed Chat routes the
+  bridge can emit a turn's answer text twice inside one assistant `message`
+  item -- the same token run and then the same run again, with
+  `output_text.done` carrying both copies. It lands in the wire bytes, so it is
+  not a client rendering artifact and not an item-lifecycle reorder. A new
+  `src/duplicate-block-collapse.mjs` egress transform rewrites a message whose
+  entire text is a run of identical blank-line-separated blocks (`A\n\nA`,
+  `A\n\nA\n\nB\n\nB`) down to one copy each and relays everything else
+  byte-for-byte. It runs after `ItemLifecycleNormalizer`, so no held item can
+  reorder the stream. The held-item bound deliberately weighs the visible text
+  rather than total item bytes: a captured turn held 138 KB for one message item
+  of which 113 KB was reasoning, so a single byte budget tripped on long
+  reasoning and released the item verbatim, leaving the duplicate in place on
+  exactly the thinking routes where it was most common.
 - **A reseller's DeepSeek routes replay Chat reasoning again.** The Chat
   reasoning carry was scoped to the vendor request profiles (`glm-thinking`,
   `deepseek-thinking`) plus Command Code's single DeepSeek Flash slug, so any
