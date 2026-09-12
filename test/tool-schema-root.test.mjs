@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { preservedGeminiSchemas, zillowRangeSchema } from "./fixtures/gemini-tool-schemas.mjs";
 
 import { CODEX_APP_TOOLS } from "../src/codex-app-tools.mjs";
 import { toResponsesRequest } from "../src/grok-oauth-forwarder.mjs";
@@ -687,6 +688,165 @@ test("valid root $defs refs and unresolved nested refs stay untouched", () => {
     },
   };
   assert.equal(inlineDanglingNestedDefsRefs(unresolved), unresolved);
+});
+
+test("Gemini repair preserves valid schemas from the adversarial review", () => {
+  for (const { name, schema } of preservedGeminiSchemas()) {
+    const before = structuredClone(schema);
+    assert.equal(inlineDanglingNestedDefsRefs(schema), schema, name);
+    assert.deepEqual(schema, before, name);
+  }
+});
+
+test("Gemini repair preserves the observed Zillow range constraints", () => {
+  const schema = zillowRangeSchema();
+  const before = structuredClone(schema);
+  const repaired = inlineDanglingNestedDefsRefs(schema);
+  assert.deepEqual(repaired.properties.request.properties.propertyFiltersRequest.properties.bedrooms, {
+    ...schema.properties.request.$defs.MinMaxInt,
+    description: schema.properties.request.properties.propertyFiltersRequest.properties.bedrooms.description,
+  });
+  assert.deepEqual(schema, before);
+  assert.equal(inlineDanglingNestedDefsRefs(repaired), repaired);
+});
+
+test("borrowed nested definitions retain their original lexical scope", () => {
+  const schema = {
+    type: "object",
+    properties: {
+      outer: {
+        type: "object",
+        $defs: {
+          Value: { type: "string" },
+          Wrapper: { type: "object", properties: { value: { $ref: "#/$defs/Value" } } },
+        },
+        properties: {
+          inner: {
+            type: "object",
+            $defs: { Value: { type: "integer" } },
+            properties: { wrapper: { $ref: "#/$defs/Wrapper" }, own: { $ref: "#/$defs/Value" } },
+          },
+        },
+      },
+    },
+  };
+  const repaired = inlineDanglingNestedDefsRefs(schema);
+  const outer = repaired.properties.outer;
+  assert.equal(outer.$defs.Wrapper.properties.value.type, "string");
+  assert.equal(outer.properties.inner.properties.wrapper.properties.value.type, "string");
+  assert.equal(outer.properties.inner.properties.own.type, "integer");
+});
+
+test("dangling repair never falls through a boolean or invalid definition", () => {
+  for (const value of [false, true, null, 1]) {
+    const schema = {
+      type: "object",
+      properties: {
+        outer: {
+          $defs: { Value: { type: "string" } },
+          properties: {
+            inner: {
+              $defs: { Value: value },
+              properties: { value: { $ref: "#/$defs/Value" } },
+            },
+          },
+        },
+      },
+    };
+    assert.equal(inlineDanglingNestedDefsRefs(schema), schema);
+    schema.$defs = { Value: value };
+    assert.equal(inlineDanglingNestedDefsRefs(schema), schema);
+  }
+});
+
+test("dangling repair leaves validation siblings intact, including interacting keywords", () => {
+  for (const siblings of [
+    { properties: { value: { type: "string" } } },
+    { additionalProperties: false },
+    { type: "object" },
+    { allOf: [{ minProperties: 1 }] },
+  ]) {
+    const schema = {
+      type: "object",
+      properties: {
+        request: {
+          $defs: { Closed: { type: "object", additionalProperties: false } },
+          properties: { value: { $ref: "#/$defs/Closed", ...siblings } },
+        },
+      },
+    };
+    assert.equal(inlineDanglingNestedDefsRefs(schema), schema);
+  }
+});
+
+test("dangling repair declines resource boundaries and dynamic references", () => {
+  for (const [key, value] of [
+    ["$id", "https://example.test/resource"], ["id", "resource.json"],
+    ["$schema", "https://json-schema.org/draft/2020-12/schema"],
+    ["$anchor", "node"], ["$dynamicRef", "#node"], ["$dynamicAnchor", "node"],
+    ["$recursiveRef", "#"], ["$recursiveAnchor", true],
+  ]) {
+    const schema = zillowRangeSchema();
+    schema.properties.request[key] = value;
+    assert.equal(inlineDanglingNestedDefsRefs(schema), schema, key);
+  }
+});
+
+test("dangling repair decodes pointer names without following other pointer forms", () => {
+  const schema = {
+    properties: {
+      request: {
+        $defs: { "a/b~c": { type: "string" } },
+        properties: {
+          value: { $ref: "#/$defs/a~1b~0c" },
+          encoded: { $ref: "#/%24defs/a~1b~0c" },
+          invalid: { $ref: "#/$defs/a~2b" },
+          malformed: { $ref: "#/$defs/%ZZ" },
+          deeper: { $ref: "#/$defs/a~1b~0c/type" },
+        },
+      },
+    },
+  };
+  const repaired = inlineDanglingNestedDefsRefs(schema).properties.request.properties;
+  assert.deepEqual(repaired.value, { type: "string" });
+  assert.deepEqual(repaired.encoded, { type: "string" });
+  for (const key of ["invalid", "malformed", "deeper"]) {
+    assert.equal(repaired[key], schema.properties.request.properties[key]);
+  }
+});
+
+test("dangling repair leaves literal payloads alone", () => {
+  const schema = zillowRangeSchema();
+  const literal = { $ref: "#/$defs/MinMaxInt", $id: "literal", properties: { nested: { $ref: "#/$defs/MinMaxInt" } } };
+  schema.properties.request.default = literal;
+  schema.properties.request.examples = [literal];
+  const repaired = inlineDanglingNestedDefsRefs(schema);
+  assert.notEqual(repaired, schema);
+  assert.equal(repaired.properties.request.default, literal);
+  assert.equal(repaired.properties.request.examples[0], literal);
+});
+
+test("dangling repair rolls back cycles and expansion, size, and depth limits", () => {
+  for (const defs of [
+    { A: { $ref: "#/$defs/A" } },
+    { A: { $ref: "#/$defs/B" }, B: { $ref: "#/$defs/A" } },
+    { A: { properties: { next: { $ref: "#/$defs/A" } } } },
+  ]) {
+    const schema = { properties: { request: { $defs: defs, properties: { value: { $ref: "#/$defs/A" } } } } };
+    assert.equal(inlineDanglingNestedDefsRefs(schema), schema);
+  }
+  const expanded = zillowRangeSchema();
+  expanded.properties.request.properties = Object.fromEntries(
+    Array.from({ length: 513 }, (_, i) => [`value${i}`, { $ref: "#/$defs/MinMaxInt" }]),
+  );
+  assert.equal(inlineDanglingNestedDefsRefs(expanded), expanded);
+  const large = zillowRangeSchema();
+  large.properties.request.$defs.MinMaxInt.description = "x".repeat(256 * 1024);
+  assert.equal(inlineDanglingNestedDefsRefs(large), large);
+  const deep = zillowRangeSchema();
+  let node = deep;
+  for (let i = 0; i < 40; i += 1) node = node.items = {};
+  assert.equal(inlineDanglingNestedDefsRefs(deep), deep);
 });
 
 test("a $defs ref with sibling keywords is inlined for Moonshot", () => {

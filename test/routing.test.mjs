@@ -23,6 +23,7 @@ import {
   LEGACY_V1_SUMMARY_PREFIX,
 } from "../src/compaction-checkpoint.mjs";
 import { openPort } from "./port-pool.mjs";
+import { preservedGeminiSchemas, zillowRangeSchema } from "./fixtures/gemini-tool-schemas.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const INTERNAL_KEY = "test-internal-service-key-with-sufficient-length";
@@ -3772,12 +3773,26 @@ test("API forwarder fills only missing Gemini thought signatures", async () => {
   }
 });
 
-test("API forwarder inlines Gemini property refs that Google treats as undefined schemas", async () => {
+test("API forwarder repairs observed Gemini dangling defs and preserves valid schemas", async () => {
   const upstreamRequests = [];
+  const failureMessage = "reference to undefined schema at properties.request.properties.propertyFiltersRequest.properties.bedrooms";
   const upstream = await mockServer(async (request, response) => {
-    upstreamRequests.push(await bodyJson(request));
+    const body = await bodyJson(request);
+    upstreamRequests.push(body);
+    const bedrooms = body.tools[0].function.parameters.properties.request.properties.propertyFiltersRequest.properties.bedrooms;
+    // Model the recorded rejection, not the full Gemini schema validator.
+    if (bedrooms.$ref) {
+      json(response, 400, { error: { code: 400, message: failureMessage, status: "INVALID_ARGUMENT" } });
+      return;
+    }
     json(response, 200, { choices: [] });
   });
+  const parameters = zillowRangeSchema();
+  const preserved = preservedGeminiSchemas();
+  const tools = [
+    { type: "function", function: { name: "property_search", parameters } },
+    ...preserved.map(({ name, schema }) => ({ type: "function", function: { name, parameters: schema } })),
+  ];
   const curated = curatedGeminiModel();
   const forwarderPort = await openPort();
   const forwarder = run("api-forwarder.mjs", {
@@ -3789,6 +3804,13 @@ test("API forwarder inlines Gemini property refs that Google treats as undefined
   });
 
   try {
+    const baseline = await fetch(`http://127.0.0.1:${upstream.port}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tools }),
+    });
+    assert.equal(baseline.status, 400);
+    assert.equal((await baseline.json()).error.message, failureMessage);
     await waitFor(`http://127.0.0.1:${forwarderPort}/health`, forwarder, {
       Authorization: `Bearer ${INTERNAL_KEY}`,
     });
@@ -3801,58 +3823,20 @@ test("API forwarder inlines Gemini property refs that Google treats as undefined
       body: JSON.stringify({
         model: curated.gatewayModel,
         messages: [{ role: "user", content: "find a home" }],
-        tools: [
-          {
-            type: "function",
-            function: {
-              name: "property_search",
-              parameters: {
-                type: "object",
-                properties: {
-                  request: {
-                    $defs: {
-                      MinMaxInt: {
-                        type: "object",
-                        properties: {
-                          min: { type: "integer" },
-                          max: { type: "integer" },
-                        },
-                      },
-                    },
-                    type: "object",
-                    properties: {
-                      propertyFiltersRequest: {
-                        type: "object",
-                        properties: {
-                          bedrooms: {
-                            $ref: "#/$defs/MinMaxInt",
-                            description: "Bedrooms range filter",
-                          },
-                        },
-                      },
-                    },
-                  },
-                },
-              },
-            },
-          },
-        ],
+        tools,
       }),
     });
     assert.equal(response.status, 200);
-    const parameters = upstreamRequests[0].tools[0].function.parameters;
-    assert.equal(parameters.properties.request.properties.propertyFiltersRequest.properties.bedrooms.$ref, undefined);
+    const forwarded = upstreamRequests[1].tools[0].function.parameters;
+    assert.equal(forwarded.properties.request.properties.propertyFiltersRequest.properties.bedrooms.$ref, undefined);
     assert.deepEqual(
-      parameters.properties.request.properties.propertyFiltersRequest.properties.bedrooms,
+      forwarded.properties.request.properties.propertyFiltersRequest.properties.bedrooms,
       {
-        type: "object",
-        properties: {
-          min: { type: "integer" },
-          max: { type: "integer" },
-        },
-        description: "Bedrooms range filter",
+        ...parameters.properties.request.$defs.MinMaxInt,
+        description: parameters.properties.request.properties.propertyFiltersRequest.properties.bedrooms.description,
       },
     );
+    assert.deepEqual(upstreamRequests[1].tools.slice(1), tools.slice(1));
   } finally {
     await stopChild(forwarder);
     await closeServer(upstream.server);
@@ -3860,8 +3844,40 @@ test("API forwarder inlines Gemini property refs that Google treats as undefined
   }
 });
 
-test("API forwarder leaves non-Gemini tool calls unsigned", async () => {
+test("Gemini model names on other providers do not enable the schema repair", async () => {
+  const requests = [];
+  const upstream = await mockServer(async (request, response) => {
+    requests.push(await bodyJson(request));
+    json(response, 200, { choices: [] });
+  });
+  const port = await openPort();
+  const forwarder = run("api-forwarder.mjs", {
+    CODEX_ROUTER_API_PORT: String(port),
+    OPENROUTER_API_BASE_URL: `http://127.0.0.1:${upstream.port}/v1`,
+    OPENROUTER_API_KEY: "TEST_OPENROUTER_API_KEY",
+    KIMI_PROXY_QUIET: "1",
+  });
+  const tools = [{ type: "function", function: { name: "property_search", parameters: zillowRangeSchema() } }];
+  try {
+    await waitFor(`http://127.0.0.1:${port}/health`, forwarder, {
+      Authorization: `Bearer ${INTERNAL_KEY}`,
+    });
+    const response = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${INTERNAL_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "openrouter-gemini-3-8-flash", messages: [{ role: "user", content: "test" }], tools }),
+    });
+    assert.equal(response.status, 200);
+    assert.deepEqual(requests[0].tools, tools);
+  } finally {
+    await stopChild(forwarder);
+    await closeServer(upstream.server);
+  }
+});
+
+test("API forwarder leaves non-Gemini tool calls unsigned and schemas unchanged", async () => {
   const upstreamRequests = [];
+  const tools = [{ type: "function", function: { name: "a", parameters: zillowRangeSchema() } }];
   const upstream = await mockServer(async (request, response) => {
     upstreamRequests.push(await bodyJson(request));
     json(response, 200, { choices: [] });
@@ -3886,6 +3902,7 @@ test("API forwarder leaves non-Gemini tool calls unsigned", async () => {
       },
       body: JSON.stringify({
         model: "kimi-api-k3",
+        tools,
         messages: [
           { role: "user", content: "test" },
           {
@@ -3904,6 +3921,7 @@ test("API forwarder leaves non-Gemini tool calls unsigned", async () => {
     ).tool_calls;
     assert.equal(call.thought_signature, undefined);
     assert.equal(call.extra_content, undefined);
+    assert.deepEqual(upstreamRequests[0].tools, tools);
   } finally {
     await stopChild(forwarder);
     await closeServer(upstream.server);

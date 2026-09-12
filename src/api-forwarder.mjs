@@ -77,7 +77,6 @@ import {
 } from "./provider-api-key-pool.mjs";
 import {
   inlineDanglingNestedDefsRefs,
-  inlineForeignRefs,
   nonRecursiveToolSchema,
   stripCodexEncryptedSchemaAnnotation,
 } from "./tool-schema-root.mjs";
@@ -395,28 +394,19 @@ function stripEncryptedToolSchemaAnnotations(payload, protocol) {
   if (changed) payload.tools = tools;
 }
 
-// Google's OpenAI-compatible endpoint resolves local JSON-Schema references
-// as definitions, even when the pointer targets an ordinary schema property.
-// Codex connector tools use those property pointers to share nested shapes;
-// Gemini rejects the whole request as an undefined schema before generation.
-// Inline only those foreign pointers. Standard #/$defs references and schemas
-// without a foreign pointer retain their exact wire representation.
-function inlineGeminiToolSchemaRefs(payload, protocol) {
+// The direct Gemini API rejected Zillow's bedrooms schema: its root $defs
+// pointer names a definition stored under request instead. Repair only that
+// malformed-reference class; ordinary property and valid root refs stay intact.
+function inlineGeminiToolSchemaRefs(payload) {
   if (!Array.isArray(payload.tools)) return;
   let changed = false;
   const tools = payload.tools.map((tool) => {
     if (!tool || typeof tool !== "object" || Array.isArray(tool) || tool.type !== "function") {
       return tool;
     }
-    if (protocol === "openai-responses") {
-      const repaired = inlineDanglingNestedDefsRefs(inlineForeignRefs(tool.parameters));
-      if (repaired === tool.parameters) return tool;
-      changed = true;
-      return { ...tool, parameters: repaired };
-    }
     const fn = tool.function;
     if (!fn || typeof fn !== "object" || Array.isArray(fn)) return tool;
-    const repaired = inlineDanglingNestedDefsRefs(inlineForeignRefs(fn.parameters));
+    const repaired = inlineDanglingNestedDefsRefs(fn.parameters);
     if (repaired === fn.parameters) return tool;
     changed = true;
     return { ...tool, function: { ...fn, parameters: repaired } };
@@ -892,8 +882,8 @@ function normalizeBody(buffer, contentType, route) {
   if (model.requestProfile === "codex-encrypted-schema") {
     stripEncryptedToolSchemaAnnotations(payload, provider.protocol);
   }
-  if (isGeminiProvider(provider, model)) {
-    inlineGeminiToolSchemaRefs(payload, provider.protocol);
+  if (provider.id === "gemini-api") {
+    inlineGeminiToolSchemaRefs(payload);
   }
   // Deliberately its own statement rather than a branch of the profile chain
   // below: this is an upstream limitation, and every route that has it also
