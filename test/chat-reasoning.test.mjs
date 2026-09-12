@@ -8,6 +8,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { nativeReasoningFamily, usesNativeChatReasoning } from "../src/chat-reasoning.mjs";
+import { MODEL_BY_SLUG } from "../src/model-registry.mjs";
 import { childOutput, waitForListeners } from "./listener-readiness.mjs";
 
 test("native chat reasoning stays scoped to established history contracts", () => {
@@ -21,7 +22,10 @@ test("native chat reasoning stays scoped to established history contracts", () =
   }), true);
   for (const model of [
     undefined,
-    { provider: "deepseek", requestProfile: "deepseek-nonthinking" },
+    // With no `upstreamModel` this asserted nothing: String(undefined ?? "")
+    // matches no family, so it passed whether or not the alias was swept in.
+    // `deepseek-chat` is the real shipped id, and it ships thinking disabled.
+    { provider: "deepseek", upstreamModel: "deepseek-chat", requestProfile: "deepseek-nonthinking" },
     { provider: "custom", upstreamModel: "deepseek/deepseek-v4-flash" },
     // Non-thinking Kimi stays out: k2.6 does not preserve thinking, and no
     // reseller route for k2.7 was probed.
@@ -39,6 +43,41 @@ test("native chat reasoning stays scoped to established history contracts", () =
   ]) {
     assert.equal(usesNativeChatReasoning(model), false, JSON.stringify(model));
   }
+});
+
+
+// Hand-built objects cannot catch a family that accidentally matches a route
+// nobody listed. `deepseek-chat` slipped past exactly that way: the negative
+// above omitted `upstreamModel`, so it asserted nothing, and an unanchored
+// /(^|\/)deepseek/i swept in a non-thinking alias. This sweeps the real
+// catalog instead, so the next accidental match fails here.
+test("no shipped route enters the contract without thinking evidence", () => {
+  const THINKING_PROFILES = new Set([
+    "glm-thinking", "deepseek-thinking", "hy4-reasoning",
+  ]);
+  let checked = 0;
+  for (const [slug, model] of MODEL_BY_SLUG) {
+    if (!usesNativeChatReasoning(model)) continue;
+    checked += 1;
+
+    // A route in the contract is there because its profile says it thinks, or
+    // because its upstream model is in the family table, or because it is the
+    // legacy Command Code DeepSeek Flash special case. Nothing else.
+    const byProfile = THINKING_PROFILES.has(model.requestProfile);
+    const byFamily = nativeReasoningFamily(model) !== undefined;
+    const legacy =
+      model.provider === "commandcode" &&
+      model.upstreamModel === "deepseek/deepseek-v4-flash";
+    assert.ok(byProfile || byFamily || legacy, `${slug} replays reasoning with no stated evidence`);
+
+    // A profile that disables thinking must never be in the contract, however
+    // its upstream id is spelled.
+    assert.ok(
+      !/-nonthinking$/.test(model.requestProfile ?? ""),
+      `${slug} disables thinking yet replays reasoning_content`,
+    );
+  }
+  assert.ok(checked > 0, "expected shipped routes in the native reasoning contract");
 });
 
 // The rule belongs to the upstream model, so the same family is recognised

@@ -21,7 +21,14 @@
 const NATIVE_REASONING_FAMILIES = [
   // DeepSeek: the API answers the turn after any reply with HTTP 400 "The
   // `reasoning_content` in the thinking mode must be passed back" (#703).
-  { family: "deepseek", upstream: /(^|\/)deepseek/i },
+  // Anchored to the thinking lines -- `deepseek-reasoner`, `deepseek-flash`
+  // and every `deepseek-v<n>` -- so the non-thinking `deepseek-chat` alias
+  // stays out. A bare `/(^|\/)deepseek/i` swept it in, and that route ships
+  // `thinking: {type: "disabled"}`: the request would have said thinking off
+  // while replaying reasoning_content, the combination the #703 error is
+  // about. It also keeps a future non-reasoning id (deepseek-ocr, -coder,
+  // -vl) from entering the contract without the evidence this table requires.
+  { family: "deepseek", upstream: /(^|\/)deepseek-(v\d|reasoner|flash)/i },
   // Z.ai GLM-5.x: with preserved thinking the vendor requires the full
   // historical reasoning_content replayed; every reseller route here answered
   // a live probe with a reasoning item (12 September 2026).
@@ -62,6 +69,12 @@ export function nativeReasoningFamily(model) {
 }
 
 export function usesNativeChatReasoning(model) {
+  // A profile that switches thinking off is never asked to replay reasoning,
+  // whatever its id looks like. The table is matched against `upstreamModel`,
+  // which also reaches here from discovered and user-added models that no
+  // catalog review has seen, so this guard is what keeps a hand-written entry
+  // from opting a non-thinking route into the contract.
+  if (model?.requestProfile === "deepseek-nonthinking") return false;
   return (
     model?.requestProfile === "glm-thinking" ||
     model?.requestProfile === "deepseek-thinking" ||
