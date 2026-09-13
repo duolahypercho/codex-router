@@ -395,11 +395,31 @@ function rememberStreamIndex(state, key, index) {
   return true;
 }
 
+// A keep-alive carries no Responses semantics. OpenCode Go and Zen close every
+// stream with `event: ping` / `{"type":"ping","cost":"0"}` *after*
+// `response.completed`; treating it as post-terminal data appended
+// `invalid_responses_stream` to every completed turn, which LiteLLM re-raised
+// as "Response API in-stream error". Codex ignores bytes after a terminal
+// event; opencode's AI SDK and pi validate them and failed the turn.
+function keepAliveFrame(frame, data) {
+  return frame.event === "ping" || (data && typeof data === "object" && data.type === "ping");
+}
+
 function normalizeResponsesEvent(frame, state, flatToNative) {
+  // An SSE comment, or a frame with no data line and no event, is not an event
+  // and is not forwarded. It is still proof the upstream was talking, so a
+  // stream that ends before its terminal event is still reported by `flush`.
+  if (frame.data === "" && !frame.event) {
+    state.sawEvent = true;
+    return "";
+  }
   const data = frameData(frame);
   state.sawEvent = true;
   if (state.invalid) return "";
   if (state.terminal && data !== "[DONE]") {
+    // Real data after the terminal event is still refused. Only a keep-alive,
+    // which cannot change a finished response, is dropped.
+    if (keepAliveFrame(frame, data)) return "";
     return invalidStream(state, "The Responses stream emitted data after its terminal event.");
   }
   if (frame.event === "error") state.terminal = true;

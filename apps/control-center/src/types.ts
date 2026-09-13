@@ -637,13 +637,37 @@ export interface OperationEvent {
   error?: string;
 }
 
-export type HarnessId = "codex" | "dsh" | "gemini" | "cursor" | "claude" | "openclaw";
+export type HarnessId =
+  | "codex"
+  | "dsh"
+  | "gemini"
+  | "cursor"
+  | "claude"
+  | "openclaw"
+  // Document-configured harnesses: published into rather than installed as.
+  // See `src/routed-harness-catalog.mjs`.
+  | "opencode"
+  | "pi"
+  | "omp"
+  | "commandcode"
+  | "hermes";
 export type HarnessSurface = "app" | "terminal";
 
 export interface HarnessDescriptor {
   id: HarnessId;
   displayName: string;
-  ownership: "openai" | "deepseek" | "google" | "cursor" | "anthropic" | "openclaw";
+  ownership:
+    | "openai"
+    | "deepseek"
+    | "google"
+    | "cursor"
+    | "anthropic"
+    | "openclaw"
+    | "opencode"
+    | "pi"
+    | "omp"
+    | "commandcode"
+    | "nousresearch";
   description: string;
   cliInstalled: boolean;
   cliVersion?: string;
@@ -651,6 +675,10 @@ export interface HarnessDescriptor {
   configured: boolean;
   canInstall: boolean;
   installRequirement?: string;
+  /** Whether this client is installed and has an updater this router can run. */
+  canUpdate?: boolean;
+  /** The command an update would run, e.g. `opencode upgrade`. */
+  updateCommand?: string;
   publicOrigin?: string;
   agentConfigured?: boolean;
   appConfigured?: boolean;
@@ -722,6 +750,11 @@ export interface ContextSessionsSnapshot {
     claude: number;
     gemini: number;
     openclaw: number;
+    opencode: number;
+    pi: number;
+    omp: number;
+    commandcode: number;
+    hermes: number;
     archived: number;
   };
 }
@@ -803,6 +836,8 @@ export interface RouterControlApi {
   probeAgentBridge(bridgeId: AgentBridgeId): Promise<unknown>;
   loginAgentBridge(bridgeId: AgentBridgeId): Promise<unknown>;
   setupHarness(harnessId: HarnessId, hostname?: string): Promise<unknown>;
+  /** Move one routed client, or every installed one ("all"), to its latest release. */
+  updateHarness(harnessId: HarnessId | "all"): Promise<unknown>;
   prepareCursorTunnel(): Promise<unknown>;
   connectCursor(hostname?: string): Promise<unknown>;
   openHarnessSession(harnessId: HarnessId, sessionId: string, surface: HarnessSurface, model?: string): Promise<unknown>;

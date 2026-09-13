@@ -188,6 +188,36 @@ test("Responses stream rejects unknown, conflicting, and post-terminal tool indi
   assert.match(afterTerminal.at(-1).data.message, /after its terminal/);
 });
 
+test("Responses stream drops a keep-alive after the terminal event instead of failing the turn", async () => {
+  // OpenCode Go and Zen send exactly this `ping` after every response.completed.
+  // Turning it into an error appended a gateway failure to completed turns,
+  // which strict Responses clients (opencode's AI SDK, pi) reject.
+  const output = frames(await transformText(createResponsesStreamTransform(), [
+    "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp-6\"}}\n\n",
+    ": keep-alive\n\n",
+    "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-6\",\"status\":\"completed\"}}\n\n",
+    "event: ping\ndata: {\"type\":\"ping\",\"cost\":\"0\"}\n\n",
+    ": trailing comment\n\n",
+    "data: [DONE]\n\n",
+  ]));
+  assert.deepEqual(
+    output.map((frame) => frame.data?.type ?? frame.data),
+    ["response.created", "response.completed", "[DONE]"],
+  );
+  assert.equal(output.some((frame) => frame.event === "error"), false);
+});
+
+test("a stream of nothing but keep-alives still reports an incomplete stream", async () => {
+  // Comments are not forwarded, but they are proof the upstream was talking.
+  // Swallowing them silently would turn a stream that died before its terminal
+  // event into an empty, error-free turn.
+  const output = frames(await transformText(createResponsesStreamTransform(), [
+    ": keep-alive\n\n",
+  ]));
+  assert.equal(output.at(-1).event, "error");
+  assert.equal(output.at(-1).data.code, "upstream_stream_incomplete");
+});
+
 test("Responses provider errors stay structured and do not gain a second terminal frame", async () => {
   const output = frames(await transformText(createResponsesStreamTransform(), [
     "event: error\ndata: {\"type\":\"error\",\"code\":\"provider_failed\",\"message\":\"upstream rejected\"}\n\n",

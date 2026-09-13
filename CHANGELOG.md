@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+- **Routed coding clients can be kept current from the Harness page.**
+  `control client-update <id>` and `control client-update --all`, plus an
+  **Update** button on each row and **Update all** in the header, move
+  opencode, pi, Command Code, and Hermes Agent to their latest release. Each
+  runs that client's own updater (`opencode upgrade`, `pi update --self`,
+  `command-code update`, `hermes update --yes`) rather than `npm install -g`,
+  so a CLI installed by Homebrew or a `curl | sh` script is updated in place
+  instead of gaining a second npm copy that may win or lose on PATH. omp ships
+  neither a package this router installs nor a self-update subcommand, so its
+  row prints the project's own three installs. Updating stays a separate,
+  explicit action: publishing a model list never changes a client's version.
+  `--all` skips clients that are not installed and reports each one instead of
+  stopping at the first failure.
+- **pi is installed from its maintained package.** The pi coding agent moved
+  from `@mariozechner/pi-coding-agent` (last published at 0.73.1) to
+  `@earendil-works/pi-coding-agent`. Setup installed the abandoned name, which
+  still installs and still answers `pi --version`, so the stale agent looked
+  healthy. pi's own `--ignore-scripts` install flag is used as well.
+- **Muse Spark Responses turns no longer end in a gateway error.** OpenCode Go
+  and Zen send `event: ping` (`{"type":"ping","cost":"0"}`) after every
+  `response.completed`. The API forwarder treated it as data after the terminal
+  event and appended `invalid_responses_stream`, which LiteLLM re-raised as
+  `Response API in-stream error` on every completed `opencode-go-responses` and
+  `opencode-free-responses` turn. Codex ignores bytes after a terminal event, so
+  it went unnoticed; opencode and pi validate them and failed every turn. A
+  keep-alive or SSE comment after the terminal event is now dropped; real data
+  after it is still refused.
 - **Reasoning from Chat Completions models now shows in Codex.** LiteLLM's
   Chat Completions to Responses bridge opens the assistant message first and
   streams the model's reasoning under a fresh hashed item id per delta, with no
@@ -323,6 +350,28 @@
   A native 401 is also preserved with a sanitized local error, allowing Codex's
   own ChatGPT authentication recovery to refresh the session and retry without
   exposing the upstream response body.
+- **Five more coding clients can be published to from the Harness page.**
+  opencode, pi, omp (oh-my-pi), Command Code, and Hermes Agent each keep their
+  providers in a configuration document the user also owns, so one shared
+  publisher (`src/routed-harness-*.mjs`) writes the single `codex-router`
+  provider key each of them reads and leaves every other byte alone.
+  **Set up** installs the client's CLI where this router can (updating a
+  Command Code older than 1.30.0, the first release that reads
+  `providers.json`) and publishes the whole routed catalog in one action; omp
+  and Hermes install from their own instructions first; `control client-setup <id>` and
+  `control client-disconnect <id>` are the same thing from a terminal. Clients
+  that speak the Responses API reach the authenticated loopback `/v1` path with
+  the router's own slugs; Command Code and Hermes, which have no Responses
+  client, reach the same Anthropic Messages surface Claude Code uses with
+  `codex_router/anthropic/<slug>` ids. Enabling a provider, storing a key, or
+  curating a model republishes all five alongside the existing clients, and a
+  caller-capability rotation refreshes them. YAML documents are spliced by line
+  range so comments and sibling providers survive; a JSON document the router
+  cannot round-trip is refused rather than reformatted; a `codex-router`
+  provider whose base URL this router did not issue is never replaced or
+  removed; and opencode's default model is claimed only when the user has not
+  chosen one. Devin CLI and T3 Code are deliberately not rows: Devin CLI has no
+  custom base URL, and T3 Code drives whichever official CLI is already routed.
 
 - **Command Code forced tool choices now use the same bounded alias as the tool definition.**
   The 64-character compatibility added in #643 shortened provider-facing tool names but
