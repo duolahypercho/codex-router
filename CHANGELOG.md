@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- **Thinking models behind resellers now get their reasoning replayed the way
+  their vendors require.** The replay contract was keyed on request profiles,
+  so `zai-coding/glm-5.3` replayed reasoning as `reasoning_content` while the
+  same GLM on opencode Go, OpenRouter, or Command Code -- and Kimi K3, Hy3,
+  MiniMax M3, DeepSeek there -- had it replayed as visible assistant text, the
+  shape that made Hy4 loop on its own progress notes. The contract is now
+  keyed on the upstream model family for Chat Completions resellers: DeepSeek
+  (the API 400s without it), GLM-5.x (Z.ai requires the history replayed with
+  preserved thinking), Kimi K3 (Moonshot requires it in tool loops), MiniMax
+  M3 (interleaved thinking), and Tencent Hy3/Hy4. Verified live on every
+  reachable route on opencode Go, OpenRouter, and Command Code; Anthropic
+  protocol variants and resellers that were not probed keep their existing
+  channel.
 - **Hy4 Preview no longer loops on its own progress notes mid-turn.** Its
   reasoning is now replayed to it the way DeepSeek's and GLM's already were --
   as `reasoning_content` on the assistant turn that produced it -- instead of

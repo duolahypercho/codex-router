@@ -7,30 +7,109 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { usesNativeChatReasoning } from "../src/chat-reasoning.mjs";
+import { nativeReasoningFamily, usesNativeChatReasoning } from "../src/chat-reasoning.mjs";
+import { MODEL_BY_SLUG } from "../src/model-registry.mjs";
 import { childOutput, waitForListeners } from "./listener-readiness.mjs";
 
 test("native chat reasoning stays scoped to established history contracts", () => {
   assert.equal(usesNativeChatReasoning({ requestProfile: "glm-thinking" }), true);
   assert.equal(usesNativeChatReasoning({ requestProfile: "deepseek-thinking" }), true);
   // Every hy4 route that thinks shares this profile (opencode-go, openrouter,
-  // nano-gpt, nousresearch); commandcode's own shim and clinepass do not.
+  // nano-gpt, nousresearch); clinepass does not.
   assert.equal(usesNativeChatReasoning({ requestProfile: "hy4-reasoning" }), true);
   assert.equal(usesNativeChatReasoning({
     provider: "commandcode", upstreamModel: "deepseek/deepseek-v4-flash",
   }), true);
   for (const model of [
     undefined,
-    { provider: "deepseek", requestProfile: "deepseek-nonthinking" },
-    { provider: "opencode-go", upstreamModel: "deepseek-v4-flash" },
+    // With no `upstreamModel` this asserted nothing: String(undefined ?? "")
+    // matches no family, so it passed whether or not the alias was swept in.
+    // `deepseek-chat` is the real shipped id, and it ships thinking disabled.
+    { provider: "deepseek", upstreamModel: "deepseek-chat", requestProfile: "deepseek-nonthinking" },
     { provider: "custom", upstreamModel: "deepseek/deepseek-v4-flash" },
+    // Non-thinking Kimi stays out: k2.6 does not preserve thinking, and no
+    // reseller route for k2.7 was probed.
     { provider: "commandcode", upstreamModel: "moonshotai/kimi-k2.6" },
+    { provider: "opencode-go", upstreamModel: "kimi-k2.6" },
+    { provider: "nousresearch", upstreamModel: "moonshotai/kimi-k2.7-code" },
+    // Anthropic-protocol variants carry reasoning as thinking blocks.
     { provider: "commandcode-messages", upstreamModel: "deepseek/deepseek-v4-flash" },
-    { provider: "commandcode", upstreamModel: "tencent/hy4-preview" },
+    { provider: "opencode-go-messages", upstreamModel: "MiniMax-M2.5" },
     { provider: "clinepass", requestProfile: "clinepass", upstreamModel: "tencent/hy4-preview" },
+    // Resellers that were never probed keep their existing channel.
+    { provider: "nousresearch", upstreamModel: "z-ai/glm-5.3" },
+    { provider: "venice", upstreamModel: "glm-5.3" },
+    { provider: "qwen-plan", requestProfile: "qwen-plan", upstreamModel: "qwen3.8-max" },
   ]) {
-    assert.equal(usesNativeChatReasoning(model), false);
+    assert.equal(usesNativeChatReasoning(model), false, JSON.stringify(model));
   }
+});
+
+
+// Hand-built objects cannot catch a family that accidentally matches a route
+// nobody listed. `deepseek-chat` slipped past exactly that way: the negative
+// above omitted `upstreamModel`, so it asserted nothing, and an unanchored
+// /(^|\/)deepseek/i swept in a non-thinking alias. This sweeps the real
+// catalog instead, so the next accidental match fails here.
+test("no shipped route enters the contract without thinking evidence", () => {
+  const THINKING_PROFILES = new Set([
+    "glm-thinking", "deepseek-thinking", "hy4-reasoning",
+  ]);
+  let checked = 0;
+  for (const [slug, model] of MODEL_BY_SLUG) {
+    if (!usesNativeChatReasoning(model)) continue;
+    checked += 1;
+
+    // A route in the contract is there because its profile says it thinks, or
+    // because its upstream model is in the family table, or because it is the
+    // legacy Command Code DeepSeek Flash special case. Nothing else.
+    const byProfile = THINKING_PROFILES.has(model.requestProfile);
+    const byFamily = nativeReasoningFamily(model) !== undefined;
+    const legacy =
+      model.provider === "commandcode" &&
+      model.upstreamModel === "deepseek/deepseek-v4-flash";
+    assert.ok(byProfile || byFamily || legacy, `${slug} replays reasoning with no stated evidence`);
+
+    // A profile that disables thinking must never be in the contract, however
+    // its upstream id is spelled.
+    assert.ok(
+      !/-nonthinking$/.test(model.requestProfile ?? ""),
+      `${slug} disables thinking yet replays reasoning_content`,
+    );
+  }
+  assert.ok(checked > 0, "expected shipped routes in the native reasoning contract");
+});
+
+// The rule belongs to the upstream model, so the same family is recognised
+// with or without a vendor prefix and whatever request profile the reseller
+// route happens to carry. Every positive here answered a live single-turn
+// probe with a reasoning item on 12 September 2026.
+test("thinking families behind Chat Completions resellers replay reasoning natively", () => {
+  const positives = [
+    ["deepseek", { provider: "opencode-go", upstreamModel: "deepseek-v4.1-flash", requestProfile: "auto-tool-choice" }],
+    ["deepseek", { provider: "openrouter", upstreamModel: "deepseek/deepseek-v4.1-flash", requestProfile: "auto-tool-choice" }],
+    ["deepseek", { provider: "commandcode", upstreamModel: "deepseek/deepseek-v4-pro" }],
+    ["glm", { provider: "opencode-go", upstreamModel: "glm-5.2" }],
+    ["glm", { provider: "opencode-go", upstreamModel: "glm-5.3-flash", requestProfile: "ox-alpha" }],
+    ["glm", { provider: "openrouter", upstreamModel: "z-ai/glm-5.3" }],
+    ["glm", { provider: "commandcode", upstreamModel: "zai-org/GLM-5.3" }],
+    ["kimi-k3", { provider: "opencode-go", upstreamModel: "kimi-k3", requestProfile: "kimi-k3" }],
+    ["kimi-k3", { provider: "commandcode", upstreamModel: "moonshotai/Kimi-K3", requestProfile: "kimi-k3" }],
+    ["kimi-k3", { provider: "kimi-api", upstreamModel: "kimi-k3", requestProfile: "kimi-k3" }],
+    ["minimax-m3", { provider: "minimax-token-plan", upstreamModel: "MiniMax-M3", requestProfile: "minimax-m3" }],
+    ["hunyuan", { provider: "opencode-go", upstreamModel: "hy3" }],
+    ["hunyuan", { provider: "commandcode", upstreamModel: "tencent/hy3-paid" }],
+    ["hunyuan", { provider: "commandcode", upstreamModel: "tencent/hy4-preview" }],
+  ];
+  for (const [family, model] of positives) {
+    assert.equal(nativeReasoningFamily(model), family, JSON.stringify(model));
+    assert.equal(usesNativeChatReasoning(model), true, JSON.stringify(model));
+  }
+  // A family match on a provider outside the table is not enough.
+  assert.equal(nativeReasoningFamily({ provider: "nousresearch", upstreamModel: "deepseek/deepseek-v4-pro" }), undefined);
+  // A prefix that merely contains the family name is not the family.
+  assert.equal(nativeReasoningFamily({ provider: "opencode-go", upstreamModel: "not-glm-5" }), undefined);
+  assert.equal(nativeReasoningFamily({ provider: "opencode-go", upstreamModel: "kimi-k3-mini" }), undefined);
 });
 
 // Optional, offline integration with the installed version pinned in requirements/python.txt.

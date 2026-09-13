@@ -7,6 +7,7 @@ import {
   LeakedToolCallRecovery,
   leakedToolCallRecoveryTransform,
   parseLeakedToolCalls,
+  usesLeakedToolCallRecovery,
 } from "../src/leaked-tool-call-recovery.mjs";
 
 const N = "6124c78e";
@@ -115,6 +116,36 @@ test("text without the markup is left exactly alone", () => {
   assert.equal(parseLeakedToolCalls("a < b and c > d"), undefined);
   assert.equal(parseLeakedToolCalls(""), undefined);
   assert.equal(parseLeakedToolCalls(undefined), undefined);
+});
+
+test("a long whitespace run after the span is trimmed in linear time", () => {
+  // The trailing-gap trim used to be /\s+$/, which backtracks from every start
+  // offset of a whitespace run that is not at end of string. This path is
+  // reached from the `.done` snapshot and stored-item channels, whose text
+  // MAX_CAPTURE_BYTES does not bound, and `_transform` is synchronous -- so the
+  // whole router stalls. Measured on the pre-fix code: 200 KB of padding blocked
+  // for 15 s, 400 KB for 55 s.
+  //
+  // This asserts an absolute elapsed bound, which the note against wall-clock
+  // tests in this file does not cover: that warning is about *ratio* tests,
+  // where a loaded machine slows the control run as much as the measured one.
+  // Here the two implementations differ by roughly six orders of magnitude
+  // (0.1 ms vs 55_000 ms), so a 2 s ceiling has a ~20_000x margin over the fix
+  // and still fails the regression on any machine. A `{ timeout }` option would
+  // not work: the blocking is synchronous, so the runner's timer never fires.
+  const padded = `${LIVE_REASONING.trimEnd()}${" ".repeat(400_000)}z`;
+  const startedAt = process.hrtime.bigint();
+  const parsed = parseLeakedToolCalls(padded);
+  const elapsedMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
+
+  assert.equal(parsed.calls.length, 2);
+  // The `z` is not whitespace, so nothing is trimmed and the padding survives.
+  assert.equal(parsed.cleaned.endsWith(`${" ".repeat(400_000)}z`), true);
+  assert.ok(elapsedMs < 2_000, `trailing trim took ${elapsedMs.toFixed(0)}ms`);
+
+  // And the ordinary case still trims the gap the markup left behind.
+  const trailing = parseLeakedToolCalls(`${LIVE_REASONING.trimEnd()}\n\n\t  `);
+  assert.equal(trailing.cleaned.endsWith("comes up."), true);
 });
 
 test("malformed markup is never eaten", () => {
@@ -458,4 +489,91 @@ test("a stream that ends without a terminal event still hands over its calls", a
   });
   const { body } = await run(stream);
   assert.equal(functionCalls(body).length, 2);
+});
+
+test("recovery is offered to Hy4 routes and to nothing else", () => {
+  // This markup is Hy4's own tool-call syntax. Scanning every routed provider's
+  // text for it would make prose that merely *quotes* it -- a diff, a web page,
+  // this repository's own source -- into executed tool calls.
+  for (const upstreamModel of ["hy4-preview", "tencent/hy4-preview"]) {
+    assert.equal(usesLeakedToolCallRecovery({ upstreamModel }), true, upstreamModel);
+  }
+  for (const route of [
+    null,
+    undefined,
+    {},
+    { upstreamModel: "glm-5.3" },
+    { upstreamModel: "deepseek-v4-flash" },
+    { upstreamModel: "grok-4.6" },
+    { upstreamModel: "moonshotai/kimi-k2.6" },
+    { upstreamModel: "evil-hy4-preview-x" },
+    { upstreamModel: "hy4-preview-turbo" },
+  ]) {
+    assert.equal(usesLeakedToolCallRecovery(route), false, JSON.stringify(route));
+  }
+});
+
+test("one item's calls are recovered once even when both channels carry the span", async () => {
+  // `summary` and `content` are two renderings of one item's thinking. Sharing
+  // a span stream between them made the second reading look like a genuine
+  // extension of the first, and the call was recovered -- and executed -- twice.
+  const both =
+    block({ type: "response.reasoning_summary_text.delta", output_index: 0, delta: LIVE_REASONING }) +
+    block({ type: "response.reasoning_text.delta", output_index: 0, delta: LIVE_REASONING }) +
+    block({ type: "response.completed", response: { id: "r", output: [] } });
+  assert.equal(functionCalls((await run(both)).body).length, 2);
+
+  const storedBoth =
+    block({
+      type: "response.output_item.done",
+      output_index: 0,
+      item: {
+        type: "reasoning",
+        summary: [{ type: "summary_text", text: LIVE_REASONING }],
+        content: [{ type: "reasoning_text", text: LIVE_REASONING }],
+      },
+    }) +
+    block({ type: "response.completed", response: { id: "r", output: [] } });
+  assert.equal(functionCalls((await run(storedBoth)).body).length, 2);
+});
+
+test("an unterminated span gives up at the bound instead of buffering forever", async () => {
+  // The capture is held unjoined and scanned once per delta with a closing-tag
+  // overlap, because `_transform` is synchronous and re-scanning one growing
+  // string re-flattened the rope every delta: 1.25 MB cost 29.5 s of blocked
+  // event loop against 1.1 s for the same bytes with no span open. That is a
+  // throughput property and is deliberately not asserted by wall clock here --
+  // a timing threshold measures machine load, not the algorithm. What is
+  // asserted is the behaviour at the 4 MiB bound, which the rewrite preserves.
+  const chunk = "x".repeat(4096);
+  let stream = block({ type: "response.created", response: { id: "r" } }) +
+    block({ type: "response.reasoning_text.delta", output_index: 0, delta: `<tool_calls:${N}>` });
+  for (let sent = 0; sent < 5 * 1024 * 1024; sent += chunk.length) {
+    stream += block({ type: "response.reasoning_text.delta", output_index: 0, delta: chunk });
+  }
+  stream += block({ type: "response.completed", response: { id: "r", output: [] } });
+  const { body } = await run(stream);
+  // Never closed: nothing is recovered, and past the bound the held text is
+  // released verbatim rather than buffered without limit.
+  assert.equal(functionCalls(body).length, 0);
+  assert.ok(body.includes(`<tool_calls:${N}>`), "the unrecognized span is relayed, not swallowed");
+});
+
+test("a closing tag split across two deltas is still found", async () => {
+  // The scan keeps a closeTag-length overlap precisely for this.
+  const closeTag = `</tool_calls:${N}>`;
+  for (const cut of [1, 5, closeTag.length - 1]) {
+    const span = `<tool_calls:${N}><tool_call:${N}>exec_command` +
+      `<arg_key:${N}>cmd</arg_key:${N}><arg_value:${N}>ls</arg_value:${N}>` +
+      `</tool_call:${N}>`;
+    const whole = span + closeTag;
+    const at = whole.length - closeTag.length + cut;
+    const stream =
+      block({ type: "response.created", response: { id: "r" } }) +
+      block({ type: "response.reasoning_text.delta", output_index: 0, delta: whole.slice(0, at) }) +
+      block({ type: "response.reasoning_text.delta", output_index: 0, delta: whole.slice(at) }) +
+      block({ type: "response.completed", response: { id: "r", output: [] } });
+    const { body } = await run(stream);
+    assert.equal(functionCalls(body).length, 1, `split at ${cut}`);
+  }
 });

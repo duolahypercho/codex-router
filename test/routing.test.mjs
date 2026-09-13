@@ -5919,7 +5919,16 @@ test("API forwarder routes GLM coding-plan models with thinking enabled", async 
   }
 });
 
-["zai-coding-glm-5-3", "deepseek-v4-flash", "commandcode-deepseek-v4-flash", "opencode-go-hy4-preview"].forEach((gatewayModel) => test(`API forwarder restores ${gatewayModel} thinking as native reasoning_content`, async () => {
+[
+  "zai-coding-glm-5-3",
+  "deepseek-v4-flash",
+  "commandcode-deepseek-v4-flash",
+  "opencode-go-hy4-preview",
+  // Reseller routes keyed on the upstream family rather than a profile.
+  "opencode-go-glm-5-3",
+  "opencode-go-kimi-k3",
+  "commandcode-kimi-k3",
+].forEach((gatewayModel) => test(`API forwarder restores ${gatewayModel} thinking as native reasoning_content`, async () => {
   const upstreamRequests = [];
   const upstream = await mockServer(async (request, response) => {
     upstreamRequests.push({ url: request.url, headers: request.headers, body: await bodyJson(request) });
@@ -5979,10 +5988,11 @@ test("API forwarder routes GLM coding-plan models with thinking enabled", async 
       assert.deepEqual(request.thinking, { type: "enabled", clear_thinking: false });
     } else if (gatewayModel === "deepseek-v4-flash") {
       assert.deepEqual(request.thinking, { type: "enabled" });
-    } else if (gatewayModel === "opencode-go-hy4-preview") {
-      // Hy4 has no thinking parameter of its own; the history contract alone
-      // must restore reasoning_content without inventing one. (Rollout
-      // 01a0928e, 12 September 2026: replayed as text, the model looped.)
+    } else if (gatewayModel.startsWith("opencode-go-")) {
+      // These routes have no thinking parameter of their own; the history
+      // contract alone must restore reasoning_content without inventing one.
+      // (Hy4, rollout 01a0928e, 12 September 2026: replayed as text, the
+      // model looped.)
       assert.ok(upstreamRequests[0].url.endsWith("/chat/completions"));
       assert.equal(request.thinking, undefined);
     } else {
