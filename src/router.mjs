@@ -62,7 +62,7 @@ import {
   ZaiResponsesCompatTransform,
   zaiResponsesCompatTransform,
 } from "./zai-responses-compat.mjs";
-import { grokReasoningSummaryCompatTransform } from "./grok-reasoning-summary-compat.mjs";
+import { reasoningSummaryCompatTransform } from "./grok-reasoning-summary-compat.mjs";
 import { earlyToolItemDoneTransform } from "./early-tool-item-done.mjs";
 import {
   applyGrokEditFacade,
@@ -4384,13 +4384,15 @@ async function handleResponses(request, response, requestUrl) {
         envelopeCompat = new ZaiResponsesCompatTransform();
       }
       if (envelopeCompat) transforms.push(envelopeCompat);
-      const grokReasoningSummaryCompat = route
-        ? grokReasoningSummaryCompatTransform(providerForModel(route), contentType)
+      // LiteLLM's Chat Completions bridge streams reasoning under hashed
+      // per-delta ids that Codex drops; rebuild one reasoning item. Grok OAuth
+      // also normalizes gateway error envelopes here. Observe the canonical
+      // terminal for metering and activity; the leading byte observer still
+      // measures the original upstream bytes.
+      const reasoningSummaryCompat = route
+        ? reasoningSummaryCompatTransform(providerForModel(route), contentType)
         : undefined;
-      // Grok gateway error envelopes are normalized along with its reasoning
-      // lifecycle. Observe the canonical terminal for metering and activity;
-      // the leading byte observer still measures the original upstream bytes.
-      if (grokReasoningSummaryCompat) transforms.splice(1, 0, grokReasoningSummaryCompat);
+      if (reasoningSummaryCompat) transforms.splice(1, 0, reasoningSummaryCompat);
       // LiteLLM can add blank assistant envelopes while translating either
       // Chat Completions or Messages. The factory refuses native traffic and
       // providers that already speak Responses, so those paths gain no stage.
