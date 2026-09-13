@@ -607,13 +607,24 @@ function isSubagentSpawnCall(item) {
   return item.namespace === undefined && item.name === `collaboration${NAMESPACE_DELIMITER}spawn_agent`;
 }
 
-// Inject the session model into local create_thread calls that omitted it and
-// pin every spawn_agent call to the routed parent. A parent not offered by the
-// client then fails closed at tool validation instead of silently crossing a
-// billing boundary.
-// `model` is the routed session's model (route.slug). Returns a rewritten
-// item when a local create_thread carries no explicit model or a spawn_agent
-// model differs from the routed parent; otherwise returns the item untouched.
+// Inject the session model into local create_thread calls that omitted it, and
+// into spawn_agent calls that carry no model of their own.
+//
+// An explicit subagent model wins. Codex ships the override as a plain string
+// on the tool schema rather than a schema enum, and validates the value against
+// its own advertised list, so anything that reaches here is the operator's own
+// delegation choice and not a value the parent model invented. Rewriting it
+// back to the routed parent discarded that choice and made a cross-provider
+// subagent impossible from any routed session, which is the one thing
+// `expose_spawn_agent_model_overrides = true` exists to allow.
+//
+// `sanitizeSpawnAgentModel` still drops a value outside the advertised set when
+// a client version does ship one, so that guard is unaffected: the item it
+// clears arrives here without a model and inherits the parent as before.
+//
+// `model` is the routed session's model (route.slug). Returns a rewritten item
+// only when the call carries no model of its own; otherwise returns the item
+// untouched.
 export function injectSessionModelForSpawnCalls(item, model) {
   if (!isSpawnModelCall(item)) return item;
   if (typeof model !== "string" || !model) return item;
@@ -628,7 +639,7 @@ export function injectSessionModelForSpawnCalls(item, model) {
   if (typeof args !== "object" || args === null || Array.isArray(args)) return item;
   if (args.model !== undefined && !isSubagentSpawnCall(item)) return item;
   if (args.target?.type === "chatgptWorkCloud") return item;
-  if (args.model === model) return item;
+  if (typeof args.model === "string" && args.model) return item;
   return { ...item, arguments: JSON.stringify({ ...args, model }) };
 }
 

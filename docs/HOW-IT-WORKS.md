@@ -395,7 +395,11 @@ unprotected, or left over for a model that is no longer eligible, the installed
 picker is republished to restore the coupled catalog/agent state. An unreadable
 or foreign Codex transport is never repaired speculatively.
 
-Only registry-proven models are advertised as native v2 spawn-agent overrides.
+Only registry-proven models are advertised as native v2 spawn-agent overrides,
+and an explicit spawn model is kept: a child runs on the model the operator
+picked from Codex's own list instead of being pinned back to the routed parent.
+Codex checks that value against its list before the call is dispatched, so an
+override cannot name a route the operator was never offered.
 The Settings tab (desktop panel and macOS tray) exposes two local accordions:
 **Subagent models** can withhold or re-enable proven models, while **Model
 picker** controls visibility. Local settings never promote an unverified model
