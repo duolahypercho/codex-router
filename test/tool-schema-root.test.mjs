@@ -4,6 +4,7 @@ import test from "node:test";
 import { CODEX_APP_TOOLS } from "../src/codex-app-tools.mjs";
 import { toResponsesRequest } from "../src/grok-oauth-forwarder.mjs";
 import {
+  declareSchemaTypes,
   hasObjectRoot,
   inlineForeignRefs,
   nonRecursiveToolSchema,
@@ -834,4 +835,55 @@ test("a schema with no foreign ref keeps identity", () => {
   assert.equal(inlineForeignRefs(schema), schema);
   const notObject = ["not", "a", "schema"];
   assert.equal(inlineForeignRefs(notObject), notObject);
+});
+
+test("a union leaf that declares no type gains the type its branches agree on", () => {
+  // #641: Moonshot answers a typeless node inside a union with
+  // "tools.function.parameters missing type in anyOf properties" and loses the
+  // turn. This is the reporter's exact path.
+  const schema = {
+    type: "object",
+    properties: {
+      icon: {
+        anyOf: [
+          { type: "object", properties: { color: { anyOf: [{ type: "string" }, { type: "null" }] } } },
+          { type: "null" },
+        ],
+      },
+    },
+  };
+  const declared = declareSchemaTypes(schema);
+  assert.deepEqual(declared.properties.icon.anyOf[0].properties.color.type, ["string", "null"]);
+  assert.deepEqual(declared.properties.icon.type, ["object", "null"]);
+  // The union itself is preserved: the type is added alongside, never instead.
+  assert.deepEqual(
+    declared.properties.icon.anyOf[0].properties.color.anyOf,
+    [{ type: "string" }, { type: "null" }],
+  );
+});
+
+test("a type is declared only where the node already implies one", () => {
+  assert.equal(declareSchemaTypes({ items: { type: "string" } }).type, "array");
+  assert.equal(declareSchemaTypes({ properties: {} }).type, "object");
+  assert.equal(declareSchemaTypes({ required: ["a"] }).type, "object");
+  assert.equal(declareSchemaTypes({ enum: ["a", "b"] }).type, "string");
+  assert.equal(declareSchemaTypes({ const: 7 }).type, "integer");
+  for (const open of [
+    {},                                  // deliberately open: narrowing is worse than the 400
+    { not: { type: "string" } },         // a negation says what it is not
+    { enum: ["a", 1] },                  // branches disagree
+    { anyOf: [{ type: "string" }, {}] }, // one branch declares nothing
+    { $ref: "#/$defs/Node" },            // the target carries the type
+  ]) {
+    assert.equal("type" in declareSchemaTypes(open), false, JSON.stringify(open));
+  }
+});
+
+test("a schema that already declares its types is returned by identity", () => {
+  const clean = {
+    type: "object",
+    properties: { a: { type: "string" }, b: { type: "array", items: { type: "number" } } },
+  };
+  assert.equal(declareSchemaTypes(clean), clean);
+  assert.equal(declareSchemaTypes({ type: "object" }).type, "object");
 });

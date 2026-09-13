@@ -17,3 +17,15 @@ bin/* text eol=lf
 # and are conventionally CRLF, but nothing here depends on their endings, so
 # they are normalized in the repository and left to the platform on checkout.
 *.ps1 text
+
+# Every change here appends a bullet to the top of CHANGELOG.md's `## Unreleased`
+# section, so two branches that share no source file still collide on it. That
+# was the single largest source of conflicts in the open queue: of ten
+# conflicting pull requests, seven conflicted on this file and nothing else.
+#
+# `union` is git's built-in driver for exactly this shape -- an append-only list
+# whose entries are independent. It keeps both sides' bullets instead of asking
+# a human to re-type one. The cost is that when both sides edit the *same*
+# bullet it keeps both copies, which is a visible one-line delete rather than a
+# conflict to resolve; pick the surviving wording when that happens.
+CHANGELOG.md merge=union

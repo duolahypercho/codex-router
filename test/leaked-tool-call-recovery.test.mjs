@@ -118,6 +118,36 @@ test("text without the markup is left exactly alone", () => {
   assert.equal(parseLeakedToolCalls(undefined), undefined);
 });
 
+test("a long whitespace run after the span is trimmed in linear time", () => {
+  // The trailing-gap trim used to be /\s+$/, which backtracks from every start
+  // offset of a whitespace run that is not at end of string. This path is
+  // reached from the `.done` snapshot and stored-item channels, whose text
+  // MAX_CAPTURE_BYTES does not bound, and `_transform` is synchronous -- so the
+  // whole router stalls. Measured on the pre-fix code: 200 KB of padding blocked
+  // for 15 s, 400 KB for 55 s.
+  //
+  // This asserts an absolute elapsed bound, which the note against wall-clock
+  // tests in this file does not cover: that warning is about *ratio* tests,
+  // where a loaded machine slows the control run as much as the measured one.
+  // Here the two implementations differ by roughly six orders of magnitude
+  // (0.1 ms vs 55_000 ms), so a 2 s ceiling has a ~20_000x margin over the fix
+  // and still fails the regression on any machine. A `{ timeout }` option would
+  // not work: the blocking is synchronous, so the runner's timer never fires.
+  const padded = `${LIVE_REASONING.trimEnd()}${" ".repeat(400_000)}z`;
+  const startedAt = process.hrtime.bigint();
+  const parsed = parseLeakedToolCalls(padded);
+  const elapsedMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
+
+  assert.equal(parsed.calls.length, 2);
+  // The `z` is not whitespace, so nothing is trimmed and the padding survives.
+  assert.equal(parsed.cleaned.endsWith(`${" ".repeat(400_000)}z`), true);
+  assert.ok(elapsedMs < 2_000, `trailing trim took ${elapsedMs.toFixed(0)}ms`);
+
+  // And the ordinary case still trims the gap the markup left behind.
+  const trailing = parseLeakedToolCalls(`${LIVE_REASONING.trimEnd()}\n\n\t  `);
+  assert.equal(trailing.cleaned.endsWith("comes up."), true);
+});
+
 test("malformed markup is never eaten", () => {
   // Unterminated span.
   assert.equal(parseLeakedToolCalls(`prose <tool_calls:${N}><tool_call:${N}>x`), undefined);

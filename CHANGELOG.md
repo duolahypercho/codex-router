@@ -39,6 +39,21 @@
   work continues. Only the model's calls are recovered: a malformed, unterminated
   or nonce-mismatched span is relayed verbatim, a stream without the markup is
   passed through byte-for-byte, and native turns gain no stage.
+- **Kimi no longer rejects a tool schema whose union leaf declares no type.**
+  A nullable field written the ordinary way --
+  `{"anyOf":[{"type":"string"},{"type":"null"}]}` -- carries no `type` of its
+  own, and Moonshot's validator refuses the whole request with HTTP 400
+  `tools.function.parameters missing type in anyOf properties`, losing the turn
+  on every Kimi model (#641). Nothing in the pipeline supplied one:
+  `normalizeSchemaLiterals` only removes literals that contradict a type a node
+  already declares. The Moonshot compatibility pass now declares a type where
+  the node already implies one -- from `properties`/`required`, `items`, a
+  single-typed `enum`/`const`, or a union whose branches all agree -- alongside
+  the existing `$ref` inlining. A node that implies nothing (a bare `{}`, a
+  lone `not`, a mixed `enum`) is left open, because narrowing a schema the
+  client meant to leave open is worse than the rejection. Every other provider
+  keeps the exact wire payload it has today.
+
 - **A routed model the router has not loaded now fails locally, not at
   ChatGPT.** A model added to or renamed in `user-models.json` shows up in the
   Codex picker as soon as the catalog is rebuilt, but the running router reads
