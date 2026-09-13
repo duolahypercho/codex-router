@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **Command Code's Gemini 3.8 Flash accepts nullable tool parameters.** Convert
+  a single concrete type plus `null` to an explicit union before forwarding,
+  preserving array constraints and nested schemas. This prevents the observed
+  `any_of` sibling-field rejection for Codex's image-generation tool, including
+  definitions restored from tool-search history. Other routes keep their schemas.
 - **Reasoning from Chat Completions models now shows in Codex.** LiteLLM's
   Chat Completions to Responses bridge opens the assistant message first and
   streams the model's reasoning under a fresh hashed item id per delta, with no
