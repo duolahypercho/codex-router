@@ -80,6 +80,7 @@ jobs:
           QWEN_PLAN_API_KEY: ${{ secrets.QWEN_PLAN_API_KEY }}
           SILICONFLOW_API_KEY: ${{ secrets.SILICONFLOW_API_KEY }}
           TOGETHER_API_KEY: ${{ secrets.TOGETHER_API_KEY }}
+          UNOROUTER_API_KEY: ${{ secrets.UNOROUTER_API_KEY }}
           VENICE_API_KEY: ${{ secrets.VENICE_API_KEY }}
           XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
           ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
