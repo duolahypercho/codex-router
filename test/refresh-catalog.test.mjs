@@ -14,7 +14,13 @@ const noJournal = {
 const noLock = (operation) => operation();
 const noAccountRefresh = async () => ({ status: "unavailable" });
 
-function recordingRunner({ signed = true, loginFree = false, model, failAt } = {}) {
+function recordingRunner({
+  signed = true,
+  signedProviderMode = signed ? "root-openai" : undefined,
+  loginFree = false,
+  model,
+  failAt,
+} = {}) {
   const calls = [];
   return {
     calls,
@@ -30,6 +36,7 @@ function recordingRunner({ signed = true, loginFree = false, model, failAt } = {
           stdout: `${JSON.stringify({
             mode: "router",
             signed_routing: signed,
+            signed_provider_mode: signedProviderMode,
             login_free: loginFree,
             model: model || null,
           })}\n`,
@@ -96,7 +103,7 @@ test("refresh orchestration restores signed routing and republishes the routed c
     ["config-manager.mjs", ["disable"]],
     ["catalog.mjs", ["--refresh-native"]],
     ["config-manager.mjs", ["enable"]],
-    ["config-manager.mjs", ["signed-enable"]],
+    ["config-manager.mjs", ["signed-enable", "--preserve-root-openai"]],
     ["catalog.mjs", []],
   ]);
   assert.equal(result.catalogOutput, '{"models":1}\n');
@@ -113,6 +120,24 @@ test("refresh orchestration restores the active transport after catalog failure"
     }),
     /catalog\.mjs exited with status 75.*forced catalog failure/s,
   );
+  assert.deepEqual(runner.calls, [
+    ["config-manager.mjs", ["status"]],
+    ["config-manager.mjs", ["disable"]],
+    ["catalog.mjs", ["--refresh-native"]],
+    ["config-manager.mjs", ["enable"]],
+    ["config-manager.mjs", ["signed-enable", "--preserve-root-openai"]],
+    ["catalog.mjs", []],
+  ]);
+});
+
+test("refresh restores a provider-switch signed mode without changing its mode", async () => {
+  const runner = recordingRunner({ signedProviderMode: "provider-switch" });
+  await refreshCatalog({
+    canRefreshInPlace: () => false,
+    refreshAccountCatalog: noAccountRefresh,
+    run: runner.run,
+    lock: noLock,
+  });
   assert.deepEqual(runner.calls, [
     ["config-manager.mjs", ["status"]],
     ["config-manager.mjs", ["disable"]],

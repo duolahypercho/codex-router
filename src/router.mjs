@@ -2457,15 +2457,32 @@ function normalizeNativeInput(
   { statelessReasoning = false, dropUnstoredReasoningReferences = false } = {},
 ) {
   if (!Array.isArray(input)) return input;
+  // A routed turn can leave its full reasoning item and a following rs_
+  // reference in the next native request even though that item was produced
+  // with store=false. A null/empty encrypted payload on the full item is
+  // request-local proof that native storage cannot resolve the paired id.
+  // Keep unrelated bare references intact for credential-bearing native
+  // callers; they may still name items that ChatGPT actually stored.
+  const explicitlyUnstoredReasoningIds = new Set(
+    input
+      .filter((item) =>
+        item?.type === "reasoning" &&
+        typeof item.id === "string" &&
+        item.id.startsWith("rs_") &&
+        Object.hasOwn(item, "encrypted_content") &&
+        (typeof item.encrypted_content !== "string" || item.encrypted_content.length === 0)
+      )
+      .map((item) => item.id),
+  );
   return input.flatMap((item) => {
     if (item?.type === "reasoning") {
       const reasoning = sanitizeReasoningForNative(item, {
-        stateless: statelessReasoning,
+        stateless: statelessReasoning || explicitlyUnstoredReasoningIds.has(item.id),
       });
       return reasoning === undefined ? [] : [reasoning];
     }
     if (
-      dropUnstoredReasoningReferences &&
+      (dropUnstoredReasoningReferences || explicitlyUnstoredReasoningIds.has(item?.id)) &&
       item?.type === "item_reference" &&
       typeof item.id === "string" &&
       item.id.startsWith("rs_")
@@ -3004,14 +3021,19 @@ async function handleRoutedCompaction(
 }
 
 async function handleModels(response) {
-  const data = catalogModels().map((model) => ({
+  const models = catalogModels();
+  const data = models.map((model) => ({
     id: model.slug,
     object: "model",
     owned_by: MODEL_BY_SLUG.has(model.slug)
       ? providerForModel(MODEL_BY_SLUG.get(model.slug)).ownedBy
       : "openai",
   }));
-  writeJson(response, 200, { object: "list", data });
+  // OpenAI-compatible clients read `data`; current Codex custom-provider
+  // discovery reads its account-catalog shape from `models` on the same
+  // endpoint. Serving both keeps the provider switch compatible with either
+  // reader without duplicating discovery work.
+  writeJson(response, 200, { object: "list", data, models });
 }
 
 // What the Gemini surface will accept a turn for.

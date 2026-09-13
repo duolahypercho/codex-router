@@ -1643,13 +1643,17 @@ about it.
   `model_catalog_json` block plus its marked `model_providers.codex-router`
   table and, when the user has no concurrency preference, its marked
   `[agents].max_concurrent_threads_per_session` default. It may change the root
-  `model_provider` only when the user explicitly
-  enables the tray's login-free mode. In that mode it may also select an
-  enabled external `model`; snapshot both previous values in protected router
-  state and restore them exactly when the mode is disabled.
+  `model_provider` only when the user explicitly enables either login-free mode
+  or signed routing from a root-OpenAI configuration. Signed routing selects
+  the dedicated, ChatGPT-authenticated `codex-router-signed` provider; ordinary
+  install, update, repair, and catalog refresh must never create or migrate that
+  switch implicitly. Keep its state readable by the previous release and
+  restore the prior provider exactly when it is disabled. Login-free mode may
+  also select an enabled external `model`; snapshot both previous values in
+  protected router state and restore them exactly when the mode is disabled.
 - Preserve reasoning settings, profiles, projects, trust, MCP configuration,
   features, and ChatGPT authentication. Preserve `model` and `model_provider`
-  outside the explicitly enabled login-free mode.
+  outside those explicitly enabled routing modes.
 - A user-initiated macOS tray login-mode change may gracefully restart only the
   registered Codex desktop app. This does not authorize an installation task to
   quit Codex, and the tray must never force-terminate it.

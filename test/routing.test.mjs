@@ -276,6 +276,17 @@ test("router requires the configured path capability before any model route", as
   try {
     await waitFor(`${routerBase(routerPort)}/models`, router);
 
+    const modelResponse = await fetch(`${routerBase(routerPort)}/models`);
+    assert.equal(modelResponse.status, 200);
+    const modelCatalog = await modelResponse.json();
+    assert.equal(modelCatalog.object, "list");
+    assert.ok(Array.isArray(modelCatalog.data));
+    assert.ok(Array.isArray(modelCatalog.models));
+    assert.deepEqual(
+      modelCatalog.data.map((model) => model.id),
+      modelCatalog.models.map((model) => model.slug),
+    );
+
     const oldRoute = await fetch(`http://127.0.0.1:${routerPort}/v1/responses`, {
       method: "POST",
       headers: {
@@ -2965,6 +2976,17 @@ test("router drops foreign reasoning items before stateless native replay", asyn
       type: "item_reference",
       id: "rs_external_reference",
     };
+    const explicitlyUnstoredReasoning = {
+      type: "reasoning",
+      id: "rs_private_unstored",
+      summary: [{ type: "summary_text", text: "private draft" }],
+      content: null,
+      encrypted_content: null,
+    };
+    const explicitlyUnstoredReference = {
+      type: "item_reference",
+      id: "rs_private_unstored",
+    };
     const nonReasoningReference = {
       type: "item_reference",
       id: "msg_native_reference",
@@ -3103,6 +3125,8 @@ test("router drops foreign reasoning items before stateless native replay", asyn
           mixedSummaryReasoning,
           missingStatelessPayload,
           staleReasoningReference,
+          explicitlyUnstoredReasoning,
+          explicitlyUnstoredReference,
           userMessage,
         ],
         store: true,
@@ -3126,6 +3150,10 @@ test("router drops foreign reasoning items before stateless native replay", asyn
     assert.deepEqual(
       stored.input.find((item) => item?.id === "rs_external_reference"),
       staleReasoningReference,
+    );
+    assert.equal(
+      stored.input.some((item) => item?.id === explicitlyUnstoredReasoning.id),
+      false,
     );
     assert.deepEqual(
       stored.input.find((item) => item?.id === unknownOpaqueReasoning.id),
@@ -7700,6 +7728,18 @@ test("router redirects native background turns to the configured routed model", 
   writeFileSync(
     path.join(stateDir, "native-redirect.json"),
     `${JSON.stringify({ version: 1, model: "kimi-oauth/k3" })}\n`,
+  );
+  // Signed routing and native redirect are independent controls. Enabling the
+  // former must not silently disable an explicit redirect selected by the
+  // operator.
+  writeFileSync(
+    path.join(stateDir, "signed-provider-mode.json"),
+    `${JSON.stringify({
+      version: 1,
+      managedProvider: "codex-router-signed",
+      previousPresent: true,
+      previousModelProvider: "openai",
+    })}\n`,
   );
   const router = run("router.mjs", {
     CODEX_ROUTER_PORT: String(routerPort),
