@@ -5919,7 +5919,7 @@ test("API forwarder routes GLM coding-plan models with thinking enabled", async 
   }
 });
 
-["zai-coding-glm-5-3", "deepseek-v4-flash", "commandcode-deepseek-v4-flash"].forEach((gatewayModel) => test(`API forwarder restores ${gatewayModel} thinking as native reasoning_content`, async () => {
+["zai-coding-glm-5-3", "deepseek-v4-flash", "commandcode-deepseek-v4-flash", "opencode-go-hy4-preview"].forEach((gatewayModel) => test(`API forwarder restores ${gatewayModel} thinking as native reasoning_content`, async () => {
   const upstreamRequests = [];
   const upstream = await mockServer(async (request, response) => {
     upstreamRequests.push({ url: request.url, headers: request.headers, body: await bodyJson(request) });
@@ -5934,6 +5934,8 @@ test("API forwarder routes GLM coding-plan models with thinking enabled", async 
     DEEPSEEK_API_KEY: "TEST_DEEPSEEK_API_KEY",
     COMMANDCODE_BASE_URL: `http://127.0.0.1:${upstream.port}/provider/v1`,
     COMMAND_CODE_API_KEY: "TEST_COMMANDCODE_API_KEY",
+    OPENCODE_GO_BASE_URL: `http://127.0.0.1:${upstream.port}`,
+    OPENCODE_GO_API_KEY: "TEST_OPENCODE_GO_API_KEY",
     CODEX_ROUTER_QUIET: "1",
   });
 
@@ -5977,6 +5979,12 @@ test("API forwarder routes GLM coding-plan models with thinking enabled", async 
       assert.deepEqual(request.thinking, { type: "enabled", clear_thinking: false });
     } else if (gatewayModel === "deepseek-v4-flash") {
       assert.deepEqual(request.thinking, { type: "enabled" });
+    } else if (gatewayModel === "opencode-go-hy4-preview") {
+      // Hy4 has no thinking parameter of its own; the history contract alone
+      // must restore reasoning_content without inventing one. (Rollout
+      // 01a0928e, 12 September 2026: replayed as text, the model looped.)
+      assert.ok(upstreamRequests[0].url.endsWith("/chat/completions"));
+      assert.equal(request.thinking, undefined);
     } else {
       assert.equal(upstreamRequests[0].url, "/provider/v1/chat/completions");
       assert.equal(request.thinking, undefined, "history preservation must not enable a new thinking parameter");

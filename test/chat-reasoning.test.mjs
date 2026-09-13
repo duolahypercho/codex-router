@@ -13,6 +13,9 @@ import { childOutput, waitForListeners } from "./listener-readiness.mjs";
 test("native chat reasoning stays scoped to established history contracts", () => {
   assert.equal(usesNativeChatReasoning({ requestProfile: "glm-thinking" }), true);
   assert.equal(usesNativeChatReasoning({ requestProfile: "deepseek-thinking" }), true);
+  // Every hy4 route that thinks shares this profile (opencode-go, openrouter,
+  // nano-gpt, nousresearch); commandcode's own shim and clinepass do not.
+  assert.equal(usesNativeChatReasoning({ requestProfile: "hy4-reasoning" }), true);
   assert.equal(usesNativeChatReasoning({
     provider: "commandcode", upstreamModel: "deepseek/deepseek-v4-flash",
   }), true);
@@ -23,6 +26,8 @@ test("native chat reasoning stays scoped to established history contracts", () =
     { provider: "custom", upstreamModel: "deepseek/deepseek-v4-flash" },
     { provider: "commandcode", upstreamModel: "moonshotai/kimi-k2.6" },
     { provider: "commandcode-messages", upstreamModel: "deepseek/deepseek-v4-flash" },
+    { provider: "commandcode", upstreamModel: "tencent/hy4-preview" },
+    { provider: "clinepass", requestProfile: "clinepass", upstreamModel: "tencent/hy4-preview" },
   ]) {
     assert.equal(usesNativeChatReasoning(model), false);
   }
