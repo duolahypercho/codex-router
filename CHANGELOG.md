@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- **Kimi no longer rejects a recursive tool schema the router itself made
+  typeless.** Breaking a `$ref` cycle drops the reference and leaves the node
+  behind, and a node with nothing left in it declares no type -- the one shape
+  Moonshot answers with HTTP 400 `tools.function.parameters missing type in
+  anyOf properties`, the same rejection #641 fixed for client-supplied schemas.
+  The type pass that fix added runs in the router's Moonshot compatibility hop,
+  while the cycle breaking runs later in the forwarder, so a recursive schema on
+  a Kimi route arrived with the type already removed again (#726). The cycle
+  edge now carries the type its target declared -- read out of the definition
+  the reference named, never guessed, and never over a type the client wrote
+  itself. Scoped to the measured Moonshot routes: the blanking exists for Meta's
+  Console 400, that path was not re-measured here, and every other provider and
+  model keeps the exact wire payload it has today.
+
 - **Reasoning from Chat Completions models now shows in Codex.** LiteLLM's
   Chat Completions to Responses bridge opens the assistant message first and
   streams the model's reasoning under a fresh hashed item id per delta, with no

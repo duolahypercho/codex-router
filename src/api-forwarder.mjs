@@ -38,6 +38,7 @@ import {
 } from "./rate-limit-headers.mjs";
 import { recordRateLimitSnapshot } from "./rate-limit-state.mjs";
 import { recordProviderCooldown } from "./model-failover.mjs";
+import { moonshotSchemaRoute } from "./moonshot-schema-routes.mjs";
 import { cooldownScope } from "./provider-cooldown.mjs";
 import { canonicalProviderId, readProviderSelection } from "./provider-selection.mjs";
 import { stripImages, supportsImageInput } from "./vision-bridge.mjs";
@@ -402,7 +403,7 @@ function stripEncryptedToolSchemaAnnotations(payload, protocol) {
 // `nonRecursiveToolSchema` -- which blanks exactly the cycle-closing edge and
 // returns any other schema by identity -- is the whole fix. The namespace relay
 // already uses it for the same reason.
-function flattenRecursiveToolSchemas(payload, protocol) {
+function flattenRecursiveToolSchemas(payload, protocol, options) {
   if (!Array.isArray(payload.tools)) return;
   let changed = false;
   const tools = payload.tools.map((tool) => {
@@ -410,14 +411,14 @@ function flattenRecursiveToolSchemas(payload, protocol) {
       return tool;
     }
     if (protocol === "openai-responses") {
-      const flattened = nonRecursiveToolSchema(tool.parameters);
+      const flattened = nonRecursiveToolSchema(tool.parameters, options);
       if (flattened === tool.parameters) return tool;
       changed = true;
       return { ...tool, parameters: flattened };
     }
     const fn = tool.function;
     if (!fn || typeof fn !== "object" || Array.isArray(fn)) return tool;
-    const flattened = nonRecursiveToolSchema(fn.parameters);
+    const flattened = nonRecursiveToolSchema(fn.parameters, options);
     if (flattened === fn.parameters) return tool;
     changed = true;
     return { ...tool, function: { ...fn, parameters: flattened } };
@@ -875,7 +876,14 @@ function normalizeBody(buffer, contentType, route) {
   // needs a request profile of its own, which the single-valued field cannot
   // express.
   if (model.toolSchemaRecursion === "flatten") {
-    flattenRecursiveToolSchemas(payload, provider.protocol);
+    // The router's Moonshot pass declares the types this route needs, but it
+    // runs earlier and elsewhere; blanking a cycle-closing `$ref` here would
+    // undo that work and leave a typeless `{}` behind (#726). Only that route
+    // pays for carrying the type through -- every other provider keeps the
+    // exact wire payload it has today.
+    flattenRecursiveToolSchemas(payload, provider.protocol, {
+      keepBlankedTypes: moonshotSchemaRoute(provider.id, model.upstreamModel),
+    });
   }
   if (model.requestProfile === "clinepass") {
     delete payload.reasoning_effort;
