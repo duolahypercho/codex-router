@@ -63,6 +63,16 @@ import {
   zaiResponsesCompatTransform,
 } from "./zai-responses-compat.mjs";
 import { grokReasoningSummaryCompatTransform } from "./grok-reasoning-summary-compat.mjs";
+import { earlyToolItemDoneTransform } from "./early-tool-item-done.mjs";
+import {
+  applyGrokEditFacade,
+  encodeGrokFacadeHistory,
+  GROK_FACADE_TOOL_NAMES,
+  grokEditFacadeEnabled,
+  nativeExecRelayTarget,
+  rewriteGrokFacadeToolChoice,
+} from "./grok-tool-facade.mjs";
+import { applyGrokFileToolsOverlay } from "./instruction-overlays.mjs";
 import { ResponsesHeartbeatTransform } from "./responses-heartbeat.mjs";
 import { messagePhaseTransform } from "./message-phase.mjs";
 import { translatedToolMessageCompatTransform } from "./deepseek-tool-message-compat.mjs";
@@ -3326,6 +3336,8 @@ async function buildRoutedRequest({ request, payload, route, agedInput }) {
   }
   let routedInput = input;
   let routedToolChoice = payload.tool_choice;
+  let installedFacade = new Set();
+  let facadeNameCollision = false;
   const patchHook = grokPatchHookEnabled(route, request.headers, process.env, request.codexRouterPatchHookCapability);
   const structuredPatch = (patchHook || grokStructuredPatchEnabled(route)) &&
     Array.isArray(tools) && tools.some(
@@ -3349,6 +3361,19 @@ async function buildRoutedRequest({ request, payload, route, agedInput }) {
     tools = customTools.tools;
     routedInput = customTools.input;
     routedToolChoice = customTools.toolChoice;
+    if (grokEditFacadeEnabled(route, structuredPatch)) {
+      const incomingFacadeNames = new Set(
+        (Array.isArray(tools) ? tools : []).map((tool) => tool?.name).filter(Boolean),
+      );
+      const nativeExec = nativeExecRelayTarget(tools, flattenedNamespaces);
+      tools = applyGrokEditFacade(tools, flattenedNamespaces, route, structuredPatch, {
+        patchHook,
+        installed: installedFacade,
+      });
+      routedInput = encodeGrokFacadeHistory(routedInput, nativeExec, installedFacade);
+      routedToolChoice = rewriteGrokFacadeToolChoice(routedToolChoice, installedFacade);
+      facadeNameCollision = GROK_FACADE_TOOL_NAMES.some((name) => incomingFacadeNames.has(name));
+    }
   }
   if (chatCompletionsProvider || consoleGoResponsesCompatibility || deepSeekResponses) {
     let searchHistory;
@@ -3431,6 +3456,16 @@ async function buildRoutedRequest({ request, payload, route, agedInput }) {
     model: route.gatewayModel,
     input: routedInput,
   };
+  if (
+    grokEditFacadeEnabled(route, structuredPatch) &&
+    installedFacade.size > 0 &&
+    !facadeNameCollision
+  ) {
+    routed.instructions = applyGrokFileToolsOverlay(
+      typeof payload.instructions === "string" ? payload.instructions : "",
+      installedFacade,
+    );
+  }
   applyRoutedServiceTier(routed, payload, route);
   if (routedToolChoice !== payload.tool_choice) routed.tool_choice = routedToolChoice;
   // Codex chooses a child's model; this is where an operator gets to choose its
@@ -4363,6 +4398,10 @@ async function handleResponses(request, response, requestUrl) {
         ? translatedToolMessageCompatTransform(providerForModel(route), contentType)
         : undefined;
       if (translatedToolMessageCompat) transforms.push(translatedToolMessageCompat);
+      const earlyToolDone = route
+        ? earlyToolItemDoneTransform(providerForModel(route), contentType)
+        : undefined;
+      if (earlyToolDone) transforms.push(earlyToolDone);
       // Restore flattened namespace calls for routed chat-completions providers
       // and pin an omitted spawn_agent model to every routed parent, including
       // providers that already speak Responses. Also inject missing finished-
