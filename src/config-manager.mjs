@@ -509,9 +509,30 @@ function withManagedAgentConcurrency(input) {
   return `${lines.join("\n").trimEnd()}\n`;
 }
 
+// The structural read of a config, or undefined when the lexer refuses it. A
+// legacy config can carry an unescaped Windows path inside a basic string --
+// `model_catalog_json = "D:\\a\\kimi-proxy\\merged-models.json"`, whose `\\a` is
+// not a valid TOML escape -- and refusing to touch those would leave the
+// operator unable to so much as disable the router. Those keep the line
+// matching they have always had; every config that can be read structurally
+// gets the accurate answer.
+function scannedConfig(contents) {
+  try {
+    return scanTomlDocument(contents);
+  } catch {
+    return undefined;
+  }
+}
+
 function splitRoot(input) {
   const lines = input.split("\n");
-  const firstTable = lines.findIndex((line) => /^\s*\[/.test(line));
+  // A line inside a multiline string can begin with `[` without opening a
+  // table; asking the structural lexer keeps the boundary honest, and keeps
+  // `rootLines` a document the lexer can read on its own below.
+  const scanned = scannedConfig(input);
+  const firstTable = scanned
+    ? scanned.headers[0]?.index ?? -1
+    : lines.findIndex((line) => /^\s*\[/.test(line));
   return firstTable === -1
     ? { rootLines: lines, tableLines: [] }
     : { rootLines: lines.slice(0, firstTable), tableLines: lines.slice(firstTable) };
@@ -539,12 +560,13 @@ function assignmentValue(line) {
 }
 
 function rootValue(lines, key) {
-  const match = lines.find((line) => new RegExp(`^\\s*${key}\\s*=`).test(line));
-  return match ? assignmentValue(match) : undefined;
+  const [index] = rootAssignmentIndexes(lines.join("\n"), key);
+  // Decoded the same way it always was, so only which line is chosen changes.
+  return index === undefined ? undefined : assignmentValue(lines[index]);
 }
 
 function rootHasValue(lines, key) {
-  return lines.some((line) => new RegExp(`^\\s*${key}\\s*=`).test(line));
+  return rootAssignmentIndexes(lines.join("\n"), key).length > 0;
 }
 
 function nativeRealtimeCallBaseUrl(lines) {
@@ -556,11 +578,42 @@ function nativeRealtimeCallBaseUrl(lines) {
     : `${chatgptBaseUrl}/codex`;
 }
 
+// Line indices of the genuine root-level assignments of `key`, read from the
+// structural lexer instead of matched out of the text. A line can look exactly
+// like an assignment without being one -- prose inside a multiline string, an
+// element of a multi-line array -- and rewriting or deleting such a line
+// destroys the value it belongs to while leaving the real assignment in place.
+function rootAssignmentIndexes(contents, key) {
+  const scanned = scannedConfig(contents);
+  if (!scanned) {
+    // Unreadable document: the previous line matching, bounded to the root
+    // section the same way it used to be.
+    const lines = contents.split("\n");
+    const firstTable = lines.findIndex((line) => /^\s*\[/.test(line));
+    const limit = firstTable === -1 ? lines.length : firstTable;
+    const expression = new RegExp(`^\\s*${key}\\s*=`);
+    const found = [];
+    for (let index = 0; index < limit; index += 1) {
+      if (expression.test(lines[index])) found.push(index);
+    }
+    return found;
+  }
+  return scanned.assignments
+    .filter(
+      (assignment) =>
+        assignment.tablePath.length === 0 &&
+        assignment.key.length === 1 &&
+        assignment.key[0] === key,
+    )
+    .map(({ index }) => index);
+}
+
 function replaceRootValue(contents, key, value) {
+  // Indices are absolute, and every root assignment precedes the first table,
+  // so they address `rootLines` unchanged.
+  const removable = new Set(rootAssignmentIndexes(contents, key));
   const { rootLines, tableLines } = splitRoot(contents);
-  const filtered = rootLines.filter(
-    (line) => !new RegExp(`^\\s*${key}\\s*=`).test(line),
-  );
+  const filtered = rootLines.filter((_line, index) => !removable.has(index));
   if (value !== undefined) {
     const managedBlock = filtered.findIndex((line) => line.trim() === startMarker);
     filtered.splice(
@@ -577,12 +630,8 @@ function replaceRootValue(contents, key, value) {
 function replaceRootValueInPlace(contents, key, value) {
   if (value === undefined) return replaceRootValue(contents, key, value);
   const lines = contents.split("\n");
-  const firstTable = scanTomlDocument(contents).headers[0]?.index ?? lines.length;
-  const expression = new RegExp(`^\\s*${key}\\s*=`);
-  const index = lines.findIndex((line, lineIndex) =>
-    lineIndex < firstTable && expression.test(line)
-  );
-  if (index === -1) return replaceRootValue(contents, key, value);
+  const [index] = rootAssignmentIndexes(contents, key);
+  if (index === undefined) return replaceRootValue(contents, key, value);
   lines[index] = `${key} = ${JSON.stringify(value)}`;
   return lines.join("\n").trimEnd();
 }

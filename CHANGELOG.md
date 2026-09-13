@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+- **A multiline string in `config.toml` is no longer edited as if it were
+  settings.** The root-level helpers found assignments by matching lines, so a
+  line inside a multiline string -- prose in `instructions`, a documented
+  example -- counted as one whenever it was shaped like `model = ...`. Because
+  it came first, it was the line that got rewritten, deleted when a value
+  moved, and read back as the current setting. Switching the model edited the
+  user's prose and left the real `model` untouched; enabling the router deleted
+  a line out of the middle of their text; and the router journalled the prose
+  as the previous value, so turning it off restored that. All of it silent, and
+  the setting the user asked for never changed. These helpers now locate the
+  assignment through `scanTomlDocument` -- the fail-closed structural lexer this
+  file already uses for table boundaries, which exists to tell a real
+  assignment from text that looks like one -- and decode the line exactly as
+  before, so only the choice of line changes. The root/table split is read from
+  the same lexer, so a string containing a `[`-leading line no longer ends the
+  root section early. A `config.toml` the lexer cannot read at all keeps the
+  line matching it has always had: the prototype installer wrote the catalog
+  path unescaped, so on Windows that value carries escapes TOML does not define,
+  and failing closed there would leave the operator unable to so much as disable
+  the router.
+
 - **Reasoning from Chat Completions models now shows in Codex.** LiteLLM's
   Chat Completions to Responses bridge opens the assistant message first and
   streams the model's reasoning under a fresh hashed item id per delta, with no
