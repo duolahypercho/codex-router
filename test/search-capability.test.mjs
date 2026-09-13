@@ -67,6 +67,7 @@ test("checked-in opencode Muse Responses routes replay verified search history w
   for (const slug of [
     "opencode-go-responses/muse-spark-1.2-contributor",
     "opencode-go-responses/muse-spark-1.3-contributor",
+    "opencode-free-responses/muse-spark-1.3-contributor-free",
   ]) {
     const model = MODEL_BY_SLUG.get(slug);
     assert.ok(model, slug);
