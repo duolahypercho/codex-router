@@ -28,6 +28,22 @@
   client meant to leave open is worse than the rejection. Every other provider
   keeps the exact wire payload it has today.
 
+- **A streamed answer no longer loses the whitespace it starts with.** The
+  inline-reasoning stripper trimmed the leading whitespace of every message it
+  streamed, but `stripThinkTags` -- the same module's whole-string form, used
+  for the `output_text.done` snapshot and the stored message item -- trims only
+  when it actually removed a tag, and returns an untagged message by identity.
+  So an ordinary answer opening with a newline (a fenced code block, a leading
+  blank line) reached the client without it, while the terminal snapshot beside
+  it kept it: the rendered answer and the stored one disagreed on a route that
+  had leaked no reasoning at all. A first delta made only of whitespace was
+  dropped from the stream outright. The stripper now holds that whitespace until
+  the first visible character, by which point it knows whether a tag was
+  removed, and emits or drops it to match. The hold is bounded: nothing is kept
+  once a tag has been removed, only the new delta is scanned rather than the
+  accumulation, and past 8 KiB of unbroken whitespace the stripper emits what it
+  holds instead of growing further. The observed leak shapes are unchanged --
+  reasoning arrives before the answer, so the removal is always known in time.
 - **opencode Zen's quota headers no longer overwrite the Go plan's.** Both
   plans share one credential and one selection toggle, but Zen bills at its own
   endpoint, which is why `cooldownScope` keeps Zen's identity where
