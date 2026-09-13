@@ -3,7 +3,10 @@ import test from "node:test";
 
 import {
   SPAWN_MODEL_TOOLS,
+  buildNamespaceLookups,
+  flattenNamespaceTools,
   injectSessionModelForSpawnCalls,
+  rewriteNamespaceResponsePayload,
 } from "../src/namespace-relay.mjs";
 
 const SESSION_MODEL = "opencode-go/deepseek-v4-flash";
@@ -91,12 +94,15 @@ test("explicit model on a fresh thread wins and stays untouched", () => {
   assert.equal(injectSessionModelForSpawnCalls(namespaced, SESSION_MODEL), namespaced);
 });
 
-test("explicit subagent model is pinned to its routed parent", () => {
+test("an explicit subagent model is kept instead of pinned to the routed parent", () => {
+  // Codex renders the override as a plain string and validates it against its
+  // own list, so a value here is the operator's delegation choice. Rewriting it
+  // back to the parent is what made cross-provider subagents impossible.
   for (const subagent of [
     spawnCall(
       "collaboration__spawn_agent",
       undefined,
-      JSON.stringify({ task_name: "review", message: "inspect", model: "gpt-5.6-sol" }),
+      JSON.stringify({ task_name: "review", message: "inspect", model: "gpt-6-astra" }),
     ),
     spawnCall(
       "spawn_agent",
@@ -104,14 +110,39 @@ test("explicit subagent model is pinned to its routed parent", () => {
       JSON.stringify({ task_name: "review", message: "inspect", model: "gpt-5.6-sol" }),
     ),
   ]) {
-    const next = injectSessionModelForSpawnCalls(subagent, SESSION_MODEL);
-    assert.notEqual(next, subagent);
-    assert.deepEqual(JSON.parse(next.arguments), {
-      task_name: "review",
-      message: "inspect",
-      model: SESSION_MODEL,
-    });
+    assert.equal(injectSessionModelForSpawnCalls(subagent, SESSION_MODEL), subagent);
   }
+});
+
+test("an unusable spawn model still inherits the routed parent", () => {
+  // Absent, empty, and non-string values carry no override, so the child keeps
+  // the routed parent exactly as it did before.
+  const cases = [
+    { task_name: "review", message: "inspect" },
+    { task_name: "review", message: "inspect", model: "" },
+    { task_name: "review", message: "inspect", model: null },
+    { task_name: "review", message: "inspect", model: 7 },
+  ];
+  for (const args of cases) {
+    for (const build of [
+      (value) => spawnCall("collaboration__spawn_agent", undefined, JSON.stringify(value)),
+      (value) => spawnCall("spawn_agent", "collaboration", JSON.stringify(value)),
+    ]) {
+      const subagent = build(args);
+      const next = injectSessionModelForSpawnCalls(subagent, SESSION_MODEL);
+      assert.notEqual(next, subagent);
+      assert.equal(JSON.parse(next.arguments).model, SESSION_MODEL);
+    }
+  }
+});
+
+test("a spawned model equal to the routed parent is left untouched", () => {
+  const item = spawnCall(
+    "collaboration__spawn_agent",
+    undefined,
+    JSON.stringify({ task_name: "review", message: "inspect", model: SESSION_MODEL }),
+  );
+  assert.equal(injectSessionModelForSpawnCalls(item, SESSION_MODEL), item);
 });
 
 test("chatgptWorkCloud create_thread calls omit model", () => {
@@ -167,4 +198,79 @@ test("injection is idempotent once the model is present", () => {
     JSON.stringify({ prompt: "hi", model: SESSION_MODEL }),
   );
   assert.equal(injectSessionModelForSpawnCalls(item, SESSION_MODEL), item);
+});
+
+// `sanitizeSpawnAgentModel` polices an advertised enum when a client version
+// ships one, so that split is exercised end to end through the real
+// flatten/lookup/rewrite path instead of by calling the helper directly.
+function routedCollaborationTools(models) {
+  return [
+    {
+      type: "namespace",
+      name: "collaboration",
+      tools: [
+        {
+          type: "function",
+          name: "spawn_agent",
+          inputSchema: {
+            type: "object",
+            properties: {
+              model: {
+                anyOf: [{ type: "string", enum: models }, { type: "null" }],
+              },
+            },
+          },
+        },
+      ],
+    },
+  ];
+}
+
+function flattenedSpawnPayload(model) {
+  return {
+    output: [
+      {
+        type: "function_call",
+        name: "collaboration__spawn_agent",
+        call_id: "call_1",
+        arguments: JSON.stringify({ task_name: "review", model }),
+      },
+    ],
+  };
+}
+
+test("the client's advertised enum reaches the wire rewrite and is preserved", () => {
+  const { namespaces } = flattenNamespaceTools(
+    routedCollaborationTools(["gpt-6-astra", "gpt-5.6-sol"]),
+  );
+  const lookups = buildNamespaceLookups(namespaces);
+  assert.ok(lookups.spawnAgentModels.has("gpt-6-astra"));
+
+  const rewritten = rewriteNamespaceResponsePayload(
+    flattenedSpawnPayload("gpt-6-astra"),
+    lookups,
+    SESSION_MODEL,
+  );
+  const item = rewritten.output[0];
+  assert.equal(item.name, "spawn_agent");
+  assert.equal(item.namespace, "collaboration");
+  assert.equal(JSON.parse(item.arguments).model, "gpt-6-astra");
+});
+
+test("a wire model outside the advertised enum is still pinned to the parent", () => {
+  const { namespaces } = flattenNamespaceTools(
+    routedCollaborationTools(["gpt-6-astra", "gpt-5.6-sol"]),
+  );
+  const lookups = buildNamespaceLookups(namespaces);
+
+  // `gpt-5.6-terra` is a real catalog entry the client did not advertise for
+  // this session, so it is still treated as an invented value.
+  const rewritten = rewriteNamespaceResponsePayload(
+    flattenedSpawnPayload("gpt-5.6-terra"),
+    lookups,
+    SESSION_MODEL,
+  );
+  const item = rewritten.output[0];
+  assert.equal(item.name, "spawn_agent");
+  assert.equal(JSON.parse(item.arguments).model, SESSION_MODEL);
 });

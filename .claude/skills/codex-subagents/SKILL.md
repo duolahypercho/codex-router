@@ -118,6 +118,19 @@ what Codex is allowed to choose.
 For parallel work, ask for several in one message so they run concurrently rather
 than in sequence.
 
+## Delegating from a routed parent to a native OpenAI model
+
+The router writes `expose_spawn_agent_model_overrides = true` into the managed
+`multi_agent_v2` block, so Codex offers a model override on `spawn_agent` for
+every session, routed parent included. Name the child model when you ask:
+
+> spawn a subagent on gpt-6-astra to audit src/router.mjs
+
+Codex checks the name against its own override list and rejects anything it does
+not offer, so an unavailable model fails before a turn is spent. The router
+keeps the override instead of pinning the child back to the parent's model; only
+a spawn call that omits the model inherits the parent.
+
 ## When it goes wrong
 
 **Model not offered in Codex.** Run the report. Not listed → `subagents set <slug> on`,
