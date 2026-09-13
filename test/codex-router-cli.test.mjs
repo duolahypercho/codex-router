@@ -25,11 +25,11 @@ function run(args, options = {}) {
   return spawnSync(dispatcher, args, { encoding: "utf8", ...options });
 }
 
-// The dispatcher exists so a packaged install can expose one name on PATH, and
-// the name a package manager exposes is a symlink into a versioned prefix. Every
-// sibling in bin/ resolves its root with `dirname $0`, so a dispatcher that does
-// not walk the symlink chain hands them a root one directory above the package
-// prefix and every command fails on a missing src/.
+// The dispatcher exists so a packaged install can expose one name on PATH. A
+// checkout user links it onto PATH by hand, and a dispatcher that does not walk
+// that symlink chain looks for its siblings beside the link and reports every
+// command as unknown. test/bin-symlink-resolution.test.mjs covers the siblings,
+// and the linked-directory case the Homebrew layout actually produces.
 function linkedCopy(target) {
   const dir = mkdtempSync(path.join(realpathSync(os.tmpdir()), "codex-router-cli-"));
   const link = path.join(dir, target);
@@ -58,8 +58,9 @@ test("the dispatcher resolves its root through a symlink", { skip: posixOnly }, 
 });
 
 test("the dispatcher resolves a chain of symlinks", { skip: posixOnly }, () => {
-  // Homebrew stacks two: `bin/codex-router` points at `opt/<name>/...`, which is
-  // itself a symlink into the versioned Cellar directory.
+  // A user stacks two by hand: `~/bin/x -> ~/.local/bin/x -> checkout/bin/...`.
+  // Homebrew itself ships a wrapper script here, not a link; its only link is the
+  // `opt/<formula>` directory, which `[ -L ]` on the file never sees.
   const { dir, link } = linkedCopy("codex-router");
   try {
     const chained = path.join(dir, "chained");
