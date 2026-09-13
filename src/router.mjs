@@ -133,6 +133,7 @@ import {
   ResponseUsageTransform,
   tokenUsageFromPayload,
 } from "./response-usage.mjs";
+import { shouldSkipRemoteCompactV2 } from "./compaction-limit.mjs";
 import { fetchWithRetry } from "./upstream-retry.mjs";
 import { applyGrokApplyPatchGuidance } from "./grok-apply-patch-guidance.mjs";
 import {
@@ -3926,9 +3927,22 @@ async function handleResponses(request, response, requestUrl) {
     // Codex remote compaction V2 uses the ordinary Responses endpoint with a
     // terminal trigger. Detect the protocol shape before route dispatch so the
     // native path can also preserve the full tool results being summarized.
-    const compactV2 =
+    let compactV2 =
       Array.isArray(payload.input) &&
       payload.input.at(-1)?.type === "compaction_trigger";
+
+    if (route && compactV2 && shouldSkipRemoteCompactV2(payload, route, body)) {
+      const estimatedTokens = estimateInputTokens(body, {
+        contextWindow: route.contextWindow,
+      });
+      payload.input = payload.input.slice(0, -1);
+      compactV2 = false;
+      if (!QUIET) {
+        console.error(
+          `[codex-router] skipped-unnecessary-compaction model=${route.slug} provider=${route.provider} estimated-input=${estimatedTokens ?? "<1k"}`,
+        );
+      }
+    }
 
     if (route && (compactV1 || compactV2)) {
       const compaction = await handleRoutedCompaction(
