@@ -16,6 +16,17 @@
   from 256 KiB to 10 MiB: LiteLLM echoes the whole Codex tool list in
   `response.created`, and in Codex Desktop that frame used to switch the repair
   off for the entire stream.
+- **Blank tool-call messages and direct DeepSeek reasoning are repaired behind
+  large tool lists.** LiteLLM echoes the request's instructions and whole tool
+  list in `response.created` and `response.in_progress`. The stream repairs
+  that remove LiteLLM's blank assistant message before a tool call (every Chat
+  Completions and Messages route) and rebuild direct DeepSeek's reasoning item
+  gave up on any frame over 256 KiB or with more than 8,192 JSON members, so a
+  session whose tool list crossed either had both repairs switched off from
+  its first event. Mock gateways send a bare envelope and never showed it. The
+  frame bound now matches the namespace relay's 10 MiB, the JSON scan budgets
+  grow with it, and malformed, ambiguous, or over-budget streams still pass
+  through byte-identical.
 - **Kimi no longer rejects a tool schema whose union leaf declares no type.**
   A nullable field written the ordinary way --
   `{"anyOf":[{"type":"string"},{"type":"null"}]}` -- carries no `type` of its
@@ -30,6 +41,20 @@
   lone `not`, a mixed `enum`) is left open, because narrowing a schema the
   client meant to leave open is worse than the rejection. Every other provider
   keeps the exact wire payload it has today.
+
+- **opencode Zen's quota headers no longer overwrite the Go plan's.** Both
+  plans share one credential and one selection toggle, but Zen bills at its own
+  endpoint, which is why `cooldownScope` keeps Zen's identity where
+  `canonicalProviderId` folds it into Go. The forwarder harvested the observed
+  rate-limit headers under the canonical id instead, so every Zen response
+  overwrote the Go plan's entry in `rate-limits.json` and every Go response
+  overwrote Zen's -- one key holding whichever plan answered last, under the
+  name of the other. Zen's window could not be read back either: every
+  cooldown-scope consumer looks it up as `opencode-zen`, an id the file never
+  held. The snapshot is now keyed by cooldown scope, the same identity the
+  cooldown store beside it already uses, so the two cannot drift apart again
+  (#575). Every other provider and variant keeps the key it has today, and a
+  stale entry is replaced by the next response that carries headers.
 
 - **A routed model the router has not loaded now fails locally, not at
   ChatGPT.** A model added to or renamed in `user-models.json` shows up in the

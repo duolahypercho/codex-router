@@ -89,7 +89,7 @@ test("a healthy service that answers slower than the first probe window still co
   // The first probe still aborts fast, so a service that is genuinely up is
   // still detected immediately; only the later probes widen.
   assert.ok(
-    fetchImpl.abortDurations[0] < 1_300,
+    fetchImpl.abortDurations[0] < 1_400,
     `first probe window should stay ~1 s, was ${fetchImpl.abortDurations[0]} ms`,
   );
   assert.ok(

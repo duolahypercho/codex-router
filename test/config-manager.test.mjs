@@ -2102,12 +2102,143 @@ test("signed routing restores an originally unset provider", () => {
   const codexHome = mkdtempSync(path.join(os.tmpdir(), "codex-router-signed-unset-"));
   const stateDir = path.join(codexHome, "router-state");
   const configPath = path.join(codexHome, "config.toml");
+  const statePath = path.join(stateDir, "signed-provider-mode.json");
   writeFileSync(configPath, 'model = "gpt-5.6-sol"\n', { mode: 0o600 });
   try {
-    run("signed-enable", codexHome, stateDir);
-    assert.doesNotMatch(readFileSync(configPath, "utf8"), /^model_provider\s*=/m);
+    const enabled = run("signed-enable", codexHome, stateDir);
+    assert.equal(enabled.model_provider, "codex-router-signed");
+    assert.equal(enabled.signed_routing, true);
+    assert.equal(enabled.login_free, false);
+    const active = readFileSync(configPath, "utf8");
+    assert.match(active, /^model_provider = "codex-router-signed"$/m);
+    assert.match(active, /\[model_providers\.codex-router-signed\]/);
+    assert.match(active, /^requires_openai_auth = true$/m);
+    assert.doesNotMatch(active, /caller-key-auth-command\.mjs/);
+    assert.deepEqual(JSON.parse(readFileSync(statePath, "utf8")), {
+      version: 1,
+      managedProvider: "codex-router-signed",
+      previousPresent: false,
+    });
+
+    // Ordinary updates keep the rollback-compatible v1 record byte-for-byte;
+    // only an explicit off/on cycle may change signed-routing modes.
+    const stateBeforeUpdate = readFileSync(statePath, "utf8");
+    const updated = run("enable", codexHome, stateDir);
+    assert.equal(updated.model_provider, "codex-router-signed");
+    assert.equal(readFileSync(statePath, "utf8"), stateBeforeUpdate);
+
     run("signed-disable", codexHome, stateDir);
-    assert.doesNotMatch(readFileSync(configPath, "utf8"), /^model_provider\s*=/m);
+    const restored = readFileSync(configPath, "utf8");
+    assert.doesNotMatch(restored, /^model_provider\s*=/m);
+    assert.doesNotMatch(restored, /model_providers\.codex-router-signed/);
+    assert.equal(existsSync(statePath), false);
+  } finally {
+    rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
+test("signed routing switches an explicit OpenAI provider and restores it exactly", () => {
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), "codex-router-signed-openai-"));
+  const stateDir = path.join(codexHome, "router-state");
+  const configPath = path.join(codexHome, "config.toml");
+  const statePath = path.join(stateDir, "signed-provider-mode.json");
+  writeFileSync(
+    configPath,
+    'model = "deepseek/deepseek-v4-pro"\nmodel_provider = "openai"\n',
+    { mode: 0o600 },
+  );
+  try {
+    const enabled = run("signed-enable", codexHome, stateDir);
+    assert.equal(enabled.model_provider, "codex-router-signed");
+    assert.equal(enabled.signed_routing_managed, true);
+    assert.equal(enabled.login_free, false);
+    assert.deepEqual(JSON.parse(readFileSync(statePath, "utf8")), {
+      version: 1,
+      managedProvider: "codex-router-signed",
+      previousPresent: true,
+      previousModelProvider: "openai",
+    });
+
+    const disabled = run("signed-disable", codexHome, stateDir);
+    assert.equal(disabled.model_provider, "openai");
+    const restored = readFileSync(configPath, "utf8");
+    assert.match(restored, /^model = "deepseek\/deepseek-v4-pro"$/m);
+    assert.match(restored, /^model_provider = "openai"$/m);
+    assert.doesNotMatch(restored, /model_providers\.codex-router-signed/);
+  } finally {
+    rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
+test("ordinary refresh does not migrate an existing root-OpenAI v3 signed state", () => {
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), "codex-router-signed-v3-stable-"));
+  const stateDir = path.join(codexHome, "router-state");
+  const configPath = path.join(codexHome, "config.toml");
+  const statePath = path.join(stateDir, "signed-provider-mode.json");
+  writeFileSync(configPath, 'model_provider = "openai"\n', { mode: 0o600 });
+  try {
+    run("enable", codexHome, stateDir);
+    const legacyState = {
+      version: 3,
+      mode: "root-openai",
+      managedProvider: "openai",
+      managedBaseUrl: "http://127.0.0.1:46192/v1",
+      ownershipId: "0123456789abcdef0123456789abcdef",
+      previousProviderSections: [],
+    };
+    writeFileSync(statePath, `${JSON.stringify(legacyState, null, 2)}\n`, { mode: 0o600 });
+
+    const explicitlyReapplied = run("signed-enable", codexHome, stateDir);
+    assert.equal(explicitlyReapplied.model_provider, "openai");
+    assert.deepEqual(JSON.parse(readFileSync(statePath, "utf8")), legacyState);
+
+    const refreshed = run("enable", codexHome, stateDir);
+    assert.equal(refreshed.model_provider, "openai");
+    assert.equal(refreshed.signed_routing, true);
+    assert.deepEqual(JSON.parse(readFileSync(statePath, "utf8")), legacyState);
+
+    // A full native-catalog refresh temporarily disables the transport. Its
+    // internal restore hint recreates the prior root-openai mode instead of
+    // treating the refresh as a user off/on toggle.
+    run("disable", codexHome, stateDir);
+    assert.equal(existsSync(statePath), false);
+    run("enable", codexHome, stateDir);
+    const restored = run(
+      "signed-enable",
+      codexHome,
+      stateDir,
+      ["--preserve-root-openai"],
+    );
+    assert.equal(restored.model_provider, "openai");
+    const restoredState = JSON.parse(readFileSync(statePath, "utf8"));
+    assert.equal(restoredState.version, 3);
+    assert.equal(restoredState.mode, "root-openai");
+  } finally {
+    rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
+test("signed provider switch fails closed after its managed table drifts", () => {
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), "codex-router-signed-switch-drift-"));
+  const stateDir = path.join(codexHome, "router-state");
+  const configPath = path.join(codexHome, "config.toml");
+  writeFileSync(configPath, 'model_provider = "openai"\n', { mode: 0o600 });
+  try {
+    run("signed-enable", codexHome, stateDir);
+    const drifted = readFileSync(configPath, "utf8").replace(
+      'name = "Codex Router (with ChatGPT)"',
+      'name = "User-managed provider"',
+    );
+    writeFileSync(configPath, drifted, { mode: 0o600 });
+    assert.throws(
+      () => run("enable", codexHome, stateDir),
+      /lost ownership.*codex-router-signed/i,
+    );
+    assert.throws(
+      () => run("signed-disable", codexHome, stateDir),
+      /lost ownership.*codex-router-signed/i,
+    );
+    assert.equal(readFileSync(configPath, "utf8"), drifted);
   } finally {
     rmSync(codexHome, { recursive: true, force: true });
   }
