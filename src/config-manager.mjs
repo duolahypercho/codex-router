@@ -152,6 +152,7 @@ const markerPairs = [
 ];
 const command = process.argv[2] || "status";
 const adoptNativeCatalog = process.argv.includes("--adopt-native-catalog");
+const preserveRootOpenaiSignedMode = process.argv.includes("--preserve-root-openai");
 let nativeCatalogNeedsActivation = false;
 
 function configuredRouterBaseUrl() {
@@ -631,6 +632,57 @@ function managedSignedProviderBlock(providerId, baseUrl) {
   ].join("\n");
 }
 
+function signedProviderSwitchState(rootLines) {
+  const previousPresent = rootHasValue(rootLines, "model_provider");
+  return {
+    version: 1,
+    managedProvider: signedProviderId,
+    previousPresent,
+    ...(previousPresent
+      ? { previousModelProvider: rootValue(rootLines, "model_provider") }
+      : {}),
+  };
+}
+
+function managedSignedProviderSwitchContents(contents, baseUrl) {
+  const withoutPriorBlock = removeMarkerPair(
+    contents,
+    signedProviderStartMarker,
+    signedProviderEndMarker,
+    `[model_providers.${signedProviderId}]`,
+  );
+  const withProvider = `${withoutPriorBlock.trimEnd()}\n\n${managedSignedProviderBlock(
+    signedProviderId,
+    baseUrl,
+  )}\n`;
+  return `${replaceRootValue(withProvider, "model_provider", signedProviderId)}\n`;
+}
+
+function withoutManagedSignedProviderSwitch(contents) {
+  return removeMarkerPair(
+    contents,
+    signedProviderStartMarker,
+    signedProviderEndMarker,
+    `[model_providers.${signedProviderId}]`,
+  );
+}
+
+function signedProviderSwitchBlockStatus(contents) {
+  const range = signedManagedRange(contents);
+  if (!range) {
+    const hasArtifacts =
+      contents.includes(signedProviderStartMarker) ||
+      contents.includes(signedProviderEndMarker) ||
+      providerTableRanges(contents, signedProviderId).length > 0;
+    return hasArtifacts ? "drift" : "absent";
+  }
+  const actual = range.lines.slice(range.start, range.end).join("\n");
+  const baseUrl = rootValue(splitRoot(contents).rootLines, "openai_base_url");
+  return managedSignedProviderBlockMatches(actual, signedProviderId, baseUrl)
+    ? "owned"
+    : "drift";
+}
+
 function managedLoginFreeProviderBlock(providerId, baseUrl) {
   const headerId = /^[A-Za-z0-9_-]+$/.test(providerId)
     ? providerId
@@ -963,7 +1015,12 @@ function signedProviderStateIsOwned(contents, state) {
   const { rootLines } = splitRoot(contents);
   const activeProvider = rootValue(rootLines, "model_provider") || "openai";
   if (activeProvider !== state.managedProvider) return false;
-  if (state.version === 1) return activeProvider === signedProviderId;
+  if (state.version === 1) {
+    return (
+      activeProvider === signedProviderId &&
+      signedProviderSwitchBlockStatus(contents) === "owned"
+    );
+  }
   if (state.mode === "root-openai") {
     return (
       isManagedRouterBaseUrl(rootValue(rootLines, "openai_base_url")) &&
@@ -1303,6 +1360,9 @@ function snapshot(contents) {
       signedActive && privateFileIsProtected(SIGNED_PROVIDER_MODE_PATH),
     ),
     signed_provider_state_present: existsSync(SIGNED_PROVIDER_MODE_PATH),
+    signed_provider_state_version: signedState?.version ?? null,
+    signed_provider_mode:
+      signedState?.version === 1 ? "provider-switch" : signedState?.mode ?? null,
     managed_router_artifacts_present: managedRouterArtifactsPresent,
     router_default_model: routerDefault?.model || null,
     router_default_managed: Boolean(routerDefault),
@@ -1564,8 +1624,16 @@ if (command === "enable") {
     );
   }
   if (signedState?.version === 1) {
-    throw new Error(
-      "A recognized older signed-routing mode is still active; turn it off before updating the router.",
+    if (!signedProviderStateIsOwned(current, signedState)) {
+      throw new Error(
+        `Signed routing lost ownership while model_provider is ${
+          rootValue(splitRoot(current).rootLines, "model_provider") || "openai"
+        }; refusing to update it.`,
+      );
+    }
+    next = managedSignedProviderSwitchContents(
+      enabledContents(current),
+      configuredRouterBaseUrl(),
     );
   } else if (signedState) {
     if (!signedProviderStateIsOwned(current, signedState)) {
@@ -1819,9 +1887,20 @@ if (command === "enable") {
   const { rootLines } = splitRoot(current);
   const currentProvider = rootValue(rootLines, "model_provider") || "openai";
   const state = readSignedProviderModeState();
-  if (state?.version === 1) {
+  if (preserveRootOpenaiSignedMode && currentProvider !== "openai") {
     throw new Error(
-      "A recognized older signed-routing mode is still active; turn it off before enabling the task-preserving mode.",
+      "The root-OpenAI signed mode can only be restored from the OpenAI provider.",
+    );
+  }
+  if (state?.version === 1) {
+    if (!signedProviderStateIsOwned(current, state)) {
+      throw new Error(
+        `Signed routing lost ownership while model_provider is ${currentProvider}; turn it off before enabling it again.`,
+      );
+    }
+    next = managedSignedProviderSwitchContents(
+      enabledContents(current),
+      configuredRouterBaseUrl(),
     );
   } else if (state) {
     if (!signedProviderStateIsOwned(current, state)) {
@@ -1846,9 +1925,14 @@ if (command === "enable") {
   } else {
     const enabled = enabledContents(current);
     const routerBaseUrl = configuredRouterBaseUrl();
-    const managed = managedSignedProviderContents(enabled, currentProvider, routerBaseUrl);
-    pendingSignedProviderModeState = managed.state;
-    next = managed.contents;
+    if (currentProvider === "openai" && !preserveRootOpenaiSignedMode) {
+      pendingSignedProviderModeState = signedProviderSwitchState(rootLines);
+      next = managedSignedProviderSwitchContents(enabled, routerBaseUrl);
+    } else {
+      const managed = managedSignedProviderContents(enabled, currentProvider, routerBaseUrl);
+      pendingSignedProviderModeState = managed.state;
+      next = managed.contents;
+    }
   }
   next = applyRouterDefault(next);
 } else {
@@ -1883,12 +1967,27 @@ if (command === "enable") {
           `Refusing to replace user-owned model_provider: ${currentProvider || "unset"}.`,
         );
       }
+      const blockStatus = signedProviderSwitchBlockStatus(current);
+      if (blockStatus === "drift") {
+        throw new Error(
+          `Signed routing lost ownership of model_providers.${signedProviderId}; refusing to replace it.`,
+        );
+      }
+      restored = blockStatus === "owned"
+        ? withoutManagedSignedProviderSwitch(current)
+        : current;
     } else if (signedState.version === 1) {
+      if (!signedProviderStateIsOwned(current, signedState)) {
+        throw new Error(
+          `Signed routing lost ownership of model_providers.${signedProviderId}; refusing to replace it.`,
+        );
+      }
       restored = `${replaceRootValue(
         current,
         "model_provider",
         signedState.previousPresent ? signedState.previousModelProvider : undefined,
       )}\n`;
+      restored = withoutManagedSignedProviderSwitch(restored);
     } else {
       const effectiveProvider = currentProvider || "openai";
       if (effectiveProvider !== signedState.managedProvider) {

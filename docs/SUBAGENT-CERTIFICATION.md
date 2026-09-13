@@ -69,35 +69,44 @@ What is **not** a fourth way: the legacy diagnostic statuses in the proofs file
 > definition on disk. If you are changing that function, the modes are the
 > feature, not a formality — and `subagent-report.mjs` is how you check.
 
-## A ChatGPT account cannot certify a routed model
+## Signed routing is not itself subagent certification
 
-Checks 3–5 cannot complete while Codex is signed in with a ChatGPT account.
-Codex says so in the parent's own message:
+An older root-OpenAI signed-routing run could not complete checks 3–5 while
+Codex was signed in with a ChatGPT account. Codex rejected the routed child in
+the parent's own message:
 
 ```
 The '<provider>/<model>' model is not supported when using Codex with a
 ChatGPT account.
 ```
 
-This is a property of the harness and the account, not of the route, so it
-records as **deferred** — never as a refusal. Do not "fix" it by relaxing the
+That result records as **deferred** — never as a refusal — because it did not
+exercise the route's collaboration transport. Do not "fix" it by relaxing the
 promotion gate.
 
-Two things that look like a way out and are not:
+Current Codex validates an external model id against the selected provider
+before it sends an ordinary request. On Codex CLI 0.153.4, with `codex login
+status` reporting `Logged in using ChatGPT`, the explicit signed-routing switch
+uses the dedicated `codex-router-signed` provider and clears that top-level
+provider/model validation while retaining `requires_openai_auth = true`. The
+ordinary request then reaches the router's `/v1/responses` edge. This is useful
+request-routing evidence, but it is not evidence for any of checks 3–5.
 
-- **Signed routing** (`set_signed_routing`) declares a provider block with
-  `requires_openai_auth = true`. That is the same ChatGPT-account auth, so it
-  changes nothing here.
+Two things still do not constitute certification:
+
+- **Signed routing** (`set_signed_routing`) establishes the provider/transport
+  precondition for ordinary routed turns. No route becomes v2 merely because
+  that switch is on; a complete five-check run is still required.
 - **Marking the candidate v2 in the catalog** is already done: Codex only
   offers a subagent for a route its catalog marks v2, so the run builds a
   private catalog copy with just the candidate marked. That clears an earlier
   "not supported with the current ChatGPT account" error and gets as far as the
-  refusal above — it does not get past it.
+  older root-OpenAI refusal above. A catalog claim alone does not get past it.
 
-The remaining untested path is running Codex under `auth_mode: "apikey"` rather
-than `"chatgpt"`. The wording of the refusal implies an API key would be
-accepted, but that has not been verified, and it bills separately from a
-ChatGPT plan. Verify before promising anyone this works.
+The dedicated signed-provider path has not yet completed all five checks under
+a ChatGPT account, and the API-key path has not been verified either. Both
+remain uncertified and may spend separate quota. Verify before promising either
+one works.
 
 ## What has already been verified, and what has not
 
@@ -108,9 +117,9 @@ Do not re-run these. They cost quota and the answers are recorded here.
 | Does the caller endpoint serve `chat/completions`? | **No.** It answers Responses at `<callerBase>/responses` and takes the caller key as a bearer. | A 404 was once reported to the operator as "this model cannot run subagents". |
 | Can a route stream through the router? | **Yes** for every route tried. | `deepseek/deepseek-v4-flash-vision-exp` returned HTTP 200 with a real SSE stream. |
 | Does a forced `tool_choice` work everywhere? | **No.** A reasoning route can reject the forcing mode itself — *"Thinking mode does not support this tool_choice"* — while calling the tool correctly when simply offered it. | `opencode-go/deepseek-v4-flash-vision-exp`: forced → 400, `auto` → 200 with `{"token": "ok"}`. Codex does not force tool_choice in ordinary use. |
-| Can checks 3-5 complete under a ChatGPT account? | **No.** See the section above. | Codex states it in the parent's own message. |
+| Can checks 3-5 complete under a ChatGPT account? | **Not established.** The older root-OpenAI attempt was deferred; the dedicated signed-provider path has no complete five-check record. | See the versioned evidence above. |
 | Does marking the candidate v2 in a private catalog help? | **Partly.** It clears an earlier "not supported with the current ChatGPT account" error and gets as far as the refusal above. It does not get past it. | Already implemented in the runner. |
-| Is signed routing a way around that? | **No.** Its provider block is `requires_openai_auth = true` — the same account. | `managedSignedProviderBlock` in `config-manager.mjs`. |
+| Is signed routing enough to certify a route? | **No.** It fixes ordinary provider/model validation only; promotion still requires all five checks. | `managedSignedProviderBlock` and `verifiedForRoute`. |
 | Do Ox Alpha, Fugu Ultra or Inkling have a registry certification? | **No.** The registry has seven v2 routes and none of them is one of these. | They reach v2 through operator selection instead. |
 
 Statuses that answer about the account or the moment — 401, 402, 403, 408, 429,
