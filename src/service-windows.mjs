@@ -39,7 +39,7 @@ const HOST_MANAGED = process.platform === "win32";
 
 const effectivePlatform = process.env.CODEX_ROUTER_SERVICE_PLATFORM || process.platform;
 const command = process.argv[2] || "status";
-const renderCommands = new Set(["render", "render-launcher", "render-task"]);
+const renderCommands = new Set(["render", "render-launcher", "render-python", "render-task"]);
 const taskName = "Codex Router";
 const guardLauncherWrite = () => assertServiceWriteIsolated(STATE_DIR, {
   redirected: Boolean(
@@ -51,6 +51,10 @@ const guardLauncherWrite = () => assertServiceWriteIsolated(STATE_DIR, {
 
 const wrapperPath = path.join(STATE_DIR, "start-codex-router.cmd");
 const launcherPath = path.join(STATE_DIR, "start-codex-router-hidden.vbs");
+const pythonLauncherPath = path.join(STATE_DIR, "start-codex-router.pyw");
+const pythonwPath = path.join(SOURCE_ROOT, ".venv", "Scripts", "pythonw.exe");
+const hiddenExePath = path.join(STATE_DIR, "start-codex-router-hidden.exe");
+const hiddenCSharpPath = path.join(STATE_DIR, "start-codex-router-hidden.cs");
 
 if (effectivePlatform !== "win32" && !renderCommands.has(command)) {
   throw new Error("The Task Scheduler service manager runs on Windows only.");
@@ -64,9 +68,8 @@ function vbsEscape(value) {
   return String(value).replaceAll('"', '""');
 }
 
-function wrapper() {
-  const start = path.join(SOURCE_ROOT, "src", "start.mjs");
-  const variables = {
+function serviceEnvironment() {
+  return {
     MODEL_ROUTER_TARGET: TARGET,
     MODEL_ROUTER_STATE_DIR: STATE_DIR,
     MODEL_ROUTER_QUIET: "1",
@@ -95,36 +98,162 @@ function wrapper() {
     PYTHONUTF8: "1",
     ...(process.env.KIMI_CODE_HOME ? { KIMI_CODE_HOME: process.env.KIMI_CODE_HOME } : {}),
   };
-  return `@echo off\r\nsetlocal DisableDelayedExpansion\r\n${Object.entries(variables)
+}
+
+function wrapper() {
+  const start = path.join(SOURCE_ROOT, "src", "start.mjs");
+  return `@echo off\r\nsetlocal DisableDelayedExpansion\r\n${Object.entries(serviceEnvironment())
     .map(([key, value]) => `set "${key}=${cmdEscape(value)}"`)
     .join("\r\n")}\r\n"${cmdEscape(process.execPath)}" "${cmdEscape(start)}" >> "${cmdEscape(LOG_PATH)}" 2>&1\r\n`;
 }
 
+function csharpString(value) {
+  return `"${String(value)
+    .replaceAll("\\", "\\\\")
+    .replaceAll("\"", "\\\"")
+    .replaceAll("\r", "\\r")
+    .replaceAll("\n", "\\n")}"`;
+}
+
+function csharpHiddenLauncher() {
+  const start = path.join(SOURCE_ROOT, "src", "start.mjs");
+  const envLines = Object.entries(serviceEnvironment())
+    .map(([key, value]) => `      psi.EnvironmentVariables[${csharpString(key)}] = ${csharpString(value)};`)
+    .join("\n");
+  return `using System;
+using System.Diagnostics;
+using System.IO;
+using System.Text;
+
+internal static class Program {
+  static int Main() {
+    try {
+      var psi = new ProcessStartInfo();
+      psi.FileName = ${csharpString(process.execPath)};
+      psi.Arguments = ${csharpString(`"${start}"`)};
+      psi.WorkingDirectory = ${csharpString(SOURCE_ROOT)};
+      psi.UseShellExecute = false;
+      psi.CreateNoWindow = true;
+      psi.RedirectStandardOutput = true;
+      psi.RedirectStandardError = true;
+      psi.RedirectStandardInput = true;
+      psi.WindowStyle = ProcessWindowStyle.Hidden;
+      psi.StandardOutputEncoding = new UTF8Encoding(false);
+      psi.StandardErrorEncoding = new UTF8Encoding(false);
+${envLines}
+      var process = Process.Start(psi);
+      if (process == null) return 1;
+      process.StandardInput.Close();
+      using (var log = new StreamWriter(${csharpString(LOG_PATH)}, true, new UTF8Encoding(false))) {
+        log.AutoFlush = true;
+        process.OutputDataReceived += delegate(object sender, DataReceivedEventArgs e) {
+          if (e.Data != null) { lock (log) { log.WriteLine(e.Data); } }
+        };
+        process.ErrorDataReceived += delegate(object sender, DataReceivedEventArgs e) {
+          if (e.Data != null) { lock (log) { log.WriteLine(e.Data); } }
+        };
+        process.BeginOutputReadLine();
+        process.BeginErrorReadLine();
+        process.WaitForExit();
+        return process.ExitCode;
+      }
+    } catch {
+      return 1;
+    }
+  }
+}
+`;
+}
+
+function csharpCompiler() {
+  const root = process.env.WINDIR || process.env.SystemRoot || "C:\\Windows";
+  return path.join(root, "Microsoft.NET", "Framework64", "v4.0.30319", "csc.exe");
+}
+
+function compileHiddenExe() {
+  const compiler = csharpCompiler();
+  if (!existsSync(compiler) || !existsSync(hiddenCSharpPath)) return false;
+  try {
+    execFileSync(
+      compiler,
+      ["/nologo", "/target:winexe", `/out:${hiddenExePath}`, hiddenCSharpPath],
+      {
+        encoding: "utf8",
+        windowsHide: true,
+        stdio: ["ignore", "ignore", "ignore"],
+        timeout: 60_000,
+      },
+    );
+    return existsSync(hiddenExePath);
+  } catch {
+    return false;
+  }
+}
+
+function pythonHideLauncher() {
+  const start = path.join(SOURCE_ROOT, "src", "start.mjs");
+  return [
+    "# Generated by Codex Router. Do not edit.",
+    "import os, subprocess, sys",
+    "CREATE_NO_WINDOW = 0x08000000",
+    `WRAPPER = ${JSON.stringify(wrapperPath)}`,
+    `NODE = ${JSON.stringify(process.execPath)}`,
+    `START = ${JSON.stringify(start)}`,
+    `LOG = ${JSON.stringify(LOG_PATH)}`,
+    `CWD = ${JSON.stringify(SOURCE_ROOT)}`,
+    `EXTRA_ENV = ${JSON.stringify(serviceEnvironment())}`,
+    "def main():",
+    "    if os.path.isfile(WRAPPER):",
+    "        with open(WRAPPER, 'rb') as fh:",
+    "            body = fh.read()",
+    "        if b'start.mjs' not in body:",
+    "            raise SystemExit(subprocess.call(",
+    "                ['cmd.exe', '/D', '/C', WRAPPER],",
+    "                creationflags=CREATE_NO_WINDOW,",
+    "                stdin=subprocess.DEVNULL,",
+    "            ))",
+    "    env = os.environ.copy()",
+    "    env.update(EXTRA_ENV)",
+    "    os.makedirs(os.path.dirname(LOG) or '.', exist_ok=True)",
+    "    with open(LOG, 'ab') as log:",
+    "        raise SystemExit(subprocess.call(",
+    "            [NODE, START],",
+    "            cwd=CWD,",
+    "            env=env,",
+    "            stdout=log,",
+    "            stderr=subprocess.STDOUT,",
+    "            stdin=subprocess.DEVNULL,",
+    "            creationflags=CREATE_NO_WINDOW,",
+    "        ))",
+    "if __name__ == '__main__':",
+    "    main()",
+    "",
+  ].join("\n");
+}
+
 // The scheduled task launches this script through `wscript.exe //B //NoLogo`,
-// which is a windowless host, and the script starts the CMD wrapper with a
-// window style of 0. Without it the wrapper owned a console window that stayed
-// on screen for the router's lifetime and reappeared on every watchdog restart.
-//
-// The `True` wait flag keeps the task instance alive for the router's lifetime
-// so Task Scheduler state and `schtasks /End` track the real process tree.
-// Propagating the wrapper exit code still matters for diagnostics
-// (`LastTaskResult`), but it does not drive relaunch: Task Scheduler's
-// RestartOnFailure only covers actions that fail to start, not a non-zero
-// exit after a successful start (issue #581). Relaunch after exit or a power
-// event comes from the minute heartbeat trigger in installTask().
+// a windowless host. cmd.exe, node.exe and powershell.exe are console
+// binaries: SW_HIDE and even Python CREATE_NO_WINDOW still let Windows
+// Terminal attach a conhost. The generated winexe (/target:winexe) has no
+// console subsystem, and ProcessStartInfo.CreateNoWindow starts node without
+// one. pythonw is the fallback when csc.exe cannot compile. The True wait
+// keeps the task instance alive so Task Scheduler and `schtasks /End` track
+// the real tree.
 function launcher() {
-  // A Windows path cannot contain a double quote, but escape it anyway so a
-  // hand-edited state directory can never break out of the string literal.
-  // Chr(34) supplies the quotes cmd.exe needs around the wrapper path, which
-  // keeps this generated source free of stacked quote-doubling.
   return [
     "Option Explicit",
     "",
-    "Dim quote, shell, status",
+    "Dim quote, command, shell, status, fso",
     "quote = Chr(34)",
+    'Set fso = CreateObject("Scripting.FileSystemObject")',
+    `If fso.FileExists("${vbsEscape(hiddenExePath)}") Then`,
+    `  command = quote & "${vbsEscape(hiddenExePath)}" & quote`,
+    "Else",
+    `  command = quote & "${vbsEscape(pythonwPath)}" & quote & " " & quote & "${vbsEscape(pythonLauncherPath)}" & quote`,
+    "End If",
     'Set shell = CreateObject("WScript.Shell")',
     "On Error Resume Next",
-    `status = shell.Run("cmd.exe /D /C " & quote & quote & "${vbsEscape(wrapperPath)}" & quote & quote, 0, True)`,
+    "status = shell.Run(command, 0, True)",
     "If Err.Number <> 0 Then",
     "  WScript.Quit 1",
     "End If",
@@ -142,6 +271,7 @@ function schtasks(args, options = {}) {
   }
   return execFileSync("schtasks.exe", args, {
     encoding: "utf8",
+    windowsHide: true,
     stdio: options.quiet ? ["ignore", "ignore", "ignore"] : ["ignore", "pipe", "pipe"],
   });
 }
@@ -175,6 +305,9 @@ function writeLaunchers() {
   guardLauncherWrite();
   mkdirSync(STATE_DIR, { recursive: true });
   writeAtomic(wrapperPath, Buffer.from(wrapper(), "utf8"));
+  writeAtomic(pythonLauncherPath, Buffer.from(pythonHideLauncher(), "utf8"));
+  writeAtomic(hiddenCSharpPath, Buffer.from(csharpHiddenLauncher(), "utf8"));
+  compileHiddenExe();
   // wscript.exe parses a script file with the system ANSI code page unless the
   // file carries a UTF-16 byte order mark, so a state directory holding
   // non-ASCII characters only round-trips when the launcher is UTF-16LE.
@@ -207,15 +340,14 @@ function installTask() {
     // around the launcher path never pass through powershell.exe's -Command
     // reparse or the schtasks argument escaper.
     "$action = New-ScheduledTaskAction -Execute $env:CODEX_ROUTER_TASK_EXECUTE -Argument $env:CODEX_ROUTER_TASK_ARGUMENT",
-    // Logon alone never re-fires on wake/fast-startup, and RestartOnFailure
-    // does not relaunch after a started action exits (issue #581). The minute
-    // heartbeat is the supervisor: MultipleInstances IgnoreNew drops it while
-    // the router is alive, and StartWhenAvailable catches ticks missed in sleep.
+    // A one-minute heartbeat retried while Running (IgnoreNew) still made
+    // Windows Terminal flash an empty console on each tick. Logon plus
+    // RestartOnFailure covers start failures; a started action that later
+    // exits is issue #581 and is accepted here to keep the desktop quiet.
     "$logon = New-ScheduledTaskTrigger -AtLogOn -User ([Security.Principal.WindowsIdentity]::GetCurrent().Name)",
-    "$heartbeat = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 1) -RepetitionDuration (New-TimeSpan -Days 9999)",
     "$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -StartWhenAvailable",
     "$principal = New-ScheduledTaskPrincipal -UserId ([Security.Principal.WindowsIdentity]::GetCurrent().Name) -LogonType Interactive -RunLevel Limited",
-    "Register-ScheduledTask -TaskName $env:CODEX_ROUTER_TASK -Action $action -Trigger @($logon, $heartbeat) -Settings $settings -Principal $principal -Force | Out-Null",
+    "Register-ScheduledTask -TaskName $env:CODEX_ROUTER_TASK -Action $action -Trigger $logon -Settings $settings -Principal $principal -Force | Out-Null",
   ].join("; ");
   try {
     execFileSync(
@@ -455,11 +587,12 @@ if (
     "status",
     "render",
     "render-launcher",
+    "render-python",
     "render-task",
   ]).has(command)
 ) {
   console.error(
-    "Usage: service-windows.mjs install|uninstall|start|stop|restart|status|render|render-launcher|render-task",
+    "Usage: service-windows.mjs install|uninstall|start|stop|restart|status|render|render-launcher|render-python|render-task",
   );
   process.exit(2);
 }
@@ -468,6 +601,8 @@ if (command === "render") {
   process.stdout.write(wrapper());
 } else if (command === "render-launcher") {
   process.stdout.write(launcher());
+} else if (command === "render-python") {
+  process.stdout.write(pythonHideLauncher());
 } else if (command === "render-task") {
   process.stdout.write(`${JSON.stringify(taskAction())}\n`);
 } else if (command === "install") {
@@ -521,7 +656,7 @@ if (command === "render") {
   } catch {
     // The task may not exist.
   }
-  for (const target of [launcherPath, wrapperPath]) {
+  for (const target of [launcherPath, wrapperPath, pythonLauncherPath, hiddenExePath, hiddenCSharpPath]) {
     try {
       if (existsSync(target)) unlinkSync(target);
     } catch {
@@ -546,9 +681,9 @@ if (command === "render") {
     `${JSON.stringify({ installed, loaded, state })}\n`,
   );
 } else if (command === "stop") {
-  // A heartbeat trigger must not undo an explicit stop. Disable the task before
-  // ending the active instance so scheduled ticks stay inert until start/restart.
-  // If the task is already missing, stopping remains idempotent.
+  // Disable the task before ending the active instance so logon and
+  // RestartOnFailure stay inert until start/restart. If the task is already
+  // missing, stopping remains idempotent.
   if (taskExists()) {
     setTaskEnabled(false);
     endTask();
