@@ -132,16 +132,125 @@ export function serializeStructuredPatch(value) {
 
 /** Reject duplicate JSON keys rather than accepting JSON.parse's last value. */
 export function compileStructuredPatchArguments(argumentsText) {
+  return serializeStructuredPatch(normalizeGrokEdit(parseArgumentObject(argumentsText)));
+}
+
+function splitLogicalLines(text) {
+  if (typeof text !== "string") reject("string_required");
+  if (/\r/u.test(text)) reject("crlf_unrepresentable");
+  if (text === "") return [];
+  const lines = text.split("\n");
+  if (lines[lines.length - 1] === "") lines.pop();
+  return lines;
+}
+
+function parseArgumentObject(argumentsText) {
   if (typeof argumentsText !== "string") reject("json_string_required");
   if (Buffer.byteLength(argumentsText, "utf8") > MAX_STRUCTURED_PATCH_BYTES) reject("arguments_too_large");
   if (!jsonArgumentsAreUnambiguous(argumentsText)) reject("ambiguous_or_invalid_json");
-  let value;
   try {
-    value = JSON.parse(argumentsText);
+    return JSON.parse(argumentsText);
   } catch {
     reject("ambiguous_or_invalid_json");
   }
-  return serializeStructuredPatch(value);
+}
+
+export function compileSearchReplaceArguments(argumentsText) {
+  return serializeStructuredPatch(searchReplaceToOperations(parseArgumentObject(argumentsText)));
+}
+
+export function compileWriteArguments(argumentsText) {
+  return serializeStructuredPatch(writeToOperations(parseArgumentObject(argumentsText)));
+}
+
+function searchReplaceToOperations(value) {
+  object(value, ["path", "old_string", "new_string"]);
+  if (typeof value.old_string !== "string" || value.old_string.length === 0) reject("empty_old_string");
+  if (value.old_string === value.new_string) reject("no_change");
+  if (/(?:\n)$/u.test(value.old_string) !== /(?:\n)$/u.test(value.new_string)) {
+    reject("trailing_newline_unrepresentable");
+  }
+  const removed = splitLogicalLines(value.old_string);
+  const added = splitLogicalLines(value.new_string);
+  if (removed.length === 0 && added.length === 0) reject("no_change");
+  if (removed.length === added.length && removed.every((text, index) => text === added[index])) {
+    reject("trailing_newline_unrepresentable");
+  }
+  return {
+    operations: [{
+      op: "update",
+      path: value.path,
+      hunks: [{
+        lines: [
+          ...removed.map((text) => ({ kind: "remove", text })),
+          ...added.map((text) => ({ kind: "add", text })),
+        ],
+      }],
+    }],
+  };
+}
+
+function writeToOperations(value) {
+  object(value, ["path", "contents"]);
+  if (value.contents !== "" && !/(?:\r?\n)$/u.test(value.contents)) {
+    reject("missing_trailing_newline");
+  }
+  return {
+    operations: [{
+      op: "add",
+      path: value.path,
+      lines: splitLogicalLines(value.contents),
+    }],
+  };
+}
+
+function parseOperationsField(operations) {
+  if (typeof operations === "string") {
+    if (!jsonArgumentsAreUnambiguous(operations)) reject("ambiguous_or_invalid_json");
+    try {
+      return JSON.parse(operations);
+    } catch {
+      reject("ambiguous_or_invalid_json");
+    }
+  }
+  return operations;
+}
+
+function mergeUpdateOperations(value) {
+  const operations = parseOperationsField(value.operations);
+  if (!Array.isArray(operations)) return { ...value, operations };
+  if (operations.length < 1 || operations.length > MAX_OPERATIONS) reject("array_bounds");
+  for (const operation of operations) {
+    serializeStructuredPatch({ operations: [operation] });
+  }
+  const merged = [];
+  const updateAt = new Map();
+  for (const operation of operations) {
+    if (operation && operation.op === "update" && typeof operation.path === "string") {
+      const index = updateAt.get(operation.path);
+      if (index !== undefined) {
+        const current = merged[index];
+        merged[index] = {
+          ...current,
+          hunks: [...current.hunks, ...operation.hunks],
+        };
+        continue;
+      }
+      updateAt.set(operation.path, merged.length);
+    }
+    merged.push(operation);
+  }
+  return { ...value, operations: merged };
+}
+
+function normalizeGrokEdit(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) reject("object_required");
+  if (Object.hasOwn(value, "operations")) return mergeUpdateOperations(value);
+  if (Object.hasOwn(value, "old_string") || Object.hasOwn(value, "new_string")) {
+    return searchReplaceToOperations(value);
+  }
+  if (Object.hasOwn(value, "contents")) return writeToOperations(value);
+  reject("missing_field");
 }
 
 const textSchema = { type: "string", maxLength: MAX_LINE_LENGTH };

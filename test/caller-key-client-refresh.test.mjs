@@ -41,6 +41,40 @@ test("Codex capability refresh changes only managed caller URLs", () => {
   assert.ok(after.includes(`# copied example must stay ${oldBase}`));
 });
 
+test("Codex capability refresh updates the rollback-compatible signed provider block", () => {
+  const before = [
+    `openai_base_url = ${JSON.stringify(oldBase)}`,
+    "",
+    "# BEGIN codex-router-provider-managed",
+    "[model_providers.codex-router]",
+    `base_url = ${JSON.stringify(oldBase)}`,
+    "# END codex-router-provider-managed",
+    "",
+    "# BEGIN codex-router-signed-provider-managed",
+    "[model_providers.codex-router-signed]",
+    `base_url = ${JSON.stringify(oldBase)}`,
+    "# END codex-router-signed-provider-managed",
+    "",
+  ].join("\n");
+  const after = refreshCodexCallerCapabilityContents(before, newBase, { port: 4202 });
+  assert.equal((after.match(new RegExp(newSecret, "g")) || []).length, 3);
+  assert.doesNotMatch(after, new RegExp(oldSecret));
+  assert.deepEqual(
+    refreshCodexCallerCapabilityState({
+      version: 1,
+      managedProvider: "codex-router-signed",
+      previousPresent: true,
+      previousModelProvider: "openai",
+    }, newBase, { port: 4202 }),
+    {
+      version: 1,
+      managedProvider: "codex-router-signed",
+      previousPresent: true,
+      previousModelProvider: "openai",
+    },
+  );
+});
+
 test("Codex capability state refresh preserves policy and ownership", () => {
   const before = {
     version: 3, mode: "provider-table", managedProvider: "example-provider",

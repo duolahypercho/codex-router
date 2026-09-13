@@ -817,6 +817,15 @@ function readFileEdges(filePath) {
   }
 }
 
+export function codexSessionProvider(model, sessionProvider) {
+  if (model?.includes("/")) return model.split("/", 1)[0];
+  // Signed routing uses a dedicated transport provider so current Codex can
+  // validate external slugs while keeping ChatGPT authentication. Native GPT
+  // turns still go to OpenAI unless the operator separately enabled native
+  // redirect, so do not label them as router traffic in the session list.
+  return sessionProvider === "codex-router-signed" ? "openai" : sessionProvider;
+}
+
 function codexRolloutMetadata(filePath) {
   let sessionMeta;
   let turnContext;
@@ -843,7 +852,7 @@ function codexRolloutMetadata(filePath) {
     workspace,
     workspaceLabel: workspace ? cleanText(path.basename(workspace), workspace, 100) : undefined,
     model,
-    provider: cleanText(model?.includes("/") ? model.split("/", 1)[0] : sessionMeta?.model_provider, "", 100) || undefined,
+    provider: cleanText(codexSessionProvider(model, sessionMeta?.model_provider), "", 100) || undefined,
     effort: cleanText(turnContext?.effort, "", 40) || undefined,
     originator: cleanText(sessionMeta?.originator, "", 80) || undefined,
     createdAt: safeTimestamp(sessionMeta?.timestamp),
