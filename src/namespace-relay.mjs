@@ -8,6 +8,7 @@ import { HeaderlessSseDetector } from "./sse-prefix.mjs";
 import { coerceFunctionCallArguments } from "./tool-arguments.mjs";
 import {
   inlineForeignRefs,
+  declareSchemaTypes,
   nonRecursiveToolSchema,
   providerToolSchema,
 } from "./tool-schema-root.mjs";
@@ -874,7 +875,7 @@ export function jsonArgumentsAreUnambiguous(value, { allowEmpty = false } = {}) 
 // copy.
 export function repairToolSchemaRoot(
   tool,
-  { nonRecursive = false, inlineForeignRefs: inlineRefs = false } = {},
+  { nonRecursive = false, inlineForeignRefs: inlineRefs = false, declareTypes = false } = {},
 ) {
   // Moonshot alone rejects a `$ref` that does not point into `#/$defs/` or one
   // that carries sibling keywords, so only the route that asks for it pays the
@@ -883,7 +884,10 @@ export function repairToolSchemaRoot(
   // is not copied.
   const relaySchema = (schema) => {
     const repaired = providerToolSchema(schema);
-    return inlineRefs ? inlineForeignRefs(repaired) : repaired;
+    const inlined = inlineRefs ? inlineForeignRefs(repaired) : repaired;
+    // After inlining, so a type is declared on the branches a `$ref` brought in
+    // rather than only on the reference that pointed at them.
+    return declareTypes ? declareSchemaTypes(inlined) : inlined;
   };
 
   // Preserve the established shared-provider behavior byte-for-byte. Native
