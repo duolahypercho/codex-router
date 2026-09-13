@@ -1103,6 +1103,7 @@ struct ProviderIcon: View {
     if providerID == "clinepass" { return "cline" }
     if providerID == "minimax-token-plan" { return "minimax" }
     if providerID == "meta" { return "meta" }
+    if providerID == "unorouter" { return "unorouter" }
     return nil
   }
 
@@ -1131,6 +1132,7 @@ struct ProviderIcon: View {
     if providerID == "nano-gpt" { return "NanoGPT" }
     if providerID == "opencode-free" { return "OpenCode Free" }
     if providerID == "kilo-free" { return "Kilo Free" }
+    if providerID == "unorouter" { return "UnoRouter" }
     // Deliberately not a vendor name: this provider is a container for
     // whatever endpoints the operator put in it, and its models come from
     // different places.
