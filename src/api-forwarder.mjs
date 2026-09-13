@@ -77,6 +77,7 @@ import {
   runProviderApiKeyAttempts,
 } from "./provider-api-key-pool.mjs";
 import {
+  inlineDanglingNestedDefsRefs,
   nonRecursiveToolSchema,
   stripCodexEncryptedSchemaAnnotation,
 } from "./tool-schema-root.mjs";
@@ -388,6 +389,26 @@ function stripEncryptedToolSchemaAnnotations(payload, protocol) {
     const fn = tool.function;
     if (!fn || typeof fn !== "object" || Array.isArray(fn)) return tool;
     const repaired = stripCodexEncryptedSchemaAnnotation(fn.parameters);
+    if (repaired === fn.parameters) return tool;
+    changed = true;
+    return { ...tool, function: { ...fn, parameters: repaired } };
+  });
+  if (changed) payload.tools = tools;
+}
+
+// The direct Gemini API rejected Zillow's bedrooms schema: its root $defs
+// pointer names a definition stored under request instead. Repair only that
+// malformed-reference class; ordinary property and valid root refs stay intact.
+function inlineGeminiToolSchemaRefs(payload) {
+  if (!Array.isArray(payload.tools)) return;
+  let changed = false;
+  const tools = payload.tools.map((tool) => {
+    if (!tool || typeof tool !== "object" || Array.isArray(tool) || tool.type !== "function") {
+      return tool;
+    }
+    const fn = tool.function;
+    if (!fn || typeof fn !== "object" || Array.isArray(fn)) return tool;
+    const repaired = inlineDanglingNestedDefsRefs(fn.parameters);
     if (repaired === fn.parameters) return tool;
     changed = true;
     return { ...tool, function: { ...fn, parameters: repaired } };
@@ -869,6 +890,9 @@ function normalizeBody(buffer, contentType, route) {
   }
   if (model.requestProfile === "codex-encrypted-schema") {
     stripEncryptedToolSchemaAnnotations(payload, provider.protocol);
+  }
+  if (provider.id === "gemini-api") {
+    inlineGeminiToolSchemaRefs(payload);
   }
   // Deliberately its own statement rather than a branch of the profile chain
   // below: this is an upstream limitation, and every route that has it also

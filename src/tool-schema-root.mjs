@@ -507,6 +507,142 @@ export function inlineForeignRefs(schema) {
   return inlined;
 }
 
+// Zillow's connector stores MinMaxInt in request.$defs but refers to it as
+// #/$defs/MinMaxInt. Repair missing direct root names using their enclosing
+// definitions, without reinterpreting valid root refs or other pointer forms.
+// This is a compatibility heuristic for malformed schemas, not JSON Schema
+// reference resolution. Resource boundaries, cycles and exhausted budgets
+// return the original schema. Only annotation siblings may be merged.
+export function inlineDanglingNestedDefsRefs(schema) {
+  if (!isPlainObject(schema)) return schema;
+  const state = { expansions: 0, nodes: 0, bytes: jsonByteLength(schema), exceeded: false, inlined: false };
+  if (state.bytes > MAX_INLINE_BYTES) return schema;
+  const activeTargets = new WeakSet();
+  const contexts = new WeakMap();
+
+  // Index lexical scopes before moving anything. A borrowed definition's own
+  // refs must not bind to same-named definitions at the expansion site.
+  const index = (node, scopes, depth) => {
+    if (state.exceeded) return;
+    state.nodes += 1;
+    if (depth > MAX_INLINE_DEPTH || state.nodes > 8192 || contexts.has(node)) {
+      state.exceeded = true;
+      return;
+    }
+    if (
+      (node !== schema && ["$id", "id", "$schema"].some((key) => Object.hasOwn(node, key))) ||
+      ["$anchor", "$dynamicAnchor", "$dynamicRef", "$recursiveAnchor", "$recursiveRef"]
+        .some((key) => Object.hasOwn(node, key))
+    ) {
+      state.exceeded = true;
+      return;
+    }
+    const nextScopes = isPlainObject(node.$defs) ? [node.$defs, ...scopes] : scopes;
+    contexts.set(node, nextScopes);
+    // A null root yields only structural edges, never reference edges.
+    for (const edge of schemaEdges(node, null)) index(edge.node, nextScopes, depth + 1);
+  };
+  index(schema, [], 0);
+  if (state.exceeded) return schema;
+
+  const definitionName = (ref) => {
+    if (typeof ref !== "string") return undefined;
+    let decoded;
+    try { decoded = decodeURIComponent(ref); } catch { return undefined; }
+    const match = /^#\/\$defs\/([^/]+)$/.exec(decoded);
+    if (!match || /~(?:[^01]|$)/.test(match[1])) return undefined;
+    return match[1].replace(/~1/g, "/").replace(/~0/g, "~");
+  };
+
+  const visit = (node, depth) => {
+    if (!isPlainObject(node) || state.exceeded) return node;
+    if (depth > MAX_INLINE_DEPTH) {
+      state.exceeded = true;
+      return node;
+    }
+    const name = definitionName(node.$ref);
+
+    if (
+      name !== undefined &&
+      !(isPlainObject(schema.$defs) && Object.hasOwn(schema.$defs, name))
+    ) {
+      let target;
+      for (const defs of contexts.get(node) ?? []) {
+        if (!Object.hasOwn(defs, name)) continue;
+        target = defs[name];
+        break;
+      }
+      const { $ref: _ref, ...siblings } = node;
+      // Distinct validation keywords can interact (e.g. properties and
+      // additionalProperties). Even a conflict-free object spread is unsafe.
+      if (isPlainObject(target) && Object.keys(siblings).every((key) => REF_OVERRIDE_ANNOTATIONS.has(key))) {
+        if (activeTargets.has(target)) {
+          state.exceeded = true;
+          return node;
+        }
+        state.expansions += 1;
+        // Charge before expansion so repeated large targets cannot allocate a
+        // huge output before the final serialized-size check.
+        state.bytes += jsonByteLength(target);
+        if (state.expansions > MAX_INLINE_EXPANSIONS || state.bytes > MAX_INLINE_BYTES) {
+          state.exceeded = true;
+          return node;
+        }
+        activeTargets.add(target);
+        const expanded = visit(target, depth);
+        activeTargets.delete(target);
+        if (!state.exceeded) {
+          state.inlined = true;
+          return { ...expanded, ...siblings };
+        }
+      }
+    }
+
+    let next = node;
+    const replace = (key, value) => {
+      if (next === node) next = { ...node };
+      next[key] = value;
+    };
+    for (const keyword of [...REF_SCHEMA_MAP_KEYWORDS, "dependencies"]) {
+      const children = node[keyword];
+      if (!isPlainObject(children)) continue;
+      let changed = false;
+      const rewritten = { ...children };
+      for (const [name, child] of Object.entries(children)) {
+        if (!isPlainObject(child)) continue;
+        const repaired = visit(child, depth + 1);
+        if (repaired !== child) {
+          rewritten[name] = repaired;
+          changed = true;
+        }
+      }
+      if (changed) replace(keyword, rewritten);
+    }
+    for (const keyword of [...REF_SCHEMA_ARRAY_KEYWORDS, ...REF_SCHEMA_CHILD_KEYWORDS]) {
+      const children = node[keyword];
+      if (Array.isArray(children)) {
+        let changed = false;
+        const rewritten = children.map((child) => {
+          if (!isPlainObject(child)) return child;
+          const repaired = visit(child, depth + 1);
+          if (repaired !== child) changed = true;
+          return repaired;
+        });
+        if (changed) replace(keyword, rewritten);
+      } else if (isPlainObject(children)) {
+        const repaired = visit(children, depth + 1);
+        if (repaired !== children) replace(keyword, repaired);
+      }
+    }
+    return next;
+  };
+
+  const inlined = visit(schema, 0);
+  if (state.exceeded || !state.inlined || inlined === schema) return schema;
+  if (jsonByteLength(inlined) > MAX_INLINE_BYTES) return schema;
+  return inlined;
+}
+
 // Every object-typed leaf reachable from `schema` through unions and local
 // refs. `seen` guards the self-referential `$defs` Codex generates.
 function objectBranches(schema, root, seen, depth = 0) {
