@@ -12122,3 +12122,81 @@ test("an oversize zstd body is refused with 413 before decoding and the router s
     await closeServer(gateway.server);
   }
 });
+
+test("Command Code Gemini repairs nullable schemas after namespace and search expansion only on the affected route", async () => {
+  const captured = [];
+  const gateway = await mockServer(async (request, response) => {
+    captured.push(await bodyJson(request));
+    json(response, 200, {
+      id: "resp-gemini-schema", object: "response",
+      output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "ok" }] }],
+    });
+  });
+  const scratch = mkdtempSync(path.join(os.tmpdir(), "gemini-tool-schemas-"));
+  const routerPort = await openPort();
+  const router = run("router.mjs", {
+    CODEX_HOME: path.join(scratch, "codex"),
+    MODEL_ROUTER_STATE_DIR: path.join(scratch, "state"),
+    CODEX_ROUTER_STATE_DIR: path.join(scratch, "state"),
+    CODEX_ROUTER_PORT: String(routerPort),
+    CODEX_ROUTER_GATEWAY_BASE_URL: `http://127.0.0.1:${gateway.port}/v1`,
+    CODEX_ROUTER_QUIET: "1",
+  });
+  const parameters = {
+    type: "object",
+    properties: {
+      prompt: { type: "string" },
+      referenced_image_paths: { type: ["array", "null"], items: { type: "string" } },
+      num_last_images_to_include: { type: ["number", "null"] },
+    },
+    required: ["prompt"],
+  };
+  const namespace = { type: "namespace", name: "image_gen", tools: [
+    { type: "function", name: "imagegen", inputSchema: parameters },
+  ] };
+  const plain = { type: "function", name: "plain", parameters: { type: "object", properties: { value: {type: "string"} } } };
+  try {
+    await waitFor(`${routerBase(routerPort)}/models`, router);
+    for (const model of ["commandcode/gemini-3.8-flash", "commandcode/gemini-3.7-flash", "openrouter/gemini-3.8-flash"]) {
+      for (const deferred of [false, true]) {
+        const input = [{ role: "user", content: "Schema compatibility check." }];
+        if (deferred) input.push(
+          { type: "tool_search_call", call_id: "search-schema", execution: "client", arguments: {query: "imagegen"} },
+          { type: "tool_search_output", call_id: "search-schema", execution: "client", status: "completed", tools: [namespace] },
+          { role: "user", content: "Use the discovered tools." },
+        );
+        const response = await fetch(`${routerBase(routerPort)}/responses`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${CALLER_KEY}` },
+          body: JSON.stringify({ model, input, tools: deferred ? [plain, {type: "tool_search", execution: "client"}] : [plain, namespace] }),
+        });
+        assert.equal(response.status, 200, router.testErrors());
+        await response.arrayBuffer();
+        const sent = captured.at(-1).tools;
+        assert.ok(sent.some(tool => tool.name === "plain"));
+        const imagegen = sent.find(tool => tool.name === "image_gen__imagegen");
+        assert.ok(imagegen, `${model}: image tool must be retained (deferred=${deferred})`);
+        for (const field of ["parameters", "inputSchema"]) {
+          const schema = imagegen[field];
+          assert.ok(schema, `${model}: ${field} must be retained`);
+          assert.deepEqual(schema.required, ["prompt"]);
+          assert.deepEqual(schema.properties.prompt, {type: "string"});
+          if (model === "commandcode/gemini-3.8-flash") {
+            assert.deepEqual(schema.properties.referenced_image_paths, {
+              anyOf: [{ type: "array", items: { type: "string" } }, { type: "null" }],
+            });
+            assert.deepEqual(schema.properties.num_last_images_to_include, {
+              anyOf: [{ type: "number" }, { type: "null" }],
+            });
+          } else {
+            assert.deepEqual(schema, parameters, `${model} must keep its existing schema`);
+          }
+        }
+      }
+    }
+  } finally {
+    await stopChild(router);
+    await closeServer(gateway.server);
+    rmSync(scratch, {recursive: true, force: true});
+  }
+});

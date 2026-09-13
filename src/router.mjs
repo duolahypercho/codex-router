@@ -130,6 +130,7 @@ import {
   tokenUsageFromPayload,
 } from "./response-usage.mjs";
 import { fetchWithRetry } from "./upstream-retry.mjs";
+import { repairGeminiToolSchemas } from "./gemini-tool-schema.mjs";
 import { applyGrokApplyPatchGuidance } from "./grok-apply-patch-guidance.mjs";
 import {
   GROK_STRUCTURED_PATCH_CODEC,
@@ -1056,6 +1057,16 @@ function needsNonRecursiveToolSchemaCompatibility(route) {
     needsZenFreeToolCompatibility(route) ||
     (providerId === "opencode-go-responses" &&
       route.upstreamModel === "muse-spark-1.2-contributor")
+  );
+}
+
+// This route rejected image_gen's nullable array after upstream conversion
+// produced anyOf with sibling fields. Match the provider/model pair so aliases
+// of the same upstream receive the repair without changing other routes.
+function needsCommandCodeGeminiToolSchemaCompatibility(route) {
+  return (
+    providerForModel(route)?.id === "commandcode" &&
+    route.upstreamModel === "google/gemini-3.8-flash"
   );
 }
 
@@ -3414,6 +3425,10 @@ async function buildRoutedRequest({ request, payload, route, agedInput }) {
       // repair pass, so enforce the same boundary on the expanded inventory.
       tools = repairToolSchemaRoots(tools, { nonRecursive: true });
     }
+  }
+  if (needsCommandCodeGeminiToolSchemaCompatibility(route)) {
+    // Normalize the complete inventory once, including stored search results.
+    tools = repairGeminiToolSchemas(tools);
   }
   // Stored call history and forced choices must use the same tool names as the
   // provider-facing list, or the model/request validator sees two identities.

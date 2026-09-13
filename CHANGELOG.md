@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **Command Code's Gemini 3.8 Flash accepts nullable tool parameters.** Convert
+  a single concrete type plus `null` to an explicit union before forwarding,
+  preserving array constraints and nested schemas. This prevents the observed
+  `any_of` sibling-field rejection for Codex's image-generation tool, including
+  definitions restored from tool-search history. Other routes keep their schemas.
 - **Blank tool-call messages and direct DeepSeek reasoning are repaired behind
   large tool lists.** LiteLLM echoes the request's instructions and whole tool
   list in `response.created` and `response.in_progress`. The stream repairs
