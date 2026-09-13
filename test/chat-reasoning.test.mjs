@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 
 import { usesNativeChatReasoning } from "../src/chat-reasoning.mjs";
 import { childOutput, waitForListeners } from "./listener-readiness.mjs";
+import { MODEL_BY_SLUG } from "../src/model-registry.mjs";
 
 test("native chat reasoning stays scoped to established history contracts", () => {
   assert.equal(usesNativeChatReasoning({ requestProfile: "glm-thinking" }), true);
@@ -16,15 +17,56 @@ test("native chat reasoning stays scoped to established history contracts", () =
   assert.equal(usesNativeChatReasoning({
     provider: "commandcode", upstreamModel: "deepseek/deepseek-v4-flash",
   }), true);
+  // OpenCode Go reaches its DeepSeek, GLM, and Qwen thinking models over Chat
+  // Completions with reseller-shaped profiles. Its DeepSeek routes keep the
+  // vendor replay rule, which the profile checks alone cannot see: the measured
+  // `opencode-go/deepseek-v4.1-flash` carries `auto-tool-choice`, so the carry
+  // never ran and the provider rejected the following turn.
+  for (const model of [
+    { provider: "opencode-go", upstreamModel: "deepseek-v4.1-flash", requestProfile: "auto-tool-choice" },
+    { provider: "opencode-go", upstreamModel: "deepseek-v4-flash" },
+    { provider: "opencode-go", upstreamModel: "deepseek/deepseek-v4-pro" },
+  ]) {
+    assert.equal(usesNativeChatReasoning(model), true);
+  }
   for (const model of [
     undefined,
     { provider: "deepseek", requestProfile: "deepseek-nonthinking" },
-    { provider: "opencode-go", upstreamModel: "deepseek-v4-flash" },
     { provider: "custom", upstreamModel: "deepseek/deepseek-v4-flash" },
     { provider: "commandcode", upstreamModel: "moonshotai/kimi-k2.6" },
     { provider: "commandcode-messages", upstreamModel: "deepseek/deepseek-v4-flash" },
+    // Other OpenCode Go thinking models keep their existing replay channel:
+    // only the DeepSeek upstream's requirement is established.
+    { provider: "opencode-go", upstreamModel: "glm-5.3", requestProfile: "ox-alpha" },
+    { provider: "opencode-go", upstreamModel: "kimi-k3", requestProfile: "kimi-k3" },
+    // Anthropic-protocol variant: reasoning travels as thinking blocks, so the
+    // `reasoning_content` restore must not be applied.
+    { provider: "opencode-go-messages", requestProfile: "auto-tool-choice" },
   ]) {
     assert.equal(usesNativeChatReasoning(model), false);
+  }
+});
+
+// The contract is per-upstream, not per-profile: the shipped OpenCode Go
+// DeepSeek route carries `auto-tool-choice`, which no profile check in this
+// module matches. Reading the registry keeps the assertion tied to the real
+// configuration instead of hand-built objects that could drift away from it.
+test("every shipped OpenCode Go DeepSeek route replays its reasoning", () => {
+  const deepseekRoutes = [...MODEL_BY_SLUG.values()].filter(
+    (model) => model.provider === "opencode-go" && /deepseek/i.test(model.upstreamModel ?? ""),
+  );
+  assert.ok(deepseekRoutes.length > 0, "expected shipped OpenCode Go DeepSeek routes");
+  for (const route of deepseekRoutes) {
+    assert.equal(usesNativeChatReasoning(route), true, route.slug);
+  }
+
+  // Everything else on that endpoint keeps its existing replay channel, and the
+  // Anthropic-protocol variant is a different wire contract entirely, so a slug
+  // that merely sits next to the Chat routes must not be swept in.
+  for (const [slug, model] of MODEL_BY_SLUG) {
+    if (model.provider !== "opencode-go" && model.provider !== "opencode-go-messages") continue;
+    if (model.provider === "opencode-go" && /deepseek/i.test(model.upstreamModel ?? "")) continue;
+    assert.equal(usesNativeChatReasoning(model), false, slug);
   }
 });
 

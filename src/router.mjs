@@ -57,6 +57,7 @@ import {
   isEmptyCompletionPreludeLimitError,
 } from "./empty-completion-guard.mjs";
 import { itemLifecycleNormalizerTransform } from "./item-lifecycle-normalizer.mjs";
+import { duplicateBlockCollapseTransform } from "./duplicate-block-collapse.mjs";
 import { reasoningTagStripperTransform } from "./reasoning-tag-stripper.mjs";
 import {
   ZaiResponsesCompatTransform,
@@ -4463,6 +4464,14 @@ async function handleResponses(request, response, requestUrl) {
       // always wins. Native streams already carry the label and gain no stage.
       const messagePhase = route ? messagePhaseTransform(contentType) : undefined;
       if (messagePhase) transforms.push(messagePhase);
+      // Runs after the normalizer, which guarantees each item is opened,
+      // streamed, and closed before the next begins -- so holding one message
+      // item's events cannot reorder anything. Collapses a message whose whole
+      // text is a run of identical block repeats, the measured duplicate shape.
+      const blockCollapse = route
+        ? duplicateBlockCollapseTransform(contentType)
+        : undefined;
+      if (blockCollapse) transforms.push(blockCollapse);
       // Last, so no router stage ever parses a heartbeat: while a Grok stream is
       // silent, keep the client's idle timer from abandoning a live turn.
       if (

@@ -2025,6 +2025,16 @@ retry rules on the shared path.
   source items or change other native Responses routes. Keep this policy shared
   between hops without applying direct DeepSeek sampling parameters to resellers.
   Command Code's schema-strict `/alpha/generate` fallback remains separate.
+- A reseller's DeepSeek routes carry reasoning the same way regardless of the
+  route's own request profile, because the rule belongs to the upstream model
+  and not to the profile or the reseller. OpenCode Go's DeepSeek routes carry
+  `auto-tool-choice`, which no profile check matches, so a profile-only policy
+  left them unprotected and the provider rejected the turn after any prose
+  reply with "The `reasoning_content` in the thinking mode must be passed back
+  to the API". Scope this to the DeepSeek upstream: the same endpoint serves
+  GLM, Qwen, Kimi, MiniMax, Longcat and MiMo thinking models, and moving their
+  replay from visible text to `reasoning_content` without evidence that they
+  require it would be a silent behaviour change.
 
 Regression coverage lives in `test/deepseek-responses-routing.test.mjs`,
 `test/namespace-relay-custom.test.mjs`, `test/chat-reasoning.test.mjs` and the
@@ -2033,6 +2043,32 @@ set `MODEL_ROUTER_TEST_LITELLM_PYTHON` to a Python interpreter with the reposito
 pinned LiteLLM and run `node --test test/chat-reasoning.test.mjs`. It uses only
 loopback services and synthetic credentials, with duplicate negative controls.
 See the provider's [Responses contract](https://api-docs.deepseek.com/guides/responses_api/).
+
+## A duplicated assistant block is collapsed at egress
+
+LiteLLM's chat-completions bridge can emit a turn's answer text twice inside one
+assistant `message` item: the same token run, then the same run again, with the
+terminal `output_text.done` carrying both copies. It is observable on routed
+Chat routes and it is in the wire bytes, not a client rendering artifact and not
+an item-lifecycle reorder. `src/duplicate-block-collapse.mjs` rewrites a message
+whose entire text is a run of identical blank-line-separated blocks (`A\n\nA`,
+`A\n\nA\n\nB\n\nB`) down to one copy each, and relays everything else
+byte-for-byte.
+
+- The rewrite inspects only the visible answer text. An output item also carries
+  the model's reasoning, which on a thinking route is routinely an order of
+  magnitude larger; bounding the hold by total item bytes made the guard trip on
+  long reasoning and release the item verbatim, so the duplicate survived
+  exactly where it was most common. Keep the text bound and the memory bound
+  separate.
+- It runs after `ItemLifecycleNormalizer`, which guarantees an item is opened,
+  streamed, and closed before the next one begins, so holding one message item's
+  events cannot reorder the stream. If a different output index arrives while an
+  item is held, release everything verbatim rather than reordering.
+- Captures that prove a rewrite must be taken on both sides of this transform.
+  A post-transform-only capture cannot distinguish "the duplicate never
+  arrived" from "the transform removed it", which is how the reasoning-volume
+  defect above stayed hidden behind an apparently clean stream.
 
 ## Substituting a prompt-token count a provider reported as zero
 
