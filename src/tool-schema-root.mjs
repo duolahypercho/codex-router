@@ -166,7 +166,28 @@ function cycleClosingLocalRefs(schema) {
   return { closing, count };
 }
 
-function cloneWithoutClosingRefs(root, closing) {
+// The type a blanked cycle-closing `$ref` was declaring, read out of the target
+// it named rather than inferred from context. A definition that is a pure alias
+// for another is followed, with visited pointers tracked so a `$defs` cycle made
+// only of references terminates.
+function closingRefType(ref, root) {
+  const seen = new Set();
+  let node = resolveRef(ref, root);
+  while (isPlainObject(node) && !("type" in node) && typeof node.$ref === "string") {
+    if (seen.has(node.$ref)) return undefined;
+    seen.add(node.$ref);
+    node = resolveRef(node.$ref, root);
+  }
+  if (!isPlainObject(node)) return undefined;
+  const type = node.type;
+  if (typeof type === "string") return type;
+  if (Array.isArray(type) && type.length && type.every((entry) => typeof entry === "string")) {
+    return [...type];
+  }
+  return undefined;
+}
+
+function cloneWithoutClosingRefs(root, closing, keepTypes) {
   const clones = new WeakMap();
   const rootCopy = {};
   clones.set(root, rootCopy);
@@ -176,8 +197,12 @@ function cloneWithoutClosingRefs(root, closing) {
     const entries = Array.isArray(source)
       ? source.map((value, index) => [index, value])
       : Object.entries(source);
+    let blankedRef;
     for (const [key, value] of entries) {
-      if (key === "$ref" && closing.has(source)) continue;
+      if (key === "$ref" && closing.has(source)) {
+        blankedRef = value;
+        continue;
+      }
       if (!Array.isArray(value) && !isPlainObject(value)) {
         target[key] = value;
         continue;
@@ -190,15 +215,25 @@ function cloneWithoutClosingRefs(root, closing) {
       }
       target[key] = copy;
     }
+    // Only for the routes that ask for it. Dropping the reference otherwise
+    // leaves a bare `{}`, which declares no type -- the one shape Moonshot
+    // answers with `tools.function.parameters missing type in anyOf
+    // properties` (#726), so the router can manufacture that 400 out of a
+    // schema the client wrote correctly. Every sibling the client authored,
+    // `type` included, still wins; this only fills the gap blanking opened.
+    if (keepTypes && blankedRef !== undefined && !("type" in target)) {
+      const recovered = closingRefType(blankedRef, root);
+      if (recovered !== undefined) target.type = recovered;
+    }
   }
   return rootCopy;
 }
 
-export function nonRecursiveToolSchema(schema) {
+export function nonRecursiveToolSchema(schema, { keepBlankedTypes = false } = {}) {
   if (!isPlainObject(schema)) return schema;
   const { closing, count } = cycleClosingLocalRefs(schema);
   if (!count) return schema;
-  return cloneWithoutClosingRefs(schema, closing);
+  return cloneWithoutClosingRefs(schema, closing, keepBlankedTypes);
 }
 
 // Some strict upstream JSON-Schema validators reject Codex's private

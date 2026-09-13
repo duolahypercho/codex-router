@@ -3,6 +3,7 @@ import test from "node:test";
 
 import { CODEX_APP_TOOLS } from "../src/codex-app-tools.mjs";
 import { toResponsesRequest } from "../src/grok-oauth-forwarder.mjs";
+import { moonshotSchemaRoute } from "../src/moonshot-schema-routes.mjs";
 import {
   declareSchemaTypes,
   hasObjectRoot,
@@ -886,4 +887,103 @@ test("a schema that already declares its types is returned by identity", () => {
   };
   assert.equal(declareSchemaTypes(clean), clean);
   assert.equal(declareSchemaTypes({ type: "object" }).type, "object");
+});
+
+test("blanking a cycle edge keeps the type it pointed at when the route asks", () => {
+  // #726: `declareSchemaTypes` runs in the router's Moonshot pass, but the
+  // forwarder breaks `$ref` cycles later. Left as a bare `{}` the node declares
+  // no type, which is exactly what Moonshot rejects with
+  // "tools.function.parameters missing type in anyOf properties" -- a 400 the
+  // router manufactured out of a schema the client wrote correctly.
+  const schema = {
+    type: "object",
+    properties: { root: { $ref: "#/$defs/Node" } },
+    $defs: {
+      Node: {
+        type: "object",
+        properties: { name: { type: "string" }, child: { $ref: "#/$defs/Node" } },
+      },
+      Tags: { type: "array", items: { $ref: "#/$defs/Tags" } },
+    },
+  };
+
+  const repaired = nonRecursiveToolSchema(schema, { keepBlankedTypes: true });
+  assert.deepEqual(repaired.$defs.Node.properties.child, { type: "object" });
+  assert.deepEqual(repaired.$defs.Tags.items, { type: "array" });
+  // The type is read from the target, so the definitions themselves survive.
+  assert.equal(repaired.$defs.Node.properties.name.type, "string");
+});
+
+test("every other route still gets the permissive blank it has today", () => {
+  // The opposite of the test above, and the reason this is opt-in: the blanking
+  // exists for Meta's Console 400, that path works, and it was not re-measured
+  // here. Its wire payload must not move.
+  const schema = {
+    type: "object",
+    properties: { root: { $ref: "#/$defs/Node" } },
+    $defs: { Node: { type: "object", properties: { child: { $ref: "#/$defs/Node" } } } },
+  };
+  assert.deepEqual(nonRecursiveToolSchema(schema).$defs.Node.properties.child, {});
+  assert.deepEqual(
+    nonRecursiveToolSchema(schema, { keepBlankedTypes: false }).$defs.Node.properties.child,
+    {},
+  );
+});
+
+test("a type the client wrote on the referencing node is never overwritten", () => {
+  const schema = {
+    type: "object",
+    properties: { root: { $ref: "#/$defs/Node" } },
+    $defs: {
+      Node: {
+        type: "object",
+        properties: {
+          child: { $ref: "#/$defs/Node", type: "string", description: "kept" },
+        },
+      },
+    },
+  };
+  const child = nonRecursiveToolSchema(schema, { keepBlankedTypes: true })
+    .$defs.Node.properties.child;
+  assert.equal(child.type, "string");
+  assert.equal(child.description, "kept");
+  assert.equal("$ref" in child, false);
+});
+
+test("an alias definition is followed, and a definition cycle of pure refs terminates", () => {
+  const aliased = {
+    type: "object",
+    properties: { root: { $ref: "#/$defs/Node" } },
+    $defs: {
+      Alias: { $ref: "#/$defs/Node" },
+      Node: { type: "object", properties: { child: { $ref: "#/$defs/Alias" } } },
+    },
+  };
+  assert.deepEqual(
+    nonRecursiveToolSchema(aliased, { keepBlankedTypes: true }).$defs.Node.properties.child,
+    { type: "object" },
+  );
+
+  // Nothing declares a type anywhere on the ring; the walk must stop rather
+  // than chase it, and the node stays open.
+  const ring = {
+    type: "object",
+    properties: { root: { $ref: "#/$defs/A" } },
+    $defs: { A: { $ref: "#/$defs/B" }, B: { $ref: "#/$defs/A" } },
+  };
+  const repaired = nonRecursiveToolSchema(ring, { keepBlankedTypes: true });
+  assert.equal(JSON.stringify(repaired).includes("$defs"), true);
+});
+
+test("the Moonshot schema route set is exactly the measured routes", () => {
+  for (const providerId of ["kimi-oauth", "kimi-api", "kimi-api-cn"]) {
+    assert.equal(moonshotSchemaRoute(providerId, "any-model"), true);
+  }
+  assert.equal(moonshotSchemaRoute("opencode-go", "kimi-k2.7-code"), true);
+  // Not projected onto the rest of Console Go, and not onto the providers that
+  // use the blanking for Meta's 400.
+  assert.equal(moonshotSchemaRoute("opencode-go", "muse-spark-1.2-contributor"), false);
+  assert.equal(moonshotSchemaRoute("opencode-go-responses", "muse-spark-1.2-contributor"), false);
+  assert.equal(moonshotSchemaRoute("opencode-free-responses", "muse-spark-1.3-contributor-free"), false);
+  assert.equal(moonshotSchemaRoute(undefined, undefined), false);
 });

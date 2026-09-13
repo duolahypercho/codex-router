@@ -57,6 +57,7 @@ import {
   isEmptyCompletionPreludeLimitError,
 } from "./empty-completion-guard.mjs";
 import { itemLifecycleNormalizerTransform } from "./item-lifecycle-normalizer.mjs";
+import { moonshotSchemaRoute } from "./moonshot-schema-routes.mjs";
 import { reasoningTagStripperTransform } from "./reasoning-tag-stripper.mjs";
 import {
   ZaiResponsesCompatTransform,
@@ -1066,16 +1067,8 @@ function needsNonRecursiveToolSchemaCompatibility(route) {
 // schema flavor. Console Go's Kimi K2.7 Code route has now returned the same
 // validator error (#488), so include that exact measured route without
 // projecting the behavior onto unrelated OpenCode Go models.
-const MOONSHOT_PROVIDER_IDS = new Set(["kimi-oauth", "kimi-api", "kimi-api-cn"]);
-const OPENCODE_GO_MOONSHOT_MODELS = new Set(["kimi-k2.7-code"]);
-
 function needsMoonshotSchemaCompatibility(route) {
-  const providerId = providerForModel(route)?.id;
-  return (
-    MOONSHOT_PROVIDER_IDS.has(providerId) ||
-    (providerId === "opencode-go" &&
-      OPENCODE_GO_MOONSHOT_MODELS.has(route.upstreamModel))
-  );
+  return moonshotSchemaRoute(providerForModel(route)?.id, route.upstreamModel);
 }
 
 function zenFreeCompatibleInput(input, route) {
