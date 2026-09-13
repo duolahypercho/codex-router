@@ -17,6 +17,20 @@
   client meant to leave open is worse than the rejection. Every other provider
   keeps the exact wire payload it has today.
 
+- **opencode Zen's quota headers no longer overwrite the Go plan's.** Both
+  plans share one credential and one selection toggle, but Zen bills at its own
+  endpoint, which is why `cooldownScope` keeps Zen's identity where
+  `canonicalProviderId` folds it into Go. The forwarder harvested the observed
+  rate-limit headers under the canonical id instead, so every Zen response
+  overwrote the Go plan's entry in `rate-limits.json` and every Go response
+  overwrote Zen's -- one key holding whichever plan answered last, under the
+  name of the other. Zen's window could not be read back either: every
+  cooldown-scope consumer looks it up as `opencode-zen`, an id the file never
+  held. The snapshot is now keyed by cooldown scope, the same identity the
+  cooldown store beside it already uses, so the two cannot drift apart again
+  (#575). Every other provider and variant keeps the key it has today, and a
+  stale entry is replaced by the next response that carries headers.
+
 - **A routed model the router has not loaded now fails locally, not at
   ChatGPT.** A model added to or renamed in `user-models.json` shows up in the
   Codex picker as soon as the catalog is rebuilt, but the running router reads
