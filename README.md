@@ -1355,6 +1355,22 @@ When the Codex runtime is executing inside WSL, a Windows-style path such as
 If setup appears successful but the Desktop model picker does not change, check
 which Codex home was modified before rerunning setup.
 
+### Use external models while signed in to ChatGPT
+
+The Control Center's **Use Router with ChatGPT** switch keeps ChatGPT
+authentication available while external provider models remain selectable. On
+current Codex builds, an explicit switch from the built-in OpenAI provider
+selects the managed `codex-router-signed` transport so Codex validates prefixed
+model ids against the router before sending them. The prior provider is stored
+in protected state and restored when the switch is turned off. Normal updates
+and catalog refreshes do not silently opt an existing installation into this
+provider switch.
+
+The optional native redirect is independent of this switch and of model
+failover. If native redirect is set, every unmatched native GPT turn that
+reaches the router continues to use its configured external route until
+`./bin/control native-redirect clear` is run.
+
 ### Use Codex without an OpenAI login
 
 The tray's **Use without OpenAI login** switch selects the managed custom

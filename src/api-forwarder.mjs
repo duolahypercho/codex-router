@@ -38,6 +38,7 @@ import {
 } from "./rate-limit-headers.mjs";
 import { recordRateLimitSnapshot } from "./rate-limit-state.mjs";
 import { recordProviderCooldown } from "./model-failover.mjs";
+import { cooldownScope } from "./provider-cooldown.mjs";
 import { canonicalProviderId, readProviderSelection } from "./provider-selection.mjs";
 import { stripImages, supportsImageInput } from "./vision-bridge.mjs";
 import {
@@ -1223,9 +1224,13 @@ async function upstreamSession(provider, credential, payload, options = {}, endp
 // never sit in time-to-first-byte.
 function recordUpstreamLimits(normalized, upstream) {
   const rateLimit = parseRateLimitHeaders(upstream.headers);
-  // Variant-routed responses meter the same upstream subscription, so quota
-  // headers land under the family's canonical provider id.
-  if (rateLimit) recordRateLimitSnapshot(canonicalProviderId(normalized.provider.id), rateLimit);
+  // Keyed by cooldown scope, the same identity `recordProviderCooldown` uses
+  // below. A protocol variant meters its parent's subscription and shares its
+  // key, but opencode Zen is billed at its own endpoint: canonicalizing here
+  // filed Zen's window under the Go plan, so each plan's response overwrote the
+  // other's snapshot and neither could be read back under the id that produced
+  // it.
+  if (rateLimit) recordRateLimitSnapshot(cooldownScope(normalized.provider.id), rateLimit);
   // This hop is the only place the provider's own status and headers are seen
   // before LiteLLM restates them, so it is the only place a reset time the
   // gateway does not relay can still be read. A failure that names when the

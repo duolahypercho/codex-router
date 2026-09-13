@@ -29,6 +29,31 @@
   it went unnoticed; opencode and pi validate them and failed every turn. A
   keep-alive or SSE comment after the terminal event is now dropped; real data
   after it is still refused.
+- **Reasoning from Chat Completions models now shows in Codex.** LiteLLM's
+  Chat Completions to Responses bridge opens the assistant message first and
+  streams the model's reasoning under a fresh hashed item id per delta, with no
+  reasoning item around it. Codex drops deltas that belong to no open item, so
+  routed models such as Hy4 Preview (Command Code), DeepSeek V4.1 Flash on
+  opencode Go, and every other Chat Completions route showed no reasoning at
+  all, and none was saved to the thread. The repair that already rebuilt one
+  reasoning item for Grok OAuth now runs for every Chat Completions route.
+  Direct DeepSeek keeps its own bridge repair, Responses and Messages providers
+  are untouched, canonical streams pass byte-identical, and the Grok-specific
+  gateway-error wording stays on Grok OAuth. Its first-frame bound also rises
+  from 256 KiB to 10 MiB: LiteLLM echoes the whole Codex tool list in
+  `response.created`, and in Codex Desktop that frame used to switch the repair
+  off for the entire stream.
+- **Blank tool-call messages and direct DeepSeek reasoning are repaired behind
+  large tool lists.** LiteLLM echoes the request's instructions and whole tool
+  list in `response.created` and `response.in_progress`. The stream repairs
+  that remove LiteLLM's blank assistant message before a tool call (every Chat
+  Completions and Messages route) and rebuild direct DeepSeek's reasoning item
+  gave up on any frame over 256 KiB or with more than 8,192 JSON members, so a
+  session whose tool list crossed either had both repairs switched off from
+  its first event. Mock gateways send a bare envelope and never showed it. The
+  frame bound now matches the namespace relay's 10 MiB, the JSON scan budgets
+  grow with it, and malformed, ambiguous, or over-budget streams still pass
+  through byte-identical.
 - **Kimi no longer rejects a tool schema whose union leaf declares no type.**
   A nullable field written the ordinary way --
   `{"anyOf":[{"type":"string"},{"type":"null"}]}` -- carries no `type` of its
@@ -43,6 +68,37 @@
   lone `not`, a mixed `enum`) is left open, because narrowing a schema the
   client meant to leave open is worse than the rejection. Every other provider
   keeps the exact wire payload it has today.
+
+- **A streamed answer no longer loses the whitespace it starts with.** The
+  inline-reasoning stripper trimmed the leading whitespace of every message it
+  streamed, but `stripThinkTags` -- the same module's whole-string form, used
+  for the `output_text.done` snapshot and the stored message item -- trims only
+  when it actually removed a tag, and returns an untagged message by identity.
+  So an ordinary answer opening with a newline (a fenced code block, a leading
+  blank line) reached the client without it, while the terminal snapshot beside
+  it kept it: the rendered answer and the stored one disagreed on a route that
+  had leaked no reasoning at all. A first delta made only of whitespace was
+  dropped from the stream outright. The stripper now holds that whitespace until
+  the first visible character, by which point it knows whether a tag was
+  removed, and emits or drops it to match. The hold is bounded: nothing is kept
+  once a tag has been removed, only the new delta is scanned rather than the
+  accumulation, and past 8 KiB of unbroken whitespace the stripper emits what it
+  holds instead of growing further. The observed leak shapes are unchanged --
+  reasoning arrives before the answer, so the removal is always known in time.
+- **opencode Zen's quota headers no longer overwrite the Go plan's.** Both
+  plans share one credential and one selection toggle, but Zen bills at its own
+  endpoint, which is why `cooldownScope` keeps Zen's identity where
+  `canonicalProviderId` folds it into Go. The forwarder harvested the observed
+  rate-limit headers under the canonical id instead, so every Zen response
+  overwrote the Go plan's entry in `rate-limits.json` and every Go response
+  overwrote Zen's -- one key holding whichever plan answered last, under the
+  name of the other. Zen's window could not be read back either: every
+  cooldown-scope consumer looks it up as `opencode-zen`, an id the file never
+  held. The snapshot is now keyed by cooldown scope, the same identity the
+  cooldown store beside it already uses, so the two cannot drift apart again
+  (#575). Every other provider and variant keeps the key it has today, and a
+  stale entry is replaced by the next response that carries headers.
+
 - **A routed model the router has not loaded now fails locally, not at
   ChatGPT.** A model added to or renamed in `user-models.json` shows up in the
   Codex picker as soon as the catalog is rebuilt, but the running router reads

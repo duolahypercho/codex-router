@@ -62,7 +62,17 @@ import {
   ZaiResponsesCompatTransform,
   zaiResponsesCompatTransform,
 } from "./zai-responses-compat.mjs";
-import { grokReasoningSummaryCompatTransform } from "./grok-reasoning-summary-compat.mjs";
+import { reasoningSummaryCompatTransform } from "./grok-reasoning-summary-compat.mjs";
+import { earlyToolItemDoneTransform } from "./early-tool-item-done.mjs";
+import {
+  applyGrokEditFacade,
+  encodeGrokFacadeHistory,
+  GROK_FACADE_TOOL_NAMES,
+  grokEditFacadeEnabled,
+  nativeExecRelayTarget,
+  rewriteGrokFacadeToolChoice,
+} from "./grok-tool-facade.mjs";
+import { applyGrokFileToolsOverlay } from "./instruction-overlays.mjs";
 import { ResponsesHeartbeatTransform } from "./responses-heartbeat.mjs";
 import { messagePhaseTransform } from "./message-phase.mjs";
 import { translatedToolMessageCompatTransform } from "./deepseek-tool-message-compat.mjs";
@@ -2457,15 +2467,32 @@ function normalizeNativeInput(
   { statelessReasoning = false, dropUnstoredReasoningReferences = false } = {},
 ) {
   if (!Array.isArray(input)) return input;
+  // A routed turn can leave its full reasoning item and a following rs_
+  // reference in the next native request even though that item was produced
+  // with store=false. A null/empty encrypted payload on the full item is
+  // request-local proof that native storage cannot resolve the paired id.
+  // Keep unrelated bare references intact for credential-bearing native
+  // callers; they may still name items that ChatGPT actually stored.
+  const explicitlyUnstoredReasoningIds = new Set(
+    input
+      .filter((item) =>
+        item?.type === "reasoning" &&
+        typeof item.id === "string" &&
+        item.id.startsWith("rs_") &&
+        Object.hasOwn(item, "encrypted_content") &&
+        (typeof item.encrypted_content !== "string" || item.encrypted_content.length === 0)
+      )
+      .map((item) => item.id),
+  );
   return input.flatMap((item) => {
     if (item?.type === "reasoning") {
       const reasoning = sanitizeReasoningForNative(item, {
-        stateless: statelessReasoning,
+        stateless: statelessReasoning || explicitlyUnstoredReasoningIds.has(item.id),
       });
       return reasoning === undefined ? [] : [reasoning];
     }
     if (
-      dropUnstoredReasoningReferences &&
+      (dropUnstoredReasoningReferences || explicitlyUnstoredReasoningIds.has(item?.id)) &&
       item?.type === "item_reference" &&
       typeof item.id === "string" &&
       item.id.startsWith("rs_")
@@ -3004,14 +3031,19 @@ async function handleRoutedCompaction(
 }
 
 async function handleModels(response) {
-  const data = catalogModels().map((model) => ({
+  const models = catalogModels();
+  const data = models.map((model) => ({
     id: model.slug,
     object: "model",
     owned_by: MODEL_BY_SLUG.has(model.slug)
       ? providerForModel(MODEL_BY_SLUG.get(model.slug)).ownedBy
       : "openai",
   }));
-  writeJson(response, 200, { object: "list", data });
+  // OpenAI-compatible clients read `data`; current Codex custom-provider
+  // discovery reads its account-catalog shape from `models` on the same
+  // endpoint. Serving both keeps the provider switch compatible with either
+  // reader without duplicating discovery work.
+  writeJson(response, 200, { object: "list", data, models });
 }
 
 // What the Gemini surface will accept a turn for.
@@ -3304,6 +3336,8 @@ async function buildRoutedRequest({ request, payload, route, agedInput }) {
   }
   let routedInput = input;
   let routedToolChoice = payload.tool_choice;
+  let installedFacade = new Set();
+  let facadeNameCollision = false;
   const patchHook = grokPatchHookEnabled(route, request.headers, process.env, request.codexRouterPatchHookCapability);
   const structuredPatch = (patchHook || grokStructuredPatchEnabled(route)) &&
     Array.isArray(tools) && tools.some(
@@ -3327,6 +3361,19 @@ async function buildRoutedRequest({ request, payload, route, agedInput }) {
     tools = customTools.tools;
     routedInput = customTools.input;
     routedToolChoice = customTools.toolChoice;
+    if (grokEditFacadeEnabled(route, structuredPatch)) {
+      const incomingFacadeNames = new Set(
+        (Array.isArray(tools) ? tools : []).map((tool) => tool?.name).filter(Boolean),
+      );
+      const nativeExec = nativeExecRelayTarget(tools, flattenedNamespaces);
+      tools = applyGrokEditFacade(tools, flattenedNamespaces, route, structuredPatch, {
+        patchHook,
+        installed: installedFacade,
+      });
+      routedInput = encodeGrokFacadeHistory(routedInput, nativeExec, installedFacade);
+      routedToolChoice = rewriteGrokFacadeToolChoice(routedToolChoice, installedFacade);
+      facadeNameCollision = GROK_FACADE_TOOL_NAMES.some((name) => incomingFacadeNames.has(name));
+    }
   }
   if (chatCompletionsProvider || consoleGoResponsesCompatibility || deepSeekResponses) {
     let searchHistory;
@@ -3409,6 +3456,16 @@ async function buildRoutedRequest({ request, payload, route, agedInput }) {
     model: route.gatewayModel,
     input: routedInput,
   };
+  if (
+    grokEditFacadeEnabled(route, structuredPatch) &&
+    installedFacade.size > 0 &&
+    !facadeNameCollision
+  ) {
+    routed.instructions = applyGrokFileToolsOverlay(
+      typeof payload.instructions === "string" ? payload.instructions : "",
+      installedFacade,
+    );
+  }
   applyRoutedServiceTier(routed, payload, route);
   if (routedToolChoice !== payload.tool_choice) routed.tool_choice = routedToolChoice;
   // Codex chooses a child's model; this is where an operator gets to choose its
@@ -4327,13 +4384,15 @@ async function handleResponses(request, response, requestUrl) {
         envelopeCompat = new ZaiResponsesCompatTransform();
       }
       if (envelopeCompat) transforms.push(envelopeCompat);
-      const grokReasoningSummaryCompat = route
-        ? grokReasoningSummaryCompatTransform(providerForModel(route), contentType)
+      // LiteLLM's Chat Completions bridge streams reasoning under hashed
+      // per-delta ids that Codex drops; rebuild one reasoning item. Grok OAuth
+      // also normalizes gateway error envelopes here. Observe the canonical
+      // terminal for metering and activity; the leading byte observer still
+      // measures the original upstream bytes.
+      const reasoningSummaryCompat = route
+        ? reasoningSummaryCompatTransform(providerForModel(route), contentType)
         : undefined;
-      // Grok gateway error envelopes are normalized along with its reasoning
-      // lifecycle. Observe the canonical terminal for metering and activity;
-      // the leading byte observer still measures the original upstream bytes.
-      if (grokReasoningSummaryCompat) transforms.splice(1, 0, grokReasoningSummaryCompat);
+      if (reasoningSummaryCompat) transforms.splice(1, 0, reasoningSummaryCompat);
       // LiteLLM can add blank assistant envelopes while translating either
       // Chat Completions or Messages. The factory refuses native traffic and
       // providers that already speak Responses, so those paths gain no stage.
@@ -4341,6 +4400,10 @@ async function handleResponses(request, response, requestUrl) {
         ? translatedToolMessageCompatTransform(providerForModel(route), contentType)
         : undefined;
       if (translatedToolMessageCompat) transforms.push(translatedToolMessageCompat);
+      const earlyToolDone = route
+        ? earlyToolItemDoneTransform(providerForModel(route), contentType)
+        : undefined;
+      if (earlyToolDone) transforms.push(earlyToolDone);
       // Restore flattened namespace calls for routed chat-completions providers
       // and pin an omitted spawn_agent model to every routed parent, including
       // providers that already speak Responses. Also inject missing finished-

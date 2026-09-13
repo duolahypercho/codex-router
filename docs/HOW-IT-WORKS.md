@@ -122,6 +122,22 @@ The integration deliberately keeps the built-in `openai` provider and points
 it at a loopback `openai_base_url`. This makes named models appear in the normal
 picker instead of replacing the provider with a generic `Custom` entry.
 
+Current Codex builds validate a prefixed external model against the selected
+provider before sending the request. When the user explicitly enables signed
+routing from a root-OpenAI configuration, the router therefore snapshots the
+root provider and selects its dedicated `codex-router-signed` provider. That
+provider still requires ChatGPT authentication and sends both native and
+external Responses requests to the local router. The switch uses the signed
+state format already understood by the previous release, so downgrading can
+still disable it and restore the prior provider. Ordinary install, update,
+repair, and catalog refresh maintain an existing signed mode but never convert
+one implicitly; changing modes requires an explicit off/on toggle.
+
+Native redirect is a separate, all-or-nothing control. If configured, it still
+redirects unmatched native GPT turns while signed routing is enabled, and
+turning model failover off does not disable it. Clear native redirect separately
+when selected native GPT models should remain on OpenAI.
+
 For a selected custom provider, the tray's login-free switch keeps the provider
 id unchanged and temporarily replaces its complete table with a router-owned,
 auth-free table that points Responses requests at the local router. The

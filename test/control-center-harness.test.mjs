@@ -7,6 +7,7 @@ import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 
 import {
+  codexSessionProvider,
   getContextSessionsSnapshot,
   registerIpcHandlers,
 } from "../apps/control-center/electron/ipc.mjs";
@@ -15,6 +16,15 @@ const CODEX_ID = "019f7432-43d9-7413-8f18-5f964587f58e";
 const DSH_ID = "session-123e4567-e89b-42d3-a456-426614174000";
 const CURSOR_ID = "223e4567-e89b-42d3-a456-426614174000";
 const CURSOR_AGENT_ID = "323e4567-e89b-42d3-a456-426614174000";
+
+test("signed routing does not label native Codex sessions as router traffic", () => {
+  assert.equal(codexSessionProvider("gpt-6-astra", "codex-router-signed"), "openai");
+  assert.equal(
+    codexSessionProvider("deepseek/deepseek-v4-pro", "codex-router-signed"),
+    "deepseek",
+  );
+  assert.equal(codexSessionProvider("gpt-6-astra", "openai"), "openai");
+});
 
 test("context manager reads bounded metadata without returning conversation messages", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "router-context-sessions-"));
