@@ -70,6 +70,13 @@ const QUOTA_PATTERNS = [
   // Both word orders occur in the wild: "usage limit reached" (zai) and
   // "reached your usage limit" (Kimi).
   /usage limit(?:s)? (?:reached|exceeded|hit)/i,
+  // zai 1310 names a weekly or monthly window without the words "usage" or
+  // "quota": "Weekly/Monthly Limit Exhausted. Your limit will reset at ...".
+  /(?:weekly|monthly|daily)\s+limit\s+exhausted/i,
+  // zai 1309/1314: a lapsed Coding Plan or enterprise package is renewed, not
+  // waited out or re-keyed: "Your GLM Coding Plan package has expired and is
+  // temporarily unavailable. You can resume using it after renewing...".
+  /(?:package|plan|subscription) has expired/i,
   /reached your (?:usage|monthly|daily) limit/i,
   /(?:monthly|daily|plan) usage limit/i,
   /purchase extra usage/i,
