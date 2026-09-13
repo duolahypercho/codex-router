@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  compileSearchReplaceArguments,
   compileStructuredPatchArguments,
+  compileWriteArguments,
   GROK_STRUCTURED_PATCH_PARAMETERS,
   MAX_STRUCTURED_PATCH_BYTES,
   serializeStructuredPatch,
@@ -105,6 +107,88 @@ test("object API refuses accessor fields and sparse arrays", () => {
   Object.defineProperty(lines, 0, { get() { invoked = true; return "bad"; } });
   assert.throws(() => serializeStructuredPatch(wrap(add("x", lines))), { code: "accessor_field" });
   assert.equal(invoked, false);
+});
+
+test("operations serialized as a JSON string still compile", () => {
+  const operations = [add("notes.txt", ["hello"])];
+  assert.equal(
+    compileStructuredPatchArguments(JSON.stringify({ operations: JSON.stringify(operations) })),
+    serializeStructuredPatch(wrap(...operations)),
+  );
+});
+
+test("two updates of the same path merge into one file operation", () => {
+  const first = update([removeLine("a"), addLine("b")]);
+  const second = { op: "update", path: "notes.txt", hunks: [{ lines: [removeLine("c"), addLine("d")] }] };
+  assert.equal(compileStructuredPatchArguments(JSON.stringify(wrap(first, second))), [
+    "*** Begin Patch", "*** Update File: notes.txt", "@@", "-a", "+b", "@@", "-c", "+d", "*** End Patch",
+  ].join("\n"));
+});
+
+test("search_replace rejects replace_all and invalid duplicate updates", () => {
+  assert.throws(
+    () => compileStructuredPatchArguments(JSON.stringify({
+      path: "x", old_string: "a", new_string: "b", replace_all: true,
+    })),
+    { code: "unknown_field" },
+  );
+  const valid = update([removeLine("a"), addLine("b")]);
+  const invalid = { op: "update", path: "notes.txt", hunks: "nope" };
+  assert.throws(
+    () => compileStructuredPatchArguments(JSON.stringify(wrap(valid, invalid))),
+    StructuredPatchError,
+  );
+});
+
+test("search_replace and write shapes compile to native add/update patches", () => {
+  assert.equal(compileStructuredPatchArguments(JSON.stringify({
+    path: "notes.txt", old_string: "hello", new_string: "hello world",
+  })), [
+    "*** Begin Patch", "*** Update File: notes.txt", "@@", "-hello", "+hello world", "*** End Patch",
+  ].join("\n"));
+  assert.equal(compileStructuredPatchArguments(JSON.stringify({
+    path: "new.txt", contents: "Привет\n",
+  })), [
+    "*** Begin Patch", "*** Add File: new.txt", "+Привет", "*** End Patch",
+  ].join("\n"));
+  assert.throws(
+    () => compileStructuredPatchArguments(JSON.stringify({ path: "new.txt", contents: "hello" })),
+    { code: "missing_trailing_newline" },
+  );
+  assert.throws(
+    () => compileStructuredPatchArguments(JSON.stringify({
+      path: "notes.txt", old_string: "hello\n", new_string: "hello",
+    })),
+    { code: "trailing_newline_unrepresentable" },
+  );
+  assert.throws(
+    () => compileStructuredPatchArguments(JSON.stringify({
+      path: "notes.txt", old_string: "hello", new_string: "hello\n",
+    })),
+    { code: "trailing_newline_unrepresentable" },
+  );
+  assert.throws(
+    () => compileStructuredPatchArguments(JSON.stringify({
+      path: "notes.txt", old_string: "a\n", new_string: "b",
+    })),
+    { code: "trailing_newline_unrepresentable" },
+  );
+  assert.throws(
+    () => compileSearchReplaceArguments(JSON.stringify({
+      path: "notes.txt", old_string: "", new_string: "hello",
+    })),
+    { code: "empty_old_string" },
+  );
+  assert.throws(
+    () => compileWriteArguments(JSON.stringify({ path: "new.txt", contents: "a\r\nb\r\n" })),
+    { code: "crlf_unrepresentable" },
+  );
+  assert.throws(
+    () => compileSearchReplaceArguments(JSON.stringify({
+      operations: [{ op: "delete", path: "victim" }],
+    })),
+    { code: "unknown_field" },
+  );
 });
 
 test("schema only offers add/update/delete with typed lines, no raw patch escape hatch", () => {

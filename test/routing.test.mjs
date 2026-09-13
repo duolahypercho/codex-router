@@ -276,6 +276,17 @@ test("router requires the configured path capability before any model route", as
   try {
     await waitFor(`${routerBase(routerPort)}/models`, router);
 
+    const modelResponse = await fetch(`${routerBase(routerPort)}/models`);
+    assert.equal(modelResponse.status, 200);
+    const modelCatalog = await modelResponse.json();
+    assert.equal(modelCatalog.object, "list");
+    assert.ok(Array.isArray(modelCatalog.data));
+    assert.ok(Array.isArray(modelCatalog.models));
+    assert.deepEqual(
+      modelCatalog.data.map((model) => model.id),
+      modelCatalog.models.map((model) => model.slug),
+    );
+
     const oldRoute = await fetch(`http://127.0.0.1:${routerPort}/v1/responses`, {
       method: "POST",
       headers: {
@@ -2965,6 +2976,17 @@ test("router drops foreign reasoning items before stateless native replay", asyn
       type: "item_reference",
       id: "rs_external_reference",
     };
+    const explicitlyUnstoredReasoning = {
+      type: "reasoning",
+      id: "rs_private_unstored",
+      summary: [{ type: "summary_text", text: "private draft" }],
+      content: null,
+      encrypted_content: null,
+    };
+    const explicitlyUnstoredReference = {
+      type: "item_reference",
+      id: "rs_private_unstored",
+    };
     const nonReasoningReference = {
       type: "item_reference",
       id: "msg_native_reference",
@@ -3103,6 +3125,8 @@ test("router drops foreign reasoning items before stateless native replay", asyn
           mixedSummaryReasoning,
           missingStatelessPayload,
           staleReasoningReference,
+          explicitlyUnstoredReasoning,
+          explicitlyUnstoredReference,
           userMessage,
         ],
         store: true,
@@ -3126,6 +3150,10 @@ test("router drops foreign reasoning items before stateless native replay", asyn
     assert.deepEqual(
       stored.input.find((item) => item?.id === "rs_external_reference"),
       staleReasoningReference,
+    );
+    assert.equal(
+      stored.input.some((item) => item?.id === explicitlyUnstoredReasoning.id),
+      false,
     );
     assert.deepEqual(
       stored.input.find((item) => item?.id === unknownOpaqueReasoning.id),
@@ -7701,6 +7729,18 @@ test("router redirects native background turns to the configured routed model", 
     path.join(stateDir, "native-redirect.json"),
     `${JSON.stringify({ version: 1, model: "kimi-oauth/k3" })}\n`,
   );
+  // Signed routing and native redirect are independent controls. Enabling the
+  // former must not silently disable an explicit redirect selected by the
+  // operator.
+  writeFileSync(
+    path.join(stateDir, "signed-provider-mode.json"),
+    `${JSON.stringify({
+      version: 1,
+      managedProvider: "codex-router-signed",
+      previousPresent: true,
+      previousModelProvider: "openai",
+    })}\n`,
+  );
   const router = run("router.mjs", {
     CODEX_ROUTER_PORT: String(routerPort),
     CODEX_ROUTER_GATEWAY_BASE_URL: `http://127.0.0.1:${gateway.port}/v1`,
@@ -10207,6 +10247,297 @@ test("router compacts translated OpenCode routes and pins subagents on both rout
       nativeEvents.find((event) => event.type === "response.completed").response.output,
       // The kept blank message precedes a tool call, so it is labelled commentary.
       [{ ...terminalBlank, phase: "commentary" }, restoredTool("opencode-go-responses/gpt-5.6-luna")],
+    );
+  } finally {
+    await stopChild(router);
+    await closeServer(gateway.server);
+  }
+});
+
+// LiteLLM's Chat Completions bridge echoes the request's instructions and full
+// tools array in response.created and response.in_progress. A Codex Desktop
+// tool list makes that frame larger than 256 KiB and denser than 8 KiB JSON
+// members; a mock gateway with a bare envelope never exercises either bound.
+function desktopSizedToolList() {
+  return Array.from({ length: 300 }, (_, index) => ({
+    type: "function",
+    name: index === 0 ? "exec_command" : `mcp__server_${index % 12}__tool_${index}`,
+    description: `Tool ${index}. ${"d".repeat(600)}`,
+    strict: false,
+    parameters: {
+      type: "object",
+      properties: Object.fromEntries(Array.from({ length: 8 }, (_, field) => [
+        `field_${field}`,
+        { type: "string", description: `Field ${field} of tool ${index}.` },
+      ])),
+      required: ["field_0"],
+      additionalProperties: false,
+    },
+  }));
+}
+
+function jsonMemberCount(value) {
+  if (Array.isArray(value)) {
+    return value.reduce((count, entry) => count + jsonMemberCount(entry), 0);
+  }
+  if (value === null || typeof value !== "object") return 0;
+  return Object.values(value)
+    .reduce((count, entry) => count + 1 + jsonMemberCount(entry), 0);
+}
+
+test("router keeps DeepSeek message repairs behind a Desktop-sized prelude", async () => {
+  const model = "deepseek-v4-flash";
+  const reasoningText = "Inspect the request, then call the tool exactly once.";
+  const blankMessage = {
+    id: "msg_desktop_blank",
+    type: "message",
+    status: "completed",
+    role: "assistant",
+    content: [{ type: "output_text", text: "", annotations: [] }],
+  };
+  const functionCall = {
+    id: "call_desktop",
+    type: "function_call",
+    call_id: "call_desktop",
+    name: "exec_command",
+    arguments: "{}",
+    status: "completed",
+  };
+  const terminalReasoning = {
+    id: "rs_-8853496868378332836",
+    type: "reasoning",
+    status: "completed",
+    role: "assistant",
+    content: [{ type: "output_text", text: reasoningText, annotations: [] }],
+  };
+  const terminalBlank = {
+    ...blankMessage,
+    id: "04847f40-ed33-4239-80d2-d392fe38fcc3",
+    content: [{ type: "output_text", annotations: [] }],
+  };
+  const sources = new Map();
+  const gateway = await mockServer(async (request, response) => {
+    const body = await bodyJson(request);
+    const direct = body.input === "direct";
+    // Echo what the router forwarded, exactly where LiteLLM puts it.
+    const envelope = (id, extra = {}) => ({
+      id,
+      ...extra,
+      object: "response",
+      status: "in_progress",
+      error: null,
+      instructions: body.instructions ?? null,
+      output: [],
+      tool_choice: "auto",
+      tools: body.tools ?? [],
+    });
+    const events = direct
+      ? [
+          { type: "response.created", response: envelope("resp_desktop_open", { model }), model },
+          { type: "response.in_progress", response: envelope("resp_desktop_open", { model }), model },
+          {
+            type: "response.output_item.added",
+            output_index: 0,
+            item: { ...blankMessage, status: "in_progress", content: [] },
+            model,
+          },
+          {
+            type: "response.content_part.added",
+            item_id: blankMessage.id,
+            output_index: 0,
+            content_index: 0,
+            part: { type: "output_text", text: "", annotations: [] },
+            model,
+          },
+          {
+            type: "response.reasoning_summary_text.delta",
+            item_id: blankMessage.id,
+            output_index: 0,
+            delta: "Inspect the request, then ",
+            model,
+          },
+          {
+            type: "response.reasoning_summary_text.delta",
+            item_id: blankMessage.id,
+            output_index: 0,
+            delta: "call the tool exactly once.",
+            model,
+          },
+          {
+            type: "response.output_item.added",
+            output_index: 1,
+            item: { ...functionCall, arguments: "", status: "in_progress" },
+            model,
+          },
+          {
+            type: "response.function_call_arguments.delta",
+            item_id: functionCall.id,
+            output_index: 1,
+            delta: "{}",
+            model,
+          },
+          {
+            type: "response.function_call_arguments.done",
+            item_id: functionCall.id,
+            output_index: 1,
+            arguments: "{}",
+            model,
+          },
+          {
+            type: "response.output_item.done",
+            output_index: 1,
+            sequence_number: 16,
+            item: functionCall,
+            model,
+          },
+          {
+            type: "response.output_text.done",
+            item_id: blankMessage.id,
+            output_index: 0,
+            content_index: 0,
+            text: "",
+            model,
+          },
+          {
+            type: "response.content_part.done",
+            item_id: blankMessage.id,
+            output_index: 0,
+            content_index: 0,
+            part: { type: "reasoning_text", reasoning: reasoningText },
+            model,
+          },
+          {
+            type: "response.output_item.done",
+            output_index: 0,
+            sequence_number: 1,
+            item: blankMessage,
+            model,
+          },
+          {
+            type: "response.completed",
+            response: {
+              id: "resp_desktop_closed",
+              model,
+              object: "response",
+              status: "completed",
+              error: null,
+              output: [terminalReasoning, terminalBlank, functionCall],
+              usage: { input_tokens: 5, output_tokens: 2, total_tokens: 7 },
+            },
+            model,
+          },
+        ]
+      : [
+          { type: "response.created", response: envelope("resp_desktop_tool_only") },
+          {
+            type: "response.output_item.added",
+            output_index: 0,
+            item: { ...blankMessage, status: "in_progress", content: [] },
+          },
+          {
+            type: "response.output_item.added",
+            output_index: 1,
+            item: { ...functionCall, arguments: "", status: "in_progress" },
+          },
+          { type: "response.output_item.done", output_index: 1, item: functionCall },
+          { type: "response.output_item.done", output_index: 0, item: blankMessage },
+          {
+            type: "response.completed",
+            response: {
+              id: "resp_desktop_tool_only",
+              object: "response",
+              status: "completed",
+              error: null,
+              output: [terminalBlank, functionCall],
+              usage: { input_tokens: 5, output_tokens: 2, total_tokens: 7 },
+            },
+          },
+        ];
+    const source = events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("");
+    sources.set(body.input, source);
+    response.writeHead(200, { "Content-Type": "text/event-stream" });
+    response.end(source);
+  });
+  const routerPort = await openPort();
+  const router = run("router.mjs", {
+    CODEX_ROUTER_PORT: String(routerPort),
+    CODEX_ROUTER_GATEWAY_BASE_URL: `http://127.0.0.1:${gateway.port}/v1`,
+    CODEX_ROUTER_QUIET: "1",
+  });
+  const turn = async (slug, input) => {
+    const response = await fetch(`${routerBase(routerPort)}/responses`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: slug,
+        input,
+        stream: true,
+        instructions: `You are Codex. ${"i".repeat(16 * 1024)}`,
+        tools: desktopSizedToolList(),
+      }),
+    });
+    const text = await response.text();
+    assert.equal(response.status, 200, text);
+    // The fixture only proves something if the echoed prelude crossed both
+    // pre-commit bounds that used to switch the repair off.
+    const [prelude] = sources.get(input).split("\n\n", 1);
+    assert.ok(Buffer.byteLength(prelude) > 256 * 1024, "prelude is not Desktop-sized");
+    assert.ok(
+      jsonMemberCount(JSON.parse(prelude.slice(5))) > 8 * 1024,
+      "prelude is not Desktop-dense",
+    );
+    const events = text.split(/\r?\n/)
+      .filter((line) => line.startsWith("data: {"))
+      .map((line) => JSON.parse(line.slice(5).trim()));
+    return { text, events };
+  };
+
+  try {
+    await waitFor(`${routerBase(routerPort)}/models`, router);
+
+    const translated = await turn("opencode-go/deepseek-v4-flash", "translated");
+    assert.equal(translated.text.includes(blankMessage.id), false);
+    assert.equal(translated.text.includes(terminalBlank.id), false);
+    assert.equal(
+      translated.events.find((event) => event.item?.id === functionCall.id).output_index,
+      0,
+    );
+    assert.deepEqual(
+      translated.events.find((event) => event.type === "response.completed").response.output,
+      [functionCall],
+    );
+
+    const direct = await turn("deepseek/deepseek-v4-flash-vision-exp", "direct");
+    assert.equal(direct.text.includes(blankMessage.id), false);
+    assert.equal(direct.text.includes(terminalBlank.id), false);
+    assert.deepEqual(
+      direct.events
+        .filter((event) => (event.item_id ?? event.item?.id) === terminalReasoning.id)
+        .map((event) => [event.type, event.output_index]),
+      [
+        ["response.output_item.added", 0],
+        ["response.reasoning_summary_part.added", 0],
+        ["response.reasoning_summary_text.delta", 0],
+        ["response.reasoning_summary_text.delta", 0],
+        ["response.reasoning_summary_text.done", 0],
+        ["response.reasoning_summary_part.done", 0],
+        ["response.output_item.done", 0],
+      ],
+    );
+    assert.ok(direct.events
+      .filter((event) => (event.item_id ?? event.item?.id) === functionCall.id)
+      .every((event) => event.output_index === 1));
+    assert.deepEqual(
+      direct.events.find((event) => event.type === "response.completed").response.output,
+      [
+        {
+          id: terminalReasoning.id,
+          type: "reasoning",
+          status: "completed",
+          summary: [{ type: "summary_text", text: reasoningText }],
+        },
+        functionCall,
+      ],
     );
   } finally {
     await stopChild(router);

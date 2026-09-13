@@ -1247,6 +1247,16 @@ async function setSignedRouting(desired) {
     throw new Error("Signed router mode could not be changed.");
   }
   process.stdout.write(result.stdout);
+  if (desired === "on") {
+    const { readNativeRedirect } = await import("./native-redirect.mjs");
+    const redirect = readNativeRedirect();
+    if (redirect) {
+      process.stderr.write(
+        `Native redirect remains active for ${redirect}; it is independent of signed routing ` +
+          "and failover. Clear it separately if native GPT turns should stay on OpenAI.\n",
+      );
+    }
+  }
 }
 
 async function setLoginFreeModel(slug) {
@@ -3046,6 +3056,11 @@ async function handleNativeRedirect(action, value) {
     throw new Error(`Unknown routed model slug: ${value}`);
   }
   process.stdout.write(`${JSON.stringify(setNativeRedirect(value))}\n`);
+  process.stderr.write(
+    `Native redirect now sends every unmatched native GPT turn to ${value}. ` +
+      "This setting is independent of signed routing and failover; clear it with " +
+      "control native-redirect clear.\n",
+  );
 }
 
 // One action for "give me a working harness": install the CLI if it is absent,
