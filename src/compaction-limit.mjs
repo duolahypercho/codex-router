@@ -12,6 +12,7 @@ export function shouldSkipRemoteCompactV2(payload, route, body) {
   });
   return (
     Number.isFinite(route?.autoCompact) &&
-    (estimatedTokens === undefined || estimatedTokens <= route.autoCompact)
+    estimatedTokens !== undefined &&
+    estimatedTokens <= route.autoCompact
   );
 }

@@ -3935,13 +3935,39 @@ async function handleResponses(request, response, requestUrl) {
       const estimatedTokens = estimateInputTokens(body, {
         contextWindow: route.contextWindow,
       });
-      payload.input = payload.input.slice(0, -1);
-      compactV2 = false;
+      const skipInput = payload.input.slice(0, -1);
+      const normalized = normalizeRoutedInput(skipInput);
+      const prepared = prepareCompaction(normalized);
+      const checkpoint = finalizeCheckpoint("", prepared);
+      const item = {
+        type: "compaction",
+        id: `cmp_${randomUUID().replaceAll("-", "")}`,
+        encrypted_content: encodeCheckpoint(checkpoint),
+      };
+      if (payload.stream === false) {
+        writeJson(response, 200, compactionSnapshot(payload.model, item));
+      } else {
+        writeCompactionSse(response, payload.model, checkpoint);
+      }
       if (!QUIET) {
         console.error(
           `[codex-router] skipped-unnecessary-compaction model=${route.slug} provider=${route.provider} estimated-input=${estimatedTokens ?? "<1k"}`,
         );
       }
+      recordObservedUsage(
+        {
+          model: route.slug,
+          provider: canonicalProviderId(route.provider),
+          status: 200,
+          durationMs: Date.now() - startedAt,
+        },
+        diagnostics,
+      );
+      usage = undefined;
+      finalStatus = 200;
+      activityStatus = 200;
+      usageRecorded = true;
+      return;
     }
 
     if (route && (compactV1 || compactV2)) {
