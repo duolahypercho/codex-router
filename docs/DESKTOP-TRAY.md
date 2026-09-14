@@ -126,24 +126,28 @@ only additional build runtime; Rust is not required.
 
 ## Downloading a prebuilt app
 
-**From a tagged release (unsigned tester builds).** Tagged releases attach the
-Windows and Linux Control Center packages, checksummed in `SHA256SUMS` and
-covered by the same build provenance attestation as the source archives. These
-packages are unsigned frontends, not standalone router installers: install the
-same Codex Router version first, then run the matching desktop package.
+**From a tagged release.** Tagged releases attach the Windows and Linux Control
+Center packages and, when the repository's Apple credentials are configured, a
+signed and notarized universal macOS app. Every attached package is checksummed
+in `SHA256SUMS` and covered by the same build provenance attestation as the
+source archives. These packages are frontends, not standalone router installers:
+install the same Codex Router version first, then run the matching package.
 
 | Asset | Platform |
 | --- | --- |
 | `model-router-<version>-windows-x64.exe` | Windows 10/11 unsigned tester installer |
 | `model-router-<version>-linux-x64.tar.gz` | Linux archive containing the executable AppImage |
+| `model-router-<version>-macos-universal.zip` | macOS universal Developer ID signed and notarized app |
 
 Windows SmartScreen may warn about the unsigned installer. On Linux, extract
 the tarball before launching its AppImage; the archive preserves its executable
 permission. Do not copy the AppImage out through a tool that strips file modes.
 
-Tagged releases do not publish an ad-hoc-signed macOS app. An ad-hoc signature
-only proves bundle integrity on the machine that built it; public macOS
-distribution waits for Developer ID signing and notarization.
+Source-installed macOS companions fetch the matching release ZIP automatically.
+They accept it only after its SHA-256, Developer ID signature, Gatekeeper
+assessment, app/control versions, and sealed tray-source fingerprint match.
+If no macOS ZIP was published, the installer falls back to the full-Xcode local
+build. It never falls back after a download or integrity failure.
 
 **From a CI run (for unreleased changes).** Open the **Actions** tab, pick a
 green **CI** run, and download the Control Center artifact for Windows/Linux or

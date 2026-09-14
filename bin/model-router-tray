@@ -54,14 +54,37 @@ case $(uname -s) in
     legacy_user_bundle_is_managed() {
       candidate=$1
       [ -d "$candidate" ] && [ ! -L "$candidate" ] || return 1
-      node "$repo_dir/src/macos-tray-transaction.mjs" validate-legacy-bundle "$candidate" \
-        >/dev/null 2>&1 || return 1
       candidate_identifier=$(
         /usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" \
           "$candidate/Contents/Info.plist" 2>/dev/null
       ) || return 1
       [ "$candidate_identifier" = "io.github.codex-router.tray" ] || return 1
-      /usr/bin/codesign --verify --deep --strict "$candidate" >/dev/null 2>&1
+      /usr/bin/codesign --verify --deep --strict "$candidate" >/dev/null 2>&1 || return 1
+      if node "$repo_dir/src/macos-tray-transaction.mjs" validate-legacy-bundle "$candidate" \
+        >/dev/null 2>&1; then
+        return 0
+      fi
+      # The first native menu-bar release predates the embedded Control Center
+      # and widget, so the structural validator above correctly rejects it as
+      # an incomplete *current* bundle. Recognize only its exact sealed identity
+      # and its binding to this checkout; arbitrary apps sharing the bundle id
+      # must remain untouched.
+      candidate_executable=$(
+        /usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" \
+          "$candidate/Contents/Info.plist" 2>/dev/null
+      ) || return 1
+      candidate_version=$(
+        /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" \
+          "$candidate/Contents/Info.plist" 2>/dev/null
+      ) || return 1
+      candidate_source_root=$(
+        /usr/libexec/PlistBuddy -c "Print :ModelRouterSourceRoot" \
+          "$candidate/Contents/Info.plist" 2>/dev/null
+      ) || return 1
+      [ "$candidate_executable" = "ModelRouterTray" ] \
+        && [ "$candidate_version" = "0.1" ] \
+        && [ "$candidate_source_root" = "$repo_dir" ] \
+        && [ -x "$candidate/Contents/MacOS/ModelRouterTray" ]
     }
     tray_app_count() {
       /usr/bin/osascript -l JavaScript -e '
@@ -337,7 +360,15 @@ RESTORE_MACOS_SUPERVISION
     # Assemble and verify the replacement away from the live app. A failed
     # build leaves the running tray intact; overwriting its mapped signed pages
     # in place is what made macOS kill it as an invalid-signature process.
-    "$repo_dir/scripts/build-macos-tray-app.sh" "$staged_bundle" >/dev/null
+    download_status=0
+    node "$repo_dir/scripts/download-macos-tray-release.mjs" "$staged_bundle" \
+      || download_status=$?
+    if [ "$download_status" -eq 75 ]; then
+      "$repo_dir/scripts/build-macos-tray-app.sh" "$staged_bundle" >/dev/null
+    elif [ "$download_status" -ne 0 ]; then
+      printf 'codex-router: the published macOS companion failed verification; refusing a local fallback.\n' >&2
+      exit "$download_status"
+    fi
     write_macos_phase staged
 
     # NSRunningApplication names only real GUI bundle instances. The packaged

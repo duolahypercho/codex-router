@@ -85,7 +85,7 @@ test("releases are tag-driven and validate every asset before publishing", () =>
   assert.match(release, /actions\/workflows\/ci\.yml\/runs\?head_sha=\$\{GITHUB_SHA\}/);
   assert.match(release, /select\(\.conclusion == "success"/);
   assert.match(release, /needs: release-preflight/);
-  assert.match(release, /needs: \[release-preflight, unified-app\]/);
+  assert.match(release, /needs: \[release-preflight, unified-app, unified-app-macos\]/);
   assert.ok(
     release.indexOf("- run: npm test") < release.indexOf("gh release create"),
     "the release must pass the full test suite before publishing assets",
@@ -103,7 +103,15 @@ test("releases are tag-driven and validate every asset before publishing", () =>
   assert.match(release, /-ArgumentList "--quit-for-update"/);
   assert.match(release, /install -m 0755/);
   assert.match(release, /model-router-\$\{version\}-linux-x64\.tar\.gz/);
-  assert.doesNotMatch(release, /platform: macos|macos-latest|model-router-\$\{version\}-macos/);
+  assert.match(release, /name: Signed and notarized macOS app/);
+  assert.match(release, /runs-on: macos-latest/);
+  assert.match(release, /MODEL_ROUTER_TRAY_UNIVERSAL: "1"/);
+  assert.match(release, /MODEL_ROUTER_PORTABLE_APP: "1"/);
+  assert.match(release, /MACOS_CERTIFICATE_P12_BASE64/);
+  assert.match(release, /xcrun notarytool submit/);
+  assert.match(release, /xcrun stapler staple/);
+  assert.match(release, /spctl --assess --type execute/);
+  assert.match(release, /model-router-\$\{version\}-macos-universal\.zip/);
   assert.match(release, /unsigned tester artifacts/);
   assert.match(release, /matching Codex Router version/);
   assert.match(release, /sha256sum codex-router-\* model-router-\* > SHA256SUMS/);

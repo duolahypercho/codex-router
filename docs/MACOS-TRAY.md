@@ -12,6 +12,18 @@ shared with the existing command-line control plane.
 The tray focuses on Codex and does not disable, uninstall, or change the
 existing router configuration.
 
+## Installation and updates
+
+For a tagged release, the source installer first looks for
+`model-router-<version>-macos-universal.zip` on the matching GitHub Release. It
+installs that bundle without local Xcode only after the release checksum,
+Developer ID signature, Gatekeeper assessment, app/control versions, and sealed
+tray-source fingerprint all match. A missing asset falls back to the existing
+local build, which requires full Xcode; a network or integrity failure stops
+without replacing the live app. Both paths enter the same journaled swap and
+readiness checks, so the prior app remains the rollback candidate until the new
+native host and embedded renderer are running.
+
 ## Desktop widget
 
 On macOS 14 or newer, add **Codex Router Usage** or **Codex Router Reset** from
