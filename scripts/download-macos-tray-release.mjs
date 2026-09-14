@@ -23,7 +23,7 @@ if (process.platform !== "darwin" || !target || !path.isAbsolute(target)) {
 }
 
 const version = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8")).version;
-const repository = process.env.CODEX_ROUTER_RELEASE_REPOSITORY || "duolahypercho/codex-router";
+const repository = process.env.CODEX_ROUTER_RELEASE_REPOSITORY || "jiemocoder/codex-router";
 const asset = macosReleaseAsset(version);
 const temporary = mkdtempSync(path.join(os.tmpdir(), "codex-router-macos-release-"));
 

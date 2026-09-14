@@ -16,7 +16,7 @@ export function macosReleaseAsset(version) {
   return `model-router-${version}-macos-universal.zip`;
 }
 
-export function releaseAssetUrl(version, asset, repository = "duolahypercho/codex-router") {
+export function releaseAssetUrl(version, asset, repository = "jiemocoder/codex-router") {
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) {
     throw new Error(`Invalid GitHub repository: ${repository}`);
   }

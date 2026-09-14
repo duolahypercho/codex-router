@@ -25,7 +25,7 @@ test("macOS release asset names are versioned and architecture-neutral", () => {
 test("release URLs are pinned to the matching GitHub tag and asset", () => {
   assert.equal(
     releaseAssetUrl("1.2.3", "SHA256SUMS"),
-    "https://github.com/duolahypercho/codex-router/releases/download/v1.2.3/SHA256SUMS",
+    "https://github.com/jiemocoder/codex-router/releases/download/v1.2.3/SHA256SUMS",
   );
   assert.throws(
     () => releaseAssetUrl("1.2.3", "asset.zip", "https://example.com/repo"),
