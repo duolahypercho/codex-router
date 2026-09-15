@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+- **A multiline string in `config.toml` is no longer edited as if it were
+  settings.** The root-level helpers found assignments by matching lines, so a
+  line inside a multiline string -- prose in `instructions`, a documented
+  example -- counted as one whenever it was shaped like `model = ...`. Because
+  it came first, it was the line that got rewritten, deleted when a value
+  moved, and read back as the current setting. Switching the model edited the
+  user's prose and left the real `model` untouched; enabling the router deleted
+  a line out of the middle of their text; and the router journalled the prose
+  as the previous value, so turning it off restored that. All of it silent, and
+  the setting the user asked for never changed. These helpers now locate the
+  assignment through `scanTomlDocument` -- the fail-closed structural lexer this
+  file already uses for table boundaries, which exists to tell a real
+  assignment from text that looks like one. String values are decoded by the
+  lexer, including trailing comments. Root reads and writes scan the same root
+  section, even when a later table contains an invalid escape. Catalog removal,
+  concurrency detection, and managed-marker insertion also respect structure.
+  Multiline root settings are refused rather than partially removed, and
+  login-free in-place changes retain strict whole-document validation.
+  Legacy malformed root sections retain their best-effort line matching so
+  Windows prototype installations can still be disabled; prose preservation
+  is only guaranteed when that root section can be scanned.
 - **Routed models can be published ahead of the native GPT picker entries.**
   Codex renders its picker by `priority`, and routed models always landed in a
   band after the highest visible native entry, so an operator whose everyday
