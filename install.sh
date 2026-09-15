@@ -74,9 +74,26 @@ die() {
 restore_previous_revision() {
   if [ -n "$previous_revision" ]; then
     git -C "$repo_dir" switch --detach "$previous_revision" >/dev/null 2>&1 || true
-    die "$1; the managed source checkout was restored to $previous_revision"
+    die "$1; the managed source checkout was restored to $previous_revision. Re-run this installer to retry the update from main."
   fi
   die "$1"
+}
+
+# A failed setup rolls HEAD back with `switch --detach`, so the next run
+# finds no current branch. `src/update.mjs` and install.ps1 already switch
+# that state back to main before pulling; refusing here is how a Homebrew
+# user who then ran this script stayed on refs/codex-router/rollback (#761).
+ensure_main_branch() {
+  current_branch=$(git -C "$1" branch --show-current || true)
+  if [ "$current_branch" != "main" ]; then
+    if [ -z "$current_branch" ]; then
+      git -C "$1" switch main >/dev/null 2>&1 ||
+        die "$1 is in a detached HEAD state and could not be restored to main; run 'git switch main' there and retry."
+      current_branch=$(git -C "$1" branch --show-current || true)
+    fi
+    [ "$current_branch" = "main" ] ||
+      die "$1 must be on its main branch before updating"
+  fi
 }
 
 # Mirrors DIRTY_PREVIEW_LIMIT in src/update.mjs and $DirtyPreviewLimit in
@@ -289,9 +306,7 @@ if [ -z "$repo_dir" ]; then
       git -C "$install_dir" reset --hard HEAD ||
         die "unable to discard the local changes in $install_dir"
     fi
-    current_branch=$(git -C "$install_dir" branch --show-current)
-    [ "$current_branch" = "main" ] ||
-      die "$install_dir must be on its main branch before updating"
+    ensure_main_branch "$install_dir"
     printf 'Updating %s...\n' "$install_dir"
     previous_revision=$(git -C "$install_dir" rev-parse HEAD)
     git -C "$install_dir" update-ref refs/codex-router/rollback "$previous_revision"
