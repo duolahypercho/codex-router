@@ -149,6 +149,8 @@ import {
   bridgeCustomTools,
   downgradeOriginalImageDetail,
   flattenNamespacedHistory,
+  stripUnissuedEncryptedReasoning,
+  stripUnissuedEncryptedReasoningInclude,
   flattenNamespaceTools,
   flattenToolChoice,
   flattenToolSearchHistory,
@@ -1078,7 +1080,19 @@ function needsMoonshotSchemaCompatibility(route) {
 
 function zenFreeCompatibleInput(input, route) {
   if (!needsZenFreeToolCompatibility(route)) return input;
-  return downgradeOriginalImageDetail(agentMessagesAsUserMessages(input));
+  return stripUnissuedEncryptedReasoning(
+    downgradeOriginalImageDetail(agentMessagesAsUserMessages(input)),
+  );
+}
+
+function applyZenFreeIncludeCompatibility(payload, route) {
+  if (!needsZenFreeToolCompatibility(route)) return payload;
+  const include = stripUnissuedEncryptedReasoningInclude(payload.include);
+  if (include === payload.include) return payload;
+  const next = { ...payload };
+  if (include === undefined) delete next.include;
+  else next.include = include;
+  return next;
 }
 
 function nativeTarget(pathname, search = "") {
@@ -2741,7 +2755,7 @@ async function summarizeWith(
     route,
     request,
   );
-  const body = {
+  let body = {
     ...payload,
     model: route.gatewayModel,
     stream: false,
@@ -2760,6 +2774,7 @@ async function summarizeWith(
   delete body.previous_response_id;
   delete body.client_metadata;
   applyRoutedServiceTier(body, payload, route);
+  body = applyZenFreeIncludeCompatibility(body, route);
   // Compaction re-enters the same provider as the routed turn. Strict Chat
   // Completions surfaces reject this OpenAI search parameter even though it
   // is unrelated to the compaction body.
@@ -3493,7 +3508,7 @@ async function buildRoutedRequest({ request, payload, route, agedInput }) {
   // Append V4A examples to the native custom apply_patch description for
   // grok-oauth/grok-4.6 only, before LiteLLM translates that custom tool.
   tools = applyGrokApplyPatchGuidance(tools, route);
-  const routed = {
+  let routed = {
     ...payload,
     tools,
     model: route.gatewayModel,
@@ -3510,6 +3525,7 @@ async function buildRoutedRequest({ request, payload, route, agedInput }) {
     );
   }
   applyRoutedServiceTier(routed, payload, route);
+  routed = applyZenFreeIncludeCompatibility(routed, route);
   if (routedToolChoice !== payload.tool_choice) routed.tool_choice = routedToolChoice;
   // Codex chooses a child's model; this is where an operator gets to choose its
   // depth. Applied only to turns Codex marked as a child, so a parent

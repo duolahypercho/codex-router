@@ -11963,6 +11963,115 @@ test("Zen Free Muse bridges custom tools across JSON, history, and errors", asyn
   }
 });
 
+test("Zen Free Muse strips reasoning encrypted_content Console did not issue to this caller", async () => {
+  const testRoot = mkdtempSync(path.join(os.tmpdir(), "routing-muse-encrypted-"));
+  const stateDir = path.join(testRoot, "state");
+  mkdirSync(stateDir, { recursive: true });
+  const muse = {
+    slug: "opencode-free-responses/muse-spark-1.3-contributor-free",
+    gatewayModel: "opencode-free-responses-muse-spark-1-3-contributor-free",
+    upstreamModel: "muse-spark-1.3-contributor-free",
+    provider: "opencode-free-responses",
+    listed: true,
+    displayName: "Muse Spark 1.3 Free",
+    description: "Encrypted-content compatibility fixture.",
+    priority: 48,
+    defaultEffort: "xhigh",
+    reasoningLevels: [{ effort: "xhigh", description: "Max" }],
+    contextWindow: 1048576,
+    autoCompact: 900000,
+    inputModalities: ["text"],
+    compHash: "opencode-free-responses-muse-spark-1-3-contributor-free-encrypted-v1",
+  };
+  writeFileSync(
+    path.join(testRoot, "user-models.json"),
+    JSON.stringify({ version: 1, models: [muse] }),
+    "utf8",
+  );
+  writeFileSync(
+    path.join(stateDir, "enabled-providers.json"),
+    `${JSON.stringify({ version: 1, providers: ["opencode-free"] })}\n`,
+  );
+  const gatewayRequests = [];
+  const gateway = await mockServer(async (request, response) => {
+    if (request.method === "GET") {
+      json(response, 200, { ok: true, credential_present: true });
+      return;
+    }
+    const body = await bodyJson(request);
+    gatewayRequests.push(body);
+    json(response, 200, {
+      id: "resp_muse_encrypted",
+      object: "response",
+      status: "completed",
+      output: [
+        {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "ok" }],
+        },
+      ],
+      usage: { input_tokens: 8, output_tokens: 1, total_tokens: 9 },
+    });
+  });
+  const routerPort = await openPort();
+  const router = run("router.mjs", {
+    CODEX_ROUTER_PORT: String(routerPort),
+    CODEX_ROUTER_STATE_DIR: stateDir,
+    CODEX_ROUTER_SHOW_ALL_MODELS: "0",
+    MODEL_ROUTER_USER_MODELS: path.join(testRoot, "user-models.json"),
+    CODEX_ROUTER_GATEWAY_BASE_URL: `http://127.0.0.1:${gateway.port}/v1`,
+    CODEX_ROUTER_GATEWAY_HEALTH_URL: `http://127.0.0.1:${gateway.port}/health`,
+    CODEX_ROUTER_API_HEALTH_URL: `http://127.0.0.1:${gateway.port}/health`,
+    CODEX_ROUTER_GROK_OAUTH_HEALTH_URL: `http://127.0.0.1:${gateway.port}/health`,
+    CODEX_ROUTER_QUIET: "1",
+  });
+  try {
+    await waitFor(`${routerBase(routerPort)}/models`, router);
+    const response = await fetch(`${routerBase(routerPort)}/responses`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: muse.slug,
+        stream: false,
+        include: ["file_search_call.results", "reasoning.encrypted_content"],
+        input: [
+          { type: "message", role: "user", content: "Continue." },
+          {
+            type: "reasoning",
+            id: "rs_keep",
+            encrypted_content: "gAAAAAforeign",
+            summary: [{ type: "summary_text", text: "prior thought" }],
+          },
+          {
+            type: "reasoning",
+            id: "rs_drop",
+            encrypted_content: "gAAAAAforeign2",
+          },
+        ],
+      }),
+    });
+    assert.equal(response.status, 200, router.testErrors());
+    assert.equal(gatewayRequests.length, 1);
+    assert.equal(gatewayRequests[0].model, muse.gatewayModel);
+    assert.deepEqual(gatewayRequests[0].include, ["file_search_call.results"]);
+    assert.deepEqual(
+      gatewayRequests[0].input.filter((item) => item.type === "reasoning"),
+      [
+        {
+          type: "reasoning",
+          id: "rs_keep",
+          summary: [{ type: "summary_text", text: "prior thought" }],
+        },
+      ],
+    );
+  } finally {
+    await stopChild(router);
+    await closeServer(gateway.server);
+    rmSync(testRoot, { recursive: true, force: true });
+  }
+});
+
 test("Go Chat/Messages, paid Zen, and other Free routes keep compatibility-sensitive wire shapes", async () => {
   const testRoot = mkdtempSync(path.join(os.tmpdir(), "routing-opencode-identity-"));
   const stateDir = path.join(testRoot, "state");

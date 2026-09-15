@@ -19,6 +19,8 @@ import {
   rewriteNamespaceResponsePayload,
   repairToolSchemaRoots,
   stripSearchContentTypes,
+  stripUnissuedEncryptedReasoning,
+  stripUnissuedEncryptedReasoningInclude,
   ToolSearchHistoryCapacityError,
 } from "../src/namespace-relay.mjs";
 import { CODEX_APP_TOOLS, mergeCodexAppTools } from "../src/codex-app-tools.mjs";
@@ -3751,6 +3753,66 @@ test("OpenCode input repair preserves collaboration text and inherited images", 
   assert.deepEqual(compatible[0].content[0], agent.content[0]);
   assert.equal(compatible[0].content[1].image_url, "data:image/png;base64,AAA");
   assert.equal(compatible[0].content[1].detail, "auto");
+});
+
+// OpenCode Console 400s Muse Free follow-ups that replay Meta-issued
+// reasoning encrypted_content: "was not issued to this caller". Drop the
+// continuation token, keep visible summary text, and leave unrelated items
+// by identity.
+test("OpenCode reasoning repair drops encrypted_content Console did not issue", () => {
+  const user = { type: "message", role: "user", content: "hi" };
+  const withSummary = {
+    type: "reasoning",
+    id: "rs_1",
+    encrypted_content: "gAAAAAforeign",
+    summary: [{ type: "summary_text", text: "thought" }],
+  };
+  const tokenOnly = {
+    type: "reasoning",
+    id: "rs_2",
+    encrypted_content: "gAAAAAforeign2",
+  };
+  const untouched = {
+    type: "reasoning",
+    id: "rs_3",
+    summary: [{ type: "summary_text", text: "kept" }],
+  };
+  const input = [user, withSummary, tokenOnly, untouched];
+  const stripped = stripUnissuedEncryptedReasoning(input);
+  assert.notEqual(stripped, input);
+  assert.deepEqual(stripped, [
+    user,
+    {
+      type: "reasoning",
+      id: "rs_1",
+      summary: [{ type: "summary_text", text: "thought" }],
+    },
+    untouched,
+  ]);
+  assert.equal(stripped[2], untouched);
+});
+
+test("OpenCode reasoning repair leaves input without encrypted_content by identity", () => {
+  const input = [{ type: "message", role: "user", content: "hi" }];
+  assert.equal(stripUnissuedEncryptedReasoning(input), input);
+  assert.equal(stripUnissuedEncryptedReasoning("plain"), "plain");
+});
+
+test("OpenCode include repair drops reasoning.encrypted_content", () => {
+  assert.deepEqual(
+    stripUnissuedEncryptedReasoningInclude([
+      "file_search_call.results",
+      "reasoning.encrypted_content",
+    ]),
+    ["file_search_call.results"],
+  );
+  assert.equal(
+    stripUnissuedEncryptedReasoningInclude(["reasoning.encrypted_content"]),
+    undefined,
+  );
+  const include = ["file_search_call.results"];
+  assert.equal(stripUnissuedEncryptedReasoningInclude(include), include);
+  assert.equal(stripUnissuedEncryptedReasoningInclude(undefined), undefined);
 });
 
 // Codex ships apply_patch as a custom tool whose lark grammar is the only

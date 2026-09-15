@@ -1076,6 +1076,54 @@ export function downgradeOriginalImageDetail(input) {
   return changed ? converted : input;
 }
 
+const REASONING_ENCRYPTED_INCLUDE = "reasoning.encrypted_content";
+
+function reasoningItemHasVisibleText(item) {
+  if (typeof item?.summary === "string" && item.summary) return true;
+  if (
+    Array.isArray(item?.summary) &&
+    item.summary.some((part) => typeof part?.text === "string" && part.text)
+  ) {
+    return true;
+  }
+  if (typeof item?.content === "string" && item.content) return true;
+  if (
+    Array.isArray(item?.content) &&
+    item.content.some((part) => typeof part?.text === "string" && part.text)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+// OpenCode Zen's anonymous Muse Contributor Free Responses route is a Console
+// proxy. Meta issues reasoning `encrypted_content` to Console's caller, not to
+// this router. Replaying it 400s with "reasoning `encrypted_content` was not
+// issued to this caller". Drop the continuation token; keep any summary text.
+// Paid Zen/Go keep a stable key and stay outside this exact-route gate.
+export function stripUnissuedEncryptedReasoning(input) {
+  if (!Array.isArray(input)) return input;
+  let changed = false;
+  const next = [];
+  for (const item of input) {
+    if (item?.type !== "reasoning" || item.encrypted_content === undefined) {
+      next.push(item);
+      continue;
+    }
+    changed = true;
+    const { encrypted_content: _encryptedContent, ...rest } = item;
+    if (reasoningItemHasVisibleText(rest)) next.push(rest);
+  }
+  return changed ? next : input;
+}
+
+export function stripUnissuedEncryptedReasoningInclude(include) {
+  if (!Array.isArray(include)) return include;
+  const next = include.filter((entry) => entry !== REASONING_ENCRYPTED_INCLUDE);
+  if (next.length === include.length) return include;
+  return next.length > 0 ? next : undefined;
+}
+
 function flattenNamespaceChild(namespace, fn, providerName) {
   const clientSchema = fn.parameters ?? fn.inputSchema;
   const parameters =
