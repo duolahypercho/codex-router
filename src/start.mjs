@@ -245,6 +245,10 @@ function run(command, args, extraEnv = {}) {
     cwd: SOURCE_ROOT,
     env: { ...process.env, ...commonEnv, ...extraEnv },
     stdio: "inherit",
+    // Console-subsystem children (node.exe, litellm.exe) allocate a visible
+    // Windows Terminal window unless CREATE_NO_WINDOW is set. The service
+    // already logs through the wrapper; inheriting a console is not required.
+    windowsHide: process.platform === "win32",
     ...spawnable.options,
   });
   children.push(child);

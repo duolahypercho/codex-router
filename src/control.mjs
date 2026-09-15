@@ -26,6 +26,7 @@ import {
   PROVIDER_API_KEY_POOL_PATH,
   PROVIDER_CREDENTIAL_STORE_PATH,
   PROVIDER_SELECTION_PATH,
+  SERVICE_PROCESS_STATE_PATH,
 } from "./paths.mjs";
 // Same reasoning: presence is a property of the shared plane, not of a target,
 // so the overview can resolve it statically without perturbing those probes.
@@ -110,9 +111,13 @@ const maximumControlOperationMs = boundedAntigravityOperation
   : restartBearingOverlayOperation
     ? 1_310_000
     : 850_000;
-if (!selfReplacingControl && !boundedOperationChild(process.env, {
+if (
+  !selfReplacingControl
+  && process.env.ELECTRON_RUN_AS_NODE !== "1"
+  && !boundedOperationChild(process.env, {
   maximumMs: maximumControlOperationMs,
-})) {
+})
+) {
   // Every ordinary control invocation enters one separately terminable tree.
   // Its owner gets ten seconds beyond the cooperative child budget so it can
   // escalate a full process-group termination. Catalog desktop watchdogs keep
@@ -145,13 +150,16 @@ function targetIsActive(target) {
   if (target === "cursor") return existsSync(CURSOR_PUBLISHED);
   if (target === "claude") return existsSync(CLAUDE_PUBLISHED);
   if (target === "openclaw") return existsSync(OPENCLAW_PUBLISHED);
-  const result = spawnSync(process.execPath, [path.join(REPO_ROOT, "src", "service.mjs"), "status"], {
-    env: { ...process.env, MODEL_ROUTER_TARGET: target },
-    encoding: "utf8",
-  });
+  // Do not spawn service.mjs here. That path shells out to powershell.exe
+  // Get-ScheduledTask, and Windows Terminal shows that console on every
+  // Control Center Refresh. The service pid file is enough to know the
+  // shared router plane is up.
   try {
-    const status = JSON.parse(result.stdout);
-    return Boolean(status.installed || status.loaded);
+    const parsed = JSON.parse(readFileSync(SERVICE_PROCESS_STATE_PATH, "utf8"));
+    const pid = Number(parsed?.pid);
+    if (!Number.isSafeInteger(pid) || pid <= 0) return false;
+    process.kill(pid, 0);
+    return true;
   } catch {
     return false;
   }

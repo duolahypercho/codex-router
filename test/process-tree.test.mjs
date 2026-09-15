@@ -489,16 +489,24 @@ test("Windows commands enter a suspended kill-on-close Job Object", () => {
       runner: "C:\\router\\src\\windows-process-tree.ps1",
     },
   );
-  assert.equal(invocation.command, "powershell.exe");
-  assert.deepEqual(invocation.args.slice(0, -1), [
-    "-NoLogo",
-    "-NoProfile",
-    "-NonInteractive",
-    "-ExecutionPolicy", "Bypass",
-    "-File", "C:\\router\\src\\windows-process-tree.ps1",
-  ]);
+  const payloadArg = invocation.args.at(-1);
+  const prefix = invocation.args.slice(0, -1);
+  if (String(invocation.command).toLowerCase().endsWith("pythonw.exe")) {
+    assert.equal(path.basename(invocation.args[0]), "windows-job-host.pyw");
+    assert.equal(prefix.at(-2), "-File");
+    assert.equal(prefix.at(-1), "C:\\router\\src\\windows-process-tree.ps1");
+  } else {
+    assert.equal(invocation.command, "powershell.exe");
+    assert.deepEqual(prefix, [
+      "-NoLogo",
+      "-NoProfile",
+      "-NonInteractive",
+      "-ExecutionPolicy", "Bypass",
+      "-File", "C:\\router\\src\\windows-process-tree.ps1",
+    ]);
+  }
   assert.deepEqual(
-    JSON.parse(Buffer.from(invocation.args.at(-1), "base64").toString("utf8")),
+    JSON.parse(Buffer.from(payloadArg, "base64").toString("utf8")),
     {
       command: "C:\\Program Files\\nodejs\\node.exe",
       arguments: ["worker.mjs", "argument with spaces"],
@@ -525,7 +533,7 @@ test("Windows commands enter a suspended kill-on-close Job Object", () => {
   const processTree = readFileSync(new URL("../src/process-tree.mjs", import.meta.url), "utf8");
   assert.match(
     processTree,
-    /const effectiveWindowsHide = stdio === "inherit" \? false : windowsHide/,
+    /const effectiveWindowsHide = process\.platform === "win32" && !process\.stdout\.isTTY/,
   );
   assert.equal(
     processTree.match(/windowsHide: effectiveWindowsHide/g)?.length,
