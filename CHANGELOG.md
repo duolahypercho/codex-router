@@ -58,6 +58,17 @@
   `missing type in anyOf properties` error. The route behind #726 has not been
   established, so that issue is not claimed resolved by this change.
 
+- **macOS tray updates can install a published universal app without local
+  Xcode.** Tagged releases can now build the unified native host and embedded
+  Control Center on GitHub's macOS runner, Developer ID sign it, smoke the
+  signed renderer, notarize and staple it, and publish a checksummed universal
+  ZIP. Source installs prefer that package and require its SHA-256, Apple
+  signature, Gatekeeper assessment, version, and sealed tray-source fingerprint
+  to match before entering the existing transactional swap. A missing package
+  alone falls back to the local Xcode build; download or integrity failures do
+  not. The original signed 0.1 menu-bar app is also recognized narrowly by its
+  bundle identity, version, executable, and exact checkout binding so it can
+  migrate instead of blocking the first packaged update.
 - **Routed coding clients can be kept current from the Harness page.**
   `control client-update <id>` and `control client-update --all`, plus an
   **Update** button on each row and **Update all** in the header, move

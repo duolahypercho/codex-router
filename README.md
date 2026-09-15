@@ -39,10 +39,13 @@ already included: choose **Settings → Dynamic Island → Desktop** from the
 menu-bar app to show it. It is a movable Codex Router panel rather than an item
 in macOS's **Edit Widgets** gallery.
 
-macOS does not have a public `.dmg` yet; the command above builds and installs
-the app locally. That build requires the full Xcode app, not only the standalone
-Command Line Tools, because it contains SwiftUI macro and WidgetKit targets. The
-installer honors `DEVELOPER_DIR` or the Xcode selected under **Xcode → Settings
+Tagged releases may attach a signed and notarized universal macOS app. The
+installer downloads that matching app first, verifies its checksum, Apple
+signature, Gatekeeper assessment, version, and source fingerprint, then installs
+it without Xcode. When a matching asset has not been published, it falls back to
+a local build. Only that fallback requires the full Xcode app, not the standalone
+Command Line Tools, because the app contains SwiftUI macro and WidgetKit targets.
+The installer honors `DEVELOPER_DIR` or the Xcode selected under **Xcode → Settings
 → Locations → Command Line Tools**. If that selection still points at the
 standalone tools, it uses `/Applications/Xcode.app` or
 `/Applications/Xcode-beta.app` for this build only without changing the global
@@ -2132,13 +2135,14 @@ the window.
 .\codex-router.ps1 tray install
 ```
 
-[Download the latest Windows or Linux desktop package](https://github.com/duolahypercho/codex-router/releases/latest).
+[Download the latest desktop package](https://github.com/duolahypercho/codex-router/releases/latest).
 Tagged releases provide unsigned tester packages for this unified application
 family: `model-router-<version>-windows-x64.exe` and
 `model-router-<version>-linux-x64.tar.gz` (containing the executable AppImage).
 They are frontends, so install the matching Codex Router version first. The
-universal macOS bundle remains an ad-hoc-signed CI artifact until Developer ID
-signing and notarization are available; it is not attached to public releases.
+optional `model-router-<version>-macos-universal.zip` is a Developer ID signed,
+notarized, and stapled build; it is attached only when all Apple release
+credentials are configured.
 
 Windows 11 hides new tray icons in the `^` overflow next to the clock; drag the
 icon onto the taskbar to pin it.

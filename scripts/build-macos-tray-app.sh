@@ -33,6 +33,10 @@ app_version=$(node -e '
   if (typeof doc.version !== "string" || !doc.version) process.exit(2);
   process.stdout.write(doc.version);
 ' "$control_center_dir/package.json")
+tray_source_fingerprint=$(node --input-type=module -e '
+  import { traySourceFingerprint } from "./src/install-plan.mjs";
+  process.stdout.write(traySourceFingerprint(process.cwd(), "darwin"));
+')
 control_protocol=$(node -e '
   const fs = require("node:fs");
   const doc = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
@@ -86,14 +90,30 @@ trap cleanup_electron_output EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
-(
-  cd "$control_center_dir"
-  CSC_IDENTITY_AUTO_DISCOVERY=false ./node_modules/.bin/electron-builder \
-    --mac dir \
-    "--$electron_arch" \
-    --publish never \
-    "--config.directories.output=$electron_output" 1>&2
-)
+if [ "$signing_identity" = "-" ]; then
+  (
+    cd "$control_center_dir"
+    CSC_IDENTITY_AUTO_DISCOVERY=false ./node_modules/.bin/electron-builder \
+      --mac dir \
+      "--$electron_arch" \
+      --publish never \
+      "--config.directories.output=$electron_output" 1>&2
+  )
+else
+  # Let electron-builder sign Electron and every helper with its hardened
+  # runtime entitlements. Re-signing that tree later with `codesign --deep`
+  # discards helper-specific entitlements and produces a notarized app whose
+  # renderer can still fail at launch.
+  (
+    cd "$control_center_dir"
+    CSC_IDENTITY_AUTO_DISCOVERY=true CSC_NAME="$signing_identity" \
+      ./node_modules/.bin/electron-builder \
+      --mac dir \
+      "--$electron_arch" \
+      --publish never \
+      "--config.directories.output=$electron_output" 1>&2
+  )
+fi
 control_center_bundle=$(find "$electron_output" -maxdepth 3 -type d -name 'Codex Router.app' -print -quit)
 if [ -z "$control_center_bundle" ] || [ ! -d "$control_center_bundle" ]; then
   printf 'The packaged Electron Control Center was not produced.\n' >&2
@@ -112,6 +132,8 @@ fi
 /usr/libexec/PlistBuddy -c "Add :ModelRouterControlVersion string $app_version" \
   "$bundle_dir/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Add :ModelRouterControlProtocol integer $control_protocol" \
+  "$bundle_dir/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Add :ModelRouterTraySourceFingerprint string $tray_source_fingerprint" \
   "$bundle_dir/Contents/Info.plist"
 # The icon is committed as a built .icns, not rasterized here: scripts/build-app-icon.sh
 # needs sips and iconutil, and a tray build must not start depending on them.
@@ -135,13 +157,17 @@ MODEL_ROUTER_WIDGET_ARCH="$widget_arch" \
   "$short_version" "$bundle_version" 1>&2
 rm -rf "$bundle_dir/Contents/Resources/Control Center.app"
 cp -R "$control_center_bundle" "$bundle_dir/Contents/Resources/Control Center.app"
-printf '%s\n' "$repo_dir" > "$bundle_dir/Contents/Resources/Control Center.app/Contents/Resources/router-root"
+if [ "${MODEL_ROUTER_PORTABLE_APP:-0}" != "1" ]; then
+  printf '%s\n' "$repo_dir" > "$bundle_dir/Contents/Resources/Control Center.app/Contents/Resources/router-root"
+fi
 # Seal the checkout relationship into Info.plist itself. An external symlink is
 # invalid inside a strict macOS code-signed bundle; a loose text resource would
 # be executable-path input. This value is covered by the final signature, so
 # changing the selected checkout also invalidates verification.
-/usr/libexec/PlistBuddy -c "Add :ModelRouterSourceRoot string $repo_dir" \
-  "$bundle_dir/Contents/Info.plist"
+if [ "${MODEL_ROUTER_PORTABLE_APP:-0}" != "1" ]; then
+  /usr/libexec/PlistBuddy -c "Add :ModelRouterSourceRoot string $repo_dir" \
+    "$bundle_dir/Contents/Info.plist"
+fi
 /usr/libexec/PlistBuddy -c "Set :ModelRouterWidgetStorageMode $widget_storage_mode" \
   "$bundle_dir/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :ModelRouterWidgetStorageMode $widget_storage_mode" \
@@ -151,11 +177,20 @@ printf '%s\n' "$repo_dir" > "$bundle_dir/Contents/Resources/Control Center.app/C
 # signed before the containing app. Ad-hoc builds use one narrow, read-only
 # exception for the local-source snapshot; provisioned builds use only the App
 # Group contract.
-/usr/bin/codesign --force --deep --sign "$signing_identity" \
-  "$bundle_dir/Contents/Resources/Control Center.app"
-/usr/bin/codesign --force --sign "$signing_identity" \
-  --entitlements "$widget_entitlements" \
-  "$bundle_dir/Contents/PlugIns/RouterUsageWidget.appex"
+if [ "$signing_identity" = "-" ]; then
+  /usr/bin/codesign --force --deep --sign "$signing_identity" \
+    "$bundle_dir/Contents/Resources/Control Center.app"
+  /usr/bin/codesign --force --sign "$signing_identity" \
+    --entitlements "$widget_entitlements" \
+    "$bundle_dir/Contents/PlugIns/RouterUsageWidget.appex"
+else
+  /usr/bin/codesign --verify --deep --strict \
+    "$bundle_dir/Contents/Resources/Control Center.app"
+  /usr/bin/codesign --force --sign "$signing_identity" \
+    --options runtime --timestamp \
+    --entitlements "$widget_entitlements" \
+    "$bundle_dir/Contents/PlugIns/RouterUsageWidget.appex"
+fi
 # The copied SwiftPM executable carries an ad-hoc signature. Sign only after
 # every executable, resource, and link is in its final location; mutating the
 # live signed bundle is what produced taskgated "Invalid Page" terminations.
@@ -163,6 +198,7 @@ if [ "$signing_identity" = "-" ]; then
   /usr/bin/codesign --force --sign "$signing_identity" "$bundle_dir"
 else
   /usr/bin/codesign --force --sign "$signing_identity" \
+    --options runtime --timestamp \
     --entitlements "$tray_dir/Resources/ModelRouterTray.entitlements" \
     "$bundle_dir"
 fi

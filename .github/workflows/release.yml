@@ -190,8 +190,151 @@ jobs:
           path: staged/*
           if-no-files-found: error
 
+  unified-app-macos:
+    name: Signed and notarized macOS app
+    needs: release-preflight
+    runs-on: macos-latest
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+      MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+      MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+      MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+      MACOS_NOTARY_APPLE_ID: ${{ secrets.MACOS_NOTARY_APPLE_ID }}
+      MACOS_NOTARY_PASSWORD: ${{ secrets.MACOS_NOTARY_PASSWORD }}
+      MACOS_TEAM_ID: ${{ secrets.MACOS_TEAM_ID }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: apps/control-center/package-lock.json
+      - name: Detect macOS release credentials
+        id: credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          available=true
+          for name in \
+            MACOS_CERTIFICATE_P12_BASE64 MACOS_CERTIFICATE_PASSWORD MACOS_SIGNING_IDENTITY \
+            MACOS_NOTARY_APPLE_ID MACOS_NOTARY_PASSWORD MACOS_TEAM_ID
+          do
+            if [ -z "${!name:-}" ]; then
+              echo "macOS release asset disabled because $name is not configured."
+              available=false
+            fi
+          done
+          echo "available=$available" >> "$GITHUB_OUTPUT"
+      - name: Import Developer ID certificate
+        if: steps.credentials.outputs.available == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          keychain="$RUNNER_TEMP/codex-router-signing.keychain-db"
+          certificate="$RUNNER_TEMP/codex-router-signing.p12"
+          keychain_password=$(openssl rand -hex 24)
+          printf '%s' "$MACOS_CERTIFICATE_P12_BASE64" | base64 -D > "$certificate"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$certificate" -k "$keychain" \
+            -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$keychain_password" "$keychain"
+          security list-keychains -d user -s "$keychain" login.keychain-db
+          security find-identity -v -p codesigning "$keychain"
+      - name: Build universal Developer ID application
+        if: steps.credentials.outputs.available == 'true'
+        env:
+          MODEL_ROUTER_TRAY_UNIVERSAL: "1"
+          MODEL_ROUTER_PORTABLE_APP: "1"
+          MODEL_ROUTER_CODESIGN_IDENTITY: ${{ env.MACOS_SIGNING_IDENTITY }}
+        shell: bash
+        run: scripts/build-macos-tray-app.sh "$RUNNER_TEMP/Codex Router.app"
+      - name: Smoke the signed native host and embedded renderer
+        if: steps.credentials.outputs.available == 'true'
+        env:
+          CODEX_ROUTER_SOURCE_ROOT: ${{ github.workspace }}
+          MODEL_ROUTER_SKIP_SERVICE_MANAGER: "1"
+        shell: bash
+        run: |
+          set -euo pipefail
+          app="$RUNNER_TEMP/Codex Router.app"
+          outer="$app/Contents/MacOS/ModelRouterTray"
+          embedded="$app/Contents/Resources/Control Center.app/Contents/MacOS/Codex Router"
+          log="$RUNNER_TEMP/model-router-macos-signed-smoke.log"
+          "$outer" --supervised > "$log" 2>&1 &
+          pid=$!
+          cleanup() {
+            /usr/bin/osascript -l JavaScript -e '
+              ObjC.import("AppKit");
+              for (const identifier of ["io.github.codex-router.control-center", "io.github.codex-router.tray"]) {
+                const apps = $.NSRunningApplication.runningApplicationsWithBundleIdentifier(identifier);
+                for (let index = 0; index < apps.count; index += 1) apps.objectAtIndex(index).terminate;
+              }
+            ' >/dev/null 2>&1 || true
+            kill -KILL "$pid" 2>/dev/null || true
+            wait "$pid" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+          sleep 1
+          kill -0 "$pid"
+          /usr/bin/open "$app"
+          ready=false
+          for _ in {1..120}; do
+            state=$(/usr/bin/env -u ELECTRON_RUN_AS_NODE "$embedded" --query-lifecycle 2>/dev/null || true)
+            if node -e '
+              try {
+                const state = JSON.parse(process.argv[1]);
+                process.exit(state.running && state.ready && state.visible ? 0 : 1);
+              } catch { process.exit(1); }
+            ' "$state"; then
+              ready=true
+              break
+            fi
+            sleep 0.25
+          done
+          if [ "$ready" != true ]; then
+            cat "$log"
+            echo "Signed embedded Control Center did not become ready." >&2
+            exit 1
+          fi
+          kill -0 "$pid"
+          cleanup
+          trap - EXIT
+      - name: Notarize, staple, validate, and package
+        if: steps.credentials.outputs.available == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          app="$RUNNER_TEMP/Codex Router.app"
+          submission="$RUNNER_TEMP/codex-router-notary.zip"
+          version="${GITHUB_REF_NAME#v}"
+          asset="staged/model-router-${version}-macos-universal.zip"
+          mkdir -p staged
+          ditto -c -k --keepParent "$app" "$submission"
+          xcrun notarytool submit "$submission" \
+            --apple-id "$MACOS_NOTARY_APPLE_ID" \
+            --password "$MACOS_NOTARY_PASSWORD" \
+            --team-id "$MACOS_TEAM_ID" \
+            --wait
+          xcrun stapler staple "$app"
+          xcrun stapler validate "$app"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          codesign --verify --deep --strict \
+            --requirements '=anchor apple generic and certificate leaf[field.1.2.840.113635.100.6.1.13] exists' \
+            "$app"
+          spctl --assess --type execute --verbose=2 "$app"
+          ditto -c -k --keepParent "$app" "$asset"
+      - uses: actions/upload-artifact@v7
+        if: steps.credentials.outputs.available == 'true'
+        with:
+          name: unified-app-macos
+          path: staged/*
+          if-no-files-found: error
+
   release:
-    needs: [release-preflight, unified-app]
+    needs: [release-preflight, unified-app, unified-app-macos]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -235,7 +378,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          warning="The Windows and Linux desktop packages are unsigned tester artifacts. Install the matching Codex Router version before running them. macOS is excluded until its app can be Developer ID signed and notarized."
+          if compgen -G 'dist/model-router-*-macos-universal.zip' >/dev/null; then
+            mac_note="The macOS universal app is Developer ID signed, notarized, stapled, checksum-verified by the updater, and must match the installed router's tray-source fingerprint."
+          else
+            mac_note="No macOS app is attached because the repository's Developer ID or notarization credentials are not configured."
+          fi
+          warning="The Windows and Linux desktop packages are unsigned tester artifacts. Install the matching Codex Router version before running them. $mac_note"
           gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --generate-notes --notes "$warning"
       - name: Update Homebrew formula
         run: |

@@ -135,10 +135,21 @@ npm run electron:build
 `electron:build` can create a standalone developer artifact for the current
 host. Shipped Windows and Linux artifacts are NSIS/AppImage packages. Shipped
 macOS builds use `scripts/build-macos-tray-app.sh`, which embeds the packaged
-Electron child inside the one outer `Codex Router.app`; CI and releases do not
-publish the child separately. Beta artifacts are unsigned unless signing
-credentials are configured. Public macOS distribution additionally requires
-Developer ID signing/notarization, and Windows requires Authenticode.
+Electron child inside the one outer `Codex Router.app`; releases publish that
+unified bundle as `model-router-VERSION-macos-universal.zip`. The release job
+requires a Developer ID certificate plus Apple notary credentials, signs with
+the hardened runtime, notarizes and staples the app, and publishes its SHA-256
+alongside build provenance. A source install downloads that artifact first and
+accepts it only when its version, signature, Gatekeeper assessment, and sealed
+tray-source fingerprint match the checkout. A missing release artifact falls
+back to the local Xcode build; an integrity failure never does. Windows still
+requires Authenticode for a signed public package.
+
+The repository must configure these GitHub Actions secrets to attach the macOS
+asset: `MACOS_CERTIFICATE_P12_BASE64`, `MACOS_CERTIFICATE_PASSWORD`,
+`MACOS_SIGNING_IDENTITY`, `MACOS_NOTARY_APPLE_ID`, `MACOS_NOTARY_PASSWORD`, and
+`MACOS_TEAM_ID`. If any one is absent, the release remains valid but omits the
+macOS asset, and clients retain the documented local-build fallback.
 
 ## Security boundary
 

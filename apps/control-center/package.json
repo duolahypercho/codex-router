@@ -1,6 +1,6 @@
 {
   "name": "@codex-router/control-center",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "Electron control center for Codex Router",
   "author": "Codex Router contributors",
   "private": true,
