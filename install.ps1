@@ -225,7 +225,7 @@ if (-not $CheckoutInstall) {
     Write-Warning "Setup did not finish configuring; the update was kept. Re-run setup to continue, or ./codex-router.ps1 rollback to return to the previous revision."
   } elseif ($SetupExitCode -ne 0 -and $PreviousRevision) {
     & git -C $Repository switch --detach $PreviousRevision 2>$null | Out-Null
-    Write-Warning "Setup failed; the managed source checkout was restored to $PreviousRevision."
+    Write-Warning "Setup failed; the managed source checkout was restored to $PreviousRevision. Re-run this installer to retry the update from main."
   }
   exit $SetupExitCode
 }

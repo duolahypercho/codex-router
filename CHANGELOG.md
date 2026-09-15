@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **A failed script install no longer leaves POSIX users stuck on the rollback
+  revision.** After setup fails, the checkout is detached at the previous
+  commit by design so the service is not left on half-applied code. Windows
+  and `./bin/update` already switched that state back to `main` before the
+  next fetch; `install.sh` refused instead because it was not on `main`. A
+  Homebrew user who then installed from the script could stay on
+  `refs/codex-router/rollback` and keep serving the tree that predates
+  `x-opencode-session` (#761). A retry now restores `main` the same way.
+
 ## 0.6.0
 
 - **Thinking models on Chat resellers outside the native-reasoning contract no

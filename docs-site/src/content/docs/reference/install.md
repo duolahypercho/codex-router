@@ -547,7 +547,11 @@ value — the update is kept, because none of those say anything about the code
 that was just fetched, and discarding it means the next attempt repeats the
 same failure with the same code. Rolling back there is what made a setup-path
 bug impossible to fix by updating: the fix was fetched and then thrown away.
-Any other non-zero exit still restores the previous revision. Re-run setup to
+Any other non-zero exit still restores the previous revision, leaving HEAD
+detached at that commit so the running service keeps the last known-good
+tree. The next `install.sh` / `install.ps1` run, or `./bin/update`, switches
+back to `main` before fetching; a named non-`main` branch is still refused.
+Re-run setup to
 continue, or `./bin/rollback` (`./codex-router.ps1 rollback` on Windows) to
 return to the retained revision deliberately.
 
