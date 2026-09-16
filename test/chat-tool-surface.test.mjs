@@ -362,7 +362,7 @@ function commandCodeSurface() {
   ];
 }
 
-for (const providerId of ["commandcode", "commandcode-messages"]) {
+for (const providerId of ["commandcode", "commandcode-messages", "opencode-go-messages"]) {
   test(`${providerId} bounds provider-facing tool names to 64 characters`, () => {
     assert.equal(COMMAND_CODE_LONG_TOOL.length, 80, "regression fixture reproduces issue #626");
     const routed = chatProviderToolSurface(commandCodeSurface(), providerId);
@@ -370,7 +370,7 @@ for (const providerId of ["commandcode", "commandcode-messages"]) {
     for (const name of names) {
       assert.ok(
         name.length <= 64,
-        `${name} is ${name.length} characters, which Command Code rejects`,
+        `${name} is ${name.length} characters, which ${providerId} rejects`,
       );
     }
     const alias = names.find((name) => name !== "codex_app__create_thread");

@@ -737,13 +737,18 @@ export class GrokReasoningSummaryCompatTransform extends Transform {
 // Grok OAuth keeps its gateway-error normalization. Every other provider whose
 // turns LiteLLM translates from Chat Completions gets the summary repair only.
 // Direct DeepSeek has its own reasoning bridge repair in
-// deepseek-tool-message-compat.mjs, and Responses and Messages providers do not
-// come through this bridge, so none of those gain a stage.
+// deepseek-tool-message-compat.mjs. Native Responses providers skip this
+// bridge. Anthropic Messages providers do not: litellm-config.mjs still sets
+// `use_chat_completions_api: true` for them, so Union Alpha (and every other
+// `protocol: "anthropic"` route) arrives as the same message-first, hashed
+// `reasoning_summary_text.delta` / `content_part.done` `reasoning_text` stream
+// this transform repairs. Leaving them out classified those turns empty.
 export function reasoningSummaryCompatTransform(provider, contentType = "") {
   if (!String(contentType).toLowerCase().includes("text/event-stream")) return undefined;
   const providerId = typeof provider === "string" ? provider : provider?.id;
   if (providerId === "grok-oauth") return new GrokReasoningSummaryCompatTransform();
   if (!provider || typeof provider !== "object" || providerId === "deepseek") return undefined;
-  if ((provider.protocol ?? "openai") !== "openai") return undefined;
+  const protocol = provider.protocol ?? "openai";
+  if (protocol !== "openai" && protocol !== "anthropic") return undefined;
   return new GrokReasoningSummaryCompatTransform({ normalizeGatewayErrors: false });
 }

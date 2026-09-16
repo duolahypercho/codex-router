@@ -226,6 +226,18 @@ export class EmptyCompletionTerminalGuard extends Transform {
 
 function partHasContent(part) {
   if (!part || typeof part !== "object") return false;
+  // LiteLLM's Chat Completions -> Responses bridge can close the assistant
+  // message with `type: "reasoning_text"` (and a `reasoning` field) instead of
+  // `output_text`. That is thinking, not an answer: counting it as content
+  // would hide an empty completion, and counting it as liveness would disable
+  // the silent retry that recovers the next attempt's text.
+  if (
+    part.type === "reasoning_text" ||
+    part.type === "reasoning" ||
+    part.type === "thinking"
+  ) {
+    return false;
+  }
   return (
     (typeof part.text === "string" && part.text.length > 0) ||
     (typeof part.refusal === "string" && part.refusal.length > 0)

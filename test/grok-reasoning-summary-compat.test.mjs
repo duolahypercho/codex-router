@@ -871,10 +871,12 @@ test("compatibility factory covers LiteLLM Chat Completions event streams", () =
   assert.ok(reasoningSummaryCompatTransform({ id: "grok-api" }, "text/event-stream"));
   assert.equal(reasoningSummaryCompatTransform("grok-oauth", "application/json"), undefined);
   assert.equal(reasoningSummaryCompatTransform({ id: "commandcode" }, "application/json"), undefined);
-  // Direct DeepSeek repairs its own bridge; Messages and Responses providers
-  // never pass through LiteLLM's Chat Completions translation.
+  // Direct DeepSeek repairs its own bridge. Native Responses providers skip
+  // LiteLLM's Chat Completions translation. Anthropic Messages providers do
+  // not: they still set use_chat_completions_api and need the same repair.
   assert.equal(reasoningSummaryCompatTransform({ id: "deepseek" }, "text/event-stream"), undefined);
-  assert.equal(reasoningSummaryCompatTransform({ id: "commandcode-messages", protocol: "anthropic" }, "text/event-stream"), undefined);
+  assert.ok(reasoningSummaryCompatTransform({ id: "commandcode-messages", protocol: "anthropic" }, "text/event-stream"));
+  assert.ok(reasoningSummaryCompatTransform({ id: "opencode-go-messages", protocol: "anthropic" }, "text/event-stream"));
   assert.equal(reasoningSummaryCompatTransform({ id: "opencode-go-responses", protocol: "openai-responses" }, "text/event-stream"), undefined);
   assert.equal(reasoningSummaryCompatTransform(undefined, "text/event-stream"), undefined);
   assert.equal(reasoningSummaryCompatTransform("commandcode", "text/event-stream"), undefined);

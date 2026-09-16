@@ -158,6 +158,7 @@ import {
   repairToolSchemaRoots,
   strictOpenCodeCompactionInput,
   stripSearchContentTypes,
+  anthropicFunctionTools,
   ToolSearchHistoryCapacityError,
 } from "./namespace-relay.mjs";
 import {
@@ -1037,6 +1038,20 @@ function needsConsoleGoResponsesToolCompatibility(route) {
   return providerForModel(route)?.id === "opencode-go-responses";
 }
 
+// Console Go's Messages endpoint is Anthropic-shaped: every tool must have a
+// string name and an object input_schema. Live Union Alpha (2026-09-16) 400s
+// `tools[116]` when Codex's hosted/custom leftovers survive LiteLLM translation.
+function needsConsoleGoMessagesToolCompatibility(route) {
+  return providerForModel(route)?.id === "opencode-go-messages";
+}
+
+function needsConsoleGoToolCompatibility(route) {
+  return (
+    needsConsoleGoResponsesToolCompatibility(route) ||
+    needsConsoleGoMessagesToolCompatibility(route)
+  );
+}
+
 function rejectsWebSearchOptions(route) {
   return ["fireworks", "opencode-go"].includes(providerForModel(route)?.id);
 }
@@ -1044,7 +1059,7 @@ function rejectsWebSearchOptions(route) {
 function needsStrictOpenCodeToolCompatibility(route) {
   return (
     needsZenFreeToolCompatibility(route) ||
-    needsConsoleGoResponsesToolCompatibility(route)
+    needsConsoleGoToolCompatibility(route)
   );
 }
 
@@ -2740,7 +2755,7 @@ async function summarizeWith(
     normalizeProviderAppToolOutputs(aged.input),
     route,
   );
-  const providerInput = (needsConsoleGoResponsesToolCompatibility(route) || usesDeepSeekResponses(route))
+  const providerInput = (needsConsoleGoToolCompatibility(route) || usesDeepSeekResponses(route))
     ? strictOpenCodeCompactionInput(compatibleInput, payload.tools, {
         maxNameLength: 64,
       })
@@ -3238,6 +3253,8 @@ async function buildRoutedRequest({ request, payload, route, agedInput }) {
   const chatCompletionsProvider = provider?.protocol !== "openai-responses";
   const deepSeekResponses = usesDeepSeekResponses(route);
   const consoleGoResponsesCompatibility = needsConsoleGoResponsesToolCompatibility(route);
+  const consoleGoMessagesCompatibility = needsConsoleGoMessagesToolCompatibility(route);
+  const consoleGoToolCompatibility = consoleGoResponsesCompatibility || consoleGoMessagesCompatibility;
   // Restore declarations only where the existing adapter flattens tools again.
   // Native Responses routes retain the client's original declaration shape and
   // restore only their response lookup below.
@@ -3413,7 +3430,7 @@ async function buildRoutedRequest({ request, payload, route, agedInput }) {
         ? { codecs: new Map([["apply_patch", GROK_PATCH_HOOK_CODEC]]) }
         : structuredPatch
         ? { codecs: new Map([["apply_patch", GROK_STRUCTURED_PATCH_CODEC]]) }
-        : consoleGoResponsesCompatibility
+        : consoleGoToolCompatibility
         ? { maxNameLength: 64, bridgeAll: true }
         : undefined,
     );
@@ -3489,8 +3506,20 @@ async function buildRoutedRequest({ request, payload, route, agedInput }) {
       );
     }
   }
-  if (consoleGoResponsesCompatibility || deepSeekResponses) {
+  if (consoleGoResponsesCompatibility || consoleGoMessagesCompatibility || deepSeekResponses) {
     routedToolChoice = flattenToolChoice(routedToolChoice, flattenedNamespaces);
+  }
+  if (provider?.protocol === "anthropic") {
+    tools = anthropicFunctionTools(tools);
+    if (
+      routedToolChoice &&
+      typeof routedToolChoice === "object" &&
+      !Array.isArray(routedToolChoice) &&
+      routedToolChoice.type &&
+      !["function", "auto", "none", "required", "allowed_tools"].includes(routedToolChoice.type)
+    ) {
+      routedToolChoice = "auto";
+    }
   }
   // Last, so the marker text is built from the history every other rewrite has
   // already settled. A chat-wire route would otherwise hand LiteLLM a
