@@ -95,6 +95,8 @@ const REQUEST_PROFILE_DESCRIPTIONS = {
     'reject a forced tool_choice ("required") while still calling tools under "auto"',
   "codex-encrypted-schema":
     "reject Codex's encrypted annotation on JSON-Schema nodes while accepting the same tool schema without it",
+  "omit-tool-choice":
+    'reject any explicit tool_choice (even "auto") while still calling the listed tools when the field is absent',
 };
 
 if (Object.keys(REQUEST_PROFILE_DESCRIPTIONS).some((profile) => !curatableRequestProfile(profile)) ||

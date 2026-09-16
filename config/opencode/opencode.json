@@ -85,6 +85,52 @@
         ],
         "prompt": "opencode API key"
       }
+    },
+    {
+      "id": "opencode-zen-messages",
+      "displayName": "opencode Zen Messages",
+      "kind": "openai-compatible",
+      "ownedBy": "opencode",
+      "variantOf": "opencode-go",
+      "protocol": "anthropic",
+      "baseUrl": "https://opencode.ai/zen/v1",
+      "baseUrlEnv": "OPENCODE_ZEN_BASE_URL",
+      "credential": {
+        "environment": [
+          "OPENCODE_API_KEY",
+          "OPENCODE_GO_API_KEY"
+        ],
+        "file": "opencode-go-api-key.secret",
+        "legacyFiles": [],
+        "keychainServices": [
+          "codex-router-opencode-go"
+        ],
+        "prompt": "opencode API key"
+      },
+      "models": []
+    },
+    {
+      "id": "opencode-zen-responses",
+      "displayName": "opencode Zen Responses",
+      "kind": "openai-compatible",
+      "ownedBy": "opencode",
+      "variantOf": "opencode-go",
+      "protocol": "openai-responses",
+      "baseUrl": "https://opencode.ai/zen/v1",
+      "baseUrlEnv": "OPENCODE_ZEN_BASE_URL",
+      "credential": {
+        "environment": [
+          "OPENCODE_API_KEY",
+          "OPENCODE_GO_API_KEY"
+        ],
+        "file": "opencode-go-api-key.secret",
+        "legacyFiles": [],
+        "keychainServices": [
+          "codex-router-opencode-go"
+        ],
+        "prompt": "opencode API key"
+      },
+      "models": []
     }
   ]
 }

@@ -1126,6 +1126,14 @@ function normalizeBody(buffer, contentType, route) {
     if (payload.tool_choice !== undefined && payload.tool_choice !== "none") {
       payload.tool_choice = "auto";
     }
+  } else if (model.requestProfile === "omit-tool-choice") {
+    // One step past auto-tool-choice: the upstream refuses the field in any
+    // form ("auto" and "none" included) yet calls the listed tools when it is
+    // simply absent. Observed on the Qwen family behind opencode Go's Messages
+    // route on 2026-09-15 (HTTP 400 with only the model id as the body). The
+    // tools stay; only the choice is dropped, so a forced call becomes a
+    // request the model may decline, exactly as auto-tool-choice already does.
+    delete payload.tool_choice;
   }
   // The provider still answers protocol, auth profile, and identity; the
   // endpoint answers where the request goes and what authenticates it. For
