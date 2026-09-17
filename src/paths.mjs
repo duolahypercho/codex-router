@@ -130,7 +130,14 @@ export const SUPPORT_DIR = path.join(STATE_DIR, "support");
 export const LOG_PATH = path.join(STATE_DIR, "router.log");
 export const SERVICE_PROCESS_STATE_PATH = path.join(STATE_DIR, "service-process.json");
 export const BACKUP_PATH = path.join(CODEX_HOME, "config.toml.pre-codex-router");
-export const SERVICE_LABEL = "io.github.codex-router";
+export const PRODUCTION_SERVICE_LABEL = "io.github.codex-router";
+// A test that exercises a real launchd command must never share the live
+// router's label: launchd keys jobs by label, not by plist path. Keep the
+// override test-only so production installs retain one stable service name.
+export const SERVICE_LABEL =
+  process.env.NODE_TEST_CONTEXT && process.env.CODEX_ROUTER_TEST_SERVICE_LABEL
+    ? process.env.CODEX_ROUTER_TEST_SERVICE_LABEL
+    : PRODUCTION_SERVICE_LABEL;
 export const LEGACY_SERVICE_LABEL = "io.github.kimi-codex-router";
 export const PROTOTYPE_SERVICE_LABEL = "com.ziwenxu.kimi-codex-proxy";
 export const LEGACY_STATE_DIRS = Object.freeze([

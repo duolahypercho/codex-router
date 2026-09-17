@@ -21,7 +21,10 @@ import {
   TARGET,
 } from "./paths.mjs";
 import { serviceProxyEnvironment } from "./proxy-environment.mjs";
-import { assertServiceWriteIsolated } from "./service-write-guard.mjs";
+import {
+  assertServiceLabelIsolated,
+  assertServiceWriteIsolated,
+} from "./service-write-guard.mjs";
 
 const command = process.argv[2] || "status";
 const effectivePlatform = process.env.CODEX_ROUTER_SERVICE_PLATFORM || process.platform;
@@ -32,6 +35,8 @@ const userId = typeof process.getuid === "function" ? process.getuid() : 501;
 const domain = `gui/${userId}`;
 const service = `${domain}/${SERVICE_LABEL}`;
 const launchctl = "/bin/launchctl";
+const skipLaunchctl =
+  Boolean(process.env.NODE_TEST_CONTEXT) && process.env.CODEX_ROUTER_SKIP_LAUNCHCTL === "1";
 const launchctlRetryWait = new Int32Array(new SharedArrayBuffer(4));
 const nodeBinary = process.env.CODEX_ROUTER_NODE_BIN || process.execPath;
 if (!path.isAbsolute(nodeBinary)) {
@@ -120,6 +125,7 @@ ${environmentEntries()}
 }
 
 function run(args, options = {}) {
+  if (skipLaunchctl) return "";
   return execFileSync(launchctl, args, {
     encoding: "utf8",
     timeout: 15_000,
@@ -199,6 +205,10 @@ if (!new Set(["install", "uninstall", "start", "stop", "restart", "status", "ren
   process.exit(2);
 }
 
+// Test subprocesses inherit NODE_TEST_CONTEXT. Check their label before any
+// launchctl operation, regardless of whether their plist path was redirected.
+if (command !== "status" && command !== "render") assertServiceLabelIsolated(SERVICE_LABEL);
+
 if (command === "render") {
   process.stdout.write(plist());
 } else if (command === "status") {
@@ -216,6 +226,10 @@ if (command === "render") {
     })}\n`,
   );
 } else if (command === "install") {
+  // Refuse before touching launchd. A redirected test previously reached
+  // bootout() with the production label, evicting the real router even though
+  // its plist write was isolated.
+  guardPlistWrite();
   bootout();
   // Only safe here. launchd opens StandardOutPath before it execs the service,
   // so a rotation performed by the started process renames a file the process
@@ -228,15 +242,13 @@ if (command === "render") {
   bootstrap();
   process.stdout.write(`${JSON.stringify({ installed: true, path: LAUNCH_AGENT_PATH })}\n`);
 } else if (command === "uninstall") {
+  guardPlistWrite();
   bootout();
   try {
     run(["disable", service], { quiet: true });
   } catch {
     // Best effort.
   }
-  // Removal damages the machine exactly as a write does: the observed failure
-  // included a test deleting the real LaunchAgent outright.
-  guardPlistWrite();
   if (existsSync(LAUNCH_AGENT_PATH)) unlinkSync(LAUNCH_AGENT_PATH);
   process.stdout.write(`${JSON.stringify({ installed: false })}\n`);
 } else if (command === "stop") {
