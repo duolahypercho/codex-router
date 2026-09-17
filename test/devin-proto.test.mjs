@@ -92,7 +92,7 @@ test("the discovery model list reaches GetCliModelConfigs on the wire", async ()
   const realFetch = globalThis.fetch;
   const seen = [];
   globalThis.fetch = async (url, init) => {
-    seen.push({ url: String(url), authorization: init?.headers?.authorization });
+    seen.push({ url: String(url), authorization: init?.headers?.authorization, body: init?.body });
     return {
       ok: true,
       status: 200,
@@ -116,10 +116,30 @@ test("the discovery model list reaches GetCliModelConfigs on the wire", async ()
       seen[0].url,
       "https://cascade.invalid/exa.api_server_pb.ApiServerService/GetCliModelConfigs",
     );
+    const request = decodeMessage(proto.GET_CLI_MODEL_CONFIGS_REQUEST, seen[0].body);
+    assert.equal(request.metadata.ideName, "chisel");
+    assert.equal(request.metadata.ideVersion, "0.0.0-dev");
+    assert.equal(request.metadata.extensionVersion, "0.0.0-dev");
     // A disabled entitlement is the account's answer, not a model to offer.
     assert.deepEqual(models.map((model) => model.id), ["live-model"]);
     assert.equal(models[0].premium, true);
   } finally {
     globalThis.fetch = realFetch;
   }
+});
+
+test("unnamed tool argument deltas extend the active named call", async () => {
+  const { ToolCallStream } = await import("../src/devin-cli-forwarder.mjs");
+  const stream = new ToolCallStream();
+  const header = stream.accept({ id: "call_1", name: "ping", argumentsJson: "" });
+  const open = stream.accept({ argumentsJson: "{" });
+  const body = stream.accept({ argumentsJson: '"value":1' });
+  const close = stream.accept({ argumentsJson: "}" });
+
+  assert.equal(header.restated, false);
+  assert.equal(open.argumentDelta, "{");
+  assert.equal(body.argumentDelta, '"value":1');
+  assert.equal(close.argumentDelta, "}");
+  assert.equal(stream.collected.length, 1);
+  assert.equal(stream.collected[0].function.arguments, '{"value":1}');
 });
