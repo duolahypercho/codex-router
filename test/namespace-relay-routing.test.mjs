@@ -193,7 +193,7 @@ function routedRequestPayload(stream = true, model = "opencode-go/deepseek-v4-fl
       },
       {
         type: "namespace",
-        name: "mcp__codex_apps__github",
+        name: "mcp__git_forge__github",
         tools: [
           {
             type: "function",
@@ -1031,6 +1031,137 @@ test("Groq refuses more than 128 client tools before contacting the gateway", as
   }
 });
 
+// Moonshot rejects the whole request over a `$ref` that points outside
+// `#/$defs/`, and the router repairs the tool list for that route before the
+// tool-search pass runs. A definition the transcript already called is added
+// back after that pass, so it has to be repaired again or an unrepaired
+// connector schema reaches Kimi's validator (the restore counterpart of
+// "the kimi route expands Codex automation definitions with sibling refs").
+function deferredConnectorSchema() {
+  return {
+    type: "object",
+    properties: {
+      filters: {
+        type: "object",
+        properties: {
+          priceRange: {
+            type: "object",
+            properties: { min: { type: "number" }, max: { type: "number" } },
+            required: ["min"],
+          },
+          inboundTotalDurationRange: {
+            $ref: "#/properties/filters/properties/priceRange",
+          },
+        },
+      },
+    },
+  };
+}
+
+function foreignRefs(value, found = []) {
+  if (Array.isArray(value)) {
+    for (const entry of value) foreignRefs(entry, found);
+    return found;
+  }
+  if (!value || typeof value !== "object") return found;
+  for (const [key, entry] of Object.entries(value)) {
+    if (key === "$ref" && typeof entry === "string" && !entry.startsWith("#/$defs/")) {
+      found.push(entry);
+    } else foreignRefs(entry, found);
+  }
+  return found;
+}
+
+function deferredConnectorPayload(stream, model) {
+  return {
+    model,
+    stream,
+    input: [
+      { type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] },
+      {
+        type: "function_call",
+        name: "_flights_search",
+        namespace: "wego",
+        call_id: "call_wego",
+        arguments: '{"filters":{}}',
+      },
+      { type: "function_call_output", call_id: "call_wego", output: "{}" },
+    ],
+    tools: [
+      {
+        type: "tool_search",
+        execution: "client",
+        description: "Search deferred tools.",
+        parameters: {
+          type: "object",
+          properties: { query: { type: "string" } },
+          required: ["query"],
+          additionalProperties: false,
+        },
+      },
+      { type: "function", name: "exec_command" },
+      {
+        type: "namespace",
+        name: "wego",
+        tools: [
+          {
+            type: "function",
+            name: "_flights_search",
+            defer_loading: true,
+            description: "Search flights.",
+            inputSchema: deferredConnectorSchema(),
+          },
+        ],
+      },
+    ],
+  };
+}
+
+test("a Moonshot route repairs a deferred definition restored after the search pass", async () => {
+  const result = await scenario(false, {
+    model: "opencode-go/kimi-k2.7-code",
+    requestPayload: deferredConnectorPayload,
+    jsonBody: () => ({ id: "kimi-deferred-restore", output: [] }),
+  });
+  assert.equal(result.gatewayBodies.length, 1);
+  const outgoing = result.gatewayBodies[0];
+  const restored = outgoing.tools.find((tool) => tool.name === "wego___flights_search");
+  assert.ok(restored, "the called connector is declared");
+  assert.deepEqual(
+    foreignRefs(restored.parameters),
+    [],
+    "Moonshot only accepts pointers into #/$defs/",
+  );
+  assert.deepEqual(
+    restored.parameters.properties.filters.properties.inboundTotalDurationRange.properties,
+    { min: { type: "number" }, max: { type: "number" } },
+  );
+});
+
+// The forced choice is resolved after the tool list is built, so the router
+// has to hand it to the tool-search pass on every chat-completions route --
+// not only the bounded Groq one -- or the request leaves naming a withheld
+// deferred tool it never declares.
+test("a forced choice on a withheld deferred tool declares it on any route", async () => {
+  const result = await scenario(false, {
+    model: "opencode-go/kimi-k2.7-code",
+    requestPayload: (stream, model) => {
+      const payload = deferredConnectorPayload(stream, model);
+      return {
+        ...payload,
+        input: payload.input.slice(0, 1),
+        tool_choice: { type: "function", name: "wego___flights_search" },
+      };
+    },
+    jsonBody: () => ({ id: "kimi-deferred-choice", output: [] }),
+  });
+  const outgoing = result.gatewayBodies[0];
+  assert.ok(
+    outgoing.tools.some((tool) => tool.name === "wego___flights_search"),
+    "the forced connector is declared",
+  );
+});
+
 test("Groq re-adds a deferred app definition used by prior native history", async () => {
   const fixture = groqModelFixture();
   try {
@@ -1424,7 +1555,7 @@ test("routed request flattens every namespace to the gateway and restores calls 
   assert.ok(names.includes("mcp__node_repl__js_reset"), "node_repl js_reset flattened");
   assert.ok(names.includes("tool_search"), "native tool_search exposed as a function");
   assert.ok(
-    names.includes("mcp__codex_apps__github__fetch_issue"),
+    names.includes("mcp__git_forge__github__fetch_issue"),
     "nested-namespace MCP tool flattened",
   );
   assert.ok(names.includes("exec_command"), "plain tools untouched");
@@ -1444,7 +1575,7 @@ test("routed request flattens every namespace to the gateway and restores calls 
   assert.ok(createThread?.inputSchema, "create_thread schema survives the relay");
   assert.equal(createThread.inputSchema.type, "object");
   const fetchIssue = outgoing.tools.find(
-    (tool) => tool.name === "mcp__codex_apps__github__fetch_issue",
+    (tool) => tool.name === "mcp__git_forge__github__fetch_issue",
   );
   assert.deepEqual(fetchIssue?.parameters, {
     type: "object",

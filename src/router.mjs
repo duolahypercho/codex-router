@@ -3568,7 +3568,10 @@ async function buildRoutedRequest({ request, payload, route, agedInput }) {
               recoverWithoutRelay: true,
               toolChoice: routedToolChoice,
             }
-          : undefined,
+          // Every provider still needs the forced choice: it can name a
+          // withheld deferred tool, and only the relay can put that
+          // definition back before the request leaves.
+          : { toolChoice: routedToolChoice },
       );
     } catch (error) {
       if (provider?.id !== "groq" || !(error instanceof ToolSearchHistoryCapacityError)) {
@@ -3593,6 +3596,13 @@ async function buildRoutedRequest({ request, payload, route, agedInput }) {
       // Stored tool-search results can introduce definitions after the first
       // repair pass, so enforce the same boundary on the expanded inventory.
       tools = repairToolSchemaRoots(tools, { nonRecursive: true });
+    }
+    if (needsMoonshotSchemaCompatibility(route)) {
+      // For the same reason: a discovered definition, or one restored because
+      // the transcript already called it, arrives after the repair above and
+      // would otherwise reach Moonshot's validator with the sibling `$ref` it
+      // rejects the whole request over.
+      tools = repairToolSchemaRoots(tools, { inlineForeignRefs: true, declareTypes: true });
     }
   }
   // Stored call history and forced choices must use the same tool names as the

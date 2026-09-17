@@ -1180,6 +1180,28 @@ The caller-authenticated health endpoint reports these limits, aggregate
 in-flight counts, bounded-buffer ceilings, and encrypted-relay cache metrics;
 the public health endpoint omits that resource detail.
 
+`CODEX_ROUTER_APP_CONNECTORS` can withhold the Codex app connectors from a
+routed model. Codex sends its full connector registry
+(`mcp__codex_apps__github`, `mcp__codex_apps__notion`, ...) on every request,
+including connectors you disabled, with nothing marked deferred and no
+`tool_search` control to defer it: a live capture of a one-word turn reached the
+provider as 576 flattened tools, about 1.09 MB of JSON Schema and roughly
+200,000 input tokens billed before the model read the first word. The default is
+unchanged -- every connector is still declared eagerly -- and the variable is
+the opt-in:
+
+- unset or empty: send every connector, exactly as before.
+- `none`: withhold all of them. On the captured turn that is 576 tools /
+  1,091,492 bytes down to 76 tools / 121,002 bytes.
+- `all`: send every connector, stated explicitly.
+- `airtable,gmail`: keep those connectors eager and withhold the rest;
+  trimmed, case-insensitive, unknown ids ignored.
+
+A withheld namespace is re-declared automatically the moment a stored call or a
+forced tool choice names it, so an in-progress session keeps working. Codex's
+own app tools, the collaboration runtime, the repls, and image generation are
+always sent. The variable is read per request, so no restart is needed.
+
 For routed external models, old textual tool results larger than 32 KiB are
 compacted after the model has acted on them. The four newest tool results stay
 intact, and each compacted result keeps a hash, head/tail evidence, and an exact

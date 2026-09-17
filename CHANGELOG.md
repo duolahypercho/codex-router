@@ -1,6 +1,40 @@
 # Changelog
 
 ## Unreleased
+- **`CODEX_ROUTER_APP_CONNECTORS` can withhold the Codex app connectors from a
+  routed turn.** A live capture of a one-word turn (DeepSeek on OpenCode Go,
+  Union Alpha on OpenCode Go Messages) showed Codex marks *nothing* deferred
+  for a routed model: 38 tool entries, 25 namespaces, no `defer_loading` on any
+  tool and no `tool_search` control at all. `flattenNamespaceTools` therefore
+  flattens Codex's whole connector registry into the prompt -- 576
+  provider-facing tools, ~1.09 MB of JSON Schema, ~200,000 input tokens billed
+  before the model read the first word, including connectors disabled in Codex,
+  which stay registered. The default is unchanged: every connector is still
+  declared eagerly, so an untouched install behaves exactly as before. Setting
+  `CODEX_ROUTER_APP_CONNECTORS` opts in -- `none` withholds every
+  `mcp__codex_apps__*` namespace from a routed chat/messages surface whether or
+  not Codex marked it and whether or not a search relay exists, which on the
+  captured shape is 576 tools / 1,091,492 bytes down to 76 tools / 121,002
+  bytes, most of the remainder being the app snapshot the router injects
+  itself; a comma-separated list (`airtable,gmail`, trimmed, case-insensitive,
+  unknown ids ignored) keeps those connectors eager and withholds the rest;
+  `all`, empty and unset withhold nothing. `mcp__codex_app` (threads,
+  automations, navigation), `collaboration`, the repls, the template picker,
+  `image_gen` and every plain tool always stay eager, and a namespace Codex did
+  mark deferred still follows the existing search-relay rule. A withheld connector keeps its namespace
+  registration, so stored calls are still renamed outbound and restored
+  inbound, and its definition is re-declared the moment a stored
+  `function_call`, a forced `tool_choice`, or an `allowed_tools` entry names it
+  -- by namespaced provider name, explicit namespace, or wire spelling -- so an
+  in-progress session never cites a tool the request does not declare. That
+  restoration is charged against a bounded provider's tool ceiling like any
+  other definition, so a Groq surface that cannot hold them all still fails
+  locally, and it is repaired again for the routes whose validators reject a
+  sibling `$ref`. The variable is read per request, so no restart is
+  needed. Responses-native routes are unchanged.
+  The `defer_loading` registration flag itself no longer leaks into any
+  provider-facing declaration.
+
 - **The Devin CLI model list asks for the method Devin 3000.x actually serves.**
   `devin-cli` called `GetCascadeModelConfigs`, which is the IDE's method; the
   CLI moved to `GetCliModelConfigs`, so a CLI-credentialed account was answered

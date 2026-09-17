@@ -12,14 +12,22 @@ import { freePort } from "./port-pool.mjs";
 // so a future refactor cannot quietly hand a test a port the live service --
 // or an unrelated process -- already holds.
 
-const POOL_FLOOR = 10_000;
+// Fetch blocks several lower ports even when a TCP listener can bind them.
+const POOL_FLOOR = 7_000;
 // One below Linux's default ephemeral floor of 32768.
 const POOL_CEILING = 32_767;
 const PRODUCTION_DEFAULTS = new Set([4200, 4201, 4202, 4203, 4208, 4210, 4212]);
 
-test("drawn ports stay inside the dedicated pool window and off production defaults", async () => {
-  const ports = await Promise.all(Array.from({ length: 24 }, () => freePort()));
+test("drawn ports stay outside production defaults and Antigravity POSIX lease ranges", async () => {
+  // The routing integration file needs over 140 distinct ports. A pool that
+  // avoids the lease range but shrinks each block to 99 still breaks CI.
+  const ports = await Promise.all(Array.from({ length: 150 }, () => freePort()));
+  assert.equal(new Set(ports).size, ports.length);
   for (const port of ports) {
+    assert.ok(
+      port < 10_000 || port >= 30_000,
+      `port ${port} overlaps Antigravity's POSIX token/refresh leases`,
+    );
     assert.ok(
       Number.isInteger(port) && port >= POOL_FLOOR && port <= POOL_CEILING,
       `port ${port} is outside the test pool window [${POOL_FLOOR}, ${POOL_CEILING}]`,
