@@ -72,6 +72,22 @@ test("an Ollama MLX context rejection becomes a non-retryable context error", ()
   assert.doesNotMatch(payload.error.message, /LiteLLM|APIConnectionError/);
 });
 
+test("an OpenRouter context rejection reports the requested tool payload", () => {
+  const bodyText = JSON.stringify({
+    error: {
+      message:
+        "This endpoint's maximum context length is 262144 tokens. However, you requested about 335996 tokens (37530 of text input, 298466 of tool input). Please reduce the length of either one.",
+    },
+  });
+
+  assert.deepEqual(contextLengthFailure(bodyText), {
+    detail:
+      "This endpoint's maximum context length is 262144 tokens. However, you requested about 335996 tokens (37530 of text input, 298466 of tool input). Please reduce the length of either one.",
+    inputTokens: 335996,
+    maximumTokens: 262144,
+  });
+});
+
 test("ordinary Ollama-style 500 errors remain retryable server errors", () => {
   const bodyText = JSON.stringify({ error: { message: "mlx runner stopped unexpectedly" } });
   assert.equal(gatewayErrorStatus({ status: 500, bodyText }), 500);

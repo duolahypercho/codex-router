@@ -127,9 +127,20 @@ const CONTEXT_LENGTH_PATTERNS = [
   /context[_\s-]length[_\s-]exceeded/i,
 ];
 
+const OPENROUTER_CONTEXT_LENGTH_PATTERN =
+  /maximum context length is (\d+) tokens\.\s*However,\s*you requested about (\d+) tokens/i;
+
 export function contextLengthFailure(bodyText) {
   const detail = extractUpstreamDetail(bodyText);
   if (!detail) return undefined;
+  const openRouterMatch = detail.match(OPENROUTER_CONTEXT_LENGTH_PATTERN);
+  if (openRouterMatch) {
+    return {
+      detail,
+      inputTokens: Number(openRouterMatch[2]),
+      maximumTokens: Number(openRouterMatch[1]),
+    };
+  }
   for (const pattern of CONTEXT_LENGTH_PATTERNS) {
     const match = detail.match(pattern);
     if (!match) continue;
