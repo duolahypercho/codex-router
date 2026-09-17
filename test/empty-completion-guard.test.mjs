@@ -335,6 +335,73 @@ test("content clears the post-reasoning stall timer", async () => {
   assert.match(Buffer.concat(chunks).toString("utf8"), /answer/);
 });
 
+test("LiteLLM reasoning_text message closes stay retryable empty completions", async () => {
+  // Anthropic Messages through LiteLLM's Chat Completions bridge can finish a
+  // thinking-only turn as content_part.done { type: reasoning_text } plus an
+  // empty output_text message. That must not count as content (thinking is not
+  // an answer) or as liveness (a silent retry is what recovers the next text).
+  const input = [
+    "event: response.created",
+    'data: {"type":"response.created","response":{"id":"r1"}}',
+    "",
+    "event: response.in_progress",
+    'data: {"type":"response.in_progress","response":{"id":"r1"}}',
+    "",
+    "event: response.output_item.added",
+    'data: {"type":"response.output_item.added","output_index":0,"item":{"id":"msg_1","type":"message","role":"assistant","status":"in_progress","content":[]}}',
+    "",
+    "event: response.content_part.added",
+    'data: {"type":"response.content_part.added","item_id":"msg_1","output_index":0,"content_index":0,"part":{"type":"output_text","text":"","annotations":[]}}',
+    "",
+    "event: response.output_text.done",
+    'data: {"type":"response.output_text.done","item_id":"msg_1","output_index":0,"content_index":0,"text":""}',
+    "",
+    "event: response.content_part.done",
+    `data: ${JSON.stringify({
+      type: "response.content_part.done",
+      item_id: "msg_1",
+      output_index: 0,
+      content_index: 0,
+      part: { type: "reasoning_text", reasoning: "thinking about the answer" },
+    })}`,
+    "",
+    "event: response.output_item.done",
+    `data: ${JSON.stringify({
+      type: "response.output_item.done",
+      output_index: 0,
+      item: {
+        id: "msg_1",
+        type: "message",
+        role: "assistant",
+        status: "completed",
+        content: [{ type: "output_text", text: "", annotations: [] }],
+      },
+    })}`,
+    "",
+    "event: response.completed",
+    `data: ${JSON.stringify({
+      type: "response.completed",
+      response: {
+        id: "r1",
+        output: [{
+          id: "msg_1",
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "" }],
+        }],
+      },
+    })}`,
+    "",
+    "data: [DONE]",
+    "",
+  ].join("\n");
+  const { body, empty, suppressed, live } = await runGuard(input);
+  assert.equal(empty, true);
+  assert.equal(suppressed, true);
+  assert.equal(live, false);
+  assert.equal(body, "");
+});
+
 test("a reasoning item announces liveness when no summary is streamed", async () => {
   const input = [
     "event: response.output_item.added",

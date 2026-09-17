@@ -19,6 +19,7 @@ import {
   rewriteNamespaceResponsePayload,
   repairToolSchemaRoots,
   stripSearchContentTypes,
+  anthropicFunctionTools,
   stripUnissuedEncryptedReasoning,
   stripUnissuedEncryptedReasoningInclude,
   ToolSearchHistoryCapacityError,
@@ -3705,6 +3706,38 @@ test("repairToolSchemaRoots fixes roots without flattening", () => {
 test("repairToolSchemaRoots returns the original array when nothing needs repair", () => {
   const tools = [{ type: "function", name: "fine", parameters: { type: "object", properties: { a: {} } } }];
   assert.equal(repairToolSchemaRoots(tools), tools);
+});
+
+test("anthropicFunctionTools keeps named functions and drops hosted leftovers", () => {
+  const ordinary = {
+    type: "function",
+    name: "exec_command",
+    parameters: { type: "object", properties: { command: { type: "string" } } },
+  };
+  const nested = {
+    type: "function",
+    function: { name: "nested", parameters: { type: "object", properties: { a: { type: "string" } } } },
+  };
+  const schemaOnly = { name: "schema_only", inputSchema: { type: "object", properties: { q: { type: "number" } } } };
+  const nameless = { type: "function", parameters: { type: "object" } };
+  const hosted = { type: "web_search", search_context_size: "medium" };
+  const custom = { type: "custom", name: "apply_patch" };
+  const noSchema = { type: "function", name: "bare" };
+  const tools = [ordinary, nested, schemaOnly, nameless, hosted, custom, noSchema];
+  const sanitized = anthropicFunctionTools(tools);
+  assert.notEqual(sanitized, tools);
+  assert.deepEqual(sanitized.map((tool) => tool.name), ["exec_command", "nested", "schema_only", "bare"]);
+  assert.ok(sanitized.every((tool) => tool.type === "function"));
+  assert.ok(sanitized.every((tool) => tool.parameters && typeof tool.parameters === "object" && !Array.isArray(tool.parameters)));
+  assert.equal(sanitized[0], ordinary);
+  assert.deepEqual(sanitized[1].parameters.properties, { a: { type: "string" } });
+  assert.deepEqual(sanitized[2].parameters.properties, { q: { type: "number" } });
+  assert.deepEqual(sanitized[3].parameters, { type: "object", properties: {} });
+});
+
+test("anthropicFunctionTools returns the original array when every tool is already valid", () => {
+  const tools = [{ type: "function", name: "fine", parameters: { type: "object", properties: {} } }];
+  assert.equal(anthropicFunctionTools(tools), tools);
 });
 
 test("OpenCode search repair strips only search_content_types on web_search", () => {

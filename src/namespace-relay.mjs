@@ -1051,6 +1051,57 @@ export function stripSearchContentTypes(tools) {
   return changed ? stripped : tools;
 }
 
+const EMPTY_OBJECT_SCHEMA = Object.freeze({ type: "object", properties: Object.freeze({}) });
+
+function objectToolSchema(schema) {
+  if (schema && typeof schema === "object" && !Array.isArray(schema)) return schema;
+  return EMPTY_OBJECT_SCHEMA;
+}
+
+// Anthropic Messages (and LiteLLM's translation onto it) requires every tool to
+// have a string `name` and an object `input_schema`. Hosted/custom leftovers
+// become tools[N] without those fields and 400 the whole turn. Keep named
+// functions, flatten nested Chat Completions / inputSchema spellings onto
+// `parameters`, and drop everything else.
+export function anthropicFunctionTools(tools) {
+  if (!Array.isArray(tools)) return tools;
+  let changed = false;
+  const next = [];
+  for (const tool of tools) {
+    if (!tool || typeof tool !== "object" || Array.isArray(tool)) {
+      changed = true;
+      continue;
+    }
+    const name = providerFunctionName(tool);
+    if (typeof name !== "string" || !name) {
+      changed = true;
+      continue;
+    }
+    if (tool.type && tool.type !== "function") {
+      changed = true;
+      continue;
+    }
+    const schema = tool.function?.parameters ?? tool.parameters ?? tool.inputSchema;
+    const parameters = objectToolSchema(schema);
+    const description = tool.description ?? tool.function?.description;
+    const alreadyValid =
+      tool.type === "function" &&
+      tool.name === name &&
+      tool.function === undefined &&
+      tool.inputSchema === undefined &&
+      tool.parameters === parameters &&
+      (tool.description ?? undefined) === description;
+    if (!alreadyValid) changed = true;
+    next.push(alreadyValid ? tool : {
+      type: "function",
+      name,
+      ...(description !== undefined ? { description } : {}),
+      parameters,
+    });
+  }
+  return changed ? next : tools;
+}
+
 // agent_message is a Codex collaboration input item, not part of the public
 // Responses schema OpenCode implements. The readable handoff has already been
 // recovered before this boundary, so keep its content and present it as the

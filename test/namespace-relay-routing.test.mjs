@@ -2187,6 +2187,46 @@ test("OpenCode Go Responses uses one bounded function-tool contract in both resp
   }
 });
 
+test("OpenCode Go Messages strips non-function tools and keeps name+object schemas", async () => {
+  const result = await scenario(false, {
+    model: "opencode-go-messages/minimax-m3",
+    requestPayload: goCompatibilityRequestPayload,
+    jsonBody: goCompatibilityJsonBody,
+  });
+  const outgoing = result.gatewayBodies[0];
+  assert.equal(outgoing.model, "opencode-go-messages-minimax-m3");
+  assert.ok(
+    outgoing.tools.every((tool) => tool?.type === "function"),
+    "Anthropic Messages cannot carry hosted or custom discriminators",
+  );
+  assert.ok(
+    outgoing.tools.every((tool) => typeof tool.name === "string" && tool.name),
+    "every remaining tool has a string name",
+  );
+  assert.ok(
+    outgoing.tools.every(
+      (tool) => tool.parameters && typeof tool.parameters === "object" && !Array.isArray(tool.parameters),
+    ),
+    "every remaining tool has an object schema LiteLLM can map to input_schema",
+  );
+  assert.ok(
+    outgoing.tools.every((tool) => tool.name.length <= 64),
+    "Console Go Messages shares the 64-character name cap",
+  );
+  assert.ok(
+    outgoing.tools.some((tool) => tool.parameters?.properties?.input),
+    "the custom patch tool is bridged instead of dropped",
+  );
+  assert.ok(
+    outgoing.tools.some((tool) => tool.description === "FUTURE_CUSTOM_SENTINEL"),
+    "every custom discriminator is bridged",
+  );
+  assert.equal(
+    outgoing.tools.some((tool) => tool.type === "web_search"),
+    false,
+  );
+});
+
 test("OpenCode Go Muse removes recursive tool refs in both response modes", async () => {
   for (const stream of [true, false]) {
     const result = await scenario(stream, {

@@ -220,7 +220,11 @@ function withRequiredAppTools(tools, required) {
 // bounded alias route, which is deterministic and reversible, so
 // `rewriteNamespaceResponsePayload()` still restores the client's own identity.
 // Every other non-Groq provider keeps the unbounded surface byte for byte.
-const BOUNDED_TOOL_NAME_PROVIDERS = new Set(["commandcode", "commandcode-messages"]);
+const BOUNDED_TOOL_NAME_PROVIDERS = new Set([
+  "commandcode",
+  "commandcode-messages",
+  "opencode-go-messages",
+]);
 const BOUNDED_TOOL_NAME_LENGTH = 64;
 
 export function chatProviderToolSurface(
