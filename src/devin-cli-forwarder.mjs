@@ -59,13 +59,27 @@ const chunk = (id, created, model, delta, finishReason = null) =>
 // arriving twice is the same call restated. Indexing by id keeps the OpenAI
 // `tool_calls[].index` stable across restatements instead of emitting a second
 // call the client would dispatch twice.
-class ToolCallStream {
+export class ToolCallStream {
   constructor() {
     this.byId = new Map();
     this.collected = [];
   }
 
   accept(call) {
+    if (!call.id && !call.name && call.argumentsJson && this.collected.length) {
+      const index = this.collected.length - 1;
+      const existing = this.collected[index];
+      const entry = {
+        ...existing,
+        function: {
+          ...existing.function,
+          arguments: `${existing.function.arguments || ""}${call.argumentsJson}`,
+        },
+      };
+      this.collected[index] = entry;
+      this.byId.set(entry.id, entry);
+      return { index, entry, restated: true, argumentDelta: call.argumentsJson };
+    }
     const id = call.id || `call_${randomUUID()}`;
     const existing = this.byId.get(id);
     const entry = {
@@ -155,13 +169,14 @@ async function handleChatCompletions(request, response) {
         if (wantsStream) response.write(chunk(id, created, model, { content: message.deltaText }));
       }
       for (const call of message.deltaToolCalls || []) {
-        const { index, entry, restated } = toolCalls.accept(call);
+        if (!call.name && !call.argumentsJson) continue;
+        const { index, entry, restated, argumentDelta } = toolCalls.accept(call);
         if (!wantsStream) continue;
         response.write(
           chunk(id, created, model, {
             tool_calls: [
               restated
-                ? { index, function: { arguments: entry.function.arguments } }
+                ? { index, function: { arguments: argumentDelta ?? entry.function.arguments } }
                 : { index, id: entry.id, type: "function", function: { ...entry.function } },
             ],
           }),
@@ -234,7 +249,15 @@ export async function listCascadeModels({ session = readDevinSession(), signal }
     token: session.apiKey,
     requestSchema: GET_CLI_MODEL_CONFIGS_REQUEST,
     responseSchema: GET_CLI_MODEL_CONFIGS_RESPONSE,
-    message: { metadata: { apiKey: session.apiKey, ideName: "windsurf", locale: "en" } },
+    message: {
+      metadata: {
+        apiKey: session.apiKey,
+        ideName: "chisel",
+        ideVersion: "0.0.0-dev",
+        extensionVersion: "0.0.0-dev",
+        locale: "en",
+      },
+    },
     signal,
   });
   return (response.clientModelConfigs || [])

@@ -225,7 +225,13 @@ async function runFreeStage(report, provider, args, fetchImpl) {
         authorization: connect.connectAuthorization(session.apiKey),
       },
       body: wire.encodeMessage(proto.GET_CLI_MODEL_CONFIGS_REQUEST, {
-        metadata: { apiKey: session.apiKey, ideName: "windsurf", locale: "en" },
+        metadata: {
+          apiKey: session.apiKey,
+          ideName: "chisel",
+          ideVersion: "0.0.0-dev",
+          extensionVersion: "0.0.0-dev",
+          locale: "en",
+        },
       }),
     });
   } catch (error) {
@@ -393,7 +399,14 @@ async function runLiveStage(report, provider, args, context, fetchImpl) {
         const decoded = wire.decodeMessage(proto.GET_CHAT_MESSAGE_RESPONSE, frame.payload);
         if (decoded.deltaText) text += decoded.deltaText;
         if (decoded.deltaThinking) thinking += decoded.deltaThinking;
-        for (const call of decoded.deltaToolCalls || []) toolCalls.push(call);
+        for (const call of decoded.deltaToolCalls || []) {
+          if (call.name) {
+            toolCalls.push(call);
+          } else if (call.argumentsJson && toolCalls.length) {
+            const active = toolCalls[toolCalls.length - 1];
+            active.argumentsJson = `${active.argumentsJson || ""}${call.argumentsJson}`;
+          }
+        }
         if (decoded.stopReason !== undefined) stopReason = decoded.stopReason;
         if (decoded.usage) usage = provider.turn.usageFrom(decoded.usage);
         if (decoded.actualModelUid) actualModelUid = decoded.actualModelUid;
