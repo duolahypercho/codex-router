@@ -156,6 +156,27 @@ test("client tool_search retains only schemas referenced by namespace history", 
   assert.deepEqual(deferred.tools[1].tools.map((tool) => tool.name), ["list_events"]);
 });
 
+test("client tool_search retains schemas for legacy namespace history names", () => {
+  const source = [
+    clientToolSearchControl(),
+    {
+      type: "namespace",
+      name: "collaboration",
+      tools: [
+        { type: "function", name: "spawn_agent" },
+        { type: "function", name: "wait_agent" },
+      ],
+    },
+  ];
+
+  for (const name of ["spawn_agent", "collaboration__spawn_agent"]) {
+    const deferred = deferNamespaceToolsForClientSearch(source, {
+      input: [{ type: "function_call", name, call_id: `history-${name}`, arguments: "{}" }],
+    });
+    assert.deepEqual(deferred.tools[1].tools.map((tool) => tool.name), ["spawn_agent"]);
+  }
+});
+
 test("namespace schemas remain eager when client tool_search is unavailable", () => {
   const source = [
     { type: "function", name: "exec_command" },

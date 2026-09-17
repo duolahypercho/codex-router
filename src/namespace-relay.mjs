@@ -111,6 +111,21 @@ function namespaceCallsInHistory(input) {
   return calls;
 }
 
+function unnamespacedCallsInHistory(input) {
+  const calls = new Set();
+  if (!Array.isArray(input)) return calls;
+  for (const item of input) {
+    if (
+      ["function_call", "custom_tool_call"].includes(item?.type) &&
+      item.namespace === undefined &&
+      typeof item.name === "string"
+    ) {
+      calls.add(item.name);
+    }
+  }
+  return calls;
+}
+
 // Codex exposes a client-executed tool_search control when namespace tools can
 // be discovered on demand. Chat-completions providers cannot consume namespace
 // entries directly, and eagerly flattening every registered MCP/app schema can
@@ -123,6 +138,15 @@ export function deferNamespaceToolsForClientSearch(tools, { input } = {}) {
   }
 
   const historicalCalls = namespaceCallsInHistory(input);
+  const unnamespacedCalls = unnamespacedCallsInHistory(input);
+  const namespaceNameCounts = new Map();
+  for (const tool of tools) {
+    if (tool?.type !== "namespace" || !Array.isArray(tool.tools)) continue;
+    for (const fn of tool.tools) {
+      if (!fn?.name) continue;
+      namespaceNameCounts.set(fn.name, (namespaceNameCounts.get(fn.name) || 0) + 1);
+    }
+  }
   const deferred = [];
   for (const tool of tools) {
     if (tool?.type !== "namespace" || !Array.isArray(tool.tools)) {
@@ -130,8 +154,12 @@ export function deferNamespaceToolsForClientSearch(tools, { input } = {}) {
       continue;
     }
     const required = historicalCalls.get(tool.name);
-    if (!required?.size) continue;
-    const retained = tool.tools.filter((fn) => required.has(fn?.name));
+    const retained = tool.tools.filter((fn) => {
+      if (!fn?.name) return false;
+      if (required?.has(fn.name)) return true;
+      if (unnamespacedCalls.has(`${tool.name}__${fn.name}`)) return true;
+      return unnamespacedCalls.has(fn.name) && namespaceNameCounts.get(fn.name) === 1;
+    });
     if (retained.length) deferred.push({ ...tool, tools: retained });
   }
   return { tools: deferred, deferred: true };
