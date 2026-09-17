@@ -13,8 +13,8 @@ import {
   TRAJECTORY_TYPE_CASCADE,
 } from "./devin-proto.mjs";
 
-const CLIENT_NAME = "windsurf";
-const CLIENT_VERSION = "1.0.0";
+const CLIENT_NAME = "chisel";
+const CLIENT_VERSION = "0.0.0-dev";
 
 // Cascade has no "assistant" message source. The shipped client sends prior
 // model turns as SYSTEM, and a turn built any other way is rejected.
@@ -130,7 +130,7 @@ export function buildChatMessageRequest(chat, { token, modelUid, newId = randomU
       extensionName: CLIENT_NAME,
       extensionVersion: CLIENT_VERSION,
       locale: "en",
-      os: { darwin: "mac", win32: "win" }[process.platform] || "linux",
+      os: { darwin: "darwin", win32: "win" }[process.platform] || "linux",
     },
     prompt: withToolDescriptions(systemPrompt, tools),
     chatModelUid: modelUid,
