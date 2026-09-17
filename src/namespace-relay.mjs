@@ -84,6 +84,59 @@ function providerToolSearchDescription(description, providerName) {
   return `${rewritten}\n\nFor this routed request, call \`${providerName}\` for deferred tool discovery; \`${TOOL_SEARCH_FUNCTION_NAME}\` is a separate ordinary function.`;
 }
 
+function hasClientToolSearch(tools) {
+  return Array.isArray(tools) && tools.some(
+    (tool) => tool?.type === "tool_search" && tool.execution === "client",
+  );
+}
+
+function namespaceCallsInHistory(input) {
+  const calls = new Map();
+  if (!Array.isArray(input)) return calls;
+  for (const item of input) {
+    if (
+      !["function_call", "custom_tool_call"].includes(item?.type) ||
+      typeof item.namespace !== "string" ||
+      typeof item.name !== "string"
+    ) {
+      continue;
+    }
+    let names = calls.get(item.namespace);
+    if (!names) {
+      names = new Set();
+      calls.set(item.namespace, names);
+    }
+    names.add(item.name);
+  }
+  return calls;
+}
+
+// Codex exposes a client-executed tool_search control when namespace tools can
+// be discovered on demand. Chat-completions providers cannot consume namespace
+// entries directly, and eagerly flattening every registered MCP/app schema can
+// consume the model's context before the conversation begins. Keep ordinary
+// functions and the search control eager, while retaining only namespace
+// schemas already referenced by the conversation history.
+export function deferNamespaceToolsForClientSearch(tools, { input } = {}) {
+  if (!Array.isArray(tools) || !hasClientToolSearch(tools)) {
+    return { tools, deferred: false };
+  }
+
+  const historicalCalls = namespaceCallsInHistory(input);
+  const deferred = [];
+  for (const tool of tools) {
+    if (tool?.type !== "namespace" || !Array.isArray(tool.tools)) {
+      deferred.push(tool);
+      continue;
+    }
+    const required = historicalCalls.get(tool.name);
+    if (!required?.size) continue;
+    const retained = tool.tools.filter((fn) => required.has(fn?.name));
+    if (retained.length) deferred.push({ ...tool, tools: retained });
+  }
+  return { tools: deferred, deferred: true };
+}
+
 function schemaStringValues(schema, values = new Set()) {
   if (!schema || typeof schema !== "object") return values;
   if (typeof schema.const === "string") values.add(schema.const);

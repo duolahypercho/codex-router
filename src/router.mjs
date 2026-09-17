@@ -58,6 +58,7 @@ import {
 import { fetchWithRetry } from "./upstream-retry.mjs";
 import {
   NamespaceToolCallTransform,
+  deferNamespaceToolsForClientSearch,
   flattenNamespacedHistory,
   flattenNamespaceTools,
   flattenToolSearchHistory,
@@ -2047,6 +2048,8 @@ async function buildRoutedRequest({ request, payload, route, agedInput }) {
     // it only relays definitions and results.
     const merged = mergeCodexAppTools(tools);
     if (merged.merged) tools = merged.tools;
+    const deferred = deferNamespaceToolsForClientSearch(tools, { input });
+    if (deferred.deferred) tools = deferred.tools;
     const flattened = flattenNamespaceTools(tools);
     namespacesFlattened = flattened.flattened;
     flattenedNamespaces = flattened.namespaces;

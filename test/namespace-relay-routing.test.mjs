@@ -204,6 +204,24 @@ function routedRequestPayload(stream = true, model = "opencode-go/deepseek-v4-fl
   };
 }
 
+function freshDeferredRequestPayload(
+  stream = true,
+  model = "opencode-go/deepseek-v4-flash",
+) {
+  const payload = routedRequestPayload(stream, model);
+  payload.input = payload.input.slice(0, 1);
+  return payload;
+}
+
+function routedRequestWithoutClientToolSearch(
+  stream = true,
+  model = "opencode-go/deepseek-v4-flash",
+) {
+  const payload = routedRequestPayload(stream, model);
+  payload.tools = payload.tools.filter((tool) => tool?.type !== "tool_search");
+  return payload;
+}
+
 function routedToolSearchHistoryPayload(
   stream = true,
   model = "opencode-go/deepseek-v4-flash",
@@ -544,9 +562,26 @@ async function scenario(
   }
 }
 
-test("routed request flattens every namespace to the gateway and restores calls to the client", async () => {
-  const first = await scenario();
-  const second = await scenario();
+test("fresh routed requests defer namespace schemas behind client tool_search", async () => {
+  const result = await scenario(true, { requestPayload: freshDeferredRequestPayload });
+  const outgoing = result.gatewayBodies[0];
+  const names = outgoing.tools.map((tool) => tool.name);
+
+  assert.deepEqual(names, ["tool_search", "exec_command", "view_image"]);
+  assert.ok(
+    outgoing.tools.every((tool) => tool?.type !== "namespace"),
+    "native namespaces never reach a function-only provider",
+  );
+  assert.ok(
+    names.every((name) => !name?.includes("__")),
+    "no namespace schema is flattened eagerly",
+  );
+});
+
+test("routed request without client tool_search flattens every namespace and restores calls", async () => {
+  const options = { requestPayload: routedRequestWithoutClientToolSearch };
+  const first = await scenario(true, options);
+  const second = await scenario(true, options);
   // Determinism: two identical runs produce byte-identical outgoing and
   // incoming bodies.
   assert.equal(second.gatewayBodies.length, 1);
@@ -564,7 +599,6 @@ test("routed request flattens every namespace to the gateway and restores calls 
   assert.ok(names.includes("codex_app__create_thread"), "merged codex_app tool flattened");
   assert.ok(names.includes("mcp__node_repl__js"), "node_repl js flattened");
   assert.ok(names.includes("mcp__node_repl__js_reset"), "node_repl js_reset flattened");
-  assert.ok(names.includes("tool_search"), "native tool_search exposed as a function");
   assert.ok(
     names.includes("mcp__codex_apps__github__fetch_issue"),
     "nested-namespace MCP tool flattened",
@@ -576,11 +610,8 @@ test("routed request flattens every namespace to the gateway and restores calls 
   );
   assert.ok(
     outgoing.tools.every((tool) => tool?.type !== "tool_search"),
-    "native deferred-search controls do not reach a function-only provider",
+    "no native deferred-search control was supplied",
   );
-  const toolSearch = outgoing.tools.find((tool) => tool.name === "tool_search");
-  assert.equal(toolSearch.type, "function");
-  assert.deepEqual(toolSearch.parameters.required, ["query"]);
   // The merged codex_app tool definitions keep their schema.
   const createThread = outgoing.tools.find((tool) => tool.name === "codex_app__create_thread");
   assert.ok(createThread?.inputSchema, "create_thread schema survives the relay");
@@ -644,10 +675,10 @@ test("routed request flattens every namespace to the gateway and restores calls 
     (item) => item.call_id === "call_search",
   );
   assert.deepEqual(searchCall, {
-    type: "tool_search_call",
+    type: "function_call",
+    name: "tool_search",
     call_id: "call_search",
-    execution: "client",
-    arguments: { query: "calendar", limit: 2 },
+    arguments: JSON.stringify({ query: "calendar", limit: 2 }),
   });
   // The router never executed any app tool: the gateway saw exactly one
   // request and the client saw exactly the relayed calls.
@@ -655,7 +686,9 @@ test("routed request flattens every namespace to the gateway and restores calls 
 });
 
 test("non-streaming routed responses restore namespace calls before client dispatch", async () => {
-  const result = await scenario(false);
+  const result = await scenario(false, {
+    requestPayload: routedRequestWithoutClientToolSearch,
+  });
   assert.equal(result.gatewayBodies.length, 1);
   assert.equal(result.gatewayBodies[0].stream, false);
 
@@ -697,10 +730,10 @@ test("non-streaming routed responses restore namespace calls before client dispa
   assert.equal(client.output[5].name, "exec_command");
   assert.equal(client.output[5].namespace, undefined);
   assert.deepEqual(client.output[6], {
-    type: "tool_search_call",
+    type: "function_call",
+    name: "tool_search",
     call_id: "call_search",
-    execution: "client",
-    arguments: { query: "calendar", limit: 2 },
+    arguments: JSON.stringify({ query: "calendar", limit: 2 }),
   });
 });
 

@@ -5,6 +5,7 @@ import test from "node:test";
 import {
   NamespaceToolCallTransform,
   buildNamespaceLookups,
+  deferNamespaceToolsForClientSearch,
   flattenNamespacedHistory,
   flattenNamespaceTools,
   flattenToolSearchHistory,
@@ -96,6 +97,80 @@ function clientToolSearchControl() {
     },
   };
 }
+
+test("client tool_search defers namespace schemas without a context-size heuristic", () => {
+  const source = [
+    clientToolSearchControl(),
+    { type: "function", name: "exec_command" },
+    {
+      type: "namespace",
+      name: "mcp__calendar",
+      tools: [
+        { type: "function", name: "list_events", inputSchema: { type: "object" } },
+        { type: "function", name: "delete_event", inputSchema: { type: "object" } },
+      ],
+    },
+  ];
+
+  const deferred = deferNamespaceToolsForClientSearch(source);
+
+  assert.equal(deferred.deferred, true);
+  assert.deepEqual(deferred.tools, [clientToolSearchControl(), source[1]]);
+});
+
+test("client tool_search retains only schemas referenced by namespace history", () => {
+  const source = [
+    clientToolSearchControl(),
+    {
+      type: "namespace",
+      name: "mcp__calendar",
+      tools: [
+        { type: "function", name: "list_events", inputSchema: { type: "object" } },
+        { type: "function", name: "delete_event", inputSchema: { type: "object" } },
+      ],
+    },
+    {
+      type: "namespace",
+      name: "mcp__mail",
+      tools: [{ type: "function", name: "list_messages", inputSchema: { type: "object" } }],
+    },
+  ];
+
+  const deferred = deferNamespaceToolsForClientSearch(source, {
+    input: [
+      {
+        type: "function_call",
+        namespace: "mcp__calendar",
+        name: "list_events",
+        call_id: "history-1",
+        arguments: "{}",
+      },
+    ],
+  });
+
+  assert.equal(deferred.deferred, true);
+  assert.deepEqual(
+    deferred.tools.map((tool) => tool.name || tool.type),
+    ["tool_search", "mcp__calendar"],
+  );
+  assert.deepEqual(deferred.tools[1].tools.map((tool) => tool.name), ["list_events"]);
+});
+
+test("namespace schemas remain eager when client tool_search is unavailable", () => {
+  const source = [
+    { type: "function", name: "exec_command" },
+    {
+      type: "namespace",
+      name: "mcp__calendar",
+      tools: [{ type: "function", name: "list_events" }],
+    },
+  ];
+
+  assert.deepEqual(deferNamespaceToolsForClientSearch(source), {
+    tools: source,
+    deferred: false,
+  });
+});
 
 test("flattenNamespaceTools flattens every namespace, including MCP ones", () => {
   const { tools, flattened, namespaces } = flattenNamespaceTools(clientRoutedTools());
