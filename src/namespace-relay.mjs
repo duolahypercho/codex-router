@@ -90,40 +90,26 @@ function hasClientToolSearch(tools) {
   );
 }
 
-function namespaceCallsInHistory(input) {
-  const calls = new Map();
-  if (!Array.isArray(input)) return calls;
+function namespaceHistoryCalls(input) {
+  const namespaced = new Map();
+  const unnamespaced = new Set();
+  if (!Array.isArray(input)) return { namespaced, unnamespaced };
   for (const item of input) {
-    if (
-      !["function_call", "custom_tool_call"].includes(item?.type) ||
-      typeof item.namespace !== "string" ||
-      typeof item.name !== "string"
-    ) {
+    if (!["function_call", "custom_tool_call"].includes(item?.type)) continue;
+    if (typeof item.name !== "string") continue;
+    if (item.namespace === undefined) {
+      unnamespaced.add(item.name);
       continue;
     }
-    let names = calls.get(item.namespace);
+    if (typeof item.namespace !== "string") continue;
+    let names = namespaced.get(item.namespace);
     if (!names) {
       names = new Set();
-      calls.set(item.namespace, names);
+      namespaced.set(item.namespace, names);
     }
     names.add(item.name);
   }
-  return calls;
-}
-
-function unnamespacedCallsInHistory(input) {
-  const calls = new Set();
-  if (!Array.isArray(input)) return calls;
-  for (const item of input) {
-    if (
-      ["function_call", "custom_tool_call"].includes(item?.type) &&
-      item.namespace === undefined &&
-      typeof item.name === "string"
-    ) {
-      calls.add(item.name);
-    }
-  }
-  return calls;
+  return { namespaced, unnamespaced };
 }
 
 // Codex exposes a client-executed tool_search control when namespace tools can
@@ -137,8 +123,10 @@ export function deferNamespaceToolsForClientSearch(tools, { input } = {}) {
     return { tools, deferred: false };
   }
 
-  const historicalCalls = namespaceCallsInHistory(input);
-  const unnamespacedCalls = unnamespacedCallsInHistory(input);
+  const {
+    namespaced: historicalCalls,
+    unnamespaced: unnamespacedCalls,
+  } = namespaceHistoryCalls(input);
   const namespaceNameCounts = new Map();
   for (const tool of tools) {
     if (tool?.type !== "namespace" || !Array.isArray(tool.tools)) continue;
