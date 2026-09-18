@@ -67,6 +67,7 @@ import {
 } from "./skills-install.mjs";
 import { discoveryDisabled } from "./discovery-mode.mjs";
 import { credentialLabel } from "./provider-credentials.mjs";
+import { resolveAvailabilityCache, withdrawnListedRoutes } from "./model-catalog-cache.mjs";
 import { providerApiKeyPoolsSnapshot } from "./provider-api-key-pool.mjs";
 import {
   effectiveProviderCredentialStatus,
@@ -601,6 +602,50 @@ add(
     ? `${unroutable.length} offered model(s) have no gateway route: ${unroutable.join(", ")}`
     : `${catalogRoutedModels.length} routed models`,
   "Run ./bin/doctor --fix from the owning checkout, then fully quit and reopen Codex.",
+);
+// A provider that answers its catalog without a listed id has withdrawn it;
+// the static card keeps offering a turn that deterministically fails. Warn
+// only, and only on a fresh successful answer: the operator decides what to
+// remove, a failed or stale fetch must never hide a working route, and a
+// returning model clears this on the next catalog refresh. Never consults
+// credentials or the network; it reads the cached provider lists.
+let withdrawnRoutes = [];
+if (catalogReadable && !discoveryDisabled()) {
+  try {
+    const seenProviders = new Set();
+    const caches = {};
+    const listed = [];
+    for (const model of catalogModels) {
+      if (model?.visibility !== "list") continue;
+      const registered = MODEL_BY_SLUG.get(String(model.slug));
+      const provider = registered?.provider;
+      const upstreamModel = registered?.upstreamModel;
+      if (typeof provider !== "string" || !provider) continue;
+      listed.push({
+        slug: String(model.slug),
+        provider,
+        upstreamModel: typeof upstreamModel === "string" ? upstreamModel : "",
+      });
+      if (!seenProviders.has(provider)) {
+        seenProviders.add(provider);
+        // A local override may serve a known endpoint under its own provider
+        // id; the endpoint owner's cached list still settles availability.
+        caches[provider] = resolveAvailabilityCache(provider, { providers: PROVIDERS });
+      }
+    }
+    withdrawnRoutes = withdrawnListedRoutes(listed, caches);
+  } catch {
+    // A cache this build cannot read is evidence of nothing; fail open.
+    withdrawnRoutes = [];
+  }
+}
+add(
+  withdrawnRoutes.length ? "warn" : "ok",
+  "Listed routes match provider catalogs",
+  withdrawnRoutes.length
+    ? `${withdrawnRoutes.length} listed route(s) no longer advertised: ${withdrawnRoutes.map((route) => `${route.slug} (${route.provider})`).join(", ")}`
+    : "all listed routes are advertised by their providers",
+  "The provider withdrew the model; remove or replace the route, then refresh the catalog.",
 );
 // Warn, not fail: an understated window still routes, and the operator may be
 // running a plan whose real ceiling is genuinely lower than the vendor's. What
