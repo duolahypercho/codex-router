@@ -1117,6 +1117,41 @@ export function agentMessagesAsUserMessages(input) {
   return changed ? converted : input;
 }
 
+// Console Go's Responses endpoint implements the public input schema only, so
+// it refuses both halves of a delegated task before inference: it answers
+// `` `input[N]` did not match any supported type `` for Codex's `agent_message`
+// item and `` `input[N].content` did not match any supported type `` for its
+// `encrypted_content` part. Every child spawned on an `opencode-go-responses`
+// route died on its first turn with that pair while the same route served its
+// parent normally. The readable handoff and the relayed plaintext are already
+// recovered upstream, so present the item as the ordinary user message the
+// strict endpoint accepts and carry whatever value is still opaque as visible
+// text rather than as a part the endpoint refuses.
+export function consoleGoResponsesInput(input) {
+  const converted = agentMessagesAsUserMessages(input);
+  if (!Array.isArray(converted)) return converted;
+  let changed = false;
+  const next = converted.map((item) => {
+    if (!Array.isArray(item?.content)) return item;
+    let contentChanged = false;
+    const content = [];
+    for (const part of item.content) {
+      if (part?.type !== "encrypted_content") {
+        content.push(part);
+        continue;
+      }
+      contentChanged = true;
+      if (typeof part.encrypted_content === "string" && part.encrypted_content) {
+        content.push({ type: "input_text", text: part.encrypted_content });
+      }
+    }
+    if (!contentChanged) return item;
+    changed = true;
+    return { ...item, content };
+  });
+  return changed ? next : converted;
+}
+
 // Codex can inherit an image with detail:"original" from the parent thread.
 // OpenCode rejects that OpenAI-only hint but accepts the same image as auto.
 // Preserve the image bytes and surrounding transcript; change only the hint.

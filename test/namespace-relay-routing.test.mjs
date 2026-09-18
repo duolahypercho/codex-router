@@ -2246,6 +2246,98 @@ test("OpenCode Go Muse removes recursive tool refs in both response modes", asyn
   }
 });
 
+test("Console Go Chat drops the access_programs field its endpoint refuses", async () => {
+  const chat = await scenario(false, {
+    model: "opencode-go/glm-5.3-flash",
+    requestPayload: (stream, model) => ({
+      ...routedRequestPayload(stream, model),
+      access_programs: ["standard"],
+    }),
+    jsonBody: () => ({ id: "resp-go-chat", output: [] }),
+  });
+  assert.equal(
+    "access_programs" in chat.gatewayBodies[0],
+    false,
+    "Console Go answers 400 `unknown field \"access_programs\"` before inference",
+  );
+
+  // The gate is exact to the Chat variant: the Responses route took the same
+  // field unchanged in the same session, so it keeps its payload.
+  const responses = await scenario(false, {
+    model: "opencode-go-responses/muse-spark-1.3-contributor",
+    requestPayload: (stream, model) => ({
+      ...goCompatibilityRequestPayload(stream, model),
+      access_programs: ["standard"],
+    }),
+    sseBody: goCompatibilitySseBody,
+    jsonBody: goCompatibilityJsonBody,
+  });
+  assert.deepEqual(responses.gatewayBodies[0].access_programs, ["standard"]);
+});
+
+test("OpenCode Go Responses carries a delegated task as an ordinary user message", async () => {
+  const envelope = "Message Type: NEW_TASK\nSender: /root\nPayload: ";
+  const recovered = "Preserve this bounded task exactly.";
+  const opaque = "OPAQUE-UNRECOVERED-PAYLOAD";
+  const result = await scenario(false, {
+    model: "opencode-go-responses/muse-spark-1.3-contributor",
+    requestPayload: (stream, model) => {
+      const payload = goCompatibilityRequestPayload(stream, model);
+      payload.input.push(
+        {
+          type: "agent_message",
+          author: "/root",
+          recipient: "/root/worker",
+          content: [
+            { type: "input_text", text: envelope },
+            { type: "encrypted_content", encrypted_content: recovered },
+          ],
+        },
+        {
+          type: "agent_message",
+          author: "/root",
+          recipient: "/root/worker",
+          content: [{ type: "encrypted_content", encrypted_content: opaque }],
+        },
+      );
+      return payload;
+    },
+    sseBody: goCompatibilitySseBody,
+    jsonBody: goCompatibilityJsonBody,
+  });
+  const outgoing = result.gatewayBodies[0];
+  assert.equal(outgoing.model, "opencode-go-responses-muse-spark-1-3-contributor");
+  assert.equal(
+    outgoing.input.some((item) => item?.type === "agent_message"),
+    false,
+    "Console Go refuses the agent_message item type before inference",
+  );
+  assert.equal(
+    outgoing.input.some((item) =>
+      (Array.isArray(item?.content) ? item.content : [])
+        .some((part) => part?.type === "encrypted_content"),
+    ),
+    false,
+    "Console Go refuses an encrypted_content content part before inference",
+  );
+  const delegated = outgoing.input.filter(
+    (item) =>
+      item?.type === "message" &&
+      item.role === "user" &&
+      Array.isArray(item.content) &&
+      item.content.some(
+        (part) =>
+          part?.type === "input_text" &&
+          (part.text === recovered || part.text === opaque),
+      ),
+  );
+  assert.deepEqual(
+    delegated.map((item) => item.content.at(-1).text),
+    [recovered, opaque],
+    "the readable handoff and the still-opaque value both arrive as text",
+  );
+});
+
 test("OpenCode Go compaction removes native tool history before the strict endpoint", async () => {
   const result = await scenario(false, {
     endpoint: "/responses/compact",
