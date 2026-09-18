@@ -51,6 +51,9 @@ interface UsageSource {
   inputTokens: number | null;
   regularInputTokens: number | null;
   cachedInputTokens: number | null;
+  // Older backends do not say whether a provider ever reported cache
+  // telemetry; `null` keeps that unknown apart from a known-absent `false`.
+  cacheTelemetrySeen?: boolean | null;
   outputTokens: number | null;
   totalTokens: number | null;
   last24hInputTokens: number | null;
@@ -171,6 +174,16 @@ export function UsagePage({
       })),
     );
   }, [source, sources]);
+
+  // Selection focuses, it does not hide: every connected account keeps its
+  // meters on the page so a routed provider can always be compared with its
+  // neighbours, and the selected one is labelled rather than merely first (#824).
+  const selectedAllowances = source && source.kind !== "aggregate"
+    ? allowances.filter((row) => row.source.id === source.id)
+    : [];
+  const otherAllowances = selectedAllowances.length
+    ? allowances.filter((row) => row.source.id !== source?.id)
+    : allowances;
 
   const targetAllowanceSourceId = focusRequest?.allowance
     ? navigationSourceId(focusRequest.sourceId)
@@ -349,20 +362,43 @@ export function UsagePage({
                 description="Official quota windows and balances for every connected account."
               />
               {allowances.length ? (
-                <div className="us-metric-stack">
-                  {allowances.map((row) => (
-                    <MetricCard
-                      key={row.id}
-                      source={row.source.name}
-                      metric={row.metric}
-                      cardRef={row.id === targetAllowanceRowId ? allowanceTargetRef : undefined}
-                      navigationFocused={allowanceFocused && row.id === targetAllowanceRowId}
-                    />
-                  ))}
-                  {!dataReady.accountUsage || !dataReady.providerUsage ? (
-                    <SkeletonBlock className="us-loading-metric" />
+                <>
+                  {selectedAllowances.length ? (
+                    <>
+                      <p className="us-source-group-label">Selected · {source.name}</p>
+                      <div className="us-metric-stack" aria-label={`${source.name} allowances`}>
+                        {selectedAllowances.map((row) => (
+                          <MetricCard
+                            key={row.id}
+                            source={row.source.name}
+                            metric={row.metric}
+                            cardRef={row.id === targetAllowanceRowId ? allowanceTargetRef : undefined}
+                            navigationFocused={allowanceFocused && row.id === targetAllowanceRowId}
+                          />
+                        ))}
+                      </div>
+                      {otherAllowances.length ? (
+                        <p className="us-source-group-label">Other connected accounts</p>
+                      ) : null}
+                    </>
                   ) : null}
-                </div>
+                  {otherAllowances.length || !dataReady.accountUsage || !dataReady.providerUsage ? (
+                    <div className="us-metric-stack" aria-label={selectedAllowances.length ? "Other account allowances" : "Account allowances"}>
+                      {otherAllowances.map((row) => (
+                        <MetricCard
+                          key={row.id}
+                          source={row.source.name}
+                          metric={row.metric}
+                          cardRef={row.id === targetAllowanceRowId ? allowanceTargetRef : undefined}
+                          navigationFocused={allowanceFocused && row.id === targetAllowanceRowId}
+                        />
+                      ))}
+                      {!dataReady.accountUsage || !dataReady.providerUsage ? (
+                        <SkeletonBlock className="us-loading-metric" />
+                      ) : null}
+                    </div>
+                  ) : null}
+                </>
               ) : !dataReady.accountUsage || !dataReady.providerUsage ? (
                 <PanelSkeleton label="Loading account allowances" count={2} />
               ) : (
@@ -515,6 +551,7 @@ function buildSources(
       inputTokens: provider.inputTokens ?? null,
       regularInputTokens: provider.regularInputTokens ?? null,
       cachedInputTokens: provider.cachedInputTokens ?? null,
+      cacheTelemetrySeen: provider.cacheTelemetrySeen ?? null,
       outputTokens: provider.outputTokens ?? null,
       totalTokens: provider.totalTokens ?? null,
       last24hInputTokens: recentProvider?.last24hInputTokens ?? provider.last24hInputTokens ?? null,
@@ -573,6 +610,9 @@ function buildSources(
       inputTokens: sumNullable(providerSources.map((source) => source.inputTokens)),
       regularInputTokens: sumNullable(providerSources.map((source) => source.regularInputTokens)),
       cachedInputTokens: sumNullable(providerSources.map((source) => source.cachedInputTokens)),
+      cacheTelemetrySeen: providerSources.some((source) => source.cacheTelemetrySeen === true)
+        ? true
+        : providerSources.every((source) => source.cacheTelemetrySeen === false) ? false : null,
       outputTokens: sumNullable(providerSources.map((source) => source.outputTokens)),
       totalTokens: sumNullable(providerSources.map((source) => source.totalTokens)),
       last24hInputTokens: aggregateLast24.inputTokens,
@@ -693,6 +733,9 @@ function usageSummary(
   const successRate = source.requests && source.successfulRequests != null
     ? (source.successfulRequests / source.requests) * 100
     : null;
+  const cacheHitRate = source.cacheTelemetrySeen === false
+    ? null
+    : cacheHitRatePercent(source.cachedInputTokens, source.inputTokens);
   const last24hTokens = source.last24hTokens;
   const last24hRequests = source.last24hRequests;
   const last24hMeteredRequests = source.last24hMeteredRequests;
@@ -731,8 +774,12 @@ function usageSummary(
     },
     {
       label: "Cached input",
-      value: optionalCompact(source.cachedInputTokens),
-      detail: `${routerScope} · included in input`,
+      value: cacheHitRate == null
+        ? optionalCompact(source.cachedInputTokens)
+        : `${compactNumber(source.cachedInputTokens!)} (${formatPercent(cacheHitRate)})`,
+      detail: cacheHitRate == null
+        ? `${routerScope} · hit rate not reported`
+        : `${routerScope} · ${formatPercent(cacheHitRate)} of reported input`,
       tone: "cached" as const,
     },
     {
@@ -1248,7 +1295,10 @@ function SourceRow({ source, selected, onSelect, t }: {
         {recentRouterTokens ? <small>{recentRouterTokens}</small> : null}
         {quota ? <small>{quota}</small> : null}
       </span>
-      <Badge tone={tone}>{status}</Badge>
+      <span className="us-source-badges">
+        {selected ? <Badge tone="accent">Selected</Badge> : null}
+        <Badge tone={tone}>{status}</Badge>
+      </span>
     </button>
   );
 }
@@ -1396,6 +1446,22 @@ function optionalEventNumber(value: number | undefined): number | null {
 
 function optionalCompact(value: number | null | undefined): string {
   return value == null ? "Not reported" : compactNumber(value);
+}
+
+// A rate needs both halves reported: a route that meters cached tokens but
+// never reports prompt totals (or the reverse) has no ratio, and "0%" there
+// would be indistinguishable from a real cold cache (#826).
+export function cacheHitRatePercent(
+  cachedInputTokens: number | null | undefined,
+  inputTokens: number | null | undefined,
+): number | null {
+  if (cachedInputTokens == null || inputTokens == null) return null;
+  if (!Number.isFinite(cachedInputTokens) || !Number.isFinite(inputTokens) || inputTokens <= 0) return null;
+  return Math.min(100, Math.max(0, (cachedInputTokens / inputTokens) * 100));
+}
+
+function formatPercent(value: number): string {
+  return `${value.toFixed(value > 0 && value < 10 ? 1 : 0)}%`;
 }
 
 function friendlyPlanName(value: string): string {

@@ -7,7 +7,11 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { nativeReasoningFamily, usesNativeChatReasoning } from "../src/chat-reasoning.mjs";
+import {
+  nativeReasoningFamily,
+  requiresReasoningContentOnToolCalls,
+  usesNativeChatReasoning,
+} from "../src/chat-reasoning.mjs";
 import { MODEL_BY_SLUG } from "../src/model-registry.mjs";
 import { childOutput, waitForListeners } from "./listener-readiness.mjs";
 
@@ -45,6 +49,27 @@ test("native chat reasoning stays scoped to established history contracts", () =
   }
 });
 
+test("only DeepSeek thinking routes need reasoning_content on every tool call (#809)", () => {
+  for (const slug of [
+    "opencode-go/deepseek-v4.1-flash",
+    "opencode-go/deepseek-v4-flash",
+    "commandcode/deepseek-v4-flash",
+  ]) {
+    const model = MODEL_BY_SLUG.get(slug);
+    assert.ok(model, slug);
+    assert.equal(requiresReasoningContentOnToolCalls(model), true, slug);
+  }
+  for (const model of [
+    undefined,
+    { provider: "deepseek", upstreamModel: "deepseek-chat", requestProfile: "deepseek-nonthinking" },
+    { provider: "opencode-go", upstreamModel: "glm-5.3" },
+    { provider: "opencode-go", upstreamModel: "kimi-k3" },
+    { provider: "opencode-go", upstreamModel: "hy4-preview", requestProfile: "hy4-reasoning" },
+    { provider: "custom", upstreamModel: "deepseek-v4.1-flash" },
+  ]) {
+    assert.equal(requiresReasoningContentOnToolCalls(model), false, JSON.stringify(model));
+  }
+});
 
 // Hand-built objects cannot catch a family that accidentally matches a route
 // nobody listed. `deepseek-chat` slipped past exactly that way: the negative

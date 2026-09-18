@@ -1,5 +1,8 @@
 import http from "node:http";
-import { usesNativeChatReasoning } from "./chat-reasoning.mjs";
+import {
+  requiresReasoningContentOnToolCalls,
+  usesNativeChatReasoning,
+} from "./chat-reasoning.mjs";
 import {
   deepSeekResponsesEffort,
   deepSeekResponsesInput,
@@ -376,6 +379,21 @@ function restoreNativeReasoningContent(messages) {
       restored.reasoning_content = reasoning.join("\n");
     }
     return restored;
+  });
+}
+
+function ensureToolCallReasoningContent(messages) {
+  if (!Array.isArray(messages)) return messages;
+  return messages.map((message) => {
+    if (
+      message?.role !== "assistant" ||
+      !Array.isArray(message.tool_calls) ||
+      message.tool_calls.length === 0 ||
+      typeof message.reasoning_content === "string"
+    ) {
+      return message;
+    }
+    return { ...message, reasoning_content: "" };
   });
 }
 
@@ -1117,6 +1135,9 @@ function normalizeBody(buffer, contentType, route) {
     if (usesNativeChatReasoning(model)) {
       payload.messages = restoreNativeReasoningContent(payload.messages);
     }
+    if (requiresReasoningContentOnToolCalls(model)) {
+      payload.messages = ensureToolCallReasoningContent(payload.messages);
+    }
   }
   if (provider.authProfile === "github-copilot") {
     // This is native ChatGPT account metadata, not an upstream scheduling
@@ -1530,7 +1551,11 @@ async function relayUpstreamResponse(
     : new Map();
   
   const transform = [
-    responsesStream ? createResponsesStreamTransform(flatToNative) : undefined,
+    responsesStream
+      ? createResponsesStreamTransform(flatToNative, {
+          pinResponseId: normalized.provider.authProfile === "github-copilot",
+        })
+      : undefined,
     responsesJson ? createResponsesJsonTransform(flatToNative) : undefined,
     zaiCacheUsageTransform(normalized.provider.id, upstreamContentType),
   ].filter(Boolean);

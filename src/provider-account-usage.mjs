@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { grokOAuthStatus, grokSessionEntry } from "./grok-oauth-status.mjs";
 import { ensureFreshGrokOAuthToken } from "./grok-oauth-session.mjs";
 import { ensureFreshKimiOAuthToken, kimiIdentityHeaders } from "./kimi-oauth-session.mjs";
+import { resolveKimiCodeEnvironment } from "./kimi-region.mjs";
 import {
   assertGitHubCopilotCredential,
   githubCopilotAccountHeaders,
@@ -288,7 +289,7 @@ export function opencodeGoUsageMetrics(payload) {
 
 // Command Code's billing API reports plan windows as used/cap credit
 // counters; resetAt is an epoch that stays 0 until the window first opens.
-export function commandCodeCreditsMetrics(payload) {
+export function commandCodeCreditsMetrics(payload, { summary, subscription } = {}) {
   const windows = payload?.windowLimits;
   if (!windows || typeof windows !== "object") return [];
   const windowMetric = (label, detail) => {
@@ -334,7 +335,53 @@ export function commandCodeCreditsMetrics(payload) {
     ...balance,
     windowMetric("5-hour limit", windows.fiveHour),
     windowMetric("Weekly limit", windows.weekly),
+    commandCodeMonthlyMetric(credits, summary, subscription),
   ].filter(Boolean);
+}
+
+// The credits route carries no monthly window and no monthly grant, only the
+// remaining plan balance. The billing-period spend from the usage summary plus
+// that remainder recovers the grant without a plan table; the subscription
+// supplies the period end. Any missing piece yields no metric rather than a
+// confident percentage, and a past-due subscription is not metered at all,
+// matching the provider's own Studio page.
+function commandCodeMonthlyMetric(credits, summary, subscription) {
+  const remaining = numberValue(credits?.monthlyCredits);
+  const used = numberValue(summary?.totalMonthlyCredits);
+  if (!Number.isFinite(remaining) || !Number.isFinite(used) || remaining < 0 || used < 0) return undefined;
+  const limit = remaining + used;
+  if (limit <= 0) return undefined;
+  const plan = commandCodeSubscription(subscription);
+  if (plan?.status === "past_due") return undefined;
+  const periodEnd = plan?.currentPeriodEnd;
+  const resetRaw = typeof periodEnd === "string" && !/^\d+$/.test(periodEnd.trim())
+    ? Date.parse(periodEnd)
+    : numberValue(periodEnd);
+  const resetMs = Number.isFinite(resetRaw) && resetRaw > 0
+    ? resetRaw > 1e12 ? resetRaw : resetRaw * 1_000
+    : undefined;
+  return quotaMetric(
+    "Monthly limit",
+    {
+      limit,
+      used,
+      remaining,
+      ...(resetMs !== undefined ? { resetTime: new Date(resetMs).toISOString() } : {}),
+    },
+    "credits",
+  );
+}
+
+function commandCodeSubscription(payload) {
+  const list = Array.isArray(payload)
+    ? payload
+    : Array.isArray(payload?.subscriptions)
+      ? payload.subscriptions
+      : payload && typeof payload === "object"
+        ? [payload.subscription ?? payload]
+        : [];
+  const entries = list.filter((entry) => entry && typeof entry === "object");
+  return entries.find((entry) => entry.status === "active" || entry.status === "trialing") ?? entries[0];
 }
 
 // Venice funds inference from three independent pools -- funded USD, VCU from
@@ -588,7 +635,7 @@ async function kimiOAuthAccount(fetchImpl) {
   if (!status.configured) return { status: "not-configured", source: "official-api", metrics: [] };
   const accessToken = await ensureFreshKimiOAuthToken();
   const payload = await requestJson(
-    "https://api.kimi.com/coding/v1/usages",
+    `${resolveKimiCodeEnvironment().apiBase}/usages`,
     accessToken,
     kimiIdentityHeaders(),
     fetchImpl,
@@ -790,13 +837,13 @@ async function commandCodeAccount(fetchImpl) {
     return fallback("Account usage is unavailable for a custom Command Code endpoint");
   }
   try {
-    const payload = await requestJson(
-      "https://api.commandcode.ai/alpha/billing/credits",
-      credential.value,
-      {},
-      fetchImpl,
-    );
-    const metrics = commandCodeCreditsMetrics(payload);
+    const read = (route) => requestJson(`https://api.commandcode.ai/alpha/${route}`, credential.value, {}, fetchImpl);
+    const [payload, summary, subscription] = await Promise.all([
+      read("billing/credits"),
+      read("usage/summary").catch(() => undefined),
+      read("billing/subscriptions").catch(() => undefined),
+    ]);
+    const metrics = commandCodeCreditsMetrics(payload, { summary, subscription });
     if (!metrics.length) {
       return fallback("Command Code reported no plan windows; showing router traffic");
     }

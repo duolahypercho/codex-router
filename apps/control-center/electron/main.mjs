@@ -26,6 +26,7 @@ import { controlCenterDestination, controlCenterNavigationURL } from "./navigati
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const DEVELOPMENT_ICON = path.resolve(HERE, "..", "assets", "icon.png");
+const DEVELOPMENT_TRAY_TEMPLATE_ICON = path.resolve(HERE, "..", "assets", "trayTemplate.png");
 let mainWindow;
 let tray;
 let mutationLifecycle = {
@@ -98,6 +99,21 @@ const RENDERER = rendererLocation();
 
 function appIconPath() {
   return app.isPackaged ? path.join(process.resourcesPath, "icon.png") : DEVELOPMENT_ICON;
+}
+
+// macOS status items are template images: a monochrome glyph the menu bar
+// tints and inverts itself. The full-colour 512px app tile belongs to the Dock
+// and the window, not the status area (#829). Electron reads the `Template`
+// filename suffix and the sibling `@2x` face on its own.
+function trayIconImage() {
+  if (process.platform !== "darwin") return nativeImage.createFromPath(appIconPath());
+  const file = app.isPackaged
+    ? path.join(process.resourcesPath, "trayTemplate.png")
+    : DEVELOPMENT_TRAY_TEMPLATE_ICON;
+  const image = nativeImage.createFromPath(file);
+  if (image.isEmpty()) return image;
+  image.setTemplateImage(true);
+  return image;
 }
 
 function showDockForVisibleWindow() {
@@ -264,8 +280,8 @@ function completeApplicationReadiness() {
 
 function createTray() {
   if (tray && !tray.isDestroyed()) return tray;
-  const image = nativeImage.createFromPath(appIconPath());
-  if (image.isEmpty()) throw new Error(`The tray icon could not be loaded from ${appIconPath()}.`);
+  const image = trayIconImage();
+  if (image.isEmpty()) throw new Error("The tray icon could not be loaded.");
   const createdTray = new Tray(image);
   try {
     createdTray.setToolTip("Codex Router");

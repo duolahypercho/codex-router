@@ -417,6 +417,10 @@ const bridgeSource = String.raw`
             id: "deepseek",
             displayName: "DeepSeek",
             credentialType: "api",
+            inputTokens: 10_000,
+            regularInputTokens: 7_500,
+            cachedInputTokens: 2_500,
+            cacheTelemetrySeen: true,
             totalTokens,
             requests: 8,
             last24hTokens: totalTokens,
@@ -446,6 +450,10 @@ const bridgeSource = String.raw`
             id: "venice",
             displayName: "Venice",
             credentialType: "api",
+            inputTokens: 0,
+            regularInputTokens: 0,
+            cachedInputTokens: 0,
+            cacheTelemetrySeen: false,
             totalTokens: 0,
             requests: 0,
             last24hTokens: 0,
@@ -652,6 +660,19 @@ test("the production renderer exposes model discovery and picker actions", { tim
     );
     await page.getByRole("heading", { name: "Usage", exact: true }).waitFor();
     await page.getByText("8.25 DIEM", { exact: true }).waitFor();
+    // #824: the chosen source is labelled and its allowances are grouped under
+    // it instead of being silently floated above the other accounts.
+    assert.equal(await page.getByLabel("Usage source").inputValue(), "provider:deepseek");
+    await page.locator(".us-source-group-label", { hasText: "Selected · DeepSeek" }).waitFor();
+    assert.equal(await page.locator(".us-source-group-label", { hasText: "Other connected accounts" }).count(), 1);
+    assert.equal(await page.locator(".us-source-badges .badge", { hasText: "Selected" }).count(), 1);
+    // #826: cache hits render as a count plus a share of reported input; a
+    // provider with no cache telemetry says so rather than reading "0%".
+    await page.getByText("2.5k (25%)", { exact: true }).waitFor();
+    await page.getByLabel("Usage source").selectOption("provider:venice");
+    await page.getByText(/hit rate not reported/).waitFor();
+    assert.equal(await page.getByText(/\(0%\)/).count(), 0);
+    await page.getByLabel("Usage source").selectOption("provider:deepseek");
     assert.equal(
       await page.evaluate(() => window.routerControlTest.navigate({ destination: "usage-resets", sourceId: "deepseek" })),
       true,

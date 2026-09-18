@@ -237,6 +237,8 @@ function controlCenterSources(root) {
     ]),
     path.join(base, "assets", "icon.png"),
     path.join(base, "assets", "icon.ico"),
+    path.join(base, "assets", "trayTemplate.png"),
+    path.join(base, "assets", "trayTemplate@2x.png"),
   ];
 }
 

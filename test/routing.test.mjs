@@ -3670,6 +3670,60 @@ test("API forwarder validates Copilot auth, sets identity headers, and retries r
   }
 });
 
+test("API forwarder pins Copilot's per-event Responses ids to the created response (#814)", async () => {
+  const upstream = await mockServer(async (request, response) => {
+    if (request.url === "/user") {
+      json(response, 200, { endpoints: {} });
+      return;
+    }
+    await bodyJson(request);
+    response.writeHead(200, { "Content-Type": "text/event-stream" });
+    const events = [
+      { type: "response.created", response: { id: "resp_a" } },
+      { type: "response.in_progress", response: { id: "resp_b" } },
+      { type: "response.output_text.delta", output_index: 0, delta: "OK" },
+      { type: "response.completed", response: { id: "resp_c", output: [] } },
+    ];
+    response.end(events.map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(""));
+  });
+  const curated = curatedCopilotModel();
+  const forwarderPort = await openPort();
+  const forwarder = run("api-forwarder.mjs", {
+    CODEX_ROUTER_API_PORT: String(forwarderPort),
+    MODEL_ROUTER_USER_MODELS: curated.file,
+    GITHUB_COPILOT_BASE_URL: `http://127.0.0.1:${upstream.port}`,
+    GITHUB_COPILOT_USER_URL: `http://127.0.0.1:${upstream.port}/user`,
+    COPILOT_GITHUB_TOKEN: "github_pat_TEST_GITHUB_SOURCE_TOKEN",
+    CODEX_ROUTER_QUIET: "1",
+  });
+
+  try {
+    await waitFor(`http://127.0.0.1:${forwarderPort}/health`, forwarder, {
+      Authorization: `Bearer ${INTERNAL_KEY}`,
+    });
+    const response = await fetch(`http://127.0.0.1:${forwarderPort}/v1/responses`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${INTERNAL_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ model: `responses/${curated.gatewayModel}`, input: "Reply with exactly OK.", stream: true }),
+    });
+    assert.equal(response.status, 200, forwarder.testErrors());
+    const events = (await response.text())
+      .split("\n\n")
+      .filter((frame) => frame.includes("data: "))
+      .map((frame) => JSON.parse(frame.slice(frame.indexOf("data: ") + 6)));
+    assert.deepEqual(
+      events.map((event) => event.type),
+      ["response.created", "response.in_progress", "response.output_text.delta", "response.completed"],
+    );
+    assert.equal(events[1].response.id, "resp_a");
+    assert.equal(events[3].response.id, "resp_a");
+  } finally {
+    await stopChild(forwarder);
+    await closeServer(upstream.server);
+    rmSync(curated.dir, { recursive: true, force: true });
+  }
+});
+
 // The forwarder sits downstream of the gateway, so Codex's own traffic reaches
 // it already bridged. What this covers is the other way in: a client talking to
 // the gateway directly, whose image would otherwise reach the provider intact
@@ -6220,6 +6274,80 @@ test("API forwarder routes GLM coding-plan models with thinking enabled", async 
     await closeServer(upstream.server);
   }
 }));
+
+test("API forwarder gives DeepSeek tool calls without reasoning an empty reasoning_content (#809)", async () => {
+  const upstreamRequests = [];
+  const upstream = await mockServer(async (request, response) => {
+    upstreamRequests.push({ url: request.url, body: await bodyJson(request) });
+    json(response, 200, { choices: [] });
+  });
+  const forwarderPort = await openPort();
+  const forwarder = run("api-forwarder.mjs", {
+    CODEX_ROUTER_API_PORT: String(forwarderPort),
+    OPENCODE_GO_BASE_URL: `http://127.0.0.1:${upstream.port}`,
+    OPENCODE_GO_API_KEY: "TEST_OPENCODE_GO_API_KEY",
+    CODEX_ROUTER_QUIET: "1",
+  });
+  const history = (model) => ({
+    model,
+    messages: [
+      { role: "user", content: "read the probe result" },
+      {
+        role: "assistant",
+        content: null,
+        tool_calls: [{
+          id: "call_probe",
+          type: "function",
+          function: { name: "codex_router_probe", arguments: "{\"value\":\"pending\"}" },
+        }],
+      },
+      { role: "tool", tool_call_id: "call_probe", content: "MARKER" },
+      {
+        role: "assistant",
+        content: [{ type: "thinking", text: "kept" }],
+        tool_calls: [{
+          id: "call_two",
+          type: "function",
+          function: { name: "codex_router_probe", arguments: "{}" },
+        }],
+      },
+      { role: "tool", tool_call_id: "call_two", content: "done" },
+    ],
+    tools: [{
+      type: "function",
+      function: { name: "codex_router_probe", parameters: { type: "object", properties: {} } },
+    }],
+  });
+
+  try {
+    await waitFor(`http://127.0.0.1:${forwarderPort}/health`, forwarder, {
+      Authorization: `Bearer ${INTERNAL_KEY}`,
+    });
+    for (const model of ["opencode-go-deepseek-v4-1-flash", "opencode-go-glm-5-3"]) {
+      const response = await fetch(`http://127.0.0.1:${forwarderPort}/v1/chat/completions`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${INTERNAL_KEY}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(history(model)),
+      });
+      assert.equal(response.status, 200, model);
+    }
+    const [deepseek, glm] = upstreamRequests.map((entry) => entry.body.messages);
+    assert.equal(deepseek[1].reasoning_content, "");
+    assert.equal(deepseek[1].content, null);
+    assert.equal(deepseek[1].tool_calls.length, 1);
+    assert.equal(deepseek[3].reasoning_content, "kept");
+    assert.equal(deepseek[0].reasoning_content, undefined);
+    // Only the DeepSeek contract needs the field on every tool call.
+    assert.equal(glm[1].reasoning_content, undefined);
+    assert.equal(glm[3].reasoning_content, "kept");
+  } finally {
+    await stopChild(forwarder);
+    await closeServer(upstream.server);
+  }
+});
 
 test("API forwarder preserves Z.ai cached-token telemetry before the LiteLLM bridge", async () => {
   const upstream = await mockServer(async (request, response) => {

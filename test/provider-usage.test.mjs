@@ -223,6 +223,12 @@ test("publishes prefix-cache telemetry for the dashboard without inflating it", 
   assert.equal(deepseek.last24hRegularInputTokens, 20);
   assert.equal(deepseek.last24hCachedInputTokens, 130);
   assert.equal(deepseek.regularInputTokens + deepseek.cachedInputTokens, deepseek.inputTokens);
+  // A provider whose rows never carried cache telemetry has no hit rate, not a
+  // zero one; the per-provider flag lets the dashboard tell them apart (#826).
+  assert.equal(deepseek.cacheTelemetrySeen, true);
+  for (const provider of snapshot.providers) {
+    if (provider.id !== "deepseek") assert.equal(provider.cacheTelemetrySeen, false, provider.id);
+  }
   assert.deepEqual(deepseek.dailyUsageBuckets, [
     { startDate: utcDateKey("2026-07-20T18:00:00Z"), tokens: 100, requests: 1, inputTokens: 100, cachedInputTokens: 80, outputTokens: 0 },
     { startDate: utcDateKey("2026-07-21T17:00:00Z"), tokens: 50, requests: 2, inputTokens: 50, cachedInputTokens: 50, outputTokens: 0 },

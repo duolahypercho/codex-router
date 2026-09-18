@@ -17,24 +17,24 @@ import path from "node:path";
 import lockfile from "proper-lockfile";
 
 import { protectPrivateFile } from "./file-security.mjs";
+import { kimiCodeHome, resolveKimiCodeEnvironment } from "./kimi-region.mjs";
 import { VERSION } from "./version.mjs";
 
 const KIMI_CLIENT_ID = "17e5f671-d194-4dfb-9706-5516cb48c098";
-const KIMI_CODE_HOME =
-  process.env.KIMI_CODE_HOME || path.join(os.homedir(), ".kimi-code");
-const OAUTH_HOST = (
-  process.env.KIMI_CODE_OAUTH_HOST ||
-  process.env.KIMI_OAUTH_HOST ||
-  "https://auth.kimi.com"
-).replace(/\/+$/, "");
-const CREDENTIALS_PATH = path.join(
-  KIMI_CODE_HOME,
-  "credentials",
-  "kimi-code.json",
-);
+const KIMI_CODE_HOME = kimiCodeHome();
 const OAUTH_LOCK_TARGET = path.join(KIMI_CODE_HOME, "oauth", "kimi-code");
 const DEVICE_ID_PATH = path.join(KIMI_CODE_HOME, "device_id");
 let refreshInFlight;
+
+// Resolved per call so a `kimi login` into the other region (kimi.com vs
+// kimi.ai) while the forwarder is running is picked up without a restart.
+function credentialsPath() {
+  return resolveKimiCodeEnvironment().credentialsPath;
+}
+
+function oauthHost() {
+  return resolveKimiCodeEnvironment().oauthHost;
+}
 
 function oauthError(message, { code = "oauth_error", status = 502 } = {}) {
   const error = new Error(message);
@@ -133,11 +133,12 @@ function validateToken(value) {
 }
 
 export function readKimiOAuthToken() {
-  if (!existsSync(CREDENTIALS_PATH)) {
+  const file = credentialsPath();
+  if (!existsSync(file)) {
     throw unauthorizedError("Kimi OAuth credentials were not found; run `kimi login`.");
   }
   try {
-    return validateToken(JSON.parse(readFileSync(CREDENTIALS_PATH, "utf8")));
+    return validateToken(JSON.parse(readFileSync(file, "utf8")));
   } catch (error) {
     if (error?.code === "oauth_unauthorized") throw error;
     throw unauthorizedError("Kimi OAuth credential file is invalid; run `kimi login`.");
@@ -165,10 +166,11 @@ function sameToken(left, right) {
 }
 
 function atomicSaveToken(token) {
-  const directory = path.dirname(CREDENTIALS_PATH);
+  const file = credentialsPath();
+  const directory = path.dirname(file);
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   chmodSync(directory, 0o700);
-  const temporary = `${CREDENTIALS_PATH}.tmp.${process.pid}`;
+  const temporary = `${file}.tmp.${process.pid}`;
   const descriptor = openSync(temporary, "w", 0o600);
   try {
     writeFileSync(descriptor, `${JSON.stringify(token, null, 2)}\n`, "utf8");
@@ -178,8 +180,8 @@ function atomicSaveToken(token) {
   }
   try {
     protectPrivateFile(temporary);
-    renameSync(temporary, CREDENTIALS_PATH);
-    protectPrivateFile(CREDENTIALS_PATH);
+    renameSync(temporary, file);
+    protectPrivateFile(file);
   } catch (error) {
     try {
       unlinkSync(temporary);
@@ -211,7 +213,7 @@ async function refreshToken(refreshTokenValue) {
   for (let attempt = 0; attempt < 3; attempt += 1) {
     let response;
     try {
-      response = await fetch(`${OAUTH_HOST}/api/oauth/token`, {
+      response = await fetch(`${oauthHost()}/api/oauth/token`, {
         method: "POST",
         headers: {
           ...kimiIdentityHeaders(),

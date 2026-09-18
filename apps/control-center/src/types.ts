@@ -485,6 +485,7 @@ export interface ProviderUsage {
   inputTokens?: number;
   regularInputTokens?: number;
   cachedInputTokens?: number;
+  cacheTelemetrySeen?: boolean;
   outputTokens?: number;
   totalTokens?: number;
   requests?: number;

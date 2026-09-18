@@ -1123,6 +1123,16 @@ test("electron boundary does not enable node integration or shell argv", async (
   assert.match(main, /setApplicationMenu\(null\)/);
   assert.match(main, /icon:\s*appIconPath\(\)/);
   assert.match(main, /app\.dock\?\.setIcon\(appIconPath\(\)\)/);
+  // The macOS status item is a monochrome template glyph, not the app tile (#829).
+  assert.match(main, /function trayIconImage\(\)[\s\S]{0,200}process\.platform !== "darwin"[\s\S]{0,400}"trayTemplate\.png"[\s\S]{0,300}setTemplateImage\(true\)/);
+  assert.match(main, /function createTray\(\)[\s\S]{0,200}const image = trayIconImage\(\)/);
+  assert.doesNotMatch(main, /new Tray\(nativeImage\.createFromPath\(appIconPath\(\)\)\)/);
+  for (const [asset, size] of [["trayTemplate.png", 18], ["trayTemplate@2x.png", 36]]) {
+    const png = await readFile(new URL(`../apps/control-center/assets/${asset}`, import.meta.url));
+    assert.equal(png.readUInt32BE(16), size, `${asset} width`);
+    assert.equal(png.readUInt32BE(20), size, `${asset} height`);
+    assert.equal(png[25], 6, `${asset} keeps its alpha channel`);
+  }
   assert.match(main, /function showDockForVisibleWindow\(\)[\s\S]*app\.dock\.setIcon\(appIconPath\(\)\)[\s\S]*app\.dock\.show\(\)/);
   assert.match(main, /function hideDockForHiddenWindow\(\)[\s\S]*app\.dock\.hide\(\)/);
   assert.match(main, /function revealWindow\(\)[\s\S]{0,700}showDockForVisibleWindow\(\)[\s\S]{0,120}mainWindow\.show\(\)/);
@@ -1182,6 +1192,8 @@ test("electron boundary does not enable node integration or shell argv", async (
   assert.doesNotMatch(main, /script-src[^;]*'unsafe-inline'/);
   const builder = await readFile(new URL("../apps/control-center/electron-builder.yml", import.meta.url), "utf8");
   assert.match(builder, /extraResources:[\s\S]*icon\.png/);
+  assert.match(builder, /from: assets\/trayTemplate\.png\s+to: trayTemplate\.png/);
+  assert.match(builder, /from: assets\/trayTemplate@2x\.png\s+to: trayTemplate@2x\.png/);
   assert.match(builder, /from:\s*\.\.\/\.\.\/src\/spawnable-command\.mjs[\s\S]*to:\s*src\/spawnable-command\.mjs/);
   assert.match(builder, /from:\s*\.\.\/\.\.\/src\/chatgpt-login-lease\.mjs[\s\S]*to:\s*src\/chatgpt-login-lease\.mjs/);
   assert.match(builder, /from:\s*\.\.\/\.\.\/src\/path-security\.mjs[\s\S]*to:\s*src\/path-security\.mjs/);

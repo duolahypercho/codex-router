@@ -412,8 +412,19 @@ test("Command Code usage reads plan windows from the billing credits API", async
     const snapshot = await providerAccountUsageSnapshot({
       providerIds: ["commandcode"],
       fetchImpl: async (url, options) => {
-        assert.equal(url, "https://api.commandcode.ai/alpha/billing/credits");
         assert.equal(options.headers.Authorization, "Bearer TEST_COMMANDCODE_USAGE_KEY");
+        if (url === "https://api.commandcode.ai/alpha/usage/summary") {
+          return new Response(JSON.stringify({ totalMonthlyCredits: 60, periodBasis: "billing-period" }));
+        }
+        if (url === "https://api.commandcode.ai/alpha/billing/subscriptions") {
+          return new Response(JSON.stringify([{
+            planId: "individual-goat",
+            quantity: 1,
+            status: "active",
+            currentPeriodEnd: "2026-08-01T00:00:00.000Z",
+          }]));
+        }
+        assert.equal(url, "https://api.commandcode.ai/alpha/billing/credits");
         return new Response(JSON.stringify({
           credits: { monthlyCredits: 10, purchasedCredits: 0, freeCredits: 0 },
           windowLimits: {
@@ -455,6 +466,19 @@ test("Command Code usage reads plan windows from the billing credits API", async
         limit: 6,
         remaining: 4,
         unit: "credits",
+      },
+      // The monthly grant is the period's spend plus what is left of it, and
+      // the bar resets when the subscription period ends (#827).
+      {
+        kind: "quota",
+        label: "Monthly limit",
+        usedPercent: (60 / 70) * 100,
+        remainingPercent: 100 - (60 / 70) * 100,
+        used: 60,
+        limit: 70,
+        remaining: 10,
+        unit: "credits",
+        resetAt: Date.parse("2026-08-01T00:00:00.000Z") / 1_000,
       },
     ]);
     assert.doesNotMatch(JSON.stringify(snapshot), /TEST_COMMANDCODE_USAGE_KEY/);
@@ -993,6 +1017,68 @@ test("Command Code top-ups and a low-credit warning reach the balance metric", (
   assert.equal(balance.value, 21.75);
   assert.equal(balance.detail, "Plan 1.50 · Purchased 20.00 · Free 0.25");
   assert.equal(balance.available, false);
+});
+
+test("Command Code monthly window needs the period spend and skips a past-due plan", async () => {
+  const credits = {
+    credits: { monthlyCredits: 10 },
+    windowLimits: { weekly: { used: 1, cap: 6 } },
+  };
+  const labels = (metrics) => metrics.map((metric) => metric.label);
+  // No usage summary means no denominator: never invent a percentage.
+  assert.deepEqual(labels(commandCodeCreditsMetrics(credits)), ["Plan credits", "Weekly limit"]);
+  assert.deepEqual(
+    labels(commandCodeCreditsMetrics(credits, { summary: { totalMonthlyCredits: "n/a" } })),
+    ["Plan credits", "Weekly limit"],
+  );
+  // The subscription read is optional: without it the bar still renders, just
+  // without a reset time.
+  const [, , monthly] = commandCodeCreditsMetrics(credits, { summary: { totalMonthlyCredits: 30 } });
+  assert.equal(monthly.label, "Monthly limit");
+  assert.equal(monthly.limit, 40);
+  assert.equal(monthly.usedPercent, 75);
+  assert.equal(monthly.resetAt, undefined);
+  // Epoch-second period ends are accepted alongside ISO strings.
+  const [, , epoch] = commandCodeCreditsMetrics(credits, {
+    summary: { totalMonthlyCredits: 30 },
+    subscription: { subscriptions: [{ status: "active", currentPeriodEnd: 1_786_579_200 }] },
+  });
+  assert.equal(epoch.resetAt, 1_786_579_200);
+  // A past-due plan is not metered, matching the provider's own page.
+  assert.deepEqual(
+    labels(commandCodeCreditsMetrics(credits, {
+      summary: { totalMonthlyCredits: 30 },
+      subscription: [{ status: "past_due", currentPeriodEnd: "2026-08-01T00:00:00Z" }],
+    })),
+    ["Plan credits", "Weekly limit"],
+  );
+  // A fresh period with nothing spent and nothing granted has no bar either.
+  assert.deepEqual(
+    labels(commandCodeCreditsMetrics({ credits: { monthlyCredits: 0 }, windowLimits: {} }, { summary: { totalMonthlyCredits: 0 } })),
+    ["Plan credits"],
+  );
+});
+
+test("Command Code usage keeps the plan windows when the optional monthly reads fail", async () => {
+  delete process.env.COMMAND_CODE_API_KEY;
+  delete process.env.COMMANDCODE_API_KEY;
+  process.env.COMMAND_CODE_API_KEY = "TEST_COMMANDCODE_USAGE_KEY";
+  try {
+    const snapshot = await providerAccountUsageSnapshot({
+      providerIds: ["commandcode"],
+      fetchImpl: async (url) => {
+        if (url !== "https://api.commandcode.ai/alpha/billing/credits") return new Response("nope", { status: 404 });
+        return new Response(JSON.stringify({
+          credits: { monthlyCredits: 10 },
+          windowLimits: { weekly: { used: 2, cap: 6 } },
+        }));
+      },
+    });
+    assert.equal(snapshot.commandcode.status, "available");
+    assert.deepEqual(snapshot.commandcode.metrics.map((metric) => metric.label), ["Plan credits", "Weekly limit"]);
+  } finally {
+    delete process.env.COMMAND_CODE_API_KEY;
+  }
 });
 
 // Nothing to report is reported as nothing. A zero-valued balance would read
