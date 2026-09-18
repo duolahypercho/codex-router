@@ -961,9 +961,10 @@ function normalizeBody(buffer, contentType, route) {
     error.status = 400;
     throw error;
   }
-  // Codex tags outbound payloads with caller identity that no upstream
-  // provider consumes; strict providers reject the unknown field outright.
+  // Codex tags outbound payloads with caller identity and access programs that
+  // no upstream provider consumes; strict providers reject the unknown field outright.
   delete payload.client_metadata;
+  delete payload.access_programs;
   const requestedModel = String(payload.model || "");
   // LiteLLM's Responses bridge prefixes the gateway id with `responses/` on
   // the upstream wire format; the forwarder still owns the id translation.

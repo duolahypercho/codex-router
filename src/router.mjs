@@ -2834,6 +2834,7 @@ async function summarizeWith(
   normalizeAutoToolChoice(body, route);
   delete body.previous_response_id;
   delete body.client_metadata;
+  delete body.access_programs;
   // Codex sends reasoning as an object; the ordinary routed turn drops it for
   // keyless providers because LiteLLM forwards it as a `think` value Ollama
   // rejects. Compaction spreads the same payload, so it needs the same drop,
@@ -3692,9 +3693,10 @@ async function buildRoutedRequest({ request, payload, route, agedInput }) {
     routed.reasoning = { ...(routed.reasoning || {}), effort: childEffort };
   }
   normalizeAutoToolChoice(routed, route);
-  // Native OpenAI traffic keeps client_metadata; routed providers do not
-  // consume it and the strict ones reject the unknown field.
+  // Native OpenAI traffic keeps client_metadata and access_programs; routed
+  // providers do not consume them and the strict ones reject the unknown field.
   delete routed.client_metadata;
+  delete routed.access_programs;
   // Codex sends reasoning as an object. LiteLLM's Ollama path tests that value
   // for membership of a string set, which raises on a dict and fails the whole
   // turn -- 210 of them here before this was caught. Ollama has no

@@ -1131,6 +1131,7 @@ test("router preserves native auth and isolates every external route", async () 
             workspace: "caller-owned",
             "x-codex-turn-metadata": "native-canonical-turn-metadata",
           },
+          access_programs: { cyber: "standard" },
         }),
       ),
     );
@@ -1163,6 +1164,7 @@ test("router preserves native auth and isolates every external route", async () 
             "x-codex-turn-metadata": "routed-canonical-turn-metadata",
             "x-codex-turn-state": "routed-turn-state",
           },
+          access_programs: { cyber: "standard" },
         }),
       });
       assert.equal(response.status, 200);
@@ -1183,10 +1185,14 @@ test("router preserves native auth and isolates every external route", async () 
     assert.equal(nativeRequests[0].body.previous_response_id, undefined);
     assert.equal(nativeRequests[0].body.prompt_cache_retention, undefined);
     assert.deepEqual(nativeRequests[0].body.prompt_cache_options, { ttl: "30m" });
-    // Native OpenAI traffic owns client_metadata; only routed traffic drops it.
+    // Native OpenAI traffic owns client_metadata and access_programs; only
+    // routed traffic drops them.
     assert.deepEqual(nativeRequests[0].body.client_metadata, {
       workspace: "caller-owned",
       "x-codex-turn-metadata": "native-canonical-turn-metadata",
+    });
+    assert.deepEqual(nativeRequests[0].body.access_programs, {
+      cyber: "standard",
     });
     for (const request of routedRequests) {
       assert.equal(request.headers.authorization, `Bearer ${INTERNAL_KEY}`);
@@ -1197,6 +1203,7 @@ test("router preserves native auth and isolates every external route", async () 
       assert.equal(request.headers["x-openai-internal-codex-responses-lite"], undefined);
       assert.equal(request.headers["x-private-header"], undefined);
       assert.equal(request.body.client_metadata, undefined);
+      assert.equal(request.body.access_programs, undefined);
     }
   } finally {
     await stopChild(router);
@@ -7541,6 +7548,7 @@ test("API forwarder strips web_search_options for OpenCode Go chat models", asyn
         body: JSON.stringify({
           model: "opencode-go-glm-5-3",
           web_search_options: { search_context_size: "medium" },
+          access_programs: { cyber: "standard" },
           messages: [{ role: "user", content: "test" }],
         }),
       },
@@ -7548,6 +7556,7 @@ test("API forwarder strips web_search_options for OpenCode Go chat models", asyn
     assert.equal(response.status, 200, forwarder.testErrors());
     assert.equal(upstreamRequests[0].model, "glm-5.3");
     assert.equal(upstreamRequests[0].web_search_options, undefined);
+    assert.equal(upstreamRequests[0].access_programs, undefined);
   } finally {
     await stopChild(forwarder);
     await closeServer(upstream.server);
@@ -7736,12 +7745,14 @@ test("router strips Fireworks web_search_options on routed and compaction reques
         input: "routed test",
         web_search_options: { search_context_size: "medium" },
         client_metadata: { workspace: "caller-owned" },
+        access_programs: { cyber: "standard" },
       }),
     });
     assert.equal(routed.status, 200, router.testErrors());
     assert.equal(gatewayRequests[0].model, curated.gatewayModel);
     assert.equal(gatewayRequests[0].web_search_options, undefined);
     assert.equal(gatewayRequests[0].client_metadata, undefined);
+    assert.equal(gatewayRequests[0].access_programs, undefined);
 
     const compact = await fetch(`${routerBase(routerPort)}/responses/compact`, {
       method: "POST",
@@ -7757,12 +7768,14 @@ test("router strips Fireworks web_search_options on routed and compaction reques
         ],
         web_search_options: { search_context_size: "medium" },
         client_metadata: { workspace: "caller-owned" },
+        access_programs: { cyber: "standard" },
       }),
     });
     assert.equal(compact.status, 200, router.testErrors());
     assert.equal(gatewayRequests[1].model, curated.gatewayModel);
     assert.equal(gatewayRequests[1].web_search_options, undefined);
     assert.equal(gatewayRequests[1].client_metadata, undefined);
+    assert.equal(gatewayRequests[1].access_programs, undefined);
   } finally {
     await stopChild(router);
     await closeServer(gateway.server);
