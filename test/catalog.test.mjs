@@ -243,7 +243,9 @@ test("routed models can borrow native behavior instructions without inheriting c
   assert.match(model.base_instructions, /based on Grok 4\.5/);
   assert.match(model.base_instructions, /SOL_BEHAVIOR/);
   assert.match(model.model_messages.instructions_template, /SOL_TEMPLATE/);
-  assert.equal(model.tool_mode, undefined);
+  // Code mode is set for every routed route rather than borrowed with the
+  // behavior text, so it survives a template that carries the switch itself.
+  assert.equal(model.tool_mode, "code_mode_only");
   assert.equal(model.use_responses_lite, false);
 });
 
@@ -650,7 +652,7 @@ test("merged catalog resolves a routed behavior template without inheriting its 
 
   assert.match(routed.base_instructions, /SOL_BEHAVIOR/);
   assert.match(routed.model_messages.instructions_template, /SOL_TEMPLATE/);
-  assert.equal(routed.tool_mode, undefined);
+  assert.equal(routed.tool_mode, "code_mode_only");
   assert.equal(routed.use_responses_lite, false);
 });
 
@@ -671,7 +673,7 @@ test("merged catalog derives a missing behavior base instruction from its templa
   assert.doesNotMatch(routed.base_instructions, /GPT-5/);
 });
 
-test("merged catalog does not inherit native tool mode from a fallback template", () => {
+test("merged catalog gives a routed model code mode without reading the template", () => {
   const sol = {
     ...template,
     slug: "gpt-5.6-sol",
@@ -684,8 +686,23 @@ test("merged catalog does not inherit native tool mode from a fallback template"
   );
   const routed = merged.find((model) => model.slug === grok.slug);
 
-  assert.equal(routed.tool_mode, undefined);
+  assert.equal(routed.tool_mode, "code_mode_only");
   assert.equal(routed.use_responses_lite, false);
+});
+
+test("every routed model advertises code mode regardless of its template", () => {
+  const plain = routedModel(template, grok, template);
+  assert.equal(plain.tool_mode, "code_mode_only");
+  const againstSilentTemplate = routedModel(
+    template,
+    { ...grok, slug: "somewhere/other-model" },
+    { ...template, tool_mode: null },
+  );
+  assert.equal(
+    againstSilentTemplate.tool_mode,
+    "code_mode_only",
+    "a template that omits the switch cannot suppress a routed route's code mode",
+  );
 });
 
 test("merged catalog preserves an explicit native reasoning summary capability", () => {

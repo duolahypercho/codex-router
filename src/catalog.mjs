@@ -725,15 +725,19 @@ export function routedModel(template, model, behaviorTemplate = template) {
     // Responses, for example) must opt out explicitly; null is the only value
     // that suppresses the tool without making the catalog unparseable.
     apply_patch_tool_type: model.supportsApplyPatchTool === false ? null : "freeform",
+    // Codex enables code mode per model from this field. Every routed route
+    // advertises it: the relay already presents Codex's freeform `exec` custom
+    // tool as a function wherever the upstream rejects custom tools, and
+    // restores the model's call as a `custom_tool_call` on the way back.
+    // Measured on the chat, Messages, Console Go Responses and xAI routes this
+    // catalog publishes. Written here rather than inherited from a native
+    // template, so a template change cannot move a routed route's tool mode.
+    tool_mode: "code_mode_only",
     // Codex v2 collaboration only exposes spawn_agent model overrides whose
     // catalog entry advertises the same backend version as the parent. Models
     // opt in after their tool and encrypted-payload relay paths are verified.
     multi_agent_version: model.multiAgentVersion || "v1",
   };
-  // Native GPT-5.6 templates may carry this transport/tool-mode switch. It is
-  // not a routed capability and must stay out even when that native entry is
-  // also the conservative fallback template.
-  delete next.tool_mode;
   // ClinePass strips these unsupported request controls, so Codex must not offer them.
   if (model.requestProfile === "clinepass") {
     delete next.default_reasoning_level;
