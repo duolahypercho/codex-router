@@ -1,6 +1,25 @@
 # Changelog
 
 ## Unreleased
+- **Publishing into a DeepSeek Harness settings file no longer nests the route
+  inside somebody else's provider, and removing it no longer empties the
+  file.** `dsh-config-manager.mjs` read "does this mapping hold anything but
+  ours?" off `children`, which is only the keys the YAML lexer could register.
+  A block sequence, a merge key, or a provider id the key grammar declines
+  (`openrouter/free:`) lives inside the node while being invisible there. So
+  publishing copied its indentation off a hoisted grandchild and wrote
+  `codex-router:` two columns too deep -- inside the user's provider, where the
+  harness never looks, while every status read agreed the publish had worked --
+  and removal, seeing `children.size === 1`, spliced the whole `providers:`
+  section away: a 143-byte settings file with somebody else's route in it came
+  back empty. One comment line above our key was enough to do the same. The
+  credentials document had the matching failure: `refs:` holding an entry the
+  grammar declines left the indent falling back to `refs.indent + 2` while the
+  entries on disk sat at four, and that mixed-indent block costs every
+  adapter's key, not just ours. `routed-harness-document.mjs` already refused
+  all of this; its `unaccountedLines` helper moves to `yaml-structure.mjs` and
+  both managers now share it. Anything this reader cannot account for is
+  refused with the file untouched and the offending line named.
 - **An apostrophe in a harness config no longer moves the router's route into
   somebody else's value.** `yaml-structure.mjs` treated every `'` and `"` as a
   quoting indicator, but YAML only gives a quote that meaning where a node can
