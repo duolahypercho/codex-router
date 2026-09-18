@@ -2879,3 +2879,51 @@ test("hy4's prior reasoning is replayed as thinking, never as its own visible pr
     "the dropped reasoning must not survive as an item either",
   );
 });
+
+// Console Go's validator rejects Codex's collaboration item by name on the two
+// Muse Contributor routes, so a delegated child died before its first token
+// (`input[5] did not match any supported type`). The handoff payload is
+// recovered first, and the route then presents it as the equivalent user
+// message; a sibling Console Go route, whose upstream accepts the item, keeps
+// the shape it was written for.
+test("Console Go Muse Contributor routes carry Codex handoffs as user messages", async () => {
+  const handoff = {
+    type: "agent_message",
+    author: "/root",
+    recipient: "/root/worker",
+    content: [
+      {
+        type: "input_text",
+        text: "Message Type: NEW_TASK\nTask name: /root/worker\nSender: /root\nPayload:\n",
+      },
+      { type: "encrypted_content", encrypted_content: "Synthetic delegated task." },
+    ],
+  };
+  const outgoingFor = async (model) => {
+    const result = await scenario(true, {
+      model,
+      requestPayload: (stream, slug) => ({ model: slug, stream, input: [handoff] }),
+    });
+    return result.gatewayBodies.at(-1);
+  };
+
+  const expected = {
+    type: "message",
+    role: "user",
+    content: [
+      handoff.content[0],
+      { type: "input_text", text: "Synthetic delegated task." },
+    ],
+  };
+  for (const slug of [
+    "opencode-go-responses/muse-spark-1.3-contributor",
+    "opencode-go-responses/muse-spark-1.2-contributor",
+  ]) {
+    assert.deepEqual((await outgoingFor(slug)).input, [expected], slug);
+  }
+  assert.deepEqual(
+    (await outgoingFor("opencode-go-responses/gpt-5.6-luna")).input,
+    [{ ...handoff, content: expected.content }],
+    "an untouched Console Go route keeps the collaboration item",
+  );
+});

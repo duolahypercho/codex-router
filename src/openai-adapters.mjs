@@ -95,6 +95,13 @@ function restoreNamespacedFunctionCall(call, flatToNative) {
   };
 }
 
+// Only function calls carry a namespace. Everything else is returned by
+// identity so a stream event keeps the bytes it arrived with.
+function restoreFunctionCallNamespace(item, flatToNative) {
+  if (!item || typeof item !== "object" || item.type !== "function_call") return item;
+  return restoreNamespacedFunctionCall(item, flatToNative);
+}
+
 function adapterError(message, code = "invalid_responses_request") {
   const error = new Error(message);
   error.status = 400;
@@ -466,12 +473,16 @@ function normalizeResponsesEvent(frame, state, flatToNative) {
     if (!validOutputIndex(data.output_index)) data.output_index = index;
     
     // Restore namespace for function call items
-    if (item.type === "function_call" && flatToNative && flatToNative.size > 0) {
-      const restored = restoreNamespacedFunctionCall(item, flatToNative);
-      if (restored !== item) {
-        data.item = restored;
-      }
-    }
+    const restoredAdded = restoreFunctionCallNamespace(item, flatToNative);
+    if (restoredAdded !== item) data.item = restoredAdded;
+  }
+  // The terminal item is the one a client executes, and it is re-sent in full
+  // rather than diffed from `added`. Restoring only `added` left the flattened
+  // name on the call Codex actually ran, so namespace tools answered
+  // "unsupported call" on every Responses route that relays flattened names.
+  if (data.type === "response.output_item.done") {
+    const restoredDone = restoreFunctionCallNamespace(data.item, flatToNative);
+    if (restoredDone !== data.item) data.item = restoredDone;
   }
   if (data.type === "response.function_call_arguments.delta" || data.type === "response.function_call_arguments.done") {
     const key = data.call_id || data.item_id;
@@ -498,6 +509,13 @@ function normalizeResponsesEvent(frame, state, flatToNative) {
       return invalidStream(state, "The Responses completion used a different response ID.");
     }
     if (state.responseId && !data.response.id) data.response.id = state.responseId;
+    // Non-incremental consumers read the calls off the completion snapshot
+    // instead of the item events, so it has to carry the same restored shape.
+    if (Array.isArray(data.response.output)) {
+      data.response.output = data.response.output.map((item) =>
+        restoreFunctionCallNamespace(item, flatToNative),
+      );
+    }
   }
   return serializeFrame(frame, data);
 }
