@@ -147,6 +147,7 @@ import {
   NamespaceToolCallTransform,
   agentMessagesAsUserMessages,
   bridgeCustomTools,
+  consoleGoResponsesInput,
   downgradeOriginalImageDetail,
   flattenNamespacedHistory,
   stripUnissuedEncryptedReasoning,
@@ -1066,6 +1067,18 @@ function needsConsoleGoResponsesToolCompatibility(route) {
 
 function rejectsWebSearchOptions(route) {
   return ["fireworks", "opencode-go"].includes(providerForModel(route)?.id);
+}
+
+// Console Go's Chat endpoint refuses the whole request over one unknown
+// top-level field: measured live as `invalid request body: json: unknown field
+// "access_programs"` on `opencode-go/glm-5.3-flash` and on
+// `opencode-go/glm-5.3`. Codex sends that field because the
+// merged catalog publishes the model's `available_access_programs`; the Go
+// Chat endpoint has no such concept and answers 400 before inference. Keep
+// the deletion exact to that provider: the Responses variant accepted the
+// identical field unchanged in the same session.
+function rejectsAccessPrograms(route) {
+  return providerForModel(route)?.id === "opencode-go";
 }
 
 function needsStrictOpenCodeToolCompatibility(route) {
@@ -2800,7 +2813,7 @@ async function summarizeWith(
     normalizeProviderAppToolOutputs(aged.input),
     route,
   );
-  const providerInput = (needsConsoleGoResponsesToolCompatibility(route) || usesDeepSeekResponses(route))
+  const compactedInput = (needsConsoleGoResponsesToolCompatibility(route) || usesDeepSeekResponses(route))
     ? strictOpenCodeCompactionInput(compatibleInput, payload.tools, {
         maxNameLength: 64,
       })
@@ -2811,6 +2824,12 @@ async function summarizeWith(
         new Map(),
       ).input
       : compatibleInput;
+  // Console Go refuses Codex's collaboration item shape on a replayed
+  // transcript exactly as it does on a live turn, so compacting a delegated
+  // child needs the same conversion the ordinary turn path applies.
+  const providerInput = needsConsoleGoResponsesToolCompatibility(route)
+    ? consoleGoResponsesInput(compactedInput)
+    : compactedInput;
   const bridged = await bridgeVisionInput(
     providerInput,
     route,
@@ -2848,6 +2867,7 @@ async function summarizeWith(
   // Completions surfaces reject this OpenAI search parameter even though it
   // is unrelated to the compaction body.
   if (rejectsWebSearchOptions(route)) delete body.web_search_options;
+  if (rejectsAccessPrograms(route)) delete body.access_programs;
   const searchCompatibility = routedSearchCompatibility(body, route);
   const serialized = JSON.stringify(searchCompatibility.payload);
   // Candidate capability may depend on a sidecar credential or binding that
@@ -3522,7 +3542,13 @@ async function buildRoutedRequest({ request, payload, route, agedInput }) {
     // inside `codex_app` are repaired in the shape Moonshot actually receives.
     tools = repairToolSchemaRoots(tools, { inlineForeignRefs: true, declareTypes: true });
   }
-  let routedInput = input;
+  // Console Go refuses Codex's collaboration items outright, so a delegated
+  // task has to reach it as an ordinary user message before any later rewrite
+  // reads the history. `input` is already this build's own copy, so the
+  // conversion cannot leak into another route's build.
+  let routedInput = consoleGoResponsesCompatibility
+    ? consoleGoResponsesInput(input)
+    : input;
   let routedToolChoice = payload.tool_choice;
   let installedFacade = new Set();
   let facadeNameCollision = false;
@@ -3695,6 +3721,7 @@ async function buildRoutedRequest({ request, payload, route, agedInput }) {
   // Native OpenAI traffic keeps client_metadata; routed providers do not
   // consume it and the strict ones reject the unknown field.
   delete routed.client_metadata;
+  if (rejectsAccessPrograms(route)) delete routed.access_programs;
   // Codex sends reasoning as an object. LiteLLM's Ollama path tests that value
   // for membership of a string set, which raises on a dict and fails the whole
   // turn -- 210 of them here before this was caught. Ollama has no

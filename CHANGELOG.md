@@ -17,6 +17,26 @@
   unparseable outputs and 178 misplaced routes all go to zero. Affects
   DeepSeek Harness `settings.yaml` and `.credentials.yaml`, omp `models.yml`,
   Hermes Agent `config.yaml`, and caller-capability refreshes into all three.
+- **A child delegated to an `opencode-go-responses` route no longer dies on its
+  first turn.** Console Go implements the public Responses input schema only:
+  it answers `` `input[N]` did not match any supported type `` for Codex's
+  `agent_message` collaboration item and for the `encrypted_content` part
+  inside it, so a Muse Spark 1.3 Contributor child was refused while the very
+  same route served its parent normally. Both shapes are now converted on that
+  exact provider -- the handoff becomes the ordinary user message the endpoint
+  accepts, and a value that is still opaque is carried as visible text -- on
+  the turn and on a delegated transcript's compaction. Measured end to end: a
+  routed parent delegated to `opencode-go-responses/muse-spark-1.3-contributor`
+  and the child returned its exact marker.
+- **OpenCode Go Chat no longer 400s on `access_programs`.** Codex sends that
+  top-level field because the merged catalog publishes the model's
+  `available_access_programs`, and Console Go's Chat endpoint refuses the whole
+  request before inference (`invalid request body: json: unknown field
+  "access_programs"`) -- measured on `opencode-go/glm-5.3-flash` and on
+  `opencode-go/glm-5.3`, both as delegated children. The field is
+  now dropped on that exact provider; the Responses variant accepted the
+  identical field unchanged in the same session, so it keeps its payload.
+
 - **The Devin CLI model list asks for the method Devin 3000.x actually serves.**
   `devin-cli` called `GetCascadeModelConfigs`, which is the IDE's method; the
   CLI moved to `GetCliModelConfigs`, so a CLI-credentialed account was answered
