@@ -61,6 +61,16 @@
   LiteLLM had closed that fragment as a real `output_text` part, so the
   thinking-match withhold never fired. A held done snapshot that is still a
   mid-clause cut is withheld; punctuated answers stay answers.
+- **Automatic approval reviews can fall back to a routed model when ChatGPT
+  quota runs out.** Codex runs `Approve for me` on its own hidden native model,
+  so with `Use Router with ChatGPT` on, an exhausted plan left a routed session
+  proposing commands it could not execute (#787).
+  `./bin/control auto-review-fallback set <provider/model>` names a reviewer for
+  exactly those turns. It engages only after the native reviewer has itself
+  refused for quota, and only for the window that refusal named -- a denial, a
+  policy rejection, a 5xx, and anything ambiguous all stay native, and a `deny`
+  is never retried through another model. The first native answer afterwards
+  ends the window. The main agent's model is unaffected either way.
 
 - **Playwright is 1.63.0 in both the router tests and the Control Center.**
   Dependabot #758 only bumped the root pin. The Control Center lock stays in

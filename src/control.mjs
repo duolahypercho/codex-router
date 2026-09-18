@@ -3104,6 +3104,40 @@ async function handleNativeRedirect(action, value) {
   );
 }
 
+// The reviewer counterpart to `native-redirect`. Codex's "Approve for me"
+// always runs on its own hidden native model, so with `Use Router with ChatGPT`
+// on, an exhausted ChatGPT plan leaves a routed session able to propose
+// commands and unable to execute the ones needing review (#787). Naming a
+// routed model here lets those approvals continue on a provider that still has
+// quota -- and only while the native reviewer has itself refused for quota.
+async function handleAutoReviewFallback(action, value) {
+  const {
+    autoReviewFallbackSnapshot,
+    clearAutoReviewFallback,
+    setAutoReviewFallback,
+  } = await import("./auto-review-fallback.mjs");
+  if (!action || action === "status") {
+    process.stdout.write(`${JSON.stringify(autoReviewFallbackSnapshot())}\n`);
+    return;
+  }
+  if (action === "clear") {
+    process.stdout.write(`${JSON.stringify(clearAutoReviewFallback())}\n`);
+    return;
+  }
+  if (action !== "set") {
+    throw new Error("Usage: control auto-review-fallback status|set <routed-model-slug>|clear");
+  }
+  if (!(await knownModelSlug(value))) {
+    throw new Error(`Unknown routed model slug: ${value}`);
+  }
+  process.stdout.write(`${JSON.stringify(setAutoReviewFallback(value))}\n`);
+  process.stderr.write(
+    `Automatic approval reviews fall back to ${value} while Codex's own reviewer is out of quota. ` +
+      "Reviews return to the native reviewer as soon as it answers again. This changes nothing " +
+      "about which model runs the session; clear it with control auto-review-fallback clear.\n",
+  );
+}
+
 // One action for "give me a working harness": install the CLI if it is absent,
 // then publish the routed models into its own documents. Kept behind an
 // explicit subcommand rather than folded into `apply`, because it installs a
@@ -3618,6 +3652,8 @@ if (args.includes("--probe")) {
   handleService(args[1]);
 } else if (args[0] === "native-redirect") {
   await handleNativeRedirect(args[1], args[2]);
+} else if (args[0] === "auto-review-fallback") {
+  await handleAutoReviewFallback(args[1], args[2]);
 } else if (args[0] === "tray") {
   handleTray(args[1]);
 } else if (args[0] === "harness") {

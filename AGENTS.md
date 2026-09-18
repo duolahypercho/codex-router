@@ -2813,6 +2813,53 @@ the same OS user to sign in or authorize once per harness buys nothing.
 - `doctor` reports it as its own line, because "open Codex once" is the fix and
   nothing else would say so.
 
+## The approval reviewer is the one native turn that may be singled out
+
+`native-redirect.mjs` is deliberately all-or-nothing, and its own comment says
+why: native turns "carry no reliable marker separating background work from a
+deliberately picked GPT model". Codex's automatic approval reviewer is the
+exception. It arrives under its own hidden slug, `codex-auto-review`, so it can
+be singled out without ever touching a GPT model the operator chose.
+
+That matters because the reviewer's quota is not the session's. With `Use
+Router with ChatGPT` on, an external model can answer the turn while every
+`Approve for me` still spends ChatGPT quota, so an exhausted plan leaves a
+session that reasons and proposes commands but cannot run the ones that need
+review (#787). `src/auto-review-fallback.mjs` lets the operator name a routed
+model for exactly those reviews.
+
+1. **Only a refusal the reviewer could not run may engage it.** The verdict
+   comes from `classifyRoutedFailure`, the routed path's own classifier, which
+   already puts an entitlement refusal ahead of a quota one, ignores every 5xx
+   and deterministic 4xx, and reads a reset time only where the upstream stated
+   one. Do not grow a second classifier here; two definitions of "out of quota"
+   is one more than this repository can keep correct.
+2. **A `deny` is a decision, not a failure.** It arrives as HTTP 200, so it can
+   never reach the classifier — but say it in a test anyway, because asking a
+   second model to re-review a command the first refused is the one outcome the
+   issue names as unacceptable. The same holds for any answer at all: the first
+   native answer clears the window, the rule `clearProviderCooldown` follows.
+3. **The window is the upstream's, capped at six hours**, like a provider
+   cooldown. A refusal that named nothing gets sixty seconds — enough that a
+   burst of approvals in one minute does not each pay for the same rejection,
+   short enough that a quota which returns is noticed almost at once. Never
+   invent a longer one.
+4. **The first failing review is not rescued.** The refusal is relayed exactly
+   as ChatGPT wrote it and the window is recorded; the *next* approval goes to
+   the configured reviewer. Rescuing the failing turn would mean rebuilding a
+   native request as a routed one mid-flight, which is the native/routed
+   crossing the "Not implemented: the native ChatGPT tier" note above refuses
+   to make from the test suite alone. The pre-flight redirect reuses the
+   crossing `native-redirect` already ships, at the one point it is safe.
+5. **Never silent.** The log line is not gated on `CODEX_ROUTER_QUIET`, the
+   usage row carries `autoReviewFallback`, and
+   `control auto-review-fallback status` reports the configured reviewer, the
+   window, and which reviewer the next approval will actually use.
+6. Coverage lives in `test/auto-review-fallback.test.mjs` (state, classifier
+   boundary, window arithmetic) and the two `#787` cases in
+   `test/routing.test.mjs` (end to end, including that a `deny` is never
+   retried through another model). Both router cases fail without the hooks.
+
 ## A provider-prefixed slug is never forwarded to ChatGPT
 
 `handleResponses` treats a model it has no route for as native GPT traffic and

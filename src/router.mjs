@@ -107,6 +107,13 @@ import { readNativeAliases } from "./native-alias.mjs";
 import { nativeContextVariantBase } from "./native-context-variants.mjs";
 import { readNativeRedirect } from "./native-redirect.mjs";
 import {
+  autoReviewFallbackEngaged,
+  clearAutoReviewExhaustion,
+  isAutoReviewModel,
+  readAutoReviewFallback,
+  recordAutoReviewExhaustion,
+} from "./auto-review-fallback.mjs";
+import {
   executeSearchSidecar,
   SearchSidecarError,
 } from "./search-sidecar.mjs";
@@ -1200,6 +1207,23 @@ async function boundedResponseText(
 ) {
   try {
     return (await readResponseBody(upstream, { maxBytes, signal })).toString("utf8");
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    return "";
+  }
+}
+
+// Read a failed upstream body *without* consuming the one that gets relayed.
+// Native errors are forwarded to Codex byte-for-byte on purpose -- "OpenAI
+// errors are already clear" -- so the auto-review classifier reads a clone and
+// leaves the original stream untouched. Only ever called on a response that is
+// already `!ok` and only for the reviewer slug, so the tee buffers an error
+// body and never a turn. Any failure to read is reported as no body: a missed
+// quota window costs one more round trip, while breaking the relay would cost
+// the operator the error itself.
+async function peekFailedBodyText(upstream, signal) {
+  try {
+    return await boundedResponseText(upstream.clone(), MAX_BUFFERED_RESPONSE_BYTES, signal);
   } catch (error) {
     if (signal?.aborted) throw error;
     return "";
@@ -4023,6 +4047,9 @@ async function handleResponses(request, response, requestUrl) {
   // The model the operator actually asked for, when this turn ended up being
   // served by a different one. Present only on a turn the router rescued.
   let failoverFrom;
+  // This approval was sent to the configured external reviewer because the
+  // native one is inside a quota window it named itself (#787).
+  let autoReviewFallbackUsed = false;
   // An empty turn the router could not repair because the attempt was already
   // relayed. Distinct from `emptyCompletionRetried` in the meter: one is a
   // failure the router absorbed, the other a failure it had to hand to the
@@ -4081,6 +4108,19 @@ async function handleResponses(request, response, requestUrl) {
       const redirect = MODEL_BY_SLUG.get(readNativeRedirect());
       if (redirect && routeProviderEnabled(redirect.provider)) {
         registeredRoute = redirect;
+      }
+    }
+    // "Approve for me" runs on its own hidden native slug, so unlike the
+    // all-or-nothing redirect above this one can be scoped to the reviewer and
+    // leave a deliberately picked GPT model alone. It engages only while the
+    // native reviewer has already refused for quota inside a window it named:
+    // Codex asks for a review per command, and without this every one of them
+    // pays a full round trip to learn the same thing again (#787).
+    if (!registeredRoute && isAutoReviewModel(requestedModel) && autoReviewFallbackEngaged()) {
+      const reviewer = MODEL_BY_SLUG.get(readAutoReviewFallback().model);
+      if (reviewer && routeProviderEnabled(reviewer.provider)) {
+        registeredRoute = reviewer;
+        autoReviewFallbackUsed = true;
       }
     }
     route = registeredRoute && routeProviderEnabled(registeredRoute.provider)
@@ -4511,6 +4551,37 @@ async function handleResponses(request, response, requestUrl) {
     // raised, or a reset time the provider got wrong all end the same way, and
     // a real answer is better evidence than anything on disk.
     if (route && upstream.ok) clearProviderCooldown(route.provider);
+    // The same rule for the native reviewer. Any answer at all clears the
+    // window -- including a `deny`, which is a successful HTTP 200 carrying a
+    // decision and must never be read as the provider failing (#787).
+    if (!route && isAutoReviewModel(requestedModel)) {
+      if (upstream.ok) {
+        clearAutoReviewExhaustion();
+      } else {
+        // One classifier, the routed path's. It already puts an entitlement
+        // refusal ahead of a quota one, ignores 5xx and every deterministic
+        // 4xx, and reads a reset time only where the upstream stated one. A
+        // second opinion here would be a second thing to keep correct.
+        const reviewerFailure = classifyRoutedFailure({
+          status: upstream.status,
+          bodyText: await peekFailedBodyText(upstream, controller.signal),
+          retryAfterSeconds: retryAfterSeconds(upstream.headers),
+        });
+        if (reviewerFailure.swap) {
+          const recorded = recordAutoReviewExhaustion(reviewerFailure);
+          if (recorded?.model) {
+            // Not gated on QUIET. A router that silently moved the operator's
+            // approvals onto a provider's quota is indistinguishable from one
+            // that never had to.
+            console.error(
+              `[codex-router] auto-review native quota exhausted status=${upstream.status}`
+                + ` reason=${reviewerFailure.reason} until=${recorded.nativeExhaustedUntil}`
+                + ` reviewer=${recorded.model}`,
+            );
+          }
+        }
+      }
+    }
     // Gateway error bodies leak LiteLLM's internal exception chain, which
     // reads like a router bug. Rewrite them to name the provider that failed.
     // Native traffic passes through untouched: OpenAI errors are already clear.
@@ -5048,6 +5119,10 @@ async function handleResponses(request, response, requestUrl) {
         ? { emptyCompletionPreludeLimit }
         : {}),
       ...(failoverFrom ? { failoverFrom } : {}),
+      // A review the operator's own plan should have paid for, answered by a
+      // provider instead. Metered so the switch is visible in the ledger and
+      // not only in the log (#787).
+      ...(autoReviewFallbackUsed ? { autoReviewFallback: true } : {}),
     }, diagnostics);
     // The same usage this turn just metered, and the same two disqualifiers
     // context-window-drift.mjs applies to it: a substituted estimate and a
@@ -5081,6 +5156,8 @@ async function handleResponses(request, response, requestUrl) {
             : ""
         }${
           failoverFrom ? ` failover-from=${failoverFrom}` : ""
+        }${
+          autoReviewFallbackUsed ? " auto-review-fallback=true" : ""
         }`,
       );
     }
