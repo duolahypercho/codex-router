@@ -61,6 +61,21 @@
   LiteLLM had closed that fragment as a real `output_text` part, so the
   thinking-match withhold never fired. A held done snapshot that is still a
   mid-clause cut is withheld; punctuated answers stay answers.
+- **`subagents explain <model>` says why a route cannot be delegated to.** The
+  answer lived in three places that never met -- selection in `subagents
+  status`, promotion in the published catalog, and the agent definition on disk
+  -- so the only way to find out was to spawn one and read `codex exited 1`
+  (#804). The new command names the first blocker and the command that fixes
+  it, distinguishes a typo from an uncurated model from a native slug, and says
+  whether a route's v2 claim comes from the registry, a local five-check run, or
+  the operator's own selection. Read-only and quota-free.
+
+- **A configured subagent effort no longer reads as a drifted agent
+  definition.** `syncRoutedCodexAgents` wrote `model_reasoning_effort` into the
+  definition and `routedCodexAgentStatus` computed the expected contents without
+  it, so every model with a subagent effort set was reported `stale` forever:
+  doctor flagged drift, `--fix` republished identical bytes, and the next check
+  flagged it again.
 
 - **Playwright is 1.63.0 in both the router tests and the Control Center.**
   Dependabot #758 only bumped the root pin. The Control Center lock stays in

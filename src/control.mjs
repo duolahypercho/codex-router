@@ -1559,6 +1559,43 @@ async function handleSubagents(action, value, flag, rest = []) {
     setMultiAgentModels,
     subagentSettingsSnapshot,
   } = await import("./multi-agent-state.mjs");
+  if (action === "explain") {
+    // "Why can't Codex delegate to this model?" had no answer short of
+    // spawning one and reading `codex exited 1` (#804). Selection lived in
+    // `subagents status`, promotion in the published catalog, and the agent
+    // definition on disk, and nothing joined the three. Read-only and
+    // quota-free: it reports, so it promotes nothing and probes nothing.
+    const slug = String(value || "").trim();
+    if (!slug) throw new Error("Usage: control subagents explain <model-slug> [--json]");
+    const [
+      { MODELS },
+      { readProviderSelection, canonicalProviderId },
+      { readHiddenModels },
+      { explainSubagentRoute, formatSubagentExplanation },
+      { CODEX_AGENTS_DIR },
+    ] = await Promise.all([
+      import("./model-registry.mjs"),
+      import("./provider-selection.mjs"),
+      import("./model-picker-state.mjs"),
+      import("./subagent-explain.mjs"),
+      import("./paths.mjs"),
+    ]);
+    const selected = new Set(readProviderSelection().map((id) => canonicalProviderId(id)));
+    const explanation = explainSubagentRoute({
+      slug,
+      models: MODELS,
+      providerEnabled: (providerId) => selected.has(canonicalProviderId(providerId)),
+      hidden: readHiddenModels(),
+      reasoningLevels: await modelReasoningLevels(slug),
+      agentsDir: CODEX_AGENTS_DIR,
+    });
+    process.stdout.write(
+      [...rest, flag].includes("--json")
+        ? `${JSON.stringify(explanation)}\n`
+        : `${formatSubagentExplanation(explanation)}\n`,
+    );
+    return;
+  }
   if (action === "status") {
     const { selectedConfiguredListedModels } = await import("./provider-selection.mjs");
     const { subagentAutoPolicySnapshot } = await import("./subagent-auto-policy.mjs");
@@ -1828,7 +1865,8 @@ async function handleSubagents(action, value, flag, rest = []) {
     }
   } else {
     throw new Error(
-      "Usage: control subagents status|select-all|unselect-all|mode <all|selected|proven>|" +
+      "Usage: control subagents status|explain <model-slug> [--json]|select-all|unselect-all|" +
+        "mode <all|selected|proven>|" +
         "set <model-slug> <on|off>|effort <model-slug> <level|default>|" +
         "provider <provider-id> <on|off>|verify [model-slug ...]|certify <model-slug>|" +
         "policy status|provider <provider-id> <on|off>|model <model-slug> <on|off>|family <name> <on|off>",
