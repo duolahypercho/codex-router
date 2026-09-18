@@ -494,6 +494,35 @@ test("rankFailoverCandidates never routes back into the same quota", () => {
   );
 });
 
+test("rankFailoverCandidates offers separately billed Zen after Go exhaustion", () => {
+  const from = model("opencode-go/glm-5.3", "opencode-go");
+  const ranked = rankFailoverCandidates(
+    [
+      model("opencode-go-messages/minimax-m3", "opencode-go-messages"),
+      model("opencode-go-responses/gpt-5.6-luna", "opencode-go-responses"),
+      model("opencode-zen/glm-5.3", "opencode-zen"),
+    ],
+    { from },
+  );
+  assert.deepEqual(
+    ranked.map((entry) => entry.model.slug),
+    ["opencode-zen/glm-5.3"],
+  );
+
+  const reverse = rankFailoverCandidates(
+    [
+      model("opencode-zen-messages/claude-sonnet-4-5", "opencode-zen-messages"),
+      model("opencode-zen-responses/muse-spark-1.2", "opencode-zen-responses"),
+      model("opencode-go/glm-5.3", "opencode-go"),
+    ],
+    { from: model("opencode-zen/glm-5.3", "opencode-zen") },
+  );
+  assert.deepEqual(
+    reverse.map((entry) => entry.model.slug),
+    ["opencode-go/glm-5.3"],
+  );
+});
+
 test("rankFailoverCandidates will not trade a quota error for a context error", () => {
   const ranked = rankFailoverCandidates(
     [model("kimi/k3", "kimi", { contextWindow: 262_144 }), model("gemini/g4", "gemini", { contextWindow: 1_048_576 })],
