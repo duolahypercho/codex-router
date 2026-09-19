@@ -267,7 +267,9 @@ struct ProviderCatalogReloadBatch: Equatable {
     case .loaded:
       loaded += 1
     case .superseded:
-      failures.append("\(sourceID): reload superseded by a credential change")
+      failures.append(
+        routerFormat("%@: reload superseded by a credential change", sourceID)
+      )
     case .failed(let detail):
       failures.append(detail)
     }
@@ -275,12 +277,19 @@ struct ProviderCatalogReloadBatch: Equatable {
 
   var message: String {
     if failures.isEmpty {
-      return "Reloaded current models from \(loaded) catalog\(loaded == 1 ? "" : "s")."
+      return loaded == 1
+        ? routerLocalized("Reloaded current models from 1 catalog.")
+        : routerFormat("Reloaded current models from %d catalogs.", loaded)
     }
     if loaded == 0 {
-      return "Catalog reload failed: \(failures.joined(separator: " · "))"
+      return routerFormat("Catalog reload failed: %@", failures.joined(separator: " · "))
     }
-    return "Reloaded \(loaded) catalog\(loaded == 1 ? "" : "s"); \(failures.count) failed: \(failures.joined(separator: " · "))"
+    return routerFormat(
+      "%d reloaded; %d failed: %@",
+      loaded,
+      failures.count,
+      failures.joined(separator: " · ")
+    )
   }
 }
 
@@ -845,7 +854,7 @@ enum ControlCenterLauncher {
   static func open(navigation: ControlCenterNavigationRequest? = nil) {
     guard let application = bundledApplicationURL else {
       RouterStore.shared.reportControlCenterLaunchFailure(
-        "The embedded Control Center is missing. Rebuild Codex Router."
+        routerLocalized("The embedded Control Center is missing. Rebuild Codex Router.")
       )
       return
     }
@@ -880,7 +889,9 @@ enum ControlCenterLauncher {
       try await Task.sleep(for: .milliseconds(100))
     }
     throw RouterError(
-      "A superseded Codex Router Control Center is still running. Quit it, then reopen Codex Router."
+      routerLocalized(
+        "A superseded Codex Router Control Center is still running. Quit it, then reopen Codex Router."
+      )
     )
   }
 
@@ -896,7 +907,7 @@ enum ControlCenterLauncher {
       let message = error.localizedDescription
       Task { @MainActor in
         RouterStore.shared.reportControlCenterLaunchFailure(
-          "Control Center could not open: \(message)"
+          routerFormat("Control Center could not open: %@", message)
         )
       }
     }
@@ -1570,7 +1581,7 @@ final class RouterStore: ObservableObject {
       // the next Codex launch retry from a known-unknown intent.
       serviceIntent = .unknown
       if action == "stop" { pendingServiceStop = nil }
-      message = "Router \(action): \(error.localizedDescription)"
+      message = routerFormat("Router %@: %@", action, error.localizedDescription)
     }
     await refresh()
   }
@@ -1634,7 +1645,7 @@ final class RouterStore: ObservableObject {
     var choices = [
       UsageProviderChoice(
         id: "openai", displayName: "ChatGPT", shortName: "ChatGPT",
-        detail: "Codex subscription", isEnabled: true),
+        detail: routerLocalized("Codex subscription"), isEnabled: true),
     ]
     for provider in registryProviders {
       choices.append(UsageProviderChoice(
@@ -2211,7 +2222,12 @@ final class RouterStore: ObservableObject {
       providerCatalogs[providerID] = catalog
       let origin = catalog.cached == true ? "saved" : "current"
       if reportsOutcome {
-        message = "\(catalog.discovered.count) \(origin) \(providerID) models loaded. Select the ones to add below."
+        message = routerFormat(
+          "%d %@ models loaded from %@. Select the ones to add below.",
+          catalog.discovered.count,
+          routerLocalized(origin),
+          providerID
+        )
       }
       return .loaded
     } catch {
@@ -2262,7 +2278,11 @@ final class RouterStore: ObservableObject {
        let blockedID = unique.first(where: { !catalog.addableModelIDs.contains($0) })
     {
       message = catalog.blocked?[blockedID]
-        ?? "\(blockedID) is not an addable \(providerID) catalog candidate."
+        ?? routerFormat(
+          "%@ is not an addable %@ catalog candidate.",
+          blockedID,
+          providerID
+        )
       return
     }
     guard !providerCatalogLoading.contains(providerID) else { return }
@@ -2281,7 +2301,16 @@ final class RouterStore: ObservableObject {
       // Curation just re-asked upstream and rewrote the stored list, so the
       // cache-first read here is the fresh answer without a second round trip.
       await reloadProviderCatalog(providerID)
-      message = "\(unique.count) \(providerID) model\(unique.count == 1 ? "" : "s") added. Restart Codex to refresh its picker."
+      message = unique.count == 1
+        ? routerFormat(
+          "1 %@ model added. Restart Codex to refresh its model picker.",
+          providerID
+        )
+        : routerFormat(
+          "%d %@ models added. Restart Codex to refresh its model picker.",
+          unique.count,
+          providerID
+        )
     } catch {
       providerCatalogLoading.remove(providerID)
       message = "\(providerID): \(error.localizedDescription)"
@@ -2301,7 +2330,9 @@ final class RouterStore: ObservableObject {
     if setupAction == "probe" {
       await performProviderOperation(
         provider,
-        successMessage: "Live compatibility verified and provider enabled. Restart Codex to refresh its model picker."
+        successMessage: routerLocalized(
+          "Live compatibility verified and provider enabled. Restart Codex to refresh its model picker."
+        )
       ) {
         _ = try await runControl(arguments: ["probe-provider", provider, "--live", "--yes"])
         try await updateProviderSelection(provider, enabled: true)
@@ -2315,13 +2346,17 @@ final class RouterStore: ObservableObject {
     await performProviderOperation(
       provider,
       progressMessage: reconnecting
-        ? "Opening \(displayName) sign-in in your browser…"
-        : "Starting \(displayName) sign-in…",
+        ? routerFormat("Opening %@ sign-in in your browser…", displayName)
+        : routerFormat("Starting %@ sign-in…", displayName),
       successMessage: awaitsAntigravityProbe
-        ? "Signed in. Run the live compatibility test before enabling this provider."
+        ? routerLocalized(
+          "Signed in. Run the live compatibility test before enabling this provider."
+        )
         : reconnecting
-          ? "Provider reconnected."
-          : "Provider connected. Restart Codex to refresh its model picker."
+          ? routerLocalized("Provider reconnected.")
+          : routerLocalized(
+            "Provider connected. Restart Codex to refresh its model picker."
+          )
     ) {
       if needsInstall {
         _ = try await runControl(arguments: ["install-cli", provider])
@@ -2342,13 +2377,17 @@ final class RouterStore: ObservableObject {
     await performProviderOperation(
       provider,
       progressMessage: reconnecting
-        ? "Opening \(displayName) sign-in in your browser…"
-        : "Starting \(displayName) sign-in…",
+        ? routerFormat("Opening %@ sign-in in your browser…", displayName)
+        : routerFormat("Starting %@ sign-in…", displayName),
       successMessage: provider == "antigravity-oauth"
-        ? "Signed in again. Run the live compatibility test before re-enabling this provider."
+        ? routerLocalized(
+          "Signed in again. Run the live compatibility test before re-enabling this provider."
+        )
         : reconnecting
-          ? "Provider reconnected."
-          : "Provider connected. Restart Codex to refresh its model picker."
+          ? routerLocalized("Provider reconnected.")
+          : routerLocalized(
+            "Provider connected. Restart Codex to refresh its model picker."
+          )
     ) {
       _ = try await runControl(arguments: ["login", provider])
       if !reconnecting {
@@ -2359,10 +2398,13 @@ final class RouterStore: ObservableObject {
 
   func saveProviderKey(_ provider: String, key: String) async {
     let secret = Data(key.utf8)
-    let label = providerSetup[provider]?.credentialLabel ?? "API key"
+    let label = routerLocalized(providerSetup[provider]?.credentialLabel ?? "API key")
     await performProviderOperation(
       provider,
-      successMessage: "\(label) saved. Restart Codex to refresh its model picker."
+      successMessage: routerFormat(
+        "%@ saved. Restart Codex to refresh its model picker.",
+        label
+      )
     ) {
       _ = try await runControl(arguments: ["credential", provider], stdin: secret)
     }
@@ -2371,10 +2413,13 @@ final class RouterStore: ObservableObject {
   // The credential command removes the key, disables the provider, and publishes
   // the resulting selection under one model-overlay lock.
   func removeProviderKey(_ provider: String) async {
-    let label = providerSetup[provider]?.credentialLabel ?? "API key"
+    let label = routerLocalized(providerSetup[provider]?.credentialLabel ?? "API key")
     await performProviderOperation(
       provider,
-      successMessage: "\(label) removed. Restart Codex to refresh its model picker."
+      successMessage: routerFormat(
+        "%@ removed. Restart Codex to refresh its model picker.",
+        label
+      )
     ) {
       _ = try await runControl(arguments: ["credential", provider, "--remove"])
     }
@@ -2565,8 +2610,8 @@ final class RouterStore: ObservableObject {
       success: { [weak self] enabled in
         await self?.refreshProviderUsage()
         return enabled
-          ? "Provider added. Restart Codex to refresh its model picker."
-          : "Provider hidden. Restart Codex to refresh its model picker."
+          ? routerLocalized("Provider added. Restart Codex to refresh its model picker.")
+          : routerLocalized("Provider hidden. Restart Codex to refresh its model picker.")
       }
     )
   }
@@ -2589,7 +2634,7 @@ final class RouterStore: ObservableObject {
       finishNativeMutation()
     }
     providerOperation = "maintenance"
-    maintenanceMessage = "Running update and doctor…"
+    maintenanceMessage = routerLocalized("Running update and doctor…")
     maintenanceSucceeded = false
     defer { providerOperation = nil }
     do {
@@ -2601,7 +2646,9 @@ final class RouterStore: ObservableObject {
       await refreshProviderUsage()
       await refreshProviderSetup()
       maintenanceSucceeded = true
-      maintenanceMessage = "Update installed. Fully quit and reopen Codex to load updated models and agents."
+      maintenanceMessage = routerLocalized(
+        "Update installed. Fully quit and reopen Codex to load updated models and agents."
+      )
     } catch {
       maintenanceMessage = error.localizedDescription
       await refresh()
@@ -2730,7 +2777,7 @@ final class RouterStore: ObservableObject {
       finishNativeMutation()
     }
     providerOperation = "doctor"
-    maintenanceMessage = "Running doctor --fix…"
+    maintenanceMessage = routerLocalized("Running doctor --fix…")
     maintenanceSucceeded = false
     defer { providerOperation = nil }
     do {
@@ -2742,7 +2789,9 @@ final class RouterStore: ObservableObject {
       await refreshProviderUsage()
       await refreshProviderSetup()
       maintenanceSucceeded = true
-      maintenanceMessage = "Repair verified. Fully quit and reopen Codex if models changed."
+      maintenanceMessage = routerLocalized(
+        "Repair verified. Fully quit and reopen Codex if models changed."
+      )
     } catch {
       maintenanceMessage = error.localizedDescription
       await refresh()
@@ -2759,14 +2808,17 @@ final class RouterStore: ObservableObject {
         _ = try await self.runControl(arguments: ["auth-mode", enabled ? "on" : "off"])
       },
       success: { [weak self] enabled in
-        guard let self else { return "Mode changed." }
+        guard let self else { return routerLocalized("Mode changed.") }
         do {
           try await self.restartCodexApp()
           return enabled
-            ? "Codex restarted with external-provider mode."
-            : "Codex restarted with OpenAI login restored."
+            ? routerLocalized("Codex restarted with external-provider mode.")
+            : routerLocalized("Codex restarted with OpenAI login restored.")
         } catch {
-          return "Mode changed, but Codex could not restart: \(error.localizedDescription)"
+          return routerFormat(
+            "Mode changed, but Codex could not restart: %@",
+            error.localizedDescription
+          )
         }
       }
     )
@@ -2783,8 +2835,8 @@ final class RouterStore: ObservableObject {
       },
       success: { enabled in
         enabled
-        ? "Router with ChatGPT enabled. Fully quit and reopen Codex when ready."
-        : "Previous provider restored. Fully quit and reopen Codex when ready."
+        ? routerLocalized("Router with ChatGPT enabled. Fully quit and reopen Codex when ready.")
+        : routerLocalized("Previous provider restored. Fully quit and reopen Codex when ready.")
       }
     )
   }
@@ -2823,7 +2875,7 @@ final class RouterStore: ObservableObject {
         guard let self else { return }
         _ = try await self.runControl(arguments: ["subagents", "mode", mode])
       },
-      success: { _ in "Model settings applied. Restart Codex to refresh its picker." }
+      success: { _ in routerLocalized("Model settings applied. Restart Codex to refresh its picker.") }
     )
   }
 
@@ -2838,7 +2890,7 @@ final class RouterStore: ObservableObject {
           arguments: ["subagents", "set", slug, enabled ? "on" : "off"]
         )
       },
-      success: { _ in "Model settings applied. Restart Codex to refresh its picker." }
+      success: { _ in routerLocalized("Model settings applied. Restart Codex to refresh its picker.") }
     )
   }
 
@@ -2867,7 +2919,7 @@ final class RouterStore: ObservableObject {
           arguments: ["picker", "set", slug, visible ? "show" : "hide"]
         )
       },
-      success: { _ in "Model settings applied. Restart Codex to refresh its picker." }
+      success: { _ in routerLocalized("Model settings applied. Restart Codex to refresh its picker.") }
     )
   }
 
@@ -2902,7 +2954,7 @@ final class RouterStore: ObservableObject {
         guard let self else { return }
         _ = try await self.runControl(arguments: ["vision-bridge", enabled ? "on" : "off"])
       },
-      success: { _ in "Model settings applied. Restart Codex to refresh its picker." }
+      success: { _ in routerLocalized("Model settings applied. Restart Codex to refresh its picker.") }
     )
   }
 
@@ -2919,8 +2971,10 @@ final class RouterStore: ObservableObject {
       },
       success: { enabled in
         enabled
-        ? "Token maxxing is on for the next external-model request."
-        : "Token maxxing is off; exact tool results will be sent on the next external-model request."
+        ? routerLocalized("Token maxxing is on for the next external-model request.")
+        : routerLocalized(
+          "Token maxxing is off; exact tool results will be sent on the next external-model request."
+        )
       }
     )
   }
@@ -2950,7 +3004,7 @@ final class RouterStore: ObservableObject {
           arguments: ["local-models", "set", tag, enabled ? "on" : "off"]
         )
       },
-      success: { _ in "Model settings applied. Restart Codex to refresh its picker." }
+      success: { _ in routerLocalized("Model settings applied. Restart Codex to refresh its picker.") }
     )
   }
 
@@ -3012,7 +3066,7 @@ final class RouterStore: ObservableObject {
     do {
       _ = try await runControl(arguments: ["vision-bridge", "benchmark", tag])
       await refresh()
-      message = "\(tag) tested. The score is on its row."
+      message = routerFormat("%@ tested. The score is on its row.", tag)
     } catch {
       message = error.localizedDescription
     }
@@ -3027,7 +3081,7 @@ final class RouterStore: ObservableObject {
     do {
       _ = try await runControl(arguments: ["local-models", "benchmark", tag])
       await refresh()
-      message = "\(tag) speed measured. Tokens per second is on its row."
+      message = routerFormat("%@ speed measured. Tokens per second is on its row.", tag)
     } catch {
       message = error.localizedDescription
     }
@@ -3119,7 +3173,7 @@ final class RouterStore: ObservableObject {
     let now = Date().timeIntervalSince1970 * 1_000
     let starting = LocalMlxOperation(
       status: "preparing",
-      detail: "Checking the local runtime and downloader",
+      detail: routerLocalized("Checking the local runtime and downloader"),
       percent: 0,
       progressMode: "determinate",
       startedAt: now,
@@ -3140,7 +3194,7 @@ final class RouterStore: ObservableObject {
     } catch {
       localMlx = localMlx?.replacing(operation: LocalMlxOperation(
         status: "error",
-        detail: "The MLX install could not start",
+        detail: routerLocalized("The MLX install could not start"),
         percent: 0,
         progressMode: "determinate",
         startedAt: now,
@@ -3176,11 +3230,14 @@ final class RouterStore: ObservableObject {
       await refresh()
       switch mlx.operation.status {
       case "done":
-        message = "Qwen3.8 27B MLX is ready for Codex. Fully quit and reopen Codex to refresh its picker."
+        message = routerLocalized(
+          "Qwen3.8 27B MLX is ready for Codex. Fully quit and reopen Codex to refresh its picker."
+        )
       case "cancelled":
-        message = "Qwen3.8 27B MLX installation cancelled."
+        message = routerLocalized("Qwen3.8 27B MLX installation cancelled.")
       case "error":
-        message = mlx.operation.error ?? mlx.operation.detail ?? "The MLX installation failed."
+        message = mlx.operation.error ?? mlx.operation.detail
+          ?? routerLocalized("The MLX installation failed.")
       default:
         break
       }
@@ -3195,7 +3252,9 @@ final class RouterStore: ObservableObject {
     do {
       _ = try await runControl(arguments: ["local-models", "runtime", "update", "--yes"])
       await refresh()
-      message = "Ollama updated. Its headless server will be reused for local models."
+      message = routerLocalized(
+        "Ollama updated. Its headless server will be reused for local models."
+      )
     } catch {
       message = error.localizedDescription
     }
@@ -3211,25 +3270,26 @@ final class RouterStore: ObservableObject {
       localDownload = state
       guard let state else {
         localModelOperation = nil
-        message = "No local model operation is running."
+        message = routerLocalized("No local model operation is running.")
         return
       }
       if state.isRunning { continue }
       await refresh()
       let isUninstall = state.isUninstalling || localModelOperation?.tag == state.tag
+      let tag = state.tag ?? "Model"
       switch state.status {
       case "done":
         message = isUninstall
-          ? "\(state.tag ?? "Model") was removed."
-          : "\(state.tag ?? "Model") ready for Codex. Restart Codex to refresh its picker."
+          ? routerFormat("%@ was removed.", tag)
+          : routerFormat("%@ ready for Codex. Restart Codex to refresh its picker.", tag)
       case "cancelled":
         message = isUninstall
-          ? "\(state.tag ?? "Model") removal cancelled."
-          : "\(state.tag ?? "Model") download cancelled."
+          ? routerFormat("%@ removal cancelled.", tag)
+          : routerFormat("%@ download cancelled.", tag)
       default:
         message = state.error ?? (isUninstall
-          ? "The local model removal failed."
-          : "The local model download failed.")
+          ? routerLocalized("The local model removal failed.")
+          : routerLocalized("The local model download failed."))
       }
       localModelOperation = nil
       return
@@ -3248,8 +3308,11 @@ final class RouterStore: ObservableObject {
       // catches up, then report what happened.
       await refresh()
       message = state.status == "done"
-        ? "\(state.tag ?? "Model") downloaded. Restart Codex to refresh its picker."
-        : (state.error ?? "The download failed.")
+        ? routerFormat(
+          "%@ downloaded. Restart Codex to refresh its picker.",
+          state.tag ?? "Model"
+        )
+        : (state.error ?? routerLocalized("The download failed."))
       visionDownload = nil
       return
     }
@@ -3257,7 +3320,7 @@ final class RouterStore: ObservableObject {
 
   private func applyModelSettings(
     arguments: [String],
-    successMessage: String = "Model settings applied. Restart Codex to refresh its picker."
+    successMessage: String = routerLocalized("Model settings applied. Restart Codex to refresh its picker.")
   ) async {
     guard providerOperation == nil else { return }
     providerOperation = "models"
@@ -3496,12 +3559,12 @@ final class RouterStore: ObservableObject {
       ?? workspace.urlForApplication(withBundleIdentifier: bundleIdentifier)
 
     guard let applicationURL else {
-      throw RouterError("the Codex desktop app could not be found")
+      throw RouterError(routerLocalized("the Codex desktop app could not be found"))
     }
 
     for application in runningApplications where !application.isTerminated {
       guard application.terminate() else {
-        throw RouterError("Codex did not accept a graceful quit request")
+        throw RouterError(routerLocalized("Codex did not accept a graceful quit request"))
       }
     }
 
@@ -3511,7 +3574,7 @@ final class RouterStore: ObservableObject {
     }
 
     guard runningApplications.allSatisfy({ $0.isTerminated }) else {
-      throw RouterError("Codex did not quit in time; restart it manually")
+      throw RouterError(routerLocalized("Codex did not quit in time; restart it manually"))
     }
 
     let configuration = NSWorkspace.OpenConfiguration()
@@ -3543,14 +3606,16 @@ final class RouterStore: ObservableObject {
 
   private func launchDetachedTrayRefresh(after arguments: [String]) throws {
     guard RouterControlContractPolicy.requiresDetachedTrayRefresh(arguments) else {
-      throw RouterError("This maintenance command does not schedule a desktop refresh.")
+      throw RouterError(
+        routerLocalized("This maintenance command does not schedule a desktop refresh.")
+      )
     }
     try launchDetachedTrayCommand("refresh")
   }
 
   private func launchDetachedTrayCommand(_ action: String) throws {
     guard action == "refresh" || action == "rebuild" else {
-      throw RouterError("Unsupported detached tray command.")
+      throw RouterError(routerLocalized("Unsupported detached tray command."))
     }
     let root = try sourceRoot()
     let task = Process()
@@ -3648,7 +3713,9 @@ final class RouterStore: ObservableObject {
           contents: nil,
           attributes: [.posixPermissions: 0o600]
         ) else {
-          throw RouterError("Could not create the private maintenance error log.")
+          throw RouterError(
+            routerLocalized("Could not create the private maintenance error log.")
+          )
         }
         durableErrorURL = url
         durableErrorHandle = try FileHandle(forUpdating: url)
@@ -3703,12 +3770,18 @@ final class RouterStore: ObservableObject {
       }
       if watchdog.didTimeOut {
         throw RouterError(
-          "Codex Router control command exceeded its absolute deadline and was stopped."
+          routerLocalized(
+            "Codex Router control command exceeded its absolute deadline and was stopped."
+          )
         )
       }
       guard task.terminationStatus == 0 else {
         let detail = String(data: stderr, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        throw RouterError(detail?.isEmpty == false ? detail! : "Codex Router control command failed.")
+        throw RouterError(
+          detail?.isEmpty == false
+            ? detail!
+            : routerLocalized("Codex Router control command failed.")
+        )
       }
       return stdout
     }.value
@@ -3724,7 +3797,7 @@ final class RouterStore: ObservableObject {
     timeout: TimeInterval
   ) async throws -> Data {
     guard ["model-discovery.mjs", "curate-models.mjs"].contains(script) else {
-      throw RouterError("Unsupported Codex Router script.")
+      throw RouterError(routerLocalized("Unsupported Codex Router script."))
     }
     let root = try sourceRoot()
     if script == "curate-models.mjs" {
@@ -3785,13 +3858,18 @@ final class RouterStore: ObservableObject {
       let stderr = await stderrReader.value
       if watchdog.didTimeOut {
         throw RouterError(
-          "\(script) did not answer within \(Int(timeout.rounded())) seconds and was stopped. "
-            + "The provider may be unreachable; try again."
+          routerFormat(
+            "%@ did not answer within %d seconds and was stopped. The provider may be unreachable; try again.",
+            script,
+            Int(timeout.rounded())
+          )
         )
       }
       guard task.terminationStatus == 0 else {
         let detail = String(data: stderr, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        throw RouterError(detail?.isEmpty == false ? detail! : "Codex Router command failed.")
+        throw RouterError(
+          detail?.isEmpty == false ? detail! : routerLocalized("Codex Router command failed.")
+        )
       }
       return stdout
     }.value
@@ -3832,7 +3910,9 @@ final class RouterStore: ObservableObject {
       if let root = try? validatedSourceRoot(candidate) { return root }
     }
     throw RouterError(
-      "Cannot find the installed Codex Router checkout. Install the router or rebuild this app from its checkout."
+      routerLocalized(
+        "Cannot find the installed Codex Router checkout. Install the router or rebuild this app from its checkout."
+      )
     )
   }
 
@@ -3850,8 +3930,9 @@ final class RouterStore: ObservableObject {
       expectedProtocol: expectedProtocol
     ) else {
       throw RouterError(
-        "This Codex Router app does not match the installed router control protocol. "
-          + "Install or update the router and desktop app from the same build, then reopen the app."
+        routerLocalized(
+          "This Codex Router app does not match the installed router control protocol. Install or update the router and desktop app from the same build, then reopen the app."
+        )
       )
     }
   }
@@ -3871,7 +3952,11 @@ final class RouterStore: ObservableObject {
         trustedOwnerAndMode(attributes),
         !executable || FileManager.default.isExecutableFile(atPath: url.path)
       else {
-        throw RouterError("The Codex Router checkout is missing or has unsafe ownership or permissions.")
+        throw RouterError(
+          routerLocalized(
+            "The Codex Router checkout is missing or has unsafe ownership or permissions."
+          )
+        )
       }
     }
     return resolvedRoot
@@ -3957,7 +4042,7 @@ enum RouterHealthProbe {
     guard let number = Double(value.trimmingCharacters(in: .whitespacesAndNewlines)),
       number.isFinite, number == number.rounded(), number >= 1, number <= 65_535
     else {
-      throw RouterError("MODEL_ROUTER_PORT must be a TCP port between 1 and 65535.")
+      throw RouterError(routerLocalized("MODEL_ROUTER_PORT must be a TCP port between 1 and 65535."))
     }
     return Int(number)
   }
@@ -3976,10 +4061,12 @@ enum RouterHealthProbe {
     let port = try routerPort(environment: environment)
     let stateDirectory = RouterStateDirectory.resolve(environment: environment, home: home)
     guard let secret = callerSecret(stateDirectory: stateDirectory) else {
-      throw RouterError("The local router caller key is missing or invalid; run ./bin/doctor --fix.")
+      throw RouterError(
+        routerLocalized("The local router caller key is missing or invalid; run ./bin/doctor --fix.")
+      )
     }
     guard let url = URL(string: "http://127.0.0.1:\(port)/_codex-router/\(secret)/v1/health") else {
-      throw RouterError("The local router health URL could not be built.")
+      throw RouterError(routerLocalized("The local router health URL could not be built."))
     }
     return url
   }
@@ -4765,13 +4852,26 @@ struct ToolResultAgingStats: Decodable {
       // the floor can still be counted here -- and saying "no result over
       // 32 KB (largest 40 KB)" would contradict itself in the same sentence.
       if largestBytes > Self.agingMinBytes {
-        return "Nothing aged yet in \(evaluatedRequests) requests (largest \(largest))"
+        return routerFormat(
+          "Nothing aged yet in %d requests (largest %@)",
+          evaluatedRequests,
+          largest
+        )
       }
-      return "No result over 32 KB in \(evaluatedRequests) requests (largest \(largest))"
+      return routerFormat(
+        "No result over 32 KB in %d requests (largest %@)",
+        evaluatedRequests,
+        largest
+      )
     }
     let tokens = Self.compactCount(estimatedTokensSaved)
     let megabytes = String(format: "%.1f", Double(bytesSaved) / 1_048_576)
-    return "Saved ~\(tokens) tokens (\(megabytes) MB) across \(requests) requests"
+    return routerFormat(
+      "Saved ~%@ tokens (%@ MB) across %d requests",
+      tokens,
+      megabytes,
+      requests
+    )
   }
 
   // Mirrors TOOL_RESULT_AGING_MIN_BYTES in src/tool-result-aging.mjs. Only the
@@ -4816,9 +4916,9 @@ enum SavingsRange: String, CaseIterable {
 
   var caption: String {
     switch self {
-    case .day: return "tokens saved · last 24 hours"
-    case .week: return "tokens saved · last 7 days"
-    case .month: return "tokens saved · last 30 days"
+    case .day: return routerLocalized("tokens saved · last 24 hours")
+    case .week: return routerLocalized("tokens saved · last 7 days")
+    case .month: return routerLocalized("tokens saved · last 30 days")
     }
   }
 
@@ -4843,7 +4943,12 @@ struct ToolResultAgingCache: Decodable {
     guard let agedRate, let unagedRate, let agedTurns, agedTurns > 0 else { return nil }
     let normal = String(format: "%.1f%%", unagedRate * 100)
     let compacted = String(format: "%.1f%%", agedRate * 100)
-    return "Cache \(normal) normal · \(compacted) compacted (n=\(agedTurns))"
+    return routerFormat(
+      "Cache %@ normal · %@ compacted (n=%d)",
+      normal,
+      compacted,
+      agedTurns
+    )
   }
 }
 
@@ -4936,16 +5041,16 @@ struct LocalMlxOperation: Decodable, Equatable {
 
   var stageLabel: String {
     switch status {
-    case "preparing": return "Preparing runtime"
-    case "downloading": return "Downloading model"
-    case "loading": return "Loading model"
-    case "starting-server": return "Starting local server"
-    case "verifying": return "Verifying model"
-    case "publishing": return "Wiring Codex"
-    case "done": return "Ready for Codex"
-    case "cancelled": return "Installation cancelled"
-    case "error": return "Installation failed"
-    default: return "Not installed"
+    case "preparing": return routerLocalized("Preparing runtime")
+    case "downloading": return routerLocalized("Downloading model")
+    case "loading": return routerLocalized("Loading model")
+    case "starting-server": return routerLocalized("Starting local server")
+    case "verifying": return routerLocalized("Verifying model")
+    case "publishing": return routerLocalized("Wiring Codex")
+    case "done": return routerLocalized("Ready for Codex")
+    case "cancelled": return routerLocalized("Installation cancelled")
+    case "error": return routerLocalized("Installation failed")
+    default: return routerLocalized("Not installed")
     }
   }
 }
@@ -5436,13 +5541,16 @@ enum ProviderCatalogInput {
     var errorDescription: String? {
       switch self {
       case .emptySelection, .tooManyModels:
-        return "Choose between 1 and \(ProviderCatalogInput.maxModelIDCount) provider models."
+        return routerFormat(
+          "Choose between 1 and %d provider models.",
+          ProviderCatalogInput.maxModelIDCount
+        )
       case .invalidModelID(let id):
-        return "Model id is invalid: \(id)"
+        return routerFormat("Model id is invalid: %@", id)
       case .duplicateModelID:
-        return "Provider model ids must be unique."
+        return routerLocalized("Provider model ids must be unique.")
       case .invalidProviderID(let id):
-        return "Provider is invalid: \(id)"
+        return routerFormat("Provider is invalid: %@", id)
       }
     }
   }
@@ -5708,7 +5816,11 @@ private struct TrayView: View {
   private var providerDashboardSummary: String {
     if let dashboard = store.snapshot.dashboard, !dashboard.providers.isEmpty {
       let enabled = dashboard.providers.filter(\.enabled).count
-      return "\(enabled)/\(dashboard.providers.count) routes enabled"
+      return routerFormat(
+        "%d/%d routes enabled",
+        enabled,
+        dashboard.providers.count
+      )
     }
     return routerLocalized("Auto-saved")
   }
@@ -5968,7 +6080,11 @@ private struct TrayView: View {
     if !store.overallModelUsage.isEmpty {
       sectionLabel(
         routerLocalized("Tokens by model"),
-        detail: "\(compactTokenCount(Double(store.overallTokenTotal))) tok · \(store.overallRequestTotal) req"
+        detail: routerFormat(
+          "%@ tok · %d req",
+          compactTokenCount(Double(store.overallTokenTotal)),
+          store.overallRequestTotal
+        )
       )
       ModelUsageBreakdown(store: store)
     }
@@ -6083,16 +6199,19 @@ private struct TrayView: View {
       let range = agingStats.ranges?[savingsRange.rawValue]
       let rangeRequests = range?.requests ?? 0
       let allTimeTokens = agingStats.estimatedTokensSaved ?? 0
-      sectionLabel("Context savings", detail: "\(agedRequests) requests compacted all-time")
+      sectionLabel(
+        routerLocalized("Context savings"),
+        detail: routerFormat("%d requests compacted all-time", agedRequests)
+      )
       VStack(alignment: .leading, spacing: 8) {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
           VStack(alignment: .leading, spacing: 2) {
-            Text("Tool results compressed into recoverable receipts")
+            Text(routerLocalized("Tool results compressed into recoverable receipts"))
               .font(.system(size: 10, weight: .medium))
               .lineLimit(1)
             Text(rangeRequests > 0
-              ? "\(rangeRequests) compacted requests in this window"
-              : "No compactions in this window")
+              ? routerFormat("%d compacted requests in this window", rangeRequests)
+              : routerLocalized("No compactions in this window"))
               .font(.system(size: 8))
               .foregroundStyle(routerMuted)
               .lineLimit(1)
@@ -6118,11 +6237,11 @@ private struct TrayView: View {
                 .buttonStyle(.plain)
               }
             }
-            Text("~\(compactTokenCount(Double(allTimeTokens))) tok")
+            Text(routerFormat("~%@ tok", compactTokenCount(Double(allTimeTokens))))
               .font(.system(size: 15, weight: .semibold, design: .monospaced))
               .foregroundStyle(routerMint)
               .monospacedDigit()
-            Text("saved all-time")
+            Text(routerLocalized("saved all-time"))
               .font(.system(size: 7.5))
               .foregroundStyle(routerMuted)
           }
@@ -6134,7 +6253,7 @@ private struct TrayView: View {
             bucketUnit: savingsRange.bucketUnit
           )
         } else {
-          Text("Nothing compacted in this window")
+          Text(routerLocalized("Nothing compacted in this window"))
             .font(.system(size: 8))
             .foregroundStyle(routerMuted)
         }
@@ -6230,7 +6349,9 @@ private struct TrayView: View {
     guard store.routerHealth != nil else { return routerLocalized("Checking") }
     let attention = serviceHealthRows.filter { $0.state == .offline || $0.state == .degraded }.count
     if attention > 0 {
-      return "\(attention) \(routerLocalized(attention == 1 ? "dependency needs attention" : "dependencies need attention"))"
+      return attention == 1
+        ? routerFormat("%d dependency needs attention", attention)
+        : routerFormat("%d dependencies need attention", attention)
     }
     return routerLocalized("All clear")
   }
@@ -6249,7 +6370,9 @@ private struct TrayView: View {
       } else if !degraded.isEmpty {
         routerState = .degraded
         routerStatus = routerLocalized("Degraded")
-        routerDetail = "\(degraded.count) \(routerLocalized(degraded.count == 1 ? "dependency needs attention" : "dependencies need attention"))"
+        routerDetail = degraded.count == 1
+          ? routerFormat("%d dependency needs attention", degraded.count)
+          : routerFormat("%d dependencies need attention", degraded.count)
       } else {
         routerState = .offline
         routerStatus = routerLocalized("Offline")
@@ -6950,8 +7073,8 @@ private struct TrayView: View {
             toggleRow(
               title: routerLocalized("All proven models"),
               detail: store.subagentModeAll(authoritative: settings?.subagents.mode == "all")
-                ? "Every proven v2 model can run as a subagent"
-                : "Only selected proven v2 models can run as subagents",
+                ? routerLocalized("Every proven v2 model can run as a subagent")
+                : routerLocalized("Only selected proven v2 models can run as subagents"),
               isOn: Binding(
                 get: {
                   store.subagentModeAll(authoritative: settings?.subagents.mode == "all")
@@ -7270,20 +7393,29 @@ private struct TrayView: View {
       let active = operation?.isRunning == true
       let tint = failed || cancelled || unsupported ? routerRed : (ready ? routerMint : routerYellow)
 
-      downloadHeader("QWEN MLX", detail: "LM Studio · 4-bit · ~15 GB")
+      downloadHeader(
+        "QWEN MLX",
+        detail: routerLocalized("LM Studio · 4-bit · ~15 GB")
+      )
       VStack(alignment: .leading, spacing: 7) {
         HStack(alignment: .top, spacing: 8) {
           VStack(alignment: .leading, spacing: 2) {
             Text("Qwen3.8 27B Uncensored")
               .font(.system(size: 11, weight: .semibold))
-            Text(mlx?.model.map { "\($0.precision) MLX · \($0.contextLength / 1024)K context" }
-              ?? "4-bit MLX · 32K context · Apple silicon")
+            Text(mlx?.model.map {
+              routerFormat(
+                "%@ MLX · %dK context",
+                $0.precision,
+                $0.contextLength / 1024
+              )
+            }
+              ?? routerLocalized("4-bit MLX · 32K context · Apple silicon"))
               .font(.system(size: 8))
               .foregroundStyle(routerMutedStrong)
           }
           Spacer(minLength: 6)
           if ready {
-            Label("Ready", systemImage: "checkmark.circle.fill")
+            Label(routerLocalized("Ready"), systemImage: "checkmark.circle.fill")
               .font(.system(size: 8, weight: .semibold))
               .foregroundStyle(routerMint)
           }
@@ -7296,7 +7428,7 @@ private struct TrayView: View {
               .font(.system(size: 9, weight: .semibold))
               .foregroundStyle(tint)
             Spacer(minLength: 4)
-            Button("Cancel", role: .cancel) {
+            Button(routerLocalized("Cancel"), role: .cancel) {
               Task { await store.cancelLocalMlx() }
             }
             .buttonStyle(.borderless)
@@ -7329,7 +7461,10 @@ private struct TrayView: View {
           Label(operation.stageLabel, systemImage: "exclamationmark.triangle.fill")
             .font(.system(size: 9, weight: .semibold))
             .foregroundStyle(routerRed)
-          Text(operation.error ?? operation.detail ?? "The local MLX setup did not complete.")
+          Text(
+            operation.error ?? operation.detail
+              ?? routerLocalized("The local MLX setup did not complete.")
+          )
             .font(.system(size: 8))
             .foregroundStyle(routerRed)
             .lineLimit(3)
@@ -7339,34 +7474,47 @@ private struct TrayView: View {
             .foregroundStyle(routerMutedStrong)
             .lineLimit(1)
             .truncationMode(.middle)
-          Text("Served only on this Mac and published to the Codex model picker.")
+          Text(routerLocalized("Served only on this Mac and published to the Codex model picker."))
             .font(.system(size: 8))
             .foregroundStyle(routerMuted)
         } else if unsupported {
-          Label("Apple silicon required", systemImage: "cpu")
+          Label(routerLocalized("Apple silicon required"), systemImage: "cpu")
             .font(.system(size: 9, weight: .semibold))
             .foregroundStyle(routerRed)
-          Text(mlx?.host?.reason ?? "This MLX model is available only on Apple silicon Macs.")
+          Text(
+            mlx?.host?.reason
+              ?? routerLocalized("This MLX model is available only on Apple silicon Macs.")
+          )
             .font(.system(size: 8))
             .foregroundStyle(routerRed)
             .lineLimit(3)
           if let host = mlx?.host {
-            Text("Detected: \(host.platform) · \(host.arch)")
+            Text(routerFormat("Detected: %@ · %@", host.platform, host.arch))
               .font(.system(size: 8, design: .monospaced))
               .foregroundStyle(routerMuted)
           }
         } else {
-          localMlxPrerequisiteLine("LM Studio runtime", state: mlx?.prerequisites?.lms)
-          localMlxPrerequisiteLine("Model downloader", state: mlx?.prerequisites?.uvx)
+          localMlxPrerequisiteLine(
+            routerLocalized("LM Studio runtime"),
+            state: mlx?.prerequisites?.lms
+          )
+          localMlxPrerequisiteLine(
+            routerLocalized("Model downloader"),
+            state: mlx?.prerequisites?.uvx
+          )
         }
 
-        Text("Reduced safety guardrails. Treat outputs as untrusted and keep the server local.")
+        Text(
+          routerLocalized(
+            "Reduced safety guardrails. Treat outputs as untrusted and keep the server local."
+          )
+        )
           .font(.system(size: 8))
           .foregroundStyle(routerYellow)
           .lineLimit(2)
 
         if !active && !ready {
-          Button("Install runtime + ~15 GB model and wire Codex") {
+          Button(routerLocalized("Install runtime + ~15 GB model and wire Codex")) {
             Task { await store.installLocalMlx() }
           }
           .buttonStyle(.borderedProminent)
@@ -7374,8 +7522,11 @@ private struct TrayView: View {
           .tint(routerMint)
           .disabled(unsupported || busy || store.localDownload?.isRunning == true || store.localModelOperation != nil)
           .help(unsupported
-            ? (mlx?.host?.reason ?? "This MLX model requires an Apple silicon Mac.")
-            : "Installs official local prerequisites when missing, downloads the curated 4-bit model, and publishes it through Codex Router.")
+            ? (mlx?.host?.reason
+              ?? routerLocalized("This MLX model requires an Apple silicon Mac."))
+            : routerLocalized(
+              "Installs official local prerequisites when missing, downloads the curated 4-bit model, and publishes it through Codex Router."
+            ))
         }
       }
       .padding(8)
@@ -7393,8 +7544,10 @@ private struct TrayView: View {
         Text(label)
         Spacer()
         Text(state?.available == true
-          ? "ready"
-          : (state?.automaticWithYes == true ? "official installer on click" : "required"))
+          ? routerLocalized("ready")
+          : (state?.automaticWithYes == true
+            ? routerLocalized("official installer on click")
+            : routerLocalized("required")))
           .foregroundStyle(routerMuted)
       }
       .font(.system(size: 8))
@@ -7406,7 +7559,7 @@ private struct TrayView: View {
       } else if state?.available != true,
         let source = state?.source,
         let host = URL(string: source)?.host {
-        Text("Source: \(host)")
+        Text(routerFormat("Source: %@", host))
           .font(.system(size: 8))
           .foregroundStyle(routerMuted)
       }
@@ -7426,7 +7579,7 @@ private struct TrayView: View {
             .truncationMode(.middle)
         }
         Spacer(minLength: 4)
-        Button("Cancel", role: .cancel) {
+        Button(routerLocalized("Cancel"), role: .cancel) {
           Task { await store.cancelLocalModel(operation.tag) }
         }
         .buttonStyle(.borderless)
@@ -7449,7 +7602,12 @@ private struct TrayView: View {
       let installedCount = sortedLocalModels.count
       let detail = installedCount == 0
         ? routerLocalized("none installed")
-        : "\(installedCount) \(routerLocalized("installed")) · \(String(format: "%.1f", localModels?.totalGb ?? 0)) GB"
+        : routerFormat(
+          "%d %@ · %.1f GB",
+          installedCount,
+          routerLocalized("installed"),
+          localModels?.totalGb ?? 0
+        )
       downloadHeader("ON THIS MAC", detail: detail)
       if sortedLocalModels.isEmpty {
         Text(routerLocalized("Nothing installed yet. Start with a quick pick or browse the Ollama catalog below."))
@@ -7694,9 +7852,7 @@ private struct TrayView: View {
         Button(
           expanded
             ? routerLocalized("Show fewer tags")
-            : (RouterLanguage.isSimplifiedChinese
-                ? "查看全部 \(family.models.count) 个标签"
-                : "View all \(family.models.count) tags")
+            : routerFormat("View all %@ tags", "\(family.models.count)")
         ) {
           withAnimation(.easeOut(duration: 0.15)) {
             if expandedLocalVariants.contains(family.id) {
@@ -7989,17 +8145,26 @@ private struct TrayView: View {
           }
           Text(
             isError
-              ? (isUninstalling ? "Local model removal failed" : routerLocalized("Local model install failed"))
+              ? (isUninstalling
+                ? routerLocalized("Local model removal failed")
+                : routerLocalized("Local model install failed"))
               : (isCancelled
-                ? (isUninstalling ? "Local model removal cancelled" : "Local model download cancelled")
-                : (isDone ? (isUninstalling ? "Local model removed" : routerLocalized("Local model ready"))
-                  : (isUninstalling ? "Uninstalling local model" : routerLocalized("Installing local model"))))
+                ? (isUninstalling
+                  ? routerLocalized("Local model removal cancelled")
+                  : routerLocalized("Local model download cancelled"))
+                : (isDone
+                  ? (isUninstalling
+                    ? routerLocalized("Local model removed")
+                    : routerLocalized("Local model ready"))
+                  : (isUninstalling
+                    ? routerLocalized("Uninstalling local model")
+                    : routerLocalized("Installing local model"))))
           )
             .font(.system(size: 9, weight: .semibold))
             .foregroundStyle(tint)
           Spacer(minLength: 4)
           if download.isRunning, let tag = download.tag {
-            Button("Cancel", role: .cancel) {
+            Button(routerLocalized("Cancel"), role: .cancel) {
               Task { await store.cancelLocalModel(tag) }
             }
             .buttonStyle(.borderless)
@@ -8115,16 +8280,12 @@ private struct TrayView: View {
             }
             .menuStyle(.borderlessButton)
             .buttonStyle(.borderless)
-            .accessibilityLabel(
-              RouterLanguage.isSimplifiedChinese
-                ? "\(model.tag) 的操作"
-                : "Actions for \(model.tag)"
-            )
+            .accessibilityLabel(routerFormat("Actions for %@", model.tag))
           }
           if let operation {
             HStack(spacing: 7) {
               OperationPulse(tint: routerRed)
-              Text("\(operation.kind.label)…")
+              Text("\(routerLocalized(operation.kind.label))…")
                 .font(.system(size: 9, weight: .semibold))
                 .foregroundStyle(routerRed)
               ProgressView()
@@ -8359,14 +8520,14 @@ private struct TrayView: View {
         return "\(operation.stageLabel)\(percent)"
       }
       if store.localMlx?.host?.supported == false {
-        return "MLX requires Apple silicon"
+        return routerLocalized("MLX requires Apple silicon")
       }
       if store.localMlx?.runtime?.ready == true,
         (localModels?.installed ?? 0) == 0 {
-        return "Qwen MLX ready for Codex"
+        return routerLocalized("Qwen MLX ready for Codex")
       }
       if store.localMlx?.operation.status == "error" {
-        return "MLX install failed"
+        return routerLocalized("MLX install failed")
       }
       if let download = store.localDownload, download.isRunning {
         let tag = download.tag ?? routerLocalized("local model")
@@ -8374,10 +8535,14 @@ private struct TrayView: View {
         return "\(routerLocalized(download.isUninstalling ? "Removing" : "Downloading")) \(tag)\(percent)"
       }
       if let download = store.localDownload, download.status == "error" {
-        return download.isUninstalling ? "Last removal failed" : "Last download failed"
+        return download.isUninstalling
+          ? routerLocalized("Last removal failed")
+          : routerLocalized("Last download failed")
       }
       if let download = store.localDownload, download.status == "cancelled" {
-        return download.isUninstalling ? "Removal cancelled" : "Download cancelled"
+        return download.isUninstalling
+          ? routerLocalized("Removal cancelled")
+          : routerLocalized("Download cancelled")
       }
       guard let localModels, localModels.installed > 0 else {
         let available = localModels?.availableExplore?.count ?? 0
@@ -8728,7 +8893,7 @@ private struct TrayView: View {
       HStack {
         Spacer()
         ForEach(Array(buttons.enumerated()), id: \.offset) { _, entry in
-          Button(entry.0, action: entry.1)
+          Button(routerLocalized(entry.0), action: entry.1)
             .buttonStyle(.borderless)
             .font(.system(size: 9, weight: .medium))
             .foregroundStyle(routerMint)
@@ -9252,7 +9417,10 @@ private struct TrayView: View {
 
   private var maintenanceHint: String {
     guard let message = store.maintenanceMessage else { return "" }
-    return "\(message)\nIf this keeps failing, run ./bin/support-bundle and share the path."
+    return routerFormat(
+      "%@\nIf this keeps failing, run ./bin/support-bundle and share the path.",
+      message
+    )
   }
 
   private var emptyState: some View {
@@ -9355,7 +9523,11 @@ private struct ProviderSetupRow: View {
   @State private var removalArmed = false
   @State private var armGeneration = 0
 
-  private var credentialLabel: String { setup?.credentialLabel ?? routerLocalized("API key") }
+  // The router spells the label ("API key", "OAuth client secret"); translate
+  // the ones this app knows so the composed buttons below read in Chinese.
+  private var credentialLabel: String {
+    routerLocalized(setup?.credentialLabel ?? "API key")
+  }
 
   var body: some View {
     VStack(alignment: .leading, spacing: 9) {
@@ -9862,14 +10034,27 @@ private struct SavingsSparkBars: View {
           .font(.system(size: 7.5))
           .foregroundStyle(routerMuted)
         Spacer()
-        Text("peak \(ToolResultAgingStats.compactCount(peak))/\(bucketUnit)")
+        Text(
+          routerFormat(
+            "peak %@/%@",
+            ToolResultAgingStats.compactCount(peak),
+            bucketUnit
+          )
+        )
           .font(.system(size: 7.5))
           .foregroundStyle(routerMuted)
           .monospacedDigit()
       }
     }
     .accessibilityElement(children: .ignore)
-    .accessibilityLabel("\(caption), peak \(peak) per \(bucketUnit == "h" ? "hour" : "day")")
+    .accessibilityLabel(
+      routerFormat(
+        "%@, peak %d per %@",
+        caption,
+        peak,
+        routerLocalized(bucketUnit == "h" ? "hour" : "day")
+      )
+    )
   }
 }
 
@@ -10140,7 +10325,7 @@ private struct AllProviderUsageCard: View {
       return kindLabel
     }
     if card.providerID == "openai" {
-      return store.accountUsage?.primary?.durationLabel ?? "Weekly limit"
+      return store.accountUsage?.primary?.durationLabel ?? routerLocalized("Weekly limit")
     }
     if localTotals.requests > 0 || localTotals.tokens > 0 {
       if localTotals.tokens > 0, localTotals.requests > 0 {

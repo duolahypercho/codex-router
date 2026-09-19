@@ -1,3 +1,4 @@
+import { uiText } from "./ui-text";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Search, type LucideIcon } from "lucide-react";
 import type { ViewId } from "./types";
@@ -108,7 +109,7 @@ export function SearchDialog({ activeView, items, onClose, onNavigate }: SearchD
         className="search-dialog"
         role="dialog"
         aria-modal="true"
-        aria-label="Search control center"
+        aria-label={uiText("Search control center")}
       >
         <div className="search-dialog-input-row">
           <Search aria-hidden size={19} strokeWidth={1.65} />
@@ -116,8 +117,8 @@ export function SearchDialog({ activeView, items, onClose, onNavigate }: SearchD
             ref={inputRef}
             type="search"
             value={query}
-            placeholder="Search sections"
-            aria-label="Search control center sections"
+            placeholder={uiText("Search sections")}
+            aria-label={uiText("Search control center sections")}
             aria-controls="control-center-search-results"
             aria-activedescendant={results[selectedIndex]
               ? `control-center-search-${results[selectedIndex].id}`
@@ -132,8 +133,8 @@ export function SearchDialog({ activeView, items, onClose, onNavigate }: SearchD
         </div>
 
         <div className="search-dialog-section-label" id="control-center-search-label">
-          Sections
-          <span aria-live="polite">{results.length} {results.length === 1 ? "result" : "results"}</span>
+          {uiText("Sections")}
+          <span aria-live="polite">{uiText(results.length === 1 ? "{count} result" : "{count} results", { count: results.length })}</span>
         </div>
 
         <div
@@ -162,23 +163,23 @@ export function SearchDialog({ activeView, items, onClose, onNavigate }: SearchD
                   <strong>{item.label}</strong>
                   <small>{item.description}</small>
                 </span>
-                {active ? <span className="search-dialog-current">Current</span> : null}
+                {active ? <span className="search-dialog-current">{uiText("Current")}</span> : null}
               </button>
             );
           })}
 
           {!results.length ? (
             <div className="search-dialog-empty" role="status">
-              <strong>No matching sections</strong>
-              <span>Try a section name or what you want to manage.</span>
+              <strong>{uiText("No matching sections")}</strong>
+              <span>{uiText("Try a section name or what you want to manage.")}</span>
             </div>
           ) : null}
         </div>
 
         <footer className="search-dialog-hints" aria-hidden="true">
-          <span><kbd>↑</kbd><kbd>↓</kbd> Navigate</span>
-          <span><kbd>↵</kbd> Open</span>
-          <span><kbd>esc</kbd> Close</span>
+          <span><kbd>↑</kbd><kbd>↓</kbd> {uiText("Navigate")}</span>
+          <span><kbd>↵</kbd> {uiText("Open")}</span>
+          <span><kbd>esc</kbd> {uiText("Close")}</span>
         </footer>
       </div>
     </div>

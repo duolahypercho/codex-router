@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, mkdirSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import test from "node:test";
@@ -518,7 +518,11 @@ const bridgeSource = String.raw`
       return { accountId, opened: true, surface: "browser", pending: true };
     },
     setSubagentModel: async () => ({ ok: true }),
-    setSubagentEffort: async () => ({ ok: true }),
+    setSubagentEffort: async (slug, effort) => {
+      record("setSubagentEffort", slug, effort);
+      subagents.efforts[slug] = effort;
+      return { ok: true };
+    },
     onNavigation: (listener) => {
       navigationListener = listener;
       return () => { if (navigationListener === listener) navigationListener = undefined; };
@@ -868,7 +872,7 @@ test("the production renderer exposes model discovery and picker actions", { tim
     // that would make it usable.
     assert.equal(await oxFamily.getByRole("button", { name: /^Connect / }).count(), 4);
     const columns = await oxFamily.locator(".pm-route-head > span").allTextContents();
-    assert.deepEqual(columns, ["Account", "Context", "Input", "In picker", "Subagents", "Thinking"]);
+    assert.deepEqual(columns, ["Account", "Context", "Input", "In picker", "Subagents", "Reasoning effort"]);
     await modelSearch.fill("");
 
     // Adding reads every connected provider's catalog at once. Only a provider
@@ -1300,6 +1304,81 @@ test("health polling and core refresh share latest-wins ordering", { timeout: 12
       /version health-2/,
     );
     assert.deepEqual(pageErrors, [], `renderer errors: ${pageErrors.join("; ")}`);
+  } finally {
+    await browser.close();
+    await close();
+  }
+});
+
+test("Chinese interface covers every page, dialogs and search, and survives language changes", { timeout: 120_000 }, async () => {
+  const { url, close } = await serveRenderer();
+  const browser = await chromium.launch({
+    executablePath: chromiumPath,
+    headless: true,
+    args: process.platform === "linux" ? ["--no-sandbox"] : [],
+  });
+  const errors = [];
+  const artifacts = process.env.CODEX_ROUTER_UI_ARTIFACTS;
+  if (artifacts) mkdirSync(artifacts, { recursive: true });
+  try {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 840 }, locale: "en-US" });
+    page.setDefaultTimeout(10_000);
+    page.on("pageerror", error => errors.push(error.message));
+    await page.goto(url);
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    await page.getByRole("combobox", { name: "Interface language" }).selectOption("zh-CN");
+    await page.getByRole("heading", { level: 1, name: "设置" }).waitFor();
+    const ids = ["dashboard", "usage", "status", "models", "local", "harness", "context", "settings"];
+    const names = ["总览", "用量", "状态", "模型", "本地", "工具链", "上下文管理", "设置"];
+    for (const [index, id] of ids.entries()) {
+      const nav = page.locator(".primary-nav button").nth(index);
+      assert.match(await nav.innerText(), new RegExp(names[index]));
+      await nav.click();
+      await page.locator(`.page-scroll-${id} h1`).waitFor();
+      assert.match(await page.locator("h1").innerText(), /[\u3400-\u9fff]/, `${id} heading should be Chinese`);
+      await page.locator(".app-loading-skeleton").waitFor({ state: "detached" });
+      const visibleText = await page.locator("body").innerText();
+      assert.doesNotMatch(visibleText, /Rolling window|Monthly credits|Daily DIEM allowance/, `${id} has an untranslated account label`);
+      assert.doesNotMatch(visibleText, /\{(?:count|name|label|title|period|hours)\}/, `${id} has an unexpanded translation`);
+      assert.equal(await page.getByRole("button", { name: "Refresh all data", exact: true }).count(), 0);
+      assert.equal(await page.getByRole("button", { name: "刷新所有数据", exact: true }).count(), 1);
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, `${id} overflows the window`);
+      if (artifacts) {
+        await page.screenshot({ path: path.join(artifacts, `${id}-zh.png`) });
+        writeFileSync(path.join(artifacts, `${id}-zh.txt`), visibleText);
+      }
+    }
+    await page.locator(".primary-nav button").nth(3).click();
+    const family = page.locator(".pm-family-row").filter({ hasText: "DeepSeek Chat" });
+    await family.locator(".pm-family-open").click();
+    await family.locator(".pm-effort-trigger").click();
+    await family.getByRole("menuitemradio", { name: "高 (high)", exact: true }).click();
+    await page.waitForFunction(() => window.routerControlTest.calls().some(call => call.name === "setSubagentEffort" && call.args[1] === "high"));
+    await page.getByRole("button", { name: "添加模型", exact: true }).click();
+    const addDialog = page.getByRole("dialog", { name: "添加模型", exact: true });
+    await addDialog.waitFor();
+    await addDialog.getByRole("button", { name: "关闭对话框", exact: true }).click();
+    await page.locator(".primary-nav button").nth(7).click();
+    await page.getByRole("button", { name: "运行诊断修复", exact: true }).click();
+    await page.getByRole("dialog", { name: "运行诊断修复？", exact: true }).waitFor();
+    await page.getByRole("button", { name: "取消", exact: true }).click();
+    assert.equal(await page.evaluate(() => window.routerControlTest.calls().filter(call => call.name === "repairInstall").length), 0, "canceling the localized dialog must not perform maintenance");
+    await page.getByRole("button", { name: "搜索控制中心", exact: true }).click();
+    const search = page.getByRole("searchbox", { name: "搜索控制中心页面" });
+    await search.fill("模型");
+    await page.getByRole("dialog", { name: "搜索控制中心" }).getByRole("option", { name: /模型/ }).first().waitFor();
+    await search.fill("不存在的页面xyz");
+    await page.getByText("没有匹配的页面", { exact: true }).waitFor();
+    await search.press("Escape");
+    await page.getByRole("combobox", { name: "界面语言" }).selectOption("en");
+    await page.getByRole("heading", { level: 1, name: "Settings" }).waitFor();
+    await page.getByText("Router online", { exact: true }).waitFor();
+    await page.getByRole("combobox", { name: "Interface language" }).selectOption("zh-CN");
+    await page.reload();
+    await page.getByRole("heading", { level: 1, name: "设置" }).waitFor();
+    assert.equal(await page.locator("html").getAttribute("lang"), "zh-CN");
+    assert.equal(await page.getByRole("combobox", { name: "界面语言" }).inputValue(), "zh-CN");
+    assert.deepEqual(errors, []);
   } finally {
     await browser.close();
     await close();

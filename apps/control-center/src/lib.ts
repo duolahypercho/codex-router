@@ -1,3 +1,4 @@
+import { uiText, uiLocale } from "./ui-text.ts";
 import type { UsageBucket, UsageMetric } from "./types";
 
 export type AccountBucketSource = "account" | "router-fallback";
@@ -5,34 +6,34 @@ export type AccountDisplayBucket = UsageBucket & { displaySource: AccountBucketS
 
 export function compactNumber(value: number | null | undefined): string {
   const number = Math.max(0, Number(value) || 0);
-  if (number < 1_000) return Math.round(number).toLocaleString("en-US");
+  if (number < 1_000) return Math.round(number).toLocaleString(uiLocale());
   if (number < 1_000_000) return `${trim(number / 1_000, number < 10_000 ? 1 : 0)}k`;
   if (number < 1_000_000_000) return `${trim(number / 1_000_000, number < 10_000_000 ? 1 : 0)}m`;
   return `${trim(number / 1_000_000_000, number < 10_000_000_000 ? 1 : 0)}b`;
 }
 
 export function exactNumber(value: number | null | undefined): string {
-  return Math.max(0, Math.round(Number(value) || 0)).toLocaleString("en-US");
+  return Math.max(0, Math.round(Number(value) || 0)).toLocaleString(uiLocale());
 }
 
 export function formatContext(value: number | null | undefined): string {
-  if (!Number.isFinite(Number(value)) || Number(value) <= 0) return "Managed";
-  return `${compactNumber(Number(value))} tokens`;
+  if (!Number.isFinite(Number(value)) || Number(value) <= 0) return uiText("Managed");
+  return uiText("{count} tokens", { count: compactNumber(Number(value)) });
 }
 
 export function formatBytesGb(value: number | null | undefined): string {
-  if (!Number.isFinite(Number(value))) return "Size unknown";
+  if (!Number.isFinite(Number(value))) return uiText("Size unknown");
   return `${Number(value).toFixed(Number(value) < 10 ? 1 : 0)} GB`;
 }
 
 export function formatDateTime(value: number | string | null | undefined): string {
-  if (value === null || value === undefined || value === "") return "Not reported";
+  if (value === null || value === undefined || value === "") return uiText("Not reported");
   const numeric = Number(value);
   const date = Number.isFinite(numeric)
     ? new Date(numeric < 10_000_000_000 ? numeric * 1_000 : numeric)
     : new Date(value);
-  if (Number.isNaN(date.getTime())) return "Not reported";
-  return new Intl.DateTimeFormat("en-US", {
+  if (Number.isNaN(date.getTime())) return uiText("Not reported");
+  return new Intl.DateTimeFormat(uiLocale(), {
     month: "short",
     day: "numeric",
     hour: "numeric",
@@ -42,19 +43,19 @@ export function formatDateTime(value: number | string | null | undefined): strin
 
 export function formatDuration(milliseconds: number | null | undefined): string {
   const value = Math.max(0, Number(milliseconds) || 0);
-  if (value < 1_000) return `${Math.round(value)} ms`;
-  if (value < 60_000) return `${(value / 1_000).toFixed(value < 10_000 ? 1 : 0)} sec`;
-  return `${Math.floor(value / 60_000)}m ${Math.round((value % 60_000) / 1_000)}s`;
+  if (value < 1_000) return uiText("{count} ms", { count: Math.round(value) });
+  if (value < 60_000) return uiText("{count} sec", { count: (value / 1_000).toFixed(value < 10_000 ? 1 : 0) });
+  return uiText("{minutes}m {seconds}s", { minutes: Math.floor(value / 60_000), seconds: Math.round((value % 60_000) / 1_000) });
 }
 
 export function metricValue(metric: UsageMetric): string {
   if (metric.kind === "balance" && Number.isFinite(Number(metric.value))) {
     return formatBalance(Number(metric.value), metric.currency);
   }
-  if (Number.isFinite(Number(metric.remainingPercent))) return `${Math.round(Number(metric.remainingPercent))}% left`;
-  if (Number.isFinite(Number(metric.usedPercent))) return `${Math.round(100 - Number(metric.usedPercent))}% left`;
-  if (Number.isFinite(Number(metric.remaining))) return `${compactNumber(Number(metric.remaining))} left`;
-  return "Reported";
+  if (Number.isFinite(Number(metric.remainingPercent))) return uiText("{count}% left", { count: Math.round(Number(metric.remainingPercent)) });
+  if (Number.isFinite(Number(metric.usedPercent))) return uiText("{count}% left", { count: Math.round(100 - Number(metric.usedPercent)) });
+  if (Number.isFinite(Number(metric.remaining))) return uiText("{count} left", { count: compactNumber(Number(metric.remaining)) });
+  return uiText("Reported");
 }
 
 export function remainingPercent(metric: UsageMetric): number | null {
@@ -115,7 +116,7 @@ export function classNames(...values: Array<string | false | null | undefined>):
 function formatBalance(value: number, currency?: string): string {
   const code = typeof currency === "string" && currency.trim() ? currency.trim() : "USD";
   try {
-    return new Intl.NumberFormat("en-US", {
+    return new Intl.NumberFormat(uiLocale(), {
       style: "currency",
       currency: code,
       maximumFractionDigits: 2,
@@ -123,7 +124,7 @@ function formatBalance(value: number, currency?: string): string {
   } catch {
     // Venice reports a DIEM ledger that is not an ISO 4217 code. Intl throws
     // RangeError, React unmounts Usage, and the operator sees a white screen.
-    return `${new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 }).format(value)} ${code}`;
+    return `${new Intl.NumberFormat(uiLocale(), { maximumFractionDigits: 2 }).format(value)} ${code}`;
   }
 }
 

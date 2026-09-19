@@ -1,3 +1,4 @@
+import { uiText } from "./ui-text";
 import { useEffect, useId, useRef, type ButtonHTMLAttributes, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { AlertTriangle, CheckCircle2, RefreshCw, Search, X } from "lucide-react";
@@ -26,13 +27,13 @@ export function Toggle({ checked, onChange, disabled = false, label }: { checked
   );
 }
 
-export function SearchField({ value, onChange, placeholder = "Search" }: { value: string; onChange: (value: string) => void; placeholder?: string }) {
+export function SearchField({ value, onChange, placeholder = uiText("Search") }: { value: string; onChange: (value: string) => void; placeholder?: string }) {
   return (
     <label className="search-field">
       <Search aria-hidden size={14} strokeWidth={1.7} />
       <input value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} />
       {value ? (
-        <button type="button" aria-label="Clear search" onClick={() => onChange("")}>
+        <button type="button" aria-label={uiText("Clear search")} onClick={() => onChange("")}>
           <X aria-hidden size={13} strokeWidth={1.7} />
         </button>
       ) : null}
@@ -51,9 +52,9 @@ export function PageHeader({ eyebrow, title, description, onRefresh, refreshing,
       <div className="page-actions">
         {actions}
         {onRefresh ? (
-          <Button variant="ghost" aria-label={`Refresh ${title}`} onClick={onRefresh} disabled={refreshing}>
+          <Button variant="ghost" aria-label={uiText("Refresh {title}", { title })} onClick={onRefresh} disabled={refreshing}>
             <RefreshCw aria-hidden size={14} strokeWidth={1.7} className={refreshing ? "spin" : ""} />
-            Refresh
+            {uiText("Refresh")}
           </Button>
         ) : null}
       </div>
@@ -98,7 +99,7 @@ export function EmptyState({ icon, title, body, action }: { icon?: ReactNode; ti
   );
 }
 
-export function LoadingState({ label = "Loading router data" }: { label?: string }) {
+export function LoadingState({ label = uiText("Loading router data") }: { label?: string }) {
   return (
     <div className="loading-state app-loading-skeleton" role="status" aria-live="polite">
       <span className="visually-hidden">{label}</span>
@@ -122,7 +123,7 @@ export function SkeletonBlock({ className = "" }: { className?: string }) {
   return <i className={classNames("skeleton-block", className)} aria-hidden="true" />;
 }
 
-export function CatalogSkeleton({ label = "Loading provider catalog" }: { label?: string }) {
+export function CatalogSkeleton({ label = uiText("Loading provider catalog") }: { label?: string }) {
   return (
     <div className="catalog-skeleton" role="status" aria-live="polite">
       <span className="visually-hidden">{label}</span>
@@ -137,7 +138,7 @@ export function CatalogSkeleton({ label = "Loading provider catalog" }: { label?
   );
 }
 
-export function PanelSkeleton({ label = "Loading content", variant = "list", count = 4 }: { label?: string; variant?: "list" | "cards"; count?: number }) {
+export function PanelSkeleton({ label = uiText("Loading content"), variant = "list", count = 4 }: { label?: string; variant?: "list" | "cards"; count?: number }) {
   return (
     <div className={classNames("panel-skeleton", `panel-skeleton-${variant}`)} role="status" aria-live="polite">
       <span className="visually-hidden">{label}</span>
@@ -241,7 +242,7 @@ export function Dialog({ open, title, description, children, onClose }: { open: 
             <h2 id={titleId}>{title}</h2>
             {description ? <p id={descriptionId}>{description}</p> : null}
           </div>
-          <button className="icon-button" type="button" aria-label="Close dialog" onClick={onClose}>
+          <button className="icon-button" type="button" aria-label={uiText("Close dialog")} onClick={onClose}>
             <X aria-hidden size={16} strokeWidth={1.7} />
           </button>
         </header>

@@ -24,6 +24,10 @@ import {
 } from "./lifecycle-state.mjs";
 import { controlCenterDestination, controlCenterNavigationURL } from "./navigation.mjs";
 
+import { interfaceMenuTemplates, isInterfaceLanguage } from "./interface-menu.mjs";
+
+let interfaceLanguage = "en";
+
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const DEVELOPMENT_ICON = path.resolve(HERE, "..", "assets", "icon.png");
 let mainWindow;
@@ -269,11 +273,7 @@ function createTray() {
   const createdTray = new Tray(image);
   try {
     createdTray.setToolTip("Codex Router");
-    createdTray.setContextMenu(Menu.buildFromTemplate([
-      { label: "Open Control Center", click: showWindow },
-      { type: "separator" },
-      { label: "Quit Codex Router", click: () => app.quit() },
-    ]));
+    createdTray.setContextMenu(Menu.buildFromTemplate(interfaceMenuTemplates(interfaceLanguage, { showWindow, quit: () => app.quit() }).tray));
     createdTray.on("click", showWindow);
   } catch (error) {
     createdTray.destroy();
@@ -281,6 +281,12 @@ function createTray() {
   }
   tray = createdTray;
   return tray;
+}
+
+function updateInterfaceMenus() {
+  const templates = interfaceMenuTemplates(interfaceLanguage, { showWindow, quit: () => app.quit() });
+  if (process.platform === "darwin") Menu.setApplicationMenu(Menu.buildFromTemplate(templates.application));
+  if (tray && !tray.isDestroyed()) tray.setContextMenu(Menu.buildFromTemplate(templates.tray));
 }
 
 function trayIsAvailable() {
@@ -335,6 +341,8 @@ if (primaryInstance && !quitForUpdateInvocation) {
   // lock. The ready bit is raised only after the full Electron boundary is set.
   publishLifecycleState();
   app.whenReady().then(() => {
+    interfaceLanguage = /^zh/i.test(app.getLocale()) ? "zh-CN" : "en";
+    updateInterfaceMenus();
     if (process.platform !== "darwin") {
       Menu.setApplicationMenu(null);
     }
@@ -375,6 +383,11 @@ if (primaryInstance && !quitForUpdateInvocation) {
       BrowserWindow,
       shell,
       senderGuard: trustedRendererSender,
+    });
+    ipcMain.on("router-control:interface-language", (event, language) => {
+      if (!trustedRendererSender(event) || !isInterfaceLanguage(language)) return;
+      interfaceLanguage = language;
+      updateInterfaceMenus();
     });
     ipcMain.on("router-control:navigation-ready", (event) => {
       if (!trustedRendererSender(event)) return;

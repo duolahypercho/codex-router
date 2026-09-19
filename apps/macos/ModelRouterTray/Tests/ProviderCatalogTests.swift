@@ -123,17 +123,31 @@ struct ProviderCatalogTests {
   func bulkReloadPreservesFailures() {
     var failed = ProviderCatalogReloadBatch()
     failed.record(.failed("deepseek: provider unavailable"), sourceID: "deepseek")
-    #expect(failed.message == "Catalog reload failed: deepseek: provider unavailable")
+    // Expectation built from the same table as the message: the batch reports
+    // through `routerFormat`, so a hard-coded English string would only pass
+    // on a machine whose preferred language is English.
+    #expect(
+      failed.message
+        == routerFormat("Catalog reload failed: %@", "deepseek: provider unavailable")
+    )
 
     var partial = ProviderCatalogReloadBatch()
     partial.record(.loaded, sourceID: "deepseek")
     partial.record(.failed("opencode-go: unauthorized"), sourceID: "opencode-go")
-    #expect(partial.message.contains("Reloaded 1 catalog; 1 failed"))
-    #expect(partial.message.contains("opencode-go: unauthorized"))
+    #expect(
+      partial.message
+        == routerFormat("%d reloaded; %d failed: %@", 1, 1, "opencode-go: unauthorized")
+    )
 
     var superseded = ProviderCatalogReloadBatch()
     superseded.record(.superseded, sourceID: "opencode-zen")
-    #expect(superseded.message.contains("superseded by a credential change"))
+    #expect(
+      superseded.message
+        == routerFormat(
+          "Catalog reload failed: %@",
+          routerFormat("%@: reload superseded by a credential change", "opencode-zen")
+        )
+    )
   }
 
   // MARK: - Decoding the discovery payload

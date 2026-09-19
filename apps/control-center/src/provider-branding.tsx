@@ -1,3 +1,4 @@
+import { uiText } from "./ui-text";
 import type { CSSProperties } from "react";
 
 import antigravityLogo from "./assets/providers/antigravity.png";
@@ -238,7 +239,7 @@ export function BrandLogo({ brand, size = "medium", className = "" }: {
 }
 
 function fallbackBrand(name: string, seed: string): ProviderBrand {
-  const cleanName = name.trim() || "Model provider";
+  const cleanName = name.trim() || uiText("Model provider");
   let hash = 0;
   for (const character of seed) hash = ((hash << 5) - hash + character.charCodeAt(0)) | 0;
   return {

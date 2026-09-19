@@ -1151,7 +1151,10 @@ test("electron boundary does not enable node integration or shell argv", async (
   assert.match(main, /else openRequests\.requestOpen\(\)/);
   assert.match(main, /new Tray\(/);
   assert.match(main, /createdTray\.on\("click", showWindow\)/);
-  assert.match(main, /Open Control Center/);
+  assert.match(main, /interfaceMenuTemplates\(interfaceLanguage/);
+  const menu = await readFile(new URL("../apps/control-center/electron/interface-menu.mjs", import.meta.url), "utf8");
+  assert.match(menu, /Open Control Center/);
+  assert.match(main, /trustedRendererSender\(event\) \|\| !isInterfaceLanguage\(language\)/);
   assert.match(main, /CODEX_ROUTER_EMBEDDED_CONTROL_CENTER/);
   assert.match(main, /image\.isEmpty\(\)[\s\S]*tray icon could not be loaded/);
   assert.match(main, /const trayAvailable = trayIsAvailable\(\)/);
@@ -1216,7 +1219,7 @@ test("electron boundary does not enable node integration or shell argv", async (
   assert.match(styles, /-webkit-app-region:\s*drag/);
   assert.match(styles, /-webkit-app-region:\s*no-drag/);
   for (const label of ["Close window", "Minimize window", "Maximize or restore window"]) {
-    assert.match(renderer, new RegExp(`aria-label=\\"${label}\\"`));
+    assert.ok(renderer.includes(`aria-label={uiText("${label}")}`));
   }
   const runner = await readFile(new URL("../apps/control-center/electron/command-runner.mjs", import.meta.url), "utf8");
   assert.match(runner, /shell:\s*false/);
@@ -1424,7 +1427,7 @@ test("the control center health rows match the tray's on absent and Grok depende
   // about, so an id missing from `degraded` is Ready rather than Unknown.
   assert.match(source, /routerOk\?: boolean/);
   assert.match(source, /if \(!offline && routerOk === true\) \{[\s\S]*?state: "ready"/);
-  assert.match(source, /dependencyRow\("gateway", "Gateway", health\?\.gateway, degraded, routerOk\)/);
+  assert.match(source, /dependencyRow\("gateway", uiText\("Gateway"\), health\?\.gateway, degraded, routerOk\)/);
 
   // The Grok OAuth forwarder is a fifth local port with its own probe, and
   // both surfaces enumerate forwarders explicitly, so it has to be listed.
@@ -1602,9 +1605,9 @@ test("the model directory combines provider setup with de-duplicated model-famil
   assert.match(models, /saveProviderCredential/);
   assert.match(models, /setProviderEnabled/);
   assert.match(models, /setPickerModel/);
-  assert.match(models, /"Show all router models", \(\) => api\.setPickerModels\(true\)/);
-  assert.match(models, /<span>Turn all on<\/span>/);
-  assert.match(models, /<span>Turn all off<\/span>/);
+  assert.match(models, /uiText\("Show all router models"\), \(\) => api\.setPickerModels\(true\)/);
+  assert.match(models, /<span>\{uiText\("Turn all on"\)\}<\/span>/);
+  assert.match(models, /<span>\{uiText\("Turn all off"\)\}<\/span>/);
   assert.match(models, /invalidateCatalogs\(\);[\s\S]{0,180}try \{[\s\S]*finally \{\s*invalidateCatalogs\(\)/);
   assert.match(models, /const generation = beginCatalogRequest/);
   assert.match(models, /catalogRequestIsCurrent\(catalogRequestGenerations\.current, sourceId, generation\)/);
@@ -1615,7 +1618,7 @@ test("the model directory combines provider setup with de-duplicated model-famil
   assert.match(models, /className="panel-section pm-connections"/);
   assert.match(models, /className="pm-chip"/);
   assert.match(models, /className="pm-connection-menu"/);
-  assert.match(models, /\{connected\.length\} of \{directory\.length\} connected/);
+  assert.match(models, /uiText\("\{connected\} of \{total\} connected", \{ connected: connected\.length, total: directory\.length \}\)/);
   assert.match(models, /Connect provider/);
   assert.doesNotMatch(models, /className="pm-provider-row"|className="pm-provider-summary"/);
   assert.doesNotMatch(models, /<StatStrip/);
@@ -1630,13 +1633,13 @@ test("the model directory combines provider setup with de-duplicated model-famil
   assert.match(models, /const readyRows = visibleRows\.filter\(\(row\) => row\.usable\.length\)/);
   assert.match(models, /const blockedRows = visibleRows\.filter\(\(row\) => !row\.usable\.length\)/);
   // Only the one split a switch cannot change keeps a heading.
-  assert.match(models, /<span>Needs a provider<\/span>/);
+  assert.match(models, /<span>\{uiText\("Needs a provider"\)\}<\/span>/);
   assert.match(models, /className="pm-group-heading"/);
   assert.match(providerModelsCss, /\.pm-group-heading\s*\{/);
 
   // The switch states its own value, and the disclosure sits at the far left
   // so it cannot read as part of that switch.
-  assert.match(models, /className="pm-family-state" aria-hidden>\{on \? "On" : "Off"\}/);
+  assert.match(models, /className="pm-family-state" aria-hidden>\{on \? uiText\("On"\) : uiText\("Off"\)\}/);
   assert.match(models, /<ChevronDown className="pm-accordion-chevron"[\s\S]{0,80}<BrandLogo/);
   assert.match(providerModelsCss, /\.pm-family-open \{[^}]*grid-template-columns: 14px 38px/s);
 
@@ -1647,7 +1650,7 @@ test("the model directory combines provider setup with de-duplicated model-famil
   // The count describes the visible list, not the whole catalogue.
   assert.match(models, /modelSearch \|\| statusFilter !== "all"[\s\S]{0,120}visibleRows\.length/);
   assert.match(models, /\{crowded \? \(/);
-  assert.match(models, /aria-label="More model actions"/);
+  assert.match(models, /aria-label=\{uiText\("More model actions"\)\}/);
 
   // The provider chip follows the same judgement, counted in providers rather
   // than rows, and composes with the search and status filters instead of
@@ -1655,7 +1658,7 @@ test("the model directory combines provider setup with de-duplicated model-famil
   assert.match(models, /const CROWDED_PROVIDERS = 3/);
   assert.match(models, /const providerCrowded = filterProviders\.length > CROWDED_PROVIDERS/);
   assert.match(models, /\{providerCrowded \? \([\s\S]{0,400}className="pm-filter-trigger"/);
-  assert.match(models, /aria-label="Filter models by provider"/);
+  assert.match(models, /aria-label=\{uiText\("Filter models by provider"\)\}/);
   assert.match(models, /role="menuitemradio"\s*aria-checked=\{activeProviderFilter === entry\.id\}/);
   assert.match(models, /activeProviderFilter !== "all" && !family\.routes\.some\(\(model\) => model\.provider === activeProviderFilter\)/);
   assert.match(models, /modelSearch \|\| statusFilter !== "all" \|\| activeProviderFilter !== "all"[\s\S]{0,120}visibleRows\.length/);
@@ -1665,7 +1668,7 @@ test("the model directory combines provider setup with de-duplicated model-famil
 
   // Nothing to connect means nothing to browse, so the page asks for that
   // first instead of showing an empty list behind a disabled button.
-  assert.match(models, /title="Connect a provider to get started"/);
+  assert.match(models, /title=\{uiText\("Connect a provider to get started"\)\}/);
 
   // A single-route model already showed its identity in the row above, so the
   // panel carries only what the summary left out.
@@ -1674,14 +1677,14 @@ test("the model directory combines provider setup with de-duplicated model-famil
   // menu doubled every row's height and repeated "Thinking" down the list.
   assert.match(models, /function SubagentToggle\(/);
   assert.match(models, /function SubagentEffort\(/);
-  assert.match(models, /<span>Thinking<\/span>/);
+  assert.match(models, /<span>\{uiText\("Reasoning effort"\)\}<\/span>/);
   assert.match(providerModelsCss, /grid-template-columns: minmax\(0, 1fr\) 78px 92px 70px 74px 104px/);
   // The effort control uses this page's own menu: a native select's popup is
   // shifted by the macOS checkmark gutter, which reads as misaligned in a table.
   assert.match(providerModelsCss, /\.pm-effort-menu \{/);
   assert.match(models, /className="pm-effort-trigger"/);
   assert.doesNotMatch(models, /<select[\s\S]{0,200}subagent thinking effort/);
-  assert.match(models, /<dt>Model id<\/dt>/);
+  assert.match(models, /<dt>\{uiText\("Model id"\)\}<\/dt>/);
   assert.match(providerModelsCss, /\.pm-model-details\s*\{/);
   assert.match(models, /<dd className="pm-model-details-controls">/);
   assert.match(
@@ -1694,7 +1697,7 @@ test("the model directory combines provider setup with de-duplicated model-famil
   // stand in meanwhile, or the click reads as having done nothing at all.
   assert.match(models, /setPendingModels\(\(current\) => addPendingCatalogModels\(current, entry\.id, selected\)\)/);
   assert.match(models, /<PendingModelRows slugs=\{pendingSlugs\} \/>/);
-  assert.match(models, /<small>Adding…<\/small>/);
+  assert.match(models, /<small>\{uiText\("Adding…"\)\}<\/small>/);
   // Cleared in a finally: a placeholder surviving a failed add would claim the
   // model arrived.
   assert.match(models, /\} finally \{[\s\S]{0,400}setPendingModels\(/);
@@ -1746,7 +1749,7 @@ test("the model directory combines provider setup with de-duplicated model-famil
   assert.match(models, /discoverProviderModels\(sourceId, \{ refresh \}\)/);
   assert.match(models, /onReload=\{\(\) => void loadConnectedCatalogs\(\{ refresh: true \}\)\}/);
   // A stored list can be a day old, so the dialog says when it was read.
-  assert.match(models, /read \$\{formatDateTime\(lastRead\)\}/);
+  assert.match(models, /read \{time\}.*time: formatDateTime\(lastRead\)/);
   assert.match(models, /Lists are stored locally/);
   assert.match(providerModelsCss, /\.pm-add-models\s*\{/);
   assert.match(providerModelsCss, /\.dialog-panel:has\(\.pm-add-models\)/);
@@ -2015,7 +2018,7 @@ test("Harness page renders fixed client rows backed by the shared session index"
   assert.match(harness, /api\.connectCursor\(cursorHostname\.trim\(\) \|\| undefined\)/);
   assert.match(harness, /api\.disconnectCursor\(\)/);
   assert.match(harness, /api\.disconnectHarness\(harness\.id\)/);
-  assert.match(harness, /Route \$\{harness\.displayName\} through Codex Router/);
+  assert.match(harness, /uiText\("Route \{name\} through Codex Router", \{ name: harness\.displayName \}\)/);
   assert.match(harness, /Custom API keys/);
   assert.match(harness, /Use an existing Cloudflare hostname/);
   assert.match(harness, /lhc-harness-toolbar/);
@@ -2208,12 +2211,12 @@ test("detached tray acceptance is labeled started, never completed", async () =>
     .replaceAll("\r\n", "\n");
   const action = source.slice(source.indexOf("const runAction"), source.indexOf("const t = useCallback"));
   assert.match(action, /accepted[^\n]+=== true/);
-  assert.match(action, /`\$\{label\} started\.`/);
+  assert.match(action, /uiText\("\{label\} started\.", \{ label \}\)/);
   const acceptedStart = action.indexOf("if (\n        actionResult?.accepted === true");
   assert.notEqual(acceptedStart, -1, "runAction should keep a dedicated detached-acceptance branch");
   const accepted = action.slice(acceptedStart, action.indexOf("return;", acceptedStart));
   assert.doesNotMatch(accepted, /status: "completed"/);
-  assert.match(source, /<Badge tone="neutral">Started<\/Badge>/);
+  assert.match(source, /<Badge tone="neutral">\{uiText\("Started"\)\}<\/Badge>/);
 });
 
 test("local model mutations cover service readiness and validate consent flags", async () => {

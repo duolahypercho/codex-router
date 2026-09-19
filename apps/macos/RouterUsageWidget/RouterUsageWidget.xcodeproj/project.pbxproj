@@ -13,6 +13,7 @@
 		9570D8A02D513BE5DE2D77EB /* RouterUsageWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = D78E79087D60B4EFCF9962AC /* RouterUsageWidget.swift */; };
 		C304C565C8F5D23A59255FD8 /* RouterWidgetSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = A061208B3EDCA72A7E3F0467 /* RouterWidgetSnapshot.swift */; };
 		C4503753924917B313C60C0F /* RouterUsageWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = D78E79087D60B4EFCF9962AC /* RouterUsageWidget.swift */; };
+		F0BF94D36106DE8E810A3E24 /* Localizable.strings in Resources */ = {isa = PBXBuildFile; fileRef = 79718EB2FFF1BBA0A727C006 /* Localizable.strings */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -20,6 +21,7 @@
 		2D159516C2AAE8505FF250B6 /* RouterUsageWidgetTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RouterUsageWidgetTests.swift; sourceTree = "<group>"; };
 		3B7A9C255277C9B13D5B2D66 /* RouterUsageWidgetTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = RouterUsageWidgetTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		51F94E830DB20400BCED3A13 /* RouterUsageWidget.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = RouterUsageWidget.entitlements; sourceTree = "<group>"; };
+		79718EB2FFF1BBA0A727C006 /* Localizable.strings */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = Localizable.strings; path = "zh-Hans.lproj/Localizable.strings"; sourceTree = "<group>"; };
 		9BA4BFE9410EB4F466D7308D /* RouterUsageWidget.local.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = RouterUsageWidget.local.entitlements; sourceTree = "<group>"; };
 		A061208B3EDCA72A7E3F0467 /* RouterWidgetSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = RouterWidgetSnapshot.swift; path = ../ModelRouterTray/Sources/RouterWidgetSnapshot.swift; sourceTree = "<group>"; };
 		AE16D64298A8C24205D17F37 /* RouterUsageWidgetBundle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RouterUsageWidgetBundle.swift; sourceTree = "<group>"; };
@@ -32,6 +34,7 @@
 			isa = PBXGroup;
 			children = (
 				D2096A00DB21B9FC5A7B4888 /* Info.plist */,
+				79718EB2FFF1BBA0A727C006 /* Localizable.strings */,
 				51F94E830DB20400BCED3A13 /* RouterUsageWidget.entitlements */,
 				9BA4BFE9410EB4F466D7308D /* RouterUsageWidget.local.entitlements */,
 				D78E79087D60B4EFCF9962AC /* RouterUsageWidget.swift */,
@@ -83,6 +86,7 @@
 			buildConfigurationList = 539CC25A292662C99DC9B671 /* Build configuration list for PBXNativeTarget "RouterUsageWidget" */;
 			buildPhases = (
 				834E620A9FB4135B19E5402A /* Sources */,
+				DCE03EA458002D831FDDF25A /* Resources */,
 			);
 			buildRules = (
 			);
@@ -133,6 +137,7 @@
 			knownRegions = (
 				Base,
 				en,
+				"zh-Hans",
 			);
 			mainGroup = C755F09722063043E67E4E4C;
 			minimizedProjectReferenceProxies = 1;
@@ -145,6 +150,17 @@
 			);
 		};
 /* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		DCE03EA458002D831FDDF25A /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				F0BF94D36106DE8E810A3E24 /* Localizable.strings in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		14D2580CC2976D90C3F09667 /* Sources */ = {

@@ -155,7 +155,7 @@ const EN = {
   "settings.appearance.dark": "Dark",
   "settings.appearance.darkDetail": "Low-glare control room",
   "settings.language.title": "Interface language",
-  "settings.language.detail": "Applies to this window only. The router itself and model replies are unaffected.",
+  "settings.language.detail": "Applies to this window; Simplified Chinese also localizes its menus. The router itself and model replies are unaffected.",
   "settings.language.aria": "Interface language",
 
   "settings.maintenance.title": "Maintenance",
@@ -253,11 +253,11 @@ const ZH: Overlay = {
   "settings.action.restart": "重启",
   "settings.action.stop": "停止",
 
-  "settings.context.title": "Token maxxing",
+  "settings.context.title": "Token 精简",
   "settings.context.description": "压缩已使用的旧结果，并仅在路由上下文压缩期间应用确定性的 RTK 风格输出精简。",
-  "settings.context.enable.title": "启用 Token maxxing",
+  "settings.context.enable.title": "启用 token 精简",
   "settings.context.enable.detail": "适用于外部路由模型；压缩超过 32 KiB 的已处理结果，RTK 精简仅在路由压缩时运行。默认关闭。",
-  "settings.context.native.title": "同时压缩原生模型",
+  "settings.context.native.title": "同时压缩原生请求的结果",
   "settings.context.native.detail": "将压缩扩展到已登录的 ChatGPT 流量。",
   "settings.context.ttl.title": "原始结果保留",
   "settings.context.ttl.detail": "压缩前会先归档未改动的原始结果。",
@@ -309,7 +309,7 @@ const ZH: Overlay = {
   "settings.appearance.dark": "深色",
   "settings.appearance.darkDetail": "低眩光的控制室",
   "settings.language.title": "界面语言",
-  "settings.language.detail": "仅作用于本窗口。路由器本身与模型回复不受影响。",
+  "settings.language.detail": "应用于控制中心及其菜单。路由器本身与模型回复不受影响。",
   "settings.language.aria": "界面语言",
 
   "settings.maintenance.title": "维护",
@@ -1099,11 +1099,14 @@ export function languageOption(language: LanguageId) {
 // A stored answer is the operator's own and is returned verbatim. Only when
 // nobody has answered do we read the browser's preference, matching how the
 // retained read-only browser panel picks a first language.
+let selectedLanguage: LanguageId | undefined;
+
 export function detectLanguage(): LanguageId {
   try {
     const stored = localStorage.getItem(LANGUAGE_STORAGE_KEY);
     if (isLanguageId(stored)) return stored;
   } catch { /* storage can be unavailable; fall through to the browser hint */ }
+  if (selectedLanguage) return selectedLanguage;
   const navigatorLanguage = typeof navigator === "undefined" ? "" : navigator.language || "";
   if (/^zh/i.test(navigatorLanguage)) return "zh-CN";
   const prefix = navigatorLanguage.split("-")[0]?.toLowerCase();
@@ -1111,6 +1114,7 @@ export function detectLanguage(): LanguageId {
 }
 
 export function storeLanguage(language: LanguageId): void {
+  selectedLanguage = language;
   try {
     localStorage.setItem(LANGUAGE_STORAGE_KEY, language);
   } catch { /* a rejected write only costs the preference on next launch */ }

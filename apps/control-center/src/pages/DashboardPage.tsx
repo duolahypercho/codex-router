@@ -13,6 +13,8 @@ import { Badge, Button, EmptyState, InlineNotice, PageHeader, PanelSkeleton, Sec
 import { ProviderLogo } from "../provider-branding";
 import { ServiceHealthPanel } from "../ServiceHealth";
 import { useOptimisticValues, type RunAction } from "../useOptimisticValues";
+import { detectLanguage } from "../i18n";
+import { uiLocale, uiText } from "../ui-text";
 import {
   classNames,
   compactNumber,
@@ -164,7 +166,8 @@ export function DashboardPage({
   // Every prop can be undefined on first paint and after a failed refresh, so
   // each tile below separates three cases: still loading, reported-but-absent,
   // and a genuine zero. A missing field must never render as 0.
-  const pending = refreshing ? "Checking" : "Unavailable";
+  const language = detectLanguage();
+  const pending = refreshing ? uiText("Checking") : uiText("Unavailable");
 
   const activity = health?.activity;
   const active: ActiveRequest[] = activity?.active ?? [];
@@ -213,7 +216,7 @@ export function DashboardPage({
   const requests24h = reportedRequests24h ?? rollupRequests24h ?? eventRequests24h;
   const usageMeasured = Boolean(providerUsage || target?.usageEvents || eventHours?.length);
 
-  const metrics = useMemo(() => collectMetrics(account, providerUsage), [account, providerUsage]);
+  const metrics = useMemo(() => collectMetrics(account, providerUsage), [account, providerUsage, language]);
   const quotaLoaded = Boolean(account || providerUsage);
   const nextReset = useMemo(() => {
     const now = Date.now();
@@ -250,78 +253,95 @@ export function DashboardPage({
   const tiles: SummaryTile[] = [
     {
       id: "router",
-      label: "Router state",
+      label: uiText("Router state"),
       icon: Activity,
-      value: health ? health.ok ? "Online" : "Offline" : pending,
+      value: health ? health.ok ? uiText("Online") : uiText("Offline") : pending,
       detail: health
         ? health.ok
-          ? `${activityLabel(routerState)}${health.version ? ` · version ${health.version}` : ""}`
-          : health.error || "The local health endpoint did not answer"
-        : refreshing ? "Contacting the local health endpoint" : "Router health has not been read",
+          ? health.version
+            ? uiText("{state} · version {version}", { state: activityLabel(routerState), version: health.version })
+            : activityLabel(routerState)
+          : health.error || uiText("The local health endpoint did not answer")
+        : refreshing ? uiText("Contacting the local health endpoint") : uiText("Router health has not been read"),
       tone: health ? health.ok ? "success" : "danger" : undefined,
       view: "status",
-      viewLabel: "Status",
+      viewLabel: uiText("Status"),
       pending: healthPending,
     },
     {
       id: "live",
-      label: "Live now",
+      label: uiText("Live now"),
       icon: Waypoints,
-      value: !health ? pending : activityMeasured ? exactNumber(liveCount) : "Not measured",
+      value: !health ? pending : activityMeasured ? exactNumber(liveCount) : uiText("Not measured"),
       detail: !health
-        ? "Waiting for the first health response"
+        ? uiText("Waiting for the first health response")
         : activityMeasured
-          ? `${exactNumber(chatCount)} ${plural(chatCount, "chat")} · ${exactNumber(subagents.length)} ${plural(subagents.length, "subagent")}`
-          : "This router build does not report live activity",
+          ? uiText("{chats} · {agents}", {
+              chats: countPhrase(chatCount, "1 chat", "{count} chats"),
+              agents: countPhrase(subagents.length, "1 subagent", "{count} subagents"),
+            })
+          : uiText("This router build does not report live activity"),
       tone: activityMeasured && (liveCount || 0) > 0 ? "accent" : undefined,
       view: "status",
-      viewLabel: "Status",
+      viewLabel: uiText("Status"),
       pending: healthPending,
     },
     {
       id: "tokens",
-      label: "Tokens, last 24h",
+      label: uiText("Tokens, last 24h"),
       icon: CircleGauge,
-      value: !usageMeasured ? pending : tokens24h === null ? "Not measured" : compactNumber(tokens24h),
+      value: !usageMeasured ? pending : tokens24h === null ? uiText("Not measured") : compactNumber(tokens24h),
       detail: !usageMeasured
-        ? "Waiting for router usage telemetry"
+        ? uiText("Waiting for router usage telemetry")
         : tokens24h === null
-          ? "No provider or event reports a rolling 24-hour window"
-          : `${exactNumber(tokens24h)} router tokens${requests24h === null ? "" : ` · ${exactNumber(requests24h)} ${plural(requests24h, "request")}`} · ${reportedTokens24h !== null ? "sum of provider rows" : rollupTokens24h !== null ? "sum of the router's hourly rollup" : "sum of recent event details"}`,
+          ? uiText("No provider or event reports a rolling 24-hour window")
+          : uiText("{tokens} router tokens{requests} · {source}", {
+              tokens: exactNumber(tokens24h),
+              requests: requests24h === null ? "" : ` · ${countPhrase(requests24h, "1 request", "{count} requests")}`,
+              source: uiText(reportedTokens24h !== null ? "sum of provider rows" : rollupTokens24h !== null ? "sum of the router's hourly rollup" : "sum of recent event details"),
+            }),
       view: "usage",
-      viewLabel: "Usage",
+      viewLabel: uiText("Usage"),
       pending: snapshotPending && !providerUsage,
     },
     {
       id: "reset",
-      label: "Next quota reset",
+      label: uiText("Next quota reset"),
       icon: Clock3,
-      value: !quotaLoaded ? pending : nextReset ? resetCountdown(nextReset.resetAt) : "Not reported",
+      value: !quotaLoaded ? pending : nextReset ? resetCountdown(nextReset.resetAt) : uiText("Not reported"),
       detail: !quotaLoaded
-        ? "Waiting for account and provider usage"
+        ? uiText("Waiting for account and provider usage")
         : nextReset
-          ? `${nextReset.entry.provider}, ${nextReset.entry.label} · ${formatDateTime(nextReset.resetAt)}`
-          : "No connected account exposed a reset timestamp",
+          ? uiText("{provider}, {label} · {time}", {
+              provider: nextReset.entry.provider,
+              label: nextReset.entry.label,
+              time: formatDateTime(nextReset.resetAt),
+            })
+          : uiText("No connected account exposed a reset timestamp"),
       view: "usage",
-      viewLabel: "Usage",
+      viewLabel: uiText("Usage"),
       pending: quotaPending,
     },
     {
       id: "allowance",
-      label: "Lowest allowance",
+      label: uiText("Lowest allowance"),
       icon: Gauge,
       value: !quotaLoaded
         ? pending
-        : lowestAllowance ? `${Math.round(lowestAllowance.percent)}% left` : "Not measured",
+        : lowestAllowance ? uiText("{percent}% left", { percent: Math.round(lowestAllowance.percent) }) : uiText("Not measured"),
       detail: !quotaLoaded
-        ? "Waiting for account and provider usage"
+        ? uiText("Waiting for account and provider usage")
         : lowestAllowance
-          ? `${lowestAllowance.entry.provider}, ${lowestAllowance.entry.label}${account?.planType ? ` · ${friendlyPlanName(account.planType)} plan` : ""}`
-          : "No connected account reports a remaining share",
+          ? uiText("{provider}, {label}{plan}", {
+              provider: lowestAllowance.entry.provider,
+              label: lowestAllowance.entry.label,
+              plan: account?.planType ? uiText(" · {plan} plan", { plan: friendlyPlanName(account.planType) }) : "",
+            })
+          : uiText("No connected account reports a remaining share"),
       tone: allowanceTone,
       meter: lowestAllowance ? lowestAllowance.percent : undefined,
       view: "usage",
-      viewLabel: "Usage",
+      viewLabel: uiText("Usage"),
       pending: quotaPending,
     },
   ];
@@ -329,22 +349,22 @@ export function DashboardPage({
   return (
     <div className="dashboard-page page-stack">
       <PageHeader
-        eyebrow="At a glance"
-        title="Dashboard"
-        description="Router health, live work, recent traffic, and the accounts closest to running out. Every tile opens the page that owns the detail."
+        eyebrow={uiText("At a glance")}
+        title={uiText("Dashboard")}
+        description={uiText("Router health, live work, recent traffic, and the accounts closest to running out. Every tile opens the page that owns the detail.")}
         onRefresh={onRefresh}
         refreshing={refreshing}
       />
 
       {!api ? (
-        <InlineNotice tone="warning" title="Desktop bridge unavailable">
-          Open this window through the Codex Router desktop app to read live router data.
+        <InlineNotice tone="warning" title={uiText("Desktop bridge unavailable")}>
+          {uiText("Open this window through the Codex Router desktop app to read live router data.")}
         </InlineNotice>
       ) : health && !health.ok && health.error ? (
-        <InlineNotice tone="danger" title="Router health check failed">{health.error}</InlineNotice>
+        <InlineNotice tone="danger" title={uiText("Router health check failed")}>{health.error}</InlineNotice>
       ) : null}
 
-      <div className="db-summary-grid" role="list" aria-label="Router summary">
+      <div className="db-summary-grid" role="list" aria-label={uiText("Router summary")}>
         {tiles.map((tile) => {
           const Icon = tile.icon;
           return (
@@ -353,7 +373,12 @@ export function DashboardPage({
               type="button"
               role="listitem"
               className={classNames("db-summary-cell", tile.tone && `tone-${tile.tone}`)}
-              aria-label={`${tile.label}: ${tile.value}. ${tile.detail}. Open ${tile.viewLabel}.`}
+              aria-label={uiText("{label}: {value}. {detail}. Open {view}.", {
+                label: tile.label,
+                value: tile.value,
+                detail: tile.detail,
+                view: tile.viewLabel,
+              })}
               onClick={() => onNavigate(tile.view)}
             >
               <span className="db-summary-label">
@@ -372,7 +397,7 @@ export function DashboardPage({
                 <SkeletonBlock className="db-skeleton-summary-detail" />
               ) : <small className="db-summary-detail">{tile.detail}</small>}
               <span className="db-summary-link" aria-hidden="true">
-                View {tile.viewLabel}
+                {uiText("View {view}", { view: tile.viewLabel })}
                 <ArrowUpRight aria-hidden size={11} strokeWidth={1.9} />
               </span>
             </button>
@@ -383,42 +408,56 @@ export function DashboardPage({
       <div className="db-traffic-grid">
         <section className="panel-section db-traffic-panel">
           <SectionHeading
-            title={`Traffic, ${trafficRangeLabel(trafficRange)}`}
+            title={uiText("Traffic, {range}", { range: trafficRangeLabel(trafficRange) })}
             description={trafficDescription(trafficRange)}
             action={(
               <div className="db-traffic-actions">
                 <TrafficRangePicker value={trafficRange} onChange={setTrafficRange} />
-                <Button variant="ghost" aria-label="Open Usage" onClick={() => onNavigate("usage")}>
+                <Button variant="ghost" aria-label={uiText("Open Usage")} onClick={() => onNavigate("usage")}>
                   <BarChart3 aria-hidden size={13} strokeWidth={1.7} />
-                  Usage
+                  {uiText("Usage")}
                 </Button>
               </div>
             )}
           />
           {snapshotPending ? (
-            <PanelSkeleton label="Loading router traffic" count={4} />
+            <PanelSkeleton label={uiText("Loading router traffic")} count={4} />
           ) : !events ? (
             <EmptyState
               icon={<BarChart3 size={20} />}
-              title={refreshing ? "Reading router telemetry" : "Router telemetry unavailable"}
-              body="Traffic appears once the router snapshot loads."
+              title={refreshing ? uiText("Reading router telemetry") : uiText("Router telemetry unavailable")}
+              body={uiText("Traffic appears once the router snapshot loads.")}
             />
           ) : trafficHasRequests ? (
             <TrafficTrend buckets={trafficBuckets} hasTokens={trafficHasTokens} range={trafficRange} />
           ) : (
             <EmptyState
               icon={<BarChart3 size={20} />}
-              title={`No requests in ${trafficRangeLabel(trafficRange)}`}
-              body="The chart will fill as a request passes through the local router."
+              title={uiText("No requests in {range}", { range: trafficRangeLabel(trafficRange) })}
+              body={uiText("The chart will fill as a request passes through the local router.")}
             />
           )}
           {events ? (
             <p className="db-panel-note db-traffic-note">
               {trafficHasTokens
-                ? `${exactNumber(trafficBuckets.reduce((sum, bucket) => sum + bucket.tokens, 0))} measured tokens across ${exactNumber(trafficBuckets.reduce((sum, bucket) => sum + bucket.requests, 0))} requests in ${trafficRangeLabel(trafficRange)}. ${trafficRange === 24 ? eventHours?.length ? "Hourly bars use the router's full 24-hour rollup." : "Hourly bars use the latest 1,000 event details; this router does not publish an hourly rollup." : "Daily bars use the retained provider ledger when available."}`
+                ? uiText("{tokens} measured tokens across {requests} requests in {range}. {source}", {
+                    tokens: exactNumber(trafficBuckets.reduce((sum, bucket) => sum + bucket.tokens, 0)),
+                    requests: exactNumber(trafficBuckets.reduce((sum, bucket) => sum + bucket.requests, 0)),
+                    range: trafficRangeLabel(trafficRange),
+                    source: trafficRange === 24
+                      ? eventHours?.length
+                        ? uiText("Hourly bars use the router's full 24-hour rollup.")
+                        : uiText("Hourly bars use the latest 1,000 event details; this router does not publish an hourly rollup.")
+                      : uiText("Daily bars use the retained provider ledger when available."),
+                  })
                 : trafficHasRequests
-                  ? `${exactNumber(trafficBuckets.reduce((sum, bucket) => sum + bucket.requests, 0))} requests observed in ${trafficRangeLabel(trafficRange)}, but token counts were not reported by the upstream responses.`
-                  : `The router returned an empty ${trafficRangeLabel(trafficRange)} telemetry window; this is different from a failed health check.`}
+                  ? uiText("{requests} requests observed in {range}, but token counts were not reported by the upstream responses.", {
+                      requests: exactNumber(trafficBuckets.reduce((sum, bucket) => sum + bucket.requests, 0)),
+                      range: trafficRangeLabel(trafficRange),
+                    })
+                  : uiText("The router returned an empty {range} telemetry window; this is different from a failed health check.", {
+                      range: trafficRangeLabel(trafficRange),
+                    })}
             </p>
           ) : null}
         </section>
@@ -435,29 +474,33 @@ export function DashboardPage({
       <div className="db-panel-grid db-dashboard-details">
         <section className="panel-section db-breakdown-panel">
           <SectionHeading
-            title="Provider and model mix"
-            description={providerUsage ? "Rolling provider totals and the busiest models on this router; model rows include 24-hour input, cache, output, and speed." : "Breakdowns appear with the provider usage snapshot."}
+            title={uiText("Provider and model mix")}
+            description={providerUsage
+              ? uiText("Rolling provider totals and the busiest models on this router; model rows include 24-hour input, cache, output, and speed.")
+              : uiText("Breakdowns appear with the provider usage snapshot.")}
             action={(
-              <Button variant="ghost" aria-label="Open Status" onClick={() => onNavigate("status")}>
+              <Button variant="ghost" aria-label={uiText("Open Status")} onClick={() => onNavigate("status")}>
                 <Activity aria-hidden size={13} strokeWidth={1.7} />
-                Details
+                {uiText("Details")}
               </Button>
             )}
           />
           {providerUsagePending ? (
-            <PanelSkeleton label="Loading provider and model usage" count={4} />
+            <PanelSkeleton label={uiText("Loading provider and model usage")} count={4} />
           ) : <div className="db-breakdown-stack">
             <BreakdownGroup
-              title="Providers"
-              emptyTitle={providerUsage ? "No metered provider traffic" : refreshing ? "Reading providers" : "Provider usage unavailable"}
-              emptyBody={providerUsage ? "Connected providers have not served a metered request in the rolling window." : "Refresh after the provider usage snapshot becomes available."}
+              title={uiText("Providers")}
+              emptyTitle={providerUsage ? uiText("No metered provider traffic") : refreshing ? uiText("Reading providers") : uiText("Provider usage unavailable")}
+              emptyBody={providerUsage
+                ? uiText("Connected providers have not served a metered request in the rolling window.")
+                : uiText("Refresh after the provider usage snapshot becomes available.")}
               rows={providerBreakdown}
               providerRows
             />
             <BreakdownGroup
               title={modelBreakdownScopeTitle(modelBreakdown)}
-              emptyTitle={events === undefined && providerUsage === undefined ? "No model usage yet" : "No model traffic"}
-              emptyBody={modelBreakdown.length ? "" : "A model appears after it serves a request with usage metadata."}
+              emptyTitle={events === undefined && providerUsage === undefined ? uiText("No model usage yet") : uiText("No model traffic")}
+              emptyBody={modelBreakdown.length ? "" : uiText("A model appears after it serves a request with usage metadata.")}
               rows={modelBreakdown}
             />
           </div>}
@@ -466,17 +509,17 @@ export function DashboardPage({
 
       <section className="panel-section db-events-panel">
         <SectionHeading
-          title="Recent activity"
-          description="The last few routed requests from the rolling 24-hour telemetry window, with output speed and token mix when reported."
+          title={uiText("Recent activity")}
+          description={uiText("The last few routed requests from the rolling 24-hour telemetry window, with output speed and token mix when reported.")}
           action={(
-            <Button variant="ghost" aria-label="Open Status" onClick={() => onNavigate("status")}>
+            <Button variant="ghost" aria-label={uiText("Open Status")} onClick={() => onNavigate("status")}>
               <Activity aria-hidden size={13} strokeWidth={1.7} />
-              Status
+              {uiText("Status")}
             </Button>
           )}
         />
         {snapshotPending ? (
-          <PanelSkeleton label="Loading recent router activity" count={5} />
+          <PanelSkeleton label={uiText("Loading recent router activity")} count={5} />
         ) : recentEvents.length ? (
           <div className="db-event-list">
             {recentEvents.map((event, index) => (
@@ -486,10 +529,10 @@ export function DashboardPage({
         ) : (
           <EmptyState
             icon={<Server size={20} />}
-            title={events ? "No recent router traffic" : refreshing ? "Reading router telemetry" : "Router telemetry unavailable"}
+            title={events ? uiText("No recent router traffic") : refreshing ? uiText("Reading router telemetry") : uiText("Router telemetry unavailable")}
             body={events
-              ? "This list fills after a request passes through the local router."
-              : "Recent requests appear once the router snapshot loads."}
+              ? uiText("This list fills after a request passes through the local router.")
+              : uiText("Recent requests appear once the router snapshot loads.")}
           />
         )}
       </section>
@@ -531,16 +574,16 @@ function RouteDashboardPanel({
   return (
     <section className="db-route-dashboard" aria-labelledby="db-route-dashboard-title">
       <SectionHeading
-        title="Provider routes"
-        description="Enable or disable validated provider routes. Changes are saved atomically and shared with the tray."
-        action={<Button variant="ghost" onClick={() => onNavigate("models")}>Manage models</Button>}
+        title={uiText("Provider routes")}
+        description={uiText("Enable or disable validated provider routes. Changes are saved atomically and shared with the tray.")}
+        action={<Button variant="ghost" onClick={() => onNavigate("models")}>{uiText("Manage models")}</Button>}
       />
       {loading ? (
-        <PanelSkeleton label="Loading provider routes" count={3} />
+        <PanelSkeleton label={uiText("Loading provider routes")} count={3} />
       ) : visible.length === 0 ? (
-        <EmptyState title="No provider routes" body="Connect a provider to make a route available here." />
+        <EmptyState title={uiText("No provider routes")} body={uiText("Connect a provider to make a route available here.")} />
       ) : (
-        <div className="db-route-list" role="list" aria-label="Provider routes">
+        <div className="db-route-list" role="list" aria-label={uiText("Provider routes")}>
           {visible.map((provider) => {
             const enabled = routeMutations.value(provider.id, provider.enabled);
             return (
@@ -548,27 +591,33 @@ function RouteDashboardPanel({
                 <ProviderLogo providerId={provider.id} displayName={provider.displayName} size="small" />
                 <div className="db-route-copy">
                   <strong>{provider.displayName}</strong>
-                  <small>{enabled ? "Route enabled" : "Route disabled"}</small>
+                  <small>{enabled ? uiText("Route enabled") : uiText("Route disabled")}</small>
                 </div>
-                <Badge tone={enabled ? "success" : "neutral"}>{enabled ? "Enabled" : "Disabled"}</Badge>
+                <Badge tone={enabled ? "success" : "neutral"}>{enabled ? uiText("Enabled") : uiText("Disabled")}</Badge>
                 <Button
                   variant={enabled ? "secondary" : "primary"}
                   type="button"
                   disabled={!api}
                   aria-pressed={enabled}
-                  aria-label={`${enabled ? "Disable" : "Enable"} ${provider.displayName}`}
+                  aria-label={uiText("{action} {name}", {
+                    action: enabled ? uiText("Disable") : uiText("Enable"),
+                    name: provider.displayName,
+                  })}
                   onClick={() => {
                     if (!api) return;
                     const next = !enabled;
                     void routeMutations.mutate(
                       provider.id,
                       next,
-                      `${next ? "Enable" : "Disable"} ${provider.displayName}`,
+                      uiText("{action} {name}", {
+                        action: next ? uiText("Enable") : uiText("Disable"),
+                        name: provider.displayName,
+                      }),
                       () => api.setProviderEnabled(provider.id, next),
                     );
                   }}
                 >
-                  {enabled ? "Disable" : "Enable"}
+                  {enabled ? uiText("Disable") : uiText("Enable")}
                 </Button>
               </div>
             );
@@ -591,13 +640,14 @@ function TokenActivity({
   loading: boolean;
 }) {
   const [mode, setMode] = useState<TokenActivityMode>("daily");
+  const language = detectLanguage();
   const activity = useMemo(
     () => buildTokenActivity(events, providerUsage, Date.now()),
-    [events, providerUsage],
+    [events, providerUsage, language],
   );
   const viewDays = useMemo(
     () => tokenActivityForMode(activity.days, mode),
-    [activity.days, mode],
+    [activity.days, mode, language],
   );
   const levels = useMemo(
     () => tokenActivityLevels(viewDays.map((day) => day.displayTokens)),
@@ -610,18 +660,18 @@ function TokenActivity({
     <section className="panel-section db-token-activity">
       <div className="db-token-activity-heading">
         <div>
-          <h2>Token activity</h2>
+          <h2>{uiText("Token activity")}</h2>
           <p>
             {providerUsage
-              ? `${exactNumber(total)} measured tokens across the last year`
+              ? uiText("{tokens} measured tokens across the last year", { tokens: exactNumber(total) })
               : refreshing
-                ? "Reading the retained router ledger"
+                ? uiText("Reading the retained router ledger")
                 : events
-                  ? "Recent event telemetry; retained daily totals are unavailable"
-                  : "Token history appears after the router reports usage"}
+                  ? uiText("Recent event telemetry; retained daily totals are unavailable")
+                  : uiText("Token history appears after the router reports usage")}
           </p>
         </div>
-        <div className="db-token-mode" role="radiogroup" aria-label="Token activity display">
+        <div className="db-token-mode" role="radiogroup" aria-label={uiText("Token activity display")}>
           {(["daily", "weekly", "cumulative"] as const).map((option) => (
             <button
               key={option}
@@ -631,17 +681,17 @@ function TokenActivity({
               className={mode === option ? "is-active" : ""}
               onClick={() => setMode(option)}
             >
-              {capitalize(option)}
+              {tokenActivityModeLabel(option)}
             </button>
           ))}
         </div>
       </div>
 
       {loading ? (
-        <PanelSkeleton label="Loading retained token activity" count={2} />
+        <PanelSkeleton label={uiText("Loading retained token activity")} count={2} />
       ) : <><div className="db-token-calendar-scroll">
         <div className="db-token-calendar">
-          <div className="db-token-cells" role="grid" aria-label={`${capitalize(mode)} token activity for the last year`}>
+          <div className="db-token-cells" role="grid" aria-label={uiText("{mode} token activity for the last year", { mode: tokenActivityModeLabel(mode) })}>
             {viewDays.map((day) => {
               const level = levelForTokenActivity(day.displayTokens, levels);
               const isFuture = day.date.getTime() > activity.today;
@@ -682,11 +732,11 @@ function TokenActivity({
       </div>
 
       <div className="db-token-activity-footer">
-        <span>{activeDays ? `${exactNumber(activeDays)} active ${plural(activeDays, "day")}` : "No measured activity yet"}</span>
-        <span className="db-token-scale" aria-label="Token activity intensity from less to more">
-          Less
+        <span>{activeDays ? countPhrase(activeDays, "1 active day", "{count} active days") : uiText("No measured activity yet")}</span>
+        <span className="db-token-scale" aria-label={uiText("Token activity intensity from less to more")}>
+          {uiText("Less")}
           {[0, 1, 2, 3, 4].map((level) => <i key={level} className={`level-${level}`} />)}
-          More
+          {uiText("More")}
         </span>
       </div></>}
     </section>
@@ -698,7 +748,7 @@ function TrafficRangePicker({ value, onChange }: {
   onChange: (value: TrafficRange) => void;
 }) {
   return (
-    <div className="db-range-picker" role="radiogroup" aria-label="Dashboard traffic range">
+    <div className="db-range-picker" role="radiogroup" aria-label={uiText("Dashboard traffic range")}>
       {([24, 7, 30] as const).map((range) => (
         <button
           type="button"
@@ -708,7 +758,7 @@ function TrafficRangePicker({ value, onChange }: {
           className={value === range ? "is-active" : ""}
           onClick={() => onChange(range)}
         >
-          {range === 24 ? "24h" : `${range}d`}
+          {range === 24 ? uiText("24h") : uiText("{days}d", { days: range })}
         </button>
       ))}
     </div>
@@ -723,7 +773,15 @@ function TrafficTrend({ buckets, hasTokens, range }: { buckets: TrafficBucket[];
     <div
       className="db-trend"
       role="img"
-      aria-label={`${range === 24 ? "Hourly" : "Daily"} router traffic for ${trafficRangeLabel(range)}${hasTokens ? hasBreakdown ? " split into regular input, cached input, and output" : " by tokens" : " by requests"}`}
+      aria-label={uiText("{scope} router traffic for {range}{breakdown}", {
+        scope: uiText(range === 24 ? "Hourly" : "Daily"),
+        range: trafficRangeLabel(range),
+        breakdown: hasTokens
+          ? hasBreakdown
+            ? uiText(" split into regular input, cached input, and output")
+            : uiText(" by tokens")
+          : uiText(" by requests"),
+      })}
     >
       <div className="db-trend-scale" aria-hidden="true">
         <span>{hasTokens ? compactNumber(maxTokens) : exactNumber(maxRequests)}</span>
@@ -744,9 +802,9 @@ function TrafficTrend({ buckets, hasTokens, range }: { buckets: TrafficBucket[];
             : [];
           const label = [
             `${bucket.fullLabel}.`,
-            bucket.measuredTokens ? `Total: ${exactNumber(bucket.tokens)} tokens.` : "Token count not reported.",
+            bucket.measuredTokens ? uiText("Total: {count} tokens.", { count: exactNumber(bucket.tokens) }) : uiText("Token count not reported."),
             ...breakdown.map((item) => `${item}.`),
-            `Requests: ${exactNumber(bucket.requests)}.`,
+            uiText("Requests: {count}.", { count: exactNumber(bucket.requests) }),
           ].join(" ");
           const edge = index === 0 ? "start" : index === buckets.length - 1 ? "end" : undefined;
           return (
@@ -782,12 +840,12 @@ function TrafficTrend({ buckets, hasTokens, range }: { buckets: TrafficBucket[];
       <div className="db-trend-legend" aria-hidden="true">
         {hasBreakdown ? (
           <>
-            <span className="is-regular">Regular input</span>
-            <span className="is-cached">Cached input</span>
-            <span className="is-output">Output</span>
+            <span className="is-regular">{uiText("Regular input")}</span>
+            <span className="is-cached">{uiText("Cached input")}</span>
+            <span className="is-output">{uiText("Output")}</span>
           </>
-        ) : <span className="is-token">{hasTokens ? "Tokens" : "Requests"}</span>}
-        <span className="is-request">Request volume</span>
+        ) : <span className="is-token">{hasTokens ? uiText("Tokens") : uiText("Requests")}</span>}
+        <span className="is-request">{uiText("Request volume")}</span>
       </div>
     </div>
   );
@@ -800,11 +858,11 @@ function TrafficTooltip({ bucket, parts }: { bucket: TrafficBucket; parts: Traff
       <span className="db-trend-tooltip-date">{bucket.fullLabel}</span>
       {bucket.measuredTokens ? (
         <>
-          <strong className="db-trend-tooltip-total">{compactNumber(bucket.tokens).toUpperCase()} tokens</strong>
-          <span className="db-trend-tooltip-exact">{exactNumber(bucket.tokens)} total tokens</span>
+          <strong className="db-trend-tooltip-total">{uiText("{count} tokens", { count: compactNumber(bucket.tokens).toUpperCase() })}</strong>
+          <span className="db-trend-tooltip-exact">{uiText("{count} total tokens", { count: exactNumber(bucket.tokens) })}</span>
         </>
       ) : (
-        <strong className="db-trend-tooltip-total">Token count not reported</strong>
+        <strong className="db-trend-tooltip-total">{uiText("Token count not reported")}</strong>
       )}
       <span className="db-trend-tooltip-rows">
         {visibleParts.map((part) => (
@@ -816,14 +874,14 @@ function TrafficTooltip({ bucket, parts }: { bucket: TrafficBucket; parts: Traff
         ))}
         <span className="db-trend-tooltip-row is-requests">
           <i aria-hidden="true" />
-          <span>Requests</span>
+          <span>{uiText("Requests")}</span>
           <strong>{exactNumber(bucket.requests)}</strong>
         </span>
       </span>
       {!bucket.measuredTokens ? (
-        <span className="db-trend-tooltip-note">The upstream response did not include token counts.</span>
+        <span className="db-trend-tooltip-note">{uiText("The upstream response did not include token counts.")}</span>
       ) : !bucket.measuredBreakdown ? (
-        <span className="db-trend-tooltip-note">Input and output details were not reported for this hour.</span>
+        <span className="db-trend-tooltip-note">{uiText("Input and output details were not reported for this hour.")}</span>
       ) : null}
     </span>
   );
@@ -848,10 +906,12 @@ function BreakdownGroup({
     <div className="db-breakdown-group">
       <div className="db-breakdown-heading">
         <h3>{title}</h3>
-        {rows.length > visibleRows.length ? <small>Top {visibleRows.length} of {rows.length}</small> : null}
+        {rows.length > visibleRows.length
+          ? <small>{uiText("Top {shown} of {total}", { shown: visibleRows.length, total: rows.length })}</small>
+          : null}
       </div>
       {visibleRows.length ? (
-        <div className="db-breakdown-list" role="list" aria-label={`${title} usage breakdown`}>
+        <div className="db-breakdown-list" role="list" aria-label={uiText("{title} usage breakdown", { title })}>
           {visibleRows.map((row) => (
             <div className="db-breakdown-row" role="listitem" key={row.id}>
               <ProviderLogo
@@ -862,7 +922,13 @@ function BreakdownGroup({
               />
               <div className="db-breakdown-label">
                 <strong title={row.label}>{row.label}</strong>
-                <small>{row.provider ? `${row.provider} · ` : ""}{exactNumber(row.requests)} {plural(row.requests, "request")}{row.measuredTokens ? ` · ${compactNumber(row.tokens)} tok` : " · tokens not reported"}</small>
+                <small>{uiText("{provider}{requests}{tokens}", {
+                  provider: row.provider ? `${row.provider} · ` : "",
+                  requests: countPhrase(row.requests, "1 request", "{count} requests"),
+                  tokens: row.measuredTokens
+                    ? uiText(" · {tokens} tok", { tokens: compactNumber(row.tokens) })
+                    : uiText(" · tokens not reported"),
+                })}</small>
                 {!providerRows ? <ModelBreakdownFacts row={row} /> : null}
                 <span className="db-breakdown-meter" aria-hidden="true"><i style={{ width: `${row.tokens > 0 ? Math.max(2, (row.tokens / max) * 100) : 0}%` }} /></span>
               </div>
@@ -882,9 +948,9 @@ function BreakdownGroup({
 
 function ModelBreakdownFacts({ row }: { row: TrafficBreakdownRow }) {
   const facts: Array<{ label: string; tone: "input" | "cached" | "output" | "speed" }> = [];
-  if (row.inputTokens != null) facts.push({ label: `${compactNumber(row.inputTokens)} input`, tone: "input" });
-  if (row.cachedInputTokens != null) facts.push({ label: `${compactNumber(row.cachedInputTokens)} cache`, tone: "cached" });
-  if (row.outputTokens != null) facts.push({ label: `${compactNumber(row.outputTokens)} output`, tone: "output" });
+  if (row.inputTokens != null) facts.push({ label: uiText("{count} input", { count: compactNumber(row.inputTokens) }), tone: "input" });
+  if (row.cachedInputTokens != null) facts.push({ label: uiText("{count} cache", { count: compactNumber(row.cachedInputTokens) }), tone: "cached" });
+  if (row.outputTokens != null) facts.push({ label: uiText("{count} output", { count: compactNumber(row.outputTokens) }), tone: "output" });
   if (row.tokensPerSecond != null) facts.push({ label: formatTokensPerSecond(row.tokensPerSecond), tone: "speed" });
   if (!facts.length) return null;
   return (
@@ -915,20 +981,20 @@ function DashboardEventRow({ event }: { event: UsageEvent }) {
         className="db-event-logo"
       />
       <span className="db-event-model">
-        <strong>{shortModelName(event.model || "Unknown model")}</strong>
-        <small>{event.provider || "router"}</small>
+        <strong>{shortModelName(event.model || uiText("Unknown model"))}</strong>
+        <small>{event.provider || uiText("router")}</small>
       </span>
       <span className="db-event-metering">
-        <strong>{speed == null ? "Speed unmeasured" : formatTokensPerSecond(speed)}</strong>
+        <strong>{speed == null ? uiText("Speed unmeasured") : formatTokensPerSecond(speed)}</strong>
         <small title={tokenFacts}>{tokenFacts}</small>
       </span>
       <span className="db-event-duration">
-        <strong>{event.durationMs === undefined ? "No duration" : formatDuration(event.durationMs)}</strong>
+        <strong>{event.durationMs === undefined ? uiText("No duration") : formatDuration(event.durationMs)}</strong>
         <small>{formatDateTime(event.at)}</small>
       </span>
       <span className="db-event-status">
         <Badge tone={tone === "neutral" ? "neutral" : tone}>
-          {status === undefined ? "no status" : String(status)}
+          {status === undefined ? uiText("no status") : String(status)}
         </Badge>
       </span>
     </article>
@@ -952,7 +1018,7 @@ function collectMetrics(
     for (const metric of provider.account?.metrics ?? []) {
       entries.push({
         provider: provider.displayName,
-        label: metric.label || "Usage limit",
+        label: metric.label ? uiText(metric.label) : uiText("Usage limit"),
         metric,
       });
     }
@@ -1017,7 +1083,7 @@ function buildTokenActivity(
     };
   });
 
-  const monthFormatter = new Intl.DateTimeFormat("en-US", { month: "short", timeZone: "UTC" });
+  const monthFormatter = new Intl.DateTimeFormat(uiLocale(), { month: "short", timeZone: "UTC" });
   const months: TokenActivityMonth[] = [];
   let previousMonth = -1;
   for (const day of days) {
@@ -1035,7 +1101,7 @@ function tokenActivityForMode(
   days: TokenActivityDay[],
   mode: TokenActivityMode,
 ): TokenActivityViewDay[] {
-  const dateFormatter = new Intl.DateTimeFormat("en-US", {
+  const dateFormatter = new Intl.DateTimeFormat(uiLocale(), {
     month: "short",
     day: "numeric",
     year: "numeric",
@@ -1056,20 +1122,30 @@ function tokenActivityForMode(
       return {
         ...day,
         displayTokens,
-        tooltip: `${exactNumber(displayTokens)} tokens from ${dateFormatter.format(weekStart)} to ${dateFormatter.format(weekEnd)}`,
+        tooltip: uiText("{count} tokens from {start} to {end}", {
+          count: exactNumber(displayTokens),
+          start: dateFormatter.format(weekStart),
+          end: dateFormatter.format(weekEnd),
+        }),
       };
     }
     if (mode === "cumulative") {
       return {
         ...day,
         displayTokens: cumulative,
-        tooltip: `${exactNumber(cumulative)} cumulative tokens through ${dateFormatter.format(day.date)}`,
+        tooltip: uiText("{count} cumulative tokens through {date}", {
+          count: exactNumber(cumulative),
+          date: dateFormatter.format(day.date),
+        }),
       };
     }
     return {
       ...day,
       displayTokens: day.tokens,
-      tooltip: `${exactNumber(day.tokens)} tokens on ${dateFormatter.format(day.date)}`,
+      tooltip: uiText("{count} tokens on {date}", {
+        count: exactNumber(day.tokens),
+        date: dateFormatter.format(day.date),
+      }),
     };
   });
 }
@@ -1098,18 +1174,14 @@ function usageDateKey(date: Date): string {
   return `${year}-${month}-${day}`;
 }
 
-function capitalize(value: string): string {
-  return value.charAt(0).toUpperCase() + value.slice(1);
-}
-
 function trafficRangeLabel(range: TrafficRange): string {
-  return range === 24 ? "the last 24 hours" : `the last ${range} days`;
+  return range === 24 ? uiText("the last 24 hours") : uiText("the last {days} days", { days: range });
 }
 
 function trafficDescription(range: TrafficRange): string {
   return range === 24
-    ? "Hourly local buckets from router request telemetry. This is observed traffic, not provider billing."
-    : "Daily local buckets from the retained router ledger. This is observed traffic, not provider billing.";
+    ? uiText("Hourly local buckets from router request telemetry. This is observed traffic, not provider billing.")
+    : uiText("Daily local buckets from the retained router ledger. This is observed traffic, not provider billing.");
 }
 
 function buildTrafficBuckets(
@@ -1124,12 +1196,15 @@ function buildTrafficBuckets(
     : buildDailyTrafficBuckets(events, providerUsage, range, now);
 }
 
-const HOUR_LABEL_FORMATTER = new Intl.DateTimeFormat("en-US", { hour: "numeric" });
-const HOUR_FULL_LABEL_FORMATTER = new Intl.DateTimeFormat("en-US", {
-  month: "short",
-  day: "numeric",
-  hour: "numeric",
-});
+// Built per render rather than at module scope: a module-level formatter froze
+// the locale that was active at import time and kept it after a language change.
+function hourlyTrafficFormatters(): { label: Intl.DateTimeFormat; full: Intl.DateTimeFormat } {
+  const locale = uiLocale();
+  return {
+    label: new Intl.DateTimeFormat(locale, { hour: "numeric" }),
+    full: new Intl.DateTimeFormat(locale, { month: "short", day: "numeric", hour: "numeric" }),
+  };
+}
 
 // `events` is a bounded sample -- the router caps it at 1,000 rows -- so on a
 // busy day it covers a couple of hours, not twenty-four. Summing it drew most
@@ -1142,12 +1217,13 @@ function hourlyBucketsFromRollup(hours: UsageEventHour[]): TrafficBucket[] {
   // a grid anchored on the renderer's clock. The two agree until the hour turns
   // over between the snapshot and the render, and then this keeps the newest
   // measured hour on the chart instead of blanking it until the next poll.
+  const formatter = hourlyTrafficFormatters();
   return hours.map((hour) => {
     const start = new Date(hour.startedAt);
     return {
       key: hour.startedAt,
-      label: HOUR_LABEL_FORMATTER.format(start),
-      fullLabel: HOUR_FULL_LABEL_FORMATTER.format(start),
+      label: formatter.label.format(start),
+      fullLabel: formatter.full.format(start),
       tokens: hour.tokens,
       requests: hour.requests,
       measuredTokens: hour.measuredTokens,
@@ -1174,18 +1250,13 @@ function buildHourlyTrafficBuckets(
   const lastHour = lastAnchor.getTime();
   const lastBucket = now === lastHour ? lastHour - HOUR_MS : lastHour;
   const bucketCount = Math.floor((lastBucket - first) / HOUR_MS) + 1;
-  const formatter = new Intl.DateTimeFormat("en-US", { hour: "numeric" });
-  const fullFormatter = new Intl.DateTimeFormat("en-US", {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-  });
+  const formatter = hourlyTrafficFormatters();
   const buckets = Array.from({ length: bucketCount }, (_, index) => {
     const start = new Date(first + index * HOUR_MS);
     return {
       key: start.toISOString(),
-      label: formatter.format(start),
-      fullLabel: fullFormatter.format(start),
+      label: formatter.label.format(start),
+      fullLabel: formatter.full.format(start),
       tokens: 0,
       requests: 0,
       measuredTokens: false,
@@ -1233,12 +1304,12 @@ function buildDailyTrafficBuckets(
   const anchor = new Date(now);
   anchor.setUTCHours(0, 0, 0, 0);
   const first = anchor.getTime() - (range - 1) * DAY_MS;
-  const labelFormatter = new Intl.DateTimeFormat("en-US", {
+  const labelFormatter = new Intl.DateTimeFormat(uiLocale(), {
     month: "short",
     day: "numeric",
     timeZone: "UTC",
   });
-  const fullFormatter = new Intl.DateTimeFormat("en-US", {
+  const fullFormatter = new Intl.DateTimeFormat(uiLocale(), {
     month: "short",
     day: "numeric",
     year: range === 30 ? "numeric" : undefined,
@@ -1417,7 +1488,7 @@ function buildProviderBreakdown(
     if (rows.has(providerId) || (eventRow.requests <= 0 && !eventRow.measuredTokens)) continue;
     rows.set(providerId, {
       id: `provider:${providerId}`,
-      label: names.get(providerId) || providerId,
+      label: names.get(providerId) || (providerId === "unknown" ? uiText("unknown") : providerId),
       providerId,
       tokens: eventRow.tokens,
       requests: eventRow.requests,
@@ -1442,9 +1513,9 @@ function buildModelBreakdown(
     const id = `${provider}:${model}`;
     const previous = eventRows.get(id) ?? {
       id,
-      label: shortModelName(model),
+      label: shortModelName(event.model || uiText("unknown")),
       providerId: provider,
-      provider: names.get(provider) || provider,
+      provider: names.get(provider) || (provider === "unknown" ? uiText("unknown") : provider),
       tokens: 0,
       requests: 0,
       measuredTokens: false,
@@ -1501,7 +1572,7 @@ function buildModelBreakdown(
       .filter((model) => (model.requests || 0) > 0 || (model.totalTokens || 0) > 0)
       .map((model) => ({
         id: `${provider.id}:${model.slug || model.displayName || "unknown"}`,
-        label: model.displayName || shortModelName(model.slug || "unknown"),
+        label: model.displayName || shortModelName(model.slug || uiText("unknown")),
         providerId: provider.id,
         provider: provider.displayName,
         tokens: Number(model.totalTokens) || 0,
@@ -1522,7 +1593,9 @@ function buildModelBreakdown(
 }
 
 function modelBreakdownScopeTitle(rows: TrafficBreakdownRow[]): string {
-  return rows[0]?.scope === "90-day ledger" ? "Models, 90-day ledger" : "Models, last 24 hours";
+  return rows[0]?.scope === "90-day ledger"
+    ? uiText("Models, 90-day ledger")
+    : uiText("Models, last 24 hours");
 }
 
 function recentWindowEvents(events: UsageEvent[] | undefined, now: number): UsageEvent[] {
@@ -1602,10 +1675,10 @@ function formatTokensPerSecond(value: number): string {
 function formatEventTokenFacts(total: number | null, breakdown: EventTokenBreakdown): string {
   const facts: string[] = [];
   if (total !== null) facts.push(`${compactNumber(total)} tok`);
-  if (breakdown.inputTokens !== null) facts.push(`${compactNumber(breakdown.inputTokens)} input`);
-  if (breakdown.cachedInputTokens !== null) facts.push(`${compactNumber(breakdown.cachedInputTokens)} cache`);
-  if (breakdown.outputTokens !== null) facts.push(`${compactNumber(breakdown.outputTokens)} output`);
-  return facts.length ? facts.join(" · ") : "No token usage reported";
+  if (breakdown.inputTokens !== null) facts.push(uiText("{count} input", { count: compactNumber(breakdown.inputTokens) }));
+  if (breakdown.cachedInputTokens !== null) facts.push(uiText("{count} cache", { count: compactNumber(breakdown.cachedInputTokens) }));
+  if (breakdown.outputTokens !== null) facts.push(uiText("{count} output", { count: compactNumber(breakdown.outputTokens) }));
+  return facts.length ? facts.join(" · ") : uiText("No token usage reported");
 }
 
 function optionalNumber(value: number | string | null | undefined): number | null {
@@ -1662,16 +1735,12 @@ function uniqueCount(values: Array<string | undefined>): number {
   return new Set(values.map((value, index) => value || `unknown-${index}`)).size;
 }
 
-function plural(count: number, word: string): string {
-  return count === 1 ? word : `${word}s`;
-}
-
 function activityLabel(state: string): string {
-  if (state === "generating") return "Thinking";
-  if (state === "starting") return "Starting";
-  if (state === "error") return "Error";
-  if (state === "offline") return "Offline";
-  return "Idle";
+  if (state === "generating") return uiText("Thinking");
+  if (state === "starting") return uiText("Starting");
+  if (state === "error") return uiText("Error");
+  if (state === "offline") return uiText("Offline");
+  return uiText("Idle");
 }
 
 function shortModelName(model: string): string {
@@ -1685,16 +1754,16 @@ function friendlyPlanName(value: string): string {
 }
 
 function limitWindowLabel(minutes: number | undefined, index: number): string {
-  if (!Number.isFinite(Number(minutes))) return index === 0 ? "primary limit" : "secondary limit";
+  if (!Number.isFinite(Number(minutes))) return index === 0 ? uiText("primary limit") : uiText("secondary limit");
   const value = Number(minutes);
   if (value >= 1_440 && value % 1_440 === 0) {
     const days = value / 1_440;
-    if (days === 1) return "daily limit";
-    if (days === 7) return "weekly limit";
-    return `${days}-day limit`;
+    if (days === 1) return uiText("daily limit");
+    if (days === 7) return uiText("weekly limit");
+    return uiText("{days}-day limit", { days });
   }
-  if (value >= 60 && value % 60 === 0) return `${value / 60}-hour limit`;
-  return `${value}-minute limit`;
+  if (value >= 60 && value % 60 === 0) return uiText("{hours}-hour limit", { hours: value / 60 });
+  return uiText("{minutes}-minute limit", { minutes: value });
 }
 
 function timestampFor(value: number | string): number {
@@ -1706,12 +1775,24 @@ function timestampFor(value: number | string): number {
 
 function resetCountdown(value: number | string): string {
   const remaining = timestampFor(value) - Date.now();
-  if (!Number.isFinite(remaining)) return "Time unavailable";
-  if (remaining <= 0) return "Refresh due";
+  if (!Number.isFinite(remaining)) return uiText("Time unavailable");
+  if (remaining <= 0) return uiText("Refresh due");
   const minutes = Math.ceil(remaining / 60_000);
-  if (minutes < 60) return `${minutes}m`;
+  if (minutes < 60) return uiText("{minutes}m", { minutes });
   const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ${minutes % 60}m`;
+  if (hours < 24) return uiText("{hours}h {minutes}m", { hours, minutes: minutes % 60 });
   const days = Math.floor(hours / 24);
-  return `${days}d ${hours % 24}h`;
+  return uiText("{days}d {hours}h", { days, hours: hours % 24 });
+}
+
+// Plurality belongs to the English source string, so each locale supplies its
+// own counter word instead of inheriting an English "s".
+function countPhrase(count: number, singular: string, pluralTemplate: string): string {
+  return uiText(count === 1 ? singular : pluralTemplate, { count: exactNumber(count) });
+}
+
+function tokenActivityModeLabel(mode: TokenActivityMode): string {
+  if (mode === "weekly") return uiText("Weekly");
+  if (mode === "cumulative") return uiText("Cumulative");
+  return uiText("Daily");
 }

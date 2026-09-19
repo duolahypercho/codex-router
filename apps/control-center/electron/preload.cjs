@@ -4,6 +4,7 @@ const call = (name, input) => ipcRenderer.invoke(`router-control:${name}`, input
 
 const routerControl = Object.freeze({
   platform: process.platform,
+  setInterfaceLanguage: (language) => ipcRenderer.send("router-control:interface-language", language),
   minimizeWindow: () => call("minimizeWindow"),
   toggleMaximizeWindow: () => call("toggleMaximizeWindow"),
   closeWindow: () => call("closeWindow"),

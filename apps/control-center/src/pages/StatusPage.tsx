@@ -12,6 +12,7 @@ import {
 import { Badge, Button, EmptyState, PageHeader, PanelSkeleton, SectionHeading, SkeletonBlock } from "../components";
 import { ProviderLogo } from "../provider-branding";
 import { ServiceHealthPanel } from "../ServiceHealth";
+import { uiText } from "../ui-text";
 import {
   compactNumber,
   exactNumber,
@@ -120,11 +121,13 @@ export function StatusPage({
     if (!api || repairing) return;
     setRepairing(true);
     try {
-      await runAction("Repair installation", async () => {
+      await runAction(uiText("Repair installation"), async () => {
         const report = await api.repairInstall();
         if (!report.ok) {
           const failed = report.checks?.find((check) => check.status === "fail");
-          throw new Error(failed ? `${failed.name}: ${failed.detail || "check failed"}` : "Repair finished with failing checks.");
+          throw new Error(failed
+            ? `${failed.name}: ${failed.detail || uiText("check failed")}`
+            : uiText("Repair finished with failing checks."));
         }
         return report;
       });
@@ -239,46 +242,52 @@ export function StatusPage({
 
   const summary = [
     {
-      label: "Router",
-      value: health ? health.ok ? "Online" : "Offline" : refreshing ? "Checking" : "Unavailable",
-      detail: health?.version ? `Version ${health.version}` : health?.error || "Local health endpoint",
+      label: uiText("Router"),
+      value: health ? health.ok ? uiText("Online") : uiText("Offline") : refreshing ? uiText("Checking") : uiText("Unavailable"),
+      detail: health?.version
+        ? uiText("Version {version}", { version: health.version })
+        : health?.error || uiText("Local health endpoint"),
       tone: health?.ok ? "success" : "danger",
       pending: healthPending,
     },
     {
-      label: "Running chats",
+      label: uiText("Running chats"),
       value: exactNumber(chatCount),
-      detail: "Unique active sessions",
+      detail: uiText("Unique active sessions"),
       pending: healthPending,
     },
     {
-      label: "Running agents",
+      label: uiText("Running agents"),
       value: exactNumber(runningAgentCount),
-      detail: "Named subagents currently in flight",
+      detail: uiText("Named subagents currently in flight"),
       pending: healthPending,
     },
     {
-      label: "Live requests",
+      label: uiText("Live requests"),
       value: exactNumber(activeRequestCount),
-      detail: "Concurrent router work",
+      detail: uiText("Concurrent router work"),
       pending: healthPending,
     },
     {
-      label: "Model speed",
-      value: fastest ? Number(fastest.observedTokensPerSecond).toFixed(1) : "Unmeasured",
-      detail: fastest ? `tok/s · ${fastest.displayName || fastest.slug || "fastest sample"}` : "After a metered reply",
+      label: uiText("Model speed"),
+      value: fastest ? Number(fastest.observedTokensPerSecond).toFixed(1) : uiText("Unmeasured"),
+      detail: fastest
+        ? uiText("tok/s · {model}", { model: fastest.displayName || fastest.slug || uiText("fastest sample") })
+        : uiText("After a metered reply"),
       pending: !dataReady.providerUsage && !providerUsage,
     },
     {
-      label: "Context reused",
-      value: hasCacheTelemetry ? compactNumber(cachedInputTokens) : "Not reported",
-      detail: "Cached input, recent 24h",
+      label: uiText("Context reused"),
+      value: hasCacheTelemetry ? compactNumber(cachedInputTokens) : uiText("Not reported"),
+      detail: uiText("Cached input, recent 24h"),
       pending: snapshotPending && !providerUsage,
     },
     {
-      label: "Quota reset",
-      value: nextReset ? resetCountdown(nextReset.resetAt) : "Not reported",
-      detail: nextReset ? `${nextReset.provider}, ${nextReset.label}` : "No reset timestamp exposed",
+      label: uiText("Quota reset"),
+      value: nextReset ? resetCountdown(nextReset.resetAt) : uiText("Not reported"),
+      detail: nextReset
+        ? uiText("{provider}, {label}", { provider: nextReset.provider, label: nextReset.label })
+        : uiText("No reset timestamp exposed"),
       pending: usagePending,
     },
   ];
@@ -286,9 +295,9 @@ export function StatusPage({
   return (
     <div className="usage-status-page status-page">
       <PageHeader
-        eyebrow="Live operations"
-        title="Status"
-        description="Running chats, agents, model throughput, context reuse, request activity, and quota timing."
+        eyebrow={uiText("Live operations")}
+        title={uiText("Status")}
+        description={uiText("Running chats, agents, model throughput, context reuse, request activity, and quota timing.")}
         onRefresh={onRefresh}
         refreshing={refreshing}
       />
@@ -296,8 +305,8 @@ export function StatusPage({
       <StatusSummary items={summary} />
 
       {healthPending ? (
-        <section className="panel-section st-service-loading" aria-label="Loading service health" aria-busy="true">
-          <PanelSkeleton label="Loading service health" count={2} />
+        <section className="panel-section st-service-loading" aria-label={uiText("Loading service health")} aria-busy="true">
+          <PanelSkeleton label={uiText("Loading service health")} count={2} />
         </section>
       ) : (
         <ServiceHealthPanel health={health} onRepair={api ? () => void repair() : undefined} repairing={repairing} />
@@ -305,34 +314,34 @@ export function StatusPage({
 
       <div className="st-primary-grid">
         <section className={`panel-section st-live-panel${healthPending ? " is-partition-loading" : ""}`} aria-busy={healthPending}>
-          {healthPending ? <div className="st-partition-skeleton"><PanelSkeleton label="Loading live router activity" count={4} /></div> : null}
+          {healthPending ? <div className="st-partition-skeleton"><PanelSkeleton label={uiText("Loading live router activity")} count={4} /></div> : null}
           <SectionHeading
-            title="Router activity"
-            description="Live work from the local health endpoint, grouped by chat and named agent."
+            title={uiText("Router activity")}
+            description={uiText("Live work from the local health endpoint, grouped by chat and named agent.")}
           />
           <div className="st-router-state">
             <RouterActivityOrb state={state} />
             <div>
               <strong>{activityLabel(state)}</strong>
               <small>{activity?.model || (health?.ok
-                ? "Ready for routed requests"
-                : health?.error || "Router unavailable")}</small>
+                ? uiText("Ready for routed requests")
+                : health?.error || uiText("Router unavailable"))}</small>
             </div>
             <Badge tone={health?.ok ? "success" : health ? "danger" : "neutral"}>
-              {health?.ok ? "reachable" : health ? "offline" : "checking"}
+              {health?.ok ? uiText("reachable") : health ? uiText("offline") : uiText("checking")}
             </Badge>
           </div>
 
           <div className="st-subsection-heading">
             <div>
-              <h3>Live requests</h3>
-              <p>Request metadata only. Prompts and responses are never shown here.</p>
+              <h3>{uiText("Live requests")}</h3>
+              <p>{uiText("Request metadata only. Prompts and responses are never shown here.")}</p>
             </div>
-            <Badge tone={activeRequestCount ? "accent" : "neutral"}>{activeRequestCount} live</Badge>
+            <Badge tone={activeRequestCount ? "accent" : "neutral"}>{uiText("{count} live", { count: activeRequestCount })}</Badge>
           </div>
 
           {active.length ? (
-            <div className="st-live-list" role="list" aria-label="Live router requests">
+            <div className="st-live-list" role="list" aria-label={uiText("Live router requests")}>
               {active.map((request, index) => {
                 const isAgent = request.isSubagent === true
                   || Boolean(request.agentName)
@@ -349,7 +358,7 @@ export function StatusPage({
                     <div className="st-request-body">
                       <header>
                         <strong>{requestTitle(request)}</strong>
-                        <Badge tone={isAgent ? "accent" : "neutral"}>{isAgent ? "agent" : "chat"}</Badge>
+                        <Badge tone={isAgent ? "accent" : "neutral"}>{isAgent ? uiText("agent") : uiText("chat")}</Badge>
                       </header>
                       <div className="st-request-meta">
                         <span>{request.provider || "router"}</span>
@@ -368,30 +377,32 @@ export function StatusPage({
           ) : (
             <EmptyState
               icon={<Activity size={20} />}
-              title={activeRequestCount ? "Request is starting" : "Router is idle"}
+              title={activeRequestCount ? uiText("Request is starting") : uiText("Router is idle")}
               body={activeRequestCount
-                ? "A request has entered the router and is waiting for route metadata."
-                : "Running chats and named subagents will appear here as they route work."}
+                ? uiText("A request has entered the router and is waiting for route metadata.")
+                : uiText("Running chats and named subagents will appear here as they route work.")}
             />
           )}
         </section>
 
         <section className={`panel-section st-context-panel${snapshotPending && !providerUsage ? " is-partition-loading" : ""}`} aria-busy={snapshotPending && !providerUsage}>
-          {snapshotPending && !providerUsage ? <div className="st-partition-skeleton"><PanelSkeleton label="Loading context efficiency" count={4} /></div> : null}
+          {snapshotPending && !providerUsage ? <div className="st-partition-skeleton"><PanelSkeleton label={uiText("Loading context efficiency")} count={4} /></div> : null}
           <SectionHeading
-            title="Context efficiency"
-            description="Accumulated cached input tokens saved across the last 24 hours, 7 days, and 30 days."
+            title={uiText("Context efficiency")}
+            description={uiText("Accumulated cached input tokens saved across the last 24 hours, 7 days, and 30 days.")}
           />
           <div className="st-context-window-heading">
-            <h3>Cached tokens saved</h3>
-            <p>Reported prefix-cache reuse, summed across routed requests.</p>
+            <h3>{uiText("Cached tokens saved")}</h3>
+            <p>{uiText("Reported prefix-cache reuse, summed across routed requests.")}</p>
           </div>
           <dl className="st-context-windows">
             {contextWindowRows.map((row) => (
               <div key={row.label}>
-                <dt>{row.label}</dt>
-                <dd>{row.value == null ? "Not reported" : compactNumber(row.value)}</dd>
-                <small>{row.value == null ? "Waiting for a cache window" : `${exactNumber(row.value)} tokens saved`}</small>
+                <dt>{uiText(row.label)}</dt>
+                <dd>{row.value == null ? uiText("Not reported") : compactNumber(row.value)}</dd>
+                <small>{row.value == null
+                  ? uiText("Waiting for a cache window")
+                  : uiText("{count} tokens saved", { count: exactNumber(row.value) })}</small>
               </div>
             ))}
           </dl>
@@ -399,40 +410,45 @@ export function StatusPage({
             <>
               <dl className="st-context-stats">
                 <div>
-                  <dt>Cached input</dt>
+                  <dt>{uiText("Cached input")}</dt>
                   <dd>{compactNumber(cachedInputTokens)}</dd>
-                  <small>{exactNumber(cachedInputTokens)} tokens reused</small>
+                  <small>{uiText("{count} tokens reused", { count: exactNumber(cachedInputTokens) })}</small>
                 </div>
                 <div>
-                  <dt>Input observed</dt>
+                  <dt>{uiText("Input observed")}</dt>
                   <dd>{compactNumber(observedInputTokens)}</dd>
-                  <small>Across {exactNumber(events.length)} recent events</small>
+                  <small>{uiText("Across {count} recent events", { count: exactNumber(events.length) })}</small>
                 </div>
                 <div>
-                  <dt>Reuse share</dt>
-                  <dd>{cacheReusePercent == null ? "Not measured" : `${cacheReusePercent.toFixed(1)}%`}</dd>
-                  <small>Cached input divided by input tokens</small>
+                  <dt>{uiText("Reuse share")}</dt>
+                  <dd>{cacheReusePercent == null ? uiText("Not measured") : `${cacheReusePercent.toFixed(1)}%`}</dd>
+                  <small>{uiText("Cached input divided by input tokens")}</small>
                 </div>
               </dl>
               <p className="st-telemetry-note">
-                The detailed event view is capped at 1,000 routed events; the windows above use accumulated cache buckets.
-                {estimatedInputEvents ? ` ${estimatedInputEvents} event${estimatedInputEvents === 1 ? " used" : "s used"} estimated input tokens.` : ""}
+                {uiText("The detailed event view is capped at 1,000 routed events; the windows above use accumulated cache buckets.")}
+                {estimatedInputEvents
+                  ? ` ${uiText(estimatedInputEvents === 1
+                    ? "1 event used estimated input tokens."
+                    : "{count} events used estimated input tokens.",
+                    { count: estimatedInputEvents })}`
+                  : ""}
               </p>
             </>
           ) : (
             <EmptyState
               icon={<BrainCircuit size={20} />}
-              title="No context reuse telemetry"
-              body="Recent routed events have not reported cached input tokens."
+              title={uiText("No context reuse telemetry")}
+              body={uiText("Recent routed events have not reported cached input tokens.")}
             />
           )}
           <section className="st-context-savings" aria-labelledby="context-savings-title">
             <header>
               <div>
-                <h3 id="context-savings-title">Tool-result compaction savings</h3>
-                <p>Tokens removed from old tool results before the next upstream request.</p>
+                <h3 id="context-savings-title">{uiText("Tool-result compaction savings")}</h3>
+                <p>{uiText("Tokens removed from old tool results before the next upstream request.")}</p>
               </div>
-              <div className="st-context-range-picker" role="radiogroup" aria-label="Compaction savings date range">
+              <div className="st-context-range-picker" role="radiogroup" aria-label={uiText("Compaction savings date range")}>
                 {CONTEXT_SAVINGS_RANGES.map((range) => (
                   <button
                     type="button"
@@ -445,7 +461,7 @@ export function StatusPage({
                       setContextSavingsRangeSelectedByUser(true);
                     }}
                   >
-                    {range.label}
+                    {uiText(range.label)}
                   </button>
                 ))}
               </div>
@@ -460,8 +476,12 @@ export function StatusPage({
             ) : (
               <p className="st-context-savings-empty">
                 {compactionStats
-                  ? `No compactions in this window${(compactionStats.requests ?? 0) > 0 ? ` · ${exactNumber(compactionStats.requests)} recorded all-time` : ""}.`
-                  : "Compaction savings will appear after the router records its first eligible result."}
+                  ? uiText("No compactions in this window{suffix}.", {
+                      suffix: (compactionStats.requests ?? 0) > 0
+                        ? uiText(" · {count} recorded all-time", { count: exactNumber(compactionStats.requests) })
+                        : "",
+                    })
+                  : uiText("Compaction savings will appear after the router records its first eligible result.")}
               </p>
             )}
           </section>
@@ -470,28 +490,28 @@ export function StatusPage({
 
       <section className="panel-section st-model-panel">
         <SectionHeading
-          title="Model breakdown"
-          description="Observed traffic, token mix, and output speed across connected providers."
+          title={uiText("Model breakdown")}
+          description={uiText("Observed traffic, token mix, and output speed across connected providers.")}
           action={allModelRows.length ? (
             <label className="st-model-search">
               <Search aria-hidden size={13} strokeWidth={1.7} />
               <input
-                aria-label="Filter models"
+                aria-label={uiText("Filter models")}
                 value={modelQuery}
                 onChange={(event) => {
                   setModelQuery(event.target.value);
                   setModelLimit(STATUS_MODEL_PAGE_SIZE);
                 }}
-                placeholder="Filter models"
+                placeholder={uiText("Filter models")}
               />
             </label>
           ) : undefined}
         />
         {!dataReady.providerUsage && !providerUsage ? (
-          <PanelSkeleton label="Loading model usage" count={6} />
+          <PanelSkeleton label={uiText("Loading model usage")} count={6} />
         ) : visibleModels.length ? (
           <>
-            <div className="st-model-list" aria-label="Model usage">
+            <div className="st-model-list" aria-label={uiText("Model usage")}>
               {visibleModels.map((model) => (
                 <StatusModelRow
                   key={`${model.providerId}/${model.slug || model.displayName}`}
@@ -502,21 +522,24 @@ export function StatusPage({
             </div>
             <div className="st-model-pagination" aria-live="polite">
               <span>
-                Showing {exactNumber(visibleModels.length)} of {exactNumber(filteredModels.length)} models
+                {uiText("Showing {shown} of {total} models", {
+                  shown: exactNumber(visibleModels.length),
+                  total: exactNumber(filteredModels.length),
+                })}
               </span>
               {visibleModels.length < filteredModels.length ? (
                 <Button
                   variant="ghost"
                   onClick={() => setModelLimit((value) => value + STATUS_MODEL_PAGE_SIZE)}
                 >
-                  Show more
+                  {uiText("Show more")}
                 </Button>
               ) : filteredModels.length > STATUS_MODEL_PAGE_SIZE ? (
                 <Button
                   variant="ghost"
                   onClick={() => setModelLimit(STATUS_MODEL_PAGE_SIZE)}
                 >
-                  Show fewer
+                  {uiText("Show fewer")}
                 </Button>
               ) : null}
             </div>
@@ -524,10 +547,10 @@ export function StatusPage({
         ) : (
           <EmptyState
             icon={modelQuery ? <SearchX size={20} /> : <Layers3 size={20} />}
-            title={modelQuery ? "No models match" : "No model traffic available"}
+            title={modelQuery ? uiText("No models match") : uiText("No model traffic available")}
             body={modelQuery
-              ? "Try a model name, slug, or provider."
-              : "A metered routed reply will establish the first model row."}
+              ? uiText("Try a model name, slug, or provider.")
+              : uiText("A metered routed reply will establish the first model row.")}
           />
         )}
       </section>
@@ -535,11 +558,11 @@ export function StatusPage({
       <div className="st-secondary-grid">
         <section className="panel-section st-reset-panel">
           <SectionHeading
-            title="Quota resets"
-            description="Reset timestamps from ChatGPT and connected provider account APIs."
+            title={uiText("Quota resets")}
+            description={uiText("Reset timestamps from ChatGPT and connected provider account APIs.")}
           />
           {usagePending ? (
-            <PanelSkeleton label="Loading quota resets" count={3} />
+            <PanelSkeleton label={uiText("Loading quota resets")} count={3} />
           ) : resetRows.length ? (
             <div className="st-reset-list">
               {resetRows.slice(0, 10).map((row) => (
@@ -552,7 +575,7 @@ export function StatusPage({
                   />
                   <span>
                     <strong>{row.provider}</strong>
-                    <small>{row.label}{row.remaining == null ? "" : `, ${Math.round(row.remaining)}% left`}</small>
+                    <small>{row.label}{row.remaining == null ? "" : uiText(", {percent}% left", { percent: Math.round(row.remaining) })}</small>
                   </span>
                   <time dateTime={dateTimeValue(row.resetAt)}>
                     <strong>{resetCountdown(row.resetAt)}</strong>
@@ -564,19 +587,19 @@ export function StatusPage({
           ) : (
             <EmptyState
               icon={<Gauge size={20} />}
-              title="No reset times reported"
-              body="Balances and local traffic do not imply a reset schedule."
+              title={uiText("No reset times reported")}
+              body={uiText("Balances and local traffic do not imply a reset schedule.")}
             />
           )}
         </section>
 
         <section className="panel-section st-speed-panel">
           <SectionHeading
-            title="Speed leaders"
-            description="Fastest observed output rates from successful requests, not synthetic benchmarks."
+            title={uiText("Speed leaders")}
+            description={uiText("Fastest observed output rates from successful requests, not synthetic benchmarks.")}
           />
           {!dataReady.providerUsage && !providerUsage ? (
-            <PanelSkeleton label="Loading model speed" count={3} />
+            <PanelSkeleton label={uiText("Loading model speed")} count={3} />
           ) : speedRows.length ? (
             <div className="st-speed-list">
               {speedRows.slice(0, 12).map((model) => (
@@ -588,14 +611,14 @@ export function StatusPage({
                     className="st-list-logo"
                   />
                   <span>
-                    <strong>{model.displayName || model.slug || "Unknown model"}</strong>
+                    <strong>{model.displayName || model.slug || uiText("Unknown model")}</strong>
                     <small>{model.providerName}</small>
                   </span>
                   <span>
-                    <strong>{Number(model.observedTokensPerSecond).toFixed(1)} tok/s</strong>
+                    <strong>{uiText("{speed} tok/s", { speed: Number(model.observedTokensPerSecond).toFixed(1) })}</strong>
                     <small>{model.speedSampleCount
-                      ? `${exactNumber(model.speedSampleCount)} successful samples`
-                      : "Sample count unavailable"}</small>
+                      ? uiText("{count} successful samples", { count: exactNumber(model.speedSampleCount) })
+                      : uiText("Sample count unavailable")}</small>
                   </span>
                 </article>
               ))}
@@ -603,8 +626,8 @@ export function StatusPage({
           ) : (
             <EmptyState
               icon={<Timer size={20} />}
-              title="No speed samples yet"
-              body="A successful metered reply with output tokens and duration will establish observed speed."
+              title={uiText("No speed samples yet")}
+              body={uiText("A successful metered reply with output tokens and duration will establish observed speed.")}
             />
           )}
         </section>
@@ -613,11 +636,11 @@ export function StatusPage({
 
       <section className="panel-section st-events-panel">
         <SectionHeading
-          title="Recent router activity"
-          description="Privacy-safe events from the recent 24-hour telemetry window."
+          title={uiText("Recent router activity")}
+          description={uiText("Privacy-safe events from the recent 24-hour telemetry window.")}
         />
         {snapshotPending ? (
-          <PanelSkeleton label="Loading recent router activity" count={5} />
+          <PanelSkeleton label={uiText("Loading recent router activity")} count={5} />
         ) : recentEvents.length ? (
           <div className="st-event-list">
             {recentEvents.map((event, index) => (
@@ -627,8 +650,8 @@ export function StatusPage({
         ) : (
           <EmptyState
             icon={<Server size={20} />}
-            title="No recent router traffic"
-            body="This list fills after a request passes through the local router."
+            title={uiText("No recent router traffic")}
+            body={uiText("This list fills after a request passes through the local router.")}
           />
         )}
       </section>
@@ -665,25 +688,31 @@ function StatusModelRow({ model, peak }: { model: StatusModelUsage; peak: number
             className="st-list-logo"
           />
           <span>
-            <strong>{model.displayName || model.slug || "Unknown model"}</strong>
+            <strong>{model.displayName || model.slug || uiText("Unknown model")}</strong>
             <small>{model.providerName}</small>
           </span>
         </div>
-        <strong>{total > 0 ? `${compactNumber(total)} tok` : `${model.requests || 0} req`}</strong>
+        <strong>{total > 0
+          ? `${compactNumber(total)} tok`
+          : uiText("{count} req", { count: model.requests || 0 })}</strong>
       </div>
       <div
         className="st-model-meter"
         role="img"
-        aria-label={`${exactNumber(total)} tokens compared with the busiest model in this view`}
+        aria-label={uiText("{count} tokens compared with the busiest model in this view", { count: exactNumber(total) })}
       >
         <i style={{ width: `${width}%` }} />
       </div>
       <div className="st-model-facts">
-        <span>{compactNumber(model.inputTokens || 0)} input</span>
-        <span>{compactNumber(model.outputTokens || 0)} output</span>
-        <span>{exactNumber(model.requests || 0)} requests</span>
-        {Number.isFinite(speed) ? <span>{speed.toFixed(1)} tok/s</span> : <span>Speed unmeasured</span>}
-        {model.speedSampleCount ? <span>{exactNumber(model.speedSampleCount)} speed samples</span> : null}
+        <span>{uiText("{count} input", { count: compactNumber(model.inputTokens || 0) })}</span>
+        <span>{uiText("{count} output", { count: compactNumber(model.outputTokens || 0) })}</span>
+        <span>{uiText("{count} requests", { count: exactNumber(model.requests || 0) })}</span>
+        {Number.isFinite(speed)
+          ? <span>{uiText("{speed} tok/s", { speed: speed.toFixed(1) })}</span>
+          : <span>{uiText("Speed unmeasured")}</span>}
+        {model.speedSampleCount
+          ? <span>{uiText("{count} speed samples", { count: exactNumber(model.speedSampleCount) })}</span>
+          : null}
       </div>
     </article>
   );
@@ -723,18 +752,18 @@ function EventRow({ event }: { event: UsageEventTelemetry }) {
         className={failure ? "st-event-logo is-failure" : success ? "st-event-logo is-success" : "st-event-logo"}
       />
       <span className="st-event-model">
-        <strong>{shortModelName(event.model || "Unknown model")}</strong>
-        <small>{event.provider || "router"}</small>
+        <strong>{shortModelName(event.model || uiText("Unknown model"))}</strong>
+        <small>{event.provider || uiText("router")}</small>
       </span>
       <span className="st-event-metering">
-        <strong>{total === undefined ? "Unmetered" : `${compactNumber(total)} tok`}</strong>
+        <strong>{total === undefined ? uiText("Unmetered") : `${compactNumber(total)} tok`}</strong>
         <small>{event.cachedInputTokens === undefined
-          ? "No cache detail"
-          : `${compactNumber(event.cachedInputTokens)} cached`}</small>
+          ? uiText("No cache detail")
+          : uiText("{count} cached", { count: compactNumber(event.cachedInputTokens) })}</small>
       </span>
       <span className="st-event-duration">
-        <strong>{event.durationMs ? formatDuration(event.durationMs) : "No duration"}</strong>
-        <small>{event.status || "No status"}</small>
+        <strong>{event.durationMs ? formatDuration(event.durationMs) : uiText("No duration")}</strong>
+        <small>{event.status || uiText("No status")}</small>
       </span>
       <span className="st-event-time">
         <time dateTime={dateTimeValue(event.at)}>{formatDateTime(event.at)}</time>
@@ -772,7 +801,7 @@ function buildResetRows(
         id: `${provider.id}-${index}-${metric.label}`,
         providerId: provider.id,
         provider: provider.displayName,
-        label: metric.label || "Usage limit",
+        label: metric.label ? uiText(metric.label) : uiText("Usage limit"),
         remaining: remainingPercent(metric),
         resetAt,
       });
@@ -789,35 +818,39 @@ function buildResetRows(
 }
 
 function eventFlag(event: UsageEventTelemetry): string | null {
-  if (event.streamAborted) return "truncated";
+  if (event.streamAborted) return uiText("truncated");
   if (event.emptyCompletionPreludeLimit) {
-    return `guard ${event.emptyCompletionPreludeLimit} limit`;
+    return uiText("guard {limit} limit", { limit: uiText(event.emptyCompletionPreludeLimit) });
   }
-  if (event.emptyCompletionRetried) return "retried empty";
-  if (event.emptyCompletion) return "empty reply";
-  if (event.emptyCompletionGuardReleased) return "guard released";
-  if (event.retries) return `${event.retries} retr${event.retries === 1 ? "y" : "ies"}`;
-  if (event.estimatedInputTokens !== undefined) return "estimated input";
+  if (event.emptyCompletionRetried) return uiText("retried empty");
+  if (event.emptyCompletion) return uiText("empty reply");
+  if (event.emptyCompletionGuardReleased) return uiText("guard released");
+  if (event.retries) {
+    return event.retries === 1
+      ? uiText("1 retry")
+      : uiText("{count} retries", { count: event.retries });
+  }
+  if (event.estimatedInputTokens !== undefined) return uiText("estimated input");
   return null;
 }
 
 function activityLabel(state: string): string {
-  if (state === "generating") return "Thinking";
-  if (state === "starting") return "Starting";
-  if (state === "error") return "Error";
-  if (state === "offline") return "Offline";
-  return "Idle";
+  if (state === "generating") return uiText("Thinking");
+  if (state === "starting") return uiText("Starting");
+  if (state === "error") return uiText("Error");
+  if (state === "offline") return uiText("Offline");
+  return uiText("Idle");
 }
 
 function requestActivityLabel(state: string): string {
-  return state === "idle" ? "Working" : activityLabel(state);
+  return state === "idle" ? uiText("Working") : activityLabel(state);
 }
 
 function requestTitle(request: ActiveRequestTelemetry): string {
   return request.agentNickname
     || request.agentName
     || requestSessionName(request)
-    || (request.model ? shortModelName(request.model) : "Routed request");
+    || (request.model ? shortModelName(request.model) : uiText("Routed request"));
 }
 
 function requestSessionName(request: ActiveRequestTelemetry): string | undefined {
@@ -851,8 +884,8 @@ function elapsedFrom(startedAt: number | string | undefined): number {
 function liveElapsedLabel(request: ActiveRequestTelemetry): string {
   const milliseconds = request.elapsedMs ?? elapsedFrom(request.startedAt);
   const seconds = Math.floor(Math.max(0, milliseconds) / 1_000);
-  if (seconds < 60) return `${seconds}s`;
-  return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+  if (seconds < 60) return uiText("{seconds}s", { seconds });
+  return uiText("{minutes}m {seconds}s", { minutes: Math.floor(seconds / 60), seconds: seconds % 60 });
 }
 
 function ContextSavingsChart({
@@ -872,7 +905,13 @@ function ContextSavingsChart({
       <div
         className="st-context-savings-bars"
         role="img"
-        aria-label={`${exactNumber(savedTokens)} tokens saved across ${exactNumber(requests)} compacted requests in the last ${range.label}, with a peak of ${exactNumber(peak)} tokens per ${range.bucketLabel}`}
+        aria-label={uiText("{tokens} tokens saved across {requests} compacted requests in the last {range}, with a peak of {peak} tokens per {unit}", {
+          tokens: exactNumber(savedTokens),
+          requests: exactNumber(requests),
+          range: uiText(range.label),
+          peak: exactNumber(peak),
+          unit: uiText(range.bucketLabel),
+        })}
         style={{ gridTemplateColumns: `repeat(${Math.max(1, buckets.length)}, minmax(0, 1fr))` }}
       >
         {buckets.map((bucket, index) => (
@@ -880,13 +919,16 @@ function ContextSavingsChart({
             key={index}
             className={bucket > 0 ? "is-populated" : ""}
             style={{ height: bucket > 0 ? `${Math.max(5, (bucket / peak) * 54)}px` : "2px" }}
-            title={`${exactNumber(bucket)} tokens saved`}
+            title={uiText("{count} tokens saved", { count: exactNumber(bucket) })}
           />
         ))}
       </div>
       <footer>
-        <span>{exactNumber(savedTokens)} tokens saved · {exactNumber(requests)} requests</span>
-        <span>Peak {compactNumber(peak)}/{range.bucketLabel}</span>
+        <span>{uiText("{tokens} tokens saved · {requests} requests", {
+          tokens: exactNumber(savedTokens),
+          requests: exactNumber(requests),
+        })}</span>
+        <span>{uiText("Peak {peak}/{unit}", { peak: compactNumber(peak), unit: uiText(range.bucketLabel) })}</span>
       </footer>
     </div>
   );
@@ -933,16 +975,16 @@ function cachedTokensForCalendarDays(
 }
 
 function limitWindowLabel(minutes: number | undefined, index: number): string {
-  if (!Number.isFinite(Number(minutes))) return index === 0 ? "Primary limit" : "Secondary limit";
+  if (!Number.isFinite(Number(minutes))) return index === 0 ? uiText("Primary limit") : uiText("Secondary limit");
   const value = Number(minutes);
   if (value >= 1_440 && value % 1_440 === 0) {
     const days = value / 1_440;
-    if (days === 1) return "Daily limit";
-    if (days === 7) return "Weekly limit";
-    return `${days}-day limit`;
+    if (days === 1) return uiText("Daily limit");
+    if (days === 7) return uiText("Weekly limit");
+    return uiText("{days}-day limit", { days });
   }
-  if (value >= 60 && value % 60 === 0) return `${value / 60}-hour limit`;
-  return `${value}-minute limit`;
+  if (value >= 60 && value % 60 === 0) return uiText("{hours}-hour limit", { hours: value / 60 });
+  return uiText("{minutes}-minute limit", { minutes: value });
 }
 
 function timestampFor(value: number | string): number {
@@ -954,14 +996,14 @@ function timestampFor(value: number | string): number {
 
 function resetCountdown(value: number | string): string {
   const remaining = timestampFor(value) - Date.now();
-  if (!Number.isFinite(remaining)) return "Time unavailable";
-  if (remaining <= 0) return "Refresh due";
+  if (!Number.isFinite(remaining)) return uiText("Time unavailable");
+  if (remaining <= 0) return uiText("Refresh due");
   const minutes = Math.ceil(remaining / 60_000);
-  if (minutes < 60) return `${minutes}m`;
+  if (minutes < 60) return uiText("{minutes}m", { minutes });
   const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ${minutes % 60}m`;
+  if (hours < 24) return uiText("{hours}h {minutes}m", { hours, minutes: minutes % 60 });
   const days = Math.floor(hours / 24);
-  return `${days}d ${hours % 24}h`;
+  return uiText("{days}d {hours}h", { days, hours: hours % 24 });
 }
 
 function dateTimeValue(value: number | string): string {

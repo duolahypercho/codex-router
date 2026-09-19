@@ -599,7 +599,8 @@ private struct IslandOverlayView: View {
       request.sessionId ?? request.sessionName ?? "request-\(request.id)"
     }
     return grouped.map { id, requests in
-      let fallback = requests.first.map(store.sessionName(for:)) ?? "Active session"
+      let fallback = requests.first.map(store.sessionName(for:))
+        ?? routerLocalized("Active session")
       let name = requests.compactMap(\.sessionName).first
         ?? (grouped.count == 1 ? store.activitySessionName : nil)
         ?? fallback
@@ -872,7 +873,9 @@ private struct IslandUsageLineChart: View {
     .onChange(of: reduceMotion) { _ in animateReveal() }
     .accessibilityElement(children: .ignore)
     .accessibilityLabel(routerLocalized("Daily token usage line chart"))
-    .accessibilityValue("\(formattedTotalTokens) tokens over \(points.count) days")
+    .accessibilityValue(
+      routerFormat("%@ tokens over %d days", formattedTotalTokens, points.count)
+    )
   }
 
   private func animateReveal() {
@@ -1899,7 +1902,7 @@ private struct DesktopPanelView: View {
         .stroke(Color.white.opacity(0.11), lineWidth: 0.8)
     )
     .accessibilityElement(children: .contain)
-    .accessibilityLabel("Codex Router usage widget")
+    .accessibilityLabel(routerLocalized("Codex Router usage widget"))
   }
 
   private var header: some View {
@@ -2035,7 +2038,7 @@ private struct DesktopQuotaBarRow: View {
           .font(.system(size: 10, weight: .medium, design: .rounded))
           .lineLimit(1)
         Spacer()
-        Text("\(Int(row.remainingPercent.rounded()))% left")
+        Text(routerFormat("%@ left", "\(Int(row.remainingPercent.rounded()))%"))
           .font(.system(size: 10, weight: .semibold, design: .rounded))
           .monospacedDigit()
           .foregroundStyle(tint)
@@ -2051,7 +2054,7 @@ private struct DesktopQuotaBarRow: View {
       .frame(height: 4)
 
       HStack(spacing: 6) {
-        Text(row.label)
+        Text(routerLocalized(row.label))
           .lineLimit(1)
         Spacer()
         if let resetAt = row.resetAt {
@@ -2086,17 +2089,36 @@ enum DesktopWidgetPresentation {
 
   nonisolated static func quotaAccessibilityLabel(
     _ row: DesktopQuotaRow,
-    now: Date = Date()
+    now: Date = Date(),
+    // Explicit so a test can pin the language: the tray language suite mutates
+    // the process-wide selection from a parallel suite.
+    language: ResolvedTrayLanguage = RouterLanguage.resolution
   ) -> String {
-    let remaining = "\(Int(row.remainingPercent.rounded())) percent left"
+    func localized(_ english: String) -> String { language.table?[english] ?? english }
+    let remaining = String(
+      format: localized("%d percent left"),
+      Int(row.remainingPercent.rounded())
+    )
+    let label = localized(row.label)
     guard let resetAt = row.resetAt else {
-      return "\(row.providerName), \(row.label), \(remaining)"
+      return String(
+        format: localized("%@, %@, %@"),
+        row.providerName,
+        label,
+        remaining
+      )
     }
     let reset = resetCountdownLabel(
       Date(timeIntervalSince1970: resetAt),
       now: now,
-      chinese: false
+      chinese: language == .chinese
     )
-    return "\(row.providerName), \(row.label), \(remaining), \(reset)"
+    return String(
+      format: localized("%@, %@, %@, %@"),
+      row.providerName,
+      label,
+      remaining,
+      reset
+    )
   }
 }

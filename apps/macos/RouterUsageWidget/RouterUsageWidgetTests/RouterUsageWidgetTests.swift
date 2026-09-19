@@ -183,13 +183,41 @@ final class RouterUsageWidgetTests: XCTestCase {
   func testTokenWordingDistinguishesAccountUsageFromRoutedProviderTraffic() {
     let preview = RouterWidgetSnapshot.preview
     XCTAssertEqual(
-      RouterUsageWidgetView.todayTokenLabel(for: preview.usageSource(id: "openai")),
+      RouterUsageWidgetView.todayTokenLabel(
+        for: preview.usageSource(id: "openai"),
+        language: .english
+      ),
       "account tokens"
     )
     XCTAssertEqual(
-      RouterUsageWidgetView.todayTokenLabel(for: preview.usageSource(id: "deepseek")),
+      RouterUsageWidgetView.todayTokenLabel(
+        for: preview.usageSource(id: "deepseek"),
+        language: .english
+      ),
       "tokens routed"
     )
+  }
+
+  func testLocalizedTokenWordingFollowsThePublishedLanguage() {
+    let preview = RouterWidgetSnapshot.preview
+    XCTAssertEqual(
+      RouterUsageWidgetView.todayTokenLabel(
+        for: preview.usageSource(id: "openai"),
+        language: .chinese
+      ),
+      "账户 token"
+    )
+    XCTAssertEqual(
+      RouterUsageWidgetView.todayTokenLabel(
+        for: preview.usageSource(id: "deepseek"),
+        language: .chinese
+      ),
+      "路由 token"
+    )
+    XCTAssertEqual(RouterResetWidgetView.countdown(to: nil, now: Date(), language: .chinese), "即将")
+    XCTAssertEqual(RouterWidgetLanguage.resolve("chinese"), .chinese)
+    XCTAssertEqual(RouterWidgetLanguage.resolve("english"), .english)
+    XCTAssertEqual(RouterWidgetLanguage.resolve(nil), RouterWidgetLanguage.system)
   }
 
   func testRouterOnlyDaysAreNamedInsteadOfPassingAsAccountTotals() {
@@ -198,7 +226,7 @@ final class RouterUsageWidgetTests: XCTestCase {
 
     XCTAssertTrue(source.todayIsRouterFallback)
     XCTAssertEqual(
-      RouterUsageWidgetView.todayTokenLabel(for: source),
+      RouterUsageWidgetView.todayTokenLabel(for: source, language: .english),
       "this Mac · account not reported yet"
     )
     // The headline number is the measured one, not the zero this used to

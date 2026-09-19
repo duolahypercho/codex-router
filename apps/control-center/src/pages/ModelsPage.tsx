@@ -3,6 +3,9 @@ import { Check, ChevronDown, Filter, KeyRound, Link2, LogIn, MoreHorizontal, Plu
 import { Badge, Button, CatalogSkeleton, Dialog, EmptyState, PageHeader, PanelSkeleton, SearchField, SkeletonBlock, Toggle } from "../components";
 import { BrandLogo, ProviderLogo, brandForModel } from "../provider-branding";
 import { formatContext, formatDateTime } from "../lib";
+import { detectLanguage } from "../i18n";
+import { backendText } from "../backend-text";
+import { effortLabel, uiText } from "../ui-text";
 import {
   addPendingCatalogModels,
   beginCatalogRequest,
@@ -35,6 +38,20 @@ import "./providers-models.css";
 type StatusFilter = "all" | "on" | "off" | "blocked";
 const CATALOG_ADD_BATCH_LIMIT = 200;
 
+function statusLabel(filter: StatusFilter): string {
+  if (filter === "on") return uiText("On");
+  if (filter === "off") return uiText("Off");
+  if (filter === "blocked") return uiText("Needs a provider");
+  return uiText("All models");
+}
+
+/** The shared effort label keeps the provider's own id ("max") for a known
+ *  effort and localizes it as "最高 (max)". The route default is not a provider
+ *  effort, so it gets its own word instead of the raw id. */
+function routeEffortLabel(effort: string): string {
+  return effort === "default" ? uiText("Default") : effortLabel(effort);
+}
+
 /** One model, and every provider route that can serve it. */
 interface ModelFamily {
   id: string;
@@ -57,15 +74,6 @@ interface CatalogModel {
   contextWindow?: number;
   isFree: boolean;
 }
-
-const STATUS_LABELS: Record<StatusFilter, string> = {
-  all: "All models",
-  on: "On",
-  off: "Off",
-  blocked: "Needs a provider",
-};
-
-const ALL_PROVIDERS_LABEL = "All providers";
 
 /** Below this, a list is short enough to read whole; filters and bulk switches
  *  would be more chrome than the list they act on. */
@@ -168,6 +176,9 @@ export function ModelsPage({ target, catalog, setup, usage, api, refreshing, dat
   // slowest thing this page starts; without a placeholder the models simply are
   // not there for the length of it and the click reads as having done nothing.
   const [pendingModels, setPendingModels] = useState<PendingCatalogModels>({});
+  // Provider labels below are produced through uiText, so a language change has
+  // to invalidate the memos that build them.
+  const language = detectLanguage();
 
   // External model identity and picker visibility come from the router-owned
   // catalog. Native entries remain a Codex-only adapter concern and are merged
@@ -250,7 +261,7 @@ export function ModelsPage({ target, catalog, setup, usage, api, refreshing, dat
       const rightConnected = providerConnected(right, enabledProviders);
       return Number(rightConnected) - Number(leftConnected) || left.displayName.localeCompare(right.displayName);
     });
-  }, [catalog?.knownModels, enabledProviders, models, setup?.providers, target?.providers]);
+  }, [catalog?.knownModels, enabledProviders, language, models, setup?.providers, target?.providers]);
   const directoryById = useMemo(() => new Map(directory.map((entry) => [entry.id, entry])), [directory]);
   const providerStates = useMemo(() => new Map(directory.map((entry) => [
     entry.id,
@@ -367,7 +378,7 @@ export function ModelsPage({ target, catalog, setup, usage, api, refreshing, dat
           ...current,
           status: "error",
           refreshing: false,
-          error: error instanceof Error ? error.message : "Provider catalog could not be loaded.",
+          error: error instanceof Error ? error.message : uiText("Provider catalog could not be loaded."),
         });
     }
   };
@@ -396,7 +407,10 @@ export function ModelsPage({ target, catalog, setup, usage, api, refreshing, dat
     let published = false;
     setPendingModels((current) => addPendingCatalogModels(current, entry.id, selected));
     try {
-      await runAction(`Add ${selected.length} ${entry.displayName} model${selected.length === 1 ? "" : "s"}`, async () => {
+      const addLabel = selected.length === 1
+        ? uiText("Add 1 {provider} model", { provider: entry.displayName })
+        : uiText("Add {count} {provider} models", { count: selected.length, provider: entry.displayName });
+      await runAction(addLabel, async () => {
         await api.addProviderModels(sourceId, selected);
         published = true;
       });
@@ -433,7 +447,7 @@ export function ModelsPage({ target, catalog, setup, usage, api, refreshing, dat
   };
 
   const renderConnections = () => !dataReady.providers && !setup ? (
-    <section className="pm-connections pm-connections-loading" aria-label="Loading provider connections" aria-busy="true">
+    <section className="pm-connections pm-connections-loading" aria-label={uiText("Loading provider connections")} aria-busy="true">
       <SkeletonBlock />
       <SkeletonBlock />
       <SkeletonBlock />
@@ -453,13 +467,14 @@ export function ModelsPage({ target, catalog, setup, usage, api, refreshing, dat
       isEnabled={(entry) => optimisticProviders.value(entry.id, enabledProviders.has(entry.id) || entry.models.some((model) => model.native))}
       onEnabledChange={(entry, checked) => {
         if (!api) return;
-        void optimisticProviders.mutate(entry.id, checked, `${checked ? "Enable" : "Disable"} ${entry.displayName}`, () => api.setProviderEnabled(entry.id, checked));
+        const label = checked ? uiText("Enable {name}", { name: entry.displayName }) : uiText("Disable {name}", { name: entry.displayName });
+        void optimisticProviders.mutate(entry.id, checked, label, () => api.setProviderEnabled(entry.id, checked));
       }}
       onSignIn={(entry) => {
         if (!api || !entry.setup) return;
         const label = entry.setup.action === "probe"
-          ? `Run ${entry.displayName} live compatibility test`
-          : `Start ${entry.displayName} sign-in`;
+          ? uiText("Run {name} live compatibility test", { name: entry.displayName })
+          : uiText("Start {name} sign-in", { name: entry.displayName });
         void runProviderCredentialAction(entry.setup, label, () => api.connectProvider(entry.id));
       }}
       onConfigure={(entry) => entry.setup && setConfigurationProvider(entry.setup)}
@@ -472,31 +487,31 @@ export function ModelsPage({ target, catalog, setup, usage, api, refreshing, dat
       <CredentialDialog
         provider={credentialProvider}
         onSave={(provider, secret) => api
-          ? runProviderCredentialAction(provider, `Save ${provider.displayName} credential`, () => api.saveProviderCredential(provider.id, secret))
+          ? runProviderCredentialAction(provider, uiText("Save {name} credential", { name: provider.displayName }), () => api.saveProviderCredential(provider.id, secret))
           : Promise.resolve()}
         onClose={() => setCredentialProvider(null)}
       />
       <Dialog
         open={Boolean(configurationProvider)}
-        title={`Configure ${configurationProvider?.displayName || "provider"}`}
-        description="This provider uses local configuration rather than an API key."
+        title={uiText("Configure {name}", { name: configurationProvider?.displayName || uiText("provider") })}
+        description={uiText("This provider uses local configuration rather than an API key.")}
         onClose={() => setConfigurationProvider(null)}
       >
         <div className="pm-credential-warning">
           <ShieldCheck aria-hidden size={17} strokeWidth={1.7} />
-          <p>{configurationProvider?.configurationNote || "Run the provider's local configuration command, then refresh this page."}</p>
+          <p>{backendText(configurationProvider?.configurationNote) || uiText("Run the provider's local configuration command, then refresh this page.")}</p>
         </div>
         <div className="dialog-actions">
-          <Button variant="secondary" onClick={() => setConfigurationProvider(null)}>Close</Button>
+          <Button variant="secondary" onClick={() => setConfigurationProvider(null)}>{uiText("Close")}</Button>
         </div>
       </Dialog>
-      <Dialog open={Boolean(removeProvider)} title="Disconnect provider" description="The provider is withdrawn from installed clients before its managed credential is deleted." onClose={() => setRemoveProvider(null)}>
+      <Dialog open={Boolean(removeProvider)} title={uiText("Disconnect provider")} description={uiText("The provider is withdrawn from installed clients before its managed credential is deleted.")} onClose={() => setRemoveProvider(null)}>
         <div className="pm-credential-warning"><ShieldCheck aria-hidden size={17} strokeWidth={1.7} /><p>{removeProvider?.id === "antigravity-oauth"
-          ? "This removes only the router-owned OAuth client, session, and live proof. Official Antigravity or agy credentials are never read or changed."
-          : "If a credential also exists in the environment or Keychain, the router will still report it as connected."}</p></div>
+          ? uiText("This removes only the router-owned OAuth client, session, and live proof. Official Antigravity or agy credentials are never read or changed.")
+          : uiText("If a credential also exists in the environment or Keychain, the router will still report it as connected.")}</p></div>
         <div className="dialog-actions">
-          <Button variant="secondary" onClick={() => setRemoveProvider(null)}>Cancel</Button>
-          <Button variant="danger" onClick={() => { const provider = removeProvider; setRemoveProvider(null); if (provider && api) void runProviderCredentialAction(provider, `Remove ${provider.displayName} credential`, () => api.removeProviderCredential(provider.id)); }}><Trash2 aria-hidden size={14} strokeWidth={1.7} /> Disconnect</Button>
+          <Button variant="secondary" onClick={() => setRemoveProvider(null)}>{uiText("Cancel")}</Button>
+          <Button variant="danger" onClick={() => { const provider = removeProvider; setRemoveProvider(null); if (provider && api) void runProviderCredentialAction(provider, uiText("Remove {name} credential", { name: provider.displayName }), () => api.removeProviderCredential(provider.id)); }}><Trash2 aria-hidden size={14} strokeWidth={1.7} /> {uiText("Disconnect")}</Button>
         </div>
       </Dialog>
     </>
@@ -512,7 +527,7 @@ export function ModelsPage({ target, catalog, setup, usage, api, refreshing, dat
         .toLowerCase()
         .includes(needle);
     });
-  }, [activeProviderFilter, families, modelSearch]);
+  }, [activeProviderFilter, families, language, modelSearch]);
 
   // Row order never depends on a switch. Sorting by on/off would throw the row
   // you just clicked to the other end of the list, at the exact moment you are
@@ -543,19 +558,19 @@ export function ModelsPage({ target, catalog, setup, usage, api, refreshing, dat
       <>
         <div className="providers-models-page models-page">
           <PageHeader
-            eyebrow="Models"
-            title="Models"
-            description="Choose which models your installed clients can use, and connect the accounts that serve them."
+            eyebrow={uiText("Models")}
+            title={uiText("Models")}
+            description={uiText("Choose which models your installed clients can use, and connect the accounts that serve them.")}
             onRefresh={onRefresh}
             refreshing={refreshing}
           />
           {renderConnections()}
           {!dataReady.snapshot ? (
-            <section className="panel-section pm-models-loading" aria-label="Loading models" aria-busy="true">
-              <PanelSkeleton label="Loading model routes" count={6} />
+            <section className="panel-section pm-models-loading" aria-label={uiText("Loading models")} aria-busy="true">
+              <PanelSkeleton label={uiText("Loading model routes")} count={6} />
             </section>
           ) : (
-            <EmptyState icon={<SearchX size={22} />} title="Router snapshot unavailable" body="Start the router or refresh after setup completes." />
+            <EmptyState icon={<SearchX size={22} />} title={uiText("Router snapshot unavailable")} body={uiText("Start the router or refresh after setup completes.")} />
           )}
         </div>
         {renderConnectionDialogs()}
@@ -568,13 +583,13 @@ export function ModelsPage({ target, catalog, setup, usage, api, refreshing, dat
     .filter((slug) => !entry.models.some((model) => model.slug === slug)));
 
   const updatePicker = (slug: string, visible: boolean) => api
-    ? optimisticPicker.mutate(slug, visible, `${visible ? "Show" : "Hide"} ${slug}`, () => api.setPickerModel(slug, visible))
+    ? optimisticPicker.mutate(slug, visible, visible ? uiText("Show {name}", { name: slug }) : uiText("Hide {name}", { name: slug }), () => api.setPickerModel(slug, visible))
     : Promise.resolve();
   const updateSubagent = (slug: string, enabled: boolean) => api
-    ? optimisticSubagents.mutate(slug, enabled, `${enabled ? "Enable" : "Disable"} ${slug} as subagent`, () => api.setSubagentModel(slug, enabled))
+    ? optimisticSubagents.mutate(slug, enabled, enabled ? uiText("Enable {name} as subagent", { name: slug }) : uiText("Disable {name} as subagent", { name: slug }), () => api.setSubagentModel(slug, enabled))
     : Promise.resolve();
   const updateSubagentEffort = (slug: string, effort: string) => api
-    ? optimisticSubagentEfforts.mutate(slug, effort, `Set ${slug} subagent thinking to ${effortLabel(effort)}`, () => api.setSubagentEffort(slug, effort))
+    ? optimisticSubagentEfforts.mutate(slug, effort, uiText("Set {name} subagent thinking to {effort}", { name: slug, effort: routeEffortLabel(effort) }), () => api.setSubagentEffort(slug, effort))
     : Promise.resolve();
 
   // The row-level switch speaks for the whole model: turning it on publishes
@@ -586,13 +601,13 @@ export function ModelsPage({ target, catalog, setup, usage, api, refreshing, dat
     if (visible) {
       const route = preferredFamilyRoute({ ...family, routes: selectable }) ?? selectable[0];
       if (!route) return Promise.resolve();
-      return optimisticPicker.mutate(route.slug, true, `Show ${family.displayName}`, () => api.setPickerModel(route.slug, true));
+      return optimisticPicker.mutate(route.slug, true, uiText("Show {name}", { name: family.displayName }), () => api.setPickerModel(route.slug, true));
     }
     const withdraw = inPicker.filter((model) => !nativeClientManaged(model));
     if (!withdraw.length) return Promise.resolve();
     return optimisticPicker.mutateMany(
       withdraw.map((model) => [model.slug, false] as const),
-      `Hide ${family.displayName}`,
+      uiText("Hide {name}", { name: family.displayName }),
       async () => {
         for (const model of withdraw) await api.setPickerModel(model.slug, false);
       },
@@ -636,9 +651,9 @@ export function ModelsPage({ target, catalog, setup, usage, api, refreshing, dat
     <>
       <div className="providers-models-page models-page">
         <PageHeader
-          eyebrow="Models"
-          title="Models"
-          description="Choose which models your installed clients can use, and connect the accounts that serve them."
+          eyebrow={uiText("Models")}
+          title={uiText("Models")}
+          description={uiText("Choose which models your installed clients can use, and connect the accounts that serve them.")}
           onRefresh={onRefresh}
           refreshing={refreshing}
         />
@@ -647,14 +662,14 @@ export function ModelsPage({ target, catalog, setup, usage, api, refreshing, dat
 
         <section className="panel-section pm-model-catalog" id="model-catalog-controls">
           <div className="pm-model-toolbar">
-            <SearchField value={modelSearch} onChange={setModelSearch} placeholder="Search models" />
+            <SearchField value={modelSearch} onChange={setModelSearch} placeholder={uiText("Search models")} />
             {/* The count describes the list underneath it. Reporting the whole
                 catalogue while a filter is narrowing the view made the filter
                 look broken. */}
             <span className="pm-results-count" aria-live="polite">
               {modelSearch || statusFilter !== "all" || activeProviderFilter !== "all"
-                ? `${visibleRows.length} of ${families.length} models`
-                : `${families.length} models`}
+                ? uiText("{shown} of {total} models", { shown: visibleRows.length, total: families.length })
+                : uiText("{count} models", { count: families.length })}
             </span>
             {/* A short list reads whole. Filters and bulk switches only earn
                 their space once scrolling starts. */}
@@ -668,12 +683,12 @@ export function ModelsPage({ target, catalog, setup, usage, api, refreshing, dat
                   onClick={() => setFilterMenuOpen((open) => !open)}
                 >
                   <Filter aria-hidden size={14} strokeWidth={1.7} />
-                  <span>Show</span>
-                  <strong>{STATUS_LABELS[statusFilter]}</strong>
+                  <span>{uiText("Show")}</span>
+                  <strong>{statusLabel(statusFilter)}</strong>
                   <ChevronDown aria-hidden size={14} strokeWidth={1.7} className={filterMenuOpen ? "is-open" : ""} />
                 </button>
                 {filterMenuOpen ? (
-                  <div className="pm-filter-menu" role="menu" aria-label="Filter models">
+                  <div className="pm-filter-menu" role="menu" aria-label={uiText("Filter models")}>
                     {(["all", "on", "off", "blocked"] as const).map((value) => (
                       <button
                         key={value}
@@ -686,7 +701,7 @@ export function ModelsPage({ target, catalog, setup, usage, api, refreshing, dat
                           setFilterMenuOpen(false);
                         }}
                       >
-                        <span>{STATUS_LABELS[value]}</span>
+                        <span>{statusLabel(value)}</span>
                         {statusFilter === value ? <Check aria-hidden size={14} strokeWidth={1.9} /> : null}
                       </button>
                     ))}
@@ -707,13 +722,13 @@ export function ModelsPage({ target, catalog, setup, usage, api, refreshing, dat
                   onClick={() => setProviderFilterMenuOpen((open) => !open)}
                 >
                   <Filter aria-hidden size={14} strokeWidth={1.7} />
-                  <span>Provider</span>
-                  <strong>{activeProviderFilter === "all" ? ALL_PROVIDERS_LABEL : providerNames.get(activeProviderFilter) || activeProviderFilter}</strong>
+                  <span>{uiText("Provider")}</span>
+                  <strong>{activeProviderFilter === "all" ? uiText("All providers") : providerNames.get(activeProviderFilter) || activeProviderFilter}</strong>
                   <ChevronDown aria-hidden size={14} strokeWidth={1.7} className={providerFilterMenuOpen ? "is-open" : ""} />
                 </button>
                 {providerFilterMenuOpen ? (
-                  <div className="pm-filter-menu pm-provider-filter-menu" role="menu" aria-label="Filter models by provider">
-                    {[{ id: "all", displayName: ALL_PROVIDERS_LABEL }, ...filterProviders].map((entry) => (
+                  <div className="pm-filter-menu pm-provider-filter-menu" role="menu" aria-label={uiText("Filter models by provider")}>
+                    {[{ id: "all", displayName: uiText("All providers") }, ...filterProviders].map((entry) => (
                       <button
                         key={entry.id}
                         type="button"
@@ -739,48 +754,48 @@ export function ModelsPage({ target, catalog, setup, usage, api, refreshing, dat
                 className="pm-icon-trigger"
                 aria-haspopup="menu"
                 aria-expanded={bulkMenuOpen}
-                aria-label="More model actions"
+                aria-label={uiText("More model actions")}
                 disabled={!api}
                 onClick={() => setBulkMenuOpen((open) => !open)}
               >
                 <MoreHorizontal aria-hidden size={15} strokeWidth={1.9} />
               </button>
               {bulkMenuOpen ? (
-                <div className="pm-filter-menu" role="menu" aria-label="Bulk model actions">
+                <div className="pm-filter-menu" role="menu" aria-label={uiText("Bulk model actions")}>
                   <button
                     type="button"
                     role="menuitem"
                     onClick={() => {
                       setBulkMenuOpen(false);
-                      if (api) void optimisticPicker.mutateMany(models.filter((model) => !nativeClientManaged(model)).map((model) => [model.slug, true] as const), "Show all router models", () => api.setPickerModels(true));
+                      if (api) void optimisticPicker.mutateMany(models.filter((model) => !nativeClientManaged(model)).map((model) => [model.slug, true] as const), uiText("Show all router models"), () => api.setPickerModels(true));
                     }}
                   >
-                    <span>Turn all on</span>
+                    <span>{uiText("Turn all on")}</span>
                   </button>
                   <button
                     type="button"
                     role="menuitem"
                     onClick={() => {
                       setBulkMenuOpen(false);
-                      if (api) void optimisticPicker.mutateMany(models.filter((model) => !nativeClientManaged(model)).map((model) => [model.slug, false] as const), "Hide all router models", () => api.setPickerModels(false));
+                      if (api) void optimisticPicker.mutateMany(models.filter((model) => !nativeClientManaged(model)).map((model) => [model.slug, false] as const), uiText("Hide all router models"), () => api.setPickerModels(false));
                     }}
                   >
-                    <span>Turn all off</span>
+                    <span>{uiText("Turn all off")}</span>
                   </button>
                 </div>
               ) : null}
             </div>
             <Button variant="primary" disabled={!api || !connectedProviderCount} onClick={openAddModels}>
-              <Plus aria-hidden size={14} strokeWidth={1.9} /> Add models
+              <Plus aria-hidden size={14} strokeWidth={1.9} /> {uiText("Add models")}
             </Button>
           </div>
 
           {!connectedProviderCount && !families.length ? (
             <EmptyState
               icon={<Plus size={20} />}
-              title="Connect a provider to get started"
-              body="A provider is the account the router calls on your behalf. Connect one and its models appear here, ready to switch on."
-              action={<Button variant="primary" disabled={!api} onClick={() => setConnectMenuOpen(true)}>Connect provider</Button>}
+              title={uiText("Connect a provider to get started")}
+              body={uiText("A provider is the account the router calls on your behalf. Connect one and its models appear here, ready to switch on.")}
+              action={<Button variant="primary" disabled={!api} onClick={() => setConnectMenuOpen(true)}>{uiText("Connect provider")}</Button>}
             />
           ) : readyRows.length || blockedRows.length || pendingSlugs.length ? (
             <>
@@ -793,7 +808,7 @@ export function ModelsPage({ target, catalog, setup, usage, api, refreshing, dat
               {blockedRows.length ? (
                 <section className="pm-group" data-group="blocked">
                   <h3 className="pm-group-heading">
-                    <span>Needs a provider</span>
+                    <span>{uiText("Needs a provider")}</span>
                     <small>{blockedRows.length}</small>
                   </h3>
                   <div className="pm-family-list">{blockedRows.map(renderRow)}</div>
@@ -803,10 +818,10 @@ export function ModelsPage({ target, catalog, setup, usage, api, refreshing, dat
           ) : (
             <EmptyState
               icon={<SearchX size={20} />}
-              title="No models match"
+              title={uiText("No models match")}
               body={modelSearch || statusFilter !== "all" || activeProviderFilter !== "all"
-                ? "Clear the search or the filters, or add models from a connected provider."
-                : "Add models from a connected provider to fill this list."}
+                ? uiText("Clear the search or the filters, or add models from a connected provider.")
+                : uiText("Add models from a connected provider to fill this list.")}
             />
           )}
         </section>
@@ -889,10 +904,10 @@ function ConnectionsBar({
   }, [connectMenuOpen, onCloseProvider, onConnectMenuOpen, openProviderId]);
 
   return (
-    <section className="panel-section pm-connections" id="model-provider-directory" ref={barRef} aria-label="Provider connections">
+    <section className="panel-section pm-connections" id="model-provider-directory" ref={barRef} aria-label={uiText("Provider connections")}>
       <div className="pm-connections-label">
-        <strong>Connections</strong>
-        <small>{connected.length} of {directory.length} connected</small>
+        <strong>{uiText("Connections")}</strong>
+        <small>{uiText("{connected} of {total} connected", { connected: connected.length, total: directory.length })}</small>
       </div>
       <div className="pm-connections-chips">
         {connected.map((entry) => (
@@ -934,10 +949,10 @@ function ConnectionsBar({
               onClick={() => { onCloseProvider(); onConnectMenuOpen(!connectMenuOpen); }}
             >
               <Plus aria-hidden size={13} strokeWidth={2} />
-              <span>Connect provider</span>
+              <span>{uiText("Connect provider")}</span>
             </button>
             {connectMenuOpen ? (
-              <div className="pm-connect-menu" role="menu" aria-label="Providers you can connect">
+              <div className="pm-connect-menu" role="menu" aria-label={uiText("Providers you can connect")}>
                 {available.map((entry) => (
                   <button
                     key={entry.id}
@@ -990,7 +1005,7 @@ function ProviderMenu({
 }) {
   const setup = entry.setup;
   return (
-    <div className="pm-connection-menu" role="dialog" aria-label={`${entry.displayName} connection`}>
+    <div className="pm-connection-menu" role="dialog" aria-label={uiText("{name} connection", { name: entry.displayName })}>
       <div className="pm-connection-menu-head">
         <ProviderLogo providerId={entry.id} displayName={entry.displayName} size="large" />
         <div>
@@ -999,17 +1014,19 @@ function ProviderMenu({
         </div>
       </div>
       <p className="pm-connection-menu-copy">
-        {setup?.planNote || connectionDetail(entry, usage?.account?.status, usage?.account?.message, platform === "darwin")}
+        {backendText(setup?.planNote) || connectionDetail(entry, usage?.account?.status, usage?.account?.message, platform === "darwin")}
       </p>
-      {usage?.requests ? <small className="pm-connection-menu-usage">{usage.requests} {usage.requests === 1 ? "request" : "requests"} so far</small> : null}
+      {usage?.requests ? <small className="pm-connection-menu-usage">{usage.requests === 1
+        ? uiText("1 request so far")
+        : uiText("{count} requests so far", { count: usage.requests })}</small> : null}
       {setup ? (
         <>
           <label className="pm-connection-menu-enable">
-            <span>Available to installed clients</span>
+            <span>{uiText("Available to installed clients")}</span>
             <Toggle
               checked={enabled}
               disabled={!apiAvailable || !setup.configured}
-              label={`Make ${entry.displayName} available to installed clients`}
+                label={uiText("Make {name} available to installed clients", { name: entry.displayName })}
               onChange={onEnabledChange}
             />
           </label>
@@ -1018,21 +1035,21 @@ function ProviderMenu({
               <Button
                 variant="ghost"
                 disabled={!apiAvailable || setup.action === "blocked" || (entry.id !== "antigravity-oauth" && platform !== "darwin")}
-                title={entry.id === "antigravity-oauth" || platform === "darwin" ? undefined : "Open the provider CLI in your own terminal on Windows or Linux."}
+                title={entry.id === "antigravity-oauth" || platform === "darwin" ? undefined : uiText("Open the provider CLI in your own terminal on Windows or Linux.")}
                 onClick={onSignIn}
               >
                 <LogIn aria-hidden size={14} strokeWidth={1.7} />
-                {setup.action === "probe" ? "Run live test" : setup.configured ? "Sign in again" : "Open sign-in"}
+                {setup.action === "probe" ? uiText("Run live test") : setup.configured ? uiText("Sign in again") : uiText("Open sign-in")}
               </Button>
             ) : null}
             {setup.kind === "api" && entry.id !== "local" ? (
               <Button variant="ghost" disabled={!apiAvailable} onClick={onKey}>
-                <KeyRound aria-hidden size={14} strokeWidth={1.7} /> {setup.configured ? "Replace key" : "Add key"}
+                <KeyRound aria-hidden size={14} strokeWidth={1.7} /> {setup.configured ? uiText("Replace key") : uiText("Add key")}
               </Button>
             ) : null}
             {((setup.kind === "api" && setup.configured) || setup.disconnectable) && entry.id !== "local" ? (
               <Button variant="ghost" disabled={!apiAvailable} onClick={onRemove}>
-                <Trash2 aria-hidden size={14} strokeWidth={1.7} /> Disconnect
+                <Trash2 aria-hidden size={14} strokeWidth={1.7} /> {uiText("Disconnect")}
               </Button>
             ) : null}
           </div>
@@ -1088,13 +1105,13 @@ function ModelFamilyRow({
 
   // One muted line under the name instead of a row of columns. Reading left to
   // right beats hunting the same fact in four different x-positions.
-  const facts = [
-    providerIds.length > 1 ? `${providerIds.length} providers` : providerNames.get(providerIds[0]) || maker.name,
-    preferred?.contextWindow ? formatContext(preferred.contextWindow) : undefined,
-    family.routes.some((model) => model.inputModalities?.includes("image")) ? "Text + image" : "Text",
-    family.routes.some((model) => model.isFree) ? "Free" : undefined,
-    multiRoute ? `${family.routes.length} routes` : undefined,
-  ].filter(Boolean);
+    const facts = [
+      providerIds.length > 1 ? uiText("{count} providers", { count: providerIds.length }) : providerNames.get(providerIds[0]) || maker.name,
+      preferred?.contextWindow ? formatContext(preferred.contextWindow) : undefined,
+      family.routes.some((model) => model.inputModalities?.includes("image")) ? uiText("Text + image") : uiText("Text"),
+      family.routes.some((model) => model.isFree) ? uiText("Free") : undefined,
+      multiRoute ? uiText("{count} routes", { count: family.routes.length }) : undefined,
+    ].filter(Boolean);
 
   return (
     <article className="pm-family-row" data-expanded={expanded} data-on={on} data-blocked={blocked}>
@@ -1119,15 +1136,17 @@ function ModelFamilyRow({
         <div className="pm-family-action">
           {blocked ? (
             <Button variant="secondary" disabled={!apiAvailable} onClick={() => onConnect(providerIds[0])}>
-              {providerIds.length > 1 ? "Connect a provider" : `Connect ${providerNames.get(providerIds[0]) || providerIds[0]}`}
+                {providerIds.length > 1 ? uiText("Connect a provider") : uiText("Connect {name}", { name: providerNames.get(providerIds[0]) || providerIds[0] })}
             </Button>
           ) : (
             <>
-              <span className="pm-family-state" aria-hidden>{on ? "On" : "Off"}</span>
+                <span className="pm-family-state" aria-hidden>{on ? uiText("On") : uiText("Off")}</span>
               <Toggle
                 checked={on}
                 disabled={!apiAvailable || managedByClient}
-                label={managedByClient ? `${family.displayName} is managed by Codex` : `Use ${family.displayName} in Codex`}
+                  label={managedByClient
+                    ? uiText("{name} is managed by Codex", { name: family.displayName })
+                    : uiText("Use {name} in Codex", { name: family.displayName })}
                 onChange={onFamilyPicker}
               />
             </>
@@ -1137,20 +1156,20 @@ function ModelFamilyRow({
       <div id={panelId} className="pm-family-panel" role="region" aria-labelledby={triggerId} hidden={!expanded}>
         {multiRoute ? (
           <>
-            <div className="pm-family-route-note">
-              The same model reaches you through more than one account. Each one has its own credential, quota, and pricing.
-            </div>
+              <div className="pm-family-route-note">
+                {uiText("The same model reaches you through more than one account. Each one has its own credential, quota, and pricing.")}
+              </div>
             {/* Labelling every row cost 12 words for 4 switches, and every row
                 sized its own columns so nothing lined up down the list. One
                 header, one shared grid. */}
-            <div className="pm-route-table" role="list" aria-label={`${family.displayName} routes`}>
-              <div className="pm-route-head" aria-hidden="true">
-                <span>Account</span>
-                <span>Context</span>
-                <span>Input</span>
-                <span>In picker</span>
-                <span>Subagents</span>
-                <span>Thinking</span>
+              <div className="pm-route-table" role="list" aria-label={uiText("{name} routes", { name: family.displayName })}>
+                <div className="pm-route-head" aria-hidden="true">
+                  <span>{uiText("Account")}</span>
+                  <span>{uiText("Context")}</span>
+                  <span>{uiText("Input")}</span>
+                  <span>{uiText("In picker")}</span>
+                  <span>{uiText("Subagents")}</span>
+                  <span>{uiText("Reasoning effort")}</span>
               </div>
               {family.routes.map((model) => (
                 <ModelRouteRow
@@ -1208,16 +1227,16 @@ function ModelDetails({
   return (
     <dl className="pm-model-details">
       <div>
-        <dt>Model id</dt>
+        <dt>{uiText("Model id")}</dt>
         <dd className="pm-model-details-mono">{model.slug}</dd>
       </div>
       <div>
-        <dt>Route</dt>
+          <dt>{uiText("Route")}</dt>
         <dd>{providerName} · {modelRouteKind(model)}</dd>
       </div>
       {routeUsable(model) ? (
         <div>
-          <dt>Subagents</dt>
+            <dt>{uiText("Subagents")}</dt>
           {/* The effort popup extends below this definition-list cell. Keep
               this cell visibly overflowing; the generic text cells still
               ellipsize long ids and route descriptions. */}
@@ -1243,8 +1262,8 @@ function ModelDetails({
         </div>
       ) : (
         <div>
-          <dt>Status</dt>
-          <dd>Connect {providerName} to use this route.</dd>
+            <dt>{uiText("Status")}</dt>
+            <dd>{uiText("Connect {name} to use this route.", { name: providerName })}</dd>
         </div>
       )}
     </dl>
@@ -1264,8 +1283,8 @@ function subagentControl(model: RouterModel, selectedInSettings: boolean) {
   return {
     checked: selectedInSettings,
     hint: subagentCertification(model) === "v2"
-      ? "Codex can spawn subagents on this route."
-      : "Switch on to let Codex spawn subagents on this route. Verify it with an agent check before relying on it.",
+      ? uiText("Codex can spawn subagents on this route.")
+      : uiText("Switch on to let Codex spawn subagents on this route. Verify it with an agent check before relying on it."),
   };
 }
 
@@ -1297,13 +1316,13 @@ function ModelRouteRow({
       <ProviderLogo providerId={model.provider} displayName={providerName} size="medium" />
       <div>
         <strong>{providerName}</strong>
-        {model.isFree ? <span className="pm-route-free">Free</span> : null}
+        {model.isFree ? <span className="pm-route-free">{uiText("Free")}</span> : null}
         <small title={model.slug}>{model.slug}</small>
       </div>
     </div>
   );
   const context = model.contextWindow ? formatContext(model.contextWindow) : "—";
-  const input = model.inputModalities?.includes("image") ? "Text + image" : "Text";
+  const input = model.inputModalities?.includes("image") ? uiText("Text + image") : uiText("Text");
 
   if (!routeUsable(model)) {
     return (
@@ -1314,7 +1333,7 @@ function ModelRouteRow({
         {/* The same slot the switches occupy, so the right edge answers one
             question all the way down: what can I do with this route. */}
         <span className="pm-route-cell pm-route-connect">
-          <Button variant="secondary" disabled={!apiAvailable} onClick={onConnect}>Connect {providerName}</Button>
+          <Button variant="secondary" disabled={!apiAvailable} onClick={onConnect}>{uiText("Connect {name}", { name: providerName })}</Button>
         </span>
       </article>
     );
@@ -1330,7 +1349,9 @@ function ModelRouteRow({
         <Toggle
           checked={pickerVisible}
           disabled={!apiAvailable || nativeClientManaged(model)}
-          label={nativeClientManaged(model) ? `${model.displayName} is managed by Codex` : `Show ${model.displayName} through ${providerName} in the picker`}
+            label={nativeClientManaged(model)
+              ? uiText("{name} is managed by Codex", { name: model.displayName })
+              : uiText("Show {name} through {provider} in the picker", { name: model.displayName, provider: providerName })}
           onChange={onPickerChange}
         />
       </span>
@@ -1381,10 +1402,10 @@ function SubagentToggle({
       <Toggle
         checked={subagent.checked}
         disabled={!apiAvailable}
-        label={`Use ${model.displayName} through ${providerName} as a subagent`}
-        onChange={onSubagentChange}
-      />
-      <span>{subagent.checked ? "On" : "Off"}</span>
+          label={uiText("Use {name} through {provider} as a subagent", { name: model.displayName, provider: providerName })}
+          onChange={onSubagentChange}
+        />
+        <span>{subagent.checked ? uiText("On") : uiText("Off")}</span>
     </div>
   );
 }
@@ -1441,11 +1462,11 @@ function SubagentEffort({
         className="pm-effort-trigger"
         aria-haspopup="menu"
         aria-expanded={open}
-        aria-label={`${model.displayName} ${providerName} subagent thinking effort`}
+          aria-label={uiText("{name} {provider} subagent thinking effort", { name: model.displayName, provider: providerName })}
         disabled={!apiAvailable}
         onClick={() => setOpen((current) => !current)}
       >
-        <span>{effortLabel(subagentEffort)}</span>
+        <span>{routeEffortLabel(subagentEffort)}</span>
         <ChevronDown aria-hidden size={12} strokeWidth={1.8} className={open ? "is-open" : ""} />
       </button>
       {open ? (
@@ -1462,7 +1483,7 @@ function SubagentEffort({
                 if (effort !== subagentEffort) onEffortChange(effort);
               }}
             >
-              <span>{effortLabel(effort)}</span>
+              <span>{routeEffortLabel(effort)}</span>
               {subagentEffort === effort ? <Check aria-hidden size={13} strokeWidth={1.9} /> : null}
             </button>
           ))}
@@ -1486,7 +1507,7 @@ function PendingModelRows({ slugs }: { slugs: string[] }) {
             <SkeletonBlock className="pm-pending-logo" />
             <div>
               <strong>{slug}</strong>
-              <small>Adding…</small>
+                <small>{uiText("Adding…")}</small>
             </div>
           </div>
           <div className="pm-pending-meta" aria-hidden="true">
@@ -1499,10 +1520,6 @@ function PendingModelRows({ slugs }: { slugs: string[] }) {
       ))}
     </>
   );
-}
-
-function effortLabel(effort: string): string {
-  return effort === "default" ? "Default" : effort.charAt(0).toUpperCase() + effort.slice(1);
 }
 
 // One place to add a model, searching every connected provider at once. The
@@ -1572,37 +1589,41 @@ function AddModelsDialog({
   };
 
   return (
-    <Dialog
-      open={open}
-      title="Add models"
-      description="Everything your connected providers offer. Adding a model makes it available to the router; use the picker switch to show it in your clients."
-      onClose={onClose}
-    >
-      <div className="pm-add-models">
-        <div className="pm-add-models-toolbar">
-          <SearchField value={query} onChange={setQuery} placeholder="Search every connected provider" />
-          <span className="pm-results-count" aria-live="polite">
-            {loading
-              ? "Loading catalogs"
-              : `${matching.length} of ${catalogModels.length} models${lastRead ? ` · read ${formatDateTime(lastRead)}` : ""}`}
-          </span>
-          <Button variant="ghost" disabled={disabled || loading} onClick={onReload}>
-            {loading ? "Asking providers" : "Reload"}
-          </Button>
-        </div>
+      <Dialog
+        open={open}
+        title={uiText("Add models")}
+        description={uiText("Everything your connected providers offer. Adding a model makes it available to the router; use the picker switch to show it in your clients.")}
+        onClose={onClose}
+      >
+        <div className="pm-add-models">
+          <div className="pm-add-models-toolbar">
+            <SearchField value={query} onChange={setQuery} placeholder={uiText("Search every connected provider")} />
+            <span className="pm-results-count" aria-live="polite">
+              {loading
+                ? uiText("Loading catalogs")
+                : uiText("{shown} of {total} models{read}", {
+                  shown: matching.length,
+                  total: catalogModels.length,
+                  read: lastRead ? ` · ${uiText("read {time}", { time: formatDateTime(lastRead) })}` : "",
+                })}
+            </span>
+            <Button variant="ghost" disabled={disabled || loading} onClick={onReload}>
+              {loading ? uiText("Asking providers") : uiText("Reload")}
+            </Button>
+          </div>
 
-        {loading && !catalogModels.length ? <CatalogSkeleton label="Loading provider catalogs" /> : null}
+          {loading && !catalogModels.length ? <CatalogSkeleton label={uiText("Loading provider catalogs")} /> : null}
 
-        {!loading && !catalogModels.length ? (
-          <EmptyState
-            icon={<SearchX size={20} />}
-            title={errors.length ? "Catalogs could not be loaded" : "No catalogs available"}
-            body={errors[0]?.error || "Connect a provider that publishes a model catalog, then reload."}
-          />
-        ) : null}
+          {!loading && !catalogModels.length ? (
+            <EmptyState
+              icon={<SearchX size={20} />}
+              title={errors.length ? uiText("Catalogs could not be loaded") : uiText("No catalogs available")}
+              body={errors[0]?.error || uiText("Connect a provider that publishes a model catalog, then reload.")}
+            />
+          ) : null}
 
-        {shown.length ? (
-          <div className="pm-add-models-list" role="list" aria-label="Provider catalog models">
+          {shown.length ? (
+            <div className="pm-add-models-list" role="list" aria-label={uiText("Provider catalog models")}>
             {shown.map((model) => {
               const adding = (pendingModels[model.providerId]?.[model.modelId] ?? 0) > 0;
               const checked = model.registered || selectedKeys.has(model.key);
@@ -1632,41 +1653,45 @@ function AddModelsDialog({
                   <span className="pm-add-models-provider">{model.providerName}</span>
                   <div className="pm-add-models-meta">
                     {model.contextWindow ? <span>{formatContext(model.contextWindow)}</span> : null}
-                    {model.isFree ? <Badge tone="success">Free</Badge> : null}
-                  </div>
-                  {adding ? <Badge tone="neutral">Adding</Badge>
-                    : model.registered ? <Badge tone="neutral">Added</Badge>
-                    : blocked ? <Badge tone="neutral">Not yet supported</Badge>
-                    : null}
+                      {model.isFree ? <Badge tone="success">{uiText("Free")}</Badge> : null}
+                    </div>
+                    {adding ? <Badge tone="neutral">{uiText("Adding")}</Badge>
+                      : model.registered ? <Badge tone="neutral">{uiText("Added")}</Badge>
+                      : blocked ? <Badge tone="neutral">{uiText("Not yet supported")}</Badge>
+                      : null}
                 </label>
               );
             })}
           </div>
         ) : null}
 
-        {matching.length > shown.length ? (
-          <div className="pm-add-models-more">
-            <span>{matching.length - shown.length} more models</span>
-            <Button variant="ghost" onClick={() => setShownLimit((current) => current + 120)}>Show 120 more</Button>
-          </div>
-        ) : null}
+          {matching.length > shown.length ? (
+            <div className="pm-add-models-more">
+              <span>{uiText("{count} more models", { count: matching.length - shown.length })}</span>
+              <Button variant="ghost" onClick={() => setShownLimit((current) => current + 120)}>{uiText("Show 120 more")}</Button>
+            </div>
+          ) : null}
 
-        {catalogModels.length && !matching.length ? (
-          <div className="pm-add-models-empty">No catalog model matches this search.</div>
-        ) : null}
+          {catalogModels.length && !matching.length ? (
+            <div className="pm-add-models-empty">{uiText("No catalog model matches this search.")}</div>
+          ) : null}
 
-        <div className="dialog-actions">
-          <span className="pm-add-models-hint">
-            Lists are stored locally and re-read in the background once a day. Up to {CATALOG_ADD_BATCH_LIMIT} at a time.
-          </span>
-          <Button variant="secondary" onClick={onClose}>Cancel</Button>
-          <Button
-            variant="primary"
-            disabled={disabled || !selectedModels.length}
-            onClick={() => { onAdd(selectedModels); setSelected([]); onClose(); }}
-          >
-            {selectedModels.length ? `Add ${selectedModels.length} model${selectedModels.length === 1 ? "" : "s"}` : "Add models"}
-          </Button>
+          <div className="dialog-actions">
+            <span className="pm-add-models-hint">
+              {uiText("Lists are stored locally and re-read in the background once a day. Up to {limit} at a time.", { limit: CATALOG_ADD_BATCH_LIMIT })}
+            </span>
+            <Button variant="secondary" onClick={onClose}>{uiText("Cancel")}</Button>
+            <Button
+              variant="primary"
+              disabled={disabled || !selectedModels.length}
+              onClick={() => { onAdd(selectedModels); setSelected([]); onClose(); }}
+            >
+              {selectedModels.length
+                ? selectedModels.length === 1
+                  ? uiText("Add 1 model")
+                  : uiText("Add {count} models", { count: selectedModels.length })
+                : uiText("Add models")}
+            </Button>
         </div>
       </div>
     </Dialog>
@@ -1685,13 +1710,20 @@ function CredentialDialog({ provider, onSave, onClose }: { provider: ProviderSet
   }
   function close() { setCredential(""); onClose(); }
   return (
-    <Dialog open={Boolean(provider)} title={provider?.configured ? `Replace ${provider.displayName} credential` : `Connect ${provider?.displayName || "provider"}`} description="The secret is sent once to the router's hidden standard-input prompt. It is never added to a command." onClose={close}>
+    <Dialog
+      open={Boolean(provider)}
+      title={provider?.configured
+        ? uiText("Replace {name} credential", { name: provider.displayName })
+        : uiText("Connect {name}", { name: provider?.displayName || uiText("provider") })}
+      description={uiText("The secret is sent once to the router's hidden standard-input prompt. It is never added to a command.")}
+      onClose={close}
+    >
       <form className="pm-credential-form" onSubmit={(event) => void submit(event)}>
         {provider ? <div className="pm-credential-provider"><ProviderLogo providerId={provider.id} displayName={provider.displayName} size="large" /><div><strong>{provider.displayName}</strong><small>{provider.id}</small></div></div> : null}
-        <label htmlFor="provider-credential">{provider?.credentialLabel || "API key"}</label>
-        <input id="provider-credential" type="password" value={credential} onChange={(event) => setCredential(event.target.value)} autoComplete="off" spellCheck={false} placeholder="Enter credential" autoFocus />
-        <p><Link2 aria-hidden size={13} strokeWidth={1.7} /> The value is not placed in logs, command arguments, localStorage, or saved renderer state.</p>
-        <div className="dialog-actions"><Button type="button" variant="secondary" onClick={close}>Cancel</Button><Button type="submit" variant="primary" disabled={!credential.trim()}>Save credential</Button></div>
+        <label htmlFor="provider-credential">{provider?.credentialLabel || uiText("API key")}</label>
+        <input id="provider-credential" type="password" value={credential} onChange={(event) => setCredential(event.target.value)} autoComplete="off" spellCheck={false} placeholder={uiText("Enter credential")} autoFocus />
+        <p><Link2 aria-hidden size={13} strokeWidth={1.7} /> {uiText("The value is not placed in logs, command arguments, localStorage, or saved renderer state.")}</p>
+        <div className="dialog-actions"><Button type="button" variant="secondary" onClick={close}>{uiText("Cancel")}</Button><Button type="submit" variant="primary" disabled={!credential.trim()}>{uiText("Save credential")}</Button></div>
       </form>
     </Dialog>
   );
@@ -1709,41 +1741,43 @@ function providerConnected(entry: ProviderDirectoryEntry, enabledProviders: Set<
 }
 
 function providerDisplayName(providerId: string): string {
-  return providerId === "openai" ? "OpenAI native" : providerId;
+  return providerId === "openai" ? uiText("OpenAI native") : providerId;
 }
 
 function connectionMethod(entry: ProviderDirectoryEntry): string {
-  if (entry.id === "openai") return "ChatGPT session";
-  if (entry.id === "local") return "Local runtime";
-  if (!entry.setup) return "Managed catalog";
-  if (entry.setup.action === "probe") return "Live test required";
-  if (entry.setup.action === "blocked") return "Disconnect required";
-  if (entry.setup.kind === "oauth") return "Sign-in";
-  if (entry.setup.kind === "configuration") return "Local configuration";
-  if (entry.setup.kind === "anonymous") return "No key needed";
-  if (entry.setup.signIn) return "Key or sign-in";
-  return entry.setup.credentialLabel || "API key";
+  if (entry.id === "openai") return uiText("ChatGPT session");
+  if (entry.id === "local") return uiText("Local runtime");
+  if (!entry.setup) return uiText("Managed catalog");
+  if (entry.setup.action === "probe") return uiText("Live test required");
+  if (entry.setup.action === "blocked") return uiText("Disconnect required");
+  if (entry.setup.kind === "oauth") return uiText("Sign-in");
+  if (entry.setup.kind === "configuration") return uiText("Local configuration");
+  if (entry.setup.kind === "anonymous") return uiText("No key needed");
+  if (entry.setup.signIn) return uiText("Key or sign-in");
+  return entry.setup.credentialLabel || uiText("API key");
 }
 
 function connectionDetail(entry: ProviderDirectoryEntry, accountStatus?: string, accountMessage?: string, canOpenTerminal?: boolean): string {
-  if (entry.id === "openai") return "Uses the signed-in ChatGPT session available to this Codex installation.";
-  if (!entry.setup) return "This provider catalog is managed by the router and has no separate credential action here.";
+  if (entry.id === "openai") return uiText("Uses the signed-in ChatGPT session available to this Codex installation.");
+  if (!entry.setup) return uiText("This provider catalog is managed by the router and has no separate credential action here.");
   if (entry.setup.kind === "configuration") {
     return entry.setup.configured
-      ? "Google Cloud Application Default Credentials and the protected Vertex project/location are ready."
-      : entry.setup.configurationNote || "Run the provider's local configuration command, then refresh this page.";
+      ? uiText("Google Cloud Application Default Credentials and the protected Vertex project/location are ready.")
+      : backendText(entry.setup.configurationNote) || uiText("Run the provider's local configuration command, then refresh this page.");
   }
-  if (entry.setup.kind === "anonymous") return "No API key is required. Make it available before routed prompts or catalog loading can use its endpoint.";
-  if (entry.setup.action === "probe") return entry.setup.probeNote || "Run the explicit live compatibility test; it sends a small prompt and uses provider quota.";
-  if (entry.setup.action === "blocked") return entry.setup.blockedNote || "Disconnect the incompatible router record before signing in again.";
-  if (accountStatus === "unavailable") return accountMessage || "Account usage is unavailable. Sign in again if the session expired.";
-  if (entry.setup.configured) return "Credential ready. You can take it away from your clients without disconnecting the account.";
+  if (entry.setup.kind === "anonymous") return uiText("No API key is required. Make it available before routed prompts or catalog loading can use its endpoint.");
+  if (entry.setup.action === "probe") return backendText(entry.setup.probeNote) || uiText("Run the explicit live compatibility test; it sends a small prompt and uses provider quota.");
+  if (entry.setup.action === "blocked") return backendText(entry.setup.blockedNote) || uiText("Disconnect the incompatible router record before signing in again.");
+  if (accountStatus === "unavailable") return accountMessage || uiText("Account usage is unavailable. Sign in again if the session expired.");
+  if (entry.setup.configured) return uiText("Credential ready. You can take it away from your clients without disconnecting the account.");
   if (entry.setup.kind === "oauth") {
-    if (!canOpenTerminal) return "Run the official provider sign-in command in your own terminal, then refresh this page.";
-    return entry.setup.cliInstalled === false ? "The official CLI will be installed, then sign-in will open in your system terminal." : "Sign in through the official provider CLI in your system terminal, then refresh.";
+    if (!canOpenTerminal) return uiText("Run the official provider sign-in command in your own terminal, then refresh this page.");
+    return entry.setup.cliInstalled === false
+      ? uiText("The official CLI will be installed, then sign-in will open in your system terminal.")
+      : uiText("Sign in through the official provider CLI in your system terminal, then refresh.");
   }
-  if (entry.setup.signIn) return `Add ${entry.setup.credentialLabel || "an API key"}, or use the provider's browser sign-in.`;
-  return `Add ${entry.setup.credentialLabel || "an API key"} to connect this provider.`;
+  if (entry.setup.signIn) return uiText("Add {name}, or use the provider's browser sign-in.", { name: entry.setup.credentialLabel || uiText("an API key") });
+  return uiText("Add {name} to connect this provider.", { name: entry.setup.credentialLabel || uiText("an API key") });
 }
 
 function safeId(value: string): string { return value.replace(/[^a-zA-Z0-9_-]/g, "-"); }

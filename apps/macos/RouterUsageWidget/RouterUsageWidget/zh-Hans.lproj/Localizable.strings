@@ -1,0 +1,18 @@
+/*
+   Simplified Chinese for the widget's AppIntents metadata.
+
+   AppIntents and WidgetKit localize their own declarations -- the gallery name
+   and description, the type display name, and the parameter title -- from the
+   extension bundle, so these strings cannot read the Swift table that the
+   widget's rendered text uses. Keys are the English source strings, which is
+   AppIntents' default lookup.
+
+   "Usage Source" serves both the entity's type name and the configuration
+   parameter's title; AppIntents looks them up by the same source string.
+*/
+"Usage Source" = "用量来源";
+"Choose which connected usage source this widget shows." = "选择此小组件显示的已连接用量来源。";
+"Codex Router Usage" = "Codex Router 用量";
+"Track cumulative token usage for any connected source." = "跟踪任一已连接来源的累计 token 用量。";
+"Codex Router Reset" = "Codex Router 重置";
+"See when the selected provider quota resets." = "查看所选提供商额度的重置时间。";

@@ -4,6 +4,110 @@ import OSLog
 import SwiftUI
 import WidgetKit
 
+/// The language this extension renders in.
+///
+/// The widget is a separate process with its own bundle, so it cannot read the
+/// tray's `UserDefaults` or import its localization layer. The tray publishes
+/// its choice inside the snapshot; before the first publish -- or for a
+/// snapshot written by an older tray -- macOS's preferred language decides,
+/// which is what "System" means in the tray's own picker.
+enum RouterWidgetLanguage: String {
+  case english
+  case chinese
+
+  static func resolve(_ published: String?) -> RouterWidgetLanguage {
+    guard let published, !published.isEmpty else { return system }
+    let lowered = published.lowercased()
+    if lowered.hasPrefix("zh") || lowered == "chinese" { return .chinese }
+    return .english
+  }
+
+  static var system: RouterWidgetLanguage {
+    let preferred = (Locale.preferredLanguages.first ?? Locale.current.identifier).lowercased()
+    return preferred.hasPrefix("zh") ? .chinese : .english
+  }
+
+  /// The identifier a tray publishes for a given resolved language. Kept here
+  /// so the sample snapshot in this file names languages exactly the way the
+  /// tray does, instead of a second spelling that could drift.
+  static func publishedIdentifier(for resolved: RouterWidgetLanguage) -> String {
+    resolved.rawValue
+  }
+
+  private var table: [String: String]? {
+    switch self {
+    case .english: return nil
+    case .chinese: return RouterWidgetChineseText.values
+    }
+  }
+
+  func text(_ english: String) -> String { table?[english] ?? english }
+
+  func format(_ english: String, _ arguments: CVarArg...) -> String {
+    String(format: text(english), arguments: arguments)
+  }
+}
+
+/// English remains the source text and the fallback, mirroring the tray's own
+/// table so both surfaces name the same thing the same way.
+enum RouterWidgetChineseText {
+  static let values: [String: String] = [
+    "Today · %@ · UTC": "今天 · %@ · UTC",
+    "Limits": "额度",
+    "No quota available": "暂无可用额度",
+    "7D cumulative": "7 天累计",
+    "7-day cumulative": "7 天累计",
+    "Usage snapshot is stale": "用量数据已过期",
+    "Open Codex Router to refresh usage.": "打开 Codex Router 以刷新用量。",
+    "Waiting for router data": "正在等待路由数据",
+    "Open Codex Router once to publish usage.": "请先打开一次 Codex Router 以发布用量。",
+    "this Mac · account not reported yet": "本机 · 账户尚未报告",
+    "account tokens": "账户 token",
+    "tokens routed": "路由 token",
+    "Reset": "重置",
+    "Reset data is stale": "重置数据已过期",
+    "No reset available": "暂无重置信息",
+    "Waiting for reset data": "正在等待重置数据",
+    "Open Codex Router to refresh provider limits.": "打开 Codex Router 以刷新提供商额度。",
+    "Next · %@": "下一个 · %@",
+    "until reset · %@": "距重置 · %@",
+    "Next reset": "下次重置",
+    "%@ · %@": "%@ · %@",
+    "Soon": "即将",
+    "Resets": "重置时间",
+    "5-hour limit": "5 小时限制",
+    "Weekly limit": "每周限制",
+    "Monthly limit": "每月限制",
+    "%d active": "%d 个进行中",
+    "Active": "活动中",
+    "Ready": "就绪",
+    "%d percent left": "剩余 %d%%",
+    ", resets %@": "，重置 %@",
+    "%@, %@, %@%@": "%@，%@，%@%@",
+    "soon": "即将",
+    "in %d m": "%d 分钟后",
+    "in %d h": "%d 小时后",
+    "in %d d": "%d 天后",
+    "<1m": "不到 1 分钟",
+    "%dm": "%d 分钟",
+    "%dh %dm": "%d 小时 %d 分",
+    "%dd %dh": "%d 天 %d 小时",
+    "Seven day cumulative token usage": "7 天累计 token 用量",
+    "Seven day cumulative token usage, most recent day measured locally": "7 天累计 token 用量，最近一天为本机测量",
+  ]
+}
+
+private struct RouterWidgetLanguageKey: EnvironmentKey {
+  static let defaultValue = RouterWidgetLanguage.system
+}
+
+extension EnvironmentValues {
+  var routerWidgetLanguage: RouterWidgetLanguage {
+    get { self[RouterWidgetLanguageKey.self] }
+    set { self[RouterWidgetLanguageKey.self] = newValue }
+  }
+}
+
 private func widgetColor(light: NSColor, dark: NSColor) -> Color {
   Color(nsColor: NSColor(name: nil) { appearance in
     appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light
@@ -233,6 +337,10 @@ struct RouterUsageWidget: Widget {
       provider: RouterUsageProvider()
     ) { entry in
       RouterUsageWidgetView(entry: entry)
+        .environment(
+          \.routerWidgetLanguage,
+          RouterWidgetLanguage.resolve(entry.snapshot?.language)
+        )
         .containerBackground(for: .widget) { RouterWidgetBackground() }
         .widgetURL(RouterWidgetDestination.usage.url(sourceID: entry.effectiveSourceID))
     }
@@ -250,6 +358,10 @@ struct RouterResetWidget: Widget {
       provider: RouterUsageProvider()
     ) { entry in
       RouterResetWidgetView(entry: entry)
+        .environment(
+          \.routerWidgetLanguage,
+          RouterWidgetLanguage.resolve(entry.snapshot?.language)
+        )
         .containerBackground(for: .widget) { RouterWidgetBackground() }
         .widgetURL(RouterWidgetDestination.usageResets.url(sourceID: entry.effectiveSourceID))
     }
@@ -261,6 +373,7 @@ struct RouterResetWidget: Widget {
 
 struct RouterUsageWidgetView: View {
   @Environment(\.widgetFamily) private var environmentFamily
+  @Environment(\.routerWidgetLanguage) private var language
   let entry: RouterUsageEntry
   private let familyOverride: WidgetFamily?
 
@@ -293,7 +406,7 @@ struct RouterUsageWidgetView: View {
     VStack(alignment: .leading, spacing: 0) {
       WidgetHeader(snapshot: snapshot, compact: true)
       Spacer(minLength: 9)
-      Text("Today · \(source.name) · UTC")
+      Text(language.format("Today · %@ · UTC", source.name))
         .font(.caption2.weight(.semibold))
         .textCase(.uppercase)
         .tracking(0.35)
@@ -304,7 +417,7 @@ struct RouterUsageWidgetView: View {
         .monospacedDigit()
         .lineLimit(1)
         .minimumScaleFactor(0.64)
-      Text(Self.todayTokenLabel(for: source))
+      Text(Self.todayTokenLabel(for: source, language: language))
         .font(.caption2)
         .foregroundStyle(.secondary)
         .lineLimit(2)
@@ -323,7 +436,7 @@ struct RouterUsageWidgetView: View {
       WidgetHeader(snapshot: snapshot)
       HStack(alignment: .top, spacing: 15) {
         VStack(alignment: .leading, spacing: 1) {
-          Text("Today · \(source.name) · UTC")
+          Text(language.format("Today · %@ · UTC", source.name))
             .font(.caption2.weight(.semibold))
             .textCase(.uppercase)
             .tracking(0.35)
@@ -335,7 +448,7 @@ struct RouterUsageWidgetView: View {
             .monospacedDigit()
             .lineLimit(1)
             .minimumScaleFactor(0.64)
-          Text(Self.todayTokenLabel(for: source))
+          Text(Self.todayTokenLabel(for: source, language: language))
             .font(.caption2)
             .foregroundStyle(.secondary)
             .lineLimit(2)
@@ -352,13 +465,13 @@ struct RouterUsageWidgetView: View {
         Divider()
 
         VStack(alignment: .leading, spacing: 8) {
-          Text("Limits")
+          Text(language.text("Limits"))
             .font(.caption2.weight(.semibold))
             .textCase(.uppercase)
             .tracking(0.35)
             .foregroundStyle(.secondary)
           if quotas.isEmpty {
-            Text("No quota available")
+            Text(language.text("No quota available"))
               .font(.caption)
               .foregroundStyle(.secondary)
               .frame(maxWidth: .infinity, alignment: .leading)
@@ -378,7 +491,7 @@ struct RouterUsageWidgetView: View {
     compact: Bool = false
   ) -> some View {
     HStack(spacing: 4) {
-      Text(compact ? "7D cumulative" : "7-day cumulative")
+      Text(language.text(compact ? "7D cumulative" : "7-day cumulative"))
         .lineLimit(1)
         .minimumScaleFactor(0.8)
       Spacer(minLength: 4)
@@ -394,8 +507,8 @@ struct RouterUsageWidgetView: View {
   private var stale: some View {
     WidgetUnavailableState(
       icon: "clock.badge.exclamationmark",
-      title: "Usage snapshot is stale",
-      message: "Open Codex Router to refresh usage.",
+      title: language.text("Usage snapshot is stale"),
+      message: language.text("Open Codex Router to refresh usage."),
       tint: widgetWarning,
       compact: family == .systemSmall
     )
@@ -404,8 +517,8 @@ struct RouterUsageWidgetView: View {
   private var emptyState: some View {
     WidgetUnavailableState(
       icon: "chart.xyaxis.line",
-      title: "Waiting for router data",
-      message: "Open Codex Router once to publish usage.",
+      title: language.text("Waiting for router data"),
+      message: language.text("Open Codex Router once to publish usage."),
       tint: widgetAccent,
       compact: family == .systemSmall
     )
@@ -423,17 +536,23 @@ struct RouterUsageWidgetView: View {
     return String(Int64(safe))
   }
 
-  static func todayTokenLabel(for source: RouterWidgetUsageSource) -> String {
+  static func todayTokenLabel(
+    for source: RouterWidgetUsageSource,
+    language: RouterWidgetLanguage
+  ) -> String {
     // A router-only day is this Mac's traffic, not the account total, and
     // saying so is the whole point of carrying provenance into the snapshot.
     // Without it a lagging account stream reads as a real zero.
-    if source.todayIsRouterFallback { return "this Mac · account not reported yet" }
-    return source.id == RouterWidgetSnapshot.defaultUsageSourceID ? "account tokens" : "tokens routed"
+    if source.todayIsRouterFallback { return language.text("this Mac · account not reported yet") }
+    return source.id == RouterWidgetSnapshot.defaultUsageSourceID
+      ? language.text("account tokens")
+      : language.text("tokens routed")
   }
 }
 
 struct RouterResetWidgetView: View {
   @Environment(\.widgetFamily) private var environmentFamily
+  @Environment(\.routerWidgetLanguage) private var language
   let entry: RouterUsageEntry
   private let familyOverride: WidgetFamily?
 
@@ -452,16 +571,22 @@ struct RouterResetWidgetView: View {
           .filter { $0.resetAt != nil }
           .sorted { ($0.resetAt ?? .distantFuture) < ($1.resetAt ?? .distantFuture) }
         if snapshot.generatedAt.timeIntervalSince(entry.date) < -45 * 60 {
-          unavailable(icon: "clock.badge.exclamationmark", title: "Reset data is stale")
+          unavailable(
+            icon: "clock.badge.exclamationmark",
+            title: language.text("Reset data is stale")
+          )
         } else if resets.isEmpty {
-          unavailable(icon: "clock.arrow.circlepath", title: "No reset available")
+          unavailable(icon: "clock.arrow.circlepath", title: language.text("No reset available"))
         } else if family == .systemSmall {
           small(source: source, quota: resets[0])
         } else {
           medium(source: source, quotas: Array(resets.prefix(2)))
         }
       } else {
-        unavailable(icon: "clock.arrow.circlepath", title: "Waiting for reset data")
+        unavailable(
+          icon: "clock.arrow.circlepath",
+          title: language.text("Waiting for reset data")
+        )
       }
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -470,21 +595,25 @@ struct RouterResetWidgetView: View {
 
   private func small(source: RouterWidgetUsageSource, quota: RouterWidgetQuota) -> some View {
     VStack(alignment: .leading, spacing: 0) {
-      WidgetHeader(snapshot: entry.snapshot, compact: true, section: "Reset")
+      WidgetHeader(
+        snapshot: entry.snapshot,
+        compact: true,
+        section: language.text("Reset")
+      )
       Spacer(minLength: 10)
-      Text("Next · \(quota.label)")
+      Text(language.format("Next · %@", language.text(quota.label)))
         .font(.caption2.weight(.semibold))
         .textCase(.uppercase)
         .tracking(0.35)
         .foregroundStyle(.secondary)
         .lineLimit(1)
-      Text(Self.countdown(to: quota.resetAt, now: entry.date))
+      Text(Self.countdown(to: quota.resetAt, now: entry.date, language: language))
         .font(.system(size: 27, weight: .semibold, design: .rounded))
         .tracking(-0.5)
         .monospacedDigit()
         .lineLimit(1)
         .minimumScaleFactor(0.65)
-      Text("until reset · \(source.name)")
+      Text(language.format("until reset · %@", source.name))
         .font(.caption2)
         .foregroundStyle(.secondary)
         .lineLimit(1)
@@ -495,22 +624,22 @@ struct RouterResetWidgetView: View {
 
   private func medium(source: RouterWidgetUsageSource, quotas: [RouterWidgetQuota]) -> some View {
     VStack(alignment: .leading, spacing: 10) {
-      WidgetHeader(snapshot: entry.snapshot, section: "Reset")
+      WidgetHeader(snapshot: entry.snapshot, section: language.text("Reset"))
       HStack(alignment: .top, spacing: 15) {
         if let first = quotas.first {
           VStack(alignment: .leading, spacing: 2) {
-            Text("Next reset")
+            Text(language.text("Next reset"))
               .font(.caption2.weight(.semibold))
               .textCase(.uppercase)
               .tracking(0.35)
               .foregroundStyle(.secondary)
-            Text(Self.countdown(to: first.resetAt, now: entry.date))
+            Text(Self.countdown(to: first.resetAt, now: entry.date, language: language))
               .font(.system(size: 28, weight: .semibold, design: .rounded))
               .tracking(-0.5)
               .monospacedDigit()
               .lineLimit(1)
               .minimumScaleFactor(0.65)
-            Text("\(first.label) · \(source.name)")
+            Text(language.format("%@ · %@", language.text(first.label), source.name))
               .font(.caption)
               .foregroundStyle(.secondary)
               .lineLimit(1)
@@ -532,22 +661,26 @@ struct RouterResetWidgetView: View {
     WidgetUnavailableState(
       icon: icon,
       title: title,
-      message: "Open Codex Router to refresh provider limits.",
+      message: language.text("Open Codex Router to refresh provider limits."),
       tint: widgetAccent,
       compact: family == .systemSmall,
-      headerSection: "Reset"
+      headerSection: language.text("Reset")
     )
   }
 
-  static func countdown(to date: Date?, now: Date) -> String {
-    guard let date else { return "Soon" }
+  static func countdown(
+    to date: Date?,
+    now: Date,
+    language: RouterWidgetLanguage = .english
+  ) -> String {
+    guard let date else { return language.text("Soon") }
     let seconds = max(0, Int(date.timeIntervalSince(now)))
-    if seconds < 60 { return "<1m" }
+    if seconds < 60 { return language.text("<1m") }
     let minutes = seconds / 60
-    if minutes < 60 { return "\(minutes)m" }
+    if minutes < 60 { return language.format("%dm", minutes) }
     let hours = minutes / 60
-    if hours < 24 { return "\(hours)h \(minutes % 60)m" }
-    return "\(hours / 24)d \(hours % 24)h"
+    if hours < 24 { return language.format("%dh %dm", hours, minutes % 60) }
+    return language.format("%dd %dh", hours / 24, hours % 24)
   }
 }
 
@@ -578,6 +711,7 @@ private struct WidgetUnavailableState: View {
 }
 
 private struct WidgetHeader: View {
+  @Environment(\.routerWidgetLanguage) private var language
   let snapshot: RouterWidgetSnapshot?
   var compact = false
   var title = "Codex Router"
@@ -591,7 +725,7 @@ private struct WidgetHeader: View {
         .minimumScaleFactor(0.8)
       Spacer()
       if let section, !compact {
-        Text(section)
+        Text(language.text(section))
           .font(.system(size: 9, weight: .semibold))
           .tracking(0.45)
           .textCase(.uppercase)
@@ -613,8 +747,10 @@ private struct WidgetHeader: View {
   }
 
   private func activityLabel(_ snapshot: RouterWidgetSnapshot) -> String {
-    if snapshot.activeChatCount > 1 { return "\(snapshot.activeChatCount) active" }
-    return snapshot.activityState == "generating" ? "Active" : "Ready"
+    if snapshot.activeChatCount > 1 {
+      return language.format("%d active", snapshot.activeChatCount)
+    }
+    return language.text(snapshot.activityState == "generating" ? "Active" : "Ready")
   }
 
   private func activityTint(_ state: String) -> Color {
@@ -628,6 +764,7 @@ private struct WidgetHeader: View {
 }
 
 private struct RouterWidgetQuotaRow: View {
+  @Environment(\.routerWidgetLanguage) private var language
   let quota: RouterWidgetQuota
   let compact: Bool
   let now: Date
@@ -641,7 +778,7 @@ private struct RouterWidgetQuotaRow: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 4) {
       HStack(spacing: 5) {
-        Text(quota.label)
+        Text(language.text(quota.label))
           .font(.caption.weight(.medium))
           .lineLimit(1)
         Spacer(minLength: 4)
@@ -661,11 +798,11 @@ private struct RouterWidgetQuotaRow: View {
       .frame(height: 3)
       if !compact {
         HStack(spacing: 4) {
-          Text("Resets")
+          Text(language.text("Resets"))
             .lineLimit(1)
           Spacer(minLength: 3)
           if let resetAt = quota.resetAt {
-            Text(Self.resetLabel(resetAt, now: now))
+            Text(Self.resetLabel(resetAt, now: now, language: language))
               .monospacedDigit()
           }
         }
@@ -678,22 +815,39 @@ private struct RouterWidgetQuotaRow: View {
   }
 
   private var accessibilityLabel: String {
-    let reset = quota.resetAt.map { ", resets \(Self.resetLabel($0, now: now))" } ?? ""
-    return "\(quota.providerName), \(quota.label), \(quota.roundedRemainingPercent) percent left\(reset)"
+    let remaining = language.format("%d percent left", quota.roundedRemainingPercent)
+    let reset = quota.resetAt.map {
+      language.format(
+        ", resets %@",
+        Self.resetLabel($0, now: now, language: language)
+      )
+    } ?? ""
+    return language.format(
+      "%@, %@, %@%@",
+      quota.providerName,
+      language.text(quota.label),
+      remaining,
+      reset
+    )
   }
 
-  static func resetLabel(_ date: Date, now: Date) -> String {
+  static func resetLabel(
+    _ date: Date,
+    now: Date,
+    language: RouterWidgetLanguage = .english
+  ) -> String {
     let seconds = date.timeIntervalSince(now)
-    if seconds <= 0 { return "soon" }
+    if seconds <= 0 { return language.text("soon") }
     let minutes = Int(seconds / 60)
-    if minutes < 60 { return "in \(minutes)m" }
+    if minutes < 60 { return language.format("in %d m", minutes) }
     let hours = minutes / 60
-    if hours < 24 { return "in \(hours)h" }
-    return "in \(hours / 24)d"
+    if hours < 24 { return language.format("in %d h", hours) }
+    return language.format("in %d d", hours / 24)
   }
 }
 
 private struct RouterWidgetCumulativeLineChart: View {
+  @Environment(\.routerWidgetLanguage) private var language
   let points: [RouterWidgetDailyPoint]
 
   private var visiblePoints: [RouterWidgetDailyPoint] { Array(points.suffix(7)) }
@@ -788,8 +942,8 @@ private struct RouterWidgetCumulativeLineChart: View {
     .accessibilityElement(children: .ignore)
     .accessibilityLabel(
       endsOnRouterFallback
-        ? "Seven day cumulative token usage, most recent day measured locally"
-        : "Seven day cumulative token usage"
+        ? language.text("Seven day cumulative token usage, most recent day measured locally")
+        : language.text("Seven day cumulative token usage")
     )
   }
 }
@@ -903,7 +1057,10 @@ extension RouterWidgetSnapshot {
           todayTokens: 510_000,
           daily: deepSeekDaily
         ),
-      ]
+      ],
+      // Sample data carries what a real tray publishes, so the gallery and the
+      // screenshot fixtures follow the Mac's language like the live widget.
+      language: RouterWidgetLanguage.publishedIdentifier(for: .system)
     )
   }
 }

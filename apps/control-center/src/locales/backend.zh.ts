@@ -1,0 +1,140 @@
+// Fixed copy that the router, the Electron IPC layer, and the local-runtime
+// helpers produce and hand to the four pages this module localizes. Keys are
+// the exact backend strings; a value that is not listed is shown as produced,
+// so raw provider errors, paths, commands, and status ids keep their wording.
+//
+// This sits beside catalog.zh.ts rather than inside it because it translates
+// another layer's strings: a backend rewording should show up here as an
+// untranslated string that is easy to grep for, not as a silent page change.
+export const backendZh: Record<string, string> = {
+  // Electron IPC progress for the resumable Cursor and Cloudflare action.
+  "Opening Cloudflare authorization in your browser…": "正在浏览器中打开 Cloudflare 授权…",
+  "Complete Cloudflare authorization in your browser…": "请在浏览器中完成 Cloudflare 授权…",
+  "Preparing Cloudflare connector installation…": "正在准备安装 Cloudflare 连接器…",
+  "Downloading Cloudflare connector…": "正在下载 Cloudflare 连接器…",
+  "Installing Cloudflare connector…": "正在安装 Cloudflare 连接器…",
+  "Finishing Cloudflare connector setup…": "正在完成 Cloudflare 连接器配置…",
+  "Cloudflare connector installed. Refreshing Cursor setup…": "Cloudflare 连接器已安装，正在刷新 Cursor 配置…",
+  "Cloudflare authorization complete. Refreshing Cursor setup…": "Cloudflare 授权已完成，正在刷新 Cursor 配置…",
+  "Cloudflare connector installed.": "Cloudflare 连接器已安装。",
+  "Cloudflare authorization complete.": "Cloudflare 授权已完成。",
+  "Fully quit Cursor. Setup will resume here automatically…": "请完全退出 Cursor，配置会自动从这里继续…",
+  "Creating the isolated Cursor connector and publishing routed models…": "正在创建独立的 Cursor 连接器并发布已路由模型…",
+  "Cursor routing verified. Opening Cursor…": "Cursor 路由已验证，正在打开 Cursor…",
+  "Fully quit Cursor. Disconnect will resume here automatically…": "请完全退出 Cursor，断开连接会自动从这里继续…",
+  "Removing router models and restoring Cursor's own endpoint…": "正在移除路由器模型并恢复 Cursor 自己的端点…",
+
+  // Coding-client setup requirements shown as the setup button tooltip.
+  "Publishes every routed model into OpenClaw's router-owned provider. Other OpenClaw settings remain untouched.": "把每个已路由模型发布到 OpenClaw 的路由器自有服务商中。OpenClaw 的其他设置保持不变。",
+  "Setup installs openclaw@latest and publishes every routed model in one action.": "配置会安装 openclaw@latest，并一次性发布所有已路由模型。",
+  "Publishes the shared router catalog into Codex.": "把共享的路由目录发布到 Codex。",
+  "Install Codex from the official OpenAI download.": "请先从 OpenAI 官方渠道安装 Codex。",
+  "Setup installs @deepseek-ai/dsh when it is missing and publishes the shared route.": "缺少时，配置会安装 @deepseek-ai/dsh 并发布共享路由。",
+  "Creates a private claude-router launcher and publishes the shared routed catalog. Claude settings remain untouched.": "创建私有的 claude-router 启动器并发布共享路由目录。Claude 设置保持不变。",
+  "Install the official Claude Code CLI first.": "请先安装官方 Claude Code CLI。",
+  "Publishes the shared router catalog into Gemini CLI. Its settings file remains untouched.": "把共享的路由目录发布到 Gemini CLI。其设置文件保持不变。",
+  "Install the official Gemini CLI first.": "请先安装官方 Gemini CLI。",
+  "Cursor Agent connects locally and always reads the current routed catalog.": "Cursor Agent 通过本地连接，始终读取当前的路由目录。",
+  "Cursor App and Cursor Agent use the shared routed catalog.": "Cursor App 与 Cursor Agent 使用共享的路由目录。",
+  "Connect Cursor installs the connector when needed, opens Cloudflare authorization, creates an isolated hostname, publishes the catalog, verifies it, and reopens Cursor.": "连接 Cursor 会按需安装连接器、打开 Cloudflare 授权、创建独立主机名、发布并验证目录，然后重新打开 Cursor。",
+  "Install Cursor App or Cursor Agent first.": "请先安装 Cursor App 或 Cursor Agent。",
+  "Setup installs opencode-ai when it is missing and publishes every routed model.": "缺少时，配置会安装 opencode-ai 并发布所有已路由模型。",
+  "Publishes every routed model into opencode's router-owned provider. Other opencode settings remain untouched.": "把每个已路由模型发布到 opencode 的路由器自有服务商中。opencode 的其他设置保持不变。",
+  "Setup installs @earendil-works/pi-coding-agent when it is missing and publishes every routed model.": "缺少时，配置会安装 @earendil-works/pi-coding-agent 并发布所有已路由模型。",
+  "Publishes every routed model into pi's models.json. Every other provider in that file is preserved.": "把每个已路由模型发布到 pi 的 models.json，并保留文件中的其他服务商。",
+  "Install omp from omp.sh first; setup then publishes every routed model into ~/.omp/agent/models.yml.": "请先从 omp.sh 安装 omp；配置随后会把所有已路由模型发布到 ~/.omp/agent/models.yml。",
+  "Publishes every routed model into omp's models.yml. Comments and every other provider are preserved.": "把每个已路由模型发布到 omp 的 models.yml，并保留注释和其他服务商。",
+  "Setup installs command-code 1.30.0 or later (the first release that reads providers.json) and publishes every routed model as a BYOK provider.": "配置会安装 command-code 1.30.0 或更高版本（首个读取 providers.json 的版本），并把所有已路由模型发布为 BYOK 服务商。",
+  "Publishes every routed model into ~/.commandcode/providers.json. Your Command Code plan and its own models are untouched.": "把每个已路由模型发布到 ~/.commandcode/providers.json。你的 Command Code 方案及其自带模型保持不变。",
+  "Install the official Hermes Agent first; setup then publishes every routed model into its config.yaml.": "请先安装官方 Hermes Agent；配置随后会把所有已路由模型发布到其 config.yaml。",
+  "Publishes every routed model as the codex-router provider in Hermes's config.yaml. Every other setting is preserved.": "在 Hermes 的 config.yaml 中把每个已路由模型发布为 codex-router 服务商，并保留其他所有设置。",
+
+  // Provider setup notes shown in the connection menu and dialogs.
+  "A live compatibility test is required before enabling this route; it sends a small prompt and uses provider quota.": "启用此路由前需要做一次实测兼容性检查；它会发送一个小请求并消耗服务商配额。",
+  "The live proof is pending router health activation. Restart the managed router service, then enable the provider to republish it.": "实测凭据仍在等待路由器健康激活。请重启托管的路由服务，然后启用该服务商以重新发布。",
+  "Google rejected this operator OAuth client. Disconnect it, then sign in with a valid operator-owned Google Desktop app client.": "Google 拒绝了此运营方 OAuth 客户端。请先断开它，再用有效的运营方自有 Google Desktop 应用客户端登录。",
+  "An incompatible router record is preserved. Disconnect it explicitly before starting the operator-owned OAuth sign-in.": "已保留一条不兼容的路由记录。请先显式断开它，再开始运营方自有 OAuth 登录。",
+  "Each model here names its own endpoint and its own auth. Enabling this provider costs nothing.": "此处的每个模型都指定自己的端点与认证方式。启用该服务商不产生费用。",
+  "No key needed; free models are rate limited by the provider.": "无需密钥；免费模型受服务商的速率限制。",
+  "No key needed here; each model names its own endpoint.": "此处无需密钥；每个模型都指定自己的端点。",
+  "No key needed; it runs on this machine.": "无需密钥；它在本机运行。",
+  "Per-model endpoints": "按模型端点",
+  "No API key": "无需 API key",
+  "Requires an active ClinePass subscription.": "需要有效的 ClinePass 订阅。",
+  "Requires Copilot access. After connecting, run ./bin/curate-models github-copilot.": "需要 Copilot 访问权限。连接后请运行 ./bin/curate-models github-copilot。",
+  "Keys are not interchangeable with the global platform: create this one at platform.moonshot.cn.": "密钥与全球平台不通用：请在 platform.moonshot.cn 创建此密钥。",
+  "Runs on this machine. Start Ollama before using these models.": "在本机运行。使用这些模型前请先启动 Ollama。",
+  "Runs on this machine. Start the LM Studio local server before using these models.": "在本机运行。使用这些模型前请先启动 LM Studio 本地服务器。",
+  "Each model here names its own endpoint. Enabling the provider costs nothing; a model that needs a key says so on its own row.": "此处的每个模型都指定自己的端点。启用该服务商不产生费用；需要密钥的模型会在各自的行中说明。",
+  "Every Command Code plan except Go includes Provider API access; GOAT, Pro, Max, Team, and Provider accounts use this API and meter against their own credits.": "除 Go 之外的 Command Code 方案都包含 Provider API 访问权限；GOAT、Pro、Max、Team 和 Provider 账户使用此 API 并计入各自的额度。",
+  "The pay-per-token platform key is a different credential from the GLM Coding Plan key; a Coding Plan key is not billable on this endpoint.": "按量计费的平台密钥与 GLM Coding Plan 密钥是两个不同的凭据；Coding Plan 密钥无法在此端点计费。",
+  "Venice API access needs a Pro account (the low-rate-limit Explorer tier), a USD balance, or staked VVV that grants VCU; a free Venice account has no API entitlement.": "使用 Venice API 需要 Pro 账户（低速率限制的 Explorer 档）、美元余额，或质押 VVV 获得 VCU；免费 Venice 账户没有 API 权限。",
+  "Reuses the session `devin auth login` stores in the official Devin CLI and spends that account's ACU credits. Which models the account may run is decided server-side, so this provider ships no preselected models: run `bin/curate-models devin-cli` after signing in. Cognition publishes no model API, so the transport is unversioned and can change without notice.": "复用官方 Devin CLI 中 `devin auth login` 保存的会话，并消耗该账户的 ACU 额度。账户可运行的模型由服务端决定，因此此服务商不预置任何模型：登录后请运行 `bin/curate-models devin-cli`。Cognition 未公开模型 API，因此该传输方式没有版本号，可能随时变更。",
+  "Billed to a Google Cloud project with the Vertex AI API enabled. Requires Application Default Credentials from `gcloud auth application-default login`; a plain `gcloud auth login` session is not used. Catalog-only: after connecting, run `bin/curate-models vertex`. A discovered Model Garden id is not routable until it is curated onto a reviewed adapter.": "费用计入已启用 Vertex AI API 的 Google Cloud 项目。需要来自 `gcloud auth application-default login` 的 Application Default Credentials；不会使用单纯的 `gcloud auth login` 会话。此服务商仅提供目录：连接后请运行 `bin/curate-models vertex`。发现到的 Model Garden id 需要先收录到经过审核的适配器上才可路由。",
+
+  // Local MLX setup: host gate, stage details, and the known failure copy.
+  "The curated MLX build requires macOS on Apple silicon (arm64).": "精选 MLX 版本需要 Apple 芯片（arm64）上的 macOS。",
+  "Starting one-click MLX installation": "正在启动一键 MLX 安装",
+  "Installation interrupted": "安装已中断",
+  "Installation failed to start": "安装启动失败",
+  "Installation cancelled": "安装已取消",
+  "Installation failed": "安装失败",
+  "Installed and published to Codex": "已安装并发布到 Codex",
+  "Cancelled by user.": "已由用户取消。",
+  "The local MLX installation stopped before completion. Retry the install.": "本地 MLX 安装未完成就中止了。请重试安装。",
+  "The local MLX installation could not be cancelled.": "无法取消本地 MLX 安装。",
+  "Installed automatically after consent, or install LM Studio from its official source.": "确认后会自动安装，也可从 LM Studio 官方渠道安装。",
+  "Installed automatically after consent, or install uv from its official source.": "确认后会自动安装，也可从 uv 官方渠道安装。",
+
+  // Local Ollama runtime: download states and catalog copy.
+  "starting Ollama": "正在启动 Ollama",
+  "interrupted": "已中断",
+  "Download cancelled": "下载已取消",
+  "Removal cancelled": "移除已取消",
+  "failed": "失败",
+  "Model removed · catalog refresh needed": "模型已移除 · 需要刷新目录",
+  "Cataloged · compatibility unverified": "已收录 · 兼容性未验证",
+  "Verify capabilities after pull.": "拉取后请验证模型能力。",
+  "Official Ollama tag; capabilities are checked after pull.": "官方 Ollama tag；拉取后会检查模型能力。",
+  "Cloud-only Ollama alias; no local weights to download.": "仅云端的 Ollama 别名；没有可下载的本地权重。",
+  "Added by you.": "由你添加。",
+  "fits": "适配",
+  "tight": "内存偏紧",
+  "too-large": "超出容量",
+  "cloud-only": "仅云端",
+  "vision": "视觉",
+  "tools": "工具调用",
+  "thinking": "思考",
+  "audio": "音频",
+  "cloud": "云端",
+  "Multimodal Gemma 4 family for reasoning, coding, and agentic work.": "多模态 Gemma 4 系列，适用于推理、编码与智能体任务。",
+  "Multimodal Qwen family with sizes from 0.8B to 122B.": "多模态 Qwen 系列，规模从 0.8B 到 122B。",
+  "Qwen's newer agentic-coding and thinking-focused family.": "Qwen 更新的智能体编码与思考系列。",
+  "Self-improving open-source family focused on agentic coding.": "专注智能体编码的自改进开源系列。",
+  "Meta's 30B open model for long-running local agents and tool use.": "Meta 的 30B 开放模型，面向长时间运行的本地智能体与工具调用。",
+  "Community quantizations of Z.ai's 754B model. Even the smallest build is about 217 GB; capability and Codex checks run after pull.": "Z.ai 754B 模型的社区量化版本。即使最小的版本也要约 217 GB；拉取后会做能力与 Codex 检查。",
+  "Community quantizations of Z.ai's 321B multimodal model. The smallest build is about 93.1 GB; capability and Codex checks run after pull.": "Z.ai 321B 多模态模型的社区量化版本。最小版本约 93.1 GB；拉取后会做能力与 Codex 检查。",
+
+  // Local image readers.
+  "Reads codes, numbers, and dates exactly. The default choice.": "能准确读取代码、数字和日期。默认选择。",
+  "Larger sibling of the 3B. Not benchmarked here yet.": "3B 版本的更大同级模型。此处尚未做基准测试。",
+  "Strongest reasoning of the set. Not benchmarked here yet.": "本组中推理能力最强。此处尚未做基准测试。",
+  "Tiny and quick, but transcribed none of the test text.": "体积小、速度快，但未能转写任何测试文本。",
+  "Scored zero on the benchmark and is the slowest. Avoid for text.": "基准测试得分为零，且速度最慢。不建议用于文本识别。",
+  "Under 8 GB: moondream (~1.8B) is the only model that runs comfortably; expect rougher reads of dense text.": "8 GB 以下：moondream（约 1.8B）是唯一能流畅运行的模型；密集文本的识别结果会比较粗糙。",
+  "accurate": "准确",
+  "partial": "部分准确",
+  "captions-only": "仅描述",
+};
+
+// Backend strings that embed a value this page cannot know in advance. The
+// English template is the source string with named groups substituted, and the
+// helper only uses the template once its pattern matched, so an unrecognized
+// string still reaches the operator exactly as the backend produced it.
+export const backendTemplatesZh: ReadonlyArray<{ pattern: RegExp; template: string }> = [
+  { pattern: /^Official Ollama · (?<count>\d+) tags$/, template: "官方 Ollama · {count} 个 tag" },
+  { pattern: /^Unsloth GGUF · (?<count>\d+) local quants$/, template: "Unsloth GGUF · {count} 个本地量化版本" },
+  { pattern: /^Using (?<hostname>\S+) for Cursor's private connector\.$/, template: "正在将 {hostname} 用于 Cursor 的私有连接器。" },
+  { pattern: /^Removing the routed catalog from (?<name>.+)…$/, template: "正在从 {name} 移除已路由目录…" },
+  { pattern: /^Run (?<command>\S+ provider-key \S+ set)$/, template: "运行 {command}" },
+];

@@ -25,6 +25,8 @@ import opencodeLogo from "../assets/providers/opencode.png";
 import commandCodeLogo from "../assets/providers/commandcode.svg";
 import nousResearchLogo from "../assets/providers/nousresearch.png";
 import { Badge, Button, InlineNotice, PageHeader, PanelSkeleton, SectionHeading, StatStrip, Toggle } from "../components";
+import { backendText } from "../backend-text";
+import { uiText } from "../ui-text";
 import type {
   AgentBridgeDescriptor,
   AgentBridgeSnapshot,
@@ -87,6 +89,13 @@ const CURSOR_OPERATION_ACTIONS = new Set([
   "Configure Cursor",
 ]);
 
+/** The IPC process reports its own action ids, which the set above already
+ *  carries. Operations started from this page report the label they were given,
+ *  so the guard has to recognize that label in whichever language produced it. */
+function isCursorActionLabel(action: string): boolean {
+  return action === uiText("Connect Cursor") || action === uiText("Disconnect Cursor") || action === uiText("Configure Cursor");
+}
+
 export function HarnessPage({ target, api, refreshing, operation, onRefresh, runAction, onNavigate }: HarnessPageProps) {
   const [snapshot, setSnapshot] = useState<HarnessSnapshot>();
   const [sessions, setSessions] = useState<ContextSessionsSnapshot>();
@@ -114,7 +123,7 @@ export function HarnessPage({ target, api, refreshing, operation, onRefresh, run
         }
       }
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Client detection failed.");
+      setError(reason instanceof Error ? reason.message : uiText("Client detection failed."));
     }
   }, [api]);
 
@@ -133,7 +142,7 @@ export function HarnessPage({ target, api, refreshing, operation, onRefresh, run
   ).length ?? 0;
   const cursorOperationActive = Boolean(
     pendingHarnessId === "cursor"
-    || (operation?.status === "started" && CURSOR_OPERATION_ACTIONS.has(operation.action || "")),
+    || (operation?.status === "started" && (CURSOR_OPERATION_ACTIONS.has(operation.action || "") || isCursorActionLabel(operation.action || ""))),
   );
   const refresh = () => {
     onRefresh();
@@ -159,35 +168,37 @@ export function HarnessPage({ target, api, refreshing, operation, onRefresh, run
     if (!api) return;
     if (enabled) {
       if (harness.id === "cursor") {
-        await runHarnessAction("cursor", "Connect Cursor", () => api.connectCursor(cursorHostname.trim() || undefined));
+        await runHarnessAction("cursor", uiText("Connect Cursor"), () => api.connectCursor(cursorHostname.trim() || undefined));
         return;
       }
-      await runHarnessAction(harness.id, `Configure ${harness.displayName}`, () => api.setupHarness(harness.id));
+      await runHarnessAction(harness.id, uiText("Configure {name}", { name: harness.displayName }), () => api.setupHarness(harness.id));
       return;
     }
     if (harness.id === "cursor" && api.disconnectCursor) {
-      await runHarnessAction("cursor", "Disconnect Cursor", () => api.disconnectCursor());
+      await runHarnessAction("cursor", uiText("Disconnect Cursor"), () => api.disconnectCursor());
       return;
     }
     if (!api.disconnectHarness) return;
     await runHarnessAction(
       harness.id,
-      `Disconnect ${harness.displayName}`,
+      uiText("Disconnect {name}", { name: harness.displayName }),
       () => api.disconnectHarness(harness.id),
     );
   };
   const setup = async (harness: HarnessDescriptor) => {
     if (!api) return;
     if (harness.id === "cursor") {
-      await runHarnessAction("cursor", "Connect Cursor", () => api.connectCursor(cursorHostname.trim() || undefined));
+      await runHarnessAction("cursor", uiText("Connect Cursor"), () => api.connectCursor(cursorHostname.trim() || undefined));
     } else {
-      await runHarnessAction(harness.id, `Configure ${harness.displayName}`, () => api.setupHarness(harness.id));
+      await runHarnessAction(harness.id, uiText("Configure {name}", { name: harness.displayName }), () => api.setupHarness(harness.id));
     }
   };
   const openSurface = async (harness: HarnessDescriptor, surface: "app" | "terminal") => {
     if (!api) return;
     await act(
-      surface === "app" ? `Open ${harness.displayName} app` : `Open ${harness.displayName} terminal`,
+      surface === "app"
+        ? uiText("Open {name} app", { name: harness.displayName })
+        : uiText("Open {name} terminal", { name: harness.displayName }),
       () => api.launchHarness(harness.id, surface),
     );
   };
@@ -195,12 +206,12 @@ export function HarnessPage({ target, api, refreshing, operation, onRefresh, run
   // list must not be the reason somebody's global coding agent changed version.
   const update = async (harness: HarnessDescriptor) => {
     if (!api?.updateHarness) return;
-    await act(`Update ${harness.displayName}`, () => api.updateHarness(harness.id));
+    await act(uiText("Update {name}", { name: harness.displayName }), () => api.updateHarness(harness.id));
   };
   const updatableClients = clients.filter((client) => client.canUpdate);
   const updateAll = async () => {
     if (!api?.updateHarness) return;
-    await act("Update installed clients", () => api.updateHarness("all"));
+    await act(uiText("Update installed clients"), () => api.updateHarness("all"));
   };
   const busy = (harness: HarnessDescriptor) => (
     pendingHarnessId === harness.id
@@ -210,41 +221,41 @@ export function HarnessPage({ target, api, refreshing, operation, onRefresh, run
   return (
     <>
       <PageHeader
-        eyebrow="Coding clients"
-        title="Harness"
-        description="Publish the shared routed catalog into each coding client."
+        eyebrow={uiText("Coding clients")}
+        title={uiText("Harness")}
+        description={uiText("Publish the shared routed catalog into each coding client.")}
         onRefresh={refresh}
         refreshing={refreshing}
       />
       <div className="lhc-harness-summary">
         <StatStrip items={[
-          { label: "Clients", value: clients.length, detail: "Supported clients" },
-          { label: "Configured", value: clients.filter((client) => client.configured).length, detail: "Using this router" },
-          { label: "Sessions", value: sessions?.counts.total ?? 0, detail: "Indexed metadata" },
-          { label: "Routed models", value: routedModelCount, detail: "Shared picker" },
+          { label: uiText("Clients"), value: clients.length, detail: uiText("Supported clients") },
+          { label: uiText("Configured"), value: clients.filter((client) => client.configured).length, detail: uiText("Using this router") },
+          { label: uiText("Sessions"), value: sessions?.counts.total ?? 0, detail: uiText("Indexed metadata") },
+          { label: uiText("Routed models"), value: routedModelCount, detail: uiText("Shared picker") },
         ]} />
         {updatableClients.length ? (
           <Button
             variant="secondary"
             disabled={!api?.updateHarness}
-            title={`Runs each client's own updater for: ${updatableClients.map((client) => client.displayName).join(", ")}. Clients that are not installed are skipped.`}
+            title={uiText("Runs each client's own updater for: {clients}. Clients that are not installed are skipped.", { clients: updatableClients.map((client) => client.displayName).join(", ") })}
             onClick={() => void updateAll()}
           >
-            <ArrowUpCircle aria-hidden size={14} strokeWidth={1.7} /> Update all ({updatableClients.length})
+            <ArrowUpCircle aria-hidden size={14} strokeWidth={1.7} /> {uiText("Update all ({count})", { count: updatableClients.length })}
           </Button>
         ) : null}
       </div>
 
-      {error ? <InlineNotice tone="warning" title="Client detection is incomplete">{error}</InlineNotice> : null}
+      {error ? <InlineNotice tone="warning" title={uiText("Client detection is incomplete")}>{error}</InlineNotice> : null}
 
       <div className="lhc-harness-list">
-        {!snapshot && !error ? <PanelSkeleton label="Detecting coding clients" variant="list" count={CLIENT_ORDER.length} /> : null}
+        {!snapshot && !error ? <PanelSkeleton label={uiText("Detecting coding clients")} variant="list" count={CLIENT_ORDER.length} /> : null}
         {clients.length ? (
           <div className="lhc-harness-table-head" aria-hidden>
-            <span>Client</span>
-            <span>Models</span>
-            <span>Sessions</span>
-            <span>Actions</span>
+            <span>{uiText("Client")}</span>
+            <span>{uiText("Models")}</span>
+            <span>{uiText("Sessions")}</span>
+            <span>{uiText("Actions")}</span>
           </div>
         ) : null}
         {clients.map((harness) => {
@@ -264,9 +275,11 @@ export function HarnessPage({ target, api, refreshing, operation, onRefresh, run
                 <div className="lhc-harness-progress" role="status" aria-live="polite">
                   <div>
                     <LoaderCircle aria-hidden size={14} strokeWidth={1.7} className="spin" />
-                    <span>{operation?.status === "started" ? operation.message || "Preparing Cursor setup…" : "Refreshing Cursor setup…"}</span>
+                    <span>{operation?.status === "started"
+                      ? backendText(operation.message) || uiText("Preparing Cursor setup…")
+                      : uiText("Refreshing Cursor setup…")}</span>
                   </div>
-                  <progress aria-label="Cursor setup progress" />
+                  <progress aria-label={uiText("Cursor setup progress")} />
                 </div>
               ) : harness.id === "cursor" && harness.appInstalled && !enabled ? (
                 <div className="lhc-cursor-connect">
@@ -274,10 +287,10 @@ export function HarnessPage({ target, api, refreshing, operation, onRefresh, run
                     <Globe2 aria-hidden size={14} strokeWidth={1.7} />
                     <span>{cursorTunnelHelp(harness)}</span>
                   </div>
-                  <details>
-                    <summary>Use an existing Cloudflare hostname</summary>
-                    <label className="lhc-harness-origin">
-                      <span>Hostname</span>
+                    <details>
+                      <summary>{uiText("Use an existing Cloudflare hostname")}</summary>
+                      <label className="lhc-harness-origin">
+                        <span>{uiText("Hostname")}</span>
                       <input
                         value={cursorHostname}
                         placeholder="cursor-router.example.com"
@@ -285,7 +298,7 @@ export function HarnessPage({ target, api, refreshing, operation, onRefresh, run
                         autoCapitalize="none"
                         onChange={(event) => setCursorHostname(event.target.value)}
                       />
-                      <small>Optional. Leave blank to create one under the domain you authorize.</small>
+                        <small>{uiText("Optional. Leave blank to create one under the domain you authorize.")}</small>
                     </label>
                   </details>
                 </div>
@@ -297,7 +310,7 @@ export function HarnessPage({ target, api, refreshing, operation, onRefresh, run
                       <Toggle
                         checked={enabled}
                         disabled={!api || harnessBusy || (!enabled && !harness.canInstall)}
-                        label={`Route ${harness.displayName} through Codex Router`}
+                          label={uiText("Route {name} through Codex Router", { name: harness.displayName })}
                         onChange={(next) => void toggleRouting(harness, next)}
                       />
                       <span id={hintId} role="tooltip" className="lhc-harness-hint-tooltip">
@@ -310,9 +323,11 @@ export function HarnessPage({ target, api, refreshing, operation, onRefresh, run
                           <Button
                             className="lhc-harness-icon-btn"
                             variant="primary"
-                            aria-label={`Open ${harness.displayName} app`}
-                            disabled={!api || harnessBusy}
-                            title={harness.appInstalled ? `Open ${harness.displayName}` : `Open ${harness.displayName} site`}
+                              aria-label={uiText("Open {name} app", { name: harness.displayName })}
+                              disabled={!api || harnessBusy}
+                              title={harness.appInstalled
+                                ? uiText("Open {name}", { name: harness.displayName })
+                                : uiText("Open {name} site", { name: harness.displayName })}
                             onClick={() => void openSurface(harness, "app")}
                           >
                             {harnessBusy
@@ -322,15 +337,15 @@ export function HarnessPage({ target, api, refreshing, operation, onRefresh, run
                           <Button
                             className="lhc-harness-icon-btn"
                             variant="secondary"
-                            aria-label={`Open ${harness.displayName} terminal`}
-                            disabled={!api || harnessBusy || !harness.cliInstalled || !snapshot?.terminalAvailable}
-                            title={
-                              !snapshot?.terminalAvailable
-                                ? "Terminal launch is available on macOS only"
-                                : !harness.cliInstalled
-                                  ? `${harness.displayName} CLI is not installed`
-                                  : `Open ${harness.displayName} in a terminal`
-                            }
+                              aria-label={uiText("Open {name} terminal", { name: harness.displayName })}
+                              disabled={!api || harnessBusy || !harness.cliInstalled || !snapshot?.terminalAvailable}
+                              title={
+                                !snapshot?.terminalAvailable
+                                  ? uiText("Terminal launch is available on macOS only")
+                                  : !harness.cliInstalled
+                                    ? uiText("{name} CLI is not installed", { name: harness.displayName })
+                                    : uiText("Open {name} in a terminal", { name: harness.displayName })
+                              }
                             onClick={() => void openSurface(harness, "terminal")}
                           >
                             <SquareTerminal aria-hidden size={14} strokeWidth={1.7} />
@@ -340,14 +355,14 @@ export function HarnessPage({ target, api, refreshing, operation, onRefresh, run
                         <Button
                           className="lhc-harness-setup-btn"
                           variant="primary"
-                          aria-label={`Set up ${harness.displayName}`}
+                            aria-label={uiText("Set up {name}", { name: harness.displayName })}
                           disabled={!api || harnessBusy || !harness.canInstall}
-                          title={harness.installRequirement}
+                            title={backendText(harness.installRequirement)}
                           onClick={() => void setup(harness)}
                         >
                           {harnessBusy
                             ? <LoaderCircle aria-hidden size={14} strokeWidth={1.7} className="spin" />
-                            : harness.id === "cursor" ? "Connect" : "Set up"}
+                              : harness.id === "cursor" ? uiText("Connect") : uiText("Set up")}
                         </Button>
                       )}
                     </div>
@@ -355,11 +370,11 @@ export function HarnessPage({ target, api, refreshing, operation, onRefresh, run
                       <Button
                         className="lhc-harness-icon-btn"
                         variant="ghost"
-                        aria-label={`Update ${harness.displayName}`}
-                        disabled={!api?.updateHarness || harnessBusy}
-                        title={harness.updateCommand
-                          ? `Runs \`${harness.updateCommand}\``
-                          : `Update ${harness.displayName}`}
+                          aria-label={uiText("Update {name}", { name: harness.displayName })}
+                          disabled={!api?.updateHarness || harnessBusy}
+                          title={harness.updateCommand
+                            ? uiText("Runs `{command}`", { command: harness.updateCommand })
+                            : uiText("Update {name}", { name: harness.displayName })}
                         onClick={() => void update(harness)}
                       >
                         <ArrowUpCircle aria-hidden size={14} strokeWidth={1.7} />
@@ -374,23 +389,26 @@ export function HarnessPage({ target, api, refreshing, operation, onRefresh, run
       </div>
 
       <section className="panel-section">
-        <SectionHeading title={`One router plane, ${clients.length} client stores`} description="Model routes and provider credentials are shared; sessions and client-owned settings remain separate." />
-        <div className="lhc-continuity-map">
-          <article>
-            <Route aria-hidden size={18} strokeWidth={1.7} />
-            <div><strong>Shared routed catalog</strong><small>{routedModelCount} selected models are republished into every configured client.</small></div>
-            <Badge tone={target?.active ? "success" : "neutral"}>{target?.active ? "Active" : "Inactive"}</Badge>
-          </article>
-          <article>
-            <Globe2 aria-hidden size={18} strokeWidth={1.7} />
-            <div><strong>Cursor public edge</strong><small>Cursor App reaches only the separately keyed app edge; the main loopback capability stays private.</small></div>
-            <Badge tone={clients.find((client) => client.id === "cursor")?.configured ? "success" : "neutral"}>Isolated</Badge>
-          </article>
-          <article>
-            <Boxes aria-hidden size={18} strokeWidth={1.7} />
-            <div><strong>Session ownership</strong><small>The index reads bounded metadata only. Conversation messages stay inside each coding client.</small></div>
-            <Badge tone="accent">Local</Badge>
-          </article>
+          <SectionHeading
+            title={uiText("One router plane, {count} client stores", { count: clients.length })}
+            description={uiText("Model routes and provider credentials are shared; sessions and client-owned settings remain separate.")}
+          />
+          <div className="lhc-continuity-map">
+            <article>
+              <Route aria-hidden size={18} strokeWidth={1.7} />
+              <div><strong>{uiText("Shared routed catalog")}</strong><small>{uiText("{count} selected models are republished into every configured client.", { count: routedModelCount })}</small></div>
+              <Badge tone={target?.active ? "success" : "neutral"}>{target?.active ? uiText("Active") : uiText("Inactive")}</Badge>
+            </article>
+            <article>
+              <Globe2 aria-hidden size={18} strokeWidth={1.7} />
+              <div><strong>{uiText("Cursor public edge")}</strong><small>{uiText("Cursor App reaches only the separately keyed app edge; the main loopback capability stays private.")}</small></div>
+              <Badge tone={clients.find((client) => client.id === "cursor")?.configured ? "success" : "neutral"}>{uiText("Isolated")}</Badge>
+            </article>
+            <article>
+              <Boxes aria-hidden size={18} strokeWidth={1.7} />
+              <div><strong>{uiText("Session ownership")}</strong><small>{uiText("The index reads bounded metadata only. Conversation messages stay inside each coding client.")}</small></div>
+              <Badge tone="accent">{uiText("Local")}</Badge>
+            </article>
         </div>
       </section>
     </>
@@ -414,12 +432,12 @@ function HarnessRow({ harness, sessions, models, bridge, setupControl, actions, 
           <div className="lhc-harness-title">
             <h2>{harness.displayName}</h2>
             <Badge tone={harness.configured ? "success" : harness.cliInstalled || harness.appInstalled ? "accent" : "neutral"}>
-              {harness.configured ? "Ready" : harness.cliInstalled || harness.appInstalled ? "Detected" : "Missing"}
+              {harness.configured ? uiText("Ready") : harness.cliInstalled || harness.appInstalled ? uiText("Detected") : uiText("Missing")}
             </Badge>
           </div>
           {bridge?.installed ? (
-            <p className="lhc-harness-bridge is-available" title="Optional delegated runs use the official client's own login.">
-              Agent{bridge.sessions > 0 ? ` · ${bridge.sessions}` : ""}
+            <p className="lhc-harness-bridge is-available" title={uiText("Optional delegated runs use the official client's own login.")}>
+              {uiText("Agent")}{bridge.sessions > 0 ? ` · ${bridge.sessions}` : ""}
             </p>
           ) : null}
         </div>
@@ -429,7 +447,7 @@ function HarnessRow({ harness, sessions, models, bridge, setupControl, actions, 
         <button
           className="lhc-harness-sessions"
           type="button"
-          title={`${sessions} indexed session${sessions === 1 ? "" : "s"}`}
+          title={sessions === 1 ? uiText("1 indexed session") : uiText("{count} indexed sessions", { count: sessions })}
           onClick={onSessions}
         >
           <span>{sessions}</span>
@@ -463,37 +481,37 @@ function HarnessMark({ id }: { id: HarnessId }) {
 function modelFact(harness: HarnessDescriptor, modelCount: number): { label: string; title: string } {
   if (harness.id === "cursor") {
     return harness.configured
-      ? { label: String(modelCount), title: `${modelCount} available` }
-      : { label: "—", title: "Ready after setup" };
+      ? { label: String(modelCount), title: uiText("{count} available", { count: modelCount }) }
+      : { label: "—", title: uiText("Ready after setup") };
   }
   return harness.configured
-    ? { label: String(modelCount), title: `${modelCount} published` }
-    : { label: "—", title: "Not published" };
+    ? { label: String(modelCount), title: uiText("{count} published", { count: modelCount }) }
+    : { label: "—", title: uiText("Not published") };
 }
 
 function cursorTunnelHelp(harness: HarnessDescriptor): string {
   if (!harness.tunnel?.binaryInstalled) {
-    return "Turn Route on to install the connector, authorize Cloudflare, publish models, and reopen Cursor.";
+    return uiText("Turn Route on to install the connector, authorize Cloudflare, publish models, and reopen Cursor.");
   }
   if (!harness.tunnel.loggedIn) {
-    return "Turn Route on, then authorize a domain in the browser.";
+    return uiText("Turn Route on, then authorize a domain in the browser.");
   }
-  return "Turn Route on to publish models and reopen Cursor.";
+  return uiText("Turn Route on to publish models and reopen Cursor.");
 }
 
 function harnessHint(harness: HarnessDescriptor): ReactNode {
   if (harness.id === "cursor") {
     return (
       <>
-        “Custom API keys” means a Cursor model while routed. Use <code>codex_router/…</code> or turn Route off.
+        {uiText("“Custom API keys” means a Cursor model while routed. Use")} <code>codex_router/…</code> {uiText("or turn Route off.")}
       </>
     );
   }
   if (TERMINAL_ONLY_CLIENTS.has(harness.id)) {
-    return <>Route publishes models. Off removes them. Term runs the CLI.</>;
+    return <>{uiText("Route publishes models. Off removes them. Term runs the CLI.")}</>;
   }
   if (harness.id === "codex") {
-    return <>Route points Codex here. Restart Codex after toggling.</>;
+    return <>{uiText("Route points Codex here. Restart Codex after toggling.")}</>;
   }
-  return <>Route publishes models into {harness.displayName}. Off removes only this router’s entry.</>;
+  return <>{uiText("Route publishes models into {name}. Off removes only this router’s entry.", { name: harness.displayName })}</>;
 }
