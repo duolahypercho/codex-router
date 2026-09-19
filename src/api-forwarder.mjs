@@ -983,6 +983,8 @@ function normalizeBody(buffer, contentType, route) {
       ? "/messages"
       : provider.protocol === "openai-responses"
         ? "/responses"
+        : provider.protocol === "openai-decisions"
+          ? "/decisions"
         : "/chat/completions");
   if (
     route === "/embeddings"
@@ -1000,9 +1002,10 @@ function normalizeBody(buffer, contentType, route) {
   }
 
   payload.model = model.upstreamModel;
-  // Embeddings have their own wire contract. Keep every provider-specific
-  // input field unchanged and never send the body through a chat adapter.
-  if (route === "/embeddings") {
+  // Embeddings and Decisions have their own wire contracts. Keep every
+  // provider-specific field unchanged and never send either through a chat
+  // adapter or profile-specific normalisation.
+  if (["/embeddings", "/decisions"].includes(route)) {
     const endpoint = endpointForModel(model);
     return {
       body: Buffer.from(JSON.stringify(payload), "utf8"),
@@ -1675,7 +1678,7 @@ async function handleRequest(request, response) {
   }
   if (
     request.method !== "POST" ||
-    !["/chat/completions", "/messages", "/responses", "/embeddings"].includes(route)
+    !["/chat/completions", "/messages", "/responses", "/embeddings", "/decisions"].includes(route)
   ) {
     writeJson(response, 404, {
       error: { type: "proxy_route_not_found", message: "Unsupported API-provider route." },
@@ -1805,7 +1808,7 @@ async function handleRequest(request, response) {
     }
     return outcome;
   };
-  if (!poolRouting.pooled && route !== "/embeddings" && commandCode?.route === "plan") {
+  if (!poolRouting.pooled && !["/embeddings", "/decisions"].includes(route) && commandCode?.route === "plan") {
     await relayThroughPlan();
     return;
   }
@@ -1819,7 +1822,7 @@ async function handleRequest(request, response) {
   let target;
   let upstream;
   let deferredUpstreamLimits;
-  if (poolRouting.pooled && route !== "/embeddings") {
+  if (poolRouting.pooled && !["/embeddings", "/decisions"].includes(route)) {
     const pooled = await runProviderApiKeyAttempts(normalized.endpoint.id, {
       filePath: undefined,
       resolveCredential: (credentialId) =>
@@ -1871,7 +1874,7 @@ async function handleRequest(request, response) {
           ),
           body: upstreamBody,
           signal: controller.signal,
-          redirect: route === "/embeddings" ? "error" : "follow",
+          redirect: ["/embeddings", "/decisions"].includes(route) ? "error" : "follow",
         });
         let attemptResponse = await sendAttempt();
         // The source credential can still be valid when Copilot changes the
@@ -2002,14 +2005,14 @@ async function handleRequest(request, response) {
       ),
       body: upstreamBody,
       signal: controller.signal,
-      redirect: route === "/embeddings" ? "error" : "follow",
+      redirect: ["/embeddings", "/decisions"].includes(route) ? "error" : "follow",
     });
-    // Embeddings can be billed even when the response never reaches the
-    // caller. Select one pool credential above and record its outcome, but do
-    // not replay the same input through another credential after a 401, 429,
-    // or transport failure. Chat/Responses keep their established pool
-    // failover contract.
-    if (poolRouting.pooled && route === "/embeddings") {
+    // Embeddings and Decisions can be billed even when the response never
+    // reaches the caller. Select one pool credential above and record its
+    // outcome, but do not replay the same input through another credential
+    // after a 401, 429, or transport failure. Chat/Responses keep their
+    // established pool failover contract.
+    if (poolRouting.pooled && ["/embeddings", "/decisions"].includes(route)) {
       await recordProviderApiKeyRequestOutcome(poolRouting, normalized.endpoint, {
         status: upstream.status,
         ok: upstream.ok,
@@ -2024,7 +2027,7 @@ async function handleRequest(request, response) {
   // before any response byte reaches the caller; every other status is relayed.
   if (
     !poolRouting.pooled &&
-    route !== "/embeddings" &&
+    !["/embeddings", "/decisions"].includes(route) &&
     normalized.provider.authProfile === "github-copilot" &&
     upstream.status === 401
   ) {
@@ -2059,7 +2062,7 @@ async function handleRequest(request, response) {
   if (
     commandCode &&
     !poolRouting.pooled &&
-    route !== "/embeddings" &&
+    !["/embeddings", "/decisions"].includes(route) &&
     upstream.status === 403
   ) {
     const raw = (await readResponseBody(upstream, { signal: controller.signal })).toString("utf8");
