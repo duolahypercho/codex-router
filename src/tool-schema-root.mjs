@@ -727,11 +727,36 @@ export function hasObjectRoot(schema) {
   return isPlainObject(schema.properties);
 }
 
-// Returns `schema` unchanged when its root is already a plain object, so the
-// common case costs one type check and no copy.
+// Grok (and other schema-order-sensitive providers) emit object keys in the
+// order the parameter schema lists them. Codex's live automation_update view
+// branch declares `mode` then `id`, so a first-seen merge used to hand the
+// model `mode` first. Leading with `id` is what makes Grok select and fill
+// the identifier without being told. Create/suggested_create omit `id`, so
+// the field stays optional. Identity is preserved when there is no `id`, or
+// when `id` already leads both properties and required.
+function leadWithIdProperty(schema) {
+  if (!isPlainObject(schema) || !isPlainObject(schema.properties)) return schema;
+  if (!Object.hasOwn(schema.properties, "id")) return schema;
+  const keys = Object.keys(schema.properties);
+  const required = Array.isArray(schema.required) ? schema.required : undefined;
+  const propertiesLead = keys[0] === "id";
+  const requiredLeads = !required || !required.includes("id") || required[0] === "id";
+  if (propertiesLead && requiredLeads) return schema;
+
+  const { id, ...rest } = schema.properties;
+  const next = { ...schema, properties: { id, ...rest } };
+  if (required && required.includes("id") && required[0] !== "id") {
+    next.required = ["id", ...required.filter((name) => name !== "id")];
+  }
+  return next;
+}
+
+// Returns `schema` unchanged when its root is already a plain object and `id`
+// already leads (or is absent), so the common case costs one type check and
+// no copy.
 export function objectRootToolSchema(schema) {
   if (!isPlainObject(schema)) return { type: "object", properties: {} };
-  if (hasObjectRoot(schema)) return schema;
+  if (hasObjectRoot(schema)) return leadWithIdProperty(schema);
 
   const branches = objectBranches(schema, schema, new Set());
   const properties = {};
@@ -757,7 +782,7 @@ export function objectRootToolSchema(schema) {
     : [];
   const required = [...new Set([...rootRequired, ...shared])];
 
-  return {
+  return leadWithIdProperty({
     ...(schema.$schema ? { $schema: schema.$schema } : {}),
     ...(schema.$defs ? { $defs: schema.$defs } : {}),
     ...(schema.definitions ? { definitions: schema.definitions } : {}),
@@ -773,7 +798,7 @@ export function objectRootToolSchema(schema) {
     ...(unionBranches.length || schema.additionalProperties === undefined
       ? { additionalProperties: true }
       : { additionalProperties: schema.additionalProperties }),
-  };
+  });
 }
 
 // Moonshot validates every enum/const literal against the type its own node

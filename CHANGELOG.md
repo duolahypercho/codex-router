@@ -1,6 +1,14 @@
 # Changelog
 
 ## Unreleased
+- **Grok now sees `id` first on flattened tool schemas, so `automation_update`
+  fills the identifier without being told.** Codex's live view branch declares
+  `mode` then `id`. The union flatten used to keep that order, and Grok emits
+  object keys in schema order, so view/update/delete calls arrived with `mode`
+  first. `objectRootToolSchema` now leads with `id` when the field exists, on
+  both merged unions and already-object-rooted copies. `id` stays optional
+  (create omits it). Schemas with no `id`, or with `id` already first, stay by
+  identity.
 - **An apostrophe in a harness config no longer moves the router's route into
   somebody else's value.** `yaml-structure.mjs` treated every `'` and `"` as a
   quoting indicator, but YAML only gives a quote that meaning where a node can

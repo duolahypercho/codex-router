@@ -366,6 +366,67 @@ test("automation_update keeps its branch fields after flattening", () => {
   );
 });
 
+// Grok (and other schema-order-sensitive providers) emit object keys in the
+// order the parameter schema lists them. Codex's live automation_update view
+// branch declares `mode` then `id`, so the flatten used to hand Grok `mode`
+// first. Putting `id` first is what makes the model select and fill the
+// identifier without being told.
+test("flattened union properties lead with id when the field exists", () => {
+  const flattened = objectRootToolSchema({
+    oneOf: [
+      { type: "object", properties: { mode: { const: "view" }, id: { type: "string" } }, required: ["mode", "id"] },
+      { type: "object", properties: { mode: { const: "delete" }, force: { type: "boolean" } }, required: ["mode"] },
+    ],
+  });
+  assert.deepEqual(Object.keys(flattened.properties), ["id", "mode", "force"]);
+});
+
+test("object-rooted schemas with id not first are rewritten to lead with id", () => {
+  const schema = {
+    type: "object",
+    properties: { mode: { type: "string" }, id: { type: "string" }, name: { type: "string" } },
+    required: ["mode", "id"],
+  };
+  const rewritten = objectRootToolSchema(schema);
+  assert.notEqual(rewritten, schema);
+  assert.deepEqual(Object.keys(rewritten.properties), ["id", "mode", "name"]);
+  assert.deepEqual(rewritten.required, ["id", "mode"]);
+  assert.deepEqual(Object.keys(schema.properties), ["mode", "id", "name"]);
+  assert.deepEqual(schema.required, ["mode", "id"]);
+});
+
+test("object-rooted schemas that already lead with id stay by identity", () => {
+  const schema = {
+    type: "object",
+    properties: { id: { type: "string" }, mode: { type: "string" } },
+    required: ["id", "mode"],
+  };
+  assert.equal(objectRootToolSchema(schema), schema);
+});
+
+test("Grok sees automation_update with id first", () => {
+  const automationUpdate = CODEX_APP_TOOLS.flatMap((entry) =>
+    entry.type === "namespace" ? entry.tools : [entry],
+  ).find((tool) => tool.name === "automation_update");
+  const request = toResponsesRequest({
+    model: "grok-4.6",
+    messages: [{ role: "user", content: "view it" }],
+    tools: [
+      {
+        type: "function",
+        function: {
+          name: "codex_app__automation_update",
+          parameters: automationUpdate.inputSchema,
+        },
+      },
+    ],
+  });
+  const tool = request.tools.find((entry) => entry.name === "codex_app__automation_update");
+  assert.ok(tool, "automation_update is still sent to Grok");
+  assert.equal(Object.keys(tool.parameters.properties)[0], "id");
+  assert.ok(Object.keys(tool.parameters.properties).includes("mode"));
+});
+
 // Regression for #179: Moonshot rejects the whole request when an enum literal
 // contradicts the type its own node declares. The reported path was
 // `properties.appTaskLane.properties.enabled.enum`, from a client-supplied
