@@ -1,6 +1,6 @@
 ---
 name: codex-router
-description: Orientation for custom (non-OpenAI) models running in the Codex app through the codex-router proxy. Explains that the app's native tools arrive as flattened codex_app__ and mcp__ names, that the router restores them so the app executes them, which companion skills to read before threads, browser, or computer-use work, and that a turn with no tool call ends the task. Use when the session uses a custom (non-OpenAI) model, for example deepseek-v4-flash or mimo-v2.5, when codex_app__ or mcp__ tool names appear in the tool list, when a tool result just arrived and more work remains, or when thread, browser, or computer-use work is requested.
+description: "Orientation for custom (non-OpenAI) models in the Codex app: how codex-router exposes the app's native tools, and which companion skill to read for thread, browser, or computer-use work."
 ---
 
 # Codex Router (custom models in the Codex app)
