@@ -12939,3 +12939,92 @@ test("an in-contract Chat route still carries its reasoning as thinking", async 
     rmSync(stateDir, { recursive: true, force: true });
   }
 });
+
+test("a routed subagent handoff reaches Console Go as a user message", async () => {
+  const gatewayRequests = [];
+  const gateway = await mockServer(async (request, response) => {
+    gatewayRequests.push(await bodyJson(request));
+    json(response, 200, {
+      id: "resp_console_go_handoff",
+      object: "response",
+      status: "completed",
+      output: [
+        {
+          type: "message",
+          id: "msg_console_go_handoff",
+          role: "assistant",
+          status: "completed",
+          content: [{ type: "output_text", text: "ok" }],
+        },
+      ],
+    });
+  });
+  const routerPort = await openPort();
+  const router = run("router.mjs", {
+    CODEX_ROUTER_PORT: String(routerPort),
+    CODEX_ROUTER_GATEWAY_BASE_URL: `http://127.0.0.1:${gateway.port}/v1`,
+    CODEX_ROUTER_QUIET: "1",
+  });
+
+  // A routed child cannot mint an OpenAI token, so Codex stores its readable
+  // handoff under `agent_message.content[].encrypted_content`. Console Go
+  // implements only the public Responses item types and rejects the native
+  // discriminator outright: `input[N] did not match any supported type`.
+  const handoff = {
+    type: "agent_message",
+    id: "amsg_console_go_handoff",
+    author: "/root",
+    recipient: "/root/child",
+    content: [
+      {
+        type: "input_text",
+        text: "Message Type: NEW_TASK\nTask name: /root/child\nSender: /root\nPayload:\n",
+      },
+      { type: "encrypted_content", encrypted_content: "Return the marker." },
+    ],
+  };
+
+  try {
+    await waitFor(`${routerBase(routerPort)}/models`, router);
+    const response = await fetch(`${routerBase(routerPort)}/responses`, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer CODEX_CALLER_SECRET",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "opencode-go-responses/muse-spark-1.3-contributor",
+        stream: false,
+        input: [
+          {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: "start" }],
+          },
+          handoff,
+        ],
+      }),
+    });
+    assert.ok(response.status < 500, `the router failed before the gateway (${response.status})`);
+  } finally {
+    await stopChild(router);
+    await closeServer(gateway.server);
+  }
+
+  assert.equal(gatewayRequests.length, 1, "the handoff never reached the upstream");
+  const forwarded = gatewayRequests[0].input;
+  assert.ok(Array.isArray(forwarded), "the forwarded input was not an array");
+  assert.equal(
+    forwarded.some((item) => item?.type === "agent_message"),
+    false,
+    "the native agent_message discriminator reached the strict upstream",
+  );
+  const delivered = forwarded.at(-1);
+  assert.equal(delivered?.type, "message");
+  assert.equal(delivered?.role, "user");
+  assert.deepEqual(
+    delivered?.content?.at(-1),
+    { type: "input_text", text: "Return the marker." },
+    "the non-Fernet payload was not rendered as readable text",
+  );
+});

@@ -1112,6 +1112,23 @@ function zenFreeCompatibleInput(input, route) {
   );
 }
 
+// Console Go's Responses surface rejects the Codex-native item discriminator a
+// spawned child receives first: the parent hands the task over as an
+// `agent_message`, and the endpoint answers "input[N] did not match any
+// supported type" (measured on Muse Spark 1.3, input[4]). That item carries its
+// payload as the `encrypted_content` part, and the value Codex puts there is a
+// plain string rather than a native Fernet token, so render it as text and
+// present the handoff as the ordinary user message the endpoint accepts -- the
+// same shape the Zen free routes and the DeepSeek Responses route already
+// require. A real native token is left untouched rather than shown as ciphertext.
+function consoleGoCompatibleInput(input, route) {
+  if (!needsConsoleGoResponsesToolCompatibility(route)) return input;
+  const rendered = Array.isArray(input)
+    ? input.map((item) => normalizeAgentMessageForNative(item))
+    : input;
+  return agentMessagesAsUserMessages(rendered);
+}
+
 function applyZenFreeIncludeCompatibility(payload, route) {
   if (!needsZenFreeToolCompatibility(route)) return payload;
   const include = stripUnissuedEncryptedReasoningInclude(payload.include);
@@ -2796,8 +2813,8 @@ async function summarizeWith(
   signal,
   { searchContract } = {},
 ) {
-  const compatibleInput = zenFreeCompatibleInput(
-    normalizeProviderAppToolOutputs(aged.input),
+  const compatibleInput = consoleGoCompatibleInput(
+    zenFreeCompatibleInput(normalizeProviderAppToolOutputs(aged.input), route),
     route,
   );
   const providerInput = (needsConsoleGoResponsesToolCompatibility(route) || usesDeepSeekResponses(route))
@@ -3373,8 +3390,8 @@ async function buildRoutedRequest({ request, payload, route, agedInput }) {
   const clientTools = chatCompletionsProvider || deepSeekResponses || consoleGoResponsesCompatibility
     ? restorePreflattenedToolNamespaces(payload.tools, payload.client_metadata)
     : payload.tools;
-  const compatibleInput = zenFreeCompatibleInput(
-    normalizeProviderAppToolOutputs(agedInput),
+  const compatibleInput = consoleGoCompatibleInput(
+    zenFreeCompatibleInput(normalizeProviderAppToolOutputs(agedInput), route),
     route,
   );
   // Image substitution may spend another provider's quota. Every Groq tool
