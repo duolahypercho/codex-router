@@ -7,6 +7,15 @@
   reasoning ladder whose default is high. `xhigh` is forwarded for this model
   the same way it is for Grok 4.6. The route does not advertise the Grok 4.6
   Fast tier, and it is not marked as a native v2 subagent.
+- **Switching native models no longer carries an unsupported reasoning effort
+  into the next turn.** Codex can apply the newly selected model before it
+  replaces the previous model's effort, so moving from a model with a
+  `minimal` rung to GPT-6 Astra, GPT-5.6 Sol, or GPT-5.6 Luna sent an invalid
+  model/effort pair and ChatGPT rejected the whole turn with HTTP 400. Native
+  passthrough now checks the target model's current account-catalog ladder and
+  clamps only known Codex effort names onto it. Already-supported values remain
+  unchanged, unknown values still reach the upstream validator, and a missing
+  or unreadable catalog remains fail-open.
 - **Direct Meta Muse Spark 1.3 Contributor no longer loses tool-bearing turns
   to a recursive schema the repair never reached.** Issue #792 opted that route
   into the cycle-closing repair, but the repair ran only in the api-forwarder,

@@ -1326,6 +1326,85 @@ test("substituted native compaction omits the ordinary Responses store policy", 
   }
 });
 
+test("native passthrough clamps a stale effort after a model switch", async () => {
+  const nativeRequests = [];
+  const native = await mockServer(async (request, response) => {
+    nativeRequests.push(await bodyJson(request));
+    json(response, 200, { id: "native-ok", output: [] });
+  });
+  const testRoot = mkdtempSync(path.join(os.tmpdir(), "native-effort-switch-"));
+  const stateDir = path.join(testRoot, "state");
+  const codexHome = path.join(testRoot, "codex");
+  mkdirSync(stateDir, { recursive: true });
+  mkdirSync(codexHome, { recursive: true });
+  writeFileSync(
+    path.join(stateDir, "native-models.json"),
+    JSON.stringify({
+      models: [{
+        slug: "gpt-6-astra",
+        supported_reasoning_levels: ["low", "medium", "high", "xhigh", "max"].map(
+          (effort) => ({ effort, description: effort }),
+        ),
+      }],
+    }),
+  );
+  const authPath = path.join(testRoot, "auth.json");
+  writeFileSync(
+    authPath,
+    JSON.stringify({
+      auth_mode: "chatgpt",
+      tokens: {
+        access_token: "test-native-session-token",
+        account_id: "test-native-account",
+      },
+    }),
+    { mode: 0o600 },
+  );
+  const routerPort = await openPort();
+  const router = run("router.mjs", {
+    CODEX_ROUTER_PORT: String(routerPort),
+    CODEX_NATIVE_BASE_URL: `http://127.0.0.1:${native.port}/backend-api/codex`,
+    CODEX_ROUTER_NATIVE_SESSION_FALLBACK: "1",
+    MODEL_ROUTER_CODEX_AUTH: authPath,
+    MODEL_ROUTER_STATE_DIR: stateDir,
+    CODEX_HOME: codexHome,
+    CODEX_ROUTER_QUIET: "1",
+  });
+  const headers = {
+    Authorization: `Bearer ${CALLER_KEY}`,
+    "Content-Type": "application/json",
+  };
+
+  try {
+    await waitFor(`${routerBase(routerPort)}/models`, router);
+    for (const effort of ["minimal", "high", "future"]) {
+      const response = await fetch(`${routerBase(routerPort)}/responses`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          model: "gpt-6-astra",
+          input: "hello",
+          reasoning: { effort, summary: "auto" },
+        }),
+      });
+      assert.equal(response.status, 200, await response.text());
+    }
+
+    assert.equal(nativeRequests[0].reasoning.effort, "low");
+    assert.equal(nativeRequests[0].reasoning.summary, "auto");
+    assert.equal(nativeRequests[1].reasoning.effort, "high");
+    assert.equal(nativeRequests[2].reasoning.effort, "future");
+    assert.match(
+      router.testErrors(),
+      /normalized stale native reasoning effort model=gpt-6-astra .*from=minimal to=low/,
+    );
+  } finally {
+    await stopChild(router);
+    await closeServer(native.server);
+    rmSync(testRoot, { recursive: true, force: true });
+  }
+});
+
 test("router permits a compressed context larger than the encoded request limit", async () => {
   let receivedInputLength = 0;
   const native = await mockServer(async (request, response) => {

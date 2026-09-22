@@ -106,6 +106,7 @@ import { createHealthCache } from "./health-cache.mjs";
 import { discoveryDisabled } from "./discovery-mode.mjs";
 import { readNativeAliases } from "./native-alias.mjs";
 import { nativeContextVariantBase } from "./native-context-variants.mjs";
+import { normalizeNativeReasoningEffort } from "./native-reasoning-effort.mjs";
 import { readNativeRedirect } from "./native-redirect.mjs";
 import {
   autoReviewFallbackEngaged,
@@ -961,6 +962,22 @@ function normalizeNativeForSubstitutedCaller(payload, { compact = false } = {}) 
 function normalizeNativePromptCacheCompatibility(payload) {
   if (/^gpt-5\.6(?:-|$)/.test(String(payload.model || ""))) {
     delete payload.prompt_cache_retention;
+  }
+  return payload;
+}
+
+const loggedNativeEffortNormalizations = new Set();
+
+function normalizeNativeEffortCompatibility(payload) {
+  const changes = normalizeNativeReasoningEffort(payload);
+  for (const change of changes) {
+    const key = `${payload.model}:${change.field}:${change.from}:${change.to}`;
+    if (loggedNativeEffortNormalizations.has(key)) continue;
+    loggedNativeEffortNormalizations.add(key);
+    console.error(
+      `[codex-router] normalized stale native reasoning effort model=${payload.model} ` +
+      `field=${change.field} from=${change.from} to=${change.to}`,
+    );
   }
   return payload;
 }
@@ -4487,6 +4504,7 @@ async function handleResponses(request, response, requestUrl) {
       // the log still name the model the picker showed.
       const variantBase = nativeContextVariantBase(native.model);
       if (variantBase) native.model = variantBase;
+      normalizeNativeEffortCompatibility(native);
       normalizeNativePromptCacheCompatibility(native);
       if (Array.isArray(payload.input)) {
         native.input = normalizeNativeInput(payload.input, {
