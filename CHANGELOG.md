@@ -1,6 +1,12 @@
 # Changelog
 
 ## Unreleased
+- **Grok 4.7 is selectable on the official Grok CLI OAuth session.** The picker
+  entry is `grok-oauth/grok-4.7`. It uses the documented 500,000-token window,
+  text and image input, hosted web/X search, and a low/medium/high/xhigh
+  reasoning ladder whose default is high. `xhigh` is forwarded for this model
+  the same way it is for Grok 4.6. The route does not advertise the Grok 4.6
+  Fast tier, and it is not marked as a native v2 subagent.
 - **Direct Meta Muse Spark 1.3 Contributor no longer loses tool-bearing turns
   to a recursive schema the repair never reached.** Issue #792 opted that route
   into the cycle-closing repair, but the repair ran only in the api-forwarder,

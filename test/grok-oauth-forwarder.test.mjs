@@ -226,6 +226,19 @@ test("translates Chat Completions to Grok Responses and back (text + tools)", as
     await xhighResponse.json();
     assert.equal(captured.reasoning?.effort, "xhigh");
 
+    const grok47 = await fetch(`${base}/v1/chat/completions`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({
+        model: "grok-4.7",
+        messages: [{ role: "user", content: "ping" }],
+        reasoning_effort: "xhigh",
+      }),
+    });
+    assert.equal(grok47.status, 200);
+    await grok47.json();
+    assert.equal(captured.reasoning?.effort, "xhigh");
+
     // Streaming text.
     const streamResp = await fetch(`${base}/v1/chat/completions`, {
       method: "POST",

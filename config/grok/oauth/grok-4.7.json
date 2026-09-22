@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "slug": "grok-oauth/grok-4.7",
+      "gatewayModel": "grok-oauth-grok-4-7",
+      "upstreamModel": "grok-4.7",
+      "provider": "grok-oauth",
+      "listed": true,
+      "displayName": "Grok 4.7 (OAuth)",
+      "description": "Grok 4.7 through the official Grok CLI OAuth session with agentic coding, tool calls, and hosted web/X search.",
+      "priority": 0,
+      "defaultEffort": "high",
+      "reasoningLevels": [
+        {
+          "effort": "low",
+          "description": "Faster reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced reasoning"
+        },
+        {
+          "effort": "high",
+          "description": "Deep reasoning"
+        },
+        {
+          "effort": "xhigh",
+          "description": "Maximum reasoning depth"
+        }
+      ],
+      "contextWindow": 500000,
+      "autoCompact": 440000,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "instructionOverlay": "filesystem-mcp-discipline",
+      "requestProfile": "xai-reasoning",
+      "supportsReasoningSummaries": true,
+      "searchTool": {
+        "mode": "hosted"
+      },
+      "supportsImageDetailOriginal": true,
+      "availabilityNux": "Grok 4.7 is available through the official Grok CLI OAuth session.",
+      "compHash": "grok-oauth-grok-4-7-v1"
+    }
+  ]
+}

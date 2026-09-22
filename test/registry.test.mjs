@@ -105,6 +105,7 @@ test("provider registry exposes configured API and OAuth model families", () => 
       "grok-api/grok-4.5",
       "grok-oauth/grok-4.5",
       "grok-oauth/grok-4.6",
+      "grok-oauth/grok-4.7",
       "kimi-api/kimi-k3",
       "kimi-api-cn/kimi-k3",
       "kimi-oauth/k3",
@@ -586,7 +587,7 @@ test("provider registry exposes configured API and OAuth model families", () => 
   // probe AGENTS.md requires, and a v2 claim is not inherited from a sibling
   // route: kimi-api-cn is the same model on a different platform, which is
   // exactly the kind of "surely it also works" assumption the probe exists for.
-  const unprovenForV2 = new Set(["grok-oauth/grok-4.6", "kimi-api-cn/kimi-k3"]);
+  const unprovenForV2 = new Set(["grok-oauth/grok-4.6", "grok-oauth/grok-4.7", "kimi-api-cn/kimi-k3"]);
   for (const model of LISTED_MODELS.filter(({ provider, slug }) =>
     /^(?:kimi|grok)-/.test(provider) && !unprovenForV2.has(slug),
   )) {
@@ -634,7 +635,7 @@ test("provider registry exposes configured API and OAuth model families", () => 
   assert.deepEqual(ollamaK3.inputModalities, ["text", "image"]);
   // Hosted search is an xAI-backend behavior. Standalone search is limited to
   // provider/model pairs verified against Codex's client-side replay path.
-  for (const slug of ["grok-oauth/grok-4.5", "grok-oauth/grok-4.6"]) {
+  for (const slug of ["grok-oauth/grok-4.5", "grok-oauth/grok-4.6", "grok-oauth/grok-4.7"]) {
     assert.deepEqual(MODEL_BY_SLUG.get(slug).searchTool, { mode: "hosted" });
   }
   const standaloneSearchSlugs = new Set([
@@ -646,7 +647,7 @@ test("provider registry exposes configured API and OAuth model families", () => 
     "zai-coding/glm-5.3-flash",
   ]);
   for (const model of MODELS) {
-    if (["grok-oauth/grok-4.5", "grok-oauth/grok-4.6"].includes(model.slug) || standaloneSearchSlugs.has(model.slug)) continue;
+    if (["grok-oauth/grok-4.5", "grok-oauth/grok-4.6", "grok-oauth/grok-4.7"].includes(model.slug) || standaloneSearchSlugs.has(model.slug)) continue;
     assert.equal(model.searchTool, undefined, model.slug);
   }
   // Original-detail images are declared per slug on canonical vision
@@ -661,6 +662,7 @@ test("provider registry exposes configured API and OAuth model families", () => 
     "grok-api/grok-4.5",
     "grok-oauth/grok-4.5",
     "grok-oauth/grok-4.6",
+    "grok-oauth/grok-4.7",
     "kimi-api-cn/kimi-k3",
     "kimi-api/kimi-k3",
     "kimi-oauth/k3",
@@ -723,6 +725,7 @@ test("provider registry exposes configured API and OAuth model families", () => 
   assert.deepEqual(grok46.inputModalities, ["text", "image"]);
   for (const slug of [
     "grok-oauth/grok-4.6",
+    "grok-oauth/grok-4.7",
     "grok-oauth/grok-4.5",
     "grok-api/grok-4.5",
     "deepseek/deepseek-v4-flash",

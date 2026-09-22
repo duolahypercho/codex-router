@@ -192,7 +192,7 @@ function messageContentParts(content, textType) {
 function mapEffort(effort, model) {
   if (effort === "minimal") return "low";
   if (["none", "low"].includes(effort)) return "low";
-  if (effort === "xhigh") return model === "grok-4.6" ? "xhigh" : "high";
+  if (effort === "xhigh") return model === "grok-4.6" || model === "grok-4.7" ? "xhigh" : "high";
   if (effort === "max") return "high";
   return ["medium", "high"].includes(effort) ? effort : undefined;
 }

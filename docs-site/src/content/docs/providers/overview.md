@@ -12,6 +12,7 @@ description: "Connect provider access without putting secrets in shell history."
 | DeepSeek V4 Flash (API) | `deepseek/deepseek-v4-flash` | DeepSeek API key |
 | DeepSeek V4 Pro (API) | `deepseek/deepseek-v4-pro` | DeepSeek API key |
 | DeepSeek V4.1 Flash (API) | `deepseek/deepseek-v4.1-flash` | DeepSeek API key |
+| Grok 4.7 (OAuth) | `grok-oauth/grok-4.7` | Official Grok CLI OAuth session |
 | Grok 4.5 (OAuth) | `grok-oauth/grok-4.5` | Official Grok CLI OAuth session |
 | Grok 4.5 (API) | `grok-api/grok-4.5` | Separately billed xAI API key |
 | Claude Opus 4.8 (API) | `anthropic-api/claude-opus-4.8` | Separately billed Anthropic API key |
