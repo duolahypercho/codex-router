@@ -103,6 +103,7 @@ test("provider registry exposes configured API and OAuth model families", () => 
       "deepseek/deepseek-v4-pro",
       "deepseek/deepseek-v4.1-flash",
       "grok-api/grok-4.5",
+      "grok-api/grok-4.7",
       "grok-oauth/grok-4.5",
       "grok-oauth/grok-4.6",
       "grok-oauth/grok-4.7",
@@ -587,7 +588,12 @@ test("provider registry exposes configured API and OAuth model families", () => 
   // probe AGENTS.md requires, and a v2 claim is not inherited from a sibling
   // route: kimi-api-cn is the same model on a different platform, which is
   // exactly the kind of "surely it also works" assumption the probe exists for.
-  const unprovenForV2 = new Set(["grok-oauth/grok-4.6", "grok-oauth/grok-4.7", "kimi-api-cn/kimi-k3"]);
+  const unprovenForV2 = new Set([
+    "grok-api/grok-4.7",
+    "grok-oauth/grok-4.6",
+    "grok-oauth/grok-4.7",
+    "kimi-api-cn/kimi-k3",
+  ]);
   for (const model of LISTED_MODELS.filter(({ provider, slug }) =>
     /^(?:kimi|grok)-/.test(provider) && !unprovenForV2.has(slug),
   )) {
@@ -660,6 +666,7 @@ test("provider registry exposes configured API and OAuth model families", () => 
     "anthropic-api/claude-opus-4.8",
     "deepseek/deepseek-v4-flash-vision-exp",
     "grok-api/grok-4.5",
+    "grok-api/grok-4.7",
     "grok-oauth/grok-4.5",
     "grok-oauth/grok-4.6",
     "grok-oauth/grok-4.7",
@@ -728,6 +735,7 @@ test("provider registry exposes configured API and OAuth model families", () => 
     "grok-oauth/grok-4.7",
     "grok-oauth/grok-4.5",
     "grok-api/grok-4.5",
+    "grok-api/grok-4.7",
     "deepseek/deepseek-v4-flash",
     "deepseek/deepseek-v4-flash-vision-exp",
     "deepseek/deepseek-v4-pro",

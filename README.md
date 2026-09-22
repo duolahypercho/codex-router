@@ -265,6 +265,7 @@ Linux installations support the Codex CLI.
 | DeepSeek V4.1 Flash (API) | `deepseek/deepseek-v4.1-flash` | DeepSeek API key |
 | Grok 4.7 (OAuth) | `grok-oauth/grok-4.7` | Official Grok CLI OAuth session |
 | Grok 4.5 (OAuth) | `grok-oauth/grok-4.5` | Official Grok CLI OAuth session |
+| Grok 4.7 (API) | `grok-api/grok-4.7` | Separately billed xAI API key |
 | Grok 4.5 (API) | `grok-api/grok-4.5` | Separately billed xAI API key |
 | Claude Opus 4.8 (API) | `anthropic-api/claude-opus-4.8` | Separately billed Anthropic API key |
 | GLM-5.2 (Ollama Cloud) | `ollama-cloud/glm-5.2` | Ollama Cloud API key |

@@ -1,12 +1,14 @@
 # Changelog
 
 ## Unreleased
-- **Grok 4.7 is selectable on the official Grok CLI OAuth session.** The picker
-  entry is `grok-oauth/grok-4.7`. It uses the documented 500,000-token window,
-  text and image input, hosted web/X search, and a low/medium/high/xhigh
-  reasoning ladder whose default is high. `xhigh` is forwarded for this model
-  the same way it is for Grok 4.6. The route does not advertise the Grok 4.6
-  Fast tier, and it is not marked as a native v2 subagent.
+- **Grok 4.7 is selectable on the official Grok CLI OAuth session and on the
+  separately billed xAI API.** The picker entries are `grok-oauth/grok-4.7`
+  and `grok-api/grok-4.7` (issue #861). Both use the documented 500,000-token
+  window, text and image input, and a low/medium/high/xhigh reasoning ladder
+  whose default is high. OAuth forwards `xhigh` the same way Grok 4.6 does,
+  and the API profile keeps `xhigh` when the model declares it instead of
+  clamping every non-high rung to high. Neither route advertises the Grok 4.6
+  Fast tier, and neither is marked as a native v2 subagent.
 - **Switching native models no longer carries an unsupported reasoning effort
   into the next turn.** Codex can apply the newly selected model before it
   replaces the previous model's effort, so moving from a model with a

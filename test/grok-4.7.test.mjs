@@ -30,3 +30,25 @@ test("Grok 4.7 OAuth records the upstream id, window, and reasoning ladder", () 
   assert.equal(model.multiAgentVersion, undefined);
   assert.equal(model.serviceTiers, undefined);
 });
+
+test("Grok 4.7 API records the upstream id without the OAuth Fast tier", () => {
+  const model = MODEL_BY_SLUG.get("grok-api/grok-4.7");
+  assert.ok(model, "grok-api/grok-4.7 is missing from the registry");
+  assert.equal(model.upstreamModel, "grok-4.7");
+  assert.equal(model.gatewayModel, "grok-api-grok-4-7");
+  assert.equal(model.provider, "grok-api");
+  assert.equal(model.listed, true);
+  assert.equal(model.contextWindow, 500_000);
+  assert.equal(model.autoCompact, 440_000);
+  assert.equal(model.defaultEffort, "high");
+  assert.deepEqual(
+    model.reasoningLevels.map((level) => level.effort),
+    ["low", "medium", "high", "xhigh"],
+  );
+  assert.deepEqual(model.inputModalities, ["text", "image"]);
+  assert.equal(model.supportsReasoningSummaries, true);
+  assert.equal(model.supportsImageDetailOriginal, true);
+  assert.equal(model.searchTool, undefined);
+  assert.equal(model.serviceTiers, undefined);
+  assert.equal(model.multiAgentVersion, undefined);
+});

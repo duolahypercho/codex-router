@@ -95,6 +95,7 @@ map, which restores native GPT routing.
 | DeepSeek V4 Pro | `deepseek/deepseek-v4-pro` | `deepseek-v4-pro` | `deepseek-v4-pro` |
 | Grok 4.7 OAuth | `grok-oauth/grok-4.7` | `grok-oauth-grok-4-7` | `grok-4.7` |
 | Grok 4.5 OAuth | `grok-oauth/grok-4.5` | `grok-oauth-grok-4-5` | `grok-4.5` |
+| Grok 4.7 | `grok-api/grok-4.7` | `grok-api-grok-4-7` | `grok-4.7` |
 | Grok 4.5 | `grok-api/grok-4.5` | `grok-api-grok-4-5` | `grok-4.5` |
 | Claude Opus 4.8 | `anthropic-api/claude-opus-4.8` | `anthropic-api-claude-opus-4-8` | `claude-opus-4-8` |
 | GLM-5.2 Ollama Cloud | `ollama-cloud/glm-5.2` | `ollama-cloud-glm-5-2` | `glm-5.2` |

@@ -1370,7 +1370,14 @@ function normalizeBody(buffer, contentType, route) {
     delete payload.temperature;
     delete payload.top_p;
   } else if (model.requestProfile === "xai-reasoning") {
-    if (!["low", "medium", "high"].includes(payload.reasoning_effort)) {
+    // The accepted rungs belong to the model. Grok 4.5 stops at high, so an
+    // xhigh request stays high. Grok 4.7 documents xhigh, so that rung passes
+    // through instead of being clamped away.
+    const declared = new Set((model.reasoningLevels || []).map((level) => level.effort));
+    const accepted = ["low", "medium", "high", "xhigh"].filter(
+      (effort) => declared.size === 0 || declared.has(effort),
+    );
+    if (!accepted.includes(payload.reasoning_effort)) {
       payload.reasoning_effort = "high";
     }
     delete payload.presence_penalty;
