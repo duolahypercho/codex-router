@@ -8,7 +8,7 @@
       "provider": "opencode-go",
       "listed": true,
       "displayName": "GLM-5.3-Flash (opencode Go)",
-      "description": "GLM-5.3-Flash through the opencode Go subscription. Z.ai previously tested this multimodal model as Ox Alpha; the old router slug migrates here. Codex compacts conservatively because large live requests have returned empty completions.",
+      "description": "GLM-5.3-Flash through the opencode Go subscription. Z.ai previously tested this multimodal model as Ox Alpha; the old router slug migrates here. Codex loads deferred tools on demand and compacts at 500K within the provider's 1M-token context.",
       "priority": 29,
       "defaultEffort": "max",
       "reasoningLevels": [
@@ -26,13 +26,18 @@
         }
       ],
       "contextWindow": 1000000,
-      "autoCompact": 400000,
+      "autoCompact": 500000,
       "inputModalities": [
         "text",
         "image"
       ],
       "requestProfile": "ox-alpha",
-      "compHash": "opencode-go-glm-5-3-flash-v1"
+      "compHash": "opencode-go-glm-5-3-flash-v4",
+      "searchTool": {
+        "mode": "standalone"
+      },
+      "behaviorTemplate": "gpt-5.6-sol",
+      "instructionOverlay": "efficient-agentic-v2"
     }
   ]
 }

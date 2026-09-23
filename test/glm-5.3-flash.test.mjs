@@ -22,7 +22,7 @@ const ROUTES = [
   // house 900K compaction value, and a pre-0.143 Codex sending `xhigh` --
   // the one rung this model names in its own refusal -- straight through.
   ["commandcode/glm-5.3-flash", "z-ai/glm-5.3-flash", "ox-alpha", 400_000],
-  ["opencode-go/glm-5.3-flash", "glm-5.3-flash", "ox-alpha", 400_000],
+  ["opencode-go/glm-5.3-flash", "glm-5.3-flash", "ox-alpha", 500_000],
   ["ollama-cloud/glm-5.3-flash", "glm-5.3-flash:cloud", "ollama-cloud-glm-5-3-flash", 400_000],
   ["openrouter/glm-5.3-flash", "z-ai/glm-5.3-flash", "ox-alpha", 400_000],
   ["zai-api/glm-5.3-flash", "glm-5.3-flash", "glm-thinking", 400_000],
@@ -39,14 +39,15 @@ const ROUTES = [
 // ternary so a new Flash route cannot quietly ship the same default.
 const IMAGE_INPUT = Object.freeze(["text", "image"]);
 
-// Z.ai Coding is the one provider where live child turns have disproved the
-// inherited 400K pin: Codex Desktop 0.155.0-alpha.9.2 repeatedly rebuilt a
-// ~450K prompt immediately after a successful compaction because its routed
-// subagent tool schema alone occupied most of that budget. Z.ai Coding then
-// served nineteen 400K+ prompts successfully, including 474,443 tokens with
-// non-empty output. 500K is the smallest round provider-specific threshold
-// above that measured floor while still reserving half of the advertised 1M
-// window; the reseller/API routes keep their separately proven 400K pin.
+// Z.ai Coding and OpenCode Go have separate route-specific thresholds.
+// Z.ai Coding served nineteen 400K+ prompts successfully, including 474,443
+// tokens with non-empty output, so its pin remains 500K. OpenCode Go's direct
+// Codex rerun at 500K still compacted five times and repeated onboarding file
+// reads before the user stopped it. Router requests correlated to that task
+// succeeded at 485K-513K, including inputs just above 500K. The repeated
+// 1,271-tool prefix is addressed by standalone tool search, so 500K remains the
+// conservative route-specific threshold rather than relying on an unproven
+// larger cutoff. Other reseller/API routes retain 400K.
 test("every checked-in GLM-5.3-Flash route records its static metadata", () => {
   for (const [slug, upstreamModel, requestProfile, autoCompact] of ROUTES) {
     const model = MODEL_BY_SLUG.get(slug);
@@ -60,6 +61,14 @@ test("every checked-in GLM-5.3-Flash route records its static metadata", () => {
     assert.deepEqual(model.inputModalities, IMAGE_INPUT, slug);
     assert.equal(model.requestProfile, requestProfile);
   }
+  assert.equal(
+    MODEL_BY_SLUG.get("opencode-go/glm-5.3-flash").compHash,
+    "opencode-go-glm-5-3-flash-v4",
+  );
+  const goFlash = MODEL_BY_SLUG.get("opencode-go/glm-5.3-flash");
+  assert.equal(goFlash.searchTool?.mode, "standalone");
+  assert.equal(goFlash.behaviorTemplate, "gpt-5.6-sol");
+  assert.equal(goFlash.instructionOverlay, "efficient-agentic-v2");
 });
 
 test("Z.ai Coding Flash uses the proven GLM execution and deferred-tool surface without inferring shipped v2", () => {

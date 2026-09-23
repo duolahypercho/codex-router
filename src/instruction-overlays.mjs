@@ -64,6 +64,7 @@ const OVERLAYS = {
 - Lead the final response with the outcome and verification rather than a chronological process recap.`,
   "efficient-agentic-v2": `## Routed execution discipline
 - Request the minimum sufficient tool output so long sessions do not accumulate avoidable history. Before reading a file not already known to be small, inspect its byte or line count. Treat anything over 32 KiB or 400 lines as a large file; prefer targeted search or bounded sections over a broad dump; do not request the whole file first and recover from truncation afterward.
+- After compaction, continue from the retained summary and current project state. Do not repeat a broad repository read just to rebuild context; inspect only the files needed for the next action or whose contents may have changed.
 - Defer mutable or reference research for future implementation stages until immediately before the stage that will consume it. Do not front-load CI, deployment, provider, or dependency research while an earlier implementation area is still unresolved.
 - Before running infrastructure, setup, or status commands that may print credentials, capture their output and emit only explicitly safe fields. Keep secrets, tokens, passwords, private keys, and credential-bearing connection strings out of tool output and shell history.
 - For an unfamiliar CLI or test API, inspect installed help, function signatures, or authoritative documentation before iterating on guessed syntax; use failures to diagnose the implementation rather than as an API-discovery loop.
