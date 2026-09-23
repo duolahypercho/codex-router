@@ -304,20 +304,20 @@ async function emitProbe() {
     [...new Set([...Object.keys(visionBenchmarks), ...Object.keys(localBenchmarks)])]
       .map((tag) => [tag, { ...visionBenchmarks[tag], ...localBenchmarks[tag] }]),
   );
-  const { localModelInventory, localModelsSnapshot, runningLocalModels } = await import(
+  const { localModelStatusInputs, localModelsSnapshot } = await import(
     "./local-models.mjs",
   );
-  const { localOllamaRuntimeSnapshot } = await import("./ollama-runtime.mjs");
   const { selectedConfiguredListedModels } = await import("./provider-selection.mjs");
   // Bounded and weekly: the tray reads this snapshot constantly, so a fresh
   // cache costs nothing and a stale one costs one short, failure-tolerant pass.
   if (TARGET === "codex") await refreshVisionModelSizesIfStale();
   // One probe serves several tray sections. Reuse the local reads so the same
   // snapshot does not run `ollama list` and the hardware checks once per view.
-  const localInventory = TARGET === "codex" ? localModelInventory() : [];
-  const localRunning = TARGET === "codex" ? runningLocalModels() : [];
+  const localStatus = TARGET === "codex" ? await localModelStatusInputs() : undefined;
+  const localInventory = localStatus?.inventory || [];
+  const localRunning = localStatus?.running || [];
   const localProfile = TARGET === "codex" ? hostVisionProfile() : undefined;
-  const localRuntime = TARGET === "codex" ? localOllamaRuntimeSnapshot() : undefined;
+  const localRuntime = localStatus?.runtime;
   const localInstalled = localInventory.map((model) => model.tag);
 
   const enabledProviders = readProviderSelection();
@@ -2367,6 +2367,7 @@ async function handleLocalModels(action, value, ...rest) {
   const {
     isLocalModelEnabled,
     LOCAL_MODELS_STATE_PATH,
+    localModelStatusInputs,
     localModelsSnapshot,
     setLocalModelEnabled,
   } = await import("./local-models.mjs");
@@ -2385,9 +2386,11 @@ async function handleLocalModels(action, value, ...rest) {
   const { lmstudioSnapshot } = await import("./lmstudio-models.mjs");
   const { localMlxUiSnapshot } = await import("./local-mlx-operation.mjs");
   const snapshot = async () => {
-    const [lmstudio, mlx] = await Promise.all([lmstudioSnapshot(), localMlxUiSnapshot()]);
+    const [lmstudio, mlx, ollama] = await Promise.all([
+      lmstudioSnapshot(), localMlxUiSnapshot(), localModelStatusInputs(),
+    ]);
     return {
-      ...localModelsSnapshot({ benchmarks: localAndVisionBenchmarks }),
+      ...localModelsSnapshot({ benchmarks: localAndVisionBenchmarks, ...ollama }),
       lmstudio,
       mlx,
     };
@@ -2463,12 +2466,12 @@ async function handleLocalModels(action, value, ...rest) {
     return;
   }
   if (action === "runtime") {
-    const { localOllamaRuntimeSnapshot, ensureOllamaHeadless, updateOllamaRuntime } = await import(
+    const { localOllamaRuntimeSnapshot, probeOllama, ensureOllamaHeadless, updateOllamaRuntime } = await import(
       "./ollama-runtime.mjs"
     );
     const subcommand = String(value || "status").trim();
     if (subcommand === "status") {
-      process.stdout.write(`${JSON.stringify(localOllamaRuntimeSnapshot())}\n`);
+      process.stdout.write(`${JSON.stringify(localOllamaRuntimeSnapshot({ serverReachable: (await probeOllama()).reachable }))}\n`);
       return;
     }
     if (subcommand === "update") {

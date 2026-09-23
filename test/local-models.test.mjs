@@ -18,6 +18,8 @@ const {
   describeMachine,
   fitAdvisory,
   isLocalModelEnabled,
+  localModelInventory,
+  localModelStatusInputs,
   localModelsSnapshot,
   machineCapacity,
   parseGgufContextLength,
@@ -26,6 +28,7 @@ const {
   readLocalModelSelection,
   removeLocalModel,
   renderLocalModels,
+  runningLocalModels,
   setLocalModelEnabled,
   suggestedLocalModels,
   suggestedExploreModels,
@@ -52,6 +55,43 @@ test("ollama list is parsed into tag, size, and age", () => {
   assert.equal(models[0].modified, "19 minutes ago");
   // An empty store is an empty list, never a crash.
   assert.deepEqual(parseOllamaList("NAME  ID  SIZE  MODIFIED\n"), []);
+});
+
+test("status does not launch Ollama's desktop executable when its API is offline", async () => {
+  const mustNotRun = () => { throw new Error("Ollama CLI was launched while offline"); };
+  const offline = await localModelStatusInputs({
+    probe: async () => ({ reachable: false }),
+    inventory: mustNotRun,
+    running: mustNotRun,
+    runtime: ({ serverReachable }) => {
+      assert.equal(serverReachable, false);
+      return { installed: true, running: false };
+    },
+  });
+  assert.deepEqual(offline, {
+    inventory: [], running: [], runtime: { installed: true, running: false },
+  });
+  const online = await localModelStatusInputs({
+    probe: async () => ({ reachable: true }),
+    inventory: () => [{ tag: "qwen:latest" }],
+    running: () => ["qwen:latest"],
+    runtime: ({ serverReachable }) => ({ running: serverReachable }),
+  });
+  assert.deepEqual(online.inventory.map((model) => model.tag), ["qwen:latest"]);
+  assert.deepEqual(online.running, ["qwen:latest"]);
+  assert.equal(online.runtime.running, true);
+});
+
+test("Ollama CLI inventory and running probes have short deadlines", () => {
+  const calls = [];
+  const spawn = (_command, args, options) => {
+    calls.push({ args, options });
+    return { status: 0, stdout: LIST };
+  };
+  assert.equal(localModelInventory({ spawn }).length, 3);
+  assert.deepEqual(runningLocalModels({ spawn }), ["gemma3:4b", "qwen2.5vl:3b", "llava:latest"]);
+  assert.deepEqual(calls.map(({ args }) => args[0]), ["list", "ps"]);
+  assert.ok(calls.every(({ options }) => options.timeout === 2000 && options.windowsHide === true));
 });
 
 test("checking a model is separate from installing or deleting it", () => {
