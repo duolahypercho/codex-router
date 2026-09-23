@@ -1027,9 +1027,9 @@ onto the three the model accepts. Existing `opencode-go/ox-alpha` and locally
 curated `opencode-go/ox-alpha-free` selections migrate to
 `opencode-go/glm-5.3-flash` automatically.
 
-The picker retains the advertised 1M context. OpenCode Go, OpenRouter, Z.ai API,
-and the other Flash routes keep the conservative 400K compaction threshold:
-live multimodal histories on the original OpenCode Go route repeatedly returned
+The picker retains the advertised 1M context. OpenRouter, Z.ai API, and the
+other Flash routes keep the conservative 400K compaction threshold; live
+multimodal histories on the original OpenCode Go route repeatedly returned
 empty completions before the advertised limit. Z.ai Coding is provider-specific
 at 500K. Current Codex Desktop subagents attach a tool-schema prefix large enough
 that successful Z.ai Coding prompts reached 474K immediately after compaction;
@@ -1041,7 +1041,11 @@ instruction overlay, and standalone tool-search contract as the proven
 full-size `zai-coding/glm-5.3` route. Standalone search keeps deferred tools out
 of the initial Codex tool surface and loads them through the native
 `tool_search` bridge on demand; this is the root fix for the large fixed prefix
-that made compacted Flash subagents reopen above their threshold. These
+that made compacted Flash subagents reopen above their threshold. OpenCode Go's
+Flash route now uses the same deferred tool loading and concise project-work
+instructions. A direct Codex onboarding task sent about 1,271 tool definitions
+per ordinary turn and compacted five times without making an edit at 500K;
+the route keeps that 500K limit and removes the repeated fixed tool cost. These
 execution/catalog capabilities are route-local: Flash remains conservative v1
 for shipped multi-agent capability until its exact route has a separate
 accepted `v2_agent` proof artifact. OpenCode Go's content moderation still

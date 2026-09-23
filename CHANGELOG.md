@@ -1,6 +1,17 @@
 # Changelog
 
 ## Unreleased
+- **OpenCode Go GLM-5.3-Flash defers tool loading and retains more working room.**
+  A direct Codex onboarding task compacted five times without editing: its
+  ordinary turns sent about 1,271 tool definitions (1.83 MB of schemas) and
+  used 485K-513K input tokens. The route now advertises standalone search so
+  Codex can defer tool definitions and discover them on demand, matching the
+  existing Z.ai Coding GLM route. It also adopts the concise project-work
+  instructions, including a reminder to continue from the compacted summary
+  instead of rereading the repository. Its proven 500K compaction threshold
+  remains in place; the fixed tool cost is the cause being addressed. `compHash`
+  advances so catalog publication updates the route; other GLM-5.3-Flash
+  routes keep their limits.
 - **Installing no longer tells you to quit a Codex that is already closed.**
   Quitting the desktop app leaves Chromium's crash reporter
   (`browser_crashpad_handler`) running for hours, reparented to launchd, under
