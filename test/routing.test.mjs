@@ -4836,6 +4836,78 @@ test("API forwarder routes Qwen plan models without unsupported parameters", asy
   }
 });
 
+test("API forwarder keeps Xiaomi MiMo TokenPlan on Chat Completions with tools", async () => {
+  const upstreamRequests = [];
+  const upstream = await mockServer(async (request, response) => {
+    upstreamRequests.push({
+      url: request.url,
+      headers: request.headers,
+      body: await bodyJson(request),
+    });
+    json(response, 200, { choices: [] });
+  });
+  const forwarderPort = await openPort();
+  const forwarder = run("api-forwarder.mjs", {
+    CODEX_ROUTER_API_PORT: String(forwarderPort),
+    XIAOMI_MIMO_TOKEN_PLAN_BASE_URL: `http://127.0.0.1:${upstream.port}/v1`,
+    XIAOMI_MIMO_TOKEN_PLAN_API_KEY: "TEST_XIAOMI_MIMO_TOKEN_PLAN_KEY",
+    CODEX_ROUTER_QUIET: "1",
+  });
+
+  try {
+    await waitFor(`http://127.0.0.1:${forwarderPort}/health`, forwarder, {
+      Authorization: `Bearer ${INTERNAL_KEY}`,
+    });
+    const response = await fetch(
+      `http://127.0.0.1:${forwarderPort}/v1/chat/completions`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${INTERNAL_KEY}`,
+          "ChatGPT-Account-Id": "must-not-forward",
+          "X-Codex-Installation-Id": "must-not-forward",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "xiaomi-mimo-tokenplan-mimo-v2-6-pro",
+          reasoning_effort: "high",
+          messages: [{ role: "user", content: "Use the patch tool." }],
+          tools: [
+            {
+              type: "function",
+              function: {
+                name: "apply_patch",
+                description: "Apply a patch supplied as freeform text.",
+                parameters: {
+                  type: "object",
+                  properties: { input: { type: "string" } },
+                  required: ["input"],
+                  additionalProperties: false,
+                },
+              },
+            },
+          ],
+          tool_choice: "auto",
+        }),
+      },
+    );
+    assert.equal(response.status, 200);
+    assert.equal(upstreamRequests.length, 1);
+    const request = upstreamRequests[0];
+    assert.equal(request.url, "/v1/chat/completions");
+    assert.notEqual(request.url, "/v1/responses");
+    assert.equal(request.headers.authorization, "Bearer TEST_XIAOMI_MIMO_TOKEN_PLAN_KEY");
+    assert.equal(request.headers["chatgpt-account-id"], undefined);
+    assert.equal(request.headers["x-codex-installation-id"], undefined);
+    assert.equal(request.body.model, "mimo-v2.6-pro");
+    assert.equal(request.body.tools[0].type, "function");
+    assert.equal(request.body.tools[0].function.name, "apply_patch");
+  } finally {
+    await stopChild(forwarder);
+    await closeServer(upstream.server);
+  }
+});
+
 // The catalog-only resellers ship no models, so their entries reach the
 // registry only through `bin/curate-models`. The fixture registers two
 // OpenRouter models the same way curation does: one whose upstream refuses a

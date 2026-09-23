@@ -222,6 +222,7 @@ test("provider registry exposes configured API and OAuth model families", () => 
       "venice/glm-5.3",
       "xiaomi-mimo/mimo-v2.5-pro",
       "xiaomi-mimo/mimo-v2.5",
+      "xiaomi-mimo-tokenplan/mimo-v2.6-pro",
       "zai-api/glm-4.7",
       "zai-api/glm-5.2",
       "zai-api/glm-5.3-flash",
@@ -292,6 +293,34 @@ test("provider registry exposes configured API and OAuth model families", () => 
   assert.equal(PROVIDERS.get("xiaomi-mimo").protocol, "openai");
   assert.deepEqual(PROVIDERS.get("xiaomi-mimo").credential.environment, ["MIMO_API_KEY"]);
   assert.equal(PROVIDERS.get("xiaomi-mimo").credential.file, "xiaomi-mimo-api-key.secret");
+  // TokenPlan is separately billed, credentialed, and routed through Chat
+  // Completions. Its custom-tool support must not regress to the Responses
+  // endpoint that rejects Codex freeform tools.
+  const tokenPlan = PROVIDERS.get("xiaomi-mimo-tokenplan");
+  assert.equal(tokenPlan.baseUrl, "https://token-plan-sgp.xiaomimimo.com/v1");
+  assert.equal(tokenPlan.baseUrlEnv, "XIAOMI_MIMO_TOKEN_PLAN_BASE_URL");
+  assert.equal(tokenPlan.protocol, "openai");
+  assert.equal(tokenPlan.variantOf, undefined);
+  assert.deepEqual(tokenPlan.credential.environment, [
+    "XIAOMI_MIMO_TOKEN_PLAN_API_KEY",
+    "MIMO_TOKEN_PLAN_API_KEY",
+  ]);
+  const directMiMo = PROVIDERS.get("xiaomi-mimo");
+  assert.notEqual(tokenPlan.baseUrlEnv, directMiMo.baseUrlEnv);
+  assert.notEqual(tokenPlan.credential.file, directMiMo.credential.file);
+  for (const field of ["environment", "keychainServices"]) {
+    const directValues = new Set(directMiMo.credential[field] || []);
+    assert.ok(
+      tokenPlan.credential[field].every((entry) => !directValues.has(entry)),
+      `Xiaomi TokenPlan ${field} must not overlap the direct API`,
+    );
+  }
+  const mimo26 = MODEL_BY_SLUG.get("xiaomi-mimo-tokenplan/mimo-v2.6-pro");
+  assert.equal(mimo26.upstreamModel, "mimo-v2.6-pro");
+  assert.equal(mimo26.contextWindow, 1_048_576);
+  assert.equal(mimo26.autoCompact, 900_000);
+  assert.deepEqual(mimo26.inputModalities, ["text"]);
+  assert.notEqual(mimo26.supportsApplyPatchTool, false);
   // The protocol variants are one selectable family: they declare the parent
   // whose credential and picker selection they follow.
   assert.equal(PROVIDERS.get("opencode-go").variantOf, undefined);

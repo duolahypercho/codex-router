@@ -20,6 +20,27 @@
         ],
         "prompt": "Xiaomi MiMo API key"
       }
+    },
+    {
+      "id": "xiaomi-mimo-tokenplan",
+      "displayName": "Xiaomi MiMo TokenPlan",
+      "kind": "openai-compatible",
+      "ownedBy": "xiaomi",
+      "protocol": "openai",
+      "baseUrl": "https://token-plan-sgp.xiaomimimo.com/v1",
+      "baseUrlEnv": "XIAOMI_MIMO_TOKEN_PLAN_BASE_URL",
+      "credential": {
+        "environment": [
+          "XIAOMI_MIMO_TOKEN_PLAN_API_KEY",
+          "MIMO_TOKEN_PLAN_API_KEY"
+        ],
+        "file": "xiaomi-mimo-tokenplan-api-key.secret",
+        "legacyFiles": [],
+        "keychainServices": [
+          "codex-router-xiaomi-mimo-tokenplan"
+        ],
+        "prompt": "Xiaomi MiMo TokenPlan API key"
+      }
     }
   ]
 }

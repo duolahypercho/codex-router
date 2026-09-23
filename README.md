@@ -277,6 +277,7 @@ Linux installations support the Codex CLI.
 | MiniMax M3 | `minimax-token-plan/minimax-m3` | MiniMax Token Plan API key |
 | MiMo-V2.5 (Xiaomi API) | `xiaomi-mimo/mimo-v2.5` | Xiaomi MiMo API key |
 | MiMo-V2.5-Pro (Xiaomi API) | `xiaomi-mimo/mimo-v2.5-pro` | Xiaomi MiMo API key |
+| MiMo-V2.6-Pro (Xiaomi TokenPlan) | `xiaomi-mimo-tokenplan/mimo-v2.6-pro` | Xiaomi MiMo TokenPlan API key |
 | Qwen3.8 Max (Plan) | `qwen-plan/qwen3.8-max` | Alibaba Model Studio plan API key |
 | Qwen3.8 Max Preview (Plan) | `qwen-plan/qwen3.8-max-preview` | Alibaba Model Studio plan API key |
 | Qwen3.7 Max (Plan) | `qwen-plan/qwen3.7-max` | Alibaba Model Studio plan API key |
@@ -501,6 +502,18 @@ serves `mimo-v2.5` and `mimo-v2.5-pro` through the standard
 `mimo-v2.5` is verified for text/image input and Codex standalone web search;
 `mimo-v2.5-pro` is text-only. Store the key with
 `./bin/model-router codex provider-key xiaomi-mimo set`.
+
+MiMo TokenPlan is a separate subscription surface at
+`https://token-plan-sgp.xiaomimimo.com/v1`. It serves the text-only
+`mimo-v2.6-pro` model through `/chat/completions`; the router deliberately does
+not send TokenPlan traffic to `/responses`, because that endpoint rejects the
+Codex custom-tool shape used by tools such as `apply_patch`. TokenPlan and the
+ordinary Xiaomi API have separate credentials and may be enabled together.
+Store the subscription key through the hidden prompt:
+
+```sh
+./bin/model-router codex provider-key xiaomi-mimo-tokenplan set
+```
 
 Native GPT models continue to use Codex directly. There is no separate GPT or
 ChatGPT OAuth provider in the router.

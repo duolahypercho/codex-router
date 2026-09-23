@@ -125,6 +125,7 @@ API-key providers use hidden prompts:
 ./bin/provider-key zai-api set
 ./bin/provider-key github-copilot set
 ./bin/provider-key orca set
+./bin/provider-key xiaomi-mimo-tokenplan set
 ```
 
 Replace a stored key by running `set` again. Delete one with `remove`, which

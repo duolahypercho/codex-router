@@ -62,7 +62,7 @@ user.
    arguments, logs, environment snippets, or tracked files.
 4. Determine which provider IDs the user requested: `anthropic-api`,
     `kimi-oauth`, `antigravity-oauth`, `kimi-api`, `kimi-api-cn`, `deepseek`, `grok-oauth`, `grok-api`, `qwen-plan`,
-    `zai-coding`, `ollama-cloud`, `minimax-token-plan`, `meta`, `clinepass`,
+    `zai-coding`, `ollama-cloud`, `minimax-token-plan`, `xiaomi-mimo-tokenplan`, `meta`, `clinepass`,
     `venice`, `nousresearch`, and/or
    `opencode-go`
    (shown to users as "opencode Go/Zen"; its `opencode-go-messages`,

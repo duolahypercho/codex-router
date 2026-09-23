@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "slug": "xiaomi-mimo-tokenplan/mimo-v2.6-pro",
+      "gatewayModel": "xiaomi-mimo-tokenplan-mimo-v2-6-pro",
+      "upstreamModel": "mimo-v2.6-pro",
+      "provider": "xiaomi-mimo-tokenplan",
+      "listed": true,
+      "displayName": "MiMo-V2.6-Pro (Xiaomi TokenPlan)",
+      "description": "MiMo-V2.6-Pro through Xiaomi's TokenPlan OpenAI-compatible Chat Completions endpoint. Text input only.",
+      "priority": 69,
+      "defaultEffort": "high",
+      "reasoningLevels": [
+        {
+          "effort": "high",
+          "description": "Deep reasoning"
+        }
+      ],
+      "contextWindow": 1048576,
+      "autoCompact": 900000,
+      "inputModalities": [
+        "text"
+      ],
+      "compHash": "xiaomi-mimo-tokenplan-mimo-v2-6-pro-v1",
+      "supportsReasoningSummaries": true,
+      "supportsParallelToolCalls": false
+    }
+  ]
+}
