@@ -1,9 +1,14 @@
-// grok-oauth/grok-4.6 receives two small V4A examples on the native custom
-// apply_patch description before LiteLLM translates that tool into a function.
+// The agentic grok-oauth routes receive two small V4A examples on the native
+// custom apply_patch description before LiteLLM translates that tool into a
+// function.
 // LiteLLM 1.96 already copies format.definition into the bridged function
 // description (wrapped in a Format fence); this module does not compensate for
 // a lost grammar and must not rewrite format or format.definition.
 
+import { isGrokOauthAgenticRoute } from "./grok-oauth-routes.mjs";
+
+// The route this guidance was first proven on, kept as a fixture for tests.
+// `shouldGuideGrokApplyPatch` is the gate, and it reads the shared list.
 export const GROK_APPLY_PATCH_GUIDANCE_ROUTE = "grok-oauth/grok-4.6";
 export const APPLY_PATCH_TOOL_NAME = "apply_patch";
 
@@ -33,7 +38,7 @@ export const GROK_APPLY_PATCH_GUIDANCE = [
 ].join("\n\n");
 
 export function shouldGuideGrokApplyPatch(route) {
-  return route?.slug === GROK_APPLY_PATCH_GUIDANCE_ROUTE;
+  return isGrokOauthAgenticRoute(route);
 }
 
 function isNativeCustomApplyPatch(tool) {

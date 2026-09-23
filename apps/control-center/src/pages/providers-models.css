@@ -258,7 +258,8 @@
   font-weight: 570;
 }
 
-.pm-credential-form > input {
+.pm-credential-form > input,
+.pm-credential-form > select {
   width: 100%;
 }
 
@@ -826,6 +827,30 @@
   background: var(--ink-faint);
 }
 
+/* A provider whose credential transaction is still publishing. It sits with
+   the connected chips, because that is where the operator will look for it,
+   and says what it is doing in place of the enabled dot rather than claiming
+   an account state it has not reached. */
+.pm-chip[data-pending] {
+  cursor: default;
+  border-style: dashed;
+  color: var(--ink-subtle);
+}
+
+.pm-chip[data-pending]:hover {
+  border-color: var(--line-strong);
+  background: var(--surface-0);
+}
+
+.pm-chip-pending {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--ink-faint);
+  font-weight: 500;
+}
+
+
 .pm-chip-dot[data-enabled="true"] {
   background: var(--success);
 }
@@ -932,11 +957,31 @@
   font-size: 9.5px;
 }
 
+/* Ghost buttons carry their own inset, so pull the row out by that much: the
+   labels then start on the same edge as the copy above them. */
 .pm-connection-menu-actions {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 2px;
   flex-wrap: wrap;
+  margin: -3px -8px -5px;
+}
+
+.pm-connection-menu-actions .button {
+  min-height: 26px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 9.5px;
+}
+
+/* A container with nothing in it yet has one job, so its action is the card. */
+.pm-connection-menu-actions[data-solo="true"] {
+  margin: 0;
+}
+
+.pm-connection-menu-actions[data-solo="true"] .button {
+  width: 100%;
+  min-height: 30px;
 }
 
 /* Status groups replace the two-section split: a model's heading says what you
@@ -1316,4 +1361,177 @@
   .pm-add-models-meta {
     grid-column: 3;
   }
+}
+
+.pm-endpoint-models {
+  display: grid;
+  gap: 6px;
+  margin: 2px 0 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.pm-endpoint-models-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.pm-endpoint-models-head strong {
+  color: var(--ink-strong);
+  font-size: 10px;
+  font-weight: 610;
+}
+
+.pm-endpoint-models > small {
+  color: var(--ink-subtle);
+  font-size: 9px;
+}
+
+.pm-endpoint-models ul {
+  display: grid;
+  gap: 2px;
+  max-height: 180px;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.pm-endpoint-models li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 6px;
+  border-radius: 6px;
+  background: var(--surface-1);
+}
+
+.pm-endpoint-models li > div {
+  display: grid;
+  min-width: 0;
+}
+
+.pm-endpoint-models li span,
+.pm-endpoint-models li small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pm-endpoint-models li span {
+  color: var(--ink);
+  font-size: 10px;
+}
+
+.pm-endpoint-models li small {
+  color: var(--ink-subtle);
+  font-size: 9px;
+}
+
+.pm-endpoint-model-remove {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--ink-subtle);
+  cursor: pointer;
+}
+
+.pm-endpoint-model-remove:hover:not(:disabled) {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.pm-endpoint-model-remove:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.pm-endpoint-models-buttons {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 2px;
+}
+
+/* The Custom container lists its endpoints; each row opens that endpoint. */
+
+.pm-endpoint-list li {
+  padding: 0;
+  background: transparent;
+}
+
+.pm-endpoint-list li button {
+  display: grid;
+  width: 100%;
+  grid-template-columns: 6px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 7px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--surface-1);
+  color: var(--ink-faint);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.pm-endpoint-list li button:hover {
+  background: var(--surface-2);
+  color: var(--ink-strong);
+}
+
+.pm-endpoint-list li button > div {
+  display: grid;
+  min-width: 0;
+}
+
+.pm-connection-menu-back {
+  display: inline-flex;
+  align-items: center;
+  justify-self: start;
+  gap: 3px;
+  margin: -4px 0 -4px -4px;
+  padding: 2px 5px 2px 2px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--ink-faint);
+  cursor: pointer;
+  font: inherit;
+  font-size: 8.5px;
+}
+
+.pm-connection-menu-back:hover {
+  background: var(--surface-2);
+  color: var(--ink-strong);
+}
+
+/* What a route shows while the connection it needs is being made. Same slot as
+   the button it replaces, so nothing on the row moves when the wait starts --
+   or when the real switch arrives at the end of it. */
+.pm-connecting {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pm-connecting > small {
+  color: var(--ink-faint);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.pm-family-row[data-connecting] .pm-family-open,
+.pm-route-row[data-connecting] .pm-route-identity {
+  opacity: 0.72;
 }

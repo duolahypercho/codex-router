@@ -1,3 +1,4 @@
+import { uiText } from "./ui-text";
 import type { CSSProperties } from "react";
 
 import antigravityLogo from "./assets/providers/antigravity.png";
@@ -144,6 +145,8 @@ const PROVIDER_BRANDS: Record<string, string> = {
   openrouter: "openrouter",
   "qwen-plan": "qwen",
   siliconflow: "siliconflow",
+  "stepfun-api": "stepfun",
+  "stepfun-api-cn": "stepfun",
   together: "together",
   venice: "venice",
   vertex: "google",
@@ -188,7 +191,7 @@ export function brandForModel(model: BrandableModel): ProviderBrand {
   if (/\bnemotron\b/.test(identity)) return BRANDS.nvidia;
   if (/\bornith(?:-|\b)/.test(identity)) return BRANDS.deepreinforce;
   // Anonymous preview models, matched last so a maker's own mark always wins.
-  if (/\b(?:ox alpha|ox-alpha|union alpha|union-alpha|omen alpha|omen-alpha|fugu|inkling)\b/.test(identity) || /x-preview/.test(identity)) {
+  if (/\b(?:ox alpha|ox-alpha|omen alpha|omen-alpha|fugu|inkling)\b/.test(identity) || /x-preview/.test(identity)) {
     return BRANDS.stealth;
   }
   return brandForProvider(model.provider);
@@ -238,7 +241,7 @@ export function BrandLogo({ brand, size = "medium", className = "" }: {
 }
 
 function fallbackBrand(name: string, seed: string): ProviderBrand {
-  const cleanName = name.trim() || "Model provider";
+  const cleanName = name.trim() || uiText("Model provider");
   let hash = 0;
   for (const character of seed) hash = ((hash << 5) - hash + character.charCodeAt(0)) | 0;
   return {

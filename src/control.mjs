@@ -98,6 +98,9 @@ const restartBearingOverlayOperation = new Set([
   "vision-bridge",
   "local-models",
   "signed-routing",
+  // Descriptor, credential, and removal changes republish the model overlay
+  // and restart the router, exactly like `credential`.
+  "generic-providers",
 ]).has(args[0]);
 const selfReplacingControl =
   args[0] === "maintenance" ||
@@ -1559,6 +1562,43 @@ async function handleSubagents(action, value, flag, rest = []) {
     setMultiAgentModels,
     subagentSettingsSnapshot,
   } = await import("./multi-agent-state.mjs");
+  if (action === "explain") {
+    // "Why can't Codex delegate to this model?" had no answer short of
+    // spawning one and reading `codex exited 1` (#804). Selection lived in
+    // `subagents status`, promotion in the published catalog, and the agent
+    // definition on disk, and nothing joined the three. Read-only and
+    // quota-free: it reports, so it promotes nothing and probes nothing.
+    const slug = String(value || "").trim();
+    if (!slug) throw new Error("Usage: control subagents explain <model-slug> [--json]");
+    const [
+      { MODELS },
+      { readProviderSelection, canonicalProviderId },
+      { readHiddenModels },
+      { explainSubagentRoute, formatSubagentExplanation },
+      { CODEX_AGENTS_DIR },
+    ] = await Promise.all([
+      import("./model-registry.mjs"),
+      import("./provider-selection.mjs"),
+      import("./model-picker-state.mjs"),
+      import("./subagent-explain.mjs"),
+      import("./paths.mjs"),
+    ]);
+    const selected = new Set(readProviderSelection().map((id) => canonicalProviderId(id)));
+    const explanation = explainSubagentRoute({
+      slug,
+      models: MODELS,
+      providerEnabled: (providerId) => selected.has(canonicalProviderId(providerId)),
+      hidden: readHiddenModels(),
+      reasoningLevels: await modelReasoningLevels(slug),
+      agentsDir: CODEX_AGENTS_DIR,
+    });
+    process.stdout.write(
+      [...rest, flag].includes("--json")
+        ? `${JSON.stringify(explanation)}\n`
+        : `${formatSubagentExplanation(explanation)}\n`,
+    );
+    return;
+  }
   if (action === "status") {
     const { selectedConfiguredListedModels } = await import("./provider-selection.mjs");
     const { subagentAutoPolicySnapshot } = await import("./subagent-auto-policy.mjs");
@@ -1828,7 +1868,8 @@ async function handleSubagents(action, value, flag, rest = []) {
     }
   } else {
     throw new Error(
-      "Usage: control subagents status|select-all|unselect-all|mode <all|selected|proven>|" +
+      "Usage: control subagents status|explain <model-slug> [--json]|select-all|unselect-all|" +
+        "mode <all|selected|proven>|" +
         "set <model-slug> <on|off>|effort <model-slug> <level|default>|" +
         "provider <provider-id> <on|off>|verify [model-slug ...]|certify <model-slug>|" +
         "policy status|provider <provider-id> <on|off>|model <model-slug> <on|off>|family <name> <on|off>",
@@ -3104,6 +3145,40 @@ async function handleNativeRedirect(action, value) {
   );
 }
 
+// The reviewer counterpart to `native-redirect`. Codex's "Approve for me"
+// always runs on its own hidden native model, so with `Use Router with ChatGPT`
+// on, an exhausted ChatGPT plan leaves a routed session able to propose
+// commands and unable to execute the ones needing review (#787). Naming a
+// routed model here lets those approvals continue on a provider that still has
+// quota -- and only while the native reviewer has itself refused for quota.
+async function handleAutoReviewFallback(action, value) {
+  const {
+    autoReviewFallbackSnapshot,
+    clearAutoReviewFallback,
+    setAutoReviewFallback,
+  } = await import("./auto-review-fallback.mjs");
+  if (!action || action === "status") {
+    process.stdout.write(`${JSON.stringify(autoReviewFallbackSnapshot())}\n`);
+    return;
+  }
+  if (action === "clear") {
+    process.stdout.write(`${JSON.stringify(clearAutoReviewFallback())}\n`);
+    return;
+  }
+  if (action !== "set") {
+    throw new Error("Usage: control auto-review-fallback status|set <routed-model-slug>|clear");
+  }
+  if (!(await knownModelSlug(value))) {
+    throw new Error(`Unknown routed model slug: ${value}`);
+  }
+  process.stdout.write(`${JSON.stringify(setAutoReviewFallback(value))}\n`);
+  process.stderr.write(
+    `Automatic approval reviews fall back to ${value} while Codex's own reviewer is out of quota. ` +
+      "Reviews return to the native reviewer as soon as it answers again. This changes nothing " +
+      "about which model runs the session; clear it with control auto-review-fallback clear.\n",
+  );
+}
+
 // One action for "give me a working harness": install the CLI if it is absent,
 // then publish the routed models into its own documents. Kept behind an
 // explicit subcommand rather than folded into `apply`, because it installs a
@@ -3618,6 +3693,8 @@ if (args.includes("--probe")) {
   handleService(args[1]);
 } else if (args[0] === "native-redirect") {
   await handleNativeRedirect(args[1], args[2]);
+} else if (args[0] === "auto-review-fallback") {
+  await handleAutoReviewFallback(args[1], args[2]);
 } else if (args[0] === "tray") {
   handleTray(args[1]);
 } else if (args[0] === "harness") {

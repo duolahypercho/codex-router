@@ -354,6 +354,41 @@ export function spliceYamlBlock(document, path, rendered) {
   return lines;
 }
 
+/**
+ * Lines inside `node`'s indented region that none of its registered children
+ * account for.
+ *
+ * Two separate blind spots make `children.size` an unsafe proxy for "this node
+ * holds nothing but ours":
+ *
+ *   - `children` is this lexer's map of mapping keys it was able to register. A
+ *     block sequence, a merge key, or a key `PLAIN_KEY` declines is invisible
+ *     there while still living inside the node. This is how removal came to
+ *     splice away a whole `providers:` sequence and leave a zero-byte file.
+ *   - `endIndex` deliberately stops before a trailing comment block, so a
+ *     comment the publish step pushed below our key sits outside the node's
+ *     own range while still being spliced away with it.
+ *
+ * So the region is walked by indentation -- every following line that is blank
+ * or indented deeper than the node -- rather than read off `endIndex`.
+ */
+export function unaccountedLines(document, node) {
+  const covered = new Set();
+  for (const child of node.children.values()) {
+    for (let index = child.index; index <= child.endIndex; index += 1) covered.add(index);
+  }
+  const rest = [];
+  for (let index = node.index + 1; index < document.lines.length; index += 1) {
+    const text = String(document.lines[index] ?? "");
+    if (/^\s*$/.test(text)) continue;
+    const indent = text.length - text.replace(/^\s*/, "").length;
+    if (indent <= node.indent) break;
+    if (covered.has(index)) continue;
+    rest.push({ index, text });
+  }
+  return rest;
+}
+
 /** Renders a string as a YAML scalar. JSON string syntax is valid YAML. */
 export function yamlScalar(value) {
   return JSON.stringify(String(value));

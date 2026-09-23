@@ -8,6 +8,7 @@ import {
   MAX_CLI_WAIT_ATTEMPTS,
   MAX_LOGIN_ATTEMPTS,
   kimiCliInstallGuidance,
+  kimiLoginArgs,
   nextOauthStep,
 } from "../src/kimi-oauth-onboarding.mjs";
 
@@ -52,4 +53,13 @@ test("bounded retry limits are positive integers", () => {
   for (const limit of [MAX_CLI_WAIT_ATTEMPTS, MAX_LOGIN_ATTEMPTS]) {
     assert.ok(Number.isInteger(limit) && limit > 0);
   }
+});
+
+test("kimiLoginArgs requests the global site only when the operator picks kimi.ai (#819)", () => {
+  assert.deepEqual(kimiLoginArgs("1"), ["login"]);
+  assert.deepEqual(kimiLoginArgs(""), ["login"]);
+  assert.deepEqual(kimiLoginArgs(undefined), ["login"]);
+  assert.deepEqual(kimiLoginArgs("2"), ["login", "--region", "global"]);
+  assert.deepEqual(kimiLoginArgs(" Global "), ["login", "--region", "global"]);
+  assert.deepEqual(kimiLoginArgs("kimi.ai"), ["login", "--region", "global"]);
 });

@@ -2077,9 +2077,9 @@ test("a streamed function_call with unterminated JSON retries onto a valid call"
   }
 });
 
-const UNION_ALPHA = {
-  slug: "opencode-go-messages/union-alpha",
-  gatewayModel: "opencode-go-messages-union-alpha",
+const GO_MESSAGES_262K = {
+  slug: "opencode-go-messages/qwen3.7-max",
+  gatewayModel: "opencode-go-messages-qwen3-7-max",
 };
 const GO_FLASH = {
   slug: "opencode-go/glm-5.3-flash",
@@ -2101,7 +2101,7 @@ function consoleGoNumericOverflowBody() {
   return JSON.stringify({
     error: {
       message:
-        `litellm.BadRequestError: AnthropicException - ${inner}. Received Model Group=${UNION_ALPHA.gatewayModel}\nAvailable Model Group Fallbacks=None`,
+        `litellm.BadRequestError: AnthropicException - ${inner}. Received Model Group=${GO_MESSAGES_262K.gatewayModel}\nAvailable Model Group Fallbacks=None`,
       type: null,
       param: null,
       code: "400",
@@ -2148,7 +2148,7 @@ test("compact overflow hops to a larger same-family window without cooldown", as
   const gw = await gateway(async (request, response) => {
     const body = await bodyJson(request);
     seen.push(body.model);
-    if (body.model === UNION_ALPHA.gatewayModel) {
+    if (body.model === GO_MESSAGES_262K.gatewayModel) {
       const payload = Buffer.from(overflow, "utf8");
       response.writeHead(400, {
         "Content-Type": "application/json",
@@ -2171,11 +2171,11 @@ test("compact overflow hops to a larger same-family window without cooldown", as
   });
   try {
     await waitFor(`http://127.0.0.1:${routerPort}/health`, child);
-    const result = await readRouted(routerPort, compactBody(UNION_ALPHA.slug), {
+    const result = await readRouted(routerPort, compactBody(GO_MESSAGES_262K.slug), {
       endpoint: "/responses/compact",
     });
     assert.equal(result.status, 200, result.body);
-    assert.deepEqual(seen, [UNION_ALPHA.gatewayModel, GO_FLASH.gatewayModel]);
+    assert.deepEqual(seen, [GO_MESSAGES_262K.gatewayModel, GO_FLASH.gatewayModel]);
     assert.match(child.testErrors(), /compaction\/context_length/);
     const cooldownFile = path.join(child.stateDir, "provider-cooldowns.json");
     if (existsSync(cooldownFile)) {
@@ -2210,12 +2210,12 @@ test("an ordinary turn never hops on a Console Go context-length 400", async () 
   try {
     await waitFor(`http://127.0.0.1:${routerPort}/health`, child);
     const result = await readRouted(routerPort, {
-      model: UNION_ALPHA.slug,
+      model: GO_MESSAGES_262K.slug,
       stream: true,
       input: "hello",
     });
     assert.equal(seen.length, 1);
-    assert.equal(seen[0], UNION_ALPHA.gatewayModel);
+    assert.equal(seen[0], GO_MESSAGES_262K.gatewayModel);
     assert.equal(result.status, 400);
     const payload = JSON.parse(result.body);
     assert.equal(payload.error.code, "context_length_exceeded");
@@ -2244,7 +2244,7 @@ test("compact overflow without a larger window is a translated context error", a
   });
   try {
     await waitFor(`http://127.0.0.1:${routerPort}/health`, child);
-    const result = await readRouted(routerPort, compactBody(UNION_ALPHA.slug), {
+    const result = await readRouted(routerPort, compactBody(GO_MESSAGES_262K.slug), {
       endpoint: "/responses/compact",
     });
     assert.equal(result.status, 400, result.body);

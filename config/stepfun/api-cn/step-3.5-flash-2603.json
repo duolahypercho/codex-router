@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "slug": "stepfun-api-cn/step-3.5-flash-2603",
+      "gatewayModel": "stepfun-api-cn-step-3-5-flash-2603",
+      "upstreamModel": "step-3.5-flash-2603",
+      "provider": "stepfun-api-cn",
+      "listed": true,
+      "displayName": "Step 3.5 Flash 2603 (StepFun China)",
+      "description": "The agent-optimized Step 3.5 Flash snapshot through the mainland China platform (api.stepfun.com), billed to a separate platform.stepfun.com account. Text only, 256K context.",
+      "priority": 137,
+      "defaultEffort": "high",
+      "reasoningLevels": [
+        {
+          "effort": "low",
+          "description": "Fewer reasoning tokens"
+        },
+        {
+          "effort": "high",
+          "description": "Deep reasoning"
+        }
+      ],
+      "contextWindow": 256000,
+      "autoCompact": 235000,
+      "inputModalities": [
+        "text"
+      ],
+      "compHash": "stepfun-api-cn-step-3-5-flash-2603-v1"
+    }
+  ]
+}

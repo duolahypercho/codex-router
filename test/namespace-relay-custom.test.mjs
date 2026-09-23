@@ -90,6 +90,19 @@ test("namespaced custom tools preserve exact input, choice and output identity",
   }
 });
 
+test("provider namespace null restores a bridged custom tool", () => {
+  const built = fixture();
+  const call = { ...sourceCall(built.providerName), namespace: null };
+  const output = rewriteNamespaceResponsePayload(
+    { output: [call] },
+    buildNamespaceLookups(built.namespaces),
+  )?.output?.[0];
+  assert.equal(output?.type, "custom_tool_call");
+  assert.equal(output?.name, "exec");
+  assert.equal(output?.namespace, "functions");
+  assert.equal(output?.input, "text(2)");
+});
+
 test("flat custom history does not hijack an ordinary tool with the same wire name", () => {
   const wireName = "functions__exec";
   for (const plainType of ["custom", "function"]) {

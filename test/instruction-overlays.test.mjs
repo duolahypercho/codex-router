@@ -44,3 +44,23 @@ test("file-tool overlay only names the installed façade tools", () => {
   assert.match(applied, /Create files with write/);
   assert.doesNotMatch(applied, /read_file/);
 });
+
+test("efficient-agentic-v2 keeps GLM execution discipline without duplicating the Sol base contract", () => {
+  const legacy = applyInstructionOverlay("Base instructions.", "efficient-agentic");
+  const v2 = applyInstructionOverlay("Base instructions.", "efficient-agentic-v2");
+
+  assert.match(v2, /minimum sufficient tool output/i);
+  assert.match(v2, /credentials|secrets|tokens/i);
+  assert.match(v2, /behavioral RED suite/i);
+  assert.match(v2, /invalidate that hypothesis/i);
+  assert.match(v2, /On Windows/i);
+  assert.match(v2, /wait timeout is a polling result/i);
+  assert.match(v2, /Do not interrupt a running child solely because.*wait/i);
+  assert.match(v2, /Do not spawn a replacement.*mutable task/i);
+
+  assert.doesNotMatch(v2, /Continue through routine tool work/i);
+  assert.doesNotMatch(v2, /Batch independent reads and checks/i);
+  assert.doesNotMatch(v2, /After a tool result, continue execution/i);
+  assert.doesNotMatch(v2, /Lead the final response/i);
+  assert.ok(v2.length < legacy.length, "v2 should be smaller than the legacy overlay");
+});

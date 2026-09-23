@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "slug": "nousresearch/mimo-v2.6-flash",
+      "gatewayModel": "nousresearch-mimo-v2-6-flash",
+      "upstreamModel": "xiaomi/mimo-v2.6-flash",
+      "provider": "nousresearch",
+      "listed": true,
+      "displayName": "MiMo-V2.6-Flash (Nous Research)",
+      "description": "MiMo-V2.6-Flash through the Nous Portal with text and image input.",
+      "priority": 79,
+      "defaultEffort": "high",
+      "reasoningLevels": [
+        {
+          "effort": "high",
+          "description": "Deep reasoning"
+        }
+      ],
+      "contextWindow": 1048576,
+      "autoCompact": 900000,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "compHash": "nousresearch-mimo-v2-6-flash-v1"
+    }
+  ]
+}

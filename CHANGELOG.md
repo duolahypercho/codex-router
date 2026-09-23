@@ -1,6 +1,265 @@
 # Changelog
 
 ## Unreleased
+- **Installing no longer tells you to quit a Codex that is already closed.**
+  Quitting the desktop app leaves Chromium's crash reporter
+  (`browser_crashpad_handler`) running for hours, reparented to launchd, under
+  the Codex Framework path the running-client check matches, so the install
+  named it as "Codex is running right now". Crash reporters are no longer
+  counted on macOS, Linux, or Windows, and a listing made only of helper
+  processes -- the residue of an app that already quit -- reports the client as
+  not running. A running app is still named by its main process. On Windows,
+  Cursor's quoted executable path is now recognized too.
+- **Adding a provider key now shows the connection being made instead of
+  nothing at all.** Saving a credential runs one router command that writes the
+  key, enables the provider, and republishes every installed client's catalog
+  before the refreshed snapshot can report the routes it unlocked -- and the
+  dialog closes the moment you submit, so for the length of that command the
+  Models page was identical either side of the key being accepted and the click
+  read as having done nothing. The provider's chip now moves onto the
+  connections strip with a spinner and "Connecting...", and every route waiting
+  on it swaps its Connect button for the same word plus a blank the size of the
+  switch that is about to arrive. Signing in and disconnecting report the same
+  way. Placement is optimistic; the connected count is not, so a provider still
+  publishing sits among the chips without being counted as connected. The
+  placeholder is cleared by the same await that already reconciled the
+  snapshot, including when the command fails, so it can never outlive the work
+  it describes or fall back to the state it replaced.
+- **Models you select no longer vanish from the desktop picker on large catalogs.**
+  The ChatGPT desktop app reads a single 100-entry page of Codex's
+  `model/list`, which Codex serves in priority order with hidden entries
+  included, and never asks for the next page. The published catalog
+  interleaved hidden routes with visible ones by priority, so on this host a
+  selected Step 5 Preview landed at entry 107 and never reached the picker while
+  the CLI listed it. Hidden entries are now published in a priority band after
+  the last visible model; visible priorities, and therefore the picker order
+  and the spawn_agent override window, are unchanged.
+- **A long session's images can no longer cross the provider's ceiling and fail
+  the whole turn.** A conversation replays every image it still holds on every
+  following turn, so a session that views screenshots grows until one request
+  exceeds OpenRouter's limit of 30MB of decoded image content -- measured on
+  this host 2026-09-17 at about 12MB accepted and 31MB refused with `413`, on a
+  Kalaam worker whose session had reached 1,791 image references. The routed
+  path now bounds the payload after tool-result aging: oldest images become
+  short text receipts until the request fits both a 20MB byte budget and a 128K
+  image-token budget, keeping the newest two images always. The byte cap stops
+  the stall; the token cap, charged at the route's per-image bound (4096 on a
+  resold route against 1024 on the documented direct DeepSeek Flash models),
+  bounds the per-turn bill that the byte cap alone does not. Images inside tool
+  results are bounded too, remote image URLs are not measured, and the counts --
+  seen, dropped, bytes and tokens saved -- are recorded in the usage event.
+- **Switching native models no longer carries an unsupported reasoning effort
+  into the next turn.** Codex can apply the newly selected model before it
+  replaces the previous model's effort, so moving from a model with a
+  `minimal` rung to GPT-6 Astra, GPT-5.6 Sol, or GPT-5.6 Luna sent an invalid
+  model/effort pair and ChatGPT rejected the whole turn with HTTP 400. Native
+  passthrough now checks the target model's current account-catalog ladder and
+  clamps only known Codex effort names onto it. Already-supported values remain
+  unchanged, unknown values still reach the upstream validator, and a missing
+  or unreadable catalog remains fail-open.
+- **Direct Meta Muse Spark 1.3 Contributor no longer loses tool-bearing turns
+  to a recursive schema the repair never reached.** Issue #792 opted that route
+  into the cycle-closing repair, but the repair ran only in the api-forwarder,
+  which understands top-level `type: "function"` tools. Meta is a
+  Responses-native endpoint, so the router deliberately keeps Codex's
+  `type: "namespace"` entries, and the recursion lives inside those children --
+  the `codex_app` and connector toolsets, where `$defs` re-enters itself
+  (`__schema0`, and the Gmail-style `MessagePartRequest.parts`). Those turns
+  still came back as HTTP 400 `Recursive JSON schemas are not currently
+  supported` while the forwarder's own log stayed silent, which is what made it
+  read like a stale config. The router now runs the same repair for any route
+  that documents `toolSchemaRecursion: "flatten"` on itself, in the shape its
+  endpoint validates. That also closes the same latent gap on
+  `opencode-go-responses/muse-spark-1.3-contributor`, which carries the flag
+  without being named in the gate. Sibling Meta routes still keep their
+  payloads until their own endpoint proves the restriction (#792), and
+  Moonshot-flavored routes keep their own pass, where a blanked cycle-closing
+  reference has to retain the type it declared.
+- **One tool name never stands for two tools on a chat route, and a live schema
+  always wins over a discovered one.** Two halves of the same collision.
+  `chatProviderToolSurface` asked `flattenNamespaceTools` for deterministic
+  aliases only on the Groq route, so every unbounded chat provider published
+  two distinct native identities under one name: Codex injects its app tools as
+  a `codex_app` namespace and also sends the flattened spelling, so a client
+  carrying `codex_app__create_thread` beside the namespaced `create_thread` had
+  that name sent upstream twice, its own tool unreachable for the turn, and the
+  past call it had made restored under the namespaced identity Codex dispatches
+  elsewhere. The other half ran the opposite way: `flattenToolSearchHistory`
+  states that live top-level schemas win on a name collision, but it compared
+  provider-facing names, so exactly the routes that do alias -- Groq and
+  Command Code -- handed the discovered tool a different name, stopped seeing
+  the collision, and declared a stale searched schema beside the live one. The
+  shadow check now compares the live tools' own wire spellings, which is what a
+  discovery collides with. Every chat route now behaves the same way on both,
+  with the aliases Groq and Command Code already minted. Asking for the aliases
+  changes nothing where there is no collision: across 20,000 generated
+  collision-free tool lists the flattened output is byte-identical either way.
+- **A turn the router sent twice is metered at what both attempts cost.**
+  `mergeTokenUsage` exists to add up two attempts at one turn -- "a turn the
+  router had to send twice cost twice; the meter has to say so" -- and added up
+  every field except the two that carry what was actually billed.
+  `billedInputTokens` and `billedOutputTokens` were dropped when both attempts
+  reported, while being kept when only one did. `provider-usage.mjs` reads
+  `billedInputTokens ?? inputTokens`, so the Usage view fell back to the
+  reported prompt on exactly the turns where the two differ: a Grok OAuth
+  progress-only repair whose upstream billed 301,000 input tokens was shown as
+  101,000. Both are now summed like the cache and reasoning counts, absent when
+  neither attempt reported one, and a measured zero still survives.
+- **A replayed tool call with no arguments no longer kills a Meta Muse Spark
+  thread.** Meta validates a function call's `arguments` as JSON and refuses the
+  whole request with HTTP 400 `` `arguments` must be valid JSON `` before
+  inference, so the turn is lost — and because the call stays in the transcript,
+  every later turn in that thread is lost with it. Measured live: Muse called an
+  MCP tool with no arguments at all, the server answered "pattern is required",
+  Codex recorded the call with `arguments: ""`, and the next request died on
+  replay. Meta-bound requests now turn an absent, empty, or whitespace-only
+  argument string into `{}`, which is what the call meant and what the endpoint
+  accepts. The repair is deliberately narrow: a non-empty string that is not
+  JSON is a different failure and is left exactly as it arrived, and each
+  substitution is reported rather than quieted.
+- **Grok 4.7 ships on all six providers that serve it.** xAI published
+  `grok-4.7` on 2026-09-21 with the same 500,000-token window, text + image
+  input, and low/medium/high/xhigh effort ladder as 4.6, and it is now a
+  checked-in route on `grok-oauth`, `grok-api`, `commandcode` (`xai/grok-4.7`),
+  `nousresearch` and `openrouter` (`x-ai/grok-4.7`), and opencode Go's
+  Responses surface. Each entry takes its ladder and modalities from that
+  provider's own catalog rather than from the family name: Command Code
+  publishes no parameter metadata and so keeps low/medium/high, while every
+  other route carries xAI's documented `xhigh`. All four rungs were checked
+  live on `grok-oauth/grok-4.7`. None of the six claims `multiAgentVersion: "v2"` — a native collaboration
+  proof is not inherited from a certified 4.5 sibling — and the grok-oauth
+  route does not inherit 4.6's Fast service tier either.
+- **OpenRouter's Grok routes regain the `xhigh` rung they always had.** The
+  checked-in `openrouter/grok-4.6` ladder was copied from Command Code's entry
+  rather than read from OpenRouter, so it published low/medium/high. OpenRouter
+  documents `xhigh` in the accepted effort vocabulary and maps an unsupported
+  rung down instead of rejecting it, its `/models` record for `x-ai/grok-4.6`
+  and `x-ai/grok-4.7` advertises `reasoning_effort` among the supported
+  parameters, and xAI documents `xhigh` as a native rung of both models. Both
+  OpenRouter entries now carry the fourth rung. Command Code publishes no
+  parameter metadata for its Grok route and stays conservative, which is now
+  recorded as its own reason rather than as the precedent the other route was
+  copied from.
+- **The Grok OAuth bridge's per-model adaptations moved into one list.** The
+  literal `"grok-oauth/grok-4.6"` used to be repeated across the forwarder, the
+  router, the tool facade, the structured-patch and patch-hook experiments, and
+  request diagnostics, so adding a Grok model meant finding all of them.
+  `src/grok-oauth-routes.mjs` now holds the routes that run those workarounds,
+  and the two facts the registry already knows — whether a route has an `xhigh`
+  rung and whether it offers a service tier — are read back from the model
+  entry the way hosted search always was. A second Grok model therefore joins
+  by declaring its own capabilities, and a workaround is widened only where the
+  behavior was actually observed.
+- **Xiaomi's MiMo-V2.6 series ships on every provider that lists it.** Xiaomi
+  released `mimo-v2.6-pro`, `mimo-v2.6-flash`, and `mimo-v2.6-pro-ultraspeed`
+  on 2026-09-22. All three are checked in on Xiaomi's own API, Command Code,
+  the Nous Portal, and OpenRouter; opencode Go carries the Pro and Flash ids
+  its catalog lists. Xiaomi publishes reasoning as a toggle rather than an
+  effort ladder, so each entry keeps the single `high` rung every other MiMo
+  route uses. The 1,048,576-token window is each provider's own published
+  figure and compacts at 900,000, which still reserves the full 131,072-token
+  output limit; the two opencode Go routes keep the 1,000,000 their V2.5
+  siblings use, because OpenCode publishes no limit for a paid Go id.
+  UltraSpeed is the same Pro answers generated faster at ten times the token
+  price, and its picker description says so. `mimo-v2.6-flash-free` is
+  curatable on the anonymous OpenCode routes; like `mimo-v2.5-free` it keeps
+  conservative metadata, because its published 200,000-token window cannot
+  reserve room for its own 32,000-token output limit.
+- **StepFun ships as a first-party provider, one per regional platform.**
+  `stepfun-api` is the global Open Platform (`https://api.stepfun.ai/v1`,
+  `STEPFUN_API_KEY`) and `stepfun-api-cn` is the mainland console
+  (`https://api.stepfun.com/v1`, `STEPFUN_API_CN_KEY`). Each console issues its
+  own key, so they are credentialed and enabled separately and carry a
+  `planNote` saying where to create the China one. Both serve
+  `step-5-preview` (1M context, text + image), `step-3.7-flash` (256K, text +
+  image) and the agent-tuned `step-3.5-flash-2603` (256K, text-only) over the
+  standard `/chat/completions` surface with a top-level `reasoning_effort` —
+  low/medium/high for the first two, low/high for the 2603 snapshot, all taken
+  from StepFun's published model pages. The million-token route compacts at
+  900,000 like every other one. The provider ids carry the `-api` suffix that
+  `kimi-api` and `zai-api` already use, which also leaves the unreserved
+  `stepfun` id available to operator-defined generic endpoints.
+- **The Union Alpha routes are removed; both providers withdrew the preview.**
+  OpenRouter's public model list no longer carries `stealth/union-alpha`, and
+  OpenCode's models.dev record no longer carries `union-alpha` on Go, so the
+  two checked-in routes pointed at ids that no longer resolve. Both configs,
+  the Messages completion clamp that existed only for that hop, and the
+  catalog/curation entries are gone. The OpenCode limits the preview exposed
+  are provider-wide, not route-specific, so they stay: Console Go's
+  2,500,000-character single-message rejection still replaces an oversized
+  ImageGen data URL with a labeled stub (now in `opencode-message-compat.mjs`),
+  compact overflow still hops to a larger same-family window without a
+  cooldown, and a context-length 400 is still translated rather than
+  classified as quota. Ox Alpha is untouched: it graduated to GLM-5.3-Flash
+  earlier, and its slug aliases still keep an existing pin routable.
+- **Z.ai Coding GLM agents now use a leaner execution overlay and stop treating a poll timeout as a stalled child.**
+  The GPT-5.6-Sol behavior template already supplies routine progress cadence,
+  parallel tool use, persistence after tool calls, and outcome-first handoff, so
+  repeating those rules in `efficient-agentic` spent prompt budget without
+  changing the contract. The Coding Plan GLM-5.3 and GLM-5.3-Flash routes now
+  use `efficient-agentic-v2`, which keeps bounded tool output, secret-safe
+  diagnostics, schema-first fixtures, RED-to-GREEN continuity, hypothesis
+  retracing, and Windows quoting while adding one collaboration invariant:
+  `wait_agent` timing out means only that the child has not finished yet. A
+  running child is not interrupted or replaced for the same mutable task
+  without a terminal error, explicit cancellation/supersession, safety reason,
+  or repeated concrete no-progress evidence. The legacy overlay remains
+  available for routes that already name it.
+- **Your own OpenAI-compatible endpoints can be added from Control Center.**
+  A generic provider already carried everything an operator needs — an address,
+  a protected key file, `/models` discovery, curation into the picker, and
+  `<provider>/<model>` slugs that cannot collide — but it existed only on the
+  command line, and `providerOnboardingSnapshot()` walked the checked-in
+  registry alone, so nothing in the desktop app could see one. **Models →
+  Custom → Add endpoint** now takes a name, a base URL, a Chat Completions or
+  Responses choice, and a key, and the endpoint's own chip owns the rest: add
+  models from its catalog, add one **By name** for a private or preview id that
+  catalog never lists, remove a model, edit the address or key, or remove the
+  endpoint with its key and models. The key crosses from the renderer on
+  standard input (`providers generic credential ID set --stdin`), because the
+  existing hidden prompt opens `/dev/tty` and an Electron child has none.
+  Endpoints ride in their own `customEndpoints` array rather than among
+  `providers`, so the tray and guided setup cannot mistake one for a
+  checked-in provider they may select.
+- **Adding a custom endpoint no longer fails on the deadline check.**
+  `generic-providers` republishes the overlay and restarts the router, exactly
+  as `credential` does, but it was missing from control.mjs's restart-bearing
+  set. It therefore ran under the 850-second budget while
+  `assertRestartingPublicationAllowance` demands room for a full
+  publication-plus-readiness epoch, and every add refused with "The
+  model-overlay deadline cannot preserve publication and the full router
+  readiness allowance" before writing anything.
+- **A crashing router child no longer reports itself as a stack trace.**
+  `safeFailure()` forwarded Node's whole uncaught-exception report, so a
+  desktop error read `file:///…/model-overlay-publication.mjs:94 const error =
+  new Error( ^ Error: …` with the sentence buried in the middle. It now keeps
+  the message and drops the file, the source excerpt, the caret, and the
+  frames; a child that failed without throwing is still shown whole, and
+  redaction is unchanged.
+- **A saved endpoint says at once whether it answers.** Adding or editing one
+  runs a single `GET /models` against it, so an unreachable host, a typo, or a
+  rejected key is named while the operator is still in the dialog, with the
+  option to register a model by name anyway, instead of silently opening an
+  empty model picker.
+- **Publishing into a DeepSeek Harness settings file no longer nests the route
+  inside somebody else's provider, and removing it no longer empties the
+  file.** `dsh-config-manager.mjs` read "does this mapping hold anything but
+  ours?" off `children`, which is only the keys the YAML lexer could register.
+  A block sequence, a merge key, or a provider id the key grammar declines
+  (`openrouter/free:`) lives inside the node while being invisible there. So
+  publishing copied its indentation off a hoisted grandchild and wrote
+  `codex-router:` two columns too deep -- inside the user's provider, where the
+  harness never looks, while every status read agreed the publish had worked --
+  and removal, seeing `children.size === 1`, spliced the whole `providers:`
+  section away: a 143-byte settings file with somebody else's route in it came
+  back empty. One comment line above our key was enough to do the same. The
+  credentials document had the matching failure: `refs:` holding an entry the
+  grammar declines left the indent falling back to `refs.indent + 2` while the
+  entries on disk sat at four, and that mixed-indent block costs every
+  adapter's key, not just ours. `routed-harness-document.mjs` already refused
+  all of this; its `unaccountedLines` helper moves to `yaml-structure.mjs` and
+  both managers now share it. Anything this reader cannot account for is
+  refused with the file untouched and the offending line named.
 - **An apostrophe in a harness config no longer moves the router's route into
   somebody else's value.** `yaml-structure.mjs` treated every `'` and `"` as a
   quoting indicator, but YAML only gives a quote that meaning where a node can
@@ -61,6 +320,31 @@
   LiteLLM had closed that fragment as a real `output_text` part, so the
   thinking-match withhold never fired. A held done snapshot that is still a
   mid-clause cut is withheld; punctuated answers stay answers.
+- **Automatic approval reviews can fall back to a routed model when ChatGPT
+  quota runs out.** Codex runs `Approve for me` on its own hidden native model,
+  so with `Use Router with ChatGPT` on, an exhausted plan left a routed session
+  proposing commands it could not execute (#787).
+  `./bin/control auto-review-fallback set <provider/model>` names a reviewer for
+  exactly those turns. It engages only after the native reviewer has itself
+  refused for quota, and only for the window that refusal named -- a denial, a
+  policy rejection, a 5xx, and anything ambiguous all stay native, and a `deny`
+  is never retried through another model. The first native answer afterwards
+  ends the window. The main agent's model is unaffected either way.
+- **`subagents explain <model>` says why a route cannot be delegated to.** The
+  answer lived in three places that never met -- selection in `subagents
+  status`, promotion in the published catalog, and the agent definition on disk
+  -- so the only way to find out was to spawn one and read `codex exited 1`
+  (#804). The new command names the first blocker and the command that fixes
+  it, distinguishes a typo from an uncurated model from a native slug, and says
+  whether a route's v2 claim comes from the registry, a local five-check run, or
+  the operator's own selection. Read-only and quota-free.
+
+- **A configured subagent effort no longer reads as a drifted agent
+  definition.** `syncRoutedCodexAgents` wrote `model_reasoning_effort` into the
+  definition and `routedCodexAgentStatus` computed the expected contents without
+  it, so every model with a subagent effort set was reported `stale` forever:
+  doctor flagged drift, `--fix` republished identical bytes, and the next check
+  flagged it again.
 
 - **Playwright is 1.63.0 in both the router tests and the Control Center.**
   Dependabot #758 only bumped the root pin. The Control Center lock stays in

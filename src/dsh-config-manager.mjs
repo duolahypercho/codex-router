@@ -38,7 +38,13 @@ import {
 import { readMultiAgentSettings, subagentEligibleModels } from "./multi-agent-state.mjs";
 import { assertStateOwnership } from "./state-owner.mjs";
 import { routedClientModels } from "./routed-client-models.mjs";
-import { scanYamlDocument, spliceYamlBlock, yamlNode, yamlScalar } from "./yaml-structure.mjs";
+import {
+  scanYamlDocument,
+  spliceYamlBlock,
+  unaccountedLines,
+  yamlNode,
+  yamlScalar,
+} from "./yaml-structure.mjs";
 
 const ROUTE_PATH = ["llm-pi-ai", "providers", DSH_ROUTE_ID];
 const DEFAULT_MODEL_PATH = ["agent-default-model"];
@@ -89,6 +95,27 @@ function normalizeTrailing(lines) {
   return copy;
 }
 
+// The mapping we are about to add a key beside must be one the lexer read
+// whole. `children` holds only the mapping keys it could register, so a block
+// sequence, a merge key, or a key the key grammar declines lives inside the
+// node while being invisible there -- and the indent this manager copies off
+// "the first sibling" is then that invisible key's *child*. Publishing into
+// `providers:` holding `openrouter/free:` wrote `codex-router:` two columns
+// too deep, nested inside the user's provider, while every status read agreed
+// it went in cleanly. Refuse with the file untouched, as the rest of this
+// module does.
+function assertReadableMapping(document, node, label) {
+  if (!node) return;
+  const unreadable = unaccountedLines(document, node).filter(
+    (line) => !/^\s*#/.test(line.text),
+  );
+  if (!unreadable.length) return;
+  throw new Error(
+    `Refusing to edit ${label}: line ${unreadable[0].index + 1} `
+      + `(${unreadable[0].text.trim()}) is not a mapping entry this reader can account for.`,
+  );
+}
+
 /**
  * Splices the router's route into the settings document text.
  *
@@ -103,6 +130,7 @@ export function applyRouteToSettings(contents, route) {
       "Refusing to edit llm-pi-ai.providers: it is written as an inline value rather than a block.",
     );
   }
+  assertReadableMapping(document, providers, "llm-pi-ai.providers");
   // Follow whatever indentation the document already uses for a sibling route
   // rather than assuming two spaces: a route indented differently from the
   // ones beside it parses, but reads as though something went wrong.
@@ -132,6 +160,11 @@ export function removeRouteFromSettings(contents) {
   for (let depth = ROUTE_PATH.length - 1; depth > 0; depth -= 1) {
     const parent = yamlNode(document, ROUTE_PATH.slice(0, depth));
     if (!parent || parent.children.size !== 1) break;
+    // One *registered* key is not the same as one key. Stop if anything else
+    // lives here -- a sequence item, a merge key, a key the grammar declined,
+    // or the user's own comment. Leaving an empty `providers:` behind is a
+    // cosmetic cost; splicing the user's routes away is not recoverable.
+    if (unaccountedLines(document, parent).length) break;
     removal = parent;
   }
   const lines = [...document.lines];
@@ -247,6 +280,7 @@ export function applyCredential(contents, reference, value) {
   // and that mixed-indent block is not YAML any parser will read back. The
   // whole file is the harness's credential store, so the loss would be every
   // adapter's key, not ours.
+  assertReadableMapping(document, refs, `the harness credentials document's "${CREDENTIAL_REFS_KEY}"`);
   const sibling = refs && [...refs.children.values()][0];
   const indent = wrapped
     ? " ".repeat(sibling ? sibling.indent : (refs ? refs.indent : 0) + 2)
@@ -276,7 +310,13 @@ export function removeCredential(contents, reference) {
     let removal = node;
     if (node.path.length > 1) {
       const parent = yamlNode(document, [CREDENTIAL_REFS_KEY]);
-      if (parent && parent.children.size === 1) removal = parent;
+      if (
+        parent &&
+        parent.children.size === 1 &&
+        !unaccountedLines(document, parent).length
+      ) {
+        removal = parent;
+      }
     }
     // Each pass removes at least one line, so this terminates.
     text = withoutNode(document, removal).join("\n");

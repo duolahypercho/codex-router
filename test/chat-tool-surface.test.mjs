@@ -11,6 +11,7 @@ import {
   buildNamespaceLookups,
   flattenNamespacedHistory,
   flattenNamespaceTools,
+  flattenToolSearchHistory,
   flattenToolChoice,
   rewriteNamespaceResponsePayload,
   toolSearchRelayAvailable,
@@ -330,7 +331,49 @@ test("Groq refuses when client plus referenced app definitions exceed the cap", 
   );
 });
 
-test("non-Groq providers preserve the normally expanded tool surface", () => {
+test("tool-search capable chat providers keep the client-deferred app surface", () => {
+  const client = largeClientSurface({ plainTools: 2, toolSearch: true });
+  const clientFlattened = flattenNamespaceTools(client);
+  const routed = chatProviderToolSurface(client, "zai-coding");
+
+  assert.equal(toolSearchRelayAvailable(routed.namespaces), true);
+  assert.deepEqual(routed.tools, clientFlattened.tools);
+  assert.equal(
+    routed.tools.some((tool) => tool.name === "codex_app__create_thread"),
+    false,
+  );
+  assert.equal(
+    routed.tools.some((tool) => tool.name === "plugin_management__uninstall_plugin"),
+    false,
+  );
+});
+
+test("tool-search capable chat providers add back only referenced deferred app tools", () => {
+  const client = largeClientSurface({ plainTools: 2, toolSearch: true });
+  const routed = chatProviderToolSurface(client, "zai-coding", {
+    input: [{
+      type: "function_call",
+      namespace: "codex_app",
+      name: "create_thread",
+      call_id: "history-thread",
+      arguments: "{}",
+    }],
+    toolChoice: {
+      type: "function",
+      namespace: "codex_app",
+      name: "send_message_to_thread",
+    },
+  });
+  const names = new Set(routed.tools.map((tool) => tool.name));
+
+  assert.equal(toolSearchRelayAvailable(routed.namespaces), true);
+  assert.equal(names.has("codex_app__create_thread"), true);
+  assert.equal(names.has("codex_app__send_message_to_thread"), true);
+  assert.equal(names.has("codex_app__automation_update"), false);
+  assert.equal(names.has("plugin_management__uninstall_plugin"), false);
+});
+
+test("non-Groq providers without tool search preserve the normally expanded tool surface", () => {
   const client = largeClientSurface();
   const expected = flattenNamespaceTools(mergeCodexAppTools(client).tools);
   const routed = chatProviderToolSurface(client, "openrouter");
@@ -399,6 +442,127 @@ for (const providerId of ["commandcode", "commandcode-messages"]) {
     );
   });
 }
+
+test("every chat provider aliases a plain flattened spelling away from its app identity", () => {
+  // The same shape the Groq case above covers, on the providers that reach the
+  // other branch. Codex injects its app tools as a `codex_app` namespace and
+  // also sends the flattened spelling, so the two identities collide on the
+  // wire. Without deterministic aliases the tool list carries one name twice,
+  // the client's own `codex_app__create_thread` is unreachable for the turn,
+  // and the past call it made is restored under the namespaced identity Codex
+  // dispatches somewhere else.
+  const client = [
+    { type: "function", name: "shell", parameters: { type: "object" } },
+    { type: "function", name: "codex_app__create_thread", parameters: { type: "object" } },
+  ];
+  const input = [
+    { type: "function_call", name: "codex_app__create_thread", call_id: "plain" },
+    { type: "function_call", namespace: "codex_app", name: "create_thread", call_id: "app" },
+  ];
+  for (const providerId of ["deepseek", "openrouter", "zai", "moonshot"]) {
+    const routed = chatProviderToolSurface(client, providerId, { input });
+    const names = routed.tools
+      .filter((tool) => tool?.type === "function")
+      .map((tool) => tool.name);
+    assert.equal(
+      new Set(names).size,
+      names.length,
+      `${providerId} sent one tool name twice: ${names.join(", ")}`,
+    );
+
+    const history = flattenNamespacedHistory(input, routed.namespaces);
+    assert.notEqual(history[0].name, history[1].name, providerId);
+
+    const restored = rewriteNamespaceResponsePayload({
+      output: [
+        { type: "function_call", name: history[0].name, call_id: "plain", arguments: "{}" },
+        { type: "function_call", name: history[1].name, call_id: "app", arguments: "{}" },
+      ],
+    }, buildNamespaceLookups(routed.namespaces));
+    assert.deepEqual(restored.output[0], {
+      type: "function_call",
+      name: "codex_app__create_thread",
+      call_id: "plain",
+      arguments: "{}",
+    }, providerId);
+    assert.deepEqual(restored.output[1], {
+      type: "function_call",
+      name: "create_thread",
+      namespace: "codex_app",
+      call_id: "app",
+      arguments: "{}",
+    }, providerId);
+  }
+});
+
+test("a live top-level schema wins over a discovered one on every chat route", () => {
+  // `flattenToolSearchHistory` states the rule: live top-level schemas win on
+  // a name collision. It compared provider-facing names, so on a route that
+  // aliases collisions the discovered tool was handed a different name, stopped
+  // colliding, and the stale schema was declared beside the live one -- two
+  // definitions of one tool, the wrong one first.
+  const tools = [
+    clientToolSearch(),
+    { type: "function", name: "shell", parameters: { type: "object", properties: {} } },
+    {
+      type: "function",
+      name: "mcp__calendar__create_event",
+      description: "Current live schema.",
+      parameters: { type: "object", properties: { live: { type: "boolean" } } },
+    },
+  ];
+  const input = [
+    { type: "tool_search_call", call_id: "s1", execution: "client", arguments: { query: "calendar" } },
+    {
+      type: "tool_search_output",
+      call_id: "s1",
+      status: "completed",
+      execution: "client",
+      tools: [{
+        type: "namespace",
+        name: "mcp__calendar",
+        description: "Calendar tools.",
+        tools: [
+          { type: "function", name: "create_event", parameters: { type: "object", properties: { stale: { type: "string" } } } },
+          { type: "function", name: "delete_event", parameters: { type: "object", properties: { id: { type: "string" } } } },
+        ],
+      }],
+    },
+  ];
+  for (const providerId of ["groq", "commandcode", "deepseek", "openrouter"]) {
+    const routed = chatProviderToolSurface(tools, providerId, { input });
+    const flattened = flattenToolSearchHistory(input, routed.tools, routed.namespaces, {
+      maxTools: 128,
+    });
+    const calendarTools = flattened.tools
+      .filter((tool) => tool?.type === "function" && tool.name.startsWith("mcp__calendar"))
+      .map((tool) => tool.name);
+    assert.deepEqual(
+      calendarTools,
+      ["mcp__calendar__create_event", "mcp__calendar__delete_event"],
+      `${providerId} redeclared the discovered schema beside the live one`,
+    );
+    const searchOutput = flattened.input.find(
+      (item) => item?.type === "function_call_output" && item.call_id === "s1",
+    );
+    assert.deepEqual(
+      JSON.parse(searchOutput.output).tools.map((tool) => tool.name),
+      ["mcp__calendar__delete_event"],
+      providerId,
+    );
+  }
+});
+
+test("collision aliases are the same on a bounded and an unbounded provider", () => {
+  // The alias is derived from the native identity, not the route, so an
+  // operator comparing two providers sees one answer.
+  const client = [
+    { type: "function", name: "codex_app__create_thread", parameters: { type: "object" } },
+  ];
+  const bounded = chatProviderToolSurface(client, "commandcode").tools.map((tool) => tool.name);
+  const unbounded = chatProviderToolSurface(client, "deepseek").tools.map((tool) => tool.name);
+  assert.deepEqual(unbounded, bounded);
+});
 
 test("a non-Command Code chat provider keeps the unbounded 80-character name", () => {
   const routed = chatProviderToolSurface(commandCodeSurface(), "openrouter");

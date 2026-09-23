@@ -1,7 +1,8 @@
+import { backendText } from "../backend-text";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AppWindow, Check, Eye, LogIn, Moon, Plus, RefreshCw, Server, ShieldCheck, Sun, Trash2, UserRound, Wrench } from "lucide-react";
 import { Badge, Button, Dialog, InlineNotice, PageHeader, SectionHeading, Toggle } from "../components";
-import { compactNumber } from "../lib";
+import { compactNumber, effortLabel } from "../lib";
 import { LANGUAGE_OPTIONS, type LanguageId, type Translate } from "../i18n";
 import type {
   ChatGptAccountPool,
@@ -210,7 +211,7 @@ export function SettingsPage({ target, health, presence, chatgptSession, account
     setNewAccountLabel("");
     let saved = false;
     try {
-      await runAction("Add ChatGPT subscription account", async () => {
+      await runAction(t("app.action.addChatgptAccount"), async () => {
         const result = await api.addChatGptSubscriptionAccount(label) as {
           account?: ChatGptSubscriptionAccount;
         };
@@ -246,7 +247,7 @@ export function SettingsPage({ target, health, presence, chatgptSession, account
     setAccountOverlays((current) => [...current, { kind: "remove", accountId }]);
     let saved = false;
     try {
-      await runAction("Remove ChatGPT subscription account", async () => {
+      await runAction(t("app.action.removeChatgptAccount"), async () => {
         await api.removeChatGptSubscriptionAccount(accountId);
         saved = true;
       });
@@ -337,7 +338,7 @@ export function SettingsPage({ target, health, presence, chatgptSession, account
             <div className="settings-list">
               <div className="setting-row">
                 <div><strong>{t("settings.signedRouting.title")}</strong><small>{t("settings.signedRouting.detail")}</small></div>
-                <Toggle checked={optimisticToggles.value("signed-routing", target?.signedRouting === true)} disabled={!api || !target} label={t("settings.signedRouting.title")} onChange={(enabled) => api && void optimisticToggles.mutate("signed-routing", enabled, "Change signed routing", () => api.setSignedRouting(enabled))} />
+                <Toggle checked={optimisticToggles.value("signed-routing", target?.signedRouting === true)} disabled={!api || !target} label={t("settings.signedRouting.title")} onChange={(enabled) => api && void optimisticToggles.mutate("signed-routing", enabled, t("app.action.changeSignedRouting"), () => api.setSignedRouting(enabled))} />
               </div>
               <div className="setting-row">
                 <div>
@@ -361,51 +362,55 @@ export function SettingsPage({ target, health, presence, chatgptSession, account
 
           <section className="panel-section">
             <SectionHeading
-              title="ChatGPT accounts"
-              description="Save multiple ChatGPT logins and choose which one native Codex chats use. Provider routes keep their own credentials."
+              title={t("settings.accounts.title")}
+              description={t("settings.accounts.description")}
             />
             {accountPoolError ? (
-              <InlineNotice tone="danger" title="ChatGPT account state unavailable">
-                {accountPoolError} The protected account list was not treated as empty; repair that state before adding, selecting, or removing accounts.
+              <InlineNotice tone="danger" title={t("settings.accounts.stateUnavailable")}>
+                {t("settings.accounts.stateUnavailableBody", { error: accountPoolError })}
               </InlineNotice>
             ) : loginError ? (
-              <InlineNotice tone="danger" title="ChatGPT login did not complete">
-                {loginError} Retry the login when you are ready.
+              <InlineNotice tone="danger" title={t("settings.accounts.loginFailed")}>
+                {t("settings.accounts.loginFailedBody", { error: loginError })}
               </InlineNotice>
             ) : accountPool?.profile?.pending ? (
-              <InlineNotice tone="neutral" title="Account switch pending">
-                Close Codex completely. The selected login will be activated before the next launch.
+              <InlineNotice tone="neutral" title={t("settings.accounts.switchPending")}>
+                {t("settings.accounts.switchPendingBody")}
               </InlineNotice>
             ) : null}
             <div className="settings-actions subscription-account-create">
               <input
-                aria-label="New ChatGPT account label"
+                aria-label={t("settings.accounts.newLabelAria")}
                 value={newAccountLabel}
                 maxLength={120}
-                placeholder="Account label (optional)"
+                placeholder={t("settings.accounts.labelPlaceholder")}
                 onChange={(event) => setNewAccountLabel(event.target.value)}
               />
               <Button
                 variant="secondary"
                 disabled={!api || Boolean(accountPoolError)}
                 onClick={() => void addSubscriptionAccount()}
-              ><Plus aria-hidden size={14} strokeWidth={1.7} /> Add account</Button>
+              ><Plus aria-hidden size={14} strokeWidth={1.7} /> {t("settings.accounts.add")}</Button>
             </div>
             <div className="settings-list">
               {subscriptionAccounts.map((account) => {
                 const optimisticPending = isOptimisticAccountId(account.id);
                 const accountLoginAttempt = accountPool?.loginAttempts?.[account.id];
                 const status = optimisticPending
-                  ? "Adding…"
-                  : account.subscription?.usable ? "Ready" : account.subscription?.expired ? "Session expired" : "Sign-in required";
-                const title = account.subscription?.email || account.label || "ChatGPT account";
+                  ? t("settings.accounts.statusAdding")
+                  : account.subscription?.usable
+                    ? t("settings.accounts.statusReady")
+                    : account.subscription?.expired
+                      ? t("settings.accounts.statusExpired")
+                      : t("settings.accounts.statusSignInRequired");
+                const title = account.subscription?.email || account.label || t("settings.accounts.defaultTitle");
                 const label = account.subscription?.email && account.label ? `${account.label} · ` : "";
                 const usage = account.subscription?.usage;
                 const usageLabel = optimisticPending
-                  ? "Saving account"
+                  ? t("settings.accounts.savingAccount")
                   : usage && Number.isFinite(usage.remainingPercent)
-                    ? `${usage.period} · ${Math.round(usage.remainingPercent)}% remaining`
-                    : "Usage unavailable";
+                    ? t("settings.accounts.remaining", { period: usage.period, percent: Math.round(usage.remainingPercent) })
+                    : t("settings.accounts.usageUnavailable");
                 return (
                   <div
                     className="setting-row subscription-account-row"
@@ -413,18 +418,18 @@ export function SettingsPage({ target, health, presence, chatgptSession, account
                     data-optimistic={optimisticPending ? "true" : undefined}
                   >
                     <div>
-                      <strong><UserRound aria-hidden size={14} strokeWidth={1.7} /> {title} {accountSelection === account.id ? <Badge tone="accent">Selected</Badge> : null}</strong>
-                      <small>{label}{status}{account.subscription?.expiresInHours !== undefined ? ` · ${account.subscription.expiresInHours}h token` : ""} · {usageLabel}</small>
+                      <strong><UserRound aria-hidden size={14} strokeWidth={1.7} /> {title} {accountSelection === account.id ? <Badge tone="accent">{t("settings.accounts.selectedBadge")}</Badge> : null}</strong>
+                      <small>{label}{status}{account.subscription?.expiresInHours !== undefined ? t("settings.accounts.tokenHours", { hours: account.subscription.expiresInHours }) : ""} · {usageLabel}</small>
                       {accountLoginAttempt?.status === "failed" ? <small>{accountLoginAttempt.error}</small> : null}
                     </div>
                     <div className="settings-actions">
                       <Button
                         variant={accountSelection === account.id ? "secondary" : "ghost"}
                         aria-pressed={accountSelection === account.id}
-                        aria-label={accountSelection === account.id ? `Selected ChatGPT account: ${title}` : `Select ChatGPT account: ${title}`}
+                        aria-label={accountSelection === account.id ? t("settings.accounts.selectedAria", { name: title }) : t("settings.accounts.selectAria", { name: title })}
                         disabled={!api || optimisticPending}
-                        onClick={() => api && void runAction("Switch ChatGPT account", () => api.setChatGptAccountSelection(account.id))}
-                      >{accountSelection === account.id ? <><Check aria-hidden size={13} strokeWidth={1.9} /> Selected</> : <><Check aria-hidden size={13} strokeWidth={1.9} /> Select</>}</Button>
+                        onClick={() => api && void runAction(t("app.action.switchChatgptAccount"), () => api.setChatGptAccountSelection(account.id))}
+                      >{accountSelection === account.id ? <><Check aria-hidden size={13} strokeWidth={1.9} /> {t("settings.accounts.selectedBadge")}</> : <><Check aria-hidden size={13} strokeWidth={1.9} /> {t("settings.accounts.select")}</>}</Button>
                       <Button
                         variant="ghost"
                         disabled={!api || optimisticPending || account.state !== "active" || accountLoginAttempt?.retryable === false || (account.subscription?.usable === true && accountLoginAttempt?.status !== "failed") || loginPendingId === account.id}
@@ -433,7 +438,7 @@ export function SettingsPage({ target, health, presence, chatgptSession, account
                           setLoginError(null);
                           setLoginRetryingId(accountLoginAttempt?.status === "failed" ? account.id : null);
                           setLoginPendingId(account.id);
-                          void runAction(`Login ${account.label || "ChatGPT account"}`, async () => {
+                          void runAction(t("app.action.loginChatgptAccount", { name: account.label || t("settings.accounts.defaultTitle") }), async () => {
                             try {
                               return await api.loginChatGptSubscriptionAccount(account.id);
                             } catch (error) {
@@ -448,19 +453,19 @@ export function SettingsPage({ target, health, presence, chatgptSession, account
                             }
                           });
                         }}
-                      ><LogIn aria-hidden size={13} strokeWidth={1.7} /> Login</Button>
+                      ><LogIn aria-hidden size={13} strokeWidth={1.7} /> {t("settings.accounts.login")}</Button>
                       <Button
                         variant="ghost"
                         disabled={!api || optimisticPending || account.state === "revoked" || accountLoginAttempt?.retryable === false || accountLoginAttempt?.removable === false || loginPendingId === account.id}
                         onClick={() => setRemoveAccountId(account.id)}
-                      ><Trash2 aria-hidden size={13} strokeWidth={1.7} /> Remove</Button>
+                      ><Trash2 aria-hidden size={13} strokeWidth={1.7} /> {t("settings.accounts.remove")}</Button>
                     </div>
                   </div>
                 );
               })}
             </div>
             {!accountPoolError && !subscriptionAccounts.length ? (
-              <div className="surface-summary"><ShieldCheck aria-hidden size={20} strokeWidth={1.6} /><div><strong>No saved ChatGPT accounts</strong><small>Add a login to create its isolated account profile.</small></div></div>
+              <div className="surface-summary"><ShieldCheck aria-hidden size={20} strokeWidth={1.6} /><div><strong>{t("settings.accounts.emptyTitle")}</strong><small>{t("settings.accounts.emptyBody")}</small></div></div>
             ) : null}
           </section>
 
@@ -473,7 +478,7 @@ export function SettingsPage({ target, health, presence, chatgptSession, account
                   aria-label={t("settings.presence.title")}
                   value={presence?.mode || "always"}
                   disabled={!api}
-                  onChange={(event) => api && void runAction("Change presence mode", () => api.setPresence(event.target.value as "always" | "follow-codex"))}
+                  onChange={(event) => api && void runAction(t("app.action.changePresenceMode"), () => api.setPresence(event.target.value as "always" | "follow-codex"))}
                 >
                   <option value="always">{t("settings.presence.always")}</option>
                   <option value="follow-codex">{t("settings.presence.followCodex")}</option>
@@ -485,7 +490,7 @@ export function SettingsPage({ target, health, presence, chatgptSession, account
               </div>
             </div>
             <div className="settings-actions">
-              <Button variant="secondary" disabled={!api} onClick={() => api && void runAction("Start router service", () => api.controlService("start"))}><Server aria-hidden size={14} strokeWidth={1.7} /> {t("settings.action.start")}</Button>
+              <Button variant="secondary" disabled={!api} onClick={() => api && void runAction(t("app.action.startService"), () => api.controlService("start"))}><Server aria-hidden size={14} strokeWidth={1.7} /> {t("settings.action.start")}</Button>
             </div>
           </section>
 
@@ -496,11 +501,11 @@ export function SettingsPage({ target, health, presence, chatgptSession, account
                 <div className="settings-list">
                   <div className="setting-row">
                     <div><strong>{t("settings.context.enable.title")}</strong><small>{t("settings.context.enable.detail")}</small></div>
-                    <Toggle checked={toolResultAgingEnabled} disabled={!api || agingLocked} label={t("settings.context.enable.title")} onChange={(enabled) => api && void optimisticToggles.mutate("tool-result-aging", enabled, "Change Token maxxing", () => api.setToolResultAging(enabled))} />
+                    <Toggle checked={toolResultAgingEnabled} disabled={!api || agingLocked} label={t("settings.context.enable.title")} onChange={(enabled) => api && void optimisticToggles.mutate("tool-result-aging", enabled, t("app.action.changeTokenMaxxing"), () => api.setToolResultAging(enabled))} />
                   </div>
                   <div className="setting-row">
                     <div><strong>{t("settings.context.native.title")}</strong><small>{t("settings.context.native.detail")}</small></div>
-                    <Toggle checked={optimisticToggles.value("native-tool-result-aging", aging.nativeEnabled === true)} disabled={!api || agingLocked || !toolResultAgingEnabled} label={t("settings.context.native.title")} onChange={(enabled) => api && void optimisticToggles.mutate("native-tool-result-aging", enabled, "Change native result compaction", () => api.setNativeToolResultAging(enabled))} />
+                    <Toggle checked={optimisticToggles.value("native-tool-result-aging", aging.nativeEnabled === true)} disabled={!api || agingLocked || !toolResultAgingEnabled} label={t("settings.context.native.title")} onChange={(enabled) => api && void optimisticToggles.mutate("native-tool-result-aging", enabled, t("app.action.changeNativeCompaction"), () => api.setNativeToolResultAging(enabled))} />
                   </div>
                   <div className="setting-row">
                     <div><strong>{t("settings.context.ttl.title")}</strong><small>{t("settings.context.ttl.detail")}</small></div>
@@ -511,7 +516,7 @@ export function SettingsPage({ target, health, presence, chatgptSession, account
                       onChange={(event) => {
                         const raw = event.target.value;
                         const days = raw === "default" ? "default" : Number(raw);
-                        if (api) void runAction("Change retention window", () => api.setToolResultRetentionTtl(days));
+                        if (api) void runAction(t("app.action.changeRetentionWindow"), () => api.setToolResultRetentionTtl(days));
                       }}
                     >
                       <option value="default">{t("settings.context.ttl.default", { days: RETENTION_DEFAULT_TTL_DAYS })}</option>
@@ -545,7 +550,7 @@ export function SettingsPage({ target, health, presence, chatgptSession, account
                 <div className="settings-list">
                   <div className="setting-row">
                     <div><strong>{t("settings.vision.enable.title")}</strong><small>{t("settings.vision.enable.detail")}</small></div>
-                    <Toggle checked={optimisticToggles.value("vision-bridge", bridge.enabled === true)} disabled={!api} label={t("settings.vision.enable.title")} onChange={(enabled) => api && void optimisticToggles.mutate("vision-bridge", enabled, "Change vision bridge", () => api.setVisionBridgeEnabled(enabled))} />
+                    <Toggle checked={optimisticToggles.value("vision-bridge", bridge.enabled === true)} disabled={!api} label={t("settings.vision.enable.title")} onChange={(enabled) => api && void optimisticToggles.mutate("vision-bridge", enabled, t("app.action.changeVisionBridge"), () => api.setVisionBridgeEnabled(enabled))} />
                   </div>
                   <div className="setting-row">
                     <div><strong>{t("settings.vision.engine.title")}</strong><small>{t("settings.vision.engine.detail")}</small></div>
@@ -553,7 +558,7 @@ export function SettingsPage({ target, health, presence, chatgptSession, account
                       aria-label={t("settings.vision.engine.title")}
                       value={selectedEngine}
                       disabled={!api}
-                      onChange={(event) => api && void runAction("Change vision engine", () => api.setVisionBridgeEngine(event.target.value))}
+                      onChange={(event) => api && void runAction(t("app.action.changeVisionEngine"), () => api.setVisionBridgeEngine(event.target.value))}
                     >
                       {/* No standing "Auto" choice, matching the tray: the ranking behind it
                           scored cost by slug spelling, so it tied across a normal install and
@@ -580,10 +585,10 @@ export function SettingsPage({ target, health, presence, chatgptSession, account
                       aria-label={t("settings.vision.effort.title")}
                       value={selectedEffort}
                       disabled={!api || !effortOptions.length}
-                      onChange={(event) => api && void runAction("Change vision effort", () => api.setVisionBridgeEffort(event.target.value))}
+                      onChange={(event) => api && void runAction(t("app.action.changeVisionEffort"), () => api.setVisionBridgeEffort(event.target.value))}
                     >
                       <option value="default">{t("settings.vision.effort.default")}</option>
-                      {effortOptions.map((effort) => <option key={effort} value={effort}>{effort}</option>)}
+                      {effortOptions.map((effort) => <option key={effort} value={effort}>{effortLabel(effort, t)}</option>)}
                     </select>
                   </div>
                 </div>
@@ -602,8 +607,8 @@ export function SettingsPage({ target, health, presence, chatgptSession, account
               <div><strong>{t("settings.desktop.tray.title")}</strong><small>{t("settings.desktop.tray.detail")}</small></div>
             </div>
             <div className="settings-actions">
-              <Button variant="secondary" disabled={!api || trayControlsUnavailable} onClick={() => api && void runAction("Enable desktop tray", () => api.controlTray("enable"))}>{t("settings.desktop.enable")}</Button>
-              <Button variant="secondary" disabled={!api || trayControlsUnavailable} onClick={() => api && void runAction("Restart desktop tray", () => api.controlTray("restart"))}>{t("settings.desktop.restart")}</Button>
+              <Button variant="secondary" disabled={!api || trayControlsUnavailable} onClick={() => api && void runAction(t("app.action.enableTray"), () => api.controlTray("enable"))}>{t("settings.desktop.enable")}</Button>
+              <Button variant="secondary" disabled={!api || trayControlsUnavailable} onClick={() => api && void runAction(t("app.action.restartTray"), () => api.controlTray("restart"))}>{t("settings.desktop.restart")}</Button>
               <Button variant="ghost" disabled={!api || trayControlsUnavailable} onClick={() => setConfirmTrayDisable(true)}>{t("settings.desktop.disable")}</Button>
             </div>
             {trayControlsUnavailable ? (
@@ -655,7 +660,7 @@ export function SettingsPage({ target, health, presence, chatgptSession, account
                     own remedy is the whole point of showing the report -- a
                     bare "it failed" would send the user back to the terminal
                     the button exists to replace. */}
-                {repairFailures.map((check) => `${check.name}: ${check.detail || ""}${check.fix ? ` — ${check.fix}` : ""}`).join(" · ")}
+                {repairFailures.map((check) => `${backendText(check.name, t)}: ${backendText(check.detail, t)}${check.fix ? ` — ${backendText(check.fix, t)}` : ""}`).join(" · ")}
               </InlineNotice>
             ) : null}
             <InlineNotice tone="neutral" title={t("settings.maintenance.update")}>
@@ -703,24 +708,24 @@ export function SettingsPage({ target, health, presence, chatgptSession, account
           <Button variant="secondary" onClick={() => setConfirmTrayDisable(false)}>{t("settings.desktop.confirm.cancel")}</Button>
           <Button variant="danger" disabled={trayControlsUnavailable} onClick={() => {
             setConfirmTrayDisable(false);
-            if (api) void runAction("Disable desktop tray", () => api.controlTray("disable"));
+            if (api) void runAction(t("app.action.disableTray"), () => api.controlTray("disable"));
           }}>{t("settings.desktop.disable")}</Button>
         </div>
       </Dialog>
 
       <Dialog
         open={Boolean(removeAccountId)}
-        title="Remove ChatGPT subscription account?"
-        description="This revokes the pool entry and deletes its isolated Codex login profile."
+        title={t("settings.accounts.removeTitle")}
+        description={t("settings.accounts.removeDescription")}
         onClose={() => setRemoveAccountId(null)}
       >
-        <p className="dialog-copy">The account's local OAuth profile will be removed. If it is active, close Codex first; another saved account must be activated before removal.</p>
+        <p className="dialog-copy">{t("settings.accounts.removeBody")}</p>
         <div className="dialog-actions">
-          <Button variant="secondary" onClick={() => setRemoveAccountId(null)}>Cancel</Button>
+          <Button variant="secondary" onClick={() => setRemoveAccountId(null)}>{t("settings.accounts.removeCancel")}</Button>
           <Button variant="danger" disabled={!api || !removeAccountId || loginPendingId === removeAccountId} onClick={() => {
             const id = removeAccountId;
             if (id) void removeSubscriptionAccount(id);
-          }}>Remove account</Button>
+          }}>{t("settings.accounts.removeConfirm")}</Button>
         </div>
       </Dialog>
     </>

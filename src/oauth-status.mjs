@@ -1,15 +1,12 @@
 import { existsSync, readFileSync } from "node:fs";
-import os from "node:os";
-import path from "node:path";
 
 import { discoveryDisabled } from "./discovery-mode.mjs";
+import { resolveKimiCodeEnvironment } from "./kimi-region.mjs";
 
-export function kimiCodeHome() {
-  return process.env.KIMI_CODE_HOME || path.join(os.homedir(), ".kimi-code");
-}
+export { kimiCodeHome } from "./kimi-region.mjs";
 
 function kimiCredentialsPath() {
-  return path.join(kimiCodeHome(), "credentials", "kimi-code.json");
+  return resolveKimiCodeEnvironment().credentialsPath;
 }
 
 export function kimiOAuthStatus() {

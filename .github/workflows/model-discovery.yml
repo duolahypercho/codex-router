@@ -80,6 +80,8 @@ jobs:
           ORCAROUTER_API_KEY: ${{ secrets.ORCAROUTER_API_KEY }}
           QWEN_PLAN_API_KEY: ${{ secrets.QWEN_PLAN_API_KEY }}
           SILICONFLOW_API_KEY: ${{ secrets.SILICONFLOW_API_KEY }}
+          STEPFUN_API_KEY: ${{ secrets.STEPFUN_API_KEY }}
+          STEPFUN_API_CN_KEY: ${{ secrets.STEPFUN_API_CN_KEY }}
           TOGETHER_API_KEY: ${{ secrets.TOGETHER_API_KEY }}
           VENICE_API_KEY: ${{ secrets.VENICE_API_KEY }}
           XAI_API_KEY: ${{ secrets.XAI_API_KEY }}

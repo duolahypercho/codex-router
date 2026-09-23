@@ -23,6 +23,10 @@
         {
           "effort": "high",
           "description": "Deep reasoning"
+        },
+        {
+          "effort": "xhigh",
+          "description": "Maximum reasoning depth"
         }
       ],
       "contextWindow": 500000,

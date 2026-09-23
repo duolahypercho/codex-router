@@ -480,7 +480,7 @@ function consoleGoNumericOverflowBody() {
   return JSON.stringify({
     error: {
       message:
-        `litellm.BadRequestError: AnthropicException - ${inner}. Received Model Group=opencode-go-messages-union-alpha\nAvailable Model Group Fallbacks=None`,
+        `litellm.BadRequestError: AnthropicException - ${inner}. Received Model Group=opencode-go-messages-minimax-m3\nAvailable Model Group Fallbacks=None`,
       type: null,
       param: null,
       code: "400",
@@ -505,7 +505,7 @@ test("a numeric Console Go prompt-too-long keeps both token counts", () => {
   const payload = translateGatewayError({
     status: 400,
     bodyText,
-    modelName: "Union Alpha (opencode Go)",
+    modelName: "MiniMax M3 (opencode Go)",
     providerName: "opencode",
   });
   assert.equal(payload.error.type, "invalid_request_error");
@@ -532,7 +532,7 @@ test("an OpenRouter overflow with two input/request occurrences keeps the real t
         + "is 262144 tokens. However, you requested about 282974 tokens (132890 of text "
         + "input, 150084 of tool input). Please reduce the length of either one, or use the "
         + "context-compression plugin to compress your prompt automatically.. Received "
-        + "Model Group=openrouter-union-alpha\nAvailable Model Group Fallbacks=None",
+        + "Model Group=openrouter-minimax-m3\nAvailable Model Group Fallbacks=None",
       type: null,
       param: null,
       code: "400",
@@ -546,7 +546,7 @@ test("an OpenRouter overflow with two input/request occurrences keeps the real t
   const payload = translateGatewayError({
     status: 400,
     bodyText,
-    modelName: "Union Alpha (OpenRouter)",
+    modelName: "MiniMax M3 (OpenRouter)",
     providerName: "openrouter",
   });
   assert.match(payload.error.message, /282,974 tokens/);
@@ -576,7 +576,7 @@ test("Console Go prompt-too-long-including-completion is a context error, not qu
   const payload = translateGatewayError({
     status: 400,
     bodyText,
-    modelName: "Union Alpha (opencode Go)",
+    modelName: "MiniMax M3 (opencode Go)",
     providerName: "opencode",
   });
   assert.equal(payload.error.type, "invalid_request_error");
@@ -612,7 +612,7 @@ test("a LiteLLM-wrapped Console Go prompt-too-long still classifies as context",
   const payload = translateGatewayError({
     status: 400,
     bodyText,
-    modelName: "Union Alpha (opencode Go)",
+    modelName: "MiniMax M3 (opencode Go)",
     providerName: "opencode",
   });
   assert.equal(payload.error.code, "context_length_exceeded");
@@ -644,7 +644,7 @@ test("a local Anthropic tool-argument conversion is not a provider rejection", (
           '{"cmd":"usage limit reached for your GLM Coding Plan"}',
       },
     }),
-    modelName: "Union Alpha Free (opencode Go)",
+    modelName: "MiniMax M3 (opencode Go)",
     providerName: "opencode",
   });
   assert.equal(payload.error.code, "invalid_function_call_arguments");

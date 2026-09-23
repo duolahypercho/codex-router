@@ -142,6 +142,24 @@ node src/catalog.mjs                 # publish; the Control Center does this for
 Then **fully quit and reopen Codex**. It reads the catalog at startup and caches
 it; skipping this is the most common reason a change looks like it did nothing.
 
+### Why is this route not spawnable?
+
+Before spawning anything, ask:
+
+```bash
+bin/model-router codex subagents explain <provider>/<model>
+```
+
+It joins the three places the answer used to live -- selection in `subagents
+status`, promotion in the published catalog, and the agent definition on disk --
+and names the first thing to fix. Read-only and quota-free; it promotes nothing
+and probes nothing. `--json` returns the same answer structured.
+
+It also says where a route's v2 claim came from, because the three sources are
+not worth the same: a checked-in registry certification, a completed local
+five-check run, or the operator's own selection -- which is intent, not
+evidence.
+
 Neither costs quota. Selection is a statement of intent, not a capability claim
 — `mode all` is documented as advertising every route "regardless of whether it
 works" — so verify a route before relying on it:

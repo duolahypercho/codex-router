@@ -42,6 +42,18 @@ export const DEFAULT_RESTART_WINDOW_MS = 10 * 60_000;
 export const DEFAULT_RESTART_BACKOFF_MS = 1_000;
 export const MAX_RESTART_BACKOFF_MS = 30_000;
 
+// A gateway can stop serving while its process stays alive. On Windows,
+// LiteLLM's uvicorn accept loop can die to an asyncio proactor error
+// (`WinError 64 ... Accept failed on a socket`, observed after a mid-stream
+// upstream reset) and then never accept another connection, even though the
+// Python process keeps running and `waitForExit` never fires. The exit-only
+// supervisor above would leave every routed request talking to a closed port
+// until a human restarted the service. So also poll the same liveness endpoint
+// the router uses: a few consecutive failures mean the listener is gone, and
+// the still-running child is stopped so the restart path below runs.
+export const DEFAULT_HEALTH_INTERVAL_MS = 15_000;
+export const DEFAULT_HEALTH_FAILURES = 3;
+
 // Doubling from the base, capped. The cap matters more than the curve: a
 // gateway that crashes on a poisoned request recovers on the first restart,
 // while one that dies on startup must not be respawned faster than it takes to
@@ -79,6 +91,14 @@ export function gatewaySupervisorLimits(env = process.env) {
       env.CODEX_ROUTER_GATEWAY_RESTART_WINDOW_MS,
       DEFAULT_RESTART_WINDOW_MS,
     ),
+    healthIntervalMs: positiveInteger(
+      env.CODEX_ROUTER_GATEWAY_HEALTH_INTERVAL_MS,
+      DEFAULT_HEALTH_INTERVAL_MS,
+    ),
+    healthFailures: positiveInteger(
+      env.CODEX_ROUTER_GATEWAY_HEALTH_FAILURES,
+      DEFAULT_HEALTH_FAILURES,
+    ),
   };
 }
 
@@ -88,6 +108,45 @@ function isRunning(child) {
 
 function reason(error) {
   return (error instanceof Error && error.message) || String(error);
+}
+
+// Resolve as soon as the child exits OR its liveness probe fails
+// `healthFailures` times in a row. The watchdog is marked stopped once the race
+// is decided so it cannot keep probing a child that already exited.
+async function waitForExitOrUnhealthy(
+  current,
+  { label, waitForExit, healthCheck, healthIntervalMs, healthFailures, isShuttingDown, sleep },
+) {
+  const exit = waitForExit(current, label).then((result) => ({ kind: "exit", result }));
+  let stopped = false;
+  const watchdog = (async () => {
+    let consecutive = 0;
+    while (!stopped) {
+      await sleep(healthIntervalMs);
+      if (stopped || isShuttingDown() || !isRunning(current)) return null;
+      try {
+        await healthCheck();
+        consecutive = 0;
+      } catch {
+        consecutive += 1;
+        if (consecutive >= healthFailures) {
+          return {
+            kind: "unhealthy",
+            result: {
+              label,
+              code: null,
+              signal: null,
+              reason: `${consecutive} consecutive liveness failures`,
+            },
+          };
+        }
+      }
+    }
+    return null;
+  })();
+  const winner = await Promise.race([exit, watchdog]);
+  stopped = true;
+  return winner ?? exit;
 }
 
 /**
@@ -112,13 +171,28 @@ export async function superviseGateway({
   maxRestarts = DEFAULT_MAX_RESTARTS,
   windowMs = DEFAULT_RESTART_WINDOW_MS,
   backoffMs = DEFAULT_RESTART_BACKOFF_MS,
+  healthCheck,
+  healthIntervalMs = DEFAULT_HEALTH_INTERVAL_MS,
+  healthFailures = DEFAULT_HEALTH_FAILURES,
 } = {}) {
   let current = child;
   let restarts = 0;
   const failures = [];
+  const healthMonitored = typeof healthCheck === "function";
 
   for (;;) {
-    const exit = await waitForExit(current, label);
+    const outcome = healthMonitored
+      ? await waitForExitOrUnhealthy(current, {
+          label,
+          waitForExit,
+          healthCheck,
+          healthIntervalMs,
+          healthFailures,
+          isShuttingDown,
+          sleep,
+        })
+      : { kind: "exit", result: await waitForExit(current, label) };
+    const exit = outcome.result;
     if (isShuttingDown()) return { ...exit, restarts };
 
     const at = now();
@@ -147,6 +221,17 @@ export async function superviseGateway({
     );
     await sleep(wait);
     if (isShuttingDown()) return { ...exit, restarts };
+
+    if (outcome.kind === "unhealthy") {
+      log(
+        `${label} stopped answering health checks (${exit.reason}); terminating the ` +
+          `still-running process before restarting it.`,
+      );
+      // The process is alive but its listener is not. Stop it and wait for the
+      // exit so the replacement can bind the same port.
+      if (isRunning(current)) stop(current);
+      await waitForExit(current, label);
+    }
 
     restarts += 1;
     try {

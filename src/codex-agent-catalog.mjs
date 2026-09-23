@@ -156,7 +156,12 @@ export function routedCodexAgentStatus(models, agentsDir = CODEX_AGENTS_DIR) {
   };
   const expectedFiles = new Set();
   for (const model of models) {
-    const definition = routedAgentDefinition(model);
+    // The same effort `syncRoutedCodexAgents` writes. Without it the expected
+    // contents differ from the file on disk by exactly the
+    // `model_reasoning_effort` line, so every model with a configured subagent
+    // effort read as permanently `stale`: doctor reported drift, `--fix`
+    // republished the identical bytes, and the next check reported it again.
+    const definition = routedAgentDefinition(model, { effort: subagentEffort(model.slug) });
     const target = path.join(agentsDir, definition.fileName);
     expectedFiles.add(definition.fileName);
     if (!existsSync(target)) {

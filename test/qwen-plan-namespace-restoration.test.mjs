@@ -201,6 +201,75 @@ data: [DONE]
   assert.equal(outputItemData.item.name, "spawn_agent");
 });
 
+// The terminal item is what Codex executes, and the completion snapshot is what
+// non-incremental consumers read. Restoring only `output_item.added` left the
+// flattened name on the call Codex actually ran, so namespace tools answered
+// "unsupported call" on every Responses route that relays flattened names.
+test("createResponsesStreamTransform restores the terminal item and the completion snapshot", async () => {
+  const tools = [
+    {
+      type: "function",
+      name: "collaboration__spawn_agent",
+      description: "Spawn a child",
+      parameters: { type: "object", properties: { task_name: { type: "string" } } },
+    },
+  ];
+  const call = {
+    type: "function_call",
+    id: "fc_1",
+    call_id: "call_1",
+    name: "collaboration__spawn_agent",
+    arguments: '{"task_name":"probe"}',
+  };
+  const sseInput = [
+    `event: response.output_item.added\ndata: ${JSON.stringify({
+      type: "response.output_item.added",
+      output_index: 0,
+      item: { ...call, arguments: "" },
+    })}\n\n`,
+    `event: response.output_item.done\ndata: ${JSON.stringify({
+      type: "response.output_item.done",
+      output_index: 0,
+      item: call,
+    })}\n\n`,
+    `event: response.completed\ndata: ${JSON.stringify({
+      type: "response.completed",
+      response: { id: "resp_1", output: [call] },
+    })}\n\n`,
+    "data: [DONE]\n\n",
+  ].join("");
+
+  const transform = createResponsesStreamTransform(buildNamespaceLookupsFromTools(tools));
+  const chunks = [];
+  transform.on("data", (chunk) => chunks.push(chunk.toString("utf8")));
+  await new Promise((resolve, reject) => {
+    transform.on("end", resolve);
+    transform.on("error", reject);
+    transform.write(sseInput);
+    transform.end();
+  });
+
+  const events = chunks
+    .join("")
+    .split(/\n\n/)
+    .map((frame) => frame.split("\n").find((line) => line.startsWith("data: ")))
+    .filter(Boolean)
+    .map((line) => line.slice("data: ".length).trim())
+    .filter((payload) => payload.startsWith("{"))
+    .map((payload) => JSON.parse(payload));
+  const identity = (item) => ({ name: item.name, namespace: item.namespace });
+  const expected = { name: "spawn_agent", namespace: "collaboration" };
+
+  const done = events.find((event) => event.type === "response.output_item.done");
+  assert.deepEqual(identity(done.item), expected, "the executed item is restored");
+  const completed = events.find((event) => event.type === "response.completed");
+  assert.deepEqual(
+    identity(completed.response.output[0]),
+    expected,
+    "the completion snapshot is restored",
+  );
+});
+
 test("createResponsesJsonTransform restores namespaced function calls", async () => {
   const tools = [
     {

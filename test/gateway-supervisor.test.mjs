@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  DEFAULT_HEALTH_FAILURES,
+  DEFAULT_HEALTH_INTERVAL_MS,
   DEFAULT_MAX_RESTARTS,
   MAX_RESTART_BACKOFF_MS,
   gatewaySupervisorLimits,
@@ -177,6 +179,8 @@ test("limits come from the environment and fall back on nonsense", () => {
     maxRestarts: DEFAULT_MAX_RESTARTS,
     backoffMs: 1_000,
     windowMs: 600_000,
+    healthIntervalMs: DEFAULT_HEALTH_INTERVAL_MS,
+    healthFailures: DEFAULT_HEALTH_FAILURES,
   });
   assert.equal(gatewaySupervisorLimits({ CODEX_ROUTER_GATEWAY_RESTARTS: "0" }).maxRestarts, 0);
   assert.equal(
@@ -191,6 +195,71 @@ test("limits come from the environment and fall back on nonsense", () => {
     gatewaySupervisorLimits({ CODEX_ROUTER_GATEWAY_RESTART_WINDOW_MS: "1000" }).windowMs,
     1_000,
   );
+  assert.equal(
+    gatewaySupervisorLimits({ CODEX_ROUTER_GATEWAY_HEALTH_INTERVAL_MS: "250" }).healthIntervalMs,
+    250,
+  );
+  assert.equal(
+    gatewaySupervisorLimits({ CODEX_ROUTER_GATEWAY_HEALTH_FAILURES: "7" }).healthFailures,
+    7,
+  );
+  assert.equal(
+    gatewaySupervisorLimits({ CODEX_ROUTER_GATEWAY_HEALTH_FAILURES: "0" }).healthFailures,
+    DEFAULT_HEALTH_FAILURES,
+  );
+});
+
+// The LiteLLM-on-Windows failure this guards: a mid-stream upstream reset kills
+// the uvicorn accept loop (`WinError 64`) while the Python process keeps
+// running, so `waitForExit` never fires and the exit-only supervisor would
+// leave the router answering 502 on a closed port forever.
+test("a gateway that stays alive but stops answering liveness is stopped and replaced", async () => {
+  const spawned = [];
+  const logs = [];
+  let healthy = true;
+  let shuttingDown = false;
+  const start = () => {
+    const child = fakeChild(spawned.length);
+    spawned.push(child);
+    return child;
+  };
+  const waitForExit = (child, label) =>
+    child.exitCode !== null || child.signalCode !== null
+      ? Promise.resolve({ label, code: child.exitCode, signal: child.signalCode })
+      : new Promise((resolve) => {
+          child.resolvers.push(({ code, signal }) => resolve({ label, code, signal }));
+        });
+
+  const first = start();
+  const done = superviseGateway({
+    child: first,
+    start,
+    waitForExit,
+    waitForHealth: async () => {},
+    healthCheck: async () => {
+      if (!healthy) throw new Error("gateway liveness failed");
+    },
+    healthIntervalMs: 5,
+    healthFailures: 2,
+    isShuttingDown: () => shuttingDown,
+    log: (message) => logs.push(message),
+    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  });
+
+  healthy = false;
+  const deadline = Date.now() + 3_000;
+  while (spawned.length < 2 && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal(spawned.length, 2, "the wedged gateway was not replaced");
+  assert.deepEqual(first.killed, ["SIGTERM"], "the wedged process was not stopped");
+  assert.match(logs.join("\n"), /stopped answering health checks/);
+
+  shuttingDown = true;
+  healthy = true;
+  spawned[1].exit(0);
+  const result = await done;
+  assert.equal(result.restarts, 1);
 });
 
 // The window is what keeps a long-lived install restartable: five crashes over

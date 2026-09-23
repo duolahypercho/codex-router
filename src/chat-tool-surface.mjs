@@ -202,16 +202,21 @@ function withRequiredAppTools(tools, required) {
   return selected;
 }
 
-// Chat-completions providers need namespace flattening and normally receive
-// the app definitions Codex registered with deferLoading but omitted from the
-// live request. Groq alone caps a request at 128 tools. When that expansion is
-// the only thing crossing the cap, keep every client-declared tool and omit the
-// injected definitions the current transcript does not require. Curated Groq
-// models do not advertise native tool_search, so this cannot depend on a live
-// relay. Stored app calls and forced app choices are evidence that an omitted
-// definition is required; those definitions are added back before the request
-// is admitted. A client surface (or client + required definitions) over the cap
-// is refused locally rather than truncated.
+// Chat-completions providers need namespace flattening. When the client also
+// supplies its client-executed tool_search control, however, its reduced
+// codex_app namespace is deliberate deferred loading: keep that reduced surface
+// and add back only app definitions already referenced by stored history or a
+// forced tool choice. Otherwise the router would defeat discovery by injecting
+// the full deferLoading snapshot before the model can search for a tool.
+//
+// Providers without client tool_search keep the compatibility fallback that
+// merges the full app snapshot so routed models still see native app tools.
+// Groq alone caps a request at 128 tools and already applies the same
+// reference-driven app selection regardless of discovery support. Stored app
+// calls and forced app choices are evidence that an omitted definition is
+// required; those definitions are added back before the request is admitted. A
+// client surface (or client + required definitions) over the cap is refused
+// locally rather than truncated.
 // Command Code validates the provider-facing tool `name` at 64 characters and
 // refuses the whole request over a longer one, so a client tool such as
 // `mcp__openai_api_key_local_confirmation__confirm_openai_api_key_local_destination`
@@ -228,19 +233,40 @@ export function chatProviderToolSurface(
   providerId,
   { input, toolChoice } = {},
 ) {
-  const merged = mergeCodexAppTools(tools);
   if (providerId !== "groq") {
-    return flattenNamespaceTools(
-      merged.tools,
-      BOUNDED_TOOL_NAME_PROVIDERS.has(providerId)
-        ? { maxNameLength: BOUNDED_TOOL_NAME_LENGTH }
-        : {},
+    const clientToolSearch = Array.isArray(tools) && tools.some(
+      (tool) => tool?.type === "tool_search" && tool.execution === "client",
     );
+    let providerTools;
+    if (clientToolSearch) {
+      const inventory = clientToolInventory(tools);
+      const referenced = referencedAppTools(input, toolChoice, inventory);
+      const requiredDefinitions = new Map(
+        [...referenced].filter(([key]) => !inventory.nativeIdentities.has(key)),
+      );
+      providerTools = withRequiredAppTools(tools, requiredDefinitions);
+    } else {
+      providerTools = mergeCodexAppTools(tools).tools;
+    }
+    // Collision safety is not the length bound. A provider with no name-length
+    // limit still cannot be sent two tools under one name: the second
+    // declaration wins on the wire, and every call to that name comes back
+    // under one identity, so the other tool is unreachable for the whole turn.
+    // The bounded branch already aliases both apart because any duplicate
+    // forces an alias there; the unbounded branch has to ask for it.
+    return flattenNamespaceTools(providerTools, {
+      aliasCollisions: true,
+      ...(BOUNDED_TOOL_NAME_PROVIDERS.has(providerId)
+        ? { maxNameLength: BOUNDED_TOOL_NAME_LENGTH }
+        : {}),
+    });
   }
+
+  const merged = mergeCodexAppTools(tools);
 
   // Groq has no OpenCode-style length bound, but it still needs deterministic
   // aliases when two distinct native identities have the same flattened wire
-  // spelling. Keep that collision safety independent from the 64-byte route.
+  // spelling -- the same reason the branch above asks for them.
   const expanded = flattenNamespaceTools(merged.tools, { aliasCollisions: true });
   if (!Array.isArray(expanded.tools) || expanded.tools.length <= GROQ_MAX_TOOLS) return expanded;
 

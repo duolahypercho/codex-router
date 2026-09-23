@@ -922,6 +922,30 @@ function sortCatalogModels(models) {
   });
 }
 
+// Codex serves `model/list` in priority order, hidden entries included, and
+// the desktop model picker reads only the first page of that list (100
+// entries) before dropping the hidden ones. With a large catalog, hidden
+// routes interleaved by priority pushed selected models past entry 100, so
+// they never reached the picker although the CLI listed them. Publishing every
+// hidden entry in a band after the last visible priority keeps each selected
+// model on that first page. Visible priorities are untouched, and a hidden
+// model is never a spawn override (AGENTS.md step 5), so the spawn window
+// cannot lose anything to this renumbering.
+export function publishHiddenAfterVisible(models) {
+  const isVisible = (model) => model.visibility !== "hide";
+  const visibleMax = Math.max(
+    0,
+    ...models.filter(isVisible).map((model) => Number(model.priority)).filter(Number.isFinite),
+  );
+  const hiddenOrder = new Map(
+    sortCatalogModels(models.filter((model) => !isVisible(model)))
+      .map((model, index) => [model.slug, visibleMax + 1 + index]),
+  );
+  return models.map((model) =>
+    hiddenOrder.has(model.slug) ? { ...model, priority: hiddenOrder.get(model.slug) } : model,
+  );
+}
+
 // Native entries carry upstream's static multi_agent_version. One pinned
 // backend exception is maintained in the repository after upstream evidence;
 // local selection or a stream/tool probe must never promote any other v1
@@ -1232,7 +1256,7 @@ export function publishCatalog({ refreshNative = refresh, output = true } = {}) 
     atomicJson(NATIVE_ALIAS_PATH, { version: 1, aliases });
     writeAnnouncedAt(announcedAt);
     atomicJson(MERGED_CATALOG_PATH, {
-      models: merged.map((model) => {
+      models: publishHiddenAfterVisible(merged.map((model) => {
         const slug = String(model.slug);
         // In login-free mode a native-looking slot is an alias for a routed
         // model, so visibility follows the canonical routed slug that the
@@ -1251,7 +1275,7 @@ export function publishCatalog({ refreshNative = refresh, output = true } = {}) 
         return routerManaged && (hidden || !selected)
           ? { ...model, visibility: "hide" }
           : model;
-      }),
+      })),
     });
     if (process.env.MODEL_ROUTER_TEST_FAIL_AFTER_CATALOG_WRITE === "1") {
       throw new Error("Forced failure after model catalog publication.");

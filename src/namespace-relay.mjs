@@ -632,10 +632,20 @@ function isSubagentSpawnCall(item) {
 // a client version does ship one, so that guard is unaffected: the item it
 // clears arrives here without a model and inherits the parent as before.
 //
+// A spawn_agent call that names another model but no reasoning depth keeps
+// whatever that model's catalog default is. For a model with a router-published
+// agent definition the configured depth travels inside that definition; for
+// every other model (native entries such as gpt-5.6-luna, which the routed
+// agent sync cannot publish) this relay is the only place it can travel, so
+// `effortForModel` supplies the operator's configured per-model subagent depth
+// and the child is created at that depth instead of the catalog default. An
+// explicit reasoning_effort always wins, and an unconfigured model is left
+// untouched.
+//
 // `model` is the routed session's model (route.slug). Returns a rewritten item
 // only when the call carries no model of its own; otherwise returns the item
 // untouched.
-export function injectSessionModelForSpawnCalls(item, model) {
+export function injectSessionModelForSpawnCalls(item, model, effortForModel) {
   if (!isSpawnModelCall(item)) return item;
   if (typeof model !== "string" || !model) return item;
   if (typeof item.arguments !== "string") return item;
@@ -649,7 +659,19 @@ export function injectSessionModelForSpawnCalls(item, model) {
   if (typeof args !== "object" || args === null || Array.isArray(args)) return item;
   if (args.model !== undefined && !isSubagentSpawnCall(item)) return item;
   if (args.target?.type === "chatgptWorkCloud") return item;
-  if (typeof args.model === "string" && args.model) return item;
+  if (typeof args.model === "string" && args.model) {
+    // An explicit subagent model keeps its own depth. When it has none, the
+    // operator's configured depth for that model is the documented default.
+    if (!isSubagentSpawnCall(item)) return item;
+    if (args.reasoning_effort !== undefined && args.reasoning_effort !== null) return item;
+    const slug = args.model.trim();
+    const effort = typeof effortForModel === "function" ? effortForModel(slug) : undefined;
+    if (typeof effort !== "string" || !effort.trim()) return item;
+    return {
+      ...item,
+      arguments: JSON.stringify({ ...args, reasoning_effort: effort.trim() }),
+    };
+  }
   return { ...item, arguments: JSON.stringify({ ...args, model }) };
 }
 
@@ -1593,6 +1615,12 @@ export function flattenToolSearchHistory(
   const initialNameAliases = new Map(
     NAME_ALIASES.get(namespaces)?.nativeToProvider || [],
   );
+  // The live tools' own wire spellings, captured before any discovery mints an
+  // alias of its own. `visibleNames` holds provider-facing names, and on a
+  // route that aliases collisions a discovery of the same wire spelling is
+  // handed a different one -- so comparing provider names alone let the stale
+  // discovered schema back in beside the live tool it was supposed to lose to.
+  const liveWireNames = new Set(NAME_ALIASES.get(namespaces)?.wireOwners?.keys() || []);
   const definitionOwnersByName = new Map();
   const discoveries = [];
   const discoveriesByOutputIndex = new Map();
@@ -1603,8 +1631,12 @@ export function flattenToolSearchHistory(
     for (const candidate of discoveredProviderTools(item.tools, namespaces)) {
       const name = providerFunctionName(candidate.tool);
       if (!name) continue;
+      const wireName = candidate.native
+        ? `${candidate.native.namespace}${NAMESPACE_DELIMITER}${candidate.native.name}`
+        : candidate.nativeName;
       const priorOwner = definitionOwnersByName.get(name);
-      const shadowedByClient = visibleNames.has(name) && !priorOwner;
+      const shadowedByClient =
+        (visibleNames.has(name) || liveWireNames.has(wireName)) && !priorOwner;
       const record = {
         ...candidate,
         name,
@@ -2229,6 +2261,10 @@ function sanitizeSpawnAgentModel(item, lookups) {
 // name (some models emit the unqualified form) is restored only when it is
 // unambiguous across every flattened namespace; a collision stays untouched
 // rather than guessing which runtime owns it.
+function providerFunctionNamespaceAbsent(item) {
+  return item?.namespace === undefined || item.namespace === null;
+}
+
 function functionRelayIdentityMatches(item, relay) {
   if (!relay || item?.type !== "function_call" || item.name !== relay.nativeName) return false;
   if (typeof relay.nativeNamespace === "string" && relay.nativeNamespace) {
@@ -2279,7 +2315,7 @@ function rewriteToolSearchFunctionCallItem(item, lookups, allowPlaceholder) {
     !relay ||
     item?.type !== "function_call" ||
     item.name !== relay.providerName ||
-    item.namespace !== undefined ||
+    !providerFunctionNamespaceAbsent(item) ||
     typeof item.call_id !== "string" ||
     !item.call_id
   ) {
@@ -2356,7 +2392,7 @@ function litellmCustomToolInput(argumentsText) {
 function rewriteCustomToolFunctionCallItem(item, lookups, allowPlaceholder) {
   if (
     item?.type !== "function_call" ||
-    item.namespace !== undefined ||
+    !providerFunctionNamespaceAbsent(item) ||
     !(lookups.customTools instanceof Map)
   ) {
     return undefined;
@@ -2387,7 +2423,7 @@ function customToolIdentity(value) {
 function customCallIdentityMatches(source, item, lookups) {
   if (typeof item.name !== "string" || !item.name) return false;
   if (source?.type === "function_call") {
-    if (source.namespace !== undefined) return false;
+    if (!providerFunctionNamespaceAbsent(source)) return false;
     const native = customToolIdentity(lookups.customTools?.get(source.name));
     return Boolean(native && native.name === item.name && native.namespace === item.namespace);
   }
@@ -2401,18 +2437,18 @@ function rewriteNamespaceFunctionCallItem(
   item,
   lookups,
   sessionModel,
-  { allowIncompleteToolSearch = false } = {},
+  { allowIncompleteToolSearch = false, effortForModel } = {},
 ) {
   if (!item || item.type !== "function_call") return undefined;
   if (!rawCodecItem(item, lookups) && !jsonArgumentsAreUnambiguous(item.arguments, { allowEmpty: true })) return undefined;
   const exactPlainProviderIdentity =
     lookups.identityAliases &&
-    item.namespace === undefined &&
+    providerFunctionNamespaceAbsent(item) &&
     lookups.plainToolNames?.has(item.name);
   const functionRelay = lookups.functionRelays instanceof Map
     ? lookups.functionRelays.get(item.name)
     : undefined;
-  if (functionRelay && item.namespace === undefined) {
+  if (functionRelay && providerFunctionNamespaceAbsent(item)) {
     if (allowIncompleteToolSearch && (item.arguments === undefined || item.arguments === "")) {
       return restoreFunctionRelayCall(item, functionRelay, item.arguments ?? "");
     }
@@ -2448,7 +2484,7 @@ function rewriteNamespaceFunctionCallItem(
   } else {
     const owners = lookups.bareToNamespaces.get(item.name);
     if (
-      item.namespace === undefined &&
+      providerFunctionNamespaceAbsent(item) &&
       !lookups.plainToolNames?.has(item.name) &&
       owners &&
       owners.size === 1
@@ -2466,24 +2502,29 @@ function rewriteNamespaceFunctionCallItem(
   // exact plain identity, not the app namespace. Do not infer app semantics
   // from the restored spelling after the lookup has already proved otherwise.
   if (!exactPlainProviderIdentity) {
-    rewritten = injectSessionModelForSpawnCalls(rewritten, sessionModel);
+    rewritten = injectSessionModelForSpawnCalls(rewritten, sessionModel, effortForModel);
   }
   rewritten = rewriteFunctionCallArguments(rewritten);
   return rewritten === item ? undefined : rewritten;
 }
 
-export function rewriteNamespaceFunctionCall(event, lookups, sessionModel) {
+export function rewriteNamespaceFunctionCall(event, lookups, sessionModel, {
+  effortForModel,
+} = {}) {
   const item = rewriteNamespaceFunctionCallItem(event?.item, lookups, sessionModel, {
     allowIncompleteToolSearch: event?.type === "response.output_item.added",
+    effortForModel,
   });
   return item ? { ...event, item } : undefined;
 }
 
-function rewriteOutputItems(output, lookups, sessionModel) {
+function rewriteOutputItems(output, lookups, sessionModel, { effortForModel } = {}) {
   if (!Array.isArray(output)) return undefined;
   let changed = false;
   const rewritten = output.map((item) => {
-    const next = rewriteNamespaceFunctionCallItem(item, lookups, sessionModel);
+    const next = rewriteNamespaceFunctionCallItem(item, lookups, sessionModel, {
+      effortForModel,
+    });
     if (!next) return item;
     changed = true;
     return next;
@@ -2494,7 +2535,7 @@ function rewriteOutputItems(output, lookups, sessionModel) {
 // Only the exact declared client-hook codec defers argument syntax to the
 // native hook. Identity, outer JSON, lifecycle and byte bounds stay enforced.
 function rawCodecItem(item, lookups) {
-  return item?.type === "function_call" && item.namespace === undefined &&
+  return item?.type === "function_call" && providerFunctionNamespaceAbsent(item) &&
     lookups?.customCodecs?.get(item.name)?.preserveRawArguments === true;
 }
 
@@ -2521,9 +2562,12 @@ function embeddedFunctionArgumentsAreUnambiguous(payload, lookups, rawArgumentsD
 // array instead of SSE `item` events. Restore both shapes through the same
 // exact request-local lookup so stream mode cannot change dispatch semantics.
 // Returns a copy only when at least one call was restored.
-export function rewriteNamespaceResponsePayload(payload, lookups, sessionModel) {
+export function rewriteNamespaceResponsePayload(payload, lookups, sessionModel, {
+  effortForModel,
+} = {}) {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return undefined;
-  let rewritten = rewriteNamespaceFunctionCall(payload, lookups, sessionModel) || payload;
+  let rewritten =
+    rewriteNamespaceFunctionCall(payload, lookups, sessionModel, { effortForModel }) || payload;
   let changed = rewritten !== payload;
 
   if (payload.type === "response.function_call_arguments.done") {
@@ -2538,13 +2582,15 @@ export function rewriteNamespaceResponsePayload(payload, lookups, sessionModel) 
     }
   }
 
-  const output = rewriteOutputItems(rewritten.output, lookups, sessionModel);
+  const output = rewriteOutputItems(rewritten.output, lookups, sessionModel, { effortForModel });
   if (output) {
     rewritten = { ...rewritten, output };
     changed = true;
   }
 
-  const responseOutput = rewriteOutputItems(rewritten.response?.output, lookups, sessionModel);
+  const responseOutput = rewriteOutputItems(rewritten.response?.output, lookups, sessionModel, {
+    effortForModel,
+  });
   if (responseOutput) {
     rewritten = {
       ...rewritten,
@@ -2724,6 +2770,7 @@ export class NamespaceToolCallTransform extends Transform {
   #requiresCodec = false;
   #lookups;
   #sessionModel;
+  #effortForModel;
   #pendingInterrupts;
   #injectOnly = false;
   #interruptedTargets = new Set();
@@ -2744,6 +2791,8 @@ export class NamespaceToolCallTransform extends Transform {
     super();
     this.#lookups = buildNamespaceLookups(namespaces);
     this.#sessionModel = sessionModel;
+    this.#effortForModel =
+      typeof options.effortForModel === "function" ? options.effortForModel : undefined;
     this.#pendingInterrupts = Array.isArray(options.pendingInterrupts)
       ? [...options.pendingInterrupts]
       : [];
@@ -2873,6 +2922,7 @@ export class NamespaceToolCallTransform extends Transform {
           payload,
           this.#lookups,
           this.#sessionModel,
+          { effortForModel: this.#effortForModel },
         );
         if (rewritten) payload = rewritten;
       }
@@ -4133,7 +4183,9 @@ export class NamespaceToolCallTransform extends Transform {
         }
       }
       if (!this.#injectOnly) {
-        const next = rewriteNamespaceResponsePayload(event, this.#lookups, this.#sessionModel);
+        const next = rewriteNamespaceResponsePayload(event, this.#lookups, this.#sessionModel, {
+          effortForModel: this.#effortForModel,
+        });
         if (next) {
           event = next;
           changed = true;

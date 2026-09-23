@@ -25,11 +25,12 @@
 // compaction fires before a completion can overrun the window the entry just
 // declared. Where it does not, the id keeps the conservative default and says
 // so in its own description rather than declaring a window a full-length
-// answer can walk off the end of. Two live free ids are therefore absent from
-// this table entirely, because neither their window nor an effort ladder
-// survives that test: `mimo-v2.5-free` (200,000 window, 32,000 output, so
-// 0.85 leaves 30,000) and `nemotron-3.5-lightning-free` (262,144 window and a
-// 262,144 output limit, which no ratio can reserve room for). Both publish an
+// answer can walk off the end of. Three live free ids are therefore absent
+// from this table entirely, because neither their window nor an effort ladder
+// survives that test: `mimo-v2.5-free` and `mimo-v2.6-flash-free` (each a
+// 200,000 window against a 32,000 output limit, so 0.85 leaves 30,000) and
+// `nemotron-3.5-lightning-free` (262,144 window and a 262,144 output limit,
+// which no ratio can reserve room for). All three publish an
 // empty `reasoning_options`. They keep the stock "conservative default
 // metadata" description, which is this repository's existing way of saying
 // every value in the entry is a default rather than a documented capability.
@@ -210,7 +211,11 @@ const CURATION_ROUTES = Object.freeze({
       "thinkingmachines/inkling-small",
       "xai/grok-4.5",
       "xai/grok-4.6",
+      "xai/grok-4.7",
       "xiaomi/mimo-v2.5-pro",
+      "xiaomi/mimo-v2.6-flash",
+      "xiaomi/mimo-v2.6-pro",
+      "xiaomi/mimo-v2.6-pro-ultraspeed",
       "z-ai/glm-5.3-flash",
       "zai-org/GLM-5.2",
       "zai-org/GLM-5.2-Fast",
@@ -235,13 +240,13 @@ const CURATION_ROUTES = Object.freeze({
       "qwen3.7-plus",
       "qwen3.8-flash",
       "qwen3.8-max",
-      "union-alpha",
     ]),
     responsesProvider: "opencode-go-responses",
     responsesModels: Object.freeze([
       "gpt-5.6-luna",
       "grok-4.5",
       "grok-4.6",
+      "grok-4.7",
       "muse-spark-1.2-contributor",
       "muse-spark-1.3-contributor",
     ]),
@@ -264,6 +269,8 @@ const CURATION_ROUTES = Object.freeze({
       "longcat-2.0",
       "mimo-v2.5",
       "mimo-v2.5-pro",
+      "mimo-v2.6-flash",
+      "mimo-v2.6-pro",
       "qwen3.5-plus",
       "x-preview-f",
     ]),
@@ -283,6 +290,7 @@ const CURATION_ROUTES = Object.freeze({
       "hy3-free",
       "laguna-s-2.1-free",
       "mimo-v2.5-free",
+      "mimo-v2.6-flash-free",
       "nemotron-3-ultra-free",
       "nemotron-3.5-lightning-free",
     ]),

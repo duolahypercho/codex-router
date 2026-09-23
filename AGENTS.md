@@ -1492,48 +1492,41 @@ a bridge **engine** for other text-only models as well, so a future Flash route
 on a new reseller is sourced from that reseller's own catalog rather than
 inherited from this paragraph.
 
-## Union Alpha on OpenCode Go Messages must compact above the tool floor
+## OpenCode Go Messages hops must fit Console Go's own limits
 
-OpenCode publishes Union Alpha (`union-alpha` on `/zen/go/v1/messages`) with a
-262,144-token window and a 131,072-token output. Compact-at-window-minus-output
-is 131,072. Console Go also tokenizes independently of Codex and 400s when the
-prompt plus completion does not fit any backend (`Prompt too long … including
-the completion`, later `about 434983 tokens estimated` against 262,144). That
-is not quota and not a truncated tool-call repair. Do not classify it as
-`out_of_usage`. Do not invent effort rungs: OpenCode documents reasoning but
-publishes `reasoning_options=[]`, so the stored ladder stays the conservative
-single `high`.
+Console Go tokenizes independently of Codex and 400s when the prompt plus
+completion does not fit any backend (`Prompt too long … including the
+completion`, later `about 434983 tokens estimated` against 262,144). That is
+not quota and not a truncated tool-call repair. Do not classify it as
+`out_of_usage`.
 
-Do not compact below the unavoidable Desktop prefix. Live Union Alpha turns
-report ~88–108k cached input tokens from the tool list alone. Compact-at-80,000
-therefore fired after every skill read, kcr2 kept a 1,024-byte source excerpt,
-and the model re-read ImageGen in a loop. The checked-in route keeps the
-advertised 262,144 window and compacts at 180,000, above that floor. The
-Messages hop always sends `max_tokens` / `max_output_tokens` at 32,768 —
-OpenCode's own completion reserve — including when Codex omitted the field,
-so a compact request cannot re-reserve the model's advertised 131,072 output.
-The catalog publishes that same 32,768 as `maxOutputTokens` (OpenCode client
-`limit.output`) so a local `rendered + output > window` check cannot refuse a
-prompt the hop would have accepted. Do not copy that cap onto OpenRouter or
-Cline Union Alpha routes without their own evidence.
+Do not compact below the unavoidable Desktop prefix. Live turns report
+~88–108k cached input tokens from the tool list alone, so a compact threshold
+under that floor fires after every skill read, kcr2 keeps a 1,024-byte source
+excerpt, and the model re-reads the file in a loop. A route that measured a
+completion reserve smaller than its advertised output publishes that reserve
+as `maxOutputTokens` (OpenCode client `limit.output`) so a local
+`rendered + output > window` check cannot refuse a prompt the hop would have
+accepted. Do not copy a measured cap onto another provider's route without
+that route's own evidence.
 
-OpenCode's tokenizer can still count a thread above 262,144 when Codex reports
-~90–120k. Compact overflow may retry a larger-window model, including a
-same-family OpenCode Go 1M route such as `opencode-go/glm-5.3-flash`, without
-recording a provider cooldown. Compact failures are translated to
-`context_length_exceeded` rather than echoing LiteLLM's model-group wrapper.
-Ordinary turns still never swap on HTTP 400. If nothing configured can hold
-the prompt, start a new Codex task. Do not copy this hop onto turn failover.
+OpenCode's tokenizer can still count a thread above its advertised window when
+Codex reports far less. Compact overflow may retry a larger-window model,
+including a same-family OpenCode Go 1M route such as
+`opencode-go/glm-5.3-flash`, without recording a provider cooldown. Compact
+failures are translated to `context_length_exceeded` rather than echoing
+LiteLLM's model-group wrapper. Ordinary turns still never swap on HTTP 400. If
+nothing configured can hold the prompt, start a new Codex task. Do not copy
+this hop onto turn failover.
 
 Console Go also 400s when a single `messages[N].content` exceeds 2,500,000
 characters. A live ImageGen function_call_output (1536×1024 PNG, 2.03 MiB,
-2,707,238-character data URL) was stored by Codex, then the next Union Alpha
-turn failed with `messages[9].content exceeds maximum length of 2500000`.
-The Chat Completions image hoist keeps those bytes and still overflows. The
-OpenCode hop replaces an oversized image payload with a labeled stub so the
-turn can finish; it does not invent image bytes and does not copy this cap
-onto OpenRouter or Cline. This is not `context_length_exceeded` and is not
-quota.
+2,707,238-character data URL) was stored by Codex, then the next turn failed
+with `messages[9].content exceeds maximum length of 2500000`. The Chat
+Completions image hoist keeps those bytes and still overflows. The OpenCode
+hop replaces an oversized image payload with a labeled stub so the turn can
+finish; it does not invent image bytes and does not copy this cap onto
+OpenRouter or Cline. This is not `context_length_exceeded` and is not quota.
 
 ## A provider whose models each name their own endpoint
 
@@ -1993,8 +1986,8 @@ purpose; several of them exist because the obvious wider version is wrong.
    Compaction is the one exception: a context-length 400 on
    `/responses/compact` may retry a larger-window model, including a
    same-family sibling, without recording a cooldown. Ordinary turns still
-   never swap on 400 and still never hop inside the family. See "Union Alpha
-   on OpenCode Go Messages compacts below window-minus-output".
+   never swap on 400 and still never hop inside the family. See "OpenCode Go
+   Messages hops must fit Console Go's own limits".
 5. **A cooldown is only ever a window the provider itself named.** Derived from
    `Retry-After`, `cooldownUntil`, or a wall-clock reset the provider stated in
    its own refusal body — Z.ai's Coding Plan sends "Your limit will reset at
@@ -2454,8 +2447,9 @@ every Chat Completions route (measured on `commandcode/hy4-preview` and
    `src/grok-reasoning-summary-compat.mjs` attaches the lifecycle repair to
    every provider whose `protocol` is Chat Completions (`openai`, the default)
    **or Anthropic Messages** (`anthropic`). LiteLLM still sets
-   `use_chat_completions_api: true` for Anthropic routes, so Union Alpha and
-   `commandcode-messages` arrive as the same message-first hashed summary
+   `use_chat_completions_api: true` for Anthropic routes, so
+   `opencode-go-messages` and `commandcode-messages` arrive as the same
+   message-first hashed summary
    stream. Direct `deepseek` is excluded because
    `DeepseekToolMessageCompatTransform` already repairs its bridge, and
    `openai-responses` providers skip this bridge. Widening it to another
@@ -2464,7 +2458,7 @@ every Chat Completions route (measured on `commandcode/hy4-preview` and
    `content_part.done` `reasoning_text` before `output_text.done`. That close
    is thinking leaking onto the message part, not the end of the answer:
    rewriting it to `output_text` while text is still arriving truncates the
-   visible reply (Union Alpha stopped at `Union Alpha (`). Drop the premature
+   visible reply (a live identity answer stopped mid-sentence). Drop the premature
    close and only rewrite one that follows a grown `output_text.done`. The
    drop must still apply when no `reasoning_summary_text.delta` has opened
    the repair — a live ImageGen turn streamed the prefix, closed as
@@ -2812,6 +2806,53 @@ the same OS user to sign in or authorize once per harness buys nothing.
   reads as expired.
 - `doctor` reports it as its own line, because "open Codex once" is the fix and
   nothing else would say so.
+
+## The approval reviewer is the one native turn that may be singled out
+
+`native-redirect.mjs` is deliberately all-or-nothing, and its own comment says
+why: native turns "carry no reliable marker separating background work from a
+deliberately picked GPT model". Codex's automatic approval reviewer is the
+exception. It arrives under its own hidden slug, `codex-auto-review`, so it can
+be singled out without ever touching a GPT model the operator chose.
+
+That matters because the reviewer's quota is not the session's. With `Use
+Router with ChatGPT` on, an external model can answer the turn while every
+`Approve for me` still spends ChatGPT quota, so an exhausted plan leaves a
+session that reasons and proposes commands but cannot run the ones that need
+review (#787). `src/auto-review-fallback.mjs` lets the operator name a routed
+model for exactly those reviews.
+
+1. **Only a refusal the reviewer could not run may engage it.** The verdict
+   comes from `classifyRoutedFailure`, the routed path's own classifier, which
+   already puts an entitlement refusal ahead of a quota one, ignores every 5xx
+   and deterministic 4xx, and reads a reset time only where the upstream stated
+   one. Do not grow a second classifier here; two definitions of "out of quota"
+   is one more than this repository can keep correct.
+2. **A `deny` is a decision, not a failure.** It arrives as HTTP 200, so it can
+   never reach the classifier — but say it in a test anyway, because asking a
+   second model to re-review a command the first refused is the one outcome the
+   issue names as unacceptable. The same holds for any answer at all: the first
+   native answer clears the window, the rule `clearProviderCooldown` follows.
+3. **The window is the upstream's, capped at six hours**, like a provider
+   cooldown. A refusal that named nothing gets sixty seconds — enough that a
+   burst of approvals in one minute does not each pay for the same rejection,
+   short enough that a quota which returns is noticed almost at once. Never
+   invent a longer one.
+4. **The first failing review is not rescued.** The refusal is relayed exactly
+   as ChatGPT wrote it and the window is recorded; the *next* approval goes to
+   the configured reviewer. Rescuing the failing turn would mean rebuilding a
+   native request as a routed one mid-flight, which is the native/routed
+   crossing the "Not implemented: the native ChatGPT tier" note above refuses
+   to make from the test suite alone. The pre-flight redirect reuses the
+   crossing `native-redirect` already ships, at the one point it is safe.
+5. **Never silent.** The log line is not gated on `CODEX_ROUTER_QUIET`, the
+   usage row carries `autoReviewFallback`, and
+   `control auto-review-fallback status` reports the configured reviewer, the
+   window, and which reviewer the next approval will actually use.
+6. Coverage lives in `test/auto-review-fallback.test.mjs` (state, classifier
+   boundary, window arithmetic) and the two `#787` cases in
+   `test/routing.test.mjs` (end to end, including that a `deny` is never
+   retried through another model). Both router cases fail without the hooks.
 
 ## A provider-prefixed slug is never forwarded to ChatGPT
 

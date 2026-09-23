@@ -267,7 +267,7 @@ test("the current OpenCode catalogs remain fully fetchable without preselecting 
     "kimi-k2.7-code", "kimi-k3", "longcat-2.0", "mimo-v2-omni", "mimo-v2-pro", "mimo-v2.5",
     "mimo-v2.5-pro", "minimax-m2.5", "minimax-m2.7", "minimax-m3",
     "muse-spark-1.2-contributor", "muse-spark-1.3-contributor", "omen-alpha", "qwen3.5-plus", "qwen3.6-plus",
-    "qwen3.7-max", "qwen3.7-plus", "qwen3.8-flash", "qwen3.8-max", "union-alpha",
+    "qwen3.7-max", "qwen3.7-plus", "qwen3.8-flash", "qwen3.8-max",
   ];
   assert.deepEqual(
     modelIds({ data: goLive.map((id) => ({ id })) }, PROVIDERS.get("opencode-go")),
@@ -278,10 +278,10 @@ test("the current OpenCode catalogs remain fully fetchable without preselecting 
 test("the checked-in OpenCode Go set matches the official current-model table", () => {
   const documented = [
     "deepseek-v4-flash", "deepseek-v4-flash-vision-exp", "deepseek-v4-pro", "deepseek-v4.1-flash", "glm-5", "glm-5.1", "glm-5.2", "glm-5.3", "glm-5.3-flash",
-    "gpt-5.6-luna", "grok-4.5", "grok-4.6", "hy3", "hy4-preview", "kimi-k2.5", "kimi-k2.6", "kimi-k2.7-code", "kimi-k3", "longcat-2.0",
-    "mimo-v2.5", "mimo-v2.5-pro", "minimax-m2.5", "minimax-m2.7", "minimax-m3",
+    "gpt-5.6-luna", "grok-4.5", "grok-4.6", "grok-4.7", "hy3", "hy4-preview", "kimi-k2.5", "kimi-k2.6", "kimi-k2.7-code", "kimi-k3", "longcat-2.0",
+    "mimo-v2.5", "mimo-v2.5-pro", "mimo-v2.6-flash", "mimo-v2.6-pro", "minimax-m2.5", "minimax-m2.7", "minimax-m3",
     "muse-spark-1.2-contributor", "muse-spark-1.3-contributor", "qwen3.5-plus", "qwen3.6-plus", "qwen3.7-max",
-    "qwen3.7-plus", "qwen3.8-flash", "qwen3.8-max", "union-alpha",
+    "qwen3.7-plus", "qwen3.8-flash", "qwen3.8-max",
   ].sort();
   const registered = MODELS
     .filter(({ provider }) => ["opencode-go", "opencode-go-messages", "opencode-go-responses"].includes(provider))

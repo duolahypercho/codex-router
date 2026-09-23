@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { grokOAuthStatus, grokSessionEntry } from "./grok-oauth-status.mjs";
 import { ensureFreshGrokOAuthToken } from "./grok-oauth-session.mjs";
 import { ensureFreshKimiOAuthToken, kimiIdentityHeaders } from "./kimi-oauth-session.mjs";
+import { resolveKimiCodeEnvironment } from "./kimi-region.mjs";
 import {
   assertGitHubCopilotCredential,
   githubCopilotAccountHeaders,
@@ -104,6 +105,32 @@ export function kimiApiBalanceMetrics(payload, currency = "USD") {
       Number.isFinite(voucher) ? `Voucher ${voucher.toFixed(2)}` : undefined,
     ].filter(Boolean).join(" · "),
     available: payload.status !== false && (payload.code === undefined || payload.code === 0),
+  }];
+}
+
+// StepFun's GET /v1/accounts answers a prepaid or postpaid account with the
+// usable `balance` plus its cash/voucher split. A postpaid account's balance is
+// what is left of the billing arrangement rather than a wallet, so the account
+// type rides in the detail line instead of being flattened away.
+export function stepFunBalanceMetrics(payload, currency = "USD") {
+  const value = numberValue(payload?.balance);
+  if (!Number.isFinite(value)) return [];
+  const cash = numberValue(payload.total_cash_balance);
+  const voucher = numberValue(payload.total_voucher_balance);
+  const type = typeof payload.type === "string" && payload.type.trim()
+    ? payload.type.trim()
+    : undefined;
+  return [{
+    kind: "balance",
+    label: "API balance",
+    value,
+    currency,
+    detail: [
+      type === "prepaid" ? "Prepaid" : type === "postpaid" ? "Postpaid" : undefined,
+      Number.isFinite(cash) ? `Cash ${cash.toFixed(2)}` : undefined,
+      Number.isFinite(voucher) ? `Voucher ${voucher.toFixed(2)}` : undefined,
+    ].filter(Boolean).join(" · "),
+    available: true,
   }];
 }
 
@@ -288,7 +315,7 @@ export function opencodeGoUsageMetrics(payload) {
 
 // Command Code's billing API reports plan windows as used/cap credit
 // counters; resetAt is an epoch that stays 0 until the window first opens.
-export function commandCodeCreditsMetrics(payload) {
+export function commandCodeCreditsMetrics(payload, { summary, subscription } = {}) {
   const windows = payload?.windowLimits;
   if (!windows || typeof windows !== "object") return [];
   const windowMetric = (label, detail) => {
@@ -334,7 +361,53 @@ export function commandCodeCreditsMetrics(payload) {
     ...balance,
     windowMetric("5-hour limit", windows.fiveHour),
     windowMetric("Weekly limit", windows.weekly),
+    commandCodeMonthlyMetric(credits, summary, subscription),
   ].filter(Boolean);
+}
+
+// The credits route carries no monthly window and no monthly grant, only the
+// remaining plan balance. The billing-period spend from the usage summary plus
+// that remainder recovers the grant without a plan table; the subscription
+// supplies the period end. Any missing piece yields no metric rather than a
+// confident percentage, and a past-due subscription is not metered at all,
+// matching the provider's own Studio page.
+function commandCodeMonthlyMetric(credits, summary, subscription) {
+  const remaining = numberValue(credits?.monthlyCredits);
+  const used = numberValue(summary?.totalMonthlyCredits);
+  if (!Number.isFinite(remaining) || !Number.isFinite(used) || remaining < 0 || used < 0) return undefined;
+  const limit = remaining + used;
+  if (limit <= 0) return undefined;
+  const plan = commandCodeSubscription(subscription);
+  if (plan?.status === "past_due") return undefined;
+  const periodEnd = plan?.currentPeriodEnd;
+  const resetRaw = typeof periodEnd === "string" && !/^\d+$/.test(periodEnd.trim())
+    ? Date.parse(periodEnd)
+    : numberValue(periodEnd);
+  const resetMs = Number.isFinite(resetRaw) && resetRaw > 0
+    ? resetRaw > 1e12 ? resetRaw : resetRaw * 1_000
+    : undefined;
+  return quotaMetric(
+    "Monthly limit",
+    {
+      limit,
+      used,
+      remaining,
+      ...(resetMs !== undefined ? { resetTime: new Date(resetMs).toISOString() } : {}),
+    },
+    "credits",
+  );
+}
+
+function commandCodeSubscription(payload) {
+  const list = Array.isArray(payload)
+    ? payload
+    : Array.isArray(payload?.subscriptions)
+      ? payload.subscriptions
+      : payload && typeof payload === "object"
+        ? [payload.subscription ?? payload]
+        : [];
+  const entries = list.filter((entry) => entry && typeof entry === "object");
+  return entries.find((entry) => entry.status === "active" || entry.status === "trialing") ?? entries[0];
 }
 
 // Venice funds inference from three independent pools -- funded USD, VCU from
@@ -506,6 +579,27 @@ async function kimiApiAccount(fetchImpl, providerId = "kimi-api") {
   return { status: "available", source: "official-api", metrics };
 }
 
+// Both StepFun platforms publish the same account endpoint on their own host.
+// The China console bills in CNY, the global one in USD, and a custom base URL
+// is never queried: an operator-pointed endpoint is not StepFun's billing API.
+async function stepFunAccount(fetchImpl, providerId) {
+  const provider = PROVIDERS.get(providerId);
+  const credential = resolveProviderCredential(provider);
+  if (!credential) return { status: "not-configured", source: "official-api", metrics: [] };
+  const baseURL = (process.env[provider.baseUrlEnv] || provider.baseUrl).replace(/\/+$/, "");
+  const host = new URL(baseURL).hostname;
+  if (!new Set(["api.stepfun.ai", "api.stepfun.com"]).has(host)) {
+    return withHeaderQuota(
+      providerId,
+      localOnly("Account balance is unavailable for a custom StepFun endpoint"),
+    );
+  }
+  const payload = await requestJson(`${baseURL}/accounts`, credential.value, {}, fetchImpl);
+  const metrics = stepFunBalanceMetrics(payload, host === "api.stepfun.com" ? "CNY" : "USD");
+  if (!metrics.length) throw new Error("StepFun account response did not include a balance");
+  return { status: "available", source: "official-api", metrics };
+}
+
 async function chutesAccount(fetchImpl) {
   const provider = PROVIDERS.get("chutes");
   const credential = resolveProviderCredential(provider);
@@ -588,7 +682,7 @@ async function kimiOAuthAccount(fetchImpl) {
   if (!status.configured) return { status: "not-configured", source: "official-api", metrics: [] };
   const accessToken = await ensureFreshKimiOAuthToken();
   const payload = await requestJson(
-    "https://api.kimi.com/coding/v1/usages",
+    `${resolveKimiCodeEnvironment().apiBase}/usages`,
     accessToken,
     kimiIdentityHeaders(),
     fetchImpl,
@@ -790,13 +884,13 @@ async function commandCodeAccount(fetchImpl) {
     return fallback("Account usage is unavailable for a custom Command Code endpoint");
   }
   try {
-    const payload = await requestJson(
-      "https://api.commandcode.ai/alpha/billing/credits",
-      credential.value,
-      {},
-      fetchImpl,
-    );
-    const metrics = commandCodeCreditsMetrics(payload);
+    const read = (route) => requestJson(`https://api.commandcode.ai/alpha/${route}`, credential.value, {}, fetchImpl);
+    const [payload, summary, subscription] = await Promise.all([
+      read("billing/credits"),
+      read("usage/summary").catch(() => undefined),
+      read("billing/subscriptions").catch(() => undefined),
+    ]);
+    const metrics = commandCodeCreditsMetrics(payload, { summary, subscription });
     if (!metrics.length) {
       return fallback("Command Code reported no plan windows; showing router traffic");
     }
@@ -915,6 +1009,9 @@ async function accountUsageFor(providerId, fetchImpl) {
     if (providerId === "deepseek") return await deepSeekAccount(fetchImpl);
     if (providerId === "kimi-api" || providerId === "kimi-api-cn") {
       return await kimiApiAccount(fetchImpl, providerId);
+    }
+    if (providerId === "stepfun-api" || providerId === "stepfun-api-cn") {
+      return await stepFunAccount(fetchImpl, providerId);
     }
     if (providerId === "kimi-oauth") return await kimiOAuthAccount(fetchImpl);
     if (providerId === "grok-oauth") return await grokOAuthAccount(fetchImpl);

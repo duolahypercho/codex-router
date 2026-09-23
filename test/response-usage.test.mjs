@@ -324,6 +324,50 @@ test("adds up the usage of two attempts at one turn", () => {
   assert.equal(mergeTokenUsage(undefined, undefined), undefined);
 });
 
+test("billed counts are added up like every other measurement", () => {
+  // A provider that meters spend separately from the prompt it reports is the
+  // one this matters for. Dropping the billed halves left the pair reported at
+  // one attempt's cost, and provider-usage.mjs reads `billedInputTokens ??
+  // inputTokens`, so the turns that cost twice were the ones counted low.
+  assert.deepEqual(
+    mergeTokenUsage(
+      { inputTokens: 50_000, outputTokens: 100, totalTokens: 50_100, billedInputTokens: 150_000, billedOutputTokens: 135 },
+      { inputTokens: 51_000, outputTokens: 100, totalTokens: 51_100, billedInputTokens: 151_000, billedOutputTokens: 135 },
+    ),
+    {
+      inputTokens: 101_000,
+      outputTokens: 200,
+      totalTokens: 101_200,
+      billedInputTokens: 301_000,
+      billedOutputTokens: 270,
+    },
+  );
+  // Reported by one attempt and not the other, exactly like the cache count.
+  assert.deepEqual(
+    mergeTokenUsage(
+      { inputTokens: 10, outputTokens: 1, totalTokens: 11 },
+      { inputTokens: 10, outputTokens: 1, totalTokens: 11, billedInputTokens: 25 },
+    ),
+    { inputTokens: 20, outputTokens: 2, totalTokens: 22, billedInputTokens: 25 },
+  );
+  // Reported by neither, the key stays absent rather than becoming a zero:
+  // `billedInputTokens ?? inputTokens` has to fall through to the reported one.
+  const plain = mergeTokenUsage(
+    { inputTokens: 10, outputTokens: 1, totalTokens: 11 },
+    { inputTokens: 10, outputTokens: 1, totalTokens: 11 },
+  );
+  assert.equal("billedInputTokens" in plain, false);
+  assert.equal("billedOutputTokens" in plain, false);
+  // A measured zero survives.
+  assert.equal(
+    mergeTokenUsage(
+      { inputTokens: 1, outputTokens: 1, totalTokens: 2, billedOutputTokens: 0 },
+      { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+    ).billedOutputTokens,
+    0,
+  );
+});
+
 test("captures final SSE usage without changing streamed bytes", async () => {
   const body = [
     "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"hi\"}\n\n",

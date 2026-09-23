@@ -89,3 +89,61 @@ test("Gemini CLI is named as itself", () => {
   });
   assert.match(notice, /^Gemini CLI is running right now \(PID 900\)/);
 });
+
+// Quitting the desktop app leaves Chromium's crash reporter behind, reparented
+// to launchd, under the same framework path the Codex pattern matches. Seen on
+// a host where Codex had been closed for hours and the install still said to
+// quit it.
+const CRASHPAD =
+  "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/153.0.8010.53/Helpers/browser_crashpad_handler --monitor-self --monitor-self-annotation=ptype=crashpad-handler --handshake-fd=5";
+
+test("orphaned crash reporters are not a running client", () => {
+  const spawn = fakePs([
+    [1, 0, "/sbin/launchd"],
+    [71348, 1, CRASHPAD],
+    [71350, 1, CRASHPAD],
+  ]);
+  assert.deepEqual(runningClientProcesses("codex", { ...posix, spawn }), []);
+  assert.match(clientRestartNotice("codex", { ...posix, spawn }), /Codex is not running/);
+});
+
+test("a running app is still named when its crash reporters sit beside it", () => {
+  const notice = clientRestartNotice("codex", {
+    ...posix,
+    spawn: fakePs([
+      [71348, 1, CRASHPAD],
+      [71350, 1, CRASHPAD],
+      [4242, 1, "/Applications/ChatGPT.app/Contents/MacOS/ChatGPT"],
+      [4243, 4242, "/Applications/ChatGPT.app/Contents/Frameworks/ChatGPT Helper (Renderer).app/Contents/MacOS/ChatGPT Helper (Renderer) --type=renderer"],
+    ]),
+  });
+  assert.match(notice, /running right now \(PID 4242 and 1 other process\)/);
+});
+
+test("helpers that outlived their app are not a running client", () => {
+  const found = runningClientProcesses("codex", {
+    ...posix,
+    spawn: fakePs([
+      [4243, 1, "/Applications/ChatGPT.app/Contents/Frameworks/ChatGPT Helper (GPU).app/Contents/MacOS/ChatGPT Helper (GPU) --type=gpu-process"],
+      [4244, 1, "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Helpers/chrome_crashpad_handler"],
+    ]),
+  });
+  assert.deepEqual(found, []);
+});
+
+test("Windows crash reporters are ignored the same way", () => {
+  const win = { platform: "win32" };
+  const orphans = fakePs([
+    [5100, 4, '"C:\\Users\\x\\AppData\\Local\\Programs\\cursor\\Cursor.exe" --type=crashpad-handler --user-data-dir=C:\\x'],
+    [5101, 4, '"C:\\Users\\x\\AppData\\Local\\Programs\\cursor\\resources\\crashpad_handler.exe" --database=C:\\x'],
+  ]);
+  assert.deepEqual(runningClientProcesses("cursor", { ...win, spawn: orphans }), []);
+  const running = fakePs([
+    [5100, 4, '"C:\\Users\\x\\AppData\\Local\\Programs\\cursor\\Cursor.exe" --type=crashpad-handler --user-data-dir=C:\\x'],
+    [5200, 4, '"C:\\Users\\x\\AppData\\Local\\Programs\\cursor\\Cursor.exe"'],
+  ]);
+  assert.match(
+    clientRestartNotice("cursor", { ...win, spawn: running }),
+    /^Cursor is running right now \(PID 5200\)/,
+  );
+});

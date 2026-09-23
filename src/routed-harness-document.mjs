@@ -22,7 +22,13 @@ import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileS
 import path from "node:path";
 
 import { protectPrivateFile } from "./file-security.mjs";
-import { scanYamlDocument, spliceYamlBlock, yamlNode, yamlScalar } from "./yaml-structure.mjs";
+import {
+  scanYamlDocument,
+  spliceYamlBlock,
+  unaccountedLines,
+  yamlNode,
+  yamlScalar,
+} from "./yaml-structure.mjs";
 
 /** Reads a client's document, or "" when it does not exist yet. */
 export function readHarnessDocument(target) {
@@ -224,39 +230,6 @@ export function renderYamlMapping(value, indent = "", lines = []) {
 }
 
 /** Returns the document text with `keyPath` replaced by `value`, as block YAML. */
-// Lines inside `node`'s indented region that none of its registered children
-// account for.
-//
-// Two separate blind spots make `children.size` an unsafe proxy for "this node
-// holds nothing but ours":
-//
-//   - `children` is the lexer's map of mapping keys it was able to register. A
-//     block sequence, a merge key, or a key `PLAIN_KEY` declines is invisible
-//     there while still living inside the node. This is how removal came to
-//     splice away a whole `providers:` sequence and leave a zero-byte file.
-//   - `endIndex` deliberately stops before a trailing comment block, so a
-//     comment the publish step pushed below our key sits outside the node's
-//     own range while still being spliced away with it.
-//
-// So the region is walked by indentation -- every following line that is blank
-// or indented deeper than the node -- rather than read off `endIndex`.
-function unaccountedLines(document, node) {
-  const covered = new Set();
-  for (const child of node.children.values()) {
-    for (let index = child.index; index <= child.endIndex; index += 1) covered.add(index);
-  }
-  const rest = [];
-  for (let index = node.index + 1; index < document.lines.length; index += 1) {
-    const text = String(document.lines[index] ?? "");
-    if (/^\s*$/.test(text)) continue;
-    const indent = text.length - text.replace(/^\s*/, "").length;
-    if (indent <= node.indent) break;
-    if (covered.has(index)) continue;
-    rest.push({ index, text });
-  }
-  return rest;
-}
-
 export function applyYamlValue(contents, keyPath, value) {
   const document = scanYamlDocument(contents);
   const parent = keyPath.length > 1 ? yamlNode(document, keyPath.slice(0, -1)) : undefined;

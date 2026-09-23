@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "slug": "openrouter-decisions/jev-latest",
+      "gatewayModel": "openrouter-decisions-jev-latest",
+      "upstreamModel": "~typesafe/jev-latest",
+      "provider": "openrouter-decisions",
+      "listed": false,
+      "displayName": "Jev Latest (OpenRouter)",
+      "description": "OpenRouter Decisions judge for structured keep/drop compaction questions.",
+      "priority": 100,
+      "contextWindow": 32768,
+      "autoCompact": 13000,
+      "inputModalities": [
+        "text"
+      ],
+      "compHash": "openrouter-decisions-jev-latest-v1"
+    }
+  ]
+}
