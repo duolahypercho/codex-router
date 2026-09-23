@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "slug": "opencode-go-responses/grok-4.7",
+      "gatewayModel": "opencode-go-responses-grok-4-7",
+      "upstreamModel": "grok-4.7",
+      "provider": "opencode-go-responses",
+      "listed": true,
+      "displayName": "Grok 4.7 (opencode Go)",
+      "description": "Grok 4.7 through the opencode Go subscription using the Responses API documented by OpenCode.",
+      "priority": 30,
+      "defaultEffort": "high",
+      "reasoningLevels": [
+        {
+          "effort": "low",
+          "description": "Faster reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced reasoning"
+        },
+        {
+          "effort": "high",
+          "description": "Deep reasoning"
+        },
+        {
+          "effort": "xhigh",
+          "description": "Maximum reasoning depth"
+        }
+      ],
+      "contextWindow": 500000,
+      "autoCompact": 440000,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "compHash": "opencode-go-responses-grok-4-7-v1"
+    }
+  ]
+}

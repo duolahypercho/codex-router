@@ -13,6 +13,7 @@ import {
   MAX_CLI_WAIT_ATTEMPTS,
   MAX_LOGIN_ATTEMPTS,
   kimiCliInstallGuidance,
+  kimiLoginArgs,
 } from "./kimi-oauth-onboarding.mjs";
 import { PROVIDERS, providerNeedsNoKey } from "./model-registry.mjs";
 import { kimiOAuthStatus } from "./oauth-status.mjs";
@@ -20,6 +21,7 @@ import { grokOAuthStatus } from "./grok-oauth-status.mjs";
 import { antigravityOAuthStatus } from "./antigravity-oauth-status.mjs";
 import { SOURCE_ROOT } from "./paths.mjs";
 import { effectiveProviderCredentialStatus } from "./provider-api-key-routing.mjs";
+import { credentialSetupHint } from "./provider-credentials.mjs";
 import { providerOnboardingSnapshot } from "./provider-onboarding.mjs";
 import { defaultProviderIds, validateProviderIds } from "./provider-selection.mjs";
 import { commandOnPath, spawnableCommand } from "./spawnable-command.mjs";
@@ -138,7 +140,7 @@ function oauthSetupHint(provider) {
   if (provider.id === "antigravity-oauth") {
     return "run the Antigravity sign-in flow";
   }
-  return `run \`kimi login\` (install the Kimi Code CLI from ${KIMI_CLI_INSTALL_URL} first if needed)`;
+  return `run \`kimi login\` (\`kimi login --region global\` for a kimi.ai account; install the Kimi Code CLI from ${KIMI_CLI_INSTALL_URL} first if needed)`;
 }
 
 function executable(name) {
@@ -242,11 +244,15 @@ function onboardKimiOauth() {
       `Kimi Code CLI is required for OAuth. Install it from ${KIMI_CLI_INSTALL_URL}, then run setup again.`,
     );
   }
+  const loginArgs = kimiLoginArgs(promptLine(
+    "Which Kimi Code site holds your account? 1) kimi.com (mainland China) 2) kimi.ai (global)",
+    "1",
+  ));
   for (let attempt = 0; attempt < MAX_LOGIN_ATTEMPTS; attempt += 1) {
-    if (!confirm("Run `kimi login` now?")) {
+    if (!confirm(`Run \`kimi ${loginArgs.join(" ")}\` now?`)) {
       throw new Error("Kimi OAuth setup was cancelled.");
     }
-    tryRun(kimi, ["login"]);
+    tryRun(kimi, loginArgs);
     if (kimiOAuthStatus().configured) return;
     process.stdout.write("Kimi login did not produce a usable OAuth credential yet.\n");
   }
@@ -277,4 +283,30 @@ function onboardGrokOauth() {
     process.stdout.write("Grok login did not produce a usable OAuth credential yet.\n");
   }
   throw new Error("Grok OAuth login did not produce a usable credential after several attempts.");
+}
+
+export function configureProvider(provider, { guided, providerKeyCommand }) {
+  if (providerConfigured(provider)) return;
+  if (!guided) {
+    const setup = provider.kind === "oauth"
+      ? oauthSetupHint(provider)
+      : provider.credential?.resolver
+        ? credentialSetupHint(provider)
+        : `run \`${providerKeyCommand(provider.id)}\``;
+    throw new Error(`${provider.displayName} is selected but not configured; ${setup} first.`);
+  }
+  if (provider.credential?.resolver) {
+    throw new Error(
+      `${provider.displayName} is selected but not configured; ${credentialSetupHint(provider)} first.`,
+    );
+  }
+  if (provider.kind === "oauth") {
+    if (provider.id === "grok-oauth") onboardGrokOauth();
+    else onboardKimiOauth();
+    return;
+  }
+  if (!confirm(`Enter a ${provider.displayName} key securely now?`)) {
+    throw new Error(`${provider.displayName} setup was cancelled.`);
+  }
+  run(process.execPath, [path.join(SOURCE_ROOT, "src", "provider-key.mjs"), provider.id, "set"]);
 }

@@ -52,7 +52,8 @@ struct LocalizationTests {
   func labelsAreSelfDescribing() {
     // Somebody who cannot read the current language still has to find the way out.
     #expect(TrayLanguage.english.label == "English")
-    #expect(TrayLanguage.chinese.label == "中文")
+    #expect(TrayLanguage.chinese.label == "简体中文")
+    #expect(TrayLanguage.traditionalChinese.label == "繁體中文")
     #expect(TrayLanguage.arabic.label == "العربية")
     #expect(TrayLanguage.hindi.label == "हिन्दी")
     #expect(TrayLanguage.japanese.label == "日本語")
@@ -75,7 +76,7 @@ struct LocalizationTests {
 
   @Test(
     "each explicit language renders from its own table",
-    arguments: [TrayLanguage.arabic, .hindi, .japanese, .korean]
+    arguments: [TrayLanguage.traditionalChinese, .arabic, .hindi, .japanese, .korean]
   )
   func explicitLanguageUsesItsTable(language: TrayLanguage) {
     let original = RouterLanguage.selection
@@ -90,6 +91,7 @@ struct LocalizationTests {
   func keyParityAcrossLanguages() {
     let reference = Set(RouterChineseText.values.keys)
     let tables: [(String, [String: String])] = [
+      ("Traditional Chinese", RouterTraditionalChineseText.values),
       ("Arabic", RouterArabicText.values),
       ("Hindi", RouterHindiText.values),
       ("Japanese", RouterJapaneseText.values),
@@ -106,7 +108,7 @@ struct LocalizationTests {
 
   @Test(
     "session-sharing consent and status are translated in every explicit locale",
-    arguments: [TrayLanguage.chinese, .arabic, .hindi, .japanese, .korean]
+    arguments: [TrayLanguage.chinese, .traditionalChinese, .arabic, .hindi, .japanese, .korean]
   )
   func sessionSharingConsentIsLocalized(language: TrayLanguage) {
     let original = RouterLanguage.selection
@@ -129,7 +131,7 @@ struct LocalizationTests {
 
   @Test(
     "daily-usage fallback provenance is translated in every explicit locale",
-    arguments: [TrayLanguage.chinese, .arabic, .hindi, .japanese, .korean]
+    arguments: [TrayLanguage.chinese, .traditionalChinese, .arabic, .hindi, .japanese, .korean]
   )
   func dailyUsageFallbackIsLocalized(language: TrayLanguage) {
     let original = RouterLanguage.selection
@@ -161,6 +163,7 @@ struct LocalizationTests {
     "every translation keeps the specifiers its English source declares",
     arguments: [
       RouterChineseText.values,
+      RouterTraditionalChineseText.values,
       RouterArabicText.values,
       RouterHindiText.values,
       RouterJapaneseText.values,

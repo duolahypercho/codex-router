@@ -20,6 +20,7 @@ const {
   DSH_CATALOG_PATH,
   NATIVE_CATALOG_PATH,
   OPENCLAW_CATALOG_PATH,
+  ROUTED_HARNESS_CATALOG_PATHS,
 } = await import("../src/paths.mjs");
 
 function stageFile(filePath, contents) {
@@ -28,7 +29,10 @@ function stageFile(filePath, contents) {
 }
 
 function clearStagedFiles() {
-  for (const filePath of [CONFIG_PATH, CLAUDE_CATALOG_PATH, CURSOR_CATALOG_PATH, DSH_CATALOG_PATH, NATIVE_CATALOG_PATH, OPENCLAW_CATALOG_PATH]) {
+  for (const filePath of [
+    CONFIG_PATH, CLAUDE_CATALOG_PATH, CURSOR_CATALOG_PATH, DSH_CATALOG_PATH, NATIVE_CATALOG_PATH,
+    OPENCLAW_CATALOG_PATH, ...Object.values(ROUTED_HARNESS_CATALOG_PATHS),
+  ]) {
     rmSync(filePath, { force: true });
   }
 }
@@ -215,6 +219,24 @@ test("a config that exists but cannot be read still counts as installed", () => 
     assert.deepEqual(installedTargets(), ["codex"]);
   } finally {
     rmSync(CONFIG_PATH, { recursive: true, force: true });
+    clearStagedFiles();
+  }
+});
+
+test("a routed harness publication keeps the shared plane installed", () => {
+  try {
+    // opencode, pi, omp, Command Code, and Hermes are published *into* rather
+    // than installed *as*, so they are no `MODEL_ROUTER_TARGET`. They still
+    // hold the shared service open: `bin/disable` retires it only once this
+    // list is empty, and omitting them is how turning Codex off would stop
+    // opencode working.
+    stageFile(ROUTED_HARNESS_CATALOG_PATHS.opencode, "{}");
+    assert.deepEqual(installedTargets(), ["opencode"]);
+    stageFile(ROUTED_HARNESS_CATALOG_PATHS.hermes, "{}");
+    assert.deepEqual(installedTargets(), ["opencode", "hermes"]);
+    stageFile(CONFIG_PATH, "# BEGIN codex-router-managed\n# END codex-router-managed\n");
+    assert.deepEqual(installedTargets(), ["codex", "opencode", "hermes"]);
+  } finally {
     clearStagedFiles();
   }
 });

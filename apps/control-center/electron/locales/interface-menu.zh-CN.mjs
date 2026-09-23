@@ -1,0 +1,35 @@
+// @ts-check
+// Keep a separate reviewed locale, not a runtime script conversion.
+/** @satisfies {Record<keyof typeof import("./interface-menu.en.mjs").default, string>} */
+const messages = {
+  "tray.open": "打开控制中心",
+  "app.quit": "退出 Codex Router",
+  "app.about": "关于 Codex Router",
+  "app.services": "服务",
+  "app.hide": "隐藏 Codex Router",
+  "app.hideOthers": "隐藏其他应用",
+  "app.showAll": "显示全部",
+  "menu.file": "文件",
+  "window.close": "关闭窗口",
+  "menu.edit": "编辑",
+  "edit.undo": "撤销",
+  "edit.redo": "重做",
+  "edit.cut": "剪切",
+  "edit.copy": "复制",
+  "edit.paste": "粘贴",
+  "edit.selectAll": "全选",
+  "menu.view": "显示",
+  "view.reload": "重新加载",
+  "view.forceReload": "强制重新加载",
+  "view.developerTools": "切换开发者工具",
+  "view.actualSize": "实际大小",
+  "view.zoomIn": "放大",
+  "view.zoomOut": "缩小",
+  "view.fullScreen": "切换全屏",
+  "menu.window": "窗口",
+  "window.minimize": "最小化",
+  "window.zoom": "缩放",
+  "window.front": "前置全部窗口",
+  "menu.help": "帮助",
+};
+export default Object.freeze(messages);

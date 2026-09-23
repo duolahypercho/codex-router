@@ -599,13 +599,32 @@ export function assertMutationCompatibility(sourceRoot = discoverSourceRoot()) {
   );
 }
 
+// A crashing router child prints Node's whole uncaught-exception report: the
+// file and line, the source line that built the error, a caret, the message,
+// and the stack. Only the message says anything to the person reading it, so
+// keep that and drop the rest. A child that failed without throwing (a usage
+// message, a provider's own refusal) has no such report and is kept whole.
+function routerFailureSentence(text) {
+  const lines = text.split("\n");
+  const thrown = lines.findIndex((line) => /^(?:[A-Za-z_$][\w$]*)?Error: \S/.test(line.trim()));
+  if (thrown === -1) return text;
+  const message = [lines[thrown].trim().replace(/^(?:[A-Za-z_$][\w$]*)?Error:\s*/, "")];
+  // A message can wrap; keep following lines until the stack or a blank line.
+  for (const line of lines.slice(thrown + 1)) {
+    if (!line.trim() || /^\s+at\s/.test(line) || /^\s*\{/.test(line)) break;
+    message.push(line.trim());
+  }
+  const sentence = message.join(" ").trim();
+  return sentence || text;
+}
+
 export function safeFailure(message) {
   const text = String(message || "Router command failed.")
     .split("\n")
     .filter((line) => !SECRET_WORD.test(line))
     .join("\n")
     .replace(/(?:sk|key|token|secret)[-_A-Za-z0-9]{12,}/gi, "[redacted]");
-  return text.slice(0, 1000) || "Router command failed.";
+  return routerFailureSentence(text).slice(0, 1000) || "Router command failed.";
 }
 
 function killChildFallback(child) {

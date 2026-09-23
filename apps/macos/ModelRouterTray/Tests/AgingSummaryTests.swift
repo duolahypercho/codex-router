@@ -36,7 +36,11 @@ struct AgingSummaryTests {
   @Test("an idle pass under the floor names the floor")
   func idleUnderFloor() {
     let summary = stats(evaluated: 8, largest: 12_000).savingsSummary
-    #expect(summary == "No result over 32 KB in 8 requests (largest 12 KB)")
+    // Composed through the same table the card reads, so the assertion holds
+    // whatever language the process is rendering in.
+    #expect(
+      summary == routerFormat("No result over 32 KB in %d requests (largest %@)", 8, "12 KB")
+    )
   }
 
   @Test("an idle pass over the floor does not claim nothing was big enough")
@@ -45,8 +49,12 @@ struct AgingSummaryTests {
     // acted-after gate. Saying "no result over 32 KB (largest 40 KB)" would
     // contradict itself in one sentence.
     let summary = stats(evaluated: 5, largest: 40 * 1024).savingsSummary
-    #expect(summary?.contains("No result over 32 KB") == false)
-    #expect(summary == "Nothing aged yet in 5 requests (largest 40 KB)")
+    #expect(
+      summary != routerFormat("No result over 32 KB in %d requests (largest %@)", 5, "40 KB")
+    )
+    #expect(
+      summary == routerFormat("Nothing aged yet in %d requests (largest %@)", 5, "40 KB")
+    )
   }
 
   @Test("a pass that saved something reports the savings instead")
@@ -58,7 +66,13 @@ struct AgingSummaryTests {
       bytesSaved: 2 * 1024 * 1024,
       tokensSaved: 4_000,
     ).savingsSummary
-    #expect(summary?.hasPrefix("Saved ~") == true)
-    #expect(summary?.contains("across 3 requests") == true)
+    #expect(
+      summary == routerFormat(
+        "Saved ~%@ tokens (%@ MB) across %d requests",
+        ToolResultAgingStats.compactCount(4_000),
+        "2.0",
+        3
+      )
+    )
   }
 }

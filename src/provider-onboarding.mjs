@@ -20,9 +20,11 @@ import {
 } from "./provider-catalogs.mjs";
 import { curationProviderIds } from "./opencode-curation.mjs";
 import { kimiOAuthStatus } from "./oauth-status.mjs";
+import { resolveVertexAccessToken } from "./vertex-credentials.mjs";
 import {
   apiProvider,
   credentialLabel,
+  credentialSetupHint,
   removeProviderCredential,
   writeProviderCredential,
 } from "./provider-credentials.mjs";
@@ -31,6 +33,8 @@ import {
   providerApiKeyAuthoritySnapshot,
 } from "./provider-api-key-routing.mjs";
 import { disableProvider } from "./provider-selection.mjs";
+import { readGenericProviders } from "./generic-provider-state.mjs";
+import { genericProviderConfigured } from "./generic-provider-readiness.mjs";
 import {
   installFailureDetail,
   npmGlobalBinary,
@@ -64,6 +68,14 @@ const SIGN_IN_CLIS = Object.freeze({
     // stdio pair kills it before it opens the browser.
     needsTerminal: true,
   },
+  // gcloud is Google's SDK, not an npm package. The tray names the official
+  // installer and then runs ADC login in the same click once gcloud is on PATH.
+  vertex: {
+    executable: "gcloud",
+    loginArgs: ["auth", "application-default", "login"],
+    installCommand: "See https://cloud.google.com/sdk/docs/install",
+    needsTerminal: true,
+  },
 });
 
 function commandPath(name) {
@@ -76,6 +88,11 @@ export function oauthCliPath(providerId) {
   const cli = SIGN_IN_CLIS[providerId];
   if (!cli) throw new Error(`Unknown OAuth provider: ${providerId}`);
   if (providerId === "grok-oauth") return grokCliPath();
+  if (providerId === "vertex") {
+    const configured = process.env.GCLOUD_BIN;
+    if (configured && existsSync(configured)) return configured;
+    return commandPath(cli.executable);
+  }
   const discovered = commandPath(cli.executable);
   if (discovered) return discovered;
   const candidate = (cli.candidates || []).find((path) => existsSync(path));
@@ -97,10 +114,51 @@ function oauthConfigured(providerId) {
   if (providerId === "grok-oauth") return grokOAuthStatus().configured;
   if (providerId === "antigravity-oauth") return antigravityOAuthStatus().configured;
   if (providerId === "devin-cli") return devinCliStatus().configured;
+  if (providerId === "vertex") return Boolean(resolveVertexAccessToken());
   return false;
 }
 
+// Operator-added OpenAI-compatible endpoints (generic providers). They are a
+// separate list rather than rows of `providers` because the tray and guided
+// setup treat every `providers` row as a checked-in id they can select, and
+// these ids never pass provider selection: they are routed while enabled.
+function customEndpointSnapshot() {
+  let descriptors;
+  try {
+    descriptors = readGenericProviders({ reservedProviderIds: PROVIDERS });
+  } catch {
+    return [];
+  }
+  return descriptors.map((provider) => {
+    const configured = genericProviderConfigured(provider.id);
+    return {
+      id: provider.id,
+      displayName: provider.displayName,
+      kind: "api",
+      generic: true,
+      enabled: provider.enabled,
+      baseUrl: provider.baseUrl,
+      adapter: provider.adapter,
+      hasKey: Boolean(provider.credentialRef),
+      // Removing the endpoint is always possible, keyed or not.
+      disconnectable: true,
+      credentialLabel: "API key",
+      configured,
+      action: configured ? "ready" : "add-key",
+      // Discovery reads the runtime registry, which holds enabled
+      // descriptors only.
+      ...(provider.enabled
+        ? { catalogSources: [{ id: provider.id, displayName: provider.displayName, kind: "models-endpoint" }] }
+        : {}),
+    };
+  });
+}
+
 export function providerOnboardingSnapshot() {
+  return { ...builtInProviderSnapshot(), customEndpoints: customEndpointSnapshot() };
+}
+
+function builtInProviderSnapshot() {
   // Protocol variants share their parent's key and selection, so onboarding
   // surfaces (tray, guided setup) offer one entry per family.
   const selectable = [...PROVIDERS.values()].filter((provider) => !provider.variantOf);
@@ -185,18 +243,31 @@ export function providerOnboardingSnapshot() {
             persistent: true,
             poolAuthoritySnapshot,
           }).configured;
+      const credentialResolver = provider.credential?.resolver;
       const entry = {
         id: provider.id,
         displayName: provider.displayName,
-        kind: "api",
-        ...(provider.credential?.label ? { credentialLabel: credentialLabel(provider) } : {}),
+        // Resolver-backed providers have no secret field for this UI to collect.
+        // Keep them distinct from API-key providers so every desktop surface
+        // can show the local setup instruction without offering a dead key
+        // dialog or a misleading remove-key action.
+        kind: credentialResolver ? "configuration" : "api",
+        ...(credentialResolver
+          ? { credentialLabel: "Google Cloud ADC" }
+          : provider.credential?.label
+            ? { credentialLabel: credentialLabel(provider) }
+            : {}),
         configured,
-        action: configured ? "ready" : "add-key",
+        action: configured ? "ready" : credentialResolver ? "configure" : "add-key",
         ...(catalogSources.length ? { catalogSources } : {}),
         // Carried to the tray so the plan requirement is visible at the
         // moment someone decides to connect, not after Codex 403s.
         ...(provider.planNote ? { planNote: provider.planNote } : {}),
+        ...(credentialResolver
+          ? { configurationNote: credentialSetupHint(provider) }
+          : {}),
       };
+      if (credentialResolver) return entry;
       // A container has no key field of its own. Saying so is the whole card:
       // an "Add Key" button here would store a secret nothing ever reads.
       if (provider.authMode === "per-model") {

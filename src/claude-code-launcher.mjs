@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { assertCallerSecret, claudeBaseUrl } from "./caller-auth.mjs";
+import { CLAUDE_MODEL_PREFIX } from "./claude-model-id.mjs";
 import {
   CALLER_SECRET_PATH,
   CLAUDE_CATALOG_PATH,
@@ -21,6 +22,37 @@ function explicitModel(args) {
   return args.some((value, index) => value === "--model" || value.startsWith("--model=") ||
     (index > 0 && args[index - 1] === "--model"));
 }
+
+function explicitModelValue(args) {
+  for (let index = 0; index < args.length; index += 1) {
+    const value = String(args[index]);
+    if (value.startsWith("--model=")) return value.slice("--model=".length);
+    if (value === "--model") return String(args[index + 1] ?? "");
+  }
+  return "";
+}
+
+// Only gateway-discovered ids are served; anything else reaches the router as
+// an id it cannot route.
+function routedModel(value) {
+  const model = String(value ?? "");
+  return model.startsWith(CLAUDE_MODEL_PREFIX) ? model : "";
+}
+
+// Claude Code resolves agent and background models through these names rather
+// than through the session model. Left alone they fall back to literal
+// Anthropic ids (claude-opus-5) the router does not serve, which surfaces as
+// HTTP 404 model_not_found inside every spawned agent while the main loop
+// keeps working. Built-in agents (Explore, Plan, ...) and user agents whose
+// frontmatter pins `model: opus` take the default-tier aliases, not
+// CLAUDE_CODE_SUBAGENT_MODEL, so all five have to point at a served model.
+const AGENT_MODEL_VARIABLES = [
+  "CLAUDE_CODE_SUBAGENT_MODEL",
+  "ANTHROPIC_SMALL_FAST_MODEL",
+  "ANTHROPIC_DEFAULT_OPUS_MODEL",
+  "ANTHROPIC_DEFAULT_SONNET_MODEL",
+  "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+];
 
 export function claudeRouterEnvironment({
   environment = process.env,
@@ -53,11 +85,22 @@ export function claudeRouterEnvironment({
   delete env.CLAUDE_CODE_USE_MANTLE;
 
   const saved = typeof settings?.model === "string" ? settings.model : "";
-  if (!explicitModel(args) && !saved.startsWith("codex_router/anthropic/") && catalog?.defaultModel) {
+  const routedDefault = catalog?.defaultModel ? String(catalog.defaultModel) : "";
+  if (!explicitModel(args) && !saved.startsWith(CLAUDE_MODEL_PREFIX) && routedDefault) {
     // ANTHROPIC_DEFAULT_MODEL only exists in Claude Code 2.1.236+. The older
     // ANTHROPIC_MODEL works on supported versions and is still overridden by
     // an explicit `--model` argument.
-    env.ANTHROPIC_MODEL = String(catalog.defaultModel);
+    env.ANTHROPIC_MODEL = routedDefault;
+  }
+  // Agents belong on the model the session itself runs, in the order Claude
+  // Code resolves it: `--model`, then the saved routed model, then the catalog
+  // default. A caller who already pinned a served id keeps it; every other
+  // value is an unserved fallback this launcher has to replace.
+  const sessionModel = routedModel(explicitModelValue(args)) || routedModel(saved) || routedDefault;
+  if (sessionModel) {
+    for (const name of AGENT_MODEL_VARIABLES) {
+      if (!routedModel(env[name])) env[name] = sessionModel;
+    }
   }
   return env;
 }

@@ -67,8 +67,9 @@ test("DeepSeek V4.1 Flash on Command Code uses the Provider API chat route", () 
   assert.deepEqual(model.reasoningLevels.map(({ effort }) => effort), ["low", "high", "max"]);
   assert.equal(model.contextWindow, 1_000_000);
   assert.ok(model.contextWindow - model.autoCompact >= MAX_EFFORT_DEFAULT_OUTPUT);
-  // Image input is claimed only in marketing copy, not at the API.
-  assert.deepEqual(model.inputModalities, ["text"]);
+  // Command Code's model page lists Image input, and the Provider API FAQ
+  // says the schema accepts text and images without per-model pre-gating.
+  assert.deepEqual(model.inputModalities, ["text", "image"]);
   assert.notEqual(model.multiAgentVersion, "v2");
   assert.equal(curatedModelProviderId("commandcode", "deepseek/deepseek-v4.1-flash"), "commandcode");
   assert.equal(curatedModelBlockReason("commandcode", "deepseek/deepseek-v4.1-flash"), undefined);
@@ -126,6 +127,7 @@ test("V4.1 Flash is added alongside the V4 routes rather than replacing them", (
     ["deepseek/deepseek-v4-flash", "deepseek-v4-flash"],
     ["deepseek/deepseek-v4-flash-vision-exp", "deepseek-v4-flash-vision-exp"],
     ["deepseek/deepseek-v4-pro", "deepseek-v4-pro"],
+    ["openrouter/deepseek-v4-pro", "deepseek/deepseek-v4-pro"],
     ["opencode-go/deepseek-v4-flash", "deepseek-v4-flash"],
     ["opencode-go/deepseek-v4-pro", "deepseek-v4-pro"],
     ["ollama-cloud/deepseek-v4-flash", "deepseek-v4-flash:cloud"],
@@ -136,4 +138,22 @@ test("V4.1 Flash is added alongside the V4 routes rather than replacing them", (
     assert.equal(model.upstreamModel, upstreamModel);
     assert.equal(model.listed, true);
   }
+});
+
+test("DeepSeek V4 Pro on OpenRouter matches the live catalog capabilities", () => {
+  const model = MODEL_BY_SLUG.get("openrouter/deepseek-v4-pro");
+  assert.ok(model);
+  assert.equal(model.provider, "openrouter");
+  assert.equal(model.upstreamModel, "deepseek/deepseek-v4-pro");
+  assert.equal(model.requestProfile, "auto-tool-choice");
+  assert.equal(model.defaultEffort, "high");
+  // The DeepSeek V4.x ladder AGENTS.md documents, and the one every other
+  // V4 Pro route in the registry publishes. OpenRouter resells the same
+  // upstream, so it does not get a ladder of its own.
+  assert.deepEqual(model.reasoningLevels.map(({ effort }) => effort), ["high", "max"]);
+  assert.equal(model.contextWindow, 1_048_576);
+  assert.deepEqual(model.inputModalities, ["text"]);
+  // Reasoning summaries are claimed only by routes observed to emit them;
+  // no OpenRouter route does.
+  assert.equal(model.supportsReasoningSummaries, undefined);
 });

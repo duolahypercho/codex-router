@@ -199,6 +199,7 @@ function run(
     userModels,
     genericProviders,
     v2Credentials = false,
+    hiddenModels,
   } = {},
 ) {
   const stateDir = mkdtempSync(path.join(os.tmpdir(), "model-failover-router-state-"));
@@ -265,6 +266,13 @@ function run(
       encoding: "utf8",
       mode: 0o600,
     });
+  }
+  if (Array.isArray(hiddenModels)) {
+    writeFileSync(
+      path.join(stateDir, "model-picker.json"),
+      JSON.stringify({ version: 1, hidden: hiddenModels, visible: [], seeded: hiddenModels }),
+      "utf8",
+    );
   }
   if (v2Credentials) {
     for (const [file, key] of [
@@ -1481,8 +1489,7 @@ test("a responses turn failing over to a chat-completions provider flattens it",
 // A fallback that answers with a flattened tool call. The response transform has
 // to map it back to the client's namespace shape using the *fallback's* map and
 // slug -- the ones adopted during the swap, not the exhausted model's.
-function toolCallSse(name) {
-  const args = JSON.stringify({ task: "audit the map" });
+function toolCallSse(name, args = JSON.stringify({ task: "audit the map" })) {
   const events = [
     { type: "response.created", response: { id: "r-tool" } },
     {
@@ -1926,6 +1933,328 @@ test("a rate limit with no usable window asks for patience", async () => {
       assert.match(message, /Wait a bit and retry\./);
       assert.doesNotMatch(message, /Retry in about 0s/);
     }
+  } finally {
+    await stopChild(child);
+    await closeServer(gw.server);
+  }
+});
+
+const LOCAL_CONVERSION_BODY = JSON.stringify({
+  error: {
+    message:
+      "Failed to parse tool call arguments for tool 'exec_command' (Anthropic tool invoke). " +
+      "Error: Unterminated string starting at: line 1 column 8 (char 7).\n" +
+      '{"cmd":"usage limit reached for your GLM Coding Plan. Upgrade your plan."}',
+  },
+});
+
+test("a local tool-argument conversion 400 is not attributed to the provider and does not failover", async () => {
+  const seen = [];
+  const gw = await gateway(async (request, response) => {
+    const body = await bodyJson(request);
+    seen.push(body);
+    const payload = Buffer.from(LOCAL_CONVERSION_BODY, "utf8");
+    response.writeHead(400, {
+      "Content-Type": "application/json",
+      "Content-Length": String(payload.length),
+    });
+    response.end(payload);
+  });
+  const routerPort = await openPort();
+  const child = run(routerEnv(gw.port, routerPort));
+  try {
+    await waitFor(`http://127.0.0.1:${routerPort}/health`, child);
+    const result = await readRouted(routerPort, TURN_BODY);
+    assert.equal(seen.length, 1);
+    assert.equal(seen[0].model, PRIMARY.gatewayModel);
+    assert.equal(result.status, 400);
+    const payload = JSON.parse(result.body);
+    assert.equal(payload.error.code, "invalid_function_call_arguments");
+    assert.match(payload.error.message, /not a provider rejection/);
+    assert.doesNotMatch(payload.error.message, /rejected the request/);
+    assert.doesNotMatch(payload.error.message, /usage limit reached/);
+    assert.doesNotMatch(child.testErrors(), /failover/);
+  } finally {
+    await stopChild(child);
+    await closeServer(gw.server);
+  }
+});
+
+test("a stored function_call with unterminated JSON is refused before any provider request", async () => {
+  const seen = [];
+  const gw = await gateway(async (request, response) => {
+    seen.push(await bodyJson(request));
+    response.writeHead(200, { "Content-Type": "text/event-stream" });
+    response.end(contentSse("should-not-run"));
+  });
+  const routerPort = await openPort();
+  const child = run(routerEnv(gw.port, routerPort));
+  try {
+    await waitFor(`http://127.0.0.1:${routerPort}/health`, child);
+    const result = await readRouted(routerPort, {
+      model: PRIMARY.slug,
+      stream: true,
+      input: [
+        { type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] },
+        {
+          type: "function_call",
+          name: "exec_command",
+          call_id: "call_poisoned",
+          arguments: '{"cmd":"echo hello',
+        },
+      ],
+    });
+    assert.equal(seen.length, 0, "the poisoned history must never reach the gateway");
+    assert.equal(result.status, 400);
+    const payload = JSON.parse(result.body);
+    assert.equal(payload.error.code, "invalid_function_call_arguments");
+    assert.match(payload.error.message, /exec_command/);
+    assert.match(payload.error.message, /call_poisoned/);
+    assert.match(payload.error.message, /not a provider rejection/);
+    assert.doesNotMatch(payload.error.message, /echo hello/);
+    assert.doesNotMatch(child.testErrors(), /failover/);
+  } finally {
+    await stopChild(child);
+    await closeServer(gw.server);
+  }
+});
+
+test("a streamed function_call with unterminated JSON is failed and the completing snapshot is withheld", async () => {
+  const seen = [];
+  const gw = await gateway(async (request, response) => {
+    seen.push(await bodyJson(request));
+    response.writeHead(200, { "Content-Type": "text/event-stream" });
+    response.end(toolCallSse("exec_command", '{"cmd":"echo hello'));
+  });
+  const routerPort = await openPort();
+  const child = run(routerEnv(gw.port, routerPort));
+  try {
+    await waitFor(`http://127.0.0.1:${routerPort}/health`, child);
+    const result = await readRouted(routerPort, TURN_BODY);
+    assert.equal(seen.length, 2, "invalid arguments retry once, then fail locally, never failover");
+    assert.equal(seen[0].model, PRIMARY.gatewayModel);
+    assert.equal(seen[1].model, PRIMARY.gatewayModel);
+    assert.equal(result.status, 502);
+    assert.doesNotMatch(result.body, /event: response\.function_call_arguments\.done/);
+    assert.doesNotMatch(result.body, /event: response\.output_item\.done/);
+    assert.doesNotMatch(result.body, /"type":"response.completed"/);
+    const payload = JSON.parse(result.body);
+    assert.equal(payload.error.code, "invalid_function_call_arguments");
+    assert.match(payload.error.message, /exec_command/);
+    assert.doesNotMatch(child.testErrors(), /failover/);
+  } finally {
+    await stopChild(child);
+    await closeServer(gw.server);
+  }
+});
+
+test("a streamed function_call with unterminated JSON retries onto a valid call", async () => {
+  let attempts = 0;
+  const gw = await gateway(async (request, response) => {
+    await bodyJson(request);
+    attempts += 1;
+    response.writeHead(200, { "Content-Type": "text/event-stream" });
+    response.end(
+      attempts === 1
+        ? toolCallSse("exec_command", '{"cmd":"echo hello')
+        : toolCallSse("exec_command", '{"cmd":"echo hello"}'),
+    );
+  });
+  const routerPort = await openPort();
+  const child = run(routerEnv(gw.port, routerPort));
+  try {
+    await waitFor(`http://127.0.0.1:${routerPort}/health`, child);
+    const result = await readRouted(routerPort, TURN_BODY);
+    assert.equal(attempts, 2);
+    assert.doesNotMatch(result.body, /invalid_function_call_arguments/);
+    assert.match(result.body, /function_call_arguments\.done/);
+    assert.match(result.body, /echo hello/);
+    assert.doesNotMatch(child.testErrors(), /failover/);
+    assert.match(child.testErrors(), /invalid function_call arguments; retrying/);
+  } finally {
+    await stopChild(child);
+    await closeServer(gw.server);
+  }
+});
+
+const GO_MESSAGES_262K = {
+  slug: "opencode-go-messages/qwen3.7-max",
+  gatewayModel: "opencode-go-messages-qwen3-7-max",
+};
+const GO_FLASH = {
+  slug: "opencode-go/glm-5.3-flash",
+  gatewayModel: "opencode-go-glm-5-3-flash",
+};
+const GO_SMALL_CHAIN = "opencode-go-messages/qwen3.8-max";
+
+function consoleGoNumericOverflowBody() {
+  const inner = JSON.stringify({
+    type: "error",
+    error: {
+      type: "invalid_request_error",
+      message:
+        "Error from provider (Console Go): Upstream request failed: [invalid_request_error] "
+        + "Prompt too long: about 434983 tokens estimated, but the maximum context length is 262144 tokens including the completion. "
+        + "Reduce the length of the messages.",
+    },
+  });
+  return JSON.stringify({
+    error: {
+      message:
+        `litellm.BadRequestError: AnthropicException - ${inner}. Received Model Group=${GO_MESSAGES_262K.gatewayModel}\nAvailable Model Group Fallbacks=None`,
+      type: null,
+      param: null,
+      code: "400",
+    },
+  });
+}
+
+function compactBody(slug) {
+  return {
+    model: slug,
+    stream: false,
+    input: [
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "Remember 42." }],
+      },
+    ],
+  };
+}
+
+function compactSuccessJson() {
+  return JSON.stringify({
+    id: "resp-summary",
+    object: "response",
+    output: [
+      { type: "message", content: [{ type: "output_text", text: "compact summary" }] },
+    ],
+    usage: { input_tokens: 12, output_tokens: 4, total_tokens: 16 },
+  });
+}
+
+async function oversizedWindowsExcept(keepSlugs = []) {
+  const { LISTED_MODELS } = await import("../src/model-registry.mjs");
+  const keep = new Set(keepSlugs);
+  return LISTED_MODELS.filter(
+    (model) => !keep.has(model.slug) && Number(model.contextWindow) >= 434983,
+  ).map((model) => model.slug);
+}
+
+test("compact overflow hops to a larger same-family window without cooldown", async () => {
+  const overflow = consoleGoNumericOverflowBody();
+  const seen = [];
+  const gw = await gateway(async (request, response) => {
+    const body = await bodyJson(request);
+    seen.push(body.model);
+    if (body.model === GO_MESSAGES_262K.gatewayModel) {
+      const payload = Buffer.from(overflow, "utf8");
+      response.writeHead(400, {
+        "Content-Type": "application/json",
+        "Content-Length": String(payload.length),
+      });
+      response.end(payload);
+      return;
+    }
+    const payload = Buffer.from(compactSuccessJson(), "utf8");
+    response.writeHead(200, {
+      "Content-Type": "application/json",
+      "Content-Length": String(payload.length),
+    });
+    response.end(payload);
+  });
+  const routerPort = await openPort();
+  const child = run(routerEnv(gw.port, routerPort), {
+    chain: [GO_SMALL_CHAIN],
+    hiddenModels: await oversizedWindowsExcept([GO_FLASH.slug]),
+  });
+  try {
+    await waitFor(`http://127.0.0.1:${routerPort}/health`, child);
+    const result = await readRouted(routerPort, compactBody(GO_MESSAGES_262K.slug), {
+      endpoint: "/responses/compact",
+    });
+    assert.equal(result.status, 200, result.body);
+    assert.deepEqual(seen, [GO_MESSAGES_262K.gatewayModel, GO_FLASH.gatewayModel]);
+    assert.match(child.testErrors(), /compaction\/context_length/);
+    const cooldownFile = path.join(child.stateDir, "provider-cooldowns.json");
+    if (existsSync(cooldownFile)) {
+      const stored = JSON.parse(readFileSync(cooldownFile, "utf8"));
+      assert.equal(stored["opencode-go"], undefined);
+      assert.equal(stored["opencode-go-messages"], undefined);
+    }
+  } finally {
+    await stopChild(child);
+    await closeServer(gw.server);
+  }
+});
+
+test("an ordinary turn never hops on a Console Go context-length 400", async () => {
+  const overflow = consoleGoNumericOverflowBody();
+  const seen = [];
+  const gw = await gateway(async (request, response) => {
+    const body = await bodyJson(request);
+    seen.push(body.model);
+    const payload = Buffer.from(overflow, "utf8");
+    response.writeHead(400, {
+      "Content-Type": "application/json",
+      "Content-Length": String(payload.length),
+    });
+    response.end(payload);
+  });
+  const routerPort = await openPort();
+  const child = run(routerEnv(gw.port, routerPort), {
+    chain: [GO_SMALL_CHAIN],
+    hiddenModels: await oversizedWindowsExcept([GO_FLASH.slug]),
+  });
+  try {
+    await waitFor(`http://127.0.0.1:${routerPort}/health`, child);
+    const result = await readRouted(routerPort, {
+      model: GO_MESSAGES_262K.slug,
+      stream: true,
+      input: "hello",
+    });
+    assert.equal(seen.length, 1);
+    assert.equal(seen[0], GO_MESSAGES_262K.gatewayModel);
+    assert.equal(result.status, 400);
+    const payload = JSON.parse(result.body);
+    assert.equal(payload.error.code, "context_length_exceeded");
+    assert.doesNotMatch(child.testErrors(), /compaction\/context_length/);
+  } finally {
+    await stopChild(child);
+    await closeServer(gw.server);
+  }
+});
+
+test("compact overflow without a larger window is a translated context error", async () => {
+  const overflow = consoleGoNumericOverflowBody();
+  const gw = await gateway(async (request, response) => {
+    await bodyJson(request);
+    const payload = Buffer.from(overflow, "utf8");
+    response.writeHead(400, {
+      "Content-Type": "application/json",
+      "Content-Length": String(payload.length),
+    });
+    response.end(payload);
+  });
+  const routerPort = await openPort();
+  const child = run(routerEnv(gw.port, routerPort), {
+    chain: [GO_SMALL_CHAIN],
+    hiddenModels: await oversizedWindowsExcept(),
+  });
+  try {
+    await waitFor(`http://127.0.0.1:${routerPort}/health`, child);
+    const result = await readRouted(routerPort, compactBody(GO_MESSAGES_262K.slug), {
+      endpoint: "/responses/compact",
+    });
+    assert.equal(result.status, 400, result.body);
+    const payload = JSON.parse(result.body);
+    assert.equal(payload.error.code, "context_length_exceeded");
+    assert.match(payload.error.message, /434,983 tokens/);
+    assert.match(payload.error.message, /262,144-token context window/);
+    assert.doesNotMatch(result.body, /litellm\.BadRequestError/);
+    assert.doesNotMatch(result.body, /Available Model Group Fallbacks/);
+    assert.doesNotMatch(child.testErrors(), /compaction\/context_length/);
   } finally {
     await stopChild(child);
     await closeServer(gw.server);

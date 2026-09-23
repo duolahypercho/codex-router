@@ -10,6 +10,7 @@ import {
   openSync,
   readFileSync,
   readSync,
+  realpathSync,
   writeFileSync,
 } from "node:fs";
 import os from "node:os";
@@ -109,6 +110,59 @@ function commandVersion(command, args) {
   }
 }
 
+// The commit that describes the installed tree, or null when no commit does.
+//
+// `git -C <dir> rev-parse HEAD` answers for the nearest *enclosing* repository,
+// which is not always the router's. A Homebrew keg lives at
+// `<brew prefix>/Cellar/codex-router/<version>/libexec`, and the Homebrew
+// prefix is itself a Git checkout of `homebrew/brew`, so the plain rev-parse
+// reported brew.git's HEAD as the router's commit -- a SHA that does not exist
+// in this repository at all. Issue #761 was triaged against exactly that
+// phantom commit. A tarball install has no commit; saying so is the honest
+// answer and keeps triage on `packageVersion`.
+//
+// Requiring the toplevel to *be* SOURCE_ROOT is what distinguishes "this tree
+// is a checkout" from "this tree sits inside someone else's checkout". It also
+// declines to answer for a router vendored into a subdirectory of a larger
+// repository, where the enclosing HEAD likewise does not identify this tree.
+export function gitCommitForSourceRoot(root) {
+  const toplevel = commandVersion("git", ["-C", root, "rev-parse", "--show-toplevel"]);
+  if (!toplevel) return null;
+  // Compared through realpath because Git reports the resolved path while
+  // SOURCE_ROOT can arrive symlinked -- macOS `/var` and `/tmp` both are, and
+  // so is an install root someone symlinked into place. Without this the check
+  // would reject a genuine checkout for spelling its own path differently.
+  if (!samePath(toplevel, root)) return null;
+  return commandVersion("git", ["-C", root, "rev-parse", "HEAD"]);
+}
+
+// Windows spells the same directory three ways, and Git and Node each pick a
+// different one: Git reports a forward-slash long path, `os.tmpdir()` hands
+// back an 8.3 short name (`C:\Users\RUNNER~1\...`), and the drive letter's case
+// is not fixed. `realpathSync.native` asks the OS to canonicalize, which is the
+// only one of these that undoes a short name; the plain JS implementation does
+// not, and comparing its output rejected a genuine checkout on Windows.
+function samePath(left, right) {
+  const a = realPath(left);
+  const b = realPath(right);
+  return process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
+}
+
+function realPath(target) {
+  const resolved = path.resolve(target);
+  try {
+    return realpathSync.native(resolved);
+  } catch {
+    // `.native` throws on a path that does not exist; the JS implementation is
+    // the fallback, and its own failure leaves the resolved spelling.
+    try {
+      return realpathSync(resolved);
+    } catch {
+      return resolved;
+    }
+  }
+}
+
 function fileMetadata(target) {
   if (!existsSync(target)) return { path: target, exists: false };
   const metadata = lstatSync(target);
@@ -179,7 +233,7 @@ function knownLocalSecrets() {
     // nothing to redact for it.
     if (providerNeedsNoKey(provider)) continue;
     files.push(...credentialPaths(provider));
-    for (const name of provider.credential.environment) {
+    for (const name of provider.credential?.environment || []) {
       const value = process.env[name]?.trim();
       if (value) values.add(value);
     }
@@ -323,7 +377,7 @@ export function createSupportBundle(options = {}) {
       architecture: process.arch,
       node: process.version,
       packageVersion: packageJson.version,
-      gitCommit: commandVersion("git", ["-C", SOURCE_ROOT, "rev-parse", "HEAD"]),
+      gitCommit: gitCommitForSourceRoot(SOURCE_ROOT),
       python: commandVersion(
         path.join(
           SOURCE_ROOT,

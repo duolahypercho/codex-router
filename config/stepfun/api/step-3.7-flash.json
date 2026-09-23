@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "slug": "stepfun-api/step-3.7-flash",
+      "gatewayModel": "stepfun-api-step-3-7-flash",
+      "upstreamModel": "step-3.7-flash",
+      "provider": "stepfun-api",
+      "listed": true,
+      "displayName": "Step 3.7 Flash (StepFun)",
+      "description": "Step 3.7 Flash through the global Open Platform: a 198B/11B sparse-MoE vision-language model with native image understanding, 256K context, $0.20 / $1.15 per million tokens with $0.04 cached input.",
+      "priority": 96,
+      "defaultEffort": "medium",
+      "reasoningLevels": [
+        {
+          "effort": "low",
+          "description": "Simple tasks"
+        },
+        {
+          "effort": "medium",
+          "description": "General reasoning"
+        },
+        {
+          "effort": "high",
+          "description": "Complex reasoning, math and planning"
+        }
+      ],
+      "contextWindow": 256000,
+      "autoCompact": 235000,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "compHash": "stepfun-api-step-3-7-flash-v1"
+    }
+  ]
+}

@@ -146,6 +146,13 @@ struct RouterWidgetSnapshot: Codable, Equatable {
   let daily: [RouterWidgetDailyPoint]
   let quotas: [RouterWidgetQuota]
   let usageSources: [RouterWidgetUsageSource]?
+  /// The language the tray is rendering in, so the widget can follow an
+  /// in-app choice instead of only macOS's preferred language.
+  ///
+  /// A `var` with a default keeps the memberwise initializer source
+  /// compatible, and the synthesized decoder treats a missing key as nil, so a
+  /// snapshot written before this field existed still decodes.
+  var language: String? = nil
 
   var availableUsageSources: [RouterWidgetUsageSource] {
     if let usageSources, !usageSources.isEmpty { return usageSources }
@@ -182,7 +189,8 @@ struct RouterWidgetSnapshot: Codable, Equatable {
       todayTokens: todayTokens,
       daily: daily,
       quotas: quotas,
-      usageSources: usageSources
+      usageSources: usageSources,
+      language: language
     )
   }
 
@@ -195,6 +203,7 @@ struct RouterWidgetSnapshot: Codable, Equatable {
     let daily: [RouterWidgetDailyPoint]
     let quotas: [RouterWidgetQuota]
     let usageSources: [RouterWidgetUsageSource]?
+    let language: String?
   }
 
   var isSemanticallyValid: Bool {
@@ -206,6 +215,7 @@ struct RouterWidgetSnapshot: Codable, Equatable {
           Self.isBoundedString(selectedProviderName),
           todayTokens >= 0,
           Self.hasValidDailyPoints(daily),
+          Self.isBoundedString(language ?? ""),
           quotas.count <= Self.maximumQuotas,
           Set(quotas.map(\.id)).count == quotas.count
     else { return false }

@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, type ButtonHTMLAttributes, type ReactNode } f
 import { createPortal } from "react-dom";
 import { AlertTriangle, CheckCircle2, RefreshCw, Search, X } from "lucide-react";
 import { classNames } from "./lib";
+import { useI18n } from "./i18n-react";
 
 export function Badge({ children, tone = "neutral" }: { children: ReactNode; tone?: "neutral" | "success" | "warning" | "danger" | "accent" }) {
   return <span className={classNames("badge", `badge-${tone}`)}>{children}</span>;
@@ -26,13 +27,14 @@ export function Toggle({ checked, onChange, disabled = false, label }: { checked
   );
 }
 
-export function SearchField({ value, onChange, placeholder = "Search" }: { value: string; onChange: (value: string) => void; placeholder?: string }) {
+export function SearchField({ value, onChange, placeholder }: { value: string; onChange: (value: string) => void; placeholder?: string }) {
+  const t = useI18n();
   return (
     <label className="search-field">
       <Search aria-hidden size={14} strokeWidth={1.7} />
-      <input value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} />
+      <input value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder ?? t("common.search")} />
       {value ? (
-        <button type="button" aria-label="Clear search" onClick={() => onChange("")}>
+        <button type="button" aria-label={t("common.clearSearch")} onClick={() => onChange("")}>
           <X aria-hidden size={13} strokeWidth={1.7} />
         </button>
       ) : null}
@@ -41,6 +43,7 @@ export function SearchField({ value, onChange, placeholder = "Search" }: { value
 }
 
 export function PageHeader({ eyebrow, title, description, onRefresh, refreshing, actions }: { eyebrow: string; title: string; description: string; onRefresh?: () => void; refreshing?: boolean; actions?: ReactNode }) {
+  const t = useI18n();
   return (
     <header className="page-header">
       <div>
@@ -51,9 +54,9 @@ export function PageHeader({ eyebrow, title, description, onRefresh, refreshing,
       <div className="page-actions">
         {actions}
         {onRefresh ? (
-          <Button variant="ghost" aria-label={`Refresh ${title}`} onClick={onRefresh} disabled={refreshing}>
+          <Button variant="ghost" aria-label={t("common.refreshTitle", { title })} onClick={onRefresh} disabled={refreshing}>
             <RefreshCw aria-hidden size={14} strokeWidth={1.7} className={refreshing ? "spin" : ""} />
-            Refresh
+            {t("common.refresh")}
           </Button>
         ) : null}
       </div>
@@ -98,10 +101,11 @@ export function EmptyState({ icon, title, body, action }: { icon?: ReactNode; ti
   );
 }
 
-export function LoadingState({ label = "Loading router data" }: { label?: string }) {
+export function LoadingState({ label }: { label?: string }) {
+  const t = useI18n();
   return (
     <div className="loading-state app-loading-skeleton" role="status" aria-live="polite">
-      <span className="visually-hidden">{label}</span>
+      <span className="visually-hidden">{label ?? t("common.loadingRouterData")}</span>
       <div className="skeleton-heading">
         <SkeletonBlock className="skeleton-eyebrow" />
         <SkeletonBlock className="skeleton-title" />
@@ -122,10 +126,11 @@ export function SkeletonBlock({ className = "" }: { className?: string }) {
   return <i className={classNames("skeleton-block", className)} aria-hidden="true" />;
 }
 
-export function CatalogSkeleton({ label = "Loading provider catalog" }: { label?: string }) {
+export function CatalogSkeleton({ label }: { label?: string }) {
+  const t = useI18n();
   return (
     <div className="catalog-skeleton" role="status" aria-live="polite">
-      <span className="visually-hidden">{label}</span>
+      <span className="visually-hidden">{label ?? t("common.loadingProviderCatalog")}</span>
       {Array.from({ length: 4 }, (_, index) => (
         <div className="catalog-skeleton-row" key={index} aria-hidden="true">
           <SkeletonBlock className="skeleton-check" />
@@ -137,10 +142,11 @@ export function CatalogSkeleton({ label = "Loading provider catalog" }: { label?
   );
 }
 
-export function PanelSkeleton({ label = "Loading content", variant = "list", count = 4 }: { label?: string; variant?: "list" | "cards"; count?: number }) {
+export function PanelSkeleton({ label, variant = "list", count = 4 }: { label?: string; variant?: "list" | "cards"; count?: number }) {
+  const t = useI18n();
   return (
     <div className={classNames("panel-skeleton", `panel-skeleton-${variant}`)} role="status" aria-live="polite">
-      <span className="visually-hidden">{label}</span>
+      <span className="visually-hidden">{label ?? t("common.loadingContent")}</span>
       {Array.from({ length: count }, (_, index) => <SkeletonBlock className="panel-skeleton-item" key={index} />)}
     </div>
   );
@@ -157,6 +163,7 @@ export function InlineNotice({ tone = "neutral", title, children }: { tone?: "ne
 }
 
 export function Dialog({ open, title, description, children, onClose }: { open: boolean; title: string; description?: string; children: ReactNode; onClose: () => void }) {
+  const t = useI18n();
   const backdropRef = useRef<HTMLDivElement | null>(null);
   const panelRef = useRef<HTMLElement | null>(null);
   const closeRef = useRef(onClose);
@@ -241,7 +248,7 @@ export function Dialog({ open, title, description, children, onClose }: { open: 
             <h2 id={titleId}>{title}</h2>
             {description ? <p id={descriptionId}>{description}</p> : null}
           </div>
-          <button className="icon-button" type="button" aria-label="Close dialog" onClick={onClose}>
+          <button className="icon-button" type="button" aria-label={t("common.closeDialog")} onClick={onClose}>
             <X aria-hidden size={16} strokeWidth={1.7} />
           </button>
         </header>

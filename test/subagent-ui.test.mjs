@@ -131,7 +131,7 @@ test("the macOS tray OAuth reconnect action opens a visible browser-sign-in stat
     macos.indexOf("func loginProvider(_ provider: String) async"),
     macos.indexOf("func saveProviderKey(_ provider: String, key: String) async"),
   );
-  assert.match(login, /Opening \\\(displayName\) sign-in in your browser/);
+  assert.match(login, /routerFormat\("Opening %@ sign-in in your browser…", displayName\)/);
   assert.match(login, /runControl\(arguments: \["login", provider\]\)/);
   assert.match(macos, /Image\(systemName: "arrow\.clockwise"\)[\s\S]*Text\(routerLocalized\("Reconnect"\)\)/);
   assert.match(macos, /\.fixedSize\(horizontal: true, vertical: false\)/);

@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "providers": [
+    {
+      "id": "vertex",
+      "displayName": "Google Cloud Vertex AI",
+      "kind": "openai-compatible",
+      "protocol": "vertex",
+      "ownedBy": "google",
+      "explicitSelection": true,
+      "baseUrl": "https://aiplatform.googleapis.com",
+      "planNote": "Billed to a Google Cloud project with the Vertex AI API enabled. Requires Application Default Credentials from `gcloud auth application-default login`; a plain `gcloud auth login` session is not used. Catalog-only: after connecting, run `bin/curate-models vertex`. A discovered Model Garden id is not routable until it is curated onto a reviewed adapter.",
+      "modelGarden": {
+        "apiVersion": "v1beta1",
+        "baseUrl": "https://aiplatform.googleapis.com",
+        "publishers": [
+          "anthropic",
+          "google"
+        ],
+        "listAllVersions": true
+      },
+      "credential": {
+        "resolver": "google-application-default"
+      }
+    }
+  ]
+}

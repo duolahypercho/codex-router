@@ -294,9 +294,7 @@ private struct IslandOverlayView: View {
           .font(.system(size: 9.5, weight: .semibold, design: .rounded))
           .foregroundStyle(.white.opacity(0.72))
           .fixedSize()
-          .help(RouterLanguage.isSimplifiedChinese
-            ? "\(activeSessions.count) 个会话运行中"
-            : "\(activeSessions.count) running \(activeSessions.count == 1 ? "chat" : "chats")")
+          .help(routerMessage(activeSessions.count == 1 ? .runningChatsOne : .runningChats, ["count": "\(activeSessions.count)"]))
       }
       if store.activeRequests.isEmpty {
         Text(compactUsageSummary)
@@ -369,9 +367,7 @@ private struct IslandOverlayView: View {
           Text(store.activityState.label)
             .font(.system(size: 12, weight: .semibold, design: .rounded))
             .foregroundStyle(store.activityState.tint)
-          Text(RouterLanguage.isSimplifiedChinese
-            ? "\(activeSessions.count) 个会话运行中"
-            : "\(activeSessions.count) \(activeSessions.count == 1 ? "CHAT" : "CHATS") RUNNING")
+          Text(routerMessage(activeSessions.count == 1 ? .runningChatsUpperOne : .runningChatsUpper, ["count": "\(activeSessions.count)"]))
             .font(.system(size: 8, weight: .semibold, design: .monospaced))
             .foregroundStyle(routerMuted)
         }
@@ -474,9 +470,7 @@ private struct IslandOverlayView: View {
           .foregroundStyle(routerMuted)
         Spacer()
         Text(store.hasConcurrentActivity
-          ? (RouterLanguage.isSimplifiedChinese
-            ? "\(store.activeChatCount) 个会话运行中"
-            : "\(store.activeChatCount) chats running")
+          ? (routerMessage(.chatsRunning, ["count": "\(store.activeChatCount)"]))
           : routerLocalized("Account and traffic are provider-scoped"))
           .font(.system(size: 9, design: .rounded))
           .foregroundStyle(routerMuted)
@@ -526,12 +520,8 @@ private struct IslandOverlayView: View {
             .font(.system(size: 15, weight: .semibold, design: .rounded))
             .lineLimit(1)
           Text(selectedSession == nil
-            ? (RouterLanguage.isSimplifiedChinese
-              ? "\(activeSessions.count) 个会话运行中"
-              : "\(activeSessions.count) \(activeSessions.count == 1 ? "chat" : "chats") running")
-            : (RouterLanguage.isSimplifiedChinese
-              ? "\(selectedSession?.agents.count ?? 0) 个已分配智能体"
-              : "\(selectedSession?.agents.count ?? 0) assigned agents"))
+            ? (routerMessage(activeSessions.count == 1 ? .chatsRunningOne : .chatsRunning, ["count": "\(activeSessions.count)"]))
+            : (routerMessage(.assignedAgents, ["count": "\(selectedSession?.agents.count ?? 0)"])))
             .font(.system(size: 9, weight: .medium, design: .rounded))
             .foregroundStyle(store.activityState.tint)
         }
@@ -599,7 +589,8 @@ private struct IslandOverlayView: View {
       request.sessionId ?? request.sessionName ?? "request-\(request.id)"
     }
     return grouped.map { id, requests in
-      let fallback = requests.first.map(store.sessionName(for:)) ?? "Active session"
+      let fallback = requests.first.map(store.sessionName(for:))
+        ?? routerLocalized("Active session")
       let name = requests.compactMap(\.sessionName).first
         ?? (grouped.count == 1 ? store.activitySessionName : nil)
         ?? fallback
@@ -623,14 +614,13 @@ private struct IslandOverlayView: View {
     if provider == "grok-oauth" { return routerLocalized("XAI • OAUTH SESSION") }
     if provider == "grok-api" { return routerLocalized("XAI • METERED API") }
     if provider.hasSuffix("-api") || ["deepseek", "chutes", "orca"].contains(provider) {
-      if RouterLanguage.isSimplifiedChinese { return "计量 API" }
-      return "METERED API"
+      return routerMessage(.meteredApi)
     }
     return routerLocalized("OAUTH ROUTE")
   }
 
   private var compactUsageSummary: String {
-    RouterLanguage.isSimplifiedChinese ? "今天 \(todayTokenValue)" : "\(todayTokenValue) today"
+    routerMessage(.tokensToday, ["tokens": "\(todayTokenValue)"])
   }
 
   private var todayTokenValue: String {
@@ -872,7 +862,9 @@ private struct IslandUsageLineChart: View {
     .onChange(of: reduceMotion) { _ in animateReveal() }
     .accessibilityElement(children: .ignore)
     .accessibilityLabel(routerLocalized("Daily token usage line chart"))
-    .accessibilityValue("\(formattedTotalTokens) tokens over \(points.count) days")
+    .accessibilityValue(
+      routerFormat("%@ tokens over %d days", formattedTotalTokens, points.count)
+    )
   }
 
   private func animateReveal() {
@@ -949,7 +941,7 @@ private struct IslandUsageLineChart: View {
   private func hoverText(for point: DailyUsagePoint) -> String {
     let date = point.date.usageDayLabel(.dateTime.month(.abbreviated).day())
     let tokens = Int64(point.tokens).formatted(.number.grouping(.automatic))
-    let text = RouterLanguage.isSimplifiedChinese ? "\(date) · \(tokens) token" : "\(date) · \(tokens) tok"
+    let text = routerMessage(.dateTokensCompact, ["date": "\(date)", "tokens": "\(tokens)"])
     guard point.isRouterFallback else { return text }
     return "\(text) · \(routerLocalized("local fallback"))"
   }
@@ -1082,6 +1074,7 @@ struct ProviderIcon: View {
 
   private var assetName: String? {
     if providerID == "openai" { return "openai" }
+    if providerID == "vertex" { return "google" }
     if providerID.hasPrefix("grok") { return "grok" }
     if providerID.hasPrefix("kimi") { return "kimi" }
     if providerID == "deepseek" { return "deepseek" }
@@ -1102,6 +1095,8 @@ struct ProviderIcon: View {
     if providerID == "ollama-cloud" || providerID == "local" { return "ollama" }
     if providerID == "clinepass" { return "cline" }
     if providerID == "minimax-token-plan" { return "minimax" }
+    // Both StepFun regional platforms share the one StepFun mark.
+    if providerID.hasPrefix("stepfun-api") { return "stepfun" }
     if providerID == "meta" { return "meta" }
     return nil
   }
@@ -1109,11 +1104,13 @@ struct ProviderIcon: View {
   private var assetExtension: String {
     // Keyed off the asset, not the provider id, so every route sharing a mark
     // (opencode-go and friends) resolves the same file type.
-    ["github-copilot", "chutes", "opencode-free", "kilo-free", "nano-gpt"].contains(assetName ?? "") ? "svg" : "png"
+    ["github-copilot", "chutes", "google", "opencode-free", "kilo-free", "nano-gpt", "stepfun"]
+      .contains(assetName ?? "") ? "svg" : "png"
   }
 
   private var providerName: String {
     if providerID == "openai" { return "ChatGPT" }
+    if providerID == "vertex" { return "Google Cloud Vertex AI" }
     if providerID.hasPrefix("grok") { return "Grok" }
     if providerID.hasPrefix("kimi") { return "Kimi" }
     if providerID == "deepseek" { return "DeepSeek" }
@@ -1250,9 +1247,7 @@ private struct IslandSessionList: View {
           .foregroundStyle(.white.opacity(0.94))
           .lineLimit(1)
         Text(
-          RouterLanguage.isSimplifiedChinese
-            ? "\(session.agents.count) 个代理"
-            : "\(session.agents.count) \(session.agents.count == 1 ? "agent" : "agents")"
+          routerMessage(session.agents.count == 1 ? .agentsOne : .agents, ["count": "\(session.agents.count)"])
         )
           .font(.system(size: 8.5, weight: .medium, design: .monospaced))
           .foregroundStyle(routerMuted)
@@ -1359,9 +1354,7 @@ private struct ActiveRequestList: View {
           .frame(maxWidth: .infinity)
           TimelineView(.periodic(from: .now, by: 1)) { context in
             let elapsed = elapsedLabel(for: request, now: context.date)
-            Text(RouterLanguage.isSimplifiedChinese
-              ? "思考中 · \(elapsed)"
-              : "Thinking · \(elapsed)")
+            Text(routerMessage(.thinkingElapsed, ["elapsed": "\(elapsed)"]))
               .font(.system(size: compact ? 8.5 : 9, weight: .medium, design: .rounded))
               .foregroundStyle(routerYellow.opacity(0.95))
               .monospacedDigit()
@@ -1377,9 +1370,7 @@ private struct ActiveRequestList: View {
         }
       }
       if store.activeRequests.count > limit {
-        Text(RouterLanguage.isSimplifiedChinese
-          ? "+\(store.activeRequests.count - limit) 个更多"
-          : "+\(store.activeRequests.count - limit) more")
+        Text(routerMessage(.moreRequests, ["count": "\(store.activeRequests.count - limit)"]))
           .font(.system(size: 9, weight: .medium, design: .rounded))
           .foregroundStyle(routerMuted)
           .frame(maxWidth: .infinity, alignment: .leading)
@@ -1897,7 +1888,7 @@ private struct DesktopPanelView: View {
         .stroke(Color.white.opacity(0.11), lineWidth: 0.8)
     )
     .accessibilityElement(children: .contain)
-    .accessibilityLabel("Codex Router usage widget")
+    .accessibilityLabel(routerLocalized("Codex Router usage widget"))
   }
 
   private var header: some View {
@@ -1971,7 +1962,7 @@ private struct DesktopPanelView: View {
   private var quotaSummary: String {
     let count = store.desktopQuotaRows.count
     if count == 0 { return routerLocalized("None") }
-    return RouterLanguage.isSimplifiedChinese ? "\(count) 个窗口" : "\(count) window\(count == 1 ? "" : "s")"
+    return routerMessage(count == 1 ? .quotaWindowsOne : .quotaWindows, ["count": "\(count)"])
   }
 
   private func sectionHeading(_ title: String, trailing: String) -> some View {
@@ -2033,7 +2024,7 @@ private struct DesktopQuotaBarRow: View {
           .font(.system(size: 10, weight: .medium, design: .rounded))
           .lineLimit(1)
         Spacer()
-        Text("\(Int(row.remainingPercent.rounded()))% left")
+        Text(routerFormat("%@ left", "\(Int(row.remainingPercent.rounded()))%"))
           .font(.system(size: 10, weight: .semibold, design: .rounded))
           .monospacedDigit()
           .foregroundStyle(tint)
@@ -2049,7 +2040,7 @@ private struct DesktopQuotaBarRow: View {
       .frame(height: 4)
 
       HStack(spacing: 6) {
-        Text(row.label)
+        Text(routerLocalized(row.label))
           .lineLimit(1)
         Spacer()
         if let resetAt = row.resetAt {
@@ -2084,17 +2075,36 @@ enum DesktopWidgetPresentation {
 
   nonisolated static func quotaAccessibilityLabel(
     _ row: DesktopQuotaRow,
-    now: Date = Date()
+    now: Date = Date(),
+    // Explicit so a test can pin the language: the tray language suite mutates
+    // the process-wide selection from a parallel suite.
+    language: ResolvedTrayLanguage = RouterLanguage.resolution
   ) -> String {
-    let remaining = "\(Int(row.remainingPercent.rounded())) percent left"
+    func localized(_ english: String) -> String { language.table?[english] ?? english }
+    let remaining = String(
+      format: localized("%d percent left"),
+      Int(row.remainingPercent.rounded())
+    )
+    let label = localized(row.label)
     guard let resetAt = row.resetAt else {
-      return "\(row.providerName), \(row.label), \(remaining)"
+      return String(
+        format: localized("%@, %@, %@"),
+        row.providerName,
+        label,
+        remaining
+      )
     }
     let reset = resetCountdownLabel(
       Date(timeIntervalSince1970: resetAt),
       now: now,
-      chinese: false
+      chinese: language == .chinese
     )
-    return "\(row.providerName), \(row.label), \(remaining), \(reset)"
+    return String(
+      format: localized("%@, %@, %@, %@"),
+      row.providerName,
+      label,
+      remaining,
+      reset
+    )
   }
 }

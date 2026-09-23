@@ -10,6 +10,9 @@ const LOCAL_INVENTORY_PROVIDERS = new Set(["local", "lmstudio"]);
 
 export function providerCatalogKind(provider) {
   if (provider?.id === "devin-cli") return "devin";
+  // Vertex lists Model Garden publisher models, not GET /models. Treating it
+  // as a models-endpoint would send curation at aiplatform.googleapis.com/v1/models.
+  if (provider?.protocol === "vertex") return "vertex";
   if (
     provider?.kind === "openai-compatible"
     && !provider.perModelEndpoint
@@ -20,6 +23,7 @@ export function providerCatalogKind(provider) {
 
 function catalogIdentity(provider) {
   if (providerCatalogKind(provider) === "devin") return "devin-cli";
+  if (providerCatalogKind(provider) === "vertex") return "vertex";
   return `${provider.baseUrlEnv || ""}\0${provider.baseUrl || ""}`;
 }
 

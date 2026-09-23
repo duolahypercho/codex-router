@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "slug": "stepfun-api/step-5-preview",
+      "gatewayModel": "stepfun-api-step-5-preview",
+      "upstreamModel": "step-5-preview",
+      "provider": "stepfun-api",
+      "listed": true,
+      "displayName": "Step 5 Preview (StepFun)",
+      "description": "StepFun's 600B/27B sparse-MoE flagship through the global Open Platform. 1M-token context, text and image input, $1.00 / $2.70 per million tokens with $0.05 cached input.",
+      "priority": 95,
+      "defaultEffort": "medium",
+      "reasoningLevels": [
+        {
+          "effort": "low",
+          "description": "Simple tasks"
+        },
+        {
+          "effort": "medium",
+          "description": "General reasoning"
+        },
+        {
+          "effort": "high",
+          "description": "Complex reasoning, math and planning"
+        }
+      ],
+      "contextWindow": 1000000,
+      "autoCompact": 900000,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "compHash": "stepfun-api-step-5-preview-v1"
+    }
+  ]
+}

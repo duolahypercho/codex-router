@@ -10,6 +10,7 @@ enum TrayLanguage: String, CaseIterable, Identifiable {
   case system
   case english
   case chinese
+  case traditionalChinese
   case arabic
   case hindi
   case japanese
@@ -31,7 +32,8 @@ enum TrayLanguage: String, CaseIterable, Identifiable {
     case .system:
       return "\(routerLocalized("System")) · \(RouterLanguage.systemResolution.nativeName)"
     case .english: return "English"
-    case .chinese: return "中文"
+    case .chinese: return "简体中文"
+    case .traditionalChinese: return "繁體中文"
     case .arabic: return "العربية"
     case .hindi: return "हिन्दी"
     case .japanese: return "日本語"
@@ -45,6 +47,7 @@ enum TrayLanguage: String, CaseIterable, Identifiable {
 enum ResolvedTrayLanguage {
   case english
   case chinese
+  case traditionalChinese
   case arabic
   case hindi
   case japanese
@@ -53,7 +56,8 @@ enum ResolvedTrayLanguage {
   var nativeName: String {
     switch self {
     case .english: return "English"
-    case .chinese: return "中文"
+    case .chinese: return "简体中文"
+    case .traditionalChinese: return "繁體中文"
     case .arabic: return "العربية"
     case .hindi: return "हिन्दी"
     case .japanese: return "日本語"
@@ -66,10 +70,26 @@ enum ResolvedTrayLanguage {
     switch self {
     case .english: return nil
     case .chinese: return RouterChineseText.values
+    case .traditionalChinese: return RouterTraditionalChineseText.values
     case .arabic: return RouterArabicText.values
     case .hindi: return RouterHindiText.values
     case .japanese: return RouterJapaneseText.values
     case .korean: return RouterKoreanText.values
+    }
+  }
+
+  /// The identifier this language is published under in the widget snapshot.
+  /// The widget extension is a separate process with its own bundle, so it
+  /// cannot read `RouterLanguage`; the tray has to carry the choice over.
+  var widgetIdentifier: String {
+    switch self {
+    case .english: return "english"
+    case .chinese: return "chinese"
+    case .traditionalChinese: return "traditionalChinese"
+    case .arabic: return "arabic"
+    case .hindi: return "hindi"
+    case .japanese: return "japanese"
+    case .korean: return "korean"
     }
   }
 }
@@ -89,14 +109,33 @@ enum RouterLanguage {
     UserDefaults.standard.set(next.rawValue, forKey: storageKey)
   }
 
+  static func resolve(_ languageTag: String) -> ResolvedTrayLanguage {
+    let tag = languageTag.trimmingCharacters(in: .whitespacesAndNewlines)
+      .replacingOccurrences(of: "_", with: "-")
+    guard !tag.isEmpty, tag.count <= 128,
+      tag.range(of: #"^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{1,8})*$"#, options: .regularExpression) != nil
+    else { return .english }
+    // A script or region inside an extension/private-use value is not the
+    // language's declared script/region (zh-x-hant still means Simplified).
+    let core = tag.components(separatedBy: "-").prefix(while: { $0.count != 1 }).joined(separator: "-")
+    let locale = Locale(identifier: core)
+    if locale.languageCode == "zh" {
+      if locale.scriptCode == "Hans" { return .chinese }
+      if locale.scriptCode == "Hant" { return .traditionalChinese }
+      if locale.scriptCode != nil { return .english }
+      return ["TW", "HK", "MO"].contains(locale.regionCode ?? "") ? .traditionalChinese : .chinese
+    }
+    switch locale.languageCode {
+    case "ar": return .arabic
+    case "hi": return .hindi
+    case "ja": return .japanese
+    case "ko": return .korean
+    default: return .english
+    }
+  }
+
   static var systemResolution: ResolvedTrayLanguage {
-    let preferred = (Locale.preferredLanguages.first ?? Locale.current.identifier).lowercased()
-    if preferred.hasPrefix("zh") { return .chinese }
-    if preferred.hasPrefix("ar") { return .arabic }
-    if preferred.hasPrefix("hi") { return .hindi }
-    if preferred.hasPrefix("ja") { return .japanese }
-    if preferred.hasPrefix("ko") { return .korean }
-    return .english
+    resolve(Locale.preferredLanguages.first ?? Locale.current.identifier)
   }
 
   static var systemPrefersChinese: Bool { systemResolution == .chinese }
@@ -106,6 +145,7 @@ enum RouterLanguage {
     case .system: return systemResolution
     case .english: return .english
     case .chinese: return .chinese
+    case .traditionalChinese: return .traditionalChinese
     case .arabic: return .arabic
     case .hindi: return .hindi
     case .japanese: return .japanese
@@ -113,8 +153,7 @@ enum RouterLanguage {
     }
   }
 
-  /// Kept for the call sites that compose Chinese strings inline; those fall
-  /// back to English in every other translated language.
+  /// Compatibility predicate; new UI code uses the shared message catalogs.
   static var isSimplifiedChinese: Bool { resolution == .chinese }
 }
 
@@ -241,6 +280,8 @@ enum RouterChineseText {
     "Quotas and live activity pinned to the desktop": "将额度和实时活动固定在桌面",
     "Show provider usage and activity status": "显示提供商用量和活动状态",
     "Use Router with ChatGPT": "在 ChatGPT 中使用路由",
+    "Turn off 'Use Router with ChatGPT' first": "请先关闭「在 ChatGPT 中使用路由」",
+    "Turn off 'Use without OpenAI login' first": "请先关闭「不使用 OpenAI 登录」",
     "Share ChatGPT subscription": "共享 ChatGPT 订阅",
     "Sharing status unavailable": "无法读取共享状态",
     "Sharing enabled": "共享已启用",
@@ -262,7 +303,7 @@ enum RouterChineseText {
     "Use without OpenAI login": "不使用 OpenAI 登录",
     "External providers · Codex restarts automatically": "外部提供商 · Codex 会自动重启",
     "Use connected models and restart Codex": "使用已连接模型并重启 Codex",
-    "Token maxxing": "Token maxxing",
+    "Token maxxing": "Token 精简",
     "Cannot run subagents": "无法运行子代理",
     "Effort as subagent": "作为子代理的思考强度",
     "Forced off by CODEX_ROUTER_TOOL_RESULT_AGING=0": "已被 CODEX_ROUTER_TOOL_RESULT_AGING=0 强制关闭",
@@ -569,8 +610,167 @@ enum RouterChineseText {
     "%d selected": "已选择 %d 个",
     "Add selected": "添加所选",
     "Load the current list from this provider.": "从该服务商加载当前列表。",
+    "Run the provider's local configuration command, then refresh": "运行服务商的本地配置命令，然后刷新",
     "saved list": "已保存列表",
     "live list": "实时列表",
     "%d models · %d added · %@": "%d 个模型 · 已添加 %d 个 · %@",
+    // Added by the Simplified Chinese coverage pass: tray status, dialogs,
+    // accessibility, and local-model panels. English stays the key.
+    "Router %@: %@": "路由 %@：%@",
+    "%@: reload superseded by a credential change": "%@：凭据变更，重新加载已作废",
+    "Reloaded current models from 1 catalog.": "已从 1 个目录重新加载当前模型。",
+    "Reloaded current models from %d catalogs.": "已从 %d 个目录重新加载当前模型。",
+    "Catalog reload failed: %@": "目录重新加载失败：%@",
+    "%d reloaded; %d failed: %@": "已重新加载 %d 个；%d 个失败：%@",
+    "%d %@ models loaded from %@. Select the ones to add below.": "%d 个 %@ 模型已从 %@ 加载。请在下方选择要添加的模型。",
+    "saved": "已保存",
+    "current": "最新",
+    "%@ is not an addable %@ catalog candidate.": "%@ 不是可添加的 %@ 目录候选项。",
+    "1 %@ model added. Restart Codex to refresh its model picker.": "已添加 1 个 %@ 模型。请重启 Codex 以刷新模型选择器。",
+    "%d %@ models added. Restart Codex to refresh its model picker.": "已添加 %d 个 %@ 模型。请重启 Codex 以刷新模型选择器。",
+    "Live compatibility verified and provider enabled. Restart Codex to refresh its model picker.": "实时兼容性已验证并已启用该提供商。请重启 Codex 以刷新模型选择器。",
+    "Opening %@ sign-in in your browser…": "正在浏览器中打开 %@ 登录…",
+    "Starting %@ sign-in…": "正在启动 %@ 登录…",
+    "Signed in. Run the live compatibility test before enabling this provider.": "已登录。启用该提供商前请先运行实时兼容性测试。",
+    "Signed in again. Run the live compatibility test before re-enabling this provider.": "已重新登录。重新启用该提供商前请先运行实时兼容性测试。",
+    "Provider reconnected.": "提供商已重新连接。",
+    "Provider connected. Restart Codex to refresh its model picker.": "提供商已连接。请重启 Codex 以刷新模型选择器。",
+    "%@ saved. Restart Codex to refresh its model picker.": "%@ 已保存。请重启 Codex 以刷新模型选择器。",
+    "%@ removed. Restart Codex to refresh its model picker.": "%@ 已移除。请重启 Codex 以刷新模型选择器。",
+    "Running update and doctor…": "正在运行更新和 doctor…",
+    "Update installed. Fully quit and reopen Codex to load updated models and agents.": "更新已安装。请完全退出并重新打开 Codex，以加载更新后的模型和代理。",
+    "Running doctor --fix…": "正在运行 doctor --fix…",
+    "Repair verified. Fully quit and reopen Codex if models changed.": "修复已验证。如有模型变化，请完全退出并重新打开 Codex。",
+    "Mode changed.": "模式已更改。",
+    "Codex restarted with external-provider mode.": "Codex 已以外部提供商模式重启。",
+    "Codex restarted with OpenAI login restored.": "Codex 已重启，OpenAI 登录已恢复。",
+    "Mode changed, but Codex could not restart: %@": "模式已更改，但 Codex 无法重启：%@",
+    "Router with ChatGPT enabled. Fully quit and reopen Codex when ready.": "已启用 ChatGPT 路由。准备好后请完全退出并重新打开 Codex。",
+    "Previous provider restored. Fully quit and reopen Codex when ready.": "已恢复之前的提供商。准备好后请完全退出并重新打开 Codex。",
+    "Model settings applied. Restart Codex to refresh its picker.": "模型设置已应用。请重启 Codex 以刷新模型选择器。",
+    "Token maxxing is on for the next external-model request.": "Token 精简已开启，将在下一次外部模型请求中生效。",
+    "Token maxxing is off; exact tool results will be sent on the next external-model request.": "Token 精简已关闭；下一次外部模型请求将发送完整工具结果。",
+    "%@ tested. The score is on its row.": "%@ 已测试。评分显示在该行。",
+    "%@ speed measured. Tokens per second is on its row.": "%@ 速度已测量。每秒 token 数显示在该行。",
+    "Checking the local runtime and downloader": "正在检查本地运行时和下载器",
+    "The MLX install could not start": "MLX 安装无法启动",
+    "Qwen3.8 27B MLX is ready for Codex. Fully quit and reopen Codex to refresh its picker.": "Qwen3.8 27B MLX 已可供 Codex 使用。请完全退出并重新打开 Codex 以刷新模型选择器。",
+    "Qwen3.8 27B MLX installation cancelled.": "Qwen3.8 27B MLX 安装已取消。",
+    "The MLX installation failed.": "MLX 安装失败。",
+    "Ollama updated. Its headless server will be reused for local models.": "Ollama 已更新。其后台服务器将继续用于本地模型。",
+    "No local model operation is running.": "当前没有正在运行的本地模型操作。",
+    "%@ was removed.": "%@ 已移除。",
+    "%@ ready for Codex. Restart Codex to refresh its picker.": "%@ 已可供 Codex 使用。请重启 Codex 以刷新模型选择器。",
+    "%@ removal cancelled.": "%@ 移除已取消。",
+    "%@ download cancelled.": "%@ 下载已取消。",
+    "The local model removal failed.": "本地模型移除失败。",
+    "The local model download failed.": "本地模型下载失败。",
+    "%@ downloaded. Restart Codex to refresh its picker.": "%@ 已下载。请重启 Codex 以刷新模型选择器。",
+    "The download failed.": "下载失败。",
+    "The embedded Control Center is missing. Rebuild Codex Router.": "内置控制中心缺失。请重新构建 Codex 路由。",
+    "A superseded Codex Router Control Center is still running. Quit it, then reopen Codex Router.": "仍有一个被取代的 Codex 路由控制中心在运行。请退出它，然后重新打开 Codex 路由。",
+    "Control Center could not open: %@": "控制中心无法打开：%@",
+    "the Codex desktop app could not be found": "找不到 Codex 桌面应用",
+    "Codex did not accept a graceful quit request": "Codex 未接受正常的退出请求",
+    "Codex did not quit in time; restart it manually": "Codex 未及时退出；请手动重启",
+    "This maintenance command does not schedule a desktop refresh.": "该维护命令不会安排桌面刷新。",
+    "Unsupported detached tray command.": "不支持的后台菜单栏命令。",
+    "Could not create the private maintenance error log.": "无法创建私有维护错误日志。",
+    "Codex Router control command exceeded its absolute deadline and was stopped.": "Codex 路由控制命令超出绝对时限，已被停止。",
+    "Codex Router control command failed.": "Codex 路由控制命令失败。",
+    "Unsupported Codex Router script.": "不支持的 Codex 路由脚本。",
+    "%@ did not answer within %d seconds and was stopped. The provider may be unreachable; try again.": "%@ 在 %d 秒内没有响应，已被停止。提供商可能无法连接；请重试。",
+    "Codex Router command failed.": "Codex 路由命令失败。",
+    "Cannot find the installed Codex Router checkout. Install the router or rebuild this app from its checkout.": "找不到已安装的 Codex 路由检出目录。请安装路由，或从检出目录重新构建此应用。",
+    "This Codex Router app does not match the installed router control protocol. Install or update the router and desktop app from the same build, then reopen the app.": "此 Codex 路由应用与已安装的路由控制协议不匹配。请使用同一构建安装或更新路由和桌面应用，然后重新打开应用。",
+    "The Codex Router checkout is missing or has unsafe ownership or permissions.": "Codex 路由检出目录缺失，或其所有者或权限不安全。",
+    "MODEL_ROUTER_PORT must be a TCP port between 1 and 65535.": "MODEL_ROUTER_PORT 必须是 1 到 65535 之间的 TCP 端口。",
+    "The local router caller key is missing or invalid; run ./bin/doctor --fix.": "本地路由调用方密钥缺失或无效；请运行 ./bin/doctor --fix。",
+    "The local router health URL could not be built.": "无法构建本地路由健康检查 URL。",
+    "Choose between 1 and %d provider models.": "请选择 1 到 %d 个提供商模型。",
+    "Model id is invalid: %@": "模型 ID 无效：%@",
+    "Provider model ids must be unique.": "提供商模型 ID 必须唯一。",
+    "Provider is invalid: %@": "提供商无效：%@",
+    "%d/%d routes enabled": "%d/%d 条路由已启用",
+    "Context savings": "上下文节省",
+    "%d requests compacted all-time": "累计压缩 %d 个请求",
+    "Tool results compressed into recoverable receipts": "工具结果已压缩为可恢复的凭据",
+    "%d compacted requests in this window": "此时间窗口内压缩了 %d 个请求",
+    "No compactions in this window": "此时间窗口内没有压缩记录",
+    "Nothing compacted in this window": "此时间窗口内没有压缩内容",
+    "~%@ tok": "~%@ tok",
+    "saved all-time": "累计节省",
+    "%@ tok · %d req": "%@ token · %d 个请求",
+    "%d dependency needs attention": "%d 个依赖需要处理",
+    "%d dependencies need attention": "%d 个依赖需要处理",
+    "Gateway": "网关",
+    "OAuth forwarder": "OAuth 转发器",
+    "API forwarder": "API 转发器",
+    "No external forwarders enabled": "未启用外部转发器",
+    "Every proven v2 model can run as a subagent": "所有已验证的 v2 模型都可作为子代理运行",
+    "Only selected proven v2 models can run as subagents": "只有选中的已验证 v2 模型可作为子代理运行",
+    "Subagents on": "启用全部子代理",
+    "Subagents off": "停用全部子代理",
+    "Load models": "加载模型",
+    "Reload models": "重新加载模型",
+    "Removing": "正在移除",
+    "Not installed": "未安装",
+    "Installation cancelled": "安装已取消",
+    "Installation failed": "安装失败",
+    "Preparing runtime": "正在准备运行时",
+    "Downloading model": "正在下载模型",
+    "Loading model": "正在加载模型",
+    "Starting local server": "正在启动本地服务器",
+    "Verifying model": "正在验证模型",
+    "Wiring Codex": "正在接入 Codex",
+    "Ready for Codex": "已可供 Codex 使用",
+    "MLX requires Apple silicon": "MLX 需要 Apple 芯片",
+    "Qwen MLX ready for Codex": "Qwen MLX 已可供 Codex 使用",
+    "MLX install failed": "MLX 安装失败",
+    "Last removal failed": "上次移除失败",
+    "Removal cancelled": "移除已取消",
+    "Download cancelled": "下载已取消",
+    "Local model removal failed": "本地模型移除失败",
+    "Local model removal cancelled": "本地模型移除已取消",
+    "Local model download cancelled": "本地模型下载已取消",
+    "Local model removed": "本地模型已移除",
+    "Uninstalling local model": "正在卸载本地模型",
+    "QWEN MLX": "QWEN MLX",
+    "CODEX": "CODEX",
+    "LM Studio · 4-bit · ~15 GB": "LM Studio · 4-bit · ~15 GB",
+    "%@ MLX · %dK context": "%@ MLX · %dK 上下文",
+    "4-bit MLX · 32K context · Apple silicon": "4-bit MLX · 32K 上下文 · Apple 芯片",
+    "Apple silicon required": "需要 Apple 芯片",
+    "Served only on this Mac and published to the Codex model picker.": "仅在本机提供服务，并已发布到 Codex 模型选择器。",
+    "This MLX model is available only on Apple silicon Macs.": "此 MLX 模型仅在 Apple 芯片的 Mac 上可用。",
+    "Detected: %@ · %@": "检测到：%@ · %@",
+    "LM Studio runtime": "LM Studio 运行时",
+    "Model downloader": "模型下载器",
+    "Reduced safety guardrails. Treat outputs as untrusted and keep the server local.": "安全防护已降低。请将输出视为不可信，并保持服务器仅在本地运行。",
+    "Install runtime + ~15 GB model and wire Codex": "安装运行时和约 15 GB 的模型并接入 Codex",
+    "This MLX model requires an Apple silicon Mac.": "此 MLX 模型需要 Apple 芯片的 Mac。",
+    "Installs official local prerequisites when missing, downloads the curated 4-bit model, and publishes it through Codex Router.": "在缺失时安装官方本地依赖，下载精选的 4 位模型，并通过 Codex 路由发布。",
+    "The local MLX setup did not complete.": "本地 MLX 设置未完成。",
+    "ready": "就绪",
+    "official installer on click": "点击后使用官方安装程序",
+    "Source: %@": "来源：%@",
+    "%d %@ · %.1f GB": "%d %@ · %.1f GB",
+    "No result over 32 KB in %d requests (largest %@)": "在 %d 个请求中没有超过 32 KB 的结果（最大 %@）",
+    "Nothing aged yet in %d requests (largest %@)": "在 %d 个请求中尚无内容被压缩（最大 %@）",
+    "Saved ~%@ tokens (%@ MB) across %d requests": "节省约 %@ token（%@ MB），共 %d 个请求",
+    "tokens saved · last 24 hours": "节省的 token · 最近 24 小时",
+    "tokens saved · last 7 days": "节省的 token · 最近 7 天",
+    "tokens saved · last 30 days": "节省的 token · 最近 30 天",
+    "Cache %@ normal · %@ compacted (n=%d)": "缓存命中 %@ 未压缩 · %@ 已压缩（n=%d）",
+    "peak %@/%@": "峰值 %@/%@",
+    "%@, peak %d per %@": "%@，峰值 %d，单位 %@",
+    "hour": "小时",
+    "day": "天",
+    "%@\nIf this keeps failing, run ./bin/support-bundle and share the path.": "%@\n如果持续失败，请运行 ./bin/support-bundle 并分享其路径。",
+    "Codex Router usage widget": "Codex Router 用量小组件",
+    "%@ tokens over %d days": "%@ 个 token，覆盖 %d 天",
+    "%d percent left": "剩余 %d%%",
+    "%@, %@, %@": "%@，%@，%@",
+    "%@, %@, %@, %@": "%@，%@，%@，%@",
   ]
 }

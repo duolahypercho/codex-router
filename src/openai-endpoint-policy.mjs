@@ -8,6 +8,7 @@ export const OPENAI_MODEL_ENDPOINTS = Object.freeze([
   "/chat/completions",
   "/responses",
   "/embeddings",
+  "/decisions",
 ]);
 
 const ENDPOINTS = new Set(OPENAI_MODEL_ENDPOINTS);
@@ -32,6 +33,7 @@ export function providerModelEndpoint(provider) {
     return "/chat/completions";
   }
   if (provider?.protocol === "openai-responses") return "/responses";
+  if (provider?.protocol === "openai-decisions") return "/decisions";
   return undefined;
 }
 

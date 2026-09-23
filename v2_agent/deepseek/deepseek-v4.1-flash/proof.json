@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "provider": "deepseek",
+  "model": "deepseek-v4.1-flash",
+  "slug": "deepseek/deepseek-v4.1-flash",
+  "status": "draft",
+  "officialSources": [
+    "provider catalog: api.deepseek.com/models lists the exact upstream id `deepseek-flash`"
+  ],
+  "testedAt": "2026-09-14",
+  "routerVersion": "0.5.1",
+  "checks": {
+    "streaming": { "outcome": "passed", "at": "2026-09-14", "local": true },
+    "toolCall": { "outcome": "passed", "at": "2026-09-14", "local": true },
+    "encryptedRelay": { "outcome": "pending" },
+    "markerReturn": { "outcome": "pending" },
+    "sameThreadFollowUp": { "outcome": "pending" }
+  }
+}

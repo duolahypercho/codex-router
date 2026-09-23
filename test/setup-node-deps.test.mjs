@@ -524,7 +524,10 @@ test(
       assert.equal(git(installDir, "rev-parse", "HEAD"), previousRevision);
       assert.equal(existsSync(path.join(installDir, "src", "new-file.mjs")), false);
     } finally {
-      rmSync(testRoot, { recursive: true, force: true });
+      // macOS may briefly retain a directory entry after the shell fixture
+      // exits. Node's bounded retry avoids making that cleanup race a test
+      // failure without masking a persistent filesystem error.
+      rmSync(testRoot, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     }
   },
 );

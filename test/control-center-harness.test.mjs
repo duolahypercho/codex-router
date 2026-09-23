@@ -87,7 +87,12 @@ test("context manager reads bounded metadata without returning conversation mess
     process.env.CODEX_ROUTER_CURSOR_AGENT_CHATS = cursorAgentChats;
     const snapshot = getContextSessionsSnapshot();
 
-    assert.deepEqual(snapshot.counts, { total: 4, codex: 1, dsh: 1, cursor: 2, claude: 0, gemini: 0, openclaw: 0, archived: 0 });
+    // The five document-configured harnesses write no session index this app
+    // can read, so their rows must report zero rather than an invented number.
+    assert.deepEqual(snapshot.counts, {
+      total: 4, codex: 1, dsh: 1, cursor: 2, claude: 0, gemini: 0, openclaw: 0,
+      opencode: 0, pi: 0, omp: 0, commandcode: 0, hermes: 0, archived: 0,
+    });
     assert.equal(snapshot.sessions.find((session) => session.id === CODEX_ID)?.model, "deepseek/deepseek-v4-pro");
     assert.equal(snapshot.sessions.find((session) => session.id === DSH_ID)?.workspaceLabel, "DeepSeek workspace");
     assert.equal(snapshot.sessions.find((session) => session.id === CURSOR_ID)?.title, "Cursor session");
@@ -228,9 +233,18 @@ test("health IPC reads in-process and preserves the injected fetch boundary", as
   assert.doesNotMatch(source, /handle\("getHealth"[\s\S]{0,100}runJson\(\["health"\]\)/);
 });
 
-test("client setup is fixed to the six supported targets and keeps session bodies unread", async () => {
+test("client setup is fixed to the supported targets and keeps session bodies unread", async () => {
   const source = await readFile(new URL("../apps/control-center/electron/ipc.mjs", import.meta.url), "utf8");
-  assert.match(source, /const HARNESS_IDS = \["codex", "dsh", "gemini", "cursor", "claude", "openclaw"\]/);
+  assert.match(
+    source,
+    /const HARNESS_IDS = \["codex", "dsh", "gemini", "cursor", "claude", "openclaw", \.\.\.ROUTED_HARNESS_IDS\]/,
+  );
+  // The routed rows are a fixed table too, not a discovered one.
+  assert.match(source, /const ROUTED_HARNESS_IDS = ROUTED_HARNESS_ROWS\.map\(\(row\) => row\.id\)/);
+  assert.deepEqual(
+    [...source.matchAll(/^    id: "([a-z-]+)",$/gm)].map((match) => match[1]),
+    ["opencode", "pi", "omp", "commandcode", "hermes"],
+  );
   assert.match(source, /const args = \["client-setup", harness\]/);
   assert.match(source, /Cursor public URL/);
   assert.match(source, /cursorConnectorRunner\(installer\.executable, installer\.args/);
@@ -561,6 +575,46 @@ test("Connect Cursor resumes through install, login, quit, publish, verify, and 
     else process.env.MODEL_ROUTER_CLOUDFLARED_HOME = priorHome;
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("Disconnect Cursor waits for quit then clears the routed App endpoint", async () => {
+  const handlers = new Map();
+  const events = [];
+  const commands = [];
+  let processReads = 0;
+  let configured = true;
+  registerIpcHandlers({
+    ipcMain: { handle: (name, handler) => handlers.set(name, handler) },
+    BrowserWindow: {
+      getAllWindows: () => [{
+        isDestroyed: () => false,
+        webContents: { send: (_channel, payload) => events.push(payload) },
+      }],
+    },
+    shell: {},
+    cursorProcessReader: () => processReads++ === 0 ? [{ pid: 42 }] : [],
+    cursorWait: async () => {},
+    controlJsonRunner: async (args, options) => {
+      commands.push({ args, options });
+      configured = false;
+      return { removed: true };
+    },
+    harnessSnapshotReader: () => ({
+      harnesses: [{
+        id: "cursor",
+        appConfigured: configured,
+        agentConfigured: false,
+      }],
+    }),
+    senderGuard: () => true,
+  });
+
+  const disconnect = handlers.get("router-control:disconnectCursor");
+  assert.deepEqual(await disconnect({}, {}), { removed: true });
+  assert.deepEqual(commands[0].args, ["client-disconnect", "cursor"]);
+  assert.equal(events.some((event) => /Fully quit Cursor/.test(event.message || "")), true);
+  assert.equal(events.some((event) => /restoring Cursor's own endpoint/.test(event.message || "")), true);
+  assert.equal(events.at(-1).status, "completed");
 });
 
 test("service stop and restart are rejected at the IPC boundary", async () => {

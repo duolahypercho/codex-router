@@ -266,3 +266,40 @@ test("an Ollama context rejection reaches Codex once as context_length_exceeded"
     rmSync(fixture.directory, { recursive: true, force: true });
   }
 });
+
+test("compaction requests to keyless providers also drop reasoning flags", async () => {
+  const fixture = localFixture();
+  const requests = [];
+  const gateway = await mockServer(async (request, response) => {
+    if (request.method === "GET") {
+      json(response, 200, { ok: true });
+      return;
+    }
+    requests.push(await bodyJson(request));
+    json(response, 200, { id: "resp_compact", object: "response", status: "completed", output: [] });
+  });
+  const routerPort = await openPort();
+  const router = startRouter(fixture, gateway.port, routerPort);
+  try {
+    await waitForRouter(routerPort, router);
+    const response = await fetch(`${callerBaseUrl(routerPort, CALLER_KEY)}/responses/compact`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: LOCAL_SLUG,
+        reasoning: { effort: "high" },
+        reasoning_effort: "high",
+        input: "Compaction test input.",
+      }),
+    });
+    assert.equal(response.status, 200, router.testErrors());
+    assert.equal(requests.length, 1);
+    const forwarded = requests[0];
+    assert.equal(forwarded.reasoning, undefined, "Ollama must not receive Codex's reasoning object on compaction");
+    assert.equal(forwarded.reasoning_effort, undefined, "Ollama must not receive Codex's reasoning_effort on compaction");
+
+  } finally {
+    await stop(router, gateway.server);
+    rmSync(fixture.directory, { recursive: true, force: true });
+  }
+});

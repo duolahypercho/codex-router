@@ -16,6 +16,9 @@ set -eu
 
 repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 source_svg="$repo_dir/apps/macos/ModelRouterTray/Resources/AppIcon.svg"
+# The menu-bar glyph shares its vector with the Swift status item; the Electron
+# tray on macOS needs it as a template PNG pair (18pt, and 36px at 2x).
+mark_svg="$repo_dir/apps/macos/ModelRouterTray/Sources/Resources/RouterMark.svg"
 output_icns=${1:-"$repo_dir/apps/macos/ModelRouterTray/Resources/AppIcon.icns"}
 control_center_assets="$repo_dir/apps/control-center/assets"
 
@@ -48,15 +51,20 @@ render() {
   fi
 }
 
-render_to() {
-  size=$1
-  destination=$2
-  sips -s format png -z "$size" "$size" "$source_svg" \
+render_svg_to() {
+  svg=$1
+  size=$2
+  destination=$3
+  sips -s format png -z "$size" "$size" "$svg" \
     --out "$destination" >/dev/null 2>&1 || true
   if [ ! -s "$destination" ]; then
-    printf 'codex-router: sips could not rasterize %s at %spx.\n' "$source_svg" "$size" >&2
+    printf 'codex-router: sips could not rasterize %s at %spx.\n' "$svg" "$size" >&2
     exit 1
   fi
+}
+
+render_to() {
+  render_svg_to "$source_svg" "$1" "$2"
 }
 
 # The exact face list iconutil expects. A missing face is not an error to
@@ -81,6 +89,8 @@ render_to 32 "$control_center_assets/32x32.png"
 render_to 128 "$control_center_assets/128x128.png"
 render_to 256 "$control_center_assets/128x128@2x.png"
 render_to 512 "$control_center_assets/icon.png"
+render_svg_to "$mark_svg" 18 "$control_center_assets/trayTemplate.png"
+render_svg_to "$mark_svg" 36 "$control_center_assets/trayTemplate@2x.png"
 
 ico_dir="$work_dir/ControlCenter.iconset"
 mkdir -p "$ico_dir"
@@ -100,4 +110,5 @@ node "$repo_dir/scripts/build-ico.mjs" "$control_center_assets/icon.ico" \
 
 printf '%s\n' "$output_icns"
 printf '%s\n' "$control_center_assets/icon.png"
+printf '%s\n' "$control_center_assets/trayTemplate.png"
 printf '%s\n' "$control_center_assets/icon.ico"

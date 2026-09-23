@@ -4,6 +4,7 @@ const call = (name, input) => ipcRenderer.invoke(`router-control:${name}`, input
 
 const routerControl = Object.freeze({
   platform: process.platform,
+  setInterfaceLanguage: (language) => ipcRenderer.send("router-control:interface-language", language),
   minimizeWindow: () => call("minimizeWindow"),
   toggleMaximizeWindow: () => call("toggleMaximizeWindow"),
   closeWindow: () => call("closeWindow"),
@@ -30,6 +31,10 @@ const routerControl = Object.freeze({
   addProviderModels: (providerId, modelIds) => call("addProviderModels", { providerId, modelIds }),
   connectProvider: (providerId) => call("connectProvider", { providerId }),
   saveProviderCredential: (providerId, credential) => call("saveProviderCredential", { providerId, credential }),
+  addCustomEndpoint: (endpoint) => call("addCustomEndpoint", endpoint),
+  editCustomEndpoint: (providerId, endpoint) => call("editCustomEndpoint", { ...endpoint, providerId }),
+  removeCustomEndpointModels: (providerId, slugs) => call("removeCustomEndpointModels", { providerId, slugs }),
+  addCustomEndpointModel: (providerId, modelId) => call("addCustomEndpointModel", { providerId, modelId }),
   removeProviderCredential: (providerId) => call("removeProviderCredential", { providerId }),
   setSubagentMode: (mode) => call("setSubagentMode", { mode }),
   setSubagentModel: (slug, enabled) => call("setSubagentModel", { slug, enabled }),
@@ -70,8 +75,11 @@ const routerControl = Object.freeze({
   probeAgentBridge: (bridgeId) => call("probeAgentBridge", { bridgeId }),
   loginAgentBridge: (bridgeId) => call("loginAgentBridge", { bridgeId }),
   setupHarness: (harnessId, hostname) => call("setupHarness", { harnessId, hostname }),
+  updateHarness: (harnessId) => call("updateHarness", { harnessId }),
   prepareCursorTunnel: () => call("prepareCursorTunnel"),
   connectCursor: (hostname) => call("connectCursor", { hostname }),
+  disconnectCursor: () => call("disconnectCursor"),
+  disconnectHarness: (harnessId) => call("disconnectHarness", { harnessId }),
   openHarnessSession: (harnessId, sessionId, surface, model) => call("openHarnessSession", { harnessId, sessionId, surface, model }),
   openExternal: (url) => call("openExternal", { url }),
   onNavigation(listener) {

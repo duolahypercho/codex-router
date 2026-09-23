@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "slug": "stepfun-api-cn/step-5-preview",
+      "gatewayModel": "stepfun-api-cn-step-5-preview",
+      "upstreamModel": "step-5-preview",
+      "provider": "stepfun-api-cn",
+      "listed": true,
+      "displayName": "Step 5 Preview (StepFun China)",
+      "description": "Step 5 Preview through the mainland China platform (api.stepfun.com), billed to a separate platform.stepfun.com account. 1M-token context, text and image input.",
+      "priority": 135,
+      "defaultEffort": "medium",
+      "reasoningLevels": [
+        {
+          "effort": "low",
+          "description": "Simple tasks"
+        },
+        {
+          "effort": "medium",
+          "description": "General reasoning"
+        },
+        {
+          "effort": "high",
+          "description": "Complex reasoning, math and planning"
+        }
+      ],
+      "contextWindow": 1000000,
+      "autoCompact": 900000,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "compHash": "stepfun-api-cn-step-5-preview-v1"
+    }
+  ]
+}

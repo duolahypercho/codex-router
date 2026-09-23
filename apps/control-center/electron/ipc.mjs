@@ -67,7 +67,98 @@ const SESSION_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3
 const CURSOR_SESSION_ID = /^(?:(?:draft|bc)-)?[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const SESSION_UUID_IN_FILENAME = /[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i;
 const DSH_SESSION_ID = /^session-[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const HARNESS_IDS = ["codex", "dsh", "gemini", "cursor", "claude", "openclaw"];
+// The five document-configured harnesses this router publishes into. The
+// authority is `src/routed-harness-catalog.mjs`; this table is the renderer's
+// copy of the parts a detection-only pass needs, kept here for the same reason
+// `HARNESS_SITES` and the docs URLs below are — the app must be able to draw
+// the Harness tab before it can load a module out of the installed router.
+const ROUTED_HARNESS_ROWS = Object.freeze([
+  Object.freeze({
+    id: "opencode",
+    binEnv: "OPENCODE_BIN",
+    displayName: "opencode",
+    ownership: "opencode",
+    description: "The opencode terminal agent, using every model selected in this router.",
+    executables: Object.freeze(["opencode"]),
+    marker: "opencode-models.json",
+    site: "https://opencode.ai/",
+    docs: "https://opencode.ai/docs/config/",
+    installable: true,
+    updater: "opencode upgrade",
+    installHint: "Setup installs opencode-ai when it is missing and publishes every routed model.",
+    publishHint: "Publishes every routed model into opencode's router-owned provider. Other opencode settings remain untouched.",
+  }),
+  Object.freeze({
+    id: "pi",
+    binEnv: "PI_BIN",
+    displayName: "pi",
+    ownership: "pi",
+    description: "Mario Zechner's pi coding agent, using every model selected in this router.",
+    executables: Object.freeze(["pi"]),
+    marker: "pi-models.json",
+    site: "https://pi.dev/",
+    docs: "https://pi.dev/docs/latest/models",
+    installable: true,
+    updater: "pi update --self",
+    installHint: "Setup installs @earendil-works/pi-coding-agent when it is missing and publishes every routed model.",
+    publishHint: "Publishes every routed model into pi's models.json. Every other provider in that file is preserved.",
+  }),
+  Object.freeze({
+    id: "omp",
+    binEnv: "OMP_BIN",
+    displayName: "omp",
+    ownership: "omp",
+    description: "The omp (oh-my-pi) terminal agent, using every model selected in this router.",
+    executables: Object.freeze(["omp"]),
+    marker: "omp-models.json",
+    site: "https://omp.sh/",
+    docs: "https://github.com/can1357/oh-my-pi/blob/main/docs/models.md",
+    // omp runs on Bun and installs from its own script, Homebrew, or Bun, none
+    // of which this router runs on somebody's behalf. The row links to them.
+    installable: false,
+    updater: null,
+    installHint: "Install omp from omp.sh first; setup then publishes every routed model into ~/.omp/agent/models.yml.",
+    publishHint: "Publishes every routed model into omp's models.yml. Comments and every other provider are preserved.",
+  }),
+  Object.freeze({
+    id: "commandcode",
+    binEnv: "COMMANDCODE_BIN",
+    displayName: "Command Code",
+    ownership: "commandcode",
+    description: "Command Code's CLI as a BYOK client of this router's Anthropic surface.",
+    executables: Object.freeze(process.platform === "win32" ? ["command-code", "cmdc"] : ["command-code", "cmd"]),
+    marker: "commandcode-models.json",
+    site: "https://commandcode.ai/",
+    docs: "https://commandcode.ai/docs/byok",
+    installable: true,
+    // `command-code`, not the `cmd` alias the docs use: `cmd` is the Windows
+    // command shell, so Command Code ships as `cmdc` there. The full name is
+    // the one that resolves on every platform, and the one this router runs.
+    updater: "command-code update",
+    installHint: "Setup installs command-code 1.30.0 or later (the first release that reads providers.json) and publishes every routed model as a BYOK provider.",
+    publishHint: "Publishes every routed model into ~/.commandcode/providers.json. Your Command Code plan and its own models are untouched.",
+  }),
+  Object.freeze({
+    id: "hermes",
+    binEnv: "HERMES_BIN",
+    displayName: "Hermes Agent",
+    ownership: "nousresearch",
+    description: "Nous Research's Hermes Agent as a named custom provider on this router.",
+    executables: Object.freeze(["hermes"]),
+    marker: "hermes-models.json",
+    site: "https://hermes-agent.nousresearch.com/",
+    docs: "https://hermes-agent.nousresearch.com/docs/integrations/providers",
+    // Hermes installs from its own shell script rather than a package
+    // registry, and this router does not run remote installers on somebody's
+    // behalf. The row links to the official instructions instead.
+    installable: false,
+    updater: "hermes update --yes",
+    installHint: "Install the official Hermes Agent first; setup then publishes every routed model into its config.yaml.",
+    publishHint: "Publishes every routed model as the codex-router provider in Hermes's config.yaml. Every other setting is preserved.",
+  }),
+]);
+const ROUTED_HARNESS_IDS = ROUTED_HARNESS_ROWS.map((row) => row.id);
+const HARNESS_IDS = ["codex", "dsh", "gemini", "cursor", "claude", "openclaw", ...ROUTED_HARNESS_IDS];
 const HARNESS_SURFACES = ["app", "terminal"];
 const AGENT_BRIDGE_IDS = ["anthropic", "cursor", "gemini"];
 const SESSION_INDEX_LIMIT = 16 * 1024 * 1024;
@@ -121,6 +212,7 @@ const HARNESS_SITES = Object.freeze({
   cursor: "https://cursor.com/",
   claude: "https://claude.com/product/claude-code",
   gemini: "https://google-gemini.github.io/gemini-cli/",
+  ...Object.fromEntries(ROUTED_HARNESS_ROWS.map((row) => [row.id, row.site])),
 });
 const OAUTH_LOGIN_COMMANDS = Object.freeze({
   "kimi-oauth": { executable: "kimi", args: ["login"] },
@@ -439,6 +531,32 @@ export function getHarnessSnapshot() {
         ...(typeof cursorState?.publicOrigin === "string" ? { publicOrigin: cursorState.publicOrigin } : {}),
         docsUrl: CURSOR_DOCS,
       },
+      // Detection only: this runs on every page load, so it reads a marker and
+      // looks for an executable and does nothing else. Whether a routed
+      // harness is *correctly* published is a question for its own status
+      // command, which costs a process and is asked when a row is acted on.
+      ...ROUTED_HARNESS_ROWS.map((row) => {
+        const binary = row.executables.map((name) => executablePath(name)).find(Boolean);
+        const version = executableVersion(binary);
+        return {
+          id: row.id,
+          displayName: row.displayName,
+          ownership: row.ownership,
+          description: row.description,
+          cliInstalled: Boolean(binary),
+          ...(version ? { cliVersion: version } : {}),
+          appInstalled: false,
+          configured: existsSync(path.join(stateDirectory, row.marker)),
+          canInstall: row.installable || Boolean(binary),
+          installRequirement: binary ? row.publishHint : row.installHint,
+          // Updating is offered only for a client that is actually here and has
+          // something to run. It is never implied by setup: bumping a global
+          // coding agent is its own decision, so it gets its own button.
+          canUpdate: Boolean(binary) && Boolean(row.updater || row.installable),
+          ...(row.updater ? { updateCommand: row.updater } : {}),
+          docsUrl: row.docs,
+        };
+      }),
     ],
   };
 }
@@ -1096,6 +1214,9 @@ export function getContextSessionsSnapshot() {
       claude: sessions.filter((session) => session.harnessId === "claude").length,
       gemini: sessions.filter((session) => session.harnessId === "gemini").length,
       openclaw: 0,
+      // None of the routed harnesses writes a session index this app can read,
+      // so their rows report no sessions rather than an invented number.
+      ...Object.fromEntries(ROUTED_HARNESS_IDS.map((id) => [id, 0])),
       archived: sessions.filter((session) => session.archived).length,
     },
   };
@@ -1178,7 +1299,84 @@ async function modelEntries() {
 
 async function providerEntries() {
   const result = await runControlJson(["providers"]);
-  return result?.providers || [];
+  // Custom endpoints are generic providers: separate from the checked-in rows
+  // so other snapshot readers never try to select them, but addressable here
+  // for credential, enable, discovery, and curation calls.
+  return [...(result?.providers || []), ...(result?.customEndpoints || [])];
+}
+
+const CUSTOM_ENDPOINT_ADAPTERS = new Set(["openai-chat", "openai-responses"]);
+
+// One GET /models against the endpoint the operator just described, so a typo,
+// an unreachable host, or a rejected key is reported while they are still
+// looking at the form -- not later as an empty model list.
+async function checkCustomEndpoint(id) {
+  try {
+    const result = await runControlJson(["generic-providers", "test", id, "--json"], {
+      timeoutMs: 45_000,
+    });
+    const status = Number(result?.status) || 0;
+    if (result?.ok) return { ok: true, status };
+    return {
+      ok: false,
+      status,
+      reason: status === 401 || status === 403
+        ? "The endpoint rejected this API key."
+        : status
+          ? `The endpoint answered HTTP ${status}.`
+          : "The endpoint did not respond.",
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      status: 0,
+      reason: error instanceof Error ? error.message : "The endpoint did not respond.",
+    };
+  }
+}
+
+export function customEndpointBaseUrl(value) {
+  let parsed;
+  try { parsed = new URL(stringValue(value, "Base URL")); } catch { throw new Error("Base URL is invalid."); }
+  if (!["https:", "http:"].includes(parsed.protocol)) throw new Error("Base URL must use http or https.");
+  if (parsed.username || parsed.password) throw new Error("Put the API key in the key field, not the URL.");
+  if (parsed.search || parsed.hash) throw new Error("Base URL must not carry a query or fragment.");
+  return parsed.href.replace(/\/+$/, "");
+}
+
+// Mirrors the ranges the router itself treats as private
+// (isPrivateGenericProviderHostname in src/generic-provider-state.mjs). That
+// check is the real gate and runs server-side; this one only decides whether to
+// pass --allow-private, so under-detecting costs a confusing refusal rather
+// than opening a hole. It cannot import the router module: this file ships in
+// the Electron bundle and resolves the router source at runtime.
+export function loopbackOrPrivateHost(hostname) {
+  const host = String(hostname).replace(/^\[|\]$/g, "").toLowerCase();
+  if (host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local")) return true;
+  if (host === "::1" || host === "::") return true;
+  // IPv6 unique-local (fc00::/7) and link-local (fe80::/10).
+  if (/^f[cd][0-9a-f]{0,2}:/.test(host) || /^fe[89ab][0-9a-f]?:/.test(host)) return true;
+  return /^127\./.test(host) || /^10\./.test(host) || /^192\.168\./.test(host) ||
+    /^172\.(1[6-9]|2\d|3[01])\./.test(host) ||
+    // Link-local and carrier-grade NAT: not routable to a public endpoint.
+    /^169\.254\./.test(host) || /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(host) ||
+    host === "0.0.0.0";
+}
+
+// The provider id is the slug prefix of every model it publishes
+// (`<id>/<upstream model>`), so a fresh id keeps those slugs unique.
+export function customEndpointId(displayName, takenIds) {
+  // Strip the combining marks NFKD leaves behind, or "Ünïcødé" decomposes into
+  // marks that the separator rule below turns into their own dashes.
+  const base = displayName.toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "").slice(0, 40) || "custom-endpoint";
+  const stem = /^[a-z0-9]/.test(base) ? base : `custom-${base}`;
+  for (let index = 1; index < 1000; index += 1) {
+    const candidate = index === 1 ? stem : `${stem}-${index}`;
+    if (!takenIds.has(candidate)) return candidate;
+  }
+  throw new Error("Could not choose an unused endpoint id.");
 }
 
 async function validateProvider(providerId, capability) {
@@ -1505,8 +1703,14 @@ export function registerIpcHandlers({
   }));
 
   handleAction("setProviderEnabled", async ({ providerId, enabled = true } = {}) => {
-    const { id } = await validateProvider(providerId);
+    const { id, provider } = await validateProvider(providerId);
     if (typeof enabled !== "boolean") throw new Error("enabled must be boolean.");
+    if (provider.generic) {
+      await runControl(["generic-providers", enabled ? "enable" : "disable", id], {
+        timeoutMs: CATALOG_MUTATION_TIMEOUT_MS,
+      });
+      return snapshot();
+    }
     return updateProviderSelection(id, enabled);
   });
   handleAction("addProviderModels", async ({ providerId, modelIds } = {}) => {
@@ -1594,8 +1798,90 @@ export function registerIpcHandlers({
       pending: true,
     };
   });
+  handleAction("addCustomEndpoint", async ({ displayName, baseUrl, adapter = "openai-chat", credential } = {}) => {
+    const name = stringValue(displayName, "Name");
+    if (name.length > 120) throw new Error("Name must be at most 120 characters.");
+    const url = customEndpointBaseUrl(baseUrl);
+    if (!CUSTOM_ENDPOINT_ADAPTERS.has(adapter)) throw new Error("API format is invalid.");
+    if (credential !== undefined && (typeof credential !== "string" || credential.length > 16 * 1024)) {
+      throw new Error("Credential is invalid.");
+    }
+    const key = typeof credential === "string" ? credential.trim() : "";
+    const id = customEndpointId(name, new Set((await providerEntries()).map((entry) => String(entry.id))));
+    await runControl([
+      "generic-providers", "add", id,
+      "--name", name,
+      "--base-url", url,
+      "--adapter", adapter,
+      ...(loopbackOrPrivateHost(new URL(url).hostname) ? ["--allow-private"] : []),
+    ], { timeoutMs: CATALOG_MUTATION_TIMEOUT_MS });
+    if (key) {
+      try {
+        await runControl(["generic-providers", "credential", id, "set", "--stdin"], {
+          stdin: key,
+          timeoutMs: CATALOG_MUTATION_TIMEOUT_MS,
+        });
+      } catch (error) {
+        // An endpoint without the key the operator just typed would look
+        // connected and fail every request; take it back out.
+        await runControl(["generic-providers", "remove", id], { timeoutMs: CATALOG_MUTATION_TIMEOUT_MS }).catch(() => undefined);
+        throw error;
+      }
+    }
+    return { providerId: id, check: await checkCustomEndpoint(id) };
+  });
+  handleAction("editCustomEndpoint", async ({ providerId, displayName, baseUrl, adapter } = {}) => {
+    const { id, provider } = await validateProvider(providerId);
+    if (!provider.generic) throw new Error(`${provider.displayName || id} is not a custom endpoint.`);
+    const name = stringValue(displayName, "Name");
+    if (name.length > 120) throw new Error("Name must be at most 120 characters.");
+    const url = customEndpointBaseUrl(baseUrl);
+    if (!CUSTOM_ENDPOINT_ADAPTERS.has(adapter)) throw new Error("API format is invalid.");
+    // The id stays: it is the prefix of every model slug already published.
+    await runControl([
+      "generic-providers", "edit", id,
+      "--name", name,
+      "--base-url", url,
+      "--adapter", adapter,
+      loopbackOrPrivateHost(new URL(url).hostname) ? "--allow-private" : "--public-only",
+    ], { timeoutMs: CATALOG_MUTATION_TIMEOUT_MS });
+    return { providerId: id, check: await checkCustomEndpoint(id) };
+  });
+  handleAction("addCustomEndpointModel", async ({ providerId, modelId } = {}) => {
+    const { id, provider } = await validateProvider(providerId);
+    if (!provider.generic) throw new Error(`${provider.displayName || id} is not a custom endpoint.`);
+    // The upstream id is whatever the endpoint expects on the wire, so this is
+    // deliberately not checked against its catalog: a private or preview model
+    // is never listed there.
+    const model = stringValue(modelId, "Model id", MODEL_SLUG);
+    await runControl(["generic-providers", "add-model", id, model], {
+      timeoutMs: CATALOG_MUTATION_TIMEOUT_MS,
+    });
+    return { provider: id, added: model };
+  });
+  handleAction("removeCustomEndpointModels", async ({ providerId, slugs } = {}) => {
+    const { id, provider } = await validateProvider(providerId);
+    if (!provider.generic) throw new Error(`${provider.displayName || id} is not a custom endpoint.`);
+    if (!Array.isArray(slugs) || slugs.length < 1 || slugs.length > 200) {
+      throw new Error("Choose between 1 and 200 models to remove.");
+    }
+    // Every model of a custom endpoint is published as `<id>/<upstream id>`.
+    const upstream = [...new Set(slugs.map((slug) => {
+      const value = stringValue(slug, "Model", MODEL_SLUG);
+      if (!value.startsWith(`${id}/`) || value.includes(",")) throw new Error(`${value} does not belong to ${id}.`);
+      return value.slice(id.length + 1);
+    }))];
+    // Removal is local: curate-models prunes the overlay without asking the
+    // endpoint anything, then republishes every installed client.
+    await runRouterScript(
+      "curate-models.mjs",
+      [id, "--remove", upstream.join(","), "--apply"],
+      { timeoutMs: CATALOG_MUTATION_TIMEOUT_MS },
+    );
+    return { provider: id, removed: upstream };
+  });
   handleAction("saveProviderCredential", async ({ providerId, credential } = {}) => {
-    const { id } = await validateProvider(providerId, "credential");
+    const { id, provider } = await validateProvider(providerId, "credential");
     if (typeof credential !== "string" || !credential.trim() || credential.length > 16 * 1024) {
       throw new Error("Credential is invalid.");
     }
@@ -1603,6 +1889,13 @@ export function registerIpcHandlers({
     // publication under one cross-process model-overlay lock. Do not split a
     // second set/apply here: a concurrent removal could otherwise delete the
     // key after this child succeeds and before the follow-up enable.
+    if (provider.generic) {
+      await runControl(["generic-providers", "credential", id, "set", "--stdin"], {
+        stdin: credential,
+        timeoutMs: CATALOG_MUTATION_TIMEOUT_MS,
+      });
+      return runJson(["providers"]);
+    }
     await runJson(["credential", id], {
       stdin: credential,
       timeoutMs: CATALOG_MUTATION_TIMEOUT_MS,
@@ -1613,6 +1906,12 @@ export function registerIpcHandlers({
     const { id, provider } = await validateProvider(providerId);
     if (provider.kind !== "api" && id !== "antigravity-oauth") {
       throw new Error(`${provider.displayName || id} has no router-managed credential to remove.`);
+    }
+    // Disconnecting a custom endpoint removes it whole: its key, its curated
+    // routes, and their picker decisions go in one transaction.
+    if (provider.generic) {
+      await runControl(["generic-providers", "remove", id], { timeoutMs: CATALOG_MUTATION_TIMEOUT_MS });
+      return runJson(["providers"]);
     }
     // The control command owns credential deletion, provider withdrawal, and
     // publication under the same lock as credential setup. Splitting a
@@ -2021,20 +2320,24 @@ export function registerIpcHandlers({
       return { opened: true, surface: "app" };
     }
     if (destination === "app") return openOfficialSite();
-    const executable = executablePath(
-      harness === "codex" ? "codex"
-        : harness === "dsh" ? "dsh"
-          : harness === "claude" ? "claude-router"
-            : harness === "gemini" ? "gemini"
-              : harness === "openclaw" ? "openclaw"
-              : "cursor-router-agent",
-    );
-    const label = harness === "codex" ? "Codex"
-      : harness === "dsh" ? "DeepSeek Harness"
-        : harness === "claude" ? "Claude Code Router"
-          : harness === "gemini" ? "Gemini CLI"
-            : harness === "openclaw" ? "OpenClaw"
-            : "Cursor Router Agent";
+    const routed = ROUTED_HARNESS_ROWS.find((row) => row.id === harness);
+    const executable = routed
+      ? routed.executables.map((name) => harnessExecutableResolver(name)).find(Boolean)
+      : executablePath(
+        harness === "codex" ? "codex"
+          : harness === "dsh" ? "dsh"
+            : harness === "claude" ? "claude-router"
+              : harness === "gemini" ? "gemini"
+                : harness === "openclaw" ? "openclaw"
+                : "cursor-router-agent",
+      );
+    const label = routed ? routed.displayName
+      : harness === "codex" ? "Codex"
+        : harness === "dsh" ? "DeepSeek Harness"
+          : harness === "claude" ? "Claude Code Router"
+            : harness === "gemini" ? "Gemini CLI"
+              : harness === "openclaw" ? "OpenClaw"
+              : "Cursor Router Agent";
     if (!executable) throw new Error(`${label} CLI is not installed or configured.`);
     return openTerminalCommand(executable, [], discoverSourceRoot());
   }, { requiresCompatibleRouter: false });
@@ -2089,7 +2392,35 @@ export function registerIpcHandlers({
       const openclaw = harnessExecutableResolver("openclaw");
       if (openclaw) environmentOverrides.OPENCLAW_BIN = openclaw;
     }
+    // A desktop app does not inherit the login shell's PATH. Detection above
+    // already checked the standard per-user CLI directories, so hand the exact
+    // executable it found to the router rather than asking a child with a
+    // narrower PATH to discover it a second time.
+    const routedSetup = ROUTED_HARNESS_ROWS.find((row) => row.id === harness);
+    if (routedSetup) {
+      const binary = routedSetup.executables.map((name) => harnessExecutableResolver(name)).find(Boolean);
+      if (binary) environmentOverrides[routedSetup.binEnv] = binary;
+    }
     return controlJsonRunner(args, {
+      timeoutMs: REPAIR_TIMEOUT_MS,
+      ...(Object.keys(environmentOverrides).length ? { environmentOverrides } : {}),
+    });
+  });
+  // Move one routed client, or every installed one, to its latest release.
+  //
+  // A fixed command with a validated id; the renderer supplies no executable
+  // and no argv. It is deliberately not folded into `setupHarness`: publishing
+  // a model list must never be the reason somebody's global coding agent
+  // changed version underneath them.
+  handleAction("updateHarness", async ({ harnessId } = {}) => {
+    const harness = harnessId === "all" ? "--all" : oneOf(harnessId, ROUTED_HARNESS_IDS, "Harness");
+    const environmentOverrides = {};
+    const routed = ROUTED_HARNESS_ROWS.find((row) => row.id === harness);
+    if (routed) {
+      const binary = routed.executables.map((name) => harnessExecutableResolver(name)).find(Boolean);
+      if (binary) environmentOverrides[routed.binEnv] = binary;
+    }
+    return controlJsonRunner(["client-update", harness], {
       timeoutMs: REPAIR_TIMEOUT_MS,
       ...(Object.keys(environmentOverrides).length ? { environmentOverrides } : {}),
     });
@@ -2200,6 +2531,48 @@ export function registerIpcHandlers({
     const failure = await shell.openPath(appPath);
     if (failure) throw new Error("Cursor was configured but could not be reopened.");
     return { configured: true, hostname: selectedHostname, opened: true };
+  });
+  const runCursorDisconnect = async (context) => {
+    const quitDeadline = Date.now() + CURSOR_QUIT_TIMEOUT_MS;
+    let waitingAnnounced = false;
+    while ((await cursorProcessReader()).length) {
+      if (!waitingAnnounced) {
+        context.progress("Fully quit Cursor. Disconnect will resume here automatically…");
+        waitingAnnounced = true;
+      }
+      if (Date.now() >= quitDeadline) {
+        throw new Error("Cursor is still running. Fully quit it, then turn routing off again.");
+      }
+      await cursorWait(1_000);
+    }
+
+    context.progress("Removing router models and restoring Cursor's own endpoint…");
+    await controlJsonRunner(
+      ["client-disconnect", "cursor"],
+      { timeoutMs: REPAIR_TIMEOUT_MS },
+    );
+    const cursor = harnessSnapshotReader().harnesses.find((entry) => entry.id === "cursor");
+    if (cursor?.appConfigured || cursor?.agentConfigured) {
+      throw new Error("Cursor disconnect finished without clearing the routed App and Agent surfaces.");
+    }
+    return { removed: true };
+  };
+  handleAction("disconnectCursor", async (_input, context) => {
+    return runCursorDisconnect(context);
+  });
+  handleAction("disconnectHarness", async ({ harnessId } = {}, context) => {
+    const harness = oneOf(harnessId, HARNESS_IDS, "Harness");
+    if (harness === "cursor") return runCursorDisconnect(context);
+    context.progress(`Removing the routed catalog from ${harness}…`);
+    await controlJsonRunner(
+      ["client-disconnect", harness],
+      { timeoutMs: REPAIR_TIMEOUT_MS },
+    );
+    const next = harnessSnapshotReader().harnesses.find((entry) => entry.id === harness);
+    if (next?.configured) {
+      throw new Error(`${harness} disconnect finished without clearing its router publication.`);
+    }
+    return { removed: true, harnessId: harness };
   });
   handleAction("openHarnessSession", async ({ harnessId, sessionId, surface, model } = {}) => {
     const harness = oneOf(harnessId, HARNESS_IDS, "Harness");

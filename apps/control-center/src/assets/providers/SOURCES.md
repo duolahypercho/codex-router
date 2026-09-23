@@ -44,7 +44,7 @@ hotlinked at runtime. Research was refreshed on 2026-08-29.
 | `xiaomi.svg` | Xiaomi MiMo models | https://www.mi.com/global/ | https://cdn.simpleicons.org/xiaomi |
 | `venice.png` | Venice | https://venice.ai/ | https://venice.ai/apple-touch-icon.png (official touch icon, locally adapted to a white-on-transparent mask) |
 | `nousresearch.png` | Nous Research (Hermes) | https://nousresearch.com/ | https://nousresearch.com/apple-touch-icon.png (official touch icon, locally adapted to a white-on-transparent mask) |
-| `stealth.svg` | Codenamed preview models with no maker's mark of their own (Ox Alpha, Fugu Ultra, Inkling), and the user-defined Custom provider | n/a | Original artwork drawn for this repository; not a third-party mark |
+| `stealth.svg` | Codenamed preview models with no maker's mark of their own (Ox Alpha, Omen Alpha, Fugu Ultra, Inkling), and the user-defined Custom provider | n/a | Original artwork drawn for this repository; not a third-party mark |
 
 Simple Icons copies are stored locally and used only where an official site did
 not expose a practical standalone product mark. Unknown future providers and

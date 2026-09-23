@@ -6,14 +6,26 @@ const DEEPSEEK_FLASH_MODELS = new Set([
   "deepseek-v4-flash-vision-exp",
 ]);
 
+const DEEPSEEK_FLASH_IMAGE_TOKENS = 1024;
+
+// The estimate exists to keep a false zero from being believed, not to price an
+// image. Every provider here charges an image in the low thousands of tokens at
+// most, so a route whose exact bound is unknown still gets a bound: the error
+// stays inside a few thousand tokens, where counting the payload whole can cross
+// the compaction threshold with a single screenshot. Only a recognised image
+// reference in a real content array is ever discounted (see promptImageUsage),
+// so a route that takes no images is unaffected.
+export const DEFAULT_IMAGE_TOKEN_BOUND = 4096;
+
 // DeepSeek's hosted Flash API resizes every image to at most 1024 tokens.
-// The older Flash names now alias that model. This bound is not established
-// for resellers, other providers, or other DeepSeek models.
+// The older Flash names now alias that model. That bound is not established for
+// resellers, other providers, or other DeepSeek models, which take the
+// conservative default above rather than no bound at all.
 // Verified 2026-09-10: https://api-docs.deepseek.com/guides/vision/#token-usage
 export function maxImageTokensForRoute(route) {
   return route?.provider === "deepseek" && DEEPSEEK_FLASH_MODELS.has(route.upstreamModel)
-    ? 1024
-    : undefined;
+    ? DEEPSEEK_FLASH_IMAGE_TOKENS
+    : DEFAULT_IMAGE_TOKEN_BOUND;
 }
 
 // Discount only image references in actual Responses content arrays. A pasted

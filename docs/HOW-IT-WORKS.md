@@ -59,7 +59,12 @@ catalog, router, gateway generator, API forwarder, and doctor.
 It controls routed picker visibility and dispatcher access. `model-picker.json`
 stores the durable per-model decision, including explicit show choices, and the
 Codex, DeepSeek Harness, Gemini, and Cursor publishers all consume that same state for
-external models. In a signed-in Codex install, the native GPT catalog and its
+external models. The same file carries the Codex picker `order`: `native-first`
+(the default, routed models publish after the highest visible native GPT
+priority) or `routed-first` (every routed model publishes ahead of the natives,
+in vendor-group order, and the natives shift after them). Set it with
+`./bin/model-router codex picker-order routed-first|native-first|status`; the
+command republishes the catalog, and Codex reloads the picker on its next start. In a signed-in Codex install, the native GPT catalog and its
 base-entry visibility remain Codex-owned, so a router "hide all" action cannot
 erase the original native picker. A known namespaced model whose provider is hidden receives a local
 `provider_not_enabled` error; it is never mistaken for a native model or
@@ -395,7 +400,11 @@ unprotected, or left over for a model that is no longer eligible, the installed
 picker is republished to restore the coupled catalog/agent state. An unreadable
 or foreign Codex transport is never repaired speculatively.
 
-Only registry-proven models are advertised as native v2 spawn-agent overrides.
+Only registry-proven models are advertised as native v2 spawn-agent overrides,
+and an explicit spawn model is kept: a child runs on the model the operator
+picked from Codex's own list instead of being pinned back to the routed parent.
+Codex checks that value against its list before the call is dispatched, so an
+override cannot name a route the operator was never offered.
 The Settings tab (desktop panel and macOS tray) exposes two local accordions:
 **Subagent models** can withhold or re-enable proven models, while **Model
 picker** controls visibility. Local settings never promote an unverified model

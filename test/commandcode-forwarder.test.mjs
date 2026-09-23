@@ -655,3 +655,117 @@ test("pooled Command Code recheck success is cached against the exact winning ke
     rmSync(cliHome, { recursive: true, force: true });
   }
 });
+
+// Command Code documents no effort vocabulary, so `commandcode/glm-5.3-flash`
+// declares the ladder its own model names -- low/high/max -- and nothing else
+// may leave the router for it. That matters because Codex older than 0.143 has
+// no `max` in its effort enum at all: `clampModelEfforts` rewrites this
+// entry's default down to `xhigh`, which is precisely the rung GLM-5.3-Flash
+// refuses by name ("[1210] This model always engages in thinking and cannot be
+// disabled; please use low, high, or max"). The route shipped with no request
+// profile, so that rewrite reached the Provider API verbatim. The plan
+// fallback is unaffected either way: `/alpha/generate` carries no effort at
+// all.
+test("the Command Code Flash route clamps Codex's efforts onto the model's ladder", async () => {
+  const stateDir = mkdtempSync(path.join(os.tmpdir(), "commandcode-effort-state-"));
+  const cliHome = mkdtempSync(path.join(os.tmpdir(), "commandcode-effort-home-"));
+  const upstreamPort = await openPort();
+  const forwarderPort = await openPort();
+  const bodies = [];
+  const server = http.createServer((request, response) => {
+    let raw = "";
+    request.on("data", (chunk) => {
+      raw += chunk;
+    });
+    request.on("end", () => {
+      if (request.url !== "/provider/v1/chat/completions") {
+        response.writeHead(404).end("{}");
+        return;
+      }
+      bodies.push(JSON.parse(raw));
+      response.writeHead(200, { "Content-Type": "application/json" });
+      response.end(JSON.stringify({ id: "c", object: "chat.completion", choices: [] }));
+    });
+  });
+  await listen(server, upstreamPort);
+
+  const child = spawn(process.execPath, [path.join(root, "src", "api-forwarder.mjs")], {
+    cwd: root,
+    env: {
+      ...process.env,
+      MODEL_ROUTER_TARGET: "codex",
+      MODEL_ROUTER_INTERNAL_KEY: internalKey,
+      MODEL_ROUTER_API_PORT: String(forwarderPort),
+      MODEL_ROUTER_STATE_DIR: stateDir,
+      MODEL_ROUTER_QUIET: "1",
+      COMMANDCODE_BASE_URL: `http://127.0.0.1:${upstreamPort}/provider/v1`,
+      COMMAND_CODE_API_KEY: "user_test_key",
+      COMMANDCODE_CLI_HOME: cliHome,
+    },
+    stdio: ["ignore", "ignore", "pipe"],
+  });
+  child.stderr.setEncoding("utf8");
+  let stderr = "";
+  child.stderr.on("data", (chunk) => {
+    stderr += chunk;
+  });
+
+  const base = `http://127.0.0.1:${forwarderPort}`;
+  const headers = { Authorization: `Bearer ${internalKey}`, "Content-Type": "application/json" };
+  try {
+    await waitForHealth(base, headers, child, () => stderr);
+
+    for (const [sent, expected] of [
+      ["low", "low"],
+      ["high", "high"],
+      ["max", "max"],
+      // The pre-0.143 catalog clamp, and the rung above it Codex can also spell.
+      ["xhigh", "max"],
+      ["ultra", "max"],
+      // Rungs the route does not publish take the nearest one at or below.
+      ["medium", "low"],
+      ["minimal", "low"],
+    ]) {
+      const response = await fetch(`${base}/v1/chat/completions`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          model: "commandcode-glm-5-3-flash",
+          reasoning_effort: sent,
+          thinking: { type: "enabled" },
+          messages: [{ role: "user", content: "hi" }],
+        }),
+      });
+      assert.equal(response.status, 200);
+      await response.text();
+      const forwarded = bodies.at(-1);
+      assert.equal(forwarded.model, "z-ai/glm-5.3-flash");
+      assert.equal(forwarded.reasoning_effort, expected, `sent ${sent}`);
+      // Thinking cannot be switched off on this model and the route documents
+      // no such parameter, so it never travels.
+      assert.equal(forwarded.thinking, undefined);
+    }
+
+    // An absent effort stays absent: that is the upstream's own default rather
+    // than a rung this router picked.
+    const bare = await fetch(`${base}/v1/chat/completions`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        model: "commandcode-glm-5-3-flash",
+        messages: [{ role: "user", content: "hi" }],
+      }),
+    });
+    assert.equal(bare.status, 200);
+    await bare.text();
+    assert.equal(bodies.at(-1).reasoning_effort, undefined);
+  } finally {
+    if (child.exitCode === null) {
+      child.kill("SIGTERM");
+      await new Promise((resolve) => child.once("exit", resolve));
+    }
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(stateDir, { recursive: true, force: true });
+    rmSync(cliHome, { recursive: true, force: true });
+  }
+});

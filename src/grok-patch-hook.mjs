@@ -6,6 +6,7 @@ import {
   StructuredPatchError,
 } from "./grok-structured-patch.mjs";
 import { GROK_PATCH_HOOK_PREFIX } from "./grok-patch-hook-transport.mjs";
+import { isGrokOauthAgenticSlug } from "./grok-oauth-routes.mjs";
 
 // JSON escaping can expand the 1 MiB argument string sixfold. Reserve room
 // for the native event metadata as well; reject the complete event above 8 MiB.
@@ -225,7 +226,7 @@ function searchReplaceMatchProblem(raw, event) {
 // that the client's hook failures deny arbitrary native tool invocations.
 export function adaptHookInput(event) {
   const command = event?.tool_input?.command;
-  if (event?.model !== "grok-oauth/grok-4.6" || event?.tool_name !== "apply_patch" ||
+  if (!isGrokOauthAgenticSlug(event?.model) || event?.tool_name !== "apply_patch" ||
       typeof command !== "string") return {};
   if (command.startsWith(GROK_PATCH_HOOK_PREFIX)) {
     try {

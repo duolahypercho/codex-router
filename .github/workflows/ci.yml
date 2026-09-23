@@ -93,7 +93,7 @@ jobs:
       - name: Set up Homebrew
         id: set-up-homebrew
         if: steps.changed.outputs.run == 'true'
-        uses: Homebrew/actions/setup-homebrew@f8d4222eb633e65c2a0157383cf80861fc7fae7f # 2026.09.07.1
+        uses: Homebrew/actions/setup-homebrew@848c272c7bfe984a197bd4d16383f4c106ec61e6 # 2026.09.21.1
       - name: Cache Homebrew Bundler RubyGems
         id: cache-homebrew-gems
         if: steps.changed.outputs.run == 'true'
@@ -122,7 +122,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Set up Homebrew
-        uses: Homebrew/actions/setup-homebrew@f8d4222eb633e65c2a0157383cf80861fc7fae7f # 2026.09.07.1
+        uses: Homebrew/actions/setup-homebrew@848c272c7bfe984a197bd4d16383f4c106ec61e6 # 2026.09.21.1
       - name: Build and test the formula from source
         run: packaging/homebrew/check-core-readiness.sh --install
 
@@ -136,10 +136,16 @@ jobs:
             os: ubuntu-latest
             builder_flag: --linux
             artifact_path: apps/control-center/release/codex-router-control-center-linux.tar.gz
+            download_cache: |
+              ~/.cache/electron
+              ~/.cache/electron-builder
           - platform: Windows
             os: windows-latest
             builder_flag: --win
             artifact_path: apps/control-center/release/*.exe
+            download_cache: |
+              ~\AppData\Local\electron\Cache
+              ~\AppData\Local\electron-builder\Cache
     runs-on: ${{ matrix.os }}
     env:
       # Pull-request artifacts are deliberately unsigned and intended only for
@@ -155,6 +161,18 @@ jobs:
           node-version: "24"
           cache: npm
           cache-dependency-path: apps/control-center/package-lock.json
+      # electron-builder fetches the Electron binary and its own helper binaries
+      # (NSIS, winCodeSign) from the network on every run, and a 5xx from those
+      # hosts fails the job outright -- four packaging jobs died that way in a
+      # single day. Restoring the caches it already keeps means a healthy run
+      # does not depend on those hosts being up at all.
+      - name: Restore electron-builder downloads
+        id: electron-downloads
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ matrix.download_cache }}
+          key: electron-builder-${{ runner.os }}-${{ hashFiles('apps/control-center/package-lock.json') }}
+          restore-keys: electron-builder-${{ runner.os }}-
       - name: Install Electron dependencies
         run: npm ci
       - name: Check Electron sources
@@ -165,6 +183,16 @@ jobs:
         run: npm run build
       - name: Package the native beta
         run: npx --no-install electron-builder ${{ matrix.builder_flag }}
+      # Saved separately, and on failure too: the download that 5xx'd is always
+      # preceded by several that succeeded, and `actions/cache` skips its own
+      # post step when the job fails -- throwing those away and leaving the next
+      # run as exposed as this one. Keeping them is the whole point.
+      - name: Save electron-builder downloads
+        if: ${{ !cancelled() && steps.electron-downloads.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ matrix.download_cache }}
+          key: electron-builder-${{ runner.os }}-${{ hashFiles('apps/control-center/package-lock.json') }}
       - name: Smoke the packaged Linux app
         if: runner.os == 'Linux'
         env:
@@ -297,10 +325,29 @@ jobs:
           node-version: "24"
           cache: npm
           cache-dependency-path: apps/control-center/package-lock.json
+      # The tray build runs electron-builder too, so it has the same dependency
+      # on those download hosts staying up.
+      - name: Restore electron-builder downloads
+        id: electron-downloads
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            ~/Library/Caches/electron
+            ~/Library/Caches/electron-builder
+          key: electron-builder-${{ runner.os }}-${{ hashFiles('apps/control-center/package-lock.json') }}
+          restore-keys: electron-builder-${{ runner.os }}-
       - name: Build native tray with embedded Control Center
         env:
           MODEL_ROUTER_TRAY_UNIVERSAL: "1"
         run: scripts/build-macos-tray-app.sh "$RUNNER_TEMP/Codex Router.app"
+      - name: Save electron-builder downloads
+        if: ${{ !cancelled() && steps.electron-downloads.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            ~/Library/Caches/electron
+            ~/Library/Caches/electron-builder
+          key: electron-builder-${{ runner.os }}-${{ hashFiles('apps/control-center/package-lock.json') }}
       - name: Verify universal binaries, version, and complete bundle seal
         shell: bash
         run: |

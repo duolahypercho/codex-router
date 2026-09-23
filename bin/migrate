@@ -1,7 +1,20 @@
 #!/bin/sh
 set -eu
 
-repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+# The name on PATH may be a symlink to this script, so walk the chain before
+# locating the repository root, and resolve that root physically: `dirname $0`
+# alone points beside the link, and a logical `..` climbs out of a linked
+# directory to a path node does not recognise as a module's own when it guards
+# main, so the command would quietly do nothing.
+self=$0
+while [ -L "$self" ]; do
+  link=$(readlink "$self")
+  case $link in
+    /*) self=$link ;;
+    *) self=$(dirname -- "$self")/$link ;;
+  esac
+done
+repo_dir=$(CDPATH= cd -P -- "$(dirname -- "$self")/.." && pwd -P)
 command=${1:-detect}
 case "$command" in
   detect) exec node "$repo_dir/src/legacy-migration.mjs" detect ;;

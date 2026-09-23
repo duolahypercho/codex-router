@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "slug": "xiaomi-mimo/mimo-v2.6-flash",
+      "gatewayModel": "xiaomi-mimo-mimo-v2-6-flash",
+      "upstreamModel": "mimo-v2.6-flash",
+      "provider": "xiaomi-mimo",
+      "listed": true,
+      "displayName": "MiMo-V2.6-Flash (Xiaomi API)",
+      "description": "MiMo-V2.6-Flash, the low-cost V2.6 reasoning model, through Xiaomi's official OpenAI-compatible API with text and image input.",
+      "priority": 71,
+      "defaultEffort": "high",
+      "reasoningLevels": [
+        {
+          "effort": "high",
+          "description": "Deep reasoning"
+        }
+      ],
+      "contextWindow": 1048576,
+      "autoCompact": 900000,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "compHash": "xiaomi-mimo-v2-6-flash-v1",
+      "supportsReasoningSummaries": true,
+      "supportsImageDetailOriginal": true,
+      "supportsParallelToolCalls": false,
+      "experimentalSupportedTools": [],
+      "supportsApplyPatchTool": false
+    }
+  ]
+}

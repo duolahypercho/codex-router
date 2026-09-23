@@ -5,6 +5,15 @@ options:
   xcodeVersion: "15.0"
   deploymentTarget:
     macOS: "14.0"
+  # Simplified and Traditional Chinese ship as resource folders because the widget's
+  # AppIntents metadata (gallery title and description, and the "Usage Source"
+  # parameter name) is localized by the framework from the extension bundle and
+  # cannot read the Swift table that the rendered text uses. Anything listed
+  # here is picked up as a localization; the .lproj stays the source of truth.
+  knownLocalizations:
+    - en
+    - zh-Hans
+    - zh-Hant
 settings:
   base:
     CLANG_ENABLE_MODULES: YES

@@ -183,13 +183,41 @@ final class RouterUsageWidgetTests: XCTestCase {
   func testTokenWordingDistinguishesAccountUsageFromRoutedProviderTraffic() {
     let preview = RouterWidgetSnapshot.preview
     XCTAssertEqual(
-      RouterUsageWidgetView.todayTokenLabel(for: preview.usageSource(id: "openai")),
+      RouterUsageWidgetView.todayTokenLabel(
+        for: preview.usageSource(id: "openai"),
+        language: .english
+      ),
       "account tokens"
     )
     XCTAssertEqual(
-      RouterUsageWidgetView.todayTokenLabel(for: preview.usageSource(id: "deepseek")),
+      RouterUsageWidgetView.todayTokenLabel(
+        for: preview.usageSource(id: "deepseek"),
+        language: .english
+      ),
       "tokens routed"
     )
+  }
+
+  func testLocalizedTokenWordingFollowsThePublishedLanguage() {
+    let preview = RouterWidgetSnapshot.preview
+    XCTAssertEqual(
+      RouterUsageWidgetView.todayTokenLabel(
+        for: preview.usageSource(id: "openai"),
+        language: .chinese
+      ),
+      "账户 token"
+    )
+    XCTAssertEqual(
+      RouterUsageWidgetView.todayTokenLabel(
+        for: preview.usageSource(id: "deepseek"),
+        language: .chinese
+      ),
+      "路由 token"
+    )
+    XCTAssertEqual(RouterResetWidgetView.countdown(to: nil, now: Date(), language: .chinese), "即将")
+    XCTAssertEqual(RouterWidgetLanguage.resolve("chinese"), .chinese)
+    XCTAssertEqual(RouterWidgetLanguage.resolve("english"), .english)
+    XCTAssertEqual(RouterWidgetLanguage.resolve(nil), RouterWidgetLanguage.system)
   }
 
   func testRouterOnlyDaysAreNamedInsteadOfPassingAsAccountTotals() {
@@ -198,7 +226,7 @@ final class RouterUsageWidgetTests: XCTestCase {
 
     XCTAssertTrue(source.todayIsRouterFallback)
     XCTAssertEqual(
-      RouterUsageWidgetView.todayTokenLabel(for: source),
+      RouterUsageWidgetView.todayTokenLabel(for: source, language: .english),
       "this Mac · account not reported yet"
     )
     // The headline number is the measured one, not the zero this used to
@@ -416,5 +444,27 @@ private extension RouterWidgetSnapshot {
           : source
       }
     )
+  }
+}
+
+final class TraditionalChineseWidgetTests: XCTestCase {
+  func testIdentifiersPreserveOldSnapshots() {
+    for tag in ["traditionalChinese", "zh-TW", "zh-Hant", "zh-HK", "zh_MO", "zh-Hant-CN", "zh-Hant-x-hans"] {
+      XCTAssertEqual(RouterWidgetLanguage.resolve(tag), .traditionalChinese)
+    }
+    for tag in ["chinese", "zh-CN", "zh-Hans-TW", "zh", "zh-x-hant", "zh-x-TW", "zh-u-rg-twzzzz"] {
+      XCTAssertEqual(RouterWidgetLanguage.resolve(tag), .chinese)
+    }
+    XCTAssertEqual(RouterWidgetLanguage.resolve("japanese"), .english)
+    XCTAssertEqual(RouterWidgetLanguage.resolve("zh-Latn-TW"), .english)
+    XCTAssertEqual(RouterWidgetLanguage.resolve("zh---CN"), .english)
+    XCTAssertEqual(RouterWidgetLanguage.publishedIdentifier(for: .traditionalChinese), "traditionalChinese")
+  }
+
+  func testCompleteCatalogsAndValues() {
+    XCTAssertEqual(Set(RouterWidgetChineseText.values.keys), Set(RouterWidgetTraditionalChineseText.values.keys))
+    XCTAssertEqual(RouterWidgetLanguage.traditionalChinese.text("Waiting for router data"), "正在等待路由資料")
+    XCTAssertEqual(RouterWidgetLanguage.traditionalChinese.format("%d percent left", 42), "剩餘 42%")
+    XCTAssertEqual(RouterWidgetLanguage.traditionalChinese.text("vendor/unknown-id"), "vendor/unknown-id")
   }
 }

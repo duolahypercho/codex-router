@@ -144,12 +144,18 @@ https://commandcode.ai/models/deepseek-v4-1-flash.
 - Price matches V4 Flash ($0.15 / $0.60 per M off-peak); available on Go and
   above.
 - Not documented: maximum output, effort values, tool_choice or
-  `reasoning_content` behavior. Image input appears only in marketing copy.
+  `reasoning_content` behavior.
+- Rechecked 2026-09-16: Command Code's model page lists Image input under
+  Modalities ("V4.1 hybrid-attention reasoning with vision"), and the Provider
+  API FAQ says message content is text and images with no per-model pre-gate
+  ("Pick a model without vision and the upstream provider returns its own
+  error"). The route therefore declares image input. A live image turn through
+  the Provider API has not been run.
 
-Route: `commandcode/deepseek-v4.1-flash`, text-only until image input is
-verified at the API, window 1,000,000 compacting at 850,000. The low/high/max
-ladder is DeepSeek's documented ladder for this model, matching the existing
-Command Code V4 Flash route; it is not separately documented by Command Code.
+Route: `commandcode/deepseek-v4.1-flash`, text and image, window 1,000,000
+compacting at 850,000. The low/high/max ladder is DeepSeek's documented ladder
+for this model, matching the existing Command Code V4 Flash route; it is not
+separately documented by Command Code.
 
 ## ClinePass (`clinepass`)
 

@@ -77,9 +77,19 @@ export async function waitForServiceReadiness({
   const healthWinner = settleHealth(waitForHealth, Math.max(0, deadline - Date.now())).then(
     (outcome) => ({ kind: "health", outcome }),
   );
-  const failureOf = (outcome) =>
-    outcome.error ??
-    new Error(outcome.health?.error || "service did not become healthy");
+  // Every path through this helper is the health attempt having spent its
+  // whole budget without an answer -- a router that is still starting, which
+  // a LiteLLM gateway with a large model set does on a cold start. That is
+  // retryable, and an installer must not tear the service out over it (#760).
+  // The crash-loop and dead-launcher throws below are deliberately left
+  // untagged: those are broken, not slow, and a rollback is right for them.
+  const failureOf = (outcome) => {
+    const error =
+      outcome.error ??
+      new Error(outcome.health?.error || "service did not become healthy");
+    error.readinessTimeout = true;
+    return error;
+  };
 
   if (platform !== "win32") {
     if (typeof getServiceRestarts !== "function") {

@@ -6,7 +6,10 @@ import {
   GROK_STRUCTURED_PATCH_CODEC,
   MAX_STRUCTURED_PATCH_BYTES,
 } from "./grok-structured-patch.mjs";
+import { isGrokOauthAgenticRoute } from "./grok-oauth-routes.mjs";
 
+// The route this facade was first proven on, kept as a fixture for tests.
+// `grokEditFacadeEnabled` is the gate, and it reads the shared list.
 export const GROK_EDIT_FACADE_ROUTE = "grok-oauth/grok-4.6";
 export const SEARCH_REPLACE_TOOL_NAME = "search_replace";
 export const WRITE_TOOL_NAME = "write";
@@ -682,7 +685,7 @@ function hideNativeTools(tools, nativeExec, installed, existing) {
 }
 
 export function grokEditFacadeEnabled(route, structuredPatch) {
-  return structuredPatch === true && route?.slug === GROK_EDIT_FACADE_ROUTE;
+  return structuredPatch === true && isGrokOauthAgenticRoute(route);
 }
 
 export function applyGrokEditFacade(tools, namespaces, route, structuredPatch, options = {}) {

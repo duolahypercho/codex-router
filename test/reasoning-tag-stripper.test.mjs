@@ -13,8 +13,8 @@ function block(event, sep = "\n\n") {
   return `event: ${event.type}\ndata: ${JSON.stringify(event)}${sep}`;
 }
 
-async function run(input, { chunkSize = 0 } = {}) {
-  const t = new ReasoningTagStripper();
+async function run(input, { chunkSize = 0, ...options } = {}) {
+  const t = new ReasoningTagStripper(options);
   const chunks = [];
   const sink = new Writable({
     write(chunk, _e, cb) {
@@ -321,4 +321,105 @@ test("whitespace held past the cap is still dropped by a tag that follows it", (
   assert.ok(!deltas.includes("hidden"), "reasoning survived the cap path");
   assert.ok(!deltas.includes("<think>"), "tag survived the cap path");
   assert.equal(deltas.trimStart(), "Answer");
+});
+
+// --- Hy4's nonce-suffixed delimiters (#654) -------------------------------
+//
+// `commandcode/hy4-preview` writes `</think:6124c78e>`, and a serving stack
+// that swallows the opening tag leaves the model's planning prose in the
+// visible answer behind nothing but that orphan close. The grammar is gated to
+// the Hy4 family, so every case below is asserted both ways: untouched without
+// `nonceDelimiters`, stripped with it.
+const NONCE = { nonceDelimiters: true };
+// The nonce and delimiters reported on the leaking turns; the prose is not.
+const HEX = "6124c78e";
+
+test("an orphan nonce close ends the leaked reasoning and takes its prose with it", () => {
+  const leak = `Let me keep reading the behavior code.</think:${HEX}>The answer is 4.`;
+  assert.equal(stripThinkTags(leak), leak, "ungated routes must not reinterpret the text");
+  assert.equal(stripThinkTags(leak, NONCE), "The answer is 4.");
+  // The same shape on the tool-call markup's own names (one reported turn ended
+  // on `</arg_value:NONCE>`).
+  const args = `tail -5 .qa/eo-up.log</arg_value:${HEX}>Done.`;
+  assert.equal(stripThinkTags(args), args);
+  assert.equal(stripThinkTags(args, NONCE), "Done.");
+  // Whitespace that framed the removed block goes with it.
+  assert.equal(stripThinkTags(`hidden\n</think:${HEX}>\n\nAnswer.`, NONCE), "Answer.");
+});
+
+test("a matched nonce span is stripped like a bare <think> span", () => {
+  const span = `<think:${HEX}>hidden</think:${HEX}>Answer.`;
+  assert.equal(stripThinkTags(span), span);
+  assert.equal(stripThinkTags(span, NONCE), "Answer.");
+  // A close that repeats an opening tag already seen is that span's end, not a
+  // terminator: the text between the two spans survives.
+  assert.equal(stripThinkTags(`A<think:${HEX}>r</think:${HEX}>B</think:${HEX}>C`, NONCE), "ABC");
+});
+
+test("the nonce grammar leaves the tool-call markup's own spans verbatim", () => {
+  // `src/leaked-tool-call-recovery.mjs` runs first and relays a span it cannot
+  // parse verbatim on purpose. Deleting it here would undo that.
+  const markup = `<tool_calls:${HEX}><tool_call:${HEX}>exec_command</tool_call:${HEX}></tool_calls:${HEX}>`;
+  assert.equal(stripThinkTags(markup, NONCE), markup);
+  assert.equal(stripThinkTags(`x<arg_value:${HEX}>v</arg_value:${HEX}>y`, NONCE), `x<arg_value:${HEX}>v</arg_value:${HEX}>y`);
+});
+
+test("a bare </think> keeps its prefix on every route", () => {
+  // The suffix is what makes "everything before this was reasoning" safe to
+  // act on; `</think>` is ordinary enough to appear in an answer about tags.
+  assert.equal(stripThinkTags("Close it with </think> at the end.", NONCE), "Close it with  at the end.");
+  assert.equal(stripThinkTags("PRIVATE</think>FINAL", NONCE), "PRIVATEFINAL");
+});
+
+test("a nonce delimiter split across deltas is still recognised", async () => {
+  const deltas = ["Let me check the ", "log first.</thi", `nk:${HEX.slice(0, 4)}`, `${HEX.slice(4)}>`, "The answer is 4."];
+  const text = deltas.join("");
+  assert.equal(stripThinkTags(text, NONCE), "The answer is 4.");
+  for (const chunkSize of [0, 1, 3, 17]) {
+    const { deltas: d, done, messages } = collect(await run(streamCase(deltas), { chunkSize, ...NONCE }));
+    // The close is spread over three deltas and two of its pieces are not tags
+    // on their own; none of them may reach the answer as literal text.
+    assert.ok(!/<\/?thi/.test(d), `delimiter fragment survived at chunkSize=${chunkSize}: ${d}`);
+    assert.ok(!d.includes(HEX), `nonce survived at chunkSize=${chunkSize}: ${d}`);
+    assert.deepEqual(done, ["The answer is 4."], `chunkSize=${chunkSize}`);
+    assert.deepEqual(messages, ["The answer is 4."], `chunkSize=${chunkSize}`);
+  }
+  // Ungated, the same stream keeps every byte of text it carried (the deltas
+  // are re-split around the partial tag the plain grammar holds, but nothing
+  // is added or removed).
+  const ungated = collect(await run(streamCase(deltas)));
+  assert.equal(ungated.deltas, text);
+  assert.deepEqual(ungated.done, [text]);
+  assert.deepEqual(ungated.messages, [text]);
+});
+
+test("prose already streamed before the orphan close is still cleaned from what is stored", async () => {
+  // The delta channel cannot retract bytes it has emitted, so the reasoning
+  // does reach the screen when it arrives in an earlier delta than its close.
+  // The `.done` snapshot and the stored message item -- what Codex replays into
+  // the next turn -- are cleaned regardless. That is what stops the leak from
+  // accumulating in context.
+  const deltas = ["I should read the file first.", `</think:${HEX}>`, "The answer is 4."];
+  const { deltas: d, done, messages } = collect(await run(streamCase(deltas), NONCE));
+  assert.deepEqual(done, ["The answer is 4."]);
+  assert.deepEqual(messages, ["The answer is 4."]);
+  assert.ok(!d.includes(`</think:${HEX}>`), "the delimiter itself must never be rendered");
+  // Reasoning the stripper still holds when the close arrives is dropped.
+  const held = collect(await run(streamCase([`I should read the file first.</think:${HEX}>The answer is 4.`]), NONCE));
+  assert.equal(held.deltas, "The answer is 4.");
+});
+
+test("nonce state is per output index", async () => {
+  const input =
+    block({ type: "response.output_text.delta", output_index: 0, delta: `r0</think:${HEX}>Zero` }) +
+    block({ type: "response.output_text.delta", output_index: 2, delta: `r2</think:${HEX}>Two` });
+  const { deltas } = collect(await run(input, NONCE));
+  assert.equal(deltas, "ZeroTwo");
+});
+
+test("the factory forwards the gate", () => {
+  const gated = reasoningTagStripperTransform("text/event-stream", { nonceDelimiters: true });
+  assert.ok(gated instanceof ReasoningTagStripper);
+  assert.equal(reasoningTagStripperTransform("text/event-stream", { nonceDelimiters: true }) === gated, false);
+  assert.ok(reasoningTagStripperTransform("text/event-stream") instanceof ReasoningTagStripper);
 });

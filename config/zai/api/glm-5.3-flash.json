@@ -8,7 +8,7 @@
       "provider": "zai-api",
       "listed": true,
       "displayName": "GLM-5.3-Flash (Z.ai API)",
-      "description": "GLM-5.3-Flash billed per token on the Z.ai open platform, with the low/high/max reasoning ladder and conservative flash compaction.",
+      "description": "GLM-5.3-Flash billed per token on the Z.ai open platform. The route reads text and images, on the low/high/max reasoning ladder and conservative flash compaction.",
       "priority": 63,
       "defaultEffort": "max",
       "reasoningLevels": [
@@ -28,10 +28,11 @@
       "contextWindow": 1000000,
       "autoCompact": 400000,
       "inputModalities": [
-        "text"
+        "text",
+        "image"
       ],
       "requestProfile": "glm-thinking",
-      "compHash": "zai-api-glm-5-3-flash-v1"
+      "compHash": "zai-api-glm-5-3-flash-v2"
     }
   ]
 }

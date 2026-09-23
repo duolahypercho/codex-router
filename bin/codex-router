@@ -7,10 +7,15 @@ set -eu
 # install` exposes this dispatcher and `codex-router setup` reaches the same
 # script `./bin/setup` does.
 #
-# Every sibling resolves its own root with `dirname $0`, which is only correct
-# when the script is invoked at its real path. The name a package manager puts
-# on PATH is a symlink into a versioned prefix, so this one walks the symlink
-# chain first and hands the resolved root to the sibling by calling it there.
+# Every sibling walks the same symlink chain before locating its root, and the
+# dispatcher must as well: a checkout user may link it onto PATH by hand, and
+# `bin_dir` is where the sibling it execs actually lives. The root is resolved
+# physically for the same reason as in the siblings, and a packaged install is
+# the case that needs it most: the formula's wrapper execs this script at
+# `<prefix>/opt/<formula>/libexec/bin/codex-router`, where the file is not a
+# link but `opt/<formula>` is one into the versioned keg, so the walk is a
+# no-op and only the physical root matches the path node realpaths a module to
+# before treating it as the main module.
 self=$0
 while [ -L "$self" ]; do
   link=$(readlink "$self")
@@ -19,8 +24,8 @@ while [ -L "$self" ]; do
     *) self=$(dirname -- "$self")/$link ;;
   esac
 done
-bin_dir=$(CDPATH= cd -- "$(dirname -- "$self")" && pwd)
-repo_dir=$(CDPATH= cd -- "$bin_dir/.." && pwd)
+bin_dir=$(CDPATH= cd -P -- "$(dirname -- "$self")" && pwd -P)
+repo_dir=$(CDPATH= cd -P -- "$bin_dir/.." && pwd -P)
 
 usage() {
   cat <<'EOF'

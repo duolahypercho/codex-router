@@ -26,6 +26,7 @@ test("providerStatusLabel maps onboarding actions to friendly text", () => {
   assert.equal(providerStatusLabel({ action: "install" }), "needs CLI install");
   assert.equal(providerStatusLabel({ action: "blocked" }), "CLI blocked by Windows");
   assert.equal(providerStatusLabel({ action: "anonymous" }), "no API key");
+  assert.equal(providerStatusLabel({ action: "configure" }), "needs local configuration");
   assert.equal(providerStatusLabel({ action: "mystery" }), "setup required");
 });
 

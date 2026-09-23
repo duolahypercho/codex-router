@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -95,6 +96,55 @@ export const CURSOR_LAUNCHER_PATH = process.env.MODEL_ROUTER_CURSOR_LAUNCHER || 
     ? path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local"), "codex-router", "bin", "cursor-router-agent.cmd")
     : path.join(os.homedir(), ".local", "bin", "cursor-router-agent")
 );
+// The five OpenAI/Anthropic-wire harnesses published by `routed-harness-*.mjs`.
+// Each one owns a single user-visible configuration document that the router
+// edits one key of; every path below resolves the way that client resolves it,
+// with a `MODEL_ROUTER_*` override so a test never writes into a real home.
+//
+// opencode reads a global config from `$XDG_CONFIG_HOME/opencode/opencode.json`
+// and lets `OPENCODE_CONFIG` name a file outright. Honour both, in that order,
+// or a user who moved theirs gets a provider nothing reads.
+export const OPENCODE_CONFIG_PATH =
+  process.env.MODEL_ROUTER_OPENCODE_CONFIG ||
+  process.env.OPENCODE_CONFIG ||
+  path.join(
+    process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config"),
+    "opencode",
+    "opencode.json",
+  );
+// pi keeps its agent state in `~/.pi/agent`; custom providers live in
+// `models.json` beside the session store. Its override is
+// `${APP_NAME.toUpperCase()}_CODING_AGENT_DIR`, i.e. `PI_CODING_AGENT_DIR`
+// (read from the shipped `dist/config.js`, not guessed from the docs).
+export const PI_AGENT_HOME =
+  process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent");
+export const PI_MODELS_PATH =
+  process.env.MODEL_ROUTER_PI_MODELS || path.join(PI_AGENT_HOME, "models.json");
+// omp (can1357/oh-my-pi) inherits pi's `PI_CODING_AGENT_DIR` override and
+// defaults to `~/.omp/agent`. It reads `models.yml`, then `models.yaml`, so an
+// existing `models.yaml` with no `models.yml` beside it is the document to edit:
+// creating a `models.yml` would silently shadow the user's file.
+export const OMP_AGENT_HOME =
+  process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".omp", "agent");
+const OMP_MODELS_YML = path.join(OMP_AGENT_HOME, "models.yml");
+const OMP_MODELS_YAML = path.join(OMP_AGENT_HOME, "models.yaml");
+export const OMP_MODELS_PATH =
+  process.env.MODEL_ROUTER_OMP_MODELS ||
+  (!existsSync(OMP_MODELS_YML) && existsSync(OMP_MODELS_YAML) ? OMP_MODELS_YAML : OMP_MODELS_YML);
+// Command Code keeps BYOK provider declarations in their own document, apart
+// from `auth.json` where its own credentials live. The router only ever writes
+// the former, and never a raw secret into it. Command Code has no directory
+// override: it joins the home directory with `.commandcode`.
+export const COMMANDCODE_HOME = path.join(os.homedir(), ".commandcode");
+export const COMMANDCODE_PROVIDERS_PATH =
+  process.env.MODEL_ROUTER_COMMANDCODE_PROVIDERS ||
+  path.join(COMMANDCODE_HOME, "providers.json");
+// Hermes Agent keeps every non-secret setting in one YAML document. Named
+// custom providers live under its `providers:` mapping.
+export const HERMES_HOME = process.env.HERMES_HOME || path.join(os.homedir(), ".hermes");
+export const HERMES_CONFIG_PATH =
+  process.env.MODEL_ROUTER_HERMES_CONFIG || path.join(HERMES_HOME, "config.yaml");
+
 export const CLAUDE_HOME = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude");
 export const CLAUDE_SETTINGS_PATH = path.join(CLAUDE_HOME, "settings.json");
 export const CLAUDE_LAUNCHER_PATH = process.env.MODEL_ROUTER_CLAUDE_LAUNCHER || (
@@ -135,6 +185,18 @@ export const GEMINI_CATALOG_PATH = path.join(STATE_DIR, "gemini-models.json");
 export const CURSOR_CATALOG_PATH = path.join(STATE_DIR, "cursor-models.json");
 export const CLAUDE_CATALOG_PATH = path.join(STATE_DIR, "claude-models.json");
 export const OPENCLAW_CATALOG_PATH = path.join(STATE_DIR, "openclaw-models.json");
+// One publication marker per routed harness, on the same rule as every other
+// client: it records what this router last wrote into somebody else's
+// document, so drift is detected against a snapshot rather than by
+// re-deriving what "should" be there and trusting the answer. Its presence is
+// what says the integration is installed.
+export const ROUTED_HARNESS_CATALOG_PATHS = Object.freeze({
+  opencode: path.join(STATE_DIR, "opencode-models.json"),
+  pi: path.join(STATE_DIR, "pi-models.json"),
+  omp: path.join(STATE_DIR, "omp-models.json"),
+  commandcode: path.join(STATE_DIR, "commandcode-models.json"),
+  hermes: path.join(STATE_DIR, "hermes-models.json"),
+});
 // Router-owned Cloudflare named-tunnel metadata. The tunnel exposes only the
 // separately keyed Cursor App edge on 4214; it never points at the main router.
 export const CURSOR_TUNNEL_STATE_PATH = path.join(STATE_DIR, "cursor-tunnel.json");

@@ -67,6 +67,7 @@ import {
 } from "./skills-install.mjs";
 import { discoveryDisabled } from "./discovery-mode.mjs";
 import { credentialLabel } from "./provider-credentials.mjs";
+import { resolveAvailabilityCache, withdrawnListedRoutes } from "./model-catalog-cache.mjs";
 import { providerApiKeyPoolsSnapshot } from "./provider-api-key-pool.mjs";
 import {
   effectiveProviderCredentialStatus,
@@ -473,17 +474,29 @@ try {
   requiredRoutedModels = selectedConfiguredListedModels();
   catalogRoutedModels = routedTransportActive ? requiredRoutedModels : [];
   requiredModels = new Set(catalogRoutedModels.map((model) => model.slug));
+  // Registry selection and generic providers are two lists. A Poe-only
+  // install writes `enabled-providers.json` as `[]` and still serves curated
+  // generic routes, so naming only the registry file here reported
+  // "Enabled providers: none" while the Poe row below said OK (#774).
+  const enabledGenericIds = [...RUNTIME_PROVIDERS.values()]
+    .filter((provider) => provider.generic === true && genericProviderConfigured(provider.id))
+    .map((provider) => provider.id);
+  const enabledNames = [...selection.providers, ...enabledGenericIds];
   add(
-    selection.providers.length ? "ok" : idleInstall ? "warn" : "fail",
+    enabledNames.length ? "ok" : idleInstall ? "warn" : "fail",
     "Enabled providers",
-    selection.providers.length
-      ? `${selection.providers.join(", ")}${selection.explicit ? "" : " (legacy show-all mode)"}`
+    enabledNames.length
+      ? `${enabledNames.join(", ")}${
+        selection.explicit || enabledGenericIds.length ? "" : " (legacy show-all mode)"
+      }`
       : idleInstall
         ? "none (idle install: --no-provider)"
         : "none",
-    idleInstall
-      ? "Run ./bin/setup without --no-provider to enable a provider."
-      : "Run ./bin/setup --guided and choose at least one provider.",
+    enabledNames.length
+      ? undefined
+      : idleInstall
+        ? "Run ./bin/setup without --no-provider to enable a provider."
+        : "Run ./bin/setup --guided and choose at least one provider.",
   );
   // The router no longer refuses to serve on a selection file it cannot fully
   // resolve, so the damage has to be reported here instead of as a 502.
@@ -589,6 +602,50 @@ add(
     ? `${unroutable.length} offered model(s) have no gateway route: ${unroutable.join(", ")}`
     : `${catalogRoutedModels.length} routed models`,
   "Run ./bin/doctor --fix from the owning checkout, then fully quit and reopen Codex.",
+);
+// A provider that answers its catalog without a listed id has withdrawn it;
+// the static card keeps offering a turn that deterministically fails. Warn
+// only, and only on a fresh successful answer: the operator decides what to
+// remove, a failed or stale fetch must never hide a working route, and a
+// returning model clears this on the next catalog refresh. Never consults
+// credentials or the network; it reads the cached provider lists.
+let withdrawnRoutes = [];
+if (catalogReadable && !discoveryDisabled()) {
+  try {
+    const seenProviders = new Set();
+    const caches = {};
+    const listed = [];
+    for (const model of catalogModels) {
+      if (model?.visibility !== "list") continue;
+      const registered = MODEL_BY_SLUG.get(String(model.slug));
+      const provider = registered?.provider;
+      const upstreamModel = registered?.upstreamModel;
+      if (typeof provider !== "string" || !provider) continue;
+      listed.push({
+        slug: String(model.slug),
+        provider,
+        upstreamModel: typeof upstreamModel === "string" ? upstreamModel : "",
+      });
+      if (!seenProviders.has(provider)) {
+        seenProviders.add(provider);
+        // A local override may serve a known endpoint under its own provider
+        // id; the endpoint owner's cached list still settles availability.
+        caches[provider] = resolveAvailabilityCache(provider, { providers: PROVIDERS });
+      }
+    }
+    withdrawnRoutes = withdrawnListedRoutes(listed, caches);
+  } catch {
+    // A cache this build cannot read is evidence of nothing; fail open.
+    withdrawnRoutes = [];
+  }
+}
+add(
+  withdrawnRoutes.length ? "warn" : "ok",
+  "Listed routes match provider catalogs",
+  withdrawnRoutes.length
+    ? `${withdrawnRoutes.length} listed route(s) no longer advertised: ${withdrawnRoutes.map((route) => `${route.slug} (${route.provider})`).join(", ")}`
+    : "all listed routes are advertised by their providers",
+  "The provider withdrew the model; remove or replace the route, then refresh the catalog.",
 );
 // Warn, not fail: an understated window still routes, and the operator may be
 // running a plan whose real ceiling is genuinely lower than the vendor's. What
@@ -1134,6 +1191,8 @@ for (const provider of PROVIDERS.values()) {
         ? `${provider.displayName} anonymous endpoint`
       : provider.authMode === "per-model"
         ? `${provider.displayName} per-model endpoints`
+      : provider.credential?.resolver
+        ? `${provider.displayName} credentials`
       : `${provider.displayName} ${credentialNoun}`,
     status.configured ? status.source : "not configured",
     provider.keyless
@@ -1144,7 +1203,9 @@ for (const provider of PROVIDERS.values()) {
         ? provider.anonymousNote || "No key needed; only the provider's free models are available."
       : provider.authMode === "per-model"
         ? "Each model here names its own endpoint; a model that needs a key reports it on its own row."
-      : `Run ./bin/provider-key ${provider.id} set.`,
+      : provider.credential?.resolver
+        ? status.setup || "Configure Vertex project/location and Google Application Default Credentials."
+        : `Run ./bin/provider-key ${provider.id} set.`,
   );
   // A credential that resolves says nothing about whether the account's plan
   // may use the API. Only warn once the provider is actually selected, so the
@@ -1438,6 +1499,66 @@ if (TARGET === "gemini") {
     error instanceof Error ? error.message : String(error),
     "Inspect ~/.codex/config.toml, then run ./bin/doctor --fix.",
   );
+}
+
+// The five document-configured harnesses are published *into* rather than
+// installed *as*, so they belong to no `MODEL_ROUTER_TARGET` and would
+// otherwise be checked by no doctor run at all. They are reported here
+// whenever their publication marker says this router wrote into one of them,
+// whichever target this command happens to be running under.
+try {
+  const { routedHarnesses } = await import("./routed-harness-catalog.mjs");
+  const { ROUTED_HARNESS_CATALOG_PATHS } = await import("./paths.mjs");
+  for (const harness of routedHarnesses()) {
+    if (!existsSync(ROUTED_HARNESS_CATALOG_PATHS[harness.id])) continue;
+    const publishHint = `Run ./bin/control client-setup ${harness.id} to republish.`;
+    try {
+      const status = childJson("routed-harness-manager.mjs", [harness.id, "status"]);
+      add(
+        status.installed && status.providerInstalled && status.baseUrlManaged && status.configValid
+          ? "ok"
+          : "fail",
+        `${harness.displayName} routing config`,
+        status.configError
+          ? status.configError
+          : status.providerInstalled
+            ? `${status.publishedModels} models in ${harness.providerPath.join(".")}; ${status.baseUrl || "unmanaged endpoint"}`
+            : `the router-owned provider is missing from ${status.document}`,
+        publishHint,
+      );
+      add(
+        status.cliInstalled && !status.cliOutdated ? "ok" : "warn",
+        `${harness.displayName} CLI`,
+        !status.cliInstalled
+          ? "not installed"
+          : status.cliOutdated
+            ? `${status.cliVersion} predates ${status.cliMinimumVersion}, the first release that reads the published provider`
+            : status.cli || harness.executables[0],
+        `Use Harness > ${harness.displayName} > Set up, or install it from ${harness.siteUrl}.`,
+      );
+      add(
+        status.documentProtected ? "ok" : "fail",
+        `${harness.displayName} config privacy`,
+        status.documentProtected ? `${status.document} is private` : status.document,
+        `${publishHint} Its provider carries the local caller capability.`,
+      );
+      add(
+        status.catalogFresh ? "ok" : "warn",
+        `${harness.displayName} catalog freshness`,
+        `published ${status.publishedModels}, routable ${status.routableModels}`,
+        publishHint,
+      );
+    } catch (error) {
+      add(
+        "fail",
+        `${harness.displayName} routing config`,
+        error instanceof Error ? error.message : String(error),
+        publishHint,
+      );
+    }
+  }
+} catch {
+  // Never let a diagnostic be the thing that fails the doctor.
 }
 
 const legacy = detectLegacyInstallations();

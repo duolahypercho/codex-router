@@ -8,7 +8,7 @@
       "provider": "openrouter",
       "listed": true,
       "displayName": "GLM-5.3-Flash (OpenRouter)",
-      "description": "GLM-5.3-Flash through OpenRouter. The 1M-context route uses the model's low/high/max reasoning ladder.",
+      "description": "GLM-5.3-Flash through OpenRouter. The 1M-context route reads text and images and uses the model's low/high/max reasoning ladder.",
       "priority": 102,
       "defaultEffort": "max",
       "reasoningLevels": [
@@ -28,10 +28,11 @@
       "contextWindow": 1000000,
       "autoCompact": 400000,
       "inputModalities": [
-        "text"
+        "text",
+        "image"
       ],
       "requestProfile": "ox-alpha",
-      "compHash": "openrouter-glm-5-3-flash-v2"
+      "compHash": "openrouter-glm-5-3-flash-v3"
     }
   ]
 }

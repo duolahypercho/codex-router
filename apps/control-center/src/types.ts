@@ -351,10 +351,22 @@ export interface RouterCatalogSnapshot {
   dashboard?: RouterDashboardSnapshot;
 }
 
+/** A custom endpoint mutation plus the one live check that followed it. */
+export interface CustomEndpointResult {
+  providerId: string;
+  check?: { ok: boolean; status: number; reason?: string };
+}
+
 export interface ProviderSetup {
   id: string;
   displayName: string;
-  kind: "oauth" | "api" | "anonymous" | "per-model";
+  kind: "oauth" | "api" | "anonymous" | "per-model" | "configuration";
+  /** Operator-added OpenAI-compatible endpoint (a generic provider). */
+  generic?: boolean;
+  enabled?: boolean;
+  baseUrl?: string;
+  adapter?: string;
+  hasKey?: boolean;
   configured: boolean;
   action: string;
   planNote?: string;
@@ -364,6 +376,7 @@ export interface ProviderSetup {
     kind: "models-endpoint" | "devin" | string;
   }>;
   credentialLabel?: string;
+  configurationNote?: string;
   cliInstalled?: boolean;
   cliRunnable?: boolean;
   signIn?: boolean;
@@ -418,6 +431,8 @@ export interface ProviderCatalog {
 
 export interface ProviderSetupSnapshot {
   providers: ProviderSetup[];
+  /** Operator-added OpenAI-compatible endpoints; shown under Custom. */
+  customEndpoints?: ProviderSetup[];
 }
 
 export interface UsageBucket {
@@ -484,6 +499,7 @@ export interface ProviderUsage {
   inputTokens?: number;
   regularInputTokens?: number;
   cachedInputTokens?: number;
+  cacheTelemetrySeen?: boolean;
   outputTokens?: number;
   totalTokens?: number;
   requests?: number;
@@ -637,13 +653,37 @@ export interface OperationEvent {
   error?: string;
 }
 
-export type HarnessId = "codex" | "dsh" | "gemini" | "cursor" | "claude" | "openclaw";
+export type HarnessId =
+  | "codex"
+  | "dsh"
+  | "gemini"
+  | "cursor"
+  | "claude"
+  | "openclaw"
+  // Document-configured harnesses: published into rather than installed as.
+  // See `src/routed-harness-catalog.mjs`.
+  | "opencode"
+  | "pi"
+  | "omp"
+  | "commandcode"
+  | "hermes";
 export type HarnessSurface = "app" | "terminal";
 
 export interface HarnessDescriptor {
   id: HarnessId;
   displayName: string;
-  ownership: "openai" | "deepseek" | "google" | "cursor" | "anthropic" | "openclaw";
+  ownership:
+    | "openai"
+    | "deepseek"
+    | "google"
+    | "cursor"
+    | "anthropic"
+    | "openclaw"
+    | "opencode"
+    | "pi"
+    | "omp"
+    | "commandcode"
+    | "nousresearch";
   description: string;
   cliInstalled: boolean;
   cliVersion?: string;
@@ -651,6 +691,10 @@ export interface HarnessDescriptor {
   configured: boolean;
   canInstall: boolean;
   installRequirement?: string;
+  /** Whether this client is installed and has an updater this router can run. */
+  canUpdate?: boolean;
+  /** The command an update would run, e.g. `opencode upgrade`. */
+  updateCommand?: string;
   publicOrigin?: string;
   agentConfigured?: boolean;
   appConfigured?: boolean;
@@ -722,11 +766,17 @@ export interface ContextSessionsSnapshot {
     claude: number;
     gemini: number;
     openclaw: number;
+    opencode: number;
+    pi: number;
+    omp: number;
+    commandcode: number;
+    hermes: number;
     archived: number;
   };
 }
 
 export interface RouterControlApi {
+  setInterfaceLanguage?(language: import("./i18n").LanguageId): void;
   readonly platform: string;
   minimizeWindow(): Promise<unknown>;
   toggleMaximizeWindow(): Promise<unknown>;
@@ -753,6 +803,10 @@ export interface RouterControlApi {
   addProviderModels(provider: string, modelIds: string[]): Promise<unknown>;
   connectProvider(provider: string): Promise<unknown>;
   saveProviderCredential(provider: string, credential: string): Promise<unknown>;
+  addCustomEndpoint(endpoint: { displayName: string; baseUrl: string; adapter: "openai-chat" | "openai-responses"; credential?: string }): Promise<CustomEndpointResult>;
+  editCustomEndpoint(provider: string, endpoint: { displayName: string; baseUrl: string; adapter: "openai-chat" | "openai-responses" }): Promise<CustomEndpointResult>;
+  removeCustomEndpointModels(provider: string, slugs: string[]): Promise<unknown>;
+  addCustomEndpointModel(provider: string, modelId: string): Promise<unknown>;
   removeProviderCredential(provider: string): Promise<unknown>;
   setSubagentMode(mode: "all" | "selected" | "proven"): Promise<unknown>;
   setSubagentModel(slug: string, enabled: boolean): Promise<unknown>;
@@ -803,8 +857,12 @@ export interface RouterControlApi {
   probeAgentBridge(bridgeId: AgentBridgeId): Promise<unknown>;
   loginAgentBridge(bridgeId: AgentBridgeId): Promise<unknown>;
   setupHarness(harnessId: HarnessId, hostname?: string): Promise<unknown>;
+  /** Move one routed client, or every installed one ("all"), to its latest release. */
+  updateHarness(harnessId: HarnessId | "all"): Promise<unknown>;
   prepareCursorTunnel(): Promise<unknown>;
   connectCursor(hostname?: string): Promise<unknown>;
+  disconnectCursor(): Promise<unknown>;
+  disconnectHarness(harnessId: HarnessId): Promise<unknown>;
   openHarnessSession(harnessId: HarnessId, sessionId: string, surface: HarnessSurface, model?: string): Promise<unknown>;
   openExternal(url: string): Promise<void>;
   onNavigation?(listener: (request: {

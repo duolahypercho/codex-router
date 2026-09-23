@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "slug": "commandcode/mimo-v2.6-flash",
+      "gatewayModel": "commandcode-mimo-v2-6-flash",
+      "upstreamModel": "xiaomi/mimo-v2.6-flash",
+      "provider": "commandcode",
+      "listed": true,
+      "displayName": "MiMo-V2.6-Flash (Command Code)",
+      "description": "MiMo-V2.6-Flash through the Command Code Provider API. Text input only.",
+      "priority": 113,
+      "defaultEffort": "high",
+      "reasoningLevels": [
+        {
+          "effort": "high",
+          "description": "Deep reasoning"
+        }
+      ],
+      "contextWindow": 1048576,
+      "autoCompact": 900000,
+      "inputModalities": [
+        "text"
+      ],
+      "compHash": "commandcode-mimo-v2-6-flash-v1"
+    }
+  ]
+}

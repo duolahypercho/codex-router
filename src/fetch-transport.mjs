@@ -30,7 +30,10 @@ export function fetchDispatcherOptions() {
 
 // `bodyTimeoutMs` raises Undici's 300s idle bound between body chunks. Only a
 // process that carries nothing but long-silent streams (the Grok OAuth
-// forwarder) sets it for its whole pool.
+// forwarder) sets it for its whole pool. The headers bound moves with it: a
+// Grok turn can stay silent until the first response headers, and Undici's
+// 300s headers default would abort that wait while the body bound still had
+// room. Callers that omit `bodyTimeoutMs` keep both defaults.
 export function installStableFetchTransport({
   AgentClass = Agent,
   EnvHttpProxyAgentClass = EnvHttpProxyAgent,
@@ -44,7 +47,7 @@ export function installStableFetchTransport({
     : AgentClass;
   const dispatcher = new DispatcherClass({
     ...fetchDispatcherOptions(),
-    ...(bodyTimeoutMs ? { bodyTimeout: bodyTimeoutMs } : {}),
+    ...(bodyTimeoutMs ? { headersTimeout: bodyTimeoutMs, bodyTimeout: bodyTimeoutMs } : {}),
   });
   setDispatcher(dispatcher);
   return dispatcher;

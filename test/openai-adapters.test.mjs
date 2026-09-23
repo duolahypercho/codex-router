@@ -188,6 +188,73 @@ test("Responses stream rejects unknown, conflicting, and post-terminal tool indi
   assert.match(afterTerminal.at(-1).data.message, /after its terminal/);
 });
 
+test("Responses stream drops a keep-alive after the terminal event instead of failing the turn", async () => {
+  // OpenCode Go and Zen send exactly this `ping` after every response.completed.
+  // Turning it into an error appended a gateway failure to completed turns,
+  // which strict Responses clients (opencode's AI SDK, pi) reject.
+  const output = frames(await transformText(createResponsesStreamTransform(), [
+    "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp-6\"}}\n\n",
+    ": keep-alive\n\n",
+    "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-6\",\"status\":\"completed\"}}\n\n",
+    "event: ping\ndata: {\"type\":\"ping\",\"cost\":\"0\"}\n\n",
+    ": trailing comment\n\n",
+    "data: [DONE]\n\n",
+  ]));
+  assert.deepEqual(
+    output.map((frame) => frame.data?.type ?? frame.data),
+    ["response.created", "response.completed", "[DONE]"],
+  );
+  assert.equal(output.some((frame) => frame.event === "error"), false);
+});
+
+test("Responses stream pins per-event response IDs to the created id (#814)", async () => {
+  // GitHub Copilot mints a different response id on response.created,
+  // response.in_progress and response.completed within one stream.
+  const copilotStream = [
+    "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_a\"}}\n\n",
+    "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_c\",\"output\":[]}}\n\n",
+  ];
+  // The pin is opt-in per route: every other upstream keeps the invariant that
+  // a completion under a different id is a corrupt stream.
+  const generic = frames(await transformText(createResponsesStreamTransform(), copilotStream));
+  assert.equal(generic[1].event, "error");
+  assert.equal(generic[1].data.code, "invalid_responses_stream");
+
+  const output = frames(await transformText(createResponsesStreamTransform(new Map(), { pinResponseId: true }), [
+    "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_a\"}}\n\n",
+    "event: response.in_progress\ndata: {\"type\":\"response.in_progress\",\"response\":{\"id\":\"resp_b\"}}\n\n",
+    "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"OK\"}\n\n",
+    "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_c\",\"output\":[]}}\n\n",
+  ]));
+  assert.deepEqual(output.map((frame) => frame.data.type), [
+    "response.created",
+    "response.in_progress",
+    "response.output_text.delta",
+    "response.completed",
+  ]);
+  assert.equal(output[1].data.response.id, "resp_a");
+  assert.equal(output[3].data.response.id, "resp_a");
+  assert.equal(output.some((frame) => frame.event === "error"), false);
+
+  const secondCreated = frames(await transformText(createResponsesStreamTransform(new Map(), { pinResponseId: true }), [
+    "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_a\"}}\n\n",
+    "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_b\"}}\n\n",
+  ]));
+  assert.equal(secondCreated[1].event, "error");
+  assert.equal(secondCreated[1].data.code, "invalid_responses_stream");
+});
+
+test("a stream of nothing but keep-alives still reports an incomplete stream", async () => {
+  // Comments are not forwarded, but they are proof the upstream was talking.
+  // Swallowing them silently would turn a stream that died before its terminal
+  // event into an empty, error-free turn.
+  const output = frames(await transformText(createResponsesStreamTransform(), [
+    ": keep-alive\n\n",
+  ]));
+  assert.equal(output.at(-1).event, "error");
+  assert.equal(output.at(-1).data.code, "upstream_stream_incomplete");
+});
+
 test("Responses provider errors stay structured and do not gain a second terminal frame", async () => {
   const output = frames(await transformText(createResponsesStreamTransform(), [
     "event: error\ndata: {\"type\":\"error\",\"code\":\"provider_failed\",\"message\":\"upstream rejected\"}\n\n",

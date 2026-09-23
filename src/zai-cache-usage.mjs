@@ -94,7 +94,7 @@ export class ZaiCacheUsageCompatTransform extends Transform {
 // 1.96 discards it (BerriAI/litellm#36168), so Codex reports cached_tokens=0
 // even though Go caches the prefix (verified 2026-08-26: mimo-v2.5 returned
 // cached_tokens 2560/2571 on a repeated prefix when called directly).
-const CHOICE_BEARING_USAGE_PROVIDERS = ["zai-api", "zai-coding", "opencode-go"];
+const CHOICE_BEARING_USAGE_PROVIDERS = ["zai-api", "zai-coding", "opencode-go", "openrouter"];
 
 export function zaiCacheUsageTransform(providerId, contentType = "") {
   if (!CHOICE_BEARING_USAGE_PROVIDERS.includes(String(providerId))) return undefined;

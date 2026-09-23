@@ -75,8 +75,8 @@ function mappingEntry(line, lineNumber) {
 }
 
 /**
- * Reports what a line leaves open: unclosed flow-collection depth, and a
- * quoted scalar still running at the end of it.
+ * Reports what a line leaves open: flow-collection depth, and a quoted scalar
+ * still running at the end of it.
  *
  * A quoted scalar legitimately spans lines, and the harness's own writer
  * produces one: it folds a long double-quoted value at its line width and ends
@@ -86,25 +86,60 @@ function mappingEntry(line, lineNumber) {
  * flow collection can hold a key this lexer owns, so tracking both is enough to
  * skip past them safely.
  */
-function scanValue(value, openQuote) {
-  let depth = 0;
+function scanValue(value, { depth = 0, openQuote, startsNode = true } = {}) {
+  let flowDepth = depth;
   let quote = openQuote;
+  // A quote is a quoting indicator only where a node can begin. Everywhere
+  // else it is an ordinary character of a plain scalar -- `don't`, `5" wide`,
+  // `he said "hi"` -- and reading one as an opening quote swallowed the rest
+  // of the document into a scalar that never ends.
+  let nodeStart = quote ? false : startsNode;
   for (let index = 0; index < value.length; index += 1) {
     const character = value[index];
     if (quote) {
       if (character === "\\" && quote === '"') index += 1;
-      else if (character === quote) quote = undefined;
-      continue;
-    }
-    if (character === '"' || character === "'") {
-      quote = character;
+      else if (character === quote) {
+        quote = undefined;
+        nodeStart = false;
+      }
       continue;
     }
     if (character === "#" && (index === 0 || /\s/.test(value[index - 1]))) break;
-    if (character === "[" || character === "{") depth += 1;
-    else if (character === "]" || character === "}") depth -= 1;
+    // Whitespace separates tokens without ending a plain scalar, so it leaves
+    // the node position exactly as it found it.
+    if (/\s/.test(character)) continue;
+    if (character === '"' || character === "'") {
+      if (nodeStart) quote = character;
+      nodeStart = false;
+      continue;
+    }
+    if (character === "[" || character === "{") {
+      flowDepth += 1;
+      nodeStart = true;
+      continue;
+    }
+    if (character === "]" || character === "}") {
+      flowDepth -= 1;
+      nodeStart = false;
+      continue;
+    }
+    // Inside a flow collection a comma and a mapping colon each begin the next
+    // node. In block context only `: ` does, because a plain scalar may not
+    // contain one; a `- ` with nothing but indentation before it begins a
+    // sequence entry.
+    if (character === "," && flowDepth > 0) {
+      nodeStart = true;
+      continue;
+    }
+    const separated = index + 1 === value.length || /\s/.test(value[index + 1]);
+    if (character === ":" && (separated || (flowDepth > 0 && /[,\]}]/.test(value[index + 1])))) {
+      nodeStart = true;
+      continue;
+    }
+    if (character === "-" && nodeStart && separated) continue;
+    nodeStart = false;
   }
-  return { depth, openQuote: quote };
+  return { depth: flowDepth, openQuote: quote };
 }
 
 function blockScalarIndicator(value) {
@@ -135,10 +170,10 @@ export function scanYamlDocument(contents) {
   // lines are not mapping entries however much they look like one.
   let openQuote;
 
-  const consume = (text, lineNumber) => {
-    const scanned = scanValue(text, openQuote);
+  const consume = (text, lineNumber, startsNode = true) => {
+    const scanned = scanValue(text, { depth: flowDepth, openQuote, startsNode });
     openQuote = scanned.openQuote;
-    flowDepth += scanned.depth;
+    flowDepth = scanned.depth;
     if (flowDepth < 0) {
       ambiguousYaml(lineNumber, "an unmatched flow-collection close was found");
     }
@@ -317,6 +352,41 @@ export function spliceYamlBlock(document, path, rendered) {
   // the document on every write.
   lines.splice(anchor.endIndex + 1, 0, ...block);
   return lines;
+}
+
+/**
+ * Lines inside `node`'s indented region that none of its registered children
+ * account for.
+ *
+ * Two separate blind spots make `children.size` an unsafe proxy for "this node
+ * holds nothing but ours":
+ *
+ *   - `children` is this lexer's map of mapping keys it was able to register. A
+ *     block sequence, a merge key, or a key `PLAIN_KEY` declines is invisible
+ *     there while still living inside the node. This is how removal came to
+ *     splice away a whole `providers:` sequence and leave a zero-byte file.
+ *   - `endIndex` deliberately stops before a trailing comment block, so a
+ *     comment the publish step pushed below our key sits outside the node's
+ *     own range while still being spliced away with it.
+ *
+ * So the region is walked by indentation -- every following line that is blank
+ * or indented deeper than the node -- rather than read off `endIndex`.
+ */
+export function unaccountedLines(document, node) {
+  const covered = new Set();
+  for (const child of node.children.values()) {
+    for (let index = child.index; index <= child.endIndex; index += 1) covered.add(index);
+  }
+  const rest = [];
+  for (let index = node.index + 1; index < document.lines.length; index += 1) {
+    const text = String(document.lines[index] ?? "");
+    if (/^\s*$/.test(text)) continue;
+    const indent = text.length - text.replace(/^\s*/, "").length;
+    if (indent <= node.indent) break;
+    if (covered.has(index)) continue;
+    rest.push({ index, text });
+  }
+  return rest;
 }
 
 /** Renders a string as a YAML scalar. JSON string syntax is valid YAML. */

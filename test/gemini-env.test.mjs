@@ -148,3 +148,35 @@ test("CRLF documents keep their line endings", () => {
   assert.ok(!/[^\r]\n/.test(written));
   assert.equal(removeGeminiEnvBlock(written), original);
 });
+
+test("a document that mixes CRLF and LF keeps every line's own ending", () => {
+  // The module treats every byte it did not write as somebody else's work, and
+  // a `.env` touched by two editors carries both endings. Detecting one ending
+  // for the whole document and rejoining on it rewrote the lines the router
+  // never authored -- the LF line below came back as CRLF.
+  const original = "A=1\r\nB=2\nC=3\r\n";
+  const written = spliceGeminiEnvBlock(original, VALUES);
+  assert.ok(written.includes("B=2\n"), `the LF line was rewritten:\n${JSON.stringify(written)}`);
+  assert.ok(written.includes("A=1\r\n"));
+  assert.equal(removeGeminiEnvBlock(written), original);
+  // Republishing over the block is still byte-identical, not merely equivalent.
+  assert.equal(spliceGeminiEnvBlock(written, VALUES), written);
+});
+
+test("an LF document with a CRLF value line is not normalised either", () => {
+  const original = "A=1\nB=2\r\nC=3\n";
+  const written = spliceGeminiEnvBlock(original, VALUES);
+  assert.ok(written.includes("B=2\r\n"), `the CRLF line was rewritten:\n${JSON.stringify(written)}`);
+  assert.equal(removeGeminiEnvBlock(written), original);
+});
+
+test("a document with no trailing newline gains exactly one, and nothing else", () => {
+  // The block has to start on its own line, so the last line gains a
+  // terminator. That is the only difference a publish/remove cycle leaves, and
+  // it is unchanged by this commit -- this pins the documented exception rather
+  // than evidencing the fix, and passes on `main` too.
+  const original = "A=1\nB=2";
+  const written = spliceGeminiEnvBlock(original, VALUES);
+  assert.ok(written.startsWith("A=1\nB=2\n"));
+  assert.equal(removeGeminiEnvBlock(written), `${original}\n`);
+});

@@ -85,7 +85,16 @@ test("OpenCode curation keeps each endpoint family on its documented protocol", 
     "opencode-free",
     "opencode-free-responses",
   ]);
-  assert.deepEqual(curationProviderIds("opencode-zen"), ["opencode-zen"]);
+  assert.deepEqual(curationProviderIds("opencode-zen"), [
+    "opencode-zen",
+    "opencode-zen-messages",
+    "opencode-zen-responses",
+  ]);
+  assert.deepEqual(curationProviderIds("opencode-zen-messages"), [
+    "opencode-zen",
+    "opencode-zen-messages",
+    "opencode-zen-responses",
+  ]);
   assert.deepEqual(curationProviderIds("opencode-go"), [
     "opencode-go",
     "opencode-go-messages",
@@ -109,7 +118,16 @@ test("OpenCode curation keeps each endpoint family on its documented protocol", 
   );
   assert.equal(
     curatedModelProviderId("opencode-zen", "muse-spark-1.2"),
-    "opencode-zen",
+    "opencode-zen-responses",
+  );
+  assert.equal(
+    curatedModelProviderId("opencode-zen", "claude-sonnet-4-5"),
+    "opencode-zen-messages",
+  );
+  assert.equal(curatedModelProviderId("opencode-zen", "glm-5.3"), "opencode-zen");
+  assert.match(
+    curatedModelBlockReason("opencode-zen", "gemini-3-pro") || "",
+    /Google's native protocol/,
   );
   assert.equal(curatedModelBlockReason("opencode-go", "grok-4.5"), undefined);
   assert.match(
@@ -262,7 +280,7 @@ test("OpenCode Free curation knows the documented windows its live catalog omits
   assert.equal(curatedModelContextLength("opencode-free", "mimo-v2.5-free"), undefined);
 });
 
-test("paid Zen curation identity remains byte-for-byte unchanged", () => {
+test("paid Zen Muse curation lands on the Responses variant", () => {
   const paidZen = userModelEntry({
     providerId: "opencode-zen",
     upstreamId: "muse-spark-1.2",
@@ -271,9 +289,9 @@ test("paid Zen curation identity remains byte-for-byte unchanged", () => {
     metadata: { contextWindow: 1_048_576 },
   });
   const [normalized] = normalizeCurationModels([paidZen], "opencode-zen");
-  assert.strictEqual(normalized, paidZen);
-  assert.equal(normalized.slug, "opencode-zen/muse-spark-1.2");
-  assert.equal(normalized.gatewayModel, "opencode-zen-muse-spark-1-2");
+  assert.equal(normalized.slug, "opencode-zen-responses/muse-spark-1.2");
+  assert.equal(normalized.gatewayModel, "opencode-zen-responses-muse-spark-1-2");
+  assert.equal(normalized.provider, "opencode-zen-responses");
 });
 
 test("OpenCode protocol normalization preserves metadata and deduplicates old routes", () => {
@@ -476,11 +494,19 @@ test("a curated model can opt into the auto tool-choice profile", () => {
   assert.equal(parseRequestProfile("auto-tool-choice"), "auto-tool-choice");
 });
 
+test("a curated model can opt into omit-tool-choice", () => {
+  assert.equal(parseRequestProfile("omit-tool-choice"), "omit-tool-choice");
+});
+
 test("a curated model can opt into the narrow encrypted-schema profile", () => {
   assert.equal(
     parseRequestProfile("codex-encrypted-schema"),
     "codex-encrypted-schema",
   );
+});
+
+test("a curated model can opt into the DashScope reasoning profile", () => {
+  assert.equal(parseRequestProfile("dashscope-reasoning"), "dashscope-reasoning");
 });
 
 test("an unknown request profile is rejected by name", () => {
@@ -1351,6 +1377,59 @@ test("--efforts still overrides a documented ladder", () => {
     assert.equal(stored.contextWindow, 256_000);
     assert.match(stored.description, /256,000/);
     assert.doesNotMatch(stored.description, /low\/medium\/high ladder/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("scripted curation records that a served window and modalities came from the provider's catalog", () => {
+  const providerId = "openrouter";
+  const upstreamModel = "vendor/sized";
+  const dir = mkdtempSync(path.join(os.tmpdir(), "curate-advertised-"));
+  const file = path.join(dir, "user-models.json");
+  const fixture = path.join(dir, "models.json");
+  writeFileSync(fixture, JSON.stringify({ data: [
+    { id: upstreamModel, context_length: 1048576, architecture: { input_modalities: ["text", "image", "file"] } },
+    { id: "vendor/silent" },
+    { id: "vendor/audio-only", architecture: { input_modalities: ["audio"] } },
+  ] }));
+  try {
+    const result = spawnSync(
+      process.execPath,
+      [
+        path.join(root, "src", "curate-models.mjs"),
+        providerId,
+        "--models",
+        `${upstreamModel},vendor/silent,vendor/audio-only`,
+        "--fixture",
+        fixture,
+        "--no-apply",
+      ],
+      {
+        cwd: root,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          CODEX_HOME: path.join(dir, "codex"),
+          MODEL_ROUTER_STATE_DIR: dir,
+          MODEL_ROUTER_USER_MODELS: file,
+          MODEL_ROUTER_MODEL_PICKER_STATE: path.join(dir, "model-picker.json"),
+          OPENROUTER_API_KEY: "",
+        },
+      },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    const models = JSON.parse(readFileSync(file, "utf8")).models;
+    const sized = models.find((model) => model.upstreamModel === upstreamModel);
+    assert.equal(sized.contextWindow, 1048576);
+    assert.deepEqual(sized.inputModalities, ["text", "image"], "file is advertised but not publishable; text and image survive");
+    assert.match(sized.description, /context window and input modalities as advertised by the provider's catalog/);
+    const audioOnly = models.find((model) => model.upstreamModel === "vendor/audio-only");
+    assert.deepEqual(audioOnly.inputModalities, ["text"], "an unpublishable modality set falls back to the default, never an empty list");
+    assert.match(audioOnly.description, /conservative default metadata/);
+    const silent = models.find((model) => model.upstreamModel === "vendor/silent");
+    assert.equal(silent.contextWindow, 131072);
+    assert.match(silent.description, /conservative default metadata/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

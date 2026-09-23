@@ -62,9 +62,10 @@ test("the router disables HTTP/2 on its process-wide fetch dispatcher", () => {
   assert.deepEqual(installed, [dispatcher]);
 });
 
-test("a Grok long-idle pool raises only the body idle bound and keeps the proxy decision", () => {
+test("a Grok long-idle pool raises the header and body idle bounds together", () => {
   const { created } = installFakeTransport({});
   assert.equal("bodyTimeout" in created[0].options, false, "the shared pool keeps undici's default");
+  assert.equal("headersTimeout" in created[0].options, false, "the shared pool keeps undici's header default");
 
   class FakeAgent {
     constructor(options) {
@@ -86,7 +87,12 @@ test("a Grok long-idle pool raises only the body idle bound and keeps the proxy 
     bodyTimeoutMs: 660_000,
     setDispatcher() {},
   });
-  assert.deepEqual(forwarderPool.options, { allowH2: false, pipelining: 1, bodyTimeout: 660_000 });
+  assert.deepEqual(forwarderPool.options, {
+    allowH2: false,
+    pipelining: 1,
+    headersTimeout: 660_000,
+    bodyTimeout: 660_000,
+  });
 
   const classes = { AgentClass: FakeAgent, EnvHttpProxyAgentClass: FakeEnvHttpProxyAgent, execArgv: [] };
   const direct = longIdleStreamDispatcher(660_001, { ...classes, environment: {} });

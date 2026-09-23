@@ -33,8 +33,25 @@ struct DesktopWidgetPresentationTests {
       resetAt: now.addingTimeInterval(2 * 3600 + 12 * 60).timeIntervalSince1970
     )
     #expect(
-      DesktopWidgetPresentation.quotaAccessibilityLabel(row, now: now)
+      DesktopWidgetPresentation.quotaAccessibilityLabel(row, now: now, language: .english)
         == "ChatGPT, 5-hour limit, 42 percent left, in 2h 12m"
+    )
+  }
+
+  @Test("the same quota label reads in Chinese when that is the selected language")
+  func quotaAccessibilityInChinese() {
+    let now = Date(timeIntervalSince1970: 1_770_000_000)
+    let row = DesktopQuotaRow(
+      id: "openai-primary",
+      providerID: "openai",
+      providerName: "ChatGPT",
+      label: "5-hour limit",
+      remainingPercent: 42,
+      resetAt: now.addingTimeInterval(2 * 3600 + 12 * 60).timeIntervalSince1970
+    )
+    #expect(
+      DesktopWidgetPresentation.quotaAccessibilityLabel(row, now: now, language: .chinese)
+        == "ChatGPT，5 小时限制，剩余 42%，2 小时 12 分后"
     )
   }
 }

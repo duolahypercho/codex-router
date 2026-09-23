@@ -50,8 +50,51 @@ writeFileSync(
 
 const {
   createSupportBundle,
+  gitCommitForSourceRoot,
   redactSupportBundleObjectForTests,
 } = await import("../src/support-bundle.mjs");
+
+test("gitCommit reports only a commit that describes the installed tree", () => {
+  const gitRoot = mkdtempSync(path.join(os.tmpdir(), "codex-router-git-"));
+  const git = (args, cwd) => {
+    const result = spawnSync("git", args, {
+      cwd,
+      encoding: "utf8",
+      env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null" },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trim();
+  };
+  try {
+    git(["init", "-q", "-b", "main", "."], gitRoot);
+    git(["config", "user.email", "test@example.test"], gitRoot);
+    git(["config", "user.name", "Test"], gitRoot);
+    writeFileSync(path.join(gitRoot, "package.json"), "{}\n");
+    git(["add", "package.json"], gitRoot);
+    git(["commit", "-qm", "init"], gitRoot);
+    const head = git(["rev-parse", "HEAD"], gitRoot);
+
+    // A Git checkout is the only install whose HEAD describes the router.
+    assert.equal(gitCommitForSourceRoot(gitRoot), head);
+
+    // The Homebrew shape from issue #761: the keg is not a repository, but the
+    // Homebrew prefix above it is, so a plain `rev-parse HEAD` would answer
+    // with brew.git's commit and misidentify the installed tree.
+    const keg = path.join(gitRoot, "Cellar", "codex-router", "0.5.1", "libexec");
+    mkdirSync(keg, { recursive: true });
+    assert.equal(gitCommitForSourceRoot(keg), null);
+
+    // A tarball outside any repository has no commit to report.
+    const tarball = mkdtempSync(path.join(os.tmpdir(), "codex-router-tarball-"));
+    try {
+      assert.equal(gitCommitForSourceRoot(tarball), null);
+    } finally {
+      rmSync(tarball, { recursive: true, force: true });
+    }
+  } finally {
+    rmSync(gitRoot, { recursive: true, force: true });
+  }
+});
 
 test("support-bundle keeps --include-logs as a deprecated log-free no-op", () => {
   const entry = fileURLToPath(new URL("../src/support-bundle.mjs", import.meta.url));

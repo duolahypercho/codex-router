@@ -3,10 +3,11 @@ import { existsSync, lstatSync, readFileSync, unlinkSync } from "node:fs";
 import path from "node:path";
 import { privateFileIsProtected, writePrivateJson } from "./file-security.mjs";
 import { STATE_DIR } from "./paths.mjs";
+import { ROUTED_HARNESS_IDS } from "./routed-harness-catalog.mjs";
 
 export const CALLER_KEY_ROTATION_JOURNAL_PATH = path.join(STATE_DIR, "caller-key-rotation.json");
 const PHASES = new Set(["prepared", "service-stopped", "secret-swapped", "clients-refreshed", "service-started", "verified"]);
-const TARGETS = new Set(["codex", "dsh", "gemini", "openclaw"]);
+const TARGETS = new Set(["codex", "dsh", "gemini", "openclaw", ...ROUTED_HARNESS_IDS]);
 const TRANSITIONS = Object.freeze({
   prepared: new Set(["service-stopped", "secret-swapped"]),
   "service-stopped": new Set(["secret-swapped"]),

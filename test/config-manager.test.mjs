@@ -482,6 +482,51 @@ test("config manager enables multi_agent_v2 and skips the legacy agents scalar w
   }
 });
 
+test("a user-owned [features.multi_agent_v2] table is left alone instead of duplicated (#819)", () => {
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), "codex-router-v2-user-table-"));
+  const configPath = path.join(codexHome, "config.toml");
+  const original = `model = "gpt-5.5"
+
+[features]
+multi_agent = true
+
+[features.multi_agent_v2]
+enabled = true
+max_concurrent_threads_per_session = 3
+`;
+  writeFileSync(configPath, original, { mode: 0o600 });
+
+  try {
+    run("enable", codexHome);
+    const enabled = readFileSync(configPath, "utf8");
+    assert.doesNotMatch(enabled, /codex-router-multi-agent-v2-managed/);
+    assert.doesNotMatch(enabled, /codex-router-agent-concurrency-managed/);
+    assert.equal((enabled.match(/multi_agent_v2/g) || []).length, 1);
+    assert.match(enabled, /^\[features\.multi_agent_v2\]$/m);
+    assert.match(enabled, /^max_concurrent_threads_per_session = 3$/m);
+
+    run("disable", codexHome);
+    assert.equal(readFileSync(configPath, "utf8").trimStart(), original);
+  } finally {
+    rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
+test("a dotted multi_agent_v2 assignment under [features] is respected (#819)", () => {
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), "codex-router-v2-dotted-"));
+  const configPath = path.join(codexHome, "config.toml");
+  writeFileSync(configPath, `[features]\nmulti_agent_v2.enabled = true\n`, { mode: 0o600 });
+
+  try {
+    run("enable", codexHome);
+    const enabled = readFileSync(configPath, "utf8");
+    assert.doesNotMatch(enabled, /codex-router-multi-agent-v2-managed/);
+    assert.equal((enabled.match(/multi_agent_v2/g) || []).length, 1);
+  } finally {
+    rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
 test("multi_agent_v2 management is byte-idempotent around an existing features table", () => {
   const codexHome = mkdtempSync(path.join(os.tmpdir(), "codex-router-v2-idempotence-"));
   const configPath = path.join(codexHome, "config.toml");
@@ -1479,9 +1524,10 @@ test("config manager adopts and restores a prepared user-owned native catalog", 
     JSON.stringify({ models: [{ slug: "gpt-user-native" }] }),
     { mode: 0o600 },
   );
+  const prose = 'instructions = """\nmodel_catalog_json = "example"\n"""';
   writeFileSync(
     configPath,
-    `model = "gpt-user-native"\nmodel_catalog_json = ${JSON.stringify(foreignCatalog)}\n`,
+    `${prose}\nmodel = "gpt-user-native"\nmodel_catalog_json = ${JSON.stringify(foreignCatalog)}\n`,
     { mode: 0o600 },
   );
 
@@ -1500,6 +1546,7 @@ test("config manager adopts and restores a prepared user-owned native catalog", 
     );
     const enabled = run("enable", codexHome, stateDir, ["--adopt-native-catalog"]);
     assert.equal(enabled.mode, "router");
+    assert.ok(readFileSync(configPath, "utf8").includes(prose));
     assert.equal(
       JSON.parse(
         readFileSync(path.join(stateDir, "native-catalog-source.json"), "utf8"),
@@ -1509,6 +1556,7 @@ test("config manager adopts and restores a prepared user-owned native catalog", 
 
     const disabled = run("disable", codexHome, stateDir);
     assert.equal(disabled.mode, "native");
+    assert.ok(readFileSync(configPath, "utf8").includes(prose));
     assert.equal(
       readFileSync(configPath, "utf8").includes(
         `model_catalog_json = ${JSON.stringify(foreignCatalog)}`,
@@ -2421,5 +2469,183 @@ test("status exposes residual managed router artifacts even when mode is native"
     assert.equal(providerStatus.managed_router_artifacts_present, true);
   } finally {
     rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
+test("a root multiline string that contains assignment-shaped prose is never rewritten", () => {
+  // `config.toml` is edited as text, and a line inside a multiline string can
+  // look exactly like a root assignment. Matching lines by regex found that
+  // prose first: `router-default-set` overwrote it and left the real `model`
+  // alone, and the enable path deleted the `model_provider` line out of the
+  // string entirely. Both destroyed user text silently while the setting the
+  // user asked for did not change.
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), "codex-router-multiline-root-"));
+  const stateDir = path.join(codexHome, "router-state");
+  const configPath = path.join(codexHome, "config.toml");
+  const instructions = [
+    'instructions = """',
+    "Always answer briefly.",
+    'model = "documented example, not a setting"',
+    'model_provider = "documented example, not a setting"',
+    "Never guess.",
+    '"""',
+  ].join("\n");
+  writeFileSync(configPath, `${instructions}\nmodel = "gpt-5.6-luna"\nmodel_provider = "openai"\n`, {
+    mode: 0o600,
+  });
+
+  try {
+    run("enable", codexHome, stateDir);
+    let contents = readFileSync(configPath, "utf8");
+    assert.ok(
+      contents.includes(instructions),
+      `enable rewrote the multiline string:\n${contents}`,
+    );
+
+    const selected = run(
+      "router-default-set",
+      codexHome,
+      stateDir,
+      ["deepseek/deepseek-v4-flash"],
+    );
+    assert.equal(selected.model, "deepseek/deepseek-v4-flash");
+    contents = readFileSync(configPath, "utf8");
+    assert.ok(
+      contents.includes(instructions),
+      `router-default-set rewrote the multiline string:\n${contents}`,
+    );
+    // Outside the string there is exactly one `model` assignment and it is the
+    // one that moved. The prose is identical in shape, so it can only be told
+    // apart by whether it is inside the string.
+    const outside = contents.replace(instructions, "");
+    assert.match(outside, /^model = "deepseek\/deepseek-v4-flash"$/m);
+    assert.ok(
+      !outside.includes("documented example"),
+      `prose escaped the multiline string:\n${contents}`,
+    );
+
+    // ...and the prior value is still recoverable, which it is not if the
+    // assignment the journal recorded was the prose line.
+    const restored = run("router-default-clear", codexHome, stateDir);
+    assert.equal(restored.model, "gpt-5.6-luna");
+    contents = readFileSync(configPath, "utf8");
+    assert.ok(contents.includes(instructions), `clear rewrote the multiline string:\n${contents}`);
+
+    run("disable", codexHome, stateDir);
+    contents = readFileSync(configPath, "utf8");
+    assert.ok(contents.includes(instructions), `disable rewrote the multiline string:\n${contents}`);
+    // Root keys are re-inserted rather than edited in place, so their order is
+    // not preserved and is not asserted here; the values and the string are.
+    const restoredOutside = contents.replace(instructions, "");
+    assert.match(restoredOutside, /^model = "gpt-5\.6-luna"$/m);
+    assert.match(restoredOutside, /^model_provider = "openai"$/m);
+    assert.ok(!restoredOutside.includes("documented example"));
+  } finally {
+    rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
+test("a config the TOML lexer refuses is still editable", () => {
+  // The prototype installer wrote the catalog path unescaped, so on Windows
+  // `model_catalog_json` holds `"D:\a\...\merged-models.json"` whose `\a` is
+  // not a valid TOML escape. The structural lexer refuses that document, and
+  // refusing along with it would leave the operator unable to disable the
+  // router at all -- so these fall back to the line matching they have always
+  // had rather than failing closed.
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), "codex-router-unlexable-"));
+  const stateDir = path.join(codexHome, "router-state");
+  const configPath = path.join(codexHome, "config.toml");
+  // Any unescaped backslash path makes the document unreadable; this one is on
+  // a key the router does not own, so the test is about the lexer refusal and
+  // not about ownership rules.
+  const windowsPath = "D:\\a\\codex-router\\tools\\run.exe";
+  writeFileSync(
+    configPath,
+    `model = "kimi-oauth/k3"\nuser_tool_path = "${windowsPath}"\n`,
+    { mode: 0o600 },
+  );
+
+  try {
+    run("enable", codexHome, stateDir);
+    assert.match(readFileSync(configPath, "utf8"), /^model = "kimi-oauth\/k3"$/m);
+    run("disable", codexHome, stateDir);
+    const contents = readFileSync(configPath, "utf8");
+    assert.match(contents, /^model = "kimi-oauth\/k3"$/m);
+    // The unreadable line is still the user's, byte for byte.
+    assert.ok(contents.includes(`user_tool_path = "${windowsPath}"`), contents);
+  } finally {
+    rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
+for (const invalidTable of [false, true]) {
+  test(`root edits preserve prose and markers with invalid table = ${invalidTable}`, () => {
+    const home = mkdtempSync(path.join(os.tmpdir(), "router-root-review-"));
+    const config = path.join(home, "config.toml");
+    const prose = [
+      'instructions = """',
+      'model = "prose"',
+      'model_catalog_json = "prose-catalog"',
+      '# BEGIN codex-router-managed',
+      '# END codex-router-managed',
+      '[not_a_table]',
+      'max_threads = 1',
+      '\"\"\"',
+    ].join("\n");
+    const tail = invalidTable ? '\n[mcp_servers.x]\ncommand = "C:\\bad\\escape"\n' : '';
+    writeFileSync(config, `${prose}\nmodel = "gpt-5.6" # keep decoded value\n${tail}`);
+    try {
+      run("enable", home);
+      assert.ok(readFileSync(config, "utf8").includes(prose));
+      run("router-default-set", home, undefined, ["deepseek/deepseek-v4-flash"]);
+      assert.ok(readFileSync(config, "utf8").includes(prose));
+      const restored = run("router-default-clear", home);
+      assert.equal(restored.model, "gpt-5.6");
+      assert.ok(readFileSync(config, "utf8").includes(prose));
+      assert.ok(readFileSync(config, "utf8").includes(tail));
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+}
+
+test("login-free refuses invalid TOML without changing prose or the config", () => {
+  const home = mkdtempSync(path.join(os.tmpdir(), "router-root-refusal-"));
+  const config = path.join(home, "config.toml");
+  const contents = 'instructions = """\nmodel = "prose"\n"""\nmodel = "gpt-5.6"\n[mcp_servers.x]\ncommand = "C:\\bad\\escape"\n';
+  writeFileSync(config, contents);
+  try {
+    assert.throws(() => run("login-free-enable", home, undefined, ["deepseek/deepseek-v4-pro"]), /ambiguous TOML/);
+    assert.equal(readFileSync(config, "utf8"), contents);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("assignment-shaped concurrency prose does not suppress the managed setting", () => {
+  const home = mkdtempSync(path.join(os.tmpdir(), "router-concurrency-prose-"));
+  const config = path.join(home, "config.toml");
+  const prose = 'instructions = """\nmax_threads = 1\n[agents]\nmax_concurrent_threads_per_session = 2\n"""';
+  writeFileSync(config, `${prose}\nmodel = "gpt-5.6"\n`);
+  try {
+    run("enable", home, undefined, [], { CODEX_BIN: scalarOnlyCodex });
+    const contents = readFileSync(config, "utf8");
+    assert.ok(contents.includes(prose));
+    assert.match(contents.replace(prose, ""), /^max_concurrent_threads_per_session = /m);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("a multiline model setting is refused without partial deletion", () => {
+  const home = mkdtempSync(path.join(os.tmpdir(), "router-multiline-setting-"));
+  const config = path.join(home, "config.toml");
+  const contents = 'model = """\ngpt-5.6\n"""\n';
+  writeFileSync(config, contents);
+  try {
+    assert.throws(() => run("enable", home), /single-line TOML string/);
+    assert.equal(readFileSync(config, "utf8"), contents);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
   }
 });

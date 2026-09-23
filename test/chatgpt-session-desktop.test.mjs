@@ -204,7 +204,7 @@ test("Electron reconciles consent after installed-client publication fails", asy
     assert.doesNotMatch(`${failed.stdout}${failed.stderr}${status.stdout}`, /partial-secret|partial-account/);
 
     const app = await readFile(new URL("../apps/control-center/src/App.tsx", import.meta.url), "utf8");
-    const action = app.slice(app.indexOf("const runAction"), app.indexOf("const t = useCallback"));
+    const action = app.slice(app.indexOf("const runAction"), app.indexOf("const navItems"));
     const rejected = action.slice(action.indexOf("} catch (error)"), action.indexOf("return;", action.indexOf("} catch (error)")));
     assert.match(rejected, /setOperation\(\{ action: label, status: "failed", message \}\);[\s\S]*await Promise\.allSettled\(\[refreshCore\(\), refreshUsage\(\)\]\)/);
   } finally {
@@ -256,6 +256,6 @@ test("Electron exposes only fixed consent IPC and requires an enable confirmatio
   assert.match(settings, /chatgptSession\.session !== "usable"/);
   assert.match(settings, /api\.setChatGptSessionSharing\(true\)/);
   assert.match(settings, /api\.setChatGptSessionSharing\(false\)/);
-  const copy = await readFile(new URL("../apps/control-center/src/i18n.ts", import.meta.url), "utf8");
+  const copy = await readFile(new URL("../apps/control-center/src/locales/en.ts", import.meta.url), "utf8");
   assert.match(copy, /other local Codex Router clients spend this user's ChatGPT subscription/);
 });

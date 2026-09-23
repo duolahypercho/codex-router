@@ -53,6 +53,7 @@ jobs:
           # Only secrets present in repository settings become configured
           # provider credentials. Scope them to this step so checkout, setup,
           # and npm lifecycle scripts never receive provider keys.
+          AINETCAFE_API_KEY: ${{ secrets.AINETCAFE_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
           CHUTES_API_KEY: ${{ secrets.CHUTES_API_KEY }}
@@ -79,6 +80,8 @@ jobs:
           ORCAROUTER_API_KEY: ${{ secrets.ORCAROUTER_API_KEY }}
           QWEN_PLAN_API_KEY: ${{ secrets.QWEN_PLAN_API_KEY }}
           SILICONFLOW_API_KEY: ${{ secrets.SILICONFLOW_API_KEY }}
+          STEPFUN_API_KEY: ${{ secrets.STEPFUN_API_KEY }}
+          STEPFUN_API_CN_KEY: ${{ secrets.STEPFUN_API_CN_KEY }}
           TOGETHER_API_KEY: ${{ secrets.TOGETHER_API_KEY }}
           VENICE_API_KEY: ${{ secrets.VENICE_API_KEY }}
           XAI_API_KEY: ${{ secrets.XAI_API_KEY }}

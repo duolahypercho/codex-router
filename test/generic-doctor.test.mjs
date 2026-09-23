@@ -45,6 +45,10 @@ test("doctor reports generic readiness without endpoint or header values", () =>
   const headerSecret = "DOCTOR_GENERIC_HEADER_MUST_NOT_LEAK";
   const endpointSecret = "private-path-must-not-leak";
   mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+  writeFileSync(path.join(stateDir, "enabled-providers.json"), `${JSON.stringify({
+    version: 1,
+    providers: [],
+  })}\n`, { mode: 0o600 });
   writeFileSync(env.MODEL_ROUTER_GENERIC_PROVIDERS, `${JSON.stringify({
     version: 1,
     providers: [{
@@ -69,6 +73,9 @@ test("doctor reports generic readiness without endpoint or header values", () =>
 
   try {
     const { report } = doctor(env);
+    const enabled = report.checks.find((check) => check.name === "Enabled providers");
+    assert.equal(enabled.status, "ok");
+    assert.equal(enabled.detail, "doctor-generic");
     const row = report.checks.find((check) => check.name === "Doctor Generic generic provider");
     assert.equal(row.status, "ok");
     assert.match(row.detail, /no credential required; 1 curated model route/);

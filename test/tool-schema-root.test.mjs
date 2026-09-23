@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { preservedGeminiSchemas, zillowRangeSchema } from "./fixtures/gemini-tool-schemas.mjs";
 
 import { CODEX_APP_TOOLS } from "../src/codex-app-tools.mjs";
 import { toResponsesRequest } from "../src/grok-oauth-forwarder.mjs";
+import { moonshotSchemaRoute } from "../src/moonshot-schema-routes.mjs";
 import {
+  inlineDanglingNestedDefsRefs,
   declareSchemaTypes,
   hasObjectRoot,
   inlineForeignRefs,
@@ -635,6 +638,219 @@ test("a $defs ref is the form Moonshot asks for and survives untouched", () => {
   assert.deepEqual(inlined.$defs, schema.$defs);
 });
 
+test("a dangling $defs ref resolves from the nearest enclosing schema", () => {
+  const schema = {
+    type: "object",
+    properties: {
+      request: {
+        $defs: {
+          MinMaxInt: {
+            type: "object",
+            properties: { min: { type: "integer" }, max: { type: "integer" } },
+          },
+        },
+        type: "object",
+        properties: {
+          bedrooms: {
+            $ref: "#/$defs/MinMaxInt",
+            description: "Bedrooms range filter.",
+          },
+        },
+      },
+    },
+  };
+  const inlined = inlineDanglingNestedDefsRefs(schema);
+  assert.deepEqual(inlined.properties.request.properties.bedrooms, {
+    type: "object",
+    properties: { min: { type: "integer" }, max: { type: "integer" } },
+    description: "Bedrooms range filter.",
+  });
+  assert.deepEqual(schema.properties.request.properties.bedrooms, {
+    $ref: "#/$defs/MinMaxInt",
+    description: "Bedrooms range filter.",
+  });
+});
+
+test("valid root $defs refs and unresolved nested refs stay untouched", () => {
+  const valid = {
+    type: "object",
+    properties: { value: { $ref: "#/$defs/value" } },
+    $defs: { value: { type: "string" } },
+  };
+  assert.equal(inlineDanglingNestedDefsRefs(valid), valid);
+
+  const unresolved = {
+    type: "object",
+    properties: {
+      request: {
+        $defs: { other: { type: "string" } },
+        type: "object",
+        properties: { value: { $ref: "#/$defs/missing" } },
+      },
+    },
+  };
+  assert.equal(inlineDanglingNestedDefsRefs(unresolved), unresolved);
+});
+
+test("Gemini repair preserves valid schemas from the adversarial review", () => {
+  for (const { name, schema } of preservedGeminiSchemas()) {
+    const before = structuredClone(schema);
+    assert.equal(inlineDanglingNestedDefsRefs(schema), schema, name);
+    assert.deepEqual(schema, before, name);
+  }
+});
+
+test("Gemini repair preserves the observed Zillow range constraints", () => {
+  const schema = zillowRangeSchema();
+  const before = structuredClone(schema);
+  const repaired = inlineDanglingNestedDefsRefs(schema);
+  assert.deepEqual(repaired.properties.request.properties.propertyFiltersRequest.properties.bedrooms, {
+    ...schema.properties.request.$defs.MinMaxInt,
+    description: schema.properties.request.properties.propertyFiltersRequest.properties.bedrooms.description,
+  });
+  assert.deepEqual(schema, before);
+  assert.equal(inlineDanglingNestedDefsRefs(repaired), repaired);
+});
+
+test("borrowed nested definitions retain their original lexical scope", () => {
+  const schema = {
+    type: "object",
+    properties: {
+      outer: {
+        type: "object",
+        $defs: {
+          Value: { type: "string" },
+          Wrapper: { type: "object", properties: { value: { $ref: "#/$defs/Value" } } },
+        },
+        properties: {
+          inner: {
+            type: "object",
+            $defs: { Value: { type: "integer" } },
+            properties: { wrapper: { $ref: "#/$defs/Wrapper" }, own: { $ref: "#/$defs/Value" } },
+          },
+        },
+      },
+    },
+  };
+  const repaired = inlineDanglingNestedDefsRefs(schema);
+  const outer = repaired.properties.outer;
+  assert.equal(outer.$defs.Wrapper.properties.value.type, "string");
+  assert.equal(outer.properties.inner.properties.wrapper.properties.value.type, "string");
+  assert.equal(outer.properties.inner.properties.own.type, "integer");
+});
+
+test("dangling repair never falls through a boolean or invalid definition", () => {
+  for (const value of [false, true, null, 1]) {
+    const schema = {
+      type: "object",
+      properties: {
+        outer: {
+          $defs: { Value: { type: "string" } },
+          properties: {
+            inner: {
+              $defs: { Value: value },
+              properties: { value: { $ref: "#/$defs/Value" } },
+            },
+          },
+        },
+      },
+    };
+    assert.equal(inlineDanglingNestedDefsRefs(schema), schema);
+    schema.$defs = { Value: value };
+    assert.equal(inlineDanglingNestedDefsRefs(schema), schema);
+  }
+});
+
+test("dangling repair leaves validation siblings intact, including interacting keywords", () => {
+  for (const siblings of [
+    { properties: { value: { type: "string" } } },
+    { additionalProperties: false },
+    { type: "object" },
+    { allOf: [{ minProperties: 1 }] },
+  ]) {
+    const schema = {
+      type: "object",
+      properties: {
+        request: {
+          $defs: { Closed: { type: "object", additionalProperties: false } },
+          properties: { value: { $ref: "#/$defs/Closed", ...siblings } },
+        },
+      },
+    };
+    assert.equal(inlineDanglingNestedDefsRefs(schema), schema);
+  }
+});
+
+test("dangling repair declines resource boundaries and dynamic references", () => {
+  for (const [key, value] of [
+    ["$id", "https://example.test/resource"], ["id", "resource.json"],
+    ["$schema", "https://json-schema.org/draft/2020-12/schema"],
+    ["$anchor", "node"], ["$dynamicRef", "#node"], ["$dynamicAnchor", "node"],
+    ["$recursiveRef", "#"], ["$recursiveAnchor", true],
+  ]) {
+    const schema = zillowRangeSchema();
+    schema.properties.request[key] = value;
+    assert.equal(inlineDanglingNestedDefsRefs(schema), schema, key);
+  }
+});
+
+test("dangling repair decodes pointer names without following other pointer forms", () => {
+  const schema = {
+    properties: {
+      request: {
+        $defs: { "a/b~c": { type: "string" } },
+        properties: {
+          value: { $ref: "#/$defs/a~1b~0c" },
+          encoded: { $ref: "#/%24defs/a~1b~0c" },
+          invalid: { $ref: "#/$defs/a~2b" },
+          malformed: { $ref: "#/$defs/%ZZ" },
+          deeper: { $ref: "#/$defs/a~1b~0c/type" },
+        },
+      },
+    },
+  };
+  const repaired = inlineDanglingNestedDefsRefs(schema).properties.request.properties;
+  assert.deepEqual(repaired.value, { type: "string" });
+  assert.deepEqual(repaired.encoded, { type: "string" });
+  for (const key of ["invalid", "malformed", "deeper"]) {
+    assert.equal(repaired[key], schema.properties.request.properties[key]);
+  }
+});
+
+test("dangling repair leaves literal payloads alone", () => {
+  const schema = zillowRangeSchema();
+  const literal = { $ref: "#/$defs/MinMaxInt", $id: "literal", properties: { nested: { $ref: "#/$defs/MinMaxInt" } } };
+  schema.properties.request.default = literal;
+  schema.properties.request.examples = [literal];
+  const repaired = inlineDanglingNestedDefsRefs(schema);
+  assert.notEqual(repaired, schema);
+  assert.equal(repaired.properties.request.default, literal);
+  assert.equal(repaired.properties.request.examples[0], literal);
+});
+
+test("dangling repair rolls back cycles and expansion, size, and depth limits", () => {
+  for (const defs of [
+    { A: { $ref: "#/$defs/A" } },
+    { A: { $ref: "#/$defs/B" }, B: { $ref: "#/$defs/A" } },
+    { A: { properties: { next: { $ref: "#/$defs/A" } } } },
+  ]) {
+    const schema = { properties: { request: { $defs: defs, properties: { value: { $ref: "#/$defs/A" } } } } };
+    assert.equal(inlineDanglingNestedDefsRefs(schema), schema);
+  }
+  const expanded = zillowRangeSchema();
+  expanded.properties.request.properties = Object.fromEntries(
+    Array.from({ length: 513 }, (_, i) => [`value${i}`, { $ref: "#/$defs/MinMaxInt" }]),
+  );
+  assert.equal(inlineDanglingNestedDefsRefs(expanded), expanded);
+  const large = zillowRangeSchema();
+  large.properties.request.$defs.MinMaxInt.description = "x".repeat(256 * 1024);
+  assert.equal(inlineDanglingNestedDefsRefs(large), large);
+  const deep = zillowRangeSchema();
+  let node = deep;
+  for (let i = 0; i < 40; i += 1) node = node.items = {};
+  assert.equal(inlineDanglingNestedDefsRefs(deep), deep);
+});
+
 test("a $defs ref with sibling keywords is inlined for Moonshot", () => {
   const schema = {
     type: "object",
@@ -886,4 +1102,135 @@ test("a schema that already declares its types is returned by identity", () => {
   };
   assert.equal(declareSchemaTypes(clean), clean);
   assert.equal(declareSchemaTypes({ type: "object" }).type, "object");
+});
+
+test("blanking a cycle edge keeps the type it pointed at when the route asks", () => {
+  // #726: `declareSchemaTypes` runs in the router's Moonshot pass, but the
+  // forwarder breaks `$ref` cycles later. Left as a bare `{}` the node declares
+  // no type, which is exactly what Moonshot rejects with
+  // "tools.function.parameters missing type in anyOf properties" -- a 400 the
+  // router manufactured out of a schema the client wrote correctly.
+  const schema = {
+    type: "object",
+    properties: { root: { $ref: "#/$defs/Node" } },
+    $defs: {
+      Node: {
+        type: "object",
+        properties: { name: { type: "string" }, child: { $ref: "#/$defs/Node" } },
+      },
+      Tags: { type: "array", items: { $ref: "#/$defs/Tags" } },
+    },
+  };
+
+  const repaired = nonRecursiveToolSchema(schema, { keepBlankedTypes: true });
+  assert.deepEqual(repaired.$defs.Node.properties.child, { type: "object" });
+  assert.deepEqual(repaired.$defs.Tags.items, { type: "array" });
+  // The type is read from the target, so the definitions themselves survive.
+  assert.equal(repaired.$defs.Node.properties.name.type, "string");
+});
+
+test("every other route still gets the permissive blank it has today", () => {
+  // The opposite of the test above, and the reason this is opt-in: the blanking
+  // exists for Meta's Console 400, that path works, and it was not re-measured
+  // here. Its wire payload must not move.
+  const schema = {
+    type: "object",
+    properties: { root: { $ref: "#/$defs/Node" } },
+    $defs: { Node: { type: "object", properties: { child: { $ref: "#/$defs/Node" } } } },
+  };
+  assert.deepEqual(nonRecursiveToolSchema(schema).$defs.Node.properties.child, {});
+  assert.deepEqual(
+    nonRecursiveToolSchema(schema, { keepBlankedTypes: false }).$defs.Node.properties.child,
+    {},
+  );
+});
+
+test("a type the client wrote on the referencing node is never overwritten", () => {
+  const schema = {
+    type: "object",
+    properties: { root: { $ref: "#/$defs/Node" } },
+    $defs: {
+      Node: {
+        type: "object",
+        properties: {
+          child: { $ref: "#/$defs/Node", type: "string", description: "kept" },
+        },
+      },
+    },
+  };
+  const child = nonRecursiveToolSchema(schema, { keepBlankedTypes: true })
+    .$defs.Node.properties.child;
+  assert.equal(child.type, "string");
+  assert.equal(child.description, "kept");
+  assert.equal("$ref" in child, false);
+});
+
+test("an alias definition is followed, and a definition cycle of pure refs terminates", () => {
+  const aliased = {
+    type: "object",
+    properties: { root: { $ref: "#/$defs/Node" } },
+    $defs: {
+      Alias: { $ref: "#/$defs/Node" },
+      Node: { type: "object", properties: { child: { $ref: "#/$defs/Alias" } } },
+    },
+  };
+  assert.deepEqual(
+    nonRecursiveToolSchema(aliased, { keepBlankedTypes: true }).$defs.Node.properties.child,
+    { type: "object" },
+  );
+
+  // Nothing declares a type anywhere on the ring; the walk must stop rather
+  // than chase it, and the node stays open.
+  const ring = {
+    type: "object",
+    properties: { root: { $ref: "#/$defs/A" } },
+    $defs: { A: { $ref: "#/$defs/B" }, B: { $ref: "#/$defs/A" } },
+  };
+  const repaired = nonRecursiveToolSchema(ring, { keepBlankedTypes: true });
+  assert.equal(JSON.stringify(repaired).includes("$defs"), true);
+});
+
+test("the Moonshot schema route set is exactly the measured routes", () => {
+  for (const providerId of ["kimi-oauth", "kimi-api", "kimi-api-cn"]) {
+    assert.equal(moonshotSchemaRoute(providerId, "any-model"), true);
+  }
+  assert.equal(moonshotSchemaRoute("opencode-go", "kimi-k2.7-code"), true);
+  // Not projected onto the rest of Console Go, and not onto the providers that
+  // use the blanking for Meta's 400.
+  assert.equal(moonshotSchemaRoute("opencode-go", "muse-spark-1.2-contributor"), false);
+  assert.equal(moonshotSchemaRoute("opencode-go-responses", "muse-spark-1.2-contributor"), false);
+  assert.equal(moonshotSchemaRoute("opencode-free-responses", "muse-spark-1.3-contributor-free"), false);
+  assert.equal(moonshotSchemaRoute(undefined, undefined), false);
+});
+
+test("blanked refs respect type-implying siblings, including ambiguous ones", () => {
+  for (const [siblings, expected] of [
+    [{ enum: ["a", "b"] }, "string"],
+    [{ const: false }, "boolean"],
+    [{ items: { type: "string" } }, "array"],
+    [{ prefixItems: [{ type: "string" }] }, "array"],
+    [{ properties: { x: { type: "string" } } }, "object"],
+    [{ enum: ["a", 1] }, undefined],
+    [{ anyOf: [{ type: "string" }, {}] }, undefined],
+  ]) {
+    const schema = { type: "array", items: { $ref: "#", ...siblings } };
+    const original = structuredClone(schema);
+    const child = nonRecursiveToolSchema(schema, { keepBlankedTypes: true }).items;
+    assert.deepEqual(child, expected === undefined ? siblings : { ...siblings, type: expected });
+    assert.deepEqual(schema, original);
+  }
+});
+
+test("untyped recursive unions remain open rather than guessing a target type", () => {
+  const schema = {
+    type: "object", properties: { root: { $ref: "#/$defs/N" } },
+    $defs: { N: { anyOf: [{ type: "string" }, { $ref: "#/$defs/N" }] } },
+  };
+  const flat = nonRecursiveToolSchema(declareSchemaTypes(schema), { keepBlankedTypes: true });
+  assert.deepEqual(flat.$defs.N.anyOf, [{ type: "string" }, {}]);
+});
+
+test("null options preserve default cycle blanking", () => {
+  const schema = { type: "array", items: { $ref: "#" } };
+  assert.deepEqual(nonRecursiveToolSchema(schema, null), { type: "array", items: {} });
 });

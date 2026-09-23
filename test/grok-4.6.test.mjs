@@ -36,8 +36,13 @@ test("every Grok 4.6 route records the upstream id and window", () => {
 });
 
 test("Grok 4.6 reasoning ladders match catalog documentation", () => {
-  // Nous Portal and grok-oauth document low/medium/high/xhigh for Grok 4.6.
-  for (const slug of ["nousresearch/grok-4.6", "grok-oauth/grok-4.6"]) {
+  // Nous Portal, grok-oauth, and OpenRouter document low/medium/high/xhigh.
+  // OpenRouter's entry carried low/medium/high until 2026-09-22 only because
+  // it was copied from Command Code's; OpenRouter's own reasoning docs list
+  // xhigh in the accepted vocabulary, its /models record for x-ai/grok-4.6
+  // advertises `reasoning_effort` in supported_parameters, and xAI documents
+  // xhigh as a native rung of this model, so the route really does carry it.
+  for (const slug of ["nousresearch/grok-4.6", "grok-oauth/grok-4.6", "openrouter/grok-4.6"]) {
     const model = MODEL_BY_SLUG.get(slug);
     assert.deepEqual(
       model.reasoningLevels.map((level) => level.effort),
@@ -45,8 +50,10 @@ test("Grok 4.6 reasoning ladders match catalog documentation", () => {
     );
   }
 
-  // Command Code and OpenRouter document low/medium/high (no xhigh).
-  for (const slug of ["commandcode/grok-4.6", "openrouter/grok-4.6"]) {
+  // Command Code publishes no parameter metadata for its Grok route at all,
+  // so it stays on the conservative low/medium/high rather than inheriting
+  // xAI's ladder through a reseller that has not said it forwards the field.
+  for (const slug of ["commandcode/grok-4.6"]) {
     const model = MODEL_BY_SLUG.get(slug);
     assert.deepEqual(
       model.reasoningLevels.map((level) => level.effort),
