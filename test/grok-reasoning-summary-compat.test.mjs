@@ -4,11 +4,15 @@ import test from "node:test";
 
 import {
   GrokReasoningSummaryCompatTransform,
-  grokReasoningSummaryCompatTransform,
+  reasoningSummaryCompatTransform,
 } from "../src/grok-reasoning-summary-compat.mjs";
 
 function block(event, newline = "\n") {
   return `data: ${JSON.stringify(event)}${newline}${newline}`;
+}
+
+function namedBlock(event, newline = "\n") {
+  return `event: ${event.type}${newline}data: ${JSON.stringify(event)}${newline}${newline}`;
 }
 
 function events(text) {
@@ -166,6 +170,399 @@ test("repairs the live LiteLLM message-first Grok stream", async () => {
       message,
     ],
   );
+});
+
+test("does not close the message on a premature reasoning_text part done", async () => {
+  const full = "Hey! I'm Codex, running on MiniMax M3 (opencode Go).";
+  const prefix = "Hey! I'm Codex, running on MiniMax M3 (";
+  const rest = "opencode Go).";
+  const message = {
+    id: "msg_identity_prefix",
+    type: "message",
+    role: "assistant",
+    status: "completed",
+    content: [{ type: "output_text", text: full, annotations: [] }],
+  };
+  const input = [
+    block({ type: "response.output_item.added", output_index: 0, item: { ...message, status: "in_progress", content: [] } }),
+    block({ type: "response.content_part.added", item_id: message.id, output_index: 0, content_index: 0, part: { type: "output_text", text: "", annotations: [] } }),
+    block({ type: "response.reasoning_summary_text.delta", item_id: "rs_hash_1", output_index: 0, delta: "identify" }),
+    block({ type: "response.output_text.delta", item_id: message.id, output_index: 0, content_index: 0, delta: prefix }),
+    block({ type: "response.content_part.done", item_id: message.id, output_index: 0, content_index: 0, part: { type: "reasoning_text", reasoning: "identify" } }),
+    block({ type: "response.output_text.delta", item_id: message.id, output_index: 0, content_index: 0, delta: rest }),
+    block({ type: "response.output_text.done", item_id: message.id, output_index: 0, content_index: 0, text: full }),
+    block({ type: "response.content_part.done", item_id: message.id, output_index: 0, content_index: 0, part: { type: "reasoning_text", reasoning: "identify" } }),
+    block({ type: "response.output_item.done", output_index: 0, item: message }),
+    block({
+      type: "response.completed",
+      response: { id: "resp_identity_prefix", status: "completed", output: [message] },
+    }),
+  ].join("");
+  const output = events(await transformed(input));
+  const textDeltas = output.filter((event) => event.type === "response.output_text.delta");
+  assert.deepEqual(textDeltas.map((event) => event.delta), [prefix, rest]);
+  const partDones = output.filter((event) => event.type === "response.content_part.done");
+  assert.equal(partDones.length, 1);
+  assert.deepEqual(partDones[0].part, { type: "output_text", text: full, annotations: [] });
+  const restDeltaAt = output.findIndex((event) => event.type === "response.output_text.delta" && event.delta === rest);
+  const partDoneAt = output.findIndex((event) => event.type === "response.content_part.done");
+  assert.ok(restDeltaAt >= 0 && restDeltaAt < partDoneAt);
+});
+
+test("keeps a no-summary stream open after a premature reasoning_text close", async () => {
+  const full = "I'll use the ImageGen skill, and read its full instructions plus the repo's vehicle presentation contract so I can generate the turnaround.";
+  const prefix = "I'll use the ImageGen skill, and read its full instructions plus the repo's vehicle presentation contract so";
+  const rest = " I can generate the turnaround.";
+  const message = {
+    id: "msg_imagegen",
+    type: "message",
+    role: "assistant",
+    status: "completed",
+    content: [{ type: "output_text", text: full, annotations: [] }],
+  };
+  const input = [
+    block({ type: "response.output_item.added", output_index: 0, item: { ...message, status: "in_progress", content: [] } }),
+    block({ type: "response.content_part.added", item_id: message.id, output_index: 0, content_index: 0, part: { type: "output_text", text: "", annotations: [] } }),
+    block({ type: "response.output_text.delta", item_id: message.id, output_index: 0, content_index: 0, delta: prefix }),
+    block({ type: "response.content_part.done", item_id: message.id, output_index: 0, content_index: 0, part: { type: "reasoning_text", reasoning: "plan the image" } }),
+    block({ type: "response.output_text.delta", item_id: message.id, output_index: 0, content_index: 0, delta: rest }),
+    block({ type: "response.output_text.done", item_id: message.id, output_index: 0, content_index: 0, text: full }),
+    block({ type: "response.content_part.done", item_id: message.id, output_index: 0, content_index: 0, part: { type: "reasoning_text", reasoning: "plan the image" } }),
+    block({ type: "response.output_item.done", output_index: 0, item: message }),
+    block({
+      type: "response.completed",
+      response: { id: "resp_imagegen", status: "completed", output: [message] },
+    }),
+  ].join("");
+  const output = events(await transformed(input));
+  const textDeltas = output.filter((event) => event.type === "response.output_text.delta");
+  assert.deepEqual(textDeltas.map((event) => event.delta), [prefix, rest]);
+  const partDones = output.filter((event) => event.type === "response.content_part.done");
+  assert.equal(partDones.length, 1);
+  assert.deepEqual(partDones[0].part, { type: "output_text", text: full, annotations: [] });
+  const restDeltaAt = output.findIndex((event) => event.type === "response.output_text.delta" && event.delta === rest);
+  const partDoneAt = output.findIndex((event) => event.type === "response.content_part.done");
+  assert.ok(restDeltaAt >= 0 && restDeltaAt < partDoneAt);
+  assert.equal(output.find((event) => event.type === "response.completed")?.response?.status, "completed");
+});
+
+test("does not complete a 21-token ImageGen prefix after a premature reasoning_text close", async () => {
+  const { EmptyCompletionGuard } = await import("../src/empty-completion-guard.mjs");
+  const { Readable, Writable } = await import("node:stream");
+  const { pipeline } = await import("node:stream/promises");
+  const prefix = "I'll use the ImageGen skill, and read its full instructions plus the repo's vehicle presentation contract so";
+  const message = {
+    id: "msg_cut",
+    type: "message",
+    role: "assistant",
+    status: "completed",
+    content: [{ type: "output_text", text: prefix, annotations: [] }],
+  };
+  const input = [
+    namedBlock({ type: "response.created", response: { id: "resp_cut", status: "in_progress" } }),
+    namedBlock({ type: "response.output_item.added", output_index: 0, item: { ...message, status: "in_progress", content: [] } }),
+    namedBlock({ type: "response.content_part.added", item_id: message.id, output_index: 0, content_index: 0, part: { type: "output_text", text: "", annotations: [] } }),
+    namedBlock({ type: "response.output_text.delta", item_id: message.id, output_index: 0, content_index: 0, delta: prefix }),
+    namedBlock({ type: "response.content_part.done", item_id: message.id, output_index: 0, content_index: 0, part: { type: "reasoning_text", reasoning: "read the skill" } }),
+    namedBlock({ type: "response.output_item.done", output_index: 0, item: message }),
+    namedBlock({
+      type: "response.completed",
+      response: { id: "resp_cut", status: "completed", output: [message] },
+    }),
+  ].join("");
+  const repaired = await transformed(input);
+  const output = events(repaired);
+  assert.equal(output.some((event) => event.type === "response.output_text.delta"), false);
+  assert.equal(
+    output.some((event) => event.type === "response.output_item.done" && event.item?.type === "message"),
+    false,
+  );
+  const completed = output.find((event) => event.type === "response.completed");
+  assert.ok(completed);
+  assert.equal(completed.type, "response.completed");
+  assert.deepEqual(completed.response.output, []);
+  assert.equal(repaired.includes(prefix), false);
+
+  const guard = new EmptyCompletionGuard("text/event-stream");
+  const chunks = [];
+  await pipeline(
+    Readable.from([Buffer.from(repaired)]),
+    guard,
+    new Writable({
+      write(chunk, _encoding, callback) {
+        chunks.push(Buffer.from(chunk));
+        callback();
+      },
+    }),
+  );
+  assert.equal(guard.isEmpty(), true);
+  assert.equal(guard.hasContent(), false);
+  assert.equal(guard.suppressedPrologue(), true);
+  assert.equal(Buffer.concat(chunks).toString("utf8").includes(prefix), false);
+});
+
+test("does not complete a leaked prefix that LiteLLM still closes as output_text.done", async () => {
+  const { EmptyCompletionGuard } = await import("../src/empty-completion-guard.mjs");
+  const { Readable, Writable } = await import("node:stream");
+  const { pipeline } = await import("node:stream/promises");
+  const prefix = "The private calibration file referenced by the visual-direction entry point is missing, so I'll proceed with a neutral, independently useful turnaround sheet (no reference";
+  const message = {
+    id: "msg_turnaround",
+    type: "message",
+    role: "assistant",
+    status: "completed",
+    content: [{ type: "output_text", text: prefix, annotations: [] }],
+  };
+  const input = [
+    namedBlock({ type: "response.created", response: { id: "resp_turnaround", status: "in_progress" } }),
+    namedBlock({ type: "response.output_item.added", output_index: 0, item: { ...message, status: "in_progress", content: [] } }),
+    namedBlock({ type: "response.content_part.added", item_id: message.id, output_index: 0, content_index: 0, part: { type: "output_text", text: "", annotations: [] } }),
+    namedBlock({ type: "response.output_text.delta", item_id: message.id, output_index: 0, content_index: 0, delta: prefix }),
+    namedBlock({ type: "response.content_part.done", item_id: message.id, output_index: 0, content_index: 0, part: { type: "reasoning_text", reasoning: "missing calibration" } }),
+    namedBlock({ type: "response.output_text.done", item_id: message.id, output_index: 0, content_index: 0, text: prefix }),
+    namedBlock({ type: "response.output_item.done", output_index: 0, item: message }),
+    namedBlock({
+      type: "response.completed",
+      response: { id: "resp_turnaround", status: "completed", output: [message] },
+    }),
+  ].join("");
+  const repaired = await transformed(input);
+  const output = events(repaired);
+  assert.equal(output.some((event) => event.type === "response.output_text.delta"), false);
+  assert.equal(
+    output.some((event) => event.type === "response.output_item.done" && event.item?.type === "message"),
+    false,
+  );
+  const completed = output.find((event) => event.type === "response.completed");
+  assert.ok(completed);
+  assert.deepEqual(completed.response.output, []);
+  assert.equal(repaired.includes(prefix), false);
+
+  const guard = new EmptyCompletionGuard("text/event-stream");
+  const chunks = [];
+  await pipeline(
+    Readable.from([Buffer.from(repaired)]),
+    guard,
+    new Writable({
+      write(chunk, _encoding, callback) {
+        chunks.push(Buffer.from(chunk));
+        callback();
+      },
+    }),
+  );
+  assert.equal(guard.isEmpty(), true);
+  assert.equal(guard.hasContent(), false);
+  assert.equal(Buffer.concat(chunks).toString("utf8").includes(prefix), false);
+});
+
+test("does not complete a leaked prefix when LiteLLM sends output_text.done before reasoning_text", async () => {
+  const { EmptyCompletionGuard } = await import("../src/empty-completion-guard.mjs");
+  const { Readable, Writable } = await import("node:stream");
+  const { pipeline } = await import("node:stream/promises");
+  const prefix = "The skill is loaded. This is a single concept-sheet generation: a GTA-style AAA";
+  const message = {
+    id: "msg_gta",
+    type: "message",
+    role: "assistant",
+    status: "completed",
+    content: [{ type: "output_text", text: prefix, annotations: [] }],
+  };
+  const input = [
+    namedBlock({ type: "response.created", response: { id: "resp_gta", status: "in_progress" } }),
+    namedBlock({ type: "response.output_item.added", output_index: 0, item: { ...message, status: "in_progress", content: [] } }),
+    namedBlock({ type: "response.content_part.added", item_id: message.id, output_index: 0, content_index: 0, part: { type: "output_text", text: "", annotations: [] } }),
+    namedBlock({ type: "response.output_text.delta", item_id: message.id, output_index: 0, content_index: 0, delta: prefix }),
+    namedBlock({ type: "response.output_text.done", item_id: message.id, output_index: 0, content_index: 0, text: prefix }),
+    namedBlock({ type: "response.content_part.done", item_id: message.id, output_index: 0, content_index: 0, part: { type: "reasoning_text", reasoning: prefix } }),
+    namedBlock({ type: "response.output_item.done", output_index: 0, item: message }),
+    namedBlock({
+      type: "response.completed",
+      response: { id: "resp_gta", status: "completed", output: [message] },
+    }),
+  ].join("");
+  const repaired = await transformed(input);
+  const output = events(repaired);
+  assert.equal(output.some((event) => event.type === "response.output_text.delta"), false);
+  assert.equal(
+    output.some((event) => event.type === "response.output_item.done" && event.item?.type === "message"),
+    false,
+  );
+  const completed = output.find((event) => event.type === "response.completed");
+  assert.ok(completed);
+  assert.deepEqual(completed.response.output, []);
+  assert.equal(repaired.includes(prefix), false);
+
+  const guard = new EmptyCompletionGuard("text/event-stream");
+  const chunks = [];
+  await pipeline(
+    Readable.from([Buffer.from(repaired)]),
+    guard,
+    new Writable({
+      write(chunk, _encoding, callback) {
+        chunks.push(Buffer.from(chunk));
+        callback();
+      },
+    }),
+  );
+  assert.equal(guard.isEmpty(), true);
+  assert.equal(guard.hasContent(), false);
+  assert.equal(Buffer.concat(chunks).toString("utf8").includes(prefix), false);
+});
+
+test("keeps a finished answer that LiteLLM closes as reasoning_text after a distinct output_text.done", async () => {
+  const full = "I'll generate a four-view vehicle concept sheet from ImageGen.";
+  const thinking = "Need the ImageGen skill and four camera views.";
+  const message = {
+    id: "msg_gta_ok",
+    type: "message",
+    role: "assistant",
+    status: "completed",
+    content: [{ type: "output_text", text: full, annotations: [] }],
+  };
+  const input = [
+    namedBlock({ type: "response.created", response: { id: "resp_gta_ok", status: "in_progress" } }),
+    namedBlock({ type: "response.output_item.added", output_index: 0, item: { ...message, status: "in_progress", content: [] } }),
+    namedBlock({ type: "response.content_part.added", item_id: message.id, output_index: 0, content_index: 0, part: { type: "output_text", text: "", annotations: [] } }),
+    namedBlock({ type: "response.output_text.delta", item_id: message.id, output_index: 0, content_index: 0, delta: full }),
+    namedBlock({ type: "response.output_text.done", item_id: message.id, output_index: 0, content_index: 0, text: full }),
+    namedBlock({ type: "response.content_part.done", item_id: message.id, output_index: 0, content_index: 0, part: { type: "reasoning_text", reasoning: thinking } }),
+    namedBlock({ type: "response.output_item.done", output_index: 0, item: message }),
+    namedBlock({
+      type: "response.completed",
+      response: { id: "resp_gta_ok", status: "completed", output: [message] },
+    }),
+  ].join("");
+  const output = events(await transformed(input));
+  assert.deepEqual(
+    output.filter((event) => event.type === "response.output_text.delta").map((event) => event.delta),
+    [full],
+  );
+  const partDone = output.find((event) => event.type === "response.content_part.done");
+  assert.deepEqual(partDone?.part, { type: "output_text", text: full, annotations: [] });
+  const completed = output.find((event) => event.type === "response.completed");
+  assert.equal(completed?.response?.status, "completed");
+  assert.equal(completed?.response?.output?.[0]?.id, message.id);
+});
+
+test("does not complete an unfinished ImageGen prefix LiteLLM closed as output_text", async () => {
+  const { EmptyCompletionGuard } = await import("../src/empty-completion-guard.mjs");
+  const { Readable, Writable } = await import("node:stream");
+  const { pipeline } = await import("node:stream/promises");
+  const prefix = "I'll use the image generation";
+  const message = {
+    id: "msg_image_gen",
+    type: "message",
+    role: "assistant",
+    status: "completed",
+    content: [{ type: "output_text", text: prefix, annotations: [] }],
+  };
+  const input = [
+    namedBlock({ type: "response.created", response: { id: "resp_image_gen", status: "in_progress" } }),
+    namedBlock({ type: "response.output_item.added", output_index: 0, item: { ...message, status: "in_progress", content: [] } }),
+    namedBlock({ type: "response.content_part.added", item_id: message.id, output_index: 0, content_index: 0, part: { type: "output_text", text: "", annotations: [] } }),
+    namedBlock({ type: "response.output_text.delta", item_id: message.id, output_index: 0, content_index: 0, delta: prefix }),
+    namedBlock({ type: "response.output_text.done", item_id: message.id, output_index: 0, content_index: 0, text: prefix }),
+    namedBlock({ type: "response.content_part.done", item_id: message.id, output_index: 0, content_index: 0, part: { type: "output_text", text: prefix, annotations: [] } }),
+    namedBlock({ type: "response.output_item.done", output_index: 0, item: message }),
+    namedBlock({
+      type: "response.completed",
+      response: { id: "resp_image_gen", status: "completed", output: [message] },
+    }),
+  ].join("");
+  const repaired = await transformed(input);
+  const output = events(repaired);
+  assert.equal(output.some((event) => event.type === "response.output_text.delta"), false);
+  assert.equal(
+    output.some((event) => event.type === "response.output_item.done" && event.item?.type === "message"),
+    false,
+  );
+  const completed = output.find((event) => event.type === "response.completed");
+  assert.ok(completed);
+  assert.deepEqual(completed.response.output, []);
+  assert.equal(repaired.includes(prefix), false);
+
+  const guard = new EmptyCompletionGuard("text/event-stream");
+  const chunks = [];
+  await pipeline(
+    Readable.from([Buffer.from(repaired)]),
+    guard,
+    new Writable({
+      write(chunk, _encoding, callback) {
+        chunks.push(Buffer.from(chunk));
+        callback();
+      },
+    }),
+  );
+  assert.equal(guard.isEmpty(), true);
+  assert.equal(guard.hasContent(), false);
+});
+
+test("keeps an unpunctuated stream marker LiteLLM closed as output_text", async () => {
+  const marker = "CODEX_ROUTER_STREAM_OK";
+  const message = {
+    id: "msg_stream_ok",
+    type: "message",
+    role: "assistant",
+    status: "completed",
+    content: [{ type: "output_text", text: marker, annotations: [] }],
+  };
+  const input = [
+    namedBlock({ type: "response.created", response: { id: "resp_stream_ok", status: "in_progress" } }),
+    namedBlock({ type: "response.output_item.added", output_index: 0, item: { ...message, status: "in_progress", content: [] } }),
+    namedBlock({ type: "response.content_part.added", item_id: message.id, output_index: 0, content_index: 0, part: { type: "output_text", text: "", annotations: [] } }),
+    namedBlock({ type: "response.output_text.delta", item_id: message.id, output_index: 0, content_index: 0, delta: marker }),
+    namedBlock({ type: "response.output_text.done", item_id: message.id, output_index: 0, content_index: 0, text: marker }),
+    namedBlock({ type: "response.content_part.done", item_id: message.id, output_index: 0, content_index: 0, part: { type: "output_text", text: marker, annotations: [] } }),
+    namedBlock({ type: "response.output_item.done", output_index: 0, item: message }),
+    namedBlock({
+      type: "response.completed",
+      response: { id: "resp_stream_ok", status: "completed", output: [message] },
+    }),
+  ].join("");
+  const repaired = await transformed(input);
+  const output = events(repaired);
+  assert.deepEqual(
+    output.filter((event) => event.type === "response.output_text.delta").map((event) => event.delta),
+    [marker],
+  );
+  const completed = output.find((event) => event.type === "response.completed");
+  assert.equal(completed?.response?.status, "completed");
+  assert.equal(completed?.response?.output?.[0]?.id, message.id);
+  assert.equal(repaired.includes(marker), true);
+});
+
+test("keeps an unpunctuated identity answer LiteLLM closed as output_text", async () => {
+  const answer = "I am MiniMax M3 through OpenCode Go";
+  const message = {
+    id: "msg_identity",
+    type: "message",
+    role: "assistant",
+    status: "completed",
+    content: [{ type: "output_text", text: answer, annotations: [] }],
+  };
+  const input = [
+    namedBlock({ type: "response.created", response: { id: "resp_identity", status: "in_progress" } }),
+    namedBlock({ type: "response.output_item.added", output_index: 0, item: { ...message, status: "in_progress", content: [] } }),
+    namedBlock({ type: "response.content_part.added", item_id: message.id, output_index: 0, content_index: 0, part: { type: "output_text", text: "", annotations: [] } }),
+    namedBlock({ type: "response.output_text.delta", item_id: message.id, output_index: 0, content_index: 0, delta: answer }),
+    namedBlock({ type: "response.output_text.done", item_id: message.id, output_index: 0, content_index: 0, text: answer }),
+    namedBlock({ type: "response.content_part.done", item_id: message.id, output_index: 0, content_index: 0, part: { type: "output_text", text: answer, annotations: [] } }),
+    namedBlock({ type: "response.output_item.done", output_index: 0, item: message }),
+    namedBlock({
+      type: "response.completed",
+      response: { id: "resp_identity", status: "completed", output: [message] },
+    }),
+  ].join("");
+  const repaired = await transformed(input);
+  const output = events(repaired);
+  assert.deepEqual(
+    output.filter((event) => event.type === "response.output_text.delta").map((event) => event.delta),
+    [answer],
+  );
+  const completed = output.find((event) => event.type === "response.completed");
+  assert.equal(completed?.response?.status, "completed");
+  assert.equal(completed?.response?.output?.[0]?.id, message.id);
+  assert.equal(repaired.includes(answer), true);
 });
 
 test("repairs one-byte CRLF chunks without changing their framing", async () => {
@@ -863,9 +1260,81 @@ test("flushes a pending message-only envelope byte-identically at EOF", async ()
   assert.equal(await transformed(input), input);
 });
 
-test("compatibility factory is scoped to Grok OAuth event streams", () => {
-  assert.ok(grokReasoningSummaryCompatTransform({ id: "grok-oauth" }, "text/event-stream"));
-  assert.ok(grokReasoningSummaryCompatTransform("grok-oauth", "text/event-stream; charset=utf-8"));
-  assert.equal(grokReasoningSummaryCompatTransform("grok-api", "text/event-stream"), undefined);
-  assert.equal(grokReasoningSummaryCompatTransform("grok-oauth", "application/json"), undefined);
+test("compatibility factory covers LiteLLM Chat Completions event streams", () => {
+  assert.ok(reasoningSummaryCompatTransform({ id: "grok-oauth" }, "text/event-stream"));
+  assert.ok(reasoningSummaryCompatTransform("grok-oauth", "text/event-stream; charset=utf-8"));
+  assert.ok(reasoningSummaryCompatTransform({ id: "commandcode" }, "text/event-stream"));
+  assert.ok(reasoningSummaryCompatTransform({ id: "opencode-go", protocol: "openai" }, "text/event-stream"));
+  assert.ok(reasoningSummaryCompatTransform({ id: "grok-api" }, "text/event-stream"));
+  assert.equal(reasoningSummaryCompatTransform("grok-oauth", "application/json"), undefined);
+  assert.equal(reasoningSummaryCompatTransform({ id: "commandcode" }, "application/json"), undefined);
+  // Direct DeepSeek repairs its own bridge; native Responses providers skip
+  // LiteLLM's Chat Completions translation. Anthropic Messages providers do
+  // not: they still set use_chat_completions_api, so they need this repair.
+  assert.equal(reasoningSummaryCompatTransform({ id: "deepseek" }, "text/event-stream"), undefined);
+  assert.ok(reasoningSummaryCompatTransform({ id: "commandcode-messages", protocol: "anthropic" }, "text/event-stream"));
+  assert.ok(reasoningSummaryCompatTransform({ id: "opencode-go-messages", protocol: "anthropic" }, "text/event-stream"));
+  assert.equal(reasoningSummaryCompatTransform({ id: "opencode-go-responses", protocol: "openai-responses" }, "text/event-stream"), undefined);
+  assert.equal(reasoningSummaryCompatTransform(undefined, "text/event-stream"), undefined);
+  assert.equal(reasoningSummaryCompatTransform("commandcode", "text/event-stream"), undefined);
+});
+
+test("non-Grok routes relay gateway error envelopes instead of rewriting them", async () => {
+  const input = [
+    pendingGatewayMessage(),
+    block(GATEWAY_ERROR),
+    block({ type: "response.completed", response: { status: "completed", output: [] } }),
+  ].join("");
+  const raw = await transformed(input, 1, { normalizeGatewayErrors: false });
+  assert.doesNotMatch(raw, /local_router_stream_failed/u);
+  assert.ok(raw.includes(block(GATEWAY_ERROR)), "the envelope must be relayed byte-identical");
+  const output = events(raw);
+  assert.equal(output.some((event) => event.type === "error"), false);
+  const envelope = output.findIndex((event) => event.error?.stack === GATEWAY_ERROR.error.stack);
+  const reasoningDone = output.findIndex(
+    (event) => event.type === "response.output_item.done" && event.item?.type === "reasoning",
+  );
+  const messageAdded = output.findIndex(
+    (event) => event.type === "response.output_item.added" && event.item?.type === "message",
+  );
+  assert.ok(reasoningDone >= 0 && reasoningDone < envelope);
+  assert.ok(messageAdded >= 0 && messageAdded < envelope);
+  assert.equal(output[reasoningDone].item.status, "incomplete");
+  assert.deepEqual(output[reasoningDone].item.summary, [{ type: "summary_text", text: "Проверка ещё идёт." }]);
+  assert.ok(output.slice(envelope).some((event) => event.type === "response.completed"));
+});
+
+test("repairs reasoning after a response.created that echoes a Codex Desktop tool list", async () => {
+  // LiteLLM copies instructions and every tool into response.created. Desktop's
+  // MCP tool list pushes that frame past 256 KiB, which used to switch the
+  // repair off for the rest of the stream.
+  const tools = Array.from({ length: 400 }, (_, index) => ({
+    type: "function",
+    name: `mcp__server__tool_${index}`,
+    description: "d".repeat(900),
+    parameters: { type: "object", properties: {} },
+  }));
+  const created = block({
+    type: "response.created",
+    response: { id: "resp_desktop", status: "in_progress", output: [], tools },
+  });
+  assert.ok(Buffer.byteLength(created) > 256 * 1024);
+  const message = { id: "msg_desktop", type: "message", role: "assistant", status: "in_progress", content: [] };
+  const input = [
+    created,
+    block({ type: "response.output_item.added", output_index: 0, item: message }),
+    block({ type: "response.content_part.added", item_id: message.id, output_index: 0, content_index: 0, part: { type: "output_text", text: "", annotations: [] } }),
+    block({ type: "response.reasoning_summary_text.delta", item_id: "rs_101", output_index: 0, delta: "Think " }),
+    block({ type: "response.reasoning_summary_text.delta", item_id: "rs_-202", output_index: 0, delta: "first." }),
+    block({ type: "response.output_text.delta", item_id: message.id, output_index: 0, content_index: 0, delta: "Done." }),
+  ].join("");
+  const output = events(await transformed(input, 65_536));
+  assert.equal(output[0].type, "response.created");
+  const reasoningEvents = output.filter(
+    (event) => event.item?.type === "reasoning" || event.type.startsWith("response.reasoning_"),
+  );
+  assert.equal(reasoningEvents[0].type, "response.output_item.added");
+  assert.ok(reasoningEvents.every((event) => (event.item_id ?? event.item?.id) === "rs_101"));
+  assert.equal(reasoningEvents.at(-1).item.summary[0].text, "Think first.");
+  assert.equal(output.find((event) => event.type === "response.output_text.delta").output_index, 1);
 });

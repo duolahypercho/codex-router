@@ -2,6 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  DEFAULT_HEALTH_FAILURES,
+  DEFAULT_HEALTH_INTERVAL_MS,
+  DEFAULT_HEALTH_STALL_FAILURES,
   DEFAULT_MAX_RESTARTS,
   MAX_RESTART_BACKOFF_MS,
   gatewaySupervisorLimits,
@@ -177,6 +180,9 @@ test("limits come from the environment and fall back on nonsense", () => {
     maxRestarts: DEFAULT_MAX_RESTARTS,
     backoffMs: 1_000,
     windowMs: 600_000,
+    healthIntervalMs: DEFAULT_HEALTH_INTERVAL_MS,
+    healthFailures: DEFAULT_HEALTH_FAILURES,
+    healthStallFailures: DEFAULT_HEALTH_STALL_FAILURES,
   });
   assert.equal(gatewaySupervisorLimits({ CODEX_ROUTER_GATEWAY_RESTARTS: "0" }).maxRestarts, 0);
   assert.equal(
@@ -191,6 +197,71 @@ test("limits come from the environment and fall back on nonsense", () => {
     gatewaySupervisorLimits({ CODEX_ROUTER_GATEWAY_RESTART_WINDOW_MS: "1000" }).windowMs,
     1_000,
   );
+  assert.equal(
+    gatewaySupervisorLimits({ CODEX_ROUTER_GATEWAY_HEALTH_INTERVAL_MS: "250" }).healthIntervalMs,
+    250,
+  );
+  assert.equal(
+    gatewaySupervisorLimits({ CODEX_ROUTER_GATEWAY_HEALTH_FAILURES: "7" }).healthFailures,
+    7,
+  );
+  assert.equal(
+    gatewaySupervisorLimits({ CODEX_ROUTER_GATEWAY_HEALTH_FAILURES: "0" }).healthFailures,
+    DEFAULT_HEALTH_FAILURES,
+  );
+});
+
+// The LiteLLM-on-Windows failure this guards: a mid-stream upstream reset kills
+// the uvicorn accept loop (`WinError 64`) while the Python process keeps
+// running, so `waitForExit` never fires and the exit-only supervisor would
+// leave the router answering 502 on a closed port forever.
+test("a gateway that stays alive but stops answering liveness is stopped and replaced", async () => {
+  const spawned = [];
+  const logs = [];
+  let healthy = true;
+  let shuttingDown = false;
+  const start = () => {
+    const child = fakeChild(spawned.length);
+    spawned.push(child);
+    return child;
+  };
+  const waitForExit = (child, label) =>
+    child.exitCode !== null || child.signalCode !== null
+      ? Promise.resolve({ label, code: child.exitCode, signal: child.signalCode })
+      : new Promise((resolve) => {
+          child.resolvers.push(({ code, signal }) => resolve({ label, code, signal }));
+        });
+
+  const first = start();
+  const done = superviseGateway({
+    child: first,
+    start,
+    waitForExit,
+    waitForHealth: async () => {},
+    healthCheck: async () => {
+      if (!healthy) throw new Error("gateway liveness failed");
+    },
+    healthIntervalMs: 5,
+    healthFailures: 2,
+    isShuttingDown: () => shuttingDown,
+    log: (message) => logs.push(message),
+    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  });
+
+  healthy = false;
+  const deadline = Date.now() + 3_000;
+  while (spawned.length < 2 && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal(spawned.length, 2, "the wedged gateway was not replaced");
+  assert.deepEqual(first.killed, ["SIGTERM"], "the wedged process was not stopped");
+  assert.match(logs.join("\n"), /stopped answering health checks/);
+
+  shuttingDown = true;
+  healthy = true;
+  spawned[1].exit(0);
+  const result = await done;
+  assert.equal(result.restarts, 1);
 });
 
 // The window is what keeps a long-lived install restartable: five crashes over
@@ -241,4 +312,112 @@ test("failures outside the window do not count against the bound", async () => {
   const result = await done;
   assert.equal(result.exhausted, true);
   assert.equal(spawned.length, 6, "the bound did not stop the spawn loop");
+});
+
+// A starved machine (load average in the hundreds) makes a healthy, streaming
+// LiteLLM miss the 4 s liveness probe. Those timeouts must not trip the short
+// fuse meant for a refused port: killing the gateway there cut a live routed
+// turn and the replacement could not finish importing under the same load.
+test("liveness timeouts use the long stall fuse, refusals the short one", async () => {
+  async function run(outcome, { failures = 2, stall = 6 } = {}) {
+    const spawned = [];
+    const logs = [];
+    let probes = 0;
+    let shuttingDown = false;
+    const start = () => {
+      const child = fakeChild(spawned.length);
+      spawned.push(child);
+      return child;
+    };
+    const waitForExit = (child, label) =>
+      child.exitCode !== null || child.signalCode !== null
+        ? Promise.resolve({ label, code: child.exitCode, signal: child.signalCode })
+        : new Promise((resolve) => {
+            child.resolvers.push(({ code, signal }) => resolve({ label, code, signal }));
+          });
+    const done = superviseGateway({
+      child: start(),
+      start,
+      waitForExit,
+      waitForHealth: async () => {},
+      healthCheck: async () => {
+        if (spawned.length > 1) return;
+        probes += 1;
+        const error = new Error("probe failed");
+        error.probeOutcome = outcome;
+        throw error;
+      },
+      healthIntervalMs: 1,
+      healthFailures: failures,
+      healthStallFailures: stall,
+      isShuttingDown: () => shuttingDown,
+      log: (message) => logs.push(message),
+      sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    });
+    const deadline = Date.now() + 3_000;
+    while (spawned.length < 2 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 2));
+    }
+    const probesAtRestart = probes;
+    shuttingDown = true;
+    spawned.at(-1).exit(0);
+    await done;
+    return { probesAtRestart, restarted: spawned.length === 2, logs: logs.join("\n") };
+  }
+
+  const refused = await run("refused");
+  assert.ok(refused.restarted);
+  assert.equal(refused.probesAtRestart, 2, "a refused port trips the short fuse");
+
+  const stalled = await run("timeout");
+  assert.ok(stalled.restarted, "a gateway that never answers is still replaced");
+  assert.equal(stalled.probesAtRestart, 6, "timeouts must wait for the stall fuse");
+  assert.match(stalled.logs, /6 consecutive liveness failures, 6 of them timeouts/);
+});
+
+test("the stall fuse comes from the environment", () => {
+  assert.equal(gatewaySupervisorLimits({}).healthStallFailures, DEFAULT_HEALTH_STALL_FAILURES);
+  assert.equal(
+    gatewaySupervisorLimits({ CODEX_ROUTER_GATEWAY_HEALTH_STALL_FAILURES: "9" })
+      .healthStallFailures,
+    9,
+  );
+  assert.equal(
+    gatewaySupervisorLimits({ CODEX_ROUTER_GATEWAY_HEALTH_STALL_FAILURES: "nope" })
+      .healthStallFailures,
+    DEFAULT_HEALTH_STALL_FAILURES,
+  );
+});
+
+// Under heavy load a replacement LiteLLM can outlast one cold-start budget
+// while still importing. Killing it there restarts the import from zero, so a
+// live child gets more budgets; only a dead or hopeless one is counted.
+test("a replacement still starting after one budget is waited on, not killed", async () => {
+  let attempts = 0;
+  const supervisor = harness({
+    limits: { maxRestarts: 1, startupBudgets: 3 },
+    health: async (child, index) => {
+      if (index === 0) return;
+      attempts += 1;
+      if (attempts < 3) {
+        const error = new Error("Timed out waiting (the connection was refused).");
+        error.probeOutcome = "refused";
+        throw error;
+      }
+    },
+  });
+  supervisor.spawned[0].exit(1);
+  const deadline = Date.now() + 3_000;
+  while (!supervisor.logs.some((line) => line.includes("healthy again")) && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.equal(attempts, 3);
+  assert.deepEqual(supervisor.spawned[1].killed, [], "a starting import was killed");
+  assert.equal(
+    supervisor.logs.filter((line) => line.includes("still starting")).length,
+    2,
+  );
+  supervisor.shutDown();
+  supervisor.spawned[1].exit(0);
+  await supervisor.done;
 });

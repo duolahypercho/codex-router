@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "slug": "grok-api/grok-4.7",
+      "gatewayModel": "grok-api-grok-4-7",
+      "upstreamModel": "grok-4.7",
+      "provider": "grok-api",
+      "listed": true,
+      "displayName": "Grok 4.7 (API)",
+      "description": "Grok 4.7 through the separately billed xAI API with agentic coding, tools, and a 500k context window.",
+      "priority": 8,
+      "defaultEffort": "high",
+      "reasoningLevels": [
+        {
+          "effort": "low",
+          "description": "Faster reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced reasoning"
+        },
+        {
+          "effort": "high",
+          "description": "Deep reasoning"
+        },
+        {
+          "effort": "xhigh",
+          "description": "Maximum reasoning depth"
+        }
+      ],
+      "contextWindow": 500000,
+      "autoCompact": 440000,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "requestProfile": "xai-reasoning",
+      "supportsReasoningSummaries": true,
+      "supportsImageDetailOriginal": true,
+      "compHash": "grok-api-grok-4-7-v1"
+    }
+  ]
+}

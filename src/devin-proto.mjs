@@ -1,7 +1,15 @@
 // Wire schemas for the subset of `exa.api_server_pb.ApiServerService` the Devin
-// CLI provider speaks. Field numbers are transcribed from the descriptor set
-// embedded in the shipped `devin` binary, which is the only published source
-// for them -- Cognition documents no model API.
+// CLI provider speaks. Field numbers are transcribed from the descriptor the
+// shipped Devin client carries, which is the only published source for them --
+// Cognition documents no model API.
+//
+// Re-checked field by field against Devin 3000.10.31 (b98cc431). The `devin`
+// binary in that release is stripped of its descriptor set, so the numbers
+// below were read from the generated protobuf-es field lists in the desktop
+// client's own `@exa/chat-client` bundle, which declares each `no:` literally
+// and covers the same `exa.api_server_pb` / `exa.codeium_common_pb` /
+// `exa.chat_pb` messages. Every field the router reads or writes matched; the
+// one thing that had moved was the model-list *method* name (see below).
 //
 // Only fields the router reads or writes are listed. Everything else on the
 // wire decodes to nothing, which is deliberate: the upstream adds fields
@@ -157,11 +165,6 @@ export const GET_CHAT_MESSAGE_RESPONSE = Object.freeze({
   actualModelUid: { no: 23, type: "string" },
 });
 
-export const MODEL_INFO = Object.freeze({
-  modelName: { no: 1, type: "string" },
-  maxOutputTokens: { no: 8, type: "int32" },
-});
-
 export const CLIENT_MODEL_CONFIG = Object.freeze({
   label: { no: 1, type: "string" },
   disabled: { no: 4, type: "bool" },
@@ -173,14 +176,26 @@ export const CLIENT_MODEL_CONFIG = Object.freeze({
   description: { no: 27, type: "string" },
 });
 
-export const GET_CASCADE_MODEL_CONFIGS_REQUEST = Object.freeze({
+// The CLI's model list moved method between the 2025.x series this provider
+// was written against and Devin 3000.x. `GetCascadeModelConfigs` is the IDE's
+// method; 3000.10.31 never calls it, and issue #770 is a CLI-credentialed
+// account being answered `invalid_argument` by it. `GetCliModelConfigs` is
+// what the shipped CLI asks, on the same service, with a request of the same
+// shape -- so the drift is the method name alone and not the encoding, which
+// is exactly what `bin/devin-probe` observed when its request-shape check
+// passed and only the model list failed.
+export const GET_CLI_MODEL_CONFIGS_REQUEST = Object.freeze({
   metadata: { no: 1, type: "message", message: METADATA },
 });
 
-export const GET_CASCADE_MODEL_CONFIGS_RESPONSE = Object.freeze({
+// `client_model_configs` keeps field 1 on the new response. The other two
+// members it carries -- `default_override_model_config` (3) and
+// `subagent_default_model_uid` (4) -- are entitlement hints the router does
+// not read, so they are left to the decoder's unknown-field skip.
+export const GET_CLI_MODEL_CONFIGS_RESPONSE = Object.freeze({
   clientModelConfigs: { no: 1, type: "message", message: CLIENT_MODEL_CONFIG, repeated: true },
 });
 
 export const SERVICE_PATH = "exa.api_server_pb.ApiServerService";
 export const GET_CHAT_MESSAGE = "GetChatMessage";
-export const GET_CASCADE_MODEL_CONFIGS = "GetCascadeModelConfigs";
+export const GET_CLI_MODEL_CONFIGS = "GetCliModelConfigs";

@@ -4,9 +4,13 @@ import "@fontsource-variable/jetbrains-mono";
 import "../styles/global.css";
 
 const githubUrl = "https://github.com/duolahypercho/codex-router";
-const installCommand = `brew tap duolahypercho/codex-router https://github.com/duolahypercho/codex-router
+const docsUrl = "/getting-started/installation/";
+const unixCommand = `brew tap duolahypercho/codex-router https://github.com/duolahypercho/codex-router
 brew install codex-router
 codex-router setup --guided`;
+const windowsCommand = `$installer = Join-Path $env:TEMP "codex-router-install.ps1"
+Invoke-WebRequest https://raw.githubusercontent.com/duolahypercho/codex-router/main/install.ps1 -OutFile $installer
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File $installer -Target codex -Guided -WithTray`;
 
 const providers = [
   { name: "Anthropic", logo: "/providers/anthropic.png" },
@@ -86,6 +90,7 @@ const socialImageUrl = new URL("/app/control-center-models.png", Astro.site);
         <a href="#control-center">Control Center</a>
         <a href="#architecture">Architecture</a>
         <a href="#install">Install</a>
+        <a href={docsUrl}>Docs</a>
       </nav>
       <a class="nav-cta" href={githubUrl}>GitHub</a>
     </header>
@@ -98,7 +103,7 @@ const socialImageUrl = new URL("/app/control-center-models.png", Astro.site);
           <p class="hero-summary">Use external providers without replacing the client, workflow, or account setup you already trust.</p>
           <div class="hero-actions">
             <a class="button button-primary" href="#install">Install</a>
-            <a class="button button-secondary" href="#control-center">See the app</a>
+            <a class="button button-secondary" href={docsUrl}>Read the docs</a>
           </div>
         </div>
 
@@ -227,15 +232,25 @@ const socialImageUrl = new URL("/app/control-center-models.png", Astro.site);
         <div class="install-copy" data-reveal>
           <h2 id="install-title">Install the local plane.</h2>
           <p>Homebrew installs the router and its locked runtime. Guided setup connects providers without putting secrets in shell history.</p>
-          <a class="text-link" href={`${githubUrl}#install`}>View all installation options</a>
+          <a class="text-link" href="/getting-started/install-methods/">View all installation options</a>
         </div>
-        <div class="command-block" data-reveal data-delay="1">
-          <div class="command-header">
-            <span>macOS and Linux</span>
-            <button class="copy-button" type="button" data-copy-command>Copy</button>
+        <div class="command-stack" data-reveal data-delay="1">
+          <div class="command-block">
+            <div class="command-header">
+              <span>macOS and Linux</span>
+              <button class="copy-button" type="button" data-copy-command>Copy</button>
+            </div>
+            <pre><code data-install-command>{unixCommand}</code></pre>
+            <p class="copy-status" role="status" aria-live="polite" data-copy-status></p>
           </div>
-          <pre><code data-install-command>{installCommand}</code></pre>
-          <p class="copy-status" role="status" aria-live="polite" data-copy-status></p>
+          <div class="command-block">
+            <div class="command-header">
+              <span>Windows</span>
+              <button class="copy-button" type="button" data-copy-command>Copy</button>
+            </div>
+            <pre><code data-install-command>{windowsCommand}</code></pre>
+            <p class="copy-status" role="status" aria-live="polite" data-copy-status></p>
+          </div>
         </div>
       </section>
 
@@ -268,6 +283,7 @@ const socialImageUrl = new URL("/app/control-center-models.png", Astro.site);
         <span>CODEX ROUTER</span>
       </a>
       <p>Independent community project. Not affiliated with OpenAI or any provider.</p>
+      <a href={docsUrl}>Documentation</a>
       <a href={githubUrl}>MIT licensed</a>
     </footer>
 
@@ -287,23 +303,25 @@ const socialImageUrl = new URL("/app/control-center-models.png", Astro.site);
         revealItems.forEach((item) => observer.observe(item));
       }
 
-      const copyButton = document.querySelector("[data-copy-command]");
-      const command = document.querySelector("[data-install-command]");
-      const copyStatus = document.querySelector("[data-copy-status]");
-      copyButton?.addEventListener("click", async () => {
-        if (!(command instanceof HTMLElement) || !(copyButton instanceof HTMLButtonElement)) return;
-        try {
-          await navigator.clipboard.writeText(command.innerText);
-          copyButton.textContent = "Copied";
-          if (copyStatus) copyStatus.textContent = "Install commands copied.";
-          window.setTimeout(() => {
-            copyButton.textContent = "Copy";
-            if (copyStatus) copyStatus.textContent = "";
-          }, 1800);
-        } catch {
-          copyButton.textContent = "Select command";
-          if (copyStatus) copyStatus.textContent = "Copy failed. Select the command manually.";
-        }
+      document.querySelectorAll(".command-block").forEach((block) => {
+        const copyButton = block.querySelector("[data-copy-command]");
+        const command = block.querySelector("[data-install-command]");
+        const copyStatus = block.querySelector("[data-copy-status]");
+        if (!(copyButton instanceof HTMLButtonElement) || !(command instanceof HTMLElement)) return;
+        copyButton.addEventListener("click", async () => {
+          try {
+            await navigator.clipboard.writeText(command.innerText);
+            copyButton.textContent = "Copied";
+            if (copyStatus) copyStatus.textContent = "Install commands copied.";
+            window.setTimeout(() => {
+              copyButton.textContent = "Copy";
+              if (copyStatus) copyStatus.textContent = "";
+            }, 1800);
+          } catch {
+            copyButton.textContent = "Select command";
+            if (copyStatus) copyStatus.textContent = "Copy failed. Select the command manually.";
+          }
+        });
       });
     </script>
   </body>

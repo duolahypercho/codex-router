@@ -28,11 +28,24 @@ export const MODEL_PICKER_STATE_PATH =
 // that is also what a model nobody has ever seen looks like, and a default
 // that cannot tell the two apart re-applies itself over the operator's choice
 // on the next rebuild (see `seedModelsHidden`).
+// Where routed (external) models sit relative to Codex's native GPT entries.
+// `native-first` is the historical default: routed models publish in a band
+// after the highest visible native priority. `routed-first` publishes every
+// routed model ahead of the natives, in the same vendor-group order, and
+// shifts the natives after them (see catalog.mjs `publishedPickerPriorities`).
+export const PICKER_ORDERS = Object.freeze(["native-first", "routed-first"]);
+export const DEFAULT_PICKER_ORDER = "native-first";
+
+function normalizePickerOrder(value) {
+  return PICKER_ORDERS.includes(value) ? value : DEFAULT_PICKER_ORDER;
+}
+
 function readPickerState() {
   const empty = {
     hidden: new Set(),
     visible: new Set(),
     seeded: new Set(),
+    order: DEFAULT_PICKER_ORDER,
     hasExplicitVisibility: false,
     // "Nothing has ever been recorded here" and "the file says nothing is
     // hidden" are different machines, and only the second one has a history
@@ -55,7 +68,10 @@ function readPickerState() {
       ? slugs(parsed.visible)
       : new Set([...seeded].filter((slug) => !hidden.has(slug)));
     for (const slug of hidden) visible.delete(slug);
-    return { hidden, visible, seeded, hasExplicitVisibility, recognized: true };
+    // `order` was added after version 1 shipped; an older file keeps the
+    // historical native-first placement, as does any unrecognized value.
+    const order = normalizePickerOrder(parsed.order);
+    return { hidden, visible, seeded, order, hasExplicitVisibility, recognized: true };
   } catch {
     return empty;
   }
@@ -90,7 +106,16 @@ export function effectiveVisibleModels(slugs) {
   );
 }
 
-function writePickerState({ hidden, visible, seeded, hasExplicitVisibility = true }) {
+function writePickerState({
+  hidden,
+  visible,
+  seeded,
+  order,
+  hasExplicitVisibility = true,
+}) {
+  // Visibility writers pass only the sets they changed; the placement choice
+  // must survive every one of them, so an unspecified order is the stored one.
+  const effectiveOrder = normalizePickerOrder(order ?? readPickerState().order);
   const stateDir = path.dirname(MODEL_PICKER_STATE_PATH);
   mkdirSync(stateDir, { recursive: true, mode: 0o700 });
   chmodSync(stateDir, 0o700);
@@ -105,6 +130,9 @@ function writePickerState({ hidden, visible, seeded, hasExplicitVisibility = tru
           ? { visible: [...visible].filter((slug) => !hidden.has(slug)).sort() }
           : {}),
         seeded: [...seeded].sort(),
+        // The default is omitted so a file nobody has reordered stays
+        // byte-identical to what earlier builds wrote.
+        ...(effectiveOrder !== DEFAULT_PICKER_ORDER ? { order: effectiveOrder } : {}),
       },
       null,
       2,
@@ -122,9 +150,25 @@ export function modelPickerSnapshot() {
   return {
     hidden: [...state.hidden].sort(),
     visible: [...state.visible].sort(),
+    order: state.order,
     hasExplicitVisibility: state.hasExplicitVisibility,
     path: MODEL_PICKER_STATE_PATH,
   };
+}
+
+export function readPickerOrder() {
+  return readPickerState().order;
+}
+
+// Records where routed models sit in the picker. Visibility is untouched:
+// this is a placement choice, not a show/hide decision, so it neither seeds
+// nor hides anything.
+export function setPickerOrder(order) {
+  if (!PICKER_ORDERS.includes(order)) {
+    throw new Error(`Picker order must be one of ${PICKER_ORDERS.join(", ")}.`);
+  }
+  const state = readPickerState();
+  return writePickerState({ ...state, order });
 }
 
 export function setModelVisible(slug, visible) {

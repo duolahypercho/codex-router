@@ -16,6 +16,7 @@ const inactiveRouterPort = await freePort();
 test("Grok tray sign-in explicitly starts the OAuth flow", () => {
   assert.deepEqual(oauthLoginArgs("grok-oauth"), ["login", "--oauth"]);
   assert.deepEqual(oauthLoginArgs("kimi-oauth"), ["login"]);
+  assert.deepEqual(oauthLoginArgs("vertex"), ["auth", "application-default", "login"]);
 });
 
 test("provider CLI children restore the proxy recorded by a desktop install", () => {

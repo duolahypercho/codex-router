@@ -15,9 +15,11 @@ test("endpoint declarations are closed, deduplicated, and model-scoped", () => {
   );
   assert.throws(() => normalizeSupportedEndpoints([]), /non-empty array/);
   assert.throws(() => normalizeSupportedEndpoints(["/audio/speech"]), /unsupported endpoint/);
+  assert.deepEqual(normalizeSupportedEndpoints(["/decisions"]), ["/decisions"]);
   assert.equal(providerModelEndpoint({}), "/chat/completions");
   assert.equal(providerModelEndpoint({ protocol: "openai" }), "/chat/completions");
   assert.equal(providerModelEndpoint({ protocol: "openai-responses" }), "/responses");
+  assert.equal(providerModelEndpoint({ protocol: "openai-decisions" }), "/decisions");
   assert.equal(providerModelEndpoint({ protocol: "anthropic" }), undefined);
   assert.equal(providerModelEndpoint({ protocol: "unknown" }), undefined);
 });
@@ -45,6 +47,20 @@ test("embeddings require an explicit model declaration", () => {
       provider,
     }),
     false,
+  );
+  assert.equal(
+    supportsOpenAIModelEndpoint("/decisions", {
+      model: { supportedEndpoints: ["/decisions"] },
+      provider: { protocol: "openai-decisions" },
+    }),
+    true,
+  );
+  assert.equal(
+    supportsOpenAIModelEndpoint("/decisions", {
+      model: {},
+      provider: { protocol: "openai-decisions" },
+    }),
+    true,
   );
   assert.equal(
     supportsOpenAIModelEndpoint("/embeddings", {

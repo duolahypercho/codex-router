@@ -9,6 +9,7 @@ import {
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { scanTomlDocument } from "./toml-structure.mjs";
 import { protectPrivateFile } from "./file-security.mjs";
 import { MODEL_BY_SLUG } from "./model-registry.mjs";
 import {
@@ -73,7 +74,20 @@ function decodeBasicString(body) {
   return decoded;
 }
 
+function scannedRootAssignments(contents, key) {
+  try {
+    return scanTomlDocument(contents, { rootOnly: true }).assignments.filter(
+      (entry) => entry.tablePath.length === 0 && entry.key.length === 1 && entry.key[0] === key,
+    );
+  } catch {
+    // Legacy Windows prototype paths may contain invalid TOML escapes.
+    return undefined;
+  }
+}
+
 export function readRootStringValues(contents, key) {
+  const assignments = scannedRootAssignments(contents, key);
+  if (assignments) return assignments.filter(({ kind }) => kind === "string").map(({ value }) => value);
   const firstTable = contents.search(/^\s*\[/m);
   const root = firstTable === -1 ? contents : contents.slice(0, firstTable);
   return [...root.matchAll(new RegExp(`^\\s*${key}\\s*=\\s*(.+?)\\s*$`, "gm"))]
@@ -105,6 +119,8 @@ export function readRootStringValues(contents, key) {
 }
 
 export function rootAssignmentCount(contents, key) {
+  const assignments = scannedRootAssignments(contents, key);
+  if (assignments) return assignments.length;
   const firstTable = contents.search(/^\s*\[/m);
   const root = firstTable === -1 ? contents : contents.slice(0, firstTable);
   return [...root.matchAll(new RegExp(`^\\s*${key}\\s*=`, "gm"))].length;

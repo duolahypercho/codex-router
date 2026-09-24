@@ -102,6 +102,56 @@ test("a single-quoted scalar folded across lines is read the same way", () => {
   assert.equal(yamlNode(document, ["a"]).endIndex, 1);
 });
 
+test("an apostrophe inside a plain scalar is not an opening quote", () => {
+  // `note: don't edit` is an ordinary plain scalar. Reading its apostrophe as
+  // the start of a quoted scalar made every line after it a continuation of
+  // that scalar, so the document lost its remaining keys and then refused
+  // itself at end of file for a quote the user never opened.
+  const document = scanYamlDocument(
+    "llm-pi-ai:\n  providers:\n    mine:\n      note: don't edit\nafter: 1\n",
+  );
+  assert.deepEqual([...document.root.children.keys()], ["llm-pi-ai", "after"]);
+  assert.equal(yamlNode(document, ["llm-pi-ai", "providers", "mine"]).endIndex, 3);
+  assert.equal(yamlNode(document, ["after"]).index, 4);
+});
+
+test("an unpaired double quote inside a plain scalar is not an opening quote", () => {
+  const document = scanYamlDocument('width: 5" wide\nafter: 1\n');
+  assert.deepEqual([...document.root.children.keys()], ["width", "after"]);
+});
+
+test("a stray quote does not extend one node over the keys that follow it", () => {
+  // The dangerous half of the same mistake: when a later line happens to carry
+  // a matching quote the scan finishes without complaint, having silently
+  // moved every key in between inside the node that opened it. Splicing then
+  // writes the router's block into somebody else's value.
+  const document = scanYamlDocument(
+    [
+      "llm-pi-ai:",
+      "  providers:",
+      "    mine:",
+      "      note: don't edit",
+      "theme: plain",
+      "prompt: |",
+      "  it's a block scalar",
+      "",
+    ].join("\n"),
+  );
+  assert.deepEqual([...document.root.children.keys()], ["llm-pi-ai", "theme", "prompt"]);
+  assert.equal(yamlNode(document, ["llm-pi-ai"]).endIndex, 3);
+});
+
+test("a quote still opens a scalar wherever a node can begin", () => {
+  // The rule is positional, not a blanket "ignore quotes": a value that starts
+  // with one, and an element or key inside a flow collection, are quoted
+  // scalars whose contents must stay opaque to this lexer.
+  const document = scanYamlDocument(
+    ["a: \"x: not a key\"", "b: ['c: no', \"d: no\"]", "c: 1", ""].join("\n"),
+  );
+  assert.deepEqual([...document.root.children.keys()], ["a", "b", "c"]);
+  assert.throws(() => scanYamlDocument("a: 'one\nb: 2\n"), /quoted scalar is unterminated/);
+});
+
 test("a quoted scalar left open at end of file is still refused", () => {
   assert.throws(() => scanYamlDocument('a: "never closed\n'), /quoted scalar is unterminated/);
 });

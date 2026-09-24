@@ -1,7 +1,20 @@
 #!/bin/sh
 set -eu
 
-repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+# The name on PATH may be a symlink to this script, so walk the chain before
+# locating the repository root, and resolve that root physically: `dirname $0`
+# alone points beside the link, and a logical `..` climbs out of a linked
+# directory to a path node does not recognise as a module's own when it guards
+# main, so the command would quietly do nothing.
+self=$0
+while [ -L "$self" ]; do
+  link=$(readlink "$self")
+  case $link in
+    /*) self=$link ;;
+    *) self=$(dirname -- "$self")/$link ;;
+  esac
+done
+repo_dir=$(CDPATH= cd -P -- "$(dirname -- "$self")/.." && pwd -P)
 cd "$repo_dir"
 # The service, gateway, ports, and credentials are one plane shared by every
 # client integration -- the same reason `bin/disable` stopped tearing it down
@@ -25,7 +38,12 @@ retire_service_if_unused() {
 case "${MODEL_ROUTER_TARGET:-codex}" in
   codex)
     node src/config-manager.mjs disable
-    node src/skills-install.mjs uninstall
+    # Best effort, like the install-side refresh: under `set -eu` a failed
+    # skill removal (a symlinked skills root, say) would otherwise abort here
+    # and leave the `codex` shim and the service behind.
+    if ! node src/skills-install.mjs uninstall; then
+      echo "Managed Codex skills could not be removed; continuing." >&2
+    fi
     # The shim is a file named `codex` on the user's PATH that execs this
     # checkout. Leaving it behind after the checkout is gone means every `codex`
     # they run from then on prints a warning about a router that is not coming

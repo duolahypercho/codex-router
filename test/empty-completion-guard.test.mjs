@@ -8,7 +8,40 @@ import {
   EmptyCompletionGuard,
   EmptyCompletionPreludeLimitError,
   EmptyCompletionTerminalGuard,
+  preludeBudgetMs,
 } from "../src/empty-completion-guard.mjs";
+
+// The pre-content budget has to cover the prefill, and the prefill scales with
+// the prompt: a 577k-token request legitimately spends 70-130s before the first
+// content byte (measured 2026-09-21), and a flat budget read that as an empty
+// completion and answered the client with an explicit 502.
+test("the pre-content budget scales with the request size", () => {
+  const base = 30_000;
+  assert.equal(preludeBudgetMs({ baseMs: base, requestBytes: 0 }), base);
+
+  // ~1k tokens of request bytes buys one increment.
+  assert.equal(preludeBudgetMs({ baseMs: base, requestBytes: 4_000 }), base + 150);
+
+  const huge = preludeBudgetMs({ baseMs: base, requestBytes: 4 * 577_000 });
+  assert.equal(huge, base + 577 * 150);
+  assert.ok(huge > 100_000, "a 577k-token prefill needs minutes, not the flat budget");
+
+  // The allowance only grows, and the ceiling holds unless the operator's base
+  // is already above it.
+  assert.equal(
+    preludeBudgetMs({ baseMs: base, requestBytes: 4 * 10_000_000, maxMs: 600_000 }),
+    600_000,
+  );
+  assert.equal(
+    preludeBudgetMs({ baseMs: 700_000, requestBytes: 4 * 10_000_000, maxMs: 600_000 }),
+    700_000,
+  );
+
+  // A missing or nonsense size must never shrink the budget.
+  assert.equal(preludeBudgetMs({ baseMs: base }), base);
+  assert.equal(preludeBudgetMs({ baseMs: base, requestBytes: -5 }), base);
+  assert.equal(preludeBudgetMs({ baseMs: base, requestBytes: Number.NaN }), base);
+});
 
 async function runGuard(
   input,
@@ -675,6 +708,23 @@ test("a large parseable prologue is relayed at the byte budget and later content
   assert.equal(guard.suppressedPrologue(), false);
   assert.equal(guard.preludeLimitKind(), "bytes");
   assert.equal(Buffer.concat(chunks).toString("utf8"), prologue + answer);
+});
+
+test("a reasoning_text content part is thinking, not an answer", async () => {
+  const turn = [
+    "event: response.created",
+    'data: {"type":"response.created","response":{"id":"r1"}}',
+    "",
+    "event: response.content_part.done",
+    'data: {"type":"response.content_part.done","part":{"type":"reasoning_text","reasoning":"thinking..."}}',
+    "",
+    "event: response.completed",
+    'data: {"type":"response.completed","response":{"id":"r1","output":[{"type":"message","content":[{"type":"reasoning_text","reasoning":"thinking..."}]}]}}',
+    "",
+  ].join("\n");
+  const result = await runGuard(turn);
+  assert.equal(result.empty, true);
+  assert.equal(result.live, false);
 });
 
 test("a fragmented initial event can finish before the prelude verdict", async () => {

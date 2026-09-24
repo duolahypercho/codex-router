@@ -28,4 +28,13 @@ bin/* text eol=lf
 # a human to re-type one. The cost is that when both sides edit the *same*
 # bullet it keeps both copies, which is a visible one-line delete rather than a
 # conflict to resolve; pick the surviving wording when that happens.
+#
+# It also only ever helped a *local* merge. GitHub's server-side merge does not
+# run `.gitattributes` merge drivers, so a pull request colliding only here
+# still reported CONFLICTING on github.com while merging cleanly on a
+# maintainer's machine -- and every merge to `main` re-conflicted every other
+# open pull request. New changes therefore write a fragment to `changelog.d/`
+# instead of touching this file, which removes the shared line rather than
+# resolving it; see `changelog.d/README.md`. This driver stays for pull
+# requests opened before fragments landed.
 CHANGELOG.md merge=union

@@ -1,0 +1,29 @@
+/* Align Starlight with the landing page's type and palette. The marketing page
+   owns its own stylesheet; these tokens only affect documentation routes. */
+@import "@fontsource-variable/manrope";
+@import "@fontsource-variable/jetbrains-mono";
+
+:root {
+  --sl-font: "Manrope Variable", ui-sans-serif, system-ui, sans-serif;
+  --sl-font-mono: "JetBrains Mono Variable", ui-monospace, SFMono-Regular, monospace;
+}
+
+:root[data-theme="dark"] {
+  --sl-color-accent-low: #17233a;
+  --sl-color-accent: #3b6fd4;
+  --sl-color-accent-high: #b9cdf2;
+}
+
+:root[data-theme="light"] {
+  --sl-color-accent-low: #d9e4f8;
+  --sl-color-accent: #2f5fbe;
+  --sl-color-accent-high: #16294d;
+}
+
+/* README tables carry wide command and path columns; let them scroll inside
+   the content column instead of widening the page. */
+.sl-markdown-content table {
+  display: block;
+  overflow-x: auto;
+  max-width: 100%;
+}

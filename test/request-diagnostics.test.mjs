@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 
 import {
-  grokOauth46IngressContextBytes,
+  grokOauthIngressContextBytes,
   measureIngressContextBytes,
   ROUTER_INGRESS_OBSERVATION_POINT,
   safeDiagnosticRequestId,
@@ -59,15 +59,15 @@ test("UTF-8 JSON bytes count serialized payload fields, never token estimates", 
 test("contextBytes is only measured for Grok OAuth 4.6 ingress", () => {
   const payload = { instructions: "x", tools: [], input: "hi" };
   assert.equal(
-    grokOauth46IngressContextBytes(payload, { slug: "grok-oauth/grok-4.5" }),
+    grokOauthIngressContextBytes(payload, { slug: "grok-oauth/grok-4.5" }),
     undefined,
   );
   assert.equal(
-    grokOauth46IngressContextBytes(payload, { slug: "openrouter/grok-4.6" }),
+    grokOauthIngressContextBytes(payload, { slug: "openrouter/grok-4.6" }),
     undefined,
   );
   assert.deepEqual(
-    grokOauth46IngressContextBytes(payload, { slug: "grok-oauth/grok-4.6" }),
+    grokOauthIngressContextBytes(payload, { slug: "grok-oauth/grok-4.6" }),
     measureIngressContextBytes(payload),
   );
 });

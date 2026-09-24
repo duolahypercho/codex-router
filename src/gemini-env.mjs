@@ -35,6 +35,37 @@ function splitLines(document) {
   return document.split(/\r\n|\n/);
 }
 
+// Lines plus the terminator that actually followed each one ("" for the last,
+// which has none). Rebuilding from these keeps a document that mixes CRLF and
+// LF exactly as its author left it: the block is rendered with the document's
+// prevailing ending, and every line the router did not write keeps its own.
+function splitLinesWithEndings(document) {
+  const lines = [];
+  const endings = [];
+  const pattern = /\r\n|\n/g;
+  let at = 0;
+  for (let match = pattern.exec(document); match; match = pattern.exec(document)) {
+    lines.push(document.slice(at, match.index));
+    endings.push(match[0]);
+    at = pattern.lastIndex;
+  }
+  lines.push(document.slice(at));
+  endings.push("");
+  return { lines, endings };
+}
+
+// `endings[i]` terminates `lines[i]`; a line that gained no terminator of its
+// own (the block this write appends) takes `eol`.
+function joinLines(lines, endings, eol) {
+  let out = "";
+  for (let index = 0; index < lines.length; index += 1) {
+    out += lines[index];
+    if (index === lines.length - 1) break;
+    out += endings[index] ?? eol;
+  }
+  return out;
+}
+
 // Locates our block, and refuses anything ambiguous.
 //
 // A missing end marker or a second begin marker means somebody edited the file
@@ -113,30 +144,52 @@ export function conflictingAssignments(document) {
 export function spliceGeminiEnvBlock(document, values) {
   const text = String(document ?? "");
   const eol = newline(text);
-  const lines = splitLines(text);
+  const { lines, endings } = splitLinesWithEndings(text);
   const block = locateBlock(lines);
   const rendered = renderBlock(values);
   if (block) {
     const next = [...lines.slice(0, block.start), ...rendered, ...lines.slice(block.end + 1)];
-    return next.join(eol);
+    // The replaced span's own terminators go with it; the block we render in
+    // its place takes the document's prevailing ending.
+    const nextEndings = [
+      ...endings.slice(0, block.start),
+      ...rendered.map(() => eol),
+      ...endings.slice(block.end + 1),
+    ];
+    return joinLines(next, nextEndings, eol);
   }
   // Appended, so an existing document keeps its own leading content and its own
   // trailing newline discipline. A file that did not end in a newline gains one
   // here because the block has to start on its own line.
-  const prefix = text === "" ? [] : lines[lines.length - 1] === "" ? lines.slice(0, -1) : lines;
-  return [...prefix, ...rendered, ""].join(eol);
+  const trailing = text !== "" && lines[lines.length - 1] === "";
+  const prefix = text === "" ? [] : trailing ? lines.slice(0, -1) : lines;
+  const prefixEndings = text === "" ? [] : trailing ? endings.slice(0, -1) : endings;
+  // The last kept line now has a line after it, so a document that ended
+  // without a terminator gains one here rather than running into the marker.
+  if (prefixEndings.length) prefixEndings[prefixEndings.length - 1] ||= eol;
+  const next = [...prefix, ...rendered, ""];
+  const nextEndings = [...prefixEndings, ...rendered.map(() => eol), ""];
+  return joinLines(next, nextEndings, eol);
 }
 
-/** The document with the managed block removed, byte-identical to before it was written. */
+/**
+ * The document with the managed block removed. Every line the router did not
+ * write is returned exactly as it was found, terminator included. The one
+ * difference from the document as it stood before the first publish is the
+ * trailing newline that `spliceGeminiEnvBlock` adds to a file that had none:
+ * once the block is appended that newline belongs to the line above it, and
+ * nothing here records that it was not there to begin with.
+ */
 export function removeGeminiEnvBlock(document) {
   const text = String(document ?? "");
   const eol = newline(text);
-  const lines = splitLines(text);
+  const { lines, endings } = splitLinesWithEndings(text);
   const block = locateBlock(lines);
   if (!block) return text;
   const next = [...lines.slice(0, block.start), ...lines.slice(block.end + 1)];
   // The block was appended onto a document that already ended in a newline, so
   // its removal leaves the trailing empty element that split produced. Anything
   // else in the document is left exactly as it was found.
-  return next.join(eol);
+  const nextEndings = [...endings.slice(0, block.start), ...endings.slice(block.end + 1)];
+  return joinLines(next, nextEndings, eol);
 }

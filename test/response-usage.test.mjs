@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { maxImageTokensForRoute } from "../src/prompt-image-usage.mjs";
+import { DEFAULT_IMAGE_TOKEN_BOUND, maxImageTokensForRoute } from "../src/prompt-image-usage.mjs";
 
 import {
   estimateInputTokens,
@@ -37,14 +37,40 @@ test("DeepSeek file references still contribute image tokens", () => {
   assert.ok(estimate >= 2048 && estimate < 2200, `image reference estimate was ${estimate}`);
 });
 
-test("image token bounds apply only to the documented direct DeepSeek models", () => {
+test("documented direct DeepSeek models keep their 1024-token image bound", () => {
   for (const upstreamModel of ["deepseek-flash", "deepseek-v4-flash", "deepseek-v4-flash-vision-exp"]) {
     assert.equal(maxImageTokensForRoute({ provider: "deepseek", upstreamModel }), 1024);
-    assert.equal(maxImageTokensForRoute({ provider: "opencode-go", upstreamModel }), undefined);
-    assert.equal(maxImageTokensForRoute({ provider: "custom", upstreamModel }), undefined);
+    assert.equal(maxImageTokensForRoute({ provider: "opencode-go", upstreamModel }), DEFAULT_IMAGE_TOKEN_BOUND);
+    assert.equal(maxImageTokensForRoute({ provider: "custom", upstreamModel }), DEFAULT_IMAGE_TOKEN_BOUND);
   }
-  assert.equal(maxImageTokensForRoute({ provider: "deepseek", upstreamModel: "deepseek-v4-pro" }), undefined);
-  assert.equal(maxImageTokensForRoute(), undefined);
+  assert.equal(
+    maxImageTokensForRoute({ provider: "deepseek", upstreamModel: "deepseek-v4-pro" }),
+    DEFAULT_IMAGE_TOKEN_BOUND,
+  );
+  assert.equal(maxImageTokensForRoute(), DEFAULT_IMAGE_TOKEN_BOUND);
+});
+
+test("a reseller route cannot turn one screenshot into six figures of tokens", () => {
+  // 2.7 MB of base64 is one full-resolution screenshot through a DeepSeek route
+  // resold by another provider. Before the default bound the payload was charged
+  // as prose (~819k tokens), which is most of a 1M window and crossed the 900k
+  // auto-compaction threshold on its own.
+  const image_url = `data:image/png;base64,${"A".repeat(2_700_000)}`;
+  const body = JSON.stringify({
+    input: [{
+      type: "function_call_output",
+      call_id: "call1",
+      output: [{ type: "input_image", image_url }],
+    }],
+  });
+  const route = { provider: "openrouter", upstreamModel: "deepseek/deepseek-v4.1-flash" };
+  const contextWindow = 1_048_576;
+  const estimate = estimateInputTokens(body, {
+    contextWindow,
+    maxTokensPerImage: maxImageTokensForRoute(route),
+  });
+  assert.ok(estimate < 20_000, `resold image estimate was ${estimate}`);
+  assert.ok(estimate >= DEFAULT_IMAGE_TOKEN_BOUND, `resold image estimate was ${estimate}`);
 });
 
 test("image estimates retain visible text, unknown fields and ciphertext handling", () => {
@@ -296,6 +322,50 @@ test("adds up the usage of two attempts at one turn", () => {
   assert.deepEqual(mergeTokenUsage(undefined, only), only);
   assert.deepEqual(mergeTokenUsage(only, undefined), only);
   assert.equal(mergeTokenUsage(undefined, undefined), undefined);
+});
+
+test("billed counts are added up like every other measurement", () => {
+  // A provider that meters spend separately from the prompt it reports is the
+  // one this matters for. Dropping the billed halves left the pair reported at
+  // one attempt's cost, and provider-usage.mjs reads `billedInputTokens ??
+  // inputTokens`, so the turns that cost twice were the ones counted low.
+  assert.deepEqual(
+    mergeTokenUsage(
+      { inputTokens: 50_000, outputTokens: 100, totalTokens: 50_100, billedInputTokens: 150_000, billedOutputTokens: 135 },
+      { inputTokens: 51_000, outputTokens: 100, totalTokens: 51_100, billedInputTokens: 151_000, billedOutputTokens: 135 },
+    ),
+    {
+      inputTokens: 101_000,
+      outputTokens: 200,
+      totalTokens: 101_200,
+      billedInputTokens: 301_000,
+      billedOutputTokens: 270,
+    },
+  );
+  // Reported by one attempt and not the other, exactly like the cache count.
+  assert.deepEqual(
+    mergeTokenUsage(
+      { inputTokens: 10, outputTokens: 1, totalTokens: 11 },
+      { inputTokens: 10, outputTokens: 1, totalTokens: 11, billedInputTokens: 25 },
+    ),
+    { inputTokens: 20, outputTokens: 2, totalTokens: 22, billedInputTokens: 25 },
+  );
+  // Reported by neither, the key stays absent rather than becoming a zero:
+  // `billedInputTokens ?? inputTokens` has to fall through to the reported one.
+  const plain = mergeTokenUsage(
+    { inputTokens: 10, outputTokens: 1, totalTokens: 11 },
+    { inputTokens: 10, outputTokens: 1, totalTokens: 11 },
+  );
+  assert.equal("billedInputTokens" in plain, false);
+  assert.equal("billedOutputTokens" in plain, false);
+  // A measured zero survives.
+  assert.equal(
+    mergeTokenUsage(
+      { inputTokens: 1, outputTokens: 1, totalTokens: 2, billedOutputTokens: 0 },
+      { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+    ).billedOutputTokens,
+    0,
+  );
 });
 
 test("captures final SSE usage without changing streamed bytes", async () => {

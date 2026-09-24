@@ -3,10 +3,11 @@ import {
   brotliDecompressSync,
   gunzipSync,
   inflateSync,
-  zstdDecompressSync,
+  zstdDecompress,
 } from "node:zlib";
+import { promisify } from "node:util";
 
-import { readRequestBody, writeJson } from "./http-utils.mjs";
+import { readRequestBody, writeJson, zstdFrameContentSize } from "./http-utils.mjs";
 import { directLoopbackFetch } from "./fetch-transport.mjs";
 import {
   cursorCatalogSelections,
@@ -141,13 +142,34 @@ function jsonBody(buffer) {
   }
 }
 
-function decodedRequestBody(buffer, headers) {
+// The last synchronous zstd inflate in the router. It only runs for
+// `/cursor/...` requests, so it cannot account for the `/v1/responses` crashes
+// in issue #465, but it is the same one-shot native decoder on the same event
+// loop and gets the same defensive treatment the canonical path received: the
+// frame's declared size is checked before any native code touches the body,
+// and the inflate itself is the asynchronous decoder.
+const decompressZstd = promisify(zstdDecompress);
+
+async function decodedRequestBody(buffer, headers) {
   const encoding = String(headers["content-encoding"] || "identity").trim().toLowerCase();
   if (!encoding || encoding === "identity") return buffer;
   if (encoding === "gzip") return gunzipSync(buffer, { maxOutputLength: MAX_CURSOR_BODY_BYTES });
   if (encoding === "deflate") return inflateSync(buffer, { maxOutputLength: MAX_CURSOR_BODY_BYTES });
   if (encoding === "br") return brotliDecompressSync(buffer, { maxOutputLength: MAX_CURSOR_BODY_BYTES });
-  if (encoding === "zstd") return zstdDecompressSync(buffer, { maxOutputLength: MAX_CURSOR_BODY_BYTES });
+  if (encoding === "zstd") {
+    // A frame announcing more than the cap allows is refused on its header
+    // alone, so the decoder is never handed a body it would not be allowed to
+    // finish. The surface already raises `status`-carrying errors, and 413 is
+    // what the same rejection returns on `/v1/responses`.
+    const declared = zstdFrameContentSize(buffer);
+    if (declared !== undefined && declared > MAX_CURSOR_BODY_BYTES) {
+      throw Object.assign(
+        new Error(`Cursor sent a body that decodes to more than ${MAX_CURSOR_BODY_BYTES} bytes.`),
+        { status: 413 },
+      );
+    }
+    return decompressZstd(buffer, { maxOutputLength: MAX_CURSOR_BODY_BYTES });
+  }
   throw Object.assign(new Error(`Cursor used unsupported content encoding ${encoding}.`), { status: 415 });
 }
 
@@ -451,7 +473,7 @@ async function handleCursorApp(request, response, route, { responsesUrl, routedM
     return false;
   }
   const encoded = await readRequestBody(request, { maxBytes: MAX_CURSOR_BODY_BYTES });
-  const body = jsonBody(decodedRequestBody(encoded, request.headers));
+  const body = jsonBody(await decodedRequestBody(encoded, request.headers));
   const requestedModel = String(body.model || "");
   const selection = assertRoutedCursorModel(requestedModel, routedModels);
   const payload = cursorChatToResponses({ ...body, model: selection.slug });
@@ -942,7 +964,7 @@ async function handleCursorCli(request, response, route, { responsesUrl, routedM
   }
   if (route === CLI_RUN_PATH) {
     const encoded = await readRequestBody(request, { maxBytes: MAX_CURSOR_BODY_BYTES });
-    const body = decodedRequestBody(encoded, request.headers);
+    const body = await decodedRequestBody(encoded, request.headers);
     const requestId = requestIdFromRunBody(body);
     if (!requestId) throw Object.assign(new Error("Cursor omitted its request ID."), { status: 400 });
     response.writeHead(200, {
@@ -960,7 +982,7 @@ async function handleCursorCli(request, response, route, { responsesUrl, routedM
   }
   if (route === CLI_APPEND_PATH) {
     const encoded = await readRequestBody(request, { maxBytes: MAX_CURSOR_BODY_BYTES });
-    const body = decodedRequestBody(encoded, request.headers);
+    const body = await decodedRequestBody(encoded, request.headers);
     const append = appendPayload(body);
     if (!append.requestId || !append.payload) {
       throw Object.assign(new Error("Cursor sent an incomplete BidiAppend request."), { status: 400 });

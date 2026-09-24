@@ -65,6 +65,68 @@ test("native reasoning replays once without becoming visible message text", () =
   assert.equal(deepSeekResponsesInput("plain prompt"), "plain prompt");
 });
 
+test("native summary_text and raw_content reasoning shapes replay as reasoning_text", () => {
+  const answer = { type: "message", role: "assistant", content: "visible answer" };
+  const input = [
+    { type: "reasoning", summary_text: ["native chain of thought", "second chunk"], raw_content: [] },
+    answer,
+    { type: "reasoning", raw_content: [{ type: "reasoning_text", text: "raw thinking" }] },
+    { type: "reasoning", summary_text: [] },
+  ];
+  const original = structuredClone(input);
+  const normalized = deepSeekResponsesInput(input);
+  assert.deepEqual(normalized, [
+    { type: "reasoning", content: [{ type: "reasoning_text", text: "native chain of thought" }, { type: "reasoning_text", text: "second chunk" }] },
+    answer,
+    { type: "reasoning", content: [{ type: "reasoning_text", text: "raw thinking" }] },
+  ]);
+  assert.deepEqual(deepSeekResponsesInput(normalized), normalized, "normalization must be idempotent");
+  assert.deepEqual(input, original);
+});
+
+test("reasoning is hoisted out of tool-call exchanges without reordering anything else", () => {
+  const call1 = { type: "function_call", id: "fc_1", call_id: "call_1", name: "shell", arguments: "{}" };
+  const call2 = { type: "function_call", id: "fc_2", call_id: "call_2", name: "shell", arguments: "{}" };
+  const out1 = { type: "function_call_output", call_id: "call_1", output: "42" };
+  const out2 = { type: "function_call_output", call_id: "call_2", output: "43" };
+  const displaced = { type: "reasoning", summary: [{ text: "thinking between call and output" }] };
+  const input = [
+    { type: "message", role: "user", content: "go" },
+    { type: "message", role: "assistant", content: "checking" },
+    call1, call2, displaced, out1, out2,
+    { type: "message", role: "assistant", content: "done" },
+  ];
+  const original = structuredClone(input);
+  const normalized = deepSeekResponsesInput(input);
+  const hoisted = { type: "reasoning", content: [{ type: "reasoning_text", text: "thinking between call and output" }] };
+  const placeholder = { type: "reasoning", content: [{ type: "reasoning_text", text: "(prior reasoning unavailable)" }] };
+  assert.deepEqual(normalized, [
+    { type: "message", role: "user", content: "go" },
+    hoisted,
+    { type: "message", role: "assistant", content: "checking" },
+    placeholder,
+    call1, call2, out1, out2,
+    placeholder,
+    { type: "message", role: "assistant", content: "done" },
+  ]);
+  assert.deepEqual(deepSeekResponsesInput(normalized), normalized, "relocation must be idempotent");
+  assert.deepEqual(input, original);
+});
+
+test("reasoning before a call with no assistant message hoists ahead of the first call", () => {
+  const call = { type: "function_call", id: "fc_1", call_id: "call_1", name: "shell", arguments: "{}" };
+  const out = { type: "function_call_output", call_id: "call_1", output: "ok" };
+  const displaced = { type: "reasoning", summary_text: ["mid-exchange thought"] };
+  const input = [
+    { type: "message", role: "user", content: "run it" },
+    call, displaced, out,
+  ];
+  const normalized = deepSeekResponsesInput(input);
+  assert.deepEqual(normalized.map((item) => item.type), [
+    "message", "reasoning", "function_call", "function_call_output",
+  ]);
+});
+
 test("only unsupported custom tools require the function bridge", () => {
   assert.deepEqual(deepSeekCustomToolNames(
     [{ type: "custom", name: "apply_patch" }, { type: "custom", name: "exec" }],

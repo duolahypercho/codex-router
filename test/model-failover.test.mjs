@@ -83,6 +83,19 @@ test("classifyRoutedFailure swaps only a marked provider transport 5xx", () => {
   );
 });
 
+test("classifyRoutedFailure never swaps a local tool-argument conversion", () => {
+  const bodyText = JSON.stringify({
+    error: {
+      message:
+        "Failed to parse tool call arguments for tool 'exec_command' (Anthropic tool invoke). " +
+        "Error: Unterminated string starting at: line 1 column 8 (char 7).\n" +
+        "usage limit reached for your GLM Coding Plan. Upgrade your plan.",
+    },
+  });
+  assert.deepEqual(classifyRoutedFailure({ status: 400, bodyText, now: NOW }), { swap: false });
+  assert.deepEqual(classifyRoutedFailure({ status: 429, bodyText, now: NOW }), { swap: false });
+});
+
 test("classifyRoutedFailure recognizes the observed Z.ai five-hour window message", () => {
   const verdict = classifyRoutedFailure({
     status: 429,
@@ -98,6 +111,34 @@ test("classifyRoutedFailure recognizes the observed Z.ai five-hour window messag
     reason: "out_of_usage",
     until: new Date(NOW + MAX_COOLDOWN_MS).toISOString(),
   });
+});
+
+test("classifyRoutedFailure recognizes the documented Z.ai weekly and monthly window message", () => {
+  // zai 1310: "Weekly/Monthly Limit Exhausted. Your limit will reset at ..." --
+  // a quota window that names neither "usage" nor "quota", so the rest of the
+  // vocabulary does not catch it and the turn keeps its 429 instead of
+  // failing over.
+  const verdict = classifyRoutedFailure({
+    status: 429,
+    bodyText: quotaBody("Weekly Limit Exhausted. Your limit will reset at 2026-08-15 13:00:00."),
+    now: NOW,
+  });
+  assert.equal(verdict.swap, true);
+  assert.equal(verdict.reason, "out_of_usage");
+  assert.ok(verdict.until, "the named reset becomes the cooldown window");
+});
+
+test("classifyRoutedFailure swaps on a lapsed Z.ai coding or enterprise package", () => {
+  // zai 1309/1314: renewal restores access -- time does not, and neither does a
+  // fresh key. Still an exhausted plan every other provider can answer.
+  const verdict = classifyRoutedFailure({
+    status: 429,
+    bodyText: quotaBody(
+      "Your GLM Coding Plan package has expired and is temporarily unavailable. You can resume using it after renewing the subscription.",
+    ),
+    now: NOW,
+  });
+  assert.deepEqual(verdict, { swap: true, reason: "out_of_usage" });
 });
 
 test("classifyRoutedFailure honours a reset time the provider named in the body", () => {
@@ -380,6 +421,63 @@ test("rankFailoverCandidates orders a tier by the registry's own preference", ()
   );
 });
 
+test("rankFailoverCandidates admits a same-family 1M sibling only when asked", () => {
+  const from = model("opencode-go-messages/minimax-m3", "opencode-go-messages", {
+    contextWindow: 262_144,
+  });
+  const largeSibling = model("opencode-go/glm-5.3-flash", "opencode-go", {
+    contextWindow: 1_000_000,
+    priority: 29,
+  });
+  const smallSibling = model("opencode-go-messages/qwen3.8-max", "opencode-go-messages", {
+    contextWindow: 262_144,
+    priority: 42,
+  });
+  const other = model("kimi/k3", "kimi", { contextWindow: 1_000_000, priority: 10 });
+  const models = [largeSibling, smallSibling, other];
+
+  const blocked = rankFailoverCandidates(models, {
+    from,
+    estimatedTokens: 434983,
+  });
+  assert.deepEqual(
+    blocked.map((entry) => entry.model.slug),
+    ["kimi/k3"],
+  );
+
+  const allowed = rankFailoverCandidates(models, {
+    from,
+    estimatedTokens: 434983,
+    allowSameFamily: true,
+  });
+  assert.ok(allowed.some((entry) => entry.model.slug === largeSibling.slug));
+  assert.equal(
+    allowed.some((entry) => entry.model.slug === smallSibling.slug),
+    false,
+  );
+  assert.ok(allowed.some((entry) => entry.model.slug === other.slug));
+});
+
+test("classifyRoutedFailure does not swap a Console Go context-length 400", () => {
+  const inner = JSON.stringify({
+    type: "error",
+    error: {
+      type: "invalid_request_error",
+      message:
+        "Error from provider (Console Go): Upstream request failed: [invalid_request_error] "
+        + "Prompt too long: about 434983 tokens estimated, but the maximum context length is 262144 tokens including the completion. "
+        + "Reduce the length of the messages.",
+    },
+  });
+  const bodyText = JSON.stringify({
+    error: {
+      message:
+        `litellm.BadRequestError: AnthropicException - ${inner}. Received Model Group=opencode-go-messages-minimax-m3\nAvailable Model Group Fallbacks=None`,
+    },
+  });
+  assert.equal(classifyRoutedFailure({ status: 400, bodyText, now: NOW }).swap, false);
+});
+
 test("rankFailoverCandidates never routes back into the same quota", () => {
   const ranked = rankFailoverCandidates(
     [
@@ -393,6 +491,35 @@ test("rankFailoverCandidates never routes back into the same quota", () => {
   assert.deepEqual(
     ranked.map((entry) => entry.model.slug),
     ["kimi/k3"],
+  );
+});
+
+test("rankFailoverCandidates offers separately billed Zen after Go exhaustion", () => {
+  const from = model("opencode-go/glm-5.3", "opencode-go");
+  const ranked = rankFailoverCandidates(
+    [
+      model("opencode-go-messages/minimax-m3", "opencode-go-messages"),
+      model("opencode-go-responses/gpt-5.6-luna", "opencode-go-responses"),
+      model("opencode-zen/glm-5.3", "opencode-zen"),
+    ],
+    { from },
+  );
+  assert.deepEqual(
+    ranked.map((entry) => entry.model.slug),
+    ["opencode-zen/glm-5.3"],
+  );
+
+  const reverse = rankFailoverCandidates(
+    [
+      model("opencode-zen-messages/claude-sonnet-4-5", "opencode-zen-messages"),
+      model("opencode-zen-responses/muse-spark-1.2", "opencode-zen-responses"),
+      model("opencode-go/glm-5.3", "opencode-go"),
+    ],
+    { from: model("opencode-zen/glm-5.3", "opencode-zen") },
+  );
+  assert.deepEqual(
+    reverse.map((entry) => entry.model.slug),
+    ["opencode-go/glm-5.3"],
   );
 });
 

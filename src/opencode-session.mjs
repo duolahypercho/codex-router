@@ -14,6 +14,8 @@ const OPENCODE_PROVIDER_IDS = new Set([
   "opencode-go-messages",
   "opencode-go-responses",
   "opencode-zen",
+  "opencode-zen-messages",
+  "opencode-zen-responses",
   "opencode-free",
   "opencode-free-responses",
 ]);

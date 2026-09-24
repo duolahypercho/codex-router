@@ -1,0 +1,41 @@
+#!/bin/sh
+set -eu
+
+# The name on PATH may be a symlink to this script, so walk the chain before
+# locating the repository root, and resolve that root physically: `dirname $0`
+# alone points beside the link, and a logical `..` climbs out of a linked
+# directory to a path node does not recognise as a module's own when it guards
+# main, so the command would quietly do nothing.
+self=$0
+while [ -L "$self" ]; do
+  link=$(readlink "$self")
+  case $link in
+    /*) self=$link ;;
+    *) self=$(dirname -- "$self")/$link ;;
+  esac
+done
+repo_dir=$(CDPATH= cd -P -- "$(dirname -- "$self")/.." && pwd -P)
+cd "$repo_dir"
+
+# Codex-only on purpose: the placement is expressed through the `priority`
+# Codex renders its picker by. Other targets publish their own catalogs.
+case "${MODEL_ROUTER_TARGET:-codex}" in
+  codex) ;;
+  *) echo "Picker order is a Codex picker concept; other targets render their own catalogs." >&2; exit 2 ;;
+esac
+
+command=${1:-status}
+case "$command" in
+  status|native-first|routed-first) ;;
+  *) echo "Usage: $0 status|native-first|routed-first" >&2; exit 2 ;;
+esac
+
+if [ "$command" != "status" ]; then
+  node --input-type=module -e \
+    'import { setPickerOrder } from "./src/model-picker-state.mjs"; setPickerOrder(process.argv[1])' \
+    "$command"
+  node src/catalog.mjs
+fi
+
+node --input-type=module -e \
+  'import { readPickerOrder, MODEL_PICKER_STATE_PATH } from "./src/model-picker-state.mjs"; process.stdout.write(readPickerOrder() + " " + MODEL_PICKER_STATE_PATH + "\n")'

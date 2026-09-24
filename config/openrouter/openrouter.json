@@ -19,6 +19,27 @@
         ],
         "prompt": "OpenRouter API key"
       }
+    },
+    {
+      "id": "openrouter-decisions",
+      "displayName": "OpenRouter Decisions",
+      "kind": "openai-compatible",
+      "ownedBy": "openrouter",
+      "variantOf": "openrouter",
+      "protocol": "openai-decisions",
+      "baseUrl": "https://openrouter.ai/api/alpha",
+      "baseUrlEnv": "OPENROUTER_DECISIONS_API_BASE_URL",
+      "credential": {
+        "environment": [
+          "OPENROUTER_API_KEY"
+        ],
+        "file": "openrouter-api-key.secret",
+        "legacyFiles": [],
+        "keychainServices": [
+          "codex-router-openrouter"
+        ],
+        "prompt": "OpenRouter API key"
+      }
     }
   ]
 }

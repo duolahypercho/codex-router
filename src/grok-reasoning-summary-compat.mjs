@@ -1,14 +1,18 @@
 import { Transform } from "node:stream";
 import { TextDecoder } from "node:util";
 
-const MAX_FRAME_BYTES = 256 * 1024;
+// LiteLLM's bridge echoes the request's instructions and full tool list in
+// response.created, and a Codex Desktop tool list is larger than 256 KiB. A
+// smaller pre-commit bound releases that first frame and turns the repair off
+// for the whole stream, so match the namespace relay's prelude bound.
+const MAX_FRAME_BYTES = 10 * 1024 * 1024;
 const MAX_COMMITTED_FRAME_BYTES = 64 * 1024 * 1024;
 const LF_FRAME_SEPARATOR = Buffer.from("\n\n");
 const CRLF_FRAME_SEPARATOR = Buffer.from("\r\n\r\n");
 
 class GrokReasoningSummaryCommittedStreamError extends Error {
   constructor(reason) {
-    super(`Grok reasoning summary repair failed after stream mutation: ${reason}`);
+    super(`Reasoning summary repair failed after stream mutation: ${reason}`);
     this.name = "GrokReasoningSummaryCommittedStreamError";
   }
 }
@@ -161,12 +165,15 @@ function isGatewayErrorEnvelope(event) {
 }
 
 // LiteLLM's Chat Completions -> Responses bridge can open an empty message
-// before Grok starts reasoning, and it hashes every reasoning delta into a
-// different item_id. Codex drops those orphaned deltas, so the user sees
-// silence while Grok is already streaming a summary. Normalize only that
-// summary lifecycle; other providers and non-SSE responses never enter here.
+// before the model starts reasoning, and it hashes every reasoning delta into a
+// different item_id. Codex drops those orphaned deltas, so the user sees no
+// reasoning while the model is already streaming a summary. This was found on
+// Grok and holds for every Chat Completions route through that bridge (Hy4,
+// DeepSeek on resellers, ...). Normalize only that summary lifecycle; canonical
+// streams pass byte-identical and non-SSE responses never enter here.
 export class GrokReasoningSummaryCompatTransform extends Transform {
   #frames;
+  #normalizeGatewayErrors;
   #disabled = false;
   #reasoning;
   #pendingMessage = [];
@@ -183,8 +190,10 @@ export class GrokReasoningSummaryCompatTransform extends Transform {
   constructor({
     maxFrameBytes = MAX_FRAME_BYTES,
     maxCommittedFrameBytes = MAX_COMMITTED_FRAME_BYTES,
+    normalizeGatewayErrors = true,
   } = {}) {
     super();
+    this.#normalizeGatewayErrors = normalizeGatewayErrors === true;
     const limit = Number.isInteger(maxFrameBytes) && maxFrameBytes > 0
       ? maxFrameBytes
       : MAX_FRAME_BYTES;
@@ -235,7 +244,11 @@ export class GrokReasoningSummaryCompatTransform extends Transform {
       this.#frames.flush((block, separator, original) => {
         this.#emitFrame(block, separator, original);
       });
-      for (const piece of this.#flushPendingMessage(true)) this.push(Buffer.from(piece));
+      if (this.#message?.prematureClose && !this.#message.textDone) {
+        this.#pendingMessage = [];
+      } else {
+        for (const piece of this.#flushPendingMessage(true)) this.push(Buffer.from(piece));
+      }
       callback();
     } catch (error) {
       callback(error);
@@ -341,10 +354,151 @@ export class GrokReasoningSummaryCompatTransform extends Transform {
   #flushPendingMessage(preserveSeparators = false) {
     const pending = this.#pendingMessage;
     this.#pendingMessage = [];
+    if (
+      this.#message
+      && pending.some(({ parsed }) => (
+        parsed.event?.type === "response.output_text.delta"
+        && typeof parsed.event.delta === "string"
+        && parsed.event.delta.length > 0
+      ))
+    ) {
+      this.#message.releasedText = true;
+    }
     return pending.map(({ parsed, separator }) => (
       this.#rewrittenBlock(parsed, this.#shiftedEvent(parsed.event))
       + (preserveSeparators ? separator : "")
     ));
+  }
+
+  #isReasoningTextPartClose(type, event) {
+    return type === "response.content_part.done"
+      && event.item_id === this.#message?.id
+      && event.part?.type === "reasoning_text";
+  }
+
+  #isResponseTerminal(type) {
+    return type === "response.completed"
+      || type === "response.done"
+      || type === "response.incomplete";
+  }
+
+  #claimedOutputText(event) {
+    return typeof event?.text === "string" ? event.text : this.#message?.text ?? "";
+  }
+
+  // LiteLLM can still emit `output_text.done` for the leaked prefix after it
+  // closed the part as `reasoning_text`. That snapshot is not a finished
+  // answer unless later deltas grew the text past the close.
+  #isUnfinishedOutputTextDone(event) {
+    return Boolean(
+      this.#message?.prematureClose
+      && !this.#message.textDone
+      && this.#claimedOutputText(event) === (this.#message.textAtPrematureClose ?? "")
+    );
+  }
+
+  // A held `output_text.done` that never grew into a finished sentence is
+  // still leaked thinking: the 14:12 ImageGen retry stored
+  // "I'll use the image generation" as `final_answer` after LiteLLM closed
+  // that fragment as `output_text` (distinct from the reasoning_text match).
+  // Short punctuated answers ("4.", "Done.") stay answers. A single token
+  // with no whitespace (`CODEX_ROUTER_STREAM_OK`) is a finished marker, not
+  // a mid-clause cut — treating every 20+ unpunctuated string as unfinished
+  // 502'd the live streaming probe. Unmatched openers, trailing clause
+  // marks, first-person planning openers, and dangling function words
+  // remain unfinished.
+  #isUnfinishedAssistantText(text) {
+    const value = typeof text === "string" ? text.trimEnd() : "";
+    if (!value) return true;
+    const opens = (value.match(/[(\[{]/g) || []).length;
+    const closes = (value.match(/[)\]}]/g) || []).length;
+    if (opens > closes) return true;
+    if (/[:,，、]$/u.test(value)) return true;
+    if (/[.!?…]["'”’)\]]*$/u.test(value)) return false;
+    if (!/\s/u.test(value)) return false;
+    if (/^(I'll|I will|Let me|Let's|I'm going to|I am going to|I need to)\b/iu.test(value)) {
+      return true;
+    }
+    return /\b(the|a|an|of|to|for|with|and|or|but)$/iu.test(value);
+  }
+
+  // Thinking copied onto `output_text` is the same string, or a prefix of the
+  // thinking the finish sequence then closes as `reasoning_text`. A real
+  // answer is a different string from that thinking.
+  #isLeakedThinkingText(output, reasoning) {
+    if (typeof output !== "string" || output.length === 0) return false;
+    if (typeof reasoning !== "string" || reasoning.length === 0) return false;
+    return reasoning === output || reasoning.startsWith(output);
+  }
+
+  #rewriteReasoningTextCloseToOutputText(parsed) {
+    return this.#rewrittenBlock(parsed, this.#shiftedEvent({
+      ...parsed.event,
+      part: {
+        type: "output_text",
+        text: this.#message.text,
+        annotations: [],
+      },
+    }));
+  }
+
+  #dropOrRewriteReasoningTextClose(parsed) {
+    this.#commitMutation(parsed);
+    const reasoning = typeof parsed.event?.part?.reasoning === "string"
+      ? parsed.event.part.reasoning
+      : "";
+    if (!this.#message.textDone) {
+      // LiteLLM's finish sequence emits `output_text.done` *before*
+      // `content_part.done` `reasoning_text`. A done snapshot that is still
+      // the thinking is truncated, same as close-then-same-done. A done
+      // snapshot that is a different string is a real answer.
+      if (
+        this.#message.heldOutputTextDone
+        && !this.#isLeakedThinkingText(this.#message.text, reasoning)
+        && !this.#isUnfinishedAssistantText(this.#message.text)
+      ) {
+        this.#message.textDone = true;
+        return [
+          ...this.#flushPendingMessage(),
+          this.#rewriteReasoningTextCloseToOutputText(parsed),
+        ];
+      }
+      this.#message.prematureClose = true;
+      this.#message.textAtPrematureClose = this.#message.text;
+      return [];
+    }
+    return [this.#rewriteReasoningTextCloseToOutputText(parsed)];
+  }
+
+  #stripUnfinishedMessages(output) {
+    if (!Array.isArray(output)) return output;
+    return output.filter((item) => item?.type !== "message");
+  }
+
+  // A `reasoning_text` close before `output_text.done` is thinking, not the
+  // end of the answer. If the stream then completes with only the prefix
+  // that had already leaked onto `output_text`, withhold that message so
+  // empty-completion can retry (or fail after a retry) instead of storing a
+  // mid-sentence `final_answer`. Visible bytes that already left this stage
+  // cannot be un-said, so that path becomes `response.incomplete`.
+  #truncatedCompletion(parsed, event) {
+    this.#pendingMessage = [];
+    this.#commitMutation(parsed);
+    const output = this.#stripUnfinishedMessages(event.response?.output);
+    const response = event.response
+      ? { ...event.response, output }
+      : event.response;
+    if (this.#message?.releasedText) {
+      return [this.#rewrittenBlock(parsed, this.#shiftedEvent({
+        ...event,
+        type: "response.incomplete",
+        response: response ? { ...response, status: "incomplete" } : response,
+      }))];
+    }
+    return [this.#rewrittenBlock(parsed, this.#shiftedEvent({
+      ...event,
+      response,
+    }))];
   }
 
   #startOrphanReasoning(parsed) {
@@ -354,7 +508,7 @@ export class GrokReasoningSummaryCompatTransform extends Transform {
       ?? (Number.isInteger(event.output_index) ? event.output_index : 0);
     this.#shiftOutputIndexes = this.#pendingMessage.length > 0;
     this.#reasoning = {
-      id: typeof event.item_id === "string" && event.item_id ? event.item_id : "rs_grok_summary",
+      id: typeof event.item_id === "string" && event.item_id ? event.item_id : "rs_reasoning_summary",
       outputIndex,
       text: "",
       partStarted: false,
@@ -436,6 +590,15 @@ export class GrokReasoningSummaryCompatTransform extends Transform {
     // LiteLLM can turn a forwarder SSE error into an untyped gateway error,
     // then append empty message closes. Recognize only the top-level envelope;
     // text containing error-shaped JSON and canonical typed events stay intact.
+    // The Grok OAuth wording is proven for that route alone, so other routes
+    // relay the envelope byte-identical, after closing anything held here.
+    if (isGatewayErrorEnvelope(event) && !this.#normalizeGatewayErrors) {
+      return [
+        ...this.#finishReasoning(parsed, "incomplete"),
+        ...this.#flushPendingMessage(),
+        block,
+      ];
+    }
     if (isGatewayErrorEnvelope(event)) {
       this.#commitMutation(parsed);
       const prefix = this.#finishReasoning(parsed, "incomplete");
@@ -459,6 +622,11 @@ export class GrokReasoningSummaryCompatTransform extends Transform {
         id: event.item.id,
         outputIndex: Number.isInteger(event.output_index) ? event.output_index : 0,
         text: "",
+        textDone: false,
+        prematureClose: false,
+        textAtPrematureClose: "",
+        releasedText: false,
+        heldOutputTextDone: false,
       };
       this.#pendingMessage.push({ parsed, separator: this.#currentSeparator });
       return [];
@@ -482,6 +650,90 @@ export class GrokReasoningSummaryCompatTransform extends Transform {
     ) {
       prefix = this.#startOrphanReasoning(parsed);
     } else if (!this.#reasoning && this.#pendingMessage.length > 0) {
+      // LiteLLM can close the held message part as `reasoning_text` before
+      // or after `output_text.done`, including after visible deltas have
+      // already started. Hold those deltas (and the done snapshot) here:
+      // flushing them would let Codex store a leaked prefix as
+      // `final_answer` when the stream then completes.
+      if (this.#isReasoningTextPartClose(type, event)) {
+        return this.#dropOrRewriteReasoningTextClose(parsed);
+      }
+      if (type === "response.output_text.delta" && event.item_id === this.#message?.id) {
+        this.#message.text += typeof event.delta === "string" ? event.delta : "";
+        this.#pendingMessage.push({ parsed, separator: this.#currentSeparator });
+        return [];
+      }
+      if (type === "response.output_text.done" && event.item_id === this.#message?.id) {
+        if (this.#isUnfinishedOutputTextDone(event)) return [];
+        if (typeof event.text === "string" && event.text.length > 0) {
+          this.#message.text = event.text;
+        }
+        // LiteLLM 1.96's Chat Completions → Responses finish sequence emits
+        // `output_text.done` before `content_part.done`. Committing here
+        // stores a leaked prefix as `final_answer` when that close is then
+        // `reasoning_text` (the GTA-style AAA ImageGen turn). Hold the
+        // snapshot until the part close says whether the text grew into an
+        // answer.
+        this.#message.heldOutputTextDone = true;
+        this.#pendingMessage.push({ parsed, separator: this.#currentSeparator });
+        return [];
+      }
+      if (
+        type === "response.content_part.done"
+        && event.item_id === this.#message?.id
+        && this.#message.heldOutputTextDone
+        && !this.#message.textDone
+        && event.part?.type === "output_text"
+      ) {
+        const text = typeof event.part.text === "string" && event.part.text
+          ? event.part.text
+          : this.#message.text;
+        this.#message.text = text;
+        if (this.#isUnfinishedAssistantText(text)) {
+          this.#message.prematureClose = true;
+          this.#message.textAtPrematureClose = text;
+          return [];
+        }
+        this.#message.textDone = true;
+        return [...this.#flushPendingMessage(), block];
+      }
+      if (
+        this.#isResponseTerminal(type)
+        && this.#message.heldOutputTextDone
+        && !this.#message.textDone
+        && this.#isUnfinishedAssistantText(this.#message.text)
+      ) {
+        this.#message.prematureClose = true;
+        return this.#truncatedCompletion(parsed, event);
+      }
+      if (
+        type === "response.output_item.done"
+        && event.item?.type === "message"
+        && event.item.id === this.#message?.id
+        && !this.#message.textDone
+        && this.#message.prematureClose
+      ) {
+        return [];
+      }
+      if (
+        this.#isResponseTerminal(type)
+        && this.#message.prematureClose
+        && !this.#message.textDone
+      ) {
+        return this.#truncatedCompletion(parsed, event);
+      }
+      if (this.#message.prematureClose && !this.#message.textDone) {
+        if (
+          type === "response.output_item.added"
+          && event?.item?.type
+          && event.item.type !== "message"
+          && event.item.type !== "reasoning"
+        ) {
+          this.#pendingMessage = [];
+          return [block];
+        }
+        return [];
+      }
       return [...this.#flushPendingMessage(), block];
     }
 
@@ -516,7 +768,26 @@ export class GrokReasoningSummaryCompatTransform extends Transform {
       return [this.#rewrittenBlock(parsed, { ...event, item })];
     }
 
-    if (!this.#reasoning) return [block];
+    if (!this.#reasoning) {
+      if (this.#isReasoningTextPartClose(type, event) && this.#message) {
+        return this.#dropOrRewriteReasoningTextClose(parsed);
+      }
+      if (
+        type === "response.output_text.done"
+        && event.item_id === this.#message?.id
+        && this.#isUnfinishedOutputTextDone(event)
+      ) {
+        return [];
+      }
+      if (
+        this.#isResponseTerminal(type)
+        && this.#message?.prematureClose
+        && !this.#message.textDone
+      ) {
+        return this.#truncatedCompletion(parsed, event);
+      }
+      return [block];
+    }
 
     if (this.#canonicalReasoningId) {
       const canonicalLifecycle = (
@@ -631,38 +902,53 @@ export class GrokReasoningSummaryCompatTransform extends Transform {
       })];
     }
 
+    const unfinishedMessageDone = type === "response.output_item.done"
+      && event?.item?.type === "message"
+      && event.item.id === this.#message?.id
+      && this.#message
+      && !this.#message.textDone
+      && this.#message.prematureClose;
+    const unfinishedOutputTextDone = type === "response.output_text.done"
+      && event.item_id === this.#message?.id
+      && this.#isUnfinishedOutputTextDone(event);
     const startsVisibleOutput = type === "response.output_text.delta"
-      || type === "response.output_text.done"
+      || (type === "response.output_text.done" && !unfinishedOutputTextDone)
       || type === "response.refusal.delta"
       || type === "response.refusal.done"
       || (type === "response.output_item.added" && event?.item?.type !== "reasoning")
-      || (type === "response.output_item.done" && event?.item?.type !== "reasoning")
+      || (
+        type === "response.output_item.done"
+        && event?.item?.type !== "reasoning"
+        && !unfinishedMessageDone
+      )
       || type === "response.function_call_arguments.delta";
     if (startsVisibleOutput) {
       if (!this.#reasoning.itemDone) prefix.push(...this.#finishReasoning(parsed));
       prefix.push(...this.#flushPendingMessage());
     }
 
-    if (
-      type === "response.content_part.done"
-      && event.item_id === this.#message?.id
-      && event.part?.type === "reasoning_text"
-    ) {
-      return [...prefix, this.#rewrittenBlock(parsed, this.#shiftedEvent({
-        ...event,
-        part: {
-          type: "output_text",
-          text: this.#message.text,
-          annotations: [],
-        },
-      }))];
-    }
-
     if (type === "response.output_text.delta" && event.item_id === this.#message?.id) {
       this.#message.text += typeof event.delta === "string" ? event.delta : "";
+      if (typeof event.delta === "string" && event.delta.length > 0) {
+        this.#message.releasedText = true;
+      }
     } else if (type === "response.output_text.done" && event.item_id === this.#message?.id) {
-      if (typeof event.text === "string") this.#message.text = event.text;
+      if (!unfinishedOutputTextDone) {
+        if (typeof event.text === "string") this.#message.text = event.text;
+        this.#message.textDone = true;
+      }
     }
+
+    if (this.#isReasoningTextPartClose(type, event)) {
+      // After the answer has finished, LiteLLM still labels this close as
+      // thinking. Rewrite it so Codex stores `output_text`. Before that, the
+      // same event is a premature close: keeping it would truncate a live
+      // identity reply mid-sentence while later deltas are dropped.
+      prefix.push(...this.#dropOrRewriteReasoningTextClose(parsed));
+      return prefix;
+    }
+
+    if (unfinishedMessageDone || unfinishedOutputTextDone) return prefix;
 
     const failureTerminal = type === "response.failed"
       || type === "response.error"
@@ -680,7 +966,21 @@ export class GrokReasoningSummaryCompatTransform extends Transform {
 
     const terminalResponse = type === "response.completed"
       || type === "response.incomplete"
+      || type === "response.done"
       || failureTerminal;
+    if (
+      this.#isResponseTerminal(type)
+      && this.#message?.prematureClose
+      && !this.#message.textDone
+    ) {
+      if (!this.#reasoning.itemDone) prefix.push(...this.#finishReasoning(parsed, "incomplete"));
+      prefix.push(...this.#truncatedCompletion(parsed, event));
+      this.#reasoning = undefined;
+      this.#repairedReasoningItems = [];
+      this.#canonicalReasoningId = undefined;
+      this.#shiftOutputIndexes = false;
+      return prefix;
+    }
     if (terminalResponse && Array.isArray(event.response?.output)) {
       const itemStatus = type === "response.completed" ? "completed" : "incomplete";
       prefix.push(
@@ -716,9 +1016,21 @@ export class GrokReasoningSummaryCompatTransform extends Transform {
   }
 }
 
-export function grokReasoningSummaryCompatTransform(provider, contentType = "") {
-  const providerId = typeof provider === "string" ? provider : provider?.id;
-  if (providerId !== "grok-oauth") return undefined;
+// Grok OAuth keeps its gateway-error normalization. Every other provider whose
+// turns LiteLLM translates from Chat Completions gets the summary repair only.
+// Direct DeepSeek has its own reasoning bridge repair in
+// deepseek-tool-message-compat.mjs. Native Responses providers skip this
+// bridge. Anthropic Messages providers do not: litellm-config.mjs still sets
+// `use_chat_completions_api: true` for them, so every `protocol: "anthropic"`
+// route arrives as the same message-first, hashed
+// `reasoning_summary_text.delta` / `content_part.done` `reasoning_text` stream
+// this transform repairs. Leaving them out classified those turns empty.
+export function reasoningSummaryCompatTransform(provider, contentType = "") {
   if (!String(contentType).toLowerCase().includes("text/event-stream")) return undefined;
-  return new GrokReasoningSummaryCompatTransform();
+  const providerId = typeof provider === "string" ? provider : provider?.id;
+  if (providerId === "grok-oauth") return new GrokReasoningSummaryCompatTransform();
+  if (!provider || typeof provider !== "object" || providerId === "deepseek") return undefined;
+  const protocol = provider.protocol ?? "openai";
+  if (protocol !== "openai" && protocol !== "anthropic") return undefined;
+  return new GrokReasoningSummaryCompatTransform({ normalizeGatewayErrors: false });
 }

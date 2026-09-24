@@ -121,8 +121,10 @@ credentials.
 The config manager:
 
 - Writes only a marked `openai_base_url` and `model_catalog_json` block.
-- Preserves `model`, `model_provider`, reasoning settings, profiles, and ChatGPT
-  authentication.
+- Preserves `model`, reasoning settings, profiles, and ChatGPT authentication.
+  It changes `model_provider` only for an explicit login-free or signed-routing
+  toggle, records the previous value in protected state, and restores it after
+  an ownership check.
 - Refuses to replace an unmarked user-owned base URL or catalog.
 - Creates `~/.codex/config.toml.pre-codex-router` before its first change.
 - Atomically rewrites the config and restricts it to the current user.

@@ -43,7 +43,8 @@
       ],
       "supportsApplyPatchTool": false,
       "requestProfile": "auto-tool-choice",
-      "compHash": "meta-muse-spark-1-3-contributor-v1"
+      "compHash": "meta-muse-spark-1-3-contributor-v1",
+      "toolSchemaRecursion": "flatten"
     }
   ]
 }

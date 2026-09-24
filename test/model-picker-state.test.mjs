@@ -15,6 +15,8 @@ const {
   migrateModelVisibility,
   modelPickerSnapshot,
   readHiddenModels,
+  readPickerOrder,
+  setPickerOrder,
   seedModelsHidden,
   setAllModelsVisible,
   setModelVisible,
@@ -286,4 +288,40 @@ test("a migration still lands on a destination nobody has decided", () => {
   const migrated = modelPickerSnapshot();
   assert.equal(migrated.visible.includes(from), false);
   assert.equal(migrated.visible.includes(to), true);
+});
+
+test("picker order defaults to native-first and is absent from an untouched file", () => {
+  assert.equal(readPickerOrder(), "native-first");
+  assert.equal(modelPickerSnapshot().order, "native-first");
+  setModelVisible("opencode-go/deepseek-v4-flash", false);
+  const persisted = JSON.parse(readFileSync(MODEL_PICKER_STATE_PATH, "utf8"));
+  assert.equal(Object.hasOwn(persisted, "order"), false);
+});
+
+test("picker order round-trips and survives visibility writes", () => {
+  setPickerOrder("routed-first");
+  assert.equal(readPickerOrder(), "routed-first");
+  assert.equal(JSON.parse(readFileSync(MODEL_PICKER_STATE_PATH, "utf8")).order, "routed-first");
+
+  // Every visibility writer passes only the sets it changed; the placement
+  // choice must not be dropped by any of them.
+  setModelVisible("kimi-oauth/k3", false);
+  setModelsVisible(["gpt-5.6-sol"], true);
+  setAllModelsVisible(["opencode-go/deepseek-v4-flash"], false);
+  forgetModelVisibility(["kimi-oauth/k3"]);
+  migrateModelVisibility([{ from: "gpt-5.6-sol", to: "gpt-5.6-luna" }]);
+  seedModelsHidden(["orca/free"]);
+  assert.equal(readPickerOrder(), "routed-first");
+  assert.equal(modelPickerSnapshot().order, "routed-first");
+
+  setPickerOrder("native-first");
+  assert.equal(readPickerOrder(), "native-first");
+  assert.equal(Object.hasOwn(JSON.parse(readFileSync(MODEL_PICKER_STATE_PATH, "utf8")), "order"), false);
+});
+
+test("picker order rejects unknown values and ignores an unrecognized stored one", () => {
+  assert.throws(() => setPickerOrder("gpt-first"), /Picker order must be one of/);
+  const persisted = JSON.parse(readFileSync(MODEL_PICKER_STATE_PATH, "utf8"));
+  writeFileSync(MODEL_PICKER_STATE_PATH, JSON.stringify({ ...persisted, order: "sideways" }));
+  assert.equal(readPickerOrder(), "native-first");
 });

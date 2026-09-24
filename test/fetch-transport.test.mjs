@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { getGlobalDispatcher, setGlobalDispatcher } from "undici";
 
 import {
+  connectTimeoutMs,
   directLoopbackFetch,
   createLoopbackProbeDispatcher,
   fetchDispatcherOptions,
@@ -16,8 +17,20 @@ import {
   loopbackProbeDispatcher,
   loopbackProbeFetch,
 } from "../src/fetch-transport.mjs";
+import { NATIVE_RETRY_BUDGET_MS, NATIVE_RETRY_LIMIT } from "../src/upstream-retry.mjs";
 
 const SRC_DIR = fileURLToPath(new URL("../src", import.meta.url));
+
+// The exact shape of the process-wide pool. The connect bound is part of it:
+// it is what makes the connect codes in `upstream-retry.mjs`'s retryable set
+// reachable at all, which the cross-module test at the end asserts.
+const POOL_DEFAULTS = {
+  allowH2: false,
+  pipelining: 1,
+  connectTimeout: connectTimeoutMs({}),
+  autoSelectFamily: true,
+  autoSelectFamilyAttemptTimeout: 250,
+};
 
 function installFakeTransport(environment, execArgv = []) {
   const created = [];
@@ -57,14 +70,15 @@ test("the router disables HTTP/2 on its process-wide fetch dispatcher", () => {
 
   assert.equal(created.length, 1);
   assert.equal(dispatcher.kind, "direct");
-  assert.deepEqual(created[0].options, { allowH2: false, pipelining: 1 });
+  assert.deepEqual(created[0].options, POOL_DEFAULTS);
   assert.equal(dispatcher, created[0]);
   assert.deepEqual(installed, [dispatcher]);
 });
 
-test("a Grok long-idle pool raises only the body idle bound and keeps the proxy decision", () => {
+test("a Grok long-idle pool raises the header and body idle bounds together", () => {
   const { created } = installFakeTransport({});
   assert.equal("bodyTimeout" in created[0].options, false, "the shared pool keeps undici's default");
+  assert.equal("headersTimeout" in created[0].options, false, "the shared pool keeps undici's header default");
 
   class FakeAgent {
     constructor(options) {
@@ -86,14 +100,17 @@ test("a Grok long-idle pool raises only the body idle bound and keeps the proxy 
     bodyTimeoutMs: 660_000,
     setDispatcher() {},
   });
-  assert.deepEqual(forwarderPool.options, { allowH2: false, pipelining: 1, bodyTimeout: 660_000 });
+  assert.deepEqual(forwarderPool.options, {
+    ...POOL_DEFAULTS,
+    headersTimeout: 660_000,
+    bodyTimeout: 660_000,
+  });
 
   const classes = { AgentClass: FakeAgent, EnvHttpProxyAgentClass: FakeEnvHttpProxyAgent, execArgv: [] };
   const direct = longIdleStreamDispatcher(660_001, { ...classes, environment: {} });
   assert.equal(direct.kind, "direct");
   assert.deepEqual(direct.options, {
-    allowH2: false,
-    pipelining: 1,
+    ...POOL_DEFAULTS,
     headersTimeout: 660_001,
     bodyTimeout: 660_001,
   });
@@ -191,19 +208,20 @@ test("the router uses the environment proxy dispatcher only with explicit opt-in
     assert.equal(created.length, 1);
     assert.equal(dispatcher.kind, "environment-proxy");
     assert.equal(dispatcher, created[0]);
-    assert.deepEqual(dispatcher.options, fetchDispatcherOptions());
+    assert.deepEqual(dispatcher.options, fetchDispatcherOptions(environment));
   }
 });
 
 test("proxy variables alone do not opt the router into proxying", () => {
-  const { created, dispatcher } = installFakeTransport({
+  const environment = {
     HTTP_PROXY: "http://proxy.example:8080",
     HTTPS_PROXY: "http://secure-proxy.example:8443",
-  });
+  };
+  const { created, dispatcher } = installFakeTransport(environment);
 
   assert.equal(created.length, 1);
   assert.equal(dispatcher.kind, "direct");
-  assert.deepEqual(dispatcher.options, fetchDispatcherOptions());
+  assert.deepEqual(dispatcher.options, fetchDispatcherOptions(environment));
 });
 
 test("the router accepts the NODE_OPTIONS and command-line opt-in forms", () => {
@@ -214,7 +232,7 @@ test("the router accepts the NODE_OPTIONS and command-line opt-in forms", () => 
     const { created, dispatcher } = installFakeTransport(environment, execArgv);
     assert.equal(created.length, 1);
     assert.equal(dispatcher.kind, "environment-proxy");
-    assert.deepEqual(dispatcher.options, fetchDispatcherOptions());
+    assert.deepEqual(dispatcher.options, fetchDispatcherOptions(environment));
   }
 });
 
@@ -231,7 +249,7 @@ test("NO_PROXY or ALL_PROXY alone keeps the lower-overhead direct agent", () => 
     assert.equal(created.length, 1);
     assert.equal(dispatcher.kind, "direct");
     assert.equal(dispatcher, created[0]);
-    assert.deepEqual(dispatcher.options, fetchDispatcherOptions());
+    assert.deepEqual(dispatcher.options, fetchDispatcherOptions(environment));
   }
 });
 
@@ -433,5 +451,48 @@ test("the shared probe dispatcher is built on first use, not at import", () => {
     source,
     /^(const|let) \w+ = createLoopbackProbeDispatcher\(\)/m,
     "a module-level call would open a connection pool for every importer",
+  );
+});
+
+// The regression these three guard: undici's 10s connect default outran the
+// 5s pre-retry budget, so the connect codes named as retryable could never
+// actually be retried and every blip surfaced as a 502 (2026-09-21: 454 of
+// 466 failures across two machines, zero connect retries logged). A test of
+// either module alone passes with that hole open, so the last one asserts the
+// relationship between them.
+test("the process-wide pool bounds the connect phase and races addresses", () => {
+  const { created } = installFakeTransport({});
+
+  assert.equal(created[0].options.connectTimeout, connectTimeoutMs({}));
+  assert.ok(
+    created[0].options.connectTimeout <= 5_000,
+    "a connect blip must be detected in seconds, not tens of seconds",
+  );
+  assert.equal(created[0].options.autoSelectFamily, true);
+  assert.ok(created[0].options.autoSelectFamilyAttemptTimeout > 0);
+});
+
+test("the connect bound is overridable and clamped", () => {
+  assert.equal(connectTimeoutMs({}), 3_000);
+  assert.equal(connectTimeoutMs({ CODEX_ROUTER_CONNECT_TIMEOUT_MS: "1200" }), 1_200);
+  assert.equal(connectTimeoutMs({ CODEX_ROUTER_CONNECT_TIMEOUT_MS: "10" }), 500);
+  assert.equal(connectTimeoutMs({ CODEX_ROUTER_CONNECT_TIMEOUT_MS: "999999" }), 30_000);
+  assert.equal(connectTimeoutMs({ CODEX_ROUTER_CONNECT_TIMEOUT_MS: "not-a-number" }), 3_000);
+
+  // The override must reach the dispatcher, not only the helper.
+  assert.equal(
+    fetchDispatcherOptions({ CODEX_ROUTER_CONNECT_TIMEOUT_MS: "1500" }).connectTimeout,
+    1_500,
+  );
+});
+
+test("the retry budget can afford every bounded connect attempt it allows", () => {
+  // A deliberately disabled loop (0) is an operator decision, not a defect.
+  if (NATIVE_RETRY_BUDGET_MS === 0 || NATIVE_RETRY_LIMIT === 0) return;
+  const connect = connectTimeoutMs({});
+  assert.ok(
+    NATIVE_RETRY_BUDGET_MS >= NATIVE_RETRY_LIMIT * connect,
+    `budget ${NATIVE_RETRY_BUDGET_MS}ms cannot afford ` +
+      `${NATIVE_RETRY_LIMIT} bounded connects of ${connect}ms`,
   );
 });

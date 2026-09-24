@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "providers": [
+    {
+      "id": "ainetcafe",
+      "displayName": "ainetcafe",
+      "kind": "openai-compatible",
+      "ownedBy": "ainetcafe",
+      "baseUrl": "https://microquickjs.com/v1",
+      "baseUrlEnv": "AINETCAFE_BASE_URL",
+      "credential": {
+        "environment": [
+          "AINETCAFE_API_KEY"
+        ],
+        "file": "ainetcafe-api-key.secret",
+        "legacyFiles": [],
+        "keychainServices": [
+          "codex-router-ainetcafe"
+        ],
+        "prompt": "ainetcafe API key"
+      }
+    }
+  ]
+}

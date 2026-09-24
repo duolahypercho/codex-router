@@ -27,6 +27,8 @@ blue accent and DeepSeek's original blue mark are preserved.
 | Nous Research | https://nousresearch.com/ | https://nousresearch.com/apple-touch-icon.png |
 | OpenRouter | https://openrouter.ai/ | https://openrouter.ai/favicon/glyph.png |
 | NanoGPT | https://nano-gpt.com/ | https://nano-gpt.com/favicon.ico (same official diamond mark as https://nano-gpt.com/logo.png) |
+| Google Cloud Vertex AI | https://cloud.google.com/vertex-ai/ | https://www.google.com/s2/favicons?domain=cloud.google.com&sz=128 (Google mark, bundled as `google.svg`) |
+| StepFun | https://www.stepfun.com/ | https://www.stepfun.com/step_favicon.svg |
 
 The Z.AI, Qwen, Ollama, Cline, MiniMax, and Meta AI marks were fetched on
 2026-08-15. The Venice, Nous Research, and OpenRouter marks were fetched on
@@ -34,7 +36,10 @@ The Z.AI, Qwen, Ollama, Cline, MiniMax, and Meta AI marks were fetched on
 the other single-color marks use, because all three ship dark artwork that
 would be invisible against the Island's black bezel. The opencode-go routes reuse the OpenCode Free mark rather than
 shipping a duplicate asset. The NanoGPT mark was fetched on 2026-08-29 and is
-bundled losslessly from the official favicon. `custom` deliberately ships no mark at all: it is a
+bundled losslessly from the official favicon. The StepFun mark was fetched on
+2026-09-22 and is the official favicon unmodified: it already ships
+white-on-transparent, and both regional platforms (`stepfun-api`,
+`stepfun-api-cn`) share the one asset. `custom` deliberately ships no mark at all: it is a
 container for whatever endpoints an operator puts in it, and its models come
 from different vendors, so any single logo would misattribute the rest.
 

@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "slug": "opencode-go/mimo-v2.6-flash",
+      "gatewayModel": "opencode-go-mimo-v2-6-flash",
+      "upstreamModel": "mimo-v2.6-flash",
+      "provider": "opencode-go",
+      "listed": true,
+      "displayName": "MiMo-V2.6-Flash (opencode Go)",
+      "description": "MiMo-V2.6-Flash through the opencode Go subscription.",
+      "priority": 38,
+      "defaultEffort": "high",
+      "reasoningLevels": [
+        {
+          "effort": "high",
+          "description": "Deep reasoning"
+        }
+      ],
+      "contextWindow": 1048576,
+      "autoCompact": 900000,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "compHash": "opencode-go-mimo-v2-6-flash-v2"
+    }
+  ]
+}

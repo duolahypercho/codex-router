@@ -7,6 +7,7 @@ export const REQUEST_PROFILES = Object.freeze([
   "auto-tool-choice",
   "clinepass",
   "codex-encrypted-schema",
+  "dashscope-reasoning",
   "deepseek-nonthinking",
   "deepseek-thinking",
   "glm-thinking",
@@ -18,6 +19,7 @@ export const REQUEST_PROFILES = Object.freeze([
   "ollama-cloud-auto-tool-choice",
   "ollama-cloud-glm-5-3",
   "ollama-cloud-glm-5-3-flash",
+  "omit-tool-choice",
   "ox-alpha",
   "qwen-plan",
   "qwen38-community",
@@ -27,11 +29,13 @@ export const REQUEST_PROFILES = Object.freeze([
 const PROFILE_SET = new Set(REQUEST_PROFILES);
 
 // Most profiles encode a checked-in vendor contract and are never sensible to
-// lend to an arbitrary model. These two are deliberately model-scoped
+// lend to an arbitrary model. These are deliberately model-scoped
 // compatibility observations an operator can make while curating a route.
 export const CURATABLE_REQUEST_PROFILES = Object.freeze([
   "auto-tool-choice",
   "codex-encrypted-schema",
+  "dashscope-reasoning",
+  "omit-tool-choice",
 ]);
 
 const CURATABLE_PROFILE_SET = new Set(CURATABLE_REQUEST_PROFILES);

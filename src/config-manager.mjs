@@ -152,6 +152,7 @@ const markerPairs = [
 ];
 const command = process.argv[2] || "status";
 const adoptNativeCatalog = process.argv.includes("--adopt-native-catalog");
+const preserveRootOpenaiSignedMode = process.argv.includes("--preserve-root-openai");
 let nativeCatalogNeedsActivation = false;
 
 function configuredRouterBaseUrl() {
@@ -225,18 +226,28 @@ function foreignTableSegments(innerLines, managedHeader) {
   return hoisted;
 }
 
+function standaloneCommentIndexes(input) {
+  const scanned = scannedConfig(input) || scannedConfig(input, { rootOnly: true });
+  if (scanned) return new Set(scanned.comments);
+  // Preserve legacy malformed-path migration behavior.
+  return new Set(input.split("\n").flatMap((line, index) =>
+    line.trimStart().startsWith("#") ? [index] : []));
+}
+
 function removeMarkerPair(input, start, end, managedHeader) {
+  const comments = standaloneCommentIndexes(input);
   const lines = input.split("\n");
   const output = [];
   let index = 0;
   while (index < lines.length) {
-    if (lines[index].trim() !== start) {
+    if (!comments.has(index) || lines[index].trim() !== start) {
       output.push(lines[index]);
       index += 1;
       continue;
     }
     let endIndex = index + 1;
-    while (endIndex < lines.length && lines[endIndex].trim() !== end) {
+    while (endIndex < lines.length &&
+      (!comments.has(endIndex) || lines[endIndex].trim() !== end)) {
       endIndex += 1;
     }
     if (endIndex >= lines.length) {
@@ -329,6 +340,18 @@ function hasModernMultiAgentConfig(input) {
   const lines = input.split("\n");
   if (lines.some((line) => /^\s*features\.multi_agent_v2\s*=/.test(line))) return true;
   if (lines.some((line) => /^\s*\[agents\.[^\]]+\]\s*(?:#.*)?$/.test(line))) return true;
+  // A user-owned `[features.multi_agent_v2]` table (or a dotted assignment
+  // under `[features]`) defines the same key; writing the managed inline
+  // table beside it is a TOML duplicate key that stops Codex from loading.
+  const scanned = scannedConfig(input);
+  if (scanned) {
+    const ownsMultiAgentV2 = (segments) =>
+      segments.length >= 2 && segments[0] === "features" && segments[1] === "multi_agent_v2";
+    if (scanned.headers.some(({ path }) => ownsMultiAgentV2(path))) return true;
+    if (scanned.assignments.some(({ tablePath, key }) => ownsMultiAgentV2([...tablePath, ...key]))) {
+      return true;
+    }
+  }
   const featuresHeader = lines.findIndex((line) =>
     /^\s*\[features\]\s*(?:#.*)?$/.test(line),
   );
@@ -393,6 +416,8 @@ ${managedMultiAgentV2FeatureLine()}
 function withManagedMultiAgentV2(input) {
   const cleaned = withoutManagedMultiAgentV2(input);
   if (hasModernMultiAgentConfig(cleaned)) return cleaned;
+  const scanned = scannedConfig(cleaned);
+  if (!scanned) return cleaned;
   if (!installedCodexSupportsMultiAgentV2()) return cleaned;
   const featureLine = managedMultiAgentV2FeatureLine();
   const managedLines = [
@@ -401,17 +426,15 @@ function withManagedMultiAgentV2(input) {
     multiAgentV2EndMarker,
   ];
   const lines = cleaned.split("\n");
-  const featuresHeader = lines.findIndex((line) =>
-    /^\s*\[features\]\s*(?:#.*)?$/.test(line),
-  );
+  const featuresHeader = scanned.headers.find(({ path }) =>
+    path.length === 1 && path[0] === "features")?.index ?? -1;
   if (featuresHeader === -1) {
-    const firstTable = lines.findIndex((line) => /^\s*\[/.test(line));
+    const firstTable = scanned.headers[0]?.index ?? -1;
     const insertionIndex = firstTable === -1 ? lines.length : firstTable;
     lines.splice(insertionIndex, 0, "", "[features]", ...managedLines);
     return `${lines.join("\n").trimEnd()}\n`;
   }
-  let tableEnd = featuresHeader + 1;
-  while (tableEnd < lines.length && !/^\s*\[/.test(lines[tableEnd])) tableEnd += 1;
+  const tableEnd = scanned.headers.find(({ index }) => index > featuresHeader)?.index ?? lines.length;
   // Keep the managed feature inside the table content and reuse the table's
   // existing trailing separator. Inserting after those blanks and appending
   // another one made every disable -> enable cycle grow the config by one line.
@@ -473,44 +496,52 @@ function probeAgentConcurrencyScalar() {
 function withManagedAgentConcurrency(input) {
   const cleaned = withoutManagedAgentConcurrency(input);
   if (hasModernMultiAgentConfig(cleaned)) return cleaned;
-  const { rootLines } = splitRoot(cleaned);
-  if (
-    rootLines.some((line) =>
-      /^\s*(?:max_concurrent_threads_per_session|max_threads)\s*=/.test(line),
-    )
-  ) {
+  const scanned = scannedConfig(cleaned);
+  // An optional tuning setting is never worth guessing at malformed TOML.
+  if (!scanned) return cleaned;
+  if (scanned.assignments.some(({ tablePath, key }) =>
+    (tablePath.length === 0 || (tablePath.length === 1 && tablePath[0] === "agents")) &&
+    key.length === 1 &&
+    ["max_concurrent_threads_per_session", "max_threads"].includes(key[0]))) {
     return cleaned;
   }
-
   const lines = cleaned.split("\n");
-  const agentsHeader = lines.findIndex((line) =>
-    /^\s*\[\s*agents\s*\]\s*(?:#.*)?$/.test(line),
-  );
-  if (agentsHeader !== -1) {
-    let tableEnd = agentsHeader + 1;
-    while (tableEnd < lines.length && !/^\s*\[/.test(lines[tableEnd])) tableEnd += 1;
-    const userConfigured = lines
-      .slice(agentsHeader + 1, tableEnd)
-      .some((line) =>
-        /^\s*(?:max_concurrent_threads_per_session|max_threads)\s*=/.test(line),
-      );
-    if (userConfigured) return cleaned;
-  }
   if (!installedCodexAcceptsAgentConcurrencyScalar()) return cleaned;
   const managedLines = [
     agentConcurrencyStartMarker,
     `max_concurrent_threads_per_session = ${managedAgentMaxConcurrency}`,
     agentConcurrencyEndMarker,
   ];
-  const firstTable = lines.findIndex((line) => /^\s*\[/.test(line));
+  const firstTable = scanned.headers[0]?.index ?? -1;
   const insertionIndex = firstTable === -1 ? lines.length : firstTable;
   lines.splice(insertionIndex, 0, ...managedLines, "");
   return `${lines.join("\n").trimEnd()}\n`;
 }
 
+// The structural read of a config, or undefined when the lexer refuses it. A
+// legacy config can carry an unescaped Windows path inside a basic string --
+// `model_catalog_json = "D:\\a\\kimi-proxy\\merged-models.json"`, whose `\\a` is
+// not a valid TOML escape -- and refusing to touch those would leave the
+// operator unable to so much as disable the router. Those keep the line
+// matching they have always had; every config that can be read structurally
+// gets the accurate answer.
+function scannedConfig(contents, options) {
+  try {
+    return scanTomlDocument(contents, options);
+  } catch {
+    return undefined;
+  }
+}
+
 function splitRoot(input) {
   const lines = input.split("\n");
-  const firstTable = lines.findIndex((line) => /^\s*\[/.test(line));
+  // A line inside a multiline string can begin with `[` without opening a
+  // table; asking the structural lexer keeps the boundary honest, and keeps
+  // `rootLines` a document the lexer can read on its own below.
+  const scanned = scannedConfig(input, { rootOnly: true });
+  const firstTable = scanned
+    ? scanned.headers[0]?.index ?? -1
+    : lines.findIndex((line) => /^\s*\[/.test(line));
   return firstTable === -1
     ? { rootLines: lines, tableLines: [] }
     : { rootLines: lines.slice(0, firstTable), tableLines: lines.slice(firstTable) };
@@ -538,12 +569,15 @@ function assignmentValue(line) {
 }
 
 function rootValue(lines, key) {
-  const match = lines.find((line) => new RegExp(`^\\s*${key}\\s*=`).test(line));
-  return match ? assignmentValue(match) : undefined;
+  const [index] = rootAssignmentIndexes(lines.join("\n"), key);
+  const assignment = scannedConfig(lines.join("\n"), { rootOnly: true })
+    ?.assignments.find((entry) => entry.index === index);
+  return assignment?.kind === "string" ? assignment.value
+    : index === undefined ? undefined : assignmentValue(lines[index]);
 }
 
 function rootHasValue(lines, key) {
-  return lines.some((line) => new RegExp(`^\\s*${key}\\s*=`).test(line));
+  return rootAssignmentIndexes(lines.join("\n"), key).length > 0;
 }
 
 function nativeRealtimeCallBaseUrl(lines) {
@@ -555,13 +589,51 @@ function nativeRealtimeCallBaseUrl(lines) {
     : `${chatgptBaseUrl}/codex`;
 }
 
+// Line indices of the genuine root-level assignments of `key`, read from the
+// structural lexer instead of matched out of the text. A line can look exactly
+// like an assignment without being one -- prose inside a multiline string, an
+// element of a multi-line array -- and rewriting or deleting such a line
+// destroys the value it belongs to while leaving the real assignment in place.
+function rootAssignmentIndexes(contents, key) {
+  const scanned = scannedConfig(contents, { rootOnly: true });
+  if (!scanned) {
+    // Unreadable document: the previous line matching, bounded to the root
+    // section the same way it used to be.
+    const lines = contents.split("\n");
+    const firstTable = lines.findIndex((line) => /^\s*\[/.test(line));
+    const limit = firstTable === -1 ? lines.length : firstTable;
+    const expression = new RegExp(`^\\s*${key}\\s*=`);
+    const found = [];
+    for (let index = 0; index < limit; index += 1) {
+      if (expression.test(lines[index])) found.push(index);
+    }
+    return found;
+  }
+  return scanned.assignments
+    .filter(
+      (assignment) =>
+        assignment.tablePath.length === 0 &&
+        assignment.key.length === 1 &&
+        assignment.key[0] === key,
+    )
+    .map(({ index, kind }) => {
+      if (kind === "multiline-string") {
+        throw new Error(`${key} must be a single-line TOML string.`);
+      }
+      return index;
+    });
+}
+
 function replaceRootValue(contents, key, value) {
+  // Indices are absolute, and every root assignment precedes the first table,
+  // so they address `rootLines` unchanged.
   const { rootLines, tableLines } = splitRoot(contents);
-  const filtered = rootLines.filter(
-    (line) => !new RegExp(`^\\s*${key}\\s*=`).test(line),
-  );
+  const removable = new Set(rootAssignmentIndexes(rootLines.join("\n"), key));
+  const filtered = rootLines.filter((_line, index) => !removable.has(index));
   if (value !== undefined) {
-    const managedBlock = filtered.findIndex((line) => line.trim() === startMarker);
+    const comments = standaloneCommentIndexes(filtered.join("\n"));
+    const managedBlock = filtered.findIndex((line, index) =>
+      comments.has(index) && line.trim() === startMarker);
     filtered.splice(
       managedBlock === -1 ? filtered.length : managedBlock,
       0,
@@ -574,14 +646,12 @@ function replaceRootValue(contents, key, value) {
 }
 
 function replaceRootValueInPlace(contents, key, value) {
+  // Login-free changes must refuse an unreadable document before mutation.
+  scanTomlDocument(contents);
   if (value === undefined) return replaceRootValue(contents, key, value);
   const lines = contents.split("\n");
-  const firstTable = scanTomlDocument(contents).headers[0]?.index ?? lines.length;
-  const expression = new RegExp(`^\\s*${key}\\s*=`);
-  const index = lines.findIndex((line, lineIndex) =>
-    lineIndex < firstTable && expression.test(line)
-  );
-  if (index === -1) return replaceRootValue(contents, key, value);
+  const [index] = rootAssignmentIndexes(contents, key);
+  if (index === undefined) return replaceRootValue(contents, key, value);
   lines[index] = `${key} = ${JSON.stringify(value)}`;
   return lines.join("\n").trimEnd();
 }
@@ -629,6 +699,57 @@ function managedSignedProviderBlock(providerId, baseUrl) {
     "supports_websockets = true",
     signedProviderEndMarker,
   ].join("\n");
+}
+
+function signedProviderSwitchState(rootLines) {
+  const previousPresent = rootHasValue(rootLines, "model_provider");
+  return {
+    version: 1,
+    managedProvider: signedProviderId,
+    previousPresent,
+    ...(previousPresent
+      ? { previousModelProvider: rootValue(rootLines, "model_provider") }
+      : {}),
+  };
+}
+
+function managedSignedProviderSwitchContents(contents, baseUrl) {
+  const withoutPriorBlock = removeMarkerPair(
+    contents,
+    signedProviderStartMarker,
+    signedProviderEndMarker,
+    `[model_providers.${signedProviderId}]`,
+  );
+  const withProvider = `${withoutPriorBlock.trimEnd()}\n\n${managedSignedProviderBlock(
+    signedProviderId,
+    baseUrl,
+  )}\n`;
+  return `${replaceRootValue(withProvider, "model_provider", signedProviderId)}\n`;
+}
+
+function withoutManagedSignedProviderSwitch(contents) {
+  return removeMarkerPair(
+    contents,
+    signedProviderStartMarker,
+    signedProviderEndMarker,
+    `[model_providers.${signedProviderId}]`,
+  );
+}
+
+function signedProviderSwitchBlockStatus(contents) {
+  const range = signedManagedRange(contents);
+  if (!range) {
+    const hasArtifacts =
+      contents.includes(signedProviderStartMarker) ||
+      contents.includes(signedProviderEndMarker) ||
+      providerTableRanges(contents, signedProviderId).length > 0;
+    return hasArtifacts ? "drift" : "absent";
+  }
+  const actual = range.lines.slice(range.start, range.end).join("\n");
+  const baseUrl = rootValue(splitRoot(contents).rootLines, "openai_base_url");
+  return managedSignedProviderBlockMatches(actual, signedProviderId, baseUrl)
+    ? "owned"
+    : "drift";
 }
 
 function managedLoginFreeProviderBlock(providerId, baseUrl) {
@@ -963,7 +1084,12 @@ function signedProviderStateIsOwned(contents, state) {
   const { rootLines } = splitRoot(contents);
   const activeProvider = rootValue(rootLines, "model_provider") || "openai";
   if (activeProvider !== state.managedProvider) return false;
-  if (state.version === 1) return activeProvider === signedProviderId;
+  if (state.version === 1) {
+    return (
+      activeProvider === signedProviderId &&
+      signedProviderSwitchBlockStatus(contents) === "owned"
+    );
+  }
   if (state.mode === "root-openai") {
     return (
       isManagedRouterBaseUrl(rootValue(rootLines, "openai_base_url")) &&
@@ -1173,14 +1299,18 @@ function clean(contents) {
     removeCreatedAgentsTableIfEmpty(removeMarkedBlock(contents)),
   );
   const { rootLines, tableLines } = splitRoot(withoutBlock);
-  const filtered = rootLines.filter((line) => {
-    if (/^\s*openai_base_url\s*=/.test(line)) {
+  const rootText = rootLines.join("\n");
+  const bases = new Set(rootAssignmentIndexes(rootText, "openai_base_url"));
+  const catalogs = new Set(rootAssignmentIndexes(rootText, "model_catalog_json"));
+  const comments = standaloneCommentIndexes(rootText);
+  const filtered = rootLines.filter((line, index) => {
+    if (bases.has(index)) {
       return !(knownManaged && isRecognizedRouterBaseUrl(assignmentValue(line)));
     }
-    if (/^\s*model_catalog_json\s*=/.test(line)) {
+    if (catalogs.has(index)) {
       return !knownCatalogPaths.includes(assignmentValue(line));
     }
-    return !markerPairs.flat().includes(line.trim());
+    return !comments.has(index) || !markerPairs.flat().includes(line.trim());
   });
   return { rootLines: filtered, tableLines };
 }
@@ -1303,6 +1433,9 @@ function snapshot(contents) {
       signedActive && privateFileIsProtected(SIGNED_PROVIDER_MODE_PATH),
     ),
     signed_provider_state_present: existsSync(SIGNED_PROVIDER_MODE_PATH),
+    signed_provider_state_version: signedState?.version ?? null,
+    signed_provider_mode:
+      signedState?.version === 1 ? "provider-switch" : signedState?.mode ?? null,
     managed_router_artifacts_present: managedRouterArtifactsPresent,
     router_default_model: routerDefault?.model || null,
     router_default_managed: Boolean(routerDefault),
@@ -1331,6 +1464,8 @@ function restoreRouterDefault(contents, state = readCodexRouterDefault()) {
 
 function enabledContents(contents, { loginFreeProvider = false } = {}) {
   const { rootLines: currentRoot } = splitRoot(contents);
+  // Validate before publishing: status also reads this setting after the write.
+  rootAssignmentIndexes(currentRoot.join("\n"), "model");
   const currentProvider = rootValue(currentRoot, "model_provider");
   const preparedSource = adoptNativeCatalog
     ? readNativeCatalogSource()
@@ -1374,9 +1509,8 @@ function enabledContents(contents, { loginFreeProvider = false } = {}) {
     ) {
       throw new Error(`Refusing to replace user-owned model_catalog_json: ${existingCatalog}`);
     }
-    rootLines = rootLines.filter(
-      (line) => !/^\s*model_catalog_json\s*=/.test(line),
-    );
+    const removable = new Set(rootAssignmentIndexes(rootLines.join("\n"), "model_catalog_json"));
+    rootLines = rootLines.filter((_line, index) => !removable.has(index));
     nativeCatalogNeedsActivation = preparedSource.status === "pending";
   }
   const managedRealtimeOverrides = [];
@@ -1439,9 +1573,8 @@ function restoreNativeCatalog(contents) {
   ) {
     throw new Error(`Refusing to replace user-owned model_catalog_json: ${existing}`);
   }
-  const rootLines = cleaned.rootLines.filter(
-    (line) => !/^\s*model_catalog_json\s*=/.test(line),
-  );
+  const removable = new Set(rootAssignmentIndexes(cleaned.rootLines.join("\n"), "model_catalog_json"));
+  const rootLines = cleaned.rootLines.filter((_line, index) => !removable.has(index));
   rootLines.push(`model_catalog_json = ${tomlValue(source.path)}`);
   return `${[
     ...trimBlankEdges(rootLines),
@@ -1564,8 +1697,16 @@ if (command === "enable") {
     );
   }
   if (signedState?.version === 1) {
-    throw new Error(
-      "A recognized older signed-routing mode is still active; turn it off before updating the router.",
+    if (!signedProviderStateIsOwned(current, signedState)) {
+      throw new Error(
+        `Signed routing lost ownership while model_provider is ${
+          rootValue(splitRoot(current).rootLines, "model_provider") || "openai"
+        }; refusing to update it.`,
+      );
+    }
+    next = managedSignedProviderSwitchContents(
+      enabledContents(current),
+      configuredRouterBaseUrl(),
     );
   } else if (signedState) {
     if (!signedProviderStateIsOwned(current, signedState)) {
@@ -1819,9 +1960,20 @@ if (command === "enable") {
   const { rootLines } = splitRoot(current);
   const currentProvider = rootValue(rootLines, "model_provider") || "openai";
   const state = readSignedProviderModeState();
-  if (state?.version === 1) {
+  if (preserveRootOpenaiSignedMode && currentProvider !== "openai") {
     throw new Error(
-      "A recognized older signed-routing mode is still active; turn it off before enabling the task-preserving mode.",
+      "The root-OpenAI signed mode can only be restored from the OpenAI provider.",
+    );
+  }
+  if (state?.version === 1) {
+    if (!signedProviderStateIsOwned(current, state)) {
+      throw new Error(
+        `Signed routing lost ownership while model_provider is ${currentProvider}; turn it off before enabling it again.`,
+      );
+    }
+    next = managedSignedProviderSwitchContents(
+      enabledContents(current),
+      configuredRouterBaseUrl(),
     );
   } else if (state) {
     if (!signedProviderStateIsOwned(current, state)) {
@@ -1846,9 +1998,14 @@ if (command === "enable") {
   } else {
     const enabled = enabledContents(current);
     const routerBaseUrl = configuredRouterBaseUrl();
-    const managed = managedSignedProviderContents(enabled, currentProvider, routerBaseUrl);
-    pendingSignedProviderModeState = managed.state;
-    next = managed.contents;
+    if (currentProvider === "openai" && !preserveRootOpenaiSignedMode) {
+      pendingSignedProviderModeState = signedProviderSwitchState(rootLines);
+      next = managedSignedProviderSwitchContents(enabled, routerBaseUrl);
+    } else {
+      const managed = managedSignedProviderContents(enabled, currentProvider, routerBaseUrl);
+      pendingSignedProviderModeState = managed.state;
+      next = managed.contents;
+    }
   }
   next = applyRouterDefault(next);
 } else {
@@ -1883,12 +2040,27 @@ if (command === "enable") {
           `Refusing to replace user-owned model_provider: ${currentProvider || "unset"}.`,
         );
       }
+      const blockStatus = signedProviderSwitchBlockStatus(current);
+      if (blockStatus === "drift") {
+        throw new Error(
+          `Signed routing lost ownership of model_providers.${signedProviderId}; refusing to replace it.`,
+        );
+      }
+      restored = blockStatus === "owned"
+        ? withoutManagedSignedProviderSwitch(current)
+        : current;
     } else if (signedState.version === 1) {
+      if (!signedProviderStateIsOwned(current, signedState)) {
+        throw new Error(
+          `Signed routing lost ownership of model_providers.${signedProviderId}; refusing to replace it.`,
+        );
+      }
       restored = `${replaceRootValue(
         current,
         "model_provider",
         signedState.previousPresent ? signedState.previousModelProvider : undefined,
       )}\n`;
+      restored = withoutManagedSignedProviderSwitch(restored);
     } else {
       const effectiveProvider = currentProvider || "openai";
       if (effectiveProvider !== signedState.managedProvider) {

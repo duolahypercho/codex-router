@@ -64,6 +64,12 @@ function safeRetryCount(value) {
   return count ? count : undefined;
 }
 
+// Every field an event can carry is named in this destructuring, and the writer
+// below only emits the ones it knows about: anything a caller passes that is not
+// listed here is dropped silently, with no error and no trace. Three image-budget
+// fields were lost that way on 2026-09-17 and found only because someone went
+// looking for them in the ledger. A new statistic belongs in three places - this
+// list, the emitted object below, and the reader's aggregate if it has one.
 export function recordUsageEvent({
   model,
   provider,
@@ -158,6 +164,17 @@ export function recordUsageEvent({
   // two: compare it against the eligibility floor.
   toolResultsEvaluated,
   toolResultBytesLargest,
+  // Present whenever the image-budget pass saw at least one image, whether or
+  // not it dropped any. The counts below are omitted when zero, so without this
+  // an operator cannot tell a turn that carried images and fit inside the budget
+  // from a bound that never ran. A turn with no images at all carries none of
+  // them, which is the same shape the field has always had. Counts and bytes
+  // describe the request sent upstream, never the image contents. The token
+  // fields are the cost signal: bytes bound the request, tokens bound the bill.
+  imageReferencesSeen,
+  imageReferencesDropped,
+  imageBytesSaved,
+  imageTokensSaved,
   // Present only on a turn the router moved to another model because the one
   // the operator asked for reported it had no usage left. `model` and
   // `provider` above name what actually served the turn; this names what was
@@ -178,9 +195,19 @@ export function recordUsageEvent({
   // a token estimate. Missing payload fields measure as zero.
   contextBytes,
   grokStructuredPatch,
+  reasoningEffort,
+  providerToolCount,
+  providerToolSchemaBytes,
   at = Date.now(),
 }) {
-  const diagnostics = usageDiagnosticMetadata({ requestId, contextBytes, grokStructuredPatch });
+  const diagnostics = usageDiagnosticMetadata({
+    requestId,
+    contextBytes,
+    grokStructuredPatch,
+    reasoningEffort,
+    providerToolCount,
+    providerToolSchemaBytes,
+  });
   const event = {
     ...serviceTierMetadata({
       requestedServiceTier,
@@ -275,6 +302,18 @@ export function recordUsageEvent({
       : {}),
     ...(safeTokenCount(toolResultBytesLargest) !== undefined
       ? { toolResultBytesLargest: safeTokenCount(toolResultBytesLargest) }
+      : {}),
+    ...(safeTokenCount(imageReferencesSeen)
+      ? { imageReferencesSeen: safeTokenCount(imageReferencesSeen) }
+      : {}),
+    ...(safeTokenCount(imageReferencesDropped)
+      ? { imageReferencesDropped: safeTokenCount(imageReferencesDropped) }
+      : {}),
+    ...(safeTokenCount(imageBytesSaved)
+      ? { imageBytesSaved: safeTokenCount(imageBytesSaved) }
+      : {}),
+    ...(safeTokenCount(imageTokensSaved)
+      ? { imageTokensSaved: safeTokenCount(imageTokensSaved) }
       : {}),
     ...diagnostics,
   };
@@ -504,6 +543,9 @@ export function recentUsageEvents({
           requestId: event.requestId,
           contextBytes: event.contextBytes,
           grokStructuredPatch: event.grokStructuredPatch,
+          reasoningEffort: event.reasoningEffort,
+          providerToolCount: event.providerToolCount,
+          providerToolSchemaBytes: event.providerToolSchemaBytes,
         });
         return {
           ...serviceTierMetadata(event),

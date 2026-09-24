@@ -29,6 +29,7 @@ import {
   mergeNativeModel,
   nativeSubagentCertification,
   promoteNativeMultiAgent,
+  publishHiddenAfterVisible,
   routedCatalogConfigured,
   routedModel,
 } from "../src/catalog.mjs";
@@ -325,10 +326,11 @@ test("routed models advertise reasoning summaries only when the registry opts in
   assert.equal(summarized.default_reasoning_summary, "auto");
 });
 
-test("ClinePass routed models omit the unsupported reasoning-effort selector", () => {
+test("ClinePass routed models hide the reasoning-effort selector with a schema-valid empty ladder", () => {
   const clinepass = routedModel(template, { ...grok, requestProfile: "clinepass" });
   assert.equal("default_reasoning_level" in clinepass, false);
-  assert.equal("supported_reasoning_levels" in clinepass, false);
+  // Codex's ModelInfo requires this key; omitting it makes the entry unparseable.
+  assert.deepEqual(clinepass.supported_reasoning_levels, []);
 
   const normal = routedModel(template, grok);
   assert.equal(normal.default_reasoning_level, "high");
@@ -1593,3 +1595,84 @@ test(
     }
   },
 );
+
+test("routed-first publishes every routed model ahead of the natives and shifts the natives by that count", () => {
+  const native = {
+    models: [
+      { slug: "gpt-5.5", priority: 1, visibility: "list", input_modalities: ["text"], supported_reasoning_levels: [] },
+      { slug: "gpt-5.2", priority: 4, visibility: "list", input_modalities: ["text"], supported_reasoning_levels: [] },
+      { slug: "gpt-5.4", priority: 9, visibility: "hide", input_modalities: ["text"], supported_reasoning_levels: [] },
+    ],
+  };
+  const routedEntry = (slug, provider, priority, extra = {}) => ({
+    slug, provider, priority, contextWindow: 1, autoCompact: 1, inputModalities: ["text"], reasoningLevels: [], displayName: slug, ...extra,
+  });
+  const routed = [
+    routedEntry("grok-oauth/grok-4.6", "grok-oauth", 1, { multiAgentVersion: "v2" }),
+    routedEntry("ollama-local/a", "ollama-local", 100),
+    routedEntry("ollama-local/b", "ollama-local", 101),
+  ];
+
+  const nativeFirst = new Map(buildMergedCatalog(native, routed).map((m) => [m.slug, m.priority]));
+  // Default behaviour is unchanged: v2 keeps its authored value, v1 bands above the visible native max.
+  assert.equal(nativeFirst.get("grok-oauth/grok-4.6"), 1);
+  assert.equal(nativeFirst.get("ollama-local/a"), 5);
+  assert.equal(nativeFirst.get("gpt-5.5"), 1);
+
+  const routedFirst = new Map(
+    buildMergedCatalog(native, routed, { pickerOrder: "routed-first" }).map((m) => [m.slug, m.priority]),
+  );
+  assert.deepStrictEqual(
+    [...routedFirst.entries()].filter(([slug]) => slug !== "gpt-5.4").sort((l, r) => l[1] - r[1]).map(([slug]) => slug),
+    ["grok-oauth/grok-4.6", "ollama-local/a", "ollama-local/b", "gpt-5.5", "gpt-5.2"],
+  );
+  assert.equal(routedFirst.get("gpt-5.5"), 4);
+  assert.equal(routedFirst.get("gpt-5.2"), 7);
+  assert.equal(routedFirst.get("gpt-5.4"), 12, "hidden natives shift too so relative native order is kept");
+
+  // Login-free aliasing publishes routed entries under native slugs and keeps
+  // the native priority there; the option must still reach the merged tail.
+  const loginFree = buildLoginFreeCatalog(native, routed, { pickerOrder: "routed-first" });
+  assert.ok(Array.isArray(loginFree.models));
+});
+
+test("hidden entries publish after every visible model so the desktop picker's first page holds the selection", () => {
+  // The desktop picker reads one 100-entry page of `model/list`, which Codex
+  // serves in priority order with hidden entries included.
+  const hiddenRoutes = Array.from({ length: 120 }, (_, index) => ({
+    slug: `commandcode/hidden-${String(index).padStart(3, "0")}`,
+    priority: 20 + index,
+    visibility: "hide",
+  }));
+  const models = [
+    { slug: "gpt-5.5", priority: 10, visibility: "list" },
+    { slug: "codex-auto-review", priority: 3, visibility: "hide" },
+    ...hiddenRoutes,
+    { slug: "stepfun-api/step-5-preview", priority: 200, visibility: "list" },
+    { slug: "opencode-go/mimo-v2.6-pro", priority: 90, visibility: "list" },
+  ];
+
+  const published = publishHiddenAfterVisible(models);
+  const firstPage = [...published]
+    .sort((left, right) => left.priority - right.priority)
+    .slice(0, 100)
+    .map((model) => model.slug);
+
+  for (const slug of ["gpt-5.5", "stepfun-api/step-5-preview", "opencode-go/mimo-v2.6-pro"]) {
+    assert.ok(firstPage.includes(slug), `${slug} must be on the first page`);
+  }
+  // Visible priorities are published unchanged.
+  assert.deepEqual(
+    published.filter((model) => model.visibility === "list").map((model) => [model.slug, model.priority]),
+    [
+      ["gpt-5.5", 10],
+      ["stepfun-api/step-5-preview", 200],
+      ["opencode-go/mimo-v2.6-pro", 90],
+    ],
+  );
+  // Every hidden entry is still published, after the highest visible priority.
+  const hidden = published.filter((model) => model.visibility === "hide");
+  assert.equal(hidden.length, 121);
+  assert.ok(hidden.every((model) => model.priority > 200));
+  assert.equal(new Set(hidden.map((model) => model.priority)).size, hidden.length);
+});

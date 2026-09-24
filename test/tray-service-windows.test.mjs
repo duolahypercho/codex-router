@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -62,7 +62,13 @@ test("an unknown subcommand exits 2 with usage", () => {
   assert.match(result.stderr, /Usage: tray-service-windows\.mjs/);
 });
 
-test("install refuses before the tray has been built", () => {
+// The guard below only exists while the companion is missing, so a checkout
+// that has already built one cannot exercise it.
+const companionBuilt = existsSync(
+  path.join(root, "apps", "control-center", "release", "win-unpacked", "Codex Router.exe"),
+);
+
+test("install refuses before the tray has been built", { skip: companionBuilt ? "the packaged companion is already built in this checkout" : false }, () => {
   // The checkout under test has no compiled Tauri binary, so this exercises
   // the real guard rather than a stub. A missing binary must name the build
   // command instead of registering a task that points at nothing.
@@ -391,6 +397,40 @@ test("the Windows CLI exposes tray as a first-class command", () => {
   }
 });
 
+// `control tray` prints enable|disable|status|restart|refresh|rebuild in its
+// own usage line, and the Windows wrapper accepted install|uninstall for the
+// first two, so following that usage line on Windows died on "Unknown tray
+// action 'disable'" (issue #751). Both surfaces are parsed here rather than
+// asserting one spelling, so a later rename of either one is caught.
+test("the Windows tray verbs accept every control tray command", () => {
+  const script = readFileSync(path.join(root, "codex-router.ps1"), "utf8");
+  const control = readFileSync(path.join(root, "src", "control.mjs"), "utf8");
+  const pairs = (source, pattern, entry) => {
+    const body = source.match(pattern)?.[1];
+    assert.ok(body, `could not read ${pattern}`);
+    return new Map([...body.matchAll(entry)].map((match) => [match[1], match[2]]));
+  };
+  const commands = pairs(control, /const TRAY_COMMANDS = \{([^}]*)\}/, /(\w+):\s*"([^"]+)"/g);
+  const aliases = pairs(script, /\$TrayActionAliases = @\{([^}]*)\}/, /"(\w+)"\s*=\s*"([^"]+)"/g);
+  const accepted = script.match(/\$Action -notin @\(([^)]*)\)/)?.[1];
+  assert.ok(accepted, "the tray action validator should remain readable");
+  const actions = new Set([...accepted.matchAll(/"([^"]+)"/g)].map((match) => match[1]));
+  assert.ok(commands.size >= 4, "control tray should still name its commands");
+  for (const [command, subcommand] of commands) {
+    const resolved = aliases.get(command) ?? command;
+    assert.ok(actions.has(resolved), `codex-router.ps1 tray ${command} is unreachable`);
+    // An alias must reach the same supervisor transaction control reaches, not
+    // merely some accepted verb.
+    assert.equal(resolved, subcommand, `tray ${command} must map to ${subcommand}`);
+  }
+  // The aliases are folded in before validation, so an aliased action reaches
+  // the same transaction the canonical spelling does.
+  assert.ok(
+    script.indexOf("$TrayActionAliases.ContainsKey($Action)") < script.indexOf("$Action -notin @("),
+    "the control aliases must be resolved before the action is validated",
+  );
+});
+
 test("tray rebuild registers the artifact it just built", () => {
   const script = readFileSync(path.join(root, "codex-router.ps1"), "utf8");
   const rebuild = script.slice(
@@ -650,4 +690,73 @@ test("Windows gets the same rebuild gating as the other tray platforms", async (
   // Same Tauri sources as Linux, so the fingerprints must agree.
   assert.equal(traySourceFingerprint(root, "win32"), traySourceFingerprint(root, "linux"));
   assert.notEqual(traySourceFingerprint(root, "win32"), "");
+});
+
+// Task Scheduler rewrites a task's stored DACL when it registers one, so an
+// exact SDDL comparison cannot survive a replacement. The recovery path has to
+// compare the security identity instead, without accepting any change to who
+// may reach the task.
+test("Windows recovery compares task security rather than the raw SDDL string", () => {
+  const script = readFileSync(path.join(root, "codex-router.ps1"), "utf8");
+  assert.match(script, /function Test-SameControlCenterTaskSecurity\(\[string\]\$Left, \[string\]\$Right\)/);
+  // The auto-inherited marker is the only thing the comparison drops, and it
+  // has to be dropped from the DACL flags the stored descriptor carries.
+  assert.match(script, /function Get-ControlCenterDaclFlags/);
+  assert.match(script, /\.Replace\("AI", ""\)/);
+  assert.match(script, /Test-SameControlCenterTaskSecurity \(Get-ControlCenterTaskSddl \$TaskName\)/);
+  // The strictly textual comparison is what made recovery impossible; it must
+  // not come back in the restore path or in the prior-task guard.
+  assert.doesNotMatch(script, /GetSddlForm\(\$Sections\) -ne/);
+  assert.doesNotMatch(script, /Test-SameControlCenterTaskSddl/);
+});
+
+const schedulerDescriptorSkip = process.platform === "win32"
+  ? false
+  : "Task Scheduler security descriptors are Windows-only";
+
+test("the recovery comparison accepts a canonicalised DACL and refuses a changed one", { skip: schedulerDescriptorSkip }, () => {
+  const script = readFileSync(path.join(root, "codex-router.ps1"), "utf8");
+  const helpers = script.slice(
+    script.indexOf("function Get-ControlCenterDaclAceIdentities"),
+    script.indexOf("function Read-ControlCenterTaskIdentityFromXml"),
+  );
+  assert.ok(helpers.includes("Test-SameControlCenterTaskSecurity"), "the comparison helpers should be extractable");
+  // Every case is built from the same ACEs the installer records, so only the
+  // property under test differs between them.
+  const probe = [
+    helpers,
+    "$user = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value",
+    "$group = 'S-1-5-32-545'",
+    "$expected = 'O:' + $user + 'G:' + $group + 'D:(A;ID;0x1f019f;;;BA)(A;ID;0x1f019f;;;SY)(A;ID;FA;;;' + $user + ')(A;;FR;;;' + $user + ')'",
+    // What Task Scheduler stores back: same ACEs, auto-inherited flag, canonical order.
+    "$canonical = 'O:' + $user + 'G:' + $group + 'D:AI(A;;FR;;;' + $user + ')(A;ID;0x1f019f;;;BA)(A;ID;0x1f019f;;;SY)(A;ID;FA;;;' + $user + ')'",
+    // A descriptor with no D: section parses to a null DACL (everyone), while
+    // 'D:' parses to an empty one (nobody); the two must not be interchangeable.
+    "$noDacl = 'O:' + $user + 'G:' + $group",
+    "$cases = @(",
+    "  @{ Name = 'canonicalised'; Left = $canonical; Right = $expected; Want = $true },",
+    "  @{ Name = 'identical'; Left = $expected; Right = $expected; Want = $true },",
+    "  @{ Name = 'added ace'; Left = 'O:' + $user + 'G:' + $group + 'D:AI(A;;FR;;;WD)(A;;FR;;;' + $user + ')(A;ID;0x1f019f;;;BA)(A;ID;0x1f019f;;;SY)(A;ID;FA;;;' + $user + ')'; Right = $expected; Want = $false },",
+    "  @{ Name = 'removed ace'; Left = 'O:' + $user + 'G:' + $group + 'D:AI(A;ID;0x1f019f;;;BA)(A;ID;0x1f019f;;;SY)(A;ID;FA;;;' + $user + ')'; Right = $expected; Want = $false },",
+    "  @{ Name = 'weakened ace'; Left = 'O:' + $user + 'G:' + $group + 'D:AI(A;;FR;;;' + $user + ')(A;ID;0x1f019f;;;BA)(A;ID;0x1f019f;;;SY)(A;;FR;;;' + $user + ')'; Right = $expected; Want = $false },",
+    "  @{ Name = 'protected dacl'; Left = 'O:' + $user + 'G:' + $group + 'D:P(A;ID;0x1f019f;;;BA)(A;ID;0x1f019f;;;SY)(A;ID;FA;;;' + $user + ')(A;;FR;;;' + $user + ')'; Right = $expected; Want = $false },",
+    "  @{ Name = 'other owner'; Left = 'O:S-1-5-18' + 'G:' + $group + 'D:(A;ID;0x1f019f;;;BA)(A;ID;0x1f019f;;;SY)(A;ID;FA;;;' + $user + ')(A;;FR;;;' + $user + ')'; Right = $expected; Want = $false },",
+    "  @{ Name = 'missing dacl'; Left = $noDacl; Right = $expected; Want = $false },",
+    "  @{ Name = 'both missing dacl'; Left = $noDacl; Right = $noDacl; Want = $true },",
+    "  @{ Name = 'unreadable descriptor'; Left = 'not-a-descriptor'; Right = $expected; Want = $false }",
+    ")",
+    "$failed = @()",
+    "foreach ($case in $cases) {",
+    "  $actual = Test-SameControlCenterTaskSecurity $case.Left $case.Right",
+    "  if ($actual -ne $case.Want) { $failed += $case.Name }",
+    "}",
+    "if ($failed.Count) { Write-Output ('FAILED: ' + ($failed -join ', ')); exit 1 }",
+    "Write-Output ('CASES ' + $cases.Count + ' FAILED ' + $failed.Count)",
+  ].join("\n");
+  const result = spawnSync("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", probe], {
+    encoding: "utf8",
+    windowsHide: true,
+  });
+  assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+  assert.match(result.stdout, /CASES 10 FAILED 0/);
 });

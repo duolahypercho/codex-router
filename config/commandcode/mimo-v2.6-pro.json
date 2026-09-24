@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "slug": "commandcode/mimo-v2.6-pro",
+      "gatewayModel": "commandcode-mimo-v2-6-pro",
+      "upstreamModel": "xiaomi/mimo-v2.6-pro",
+      "provider": "commandcode",
+      "listed": true,
+      "displayName": "MiMo-V2.6-Pro (Command Code)",
+      "description": "MiMo-V2.6-Pro through the Command Code Provider API. Text input only.",
+      "priority": 113,
+      "defaultEffort": "high",
+      "reasoningLevels": [
+        {
+          "effort": "high",
+          "description": "Deep reasoning"
+        }
+      ],
+      "contextWindow": 1048576,
+      "autoCompact": 900000,
+      "inputModalities": [
+        "text"
+      ],
+      "compHash": "commandcode-mimo-v2-6-pro-v1"
+    }
+  ]
+}

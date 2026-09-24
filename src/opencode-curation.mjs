@@ -25,11 +25,12 @@
 // compaction fires before a completion can overrun the window the entry just
 // declared. Where it does not, the id keeps the conservative default and says
 // so in its own description rather than declaring a window a full-length
-// answer can walk off the end of. Two live free ids are therefore absent from
-// this table entirely, because neither their window nor an effort ladder
-// survives that test: `mimo-v2.5-free` (200,000 window, 32,000 output, so
-// 0.85 leaves 30,000) and `nemotron-3.5-lightning-free` (262,144 window and a
-// 262,144 output limit, which no ratio can reserve room for). Both publish an
+// answer can walk off the end of. Three live free ids are therefore absent
+// from this table entirely, because neither their window nor an effort ladder
+// survives that test: `mimo-v2.5-free` and `mimo-v2.6-flash-free` (each a
+// 200,000 window against a 32,000 output limit, so 0.85 leaves 30,000) and
+// `nemotron-3.5-lightning-free` (262,144 window and a 262,144 output limit,
+// which no ratio can reserve room for). All three publish an
 // empty `reasoning_options`. They keep the stock "conservative default
 // metadata" description, which is this repository's existing way of saying
 // every value in the entry is a default rather than a documented capability.
@@ -39,6 +40,22 @@
 // config/zai/coding/glm-5.3.json). A future figure in Zen's own /models
 // response is still preferred by curate-models, because that one describes the
 // served route first-hand.
+
+// Most of that catalog is no longer reachable from here at all. OpenCode
+// answers a free-tier request that did not come from its own client with
+// `FreeTierError: OpenCode's free tier can only be used from within OpenCode`,
+// so the id is refused before any of the metadata above matters. That is an
+// access policy the provider states in the error, not a protocol gap this
+// router can adapt to, and the ids it covers are listed in
+// OPENCODE_FREE_CLIENT_GATED below.
+//
+// Separately, `hy3-free` and `laguna-s-2.1-free` have been withdrawn from
+// Zen's /models response, which now answers `ModelError: Model hy3-free is not
+// supported`. They stay listed and documented here: discovery reads the live
+// catalog, so it cannot offer a withdrawn id whatever this file says, while an
+// operator who curated either one before the withdrawal still has the entry
+// and `normalizeCurationModels` reads these records to keep its window and
+// ladder right.
 
 const UNDOCUMENTED_EFFORTS =
   "OpenCode documents no effort control for this free id -- its `reasoning_options` in " +
@@ -160,6 +177,38 @@ const OPENCODE_FREE_MODELS = Object.freeze({
   }),
 });
 
+// Free ids OpenCode serves only to its own client. Curation refuses these
+// rather than handing the operator a picker entry that fails on its first
+// request -- the same fail-closed rule the unverified-protocol branch below
+// applies, for a cause that is the provider's policy rather than this
+// router's coverage.
+//
+// Probed 2026-09-23 against https://opencode.ai/zen/v1 in the exact shape the
+// router uses: no credential (`opencode-free` is in the registry's
+// ANONYMOUS_ENDPOINTS), the `x-opencode-session` header this repository
+// attaches, Chat Completions for the primary ids and Responses for the Muse
+// pair. Every id below answered FreeTierError. The list is per id and not a
+// blanket provider rule because `deepseek-v4-flash-free` cleared the same
+// gate on the same run, so it stays curatable.
+const OPENCODE_FREE_CLIENT_GATED = Object.freeze([
+  "big-pickle",
+  "mimo-v2.5-free",
+  "mimo-v2.6-flash-free",
+  "muse-spark-1.2-contributor-free",
+  "muse-spark-1.3-contributor-free",
+  "nemotron-3-ultra-free",
+  "nemotron-3.5-lightning-free",
+]);
+
+function clientGatedReason(upstreamModel) {
+  return (
+    `OpenCode serves ${upstreamModel} only to its own client: the same request from this `
+    + `router is answered "OpenCode's free tier can only be used from within OpenCode". `
+    + `That is OpenCode's access policy rather than a router compatibility limitation, so `
+    + `the id cannot be curated into a route that works.`
+  );
+}
+
 const CURATION_ROUTES = Object.freeze({
   "commandcode": Object.freeze({
     providers: Object.freeze(["commandcode", "commandcode-messages"]),
@@ -210,7 +259,11 @@ const CURATION_ROUTES = Object.freeze({
       "thinkingmachines/inkling-small",
       "xai/grok-4.5",
       "xai/grok-4.6",
+      "xai/grok-4.7",
       "xiaomi/mimo-v2.5-pro",
+      "xiaomi/mimo-v2.6-flash",
+      "xiaomi/mimo-v2.6-pro",
+      "xiaomi/mimo-v2.6-pro-ultraspeed",
       "z-ai/glm-5.3-flash",
       "zai-org/GLM-5.2",
       "zai-org/GLM-5.2-Fast",
@@ -241,6 +294,7 @@ const CURATION_ROUTES = Object.freeze({
       "gpt-5.6-luna",
       "grok-4.5",
       "grok-4.6",
+      "grok-4.7",
       "muse-spark-1.2-contributor",
       "muse-spark-1.3-contributor",
     ]),
@@ -263,6 +317,8 @@ const CURATION_ROUTES = Object.freeze({
       "longcat-2.0",
       "mimo-v2.5",
       "mimo-v2.5-pro",
+      "mimo-v2.6-flash",
+      "mimo-v2.6-pro",
       "qwen3.5-plus",
       "x-preview-f",
     ]),
@@ -282,10 +338,26 @@ const CURATION_ROUTES = Object.freeze({
       "hy3-free",
       "laguna-s-2.1-free",
       "mimo-v2.5-free",
+      "mimo-v2.6-flash-free",
       "nemotron-3-ultra-free",
       "nemotron-3.5-lightning-free",
     ]),
+    clientGatedModels: OPENCODE_FREE_CLIENT_GATED,
     models: OPENCODE_FREE_MODELS,
+  }),
+  "opencode-zen": Object.freeze({
+    providers: Object.freeze([
+      "opencode-zen",
+      "opencode-zen-messages",
+      "opencode-zen-responses",
+    ]),
+    protocols: Object.freeze(["Chat", "Messages", "Responses"]),
+    messagesProvider: "opencode-zen-messages",
+    messagesModels: Object.freeze([]),
+    responsesProvider: "opencode-zen-responses",
+    responsesModels: Object.freeze([]),
+    primaryModels: Object.freeze([]),
+    models: Object.freeze({}),
   }),
 });
 
@@ -304,9 +376,45 @@ export function curationProviderIds(providerId) {
   return [...(CURATION_ROUTES[primary]?.providers || [primary])];
 }
 
+function zenFamilyRoute(upstreamModel) {
+  const id = String(upstreamModel || "").toLowerCase();
+  if (id.includes("gemini")) {
+    return {
+      blockedReason:
+        `The provider catalog lists ${upstreamModel}. `
+        + `OpenCode Zen serves Gemini over Google's native protocol, which this router has no adapter for, `
+        + `so it cannot be added safely.`,
+    };
+  }
+  if (id.includes("claude")) {
+    return { providerId: "opencode-zen-messages" };
+  }
+  if (id.includes("gpt-") || id.includes("grok-") || id.includes("muse-")) {
+    return { providerId: "opencode-zen-responses" };
+  }
+  return { providerId: "opencode-zen" };
+}
+
 function curatedModelRouteSelection(providerId, upstreamModel, { existingProvider } = {}) {
   const primary = curationPrimaryProviderId(providerId);
   const route = CURATION_ROUTES[primary];
+  if (primary === "opencode-zen") {
+    return zenFamilyRoute(upstreamModel);
+  }
+  // Refused before the protocol is considered: an id the provider will not
+  // serve to this router has no working route whichever wire it speaks.
+  //
+  // Only a fresh candidate is refused. normalizeCurationModels resolves every
+  // row an operator already curated through here too, and answering those with
+  // a block would strand them: curation never removes a model from a user's
+  // config, and a stored row still has to reach its documented provider so the
+  // Muse migration below and the metadata upgrades keep working on it. So a
+  // gated id keeps its entry in `responsesModels`/`primaryModels`; what the
+  // gate withholds is the route's first appearance, which is the request that
+  // would fail.
+  if (!existingProvider && route?.clientGatedModels?.includes(upstreamModel)) {
+    return { blockedReason: clientGatedReason(upstreamModel) };
+  }
   if (route?.responsesModels.includes(upstreamModel)) {
     return { providerId: route.responsesProvider };
   }

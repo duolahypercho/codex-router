@@ -634,6 +634,12 @@ h2 {
   border-bottom: 1px solid currentColor;
 }
 
+.command-stack {
+  display: grid;
+  gap: 20px;
+  min-width: 0;
+}
+
 .command-block {
   position: relative;
   min-width: 0;

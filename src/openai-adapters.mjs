@@ -95,6 +95,13 @@ function restoreNamespacedFunctionCall(call, flatToNative) {
   };
 }
 
+// Only function calls carry a namespace. Everything else is returned by
+// identity so a stream event keeps the bytes it arrived with.
+function restoreFunctionCallNamespace(item, flatToNative) {
+  if (!item || typeof item !== "object" || item.type !== "function_call") return item;
+  return restoreNamespacedFunctionCall(item, flatToNative);
+}
+
 function adapterError(message, code = "invalid_responses_request") {
   const error = new Error(message);
   error.status = 400;
@@ -353,8 +360,9 @@ function serializeFrame(frame, data = frame.data) {
   return `${lines.join("\n")}\n\n`;
 }
 
-function streamState() {
+function streamState({ pinResponseId = false } = {}) {
   return {
+    pinResponseId,
     responseId: undefined,
     outputIndex: 0,
     itemIndexes: new Map(),
@@ -395,11 +403,31 @@ function rememberStreamIndex(state, key, index) {
   return true;
 }
 
+// A keep-alive carries no Responses semantics. OpenCode Go and Zen close every
+// stream with `event: ping` / `{"type":"ping","cost":"0"}` *after*
+// `response.completed`; treating it as post-terminal data appended
+// `invalid_responses_stream` to every completed turn, which LiteLLM re-raised
+// as "Response API in-stream error". Codex ignores bytes after a terminal
+// event; opencode's AI SDK and pi validate them and failed the turn.
+function keepAliveFrame(frame, data) {
+  return frame.event === "ping" || (data && typeof data === "object" && data.type === "ping");
+}
+
 function normalizeResponsesEvent(frame, state, flatToNative) {
+  // An SSE comment, or a frame with no data line and no event, is not an event
+  // and is not forwarded. It is still proof the upstream was talking, so a
+  // stream that ends before its terminal event is still reported by `flush`.
+  if (frame.data === "" && !frame.event) {
+    state.sawEvent = true;
+    return "";
+  }
   const data = frameData(frame);
   state.sawEvent = true;
   if (state.invalid) return "";
   if (state.terminal && data !== "[DONE]") {
+    // Real data after the terminal event is still refused. Only a keep-alive,
+    // which cannot change a finished response, is dropped.
+    if (keepAliveFrame(frame, data)) return "";
     return invalidStream(state, "The Responses stream emitted data after its terminal event.");
   }
   if (frame.event === "error") state.terminal = true;
@@ -418,6 +446,12 @@ function normalizeResponsesEvent(frame, state, flatToNative) {
       return invalidStream(state, "The Responses stream changed response IDs.");
     }
     state.responseId ||= responseId;
+  } else if (state.pinResponseId && state.responseId && data.response && typeof data.response === "object") {
+    // GitHub Copilot mints a fresh id for every lifecycle event of one
+    // response. The id announced by `response.created` is the one the client
+    // already holds, so later events are pinned to it on that route only; a
+    // mismatched terminal id from any other upstream still voids the stream.
+    data.response.id = state.responseId;
   }
   if (data.type === "response.output_item.added") {
     const item = data.item && typeof data.item === "object" ? data.item : undefined;
@@ -446,12 +480,16 @@ function normalizeResponsesEvent(frame, state, flatToNative) {
     if (!validOutputIndex(data.output_index)) data.output_index = index;
     
     // Restore namespace for function call items
-    if (item.type === "function_call" && flatToNative && flatToNative.size > 0) {
-      const restored = restoreNamespacedFunctionCall(item, flatToNative);
-      if (restored !== item) {
-        data.item = restored;
-      }
-    }
+    const restoredAdded = restoreFunctionCallNamespace(item, flatToNative);
+    if (restoredAdded !== item) data.item = restoredAdded;
+  }
+  // The terminal item is the one a client executes, and it is re-sent in full
+  // rather than diffed from `added`. Restoring only `added` left the flattened
+  // name on the call Codex actually ran, so namespace tools answered
+  // "unsupported call" on every Responses route that relays flattened names.
+  if (data.type === "response.output_item.done") {
+    const restoredDone = restoreFunctionCallNamespace(data.item, flatToNative);
+    if (restoredDone !== data.item) data.item = restoredDone;
   }
   if (data.type === "response.function_call_arguments.delta" || data.type === "response.function_call_arguments.done") {
     const key = data.call_id || data.item_id;
@@ -478,13 +516,20 @@ function normalizeResponsesEvent(frame, state, flatToNative) {
       return invalidStream(state, "The Responses completion used a different response ID.");
     }
     if (state.responseId && !data.response.id) data.response.id = state.responseId;
+    // Non-incremental consumers read the calls off the completion snapshot
+    // instead of the item events, so it has to carry the same restored shape.
+    if (Array.isArray(data.response.output)) {
+      data.response.output = data.response.output.map((item) =>
+        restoreFunctionCallNamespace(item, flatToNative),
+      );
+    }
   }
   return serializeFrame(frame, data);
 }
 
-export function createResponsesStreamTransform(flatToNative = new Map()) {
+export function createResponsesStreamTransform(flatToNative = new Map(), options = {}) {
   let buffer = "";
-  const state = streamState();
+  const state = streamState(options);
   const decoder = new TextDecoder();
   const nextBoundary = (value) => {
     const match = /\r?\n\r?\n/.exec(value);

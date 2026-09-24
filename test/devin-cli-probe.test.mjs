@@ -137,12 +137,12 @@ const REQUEST = {
 const proto = {
   SERVICE_PATH: "exa.api_server_pb.ApiServerService",
   GET_CHAT_MESSAGE: "GetChatMessage",
-  GET_CASCADE_MODEL_CONFIGS: "GetCascadeModelConfigs",
+  GET_CLI_MODEL_CONFIGS: "GetCliModelConfigs",
   STOP_REASON: { FUNCTION_CALL: 10, STOP_PATTERN: 2 },
   GET_CHAT_MESSAGE_REQUEST: REQUEST,
   GET_CHAT_MESSAGE_RESPONSE: RESPONSE,
-  GET_CASCADE_MODEL_CONFIGS_REQUEST: { metadata: { no: 1, type: "message", message: { apiKey: { no: 3, type: "string" } } } },
-  GET_CASCADE_MODEL_CONFIGS_RESPONSE: MODELS_RESPONSE,
+  GET_CLI_MODEL_CONFIGS_REQUEST: { metadata: { no: 1, type: "message", message: { apiKey: { no: 3, type: "string" } } } },
+  GET_CLI_MODEL_CONFIGS_RESPONSE: MODELS_RESPONSE,
 };
 
 function fakeProvider({ configured = true, maxTokensSeen } = {}) {
@@ -223,7 +223,7 @@ function runner({ models = [{ modelUid: "swe-1", label: "SWE 1", isPremium: true
   const calls = [];
   const fetchImpl = async (url, init) => {
     calls.push({ url, init });
-    if (String(url).endsWith("/GetCascadeModelConfigs")) return okResponse(modelsBody(models));
+    if (String(url).endsWith("/GetCliModelConfigs")) return okResponse(modelsBody(models));
     return live();
   };
   return { calls, fetchImpl };
@@ -248,7 +248,7 @@ test("the free run reads the session, audits its own request and lists models wi
   const { code, checks, output } = await probe([], fakeProvider(), fetchImpl);
 
   assert.equal(calls.length, 1);
-  assert.equal(calls[0].url, "https://cascade.invalid/exa.api_server_pb.ApiServerService/GetCascadeModelConfigs");
+  assert.equal(calls[0].url, "https://cascade.invalid/exa.api_server_pb.ApiServerService/GetCliModelConfigs");
   assert.equal(calls[0].init.headers.authorization, "Basic TOKEN-TOKEN");
   assert.deepEqual(statusOf(checks, "request encoding"), ["pass"]);
   assert.deepEqual(statusOf(checks, "model list"), ["pass"]);

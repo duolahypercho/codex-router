@@ -11,6 +11,7 @@ import {
   rmSync,
   statSync,
   unlinkSync,
+  write,
   writeFileSync,
 } from "node:fs";
 import os from "node:os";
@@ -716,6 +717,58 @@ export async function terminateProcessTree(
   }
 }
 
+async function forwardProcessOutput(source, destination, signal) {
+  // Raw bytes are forwarded one write at a time, so buffering is bounded and
+  // completion is withheld until the destination has accepted every chunk.
+  let pendingWrite;
+  const onError = (error) => source.destroy(error);
+  destination.on("error", onError);
+  try {
+    for await (const chunk of source) {
+      signal.throwIfAborted();
+      pendingWrite = new Promise((resolve, reject) => {
+        if (!Number.isInteger(destination.fd)) {
+          destination.write(chunk, (error) => error ? reject(error) : resolve());
+          return;
+        }
+        // Windows process.stdout/stderr pipe writes are synchronous. Async fd
+        // writes are required so a stalled reader cannot block the deadline.
+        let offset = 0;
+        const writeRemaining = () => write(destination.fd, chunk, offset, chunk.length - offset, null, (error, written) => {
+          if (error) { reject(error); return; }
+          if (written === 0) { reject(new Error("Router output could not be forwarded: zero bytes were written.")); return; }
+          offset += written;
+          if (offset === chunk.length) resolve();
+          else if (signal.aborted) reject(signal.reason);
+          else writeRemaining();
+        });
+        writeRemaining();
+      });
+      let onAbort;
+      try {
+        await Promise.race([
+          pendingWrite,
+          new Promise((_, reject) => {
+            onAbort = () => reject(signal.reason);
+            signal.addEventListener("abort", onAbort, { once: true });
+            if (signal.aborted) onAbort();
+          }),
+        ]);
+      } finally {
+        signal.removeEventListener("abort", onAbort);
+      }
+      pendingWrite = undefined;
+    }
+  } finally {
+    // An aborted wait cannot cancel a global stream's outstanding write. Its
+    // error event is emitted after the callback, so the listener is retained
+    // until that write and its next-tick error notification have finished.
+    const removeListener = () => setImmediate(() => destination.off("error", onError));
+    if (pendingWrite) pendingWrite.then(removeListener, removeListener);
+    else removeListener();
+  }
+}
+
 /**
  * Spawn one command in its own POSIX process group or a kill-on-close Windows
  * Job Object, enforcing the same absolute deadline across every descendant.
@@ -749,7 +802,13 @@ export function runProcessTree(
   const childEnvironment = childSignalBudget === undefined
     ? coordinator.environment
     : { ...coordinator.environment, [OWNER_SIGNAL_BUDGET_ENV]: String(childSignalBudget) };
-  const effectiveWindowsHide = stdio === "inherit" ? false : windowsHide;
+  // POSIX inheritance is preserved. On Windows, inherited desktop pipes must
+  // be relayed through fresh pipes: libuv omits CREATE_NO_WINDOW if even one
+  // stdio fd is inherited, and SW_HIDE is ignored by Windows Terminal.
+  const inheritsTerminal = stdio === "inherit"
+    && (platform !== "win32" || process.stdout.isTTY || process.stderr.isTTY || process.stdin.isTTY);
+  const effectiveWindowsHide = inheritsTerminal ? false : windowsHide;
+  const relayInherited = platform === "win32" && stdio === "inherit" && effectiveWindowsHide;
   return new Promise((resolve, reject) => {
     const invocation = platform === "win32"
       ? windowsJobProcessInvocation(command, args, {
@@ -769,7 +828,8 @@ export function runProcessTree(
         shell: false,
         windowsHide: effectiveWindowsHide,
         windowsVerbatimArguments: false,
-        stdio: stdio === "inherit" ? "inherit" : ["ignore", "pipe", "pipe"],
+        stdio: relayInherited ? ["pipe", "pipe", "pipe"]
+          : stdio === "inherit" ? "inherit" : ["ignore", "pipe", "pipe"],
       });
     } catch (error) {
       coordinator.release();
@@ -789,6 +849,9 @@ export function runProcessTree(
     let childCloseResolve;
     let childClosed = false;
     const childClose = new Promise((resolveClose) => { childCloseResolve = resolveClose; });
+    const relayAbort = relayInherited ? new AbortController() : undefined;
+    let detachInput = () => {};
+    let forwardedOutput = Promise.resolve();
 
     const waitForCapturedClose = async (timeoutMs = DEFAULT_TREE_EXIT_WAIT_MS) => {
       if (childClosed) return true;
@@ -804,6 +867,7 @@ export function runProcessTree(
     };
 
     const cleanup = () => {
+      detachInput();
       clearTimeout(timer);
       signal?.removeEventListener("abort", onAbort);
       unregisterOwner();
@@ -820,6 +884,12 @@ export function runProcessTree(
       if (terminationPromise) return terminationPromise;
       terminating = true;
       discardOutput = true;
+      if (relayInherited) {
+        detachInput();
+        relayAbort.abort(error);
+        child.stdout.destroy();
+        child.stderr.destroy();
+      }
       clearTimeout(timer);
       signal?.removeEventListener("abort", onAbort);
       terminationPromise = (async () => {
@@ -893,8 +963,37 @@ export function runProcessTree(
       if (name === "stdout") stdout += chunk.toString(encoding);
       else stderr += chunk.toString(encoding);
     };
-    child.stdout?.on("data", (chunk) => collect("stdout", chunk));
-    child.stderr?.on("data", (chunk) => collect("stderr", chunk));
+    if (relayInherited && !discardOutput) {
+      const input = process.stdin;
+      const wasFlowing = input.readableFlowing === true;
+      let inputDetached = false;
+      detachInput = () => {
+        if (inputDetached) return;
+        inputDetached = true;
+        input.unpipe(child.stdin);
+        if (wasFlowing) input.resume();
+        else input.pause();
+        input.off("error", onInputError);
+      };
+      const onInputError = (error) => { void stop(error); };
+      input.on("error", onInputError);
+      child.stdin.on("error", (error) => {
+        detachInput();
+        // Early stdin closure is allowed, as with directly inherited input.
+        if (error.code !== "EPIPE" && error.code !== "ERR_STREAM_DESTROYED") void stop(error);
+      });
+      child.stdin.once("close", detachInput);
+      input.pipe(child.stdin);
+      forwardedOutput = Promise.all([
+        forwardProcessOutput(child.stdout, process.stdout, relayAbort.signal),
+        forwardProcessOutput(child.stderr, process.stderr, relayAbort.signal),
+      ]).catch((error) => {
+        if (!discardOutput && !settled) return stop(error);
+      });
+    } else if (!relayInherited) {
+      child.stdout?.on("data", (chunk) => collect("stdout", chunk));
+      child.stderr?.on("data", (chunk) => collect("stderr", chunk));
+    }
     child.once("error", (error) => {
       if (!terminating) finish(reject, error);
     });
@@ -939,7 +1038,10 @@ export function runProcessTree(
     child.once("close", (status, childSignal) => {
       childClosed = true;
       childCloseResolve();
-      if (platform === "win32") settleLeaderExit(status, childSignal);
+      if (platform === "win32") {
+        // The deadline remains active while the final forwarded writes drain.
+        void forwardedOutput.then(() => settleLeaderExit(status, childSignal));
+      }
     });
   });
 }

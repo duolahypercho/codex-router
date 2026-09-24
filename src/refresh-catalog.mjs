@@ -46,7 +46,7 @@ export function refreshCatalogCompletionMessage(status) {
 
 function restoreTransport(
   run,
-  { signed, loginFree, loginFreeModel, loginFreeDisplayModel },
+  { signed, signedProviderMode, loginFree, loginFreeModel, loginFreeDisplayModel },
   aliasFor,
 ) {
   if (loginFree) {
@@ -61,7 +61,12 @@ function restoreTransport(
     );
   } else {
     checked(run, "config-manager.mjs", ["enable"]);
-    if (signed) checked(run, "config-manager.mjs", ["signed-enable"]);
+    if (signed) {
+      checked(run, "config-manager.mjs", [
+        "signed-enable",
+        ...(signedProviderMode === "root-openai" ? ["--preserve-root-openai"] : []),
+      ]);
+    }
   }
   try {
     checked(run, "catalog.mjs", []);
@@ -132,6 +137,7 @@ async function refreshCatalogUnlocked({
   }
   const transport = {
     signed,
+    signedProviderMode: signed ? status.signed_provider_mode : undefined,
     loginFree,
     loginFreeDisplayModel: loginFree
       ? pendingJournal?.displayModel || status.model

@@ -59,7 +59,8 @@ extension RouterStore {
           resetAt: $0.resetAt.map(Date.init(timeIntervalSince1970:))
         )
       },
-      usageSources: usageSources
+      usageSources: usageSources,
+      language: RouterLanguage.resolution.widgetIdentifier
     )
   }
 

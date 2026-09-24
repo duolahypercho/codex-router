@@ -1162,6 +1162,34 @@ test("the skill's declared required fields match the app snapshot", () => {
     "utf8",
   );
   assert.match(threadsSkill, /requires TWO fields: `prompt` \(string\) and `target`/);
+  // The optional keys drift too, and the drift is not cosmetic: the skill is
+  // what a routed model reads instead of guessing. Text that says create_thread
+  // takes no key beyond `title` tells the model its own `model` argument is
+  // illegal, which is exactly the cross-model delegation the relay preserves
+  // (`injectSessionModelForSpawnCalls` rewrites only an omitted model). Assert
+  // every optional property the snapshot carries is named in the skill.
+  for (const [name, heading] of [
+    ["create_thread", "## Create a thread"],
+    ["send_message_to_thread", "## Send a message to a thread"],
+  ]) {
+    const fn = byName.get(name);
+    const required = new Set(fn?.inputSchema?.required || []);
+    const optional = Object.keys(fn?.inputSchema?.properties || {})
+      .filter((key) => !required.has(key));
+    assert.ok(optional.length > 0, `${name} has optional properties`);
+    const start = threadsSkill.indexOf(heading);
+    assert.ok(start >= 0, `skill documents ${name}`);
+    const nextHeading = threadsSkill.indexOf("\n## ", start + heading.length);
+    const section = threadsSkill.slice(start, nextHeading < 0 ? undefined : nextHeading);
+    for (const key of optional) {
+      assert.ok(
+        section.includes(`\`${key}\``),
+        `${name} section names its optional \`${key}\` argument`,
+      );
+    }
+  }
+  // And it must not tell a routed model that a routed model slug is invalid.
+  assert.doesNotMatch(threadsSkill, /No other top-level keys are allowed/);
 });
 
 test("a missing or malformed skill contract is reported as unavailable", () => {

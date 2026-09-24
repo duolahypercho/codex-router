@@ -46,6 +46,7 @@ import {
   modelPickerSnapshot,
   readHiddenModels,
   seedModelsHidden,
+  readPickerOrder,
 } from "./model-picker-state.mjs";
 import { buildNativeAliasAssignments } from "./native-alias.mjs";
 import {
@@ -733,10 +734,13 @@ export function routedModel(template, model, behaviorTemplate = template) {
   // not a routed capability and must stay out even when that native entry is
   // also the conservative fallback template.
   delete next.tool_mode;
-  // ClinePass strips these unsupported request controls, so Codex must not offer them.
+  // ClinePass strips these unsupported request controls, so Codex must not
+  // offer them. Codex requires `supported_reasoning_levels` (a missing key is a
+  // serde error that drops the entry), so an empty ladder is the only
+  // schema-valid way to hide the selector; the default level is optional.
   if (model.requestProfile === "clinepass") {
     delete next.default_reasoning_level;
-    delete next.supported_reasoning_levels;
+    next.supported_reasoning_levels = [];
   }
   // A few OpenAI-compatible upstreams reject tool scheduling the native
   // template advertises. Registry entries opt out explicitly so the picker
@@ -853,10 +857,11 @@ function pickerProviderGroup(provider) {
   if (value === "antigravity-oauth") return { rank: 0, key: "antigravity" };
   if (value === "deepseek") return { rank: 1, key: "deepseek" };
   // The opencode family shares one stored key: `opencode-go` and its variants
-  // (`opencode-go-messages`, `opencode-go-responses`, `opencode-zen`). Group
-  // them together so Zen models stay next to the Go models they relate to
-  // instead of falling into the rank-3 catch-all under their own key.
-  if (value.startsWith("opencode-go") || value === "opencode-zen") {
+  // (`opencode-go-messages`, `opencode-go-responses`, `opencode-zen` and the
+  // Zen Messages/Responses protocol variants). Group them together so Zen
+  // models stay next to the Go models they relate to instead of falling into
+  // the rank-3 catch-all under their own key.
+  if (value.startsWith("opencode-go") || value.startsWith("opencode-zen")) {
     return { rank: 2, key: "opencode" };
   }
   return { rank: 3, key: value };
@@ -920,6 +925,30 @@ function sortCatalogModels(models) {
   });
 }
 
+// Codex serves `model/list` in priority order, hidden entries included, and
+// the desktop model picker reads only the first page of that list (100
+// entries) before dropping the hidden ones. With a large catalog, hidden
+// routes interleaved by priority pushed selected models past entry 100, so
+// they never reached the picker although the CLI listed them. Publishing every
+// hidden entry in a band after the last visible priority keeps each selected
+// model on that first page. Visible priorities are untouched, and a hidden
+// model is never a spawn override (AGENTS.md step 5), so the spawn window
+// cannot lose anything to this renumbering.
+export function publishHiddenAfterVisible(models) {
+  const isVisible = (model) => model.visibility !== "hide";
+  const visibleMax = Math.max(
+    0,
+    ...models.filter(isVisible).map((model) => Number(model.priority)).filter(Number.isFinite),
+  );
+  const hiddenOrder = new Map(
+    sortCatalogModels(models.filter((model) => !isVisible(model)))
+      .map((model, index) => [model.slug, visibleMax + 1 + index]),
+  );
+  return models.map((model) =>
+    hiddenOrder.has(model.slug) ? { ...model, priority: hiddenOrder.get(model.slug) } : model,
+  );
+}
+
 // Native entries carry upstream's static multi_agent_version. One pinned
 // backend exception is maintained in the repository after upstream evidence;
 // local selection or a stream/tool probe must never promote any other v1
@@ -970,7 +999,11 @@ function behaviorTemplateFor(nativeModels, model, fallback) {
   return nativeModels.find((candidate) => candidate.slug === model.behaviorTemplate) || fallback;
 }
 
-export function buildMergedCatalog(native, routedModelsList, { includeNative = true } = {}) {
+export function buildMergedCatalog(
+  native,
+  routedModelsList,
+  { includeNative = true, pickerOrder = "native-first" } = {},
+) {
   const template =
     native.models.find((model) => model.slug === "gpt-5.5") ||
     native.models.find((model) => model.visibility === "list") ||
@@ -978,13 +1011,27 @@ export function buildMergedCatalog(native, routedModelsList, { includeNative = t
   if (!template) {
     throw new Error("Native model catalog is empty.");
   }
+  const ordered = routedPickerPriorities(native.models, routedModelsList);
+  const routedFirst = pickerOrder === "routed-first";
+  const published = publishedPickerPriorities(native.models, ordered, { routedFirst });
+  // Under routed-first every routed model was renumbered 1..N, so the natives
+  // move after them by the same count. Only the published priority changes;
+  // the native entry is otherwise the account's own.
+  const nativeShift = routedFirst ? published.size : 0;
   const models = new Map(
     includeNative
-      ? native.models.map((model) => [model.slug, normalizeNativeModel(model)])
+      ? native.models.map((model) => {
+          const normalized = normalizeNativeModel(model);
+          const priority = Number(normalized.priority);
+          return [
+            model.slug,
+            nativeShift && Number.isFinite(priority)
+              ? { ...normalized, priority: priority + nativeShift }
+              : normalized,
+          ];
+        })
       : [],
   );
-  const ordered = routedPickerPriorities(native.models, routedModelsList);
-  const published = publishedPickerPriorities(native.models, ordered);
   for (const model of ordered) {
     const behaviorTemplate = behaviorTemplateFor(native.models, model, template);
     const entry = routedModel(template, model, behaviorTemplate);
@@ -1002,7 +1049,13 @@ export function buildMergedCatalog(native, routedModelsList, { includeNative = t
 // The band starts above the highest *visible* native priority: a hidden
 // native entry can carry an arbitrary number that would otherwise push every
 // routed model far down the picker for no reason a user can see.
-function publishedPickerPriorities(nativeModels, orderedRoutedModels) {
+//
+// With `routedFirst` the band starts at 1 instead and includes the v2 routes:
+// the operator asked for external models ahead of the natives, and leaving a
+// v2 route at its authored value would interleave it with the shifted natives
+// unpredictably. The spawn_agent override window shows a priority-ordered
+// subset, so those routes stay at the top of it either way.
+function publishedPickerPriorities(nativeModels, orderedRoutedModels, { routedFirst = false } = {}) {
   const visible = nativeModels.filter((model) => model.visibility === "list");
   const nativeMax = Math.max(
     0,
@@ -1011,9 +1064,9 @@ function publishedPickerPriorities(nativeModels, orderedRoutedModels) {
       .filter(Number.isFinite),
   );
   const published = new Map();
-  let next = nativeMax + 1;
+  let next = routedFirst ? 1 : nativeMax + 1;
   for (const model of orderedRoutedModels) {
-    if (model.multiAgentVersion === "v2") continue;
+    if (model.multiAgentVersion === "v2" && !routedFirst) continue;
     published.set(model.slug, next);
     next += 1;
   }
@@ -1031,7 +1084,7 @@ function publishedPickerPriorities(nativeModels, orderedRoutedModels) {
 // merged-catalog path filters through `selectedConfiguredListedModels()`; this
 // function keeps the same rule for the login-free path instead of trusting its
 // caller to pre-filter, so no future call site can publish dead slots again.
-export function buildLoginFreeCatalog(native, routedModelsList) {
+export function buildLoginFreeCatalog(native, routedModelsList, { pickerOrder = "native-first" } = {}) {
   const configured = new Set(configuredProviderIds());
   const usableModels = routedModelsList.filter(
     (model) => !model.provider || configured.has(model.provider),
@@ -1051,7 +1104,7 @@ export function buildLoginFreeCatalog(native, routedModelsList) {
       slug: nativeModel.slug,
       priority: nativeModel.priority,
     })),
-    ...buildMergedCatalog(native, usableModels, { includeNative: false }).map(
+    ...buildMergedCatalog(native, usableModels, { includeNative: false, pickerOrder }).map(
       (model) =>
         aliasedSlugs.has(model.slug) ? { ...model, visibility: "hide" } : model,
     ),
@@ -1187,11 +1240,13 @@ export function publishCatalog({ refreshNative = refresh, output = true } = {}) 
     readVisionBridgeSettings(),
   );
   const catalogModels = applyVisionBridge(routedModels, visionEngine);
+  const pickerOrder = readPickerOrder();
   const { models: merged, aliases } = loginFree
-    ? buildLoginFreeCatalog(native, catalogModels)
+    ? buildLoginFreeCatalog(native, catalogModels, { pickerOrder })
     : {
         models: buildMergedCatalog(native, routedCatalog ? catalogModels : [], {
           includeNative: openaiAuthenticated,
+          pickerOrder,
         }),
         aliases: {},
       };
@@ -1204,7 +1259,7 @@ export function publishCatalog({ refreshNative = refresh, output = true } = {}) 
     atomicJson(NATIVE_ALIAS_PATH, { version: 1, aliases });
     writeAnnouncedAt(announcedAt);
     atomicJson(MERGED_CATALOG_PATH, {
-      models: merged.map((model) => {
+      models: publishHiddenAfterVisible(merged.map((model) => {
         const slug = String(model.slug);
         // In login-free mode a native-looking slot is an alias for a routed
         // model, so visibility follows the canonical routed slug that the
@@ -1223,7 +1278,7 @@ export function publishCatalog({ refreshNative = refresh, output = true } = {}) 
         return routerManaged && (hidden || !selected)
           ? { ...model, visibility: "hide" }
           : model;
-      }),
+      })),
     });
     if (process.env.MODEL_ROUTER_TEST_FAIL_AFTER_CATALOG_WRITE === "1") {
       throw new Error("Forced failure after model catalog publication.");

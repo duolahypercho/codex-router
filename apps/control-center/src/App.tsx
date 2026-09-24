@@ -1,3 +1,5 @@
+import { I18nContext } from "./i18n-react";
+import { backendText } from "./backend-text";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
@@ -33,9 +35,10 @@ import {
   applyDocumentLanguage,
   detectLanguage,
   storeLanguage,
-  translate,
+  createTranslator,
   type LanguageId,
   type MessageKey,
+  type Translate,
 } from "./i18n";
 import type {
   AccountUsage,
@@ -133,6 +136,10 @@ export default function App() {
   const previousActivityState = useRef<string | undefined>(undefined);
   const readGenerations = useRef<Partial<Record<keyof RouterDataReady, number>>>({});
 
+  // Every read and action below reports through this, so it is declared before
+  // the callbacks that close over it.
+  const t = useMemo(() => createTranslator(language), [language]);
+
   const settleRead = useCallback(async <T,>(
     key: keyof RouterDataReady,
     request: Promise<T>,
@@ -154,7 +161,7 @@ export default function App() {
     } catch (error) {
       if (readGenerations.current[key] !== generation) return;
       if (recover) commit(recover(error));
-      const message = readableError(error);
+      const message = readableError(error, t);
       setReadErrors((current) => current[key] === message ? current : { ...current, [key]: message });
     } finally {
       if (readGenerations.current[key] === generation) {
@@ -164,7 +171,7 @@ export default function App() {
         setDataReady((current) => current[key] ? current : { ...current, [key]: true });
       }
     }
-  }, []);
+  }, [t]);
 
   const target = snapshot?.targets.codex;
   const localDownloadActive = target?.modelSettings?.localModels?.download?.status === "downloading";
@@ -178,13 +185,13 @@ export default function App() {
     try {
       await settleRead("health", api.getHealth(), setHealth, (error) => ({
         ok: false,
-        error: readableError(error),
+        error: readableError(error, t),
         activity: { state: "offline", active: [], activeCount: 0 },
       }));
     } finally {
       healthPollInFlight.current = false;
     }
-  }, [api, settleRead]);
+  }, [api, settleRead, t]);
 
   const refreshCore = useCallback(async () => {
     if (!api) return;
@@ -194,7 +201,7 @@ export default function App() {
       settleRead("presence", api.getPresence(), setPresence),
       settleRead("health", api.getHealth(), setHealth, (error) => ({
         ok: false,
-        error: readableError(error),
+        error: readableError(error, t),
         activity: { state: "offline", active: [], activeCount: 0 },
       })),
       // Account switching is additive. An older installed router may not
@@ -207,7 +214,7 @@ export default function App() {
         ? api.getChatGptSession().then(setChatgptSession)
         : Promise.resolve(),
     ]);
-  }, [api, settleRead]);
+  }, [api, settleRead, t]);
 
   const refreshUsage = useCallback(async () => {
     if (!api) return;
@@ -286,8 +293,8 @@ export default function App() {
     previousActivityState.current = currentState;
     if (!finishedGenerating) return;
     void Promise.all([refreshCore(), refreshUsage()])
-      .catch((error) => setLoadError(readableError(error)));
-  }, [health?.activity?.state, refreshCore, refreshUsage]);
+      .catch((error) => setLoadError(readableError(error, t)));
+  }, [health?.activity?.state, refreshCore, refreshUsage, t]);
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", theme === "dark");
@@ -301,7 +308,10 @@ export default function App() {
   useEffect(() => {
     applyDocumentLanguage(language);
     storeLanguage(language);
-  }, [language]);
+    // The main process owns its menu dictionaries. Send only the resolved
+    // language ID through its existing trusted-renderer boundary.
+    api?.setInterfaceLanguage?.(language);
+  }, [language, t, api]);
 
   useEffect(() => {
     void refreshAll();
@@ -315,14 +325,14 @@ export default function App() {
     // grows; startup, manual refresh, and post-action refresh remain immediate.
     const usageTimer = window.setInterval(() => void refreshUsage(), 5 * 60_000);
     const snapshotTimer = window.setInterval(() => {
-      void refreshCore().catch((error) => setLoadError(readableError(error)));
+      void refreshCore().catch((error) => setLoadError(readableError(error, t)));
     }, 5 * 60_000);
     return () => {
       window.clearInterval(healthTimer);
       window.clearInterval(usageTimer);
       window.clearInterval(snapshotTimer);
     };
-  }, [api, refreshHealth, refreshUsage, refreshCore]);
+  }, [api, refreshHealth, refreshUsage, refreshCore, t]);
 
   useEffect(() => {
     if (!api || !downloadActive) return;
@@ -348,10 +358,10 @@ export default function App() {
         : undefined;
       if (actionResult?.alreadyAuthenticated === true || actionResult?.pending === true) {
         const message = actionResult.alreadyAuthenticated === true
-          ? `${label} is already signed in.`
+          ? t("app.toast.alreadySignedIn", { action: label })
           : actionResult.inProgress === true
-            ? `${label} is already open in the browser.`
-            : `${label} opened in the browser. Finish sign-in there.`;
+            ? t("app.toast.alreadyOpenInBrowser", { action: label })
+            : t("app.toast.openedInBrowser", { action: label });
         setToast({ tone: "neutral", message });
         // The detached Codex OAuth process updates the isolated profile after
         // the browser callback. Refresh once; Settings owns the 1.5-second
@@ -369,15 +379,15 @@ export default function App() {
         // Spawn acceptance is not scheduler/build success, so never render the
         // generic "completed" state for it; the supervisor status remains the
         // source of truth after the replacement app opens.
-        const message = `${label} started.`;
+        const message = t("app.toast.actionStarted", { action: label });
         setToast({ tone: "neutral", message });
         setOperation({ action: label, status: "started", message });
         return;
       }
-      setToast({ tone: "success", message: `${label} completed.` });
+      setToast({ tone: "success", message: t("app.toast.actionCompleted", { action: label }) });
       await Promise.allSettled([refreshCore(), refreshUsage()]);
     } catch (error) {
-      const message = readableError(error);
+      const message = readableError(error, t);
       setToast({ tone: "danger", message });
       setOperation({ action: label, status: "failed", message });
       // Some control transactions persist their safe local decision before
@@ -387,22 +397,18 @@ export default function App() {
       await Promise.allSettled([refreshCore(), refreshUsage()]);
       return;
     }
-    setOperation({ action: label, status: "completed", message: `${label} completed.` });
-  }, [refreshCore, refreshUsage]);
+    setOperation({ action: label, status: "completed", message: t("app.toast.actionCompleted", { action: label }) });
+  }, [refreshCore, refreshUsage, t]);
 
-  const t = useCallback(
-    (key: MessageKey, values?: Record<string, string | number>) => translate(language, key, values),
-    [language],
-  );
   // Nav ids stay the source of truth; only the copy is localized, so a missing
   // translation degrades to the English label rather than an empty button.
   const navItems = useMemo(
     () => NAV_ITEMS.map((item) => ({
       ...item,
-      label: translate(language, `nav.${item.id}` as MessageKey) || item.label,
-      description: translate(language, `nav.${item.id}.desc` as MessageKey) || item.description,
+      label: t(`nav.${item.id}` as MessageKey) || item.label,
+      description: t(`nav.${item.id}.desc` as MessageKey) || item.description,
     })),
-    [language],
+    [t],
   );
   const activeMeta = useMemo(() => navItems.find((item) => item.id === view) ?? navItems[0], [navItems, view]);
   const readError = Object.values(readErrors).find((message): message is string => Boolean(message));
@@ -459,25 +465,26 @@ export default function App() {
   })();
 
   return (
+    <I18nContext.Provider value={t}>
     <div className={classNames("app-shell", nativeTitlebar && "native-titlebar", api && `native-titlebar-${api.platform}`, !sidebarOpen && "sidebar-collapsed")}>
-      <aside className="app-sidebar" aria-label="Codex Router sidebar" inert={sidebarSearchOpen ? true : undefined}>
+      <aside className="app-sidebar" aria-label={t("app.sidebar.aria")} inert={sidebarSearchOpen ? true : undefined}>
         <header className="sidebar-window-row">
           {api && api.platform !== "darwin" && sidebarOpen ? (
             <div className="traffic-lights">
-              <button type="button" className="traffic-light traffic-light-close" aria-label="Close window" onClick={() => void api.closeWindow()} />
-              <button type="button" className="traffic-light traffic-light-minimize" aria-label="Minimize window" onClick={() => void api.minimizeWindow()} />
-              <button type="button" className="traffic-light traffic-light-maximize" aria-label="Maximize or restore window" onClick={() => void api.toggleMaximizeWindow()} />
+              <button type="button" className="traffic-light traffic-light-close" aria-label={t("app.window.close")} onClick={() => void api.closeWindow()} />
+              <button type="button" className="traffic-light traffic-light-minimize" aria-label={t("app.window.minimize")} onClick={() => void api.minimizeWindow()} />
+              <button type="button" className="traffic-light traffic-light-maximize" aria-label={t("app.window.maximize")} onClick={() => void api.toggleMaximizeWindow()} />
             </div>
           ) : null}
-          <button className="sidebar-toggle" type="button" aria-label="Collapse sidebar" onClick={() => setSidebarOpen(false)}><PanelLeftClose aria-hidden size={15} strokeWidth={1.7} /></button>
-          <button className="sidebar-toggle" type="button" aria-label="Go back" disabled={historyIndex === 0} onClick={() => moveHistory(-1)}><ArrowLeft aria-hidden size={15} strokeWidth={1.7} /></button>
-          <button className="sidebar-toggle" type="button" aria-label="Go forward" disabled={historyIndex >= viewHistory.length - 1} onClick={() => moveHistory(1)}><ArrowRight aria-hidden size={15} strokeWidth={1.7} /></button>
+          <button className="sidebar-toggle" type="button" aria-label={t("app.sidebar.collapse")} onClick={() => setSidebarOpen(false)}><PanelLeftClose aria-hidden size={15} strokeWidth={1.7} /></button>
+          <button className="sidebar-toggle" type="button" aria-label={t("app.nav.back")} disabled={historyIndex === 0} onClick={() => moveHistory(-1)}><ArrowLeft aria-hidden size={15} strokeWidth={1.7} /></button>
+          <button className="sidebar-toggle" type="button" aria-label={t("app.nav.forward")} disabled={historyIndex >= viewHistory.length - 1} onClick={() => moveHistory(1)}><ArrowRight aria-hidden size={15} strokeWidth={1.7} /></button>
         </header>
         <div className="router-wordmark">
           <strong>Codex Router</strong>
-          <button ref={searchTriggerRef} className="sidebar-search-toggle" type="button" aria-label="Search control center" aria-haspopup="dialog" aria-expanded={sidebarSearchOpen} onClick={() => setSidebarSearchOpen(true)}><Search aria-hidden size={15} strokeWidth={1.7} /></button>
+          <button ref={searchTriggerRef} className="sidebar-search-toggle" type="button" aria-label={t("app.search.aria")} aria-haspopup="dialog" aria-expanded={sidebarSearchOpen} onClick={() => setSidebarSearchOpen(true)}><Search aria-hidden size={15} strokeWidth={1.7} /></button>
         </div>
-        <nav className="primary-nav" aria-label="Control center sections">
+        <nav className="primary-nav" aria-label={t("app.nav.sections")}>
           {navItems.map((item) => {
             const Icon = item.icon;
             const selected = item.id === view;
@@ -493,8 +500,8 @@ export default function App() {
           })}
         </nav>
         <footer className="sidebar-footer">
-          <div className="sidebar-health"><span className={health?.ok ? "is-online" : "is-offline"}><i /></span><div><strong>{health?.ok ? "Router online" : "Router offline"}</strong><small>{health?.activity?.state === "generating" ? "Thinking" : health?.activity?.activeCount ? `${health.activity.activeCount} active` : target?.enabledProviders.length ? `${target.enabledProviders.length} provider routes` : "Waiting for setup"}</small></div></div>
-          <button type="button" aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`} onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>{theme === "dark" ? <Sun aria-hidden size={14} strokeWidth={1.7} /> : <Moon aria-hidden size={14} strokeWidth={1.7} />}</button>
+          <div className="sidebar-health"><span className={health?.ok ? "is-online" : "is-offline"}><i /></span><div><strong>{health?.ok ? t("app.health.online") : t("app.health.offline")}</strong><small>{health?.activity?.state === "generating" ? t("app.health.thinking") : health?.activity?.activeCount ? t("app.health.activeCount", { count: health.activity.activeCount }) : target?.enabledProviders.length ? t("app.health.providerRoutes", { count: target.enabledProviders.length }) : t("app.health.waitingForSetup")}</small></div></div>
+          <button type="button" aria-label={theme === "dark" ? t("app.theme.switchToLight") : t("app.theme.switchToDark")} onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>{theme === "dark" ? <Sun aria-hidden size={14} strokeWidth={1.7} /> : <Moon aria-hidden size={14} strokeWidth={1.7} />}</button>
         </footer>
       </aside>
 
@@ -502,23 +509,23 @@ export default function App() {
         <div className="titlebar">
           {api && api.platform !== "darwin" && !sidebarOpen ? (
             <div className="traffic-lights">
-              <button type="button" className="traffic-light traffic-light-close" aria-label="Close window" onClick={() => void api.closeWindow()} />
-              <button type="button" className="traffic-light traffic-light-minimize" aria-label="Minimize window" onClick={() => void api.minimizeWindow()} />
-              <button type="button" className="traffic-light traffic-light-maximize" aria-label="Maximize or restore window" onClick={() => void api.toggleMaximizeWindow()} />
+              <button type="button" className="traffic-light traffic-light-close" aria-label={t("app.window.close")} onClick={() => void api.closeWindow()} />
+              <button type="button" className="traffic-light traffic-light-minimize" aria-label={t("app.window.minimize")} onClick={() => void api.minimizeWindow()} />
+              <button type="button" className="traffic-light traffic-light-maximize" aria-label={t("app.window.maximize")} onClick={() => void api.toggleMaximizeWindow()} />
             </div>
           ) : null}
-          {!sidebarOpen ? <button className="titlebar-toggle" type="button" aria-label="Expand sidebar" onClick={() => setSidebarOpen(true)}><PanelLeftOpen aria-hidden size={15} strokeWidth={1.7} /></button> : null}
+          {!sidebarOpen ? <button className="titlebar-toggle" type="button" aria-label={t("app.sidebar.expand")} onClick={() => setSidebarOpen(true)}><PanelLeftOpen aria-hidden size={15} strokeWidth={1.7} /></button> : null}
           <div className="title-tabs">
             <strong>{activeMeta.label}</strong>
-            <span>Overview</span>
+            <span>{t("app.title.overview")}</span>
             {activeMeta.experimental ? <Badge tone="warning">{t("nav.harness.experimental")}</Badge> : null}
           </div>
           <div className="titlebar-spacer" />
-          {operation?.status === "started" ? <span className="title-operation"><LoaderCircle aria-hidden size={12} strokeWidth={1.7} className="spin" />{operation.message || operation.action}</span> : null}
-          <button className="title-refresh" type="button" aria-label="Refresh all data" disabled={refreshing} onClick={() => void refreshAll()}><RefreshCw aria-hidden size={13} strokeWidth={1.7} className={refreshing ? "spin" : ""} /></button>
+          {operation?.status === "started" ? <span className="title-operation"><LoaderCircle aria-hidden size={12} strokeWidth={1.7} className="spin" />{backendText(operation.message || operation.action, t)}</span> : null}
+          <button className="title-refresh" type="button" aria-label={t("app.refreshAll")} disabled={refreshing} onClick={() => void refreshAll()}><RefreshCw aria-hidden size={13} strokeWidth={1.7} className={refreshing ? "spin" : ""} /></button>
         </div>
         <div className={classNames("page-scroll", `page-scroll-${view}`)}>
-          {loadError || readError ? <InlineNotice tone="warning" title="Some router data could not load">{loadError || readError}</InlineNotice> : null}
+          {loadError || readError ? <InlineNotice tone="warning" title={t("app.data.loadError")}>{backendText(loadError || readError, t)}</InlineNotice> : null}
           {page}
         </div>
       </main>
@@ -532,13 +539,16 @@ export default function App() {
         />
       ) : null}
 
-      {toast ? <div className={classNames("toast", `toast-${toast.tone}`)} role="status">{toast.tone === "success" ? <Badge tone="success">Done</Badge> : toast.tone === "danger" ? <Badge tone="danger">Error</Badge> : <Badge tone="neutral">Started</Badge>}<span>{toast.message}</span></div> : null}
+      {toast ? <div className={classNames("toast", `toast-${toast.tone}`)} role="status">{toast.tone === "success" ? <Badge tone="success">{t("app.toast.done")}</Badge> : toast.tone === "danger" ? <Badge tone="danger">{t("app.toast.error")}</Badge> : <Badge tone="neutral">{t("app.toast.started")}</Badge>}<span>{toast.message}</span></div> : null}
     </div>
+    </I18nContext.Provider>
   );
 }
 
-function readableError(error: unknown): string {
+// The thrown message is the backend's own wording, so it passes through; only
+// the "nothing to report" fallback is ours to localize.
+function readableError(error: unknown, t: Translate): string {
   if (error instanceof Error && error.message) return error.message;
   if (typeof error === "string" && error.trim()) return error;
-  return "The router operation did not finish.";
+  return t("app.error.operationIncomplete");
 }

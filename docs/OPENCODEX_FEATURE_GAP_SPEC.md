@@ -45,7 +45,7 @@ Useful source and test anchors:
   `test/model-discovery.test.mjs`.
 - Credentials and redaction: `src/provider-credentials.mjs`,
   `src/file-security.mjs`, `test/provider-credentials.test.mjs`.
-- Failover and usage: `src/model-failover.mjs`, `src/provider-cooldown.mjs`,
+- Failover and usage: `src/model-failover.mjs`,
   `src/provider-usage.mjs`, `test/model-failover.test.mjs`.
 - Vision and collaboration: `src/vision-bridge.mjs`,
   `src/subagent-proofs.mjs`, `src/multi-agent-state.mjs`, and their tests.

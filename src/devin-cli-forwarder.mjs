@@ -20,9 +20,9 @@ import { devinCliStatus } from "./devin-cli-status.mjs";
 import { readDevinSession } from "./devin-cli-session.mjs";
 import { connectServerStream, connectUnary } from "./devin-connect.mjs";
 import {
-  GET_CASCADE_MODEL_CONFIGS,
-  GET_CASCADE_MODEL_CONFIGS_REQUEST,
-  GET_CASCADE_MODEL_CONFIGS_RESPONSE,
+  GET_CLI_MODEL_CONFIGS,
+  GET_CLI_MODEL_CONFIGS_REQUEST,
+  GET_CLI_MODEL_CONFIGS_RESPONSE,
   GET_CHAT_MESSAGE,
   GET_CHAT_MESSAGE_REQUEST,
   GET_CHAT_MESSAGE_RESPONSE,
@@ -230,10 +230,10 @@ export async function listCascadeModels({ session = readDevinSession(), signal }
   const response = await connectUnary({
     baseUrl: baseUrlFor(session),
     service: SERVICE_PATH,
-    method: GET_CASCADE_MODEL_CONFIGS,
+    method: GET_CLI_MODEL_CONFIGS,
     token: session.apiKey,
-    requestSchema: GET_CASCADE_MODEL_CONFIGS_REQUEST,
-    responseSchema: GET_CASCADE_MODEL_CONFIGS_RESPONSE,
+    requestSchema: GET_CLI_MODEL_CONFIGS_REQUEST,
+    responseSchema: GET_CLI_MODEL_CONFIGS_RESPONSE,
     message: { metadata: { apiKey: session.apiKey, ideName: "windsurf", locale: "en" } },
     signal,
   });

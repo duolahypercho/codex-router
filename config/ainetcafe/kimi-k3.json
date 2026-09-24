@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "slug": "ainetcafe/kimi-k3",
+      "gatewayModel": "ainetcafe-kimi-k3",
+      "upstreamModel": "Kimi-K3",
+      "provider": "ainetcafe",
+      "listed": true,
+      "displayName": "Kimi K3 (ainetcafe)",
+      "description": "Kimi K3 served from ainetcafe's own cluster at native MXFP4, $2.10 / $10.50 per million tokens, $0.30 cached input.",
+      "priority": 54,
+      "defaultEffort": "high",
+      "reasoningLevels": [
+        {
+          "effort": "low",
+          "description": "Faster reasoning"
+        },
+        {
+          "effort": "high",
+          "description": "Balanced deep reasoning"
+        },
+        {
+          "effort": "max",
+          "description": "Maximum reasoning depth"
+        }
+      ],
+      "contextWindow": 262144,
+      "autoCompact": 235000,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "requestProfile": "kimi-k3",
+      "compHash": "ainetcafe-kimi-k3-v1"
+    }
+  ]
+}

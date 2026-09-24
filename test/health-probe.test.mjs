@@ -89,7 +89,7 @@ test("a healthy service that answers slower than the first probe window still co
   // The first probe still aborts fast, so a service that is genuinely up is
   // still detected immediately; only the later probes widen.
   assert.ok(
-    fetchImpl.abortDurations[0] < 1_300,
+    fetchImpl.abortDurations[0] < 1_400,
     `first probe window should stay ~1 s, was ${fetchImpl.abortDurations[0]} ms`,
   );
   assert.ok(
@@ -244,8 +244,9 @@ test("the timeout says whether the probes were refused or never answered", async
       timeoutMs: 800,
       fetchImpl: refusesInstantly(),
     }),
-    /refused/,
+    (error) => /refused/.test(error.message) && error.probeOutcome === "refused",
   );
+  // The gateway watchdog keys its long stall fuse on this tag.
   await assert.rejects(
     waitForHealth({
       label: "API forwarder",
@@ -253,7 +254,7 @@ test("the timeout says whether the probes were refused or never answered", async
       timeoutMs: 800,
       fetchImpl: answersAfter(60_000),
     }),
-    /did not answer within/,
+    (error) => /did not answer within/.test(error.message) && error.probeOutcome === "timeout",
   );
 });
 

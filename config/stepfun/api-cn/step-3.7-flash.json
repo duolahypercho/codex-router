@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "slug": "stepfun-api-cn/step-3.7-flash",
+      "gatewayModel": "stepfun-api-cn-step-3-7-flash",
+      "upstreamModel": "step-3.7-flash",
+      "provider": "stepfun-api-cn",
+      "listed": true,
+      "displayName": "Step 3.7 Flash (StepFun China)",
+      "description": "Step 3.7 Flash through the mainland China platform (api.stepfun.com), billed to a separate platform.stepfun.com account. 256K context, text and image input.",
+      "priority": 136,
+      "defaultEffort": "medium",
+      "reasoningLevels": [
+        {
+          "effort": "low",
+          "description": "Simple tasks"
+        },
+        {
+          "effort": "medium",
+          "description": "General reasoning"
+        },
+        {
+          "effort": "high",
+          "description": "Complex reasoning, math and planning"
+        }
+      ],
+      "contextWindow": 256000,
+      "autoCompact": 235000,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "compHash": "stepfun-api-cn-step-3-7-flash-v1"
+    }
+  ]
+}

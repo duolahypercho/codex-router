@@ -1,0 +1,1 @@
+- **Thinking model tool calls now survive non-streaming Chat Completions responses.** The forwarder records complete JSON reasoning against tool-call IDs for later replay while preserving the provider's response bytes and content type. Incomplete, malformed, invalid UTF-8, and oversized responses do not seed replay.

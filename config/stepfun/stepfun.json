@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "providers": [
+    {
+      "id": "stepfun-api",
+      "displayName": "StepFun Open Platform (Global)",
+      "kind": "openai-compatible",
+      "ownedBy": "stepfun",
+      "protocol": "openai",
+      "baseUrl": "https://api.stepfun.ai/v1",
+      "baseUrlEnv": "STEPFUN_API_BASE_URL",
+      "credential": {
+        "environment": [
+          "STEPFUN_API_KEY",
+          "STEP_API_KEY"
+        ],
+        "file": "stepfun-api-key.secret",
+        "legacyFiles": [],
+        "keychainServices": [
+          "codex-router-stepfun-api"
+        ],
+        "prompt": "StepFun API key"
+      }
+    },
+    {
+      "id": "stepfun-api-cn",
+      "displayName": "StepFun Open Platform (China)",
+      "kind": "openai-compatible",
+      "ownedBy": "stepfun",
+      "protocol": "openai",
+      "baseUrl": "https://api.stepfun.com/v1",
+      "baseUrlEnv": "STEPFUN_API_CN_BASE_URL",
+      "credential": {
+        "environment": [
+          "STEPFUN_API_CN_KEY"
+        ],
+        "file": "stepfun-api-cn-key.secret",
+        "legacyFiles": [],
+        "keychainServices": [
+          "codex-router-stepfun-api-cn"
+        ],
+        "prompt": "StepFun API key (China, platform.stepfun.com)"
+      },
+      "planNote": "Each StepFun platform issues its own key from its own console: create this one at platform.stepfun.com, and the global key at platform.stepfun.ai."
+    }
+  ]
+}

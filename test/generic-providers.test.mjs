@@ -23,6 +23,8 @@ const {
   getGenericProvider,
   genericProviderDescriptor,
   listGenericProviders,
+  ollamaShowOrigin,
+  ollamaShowRecord,
   requestGenericProvider,
   readGenericProviders,
   removeGenericProvider,
@@ -43,7 +45,7 @@ const {
 const { LOG_PATH } = await import("../src/paths.mjs");
 const { createSupportBundle } = await import("../src/support-bundle.mjs");
 const { discoverGenericProviderModels } = await import("../src/model-discovery.mjs");
-const { userModelEntry } = await import("../src/user-models.mjs");
+const { readUserModels, userModelEntry } = await import("../src/user-models.mjs");
 const { runGenericCommand } = await import("../src/providers.mjs");
 test.after(() => rmSync(testRoot, { recursive: true, force: true }));
 
@@ -264,6 +266,75 @@ test("generic credential references never enter descriptors or logs", async () =
       fetchImpl: async () => ({ ok: true, status: 200 }),
     }),
     /bound credential is unavailable/,
+  );
+});
+
+test("generic provider add-model registers an unlisted model id and picks it", async () => {
+  const providerId = "generic-named-model";
+  addGenericProvider({
+    id: providerId,
+    displayName: "Generic Named Model",
+    baseUrl: "https://provider.example.test/v1",
+  });
+  const transact = async ({ mutate, applyPublication }) => {
+    await mutate();
+    await applyPublication();
+  };
+  const added = await runGenericCommand(
+    ["add-model", providerId, "private-preview-1", "--json"],
+    { transact, applyPublication: async () => ({ published: false }) },
+  );
+  assert.equal(added.slug, `${providerId}/private-preview-1`);
+  const stored = readUserModels().find((model) => model.slug === added.slug);
+  assert.equal(stored.provider, providerId);
+  assert.equal(stored.upstreamModel, "private-preview-1");
+  assert.equal(stored.listed, true);
+  await assert.rejects(
+    runGenericCommand(
+      ["add-model", providerId, "private-preview-1"],
+      { transact, applyPublication: async () => ({ published: false }) },
+    ),
+    /already a curated/,
+  );
+  await assert.rejects(
+    runGenericCommand(["add-model", providerId], { transact }),
+    /Usage: providers generic add-model/,
+  );
+});
+
+test("generic provider credential CLI reads a piped key with --stdin and never prompts", async () => {
+  const providerId = "generic-key-stdin";
+  const secret = "TEST_GENERIC_STDIN_TOKEN_41c8aa";
+  addGenericProvider({
+    id: providerId,
+    displayName: "Generic Key Stdin",
+    baseUrl: "https://provider.example.test/v1",
+  });
+  const transact = async ({ mutate, applyPublication }) => {
+    await mutate();
+    await applyPublication();
+  };
+  const configured = await runGenericCommand(
+    ["credential", providerId, "set", "--stdin", "--json"],
+    {
+      prompt: () => { throw new Error("the hidden prompt must not run with --stdin"); },
+      readStdin: async () => `${secret}\n`,
+      transact,
+      applyPublication: async () => ({ published: false }),
+    },
+  );
+  assert.equal(configured.configured, true);
+  assert.equal(JSON.stringify(configured).includes(secret), false);
+  await assert.rejects(
+    runGenericCommand(
+      ["credential", providerId, "set", "--stdin"],
+      { readStdin: async () => "  ", transact, applyPublication: async () => ({ published: false }) },
+    ),
+    /API key is empty/,
+  );
+  await assert.rejects(
+    runGenericCommand(["credential", providerId, "remove", "--stdin"], { transact }),
+    /--stdin applies only to credential set/,
   );
 });
 
@@ -498,4 +569,212 @@ test("providers CLI exposes generic CRUD with sanitized JSON", () => {
   assert.deepEqual(picker.visible, []);
   assert.deepEqual(picker.hidden, []);
   assert.deepEqual(picker.seeded, []);
+});
+
+test("Ollama show origin and record derive only from an OpenAI-chat /v1 endpoint and an Ollama-shaped answer", () => {
+  assert.equal(ollamaShowOrigin({ adapter: "openai-chat", baseUrl: "http://127.0.0.1:11434/v1" }), "http://127.0.0.1:11434");
+  assert.equal(ollamaShowOrigin({ adapter: "openai-chat", baseUrl: "http://127.0.0.1:11434/v1/" }), "http://127.0.0.1:11434");
+  assert.equal(ollamaShowOrigin({ adapter: "openai-chat", baseUrl: "https://gateway.example.test/openai" }), undefined);
+  assert.equal(ollamaShowOrigin({ adapter: "openai-completions", baseUrl: "http://127.0.0.1:11434/v1" }), undefined);
+  assert.equal(ollamaShowOrigin({ adapter: "openai-chat", baseUrl: "not a url" }), undefined);
+
+  assert.deepEqual(
+    ollamaShowRecord("glm:cloud", {
+      capabilities: ["completion", "thinking", "tools"],
+      model_info: { "general.architecture": "glm", "glm.context_length": 1048576, "glm.block_count": 1 },
+    }),
+    { id: "glm:cloud", context_length: 1048576, input_modalities: ["text"], supports_tools: true, supports_reasoning: true },
+  );
+  assert.deepEqual(
+    ollamaShowRecord("vision:cloud", {
+      capabilities: ["completion", "vision"],
+      model_info: { "a.context_length": 512000, "b.context_length": 262144 },
+    }),
+    { id: "vision:cloud", context_length: 262144, input_modalities: ["text", "image"], supports_tools: false, supports_reasoning: false },
+  );
+  assert.equal(ollamaShowRecord("x", { model_info: { "a.context_length": "1048576" } })?.context_length, undefined);
+  assert.equal(ollamaShowRecord("x", { data: [] }), undefined, "a non-Ollama answer is not a record");
+  assert.equal(ollamaShowRecord("x", "{}"), undefined);
+});
+
+test("generic discovery fills context and modalities from an Ollama server's /api/show", async () => {
+  const requests = [];
+  const server = createServer((request, response) => {
+    let raw = "";
+    request.on("data", (chunk) => { raw += chunk; });
+    request.on("end", () => {
+      requests.push({ method: request.method, url: request.url, body: raw });
+      response.writeHead(200, { "content-type": "application/json" });
+      if (request.url === "/v1/models") {
+        response.end(JSON.stringify({ object: "list", data: [
+          { id: "glm:cloud", object: "model", owned_by: "library" },
+          { id: "vision:cloud", object: "model", owned_by: "library" },
+          { id: "embed:latest", object: "model", owned_by: "library" },
+        ] }));
+        return;
+      }
+      const { model } = JSON.parse(raw || "{}");
+      if (model === "glm:cloud") {
+        response.end(JSON.stringify({ capabilities: ["completion", "tools", "thinking"], model_info: { "glm.context_length": 1048576 } }));
+      } else if (model === "vision:cloud") {
+        response.end(JSON.stringify({ capabilities: ["completion", "vision", "tools"], model_info: { "q.context_length": 262144 } }));
+      } else {
+        response.end(JSON.stringify({ capabilities: ["embedding"], model_info: {} }));
+      }
+    });
+  });
+  const port = await listen(server);
+  const providerId = "ollama-shaped";
+  try {
+    addGenericProvider({
+      id: providerId,
+      displayName: "Ollama shaped",
+      baseUrl: `http://127.0.0.1:${port}/v1`,
+      adapter: "openai-chat",
+      allowPrivate: true,
+    });
+    const discovery = await discoverGenericProviderModels(providerId, {
+      cache: false,
+      proxyResolvesDestination: false,
+    });
+    assert.deepEqual(discovery.discovered, ["embed:latest", "glm:cloud", "vision:cloud"].sort());
+    assert.deepEqual(discovery.contextLengths, { "glm:cloud": 1048576, "vision:cloud": 262144 });
+    assert.deepEqual(discovery.inputModalities, {
+      "embed:latest": ["text"],
+      "glm:cloud": ["text"],
+      "vision:cloud": ["text", "image"],
+    });
+    const described = (id) => discovery.modelMetadata.find((entry) => entry.upstreamId === id);
+    assert.equal(described("vision:cloud").supportsVision, true);
+    assert.equal(Object.hasOwn(discovery.contextLengths, "embed:latest"), false, "an undescribed size stays absent, never guessed");
+    const shows = requests.filter((r) => r.url === "/api/show");
+    assert.equal(shows.length, 3);
+    assert.ok(shows.every((r) => r.method === "POST"));
+    assert.deepEqual(shows.map((r) => JSON.parse(r.body).model).sort(), ["embed:latest", "glm:cloud", "vision:cloud"]);
+  } finally {
+    removeGenericProvider(providerId);
+    await closeServer(server);
+  }
+});
+
+test("generic discovery stops asking /api/show after a server that is not Ollama refuses once", async () => {
+  const requests = [];
+  const server = createServer((request, response) => {
+    requests.push({ method: request.method, url: request.url });
+    if (request.url === "/v1/models") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ data: [{ id: "a" }, { id: "b" }, { id: "c" }] }));
+      return;
+    }
+    response.writeHead(404, { "content-type": "application/json" });
+    response.end('{"error":"not found"}');
+  });
+  const port = await listen(server);
+  const providerId = "plain-openai-compatible";
+  try {
+    addGenericProvider({
+      id: providerId,
+      displayName: "Plain OpenAI-compatible",
+      baseUrl: `http://127.0.0.1:${port}/v1`,
+      adapter: "openai-chat",
+      allowPrivate: true,
+    });
+    const discovery = await discoverGenericProviderModels(providerId, {
+      cache: false,
+      proxyResolvesDestination: false,
+    });
+    assert.deepEqual(discovery.discovered, ["a", "b", "c"]);
+    assert.deepEqual(discovery.contextLengths, {});
+    assert.deepEqual(discovery.inputModalities, {});
+    assert.equal(requests.filter((r) => r.url === "/api/show").length, 1);
+  } finally {
+    removeGenericProvider(providerId);
+    await closeServer(server);
+  }
+});
+
+test("generic discovery keeps asking /api/show when one model is refused but the route exists", async () => {
+  const shows = [];
+  const server = createServer((request, response) => {
+    let raw = "";
+    request.on("data", (chunk) => { raw += chunk; });
+    request.on("end", () => {
+      if (request.url === "/v1/models") {
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({ data: [{ id: "broken-local:latest" }, { id: "fine:cloud" }] }));
+        return;
+      }
+      const { model } = JSON.parse(raw || "{}");
+      shows.push(model);
+      if (model === "broken-local:latest") {
+        // Ollama answers 400 for a model whose store it cannot open.
+        response.writeHead(400, { "content-type": "application/json" });
+        response.end('{"error":"mkdir /Volumes/T9-Cold: permission denied"}');
+        return;
+      }
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ capabilities: ["completion", "tools"], model_info: { "m.context_length": 1048576 } }));
+    });
+  });
+  const port = await listen(server);
+  const providerId = "ollama-partly-broken";
+  try {
+    addGenericProvider({
+      id: providerId,
+      displayName: "Ollama partly broken",
+      baseUrl: `http://127.0.0.1:${port}/v1`,
+      adapter: "openai-chat",
+      allowPrivate: true,
+    });
+    const discovery = await discoverGenericProviderModels(providerId, {
+      cache: false,
+      proxyResolvesDestination: false,
+    });
+    assert.deepEqual(shows, ["broken-local:latest", "fine:cloud"]);
+    assert.deepEqual(discovery.contextLengths, { "fine:cloud": 1048576 });
+    assert.deepEqual(discovery.inputModalities, { "fine:cloud": ["text"] });
+  } finally {
+    removeGenericProvider(providerId);
+    await closeServer(server);
+  }
+});
+
+test("generic discovery stops asking /api/show after three leading transport failures", async () => {
+  const { OLLAMA_SHOW_MAX_LEADING_REFUSALS } = await import("../src/generic-providers.mjs");
+  const ids = ["a", "b", "c", "d", "e"];
+  let showCalls = 0;
+  const fetchImpl = async (url) => {
+    const pathname = new URL(url).pathname;
+    if (pathname.endsWith("/models")) {
+      return {
+        ok: true,
+        status: 200,
+        headers: new Headers({ "content-type": "application/json" }),
+        json: async () => ({ data: ids.map((id) => ({ id })) }),
+        text: async () => JSON.stringify({ data: ids.map((id) => ({ id })) }),
+      };
+    }
+    showCalls += 1;
+    throw new TypeError("fetch failed");
+  };
+  const providerId = "ollama-show-timeouts";
+  try {
+    addGenericProvider({
+      id: providerId,
+      displayName: "Ollama show timeouts",
+      baseUrl: "http://127.0.0.1:11434/v1",
+      adapter: "openai-chat",
+      allowPrivate: true,
+    });
+    const discovery = await discoverGenericProviderModels(providerId, {
+      fetchImpl,
+      cache: false,
+      proxyResolvesDestination: false,
+    });
+    assert.equal(showCalls, OLLAMA_SHOW_MAX_LEADING_REFUSALS);
+    assert.deepEqual(discovery.discovered, ids);
+    assert.deepEqual(discovery.contextLengths, {});
+  } finally {
+    removeGenericProvider(providerId);
+  }
 });

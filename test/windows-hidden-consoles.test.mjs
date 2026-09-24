@@ -15,10 +15,10 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 // A source assertion is the only cheap guard here: the failure is invisible on
 // macOS and Linux, and reproducing it needs a Windows desktop session.
 //
-// The exemption is a property of the call, not a list of files: a process that
-// inherits stdin is prompting the operator through a console that already
-// exists, and `windowsHide` is not what governs that case. Everything else --
-// stdio `ignore` or `pipe` -- is a background helper with nothing to show.
+// Only direct PowerShell calls with non-inherited stdio are covered by this
+// static guard. Inherited-stdio calls are excluded; their background safety
+// is not established here. The variable-command spawn in process-tree.mjs is
+// outside this scan and is covered separately by its native owner-console test.
 function sourceFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
     const full = path.join(directory, entry.name);
@@ -121,6 +121,25 @@ test("every background PowerShell invocation hides its console window", () => {
     offenders,
     [],
     `PowerShell launched without windowsHide: true:\n  ${offenders.join("\n  ")}`,
+  );
+});
+
+test("the ordinary control re-exec inherits stdio instead of capturing it", () => {
+  // Issue #775 proposed `stdio: "capture"` here so a windowless Electron
+  // parent would not allocate a console. Capture ignores stdin
+  // (`["ignore", "pipe", "pipe"]` in process-tree), so Control Center
+  // credential writes would arrive empty. Windowless hide belongs to
+  // process-tree's inherit-without-TTY relay; this site must keep inherit.
+  const source = readFileSync(path.join(root, "src/control.mjs"), "utf8");
+  const match = source.match(
+    /await runOperationProcessTree\([\s\S]*?stdio:\s*("[^"]+"|[A-Za-z_$][\w$]*)/,
+  );
+  assert.ok(match, "expected the ordinary control re-exec");
+  assert.equal(match[1], '"inherit"');
+  assert.equal(
+    (source.match(/runOperationProcessTree\(/g) || []).length,
+    1,
+    "a second re-exec would need the same inherit contract",
   );
 });
 

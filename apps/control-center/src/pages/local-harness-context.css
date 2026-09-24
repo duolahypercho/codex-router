@@ -373,7 +373,7 @@
 }
 
 .lhc-harness-list {
-  --lhc-harness-columns: minmax(210px, 1fr) 88px 106px 82px 260px;
+  --lhc-harness-columns: minmax(220px, 1.6fr) 56px 56px 168px;
   display: flex;
   min-height: max-content;
   flex-direction: column;
@@ -402,11 +402,11 @@
   display: grid;
   flex: none;
   grid-template-areas:
-    "identity runtime catalog sessions actions"
-    "setup setup setup setup setup";
+    "identity catalog sessions actions"
+    "setup setup setup setup";
   grid-template-columns: var(--lhc-harness-columns);
   grid-template-rows: minmax(50px, auto) auto;
-  min-height: 76px;
+  min-height: 64px;
   min-width: 0;
   align-items: center;
   column-gap: 12px;
@@ -491,29 +491,17 @@
 }
 
 .lhc-harness-bridge {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 4px;
-  margin-top: 5px;
+  margin: 3px 0 0;
   overflow: hidden;
   color: var(--ink-faint);
-  font-size: 8px;
+  font-size: 8.5px;
+  font-weight: 560;
   line-height: 1.2;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.lhc-harness-bridge svg {
-  flex: 0 0 auto;
-}
-
-.lhc-harness-bridge strong {
-  color: var(--ink-subtle);
-  font-weight: 620;
-}
-
-.lhc-harness-bridge.is-available svg,
-.lhc-harness-bridge.is-available strong {
+.lhc-harness-bridge.is-available {
   color: var(--success);
 }
 
@@ -524,17 +512,16 @@
 .lhc-harness-facts > div {
   min-width: 0;
   color: var(--ink);
-  font-size: 9px;
+  font-size: 11px;
+  font-weight: 560;
   line-height: 1.35;
-}
-
-.lhc-harness-runtime {
-  grid-area: runtime;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-variant-numeric: tabular-nums;
 }
 
 .lhc-harness-catalog {
   grid-area: catalog;
+  justify-self: end;
+  text-align: right;
 }
 
 .lhc-harness-facts span {
@@ -548,25 +535,23 @@
   grid-area: sessions;
   display: inline-flex;
   min-width: 0;
+  justify-self: end;
   align-items: center;
-  gap: 5px;
+  margin: 0;
   padding: 0;
   border: 0;
   background: transparent;
   color: var(--ink);
   cursor: pointer;
   font: inherit;
-  font-size: 9px;
-  text-align: left;
+  font-size: 11px;
+  font-weight: 560;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
 }
 
 .lhc-harness-sessions:hover {
   color: var(--ink-strong);
-}
-
-.lhc-harness-sessions svg {
-  flex: 0 0 auto;
-  color: var(--success);
 }
 
 .lhc-harness-setup {
@@ -690,22 +675,121 @@
 
 .lhc-harness-row > footer {
   grid-area: actions;
-  display: grid;
-  width: 260px;
-  justify-items: stretch;
-  gap: 5px;
+  display: flex;
+  width: 168px;
+  max-width: 100%;
+  min-width: 0;
+  justify-content: flex-end;
+  justify-self: end;
+  flex-wrap: nowrap;
 }
 
 .lhc-harness-actions {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  justify-content: flex-end;
+  flex-wrap: nowrap;
+}
+
+.lhc-harness-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: max-content;
+  max-width: 100%;
+  min-width: 0;
+  flex-wrap: nowrap;
+}
+
+.lhc-harness-hint {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+}
+
+.lhc-harness-launch {
   display: grid;
-  grid-template-columns: minmax(84px, 110px);
-  justify-content: end;
-  width: 260px;
+  flex: 0 0 auto;
+  grid-template-columns: 30px 30px;
+  gap: 6px;
+  width: max-content;
+  min-width: 0;
+}
+
+.lhc-harness-launch:has(.lhc-harness-setup-btn) {
+  grid-template-columns: 72px;
+}
+
+.lhc-harness-setup-btn {
+  grid-column: 1 / -1;
+  width: 72px;
+  padding-inline: 8px;
 }
 
 .lhc-harness-actions .button {
-  width: 100%;
+  min-width: 0;
+  min-height: 30px;
   justify-content: center;
+  padding-inline: 6px;
+}
+
+.lhc-harness-launch .button,
+.lhc-harness-icon-btn {
+  height: 30px;
+  min-height: 30px;
+}
+
+.lhc-harness-icon-btn {
+  width: 30px;
+  min-width: 30px;
+  padding-inline: 0;
+}
+
+.lhc-harness-hint-tooltip {
+  position: absolute;
+  top: 50%;
+  right: calc(100% + 8px);
+  z-index: 20;
+  width: max-content;
+  max-width: min(280px, 48vw);
+  padding: 9px 11px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--ink-strong);
+  box-shadow: 0 8px 20px var(--shadow);
+  color: var(--surface-0);
+  font-size: 10px;
+  font-weight: 540;
+  line-height: 1.4;
+  text-align: left;
+  white-space: normal;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translate(4px, -50%);
+  transition: opacity 100ms ease, transform 100ms ease, visibility 100ms ease;
+}
+
+.lhc-harness-hint:hover .lhc-harness-hint-tooltip,
+.lhc-harness-hint:focus-within .lhc-harness-hint-tooltip {
+  opacity: 1;
+  visibility: visible;
+  transform: translate(0, -50%);
+}
+
+.lhc-harness-hint-tooltip code {
+  font-size: 9.5px;
+  color: inherit;
+}
+
+.lhc-harness-setup-note {
+  margin: 0;
+  max-width: 52rem;
+  color: var(--ink-faint);
+  font-size: 9px;
+  line-height: 1.45;
 }
 
 .lhc-harness-row footer .button,
@@ -961,12 +1045,12 @@
   }
 
   .lhc-harness-list {
-    --lhc-harness-columns: minmax(190px, 1fr) 82px 96px 76px 242px;
+    --lhc-harness-columns: minmax(200px, 1fr) 48px 48px 168px;
   }
 
   .lhc-harness-row > footer,
   .lhc-harness-actions {
-    width: 242px;
+    width: 168px;
   }
 
   .lhc-session-row {
@@ -987,14 +1071,28 @@
   .lhc-harness-row {
     grid-template-areas:
       "identity identity actions"
-      "runtime catalog sessions"
+      "catalog sessions sessions"
       "setup setup setup";
     grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 12px;
   }
 
   .lhc-harness-row > footer {
-    justify-self: end;
+    justify-self: stretch;
+    width: 100%;
+  }
+
+  .lhc-harness-actions,
+  .lhc-harness-toolbar {
+    width: 100%;
+  }
+
+  .lhc-harness-toolbar {
+    justify-content: flex-end;
+  }
+
+  .lhc-harness-launch {
+    width: max-content;
   }
 
   .lhc-harness-origin {
@@ -1045,9 +1143,18 @@
   .lhc-harness-row {
     grid-template-areas:
       "identity identity identity"
-      "runtime catalog sessions"
-      "actions actions actions"
+      "catalog sessions actions"
       "setup setup setup";
+  }
+
+  .lhc-harness-row > footer,
+  .lhc-harness-actions,
+  .lhc-harness-toolbar {
+    width: 100%;
+  }
+
+  .lhc-harness-toolbar {
+    justify-content: flex-start;
   }
 
   .lhc-harness-origin {

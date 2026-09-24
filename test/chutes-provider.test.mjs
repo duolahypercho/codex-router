@@ -57,7 +57,7 @@ test("the macOS tray labels Chutes as a metered API route", () => {
   );
   assert.match(
     sourceLabel,
-    /\["deepseek", "chutes", "orca"\]\.contains\(provider\)[\s\S]*return "METERED API"/,
+    /\["deepseek", "chutes", "orca"\]\.contains\(provider\)[\s\S]*return routerMessage\(\.meteredApi\)/,
   );
 });
 
@@ -165,6 +165,7 @@ test("Chutes public-catalog fixtures drive discovery, deterministic curation, an
       blocked: {},
       unavailable: [],
       contextLengths: { "moonshotai/Kimi-K3-TEE": 262144 },
+      inputModalities: {},
       modelMetadata: [
         {
           upstreamId: "moonshotai/Kimi-K3-TEE",

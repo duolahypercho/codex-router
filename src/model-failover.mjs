@@ -4,9 +4,9 @@ import path from "node:path";
 import { writePrivateJson } from "./file-security.mjs";
 import { STATE_DIR } from "./paths.mjs";
 import { upstreamFailureKind } from "./error-translation.mjs";
+import { isLocalToolArgumentConversionFailure } from "./invalid-function-call.mjs";
 import { PROVIDERS } from "./model-registry.mjs";
 import { cooldownScope } from "./provider-cooldown.mjs";
-import { canonicalProviderId } from "./provider-selection.mjs";
 import { hasProviderTransportError } from "./transport-failure.mjs";
 import {
   routedModelPreservesSearchContract,
@@ -89,6 +89,11 @@ function isoOrUndefined(value) {
 export function classifyRoutedFailure({ status, bodyText, retryAfterSeconds, now } = {}) {
   const code = Number(status);
   if (!Number.isFinite(code) || code < 400) return { swap: false };
+  // A LiteLLM Anthropic-conversion parse of stored tool arguments is a local
+  // request failure. The argument body is echoed in the error and can match a
+  // quota phrase, which would otherwise swap the turn onto another provider
+  // for a request that cannot succeed (#796).
+  if (isLocalToolArgumentConversionFailure(bodyText)) return { swap: false };
   // The local provider forwarder writes this reserved marker only before it
   // has committed a response. A generic provider 5xx remains an application
   // failure and is never switched away silently.
@@ -402,10 +407,16 @@ function eligible(
     requiredSearchMode,
     hasSearchHistory,
     cooled,
+    allowSameFamily,
   },
 ) {
   if (!model?.slug) return false;
-  if (canonicalProviderId(model.provider) === fromProvider) return false;
+  // Compact overflow is the one caller that may hop inside a family: a
+  // 262k Go Messages card and a 1M Go Chat sibling share a credential, so
+  // quota failover must still skip them, but a prompt the 262k card cannot
+  // hold is not evidence the 1M sibling cannot. Same-slug is already
+  // filtered by the ranking. Ordinary turns keep the default.
+  if (!allowSameFamily && cooldownScope(model.provider) === fromProvider) return false;
   if (cooled.has(cooldownScope(model.provider))) return false;
   if (Number.isFinite(estimatedTokens) && Number(model.contextWindow) < estimatedTokens) {
     return false;
@@ -450,8 +461,9 @@ export function rankFailoverCandidates(
     requiredSearchMode: requiredSearchModeOverride,
     chain = [],
     now,
+    allowSameFamily = false,
   } = options;
-  const fromProvider = canonicalProviderId(from?.provider || "");
+  const fromProvider = cooldownScope(from?.provider || "");
   // An explicitly captured absence is part of the request contract. `??`
   // would mistake it for an omitted override and re-read mutable sidecar
   // state after the source snapshot.
@@ -472,6 +484,7 @@ export function rankFailoverCandidates(
         requiredSearchMode,
         hasSearchHistory,
         cooled,
+        allowSameFamily,
       }),
   );
 

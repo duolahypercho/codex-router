@@ -48,11 +48,11 @@ turns.
 
 For a new local Codex thread, omit the `model` field unless the user
 explicitly requested one. The router selects the parent routed model, while an
-explicit model remains a separate user-visible task choice. In-session
-subagents are always pinned to the routed parent's model because their tool
-arguments are model-generated and must not silently cross a provider or billing
-boundary. Follow-up messages retain the target thread's settings, and cloud
-tasks choose their model outside this relay.
+explicit model remains a separate user-visible task choice. An in-session
+subagent keeps an explicit `spawn_agent.model`; only a call that omits it
+inherits the routed parent. Codex validates that name, so pick one the
+`spawn_agent` schema advertises. Follow-up messages retain the target thread's
+settings, and cloud tasks choose their model outside this relay.
 
 ## Waiting for a routed worker
 

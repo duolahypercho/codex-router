@@ -1,6 +1,15 @@
 import { Agent, EnvHttpProxyAgent, fetch as undiciFetch, setGlobalDispatcher } from "undici";
 
+import { connectTimeoutMs } from "./connect-timeout.mjs";
 import { environmentHttpProxyConfigured } from "./proxy-environment.mjs";
+
+// The connect-phase bound lives in `connect-timeout.mjs`, which must stay free
+// of undici (see there). Re-exported here for existing importers.
+export { connectTimeoutMs };
+
+// How long one address attempt may run before the next is tried. Only
+// meaningful with `autoSelectFamily`, whose default is 250ms.
+const AUTO_SELECT_FAMILY_ATTEMPT_TIMEOUT_MS = 250;
 
 // Node 26's bundled fetch negotiates HTTP/2 by default. A live router process
 // observed its pooled session remain destroyed after ERR_HTTP2_INVALID_SESSION,
@@ -21,16 +30,22 @@ import { environmentHttpProxyConfigured } from "./proxy-environment.mjs";
 // hold connections longer than it does -- surfacing as UND_ERR_SOCKET on a
 // POST Undici will not retry. Only the loopback probe pool below, whose one
 // origin is our own server, raises it.
-export function fetchDispatcherOptions() {
+export function fetchDispatcherOptions(environment = process.env) {
   return {
     allowH2: false,
     pipelining: 1,
+    connectTimeout: connectTimeoutMs(environment),
+    autoSelectFamily: true,
+    autoSelectFamilyAttemptTimeout: AUTO_SELECT_FAMILY_ATTEMPT_TIMEOUT_MS,
   };
 }
 
 // `bodyTimeoutMs` raises Undici's 300s idle bound between body chunks. Only a
 // process that carries nothing but long-silent streams (the Grok OAuth
-// forwarder) sets it for its whole pool.
+// forwarder) sets it for its whole pool. The headers bound moves with it: a
+// Grok turn can stay silent until the first response headers, and Undici's
+// 300s headers default would abort that wait while the body bound still had
+// room. Callers that omit `bodyTimeoutMs` keep both defaults.
 export function installStableFetchTransport({
   AgentClass = Agent,
   EnvHttpProxyAgentClass = EnvHttpProxyAgent,
@@ -43,8 +58,8 @@ export function installStableFetchTransport({
     ? EnvHttpProxyAgentClass
     : AgentClass;
   const dispatcher = new DispatcherClass({
-    ...fetchDispatcherOptions(),
-    ...(bodyTimeoutMs ? { bodyTimeout: bodyTimeoutMs } : {}),
+    ...fetchDispatcherOptions(environment),
+    ...(bodyTimeoutMs ? { headersTimeout: bodyTimeoutMs, bodyTimeout: bodyTimeoutMs } : {}),
   });
   setDispatcher(dispatcher);
   return dispatcher;
@@ -72,7 +87,7 @@ export function longIdleStreamDispatcher(bodyTimeoutMs, {
       ? EnvHttpProxyAgentClass
       : AgentClass;
     dispatcher = new DispatcherClass({
-      ...fetchDispatcherOptions(),
+      ...fetchDispatcherOptions(environment),
       headersTimeout: bodyTimeoutMs,
       bodyTimeout: bodyTimeoutMs,
     });

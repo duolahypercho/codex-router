@@ -37,7 +37,7 @@ test("posts a unary call to the service path with the proto content type", async
   const result = await connectUnary({
     baseUrl: "https://server.codeium.com/",
     service: "exa.api_server_pb.ApiServerService",
-    method: "GetCascadeModelConfigs",
+    method: "GetCliModelConfigs",
     token: "tok",
     requestSchema: SCHEMA,
     responseSchema: SCHEMA,
@@ -51,7 +51,7 @@ test("posts a unary call to the service path with the proto content type", async
       };
     },
   });
-  assert.equal(seen.url, "https://server.codeium.com/exa.api_server_pb.ApiServerService/GetCascadeModelConfigs");
+  assert.equal(seen.url, "https://server.codeium.com/exa.api_server_pb.ApiServerService/GetCliModelConfigs");
   assert.equal(seen.init.headers["content-type"], "application/proto");
   assert.equal(seen.init.headers["connect-protocol-version"], "1");
   assert.deepEqual(result, { text: "answer" });

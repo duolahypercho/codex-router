@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import http from "node:http";
 import test from "node:test";
-import { gzipSync } from "node:zlib";
+import { gzipSync, zstdCompressSync } from "node:zlib";
 
 import { handleCursorRequest } from "../src/cursor-surface.mjs";
 import { cursorModelId } from "../src/cursor-model-id.mjs";
@@ -208,6 +208,58 @@ test("Cursor rejects models outside the published routed catalog", async () => {
     });
     assert.equal(response.status, 404);
     assert.equal(upstreamCalls, 0);
+  } finally {
+    await app.close();
+  }
+});
+
+// A zstd frame header declaring an oversize payload, followed by bytes that are
+// not a decodable frame body. The surface has to refuse it on the header alone;
+// if it ever reaches the decoder the trailing garbage fails the inflate instead
+// and the status stops being 413.
+function oversizeZstdFrame(declaredBytes) {
+  const header = Buffer.alloc(9);
+  header.writeUInt32LE(0xfd2fb528, 0);
+  // Single_Segment set, 4-byte Frame_Content_Size, no dictionary id.
+  header[4] = 0xa0;
+  header.writeUInt32LE(declaredBytes, 5);
+  return Buffer.concat([header, Buffer.alloc(64, 0x5a)]);
+}
+
+test("Cursor zstd bodies inflate off the event loop and oversize frames never reach the decoder", async () => {
+  let upstreamCalls = 0;
+  const app = await fixture(async (request, response) => {
+    upstreamCalls += 1;
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk);
+    assert.equal(JSON.parse(Buffer.concat(chunks).toString("utf8")).input, "hello");
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({
+      id: "resp_zstd",
+      output: [{ type: "message", content: [{ type: "output_text", text: "done" }] }],
+    }));
+  });
+  try {
+    const accepted = await fetch(`${app.baseUrl}/cursor/v1/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "content-encoding": "zstd" },
+      body: zstdCompressSync(Buffer.from(JSON.stringify({
+        model: cursorModelId("anthropic-api/claude-test", "high"),
+        input: "hello",
+        stream: false,
+      }))),
+    });
+    assert.equal(accepted.status, 200);
+    assert.equal((await accepted.json()).choices[0].message.content, "done");
+    assert.equal(upstreamCalls, 1);
+
+    const refused = await fetch(`${app.baseUrl}/cursor/v1/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "content-encoding": "zstd" },
+      body: oversizeZstdFrame(64 * 1024 * 1024),
+    });
+    assert.equal(refused.status, 413);
+    assert.equal(upstreamCalls, 1);
   } finally {
     await app.close();
   }

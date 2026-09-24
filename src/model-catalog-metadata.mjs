@@ -211,6 +211,18 @@ export const MODEL_CATALOG_METADATA_SOURCES = Object.freeze({
     "https://openrouter.ai/api/v1/models",
     "https://openrouter.ai/docs/guides/best-practices/reasoning-tokens",
   ]),
+  // StepFun's /v1/models lists ids only, so the audit's evidence for context
+  // windows, effort ladders and pricing is the vendor's own model pages. The
+  // mainland console documents the same models under platform.stepfun.com.
+  "stepfun-api": Object.freeze([
+    "https://api.stepfun.ai/v1/models",
+    "https://platform.stepfun.ai/docs/en/guides/models/step-5-preview",
+    "https://platform.stepfun.ai/docs/en/guides/pricing/details",
+  ]),
+  "stepfun-api-cn": Object.freeze([
+    "https://api.stepfun.com/v1/models",
+    "https://platform.stepfun.com/docs/zh/api-reference/models/list",
+  ]),
   venice: Object.freeze([
     "https://api.venice.ai/api/v1/models",
     "https://docs.venice.ai/guides/features/reasoning-models",

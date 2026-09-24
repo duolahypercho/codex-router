@@ -475,6 +475,7 @@ if (command === "render") {
   // test install is a safety violation, not a restricted Task Scheduler
   // failure, and must exit non-zero without touching the host filesystem.
   guardLauncherWrite();
+  let launcherFailure;
   try {
     // Ensure the checkout directory is readable by the Limited-level scheduled
     // task. An elevated installer creates files with ACLs that only allow the
@@ -493,7 +494,8 @@ if (command === "render") {
     endTask();
     installTask();
     schtasks(["/Run", "/TN", taskName], { quiet: true, mutating: true });
-  } catch {
+  } catch (error) {
+    launcherFailure = error;
     // Scheduled-task creation can be restricted in a non-elevated terminal. The
     // launchers are still written, so the install is reported as success and
     // the caller can retry -- but endTask() has already stopped whatever was
@@ -508,9 +510,36 @@ if (command === "render") {
       // Nothing left to start; the caller's readiness check reports the failure.
     }
   }
+  // `path` names a file the caller is told this install produced, so read it
+  // back rather than assume it. The catch above was written for a restricted
+  // Task Scheduler, but writeLaunchers() runs inside it too: a failed ACL
+  // hardening unlinks the temporary and leaves nothing at `path`, and the
+  // swallowed exception was the only evidence that happened. Reporting a task
+  // that points at a launcher which is not there is the "installed but missing
+  // from disk" of issue #760 -- and because install still exited 0, the
+  // operator's first sign of trouble was the readiness wait failing 300
+  // seconds later with the health probe's own bare "fetch failed".
+  const launchers = existsSync(wrapperPath) && existsSync(launcherPath);
   // Launchers alone are not an installed service. A restricted scheduler (or
   // a test-mode mutation guard) must not claim success when the task is absent.
-  process.stdout.write(`${JSON.stringify({ installed: taskExists(), path: wrapperPath })}\n`);
+  process.stdout.write(
+    `${JSON.stringify({ installed: launchers && taskExists(), launchers, path: wrapperPath })}\n`,
+  );
+  if (!launchers) {
+    // A missing launcher is not the survivable partial install the catch above
+    // tolerates: nothing the task could run exists. Say why, and fail here so
+    // the installer stops on this step instead of on a health probe that can
+    // only report that nothing is listening.
+    console.error(
+      `Failed to write the service launchers to ${STATE_DIR}.`
+        + (launcherFailure
+          ? ` ${launcherFailure instanceof Error ? launcherFailure.message : String(launcherFailure)}`
+          : ""),
+    );
+    // exitCode, not exit(): process.stdout is asynchronous for a Windows
+    // console, and exiting here would truncate the JSON line written above.
+    process.exitCode = 1;
+  }
 } else if (command === "uninstall") {
   // Refuse before `/End`, `/Delete`, or any filesystem removal when a test has
   // not redirected its service state directory.
@@ -555,8 +584,31 @@ if (command === "render") {
   }
   process.stdout.write(`${JSON.stringify({ state: "stopped" })}\n`);
 } else {
-  if (command === "restart") endTask();
-  setTaskEnabled(true);
-  schtasks(["/Run", "/TN", taskName], { quiet: true, mutating: true });
-  process.stdout.write(`${JSON.stringify({ state: "running" })}\n`);
+  // start and restart. `stop` above has always guarded on taskExists(); these
+  // two did not, so an absent registration reached the operator as
+  // schtasks.exe's own complaint about `/Change` against a name that is not
+  // there -- with no statement of which task, and no fix (issue #760). That
+  // state is reachable: a restricted Task Scheduler leaves `install` reporting
+  // `installed: false` with the launchers written, and the reporter also had
+  // the task torn out from under them by the rollback #767 removed.
+  //
+  // There is nothing to recover here. `/Run` would fail the same way one call
+  // later, and re-registering the task behind a `start` would make a lifecycle
+  // verb quietly perform an install -- the asymmetry the "stop and start act
+  // on the same layer" rule exists to prevent. So name the task, say it is not
+  // registered, and point at the command that registers it.
+  if (!taskExists()) {
+    console.error(
+      `The "${taskName}" scheduled task is not registered, so there is nothing to ${command}. `
+        + "Register it with `node src/service.mjs install`, or repair the whole "
+        + "installation with `./model-router.ps1 codex doctor --fix`.",
+    );
+    // exitCode, not exit(): stdout is asynchronous for a Windows console.
+    process.exitCode = 1;
+  } else {
+    if (command === "restart") endTask();
+    setTaskEnabled(true);
+    schtasks(["/Run", "/TN", taskName], { quiet: true, mutating: true });
+    process.stdout.write(`${JSON.stringify({ state: "running" })}\n`);
+  }
 }

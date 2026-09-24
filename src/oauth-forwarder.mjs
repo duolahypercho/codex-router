@@ -19,14 +19,12 @@ import {
   kimiIdentityHeaders,
   readKimiOAuthToken,
 } from "./kimi-oauth-session.mjs";
+import { resolveKimiCodeEnvironment } from "./kimi-region.mjs";
 import { PORTS, TARGET } from "./paths.mjs";
 import { installStableFetchTransport } from "./fetch-transport.mjs";
 
 installStableFetchTransport();
 
-const API_BASE = (
-  process.env.KIMI_CODE_BASE_URL || "https://api.kimi.com/coding/v1"
-).replace(/\/+$/, "");
 const LISTEN_HOST =
   process.env.MODEL_ROUTER_OAUTH_HOST ||
   (TARGET === "codex"
@@ -59,6 +57,7 @@ function normalizeKimiBody(buffer, contentType) {
   const payload = JSON.parse(buffer.toString("utf8"));
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return buffer;
   delete payload.client_metadata;
+  delete payload.access_programs;
   foldInterveningAssistantMessages(payload.messages);
   payload.thinking = { type: "enabled" };
   if (payload.model === "k3") {
@@ -166,7 +165,7 @@ async function handleRequest(request, response) {
   if (route === "/chat/completions") {
     body = normalizeKimiBody(body, request.headers["content-type"]);
   }
-  const target = `${API_BASE}${route}${requestUrl.search}`;
+  const target = `${resolveKimiCodeEnvironment().apiBase}${route}${requestUrl.search}`;
   let token = await ensureFreshKimiOAuthToken();
   let upstream = await requestUpstream(request, target, body, token, controller.signal);
   if (upstream.status === 401) {
