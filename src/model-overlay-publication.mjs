@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 
 import { protectPrivateFile } from "./file-security.mjs";
 import { withModelOverlayLock } from "./model-overlay-lock.mjs";
+import { routerNodeBinary } from "./node-runtime.mjs";
 import {
   ROUTER_SERVICE_RESTART_MINIMUM_MS,
   ROUTER_SERVICE_RESTART_OPERATION_MS,
@@ -208,9 +209,9 @@ export async function rebuildModelOverlayPublication({
  */
 export async function publishModelOverlayFresh({
   run = runProcessTree,
-  executable = process.execPath,
   sourceRoot = REPO_ROOT,
   environment = process.env,
+  executable = routerNodeBinary(environment),
   signal,
   deadline,
 } = {}) {

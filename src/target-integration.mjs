@@ -22,6 +22,7 @@ import {
 // imported; the markers are a compatibility surface that lives in users'
 // config files and cannot change without a migration anyway.
 import { clientRestartNotice } from "./client-restart-notice.mjs";
+import { routerNodeBinary } from "./node-runtime.mjs";
 import {
   operationDeadlineFromEnvironment,
   remainingOperationMs,
@@ -69,9 +70,9 @@ export async function runTargetPublicationProcess(
   {
     signal,
     deadline,
-    executable = process.execPath,
     sourceRoot = SOURCE_ROOT,
     environment = process.env,
+    executable = routerNodeBinary(environment),
     run = runProcessTree,
   } = {},
 ) {
@@ -232,7 +233,7 @@ export async function refreshTargetPickerIfInstalled({ signal, deadline } = {}) 
     // an external transaction on exit, so leave the existing publication in
     // place and let doctor report catalog drift until the user quits Cursor.
     const status = JSON.parse(
-      execFileSync(process.execPath, [path.join(SOURCE_ROOT, "src", "cursor-config-manager.mjs"), "status"], {
+      execFileSync(routerNodeBinary(), [path.join(SOURCE_ROOT, "src", "cursor-config-manager.mjs"), "status"], {
         cwd: SOURCE_ROOT,
         env: process.env,
         encoding: "utf8",

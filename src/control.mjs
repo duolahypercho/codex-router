@@ -46,6 +46,7 @@ import {
   runOperationProcessTree,
 } from "./process-tree.mjs";
 import { inheritedProxyEnvironment } from "./proxy-environment.mjs";
+import { routerNodeBinary } from "./node-runtime.mjs";
 import { installStableFetchTransport } from "./fetch-transport.mjs";
 
 // The tray launches this control process from the desktop session, which can
@@ -122,7 +123,7 @@ if (!selfReplacingControl && !boundedOperationChild(process.env, {
     timeoutMs: maximumControlOperationMs,
     maximumMs: maximumControlOperationMs,
   });
-  const result = await runOperationProcessTree(process.execPath, [SELF, ...args], {
+  const result = await runOperationProcessTree(routerNodeBinary(), [SELF, ...args], {
     cwd: REPO_ROOT,
     env: process.env,
     childEnvironment: {
@@ -145,7 +146,7 @@ function targetIsActive(target) {
   if (target === "cursor") return existsSync(CURSOR_PUBLISHED);
   if (target === "claude") return existsSync(CLAUDE_PUBLISHED);
   if (target === "openclaw") return existsSync(OPENCLAW_PUBLISHED);
-  const result = spawnSync(process.execPath, [path.join(REPO_ROOT, "src", "service.mjs"), "status"], {
+  const result = spawnSync(routerNodeBinary(), [path.join(REPO_ROOT, "src", "service.mjs"), "status"], {
     env: { ...process.env, MODEL_ROUTER_TARGET: target },
     encoding: "utf8",
   });
@@ -172,7 +173,7 @@ function configuredDefaultModel(configPath) {
 
 function codexConfigSnapshot() {
   const result = spawnSync(
-    process.execPath,
+    routerNodeBinary(),
     [path.join(REPO_ROOT, "src", "config-manager.mjs"), "status"],
     { env: { ...process.env, MODEL_ROUTER_TARGET: "codex" }, encoding: "utf8" },
   );
@@ -569,7 +570,7 @@ async function routerCatalogSnapshot() {
 // and wait for the set: identical work, a quarter of the wall clock.
 function runProbe(target) {
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, [SELF, "--probe"], {
+    const child = spawn(routerNodeBinary(), [SELF, "--probe"], {
       env: { ...process.env, MODEL_ROUTER_TARGET: target },
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -664,7 +665,7 @@ function requestedControlTargets() {
 
 function setProviderSelectionForTargets(provider, desired, selected) {
   for (const target of selected) {
-    const result = spawnSync(process.execPath, [SELF, "--probe-set", provider, desired], {
+    const result = spawnSync(routerNodeBinary(), [SELF, "--probe-set", provider, desired], {
       env: { ...process.env, MODEL_ROUTER_TARGET: target },
       encoding: "utf8",
     });
@@ -690,17 +691,17 @@ async function runSet(provider, desired) {
 function refreshActiveTarget(target) {
   const command =
     target === "codex"
-      ? [process.execPath, [path.join(REPO_ROOT, "src", "catalog.mjs")]]
+      ? [routerNodeBinary(), [path.join(REPO_ROOT, "src", "catalog.mjs")]]
       : target === "dsh"
-        ? [process.execPath, [path.join(REPO_ROOT, "src", "dsh-config-manager.mjs"), "install"]]
+        ? [routerNodeBinary(), [path.join(REPO_ROOT, "src", "dsh-config-manager.mjs"), "install"]]
         : target === "gemini"
-          ? [process.execPath, [path.join(REPO_ROOT, "src", "gemini-config-manager.mjs"), "install"]]
+          ? [routerNodeBinary(), [path.join(REPO_ROOT, "src", "gemini-config-manager.mjs"), "install"]]
           : target === "cursor"
-            ? [process.execPath, [path.join(REPO_ROOT, "src", "cursor-config-manager.mjs"), "install"]]
+            ? [routerNodeBinary(), [path.join(REPO_ROOT, "src", "cursor-config-manager.mjs"), "install"]]
           : target === "claude"
-            ? [process.execPath, [path.join(REPO_ROOT, "src", "claude-code-config-manager.mjs"), "install"]]
+            ? [routerNodeBinary(), [path.join(REPO_ROOT, "src", "claude-code-config-manager.mjs"), "install"]]
           : target === "openclaw"
-            ? [process.execPath, [path.join(REPO_ROOT, "src", "openclaw-config-manager.mjs"), "install"]]
+            ? [routerNodeBinary(), [path.join(REPO_ROOT, "src", "openclaw-config-manager.mjs"), "install"]]
           : undefined;
   if (!command) return;
   const result = spawnSync(command[0], command[1], {
@@ -1122,7 +1123,7 @@ async function setLoginFreeMode(desired) {
     }
   }
   const catalog = spawnSync(
-    process.execPath,
+    routerNodeBinary(),
     [path.join(REPO_ROOT, "src", "catalog.mjs")],
     {
       cwd: REPO_ROOT,
@@ -1145,7 +1146,7 @@ async function setLoginFreeMode(desired) {
   const commandArgs = [path.join(REPO_ROOT, "src", "config-manager.mjs"), command];
   if (loginFreeModel) commandArgs.push(loginFreeModel);
   const result = spawnSync(
-    process.execPath,
+    routerNodeBinary(),
     commandArgs,
     {
       cwd: REPO_ROOT,
@@ -1173,7 +1174,7 @@ async function setSignedRouting(desired) {
   }
   const command = desired === "on" ? "signed-enable" : "signed-disable";
   const runConfig = (configCommand = command) => spawnSync(
-    process.execPath,
+    routerNodeBinary(),
     [path.join(REPO_ROOT, "src", "config-manager.mjs"), configCommand],
     {
       cwd: REPO_ROOT,
@@ -1189,7 +1190,7 @@ async function setSignedRouting(desired) {
     };
     if (!allowTestFault) delete environment.MODEL_ROUTER_TEST_FAIL_AFTER_CATALOG_WRITE;
     return spawnSync(
-      process.execPath,
+      routerNodeBinary(),
       [path.join(REPO_ROOT, "src", "catalog.mjs")],
       {
       cwd: REPO_ROOT,
@@ -1263,7 +1264,7 @@ async function setLoginFreeModel(slug) {
   const { nativeAliasFor } = await import("./native-alias.mjs");
   const configModel = nativeAliasFor(value) || value;
   const result = spawnSync(
-    process.execPath,
+    routerNodeBinary(),
     [path.join(REPO_ROOT, "src", "config-manager.mjs"), "login-free-enable", configModel],
     {
       cwd: REPO_ROOT,
@@ -1300,7 +1301,7 @@ async function setRouterDefault(action, slug) {
   }
   const command = action === "set" ? "router-default-set" : "router-default-clear";
   const result = spawnSync(
-    process.execPath,
+    routerNodeBinary(),
     [path.join(REPO_ROOT, "src", "config-manager.mjs"), command, ...(value ? [value] : [])],
     {
       cwd: REPO_ROOT,
@@ -1322,7 +1323,7 @@ async function updateAndVerifyCodex() {
 function runDoctor(args) {
   const json = args.includes("--json");
   const result = spawnSync(
-    process.execPath,
+    routerNodeBinary(),
     [path.join(REPO_ROOT, "src", "doctor.mjs"), ...args],
     {
       cwd: REPO_ROOT,
@@ -2121,7 +2122,7 @@ async function handleVisionBridge(action, value, extra) {
         workerPid: null,
       });
       const child = spawn(
-        process.execPath,
+        routerNodeBinary(),
         [path.join(REPO_ROOT, "src", "vision-download.mjs"), tag],
         // windowsHide matters more here than anywhere else: a detached child
         // gets its own console on Windows, and this one lives for the length of
@@ -2555,7 +2556,7 @@ async function handleLocalModels(action, value, ...rest) {
       await ensureOllamaHeadless({ install: installRuntime });
       if (cancelled()) return;
       writePhase("Starting model download");
-      const child = spawn(process.execPath, [path.join(REPO_ROOT, "src", "local-download.mjs"), tag], {
+      const child = spawn(routerNodeBinary(), [path.join(REPO_ROOT, "src", "local-download.mjs"), tag], {
         detached: true,
         env: detachedOperationEnvironment(),
         stdio: "ignore",
@@ -2700,7 +2701,7 @@ async function handleLocalModels(action, value, ...rest) {
       });
       try {
         const child = spawn(
-          process.execPath,
+          routerNodeBinary(),
           [path.join(REPO_ROOT, "src", "local-uninstall.mjs"), tag],
           {
             detached: true,
@@ -2915,7 +2916,7 @@ function handleService(action) {
     throw new Error(`Usage: control service ${SERVICE_COMMANDS.join("|")}`);
   }
   const result = spawnSync(
-    process.execPath,
+    routerNodeBinary(),
     [path.join(REPO_ROOT, "src", "service.mjs"), value],
     { stdio: ["inherit", "pipe", "pipe"], env: process.env, encoding: "utf8" },
   );
@@ -2939,7 +2940,7 @@ function handleTray(action) {
   const value = action || "status";
   if (value === "refresh") {
     const plan = spawnSync(
-      process.execPath,
+      routerNodeBinary(),
       [path.join(REPO_ROOT, "src", "install-plan.mjs"), "tray-plan"],
       { cwd: REPO_ROOT, env: process.env, encoding: "utf8" },
     );
@@ -3013,7 +3014,7 @@ function handleTray(action) {
         { stdio: "inherit", env: process.env, windowsHide: true },
       )
     : spawnSync(
-        process.execPath,
+        routerNodeBinary(),
         [path.join(REPO_ROOT, "src", "tray-service.mjs"), subcommand],
         { stdio: "inherit", env: process.env, windowsHide: true },
       );

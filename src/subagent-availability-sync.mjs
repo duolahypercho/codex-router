@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import path from "node:path";
 
 import { SOURCE_ROOT, TARGET } from "./paths.mjs";
+import { routerNodeBinary } from "./node-runtime.mjs";
 import { nextQuotaCooldownExpiry } from "./provider-cooldown.mjs";
 
 const MIN_TIMER_MS = 250;
@@ -33,7 +34,7 @@ export function refreshSubagentAvailability() {
     refreshQueued = true;
     return;
   }
-  refreshChild = spawn(process.execPath, [path.join(SOURCE_ROOT, "src", "catalog.mjs")], {
+  refreshChild = spawn(routerNodeBinary(), [path.join(SOURCE_ROOT, "src", "catalog.mjs")], {
     cwd: SOURCE_ROOT,
     env: { ...process.env, MODEL_ROUTER_TARGET: TARGET },
     stdio: "ignore",
