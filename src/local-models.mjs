@@ -28,6 +28,7 @@ import {
   localOllamaRuntimeSnapshot,
   ollamaCommand,
   ollamaModelsPath,
+  probeOllama,
 } from "./ollama-runtime.mjs";
 import { readLocalDownload, writeLocalDownload } from "./local-download.mjs";
 import {
@@ -401,7 +402,7 @@ export function parseOllamaList(stdout) {
 
 export function localModelInventory({ spawn = spawnSync } = {}) {
   try {
-    const result = spawn(localOllamaBinary(spawn), ["list"], { encoding: "utf8" });
+    const result = spawn(localOllamaBinary(spawn), ["list"], { encoding: "utf8", timeout: 2000, windowsHide: true });
     if (result.status !== 0 || typeof result.stdout !== "string") return [];
     return parseOllamaList(result.stdout);
   } catch {
@@ -414,12 +415,29 @@ export function localModelInventory({ spawn = spawnSync } = {}) {
 // request pays a load penalty the operator should be able to see coming.
 export function runningLocalModels({ spawn = spawnSync } = {}) {
   try {
-    const result = spawn(localOllamaBinary(spawn), ["ps"], { encoding: "utf8" });
+    const result = spawn(localOllamaBinary(spawn), ["ps"], { encoding: "utf8", timeout: 2000, windowsHide: true });
     if (result.status !== 0 || typeof result.stdout !== "string") return [];
     return parseOllamaList(result.stdout).map((entry) => entry.tag);
   } catch {
     return [];
   }
+}
+
+// On Windows, invoking Ollama's installed executable with `list` while its
+// server is off can launch the desktop app and never return. Probe the loopback
+// API first so status reads remain read-only and bounded.
+export async function localModelStatusInputs({
+  probe = probeOllama,
+  inventory = localModelInventory,
+  running = runningLocalModels,
+  runtime = localOllamaRuntimeSnapshot,
+} = {}) {
+  const serverReachable = (await probe()).reachable === true;
+  return {
+    inventory: serverReachable ? inventory() : [],
+    running: serverReachable ? running() : [],
+    runtime: runtime({ serverReachable }),
+  };
 }
 
 // Answers "is this model checked?" across spellings, so a caller holding
