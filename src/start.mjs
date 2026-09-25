@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeSync } from "node:fs";
 import path from "node:path";
 
 import { assertCallerSecret } from "./caller-auth.mjs";
@@ -31,6 +31,14 @@ import { venvRuntimeProblem } from "./venv-runtime.mjs";
 import { dependencyRepairHint } from "./dependency-repair.mjs";
 import { clearServiceProcessState, writeServiceProcessState } from "./service-process.mjs";
 import {
+  STARTUP_BACKOFF_EXIT_CODE,
+  clearStartupAttempts,
+  readStartupAttempts,
+  recordStartupFailure,
+  startupBackoffDisabled,
+  startupBackoffRemainingMs,
+} from "./startup-attempts.mjs";
+import {
   environmentProxyOptedIn,
   inheritedProxyEnvironment,
   redactProxyCredentials,
@@ -39,6 +47,34 @@ import { antigravityOAuthStatus } from "./antigravity-oauth-status.mjs";
 import { cursorTunnelRunSpec } from "./cursor-cloudflare-tunnel.mjs";
 import { pruneUnconfiguredProviders } from "./provider-selection.mjs";
 import { targetCli } from "./target-integration.mjs";
+
+// The back-off gate comes first, before anything reads the environment or
+// spawns a child, because the work it is skipping is the expensive part: the
+// virtualenv probe alone is allowed 45s, and the launcher's heartbeat would run
+// it every minute on the same host that is failing to start the service.
+//
+// Failures recorded here are the ones the startup pipeline reports; a
+// module-level configuration failure (a missing gateway launcher, a missing
+// key) still fails fast and is not recorded, so it keeps the heartbeat's normal
+// rate -- those are operator errors that need fixing, not a host that needs
+// room. An explicit `service start`/`restart` clears the record before it runs
+// this file, and the environment switch below is the way out if the record
+// itself ever misbehaves.
+if (!startupBackoffDisabled()) {
+  const backoffRecord = readStartupAttempts();
+  const backoffRemaining = startupBackoffRemainingMs(backoffRecord);
+  if (backoffRemaining > 0) {
+    // Written synchronously on purpose: process.exit() does not flush an
+    // asynchronous stream, and this message is the entire point of the exit.
+    writeSync(
+      2,
+      `[model-router] backing off for another ${Math.ceil(backoffRemaining / 1000)}s after ` +
+        `${backoffRecord?.consecutiveFailures ?? 0} consecutive failed start(s); ` +
+        "`service restart` clears this, and CODEX_ROUTER_DISABLE_STARTUP_BACKOFF=1 bypasses it.\n",
+    );
+    process.exit(STARTUP_BACKOFF_EXIT_CODE);
+  }
+}
 
 // Before anything reads the environment or spawns a child. A service manager
 // hands this process the proxy the install recorded; a shell hands it whatever
@@ -469,6 +505,14 @@ async function main() {
     : undefined;
 
   console.error(`[${frontendService}] ready (authenticated loopback endpoint)`);
+  // The service is serving, so the previous failures are over: clear the
+  // back-off record rather than leaving it to delay the next legitimate start.
+  try {
+    clearStartupAttempts();
+  } catch {
+    // A stale record only costs the next automatic retry a delay, and any
+    // explicit start clears it anyway.
+  }
   // Only the gateway is supervised. The forwarders and the router are ours and
   // are restarted by rebuilding the whole service; the gateway is a third-party
   // Python process that can end itself on a single bad upstream response
@@ -533,6 +577,7 @@ try {
   if (!shuttingDown) {
     const reason = (error instanceof Error && error.message) || String(error);
     console.error(`[model-router] startup failed: ${reason}; inspect the service logs above for details.`);
+    recordStartupFailure({ reason });
     exitCode = 1;
   }
 } finally {

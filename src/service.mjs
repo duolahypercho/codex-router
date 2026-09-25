@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { SOURCE_ROOT } from "./paths.mjs";
+import { clearStartupAttempts } from "./startup-attempts.mjs";
 import { stopManagedOllama } from "./ollama-runtime.mjs";
 import { waitForServiceReadiness } from "./service-readiness.mjs";
 import { withServiceOperationLock } from "./service-operation-lock.mjs";
@@ -65,6 +66,24 @@ export async function runServiceCommandUnlocked(
     ...process.env,
     ...(environmentProxyOptedIn() ? { NODE_USE_ENV_PROXY: "1" } : {}),
   };
+  // An explicit start, restart or install is an operator decision, and the
+  // automatic retry back-off must never refuse it. Clearing here rather than in
+  // each platform renderer is what makes that true on every host: the Windows
+  // renderer also clears before its own /Run, but the macOS and Linux renderers
+  // had no equivalent, so an operator's restart could be gated on the machine
+  // that is not Windows.
+  if (mutatingCommands.has(command)) {
+    try {
+      clearStartupAttempts();
+    } catch (error) {
+      // A record that cannot be removed must not stop the operator's command;
+      // this same command and the kill switch both remain available.
+      console.error(
+        "[model-router] warning: could not clear the startup back-off record: " +
+          `${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
   // Synchronous service renderers can own grandchildren. Do not apply a
   // direct-child timeout here: it could orphan those descendants and let them
   // mutate the service after the UI reports failure. The outer desktop runner

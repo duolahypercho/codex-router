@@ -19,8 +19,10 @@ import {
 import {
   clearServiceProcessState,
   readServiceProcessState,
-  serviceProcessOwns,
+  serviceProcessOwnership,
+  serviceRecordSettled,
 } from "./service-process.mjs";
+import { clearStartupAttempts } from "./startup-attempts.mjs";
 import { ensureCheckoutReadable, protectPrivateFile } from "./file-security.mjs";
 import { providerApiKeyServiceEnvironment } from "./provider-api-key-service-environment.mjs";
 import { serviceProxyEnvironment } from "./proxy-environment.mjs";
@@ -331,15 +333,44 @@ function managedPortStillListening(state) {
   }
 }
 
+// Bounds, stated exactly as they are: one ownership probe before the kill (a
+// precondition, and it can spend its whole budget), then taskkill, then a wait
+// that stops a reserve short of the deadline so the final check has budget of
+// its own, then that final check. Each poll carries a bounded probe budget, so
+// the wait cannot be stretched by an unanswerable host; its last poll can still
+// overrun by one ownership check (up to three probe spawns plus the port probe),
+// which is why the reserve exists rather than the wait consuming the deadline.
+//
+// The reserve is not decoration: the loop exits only once its condition fails,
+// check guarded by "remaining > 0" measured against the raw deadline is
+// could never run at all: the loop exits only once its condition fails, so a
+const FINAL_CHECK_RESERVE_MS = 6_000;
+
 function stopOwnedServiceTree() {
   // This path can issue taskkill and then poll process/port state for 15s.
   // Under test, the service-manager mutation was skipped, so there is no
   // owned tree to stop and no reason to touch the host or wait on it.
   if (skipServiceManagerCall({ hostManaged: HOST_MANAGED })) return;
   const state = readServiceProcessState();
-  if (!state || state.pid === process.pid || !serviceProcessOwns(state, { platform: effectivePlatform })) {
+  if (!state || state.pid === process.pid) return;
+
+  const ownership = serviceProcessOwnership(state, { platform: effectivePlatform });
+  if (ownership === "unknown") {
+    // The probe could not run, so nothing here can prove the tree is ours.
+    // Killing on an unproven identity is exactly what the identity check
+    // exists to prevent, so the kill is skipped -- but returning silently
+    // would report a completed stop that never happened, and the replacement
+    // start would then collide with a live listener on the same ports. Keep
+    // the record so a later stop, on a host that can answer, retries it.
+    console.error(
+      "[codex-router] warning: the service process could not be identified " +
+        `(pid ${state.pid}, and the probe did not answer); leaving it running and ` +
+        "keeping the record for a later stop.",
+    );
     return;
   }
+  if (ownership !== "owned") return;
+
   try {
     execFileSync("taskkill.exe", ["/PID", String(state.pid), "/T", "/F"], {
       encoding: "utf8",
@@ -352,21 +383,43 @@ function stopOwnedServiceTree() {
     // for another reason, the bounded wait below leaves the record intact so a
     // later stop can try the same verified identity again.
   }
+  const pollBudget = { timeoutMs: SERVICE_TREE_COMMAND_TIMEOUT_MS, attempts: 1 };
   const deadline = Date.now() + SERVICE_TREE_STOP_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    const alive = serviceProcessOwns(state, { platform: effectivePlatform });
-    const listening = managedPortStillListening(state);
-    if (!alive && !listening) {
+  const waitUntil = deadline - FINAL_CHECK_RESERVE_MS;
+  while (Date.now() < waitUntil) {
+    const ownership = serviceProcessOwnership(state, {
+      platform: effectivePlatform,
+      probeBudget: pollBudget,
+    });
+    if (
+      serviceRecordSettled({
+        ownership,
+        portListening: managedPortStillListening(state),
+      })
+    ) {
       clearServiceProcessState();
       return;
     }
-    sleep(SERVICE_TREE_STOP_POLL_MS);
+    sleep(Math.min(SERVICE_TREE_STOP_POLL_MS, Math.max(0, waitUntil - Date.now())));
   }
-  if (
-    !serviceProcessOwns(state, { platform: effectivePlatform }) &&
-    !managedPortStillListening(state)
-  ) {
-    clearServiceProcessState();
+  // The loop's last poll can leave the tree already gone, so one final check is
+  // worth it -- drawn from the reserve, split across the ownership check's three
+  // probe spawns. When nothing is left, the record stays and a later stop
+  // retries it.
+  const remaining = deadline - Date.now();
+  if (remaining > 0) {
+    const ownership = serviceProcessOwnership(state, {
+      platform: effectivePlatform,
+      probeBudget: { timeoutMs: Math.max(1, Math.floor(remaining / 3)), attempts: 1 },
+    });
+    if (
+      serviceRecordSettled({
+        ownership,
+        portListening: managedPortStillListening(state),
+      })
+    ) {
+      clearServiceProcessState();
+    }
   }
 }
 
@@ -497,6 +550,9 @@ if (command === "render") {
     // hidden run — the console window would survive until the next logon.
     endTask();
     installTask();
+    // An install is an explicit operator action: clear the automatic retry
+    // back-off so the run below is never refused by a previous failure.
+    clearStartupAttempts();
     schtasks(["/Run", "/TN", taskName], { quiet: true, mutating: true });
   } catch (error) {
     launcherFailure = error;
@@ -509,6 +565,10 @@ if (command === "render") {
     // snapshot was taken, and re-creating the old console-visible action would
     // reintroduce the very defect this launcher exists to fix.
     try {
+      // The recovery run is still an explicit install's run, so the back-off
+      // must not refuse it either: this branch is reached when registration
+      // threw, which is exactly when an operator needs the run to happen.
+      clearStartupAttempts();
       if (taskExists()) schtasks(["/Run", "/TN", taskName], { quiet: true, mutating: true });
     } catch {
       // Nothing left to start; the caller's readiness check reports the failure.
@@ -612,6 +672,19 @@ if (command === "render") {
   } else {
     if (command === "restart") endTask();
     setTaskEnabled(true);
+    // Same rule as install: an explicit start or restart is an operator
+    // decision, and the automatic retry back-off must not refuse it. The shared
+    // service entrypoint clears this too, for the platforms that had no
+    // equivalent; this covers a direct invocation of the renderer.
+    try {
+      clearStartupAttempts();
+    } catch (error) {
+      // Losing the clear must not cost the operator the command they asked for.
+      console.error(
+        "[model-router] warning: could not clear the startup back-off record: " +
+          `${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
     schtasks(["/Run", "/TN", taskName], { quiet: true, mutating: true });
     process.stdout.write(`${JSON.stringify({ state: "running" })}\n`);
   }
