@@ -258,7 +258,14 @@ export function protectPrivateFile(target) {
 
 // All private JSON state uses the same temp-file, owner-only, atomic replace.
 // Keeping it here prevents one state writer from drifting away from the rest.
-export function writePrivateFile(target, contents, { directoryMode } = {}) {
+//
+// `hardenFailure: "warn"` is for a caller whose write must survive a PowerShell
+// that cannot start. It is not a general relaxation: the default stays "throw",
+// and only service-process.json opts in. That record is a PID, an identity
+// string, paths and ports -- no credential -- and it lives in a state directory
+// whose own ACL already applies, so a cold-host ACL timeout should cost the
+// file its extra hardening rather than cost the router its startup.
+export function writePrivateFile(target, contents, { directoryMode, hardenFailure = "throw" } = {}) {
   const directory = path.dirname(target);
   const createdDirectory = mkdirSync(directory, { recursive: true, mode: 0o700 });
   // A caller may inject a credential path for an isolated test, but it never
@@ -276,7 +283,16 @@ export function writePrivateFile(target, contents, { directoryMode } = {}) {
       // with it, so the destination inherits the same owner-only ACL without a
       // second PowerShell cold start. A pre-existing target that is being
       // replaced is discarded with the move, so it cannot leak permissions.
-      protectPrivateFilesWin32([temporary]);
+      try {
+        protectPrivateFilesWin32([temporary]);
+      } catch (error) {
+        if (hardenFailure !== "warn") throw error;
+        console.warn(
+          `[codex-router] warning: could not harden the ACL on ${target}: ` +
+            `${error instanceof Error ? error.message : String(error)}; continuing ` +
+            "(the state directory's own ACL still applies).",
+        );
+      }
       renameSync(temporary, target);
     } else {
       protectPrivateFile(temporary);
@@ -316,8 +332,8 @@ export async function writePrivateFileAsync(target, contents, { directoryMode } 
   return target;
 }
 
-export function writePrivateJson(target, value, { space = 2, directoryMode } = {}) {
-  writePrivateFile(target, `${JSON.stringify(value, null, space)}\n`, { directoryMode });
+export function writePrivateJson(target, value, { space = 2, directoryMode, hardenFailure = "throw" } = {}) {
+  writePrivateFile(target, `${JSON.stringify(value, null, space)}\n`, { directoryMode, hardenFailure });
   return value;
 }
 
