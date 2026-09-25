@@ -889,6 +889,21 @@ test("the skills step runs after the rollback trap is disarmed", () => {
   assert.ok(trapDisarmed < skillsStep, "skills step must run after the trap is disarmed");
 });
 
+test("a failed skill refresh does not fail the POSIX install", { skip: !POSIX_SHELL_AVAILABLE }, () => {
+  const source = readScript("bin", "install");
+  const start = source.indexOf('if [ "$target" = codex ]; then', source.indexOf("# The skill pack"));
+  const end = source.indexOf("\nfi\n", start);
+  assert.ok(start >= 0 && end > start, "bin/install must keep the Codex skills step");
+  const skillsStep = source.slice(start, end + 4);
+  const result = spawnSync("sh", ["-eu", "-c", `target=codex
+node() { return 2; }
+${skillsStep}
+printf 'continued\\n'`], { encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /continued/);
+  assert.match(result.stderr, /skills could not be refreshed/);
+});
+
 test("uninstall removes the managed skills", () => {
   const source = readScript("bin", "uninstall");
   assert.match(source, /skills-install\.mjs uninstall/, "bin/uninstall must remove the managed skills");
