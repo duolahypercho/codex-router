@@ -800,7 +800,19 @@ export function writeStreamErrorEvent(response, { code, message }) {
   if (!isEventStream(response)) return false;
   try {
     const data = { type: "error", code, message, param: null };
-    response.write(`\n\nevent: error\ndata: ${JSON.stringify(data)}\n\n`);
+    // The terminator travels with the failure frame, not as an extra courtesy:
+    // a client whose parser waits for end-of-stream reports a broken stream --
+    // "stream closed before response.completed" / "error decoding response
+    // body" -- instead of the failure just stated when the stream simply
+    // stops. Every caller of this function is stating a terminal failure (it
+    // either ends the response immediately or returns out of the relay), and
+    // the surfaces that do not speak this marker already skip it:
+    // `claude-surface.mjs` ignores `[DONE]` explicitly, and the chat bridges
+    // treat it as done. Measured 2026-09-21: a routed client surfaced a
+    // transport decode error rather than the router's `precontent_limit`.
+    response.write(
+      `\n\nevent: error\ndata: ${JSON.stringify(data)}\n\ndata: [DONE]\n\n`,
+    );
     return true;
   } catch {
     // The socket may already be gone; the caller ends the response anyway.
