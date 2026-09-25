@@ -41,3 +41,12 @@ export function venvRuntimeProblem(
   }
   return undefined;
 }
+
+// A timeout is the one probe outcome that is not evidence about the venv: the
+// child never ran. Callers that guard against a genuinely broken environment
+// can continue on this and let the dependency's own startup be the judge --
+// measured 2026-09-21, when scheduling pressure on a saturated host timed out
+// this probe and the fatal path took the whole router down with it.
+export function isTransientVenvProblem(problem) {
+  return typeof problem === "string" && problem.startsWith("timed out after ");
+}

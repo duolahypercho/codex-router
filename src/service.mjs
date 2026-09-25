@@ -22,12 +22,12 @@ if (!script) {
 const mutatingCommands = new Set(["install", "uninstall", "start", "stop", "restart"]);
 const readinessCommands = new Set(["install", "start", "restart"]);
 const shutdownCommands = new Set(["stop", "uninstall"]);
-// start.mjs allows the LiteLLM gateway 300s to cold start, so the readiness
+// start.mjs allows the LiteLLM gateway 900s to cold start, so the readiness
 // wait has to cover at least that. A shorter wait reports failure while the
 // service is still booting, and the installer's rollback then uninstalls the
 // service and reverts the app config out from under a router that goes on to
 // come up healthy seconds later.
-const READINESS_TIMEOUT_MS = 300_000;
+const READINESS_TIMEOUT_MS = 900_000;
 // The service is installed and running; only the health wait ran out. Both
 // installers read this to skip the service teardown in their rollback, so a
 // slow cold start no longer uninstalls a working install (#760). 75 is
