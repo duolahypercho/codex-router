@@ -69,9 +69,9 @@ test("Command Code publishes Space Bunny Alpha under its advertised model ID", (
   assert.deepEqual(model.inputModalities, ["text"]);
   assert.deepEqual(
     model.reasoningLevels.map(({ effort }) => effort),
-    ["medium"],
+    ["medium", "max"],
   );
-  assert.equal(model.defaultEffort, "medium");
+  assert.equal(model.defaultEffort, "max");
   assert.equal(model.requestProfile, undefined);
   assert.equal(model.multiAgentVersion, undefined);
 });

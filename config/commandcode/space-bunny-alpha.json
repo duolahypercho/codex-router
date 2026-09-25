@@ -8,13 +8,17 @@
       "provider": "commandcode",
       "listed": true,
       "displayName": "Space Bunny Alpha (Command Code)",
-      "description": "Space Bunny Alpha through the Command Code Provider API. Text input; 1M-token context.",
+      "description": "Space Bunny Alpha through the Command Code Provider API. Text input; 1M-token context; medium and max effort verified.",
       "priority": 130,
-      "defaultEffort": "medium",
+      "defaultEffort": "max",
       "reasoningLevels": [
         {
           "effort": "medium",
-          "description": "Provider-default reasoning"
+          "description": "Balanced reasoning"
+        },
+        {
+          "effort": "max",
+          "description": "Maximum reasoning depth"
         }
       ],
       "contextWindow": 1000000,
