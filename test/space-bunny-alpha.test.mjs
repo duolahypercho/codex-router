@@ -11,8 +11,10 @@ process.env.MODEL_ROUTER_USER_MODELS = path.join(testRoot, "user-models.json");
 process.env.MODEL_ROUTER_STATE_DIR = path.join(testRoot, "state");
 
 const { MODEL_BY_SLUG } = await import("../src/model-registry.mjs");
+const { selectedListedModels } = await import("../src/provider-selection.mjs");
 
 const SLUG = "openrouter/stealth/space-bunny-alpha";
+const COMMAND_CODE_SLUG = "commandcode/stealth/space-bunny-alpha";
 
 test("Space Bunny Alpha keeps the slug an operator's local curation already used", () => {
   // OpenRouter lists the stealth id only on its own endpoint, not in the
@@ -53,4 +55,27 @@ test("Space Bunny Alpha offers the effort ladder the endpoint accepted", () => {
   // tool-choice repair is attached, and nothing here claims the v2 child role.
   assert.equal(model.requestProfile, undefined);
   assert.equal(model.multiAgentVersion, undefined);
+});
+
+test("Command Code publishes Space Bunny Alpha under its advertised model ID", () => {
+  const model = MODEL_BY_SLUG.get(COMMAND_CODE_SLUG);
+  assert.ok(model, `${COMMAND_CODE_SLUG} is missing from the registry`);
+  assert.equal(model.provider, "commandcode");
+  assert.equal(model.upstreamModel, "stealth/space-bunny-alpha");
+  assert.equal(model.gatewayModel, "commandcode-stealth-space-bunny-alpha");
+  assert.equal(model.listed, true);
+  assert.equal(model.contextWindow, 1_000_000);
+  assert.equal(model.autoCompact, 700_000);
+  assert.deepEqual(model.inputModalities, ["text"]);
+  assert.deepEqual(
+    model.reasoningLevels.map(({ effort }) => effort),
+    ["medium"],
+  );
+  assert.equal(model.defaultEffort, "medium");
+  assert.equal(model.requestProfile, undefined);
+  assert.equal(model.multiAgentVersion, undefined);
+});
+
+test("Command Code Space Bunny Alpha is included in the selectable model set", () => {
+  assert.ok(selectedListedModels().some(({ slug }) => slug === COMMAND_CODE_SLUG));
 });

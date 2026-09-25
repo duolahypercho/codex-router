@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "slug": "commandcode/stealth/space-bunny-alpha",
+      "gatewayModel": "commandcode-stealth-space-bunny-alpha",
+      "upstreamModel": "stealth/space-bunny-alpha",
+      "provider": "commandcode",
+      "listed": true,
+      "displayName": "Space Bunny Alpha (Command Code)",
+      "description": "Space Bunny Alpha through the Command Code Provider API. Text input; 1M-token context.",
+      "priority": 130,
+      "defaultEffort": "medium",
+      "reasoningLevels": [
+        {
+          "effort": "medium",
+          "description": "Provider-default reasoning"
+        }
+      ],
+      "contextWindow": 1000000,
+      "autoCompact": 700000,
+      "inputModalities": [
+        "text"
+      ],
+      "compHash": "commandcode-stealth-space-bunny-alpha-v1"
+    }
+  ]
+}
