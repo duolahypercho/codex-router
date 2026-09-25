@@ -12,9 +12,10 @@ import {
 } from "./login-free-refresh-journal.mjs";
 import { withLoginFreeRefreshLock } from "./login-free-refresh-lock.mjs";
 import { nativeAliasFor, readNativeAliases } from "./native-alias.mjs";
+import { routerNodeBinary } from "./node-runtime.mjs";
 
 function nodeRunner(script, args) {
-  return spawnSync(process.execPath, [path.join(SOURCE_ROOT, "src", script), ...args], {
+  return spawnSync(routerNodeBinary(), [path.join(SOURCE_ROOT, "src", script), ...args], {
     cwd: SOURCE_ROOT,
     env: process.env,
     encoding: "utf8",

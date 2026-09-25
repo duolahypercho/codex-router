@@ -134,6 +134,20 @@ test("each target publisher owns a finite tree and contracts its child deadline"
   );
 });
 
+test("target publication uses the configured stable Node runtime", async () => {
+  let invocation;
+  await runTargetPublicationProcess("catalog.mjs", [], {
+    sourceRoot: "/stable/router",
+    environment: { CODEX_ROUTER_NODE_BIN: "/stable/node" },
+    run: async (command, args, options) => {
+      invocation = { command, args, options };
+      return { status: 0, stdout: "", stderr: "" };
+    },
+  });
+  assert.equal(invocation.command, "/stable/node");
+  assert.equal(invocation.options.env.CODEX_ROUTER_NODE_BIN, "/stable/node");
+});
+
 test("target publication honors and caps an injected operation environment", async () => {
   let invocation;
   const now = Date.now();
