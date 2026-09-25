@@ -173,6 +173,9 @@ jobs:
           path: ${{ matrix.download_cache }}
           key: electron-builder-${{ runner.os }}-${{ hashFiles('apps/control-center/package-lock.json') }}
           restore-keys: electron-builder-${{ runner.os }}-
+      - name: Install router runtime dependencies for packaged smoke
+        working-directory: .
+        run: npm ci --omit=dev
       - name: Install Electron dependencies
         run: npm ci
       - name: Check Electron sources
