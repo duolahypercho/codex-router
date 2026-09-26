@@ -16,11 +16,12 @@ correctly, so the installer adds a small skill pack to `~/.codex/skills/`:
   `mcp__node_repl__js`.
 - `codex-computer-use` — driving local apps through the `@oai/sky` runtime.
 
-The skills live in `skills/` in this repository. `bin/install` copies them
-to `~/.codex/skills/` (each directory is marked `.codex-router-managed`);
-`bin/uninstall` removes exactly those, never a skill you wrote yourself. A
-name collision with an existing skill of your own is skipped, not
-overwritten. To install or remove them by hand:
+The skills live in `skills/` in this repository. `bin/install` (or
+`install.ps1` on Windows) copies them to `~/.codex/skills/` (each directory is
+marked `.codex-router-managed`); `bin/uninstall` (`codex-router.ps1 uninstall`
+on Windows) removes exactly those, never a skill you wrote yourself, while
+`disable` leaves them in place. A name collision with an existing skill of
+your own is skipped, not overwritten. To install or remove them by hand:
 
 ```sh
 ./bin/model-router codex skills install

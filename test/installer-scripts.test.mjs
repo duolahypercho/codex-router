@@ -22,9 +22,10 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 // them honestly on a native Windows checkout that has no such runtime.
 const POSIX_SHELL_AVAILABLE = spawnSync("sh", ["-c", "exit 0"], { stdio: "ignore" }).status === 0;
 
-// Nothing on a non-Windows machine can execute PowerShell -- the parse test in
-// this file is skipped off Windows for exactly that reason -- so the Windows
-// assertions here read the shipped scripts as text instead. That still catches
+// Most of these Windows assertions read the shipped scripts as text: a
+// non-Windows machine has no Windows PowerShell, and the parse test in this
+// file is skipped off Windows for that reason. (Where pwsh is installed,
+// windows-operations.test.mjs does drive codex-router.ps1.) Text still catches
 // the class of defect at issue: wrappers that silently drop the arguments they
 // were handed, and a refusal message that drifts from the one it mirrors.
 function windowsSwitchBranches(source) {
