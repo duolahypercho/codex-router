@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -8,7 +9,7 @@ const directory = mkdtempSync(path.join(os.tmpdir(), "agent-bridge-state-"));
 process.env.MODEL_ROUTER_AGENT_BRIDGE_STATE = path.join(directory, "sessions.json");
 
 const { agentBridgeSessions, recordAgentBridgeSession } = await import("../src/agent-bridge-state.mjs");
-const { agentBridgeDefinitions, agentBridgeStatus, probeAgentBridge } = await import("../src/agent-bridges.mjs");
+const { agentBridgeDefinitions, agentBridgeStatus, probeAgentBridge, promptAgentBridge } = await import("../src/agent-bridges.mjs");
 
 test("bridge detection is optional and does not manufacture authentication", () => {
   const resolver = () => undefined;
@@ -83,4 +84,57 @@ test("Cursor probe refuses a signed-out CLI before starting ACP", async () => {
     }),
     /signed out/,
   );
+});
+
+test("public prompt bridge forwards Claude controls on new and resumed sessions", async () => {
+  const calls = [];
+  const bridgeFactory = () => ({
+    newSession: async () => ({ sessionId: "fresh", cwd: "/workspace" }),
+    loadSession: async (sessionId) => ({ sessionId, cwd: "/workspace" }),
+    prompt: async (...args) => {
+      calls.push(args);
+      return { sessionId: args[0], text: "ok" };
+    },
+    close: async () => {},
+  });
+  await promptAgentBridge("anthropic", {
+    prompt: "first", cwd: "/workspace", model: "claude-sonnet-4-5", effort: "medium", bridgeFactory,
+  });
+  await promptAgentBridge("anthropic", {
+    prompt: "next", cwd: "/workspace", sessionId: "fresh", model: "claude-sonnet-4-5", effort: "xhigh", bridgeFactory,
+  });
+  assert.deepEqual(calls, [
+    ["fresh", "first", { cwd: "/workspace", resume: false, model: "claude-sonnet-4-5", effort: "medium" }],
+    ["fresh", "next", { cwd: "/workspace", resume: true, model: "claude-sonnet-4-5", effort: "xhigh" }],
+  ]);
+});
+
+test("non-Claude bridges reject model and effort before constructing a bridge", async () => {
+  let constructed = false;
+  const bridgeFactory = () => { constructed = true; throw new Error("unexpected bridge construction"); };
+  for (const id of ["cursor", "gemini"]) {
+    await assert.rejects(promptAgentBridge(id, { prompt: "hello", model: "model", bridgeFactory }), /Claude/i);
+    await assert.rejects(promptAgentBridge(id, { prompt: "hello", effort: "low", bridgeFactory }), /Claude/i);
+  }
+  assert.equal(constructed, false);
+});
+
+test("prompt CLI rejects missing values, unknown options and non-Claude controls before reading stdin", () => {
+  const script = path.resolve("src/agent-bridges.mjs");
+  for (const [args, expected] of [
+    [["prompt", "anthropic", "--session"], /Missing value for --session/],
+    [["prompt", "anthropic", "--cwd"], /Missing value for --cwd/],
+    [["prompt", "anthropic", "--model"], /Missing value for --model/],
+    [["prompt", "anthropic", "--effort"], /Missing value for --effort/],
+    [["prompt", "anthropic", "--model", "--effort", "low"], /Missing value for --model/],
+    [["prompt", "anthropic", "--unknown", "value"], /Unknown prompt option/],
+    [["prompt", "anthropic", "--model", "--help"], /Missing value for --model/],
+    [["prompt", "anthropic", "--effort", "ultracode"], /Claude effort/],
+    [["prompt", "cursor", "--model", "model"], /Claude bridge/],
+    [["prompt", "gemini", "--effort", "low"], /Claude bridge/],
+  ]) {
+    const result = spawnSync(process.execPath, [script, ...args], { cwd: path.dirname(script), encoding: "utf8", input: "", timeout: 5000 });
+    assert.notEqual(result.status, 0, args.join(" "));
+    assert.match(result.stderr, expected, args.join(" "));
+  }
 });

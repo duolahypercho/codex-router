@@ -104,6 +104,10 @@ printf '%s' 'Explain this repository.' |
   ./bin/model-router codex agents prompt anthropic --cwd "$PWD"
 ```
 
+Claude prompts also accept `--model` and `--effort`, including when resuming
+with `--session`. See the [adaptive worker routing pilot](docs/experiments/adaptive-worker-routing.md)
+for the supported controls and an offline comparison of routing policies.
+
 The ACP integrations follow the official [Cursor ACP](https://prod.cursor.com/docs/cli/acp)
 and [Gemini CLI ACP](https://github.com/google-gemini/gemini-cli/blob/main/docs/cli/acp-mode.md)
 contracts. Direct reuse of Gemini CLI OAuth tokens in third-party software is

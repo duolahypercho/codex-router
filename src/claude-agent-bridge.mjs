@@ -5,6 +5,18 @@ import readline from "node:readline";
 import { spawnableCommand } from "./spawnable-command.mjs";
 
 const DEFAULT_PROMPT_TIMEOUT_MS = 30 * 60_000;
+export const CLAUDE_REASONING_EFFORTS = Object.freeze(["low", "medium", "high", "xhigh", "max"]);
+
+export function validateClaudePromptControls({ model, effort } = {}) {
+  if (model !== undefined && (
+    typeof model !== "string" || !model || model.startsWith("-") || /[\s\p{Cc}]/u.test(model)
+  )) {
+    throw new Error("Claude model must be a non-empty single token that is not a flag.");
+  }
+  if (effort !== undefined && !CLAUDE_REASONING_EFFORTS.includes(effort)) {
+    throw new Error("Claude effort must be low, medium, high, xhigh or max.");
+  }
+}
 
 function assistantText(event) {
   if (event?.type !== "assistant" || !Array.isArray(event.message?.content)) return "";
@@ -46,10 +58,11 @@ export class ClaudeAgentBridge {
     return { sessionId, cwd };
   }
 
-  async prompt(sessionId, prompt, { cwd = this.cwd || process.cwd(), resume = false } = {}) {
+  async prompt(sessionId, prompt, { cwd = this.cwd || process.cwd(), resume = false, model, effort } = {}) {
     if (!sessionId) throw new Error("A Claude session ID is required.");
     const text = String(prompt || "");
     if (!text.trim()) throw new Error("A non-empty prompt is required.");
+    validateClaudePromptControls({ model, effort });
     if (this.active.has(sessionId)) throw new Error("That Claude session already has an active prompt.");
     const args = [
       "-p",
@@ -59,6 +72,8 @@ export class ClaudeAgentBridge {
       "--permission-mode", "dontAsk",
       "--tools", "",
       ...(resume ? ["--resume", sessionId] : ["--session-id", sessionId]),
+      ...(model === undefined ? [] : ["--model", model]),
+      ...(effort === undefined ? [] : ["--effort", effort]),
     ];
     const spawnable = spawnableCommand(this.binary, args);
     const child = this.spawnImpl(spawnable.command, spawnable.args, {
