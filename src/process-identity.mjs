@@ -24,8 +24,9 @@ const DEFAULT_WINDOWS_PROBE_BUDGET = Object.freeze({ timeoutMs: 5_000, attempts:
 // one-minute heartbeat relaunched it into the same failure for forty minutes
 // while the desktop client showed "Reconnecting... waiting for network". The
 // same probes measure 0.9-1.6s on an idle host, which is why this only ever
-// appeared after a restart. The 45s allowance matches the interpreter probe in
-// start.mjs, which is already treated as a scheduling artifact rather than a
+// appeared after a restart. The 45s allowance matches the interpreter probe
+// start.mjs runs through venv-runtime.mjs, which already treats a slow spawn as
+// a scheduling artifact rather than a failure.
 //
 // The retry is deliberately not a silent fallback: a probe that answers with a
 // non-zero exit is a decision, not a stall, and is returned as-is. Only a
