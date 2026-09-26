@@ -29,7 +29,7 @@ function Invoke-RouterNode([string]$Script, [string[]]$ScriptArguments = @()) {
   }
 }
 
-function Remove-TargetIntegration {
+function Remove-TargetIntegration([switch]$RemoveManagedSkills) {
   switch ($Target) {
     "dsh" { Invoke-RouterNode "src\dsh-config-manager.mjs" @("uninstall") }
     "gemini" { Invoke-RouterNode "src\gemini-config-manager.mjs" @("uninstall") }
@@ -37,6 +37,21 @@ function Remove-TargetIntegration {
     "claude" { Invoke-RouterNode "src\claude-code-config-manager.mjs" @("uninstall") }
     "openclaw" { Invoke-RouterNode "src\openclaw-config-manager.mjs" @("uninstall") }
     default { Invoke-RouterNode "src\config-manager.mjs" @("disable") }
+  }
+  # Uninstall, unlike disable, also removes the managed Codex skills, as
+  # bin/uninstall does; install.ps1 put them there, and nothing else ever takes
+  # them out of the Codex skills directory again. Best effort for the same
+  # reason as on POSIX: a failed removal must not leave the service behind.
+  if ($RemoveManagedSkills -and $Target -eq "codex") {
+    try {
+      & node (Join-Path $Root "src\skills-install.mjs") "uninstall"
+      $SkillsExitCode = $LASTEXITCODE
+      if ($SkillsExitCode -ne 0) {
+        Write-Warning "Managed Codex skills could not be removed (exit $SkillsExitCode); continuing."
+      }
+    } catch {
+      Write-Warning "Managed Codex skills could not be removed; continuing: $($_.Exception.Message)"
+    }
   }
   $Remaining = [string](& node (Join-Path $Root "src\target-integration.mjs") "installed-targets")
   if ($LASTEXITCODE -ne 0) { throw "Could not determine which router clients remain installed." }
@@ -947,7 +962,7 @@ switch ($Command) {
     Remove-TargetIntegration
   }
   "uninstall" {
-    Remove-TargetIntegration
+    Remove-TargetIntegration -RemoveManagedSkills
   }
   "update" {
     # `update check` stays a read-only comparison; a bare `update` installs.

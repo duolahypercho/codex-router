@@ -596,8 +596,9 @@ Windows:
 ./codex-router.ps1 uninstall
 ```
 
-Uninstall removes the marked integration config and current background service.
-It intentionally retains the checkout, native catalog cache, logs, backups,
+Uninstall removes the marked integration config, the managed Codex skills, and
+the current background service; disable leaves the skills in place, on every
+platform. It intentionally retains the checkout, native catalog cache, logs, backups,
 migration snapshots, internal key, and provider credentials. This prevents a
 routine uninstall from silently destroying authentication or recovery data.
 Existing Codex Router installs that used the former 4100–4103/4108 defaults are

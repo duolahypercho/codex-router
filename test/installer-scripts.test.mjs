@@ -22,9 +22,10 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 // them honestly on a native Windows checkout that has no such runtime.
 const POSIX_SHELL_AVAILABLE = spawnSync("sh", ["-c", "exit 0"], { stdio: "ignore" }).status === 0;
 
-// Nothing on a non-Windows machine can execute PowerShell -- the parse test in
-// this file is skipped off Windows for exactly that reason -- so the Windows
-// assertions here read the shipped scripts as text instead. That still catches
+// Most of these Windows assertions read the shipped scripts as text: a
+// non-Windows machine has no Windows PowerShell, and the parse test in this
+// file is skipped off Windows for that reason. (Where pwsh is installed,
+// windows-operations.test.mjs does drive codex-router.ps1.) Text still catches
 // the class of defect at issue: wrappers that silently drop the arguments they
 // were handed, and a refusal message that drifts from the one it mirrors.
 function windowsSwitchBranches(source) {
@@ -887,6 +888,21 @@ test("the skills step runs after the rollback trap is disarmed", () => {
   assert.notEqual(trapDisarmed, -1, "bin/install must disarm the rollback trap");
   assert.notEqual(skillsStep, -1, "bin/install must call the skills step");
   assert.ok(trapDisarmed < skillsStep, "skills step must run after the trap is disarmed");
+});
+
+test("a failed skill refresh does not fail the POSIX install", { skip: !POSIX_SHELL_AVAILABLE }, () => {
+  const source = readScript("bin", "install");
+  const start = source.indexOf('if [ "$target" = codex ]; then', source.indexOf("# The skill pack"));
+  const end = source.indexOf("\nfi\n", start);
+  assert.ok(start >= 0 && end > start, "bin/install must keep the Codex skills step");
+  const skillsStep = source.slice(start, end + 4);
+  const result = spawnSync("sh", ["-eu", "-c", `target=codex
+node() { return 2; }
+${skillsStep}
+printf 'continued\\n'`], { encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /continued/);
+  assert.match(result.stderr, /skills could not be refreshed/);
 });
 
 test("uninstall removes the managed skills", () => {

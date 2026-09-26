@@ -8,6 +8,7 @@ import {
   runProcessTree,
 } from "./process-tree.mjs";
 import { waitForRouterHealth } from "./router-health.mjs";
+import { childNodeBinary } from "./stable-node.mjs";
 
 const SERVICE_SCRIPT = path.join(SOURCE_ROOT, "src", "service.mjs");
 const SERVICE_STATUS_OPERATION_MS = 10_000;
@@ -97,9 +98,13 @@ async function invokeService(
     deadline,
     stdio,
   };
+  // Restarts also come from workers that can outlive a Node upgrade (a model
+  // download, a curation transaction), and `brew upgrade node` deletes the keg
+  // this process runs from, so name a Node that is still there.
+  const node = childNodeBinary({ environment: env ?? process.env });
   return childOwnsOperations
-    ? runOperationProcessTree(process.execPath, [SERVICE_SCRIPT, ...args], { ...options, run })
-    : run(process.execPath, [SERVICE_SCRIPT, ...args], options);
+    ? runOperationProcessTree(node, [SERVICE_SCRIPT, ...args], { ...options, run })
+    : run(node, [SERVICE_SCRIPT, ...args], options);
 }
 
 export async function routerServiceStatus({

@@ -30,6 +30,7 @@ import {
 // Same reasoning: presence is a property of the shared plane, not of a target,
 // so the overview can resolve it statically without perturbing those probes.
 import { presenceSnapshot } from "./presence-state.mjs";
+import { childNodeBinary } from "./stable-node.mjs";
 import { harnessSnapshotWithWeb } from "./dsh-install.mjs";
 import { USER_MODELS_PATH } from "./user-models.mjs";
 import { refreshTargetPickerIfInstalled } from "./target-integration.mjs";
@@ -3313,7 +3314,7 @@ async function handleClientDisconnect(target) {
   }
 
   const uninstall = spawnSync(
-    process.execPath,
+    childNodeBinary(),
     [path.join(REPO_ROOT, uninstallArgv[0]), uninstallArgv[1]],
     {
       cwd: REPO_ROOT,
@@ -3338,7 +3339,7 @@ async function handleClientDisconnect(target) {
       : null;
   if (serviceAction) {
     const service = spawnSync(
-      process.execPath,
+      childNodeBinary(),
       [path.join(REPO_ROOT, "src", "service.mjs"), serviceAction],
       {
         cwd: REPO_ROOT,

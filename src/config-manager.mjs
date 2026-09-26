@@ -60,6 +60,7 @@ import {
   SOURCE_ROOT,
   loopback,
 } from "./paths.mjs";
+import { homebrewStableNodePath, runnableFile, stableNodeBinary } from "./stable-node.mjs";
 import { scanTomlDocument } from "./toml-structure.mjs";
 
 const managedRouterBaseUrls = new Set([
@@ -92,12 +93,22 @@ const managedAgentMaxConcurrency = 6;
 const managedSubagentCompletionHint =
   "When a child agent finishes (FINAL_ANSWER, task_complete, or an idle/errored wait snapshot), call interrupt_agent on that child so Codex can mark it done. Do not leave finished children in the working state.";
 
+// The managed feature's fields, as TOML value text: rendered inline below, and
+// compared field by field against the table a TOML library writes it back as.
+function managedMultiAgentV2Fields() {
+  return [
+    ["enabled", "true"],
+    ["max_concurrent_threads_per_session", String(managedAgentMaxConcurrency)],
+    ["expose_spawn_agent_model_overrides", "true"],
+    ["usage_hint_enabled", "true"],
+    ["root_agent_usage_hint_text", tomlValue(managedSubagentCompletionHint)],
+  ];
+}
+
 export function managedMultiAgentV2FeatureLine() {
-  return (
-    `multi_agent_v2 = { enabled = true, max_concurrent_threads_per_session = ${managedAgentMaxConcurrency}, ` +
-    `expose_spawn_agent_model_overrides = true, usage_hint_enabled = true, ` +
-    `root_agent_usage_hint_text = ${tomlValue(managedSubagentCompletionHint)} }`
-  );
+  return `multi_agent_v2 = { ${managedMultiAgentV2Fields()
+    .map(([key, value]) => `${key} = ${value}`)
+    .join(", ")} }`;
 }
 const routerProviderId = "codex-router";
 const signedProviderId = "codex-router-signed";
@@ -112,13 +123,129 @@ function tomlValue(value) {
   return JSON.stringify(value);
 }
 
+let callerAuthNodeBinary;
+let recordedCallerAuthNode;
+let recordedCallerAuthNodeRead = false;
+
+// Codex runs this command for the caller key on every routed turn, long after
+// the process that wrote it has exited, so it names a Node that will still be
+// there. In order:
+// - the Node the config already names, while it still runs and is not a
+//   versioned Homebrew keg: rewriting a working command buys nothing, and an
+//   earlier release the updater rolls back to still recognizes its own block;
+// - this process's own Node, which is always a real binary -- never a
+//   launcher or a version-manager shim whose Node depends on the directory
+//   Codex runs it from -- with a keg mapped to its formula's opt link;
+// - under an Electron host, whose own binary would start the app instead, an
+//   explicit CODEX_ROUTER_NODE_BIN or a Node on PATH.
+// Chosen once per process, after the recorded command has been read: every
+// rendering of the block, including the ones the ownership checks compare
+// against, must spell the same command.
+function callerAuthNode() {
+  if (callerAuthNodeBinary !== undefined) return callerAuthNodeBinary;
+  const recorded = recordedCallerAuthNode;
+  let chosen;
+  if (
+    isNodeExecutablePath(recorded) &&
+    runnableFile(recorded) &&
+    homebrewStableNodePath(recorded) === recorded
+  ) {
+    chosen = recorded;
+  } else if (
+    !process.versions.electron &&
+    isNodeExecutablePath(homebrewStableNodePath(process.execPath)) &&
+    runnableFile(homebrewStableNodePath(process.execPath))
+  ) {
+    chosen = homebrewStableNodePath(process.execPath);
+  } else {
+    try {
+      const found = stableNodeBinary();
+      chosen = isNodeExecutablePath(found) ? found : process.execPath;
+    } catch {
+      chosen = process.execPath;
+    }
+  }
+  if (recordedCallerAuthNodeRead) callerAuthNodeBinary = chosen;
+  return chosen;
+}
+
+function isAbsoluteCommandPath(value) {
+  return typeof value === "string" && (path.posix.isAbsolute(value) || path.win32.isAbsolute(value));
+}
+
+function isNodeExecutablePath(value) {
+  return isAbsoluteCommandPath(value) && /^node(?:js)?(?:\.exe)?$/i.test(value.split(/[\\/]/).pop());
+}
+
+// Which binary the auth command names is not evidence of who owns the block:
+// it is whichever process last rendered it, and a Node upgrade, an install
+// from another launcher, or an older Control Center that rendered it from the
+// Electron app changes it while the block stays entirely ours. Matching it
+// literally made every router-owned login-free block look user-edited after
+// `brew upgrade node`, so enable, update, and doctor --fix all refused with
+// "lost ownership". The evidence is everything else in the table -- the
+// arguments run this router's caller-key script on its private secret -- and
+// that is still compared exactly, so only the absolute command path is
+// normalized.
+function withCurrentCallerAuthCommand(block) {
+  let inAuthTable = false;
+  return block
+    .split("\n")
+    .map((line) => {
+      if (line.startsWith("[")) {
+        inAuthTable = /^\[model_providers\..+\.auth\]$/.test(line);
+        return line;
+      }
+      if (!inAuthTable || !line.startsWith("command = ")) return line;
+      return isAbsoluteCommandPath(assignmentValue(line))
+        ? `command = ${tomlValue(callerAuthNode())}`
+        : line;
+    })
+    .join("\n");
+}
+
+// The commands of this router's own caller auth tables, for status, doctor,
+// and the choice above: an auth table inside one of its marker blocks whose
+// arguments run its caller-key script, or else the auth table of a stripped
+// provider table it would adopt. Any other auth table belongs to the user,
+// including one a writer parked inside a marker block.
+function managedCallerAuthCommands(contents) {
+  const tables = [];
+  let managed = false;
+  let table;
+  for (const line of contents.split("\n")) {
+    const trimmed = line.trim();
+    if (trimmed === providerStartMarker || trimmed === signedProviderStartMarker) {
+      managed = true;
+      table = undefined;
+    } else if (trimmed === providerEndMarker || trimmed === signedProviderEndMarker) {
+      managed = false;
+      table = undefined;
+    } else if (managed && trimmed.startsWith("[")) {
+      table = /^\[model_providers\..+\.auth\]$/.test(trimmed) ? {} : undefined;
+      if (table) tables.push(table);
+    } else if (table) {
+      const match = withoutTomlComment(trimmed).trim().match(/^(command|args)\s*=\s*(.+)$/);
+      if (match) table[match[1]] = tomlValueToken(match[2]);
+    }
+  }
+  const commands = tables
+    .filter(({ args }) =>
+      path.basename(tokenStringArray(args)?.[0] ?? "") === "caller-key-auth-command.mjs")
+    .map(({ command }) => tokenString(command))
+    .filter(Boolean);
+  if (commands.length) return commands;
+  const stripped = strippedManagedRouterProvider(contents);
+  return stripped?.authCommand ? [stripped.authCommand] : [];
+}
+
 function managedCallerAuthBlock(providerId) {
   const headerId = /^[A-Za-z0-9_-]+$/.test(providerId)
     ? providerId
     : JSON.stringify(providerId);
   return [
     `[model_providers.${headerId}.auth]`,
-    `command = ${tomlValue(process.execPath)}`,
+    `command = ${tomlValue(callerAuthNode())}`,
     `args = [${tomlValue(path.join(SOURCE_ROOT, "src", "caller-key-auth-command.mjs"))}, ${tomlValue(CALLER_SECRET_PATH)}]`,
     "timeout_ms = 5000",
     "refresh_interval_ms = 0",
@@ -857,7 +984,7 @@ function managedLoginFreeProviderBlockMatches(actual, providerId, baseUrl) {
     managedLoginFreeProviderBlock(providerId, baseUrl),
     managedLoginFreeProviderBlockHttpFallback(providerId, baseUrl),
     managedLoginFreeProviderBlockLegacy(providerId, baseUrl),
-  ].includes(actual);
+  ].includes(withCurrentCallerAuthCommand(actual));
 }
 
 function signedProviderSlot(state, index) {
@@ -964,6 +1091,103 @@ function signedProviderBlockIsOwned(contents, state) {
   );
 }
 
+function sameTableFields(actual, expected) {
+  if (!actual || !expected || actual.size !== expected.size) return false;
+  for (const [key, value] of expected) {
+    if (!actual.has(key)) return false;
+    const matches = actual.get(key) === value || (
+      key === "command" &&
+      isAbsoluteCommandPath(tokenString(actual.get(key))) &&
+      isAbsoluteCommandPath(tokenString(value))
+    );
+    if (!matches) return false;
+  }
+  return true;
+}
+
+// The field maps of a block this router renders: its main table, and its auth
+// table when it has one. Marker lines are comments and carry no fields.
+function renderedTableFields(block) {
+  const lines = block.split("\n").filter((line) => !line.trim().startsWith("#"));
+  const headers = lines.flatMap((line, index) => (line.startsWith("[") ? [index] : []));
+  return headers.map((start, position) =>
+    plainTableFields(lines, start, headers[position + 1] ?? lines.length));
+}
+
+// The provider-table modes own a table the user already had. Their markers,
+// and the slot comments recording where each original table goes back, are
+// comments too, so a writer that re-serializes config.toml without comments
+// leaves the managed table looking like the user's own: status reported an
+// unmanaged provider and every command refused with "lost ownership", with no
+// way back to the table the protected state still holds. When that state
+// names the table and the table is exactly one of this router's renderings,
+// put the markers and slots back before anything reads the document. Any
+// other field, subtable, or active provider leaves it untouched.
+function withRestoredProviderTableMarkers(contents) {
+  const providerState = readProviderModeState();
+  const signedState = readSignedProviderModeState();
+  const state = providerState ?? signedState;
+  if (
+    (providerState && signedState) ||
+    state?.version !== 3 ||
+    state.mode !== "provider-table" ||
+    [signedProviderStartMarker, signedProviderEndMarker, signedProviderSlotPrefix]
+      .some((marker) => contents.includes(marker))
+  ) {
+    return contents;
+  }
+  const scanned = scannedConfig(contents);
+  if (!scanned) return contents;
+  if ((rootValue(splitRoot(contents).rootLines, "model_provider") || "openai") !== state.managedProvider) {
+    return contents;
+  }
+  const tables = providerTableRangesTrimmed(scanned, state.managedProvider);
+  const main = tables.filter(({ header }) => header.length === 2);
+  const auth = tables.filter(({ header }) => header.length === 3 && header[2] === "auth");
+  if (
+    main.length !== 1 ||
+    auth.length > 1 ||
+    main.length + auth.length !== tables.length ||
+    !managedSpanIsClean(scanned.lines, [main[0], ...auth])
+  ) {
+    return contents;
+  }
+  const actual = [main[0], ...auth].map(({ start, end }) =>
+    plainTableFields(scanned.lines, start, end));
+  const renderings = (state.loginFree
+    ? [
+        managedLoginFreeProviderBlock,
+        managedLoginFreeProviderBlockHttpFallback,
+        managedLoginFreeProviderBlockLegacy,
+      ]
+    : [
+        managedSignedProviderBlock,
+        managedSignedProviderBlockHttpFallback,
+        managedSignedProviderBlockLegacy,
+      ]).map((render) => render(state.managedProvider, state.managedBaseUrl));
+  const block = renderings.find((rendering) => {
+    const expected = renderedTableFields(rendering);
+    return expected.length === actual.length &&
+      expected.every((fields, index) => sameTableFields(actual[index], fields));
+  });
+  if (!block) return contents;
+  const slotCount = Math.max(1, state.previousProviderSections.length);
+  const replacement = [
+    signedProviderSlot(state, 0),
+    // Keep the file's own auth command, so status and doctor still report the
+    // Node it names rather than the one this process would write.
+    actual[1]
+      ? block.replace(/^command = .*$/m, () => `command = ${tomlValue(tokenString(actual[1].get("command")))}`)
+      : block,
+    ...Array.from({ length: slotCount - 1 }, (_, index) => signedProviderSlot(state, index + 1)),
+  ];
+  const owned = (index) => [main[0], ...auth].some(({ start, end }) => index >= start && index < end);
+  return scanned.lines
+    .flatMap((line, index) =>
+      index === main[0].start ? replacement : owned(index) ? [] : [line])
+    .join("\n");
+}
+
 function restoreSignedProviderTable(contents, state) {
   if (state.version === 2 && state.mode !== "provider-table") return contents;
   if (!signedProviderBlockIsOwned(contents, state)) {
@@ -974,9 +1198,12 @@ function restoreSignedProviderTable(contents, state) {
   if (state.version === 3) {
     let restored = contents;
     for (let index = state.previousProviderSections.length - 1; index >= 1; index -= 1) {
+      // A replacer function, never the section as a replacement string:
+      // `$'`, `$&`, and `$$` in a user's saved table -- a bearer token, say --
+      // are replacement patterns there, and restored a different secret.
       restored = restored.replace(
         signedProviderSlot(state, index),
-        state.previousProviderSections[index],
+        () => state.previousProviderSections[index],
       );
     }
     const lines = restored.split("\n");
@@ -1280,21 +1507,321 @@ function legacyManagedRouterProvider(contents) {
     : undefined;
 }
 
-function removeLegacyManagedRouterProvider(contents, provider) {
+function routerCatalogPaths() {
   return [
-    ...provider.lines.slice(0, provider.start),
-    ...provider.lines.slice(provider.end),
-  ].join("\n");
-}
-
-function clean(contents) {
-  const knownCatalogPaths = [
     MERGED_CATALOG_PATH,
     ...LEGACY_STATE_DIRS.map((directory) => path.join(directory, "merged-models.json")),
   ];
+}
+
+// The text of a line up to a comment outside every string.
+function withoutTomlComment(text) {
+  let quote;
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index];
+    if (quote) {
+      if (quote === '"' && character === "\\") index += 1;
+      else if (character === quote) quote = undefined;
+    } else if (character === '"' || character === "'") {
+      quote = character;
+    } else if (character === "#") {
+      return text.slice(0, index);
+    }
+  }
+  return text;
+}
+
+function bracketDepth(text) {
+  let depth = 0;
+  let quote;
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index];
+    if (quote) {
+      if (quote === '"' && character === "\\") index += 1;
+      else if (character === quote) quote = undefined;
+    } else if (character === '"' || character === "'") {
+      quote = character;
+    } else if (character === "[") {
+      depth += 1;
+    } else if (character === "]") {
+      depth -= 1;
+    }
+  }
+  return depth;
+}
+
+function tomlSingleLineString(text) {
+  if (/^'[^'\n]*'$/.test(text)) return text.slice(1, -1);
+  if (!/^"(?:[^"\\\n]|\\.)*"$/.test(text)) return undefined;
+  try {
+    const value = JSON.parse(text);
+    return typeof value === "string" ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function tomlStringArray(text) {
+  if (!text.startsWith("[") || !text.endsWith("]")) return undefined;
+  const items = [];
+  let rest = text.slice(1, -1).trim();
+  while (rest) {
+    const match = /^(?:"(?:[^"\\\n]|\\.)*"|'[^'\n]*')/.exec(rest);
+    const value = match ? tomlSingleLineString(match[0]) : undefined;
+    if (value === undefined) return undefined;
+    items.push(value);
+    rest = rest.slice(match[0].length).trim();
+    if (rest.startsWith(",")) rest = rest.slice(1).trim();
+    else if (rest) return undefined;
+  }
+  return items;
+}
+
+// A value decoded far enough that two spellings of it compare equal: a writer
+// that re-serializes config.toml may switch quote styles, pad an array, spread
+// it over several lines, or leave a trailing comma (Python's `toml` writes
+// `[ "a", "b",]`, tomli_w one element per line). Only the shapes this router
+// writes are decoded; anything else stays raw and matches only itself.
+function tomlValueToken(text) {
+  if (text === "true" || text === "false") return `boolean:${text}`;
+  if (/^[+-]?\d+(?:_\d+)*$/.test(text)) return `integer:${Number(text.replaceAll("_", ""))}`;
+  const string = tomlSingleLineString(text);
+  if (string !== undefined) return `string:${string}`;
+  const array = tomlStringArray(text);
+  if (array) return `array:${JSON.stringify(array)}`;
+  return `raw:${text}`;
+}
+
+function tokenString(token) {
+  return typeof token === "string" && token.startsWith("string:") ? token.slice(7) : undefined;
+}
+
+function tokenStringArray(token) {
+  if (typeof token !== "string" || !token.startsWith("array:")) return undefined;
+  return JSON.parse(token.slice(6));
+}
+
+// The decoded fields of one plain table, or undefined when the table carries
+// anything this router never writes there. A comment inside it is somebody's
+// note, exactly as it is inside a marked block, so it disqualifies the table
+// rather than being deleted with it.
+function plainTableFields(lines, start, end) {
+  if (lines[start].trim().startsWith("[[")) return undefined;
+  const fields = new Map();
+  let pending;
+  for (const line of lines.slice(start + 1, end)) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith("#")) return undefined;
+    const code = withoutTomlComment(line).trim();
+    if (code !== trimmed) return undefined;
+    if (pending) {
+      if (!code) continue;
+      pending.text += ` ${code}`;
+      if (bracketDepth(pending.text) === 0) {
+        fields.set(pending.key, tomlValueToken(pending.text));
+        pending = undefined;
+      }
+      continue;
+    }
+    if (!code) continue;
+    const match = code.match(/^([A-Za-z0-9_-]+)\s*=\s*(.+)$/);
+    if (!match || fields.has(match[1])) return undefined;
+    if (match[2].startsWith("[") && bracketDepth(match[2]) > 0) {
+      pending = { key: match[1], text: match[2] };
+      continue;
+    }
+    fields.set(match[1], tomlValueToken(match[2]));
+  }
+  return pending ? undefined : fields;
+}
+
+// Every table of a scanned document, each range ending at its last
+// non-blank, non-comment line: a comment just above the next table heads that
+// table, so it is never removed with this one.
+function trimmedTableRanges(scanned) {
+  return scanned.headers.map(({ path: header, index }, position) => {
+    let end = scanned.headers[position + 1]?.index ?? scanned.lines.length;
+    while (end > index + 1) {
+      const trimmed = scanned.lines[end - 1].trim();
+      if (trimmed && !trimmed.startsWith("#")) break;
+      end -= 1;
+    }
+    return { header, start: index, end };
+  });
+}
+
+// The tables of one provider: its main table and any subtables.
+function providerTableRangesTrimmed(scanned, providerId) {
+  return trimmedTableRanges(scanned)
+    .filter(({ header }) => header[0] === "model_providers" && header[1] === providerId);
+}
+
+// Whether only blank lines sit between the tables of one managed block. A
+// note between the router's table and its auth subtable is inside what the
+// markers used to enclose, where it would have counted as somebody's edit.
+function managedSpanIsClean(lines, ranges) {
+  const start = Math.min(...ranges.map((range) => range.start));
+  const end = Math.max(...ranges.map((range) => range.end));
+  for (let index = start; index < end; index += 1) {
+    if (ranges.some((range) => index >= range.start && index < range.end)) continue;
+    if (lines[index].trim()) return false;
+  }
+  return true;
+}
+
+function isManagedCallerAuthTable(fields) {
+  const args = tokenStringArray(fields.get("args"));
+  return (
+    fields.size === 4 &&
+    isAbsoluteCommandPath(tokenString(fields.get("command"))) &&
+    Array.isArray(args) &&
+    args.length === 2 &&
+    path.basename(args[0]) === "caller-key-auth-command.mjs" &&
+    args[1] === CALLER_SECRET_PATH &&
+    fields.get("timeout_ms") === "integer:5000" &&
+    fields.get("refresh_interval_ms") === "integer:0"
+  );
+}
+
+// A writer that re-serializes config.toml -- a TOML library round trip, a
+// formatter -- keeps every table and drops every comment, this router's
+// markers included. The provider table it leaves behind then reads as
+// user-owned, and every enable (update, doctor --fix) refused to replace it,
+// with nothing the operator could run to recover. Adopt it on the evidence the
+// markers used to carry, and only that: the root keys still name this router's
+// own port and its private merged catalog, which nothing else points Codex at,
+// and the table and its auth subtable are exactly what this router writes.
+// A table with any other field, subtable, or comment is still somebody else's.
+function strippedManagedRouterProvider(contents) {
+  if (contents.includes(startMarker) || contents.includes(providerStartMarker)) {
+    return undefined;
+  }
+  const { rootLines } = splitRoot(contents);
+  const rootBaseUrl = rootValue(rootLines, "openai_base_url");
+  if (
+    !isManagedRouterBaseUrl(rootBaseUrl) ||
+    !routerCatalogPaths().includes(rootValue(rootLines, "model_catalog_json"))
+  ) {
+    return undefined;
+  }
+  const scanned = scannedConfig(contents);
+  if (!scanned) return undefined;
+  const tables = providerTableRangesTrimmed(scanned, routerProviderId);
+  const main = tables.filter(({ header }) => header.length === 2);
+  const auth = tables.filter(({ header }) => header.length === 3 && header[2] === "auth");
+  if (main.length !== 1 || auth.length > 1 || main.length + auth.length !== tables.length) {
+    return undefined;
+  }
+  if (!managedSpanIsClean(scanned.lines, [main[0], ...auth])) return undefined;
+  const fields = plainTableFields(scanned.lines, main[0].start, main[0].end);
+  const authFields = auth.length
+    ? plainTableFields(scanned.lines, auth[0].start, auth[0].end)
+    : undefined;
+  if (!fields || (auth.length && !authFields)) return undefined;
+  const optional = ["supports_standalone_web_search", "requires_openai_auth"];
+  const loginFree = fields.get("requires_openai_auth") === "boolean:false";
+  const shapeMatches =
+    fields.get("name") === "string:Codex Router (external models)" &&
+    fields.get("base_url") === `string:${rootBaseUrl}` &&
+    fields.get("wire_api") === "string:responses" &&
+    [...fields.keys()].every((key) => ["name", "base_url", "wire_api", ...optional].includes(key)) &&
+    (!fields.has("supports_standalone_web_search") ||
+      fields.get("supports_standalone_web_search") === "boolean:true") &&
+    (loginFree
+      ? Boolean(authFields) && isManagedCallerAuthTable(authFields)
+      : !authFields &&
+        (!fields.has("requires_openai_auth") || fields.get("requires_openai_auth") === "boolean:true"));
+  return shapeMatches
+    ? {
+        lines: scanned.lines,
+        ranges: [main[0], ...auth],
+        authCommand: authFields ? tokenString(authFields.get("command")) : undefined,
+      }
+    : undefined;
+}
+
+function withoutLineRanges(contents, ranges) {
+  if (!ranges.length) return contents;
+  return contents
+    .split("\n")
+    .filter((_line, index) => !ranges.some(({ start, end }) => index >= start && index < end))
+    .join("\n");
+}
+
+function removeLegacyManagedRouterProvider(contents, provider) {
+  return withoutLineRanges(contents, provider.ranges ?? [provider]);
+}
+
+// Everything else the root and feature markers used to claim, on the same
+// evidence as strippedManagedRouterProvider: after a comment-stripping round
+// trip the router's realtime endpoints and its multi-agent feature otherwise
+// read as the user's own settings, which disable then leaves behind and a
+// later release can never update. Only a value exactly equal to what this
+// router writes is taken back; a changed one is the user's.
+function strippedManagedRouterSettings(contents) {
+  if (contents.includes(startMarker)) return [];
+  const { rootLines } = splitRoot(contents);
+  if (
+    !isManagedRouterBaseUrl(rootValue(rootLines, "openai_base_url")) ||
+    !routerCatalogPaths().includes(rootValue(rootLines, "model_catalog_json"))
+  ) {
+    return [];
+  }
+  const scanned = scannedConfig(contents);
+  if (!scanned) return [];
+  const plainValue = (index) => {
+    const line = scanned.lines[index];
+    const code = withoutTomlComment(line).trim();
+    return code === line.trim() ? tomlValueToken(code.slice(code.indexOf("=") + 1).trim()) : undefined;
+  };
+  const expectedRoot = new Map([
+    [realtimeCallBaseUrlKey, `string:${nativeRealtimeCallBaseUrl(rootLines)}`],
+    [realtimeWebsocketBaseUrlKey, `string:${defaultRealtimeWebsocketBaseUrl}`],
+  ]);
+  const ranges = scanned.assignments
+    .filter(({ index, tablePath, key }) =>
+      tablePath.length === 0 &&
+      key.length === 1 &&
+      expectedRoot.has(key[0]) &&
+      plainValue(index) === expectedRoot.get(key[0]))
+    .map(({ index }) => ({ start: index, end: index + 1 }));
+  if (contents.includes(multiAgentV2StartMarker)) return ranges;
+  // The feature as this router writes it, and as a TOML library writes it
+  // back: an inline table, or its own [features.multi_agent_v2] table.
+  const featureLine = managedMultiAgentV2FeatureLine();
+  for (const { index, tablePath, key } of scanned.assignments) {
+    if (
+      tablePath.length === 1 &&
+      tablePath[0] === "features" &&
+      key.length === 1 &&
+      key[0] === "multi_agent_v2" &&
+      scanned.lines[index].trim() === featureLine
+    ) {
+      ranges.push({ start: index, end: index + 1 });
+    }
+  }
+  const expectedFeature = new Map(
+    managedMultiAgentV2Fields().map(([key, value]) => [key, tomlValueToken(value)]),
+  );
+  for (const table of trimmedTableRanges(scanned).filter(({ header }) =>
+    header.length === 2 && header[0] === "features" && header[1] === "multi_agent_v2")) {
+    if (sameTableFields(plainTableFields(scanned.lines, table.start, table.end), expectedFeature)) {
+      ranges.push({ start: table.start, end: table.end });
+    }
+  }
+  return ranges;
+}
+
+function clean(contents) {
+  const knownCatalogPaths = routerCatalogPaths();
+  // The catalog path is written as a TOML basic string, so a Windows path is
+  // stored with every backslash doubled and the raw text never contains it.
+  // Ask the decoded root value too, or a config whose markers were stripped
+  // keeps its router base URL here and gets a second one from enable.
   const knownManaged =
     markerPairs.some(([start]) => contents.includes(start)) ||
-    knownCatalogPaths.some((catalogPath) => contents.includes(catalogPath));
+    knownCatalogPaths.some((catalogPath) => contents.includes(catalogPath)) ||
+    knownCatalogPaths.includes(rootValue(splitRoot(contents).rootLines, "model_catalog_json"));
   const withoutBlock = removeEmptyFeaturesTable(
     removeCreatedAgentsTableIfEmpty(removeMarkedBlock(contents)),
   );
@@ -1442,6 +1969,7 @@ function snapshot(contents) {
     openai_base_url: baseUrl ? redactCallerUrl(baseUrl) : null,
     model_catalog_json: catalog || null,
     config_protected: privateFileIsProtected(CONFIG_PATH),
+    caller_auth_commands: managedCallerAuthCommands(contents),
   };
 }
 
@@ -1479,10 +2007,12 @@ function enabledContents(contents, { loginFreeProvider = false } = {}) {
   ) {
     nativeCatalogNeedsActivation = true;
   }
-  const legacyProvider = legacyManagedRouterProvider(contents);
-  const contentsWithoutLegacyProvider = legacyProvider
-    ? removeLegacyManagedRouterProvider(contents, legacyProvider)
-    : contents;
+  const legacyProvider =
+    legacyManagedRouterProvider(contents) ?? strippedManagedRouterProvider(contents);
+  const contentsWithoutLegacyProvider = withoutLineRanges(contents, [
+    ...(legacyProvider ? legacyProvider.ranges ?? [legacyProvider] : []),
+    ...strippedManagedRouterSettings(contents),
+  ]);
   if (
     hasUnmanagedRouterProvider(contentsWithoutLegacyProvider) ||
     (currentProvider === routerProviderId && !existsSync(CODEX_PROVIDER_MODE_PATH))
@@ -1500,6 +2030,12 @@ function enabledContents(contents, { loginFreeProvider = false } = {}) {
     throw new Error(
       `Refusing to replace user-owned openai_base_url: ${redactCallerUrl(existingBase)}`,
     );
+  }
+  if (existingBase) {
+    // The same value is written into the managed block below; a second
+    // assignment of one key is a document Codex refuses to load at all.
+    const duplicates = new Set(rootAssignmentIndexes(rootLines.join("\n"), "openai_base_url"));
+    rootLines = rootLines.filter((_line, index) => !duplicates.has(index));
   }
   if (existingCatalog && existingCatalog !== MERGED_CATALOG_PATH) {
     if (
@@ -1615,7 +2151,11 @@ if (!new Set([
   process.exit(2);
 }
 
-const current = existsSync(CONFIG_PATH) ? readFileSync(CONFIG_PATH, "utf8") : "";
+const current = withRestoredProviderTableMarkers(
+  existsSync(CONFIG_PATH) ? readFileSync(CONFIG_PATH, "utf8") : "",
+);
+recordedCallerAuthNode = managedCallerAuthCommands(current)[0];
+recordedCallerAuthNodeRead = true;
 if (command === "status") {
   process.stdout.write(`${JSON.stringify(snapshot(current))}\n`);
   process.exit(0);
@@ -2129,6 +2669,13 @@ if (command === "enable") {
       }
       restored = restoreSignedProviderTable(restored, signedState);
     }
+    // Disabling must also retire what lost its markers: an orphaned provider
+    // table refuses every later reinstall as user-owned, and the router's
+    // other settings would outlive it as somebody else's.
+    restored = withoutLineRanges(restored, [
+      ...(strippedManagedRouterProvider(restored)?.ranges ?? []),
+      ...strippedManagedRouterSettings(restored),
+    ]);
     const nativeCatalogContents = restoreNativeCatalog(restored);
     if (nativeCatalogContents) {
       next = nativeCatalogContents;
