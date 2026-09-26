@@ -1,0 +1,1 @@
+- **Claude agent prompts can select a model and reasoning effort.** The agent bridge now accepts optional Claude CLI model and effort controls for new and resumed sessions while keeping its default selection when neither is supplied.
