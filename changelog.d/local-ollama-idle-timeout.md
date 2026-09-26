@@ -1,0 +1,1 @@
+- **Local Ollama turns can exceed the router's 300-second idle cutoff.** The router sizes local response-header and streamed-body waits from `MODEL_ROUTER_LOCAL_TIMEOUT` plus a one-minute margin, matching LiteLLM's `timeout` and `stream_timeout` without changing Grok or other provider routes.
