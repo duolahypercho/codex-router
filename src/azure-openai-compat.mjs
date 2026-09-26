@@ -56,6 +56,18 @@ export function normalizeAzureOpenAIResponsesRequest(payload, { providerId, rout
     return true;
   });
 
+  const hasCollaboration = filteredTools.some(
+    (tool) => tool?.type === "namespace" && tool.name === "collaboration",
+  );
+  const hasAgents = filteredTools.some(
+    (tool) => tool?.type === "namespace" && tool.name === "agents",
+  );
+  if (hasCollaboration && hasAgents) {
+    const error = new Error("Azure collaboration alias conflicts with an existing agents namespace.");
+    error.status = 400;
+    throw error;
+  }
+
   let plaintextTools = false;
   const tools = filteredTools.map((tool) => {
     if (tool?.type === "namespace" && COLLABORATION_NAMESPACES.has(tool.name) && Array.isArray(tool.tools)) {
@@ -68,9 +80,9 @@ export function normalizeAzureOpenAIResponsesRequest(payload, { providerId, rout
         changed ||= normalized !== child;
         return normalized;
       });
-      if (!changed) return tool;
+      if (!changed && tool.name !== "collaboration") return tool;
       plaintextTools = true;
-      return { ...tool, tools: children };
+      return { ...tool, name: tool.name === "collaboration" ? "agents" : tool.name, tools: children };
     }
     if (tool?.type !== "function" || !COLLABORATION_MESSAGE_TOOLS.has(tool.name)) {
       return tool;
@@ -83,6 +95,18 @@ export function normalizeAzureOpenAIResponsesRequest(payload, { providerId, rout
   if (tools.length === payload.tools.length && !plaintextTools) return payload;
 
   const normalized = { ...payload, tools };
+  if (hasCollaboration) {
+    if (Array.isArray(payload.input)) {
+      normalized.input = payload.input.map((item) =>
+        item?.type === "function_call" && item.namespace === "collaboration"
+          ? { ...item, namespace: "agents" }
+          : item
+      );
+    }
+    if (payload.tool_choice?.type === "function" && payload.tool_choice.namespace === "collaboration") {
+      normalized.tool_choice = { ...payload.tool_choice, namespace: "agents" };
+    }
+  }
   if (tools.length === 0) delete normalized.tools;
   return normalized;
 }

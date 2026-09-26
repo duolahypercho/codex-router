@@ -638,6 +638,8 @@ function isSubagentSpawnCall(item) {
 export function injectSessionModelForSpawnCalls(item, model) {
   if (!isSpawnModelCall(item)) return item;
   if (typeof model !== "string" || !model) return item;
+  // Azure's plaintext handoff lets Codex honor its configured subagent model.
+  if (model.startsWith("azure-kmamc/") && isSubagentSpawnCall(item)) return item;
   if (typeof item.arguments !== "string") return item;
   if (!jsonArgumentsAreUnambiguous(item.arguments, { allowEmpty: true })) return item;
   let args;
@@ -2418,6 +2420,13 @@ function markAzurePlaintextCollaborationCall(item, sessionModel) {
   return { ...item, encrypted_function_args: [] };
 }
 
+function restoreAzureCollaborationAlias(item, lookups, sessionModel) {
+  if (!sessionModel?.startsWith("azure-kmamc/") || item?.namespace !== "agents") return item;
+  const owners = lookups.bareToNamespaces.get(item.name);
+  if (!owners?.has("collaboration") || owners.has("agents")) return item;
+  return { ...item, namespace: "collaboration" };
+}
+
 function rewriteNamespaceFunctionCallItem(
   item,
   lookups,
@@ -2481,6 +2490,7 @@ function rewriteNamespaceFunctionCallItem(
       };
     }
   }
+  rewritten = restoreAzureCollaborationAlias(rewritten, lookups, sessionModel);
   rewritten = sanitizeSpawnAgentModel(rewritten, lookups);
   // A client may declare an ordinary function whose literal name is
   // `codex_app__create_thread`. Its request-local alias resolves back to that

@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { normalizeAzureOpenAIResponsesRequest } from "../src/azure-openai-compat.mjs";
 
-test("azure-kmamc removes Codex image_gen namespace but preserves collaboration", () => {
+test("azure-kmamc removes image_gen and aliases collaboration for its provider", () => {
   const imageGen = {
     type: "namespace",
     name: "image_gen",
@@ -46,7 +46,7 @@ test("azure-kmamc removes Codex image_gen namespace but preserves collaboration"
     route: "/responses",
   });
 
-  assert.deepEqual(normalized.tools, [collaboration, shell]);
+  assert.deepEqual(normalized.tools, [{ ...collaboration, name: "agents" }, shell]);
   assert.equal(payload.tools.length, 6);
 });
 
@@ -66,7 +66,7 @@ test("other providers remain byte-shape untouched", () => {
 test("other Azure namespaces remain untouched", () => {
   const collaboration = {
     type: "namespace",
-    name: "collaboration",
+    name: "analytics",
     tools: [{ type: "function", name: "spawn_agent" }],
   };
 
@@ -78,6 +78,44 @@ test("other Azure namespaces remain untouched", () => {
   });
 
   assert.strictEqual(normalized, payload);
+});
+
+test("Azure collaboration alias preserves tool history and the caller's request", () => {
+  const collaboration = {
+    type: "namespace",
+    name: "collaboration",
+    tools: [
+      { type: "function", name: "spawn_agent", parameters: {
+        type: "object",
+        properties: { message: { type: "string", encrypted: true } },
+      } },
+      { type: "function", name: "wait_agent", parameters: { type: "object" } },
+    ],
+  };
+  const call = {
+    type: "function_call",
+    name: "spawn_agent",
+    namespace: "collaboration",
+    call_id: "call_1",
+    arguments: '{"task_name":"probe","message":"hello"}',
+  };
+  const output = { type: "function_call_output", call_id: "call_1", output: "done" };
+  const payload = {
+    tools: [collaboration],
+    input: [call, output],
+    tool_choice: { type: "function", name: "spawn_agent", namespace: "collaboration" },
+  };
+  const normalized = normalizeAzureOpenAIResponsesRequest(payload, {
+    providerId: "azure-kmamc",
+    route: "/responses",
+  });
+
+  assert.equal(normalized.tools[0].name, "agents");
+  assert.deepEqual(normalized.tools[0].tools[0].parameters.properties.message, { type: "string" });
+  assert.deepEqual(normalized.input, [{ ...call, namespace: "agents" }, output]);
+  assert.deepEqual(normalized.tool_choice, { ...payload.tool_choice, namespace: "agents" });
+  assert.equal(payload.tools[0].name, "collaboration");
+  assert.equal(payload.input[0].namespace, "collaboration");
 });
 
 test("Azure collaboration message tools use plaintext schemas without changing other tools", () => {
