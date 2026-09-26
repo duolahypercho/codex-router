@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -122,4 +123,94 @@ test("Windows refreshes managed Codex skills as a best-effort post-install step"
   assert.match(install, /if \(\$Target -eq "codex"\) \{/);
   assert.match(install, /\$SkillsExitCode\s*=\s*\$LASTEXITCODE/);
   assert.match(install, /Managed Codex skills could not be refreshed[\s\S]*the router is installed/);
+});
+
+// bin/uninstall removes the managed skills and bin/disable keeps them. The two
+// Windows verbs share Remove-TargetIntegration, so only uninstall may ask for
+// the removal, and it goes through a plain call rather than Invoke-RouterNode,
+// which throws: a skill failure must not stop the service being retired.
+test("Windows uninstall removes managed Codex skills; disable keeps them", () => {
+  const dispatcher = readScript("codex-router.ps1");
+  assert.match(dispatcher, /"uninstall"\s*\{\s*Remove-TargetIntegration -RemoveManagedSkills\s*\}/);
+  assert.match(dispatcher, /"disable"\s*\{\s*Remove-TargetIntegration\s*\}/);
+  const start = dispatcher.indexOf("function Remove-TargetIntegration");
+  const body = dispatcher.slice(start, dispatcher.indexOf("\nfunction ", start + 1));
+  const disable = body.indexOf('src\\config-manager.mjs" @("disable")');
+  const skills = body.indexOf('src\\skills-install.mjs") "uninstall"');
+  const service = body.indexOf('src\\service.mjs" @("uninstall")');
+  assert.ok(disable >= 0 && skills > disable, "skills are removed after the Codex config is disabled");
+  assert.ok(service > skills, "skills are removed before the shared service can be retired");
+  assert.match(body, /if \(\$RemoveManagedSkills -and \$Target -eq "codex"\)/);
+  assert.match(body, /\$SkillsExitCode\s*=\s*\$LASTEXITCODE/);
+  assert.match(body, /Managed Codex skills could not be removed/);
+  assert.doesNotMatch(body, /Invoke-RouterNode "src\\skills-install\.mjs"/);
+});
+
+// GitHub's Linux and macOS runners ship pwsh, so the dispatcher itself runs
+// there against a stand-in `node` that records which router script each call
+// named. Windows is covered by the parse check and the structural test above.
+const PWSH_AVAILABLE =
+  process.platform !== "win32" &&
+  spawnSync("pwsh", ["-NoLogo", "-NoProfile", "-Command", "exit 0"], { stdio: "ignore" }).status === 0;
+
+test("codex-router.ps1 uninstall runs the skill removal best effort", { skip: !PWSH_AVAILABLE }, () => {
+  const scratch = mkdtempSync(path.join(os.tmpdir(), "codex-router-ps1-"));
+  try {
+    const log = path.join(scratch, "calls.log");
+    const stub = path.join(scratch, "node");
+    writeFileSync(
+      stub,
+      [
+        "#!/bin/sh",
+        `script=$(basename "$(printf '%s' "$1" | tr '\\\\' '/')")`,
+        'echo "$script ${2:-}" >> "$STUB_LOG"',
+        'if [ "$script" = skills-install.mjs ]; then exit "${STUB_SKILLS_EXIT:-0}"; fi',
+        "exit 0",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(stub, 0o755);
+    const run = (command, { target = "codex", skillsExit = 0 } = {}) => {
+      writeFileSync(log, "");
+      const result = spawnSync(
+        "pwsh",
+        ["-NoLogo", "-NoProfile", "-File", path.join(root, "codex-router.ps1"), command],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            PATH: `${scratch}${path.delimiter}${process.env.PATH}`,
+            STUB_LOG: log,
+            STUB_SKILLS_EXIT: String(skillsExit),
+            MODEL_ROUTER_TARGET: target,
+          },
+        },
+      );
+      return { ...result, calls: readFileSync(log, "utf8").trim().split("\n") };
+    };
+
+    const uninstall = run("uninstall");
+    assert.equal(uninstall.status, 0, uninstall.stderr);
+    assert.deepEqual(uninstall.calls, [
+      "config-manager.mjs disable",
+      "skills-install.mjs uninstall",
+      "target-integration.mjs installed-targets",
+      "service.mjs uninstall",
+    ]);
+
+    const failing = run("uninstall", { skillsExit: 2 });
+    assert.equal(failing.status, 0, failing.stderr);
+    assert.match(`${failing.stdout}${failing.stderr}`, /Managed Codex skills could not be removed \(exit 2\)/);
+    assert.equal(failing.calls.at(-1), "service.mjs uninstall");
+
+    const disable = run("disable");
+    assert.equal(disable.status, 0, disable.stderr);
+    assert.ok(!disable.calls.some((call) => call.startsWith("skills-install.mjs")));
+
+    const harness = run("uninstall", { target: "dsh" });
+    assert.equal(harness.status, 0, harness.stderr);
+    assert.ok(!harness.calls.some((call) => call.startsWith("skills-install.mjs")));
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
 });
