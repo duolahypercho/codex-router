@@ -1,5 +1,11 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
+
+import { homebrewKegNode } from "./fixtures/homebrew-keg-node.mjs";
 
 import {
   environmentPoolRemovalReminder,
@@ -34,6 +40,33 @@ test("restart instructions are exact on POSIX and Windows", () => {
     routerServiceRestartCommand("win32"),
     "node .\\src\\control.mjs service restart",
   );
+});
+
+// Restarts also come from workers that outlive a Node upgrade, and `brew
+// upgrade node` deletes the keg such a worker runs from. Run the module from a
+// keg so its own process.execPath is the versioned path: the service command
+// must name the formula's opt link instead.
+test("service commands name a Node that survives the running keg", { skip: process.platform === "win32" }, () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "router-restart-keg-"));
+  try {
+    const { keg, opt } = homebrewKegNode(root);
+    const moduleUrl = new URL("../src/router-restart.mjs", import.meta.url).href;
+    const command = execFileSync(
+      keg,
+      [
+        "--input-type=module",
+        "--eval",
+        `import { routerServiceStatus } from ${JSON.stringify(moduleUrl)};
+let seen;
+await routerServiceStatus({ spawn: (command) => { seen = command; return { status: 1, stdout: "" }; } });
+process.stdout.write(seen);`,
+      ],
+      { encoding: "utf8" },
+    );
+    assert.equal(command, opt);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("routerServiceStatus reports an installed, loaded service", async () => {

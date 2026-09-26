@@ -1860,13 +1860,18 @@ about it.
   features, and ChatGPT authentication. Preserve `model` and `model_provider`
   outside those explicitly enabled routing modes.
 - Markers are comments, and a writer that re-serializes `config.toml` drops
-  them while keeping every table. An unmarked table is re-adopted only on the
-  evidence the markers carried: `strippedManagedRouterProvider` requires the
-  root keys to name this router's own port and private merged catalog, and
-  `withRestoredProviderTableMarkers` requires the protected v3 provider-mode
-  state to name the table. Both also require every field to be exactly what
-  this router renders (the auth command's Node path aside). Never widen either
-  to a looser match: a table that differs is somebody else's.
+  them while keeping every table. What they claimed is re-adopted only on the
+  evidence the markers carried: `strippedManagedRouterProvider` and
+  `strippedManagedRouterSettings` require the root keys to name this router's
+  own port and private merged catalog (decoded -- a Windows path is stored
+  escaped), and `withRestoredProviderTableMarkers` requires the protected v3
+  provider-mode state to name the table. Every field must decode to exactly
+  what this router writes (the auth command's path aside); values are compared
+  decoded, so a TOML library's padded or multi-line arrays still match. A
+  comment inside or between the router's tables means somebody wrote there,
+  exactly as it does inside a marked block, and a comment just above the next
+  table is never removed with ours. Never widen any of this to a looser match:
+  a table that differs is somebody else's.
 - A user-initiated macOS tray login-mode change may gracefully restart only the
   registered Codex desktop app. This does not authorize an installation task to
   quit Codex, and the tray must never force-terminate it.
@@ -3019,29 +3024,45 @@ start does not exist at request latency. The port has to already be open.
 
 `process.execPath` is the running binary's resolved path. On Homebrew that is
 the versioned keg (`<prefix>/Cellar/node/26.9.0/bin/node`), and `brew upgrade
-node` deletes it. Anything that names Node for use after this process exits --
-Codex's caller auth command, the `claude-router` and `cursor-router-agent`
-launchers, the launchd agent and systemd unit -- or that spawns Node from a
-process an upgrade can outlive goes through `src/stable-node.mjs`.
+node` deletes it. Anything that names Node for use after this process exits,
+or that spawns Node from a process an upgrade can outlive, takes it from
+`src/stable-node.mjs`, whose `homebrewStableNodePath()` maps a keg to its
+formula's `opt` link -- the path the Homebrew formula itself pins.
 
-1. **Recorded paths use `stableNodeBinary()`**, or `homebrewStableNodePath()`
-   where an explicit `CODEX_ROUTER_NODE_BIN` must stay verbatim, as in the
-   service definitions. It prefers an existing explicit
-   `CODEX_ROUTER_NODE_BIN`, maps a keg to its formula's `opt` link -- the path
-   the Homebrew formula itself pins -- and never names an Electron host.
-2. **Spawns use `childNodeBinary()`**, which falls back to `process.execPath`
-   instead of throwing: a machine without a system Node can run the router
-   through Electron with `ELECTRON_RUN_AS_NODE`.
-3. **The Node path is not ownership evidence.** The login-free provider block
-   is matched against its own rendering, and the auth `command` differs
-   whenever another Node rendered it. `withCurrentCallerAuthCommand` normalizes
-   a command that is still a Node executable before comparing; any other edit
-   still means somebody else changed the block. Matching it literally made
-   `enable`, `update`, and `doctor --fix` refuse with "lost ownership" after
-   every Node upgrade.
-4. Coverage lives in `test/stable-node.test.mjs`, the keg-upgrade case in
-   `test/config-manager.test.mjs`, and the auth-command case in
-   `test/doctor-routing-mode.test.mjs`.
+1. **Codex's caller auth command** (`callerAuthNode` in
+   `src/config-manager.mjs`) keeps the Node the config already names while it
+   still runs and is not a keg, so a working command is never churned and a
+   release the updater rolls back to still recognizes its block. Otherwise it
+   names this process's own Node, keg mapped to `opt`: always a real binary,
+   never an explicit `CODEX_ROUTER_NODE_BIN` launcher or a version-manager
+   shim whose Node depends on the directory Codex runs it from. Only an
+   Electron host, whose own binary would start the app, falls back to
+   `stableNodeBinary()`.
+2. **Launchers** (`claude-router`, `cursor-router-agent`) use
+   `stableNodeBinary()`: an existing, executable explicit
+   `CODEX_ROUTER_NODE_BIN`, then this process's own Node, then PATH -- keg
+   mapped, never an Electron host. **Service definitions** (launchd, systemd)
+   keep an explicit `CODEX_ROUTER_NODE_BIN` verbatim unless it names a keg.
+   The Windows task still records `process.execPath`; Windows has no kegs.
+3. **Spawns use `childNodeBinary()`**: this process's own Node, keg mapped,
+   exactly what `process.execPath` gave before except when the keg is gone;
+   then the wider search; then `process.execPath`, which a Node-less machine
+   runs through Electron with `ELECTRON_RUN_AS_NODE`. The service restart and
+   client-disconnect spawns use it. Other spawns of `process.execPath`
+   remain; move them to this helper rather than growing a second one.
+4. **The command path is not ownership evidence.** The login-free provider
+   block is matched against its own rendering, and the auth `command` differs
+   whenever another Node -- or an older Control Center's Electron host --
+   rendered it. `withCurrentCallerAuthCommand` normalizes any absolute command
+   path before comparing; the arguments, which run this router's caller-key
+   script on its private secret, are still compared exactly. Matching the
+   command literally made `enable`, `update`, and `doctor --fix` refuse with
+   "lost ownership" after every Node upgrade.
+5. Coverage lives in `test/stable-node.test.mjs`, the keg-upgrade case in
+   `test/config-manager.test.mjs` (run from a real keg through
+   `test/fixtures/homebrew-keg-node.mjs`, because Node resolves a symlinked
+   execPath), the keg case in `test/router-restart.test.mjs`, and the
+   auth-command case in `test/doctor-routing-mode.test.mjs`.
 
 ## Generated media and scratch output
 

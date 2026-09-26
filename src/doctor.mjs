@@ -1503,16 +1503,22 @@ if (TARGET === "gemini") {
     : [];
   if (authCommands.length) {
     const missing = authCommands.find((command) => !existsSync(command));
+    // An older Control Center rendered it from its Electron host, which Codex
+    // would launch as the app instead of running the key script.
+    const notNode = authCommands.find((command) =>
+      !/^node(?:js)?(?:\.exe)?$/i.test(String(command).split(/[\\/]/).pop()));
     const transient = authCommands.find((command) => homebrewStableNodePath(command) !== command);
     add(
-      missing ? "fail" : transient ? "warn" : "ok",
+      missing || notNode ? "fail" : transient ? "warn" : "ok",
       "Codex caller auth command",
       missing
         ? `${missing} no longer exists`
-        : transient
-          ? `${transient} is a versioned Homebrew keg the next Node upgrade removes`
-          : authCommands[0],
-      missing || transient
+        : notNode
+          ? `${notNode} is not a Node executable`
+          : transient
+            ? `${transient} is a versioned Homebrew keg the next Node upgrade removes`
+            : authCommands[0],
+      missing || notNode || transient
         ? "Run ./bin/doctor --fix to name a Node path that survives upgrades, then fully quit and reopen Codex."
         : undefined,
     );

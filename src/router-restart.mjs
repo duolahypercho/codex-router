@@ -98,10 +98,10 @@ async function invokeService(
     deadline,
     stdio,
   };
-  // Publication restarts the service from long-running workers (a model
-  // download, a curation transaction), so name a Node that survives an upgrade
-  // made while they ran: `brew upgrade node` deletes this process's own keg.
-  const node = childNodeBinary();
+  // Restarts also come from workers that can outlive a Node upgrade (a model
+  // download, a curation transaction), and `brew upgrade node` deletes the keg
+  // this process runs from, so name a Node that is still there.
+  const node = childNodeBinary({ environment: env ?? process.env });
   return childOwnsOperations
     ? runOperationProcessTree(node, [SERVICE_SCRIPT, ...args], { ...options, run })
     : run(node, [SERVICE_SCRIPT, ...args], options);

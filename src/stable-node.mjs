@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { accessSync, constants, statSync } from "node:fs";
 import path from "node:path";
 
 // Which Node binary to name in anything written down for later -- Codex's
@@ -12,10 +12,22 @@ import path from "node:path";
 // formula for this router pins CODEX_ROUTER_NODE_BIN to exactly that path.
 const HOMEBREW_KEG_NODE = /^(\/.+)\/Cellar\/([^/]+)\/[^/]+\/bin\/node$/;
 
+// A regular file this user may execute. A directory or a data file named in
+// CODEX_ROUTER_NODE_BIN exists, and recording it would fail on first use.
+export function runnableFile(candidate) {
+  try {
+    if (!statSync(candidate).isFile()) return false;
+    if (process.platform !== "win32") accessSync(candidate, constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // The stable `opt` spelling of a versioned Homebrew keg's Node, when that link
 // exists; any other path is returned unchanged. The link belongs to the same
 // formula, so a keg-only `node@22` stays on node@22 rather than on `node`.
-export function homebrewStableNodePath(nodePath, { exists = existsSync } = {}) {
+export function homebrewStableNodePath(nodePath, { exists = runnableFile } = {}) {
   const match = HOMEBREW_KEG_NODE.exec(String(nodePath || ""));
   if (!match) return nodePath;
   const stable = `${match[1]}/opt/${match[2]}/bin/node`;
@@ -31,7 +43,7 @@ export function stableNodeBinary({
   execPath = process.execPath,
   electron = Boolean(process.versions.electron),
   environment = process.env,
-  exists = existsSync,
+  exists = runnableFile,
 } = {}) {
   const usable = (candidate) => {
     if (!candidate || !path.isAbsolute(candidate)) return undefined;
@@ -66,14 +78,26 @@ export function stableNodeBinary({
   throw new Error("Node.js is unavailable; install Node.js 22 or newer.");
 }
 
-// For a child started now rather than recorded for later: the stable binary
-// when there is one, otherwise this process's own, which is what every such
-// spawn used before. Under Electron that is the app binary, and the caller's
-// ELECTRON_RUN_AS_NODE environment turns it back into Node.
-export function childNodeBinary(options = {}) {
+// For a child started now rather than recorded for later: this process's own
+// Node, as every such spawn used before -- a real binary, never a launcher or
+// a version-manager shim -- with a keg mapped to its opt link, which is still
+// there after an upgrade deleted the keg this process runs from. Only when
+// that fails, or under an Electron host, is the wider search used, and failing
+// that this process's own binary again, which the caller's
+// ELECTRON_RUN_AS_NODE environment turns back into Node.
+export function childNodeBinary({
+  execPath = process.execPath,
+  electron = Boolean(process.versions.electron),
+  environment = process.env,
+  exists = runnableFile,
+} = {}) {
+  if (!electron && path.isAbsolute(execPath)) {
+    const own = homebrewStableNodePath(execPath, { exists });
+    if (exists(own)) return own;
+  }
   try {
-    return stableNodeBinary(options);
+    return stableNodeBinary({ execPath, electron, environment, exists });
   } catch {
-    return options.execPath ?? process.execPath;
+    return execPath;
   }
 }

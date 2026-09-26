@@ -345,7 +345,6 @@ wire_api = "responses"
       ...process.env,
       CODEX_BIN: writeCodexStub(codexHome),
       CODEX_HOME: codexHome,
-      CODEX_ROUTER_NODE_BIN: optNode,
       CODEX_ROUTER_PORT: "46194",
       CODEX_ROUTER_STATE_DIR: stateDir,
       MODEL_ROUTER_STATE_DIR: stateDir,
@@ -369,16 +368,18 @@ wire_api = "responses"
         const result = child("config-manager.mjs", args, env);
         assert.equal(result.status, 0, result.stderr);
       }
+      // The router names its own Node, which is not a keg here.
       const written = readFileSync(configPath, "utf8");
-      assert.ok(written.includes(commandLine(optNode)));
+      const ownNode = process.execPath;
+      assert.ok(written.includes(commandLine(ownNode)));
 
       assert.deepEqual(authCheck().auth, {
         status: "ok",
         name: "Codex caller auth command",
-        detail: optNode,
+        detail: ownNode,
       });
 
-      writeFileSync(configPath, written.replace(commandLine(optNode), commandLine(currentKeg)), {
+      writeFileSync(configPath, written.replace(commandLine(ownNode), commandLine(currentKeg)), {
         mode: 0o600,
       });
       assert.deepEqual(authCheck().auth, {
@@ -388,7 +389,7 @@ wire_api = "responses"
         fix: "Run ./bin/doctor --fix to name a Node path that survives upgrades, then fully quit and reopen Codex.",
       });
 
-      writeFileSync(configPath, written.replace(commandLine(optNode), commandLine(removedKeg)), {
+      writeFileSync(configPath, written.replace(commandLine(ownNode), commandLine(removedKeg)), {
         mode: 0o600,
       });
       const stale = authCheck();
@@ -400,6 +401,22 @@ wire_api = "responses"
       });
       // The stale path is not mistaken for somebody else's provider table.
       assert.equal(stale.loginMode.status, "ok");
+
+      // An older Control Center rendered the command from its Electron host,
+      // which Codex would launch as the app rather than run as Node.
+      const electronHost = path.join(codexHome, "Codex Router");
+      writeFileSync(electronHost, "", { mode: 0o755 });
+      writeFileSync(configPath, written.replace(commandLine(ownNode), commandLine(electronHost)), {
+        mode: 0o600,
+      });
+      const host = authCheck();
+      assert.deepEqual(host.auth, {
+        status: "fail",
+        name: "Codex caller auth command",
+        detail: `${electronHost} is not a Node executable`,
+        fix: "Run ./bin/doctor --fix to name a Node path that survives upgrades, then fully quit and reopen Codex.",
+      });
+      assert.equal(host.loginMode.status, "ok");
     } finally {
       rmSync(codexHome, { recursive: true, force: true });
     }

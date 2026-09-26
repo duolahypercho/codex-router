@@ -6,7 +6,6 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
-  symlinkSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
@@ -19,6 +18,7 @@ import { privateFileIsProtected } from "../src/file-security.mjs";
 import { refreshCodexCallerCapabilityContents } from "../src/caller-key-client-refresh.mjs";
 import { CODEX_PATCH_HOOK_BASE_PATH } from "../src/codex-patch-hook-endpoint.mjs";
 import { scanTomlDocument } from "../src/toml-structure.mjs";
+import { homebrewKegNode } from "./fixtures/homebrew-keg-node.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const manager = path.join(root, "src", "config-manager.mjs");
@@ -90,6 +90,7 @@ function run(
   stateDir = path.join(codexHome, "router-state"),
   commandArgs = [],
   env = {},
+  node = process.execPath,
 ) {
   mkdirSync(stateDir, { recursive: true, mode: 0o700 });
   const callerSecretPath = path.join(stateDir, "caller-secret");
@@ -97,7 +98,7 @@ function run(
     writeFileSync(callerSecretPath, `${CALLER_KEY}\n`, { mode: 0o600 });
   }
   return JSON.parse(
-    execFileSync(process.execPath, [manager, command, ...commandArgs], {
+    execFileSync(node, [manager, command, ...commandArgs], {
       cwd: root,
       encoding: "utf8",
       env: {
@@ -840,17 +841,13 @@ test(
     const codexHome = mkdtempSync(path.join(os.tmpdir(), "codex-router-login-free-node-"));
     const stateDir = path.join(codexHome, "router-state");
     const configPath = path.join(codexHome, "config.toml");
-    // A Homebrew prefix holding only the current keg and the formula's opt link.
-    const prefix = path.join(codexHome, "homebrew");
-    const currentKeg = path.join(prefix, "Cellar", "node", "26.10.0", "bin", "node");
-    const optNode = path.join(prefix, "opt", "node", "bin", "node");
-    const removedKeg = path.join(prefix, "Cellar", "node", "26.9.0", "bin", "node");
-    for (const binary of [currentKeg, optNode]) {
-      mkdirSync(path.dirname(binary), { recursive: true });
-      symlinkSync(process.execPath, binary);
-    }
-    const env = { CODEX_ROUTER_NODE_BIN: currentKeg };
+    // The config manager runs from the current keg, exactly as a Homebrew
+    // install does: its process.execPath is the versioned path.
+    const { keg, opt, removedKeg } = homebrewKegNode(codexHome);
+    const fromKeg = (command, args = [], env = {}) =>
+      run(command, codexHome, stateDir, args, env, keg);
     const commandLine = (binary) => `command = ${JSON.stringify(binary)}`;
+    const withCommand = (text, binary) => text.replace(/^command = .*$/m, () => commandLine(binary));
     writeFileSync(
       configPath,
       `model_provider = "custom"
@@ -864,47 +861,65 @@ wire_api = "responses"
     );
 
     try {
-      run("enable", codexHome, stateDir, [], env);
-      const enabled = run(
-        "login-free-enable",
-        codexHome,
-        stateDir,
-        ["deepseek/deepseek-v4-pro"],
-        env,
-      );
+      // A launcher named in CODEX_ROUTER_NODE_BIN is not what Codex runs: a
+      // later run without it would render a different command and disown
+      // the block. The command is this process's own Node, keg mapped to opt.
+      const launcher = path.join(codexHome, "node-launcher");
+      writeFileSync(launcher, `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} "$@"\n`, { mode: 0o755 });
+      fromKeg("enable", [], { CODEX_ROUTER_NODE_BIN: launcher });
+      const enabled = fromKeg("login-free-enable", ["deepseek/deepseek-v4-pro"], { CODEX_ROUTER_NODE_BIN: launcher });
       assert.equal(enabled.login_free_managed, true);
       const written = readFileSync(configPath, "utf8");
-      assert.ok(written.includes(commandLine(optNode)), "the command names the formula's opt link");
-      assert.doesNotMatch(written, /Cellar/);
-      assert.deepEqual(enabled.caller_auth_commands, [optNode]);
-
-      // What an older router wrote before the upgrade removed its keg.
-      const stale = written.replace(commandLine(optNode), commandLine(removedKeg));
-      writeFileSync(configPath, stale, { mode: 0o600 });
-      assert.deepEqual(
-        run("status", codexHome, stateDir, [], env).caller_auth_commands,
-        [removedKeg],
-      );
-      const repaired = run("enable", codexHome, stateDir, [], env);
-      assert.equal(repaired.login_free, true);
-      assert.equal(repaired.login_free_managed, true);
-      assert.deepEqual(repaired.caller_auth_commands, [optNode]);
+      assert.ok(written.includes(commandLine(opt)), "the command names the formula's opt link");
+      assert.doesNotMatch(written, /Cellar|node-launcher/);
+      assert.deepEqual(enabled.caller_auth_commands, [opt]);
+      assert.equal(fromKeg("enable").login_free_managed, true);
       assert.equal(readFileSync(configPath, "utf8"), written);
 
-      // A command that is no longer Node is somebody's edit, not a stale path.
+      // What an older router wrote before the upgrade removed its keg.
+      const stale = withCommand(written, removedKeg);
+      writeFileSync(configPath, stale, { mode: 0o600 });
+      assert.deepEqual(fromKeg("status").caller_auth_commands, [removedKeg]);
+      const repaired = fromKeg("enable");
+      assert.equal(repaired.login_free, true);
+      assert.equal(repaired.login_free_managed, true);
+      assert.deepEqual(repaired.caller_auth_commands, [opt]);
+      assert.equal(readFileSync(configPath, "utf8"), written);
+
+      // A keg that still exists is rewritten too: the next upgrade deletes it.
+      writeFileSync(configPath, withCommand(written, keg), { mode: 0o600 });
+      assert.deepEqual(fromKeg("enable").caller_auth_commands, [opt]);
+
+      // A working command that is not a keg is kept rather than churned, so a
+      // release the updater rolls back to still recognizes its own block.
+      writeFileSync(configPath, withCommand(written, process.execPath), { mode: 0o600 });
+      assert.deepEqual(fromKeg("enable").caller_auth_commands, [process.execPath]);
+
+      // An older Control Center rendered the command from its Electron host.
+      // The rest of the table still proves the block is the router's, so it
+      // is repaired rather than disowned.
       writeFileSync(
         configPath,
-        written.replace(commandLine(optNode), commandLine("/usr/local/bin/credential-helper")),
+        withCommand(written, "/Applications/Codex Router.app/Contents/MacOS/Codex Router"),
         { mode: 0o600 },
       );
-      assert.throws(
-        () => run("enable", codexHome, stateDir, [], env),
-        /Login-free mode lost ownership/,
+      assert.equal(fromKeg("status").login_free_managed, true);
+      assert.deepEqual(fromKeg("enable").caller_auth_commands, [opt]);
+
+      // Different arguments, or a command that is not even a path, are
+      // somebody's edit.
+      writeFileSync(
+        configPath,
+        written.replace("caller-key-auth-command.mjs", "credential-helper.mjs"),
+        { mode: 0o600 },
       );
+      assert.throws(() => fromKeg("enable"), /Login-free mode lost ownership/);
+      writeFileSync(configPath, withCommand(written, "credential-helper"), { mode: 0o600 });
+      assert.throws(() => fromKeg("enable"), /Login-free mode lost ownership/);
 
       // Turning login-free mode off works from the stale state too.
       writeFileSync(configPath, stale, { mode: 0o600 });
-      const restored = run("login-free-disable", codexHome, stateDir, [], env);
+      const restored = fromKeg("login-free-disable");
       assert.equal(restored.login_free, false);
       assert.equal(restored.model_provider, "custom");
       assert.match(readFileSync(configPath, "utf8"), /https:\/\/direct\.invalid\/v1/);
@@ -1069,110 +1084,146 @@ test("disabling the router from login-free mode restores an originally unset pro
 // provider table as user-owned, with nothing the operator could run.
 const withoutComments = (text) =>
   text.split("\n").filter((line) => !line.trim().startsWith("#")).join("\n");
+// The shapes two real libraries write back, measured against Python's `toml`
+// 0.10.2 and tomli_w 1.2.0: no comments, the inline feature table spread into
+// its own table, and the auth arguments padded with a trailing comma or one
+// element per line.
+const roundTrips = {
+  "comment filter": withoutComments,
+  "toml 0.10.2": (text) => withoutComments(text)
+    .replace(/^\[features\]\nmulti_agent_v2 = \{ (.*) \}$/m, (_match, fields) =>
+      `[features.multi_agent_v2]\n${fields.split(/, (?=[a-z_]+ = )/).join("\n")}`)
+    .replace(/^args = \[(.*)\]$/m, (_match, items) => `args = [ ${items},]`),
+  "tomli_w 1.2.0": (text) => withoutComments(text)
+    .replace(/^\[features\]\nmulti_agent_v2 = \{ (.*) \}$/m, (_match, fields) =>
+      `[features.multi_agent_v2]\n${fields.split(/, (?=[a-z_]+ = )/).join("\n")}`)
+    .replace(/^args = \[(.*)\]$/m, (_match, items) =>
+      `args = [\n${items.split(", ").map((item) => `    ${item},`).join("\n")}\n]`),
+};
 const providerHeaders = (text, provider) =>
   text.split("\n").filter((line) => line.trim() === `[model_providers.${provider}]`).length;
+const rootAssignments = (text, key) =>
+  text.split("\n").filter((line) => new RegExp(`^${key}\\s*=`).test(line)).length;
+// A backslash in the state directory stores the catalog path escaped, as every
+// Windows path is; the raw path then never appears in the file's text.
+const escapedStateDir = (codexHome) =>
+  path.join(codexHome, process.platform === "win32" ? "router-state" : "router\\state");
+const routerResidue = /codex-router|127\.0\.0\.1|experimental_realtime|multi_agent_v2|caller-key/;
 
 test("enable and disable recover a router config whose markers were stripped", () => {
-  const codexHome = mkdtempSync(path.join(os.tmpdir(), "codex-router-stripped-"));
+  for (const [name, roundTrip] of Object.entries(roundTrips)) {
+    const codexHome = mkdtempSync(path.join(os.tmpdir(), "codex-router-stripped-"));
+    const stateDir = escapedStateDir(codexHome);
+    const configPath = path.join(codexHome, "config.toml");
+    const original = 'model = "gpt-5.6-sol"\n\n[profiles.work]\napproval_policy = "never"\n';
+    writeFileSync(configPath, original, { mode: 0o600 });
+
+    try {
+      run("enable", codexHome, stateDir);
+      const managed = readFileSync(configPath, "utf8");
+      // Somebody's own note, written after the round trip, heads their table.
+      const stripped = `${roundTrip(managed).trimEnd()}\n\n# Team profile (OPS-123)\n[profiles.team]\napproval_policy = "on-request"\n`;
+      writeFileSync(configPath, stripped, { mode: 0o600 });
+
+      const recovered = run("enable", codexHome, stateDir);
+      assert.equal(recovered.mode, "router", name);
+      const config = readFileSync(configPath, "utf8");
+      scanTomlDocument(config);
+      assert.equal(rootAssignments(config, "openai_base_url"), 1, `${name}: one base URL`);
+      assert.equal(providerHeaders(config, "codex-router"), 1, name);
+      assert.match(config, /# BEGIN codex-router-managed\nopenai_base_url = /, name);
+      assert.match(config, /# BEGIN codex-router-provider-managed\n\[model_providers\.codex-router\]/, name);
+      assert.match(config, /# BEGIN codex-router-multi-agent-v2-managed\nmulti_agent_v2 = /, name);
+      assert.match(config, /# Team profile \(OPS-123\)\n\[profiles\.team\]/, `${name}: the user's note survives`);
+
+      // Disable retires everything the router wrote, stripped or not; an
+      // orphaned provider table would refuse every later reinstall.
+      writeFileSync(configPath, roundTrip(config), { mode: 0o600 });
+      assert.equal(run("disable", codexHome, stateDir).mode, "native", name);
+      const disabled = readFileSync(configPath, "utf8");
+      assert.doesNotMatch(disabled, routerResidue, `${name}: no router settings left behind`);
+      assert.match(disabled, /\[profiles\.work\]\napproval_policy = "never"/, name);
+      assert.equal(run("enable", codexHome, stateDir).mode, "router", name);
+    } finally {
+      rmSync(codexHome, { recursive: true, force: true });
+    }
+  }
+
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), "codex-router-stripped-refuse-"));
   const stateDir = path.join(codexHome, "router-state");
   const configPath = path.join(codexHome, "config.toml");
-  writeFileSync(
-    configPath,
-    'model = "gpt-5.6-sol"\n\n[profiles.work]\napproval_policy = "never"\n',
-    { mode: 0o600 },
-  );
-
+  writeFileSync(configPath, 'model = "gpt-5.6-sol"\n', { mode: 0o600 });
   try {
     run("enable", codexHome, stateDir);
-    const managed = readFileSync(configPath, "utf8");
-    writeFileSync(configPath, withoutComments(managed), { mode: 0o600 });
-
-    const recovered = run("enable", codexHome, stateDir);
-    assert.equal(recovered.mode, "router");
-    const config = readFileSync(configPath, "utf8");
-    scanTomlDocument(config);
-    assert.equal(providerHeaders(config, "codex-router"), 1);
-    assert.match(config, /# BEGIN codex-router-managed\nopenai_base_url = /);
-    assert.match(config, /# BEGIN codex-router-provider-managed\n\[model_providers\.codex-router\]/);
-    assert.match(config, /\[profiles\.work\]\napproval_policy = "never"/);
-
-    // Disable retires the stripped table too; an orphan left behind would
-    // refuse every later reinstall as user-owned.
-    writeFileSync(configPath, withoutComments(config), { mode: 0o600 });
-    assert.equal(run("disable", codexHome, stateDir).mode, "native");
-    assert.equal(providerHeaders(readFileSync(configPath, "utf8"), "codex-router"), 0);
-    assert.equal(run("enable", codexHome, stateDir).mode, "router");
-
-    // The same table with a field this router never writes is somebody's.
-    writeFileSync(
-      configPath,
-      withoutComments(readFileSync(configPath, "utf8")).replace(
-        'wire_api = "responses"',
-        'wire_api = "responses"\nstream_idle_timeout_ms = 300000',
-      ),
-      { mode: 0o600 },
-    );
-    assert.throws(
-      () => run("enable", codexHome, stateDir),
-      /Refusing to replace user-owned model provider codex-router/,
-    );
-
-    // So is one whose root keys no longer name this router's own catalog: the
-    // markers' evidence has to be there in some other form.
-    writeFileSync(
-      configPath,
-      withoutComments(managed).replace(
-        /^model_catalog_json = .*$/m,
-        `model_catalog_json = ${JSON.stringify(path.join(codexHome, "elsewhere.json"))}`,
-      ),
-      { mode: 0o600 },
-    );
-    assert.throws(
-      () => run("enable", codexHome, stateDir),
-      /Refusing to replace user-owned model provider codex-router/,
-    );
+    const stripped = withoutComments(readFileSync(configPath, "utf8"));
+    // A field this router never writes, or a note inside the table, makes it
+    // somebody's.
+    for (const edited of [
+      stripped.replace('wire_api = "responses"', 'wire_api = "responses"\nstream_idle_timeout_ms = 300000'),
+      stripped.replace('wire_api = "responses"', 'wire_api = "responses"\n# pinned for OPS-7'),
+      stripped.replace(/^model_catalog_json = .*$/m, () =>
+        `model_catalog_json = ${JSON.stringify(path.join(codexHome, "elsewhere.json"))}`),
+    ]) {
+      writeFileSync(configPath, edited, { mode: 0o600 });
+      assert.throws(
+        () => run("enable", codexHome, stateDir),
+        /Refusing to replace user-owned model provider codex-router/,
+      );
+      assert.equal(readFileSync(configPath, "utf8"), edited, "a refusal writes nothing");
+    }
   } finally {
     rmSync(codexHome, { recursive: true, force: true });
   }
 });
 
 test("login-free mode on the router provider survives stripped markers", () => {
-  const codexHome = mkdtempSync(path.join(os.tmpdir(), "codex-router-stripped-v1-"));
-  const stateDir = path.join(codexHome, "router-state");
-  const configPath = path.join(codexHome, "config.toml");
-  writeFileSync(configPath, 'model = "gpt-5.6-sol"\n', { mode: 0o600 });
+  for (const [name, roundTrip] of Object.entries(roundTrips)) {
+    const codexHome = mkdtempSync(path.join(os.tmpdir(), "codex-router-stripped-v1-"));
+    const stateDir = escapedStateDir(codexHome);
+    const configPath = path.join(codexHome, "config.toml");
+    writeFileSync(configPath, 'model = "gpt-5.6-sol"\n', { mode: 0o600 });
 
-  try {
-    run("enable", codexHome, stateDir);
-    const enabled = run("login-free-enable", codexHome, stateDir, ["deepseek/deepseek-v4-pro"]);
-    assert.equal(enabled.model_provider, "codex-router");
-    writeFileSync(configPath, withoutComments(readFileSync(configPath, "utf8")), { mode: 0o600 });
+    try {
+      run("enable", codexHome, stateDir);
+      const enabled = run("login-free-enable", codexHome, stateDir, ["deepseek/deepseek-v4-pro"]);
+      assert.equal(enabled.model_provider, "codex-router");
+      writeFileSync(configPath, roundTrip(readFileSync(configPath, "utf8")), { mode: 0o600 });
+      // Status still names the auth command, so doctor can check it.
+      assert.equal(run("status", codexHome, stateDir).caller_auth_commands.length, 1, name);
 
-    const recovered = run("enable", codexHome, stateDir);
-    assert.equal(recovered.login_free, true);
-    assert.equal(recovered.login_free_managed, true);
-    const config = readFileSync(configPath, "utf8");
-    scanTomlDocument(config);
-    assert.equal(providerHeaders(config, "codex-router"), 1);
-    assert.equal(providerHeaders(config, "codex-router.auth"), 1);
+      const recovered = run("enable", codexHome, stateDir);
+      assert.equal(recovered.login_free, true, name);
+      assert.equal(recovered.login_free_managed, true, name);
+      const config = readFileSync(configPath, "utf8");
+      scanTomlDocument(config);
+      assert.equal(rootAssignments(config, "openai_base_url"), 1, name);
+      assert.equal(providerHeaders(config, "codex-router"), 1, name);
+      assert.equal(providerHeaders(config, "codex-router.auth"), 1, name);
 
-    writeFileSync(configPath, withoutComments(config), { mode: 0o600 });
-    const restored = run("login-free-disable", codexHome, stateDir);
-    assert.equal(restored.login_free, false);
-    assert.equal(restored.model, "gpt-5.6-sol");
-    scanTomlDocument(readFileSync(configPath, "utf8"));
-  } finally {
-    rmSync(codexHome, { recursive: true, force: true });
+      writeFileSync(configPath, roundTrip(config), { mode: 0o600 });
+      const restored = run("login-free-disable", codexHome, stateDir);
+      assert.equal(restored.login_free, false, name);
+      assert.equal(restored.model, "gpt-5.6-sol", name);
+      scanTomlDocument(readFileSync(configPath, "utf8"));
+      run("disable", codexHome, stateDir);
+      assert.doesNotMatch(readFileSync(configPath, "utf8"), routerResidue, name);
+    } finally {
+      rmSync(codexHome, { recursive: true, force: true });
+    }
   }
 });
 
 test("login-free mode on the user's own provider table survives stripped markers", () => {
-  const codexHome = mkdtempSync(path.join(os.tmpdir(), "codex-router-stripped-v3-"));
-  const stateDir = path.join(codexHome, "router-state");
-  const configPath = path.join(codexHome, "config.toml");
-  writeFileSync(
-    configPath,
-    `model = "gpt-5.6-sol"
+  for (const [name, roundTrip] of Object.entries(roundTrips)) {
+    const codexHome = mkdtempSync(path.join(os.tmpdir(), "codex-router-stripped-v3-"));
+    const stateDir = escapedStateDir(codexHome);
+    const configPath = path.join(codexHome, "config.toml");
+    // `$'` is a replacement pattern to String#replace: a restore that passed
+    // this section as a replacement string handed back a different secret.
+    const secret = "Bearer ab$'cd$&ef$$gh";
+    writeFileSync(
+      configPath,
+      `model = "gpt-5.6-sol"
 model_provider = "custom"
 
 [model_providers.custom]
@@ -1181,70 +1232,69 @@ base_url = "https://direct.invalid/v1"
 wire_api = "responses"
 
 [model_providers.custom.http_headers]
-Authorization = "Bearer ORIGINAL_STRIPPED_SECRET"
+Authorization = ${JSON.stringify(secret)}
 `,
-    { mode: 0o600 },
-  );
-
-  try {
-    run("enable", codexHome, stateDir);
-    run("login-free-enable", codexHome, stateDir, ["deepseek/deepseek-v4-pro"]);
-    // Stripped by the same round trip that left a Node upgrade's dead keg in
-    // the auth command: both have to be survivable at once.
-    const removedKeg = "/opt/homebrew/Cellar/node/0.0.1/bin/node";
-    const stripped = withoutComments(readFileSync(configPath, "utf8"))
-      .replace(/^command = .*$/m, `command = ${JSON.stringify(removedKeg)}`);
-    assert.doesNotMatch(stripped, /codex-router-signed-provider/);
-    writeFileSync(configPath, stripped, { mode: 0o600 });
-
-    // Status reads the protected state and the router's own rendering, not the
-    // missing comments, so the table is still reported as managed -- and it
-    // still reports the command the file actually names.
-    const status = run("status", codexHome, stateDir);
-    assert.equal(status.login_free, true);
-    assert.equal(status.login_free_managed, true);
-    assert.deepEqual(status.caller_auth_commands, [removedKeg]);
-    assert.equal(readFileSync(configPath, "utf8"), stripped, "status never writes");
-
-    const recovered = run("enable", codexHome, stateDir);
-    assert.equal(recovered.login_free_managed, true);
-    assert.equal(recovered.caller_auth_commands.length, 1);
-    assert.notEqual(recovered.caller_auth_commands[0], removedKeg);
-    const config = readFileSync(configPath, "utf8");
-    scanTomlDocument(config);
-    assert.equal(
-      config.split("\n").filter((line) => line.startsWith("# codex-router-signed-provider-tree-slot")).length,
-      2,
-      "one slot per original provider section",
-    );
-
-    writeFileSync(configPath, withoutComments(config), { mode: 0o600 });
-    const restored = run("login-free-disable", codexHome, stateDir);
-    assert.equal(restored.login_free, false);
-    assert.equal(restored.model_provider, "custom");
-    assert.equal(restored.model, "gpt-5.6-sol");
-    const final = readFileSync(configPath, "utf8");
-    scanTomlDocument(final);
-    assert.match(final, /base_url = "https:\/\/direct\.invalid\/v1"/);
-    assert.match(final, /Authorization = "Bearer ORIGINAL_STRIPPED_SECRET"/);
-    assert.equal(providerHeaders(final, "custom"), 1);
-
-    // A managed table somebody edited stays refused, stripped or not.
-    run("login-free-enable", codexHome, stateDir, ["deepseek/deepseek-v4-pro"]);
-    writeFileSync(
-      configPath,
-      withoutComments(readFileSync(configPath, "utf8")).replace(
-        "supports_websockets = true",
-        "supports_websockets = true\nstream_max_retries = 9",
-      ),
       { mode: 0o600 },
     );
-    assert.throws(
-      () => run("enable", codexHome, stateDir),
-      /Login-free mode lost ownership/,
-    );
-  } finally {
-    rmSync(codexHome, { recursive: true, force: true });
+
+    try {
+      run("enable", codexHome, stateDir);
+      run("login-free-enable", codexHome, stateDir, ["deepseek/deepseek-v4-pro"]);
+      // Stripped by the same round trip that left a dead Node in the auth
+      // command -- one whose path holds a replacement pattern of its own.
+      const removedNode = "/Users/dev/tools$'22/bin/node";
+      const stripped = roundTrip(readFileSync(configPath, "utf8"))
+        .replace(/^command = .*$/m, () => `command = ${JSON.stringify(removedNode)}`);
+      assert.doesNotMatch(stripped, /codex-router-signed-provider/);
+      writeFileSync(configPath, stripped, { mode: 0o600 });
+
+      // Status reads the protected state and the router's own rendering, not
+      // the missing comments, so the table is still reported as managed --
+      // and it still reports the command the file actually names.
+      const status = run("status", codexHome, stateDir);
+      assert.equal(status.login_free, true, name);
+      assert.equal(status.login_free_managed, true, name);
+      assert.deepEqual(status.caller_auth_commands, [removedNode], name);
+      assert.equal(readFileSync(configPath, "utf8"), stripped, "status never writes");
+
+      const recovered = run("enable", codexHome, stateDir);
+      assert.equal(recovered.login_free_managed, true, name);
+      assert.deepEqual(recovered.caller_auth_commands, [process.execPath], name);
+      const config = readFileSync(configPath, "utf8");
+      scanTomlDocument(config);
+      assert.equal(rootAssignments(config, "openai_base_url"), 1, name);
+      assert.equal(
+        config.split("\n").filter((line) => line.startsWith("# codex-router-signed-provider-tree-slot")).length,
+        2,
+        "one slot per original provider section",
+      );
+
+      writeFileSync(configPath, roundTrip(config), { mode: 0o600 });
+      const restored = run("login-free-disable", codexHome, stateDir);
+      assert.equal(restored.login_free, false, name);
+      assert.equal(restored.model_provider, "custom", name);
+      assert.equal(restored.model, "gpt-5.6-sol", name);
+      const final = readFileSync(configPath, "utf8");
+      scanTomlDocument(final);
+      assert.match(final, /base_url = "https:\/\/direct\.invalid\/v1"/, name);
+      assert.ok(final.includes(`Authorization = ${JSON.stringify(secret)}`), `${name}: the secret is restored exactly`);
+      assert.equal(providerHeaders(final, "custom"), 1, name);
+
+      // A managed table somebody edited -- a field or a note -- stays refused,
+      // stripped or not, and the refusal writes nothing.
+      run("login-free-enable", codexHome, stateDir, ["deepseek/deepseek-v4-pro"]);
+      const managed = roundTrip(readFileSync(configPath, "utf8"));
+      for (const edited of [
+        managed.replace("supports_websockets = true", "supports_websockets = true\nstream_max_retries = 9"),
+        managed.replace("supports_websockets = true", "supports_websockets = true\n# keep for OPS-9"),
+      ]) {
+        writeFileSync(configPath, edited, { mode: 0o600 });
+        assert.throws(() => run("enable", codexHome, stateDir), /Login-free mode lost ownership/);
+        assert.equal(readFileSync(configPath, "utf8"), edited, name);
+      }
+    } finally {
+      rmSync(codexHome, { recursive: true, force: true });
+    }
   }
 });
 

@@ -6,9 +6,12 @@
   command on every routed turn. Worse, the config manager matched that path
   literally when deciding whether it still owned its login-free provider
   block, so the next `update`, `enable`, or `doctor --fix` refused with "lost
-  ownership" and left the dead command in place. Recorded paths now name the
-  formula's `opt` link (or an explicit `CODEX_ROUTER_NODE_BIN`), the auth
-  command's Node path is no longer treated as ownership evidence, and the
-  service restart and client-disconnect spawns resolve Node the same way.
-  `doctor` reports a caller auth command whose Node is gone, and warns while it
-  still names a keg; `./bin/doctor --fix` rewrites it.
+  ownership" and left the dead command in place. A keg is now recorded as its
+  formula's `opt` link; the auth command keeps a working, non-keg Node it
+  already names and otherwise uses the router's own Node binary, never a
+  launcher or version-manager shim; and its path is no longer treated as
+  ownership evidence, which also recovers a command an older Control Center
+  recorded as its Electron app. The service restart and client-disconnect
+  spawns resolve Node the same way. `doctor` fails on an auth command whose
+  Node is gone or is not Node at all, and warns while it names a keg;
+  `./bin/doctor --fix` rewrites it.

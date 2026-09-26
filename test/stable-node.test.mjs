@@ -1,9 +1,13 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 
 import {
   childNodeBinary,
   homebrewStableNodePath,
+  runnableFile,
   stableNodeBinary,
 } from "../src/stable-node.mjs";
 
@@ -134,5 +138,58 @@ test("a child spawn falls back to this process when no Node can be found", () =>
       }),
       "/opt/homebrew/opt/node/bin/node",
     );
+  }
+});
+
+test("a child spawn keeps this process's own Node over an explicit runtime", () => {
+  // Every spawn used process.execPath before; an explicit value can be a
+  // launcher or a version-manager shim, so it is only a fallback.
+  assert.equal(
+    childNodeBinary({
+      environment: { CODEX_ROUTER_NODE_BIN: "/stable/node" },
+      execPath: "/own/node",
+      electron: false,
+      exists: onDisk("/stable/node", "/own/node"),
+    }),
+    "/own/node",
+  );
+  if (posix) {
+    // A deleted keg with no opt link falls through to the explicit runtime.
+    assert.equal(
+      childNodeBinary({
+        environment: { CODEX_ROUTER_NODE_BIN: "/stable/node" },
+        execPath: "/opt/homebrew/Cellar/node/26.9.0/bin/node",
+        electron: false,
+        exists: onDisk("/stable/node"),
+      }),
+      "/stable/node",
+    );
+  }
+});
+
+test("only a regular executable file counts as a Node binary", { skip: !posix }, () => {
+  const directory = mkdtempSync(path.join(os.tmpdir(), "stable-node-runnable-"));
+  try {
+    const executable = path.join(directory, "node");
+    const data = path.join(directory, "data");
+    writeFileSync(executable, "#!/bin/sh\n", { mode: 0o755 });
+    writeFileSync(data, "", { mode: 0o644 });
+    assert.equal(runnableFile(executable), true);
+    // Even root needs an execute bit on a regular file.
+    assert.equal(runnableFile(data), false);
+    assert.equal(runnableFile(directory), false);
+    assert.equal(runnableFile(path.join(directory, "missing")), false);
+    // A directory named in CODEX_ROUTER_NODE_BIN exists but would fail on
+    // first use, so the search moves on.
+    assert.equal(
+      stableNodeBinary({
+        environment: { CODEX_ROUTER_NODE_BIN: directory },
+        execPath: executable,
+        electron: false,
+      }),
+      executable,
+    );
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
   }
 });
