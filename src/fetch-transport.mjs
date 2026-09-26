@@ -65,11 +65,10 @@ export function installStableFetchTransport({
   return dispatcher;
 }
 
-// A Grok OAuth turn can stay silent for minutes while it reasons. The shared
-// pool keeps Undici's 300s body idle bound for every other provider; a hop that
-// carries a Grok stream uses this separate pool instead, whose bound outlasts
-// the router's stall guard. The dispatcher class and proxy decision match the
-// shared pool, so only the idle bounds differ. The headers bound moves with the
+// Grok OAuth and local Ollama turns can be silent beyond Undici's 300s idle
+// default. Their route-specific hops use separate pools sized to their own
+// configured bounds; other providers keep the shared pool. The dispatcher
+// class and proxy decision match the shared pool, so only the idle bounds differ. The headers bound moves with the
 // body bound: a Grok compaction is not streamed, so the gateway answers its
 // headers only after the whole generation, and Undici's 300s headers default
 // would end a long compaction before the stall guard's allowance.

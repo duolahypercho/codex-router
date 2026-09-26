@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 
 import { protectPrivateFile } from "./file-security.mjs";
 import { grokGatewayStreamTimeoutSeconds } from "./grok-stream-timeouts.mjs";
+import { localTimeoutSeconds } from "./local-timeouts.mjs";
 import { LITELLM_CONFIG_PATH } from "./paths.mjs";
 import { MODELS, providerForModel } from "./model-registry.mjs";
 import { assertStateOwnership } from "./state-owner.mjs";
@@ -24,7 +25,7 @@ function yamlString(value) {
 
 export function renderLiteLlmConfig() {
   const localNumCtx = positiveIntegerEnv("MODEL_ROUTER_LOCAL_NUM_CTX", 16384);
-  const localTimeout = positiveIntegerEnv("MODEL_ROUTER_LOCAL_TIMEOUT", 600);
+  const localTimeout = localTimeoutSeconds();
   const lines = ["model_list:"];
   for (const model of MODELS) {
     const provider = providerForModel(model);
