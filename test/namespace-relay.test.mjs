@@ -46,6 +46,60 @@ function collect(stream) {
   });
 }
 
+test("Azure plaintext collaboration output carries Codex's explicit plaintext marker", () => {
+  const lookups = buildNamespaceLookups(new Map());
+  const call = {
+    type: "function_call",
+    namespace: "agents",
+    name: "spawn_agent",
+    call_id: "call-azure-agent",
+    arguments: JSON.stringify({ task_name: "probe", message: "Run pwd." }),
+  };
+  const event = { type: "response.output_item.done", item: call };
+  const rewritten = rewriteNamespaceResponsePayload(event, lookups, "azure-kmamc/gpt-6-sol");
+  assert.deepEqual(rewritten?.item.encrypted_function_args, []);
+  assert.equal(
+    rewriteNamespaceResponsePayload(event, lookups, "gpt-6-sol"),
+    undefined,
+  );
+  const ciphertext = { ...call, arguments: JSON.stringify({ message: "gAAAAAopaque=" }) };
+  assert.equal(
+    rewriteNamespaceResponsePayload(
+      { type: "response.output_item.done", item: ciphertext },
+      lookups,
+      "azure-kmamc/gpt-6-sol",
+    ),
+    undefined,
+  );
+});
+
+test("Azure agents wire calls restore the configured collaboration identity", () => {
+  const lookups = buildNamespaceLookups(new Map([
+    ["collaboration", new Set(["spawn_agent", "wait_agent"])],
+  ]));
+  const call = {
+    type: "function_call",
+    namespace: "agents",
+    name: "spawn_agent",
+    call_id: "call_1",
+    arguments: '{"task_name":"probe","message":"Run pwd.","model":"azure-kmamc/gpt-6-luna"}',
+  };
+  const event = { type: "response.output_item.done", item: call };
+  const normalized = rewriteNamespaceResponsePayload(event, lookups, "azure-kmamc/gpt-6-sol");
+
+  assert.deepEqual(normalized.item, {
+    ...call,
+    namespace: "collaboration",
+    encrypted_function_args: [],
+  });
+  const wait = { ...call, name: "wait_agent", arguments: '{"target":"probe"}' };
+  assert.deepEqual(
+    rewriteNamespaceResponsePayload({ ...event, item: wait }, lookups, "azure-kmamc/gpt-6-sol").item,
+    { ...wait, namespace: "collaboration" },
+  );
+  assert.equal(rewriteNamespaceResponsePayload(event, lookups, "gpt-6-sol"), undefined);
+});
+
 function collectBuffer(stream) {
   return new Promise((resolve, reject) => {
     const output = [];
@@ -2472,6 +2526,30 @@ test("Responses-native stream keeps an omitted spawn-agent model on its routed p
     message: "verify",
     model: "opencode-go/deepseek-v4-flash",
   });
+});
+
+test("Azure routed spawn leaves an omitted model for Codex's configured subagent default", () => {
+  const lookups = buildNamespaceLookups(new Map([
+    ["collaboration", new Set(["spawn_agent"])],
+  ]));
+  const call = {
+    type: "function_call",
+    namespace: "agents",
+    name: "spawn_agent",
+    call_id: "call_azure_default",
+    arguments: '{"task_name":"curated_luna","message":"Run pwd."}',
+  };
+  const rewritten = rewriteNamespaceResponsePayload(
+    { type: "response.output_item.done", item: call },
+    lookups,
+    "azure-kmamc/gpt-6-sol",
+  );
+  assert.equal(rewritten.item.namespace, "collaboration");
+  assert.deepEqual(JSON.parse(rewritten.item.arguments), {
+    task_name: "curated_luna",
+    message: "Run pwd.",
+  });
+  assert.deepEqual(rewritten.item.encrypted_function_args, []);
 });
 
 test("response transform detects headerless SSE after split framing prelude", async () => {

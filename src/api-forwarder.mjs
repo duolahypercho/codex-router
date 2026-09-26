@@ -1,3 +1,4 @@
+import { normalizeAzureOpenAIResponsesRequest } from "./azure-openai-compat.mjs";
 import http from "node:http";
 import {
   requiresReasoningContentOnToolCalls,
@@ -1094,6 +1095,7 @@ function normalizeBody(buffer, contentType, route) {
       delete payload.thinking;
     }
     payload = normalizeOpenAIRequest(payload);
+    payload = normalizeAzureOpenAIResponsesRequest(payload, { providerId: model.provider, route });
     if (usesDeepSeekResponses(model) && payload.reasoning.effort !== "none" &&
       (payload.tool_choice === "required" || (payload.tool_choice?.type === "function" &&
         typeof payload.tool_choice.name === "string" && payload.tool_choice.name) ||

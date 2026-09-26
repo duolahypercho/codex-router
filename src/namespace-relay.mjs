@@ -649,6 +649,8 @@ function isSubagentSpawnCall(item) {
 export function injectSessionModelForSpawnCalls(item, model, effortForModel) {
   if (!isSpawnModelCall(item)) return item;
   if (typeof model !== "string" || !model) return item;
+  // Azure's plaintext handoff lets Codex honor its configured subagent model.
+  if (model.startsWith("azure-kmamc/") && isSubagentSpawnCall(item)) return item;
   if (typeof item.arguments !== "string") return item;
   if (!jsonArgumentsAreUnambiguous(item.arguments, { allowEmpty: true })) return item;
   let args;
@@ -2434,6 +2436,34 @@ function customCallIdentityMatches(source, item, lookups) {
     (item.namespace === undefined || (typeof item.namespace === "string" && Boolean(item.namespace)));
 }
 
+function markAzurePlaintextCollaborationCall(item, sessionModel) {
+  if (
+    !sessionModel?.startsWith("azure-kmamc/") ||
+    !["agents", "collaboration"].includes(item?.namespace) ||
+    !["spawn_agent", "send_message", "followup_task"].includes(item?.name) ||
+    item.encrypted_function_args !== undefined ||
+    !jsonArgumentsAreUnambiguous(item.arguments)
+  ) return item;
+  let args;
+  try {
+    args = JSON.parse(item.arguments);
+  } catch {
+    return item;
+  }
+  const message = args?.message;
+  if (typeof message !== "string" || !message || /^gAAAAA[A-Za-z0-9_-]+={0,2}$/.test(message)) {
+    return item;
+  }
+  return { ...item, encrypted_function_args: [] };
+}
+
+function restoreAzureCollaborationAlias(item, lookups, sessionModel) {
+  if (!sessionModel?.startsWith("azure-kmamc/") || item?.namespace !== "agents") return item;
+  const owners = lookups.bareToNamespaces.get(item.name);
+  if (!owners?.has("collaboration") || owners.has("agents")) return item;
+  return { ...item, namespace: "collaboration" };
+}
+
 function rewriteNamespaceFunctionCallItem(
   item,
   lookups,
@@ -2497,6 +2527,7 @@ function rewriteNamespaceFunctionCallItem(
       };
     }
   }
+  rewritten = restoreAzureCollaborationAlias(rewritten, lookups, sessionModel);
   rewritten = sanitizeSpawnAgentModel(rewritten, lookups);
   // A client may declare an ordinary function whose literal name is
   // `codex_app__create_thread`. Its request-local alias resolves back to that
@@ -2506,6 +2537,7 @@ function rewriteNamespaceFunctionCallItem(
     rewritten = injectSessionModelForSpawnCalls(rewritten, sessionModel, effortForModel);
   }
   rewritten = rewriteFunctionCallArguments(rewritten);
+  rewritten = markAzurePlaintextCollaborationCall(rewritten, sessionModel);
   return rewritten === item ? undefined : rewritten;
 }
 
