@@ -83,6 +83,15 @@ test("Choice preparation uses the documented Decisions shape and an explicit sta
   assert.equal(JSON.stringify(prepared).includes("private"), false);
 });
 
+test("Choice preparation rejects missing and overlong context before routing", () => {
+  for (const taskSummary of [undefined, "", "x".repeat(2001)]) {
+    assert.throws(() => prepareRoutingChoice(campaign("effort-only", []), step("one", { taskSummary })), /task summary/);
+  }
+  for (const stepSummary of [undefined, "", "x".repeat(2001)]) {
+    assert.throws(() => prepareRoutingChoice(campaign("effort-only", []), step("one", { stepSummary })), /step summary/);
+  }
+});
+
 test("invalid, missing, out-of-policy and failed Jev answers stop the replay", () => {
   for (const invalid of [undefined, {}, { answers: [] }, answer("unavailable"), answer("claude-high"),
     { answers: { route: { type: "score", choice: "codex-low" } } },
@@ -122,6 +131,15 @@ test("accounting includes rejected and failed work, keeps missing data unknown, 
   assert.equal(unknown.measurements.totalDurationMs, null);
   assert.throws(() => replayRouting(campaign("fixed", [step("one", { metrics: { inputTokens: 10, cachedInputTokens: 11 } })])), /cached/);
   assert.throws(() => replayRouting(campaign("fixed", [step("one", { outcome: "transport-ok" })])), /outcome/);
+});
+
+test("negative recorded cost and duration cannot masquerade as valid measurements", () => {
+  assert.throws(() => replayRouting(campaign("effort-only", [
+    step("one", { answer: answer("codex-low", -0.01) }),
+  ])), /Jev cost/);
+  assert.throws(() => replayRouting(campaign("fixed", [
+    step("one", { metrics: { durationMs: -1 } }),
+  ])), /duration/);
 });
 
 test("the report omits summaries and raw answers and CLI replays the synthetic fixture offline", () => {

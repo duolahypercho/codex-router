@@ -137,14 +137,23 @@ test("Claude controls allow documented effort levels and model punctuation", () 
 });
 
 test("Claude bridge rejects an overlapping prompt even when its effort differs", async () => {
-  let child;
+  const children = [];
   const bridge = new ClaudeAgentBridge({
     binary: "/fake/claude",
-    spawnImpl: fakeClaude((invocation) => { child = invocation.child; }),
+    spawnImpl: fakeClaude(({ child }) => { children.push(child); }),
   });
   const first = bridge.prompt("same-session", "first", { effort: "low" });
-  await assert.rejects(bridge.prompt("same-session", "second", { effort: "high" }), /active prompt/);
-  child.stdout.write(`${JSON.stringify({ type: "result", subtype: "success", result: "ok" })}\n`);
-  child.emit("exit", 0, null);
+  const second = bridge.prompt("same-session", "second", { effort: "high" }).then(
+    () => null,
+    (error) => error,
+  );
+  const spawned = children.length;
+  for (const child of children) {
+    child.stdout.write(`${JSON.stringify({ type: "result", subtype: "success", result: "ok" })}\n`);
+    child.emit("exit", 0, null);
+  }
   await first;
+  const error = await second;
+  assert.equal(spawned, 1);
+  assert.match(error?.message || "", /active prompt/);
 });

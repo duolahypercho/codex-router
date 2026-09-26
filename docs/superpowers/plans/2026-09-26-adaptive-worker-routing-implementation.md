@@ -55,7 +55,7 @@ Owner: coordinator, files scripts/worker-routing-replay.mjs, test/worker-routing
 | A3 | Offline effort changes keep model and session within a task | verified | Replay task and boundary tests |
 | A4 | Invalid choices, duplicate attempts and unavailable profiles stop the replay | verified | Negative replay tests |
 | A5 | Replay accounting marks unavailable cost/cache values unknown and records rejected work | verified | Synthetic fixture output, accounting and overflow tests |
-| A6 | Affected contracts and the patch have been checked | verified | 49 focused/adjacent tests, 2 loopback router tests and `npm run check` passed; independent review found and prompted fixes for Choice privacy wording and numeric overflow. Full unrelated repository suite was stopped before completion due long-running account tests. |
+| A6 | Affected contracts and the patch have been checked | verified | 51 focused/adjacent tests, 2 loopback router tests and `npm run check` passed. A local probe killed 25 selected source mutants after two survivors prompted stronger tests. Independent review found and prompted fixes for Choice privacy wording and numeric overflow. The full unrelated repository suite was stopped during long-running account tests. |
 | A7 | Live subscription execution and actual Jev/cache quality are measured | blocked | Needs a dispatcher, exact call/spend cap and verified billing path. No model request was sent. |
 
 ## Subsequent increments
