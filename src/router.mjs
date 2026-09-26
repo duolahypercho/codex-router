@@ -2731,6 +2731,75 @@ function extractUserMessages(input) {
   return messages;
 }
 
+// A streamed compaction arrives as Responses SSE. The terminal
+// `response.completed` event carries the same full response object a
+// non-streaming call would have returned, so unwrapping it keeps the rest of
+// the compaction path (text extraction, usage metering) unchanged.
+//
+// The parser follows SSE framing rather than trusting one-line JSON: a data
+// payload is every `data:` line since the last blank line joined with "\n",
+// CRLF is tolerated, and comment/id/retry lines are ignored. Gateways in the
+// wild end their stream without a terminal event, so
+// `response.output_text.delta` text accumulates as a fallback answer — never
+// after a failed or incomplete terminal, whose partial output must not
+// masquerade as a summary. The observed event mix rides back to the caller
+// for its failure log either way.
+function responsesSseToResponse(bytes) {
+  const payloads = [];
+  let dataLines = [];
+  const flush = () => {
+    if (dataLines.length) {
+      payloads.push(dataLines.join("\n"));
+      dataLines = [];
+    }
+  };
+  for (const rawLine of bytes.toString("utf8").split("\n")) {
+    const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
+    if (line.startsWith("data:")) dataLines.push(line.slice(5).replace(/^ /, ""));
+    else if (line === "") flush();
+  }
+  flush();
+
+  let completed;
+  let terminalFailed = false;
+  const deltas = [];
+  let usage;
+  const events = new Map();
+  for (const payload of payloads) {
+    let event;
+    try {
+      event = JSON.parse(payload);
+    } catch {
+      continue;
+    }
+    const type = typeof event?.type === "string" ? event.type : "unknown";
+    events.set(type, (events.get(type) || 0) + 1);
+    if (type === "response.completed" && event.response && typeof event.response === "object") {
+      completed = event.response;
+      if (event.response.usage && typeof event.response.usage === "object") usage = event.response.usage;
+    } else if (type === "response.failed" || type === "response.incomplete") {
+      // A failed or incomplete terminal means the summarizer never finished;
+      // the caller must classify this as a failed attempt, never accept it.
+      terminalFailed = true;
+    }
+    if (type === "response.output_text.delta" && typeof event.delta === "string") deltas.push(event.delta);
+    if (event?.usage && typeof event.usage === "object") usage = event.usage;
+  }
+  const summary = [...events].map(([type, count]) => `${type}x${count}`).join(",") || "no-events";
+  // A failed or incomplete terminal poisons the whole attempt: even a later
+  // completed event cannot be trusted as a finished summary, so the caller
+  // classifies the attempt as failed instead of checkpointing it.
+  if (completed && !terminalFailed) return { response: completed, summary, terminalFailed };
+  if (deltas.length && !terminalFailed) {
+    return {
+      response: { output_text: deltas.join(""), ...(usage ? { usage } : {}) },
+      summary: `${summary} (rebuilt from deltas)`,
+      terminalFailed,
+    };
+  }
+  return { response: undefined, summary, terminalFailed };
+}
+
 // The v1 compact response shape follows Codex's replacement-history contract.
 function compactOutput(input, checkpoint) {
   const budget = 80_000;
@@ -2925,7 +2994,11 @@ async function summarizeWith(
   let body = {
     ...payload,
     model: route.gatewayModel,
-    stream: false,
+    // Some OpenAI-Responses gateways (Codex LBs) refuse non-streaming
+    // requests outright ("Stream must be set to true"). Only those generic
+    // providers stream the summarizer; every other route keeps the plain
+    // non-streaming call it already worked with.
+    stream: providerForModel(route)?.generic === true,
     // An empty tool list already disables tool use on every forwarder, and
     // xAI rejects tool_choice "none" paired with it, so the field is omitted
     // rather than sent redundantly.
@@ -3090,13 +3163,44 @@ async function summarize(request, payload, route, signal, { allowFailover = true
         toolResultAging: aged.stats,
       };
     }
-    const parsed = JSON.parse(bytes.toString("utf8"));
+    const contentType = String(sent.upstream.headers.get("content-type") || "");
+    let parsed;
+    // A streamed attempt that yields nothing usable, or ends failed or
+    // incomplete, is classified exactly like an ordinary upstream rejection:
+    // it must reach the same failover, cooldown, and metering handling rather
+    // than short-circuiting into a synthetic terminal result.
+    let upstreamOk = sent.upstream.ok;
+    let upstreamStatus = sent.upstream.status;
+    let failureBodyText;
+    if (contentType.includes("text/event-stream")) {
+      const unwrapped = responsesSseToResponse(bytes);
+      parsed = unwrapped.response;
+      if (!parsed) {
+        console.error(
+          `[codex-router] compaction stream ended without a usable response model=${attemptRoute.slug}` +
+            ` events=${unwrapped.summary}${unwrapped.terminalFailed ? " terminal=failed" : ""}`,
+        );
+        upstreamOk = false;
+        upstreamStatus = 502;
+        parsed = {
+          error: {
+            message: unwrapped.terminalFailed
+              ? "Compact stream ended with a failed or incomplete response."
+              : "Compact stream ended without a completed response.",
+            events: unwrapped.summary,
+          },
+        };
+        failureBodyText = JSON.stringify(parsed);
+      }
+    } else {
+      parsed = JSON.parse(bytes.toString("utf8"));
+    }
     // Compaction is a plain non-streaming call, so the usage block (when the
     // provider sends one) is already in hand. `tokenUsageFromPayload` returns
     // undefined when it is absent, and `recordUsageEvent` then omits the token
     // fields entirely rather than metering an invented zero.
     const usage = tokenUsageFromPayload(parsed);
-    if (sent.upstream.ok) {
+    if (upstreamOk) {
       clearProviderCooldown(attemptRoute.provider);
       const answer = extractResponseText(parsed);
       // finalizeCheckpoint turns empty model output into a structurally valid
@@ -3123,13 +3227,13 @@ async function summarize(request, payload, route, signal, { allowFailover = true
     // metered on its own row exactly as on the turn path -- otherwise a
     // compaction the router rescued would leave no trace of the provider that
     // could not serve it.
-    const bodyText = bytes.toString("utf8");
-    failed.push({ route: attemptRoute, status: sent.upstream.status, usage });
+    const bodyText = failureBodyText ?? bytes.toString("utf8");
+    failed.push({ route: attemptRoute, status: upstreamStatus, usage });
     // A provider that still refuses the image content gets the same model again
     // with half of it. A refused compaction is retried by the client before
     // every following turn, so leaving it refused stalls the session for good.
     const imageLimits = imageRetries < IMAGE_REJECTION_MAX_RETRIES &&
-      isImagePayloadRejection({ status: sent.upstream.status, bodyText })
+      isImagePayloadRejection({ status: upstreamStatus, bodyText })
       ? tighterImageBudget(aged.stats)
       : undefined;
     if (imageLimits && !signal?.aborted) {
@@ -3144,14 +3248,14 @@ async function summarize(request, payload, route, signal, { allowFailover = true
     // operator can do something about.
     last ??= {
       ok: false,
-      status: gatewayErrorStatus({ status: sent.upstream.status, bodyText }),
+      status: gatewayErrorStatus({ status: upstreamStatus, bodyText }),
       payload: parsed,
       usage,
       toolResultAging: aged.stats,
       route: attemptRoute,
     };
     const verdict = classifyRoutedFailure({
-      status: sent.upstream.status,
+      status: upstreamStatus,
       bodyText,
       retryAfterSeconds: retryAfterSeconds(sent.upstream.headers),
     });
@@ -3185,7 +3289,7 @@ async function summarize(request, payload, route, signal, { allowFailover = true
           attemptRoute,
           hops[0],
           "compaction/context_length",
-          sent.upstream.status,
+          upstreamStatus,
           "retrying",
         );
         continue;
@@ -3199,7 +3303,7 @@ async function summarize(request, payload, route, signal, { allowFailover = true
         attemptRoute,
         attempts[index + 1],
         `compaction/${verdict.reason}`,
-        sent.upstream.status,
+        upstreamStatus,
         "retrying",
       );
     }
