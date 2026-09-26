@@ -23,6 +23,7 @@ import {
 import { providerApiKeyServiceEnvironment } from "./provider-api-key-service-environment.mjs";
 import { serviceProxyEnvironment } from "./proxy-environment.mjs";
 import { serviceGrokPatchHookEnvironment } from "./grok-patch-hook-settings.mjs";
+import { homebrewStableNodePath } from "./stable-node.mjs";
 import {
   skipServiceManagerCall,
   assertServiceWriteIsolated,
@@ -50,7 +51,9 @@ const domain = `gui/${userId}`;
 const service = `${domain}/${SERVICE_LABEL}`;
 const launchctl = "/bin/launchctl";
 const launchctlRetryWait = new Int32Array(new SharedArrayBuffer(4));
-const nodeBinary = process.env.CODEX_ROUTER_NODE_BIN || process.execPath;
+// The agent outlives this process, so a versioned Homebrew keg -- which
+// `brew upgrade node` deletes -- is recorded as its formula's `opt` link.
+const nodeBinary = homebrewStableNodePath(process.env.CODEX_ROUTER_NODE_BIN || process.execPath);
 if (!path.isAbsolute(nodeBinary)) {
   throw new Error("CODEX_ROUTER_NODE_BIN must be an absolute path.");
 }

@@ -6,6 +6,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
@@ -825,6 +826,92 @@ wire_api = "responses"
     rmSync(codexHome, { recursive: true, force: true });
   }
 });
+
+// Codex runs the auth command on every routed turn, long after the router
+// wrote it. It used to name this process's own Node, which on Homebrew is the
+// versioned keg `brew upgrade node` deletes -- and the ownership check matched
+// that path literally, so the next enable (update, doctor --fix) refused with
+// "lost ownership" and left the dead command in place.
+test(
+  "login-free ownership survives a Node upgrade that deleted the keg its auth command named",
+  { skip: process.platform === "win32" },
+  () => {
+    const codexHome = mkdtempSync(path.join(os.tmpdir(), "codex-router-login-free-node-"));
+    const stateDir = path.join(codexHome, "router-state");
+    const configPath = path.join(codexHome, "config.toml");
+    // A Homebrew prefix holding only the current keg and the formula's opt link.
+    const prefix = path.join(codexHome, "homebrew");
+    const currentKeg = path.join(prefix, "Cellar", "node", "26.10.0", "bin", "node");
+    const optNode = path.join(prefix, "opt", "node", "bin", "node");
+    const removedKeg = path.join(prefix, "Cellar", "node", "26.9.0", "bin", "node");
+    for (const binary of [currentKeg, optNode]) {
+      mkdirSync(path.dirname(binary), { recursive: true });
+      symlinkSync(process.execPath, binary);
+    }
+    const env = { CODEX_ROUTER_NODE_BIN: currentKeg };
+    const commandLine = (binary) => `command = ${JSON.stringify(binary)}`;
+    writeFileSync(
+      configPath,
+      `model_provider = "custom"
+
+[model_providers.custom]
+name = "Direct custom provider"
+base_url = "https://direct.invalid/v1"
+wire_api = "responses"
+`,
+      { mode: 0o600 },
+    );
+
+    try {
+      run("enable", codexHome, stateDir, [], env);
+      const enabled = run(
+        "login-free-enable",
+        codexHome,
+        stateDir,
+        ["deepseek/deepseek-v4-pro"],
+        env,
+      );
+      assert.equal(enabled.login_free_managed, true);
+      const written = readFileSync(configPath, "utf8");
+      assert.ok(written.includes(commandLine(optNode)), "the command names the formula's opt link");
+      assert.doesNotMatch(written, /Cellar/);
+      assert.deepEqual(enabled.caller_auth_commands, [optNode]);
+
+      // What an older router wrote before the upgrade removed its keg.
+      const stale = written.replace(commandLine(optNode), commandLine(removedKeg));
+      writeFileSync(configPath, stale, { mode: 0o600 });
+      assert.deepEqual(
+        run("status", codexHome, stateDir, [], env).caller_auth_commands,
+        [removedKeg],
+      );
+      const repaired = run("enable", codexHome, stateDir, [], env);
+      assert.equal(repaired.login_free, true);
+      assert.equal(repaired.login_free_managed, true);
+      assert.deepEqual(repaired.caller_auth_commands, [optNode]);
+      assert.equal(readFileSync(configPath, "utf8"), written);
+
+      // A command that is no longer Node is somebody's edit, not a stale path.
+      writeFileSync(
+        configPath,
+        written.replace(commandLine(optNode), commandLine("/usr/local/bin/credential-helper")),
+        { mode: 0o600 },
+      );
+      assert.throws(
+        () => run("enable", codexHome, stateDir, [], env),
+        /Login-free mode lost ownership/,
+      );
+
+      // Turning login-free mode off works from the stale state too.
+      writeFileSync(configPath, stale, { mode: 0o600 });
+      const restored = run("login-free-disable", codexHome, stateDir, [], env);
+      assert.equal(restored.login_free, false);
+      assert.equal(restored.model_provider, "custom");
+      assert.match(readFileSync(configPath, "utf8"), /https:\/\/direct\.invalid\/v1/);
+    } finally {
+      rmSync(codexHome, { recursive: true, force: true });
+    }
+  },
+);
 
 test("login-free refresh rolls provider-mode state back when the config write fails", () => {
   const codexHome = mkdtempSync(path.join(os.tmpdir(), "codex-router-login-free-rollback-"));

@@ -3007,6 +3007,34 @@ start does not exist at request latency. The port has to already be open.
   trip, and the fact that always-on is left alone. A change to the gate needs a
   test there.
 
+## A recorded Node path must survive a Node upgrade
+
+`process.execPath` is the running binary's resolved path. On Homebrew that is
+the versioned keg (`<prefix>/Cellar/node/26.9.0/bin/node`), and `brew upgrade
+node` deletes it. Anything that names Node for use after this process exits --
+Codex's caller auth command, the `claude-router` and `cursor-router-agent`
+launchers, the launchd agent and systemd unit -- or that spawns Node from a
+process an upgrade can outlive goes through `src/stable-node.mjs`.
+
+1. **Recorded paths use `stableNodeBinary()`**, or `homebrewStableNodePath()`
+   where an explicit `CODEX_ROUTER_NODE_BIN` must stay verbatim, as in the
+   service definitions. It prefers an existing explicit
+   `CODEX_ROUTER_NODE_BIN`, maps a keg to its formula's `opt` link -- the path
+   the Homebrew formula itself pins -- and never names an Electron host.
+2. **Spawns use `childNodeBinary()`**, which falls back to `process.execPath`
+   instead of throwing: a machine without a system Node can run the router
+   through Electron with `ELECTRON_RUN_AS_NODE`.
+3. **The Node path is not ownership evidence.** The login-free provider block
+   is matched against its own rendering, and the auth `command` differs
+   whenever another Node rendered it. `withCurrentCallerAuthCommand` normalizes
+   a command that is still a Node executable before comparing; any other edit
+   still means somebody else changed the block. Matching it literally made
+   `enable`, `update`, and `doctor --fix` refuse with "lost ownership" after
+   every Node upgrade.
+4. Coverage lives in `test/stable-node.test.mjs`, the keg-upgrade case in
+   `test/config-manager.test.mjs`, and the auth-command case in
+   `test/doctor-routing-mode.test.mjs`.
+
 ## Generated media and scratch output
 
 - Anything a skill, tool, or agent produces that is not source — rendered

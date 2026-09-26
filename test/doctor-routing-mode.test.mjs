@@ -6,6 +6,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  symlinkSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -294,6 +295,111 @@ test(
         detail: `0 of 1 current definitions in ${path.join(codexHome, "agents")}`,
         fix: "Run ./bin/doctor --fix, then fully quit Codex, reopen it, and create a new task.",
       });
+    } finally {
+      rmSync(codexHome, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "doctor names a login-free auth command whose Node an upgrade removed",
+  { timeout: 60_000, skip: process.platform === "win32" },
+  () => {
+    const codexHome = mkdtempSync(path.join(os.tmpdir(), "codex-router-doctor-auth-node-"));
+    const stateDir = path.join(codexHome, "router-state");
+    const configPath = path.join(codexHome, "config.toml");
+    // A Homebrew prefix holding the current keg and the formula's opt link.
+    const prefix = path.join(codexHome, "homebrew");
+    const currentKeg = path.join(prefix, "Cellar", "node", "26.10.0", "bin", "node");
+    const optNode = path.join(prefix, "opt", "node", "bin", "node");
+    const removedKeg = path.join(prefix, "Cellar", "node", "26.9.0", "bin", "node");
+    for (const binary of [currentKeg, optNode]) {
+      mkdirSync(path.dirname(binary), { recursive: true });
+      symlinkSync(process.execPath, binary);
+    }
+    mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+    writeFileSync(
+      configPath,
+      `model_provider = "custom"
+
+[model_providers.custom]
+name = "Direct custom provider"
+base_url = "https://direct.invalid/v1"
+wire_api = "responses"
+`,
+      { mode: 0o600 },
+    );
+    writeFileSync(
+      path.join(stateDir, "enabled-providers.json"),
+      `${JSON.stringify({ version: 1, providers: ["deepseek"] })}\n`,
+      { mode: 0o600 },
+    );
+    writeFileSync(path.join(stateDir, "deepseek-api-key.secret"), "test-key\n", { mode: 0o600 });
+    writeFileSync(path.join(stateDir, "caller-secret"), `${callerSecret}\n`, { mode: 0o600 });
+    writeFileSync(
+      path.join(stateDir, "internal-secret"),
+      "doctor-internal-service-key-with-sufficient-length\n",
+      { mode: 0o600 },
+    );
+    const env = {
+      ...process.env,
+      CODEX_BIN: writeCodexStub(codexHome),
+      CODEX_HOME: codexHome,
+      CODEX_ROUTER_NODE_BIN: optNode,
+      CODEX_ROUTER_PORT: "46194",
+      CODEX_ROUTER_STATE_DIR: stateDir,
+      MODEL_ROUTER_STATE_DIR: stateDir,
+      MODEL_ROUTER_TARGET: "codex",
+    };
+    const authCheck = () => {
+      const doctor = child("doctor.mjs", ["--json"], env);
+      assert.ifError(doctor.error);
+      const report = JSON.parse(doctor.stdout);
+      return {
+        auth: report.checks.find((check) => check.name === "Codex caller auth command"),
+        loginMode: report.checks.find((check) => check.name === "Codex login mode"),
+      };
+    };
+    const commandLine = (binary) => `command = ${JSON.stringify(binary)}`;
+
+    try {
+      const catalog = child("catalog.mjs", ["--refresh-native"], env);
+      assert.equal(catalog.status, 0, catalog.stderr);
+      for (const args of [["enable"], ["login-free-enable", "deepseek/deepseek-v4-pro"]]) {
+        const result = child("config-manager.mjs", args, env);
+        assert.equal(result.status, 0, result.stderr);
+      }
+      const written = readFileSync(configPath, "utf8");
+      assert.ok(written.includes(commandLine(optNode)));
+
+      assert.deepEqual(authCheck().auth, {
+        status: "ok",
+        name: "Codex caller auth command",
+        detail: optNode,
+      });
+
+      writeFileSync(configPath, written.replace(commandLine(optNode), commandLine(currentKeg)), {
+        mode: 0o600,
+      });
+      assert.deepEqual(authCheck().auth, {
+        status: "warn",
+        name: "Codex caller auth command",
+        detail: `${currentKeg} is a versioned Homebrew keg the next Node upgrade removes`,
+        fix: "Run ./bin/doctor --fix to name a Node path that survives upgrades, then fully quit and reopen Codex.",
+      });
+
+      writeFileSync(configPath, written.replace(commandLine(optNode), commandLine(removedKeg)), {
+        mode: 0o600,
+      });
+      const stale = authCheck();
+      assert.deepEqual(stale.auth, {
+        status: "fail",
+        name: "Codex caller auth command",
+        detail: `${removedKeg} no longer exists`,
+        fix: "Run ./bin/doctor --fix to name a Node path that survives upgrades, then fully quit and reopen Codex.",
+      });
+      // The stale path is not mistaken for somebody else's provider table.
+      assert.equal(stale.loginMode.status, "ok");
     } finally {
       rmSync(codexHome, { recursive: true, force: true });
     }

@@ -60,6 +60,7 @@ import {
   SOURCE_ROOT,
   loopback,
 } from "./paths.mjs";
+import { stableNodeBinary } from "./stable-node.mjs";
 import { scanTomlDocument } from "./toml-structure.mjs";
 
 const managedRouterBaseUrls = new Set([
@@ -112,13 +113,85 @@ function tomlValue(value) {
   return JSON.stringify(value);
 }
 
+let callerAuthNodeBinary;
+
+// Codex runs this command on every routed turn, long after the process that
+// wrote it has exited, so it names a Node binary that survives an upgrade
+// rather than this process's own (a Homebrew keg that `brew upgrade` deletes).
+// Resolved once per process: every rendering of the block, including the ones
+// the ownership checks compare against, must spell the same command.
+function callerAuthNode() {
+  if (callerAuthNodeBinary === undefined) {
+    try {
+      callerAuthNodeBinary = stableNodeBinary();
+    } catch {
+      callerAuthNodeBinary = process.execPath;
+    }
+  }
+  return callerAuthNodeBinary;
+}
+
+function isNodeExecutablePath(value) {
+  if (typeof value !== "string" || !(path.posix.isAbsolute(value) || path.win32.isAbsolute(value))) {
+    return false;
+  }
+  return /^node(?:js)?(?:\.exe)?$/i.test(value.split(/[\\/]/).pop());
+}
+
+// Which Node binary the auth command names is not evidence of who owns the
+// block: it is whichever binary last rendered it, and a Node upgrade or an
+// install from another launcher changes it while the block stays entirely
+// ours. Matching it literally made every router-owned login-free block look
+// user-edited after `brew upgrade node`, so enable, update, and doctor --fix
+// all refused with "lost ownership". Only a command that is still a Node
+// executable is normalized; any other edit remains somebody else's.
+function withCurrentCallerAuthCommand(block) {
+  let inAuthTable = false;
+  return block
+    .split("\n")
+    .map((line) => {
+      if (line.startsWith("[")) {
+        inAuthTable = /^\[model_providers\..+\.auth\]$/.test(line);
+        return line;
+      }
+      if (!inAuthTable || !line.startsWith("command = ")) return line;
+      return isNodeExecutablePath(assignmentValue(line))
+        ? `command = ${tomlValue(callerAuthNode())}`
+        : line;
+    })
+    .join("\n");
+}
+
+// The commands of the auth tables inside this router's own marker blocks, for
+// status and doctor. Any other auth table in the file belongs to the user.
+function managedCallerAuthCommands(contents) {
+  const commands = [];
+  let managed = false;
+  let inAuthTable = false;
+  for (const line of contents.split("\n")) {
+    const trimmed = line.trim();
+    if (trimmed === providerStartMarker || trimmed === signedProviderStartMarker) {
+      managed = true;
+      inAuthTable = false;
+    } else if (trimmed === providerEndMarker || trimmed === signedProviderEndMarker) {
+      managed = false;
+      inAuthTable = false;
+    } else if (managed && trimmed.startsWith("[")) {
+      inAuthTable = /^\[model_providers\..+\.auth\]$/.test(trimmed);
+    } else if (managed && inAuthTable && /^command\s*=/.test(trimmed)) {
+      commands.push(assignmentValue(trimmed));
+    }
+  }
+  return commands;
+}
+
 function managedCallerAuthBlock(providerId) {
   const headerId = /^[A-Za-z0-9_-]+$/.test(providerId)
     ? providerId
     : JSON.stringify(providerId);
   return [
     `[model_providers.${headerId}.auth]`,
-    `command = ${tomlValue(process.execPath)}`,
+    `command = ${tomlValue(callerAuthNode())}`,
     `args = [${tomlValue(path.join(SOURCE_ROOT, "src", "caller-key-auth-command.mjs"))}, ${tomlValue(CALLER_SECRET_PATH)}]`,
     "timeout_ms = 5000",
     "refresh_interval_ms = 0",
@@ -857,7 +930,7 @@ function managedLoginFreeProviderBlockMatches(actual, providerId, baseUrl) {
     managedLoginFreeProviderBlock(providerId, baseUrl),
     managedLoginFreeProviderBlockHttpFallback(providerId, baseUrl),
     managedLoginFreeProviderBlockLegacy(providerId, baseUrl),
-  ].includes(actual);
+  ].includes(withCurrentCallerAuthCommand(actual));
 }
 
 function signedProviderSlot(state, index) {
@@ -1442,6 +1515,7 @@ function snapshot(contents) {
     openai_base_url: baseUrl ? redactCallerUrl(baseUrl) : null,
     model_catalog_json: catalog || null,
     config_protected: privateFileIsProtected(CONFIG_PATH),
+    caller_auth_commands: managedCallerAuthCommands(contents),
   };
 }
 

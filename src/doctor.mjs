@@ -35,6 +35,7 @@ import {
 import { readHiddenModels } from "./model-picker-state.mjs";
 import { serviceFollowsHostApps } from "./presence-state.mjs";
 import { waitForRouterHealth } from "./router-health.mjs";
+import { homebrewStableNodePath } from "./stable-node.mjs";
 import {
   CALLER_SECRET_PATH,
   CLAUDE_CATALOG_PATH,
@@ -1492,6 +1493,30 @@ if (TARGET === "gemini") {
         : `off; active provider is ${config.model_provider}`,
     "Use the tray toggle to restore the previous provider table before changing configuration managers.",
   );
+  // Codex runs this command for the caller key on every routed turn in
+  // login-free mode. Once the Node it names is gone -- `brew upgrade node`
+  // deletes the versioned keg -- every routed turn fails to authenticate with
+  // nothing pointing at the cause, so name it, and warn while a keg path is
+  // merely waiting for the next upgrade.
+  const authCommands = Array.isArray(config.caller_auth_commands)
+    ? config.caller_auth_commands
+    : [];
+  if (authCommands.length) {
+    const missing = authCommands.find((command) => !existsSync(command));
+    const transient = authCommands.find((command) => homebrewStableNodePath(command) !== command);
+    add(
+      missing ? "fail" : transient ? "warn" : "ok",
+      "Codex caller auth command",
+      missing
+        ? `${missing} no longer exists`
+        : transient
+          ? `${transient} is a versioned Homebrew keg the next Node upgrade removes`
+          : authCommands[0],
+      missing || transient
+        ? "Run ./bin/doctor --fix to name a Node path that survives upgrades, then fully quit and reopen Codex."
+        : undefined,
+    );
+  }
 } catch (error) {
   add(
     "fail",
