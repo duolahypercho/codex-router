@@ -4,7 +4,7 @@ import test from "node:test";
 
 import {
   ZaiResponsesCompatTransform,
-  zaiResponsesCompatTransform,
+  messageEnvelopeCompatTransform,
 } from "../src/zai-responses-compat.mjs";
 
 async function transformed(chunks) {
@@ -71,11 +71,82 @@ test("leaves an already valid message stream byte-identical", async () => {
   assert.equal(await transformed([input]), input);
 });
 
-test("compatibility factory is scoped to Z.ai Responses event streams", () => {
-  assert.ok(zaiResponsesCompatTransform("zai-coding", "text/event-stream"));
-  assert.ok(zaiResponsesCompatTransform("zai-api", "text/event-stream; charset=utf-8"));
-  assert.equal(zaiResponsesCompatTransform("openai", "text/event-stream"), undefined);
-  assert.equal(zaiResponsesCompatTransform("zai-coding", "application/json"), undefined);
+test("compatibility factory covers every LiteLLM Chat Completions route and nothing else", () => {
+  const sse = "text/event-stream";
+  // Z.ai and OpenRouter both reproduced the missing envelope live; neither
+  // declares a protocol, so both are the default Chat Completions bridge.
+  assert.ok(messageEnvelopeCompatTransform({ id: "zai-coding" }, sse));
+  assert.ok(messageEnvelopeCompatTransform({ id: "zai-api" }, "text/event-stream; charset=utf-8"));
+  assert.ok(messageEnvelopeCompatTransform({ id: "openrouter" }, sse));
+  assert.ok(messageEnvelopeCompatTransform({ id: "opencode-go", protocol: "openai" }, sse));
+  // Native traffic has no provider; Responses providers skip the bridge;
+  // direct DeepSeek has its own repair; other protocols have no capture.
+  assert.equal(messageEnvelopeCompatTransform(undefined, sse), undefined);
+  assert.equal(messageEnvelopeCompatTransform("openrouter", sse), undefined);
+  assert.equal(messageEnvelopeCompatTransform({ id: "meta", protocol: "openai-responses" }, sse), undefined);
+  assert.equal(messageEnvelopeCompatTransform({ id: "deepseek" }, sse), undefined);
+  assert.equal(messageEnvelopeCompatTransform({ id: "opencode-go-messages", protocol: "anthropic" }, sse), undefined);
+  assert.equal(messageEnvelopeCompatTransform({ id: "openrouter" }, "application/json"), undefined);
+});
+
+test("repairs the live OpenRouter reasoning-then-text stream on the reasoning's index", async () => {
+  // Relayed live on openrouter/mimo-v2.6-flash (codex-cli 0.156.1) after the
+  // reasoning-summary repair: Codex logged `OutputTextDelta without active
+  // item` once per delta.
+  const input = [
+    block({ type: "response.output_item.added", output_index: 0, item: { id: "rs_or", type: "reasoning", status: "in_progress", summary: [] } }),
+    block({ type: "response.reasoning_summary_part.added", item_id: "rs_or", output_index: 0, summary_index: 0, part: { type: "summary_text", text: "" } }),
+    block({ type: "response.reasoning_summary_text.delta", item_id: "rs_or", output_index: 0, summary_index: 0, delta: "Need exact requested." }),
+    block({ type: "response.reasoning_summary_part.done", item_id: "rs_or", output_index: 0, summary_index: 0, part: { type: "summary_text", text: "Need exact requested." } }),
+    block({ type: "response.output_item.done", output_index: 0, item: { id: "rs_or", type: "reasoning", status: "completed", summary: [{ type: "summary_text", text: "Need exact requested." }] } }),
+    block({ type: "response.output_text.delta", item_id: "gen-or", output_index: 0, content_index: 0, delta: "M" }),
+    block({ type: "response.output_text.delta", item_id: "gen-or", output_index: 0, content_index: 0, delta: "IMO-OK PAPAYA" }),
+    block({ type: "response.output_text.done", item_id: "gen-or", output_index: 0, content_index: 0, text: "MIMO-OK PAPAYA" }),
+    block({ type: "response.content_part.done", item_id: "gen-or", output_index: 0, content_index: 0, part: { type: "reasoning_text", reasoning: "Need exact requested." } }),
+    block({ type: "response.output_item.done", output_index: 0, item: { id: "gen-or", type: "message", status: "completed", role: "assistant", content: [{ type: "output_text", text: "MIMO-OK PAPAYA", annotations: [] }] } }),
+    block({ type: "response.completed", response: { id: "resp_or", status: "completed", output: [] } }),
+  ].join("");
+  const events = dataEvents(await transformed([input]));
+  const messageEvents = events.filter((event) => event.item_id === "gen-or" || event.item?.id === "gen-or");
+  assert.deepEqual(messageEvents.map((event) => event.type), [
+    "response.output_item.added",
+    "response.content_part.added",
+    "response.output_text.delta",
+    "response.output_text.delta",
+    "response.output_text.done",
+    "response.content_part.done",
+    "response.output_item.done",
+  ]);
+  assert.ok(messageEvents.every((event) => event.output_index === 1));
+  assert.deepEqual(messageEvents[5].part, { type: "output_text", text: "MIMO-OK PAPAYA", annotations: [] });
+  assert.ok(events.filter((event) => event.item_id === "rs_or" || event.item?.id === "rs_or").every((event) => event.output_index === 0));
+});
+
+test("relays invalid UTF-8 byte-exact and stops rewriting the rest of the stream", async () => {
+  const input = Buffer.concat([
+    Buffer.from("data: "),
+    Buffer.from([0xff, 0xfe]),
+    Buffer.from("\n\n"),
+    // Would be repaired if rewriting were still on.
+    Buffer.from(block({ type: "response.output_text.delta", output_index: 0, item_id: "msg_after", delta: "x" })),
+  ]);
+  const stream = new ZaiResponsesCompatTransform();
+  const chunks = [];
+  stream.on("data", (chunk) => chunks.push(chunk));
+  stream.write(input.subarray(0, 7));
+  stream.end(input.subarray(7));
+  await once(stream, "end");
+  assert.deepEqual(Buffer.concat(chunks), input);
+});
+
+test("never adopts another item's content parts as a message envelope", async () => {
+  const input = [
+    block({ type: "response.output_item.added", output_index: 0, item: { id: "rs_parts", type: "reasoning", status: "in_progress", summary: [] } }),
+    block({ type: "response.content_part.added", output_index: 0, content_index: 0, item_id: "rs_parts", part: { type: "reasoning_text", text: "" } }),
+    block({ type: "response.content_part.done", output_index: 0, content_index: 0, item_id: "rs_parts", part: { type: "reasoning_text", text: "thinking" } }),
+    block({ type: "response.output_item.done", output_index: 0, item: { id: "rs_parts", type: "reasoning", status: "completed", summary: [] } }),
+  ].join("");
+  assert.equal(await transformed([input]), input);
 });
 
 test("repairs a message-only LiteLLM stream without shifting its zero output index", async () => {

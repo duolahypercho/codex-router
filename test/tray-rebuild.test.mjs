@@ -1113,6 +1113,8 @@ test("Control Center fingerprints include renderer, build config, and shared ico
     ["apps", "control-center", "vite.config.ts"],
     ["apps", "control-center", "tsconfig.json"],
     ["apps", "control-center", "assets", "icon.png"],
+    ["apps", "control-center", "assets", "trayTemplate.png"],
+    ["apps", "control-center", "assets", "trayTemplate@2x.png"],
   ]) {
     const fakeRoot = scratch();
     try {
@@ -1132,9 +1134,10 @@ test("Control Center fingerprints include renderer, build config, and shared ico
 test("desktop shells keep their routing mark while the Control Center sidebar stays text-only", () => {
   const script = readFileSync(path.join(root, "scripts", "build-app-icon.sh"), "utf8");
   assert.match(script, /ModelRouterTray\/Resources\/AppIcon\.svg/);
-  for (const asset of ["32x32.png", "128x128.png", "128x128@2x.png", "icon.png", "icon.ico"]) {
+  for (const asset of ["32x32.png", "128x128.png", "128x128@2x.png", "icon.png", "icon.ico", "trayTemplate.png", "trayTemplate@2x.png"]) {
     assert.match(script, new RegExp(`control_center_assets/${asset.replaceAll(".", "\\.")}`));
   }
+  assert.match(script, /Sources\/Resources\/RouterMark\.svg/);
   assert.match(script, /scripts\/build-ico\.mjs/);
 
   const renderer = readFileSync(path.join(root, "apps", "control-center", "src", "App.tsx"), "utf8");

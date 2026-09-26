@@ -1,10 +1,11 @@
 import { jsonArgumentsAreUnambiguous } from "./namespace-relay.mjs";
+import { isGrokOauthAgenticRoute } from "./grok-oauth-routes.mjs";
 
 // A pure, deliberately limited representation of native apply_patch. This
 // module does not read files, match context, apply edits, or call a provider.
 export const GROK_STRUCTURED_PATCH_VERSION = 1;
 export function grokStructuredPatchEnabled(route, environment = process.env) {
-  return route?.slug === "grok-oauth/grok-4.6" && environment.CODEX_ROUTER_GROK_STRUCTURED_PATCH === "1";
+  return isGrokOauthAgenticRoute(route) && environment.CODEX_ROUTER_GROK_STRUCTURED_PATCH === "1";
 }
 export const MAX_STRUCTURED_PATCH_BYTES = 1024 * 1024;
 const MAX_OPERATIONS = 128;

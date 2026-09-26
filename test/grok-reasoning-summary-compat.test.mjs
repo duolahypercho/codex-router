@@ -173,11 +173,11 @@ test("repairs the live LiteLLM message-first Grok stream", async () => {
 });
 
 test("does not close the message on a premature reasoning_text part done", async () => {
-  const full = "Hey! I'm Codex, running on Union Alpha (opencode Go).";
-  const prefix = "Hey! I'm Codex, running on Union Alpha (";
+  const full = "Hey! I'm Codex, running on MiniMax M3 (opencode Go).";
+  const prefix = "Hey! I'm Codex, running on MiniMax M3 (";
   const rest = "opencode Go).";
   const message = {
-    id: "msg_union",
+    id: "msg_identity_prefix",
     type: "message",
     role: "assistant",
     status: "completed",
@@ -195,7 +195,7 @@ test("does not close the message on a premature reasoning_text part done", async
     block({ type: "response.output_item.done", output_index: 0, item: message }),
     block({
       type: "response.completed",
-      response: { id: "resp_union", status: "completed", output: [message] },
+      response: { id: "resp_identity_prefix", status: "completed", output: [message] },
     }),
   ].join("");
   const output = events(await transformed(input));
@@ -531,8 +531,8 @@ test("keeps an unpunctuated stream marker LiteLLM closed as output_text", async 
   assert.equal(repaired.includes(marker), true);
 });
 
-test("keeps an unpunctuated Union Alpha identity answer LiteLLM closed as output_text", async () => {
-  const answer = "I am Union Alpha through OpenCode Go";
+test("keeps an unpunctuated identity answer LiteLLM closed as output_text", async () => {
+  const answer = "I am MiniMax M3 through OpenCode Go";
   const message = {
     id: "msg_identity",
     type: "message",

@@ -26,6 +26,12 @@ description: "Connect provider access without putting secrets in shell history."
 | MiniMax M3 | `minimax-token-plan/minimax-m3` | MiniMax Token Plan API key |
 | MiMo-V2.5 (Xiaomi API) | `xiaomi-mimo/mimo-v2.5` | Xiaomi MiMo API key |
 | MiMo-V2.5-Pro (Xiaomi API) | `xiaomi-mimo/mimo-v2.5-pro` | Xiaomi MiMo API key |
+| Step 5 Preview (StepFun) | `stepfun-api/step-5-preview` | StepFun API key (`STEPFUN_API_KEY`) |
+| Step 3.7 Flash (StepFun) | `stepfun-api/step-3.7-flash` | StepFun API key (`STEPFUN_API_KEY`) |
+| Step 3.5 Flash 2603 (StepFun) | `stepfun-api/step-3.5-flash-2603` | StepFun API key (`STEPFUN_API_KEY`) |
+| Step 5 Preview (StepFun China) | `stepfun-api-cn/step-5-preview` | StepFun **China** platform key (`STEPFUN_API_CN_KEY`) |
+| Step 3.7 Flash (StepFun China) | `stepfun-api-cn/step-3.7-flash` | StepFun **China** platform key (`STEPFUN_API_CN_KEY`) |
+| Step 3.5 Flash 2603 (StepFun China) | `stepfun-api-cn/step-3.5-flash-2603` | StepFun **China** platform key (`STEPFUN_API_CN_KEY`) |
 | Qwen3.8 Max (Plan) | `qwen-plan/qwen3.8-max` | Alibaba Model Studio plan API key |
 | Qwen3.8 Max Preview (Plan) | `qwen-plan/qwen3.8-max-preview` | Alibaba Model Studio plan API key |
 | Qwen3.7 Max (Plan) | `qwen-plan/qwen3.7-max` | Alibaba Model Studio plan API key |
@@ -49,8 +55,6 @@ description: "Connect provider access without putting secrets in shell history."
 | Hy4 Preview (NanoGPT) | `nano-gpt/tencent/hy4-preview` | NanoGPT API key |
 | Hy4 Preview (Nous Research) | `nousresearch/tencent/hy4-preview` | Nous Portal API key |
 | Hy4 Preview (opencode Go) | `opencode-go/hy4-preview` | opencode Go/Zen API key |
-| Union Alpha (opencode Go) | `opencode-go-messages/union-alpha` | opencode Go/Zen API key |
-| Union Alpha (OpenRouter) | `openrouter/union-alpha` | OpenRouter API key |
 | Hy4 Preview (OpenRouter) | `openrouter/tencent/hy4-preview` | OpenRouter API key |
 | GLM-5.2 (ClinePass) | `clinepass/glm-5.2` | ClinePass API key |
 | Kimi K3 (ClinePass) | `clinepass/kimi-k3` | ClinePass API key |
@@ -248,6 +252,19 @@ serves `mimo-v2.5` and `mimo-v2.5-pro` through the standard
 `mimo-v2.5` is verified for text/image input and Codex standalone web search;
 `mimo-v2.5-pro` is text-only. Store the key with
 `./bin/model-router codex provider-key xiaomi-mimo set`.
+
+StepFun ships as two regional platforms with separate accounts and keys.
+`stepfun-api` is the global Open Platform at platform.stepfun.ai
+(`https://api.stepfun.ai/v1`); `stepfun-api-cn` is the mainland console at
+platform.stepfun.com (`https://api.stepfun.com/v1`). Both serve the same model
+ids over the standard `/chat/completions` surface with a top-level
+`reasoning_effort`, so the only difference between a `stepfun-api/` and a
+`stepfun-api-cn/` route is which platform serves and bills it. Store each key
+separately with `./bin/model-router codex provider-key stepfun-api set` or
+`./bin/model-router codex provider-key stepfun-api-cn set`; both providers can
+be enabled at once. Step 5 Preview carries a 1M-token context and image input,
+Step 3.7 Flash 256K with image input, and the agent-tuned Step 3.5 Flash 2603
+256K text-only.
 
 Native GPT models continue to use Codex directly. There is no separate GPT or
 ChatGPT OAuth provider in the router.

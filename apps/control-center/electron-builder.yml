@@ -18,6 +18,10 @@ electronFuses:
 extraResources:
   - from: assets/icon.png
     to: icon.png
+  - from: assets/trayTemplate.png
+    to: trayTemplate.png
+  - from: assets/trayTemplate@2x.png
+    to: trayTemplate@2x.png
   - from: ../../src/spawnable-command.mjs
     to: src/spawnable-command.mjs
   - from: ../../src/chatgpt-login-lease.mjs

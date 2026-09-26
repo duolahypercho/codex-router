@@ -943,7 +943,7 @@ export class GrokReasoningSummaryCompatTransform extends Transform {
       // After the answer has finished, LiteLLM still labels this close as
       // thinking. Rewrite it so Codex stores `output_text`. Before that, the
       // same event is a premature close: keeping it would truncate a live
-      // identity reply at `Union Alpha (` while later deltas are dropped.
+      // identity reply mid-sentence while later deltas are dropped.
       prefix.push(...this.#dropOrRewriteReasoningTextClose(parsed));
       return prefix;
     }
@@ -1021,8 +1021,8 @@ export class GrokReasoningSummaryCompatTransform extends Transform {
 // Direct DeepSeek has its own reasoning bridge repair in
 // deepseek-tool-message-compat.mjs. Native Responses providers skip this
 // bridge. Anthropic Messages providers do not: litellm-config.mjs still sets
-// `use_chat_completions_api: true` for them, so Union Alpha (and every other
-// `protocol: "anthropic"` route) arrives as the same message-first, hashed
+// `use_chat_completions_api: true` for them, so every `protocol: "anthropic"`
+// route arrives as the same message-first, hashed
 // `reasoning_summary_text.delta` / `content_part.done` `reasoning_text` stream
 // this transform repairs. Leaving them out classified those turns empty.
 export function reasoningSummaryCompatTransform(provider, contentType = "") {

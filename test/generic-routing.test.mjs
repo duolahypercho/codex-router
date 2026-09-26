@@ -605,6 +605,74 @@ test("direct Meta Muse Spark 1.3 Contributor flattens recursive tool schemas", a
   }
 });
 
+test("Meta replaces a replayed empty function-call argument string, and only that", async () => {
+  // Measured live: a Muse Spark thread called an MCP tool with no arguments at
+  // all (`pattern is required` came back), Codex recorded `arguments: ""`, and
+  // every later request in that thread was refused with HTTP 400
+  // "`arguments` must be valid JSON" before inference. The repair is scoped to
+  // absent/empty/whitespace, so a real but unparseable string is never silently
+  // rewritten into a call the model never made.
+  const directory = mkdtempSync(path.join(os.tmpdir(), "meta-empty-arguments-"));
+  const bodies = [];
+  const upstream = await listen(async (request, response) => {
+    bodies.push({ url: request.url, body: await requestJson(request) });
+    json(response, 200, {
+      id: `resp_args_${bodies.length}`,
+      object: "response",
+      status: "completed",
+      model: bodies.at(-1).body.model,
+      output: [{
+        id: "msg_args_1",
+        type: "message",
+        role: "assistant",
+        status: "completed",
+        content: [{ type: "output_text", text: "ok", annotations: [] }],
+      }],
+    });
+  });
+  const port = await openPort();
+  const child = runForwarder({
+    MODEL_ROUTER_API_PORT: String(port),
+    MODEL_ROUTER_STATE_DIR: path.join(directory, "state"),
+    META_API_KEY: "test-only-key",
+    META_BASE_URL: `http://127.0.0.1:${upstream.port}/v1`,
+    MODEL_ROUTER_QUIET: "0",
+  });
+  const send = async (gatewayModel, arguments_) => {
+    const response = await fetch(`http://127.0.0.1:${port}/v1/responses`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${INTERNAL_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: `responses/${gatewayModel}`,
+        input: [
+          { role: "user", content: [{ type: "input_text", text: "hi" }] },
+          { type: "function_call", name: "search_code", arguments: arguments_, call_id: "call_a" },
+          { type: "function_call_output", call_id: "call_a", output: "pattern is required" },
+        ],
+      }),
+    });
+    assert.equal(response.status, 200, child.testErrors());
+    return response.json();
+  };
+  try {
+    await waitForForwarder(port, child);
+    await send("meta-muse-spark-1-3-contributor", "");
+    await send("meta-muse-spark-1-3-contributor", "   ");
+    await send("meta-muse-spark-1-3-contributor", '{"pattern":"x",');
+    await send("meta-muse-spark-1-3-contributor", '{"pattern":"x"}');
+    const sentCall = (index) => bodies[index].body.input.find((item) => item.type === "function_call");
+    assert.equal(sentCall(0).arguments, "{}");
+    assert.equal(sentCall(1).arguments, "{}");
+    // An unparseable non-empty string is a different failure: left as it came.
+    assert.equal(sentCall(2).arguments, '{"pattern":"x",');
+    assert.equal(sentCall(3).arguments, '{"pattern":"x"}');
+  } finally {
+    await stop(child);
+    await close(upstream.server);
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("dashscope-reasoning folds onto the documented ladder and downgrades Qwen's forced tool choice", async () => {
   const directory = mkdtempSync(path.join(os.tmpdir(), "generic-dashscope-reasoning-"));
   const providersFile = path.join(directory, "generic-providers.json");
@@ -781,6 +849,62 @@ test("dashscope-reasoning writes the flat spelling on a chat-completions DashSco
     assert.equal(body.tool_choice, "auto");
   } finally {
     await stop(forwarder);
+    await close(upstream.server);
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("OpenRouter Muse Contributor repairs recursive schemas before reaching Meta", async () => {
+  const directory = mkdtempSync(path.join(os.tmpdir(), "openrouter-muse-schema-"));
+  const bodies = [];
+  const upstream = await listen(async (request, response) => {
+    const body = await requestJson(request);
+    bodies.push({ url: request.url, body });
+    const parameters = body.tools[0].function.parameters;
+    if (body.model === "meta/muse-spark-1.3-contributor" &&
+        parameters.$defs.Node.properties.child.$ref) {
+      json(response, 400, { error: { message: "Recursive JSON schemas are not currently supported" } });
+      return;
+    }
+    json(response, 200, {
+      id: "chatcmpl-muse-schema", object: "chat.completion", model: body.model,
+      choices: [{ index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
+    });
+  });
+  const port = await openPort();
+  const child = runForwarder({
+    MODEL_ROUTER_API_PORT: String(port),
+    MODEL_ROUTER_STATE_DIR: path.join(directory, "state"),
+    OPENROUTER_API_KEY: "test-only-key",
+    OPENROUTER_API_BASE_URL: `http://127.0.0.1:${upstream.port}/v1`,
+  });
+  const schema = { type: "object", properties: { root: { $ref: "#/$defs/Node" } },
+    $defs: { Node: { type: "object", properties: { child: { $ref: "#/$defs/Node" } } } } };
+  try {
+    await waitForForwarder(port, child);
+    for (const model of ["openrouter-muse-spark-1-3-contributor", "openrouter-muse-spark-1-3"]) {
+      const response = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${INTERNAL_KEY}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model, messages: [{ role: "user", content: "Use the tool." }],
+          tools: [{ type: "function", function: { name: "inspect", parameters: schema } }],
+        }),
+      });
+      const body = await response.json();
+      assert.equal(response.status, 200, JSON.stringify(body));
+      assert.equal(body.choices[0].message.content, "ok");
+    }
+    assert.equal(bodies.length, 2);
+    assert.ok(bodies.every(entry => entry.url === "/v1/chat/completions"));
+    assert.equal(bodies[0].body.model, "meta/muse-spark-1.3-contributor");
+    const repaired = bodies[0].body.tools[0].function.parameters;
+    assert.deepEqual(repaired.$defs.Node.properties.child, {});
+    assert.deepEqual(repaired.properties.root, { $ref: "#/$defs/Node" });
+    assert.equal(repaired.$defs.Node.type, "object");
+    assert.deepEqual(bodies[1].body.tools[0].function.parameters, schema);
+  } finally {
+    await stop(child);
     await close(upstream.server);
     rmSync(directory, { recursive: true, force: true });
   }

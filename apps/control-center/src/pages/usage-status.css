@@ -75,9 +75,10 @@
   background: var(--surface-0);
 }
 
-.usage-page .us-summary-grid.is-subscription { grid-template-columns: repeat(6, minmax(0, 1fr)); }
-.usage-page .us-summary-grid.is-router { grid-template-columns: repeat(7, minmax(0, 1fr)); }
-.usage-page .us-summary-grid.is-aggregate { grid-template-columns: repeat(8, minmax(0, 1fr)); }
+/* Variant defaults must not outrank the narrower-window media rules below. */
+.usage-page .us-summary-grid:where(.is-subscription) { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+.usage-page .us-summary-grid:where(.is-router) { grid-template-columns: repeat(7, minmax(0, 1fr)); }
+.usage-page .us-summary-grid:where(.is-aggregate) { grid-template-columns: repeat(8, minmax(0, 1fr)); }
 
 .status-page .st-summary-grid {
   grid-template-columns: repeat(7, minmax(0, 1fr));
@@ -135,7 +136,16 @@
 
 .usage-page .us-summary-grid .tone-total dd { color: var(--telemetry-accent); }
 .usage-page .us-summary-grid .tone-regular dd { color: var(--token-regular); }
-.usage-page .us-summary-grid .tone-cached dd { color: var(--token-cached); }
+/* The upstream cache counter now includes a hit rate. A narrow summary cell
+   must wrap the rate instead of hiding it behind an ellipsis in any locale. */
+.usage-page .us-summary-grid .tone-cached dd {
+  color: var(--token-cached);
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.25;
+}
 .usage-page .us-summary-grid .tone-output dd { color: var(--token-output); }
 
 .status-page .st-summary-grid .tone-success dd { color: var(--success); }
@@ -878,6 +888,15 @@
   gap: 10px;
 }
 
+.usage-page .us-allowance-panel .us-source-group-label { margin-top: 0; }
+.usage-page .us-allowance-panel .us-metric-stack + .us-source-group-label { margin-top: 18px; }
+
+.usage-page .us-source-badges {
+  display: grid;
+  justify-items: end;
+  gap: 4px;
+}
+
 .usage-page .us-source-group-label {
   margin: 18px 0 9px;
   color: var(--ink-faint);
@@ -924,10 +943,16 @@
   white-space: nowrap;
 }
 
-.usage-page .us-source-name strong,
+.usage-page .us-source-name strong {
+  color: var(--ink-strong);
+  font-size: 12.5px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
 .usage-page .us-source-value strong {
   color: var(--ink-strong);
-  font-size: 9.5px;
+  font-size: 10.5px;
   font-weight: 600;
 }
 
@@ -935,7 +960,7 @@
 .usage-page .us-source-value small {
   margin-top: 3px;
   color: var(--ink-faint);
-  font-size: 7.8px;
+  font-size: 8.5px;
 }
 
 .usage-page .us-source-value {

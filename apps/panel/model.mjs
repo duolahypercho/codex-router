@@ -1,4 +1,4 @@
-import { getLocale, t } from "./i18n.mjs";
+import { getLanguage, getLocale, t } from "./i18n.mjs";
 
 const DAY_MS = 24 * 60 * 60 * 1_000;
 
@@ -76,22 +76,74 @@ export function chartGeometry(series, width = 328, height = 112, padding = 10) {
   return { points, line, area, ceiling };
 }
 
+// Providers label their own quota windows, and the router passes those labels
+// through in English. Translate the labels the router emits, keep the generic
+// "N-hour"/"N-week" wording readable, and hand anything unrecognized back
+// unchanged rather than inventing a name for it.
+const QUOTA_LABEL_KEYS = new Map([
+  ["5-hour limit", "usage.fiveHourLimit"],
+  ["current window", "usage.currentWindow"],
+  ["daily diem allowance", "usage.dailyDiemAllowance"],
+  ["diem balance", "usage.diemBalance"],
+  ["monthly credits", "usage.monthlyCredits"],
+  ["monthly limit", "usage.monthlyLimit"],
+  ["rolling limit", "usage.rollingLimit"],
+  ["rolling window", "usage.rollingWindow"],
+  ["weekly limit", "usage.weeklyLimit"],
+]);
+
+export function quotaMetricLabel(label, fallbackKey) {
+  const raw = String(label ?? "").trim();
+  const key = QUOTA_LABEL_KEYS.get(raw.toLowerCase());
+  if (key) return t(key);
+  const hours = raw.match(/^(\d+)-hour limit$/i);
+  if (hours) return t("usage.hourLimit", { hours: hours[1] });
+  const weeks = raw.match(/^(\d+)-week limit$/i);
+  if (weeks) return t("usage.weekLimit", { weeks: weeks[1] });
+  return fallbackKey ? t(fallbackKey) : raw;
+}
+
+// The engine declares its own reasoning levels and the value keeps the level's
+// own name on the wire. Only the label is translated, and the raw level rides
+// along in parentheses so the displayed name and the stored value cannot drift
+// apart. English keeps the bare level the rest of the surface already shows.
+const EFFORT_LABEL_KEYS = {
+  none: "effort.none",
+  minimal: "effort.minimal",
+  low: "effort.low",
+  medium: "effort.medium",
+  high: "effort.high",
+  xhigh: "effort.extraHigh",
+  max: "effort.maximum",
+  ultra: "effort.ultra",
+};
+
+export function localizedEffortLabel(effort) {
+  const token = String(effort ?? "").trim();
+  const key = Object.hasOwn(EFFORT_LABEL_KEYS, token.toLowerCase()) ? EFFORT_LABEL_KEYS[token.toLowerCase()] : undefined;
+  if (!key || getLanguage() === "en") return token;
+  return `${t(key)} (${token})`;
+}
+
 export function quotaWindow(metric = {}) {
   const label = String(metric.label || "").toLowerCase().replace(/[–—]/g, "-");
   const minutes = Number(metric.windowDurationMins);
+  if (label.includes("rolling")) {
+    return { key: "rolling", label: quotaMetricLabel(metric.label, "usage.rollingLimit") };
+  }
   if (
     label.includes("5-hour") ||
     label.includes("5 hour") ||
     label.includes("five-hour") ||
     minutes === 300
   ) {
-    return { key: "five-hour", label: t("usage.fiveHourLimit") };
+    return { key: "five-hour", label: quotaMetricLabel(metric.label, "usage.fiveHourLimit") };
   }
   if (label.includes("week") || minutes === 10_080) {
-    return { key: "weekly", label: t("usage.weeklyLimit") };
+    return { key: "weekly", label: quotaMetricLabel(metric.label, "usage.weeklyLimit") };
   }
   if (label.includes("month") || minutes === 43_200) {
-    return { key: "monthly", label: t("usage.monthlyLimit") };
+    return { key: "monthly", label: quotaMetricLabel(metric.label, "usage.monthlyLimit") };
   }
   return null;
 }
@@ -266,14 +318,32 @@ export function observedModelSpeed(providerUsage, providerId, modelSlug) {
     : null;
 }
 
+// Router health reports its activity in English tokens. The panel shows the
+// label for a state it knows and the raw token for one it does not, so an
+// unknown state stays visible instead of being relabelled as something else.
+const ACTIVITY_STATE_KEYS = {
+  generating: "status.thinking",
+  starting: "status.starting",
+  offline: "status.offline",
+  error: "status.error",
+  idle: "status.idle",
+};
+
+export function activityStateLabel(state, fallbackKey = "status.idle") {
+  const token = String(state ?? "").trim();
+  if (!token) return t(fallbackKey);
+  const key = Object.hasOwn(ACTIVITY_STATE_KEYS, token) ? ACTIVITY_STATE_KEYS[token] : undefined;
+  return key ? t(key) : token;
+}
+
 // The dependencies the router reports on, in render order. The Grok OAuth
 // forwarder is a fifth local port with its own probe, so it belongs here
 // alongside the other two forwarders rather than being reported by nobody.
 const SERVICE_ROWS = [
-  ["gateway", "Gateway"],
-  ["oauth", "OAuth forwarder"],
-  ["api", "API forwarder"],
-  ["grokOauth", "Grok OAuth forwarder"],
+  ["gateway", "health.gateway"],
+  ["oauth", "health.oauthForwarder"],
+  ["api", "health.apiForwarder"],
+  ["grokOauth", "health.grokForwarder"],
 ];
 const FORWARDER_IDS = new Set(["oauth", "api", "grokOauth"]);
 
@@ -288,19 +358,24 @@ export function serviceHealthRows(health) {
   const routerKnown = typeof health?.ok === "boolean";
   const rows = [{
     id: "router",
-    label: "Router",
+    label: t("health.router"),
     state: !routerKnown ? "unknown" : health.ok ? "ready" : degraded.size ? "degraded" : "offline",
-    status: !routerKnown ? "Unknown" : health.ok ? "Ready" : degraded.size ? "Degraded" : "Offline",
+    status: !routerKnown
+      ? t("health.stateUnknown")
+      : health.ok ? t("health.stateReady") : degraded.size ? t("health.stateDegraded") : t("health.stateOffline"),
     detail: !routerKnown
-      ? "Waiting for health report"
+      ? t("health.detailWaiting")
       : health.ok
-        ? "Serving locally"
+        ? t("health.detailServing")
         : degraded.size
-          ? `${degraded.size} ${degraded.size === 1 ? "dependency needs" : "dependencies need"} attention`
-          : "Health endpoint unavailable",
+          ? t(degraded.size === 1 ? "health.dependencyAttentionOne" : "health.dependencyAttentionMany", {
+              count: degraded.size,
+            })
+          : t("health.detailEndpointUnavailable"),
   }];
 
-  for (const [id, label] of SERVICE_ROWS) {
+  for (const [id, labelKey] of SERVICE_ROWS) {
+    const label = t(labelKey);
     const service = health?.[id];
     const shouldShow = id === "gateway" || Boolean(service) || degraded.has(id);
     if (!shouldShow) continue;
@@ -310,30 +385,33 @@ export function serviceHealthRows(health) {
     // Unknown made a healthy install look like it had never answered. Kept in
     // step with apps/control-center/src/service-health.ts.
     const inferredReady = !service && health?.ok === true && !degraded.has(id);
+    const state = !hasHealth || !service
+      ? degraded.has(id) ? "offline" : inferredReady ? "ready" : "unknown"
+      : service.enabled === false && !degraded.has(id)
+        ? "standby"
+        : service.reachable === false || degraded.has(id)
+          ? "offline"
+          : service.reachable === true ? "ready" : "unknown";
     rows.push({
       id,
       label,
-      state: !hasHealth || !service
-        ? degraded.has(id) ? "offline" : inferredReady ? "ready" : "unknown"
-        : service.enabled === false && !degraded.has(id)
-          ? "standby"
-          : service.reachable === false || degraded.has(id)
-            ? "offline"
-            : service.reachable === true ? "ready" : "unknown",
-      status: !hasHealth || !service
-        ? degraded.has(id) ? "Offline" : inferredReady ? "Ready" : "Unknown"
-        : service.enabled === false && !degraded.has(id)
-          ? "Standby"
-          : service.reachable === false || degraded.has(id)
-            ? "Offline"
-            : service.reachable === true ? "Ready" : "Unknown",
+      state,
+      status: t({
+        ready: "health.stateReady",
+        degraded: "health.stateDegraded",
+        offline: "health.stateOffline",
+        standby: "health.stateStandby",
+        unknown: "health.stateUnknown",
+      }[state]),
       detail: !hasHealth || !service
-        ? degraded.has(id) ? "Unreachable" : inferredReady ? "Reachable" : "Waiting for health report"
+        ? degraded.has(id)
+          ? t("health.detailUnreachable")
+          : inferredReady ? t("health.detailReachable") : t("health.detailWaiting")
         : service.enabled === false && !degraded.has(id)
-          ? "Not enabled"
+          ? t("health.detailNotEnabled")
           : service.reachable === false || degraded.has(id)
-            ? "Unreachable"
-            : service.reachable === true ? "Reachable" : "Waiting for health report",
+            ? t("health.detailUnreachable")
+            : service.reachable === true ? t("health.detailReachable") : t("health.detailWaiting"),
     });
   }
 
@@ -341,10 +419,10 @@ export function serviceHealthRows(health) {
   if (!forwarders.length) {
     rows.push({
       id: "forwarders",
-      label: "External forwarders",
+      label: t("health.externalForwarders"),
       state: hasHealth ? "standby" : "unknown",
-      status: hasHealth ? "Standby" : "Unknown",
-      detail: hasHealth ? "No external forwarders enabled" : "Waiting for health report",
+      status: hasHealth ? t("health.stateStandby") : t("health.stateUnknown"),
+      detail: hasHealth ? t("health.detailNoForwarders") : t("health.detailWaiting"),
     });
   }
   return rows;

@@ -14,6 +14,13 @@
 // `canRetry` predicate is the second line of defence, re-checked before every
 // single retry. Retrying after partial output would duplicate the stream.
 
+import { connectTimeoutMs } from "./connect-timeout.mjs";
+
+const MAX_RETRIES = 5;
+const MAX_BACKOFF_MS = 5_000;
+const MAX_BUDGET_MS = 60_000;
+const MAX_CAUSE_DEPTH = 8;
+
 const DEFAULT_RETRIES = 2;
 const DEFAULT_BACKOFF_MS = 250;
 // Backoff grows 250ms -> 750ms, so two retries add at most one second of
@@ -23,13 +30,23 @@ const DEFAULT_BACKOFF_MS = 250;
 const BACKOFF_FACTOR = 3;
 // Retry only while the request has been cheap so far. Most of the retryable
 // failures below arrive in milliseconds, but two do not: a 504 the edge spent
-// half a minute producing, and a connect timeout. Tripling either turns a slow
-// failure into a hang, which is worse than the 503 this exists to absorb.
-const DEFAULT_BUDGET_MS = 5_000;
-const MAX_RETRIES = 5;
-const MAX_BACKOFF_MS = 5_000;
-const MAX_BUDGET_MS = 60_000;
-const MAX_CAUSE_DEPTH = 8;
+// half a minute producing, and a connect timeout. The 504 stays relayed --
+// tripling it turns a slow failure into a hang, which is worse than the 503
+// this exists to absorb.
+//
+// The connect timeout is the opposite case and the reason this budget is
+// derived rather than fixed. It is bounded at `connectTimeoutMs()` by the
+// dispatcher, so it is fast enough to afford: three bounded attempts plus
+// backoff still fit the worst case a single undici-default (10s) attempt used
+// to cost. Undici's old default outran the previous fixed 5s budget, which
+// made the connect codes in RETRYABLE_ERROR_CODES structurally unreachable --
+// every connect timeout was relayed as a 502 and no connect retry was ever
+// logged (2026-09-21 incident). Deriving the floor from the same bound keeps
+// the two from drifting apart again when the connect timeout is tuned.
+const DEFAULT_BUDGET_MS = Math.min(
+  MAX_BUDGET_MS,
+  Math.max(5_000, 3 * connectTimeoutMs()),
+);
 
 function clampedInteger(raw, fallback, min, max) {
   const value = Number(raw);

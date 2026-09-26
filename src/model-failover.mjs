@@ -7,7 +7,6 @@ import { upstreamFailureKind } from "./error-translation.mjs";
 import { isLocalToolArgumentConversionFailure } from "./invalid-function-call.mjs";
 import { PROVIDERS } from "./model-registry.mjs";
 import { cooldownScope } from "./provider-cooldown.mjs";
-import { canonicalProviderId } from "./provider-selection.mjs";
 import { hasProviderTransportError } from "./transport-failure.mjs";
 import {
   routedModelPreservesSearchContract,
@@ -417,7 +416,7 @@ function eligible(
   // quota failover must still skip them, but a prompt the 262k card cannot
   // hold is not evidence the 1M sibling cannot. Same-slug is already
   // filtered by the ranking. Ordinary turns keep the default.
-  if (!allowSameFamily && canonicalProviderId(model.provider) === fromProvider) return false;
+  if (!allowSameFamily && cooldownScope(model.provider) === fromProvider) return false;
   if (cooled.has(cooldownScope(model.provider))) return false;
   if (Number.isFinite(estimatedTokens) && Number(model.contextWindow) < estimatedTokens) {
     return false;
@@ -464,7 +463,7 @@ export function rankFailoverCandidates(
     now,
     allowSameFamily = false,
   } = options;
-  const fromProvider = canonicalProviderId(from?.provider || "");
+  const fromProvider = cooldownScope(from?.provider || "");
   // An explicitly captured absence is part of the request contract. `??`
   // would mistake it for an omitted override and re-read mutable sidecar
   // state after the source snapshot.
@@ -477,6 +476,13 @@ export function rankFailoverCandidates(
   const available = (Array.isArray(models) ? models : []).filter(
     (model) =>
       model.slug !== from?.slug &&
+      // `failoverCandidate: false` keeps a model selectable (picker, explicit
+      // slug, named requests) while opting it out of every automatic hop:
+      // quota failover, compaction attempts and compaction overflow. It is
+      // checked before the chain on purpose -- an operator who marks a route
+      // as never-automatic must not have that undone by an old chain entry.
+      // Absent means eligible, so every existing model ranks exactly as before.
+      model.failoverCandidate !== false &&
       eligible(model, {
         fromProvider,
         estimatedTokens,

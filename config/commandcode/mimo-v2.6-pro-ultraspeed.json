@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "slug": "commandcode/mimo-v2.6-pro-ultraspeed",
+      "gatewayModel": "commandcode-mimo-v2-6-pro-ultraspeed",
+      "upstreamModel": "xiaomi/mimo-v2.6-pro-ultraspeed",
+      "provider": "commandcode",
+      "listed": true,
+      "displayName": "MiMo-V2.6-Pro-UltraSpeed (Command Code)",
+      "description": "MiMo-V2.6-Pro-UltraSpeed through the Command Code Provider API: V2.6-Pro quality generated faster, at ten times the V2.6-Pro token price. Text input only.",
+      "priority": 113,
+      "defaultEffort": "high",
+      "reasoningLevels": [
+        {
+          "effort": "high",
+          "description": "Deep reasoning"
+        }
+      ],
+      "contextWindow": 1048576,
+      "autoCompact": 900000,
+      "inputModalities": [
+        "text"
+      ],
+      "compHash": "commandcode-mimo-v2-6-pro-ultraspeed-v1"
+    }
+  ]
+}

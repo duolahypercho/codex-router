@@ -482,6 +482,51 @@ test("config manager enables multi_agent_v2 and skips the legacy agents scalar w
   }
 });
 
+test("a user-owned [features.multi_agent_v2] table is left alone instead of duplicated (#819)", () => {
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), "codex-router-v2-user-table-"));
+  const configPath = path.join(codexHome, "config.toml");
+  const original = `model = "gpt-5.5"
+
+[features]
+multi_agent = true
+
+[features.multi_agent_v2]
+enabled = true
+max_concurrent_threads_per_session = 3
+`;
+  writeFileSync(configPath, original, { mode: 0o600 });
+
+  try {
+    run("enable", codexHome);
+    const enabled = readFileSync(configPath, "utf8");
+    assert.doesNotMatch(enabled, /codex-router-multi-agent-v2-managed/);
+    assert.doesNotMatch(enabled, /codex-router-agent-concurrency-managed/);
+    assert.equal((enabled.match(/multi_agent_v2/g) || []).length, 1);
+    assert.match(enabled, /^\[features\.multi_agent_v2\]$/m);
+    assert.match(enabled, /^max_concurrent_threads_per_session = 3$/m);
+
+    run("disable", codexHome);
+    assert.equal(readFileSync(configPath, "utf8").trimStart(), original);
+  } finally {
+    rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
+test("a dotted multi_agent_v2 assignment under [features] is respected (#819)", () => {
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), "codex-router-v2-dotted-"));
+  const configPath = path.join(codexHome, "config.toml");
+  writeFileSync(configPath, `[features]\nmulti_agent_v2.enabled = true\n`, { mode: 0o600 });
+
+  try {
+    run("enable", codexHome);
+    const enabled = readFileSync(configPath, "utf8");
+    assert.doesNotMatch(enabled, /codex-router-multi-agent-v2-managed/);
+    assert.equal((enabled.match(/multi_agent_v2/g) || []).length, 1);
+  } finally {
+    rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
 test("multi_agent_v2 management is byte-idempotent around an existing features table", () => {
   const codexHome = mkdtempSync(path.join(os.tmpdir(), "codex-router-v2-idempotence-"));
   const configPath = path.join(codexHome, "config.toml");

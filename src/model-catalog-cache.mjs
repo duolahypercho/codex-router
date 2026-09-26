@@ -367,6 +367,53 @@ export function catalogEntryIsStale(fetchedAt, now = Date.now()) {
   return now - stamped >= CATALOG_STALE_AFTER_MS;
 }
 
+/**
+ * The cached catalog that settles a provider's availability: its own entry,
+ * or the endpoint owner's when a local override serves a known endpoint under
+ * its own provider id. The fallback crosses only to the same `baseUrl`, never
+ * to a merely related provider id -- a Zen variant must not be judged by the
+ * Go catalog on a different endpoint. Anything unresolved returns undefined
+ * so the caller fails open.
+ */
+export function resolveAvailabilityCache(providerId, { readCache = readProviderCatalogCache, providers } = {}) {
+  const id = typeof providerId === "string" ? providerId : "";
+  const direct = id ? readCache(id) : undefined;
+  if (direct) return direct;
+  const owner = providers?.get?.(id)?.variantOf;
+  if (typeof owner !== "string" || !owner) return undefined;
+  if (providers?.get?.(owner)?.baseUrl !== providers?.get?.(id)?.baseUrl) return undefined;
+  return readCache(owner);
+}
+
+/**
+ * Listed routes whose provider positively reports them absent. `routes` are
+ * `{ slug, provider, upstreamModel }` triples from the merged registry;
+ * `caches` maps a provider id to its stored catalog entry
+ * (`{ discovered, fetchedAt }`). A route is reported only when its provider
+ * answered successfully and recently with a non-empty list that omits the
+ * route's upstream id. Every other shape fails open: no entry, a stale entry,
+ * an empty list, or a missing id is evidence of nothing, and a failed fetch
+ * must never unlist a working route. Local-only routes (no upstream id) and
+ * providers without an authoritative catalog are never reported.
+ */
+export function withdrawnListedRoutes(routes, caches, now = Date.now()) {
+  const withdrawn = [];
+  for (const route of Array.isArray(routes) ? routes : []) {
+    const slug = typeof route?.slug === "string" ? route.slug : "";
+    const provider = typeof route?.provider === "string" ? route.provider : "";
+    const upstream = typeof route?.upstreamModel === "string" ? route.upstreamModel : "";
+    if (!slug || !provider || !upstream) continue;
+    const entry = caches?.[provider];
+    const discovered = Array.isArray(entry?.discovered) ? entry.discovered : undefined;
+    if (!discovered || discovered.length === 0) continue;
+    if (catalogEntryIsStale(entry.fetchedAt, now)) continue;
+    if (!discovered.includes(upstream)) {
+      withdrawn.push({ slug, provider, upstreamModel: upstream });
+    }
+  }
+  return withdrawn;
+}
+
 /** The provider's last known published model list, or undefined on a miss. */
 export function readProviderCatalogCache(providerId, { scope } = {}) {
   if (!PROVIDER_ID.test(String(providerId || ""))) return undefined;

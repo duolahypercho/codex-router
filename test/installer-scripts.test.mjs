@@ -895,6 +895,11 @@ test("uninstall removes the managed skills", () => {
   const uninstallStep = source.indexOf("skills-install.mjs uninstall");
   const serviceStep = source.indexOf("src/service.mjs uninstall");
   assert.ok(serviceStep < uninstallStep, "skills removal must follow the service removal");
+  assert.match(
+    source,
+    /if ! node src\/skills-install\.mjs uninstall; then/,
+    "a failed skill removal must not abort the rest of the uninstall under set -eu",
+  );
 });
 
 // A reinstall over a working router must not be able to leave the machine

@@ -1,0 +1,1 @@
+- **Search sidecar requests now complete their deadlines even when an upstream adapter never settles.** The operation's timeout stays referenced until the request, retry, or cancellation finishes, then its timer is cleared. Previously an idle Node process could exit before reporting the timeout.

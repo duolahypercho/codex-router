@@ -57,6 +57,103 @@ struct RouterWidgetSnapshotTests {
     #expect(!text.localizedCaseInsensitiveContains("dashboardUrl"))
   }
 
+  // The widget extension is a separate bundle and cannot read the tray's
+  // language selection, so the snapshot carries it. That field is new, and the
+  // two-sided compatibility is what keeps an updated tray and a not-yet-updated
+  // extension reading each other's files instead of falling back to "waiting
+  // for router data".
+  @Test("a snapshot written before the language field still decodes")
+  func legacySnapshotWithoutLanguageDecodes() throws {
+    let now = Date(timeIntervalSince1970: 1_700_000_000)
+    // Tagged explicitly so the removal below is a real edit of a present key
+    // rather than a no-op on a snapshot that never carried one.
+    let current = taggedSnapshot(generatedAt: now, language: "english")
+    let legacyData = try encodedSnapshot(current) { object in
+      #expect(object["language"] as? String == "english")
+      object.removeValue(forKey: "language")
+    }
+    let decoded = try #require(RouterWidgetSnapshotStore.decode(legacyData))
+    #expect(decoded.language == nil)
+    #expect(decoded.isSemanticallyValid)
+    #expect(decoded.todayTokens == current.todayTokens)
+    #expect(decoded.availableUsageSources.map(\.id) == current.availableUsageSources.map(\.id))
+  }
+
+  @Test("the language field round-trips and stays inside the size and semantics bounds")
+  func languageRoundTrips() throws {
+    let now = Date(timeIntervalSince1970: 1_700_000_000)
+    let payload = try JSONEncoder.routerWidget.encode(snapshot(generatedAt: now))
+    let withoutLanguage = try #require(
+      JSONSerialization.jsonObject(with: payload) as? [String: Any]
+    )
+    // A snapshot whose language is nil omits the key entirely rather than
+    // encoding a JSON null. That omission is the compatibility guarantee, so it
+    // is asserted strictly.
+    #expect(withoutLanguage["language"] == nil)
+
+    let tagged = RouterWidgetSnapshot(
+      schemaVersion: RouterWidgetSnapshot.schemaVersion,
+      generatedAt: now,
+      activityState: "idle",
+      activeChatCount: 0,
+      selectedProviderID: "openai",
+      selectedProviderName: "ChatGPT",
+      todayTokens: 42,
+      daily: [RouterWidgetDailyPoint(date: now, tokens: 42)],
+      quotas: [],
+      usageSources: nil,
+      language: ResolvedTrayLanguage.chinese.widgetIdentifier
+    )
+    let encoded = try JSONEncoder.routerWidget.encode(tagged)
+    let object = try #require(
+      JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+    )
+    #expect(object["language"] as? String == "chinese")
+    let decoded = try #require(RouterWidgetSnapshotStore.decode(encoded))
+    #expect(decoded.language == "chinese")
+    #expect(decoded.isSemanticallyValid)
+    // An oversized language string is rejected the same way every other
+    // bounded string is, so a hostile snapshot cannot carry one.
+    let oversizedLanguage = try encodedSnapshot(tagged) { object in
+      object["language"] = String(repeating: "z", count: RouterWidgetSnapshot.maximumStringBytes + 1)
+    }
+    #expect(RouterWidgetSnapshotStore.decode(oversizedLanguage) == nil)
+  }
+
+  /// The base fixture plus a published language, for tests that need the field
+  /// present.
+  private func taggedSnapshot(
+    generatedAt: Date,
+    language: String?
+  ) -> RouterWidgetSnapshot {
+    let base = snapshot(generatedAt: generatedAt)
+    return RouterWidgetSnapshot(
+      schemaVersion: base.schemaVersion,
+      generatedAt: base.generatedAt,
+      activityState: base.activityState,
+      activeChatCount: base.activeChatCount,
+      selectedProviderID: base.selectedProviderID,
+      selectedProviderName: base.selectedProviderName,
+      todayTokens: base.todayTokens,
+      daily: base.daily,
+      quotas: base.quotas,
+      usageSources: base.usageSources,
+      language: language
+    )
+  }
+
+  @Test("a language change republishes while an unchanged snapshot is deduplicated")
+  func languageChangeIsPublishable() throws {
+    let now = Date(timeIntervalSince1970: 1_700_000_000)
+    let english = snapshot(generatedAt: now)
+    let chinese = taggedSnapshot(generatedAt: now, language: "chinese")
+    // `content` is the deduplication key: switching language while every
+    // measured number stays put has to count as a change, or the widget would
+    // keep rendering the old language until some usage moved.
+    #expect(chinese.content != english.content)
+    #expect(english.content == snapshot(generatedAt: now).content)
+  }
+
   @Test("token projection and cumulative totals saturate instead of trapping")
   func tokenSaturation() {
     #expect(RouterWidgetTokenCount.from(-1) == 0)

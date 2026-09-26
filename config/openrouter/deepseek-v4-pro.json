@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "slug": "openrouter/deepseek-v4-pro",
+      "gatewayModel": "openrouter-deepseek-v4-pro",
+      "upstreamModel": "deepseek/deepseek-v4-pro",
+      "provider": "openrouter",
+      "listed": true,
+      "displayName": "DeepSeek V4 Pro (OpenRouter)",
+      "description": "DeepSeek V4 Pro through OpenRouter with a 1M context window and high/max reasoning.",
+      "priority": 76,
+      "defaultEffort": "high",
+      "reasoningLevels": [
+        {
+          "effort": "high",
+          "description": "Deep reasoning"
+        },
+        {
+          "effort": "max",
+          "description": "Maximum reasoning depth"
+        }
+      ],
+      "contextWindow": 1048576,
+      "autoCompact": 900000,
+      "inputModalities": [
+        "text"
+      ],
+      "requestProfile": "auto-tool-choice",
+      "compHash": "openrouter-deepseek-v4-pro-v1"
+    }
+  ]
+}

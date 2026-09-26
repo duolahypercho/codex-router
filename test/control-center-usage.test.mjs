@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { accountBucketsWithRouterFallback, metricValue } from "../apps/control-center/src/lib.ts";
-import { LANGUAGE_OPTIONS, translate } from "../apps/control-center/src/i18n.ts";
+import { LANGUAGE_OPTIONS, translate, createTranslator } from "../apps/control-center/src/i18n.ts";
 
 test("account usage fills only absent OpenAI dates from the local router", () => {
   const buckets = accountBucketsWithRouterFallback(
@@ -117,4 +117,18 @@ test("the daily window is walked in UTC days, the day space every bucket key use
   // asked for a key the UTC-keyed stream has not written yet whenever the
   // machine is east of UTC, which read as a confident zero all morning.
   assert.equal(range.at(-1).tokens, 4_242);
+});
+
+
+test("explicit interface locale formats balances without changing their source values", () => {
+  const metric = { kind: "balance", value: 12.5, currency: "USD" };
+  const original = { ...metric };
+  for (const [language, locale] of [["en", "en-US"], ["zh-CN", "zh-CN"], ["zh-TW", "zh-TW"]]) {
+    const t = createTranslator(language);
+    assert.equal(metricValue(metric, t), new Intl.NumberFormat(locale, {
+      style: "currency", currency: "USD", maximumFractionDigits: 2,
+    }).format(12.5));
+    assert.equal(metricValue({ kind: "balance", value: 8.25, currency: "DIEM" }, t), "8.25 DIEM");
+  }
+  assert.deepEqual(metric, original);
 });

@@ -216,6 +216,21 @@ export function mergeTokenUsage(first, second) {
     first.retries === undefined && second.retries === undefined
       ? undefined
       : (first.retries || 0) + (second.retries || 0);
+  // What the pair cost is the one number this function exists to report, so
+  // the billed counts are added up like every other measurement rather than
+  // dropped. A provider that meters spend separately from the prompt it
+  // reports -- Grok OAuth sends `billed_prompt_tokens` beside `prompt_tokens`
+  // -- is exactly the one whose retried turns were being charged twice and
+  // metered once, because provider-usage.mjs reads `billedInputTokens ??
+  // inputTokens` and the billed half went missing on the way here.
+  const billedInputTokens =
+    first.billedInputTokens === undefined && second.billedInputTokens === undefined
+      ? undefined
+      : (first.billedInputTokens || 0) + (second.billedInputTokens || 0);
+  const billedOutputTokens =
+    first.billedOutputTokens === undefined && second.billedOutputTokens === undefined
+      ? undefined
+      : (first.billedOutputTokens || 0) + (second.billedOutputTokens || 0);
   return {
     inputTokens: (first.inputTokens || 0) + (second.inputTokens || 0),
     outputTokens: (first.outputTokens || 0) + (second.outputTokens || 0),
@@ -223,6 +238,8 @@ export function mergeTokenUsage(first, second) {
     ...(cachedInputTokens !== undefined ? { cachedInputTokens } : {}),
     ...(reasoningTokens !== undefined ? { reasoningTokens } : {}),
     ...(retries !== undefined && retries > 0 ? { retries } : {}),
+    ...(billedInputTokens !== undefined ? { billedInputTokens } : {}),
+    ...(billedOutputTokens !== undefined ? { billedOutputTokens } : {}),
   };
 }
 

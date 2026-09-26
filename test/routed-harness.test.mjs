@@ -63,8 +63,8 @@ const MODELS = [
     priority: 5,
   },
   {
-    slug: "opencode-go-messages/union-alpha",
-    displayName: "Union Alpha (opencode Go)",
+    slug: "opencode-go-messages/minimax-m3",
+    displayName: "MiniMax M3 (opencode Go)",
     contextWindow: 262_144,
     autoCompact: 180_000,
     maxOutputTokens: 32_768,
@@ -416,7 +416,7 @@ test("opencode gets a limit its schema accepts, compacting where Codex does", ()
   assert.deepEqual(models["moonshot/kimi-k3"].limit, { context: 262_144, input: 222_822, output: 39_322 });
   // A measured completion reserve beats compact-headroom so OpenCode's local
   // fit check cannot refuse a prompt the Messages hop would accept.
-  assert.deepEqual(models["opencode-go-messages/union-alpha"].limit, {
+  assert.deepEqual(models["opencode-go-messages/minimax-m3"].limit, {
     context: 262_144,
     input: 180_000,
     output: 32_768,

@@ -48,12 +48,17 @@ import {
 import { knownServiceTier } from "./request-diagnostics.mjs";
 import { VERSION } from "./version.mjs";
 import { installStableFetchTransport } from "./fetch-transport.mjs";
+import { createGrokInflightGate, grokInflightLimit, responseWithInflightRelease } from "./grok-inflight.mjs";
 import { grokTransportIdleTimeoutMs } from "./grok-stream-timeouts.mjs";
+import {
+  certifiedReasoningItems, createReasoningCarryStore, reasoningCarryEnabled, reasoningCarryScope,
+} from "./grok-reasoning-carry.mjs";
 
 // This process carries only Grok traffic, so its whole pool outlasts the
 // router's stall guard. Undici's 300s default would otherwise end a long
 // reasoning pause with UND_ERR_BODY_TIMEOUT before the guard could decide.
 installStableFetchTransport({ bodyTimeoutMs: grokTransportIdleTimeoutMs() });
+const grokInflight = createGrokInflightGate(grokInflightLimit());
 
 // LiteLLM speaks OpenAI Chat Completions to this forwarder. It reuses the
 // official Grok CLI OAuth session and translates to xAI's Responses proxy.
@@ -66,6 +71,7 @@ const GROK_BASE = (
 const INTERNAL_KEY = process.env.MODEL_ROUTER_INTERNAL_KEY;
 const QUIET = process.env.MODEL_ROUTER_QUIET === "1";
 const PROGRESS_ONLY_RETRY = process.env.CODEX_ROUTER_GROK_PROGRESS_ONLY_RETRY !== "0";
+const reasoningCarry = reasoningCarryEnabled() ? createReasoningCarryStore() : undefined;
 const PROGRESS_ONLY_MAX_TEXT = envNonNegativeInt(
   "CODEX_ROUTER_GROK_PROGRESS_ONLY_MAX_TEXT",
   DEFAULT_PROGRESS_ONLY_MAX_TEXT,
@@ -125,12 +131,30 @@ const HOSTED_SEARCH_FUNCTION_NAMES = new Set(["web_search", "x_search"]);
 // receives the upstream model id (LiteLLM translates OAuth slugs before the
 // request arrives), so the lookup goes provider + upstreamModel, not slug.
 export function hostedSearchEnabledFor(upstreamModel, models = MODELS) {
-  return models.some(
-    (model) =>
-      model.provider === "grok-oauth" &&
-      model.upstreamModel === upstreamModel &&
-      model.searchTool?.mode === "hosted",
+  return grokOAuthEntries(upstreamModel, models).some(
+    (model) => model.searchTool?.mode === "hosted",
   );
+}
+
+function grokOAuthEntries(upstreamModel, models = MODELS) {
+  return models.filter(
+    (model) => model.provider === "grok-oauth" && model.upstreamModel === upstreamModel,
+  );
+}
+
+// The same rule decides the other two per-model facts this bridge needs, so
+// that shipping another Grok OAuth model stays a registry change. `xhigh` is a
+// real rung only where the entry lists it and is otherwise clamped to `high`
+// rather than sent through and rejected, and the Fast tier is offered only by
+// a route that declares a service tier of its own.
+export function xhighEnabledFor(upstreamModel, models = MODELS) {
+  return grokOAuthEntries(upstreamModel, models).some((model) =>
+    model.reasoningLevels?.some((level) => level.effort === "xhigh"),
+  );
+}
+
+export function serviceTierEnabledFor(upstreamModel, models = MODELS) {
+  return grokOAuthEntries(upstreamModel, models).some((model) => model.serviceTiers?.length);
 }
 
 function grokClientVersion() {
@@ -190,7 +214,7 @@ function messageContentParts(content, textType) {
 function mapEffort(effort, model) {
   if (effort === "minimal") return "low";
   if (["none", "low"].includes(effort)) return "low";
-  if (effort === "xhigh") return model === "grok-4.6" ? "xhigh" : "high";
+  if (effort === "xhigh") return xhighEnabledFor(model) ? "xhigh" : "high";
   if (effort === "max") return "high";
   return ["medium", "high"].includes(effort) ? effort : undefined;
 }
@@ -346,6 +370,10 @@ export function toResponsesRequest(chat, options = {}) {
         output: normalizeToolOutputForGrok(message.content),
       });
     } else if (role === "assistant" && Array.isArray(message.tool_calls)) {
+      // xAI's own encrypted reasoning for this tool-calling turn, when the
+      // forwarder still holds it (see grok-reasoning-carry.mjs).
+      const carried = options.recallReasoning?.(message.tool_calls.map((call) => call?.id));
+      if (carried?.length) input.push(...carried);
       const text = contentToText(message.content);
       if (text) {
         input.push({ type: "message", role: "assistant", content: [{ type: "output_text", text }] });
@@ -365,12 +393,13 @@ export function toResponsesRequest(chat, options = {}) {
   }
 
   const request = { model: chat.model, input, stream: true, store: false };
-  if (chat.model === "grok-4.6" && knownServiceTier(chat.service_tier)) {
+  if (serviceTierEnabledFor(chat.model) && knownServiceTier(chat.service_tier)) {
     request.service_tier = knownServiceTier(chat.service_tier);
   }
   if (instructions) request.instructions = instructions;
   const effort = mapEffort(chat.reasoning_effort, chat.model);
   if (effort) request.reasoning = { effort };
+  if (effort && options.recallReasoning) request.include = ["reasoning.encrypted_content"];
   const clientTools = Array.isArray(chat.tools)
     ? chat.tools
         .filter((tool) => tool?.type === "function" && tool.function?.name)
@@ -558,7 +587,22 @@ async function handleChatCompletions(request, response) {
   const model = typeof chat.model === "string" ? chat.model : "";
   const hostedSearchEnabled = hostedSearchEnabledFor(model);
   const viewImageAlias = shouldAliasViewImageForGrok(chat);
-  const responsesRequest = toResponsesRequest(chat, { hostedSearchEnabled });
+  const conversationKey = conversationId(chat?.messages);
+  const carryScope = reasoningCarryScope(conversationKey, model);
+  const carryCounts = { hits: 0, misses: 0 };
+  const recallReasoning = reasoningCarry
+    ? (callIds) => {
+        const items = reasoningCarry.recall(carryScope, callIds);
+        carryCounts[items ? "hits" : "misses"]++;
+        return items;
+      }
+    : undefined;
+  const responsesRequest = toResponsesRequest(chat, { hostedSearchEnabled, recallReasoning });
+  if (carryCounts.misses && !QUIET) {
+    console.error(
+      `[grok-oauth] reasoning-carry hits=${carryCounts.hits} misses=${carryCounts.misses} model=${model}`,
+    );
+  }
   const holdOptions = {
     maxText: PROGRESS_ONLY_MAX_TEXT,
     minOutputTokens: PROGRESS_ONLY_MIN_OUTPUT_TOKENS,
@@ -567,7 +611,6 @@ async function handleChatCompletions(request, response) {
   const mayRetry =
     PROGRESS_ONLY_RETRY && (afterToolResult || requestOffersClientTools(chat));
   const strictAfterToolRepair = PROGRESS_ONLY_RETRY && afterToolResult;
-  const conversationKey = conversationId(chat?.messages);
   // Attempt 1 normally stays live. Once this exact conversation has actually
   // produced a progress-only stop, buffer only its next short visible prefix.
   // That prevents an aborted/retried turn from committing the same status
@@ -588,7 +631,9 @@ async function handleChatCompletions(request, response) {
       requestId: randomUUID(),
       startedAt: Date.now(),
     };
+    let release;
     try {
+      release = await grokInflight.acquire(controller.signal);
       attempt.response = await fetch(`${GROK_BASE}/responses`, {
         method: "POST",
         headers: upstreamHeaders(accessToken, model, chat?.messages, attempt.requestId),
@@ -596,8 +641,15 @@ async function handleChatCompletions(request, response) {
         signal: controller.signal,
       });
       attempt.headersAt = Date.now();
+      if (attempt.response.body) {
+        attempt.response = responseWithInflightRelease(attempt.response, release);
+      } else {
+        release();
+      }
+      release = undefined;
       return attempt;
     } catch (error) {
+      release?.();
       attempt.endedAt = Date.now();
       if (error && typeof error === "object") {
         try {
@@ -756,10 +808,14 @@ async function handleChatCompletions(request, response) {
     }
   };
 
+  const upstreamOutputItems = [];
   try {
     await consumeResponsesStream(upstream.body, (event) => {
       firstAttempt.firstEventAt ??= Date.now();
       applyResponsesEvent(turnState, event);
+      if (event?.type === "response.output_item.done" && event.item && !turnState.terminalStatus) {
+        upstreamOutputItems.push(event.item);
+      }
       emitPendingDeltas();
     });
     firstAttempt.endedAt = Date.now();
@@ -774,6 +830,9 @@ async function handleChatCompletions(request, response) {
   // deltas may already have reached the client; only one terminal error is
   // legal now. Withheld/backfilled deltas stay withheld on failure.
   if (rejectUnsuccessfulTurn(turn, "attempt", firstAttempt)) return;
+  // Only a completed response certifies its reasoning for the next request.
+  reasoningCarry?.remember(carryScope, turn.toolCalls.map((call) => call.id),
+    certifiedReasoningItems(upstreamOutputItems));
   emitPendingDeltas();
   let retried = false;
   let repairFailure;
@@ -790,7 +849,7 @@ async function handleChatCompletions(request, response) {
     };
   } else if (mayRetry && progressOnly) {
     const retryChat = withProgressOnlyNudge(chat, { afterToolResult });
-    const retryRequest = toResponsesRequest(retryChat, { hostedSearchEnabled });
+    const retryRequest = toResponsesRequest(retryChat, { hostedSearchEnabled, recallReasoning });
     let secondUpstream;
     try {
       repairAttempt = await requestUpstream(accessToken, retryRequest);
@@ -947,7 +1006,7 @@ async function handleChatCompletions(request, response) {
 
   // A repair may consume multiple tiers. Do not label aggregate billing with
   // one attempt's tier, even when the selected answer came from that attempt.
-  const tierFields = model === "grok-4.6" && !retried ? chatServiceTierFields(turn) : {};
+  const tierFields = serviceTierEnabledFor(model) && !retried ? chatServiceTierFields(turn) : {};
   if (wantsStream) {
     const wasStarted = streamStarted;
     startStream();
@@ -1008,6 +1067,7 @@ async function handleRequest(request, response) {
       ok: true,
       service: "codex-router-grok-oauth-forwarder",
       credential_present: credentialPresent,
+      reasoningCarry: reasoningCarry ? { version: 1, ...reasoningCarry.stats() } : null,
     });
     return;
   }

@@ -114,6 +114,73 @@ test("an explicit subagent model is kept instead of pinned to the routed parent"
   }
 });
 
+test("a named subagent model without an explicit depth receives the configured depth", () => {
+  // Native models have no router-published agent definition, so the relay is
+  // the only layer that can default the child to the operator's setting.
+  const item = spawnCall(
+    "collaboration__spawn_agent",
+    undefined,
+    JSON.stringify({ task_name: "worker", message: "audit", model: "gpt-5.6-luna" }),
+  );
+  const next = injectSessionModelForSpawnCalls(item, SESSION_MODEL, (slug) =>
+    slug === "gpt-5.6-luna" ? "high" : undefined,
+  );
+  assert.notEqual(next, item);
+  assert.deepEqual(JSON.parse(next.arguments), {
+    task_name: "worker",
+    message: "audit",
+    model: "gpt-5.6-luna",
+    reasoning_effort: "high",
+  });
+});
+
+test("an explicit subagent depth wins over the configured default", () => {
+  const item = spawnCall(
+    "spawn_agent",
+    "collaboration",
+    JSON.stringify({
+      task_name: "worker",
+      message: "audit",
+      model: "gpt-5.6-luna",
+      reasoning_effort: "low",
+    }),
+  );
+  assert.equal(injectSessionModelForSpawnCalls(item, SESSION_MODEL, () => "high"), item);
+});
+
+test("a named subagent model with no configured depth keeps the catalog default", () => {
+  const item = spawnCall(
+    "collaboration__spawn_agent",
+    undefined,
+    JSON.stringify({ task_name: "worker", message: "audit", model: "gpt-5.6-luna" }),
+  );
+  assert.equal(injectSessionModelForSpawnCalls(item, SESSION_MODEL, () => undefined), item);
+  assert.equal(injectSessionModelForSpawnCalls(item, SESSION_MODEL), item);
+});
+
+test("an unnamed subagent keeps inheriting the routed parent without a depth rewrite", () => {
+  const item = spawnCall(
+    "collaboration__spawn_agent",
+    undefined,
+    JSON.stringify({ task_name: "review", message: "inspect" }),
+  );
+  const next = injectSessionModelForSpawnCalls(item, SESSION_MODEL, () => "high");
+  assert.deepEqual(JSON.parse(next.arguments), {
+    task_name: "review",
+    message: "inspect",
+    model: SESSION_MODEL,
+  });
+});
+
+test("a new thread keeps its explicit model without a subagent depth", () => {
+  const item = spawnCall(
+    "codex_app__create_thread",
+    undefined,
+    JSON.stringify({ prompt: "hi", model: "gpt-5.6-luna" }),
+  );
+  assert.equal(injectSessionModelForSpawnCalls(item, SESSION_MODEL, () => "high"), item);
+});
+
 test("an unusable spawn model still inherits the routed parent", () => {
   // Absent, empty, and non-string values carry no override, so the child keeps
   // the routed parent exactly as it did before.

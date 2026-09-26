@@ -151,6 +151,7 @@ test("fallback is bounded, pre-response, and excludes only the exact failed iden
     failureKind: "connection",
     failedTarget: { slug: GROK_API.slug, provider: GROK_API.provider },
     maxAttempts: 99,
+    settings: SETTINGS,
   });
   assert.equal(plan.target.provider, "grok-oauth");
   assert.deepEqual(plan.fallbacks.map((entry) => entry.provider), ["kimi-api", "zai-coding"]);

@@ -47,6 +47,12 @@ export interface RouterModel {
   autoCompact?: number;
   inputModalities?: string[];
   isFree?: boolean;
+  /**
+   * Locally curated: this route came from the operator's `user-models.json`
+   * overlay rather than a checked-in `config/` entry, so curation can prune it
+   * again. Never set on a route this checkout ships.
+   */
+  local?: boolean;
   /** False only for a checked-in research route that is not currently routable. */
   available?: boolean;
 }
@@ -351,10 +357,22 @@ export interface RouterCatalogSnapshot {
   dashboard?: RouterDashboardSnapshot;
 }
 
+/** A custom endpoint mutation plus the one live check that followed it. */
+export interface CustomEndpointResult {
+  providerId: string;
+  check?: { ok: boolean; status: number; reason?: string };
+}
+
 export interface ProviderSetup {
   id: string;
   displayName: string;
   kind: "oauth" | "api" | "anonymous" | "per-model" | "configuration";
+  /** Operator-added OpenAI-compatible endpoint (a generic provider). */
+  generic?: boolean;
+  enabled?: boolean;
+  baseUrl?: string;
+  adapter?: string;
+  hasKey?: boolean;
   configured: boolean;
   action: string;
   planNote?: string;
@@ -419,6 +437,8 @@ export interface ProviderCatalog {
 
 export interface ProviderSetupSnapshot {
   providers: ProviderSetup[];
+  /** Operator-added OpenAI-compatible endpoints; shown under Custom. */
+  customEndpoints?: ProviderSetup[];
 }
 
 export interface UsageBucket {
@@ -485,6 +505,7 @@ export interface ProviderUsage {
   inputTokens?: number;
   regularInputTokens?: number;
   cachedInputTokens?: number;
+  cacheTelemetrySeen?: boolean;
   outputTokens?: number;
   totalTokens?: number;
   requests?: number;
@@ -761,6 +782,7 @@ export interface ContextSessionsSnapshot {
 }
 
 export interface RouterControlApi {
+  setInterfaceLanguage?(language: import("./i18n").LanguageId): void;
   readonly platform: string;
   minimizeWindow(): Promise<unknown>;
   toggleMaximizeWindow(): Promise<unknown>;
@@ -787,6 +809,12 @@ export interface RouterControlApi {
   addProviderModels(provider: string, modelIds: string[]): Promise<unknown>;
   connectProvider(provider: string): Promise<unknown>;
   saveProviderCredential(provider: string, credential: string): Promise<unknown>;
+  addCustomEndpoint(endpoint: { displayName: string; baseUrl: string; adapter: "openai-chat" | "openai-responses"; credential?: string }): Promise<CustomEndpointResult>;
+  editCustomEndpoint(provider: string, endpoint: { displayName: string; baseUrl: string; adapter: "openai-chat" | "openai-responses" }): Promise<CustomEndpointResult>;
+  removeCustomEndpointModels(provider: string, slugs: string[]): Promise<unknown>;
+  /** Prune locally curated models (the `user-models.json` overlay) on any provider. */
+  removeLocalModels(slugs: string[]): Promise<unknown>;
+  addCustomEndpointModel(provider: string, modelId: string): Promise<unknown>;
   removeProviderCredential(provider: string): Promise<unknown>;
   setSubagentMode(mode: "all" | "selected" | "proven"): Promise<unknown>;
   setSubagentModel(slug: string, enabled: boolean): Promise<unknown>;

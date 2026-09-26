@@ -77,8 +77,7 @@ export function routedHarnessDefaultModel(models) {
 // `input` is that threshold and `output` is the headroom the registry leaves
 // above it, unless the route measured a smaller completion reserve. A local
 // `rendered + output > context` check that still advertises 131,072 output
-// refuses a Desktop-sized Union Alpha prompt the Messages hop would accept at
-// 32,768. opencode caps a single request at 32k either way. A model with no
+// refuses a Desktop-sized prompt the Messages hop would accept at 32,768. opencode caps a single request at 32k either way. A model with no
 // usable threshold publishes no limit, which opencode reads as unknown.
 function opencodeLimit(model) {
   const context = contextWindow(model);

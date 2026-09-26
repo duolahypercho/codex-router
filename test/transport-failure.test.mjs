@@ -21,6 +21,19 @@ function connectTimeout(host = "chatgpt.com") {
   return new TypeError("fetch failed", { cause });
 }
 
+// A refused socket is the other shape: Node sets `address` and `port`, never
+// `hostname`. A fixture that added `hostname` here once hid a live bug where a
+// stopped LiteLLM gateway on 127.0.0.1:4200 was reported as "the upstream"
+// with proxy advice instead of the local-process hint.
+function connectRefused(address, port) {
+  const cause = new Error(`connect ECONNREFUSED ${address}:${port}`);
+  cause.code = "ECONNREFUSED";
+  cause.syscall = "connect";
+  cause.address = address;
+  cause.port = port;
+  return cause;
+}
+
 test("a connect timeout names the host and the condition", () => {
   const failure = describeTransportFailure(connectTimeout(), {
     proxyConfigured: true,
@@ -80,9 +93,7 @@ test("a certificate for another host is reported as interception", () => {
 });
 
 test("an AggregateError chain is followed through its members", () => {
-  const member = new Error("connect ECONNREFUSED 127.0.0.1:4200");
-  member.code = "ECONNREFUSED";
-  member.hostname = "127.0.0.1";
+  const member = connectRefused("127.0.0.1", 4200);
   const aggregate = new AggregateError([member], "all connection attempts failed");
   const failure = describeTransportFailure(new TypeError("fetch failed", { cause: aggregate }), {
     proxyConfigured: true,
@@ -95,12 +106,11 @@ test("an AggregateError chain is followed through its members", () => {
 // died" here. Advising a proxy would send the operator to reconfigure a network
 // that is working.
 test("a loopback failure blames this install, never the network", () => {
-  const cause = new Error("connect ECONNREFUSED 127.0.0.1:4200");
-  cause.code = "ECONNREFUSED";
-  cause.hostname = "127.0.0.1";
+  const cause = connectRefused("127.0.0.1", 4200);
   const failure = describeTransportFailure(new TypeError("fetch failed", { cause }), {
     proxyConfigured: false,
   });
+  assert.equal(failure.cause, "127.0.0.1 refused the connection");
   assert.match(failure.hint, /this install's own processes/);
   assert.match(failure.hint, /doctor --fix/);
   assert.doesNotMatch(failure.hint, /NODE_USE_ENV_PROXY/);
@@ -154,4 +164,29 @@ test("a diagnosed failure with no recoverable host still names something", () =>
     proxyConfigured: true,
   });
   assert.equal(failure.cause, "timed out connecting to the upstream");
+});
+
+test("a refused socket names its host from the message when fields are gone", () => {
+  assert.equal(transportFailureHost(new Error("connect ECONNREFUSED 127.0.0.1:4200")), "127.0.0.1");
+  assert.equal(transportFailureHost(new Error("connect ECONNREFUSED ::1:4200")), "::1");
+});
+
+// Pins the fixture above to what this Node actually produces, so the two
+// cannot drift apart again.
+test("a real refused loopback fetch gets the local hint", async () => {
+  const net = await import("node:net");
+  const server = net.createServer();
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address();
+  await new Promise((resolve) => server.close(resolve));
+
+  const error = await fetch(`http://127.0.0.1:${port}/`).then(
+    () => assert.fail("expected the closed port to refuse"),
+    (caught) => caught,
+  );
+  const failure = describeTransportFailure(error, { proxyConfigured: false });
+  assert.equal(failure.code, "ECONNREFUSED");
+  assert.equal(failure.cause, "127.0.0.1 refused the connection");
+  assert.match(failure.hint, /doctor --fix/);
+  assert.doesNotMatch(failure.hint, /NODE_USE_ENV_PROXY/);
 });

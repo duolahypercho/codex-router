@@ -17,7 +17,9 @@ const STARTUP_CONFIGURED_TARGETS = new Set(["codex", "gemini", "cursor"]);
 const CLIENT_PROCESS_PATTERNS = {
   codex: [/Codex Framework/i, /ChatGPT\.app/i, /(^|\/)codex(\s|$)/],
   gemini: [/(^|\/)gemini(\s|$)/],
-  cursor: [/Cursor\.app/i, /(^|[\\/])Cursor(?:\.exe)?(?:\s|$)/i],
+  // Win32_Process quotes an executable path that contains a space, so the
+  // name can be followed by the closing quote rather than whitespace.
+  cursor: [/Cursor\.app/i, /(^|[\\/])Cursor(?:\.exe)?(?:"|\s|$)/i],
 };
 
 // This router's own processes carry `codex` in nearly every path they run
@@ -25,6 +27,20 @@ const CLIENT_PROCESS_PATTERNS = {
 // user to restart. Excluding the checkout by name is what keeps the notice
 // about Codex rather than about ourselves.
 const SELF_PATTERN = /codex-router|model-router/i;
+
+// Chromium's crash reporter outlives the app that started it: quitting the
+// desktop app leaves its `browser_crashpad_handler` (macOS) or
+// `crashpad_handler.exe` (Windows) running, reparented to launchd, for hours
+// under the same framework path the client patterns match. It holds no routing
+// configuration, so it is never evidence that the client is running.
+const CRASH_REPORTER_PATTERN = /crashpad_handler\b|--type=crashpad-handler\b/i;
+
+// Chromium child processes: an Electron `* Helper (Renderer).app`, anything
+// under a framework's `Helpers/` directory, or a process started with
+// `--type=`. They run for the app and die with it, so a listing made of helpers
+// alone is the residue of an app that already quit, not a client to restart.
+const HELPER_PATTERN =
+  /[\\/]Helpers[\\/]|\bHelper(?: \([^)]*\))?\.app[\\/]|\s--type=[\w-]+/i;
 
 /**
  * PIDs of the target client that are running right now.
@@ -74,8 +90,10 @@ export function runningClientProcesses(
     if (!command || SELF_PATTERN.test(command)) continue;
     if (pid === process.pid) continue;
     if (!patterns.some((pattern) => pattern.test(command))) continue;
+    if (CRASH_REPORTER_PATTERN.test(command)) continue;
     found.push({ pid, parentPid, command });
   }
+  if (found.every((entry) => HELPER_PATTERN.test(entry.command))) return [];
   return found;
 }
 

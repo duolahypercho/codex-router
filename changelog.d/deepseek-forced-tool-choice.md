@@ -1,0 +1,1 @@
+- **Direct DeepSeek Flash subagents can use tools in thinking mode when Codex requests a forced choice.** The router now omits the unsupported forced choice while keeping named and required allowed-tool requests restricted to their selected tools; previously DeepSeek rejected these requests with HTTP 400. No configuration change is needed.

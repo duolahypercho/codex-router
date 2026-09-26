@@ -93,7 +93,7 @@ jobs:
       - name: Set up Homebrew
         id: set-up-homebrew
         if: steps.changed.outputs.run == 'true'
-        uses: Homebrew/actions/setup-homebrew@f8d4222eb633e65c2a0157383cf80861fc7fae7f # 2026.09.07.1
+        uses: Homebrew/actions/setup-homebrew@848c272c7bfe984a197bd4d16383f4c106ec61e6 # 2026.09.21.1
       - name: Cache Homebrew Bundler RubyGems
         id: cache-homebrew-gems
         if: steps.changed.outputs.run == 'true'
@@ -122,7 +122,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Set up Homebrew
-        uses: Homebrew/actions/setup-homebrew@f8d4222eb633e65c2a0157383cf80861fc7fae7f # 2026.09.07.1
+        uses: Homebrew/actions/setup-homebrew@848c272c7bfe984a197bd4d16383f4c106ec61e6 # 2026.09.21.1
       - name: Build and test the formula from source
         run: packaging/homebrew/check-core-readiness.sh --install
 
@@ -173,6 +173,9 @@ jobs:
           path: ${{ matrix.download_cache }}
           key: electron-builder-${{ runner.os }}-${{ hashFiles('apps/control-center/package-lock.json') }}
           restore-keys: electron-builder-${{ runner.os }}-
+      - name: Install router runtime dependencies for packaged smoke
+        working-directory: .
+        run: npm ci --omit=dev
       - name: Install Electron dependencies
         run: npm ci
       - name: Check Electron sources

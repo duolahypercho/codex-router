@@ -18,7 +18,7 @@ test("provider and model-maker branding covers remote and local catalog families
 
   for (const providerId of [
     "devin-cli", "kilo-free", "kimi-api-cn", "lmstudio", "nano-gpt", "opencode-free",
-    "xiaomi-mimo", "zai-api",
+    "stepfun-api", "stepfun-api-cn", "xiaomi-mimo", "zai-api",
   ]) {
     assert.match(branding, new RegExp(`"${providerId}":`), `${providerId} falls back to a monogram`);
   }
@@ -30,6 +30,10 @@ test("provider and model-maker branding covers remote and local catalog families
   assert.match(branding, /export function brandForLocalModel/);
   assert.match(branding, /vertex: "google"/);
   assert.match(tray, /providerID == "vertex" \{ return "google" \}/);
+  // Both StepFun regional platforms resolve the one bundled SVG mark.
+  assert.match(tray, /providerID\.hasPrefix\("stepfun-api"\) \{ return "stepfun" \}/);
+  assert.match(tray, /"stepfun"\s*\]\s*\n?\s*\.contains\(assetName/);
+  assert.match(traySources, /StepFun \| https:\/\/www\.stepfun\.com\//);
   assert.match(traySources, /Google Cloud Vertex AI.*google\.svg/s);
   assert.match(local, /brandForLocalModel/);
   assert.match(local, /<BrandLogo brand=\{brandForLocalModel\(model\)\}/);

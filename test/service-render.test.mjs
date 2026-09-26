@@ -421,9 +421,10 @@ test("the Windows scheduled task runs the VBS launcher through wscript.exe", () 
     );
 
     assert.equal(action.execute, "wscript.exe");
-    // //B and //NoLogo keep the windowless host quiet; the launcher path takes a
-    // single quote pair because wscript.exe uses the standard argument parser.
-    assert.equal(action.argument, `//B //NoLogo "${launcherPath}"`);
+    // The explicit engine keeps unrelated `.vbs` file associations from
+    // disabling the launcher. //B and //NoLogo keep the windowless host quiet;
+    // the path takes one quote pair because wscript.exe uses the standard parser.
+    assert.equal(action.argument, `//E:VBScript //B //NoLogo "${launcherPath}"`);
     // The console-visible cmd.exe action is what issue #98 reported.
     assert.doesNotMatch(`${action.execute} ${action.argument}`, /cmd\.exe/);
   } finally {
@@ -475,8 +476,8 @@ test("Windows explicit stop disables heartbeat while start and restart re-enable
 // launcher reports the parse or runtime error on stderr instead of arriving as
 // an unexplained exit code.
 const WINDOWS_SCRIPT_HOSTS = [
-  { name: "cscript.exe", args: ["//NoLogo"] },
-  { name: "wscript.exe", args: ["//B", "//NoLogo"] },
+  { name: "cscript.exe", args: ["//E:VBScript", "//NoLogo"] },
+  { name: "wscript.exe", args: ["//E:VBScript", "//B", "//NoLogo"] },
 ];
 
 // Resolved absolutely: these live in the system directory, and naming them

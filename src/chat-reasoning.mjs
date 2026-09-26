@@ -68,6 +68,20 @@ export function nativeReasoningFamily(model) {
   return NATIVE_REASONING_FAMILIES.find((entry) => entry.upstream.test(upstream))?.family;
 }
 
+// DeepSeek refuses a thinking-mode assistant tool call whose `reasoning_content`
+// field is absent, while it accepts an empty string; a replay assembled by a
+// client that never saw the reasoning (a stateless tool-result probe, a
+// compacted history) must still carry the field (#809).
+export function requiresReasoningContentOnToolCalls(model) {
+  if (!usesNativeChatReasoning(model)) return false;
+  return (
+    model?.requestProfile === "deepseek-thinking" ||
+    nativeReasoningFamily(model) === "deepseek" ||
+    (model?.provider === "commandcode" &&
+      model?.upstreamModel === "deepseek/deepseek-v4-flash")
+  );
+}
+
 export function usesNativeChatReasoning(model) {
   // A profile that switches thinking off is never asked to replay reasoning,
   // whatever its id looks like. The table is matched against `upstreamModel`,

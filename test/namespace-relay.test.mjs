@@ -2214,6 +2214,7 @@ test("tool_search response bridge suppresses function argument events across its
         type: "function_call",
         id: "fc_search_1",
         name: "tool_search",
+        namespace: null,
         call_id: "search-1",
         arguments: "",
       },
@@ -2236,6 +2237,7 @@ test("tool_search response bridge suppresses function argument events across its
         type: "function_call",
         id: "fc_search_1",
         name: "tool_search",
+        namespace: null,
         call_id: "search-1",
         arguments: '{"query":"calendar","limit":2.0}',
       },
@@ -2249,6 +2251,7 @@ test("tool_search response bridge suppresses function argument events across its
             type: "function_call",
             id: "fc_search_1",
             name: "tool_search",
+            namespace: null,
             call_id: "search-1",
             arguments: '{"query":"calendar","limit":2}',
           },
@@ -2288,6 +2291,32 @@ test("tool_search response bridge suppresses function argument events across its
     arguments: { query: "calendar", limit: 2 },
   });
   assert.doesNotMatch(output, /response\.function_call_arguments/u);
+});
+
+test("tool_search response bridge treats provider namespace null as unqualified", () => {
+  const { namespaces } = flattenNamespaceTools([clientToolSearchControl()]);
+  const rewritten = rewriteNamespaceResponsePayload(
+    {
+      output: [{
+        type: "function_call",
+        id: "fc_search_null",
+        name: "tool_search",
+        namespace: null,
+        call_id: "search-null",
+        arguments: '{"query":"calendar"}',
+        status: "completed",
+      }],
+    },
+    buildNamespaceLookups(namespaces),
+  );
+  assert.deepEqual(rewritten?.output?.[0], {
+    type: "tool_search_call",
+    id: "fc_search_null",
+    call_id: "search-null",
+    status: "completed",
+    execution: "client",
+    arguments: { query: "calendar" },
+  });
 });
 
 test("tool_search response bridge fails closed without native control or valid arguments", () => {

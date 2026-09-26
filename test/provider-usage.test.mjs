@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { aggregateProviderUsage, tokensGeneratedAfterFirstToken } from "../src/provider-usage.mjs";
+import { mergeTokenUsage } from "../src/response-usage.mjs";
 
 test("protocol variants never appear as separate usage providers", () => {
   const snapshot = aggregateProviderUsage([], { now: Date.parse("2026-07-21T18:00:00Z") });
@@ -223,6 +224,12 @@ test("publishes prefix-cache telemetry for the dashboard without inflating it", 
   assert.equal(deepseek.last24hRegularInputTokens, 20);
   assert.equal(deepseek.last24hCachedInputTokens, 130);
   assert.equal(deepseek.regularInputTokens + deepseek.cachedInputTokens, deepseek.inputTokens);
+  // A provider whose rows never carried cache telemetry has no hit rate, not a
+  // zero one; the per-provider flag lets the dashboard tell them apart (#826).
+  assert.equal(deepseek.cacheTelemetrySeen, true);
+  for (const provider of snapshot.providers) {
+    if (provider.id !== "deepseek") assert.equal(provider.cacheTelemetrySeen, false, provider.id);
+  }
   assert.deepEqual(deepseek.dailyUsageBuckets, [
     { startDate: utcDateKey("2026-07-20T18:00:00Z"), tokens: 100, requests: 1, inputTokens: 100, cachedInputTokens: 80, outputTokens: 0 },
     { startDate: utcDateKey("2026-07-21T17:00:00Z"), tokens: 50, requests: 2, inputTokens: 50, cachedInputTokens: 50, outputTokens: 0 },
@@ -288,6 +295,35 @@ test("uses billed retry totals without changing the selected response usage", ()
         progressOnlyRetried: true,
       },
     ],
+    { days: 7, now },
+  );
+  const grok = snapshot.providers.find((provider) => provider.id === "grok-oauth");
+  assert.equal(grok.inputTokens, 301_000);
+  assert.equal(grok.outputTokens, 270);
+  assert.equal(grok.totalTokens, 301_270);
+});
+
+
+test("a retried turn's billed spend survives the merge into one row", () => {
+  // The two halves of the same turn, as the meter assembles them: each attempt
+  // reports the prompt it processed and, separately, what it billed. The row
+  // that reaches this aggregate has to carry the pair's cost, not one
+  // attempt's -- a turn sent twice is the one case where the difference is the
+  // whole point.
+  const usage = mergeTokenUsage(
+    { inputTokens: 50_000, outputTokens: 100, totalTokens: 50_100, billedInputTokens: 150_000, billedOutputTokens: 135 },
+    { inputTokens: 51_000, outputTokens: 100, totalTokens: 51_100, billedInputTokens: 151_000, billedOutputTokens: 135 },
+  );
+  const now = Date.parse("2026-09-21T12:00:00Z");
+  const snapshot = aggregateProviderUsage(
+    [{
+      meteringVersion: 1,
+      at: "2026-09-21T11:00:00Z",
+      provider: "grok-oauth",
+      model: "grok-oauth/grok-4.6",
+      status: 200,
+      ...usage,
+    }],
     { days: 7, now },
   );
   const grok = snapshot.providers.find((provider) => provider.id === "grok-oauth");

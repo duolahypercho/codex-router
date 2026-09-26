@@ -22,6 +22,23 @@ export function nextOauthStep({ cliFound, credentialConfigured }) {
   return "login";
 }
 
+// Arguments for the official CLI's login from the setup prompt's answer.
+// Kimi Code has separate accounts on kimi.com (mainland China) and kimi.ai
+// (global); a bare `kimi login` follows the CLI's resolved region, which is
+// mainland China on a fresh install, so the global site must be requested.
+export function kimiLoginArgs(answer) {
+  const normalized = String(answer ?? "").trim().toLowerCase();
+  if (
+    normalized === "2" ||
+    normalized === "global" ||
+    normalized === "kimi.ai" ||
+    normalized === "ai"
+  ) {
+    return ["login", "--region", "global"];
+  }
+  return ["login"];
+}
+
 // Guidance shown when the `kimi` command is missing from PATH.
 export function kimiCliInstallGuidance() {
   return [

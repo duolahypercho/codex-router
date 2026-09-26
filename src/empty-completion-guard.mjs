@@ -9,6 +9,38 @@ const MAX_PRECONTENT_MS = 30_000;
 // Bound its unfinished frame separately from the accumulated prelude hold.
 const MAX_INCOMPLETE_EVENT_BYTES = 10 * 1024 * 1024;
 
+// The pre-content budget has to cover the prefill, and the prefill scales with
+// the prompt. A 577k-token request legitimately spends 70-130s before the first
+// content byte, and a flat budget reads that as an empty completion: measured
+// 2026-09-21, a routed client whose context had grown to ~577k tokens was
+// answered with explicit `precontent_limit` 502s while the same requests
+// succeeded whenever the prefill happened to fit the budget.
+//
+// Scale the budget with the request size so small turns keep failing fast while
+// large ones get the time their prefill needs. Tokens are estimated at the
+// usual four bytes per token; the allowance only ever grows, and never past
+// `maxMs` (unless the configured base is already larger, which is the
+// operator's explicit choice).
+export const PRELUDE_MS_PER_THOUSAND_TOKENS = 150;
+export const PRELUDE_BUDGET_MAX_MS = 600_000;
+
+export function preludeBudgetMs({
+  baseMs,
+  requestBytes = 0,
+  perThousandTokensMs = PRELUDE_MS_PER_THOUSAND_TOKENS,
+  maxMs = PRELUDE_BUDGET_MAX_MS,
+} = {}) {
+  const base = Number.isFinite(baseMs) && baseMs >= 0 ? baseMs : 0;
+  const bytes = Number.isFinite(requestBytes) && requestBytes > 0 ? requestBytes : 0;
+  const rate =
+    Number.isFinite(perThousandTokensMs) && perThousandTokensMs >= 0
+      ? perThousandTokensMs
+      : PRELUDE_MS_PER_THOUSAND_TOKENS;
+  const scaled = base + (bytes / 4 / 1000) * rate;
+  const ceiling = Math.max(Number.isFinite(maxMs) && maxMs > 0 ? maxMs : PRELUDE_BUDGET_MAX_MS, base);
+  return Math.max(base, Math.min(ceiling, Math.round(scaled)));
+}
+
 export class EmptyCompletionPreludeLimitError extends Error {
   constructor(kind) {
     super(

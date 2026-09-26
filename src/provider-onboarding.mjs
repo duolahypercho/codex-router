@@ -33,6 +33,8 @@ import {
   providerApiKeyAuthoritySnapshot,
 } from "./provider-api-key-routing.mjs";
 import { disableProvider } from "./provider-selection.mjs";
+import { readGenericProviders } from "./generic-provider-state.mjs";
+import { genericProviderConfigured } from "./generic-provider-readiness.mjs";
 import {
   installFailureDetail,
   npmGlobalBinary,
@@ -116,7 +118,47 @@ function oauthConfigured(providerId) {
   return false;
 }
 
+// Operator-added OpenAI-compatible endpoints (generic providers). They are a
+// separate list rather than rows of `providers` because the tray and guided
+// setup treat every `providers` row as a checked-in id they can select, and
+// these ids never pass provider selection: they are routed while enabled.
+function customEndpointSnapshot() {
+  let descriptors;
+  try {
+    descriptors = readGenericProviders({ reservedProviderIds: PROVIDERS });
+  } catch {
+    return [];
+  }
+  return descriptors.map((provider) => {
+    const configured = genericProviderConfigured(provider.id);
+    return {
+      id: provider.id,
+      displayName: provider.displayName,
+      kind: "api",
+      generic: true,
+      enabled: provider.enabled,
+      baseUrl: provider.baseUrl,
+      adapter: provider.adapter,
+      hasKey: Boolean(provider.credentialRef),
+      // Removing the endpoint is always possible, keyed or not.
+      disconnectable: true,
+      credentialLabel: "API key",
+      configured,
+      action: configured ? "ready" : "add-key",
+      // Discovery reads the runtime registry, which holds enabled
+      // descriptors only.
+      ...(provider.enabled
+        ? { catalogSources: [{ id: provider.id, displayName: provider.displayName, kind: "models-endpoint" }] }
+        : {}),
+    };
+  });
+}
+
 export function providerOnboardingSnapshot() {
+  return { ...builtInProviderSnapshot(), customEndpoints: customEndpointSnapshot() };
+}
+
+function builtInProviderSnapshot() {
   // Protocol variants share their parent's key and selection, so onboarding
   // surfaces (tray, guided setup) offer one entry per family.
   const selectable = [...PROVIDERS.values()].filter((provider) => !provider.variantOf);

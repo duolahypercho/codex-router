@@ -232,7 +232,7 @@ test("desktop onboarding keeps the Antigravity probe explicit on every platform"
   assert.match(ipc, /\["probe-provider", id, "--live", "--yes"\]/);
   assert.match(ipc, /return updateProviderSelection\(id, true\)/);
   assert.match(ipc, /ROUTER_BROWSER_OAUTH_TIMEOUT_MS/);
-  assert.match(page, /setup\.action === "probe" \? "Run live test"/);
+  assert.match(page, /setup\.action === "probe" \? t\("models\.connection\.runLiveTest"\)/);
   assert.match(page, /setup\.disconnectable/);
   assert.match(tray, /case "probe": return routerLocalized\("Test & Enable"\)/);
   assert.match(tray, /setup\?\.disconnectable == true/);

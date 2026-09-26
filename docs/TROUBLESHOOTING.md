@@ -519,6 +519,39 @@ This removes only the marked block and current service; it preserves the
 selected model, profiles, provider credentials, and ChatGPT login. If native
 models work again, inspect router health and create a support bundle.
 
+## Native GPT turns fail with a 502 naming a connect timeout
+
+`The local router could not complete the request: timed out connecting to
+chatgpt.com` means the router's own TCP connect never completed. The diagnosis
+names the host it could not reach; this is the network path, not the credential
+and not the model.
+
+The connect phase is bounded at 3s (`CODEX_ROUTER_CONNECT_TIMEOUT_MS`, clamped
+0.5–30s) and the retry loop's default budget is derived from that bound
+(`3 x connectTimeout`), so a single blip is absorbed before the caller sees
+anything. A 502 that still reaches the user means every attempt failed inside
+that budget.
+
+Check, in order:
+
+- whether other traffic to the same host works from this machine
+  (`Test-NetConnection chatgpt.com -Port 443`, or `curl -sS -o /dev/null -w
+  '%{time_connect}\n' https://chatgpt.com/`), and whether it fails on one
+  interface but not another: a wired port and a Wi-Fi adapter on the same LAN
+  are two different paths, and a path that fails only on one of them is a
+  cabling/port/NIC problem, not an upstream one;
+- whether the configured DNS server answers at all (`Resolve-DnsName
+  chatgpt.com`);
+- the burst pattern in `~/.codex/codex-router/router.log`
+  (`grep UND_ERR_CONNECT_TIMEOUT` beside the `status=502` timing lines) and
+  whether another machine behind the same gateway shows the same window. The
+  log is the only place the cause is named.
+
+The proxy hint appears whenever the failure looks unreachable and no proxy is
+configured; it is not evidence that one is needed. Raising the budget buys
+attempts, not time on the wire — a path that is unreachable for minutes will
+still surface. Fix the path, and keep the bound small.
+
 ## Another process owns ports 4200–4203
 
 macOS/Linux:

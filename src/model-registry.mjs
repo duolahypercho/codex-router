@@ -140,7 +140,10 @@ function registryFragmentFiles(root) {
 function parseFragment(file) {
   let parsed;
   try {
-    parsed = JSON.parse(readFileSync(file, "utf8"));
+    // Windows editors (PowerShell's Set-Content, Notepad) save UTF-8 with a
+    // leading byte-order mark, which JSON.parse rejects (#887). The registry
+    // is hand-edited configuration, so accept the mark.
+    parsed = JSON.parse(readFileSync(file, "utf8").replace(/^﻿/, ""));
   } catch (error) {
     fail(`${file}: ${error instanceof Error ? error.message : String(error)}`);
   }
@@ -362,7 +365,8 @@ function loadRegistry() {
       }
       if (
         provider.protocol !== undefined &&
-        !["openai", "anthropic", "openai-responses", "vertex"].includes(provider.protocol)
+        !["openai", "anthropic", "openai-responses", "openai-decisions", "vertex"]
+          .includes(provider.protocol)
       ) {
         fail(`provider ${provider.id} has an unsupported API protocol`);
       }
@@ -841,6 +845,11 @@ function modelProblem(model, providers, slugs, gatewayModels) {
       return `model ${model.slug} has an invalid upgradeTo`;
     }
   }
+  // Only an explicit boolean may change failover eligibility; anything else is
+  // a typo that would otherwise silently leave the route eligible.
+  if (model.failoverCandidate !== undefined && typeof model.failoverCandidate !== "boolean") {
+    return `model ${model.slug} has an invalid failoverCandidate`;
+  }
   if (slugs.has(model.slug)) return `duplicate model slug ${model.slug}`;
   if (gatewayModels.has(model.gatewayModel)) {
     return `duplicate gateway model ${model.gatewayModel}`;
@@ -1032,6 +1041,14 @@ function mergeUserModels(base, staticAliases) {
     warnings: Object.freeze(warnings),
     aliases: new Map(aliases),
     skipped: new Map(skipped),
+    // Which surviving routes came from the operator's overlay rather than the
+    // checked-in tree. The merge is the only place that still knows: both
+    // sides are normalized into the same shape, so afterwards a local entry is
+    // indistinguishable from a shipped one. Curation removal is the caller --
+    // it may prune these and only these.
+    userSlugs: Object.freeze(new Set(
+      kept.filter((model) => userModels.has(model)).map((model) => model.slug),
+    )),
   };
 }
 
@@ -1055,6 +1072,11 @@ export const RUNTIME_PROVIDER_WARNINGS = runtime.warnings;
 // cannot certify itself for every installer.
 export const CHECKED_IN_MODELS = registry.models;
 export const MODELS = merged.models;
+// Slugs of the locally curated models in MODELS -- the `user-models.json`
+// overlay entries that survived the merge. A desktop surface offers removal
+// only for these, because curation removal prunes the overlay and can never
+// delete a route this checkout ships.
+export const LOCAL_MODEL_SLUGS = merged.userSlugs;
 export const USER_MODEL_WARNINGS = merged.warnings;
 // Slug -> the reason that user model was left out of MODELS. A slug here may
 // still route through a curation alias; callers check MODEL_BY_SLUG first.

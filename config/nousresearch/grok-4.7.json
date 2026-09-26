@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "slug": "nousresearch/grok-4.7",
+      "gatewayModel": "nousresearch-grok-4-7",
+      "upstreamModel": "x-ai/grok-4.7",
+      "provider": "nousresearch",
+      "listed": true,
+      "displayName": "Grok 4.7 (Nous Research)",
+      "description": "xAI Grok 4.7 through the Nous Portal.",
+      "priority": 73,
+      "defaultEffort": "high",
+      "reasoningLevels": [
+        {
+          "effort": "low",
+          "description": "Faster reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced reasoning"
+        },
+        {
+          "effort": "high",
+          "description": "Deep reasoning"
+        },
+        {
+          "effort": "xhigh",
+          "description": "Maximum reasoning depth"
+        }
+      ],
+      "contextWindow": 500000,
+      "autoCompact": 450000,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "compHash": "nousresearch-grok-4-7-v1"
+    }
+  ]
+}

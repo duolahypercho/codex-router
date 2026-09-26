@@ -13,6 +13,7 @@ import {
   MAX_CLI_WAIT_ATTEMPTS,
   MAX_LOGIN_ATTEMPTS,
   kimiCliInstallGuidance,
+  kimiLoginArgs,
 } from "./kimi-oauth-onboarding.mjs";
 import { PROVIDERS, providerNeedsNoKey } from "./model-registry.mjs";
 import { kimiOAuthStatus } from "./oauth-status.mjs";
@@ -139,7 +140,7 @@ function oauthSetupHint(provider) {
   if (provider.id === "antigravity-oauth") {
     return "run the Antigravity sign-in flow";
   }
-  return `run \`kimi login\` (install the Kimi Code CLI from ${KIMI_CLI_INSTALL_URL} first if needed)`;
+  return `run \`kimi login\` (\`kimi login --region global\` for a kimi.ai account; install the Kimi Code CLI from ${KIMI_CLI_INSTALL_URL} first if needed)`;
 }
 
 function executable(name) {
@@ -243,11 +244,15 @@ function onboardKimiOauth() {
       `Kimi Code CLI is required for OAuth. Install it from ${KIMI_CLI_INSTALL_URL}, then run setup again.`,
     );
   }
+  const loginArgs = kimiLoginArgs(promptLine(
+    "Which Kimi Code site holds your account? 1) kimi.com (mainland China) 2) kimi.ai (global)",
+    "1",
+  ));
   for (let attempt = 0; attempt < MAX_LOGIN_ATTEMPTS; attempt += 1) {
-    if (!confirm("Run `kimi login` now?")) {
+    if (!confirm(`Run \`kimi ${loginArgs.join(" ")}\` now?`)) {
       throw new Error("Kimi OAuth setup was cancelled.");
     }
-    tryRun(kimi, ["login"]);
+    tryRun(kimi, loginArgs);
     if (kimiOAuthStatus().configured) return;
     process.stdout.write("Kimi login did not produce a usable OAuth credential yet.\n");
   }

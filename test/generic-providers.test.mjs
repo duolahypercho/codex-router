@@ -45,7 +45,7 @@ const {
 const { LOG_PATH } = await import("../src/paths.mjs");
 const { createSupportBundle } = await import("../src/support-bundle.mjs");
 const { discoverGenericProviderModels } = await import("../src/model-discovery.mjs");
-const { userModelEntry } = await import("../src/user-models.mjs");
+const { readUserModels, userModelEntry } = await import("../src/user-models.mjs");
 const { runGenericCommand } = await import("../src/providers.mjs");
 test.after(() => rmSync(testRoot, { recursive: true, force: true }));
 
@@ -266,6 +266,75 @@ test("generic credential references never enter descriptors or logs", async () =
       fetchImpl: async () => ({ ok: true, status: 200 }),
     }),
     /bound credential is unavailable/,
+  );
+});
+
+test("generic provider add-model registers an unlisted model id and picks it", async () => {
+  const providerId = "generic-named-model";
+  addGenericProvider({
+    id: providerId,
+    displayName: "Generic Named Model",
+    baseUrl: "https://provider.example.test/v1",
+  });
+  const transact = async ({ mutate, applyPublication }) => {
+    await mutate();
+    await applyPublication();
+  };
+  const added = await runGenericCommand(
+    ["add-model", providerId, "private-preview-1", "--json"],
+    { transact, applyPublication: async () => ({ published: false }) },
+  );
+  assert.equal(added.slug, `${providerId}/private-preview-1`);
+  const stored = readUserModels().find((model) => model.slug === added.slug);
+  assert.equal(stored.provider, providerId);
+  assert.equal(stored.upstreamModel, "private-preview-1");
+  assert.equal(stored.listed, true);
+  await assert.rejects(
+    runGenericCommand(
+      ["add-model", providerId, "private-preview-1"],
+      { transact, applyPublication: async () => ({ published: false }) },
+    ),
+    /already a curated/,
+  );
+  await assert.rejects(
+    runGenericCommand(["add-model", providerId], { transact }),
+    /Usage: providers generic add-model/,
+  );
+});
+
+test("generic provider credential CLI reads a piped key with --stdin and never prompts", async () => {
+  const providerId = "generic-key-stdin";
+  const secret = "TEST_GENERIC_STDIN_TOKEN_41c8aa";
+  addGenericProvider({
+    id: providerId,
+    displayName: "Generic Key Stdin",
+    baseUrl: "https://provider.example.test/v1",
+  });
+  const transact = async ({ mutate, applyPublication }) => {
+    await mutate();
+    await applyPublication();
+  };
+  const configured = await runGenericCommand(
+    ["credential", providerId, "set", "--stdin", "--json"],
+    {
+      prompt: () => { throw new Error("the hidden prompt must not run with --stdin"); },
+      readStdin: async () => `${secret}\n`,
+      transact,
+      applyPublication: async () => ({ published: false }),
+    },
+  );
+  assert.equal(configured.configured, true);
+  assert.equal(JSON.stringify(configured).includes(secret), false);
+  await assert.rejects(
+    runGenericCommand(
+      ["credential", providerId, "set", "--stdin"],
+      { readStdin: async () => "  ", transact, applyPublication: async () => ({ published: false }) },
+    ),
+    /API key is empty/,
+  );
+  await assert.rejects(
+    runGenericCommand(["credential", providerId, "remove", "--stdin"], { transact }),
+    /--stdin applies only to credential set/,
   );
 });
 

@@ -340,6 +340,18 @@ function hasModernMultiAgentConfig(input) {
   const lines = input.split("\n");
   if (lines.some((line) => /^\s*features\.multi_agent_v2\s*=/.test(line))) return true;
   if (lines.some((line) => /^\s*\[agents\.[^\]]+\]\s*(?:#.*)?$/.test(line))) return true;
+  // A user-owned `[features.multi_agent_v2]` table (or a dotted assignment
+  // under `[features]`) defines the same key; writing the managed inline
+  // table beside it is a TOML duplicate key that stops Codex from loading.
+  const scanned = scannedConfig(input);
+  if (scanned) {
+    const ownsMultiAgentV2 = (segments) =>
+      segments.length >= 2 && segments[0] === "features" && segments[1] === "multi_agent_v2";
+    if (scanned.headers.some(({ path }) => ownsMultiAgentV2(path))) return true;
+    if (scanned.assignments.some(({ tablePath, key }) => ownsMultiAgentV2([...tablePath, ...key]))) {
+      return true;
+    }
+  }
   const featuresHeader = lines.findIndex((line) =>
     /^\s*\[features\]\s*(?:#.*)?$/.test(line),
   );

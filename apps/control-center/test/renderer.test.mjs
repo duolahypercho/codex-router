@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, mkdirSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import test from "node:test";
@@ -30,6 +30,7 @@ const bridgeSource = String.raw`
   const rejectAccountUsageRead = Number(searchParams.get("rejectAccountUsageRead")) || 0;
   const rejectAccountPool = searchParams.get("rejectAccountPool") === "1";
   const accountMutationDelayMs = Number(searchParams.get("accountMutationDelayMs")) || 0;
+  const credentialDelayMs = Number(searchParams.get("credentialDelayMs")) || 0;
   const terminalLoginFailure = searchParams.get("terminalLoginFailure") === "1";
   const rejectLoginImmediately = searchParams.get("rejectLoginImmediately") === "1";
   const loginStaysPending = searchParams.get("loginStaysPending") === "1";
@@ -89,6 +90,10 @@ const bridgeSource = String.raw`
     visible: false,
     multiAgentVersion: "v1",
     subagentCertification: "unknown",
+    // One route of a multi-route family is locally curated, so the fixture
+    // covers the discrimination the delete control depends on rather than a
+    // family where every route answers the same way.
+    ...(model.provider === "opencode-go" ? { local: true } : {}),
   }));
   const target = {
     target: "codex",
@@ -417,6 +422,10 @@ const bridgeSource = String.raw`
             id: "deepseek",
             displayName: "DeepSeek",
             credentialType: "api",
+            inputTokens: 10_000,
+            regularInputTokens: 7_500,
+            cachedInputTokens: searchParams.get("coldCache") === "1" ? 0 : 2_500,
+            cacheTelemetrySeen: true,
             totalTokens,
             requests: 8,
             last24hTokens: totalTokens,
@@ -446,6 +455,10 @@ const bridgeSource = String.raw`
             id: "venice",
             displayName: "Venice",
             credentialType: "api",
+            inputTokens: 0,
+            regularInputTokens: 0,
+            cachedInputTokens: 0,
+            cacheTelemetrySeen: false,
             totalTokens: 0,
             requests: 0,
             last24hTokens: 0,
@@ -518,7 +531,11 @@ const bridgeSource = String.raw`
       return { accountId, opened: true, surface: "browser", pending: true };
     },
     setSubagentModel: async () => ({ ok: true }),
-    setSubagentEffort: async () => ({ ok: true }),
+    setSubagentEffort: async (slug, effort) => {
+      record("setSubagentEffort", slug, effort);
+      subagents.efforts[slug] = effort;
+      return { ok: true };
+    },
     onNavigation: (listener) => {
       navigationListener = listener;
       return () => { if (navigationListener === listener) navigationListener = undefined; };
@@ -527,7 +544,73 @@ const bridgeSource = String.raw`
       operationListener = listener;
       return () => { if (operationListener === listener) operationListener = undefined; };
     },
+    // Not gated behind customEndpoints: a locally curated model can sit on any
+    // provider, which is the whole point of the removal being general.
+    removeLocalModels: async (slugs) => {
+      record("removeLocalModels", [...slugs]);
+      return { ok: true };
+    },
   });
+
+  if (searchParams.get("customEndpoints") === "1") {
+    providers.providers.push({ id: "custom", displayName: "Custom", kind: "per-model", configured: true });
+    providers.customEndpoints = [];
+    const baseApi = window.routerControl;
+    const clone = (value) => JSON.parse(JSON.stringify(value));
+    window.routerControl = Object.freeze({
+      ...baseApi,
+      getSnapshot: async () => clone(await baseApi.getSnapshot()),
+      getProviders: async () => clone(await baseApi.getProviders()),
+      addCustomEndpoint: async (input) => {
+        record("addCustomEndpoint", clone(input));
+        const id = "user_fixture";
+        const { credential, ...publicFields } = input;
+        providers.customEndpoints.push({
+          id, ...publicFields, kind: "api", generic: true, configured: true, enabled: true,
+          hasKey: Boolean(credential), credentialLabel: "API key",
+          catalogSources: [{ id, displayName: input.displayName, kind: "models-endpoint" }],
+        });
+        // An exact raw diagnostic must remain visible in every UI language.
+        return { providerId: id, check: { ok: false, reason: "provider/401 raw_diagnostic" } };
+      },
+      editCustomEndpoint: async (id, input) => {
+        record("editCustomEndpoint", id, clone(input));
+        const endpoint = providers.customEndpoints.find((entry) => entry.id === id);
+        Object.assign(endpoint, input);
+        return { providerId: id, check: { ok: true } };
+      },
+      saveProviderCredential: async (id, credential) => {
+        record("saveProviderCredential", id, credential);
+        // The real command writes the key, enables the provider, and
+        // republishes every installed client catalog before it resolves.
+        if (credentialDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, credentialDelayMs));
+        return { ok: true };
+      },
+      addCustomEndpointModel: async (id, modelId) => {
+        record("addCustomEndpointModel", id, modelId);
+        const model = {
+          slug: id + "/" + modelId, displayName: modelId, provider: id,
+          enabled: true, visible: true, contextWindow: 128000, inputModalities: ["text"],
+        };
+        target.models.push(model);
+        snapshot.catalog.models.push(model);
+        return { ok: true };
+      },
+      removeCustomEndpointModels: async (id, slugs) => {
+        record("removeCustomEndpointModels", id, [...slugs]);
+        target.models = target.models.filter((model) => !slugs.includes(model.slug));
+        snapshot.catalog.models = snapshot.catalog.models.filter((model) => !slugs.includes(model.slug));
+        return { ok: true };
+      },
+      removeProviderCredential: async (id) => {
+        record("removeProviderCredential", id);
+        providers.customEndpoints = providers.customEndpoints.filter((entry) => entry.id !== id);
+        target.models = target.models.filter((model) => model.provider !== id);
+        snapshot.catalog.models = snapshot.catalog.models.filter((model) => model.provider !== id);
+        return { ok: true };
+      },
+    });
+  }
   window.routerControlTest = Object.freeze({
     calls: () => calls.map((call) => ({ name: call.name, args: call.args })),
     navigationReady: () => Boolean(navigationListener),
@@ -652,6 +735,19 @@ test("the production renderer exposes model discovery and picker actions", { tim
     );
     await page.getByRole("heading", { name: "Usage", exact: true }).waitFor();
     await page.getByText("8.25 DIEM", { exact: true }).waitFor();
+    // #824: the chosen source is labelled and its allowances are grouped under
+    // it instead of being silently floated above the other accounts.
+    assert.equal(await page.getByLabel("Usage source").inputValue(), "provider:deepseek");
+    await page.locator(".us-source-group-label", { hasText: "Selected · DeepSeek" }).waitFor();
+    assert.equal(await page.locator(".us-source-group-label", { hasText: "Other connected accounts" }).count(), 1);
+    assert.equal(await page.locator(".us-source-badges .badge", { hasText: "Selected" }).count(), 1);
+    // #826: cache hits render as a count plus a share of reported input; a
+    // provider with no cache telemetry says so rather than reading "0%".
+    await page.getByText("2.5k (25%)", { exact: true }).waitFor();
+    await page.getByLabel("Usage source").selectOption("provider:venice");
+    await page.getByText(/hit rate not reported/).waitFor();
+    assert.equal(await page.getByText(/\(0%\)/).count(), 0);
+    await page.getByLabel("Usage source").selectOption("provider:deepseek");
     assert.equal(
       await page.evaluate(() => window.routerControlTest.navigate({ destination: "usage-resets", sourceId: "deepseek" })),
       true,
@@ -868,7 +964,9 @@ test("the production renderer exposes model discovery and picker actions", { tim
     // that would make it usable.
     assert.equal(await oxFamily.getByRole("button", { name: /^Connect / }).count(), 4);
     const columns = await oxFamily.locator(".pm-route-head > span").allTextContents();
-    assert.deepEqual(columns, ["Account", "Context", "Input", "In picker", "Subagents", "Thinking"]);
+    // The fixture's opencode Go route is locally curated, so this family also
+    // carries the unlabelled remove column.
+    assert.deepEqual(columns, ["Account", "Context", "Input", "In picker", "Subagents", "Reasoning effort", ""]);
     await modelSearch.fill("");
 
     // Adding reads every connected provider's catalog at once. Only a provider
@@ -1194,6 +1292,157 @@ test("independent control-center reads reveal each ready page region", { timeout
   }
 });
 
+test("only a locally curated route offers to be deleted, and only after confirmation", { timeout: 120_000 }, async () => {
+  assert.equal(existsSync(path.join(dist, "index.html")), true, "npm test must build the renderer first");
+  assert.ok(chromiumPath, "No Chromium executable is available for the Control Center renderer test.");
+
+  const { url, close } = await serveRenderer();
+  const browser = await chromium.launch({
+    executablePath: chromiumPath,
+    headless: true,
+    args: process.platform === "linux" ? ["--no-sandbox"] : [],
+  });
+  const pageErrors = [];
+  try {
+    const page = await newEnglishTestPage(browser, { viewport: { width: 1280, height: 840 } });
+    page.setDefaultTimeout(10_000);
+    page.on("pageerror", (error) => pageErrors.push(error.message));
+    page.on("console", (message) => {
+      if (message.type() === "error") pageErrors.push(message.text());
+    });
+
+    await page.goto(url, { waitUntil: "domcontentloaded" });
+    await page.getByRole("button", { name: "Models", exact: true }).click();
+    await page.getByRole("heading", { name: "Models", exact: true }).waitFor();
+
+    await page.locator('input[placeholder="Search models"]').fill("Ox Alpha");
+    const oxFamily = page.locator(".pm-family-row").filter({ hasText: "Ox Alpha" });
+    await oxFamily.locator(".pm-family-open").click();
+
+    // The locally curated route says so, and is the only one that can be
+    // deleted: every other route here is shipped by the checkout.
+    const localRoute = oxFamily.locator(".pm-route-row").filter({ hasText: "opencode Go/Zen" });
+    const shippedRoute = oxFamily.locator(".pm-route-row").filter({ hasText: "OpenCode Free" });
+    await localRoute.locator(".pm-route-local").waitFor();
+    assert.equal(await shippedRoute.locator(".pm-route-local").count(), 0);
+    assert.equal(await localRoute.locator(".pm-endpoint-model-remove").count(), 1);
+    assert.equal(
+      await shippedRoute.locator(".pm-endpoint-model-remove").count(),
+      0,
+      "a checked-in route must not offer a delete curation could not perform",
+    );
+
+    // Deleting is not undoable from here, so it is confirmed the way
+    // disconnecting a provider is -- and cancelling must call nothing.
+    await localRoute.locator(".pm-endpoint-model-remove").click();
+    await page.getByRole("heading", { name: "Delete local model", exact: true }).waitFor();
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
+    assert.equal(
+      await page.evaluate(() => window.routerControlTest.calls().some((call) => call.name === "removeLocalModels")),
+      false,
+      "cancelling the dialog must not delete anything",
+    );
+
+    await localRoute.locator(".pm-endpoint-model-remove").click();
+    await page.getByRole("heading", { name: "Delete local model", exact: true }).waitFor();
+    await page.getByRole("button", { name: "Delete model", exact: true }).click();
+    await page.waitForFunction(() => window.routerControlTest.calls().some((call) => call.name === "removeLocalModels"));
+    // The router resolves the slug against the overlay, so the slug is the
+    // whole request: the renderer never derives an upstream id.
+    assert.deepEqual(
+      await page.evaluate(() => window.routerControlTest.calls().find((call) => call.name === "removeLocalModels").args),
+      [["opencode-go/ox-alpha"]],
+    );
+
+    assert.deepEqual(pageErrors, []);
+  } finally {
+    await browser.close();
+    await close();
+  }
+});
+
+test("saving a provider key shows the connection being made before it lands", { timeout: 120_000 }, async () => {
+  assert.equal(existsSync(path.join(dist, "index.html")), true, "npm test must build the renderer first");
+  assert.ok(chromiumPath, "No Chromium executable is available for the Control Center renderer test.");
+
+  const { url, close } = await serveRenderer();
+  const browser = await chromium.launch({
+    executablePath: chromiumPath,
+    headless: true,
+    args: process.platform === "linux" ? ["--no-sandbox"] : [],
+  });
+  const pageErrors = [];
+  try {
+    const page = await newEnglishTestPage(browser, { viewport: { width: 1280, height: 840 } });
+    page.setDefaultTimeout(10_000);
+    page.on("pageerror", (error) => pageErrors.push(error.message));
+    page.on("console", (message) => {
+      if (message.type() === "error") pageErrors.push(message.text());
+    });
+
+    // The real command writes the key, enables the provider, and republishes
+    // every installed client catalog before the refreshed snapshot can report
+    // the routes it unlocked. The dialog has already closed by then, so those
+    // seconds are the ones the page has to account for.
+    await page.goto(`${url}?customEndpoints=1&credentialDelayMs=1500`, { waitUntil: "domcontentloaded" });
+    await page.getByRole("button", { name: "Models", exact: true }).click();
+    await page.getByRole("heading", { name: "Models", exact: true }).waitFor();
+    const connections = page.locator(".pm-connections:not(.pm-connections-loading)");
+    await connections.waitFor();
+    const connectedCount = () => connections.locator(".pm-connections-label small").innerText();
+    const countBeforeSave = await connectedCount();
+
+    await page.locator('input[placeholder="Search models"]').fill("Ox Alpha");
+    const oxFamily = page.locator(".pm-family-row").filter({ hasText: "Ox Alpha" });
+    await oxFamily.locator(".pm-family-open").click();
+    const openRouterRoute = oxFamily.locator(".pm-route-row").filter({ hasText: "OpenRouter" });
+    await openRouterRoute.getByRole("button", { name: "Connect OpenRouter", exact: true }).click();
+
+    await page.getByRole("heading", { name: "Connect OpenRouter", exact: true }).waitFor();
+    await page.locator("#provider-credential").fill("sk-renderer-fixture");
+    const savedAt = Date.now();
+    await page.getByRole("button", { name: "Save credential", exact: true }).click();
+
+    // The chip moves to where the operator will look for it and says what is
+    // running, in place of the enabled dot it has not earned yet.
+    const pendingChip = connections.locator('.pm-chip[data-pending="connecting"]');
+    await pendingChip.waitFor();
+    assert.ok(Date.now() - savedAt < 1200, "the connecting chip must appear before the delayed command returns");
+    assert.match(await pendingChip.innerText(), /OpenRouter/);
+    assert.match(await pendingChip.innerText(), /Connecting…/);
+    assert.equal(await pendingChip.getAttribute("data-state"), "connecting");
+    assert.equal(await pendingChip.getAttribute("aria-busy"), "true");
+    assert.equal(await pendingChip.isDisabled(), true, "a second mutation cannot start from a chip still publishing");
+    // Placement is optimistic; the count is not.
+    assert.equal(await connectedCount(), countBeforeSave, "a provider still publishing is not counted as connected");
+
+    // The route waiting on that key says the same thing, in the slot its
+    // Connect button occupied, with a blank where the switch will go.
+    assert.equal(await openRouterRoute.getAttribute("data-connecting"), "true");
+    assert.equal(await openRouterRoute.getByRole("button", { name: "Connect OpenRouter", exact: true }).count(), 0);
+    assert.equal(await openRouterRoute.locator(".pm-connecting .skeleton-block").count(), 1);
+    assert.match(await openRouterRoute.locator(".pm-connecting").innerText(), /Connecting…/);
+    // A route whose own provider is untouched keeps its button.
+    const veniceRoute = oxFamily.locator(".pm-route-row").filter({ hasText: "Venice" });
+    assert.equal(await veniceRoute.getAttribute("data-connecting"), null);
+    assert.equal(await veniceRoute.getByRole("button", { name: "Connect Venice", exact: true }).count(), 1);
+
+    await page.waitForFunction(() => window.routerControlTest.calls()
+      .some((call) => call.name === "saveProviderCredential" && call.args[0] === "openrouter"));
+    // The fixture leaves the provider unconfigured, so the placeholder has to
+    // give way to the reconciled snapshot rather than outliving the command.
+    await pendingChip.waitFor({ state: "detached" });
+    await openRouterRoute.getByRole("button", { name: "Connect OpenRouter", exact: true }).waitFor();
+    assert.equal(await openRouterRoute.getAttribute("data-connecting"), null);
+    assert.equal(await connections.locator(".pm-chip[data-pending]").count(), 0);
+
+    assert.deepEqual(pageErrors, [], `renderer errors: ${pageErrors.join("; ")}`);
+  } finally {
+    await browser.close();
+    await close();
+  }
+});
+
 test("usage polling surfaces current rejections, recovers, and ignores older results", { timeout: 120_000 }, async () => {
   assert.equal(existsSync(path.join(dist, "index.html")), true, "npm test must build the renderer first");
   assert.ok(chromiumPath, "No Chromium executable is available for the Control Center renderer test.");
@@ -1305,3 +1554,314 @@ test("health polling and core refresh share latest-wins ordering", { timeout: 12
     await close();
   }
 });
+
+for (const { language, copy } of [
+  {
+    "language": "zh-CN",
+    "copy": {
+      "settings": "设置",
+      "language": "界面语言",
+      "refresh": "刷新所有数据",
+      "addModels": "添加模型",
+      "closeDialog": "关闭对话框",
+      "repair": "运行诊断修复",
+      "repairTitle": "运行诊断修复？",
+      "cancel": "取消",
+      "search": "搜索控制中心",
+      "searchInput": "搜索控制中心页面",
+      "empty": "没有匹配的页面",
+      "effort": "高 (high)",
+      "nav": [
+        "总览",
+        "用量",
+        "状态",
+        "模型",
+        "本地",
+        "工具链",
+        "上下文管理",
+        "设置"
+      ]
+    }
+  },
+  {
+    "language": "zh-TW",
+    "copy": {
+      "settings": "設定",
+      "language": "介面語言",
+      "refresh": "重新整理所有資料",
+      "addModels": "加入模型",
+      "closeDialog": "關閉對話框",
+      "repair": "執行診斷修復",
+      "repairTitle": "執行診斷修復？",
+      "cancel": "取消",
+      "search": "搜尋控制中心",
+      "searchInput": "搜尋控制中心區段",
+      "empty": "找不到符合的區段",
+      "effort": "高 (high)",
+      "nav": [
+        "總覽",
+        "用量",
+        "狀態",
+        "模型",
+        "本機",
+        "工具鏈",
+        "Context 管理",
+        "設定"
+      ]
+    }
+  }
+]) {
+test(`${language} covers every page, dialogs, raw values, English round trips and persistence`, { timeout: 120_000 }, async () => {
+  const { url, close } = await serveRenderer();
+  const browser = await chromium.launch({
+    executablePath: chromiumPath,
+    headless: true,
+    args: process.platform === "linux" ? ["--no-sandbox"] : [],
+  });
+  const errors = [];
+  const artifacts = process.env.CODEX_ROUTER_UI_ARTIFACTS;
+  if (artifacts) mkdirSync(artifacts, { recursive: true });
+  try {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 840 }, locale: "en-US" });
+    page.setDefaultTimeout(10_000);
+    page.on("pageerror", error => errors.push(error.message));
+    await page.goto(url);
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    await page.getByRole("combobox", { name: "Interface language" }).selectOption(language);
+    await page.getByRole("heading", { level: 1, name: copy.settings }).waitFor();
+    const ids = ["dashboard", "usage", "status", "models", "local", "harness", "context", "settings"];
+    const names = copy.nav;
+    for (const [index, id] of ids.entries()) {
+      const nav = page.locator(".primary-nav button").nth(index);
+      assert.match(await nav.innerText(), new RegExp(names[index]));
+      await nav.click();
+      await page.locator(`.page-scroll-${id} h1`).waitFor();
+      assert.match(await page.locator("h1").innerText(), /[\u3400-\u9fff]/, `${id} heading should be Chinese`);
+      await page.locator(".app-loading-skeleton").waitFor({ state: "detached" });
+      const visibleText = await page.locator("body").innerText();
+      assert.doesNotMatch(visibleText, /Rolling window|Monthly credits|Daily DIEM allowance/, `${id} has an untranslated account label`);
+      assert.doesNotMatch(visibleText, /\{(?:count|name|label|title|period|hours)\}/, `${id} has an unexpanded translation`);
+      assert.equal(await page.getByRole("button", { name: "Refresh all data", exact: true }).count(), 0);
+      assert.equal(await page.getByRole("button", { name: copy.refresh, exact: true }).count(), 1);
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, `${id} overflows the window`);
+      if (artifacts) {
+        await page.screenshot({ path: path.join(artifacts, `${id}-${language}.png`) });
+        writeFileSync(path.join(artifacts, `${id}-${language}.txt`), visibleText);
+      }
+    }
+    await page.locator(".primary-nav button").nth(3).click();
+    const family = page.locator(".pm-family-row").filter({ hasText: "DeepSeek Chat" });
+    await family.locator(".pm-family-open").click();
+    await family.locator(".pm-effort-trigger").click();
+    await family.getByRole("menuitemradio", { name: copy.effort, exact: true }).click();
+    await page.waitForFunction(() => window.routerControlTest.calls().some(call => call.name === "setSubagentEffort" && call.args[1] === "high"));
+    await page.getByRole("button", { name: copy.addModels, exact: true }).click();
+    const addDialog = page.getByRole("dialog", { name: copy.addModels, exact: true });
+    await addDialog.waitFor();
+    await addDialog.getByRole("button", { name: copy.closeDialog, exact: true }).click();
+    await page.locator(".primary-nav button").nth(7).click();
+    await page.getByRole("button", { name: copy.repair, exact: true }).click();
+    await page.getByRole("dialog", { name: copy.repairTitle, exact: true }).waitFor();
+    await page.getByRole("button", { name: copy.cancel, exact: true }).click();
+    assert.equal(await page.evaluate(() => window.routerControlTest.calls().filter(call => call.name === "repairInstall").length), 0, "canceling the localized dialog must not perform maintenance");
+    await page.getByRole("button", { name: copy.search, exact: true }).click();
+    const search = page.getByRole("searchbox", { name: copy.searchInput });
+    await search.fill("模型");
+    await page.getByRole("dialog", { name: copy.search }).getByRole("option", { name: /模型/ }).first().waitFor();
+    await search.fill("不存在的页面xyz");
+    await page.getByText(copy.empty, { exact: true }).waitFor();
+    await search.press("Escape");
+    await page.getByRole("combobox", { name: copy.language }).selectOption("en");
+    await page.getByRole("heading", { level: 1, name: "Settings" }).waitFor();
+    await page.getByText("Router online", { exact: true }).waitFor();
+    await page.getByRole("combobox", { name: "Interface language" }).selectOption(language);
+    await page.reload();
+    await page.getByRole("heading", { level: 1, name: copy.settings }).waitFor();
+    assert.equal(await page.locator("html").getAttribute("lang"), language);
+    assert.equal(await page.getByRole("combobox", { name: copy.language }).inputValue(), language);
+    assert.deepEqual(errors, []);
+  } finally {
+    await browser.close();
+    await close();
+  }
+});
+
+}
+
+
+async function captureIntegrationView(page, name) {
+  const artifacts = process.env.CODEX_ROUTER_UI_ARTIFACTS;
+  if (!artifacts) return;
+  mkdirSync(artifacts, { recursive: true });
+  // Test data only; credential fields are empty at the capture sites.
+  await page.screenshot({ path: path.join(artifacts, `${name}.png`) });
+}
+
+// Independent expectations for the newly merged Usage and custom-endpoint
+// surfaces. Use the actual compiled renderer; the bridge is the only mock.
+for (const [language, copy] of [
+  ["en", {
+    addTitle: "Add custom endpoint", saveChoose: "Save and choose models", cancel: "Cancel",
+    namedTitle: "Add a model by name", addModel: "Add model", edit: "Edit endpoint", save: "Save changes",
+    remove: "Remove endpoint", removeModel: "Remove this model", noModels: "No models added yet.",
+    disconnectTitle: "Disconnect provider", disconnect: "Disconnect", addModels: "Add models",
+    closeDialog: "Close dialog", selected: "Selected · DeepSeek", others: "Other connected accounts",
+    noHit: "hit rate not reported", key: "API key",
+  }],
+  ["zh-CN", {
+    addTitle: "添加自定义接口", saveChoose: "保存并选择模型", cancel: "取消",
+    namedTitle: "按名称添加模型", addModel: "添加模型", edit: "编辑接口", save: "保存更改",
+    remove: "移除接口", removeModel: "移除此模型", noModels: "尚未添加模型。",
+    disconnectTitle: "断开服务商", disconnect: "断开连接", addModels: "添加模型",
+    closeDialog: "关闭对话框", selected: "已选择 · DeepSeek", others: "其他已连接账户",
+    noHit: "未报告缓存命中率", key: "API 密钥",
+  }],
+  ["zh-TW", {
+    addTitle: "新增自訂端點", saveChoose: "儲存並選擇模型", cancel: "取消",
+    namedTitle: "依名稱新增模型", addModel: "新增模型", edit: "編輯端點", save: "儲存變更",
+    remove: "移除端點", removeModel: "移除此模型", noModels: "尚未新增模型。",
+    disconnectTitle: "中斷供應商連線", disconnect: "中斷連線", addModels: "加入模型",
+    closeDialog: "關閉對話框", selected: "已選取 · DeepSeek", others: "其他已連線帳戶",
+    noHit: "未回報快取命中率", key: "API 金鑰",
+  }],
+]) {
+  test(`${language} custom endpoint dialogs retain raw values and support add/edit/remove`, { timeout: 90_000 }, async () => {
+    const { url, close } = await serveRenderer();
+    const browser = await chromium.launch({ executablePath: chromiumPath, headless: true, args: process.platform === "linux" ? ["--no-sandbox"] : [] });
+    try {
+      const page = await browser.newPage({ viewport: { width: 1280, height: 900 }, locale: "en-US" });
+      page.setDefaultTimeout(10_000);
+      const errors = [];
+      page.on("pageerror", (error) => errors.push(error.message));
+      await page.addInitScript((locale) => localStorage.setItem("codex-router-language", locale), language);
+      await page.goto(url + "?customEndpoints=1");
+      await page.locator(".primary-nav button").nth(3).click();
+      const openAdd = async () => {
+        await page.locator(".pm-chip-add").click();
+        await page.getByRole("menuitem").filter({ hasText: "Custom" }).click();
+        await page.getByRole("dialog", { name: copy.addTitle, exact: true }).waitFor();
+      };
+      await openAdd();
+      await page.getByRole("dialog", { name: copy.addTitle, exact: true }).getByRole("button", { name: copy.cancel, exact: true }).click();
+      assert.equal(await page.evaluate(() => window.routerControlTest.calls().filter((c) => c.name === "addCustomEndpoint").length), 0);
+      await openAdd();
+      const dialog = page.getByRole("dialog", { name: copy.addTitle, exact: true });
+      const name = "Fixture {count}";
+      const address = "https://api.example.test/v1";
+      await dialog.locator("#custom-endpoint-name").fill(name);
+      await dialog.locator("#custom-endpoint-url").fill("not a URL");
+      assert.equal(await dialog.getByRole("button", { name: copy.saveChoose, exact: true }).isDisabled(), true);
+      await dialog.locator("#custom-endpoint-url").fill(address);
+      await dialog.locator("#custom-endpoint-adapter").selectOption("openai-responses");
+      await captureIntegrationView(page, `custom-endpoint-add-${language}`);
+      await dialog.getByLabel(copy.key, { exact: true }).fill("test-only-not-a-real-key");
+      await dialog.getByRole("button", { name: copy.saveChoose, exact: true }).click();
+      await page.waitForFunction(() => window.routerControlTest.calls().some((c) => c.name === "addCustomEndpoint"));
+      assert.deepEqual(await page.evaluate(() => window.routerControlTest.calls().find((c) => c.name === "addCustomEndpoint").args), [{
+        displayName: name, baseUrl: address, adapter: "openai-responses", credential: "test-only-not-a-real-key",
+      }]);
+      const notice = page.getByRole("dialog").filter({ hasText: "provider/401 raw_diagnostic" });
+      await notice.waitFor();
+      assert.match(await notice.innerText(), /Fixture \{count\}/);
+      assert.doesNotMatch(await notice.innerText(), /test-only-not-a-real-key/);
+      await captureIntegrationView(page, `custom-endpoint-diagnostic-${language}`);
+      await notice.getByRole("button", { name: copy.namedTitle, exact: true }).click();
+      const named = page.getByRole("dialog", { name: copy.namedTitle, exact: true });
+      const modelId = "vendor/model-{count}";
+      await named.locator("#named-model-id").fill(modelId);
+      await named.getByRole("button", { name: copy.addModel, exact: true }).click();
+      await page.waitForFunction(() => window.routerControlTest.calls().some((c) => c.name === "addCustomEndpointModel"));
+      assert.deepEqual(await page.evaluate(() => window.routerControlTest.calls().find((c) => c.name === "addCustomEndpointModel").args), ["user_fixture", modelId]);
+      const openEndpoint = async () => {
+        await page.locator(".pm-chip").filter({ hasText: "Custom" }).click();
+        await page.locator(".pm-endpoint-list button").filter({ hasText: name }).click();
+        await page.getByRole("button", { name: copy.edit, exact: true }).waitFor();
+      };
+      await openEndpoint();
+      await page.getByRole("button", { name: copy.edit, exact: true }).click();
+      const editing = page.getByRole("dialog").filter({ has: page.locator("#custom-endpoint-name") });
+      // React populates the edit form in an effect after the dialog opens.
+      // Wait for that observable state, not a fixed delay or mere DOM presence.
+      await page.waitForFunction((expected) => document.querySelector("#custom-endpoint-name")?.value === expected, name);
+      assert.equal(await editing.locator("#custom-endpoint-name").inputValue(), name);
+      assert.equal(await editing.locator("#custom-endpoint-key").inputValue(), "", "stored credentials must not be rendered back");
+      await captureIntegrationView(page, `custom-endpoint-edit-${language}`);
+      await editing.locator("#custom-endpoint-url").fill("https://new.example.test/v1");
+      await editing.getByRole("button", { name: copy.save, exact: true }).click();
+      await page.waitForFunction(() => window.routerControlTest.calls().some((c) => c.name === "editCustomEndpoint"));
+      const editArgs = await page.evaluate(() => window.routerControlTest.calls().find((c) => c.name === "editCustomEndpoint").args);
+      assert.deepEqual(editArgs, ["user_fixture", { displayName: name, baseUrl: "https://new.example.test/v1", adapter: "openai-responses" }]);
+      assert.equal(await page.evaluate(() => window.routerControlTest.calls().filter((c) => c.name === "saveProviderCredential").length), 0, "empty key keeps the stored credential");
+      await openEndpoint();
+      await page.locator(".pm-connection-menu").getByRole("button", { name: copy.addModels, exact: true }).click();
+      const catalogDialog = page.getByRole("dialog", { name: copy.addModels, exact: true });
+      await catalogDialog.waitFor();
+      await page.waitForFunction((expected) => document.querySelector(".pm-add-models-toolbar input")?.value === expected, name);
+      assert.equal(await catalogDialog.locator(".pm-add-models-toolbar input").inputValue(), name);
+      await catalogDialog.getByRole("button", { name: copy.closeDialog, exact: true }).click();
+      await openEndpoint();
+      await page.getByTitle(copy.removeModel, { exact: true }).click();
+      await page.waitForFunction(() => window.routerControlTest.calls().some((c) => c.name === "removeCustomEndpointModels"));
+      assert.deepEqual(await page.evaluate(() => window.routerControlTest.calls().find((c) => c.name === "removeCustomEndpointModels").args), ["user_fixture", ["user_fixture/" + modelId]]);
+      await page.getByText(copy.noModels, { exact: true }).waitFor();
+      await page.getByRole("button", { name: copy.remove, exact: true }).click();
+      const removal = page.getByRole("dialog", { name: copy.disconnectTitle, exact: true });
+      await removal.getByRole("button", { name: copy.cancel, exact: true }).click();
+      assert.equal(await page.evaluate(() => window.routerControlTest.calls().filter((c) => c.name === "removeProviderCredential").length), 0);
+      // Cancel dismisses the provider popover through its outside-pointer guard.
+      await openEndpoint();
+      await page.getByRole("button", { name: copy.remove, exact: true }).click();
+      await removal.getByRole("button", { name: copy.disconnect, exact: true }).click();
+      await page.waitForFunction(() => window.routerControlTest.calls().some((c) => c.name === "removeProviderCredential"));
+      assert.deepEqual(await page.evaluate(() => window.routerControlTest.calls().find((c) => c.name === "removeProviderCredential").args), ["user_fixture"]);
+      assert.deepEqual(errors, []);
+    } finally { await browser.close(); await close(); }
+  });
+
+  test(`${language} Usage keeps selected accounts and missing versus zero cache telemetry`, { timeout: 60_000 }, async () => {
+    const { url, close } = await serveRenderer();
+    const browser = await chromium.launch({ executablePath: chromiumPath, headless: true, args: process.platform === "linux" ? ["--no-sandbox"] : [] });
+    try {
+      const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+      page.setDefaultTimeout(10_000);
+      await page.addInitScript((locale) => localStorage.setItem("codex-router-language", locale), language);
+      await page.goto(url);
+      await page.locator(".primary-nav button").nth(1).click();
+      const select = page.locator(".us-source-select select");
+      await select.selectOption("provider:deepseek");
+      await page.getByText(copy.selected, { exact: true }).waitFor();
+      await page.getByText(copy.others, { exact: true }).waitFor();
+      if (language !== "en") {
+        const axis = await page.locator(".us-chart-caption").innerText();
+        assert.doesNotMatch(axis, /Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec/);
+        assert.match(axis, /月|\d+\/\d+/);
+      }
+      await page.getByText("2.5k (25%)", { exact: true }).waitFor();
+      // A present string can still be invisible behind CSS text-overflow.
+      // Verify that both the counter and rate fit at supported window sizes.
+      for (const width of [960, 1280, 1600]) {
+        await page.setViewportSize({ width, height: 900 });
+        const box = await page.locator(".us-summary-grid .tone-cached dd").evaluate((element) => ({
+          width: element.clientWidth, contentWidth: element.scrollWidth,
+          height: element.clientHeight, contentHeight: element.scrollHeight,
+        }));
+        assert.equal(box.contentWidth <= box.width + 1 && box.contentHeight <= box.height + 1,
+          true, `${language} cache hit rate is clipped at ${width}px: ${JSON.stringify(box)}`);
+        const columns = await page.locator(".us-summary-grid").evaluate((element) =>
+          getComputedStyle(element).gridTemplateColumns.split(/\s+/).length);
+        assert.equal(columns, width <= 1120 ? 3 : 7, "summary variants must obey the responsive breakpoint");
+        if (width === 960) await captureIntegrationView(page, `usage-narrow-${language}`);
+      }
+      await page.setViewportSize({ width: 1280, height: 900 });
+      await captureIntegrationView(page, `usage-account-groups-${language}`);
+      await select.selectOption("provider:venice");
+      await page.getByText(copy.noHit, { exact: false }).waitFor();
+      assert.doesNotMatch(await page.locator(".us-summary-grid").innerText(), /\(0%\)/);
+      await page.goto(url + "?coldCache=1");
+      await page.locator(".primary-nav button").nth(1).click();
+      await page.locator(".us-source-select select").selectOption("provider:deepseek");
+      await page.getByText("0 (0%)", { exact: true }).waitFor();
+      assert.equal(await page.getByText(copy.noHit, { exact: false }).count(), 0);
+    } finally { await browser.close(); await close(); }
+  });
+}
