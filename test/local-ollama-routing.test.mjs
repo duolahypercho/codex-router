@@ -132,28 +132,71 @@ async function stop(child, server) {
   await new Promise((resolve) => server.close(resolve));
 }
 
-test("local LiteLLM routes are single-shot Ollama-native deployments", () => {
+function renderLocalConfig(fixture, options = {}) {
+  const env = { ...process.env, MODEL_ROUTER_USER_MODELS: fixture.userModels };
+  delete env.MODEL_ROUTER_LOCAL_NUM_CTX;
+  delete env.MODEL_ROUTER_LOCAL_TIMEOUT;
+  Object.assign(env, options);
+  return spawnSync(
+    process.execPath,
+    [
+      "-e",
+      "import('./src/litellm-config.mjs').then(({renderLiteLlmConfig}) => process.stdout.write(renderLiteLlmConfig()))",
+    ],
+    { cwd: root, encoding: "utf8", env },
+  );
+}
+
+function localBlock(rendered) {
+  const marker = 'model_name: "' + LOCAL_GATEWAY_MODEL + '"';
+  assert.equal(rendered.split(marker).length - 1, 1, "the local model was deployed twice");
+  return rendered.slice(rendered.indexOf(marker));
+}
+
+test("local LiteLLM defaults preserve 16384 context and 600 second timeouts", () => {
   const fixture = localFixture();
   try {
-    const result = spawnSync(
-      process.execPath,
-      [
-        "-e",
-        "import('./src/litellm-config.mjs').then(({renderLiteLlmConfig}) => process.stdout.write(renderLiteLlmConfig()))",
-      ],
-      {
-        cwd: root,
-        encoding: "utf8",
-        env: { ...process.env, MODEL_ROUTER_USER_MODELS: fixture.userModels },
-      },
-    );
+    const result = renderLocalConfig(fixture);
     assert.equal(result.status, 0, result.stderr);
-    const marker = `model_name: \"${LOCAL_GATEWAY_MODEL}\"`;
-    assert.equal(result.stdout.split(marker).length - 1, 1, "the local model was deployed twice");
-    const block = result.stdout.slice(result.stdout.indexOf(marker));
+    const block = localBlock(result.stdout);
     assert.match(block, /model: "ollama_chat\/qwen3\.8:27b-mlx"/);
-    assert.match(block, /num_ctx: 16384/);
+    assert.match(block, /^      num_ctx: 16384$/m);
+    assert.match(block, /^      timeout: 600$/m);
+    assert.match(block, /^      stream_timeout: 600$/m);
     assert.match(block, /num_retries: 0/);
+  } finally {
+    rmSync(fixture.directory, { recursive: true, force: true });
+  }
+});
+
+test("local LiteLLM accepts configured context and timeouts", () => {
+  const fixture = localFixture();
+  try {
+    const result = renderLocalConfig(fixture, {
+      MODEL_ROUTER_LOCAL_NUM_CTX: "32768",
+      MODEL_ROUTER_LOCAL_TIMEOUT: "2400",
+    });
+    assert.equal(result.status, 0, result.stderr);
+    const block = localBlock(result.stdout);
+    assert.match(block, /^      num_ctx: 32768$/m);
+    assert.match(block, /^      timeout: 2400$/m);
+    assert.match(block, /^      stream_timeout: 2400$/m);
+    assert.match(block, /num_retries: 0/);
+  } finally {
+    rmSync(fixture.directory, { recursive: true, force: true });
+  }
+});
+
+test("local LiteLLM rejects invalid context and timeout values explicitly", () => {
+  const fixture = localFixture();
+  try {
+    for (const name of ["MODEL_ROUTER_LOCAL_NUM_CTX", "MODEL_ROUTER_LOCAL_TIMEOUT"]) {
+      for (const value of ["", "0", "-1", "1.5", "abc", "9007199254740992"]) {
+        const result = renderLocalConfig(fixture, { [name]: value });
+        assert.notEqual(result.status, 0, name + "=" + value);
+        assert.match(result.stderr, new RegExp(name + " must be a positive integer"));
+      }
+    }
   } finally {
     rmSync(fixture.directory, { recursive: true, force: true });
   }

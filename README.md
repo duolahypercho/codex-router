@@ -1632,6 +1632,13 @@ tops the list. Everything is rated against this machine's memory, anything too
 large is not offered, and anything already downloaded drops off. Add `--json`
 for the same data as an object.
 
+The local Ollama deployment uses `num_ctx: 16384` and a 600-second LiteLLM
+timeout by default. Set `MODEL_ROUTER_LOCAL_NUM_CTX` and
+`MODEL_ROUTER_LOCAL_TIMEOUT` (seconds) to positive integers in the router
+process environment to override them. The timeout applies to both streaming
+and non-streaming requests. Restart the router to regenerate its LiteLLM
+configuration after changing either value.
+
 Checking, installing, and removing are three separate actions on purpose:
 unchecking never deletes a download, and removing needs explicit confirmation.
 The `local` provider turns itself on with the first checked model and off when
