@@ -46,6 +46,33 @@ function collect(stream) {
   });
 }
 
+test("Azure plaintext collaboration output carries Codex's explicit plaintext marker", () => {
+  const lookups = buildNamespaceLookups(new Map());
+  const call = {
+    type: "function_call",
+    namespace: "agents",
+    name: "spawn_agent",
+    call_id: "call-azure-agent",
+    arguments: JSON.stringify({ task_name: "probe", message: "Run pwd." }),
+  };
+  const event = { type: "response.output_item.done", item: call };
+  const rewritten = rewriteNamespaceResponsePayload(event, lookups, "azure-kmamc/gpt-6-sol");
+  assert.deepEqual(rewritten?.item.encrypted_function_args, []);
+  assert.equal(
+    rewriteNamespaceResponsePayload(event, lookups, "gpt-6-sol"),
+    undefined,
+  );
+  const ciphertext = { ...call, arguments: JSON.stringify({ message: "gAAAAAopaque=" }) };
+  assert.equal(
+    rewriteNamespaceResponsePayload(
+      { type: "response.output_item.done", item: ciphertext },
+      lookups,
+      "azure-kmamc/gpt-6-sol",
+    ),
+    undefined,
+  );
+});
+
 function collectBuffer(stream) {
   return new Promise((resolve, reject) => {
     const output = [];

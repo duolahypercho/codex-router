@@ -2397,6 +2397,27 @@ function customCallIdentityMatches(source, item, lookups) {
     (item.namespace === undefined || (typeof item.namespace === "string" && Boolean(item.namespace)));
 }
 
+function markAzurePlaintextCollaborationCall(item, sessionModel) {
+  if (
+    !sessionModel?.startsWith("azure-kmamc/") ||
+    !["agents", "collaboration"].includes(item?.namespace) ||
+    !["spawn_agent", "send_message", "followup_task"].includes(item?.name) ||
+    item.encrypted_function_args !== undefined ||
+    !jsonArgumentsAreUnambiguous(item.arguments)
+  ) return item;
+  let args;
+  try {
+    args = JSON.parse(item.arguments);
+  } catch {
+    return item;
+  }
+  const message = args?.message;
+  if (typeof message !== "string" || !message || /^gAAAAA[A-Za-z0-9_-]+={0,2}$/.test(message)) {
+    return item;
+  }
+  return { ...item, encrypted_function_args: [] };
+}
+
 function rewriteNamespaceFunctionCallItem(
   item,
   lookups,
@@ -2469,6 +2490,7 @@ function rewriteNamespaceFunctionCallItem(
     rewritten = injectSessionModelForSpawnCalls(rewritten, sessionModel);
   }
   rewritten = rewriteFunctionCallArguments(rewritten);
+  rewritten = markAzurePlaintextCollaborationCall(rewritten, sessionModel);
   return rewritten === item ? undefined : rewritten;
 }
 

@@ -1,3 +1,4 @@
+import { normalizeAzureOpenAIResponsesRequest } from "./azure-openai-compat.mjs";
 import http from "node:http";
 import { usesNativeChatReasoning } from "./chat-reasoning.mjs";
 import {
@@ -1028,6 +1029,7 @@ function normalizeBody(buffer, contentType, route) {
       delete payload.thinking;
     }
     payload = normalizeOpenAIRequest(payload);
+    payload = normalizeAzureOpenAIResponsesRequest(payload, { providerId: model.provider, route });
     // The router labels routed assistant messages with Codex's `phase`, and
     // Codex replays it on every later turn. An operator-configured Responses
     // endpoint is an unknown validator, so it gets the pre-label history
