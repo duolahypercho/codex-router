@@ -18,6 +18,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { privateFileIsProtected } from "../src/file-security.mjs";
 import { refreshCodexCallerCapabilityContents } from "../src/caller-key-client-refresh.mjs";
 import { CODEX_PATCH_HOOK_BASE_PATH } from "../src/codex-patch-hook-endpoint.mjs";
+import { scanTomlDocument } from "../src/toml-structure.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const manager = path.join(root, "src", "config-manager.mjs");
@@ -1057,6 +1058,191 @@ test("disabling the router from login-free mode restores an originally unset pro
     assert.doesNotMatch(restored, /^model_provider\s*=/m);
     assert.doesNotMatch(restored, /model_providers\.codex-router|codex-router-managed/);
     assert.match(restored, /model = "kimi-api\/kimi-k3"/);
+  } finally {
+    rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
+// A writer that re-serializes config.toml -- a TOML library round trip, a
+// formatter -- keeps every table and drops every comment, this router's
+// markers included. Every enable (update, doctor --fix) then refused the
+// provider table as user-owned, with nothing the operator could run.
+const withoutComments = (text) =>
+  text.split("\n").filter((line) => !line.trim().startsWith("#")).join("\n");
+const providerHeaders = (text, provider) =>
+  text.split("\n").filter((line) => line.trim() === `[model_providers.${provider}]`).length;
+
+test("enable and disable recover a router config whose markers were stripped", () => {
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), "codex-router-stripped-"));
+  const stateDir = path.join(codexHome, "router-state");
+  const configPath = path.join(codexHome, "config.toml");
+  writeFileSync(
+    configPath,
+    'model = "gpt-5.6-sol"\n\n[profiles.work]\napproval_policy = "never"\n',
+    { mode: 0o600 },
+  );
+
+  try {
+    run("enable", codexHome, stateDir);
+    const managed = readFileSync(configPath, "utf8");
+    writeFileSync(configPath, withoutComments(managed), { mode: 0o600 });
+
+    const recovered = run("enable", codexHome, stateDir);
+    assert.equal(recovered.mode, "router");
+    const config = readFileSync(configPath, "utf8");
+    scanTomlDocument(config);
+    assert.equal(providerHeaders(config, "codex-router"), 1);
+    assert.match(config, /# BEGIN codex-router-managed\nopenai_base_url = /);
+    assert.match(config, /# BEGIN codex-router-provider-managed\n\[model_providers\.codex-router\]/);
+    assert.match(config, /\[profiles\.work\]\napproval_policy = "never"/);
+
+    // Disable retires the stripped table too; an orphan left behind would
+    // refuse every later reinstall as user-owned.
+    writeFileSync(configPath, withoutComments(config), { mode: 0o600 });
+    assert.equal(run("disable", codexHome, stateDir).mode, "native");
+    assert.equal(providerHeaders(readFileSync(configPath, "utf8"), "codex-router"), 0);
+    assert.equal(run("enable", codexHome, stateDir).mode, "router");
+
+    // The same table with a field this router never writes is somebody's.
+    writeFileSync(
+      configPath,
+      withoutComments(readFileSync(configPath, "utf8")).replace(
+        'wire_api = "responses"',
+        'wire_api = "responses"\nstream_idle_timeout_ms = 300000',
+      ),
+      { mode: 0o600 },
+    );
+    assert.throws(
+      () => run("enable", codexHome, stateDir),
+      /Refusing to replace user-owned model provider codex-router/,
+    );
+
+    // So is one whose root keys no longer name this router's own catalog: the
+    // markers' evidence has to be there in some other form.
+    writeFileSync(
+      configPath,
+      withoutComments(managed).replace(
+        /^model_catalog_json = .*$/m,
+        `model_catalog_json = ${JSON.stringify(path.join(codexHome, "elsewhere.json"))}`,
+      ),
+      { mode: 0o600 },
+    );
+    assert.throws(
+      () => run("enable", codexHome, stateDir),
+      /Refusing to replace user-owned model provider codex-router/,
+    );
+  } finally {
+    rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
+test("login-free mode on the router provider survives stripped markers", () => {
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), "codex-router-stripped-v1-"));
+  const stateDir = path.join(codexHome, "router-state");
+  const configPath = path.join(codexHome, "config.toml");
+  writeFileSync(configPath, 'model = "gpt-5.6-sol"\n', { mode: 0o600 });
+
+  try {
+    run("enable", codexHome, stateDir);
+    const enabled = run("login-free-enable", codexHome, stateDir, ["deepseek/deepseek-v4-pro"]);
+    assert.equal(enabled.model_provider, "codex-router");
+    writeFileSync(configPath, withoutComments(readFileSync(configPath, "utf8")), { mode: 0o600 });
+
+    const recovered = run("enable", codexHome, stateDir);
+    assert.equal(recovered.login_free, true);
+    assert.equal(recovered.login_free_managed, true);
+    const config = readFileSync(configPath, "utf8");
+    scanTomlDocument(config);
+    assert.equal(providerHeaders(config, "codex-router"), 1);
+    assert.equal(providerHeaders(config, "codex-router.auth"), 1);
+
+    writeFileSync(configPath, withoutComments(config), { mode: 0o600 });
+    const restored = run("login-free-disable", codexHome, stateDir);
+    assert.equal(restored.login_free, false);
+    assert.equal(restored.model, "gpt-5.6-sol");
+    scanTomlDocument(readFileSync(configPath, "utf8"));
+  } finally {
+    rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
+test("login-free mode on the user's own provider table survives stripped markers", () => {
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), "codex-router-stripped-v3-"));
+  const stateDir = path.join(codexHome, "router-state");
+  const configPath = path.join(codexHome, "config.toml");
+  writeFileSync(
+    configPath,
+    `model = "gpt-5.6-sol"
+model_provider = "custom"
+
+[model_providers.custom]
+name = "Direct custom provider"
+base_url = "https://direct.invalid/v1"
+wire_api = "responses"
+
+[model_providers.custom.http_headers]
+Authorization = "Bearer ORIGINAL_STRIPPED_SECRET"
+`,
+    { mode: 0o600 },
+  );
+
+  try {
+    run("enable", codexHome, stateDir);
+    run("login-free-enable", codexHome, stateDir, ["deepseek/deepseek-v4-pro"]);
+    // Stripped by the same round trip that left a Node upgrade's dead keg in
+    // the auth command: both have to be survivable at once.
+    const removedKeg = "/opt/homebrew/Cellar/node/0.0.1/bin/node";
+    const stripped = withoutComments(readFileSync(configPath, "utf8"))
+      .replace(/^command = .*$/m, `command = ${JSON.stringify(removedKeg)}`);
+    assert.doesNotMatch(stripped, /codex-router-signed-provider/);
+    writeFileSync(configPath, stripped, { mode: 0o600 });
+
+    // Status reads the protected state and the router's own rendering, not the
+    // missing comments, so the table is still reported as managed -- and it
+    // still reports the command the file actually names.
+    const status = run("status", codexHome, stateDir);
+    assert.equal(status.login_free, true);
+    assert.equal(status.login_free_managed, true);
+    assert.deepEqual(status.caller_auth_commands, [removedKeg]);
+    assert.equal(readFileSync(configPath, "utf8"), stripped, "status never writes");
+
+    const recovered = run("enable", codexHome, stateDir);
+    assert.equal(recovered.login_free_managed, true);
+    assert.equal(recovered.caller_auth_commands.length, 1);
+    assert.notEqual(recovered.caller_auth_commands[0], removedKeg);
+    const config = readFileSync(configPath, "utf8");
+    scanTomlDocument(config);
+    assert.equal(
+      config.split("\n").filter((line) => line.startsWith("# codex-router-signed-provider-tree-slot")).length,
+      2,
+      "one slot per original provider section",
+    );
+
+    writeFileSync(configPath, withoutComments(config), { mode: 0o600 });
+    const restored = run("login-free-disable", codexHome, stateDir);
+    assert.equal(restored.login_free, false);
+    assert.equal(restored.model_provider, "custom");
+    assert.equal(restored.model, "gpt-5.6-sol");
+    const final = readFileSync(configPath, "utf8");
+    scanTomlDocument(final);
+    assert.match(final, /base_url = "https:\/\/direct\.invalid\/v1"/);
+    assert.match(final, /Authorization = "Bearer ORIGINAL_STRIPPED_SECRET"/);
+    assert.equal(providerHeaders(final, "custom"), 1);
+
+    // A managed table somebody edited stays refused, stripped or not.
+    run("login-free-enable", codexHome, stateDir, ["deepseek/deepseek-v4-pro"]);
+    writeFileSync(
+      configPath,
+      withoutComments(readFileSync(configPath, "utf8")).replace(
+        "supports_websockets = true",
+        "supports_websockets = true\nstream_max_retries = 9",
+      ),
+      { mode: 0o600 },
+    );
+    assert.throws(
+      () => run("enable", codexHome, stateDir),
+      /Login-free mode lost ownership/,
+    );
   } finally {
     rmSync(codexHome, { recursive: true, force: true });
   }

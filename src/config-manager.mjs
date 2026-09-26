@@ -1037,6 +1037,103 @@ function signedProviderBlockIsOwned(contents, state) {
   );
 }
 
+function sameTableFields(actual, expected) {
+  if (!actual || !expected || actual.size !== expected.size) return false;
+  for (const [key, value] of expected) {
+    if (!actual.has(key)) return false;
+    const matches = key === "command"
+      ? isNodeExecutablePath(actual.get(key)) && isNodeExecutablePath(value)
+      : actual.get(key) === value;
+    if (!matches) return false;
+  }
+  return true;
+}
+
+// The field maps of a block this router renders: its main table, and its auth
+// table when it has one. Marker lines are comments and carry no fields.
+function renderedTableFields(block) {
+  const lines = block.split("\n").filter((line) => !line.trim().startsWith("#"));
+  const headers = lines.flatMap((line, index) => (line.startsWith("[") ? [index] : []));
+  return headers.map((start, position) =>
+    plainTableFields(lines, start, headers[position + 1] ?? lines.length));
+}
+
+// The provider-table modes own a table the user already had. Their markers,
+// and the slot comments recording where each original table goes back, are
+// comments too, so a writer that re-serializes config.toml without comments
+// leaves the managed table looking like the user's own: status reported an
+// unmanaged provider and every command refused with "lost ownership", with no
+// way back to the table the protected state still holds. When that state
+// names the table and the table is exactly one of this router's renderings,
+// put the markers and slots back before anything reads the document. Any
+// other field, subtable, or active provider leaves it untouched.
+function withRestoredProviderTableMarkers(contents) {
+  const providerState = readProviderModeState();
+  const signedState = readSignedProviderModeState();
+  const state = providerState ?? signedState;
+  if (
+    (providerState && signedState) ||
+    state?.version !== 3 ||
+    state.mode !== "provider-table" ||
+    [signedProviderStartMarker, signedProviderEndMarker, signedProviderSlotPrefix]
+      .some((marker) => contents.includes(marker))
+  ) {
+    return contents;
+  }
+  const scanned = scannedConfig(contents);
+  if (!scanned) return contents;
+  if ((rootValue(splitRoot(contents).rootLines, "model_provider") || "openai") !== state.managedProvider) {
+    return contents;
+  }
+  const tables = scanned.headers
+    .map(({ path: header, index }, position) => {
+      let end = scanned.headers[position + 1]?.index ?? scanned.lines.length;
+      // Blank lines before the next table stay where they are.
+      while (end > index + 1 && !scanned.lines[end - 1].trim()) end -= 1;
+      return { header, start: index, end };
+    })
+    .filter(({ header }) => header[0] === "model_providers" && header[1] === state.managedProvider);
+  const main = tables.filter(({ header }) => header.length === 2);
+  const auth = tables.filter(({ header }) => header.length === 3 && header[2] === "auth");
+  if (main.length !== 1 || auth.length > 1 || main.length + auth.length !== tables.length) {
+    return contents;
+  }
+  const actual = [main[0], ...auth].map(({ start, end }) =>
+    plainTableFields(scanned.lines, start, end));
+  const renderings = (state.loginFree
+    ? [
+        managedLoginFreeProviderBlock,
+        managedLoginFreeProviderBlockHttpFallback,
+        managedLoginFreeProviderBlockLegacy,
+      ]
+    : [
+        managedSignedProviderBlock,
+        managedSignedProviderBlockHttpFallback,
+        managedSignedProviderBlockLegacy,
+      ]).map((render) => render(state.managedProvider, state.managedBaseUrl));
+  const block = renderings.find((rendering) => {
+    const expected = renderedTableFields(rendering);
+    return expected.length === actual.length &&
+      expected.every((fields, index) => sameTableFields(actual[index], fields));
+  });
+  if (!block) return contents;
+  const slotCount = Math.max(1, state.previousProviderSections.length);
+  const replacement = [
+    signedProviderSlot(state, 0),
+    // Keep the file's own auth command, so status and doctor still report the
+    // Node it names rather than the one this process would write.
+    actual[1]
+      ? block.replace(/^command = .*$/m, `command = ${tomlValue(actual[1].get("command"))}`)
+      : block,
+    ...Array.from({ length: slotCount - 1 }, (_, index) => signedProviderSlot(state, index + 1)),
+  ];
+  const owned = (index) => [main[0], ...auth].some(({ start, end }) => index >= start && index < end);
+  return scanned.lines
+    .flatMap((line, index) =>
+      index === main[0].start ? replacement : owned(index) ? [] : [line])
+    .join("\n");
+}
+
 function restoreSignedProviderTable(contents, state) {
   if (state.version === 2 && state.mode !== "provider-table") return contents;
   if (!signedProviderBlockIsOwned(contents, state)) {
@@ -1353,18 +1450,112 @@ function legacyManagedRouterProvider(contents) {
     : undefined;
 }
 
-function removeLegacyManagedRouterProvider(contents, provider) {
+function routerCatalogPaths() {
   return [
-    ...provider.lines.slice(0, provider.start),
-    ...provider.lines.slice(provider.end),
-  ].join("\n");
-}
-
-function clean(contents) {
-  const knownCatalogPaths = [
     MERGED_CATALOG_PATH,
     ...LEGACY_STATE_DIRS.map((directory) => path.join(directory, "merged-models.json")),
   ];
+}
+
+function plainTableFields(lines, start, end) {
+  const fields = new Map();
+  for (const line of lines.slice(start + 1, end)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const match = trimmed.match(/^([A-Za-z0-9_-]+)\s*=/);
+    if (!match || fields.has(match[1])) return undefined;
+    fields.set(match[1], assignmentValue(trimmed));
+  }
+  return fields;
+}
+
+function isManagedCallerAuthTable(fields) {
+  let args;
+  try {
+    args = JSON.parse(fields.get("args") ?? "");
+  } catch {
+    return false;
+  }
+  return (
+    fields.size === 4 &&
+    isNodeExecutablePath(fields.get("command")) &&
+    Array.isArray(args) &&
+    args.length === 2 &&
+    typeof args[0] === "string" &&
+    path.basename(args[0]) === "caller-key-auth-command.mjs" &&
+    args[1] === CALLER_SECRET_PATH &&
+    fields.get("timeout_ms") === "5000" &&
+    fields.get("refresh_interval_ms") === "0"
+  );
+}
+
+// A writer that re-serializes config.toml -- a TOML library round trip, a
+// formatter -- keeps every table and drops every comment, this router's
+// markers included. The provider table it leaves behind then reads as
+// user-owned, and every enable (update, doctor --fix) refused to replace it,
+// with nothing the operator could run to recover. Adopt it on the evidence the
+// markers used to carry, and only that: the root keys still name this router's
+// own port and its private merged catalog, which nothing else points Codex at,
+// and the table and its auth subtable are exactly what this router writes.
+// A table with any other field or subtable is still somebody else's.
+function strippedManagedRouterProvider(contents) {
+  if (contents.includes(startMarker) || contents.includes(providerStartMarker)) {
+    return undefined;
+  }
+  const { rootLines } = splitRoot(contents);
+  const rootBaseUrl = rootValue(rootLines, "openai_base_url");
+  if (
+    !isManagedRouterBaseUrl(rootBaseUrl) ||
+    !routerCatalogPaths().includes(rootValue(rootLines, "model_catalog_json"))
+  ) {
+    return undefined;
+  }
+  const scanned = scannedConfig(contents);
+  if (!scanned) return undefined;
+  const tables = scanned.headers
+    .map(({ path: header, index }, position) => ({
+      header,
+      start: index,
+      end: scanned.headers[position + 1]?.index ?? scanned.lines.length,
+    }))
+    .filter(({ header }) => header[0] === "model_providers" && header[1] === routerProviderId);
+  const main = tables.filter(({ header }) => header.length === 2);
+  const auth = tables.filter(({ header }) => header.length === 3 && header[2] === "auth");
+  if (main.length !== 1 || auth.length > 1 || main.length + auth.length !== tables.length) {
+    return undefined;
+  }
+  const fields = plainTableFields(scanned.lines, main[0].start, main[0].end);
+  const authFields = auth.length
+    ? plainTableFields(scanned.lines, auth[0].start, auth[0].end)
+    : undefined;
+  if (!fields || (auth.length && !authFields)) return undefined;
+  const optional = ["supports_standalone_web_search", "requires_openai_auth"];
+  const loginFree = fields.get("requires_openai_auth") === "false";
+  const shapeMatches =
+    fields.get("name") === "Codex Router (external models)" &&
+    fields.get("base_url") === rootBaseUrl &&
+    fields.get("wire_api") === "responses" &&
+    [...fields.keys()].every((key) => ["name", "base_url", "wire_api", ...optional].includes(key)) &&
+    (!fields.has("supports_standalone_web_search") ||
+      fields.get("supports_standalone_web_search") === "true") &&
+    (loginFree
+      ? Boolean(authFields) && isManagedCallerAuthTable(authFields)
+      : !authFields &&
+        (!fields.has("requires_openai_auth") || fields.get("requires_openai_auth") === "true"));
+  return shapeMatches
+    ? { lines: scanned.lines, ranges: [main[0], ...auth] }
+    : undefined;
+}
+
+function removeLegacyManagedRouterProvider(contents, provider) {
+  const ranges = provider.ranges ?? [provider];
+  return provider.lines
+    .filter((_line, index) => !ranges.some(({ start, end }) => index >= start && index < end))
+    .join("\n");
+}
+
+function clean(contents) {
+  const knownCatalogPaths = routerCatalogPaths();
   const knownManaged =
     markerPairs.some(([start]) => contents.includes(start)) ||
     knownCatalogPaths.some((catalogPath) => contents.includes(catalogPath));
@@ -1553,7 +1744,8 @@ function enabledContents(contents, { loginFreeProvider = false } = {}) {
   ) {
     nativeCatalogNeedsActivation = true;
   }
-  const legacyProvider = legacyManagedRouterProvider(contents);
+  const legacyProvider =
+    legacyManagedRouterProvider(contents) ?? strippedManagedRouterProvider(contents);
   const contentsWithoutLegacyProvider = legacyProvider
     ? removeLegacyManagedRouterProvider(contents, legacyProvider)
     : contents;
@@ -1689,7 +1881,9 @@ if (!new Set([
   process.exit(2);
 }
 
-const current = existsSync(CONFIG_PATH) ? readFileSync(CONFIG_PATH, "utf8") : "";
+const current = withRestoredProviderTableMarkers(
+  existsSync(CONFIG_PATH) ? readFileSync(CONFIG_PATH, "utf8") : "",
+);
 if (command === "status") {
   process.stdout.write(`${JSON.stringify(snapshot(current))}\n`);
   process.exit(0);
@@ -2203,6 +2397,10 @@ if (command === "enable") {
       }
       restored = restoreSignedProviderTable(restored, signedState);
     }
+    // Disabling must also retire a provider table that lost its markers, or
+    // the orphan it leaves behind refuses every later reinstall as user-owned.
+    const strippedProvider = strippedManagedRouterProvider(restored);
+    if (strippedProvider) restored = removeLegacyManagedRouterProvider(restored, strippedProvider);
     const nativeCatalogContents = restoreNativeCatalog(restored);
     if (nativeCatalogContents) {
       next = nativeCatalogContents;

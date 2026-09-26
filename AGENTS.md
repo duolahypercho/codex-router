@@ -1859,6 +1859,14 @@ about it.
 - Preserve reasoning settings, profiles, projects, trust, MCP configuration,
   features, and ChatGPT authentication. Preserve `model` and `model_provider`
   outside those explicitly enabled routing modes.
+- Markers are comments, and a writer that re-serializes `config.toml` drops
+  them while keeping every table. An unmarked table is re-adopted only on the
+  evidence the markers carried: `strippedManagedRouterProvider` requires the
+  root keys to name this router's own port and private merged catalog, and
+  `withRestoredProviderTableMarkers` requires the protected v3 provider-mode
+  state to name the table. Both also require every field to be exactly what
+  this router renders (the auth command's Node path aside). Never widen either
+  to a looser match: a table that differs is somebody else's.
 - A user-initiated macOS tray login-mode change may gracefully restart only the
   registered Codex desktop app. This does not authorize an installation task to
   quit Codex, and the tray must never force-terminate it.
