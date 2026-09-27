@@ -1205,6 +1205,12 @@ test("fallback-only splits do not claim account breakdown or a complete range mi
     page.on("console", (message) => {
       if (message.type() === "error") pageErrors.push(message.text());
     });
+    // The fixture's account bucket is 2026-08-27 and its router fallback
+    // 2026-08-28, and Usage walks its 30-day window back from today. Once
+    // today passed 2026-09-26 the fallback date left the window, no bar was
+    // drawn, and this test failed on every branch. Pin the page's clock inside
+    // the fixture's month; its timers keep running.
+    await page.clock.setFixedTime(new Date("2026-09-10T12:00:00Z"));
 
     await page.goto(`${url}?fallbackUsage=1`, { waitUntil: "domcontentloaded", timeout: 30_000 });
     await page.waitForFunction(() => window.routerControlTest.navigationReady());
