@@ -104,6 +104,7 @@ test("provider registry exposes configured API and OAuth model families", () => 
       "commandcode/qwen3.8-flash",
       "commandcode/qwen3.8-max-0902",
       "commandcode/qwen3.8-max",
+      "commandcode/stealth/space-bunny-alpha",
       "commandcode/step-3.7-flash",
       "custom/qwen3.8-27b",
       "deepseek/deepseek-v4-flash",

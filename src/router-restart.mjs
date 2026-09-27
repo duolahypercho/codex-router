@@ -7,8 +7,9 @@ import {
   runOperationProcessTree,
   runProcessTree,
 } from "./process-tree.mjs";
+import { routerNodeBinary } from "./node-runtime.mjs";
 import { waitForRouterHealth } from "./router-health.mjs";
-import { childNodeBinary } from "./stable-node.mjs";
+import { homebrewStableNodePath } from "./stable-node.mjs";
 
 const SERVICE_SCRIPT = path.join(SOURCE_ROOT, "src", "service.mjs");
 const SERVICE_STATUS_OPERATION_MS = 10_000;
@@ -98,13 +99,16 @@ async function invokeService(
     deadline,
     stdio,
   };
-  // Restarts also come from workers that can outlive a Node upgrade (a model
-  // download, a curation transaction), and `brew upgrade node` deletes the keg
-  // this process runs from, so name a Node that is still there.
-  const node = childNodeBinary({ environment: env ?? process.env });
+  // A Homebrew Node upgrade deletes the Cellar path this long-running process
+  // was started from, so process.execPath can name a binary that no longer
+  // exists. The refresh spawns already prefer the configured stable runtime;
+  // the restart has to as well, or a refresh succeeds and the restart it asks
+  // for dies with ENOENT. Without a configured runtime the fallback is this
+  // process's own Node, named by its formula's opt link rather than the keg.
+  const nodeBinary = homebrewStableNodePath(routerNodeBinary(env));
   return childOwnsOperations
-    ? runOperationProcessTree(node, [SERVICE_SCRIPT, ...args], { ...options, run })
-    : run(node, [SERVICE_SCRIPT, ...args], options);
+    ? runOperationProcessTree(nodeBinary, [SERVICE_SCRIPT, ...args], { ...options, run })
+    : run(nodeBinary, [SERVICE_SCRIPT, ...args], options);
 }
 
 export async function routerServiceStatus({

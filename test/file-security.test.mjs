@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -316,6 +316,48 @@ test(
       ).trim().toLowerCase();
       assert.equal(result, "true", "Users should have ReadAndExecute access to the checkout");
     } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  },
+);
+
+// The record that lets the Windows service manager stop the tree it owns is
+// written before anything else starts, so a PowerShell that cannot start used
+// to take the whole router down: measured 2026-09-23, every start attempt for
+// forty minutes after a boot died on "Failed to protect private file ACL:
+// spawnSync powershell.exe ETIMEDOUT". A warn-only write must survive that; the
+// default must still fail closed, because a credential file cannot silently
+// lose its hardening.
+test(
+  "a warn-only private write survives a PowerShell that cannot run the hardening script",
+  { skip: process.platform !== "win32" },
+  () => {
+    const directory = mkdtempSync(path.join(os.tmpdir(), "codex-router-harden-warn-"));
+    const shadow = path.join(directory, "shadow");
+    const target = path.join(directory, "state.json");
+    const originalPath = process.env.PATH;
+    try {
+      mkdirSync(shadow);
+      // A PowerShell that cannot start at all: an executable-named file that
+      // CreateProcess rejects, which is the shape protectPrivateFilesWin32
+      // turns into "Failed to protect private file ACL". PATH is searched
+      // before the Windows directory for a bare image name, so this shadow wins
+      // over the real interpreter.
+      writeFileSync(path.join(shadow, "powershell.exe"), "not an executable\n");
+      process.env.PATH = `${shadow};${originalPath}`;
+
+      const value = { version: 1, pid: 4242 };
+      assert.deepEqual(writePrivateJson(target, value, { hardenFailure: "warn" }), value);
+      assert.deepEqual(JSON.parse(readFileSync(target, "utf8")), value);
+
+      const strict = path.join(directory, "strict.json");
+      assert.throws(
+        () => writePrivateJson(strict, value),
+        /Failed to protect private file ACL/,
+      );
+      assert.equal(existsSync(strict), false);
+    } finally {
+      process.env.PATH = originalPath;
       rmSync(directory, { recursive: true, force: true });
     }
   },

@@ -944,6 +944,7 @@ preserves Command Code's reported cached-token usage.
 
 | Picker label | Model ID |
 | --- | --- |
+| Space Bunny Alpha (Command Code) | `commandcode/stealth/space-bunny-alpha` |
 | DeepSeek V4 Flash (Command Code) | `commandcode/deepseek-v4-flash` |
 | DeepSeek V4 Pro (Command Code) | `commandcode/deepseek-v4-pro` |
 | DeepSeek V4.1 Flash (Command Code) | `commandcode/deepseek-v4.1-flash` |

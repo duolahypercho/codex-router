@@ -6,6 +6,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { homebrewKegNode } from "./fixtures/homebrew-keg-node.mjs";
+import { homebrewStableNodePath } from "../src/stable-node.mjs";
 
 import {
   environmentPoolRemovalReminder,
@@ -61,7 +62,7 @@ let seen;
 await routerServiceStatus({ spawn: (command) => { seen = command; return { status: 1, stdout: "" }; } });
 process.stdout.write(seen);`,
       ],
-      { encoding: "utf8" },
+      { encoding: "utf8", env: { ...process.env, CODEX_ROUTER_NODE_BIN: "" } },
     );
     assert.equal(command, opt);
   } finally {
@@ -379,4 +380,28 @@ test("a failed restart fails loudly instead of pretending the route is live", as
     restartRouterServiceIfInstalled({ spawn }),
     /could not be restarted/,
   );
+});
+
+// #907 moved the refresh spawns onto the configured runtime but left this one
+// on process.execPath, so a refresh after a Homebrew Node upgrade succeeded and
+// then the restart it asks for died with ENOENT on the deleted Cellar path.
+test("service invocations use the configured stable Node runtime", async () => {
+  const seen = [];
+  const spawn = (command, args) => {
+    seen.push({ command, args });
+    return INSTALLED_STATUS;
+  };
+
+  await routerServiceStatus({
+    spawn,
+    env: { CODEX_ROUTER_NODE_BIN: "/stable/node" },
+  });
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].command, "/stable/node");
+
+  // Without the override the fallback is still this process's own interpreter,
+  // so an install that never recorded a runtime behaves as before -- named by
+  // its formula's opt link when that interpreter is a Homebrew keg.
+  await routerServiceStatus({ spawn, env: {} });
+  assert.equal(seen.at(-1).command, homebrewStableNodePath(process.execPath));
 });

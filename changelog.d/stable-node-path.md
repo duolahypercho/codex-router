@@ -11,7 +11,8 @@
   already names and otherwise uses the router's own Node binary, never a
   launcher or version-manager shim; and its path is no longer treated as
   ownership evidence, which also recovers a command an older Control Center
-  recorded as its Electron app. The service restart and client-disconnect
-  spawns resolve Node the same way. `doctor` fails on an auth command whose
-  Node is gone or is not Node at all, and warns while it names a keg;
-  `./bin/doctor --fix` rewrites it.
+  recorded as its Electron app. The service restart keeps the configured
+  runtime and, without one, names the running Node's opt link; the
+  client-disconnect workers map a keg the same way. `doctor` fails on an auth
+  command whose Node is gone or is not Node at all, and warns while it names
+  a keg; `./bin/doctor --fix` rewrites it.

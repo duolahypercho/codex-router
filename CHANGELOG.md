@@ -392,6 +392,12 @@
   stub; Codex still has the file. Compact stays 180,000 and the completion
   cap stays 32,768.
 
+- **Command Code's Gemini 3.8 Flash accepts nullable tool parameters.** Convert
+  a single concrete type plus `null` to an explicit union before forwarding,
+  preserving array constraints and nested schemas. This prevents the observed
+  `any_of` sibling-field rejection for Codex's image-generation tool, including
+  definitions restored from tool-search history. Other routes keep their schemas.
+
 - **Union Alpha publishes the measured 32,768 completion reserve.** OpenCode
   and Console Go treat an omitted `max_tokens` as the advertised 131,072
   output. A Desktop-sized first turn (~140k rendered) plus that reserve
