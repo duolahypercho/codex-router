@@ -1864,8 +1864,10 @@ about it.
   evidence the markers carried: `strippedManagedRouterProvider` and
   `strippedManagedRouterSettings` require the root keys to name this router's
   own port and private merged catalog (decoded -- a Windows path is stored
-  escaped), and `withRestoredProviderTableMarkers` requires the protected v3
-  provider-mode state to name the table. Every field must decode to exactly
+  escaped), `withRestoredProviderTableMarkers` requires the protected v3
+  provider-mode state to name the table, and `withRestoredSignedSwitchMarkers`
+  requires the v1 signed state, `model_provider = "codex-router-signed"`, and
+  the router's own root base URL. Every field must decode to exactly
   what this router writes (the auth command's path aside); values are compared
   decoded, so a TOML library's padded or multi-line arrays still match. A
   comment inside or between the router's tables means somebody wrote there,

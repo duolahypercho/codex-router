@@ -1188,6 +1188,55 @@ function withRestoredProviderTableMarkers(contents) {
     .join("\n");
 }
 
+// `Use Router with ChatGPT` from the built-in OpenAI provider switches Codex to
+// this router's own `codex-router-signed` table, and recognized that table by
+// its markers alone. After a comment-stripping round trip the switch refused
+// every direction with "lost ownership": off, on ("turn it off before enabling
+// it again"), and every update. When the protected state records that switch,
+// Codex still selects it, and the unmarked table is exactly one of this
+// router's renderings for its own root base URL, put the markers back before
+// anything reads the document. A changed field, a note inside the table, or
+// any subtable leaves it the user's.
+function withRestoredSignedSwitchMarkers(contents) {
+  if (
+    readSignedProviderModeState()?.version !== 1 ||
+    readProviderModeState() ||
+    [signedProviderStartMarker, signedProviderEndMarker]
+      .some((marker) => contents.includes(marker))
+  ) {
+    return contents;
+  }
+  const { rootLines } = splitRoot(contents);
+  const baseUrl = rootValue(rootLines, "openai_base_url");
+  if (
+    rootValue(rootLines, "model_provider") !== signedProviderId ||
+    !isManagedRouterBaseUrl(baseUrl)
+  ) {
+    return contents;
+  }
+  const scanned = scannedConfig(contents);
+  if (!scanned) return contents;
+  const tables = providerTableRangesTrimmed(scanned, signedProviderId);
+  if (tables.length !== 1 || tables[0].header.length !== 2) return contents;
+  const [table] = tables;
+  const actual = plainTableFields(scanned.lines, table.start, table.end);
+  const block = [
+    managedSignedProviderBlock,
+    managedSignedProviderBlockHttpFallback,
+    managedSignedProviderBlockLegacy,
+  ]
+    .map((render) => render(signedProviderId, baseUrl))
+    .find((rendering) => {
+      const expected = renderedTableFields(rendering);
+      return expected.length === 1 && sameTableFields(actual, expected[0]);
+    });
+  if (!block) return contents;
+  return scanned.lines
+    .flatMap((line, index) =>
+      index === table.start ? [block] : index > table.start && index < table.end ? [] : [line])
+    .join("\n");
+}
+
 function restoreSignedProviderTable(contents, state) {
   if (state.version === 2 && state.mode !== "provider-table") return contents;
   if (!signedProviderBlockIsOwned(contents, state)) {
@@ -2151,9 +2200,9 @@ if (!new Set([
   process.exit(2);
 }
 
-const current = withRestoredProviderTableMarkers(
+const current = withRestoredSignedSwitchMarkers(withRestoredProviderTableMarkers(
   existsSync(CONFIG_PATH) ? readFileSync(CONFIG_PATH, "utf8") : "",
-);
+));
 recordedCallerAuthNode = managedCallerAuthCommands(current)[0];
 recordedCallerAuthNodeRead = true;
 if (command === "status") {

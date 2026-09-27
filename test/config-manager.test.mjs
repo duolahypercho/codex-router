@@ -1298,6 +1298,107 @@ Authorization = ${JSON.stringify(secret)}
   }
 });
 
+// `Use Router with ChatGPT` from the built-in OpenAI provider switches Codex to
+// the router's own `codex-router-signed` table, recognized by its markers
+// alone. Once a round trip dropped them, the switch could be turned neither on
+// nor off: every direction refused with "lost ownership".
+test("signed routing through the provider switch survives stripped markers", () => {
+  for (const [name, roundTrip] of Object.entries(roundTrips)) {
+    const codexHome = mkdtempSync(path.join(os.tmpdir(), "codex-router-stripped-signed-"));
+    const stateDir = escapedStateDir(codexHome);
+    const configPath = path.join(codexHome, "config.toml");
+    writeFileSync(configPath, 'model = "gpt-5.6-sol"\n', { mode: 0o600 });
+
+    try {
+      run("enable", codexHome, stateDir);
+      const enabled = run("signed-enable", codexHome, stateDir);
+      assert.equal(enabled.model_provider, "codex-router-signed", name);
+      const stripped = roundTrip(readFileSync(configPath, "utf8"));
+      assert.doesNotMatch(stripped, /codex-router-signed-provider-managed/);
+      writeFileSync(configPath, stripped, { mode: 0o600 });
+
+      const status = run("status", codexHome, stateDir);
+      assert.equal(status.signed_routing, true, name);
+      assert.equal(status.signed_routing_managed, true, name);
+      assert.equal(readFileSync(configPath, "utf8"), stripped, "status never writes");
+
+      // An update reinstalls the markers, and turning the switch on again is
+      // the no-op it always was.
+      assert.equal(run("enable", codexHome, stateDir).signed_routing_managed, true, name);
+      const config = readFileSync(configPath, "utf8");
+      scanTomlDocument(config);
+      assert.equal(rootAssignments(config, "openai_base_url"), 1, `${name}: one base URL`);
+      assert.equal(providerHeaders(config, "codex-router-signed"), 1, name);
+      assert.match(
+        config,
+        /# BEGIN codex-router-signed-provider-managed\n\[model_providers\.codex-router-signed\]/,
+        name,
+      );
+      writeFileSync(configPath, roundTrip(config), { mode: 0o600 });
+      assert.equal(run("signed-enable", codexHome, stateDir).signed_routing_managed, true, name);
+
+      writeFileSync(configPath, roundTrip(readFileSync(configPath, "utf8")), { mode: 0o600 });
+      const disabled = run("signed-disable", codexHome, stateDir);
+      assert.equal(disabled.signed_routing, false, name);
+      assert.equal(disabled.model_provider, "openai", name);
+      const off = readFileSync(configPath, "utf8");
+      scanTomlDocument(off);
+      assert.doesNotMatch(off, /codex-router-signed/, `${name}: the switch table is gone`);
+      assert.doesNotMatch(off, /^model_provider\s*=/m, `${name}: the unset provider stays unset`);
+      assert.match(off, /^model = "gpt-5\.6-sol"$/m, name);
+
+      // Back on and off once more, the way the Control Center switch is used.
+      assert.equal(run("signed-enable", codexHome, stateDir).signed_routing_managed, true, name);
+      writeFileSync(configPath, roundTrip(readFileSync(configPath, "utf8")), { mode: 0o600 });
+      run("disable", codexHome, stateDir);
+      assert.doesNotMatch(readFileSync(configPath, "utf8"), routerResidue, name);
+    } finally {
+      rmSync(codexHome, { recursive: true, force: true });
+    }
+  }
+
+  // Evidence the markers carried and nothing more: an edited table, a note
+  // inside it, or a switch the user moved elsewhere stays refused, and the
+  // refusal writes nothing.
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), "codex-router-stripped-signed-refuse-"));
+  const stateDir = path.join(codexHome, "router-state");
+  const configPath = path.join(codexHome, "config.toml");
+  writeFileSync(configPath, 'model = "gpt-5.6-sol"\n', { mode: 0o600 });
+  try {
+    run("enable", codexHome, stateDir);
+    run("signed-enable", codexHome, stateDir);
+    const stripped = withoutComments(readFileSync(configPath, "utf8"));
+    // The switch table is written last; edit it, not the inert router table.
+    const header = "[model_providers.codex-router-signed]";
+    const inSwitchTable = (edit) =>
+      stripped.slice(0, stripped.indexOf(header)) + edit(stripped.slice(stripped.indexOf(header)));
+    for (const edited of [
+      stripped.replace("supports_websockets = true", "supports_websockets = true\nstream_max_retries = 9"),
+      inSwitchTable((table) => table.replace('wire_api = "responses"', 'wire_api = "responses"\n# keep for OPS-9')),
+      stripped.replace('name = "Codex Router (with ChatGPT)"', 'name = "My proxy"'),
+      inSwitchTable((table) => table.replace(/^base_url = .*$/m, 'base_url = "https://proxy.invalid/v1"')),
+    ]) {
+      writeFileSync(configPath, edited, { mode: 0o600 });
+      assert.equal(run("status", codexHome, stateDir).signed_routing_managed, false);
+      assert.throws(() => run("signed-disable", codexHome, stateDir), /lost ownership.*codex-router-signed/i);
+      assert.throws(() => run("enable", codexHome, stateDir), /lost ownership/i);
+      assert.equal(readFileSync(configPath, "utf8"), edited, "a refusal writes nothing");
+    }
+
+    // A note after the table's last line heads whatever follows it: the table
+    // is still taken back, and turning the switch off keeps the note.
+    writeFileSync(configPath, `${stripped.trimEnd()}\n# keep for OPS-9\n`, { mode: 0o600 });
+    assert.equal(run("status", codexHome, stateDir).signed_routing_managed, true);
+    assert.equal(run("signed-disable", codexHome, stateDir).signed_routing, false);
+    const off = readFileSync(configPath, "utf8");
+    scanTomlDocument(off);
+    assert.doesNotMatch(off, /codex-router-signed/);
+    assert.match(off, /^# keep for OPS-9$/m);
+  } finally {
+    rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
 test("login-free mode safely switches away from the reserved openai provider", () => {
   const codexHome = mkdtempSync(path.join(os.tmpdir(), "codex-router-login-free-openai-"));
   const stateDir = path.join(codexHome, "router-state");
