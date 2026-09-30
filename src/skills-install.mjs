@@ -782,6 +782,25 @@ function stageManagedSkill(source, target, name, token, provenance, { onStaged }
   }
 }
 
+// Copies a validated tree into a directory this operation has already claimed,
+// one top-level entry at a time, so every `cpSync` destination is a path that
+// does not exist yet. Copying the tree root onto the claimed directory relied
+// on `cpSync` merging into an existing directory under `errorOnExist`, and
+// Node 26.10 made that option refuse the directory itself (nodejs/node#64124):
+// every publication failed with ERR_FS_CP_EEXIST naming the target this
+// operation had just created. A pre-existing file is still refused, never
+// overwritten; a pre-existing directory is refused on 26.10 and merged into on
+// older Node, where the digest comparison below then rejects the result.
+function copyIntoClaimedDirectory(source, target) {
+  for (const name of readdirSync(source).sort()) {
+    cpSync(path.join(source, name), path.join(target, name), {
+      recursive: true,
+      force: false,
+      errorOnExist: true,
+    });
+  }
+}
+
 function discardStagedSkill(staged) {
   if (staged && lstat(staged.staging)) {
     // This tree was copied only from the current checkout and never occupied a
@@ -806,7 +825,7 @@ function publishStagedSkill(staged, target, publicationToken, { onPublicationCla
       flag: "wx",
     });
     onPublicationClaimed?.({ target });
-    cpSync(staged.content, target, { recursive: true, force: false, errorOnExist: true });
+    copyIntoClaimedDirectory(staged.content, target);
     const stagedDigest = directoryDigest(staged.content);
     const targetDigest = directoryDigest(target, { ignoreRootEntries: [PUBLISH_MARKER] });
     if (!stagedDigest || stagedDigest !== targetDigest) {

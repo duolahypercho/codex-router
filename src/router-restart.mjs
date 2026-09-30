@@ -9,6 +9,7 @@ import {
 } from "./process-tree.mjs";
 import { routerNodeBinary } from "./node-runtime.mjs";
 import { waitForRouterHealth } from "./router-health.mjs";
+import { homebrewStableNodePath } from "./stable-node.mjs";
 
 const SERVICE_SCRIPT = path.join(SOURCE_ROOT, "src", "service.mjs");
 const SERVICE_STATUS_OPERATION_MS = 10_000;
@@ -102,8 +103,9 @@ async function invokeService(
   // was started from, so process.execPath can name a binary that no longer
   // exists. The refresh spawns already prefer the configured stable runtime;
   // the restart has to as well, or a refresh succeeds and the restart it asks
-  // for dies with ENOENT.
-  const nodeBinary = routerNodeBinary(env);
+  // for dies with ENOENT. Without a configured runtime the fallback is this
+  // process's own Node, named by its formula's opt link rather than the keg.
+  const nodeBinary = homebrewStableNodePath(routerNodeBinary(env));
   return childOwnsOperations
     ? runOperationProcessTree(nodeBinary, [SERVICE_SCRIPT, ...args], { ...options, run })
     : run(nodeBinary, [SERVICE_SCRIPT, ...args], options);

@@ -24,6 +24,7 @@ import {
 import { writePrivateFile, writePrivateJson } from "./file-security.mjs";
 import { routedClientModels } from "./routed-client-models.mjs";
 import { spawnableCommand } from "./spawnable-command.mjs";
+import { stableNodeBinary } from "./stable-node.mjs";
 import { assertStateOwnership } from "./state-owner.mjs";
 import { provisionCursorTunnel } from "./cursor-cloudflare-tunnel.mjs";
 
@@ -173,35 +174,10 @@ function launcherContents() {
   return `#!/bin/sh\n# ${LAUNCHER_MARKER}\nexec '${node}' '${quoted}' "$@"\n`;
 }
 
-export function nodeRuntimePath({
-  execPath = process.execPath,
-  electron = Boolean(process.versions.electron),
-  environment = process.env,
-  exists = existsSync,
-} = {}) {
-  const configured = environment.CODEX_ROUTER_NODE_BIN;
-  if (configured && path.isAbsolute(configured) && exists(configured)) return configured;
-  if (!electron && path.isAbsolute(execPath) && exists(execPath)) return execPath;
-
-  const executable = process.platform === "win32" ? "node.exe" : "node";
-  const directories = new Set(
-    String(environment.PATH || "").split(path.delimiter).filter(path.isAbsolute),
-  );
-  for (const directory of [
-    "/opt/homebrew/bin",
-    "/usr/local/bin",
-    "/usr/bin",
-    process.platform === "win32" && environment.ProgramFiles
-      ? path.join(environment.ProgramFiles, "nodejs")
-      : undefined,
-  ]) {
-    if (directory) directories.add(directory);
-  }
-  for (const directory of directories) {
-    const candidate = path.join(directory, executable);
-    if (exists(candidate)) return candidate;
-  }
-  throw new Error("Node.js is unavailable; install Node.js 22 or newer before setting up Cursor Agent.");
+// The launchers outlive the process that writes them, so they name a Node
+// binary that survives upgrades rather than this process's own.
+export function nodeRuntimePath(options) {
+  return stableNodeBinary(options);
 }
 
 function assertLauncherOwnership() {

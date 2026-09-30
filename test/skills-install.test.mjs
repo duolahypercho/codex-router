@@ -13,7 +13,8 @@ import {
   truncateSync,
   writeFileSync,
 } from "node:fs";
-import { mkdtempSync } from "node:fs";
+import fs, { mkdtempSync } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -106,6 +107,59 @@ test("install is idempotent and refreshes managed skills", () => {
     assert.deepEqual(readdirSync(path.join(home, "skills")).sort(), first);
   } finally {
     rmSync(home, { recursive: true, force: true });
+  }
+});
+
+// Node 26.10 (nodejs/node#64124) made `cpSync` refuse an existing destination
+// directory under `errorOnExist` instead of merging into it, and publication
+// claims its target with mkdir before copying: every install then failed with
+// ERR_FS_CP_EEXIST naming the directory it had just created. Emulate the new
+// rule on whichever Node runs the suite, so an older CI runtime still catches
+// a publication that hands its claimed directory to cpSync.
+test("publication never asks cpSync to merge into the directory it claimed", () => {
+  const home = tempCodexHome();
+  const fakeSource = mkdtempSync(path.join(os.tmpdir(), "codex-skills-source-"));
+  const original = fs.cpSync;
+  const refused = [];
+  fs.cpSync = (source, destination, options = {}) => {
+    if (
+      options.errorOnExist &&
+      !options.force &&
+      statSync(source).isDirectory() &&
+      existsSync(destination)
+    ) {
+      refused.push(destination);
+      const error = new Error(`Target already exists: cp returned EEXIST (${destination} already exists)`);
+      error.code = "ERR_FS_CP_EEXIST";
+      throw error;
+    }
+    return original(source, destination, options);
+  };
+  syncBuiltinESMExports();
+  try {
+    for (const name of ["a-skill", "b-skill"]) {
+      mkdirSync(path.join(fakeSource, name, "references", "deeper"), { recursive: true });
+      writeFileSync(path.join(fakeSource, name, "SKILL.md"), `# ${name}\n`);
+      writeFileSync(path.join(fakeSource, name, "references", "guide.md"), `${name} guide\n`);
+      writeFileSync(path.join(fakeSource, name, "references", "deeper", "notes.md"), "notes\n");
+    }
+    process.env.CODEX_ROUTER_SKILLS_DIR = fakeSource;
+    // A fresh install publishes into a new directory; a second run replaces
+    // every managed skill through the same publication step.
+    assert.equal(installSkills(home, { quiet: true }).installed, 2);
+    assert.equal(installSkills(home, { quiet: true }).installed, 2);
+    assert.deepEqual(refused, []);
+    assert.deepEqual(installedSkillsFresh(home), { fresh: true, stale: [] });
+    assert.equal(
+      readFileSync(path.join(home, "skills", "b-skill", "references", "deeper", "notes.md"), "utf8"),
+      "notes\n",
+    );
+  } finally {
+    fs.cpSync = original;
+    syncBuiltinESMExports();
+    delete process.env.CODEX_ROUTER_SKILLS_DIR;
+    rmSync(home, { recursive: true, force: true });
+    rmSync(fakeSource, { recursive: true, force: true });
   }
 });
 
