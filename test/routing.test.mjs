@@ -129,6 +129,56 @@ async function closeServer(server) {
   await new Promise((resolve) => server.close(resolve));
 }
 
+test("native image histories over 128 MiB can grow without losing the current batch", async () => {
+  const received = [];
+  const native = await mockServer(async (request, response) => {
+    received.push(await bodyJson(request));
+    json(response, 200, { id: "resp_visual", output: [], usage: { input_tokens: 100, output_tokens: 1 } });
+  });
+  const routerPort = await openPort();
+  const router = run("router.mjs", {
+    CODEX_ROUTER_PORT: String(routerPort),
+    CODEX_NATIVE_BASE_URL: `http://127.0.0.1:${native.port}`,
+  });
+  try {
+    await waitFor(`${routerBase(routerPort)}/models`, router);
+    const oldImage = { type: "input_image", image_url: `data:image/png;base64,${"A".repeat(3 * 1024 * 1024)}`, detail: "original" };
+    const history = [];
+    for (let index = 0; index < 47; index++) {
+      history.push(
+        { type: "function_call", call_id: `call_${index}`, name: "view_image", arguments: "{}" },
+        { type: "function_call_output", call_id: `call_${index}`, output: [oldImage] },
+      );
+    }
+    const current = Array.from({ length: 6 }, (_, index) => ({
+      type: "input_image", image_url: `data:image/png;base64,${Buffer.from(`current-${index}`).toString("base64")}`, detail: "original",
+    }));
+    history.push(
+      { type: "function_call", call_id: "current", name: "view_image", arguments: "{}" },
+      { type: "function_call_output", call_id: "current", output: current },
+    );
+    for (let round = 0; round < 2; round++) {
+      const response = await fetch(`${routerBase(routerPort)}/responses`, {
+        method: "POST", headers: { Authorization: "Bearer native-test", "Content-Type": "application/json" },
+        body: JSON.stringify({ model: "native-visual-test", input: history, stream: false }),
+      });
+      assert.equal(response.status, 200, `${await response.text()} ${router.testErrors()}`);
+      assert.deepEqual(received.at(-1).input.at(-1).output, current);
+      assert.ok(JSON.stringify(received.at(-1)).length < 35 * 1024 * 1024);
+      assert.ok(received.at(-1).input.some((item) => item.output?.[0]?.text?.includes("image omitted")));
+      history.unshift(
+        { type: "function_call", call_id: "older", name: "view_image", arguments: "{}" },
+        { type: "function_call_output", call_id: "older", output: [oldImage] },
+      );
+    }
+    assert.match(router.testErrors(), /bounded incoming image history/);
+    assert.doesNotMatch(router.testErrors(), /current-0/);
+  } finally {
+    await stopChild(router);
+    await closeServer(native.server);
+  }
+});
+
 test("router health waits for enabled dependencies and ignores disabled forwarders", async () => {
   const testRoot = mkdtempSync(path.join(os.tmpdir(), "router-health-selection-"));
   writeFileSync(
@@ -9636,6 +9686,7 @@ test("routed compaction bounds the image payload like a routed turn", async () =
       { type: "input_image", image_url: `data:image/png;base64,${"A".repeat(64)}${index}` },
     ],
   }));
+  images.push({ type: "message", role: "assistant", content: [{ type: "output_text", text: "Earlier screenshots were examined." }] });
 
   try {
     await waitFor(`${routerBase(routerPort)}/models`, router);
@@ -9728,6 +9779,7 @@ for (const endpoint of ["responses", "responses/compact"]) {
         },
       ],
     }));
+    input.push({ type: "message", role: "assistant", content: [{ type: "output_text", text: "Earlier screenshots were examined." }] });
 
     try {
       await waitFor(`${routerBase(routerPort)}/models`, router);

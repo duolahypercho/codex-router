@@ -214,3 +214,15 @@ test("a tighter budget on a route with no per-image charge keeps the token check
   const next = boundImagePayload(input, { ...limits, tokensPerImage: 0 });
   assert.ok(next.stats.imageReferencesDropped > 0);
 });
+
+test("a protected current image batch is never cut or resent unchanged", () => {
+  const input = [
+    { type: "function_call", name: "view_image", arguments: "{}" },
+    { type: "function_call_output", output: Array.from({ length: 60 }, tinyImage) },
+  ];
+  const bounded = boundImagePayload(input, { protectPending: true });
+  assert.equal(bounded.input, input);
+  assert.equal(bounded.stats.imageReferencesProtected, 60);
+  assert.equal(bounded.stats.imageReferencesDropped, 0);
+  assert.equal(tighterImageBudget(bounded.stats), undefined);
+});

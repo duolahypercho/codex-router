@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "proper-lockfile": "4.1.2",
+    "stream-json": "3.7.0",
     "undici": "8.11.2"
   },
   "devDependencies": {

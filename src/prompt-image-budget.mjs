@@ -62,6 +62,12 @@ const RECEIPT =
   "content than one request should hold. Re-capture the screen if you need it " +
   "again.]";
 
+export function isImageHistoryAction(item) {
+  return item?.type === "function_call" || item?.type === "custom_tool_call" ||
+    item?.type === "reasoning" ||
+    ((!item?.type || item.type === "message") && item?.role === "assistant");
+}
+
 function dataUrlDecodedBytes(value) {
   const comma = value.indexOf(",");
   if (comma === -1) return 0;
@@ -72,7 +78,7 @@ function dataUrlDecodedBytes(value) {
   return Math.floor((payload * 3) / 4);
 }
 
-function imagePartBytes(part) {
+export function imagePartBytes(part) {
   if (!part || typeof part !== "object" || !IMAGE_PART_TYPES.has(part.type)) return undefined;
   const url = typeof part.image_url === "string" ? part.image_url
     : typeof part.image_url?.url === "string" ? part.image_url.url
@@ -101,6 +107,7 @@ export function boundImagePayload(
     maxTokens = IMAGE_PAYLOAD_BUDGET_TOKENS,
     keepNewest = IMAGE_PAYLOAD_KEEP_NEWEST,
     tokensPerImage = DEFAULT_IMAGE_TOKEN_BOUND,
+    protectPending = false,
   } = {},
 ) {
   const empty = {
@@ -123,6 +130,7 @@ export function boundImagePayload(
   const tokenBudget = Number.isFinite(maxTokens) && maxTokens > 0 ? maxTokens : Infinity;
 
   const references = [];
+  const lastAction = protectPending ? input.findLastIndex(isImageHistoryAction) : -1;
   for (let itemIndex = 0; itemIndex < input.length; itemIndex += 1) {
     for (const [field, parts] of partArrays(input[itemIndex])) {
       for (let partIndex = 0; partIndex < parts.length; partIndex += 1) {
@@ -141,10 +149,13 @@ export function boundImagePayload(
     imageBytesAfter: imageBytesBefore,
     imageTokensBefore,
     imageTokensAfter: imageTokensBefore,
+    imageReferencesProtected: protectPending
+      ? references.filter((reference) => reference.itemIndex >= lastAction).length : 0,
   };
   // Nothing to do when the conversation is inside the budget, and nothing to do
   // when the only images are the ones we promised never to drop.
-  const droppable = references.slice(0, Math.max(0, references.length - Math.max(0, keepNewest)));
+  const droppable = references.slice(0, Math.max(0, references.length - Math.max(0, keepNewest)))
+    .filter((reference) => !protectPending || reference.itemIndex < lastAction);
   if (
     (imageBytesBefore <= maxBytes && imageTokensBefore <= tokenBudget) ||
     droppable.length === 0
@@ -198,6 +209,7 @@ export function boundImagePayload(
       imageTokensBefore,
       imageTokensAfter,
       imageTokensSaved: imageTokensBefore - imageTokensAfter,
+      imageReferencesProtected: stats.imageReferencesProtected,
     },
   };
 }
@@ -231,7 +243,7 @@ export const IMAGE_REJECTION_MAX_RETRIES = 2;
 export function tighterImageBudget(stats, { keepNewest = IMAGE_PAYLOAD_KEEP_NEWEST } = {}) {
   if (!stats) return undefined;
   const remaining = stats.imageReferencesSeen - stats.imageReferencesDropped;
-  if (remaining <= Math.max(0, keepNewest)) return undefined;
+  if (remaining <= Math.max(0, keepNewest, stats.imageReferencesProtected || 0)) return undefined;
   return {
     maxBytes: Math.floor(stats.imageBytesAfter / 2),
     // A route with no per-image charge reports zero tokens; halving that would

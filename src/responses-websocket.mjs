@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { TextDecoder } from "node:util";
+import { boundImagePayload } from "./prompt-image-budget.mjs";
 
 import { authenticatedRoute, secretEqual } from "./caller-auth.mjs";
 import {
@@ -554,8 +555,10 @@ function rateLimitResponseHeaders(headers) {
 }
 
 function continuationState(input, output, maxBytes) {
-  const encoded = Buffer.from(JSON.stringify({ input, output }), "utf8");
-  return encoded.length <= maxBytes ? { input, output } : undefined;
+  const bounded = boundImagePayload([...input, ...output], { protectPending: true });
+  const state = { input: bounded.input.slice(0, input.length), output: bounded.input.slice(input.length) };
+  const encoded = Buffer.from(JSON.stringify(state), "utf8");
+  return encoded.length <= maxBytes ? state : undefined;
 }
 
 function continuationItemKey(item) {
@@ -998,6 +1001,11 @@ class ResponsesWebSocketPeer {
     // `previous_response_id` names its baseline. Keep the current envelope as
     // authority. Inheriting absent fields from an earlier request would turn a
     // meaningful omission (for example no tools) into stale configuration.
+    const boundedImages = boundImagePayload(fullRequest.input, { protectPending: true });
+    fullRequest.input = boundedImages.input;
+    if (boundedImages.stats.imageReferencesDropped > 0) {
+      console.error(`[codex-router] bounded WebSocket image history dropped=${boundedImages.stats.imageReferencesDropped} image-bytes-saved=${boundedImages.stats.imageBytesSaved}`);
+    }
     const encoded = Buffer.from(JSON.stringify(fullRequest), "utf8");
     if (encoded.length > this.options.maxMessageBytes) {
       this.sendError(413, {

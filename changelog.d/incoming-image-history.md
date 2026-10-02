@@ -1,0 +1,1 @@
+- **Long visual Codex sessions can continue without buffering every old image.** Responses requests are parsed incrementally and already-consumed images are replaced by explicit receipts before the 128 MiB retained-body limit is applied, including native GPT traffic. The current image batch stays intact; source and decoded history remain bounded.
