@@ -644,6 +644,10 @@ The service definition still looked correct at every glance.
    That keeps caller-capability rotation/recovery from swapping generations
    underneath an unmanaged foreground router. Direct `src/start.mjs` remains the
    OS-service payload; do not route the managed service through the lifetime lock.
+   Being unmanaged, the foreground supervisor never claims the Windows
+   service-process record: `src/foreground-start.mjs` calls
+   `markForegroundSupervisor()` before it imports `src/start.mjs`, because that
+   record only accepts a command line that names `src/start.mjs`.
 3. **A silent environment adopts the recorded proxy.**
    `inheritedProxyEnvironment()` in `src/proxy-environment.mjs` reads the
    install manifest, and `src/start.mjs` applies it to `process.env` before it
@@ -661,7 +665,8 @@ The service definition still looked correct at every glance.
    normal start reaches the managed service layer, Windows matches POSIX, and
    explicit foreground startup cannot boot while another service lifecycle
    operation owns the shared lock. The same file keeps the silent-environment
-   proxy restore regression.
+   proxy restore regression. `test/startup-cleanup.test.mjs` boots the
+   foreground entry past the Windows service-process record.
 
 ## The gateway is restarted in place; the router is not taken down with it
 

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -7,6 +8,7 @@ import test from "node:test";
 import {
   buildServiceProcessState,
   clearServiceProcessState,
+  shouldRecordServiceProcess,
   serviceProcessOwns,
   writeServiceProcessState,
 } from "../src/service-process.mjs";
@@ -146,4 +148,48 @@ test("service process state is private, readable, and removable", () => {
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
+});
+
+// `codex-router.ps1 start --foreground` enters through src/foreground-start.mjs,
+// whose command line never names src/start.mjs. While the foreground supervisor
+// still claimed this record it failed on every Windows install with a working
+// LiteLLM environment: "could not verify its own start.mjs process identity".
+// The one test that booted that entry stopped at its LiteLLM preflight, so no
+// test reached the claim from there; test/startup-cleanup.test.mjs now does.
+test("only the OS-service payload claims the Windows service-process record", () => {
+  assert.equal(shouldRecordServiceProcess({ platform: "win32", foreground: false }), true);
+  assert.equal(shouldRecordServiceProcess({ platform: "win32", foreground: true }), false);
+  assert.equal(shouldRecordServiceProcess({ platform: "darwin", foreground: false }), false);
+  assert.equal(shouldRecordServiceProcess({ platform: "linux", foreground: false }), false);
+  // The foreground command line cannot pass the entrypoint check, which is why
+  // the supervisor has to withdraw its claim rather than attempt it.
+  assert.equal(
+    buildServiceProcessState({
+      pid: 4242,
+      platform: "win32",
+      identity,
+      commandLine: () => `node "${root}/src/foreground-start.mjs"`,
+      sourceRoot: root,
+      stateDir,
+    }),
+    undefined,
+  );
+});
+
+test("marking the foreground supervisor withdraws its claim on the record", () => {
+  // The mark is module state, so observe it in a fresh process rather than
+  // leaking it into the other tests in this file.
+  const moduleUrl = new URL("../src/service-process.mjs", import.meta.url).href;
+  const script = [
+    `const service = await import(${JSON.stringify(moduleUrl)});`,
+    'const before = service.shouldRecordServiceProcess({ platform: "win32" });',
+    "service.markForegroundSupervisor();",
+    'const after = service.shouldRecordServiceProcess({ platform: "win32" });',
+    "process.stdout.write(JSON.stringify({ before, after }));",
+  ].join("\n");
+  const result = spawnSync(process.execPath, ["--input-type=module", "--eval", script], {
+    encoding: "utf8",
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), { before: true, after: false });
 });

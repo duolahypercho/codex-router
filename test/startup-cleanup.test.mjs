@@ -178,3 +178,56 @@ test("startup failure cleans up children and leaves a pending Antigravity proof 
     rmSync(rootDir, { recursive: true, force: true });
   }
 });
+
+// `codex-router.ps1 start --foreground` and `bin/start --foreground` enter
+// through src/foreground-start.mjs. On Windows that entry used to claim the
+// managed service-process record, whose entrypoint check only accepts a command
+// line naming src/start.mjs, so it died with "could not verify its own start.mjs
+// process identity" before it spawned anything. Boot it the way the test above
+// boots the service payload and require it to get as far as the gateway.
+test("the foreground supervisor boots past the Windows service-process record", { timeout: 120_000 }, async () => {
+  const ports = await Promise.all(Array.from({ length: 6 }, () => freePort()));
+  assert.equal(new Set(ports).size, ports.length);
+  const [routerPort, gatewayPort, oauthPort, apiPort, grokOauthPort, antigravityPort] = ports;
+  const rootDir = mkdtempSync(path.join(os.tmpdir(), "model-router-foreground-start-"));
+  const stateDir = path.join(rootDir, "state");
+  const codexHome = path.join(rootDir, "codex-home");
+  mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+  mkdirSync(codexHome, { recursive: true, mode: 0o700 });
+  writeFileSync(path.join(stateDir, "internal-secret"), "foreground-internal-key-with-sufficient-length\n", { mode: 0o600 });
+  writeFileSync(path.join(stateDir, "caller-secret"), "foreground-caller-key-with-sufficient-length\n", { mode: 0o600 });
+
+  const child = spawn(process.execPath, [path.join(root, "src", "foreground-start.mjs")], {
+    cwd: root,
+    env: {
+      ...process.env,
+      CODEX_HOME: codexHome,
+      MODEL_ROUTER_TARGET: "codex",
+      MODEL_ROUTER_STATE_DIR: stateDir,
+      MODEL_ROUTER_PORT: String(routerPort),
+      MODEL_ROUTER_GATEWAY_PORT: String(gatewayPort),
+      MODEL_ROUTER_OAUTH_PORT: String(oauthPort),
+      MODEL_ROUTER_API_PORT: String(apiPort),
+      MODEL_ROUTER_GROK_OAUTH_PORT: String(grokOauthPort),
+      MODEL_ROUTER_ANTIGRAVITY_OAUTH_PORT: String(antigravityPort),
+      MODEL_ROUTER_LITELLM_BIN: process.execPath,
+    },
+    stdio: ["ignore", "ignore", "pipe"],
+  });
+  let errors = "";
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk) => {
+    errors += chunk;
+  });
+
+  try {
+    const exit = await waitForStartupExit(child, () => errors);
+    assert.equal(exit.signal, null);
+    assert.equal(exit.code, 1, errors);
+    assert.doesNotMatch(errors, /could not verify its own start\.mjs process identity/);
+    assert.match(errors, /startup failed: LiteLLM gateway exited before becoming healthy\./);
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
+    rmSync(rootDir, { recursive: true, force: true });
+  }
+});
