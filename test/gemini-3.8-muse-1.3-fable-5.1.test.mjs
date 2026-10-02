@@ -137,22 +137,32 @@ test("Muse Spark 1.3 routes use auto-tool-choice request profile", () => {
   }
 });
 
-// Command Code documents no effort values for Muse Spark, so 1.3 keeps the
-// single `high` level and no reasoning summaries of its 1.2 route rather than
-// Meta's Responses ladder. Neither version has a Command Code Contributor route.
-test("Command Code Muse Spark 1.3 follows the Command Code 1.2 route", () => {
+// Command Code documents no effort values for Muse Spark, so both 1.3 routes
+// keep the single `high` level and no reasoning summaries of the 1.2 route
+// rather than Meta's Responses ladder. The Contributor tier is a sibling of
+// 1.3, so it is held to that same shape; Command Code still carries no 1.2
+// Contributor route in this catalog.
+test("Command Code Muse Spark 1.3 routes follow the Command Code 1.2 route", () => {
   const model = MODEL_BY_SLUG.get("commandcode/muse-spark-1.3");
+  const contributor = MODEL_BY_SLUG.get("commandcode/muse-spark-1.3-contributor");
   const previous = MODEL_BY_SLUG.get("commandcode/muse-spark-1.2");
   assert.ok(model, "commandcode/muse-spark-1.3 is missing from the registry");
+  assert.ok(
+    contributor,
+    "commandcode/muse-spark-1.3-contributor is missing from the registry",
+  );
   assert.equal(model.upstreamModel, "meta/muse-spark-1.3");
+  assert.equal(contributor.upstreamModel, "meta/muse-spark-1.3-contributor");
   assert.equal(model.listed, true);
-  for (const field of ["contextWindow", "autoCompact", "defaultEffort", "requestProfile"]) {
-    assert.equal(model[field], previous[field], field);
+  assert.equal(contributor.listed, true);
+  for (const route of [model, contributor]) {
+    for (const field of ["contextWindow", "autoCompact", "defaultEffort", "requestProfile"]) {
+      assert.equal(route[field], previous[field], `${route.slug} ${field}`);
+    }
+    assert.deepEqual(route.reasoningLevels, previous.reasoningLevels);
+    assert.deepEqual(route.inputModalities, previous.inputModalities);
+    assert.ok(!route.supportsReasoningSummaries);
   }
-  assert.deepEqual(model.reasoningLevels, previous.reasoningLevels);
-  assert.deepEqual(model.inputModalities, previous.inputModalities);
-  assert.ok(!model.supportsReasoningSummaries);
-  assert.equal(MODEL_BY_SLUG.has("commandcode/muse-spark-1.3-contributor"), false);
   assert.equal(MODEL_BY_SLUG.has("commandcode/muse-spark-1.2-contributor"), false);
 });
 
@@ -164,6 +174,7 @@ test("Muse Spark reseller routes advertise text and image input", () => {
     "meta/muse-spark-1.3-contributor",
     "commandcode/muse-spark-1.2",
     "commandcode/muse-spark-1.3",
+    "commandcode/muse-spark-1.3-contributor",
     "openrouter/muse-spark-1.2",
     "openrouter/muse-spark-1.2-contributor",
     "openrouter/muse-spark-1.3",
