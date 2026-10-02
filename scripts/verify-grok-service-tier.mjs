@@ -1,3 +1,4 @@
+import { writeGrokVersionCli } from "../test/grok-version-fixture.mjs";
 // Synthetic loopback-only proof using the repository's locked LiteLLM runtime.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -44,7 +45,7 @@ const forwarder = spawn(process.execPath, [path.join(root, "src/grok-oauth-forwa
   cwd: root,
   env: { ...process.env, MODEL_ROUTER_INTERNAL_KEY: key, MODEL_ROUTER_GROK_OAUTH_PORT: String(port),
     GROK_CLI_CHAT_PROXY_BASE_URL: `http://127.0.0.1:${upstream.address().port}`,
-    GROK_AUTH_PATH: authPath, GROK_CLI: path.join(temp, "missing-cli"), MODEL_ROUTER_QUIET: "1" },
+    GROK_AUTH_PATH: authPath, GROK_CLI: writeGrokVersionCli(temp), MODEL_ROUTER_QUIET: "1" },
   stdio: ["ignore", "ignore", "pipe"],
 });
 let errors = "";

@@ -1,3 +1,4 @@
+import { writeGrokVersionCli } from "../test/grok-version-fixture.mjs";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -608,7 +609,7 @@ try {
       ...sharedEnv,
       MODEL_ROUTER_GROK_OAUTH_PORT: String(grokPort),
       GROK_CLI_CHAT_PROXY_BASE_URL: `http://127.0.0.1:${xaiPort}`,
-      GROK_CLI: path.join(root, "test", "fixtures", "missing-grok-cli"),
+      GROK_CLI: writeGrokVersionCli(path.dirname(authPath)),
       GROK_AUTH_PATH: authPath,
     },
   );

@@ -1,6 +1,4 @@
-import { execFileSync } from "node:child_process";
 import http from "node:http";
-import os from "node:os";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
@@ -46,7 +44,7 @@ import {
   withProgressOnlyNudge,
 } from "./grok-oauth-turn.mjs";
 import { knownServiceTier } from "./request-diagnostics.mjs";
-import { VERSION } from "./version.mjs";
+import { createGrokClientVersionReader } from "./grok-client-version.mjs";
 import { installStableFetchTransport } from "./fetch-transport.mjs";
 import { createGrokInflightGate, grokInflightLimit, responseWithInflightRelease } from "./grok-inflight.mjs";
 import { grokTransportIdleTimeoutMs } from "./grok-stream-timeouts.mjs";
@@ -157,28 +155,12 @@ export function serviceTierEnabledFor(upstreamModel, models = MODELS) {
   return grokOAuthEntries(upstreamModel, models).some((model) => model.serviceTiers?.length);
 }
 
-function grokClientVersion() {
-  const fallbackVersion = VERSION.match(/\b(\d+\.\d+\.\d+)\b/)?.[1] || "0.0.0";
-  const executable =
-    process.env.GROK_CLI || path.join(process.env.GROK_HOME || path.join(os.homedir(), ".grok"), "bin", "grok");
-  try {
-    const output = execFileSync(executable, ["version"], {
-      encoding: "utf8",
-      timeout: 2_000,
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-    return output.match(/\b(\d+\.\d+\.\d+)\b/)?.[1] || fallbackVersion;
-  } catch {
-    return fallbackVersion;
-  }
-}
+const readGrokClientVersion = createGrokClientVersionReader();
 
-const GROK_CLIENT_VERSION = grokClientVersion();
-
-function grokUserAgent() {
+function grokUserAgent(clientVersion) {
   const platform = { darwin: "macos", win32: "windows" }[process.platform] || process.platform;
   const architecture = { arm64: "aarch64", x64: "x86_64" }[process.arch] || process.arch;
-  return `grok-shell/${GROK_CLIENT_VERSION} (${platform}; ${architecture})`;
+  return `grok-shell/${clientVersion} (${platform}; ${architecture})`;
 }
 
 function contentToText(content) {
@@ -482,7 +464,7 @@ function conversationId(messages) {
   ].join("-");
 }
 
-function upstreamHeaders(accessToken, model, messages, requestId = randomUUID()) {
+function upstreamHeaders(accessToken, model, messages, requestId, clientVersion) {
   const sessionId = conversationId(messages);
   return {
     Authorization: `Bearer ${accessToken}`,
@@ -490,7 +472,7 @@ function upstreamHeaders(accessToken, model, messages, requestId = randomUUID())
     Accept: "text/event-stream",
     "X-XAI-Token-Auth": "xai-grok-cli",
     "x-authenticateresponse": "authenticate-response",
-    "x-grok-client-version": GROK_CLIENT_VERSION,
+    "x-grok-client-version": clientVersion,
     "x-grok-client-identifier": "grok-shell",
     "x-grok-client-mode": "headless",
     "x-grok-conv-id": sessionId,
@@ -499,7 +481,7 @@ function upstreamHeaders(accessToken, model, messages, requestId = randomUUID())
     "x-grok-session-id": sessionId,
     "x-grok-agent-id": randomUUID(),
     "x-grok-turn-idx": "1",
-    "User-Agent": grokUserAgent(),
+    "User-Agent": grokUserAgent(clientVersion),
   };
 }
 
@@ -633,10 +615,11 @@ async function handleChatCompletions(request, response) {
     };
     let release;
     try {
+      const clientVersion = await readGrokClientVersion();
       release = await grokInflight.acquire(controller.signal);
       attempt.response = await fetch(`${GROK_BASE}/responses`, {
         method: "POST",
-        headers: upstreamHeaders(accessToken, model, chat?.messages, attempt.requestId),
+        headers: upstreamHeaders(accessToken, model, chat?.messages, attempt.requestId, clientVersion),
         body: JSON.stringify(body),
         signal: controller.signal,
       });
@@ -1097,7 +1080,10 @@ if (isMain) {
         writeJson(response, status, {
           error: {
             type: status >= 500 ? "api_error" : "invalid_request_error",
-            message: "The Grok OAuth forwarder could not complete the request.",
+            code: error.code === "grok_cli_version_unavailable" ? error.code : undefined,
+            message: error.code === "grok_cli_version_unavailable"
+              ? error.message
+              : "The Grok OAuth forwarder could not complete the request.",
           },
         });
       } else if (!response.writableEnded) {

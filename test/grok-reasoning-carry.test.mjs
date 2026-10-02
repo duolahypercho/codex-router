@@ -1,3 +1,4 @@
+import { writeGrokVersionCli } from "./grok-version-fixture.mjs";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import http from "node:http";
@@ -98,7 +99,7 @@ test("forwarder returns xAI's encrypted reasoning on the next tool-loop request"
     cwd: root, stdio: ["ignore", "ignore", "pipe"],
     env: { ...process.env, MODEL_ROUTER_TARGET: "codex", MODEL_ROUTER_INTERNAL_KEY: INTERNAL_KEY,
       MODEL_ROUTER_GROK_OAUTH_PORT: String(port), GROK_CLI_CHAT_PROXY_BASE_URL: `http://127.0.0.1:${backend.address().port}`,
-      GROK_CLI: path.join(root, "test", "fixtures", "missing-grok-cli"), GROK_AUTH_PATH: authPath,
+      GROK_CLI: writeGrokVersionCli(path.dirname(authPath)), GROK_AUTH_PATH: authPath,
       MODEL_ROUTER_STATE_DIR: path.join(dir, "state"), MODEL_ROUTER_QUIET: "1",
       CODEX_ROUTER_GROK_PROGRESS_ONLY_RETRY: "0" },
   });
