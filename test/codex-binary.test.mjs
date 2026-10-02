@@ -61,6 +61,14 @@ test("returns undefined for empty finder output", () => {
   assert.equal(preferSpawnablePath(["", "   "], "darwin"), undefined);
 });
 
+test("macOS prefers the user's standalone Codex CLI over app-bundled copies", () => {
+  const home = "/Users/example";
+  const candidates = codexCandidatePaths({ platform: "darwin", home });
+  const standalone = path.join(home, ".local", "bin", "codex");
+  assert.ok(candidates.indexOf(standalone) < candidates.indexOf("/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex"));
+  assert.ok(candidates.indexOf(standalone) < candidates.indexOf("/Applications/Codex.app/Contents/Resources/codex"));
+});
+
 test("prefers the Linux desktop app's bundled CLI over a standalone CLI", () => {
   const testRoot = mkdtempSync(path.join(os.tmpdir(), "codex-router-linux-desktop-cli-"));
   const bundled = path.join(testRoot, "resources", "codex");
