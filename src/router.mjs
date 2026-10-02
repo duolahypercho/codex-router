@@ -182,7 +182,7 @@ import {
   GroqToolLimitError,
   GROQ_TOOL_LIMIT_CODE,
 } from "./chat-tool-surface.mjs";
-import { collaborationToolAvailable, pendingInterruptTargets } from "./subagent-completion.mjs";
+import { pendingInterruptPlan, subagentToolAvailable } from "./subagent-completion.mjs";
 import {
   FAILOVER_BUDGET_MS,
   MAX_FAILOVER_HOPS,
@@ -3978,6 +3978,10 @@ async function buildRoutedRequest({ request, payload, route, agedInput }) {
     providerToolCount: Array.isArray(routed.tools) ? routed.tools.length : 0,
     providerToolSchemaBytes: utf8JsonBytes(routed.tools),
   };
+  const interruptPlan = pendingInterruptPlan(
+    needsZenFreeToolCompatibility(route) ? agedInput : input,
+    { namespaces: flattenedNamespaces },
+  );
   return {
     body: Buffer.from(JSON.stringify(routed), "utf8"),
     usageDiagnostics,
@@ -3997,14 +4001,10 @@ async function buildRoutedRequest({ request, payload, route, agedInput }) {
           ...(patchHook ? { mode: "client_hook" } : {}),
         }
       : undefined,
-    // Close finished children the parent left Working. Only when the
-    // collaboration toolset is actually available on this turn.
-    pendingInterrupts: pendingInterruptTargets(
-      needsZenFreeToolCompatibility(route) ? agedInput : input,
-      {
-        namespaces: flattenedNamespaces,
-      },
-    ),
+    // Close finished children the parent left Working, but only when this
+    // request identifies one unambiguous subagent lifecycle namespace.
+    pendingInterrupts: interruptPlan.targets,
+    pendingInterruptNamespace: interruptPlan.namespace,
   };
 }
 
@@ -4098,9 +4098,8 @@ function failoverCandidates({ route, agedInput, flattenedNamespaces, searchContr
       // its smaller window.
       needsImage: inputHasImage(agedInput),
       // Only a turn that can actually spawn children needs a model that has
-      // been through the collaboration proof. A child answering its own turn
-      // does not.
-      needsMultiAgentV2: collaborationToolAvailable(flattenedNamespaces),
+      // passed the multi-agent v2 proof. A child answering its own turn does not.
+      needsMultiAgentV2: subagentToolAvailable(flattenedNamespaces),
       needsSearch: searchContract.needsSearch,
       hasSearchHistory: searchContract.hasSearchHistory,
       requiredSearchMode: searchContract.requiredMode,
@@ -4348,6 +4347,7 @@ async function handleResponses(request, response, requestUrl) {
   let toolResultAging;
   let imageBudget;
   let pendingInterrupts = [];
+  let pendingInterruptNamespace;
   let bufferNativeStream = false;
   let emptyCompletion = false;
   let emptyCompletionRetried = false;
@@ -4593,6 +4593,7 @@ async function handleResponses(request, response, requestUrl) {
       diagnostics.grokStructuredPatch = built.grokStructuredPatch;
       setRoutingDiagnostics(built);
       pendingInterrupts = built.pendingInterrupts;
+      pendingInterruptNamespace = built.pendingInterruptNamespace;
       agedInput = built.agedInput;
       toolResultAging = built.toolResultAging;
       imageBudget = built.imageBudget;
@@ -4645,6 +4646,7 @@ async function handleResponses(request, response, requestUrl) {
       diagnostics.grokStructuredPatch = built.grokStructuredPatch;
       setRoutingDiagnostics(built);
       pendingInterrupts = built.pendingInterrupts;
+      pendingInterruptNamespace = built.pendingInterruptNamespace;
       target = built.target;
       headers = built.headers;
       routedBody = built.body;
@@ -4761,9 +4763,11 @@ async function handleResponses(request, response, requestUrl) {
       flattenedNamespaces = flattenNamespaceTools(payload.tools, {
         bridgeToolSearch: false,
       }).namespaces;
-      pendingInterrupts = pendingInterruptTargets(native.input ?? payload.input, {
+      const interruptPlan = pendingInterruptPlan(native.input ?? payload.input, {
         namespaces: flattenedNamespaces,
       });
+      pendingInterrupts = interruptPlan.targets;
+      pendingInterruptNamespace = interruptPlan.namespace;
       if (!compactV1) delete native.previous_response_id;
       if (substitutedCaller) {
         normalizeNativeForSubstitutedCaller(native, { compact: compactV1 });
@@ -5157,7 +5161,12 @@ async function handleResponses(request, response, requestUrl) {
             route?.slug,
             // A native stream is attached only for the injection, so it must
             // not pick up the routed-provider rewrites on the way through.
-            { pendingInterrupts, injectOnly: !route, effortForModel: subagentEffort },
+            {
+              pendingInterrupts,
+              interruptNamespace: pendingInterruptNamespace,
+              injectOnly: !route,
+              effortForModel: subagentEffort,
+            },
           ),
         );
       }

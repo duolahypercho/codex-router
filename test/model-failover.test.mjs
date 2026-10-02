@@ -4,6 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
+import { flattenNamespaceTools } from "../src/namespace-relay.mjs";
+import { subagentToolAvailable } from "../src/subagent-completion.mjs";
+
 const stateDir = mkdtempSync(path.join(os.tmpdir(), "model-failover-test-"));
 process.env.CODEX_ROUTER_STATE_DIR = stateDir;
 
@@ -581,6 +584,49 @@ test("rankFailoverCandidates keeps a collaboration turn on a v2 model", () => {
     ranked.map((entry) => entry.model.slug),
     ["deepseek/v4"],
   );
+});
+
+test("rankFailoverCandidates keeps colliding native lifecycle namespaces on v2", () => {
+  const namespaces = flattenNamespaceTools([
+    {
+      type: "namespace",
+      name: "collaboration",
+      tools: [
+        { type: "function", name: "spawn_agent" },
+        { type: "function", name: "interrupt_agent" },
+      ],
+    },
+    {
+      type: "namespace",
+      name: "agents",
+      tools: [
+        { type: "function", name: "spawn_agent" },
+        { type: "function", name: "interrupt_agent" },
+      ],
+    },
+  ]).namespaces;
+  const candidates = [
+    model("kimi/k3", "kimi", { multiAgentVersion: "v1" }),
+    model("deepseek/v4", "deepseek", { multiAgentVersion: "v2" }),
+  ];
+  const ranked = rankFailoverCandidates(
+    candidates,
+    { from: FROM, needsMultiAgentV2: subagentToolAvailable(namespaces) },
+  );
+
+  assert.deepEqual(
+    ranked.map((entry) => entry.model.slug),
+    ["deepseek/v4"],
+  );
+  const partial = new Map([
+    ["agents", new Set(["interrupt_agent"])],
+    ["collaboration", new Set(["spawn_agent", "wait_agent"])],
+  ]);
+  const partialRanked = rankFailoverCandidates(
+    candidates,
+    { from: FROM, needsMultiAgentV2: subagentToolAvailable(partial) },
+  );
+  assert.deepEqual(partialRanked.map((entry) => entry.model.slug), ["deepseek/v4"]);
 });
 
 test("rankFailoverCandidates preserves the selected search execution mode", () => {

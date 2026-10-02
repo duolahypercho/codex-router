@@ -5,6 +5,8 @@ import test from "node:test";
 import {
   collectFinishedSubagentState,
   pendingInterruptTargets,
+  pendingInterruptPlan,
+  subagentToolAvailable,
   buildInterruptAgentCall,
   filterAlreadyInterrupted,
 } from "../src/subagent-completion.mjs";
@@ -38,6 +40,16 @@ function finalAnswerMessage(author, body = "done") {
   };
 }
 
+function functionCall(name, namespace, args, callId) {
+  return {
+    type: "function_call",
+    name,
+    ...(namespace ? { namespace } : {}),
+    call_id: callId,
+    arguments: JSON.stringify(args),
+  };
+}
+
 function collaborationNamespaces() {
   return flattenNamespaceTools([
     {
@@ -52,17 +64,66 @@ function collaborationNamespaces() {
   ]).namespaces;
 }
 
+function agentNamespaces(name = "agents") {
+  return flattenNamespaceTools([
+    {
+      type: "namespace",
+      name,
+      tools: [
+        { type: "function", name: "spawn_agent" },
+        { type: "function", name: "wait_agent" },
+        { type: "function", name: "interrupt_agent" },
+      ],
+    },
+  ]).namespaces;
+}
+
+function lifecycleHistory(namespace, sender = "/root/child") {
+  return [
+    functionCall("spawn_agent", namespace, { task_name: "prior" }, `call_${namespace}_spawn`),
+    functionCall("wait_agent", namespace, { targets: ["prior"] }, `call_${namespace}_wait`),
+    finalAnswerMessage(sender),
+  ];
+}
+
+test("subagent lifecycle availability survives supported namespace collisions", () => {
+  const collaboration = collaborationNamespaces();
+  const agents = agentNamespaces();
+  const both = new Map([...collaboration, ...agents]);
+  const unrelated = agentNamespaces("mcp__agents");
+  const input = [finalAnswerMessage("/root/child")];
+
+  assert.equal(subagentToolAvailable(collaboration), true);
+  assert.equal(subagentToolAvailable(agents), true);
+  assert.equal(subagentToolAvailable(both), true);
+  assert.equal(subagentToolAvailable(unrelated), false);
+  assert.deepEqual(pendingInterruptTargets(input, { namespaces: collaboration }), [
+    "/root/child",
+  ]);
+  assert.deepEqual(pendingInterruptTargets(input, { namespaces: agents }), ["/root/child"]);
+  assert.deepEqual(pendingInterruptTargets(input, { namespaces: both }), []);
+  assert.deepEqual(
+    pendingInterruptTargets(input, { namespaces: unrelated }),
+    [],
+  );
+  assert.deepEqual(
+    pendingInterruptTargets(input, {
+      namespaces: new Map([["collaboration", new Set(["spawn_agent"])]]),
+    }),
+    [],
+  );
+});
+
 test("collectFinishedSubagentState finds FINAL_ANSWER authors and skips already interrupted", () => {
   const input = [
     finalAnswerMessage("/root/visual_critic"),
     finalAnswerMessage("/root/metric_tiles"),
-    {
-      type: "function_call",
-      name: "interrupt_agent",
-      namespace: "collaboration",
-      call_id: "call_1",
-      arguments: JSON.stringify({ target: "/root/visual_critic" }),
-    },
+    functionCall(
+      "interrupt_agent",
+      "collaboration",
+      { target: "/root/visual_critic" },
+      "call_1",
+    ),
   ];
   const state = collectFinishedSubagentState(input);
   assert.deepEqual([...state.finished].sort(), [
@@ -73,25 +134,248 @@ test("collectFinishedSubagentState finds FINAL_ANSWER authors and skips already 
   assert.deepEqual(state.pending, ["/root/metric_tiles"]);
 });
 
-test("pendingInterruptTargets requires the collaboration interrupt tool", () => {
-  const input = [finalAnswerMessage("/root/child")];
-  assert.deepEqual(pendingInterruptTargets(input), ["/root/child"]);
-  // Empty inventory on a native deferred-tool turn still queues closes.
+test("collectFinishedSubagentState deduplicates bare and root-qualified agent targets", () => {
+  const input = [
+    finalAnswerMessage("/root/native_regression_probe"),
+    functionCall(
+      "interrupt_agent",
+      "agents",
+      { target: "native_regression_probe" },
+      "call_native_interrupt",
+    ),
+  ];
+  const state = collectFinishedSubagentState(input);
+
+  assert.deepEqual(state.finished, new Set(["/root/native_regression_probe"]));
+  assert.deepEqual(state.interrupted, new Set(["native_regression_probe"]));
+  assert.deepEqual(state.pending, []);
   assert.deepEqual(
-    pendingInterruptTargets(input, { namespaces: new Map() }),
-    ["/root/child"],
-  );
-  // An inventory that omits interrupt_agent must not invent the call.
-  assert.deepEqual(
-    pendingInterruptTargets(input, {
-      namespaces: new Map([["collaboration", new Set(["spawn_agent"])]]),
-    }),
+    pendingInterruptTargets(input, { namespaces: agentNamespaces() }),
     [],
   );
+  const deferred = pendingInterruptPlan(input, { namespaces: new Map() });
+  assert.equal(deferred.namespace, "agents");
+  assert.deepEqual(deferred.targets, []);
+});
+
+test("unrelated namespaced and unqualified interrupt calls cannot suppress a close", () => {
+  const calls = [
+    functionCall(
+      "interrupt_agent",
+      "mcp__files",
+      { target: "/root/child" },
+      "call_mcp_interrupt",
+    ),
+    functionCall(
+      "interrupt_agent",
+      undefined,
+      { target: "/root/child" },
+      "call_unqualified_interrupt",
+    ),
+    functionCall(
+      "agents__interrupt_agent",
+      undefined,
+      { target: "/root/child" },
+      "call_literal_flat_interrupt",
+    ),
+  ];
+
+  for (const call of calls) {
+    const input = [finalAnswerMessage("/root/child"), call];
+    const state = collectFinishedSubagentState(input);
+    assert.deepEqual([...state.interrupted], []);
+    assert.deepEqual(state.pending, ["/root/child"]);
+    assert.deepEqual(
+      pendingInterruptTargets(input, { namespaces: collaborationNamespaces() }),
+      ["/root/child"],
+    );
+  }
+});
+
+test("unqualified flattened-looking agent calls cannot prove an interrupt", () => {
+  const state = collectFinishedSubagentState([
+    finalAnswerMessage("/root/child"),
+    functionCall("agents__interrupt_agent", undefined, { target: "/root/child" }, "call_agents_interrupt"),
+  ]);
+  assert.deepEqual(state.pending, ["/root/child"]);
+});
+
+test("collectFinishedSubagentState deduplicates final-answer target aliases", () => {
+  const input = [
+    finalAnswerMessage("/root/child"),
+    finalAnswerMessage("child"),
+  ];
+  const state = collectFinishedSubagentState(input);
+
+  assert.deepEqual([...state.finished], ["/root/child"]);
+  assert.deepEqual(state.pending, ["/root/child"]);
   assert.deepEqual(
     pendingInterruptTargets(input, { namespaces: collaborationNamespaces() }),
     ["/root/child"],
   );
+});
+
+test("an empty tool inventory infers one lifecycle namespace from typed history", () => {
+  const namespaces = new Map();
+
+  for (const namespace of ["agents", "collaboration"]) {
+    const input = lifecycleHistory(namespace);
+    const plan = pendingInterruptPlan(input, { namespaces });
+    assert.equal(plan.namespace, namespace);
+    assert.deepEqual(plan.targets, ["/root/child"]);
+    assert.deepEqual(pendingInterruptTargets(input, { namespaces }), ["/root/child"]);
+  }
+});
+
+test("unauthorized close injection inventories fail closed and preserve bytes", async () => {
+  const cases = [
+    {
+      label: "missing inventory",
+      namespaces: new Map(),
+      input: [finalAnswerMessage("/root/child")],
+      interruptNamespace: undefined,
+    },
+    {
+      label: "ambiguous native namespaces",
+      namespaces: new Map([...collaborationNamespaces(), ...agentNamespaces()]),
+      input: [finalAnswerMessage("/root/child")],
+      interruptNamespace: "agents",
+    },
+    {
+      label: "partial native namespace conflict",
+      namespaces: new Map([
+        ["collaboration", new Set(["interrupt_agent"])],
+        ["agents", new Set(["spawn_agent", "wait_agent"])],
+      ]),
+      input: lifecycleHistory("agents"),
+      interruptNamespace: "collaboration",
+    },
+    {
+      label: "unrelated nonempty inventory",
+      namespaces: new Map([["mcp__files", new Set(["read_file"])]]),
+      input: lifecycleHistory("agents"),
+      interruptNamespace: "agents",
+    },
+  ];
+  const original =
+    'data: {"type":"response.completed",  "sequence_number":2,"response":{"output":[]}}\n\n';
+
+  for (const { label, namespaces, input, interruptNamespace } of cases) {
+    const plan = pendingInterruptPlan(input, { namespaces });
+    assert.equal(plan.namespace, undefined, label);
+    assert.deepEqual(plan.targets, [], label);
+    const transform = new NamespaceToolCallTransform(
+      namespaces,
+      "text/event-stream",
+      undefined,
+      {
+        pendingInterrupts: ["/root/child"],
+        interruptNamespace,
+        injectOnly: true,
+      },
+    );
+    assert.equal(
+      await collect(Readable.from([original]).pipe(transform)),
+      original,
+      label,
+    );
+  }
+});
+
+test("empty-inventory namespace inference fails closed on conflicting or unknown history", async () => {
+  const inputCases = [
+    {
+      label: "conflicting native namespaces",
+      input: [
+        ...lifecycleHistory("agents").slice(0, 1),
+        ...lifecycleHistory("collaboration").slice(0, 1),
+        finalAnswerMessage("/root/child"),
+      ],
+    },
+    {
+      label: "unknown namespace",
+      input: [
+        functionCall("spawn_agent", "mcp__agents", {}, "call_mcp_spawn"),
+        finalAnswerMessage("/root/child"),
+      ],
+    },
+    {
+      label: "literal flattened-looking default function",
+      input: [
+        functionCall("agents__spawn_agent", undefined, {}, "call_literal_flat_spawn"),
+        finalAnswerMessage("/root/child"),
+      ],
+    },
+    {
+      label: "prose is not typed tool history",
+      input: [
+        {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "Previously called agents.spawn_agent." }],
+        },
+        finalAnswerMessage("/root/child"),
+      ],
+    },
+  ];
+  const completed =
+    'data: {"type":"response.completed",  "sequence_number":2,"response":{"output":[]}}\n\n';
+
+  for (const { label, input } of inputCases) {
+    const plan = pendingInterruptPlan(input, { namespaces: new Map() });
+    assert.equal(plan.namespace, undefined, label);
+    assert.deepEqual(plan.targets, [], label);
+    const transform = new NamespaceToolCallTransform(
+      new Map(),
+      "text/event-stream",
+      undefined,
+      {
+        pendingInterrupts: plan.targets,
+        interruptNamespace: plan.namespace,
+        injectOnly: true,
+      },
+    );
+    assert.equal(
+      await collect(Readable.from([completed]).pipe(transform)),
+      completed,
+      label,
+    );
+  }
+});
+
+test("resolved empty-inventory namespace reaches stream and JSON close injection", async () => {
+  const namespaces = new Map();
+  const input = lifecycleHistory("agents");
+  const plan = pendingInterruptPlan(input, { namespaces });
+  assert.equal(plan.namespace, "agents");
+  assert.deepEqual(plan.targets, ["/root/child"]);
+
+  const stream = await collect(
+    Readable.from([
+      'event: response.completed\ndata: {"type":"response.completed","sequence_number":2,"response":{"output":[]}}\n\n',
+    ]).pipe(
+      new NamespaceToolCallTransform(namespaces, "text/event-stream", undefined, {
+        pendingInterrupts: plan.targets,
+        interruptNamespace: plan.namespace,
+        injectOnly: true,
+      }),
+    ),
+  );
+  assert.match(stream, /"name":"interrupt_agent"/);
+  assert.match(stream, /"namespace":"agents"/);
+
+  const json = await collect(
+    Readable.from(['{"id":"resp","output":[]}']).pipe(
+      new NamespaceToolCallTransform(namespaces, "application/json", undefined, {
+        pendingInterrupts: plan.targets,
+        interruptNamespace: plan.namespace,
+        injectOnly: true,
+      }),
+    ),
+  );
+  const parsed = JSON.parse(json);
+  assert.equal(parsed.output[0].namespace, "agents");
+  assert.deepEqual(JSON.parse(parsed.output[0].arguments), { target: "/root/child" });
 });
 
 test("filterAlreadyInterrupted matches /root/child and child forms", () => {
@@ -326,4 +610,8 @@ test("buildInterruptAgentCall shapes native collaboration call", () => {
     call_id: "call_x",
     arguments: JSON.stringify({ target: "/root/child" }),
   });
+  assert.throws(
+    () => buildInterruptAgentCall("/root/child", { namespace: "mcp__files" }),
+    /namespace is unsupported/,
+  );
 });
