@@ -1,0 +1,1 @@
+- **POSIX router installs and updates now complete when the optional Codex skill refresh fails.** The installer prints a warning and exits successfully instead of aborting under `set -eu`, including when `~/.codex/skills` is a symlink. The skill installer still refuses unsafe directory layouts, and existing skills and symlinks are preserved.
