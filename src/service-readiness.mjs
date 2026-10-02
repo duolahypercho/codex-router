@@ -62,7 +62,7 @@ async function settleRestarts(getServiceRestarts, remainingMs) {
  */
 export async function waitForServiceReadiness({
   platform = process.platform,
-  timeoutMs = 300_000,
+  timeoutMs = 900_000,
   launchGraceMs = TASK_LAUNCH_GRACE_MS,
   pollMs = TASK_STATE_POLL_MS,
   getWindowsTaskState = windowsScheduledTaskState,

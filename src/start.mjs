@@ -27,7 +27,7 @@ import { antigravityOAuthStartupState } from "./antigravity-oauth-status.mjs";
 import { attemptAntigravityProbePromotionAfterReadiness } from "./antigravity-probe-activation.mjs";
 import { spawnableCommand } from "./spawnable-command.mjs";
 import { ensureOllamaHeadless } from "./ollama-runtime.mjs";
-import { venvRuntimeProblem } from "./venv-runtime.mjs";
+import { isTransientVenvProblem, venvRuntimeProblem } from "./venv-runtime.mjs";
 import { dependencyRepairHint } from "./dependency-repair.mjs";
 import { clearServiceProcessState, writeServiceProcessState } from "./service-process.mjs";
 import {
@@ -106,10 +106,19 @@ if (usesBundledVenv) {
     process.platform === "win32" ? "python.exe" : "python",
   );
   const venvProblem = venvRuntimeProblem(venvPython);
-  if (venvProblem) {
+  if (venvProblem && !isTransientVenvProblem(venvProblem)) {
     throw new Error(
       `The LiteLLM virtual environment is broken at ${venvPython} (${venvProblem}). ` +
         `${dependencyFix}.`,
+    );
+  }
+  if (venvProblem) {
+    // The probe timed out, so it never saw the interpreter run or fail. The
+    // gateway's own readiness gate below is the authoritative judge; failing
+    // here takes the whole service down over a scheduling artifact.
+    console.error(
+      `[model-router] warning: the LiteLLM interpreter probe ${venvProblem}; ` +
+        `continuing, and the gateway's own startup decides whether the environment works.`,
     );
   }
 }
@@ -384,15 +393,19 @@ async function main() {
       "--port",
       String(PORTS.gateway),
     ]);
-  // LiteLLM cold starts can take minutes when launchd starves the job under
+  // LiteLLM cold starts can take minutes when the host starves the job under
   // system load; killing it mid-import restarts the import from scratch and
-  // the service loops forever, so wait long enough for a starved import.
+  // the service loops forever, so wait long enough for a starved import. 900s
+  // rather than 300s: measured 2026-09-21, a gateway that took ~1-2 minutes on
+  // an idle host never finished inside 300s while unrelated heavy work ran, and
+  // the Windows task's one-minute heartbeat relaunched start.mjs (killing the
+  // in-flight import) until the whole service was down for half an hour.
   const gatewayHealthy = (child) =>
     waitForHealth(
       "LiteLLM gateway",
       loopback(PORTS.gateway, "/health/liveliness"),
       { Authorization: `Bearer ${internalKey}` },
-      300_000,
+      900_000,
       undefined,
       child,
     );

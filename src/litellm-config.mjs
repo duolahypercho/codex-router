@@ -113,6 +113,24 @@ export function renderLiteLlmConfig() {
   return lines.join("\n");
 }
 
+// The gateway config holds provider keys, so the ACL hardening is attempted on
+// every write -- but it must not decide whether the gateway starts. The helper
+// spawns a Windows PowerShell child with a short timeout, and on a saturated
+// machine that spawn times out (measured 2026-09-21: every start died here
+// while the host was busy with unrelated work, and the router stayed down
+// until this became non-fatal). The file already inherits the owner-only ACL of
+// the state directory it is written into, so the hardening stays best-effort.
+function hardenPrivateFile(target) {
+  try {
+    protectPrivateFile(target);
+  } catch (error) {
+    console.error(
+      `[model-router] warning: could not harden the ACL on ${target}: ` +
+        `${error?.message || error}; continuing (the state directory's own ACL still applies).`,
+    );
+  }
+}
+
 export function writeLiteLlmConfig(target = LITELLM_CONFIG_PATH) {
   // Only guard the managed path. Tests and tooling that render to an explicit
   // temporary file are not touching the live gateway config.
@@ -125,14 +143,14 @@ export function writeLiteLlmConfig(target = LITELLM_CONFIG_PATH) {
   const callbackPath = path.join(path.dirname(target), "grok_service_tier_callback.py");
   const callbackTemp = `${callbackPath}.tmp.${process.pid}`;
   writeFileSync(callbackTemp, readFileSync(new URL("./grok_service_tier_callback.py", import.meta.url)), { mode: 0o600 });
-  protectPrivateFile(callbackTemp);
+  hardenPrivateFile(callbackTemp);
   renameSync(callbackTemp, callbackPath);
-  protectPrivateFile(callbackPath);
+  hardenPrivateFile(callbackPath);
   const temporary = `${target}.tmp.${process.pid}`;
   writeFileSync(temporary, renderLiteLlmConfig(), { encoding: "utf8", mode: 0o600 });
-  protectPrivateFile(temporary);
+  hardenPrivateFile(temporary);
   renameSync(temporary, target);
-  protectPrivateFile(target);
+  hardenPrivateFile(target);
   return target;
 }
 
