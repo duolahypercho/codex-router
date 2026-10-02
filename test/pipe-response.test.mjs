@@ -193,6 +193,11 @@ test("an upstream body that fails mid-stream ends the chunked body instead of re
   // turn, so the failure is stated as a terminal event before the clean end.
   assert.match(result.body, /event: error/);
   assert.match(result.body, /local_router_stream_failed/);
+  // The frame also carries the wire's terminator. Without it a client whose
+  // parser waits for end-of-stream reports "stream closed before
+  // response.completed" / "error decoding response body" instead of the failure
+  // stated right above it (measured 2026-09-21 on a routed client).
+  assert.match(result.body, /data: \[DONE\]/);
 
   // `pipeline` tears the whole chain down; `.pipe()` left the transform alive.
   assert.equal(transform.destroyed, true, "the failure did not destroy the chain");
@@ -260,6 +265,13 @@ test("a mid-line upstream failure still yields a parseable terminal error event"
     /unterminatedevent/.test(result.body),
     false,
     "router protocol text leaked into the model's output span",
+  );
+
+  // A dispatched end marker must follow, so a parser that waits for
+  // end-of-stream sees a complete stream rather than a transport failure.
+  assert.ok(
+    events.some((block) => block.trim() === "data: [DONE]"),
+    "the terminal frame did not carry the wire's end marker",
   );
 });
 
@@ -336,7 +348,12 @@ test("endStreamedResponse states a diagnosed cause instead of the generic one", 
   await close(server);
 
   assert.match(result.body, /event: error/);
-  const data = JSON.parse(result.body.slice(result.body.indexOf("{", result.body.indexOf("event: error"))));
+  // Parse the error frame's own data line (the body's first `data:` line is the
+  // partial delta): the terminal frame now also carries the wire's end marker,
+  // so the body after it is not a bare JSON payload.
+  const errorFrame = result.body.slice(result.body.indexOf("event: error"));
+  const dataLine = errorFrame.split(/\r?\n/).find((line) => line.startsWith("data: "));
+  const data = JSON.parse(dataLine.slice(6));
   // The code is the stable half a client may branch on; only the message
   // gains the cause.
   assert.equal(data.code, "local_router_stream_failed");
@@ -357,7 +374,9 @@ test("endStreamedResponse keeps its generic wording when nothing was diagnosed",
   const result = await readRaw(port);
   await close(server);
 
-  const data = JSON.parse(result.body.slice(result.body.indexOf("{", result.body.indexOf("event: error"))));
+  const errorFrame = result.body.slice(result.body.indexOf("event: error"));
+  const dataLine = errorFrame.split(/\r?\n/).find((line) => line.startsWith("data: "));
+  const data = JSON.parse(dataLine.slice(6));
   assert.equal(data.code, "local_router_stream_failed");
   assert.match(data.message, /lost the upstream response stream/);
 });
