@@ -4,20 +4,28 @@ import { fileURLToPath } from "node:url";
 
 import { protectPrivateFile } from "./file-security.mjs";
 import { grokGatewayStreamTimeoutSeconds } from "./grok-stream-timeouts.mjs";
+import { localTimeoutSeconds } from "./local-timeouts.mjs";
 import { LITELLM_CONFIG_PATH } from "./paths.mjs";
 import { MODELS, providerForModel } from "./model-registry.mjs";
 import { assertStateOwnership } from "./state-owner.mjs";
 import { vertexAdapterForModel } from "./vertex-adapters.mjs";
 
-// Big enough for real Codex turns, small enough that a small model stays
-// entirely on the GPU of a 16 GB machine.
-const LOCAL_NUM_CTX = 16384;
+function positiveIntegerEnv(name, fallback) {
+  const raw = process.env[name];
+  if (raw === undefined) return fallback;
+  if (!/^[0-9]+$/.test(raw) || !Number.isSafeInteger(Number(raw)) || Number(raw) < 1) {
+    throw new Error(name + " must be a positive integer; received " + JSON.stringify(raw));
+  }
+  return Number(raw);
+}
 
 function yamlString(value) {
   return JSON.stringify(String(value));
 }
 
 export function renderLiteLlmConfig() {
+  const localNumCtx = positiveIntegerEnv("MODEL_ROUTER_LOCAL_NUM_CTX", 16384);
+  const localTimeout = localTimeoutSeconds();
   const lines = ["model_list:"];
   for (const model of MODELS) {
     const provider = providerForModel(model);
@@ -35,7 +43,9 @@ export function renderLiteLlmConfig() {
         "    litellm_params:",
         `      model: ${yamlString(`ollama_chat/${model.upstreamModel}`)}`,
         `      api_base: ${yamlString(`os.environ/${provider.baseUrlEnv}_ROOT`)}`,
-        `      num_ctx: ${LOCAL_NUM_CTX}`,
+        `      num_ctx: ${localNumCtx}`,
+        `      timeout: ${localTimeout}`,
+        `      stream_timeout: ${localTimeout}`,
         // LiteLLM defaults to two router retries and currently maps Ollama's
         // deterministic context-window rejection to APIConnectionError. That
         // makes one prompt hit the local runtime three times before Codex sees

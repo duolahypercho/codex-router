@@ -2390,8 +2390,8 @@ xAI and Codex has its own idle limit. The router's post-prologue stall guard
    the forwarder's xAI pool from that one value. Compaction is a hop too: it is
    not streamed, so its headers arrive only after the whole generation, and it
    uses the same pool and deployment bound as a turn. A new hop on the Grok path
-   takes its bound from there. The shared Undici pool keeps its default for
-   every other provider.
+   takes its bound from there. Local Ollama uses its own pool sized from
+   MODEL_ROUTER_LOCAL_TIMEOUT; other providers keep the shared Undici default.
 2. **Codex's idle timer is fed a lifecycle event, never a comment.** Codex
    abandons a stream after five minutes without a parsed data event and sends
    the whole turn again, which bills the provider twice; an SSE comment or a
@@ -2401,9 +2401,10 @@ xAI and Codex has its own idle limit. The router's post-prologue stall guard
    never after a terminal event, and as the last pipeline stage so no router
    transform parses it. It never carries text, reasoning, or a tool item: the
    rule against router-authored transcript content stands.
-3. **Only Grok OAuth routes get either.** Other providers keep their stall bound
-   and receive no heartbeat. Widening either needs the same proof: a router test
-   that a silent stream survives, and one that another route is unchanged.
+3. **Only Grok OAuth gets the heartbeat and stall guard.** Local Ollama gets
+   the long-idle transport without a heartbeat; other providers keep their
+   shared transport and receive no heartbeat. Widening either mechanism needs
+   targeted tests that the chosen route changes and another route does not.
 4. Coverage lives in `test/grok-stream-timeouts.test.mjs`,
    `test/responses-heartbeat.test.mjs`, `test/fetch-transport.test.mjs`, and the
    Grok cases in `test/empty-completion-router.test.mjs`.
