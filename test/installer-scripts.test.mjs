@@ -592,7 +592,7 @@ test(
       const result = spawnSync("sh", ["-s"], {
         cwd: fixture,
         encoding: "utf8",
-        env: { ...process.env, PATH: `${bin}:${process.env.PATH || ""}` },
+        env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH || ""}` },
         input: `${posixVenvHelper()}\nensure_uv_venv\n`,
       });
       assert.equal(result.status, 0, result.stderr);
