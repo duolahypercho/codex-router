@@ -385,6 +385,30 @@ function streamEvent(response, translator, event, state) {
   }
 }
 
+// The ChatGPT backend refuses non-stream requests, so every turn
+// streams upstream and a non-stream caller gets the stream folded into one
+// Responses object. Only a terminal completed/incomplete event yields it; an
+// upstream failure or a stream that ends without one is an error, never a
+// synthetic message.
+async function aggregateStream(upstream) {
+  const items = [];
+  for await (const event of sseFrames(upstream.body)) {
+    if (["response.failed", "response.error", "error"].includes(event?.type)) {
+      const error = new Error(event?.error?.message || event?.response?.error?.message || "The routed model failed.");
+      error.status = 502;
+      throw error;
+    }
+    if (event?.type === "response.output_item.done" && event.item) items.push(event.item);
+    if (event?.type === "response.completed" || event?.type === "response.incomplete") {
+      const done = event.response || {};
+      return { ...done, output: Array.isArray(done.output) && done.output.length ? done.output : items };
+    }
+  }
+  const error = new Error("The routed model's stream ended before the response completed.");
+  error.status = 502;
+  throw error;
+}
+
 async function handleStream(request, response, upstream, requestedModel) {
   response.writeHead(200, {
     "content-type": "text/event-stream; charset=utf-8",
@@ -457,11 +481,13 @@ export async function handleClaudeRequest(request, response, route, { responsesU
     const requestedModel = String(body.model);
     const payload = claudeMessagesToResponses(body);
     payload.model = assertPublishedModel(payload.model, routedModels);
+    const callerStreams = payload.stream;
+    payload.stream = true;
     const controller = new AbortController();
     request.once("aborted", () => controller.abort());
     const upstream = await directLoopbackFetch(responsesUrl, {
       method: "POST",
-      headers: { "content-type": "application/json", accept: payload.stream ? "text/event-stream" : "application/json" },
+      headers: { "content-type": "application/json", accept: "text/event-stream" },
       body: JSON.stringify(payload),
       signal: controller.signal,
     });
@@ -470,8 +496,8 @@ export async function handleClaudeRequest(request, response, route, { responsesU
       writeClaudeError(response, upstream.status, error.type, error.message);
       return true;
     }
-    if (payload.stream) await handleStream(request, response, upstream, requestedModel);
-    else writeJson(response, 200, responsesToClaudeMessage(await upstream.json(), requestedModel));
+    if (callerStreams) await handleStream(request, response, upstream, requestedModel);
+    else writeJson(response, 200, responsesToClaudeMessage(await aggregateStream(upstream), requestedModel));
   } catch (error) {
     if (!response.headersSent) {
       writeClaudeError(

@@ -16,6 +16,12 @@ function listen(server) {
 
 function close(server) { return new Promise((resolve) => server.close(resolve)); }
 
+function sse(response, events, { end = true } = {}) {
+  response.writeHead(200, { "content-type": "text/event-stream" });
+  for (const event of events) response.write(`data: ${JSON.stringify(event)}\n\n`);
+  if (end) response.end();
+}
+
 function routedModels() {
   return {
     engine: "test",
@@ -68,13 +74,12 @@ test("Anthropic Messages requests re-enter the canonical Responses path with too
     const chunks = [];
     for await (const chunk of request) chunks.push(chunk);
     received = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-    response.writeHead(200, { "content-type": "application/json" });
-    response.end(JSON.stringify({
+    sse(response, [{ type: "response.completed", response: {
       id: "resp_test",
       status: "completed",
       output: [{ type: "function_call", call_id: "call_2", name: "write_file", arguments: '{"path":"b"}' }],
       usage: { input_tokens: 9, output_tokens: 3, total_tokens: 12 },
-    }));
+    } }]);
   });
   try {
     const response = await fetch(`${app.baseUrl}/v1/messages`, {
@@ -176,4 +181,55 @@ test("tool and image blocks map to the canonical request shape", () => {
   });
   assert.equal(converted.model, "deepseek/test");
   assert.equal(converted.input[0].content[1].image_url, "data:image/png;base64,AA==");
+});
+// The ChatGPT backend refuses stream:false, so a non-stream caller
+// (Claude Code's /model validation) is served from an upstream stream.
+async function nonStream(events) {
+  let received;
+  const app = await fixture(async (request, response) => {
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk);
+    received = { body: JSON.parse(Buffer.concat(chunks).toString("utf8")), accept: request.headers.accept };
+    sse(response, events);
+  });
+  try {
+    const response = await fetch(`${app.baseUrl}/v1/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "codex_router/anthropic/openai/gpt-test", max_tokens: 1, messages: [{ role: "user", content: "hi" }] }),
+    });
+    return { status: response.status, body: await response.json(), received };
+  } finally {
+    await app.close();
+  }
+}
+
+test("a non-stream request streams upstream and returns one message after completion", async () => {
+  const item = { type: "message", role: "assistant", content: [{ type: "output_text", text: "hi" }] };
+  const { status, body, received } = await nonStream([
+    { type: "response.created", response: { id: "resp_ns" } },
+    { type: "response.output_item.done", item },
+    // The ChatGPT backend can complete with an empty output list.
+    { type: "response.completed", response: { id: "resp_ns", status: "completed", output: [], usage: { input_tokens: 10, output_tokens: 1, input_tokens_details: { cached_tokens: 8 } } } },
+  ]);
+  assert.equal(received.body.stream, true);
+  assert.equal(received.accept, "text/event-stream");
+  assert.equal(status, 200);
+  assert.equal(body.type, "message");
+  assert.deepEqual(body.content, [{ type: "text", text: "hi" }]);
+  assert.equal(body.stop_reason, "end_turn");
+  assert.deepEqual(body.usage, { input_tokens: 2, output_tokens: 1, cache_read_input_tokens: 8 });
+});
+
+test("a non-stream request returns an error, never a message, on upstream failure or early EOF", async () => {
+  const failed = await nonStream([{ type: "response.failed", response: { error: { message: "backend said no" } } }]);
+  assert.equal(failed.status, 502);
+  assert.equal(failed.body.type, "error");
+  assert.match(failed.body.error.message, /backend said no/);
+  const truncated = await nonStream([
+    { type: "response.output_item.done", item: { type: "message", role: "assistant", content: [{ type: "output_text", text: "partial" }] } },
+  ]);
+  assert.equal(truncated.status, 502);
+  assert.equal(truncated.body.type, "error");
+  assert.match(truncated.body.error.message, /ended before the response completed/);
 });
