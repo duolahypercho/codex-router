@@ -177,3 +177,39 @@ test("tool and image blocks map to the canonical request shape", () => {
   assert.equal(converted.model, "deepseek/test");
   assert.equal(converted.input[0].content[1].image_url, "data:image/png;base64,AA==");
 });
+
+test("Claude session identity reaches the Responses hop as the session_id affinity header", async () => {
+  const seen = [];
+  const app = await fixture(async (request, response) => {
+    for await (const _chunk of request) { /* drain */ }
+    seen.push(request.headers.session_id);
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({
+      id: "resp_test", status: "completed",
+      output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "ok" }] }],
+      usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+    }));
+  });
+  const send = (headers) => fetch(`${app.baseUrl}/v1/messages`, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...headers },
+    body: JSON.stringify({
+      model: "codex_router/anthropic/openai/gpt-test",
+      max_tokens: 16,
+      messages: [{ role: "user", content: "hi" }],
+    }),
+  }).then((response) => assert.equal(response.status, 200));
+  try {
+    const a = "0b9f1c2e-1111-4a5b-8c7d-000000000001";
+    const b = "0b9f1c2e-2222-4a5b-8c7d-000000000002";
+    await send({ "x-claude-code-session-id": a });
+    await send({ "x-claude-code-session-id": a });
+    await send({ "x-claude-code-session-id": b });
+    await send({ "x-claude-code-session-id": a, "x-claude-code-agent-id": "agent-7" });
+    await send({});
+    await send({ "x-claude-code-session-id": "bad value with spaces" });
+    assert.deepEqual(seen, [a, a, b, `${a}:agent-7`, undefined, undefined]);
+  } finally {
+    await app.close();
+  }
+});

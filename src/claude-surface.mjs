@@ -13,6 +13,27 @@ export const CLAUDE_ROUTE_PREFIX = "/anthropic";
 const MAX_BODY_BYTES = 32 * 1024 * 1024;
 const PING_INTERVAL_MS = 15_000;
 
+// ChatGPT derives prompt-cache affinity from the Responses `session_id` header
+// (openai/codex core/src/client.rs). Claude Code names its conversation in
+// X-Claude-Code-Session-Id on every request; a subagent adds
+// x-claude-code-agent-id and runs its own conversation, so it gets its own key
+// (as a non-root Codex agent gets its own session id). Without a key each turn
+// lands on an arbitrary cache shard and warm turns miss. Only the native path
+// forwards `session_id`; routed providers never see it.
+const AFFINITY_PART = /^[A-Za-z0-9._-]{1,128}$/;
+
+function singleHeader(headers, name) {
+  const value = headers?.[name];
+  return typeof value === "string" ? value.trim() : undefined;
+}
+
+export function claudeCacheAffinityKey(headers) {
+  const session = singleHeader(headers, "x-claude-code-session-id");
+  if (!session || !AFFINITY_PART.test(session)) return undefined;
+  const agent = singleHeader(headers, "x-claude-code-agent-id");
+  return agent && AFFINITY_PART.test(agent) ? `${session}:${agent}` : session;
+}
+
 export function isClaudeRoute(route) {
   return typeof route === "string" &&
     (route === CLAUDE_ROUTE_PREFIX || route.startsWith(`${CLAUDE_ROUTE_PREFIX}/`));
@@ -457,11 +478,16 @@ export async function handleClaudeRequest(request, response, route, { responsesU
     const requestedModel = String(body.model);
     const payload = claudeMessagesToResponses(body);
     payload.model = assertPublishedModel(payload.model, routedModels);
+    const affinityKey = claudeCacheAffinityKey(request.headers);
     const controller = new AbortController();
     request.once("aborted", () => controller.abort());
     const upstream = await directLoopbackFetch(responsesUrl, {
       method: "POST",
-      headers: { "content-type": "application/json", accept: payload.stream ? "text/event-stream" : "application/json" },
+      headers: {
+        "content-type": "application/json",
+        accept: payload.stream ? "text/event-stream" : "application/json",
+        ...(affinityKey ? { session_id: affinityKey } : {}),
+      },
       body: JSON.stringify(payload),
       signal: controller.signal,
     });
