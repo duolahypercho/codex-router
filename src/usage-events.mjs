@@ -198,6 +198,10 @@ export function recordUsageEvent({
   reasoningEffort,
   providerToolCount,
   providerToolSchemaBytes,
+  // Hashed cache-affinity session and router-internal ingress surface. See
+  // affinityDiagnostics(); optional so historical rows keep their shape.
+  affinity,
+  surface,
   at = Date.now(),
 }) {
   const diagnostics = usageDiagnosticMetadata({
@@ -207,6 +211,8 @@ export function recordUsageEvent({
     reasoningEffort,
     providerToolCount,
     providerToolSchemaBytes,
+    affinity,
+    surface,
   });
   const event = {
     ...serviceTierMetadata({

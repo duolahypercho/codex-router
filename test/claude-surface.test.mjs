@@ -182,6 +182,7 @@ test("Claude session identity reaches the Responses hop as the session_id affini
   const seen = [];
   const app = await fixture(async (request, response) => {
     for await (const _chunk of request) { /* drain */ }
+    assert.equal(request.headers["session-id"], request.headers.session_id);
     seen.push(request.headers.session_id);
     response.writeHead(200, { "content-type": "application/json" });
     response.end(JSON.stringify({

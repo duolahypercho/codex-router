@@ -19,7 +19,7 @@ const PING_INTERVAL_MS = 15_000;
 // x-claude-code-agent-id and runs its own conversation, so it gets its own key
 // (as a non-root Codex agent gets its own session id). Without a key each turn
 // lands on an arbitrary cache shard and warm turns miss. Only the native path
-// forwards `session_id`; routed providers never see it.
+// forwards the session headers; routed providers never see them.
 const AFFINITY_PART = /^[A-Za-z0-9._-]{1,128}$/;
 
 function singleHeader(headers, name) {
@@ -486,7 +486,10 @@ export async function handleClaudeRequest(request, response, route, { responsesU
       headers: {
         "content-type": "application/json",
         accept: payload.stream ? "text/event-stream" : "application/json",
-        ...(affinityKey ? { session_id: affinityKey } : {}),
+        // Codex has sent both spellings and the native path forwards both.
+        ...(affinityKey ? { session_id: affinityKey, "session-id": affinityKey } : {}),
+        // Router-internal ingress tag for usage diagnostics; not forwarded upstream.
+        "x-codex-router-surface": "claude",
       },
       body: JSON.stringify(payload),
       signal: controller.signal,

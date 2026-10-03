@@ -233,6 +233,7 @@ import {
 import { recordUsageEvent } from "./usage-events.mjs";
 import { createRequestProgress } from "./request-progress.mjs";
 import {
+  affinityDiagnostics,
   grokOauthIngressContextBytes,
   knownServiceTier,
   usageDiagnosticMetadata,
@@ -4329,7 +4330,7 @@ async function handleResponses(request, response, requestUrl) {
     activity.progress.headers();
     return upstream;
   };
-  const diagnostics = { requestId: activity.requestId };
+  const diagnostics = { requestId: activity.requestId, ...affinityDiagnostics(request.headers) };
   let clientGone = false;
   let requestedModel = "";
   let route;
@@ -5870,7 +5871,7 @@ async function handleNativeRequest(request, response, requestUrl, defaultModel) 
   const startedAt = Date.now();
   const controller = new AbortController();
   const activity = beginRequestActivity({ request, response, controller });
-  const diagnostics = { requestId: activity.requestId };
+  const diagnostics = { requestId: activity.requestId, ...affinityDiagnostics(request.headers) };
   let clientGone = false;
   let requestedModel = defaultModel;
   let servingProvider = "openai";

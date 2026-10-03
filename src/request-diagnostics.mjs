@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 // Bounded request diagnostics for usage events. Counts, billing, routes, and
 // retries stay in usage-events.mjs; this module names a request and records
 // small routing-shape facts such as reasoning effort, routed tool count/schema
@@ -125,6 +126,24 @@ export function serviceTierMetadata({
   };
 }
 
+const AFFINITY_FINGERPRINT = /^[a-f0-9]{12}$/;
+const KNOWN_SURFACES = new Set(["claude"]);
+
+// Non-reversible 12-hex fingerprint of the caller's cache-affinity session, so
+// usage rows can be grouped per conversation (warm-turn cache analysis) without
+// recording the session id itself. `surface` names a router-internal ingress
+// (the Claude Messages surface tags its loopback hop); direct callers have none.
+export function affinityDiagnostics(headers = {}) {
+  const raw = ["session_id", "session-id", "thread-id"]
+    .map((name) => headers[name])
+    .find((value) => typeof value === "string" && value.trim());
+  const surface = headers["x-codex-router-surface"];
+  return {
+    ...(raw ? { affinity: createHash("sha256").update(raw.trim()).digest("hex").slice(0, 12) } : {}),
+    ...(KNOWN_SURFACES.has(surface) ? { surface } : {}),
+  };
+}
+
 export function usageDiagnosticMetadata({
   requestId,
   contextBytes,
@@ -133,6 +152,8 @@ export function usageDiagnosticMetadata({
   reasoningEffort,
   providerToolCount,
   providerToolSchemaBytes,
+  affinity,
+  surface,
 } = {}) {
   const safeRequestId = safeDiagnosticRequestId(requestId);
   const safeContextBytes = sanitizeContextBytes(contextBytes);
@@ -148,5 +169,7 @@ export function usageDiagnosticMetadata({
     ...(safeEffort ? { reasoningEffort: safeEffort } : {}),
     ...(safeToolCount !== undefined ? { providerToolCount: safeToolCount } : {}),
     ...(safeToolSchemaBytes !== undefined ? { providerToolSchemaBytes: safeToolSchemaBytes } : {}),
+    ...(AFFINITY_FINGERPRINT.test(affinity || "") ? { affinity } : {}),
+    ...(KNOWN_SURFACES.has(surface) ? { surface } : {}),
   };
 }

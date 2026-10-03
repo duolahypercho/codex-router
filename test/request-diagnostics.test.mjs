@@ -252,3 +252,17 @@ test("client hook diagnostic mode is optional, constrained, and content-free", (
   assert.deepEqual(usageDiagnosticMetadata({ grokStructuredPatch: safe }), { grokStructuredPatch: safe });
   for (const mode of ["private prompt", {}, 1, null]) assert.equal(sanitizeGrokStructuredPatch({ ...safe, mode }), undefined);
 });
+
+test("affinity diagnostics fingerprint the cache session without recording it", async () => {
+  const { affinityDiagnostics, usageDiagnosticMetadata } = await import("../src/request-diagnostics.mjs");
+  const id = "0b9f1c2e-1111-4a5b-8c7d-000000000001";
+  const a = affinityDiagnostics({ session_id: id, "x-codex-router-surface": "claude" });
+  assert.match(a.affinity, /^[a-f0-9]{12}$/);
+  assert.equal(a.surface, "claude");
+  assert.ok(!JSON.stringify(a).includes(id));
+  assert.equal(affinityDiagnostics({ "session-id": id }).affinity, a.affinity);
+  assert.notEqual(affinityDiagnostics({ session_id: `${id}:agent-1` }).affinity, a.affinity);
+  assert.deepEqual(affinityDiagnostics({ "x-codex-router-surface": "other" }), {});
+  assert.deepEqual(usageDiagnosticMetadata({ affinity: "not-hex", surface: "other" }), {});
+  assert.deepEqual(usageDiagnosticMetadata({ affinity: a.affinity, surface: "claude" }), a);
+});
