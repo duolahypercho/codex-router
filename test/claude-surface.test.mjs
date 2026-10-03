@@ -182,8 +182,7 @@ test("Claude session identity reaches the Responses hop as the session_id affini
   const seen = [];
   const app = await fixture(async (request, response) => {
     for await (const _chunk of request) { /* drain */ }
-    assert.equal(request.headers["session-id"], request.headers.session_id);
-    seen.push(request.headers.session_id);
+    seen.push([request.headers.session_id, request.headers["session-id"]]);
     response.writeHead(200, { "content-type": "application/json" });
     response.end(JSON.stringify({
       id: "resp_test", status: "completed",
@@ -207,9 +206,16 @@ test("Claude session identity reaches the Responses hop as the session_id affini
     await send({ "x-claude-code-session-id": a });
     await send({ "x-claude-code-session-id": b });
     await send({ "x-claude-code-session-id": a, "x-claude-code-agent-id": "agent-7" });
+    await send({ "x-claude-code-session-id": a, "x-claude-code-agent-id": "agent-7" });
     await send({});
     await send({ "x-claude-code-session-id": "bad value with spaces" });
-    assert.deepEqual(seen, [a, a, b, `${a}:agent-7`, undefined, undefined]);
+    for (const [underscore, dash] of seen) assert.equal(dash, underscore);
+    const keys = seen.map(([key]) => key);
+    assert.deepEqual(keys.slice(0, 3), [a, a, b]);
+    assert.match(keys[3], /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    assert.notEqual(keys[3], a);
+    assert.equal(keys[4], keys[3]);
+    assert.deepEqual(keys.slice(5), [undefined, undefined]);
   } finally {
     await app.close();
   }

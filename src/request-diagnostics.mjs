@@ -131,7 +131,7 @@ const KNOWN_SURFACES = new Set(["claude"]);
 
 // Non-reversible 12-hex fingerprint of the caller's cache-affinity session, so
 // usage rows can be grouped per conversation (warm-turn cache analysis) without
-// recording the session id itself. `surface` names a router-internal ingress
+// writing the session id to the usage log (it is visible in memory to /activity). `surface` names a router-internal ingress
 // (the Claude Messages surface tags its loopback hop); direct callers have none.
 export function affinityDiagnostics(headers = {}) {
   const raw = ["session_id", "session-id", "thread-id"]

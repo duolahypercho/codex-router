@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import { GenerateTranslator } from "./commandcode-stream.mjs";
 import { directLoopbackFetch } from "./fetch-transport.mjs";
@@ -27,11 +27,23 @@ function singleHeader(headers, name) {
   return typeof value === "string" ? value.trim() : undefined;
 }
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// Codex only ever sends a UUID as session_id, so every key we send is one: a
+// main-thread UUID passes through; a subagent (or non-UUID id) gets a stable
+// name-based UUID of `session:agent`.
+function derivedUuid(name) {
+  const h = createHash("sha256").update(name).digest("hex");
+  const variant = ((parseInt(h[16], 16) & 0x3) | 0x8).toString(16);
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-5${h.slice(13, 16)}-${variant}${h.slice(17, 20)}-${h.slice(20, 32)}`;
+}
+
 export function claudeCacheAffinityKey(headers) {
   const session = singleHeader(headers, "x-claude-code-session-id");
   if (!session || !AFFINITY_PART.test(session)) return undefined;
   const agent = singleHeader(headers, "x-claude-code-agent-id");
-  return agent && AFFINITY_PART.test(agent) ? `${session}:${agent}` : session;
+  if (agent && AFFINITY_PART.test(agent)) return derivedUuid(`${session}:${agent}`);
+  return UUID.test(session) ? session : derivedUuid(session);
 }
 
 export function isClaudeRoute(route) {
