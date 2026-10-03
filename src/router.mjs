@@ -1210,6 +1210,20 @@ function consoleGoCompatibleInput(input, route) {
   return agentMessagesAsUserMessages(input);
 }
 
+// `agent_message` is a Codex-internal collaboration item, not part of the
+// public Responses schema a user-registered compatible endpoint implements.
+// Its readable payload has already been recovered by normalizeRoutedAgentInput;
+// preserve that content as an ordinary user message at this generic boundary.
+// Built-in providers keep their measured contracts and existing compatibility
+// gates above.
+function genericResponsesCompatibleInput(input, route) {
+  const provider = providerForModel(route);
+  if (provider?.generic !== true || provider.protocol !== "openai-responses") {
+    return input;
+  }
+  return agentMessagesAsUserMessages(input);
+}
+
 function applyZenFreeIncludeCompatibility(payload, route) {
   if (!needsZenFreeToolCompatibility(route)) return payload;
   const include = stripUnissuedEncryptedReasoningInclude(payload.include);
@@ -2979,9 +2993,12 @@ async function summarizeWith(
   signal,
   { searchContract } = {},
 ) {
-  const compatibleInput = consoleGoCompatibleInput(
-    zenFreeCompatibleInput(
-      normalizeProviderAppToolOutputs(aged.input),
+  const compatibleInput = genericResponsesCompatibleInput(
+    consoleGoCompatibleInput(
+      zenFreeCompatibleInput(
+        normalizeProviderAppToolOutputs(aged.input),
+        route,
+      ),
       route,
     ),
     route,
@@ -3627,9 +3644,12 @@ async function buildRoutedRequest({ request, payload, route, agedInput }) {
   const clientTools = chatCompletionsProvider || deepSeekResponses || consoleGoResponsesCompatibility
     ? restorePreflattenedToolNamespaces(payload.tools, payload.client_metadata)
     : payload.tools;
-  const compatibleInput = consoleGoCompatibleInput(
-    zenFreeCompatibleInput(
-      normalizeProviderAppToolOutputs(agedInput),
+  const compatibleInput = genericResponsesCompatibleInput(
+    consoleGoCompatibleInput(
+      zenFreeCompatibleInput(
+        normalizeProviderAppToolOutputs(agedInput),
+        route,
+      ),
       route,
     ),
     route,
