@@ -77,6 +77,7 @@ import {
   normalizeOpenAIRequest,
 } from "./openai-adapters.mjs";
 import { threadIdFromHeaders } from "./codex-session-names.mjs";
+import { applyAimlapiAttributionHeaders } from "./aimlapi-attribution.mjs";
 import { applyOpenCodeSessionHeaders, isOpenCodeProvider } from "./opencode-session.mjs";
 import { clampOpenCodeMessageContent } from "./opencode-message-compat.mjs";
 import {
@@ -1611,6 +1612,9 @@ function upstreamHeaders(requestHeaders, body, apiKey, provider, extraHeaders = 
     requestHeaders,
     body,
   });
+  // Keyed on where the request actually goes, so a baseUrl override that moves
+  // a provider onto -- or off -- the AI/ML API gateway moves attribution with it.
+  applyAimlapiAttributionHeaders(headers, { endpoint });
   // Content-Length is fetch's to compute. An explicit copy is at best
   // redundant, and the HTTP/1.1 dispatcher rejects the request outright
   // (UND_ERR_INVALID_ARG) when a caller-supplied value accompanies a body.

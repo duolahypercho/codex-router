@@ -780,6 +780,7 @@ const QWEN_PLAN_DASHBOARD_URL =
 const OLLAMA_DASHBOARD_URL = "https://ollama.com/settings";
 const COMMANDCODE_DASHBOARD_URL = "https://commandcode.ai/studio";
 const OPENROUTER_DASHBOARD_URL = "https://openrouter.ai/settings/credits";
+const AIMLAPI_DASHBOARD_URL = "https://aimlapi.com/app/billing";
 const VENICE_DASHBOARD_URL = "https://venice.ai/settings/api";
 // Nous publishes no credits or usage route on the inference API (a 404 on both
 // /v1/credits and /v1/key), so the portal page is the only honest destination.
@@ -967,6 +968,68 @@ async function veniceAccount(fetchImpl) {
   return account;
 }
 
+// AI/ML API's GET /v1/key answers the calling key itself: its scopes, whether
+// it is disabled, an optional spend `limit`, and month-to-date usage. It is a
+// spend report, not a wallet -- there is no remaining balance to read -- so the
+// money goes in the message rather than into a `balance` metric that would
+// claim to be what is left. A numeric `limit` does make a real quota card.
+export function aimlapiKeyMetrics(payload) {
+  const data = payload?.data;
+  const spent = numberValue(data?.monthly_usage_usd);
+  const limit = numberValue(data?.limit);
+  if (!Number.isFinite(limit) || limit <= 0 || !Number.isFinite(spent)) return [];
+  const metric = quotaMetric("Monthly spend", { limit, used: spent }, "USD");
+  return metric ? [metric] : [];
+}
+
+async function aimlapiAccount(fetchImpl) {
+  const provider = PROVIDERS.get("aimlapi");
+  const credential = resolveProviderCredential(provider);
+  if (!credential) return { status: "not-configured", source: "official-api", metrics: [] };
+  const fallback = (message) => ({
+    ...withHeaderQuota("aimlapi", localOnly(message)),
+    dashboardUrl: AIMLAPI_DASHBOARD_URL,
+  });
+  const baseURL = (process.env[provider.baseUrlEnv] || provider.baseUrl).replace(/\/+$/, "");
+  if (new URL(baseURL).origin !== "https://api.aimlapi.com") {
+    return fallback("Account usage is unavailable for a custom AI/ML API endpoint");
+  }
+  let key;
+  try {
+    key = await requestJson(`${baseURL}/key`, credential.value, {}, fetchImpl);
+  } catch {
+    return fallback("AI/ML API account usage is unavailable; showing router traffic");
+  }
+  const metrics = aimlapiKeyMetrics(key);
+  const spent = numberValue(key?.data?.monthly_usage_usd);
+  const spentText = Number.isFinite(spent)
+    ? `Spent $${spent.toFixed(2)} this month`
+    : undefined;
+  if (key?.data?.disabled === true) {
+    return {
+      ...fallback("This AI/ML API key is disabled; re-enable it or create a new one"),
+      metrics,
+      ...(metrics.length ? { status: "available", source: "official-api" } : {}),
+    };
+  }
+  if (!metrics.length) {
+    // An uncapped key has no percentage to show, so the honest card is router
+    // traffic plus the month-to-date figure in words.
+    return fallback(
+      spentText
+        ? `${spentText}. This key is uncapped, so there is no limit to show.`
+        : "AI/ML API reports usage only on the billing page; showing router traffic",
+    );
+  }
+  return {
+    status: "available",
+    source: "official-api",
+    metrics,
+    dashboardUrl: AIMLAPI_DASHBOARD_URL,
+    ...(spentText ? { message: spentText } : {}),
+  };
+}
+
 async function openRouterAccount(fetchImpl) {
   const provider = PROVIDERS.get("openrouter");
   const credential = resolveProviderCredential(provider);
@@ -1072,6 +1135,7 @@ async function accountUsageFor(providerId, fetchImpl) {
     }
     if (providerId === "commandcode") return await commandCodeAccount(fetchImpl);
     if (providerId === "venice") return await veniceAccount(fetchImpl);
+    if (providerId === "aimlapi") return await aimlapiAccount(fetchImpl);
     if (providerId === "openrouter") return await openRouterAccount(fetchImpl);
     if (providerId === "nousresearch") {
       // Nous Portal shows credits and the subscription tier only in the

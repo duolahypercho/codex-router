@@ -38,6 +38,18 @@ test("provider registry exposes configured API and OAuth model families", () => 
   assert.deepEqual(
     LISTED_MODELS.map((model) => model.slug),
     [
+      "aimlapi/claude-opus-5.5",
+      "aimlapi/claude-sonnet-5.5",
+      "aimlapi/claude-sonnet-5",
+      "aimlapi/deepseek-v4.1-flash",
+      "aimlapi/gemini-3.8-flash",
+      "aimlapi/glm-5.2",
+      "aimlapi/gpt-6-luna",
+      "aimlapi/gpt-6-sol",
+      "aimlapi/gpt-6.1-sol",
+      "aimlapi/grok-4.7",
+      "aimlapi/kimi-k3",
+      "aimlapi/qwen3.7-max",
       "ainetcafe/kimi-k3",
       "anthropic-api/claude-opus-4.8",
       "antigravity-oauth/gemini-3.1-pro",

@@ -22,6 +22,7 @@ import {
   RUNTIME_PROVIDERS,
   resolveProviderBaseUrl,
 } from "./model-registry.mjs";
+import { applyAimlapiAttributionHeaders } from "./aimlapi-attribution.mjs";
 import { curatedModelBlockReason } from "./opencode-curation.mjs";
 import {
   OPENCODE_SESSION_FALLBACKS,
@@ -334,6 +335,7 @@ async function providerPayload(provider, identity) {
       fallback: OPENCODE_SESSION_FALLBACKS.discovery,
     });
   }
+  applyAimlapiAttributionHeaders(headers, { baseUrl });
   return fetchUntrustedModelCatalog(`${baseUrl}/models`, {
     headers,
     allowPrivate: Boolean(provider.keyless),

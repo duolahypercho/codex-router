@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "slug": "aimlapi/kimi-k3",
+      "gatewayModel": "aimlapi-kimi-k3",
+      "upstreamModel": "moonshot/kimi-k3",
+      "provider": "aimlapi",
+      "listed": true,
+      "displayName": "Kimi K3 (AI/ML API)",
+      "description": "Moonshot Kimi K3 through AI/ML API; 1M context with image input. Accepts low, high and max only.",
+      "priority": 81,
+      "defaultEffort": "high",
+      "reasoningLevels": [
+        {
+          "effort": "low",
+          "description": "Faster reasoning"
+        },
+        {
+          "effort": "high",
+          "description": "Deep reasoning"
+        },
+        {
+          "effort": "max",
+          "description": "Maximum reasoning depth"
+        }
+      ],
+      "contextWindow": 1048576,
+      "autoCompact": 900000,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "compHash": "aimlapi-kimi-k3-v1"
+    }
+  ]
+}

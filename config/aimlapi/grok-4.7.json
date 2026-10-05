@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "slug": "aimlapi/grok-4.7",
+      "gatewayModel": "aimlapi-grok-4-7",
+      "upstreamModel": "x-ai/grok-4-7",
+      "provider": "aimlapi",
+      "listed": true,
+      "displayName": "Grok 4.7 (AI/ML API)",
+      "description": "xAI Grok 4.7 through AI/ML API; text only on this route, full effort ladder.",
+      "priority": 82,
+      "defaultEffort": "high",
+      "reasoningLevels": [
+        {
+          "effort": "minimal",
+          "description": "Minimal reasoning"
+        },
+        {
+          "effort": "low",
+          "description": "Faster reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced reasoning"
+        },
+        {
+          "effort": "high",
+          "description": "Deep reasoning"
+        },
+        {
+          "effort": "xhigh",
+          "description": "Extra deep reasoning"
+        },
+        {
+          "effort": "max",
+          "description": "Maximum reasoning depth"
+        }
+      ],
+      "contextWindow": 500000,
+      "autoCompact": 440000,
+      "inputModalities": [
+        "text"
+      ],
+      "compHash": "aimlapi-grok-4-7-v1"
+    }
+  ]
+}

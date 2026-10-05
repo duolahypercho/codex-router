@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "slug": "aimlapi/glm-5.2",
+      "gatewayModel": "aimlapi-glm-5-2",
+      "upstreamModel": "zhipu/glm-5.2",
+      "provider": "aimlapi",
+      "listed": true,
+      "displayName": "GLM 5.2 (AI/ML API)",
+      "description": "Zhipu GLM 5.2 through AI/ML API; text only on this route, every effort level from minimal to max.",
+      "priority": 80,
+      "defaultEffort": "high",
+      "reasoningLevels": [
+        {
+          "effort": "minimal",
+          "description": "Minimal reasoning"
+        },
+        {
+          "effort": "low",
+          "description": "Faster reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced reasoning"
+        },
+        {
+          "effort": "high",
+          "description": "Deep reasoning"
+        },
+        {
+          "effort": "xhigh",
+          "description": "Extra deep reasoning"
+        },
+        {
+          "effort": "max",
+          "description": "Maximum reasoning depth"
+        }
+      ],
+      "contextWindow": 1000000,
+      "autoCompact": 900000,
+      "inputModalities": [
+        "text"
+      ],
+      "compHash": "aimlapi-glm-5-2-v1"
+    }
+  ]
+}

@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "slug": "aimlapi/claude-sonnet-5.5",
+      "gatewayModel": "aimlapi-claude-sonnet-5-5",
+      "upstreamModel": "anthropic/claude-sonnet-5.5",
+      "provider": "aimlapi",
+      "listed": true,
+      "displayName": "Claude Sonnet 5.5 (AI/ML API)",
+      "description": "Anthropic Claude Sonnet 5.5 through AI/ML API; the current Sonnet, full effort ladder up to max.",
+      "priority": 76,
+      "defaultEffort": "high",
+      "reasoningLevels": [
+        {
+          "effort": "low",
+          "description": "Faster reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced reasoning"
+        },
+        {
+          "effort": "high",
+          "description": "Deep reasoning"
+        },
+        {
+          "effort": "xhigh",
+          "description": "Extra deep reasoning"
+        },
+        {
+          "effort": "max",
+          "description": "Maximum reasoning depth"
+        }
+      ],
+      "contextWindow": 1000000,
+      "autoCompact": 900000,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "compHash": "aimlapi-claude-sonnet-5-5-v1"
+    }
+  ]
+}
