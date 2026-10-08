@@ -1057,7 +1057,9 @@ instruction overlay, and standalone tool-search contract as the proven
 full-size `zai-coding/glm-5.3` route. Standalone search keeps deferred tools out
 of the initial Codex tool surface and loads them through the native
 `tool_search` bridge on demand; this is the root fix for the large fixed prefix
-that made compacted Flash subagents reopen above their threshold. These
+that made compacted Flash subagents reopen above their threshold. OpenCode Go's
+Flash route uses the same deferred tool loading and concise project-work
+instructions to remove that fixed tool cost; its 400K threshold is unchanged. These
 execution/catalog capabilities are route-local: Flash remains conservative v1
 for shipped multi-agent capability until its exact route has a separate
 accepted `v2_agent` proof artifact. OpenCode Go's content moderation still

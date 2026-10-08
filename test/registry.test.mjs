@@ -675,6 +675,7 @@ test("provider registry exposes configured API and OAuth model families", () => 
     "deepseek/deepseek-v4-flash",
     "deepseek/deepseek-v4-flash-vision-exp",
     "opencode-go/deepseek-v4-flash",
+    "opencode-go/glm-5.3-flash",
     "xiaomi-mimo/mimo-v2.5",
     "zai-coding/glm-5.3",
     "zai-coding/glm-5.3-flash",
