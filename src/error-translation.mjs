@@ -29,7 +29,8 @@ const WRAPPER_PREFIXES = [
 // Providers disagree on where the human-readable message lives: OpenAI-style
 // error.message, bare error strings, top-level message (Alibaba), FastAPI
 // detail, or MiniMax's base_resp.status_msg. The type-ish field (OpenAI type,
-// Google status) rides along for quota classification.
+// Google status) rides along for quota classification; a provider-specific
+// code distinguishes Devin's permission refusal from an OAuth rejection.
 function parseUpstreamError(bodyText) {
   if (typeof bodyText !== "string" || !bodyText) return { message: "", type: undefined };
   try {
@@ -43,7 +44,8 @@ function parseUpstreamError(bodyText) {
       (typeof parsed?.detail === "string" && parsed.detail) ||
       bodyText;
     const type = [error?.type, error?.status].find((value) => typeof value === "string");
-    return { message, type };
+    const code = typeof error?.code === "string" ? error.code : undefined;
+    return { message, type, code };
   } catch {
     // Non-JSON bodies (HTML gateway pages, plain text) pass through as-is.
     return { message: bodyText, type: undefined };
@@ -247,7 +249,9 @@ function describeFailure({
   status,
   detail,
   errorType,
+  errorCode,
   modelName,
+  providerId,
   providerName,
   providerKind,
   providerAuthMode,
@@ -266,6 +270,18 @@ function describeFailure({
     return {
       type: "billing_error",
       message: `You have run out of usage at ${providerName} for ${modelName}. Top up or check the plan on your ${providerName} account.`,
+    };
+  }
+  if (
+    providerId === "devin-cli" && status === 403 &&
+    (errorCode === "devin_permission_denied" ||
+      detail.startsWith("Devin refused this request (devin_permission_denied):"))
+  ) {
+    // LiteLLM may replace the original code/type with AuthenticationError.
+    // The forwarder's fixed prefix carries the distinction through that hop.
+    return {
+      type: "permission_error",
+      message: `${providerName} refused the request for ${modelName}. Check the reported policy or tool configuration.`,
     };
   }
   if (status === 401 || status === 403) {
@@ -332,6 +348,7 @@ export function translateGatewayError({
   status,
   bodyText,
   modelName,
+  providerId,
   providerName,
   providerKind,
   providerAuthMode,
@@ -367,7 +384,9 @@ export function translateGatewayError({
     status,
     detail,
     errorType: parseUpstreamError(bodyText).type,
+    errorCode: parseUpstreamError(bodyText).code,
     modelName,
+    providerId,
     providerName,
     providerKind,
     providerAuthMode,

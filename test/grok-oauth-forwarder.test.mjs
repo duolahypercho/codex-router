@@ -1,3 +1,4 @@
+import { writeGrokVersionCli } from "./grok-version-fixture.mjs";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import http from "node:http";
@@ -47,7 +48,7 @@ function startForwarder(port, backendPort, authPath, extraEnv = {}) {
       MODEL_ROUTER_INTERNAL_KEY: INTERNAL_KEY,
       MODEL_ROUTER_GROK_OAUTH_PORT: String(port),
       GROK_CLI_CHAT_PROXY_BASE_URL: `http://127.0.0.1:${backendPort}`,
-      GROK_CLI: path.join(root, "test", "fixtures", "missing-grok-cli"),
+      GROK_CLI: writeGrokVersionCli(path.dirname(authPath)),
       GROK_AUTH_PATH: authPath,
       MODEL_ROUTER_QUIET: "1",
       ...extraEnv,
@@ -188,7 +189,7 @@ test("translates Chat Completions to Grok Responses and back (text + tools)", as
     assert.equal(capturedHeaders.authorization, "Bearer fake-access");
     assert.equal(capturedHeaders["x-xai-token-auth"], "xai-grok-cli");
     assert.equal(capturedHeaders["x-authenticateresponse"], "authenticate-response");
-    assert.match(capturedHeaders["x-grok-client-version"], /^\d+\.\d+\.\d+$/);
+    assert.equal(capturedHeaders["x-grok-client-version"], "1.0.46");
     assert.equal(capturedHeaders["x-grok-client-identifier"], "grok-shell");
     assert.equal(capturedHeaders["x-grok-client-mode"], "headless");
     assert.equal(capturedHeaders["x-grok-model-override"], "grok-4.5");
@@ -2596,4 +2597,45 @@ test("Grok 4.5 does not receive apply_patch V4A guidance from this route", () =>
   const applyPatch = forwarded.tools.find((tool) => tool.name === APPLY_PATCH_TOOL_NAME);
   assert.equal(applyPatch.description, "Apply a patch.");
   assert.equal(applyPatch.description.includes(GROK_APPLY_PATCH_GUIDANCE_MARKER), false);
+});
+
+test("missing CLI version fails locally and recovers in the same forwarder", async () => {
+  let calls = 0;
+  const backend = await mockBackend((req, res) => {
+    calls += 1;
+    assert.equal(req.headers["x-grok-client-version"], "1.0.46");
+    res.writeHead(200, { "Content-Type": "text/event-stream" });
+    res.end(sse([
+      { type: "response.output_text.delta", delta: "recovered" },
+      { type: "response.completed", response: { usage: { input_tokens: 1, output_tokens: 1 } } },
+    ]));
+  });
+  const dir = mkdtempSync(path.join(os.tmpdir(), "grok-version-recovery-"));
+  const authPath = writeSession(dir);
+  const executable = path.join(dir, process.platform === "win32" ? "grok-version.cmd" : "grok-version");
+  const port = await openPort();
+  const child = startForwarder(port, backend.port, authPath, { GROK_CLI: executable });
+  // startForwarder creates a normal version fixture; remove it for this failure.
+  rmSync(executable);
+  const base = `http://127.0.0.1:${port}`;
+  const send = () => fetch(`${base}/v1/chat/completions`, {
+    method: "POST", headers: auth,
+    body: JSON.stringify({ model: "grok-4.7", messages: [{ role: "user", content: "ping" }] }),
+  });
+  try {
+    await waitHealth(base, child);
+    const failed = await send();
+    assert.equal(failed.status, 503);
+    assert.equal((await failed.json()).error.code, "grok_cli_version_unavailable");
+    assert.equal(calls, 0);
+    writeGrokVersionCli(dir);
+    const recovered = await send();
+    assert.equal(recovered.status, 200);
+    assert.equal((await recovered.json()).choices[0].message.content, "recovered");
+    assert.equal(calls, 1);
+  } finally {
+    await stop(child);
+    await new Promise(resolve => backend.server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

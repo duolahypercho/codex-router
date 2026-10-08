@@ -47,6 +47,12 @@ export interface RouterModel {
   autoCompact?: number;
   inputModalities?: string[];
   isFree?: boolean;
+  /**
+   * Locally curated: this route came from the operator's `user-models.json`
+   * overlay rather than a checked-in `config/` entry, so curation can prune it
+   * again. Never set on a route this checkout ships.
+   */
+  local?: boolean;
   /** False only for a checked-in research route that is not currently routable. */
   available?: boolean;
 }
@@ -806,6 +812,8 @@ export interface RouterControlApi {
   addCustomEndpoint(endpoint: { displayName: string; baseUrl: string; adapter: "openai-chat" | "openai-responses"; credential?: string }): Promise<CustomEndpointResult>;
   editCustomEndpoint(provider: string, endpoint: { displayName: string; baseUrl: string; adapter: "openai-chat" | "openai-responses" }): Promise<CustomEndpointResult>;
   removeCustomEndpointModels(provider: string, slugs: string[]): Promise<unknown>;
+  /** Prune locally curated models (the `user-models.json` overlay) on any provider. */
+  removeLocalModels(slugs: string[]): Promise<unknown>;
   addCustomEndpointModel(provider: string, modelId: string): Promise<unknown>;
   removeProviderCredential(provider: string): Promise<unknown>;
   setSubagentMode(mode: "all" | "selected" | "proven"): Promise<unknown>;
@@ -866,7 +874,7 @@ export interface RouterControlApi {
   openHarnessSession(harnessId: HarnessId, sessionId: string, surface: HarnessSurface, model?: string): Promise<unknown>;
   openExternal(url: string): Promise<void>;
   onNavigation?(listener: (request: {
-    destination: "usage" | "usage-resets";
+    destination: "usage" | "usage-resets" | "settings";
     sourceId?: string;
   }) => void): () => void;
   onOperation?(listener: (event: OperationEvent) => void): () => void;

@@ -13,6 +13,32 @@ import { randomUUID } from "node:crypto";
 const FINAL_ANSWER_HEADER =
   /Message Type:\s*FINAL_ANSWER\b[\s\S]*?\nSender:\s*(\S+)/gi;
 const NATIVE_ENCRYPTED_TOKEN = /^gAAAAA[A-Za-z0-9_-]+={0,2}$/;
+const NATIVE_SUBAGENT_NAMESPACES = new Set(["collaboration", "agents"]);
+const NATIVE_SUBAGENT_LIFECYCLE_TOOLS = new Set([
+  "spawn_agent",
+  "wait_agent",
+  "interrupt_agent",
+]);
+function hasNativeSubagentLifecycleEvidence(namespace, names) {
+  return (
+    NATIVE_SUBAGENT_NAMESPACES.has(namespace) &&
+    names instanceof Set &&
+    [...NATIVE_SUBAGENT_LIFECYCLE_TOOLS].some((name) => names.has(name))
+  );
+}
+
+function hasNativeSubagentLifecycleTools(namespace, names) {
+  return (
+    NATIVE_SUBAGENT_NAMESPACES.has(namespace) &&
+    names instanceof Set &&
+    names.has("interrupt_agent") &&
+    (namespace === "collaboration" || names.has("spawn_agent"))
+  );
+}
+
+export function isSupportedSubagentNamespace(namespace) {
+  return NATIVE_SUBAGENT_NAMESPACES.has(namespace);
+}
 
 // A close must always name a child. "/root" (and its bare and slashed forms)
 // is the parent itself, and interrupting it would cancel the turn that is
@@ -100,10 +126,7 @@ function parseFunctionCallArgs(item) {
 
 export function isInterruptAgentCall(item) {
   if (!item || item.type !== "function_call") return false;
-  if (item.namespace === "collaboration" && item.name === "interrupt_agent") {
-    return true;
-  }
-  return item.name === "collaboration__interrupt_agent" || item.name === "interrupt_agent";
+  return NATIVE_SUBAGENT_NAMESPACES.has(item.namespace) && item.name === "interrupt_agent";
 }
 
 export function interruptTargetFromCall(item) {
@@ -113,10 +136,85 @@ export function interruptTargetFromCall(item) {
   return typeof target === "string" && target.trim() ? target.trim() : undefined;
 }
 
-export function collaborationToolAvailable(namespaces) {
+function hasFlattenedLifecycleSpelling(name) {
+  return [...NATIVE_SUBAGENT_LIFECYCLE_TOOLS].some((tool) => name.endsWith(`__${tool}`));
+}
+
+function lifecycleCallEvidence(item) {
+  if (item?.type !== "function_call" || typeof item.name !== "string") return undefined;
+  const flattened = hasFlattenedLifecycleSpelling(item.name);
+
+  if (item.namespace !== undefined && item.namespace !== null) {
+    if (
+      NATIVE_SUBAGENT_NAMESPACES.has(item.namespace) &&
+      NATIVE_SUBAGENT_LIFECYCLE_TOOLS.has(item.name)
+    ) {
+      return { namespace: item.namespace };
+    }
+    return NATIVE_SUBAGENT_LIFECYCLE_TOOLS.has(item.name) || flattened
+      ? { unknown: true }
+      : undefined;
+  }
+
+  if (NATIVE_SUBAGENT_LIFECYCLE_TOOLS.has(item.name) || flattened) {
+    // A literal default function can contain "__"; only typed namespace
+    // identity proves this was a native lifecycle call.
+    return { unknown: true };
+  }
+  return undefined;
+}
+
+function namespaceFromLifecycleHistory(input) {
+  if (!Array.isArray(input)) return undefined;
+  const candidates = new Set();
+  let unknownIdentity = false;
+
+  for (const item of input) {
+    const evidence = lifecycleCallEvidence(item);
+    if (!evidence) continue;
+    if (evidence.unknown) {
+      unknownIdentity = true;
+      continue;
+    }
+    candidates.add(evidence.namespace);
+  }
+
+  return !unknownIdentity && candidates.size === 1
+    ? candidates.values().next().value
+    : undefined;
+}
+
+export function subagentToolNamespace(namespaces, input) {
+  // A nonempty namespace inventory is authoritative; history is a fallback
+  // only when the lifecycle definitions were deferred or omitted.
+  const candidates = [];
+  let partialNativeLifecycle = false;
+  if (namespaces instanceof Map) {
+    for (const [namespace, names] of namespaces) {
+      if (hasNativeSubagentLifecycleTools(namespace, names)) {
+        candidates.push(namespace);
+      } else if (hasNativeSubagentLifecycleEvidence(namespace, names)) {
+        partialNativeLifecycle = true;
+      }
+    }
+  }
+  if (candidates.length === 1 && !partialNativeLifecycle) return candidates[0];
+  if (candidates.length > 1 || partialNativeLifecycle || (namespaces instanceof Map && namespaces.size > 0)) {
+    return undefined;
+  }
+  return namespaceFromLifecycleHistory(input);
+}
+
+export function subagentToolAvailable(namespaces) {
   if (!(namespaces instanceof Map)) return false;
-  const names = namespaces.get("collaboration");
-  return names instanceof Set && names.has("interrupt_agent");
+  for (const [namespace, names] of namespaces) {
+    if (
+      NATIVE_SUBAGENT_NAMESPACES.has(namespace) &&
+      names instanceof Set &&
+      names.has("interrupt_agent")
+    ) return true;
+  }
+  return false;
 }
 
 // Walk the request input once. Returns every child that has already finished
@@ -124,7 +222,7 @@ export function collaborationToolAvailable(namespaces) {
 // the response path only injects the missing closes.
 //
 // Evidence of a finished child comes from `agent_message` items only -- the
-// envelope type Codex uses for collaboration traffic on both the native and
+// envelope type Codex uses for subagent handoffs on both the native and
 // routed paths. Ordinary `message` items are the operator's and the model's
 // own prose; scanning them meant a turn that merely *quoted* a FINAL_ANSWER
 // envelope (docs, a changelog, this very feature under discussion) had a
@@ -144,35 +242,29 @@ export function collectFinishedSubagentState(input) {
     }
     if (item.type === "agent_message") {
       for (const target of targetsFromAgentMessage(item)) {
-        if (!isRootTarget(target)) finished.add(target);
+        if (
+          !isRootTarget(target) &&
+          ![...finished].some((finishedTarget) => sameTarget(finishedTarget, target))
+        ) {
+          finished.add(target);
+        }
       }
     }
   }
-  const pending = [...finished].filter((target) => !interrupted.has(target));
+  const pending = filterAlreadyInterrupted([...finished], interrupted);
   return { finished, interrupted, pending };
 }
 
-export function pendingInterruptTargets(
-  input,
-  {
-    namespaces,
-    // Only enforce the tool check when the request actually advertised a
-    // non-empty inventory. Empty/unknown inventories (native deferred tools)
-    // still queue closes for finished children. That bypass is safe only
-    // because detection is scoped to `agent_message` envelopes: an ordinary
-    // turn cannot contain one, so an empty inventory plus quoted envelope
-    // text can no longer manufacture an interrupt.
-    requireCollaborationTool = namespaces instanceof Map && namespaces.size > 0,
-  } = {},
-) {
-  if (
-    requireCollaborationTool &&
-    namespaces &&
-    !collaborationToolAvailable(namespaces)
-  ) {
-    return [];
-  }
-  return collectFinishedSubagentState(input).pending;
+export function pendingInterruptPlan(input, { namespaces } = {}) {
+  const namespace = subagentToolNamespace(namespaces, input);
+  return {
+    namespace,
+    targets: namespace ? collectFinishedSubagentState(input).pending : [],
+  };
+}
+
+export function pendingInterruptTargets(input, options) {
+  return pendingInterruptPlan(input, options).targets;
 }
 
 function sameTarget(a, b) {
@@ -191,9 +283,15 @@ export function filterAlreadyInterrupted(pending, interruptedTargets) {
   );
 }
 
-export function buildInterruptAgentCall(target, { callId, flattened = false } = {}) {
+export function buildInterruptAgentCall(
+  target,
+  { callId, flattened = false, namespace = "collaboration" } = {},
+) {
   if (typeof target !== "string" || !target.trim()) {
     throw new Error("interrupt_agent target is required");
+  }
+  if (!isSupportedSubagentNamespace(namespace)) {
+    throw new Error("interrupt_agent namespace is unsupported");
   }
   const id =
     typeof callId === "string" && callId
@@ -202,7 +300,7 @@ export function buildInterruptAgentCall(target, { callId, flattened = false } = 
   if (flattened) {
     return {
       type: "function_call",
-      name: "collaboration__interrupt_agent",
+      name: `${namespace}__interrupt_agent`,
       call_id: id,
       arguments: JSON.stringify({ target }),
     };
@@ -210,7 +308,7 @@ export function buildInterruptAgentCall(target, { callId, flattened = false } = 
   return {
     type: "function_call",
     name: "interrupt_agent",
-    namespace: "collaboration",
+    namespace,
     call_id: id,
     arguments: JSON.stringify({ target }),
   };
@@ -218,8 +316,15 @@ export function buildInterruptAgentCall(target, { callId, flattened = false } = 
 
 // Build the SSE events for one injected interrupt. Sequence numbers are filled
 // by the stream transform once it knows the last model-emitted sequence.
-export function interruptAgentSseEvents(target, { callId, sequenceStart = 1 } = {}) {
-  const item = buildInterruptAgentCall(target, { callId, flattened: false });
+export function interruptAgentSseEvents(
+  target,
+  { callId, sequenceStart = 1, namespace = "collaboration" } = {},
+) {
+  const item = buildInterruptAgentCall(target, {
+    callId,
+    flattened: false,
+    namespace,
+  });
   const addedSeq = sequenceStart;
   const doneSeq = sequenceStart + 1;
   return [

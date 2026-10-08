@@ -1,0 +1,1 @@
+- **Request progress records the first and last stream event types and whether completion or failure was seen.** These diagnostic fields contain metadata only, without response text or tool arguments.

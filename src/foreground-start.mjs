@@ -1,4 +1,9 @@
 import { withServiceOperationLock } from "./service-operation-lock.mjs";
+import { markForegroundSupervisor } from "./service-process.mjs";
+
+// This supervisor is unmanaged, so start.mjs must not claim the Windows
+// service-process record for it; see shouldRecordServiceProcess.
+markForegroundSupervisor();
 
 try {
   // Importing start.mjs does not resolve until its top-level supervisor finishes,

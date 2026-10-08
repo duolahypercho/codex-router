@@ -1,0 +1,1 @@
+- **MiniMax media downloads replace their destination only after a complete transfer.** Interrupted downloads preserve an existing image, audio track, or video and clean their temporary output. Successful downloads keep the requested filename and existing POSIX file permissions.

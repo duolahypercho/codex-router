@@ -1,0 +1,1 @@
+- **Malformed rate-limit reset headers no longer discard successful pooled responses.** Numeric timestamps and durations outside the supported date range are ignored while valid quota counters and neighboring retry windows are retained. Overflowing duration components no longer become an immediate reset.

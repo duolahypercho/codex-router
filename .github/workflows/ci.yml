@@ -93,7 +93,7 @@ jobs:
       - name: Set up Homebrew
         id: set-up-homebrew
         if: steps.changed.outputs.run == 'true'
-        uses: Homebrew/actions/setup-homebrew@848c272c7bfe984a197bd4d16383f4c106ec61e6 # 2026.09.21.1
+        uses: Homebrew/actions/setup-homebrew@e99025eb970cfa124b8284a35463d87426917478 # 2026.09.28.1
       - name: Cache Homebrew Bundler RubyGems
         id: cache-homebrew-gems
         if: steps.changed.outputs.run == 'true'
@@ -122,7 +122,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Set up Homebrew
-        uses: Homebrew/actions/setup-homebrew@848c272c7bfe984a197bd4d16383f4c106ec61e6 # 2026.09.21.1
+        uses: Homebrew/actions/setup-homebrew@e99025eb970cfa124b8284a35463d87426917478 # 2026.09.28.1
       - name: Build and test the formula from source
         run: packaging/homebrew/check-core-readiness.sh --install
 
@@ -173,6 +173,9 @@ jobs:
           path: ${{ matrix.download_cache }}
           key: electron-builder-${{ runner.os }}-${{ hashFiles('apps/control-center/package-lock.json') }}
           restore-keys: electron-builder-${{ runner.os }}-
+      - name: Install router runtime dependencies for packaged smoke
+        working-directory: .
+        run: npm ci --omit=dev
       - name: Install Electron dependencies
         run: npm ci
       - name: Check Electron sources
@@ -392,7 +395,14 @@ jobs:
           log="$RUNNER_TEMP/model-router-macos-smoke.log"
 
           query_lifecycle() {
-            /usr/bin/env -u ELECTRON_RUN_AS_NODE "$embedded" --query-lifecycle
+            node -e '
+              const { execFileSync } = require("node:child_process");
+              const env = { ...process.env };
+              delete env.ELECTRON_RUN_AS_NODE;
+              process.stdout.write(execFileSync(process.argv[1], ["--query-lifecycle"], {
+                env, encoding: "utf8", timeout: 10000, killSignal: "SIGKILL",
+              }));
+            ' "$embedded"
           }
 
           wait_for_lifecycle() {
@@ -401,7 +411,10 @@ jobs:
             expected_visible=$3
             last_state=
             for _ in {1..120}; do
-              last_state=$(query_lifecycle 2>/dev/null || true)
+              if ! last_state=$(query_lifecycle); then
+                cat "$log" >&2 || true
+                return 1
+              fi
               if node -e '
                 try {
                   const state = JSON.parse(process.argv[1]);

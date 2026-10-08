@@ -37,6 +37,21 @@ const bridgeSource = String.raw`
   const staleAccountFailure = searchParams.get("staleAccountFailure") === "1";
   const staleProviderUsage = searchParams.get("staleProviderUsage") === "1";
   const fallbackUsage = searchParams.get("fallbackUsage") === "1";
+  // The usage chart walks a rolling window of UTC days ending on the current
+  // one (bucketRange in src/lib.ts), so a frozen bucket key silently ages out
+  // of the 30-day default and the bars it feeds stop rendering -- the fixture
+  // still returns the bucket, the chart just has no slot for it any more. Key
+  // these off today, in the same UTC day space the chart walks.
+  const usageDayKey = (daysAgo) => {
+    const day = new Date();
+    day.setUTCHours(12, 0, 0, 0);
+    day.setUTCDate(day.getUTCDate() - daysAgo);
+    return day.toISOString().slice(0, 10);
+  };
+  const accountUsageDay = usageDayKey(2);
+  // A distinct day from the account's, so the local router meter fills exactly
+  // one date the account stream does not cover.
+  const routerFallbackDay = usageDayKey(1);
   const pollOnceMs = Number(searchParams.get("pollOnceMs")) || 0;
   const healthPollOnceMs = Number(searchParams.get("healthPollOnceMs")) || 0;
   const staleHealth = searchParams.get("staleHealth") === "1";
@@ -90,6 +105,10 @@ const bridgeSource = String.raw`
     visible: false,
     multiAgentVersion: "v1",
     subagentCertification: "unknown",
+    // One route of a multi-route family is locally curated, so the fixture
+    // covers the discrimination the delete control depends on rather than a
+    // family where every route answers the same way.
+    ...(model.provider === "opencode-go" ? { local: true } : {}),
   }));
   const target = {
     target: "codex",
@@ -137,6 +156,15 @@ const bridgeSource = String.raw`
       visionBridge: { enabled: false },
     },
   };
+  if (searchParams.get("billedRetry") === "1") {
+    target.usageEvents = [{
+      at: new Date(Date.now() - 1_000).toISOString(),
+      model: "deepseek/deepseek-chat", provider: "deepseek", status: 200,
+      inputTokens: 120, outputTokens: 35, totalTokens: 155,
+      billedInputTokens: 240, billedOutputTokens: 70,
+      emptyCompletionRetried: true,
+    }];
+  }
   const snapshot = {
     targets: { codex: target },
     catalog: {
@@ -382,7 +410,7 @@ const bridgeSource = String.raw`
           windowDurationMins: 300,
           resetsAt: 1800000000,
         },
-        dailyUsageBuckets: [{ startDate: "2026-08-27", tokens: 24000 }],
+        dailyUsageBuckets: [{ startDate: accountUsageDay, tokens: 24000 }],
         summary: { lifetimeTokens: 24000, peakDailyTokens: 24000, currentStreakDays: 1 },
       };
     },
@@ -406,7 +434,7 @@ const bridgeSource = String.raw`
             last24hTokens: 31_000,
             last24hRequests: 3,
             dailyUsageBuckets: [{
-              startDate: "2026-08-28",
+              startDate: routerFallbackDay,
               tokens: 31_000,
               requests: 3,
               inputTokens: 25_000,
@@ -426,7 +454,7 @@ const bridgeSource = String.raw`
             requests: 8,
             last24hTokens: totalTokens,
             last24hRequests: 8,
-            dailyUsageBuckets: [{ startDate: "2026-08-27", tokens: totalTokens, requests: 8 }],
+            dailyUsageBuckets: [{ startDate: accountUsageDay, tokens: totalTokens, requests: 8 }],
             account: {
               status: "available",
               metrics: [
@@ -539,6 +567,12 @@ const bridgeSource = String.raw`
     onOperation: (listener) => {
       operationListener = listener;
       return () => { if (operationListener === listener) operationListener = undefined; };
+    },
+    // Not gated behind customEndpoints: a locally curated model can sit on any
+    // provider, which is the whole point of the removal being general.
+    removeLocalModels: async (slugs) => {
+      record("removeLocalModels", [...slugs]);
+      return { ok: true };
     },
   });
 
@@ -757,6 +791,12 @@ test("the production renderer exposes model discovery and picker actions", { tim
     );
     await page.waitForFunction(() => document.activeElement?.getAttribute("aria-label") === "Usage overview");
     assert.equal(await page.getByLabel("Usage source").inputValue(), "chatgpt-subscription");
+    // The tray's Settings item (Command-comma) lands on the Settings page.
+    assert.equal(
+      await page.evaluate(() => window.routerControlTest.navigate({ destination: "settings" })),
+      true,
+    );
+    await page.getByRole("heading", { name: "Settings", exact: true }).waitFor();
 
     // Harness is one client per row, in the product order the operator uses,
     // and the shared metadata index continues into Context Manager.
@@ -954,7 +994,9 @@ test("the production renderer exposes model discovery and picker actions", { tim
     // that would make it usable.
     assert.equal(await oxFamily.getByRole("button", { name: /^Connect / }).count(), 4);
     const columns = await oxFamily.locator(".pm-route-head > span").allTextContents();
-    assert.deepEqual(columns, ["Account", "Context", "Input", "In picker", "Subagents", "Reasoning effort"]);
+    // The fixture's opencode Go route is locally curated, so this family also
+    // carries the unlabelled remove column.
+    assert.deepEqual(columns, ["Account", "Context", "Input", "In picker", "Subagents", "Reasoning effort", ""]);
     await modelSearch.fill("");
 
     // Adding reads every connected provider's catalog at once. Only a provider
@@ -1175,6 +1217,35 @@ test("the production renderer exposes model discovery and picker actions", { tim
   }
 });
 
+test("dashboard retry totals match the billed token breakdown", { timeout: 120_000 }, async () => {
+  assert.ok(chromiumPath, "No Chromium executable is available for the Control Center renderer test.");
+  const { url, close } = await serveRenderer();
+  const browser = await chromium.launch({
+    executablePath: chromiumPath,
+    headless: true,
+    args: process.platform === "linux" ? ["--no-sandbox"] : [],
+  });
+  try {
+    const page = await newEnglishTestPage(browser);
+    page.setDefaultTimeout(10_000);
+    await page.goto(`${url}?billedRetry=1`, { waitUntil: "domcontentloaded" });
+    const eventFacts = page.locator(".db-event-metering small");
+    await eventFacts.waitFor();
+    assert.match(await eventFacts.innerText(), /310 tok/);
+    assert.match(await eventFacts.innerText(), /240 input/);
+    assert.match(await eventFacts.innerText(), /70 output/);
+    const model = page.locator(".db-breakdown-row").filter({ hasText: "deepseek-chat" });
+    assert.equal(await model.locator(".db-breakdown-value").innerText(), "310");
+    assert.match(await page.locator(".db-traffic-note").innerText(), /310/);
+    await page.getByRole("button", { name: "Status", exact: true }).click();
+    await page.locator(".st-event-metering strong").waitFor();
+    assert.match(await page.locator(".st-event-metering strong").innerText(), /310 tok/);
+  } finally {
+    await browser.close();
+    await close();
+  }
+});
+
 test("fallback-only splits do not claim account breakdown or a complete range mix", { timeout: 120_000 }, async () => {
   assert.equal(existsSync(path.join(dist, "index.html")), true, "npm test must build the renderer first");
   assert.ok(chromiumPath, "No Chromium executable is available for the Control Center renderer test.");
@@ -1274,6 +1345,75 @@ test("independent control-center reads reveal each ready page region", { timeout
     page.setDefaultTimeout(7_000);
     await page.locator(".pm-family-row").filter({ hasText: "DeepSeek Chat" }).waitFor();
     assert.deepEqual(pageErrors, [], `renderer errors: ${pageErrors.join("; ")}`);
+  } finally {
+    await browser.close();
+    await close();
+  }
+});
+
+test("only a locally curated route offers to be deleted, and only after confirmation", { timeout: 120_000 }, async () => {
+  assert.equal(existsSync(path.join(dist, "index.html")), true, "npm test must build the renderer first");
+  assert.ok(chromiumPath, "No Chromium executable is available for the Control Center renderer test.");
+
+  const { url, close } = await serveRenderer();
+  const browser = await chromium.launch({
+    executablePath: chromiumPath,
+    headless: true,
+    args: process.platform === "linux" ? ["--no-sandbox"] : [],
+  });
+  const pageErrors = [];
+  try {
+    const page = await newEnglishTestPage(browser, { viewport: { width: 1280, height: 840 } });
+    page.setDefaultTimeout(10_000);
+    page.on("pageerror", (error) => pageErrors.push(error.message));
+    page.on("console", (message) => {
+      if (message.type() === "error") pageErrors.push(message.text());
+    });
+
+    await page.goto(url, { waitUntil: "domcontentloaded" });
+    await page.getByRole("button", { name: "Models", exact: true }).click();
+    await page.getByRole("heading", { name: "Models", exact: true }).waitFor();
+
+    await page.locator('input[placeholder="Search models"]').fill("Ox Alpha");
+    const oxFamily = page.locator(".pm-family-row").filter({ hasText: "Ox Alpha" });
+    await oxFamily.locator(".pm-family-open").click();
+
+    // The locally curated route says so, and is the only one that can be
+    // deleted: every other route here is shipped by the checkout.
+    const localRoute = oxFamily.locator(".pm-route-row").filter({ hasText: "opencode Go/Zen" });
+    const shippedRoute = oxFamily.locator(".pm-route-row").filter({ hasText: "OpenCode Free" });
+    await localRoute.locator(".pm-route-local").waitFor();
+    assert.equal(await shippedRoute.locator(".pm-route-local").count(), 0);
+    assert.equal(await localRoute.locator(".pm-endpoint-model-remove").count(), 1);
+    assert.equal(
+      await shippedRoute.locator(".pm-endpoint-model-remove").count(),
+      0,
+      "a checked-in route must not offer a delete curation could not perform",
+    );
+
+    // Deleting is not undoable from here, so it is confirmed the way
+    // disconnecting a provider is -- and cancelling must call nothing.
+    await localRoute.locator(".pm-endpoint-model-remove").click();
+    await page.getByRole("heading", { name: "Delete local model", exact: true }).waitFor();
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
+    assert.equal(
+      await page.evaluate(() => window.routerControlTest.calls().some((call) => call.name === "removeLocalModels")),
+      false,
+      "cancelling the dialog must not delete anything",
+    );
+
+    await localRoute.locator(".pm-endpoint-model-remove").click();
+    await page.getByRole("heading", { name: "Delete local model", exact: true }).waitFor();
+    await page.getByRole("button", { name: "Delete model", exact: true }).click();
+    await page.waitForFunction(() => window.routerControlTest.calls().some((call) => call.name === "removeLocalModels"));
+    // The router resolves the slug against the overlay, so the slug is the
+    // whole request: the renderer never derives an upstream id.
+    assert.deepEqual(
+      await page.evaluate(() => window.routerControlTest.calls().find((call) => call.name === "removeLocalModels").args),
+      [["opencode-go/ox-alpha"]],
+    );
+
+    assert.deepEqual(pageErrors, []);
   } finally {
     await browser.close();
     await close();

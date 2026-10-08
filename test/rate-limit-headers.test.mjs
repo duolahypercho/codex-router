@@ -29,6 +29,72 @@ test("reset values normalize from every documented shape", () => {
   assert.equal(resetAt(undefined, NOW), undefined);
 });
 
+test("reset timestamps stay within the Date range after conversion", () => {
+  const maximum = 8_640_000_000_000_000;
+  assert.equal(resetAt(String(maximum), NOW), maximum);
+  assert.equal(resetAt("2400000000h", 0), maximum);
+  assert.equal(resetAt("1ms", maximum - 1), maximum);
+  assert.equal(resetAt("1ms", maximum), undefined);
+  assert.equal(resetAt("1", maximum), undefined);
+  assert.equal(resetAt("1790769660", NOW), 1_790_769_660_000);
+  assert.equal(resetAt("1790769660000", NOW), 1_790_769_660_000);
+});
+
+test("invalid reset headers preserve counters without inventing a cooldown", () => {
+  const invalidValues = [
+    "8640000000000001",
+    "1e20",
+    "999999999999999h",
+    `${"9".repeat(305)}h`, // A finite component whose unit conversion overflows.
+    `${"9".repeat(309)}h`, // The component itself overflows; it must not become zero.
+    `1h${"9".repeat(309)}m`,
+    `${"9".repeat(309)}s`,
+    `${"9".repeat(309)}ms`,
+  ];
+  for (const value of invalidValues) {
+    assert.equal(resetAt(value, NOW), undefined, value);
+    const headers = new Headers({
+      "x-ratelimit-limit-requests": "100",
+      "x-ratelimit-remaining-requests": "0",
+      "x-ratelimit-reset-requests": value,
+      "retry-after": value,
+    });
+    const snapshot = parseRateLimitHeaders(headers, { now: NOW });
+    assert.deepEqual(snapshot, { requests: { limit: 100, remaining: 0 } }, value);
+    assert.equal(cooldownUntil(snapshot), undefined, value);
+    assert.equal(retryAfterSeconds(headers, { now: NOW }), undefined, value);
+    assert.equal(
+      parseRateLimitHeaders(new Headers({ "retry-after": value }), { now: NOW }),
+      undefined,
+      value,
+    );
+    assert.deepEqual(requestQuotaFromRateLimitHeaders(headers, { now: NOW }), {
+      unit: "requests",
+      limit: 100,
+      remaining: 0,
+      observedAt: new Date(NOW).toISOString(),
+    }, value);
+  }
+});
+
+test("an invalid request reset leaves valid token and retry windows intact", () => {
+  const snapshot = parseRateLimitHeaders(new Headers({
+    "x-ratelimit-limit-requests": "100",
+    "x-ratelimit-remaining-requests": "0",
+    "x-ratelimit-reset-requests": "1e20",
+    "x-ratelimit-limit-tokens": "9000",
+    "x-ratelimit-remaining-tokens": "0",
+    "x-ratelimit-reset-tokens": "60",
+    "retry-after": "120",
+  }), { now: NOW });
+  assert.deepEqual(snapshot, {
+    requests: { limit: 100, remaining: 0 },
+    tokens: { limit: 9000, remaining: 0, resetAt: new Date(NOW + 60_000).toISOString() },
+    retryAt: new Date(NOW + 120_000).toISOString(),
+  });
+  assert.equal(cooldownUntil(snapshot), new Date(NOW + 120_000).toISOString());
+});
+
 test("openai-compatible headers become a normalized snapshot", () => {
   const snapshot = parseRateLimitHeaders(
     new Headers({

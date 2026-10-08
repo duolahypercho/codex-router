@@ -66,6 +66,9 @@ export async function waitForHealth({
   const deadline = Date.now() + timeoutMs;
   let attempt = 0;
   let lastFailure = "the service never answered";
+  // "timeout" when every probe we closed ourselves concluded nothing, so a
+  // caller can tell a starved-but-alive service from one whose port is gone.
+  let lastOutcome = "timeout";
 
   const assertStillStarting = () => {
     if (hasExited(child)) throw new Error(`${label} exited before becoming healthy.`);
@@ -112,9 +115,11 @@ export async function waitForHealth({
           const payload = await response.json().catch(() => ({}));
           if (payload.service === expectedService) return;
           lastFailure = `the health response did not identify ${expectedService}`;
+          lastOutcome = "answered";
         } else {
           await drainResponse(response);
           lastFailure = `the service answered HTTP ${response.status}`;
+          lastOutcome = "answered";
         }
       } catch (error) {
         // The distinction the whole fix rests on. A refusal is conclusive; a
@@ -125,6 +130,7 @@ export async function waitForHealth({
         lastFailure = timedOut
           ? `the service did not answer within ${windowMs} ms`
           : "the connection was refused";
+        lastOutcome = timedOut ? "timeout" : "refused";
       }
 
       const wait = timedOut
@@ -134,6 +140,8 @@ export async function waitForHealth({
       assertStillStarting();
       await sleep(wait);
     }
-    throw new Error(`Timed out waiting for ${label} to become healthy (${lastFailure}).`);
+    const error = new Error(`Timed out waiting for ${label} to become healthy (${lastFailure}).`);
+    error.probeOutcome = lastOutcome;
+    throw error;
   }
 }

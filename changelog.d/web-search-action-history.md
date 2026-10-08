@@ -1,0 +1,1 @@
+- **Replayed web history keeps batched queries, page opens, and in-page finds.** Chat Completions routes now receive a marker with every search query or the page URL and find pattern, instead of an empty search marker that discards the operation's context. Failed and in-progress operations retain their status, and legacy single-query markers keep their existing format.

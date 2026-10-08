@@ -3,7 +3,8 @@ import http from "node:http";
 import { Transform } from "node:stream";
 import test from "node:test";
 
-import { endStreamedResponse, pipeResponse } from "../src/http-utils.mjs";
+import { endStreamedResponse, markResponsesStream, pipeResponse } from "../src/http-utils.mjs";
+import { responsesStreamFailureTransform } from "../src/responses-stream-failure.mjs";
 
 function listen(server) {
   return new Promise((resolve) => {
@@ -193,6 +194,7 @@ test("an upstream body that fails mid-stream ends the chunked body instead of re
   // turn, so the failure is stated as a terminal event before the clean end.
   assert.match(result.body, /event: error/);
   assert.match(result.body, /local_router_stream_failed/);
+  assert.doesNotMatch(result.body, /data: \[DONE\]/, "an unmarked failure must not certify a partial Chat turn as complete");
 
   // `pipeline` tears the whole chain down; `.pipe()` left the transform alive.
   assert.equal(transform.destroyed, true, "the failure did not destroy the chain");
@@ -361,3 +363,46 @@ test("endStreamedResponse keeps its generic wording when nothing was diagnosed",
   assert.equal(data.code, "local_router_stream_failed");
   assert.match(data.message, /lost the upstream response stream/);
 });
+
+for (const partial of [false, true]) {
+  test(`a tracked Responses failure preserves its diagnosis and clean EOF${partial ? " after a partial frame" : ""}`, async () => {
+    const announced = { id: "resp_pipe_fixture", model: "fixture/model", created_at: 1_791_388_800 };
+    const prologue = `event: response.created\ndata: ${JSON.stringify({ type: "response.created", sequence_number: 0, response: announced })}\n\n`;
+    const visible = partial
+      ? 'data: {"type":"response.output_text.delta","sequence_number":1,"delta":"unfinished'
+      : 'data: {"type":"response.output_text.delta","sequence_number":1,"delta":"visible"}\n\n';
+    const server = http.createServer(async (_request, response) => {
+      markResponsesStream(response, { model: "requested/model" });
+      const upstream = {
+        status: 200, headers: new Map([["content-type", "text/event-stream"]]),
+        body: new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode(prologue + visible));
+            setTimeout(() => controller.error(new Error("fixture upstream failure")), 10);
+          },
+        }),
+      };
+      try {
+        await pipeResponse(upstream, response, new Set(), [responsesStreamFailureTransform(response, "text/event-stream")]);
+      } catch {
+        endStreamedResponse(response, { message: "The local router diagnosed the fixture reset." });
+      }
+    });
+    const port = await listen(server);
+    const result = await readRaw(port);
+    await close(server);
+    assert.equal(result.complete, true);
+    assert.equal(result.aborted, false);
+    assert.ok(result.body.startsWith(prologue + visible));
+    const block = result.body.split(/\r?\n\r?\n/).find((value) => value.startsWith("event: response.failed\n"));
+    assert.ok(block, "the response had an announced identity but lost its typed failure");
+    const failure = JSON.parse(block.split("\n").find((value) => value.startsWith("data: ")).slice(6));
+    assert.equal(failure.sequence_number, partial ? 1 : 2);
+    assert.deepEqual(failure.response, {
+      ...announced, object: "response", status: "failed", output: [], parallel_tool_calls: false, tool_choice: "none", tools: [],
+      error: { code: "server_error", message: "The local router diagnosed the fixture reset." },
+    });
+    assert.equal(failure.code, "local_router_stream_failed");
+    assert.doesNotMatch(result.body, /\[DONE\]|unterminatedevent/);
+  });
+}

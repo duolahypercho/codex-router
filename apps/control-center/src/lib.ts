@@ -1,8 +1,25 @@
-import type { UsageBucket, UsageMetric } from "./types";
+import type { UsageBucket, UsageEvent, UsageMetric } from "./types";
 import { createTranslator, detectLanguage, translatorLocale, type MessageKey, type Translate } from "./i18n.ts";
 
 export type AccountBucketSource = "account" | "router-fallback";
 export type AccountDisplayBucket = UsageBucket & { displaySource: AccountBucketSource };
+
+export function tokenCountFromEvent(event: UsageEvent): number | null {
+  const optionalCount = (value: number | undefined): number | null => {
+    const number = Number(value);
+    return Number.isFinite(number) && number >= 0 ? number : null;
+  };
+  const input = optionalCount(event.billedInputTokens ?? event.inputTokens);
+  const output = optionalCount(event.billedOutputTokens ?? event.outputTokens);
+  // Retry rows carry the selected response's raw total alongside all attempts'
+  // billed spend. Use the same precedence as the provider usage aggregate.
+  if (event.billedInputTokens !== undefined || event.billedOutputTokens !== undefined) {
+    return (input ?? 0) + (output ?? 0);
+  }
+  const explicit = optionalCount(event.totalTokens);
+  if (explicit !== null) return explicit;
+  return input !== null || output !== null ? (input ?? 0) + (output ?? 0) : null;
+}
 
 export function compactNumber(value: number | null | undefined): string {
   const number = Math.max(0, Number(value) || 0);

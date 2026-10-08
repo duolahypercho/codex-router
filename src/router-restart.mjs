@@ -7,6 +7,7 @@ import {
   runOperationProcessTree,
   runProcessTree,
 } from "./process-tree.mjs";
+import { routerNodeBinary } from "./node-runtime.mjs";
 import { waitForRouterHealth } from "./router-health.mjs";
 
 const SERVICE_SCRIPT = path.join(SOURCE_ROOT, "src", "service.mjs");
@@ -97,9 +98,15 @@ async function invokeService(
     deadline,
     stdio,
   };
+  // A Homebrew Node upgrade deletes the Cellar path this long-running process
+  // was started from, so process.execPath can name a binary that no longer
+  // exists. The refresh spawns already prefer the configured stable runtime;
+  // the restart has to as well, or a refresh succeeds and the restart it asks
+  // for dies with ENOENT.
+  const nodeBinary = routerNodeBinary(env);
   return childOwnsOperations
-    ? runOperationProcessTree(process.execPath, [SERVICE_SCRIPT, ...args], { ...options, run })
-    : run(process.execPath, [SERVICE_SCRIPT, ...args], options);
+    ? runOperationProcessTree(nodeBinary, [SERVICE_SCRIPT, ...args], { ...options, run })
+    : run(nodeBinary, [SERVICE_SCRIPT, ...args], options);
 }
 
 export async function routerServiceStatus({

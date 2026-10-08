@@ -1031,6 +1031,242 @@ test("Groq refuses more than 128 client tools before contacting the gateway", as
   }
 });
 
+// Moonshot rejects the whole request over a `$ref` that points outside
+// `#/$defs/`, and the router repairs the tool list for that route before the
+// tool-search pass runs. A definition the transcript already called is added
+// back after that pass, so it has to be repaired again or an unrepaired
+// connector schema reaches Kimi's validator (the restore counterpart of
+// "the kimi route expands Codex automation definitions with sibling refs").
+function deferredConnectorSchema() {
+  return {
+    type: "object",
+    properties: {
+      filters: {
+        type: "object",
+        properties: {
+          priceRange: {
+            type: "object",
+            properties: { min: { type: "number" }, max: { type: "number" } },
+            required: ["min"],
+          },
+          inboundTotalDurationRange: {
+            $ref: "#/properties/filters/properties/priceRange",
+          },
+        },
+      },
+    },
+  };
+}
+
+function foreignRefs(value, found = []) {
+  if (Array.isArray(value)) {
+    for (const entry of value) foreignRefs(entry, found);
+    return found;
+  }
+  if (!value || typeof value !== "object") return found;
+  for (const [key, entry] of Object.entries(value)) {
+    if (key === "$ref" && typeof entry === "string" && !entry.startsWith("#/$defs/")) {
+      found.push(entry);
+    } else foreignRefs(entry, found);
+  }
+  return found;
+}
+
+function deferredConnectorPayload(stream, model) {
+  return {
+    model,
+    stream,
+    input: [
+      { type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] },
+      {
+        type: "function_call",
+        name: "_flights_search",
+        namespace: "wego",
+        call_id: "call_wego",
+        arguments: '{"filters":{}}',
+      },
+      { type: "function_call_output", call_id: "call_wego", output: "{}" },
+    ],
+    tools: [
+      {
+        type: "tool_search",
+        execution: "client",
+        description: "Search deferred tools.",
+        parameters: {
+          type: "object",
+          properties: { query: { type: "string" } },
+          required: ["query"],
+          additionalProperties: false,
+        },
+      },
+      { type: "function", name: "exec_command" },
+      {
+        type: "namespace",
+        name: "wego",
+        tools: [
+          {
+            type: "function",
+            name: "_flights_search",
+            defer_loading: true,
+            description: "Search flights.",
+            inputSchema: deferredConnectorSchema(),
+          },
+        ],
+      },
+    ],
+  };
+}
+
+test("a Moonshot route repairs a deferred definition restored after the search pass", async () => {
+  const result = await scenario(false, {
+    model: "opencode-go/kimi-k2.7-code",
+    requestPayload: deferredConnectorPayload,
+    jsonBody: () => ({ id: "kimi-deferred-restore", output: [] }),
+  });
+  assert.equal(result.gatewayBodies.length, 1);
+  const outgoing = result.gatewayBodies[0];
+  const restored = outgoing.tools.find((tool) => tool.name === "wego___flights_search");
+  assert.ok(restored, "the called connector is declared");
+  assert.deepEqual(
+    foreignRefs(restored.parameters),
+    [],
+    "Moonshot only accepts pointers into #/$defs/",
+  );
+  assert.deepEqual(
+    restored.parameters.properties.filters.properties.inboundTotalDurationRange.properties,
+    { min: { type: "number" }, max: { type: "number" } },
+  );
+});
+
+// The forced choice is resolved after the tool list is built, so the router
+// has to hand it to the tool-search pass on every chat-completions route --
+// not only the bounded Groq one -- or the request leaves naming a withheld
+// deferred tool it never declares.
+test("a forced choice on a withheld deferred tool declares it on any route", async () => {
+  const result = await scenario(false, {
+    model: "opencode-go/kimi-k2.7-code",
+    requestPayload: (stream, model) => {
+      const payload = deferredConnectorPayload(stream, model);
+      return {
+        ...payload,
+        input: payload.input.slice(0, 1),
+        tool_choice: { type: "function", name: "wego___flights_search" },
+      };
+    },
+    jsonBody: () => ({ id: "kimi-deferred-choice", output: [] }),
+  });
+  const outgoing = result.gatewayBodies[0];
+  assert.ok(
+    outgoing.tools.some((tool) => tool.name === "wego___flights_search"),
+    "the forced connector is declared",
+  );
+});
+
+function selectedConnectorPayload(stream, model, input, toolChoice, plainTools = 1) {
+  const payload = groqToolSurfacePayload(stream, model, { plainTools, input, toolChoice });
+  payload.tools.push({
+    type: "namespace",
+    name: "mcp__codex_apps__gmail",
+    tools: [
+      { type: "function", name: "search", inputSchema: { type: "object", properties: {} } },
+      { type: "function", name: "unused", inputSchema: { type: "object", properties: {} } },
+    ],
+  });
+  return payload;
+}
+
+for (const [label, input] of [
+  ["string", "find the message"],
+  ["structured", [{ type: "message", role: "user", content: "find the message" }]],
+]) {
+  for (const kind of ["forced", "allowed"]) {
+    test(`Groq restores a selected connector for ${label} input and ${kind} choice`, async () => {
+      const fixture = groqModelFixture();
+      try {
+        const reference = { type: "function", namespace: "mcp__codex_apps__gmail", name: "search" };
+        const toolChoice = kind === "forced" ? reference
+          : { type: "allowed_tools", mode: "required", tools: [reference] };
+        const result = await scenario(false, {
+          model: fixture.model,
+          requestPayload: (stream, model) => selectedConnectorPayload(stream, model, input, toolChoice),
+          jsonBody: () => ({ id: `connector-${label}-${kind}`, output: [] }),
+          routerEnv: { MODEL_ROUTER_USER_MODELS: fixture.userModels, CODEX_ROUTER_APP_CONNECTORS: "none" },
+        });
+        assert.equal(result.gatewayBodies.length, 1);
+        const outgoing = result.gatewayBodies[0];
+        assert.deepEqual(outgoing.input, input, "selection preserves the client's input shape and content");
+        const names = outgoing.tools.map(tool => tool.name);
+        assert.ok(names.includes("mcp__codex_apps__gmail__search"));
+        assert.ok(!names.includes("mcp__codex_apps__gmail__unused"));
+        assert.ok(names.includes("core_tool_0"));
+        const flattenedReference = { type: "function", name: "mcp__codex_apps__gmail__search" };
+        assert.deepEqual(outgoing.tool_choice, kind === "forced" ? flattenedReference
+          : { type: "allowed_tools", mode: "required", tools: [flattenedReference] });
+      } finally {
+        rmSync(fixture.directory, { recursive: true, force: true });
+      }
+    });
+  }
+}
+
+test("Groq refuses string-input connector restoration when all 128 tool slots are occupied", async () => {
+  const fixture = groqModelFixture();
+  try {
+    const result = await scenario(false, {
+      model: fixture.model,
+      requestPayload: (stream, model) => selectedConnectorPayload(stream, model, "find the message",
+        { type: "function", namespace: "mcp__codex_apps__gmail", name: "search" }, 125),
+      routerEnv: { MODEL_ROUTER_USER_MODELS: fixture.userModels, CODEX_ROUTER_APP_CONNECTORS: "none" },
+      expectedStatus: 400,
+    });
+    assert.equal(result.gatewayBodies.length, 0);
+    const error = JSON.parse(result.clientBody).error;
+    assert.equal(error.code, "groq_tool_limit_exceeded");
+    assert.match(error.message, /1 discovered tools/);
+    assert.match(error.message, /only 0 slots remain/);
+  } finally {
+    rmSync(fixture.directory, { recursive: true, force: true });
+  }
+});
+
+test("Groq keeps a colliding plain choice at 128 tools and refuses its hidden namespace sibling", async () => {
+  const fixture = groqModelFixture();
+  try {
+    const payload = (stream, model, toolChoice) => {
+      const request = selectedConnectorPayload(stream, model, "find the message", toolChoice, 124);
+      request.tools.push({ type: "function", name: "mcp__codex_apps__gmail__search",
+        description: "Plain collision owner.", parameters: { type: "object", properties: {} } });
+      return request;
+    };
+    const environment = { MODEL_ROUTER_USER_MODELS: fixture.userModels, CODEX_ROUTER_APP_CONNECTORS: "none" };
+    const plain = await scenario(false, {
+      model: fixture.model,
+      requestPayload: (stream, model) => payload(stream, model,
+        { type: "function", name: "mcp__codex_apps__gmail__search" }),
+      jsonBody: () => ({ id: "plain-collision-choice", output: [] }),
+      routerEnv: environment,
+    });
+    assert.equal(plain.gatewayBodies.length, 1);
+    const outgoing = plain.gatewayBodies[0];
+    const selected = outgoing.tools.find(tool => tool.description === "Plain collision owner.");
+    assert.ok(selected);
+    assert.equal(outgoing.tools.length, 128);
+    assert.deepEqual(outgoing.tool_choice, { type: "function", name: selected.name });
+
+    const connector = await scenario(false, {
+      model: fixture.model,
+      requestPayload: (stream, model) => payload(stream, model,
+        { type: "function", namespace: "mcp__codex_apps__gmail", name: "search" }),
+      routerEnv: environment,
+      expectedStatus: 400,
+    });
+    assert.equal(connector.gatewayBodies.length, 0);
+    assert.equal(JSON.parse(connector.clientBody).error.code, "groq_tool_limit_exceeded");
+  } finally {
+    rmSync(fixture.directory, { recursive: true, force: true });
+  }
+});
+
 test("Groq re-adds a deferred app definition used by prior native history", async () => {
   const fixture = groqModelFixture();
   try {
@@ -1656,6 +1892,71 @@ test("bounded routes preserve one alias for pre-flattened MCP definitions and hi
   }
 });
 
+test("OpenRouter Muse preserves bounded aliases through MCP history and streamed or JSON responses", async () => {
+  const namespace = "mcp__neon__apm__production__snapshot__read_only";
+  const name = "get_monitor_snapshot_with_complete_context";
+  const wireName = `${namespace}__${name}`;
+  for (const stream of [true, false]) {
+    const result = await scenario(stream, {
+      model: "openrouter/muse-spark-1.3-contributor",
+      requestPayload: preflattenedBoundedMcpPayload,
+      sseBody: (outgoing) => {
+        const providerName = outgoing.tools.find(
+          (tool) => tool.description === "Long preflattened MCP fixture.",
+        ).name;
+        return [
+          sseEvent({
+            type: "response.output_item.done",
+            item: {
+              type: "function_call",
+              name: providerName,
+              call_id: "call_snapshot",
+              arguments: "{}",
+            },
+          }),
+          sseEvent({ type: "response.completed" }),
+          "data: [DONE]\n\n",
+        ].join("");
+      },
+      jsonBody: (outgoing) => {
+        const providerName = outgoing.tools.find(
+          (tool) => tool.description === "Long preflattened MCP fixture.",
+        ).name;
+        return {
+          id: "resp_preflattened_bounded",
+          output: [{
+            type: "function_call",
+            name: providerName,
+            call_id: "call_snapshot",
+            arguments: "{}",
+          }],
+        };
+      },
+    });
+    assert.equal(result.gatewayBodies.length, 1);
+    const outgoing = result.gatewayBodies[0];
+    assert.equal(outgoing.client_metadata, undefined);
+    const providerTool = outgoing.tools.find(
+      (tool) => tool.description === "Long preflattened MCP fixture.",
+    );
+    assert.notEqual(providerTool.name, wireName);
+    assert.ok(providerTool.name.length <= 64);
+    const historyCall = outgoing.input.find(
+      (item) => item.call_id === "call_previous_snapshot",
+    );
+    assert.equal(historyCall.name, providerTool.name);
+    assert.equal(historyCall.namespace, undefined);
+
+    const call = stream
+      ? functionCallsFromSse(result.clientBody).get("call_snapshot")
+      : JSON.parse(result.clientBody).output[0];
+    assert.deepEqual(
+      { namespace: call.namespace, name: call.name },
+      { namespace, name },
+    );
+  }
+});
+
 test("non-streaming routed responses restore namespace calls before client dispatch", async () => {
   const result = await scenario(false, {
     requestPayload: (stream, model) => {
@@ -1906,6 +2207,82 @@ test("Responses-native routed providers inherit the model on fresh local thread 
     target: { type: "projectless" },
     model: "meta/muse-spark-1.2",
   });
+});
+
+test("Azure routed spawns leave the model default to Codex while explicit overrides survive", async () => {
+  const directory = mkdtempSync(path.join(os.tmpdir(), "azure-spawn-default-"));
+  const providersFile = path.join(directory, "generic-providers.json");
+  const userModelsFile = path.join(directory, "user-models.json");
+  const model = "azure-kmamc/gpt-6-sol";
+  writeFileSync(providersFile, JSON.stringify({
+    version: 1,
+    providers: [{
+      id: "azure-kmamc",
+      displayName: "Azure test",
+      baseUrl: "http://127.0.0.1:1/v1",
+      adapter: "openai-responses",
+      headers: {},
+      allowPrivate: true,
+      enabled: true,
+    }],
+  }));
+  writeFileSync(userModelsFile, JSON.stringify({
+    version: 1,
+    models: [{
+      slug: model,
+      gatewayModel: "azure-test-sol",
+      compHash: "azure-test-sol-user-v1",
+      upstreamModel: "gpt-6-sol",
+      provider: "azure-kmamc",
+      listed: true,
+      displayName: "Azure test Sol",
+      description: "Local collaboration fixture.",
+      priority: 100,
+      defaultEffort: "high",
+      reasoningLevels: [{ effort: "high", description: "Deep reasoning" }],
+      contextWindow: 131072,
+      autoCompact: 110000,
+      inputModalities: ["text"],
+    }],
+  }));
+  try {
+    const result = await scenario(false, {
+      model,
+      routerEnv: {
+        MODEL_ROUTER_STATE_DIR: directory,
+        MODEL_ROUTER_GENERIC_PROVIDERS: providersFile,
+        MODEL_ROUTER_USER_MODELS: userModelsFile,
+        CODEX_HOME: path.join(directory, "codex-home"),
+      },
+      requestPayload: (stream, selectedModel) => ({
+        model: selectedModel,
+        stream,
+        input: [{ type: "message", role: "user", content: "Delegate." }],
+        tools: [
+          { type: "namespace", name: "collaboration", tools: [{ type: "function", name: "spawn_agent" }] },
+          { type: "namespace", name: "codex_app", tools: [{ type: "function", name: "create_thread" }] },
+        ],
+      }),
+      jsonBody: () => ({
+        id: "resp_azure_spawn",
+        output: [
+          { type: "function_call", namespace: "collaboration", name: "spawn_agent",
+            call_id: "default", arguments: '{"message":"Default child."}' },
+          { type: "function_call", namespace: "collaboration", name: "spawn_agent",
+            call_id: "explicit", arguments: '{"message":"Explicit child.","model":"azure-kmamc/gpt-6-luna"}' },
+          { type: "function_call", namespace: "codex_app", name: "create_thread",
+            call_id: "local", arguments: '{"prompt":"Local thread.","target":{"type":"projectless"}}' },
+        ],
+      }),
+    });
+    assert.equal(result.gatewayBodies[0].model, "azure-test-sol");
+    const calls = JSON.parse(result.clientBody).output;
+    assert.deepEqual(JSON.parse(calls[0].arguments), { message: "Default child." });
+    assert.equal(JSON.parse(calls[1].arguments).model, "azure-kmamc/gpt-6-luna");
+    assert.equal(JSON.parse(calls[2].arguments).model, model);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 const GO_NAMESPACE = "mcp__codex_apps__github";

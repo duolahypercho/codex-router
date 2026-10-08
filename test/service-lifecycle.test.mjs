@@ -120,13 +120,14 @@ test("Windows start dispatches managed and foreground modes without bypassing li
     execFileSync("powershell.exe", ["-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", path.join(root, "codex-router.ps1"), "start"], { env, encoding: "utf8" });
     let lines = readFileSync(log, "utf8").trim().split(/\r?\n/);
     assert.equal(lines.length, 1);
-    assert.match(lines[0], /src\\service\.mjs start$/i);
+    // PowerShell quotes paths containing spaces; node.cmd receives that quote.
+    assert.match(lines[0], /src\\service\.mjs"? start$/i);
 
     writeFileSync(log, "");
     execFileSync("powershell.exe", ["-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", path.join(root, "codex-router.ps1"), "start", "--foreground"], { env, encoding: "utf8" });
     lines = readFileSync(log, "utf8").trim().split(/\r?\n/);
     assert.equal(lines.length, 1);
-    assert.match(lines[0], /src\\foreground-start\.mjs$/i);
+    assert.match(lines[0], /src\\foreground-start\.mjs"?$/i);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }

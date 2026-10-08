@@ -1,7 +1,7 @@
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 
-import lockfile from "proper-lockfile";
+import { acquireFileLock } from "./file-lock.mjs";
 
 import { STATE_DIR } from "./paths.mjs";
 
@@ -67,7 +67,7 @@ export async function withModelOverlayLock(
   const target = modelOverlayLockTarget(stateDir);
   let release;
   try {
-    release = await lockfile.lock(target, {
+    release = await acquireFileLock(target, {
       realpath: false,
       lockfilePath: `${target}.lock`,
       stale: normalizedStaleMs,

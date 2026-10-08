@@ -23,6 +23,7 @@ import {
   formatDateTime,
   formatDuration,
   remainingPercent,
+  tokenCountFromEvent,
 } from "../lib";
 import type {
   AccountUsage,
@@ -1551,14 +1552,6 @@ function recentWindowEvents(events: UsageEvent[] | undefined, now: number): Usag
     const at = Date.parse(event.at);
     return Number.isFinite(at) && at >= cutoff && at <= now;
   });
-}
-
-function tokenCountFromEvent(event: UsageEvent): number | null {
-  const explicit = optionalNumber(event.totalTokens);
-  if (explicit !== null) return explicit;
-  const input = optionalNumber(event.billedInputTokens ?? event.inputTokens);
-  const output = optionalNumber(event.billedOutputTokens ?? event.outputTokens);
-  return input !== null || output !== null ? (input || 0) + (output || 0) : null;
 }
 
 interface EventTokenBreakdown {

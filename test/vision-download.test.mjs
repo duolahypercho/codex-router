@@ -22,6 +22,7 @@ const {
   streamOllamaPull,
   writeVisionDownload,
 } = await import("../src/vision-download.mjs");
+const { applyModelOverlayPublication } = await import("../src/model-overlay-publication.mjs");
 
 function ndjsonResponse(events) {
   const body = Readable.from(
@@ -158,6 +159,37 @@ test("a stream that ends without success is a failure, not a silent pass", async
   );
 });
 
+test("the final Ollama record is processed without a trailing newline", async () => {
+  const wire = Buffer.from('{"status":"pulling manifest"}\r\n{"status":"success"}');
+  for (const chunks of [[wire], [...wire].map((byte) => Buffer.from([byte]))]) {
+    const progress = [];
+    await streamOllamaPull("model:latest", {
+      fetchImpl: async () => ({ ok: true, body: Readable.from(chunks) }),
+      onProgress: (event) => progress.push(event.detail),
+    });
+    assert.deepEqual(progress, ["pulling manifest", "success"]);
+  }
+});
+
+test("an unterminated final error keeps the daemon's Unicode message", async () => {
+  const message = "Model yüklenemedi 🛑";
+  const wire = Buffer.from(`${JSON.stringify({ status: "success" })}\n${JSON.stringify({ error: message })}`);
+  await assert.rejects(streamOllamaPull("model:latest", {
+    fetchImpl: async () => ({
+      ok: true,
+      body: Readable.from([...wire].map((byte) => Buffer.from([byte]))),
+    }),
+  }), (error) => error.message === message);
+});
+
+test("a truncated final record cannot manufacture download success", async () => {
+  for (const tail of ['{"status":"suc', '{"status":"pulling manifest"}', " \r\n"]) {
+    await assert.rejects(streamOllamaPull("model:latest", {
+      fetchImpl: async () => ({ ok: true, body: Readable.from([Buffer.from(tail)]) }),
+    }), /ended before Ollama confirmed success/);
+  }
+});
+
 test("an unreachable daemon names the cause", async () => {
   await assert.rejects(
     streamOllamaPull("x", {
@@ -218,6 +250,55 @@ test("a first-run vision pull adopts only after download", async () => {
 
   assert.deepEqual(events, ["local:qwen2.5vl:3b", "enabled:true", "publish"]);
   assert.deepEqual(result, { adopt: true });
+});
+
+for (const adopt of [true, false]) {
+  test(`vision publication warnings survive a completed pull (adopt=${adopt})`, async () => {
+    const events = [];
+    const result = await finalizeVisionDownload("qwen2.5vl:3b", {
+      readSettings: () => ({ enabled: true, engine: "chosen-reader" }),
+      configured: () => !adopt,
+      setLocal: ({ model }) => events.push(`local:${model}`),
+      setEnabled: (enabled) => events.push(`enabled:${enabled}`),
+      finalizePublication: (options) => applyModelOverlayPublication({
+        ...options,
+        publish: async () => {
+          events.push("publish");
+          throw new Error("installed target could not be refreshed");
+        },
+      }),
+    });
+
+    assert.deepEqual(result, {
+      adopt,
+      catalogError: "installed target could not be refreshed",
+    });
+    assert.deepEqual(events, adopt
+      ? ["local:qwen2.5vl:3b", "enabled:true", "publish"]
+      : ["publish"]);
+    assert.equal(result.activationRolledBack, undefined, "a warning does not undo adoption");
+  });
+}
+
+test("a thrown vision publication error still reports activation rollback", async () => {
+  const publicationModes = [];
+  const result = await finalizeVisionDownload("qwen2.5vl:3b", {
+    readSettings: () => ({ enabled: true, engine: null }),
+    configured: () => false,
+    setLocal: () => {},
+    setEnabled: () => {},
+    finalizePublication: async ({ warningOnly }) => {
+      publicationModes.push(warningOnly);
+      if (warningOnly) throw new Error("publication unexpectedly threw");
+      return {};
+    },
+  });
+  assert.deepEqual(result, {
+    adopt: false,
+    activationRolledBack: true,
+    catalogError: "publication unexpectedly threw",
+  });
+  assert.deepEqual(publicationModes, [true, false], "rollback republishes without warning-only mode");
 });
 
 test("download state round-trips through protected state", () => {

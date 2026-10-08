@@ -20,6 +20,7 @@ import {
   exactNumber,
   formatDateTime,
   formatDuration,
+  tokenCountFromEvent,
   remainingPercent,
 } from "../lib";
 import type {
@@ -715,11 +716,7 @@ function EventRow({ event }: { event: UsageEventTelemetry }) {
   const t = useI18n();
   const success = Boolean(event.status && event.status >= 200 && event.status < 400);
   const failure = Boolean(event.status && event.status >= 400);
-  const total = event.totalTokens ?? (
-    event.inputTokens !== undefined || event.outputTokens !== undefined
-      ? (event.inputTokens || 0) + (event.outputTokens || 0)
-      : undefined
-  );
+  const total = tokenCountFromEvent(event);
   const flag = eventFlag(event, t);
   return (
     <article>
@@ -734,7 +731,7 @@ function EventRow({ event }: { event: UsageEventTelemetry }) {
         <small>{event.provider || t("status.routerFallback")}</small>
       </span>
       <span className="st-event-metering">
-        <strong>{total === undefined ? t("status.event.unmetered") : t("status.model.tok", { count: compactNumber(total) })}</strong>
+        <strong>{total === null ? t("status.event.unmetered") : t("status.model.tok", { count: compactNumber(total) })}</strong>
         <small>{event.cachedInputTokens === undefined
           ? t("status.event.noCacheDetail")
           : t("status.event.cached", { count: compactNumber(event.cachedInputTokens) })}</small>

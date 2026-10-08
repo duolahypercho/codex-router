@@ -6,6 +6,7 @@ const messages = {
   "tray.open": "開啟控制中心",
   "app.quit": "結束 Codex Router",
   "app.about": "關於 Codex Router",
+  "app.settings": "設定…",
   "app.services": "服務",
   "app.hide": "隱藏 Codex Router",
   "app.hideOthers": "隱藏其他應用程式",

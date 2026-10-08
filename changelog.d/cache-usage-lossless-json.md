@@ -1,0 +1,1 @@
+- **Cache-usage normalization preserves upstream bytes when JSON cannot be rewritten exactly.** The Z.ai, OpenCode Go, and OpenRouter compatibility pass leaves duplicate keys, lossy numeric values, and invalid UTF-8 unchanged. Unambiguous usage still gets its cache alias and choice-bearing terminal normalization.

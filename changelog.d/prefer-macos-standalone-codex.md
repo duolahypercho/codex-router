@@ -1,0 +1,1 @@
+- **On macOS, the router uses the user's standalone Codex CLI before a desktop app's bundled copy.** A service reinstall can omit `CODEX_BIN`; the router now finds `~/.local/bin/codex` first when that executable is present, while an explicit `CODEX_BIN` still takes priority.

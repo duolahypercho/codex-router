@@ -1,0 +1,1 @@
+- **Codex Router now detects the CLI bundled in recent ChatGPT desktop releases on macOS.** Native model catalog refreshes can use the current app-bundled CLI instead of falling back to an older standalone installation.

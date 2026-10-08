@@ -49,43 +49,33 @@ test("every MiMo V2.6 route records its upstream id and a reserved window", () =
 });
 
 test("MiMo V2.6 windows follow each provider's own catalog figure", () => {
-  // Xiaomi's API, OpenRouter, Nous Portal, and Command Code all publish
-  // 1,048,576 for these ids.
-  for (const slug of ROUTES.map(([slug]) => slug).filter((slug) => !slug.startsWith("opencode-go/"))) {
+  // Xiaomi's API, OpenRouter, Nous Portal, Command Code, and opencode Go (via
+  // models.dev) all publish 1,048,576 for these ids.
+  for (const [slug] of ROUTES) {
     assert.equal(MODEL_BY_SLUG.get(slug).contextWindow, 1_048_576, slug);
-  }
-
-  // OpenCode's catalog publishes no limit for a paid Go id, so these keep the
-  // figure their checked-in V2.5 siblings on the same route already use.
-  for (const slug of ["opencode-go/mimo-v2.6-pro", "opencode-go/mimo-v2.6-flash"]) {
-    assert.equal(MODEL_BY_SLUG.get(slug).contextWindow, 1_000_000, slug);
-    assert.equal(
-      MODEL_BY_SLUG.get(slug).contextWindow,
-      MODEL_BY_SLUG.get(slug.replace("v2.6-flash", "v2.5").replace("v2.6-pro", "v2.5-pro")).contextWindow,
-      slug,
-    );
   }
 });
 
 test("MiMo V2.6 image input is claimed only where the route publishes it", () => {
-  // Xiaomi, Nous, and OpenRouter each advertise image input on these ids.
+  // Xiaomi, Nous, OpenRouter, and opencode Go (via models.dev) each advertise
+  // image input on these ids.
   for (const slug of [
     "xiaomi-mimo/mimo-v2.6-pro",
     "xiaomi-mimo/mimo-v2.6-flash",
     "xiaomi-mimo/mimo-v2.6-pro-ultraspeed",
     "nousresearch/mimo-v2.6-pro",
     "openrouter/mimo-v2.6-flash",
+    "opencode-go/mimo-v2.6-pro",
+    "opencode-go/mimo-v2.6-flash",
   ]) {
     assert.deepEqual(MODEL_BY_SLUG.get(slug).inputModalities, ["text", "image"], slug);
   }
 
-  // Command Code and opencode Go publish no modalities for these ids, so they
-  // stay on the conservative text-only default their V2.5 entries use.
+  // Command Code publishes no modalities for these ids, so they stay on the
+  // conservative text-only default its V2.5 entry uses.
   for (const slug of [
     "commandcode/mimo-v2.6-pro",
     "commandcode/mimo-v2.6-flash",
-    "opencode-go/mimo-v2.6-pro",
-    "opencode-go/mimo-v2.6-flash",
   ]) {
     assert.deepEqual(MODEL_BY_SLUG.get(slug).inputModalities, ["text"], slug);
   }

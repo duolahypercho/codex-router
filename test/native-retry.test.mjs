@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { zstdDecompressSync } from "node:zlib";
 
 import { callerBaseUrl } from "../src/caller-auth.mjs";
+import { connectTimeoutMs } from "../src/fetch-transport.mjs";
 import { fetchWithRetry } from "../src/upstream-retry.mjs";
 import { openPort } from "./port-pool.mjs";
 
@@ -74,8 +75,17 @@ function run(env) {
   return child;
 }
 
+// A spawned router needs a moment to publish its catalog before it answers
+// /models. Five seconds was enough on an idle machine and not on a loaded one:
+// four of these waits timed out on a loaded host on 2026-09-21 while unrelated
+// heavy work ran, which failed the auto-update gate and blocked activation of
+// the very fix the test guards. The wait is bounded, polls at 50ms, and still
+// fails immediately when the child exits, so a longer deadline costs an idle
+// machine nothing.
+const SPAWNED_ROUTER_WAIT_MS = 30_000;
+
 async function waitFor(url, child) {
-  const deadline = Date.now() + 5_000;
+  const deadline = Date.now() + SPAWNED_ROUTER_WAIT_MS;
   while (Date.now() < deadline) {
     if (child.exitCode !== null) {
       throw new Error(`Child exited early (${child.exitCode}): ${child.testErrors()}`);
@@ -467,6 +477,76 @@ test("a connect failure is retried and an abort never is", async () => {
     /aborted/,
   );
   assert.equal(abortCalls, 1);
+});
+
+// The 2026-09-21 regression, as a test. A connect attempt now costs the
+// configured bound (3s by default), not undici's 10s default, so the loop can
+// afford to retry the failures its own retryable set names. Before the bound
+// existed the first attempt alone outran the budget, which is why 454 connect
+// timeouts across two machines produced zero connect retries and 502s.
+test("a bounded connect timeout is affordable for every retry", async () => {
+  const connectTimeout = () => {
+    const error = new TypeError("fetch failed");
+    error.cause = Object.assign(new Error("Connect Timeout Error"), {
+      code: "UND_ERR_CONNECT_TIMEOUT",
+    });
+    return error;
+  };
+  let calls = 0;
+  let clock = 0;
+  const result = await fetchWithRetry(
+    "http://upstream.invalid/responses",
+    {},
+    {
+      // Defaults on purpose: this is the production bound and backoff, so the
+      // test fails if either default stops fitting the other.
+      now: () => clock,
+      sleepImpl: async (delayMs) => {
+        clock += delayMs;
+      },
+      fetchImpl: async () => {
+        calls += 1;
+        clock += connectTimeoutMs();
+        if (calls < 3) throw connectTimeout();
+        return new Response("ok", { status: 200 });
+      },
+    },
+  );
+  assert.equal(calls, 3);
+  assert.equal(result.retries, 2);
+  assert.equal(result.response.status, 200);
+});
+
+// The same loop must still relay a connect failure it cannot afford: ten
+// seconds per attempt is the undici default this incident was made of, and
+// replaying it three times would turn one slow failure into a hang.
+test("a connect timeout that outlives the budget is relayed", async () => {
+  const connectTimeout = () => {
+    const error = new TypeError("fetch failed");
+    error.cause = Object.assign(new Error("Connect Timeout Error"), {
+      code: "UND_ERR_CONNECT_TIMEOUT",
+    });
+    return error;
+  };
+  let calls = 0;
+  let clock = 0;
+  await assert.rejects(
+    fetchWithRetry(
+      "http://upstream.invalid/responses",
+      {},
+      {
+        backoffMs: 0,
+        now: () => clock,
+        fetchImpl: async () => {
+          calls += 1;
+          clock += 10_000;
+          throw connectTimeout();
+        },
+      },
+    ),
+    (error) => error?.cause?.code === "UND_ERR_CONNECT_TIMEOUT",
+  );
+  assert.equal(calls, 1);
 });
 
 // #171: a Windows machine under loopback churn failed native connects with

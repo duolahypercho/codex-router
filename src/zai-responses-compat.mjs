@@ -1,5 +1,12 @@
 import { Transform } from "node:stream";
-import { StringDecoder } from "node:string_decoder";
+
+const CRLF_SEP = Buffer.from("\r\n\r\n");
+const LF_SEP = Buffer.from("\n\n");
+const EMPTY = Buffer.alloc(0);
+
+function fatalUtf8(buffer) {
+  return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(buffer);
+}
 
 function eventBlock(block) {
   const newline = block.includes("\r\n") ? "\r\n" : "\n";
@@ -68,48 +75,85 @@ function sanitizeMessageItem(item, fallbackText = "") {
   return { ...item, content };
 }
 
+// LiteLLM 1.96's Chat Completions -> Responses bridge opens a reasoning item
+// when the first upstream chunk carries reasoning, closes it, and then streams
+// the assistant text with no `output_item.added` / `content_part.added`, on the
+// reasoning item's own `output_index`, closing the part as `reasoning_text`.
+// Codex logs `OutputTextDelta without active item` for every such delta. First
+// seen on Z.ai GLM-5.3, then on OpenRouter (MiMo V2.6 Flash, Space Bunny
+// Alpha); the pinned LiteLLM emits it for any Chat Completions upstream whose
+// reply starts with reasoning. This stage injects the missing envelope, moves
+// the message to the next free output index, and never relays reasoning as
+// message content. A stream that already carries its envelope is unchanged.
+//
+// Framing is byte-level: a block this stage does not change is relayed as the
+// exact bytes that arrived, and a frame that is not valid UTF-8 switches
+// rewriting off for the rest of the stream and relays everything verbatim.
 export class ZaiResponsesCompatTransform extends Transform {
-  #decoder = new StringDecoder("utf8");
-  #buffer = "";
+  #buffer = Buffer.alloc(0);
+  #passthrough = false;
   #maxOutputIndex = -1;
   #message;
+  // Items the upstream opened as something other than a message. Their content
+  // parts belong to them, so they must never be adopted as a message envelope.
+  #otherItems = new Set();
 
-  _transform(chunk, _encoding, callback) {
-    this.#buffer += this.#decoder.write(chunk);
+  _transform(chunk, encoding, callback) {
+    const piece = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, encoding);
+    if (this.#passthrough) {
+      this.push(piece);
+      callback();
+      return;
+    }
+    this.#buffer = this.#buffer.length ? Buffer.concat([this.#buffer, piece]) : piece;
     this.#emitCompleteBlocks();
     callback();
   }
 
   _flush(callback) {
-    this.#buffer += this.#decoder.end();
-    this.#emitCompleteBlocks(true);
+    if (this.#passthrough) {
+      if (this.#buffer.length) this.push(this.#buffer);
+      this.#buffer = Buffer.alloc(0);
+    } else {
+      this.#emitCompleteBlocks(true);
+    }
     callback();
   }
 
   #emitCompleteBlocks(flush = false) {
-    while (this.#buffer.length) {
-      const crlf = this.#buffer.indexOf("\r\n\r\n");
-      const lf = this.#buffer.indexOf("\n\n");
+    while (this.#buffer.length && !this.#passthrough) {
+      const crlf = this.#buffer.indexOf(CRLF_SEP);
+      const lf = this.#buffer.indexOf(LF_SEP);
       let index = -1;
-      let separator = "";
+      let separator = EMPTY;
       if (crlf !== -1 && (lf === -1 || crlf <= lf)) {
         index = crlf;
-        separator = "\r\n\r\n";
+        separator = CRLF_SEP;
       } else if (lf !== -1) {
         index = lf;
-        separator = "\n\n";
+        separator = LF_SEP;
       }
-      if (index === -1) {
-        if (!flush) return;
-        const block = this.#buffer;
-        this.#buffer = "";
-        for (const piece of this.#rewriteBlock(block)) this.push(Buffer.from(piece));
+      if (index === -1 && !flush) return;
+      const end = index === -1 ? this.#buffer.length : index;
+      const original = this.#buffer.subarray(0, end + separator.length);
+      const bytes = this.#buffer.subarray(0, end);
+      this.#buffer = this.#buffer.subarray(end + separator.length);
+      let block;
+      try {
+        block = fatalUtf8(bytes);
+      } catch {
+        this.push(Buffer.from(original));
+        if (this.#buffer.length) this.push(Buffer.from(this.#buffer));
+        this.#buffer = Buffer.alloc(0);
+        this.#passthrough = true;
         return;
       }
-      const block = this.#buffer.slice(0, index);
-      this.#buffer = this.#buffer.slice(index + separator.length);
       const pieces = this.#rewriteBlock(block);
-      for (const piece of pieces) this.push(Buffer.from(`${piece}${separator}`));
+      if (pieces.length === 1 && pieces[0] === block) {
+        this.push(Buffer.from(original));
+        continue;
+      }
+      for (const piece of pieces) this.push(Buffer.concat([Buffer.from(piece), separator]));
     }
   }
 
@@ -176,9 +220,19 @@ export class ZaiResponsesCompatTransform extends Transform {
     if (!parsed) return [block];
     const event = parsed.event;
     const type = event?.type;
+    if (
+      event?.item_id
+      && this.#otherItems.has(String(event.item_id))
+      && (type?.startsWith("response.content_part.") || type?.startsWith("response.output_text."))
+    ) {
+      return [block];
+    }
     if (type === "response.output_item.added") {
       if (Number.isInteger(event.output_index)) {
         this.#maxOutputIndex = Math.max(this.#maxOutputIndex, event.output_index);
+      }
+      if (event?.item?.type && event.item.type !== "message" && event.item.id) {
+        this.#otherItems.add(String(event.item.id));
       }
       if (event?.item?.type === "message") {
         const item = sanitizeMessageItem(event.item);
@@ -289,8 +343,17 @@ export class ZaiResponsesCompatTransform extends Transform {
   }
 }
 
-export function zaiResponsesCompatTransform(providerId, contentType = "") {
-  if (!["zai-api", "zai-coding"].includes(String(providerId))) return undefined;
+// Every routed provider whose turns LiteLLM translates from Chat Completions
+// (`protocol: "openai"`, the default) gets the envelope repair. Native traffic
+// has no provider and never gains the stage. `openai-responses` providers skip
+// the bridge. Direct DeepSeek has its own bridge repair in
+// deepseek-tool-message-compat.mjs. Anthropic Messages routes also cross the
+// bridge, but arrive message-first with their envelope; widening this to them,
+// or to another protocol, needs a captured stream from that protocol first.
+export function messageEnvelopeCompatTransform(provider, contentType = "") {
   if (!String(contentType).toLowerCase().includes("text/event-stream")) return undefined;
+  if (!provider || typeof provider !== "object" || !provider.id) return undefined;
+  if (provider.id === "deepseek") return undefined;
+  if ((provider.protocol ?? "openai") !== "openai") return undefined;
   return new ZaiResponsesCompatTransform();
 }

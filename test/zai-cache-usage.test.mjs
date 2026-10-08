@@ -51,6 +51,44 @@ test("an empty usage object is malformed and passes through byte-for-byte", asyn
   assert.equal(await transformed([input]), input);
 });
 
+test("cache normalization preserves JSON that cannot be rewritten exactly", async () => {
+  const unsafe = [
+    '"request_id":9007199254740993',
+    '"fraction":0.10000000000000001',
+    '"small":1e-324',
+    '"large":1e309',
+    '"signed_zero":-0',
+    '"id":"first","id":"second"',
+    '"id":"first","\\u0069d":"second"',
+    '"extra":{"nested":1,"nested":2}',
+  ];
+  for (const fields of unsafe) {
+    const input = `data: {${fields},"choices":[{"finish_reason":"stop"}],"usage":{"prompt_tokens":12,"prompt_tokens_details":{"cached_tokens":8}}}\r\n\r\n`;
+    assert.equal(await transformed([input.slice(0, 25), input.slice(25)]), input, fields);
+  }
+});
+
+test("a malformed UTF-8 usage line is relayed as the original bytes", async () => {
+  const input = Buffer.concat([
+    Buffer.from('data: {"id":"'), Buffer.from([0xff]),
+    Buffer.from('","usage":{"prompt_tokens_details":{"cached_tokens":8}}}\n\n'),
+  ]);
+  const stream = Readable.from([input.subarray(0, 14), input.subarray(14)])
+    .pipe(new ZaiCacheUsageCompatTransform());
+  const output = [];
+  for await (const chunk of stream) output.push(chunk);
+  assert.deepEqual(Buffer.concat(output), input);
+});
+
+test("exact decimal spellings still permit cache normalization", async () => {
+  const input = 'data: {"weight":1.25,"exponent":1e3,"choices":[],"usage":{"prompt_tokens_details":{"cached_tokens":8.0}}}\n\n';
+  const output = await transformed([input]);
+  const payload = JSON.parse(output.slice(5).trim());
+  assert.equal(payload.weight, 1.25);
+  assert.equal(payload.exponent, 1000);
+  assert.equal(payload.usage.prompt_cache_hit_tokens, 8);
+});
+
 
 test("Z.ai choice-bearing terminal usage is normalized to a usage-only chunk", async () => {
   const terminal = {

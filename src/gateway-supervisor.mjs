@@ -54,6 +54,21 @@ export const MAX_RESTART_BACKOFF_MS = 30_000;
 export const DEFAULT_HEALTH_INTERVAL_MS = 15_000;
 export const DEFAULT_HEALTH_FAILURES = 3;
 
+// A probe that times out is not the same evidence as one that is refused. A
+// refused loopback connection means the listener is gone -- the case above --
+// and a few in a row are conclusive. A timeout means something accepted the
+// connection, or this machine was too starved to schedule the answer: under a
+// load average in the hundreds a healthy LiteLLM misses a 4 s probe while it is
+// still streaming a turn. Killing it on the short fuse cut that live stream,
+// and the replacement then could not finish importing under the same load, so
+// the router answered 502 for minutes. Timeouts therefore get a long fuse
+// (~20 intervals, several minutes) that still ends a truly wedged event loop.
+export const DEFAULT_HEALTH_STALL_FAILURES = 20;
+
+// How many of start.mjs's cold-start health budgets a still-running
+// replacement gets before it is stopped and counted as a failed restart.
+export const DEFAULT_STARTUP_BUDGETS = 3;
+
 // Doubling from the base, capped. The cap matters more than the curve: a
 // gateway that crashes on a poisoned request recovers on the first restart,
 // while one that dies on startup must not be respawned faster than it takes to
@@ -99,6 +114,10 @@ export function gatewaySupervisorLimits(env = process.env) {
       env.CODEX_ROUTER_GATEWAY_HEALTH_FAILURES,
       DEFAULT_HEALTH_FAILURES,
     ),
+    healthStallFailures: positiveInteger(
+      env.CODEX_ROUTER_GATEWAY_HEALTH_STALL_FAILURES,
+      DEFAULT_HEALTH_STALL_FAILURES,
+    ),
   };
 }
 
@@ -110,33 +129,49 @@ function reason(error) {
   return (error instanceof Error && error.message) || String(error);
 }
 
-// Resolve as soon as the child exits OR its liveness probe fails
-// `healthFailures` times in a row. The watchdog is marked stopped once the race
-// is decided so it cannot keep probing a child that already exited.
+// Resolve as soon as the child exits OR its liveness probe fails conclusively
+// `healthFailures` times in a row (or times out `healthStallFailures` times in
+// a row). The watchdog is marked stopped once the race is decided so it cannot
+// keep probing a child that already exited.
 async function waitForExitOrUnhealthy(
   current,
-  { label, waitForExit, healthCheck, healthIntervalMs, healthFailures, isShuttingDown, sleep },
+  {
+    label,
+    waitForExit,
+    healthCheck,
+    healthIntervalMs,
+    healthFailures,
+    healthStallFailures,
+    isShuttingDown,
+    sleep,
+  },
 ) {
   const exit = waitForExit(current, label).then((result) => ({ kind: "exit", result }));
   let stopped = false;
   const watchdog = (async () => {
     let consecutive = 0;
+    let conclusive = 0;
     while (!stopped) {
       await sleep(healthIntervalMs);
       if (stopped || isShuttingDown() || !isRunning(current)) return null;
       try {
         await healthCheck();
         consecutive = 0;
-      } catch {
+        conclusive = 0;
+      } catch (error) {
         consecutive += 1;
-        if (consecutive >= healthFailures) {
+        if (error?.probeOutcome !== "timeout") conclusive += 1;
+        const stalled = consecutive >= Math.max(healthFailures, healthStallFailures);
+        if (conclusive >= healthFailures || stalled) {
           return {
             kind: "unhealthy",
             result: {
               label,
               code: null,
               signal: null,
-              reason: `${consecutive} consecutive liveness failures`,
+              reason: stalled
+                ? `${consecutive} consecutive liveness failures, ${consecutive - conclusive} of them timeouts`
+                : `${conclusive} consecutive liveness failures`,
             },
           };
         }
@@ -174,6 +209,8 @@ export async function superviseGateway({
   healthCheck,
   healthIntervalMs = DEFAULT_HEALTH_INTERVAL_MS,
   healthFailures = DEFAULT_HEALTH_FAILURES,
+  healthStallFailures = DEFAULT_HEALTH_STALL_FAILURES,
+  startupBudgets = DEFAULT_STARTUP_BUDGETS,
 } = {}) {
   let current = child;
   let restarts = 0;
@@ -188,6 +225,7 @@ export async function superviseGateway({
           healthCheck,
           healthIntervalMs,
           healthFailures,
+          healthStallFailures,
           isShuttingDown,
           sleep,
         })
@@ -236,7 +274,22 @@ export async function superviseGateway({
     restarts += 1;
     try {
       current = start();
-      await waitForHealth(current);
+      // A replacement that is still running when its health budget runs out is
+      // usually a starved import, not a broken one: killing it restarts the
+      // import from zero under the same load, and the loop never converges.
+      // Give a live child a few more budgets before counting it as failed.
+      for (let budget = 1; ; budget += 1) {
+        try {
+          await waitForHealth(current);
+          break;
+        } catch (error) {
+          if (budget >= startupBudgets || !isRunning(current) || isShuttingDown()) throw error;
+          log(
+            `${label} is still starting (${reason(error)}); waiting instead of ` +
+              `restarting its import (budget ${budget + 1} of ${startupBudgets}).`,
+          );
+        }
+      }
       log(`${label} is healthy again after ${restarts} restart(s).`);
     } catch (error) {
       log(`${label} did not come back: ${reason(error)}.`);

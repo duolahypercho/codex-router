@@ -1,6 +1,10 @@
 export const NAVIGATION_ARGUMENT = "--router-destination";
 export const NAVIGATION_SOURCE_ARGUMENT = "--router-source";
-export const NAVIGATION_DESTINATIONS = Object.freeze(["usage", "usage-resets"]);
+// `settings` is what the Settings items ask for. The `codex-router` scheme is
+// registered to the tray, whose parser for widget and other external links
+// still accepts only the usage pages; this app registers no scheme, so a URL
+// reaches it only when a local process addresses it directly.
+export const NAVIGATION_DESTINATIONS = Object.freeze(["usage", "usage-resets", "settings"]);
 const SOURCE_ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
 export function controlCenterDestination(commandLine) {
@@ -32,10 +36,8 @@ export function controlCenterNavigationURL(value) {
     || parsed.port
     || parsed.hash
   ) return undefined;
-  const destination = parsed.pathname === "/usage"
-    ? "usage"
-    : parsed.pathname === "/usage-resets" ? "usage-resets" : undefined;
-  if (!destination) return undefined;
+  const destination = parsed.pathname.slice(1);
+  if (!NAVIGATION_DESTINATIONS.includes(destination)) return undefined;
   const keys = [...parsed.searchParams.keys()];
   const sourceValues = parsed.searchParams.getAll("source");
   if (keys.some((key) => key !== "source") || sourceValues.length > 1) {

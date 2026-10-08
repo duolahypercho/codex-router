@@ -1,13 +1,16 @@
+import { normalizeAzureOpenAIResponsesRequest } from "./azure-openai-compat.mjs";
 import http from "node:http";
 import {
   requiresReasoningContentOnToolCalls,
   usesNativeChatReasoning,
 } from "./chat-reasoning.mjs";
 import {
+  createReasoningReplayJsonTap,
   createReasoningReplayTap,
   reasoningForToolCalls,
   toolCallIdsOf,
 } from "./chat-reasoning-replay.mjs";
+import { EFFORT_LADDER, declaredEffort } from "./effort-ladder.mjs";
 import {
   deepSeekResponsesEffort,
   deepSeekResponsesInput,
@@ -201,19 +204,8 @@ function hy4Effort(value, levels) {
 // request under the model's floor lands on that floor. An absent or unknown
 // value is treated as "high", which is what the two-tier map sent before this
 // generalization.
-const EFFORT_LADDER = ["minimal", "low", "medium", "high", "xhigh", "max", "ultra"];
-
-function declaredEffort(value, levels) {
-  const declared = levels
-    .filter((effort) => EFFORT_LADDER.includes(effort))
-    .sort((left, right) => EFFORT_LADDER.indexOf(left) - EFFORT_LADDER.indexOf(right));
-  if (!declared.length) return undefined;
-  if (["xhigh", "max", "ultra"].includes(value)) return declared.at(-1);
-  const requested = EFFORT_LADDER.indexOf(value);
-  const ceiling = requested === -1 ? EFFORT_LADDER.indexOf("high") : requested;
-  const atOrBelow = declared.filter((effort) => EFFORT_LADDER.indexOf(effort) <= ceiling);
-  return atOrBelow.at(-1) || declared[0];
-}
+// The effort clamp lives in `effort-ladder.mjs`: this module starts a server at
+// import time, so a pure helper has to live somewhere a unit test can reach it.
 
 // DashScope's OpenAI-compatible surfaces take the flat `reasoning_effort` on
 // /chat/completions and the nested `reasoning.effort` on /responses, and the
@@ -1103,6 +1095,38 @@ function normalizeBody(buffer, contentType, route) {
       delete payload.thinking;
     }
     payload = normalizeOpenAIRequest(payload);
+    payload = normalizeAzureOpenAIResponsesRequest(payload, { providerId: model.provider, route });
+    if (usesDeepSeekResponses(model) && payload.reasoning.effort !== "none" &&
+      (payload.tool_choice === "required" || (payload.tool_choice?.type === "function" &&
+        typeof payload.tool_choice.name === "string" && payload.tool_choice.name) ||
+        (payload.tool_choice?.type === "allowed_tools" && payload.tool_choice.mode === "required"))) {
+      // Native DeepSeek Responses rejects forced tools while thinking. Omitting
+      // the choice leaves tools available under the upstream default. For a
+      // named or required allowed-tools choice, offer only those tools. Leave
+      // unknown or malformed restrictions invalid rather than widening access.
+      if (payload.tool_choice === "required") {
+        delete payload.tool_choice;
+      } else if (payload.tool_choice.type === "function") {
+        const matches = payload.tools?.filter((tool) => tool.name === payload.tool_choice.name);
+        if (matches?.length === 1) {
+          payload.tools = matches;
+          delete payload.tool_choice;
+        }
+      } else {
+        const allowed = payload.tool_choice.tools;
+        if (Array.isArray(allowed) && allowed.length > 0 &&
+          allowed.every((tool) => ["function", "custom"].includes(tool?.type) &&
+            typeof tool.name === "string" && tool.name)) {
+          const keys = new Set(allowed.map((tool) => `${tool.type}\0${tool.name}`));
+          const matches = allowed.map((choice) => payload.tools?.filter((tool) =>
+            tool.type === choice.type && tool.name === choice.name));
+          if (keys.size === allowed.length && matches.every((group) => group?.length === 1)) {
+            payload.tools = matches.map((group) => group[0]);
+            delete payload.tool_choice;
+          }
+        }
+      }
+    }
     // The router labels routed assistant messages with Codex's `phase`, and
     // Codex replays it on every later turn. An operator-configured Responses
     // endpoint is an unknown validator, so it gets the pre-label history
@@ -1370,7 +1394,11 @@ function normalizeBody(buffer, contentType, route) {
     delete payload.temperature;
     delete payload.top_p;
   } else if (model.requestProfile === "xai-reasoning") {
-    if (!["low", "medium", "high"].includes(payload.reasoning_effort)) {
+    // The accepted rungs belong to the model: grok-4.5 stops at high, while
+    // grok-4.7 documents xhigh and publishes it, so it must not be clamped.
+    const accepted = ["low", "medium", "high"];
+    if (model.reasoningLevels?.some((level) => level?.effort === "xhigh")) accepted.push("xhigh");
+    if (!accepted.includes(payload.reasoning_effort)) {
       payload.reasoning_effort = "high";
     }
     delete payload.presence_penalty;
@@ -1527,6 +1555,7 @@ function normalizeBody(buffer, contentType, route) {
   const endpoint = endpointForModel(model);
   return {
     body: Buffer.from(JSON.stringify(payload), "utf8"),
+    route,
     model,
     provider,
     endpoint,
@@ -1596,10 +1625,40 @@ async function relayUpstreamResponse(
   telemetryUpstream = upstream,
 ) {
   const upstreamContentType = upstream.headers.get("content-type") || "";
+  if (
+    normalized.provider.id === "clinepass" &&
+    normalized.route === "/chat/completions" &&
+    upstream.ok && upstream.body &&
+    upstreamContentType.toLowerCase().includes("application/json")
+  ) {
+    // Cline's non-streaming API wraps successful completions in success/data.
+    // LiteLLM needs choices at the root. Buffer under the shared upstream limit
+    // before committing any bytes, and leave errors or unknown shapes intact.
+    let body = await readResponseBody(upstream);
+    try {
+      const envelope = JSON.parse(body.toString("utf8"));
+      if (
+        envelope?.success === true &&
+        envelope.data && typeof envelope.data === "object" &&
+        !Array.isArray(envelope.data) && Array.isArray(envelope.data.choices)
+      ) {
+        body = Buffer.from(JSON.stringify(envelope.data), "utf8");
+      }
+    } catch {
+      // Malformed JSON belongs to the upstream; relay the original bytes.
+    }
+    upstream = new Response(body, {
+      status: upstream.status,
+      statusText: upstream.statusText,
+      headers: upstream.headers,
+    });
+  }
   const responsesStream = normalized.responseAdapter === "responses" &&
     upstream.ok && upstreamContentType.toLowerCase().includes("text/event-stream");
   const responsesJson = normalized.responseAdapter === "responses" &&
     upstream.ok && upstreamContentType.toLowerCase().includes("application/json");
+  const replayJson = requiresReasoningContentOnToolCalls(normalized.model) && upstream.ok &&
+    upstreamContentType.toLowerCase().includes("application/json");
   
   // Direct DeepSeek calls arrive with an outer, authoritative namespace/custom
   // map. Preserve their wire names here; guessing a namespace from a flattened
@@ -1617,6 +1676,7 @@ async function relayUpstreamResponse(
     upstreamContentType.toLowerCase().includes("text/event-stream")
       ? createReasoningReplayTap()
       : undefined,
+    replayJson ? createReasoningReplayJsonTap() : undefined,
     responsesStream
       ? createResponsesStreamTransform(flatToNative, {
           pinResponseId: normalized.provider.authProfile === "github-copilot",
@@ -1630,6 +1690,7 @@ async function relayUpstreamResponse(
     : undefined;
   if (responsesStream) response.setHeader("Content-Type", "text/event-stream; charset=utf-8");
   if (responsesJson) response.setHeader("Content-Type", "application/json; charset=utf-8");
+  if (replayJson && !responsesJson) response.setHeader("Content-Type", upstreamContentType);
   await pipeResponse(upstream, response, denylist, transform);
   recordUpstreamLimits(normalized, telemetryUpstream);
   if (!QUIET) {

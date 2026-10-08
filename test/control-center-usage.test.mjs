@@ -1,8 +1,24 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { accountBucketsWithRouterFallback, metricValue } from "../apps/control-center/src/lib.ts";
+import { accountBucketsWithRouterFallback, metricValue, tokenCountFromEvent } from "../apps/control-center/src/lib.ts";
 import { LANGUAGE_OPTIONS, translate, createTranslator } from "../apps/control-center/src/i18n.ts";
+
+test("dashboard token totals prefer billed retry spend over the selected response total", () => {
+  const raw = { inputTokens: 120, outputTokens: 35, totalTokens: 155 };
+  for (const [fields, expected] of [
+    [{ billedInputTokens: 240, billedOutputTokens: 70 }, 310],
+    [{ billedInputTokens: 240 }, 275],
+    [{ billedOutputTokens: 70 }, 190],
+    [{ billedInputTokens: 0, billedOutputTokens: 0 }, 0],
+    [{ totalTokens: 999 }, 999],
+  ]) {
+    assert.equal(tokenCountFromEvent({ ...raw, ...fields }), expected, JSON.stringify(fields));
+  }
+  assert.equal(tokenCountFromEvent({ inputTokens: 120, outputTokens: 35 }), 155);
+  assert.equal(tokenCountFromEvent({ totalTokens: 0 }), 0);
+  assert.equal(tokenCountFromEvent({}), null, "unreported usage stays unmeasured");
+});
 
 test("account usage fills only absent OpenAI dates from the local router", () => {
   const buckets = accountBucketsWithRouterFallback(

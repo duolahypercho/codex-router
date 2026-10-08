@@ -1,0 +1,1 @@
+- **Use the available Codex browser and computer-use runtime.** Routed models prefer the current `cua_repl` entry point, follow its initialization and enabled-surface rules, and retain scoped guidance for older `node_repl` installations.

@@ -1,7 +1,7 @@
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 
-import lockfile from "proper-lockfile";
+import { acquireFileLock, runWithLockRelease } from "./file-lock.mjs";
 
 import { STATE_DIR } from "./paths.mjs";
 
@@ -49,7 +49,7 @@ export async function withLoginFreeRefreshLock(
   const target = loginFreeRefreshLockTarget(stateDir);
   let release;
   try {
-    release = await lockfile.lock(target, {
+    release = await acquireFileLock(target, {
       realpath: false,
       lockfilePath: `${target}.lock`,
       stale: normalizedStaleMs,
@@ -76,9 +76,5 @@ export async function withLoginFreeRefreshLock(
     throw error;
   }
 
-  try {
-    return await operation();
-  } finally {
-    await release();
-  }
+  return runWithLockRelease(operation, release);
 }

@@ -24,8 +24,8 @@ import { Transform } from "node:stream";
 //
 // Cost and safety:
 //   * only models that require the contract pay for the tap;
-//   * the parsers pre-check the raw chunk with a substring test before any
-//     JSON work, and keep at most one turn's text in memory;
+//   * the stream parser pre-checks complete data lines before any
+//     JSON work, and keeps at most one turn's text in memory;
 //   * the cache is a Map with LRU eviction by entry count and total characters;
 //   * reasoning is stored whole or not at all -- a truncated replay is not the
 //     same reasoning, and the model reads it as prose it once wrote;
@@ -35,6 +35,7 @@ import { Transform } from "node:stream";
 const MAX_ENTRIES = 512;
 const MAX_CHARS = 400_000;
 const MAX_TURN_CHARS = 400_000;
+const MAX_JSON_RESPONSE_BYTES = 4 * 1024 * 1024;
 
 const byToolCall = new Map(); // tool_call id -> reasoning text, oldest first
 let storedChars = 0;
@@ -119,6 +120,8 @@ export function createReasoningReplayTap({ onStore } = {}) {
   let reasoning = "";
   let toolCallIds = [];
   let buffer = "";
+  let eligible = true;
+  const decoder = new TextDecoder("utf-8", { fatal: true });
 
   const endsTurn = (payload) => {
     if (payload === "[DONE]") return true;
@@ -158,42 +161,94 @@ export function createReasoningReplayTap({ onStore } = {}) {
     toolCallIds = [];
   };
 
+  const observe = (text) => {
+    buffer += text;
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+    for (const line of lines) {
+      if (!line.startsWith("data:")) continue;
+      const payloadText = line.slice(5).trim();
+      if (payloadText === "[DONE]") {
+        finish();
+        continue;
+      }
+      // HTTP chunks may split both the field name and its value. Only a
+      // complete line can prove whether the event is relevant to replay.
+      if (!payloadText.includes("reasoning_content") && !payloadText.includes("tool_calls") && !payloadText.includes("finish_reason")) continue;
+      try {
+        const payload = JSON.parse(payloadText);
+        ingest(payload);
+        if (endsTurn(payload)) finish();
+      } catch {
+        // A non-JSON data line is not this tap's business.
+      }
+    }
+  };
+
   return new Transform({
     transform(chunk, _encoding, callback) {
       try {
-        const text = chunk.toString("utf8");
-        buffer += text;
-        // Cheap pre-check: skip JSON work for chunks that cannot carry either.
-        if (text.includes("reasoning_content") || text.includes("tool_calls") || text.includes("finish_reason")) {
-          const lines = buffer.split("\n");
-          buffer = lines.pop() ?? "";
-          for (const line of lines) {
-            if (!line.startsWith("data:")) continue;
-            const payloadText = line.slice(5).trim();
-            if (!payloadText) continue;
-            if (payloadText === "[DONE]") {
-              finish();
-              continue;
-            }
-            try {
-              const payload = JSON.parse(payloadText);
-              ingest(payload);
-              if (endsTurn(payload)) finish();
-            } catch {
-              // A partial or non-JSON data line is not this tap's business.
-            }
-          }
-        } else if (buffer.includes("\n")) {
-          const lines = buffer.split("\n");
-          buffer = lines.pop() ?? "";
-        }
+        if (eligible) observe(decoder.decode(chunk, { stream: true }));
       } catch {
-        // Observation must never disturb the relay.
+        // Invalid UTF-8 cannot supply the model's exact reasoning. Stop
+        // observing, while still forwarding every original byte unchanged.
+        eligible = false;
+        reasoning = "";
+        toolCallIds = [];
+        buffer = "";
       }
       callback(null, chunk);
     },
     flush(callback) {
-      finish();
+      try {
+        if (eligible) {
+          observe(decoder.decode());
+          finish();
+        }
+      } catch {
+        // Observation must never disturb the relay, including decoder flush.
+      }
+      callback();
+    },
+  });
+}
+
+// LiteLLM can request a non-streaming Chat Completions response for a Codex
+// Responses turn. Observe a complete successful JSON response without changing
+// its bytes; incomplete or oversized responses must never seed replay.
+export function createReasoningReplayJsonTap({ onStore } = {}) {
+  const chunks = [];
+  let bytes = 0;
+  let eligible = true;
+  return new Transform({
+    transform(chunk, _encoding, callback) {
+      if (eligible) {
+        bytes += chunk.length;
+        if (bytes <= MAX_JSON_RESPONSE_BYTES) chunks.push(Buffer.from(chunk));
+        else {
+          eligible = false;
+          chunks.length = 0;
+        }
+      }
+      callback(null, chunk);
+    },
+    flush(callback) {
+      if (eligible && bytes > 0) {
+        try {
+          const decoded = new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks, bytes));
+          const payload = JSON.parse(decoded);
+          if (!Array.isArray(payload?.choices)) throw new Error("missing choices");
+          for (const choice of payload.choices) {
+            if (choice?.finish_reason !== "tool_calls" && choice?.finish_reason !== "stop") continue;
+            const reasoning = choice.message?.reasoning_content;
+            const toolCallIds = collectToolCallIds(choice.message?.tool_calls);
+            const stored = rememberReasoningForToolCalls(toolCallIds, reasoning);
+            if (stored) onStore?.({ stored, chars: reasoning.length, toolCallIds });
+          }
+        } catch {
+          // Invalid JSON or UTF-8 cannot supply the model's exact reasoning.
+        }
+      }
       callback();
     },
   });

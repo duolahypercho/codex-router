@@ -24,6 +24,7 @@ import { routedHarnesses } from "./routed-harness-catalog.mjs";
 // imported; the markers are a compatibility surface that lives in users'
 // config files and cannot change without a migration anyway.
 import { clientRestartNotice } from "./client-restart-notice.mjs";
+import { routerNodeBinary } from "./node-runtime.mjs";
 import {
   operationDeadlineFromEnvironment,
   remainingOperationMs,
@@ -71,9 +72,10 @@ export async function runTargetPublicationProcess(
   {
     signal,
     deadline,
-    executable = process.execPath,
+    client = script,
     sourceRoot = SOURCE_ROOT,
     environment = process.env,
+    executable = routerNodeBinary(environment),
     run = runProcessTree,
   } = {},
 ) {
@@ -89,9 +91,19 @@ export async function runTargetPublicationProcess(
       run,
     },
   );
-  if (result.status !== 0) {
-    throw new Error(result.stderr.trim() || `Client publication exited with status ${result.status}.`);
-  }
+  if (result.status !== 0) throw new Error(publicationFailure(client, result));
+}
+
+// The error used to be the publisher's stderr alone. Nothing in it named the
+// client, publication stops at the first failure so any later client goes
+// quietly stale, and the Control Center drops every error line that mentions
+// a credential, which can be the whole cause. The first line therefore names
+// the client and the stop and carries nothing that filter removes; the
+// publisher's own report follows it unchanged.
+export function publicationFailure(client, { status, signal, stderr = "" }) {
+  const detail = stderr.trim()
+    || (signal ? `The publisher was stopped by ${signal}.` : `Client publication exited with status ${status}.`);
+  return `${client} was not updated, and any client after it was skipped.\n${detail}`;
 }
 
 export function targetCli(command) {
@@ -212,6 +224,7 @@ export async function refreshTargetPickerIfInstalled({ signal, deadline } = {}) 
   // that misses a shared picker mutation.
   if (codexIntegrationInstalled() || existsSync(NATIVE_CATALOG_PATH)) {
     await runTargetPublicationProcess("catalog.mjs", [], {
+      client: PICKER_NAMES.codex,
       signal,
       deadline: operationDeadline,
     });
@@ -222,6 +235,7 @@ export async function refreshTargetPickerIfInstalled({ signal, deadline } = {}) 
   // it survives a user who edits or moves the document by hand.
   if (existsSync(DSH_CATALOG_PATH)) {
     await runTargetPublicationProcess("dsh-config-manager.mjs", ["install"], {
+      client: PICKER_NAMES.dsh,
       signal,
       deadline: operationDeadline,
     });
@@ -233,6 +247,7 @@ export async function refreshTargetPickerIfInstalled({ signal, deadline } = {}) 
   // set just lost.
   if (existsSync(GEMINI_CATALOG_PATH)) {
     await runTargetPublicationProcess("gemini-config-manager.mjs", ["install"], {
+      client: PICKER_NAMES.gemini,
       signal,
       deadline: operationDeadline,
     });
@@ -243,7 +258,7 @@ export async function refreshTargetPickerIfInstalled({ signal, deadline } = {}) 
     // an external transaction on exit, so leave the existing publication in
     // place and let doctor report catalog drift until the user quits Cursor.
     const status = JSON.parse(
-      execFileSync(process.execPath, [path.join(SOURCE_ROOT, "src", "cursor-config-manager.mjs"), "status"], {
+      execFileSync(routerNodeBinary(), [path.join(SOURCE_ROOT, "src", "cursor-config-manager.mjs"), "status"], {
         cwd: SOURCE_ROOT,
         env: process.env,
         encoding: "utf8",
@@ -251,6 +266,7 @@ export async function refreshTargetPickerIfInstalled({ signal, deadline } = {}) 
     );
     if (!status.running) {
       await runTargetPublicationProcess("cursor-config-manager.mjs", ["install"], {
+        client: PICKER_NAMES.cursor,
         signal,
         deadline: operationDeadline,
       });
@@ -259,6 +275,7 @@ export async function refreshTargetPickerIfInstalled({ signal, deadline } = {}) 
   }
   if (existsSync(CLAUDE_CATALOG_PATH)) {
     await runTargetPublicationProcess("claude-code-config-manager.mjs", ["install"], {
+      client: PICKER_NAMES.claude,
       signal,
       deadline: operationDeadline,
     });
@@ -266,6 +283,7 @@ export async function refreshTargetPickerIfInstalled({ signal, deadline } = {}) 
   }
   if (existsSync(OPENCLAW_CATALOG_PATH)) {
     await runTargetPublicationProcess("openclaw-config-manager.mjs", ["install"], {
+      client: PICKER_NAMES.openclaw,
       signal,
       deadline: operationDeadline,
     });
@@ -279,6 +297,7 @@ export async function refreshTargetPickerIfInstalled({ signal, deadline } = {}) 
   for (const harness of routedHarnesses()) {
     if (!existsSync(ROUTED_HARNESS_CATALOG_PATHS[harness.id])) continue;
     await runTargetPublicationProcess("routed-harness-manager.mjs", [harness.id, "install"], {
+      client: harness.displayName,
       signal,
       deadline: operationDeadline,
     });

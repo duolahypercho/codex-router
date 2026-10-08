@@ -38,7 +38,12 @@ retire_service_if_unused() {
 case "${MODEL_ROUTER_TARGET:-codex}" in
   codex)
     node src/config-manager.mjs disable
-    node src/skills-install.mjs uninstall
+    # Best effort, like the install-side refresh: under `set -eu` a failed
+    # skill removal (a symlinked skills root, say) would otherwise abort here
+    # and leave the `codex` shim and the service behind.
+    if ! node src/skills-install.mjs uninstall; then
+      echo "Managed Codex skills could not be removed; continuing." >&2
+    fi
     # The shim is a file named `codex` on the user's PATH that execs this
     # checkout. Leaving it behind after the checkout is gone means every `codex`
     # they run from then on prints a warning about a router that is not coming

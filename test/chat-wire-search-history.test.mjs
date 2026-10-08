@@ -91,6 +91,44 @@ test("several search calls each keep their own query", () => {
   ]);
 });
 
+test("a batched search keeps every query in the replayed history", () => {
+  const call = {
+    type: "web_search_call", status: "completed",
+    action: { type: "search", queries: ["  Ankara weather ", "İstanbul weather", "", null, 42] },
+  };
+  const before = structuredClone(call);
+  const marked = markChatWireSearchHistory([call]);
+  assert.equal(marked.replaced, 1);
+  assert.equal(marked.input[0].content[0].text,
+    '[completed web search: queries=["Ankara weather","İstanbul weather"]]');
+  assert.deepEqual(call, before);
+});
+
+test("page opens and in-page finds retain their own action details and status", () => {
+  assert.equal(webSearchCallMarkerText({
+    status: "completed", action: { type: "open_page", url: "https://example.com/guide" },
+  }), "[completed web page open: https://example.com/guide]");
+  assert.equal(webSearchCallMarkerText({
+    status: "failed", action: { type: "find_in_page", url: "https://example.com/guide", pattern: "install" },
+  }), '[web page find (failed): url="https://example.com/guide", pattern="install"]');
+});
+
+test("new action shapes keep the legacy query and missing-detail contracts", () => {
+  assert.equal(webSearchCallMarkerText({
+    action: { type: "search", query: "one", queries: ["one", "two"] },
+  }), '[completed web search: queries=["one","two"]]');
+  assert.equal(webSearchCallMarkerText({ action: { type: "search", queries: [] }, query: "legacy" }),
+    "[completed web search: legacy]");
+  assert.equal(webSearchCallMarkerText({ action: { type: "open_page" }, status: "in_progress" }),
+    "[web page open (in_progress)]");
+  assert.equal(webSearchCallMarkerText({ action: { type: "find_in_page", url: 42, pattern: null } }),
+    "[completed web page find]");
+  assert.equal(webSearchCallMarkerText({
+    action: { type: "search", query: "distinct", queries: ["one", "one", "two"] },
+    query: "stale legacy",
+  }), '[completed web search: queries=["distinct","one","two"]]');
+});
+
 test("a turn with no search history is returned unchanged", () => {
   const input = [{ type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] }];
   const result = markChatWireSearchHistory(input);

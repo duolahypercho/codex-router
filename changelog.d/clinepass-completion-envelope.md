@@ -1,0 +1,1 @@
+- **ClinePass non-streaming success responses now reach clients as Chat Completions.** The API forwarder unwraps the provider's `success: true` / `data` envelope when it contains a completion, preserving text, tool calls, reasoning, and usage. Ordinary completions, error bodies, and streaming responses retain their existing format.

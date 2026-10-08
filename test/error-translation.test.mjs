@@ -271,6 +271,83 @@ test("a 403 from an OAuth provider also asks for a fresh sign-in", () => {
   assert.equal(payload.error.type, "authentication_error");
 });
 
+test("a known Devin permission denial is distinct from a rejected OAuth session", () => {
+  const payload = translateGatewayError({
+    status: 403,
+    bodyText: JSON.stringify({ error: {
+      code: "devin_permission_denied", type: "permission_error", message: "Cascade access denied.",
+    } }),
+    modelName: "SWE-1", providerId: "devin-cli", providerName: "Devin", providerKind: "oauth",
+  });
+  assert.equal(payload.error.type, "permission_error");
+  assert.match(payload.error.message, /Cascade access denied/);
+  assert.doesNotMatch(payload.error.message, /Sign in|OAuth session|refresh/);
+});
+
+test("Devin's owned permission diagnosis survives LiteLLM JSON and Python-bytes wrappers", () => {
+  const message = "Devin refused this request (devin_permission_denied): the upstream reported an MCP configuration issue.";
+  const inner = JSON.stringify({ error: { message, type: "permission_error", code: "devin_permission_denied" } });
+  for (const wrapped of [message, inner, `b'${inner}'`, `b"${inner}"`, `b${inner}`]) {
+    for (const prefix of [
+      "litellm.AuthenticationError: AuthenticationError: DevinException - ",
+      "litellm.APIError: APIError: OpenAIException - ",
+    ]) {
+      const bodyText = JSON.stringify({ error: {
+        message: `${prefix}${wrapped}. Received Model Group=devin-cli-swe-1\nAvailable Model Group Fallbacks=None`,
+        type: "authentication_error", code: "403",
+      } });
+      const payload = translateGatewayError({
+        status: 403, bodyText, modelName: "SWE-1", providerId: "devin-cli", providerName: "Devin", providerKind: "oauth",
+      });
+      assert.equal(payload.error.type, "permission_error", wrapped);
+      assert.match(payload.error.message, /MCP configuration issue/);
+      assert.doesNotMatch(payload.error.message, /Sign in|OAuth session|litellm|Received Model Group/);
+    }
+  }
+});
+
+test("Devin permission codes do not override authentication or genuine billing evidence", () => {
+  for (const [status, message, type] of [
+    [401, "Devin refused this request (devin_permission_denied): access denied.", "authentication_error"],
+    [403, "Your quota is exhausted.", "billing_error"],
+    [403, "Your plan does not include this API.", "billing_error"],
+  ]) {
+    const payload = translateGatewayError({
+      status, bodyText: JSON.stringify({ error: { code: "devin_permission_denied", message } }),
+      modelName: "SWE-1", providerId: "devin-cli", providerName: "Devin", providerKind: "oauth",
+    });
+    assert.equal(payload.error.type, type);
+  }
+});
+
+test("unknown Devin 403 retains existing OAuth advice", () => {
+  for (const code of [undefined, "permission_denied", "other_permission_denied"]) {
+    const payload = translateGatewayError({
+      status: 403, bodyText: JSON.stringify({ error: { code, message: "Access denied." } }),
+      providerId: "devin-cli",
+      modelName: "Test model", providerName: "Test provider", providerKind: "oauth",
+    });
+    assert.equal(payload.error.type, "authentication_error");
+    assert.match(payload.error.message, /Sign in/);
+  }
+});
+
+test("a Devin code or diagnosis from another provider retains existing OAuth advice", () => {
+  for (const providerId of [undefined, "grok-oauth", "custom"]) {
+    for (const error of [
+      { code: "devin_permission_denied", message: "Access denied." },
+      { code: "403", message: "Devin refused this request (devin_permission_denied): the upstream reported an MCP configuration issue." },
+    ]) {
+      const payload = translateGatewayError({
+        status: 403, bodyText: JSON.stringify({ error }), providerId,
+        modelName: "Test model", providerName: "Test provider", providerKind: "oauth",
+      });
+      assert.equal(payload.error.type, "authentication_error");
+      assert.match(payload.error.message, /Sign in/);
+    }
+  }
+});
+
 test("a 402 points at billing", () => {
   const payload = translateGatewayError({
     status: 402,

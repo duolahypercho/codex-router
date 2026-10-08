@@ -1,0 +1,1 @@
+- **The model picker now explains that it adds conversational models.** The OpenRouter Decisions guide separates chat model selection from tool integrations and gives a Router recovery path when setup leaves the service offline.

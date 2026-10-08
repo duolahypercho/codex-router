@@ -240,6 +240,21 @@ test("runtime status verifies the daemon instead of trusting managed state", () 
   assert.equal(snapshot.managed, false);
 });
 
+test("runtime status skips the desktop-launching list command when the API is offline", () => {
+  const calls = [];
+  const snapshot = localOllamaRuntimeSnapshot({
+    platform: "linux",
+    serverReachable: false,
+    spawn: (_command, args) => {
+      calls.push(args[0]);
+      return { status: 0, stdout: "ollama version is 0.32.6", stderr: "" };
+    },
+  });
+  assert.equal(snapshot.installed, true);
+  assert.equal(snapshot.running, false);
+  assert.deepEqual(calls, ["--version", "--version"]);
+});
+
 test("stale or dead local download workers become retryable errors", () => {
   const alive = reconcileLocalDownload(
     {

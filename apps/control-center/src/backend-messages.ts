@@ -765,7 +765,7 @@ export const backendMessageKeys = {
   "Extra high": "models.effort.xhigh",
   "Max": "models.effort.max",
   "Ultra": "models.effort.ultra",
-  "Everything your connected providers offer. Adding a model makes it available to the router; use the picker switch to show it in your clients.": "models.add.description",
+  "Add conversation models for Codex. Decisions, embeddings and other tool APIs use separate integrations. Choosing a model here changes the Codex assistant; it does not enable a tool.": "models.add.description",
   "Search every connected provider": "models.add.search",
   "Loading catalogs": "models.add.loadingCatalogs",
   " · read {time}": "models.add.read",

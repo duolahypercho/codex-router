@@ -266,7 +266,7 @@ test("a rejected browser handoff terminates the detached Codex login", async () 
   }
 });
 
-test("Control Center navigation accepts only one fixed widget destination", () => {
+test("Control Center navigation accepts only one fixed destination", () => {
   assert.deepEqual(controlCenterDestination(["electron", ".", NAVIGATION_ARGUMENT, "usage"]), {
     destination: "usage",
     sourceId: undefined,
@@ -281,7 +281,12 @@ test("Control Center navigation accepts only one fixed widget destination", () =
     ]),
     { destination: "usage", sourceId: "deepseek" },
   );
-  assert.equal(controlCenterDestination(["electron", ".", NAVIGATION_ARGUMENT, "settings"]), undefined);
+  // The tray's Settings item; its widget-facing URL parser still refuses it.
+  assert.deepEqual(controlCenterDestination(["electron", ".", NAVIGATION_ARGUMENT, "settings"]), {
+    destination: "settings",
+    sourceId: undefined,
+  });
+  assert.equal(controlCenterDestination(["electron", ".", NAVIGATION_ARGUMENT, "models"]), undefined);
   assert.equal(controlCenterDestination(["electron", ".", NAVIGATION_ARGUMENT]), undefined);
   assert.equal(controlCenterDestination([
     "electron", ".", NAVIGATION_ARGUMENT, "usage", NAVIGATION_SOURCE_ARGUMENT, "deep_seek",
@@ -298,11 +303,15 @@ test("Control Center navigation URLs are exact and source bounded", () => {
   assert.deepEqual(controlCenterNavigationURL(
     "codex-router://control-center/usage",
   ), { destination: "usage", sourceId: undefined });
+  assert.deepEqual(controlCenterNavigationURL(
+    "codex-router://control-center/settings",
+  ), { destination: "settings", sourceId: undefined });
   for (const value of [
     "https://control-center/usage",
     "codex-router://other/usage",
     "codex-router://control-center//usage",
-    "codex-router://control-center/settings",
+    "codex-router://control-center/models",
+    "codex-router://control-center/settings/",
     "codex-router://control-center/usage?source=deep_seek",
     "codex-router://control-center/usage?source=openai&source=deepseek",
     "codex-router://control-center/usage?next=settings",
@@ -1324,6 +1333,7 @@ test("preload exposes only the named control operations", async () => {
     "setProviderEnabled",
     "discoverProviderModels",
     "addProviderModels",
+    "removeLocalModels",
     "connectProvider",
     "saveProviderCredential",
     "setSubagentEffort",
@@ -1385,6 +1395,7 @@ test("preload constructs exact positional IPC payloads", async () => {
     ["connectProvider", ["provider"], { providerId: "provider" }],
     ["saveProviderCredential", ["provider", "credential"], { providerId: "provider", credential: "credential" }],
     ["removeProviderCredential", ["provider"], { providerId: "provider" }],
+    ["removeLocalModels", [["provider/model-a"]], { slugs: ["provider/model-a"] }],
     ["setSubagentMode", ["proven"], { mode: "proven" }],
     ["setSubagentModel", ["model", true], { slug: "model", enabled: true }],
     ["setSubagentEffort", ["model", "xhigh"], { slug: "model", effort: "xhigh" }],
@@ -2179,6 +2190,23 @@ test("provider writes republish all installed targets and roll selection back on
   assert.match(add, /\[id, "--models", unique\.join\(","\), "--refresh", "--apply"\]/);
   assert.match(add, /CATALOG_MUTATION_TIMEOUT_MS/);
 
+  // Adding accepts any catalog provider, so removal has to reach the same set
+  // or a curated model can be published and never taken back. The overlay
+  // supplies the upstream id, because an ordinary provider's public slug does
+  // not encode it the way a custom endpoint's does.
+  const removeLocal = source.match(/handleAction\("removeLocalModels"[\s\S]*?\n  \}\);/)?.[0];
+  assert.ok(removeLocal, "local-model removal handler should be readable");
+  assert.match(removeLocal, /readUserModels/);
+  assert.match(removeLocal, /curationPrimaryProviderId/);
+  assert.match(removeLocal, /\[primary, "--remove", \[\.\.\.new Set\(upstream\)\]\.join\(","\), "--apply"\]/);
+  assert.match(removeLocal, /CATALOG_MUTATION_TIMEOUT_MS/);
+  // The overlay is the whole authority: without this a checked-in route could
+  // be "removed" and simply reappear on the next publication.
+  assert.match(removeLocal, /is not a locally curated model/);
+  // --remove takes a comma-separated list, so an id carrying one would name
+  // models the operator never selected.
+  assert.match(removeLocal, /upstream\.includes\(","\)/);
+
   // Replacing a credential can mean a different account with a different
   // entitlement, so neither save nor removal may leave the old list behind.
   const control = await readFile(new URL("../src/control.mjs", import.meta.url), "utf8");
@@ -2698,40 +2726,49 @@ test("a custom endpoint id is derived from the name and never reuses a taken one
 });
 
 test("custom endpoint mutations refuse renderer input before spawning a router command", async () => {
-  const handlers = new Map();
-  const { registerIpcHandlers } = await import("../apps/control-center/electron/ipc.mjs");
-  registerIpcHandlers({
-    ipcMain: { handle: (name, handler) => handlers.set(name, handler) },
-    BrowserWindow: { getAllWindows: () => [] },
-    shell: {},
-    senderGuard: () => true,
-  });
-  const add = handlers.get("router-control:addCustomEndpoint");
-  assert.equal(typeof add, "function");
-  // Every one of these must be refused by the validation above, before the
-  // handler reaches providerEntries() and spawns the router CLI.
-  await assert.rejects(add({}, { displayName: "", baseUrl: "https://api.example.com/v1" }), /Name/);
-  await assert.rejects(
-    add({}, { displayName: "x".repeat(121), baseUrl: "https://api.example.com/v1" }),
-    /at most 120/,
-  );
-  await assert.rejects(add({}, { displayName: "Ok", baseUrl: "ftp://example.com" }), /http or https/);
-  await assert.rejects(
-    add({}, { displayName: "Ok", baseUrl: "https://user:pass@example.com/v1" }),
-    /key in the key field/,
-  );
-  await assert.rejects(
-    add({}, { displayName: "Ok", baseUrl: "https://api.example.com/v1", adapter: "anthropic" }),
-    /API format is invalid/,
-  );
-  await assert.rejects(
-    add({}, { displayName: "Ok", baseUrl: "https://api.example.com/v1", credential: "k".repeat(16 * 1024 + 1) }),
-    /Credential is invalid/,
-  );
-  await assert.rejects(
-    add({}, { displayName: "Ok", baseUrl: "https://api.example.com/v1", credential: 42 }),
-    /Credential is invalid/,
-  );
+  // Validate input using this checkout: a separate installed router may be
+  // an older version, whose protocol guard would mask these assertions.
+  const previousSourceRoot = process.env.CODEX_ROUTER_SOURCE_ROOT;
+  process.env.CODEX_ROUTER_SOURCE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+  try {
+    const handlers = new Map();
+    const { registerIpcHandlers } = await import("../apps/control-center/electron/ipc.mjs");
+    registerIpcHandlers({
+      ipcMain: { handle: (name, handler) => handlers.set(name, handler) },
+      BrowserWindow: { getAllWindows: () => [] },
+      shell: {},
+      senderGuard: () => true,
+    });
+    const add = handlers.get("router-control:addCustomEndpoint");
+    assert.equal(typeof add, "function");
+    // Every one of these must be refused by the validation above, before the
+    // handler reaches providerEntries() and spawns the router CLI.
+    await assert.rejects(add({}, { displayName: "", baseUrl: "https://api.example.com/v1" }), /Name/);
+    await assert.rejects(
+      add({}, { displayName: "x".repeat(121), baseUrl: "https://api.example.com/v1" }),
+      /at most 120/,
+    );
+    await assert.rejects(add({}, { displayName: "Ok", baseUrl: "ftp://example.com" }), /http or https/);
+    await assert.rejects(
+      add({}, { displayName: "Ok", baseUrl: "https://user:pass@example.com/v1" }),
+      /key in the key field/,
+    );
+    await assert.rejects(
+      add({}, { displayName: "Ok", baseUrl: "https://api.example.com/v1", adapter: "anthropic" }),
+      /API format is invalid/,
+    );
+    await assert.rejects(
+      add({}, { displayName: "Ok", baseUrl: "https://api.example.com/v1", credential: "k".repeat(16 * 1024 + 1) }),
+      /Credential is invalid/,
+    );
+    await assert.rejects(
+      add({}, { displayName: "Ok", baseUrl: "https://api.example.com/v1", credential: 42 }),
+      /Credential is invalid/,
+    );
+  } finally {
+    if (previousSourceRoot === undefined) delete process.env.CODEX_ROUTER_SOURCE_ROOT;
+    else process.env.CODEX_ROUTER_SOURCE_ROOT = previousSourceRoot;
+  }
 });
 
 test("a crashing router child is reported as its message, not as a stack trace", () => {

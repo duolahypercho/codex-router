@@ -265,6 +265,12 @@ function requestNavigation(navigation) {
   return true;
 }
 
+// Settings… (Command-comma) in this app's own menu lands where the Codex Router
+// tray's Settings item does.
+function openSettings() {
+  requestNavigation(Object.freeze({ destination: "settings", sourceId: undefined }));
+}
+
 function showWindow() {
   if (!mainWindow || mainWindow.isDestroyed()) createWindow();
   showWhenContentReady = true;
@@ -289,7 +295,7 @@ function createTray() {
   const createdTray = new Tray(image);
   try {
     createdTray.setToolTip("Codex Router");
-    createdTray.setContextMenu(Menu.buildFromTemplate(interfaceMenuTemplates(interfaceLanguage, { showWindow, quit: () => app.quit() }).tray));
+    createdTray.setContextMenu(Menu.buildFromTemplate(interfaceMenuTemplates(interfaceLanguage, { showWindow, quit: () => app.quit(), openSettings }).tray));
     createdTray.on("click", showWindow);
   } catch (error) {
     createdTray.destroy();
@@ -300,7 +306,7 @@ function createTray() {
 }
 
 function updateInterfaceMenus() {
-  const templates = interfaceMenuTemplates(interfaceLanguage, { showWindow, quit: () => app.quit() });
+  const templates = interfaceMenuTemplates(interfaceLanguage, { showWindow, quit: () => app.quit(), openSettings });
   if (process.platform === "darwin") Menu.setApplicationMenu(Menu.buildFromTemplate(templates.application));
   if (tray && !tray.isDestroyed()) tray.setContextMenu(Menu.buildFromTemplate(templates.tray));
 }

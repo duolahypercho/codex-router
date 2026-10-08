@@ -23,6 +23,7 @@ process.env.MODEL_ROUTER_API_KEY_POOL_PATH = poolStatePath;
 
 const { addEnvironmentCredentialToPool } = await import("../src/provider-api-key-control.mjs");
 const { readProviderApiKeyPoolState } = await import("../src/provider-api-key-pool.mjs");
+const { readRateLimitSnapshots } = await import("../src/rate-limit-state.mjs");
 
 async function listen(server) {
   await new Promise((resolve, reject) => {
@@ -49,7 +50,7 @@ async function waitForHealth(baseUrl, child, stderr) {
 
 test.after(() => rmSync(root, { recursive: true, force: true }));
 
-test("configured OpenCode credential ids fail over on 429 before committing a response", async () => {
+test("pooled keys rotate on 429 and relay success despite invalid reset headers", async () => {
   for (const environmentName of ["OPENCODE_API_KEY", "OPENCODE_GO_API_KEY"]) {
     await addEnvironmentCredentialToPool("opencode-go", environmentName, {
       credentialStorePath,
@@ -78,11 +79,14 @@ test("configured OpenCode credential ids fail over on 429 before committing a re
         "Content-Type": "application/json",
         "X-RateLimit-Limit-Requests": "100",
         "X-RateLimit-Remaining-Requests": "73",
-        "X-RateLimit-Reset-Requests": "60",
+        // Passive telemetry must not discard an already successful paid call.
+        "X-RateLimit-Reset-Requests": "8640000000000001",
+        "Retry-After": "1e20",
         // Token headers remain provider-level telemetry; assigning them to a
         // pooled key would conflate a different quota unit.
         "X-RateLimit-Limit-Tokens": "9000",
         "X-RateLimit-Remaining-Tokens": "8000",
+        "X-RateLimit-Reset-Tokens": `${"9".repeat(309)}h`,
       });
       response.end(JSON.stringify({
         id: "chatcmpl_pool_success",
@@ -148,6 +152,21 @@ test("configured OpenCode credential ids fail over on 429 before committing a re
       { unit: successful.quota.unit, limit: successful.quota.limit, remaining: successful.quota.remaining },
       { unit: "requests", limit: 100, remaining: 73 },
     );
+    assert.equal(successful.quota.resetAt, undefined);
+    assert.equal(successful.health.cooldownUntil, undefined);
+    // Telemetry is written after the response body is relayed. Wait for the
+    // winning observation rather than racing the forwarder's final write.
+    let snapshot;
+    const snapshotDeadline = Date.now() + 2_000;
+    while (Date.now() < snapshotDeadline) {
+      snapshot = readRateLimitSnapshots()["opencode-go"];
+      if (snapshot?.requests?.remaining === 73) break;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    assert.ok(snapshot, "the winning response should record its quota counters");
+    assert.deepEqual(snapshot.requests, { limit: 100, remaining: 73 });
+    assert.deepEqual(snapshot.tokens, { limit: 9000, remaining: 8000 });
+    assert.equal(snapshot.retryAt, undefined);
     const cooldownMs = Date.parse(limited.health.cooldownUntil) - Date.now();
     assert.ok(cooldownMs >= 130_000 && cooldownMs <= 140_000, `unexpected cooldown ${cooldownMs}ms`);
   } finally {

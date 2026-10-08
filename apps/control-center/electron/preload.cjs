@@ -34,6 +34,7 @@ const routerControl = Object.freeze({
   addCustomEndpoint: (endpoint) => call("addCustomEndpoint", endpoint),
   editCustomEndpoint: (providerId, endpoint) => call("editCustomEndpoint", { ...endpoint, providerId }),
   removeCustomEndpointModels: (providerId, slugs) => call("removeCustomEndpointModels", { providerId, slugs }),
+  removeLocalModels: (slugs) => call("removeLocalModels", { slugs }),
   addCustomEndpointModel: (providerId, modelId) => call("addCustomEndpointModel", { providerId, modelId }),
   removeProviderCredential: (providerId) => call("removeProviderCredential", { providerId }),
   setSubagentMode: (mode) => call("setSubagentMode", { mode }),

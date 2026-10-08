@@ -177,6 +177,10 @@ export function ModelsPage({ target, catalog, setup, usage, api, refreshing, dat
   const [credentialProvider, setCredentialProvider] = useState<ProviderSetup | null>(null);
   const [configurationProvider, setConfigurationProvider] = useState<ProviderSetup | null>(null);
   const [removeProvider, setRemoveProvider] = useState<ProviderSetup | null>(null);
+  // Deleting a locally curated model is not undoable from here -- the overlay
+  // entry and its metadata go, and re-adding it means curating the model
+  // again -- so it is confirmed the way disconnecting a provider is.
+  const [removeLocalModel, setRemoveLocalModel] = useState<RouterModel | null>(null);
   const [customEndpointOpen, setCustomEndpointOpen] = useState(false);
   const [editingEndpoint, setEditingEndpoint] = useState<ProviderSetup | null>(null);
   const [addModelsQuery, setAddModelsQuery] = useState("");
@@ -478,6 +482,17 @@ export function ModelsPage({ target, catalog, setup, usage, api, refreshing, dat
     void runAction(t("customEndpoint.action.removeModel", { name: model.displayName }), () => api.removeCustomEndpointModels(entry.id, [model.slug]));
   };
 
+  // The same pruning for a locally curated model on an ordinary provider. The
+  // router resolves the slug against the overlay, so nothing here has to know
+  // how a provider's public slug relates to its upstream id.
+  const removeLocalCuratedModel = (model: RouterModel) => {
+    if (!api) return;
+    void runAction(
+      t("models.local.action.remove", { name: model.displayName }),
+      () => api.removeLocalModels([model.slug]),
+    );
+  };
+
   useEffect(() => {
     if (!awaitingEndpointId) return;
     const entry = directoryById.get(awaitingEndpointId);
@@ -639,6 +654,21 @@ export function ModelsPage({ target, catalog, setup, usage, api, refreshing, dat
           <Button variant="danger" onClick={() => { const provider = removeProvider; setRemoveProvider(null); if (provider && api) void runProviderCredentialAction(provider, t("models.action.removeCredential", { name: provider.displayName }), () => api.removeProviderCredential(provider.id), { intent: "disconnecting" }); }}><Trash2 aria-hidden size={14} strokeWidth={1.7} /> {t("models.disconnect.confirm")}</Button>
         </div>
       </Dialog>
+      <Dialog
+        open={Boolean(removeLocalModel)}
+        title={t("models.local.removeTitle")}
+        description={t("models.local.removeDescription", { name: removeLocalModel?.displayName || "" })}
+        onClose={() => setRemoveLocalModel(null)}
+      >
+        {/* Name the slug: the operator may have curated several near-identical
+            ids on one provider, and the display name alone does not separate
+            them. */}
+        <div className="pm-credential-warning"><ShieldCheck aria-hidden size={17} strokeWidth={1.7} /><p>{t("models.local.removeBody", { slug: removeLocalModel?.slug || "" })}</p></div>
+        <div className="dialog-actions">
+          <Button variant="secondary" onClick={() => setRemoveLocalModel(null)}>{t("models.disconnect.cancel")}</Button>
+          <Button variant="danger" onClick={() => { const model = removeLocalModel; setRemoveLocalModel(null); if (model) removeLocalCuratedModel(model); }}><Trash2 aria-hidden size={14} strokeWidth={1.7} /> {t("models.local.removeConfirm")}</Button>
+        </div>
+      </Dialog>
     </>
   );
 
@@ -770,6 +800,7 @@ export function ModelsPage({ target, catalog, setup, usage, api, refreshing, dat
         else if (entry.setup.kind === "configuration") setConfigurationProvider(entry.setup);
         else setCredentialProvider(entry.setup);
       }}
+      onRemoveLocal={(model) => setRemoveLocalModel(model)}
     />
   );
 
@@ -1365,6 +1396,7 @@ function ModelFamilyRow({
   onSubagent,
   onEffort,
   onConnect,
+  onRemoveLocal,
 }: {
   family: ModelFamily;
   usable: RouterModel[];
@@ -1383,6 +1415,7 @@ function ModelFamilyRow({
   onSubagent: (model: RouterModel, enabled: boolean) => void;
   onEffort: (model: RouterModel, effort: string) => void;
   onConnect: (providerId: string) => void;
+  onRemoveLocal: (model: RouterModel) => void;
 }) {
   const t = useI18n();
   const preferred = preferredFamilyRoute(family);
@@ -1454,7 +1487,10 @@ function ModelFamilyRow({
             {/* Labelling every row cost 12 words for 4 switches, and every row
                 sized its own columns so nothing lined up down the list. One
                 header, one shared grid. */}
-            <div className="pm-route-table" role="list" aria-label={t("models.family.routesAria", { name: family.displayName })}>
+            {/* The actions column exists only for a family that actually has a
+                locally curated route, so an all-checked-in family keeps the
+                column widths it had before removal was possible. */}
+            <div className="pm-route-table" role="list" data-removable={family.routes.some((model) => model.local) || undefined} aria-label={t("models.family.routesAria", { name: family.displayName })}>
               <div className="pm-route-head" aria-hidden="true">
                 <span>{t("models.route.account")}</span>
                 <span>{t("models.route.context")}</span>
@@ -1462,6 +1498,7 @@ function ModelFamilyRow({
                 <span>{t("models.route.inPicker")}</span>
                 <span>{t("models.route.subagents")}</span>
                 <span>{t("models.route.thinking")}</span>
+                {family.routes.some((model) => model.local) ? <span /> : null}
               </div>
               {family.routes.map((model) => (
                 <ModelRouteRow
@@ -1477,6 +1514,7 @@ function ModelFamilyRow({
                   onSubagentChange={(checked) => onSubagent(model, checked)}
                   onEffortChange={(effort) => onEffort(model, effort)}
                   onConnect={() => onConnect(model.provider)}
+                  onRemove={() => onRemoveLocal(model)}
                 />
               ))}
             </div>
@@ -1493,6 +1531,7 @@ function ModelFamilyRow({
             apiAvailable={apiAvailable}
             onSubagentChange={(checked) => onSubagent(family.routes[0], checked)}
             onEffortChange={(effort) => onEffort(family.routes[0], effort)}
+            onRemove={() => onRemoveLocal(family.routes[0])}
           />
         )}
       </div>
@@ -1508,6 +1547,7 @@ function ModelDetails({
   apiAvailable,
   onSubagentChange,
   onEffortChange,
+  onRemove,
 }: {
   model: RouterModel;
   providerName: string;
@@ -1516,6 +1556,7 @@ function ModelDetails({
   apiAvailable: boolean;
   onSubagentChange: (checked: boolean) => void;
   onEffortChange: (effort: string) => void;
+  onRemove: () => void;
 }) {
   const t = useI18n();
   return (
@@ -1560,6 +1601,19 @@ function ModelDetails({
           <dd>{t("models.details.connectToUse", { name: providerName })}</dd>
         </div>
       )}
+      {/* A single-route family never renders the route table, so without this
+          the only locally curated models that could be deleted would be the
+          ones that happen to share a name with other routes. */}
+      {model.local ? (
+        <div>
+          <dt>{t("models.details.curation")}</dt>
+          <dd>
+            <Button variant="secondary" disabled={!apiAvailable} onClick={onRemove}>
+              <Trash2 aria-hidden size={13} strokeWidth={1.7} /> {t("models.local.remove")}
+            </Button>
+          </dd>
+        </div>
+      ) : null}
     </dl>
   );
 }
@@ -1594,6 +1648,7 @@ function ModelRouteRow({
   onSubagentChange,
   onEffortChange,
   onConnect,
+  onRemove,
 }: {
   model: RouterModel;
   providerName: string;
@@ -1606,6 +1661,7 @@ function ModelRouteRow({
   onSubagentChange: (checked: boolean) => void;
   onEffortChange: (effort: string) => void;
   onConnect: () => void;
+  onRemove: () => void;
 }) {
   const t = useI18n();
   const identity = (
@@ -1614,6 +1670,10 @@ function ModelRouteRow({
       <div>
         <strong>{providerName}</strong>
         {model.isFree ? <span className="pm-route-free">{t("models.fact.free")}</span> : null}
+        {/* Says why this one route can be deleted when its neighbours cannot:
+            the operator curated it locally, so nothing this checkout ships is
+            at stake. */}
+        {model.local ? <span className="pm-route-local">{t("models.fact.local")}</span> : null}
         <small title={model.slug}>{model.slug}</small>
       </div>
     </div>
@@ -1671,6 +1731,20 @@ function ModelRouteRow({
           onEffortChange={onEffortChange}
         />
       </span>
+      {model.local ? (
+        <span className="pm-route-cell pm-route-remove">
+          <button
+            type="button"
+            className="pm-endpoint-model-remove"
+            disabled={!apiAvailable}
+            aria-label={t("models.local.removeAction", { model: model.displayName, provider: providerName })}
+            title={t("models.local.remove")}
+            onClick={onRemove}
+          >
+            <Trash2 aria-hidden size={13} strokeWidth={1.7} />
+          </button>
+        </span>
+      ) : null}
     </article>
   );
 }

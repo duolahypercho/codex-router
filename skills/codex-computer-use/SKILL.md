@@ -1,49 +1,37 @@
 ---
 name: codex-computer-use
-description: Control local apps through Computer Use (the @oai/sky runtime) inside the Codex app. Use when the session uses a custom (non-OpenAI) model, for example deepseek-v4-flash or mimo-v2.5, and the user asks to control the computer, operate a desktop app's UI, use Safari or Chrome through computer use, click or type in an app, or take a screenshot of an app. Prefer purpose-built connectors, APIs, or CLIs when they exist.
+description: Control available apps and browsers through the Codex app's Computer Use runtime. Use when the session uses a custom (non-OpenAI) model, for example deepseek-v4-flash or mimo-v2.5, and the user asks to control the computer, operate a desktop app's UI, use Chrome, click or type in an app, or inspect a screenshot. Prefer purpose-built connectors, APIs, or CLIs when they exist.
 ---
 
 # Codex Computer Use
 
-The runtime is `@oai/sky`, imported through `mcp__node_repl__js` (available
-in this session).
+Prefer purpose-built connectors, APIs, or CLIs when they can perform the task.
+For UI work, inspect the actual tool list before choosing a runtime:
 
-## First: read the official skill
+- If `mcp__cua_repl__js` is exposed, use the current runtime below.
+- Otherwise, if `mcp__node_repl__js` is exposed, read
+  [the legacy runtime instructions](references/legacy-runtime.md).
+- If neither is exposed, report the missing capability. Do not start a REPL
+  process, write a side-channel driver, or synthesize MCP calls.
 
-The official skill is authoritative. Read it before any computer-use work:
+## Current runtime: cua_repl
 
-`~/.codex/plugins/cache/openai-bundled/computer-use/<version>/skills/computer-use/SKILL.md`
+Read the live tool instructions. The tool initializes `cua`; do not import
+`@oai/sky` or bootstrap `agent.browsers` in this runtime.
 
-Find the latest `<version>` directory.
+On the first invocation, or after a reset, execute exactly one documented
+entry-point API call, optionally assigning its result. Do not combine it with
+another API call, a wait, a snapshot, or output helpers. Use the entry point
+matching the user's requested surface; use `await cua.getState()` only when
+an inventory is needed. Read the returned documentation and state before
+continuing. For browser work, also read `codex-in-app-browser`.
 
-## Load the runtime (once per session)
+Use only APIs described in the tool instructions or returned documentation.
+Check which surfaces are enabled: browser access does not imply native app
+control. If native APIs are disabled, report that limitation for a native app
+task. Never guess screen contents or claim an unavailable surface is enabled.
 
-Send this as ONE line through `mcp__node_repl__js`:
-
-```js
-globalThis.sky = (await import("@oai/sky")).sky;
-nodeRepl.write("sky: " + typeof sky);
-```
-
-Confirm the output says `sky: object` before continuing. The import
-connects to the SkyComputerUseService, which is already running.
-
-## Rules
-
-- Send code as ONE line, or use `@file:<path>` with a trailing newline.
-  The runtime fires on newline; input without a trailing newline silently
-  does nothing.
-- Reuse the loaded `sky` runtime on later turns. Do not reinitialize.
-- The first computer-use action may need approval in the app
-  (Settings → Computer use). Common apps such as Safari and Chrome are
-  usually pre-approved.
-- Prefer purpose-built connectors, APIs, and CLIs over computer use when
-  they exist. Computer use is for reading or operating app UI that nothing
-  else can reach.
-- Never start your own node_repl process and never write a side-channel
-  driver. Use the tool you were given.
-
-## If the tool is missing
-
-Stop and report that `mcp__node_repl__js` is not in the tool list. Do not
-build workarounds.
+Reuse the existing bindings. After compaction into a summary of an ongoing
+computer-use task, call `await cua.rewriteDocumentation()` before continuing.
+Follow the live tool's reset and output rules; the legacy runtime's imports
+and one-line input rules do not apply here.

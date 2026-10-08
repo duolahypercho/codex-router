@@ -1,0 +1,1 @@
+- **Buffered native responses retain sparse output items without scanning empty array slots.** Folding now scales with the items actually received, keeps their output-index order and replacement behavior, and reports an upstream error for malformed indices rather than returning a success with missing items.

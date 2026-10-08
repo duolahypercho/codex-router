@@ -1,6 +1,6 @@
 import { mkdirSync } from "node:fs";
 import path from "node:path";
-import lockfile from "proper-lockfile";
+import { acquireFileLock } from "./file-lock.mjs";
 import { STATE_DIR } from "./paths.mjs";
 
 const DEFAULT_WAIT_MS = 15_000;
@@ -31,7 +31,7 @@ export async function withCallerKeyRotationLock(operation, {
   const target = callerKeyRotationLockTarget(stateDir);
   let release;
   try {
-    release = await lockfile.lock(target, {
+    release = await acquireFileLock(target, {
       realpath: false, lockfilePath: `${target}.lock`, stale: normalizedStaleMs,
       update: normalizedHeartbeatMs,
       retries: { retries, factor: 1, minTimeout: normalizedRetryMs, maxTimeout: normalizedRetryMs, randomize: false },

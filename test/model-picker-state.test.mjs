@@ -119,7 +119,7 @@ test("a protocol migration carries the existing picker decision to the new slug"
   assert.equal(migrated.visible.includes(newSlug), true);
 });
 
-test("legacy hidden-only state becomes an allowlist when a picker decision is made", () => {
+test("a picker decision preserves legacy visibility until catalog migration", () => {
   writeFileSync(
     MODEL_PICKER_STATE_PATH,
     `${JSON.stringify({
@@ -135,7 +135,7 @@ test("legacy hidden-only state becomes an allowlist when a picker decision is ma
 
   setModelVisible("deepseek/deepseek-v4-flash", true);
   const current = modelPickerSnapshot();
-  assert.equal(current.hasExplicitVisibility, true);
+  assert.equal(current.hasExplicitVisibility, false);
   assert.deepEqual(current.visible, ["deepseek/deepseek-v4-flash"]);
 });
 
@@ -151,6 +151,67 @@ const ROUTED_SLUGS = [
 function writeLegacyState(state) {
   writeFileSync(MODEL_PICKER_STATE_PATH, `${JSON.stringify(state)}\n`, { mode: 0o600 });
 }
+
+test("model and bulk picker changes preserve unrelated implicit legacy choices", () => {
+  const target = "deepseek/deepseek-v4-flash";
+  const implicit = "kimi-oauth/k3";
+  const explicit = "opencode-go/gpt-5.6-sol";
+  const alreadyHidden = "opencode-go/kimi-k3";
+  const all = [target, implicit, explicit, alreadyHidden];
+  const operations = [
+    ["one model", (visible) => setModelVisible(target, visible)],
+    ["provider models", (visible) => setModelsVisible([target], visible)],
+    ["bulk models", (visible) => setAllModelsVisible([target], visible)],
+  ];
+
+  for (const [name, change] of operations) {
+    for (const visible of [false, true]) {
+      writeLegacyState({
+        version: 1,
+        hidden: [alreadyHidden],
+        seeded: [explicit, alreadyHidden],
+        order: "routed-first",
+      });
+      change(visible);
+
+      const expected = [implicit, explicit, ...(visible ? [target] : [])].sort();
+      assert.deepEqual([...effectiveVisibleModels(all)].sort(), expected, name);
+      assert.equal(modelPickerSnapshot().hasExplicitVisibility, false, name);
+      assert.equal(readPickerOrder(), "routed-first", name);
+      assert.equal(Object.hasOwn(JSON.parse(readFileSync(MODEL_PICKER_STATE_PATH, "utf8")), "visible"), false, name);
+
+      // Control and curation publish after recording the decision. The one
+      // complete catalog migration must still see every old implicit choice.
+      migrateLegacyVisibleModels(all);
+      seedModelsHidden(all);
+      assert.deepEqual([...effectiveVisibleModels(all)].sort(), expected, name);
+      assert.equal(modelPickerSnapshot().hasExplicitVisibility, true, name);
+    }
+  }
+});
+
+test("visibility writes on missing or invalid state create an opt-in picker", () => {
+  const target = "deepseek/deepseek-v4-flash";
+  const unrelated = "kimi-oauth/k3";
+  const operations = [
+    (visible) => setModelVisible(target, visible),
+    (visible) => setModelsVisible([target], visible),
+    (visible) => setAllModelsVisible([target], visible),
+  ];
+  for (const change of operations) {
+    for (const visible of [false, true]) {
+      for (const invalid of [false, true]) {
+        rmSync(MODEL_PICKER_STATE_PATH, { force: true });
+        if (invalid) writeFileSync(MODEL_PICKER_STATE_PATH, "invalid JSON");
+        change(visible);
+        assert.equal(modelPickerSnapshot().hasExplicitVisibility, true);
+        migrateLegacyVisibleModels([target, unrelated]);
+        seedModelsHidden([target, unrelated]);
+        assert.deepEqual([...effectiveVisibleModels([target, unrelated])], visible ? [target] : []);
+      }
+    }
+  }
+});
 
 test("an update keeps the models a pre-allowlist install was already showing", () => {
   writeLegacyState({
@@ -188,6 +249,46 @@ test("the legacy picker migration runs once and then leaves the file alone", () 
   // a protected file to say the same thing.
   migrateLegacyVisibleModels([...ROUTED_SLUGS, "opencode-go/newly-curated"]);
   assert.equal(readFileSync(MODEL_PICKER_STATE_PATH, "utf8"), migrated);
+});
+
+test("a complete legacy migration freezes choices when every known model was already decided", () => {
+  const known = "deepseek/deepseek-v4-flash";
+  const added = "kimi-oauth/k3";
+  const nativeVariant = "gpt-5.6-sol-1m";
+  for (const visible of [false, true]) {
+    writeLegacyState({
+      version: 1,
+      hidden: [nativeVariant, ...(visible ? [] : [known])],
+      seeded: [known, nativeVariant],
+      order: "routed-first",
+    });
+    migrateLegacyVisibleModels([known]);
+    const migrated = readFileSync(MODEL_PICKER_STATE_PATH, "utf8");
+    assert.equal(readPickerOrder(), "routed-first");
+    assert.equal(readHiddenModels().has(nativeVariant), true);
+    assert.deepEqual([...effectiveVisibleModels([known, nativeVariant])], visible ? [known] : []);
+
+    migrateLegacyVisibleModels([known]);
+    assert.equal(readFileSync(MODEL_PICKER_STATE_PATH, "utf8"), migrated);
+
+    migrateLegacyVisibleModels([known, added]);
+    seedModelsHidden([known, added, nativeVariant]);
+    assert.deepEqual([...effectiveVisibleModels([known, added, nativeVariant])], visible ? [known] : []);
+    assert.equal(modelPickerSnapshot().hasExplicitVisibility, true);
+  }
+});
+
+test("an empty catalog cannot complete the legacy visibility migration", () => {
+  writeLegacyState({
+    version: 1,
+    hidden: ["gpt-5.6-sol-1m"],
+    seeded: ["deepseek/deepseek-v4-flash", "gpt-5.6-sol-1m"],
+    order: "routed-first",
+  });
+  const previous = readFileSync(MODEL_PICKER_STATE_PATH, "utf8");
+  migrateLegacyVisibleModels([]);
+  assert.equal(readFileSync(MODEL_PICKER_STATE_PATH, "utf8"), previous);
+  assert.equal(modelPickerSnapshot().hasExplicitVisibility, false);
 });
 
 test("a fresh install has no picker history to migrate and stays opt-in", () => {

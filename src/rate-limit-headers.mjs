@@ -20,6 +20,13 @@ function count(value) {
   return number !== undefined && number >= 0 ? Math.round(number) : undefined;
 }
 
+function validTimestamp(value) {
+  // Finite numbers can still exceed Date's range, including after converting
+  // seconds or durations. Optional upstream telemetry must never make its
+  // consumers throw when serializing a reset or record an unusable cooldown.
+  return Number.isFinite(new Date(value).getTime()) ? value : undefined;
+}
+
 // Providers express resets three different ways: a Go-style duration
 // ("2m59.56s", "7.66s"), bare seconds ("60"), or an absolute timestamp. All three
 // normalize to an absolute epoch milliseconds value so consumers never re-parse.
@@ -31,17 +38,21 @@ export function resetAt(value, now = Date.now()) {
   if (bare !== undefined) {
     // A plain number is seconds-from-now when small, and an epoch when it is
     // large enough to be a real timestamp (some gateways send epoch seconds).
-    if (bare >= 1_000_000_000) return Math.round(bare * (bare >= 1e12 ? 1 : 1000));
-    return bare >= 0 ? now + Math.round(bare * 1000) : undefined;
+    if (bare >= 1_000_000_000) {
+      return validTimestamp(Math.round(bare * (bare >= 1e12 ? 1 : 1000)));
+    }
+    return bare >= 0 ? validTimestamp(now + Math.round(bare * 1000)) : undefined;
   }
 
   const duration = DURATION_PATTERN.exec(text.toLowerCase());
   if (duration && duration.slice(1).some(Boolean)) {
-    const hours = finiteNumber(duration[1]) || 0;
-    const minutes = finiteNumber(duration[2]) || 0;
-    const seconds = finiteNumber(duration[3]) || 0;
+    // Only an absent component means zero. Keep numeric overflow so the whole
+    // duration is rejected rather than silently shortening the named window.
+    const hours = Number(duration[1] || 0);
+    const minutes = Number(duration[2] || 0);
+    const seconds = Number(duration[3] || 0);
     const ms = text.toLowerCase().endsWith("ms") ? seconds : seconds * 1000;
-    return now + Math.round(hours * 3_600_000 + minutes * 60_000 + ms);
+    return validTimestamp(now + Math.round(hours * 3_600_000 + minutes * 60_000 + ms));
   }
 
   const absolute = Date.parse(text);

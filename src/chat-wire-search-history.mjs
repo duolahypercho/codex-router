@@ -14,7 +14,9 @@
 // `supportsSearchHistory` still gates whether a model may accept replayed
 // search history at all, and this runs only for turns that already passed it.
 
-const MARKER_PREFIX = "[completed web search";
+function textValue(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
 
 // The Responses API has carried the query on `action` since hosted search
 // gained action types; older stored items put it at the top level. Read both
@@ -30,15 +32,37 @@ export function webSearchCallQuery(item) {
 }
 
 export function webSearchCallMarkerText(item) {
-  const query = webSearchCallQuery(item);
   // An incomplete or failed call is not the same evidence as a completed one,
   // and a model that is told "completed" for a search that failed will invent
   // results for it.
   const status = typeof item?.status === "string" && item.status.trim()
     ? item.status.trim()
     : "completed";
-  const label = status === "completed" ? MARKER_PREFIX : `[web search (${status})`;
-  return query ? `${label}: ${query}]` : `${label}]`;
+  const action = item?.action;
+  let name = "web search";
+  let details;
+  if (action?.type === "open_page") {
+    name = "web page open";
+    details = textValue(action.url);
+  } else if (action?.type === "find_in_page") {
+    name = "web page find";
+    const url = textValue(action.url);
+    const pattern = textValue(action.pattern);
+    details = [
+      url ? `url=${JSON.stringify(url)}` : "",
+      pattern ? `pattern=${JSON.stringify(pattern)}` : "",
+    ].filter(Boolean).join(", ");
+  } else {
+    // Responses can record a batch in action.queries rather than query. Keep
+    // each query; a singular action query can coexist with the batch. The
+    // top-level legacy field is a fallback only when the action has no query.
+    const batch = Array.isArray(action?.queries) ? action.queries.map(textValue).filter(Boolean) : [];
+    const query = textValue(action?.query) || (batch.length ? "" : webSearchCallQuery(item));
+    const queries = [...new Set([query, ...batch].filter(Boolean))];
+    details = queries.length > 1 ? `queries=${JSON.stringify(queries)}` : queries[0];
+  }
+  const label = status === "completed" ? `[completed ${name}` : `[${name} (${status})`;
+  return details ? `${label}: ${details}]` : `${label}]`;
 }
 
 function markerItem(item) {

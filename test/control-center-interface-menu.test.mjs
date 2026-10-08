@@ -77,7 +77,7 @@ test("only canonical preference IDs cross the renderer IPC boundary", () => {
 for (const [locale, messages] of [["en", english], ["zh-CN", simplified], ["zh-TW", traditional]]) {
   test(`${locale} menu dictionary has every semantic key, nonempty values and no extra keys`, () => {
     assert.deepEqual(Object.keys(messages).sort(), Object.keys(english).sort());
-    assert.equal(Object.keys(messages).length, 29);
+    assert.equal(Object.keys(messages).length, 30);
     assert.ok(Object.isFrozen(messages));
     for (const [key, value] of Object.entries(messages)) {
       assert.equal(typeof value, "string", key);
@@ -142,4 +142,16 @@ test("building another language does not mutate prior menus or dictionaries", ()
   assert.equal(JSON.stringify(first), serialized);
   assert.equal(interfaceMenuTemplates("zh-CN", actions).tray[0].label, "打开控制中心");
   assert.equal(interfaceMenuTemplates("zh-TW", actions).tray[0].label, "開啟控制中心");
+});
+
+test("the application menu opens the Settings page with Command-comma in every language", () => {
+  let opened = 0;
+  const actions = { showWindow() {}, quit() {}, openSettings() { opened += 1; } };
+  for (const locale of ["en", "zh-CN", "zh-TW"]) {
+    const item = interfaceMenuTemplates(locale, actions).application[0].submenu
+      .find((entry) => entry.accelerator === "CommandOrControl+,");
+    assert.ok(item?.label.endsWith("…"), locale);
+    item.click();
+  }
+  assert.equal(opened, 3);
 });

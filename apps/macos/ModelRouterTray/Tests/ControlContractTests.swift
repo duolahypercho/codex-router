@@ -190,6 +190,16 @@ struct ControlContractTests {
     }
   }
 
+  @Test("the Settings item opens the Settings page; the link parser still refuses it")
+  func settingsItemNavigatesOnlyFromTheTray() {
+    let settings = ControlCenterNavigationRequest(destination: .settings)
+    #expect(settings.arguments == ["--router-destination", "settings"])
+    #expect(settings.url.absoluteString == "codex-router://control-center/settings")
+    // The tray hands that URL to the Control Center itself; the parser for
+    // widget and other external URLs still refuses it.
+    #expect(ControlCenterNavigationRequest(url: settings.url) == nil)
+  }
+
   @Test("the private install-owner manifest resolves and unsafe copies do not")
   func validatesInstallManifest() throws {
     let state = FileManager.default.temporaryDirectory

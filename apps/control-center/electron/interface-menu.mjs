@@ -10,9 +10,9 @@ export { interfaceLanguageFromLocale, isInterfaceLanguage } from "./interface-lo
 // supply display labels only and never carry commands or callback names.
 /**
  * @param {unknown} language
- * @param {{ showWindow: () => void, quit: () => void }} actions
+ * @param {{ showWindow: () => void, quit: () => void, openSettings: () => void }} actions
  */
-export function interfaceMenuTemplates(language, { showWindow, quit }) {
+export function interfaceMenuTemplates(language, { showWindow, quit, openSettings }) {
   const messages = language === "zh-CN" ? simplifiedChinese
     : language === "zh-TW" ? traditionalChinese : english;
   /** @param {keyof typeof english} key */
@@ -25,6 +25,10 @@ export function interfaceMenuTemplates(language, { showWindow, quit }) {
   const application = [
     { label: "Codex Router", submenu: [
       { role: "about", label: label("app.about") },
+      { type: "separator" },
+      // Command-comma is where macOS users look for settings, and the tray hands
+      // this app the focus, so its own menu has to answer it too.
+      { label: label("app.settings"), accelerator: "CommandOrControl+,", click: openSettings },
       { type: "separator" },
       { role: "services", label: label("app.services") },
       { type: "separator" },

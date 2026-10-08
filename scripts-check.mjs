@@ -19,4 +19,11 @@ execFileSync(process.execPath, [path.join(root, "scripts", "check-v2-agent-appli
   stdio: "inherit",
 });
 
+// A malformed fragment is only discovered at release otherwise, which is the
+// worst moment to find it: the person cutting the release did not write it.
+execFileSync(process.execPath, [path.join(root, "scripts", "assemble-changelog.mjs"), "--check"], {
+  stdio: "inherit",
+  cwd: root,
+});
+
 console.log("syntax checks passed");

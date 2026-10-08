@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { fileURLToPath, pathToFileURL } from "node:url";
+
+const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
 // These assertions describe the checked-in registry, so the machine's own
 // curated models (including any local Ollama models the operator has checked)
@@ -100,6 +104,7 @@ test("provider registry exposes configured API and OAuth model families", () => 
       "commandcode/qwen3.8-flash",
       "commandcode/qwen3.8-max-0902",
       "commandcode/qwen3.8-max",
+      "commandcode/stealth/space-bunny-alpha",
       "commandcode/step-3.7-flash",
       "custom/qwen3.8-27b",
       "deepseek/deepseek-v4-flash",
@@ -223,6 +228,7 @@ test("provider registry exposes configured API and OAuth model families", () => 
       "openrouter/muse-spark-1.3-contributor",
       "openrouter/muse-spark-1.3",
       "openrouter/qwen3.8-flash",
+      "openrouter/stealth/space-bunny-alpha",
       "qwen-plan/deepseek-v4-flash-0731",
       "qwen-plan/deepseek-v4-pro-0813",
       "qwen-plan/deepseek-v4-pro",
@@ -913,7 +919,7 @@ test("GLM-5.3-Flash replaces OpenCode Go's withdrawn Ox Alpha route", () => {
 test("OpenCode Go routes retain upstream windows instead of the generic fallback", () => {
   const expected = new Map([
     ["opencode-go/mimo-v2.5", [1_000_000, 850_000, "opencode-go-mimo-v2-5-v2"]],
-    ["opencode-go/mimo-v2.5-pro", [1_000_000, 850_000, "opencode-go-mimo-v2-5-pro-v2"]],
+    ["opencode-go/mimo-v2.5-pro", [1_048_576, 900_000, "opencode-go-mimo-v2-5-pro-v3"]],
     ["opencode-go/hy3", [262_144, 223_000, "opencode-go-hy3-v2"]],
     ["opencode-go-messages/minimax-m2.5", [204_800, 174_000, "opencode-go-messages-minimax-m2-5-v2"]],
     ["opencode-go-messages/minimax-m2.7", [204_800, 174_000, "opencode-go-messages-minimax-m2-7-v2"]],
@@ -1475,6 +1481,17 @@ test("direct Meta Muse Spark 1.3 Contributor flattens recursive tool schemas", (
   assert.equal(verified.toolSchemaRecursion, "flatten");
 });
 
+test("OpenRouter Muse Spark 1.3 Contributor alone opts into recursive-schema repair", () => {
+  const verified = MODELS.find(model => model.slug === "openrouter/muse-spark-1.3-contributor");
+  assert.ok(verified);
+  assert.equal(verified.toolSchemaRecursion, "flatten");
+  for (const slug of ["openrouter/muse-spark-1.3", "openrouter/muse-spark-1.2-contributor"]) {
+    const control = MODELS.find(model => model.slug === slug);
+    assert.ok(control);
+    assert.equal(control.toolSchemaRecursion, undefined);
+  }
+});
+
 test("curated OpenCode Free Muse overlay upgrades text-only image modalities", async () => {
   // An entry curated before modalities were documented keeps ["text"]. The
   // registry overlay must widen it on load the same way it applies isFree and
@@ -1977,5 +1994,99 @@ test("Muse Spark 1.2 routes normalize forced tool choices model-by-model", () =>
     "opencode-go-responses/gpt-5.6-luna",
   ]) {
     assert.equal(MODEL_BY_SLUG.get(slug)?.requestProfile, undefined, slug);
+  }
+});
+
+// A desktop delete control may only offer routes that curation can actually
+// prune. The overlay is what decides that, and after the merge both sides are
+// normalized into the same shape -- so the distinction has to be recorded while
+// it is still known, or a checked-in route ends up wearing a delete button that
+// could never remove it.
+test("locally curated slugs are marked, and no checked-in route is", async () => {
+  const { LOCAL_MODEL_SLUGS, CHECKED_IN_MODELS } = await import("../src/model-registry.mjs");
+  // This file loads the registry against an empty overlay.
+  assert.equal(LOCAL_MODEL_SLUGS.size, 0, "an empty overlay marks nothing as local");
+  assert.ok(CHECKED_IN_MODELS.length > 0);
+});
+
+test("a populated overlay marks its own routes local and leaves the checked-in tree alone", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "registry-local-slugs-"));
+  const file = path.join(dir, "user-models.json");
+  // An upstream id no checked-in route claims, so the merge keeps it rather
+  // than skipping it as a duplicate.
+  const slug = "fireworks/router-test-local-only";
+  writeFileSync(file, JSON.stringify({
+    version: 1,
+    models: [{
+      slug,
+      gatewayModel: "fireworks-router-test-local-only",
+      upstreamModel: "accounts/fireworks/models/router-test-local-only",
+      provider: "fireworks",
+      listed: true,
+      displayName: "router-test-local-only (curated)",
+      description: "Fixture model for the local-slug assertion.",
+      priority: 100,
+      defaultEffort: "high",
+      reasoningLevels: [{ effort: "high", description: "Adaptive reasoning" }],
+      contextWindow: 131072,
+      autoCompact: 110000,
+      inputModalities: ["text"],
+      compHash: "fireworks-router-test-local-only-user-v1",
+    }],
+  }));
+  try {
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        `const { LOCAL_MODEL_SLUGS, MODELS, CHECKED_IN_MODELS } = await import(${
+          JSON.stringify(pathToFileURL(path.join(root, "src", "model-registry.mjs")).href)
+        });
+         const checkedIn = new Set(CHECKED_IN_MODELS.map((model) => model.slug));
+         process.stdout.write(JSON.stringify({
+           local: [...LOCAL_MODEL_SLUGS],
+           routed: MODELS.some((model) => model.slug === ${JSON.stringify(slug)}),
+           leaked: [...LOCAL_MODEL_SLUGS].filter((value) => checkedIn.has(value)),
+         }));`,
+      ],
+      {
+        cwd: root,
+        encoding: "utf8",
+        env: { ...process.env, MODEL_ROUTER_USER_MODELS: file, MODEL_ROUTER_STATE_DIR: dir },
+      },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.routed, true, "the fixture model must survive the merge");
+    assert.deepEqual(parsed.local, [slug]);
+    // The guarantee the delete control depends on.
+    assert.deepEqual(parsed.leaked, [], "a checked-in slug must never be marked local");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("registry fragments saved with a UTF-8 byte-order mark still load", () => {
+  // PowerShell's Set-Content and Notepad on Windows write UTF-8 with a BOM,
+  // which JSON.parse rejects as an unexpected token (#887).
+  const dir = mkdtempSync(path.join(os.tmpdir(), "registry-bom-test-"));
+  try {
+    const registryPath = path.join(dir, "providers.json");
+    writeFileSync(registryPath, `﻿${JSON.stringify(readRegistryDocument("config"), null, 2)}\n`);
+    const document = readRegistryDocument(registryPath);
+    assert.ok(document.models.some((model) => model.slug === "deepseek/deepseek-v4-pro"));
+
+    const vendor = path.join(dir, "tree", "deepseek");
+    mkdirSync(vendor, { recursive: true });
+    for (const name of ["deepseek.json", "deepseek-v4-pro.json"]) {
+      const text = readFileSync(path.join(root, "config", "deepseek", name), "utf8");
+      writeFileSync(path.join(vendor, name), `﻿${text}`);
+    }
+    const merged = readRegistryDocument(path.join(dir, "tree"));
+    assert.ok(merged.models.some((model) => model.slug === "deepseek/deepseek-v4-pro"));
+    assert.ok(merged.providers.some((provider) => provider.id === "deepseek"));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });

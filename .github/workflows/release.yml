@@ -75,6 +75,8 @@ jobs:
           set -euo pipefail
           version="${GITHUB_REF_NAME#v}"
           mkdir -p staged
+          # Packaged GUI smoke runs control commands from this router checkout.
+          npm ci --omit=dev
           npm ci --prefix apps/control-center
           npm run check --prefix apps/control-center
           npm test --prefix apps/control-center

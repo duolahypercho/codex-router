@@ -853,3 +853,59 @@ test("dashscope-reasoning writes the flat spelling on a chat-completions DashSco
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test("OpenRouter Muse Contributor repairs recursive schemas before reaching Meta", async () => {
+  const directory = mkdtempSync(path.join(os.tmpdir(), "openrouter-muse-schema-"));
+  const bodies = [];
+  const upstream = await listen(async (request, response) => {
+    const body = await requestJson(request);
+    bodies.push({ url: request.url, body });
+    const parameters = body.tools[0].function.parameters;
+    if (body.model === "meta/muse-spark-1.3-contributor" &&
+        parameters.$defs.Node.properties.child.$ref) {
+      json(response, 400, { error: { message: "Recursive JSON schemas are not currently supported" } });
+      return;
+    }
+    json(response, 200, {
+      id: "chatcmpl-muse-schema", object: "chat.completion", model: body.model,
+      choices: [{ index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
+    });
+  });
+  const port = await openPort();
+  const child = runForwarder({
+    MODEL_ROUTER_API_PORT: String(port),
+    MODEL_ROUTER_STATE_DIR: path.join(directory, "state"),
+    OPENROUTER_API_KEY: "test-only-key",
+    OPENROUTER_API_BASE_URL: `http://127.0.0.1:${upstream.port}/v1`,
+  });
+  const schema = { type: "object", properties: { root: { $ref: "#/$defs/Node" } },
+    $defs: { Node: { type: "object", properties: { child: { $ref: "#/$defs/Node" } } } } };
+  try {
+    await waitForForwarder(port, child);
+    for (const model of ["openrouter-muse-spark-1-3-contributor", "openrouter-muse-spark-1-3"]) {
+      const response = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${INTERNAL_KEY}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model, messages: [{ role: "user", content: "Use the tool." }],
+          tools: [{ type: "function", function: { name: "inspect", parameters: schema } }],
+        }),
+      });
+      const body = await response.json();
+      assert.equal(response.status, 200, JSON.stringify(body));
+      assert.equal(body.choices[0].message.content, "ok");
+    }
+    assert.equal(bodies.length, 2);
+    assert.ok(bodies.every(entry => entry.url === "/v1/chat/completions"));
+    assert.equal(bodies[0].body.model, "meta/muse-spark-1.3-contributor");
+    const repaired = bodies[0].body.tools[0].function.parameters;
+    assert.deepEqual(repaired.$defs.Node.properties.child, {});
+    assert.deepEqual(repaired.properties.root, { $ref: "#/$defs/Node" });
+    assert.equal(repaired.$defs.Node.type, "object");
+    assert.deepEqual(bodies[1].body.tools[0].function.parameters, schema);
+  } finally {
+    await stop(child);
+    await close(upstream.server);
+    rmSync(directory, { recursive: true, force: true });
+  }
+});

@@ -58,6 +58,8 @@ export function codexCandidatePaths({
         process.env.CODEX_INSTALL_DIR,
         platform === "win32" ? "codex.exe" : "codex",
       ),
+    platform === "darwin" && path.join(home, ".local", "bin", "codex"),
+    "/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex",
     "/Applications/ChatGPT.app/Contents/Resources/codex",
     "/Applications/Codex.app/Contents/Resources/codex",
     "/opt/homebrew/bin/codex",
@@ -67,7 +69,8 @@ export function codexCandidatePaths({
     localAppData && path.join(localAppData, "Programs", "Codex", "resources", "codex.exe"),
     localAppData && path.join(localAppData, "Programs", "Codex", "resources", "app", "bin", "codex.exe"),
     desktopAppBundledCodex({ platform, localAppData }),
-    path.join(home, ".local", "bin", platform === "win32" ? "codex.exe" : "codex"),
+    platform !== "darwin" &&
+      path.join(home, ".local", "bin", platform === "win32" ? "codex.exe" : "codex"),
   ].filter(Boolean);
 }
 

@@ -476,6 +476,13 @@ export function rankFailoverCandidates(
   const available = (Array.isArray(models) ? models : []).filter(
     (model) =>
       model.slug !== from?.slug &&
+      // `failoverCandidate: false` keeps a model selectable (picker, explicit
+      // slug, named requests) while opting it out of every automatic hop:
+      // quota failover, compaction attempts and compaction overflow. It is
+      // checked before the chain on purpose -- an operator who marks a route
+      // as never-automatic must not have that undone by an old chain entry.
+      // Absent means eligible, so every existing model ranks exactly as before.
+      model.failoverCandidate !== false &&
       eligible(model, {
         fromProvider,
         estimatedTokens,

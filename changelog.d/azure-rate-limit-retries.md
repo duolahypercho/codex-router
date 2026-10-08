@@ -1,0 +1,1 @@
+- **Azure KMAMC model groups no longer retry rate-limit failures inside LiteLLM.** Like Z.ai Coding Plan, the gateway returns the failure without resending the exhausted deployment's context; client retry policy is unchanged.

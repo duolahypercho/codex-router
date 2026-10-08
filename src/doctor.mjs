@@ -754,7 +754,7 @@ if (!failoverSettings.enabled) {
       : `on, ${failoverCounts.subscription} model(s) on your own providers -- no free model is curated, so nothing cheaper is tried first`,
     failoverCounts.free
       ? "Run ./bin/model-router codex control failover chain <model-slug,...> to choose the order yourself."
-      : "Free catalogs change without notice so none are checked in. Run ./bin/model-router codex curate-models opencode-free to give failover a free first stop.",
+      : "Free catalogs change without notice so none are checked in. Run ./bin/model-router codex curate-models opencode-free to give failover a free first stop -- OpenCode now serves most of its free tier only to its own client, so that command offers the few ids that still answer this router and names the rest as blocked.",
   );
 }
 // The same list the catalog writes definitions from, so a model switched off

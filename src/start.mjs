@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeSync } from "node:fs";
 import path from "node:path";
 
 import { assertCallerSecret } from "./caller-auth.mjs";
@@ -17,6 +17,7 @@ import {
   loopback,
 } from "./paths.mjs";
 import { SHUTDOWN_DRAIN_MS, SHUTDOWN_FLUSH_MS } from "./http-utils.mjs";
+import { clearStartupTimeouts, runtimeChildEnvironment, startupTimeoutMs } from "./startup-timeout.mjs";
 import { waitForHealth as pollHealth } from "./health-probe.mjs";
 import { describeChildExit, fatalExitFollowUp } from "./fatal-exit.mjs";
 import { gatewaySupervisorLimits, superviseGateway } from "./gateway-supervisor.mjs";
@@ -27,9 +28,22 @@ import { antigravityOAuthStartupState } from "./antigravity-oauth-status.mjs";
 import { attemptAntigravityProbePromotionAfterReadiness } from "./antigravity-probe-activation.mjs";
 import { spawnableCommand } from "./spawnable-command.mjs";
 import { ensureOllamaHeadless } from "./ollama-runtime.mjs";
-import { venvRuntimeProblem } from "./venv-runtime.mjs";
+import { venvRuntimeOutcome } from "./venv-runtime.mjs";
 import { dependencyRepairHint } from "./dependency-repair.mjs";
-import { clearServiceProcessState, writeServiceProcessState } from "./service-process.mjs";
+import {
+  clearServiceProcessState,
+  isForegroundSupervisor,
+  shouldRecordServiceProcess,
+  writeServiceProcessState,
+} from "./service-process.mjs";
+import {
+  STARTUP_BACKOFF_EXIT_CODE,
+  clearStartupAttempts,
+  readStartupAttempts,
+  recordStartupFailure,
+  startupBackoffDisabled,
+  startupBackoffRemainingMs,
+} from "./startup-attempts.mjs";
 import {
   environmentProxyOptedIn,
   inheritedProxyEnvironment,
@@ -39,6 +53,26 @@ import { antigravityOAuthStatus } from "./antigravity-oauth-status.mjs";
 import { cursorTunnelRunSpec } from "./cursor-cloudflare-tunnel.mjs";
 import { pruneUnconfiguredProviders } from "./provider-selection.mjs";
 import { targetCli } from "./target-integration.mjs";
+
+// The foreground entry marks itself before importing this module. Direct
+// start.mjs remains the OS payload; only it consumes managed retry state.
+const automaticStartup = !isForegroundSupervisor();
+let startupReady = false;
+if (automaticStartup && !startupBackoffDisabled()) {
+  const backoffRecord = readStartupAttempts();
+  const backoffRemaining = startupBackoffRemainingMs(backoffRecord);
+  if (backoffRemaining > 0) {
+    // Written synchronously on purpose: process.exit() does not flush an
+    // asynchronous stream, and this message is the entire point of the exit.
+    writeSync(
+      2,
+      `[model-router] backing off for another ${Math.ceil(backoffRemaining / 1000)}s after ` +
+        `${backoffRecord?.consecutiveFailures ?? 0} consecutive failed start(s); ` +
+        "`service restart` clears this, and CODEX_ROUTER_DISABLE_STARTUP_BACKOFF=1 bypasses it.\n",
+    );
+    process.exit(STARTUP_BACKOFF_EXIT_CODE);
+  }
+}
 
 // Before anything reads the environment or spawns a child. A service manager
 // hands this process the proxy the install recorded; a shell hands it whatever
@@ -105,10 +139,13 @@ if (usesBundledVenv) {
     process.platform === "win32" ? "Scripts" : "bin",
     process.platform === "win32" ? "python.exe" : "python",
   );
-  const venvProblem = venvRuntimeProblem(venvPython);
-  if (venvProblem) {
+  const venvOutcome = venvRuntimeOutcome(venvPython);
+  if (venvOutcome.kind !== "ok") {
+    if (automaticStartup && !startupBackoffDisabled() && venvOutcome.kind === "timeout") {
+      recordStartupFailure({ reason: "venv-timeout" });
+    }
     throw new Error(
-      `The LiteLLM virtual environment is broken at ${venvPython} (${venvProblem}). ` +
+      `The LiteLLM virtual environment ${venvOutcome.kind === "timeout" ? "probe did not finish" : "is broken"} at ${venvPython} (${venvOutcome.message}). ` +
         `${dependencyFix}.`,
     );
   }
@@ -230,6 +267,7 @@ const commonEnv = {
 
 const children = [];
 let shuttingDown = false;
+let stopNativeCatalogWatch = () => {};
 
 // Every child goes through `spawnableCommand` for the one case that needs it:
 // a Windows `.cmd`/`.bat` launcher, which Node has refused to spawn without a
@@ -244,7 +282,9 @@ function run(command, args, extraEnv = {}) {
   const spawnable = spawnableCommand(command, args);
   const child = spawn(spawnable.command, spawnable.args, {
     cwd: SOURCE_ROOT,
-    env: { ...process.env, ...commonEnv, ...extraEnv },
+    // Only this supervisor consumes startup allowances. Request handlers,
+    // diagnostic subprocesses, and restarted children keep normal runtime bounds.
+    env: runtimeChildEnvironment({ ...process.env, ...commonEnv, ...extraEnv }),
     stdio: "inherit",
     ...spawnable.options,
   });
@@ -287,6 +327,7 @@ const SIGKILL_AFTER_MS = SHUTDOWN_DRAIN_MS + SHUTDOWN_FLUSH_MS + 2_000;
 function stopChildren() {
   if (shuttingDown) return;
   shuttingDown = true;
+  stopNativeCatalogWatch();
   for (const child of children) {
     if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
   }
@@ -299,6 +340,16 @@ function stopChildren() {
 
 const FRONTEND = { script: "router.mjs", service: "codex-router", label: "Codex router" };
 for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, stopChildren);
+
+// Boot-health allowance for spawned children (forwarders, router frontend).
+// Slow hosts (VDI Task Scheduler ancestry adds ~60 s per spawn level) raise
+// this via CODEX_ROUTER_STARTUP_HEALTH_TIMEOUT_MS; the default is unchanged.
+// The LiteLLM gateway keeps its own longer allowance below. Runtime request,
+// inference, and retry timeouts are unaffected.
+const STARTUP_CHILD_HEALTH_TIMEOUT_MS =
+  startupTimeoutMs("CODEX_ROUTER_STARTUP_HEALTH_TIMEOUT_MS", 30_000);
+const STARTUP_GATEWAY_HEALTH_TIMEOUT_MS =
+  startupTimeoutMs("CODEX_ROUTER_GATEWAY_HEALTH_TIMEOUT_MS", 300_000);
 
 async function main() {
   // These forwarders use separate ports and do not depend on one another.
@@ -325,7 +376,7 @@ async function main() {
       "OAuth forwarder",
       loopback(PORTS.oauth, "/health"),
       { Authorization: `Bearer ${internalKey}` },
-      30_000,
+      STARTUP_CHILD_HEALTH_TIMEOUT_MS,
       undefined,
       kimiForwarder,
     ),
@@ -333,7 +384,7 @@ async function main() {
       "API forwarder",
       loopback(PORTS.api, "/health"),
       { Authorization: `Bearer ${internalKey}` },
-      30_000,
+      STARTUP_CHILD_HEALTH_TIMEOUT_MS,
       undefined,
       api,
     ),
@@ -341,7 +392,7 @@ async function main() {
       "Grok OAuth forwarder",
       loopback(PORTS.grokOauth, "/health"),
       { Authorization: `Bearer ${internalKey}` },
-      30_000,
+      STARTUP_CHILD_HEALTH_TIMEOUT_MS,
       undefined,
       grokForwarder,
     ),
@@ -351,7 +402,7 @@ async function main() {
           "Antigravity OAuth forwarder",
           loopback(PORTS.antigravityOauth, "/health"),
           { Authorization: `Bearer ${internalKey}` },
-          30_000,
+          STARTUP_CHILD_HEALTH_TIMEOUT_MS,
           undefined,
           antigravityForwarder,
         ),
@@ -367,7 +418,7 @@ async function main() {
           "Devin CLI forwarder",
           loopback(PORTS.devinCli, "/health"),
           { Authorization: `Bearer ${internalKey}` },
-          30_000,
+          STARTUP_CHILD_HEALTH_TIMEOUT_MS,
           undefined,
           devinForwarder,
         ),
@@ -387,12 +438,15 @@ async function main() {
   // LiteLLM cold starts can take minutes when launchd starves the job under
   // system load; killing it mid-import restarts the import from scratch and
   // the service loops forever, so wait long enough for a starved import.
+  // Slow hosts (VDI Task Scheduler ancestry plus a saturated CPU) raise this
+  // via CODEX_ROUTER_GATEWAY_HEALTH_TIMEOUT_MS; the default is unchanged.
+  // This is a boot-health allowance, not an inference or request timeout.
   const gatewayHealthy = (child) =>
     waitForHealth(
       "LiteLLM gateway",
       loopback(PORTS.gateway, "/health/liveliness"),
       { Authorization: `Bearer ${internalKey}` },
-      300_000,
+      STARTUP_GATEWAY_HEALTH_TIMEOUT_MS,
       undefined,
       child,
     );
@@ -416,19 +470,10 @@ async function main() {
     frontend.label,
     loopback(PORTS.router, "/health"),
     {},
-    30_000,
+    STARTUP_CHILD_HEALTH_TIMEOUT_MS,
     frontendService,
     router,
   );
-
-  // After router is healthy, refresh the native account catalog and check its
-  // cache plus the installed Codex binary for drift in the background.
-  // This runs async without blocking further startup or waiting for user commands.
-  import("./native-catalog-drift.mjs")
-    .then(({ republishOnNativeDrift }) => republishOnNativeDrift())
-    .catch((error) => {
-      console.error(`[codex-router] Native drift check failed: ${error.message}`);
-    });
 
   if (antigravityStartup.pendingActivationGeneration) {
     const promoted = await attemptAntigravityProbePromotionAfterReadiness({
@@ -447,6 +492,23 @@ async function main() {
       );
     }
   }
+
+  // Pending activation is the last supervisor bootstrap write. Retire startup
+  // settings only after it settles, before publishers can perform runtime writes.
+  clearStartupTimeouts(process.env);
+
+  // Keep the native catalog fresh while the service is alive, including while
+  // Codex Desktop is closed, so its next startup reads newly released models.
+  // The immediate pass also handles an already stale cache after service boot.
+  import("./native-catalog-drift.mjs")
+    .then(({ watchNativeCatalog }) => {
+      if (shuttingDown) return;
+      stopNativeCatalogWatch = watchNativeCatalog({ immediate: true });
+    })
+    .catch((error) => {
+      console.error(`[codex-router] Native drift check failed: ${error.message}`);
+    });
+
   const cursorEdge = cursorInstalled
     ? run(process.execPath, [path.join(SOURCE_ROOT, "src", "cursor-public-edge.mjs")])
     : undefined;
@@ -455,7 +517,7 @@ async function main() {
       "Cursor public edge",
       loopback(PORTS.cursorPublic, "/health"),
       {},
-      30_000,
+      STARTUP_CHILD_HEALTH_TIMEOUT_MS,
       "codex-router-cursor-edge",
       cursorEdge,
     );
@@ -469,6 +531,16 @@ async function main() {
     : undefined;
 
   console.error(`[${frontendService}] ready (authenticated loopback endpoint)`);
+  startupReady = true;
+  // The service is serving, so the previous failures are over: clear the
+  // back-off record rather than leaving it to delay the next legitimate start.
+  if (automaticStartup) {
+    try {
+      clearStartupAttempts();
+    } catch {
+      // The operational cache must not interrupt a healthy stack.
+    }
+  }
   // Only the gateway is supervised. The forwarders and the router are ours and
   // are restarted by rebuilding the whole service; the gateway is a third-party
   // Python process that can end itself on a single bad upstream response
@@ -523,8 +595,9 @@ try {
   // cmd/node descendants still own every router port. Record the verified
   // start.mjs identity so the Windows service manager can terminate that tree
   // before it launches a replacement. Other platforms keep their native
-  // supervisor semantics and do not need this marker.
-  if (process.platform === "win32") {
+  // supervisor semantics and do not need this marker, and neither does the
+  // unmanaged foreground supervisor, which the service manager never owns.
+  if (shouldRecordServiceProcess()) {
     writeServiceProcessState();
     serviceProcessRecorded = true;
   }
@@ -533,6 +606,18 @@ try {
   if (!shuttingDown) {
     const reason = (error instanceof Error && error.message) || String(error);
     console.error(`[model-router] startup failed: ${reason}; inspect the service logs above for details.`);
+    if (automaticStartup && !startupReady && !startupBackoffDisabled()) {
+      // Do not infer policy from an error message or from try-block placement.
+      // Configuration, credentials, child exit and file/ACL errors stay fatal.
+      const failure = error?.probeOutcome === "timeout"
+        ? "health-timeout"
+        : error?.serviceProcessFailure === "identity-unavailable"
+          ? "process-identity-unavailable"
+          : error?.serviceProcessFailure === "command-line-unavailable"
+            ? "process-command-line-unavailable"
+            : undefined;
+      if (failure) recordStartupFailure({ reason: failure });
+    }
     exitCode = 1;
   }
 } finally {

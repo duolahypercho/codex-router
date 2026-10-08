@@ -1,0 +1,1 @@
+- **Packaged desktop helpers include their startup-timeout dependency.** This prevents an Electron import-error dialog from blocking application startup, second-instance handoff, or a lifecycle query. A packaging regression imports the staged helper resources with the same dependency layout as the Windows, Linux, and macOS bundles.

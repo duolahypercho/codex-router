@@ -667,6 +667,21 @@ The Jev route is intentionally unlisted, so it cannot appear in Codex's
 conversational model picker. It is for an explicit local integration such as
 jev-pruner, never a substitute for Codex native compaction.
 
+Connecting OpenRouter makes this Decisions route available to a client that
+calls `/v1/decisions`. Do not add a Jev model in **Models** to turn on output
+pruning. In particular, OpenRouter's `typesafe/jev-router` is a conversational
+model route: selecting it changes the assistant used by Codex. It does not
+activate the hidden `openrouter-decisions/jev-latest` route or install a tool
+output hook. A Decisions client must be configured separately to call the
+endpoint; automatic Codex tool output pruning needs its own hook.
+
+If the Router goes offline during setup, use **Status → Service health → Fix**
+in Control Center, then check Router health and return to a known working chat
+model. Fix repairs and restarts the installed Router, so routed chats may be
+interrupted. It does not enable a Decisions client. See the
+[provider and model guide](docs-site/src/content/docs/reference/providers-and-models.md)
+for the general boundary between chat models and tool APIs.
+
 ### opencode (Go subscription and Zen)
 
 The opencode provider family covers both of opencode's endpoints with one
@@ -944,6 +959,7 @@ preserves Command Code's reported cached-token usage.
 
 | Picker label | Model ID |
 | --- | --- |
+| Space Bunny Alpha (Command Code) | `commandcode/stealth/space-bunny-alpha` |
 | DeepSeek V4 Flash (Command Code) | `commandcode/deepseek-v4-flash` |
 | DeepSeek V4 Pro (Command Code) | `commandcode/deepseek-v4-pro` |
 | DeepSeek V4.1 Flash (Command Code) | `commandcode/deepseek-v4.1-flash` |
@@ -1027,9 +1043,9 @@ onto the three the model accepts. Existing `opencode-go/ox-alpha` and locally
 curated `opencode-go/ox-alpha-free` selections migrate to
 `opencode-go/glm-5.3-flash` automatically.
 
-The picker retains the advertised 1M context. OpenRouter, Z.ai API, and the
-other Flash routes keep the conservative 400K compaction threshold; live
-multimodal histories on the original OpenCode Go route repeatedly returned
+The picker retains the advertised 1M context. OpenCode Go, OpenRouter, Z.ai API,
+and the other Flash routes keep the conservative 400K compaction threshold:
+live multimodal histories on the original OpenCode Go route repeatedly returned
 empty completions before the advertised limit. Z.ai Coding is provider-specific
 at 500K. Current Codex Desktop subagents attach a tool-schema prefix large enough
 that successful Z.ai Coding prompts reached 474K immediately after compaction;
@@ -1041,11 +1057,7 @@ instruction overlay, and standalone tool-search contract as the proven
 full-size `zai-coding/glm-5.3` route. Standalone search keeps deferred tools out
 of the initial Codex tool surface and loads them through the native
 `tool_search` bridge on demand; this is the root fix for the large fixed prefix
-that made compacted Flash subagents reopen above their threshold. OpenCode Go's
-Flash route now uses the same deferred tool loading and concise project-work
-instructions. A direct Codex onboarding task sent about 1,271 tool definitions
-per ordinary turn and compacted five times without making an edit at 500K;
-the route keeps that 500K limit and removes the repeated fixed tool cost. These
+that made compacted Flash subagents reopen above their threshold. These
 execution/catalog capabilities are route-local: Flash remains conservative v1
 for shipped multi-agent capability until its exact route has a separate
 accepted `v2_agent` proof artifact. OpenCode Go's content moderation still
@@ -1233,8 +1245,12 @@ After setup:
 3. Fully quit Codex, reopen it, and create a new task.
 4. Open the normal model picker.
 
-Codex loads `model_catalog_json` only at app startup. If models are still
-missing, run `./bin/refresh-catalog`, fully quit Codex, and reopen it.
+While the router service is running, it checks the signed-in account's native
+model catalog every five minutes and republishes changes. This lets the next
+Codex launch see newly released models without a manual catalog refresh.
+Codex loads `model_catalog_json` only at app startup. If the catalog changes
+while Codex is open, fully quit and reopen Codex to load the new list. If a
+model is still missing, run `./bin/refresh-catalog` and reopen Codex.
 
 Large compressed Codex contexts use separate safety limits for bytes received
 on the loopback socket and bytes produced after decompression. The defaults are
@@ -1252,6 +1268,30 @@ an 8 MiB ceiling configurable through `MODEL_ROUTER_MAX_BUFFERED_RESPONSE_BYTES`
 The caller-authenticated health endpoint reports these limits, aggregate
 in-flight counts, bounded-buffer ceilings, and encrypted-relay cache metrics;
 the public health endpoint omits that resource detail.
+
+`CODEX_ROUTER_APP_CONNECTORS` can withhold the Codex app connectors from a
+routed Chat Completions or Messages model. Codex can send its full connector
+registry (`mcp__codex_apps__github`, `mcp__codex_apps__notion`, ...), adding
+hundreds of tool schemas to a turn. Supply the variable when installing or
+regenerating the service; the Linux, macOS, and Windows service definitions
+retain the setting until regenerated again. Restart an already-running service
+after changing its environment. A foreground router reads it from its launch
+environment. The setting is opt-in:
+
+- unset or empty: keep ordinary connector functions eager.
+- `none`: withhold every connector function.
+- `all`: keep ordinary connector functions eager, stated explicitly.
+- `airtable,gmail`: keep those connectors eager and withhold the rest;
+  trimmed, case-insensitive, unknown ids ignored.
+
+A withheld function is re-declared when stored call history, a forced choice,
+or an allowed-tools choice names it. With a client-executed `tool_search`,
+marked deferred functions can also be loaded through the existing search relay.
+Codex's own app tools, the collaboration runtime, the repls, image generation,
+and custom tools are outside connector selection. Explicitly deferred functions
+still follow the client tool-search contract; custom tools remain visible.
+Responses compatibility routes that translate namespace tools also use this
+policy; routes that preserve native namespace declarations bypass it.
 
 For routed external models, old textual tool results larger than 32 KiB are
 compacted after the model has acted on them. The four newest tool results stay
@@ -1636,6 +1676,13 @@ tops the list. Everything is rated against this machine's memory, anything too
 large is not offered, and anything already downloaded drops off. Add `--json`
 for the same data as an object.
 
+The local Ollama deployment uses `num_ctx: 16384` and a 600-second LiteLLM
+timeout by default. Set `MODEL_ROUTER_LOCAL_NUM_CTX` and
+`MODEL_ROUTER_LOCAL_TIMEOUT` (seconds) to positive integers in the router
+process environment to override them. The timeout applies to both streaming
+and non-streaming requests. Restart the router to regenerate its LiteLLM
+configuration after changing either value.
+
 Checking, installing, and removing are three separate actions on purpose:
 unchecking never deletes a download, and removing needs explicit confirmation.
 The `local` provider turns itself on with the first checked model and off when
@@ -1961,6 +2008,14 @@ failure. Choose the order yourself, or hand the choice back:
 ./bin/control failover chain opencode-free/big-pickle,kimi-api/kimi-k3
 ./bin/control failover auto
 ```
+
+**A route you only ever want to pick yourself can opt out.** Set
+`"failoverCandidate": false` on its entry in `user-models.json` and it stays in
+the picker and answers when you select it, but it is never chosen
+automatically -- not by quota failover, not by compaction, and not through a
+named chain. Use it for a slow, best-effort or subscription-bound route that
+must not absorb other models' traffic. Curation keeps the field on an existing
+entry; a model without it behaves exactly as before.
 
 **When a provider tells you when it will be back, that is believed.** The next
 turn skips it outright instead of paying for the same rejection again, and it

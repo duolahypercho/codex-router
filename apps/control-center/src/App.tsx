@@ -426,6 +426,10 @@ export default function App() {
   const navigateToRef = useRef(navigateTo);
   useEffect(() => { navigateToRef.current = navigateTo; }, [navigateTo]);
   useEffect(() => api?.onNavigation?.((request) => {
+    if (request.destination === "settings") {
+      navigateToRef.current("settings");
+      return;
+    }
     if (request.destination !== "usage" && request.destination !== "usage-resets") return;
     if (request.destination === "usage-resets" || request.sourceId) {
       usageFocusSequence.current += 1;

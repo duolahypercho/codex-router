@@ -182,7 +182,9 @@ export function userModelEntryFromCatalog({
 export function readUserModels() {
   if (!existsSync(USER_MODELS_PATH)) return [];
   try {
-    const payload = JSON.parse(readFileSync(USER_MODELS_PATH, "utf8"));
+    // A leading UTF-8 BOM (Windows editors add one) would otherwise fail the
+    // parse and silently drop every curated model (#887).
+    const payload = JSON.parse(readFileSync(USER_MODELS_PATH, "utf8").replace(/^﻿/, ""));
     return Array.isArray(payload?.models) ? payload.models : [];
   } catch {
     return [];

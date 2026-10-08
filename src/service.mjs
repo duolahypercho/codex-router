@@ -3,10 +3,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { SOURCE_ROOT } from "./paths.mjs";
+import { readStartupAttempts, resetStartupAttempts, startupBackoffDisabled, startupBackoffRemainingMs } from "./startup-attempts.mjs";
 import { stopManagedOllama } from "./ollama-runtime.mjs";
 import { waitForServiceReadiness } from "./service-readiness.mjs";
 import { withServiceOperationLock } from "./service-operation-lock.mjs";
 import { environmentProxyOptedIn } from "./proxy-environment.mjs";
+import { serviceAppConnectorEnvironment } from "./app-connector-policy.mjs";
 
 const platform = process.env.CODEX_ROUTER_SERVICE_PLATFORM || process.platform;
 const script = {
@@ -58,6 +60,9 @@ export async function runServiceCommandUnlocked(
   command = "status",
   args = [command],
 ) {
+  // Refuse invalid publication settings before resetting state or starting a
+  // platform installer that may replace a working service.
+  if (command === "install") serviceAppConnectorEnvironment();
   // The wrapper below is a separate Node process, so a direct
   // `node --use-env-proxy src/service.mjs ...` invocation would otherwise lose
   // its CLI-only opt-in before the platform renderer can persist it.
@@ -65,6 +70,10 @@ export async function runServiceCommandUnlocked(
     ...process.env,
     ...(environmentProxyOptedIn() ? { NODE_USE_ENV_PROXY: "1" } : {}),
   };
+  // Fail a required reset before any platform mutation. A second reset inside
+  // each replacement branch follows the stop barrier, after old writers drain.
+  if (command === "start" || command === "restart") resetStartupAttempts();
+  if (command === "install") resetStartupAttempts({ required: false });
   // Synchronous service renderers can own grandchildren. Do not apply a
   // direct-child timeout here: it could orphan those descendants and let them
   // mutate the service after the UI reports failure. The outer desktop runner
@@ -101,6 +110,11 @@ export async function runServiceCommandUnlocked(
   }
   const health = await waitForServiceReadiness({
     timeoutMs: READINESS_TIMEOUT_MS,
+    ...(command === "install" ? {
+      getStartupBackoffRemainingMs: () => startupBackoffDisabled(childEnvironment)
+        ? 0
+        : startupBackoffRemainingMs(readStartupAttempts()),
+    } : {}),
     // Only the Linux service manager exposes an automatic-restart counter
     // this guard can read; Windows readiness carries its own task-state
     // guard, and launchd has no equivalent counter.
@@ -132,13 +146,18 @@ export async function runServiceCommandUnlocked(
       : {}),
   }).catch((error) => {
     // A crash loop or a dead launcher is broken and keeps rejecting, so the
-    // caller's rollback still runs for it. Only the "still starting" timeout
-    // is converted into a status, because the service it installed is
-    // genuinely there and working towards health.
+    // caller's rollback still runs for it. A readiness timeout or confirmed
+    // automatic cooldown preserves the installed service with status 75.
+    if (error?.startupDeferred === true) return { ok: false, startupDeferred: true, error: error.message };
     if (error?.readinessTimeout !== true) throw error;
     return { ok: false, readinessTimeout: true, error: error.message };
   });
   if (health.ok) return 0;
+  if (health.startupDeferred) {
+    console.error(`The background service remains installed; automatic startup is deferred by its cooldown. ${health.error}`);
+    console.error("Inspect the service log, then use `service start` or `service restart` to reset the cooldown.");
+    return READINESS_TIMEOUT_EXIT_CODE;
+  }
   if (health.readinessTimeout) {
     // Distinct from 1 so an installer can tell "the service is installed and
     // still starting" from "the install failed". Uninstalling here deletes a
@@ -162,6 +181,8 @@ export async function runServiceCommandUnlocked(
 export async function runServiceCli(args = process.argv.slice(2)) {
   const command = args[0] || "status";
   const commandArgs = args.length ? args : [command];
+  // The operation lock writes private state, so preflight before acquiring it.
+  if (command === "install") serviceAppConnectorEnvironment();
   return mutatingCommands.has(command)
     ? withServiceOperationLock(() => runServiceCommandUnlocked(command, commandArgs))
     : runServiceCommandUnlocked(command, commandArgs);

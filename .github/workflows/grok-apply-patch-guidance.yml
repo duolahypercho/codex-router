@@ -23,9 +23,14 @@ name: Grok apply_patch protocol
       - "test/grok-patch-hook*.test.mjs"
       - "src/namespace-relay.mjs"
       - "src/grok-oauth-forwarder.mjs"
+      - "src/grok-client-version.mjs"
+      - "test/grok-version-fixture.mjs"
       - "src/grok-oauth-turn.mjs"
       - "src/grok_service_tier_callback.py"
       - "src/litellm-config.mjs"
+      - "src/litellm_stream_cleanup_callback.py"
+      - "test/litellm-stream-cleanup.test.mjs"
+      - "test/grok-fast-config.test.mjs"
       - "scripts/verify-grok-service-tier.mjs"
       - "config/grok/oauth/grok-4.6.json"
       - "src/router.mjs"
@@ -61,9 +66,14 @@ name: Grok apply_patch protocol
       - "test/grok-patch-hook*.test.mjs"
       - "src/namespace-relay.mjs"
       - "src/grok-oauth-forwarder.mjs"
+      - "src/grok-client-version.mjs"
+      - "test/grok-version-fixture.mjs"
       - "src/grok-oauth-turn.mjs"
       - "src/grok_service_tier_callback.py"
       - "src/litellm-config.mjs"
+      - "src/litellm_stream_cleanup_callback.py"
+      - "test/litellm-stream-cleanup.test.mjs"
+      - "test/grok-fast-config.test.mjs"
       - "scripts/verify-grok-service-tier.mjs"
       - "config/grok/oauth/grok-4.6.json"
       - "src/router.mjs"
@@ -169,4 +179,6 @@ jobs:
           node scripts/verify-grok-apply-patch-guidance.mjs "$venv_python" --structured
           node scripts/verify-grok-apply-patch-guidance.mjs "$venv_python" --native-hook
           node scripts/verify-grok-apply-patch-guidance.mjs "$venv_python" --native-hook --native-hook-endpoint
+          MODEL_ROUTER_TEST_LITELLM_PYTHON="$venv_python" node --test test/litellm-stream-cleanup.test.mjs
+          node scripts/verify-grok-apply-patch-guidance.mjs "$venv_python" --native-hook --native-hook-endpoint --cancel-before-next-provider-read
           node scripts/verify-grok-service-tier.mjs "$venv_python"

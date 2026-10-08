@@ -1,4 +1,7 @@
 import { Transform } from "node:stream";
+import { isUtf8 } from "node:buffer";
+
+import { jsonArgumentsAreUnambiguous } from "./namespace-relay.mjs";
 
 const LINE_FEED = 0x0a;
 
@@ -52,6 +55,7 @@ export class ZaiCacheUsageCompatTransform extends Transform {
   }
 
   #rewriteLine(line) {
+    if (!isUtf8(line)) return line;
     const text = line.toString("utf8");
     const terminator = text.endsWith("\r\n") ? "\r\n" : text.endsWith("\n") ? "\n" : "";
     const content = terminator ? text.slice(0, -terminator.length) : text;
@@ -67,6 +71,11 @@ export class ZaiCacheUsageCompatTransform extends Transform {
 
     const usage = usageObject(payload);
     if (usage === undefined) return line;
+    // This rewrite serializes the entire upstream payload. The same exact
+    // JSON guard used for tool rewrites rejects duplicate keys, rounded or
+    // underflowed numbers, and other values JSON.parse/stringify would change.
+    // Optional cache normalization is not permission to mutate unrelated data.
+    if (!jsonArgumentsAreUnambiguous(data)) return line;
     const cached = cachedTokens(payload);
     let changed = false;
     if (cached !== undefined && usage.prompt_cache_hit_tokens === undefined) {

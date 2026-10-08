@@ -10,9 +10,11 @@ process.env.CODEX_ROUTER_STATE_DIR = path.join(testRoot, "state");
 
 const {
   installedTargets,
+  publicationFailure,
   refreshTargetPickerIfInstalled,
   runTargetPublicationProcess,
 } = await import("../src/target-integration.mjs");
+const { safeFailure } = await import("../apps/control-center/electron/command-runner.mjs");
 const {
   CONFIG_PATH,
   CLAUDE_CATALOG_PATH,
@@ -134,6 +136,20 @@ test("each target publisher owns a finite tree and contracts its child deadline"
   );
 });
 
+test("target publication uses the configured stable Node runtime", async () => {
+  let invocation;
+  await runTargetPublicationProcess("catalog.mjs", [], {
+    sourceRoot: "/stable/router",
+    environment: { CODEX_ROUTER_NODE_BIN: "/stable/node" },
+    run: async (command, args, options) => {
+      invocation = { command, args, options };
+      return { status: 0, stdout: "", stderr: "" };
+    },
+  });
+  assert.equal(invocation.command, "/stable/node");
+  assert.equal(invocation.options.env.CODEX_ROUTER_NODE_BIN, "/stable/node");
+});
+
 test("target publication honors and caps an injected operation environment", async () => {
   let invocation;
   const now = Date.now();
@@ -239,4 +255,55 @@ test("a routed harness publication keeps the shared plane installed", () => {
   } finally {
     clearStagedFiles();
   }
+});
+
+// What the harness publisher printed when it refused its credentials document.
+// Every publisher catches its own error and prints only the message.
+const REFUSAL =
+  'Refusing to edit the harness credentials document: "records" holds a nested mapping, ' +
+  "so this file is not a credential reference document.";
+const STOPPED = "DeepSeek Harness was not updated, and any client after it was skipped.";
+
+test("a failed publication names its client and the stop, then the publisher's report", async () => {
+  await assert.rejects(
+    runTargetPublicationProcess("dsh-config-manager.mjs", ["install"], {
+      client: "DeepSeek Harness",
+      run: async () => ({ status: 1, signal: null, stdout: "", stderr: `${REFUSAL}\n` }),
+    }),
+    { message: `${STOPPED}\n${REFUSAL}` },
+  );
+});
+
+test("a publisher's report is relayed whole, and a silent failure says how it ended", () => {
+  // A wrapper's context and every line under it stay, not just one of them.
+  const wrapped = "OpenClaw config command failed:\nError: first line\nsecond line";
+  assert.equal(
+    publicationFailure("OpenClaw", { status: 1, stderr: `${wrapped}\n` }),
+    `OpenClaw was not updated, and any client after it was skipped.\n${wrapped}`,
+  );
+  assert.equal(
+    publicationFailure("Gemini CLI", { status: 3, stderr: "" }),
+    "Gemini CLI was not updated, and any client after it was skipped.\nClient publication exited with status 3.",
+  );
+  assert.equal(
+    publicationFailure("Codex", { status: null, signal: "SIGTERM", stderr: "" }),
+    "Codex was not updated, and any client after it was skipped.\nThe publisher was stopped by SIGTERM.",
+  );
+});
+
+test("the Control Center keeps the client name when it hides a credential line", () => {
+  // The UI drops every error line that mentions a credential, which is how the
+  // whole cause used to vanish. The client line must survive that filter, and
+  // a cause without such a word must still follow it. The control process dies
+  // on the rethrown error, so the UI parses its crash banner.
+  const banner = (message) =>
+    `file:///router/src/target-integration.mjs:93\n          ^\n\nError: ${message}\n    at x (y:1:1)\n`;
+  assert.equal(
+    safeFailure(banner(publicationFailure("DeepSeek Harness", { status: 1, stderr: REFUSAL }))),
+    STOPPED,
+  );
+  assert.equal(
+    safeFailure(banner(publicationFailure("Codex", { status: 1, stderr: "catalog is locked" }))),
+    "Codex was not updated, and any client after it was skipped. catalog is locked",
+  );
 });

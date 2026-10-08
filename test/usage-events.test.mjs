@@ -533,6 +533,40 @@ test("an empty ledger still returns a full, honest set of hours", async () => {
   assert.ok(buckets.every((bucket) => !bucket.measuredTokens && !bucket.measuredBreakdown));
 });
 
+test("hourly retry spend agrees with provider totals when raw totals are also present", async () => {
+  const { hourlyUsageRollup } = await import("../src/usage-events.mjs");
+  const { aggregateProviderUsage } = await import("../src/provider-usage.mjs");
+  const now = Date.parse("2026-09-06T17:30:37.000Z");
+  const base = {
+    at: new Date(now - 1_000).toISOString(),
+    provider: "grok-oauth",
+    model: "grok-oauth/grok-4.6",
+    inputTokens: 10,
+    outputTokens: 3,
+    totalTokens: 13,
+  };
+  for (const [fields, expected] of [
+    [{ billedInputTokens: 40, billedOutputTokens: 7, cachedInputTokens: 90 }, 47],
+    [{ billedInputTokens: 40 }, 43],
+    [{ billedOutputTokens: 7 }, 17],
+    [{ billedInputTokens: 0, billedOutputTokens: 0 }, 0],
+    [{ totalTokens: 99 }, 99],
+  ]) {
+    const event = { ...base, ...fields };
+    const buckets = hourlyUsageRollup({ now, readEvents: () => [event] });
+    const bucket = buckets.at(-1);
+    const provider = aggregateProviderUsage([event], { now }).providers
+      .find((item) => item.id === "grok-oauth");
+    assert.equal(bucket.tokens, expected, JSON.stringify(fields));
+    assert.equal(bucket.tokens, provider.last24hTokens);
+    assert.equal(bucket.measuredTokens, true, "an explicitly billed zero is measured");
+    if (fields.billedInputTokens !== undefined || fields.billedOutputTokens !== undefined) {
+      assert.equal(bucket.tokens,
+        bucket.regularInputTokens + bucket.cachedInputTokens + bucket.outputTokens);
+    }
+  }
+});
+
 test("records known actual serviceTier without echoing the requested value", async () => {
   const stateDir = mkdtempSync(path.join(os.tmpdir(), "model-router-usage-tier-"));
   const previousStateDir = process.env.MODEL_ROUTER_STATE_DIR;

@@ -28,6 +28,8 @@ extraResources:
     to: src/chatgpt-login-lease.mjs
   - from: ../../src/file-security.mjs
     to: src/file-security.mjs
+  - from: ../../src/startup-timeout.mjs
+    to: src/startup-timeout.mjs
   - from: ../../src/path-security.mjs
     to: src/path-security.mjs
   - from: ../../src/process-identity.mjs

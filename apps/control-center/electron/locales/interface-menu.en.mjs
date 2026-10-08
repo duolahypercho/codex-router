@@ -4,6 +4,7 @@ export default Object.freeze({
   "tray.open": "Open Control Center",
   "app.quit": "Quit Codex Router",
   "app.about": "About Codex Router",
+  "app.settings": "Settings…",
   "app.services": "Services",
   "app.hide": "Hide Codex Router",
   "app.hideOthers": "Hide Others",

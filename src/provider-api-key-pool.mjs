@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import path from "node:path";
 
+import { acquireFileLock, runWithLockRelease } from "./file-lock.mjs";
 import { writePrivateJsonAsync } from "./file-security.mjs";
 import { PROVIDERS } from "./model-registry.mjs";
 import { PROVIDER_API_KEY_POOL_PATH, STATE_DIR } from "./paths.mjs";
@@ -758,10 +759,6 @@ export async function withProviderApiKeyPoolLock(operation, {
   retryMs = DEFAULT_LOCK_RETRY_MS,
   staleMs = DEFAULT_LOCK_STALE_MS,
 } = {}) {
-  // Catalog/setup import the read-only authority path before dependency repair
-  // runs. Load the third-party lock implementation only for an actual
-  // mutation so a missing node_modules can still reach that repair step.
-  const { default: lockfile } = await import("proper-lockfile");
   const directory = path.dirname(filePath);
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   const normalizedWait = Math.max(0, Math.floor(Number(waitMs) || 0));
@@ -769,7 +766,7 @@ export async function withProviderApiKeyPoolLock(operation, {
   const retries = Math.max(0, Math.ceil(normalizedWait / normalizedRetry) - 1);
   let release;
   try {
-    release = await lockfile.lock(lockTarget(filePath), {
+    release = await acquireFileLock(lockTarget(filePath), {
       realpath: false,
       lockfilePath: `${filePath}.pool-lock`,
       stale: Math.max(2_000, Math.floor(Number(staleMs) || DEFAULT_LOCK_STALE_MS)),
@@ -785,11 +782,7 @@ export async function withProviderApiKeyPoolLock(operation, {
     if (error?.code === "ELOCKED") throw lockError(normalizedWait, error);
     throw error;
   }
-  try {
-    return await operation();
-  } finally {
-    await release();
-  }
+  return runWithLockRelease(operation, release);
 }
 
 async function mutatePool(filePath, operation) {

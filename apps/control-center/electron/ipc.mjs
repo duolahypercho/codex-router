@@ -728,6 +728,11 @@ export function openBrowserCommand(executable, args, cwd, {
           }, completionTimeoutMs);
           completionTimeout.unref?.();
         }
+        // Keep the detached child referenced until browser handoff succeeds:
+        // an early child exit must still deliver its close notification while
+        // the opener is pending. After handoff, the OAuth login can continue
+        // without retaining the Control Center process.
+        child.unref();
         resolveOpen({ opened: true, surface: "browser" });
       })
       .catch((error) => {
@@ -757,7 +762,6 @@ export function openBrowserCommand(executable, args, cwd, {
   } catch (error) {
     void abort(error);
   }
-  child.unref();
   return opened;
 }
 
@@ -1879,6 +1883,54 @@ export function registerIpcHandlers({
       { timeoutMs: CATALOG_MUTATION_TIMEOUT_MS },
     );
     return { provider: id, removed: upstream };
+  });
+  // The same pruning for a locally curated model on an ordinary provider.
+  // `addProviderModels` has always accepted any catalog provider, so a model
+  // added there could be published and never taken back: the removal above is
+  // gated to custom endpoints, whose slugs happen to encode their upstream id.
+  // An ordinary provider's do not, so the overlay itself supplies the mapping
+  // -- which also reaches an entry the registry merge skipped, and so never
+  // listed for a slug-derived removal to find.
+  handleAction("removeLocalModels", async ({ slugs } = {}) => {
+    if (!Array.isArray(slugs) || slugs.length < 1 || slugs.length > 200) {
+      throw new Error("Choose between 1 and 200 models to remove.");
+    }
+    const wanted = [...new Set(slugs.map((slug) => stringValue(slug, "Model", MODEL_SLUG)))];
+    const [{ readUserModels }, { curationPrimaryProviderId }] = await Promise.all([
+      installedRouterModule("user-models.mjs"),
+      installedRouterModule("opencode-curation.mjs"),
+    ]);
+    const overlay = readUserModels();
+    // Curation is per family and takes the primary id, so a selection spanning
+    // providers becomes one command each rather than one per model.
+    const byPrimary = new Map();
+    for (const slug of wanted) {
+      const entry = overlay.find((model) => model?.slug === slug);
+      // The overlay is the whole authority here: a checked-in route has no
+      // entry, so this is what refuses to "remove" a model that would simply
+      // reappear on the next publication.
+      if (!entry) throw new Error(`${slug} is not a locally curated model.`);
+      const upstream = String(entry.upstreamModel || "");
+      // --remove takes a comma-separated list, so an id carrying a comma would
+      // silently name other models.
+      if (!upstream || upstream.includes(",") || upstream.startsWith("-")) {
+        throw new Error(`${slug} has no removable upstream model id.`);
+      }
+      const primary = stringValue(
+        curationPrimaryProviderId(String(entry.provider || "")),
+        "Provider",
+        PROVIDER_ID,
+      );
+      byPrimary.set(primary, [...(byPrimary.get(primary) ?? []), upstream]);
+    }
+    for (const [primary, upstream] of byPrimary) {
+      await runRouterScript(
+        "curate-models.mjs",
+        [primary, "--remove", [...new Set(upstream)].join(","), "--apply"],
+        { timeoutMs: CATALOG_MUTATION_TIMEOUT_MS },
+      );
+    }
+    return { removed: wanted };
   });
   handleAction("saveProviderCredential", async ({ providerId, credential } = {}) => {
     const { id, provider } = await validateProvider(providerId, "credential");

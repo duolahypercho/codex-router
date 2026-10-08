@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "slug": "openrouter/stealth/space-bunny-alpha",
+      "gatewayModel": "openrouter-stealth-space-bunny-alpha",
+      "upstreamModel": "stealth/space-bunny-alpha",
+      "provider": "openrouter",
+      "listed": true,
+      "displayName": "Space Bunny Alpha (OpenRouter)",
+      "description": "OpenRouter's anonymous Space Bunny Alpha stealth preview, free while the preview lasts. Reads text and images; reasoning is always on. The undisclosed provider may retain prompts and completions.",
+      "priority": 100,
+      "defaultEffort": "high",
+      "reasoningLevels": [
+        {
+          "effort": "low",
+          "description": "Quick reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced reasoning"
+        },
+        {
+          "effort": "high",
+          "description": "Deep reasoning"
+        },
+        {
+          "effort": "xhigh",
+          "description": "Extended reasoning"
+        },
+        {
+          "effort": "max",
+          "description": "Maximum reasoning"
+        }
+      ],
+      "contextWindow": 1000000,
+      "autoCompact": 470000,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "compHash": "openrouter-stealth-space-bunny-alpha-v1"
+    }
+  ]
+}

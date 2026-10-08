@@ -1,0 +1,1 @@
+- **Startup allowances stay out of Windows runtime children and remain available through pending activation.** Cleanup removes every casing of the startup environment names. Antigravity finishes its required activation save before the supervisor retires the allowances and starts background catalog publication.

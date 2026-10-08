@@ -1,0 +1,1 @@
+- **Windows slow-host startup allowances are opt-in.** Service launchers preserve only explicitly set, validated timeout overrides; without them, each startup probe keeps its shipped default. These bounds affect startup and boot-health waits only, not request or inference timeouts.

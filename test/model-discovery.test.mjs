@@ -87,6 +87,44 @@ test("OpenCode Go discovery blocks live ids whose protocol route is not certifie
   }
 });
 
+// A control surface offers `addable` and shows `blocked` with its reason, so
+// the free ids OpenCode will not serve to this router have to reach it as the
+// second, not the first: every one of them would fail on its opening request.
+test("OpenCode Free discovery withholds the client-gated ids with their reason", () => {
+  const testRoot = mkdtempSync(path.join(os.tmpdir(), "codex-router-opencode-free-discovery-"));
+  const fixture = path.join(testRoot, "models.json");
+  writeFileSync(
+    fixture,
+    JSON.stringify({ data: [
+      { id: "deepseek-v4-flash-free" },
+      { id: "mimo-v2.6-flash-free" },
+      { id: "big-pickle" },
+      { id: "glm-5.1" },
+    ] }),
+  );
+  try {
+    const output = execFileSync(
+      process.execPath,
+      ["src/model-discovery.mjs", "opencode-free", "--fixture", fixture, "--json"],
+      { cwd: root, encoding: "utf8", env: { ...process.env, OPENCODE_API_KEY: "" } },
+    );
+    const result = JSON.parse(output);
+    // The paid id never reaches the comparison: anonymousModelAllowed drops it.
+    assert.equal(result.discovered.includes("glm-5.1"), false);
+    assert.deepEqual(result.addable, ["deepseek-v4-flash-free"]);
+    assert.deepEqual(
+      Object.keys(result.blocked).sort(),
+      ["big-pickle", "mimo-v2.6-flash-free"],
+    );
+    assert.match(
+      result.blocked["mimo-v2.6-flash-free"],
+      /only to its own client.*can only be used from within OpenCode.*access policy/s,
+    );
+  } finally {
+    rmSync(testRoot, { recursive: true, force: true });
+  }
+});
+
 test("Command Code discovery parses the Provider API model list", () => {
   const testRoot = mkdtempSync(path.join(os.tmpdir(), "codex-router-commandcode-discovery-"));
   const fixture = path.join(testRoot, "models.json");

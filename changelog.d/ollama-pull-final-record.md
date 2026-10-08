@@ -1,0 +1,1 @@
+- **Local model downloads process the final Ollama record even without a trailing newline.** A completed pull no longer reports a false interruption when its success record ends at EOF, and a final error keeps the daemon's message. This applies to both Local LLM and vision downloads.

@@ -326,10 +326,11 @@ test("routed models advertise reasoning summaries only when the registry opts in
   assert.equal(summarized.default_reasoning_summary, "auto");
 });
 
-test("ClinePass routed models omit the unsupported reasoning-effort selector", () => {
+test("ClinePass routed models hide the reasoning-effort selector with a schema-valid empty ladder", () => {
   const clinepass = routedModel(template, { ...grok, requestProfile: "clinepass" });
   assert.equal("default_reasoning_level" in clinepass, false);
-  assert.equal("supported_reasoning_levels" in clinepass, false);
+  // Codex's ModelInfo requires this key; omitting it makes the entry unparseable.
+  assert.deepEqual(clinepass.supported_reasoning_levels, []);
 
   const normal = routedModel(template, grok);
   assert.equal(normal.default_reasoning_level, "high");

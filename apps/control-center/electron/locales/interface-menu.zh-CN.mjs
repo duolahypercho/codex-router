@@ -4,6 +4,7 @@
 const messages = {
   "tray.open": "打开控制中心",
   "app.quit": "退出 Codex Router",
+  "app.settings": "设置…",
   "app.about": "关于 Codex Router",
   "app.services": "服务",
   "app.hide": "隐藏 Codex Router",

@@ -1,13 +1,16 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import http from "node:http";
+import { Readable } from "node:stream";
 import test from "node:test";
 
 import {
   applyKeepAliveTimeouts,
   installGracefulShutdown,
+  markResponsesStream,
   writeEventStreamHead,
 } from "../src/http-utils.mjs";
+import { responsesStreamFailureTransform } from "../src/responses-stream-failure.mjs";
 
 function listen(server) {
   return new Promise((resolve) => {
@@ -120,6 +123,35 @@ test("a request with no head sent yet is answered 503 when the service shuts dow
   const body = await read(response).body;
   assert.equal(response.statusCode, 503);
   assert.equal(JSON.parse(body).error.type, "local_router_restarting");
+  assert.equal(await exited, 0);
+  process.removeAllListeners(SHUTDOWN_EVENT);
+});
+
+test("shutdown retains marked Responses identity and sends a typed failure before clean EOF", async () => {
+  const identity = { id: "resp_shutdown", model: "fixture/model", created_at: 1_791_388_800 };
+  const prologue = `event: response.created\ndata: ${JSON.stringify({ type: "response.created", sequence_number: 9, response: identity })}\n\n`;
+  const server = http.createServer((_request, response) => {
+    markResponsesStream(response);
+    writeEventStreamHead(response);
+    Readable.from([prologue]).pipe(responsesStreamFailureTransform(response, "text/event-stream")).pipe(response, { end: false });
+  });
+  applyKeepAliveTimeouts(server);
+  const port = await listen(server);
+  const { exited } = shutdownHarness(server, { drainMs: 25 });
+  const response = await get(port, "/responses");
+  const stream = read(response);
+  await stream.firstChunk;
+  process.emit(SHUTDOWN_EVENT);
+  const body = await stream.body;
+  assert.equal(response.complete, true);
+  const block = body.split(/\r?\n\r?\n/).find((value) => value.startsWith("event: response.failed"));
+  assert.ok(block);
+  const failure = JSON.parse(block.split("\n").find((line) => line.startsWith("data: ")).slice(6));
+  assert.equal(failure.sequence_number, 10);
+  assert.equal(failure.response.id, identity.id);
+  assert.equal(failure.response.error.code, "server_error");
+  assert.match(failure.response.error.message, /restarting/);
+  assert.doesNotMatch(body, /\[DONE\]|response.completed/);
   assert.equal(await exited, 0);
   process.removeAllListeners(SHUTDOWN_EVENT);
 });

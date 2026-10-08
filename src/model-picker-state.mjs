@@ -180,7 +180,7 @@ export function setModelVisible(slug, visible) {
 export function setModelsVisible(slugs, visible) {
   const values = [...new Set(slugs.map((slug) => String(slug || "").trim()).filter(Boolean))];
   if (values.length === 0) throw new Error("At least one model slug is required.");
-  const { hidden, visible: visibleSet, seeded } = readPickerState();
+  const { hidden, visible: visibleSet, seeded, hasExplicitVisibility, recognized } = readPickerState();
   for (const value of values) {
     if (visible) {
       hidden.delete(value);
@@ -193,7 +193,12 @@ export function setModelsVisible(slugs, visible) {
     // shipped default from quietly undoing the decision later.
     seeded.add(value);
   }
-  return writePickerState({ hidden, visible: visibleSet, seeded });
+  return writePickerState({
+    hidden,
+    visible: visibleSet,
+    seeded,
+    hasExplicitVisibility: hasExplicitVisibility || !recognized,
+  });
 }
 
 // Move an operator's picker decision when a curated model's routing identity
@@ -269,7 +274,7 @@ export function forgetModelVisibility(slugs) {
 
 export function setAllModelsVisible(slugs, visible) {
   const known = [...new Set(slugs.map((slug) => String(slug).trim()).filter(Boolean))];
-  const { hidden: currentHidden, visible: currentVisible, seeded } = readPickerState();
+  const { hidden: currentHidden, visible: currentVisible, seeded, hasExplicitVisibility, recognized } = readPickerState();
   const hiddenModels = visible
     ? new Set([...currentHidden].filter((slug) => !known.includes(slug)))
     : new Set([...currentHidden, ...known]);
@@ -280,6 +285,7 @@ export function setAllModelsVisible(slugs, visible) {
     hidden: hiddenModels,
     visible: visibleModels,
     seeded: new Set([...seeded, ...known]),
+    hasExplicitVisibility: hasExplicitVisibility || !recognized,
   });
 }
 
@@ -344,8 +350,12 @@ export function migrateLegacyVisibleModels(slugs) {
   const values = [...new Set(
     (Array.isArray(slugs) ? slugs : []).map((slug) => String(slug || "").trim()).filter(Boolean),
   )];
+  // An empty catalog has no complete routed set to migrate (login-free
+  // publication intentionally supplies none). With a real catalog, freeze
+  // the legacy answer even when every supplied model was already seeded:
+  // otherwise a later provider's new models would still inherit implicit show.
+  if (values.length === 0) return modelPickerSnapshot();
   const legacy = values.filter((value) => !hidden.has(value) && !seeded.has(value));
-  if (legacy.length === 0) return modelPickerSnapshot();
   for (const value of legacy) {
     visible.add(value);
     // Recording the decision is the point: without it the opt-in default

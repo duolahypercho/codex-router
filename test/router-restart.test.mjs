@@ -347,3 +347,26 @@ test("a failed restart fails loudly instead of pretending the route is live", as
     /could not be restarted/,
   );
 });
+
+// #907 moved the refresh spawns onto the configured runtime but left this one
+// on process.execPath, so a refresh after a Homebrew Node upgrade succeeded and
+// then the restart it asks for died with ENOENT on the deleted Cellar path.
+test("service invocations use the configured stable Node runtime", async () => {
+  const seen = [];
+  const spawn = (command, args) => {
+    seen.push({ command, args });
+    return INSTALLED_STATUS;
+  };
+
+  await routerServiceStatus({
+    spawn,
+    env: { CODEX_ROUTER_NODE_BIN: "/stable/node" },
+  });
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].command, "/stable/node");
+
+  // Without the override the fallback is still this process's own interpreter,
+  // so an install that never recorded a runtime behaves exactly as before.
+  await routerServiceStatus({ spawn, env: {} });
+  assert.equal(seen.at(-1).command, process.execPath);
+});

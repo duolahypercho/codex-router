@@ -565,6 +565,13 @@
   padding: 0 14px 0 64px;
 }
 
+/* Only a family holding a locally curated route pays for the remove column,
+   so every other family keeps the widths it had before. */
+.pm-route-table[data-removable] .pm-route-head,
+.pm-route-table[data-removable] .pm-route-row {
+  grid-template-columns: minmax(0, 1fr) 78px 92px 70px 74px 104px 26px;
+}
+
 .pm-route-head {
   padding-top: 9px;
   padding-bottom: 6px;
@@ -613,6 +620,15 @@
 .pm-route-free {
   grid-column: 2;
   color: var(--success);
+  font-size: 8.5px;
+  font-weight: 600;
+}
+
+/* Deliberately not placed in a fixed column: it follows whichever badges
+   apply, so a route without the free tag does not leave a gap where one
+   would have been. */
+.pm-route-local {
+  color: var(--ink-faint);
   font-size: 8.5px;
   font-weight: 600;
 }

@@ -1,0 +1,1 @@
+- **Responses WebSocket streaming no longer rejects batches of valid SSE events.** The byte budget now applies to each complete or unfinished line and to accumulated event data, so multiple bounded events in one HTTP chunk are delivered normally. Oversized lines and multiline events still fail and cancel the upstream body.

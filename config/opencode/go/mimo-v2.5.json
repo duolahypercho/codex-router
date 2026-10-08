@@ -20,7 +20,8 @@
       "contextWindow": 1000000,
       "autoCompact": 850000,
       "inputModalities": [
-        "text"
+        "text",
+        "image"
       ],
       "compHash": "opencode-go-mimo-v2-5-v2"
     }

@@ -632,9 +632,15 @@ export const HOURLY_USAGE_ROLLUP_HOURS = 24;
 // recentUsageEvents() omits an absent count rather than writing a zero, so an
 // unreported field stays distinguishable from a measured zero.
 function rollupTokenCount(event) {
-  if (event.totalTokens !== undefined) return event.totalTokens;
   const input = event.billedInputTokens ?? event.inputTokens;
   const output = event.billedOutputTokens ?? event.outputTokens;
+  // A retry row retains the selected response's total as well as the cost of
+  // every attempt. Match provider-usage: billed counts take precedence, with
+  // the raw component filling in only when its billed count is absent.
+  if (event.billedInputTokens !== undefined || event.billedOutputTokens !== undefined) {
+    return (input ?? 0) + (output ?? 0);
+  }
+  if (event.totalTokens !== undefined) return event.totalTokens;
   if (input === undefined && output === undefined) return undefined;
   return (input ?? 0) + (output ?? 0);
 }

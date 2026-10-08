@@ -17,10 +17,16 @@ const MAX_CAUSE_DEPTH = 8;
 
 export const PROVIDER_TRANSPORT_ERROR_TYPE = "provider_transport_error";
 
-// `hostname` is set by Node's DNS and TLS errors but not by Undici's connect
-// errors, which name the address in their message instead. Read the field
-// first and fall back to the wordings actually observed in this router's log.
+// `hostname` is set by Node's DNS and TLS errors but not by a refused or
+// unreachable socket, which carries `address` (and `port`) instead -- a
+// stopped loopback gateway fails that way, and missing it sent the operator a
+// proxy hint for a process this install owns. Undici's own connect errors
+// name the address only in their message. Read the fields first and fall back
+// to the wordings actually observed in this router's log.
+const HOST_FIELDS = ["hostname", "address"];
+
 const HOST_PATTERNS = [
+  /connect\s+E[A-Z]+\s+([^\s,)]+):\d+/,
   /attempted address:\s*([^\s:,)]+)/i,
   /attempted addresses:\s*([^\s:,)]+)/i,
   /getaddrinfo\s+\w+\s+([^\s,)]+)/i,
@@ -41,7 +47,9 @@ function causeChain(error) {
 
 export function transportFailureHost(error) {
   for (const link of causeChain(error)) {
-    if (typeof link.hostname === "string" && link.hostname) return link.hostname;
+    for (const field of HOST_FIELDS) {
+      if (typeof link[field] === "string" && link[field]) return link[field];
+    }
     const message = typeof link.message === "string" ? link.message : "";
     for (const pattern of HOST_PATTERNS) {
       const match = message.match(pattern);

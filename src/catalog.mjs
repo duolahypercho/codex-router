@@ -734,10 +734,13 @@ export function routedModel(template, model, behaviorTemplate = template) {
   // not a routed capability and must stay out even when that native entry is
   // also the conservative fallback template.
   delete next.tool_mode;
-  // ClinePass strips these unsupported request controls, so Codex must not offer them.
+  // ClinePass strips these unsupported request controls, so Codex must not
+  // offer them. Codex requires `supported_reasoning_levels` (a missing key is a
+  // serde error that drops the entry), so an empty ladder is the only
+  // schema-valid way to hide the selector; the default level is optional.
   if (model.requestProfile === "clinepass") {
     delete next.default_reasoning_level;
-    delete next.supported_reasoning_levels;
+    next.supported_reasoning_levels = [];
   }
   // A few OpenAI-compatible upstreams reject tool scheduling the native
   // template advertises. Registry entries opt out explicitly so the picker

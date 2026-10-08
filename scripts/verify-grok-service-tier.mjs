@@ -1,3 +1,4 @@
+import { writeGrokVersionCli } from "../test/grok-version-fixture.mjs";
 // Synthetic loopback-only proof using the repository's locked LiteLLM runtime.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -11,11 +12,15 @@ import { WebSocket } from "undici";
 import { RESPONSES_WEBSOCKET_BETA } from "../src/responses-websocket.mjs";
 import { callerBaseUrl } from "../src/caller-auth.mjs";
 import { renderLiteLlmConfig } from "../src/litellm-config.mjs";
+import { PYTHON_REQUIREMENTS, requirementParts } from "../src/install-plan.mjs";
 import { tokenUsageFromPayload } from "../src/response-usage.mjs";
 import { openPort } from "../test/port-pool.mjs";
 
 assert.ok(process.argv[2], "pass the locked venv Python executable");
 const python = path.resolve(process.argv[2]);
+const litellmVersion = PYTHON_REQUIREMENTS.map(requirementParts)
+  .find(({ name }) => name === "litellm")?.version;
+assert.ok(litellmVersion, "the installer must pin LiteLLM");
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const temp = mkdtempSync(path.join(os.tmpdir(), "grok-tier-proof-"));
 const key = "sk-synthetic-grok-tier-internal-key-long-enough";
@@ -44,7 +49,7 @@ const forwarder = spawn(process.execPath, [path.join(root, "src/grok-oauth-forwa
   cwd: root,
   env: { ...process.env, MODEL_ROUTER_INTERNAL_KEY: key, MODEL_ROUTER_GROK_OAUTH_PORT: String(port),
     GROK_CLI_CHAT_PROXY_BASE_URL: `http://127.0.0.1:${upstream.address().port}`,
-    GROK_AUTH_PATH: authPath, GROK_CLI: path.join(temp, "missing-cli"), MODEL_ROUTER_QUIET: "1" },
+    GROK_AUTH_PATH: authPath, GROK_CLI: writeGrokVersionCli(temp), MODEL_ROUTER_QUIET: "1" },
   stdio: ["ignore", "ignore", "pipe"],
 });
 let errors = "";
@@ -53,14 +58,17 @@ forwarder.stderr.on("data", chunk => { errors = (errors + chunk).slice(-8000); }
 const gatewayPort = await openPort();
 const routerPort = await openPort();
 const configPath = path.join(temp, "litellm.yaml");
-assert.match(renderLiteLlmConfig(), /callbacks: \[grok_service_tier_callback.grok_service_tier_callback\]/);
-writeFileSync(path.join(temp, "grok_service_tier_callback.py"), readFileSync(path.join(root, "src/grok_service_tier_callback.py")));
+const callbacks = ["grok_service_tier_callback.grok_service_tier_callback", "litellm_stream_cleanup_callback.stream_cleanup_callback"];
+assert.ok(renderLiteLlmConfig().includes(`callbacks: [${callbacks.join(", ")}]`));
+for (const name of ["grok_service_tier_callback.py", "litellm_stream_cleanup_callback.py"]) {
+  writeFileSync(path.join(temp, name), readFileSync(path.join(root, "src", name)), { mode: 0o600 });
+}
 writeFileSync(configPath, JSON.stringify({
   model_list: ["grok-4.6", "grok-4.5"].map(model => ({
     model_name: `grok-oauth-${model.replaceAll(".", "-")}`,
     litellm_params: { model: `openai/${model}`, api_base: `http://127.0.0.1:${port}/v1`, api_key: key, use_chat_completions_api: true },
   })),
-  litellm_settings: { drop_params: true, callbacks: ["grok_service_tier_callback.grok_service_tier_callback"] },
+  litellm_settings: { drop_params: true, callbacks },
   general_settings: { master_key: key, disable_spend_logs: true },
 }));
 const processErrors = new Map();
@@ -162,7 +170,7 @@ try {
     assert.ok(Date.now() < deadline, errors);
     await new Promise(resolve => setTimeout(resolve, 50));
   }
-  gateway = start(python, ["-c", "import importlib.metadata; assert importlib.metadata.version('litellm') == '1.96.0'; from litellm import run_server; run_server()", "--config", configPath, "--host", "127.0.0.1", "--port", String(gatewayPort)], {
+  gateway = start(python, ["-c", `import importlib.metadata; assert importlib.metadata.version('litellm') == ${JSON.stringify(litellmVersion)}; from litellm import run_server; run_server()`, "--config", configPath, "--host", "127.0.0.1", "--port", String(gatewayPort)], {
     LITELLM_LOCAL_MODEL_COST_MAP: "True", DATABASE_URL: undefined, LITELLM_MASTER_KEY: key,
     // Match production startup: LiteLLM prints Unicode on Windows too.
     PYTHONIOENCODING: "utf-8", PYTHONUTF8: "1",
