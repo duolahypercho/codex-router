@@ -1596,22 +1596,44 @@ test("aborts the internal HTTP request when the WebSocket disappears", async (t)
 });
 
 test("releases the upgraded socket when the peer drops without a close frame", async (t) => {
+  const bulk = "x".repeat(8_192);
   const { server, port } = await startServer(async (request, response) => {
-    response.writeHead(200, { "content-type": "application/json" }).end("{}");
+    sse(response, Array.from({ length: 6_000 }, (_, index) => ({
+      type: "response.output_text.delta",
+      delta: `${index}:${bulk}`,
+    })));
   });
+  // Only the upgraded sockets: the peer's own HTTP re-entry keeps a
+  // keep-alive connection to this same server, which is not under test.
   const accepted = [];
-  server.on("connection", (socket) => accepted.push(socket));
+  server.on("upgrade", (request, socket) => accepted.push(socket));
   const clients = [];
   t.after(() => {
     for (const client of clients) client.socket.destroy();
     server.close();
   });
-  for (let index = 0; index < 3; index += 1) clients.push(await connect(port));
-  const [finished, reset, closed] = clients;
+  for (let index = 0; index < 4; index += 1) clients.push(await connect(port));
+  const [finished, reset, closed, stalled] = clients;
   // A plain FIN, a reset, and a proper close frame: before the fix only the
   // close frame released the server-side socket.
   finished.socket.end();
   reset.socket.resetAndDestroy();
   closed.peer.close();
-  await waitFor(() => accepted.length === 3 && accepted.every((socket) => socket.destroyed));
+  // A peer that stops reading until the kernel buffers are full, so a relayed
+  // frame is stuck in the socket, and then sends a FIN: waiting for that frame
+  // to flush would never finish.
+  stalled.socket.pause();
+  stalled.peer.sendJson(createRequest());
+  let progress = { bytes: -1, at: 0 };
+  await waitFor(() => {
+    const socket = accepted[3];
+    if (!socket?.writableNeedDrain) return false;
+    if (socket.bytesWritten !== progress.bytes) {
+      progress = { bytes: socket.bytesWritten, at: Date.now() };
+      return false;
+    }
+    return Date.now() - progress.at >= 250;
+  }, 10_000);
+  stalled.socket.end();
+  await waitFor(() => accepted.length === 4 && accepted.every((socket) => socket.destroyed), 5_000);
 });

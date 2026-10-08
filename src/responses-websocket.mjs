@@ -763,26 +763,31 @@ class ResponsesWebSocketPeer {
   }
 
   start(head) {
-    this.socket.on("error", () => this.abort());
-    this.socket.on("close", () => this.abort());
-    this.socket.on("end", () => this.abort());
+    this.socket.on("error", () => this.abort({ hard: true }));
+    this.socket.on("close", () => this.abort({ hard: true }));
+    this.socket.on("end", () => this.abort({ hard: true }));
     this.socket.on("data", (chunk) => this.feed(chunk));
     if (head?.length) this.feed(head);
     this.socket.resume?.();
   }
 
-  abort() {
+  // `hard` is for transport-level ends (FIN, reset, error): the peer is not
+  // reading any more, so a queued frame can never drain and waiting for it
+  // would hold the descriptor open. A received close frame keeps the graceful
+  // path so the close reply still flushes before the socket is released.
+  abort({ hard = false } = {}) {
     if (this.closed) return;
     this.closed = true;
     this.abortController.abort(new Error("Responses WebSocket closed."));
     this.continuations.clear();
     // The upgraded socket came from http.Server, which allows half-open
-    // connections, so a peer that goes away without a close frame (a FIN, a
-    // reset, a killed client) ends only the readable side. Nothing else closes
-    // the writable side, and Node keeps the descriptor until something does:
-    // one leaked handle per dropped connection, for the life of the process.
-    // destroySoon flushes a pending close frame first and then releases it.
-    if (!this.socket.destroyed) this.socket.destroySoon();
+    // connections, so a peer that goes away without a close frame ends only
+    // the readable side. Nothing else closes the writable side, and Node keeps
+    // the descriptor until something does: one leaked handle per dropped
+    // connection, for the life of the process.
+    if (this.socket.destroyed) return;
+    if (hard) this.socket.destroy();
+    else this.socket.destroySoon();
   }
 
   send(opcode, payload) {
