@@ -96,6 +96,7 @@ test("provider registry exposes configured API and OAuth model families", () => 
       "commandcode/minimax-m2.7",
       "commandcode/minimax-m3",
       "commandcode/muse-spark-1.2",
+      "commandcode/muse-spark-1.3-contributor",
       "commandcode/muse-spark-1.3",
       "commandcode/nemotron-3-ultra",
       "commandcode/qwen3.7-flash",
@@ -861,6 +862,23 @@ test("DeepSeek V4 Flash routes opt in to Codex standalone web search", () => {
   ]) {
     assert.deepEqual(MODEL_BY_SLUG.get(slug)?.searchTool, { mode: "standalone" }, slug);
   }
+});
+
+// DeepSeek documents low/high/max for the V4 family and the forwarder already
+// maps all three (`deepSeekEffort`). V4 Pro used to advertise only high/max, so
+// the Codex picker could not select the lower-effort rung its Flash siblings offer
+// (#887). The default stays `high`.
+test("DeepSeek V4 Pro on the direct API advertises the same effort ladder as V4 Flash", () => {
+  const pro = MODEL_BY_SLUG.get("deepseek/deepseek-v4-pro");
+  const flash = MODEL_BY_SLUG.get("deepseek/deepseek-v4-flash");
+  assert.deepEqual(
+    pro.reasoningLevels.map((level) => level.effort),
+    ["low", "high", "max"],
+  );
+  assert.deepEqual(pro.reasoningLevels, flash.reasoningLevels);
+  assert.equal(pro.defaultEffort, "high");
+  assert.equal(pro.requestProfile, "deepseek-thinking");
+  assert.equal(pro.compHash, "deepseek-v4-pro-v2");
 });
 
 test("DeepSeek V4 Flash Vision Exp advertises only verified direct-API capabilities", () => {
