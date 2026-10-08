@@ -17,6 +17,27 @@ Enabling it costs nothing and asks for nothing: a model that needs a key says so
 on its own row. It is never selected for you and never part of the default set,
 because what it holds is whatever somebody put in it.
 
+Each model may also set `endpoint.protocol`: `openai` for Chat Completions
+(the default), `anthropic` for Messages, or `openai-responses` for Responses.
+For example, a model in `user-models.json` can declare:
+
+```json
+"endpoint": {
+  "baseUrl": "https://api.example.com/v1",
+  "protocol": "openai-responses",
+  "credential": {
+    "file": "example-api-key",
+    "environment": ["EXAMPLE_API_KEY"]
+  }
+}
+```
+
+The key belongs to that model's endpoint. The `custom` provider remains a
+container with no shared protocol or credential. If the model declares
+`supportedEndpoints`, it must include the selected conversational endpoint:
+`/chat/completions` or `/responses`. Messages models do not declare OpenAI
+`supportedEndpoints`.
+
 | Model | Endpoint | Auth |
 | --- | --- | --- |
 | Qwen3.8-27-free-victor | `https://g9hnto0u7lvbu837.us-east-2.aws.endpoints.huggingface.cloud/v1` | none |

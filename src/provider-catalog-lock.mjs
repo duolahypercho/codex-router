@@ -1,6 +1,7 @@
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 
+import { acquireFileLock } from "./file-lock.mjs";
 import { STATE_DIR } from "./paths.mjs";
 
 const DEFAULT_WAIT_MS = 120_000;
@@ -60,12 +61,7 @@ export async function withProviderCatalogLock(
   const target = providerCatalogLockTarget(stateDir);
   let release;
   try {
-    // Guided setup imports the credential stack before a fresh checkout has
-    // installed its Node dependencies. Load the lock implementation only when
-    // the first catalog transaction actually runs; setup installs dependencies
-    // before reaching that boundary.
-    const { default: lockfile } = await import("proper-lockfile");
-    release = await lockfile.lock(target, {
+    release = await acquireFileLock(target, {
       realpath: false,
       lockfilePath: `${target}.lock`,
       stale: normalizedStaleMs,

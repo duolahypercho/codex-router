@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { constants as bufferConstants } from "node:buffer";
 import { TextDecoder } from "node:util";
+import { boundImagePayload, boundedJsonByteLength, MAX_REQUEST_JSON_DEPTH } from "./prompt-image-budget.mjs";
 
 import { authenticatedRoute, secretEqual } from "./caller-auth.mjs";
 import {
@@ -482,9 +484,31 @@ function rateLimitResponseHeaders(headers) {
   return projected;
 }
 
+// The frame's byte cap is already enforced. Reject pathological nesting before
+// JSON.parse allocates a tree, counting delimiters only outside quoted strings.
+function jsonNestingAllowed(text) {
+  let depth = 0, quoted = false, escaped = false;
+  for (let index = 0; index < text.length; index++) {
+    const code = text.charCodeAt(index);
+    if (quoted) {
+      if (escaped) escaped = false;
+      else if (code === 0x5c) escaped = true;
+      else if (code === 0x22) quoted = false;
+    } else if (code === 0x22) quoted = true;
+    else if (code === 0x7b || code === 0x5b) {
+      if (++depth > MAX_REQUEST_JSON_DEPTH) return false;
+    } else if (code === 0x7d || code === 0x5d) depth--;
+  }
+  return true;
+}
+
 function continuationState(input, output, maxBytes) {
-  const encoded = Buffer.from(JSON.stringify({ input, output }), "utf8");
-  return encoded.length <= maxBytes ? { input, output } : undefined;
+  const bounded = boundImagePayload([...input, ...output], {
+    protectPending: true, maxTokens: Infinity,
+    maxBodyBytes: maxBytes, bodyBytes: boundedJsonByteLength({ input, output }),
+  });
+  const state = { input: bounded.input.slice(0, input.length), output: bounded.input.slice(input.length) };
+  return boundedJsonByteLength(state, maxBytes) <= maxBytes ? state : undefined;
 }
 
 function continuationItemKey(item) {
@@ -698,6 +722,13 @@ class ResponsesWebSocketPeer {
     this.parser.stop();
     this.abortController.abort(new Error("Responses WebSocket closed."));
     this.continuations.clear();
+    // The upgraded socket came from http.Server, which allows half-open
+    // connections, so a peer that goes away without a close frame (a FIN, a
+    // reset, a killed client) ends only the readable side. Nothing else closes
+    // the writable side, and Node keeps the descriptor until something does:
+    // one leaked handle per dropped connection, for the life of the process.
+    // destroySoon flushes a pending close frame first and then releases it.
+    if (!this.socket.destroyed) this.socket.destroySoon();
   }
 
   send(opcode, payload) {
@@ -768,6 +799,13 @@ class ResponsesWebSocketPeer {
 
   async process(text) {
     if (this.closed) return;
+    if (!jsonNestingAllowed(text)) {
+      this.sendError(400, {
+        type: "invalid_request_error",
+        message: "Responses request JSON is nested too deeply.",
+      });
+      return;
+    }
     let request;
     try {
       request = JSON.parse(text);
@@ -830,19 +868,37 @@ class ResponsesWebSocketPeer {
     // `previous_response_id` names its baseline. Keep the current envelope as
     // authority. Inheriting absent fields from an earlier request would turn a
     // meaningful omission (for example no tools) into stale configuration.
-    const encoded = Buffer.from(JSON.stringify(fullRequest), "utf8");
-    if (encoded.length > this.options.maxMessageBytes) {
+    let boundedImages;
+    try {
+      boundedImages = boundImagePayload(fullRequest.input, {
+        protectPending: true, maxTokens: Infinity,
+        maxBodyBytes: this.options.maxMessageBytes, bodyBytes: boundedJsonByteLength(fullRequest),
+      });
+    } catch {
+      this.sendError(400, {
+        type: "invalid_request_error",
+        message: "Responses request JSON is nested too deeply.",
+      });
+      return;
+    }
+    fullRequest.input = boundedImages.input;
+    if (boundedImages.stats.imageReferencesDropped > 0) {
+      console.error(`[codex-router] bounded WebSocket image history dropped=${boundedImages.stats.imageReferencesDropped} image-bytes-saved=${boundedImages.stats.imageBytesSaved}`);
+    }
+    if (boundedJsonByteLength(fullRequest, this.options.maxMessageBytes) > this.options.maxMessageBytes) {
       this.sendError(413, {
         type: "request_too_large",
         message: `Reconstructed Responses request exceeds ${this.options.maxMessageBytes} bytes.`,
       });
       return;
     }
+    const encoded = Buffer.from(JSON.stringify(fullRequest), "utf8");
 
     if (request.generate === false) {
       const responseId = `resp_router_prewarm_${randomUUID().replaceAll("-", "")}`;
       this.continuations.clear();
-      this.continuations.set(responseId, { input: fullRequest.input, output: [] });
+      const continuation = continuationState(fullRequest.input, [], this.options.maxContinuationBytes);
+      if (continuation) this.continuations.set(responseId, continuation);
       await this.sendJsonWithBackpressure({
         type: "response.created",
         response: { id: responseId },
@@ -1076,8 +1132,11 @@ export function handleResponsesWebSocketUpgrade(
   },
 ) {
   maxMessageBytes = Number.isFinite(maxMessageBytes) && maxMessageBytes > 0
-    ? Math.floor(maxMessageBytes)
-    : MAX_BODY_BYTES;
+    ? Math.min(Math.floor(maxMessageBytes), bufferConstants.MAX_STRING_LENGTH)
+    : Math.min(
+      Number.isFinite(MAX_BODY_BYTES) && MAX_BODY_BYTES > 0 ? Math.floor(MAX_BODY_BYTES) : 128 * 1024 * 1024,
+      bufferConstants.MAX_STRING_LENGTH,
+    );
   maxEventBytes = Number.isFinite(maxEventBytes) && maxEventBytes > 0
     ? Math.floor(maxEventBytes)
     : MAX_BUFFERED_RESPONSE_BYTES;

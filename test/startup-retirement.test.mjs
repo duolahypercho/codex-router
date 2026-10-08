@@ -16,12 +16,22 @@ const end = source.indexOf("  const cursorEdge =", begin);
 assert.ok(begin >= 0 && end > begin, "startup readiness boundary must be present");
 const boundary = source.slice(begin, end);
 assert.ok(boundary.includes('import("./native-catalog-drift.mjs")'));
+const shutdownBegin = source.indexOf("function stopChildren() {");
+const shutdownEnd = source.indexOf("const FRONTEND =", shutdownBegin);
+assert.ok(shutdownBegin >= 0 && shutdownEnd > shutdownBegin);
+const shutdown = source.slice(shutdownBegin, shutdownEnd);
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 const completeStartup = new AsyncFunction("context", `
   const { FRONTEND, SOURCE_ROOT, run, process, waitForHealth, loopback, PORTS,
     STARTUP_CHILD_HEALTH_TIMEOUT_MS, clearStartupTimeouts,
     attemptAntigravityProbePromotionAfterReadiness, antigravityStartup,
     children, console, path, loadPublisher } = context;
+  let shuttingDown = false;
+  let stopNativeCatalogWatch = () => {};
+  const SIGKILL_AFTER_MS = 1;
+  const setTimeout = () => ({ unref() {} });
+  ${shutdown}
+  context.stopSupervisor = stopChildren;
   ${boundary.replace('import("./native-catalog-drift.mjs")', "loadPublisher()")}
 `);
 
@@ -29,11 +39,12 @@ const PRIVATE_TIMEOUT = "CODEX_ROUTER_WINDOWS_PRIVATE_SYNC_TIMEOUT_MS";
 const GENERATION = "55555555-5555-4555-8555-555555555555";
 const SESSION_GENERATION = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 
-function scenario({ pending = true, promotion = true, failure } = {}) {
+function scenario({ pending = true, promotion = true, failure, shutdownDuringLoad = false } = {}) {
   const env = { [PRIVATE_TIMEOUT]: "900000", KEEP_SETTING: "unchanged" };
   const events = [];
   const errors = [];
   const child = { exitCode: null, signalCode: null };
+  child.kill = (signal) => { child.signalCode = signal; };
   const context = {
     FRONTEND: { script: "router.mjs", service: "codex-router", label: "Codex router" },
     SOURCE_ROOT: "/unused-startup-fixture",
@@ -73,14 +84,17 @@ function scenario({ pending = true, promotion = true, failure } = {}) {
     path,
     loadPublisher: async () => {
       events.push("publisher loaded");
+      if (shutdownDuringLoad) context.stopSupervisor();
       const assertRuntime = () => {
         assert.deepEqual(env, { KEEP_SETTING: "unchanged" });
         assert.equal(startupTimeoutMs(PRIVATE_TIMEOUT, 15_000, env), 15_000);
       };
       return {
-        watchNativeCatalog: () => {
+        watchNativeCatalog: ({ immediate } = {}) => {
           assertRuntime();
           events.push("watcher started");
+          if (immediate) events.push("catalog published");
+          return () => { events.push("watcher stopped"); };
         },
         republishOnNativeDrift: async () => {
           assertRuntime();
@@ -89,7 +103,11 @@ function scenario({ pending = true, promotion = true, failure } = {}) {
       };
     },
   };
-  return { env, events, errors, complete: () => completeStartup(context) };
+  return {
+    env, events, errors,
+    complete: () => completeStartup(context),
+    stop: () => context.stopSupervisor(),
+  };
 }
 
 async function settlePublishers() {
@@ -136,6 +154,26 @@ test("startup without pending activation retires settings before publication", a
   await settlePublishers();
   assert.deepEqual(fixture.events, [
     "frontend healthy", "startup retired", "publisher loaded", "watcher started", "catalog published",
+  ]);
+  assert.deepEqual(fixture.errors, []);
+});
+
+test("supervisor shutdown disposes its catalog watcher exactly once", async () => {
+  const fixture = scenario({ pending: false });
+  await fixture.complete();
+  await settlePublishers();
+  assert.ok(fixture.events.includes("watcher started"));
+  fixture.stop();
+  fixture.stop();
+  assert.equal(fixture.events.filter((event) => event === "watcher stopped").length, 1);
+});
+
+test("shutdown while the publisher loads cannot start background maintenance", async () => {
+  const fixture = scenario({ pending: false, shutdownDuringLoad: true });
+  await fixture.complete();
+  await settlePublishers();
+  assert.deepEqual(fixture.events, [
+    "frontend healthy", "startup retired", "publisher loaded",
   ]);
   assert.deepEqual(fixture.errors, []);
 });

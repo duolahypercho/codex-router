@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { Transform } from "node:stream";
 import { isDeepStrictEqual } from "node:util";
 
+import { appConnectorPolicy } from "./app-connector-policy.mjs";
 import { jsonNumberIsStableForRewrite } from "./json-number-rewrite.mjs";
 import { HeaderlessSseDetector } from "./sse-prefix.mjs";
 import { coerceFunctionCallArguments } from "./tool-arguments.mjs";
@@ -65,6 +66,12 @@ const FUNCTION_RELAYS = new WeakMap();
 const CUSTOM_TOOL_IDENTITIES = new WeakMap();
 const NAME_ALIASES = new WeakMap();
 const PLAIN_TOOL_NAMES = new WeakMap();
+// Provider-facing declarations withheld from the eager surface because Codex
+// registered them with `defer_loading` and a live search relay can return
+// them. Kept beside the namespace map so the history passes can put one back
+// the moment stored history proves the model already called it: a search may
+// have aged out of the transcript while its call survived.
+const DEFERRED_DEFINITIONS = new WeakMap();
 // A provider-facing function reference can retain the same spelling as a
 // bridged custom/tool-search relay while a later-discovered ordinary function
 // with that native name receives an alias. Object identity is the only honest
@@ -1216,8 +1223,12 @@ function flattenNamespaceChild(namespace, fn, providerName) {
   const clientSchema = fn.parameters ?? fn.inputSchema;
   const parameters =
     clientSchema === undefined ? undefined : providerToolSchema(clientSchema);
+  // `defer_loading` is a Codex/Responses registration flag, not a provider one.
+  // A search-discovered definition still carries it, and a tool the provider
+  // can call must not describe itself as one it cannot see.
+  const { defer_loading: _deferred, ...declaration } = fn;
   const flattened = {
-    ...fn,
+    ...declaration,
     name: providerName ?? `${namespace}${NAMESPACE_DELIMITER}${fn.name}`,
     ...(parameters === undefined ? {} : { parameters }),
   };
@@ -1230,6 +1241,26 @@ function flattenNamespaceChild(namespace, fn, providerName) {
 // Flatten every namespace entry into plain functions named
 // `<namespace>__<tool>`. Returns the set of namespaces that were flattened
 // (name -> tool names) so callers can rename history and restore calls.
+// Every Codex app connector is registered as its own namespace under this
+// prefix (`mcp__codex_apps__airtable`, `mcp__codex_apps__github`, ...). The
+// app's own toolset is `mcp__codex_app`, one underscore-delimited segment
+// short of the prefix, so it is never matched here.
+const APP_CONNECTOR_NAMESPACE_PREFIX = "mcp__codex_apps__";
+
+// Withholding the connectors changes what a routed model is shown, so it is
+// opt-in: unset or empty leaves every connector eager, exactly as the router
+// behaved before. The operator turns it on with `CODEX_ROUTER_APP_CONNECTORS`,
+// read per request rather than cached at import. Set it in the service's
+// environment before starting the router. Comma-separated, trimmed,
+// case-insensitive:
+//   unset / empty -> withhold nothing
+//   `none`        -> withhold every connector
+//   `all`         -> withhold nothing, stated explicitly
+//   `airtable,gmail` -> keep those eager, withhold the rest
+// `none` beside ids is the same allow-list: any non-empty value other than
+// `all` turns withholding on, and the ids left after the two keywords are the
+// ones that stay eager. An id that matches no registered connector is simply
+// never found, so a stale entry costs nothing.
 export function flattenNamespaceTools(
   tools,
   { bridgeToolSearch = true, maxNameLength, aliasCollisions = false } = {},
@@ -1249,6 +1280,37 @@ export function flattenNamespaceTools(
       )
     : undefined;
   let toolSearchRelay;
+  // Codex marks every tool it registered with deferLoading as
+  // `defer_loading: true` and pairs them with a client-executed `tool_search`
+  // control (the `LoadableToolSpec` wire shape). The Responses backend keeps
+  // those definitions out of the model's context until a search returns them;
+  // a chat-completions provider has no such concept. Keep explicit deferred
+  // function definitions out of the eager surface and make them available
+  // through the bridged search relay, whose `tool_search_output` definitions
+  // `flattenToolSearchHistory` adds back on the next turn. Only a live relay
+  // makes that reachable, so without one every definition is still sent.
+  const deferralRelayAvailable =
+    bridgeToolSearch &&
+    tools.some((tool) => tool?.type === "tool_search" && tool.execution === "client");
+  const deferred = (tool) => deferralRelayAvailable && tool?.defer_loading === true;
+  // Routed clients may send connector registries without deferral markers or
+  // a search control. The operator can then withhold connector functions by
+  // namespace even without a relay. Unset or `all` preserves ordinary eager
+  // declarations; explicit deferred functions still use the rule above.
+  // The app's own tools, collaboration, repls, image tools and plain functions
+  // are outside this connector policy. Custom tools also stay visible because
+  // they have no function-search recovery path. This controls declarations,
+  // not client execution rights: a registered withheld function is restored
+  // when stored history, a forced choice or an allowed-tools entry names it.
+  const connectorPolicy = appConnectorPolicy();
+  const withholdConnectors = bridgeToolSearch && connectorPolicy.withhold;
+  const withheldConnector = (tool) => {
+    if (!withholdConnectors || typeof tool?.name !== "string") return false;
+    if (!tool.name.startsWith(APP_CONNECTOR_NAMESPACE_PREFIX)) return false;
+    const id = tool.name.slice(APP_CONNECTOR_NAMESPACE_PREFIX.length).toLowerCase();
+    return !connectorPolicy.eager.has(id);
+  };
+  const deferredDefinitions = new Map();
   let changed = false;
   for (const tool of tools) {
     // Codex registers deferred tools client-side and exposes this native
@@ -1277,6 +1339,7 @@ export function flattenNamespaceTools(
     }
     if (tool?.type === "namespace" && Array.isArray(tool.tools)) {
       const names = new Set();
+      const namespaceDeferred = deferred(tool) || withheldConnector(tool);
       for (const fn of tool.tools) {
         if (!fn?.name) continue;
         // Codex names function schemas `inputSchema`, while LiteLLM's
@@ -1294,18 +1357,36 @@ export function flattenNamespaceTools(
         // never touches automations still dies on its first message. Normalize
         // only the provider-facing copy; `inputSchema` stays exactly as the
         // client sent it.
-        flattened.push(
-          flattenNamespaceChild(
-            tool.name,
-            fn,
-            providerNameForNative(namespaces, tool.name, fn.name),
-          ),
-        );
-        names.add(fn.name);
+        // The provider name is reserved even for a deferred child, so the
+        // alias table a later search-discovered definition is flattened
+        // against stays identical to the eager one.
+        const providerName = providerNameForNative(namespaces, tool.name, fn.name);
+        // The registered model enum also governs restored calls, even while
+        // the definition is deferred and absent from the provider inventory.
         if (tool.name === "collaboration" && fn.name === "spawn_agent") {
           const schema = fn.parameters ?? fn.inputSchema;
           schemaStringValues(schema?.properties?.model, spawnAgentModels);
         }
+        // Only functions have a recoverable deferred definition. Custom tools
+        // use their own call/history relay and must remain provider-visible.
+        const functionChild = fn.type === undefined || fn.type === "function";
+        if (functionChild && (namespaceDeferred || deferred(fn))) {
+          // Omitting the definition must not also unregister the identity:
+          // the namespace still owns this name, so stored calls are still
+          // renamed to the provider spelling and still restored on the way
+          // back. Keep the withheld declaration so a call that outlived its
+          // search re-includes it below.
+          changed = true;
+          names.add(fn.name);
+          deferredDefinitions.set(providerName, {
+            tool: flattenNamespaceChild(tool.name, fn, providerName),
+            namespace: tool.name,
+            name: fn.name,
+          });
+          continue;
+        }
+        flattened.push(flattenNamespaceChild(tool.name, fn, providerName));
+        names.add(fn.name);
       }
       if (names.size > 0) {
         namespaces.set(tool.name, names);
@@ -1328,10 +1409,32 @@ export function flattenNamespaceTools(
       if (providerName !== name) repaired = withProviderFunctionName(repaired, providerName);
       plainToolNames.add(providerName);
     }
+    // `defer_loading` is a Codex registration flag; a provider-facing
+    // declaration must never carry it, whether it is sent eagerly here or
+    // withheld for the search relay.
+    if (repaired?.defer_loading !== undefined) {
+      const { defer_loading: _deferLoading, ...withoutFlag } = repaired;
+      repaired = withoutFlag;
+    }
+    // Only a function declaration can be withheld: restoring one means finding
+    // it again by the provider name a stored call carries, and a custom tool or
+    // any other top-level shape has no such identity here. Send those instead --
+    // withholding one would delete a tool outright, since no search the relay
+    // serves returns a definition nothing recorded.
+    if (deferred(tool) && typeof name === "string" && name) {
+      changed = true;
+      deferredDefinitions.set(providerFunctionName(repaired), {
+        tool: repaired,
+        namespace: undefined,
+        name,
+      });
+      continue;
+    }
     if (repaired !== tool) changed = true;
     flattened.push(repaired);
   }
   if (spawnAgentModels.size > 0) SPAWN_AGENT_MODELS.set(namespaces, spawnAgentModels);
+  if (deferredDefinitions.size > 0) DEFERRED_DEFINITIONS.set(namespaces, deferredDefinitions);
   if (toolSearchRelay) TOOL_SEARCH_RELAYS.set(namespaces, toolSearchRelay);
   return { tools: flattened, flattened: changed, namespaces };
 }
@@ -1513,6 +1616,111 @@ function addDiscoveredNamespace(namespaces, native) {
   names.add(native.name);
 }
 
+// A tool the model has already called is never omitted. Deferred definitions
+// normally return through the search relay, but the pair that returned one can
+// age out or be compacted away while the call it produced survives; the
+// request would then cite a tool it does not declare. Collect the withheld
+// declaration for every stored call that resolves to one and is not already
+// provider-visible, so the caller can charge them against its tool budget
+// before it decides what else fits. Resolution applies the same precedence
+// `flattenNamespacedHistory` uses: an explicit namespace is exact, then a
+// withheld provider spelling, then an exact plain identity, then -- unless a
+// provider-visible plain tool or relay already owns the spelling, in which
+// case the call stays that tool's and restores nothing -- the raw wire
+// spelling, then a bare name owned by exactly one namespace.
+function referencedDeferredDefinitions(input, tools, namespaces, toolChoice) {
+  const withheld = DEFERRED_DEFINITIONS.get(namespaces);
+  if (!withheld?.size || !Array.isArray(tools)) return [];
+  const byIdentity = new Map();
+  const byWireName = new Map();
+  for (const entry of withheld.values()) {
+    byIdentity.set(nativeToolKey(entry.namespace, entry.name), entry);
+    if (entry.namespace !== undefined) {
+      byWireName.set(`${entry.namespace}${NAMESPACE_DELIMITER}${entry.name}`, entry);
+    }
+  }
+  const bareOwners = new Map();
+  for (const [namespace, names] of namespaces) {
+    for (const name of names) {
+      if (!bareOwners.has(name)) bareOwners.set(name, new Set());
+      bareOwners.get(name).add(namespace);
+    }
+  }
+  const providerNames = providerOwnedToolNames(namespaces);
+  const visible = providerVisibleToolNames(tools);
+  const restored = [];
+  const consider = (reference) => {
+    if (!reference || typeof reference !== "object" || Array.isArray(reference)) return;
+    if (SPECIAL_FUNCTION_REFERENCES.has(reference)) return;
+    const nestedName = reference.function?.name;
+    const name = typeof nestedName === "string" ? nestedName : reference.name;
+    if (typeof name !== "string" || !name) return;
+    const namespace =
+      typeof reference.namespace === "string" && reference.namespace
+        ? reference.namespace
+        : undefined;
+    let entry;
+    if (namespace) {
+      entry = byIdentity.get(nativeToolKey(namespace, name));
+    } else {
+      // A plain native function can share the raw spelling of a namespace
+      // child while their provider aliases differ. Match the plain identity
+      // first, as history and tool-choice rewriting do, so an eager plain
+      // choice cannot restore an unrelated connector or consume its slot.
+      const plainIdentity = nativeToolKey(undefined, name);
+      const plainProviderName = NAME_ALIASES.get(namespaces)?.nativeToProvider.get(plainIdentity);
+      entry = byIdentity.get(plainIdentity) ?? withheld.get(plainProviderName ?? name);
+      if (!entry && !plainProviderName && !providerNames.has(name)) {
+        entry = byWireName.get(name);
+        if (!entry) {
+          const owners = bareOwners.get(name);
+          if (owners?.size === 1) {
+            const [owner] = [...owners];
+            entry = byIdentity.get(nativeToolKey(owner, name));
+          }
+        }
+      }
+    }
+    if (!entry) return;
+    const providerName = providerFunctionName(entry.tool);
+    if (!providerName || visible.has(providerName)) return;
+    visible.add(providerName);
+    restored.push(entry.tool);
+  };
+  for (const item of Array.isArray(input) ? input : []) {
+    if (item?.type !== "function_call") continue;
+    consider(item);
+  }
+  // A forced choice is the request's own promise about its tool list, so a
+  // withheld definition it names is as compulsory as one a stored call names:
+  // without it the request leaves citing a tool it does not declare.
+  if (toolChoice?.type === "allowed_tools" && Array.isArray(toolChoice.tools)) {
+    for (const choice of toolChoice.tools) {
+      if (choice?.type === "function") consider(choice);
+    }
+  } else if (toolChoice?.type === "function") {
+    consider(toolChoice);
+  }
+  return restored;
+}
+
+// The provider-visible plain and special-relay spellings of this request. A
+// stored call naming one of them belongs to that tool, whatever a namespace
+// registration would otherwise make of the same name.
+function providerOwnedToolNames(namespaces) {
+  const nameRelay = NAME_ALIASES.get(namespaces);
+  const names = new Set([
+    ...(PLAIN_TOOL_NAMES.get(namespaces) || []),
+    ...(nameRelay?.providerToNative.keys() || []),
+    ...(nameRelay?.plainProviderNames || []),
+    ...(CUSTOM_TOOL_RELAYS.get(namespaces)?.keys() || []),
+    ...(FUNCTION_RELAYS.get(namespaces)?.keys() || []),
+  ]);
+  const toolSearch = TOOL_SEARCH_RELAYS.get(namespaces);
+  if (toolSearch) names.add(toolSearch.providerName);
+  return names;
+}
+
 export class ToolSearchHistoryCapacityError extends Error {
   constructor({ available, required }) {
     super(
@@ -1543,10 +1751,8 @@ export function flattenToolSearchHistory(
   { maxTools = Infinity, recoverWithoutRelay = false, toolChoice } = {},
 ) {
   const relay = TOOL_SEARCH_RELAYS.get(namespaces);
-  if (!Array.isArray(input)) {
-    return { input, tools, flattened: false };
-  }
   if (!Array.isArray(tools)) {
+    if (!Array.isArray(input)) return { input, tools, flattened: false };
     const routedInput = input.filter(
       (item) => item?.type !== "tool_search_call" && item?.type !== "tool_search_output",
     );
@@ -1556,6 +1762,22 @@ export function flattenToolSearchHistory(
       flattened: routedInput.length !== input.length,
     };
   }
+
+  // Tool choice applies independently of input history. String input and an
+  // instructions-only request can still require a withheld function.
+  const toolCapacity = Number.isInteger(maxTools) && maxTools >= 0 ? maxTools : Infinity;
+  // Charge compulsory definitions before admitting search discoveries, so a
+  // bounded provider surface cannot silently exceed its tool ceiling.
+  const deferredReferences = referencedDeferredDefinitions(input, tools, namespaces, toolChoice);
+  const restoreReferences = () => {
+    if (deferredReferences.length === 0) return { input, tools, flattened: false };
+    const available = Math.max(0, toolCapacity - tools.length);
+    if (deferredReferences.length > available) {
+      throw new ToolSearchHistoryCapacityError({ available, required: deferredReferences.length });
+    }
+    return { input, tools: [...tools, ...deferredReferences], flattened: true };
+  };
+  if (!Array.isArray(input)) return restoreReferences();
 
   const callsById = new Map();
   const invalidIds = new Set();
@@ -1602,7 +1824,7 @@ export function flattenToolSearchHistory(
     call.outputIndex = index;
   }
 
-  if (nativeItems === 0) return { input, tools, flattened: false };
+  if (nativeItems === 0) return restoreReferences();
 
   const callsByIndex = new Map();
   const outputsByIndex = new Map();
@@ -1614,8 +1836,7 @@ export function flattenToolSearchHistory(
     }
   }
 
-  const toolCapacity = Number.isInteger(maxTools) && maxTools >= 0 ? maxTools : Infinity;
-  const remainingToolCapacity = Math.max(0, toolCapacity - tools.length);
+  const availableToolCapacity = Math.max(0, toolCapacity - tools.length);
   const visibleNames = providerVisibleToolNames(tools);
   const initialNameAliases = new Map(
     NAME_ALIASES.get(namespaces)?.nativeToProvider || [],
@@ -1659,6 +1880,27 @@ export function flattenToolSearchHistory(
     }
     discoveriesByOutputIndex.set(index, records);
   }
+
+  // A withheld definition the stored search also returned is one tool, not
+  // two. Reserving a slot for both overstates the surface, and the discovery
+  // then loses the race for the last slot -- leaving the relayed search output
+  // empty of the very tool the request goes on to declare. Resolve the overlap
+  // before any capacity is reserved: the discovery becomes compulsory, carries
+  // the single charge, and the restoration drops out.
+  const restoredDiscoveries = new Set();
+  const deferredRestorations = [];
+  for (const tool of deferredReferences) {
+    const discovery = definitionOwnersByName.get(providerFunctionName(tool));
+    if (discovery) {
+      restoredDiscoveries.add(discovery);
+      continue;
+    }
+    deferredRestorations.push(tool);
+  }
+  const remainingToolCapacity = Math.max(
+    0,
+    availableToolCapacity - deferredRestorations.length,
+  );
 
   // A bounded provider surface may omit only unused discoveries. Resolve each
   // stored call against the definitions that existed at that point in the
@@ -1799,11 +2041,16 @@ export function flattenToolSearchHistory(
   } else if (toolChoice?.type === "function") {
     markReference(toolChoice);
   }
+  for (const discovery of restoredDiscoveries) referencedDefinitions.add(discovery);
   const requiredDefinitions = [...referencedDefinitions];
-  if (requiredDefinitions.length > remainingToolCapacity) {
+  // A restored definition is as compulsory as a referenced discovery: both are
+  // tools the transcript already called, so they are refused together rather
+  // than letting the restored ones push the surface past the limit unreported.
+  const requiredCount = requiredDefinitions.length + deferredRestorations.length;
+  if (requiredCount > availableToolCapacity) {
     throw new ToolSearchHistoryCapacityError({
-      available: remainingToolCapacity,
-      required: requiredDefinitions.length,
+      available: availableToolCapacity,
+      required: requiredCount,
     });
   }
   const acceptedDiscoveries = new Set(requiredDefinitions);
@@ -1888,6 +2135,17 @@ export function flattenToolSearchHistory(
     });
   }
 
+  // Last, so a definition the relay legitimately returned above still wins and
+  // the same tool is never declared twice; its slot was reserved either way.
+  const declaredNames = providerVisibleToolNames(routedTools);
+  for (const tool of deferredRestorations) {
+    const name = providerFunctionName(tool);
+    if (!name || declaredNames.has(name)) continue;
+    declaredNames.add(name);
+    if (routedTools === tools) routedTools = [...tools];
+    routedTools.push(tool);
+  }
+
   return {
     input: routedInput,
     tools: routedTools,
@@ -1914,15 +2172,7 @@ export function flattenNamespacedHistory(input, namespaces) {
       bareOwners.get(name).add(namespace);
     }
   }
-  const providerNames = new Set([
-    ...(PLAIN_TOOL_NAMES.get(namespaces) || []),
-    ...(nameRelay?.providerToNative.keys() || []),
-    ...(nameRelay?.plainProviderNames || []),
-    ...(CUSTOM_TOOL_RELAYS.get(namespaces)?.keys() || []),
-    ...(FUNCTION_RELAYS.get(namespaces)?.keys() || []),
-  ]);
-  const toolSearch = TOOL_SEARCH_RELAYS.get(namespaces);
-  if (toolSearch) providerNames.add(toolSearch.providerName);
+  const providerNames = providerOwnedToolNames(namespaces);
   return input.map((item) => {
     if (item?.type !== "function_call") return item;
     const { name } = item;

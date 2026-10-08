@@ -2,6 +2,7 @@ import { waitForRouterHealth } from "./router-health.mjs";
 import { LOG_PATH, STATE_DIR } from "./paths.mjs";
 import { windowsScheduledTaskState } from "./windows-task-state.mjs";
 import { diagnoseWindowsLaunchFailure, readLogTail } from "./windows-launch-diagnosis.mjs";
+import { STARTUP_BACKOFF_EXIT_CODE } from "./startup-attempts.mjs";
 
 const TASK_LAUNCH_GRACE_MS = 15_000;
 const TASK_STATE_POLL_MS = 1_000;
@@ -67,6 +68,7 @@ export async function waitForServiceReadiness({
   pollMs = TASK_STATE_POLL_MS,
   getWindowsTaskState = windowsScheduledTaskState,
   getServiceRestarts,
+  getStartupBackoffRemainingMs,
   waitForHealth = waitForRouterHealth,
   logPath = LOG_PATH,
 } = {}) {
@@ -77,12 +79,24 @@ export async function waitForServiceReadiness({
   const healthWinner = settleHealth(waitForHealth, Math.max(0, deadline - Date.now())).then(
     (outcome) => ({ kind: "health", outcome }),
   );
+  const deferredFailure = () => {
+    let remainingMs;
+    try {
+      remainingMs = getStartupBackoffRemainingMs?.();
+    } catch {
+      // An unreadable record cannot prove deliberate cooldown.
+    }
+    if (!Number.isFinite(remainingMs) || remainingMs <= 0) return undefined;
+    const error = new Error(`Automatic startup is cooling down for another ${Math.ceil(remainingMs / 1000)} seconds.`);
+    error.startupDeferred = true;
+    return error;
+  };
   // Every path through this helper is the health attempt having spent its
   // whole budget without an answer -- a router that is still starting, which
   // a LiteLLM gateway with a large model set does on a cold start. That is
   // retryable, and an installer must not tear the service out over it (#760).
-  // The crash-loop and dead-launcher throws below are deliberately left
-  // untagged: those are broken, not slow, and a rollback is right for them.
+  // Crash loops and dead launchers remain fatal unless manager evidence and a
+  // current cooldown record explicitly prove a deferred automatic attempt.
   const failureOf = (outcome) => {
     const error =
       outcome.error ??
@@ -131,6 +145,8 @@ export async function waitForServiceReadiness({
             if (finalWinner.outcome.healthy) return finalWinner.outcome.health;
             throw failureOf(finalWinner.outcome);
           }
+          const deferred = deferredFailure();
+          if (deferred) throw deferred;
           throw new Error(
             `The background service restarted ${restartsSince} times while ` +
               "waiting for it to become healthy; it is crash-looping. " +
@@ -170,6 +186,20 @@ export async function waitForServiceReadiness({
     if (taskState && !launcherAlive) {
       deadSince ??= Date.now();
       if (Date.now() - deadSince >= launchGraceMs) {
+        // A health response may settle during the task query. Give that same
+        // in-flight attempt the final bounded look used by the Linux guard.
+        const finalWinner = await Promise.race([
+          healthWinner,
+          sleep(Math.max(0, Math.min(pollMs, deadline - Date.now()))).then(() => null),
+        ]);
+        if (finalWinner) {
+          if (finalWinner.outcome.healthy) return finalWinner.outcome.health;
+          throw failureOf(finalWinner.outcome);
+        }
+        if (taskState.lastTaskResult === STARTUP_BACKOFF_EXIT_CODE) {
+          const deferred = deferredFailure();
+          if (deferred) throw deferred;
+        }
         const result = Number.isSafeInteger(taskState.lastTaskResult)
           ? `0x${taskState.lastTaskResult.toString(16)}`
           : "unknown";

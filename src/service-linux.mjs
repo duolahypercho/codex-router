@@ -24,7 +24,9 @@ import { providerApiKeyServiceEnvironment } from "./provider-api-key-service-env
 import { responsesWsServiceEnvironment } from "./responses-ws-client.mjs";
 import { serviceZaiCodingStreamEnvironment } from "./zai-stream-timeouts.mjs";
 import { serviceProxyEnvironment } from "./proxy-environment.mjs";
+import { serviceAppConnectorEnvironment } from "./app-connector-policy.mjs";
 import { serviceGrokPatchHookEnvironment } from "./grok-patch-hook-settings.mjs";
+import { resetStartupAttempts, serviceStartupBackoffEnvironment } from "./startup-attempts.mjs";
 import {
   skipServiceManagerCall,
   assertServiceWriteIsolated,
@@ -83,10 +85,12 @@ function unit() {
     CODEX_ROUTER_PORT: String(PORTS.router),
     CODEX_ROUTER_API_PORT: String(PORTS.api),
     ...serviceProxyEnvironment(),
+    ...serviceAppConnectorEnvironment(),
     ...serviceGrokPatchHookEnvironment(),
     ...providerApiKeyServiceEnvironment(),
     ...responsesWsServiceEnvironment(),
     ...serviceZaiCodingStreamEnvironment(),
+    ...serviceStartupBackoffEnvironment(),
     ...(process.env.KIMI_CODE_HOME ? { KIMI_CODE_HOME: process.env.KIMI_CODE_HOME } : {}),
     ...(process.env.CODEX_ROUTER_SOURCE_ROOT
       ? { CODEX_ROUTER_SOURCE_ROOT: SOURCE_ROOT }
@@ -172,6 +176,7 @@ if (!new Set(["install", "uninstall", "start", "stop", "restart", "status", "ren
 if (command === "render") {
   process.stdout.write(unit());
 } else if (command === "install") {
+  serviceAppConnectorEnvironment();
   writeUnit();
   systemctl(["daemon-reload"], { quiet: true });
   // systemd's append: opens the log before the service runs, so the started
@@ -179,6 +184,7 @@ if (command === "render") {
   // while nothing holds it, then start: enable --now on an already-running
   // unit would otherwise leave the old descriptor on the renamed inode.
   systemctl(["stop", unitName], { quiet: true });
+  resetStartupAttempts({ required: false });
   rotateLog(LOG_PATH);
   systemctl(["enable", "--now", unitName], { quiet: true });
   process.stdout.write(`${JSON.stringify({ installed: true, path: unitPath })}\n`);
@@ -225,6 +231,14 @@ if (command === "render") {
   process.stdout.write(`${JSON.stringify({ restarts })}\n`);
 } else {
   const verb = { start: "start", stop: "stop", restart: "restart" }[command];
-  systemctl([verb, unitName], { quiet: true });
+  if (command === "restart") {
+    // A synchronous stop drains the old cache writer before the replacement.
+    systemctl(["stop", unitName], { quiet: true });
+    resetStartupAttempts();
+    systemctl(["start", unitName], { quiet: true });
+  } else {
+    if (command === "start") resetStartupAttempts();
+    systemctl([verb, unitName], { quiet: true });
+  }
   process.stdout.write(`${JSON.stringify({ state: command === "stop" ? "stopped" : "running" })}\n`);
 }

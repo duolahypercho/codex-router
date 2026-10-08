@@ -109,6 +109,30 @@ test("install is idempotent and refreshes managed skills", () => {
   }
 });
 
+test("managed runtime references are installed, repaired on refresh, and removed on uninstall", () => {
+  const home = tempCodexHome();
+  const names = ["codex-computer-use", "codex-in-app-browser"];
+  try {
+    installSkills(home, { quiet: true });
+    for (const name of names) {
+      const reference = path.join(home, "skills", name, "references", "legacy-runtime.md");
+      const source = readFileSync(new URL(`../skills/${name}/references/legacy-runtime.md`, import.meta.url), "utf8");
+      assert.equal(readFileSync(reference, "utf8"), source);
+      writeFileSync(reference, "stale runtime guidance\n");
+    }
+    installSkills(home, { quiet: true });
+    for (const name of names) {
+      const reference = path.join(home, "skills", name, "references", "legacy-runtime.md");
+      const source = readFileSync(new URL(`../skills/${name}/references/legacy-runtime.md`, import.meta.url), "utf8");
+      assert.equal(readFileSync(reference, "utf8"), source, "refresh repairs nested reference content");
+    }
+    assert.equal(uninstallSkills(home, { quiet: true }), PACK.length);
+    for (const name of names) assert.equal(existsSync(path.join(home, "skills", name)), false);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test("concurrent skill installs serialize ownership from recovery through publication", async () => {
   const home = tempCodexHome();
   const fakeSource = mkdtempSync(path.join(os.tmpdir(), "codex-skills-source-"));

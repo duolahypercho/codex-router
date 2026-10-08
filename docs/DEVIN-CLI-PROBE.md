@@ -15,10 +15,14 @@ The Devin CLI provider drives Cognition's models over **Cascade**, a Connect RPC
 surface Cognition has not documented. Everything the provider knows about that
 surface — the protobuf field numbers, the service path, the authorization
 header, the stream framing — was transcribed out of the shipped `devin` binary.
-It has never spoken to Cognition's backend.
+That extracted contract is not a guarantee of compatibility with Cognition's
+backend.
 
-The unit tests prove the translation is self-consistent. They cannot prove the
-upstream agrees with it. One run of this probe against a real account does.
+The unit tests prove the translation is self-consistent. A live probe tests
+whether the upstream accepts the probe's request. Its small `ping` tool does
+not prove that a full Codex request with its original tool descriptions is
+accepted: [issue #941](https://github.com/duolahypercho/codex-router/issues/941)
+reports an MCP/content-policy refusal for that larger request.
 
 ## What it costs
 
@@ -106,7 +110,7 @@ usually a `fix:` line. Those two lines are the useful part — please include th
 | `FAIL model list … connect-code=unimplemented` | The service path or method name is wrong. Not your account's fault. |
 | `FAIL model list: the account advertised no usable model` | The response arrived but nothing in it decoded to a model. If the `observed:` line names `UNKNOWN` fields, the field numbers have moved. If it says the response decoded to nothing, your plan may entitle no Cascade model. |
 | `FAIL live turn … connect-code=invalid_argument` | The request shape is wrong. The upstream's message usually names the offending field — paste it verbatim, it is the single most useful thing in this document. |
-| `FAIL live turn … connect-code=permission_denied` or `failed_precondition` | Often a team setting (`disable_cascade`, `allowed_model_uids`) rather than a bug. Please say which plan you are on. |
+| `FAIL live turn … connect-code=permission_denied` or `failed_precondition` | Check the reported cause: team permissions (`disable_cascade`, `allowed_model_uids`), MCP configuration, or content policy can refuse a request. A known `permission_denied` is not a rejected login; the forwarder preserves its code and returns a fixed diagnosis without echoing private upstream text. Please say which plan you are on. |
 | `FAIL stream framing` | The upstream accepted the request and then sent no message frame. |
 | `FAIL frame compression` | The upstream compressed the stream even though both the probe and the transport ask for `connect-accept-encoding: identity`. This transport cannot decompress; it refuses such a frame outright (`devin_compressed_frame`), so every turn would fail loudly rather than answer. Say which encoding the upstream used. |
 | `FAIL stream completeness` | The connection died part-way through a frame. |

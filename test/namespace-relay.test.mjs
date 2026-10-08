@@ -498,6 +498,478 @@ test("flattenNamespaceTools exposes client tool_search as an ordinary provider f
   ]);
 });
 
+test("deferred app tools stay out of the eager provider surface behind a live search relay", () => {
+  const connector = (name) => ({
+    type: "function",
+    name,
+    defer_loading: true,
+    description: `Do ${name}.`,
+    inputSchema: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
+  });
+  const { tools, flattened, namespaces } = flattenNamespaceTools([
+    { type: "function", name: "shell", parameters: { type: "object", properties: {} } },
+    clientToolSearchControl(),
+    {
+      type: "namespace",
+      name: "codex_apps",
+      tools: [connector("airtable.list_bases"), connector("notion.search")],
+    },
+    {
+      type: "namespace",
+      name: "collaboration",
+      tools: [{ type: "function", name: "spawn_agent" }],
+    },
+  ]);
+  assert.equal(flattened, true);
+  // Only the eager surface reaches the provider; the deferred connector
+  // definitions are reachable through the bridged search relay instead.
+  assert.deepEqual(tools.map((tool) => tool.name), [
+    "shell",
+    "tool_search",
+    "collaboration__spawn_agent",
+  ]);
+  // The identities stay registered even though their definitions are held
+  // back, so stored calls are still renamed and restored.
+  assert.deepEqual(
+    [...namespaces.get("codex_apps")],
+    ["airtable.list_bases", "notion.search"],
+  );
+  assert.deepEqual(
+    flattenNamespacedHistory(
+      [
+        {
+          type: "function_call",
+          call_id: "call-1",
+          namespace: "codex_apps",
+          name: "airtable.list_bases",
+          arguments: "{}",
+        },
+      ],
+      namespaces,
+    ),
+    [
+      {
+        type: "function_call",
+        call_id: "call-1",
+        name: "codex_apps__airtable.list_bases",
+        arguments: "{}",
+      },
+    ],
+  );
+
+  // What the relay returns is still sent, without the registration flag.
+  const routed = flattenToolSearchHistory(
+    [
+      {
+        type: "tool_search_call",
+        call_id: "search-1",
+        execution: "client",
+        arguments: { query: "airtable" },
+      },
+      {
+        type: "tool_search_output",
+        call_id: "search-1",
+        status: "completed",
+        execution: "client",
+        tools: [
+          { type: "namespace", name: "codex_apps", tools: [connector("airtable.list_bases")] },
+        ],
+      },
+    ],
+    tools,
+    namespaces,
+  );
+  const discovered = routed.tools.find(
+    (tool) => tool.name === "codex_apps__airtable.list_bases",
+  );
+  assert.ok(discovered);
+  assert.equal("defer_loading" in discovered, false);
+  assert.deepEqual(discovered.parameters, connector("x").inputSchema);
+  assert.deepEqual(
+    [...namespaces.get("codex_apps")],
+    ["airtable.list_bases", "notion.search"],
+  );
+  // The relay returned it once; it is never declared twice.
+  assert.equal(
+    routed.tools.filter((tool) => tool.name === "codex_apps__airtable.list_bases").length,
+    1,
+  );
+});
+
+test("a deferred tool the model already called is sent even when its search aged out", () => {
+  const connector = (name) => ({
+    type: "function",
+    name,
+    defer_loading: true,
+    description: `Do ${name}.`,
+    inputSchema: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
+  });
+  const { tools, namespaces } = flattenNamespaceTools([
+    { type: "function", name: "shell", parameters: { type: "object", properties: {} } },
+    clientToolSearchControl(),
+    {
+      type: "namespace",
+      name: "codex_apps",
+      tools: [connector("airtable.list_bases"), connector("notion.search")],
+    },
+  ]);
+  assert.equal(tools.some((tool) => tool.name.startsWith("codex_apps__")), false);
+
+  // Compaction dropped the `tool_search_call`, so the orphaned output is
+  // invalidated and adds nothing back -- but the call it produced survives.
+  const orphaned = [
+    {
+      type: "tool_search_output",
+      call_id: "search-1",
+      status: "completed",
+      execution: "client",
+      tools: [
+        { type: "namespace", name: "codex_apps", tools: [connector("airtable.list_bases")] },
+      ],
+    },
+    {
+      type: "function_call",
+      call_id: "call-1",
+      namespace: "codex_apps",
+      name: "airtable.list_bases",
+      arguments: '{"id":"app1"}',
+    },
+    { type: "function_call_output", call_id: "call-1", output: "{}" },
+  ];
+  const routed = flattenToolSearchHistory(orphaned, tools, namespaces);
+  const restored = routed.tools.filter(
+    (tool) => tool.name === "codex_apps__airtable.list_bases",
+  );
+  assert.equal(restored.length, 1, "the called tool is declared exactly once");
+  assert.equal("defer_loading" in restored[0], false);
+  assert.equal(
+    routed.tools.some((tool) => tool.name === "codex_apps__notion.search"),
+    false,
+    "an uncalled deferred tool stays out of the prompt",
+  );
+  // The call is renamed to the provider spelling the definition uses.
+  assert.deepEqual(
+    flattenNamespacedHistory(routed.input, namespaces)
+      .filter((item) => item.type === "function_call")
+      .map((item) => item.name),
+    ["codex_apps__airtable.list_bases"],
+  );
+});
+
+test("a stored call restores its deferred definition with no tool_search history at all", () => {
+  const deferredTool = {
+    type: "function",
+    name: "list_bases",
+    defer_loading: true,
+    parameters: { type: "object", properties: { id: { type: "string" } } },
+  };
+  const { tools, namespaces } = flattenNamespaceTools([
+    clientToolSearchControl(),
+    deferredTool,
+    { type: "function", name: "shell", parameters: { type: "object", properties: {} } },
+  ]);
+  assert.deepEqual(tools.map((tool) => tool.name), ["tool_search", "shell"]);
+
+  const routed = flattenToolSearchHistory(
+    [{ type: "function_call", call_id: "call-1", name: "list_bases", arguments: "{}" }],
+    tools,
+    namespaces,
+  );
+  const restored = routed.tools.find((tool) => tool.name === "list_bases");
+  assert.ok(restored, "a called top-level deferred tool is declared");
+  assert.equal("defer_loading" in restored, false);
+  assert.equal(routed.flattened, true);
+});
+
+test("a top-level deferred tool sent without a relay drops the registration flag", () => {
+  const { tools } = flattenNamespaceTools([
+    {
+      type: "function",
+      name: "list_bases",
+      defer_loading: true,
+      parameters: { type: "object", properties: {} },
+    },
+  ]);
+  assert.deepEqual(tools.map((tool) => tool.name), ["list_bases"]);
+  assert.equal("defer_loading" in tools[0], false);
+});
+
+test("deferred app tools are still sent when the request carries no search relay", () => {
+  const deferredTool = {
+    type: "function",
+    name: "airtable.list_bases",
+    defer_loading: true,
+    inputSchema: { type: "object", properties: {} },
+  };
+  const { tools } = flattenNamespaceTools([
+    { type: "namespace", name: "codex_apps", tools: [deferredTool] },
+  ]);
+  assert.deepEqual(tools.map((tool) => tool.name), ["codex_apps__airtable.list_bases"]);
+  assert.equal("defer_loading" in tools[0], false);
+});
+
+// A bounded provider surface counts what it is about to send, not what it
+// happened to send first: a restored definition occupies a Groq tool slot
+// exactly as a client-declared one does, and the router's invariant is that
+// every knowable overflow fails locally instead of upstream.
+function deferredCapacityFixture(children = 40, core = 120) {
+  const connector = (name) => ({
+    type: "function",
+    name,
+    defer_loading: true,
+    inputSchema: { type: "object", properties: { id: { type: "string" } } },
+  });
+  return flattenNamespaceTools([
+    clientToolSearchControl(),
+    ...Array.from({ length: core }, (_, index) => ({
+      type: "function",
+      name: `core_tool_${index}`,
+    })),
+    {
+      type: "namespace",
+      name: "codex_apps",
+      tools: Array.from({ length: children }, (_, index) => connector(`connector_${index}`)),
+    },
+  ], { aliasCollisions: true });
+}
+
+function deferredCalls(count) {
+  return Array.from({ length: count }, (_, index) => ({
+    type: "function_call",
+    call_id: `call-${index}`,
+    namespace: "codex_apps",
+    name: `connector_${index}`,
+    arguments: "{}",
+  }));
+}
+
+test("restored deferred definitions are charged against the provider tool ceiling", () => {
+  const flattened = deferredCapacityFixture();
+  assert.equal(flattened.tools.length, 121);
+  assert.throws(
+    () => flattenToolSearchHistory(
+      deferredCalls(30),
+      flattened.tools,
+      flattened.namespaces,
+      { maxTools: 128, recoverWithoutRelay: true },
+    ),
+    (error) => {
+      assert.ok(error instanceof ToolSearchHistoryCapacityError);
+      assert.equal(error.available, 7);
+      assert.equal(error.required, 30);
+      return true;
+    },
+  );
+});
+
+test("the same ceiling holds when the transcript still carries a tool_search pair", () => {
+  const flattened = deferredCapacityFixture();
+  const history = [
+    {
+      type: "tool_search_call",
+      call_id: "search-1",
+      execution: "client",
+      arguments: { query: "connector" },
+    },
+    {
+      type: "tool_search_output",
+      call_id: "search-1",
+      status: "completed",
+      execution: "client",
+      tools: [{
+        type: "namespace",
+        name: "codex_apps",
+        tools: [{
+          type: "function",
+          name: "connector_0",
+          inputSchema: { type: "object", properties: { id: { type: "string" } } },
+        }],
+      }],
+    },
+    ...deferredCalls(30),
+  ];
+  assert.throws(
+    () => flattenToolSearchHistory(history, flattened.tools, flattened.namespaces, {
+      maxTools: 128,
+      recoverWithoutRelay: true,
+    }),
+    (error) => {
+      assert.ok(error instanceof ToolSearchHistoryCapacityError);
+      assert.equal(error.available, 7);
+      assert.equal(error.required, 30);
+      return true;
+    },
+  );
+});
+
+test("a restoration that fits the ceiling is still sent", () => {
+  const flattened = deferredCapacityFixture();
+  const routed = flattenToolSearchHistory(
+    deferredCalls(7),
+    flattened.tools,
+    flattened.namespaces,
+    { maxTools: 128, recoverWithoutRelay: true },
+  );
+  assert.equal(routed.tools.length, 128);
+  const names = new Set(routed.tools.map((tool) => tool.name));
+  for (let index = 0; index < 7; index += 1) {
+    assert.ok(names.has(`codex_apps__connector_${index}`), `connector_${index} is declared`);
+  }
+  assert.equal(names.has("codex_apps__connector_7"), false);
+});
+
+// A forced choice is a promise the request makes about its own tool list. It
+// reaches the relay after the history pass, so a withheld deferred tool named
+// there is restored for exactly the same reason a stored call restores one:
+// otherwise the request leaves naming a tool it does not declare.
+test("a forced tool choice restores the deferred definition it names", () => {
+  const connector = (name) => ({
+    type: "function",
+    name,
+    defer_loading: true,
+    inputSchema: { type: "object", properties: { id: { type: "string" } } },
+  });
+  const { tools, namespaces } = flattenNamespaceTools([
+    clientToolSearchControl(),
+    { type: "function", name: "shell", parameters: { type: "object", properties: {} } },
+    {
+      type: "namespace",
+      name: "codex_apps",
+      tools: [connector("airtable.list_bases"), connector("notion.search")],
+    },
+  ]);
+  assert.deepEqual(tools.map((tool) => tool.name), ["tool_search", "shell"]);
+
+  const forced = flattenToolSearchHistory([], tools, namespaces, {
+    toolChoice: { type: "function", name: "codex_apps__airtable.list_bases" },
+  });
+  assert.ok(
+    forced.tools.some((tool) => tool.name === "codex_apps__airtable.list_bases"),
+    "the forced tool is declared",
+  );
+  assert.equal(
+    forced.tools.some((tool) => tool.name === "codex_apps__notion.search"),
+    false,
+    "an unnamed deferred tool stays out of the prompt",
+  );
+
+  const allowed = flattenToolSearchHistory([], tools, namespaces, {
+    toolChoice: {
+      type: "allowed_tools",
+      mode: "required",
+      tools: [{ type: "function", name: "codex_apps__notion.search" }],
+    },
+  });
+  assert.ok(
+    allowed.tools.some((tool) => tool.name === "codex_apps__notion.search"),
+    "an allowed_tools entry declares its deferred tool too",
+  );
+});
+
+test("a restoration the stored search returned is charged once and stays in its output", () => {
+  const flattened = deferredCapacityFixture();
+  const history = [
+    {
+      type: "tool_search_call",
+      call_id: "search-1",
+      execution: "client",
+      arguments: { query: "connector" },
+    },
+    {
+      type: "tool_search_output",
+      call_id: "search-1",
+      status: "completed",
+      execution: "client",
+      tools: [{
+        type: "namespace",
+        name: "codex_apps",
+        tools: [{
+          type: "function",
+          name: "connector_0",
+          inputSchema: { type: "object", properties: { id: { type: "string" } } },
+        }],
+      }],
+    },
+    ...deferredCalls(7),
+  ];
+  const routed = flattenToolSearchHistory(history, flattened.tools, flattened.namespaces, {
+    maxTools: 128,
+    recoverWithoutRelay: true,
+  });
+  assert.equal(routed.tools.length, 128);
+  const names = routed.tools.map((tool) => tool.name);
+  for (let index = 0; index < 7; index += 1) {
+    assert.equal(
+      names.filter((name) => name === `codex_apps__connector_${index}`).length,
+      1,
+      `connector_${index} is declared exactly once`,
+    );
+  }
+  const searchOutput = routed.input.find(
+    (item) => item?.type === "function_call_output" && item.call_id === "search-1",
+  );
+  assert.deepEqual(
+    JSON.parse(searchOutput.output).tools.map((tool) => tool.name),
+    ["codex_apps__connector_0"],
+    "the search still reports the tool it found",
+  );
+});
+
+test("a deferred custom tool is sent rather than withheld with no way back", () => {
+  // Only a function declaration has the provider identity a stored call
+  // restores by, so withholding any other shape would delete it outright.
+  const { tools } = flattenNamespaceTools([
+    clientToolSearchControl(),
+    {
+      type: "custom",
+      name: "apply_patch",
+      defer_loading: true,
+      description: "Apply a patch.",
+    },
+    { type: "function", name: "shell", parameters: { type: "object", properties: {} } },
+  ]);
+  assert.deepEqual(tools.map((tool) => tool.name), ["tool_search", "apply_patch", "shell"]);
+  assert.equal(tools[1].type, "custom");
+  assert.equal("defer_loading" in tools[1], false);
+});
+
+test("a plain tool owns a bare stored call a deferred namespace also spells", () => {
+  const { tools, namespaces } = flattenNamespaceTools([
+    clientToolSearchControl(),
+    { type: "function", name: "search", parameters: { type: "object", properties: {} } },
+    {
+      type: "namespace",
+      name: "codex_apps",
+      tools: [{
+        type: "function",
+        name: "search",
+        defer_loading: true,
+        inputSchema: { type: "object", properties: { query: { type: "string" } } },
+      }],
+    },
+  ]);
+  assert.deepEqual(tools.map((tool) => tool.name), ["tool_search", "search"]);
+
+  const bare = [{ type: "function_call", call_id: "call-1", name: "search", arguments: "{}" }];
+  // The history pass leaves the call on the plain tool, so restoring the
+  // namespaced definition for it would declare a tool nothing cites.
+  assert.equal(flattenNamespacedHistory(bare, namespaces)[0].name, "search");
+  const routed = flattenToolSearchHistory(bare, tools, namespaces);
+  assert.deepEqual(routed.tools.map((tool) => tool.name), ["tool_search", "search"]);
+  assert.equal(routed.flattened, false);
+
+  // A call that does name the namespaced tool still restores it.
+  const explicit = [{
+    type: "function_call",
+    call_id: "call-2",
+    namespace: "codex_apps",
+    name: "search",
+    arguments: "{}",
+  }];
+  const restored = flattenToolSearchHistory(explicit, tools, namespaces);
+  assert.ok(restored.tools.some((tool) => tool.name === "codex_apps__search"));
+});
+
 test("tool_search bridge uses a collision-safe request-local name", () => {
   const { tools, namespaces } = flattenNamespaceTools([
     {
@@ -2471,6 +2943,66 @@ test("response transform pins only an unadvertised spawn-agent override to the r
     model: "gpt-5.6-terra",
   });
 });
+
+for (const deferMode of ["eager", "namespace", "function"]) {
+  for (const schemaField of ["parameters", "inputSchema"]) {
+    test(`${deferMode} spawn-agent ${schemaField} preserves advertised model overrides on JSON and stream responses`, async () => {
+      const tools = [
+        { type: "tool_search", execution: "client", parameters: { type: "object" } },
+        {
+          type: "namespace",
+          name: "collaboration",
+          ...(deferMode === "namespace" ? { defer_loading: true } : {}),
+          tools: [{
+            type: "function",
+            name: "spawn_agent",
+            ...(deferMode === "function" ? { defer_loading: true } : {}),
+            [schemaField]: {
+              type: "object",
+              properties: {
+                message: { type: "string" },
+                model: { type: "string", enum: ["advertised-model"] },
+              },
+            },
+          }],
+        },
+      ];
+      const before = structuredClone(tools);
+      const flat = flattenNamespaceTools(tools, { aliasCollisions: true });
+      assert.equal(flat.tools.some(tool => tool.name === "collaboration__spawn_agent"), deferMode === "eager");
+      const restored = flattenToolSearchHistory("verify", flat.tools, flat.namespaces, {
+        toolChoice: { type: "function", namespace: "collaboration", name: "spawn_agent" },
+      });
+      assert.equal(restored.tools.filter(tool => tool.name === "collaboration__spawn_agent").length, 1);
+      const lookups = buildNamespaceLookups(flat.namespaces);
+      assert.deepEqual([...lookups.spawnAgentModels], ["advertised-model"]);
+      for (const parentModel of [undefined, "routed-parent"]) {
+        for (const model of ["advertised-model", "invented-model"]) {
+          const item = {
+            type: "function_call", name: "collaboration__spawn_agent", call_id: "call_deferred_spawn",
+            arguments: JSON.stringify({ message: "verify", model }),
+          };
+          const expected = {
+            message: "verify",
+            ...(model === "advertised-model" ? { model } : parentModel ? { model: parentModel } : {}),
+          };
+          const response = rewriteNamespaceResponsePayload({ output: [item] }, lookups, parentModel);
+          assert.equal(response.output[0].namespace, "collaboration");
+          assert.equal(response.output[0].name, "spawn_agent");
+          assert.deepEqual(JSON.parse(response.output[0].arguments), expected);
+          const stream = await collect(Readable.from([
+            `data: ${JSON.stringify({ type: "response.output_item.done", item })}\n\n`,
+          ]).pipe(new NamespaceToolCallTransform(flat.namespaces, "text/event-stream", parentModel)));
+          const event = JSON.parse(stream.trim().slice(5));
+          assert.equal(event.item.namespace, "collaboration");
+          assert.equal(event.item.name, "spawn_agent");
+          assert.deepEqual(JSON.parse(event.item.arguments), expected);
+        }
+      }
+      assert.deepEqual(tools, before);
+    });
+  }
+}
 
 test("stream response keeps an omitted spawn-agent model on its routed parent", async () => {
   const { namespaces } = flattenNamespaceTools(clientRoutedTools());

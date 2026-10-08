@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import test from "node:test";
 
 import {
@@ -147,4 +148,40 @@ test("process identity probes distinguish an absent process from an unknown prob
     }),
     { state: "unknown" },
   );
+});
+
+test("Windows identity query failure cannot be encoded as a missing PID", () => {
+  let script;
+  assert.deepEqual(processStartIdentityProbe(4242, {
+    platform: "win32",
+    spawn: (_command, args) => { script = args.at(-1); return { status: 1, stdout: "" }; },
+  }), { state: "unknown" });
+  assert.match(script, /Get-Process -ErrorAction Stop/);
+  assert.match(script, /Where-Object \{ \$_\.Id -eq 4242 \}/);
+  assert.match(script, /catch \{ exit 1 \}/);
+  assert.doesNotMatch(script, /SilentlyContinue/);
+});
+
+test("the real Windows identity query answers for this process and an absent PID", { skip: process.platform !== "win32" }, () => {
+  // Allow the CI host to cold-start PowerShell without widening production's
+  // runtime defaults. Query only this test process and an impossible Win32 PID.
+  const options = { platform: "win32", budget: COLD_START_WINDOWS_PROBE_BUDGET };
+  const alive = processStartIdentityProbe(process.pid, options);
+  assert.equal(alive.state, "alive");
+  assert.ok(alive.identity.toLowerCase().endsWith(`|${process.execPath.toLowerCase()}`), alive.identity);
+  assert.deepEqual(processStartIdentityProbe(Number.MAX_SAFE_INTEGER, options), { state: "absent" });
+});
+
+test("a real PowerShell query error stays unknown rather than becoming absence", { skip: process.platform !== "win32" }, () => {
+  // Replace just this subprocess's cmdlet with an advanced function that
+  // emits a nonterminating query error. The old SilentlyContinue script
+  // suppressed it, obtained null, and incorrectly returned exit 3 (absent).
+  const result = processStartIdentityProbe(4242, {
+    platform: "win32", budget: COLD_START_WINDOWS_PROBE_BUDGET,
+    spawn: (executable, args, options) => spawnSync(executable, [
+      ...args.slice(0, -1),
+      "function Get-Process { [CmdletBinding()] param([int]$Id); Write-Error 'fixture query unavailable' }; " + args.at(-1),
+    ], options),
+  });
+  assert.deepEqual(result, { state: "unknown" });
 });

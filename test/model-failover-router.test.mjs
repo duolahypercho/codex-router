@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -417,6 +417,53 @@ function streamGateway() {
     },
   };
 }
+
+test("Devin permission diagnosis stays provider-scoped for turns and compaction", async () => {
+  const devin = {
+    ...GROQ_CANDIDATE,
+    slug: "devin-cli/permission-diagnosis-fixture",
+    gatewayModel: "devin-cli-permission-diagnosis-fixture",
+    upstreamModel: "swe-1",
+    provider: "devin-cli",
+    displayName: "Devin permission diagnosis fixture",
+    compHash: "devin-permission-diagnosis-fixture-v1",
+  };
+  const seen = [];
+  const gw = await gateway(async (request, response) => {
+    const body = await bodyJson(request);
+    seen.push(body.model);
+    response.writeHead(403, { "Content-Type": "application/json" });
+    response.end(JSON.stringify({ error: {
+      code: "403",
+      message: "litellm.APIError: APIError: OpenAIException - Devin refused this request (devin_permission_denied): the upstream reported an MCP configuration issue.",
+    } }));
+  });
+  const routerPort = await openPort();
+  const child = run(routerEnv(gw.port, routerPort), { userModels: [devin] });
+  try {
+    await waitFor(`http://127.0.0.1:${routerPort}/health`, child);
+    for (const endpoint of ["/responses", "/responses/compact"]) {
+      for (const [model, type] of [[devin.slug, "permission_error"], [PRIMARY.slug, "authentication_error"]]) {
+        const result = await readRouted(routerPort, compactBody(model), { endpoint });
+        assert.equal(result.status, 403);
+        const error = JSON.parse(result.body).error;
+        assert.equal(error.type, type, `${endpoint} ${model}`);
+        if (model === devin.slug) {
+          assert.match(error.message, /MCP configuration issue/);
+          assert.doesNotMatch(error.message, /Sign in|OAuth session|Re-run codex-router setup/);
+        } else {
+          assert.match(error.message, /Re-run codex-router setup/);
+        }
+      }
+    }
+    assert.deepEqual(seen, [devin.gatewayModel, PRIMARY.gatewayModel, devin.gatewayModel, PRIMARY.gatewayModel]);
+    assert.doesNotMatch(child.testErrors(), /failover model=/);
+  } finally {
+    await stopChild(child);
+    await closeServer(gw.server);
+    rmSync(child.stateDir, { recursive: true, force: true });
+  }
+});
 
 test("a turn whose provider is out of usage is served by the next model", async () => {
   const seen = [];

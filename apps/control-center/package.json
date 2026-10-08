@@ -35,5 +35,10 @@
     "typescript": "7.0.2",
     "vite": "8.2.1",
     "wait-on": "9.1.0"
+  },
+  "overrides": {
+    "concurrently": {
+      "shell-quote": "1.11.0"
+    }
   }
 }

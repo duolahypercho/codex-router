@@ -1,0 +1,1 @@
+- **Canceled turns close their acquired gateway stream even before the next provider read.** The locked LiteLLM Chat-to-Responses bridge now delegates cleanup to its existing HTTP-stream closer, so cancellation can stop the forwarder and upstream without waiting for another event or replaying the turn. Existing stream timing and retry policies are unchanged.

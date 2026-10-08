@@ -41,8 +41,10 @@ import {
   formatErrorChain,
   HOP_BY_HOP_HEADERS,
   MAX_BUFFERED_RESPONSE_BYTES,
+  MAX_BODY_BYTES,
   httpErrorStatus,
   installGracefulShutdown,
+  markResponsesStream,
   pipeResponse,
   readResponseBody,
   readRequestBody,
@@ -80,6 +82,7 @@ import {
 } from "./grok-tool-facade.mjs";
 import { applyGrokFileToolsOverlay } from "./instruction-overlays.mjs";
 import { ResponsesHeartbeatTransform } from "./responses-heartbeat.mjs";
+import { responsesStreamFailureTransform } from "./responses-stream-failure.mjs";
 import { messagePhaseTransform } from "./message-phase.mjs";
 import { translatedToolMessageCompatTransform } from "./deepseek-tool-message-compat.mjs";
 import {
@@ -92,6 +95,7 @@ import {
   MERGED_CATALOG_PATH,
   NATIVE_CATALOG_PATH,
   PORTS,
+  TARGET,
   loopback,
 } from "./paths.mjs";
 import {
@@ -269,6 +273,7 @@ import { readHiddenModels } from "./model-picker-state.mjs";
 import { readVisionBridgeSettings } from "./vision-bridge-state.mjs";
 import { installedNativeVisionEngines } from "./vision-engines.mjs";
 import { ageToolResults } from "./tool-result-aging.mjs";
+import { MAX_IMAGE_HISTORY_BYTES, readResponsesRequest } from "./responses-request-body.mjs";
 import {
   IMAGE_REJECTION_MAX_RETRIES,
   boundImagePayload,
@@ -461,6 +466,15 @@ const MAX_DECODED_BODY_BYTES =
   Number.isFinite(configuredDecodedBodyBytes) && configuredDecodedBodyBytes > 0
     ? Math.floor(configuredDecodedBodyBytes)
     : 256 * 1024 * 1024;
+// The streaming history allowance is for the default visual-session path.
+// Explicit wire/decoded caps retain their meaning at ingress and every decoder.
+const explicitBodyLimit = process.env.MODEL_ROUTER_MAX_BODY_BYTES ||
+  (TARGET === "codex" && (process.env.CODEX_ROUTER_MAX_BODY_BYTES || process.env.KIMI_PROXY_MAX_BODY_BYTES));
+const INCOMING_HISTORY_WIRE_BYTES = explicitBodyLimit
+  ? positiveByteLimit(MAX_BODY_BYTES, 128 * 1024 * 1024) : MAX_IMAGE_HISTORY_BYTES;
+const INCOMING_HISTORY_DECODED_BYTES =
+  process.env.MODEL_ROUTER_MAX_DECODED_BODY_BYTES || process.env.CODEX_ROUTER_MAX_DECODED_BODY_BYTES
+    ? MAX_DECODED_BODY_BYTES : MAX_IMAGE_HISTORY_BYTES;
 const configuredActiveRequests = Number(
   process.env.MODEL_ROUTER_MAX_ACTIVE_REQUESTS ||
     process.env.CODEX_ROUTER_MAX_ACTIVE_REQUESTS ||
@@ -1591,14 +1605,10 @@ function writeEmptyCompletionError(response, code, message) {
   });
 }
 
-// Codex treats a streamed Responses `error` event as terminal, but can keep a
-// Grok OAuth turn open while its HTTP client retries a bare gateway 5xx. The
-// local Grok gateway has already exhausted its bounded retries by the time this
-// branch runs, so a second retry loop in the client only turns a stated outage
-// into a stale Working badge. Preserve every other provider's existing HTTP
-// contract, plus ordinary JSON errors for non-streaming Grok calls and its
-// actionable 4xx responses; only the observed terminal Grok shape crosses the
-// Responses SSE boundary this way.
+// State a terminal Grok gateway outage on its existing streaming surface.
+// The gateway has already exhausted its bounded retries; client stream retries
+// still follow that client's policy. Preserve every other provider's HTTP
+// contract, plus JSON errors for non-streaming Grok calls and actionable 4xx.
 function writeTranslatedGatewayError(
   response,
   status,
@@ -3563,6 +3573,7 @@ async function handleRoutedCompaction(
       status: result.status,
       bodyText,
       modelName: servedRoute.displayName || servedRoute.slug,
+      providerId: servedRoute.provider,
       providerName:
         provider?.transport === "ollama"
           ? "Ollama"
@@ -3981,7 +3992,10 @@ async function buildRoutedRequest({ request, payload, route, agedInput }) {
               recoverWithoutRelay: true,
               toolChoice: routedToolChoice,
             }
-          : undefined,
+          // Every provider still needs the forced choice: it can name a
+          // withheld deferred tool, and only the relay can put that
+          // definition back before the request leaves.
+          : { toolChoice: routedToolChoice },
       );
     } catch (error) {
       if (provider?.id !== "groq" || !(error instanceof ToolSearchHistoryCapacityError)) {
@@ -4006,6 +4020,13 @@ async function buildRoutedRequest({ request, payload, route, agedInput }) {
       // Stored tool-search results can introduce definitions after the first
       // repair pass, so enforce the same boundary on the expanded inventory.
       tools = repairToolSchemaRoots(tools, { nonRecursive: true });
+    }
+    if (needsMoonshotSchemaCompatibility(route)) {
+      // For the same reason: a discovered definition, or one restored because
+      // the transcript already called it, arrives after the repair above and
+      // would otherwise reach Moonshot's validator with the sibling `$ref` it
+      // rejects the whole request over.
+      tools = repairToolSchemaRoots(tools, { inlineForeignRefs: true, declareTypes: true });
     }
   }
   if (needsCommandCodeGeminiToolSchemaCompatibility(route)) {
@@ -4207,6 +4228,7 @@ function prepareProviderInput(
   });
   const bounded = boundImagePayload(aged.input, {
     ...imageLimits,
+    protectPending: true,
     tokensPerImage: maxImageTokensForRoute(route),
   });
   return {
@@ -4465,6 +4487,7 @@ function writeIdleNoProviderError(response) {
 }
 
 async function handleResponses(request, response, requestUrl) {
+  markResponsesStream(response);
   const startedAt = Date.now();
   const controller = new AbortController();
   const activity = beginRequestActivity({ request, response, controller });
@@ -4522,11 +4545,21 @@ async function handleResponses(request, response, requestUrl) {
   try {
     if (!requireCodexTransport(request, response)) return;
     const exactRouteProbe = exactRouteProbeRequested(request.headers);
-    const encoded = await readRequestBody(request, { signal: controller.signal });
-    const body = await decodeBody(encoded, request.headers["content-encoding"]);
-    let payload = await parseBodyAsync(body);
+    const contentEncoding = String(request.headers["content-encoding"] || "");
+    const compressed = contentEncoding.split(",").some((value) => value.trim() && value.trim().toLowerCase() !== "identity");
+    const received = await readResponsesRequest(request, {
+      signal: controller.signal,
+      maxBytes: compressed ? MAX_DECODED_BODY_BYTES : MAX_BODY_BYTES,
+      maxWireBytes: INCOMING_HISTORY_WIRE_BYTES,
+      maxHistoryBytes: INCOMING_HISTORY_DECODED_BYTES,
+    });
+    let payload = received.payload;
+    if (received.stats.imagesDropped > 0) {
+      console.error(`[codex-router] bounded incoming image history dropped=${received.stats.imagesDropped} image-bytes-saved=${received.stats.imageBytesSaved} decoded-bytes=${received.stats.decodedBytes}`);
+    }
     controller.signal.throwIfAborted();
     requestedModel = typeof payload.model === "string" ? payload.model : "";
+    markResponsesStream(response, { model: requestedModel });
     let registeredRoute =
       MODEL_BY_SLUG.get(requestedModel) ??
       MODEL_BY_SLUG.get(readNativeAliases()[requestedModel]);
@@ -5185,6 +5218,7 @@ async function handleResponses(request, response, requestUrl) {
         // second `.text()` on the same response yields "".
         bodyText: failedBodyText ?? "",
         modelName: route.displayName || route.slug,
+        providerId: route.provider,
         providerName:
           provider?.transport === "ollama"
             ? "Ollama"
@@ -5389,14 +5423,18 @@ async function handleResponses(request, response, requestUrl) {
       // always wins. Native streams already carry the label and gain no stage.
       const messagePhase = route ? messagePhaseTransform(contentType) : undefined;
       if (messagePhase) transforms.push(messagePhase);
-      // Last, so no router stage ever parses a heartbeat: while a Grok stream is
-      // silent, keep the client's idle timer from abandoning a live turn.
+      // After the content rewrites, so they never consume a heartbeat: while
+      // Grok is silent, keep the client's idle timer from abandoning a live turn.
       if (
         isGrokOauthRoute(route) &&
         String(contentType).toLowerCase().includes("text/event-stream")
       ) {
         transforms.push(new ResponsesHeartbeatTransform({ intervalMs: GROK_HEARTBEAT_MS }));
       }
+      // Observe the exact egress after every rewrite, hold, and heartbeat. A
+      // discarded attempt never announces its identity to this observer.
+      const failureMetadata = responsesStreamFailureTransform(response, contentType);
+      if (failureMetadata) transforms.push(failureMetadata);
       return { transforms, usageObserver, guard, leakedToolCalls };
     };
     // The guard's pre-content budget scales with this request's size: a large
@@ -5405,7 +5443,7 @@ async function handleResponses(request, response, requestUrl) {
     // on a ~577k-token turn).
     const requestPreludeMs = preludeBudgetMs({
       baseMs: EMPTY_COMPLETION_PRELUDE_MS,
-      requestBytes: typeof body?.length === "number" ? body.length : 0,
+      requestBytes: received.stats.retainedBodyBytes,
     });
     const firstPipeline = createResponsePipeline(upstreamContentType, requestPreludeMs);
     usageTransform = firstPipeline.usageObserver;

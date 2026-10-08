@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
+import { constants as bufferConstants } from "node:buffer";
 import test from "node:test";
 
 import {
   boundImagePayload,
+  boundedJsonByteLength,
   IMAGE_PAYLOAD_BUDGET_BYTES,
   IMAGE_PAYLOAD_BUDGET_TOKENS,
   IMAGE_PAYLOAD_KEEP_NEWEST,
@@ -213,4 +215,46 @@ test("a tighter budget on a route with no per-image charge keeps the token check
   // disabling it, and the byte half still trims.
   const next = boundImagePayload(input, { ...limits, tokensPerImage: 0 });
   assert.ok(next.stats.imageReferencesDropped > 0);
+});
+
+test("a protected current image batch is never cut or resent unchanged", () => {
+  const input = [
+    { type: "function_call", name: "view_image", arguments: "{}" },
+    { type: "function_call_output", output: Array.from({ length: 60 }, tinyImage) },
+  ];
+  const bounded = boundImagePayload(input, { protectPending: true });
+  assert.equal(bounded.input, input);
+  assert.equal(bounded.stats.imageReferencesProtected, 60);
+  assert.equal(bounded.stats.imageReferencesDropped, 0);
+  assert.equal(tighterImageBudget(bounded.stats), undefined);
+});
+
+test("bounded JSON sizing matches UTF-8 JSON including escapes, numbers and envelope overhead", () => {
+  const values = [
+    { input: 'é文😀\\"\n\ud800\udc00\ud800', '\n文': [true, false, null, 1e30, -0, Infinity], empty: {} },
+    ["", [], {}, [undefined, , "😀"], { omitted: undefined, retained: "x" }],
+    { input: Array.from({ length: 8 }, (_, index) => ({ role: "user", content: `${index}文` })) },
+  ];
+  for (const value of values) {
+    const expected = Buffer.byteLength(JSON.stringify(value));
+    assert.equal(boundedJsonByteLength(value), expected);
+    assert.equal(boundedJsonByteLength(value, expected), expected);
+    assert.equal(boundedJsonByteLength(value, expected - 1), expected);
+    assert.equal(boundedJsonByteLength(value, 8), 9);
+  }
+});
+
+test("bounded JSON sizing stops before visiting an over-budget tail", () => {
+  const value = { input: "x".repeat(1_024), get unvisited() { throw new Error("tail must not be visited"); } };
+  assert.equal(boundedJsonByteLength(value, 64), 65);
+  const cycle = {};
+  cycle.self = cycle;
+  assert.throws(() => boundedJsonByteLength(cycle), { status: 400 });
+});
+
+test("aggregate JSON larger than V8's string limit is rejected without materializing it", () => {
+  const segment = "x".repeat(8 * 1024 * 1024);
+  const input = Array.from({ length: Math.ceil(bufferConstants.MAX_STRING_LENGTH / segment.length) + 1 }, () => segment);
+  assert.ok(input.length * segment.length > bufferConstants.MAX_STRING_LENGTH);
+  assert.equal(boundedJsonByteLength({ input }, 1_024), 1_025);
 });

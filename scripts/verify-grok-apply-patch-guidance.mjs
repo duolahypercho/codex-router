@@ -27,6 +27,10 @@ const nativeHook = process.argv.includes("--native-hook");
 const hookEndpoint = process.argv.includes("--native-hook-endpoint");
 if (hookEndpoint && !nativeHook) throw new Error("--native-hook-endpoint requires --native-hook");
 const structured = nativeHook || process.argv.includes("--structured");
+const cancellationBoundaryControl = process.argv.includes("--cancel-before-next-provider-read");
+if (cancellationBoundaryControl && !nativeHook) {
+  throw new Error("--cancel-before-next-provider-read requires --native-hook");
+}
 const codexBinary = process.argv.find((arg) => arg.startsWith("--codex="))?.slice("--codex=".length);
 if (codexBinary && !structured) throw new Error("--codex requires --structured or --native-hook");
 const nativeFault = process.argv.find((arg) => arg.startsWith("--native-fault="))?.slice("--native-fault=".length);
@@ -557,6 +561,35 @@ try {
     { mode: 0o600 },
   );
   const litellmConfig = path.join(workspace, "litellm.yaml");
+  const cancellationBoundaryMarker = path.join(workspace, "cancellation-boundary-entered");
+  writeFileSync(
+    path.join(workspace, "litellm_stream_cleanup_callback.py"),
+    readFileSync(path.join(root, "src", "litellm_stream_cleanup_callback.py")),
+    { mode: 0o600 },
+  );
+  if (cancellationBoundaryControl) {
+    // Test-only scheduling boundary: the provider stream is already acquired,
+    // but cancellation lands before the next provider read. Blocking that read
+    // makes cleanup observable independently of read-time cancellation and GC.
+    // Only this temporary fixture module holds; the shipping callback never does.
+    writeFileSync(path.join(workspace, "cancellation_boundary_callback.py"), `
+import asyncio
+import json
+from pathlib import Path
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.responses.litellm_completion_transformation.streaming_iterator import LiteLLMCompletionStreamingIterator
+original_next = LiteLLMCompletionStreamingIterator.__anext__
+async def held_next(self):
+    if not getattr(self, "_fixture_initial_event_seen", False):
+        self._fixture_initial_event_seen = True
+    elif "CODEC_CANCEL_WIRE" in json.dumps(self.request_input):
+        Path(${JSON.stringify(cancellationBoundaryMarker)}).write_text("held", encoding="utf-8")
+        await asyncio.Event().wait()
+    return await original_next(self)
+LiteLLMCompletionStreamingIterator.__anext__ = held_next
+cancellation_boundary_callback = CustomLogger()
+`, { mode: 0o600 });
+  }
   writeFileSync(
     litellmConfig,
     [
@@ -570,6 +603,7 @@ try {
       "      num_retries: 0",
       "",
       "litellm_settings:",
+      `  callbacks: [litellm_stream_cleanup_callback.stream_cleanup_callback${cancellationBoundaryControl ? ", cancellation_boundary_callback.cancellation_boundary_callback" : ""}]`,
       "  drop_params: true",
       "  request_timeout: 60",
       "",
@@ -749,6 +783,13 @@ try {
     while (!cancelStreamClosed && Date.now() < startedDeadline) {
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
+    if (cancellationBoundaryControl) {
+      const boundaryDeadline = Date.now() + 10_000;
+      while (!existsSync(cancellationBoundaryMarker) && Date.now() < boundaryDeadline) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      assert.ok(existsSync(cancellationBoundaryMarker), "the cancellation control must hold before the next provider read");
+    }
     canceler.abort();
     const canceled = await held;
     assert.ok(cancelStreamClosed, "the canceled request must have reached the mock upstream");
@@ -775,8 +816,12 @@ try {
       new Promise((resolve) => { closeTimer = setTimeout(() => resolve(false), CANCEL_CLOSE_BUDGET_MS); }),
     ]).finally(() => clearTimeout(closeTimer));
     const cancelCloseMs = Date.now() - cancelCloseStarted;
+    assert.equal(capturedGrok.length, 4, "client cancellation must not trigger a replay during the upstream-close wait");
     if (!cancelClosed) {
       throw new Error(`cancellation did not reach mock upstream within ${CANCEL_CLOSE_BUDGET_MS} ms on ${process.platform}`);
+    }
+    if (cancellationBoundaryControl) {
+      process.stdout.write("ok cancellation before the next provider read closes the acquired stream without replay\n");
     }
     if (cancelCloseMs > CANCEL_CLOSE_EXPECTED_MS) {
       process.stdout.write(`::warning title=Grok cancellation::upstream close took ${cancelCloseMs} ms on ${process.platform}, over the ${CANCEL_CLOSE_EXPECTED_MS} ms this path used to need\n`);
