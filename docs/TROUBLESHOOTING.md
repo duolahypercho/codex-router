@@ -588,6 +588,29 @@ conflict.
 
 ## The background service is stopped
 
+Repeated automatic startup probe timeouts or unavailable Windows identity
+probes pause the next attempt for 1, 2, 4, 8, then at most 15 minutes. The service
+log says `backing off` and Windows may report `LastTaskResult=0x45` (exit 69).
+Configuration, credential, child-exit and mismatched-identity failures still
+need repair; the cooldown does not make them healthy.
+
+Use `node src/service.mjs start` or `node src/service.mjs restart` to reset the
+cooldown. A reset that fails reports an error before launching. A replacement
+also resets after the old service stops, so an old failure cannot hold it back.
+`bin/start --foreground` (Windows: `codex-router.ps1 start --foreground`) keeps
+its existing lifecycle lock and neither reads nor changes managed cooldown.
+
+To disable automatic cooldown persistently, set
+`CODEX_ROUTER_DISABLE_STARTUP_BACKOFF=1` when installing or regenerating the
+service definition; `0` restores it. Merely setting it in a shell before
+starting an already-installed service does not change that service's recorded
+environment. A direct payload run reads the shell setting; foreground startup
+always bypasses the cooldown.
+
+If an install reports that automatic startup is deferred, its service remains
+registered and the command returns temporary-failure status 75. Inspect the
+service log, resolve the startup problem, and use start or restart to reset it.
+
 macOS:
 
 ```sh

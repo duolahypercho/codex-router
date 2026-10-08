@@ -174,10 +174,12 @@ export function watchNativeCatalog({
   interval = setInterval,
   clear = clearInterval,
   log = console.error,
+  immediate = false,
 } = {}) {
   let running = false;
-  const timer = interval(async () => {
-    if (running) return;
+  let stopped = false;
+  const refresh = async () => {
+    if (running || stopped) return;
     running = true;
     try {
       await republish();
@@ -186,6 +188,13 @@ export function watchNativeCatalog({
     } finally {
       running = false;
     }
-  }, NATIVE_ACCOUNT_CATALOG_TTL_MS);
-  return () => clear(timer);
+  };
+  const timer = interval(refresh, NATIVE_ACCOUNT_CATALOG_TTL_MS);
+  // Background maintenance must not keep a stopped supervisor alive.
+  timer.unref?.();
+  if (immediate) void refresh();
+  return () => {
+    stopped = true;
+    clear(timer);
+  };
 }

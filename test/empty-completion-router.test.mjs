@@ -433,6 +433,81 @@ const TURN_BODY = {
   stream: true,
 };
 
+test("a relayed retry failure uses only the retry's final-egress identity and sequence", async () => {
+  let posts = 0;
+  const identity = { id: "r-tracked-retry", model: TURN_BODY.model, created_at: 1_791_388_800 };
+  const gw = await gateway((_request, response) => {
+    posts += 1;
+    response.writeHead(200, { "Content-Type": "text/event-stream" });
+    if (posts === 1) { response.end(EMPTY_SSE); return; }
+    for (const event of [
+      { type: "response.created", sequence_number: 0, response: { ...identity, status: "in_progress", output: [] } },
+      { type: "response.output_text.delta", sequence_number: 1, delta: "visible retry partial" },
+    ]) response.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+    setTimeout(() => response.socket?.destroy(), 50);
+  });
+  const routerPort = await openPort();
+  const router = run(routerEnv(gw.port, routerPort));
+  try {
+    await waitFor(`${callerBaseUrl(routerPort, CALLER_KEY)}/models`, router);
+    const result = await readRouted(routerPort, TURN_BODY);
+    assert.equal(result.complete, true);
+    assert.equal(posts, 2);
+    assert.match(result.body, /visible retry partial/);
+    assert.doesNotMatch(result.body, /r-empty|response.completed|\[DONE\]/);
+    const block = result.body.split(/\r?\n\r?\n/).find((value) => value.startsWith("event: response.failed"));
+    assert.ok(block, "the canonical Responses handler did not mark and track its relayed retry");
+    const failure = JSON.parse(block.split("\n").find((line) => line.startsWith("data: ")).slice(6));
+    assert.equal(failure.sequence_number, 2);
+    assert.equal(failure.response.id, identity.id);
+    assert.equal(failure.response.model, identity.model);
+    assert.equal(failure.response.created_at, identity.created_at);
+    assert.equal(failure.response.error.code, "server_error");
+    assert.match(failure.response.error.message, /lost the upstream response stream/);
+    const [usage] = await waitForUsageEvents(router.stateDir, 1, router);
+    assert.equal(usage.status, 502);
+    assert.equal(usage.emptyCompletionRetried, true);
+  } finally {
+    await stopChild(router);
+    await closeServer(gw.server);
+  }
+});
+
+test("a reasoning-empty canonical stream emits a typed failure after the completion is withheld", async () => {
+  const identity = { id: "r-tracked-empty", model: TURN_BODY.model, created_at: 1_791_388_800 };
+  let posts = 0;
+  const gw = await gateway((_request, response) => {
+    posts += 1;
+    response.writeHead(200, { "Content-Type": "text/event-stream" });
+    for (const event of [
+      { type: "response.created", sequence_number: 0, response: { ...identity, status: "in_progress", output: [] } },
+      { type: "response.reasoning_text.delta", sequence_number: 1, delta: "thinking fixture" },
+      { type: "response.completed", sequence_number: 2, response: { ...identity, status: "completed", output: [] } },
+    ]) response.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+    response.end();
+  });
+  const routerPort = await openPort();
+  const router = run(routerEnv(gw.port, routerPort));
+  try {
+    await waitFor(`${callerBaseUrl(routerPort, CALLER_KEY)}/models`, router);
+    const result = await readRouted(routerPort, TURN_BODY);
+    assert.equal(result.complete, true);
+    assert.equal(posts, 1, "the router must not replace an already relayed attempt");
+    assert.doesNotMatch(result.body, /event: response.completed|\[DONE\]/);
+    const block = result.body.split(/\r?\n\r?\n/).find((value) => value.startsWith("event: response.failed"));
+    assert.ok(block);
+    const failure = JSON.parse(block.split("\n").find((line) => line.startsWith("data: ")).slice(6));
+    assert.equal(failure.sequence_number, 2, "withheld terminal numbering must not pollute egress context");
+    assert.equal(failure.code, "empty_completion");
+    assert.equal(failure.response.id, identity.id);
+    assert.equal(failure.response.error.code, "server_error");
+    assert.match(failure.response.error.message, /streamed reasoning but produced no output/);
+  } finally {
+    await stopChild(router);
+    await closeServer(gw.server);
+  }
+});
+
 test("a large initial event preserves a namespaced tool call without retrying", async () => {
   const tool = {
     type: "function_call", id: "fc_1", call_id: "call_1",

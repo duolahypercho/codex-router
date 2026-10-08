@@ -17,6 +17,7 @@ import { privateFileIsProtected } from "../src/file-security.mjs";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const callbackSourcePath = path.join(root, "src", "grok_service_tier_callback.py");
 const callbackSource = readFileSync(callbackSourcePath);
+const cleanupCallbackSource = readFileSync(path.join(root, "src", "litellm_stream_cleanup_callback.py"));
 
 // Keep the checked-in registry isolated from the machine's curated models and
 // never write the live gateway config. An explicit target is the contract this
@@ -31,6 +32,8 @@ const { routedModel } = await import("../src/catalog.mjs");
 
 const CALLBACK_NAME = "grok_service_tier_callback.py";
 const CALLBACK_REF = "grok_service_tier_callback.grok_service_tier_callback";
+const CLEANUP_NAME = "litellm_stream_cleanup_callback.py";
+const CLEANUP_REF = "litellm_stream_cleanup_callback.stream_cleanup_callback";
 
 function withScratch(run) {
   const scratch = mkdtempSync(path.join(os.tmpdir(), "grok-fast-config-write-"));
@@ -70,6 +73,7 @@ function publishedCallbackAndYaml(scratch) {
     target,
     sibling,
     callbackPath: path.join(gatewayDir, CALLBACK_NAME),
+    cleanupPath: path.join(gatewayDir, CLEANUP_NAME),
   };
 }
 
@@ -78,7 +82,7 @@ test.after(() => {
 });
 
 // The baseline wrote YAML only. Verify publication and permissions of the new
-// sibling callback, including repeated writes without leftover temporary files.
+// sibling callbacks, including repeated writes without leftover temporary files.
 test("writeLiteLlmConfig publishes the repository callback privately beside generated YAML", () => {
   withScratch((scratch) => {
     const first = publishedCallbackAndYaml(scratch);
@@ -87,13 +91,15 @@ test("writeLiteLlmConfig publishes the repository callback privately beside gene
 
     assert.equal(first.target, path.join(first.gatewayDir, "litellm.yaml"));
     assert.equal(yaml.toString("utf8"), renderLiteLlmConfig());
-    assert.ok(yaml.toString("utf8").includes(`callbacks: [${CALLBACK_REF}]`));
+    assert.ok(yaml.toString("utf8").includes(`callbacks: [${CALLBACK_REF}, ${CLEANUP_REF}]`));
     assert.equal(Buffer.compare(publishedCallback, callbackSource), 0);
-    assert.deepEqual(readdirSync(first.gatewayDir).sort(), [CALLBACK_NAME, "litellm.yaml"]);
+    assert.deepEqual(readdirSync(first.gatewayDir).sort(), [CALLBACK_NAME, CLEANUP_NAME, "litellm.yaml"].sort());
     assert.deepEqual(leftoverTemps(scratch), []);
     assert.equal(readFileSync(first.sibling, "utf8"), "leave this file alone\n");
     assertPrivateFile(first.target);
     assertPrivateFile(first.callbackPath);
+    assertPrivateFile(first.cleanupPath);
+    assert.equal(Buffer.compare(readFileSync(first.cleanupPath), cleanupCallbackSource), 0);
     if (process.platform !== "win32") {
       assert.equal(statSync(first.gatewayDir).mode & 0o777, 0o700);
     }
@@ -101,10 +107,12 @@ test("writeLiteLlmConfig publishes the repository callback privately beside gene
     writeLiteLlmConfig(first.target);
     assert.equal(Buffer.compare(readFileSync(first.callbackPath), callbackSource), 0);
     assert.equal(readFileSync(first.target, "utf8"), yaml.toString("utf8"));
-    assert.deepEqual(readdirSync(first.gatewayDir).sort(), [CALLBACK_NAME, "litellm.yaml"]);
+    assert.deepEqual(readdirSync(first.gatewayDir).sort(), [CALLBACK_NAME, CLEANUP_NAME, "litellm.yaml"].sort());
     assert.deepEqual(leftoverTemps(scratch), []);
     assertPrivateFile(first.target);
     assertPrivateFile(first.callbackPath);
+    assertPrivateFile(first.cleanupPath);
+    assert.equal(Buffer.compare(readFileSync(first.cleanupPath), cleanupCallbackSource), 0);
   });
 });
 

@@ -1269,6 +1269,30 @@ The caller-authenticated health endpoint reports these limits, aggregate
 in-flight counts, bounded-buffer ceilings, and encrypted-relay cache metrics;
 the public health endpoint omits that resource detail.
 
+`CODEX_ROUTER_APP_CONNECTORS` can withhold the Codex app connectors from a
+routed Chat Completions or Messages model. Codex can send its full connector
+registry (`mcp__codex_apps__github`, `mcp__codex_apps__notion`, ...), adding
+hundreds of tool schemas to a turn. Supply the variable when installing or
+regenerating the service; the Linux, macOS, and Windows service definitions
+retain the setting until regenerated again. Restart an already-running service
+after changing its environment. A foreground router reads it from its launch
+environment. The setting is opt-in:
+
+- unset or empty: keep ordinary connector functions eager.
+- `none`: withhold every connector function.
+- `all`: keep ordinary connector functions eager, stated explicitly.
+- `airtable,gmail`: keep those connectors eager and withhold the rest;
+  trimmed, case-insensitive, unknown ids ignored.
+
+A withheld function is re-declared when stored call history, a forced choice,
+or an allowed-tools choice names it. With a client-executed `tool_search`,
+marked deferred functions can also be loaded through the existing search relay.
+Codex's own app tools, the collaboration runtime, the repls, image generation,
+and custom tools are outside connector selection. Explicitly deferred functions
+still follow the client tool-search contract; custom tools remain visible.
+Responses compatibility routes that translate namespace tools also use this
+policy; routes that preserve native namespace declarations bypass it.
+
 For routed external models, old textual tool results larger than 32 KiB are
 compacted after the model has acted on them. The four newest tool results stay
 intact, and each compacted result keeps a hash, head/tail evidence, and an exact

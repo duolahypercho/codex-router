@@ -1,0 +1,1 @@
+- Update the shared Python gateway to patched LiteLLM 1.96.2, multidict 6.9.1 and urllib3 2.8.0 in both installers and Homebrew, preserving streaming cancellation and the FastAPI startup compatibility pin.

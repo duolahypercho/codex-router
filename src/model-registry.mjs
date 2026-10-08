@@ -496,6 +496,12 @@ function endpointProblem(model, provider) {
   if (!/^https?:\/\//.test(endpoint.baseUrl || "")) {
     return `model ${model.slug} endpoint requires an HTTP(S) baseUrl`;
   }
+  if (
+    endpoint.protocol !== undefined &&
+    !["openai", "anthropic", "openai-responses"].includes(endpoint.protocol)
+  ) {
+    return `model ${model.slug} endpoint has an unsupported API protocol`;
+  }
   if (endpoint.authMode !== undefined && endpoint.authMode !== "anonymous") {
     return `model ${model.slug} endpoint has an unsupported authMode`;
   }
@@ -673,9 +679,12 @@ function modelProblem(model, providers, slugs, gatewayModels) {
     } catch (error) {
       return error instanceof Error ? error.message : String(error);
     }
-    const conversational = providerModelEndpoint(provider);
+    const protocolProvider = provider.perModelEndpoint
+      ? { ...provider, protocol: model.endpoint?.protocol ?? "openai" }
+      : provider;
+    const conversational = providerModelEndpoint(protocolProvider);
     if (!conversational && supported.includes("/embeddings")) {
-      return `model ${model.slug} cannot declare OpenAI endpoints for provider protocol ${provider.protocol}`;
+      return `model ${model.slug} cannot declare OpenAI endpoints for provider protocol ${protocolProvider.protocol}`;
     }
     if (model.listed && (!conversational || !supported.includes(conversational))) {
       return `listed model ${model.slug} must support its provider's conversational endpoint`;
@@ -1103,6 +1112,12 @@ export const MODEL_BY_GATEWAY_ID = new Map(
 
 export function providerForModel(model) {
   const provider = RUNTIME_PROVIDERS.get(model.provider);
+  // The container keeps provider identity and selection; the model owns its
+  // protocol, address and credential. Do not copy endpoint identity or auth
+  // into this descriptor, which consumers still use as the provider.
+  if (provider?.perModelEndpoint) {
+    return { ...provider, protocol: model.endpoint?.protocol ?? "openai" };
+  }
   // One credential/provider identity can serve both its legacy Chat aliases
   // and the current direct Flash model's native Responses contract.
   return usesDeepSeekResponses(model) && provider

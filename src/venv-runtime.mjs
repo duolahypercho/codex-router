@@ -8,12 +8,12 @@ import { spawnSync } from "node:child_process";
 
 import { startupTimeoutMs } from "./startup-timeout.mjs";
 
-// Returns undefined when the interpreter runs, or a human-readable reason it
-// cannot. `spawn` is injectable so tests can stub it without forking.
+// Report the final bounded probe outcome. `spawn` is injectable so tests can
+// stub it without forking; permanent failures do not spend the timeout retry.
 // Explicit timeouts win; otherwise the VDI-tunable environment applies, and
 // the shipped bounds hold when it is unset. These cover process-start latency
 // only — a fast genuine failure (ENOENT, bad exit) still reports at once.
-export function venvRuntimeProblem(
+export function venvRuntimeOutcome(
   python,
   { spawn = spawnSync, timeoutMs, retryTimeoutMs } = {},
 ) {
@@ -41,12 +41,18 @@ export function venvRuntimeProblem(
   }
   if (probe.error) {
     return probe.error.code === "ETIMEDOUT"
-      ? `timed out after ${retryMs} ms; transient process scheduling pressure is possible and this is not proof of a broken virtual environment`
-      : probe.error.message;
+      ? { kind: "timeout", message: `timed out after ${retryMs} ms; transient process scheduling pressure is possible and this is not proof of a broken virtual environment` }
+      : { kind: "failed", message: probe.error.message };
   }
   if (probe.status !== 0) {
     const detail = (probe.stderr || "").trim() || "no stderr";
-    return `exited with code ${probe.status}: ${detail}`;
+    return { kind: "failed", message: `exited with code ${probe.status}: ${detail}` };
   }
-  return undefined;
+  return { kind: "ok" };
+}
+
+// Preserve the string API used by doctor and dependency installation. The
+// startup supervisor consumes the typed outcome without running a second probe.
+export function venvRuntimeProblem(python, options) {
+  return venvRuntimeOutcome(python, options).message;
 }

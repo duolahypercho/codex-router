@@ -52,6 +52,7 @@ test("Kimi OAuth refresh coordinates with the official CLI and handles terminal 
       return;
     }
     await next.wait;
+    next.beforeRespond?.();
     response.writeHead(next.status, { "Content-Type": "application/json" });
     response.end(JSON.stringify(next.body));
   });
@@ -148,6 +149,37 @@ test("Kimi OAuth refresh coordinates with the official CLI and handles terminal 
         (error) => error?.status === 401 && /login/.test(error.message),
       );
       assert.equal(requests.length, afterRejection);
+    });
+
+    await t.test("reports real lock release failures without losing the refresh failure", async () => {
+      const blocker = path.join(lockDirectory, "removal-blocker");
+      for (const status of [200, 401]) {
+        writeToken(credentialsPath, token("release-access", "release-refresh", Math.floor(Date.now() / 1000) + 120));
+        responses.push({
+          status,
+          body: status === 200
+            ? { access_token: "refreshed-before-release-error", refresh_token: "rotated-refresh", expires_in: 3600 }
+            : { error: "invalid_grant" },
+          beforeRespond: () => writeFileSync(blocker, "fixture"),
+        });
+        try {
+          await assert.rejects(ensureFreshKimiOAuthToken({ force: true }), (error) => {
+            const releaseError = status === 401 ? error.lockReleaseError : error;
+            if (status === 401) {
+              assert.equal(error.code, "oauth_unauthorized");
+              assert.equal(error.status, 401);
+            }
+            assert.ok(["ENOTEMPTY", "EEXIST"].includes(releaseError.code));
+            assert.equal(releaseError.syscall, "rmdir");
+            return true;
+          });
+          const saved = JSON.parse(readFileSync(credentialsPath, "utf8"));
+          assert.equal(saved.access_token, status === 200 ? "refreshed-before-release-error" : "");
+        } finally {
+          if (existsSync(blocker)) unlinkSync(blocker);
+          if (existsSync(lockDirectory)) rmdirSync(lockDirectory);
+        }
+      }
     });
   } finally {
     if (previousHome === undefined) delete process.env.KIMI_CODE_HOME;

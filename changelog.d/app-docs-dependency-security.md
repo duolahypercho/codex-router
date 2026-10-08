@@ -1,0 +1,1 @@
+- **Control Center development commands and documentation builds use patched dependencies.** Scoped npm overrides pin `shell-quote` to 1.11.0 and `postcss-selector-parser` to 7.1.6 while preserving the other locked versions.

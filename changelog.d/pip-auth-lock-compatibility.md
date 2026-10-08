@@ -1,0 +1,1 @@
+- Updated the gateway's OAuthlib and PyJWT dependencies while preserving Python 3.10, platform-specific requirements, and padded JWT compatibility; regenerated the matching Homebrew resources from the verified lock.

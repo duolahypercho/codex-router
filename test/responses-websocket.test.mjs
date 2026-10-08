@@ -1332,6 +1332,125 @@ test("bounds named rate-limit discovery and drops malformed family data", async 
   peer.close();
 });
 
+test("custom WebSocket body limits trim consumed image history before encoding", async (t) => {
+  const bodies = [];
+  const image = () => ({ type: "input_image", image_url: `data:image/png;base64,${"A".repeat(700)}`, detail: "original" });
+  const action = { type: "function_call", call_id: "current", name: "view_image", arguments: "{}" };
+  const initial = Array.from({ length: 3 }, (_, index) => ({
+    type: "function_call_output", call_id: `old-${index}`, output: [image()],
+  }));
+  const current = { type: "function_call_output", call_id: "current", output: [image(), image()] };
+  const instructions = 'é文😀\\"\n\ud800'.repeat(5);
+  const tools = [{ type: "function", name: "view_image", parameters: { type: "object" } }];
+  const { server, port } = await startServer(async (request, response) => {
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk);
+    const raw = Buffer.concat(chunks);
+    assert.ok(raw.length <= 3_000);
+    bodies.push(JSON.parse(raw.toString("utf8")));
+    const id = `resp-images-${bodies.length}`;
+    sse(response, [
+      { type: "response.created", response: { id } },
+      ...(bodies.length === 1 ? [{ type: "response.output_item.done", item: action }] : []),
+      { type: "response.completed", response: { id, usage: {} } },
+    ]);
+  }, { maxMessageBytes: 3_000, maxContinuationBytes: 3_000 });
+  t.after(() => server.close());
+  const { peer } = await connect(port);
+  t.after(() => peer.socket.destroy());
+  peer.sendJson(createRequest({ input: initial }));
+  assert.equal((await peer.nextJson()).type, "response.created");
+  assert.equal((await peer.nextJson()).type, "response.output_item.done");
+  assert.equal((await peer.nextJson()).type, "response.completed");
+  peer.sendJson(createRequest({ previous_response_id: "resp-images-1", input: [current], instructions, tools }));
+  assert.equal((await peer.nextJson()).type, "response.created");
+  assert.equal((await peer.nextJson()).type, "response.completed");
+  assert.equal(bodies.length, 2);
+  assert.ok(bodies[1].input.slice(0, 3).some((item) => item.output[0].type === "input_text"));
+  assert.deepEqual(bodies[1].input.at(-2), action);
+  assert.deepEqual(bodies[1].input.at(-1), current);
+  assert.equal(bodies[1].instructions, instructions);
+  assert.deepEqual(bodies[1].tools, tools);
+  peer.close();
+});
+
+test("prewarm obeys a custom continuation cap without making a provider request", async (t) => {
+  let calls = 0;
+  const { server, port } = await startServer(async (request, response) => {
+    for await (const _chunk of request) {}
+    calls++;
+    sse(response, [{ type: "response.completed", response: { id: "unexpected", usage: {} } }]);
+  }, { maxMessageBytes: 1_024, maxContinuationBytes: 64 });
+  t.after(() => server.close());
+  const { peer } = await connect(port);
+  t.after(() => peer.socket.destroy());
+  peer.sendJson(createRequest({ generate: false, input: [{ role: "user", content: "文".repeat(100) }] }));
+  assert.equal((await peer.nextJson()).type, "response.created");
+  const prewarm = await peer.nextJson();
+  assert.equal(prewarm.type, "response.completed");
+  peer.sendJson(createRequest({ previous_response_id: prewarm.response.id, input: [] }));
+  const retry = await peer.nextJson();
+  assert.equal(retry.status, 409);
+  assert.equal(retry.error.code, "previous_response_not_found");
+  assert.equal(calls, 0);
+  peer.close();
+});
+
+test("reconstructed irreducible text and pending images respect the custom WebSocket cap", async (t) => {
+  for (const content of [
+    [{ type: "input_text", text: "文".repeat(200) }],
+    [{ type: "input_image", image_url: `data:image/png;base64,${"A".repeat(600)}` }],
+  ]) {
+    await t.test(content[0].type, async (t) => {
+      let calls = 0;
+      const { server, port } = await startServer(async (request, response) => {
+        for await (const _chunk of request) {}
+        calls++;
+        sse(response, [{ type: "response.completed", response: { id: "unexpected", usage: {} } }]);
+      }, { maxMessageBytes: 1_024 });
+      t.after(() => server.close());
+      const { peer } = await connect(port);
+      t.after(() => peer.socket.destroy());
+      const input = [{ role: "user", content }];
+      peer.sendJson(createRequest({ generate: false, input }));
+      assert.equal((await peer.nextJson()).type, "response.created");
+      const prewarm = await peer.nextJson();
+      peer.sendJson(createRequest({ previous_response_id: prewarm.response.id, input }));
+      const error = await peer.nextJson();
+      assert.equal(error.status, 413);
+      assert.equal(error.error.type, "request_too_large");
+      assert.equal(calls, 0);
+      peer.close();
+    });
+  }
+});
+
+test("WebSocket JSON nesting is bounded before parsing and ignores quoted delimiters", async (t) => {
+  let calls = 0;
+  const { server, port } = await startServer(async (request, response) => {
+    for await (const _chunk of request) {}
+    calls++;
+    sse(response, [
+      { type: "response.created", response: { id: "resp-nesting-control" } },
+      { type: "response.completed", response: { id: "resp-nesting-control", usage: {} } },
+    ]);
+  }, { maxMessageBytes: 2_048 });
+  t.after(() => server.close());
+  const { peer } = await connect(port);
+  t.after(() => peer.socket.destroy());
+  peer.sendJson(createRequest({ input: [{ role: "user", content: '\\"[{}]'.repeat(100) }] }));
+  assert.equal((await peer.nextJson()).type, "response.created");
+  assert.equal((await peer.nextJson()).type, "response.completed");
+  let deep = 0;
+  for (let index = 0; index < 300; index++) deep = [deep];
+  peer.sendJson(createRequest({ input: deep }));
+  const error = await peer.nextJson();
+  assert.equal(error.status, 400);
+  assert.equal(error.error.type, "invalid_request_error");
+  assert.equal(calls, 1, "excessive nesting must be rejected before an upstream request");
+  peer.close();
+});
+
 test("drops oversized continuation state so Codex retries the full request", async (t) => {
   let calls = 0;
   const { server, port } = await startServer(
@@ -1474,4 +1593,25 @@ test("aborts the internal HTTP request when the WebSocket disappears", async (t)
   await waitFor(() => requestStarted);
   socket.destroy();
   await waitFor(() => requestAborted);
+});
+
+test("releases the upgraded socket when the peer drops without a close frame", async (t) => {
+  const { server, port } = await startServer(async (request, response) => {
+    response.writeHead(200, { "content-type": "application/json" }).end("{}");
+  });
+  const accepted = [];
+  server.on("connection", (socket) => accepted.push(socket));
+  const clients = [];
+  t.after(() => {
+    for (const client of clients) client.socket.destroy();
+    server.close();
+  });
+  for (let index = 0; index < 3; index += 1) clients.push(await connect(port));
+  const [finished, reset, closed] = clients;
+  // A plain FIN, a reset, and a proper close frame: before the fix only the
+  // close frame released the server-side socket.
+  finished.socket.end();
+  reset.socket.resetAndDestroy();
+  closed.peer.close();
+  await waitFor(() => accepted.length === 3 && accepted.every((socket) => socket.destroyed));
 });

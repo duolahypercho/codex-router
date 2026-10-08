@@ -100,9 +100,13 @@ export function processStartIdentityProbe(
   try {
     if (platform === "win32") {
       const script =
-        `$p = Get-Process -Id ${pid} -ErrorAction SilentlyContinue; ` +
+        // Query failure must not become an answered absence. Enumerate under
+        // Stop, then select the PID only after that query succeeds.
+        "$ErrorActionPreference = 'Stop'; try { " +
+        `$p = Get-Process -ErrorAction Stop | Where-Object { $_.Id -eq ${pid} }; ` +
         "if ($null -eq $p) { exit 3 }; " +
-        `[Console]::Out.Write($p.StartTime.ToUniversalTime().Ticks.ToString() + '|' + $p.Path)`;
+        "[Console]::Out.Write($p.StartTime.ToUniversalTime().Ticks.ToString() + '|' + $p.Path) " +
+        "} catch { exit 1 }";
       const result = windowsProbe(script, { spawn, environment, budget });
       const identity = String(result.stdout || "").trim();
       if (result.status === 0 && identity) return { state: "alive", identity };

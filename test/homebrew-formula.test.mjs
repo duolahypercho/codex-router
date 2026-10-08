@@ -30,7 +30,9 @@ test("Homebrew lock selection follows its declared Python version", () => {
     "3.14",
   );
   const versions = new Map(selected.map(({ name, version }) => [name, version]));
-  assert.equal(versions.get("litellm"), "1.96.0");
+  assert.equal(versions.get("litellm"), "1.96.2");
+  assert.equal(versions.get("multidict"), "6.9.1");
+  assert.equal(versions.get("urllib3"), "2.8.0");
   assert.equal(versions.get("fastapi"), "0.139.2");
   assert.equal(versions.get("numpy"), "2.5.1");
   assert.equal(versions.get("rpds-py"), "2026.6.3");

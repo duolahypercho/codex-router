@@ -14,7 +14,7 @@ import {
 import os from "node:os";
 import path from "node:path";
 
-import lockfile from "proper-lockfile";
+import { acquireFileLock, runWithLockRelease } from "./file-lock.mjs";
 
 import { protectPrivateFile } from "./file-security.mjs";
 import { kimiCodeHome, resolveKimiCodeEnvironment } from "./kimi-region.mjs";
@@ -287,7 +287,7 @@ export async function ensureFreshKimiOAuthToken({ force = false } = {}) {
     try {
       mkdirSync(path.dirname(OAUTH_LOCK_TARGET), { recursive: true, mode: 0o700 });
       writeFileSync(OAUTH_LOCK_TARGET, "", { flag: "a", mode: 0o600 });
-      release = await lockfile.lock(OAUTH_LOCK_TARGET, {
+      release = await acquireFileLock(OAUTH_LOCK_TARGET, {
         retries: { retries: 120, factor: 1, minTimeout: 500, maxTimeout: 1_000 },
         stale: 5_000,
         realpath: false,
@@ -297,7 +297,7 @@ export async function ensureFreshKimiOAuthToken({ force = false } = {}) {
       throw transientError("Kimi OAuth refresh lock is unavailable.", error);
     }
 
-    try {
+    return runWithLockRelease(async () => {
       const latest = readKimiOAuthToken();
       if (!force && !shouldRefresh(latest)) return latest.access_token;
       if (force && !sameToken(initial, latest)) return latest.access_token;
@@ -318,13 +318,7 @@ export async function ensureFreshKimiOAuthToken({ force = false } = {}) {
         }
         throw error;
       }
-    } finally {
-      try {
-        await release();
-      } catch {
-        // The lock may have been reaped as stale after a long network pause.
-      }
-    }
+    }, release);
   })().finally(() => {
     if (refreshInFlight?.promise === promise) refreshInFlight = undefined;
   });

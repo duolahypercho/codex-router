@@ -8,8 +8,12 @@ import test from "node:test";
 import {
   buildServiceProcessState,
   clearServiceProcessState,
+  probeServiceProcessState,
+  readServiceProcessState,
   shouldRecordServiceProcess,
   serviceProcessOwns,
+  serviceProcessOwnership,
+  serviceRecordSettled,
   writeServiceProcessState,
 } from "../src/service-process.mjs";
 
@@ -23,6 +27,56 @@ function identity() {
 function commandLine() {
   return `node "${root}/src/start.mjs"`;
 }
+
+test("startup names the unavailable or mismatching probe without exposing its output", () => {
+  const options = { pid: 4242, identity, commandLine, sourceRoot: root, stateDir };
+  assert.equal(probeServiceProcessState({ ...options, pid: 0 }).failure, "pid-invalid");
+  assert.equal(probeServiceProcessState({ ...options, identity: () => undefined }).failure, "identity-unavailable");
+  assert.equal(probeServiceProcessState({ ...options, commandLine: () => undefined }).failure, "command-line-unavailable");
+  assert.equal(probeServiceProcessState({ ...options, commandLine: () => "other process" }).failure, "command-line-mismatch");
+  assert.throws(() => writeServiceProcessState({ ...options, identity: () => undefined }), /identity-unavailable/);
+  assert.throws(() => writeServiceProcessState({ ...options, commandLine: () => undefined }), /command-line-unavailable/);
+});
+
+test("ownership distinguishes absent, foreign, and unavailable process probes", () => {
+  const state = buildServiceProcessState({ pid: 4242, identity, commandLine, sourceRoot: root, stateDir });
+  const options = { commandLine, sourceRoot: root, stateDir };
+  for (const [probe, expected] of [
+    [() => ({ state: "alive", identity: identity() }), "owned"],
+    [() => ({ state: "alive", identity: "reused-pid" }), "foreign"],
+    [() => ({ state: "absent" }), "foreign"],
+    [() => ({ state: "unknown" }), "unknown"],
+    [() => undefined, "unknown"],
+    [() => { throw new Error("unavailable"); }, "unknown"],
+  ]) {
+    assert.equal(serviceProcessOwnership(state, { ...options, probe }), expected);
+    assert.equal(serviceProcessOwns(state, { ...options, probe }), expected === "owned");
+  }
+  assert.equal(serviceProcessOwnership(state, { ...options, identity: () => undefined }), "unknown");
+  assert.equal(serviceProcessOwnership(state, { ...options, identity: () => "different" }), "foreign");
+  assert.equal(serviceProcessOwnership(state, { ...options, identity, commandLine: () => undefined }), "unknown");
+  assert.equal(serviceProcessOwnership(state, { ...options, identity, commandLine: () => "different" }), "foreign");
+  assert.equal(serviceProcessOwnership({ ...state, sourceRoot: "other-checkout" }, {
+    ...options, probe: () => { throw new Error("must not be consulted"); },
+  }), "foreign");
+});
+
+test("only an answered foreign process and quiet port query settle a record", () => {
+  for (const ownership of ["owned", "foreign", "unknown", undefined]) {
+    for (const portListening of [true, false, undefined, null]) {
+      assert.equal(serviceRecordSettled({ ownership, portListening }), ownership === "foreign" && portListening === false);
+    }
+  }
+});
+
+test("strict lifecycle reads distinguish a missing record from corrupt state", () => {
+  const directory = mkdtempSync(path.join(os.tmpdir(), "codex-router-strict-record-"));
+  try {
+    assert.equal(readServiceProcessState(path.join(directory, "absent.json"), { strict: true }), undefined);
+    assert.equal(readServiceProcessState(directory), undefined);
+    assert.throws(() => readServiceProcessState(directory, { strict: true }), /could not be read or validated/);
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
 
 test("service process state requires the router start.mjs command line", () => {
   const state = buildServiceProcessState({

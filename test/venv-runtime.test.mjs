@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { venvRuntimeProblem } from "../src/venv-runtime.mjs";
+import { venvRuntimeOutcome, venvRuntimeProblem } from "../src/venv-runtime.mjs";
 
 // The injected success keeps this test platform-independent while the probe
 // arguments below verify that production forces real Python initialization.
@@ -113,4 +113,22 @@ test("the spawn is injectable for hermetic tests", () => {
   };
   assert.equal(venvRuntimeProblem("python", { spawn }), undefined);
   assert.equal(called, 1);
+});
+
+test("typed final outcomes preserve the legacy string API and retry bounds", () => {
+  for (const [result, kind, expectedCalls] of [
+    [{ status: 0, stdout: "prefix", stderr: "" }, "ok", 1],
+    [{ error: Object.assign(new Error("missing interpreter"), { code: "ENOENT" }) }, "failed", 1],
+    [{ error: Object.assign(new Error("denied interpreter"), { code: "EACCES" }) }, "failed", 1],
+    [{ status: 1, stderr: "No module named encodings" }, "failed", 1],
+    [{ error: Object.assign(new Error("timeout"), { code: "ETIMEDOUT" }) }, "timeout", 2],
+  ]) {
+    const timeouts = [];
+    const options = { timeoutMs: 31, retryTimeoutMs: 67, spawn: (_python, _args, { timeout }) => { timeouts.push(timeout); return result; } };
+    const outcome = venvRuntimeOutcome("python", options);
+    assert.equal(outcome.kind, kind);
+    assert.equal(timeouts.length, expectedCalls);
+    assert.deepEqual(timeouts, expectedCalls === 2 ? [31, 67] : [31]);
+    assert.equal(venvRuntimeProblem("python", { ...options, spawn: () => result }), outcome.message);
+  }
 });

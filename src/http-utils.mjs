@@ -4,6 +4,9 @@ import { isDeepStrictEqual } from "node:util";
 
 import { secretEqual } from "./caller-auth.mjs";
 import { TARGET } from "./paths.mjs";
+import { responsesStreamFailure } from "./responses-stream-failure.mjs";
+
+export { markResponsesStream } from "./responses-stream-failure.mjs";
 
 // Some Responses -> Chat Completions bridges (LiteLLM's, notably) emit one
 // assistant message per Responses item, so a stored turn of
@@ -755,19 +758,17 @@ export async function finishResponse(response) {
 // ("error decoding response body") with nothing to say about the cause. Ending
 // the body instead produces a well-formed, if short, HTTP message.
 //
-// A gracefully ended SSE stream, though, is indistinguishable from a completed
-// one: the turn would simply look short and successful. So on `text/event-stream`
-// we first emit a terminal `error` event, matching the event framing the router
-// already writes elsewhere and the Responses API's own `error` event. A parser
-// that understands it surfaces a real failure; one that does not ignores the
-// unknown event and lands on the plain graceful end, which is still strictly
-// better than a reset. The frame carries a fixed router-side message and never
-// upstream error text, so no response body can leak through it.
+// A graceful SSE end alone cannot state a turn's failure. Marked Responses
+// streams with trusted final-egress metadata get a typed `response.failed`.
+// Unmarked streams, and marked streams without trustworthy metadata, keep the
+// generic `error` frame. Prompt clean EOF lets clients handle the failure;
+// retries still follow their policy. The message is approved router-side text,
+// never an upstream error body, so no response body can leak through it.
 //
 // The frame is prefixed with a blank line because the stream is being ended at
 // the point upstream died, which is very often mid-line: transforms forward
 // upstream's chunk boundaries verbatim, and a single `output_text.delta` can
-// carry a long span. Writing `event: error` straight onto an unterminated
+// carry a long span. Writing an `event:` field straight onto an unterminated
 // `data:` line does not produce an error event at all -- a conforming parser
 // reads the field name as more of the previous event's data, so the failure
 // signal turns into garbage appended to the last delta, which is exactly the
@@ -788,7 +789,7 @@ export function endStreamedResponse(response, { message } = {}) {
   response.end();
 }
 
-// Emit a terminal `error` event into a response whose head is already sent,
+// Emit a terminal failure into a response whose head is already sent,
 // without ending it -- the caller decides when the stream is over. Used where
 // the router has committed to a 200 and then hits a failure it must state
 // rather than let pass as a short, successful-looking turn. The framing and
@@ -799,8 +800,13 @@ export function writeStreamErrorEvent(response, { code, message }) {
   if (!response || response.writableEnded || response.destroyed) return false;
   if (!isEventStream(response)) return false;
   try {
-    const data = { type: "error", code, message, param: null };
-    response.write(`\n\nevent: error\ndata: ${JSON.stringify(data)}\n\n`);
+    const failure = responsesStreamFailure(response, { code, message });
+    if (failure?.terminal) {
+      if (failure.closePendingFrame) response.write("\n\n");
+      return false;
+    }
+    const data = failure?.event || { type: "error", code, message, param: null };
+    response.write(`\n\nevent: ${data.type}\ndata: ${JSON.stringify(data)}\n\n`);
     return true;
   } catch {
     // The socket may already be gone; the caller ends the response anyway.
