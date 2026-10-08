@@ -91,6 +91,7 @@ test("generic provider CRUD is versioned, atomic and redacted", () => {
     ownedBy: "local-vllm",
     baseUrl: "https://inference.example.test/v1",
     adapter: "openai-chat",
+    transport: "http",
     protocol: "openai",
     headers: { "X-Organization": "[redacted]" },
     allowPrivate: false,

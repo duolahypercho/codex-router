@@ -1840,18 +1840,17 @@ async function acquireGenericWebSocketResponses(normalized, controller) {
   try {
     lease = await genericProviderPools.poolFor(providerId).acquire(controller.signal);
   } catch (error) {
-    if (error instanceof WsUpgradeRefusedError || error?.fallbackToHttp) {
-      markWsTransportFailure(genericWsBreakerKey(providerId));
-      console.warn(
-        "[api-forwarder] websocket transport unavailable provider=%s%s; using HTTP",
-        providerId,
-        error instanceof WsUpgradeRefusedError && error.status !== undefined
-          ? ` upgrade_status=${error.status}`
-          : "",
-      );
-      return undefined;
-    }
-    throw error;
+    // Nothing left the machine yet: a refused upgrade, an unreachable host,
+    // or a full pool all mean this turn belongs on the HTTP path below.
+    markWsTransportFailure(genericWsBreakerKey(providerId));
+    console.warn(
+      "[api-forwarder] websocket transport unavailable provider=%s%s; using HTTP",
+      providerId,
+      error instanceof WsUpgradeRefusedError && error.status !== undefined
+        ? ` upgrade_status=${error.status}`
+        : "",
+    );
+    return undefined;
   }
   const abandon = () => {
     lease.connection.abort();

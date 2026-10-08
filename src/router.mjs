@@ -1073,7 +1073,7 @@ function nativeWebSocketTransportSelected() {
   );
 }
 
-async function nativeResponsesWebSocketFetch(url, init) {
+async function nativeResponsesWebSocketFetch(url, init, { fallbackFetch }) {
   const authorization = init.headers.authorization || init.headers.Authorization;
   const accountId = init.headers["chatgpt-account-id"];
   let payload;
@@ -1085,7 +1085,7 @@ async function nativeResponsesWebSocketFetch(url, init) {
   // The protocol carries streaming Responses turns only; anything else keeps
   // the HTTP leg it was built for.
   if (!payload || payload.stream !== true || !Array.isArray(payload.input)) {
-    return fetchObservedUpstream(url, init);
+    return fallbackFetch(url, init);
   }
   // Per-request identity rides the frame (client_metadata), never the frozen
   // handshake: a pooled connection may outlive many sessions.
@@ -1100,17 +1100,17 @@ async function nativeResponsesWebSocketFetch(url, init) {
   try {
     lease = await nativeWsPoolFor(authorization, accountId).acquire(init.signal);
   } catch (error) {
-    if (error instanceof WsUpgradeRefusedError || error?.fallbackToHttp) {
-      markWsTransportFailure(NATIVE_WS_BREAKER_KEY);
-      console.error(
-        "[codex-router] native websocket transport unavailable%s; using HTTP",
-        error instanceof WsUpgradeRefusedError && error.status !== undefined
-          ? ` upgrade_status=${error.status}`
-          : "",
-      );
-      return fetchObservedUpstream(url, init);
-    }
-    throw error;
+    // Nothing left the machine yet: a refused upgrade, an unreachable host,
+    // or a full pool all mean this turn belongs on the HTTP leg. The breaker
+    // keeps a broken upstream from costing a handshake on every turn.
+    markWsTransportFailure(NATIVE_WS_BREAKER_KEY);
+    console.error(
+      "[codex-router] native websocket transport unavailable%s; using HTTP",
+      error instanceof WsUpgradeRefusedError && error.status !== undefined
+        ? ` upgrade_status=${error.status}`
+        : "",
+    );
+    return fallbackFetch(url, init);
   }
   try {
     return await collectResponsesRequest(lease.connection, payload, {
@@ -1122,7 +1122,7 @@ async function nativeResponsesWebSocketFetch(url, init) {
     lease.release();
     if (error instanceof WsUpgradeRefusedError) {
       markWsTransportFailure(NATIVE_WS_BREAKER_KEY);
-      return fetchObservedUpstream(url, init);
+      return fallbackFetch(url, init);
     }
     throw error;
   }
@@ -4967,7 +4967,9 @@ async function handleResponses(request, response, requestUrl) {
         // Routed traffic terminates at the local gateway, which has its own
         // error translation and Retry-After handling below; leave it exactly
         // as it was.
-        fetchImpl: nativeWsTransport ? nativeResponsesWebSocketFetch : fetchObservedUpstream,
+        fetchImpl: nativeWsTransport
+          ? (url, init) => nativeResponsesWebSocketFetch(url, init, { fallbackFetch: fetchObservedUpstream })
+          : fetchObservedUpstream,
         retries: route ? 0 : undefined,
         canRetry: () => nothingRelayed(response),
         onRetry: (event) => logUpstreamRetry(event, requestedModel, requestUrl.pathname),

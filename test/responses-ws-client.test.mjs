@@ -496,10 +496,10 @@ test("transport gates: breaker, native default, proxy self-disable, url derivati
   assert.equal(wsTransportAvailable("provider-a"), false);
   assert.equal(wsTransportAvailable("provider-b"), true);
 
-  assert.equal(nativeWebSocketTransportEnabled({}), true);
+  assert.equal(nativeWebSocketTransportEnabled({}), false);
   assert.equal(
-    nativeWebSocketTransportEnabled({ CODEX_ROUTER_NATIVE_TRANSPORT: "http" }),
-    false,
+    nativeWebSocketTransportEnabled({ CODEX_ROUTER_NATIVE_TRANSPORT: "websocket" }),
+    true,
   );
   assert.equal(
     nativeWebSocketTransportEnabled({
