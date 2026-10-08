@@ -360,9 +360,10 @@ function serializeFrame(frame, data = frame.data) {
   return `${lines.join("\n")}\n\n`;
 }
 
-function streamState({ pinResponseId = false } = {}) {
+function streamState({ pinResponseId = false, onInvalid } = {}) {
   return {
     pinResponseId,
+    onInvalid: typeof onInvalid === "function" ? onInvalid : undefined,
     responseId: undefined,
     outputIndex: 0,
     itemIndexes: new Map(),
@@ -387,6 +388,14 @@ function invalidStream(state, message) {
   if (state.invalid) return "";
   state.invalid = true;
   state.terminal = true;
+  // The reason travels to the client only inside this SSE frame, and LiteLLM
+  // replaces it with "Response API in-stream error" on the way (#837). Hand it
+  // to the caller as well so the forwarder can put it in the service log; it
+  // is always router-authored text, never upstream bytes. A reporting failure
+  // must not change what the stream emits.
+  try {
+    state.onInvalid?.(message);
+  } catch {}
   return serializeFrame({ event: "error" }, {
     type: "error",
     code: "invalid_responses_stream",
@@ -561,6 +570,9 @@ export function createResponsesStreamTransform(flatToNative = new Map(), options
           if (normalized) this.push(normalized);
         }
         if (state.sawEvent && !state.terminal && !state.invalid) {
+          try {
+            state.onInvalid?.("The upstream Responses stream ended before a terminal event.");
+          } catch {}
           this.push(serializeFrame({ event: "error" }, {
             type: "error",
             code: "upstream_stream_incomplete",

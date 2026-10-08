@@ -13,6 +13,10 @@
       "defaultEffort": "high",
       "reasoningLevels": [
         {
+          "effort": "low",
+          "description": "Faster reasoning"
+        },
+        {
           "effort": "high",
           "description": "Deep reasoning"
         },
@@ -28,7 +32,7 @@
       ],
       "requestProfile": "deepseek-thinking",
       "supportsReasoningSummaries": true,
-      "compHash": "deepseek-v4-pro-v1"
+      "compHash": "deepseek-v4-pro-v2"
     }
   ]
 }
