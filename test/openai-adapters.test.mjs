@@ -244,6 +244,51 @@ test("Responses stream pins per-event response IDs to the created id (#814)", as
   assert.equal(secondCreated[1].data.code, "invalid_responses_stream");
 });
 
+test("a refused Responses stream reports its reason to the caller exactly once", async () => {
+  // The client sees the reason only inside the SSE error frame, and the
+  // gateway rewrites that frame to "Response API in-stream error" (#837). The
+  // callback is what lets the forwarder write the real reason to its log.
+  const reasons = [];
+  const changedId = frames(await transformText(
+    createResponsesStreamTransform(new Map(), { onInvalid: (reason) => reasons.push(reason) }),
+    [
+      "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_a\"}}\n\n",
+      "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_b\",\"output\":[]}}\n\n",
+      "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_c\",\"output\":[]}}\n\n",
+    ],
+  ));
+  const refusal = changedId.find((frame) => frame.event === "error");
+  assert.equal(refusal.data.code, "invalid_responses_stream");
+  assert.deepEqual(reasons, [refusal.data.message]);
+
+  const truncated = [];
+  await transformText(
+    createResponsesStreamTransform(new Map(), { onInvalid: (reason) => truncated.push(reason) }),
+    ["event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_a\"}}\n\n"],
+  );
+  assert.deepEqual(truncated, ["The upstream Responses stream ended before a terminal event."]);
+
+  const clean = [];
+  await transformText(
+    createResponsesStreamTransform(new Map(), { onInvalid: (reason) => clean.push(reason) }),
+    [
+      "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_a\"}}\n\n",
+      "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_a\",\"output\":[]}}\n\n",
+    ],
+  );
+  assert.deepEqual(clean, []);
+
+  // A reporter that throws must not change what the stream emits.
+  const throwing = frames(await transformText(
+    createResponsesStreamTransform(new Map(), { onInvalid: () => { throw new Error("log sink failed"); } }),
+    [
+      "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_a\"}}\n\n",
+      "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_b\"}}\n\n",
+    ],
+  ));
+  assert.equal(throwing[1].data.code, "invalid_responses_stream");
+});
+
 test("a stream of nothing but keep-alives still reports an incomplete stream", async () => {
   // Comments are not forwarded, but they are proof the upstream was talking.
   // Swallowing them silently would turn a stream that died before its terminal
