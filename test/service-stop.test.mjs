@@ -67,6 +67,7 @@ async function run(command, mode, { missingTask = false, queryFailure = false, r
     ensureCheckoutReadable: () => { if (earlyFailure === "acl") throw new Error("fixture checkout ACL failed"); },
     protectPrivateFile: () => {},
     providerApiKeyServiceEnvironment: () => ({}), serviceZaiCodingStreamEnvironment: () => ({}),
+    responsesWsServiceEnvironment: () => ({}),
     serviceNativeCatalogEnvironment: () => ({}),
     serviceProxyEnvironment: () => ({}), serviceGrokPatchHookEnvironment: () => ({}), serviceStartupTimeoutEnvironment: () => ({}),
     serviceAppConnectorEnvironment: (environment = processObject.env) => serviceAppConnectorEnvironment(environment),

@@ -125,6 +125,7 @@ async function run(platform, command, mode = 'success', { wrapper = false } = {}
     './log-rotation.mjs': { rotateLog: () => {} },
     './provider-api-key-service-environment.mjs': { providerApiKeyServiceEnvironment: noopEnvironment },
     './zai-stream-timeouts.mjs': { serviceZaiCodingStreamEnvironment: noopEnvironment },
+    './responses-ws-client.mjs': { responsesWsServiceEnvironment: noopEnvironment },
     './native-catalog-settings.mjs': { serviceNativeCatalogEnvironment: noopEnvironment },
     './proxy-environment.mjs': { serviceProxyEnvironment: noopEnvironment, environmentProxyOptedIn: () => false },
     './grok-patch-hook-settings.mjs': { serviceGrokPatchHookEnvironment: noopEnvironment },
