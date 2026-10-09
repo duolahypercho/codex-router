@@ -310,6 +310,33 @@ the caller capability is never relayed to an upstream. HTTP request bodies may
 use Zstandard, gzip, deflate, or Brotli; the router safely decompresses them
 before inspecting the model ID.
 
+The upstream leg can separately reuse Responses WebSocket connections. Generic
+providers opt in with `providers generic edit ID --adapter openai-responses
+--transport websocket`; native transport stays HTTP unless
+`MODEL_ROUTER_NATIVE_TRANSPORT=websocket` (or its `CODEX_ROUTER_` alias) is set.
+The forwarder still owns generic credentials and normalization. Full canonical
+requests travel over the connection; no direct edge-to-provider relay or
+incremental upstream request shortcut bypasses routing, image/tool policies,
+usage accounting, or response transforms. A request containing an unresolved
+`previous_response_id` stays on HTTP.
+
+Pools are bounded and isolated by endpoint and all handshake headers. Each
+acquisition revalidates generic provider configuration and DNS; rotated
+credentials cannot reuse an old handshake. Per-request native identity headers
+participate in connection affinity, so changing them can reduce connection
+reuse. Idle identities expire, and process shutdown closes active connections.
+An outbound environment proxy disables this raw-socket transport.
+
+Upgrade refusal or connection failure before a turn is sent falls back to
+HTTP, retaining native zstd compression, with a five-minute transport breaker.
+After sending a turn, transport failures are never replayed. Empty-completion
+repair also stays disabled for WebSocket-configured generic routes, including
+HTTP fallback, to avoid replaying a turn still generating upstream. The
+first-event deadline defaults to 60 seconds; `MODEL_ROUTER_WS_PRELUDE_TIMEOUT_MS`
+(or its `CODEX_ROUTER_` alias) accepts a positive millisecond value capped at
+300,000. Invalid values use the default. Slow consumers pause upstream reads;
+malformed upgrades, metadata, and oversized queued events fail the affected turn.
+
 Codex can compact history through `/responses/compact` or a
 `compaction_trigger`. External Chat Completions providers cannot create OpenAI's
 opaque encrypted compaction payload. The router therefore assigns stable source

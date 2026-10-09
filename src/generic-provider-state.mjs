@@ -19,6 +19,11 @@ export const GENERIC_PROVIDER_ADAPTERS = Object.freeze([
   "openai-responses",
   "openai-completions",
 ]);
+// "http" is the Responses-over-HTTP(S) hop the forwarder has always made.
+// "websocket" sends the provider's turns over the persistent
+// responses_websockets protocol instead. Full requests retain the canonical
+// pipeline; the Responses wire requires the adapter rule below.
+export const GENERIC_PROVIDER_TRANSPORTS = Object.freeze(["http", "websocket"]);
 
 const FORBIDDEN_HEADER_NAMES = new Set([
   "authorization",
@@ -204,6 +209,15 @@ export function validateGenericProvider(input, { existingId, reservedProviderIds
   if (!GENERIC_PROVIDER_ADAPTERS.includes(adapter)) {
     throw new Error(`adapter must be one of: ${GENERIC_PROVIDER_ADAPTERS.join(", ")}.`);
   }
+  const transport = input.transport === undefined ? "http" : text(input.transport);
+  if (!GENERIC_PROVIDER_TRANSPORTS.includes(transport)) {
+    throw new Error(`transport must be one of: ${GENERIC_PROVIDER_TRANSPORTS.join(", ")}.`);
+  }
+  if (transport === "websocket" && adapter !== "openai-responses") {
+    throw new Error(
+      "transport websocket requires adapter openai-responses; the Responses WebSocket protocol carries Responses requests only.",
+    );
+  }
   const allowPrivate = input.allowPrivate === undefined ? false : input.allowPrivate;
   if (typeof allowPrivate !== "boolean") throw new Error("allowPrivate must be a boolean.");
   const { baseUrl } = validateEndpoint(input.baseUrl, allowPrivate);
@@ -221,6 +235,7 @@ export function validateGenericProvider(input, { existingId, reservedProviderIds
     ...(description ? { description } : {}),
     baseUrl,
     adapter,
+    ...(transport === "websocket" ? { transport } : {}),
     headers,
     ...(credentialRef ? { credentialRef } : {}),
     allowPrivate,
@@ -289,6 +304,7 @@ export function genericProviderRuntimeDescriptor(provider) {
     ownedBy: value.id,
     baseUrl: value.baseUrl,
     adapter: value.adapter,
+    ...(value.transport === "websocket" ? { transport: value.transport } : {}),
     protocol: value.adapter === "openai-responses" ? "openai-responses" : "openai",
     // Raw static header values stay inside the request boundary and never
     // become model registry or diagnostic data.

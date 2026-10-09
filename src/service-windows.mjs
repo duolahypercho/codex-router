@@ -24,6 +24,7 @@ import {
 } from "./service-process.mjs";
 import { ensureCheckoutReadable, protectPrivateFile } from "./file-security.mjs";
 import { providerApiKeyServiceEnvironment } from "./provider-api-key-service-environment.mjs";
+import { responsesWsServiceEnvironment } from "./responses-ws-client.mjs";
 import { serviceZaiCodingStreamEnvironment } from "./zai-stream-timeouts.mjs";
 import { serviceNativeCatalogEnvironment } from "./native-catalog-settings.mjs";
 import { serviceProxyEnvironment } from "./proxy-environment.mjs";
@@ -94,6 +95,7 @@ function wrapper() {
     ...serviceAppConnectorEnvironment(),
     ...serviceGrokPatchHookEnvironment(),
     ...providerApiKeyServiceEnvironment(),
+    ...responsesWsServiceEnvironment(),
     ...serviceZaiCodingStreamEnvironment(),
     ...serviceNativeCatalogEnvironment(),
     ...serviceStartupTimeoutEnvironment(),

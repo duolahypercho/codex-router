@@ -95,8 +95,17 @@ import {
   stripCodexEncryptedSchemaAnnotation,
 } from "./tool-schema-root.mjs";
 import { requestGenericProvider } from "./generic-providers.mjs";
+import { genericProviderWebSocketTarget } from "./generic-providers.mjs";
 import { genericProviderConfigured } from "./generic-provider-readiness.mjs";
 import { withoutInputMessagePhase } from "./message-phase.mjs";
+import {
+  WsUpgradeRefusedError,
+  collectResponsesRequest,
+  markWsTransportFailure,
+  responsesWebSocketTransportUsable,
+  wsTransportAvailable,
+} from "./responses-ws-client.mjs";
+import { providerPoolRegistry } from "./provider-ws-pool.mjs";
 import { providerTransportError } from "./transport-failure.mjs";
 import {
   endpointCapabilityError,
@@ -1871,6 +1880,50 @@ function localModels(response) {
   });
 }
 
+// Keep canonical normalized full requests and transforms; only replace the
+// upstream transport. Continuations without full input remain on HTTP.
+const genericProviderPools = providerPoolRegistry({
+  resolveProvider: (providerId, requestPath) => ({
+    wsTarget: () => genericProviderWebSocketTarget(providerId, requestPath),
+  }),
+});
+
+function genericWsBreakerKey(providerId) {
+  return `generic-ws:${providerId}`;
+}
+
+async function acquireGenericWebSocketResponses(normalized, controller, requestPath) {
+  const providerId = normalized.provider.id;
+  if (!wsTransportAvailable(genericWsBreakerKey(providerId))) return undefined;
+  if (!responsesWebSocketTransportUsable()) return undefined;
+  let payload;
+  try { payload = JSON.parse(normalized.body.toString("utf8")); } catch { return undefined; }
+  if (payload?.stream !== true || !Array.isArray(payload.input) || payload.previous_response_id) return undefined;
+  let lease;
+  try {
+    const pool = await genericProviderPools.poolFor(providerId, requestPath);
+    lease = await pool.acquire(controller.signal);
+  } catch (error) {
+    if (controller.signal.aborted) throw error;
+    markWsTransportFailure(genericWsBreakerKey(providerId));
+    console.warn("[api-forwarder] websocket transport unavailable provider=%s%s; using HTTP", providerId,
+      error instanceof WsUpgradeRefusedError && error.status !== undefined ? ` upgrade_status=${error.status}` : "");
+    return undefined;
+  }
+  let result;
+  try {
+    result = await collectResponsesRequest(lease.connection, payload, {
+      signal: controller.signal,
+      onSettled: () => lease.release(),
+    });
+  } catch (error) {
+    lease.connection.abort();
+    lease.release();
+    throw error;
+  }
+  return { result };
+}
+
 async function handleRequest(request, response) {
   const startedAt = Date.now();
   const requestUrl = new URL(
@@ -1913,6 +1966,13 @@ async function handleRequest(request, response) {
   // resolve it through the built-in credential path or construct its URL here;
   // either would bypass the confinement #404 established.
   if (normalized.provider.generic === true) {
+    if (normalized.provider.transport === "websocket" && normalized.provider.protocol === "openai-responses" && route === "/responses") {
+      const ws = await acquireGenericWebSocketResponses(normalized, controller, `${route}${requestUrl.search}`);
+      if (ws) {
+        await relayUpstreamResponse(normalized, ws.result, response, startedAt);
+        return;
+      }
+    }
     const { response: upstream, dispatcher } = await requestGenericProvider(
       normalized.provider.id,
       `${route}${requestUrl.search}`,
@@ -2349,3 +2409,7 @@ server.listen(LISTEN_PORT, LISTEN_HOST, () => {
 });
 
 installGracefulShutdown(server, { label: "api-forwarder" });
+// Pooled upstream WebSocket connections hold sockets open past the HTTP
+// server's own drain; shut them down with the process.
+process.once("SIGTERM", () => genericProviderPools.closeAll());
+process.once("SIGINT", () => genericProviderPools.closeAll());

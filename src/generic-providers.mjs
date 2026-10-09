@@ -346,8 +346,11 @@ function requestSignal(signal, timeoutMs) {
   return signal ? AbortSignal.any([signal, timeout]) : timeout;
 }
 
-function createDestinationDispatcher(endpoint, provider, timeoutMs) {
-  const lookup = (hostname, options, callback) => {
+// The DNS pin shared by the HTTP dispatcher and the WebSocket transport: the
+// host is resolved through the same rules (private/link-local refused unless
+// allowPrivate) no matter which connect path consumes it.
+function pinnedDestinationLookup(provider) {
+  return (hostname, options, callback) => {
     lookupHost(hostname)
       .then((addresses) => {
         if (!provider.allowPrivate && addresses.some(isPrivateGenericProviderAddress)) {
@@ -362,6 +365,37 @@ function createDestinationDispatcher(endpoint, provider, timeoutMs) {
       })
       .catch((error) => callback(error));
   };
+}
+
+// Everything the forwarder needs to open a Responses WebSocket to a generic
+// provider: the ws(s) URL pinned to the configured origin and path, the
+// credential-bound handshake headers, and the DNS pin. Same confinement rules
+// as requestGenericProvider -- the router process never sees the secret.
+export async function genericProviderWebSocketTarget(
+  id,
+  requestPath = "/responses",
+  { lookup = lookupHost } = {},
+) {
+  const provider = getGenericProvider(id);
+  if (!provider.enabled) throw unavailable(`Generic provider ${provider.id} is disabled.`);
+  if (provider.transport !== "websocket") {
+    throw new Error(`Generic provider ${provider.id} does not use the websocket transport.`);
+  }
+  const endpoint = destinationUrl(provider, requestPath);
+  await validateResolvedDestination(endpoint, provider, lookup);
+  const headers = { ...provider.headers };
+  const secret = credentialSecret(provider);
+  if (provider.credentialRef && !secret) {
+    throw unavailable(`The bound credential is unavailable for generic provider ${provider.id}.`);
+  }
+  if (secret) headers.Authorization = `Bearer ${secret}`;
+  const url = new URL(endpoint.toString());
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  return { url, headers, lookup: pinnedDestinationLookup(provider) };
+}
+
+function createDestinationDispatcher(endpoint, provider, timeoutMs) {
+  const lookup = pinnedDestinationLookup(provider);
   return new Agent({
     allowH2: false,
     pipelining: 1,
@@ -502,7 +536,8 @@ function optionValues(args, name) {
 function cliUsage() {
   throw new Error(
     "Usage: providers generic list [--json] | add ID --name NAME --base-url URL " +
-      "[--adapter openai-chat|openai-responses|openai-completions] [--header Name=Value] " +
+      "[--adapter openai-chat|openai-responses|openai-completions] [--transport http|websocket] " +
+      "[--header Name=Value] " +
       "[--credential-ref cred_ID] [--description TEXT] [--allow-private] | edit ID [options] | show ID [--json] | " +
       "enable ID | disable ID | remove ID | test ID [--json]. Descriptor mutations also accept --no-apply only while no curated routes exist. " +
       "Use `providers generic credential ID status|set|remove` to manage its protected key.",
@@ -528,6 +563,7 @@ export async function runGenericProviderCli(args = process.argv.slice(3), { outp
       ["--name", "displayName"],
       ["--base-url", "baseUrl"],
       ["--adapter", "adapter"],
+      ["--transport", "transport"],
       ["--credential-ref", "credentialRef"],
       ["--description", "description"],
     ]) {

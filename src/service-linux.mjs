@@ -21,6 +21,7 @@ import {
   TARGET_DISPLAY_NAME,
 } from "./paths.mjs";
 import { providerApiKeyServiceEnvironment } from "./provider-api-key-service-environment.mjs";
+import { responsesWsServiceEnvironment } from "./responses-ws-client.mjs";
 import { serviceZaiCodingStreamEnvironment } from "./zai-stream-timeouts.mjs";
 import { serviceNativeCatalogEnvironment } from "./native-catalog-settings.mjs";
 import { serviceProxyEnvironment } from "./proxy-environment.mjs";
@@ -88,6 +89,7 @@ function unit() {
     ...serviceAppConnectorEnvironment(),
     ...serviceGrokPatchHookEnvironment(),
     ...providerApiKeyServiceEnvironment(),
+    ...responsesWsServiceEnvironment(),
     ...serviceZaiCodingStreamEnvironment(),
     ...serviceNativeCatalogEnvironment(),
     ...serviceStartupBackoffEnvironment(),
