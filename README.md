@@ -1119,6 +1119,7 @@ often for the repository to pin and live-verify individual entries:
 
 | Provider | Provider ID | Base URL |
 | --- | --- | --- |
+| AI/ML API | `aimlapi` | `https://api.aimlapi.com/v1` |
 | Groq | `groq` | `https://api.groq.com/openai/v1` |
 | Together AI | `together` | `https://api.together.xyz/v1` |
 | Fireworks AI | `fireworks` | `https://api.fireworks.ai/inference/v1` |
@@ -1131,6 +1132,13 @@ often for the repository to pin and live-verify individual entries:
 | GitHub Copilot | `github-copilot` | Account-specific GitHub Copilot endpoint |
 | Chutes | `chutes` | `https://llm.chutes.ai/v1` |
 | OrcaRouter | `orca` | `https://api.orcarouter.ai/v1` |
+
+AI/ML API uses `AIMLAPI_API_KEY` or a key stored through
+`./bin/model-router codex provider-key aimlapi set`. Run
+`./bin/curate-models aimlapi` after connecting: discovery keeps only models
+advertising the OpenAI chat-completions endpoint. No models are preselected.
+`AIMLAPI_API_BASE_URL` overrides the endpoint. Account cards show router traffic
+and link to the AI/ML API dashboard for usage and limits.
 
 `devin-cli` is the OAuth exception to this API-key table. After `devin auth
 login`, the Control Center and `./bin/curate-models devin-cli` read the model

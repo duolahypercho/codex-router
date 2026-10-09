@@ -47,11 +47,17 @@ function option(name) {
   return index === -1 ? undefined : process.argv[index + 1];
 }
 
+function isAimlChatRecord(item) {
+  return item?.type === "openai/chat-completions";
+}
+
 export function modelIds(payload, provider) {
   const data = Array.isArray(payload) ? payload : payload?.data ?? payload?.models;
   if (!Array.isArray(data)) throw new Error("The provider returned an invalid model list.");
   const candidates = provider?.authMode === "anonymous"
     ? data.filter((item) => anonymousModelAllowed(provider, item?.id))
+    : provider?.id === "aimlapi"
+    ? data.filter(isAimlChatRecord)
     : provider?.id === "orca"
     ? data.filter((item) => {
         // OrcaRouter's catalog also contains image, video, audio, and
@@ -98,14 +104,19 @@ function modelRecords(payload, provider) {
   const data = Array.isArray(payload) ? payload : payload?.data ?? payload?.models;
   if (!Array.isArray(data)) throw new Error("The provider returned an invalid model list.");
   const ids = new Set(modelIds(payload, provider));
-  return data.filter((item) => ids.has(modelRecordId(item)));
+  return data.filter((item) => ids.has(modelRecordId(item)) &&
+    (provider?.id !== "aimlapi" || isAimlChatRecord(item)));
 }
 
 function metadataFromRecords(payload, provider) {
   const metadata = {};
   for (const record of modelRecords(payload, provider)) {
     try {
-      const entry = modelMetadataFromProviderRecord(record);
+      const entry = modelMetadataFromProviderRecord(provider.id === "aimlapi" ? {
+        ...record,
+        display_name: record.info?.name,
+        context_length: record.info?.contextLength,
+      } : record);
       metadata[entry.upstreamId] = entry;
     } catch {
       // Model ids remain useful even when an optional provider capability
@@ -227,10 +238,12 @@ export function modelContextLengths(payload, provider) {
   if (!Array.isArray(data)) return {};
   const kept = new Set(modelIds(payload, provider));
   const lengths = {};
-  for (const item of data) {
+  for (const item of modelRecords(payload, provider)) {
     const id = modelRecordId(item);
     if (!id || !kept.has(id) || id in lengths) continue;
-    const length = advertisedContextLength(item);
+    const length = advertisedContextLength(provider?.id === "aimlapi"
+      ? { ...item, context_length: item.info?.contextLength }
+      : item);
     if (length !== undefined) lengths[id] = length;
   }
   return lengths;

@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "providers": [
+    {
+      "id": "aimlapi",
+      "displayName": "AI/ML API",
+      "kind": "openai-compatible",
+      "ownedBy": "aimlapi",
+      "baseUrl": "https://api.aimlapi.com/v1",
+      "baseUrlEnv": "AIMLAPI_API_BASE_URL",
+      "credential": {
+        "environment": [
+          "AIMLAPI_API_KEY"
+        ],
+        "file": "aimlapi-api-key.secret",
+        "legacyFiles": [],
+        "keychainServices": [
+          "codex-router-aimlapi"
+        ],
+        "prompt": "AI/ML API key"
+      }
+    }
+  ]
+}

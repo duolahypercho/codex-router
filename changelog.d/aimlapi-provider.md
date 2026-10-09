@@ -1,0 +1,1 @@
+- Add AI/ML API as a catalog-only provider with API-key setup, chat-completions model discovery, a tray icon, and a dashboard link alongside router-observed usage. Curate models before routing; no presets or account quota estimates are included.

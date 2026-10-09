@@ -140,12 +140,11 @@ if (usesBundledVenv) {
     process.platform === "win32" ? "python.exe" : "python",
   );
   const venvOutcome = venvRuntimeOutcome(venvPython);
-  if (venvOutcome.kind !== "ok") {
-    if (automaticStartup && !startupBackoffDisabled() && venvOutcome.kind === "timeout") {
-      recordStartupFailure({ reason: "venv-timeout" });
-    }
+  if (venvOutcome.kind === "timeout") {
+    console.warn(`The LiteLLM virtual environment probe did not finish (${venvOutcome.message}); continuing with the bounded gateway readiness check.`);
+  } else if (venvOutcome.kind !== "ok") {
     throw new Error(
-      `The LiteLLM virtual environment ${venvOutcome.kind === "timeout" ? "probe did not finish" : "is broken"} at ${venvPython} (${venvOutcome.message}). ` +
+      `The LiteLLM virtual environment is broken at ${venvPython} (${venvOutcome.message}). ` +
         `${dependencyFix}.`,
     );
   }

@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1634" height="1459" viewBox="0 0 1634 1459">
+  <!-- AI/ML API mark, white-on-transparent like the other single-colour marks:
+       the official artwork is a black hexagon with the glyph knocked out in
+       white, which would be invisible on the Island's black bezel. Same two
+       paths, same geometry; the hexagon paints white and the glyph is the
+       hole. -->
+  <mask id="aimlapi-glyph">
+    <path d="M1163.933,0a156,156,0,0,1,135.1,78l327.934,568a156,156,0,0,1,0,156l-327.934,568a156,156,0,0,1-135.1,78H508.067a156,156,0,0,1-135.1-78L45.033,802a156,156,0,0,1,0-156L372.967,78a156,156,0,0,1,135.1-78Z" transform="translate(-19 5.5)" fill="#fff"/>
+    <path d="M0,812.238V440.929a69.62,69.62,0,0,1,69.62-69.62H314.842V69.619a69.62,69.62,0,1,1,139.241,0V440.929a69.62,69.62,0,0,1-69.62,69.62H139.243V812.238A69.62,69.62,0,1,1,0,812.238Z" transform="translate(968.463 257.227) rotate(45)" fill="#000"/>
+  </mask>
+  <rect width="1634" height="1459" fill="#fff" mask="url(#aimlapi-glyph)"/>
+</svg>

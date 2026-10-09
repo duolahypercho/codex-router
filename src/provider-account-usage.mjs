@@ -1073,6 +1073,14 @@ async function accountUsageFor(providerId, fetchImpl) {
     if (providerId === "commandcode") return await commandCodeAccount(fetchImpl);
     if (providerId === "venice") return await veniceAccount(fetchImpl);
     if (providerId === "openrouter") return await openRouterAccount(fetchImpl);
+    if (providerId === "aimlapi") {
+      return resolveProviderCredential("aimlapi")
+        ? {
+            ...localOnly("Showing router traffic; check AI/ML API for account usage and limits"),
+            dashboardUrl: "https://aimlapi.com/app/",
+          }
+        : { status: "not-configured", source: "official-api", metrics: [] };
+    }
     if (providerId === "nousresearch") {
       // Nous Portal shows credits and the subscription tier only in the
       // browser: the inference API answers 404 on both /credits and /key, so

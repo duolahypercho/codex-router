@@ -266,5 +266,13 @@ be enabled at once. Step 5 Preview carries a 1M-token context and image input,
 Step 3.7 Flash 256K with image input, and the agent-tuned Step 3.5 Flash 2603
 256K text-only.
 
+AI/ML API (`aimlapi`) is a catalog-only OpenAI-compatible provider at
+`https://api.aimlapi.com/v1`. Store its key with
+`./bin/model-router codex provider-key aimlapi set` or use `AIMLAPI_API_KEY`,
+then run `./bin/curate-models aimlapi` to choose chat-completions models from
+its live catalog. It ships no preselected models. `AIMLAPI_API_BASE_URL`
+overrides the endpoint. The usage card shows router traffic and links to the
+AI/ML API dashboard for account usage and limits.
+
 Native GPT models continue to use Codex directly. There is no separate GPT or
 ChatGPT OAuth provider in the router.

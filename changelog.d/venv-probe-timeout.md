@@ -1,0 +1,1 @@
+- Continue startup after an inconclusive virtual-environment probe timeout and let the existing bounded gateway readiness check decide success. Broken interpreters still fail before launch; startup budgets and file permissions are unchanged.
