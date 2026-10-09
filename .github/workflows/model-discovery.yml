@@ -54,6 +54,7 @@ jobs:
           # provider credentials. Scope them to this step so checkout, setup,
           # and npm lifecycle scripts never receive provider keys.
           AINETCAFE_API_KEY: ${{ secrets.AINETCAFE_API_KEY }}
+          AIMLAPI_API_KEY: ${{ secrets.AIMLAPI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
           CHUTES_API_KEY: ${{ secrets.CHUTES_API_KEY }}
