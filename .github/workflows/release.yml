@@ -195,6 +195,7 @@ jobs:
   unified-app-macos:
     name: Signed and notarized macOS app
     continue-on-error: true
+    timeout-minutes: 45
     needs: release-preflight
     runs-on: macos-latest
     env:
@@ -293,7 +294,16 @@ jobs:
           /usr/bin/open "$app"
           ready=false
           for _ in {1..120}; do
-            state=$(/usr/bin/env -u ELECTRON_RUN_AS_NODE "$embedded" --query-lifecycle 2>/dev/null || true)
+            state=$(node -e '
+              const { execFileSync } = require("node:child_process");
+              const env = { ...process.env };
+              delete env.ELECTRON_RUN_AS_NODE;
+              try {
+                process.stdout.write(execFileSync(process.argv[1], ["--query-lifecycle"], {
+                  env, timeout: 10000, killSignal: "SIGKILL", encoding: "utf8",
+                }));
+              } catch { process.exit(1); }
+            ' "$embedded" 2>/dev/null || true)
             if node -e '
               try {
                 const state = JSON.parse(process.argv[1]);

@@ -15,6 +15,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { callerBaseUrl } from "../src/caller-auth.mjs";
+import { readRegistryDocument } from "../src/model-registry.mjs";
 import { openPort } from "./port-pool.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -1536,6 +1537,115 @@ test("a content turn is not retried and carries no empty-completion markers", as
 const GROK_OAUTH_MODEL = "grok-oauth/grok-4.6";
 const GROK_API_MODEL = "grok-api/grok-4.5";
 const ZAI_CODING_MODEL = "zai-coding/glm-5.3-flash";
+const REPETITION_PHRASE = "The same sentence is being repeated without progress. ";
+const repetitionFrame = (event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
+
+for (const scenario of ["tracked", "untrusted", "before-content", "empty-retry", "completed-only", "disabled", "json"]) {
+  test(`GLM repetition guard: ${scenario}`, async (t) => {
+    let posts = 0;
+    let upstreamClosed;
+    const closed = new Promise((resolve) => { upstreamClosed = resolve; });
+    const identity = { id: "resp_repetition", model: "glm-5.3-flash", created_at: 1_791_388_800 };
+    const gw = await gateway((_request, response) => {
+      posts++;
+      response.writeHead(200, { "Content-Type": "text/event-stream" });
+      if (scenario === "empty-retry" && posts === 1) {
+        response.end(repetitionFrame({ type: "response.completed", sequence_number: 0, response: {
+          ...identity, id: "resp_empty", output: [], usage: { input_tokens: 10, output_tokens: 0 } } }));
+        return;
+      }
+      const text = scenario === "json" ? JSON.stringify(Array.from({ length: 500 }, () => ({ message: REPETITION_PHRASE }))) : REPETITION_PHRASE.repeat(220);
+      if (scenario === "before-content") {
+        response.end(repetitionFrame({ type: "response.output_text.delta", item_id: "m1", delta: text }));
+        return;
+      }
+      response.write(repetitionFrame({ type: "response.created", sequence_number: 0,
+        response: { ...(scenario === "untrusted" ? { id: identity.id } : identity), status: "in_progress", output: [] } }));
+      response.write(repetitionFrame({ type: "response.output_text.delta", sequence_number: 1, item_id: "m1", delta: "Starting. " }));
+      if (scenario === "empty-retry") response.write(repetitionFrame({ type: "response.reasoning_text.delta", sequence_number: 2, delta: "Checking the response." }));
+      let offset = 0;
+      let sequence = 2;
+      const timer = setInterval(() => {
+        if (["empty-retry", "completed-only"].includes(scenario)) {
+          clearInterval(timer);
+          // Keep the provider stream open: the guard must cancel it rather than
+          // forward a successful terminal or wait for the provider to end.
+          response.write(repetitionFrame({ type: "response.completed", sequence_number: 3, response: {
+            ...identity, status: "completed", output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text }] }],
+            usage: { input_tokens: 20, output_tokens: 5, input_tokens_details: { cached_tokens: 3 } } } }));
+          return;
+        }
+        if (offset < text.length) {
+          response.write(repetitionFrame({ type: "response.output_text.delta", sequence_number: sequence++, item_id: "m1", delta: text.slice(offset, offset + 400) }));
+          offset += 400;
+        } else {
+          clearInterval(timer);
+          response.end(repetitionFrame({ type: "response.completed", sequence_number: sequence++, response: {
+            ...identity, status: "completed", output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "Starting. " + text }] }],
+            usage: { input_tokens: 20, output_tokens: 5 } } }));
+        }
+      }, 10);
+      response.once("close", () => { clearInterval(timer); upstreamClosed(!response.writableEnded); });
+    });
+    const port = await openPort();
+    const env = routerEnv(gw.port, port);
+    const router = run(env, (stateDir) => {
+      env.CODEX_HOME = path.join(stateDir, "codex");
+      env.MODEL_ROUTER_USER_MODELS = path.join(stateDir, "absent.json");
+      env.MODEL_ROUTER_REGISTRY = path.join(stateDir, "registry.json");
+      const document = readRegistryDocument(path.join(root, "config"));
+      const model = document.models.find((entry) => entry.slug === ZAI_CODING_MODEL);
+      assert.ok(model);
+      model.repetitionGuard = scenario !== "disabled";
+      writeFileSync(env.MODEL_ROUTER_REGISTRY, JSON.stringify(document));
+    });
+    t.after(async () => {
+      await stopChild(router); await closeServer(gw.server);
+      rmSync(router.stateDir, { recursive: true, force: true });
+    });
+    await waitFor(`${callerBaseUrl(port, CALLER_KEY)}/models`, router);
+    const result = await readRouted(port, { ...TURN_BODY, model: ZAI_CODING_MODEL });
+    assert.equal(result.complete, true, "clean EOF preserves the deliberate terminal classification");
+    assert.equal(posts, scenario === "empty-retry" ? 2 : 1, "the repetition stop must not replay or fail over");
+    const [usage] = await waitForUsageEvents(router.stateDir, 1, router);
+    if (["disabled", "json"].includes(scenario)) {
+      assert.equal(result.status, 200);
+      assert.match(result.body, /response.completed/);
+      assert.doesNotMatch(result.body, /router_repetitive_generation/);
+      assert.equal(usage.status, 200);
+      return;
+    }
+    assert.doesNotMatch(result.body, /response.completed|response.done|\[DONE\]/);
+    assert.match(result.body, /router_repetitive_generation/);
+    if (scenario === "before-content") {
+      assert.equal(result.status, 400);
+      assert.equal(JSON.parse(result.body).error.code, "router_repetitive_generation");
+      assert.equal(usage.status, 400);
+    } else {
+      assert.equal(result.status, 200);
+      const block = result.body.split(/\r?\n\r?\n/).find((value) => value.startsWith("event: response.failed"));
+      assert.ok(block);
+      const failure = JSON.parse(block.split("\n").find((line) => line.startsWith("data: ")).slice(6));
+      assert.equal(failure.code, "router_repetitive_generation");
+      assert.equal(failure.response.error.code, "invalid_prompt", "Codex's SSE classifier treats this as terminal");
+      if (scenario === "untrusted") assert.equal(failure.response.id, undefined);
+      else assert.equal(failure.response.id, identity.id);
+      assert.equal(await closed, true, "the stopped provider stream must be canceled");
+      assert.equal(usage.status, 502);
+      assert.equal(usage.streamAborted, true);
+      if (scenario === "empty-retry") {
+        assert.equal(usage.emptyCompletionRetried, true);
+        assert.equal(usage.inputTokens, 30, "sum both attempts, including the withheld terminal's usage");
+        assert.equal(usage.outputTokens, 5);
+        assert.equal(usage.cachedInputTokens, 3);
+        assert.equal(usage.reasoningStreamed, true);
+        assert.equal(typeof usage.firstTokenMs, "number");
+      }
+    }
+    assert.equal(usageEvents(router.stateDir).length, 1);
+  });
+}
+
 const REASONING_DELTA_SSE = [
   "event: response.reasoning_text.delta",
   'data: {"type":"response.reasoning_text.delta","delta":"thinking"}',

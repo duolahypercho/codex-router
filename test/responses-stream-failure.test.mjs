@@ -41,6 +41,27 @@ function fail(target, options = {}) {
   return events(target.body()).at(-1);
 }
 
+test("a deliberate local rejection uses terminal Codex classification with trusted identity", () => {
+  const target = response();
+  markResponsesStream(target);
+  const observer = observe(target, [frame(created())]);
+  const failure = fail(target, { code: "router_repetitive_generation", localRejection: true });
+  assert.equal(failure.type, "response.failed");
+  assert.equal(failure.code, "router_repetitive_generation");
+  assert.equal(failure.response.id, identity.id);
+  assert.equal(failure.response.error.code, "invalid_prompt");
+  assert.equal(writeStreamErrorEvent(target, { localRejection: true, code: "another" }), false);
+  observer.destroy();
+});
+
+test("a deliberate local rejection omits unknown identity and still emits a typed terminal", () => {
+  const target = response();
+  markResponsesStream(target);
+  const failure = fail(target, { code: "router_repetitive_generation", localRejection: true });
+  assert.deepEqual(failure, { type: "response.failed", code: "router_repetitive_generation",
+    response: { status: "failed", error: { code: "invalid_prompt", message: "fixture diagnosed cause" } } });
+});
+
 test("a tracked failure keeps announced identity, next sequence, enum error, and empty required defaults", () => {
   const target = response();
   markResponsesStream(target, { model: "requested/model" });

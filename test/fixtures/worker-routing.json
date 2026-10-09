@@ -1,0 +1,31 @@
+{
+  "evidence": "synthetic",
+  "policy": "task-boundary",
+  "initialProfileId": "codex-low",
+  "profiles": [
+    { "id": "codex-low", "harness": "codex", "model": "fixture-codex", "effort": "low", "description": "Bounded extraction" },
+    { "id": "codex-high", "harness": "codex", "model": "fixture-codex", "effort": "high", "description": "Investigation on the same model" },
+    { "id": "claude-high", "harness": "claude", "model": "fixture-claude", "effort": "high", "description": "Independent review" }
+  ],
+  "steps": [
+    {
+      "id": "request-1", "taskId": "task-1", "sessionId": "session-1", "boundary": "task",
+      "taskSummary": "Investigate a synthetic parser defect", "stepSummary": "Locate the parser entry point",
+      "answer": { "answers": { "route": { "type": "choice", "choice": "codex-low", "confidence": 0.8 } } },
+      "outcome": "accepted"
+    },
+    {
+      "id": "request-2", "taskId": "task-1", "sessionId": "session-1", "boundary": "request",
+      "taskSummary": "Investigate a synthetic parser defect", "stepSummary": "Resolve the ambiguous grammar rule",
+      "answer": { "answers": { "route": { "type": "choice", "choice": "codex-high", "confidence": 0.8 } } },
+      "outcome": "rejected"
+    },
+    {
+      "id": "request-3", "taskId": "task-2", "sessionId": "session-2", "boundary": "task",
+      "taskSummary": "Review the synthetic result", "stepSummary": "Assess the proposed fix independently",
+      "handoverSummary": "The grammar remains ambiguous. Review the caller-supplied example and proposed fix.",
+      "answer": { "answers": { "route": { "type": "choice", "choice": "claude-high", "confidence": 0.8 } } },
+      "outcome": "accepted"
+    }
+  ]
+}

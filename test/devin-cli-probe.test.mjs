@@ -9,6 +9,7 @@ import {
   encodeEnvelope,
   parseEndStreamPayload,
 } from "../src/connect-stream-audit.mjs";
+import { ToolCallStream } from "../src/devin-cli-turn.mjs";
 import { DEFAULT_MAX_TOKENS } from "../src/devin-probe-checks.mjs";
 import { devinCliVersion, runProbe } from "../src/devin-cli-probe.mjs";
 
@@ -152,6 +153,7 @@ function fakeProvider({ configured = true, maxTokensSeen } = {}) {
     proto,
     wire: { encodeMessage, decodeMessage },
     turn: {
+      ToolCallStream,
       buildChatMessageRequest: (chat, { token, modelUid }) => {
         if (maxTokensSeen) maxTokensSeen.push(chat.max_tokens);
         return {

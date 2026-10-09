@@ -47,6 +47,7 @@ const IMAGE_INPUT = Object.freeze(["text", "image"]);
 // non-empty output. 500K is the smallest round provider-specific threshold
 // above that measured floor while still reserving half of the advertised 1M
 // window; the reseller/API routes keep their separately proven 400K pin.
+// OpenCode Go retains 400K; standalone search does not establish a higher limit.
 test("every checked-in GLM-5.3-Flash route records its static metadata", () => {
   for (const [slug, upstreamModel, requestProfile, autoCompact] of ROUTES) {
     const model = MODEL_BY_SLUG.get(slug);
@@ -60,6 +61,14 @@ test("every checked-in GLM-5.3-Flash route records its static metadata", () => {
     assert.deepEqual(model.inputModalities, IMAGE_INPUT, slug);
     assert.equal(model.requestProfile, requestProfile);
   }
+  assert.equal(
+    MODEL_BY_SLUG.get("opencode-go/glm-5.3-flash").compHash,
+    "opencode-go-glm-5-3-flash-v2",
+  );
+  const goFlash = MODEL_BY_SLUG.get("opencode-go/glm-5.3-flash");
+  assert.equal(goFlash.searchTool?.mode, "standalone");
+  assert.equal(goFlash.behaviorTemplate, "gpt-5.6-sol");
+  assert.equal(goFlash.instructionOverlay, "efficient-agentic-v2");
 });
 
 test("Z.ai Coding Flash uses the proven GLM execution and deferred-tool surface without inferring shipped v2", () => {

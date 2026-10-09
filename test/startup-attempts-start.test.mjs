@@ -121,7 +121,7 @@ test('a permanent bundled venv import error is a setup failure without cooldown'
 // The fresh main already exposes bounded startup timeout overrides. This
 // diagnostic uses those existing overrides only to keep a real pending probe
 // deterministic and short; it does not alter the reviewed source or945 work.
-test('transient bundled venv scheduling timeouts contribute to automatic cooldown',{skip:process.platform==='win32'},t=>{
+test('transient bundled venv timeouts continue to the credential preflight without cooldown',{skip:process.platform==='win32'},t=>{
   const fixture=state(t);
   const source=path.join(fixture.directory,'source');
   const bin=path.join(source,'.venv','bin');mkdirSync(bin,{recursive:true});
@@ -134,10 +134,8 @@ test('transient bundled venv scheduling timeouts contribute to automatic cooldow
   const result=run('start.mjs',env);
   assert.equal(result.status,1,result.output);
   assert.match(result.output,/transient process scheduling pressure is possible/);
-  assert.equal(existsSync(fixture.record),true,'the expensive transient venv timeout was outside the recordStartupFailure catch');
-  const recorded=JSON.parse(readFileSync(fixture.record,'utf8'));
-  assert.equal(recorded.consecutiveFailures,1);
-  assert.equal(recorded.lastReason,'venv-timeout');
+  assert.match(result.output,/Internal service key is missing/);
+  assert.equal(existsSync(fixture.record),false,'an inconclusive probe must not seed cooldown');
 });
 
 

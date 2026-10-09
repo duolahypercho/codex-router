@@ -674,6 +674,7 @@ test("provider registry exposes configured API and OAuth model families", () => 
     assert.deepEqual(MODEL_BY_SLUG.get(slug).searchTool, { mode: "hosted" });
   }
   const standaloneSearchSlugs = new Set([
+    "opencode-go/glm-5.3-flash",
     "deepseek/deepseek-v4-flash",
     "deepseek/deepseek-v4-flash-vision-exp",
     "opencode-go/deepseek-v4-flash",

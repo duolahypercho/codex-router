@@ -569,10 +569,8 @@ export function wsTransportAvailable(key, now = Date.now()) {
 }
 
 export function nativeWebSocketTransportEnabled(environment = process.env) {
-  // Opt-in: the ChatGPT backend answers the upgrade with a 401 today, and the
-  // native-retry contract tests model that HTTP-only upstream request for
-  // request. An operator whose upstream does speak the protocol (or a future
-  // backend that does) sets MODEL_ROUTER_NATIVE_TRANSPORT=websocket.
+  // Preserve the existing HTTP retry contract by default. Operators whose
+  // upstream supports this protocol opt in with MODEL_ROUTER_NATIVE_TRANSPORT.
   const raw = String(
     environment.MODEL_ROUTER_NATIVE_TRANSPORT ||
       environment.CODEX_ROUTER_NATIVE_TRANSPORT ||
