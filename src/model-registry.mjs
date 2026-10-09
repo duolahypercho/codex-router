@@ -818,6 +818,9 @@ function modelProblem(model, providers, slugs, gatewayModels) {
       return `model ${model.slug} has duplicate serviceTiers`;
     }
   }
+  if (model.repetitionGuard !== undefined && typeof model.repetitionGuard !== "boolean") {
+    return `model ${model.slug} has an invalid repetitionGuard flag`;
+  }
   if (
     model.defaultReasoningSummary !== undefined &&
     !["auto", "concise", "detailed"].includes(model.defaultReasoningSummary)

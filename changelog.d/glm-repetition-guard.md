@@ -1,0 +1,1 @@
+- **GLM-5.3 repetition protection is available as an opt-in model setting.** Set `repetitionGuard: true` on a user model to stop sustained repeated prose without replaying the provider request; the default is off, and JSON fixtures, code, tools and reasoning are excluded from the heuristic.

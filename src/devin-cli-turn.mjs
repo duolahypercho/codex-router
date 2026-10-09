@@ -13,8 +13,42 @@ import {
   TRAJECTORY_TYPE_CASCADE,
 } from "./devin-proto.mjs";
 
-const CLIENT_NAME = "windsurf";
-const CLIENT_VERSION = "1.0.0";
+// Cascade sends argument-only fragments and may restate a complete call.
+// Share accumulation with the probe; emitted OpenAI arguments must be deltas.
+export class ToolCallStream {
+  constructor() {
+    this.byId = new Map();
+    this.collected = [];
+    this.activeId = undefined;
+  }
+
+  accept(call) {
+    const fragment = !call.name;
+    const id = call.id || (fragment ? this.activeId : undefined) || `call_${randomUUID()}`;
+    const existing = this.byId.get(id);
+    const previous = existing?.function.arguments || "";
+    if (fragment && !existing) {
+      throw new Error("Devin sent tool arguments without an active named call.");
+    }
+    const argumentsJson = fragment ? previous + (call.argumentsJson || "")
+      : call.argumentsJson || previous;
+    if (existing && (call.name && call.name !== existing.function.name || !argumentsJson.startsWith(previous))) {
+      throw new Error("Devin changed a tool call after streaming its arguments.");
+    }
+    const entry = {
+      id, type: "function",
+      function: { name: call.name || existing.function.name, arguments: argumentsJson },
+    };
+    const index = existing ? this.collected.findIndex((held) => held.id === id) : this.collected.length;
+    this.collected[index] = entry;
+    this.byId.set(id, entry);
+    this.activeId = id;
+    return { index, entry, restated: Boolean(existing), argumentDelta: argumentsJson.slice(previous.length) };
+  }
+}
+
+const CLIENT_NAME = "chisel";
+const CLIENT_VERSION = "0.0.0-dev";
 
 // Cascade has no "assistant" message source. The shipped client sends prior
 // model turns as SYSTEM, and a turn built any other way is rejected.
@@ -130,7 +164,7 @@ export function buildChatMessageRequest(chat, { token, modelUid, newId = randomU
       extensionName: CLIENT_NAME,
       extensionVersion: CLIENT_VERSION,
       locale: "en",
-      os: { darwin: "mac", win32: "win" }[process.platform] || "linux",
+      os: { darwin: "darwin", win32: "win" }[process.platform] || "linux",
     },
     prompt: withToolDescriptions(systemPrompt, tools),
     chatModelUid: modelUid,

@@ -3,7 +3,7 @@ import { pathToFileURL } from "node:url";
 
 import { AcpAgentClient } from "./acp-agent-client.mjs";
 import { agentBridgeSessions, recordAgentBridgeSession } from "./agent-bridge-state.mjs";
-import { ClaudeAgentBridge } from "./claude-agent-bridge.mjs";
+import { ClaudeAgentBridge, validateClaudePromptControls } from "./claude-agent-bridge.mjs";
 import { commandOnPath, spawnableCommand } from "./spawnable-command.mjs";
 
 export const AGENT_BRIDGE_IDS = Object.freeze(["anthropic", "cursor", "gemini"]);
@@ -150,14 +150,24 @@ export async function probeAgentBridge(id, options = {}) {
   }
 }
 
-export async function promptAgentBridge(id, { prompt, cwd = process.cwd(), sessionId } = {}) {
-  const bridge = createAgentBridge(id, { cwd });
+export async function promptAgentBridge(id, {
+  prompt, cwd = process.cwd(), sessionId, model, effort, bridgeFactory = createAgentBridge,
+} = {}) {
+  if (id === "anthropic") validateClaudePromptControls({ model, effort });
+  else if (model !== undefined || effort !== undefined) {
+    throw new Error("Model and effort controls are only available for the Claude bridge.");
+  }
+  const bridge = bridgeFactory(id, { cwd });
   let session;
   try {
     if (sessionId) session = await bridge.loadSession(sessionId, { cwd });
     else session = await bridge.newSession({ cwd });
     const result = id === "anthropic"
-      ? await bridge.prompt(session.sessionId, prompt, { cwd, resume: Boolean(sessionId) })
+      ? await bridge.prompt(session.sessionId, prompt, {
+        cwd, resume: Boolean(sessionId),
+        ...(model === undefined ? {} : { model }),
+        ...(effort === undefined ? {} : { effort }),
+      })
       : await bridge.prompt(session.sessionId, prompt);
     recordAgentBridgeSession({ id: result.sessionId || session.sessionId, bridge: id, cwd });
     return result;
@@ -174,7 +184,7 @@ async function readStdin() {
 
 function usage() {
   return [
-    "Usage: agent-bridges status|sessions [BRIDGE]|probe BRIDGE|prompt BRIDGE [--session ID] [--cwd PATH]",
+    "Usage: agent-bridges status|sessions [BRIDGE]|probe BRIDGE|prompt BRIDGE [--session ID] [--cwd PATH] [--model MODEL] [--effort LEVEL]",
     "",
     "Prompt text is read from stdin so it never appears in the process list.",
   ].join("\n");
@@ -188,12 +198,25 @@ async function main(argv = process.argv.slice(2)) {
   if (command === "prompt" && AGENT_BRIDGE_IDS.includes(id)) {
     let sessionId;
     let cwd = process.cwd();
+    let model;
+    let effort;
     for (let index = 0; index < rest.length; index += 1) {
-      if (rest[index] === "--session") sessionId = rest[++index];
-      else if (rest[index] === "--cwd") cwd = rest[++index];
-      else throw new Error(`Unknown prompt option: ${rest[index]}`);
+      const option = rest[index];
+      if (!["--session", "--cwd", "--model", "--effort"].includes(option)) {
+        throw new Error(`Unknown prompt option: ${option}`);
+      }
+      const value = rest[++index];
+      if (!value || value.startsWith("-")) throw new Error(`Missing value for ${option}.`);
+      if (option === "--session") sessionId = value;
+      else if (option === "--cwd") cwd = value;
+      else if (option === "--model") model = value;
+      else effort = value;
     }
-    return await promptAgentBridge(id, { prompt: await readStdin(), cwd, sessionId });
+    if (id === "anthropic") validateClaudePromptControls({ model, effort });
+    else if (model !== undefined || effort !== undefined) {
+      throw new Error("Model and effort controls are only available for the Claude bridge.");
+    }
+    return await promptAgentBridge(id, { prompt: await readStdin(), cwd, sessionId, model, effort });
   }
   throw Object.assign(new Error(usage()), { exitCode: 2 });
 }

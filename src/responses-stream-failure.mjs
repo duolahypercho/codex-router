@@ -237,7 +237,7 @@ class FailureMetadataTransform extends Transform {
   }
 }
 
-export function responsesStreamFailure(response, { code, message }) {
+export function responsesStreamFailure(response, { code, message, localRejection = false }) {
   const context = contexts.get(response);
   if (!context) return undefined;
   const pending = context.observer?.finishForFailure() === true;
@@ -246,11 +246,20 @@ export function responsesStreamFailure(response, { code, message }) {
   const safeMessage = typeof message === "string" && message
     ? message.slice(0, MAX_MESSAGE_CHARS).toWellFormed() : DEFAULT_MESSAGE;
   const safeCode = typeof code === "string" && code ? code.slice(0, MAX_CODE_CHARS).toWellFormed() : "local_router_stream_failed";
+  // Codex classifies invalid_prompt as terminal; ordinary server_error stream
+  // failures remain retryable. Use this only for a deliberate local rejection.
+  const errorCode = localRejection === true ? "invalid_prompt" : "server_error";
   if (!context.trusted || !context.id || !context.model || context.createdAt === undefined ||
       context.nextSequence === undefined) {
     // Missing ID/date/numbering (or both announced and requested model), and
     // unknown/oversized/corrupted egress metadata cannot justify a fabricated
     // upstream Response. Retain the generic error contract for this exception.
+    if (localRejection === true) {
+      // Codex accepts this minimal failure envelope. It is a local rejection,
+      // not a fabricated snapshot of an unidentified upstream Response.
+      return { event: { type: "response.failed", code: safeCode,
+        response: { status: "failed", error: { code: errorCode, message: safeMessage } } } };
+    }
     return { event: { type: "error", code: safeCode, message: safeMessage, param: null } };
   }
   return {
@@ -264,7 +273,7 @@ export function responsesStreamFailure(response, { code, message }) {
         created_at: context.createdAt,
         model: context.model,
         status: "failed",
-        error: { code: "server_error", message: safeMessage },
+        error: { code: errorCode, message: safeMessage },
         output: [],
         parallel_tool_calls: false,
         tool_choice: "none",

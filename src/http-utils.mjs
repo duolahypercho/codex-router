@@ -796,11 +796,11 @@ export function endStreamedResponse(response, { message } = {}) {
 // the leading blank line are the same as `endStreamedResponse` above, and for
 // the same reasons; the message is always router-side text, never an upstream
 // body.
-export function writeStreamErrorEvent(response, { code, message }) {
+export function writeStreamErrorEvent(response, { code, message, localRejection = false }) {
   if (!response || response.writableEnded || response.destroyed) return false;
   if (!isEventStream(response)) return false;
   try {
-    const failure = responsesStreamFailure(response, { code, message });
+    const failure = responsesStreamFailure(response, { code, message, localRejection });
     if (failure?.terminal) {
       if (failure.closePendingFrame) response.write("\n\n");
       return false;

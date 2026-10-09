@@ -28,7 +28,7 @@ import {
   GET_CHAT_MESSAGE_RESPONSE,
   SERVICE_PATH,
 } from "./devin-proto.mjs";
-import { buildChatMessageRequest, finishReasonFor, usageFrom } from "./devin-cli-turn.mjs";
+import { buildChatMessageRequest, finishReasonFor, usageFrom, ToolCallStream } from "./devin-cli-turn.mjs";
 import { installStableFetchTransport } from "./fetch-transport.mjs";
 
 installStableFetchTransport();
@@ -122,36 +122,7 @@ const chunk = (id, created, model, delta, finishReason = null) =>
     choices: [{ index: 0, delta, finish_reason: finishReason }],
   })}\n\n`;
 
-// Cascade streams whole tool calls rather than argument fragments, so a call
-// arriving twice is the same call restated. Indexing by id keeps the OpenAI
-// `tool_calls[].index` stable across restatements instead of emitting a second
-// call the client would dispatch twice.
-class ToolCallStream {
-  constructor() {
-    this.byId = new Map();
-    this.collected = [];
-  }
-
-  accept(call) {
-    const id = call.id || `call_${randomUUID()}`;
-    const existing = this.byId.get(id);
-    const entry = {
-      id,
-      type: "function",
-      function: { name: call.name || existing?.function.name || "", arguments: call.argumentsJson || "" },
-    };
-    if (existing) {
-      const index = this.collected.findIndex((held) => held.id === id);
-      this.collected[index] = entry;
-      this.byId.set(id, entry);
-      return { index, entry, restated: true };
-    }
-    const index = this.collected.length;
-    this.collected.push(entry);
-    this.byId.set(id, entry);
-    return { index, entry, restated: false };
-  }
-}
+export { ToolCallStream } from "./devin-cli-turn.mjs";
 
 async function handleChatCompletions(request, response) {
   const chat = JSON.parse((await readRequestBody(request)).toString("utf8"));
@@ -222,13 +193,14 @@ async function handleChatCompletions(request, response) {
         if (wantsStream) response.write(chunk(id, created, model, { content: message.deltaText }));
       }
       for (const call of message.deltaToolCalls || []) {
-        const { index, entry, restated } = toolCalls.accept(call);
-        if (!wantsStream) continue;
+        if (!call.name && !call.argumentsJson) continue;
+        const { index, entry, restated, argumentDelta } = toolCalls.accept(call);
+        if (!wantsStream || (restated && !argumentDelta)) continue;
         response.write(
           chunk(id, created, model, {
             tool_calls: [
               restated
-                ? { index, function: { arguments: entry.function.arguments } }
+                ? { index, function: { arguments: argumentDelta } }
                 : { index, id: entry.id, type: "function", function: { ...entry.function } },
             ],
           }),
@@ -293,7 +265,15 @@ export async function listCascadeModels({ session = readDevinSession(), signal }
     token: session.apiKey,
     requestSchema: GET_CLI_MODEL_CONFIGS_REQUEST,
     responseSchema: GET_CLI_MODEL_CONFIGS_RESPONSE,
-    message: { metadata: { apiKey: session.apiKey, ideName: "windsurf", locale: "en" } },
+    message: {
+      metadata: {
+        apiKey: session.apiKey,
+        ideName: "chisel",
+        ideVersion: "0.0.0-dev",
+        extensionVersion: "0.0.0-dev",
+        locale: "en",
+      },
+    },
     signal,
   });
   return (response.clientModelConfigs || [])

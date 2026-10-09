@@ -83,6 +83,7 @@ import {
 import { applyGrokFileToolsOverlay } from "./instruction-overlays.mjs";
 import { ResponsesHeartbeatTransform } from "./responses-heartbeat.mjs";
 import { responsesStreamFailureTransform } from "./responses-stream-failure.mjs";
+import { glmRepetitionGuardTransform, REPETITIVE_GENERATION_CODE } from "./glm-repetition-guard.mjs";
 import { messagePhaseTransform } from "./message-phase.mjs";
 import { translatedToolMessageCompatTransform } from "./deepseek-tool-message-compat.mjs";
 import {
@@ -5250,6 +5251,8 @@ async function handleResponses(request, response, requestUrl) {
         ? invalidCompletedFunctionCallTransform(flattenedNamespaces, contentType)
         : undefined;
       if (invalidFunctionCall) transforms.push(invalidFunctionCall);
+      const repetitionGuard = glmRepetitionGuardTransform(route, contentType);
+      if (repetitionGuard) transforms.push(repetitionGuard);
       const guard =
         route && EMPTY_COMPLETION_RETRY
           ? new EmptyCompletionGuard(contentType, {
@@ -5841,6 +5844,41 @@ async function handleResponses(request, response, requestUrl) {
       const firstTokenAt = usageTransform.firstTokenAt?.();
       if (firstTokenAt !== undefined) firstTokenMs = firstTokenAt - startedAt;
       reasoningStreamed = usageTransform.reasoningStreamed?.();
+    }
+    if (error?.code === REPETITIVE_GENERATION_CODE) {
+      const tokenTimes = [usageTransform?.firstTokenAt?.(), retryUsageTransform?.firstTokenAt?.()]
+        .filter((value) => value !== undefined);
+      if (tokenTimes.length) firstTokenMs = Math.min(...tokenTimes) - startedAt;
+      reasoningStreamed = usageTransform?.reasoningStreamed?.() || retryUsageTransform?.reasoningStreamed?.();
+      const streamed = response.headersSent;
+      finalStatus = streamed ? 502 : 400;
+      activityStatus = finalStatus;
+      if (streamed) {
+        writeStreamErrorEvent(response, { code: error.code, message: error.message, localRejection: true });
+        if (!response.writableEnded && !response.destroyed) response.end();
+      } else {
+        clearStagedResponseHead(response);
+        writeJson(response, 400, { error: { type: "generation_guard_error", code: error.code, message: error.message } });
+      }
+      recordObservedUsage({
+        model: route?.slug || requestedModel,
+        provider: route ? canonicalProviderId(route.provider) : "openai",
+        status: finalStatus,
+        durationMs: Date.now() - startedAt,
+        responseStartMs: upstreamLatencyMs,
+        firstTokenMs,
+        reasoningStreamed,
+        retries: upstreamRetries,
+        ...usage,
+        estimatedInputTokens,
+        ...toolResultAging,
+        ...imageBudget,
+        ...(streamed ? { streamAborted: true } : {}),
+        ...(emptyCompletionRetried ? { emptyCompletionRetried: true } : {}),
+        ...(failoverFrom ? { failoverFrom } : {}),
+      }, diagnostics);
+      usageRecorded = true;
+      return;
     }
     // Codex may close a native stream immediately after response.completed.
     // That is a successful terminal turn, not a canceled generation.
