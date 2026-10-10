@@ -1,18 +1,6 @@
-// Bounded retry for an upstream request that failed before any byte of the
-// response reached the caller.
-//
-// ChatGPT's edge intermittently answers a native turn with
-// "upstream connect error or disconnect/reset before headers", and the router
-// relayed that 503 straight through. "Before headers" is the whole point: no
-// response bytes ever existed, so the request can be sent again and the caller
-// never learns it happened. Codex reacts to the relayed 5xx by spending one of
-// its own five reconnects on a failure that one short retry absorbs.
-//
-// The safety rule this module exists to enforce: a retry is only ever legal
-// while nothing has been relayed. That is guaranteed structurally -- the loop
-// runs entirely before the caller touches its own `ServerResponse` -- and the
-// `canRetry` predicate is the second line of defence, re-checked before every
-// single retry. Retrying after partial output would duplicate the stream.
+// Bounded retries require two independent conditions: the caller has received
+// no output, and replay is permitted by the delivery policy. Before-response
+// reset and 5xx do not prove that a generation POST was never executed.
 
 import { connectTimeoutMs } from "./connect-timeout.mjs";
 
@@ -73,35 +61,13 @@ export const NATIVE_RETRY_BUDGET_MS = clampedInteger(
   MAX_BUDGET_MS,
 );
 
-// Statuses that mean an intermediary never obtained a usable response from the
-// origin, so the request itself was not served and sending it again is not a
-// second execution:
-//
-//   502/503/504  gateway/edge failure, the reported case
-//   520-524      Cloudflare-only edge failures; a live usage log recorded 520
-//                alongside the 503s, which is what proves the failure is
-//                happening at chatgpt.com's edge
-//
-// Deliberately absent:
-//
-//   429  quota and rate limiting. Retrying it blindly makes the condition
-//        worse, and honouring `Retry-After` would mean sleeping for as long as
-//        the upstream asks -- exactly the multi-second hang this bound exists
-//        to avoid. It is relayed so the caller and the user see it.
-//   4xx  deterministic. The same request produces the same answer.
-//   500  the origin ran and failed. Unlike the edge statuses above, a repeat
-//        risks a second execution of work that already happened.
+// These statuses can be retried for safe methods or an explicit availability
+// policy. None proves that an origin did not execute a generation POST.
+// 429, other 4xx and origin 500 remain outside this transient retry policy.
 export const RETRYABLE_STATUSES = new Set([502, 503, 504, 520, 521, 522, 523, 524]);
 
-// Transport failures where no response ever started. `fetch` reports these as
-// a generic TypeError whose cause carries the socket-level code.
-//
-// ENOTFOUND, EADDRNOTAVAIL, and ENOBUFS joined after #171: a Windows machine
-// under loopback churn failed native connects repeatedly while the same
-// origin answered other requests in the same window, which is the transient
-// shape this bound exists to absorb. All three fail before a connection
-// exists — a name that did not resolve, no ephemeral port to bind, no kernel
-// buffer for the socket — so a retry can never be a second execution.
+// Transient transport errors. Most do not establish delivery state: a socket
+// can reset after the origin has received and executed the entire request.
 const RETRYABLE_ERROR_CODES = new Set([
   "EADDRNOTAVAIL",
   "ECONNABORTED",
@@ -139,10 +105,38 @@ export function isRetryableTransportError(error) {
   return false;
 }
 
+export const NATIVE_RETRY_POLICY =
+  process.env.CODEX_ROUTER_NATIVE_RETRY_POLICY === "availability"
+    ? "availability" : "at-most-once";
+
+const UNSENT_CODES = new Set([
+  "ENOTFOUND", "EAI_AGAIN", "ECONNREFUSED", "EADDRNOTAVAIL", "UND_ERR_CONNECT_TIMEOUT",
+]);
+const CONNECT_CODES = new Set([
+  "ECONNRESET", "ECONNABORTED", "EHOSTUNREACH", "ENETDOWN", "ENETUNREACH", "ENOBUFS", "ETIMEDOUT",
+]);
+
+export function transportDeliveryState(error) {
+  for (let cause = error, depth = 0; cause && depth < MAX_CAUSE_DEPTH; cause = cause.cause, depth += 1) {
+    if (UNSENT_CODES.has(cause.code) ||
+        (["connect", "bind", "getaddrinfo"].includes(cause.syscall) && CONNECT_CODES.has(cause.code))) {
+      return "not_sent";
+    }
+  }
+  return "possibly_sent";
+}
+
+function transportErrorCode(error) {
+  for (let cause = error, depth = 0; cause && depth < MAX_CAUSE_DEPTH; cause = cause.cause, depth += 1) {
+    if (RETRYABLE_ERROR_CODES.has(cause.code)) return cause.code;
+  }
+  return undefined;
+}
+
 // A backoff that a departing caller does not have to sit through: an abort
 // resolves the wait immediately so the loop can stop on its next check.
 export function sleep(ms, signal) {
-  if (!(ms > 0)) return Promise.resolve();
+  if (signal?.aborted || !(ms > 0)) return Promise.resolve();
   return new Promise((resolve) => {
     const finish = () => {
       clearTimeout(timer);
@@ -186,45 +180,69 @@ export async function fetchWithRetry(target, init = {}, options = {}) {
     signal = init.signal,
     canRetry,
     onRetry,
+    onAttempt,
+    deliveryPolicy = NATIVE_RETRY_POLICY,
     fetchImpl = fetch,
     sleepImpl = sleep,
     now = Date.now,
   } = options;
   const startedAt = now();
+  // GET/HEAD/OPTIONS can be repeated without generation side effects. A POST
+  // needs positive pre-send evidence unless the operator accepts uncertainty.
+  const safeMethod = ["GET", "HEAD", "OPTIONS"].includes(String(init.method ?? "GET").toUpperCase());
+  const availability = deliveryPolicy === "availability";
   let attempt = 0;
   for (;;) {
     let response;
     let failure;
+    const attemptStartedAt = now();
     try {
       response = await fetchImpl(target, init);
     } catch (error) {
       failure = error;
     }
-    if (attempt >= retries) return settle(response, failure, attempt);
+    const deliveryState = failure ? transportDeliveryState(failure) : "response_started";
     const retryable = failure
       ? isRetryableTransportError(failure)
       : isRetryableStatus(response?.status);
-    if (!retryable) return settle(response, failure, attempt);
-    // The caller is gone, or has already relayed something. Either way this
-    // request is over: a retry would be work for nobody, or a duplicated
-    // stream.
-    if (signal?.aborted || canRetry?.() === false) {
-      return settle(response, failure, attempt);
-    }
-    // This attempt was not cheap, so the failure was not the fast one a retry
-    // absorbs. Relay it rather than spending the same time again.
-    if (now() - startedAt >= budgetMs) return settle(response, failure, attempt);
-    await discardBody(response);
+    const permitted = safeMethod || availability || deliveryState === "not_sent";
+    const retryScheduled = attempt < retries && retryable && permitted &&
+      !signal?.aborted && canRetry?.() !== false && now() - startedAt < budgetMs;
+    onAttempt?.({
+      attempt: attempt + 1,
+      ...(response ? { status: response.status } : {}),
+      ...(transportErrorCode(failure) ? { errorCode: transportErrorCode(failure) } : {}),
+      deliveryState,
+      durationMs: Math.max(0, now() - attemptStartedAt),
+      retryScheduled,
+    });
+    if (!retryScheduled) return settle(response, failure, attempt);
     const delayMs = backoffMs * BACKOFF_FACTOR ** attempt;
-    attempt += 1;
     onRetry?.({
-      attempt,
+      attempt: attempt + 1,
       retries,
       status: response?.status,
       error: failure,
       delayMs,
+      deliveryState,
+      deliveryPolicy: availability ? "availability" : "at-most-once",
     });
     await sleepImpl(delayMs, signal);
+    if (signal?.aborted) {
+      await discardBody(response);
+      throw abortError(signal);
+    }
+    // Delivery permission can change while waiting: the caller may receive
+    // bytes, or the total retry allowance may expire. Keep the last response
+    // readable unless a replacement will actually be submitted.
+    if (canRetry?.() === false || now() - startedAt >= budgetMs) {
+      return settle(response, failure, attempt);
+    }
+    await discardBody(response);
     if (signal?.aborted) throw abortError(signal);
+    if (canRetry?.() === false || now() - startedAt >= budgetMs) {
+      return settle(response, failure, attempt);
+    }
+    attempt += 1;
   }
 }

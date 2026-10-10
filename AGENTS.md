@@ -1978,12 +1978,16 @@ merely failing them.
    bytes, and replaying it appends a second response to a stream the client is
    reading. `test/native-retry.test.mjs` asserts the caller received the partial
    stream exactly once.
-2. Only failures where an intermediary never obtained a response qualify: 502,
-   503, 504, Cloudflare's 520-524, and connect-level socket errors. Do not add
-   429 — it is rate limiting, its `Retry-After` is relayed, and sleeping for the
-   upstream's suggested delay is the hang the bound exists to prevent. Do not
-   add 4xx, and do not add 500, where the origin ran and a repeat risks a second
-   execution.
+2. A generation POST additionally needs positive pre-send evidence. A reset,
+   missing response headers, 502/503/504, or Cloudflare 520-524 does not prove
+   the origin never executed the request. The default `at-most-once` policy
+   refuses ambiguous automatic replay; safe methods retain bounded transient
+   retries. `CODEX_ROUTER_NATIVE_RETRY_POLICY=availability` explicitly permits
+   uncertain delivery before client output. Neither policy retries 429, other
+   4xx, or origin 500. Reject native generation redirects before following one
+   can misclassify a later connect failure as unsent. Recheck delivery, abort
+   and total-budget gates after backoff and body cancellation. See
+   `docs/native-generation-retries.md` and `test/retry-delivery-boundary.test.mjs`.
 3. Keep the bound small. Codex retries roughly five times on its own and the
    two loops multiply, so the router's share (2 retries, 250ms then 750ms) has
    to keep the product a fast failure. A retry is also only *started* while the

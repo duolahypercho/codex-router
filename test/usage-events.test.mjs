@@ -18,6 +18,9 @@ test("usage events persist only bounded request metadata in a private file", asy
       model: "grok-oauth/grok-4.5",
       provider: "grok-oauth",
       status: 200,
+      deliveryPolicy: "at-most-once",
+      upstreamAttempts: [{ attempt: 1, deliveryState: "possibly_sent", durationMs: 9, retryScheduled: false,
+        errorCode: "ECONNRESET", url: "http://never-persist.invalid/secret", body: "private-attempt-input" }],
       durationMs: 321,
       responseStartMs: 121,
       inputTokens: 120,
@@ -46,6 +49,8 @@ test("usage events persist only bounded request metadata in a private file", asy
         model: "grok-oauth/grok-4.5",
         provider: "grok-oauth",
         status: 200,
+        deliveryPolicy: "at-most-once",
+        upstreamAttempts: [{ attempt: 1, deliveryState: "possibly_sent", durationMs: 9, retryScheduled: false, errorCode: "ECONNRESET" }],
         durationMs: 321,
         responseStartMs: 121,
         inputTokens: 120,
@@ -66,6 +71,9 @@ test("usage events persist only bounded request metadata in a private file", asy
         searchResults: 4,
       },
     ]);
+    const persisted = readFileSync(usage.USAGE_EVENTS_PATH, "utf8");
+    assert.equal(persisted.includes("private-attempt-input"), false);
+    assert.equal(persisted.includes("never-persist.invalid"), false);
     if (process.platform !== "win32") {
       assert.equal(statSync(usage.USAGE_EVENTS_PATH).mode & 0o777, 0o600);
     }

@@ -17,8 +17,8 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const INTERNAL_KEY = "test-internal-service-key-with-sufficient-length";
 const CALLER_KEY = "test-router-caller-capability-with-sufficient-length";
 
-// The body ChatGPT's edge actually returns. "before headers" is the property
-// that makes the request replayable: no response bytes ever existed.
+// A real edge error body. "Before headers" describes missing response bytes,
+// not proof that the origin has not executed the generation POST.
 const EDGE_503_BODY =
   "upstream connect error or disconnect/reset before headers. " +
   "reset reason: remote connection failure";
@@ -142,12 +142,17 @@ function largeNativeTurn() {
   };
 }
 
-function startRouter({ nativePort, routerPort, stateDir, backoffMs = 20, retries }) {
+function startRouter({ nativePort, routerPort, stateDir, backoffMs = 20, retries, deliveryPolicy }) {
   return run({
     CODEX_ROUTER_PORT: String(routerPort),
     CODEX_NATIVE_BASE_URL: `http://127.0.0.1:${nativePort}/backend-api/codex`,
     CODEX_ROUTER_GATEWAY_BASE_URL: `http://127.0.0.1:${nativePort}/v1`,
     MODEL_ROUTER_STATE_DIR: stateDir,
+    CODEX_ROUTER_STATE_DIR: stateDir,
+    CODEX_HOME: path.join(stateDir, "codex"),
+    MODEL_ROUTER_USER_MODELS: path.join(stateDir, "user-models.json"),
+    CODEX_ROUTER_NO_DISCOVERY: "0",
+    CODEX_ROUTER_NATIVE_RETRY_POLICY: deliveryPolicy ?? "at-most-once",
     CODEX_ROUTER_NATIVE_RETRY_BACKOFF_MS: String(backoffMs),
     ...(retries === undefined ? {} : { CODEX_ROUTER_NATIVE_RETRIES: String(retries) }),
   });
@@ -157,10 +162,158 @@ function stateDirectory() {
   return mkdtempSync(path.join(os.tmpdir(), "native-retry-state-"));
 }
 
-// The reported failure: ChatGPT's edge answers a native turn with a 503 whose
-// body says the connection reset *before headers*. Nothing was relayed, so the
-// router can send it again and the caller never learns it happened.
-test("a native 503 before headers is retried and the caller sees only the success", async () => {
+test("default POST policy never replays after the origin consumed and executed the request", async () => {
+  let executions = 0;
+  const native = await mockServer(async (request, response) => {
+    await readBody(request);
+    executions += 1;
+    if (executions === 1) { request.socket.destroy(); return; }
+    response.writeHead(200, { "Content-Type": "application/json" });
+    response.end(JSON.stringify({ object: "response", status: "completed", output: [] }));
+  });
+  const stateDir = stateDirectory();
+  const routerPort = await openPort();
+  const router = startRouter({ nativePort: native.port, routerPort, stateDir });
+  try {
+    await waitFor(`${routerBase(routerPort)}/models`, router);
+    const result = await fetch(`${routerBase(routerPort)}/responses`, {
+      method: "POST",
+      headers: { Authorization: "Bearer synthetic-native-caller", "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "gpt-6.1-sol", stream: true, input: "local synthetic generation" }),
+    });
+    assert.equal(result.status, 502, await result.text());
+    assert.equal(executions, 1, "origin work must not be duplicated by this router request");
+    await waitUntil(() => usageEvents(stateDir).length > 0, "no failed-attempt ledger");
+    const event = usageEvents(stateDir).at(-1);
+
+    assert.equal(event.deliveryPolicy, "at-most-once");
+    assert.equal(event.upstreamAttempts.length, 1);
+    assert.equal(event.upstreamAttempts[0].deliveryState, "possibly_sent");
+    assert.equal(event.upstreamAttempts[0].retryScheduled, false);
+    assert.equal(router.testErrors().includes("native upstream retry "), false);
+  } finally {
+    await stopChild(router);
+    native.server.closeAllConnections();
+    await closeServer(native.server);
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("a terminal native socket failure still records every submitted availability retry", async () => {
+  let executions = 0;
+  const native = await mockServer(async (request) => {
+    await readBody(request);
+    executions += 1;
+    request.socket.destroy();
+  });
+  const stateDir = stateDirectory();
+  const routerPort = await openPort();
+  const router = startRouter({ nativePort: native.port, routerPort, stateDir, deliveryPolicy: "availability", retries: 1 });
+  try {
+    await waitFor(`${routerBase(routerPort)}/models`, router);
+    const result = await fetch(`${routerBase(routerPort)}/responses`, {
+      method: "POST",
+      headers: { Authorization: "Bearer synthetic-native-caller", "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "gpt-6.1-sol", stream: true, input: "local synthetic failed replay" }),
+      signal: AbortSignal.timeout(5_000),
+    });
+    assert.equal(result.status, 502, await result.text());
+    assert.equal(executions, 2, "the opt-in policy must exercise an actual submitted retry before terminal failure");
+    await waitUntil(() => usageEvents(stateDir).length > 0, "no terminal retry ledger");
+    const event = usageEvents(stateDir).at(-1);
+
+    assert.equal(event.deliveryPolicy, "availability");
+    assert.equal(event.retries, 1, "throwing after the final POST must not erase the submitted retry count");
+    assert.deepEqual(event.upstreamAttempts.map((attempt) => attempt.deliveryState), ["possibly_sent", "possibly_sent"]);
+    assert.deepEqual(event.upstreamAttempts.map((attempt) => attempt.retryScheduled), [true, false]);
+  } finally {
+    await stopChild(router);
+    native.server.closeAllConnections();
+    await closeServer(native.server);
+    const resolved = path.resolve(stateDir);
+    assert.ok(resolved.startsWith(`${path.resolve(os.tmpdir())}${path.sep}`) &&
+      path.basename(resolved).startsWith("native-retry-state-"), "cleanup must stay inside its owned temporary fixture");
+    rmSync(resolved, { recursive: true, force: true });
+  }
+});
+
+test("a native generation redirect cannot certify a previously consumed POST as unsent", { timeout: 20_000 }, async (t) => {
+  for (const redirectStatus of [307, 308]) {
+    await t.test(`HTTP ${redirectStatus} followed by a refused connect`, async () => {
+      let executions = 0;
+      const refusedPort = await openPort();
+      const native = await mockServer(async (request, response) => {
+        await readBody(request);
+        executions += 1;
+        response.writeHead(redirectStatus, { Location: `http://127.0.0.1:${refusedPort}/responses` });
+        response.end();
+      });
+      const stateDir = stateDirectory();
+      const routerPort = await openPort();
+      const router = startRouter({ nativePort: native.port, routerPort, stateDir, retries: 1 });
+      try {
+        await waitFor(`${routerBase(routerPort)}/models`, router);
+        const result = await fetch(`${routerBase(routerPort)}/responses`, {
+          method: "POST",
+          headers: { Authorization: "Bearer synthetic-native-caller", "Content-Type": "application/json" },
+          body: JSON.stringify({ model: "gpt-6.1-sol", stream: true, input: "local synthetic generation redirect" }),
+          redirect: "manual",
+          signal: AbortSignal.timeout(5_000),
+        });
+        assert.ok(result.status >= 400, `a generation redirect must be refused locally: ${result.status}`);
+        await result.text();
+        assert.equal(executions, 1, "failure at a redirected target must not replay a consumed generation POST");
+        await waitUntil(() => usageEvents(stateDir).length > 0, "no rejected-redirect ledger");
+        const event = usageEvents(stateDir).at(-1);
+
+        assert.equal(event.deliveryPolicy, "at-most-once");
+        assert.equal(event.upstreamAttempts.length, 1);
+        assert.notEqual(event.upstreamAttempts[0].deliveryState, "not_sent", "the first origin already consumed the complete POST");
+        assert.equal(event.upstreamAttempts[0].retryScheduled, false);
+      } finally {
+        await stopChild(router);
+        native.server.closeAllConnections();
+        await closeServer(native.server);
+        const resolved = path.resolve(stateDir);
+        assert.ok(resolved.startsWith(`${path.resolve(os.tmpdir())}${path.sep}`) &&
+          path.basename(resolved).startsWith("native-retry-state-"), "cleanup must stay inside its owned temporary fixture");
+        rmSync(resolved, { recursive: true, force: true });
+      }
+    });
+  }
+});
+
+test("POST retries require pre-send evidence unless availability was explicitly selected", async () => {
+  for (const [code, syscall, expectedCalls] of [
+    ["ENOTFOUND", undefined, 2], ["UND_ERR_CONNECT_TIMEOUT", undefined, 2],
+    ["ENOBUFS", "connect", 2], ["ENOBUFS", undefined, 1],
+    ["ECONNRESET", undefined, 1], ["UND_ERR_HEADERS_TIMEOUT", undefined, 1],
+  ]) {
+    let calls = 0;
+    const error = Object.assign(new Error("synthetic transport failure"), { code, syscall });
+    try {
+      await fetchWithRetry("http://synthetic.invalid", { method: "POST", body: "synthetic" }, {
+        deliveryPolicy: "at-most-once", retries: 1, backoffMs: 0,
+        fetchImpl: async () => { if (++calls === 1) throw error; return new Response("ok"); },
+      });
+    } catch (actual) { assert.equal(actual, error); }
+    assert.equal(calls, expectedCalls, `${code}/${syscall}`);
+  }
+  for (const policy of ["at-most-once", "availability"]) {
+    const attempts = [];
+    await fetchWithRetry("http://synthetic.invalid", { method: "POST" }, {
+      deliveryPolicy: policy, retries: 1, backoffMs: 0, onAttempt: (e) => attempts.push(e),
+      fetchImpl: async () => new Response("synthetic edge failure", { status: 503 }),
+    });
+    assert.equal(attempts.length, policy === "availability" ? 2 : 1);
+    assert.equal(attempts[0].deliveryState, "response_started");
+    assert.equal(attempts[0].retryScheduled, policy === "availability");
+  }
+});
+
+// Availability mode explicitly accepts uncertain origin delivery before any
+// output is relayed. The default generation policy does not replay this 503.
+test("availability mode retries a native 503 before client output", async () => {
   const attempts = [];
   const native = await mockServer(async (request, response) => {
     attempts.push(await readBody(request));
@@ -178,7 +331,7 @@ test("a native 503 before headers is retried and the caller sees only the succes
   });
   const stateDir = stateDirectory();
   const routerPort = await openPort();
-  const router = startRouter({ nativePort: native.port, routerPort, stateDir });
+  const router = startRouter({ nativePort: native.port, routerPort, stateDir, deliveryPolicy: "availability" });
 
   try {
     await waitFor(`${routerBase(routerPort)}/models`, router);
@@ -194,7 +347,7 @@ test("a native 503 before headers is retried and the caller sees only the succes
     assert.equal(JSON.parse(relayed).id, "resp-retried");
     assert.equal(attempts.length, 2, "the 503 was relayed instead of retried");
 
-    // Idempotency: the replayed request is the same bytes under the same
+    // Body fidelity: the replayed request is the same bytes under the same
     // encoding, and it still decodes.
     assert.equal(attempts[0].encoding, "zstd");
     assert.equal(attempts[1].encoding, "zstd");
@@ -247,7 +400,7 @@ test("a native 503 that outlives the retry bound is relayed unchanged", async ()
   });
   const stateDir = stateDirectory();
   const routerPort = await openPort();
-  const router = startRouter({ nativePort: native.port, routerPort, stateDir });
+  const router = startRouter({ nativePort: native.port, routerPort, stateDir, deliveryPolicy: "availability" });
 
   try {
     await waitFor(`${routerBase(routerPort)}/models`, router);
@@ -401,6 +554,7 @@ test("a caller that disconnects mid-backoff stops the retries", async () => {
     routerPort,
     stateDir,
     backoffMs: 1_500,
+    deliveryPolicy: "availability",
   });
 
   try {
@@ -551,8 +705,8 @@ test("a connect timeout that outlives the budget is relayed", async () => {
 
 // #171: a Windows machine under loopback churn failed native connects with
 // codes outside the original set while the same origin answered other
-// requests in the same window. Each of these fails before a connection
-// exists, so a retry can never re-execute work.
+// requests in the same window. Safe GET retries preserve this recovery;
+// generation POST additionally requires evidence of a pre-connect failure.
 test("pre-connection failures added after #171 are retried", async () => {
   for (const code of ["ENOTFOUND", "EADDRNOTAVAIL", "ENOBUFS"]) {
     let calls = 0;
