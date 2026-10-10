@@ -1,0 +1,1 @@
+- Preserve unrelated files when failed private writes or profile copies encounter a replaced temporary path or parent directory; clean up only the exclusively created file whose identity still matches.
