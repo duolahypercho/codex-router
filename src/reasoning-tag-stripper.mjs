@@ -22,9 +22,10 @@ import { Transform } from "node:stream";
 // Reasoning-delimiter names a model may leak inline. `<think>` is Qwen's and
 // DeepSeek's native form and the only one seen in real sessions, but the same
 // model varies the spelling (`<thinking>`, `<reason>`, `<reasoning>` observed
-// live), so the whole family is stripped. These names are reasoning scaffolding,
-// never prose a caller wants verbatim; the tradeoff is that a routed answer
-// which deliberately prints a literal `<reason>` tag would lose it.
+// live), so this opt-in compatibility transform recognizes the whole family.
+// The same spelling can be legitimate XML or quoted source code: no text-only
+// grammar can distinguish that from a leak. The route must establish that this
+// destructive adapter is needed; do not apply it to every routed answer.
 const TAG_NAMES = ["thinking", "reasoning", "think", "reason"]; // longest-first
 
 // Hy4 Preview writes its native markup with a per-message nonce suffix --
@@ -112,12 +113,13 @@ function tagPrefixTest(nonce, names) {
   };
 }
 
-function buildGrammar(nonce) {
+function buildGrammar(nonce, plain = true) {
+  const suffix = nonce ? `${SUFFIX}${plain ? "?" : ""}` : "";
   const tag = nonce
-    ? `</?(?:${NAMES_ALT})${SUFFIX}?>|</?(?:${MARKUP_ALT})${SUFFIX}>`
+    ? `</?(?:${NAMES_ALT})${suffix}>|</?(?:${MARKUP_ALT})${SUFFIX}>`
     : `</?(?:${NAMES_ALT})>`;
-  const open = nonce ? `<(?:${NAMES_ALT})${SUFFIX}?>|<(?:${MARKUP_ALT})${SUFFIX}>` : `<(?:${NAMES_ALT})>`;
-  const close = nonce ? `</(?:${NAMES_ALT})${SUFFIX}?>` : `</(?:${NAMES_ALT})>`;
+  const open = nonce ? `<(?:${NAMES_ALT})${suffix}>|<(?:${MARKUP_ALT})${SUFFIX}>` : `<(?:${NAMES_ALT})>`;
+  const close = `</(?:${NAMES_ALT})${suffix}>`;
   const names = nonce ? [...TAG_NAMES, ...NONCE_MARKUP_NAMES] : TAG_NAMES;
   return {
     nonce,
@@ -129,8 +131,8 @@ function buildGrammar(nonce) {
     // Open-to-nearest-close, any reasoning name to any reasoning name
     // (non-greedy) -- matches the streaming machine, which closes on the first
     // close tag it sees.
-    spanRe: new RegExp(`(?:<(?:${NAMES_ALT})${nonce ? `${SUFFIX}?` : ""}>)[\\s\\S]*?(?:${close})`, "g"),
-    orphanRe: new RegExp(`</?(?:${NAMES_ALT})${nonce ? `${SUFFIX}?` : ""}>`, "g"),
+    spanRe: new RegExp(`(?:<(?:${NAMES_ALT})${suffix}>)[\\s\\S]*?(?:${close})`, "g"),
+    orphanRe: new RegExp(`</?(?:${NAMES_ALT})${suffix}>`, "g"),
     hasRe: new RegExp(tag),
     isTagPrefix: tagPrefixTest(nonce, names),
     maxTagLen: Math.max(
@@ -141,9 +143,24 @@ function buildGrammar(nonce) {
 
 const PLAIN_GRAMMAR = buildGrammar(false);
 const NONCE_GRAMMAR = buildGrammar(true);
+const NONCE_ONLY_GRAMMAR = buildGrammar(true, false);
+const PRESERVE_GRAMMAR = {
+  nonce: false,
+  tagRe: /(?!)/g,
+  closeRe: /(?!)/g,
+  openRe: /(?!)/g,
+  spanRe: /(?!)/g,
+  orphanRe: /(?!)/g,
+  hasRe: /(?!)/,
+  isTagPrefix: () => false,
+  maxTagLen: 0,
+};
 
 function grammarFor(options) {
-  return options?.nonceDelimiters === true ? NONCE_GRAMMAR : PLAIN_GRAMMAR;
+  if (options?.plainDelimiters === false && options?.nonceDelimiters !== true) return PRESERVE_GRAMMAR;
+  return options?.nonceDelimiters === true
+    ? options?.plainDelimiters === false ? NONCE_ONLY_GRAMMAR : NONCE_GRAMMAR
+    : PLAIN_GRAMMAR;
 }
 
 // Index just past the last close tag that terminates leaked reasoning: a
@@ -421,9 +438,9 @@ export class ReasoningTagStripper extends Transform {
   #options;
   #grammar;
 
-  // `nonceDelimiters: true` adds Hy4's `</think:NONCE>` family to the grammar
-  // and the orphan-close rule that goes with it. Off by default: see the note
-  // on `NONCE_MARKUP_NAMES`.
+  // `nonceDelimiters: true` adds Hy4's `</think:NONCE>` family and its orphan-
+  // close rule. `plainDelimiters: false` restricts that grammar to nonce tags;
+  // legacy standalone callers retain the existing bare-tag grammar by default.
   constructor(options = {}) {
     super();
     this.#options = options;
@@ -543,5 +560,6 @@ export class ReasoningTagStripper extends Transform {
 
 export function reasoningTagStripperTransform(contentType = "", options = {}) {
   if (!String(contentType).toLowerCase().includes("text/event-stream")) return undefined;
+  if (options.plainDelimiters === false && options.nonceDelimiters !== true) return undefined;
   return new ReasoningTagStripper(options);
 }

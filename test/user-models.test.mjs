@@ -6,9 +6,12 @@ import { test } from "node:test";
 
 const stateDir = mkdtempSync(path.join(os.tmpdir(), "user-models-test-"));
 process.env.CODEX_ROUTER_STATE_DIR = stateDir;
+process.env.MODEL_ROUTER_STATE_DIR = stateDir;
+process.env.MODEL_ROUTER_USER_MODELS = path.join(stateDir, "user-models.json");
 
 const {
   userModelEntry,
+  userModelEntryFromCatalog,
   readUserModels,
   writeUserModels,
   hasDefaultUserModelReasoning,
@@ -108,6 +111,28 @@ test("curation metadata preserves only explicit endpoint capabilities", () => {
   });
   assert.deepEqual(entry.supportedEndpoints, ["/embeddings"]);
   assert.equal(entry.endpoint, undefined);
+});
+
+test("curation and protected JSON retain an explicit reasoning tag policy", () => {
+  const entries = ["preserve", "legacy-inline", "hy4-nonce"].map((reasoningTagPolicy, priority) =>
+    userModelEntry({ providerId: "custom", upstreamId: `policy-${priority}/hy4-preview`, priority: 100 + priority,
+      metadata: { reasoningTagPolicy } }));
+  assert.deepEqual(entries.map((entry) => entry.reasoningTagPolicy), ["preserve", "legacy-inline", "hy4-nonce"]);
+  writeUserModels(entries);
+  assert.deepEqual(readUserModels(), entries);
+  const explicit = userModelEntry({ providerId: "custom", upstreamId: "model", priority: 100,
+    reasoningTagPolicy: "preserve", metadata: { reasoningTagPolicy: "legacy-inline" } });
+  assert.equal(explicit.reasoningTagPolicy, "preserve", "explicit caller policy wins over catalog metadata");
+  assert.equal(userModelEntry({ providerId: "custom", upstreamId: "default", priority: 100 }).reasoningTagPolicy, undefined);
+});
+
+test("verified catalog conversion preserves an explicit tag policy without inventing one", () => {
+  const catalogModel = { id: "model", adapter: "vertex-openai-chat", priority: 100,
+    displayName: "Model", description: "Verified support catalog record", capabilities: {} };
+  assert.equal(userModelEntryFromCatalog({ providerId: "vertex", catalogModel }).reasoningTagPolicy, undefined);
+  const entry = userModelEntryFromCatalog({ providerId: "vertex",
+    catalogModel: { ...catalogModel, reasoningTagPolicy: "preserve" } });
+  assert.equal(entry.reasoningTagPolicy, "preserve");
 });
 
 test("curation metadata cannot replace identity or routing fields", () => {

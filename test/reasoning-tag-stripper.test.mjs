@@ -423,3 +423,29 @@ test("the factory forwards the gate", () => {
   assert.equal(reasoningTagStripperTransform("text/event-stream", { nonceDelimiters: true }) === gated, false);
   assert.ok(reasoningTagStripperTransform("text/event-stream") instanceof ReasoningTagStripper);
 });
+
+test("nonce-only compatibility preserves bare literal tags across split deltas", async () => {
+  const options = { nonceDelimiters: true, plainDelimiters: false };
+  const deltas = ["XML: <re", "ason>disk full</reason>, <thi", "nk>visible</think>. Tail complete"];
+  const text = deltas.join("");
+  assert.equal(stripThinkTags(text, options), text);
+  for (const chunkSize of [0, 1, 13]) {
+    const output = collect(await run(streamCase(deltas), { ...options, chunkSize }));
+    assert.equal(output.deltas, text);
+    assert.deepEqual(output.done, [text]);
+    assert.deepEqual(output.messages, [text]);
+  }
+  const leaked = [`<think:${HEX}>hidden</thi`, `nk:${HEX}>`, "Answer complete"];
+  const output = collect(await run(streamCase(leaked), { ...options, chunkSize: 1 }));
+  assert.equal(output.deltas, "Answer complete");
+  assert.deepEqual(output.done, ["Answer complete"]);
+  assert.deepEqual(output.messages, ["Answer complete"]);
+});
+
+test("disabling both delimiter grammars does not destructively interpret text", async () => {
+  const options = { plainDelimiters: false };
+  const text = "<think>literal</think> <reason>XML</reason>";
+  assert.equal(stripThinkTags(text, options), text);
+  assert.equal(reasoningTagStripperTransform("text/event-stream", options), undefined);
+  assert.equal(collect(await run(streamCase([text]), options)).deltas, text);
+});
