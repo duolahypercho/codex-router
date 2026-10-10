@@ -39,6 +39,7 @@ import {
 import { discoverVertexProviderModels } from "./vertex-model-discovery.mjs";
 import {
   ensureFreshGitHubCopilotSession,
+  resolveGitHubCopilotConfiguration,
   githubCopilotCatalogHeaders,
 } from "./github-copilot-session.mjs";
 
@@ -260,6 +261,9 @@ async function providerDiscoveryIdentity(provider) {
     kind: "api",
     credential,
     baseUrl: resolveProviderBaseUrl(provider).baseUrl,
+    ...(provider.authProfile === "github-copilot"
+      ? { copilotConfiguration: resolveGitHubCopilotConfiguration() }
+      : {}),
   };
 }
 
@@ -269,6 +273,7 @@ function sameProviderDiscoveryIdentity(left, right) {
 }
 
 function discoveryEndpoint(identity) {
+  if (identity?.copilotCatalogEndpoint) return identity.copilotCatalogEndpoint;
   const baseUrl = identity?.baseUrl || identity?.session?.apiServerUrl;
   return typeof baseUrl === "string" && baseUrl.trim() ? `${baseUrl.replace(/\/+$/, "")}/models` : undefined;
 }
@@ -289,6 +294,7 @@ export function providerDiscoveryIdentityFingerprint(identity) {
     "api",
     identity.baseUrl,
     identity.credential?.value,
+    ...(identity.copilotConfiguration ? [identity.copilotConfiguration.identity] : []),
   ]);
 }
 
@@ -328,14 +334,21 @@ async function providerPayload(provider, identity) {
   // placeholder credential passes the check above, so an unguarded override
   // would send `Bearer local` to whatever host the environment names.
   let baseUrl = identity?.baseUrl || resolveProviderBaseUrl(provider).baseUrl;
+  let copilotConfiguration;
   let headers = provider.authMode === "anonymous"
     ? {}
     : provider.protocol === "anthropic"
     ? { "x-api-key": credential.value, "anthropic-version": "2023-06-01" }
     : { Authorization: `Bearer ${credential.value}` };
   if (provider.authProfile === "github-copilot") {
-    const session = await ensureFreshGitHubCopilotSession(credential.value);
-    if (!process.env[provider.baseUrlEnv]) baseUrl = session.baseUrl;
+    const session = await ensureFreshGitHubCopilotSession(credential.value, {
+      configuration: identity?.copilotConfiguration,
+    });
+    copilotConfiguration = session.configuration;
+    baseUrl = session.configuration.baseUrlOverride || session.baseUrl;
+    // This is fetch provenance, not account identity. Keep it out of the
+    // fingerprint so the next cache read needs no discovery request.
+    if (identity) identity.copilotCatalogEndpoint = `${baseUrl}/models`;
     headers = {
       ...githubCopilotCatalogHeaders(session.token),
     };
@@ -350,6 +363,7 @@ async function providerPayload(provider, identity) {
   return fetchUntrustedModelCatalog(`${baseUrl}/models`, {
     headers,
     allowPrivate: Boolean(provider.keyless),
+    ...(copilotConfiguration?.enterprise ? { maxRedirects: 0 } : {}),
   });
 }
 

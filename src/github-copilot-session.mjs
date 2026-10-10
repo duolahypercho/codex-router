@@ -1,8 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { normalizeGitHubCopilotHost, readGitHubCopilotSettings } from "./github-copilot-state.mjs";
 
-const USER_URL =
-  process.env.GITHUB_COPILOT_USER_URL ||
-  "https://api.github.com/copilot_internal/user";
 const DEFAULT_API_BASE_URL = "https://api.individual.githubcopilot.com";
 const REQUEST_TIMEOUT_MS = 30_000;
 const SESSION_TTL_MS = 5 * 60_000;
@@ -48,18 +46,67 @@ function githubCopilotHost(hostname) {
     host.endsWith(".githubcopilot.com");
 }
 
-function userEndpoint() {
-  const url = new URL(USER_URL);
-  const loopback = ["127.0.0.1", "[::1]", "localhost"].includes(url.hostname);
-  if ((url.protocol !== "https:" || url.hostname !== "api.github.com") && !loopback) {
-    throw new Error("GITHUB_COPILOT_USER_URL must use api.github.com or a loopback test endpoint.");
-  }
-  return url;
+function loopbackUrl(url) {
+  return ["127.0.0.1", "[::1]", "localhost"].includes(url.hostname);
 }
 
-export function copilotApiBaseUrl(payload, fallback = DEFAULT_API_BASE_URL) {
+function enterpriseInferenceUrl(value, host) {
+  const url = new URL(value);
+  if (
+    url.protocol !== "https:" || url.username || url.password || url.port || url.search || url.hash ||
+    ![`copilot-api.${host}`, `copilot-proxy.${host}`].includes(url.hostname)
+  ) throw new Error("untrusted endpoint");
+  return url.href.replace(/\/+$/, "");
+}
+
+export function resolveGitHubCopilotConfiguration({ env = process.env, settings = readGitHubCopilotSettings() } = {}) {
+  const host = normalizeGitHubCopilotHost(settings.host);
+  const enterprise = host !== "github.com";
+  const accountHost = enterprise ? `api.${host}` : "api.github.com";
+  const userUrl = env.GITHUB_COPILOT_USER_URL || `https://${accountHost}/copilot_internal/user`;
+  let account;
+  try {
+    account = new URL(userUrl);
+    if (!loopbackUrl(account) && (
+      account.protocol !== "https:" || account.hostname !== accountHost ||
+      (enterprise && (account.username || account.password || account.port || account.search || account.hash || account.pathname !== "/copilot_internal/user"))
+    )) throw new Error("untrusted account endpoint");
+  } catch {
+    throw new Error("GITHUB_COPILOT_USER_URL must match the selected GitHub account API or a loopback test endpoint.");
+  }
+  let baseUrlOverride = env.GITHUB_COPILOT_BASE_URL || undefined;
+  if (baseUrlOverride && enterprise) {
+    try {
+      const override = new URL(baseUrlOverride);
+      // Existing loopback fixtures must set both account and inference URLs.
+      // A production account can never use this test-only HTTP exception.
+      if (loopbackUrl(account) && loopbackUrl(override) && ["http:", "https:"].includes(override.protocol) &&
+        !override.username && !override.password && !override.search && !override.hash) {
+        baseUrlOverride = override.href.replace(/\/+$/, "");
+      } else {
+        baseUrlOverride = enterpriseInferenceUrl(baseUrlOverride, host);
+      }
+    } catch {
+      throw new Error("GITHUB_COPILOT_BASE_URL must use a Copilot endpoint for the selected enterprise tenant.");
+    }
+  }
+  if (baseUrlOverride) baseUrlOverride = baseUrlOverride.replace(/\/+$/, "");
+  return Object.freeze({
+    host, enterprise, userUrl: account.href,
+    dashboardUrl: `https://${host}/settings/copilot`,
+    baseUrlOverride,
+    identity: JSON.stringify([host, account.href, baseUrlOverride || null]),
+  });
+}
+
+export function copilotApiBaseUrl(payload, fallback = DEFAULT_API_BASE_URL, configuration = resolveGitHubCopilotConfiguration()) {
   const endpoint = payload?.endpoints?.api;
   if (endpoint === undefined || endpoint === null || endpoint === "") {
+    if (configuration.enterprise) {
+      const error = new Error("GitHub returned no Copilot inference endpoint for the selected enterprise tenant.");
+      error.status = 502;
+      throw error;
+    }
     return fallback.replace(/\/+$/, "");
   }
   if (typeof endpoint !== "string" || !endpoint.trim()) {
@@ -68,6 +115,7 @@ export function copilotApiBaseUrl(payload, fallback = DEFAULT_API_BASE_URL) {
     throw error;
   }
   try {
+    if (configuration.enterprise) return enterpriseInferenceUrl(endpoint, configuration.host);
     const url = new URL(endpoint);
     if (
       url.protocol !== "https:" ||
@@ -99,10 +147,11 @@ export function githubCopilotAccountHeaders(githubToken) {
   };
 }
 
-async function resolveSession(githubToken, fetchImpl, now) {
-  const response = await fetchImpl(userEndpoint(), {
+async function resolveSession(githubToken, fetchImpl, now, configuration) {
+  const response = await fetchImpl(new URL(configuration.userUrl), {
     headers: githubCopilotAccountHeaders(githubToken),
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    ...(configuration.enterprise ? { redirect: "error" } : {}),
   });
   if (!response.ok) {
     await response.body?.cancel().catch(() => undefined);
@@ -123,14 +172,15 @@ async function resolveSession(githubToken, fetchImpl, now) {
   }
   return {
     token: githubToken,
-    baseUrl: copilotApiBaseUrl(payload),
+    baseUrl: copilotApiBaseUrl(payload, DEFAULT_API_BASE_URL, configuration),
     checkedAt: now,
+    configuration,
   };
 }
 
 export async function ensureFreshGitHubCopilotSession(
   githubToken,
-  { force = false, fetchImpl = fetch, now = Date.now() } = {},
+  { force = false, fetchImpl = fetch, now = Date.now(), configuration = resolveGitHubCopilotConfiguration() } = {},
 ) {
   let token;
   try {
@@ -144,12 +194,13 @@ export async function ensureFreshGitHubCopilotSession(
   if (
     !force &&
     cached?.token === token &&
+    cached.configuration.identity === configuration.identity &&
     now - cached.checkedAt < SESSION_TTL_MS
   ) {
     return cached;
   }
-  if (pending?.token === token) return pending.promise;
-  const promise = resolveSession(token, fetchImpl, now).then((session) => {
+  if (pending?.token === token && pending.identity === configuration.identity) return pending.promise;
+  const promise = resolveSession(token, fetchImpl, now, configuration).then((session) => {
     cached = session;
     return session;
   }).finally(() => {
@@ -158,7 +209,7 @@ export async function ensureFreshGitHubCopilotSession(
   // The resolved session already has to retain this token for inference. Keep
   // the in-flight comparison equally short-lived instead of deriving and
   // retaining a fast verifier for a credential.
-  pending = { token, promise };
+  pending = { token, identity: configuration.identity, promise };
   return promise;
 }
 
