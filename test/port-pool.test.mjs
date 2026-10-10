@@ -12,7 +12,7 @@ import { freePort } from "./port-pool.mjs";
 // so a future refactor cannot quietly hand a test a port the live service --
 // or an unrelated process -- already holds.
 
-const POOL_FLOOR = 10_000;
+const POOL_FLOOR = 5_000;
 // One below Linux's default ephemeral floor of 32768.
 const POOL_CEILING = 32_767;
 const PRODUCTION_DEFAULTS = new Set([4200, 4201, 4202, 4203, 4208, 4210, 4212]);
@@ -27,6 +27,10 @@ test("drawn ports stay inside the dedicated pool window and off production defau
     assert.ok(
       !PRODUCTION_DEFAULTS.has(port),
       `port ${port} is one of the live router's production defaults`,
+    );
+    assert.ok(
+      port < 10_000 || port >= 30_000,
+      `port ${port} overlaps the Antigravity token or refresh lease window`,
     );
   }
 });

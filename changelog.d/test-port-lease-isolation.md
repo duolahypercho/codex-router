@@ -1,0 +1,1 @@
+- Keep integration-test listener ports outside the POSIX Antigravity token and refresh lease ranges, preventing unrelated fixtures from denying credential activation. Fail explicitly when disjoint test blocks are exhausted instead of silently reverting to ephemeral allocation.

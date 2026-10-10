@@ -26,13 +26,19 @@ import { fileURLToPath } from "node:url";
 //
 // Nothing here serializes: the blocks are disjoint by construction, so no test
 // file ever waits on another.
-// Keep the pool comfortably above the privileged/system-service range while
-// leaving enough non-ephemeral space for large integration files. The routing
-// suite now needs 75 distinct listeners; starting at 20,000 divided the range
-// into only 74 ports once the Control Center tests were added.
-const FIRST_PORT = 10_000;
-// One below Linux's default ephemeral floor of 32768.
-const LAST_PORT = 32_767;
+// Antigravity kernel leases occupy 10000-29999 on POSIX. A fixture listener
+// there can deny token promotion for its entire lock-wait horizon. Keep both
+// segments outside those leases, the managed router ports, and ephemeral ports.
+const PORT_RANGES = [[5_000, 9_999], [30_000, 32_767]];
+const PORT_COUNT = PORT_RANGES.reduce((count, [first, last]) => count + last - first + 1, 0);
+function portAt(index) {
+  for (const [first, last] of PORT_RANGES) {
+    const count = last - first + 1;
+    if (index < count) return first + index;
+    index -= count;
+  }
+  return undefined;
+}
 const MAX_BLOCK = 256;
 const MIN_BLOCK = 32;
 
@@ -55,13 +61,10 @@ function blockFor(entry) {
   if (index === -1) return undefined;
   const size = Math.max(
     MIN_BLOCK,
-    Math.min(MAX_BLOCK, Math.floor((LAST_PORT - FIRST_PORT) / Math.max(files.length, 1))),
+    Math.min(MAX_BLOCK, Math.floor(PORT_COUNT / Math.max(files.length, 1))),
   );
-  const start = FIRST_PORT + index * size;
-  // More port-consuming test files than the range can seat. Falling back keeps
-  // the suite working; it just stops being race-proof, which is what it was
-  // before.
-  if (start + size > LAST_PORT) return undefined;
+  const start = index * size;
+  if (start + size > PORT_COUNT) throw new Error("Integration test port pool has no remaining disjoint blocks.");
   return { start, size };
 }
 
@@ -105,7 +108,7 @@ export async function freePort() {
   if (block === undefined) block = blockFor(process.argv[1] || "") ?? null;
   if (!block) return ephemeralPort();
   for (let offset = 0; offset < block.size; offset += 1) {
-    const port = block.start + offset;
+    const port = portAt(block.start + offset);
     if (issued.has(port)) continue;
     // Claimed before the probe, not after it. Callers draw several ports at
     // once (`Promise.all(Array.from({ length: 6 }, freePort))`), and with the
@@ -123,7 +126,7 @@ export async function freePort() {
   }
   throw new Error(
     `${path.basename(process.argv[1] || "this file")} exhausted its ${block.size}-port ` +
-      `block at ${block.start}; raise MAX_BLOCK in test/port-pool.mjs or free the leftovers`,
+      `block at ${portAt(block.start)}; raise MAX_BLOCK in test/port-pool.mjs or free the leftovers`,
   );
 }
 
