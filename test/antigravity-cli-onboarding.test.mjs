@@ -34,12 +34,18 @@ function isolatedEnvironment(testRoot, extra = {}) {
 }
 
 function runNode(args, env, { cwd = root } = {}) {
-  return spawnSync(process.execPath, args, {
+  const result = spawnSync(process.execPath, args, {
     cwd,
     env,
     encoding: "utf8",
-    timeout: 10_000,
+    // Cold Node/module and PowerShell ACL startup on shared Windows runners
+    // can exceed ten seconds before the CLI reaches its local consent gate.
+    // Keep a finite fixture bound; production/request deadlines are unchanged.
+    timeout: process.platform === "win32" ? 30_000 : 10_000,
+    windowsHide: true,
   });
+  assert.ifError(result.error);
+  return result;
 }
 
 function isolatedCheckout(testRoot) {

@@ -1,0 +1,1 @@
+- Bound Windows CI to two test-file workers so real PowerShell ACL helpers retain startup headroom, and give Antigravity CLI fixtures a finite 30-second Windows child budget with explicit spawn-error diagnostics. Keep all tests, consent/credential assertions and production deadlines unchanged.

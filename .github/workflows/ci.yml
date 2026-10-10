@@ -30,7 +30,15 @@ jobs:
         if: runner.os == 'Linux'
         run: npx playwright install --with-deps chromium
       - run: npm run check
-      - run: npm test
+      - name: Test (POSIX)
+        if: runner.os != 'Windows'
+        run: npm test
+      - name: Test (Windows, bounded ACL helper concurrency)
+        if: runner.os == 'Windows'
+        # Private-file tests launch real PowerShell ACL helpers. Avoid starving
+        # their existing deadlines on shared runners; retain every test and
+        # all within-file request/race concurrency assertions.
+        run: node --test --test-timeout=600000 --test-concurrency=2 test/*.test.mjs
       - run: npm audit --omit=dev --audit-level=high
       - name: Test the macOS tray
         if: runner.os == 'macOS'
