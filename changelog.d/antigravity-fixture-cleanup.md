@@ -1,0 +1,1 @@
+- Release Antigravity test upstream listeners even when setup fails before its try/finally, and keep repeated fixture cleanup safe. Preserve the original setup failure instead of hanging the complete CI job on a leaked listener.
