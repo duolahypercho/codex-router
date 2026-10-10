@@ -497,11 +497,8 @@ jobs:
           }
           trap cleanup EXIT
 
-          sleep 1
-          if ! kill -0 "$pid" 2>/dev/null; then
-            wait "$pid" || true
-            cat "$log"
-            echo "Unified macOS host exited before its first reopen event." >&2
+          if ! node scripts/wait-macos-app-ready.mjs "$pid" "$app"; then
+            cat "$log" >&2 || true
             exit 1
           fi
 

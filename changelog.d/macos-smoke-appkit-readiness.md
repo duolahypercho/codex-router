@@ -1,0 +1,1 @@
+- Wait for the exact native macOS host to finish launching in AppKit before the CI lifecycle smoke sends its first reopen event. Replace the fixed one-second delay with a bounded readiness check that still fails on host exit, query failure or timeout.
