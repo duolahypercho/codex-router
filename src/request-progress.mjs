@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { Transform } from "node:stream";
+import { ResponseOutcomeObserver, resolveGenerationOutcome } from "./response-outcome.mjs";
 
 const METADATA = ["provider", "model", "threadId", "parentThreadId", "sessionId", "agentName"];
 const STREAM_EVENT_TYPES = new Set([
@@ -42,6 +43,7 @@ export function createRequestProgress({ now = Date.now, recentLimit = 128, recen
       };
       active.set(record.requestId, record);
       let finished = false;
+      const outcome = new ResponseOutcomeObserver();
       const update = (fields) => { if (!finished) Object.assign(record, fields); };
       return {
         requestId: record.requestId,
@@ -54,6 +56,7 @@ export function createRequestProgress({ now = Date.now, recentLimit = 128, recen
         },
         attempt() {
           if (record.state !== "running") return;
+          outcome.reset();
           update({ upstreamAttempts: (record.upstreamAttempts || 0) + 1, phase: "awaiting_upstream", terminalEvent: undefined, terminalStatus: undefined, terminalFailureSeen: undefined });
         },
         headers() {
@@ -76,9 +79,9 @@ export function createRequestProgress({ now = Date.now, recentLimit = 128, recen
           // `response.completed` can carry a failed or incomplete status inside
           // an HTTP 200 stream; the outer event type alone is not success.
           const embeddedStatus = type === "response.completed" ? payload.response?.status : undefined;
-          const unsuccessfulCompletion =
-            typeof embeddedStatus === "string" && embeddedStatus !== "completed";
-          const failed = unsuccessfulCompletion || ["response.failed", "response.incomplete", "error"].includes(type);
+          const eventOutcome = outcome.observe(payload);
+          const unsuccessfulCompletion = type === "response.completed" && eventOutcome !== "completed";
+          const failed = eventOutcome !== undefined && eventOutcome !== "completed";
           update({
             ...(safeType && !record.firstEventType ? { firstEventType: safeType } : {}),
             ...(safeType ? { lastEventType: safeType } : {}),
@@ -105,10 +108,11 @@ export function createRequestProgress({ now = Date.now, recentLimit = 128, recen
           if (!["client_disconnected", "execution_deadline"].includes(reason)) return;
           update({ state: "canceling", phase: "canceling", cancelReason: reason, cancelRequestedAt: now() });
         },
-        finish(status) {
+        finish(status, { generationOutcome, httpStatus } = {}) {
           if (finished) return;
-          const state = status === 0 ? "canceled" : status >= 200 && status < 400 && !record.terminalEvent ? "completed" : "failed";
-          update({ state, phase: "settled", status, endedAt: now() });
+          const resolved = resolveGenerationOutcome({ observed: generationOutcome ?? outcome.outcome(), status });
+          const state = resolved === "completed" ? "completed" : status === 0 ? "canceled" : "failed";
+          update({ state, generationOutcome: resolved, phase: "settled", status, ...(httpStatus === undefined ? {} : { httpStatus }), endedAt: now() });
           finished = true;
           active.delete(record.requestId);
           recent.push({ ...record });

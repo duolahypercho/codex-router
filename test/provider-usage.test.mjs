@@ -1,6 +1,25 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+test("semantic outcomes determine success while failed generation usage remains metered", () => {
+  const now = Date.now();
+  const events = ["completed", "failed", "incomplete", "canceled", "indeterminate"].map((generationOutcome) => ({
+    at: new Date(now).toISOString(), model: "custom/contract", provider: "custom",
+    meteringVersion: 1, status: 200, httpStatus: 200, generationOutcome,
+    inputTokens: 50, outputTokens: 2, totalTokens: 52,
+  }));
+  const result = aggregateProviderUsage(events, { now });
+  const custom = result.providers.find((provider) => provider.id === "custom");
+  assert.equal(custom.requests, 5);
+  assert.equal(custom.successfulRequests, 1);
+  assert.equal(custom.inputTokens, 250);
+  assert.equal(custom.outputTokens, 10);
+  assert.equal(custom.models[0].successfulRequests, 1);
+  assert.deepEqual(custom.outcomeCounts, { completed: 1, failed: 1, incomplete: 1, canceled: 1, indeterminate: 1 });
+  assert.equal(custom.legacyOutcomeRequests, 0);
+  assert.deepEqual(custom.models[0].outcomeCounts, custom.outcomeCounts);
+});
+
 import { aggregateProviderUsage, tokensGeneratedAfterFirstToken } from "../src/provider-usage.mjs";
 import { mergeTokenUsage } from "../src/response-usage.mjs";
 

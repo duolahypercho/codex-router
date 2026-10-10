@@ -8,6 +8,7 @@ import {
 } from "node:fs";
 import path from "node:path";
 
+import { knownGenerationOutcome } from "./response-outcome.mjs";
 import { STATE_DIR } from "./paths.mjs";
 import { canonicalProviderId } from "./provider-selection.mjs";
 import { acceptedInputTokens } from "./context-window-drift.mjs";
@@ -74,6 +75,8 @@ export function recordUsageEvent({
   model,
   provider,
   status,
+  httpStatus,
+  generationOutcome,
   durationMs,
   // Milliseconds from receiving the request until the upstream response
   // headers arrived. Together with durationMs this isolates the streamed
@@ -221,6 +224,8 @@ export function recordUsageEvent({
     model: safeText(model, "unknown"),
     provider: safeText(provider, "unknown"),
     status: Number.isInteger(status) ? status : 0,
+    ...(Number.isInteger(httpStatus) && httpStatus >= 100 && httpStatus <= 599 ? { httpStatus } : {}),
+    ...(knownGenerationOutcome(generationOutcome) ? { generationOutcome } : {}),
     durationMs: Number.isFinite(durationMs) ? Math.max(0, Math.round(durationMs)) : 0,
     ...(safeTokenCount(responseStartMs) !== undefined
       ? { responseStartMs: safeTokenCount(responseStartMs) }
@@ -557,6 +562,8 @@ export function recentUsageEvents({
           // series per subscription.
           provider: canonicalProviderId(safeText(event.provider, "unknown")),
           status: Number.isInteger(event.status) ? event.status : 0,
+          ...(Number.isInteger(event.httpStatus) && event.httpStatus >= 100 && event.httpStatus <= 599 ? { httpStatus: event.httpStatus } : {}),
+          ...(knownGenerationOutcome(event.generationOutcome) ? { generationOutcome: event.generationOutcome } : {}),
           durationMs: Number.isFinite(event.durationMs)
             ? Math.max(0, Math.round(event.durationMs))
             : 0,

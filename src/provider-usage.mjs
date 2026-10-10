@@ -2,6 +2,7 @@ import { PROVIDERS } from "./model-registry.mjs";
 import { providerAccountUsageSnapshot } from "./provider-account-usage.mjs";
 import { canonicalProviderId, readProviderSelection } from "./provider-selection.mjs";
 import { allUsageEvents } from "./usage-events.mjs";
+import { knownGenerationOutcome, usageEventSucceeded } from "./response-outcome.mjs";
 
 // OpenAI's account stream reports dailyUsageBuckets keyed by UTC calendar day.
 // These router-derived buckets were keyed by the machine's local day, so the
@@ -59,6 +60,16 @@ const NATIVE_OPENAI = {
   kind: "oauth",
 };
 
+function outcomeCounts() {
+  return { completed: 0, failed: 0, incomplete: 0, canceled: 0, indeterminate: 0 };
+}
+
+function observeOutcome(record, event) {
+  const outcome = knownGenerationOutcome(event.generationOutcome);
+  if (outcome) record.outcomeCounts[outcome] += 1;
+  else record.legacyOutcomeRequests += 1;
+}
+
 function providerUsageRecord(provider) {
   return {
     id: provider.id,
@@ -73,6 +84,8 @@ function providerUsageRecord(provider) {
     scope: "local-router",
     requests: 0,
     successfulRequests: 0,
+    outcomeCounts: outcomeCounts(),
+    legacyOutcomeRequests: 0,
     meteredRequests: 0,
     inputTokens: 0,
     regularInputTokens: 0,
@@ -137,7 +150,8 @@ export function aggregateProviderUsage(events, { days = 90, now = Date.now() } =
     }
     if (event.meteringVersion !== 1 && !hasMeteredUsage(event)) continue;
     provider.requests += 1;
-    if (event.status >= 200 && event.status < 400) provider.successfulRequests += 1;
+    if (usageEventSucceeded(event)) provider.successfulRequests += 1;
+    observeOutcome(provider, event);
     const selectedOutputTokens = nonnegative(event.outputTokens);
     const inputTokens = nonnegative(event.billedInputTokens ?? event.inputTokens);
     const outputTokens = nonnegative(event.billedOutputTokens ?? event.outputTokens);
@@ -206,6 +220,8 @@ export function aggregateProviderUsage(events, { days = 90, now = Date.now() } =
       displayName: modelDisplayName(slug),
       requests: 0,
       successfulRequests: 0,
+      outcomeCounts: outcomeCounts(),
+      legacyOutcomeRequests: 0,
       meteredRequests: 0,
       inputTokens: 0,
       outputTokens: 0,
@@ -215,7 +231,8 @@ export function aggregateProviderUsage(events, { days = 90, now = Date.now() } =
       lastUsedAt: new Date(at).toISOString(),
     };
     model.requests += 1;
-    if (event.status >= 200 && event.status < 400) model.successfulRequests += 1;
+    if (usageEventSucceeded(event)) model.successfulRequests += 1;
+    observeOutcome(model, event);
     if (hasMeteredUsage(event)) {
       model.meteredRequests += 1;
     }
@@ -246,8 +263,7 @@ export function aggregateProviderUsage(events, { days = 90, now = Date.now() } =
     // stopped waiting to classify emptiness", not "this rate is unusable".
     // Keep those replies; drop only empty/retried/canceled ones.
     const measurable =
-      event.status >= 200 &&
-      event.status < 400 &&
+      usageEventSucceeded(event) &&
       !event.retries &&
       event.emptyCompletion !== true &&
       event.emptyCompletionRetried !== true &&

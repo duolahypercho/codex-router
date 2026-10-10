@@ -4,6 +4,7 @@ import { StringDecoder } from "node:string_decoder";
 import { HeaderlessSseDetector } from "./sse-prefix.mjs";
 import { promptImageUsage } from "./prompt-image-usage.mjs";
 import { knownServiceTier } from "./request-diagnostics.mjs";
+import { ResponseOutcomeObserver } from "./response-outcome.mjs";
 
 const MAX_JSON_CAPTURE_BYTES = 8 * 1024 * 1024;
 
@@ -381,8 +382,7 @@ export class ResponseUsageTransform extends Transform {
   #reasoningStreamed = false;
   #onEvent;
   #grokServiceTier;
-  #completedResponseObserved = false;
-  #terminalErrorObserved = false;
+  #outcome = new ResponseOutcomeObserver();
 
   // `estimatedInputTokens` arrives only on routed requests large enough that a
   // reported zero cannot be true. Without it this transform observes and
@@ -575,7 +575,6 @@ export class ResponseUsageTransform extends Transform {
     if (!data || data === "[DONE]") return undefined;
     try {
       const payload = JSON.parse(data);
-      if (payload?.type === "error") this.#terminalErrorObserved = true;
       this.#observe(payload);
       return payload;
     } catch {
@@ -588,7 +587,7 @@ export class ResponseUsageTransform extends Transform {
     // Diagnostics must not change parsing, metering, or the relayed bytes.
     try { this.#onEvent?.(payload); } catch { /* Observer failure is non-fatal. */ }
     this.#noteFirstToken(payload);
-    if (payload?.type === "response.completed") this.#completedResponseObserved = true;
+    this.#outcome.observe(payload);
     const usage = tokenUsageFromPayload(payload, { grokServiceTier: this.#grokServiceTier });
     if (usage) {
       // A tier-only terminal event must not erase earlier measured counters.
@@ -639,10 +638,14 @@ export class ResponseUsageTransform extends Transform {
   }
 
   completedResponseObserved() {
-    return this.#completedResponseObserved;
+    return this.#outcome.outcome() === "completed";
   }
 
   terminalErrorObserved() {
-    return this.#terminalErrorObserved;
+    return ["failed", "incomplete"].includes(this.#outcome.outcome());
+  }
+
+  generationOutcome() {
+    return this.#outcome.outcome() ?? (this.#eventStream ? "indeterminate" : undefined);
   }
 }

@@ -1,0 +1,1 @@
+- Record semantic generation outcomes separately from committed HTTP status. Preserve failed and incomplete usage, classify a streamed EOF without a terminal as indeterminate, keep activity and subagent success consistent, and retain the historical interpretation of older usage rows.

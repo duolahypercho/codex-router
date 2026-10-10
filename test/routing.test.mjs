@@ -10275,6 +10275,7 @@ test("a live child turn refines a legacy experimental subagent diagnostic", asyn
     }
     json(response, 200, {
       id: "resp_child",
+      status: "completed",
       output: [
         { type: "message", content: [{ type: "output_text", text: "child done" }] },
       ],
