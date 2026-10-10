@@ -59,6 +59,7 @@ import {
 } from "./provider-credentials.mjs";
 import {
   ensureFreshGitHubCopilotSession,
+  resolveGitHubCopilotConfiguration,
   githubCopilotRequestHeaders,
 } from "./github-copilot-session.mjs";
 import {
@@ -1780,9 +1781,7 @@ async function upstreamSession(provider, credential, payload, options = {}, endp
   const session = await ensureFreshGitHubCopilotSession(credential.value, options);
   return {
     apiKey: session.token,
-    baseUrl: process.env[provider.baseUrlEnv]
-      ? providerBaseUrl(provider)
-      : session.baseUrl,
+    baseUrl: session.configuration.baseUrlOverride || session.baseUrl,
     headers: githubCopilotRequestHeaders(payload, session.token),
   };
 }
@@ -2088,6 +2087,9 @@ async function handleRequest(request, response) {
   // Fetch may detach a Buffer's backing ArrayBuffer while sending it. Copilot
   // can replay once after refreshing account routing, so use one immutable
   // string for both attempts instead of trying to reuse detached bytes.
+  const copilotConfiguration = normalized.provider.authProfile === "github-copilot"
+    ? resolveGitHubCopilotConfiguration()
+    : undefined;
   const upstreamBody = normalized.provider.authProfile === "github-copilot"
     ? normalized.body.toString("utf8")
     : normalized.body;
@@ -2131,7 +2133,7 @@ async function handleRequest(request, response) {
           normalized.provider,
           attemptCredential,
           normalized.payload,
-          {},
+          { configuration: copilotConfiguration },
           normalized.endpoint,
         );
         let attemptTarget = upstreamTarget(attemptSession, normalized, route, requestUrl.search);
@@ -2147,7 +2149,7 @@ async function handleRequest(request, response) {
           ),
           body: upstreamBody,
           signal: controller.signal,
-          redirect: ["/embeddings", "/decisions"].includes(route) ? "error" : "follow",
+          redirect: copilotConfiguration?.enterprise || ["/embeddings", "/decisions"].includes(route) ? "error" : "follow",
         });
         let attemptResponse = await sendAttempt();
         // The source credential can still be valid when Copilot changes the
@@ -2161,7 +2163,7 @@ async function handleRequest(request, response) {
             normalized.provider,
             attemptCredential,
             normalized.payload,
-            { force: true },
+            { force: true, configuration: copilotConfiguration },
             normalized.endpoint,
           );
           attemptTarget = upstreamTarget(attemptSession, normalized, route, requestUrl.search);
@@ -2262,7 +2264,7 @@ async function handleRequest(request, response) {
       normalized.provider,
       credential,
       normalized.payload,
-      {},
+      { configuration: copilotConfiguration },
       normalized.endpoint,
     );
     target = upstreamTarget(session, normalized, route, requestUrl.search);
@@ -2278,7 +2280,7 @@ async function handleRequest(request, response) {
       ),
       body: upstreamBody,
       signal: controller.signal,
-      redirect: ["/embeddings", "/decisions"].includes(route) ? "error" : "follow",
+      redirect: copilotConfiguration?.enterprise || ["/embeddings", "/decisions"].includes(route) ? "error" : "follow",
     });
     // Embeddings and Decisions can be billed even when the response never
     // reaches the caller. Select one pool credential above and record its
@@ -2309,7 +2311,7 @@ async function handleRequest(request, response) {
       normalized.provider,
       credential,
       normalized.payload,
-      { force: true },
+      { force: true, configuration: copilotConfiguration },
       normalized.endpoint,
     );
     target = upstreamTarget(session, normalized, route, requestUrl.search);
@@ -2325,6 +2327,7 @@ async function handleRequest(request, response) {
       ),
       body: upstreamBody,
       signal: controller.signal,
+      ...(copilotConfiguration?.enterprise ? { redirect: "error" } : {}),
     });
   }
   // Falling back here is legal for the same reason the Copilot replay above

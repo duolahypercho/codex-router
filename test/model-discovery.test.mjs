@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { promises as dns } from "node:dns";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test, { after } from "node:test";
 import { fileURLToPath } from "node:url";
+import { Agent, MockAgent } from "undici";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -12,10 +14,14 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 // locally curated models out of both this process and the child processes below
 // before model-registry.mjs resolves the overlay path at import time.
 const stateRoot = mkdtempSync(path.join(os.tmpdir(), "codex-router-model-discovery-test-"));
+const originalState = process.env.MODEL_ROUTER_STATE_DIR;
+process.env.MODEL_ROUTER_STATE_DIR = stateRoot;
 const originalUserModels = process.env.MODEL_ROUTER_USER_MODELS;
 process.env.MODEL_ROUTER_USER_MODELS = path.join(stateRoot, "user-models.json");
 after(() => {
   rmSync(stateRoot, { recursive: true, force: true });
+  if (originalState === undefined) delete process.env.MODEL_ROUTER_STATE_DIR;
+  else process.env.MODEL_ROUTER_STATE_DIR = originalState;
   if (originalUserModels === undefined) delete process.env.MODEL_ROUTER_USER_MODELS;
   else process.env.MODEL_ROUTER_USER_MODELS = originalUserModels;
 });
@@ -23,6 +29,9 @@ after(() => {
 const { MODELS, PROVIDERS } = await import("../src/model-registry.mjs");
 const { modelCatalogMetadata } = await import("../src/model-catalog-metadata.mjs");
 const { discoverProviderModels, modelContextLengths, modelIds } = await import("../src/model-discovery.mjs");
+const { setGitHubCopilotHost, clearGitHubCopilotHost } = await import("../src/github-copilot-state.mjs");
+const { forgetProviderCatalogCache, readProviderCatalogCache } = await import("../src/model-catalog-cache.mjs");
+const { resetGitHubCopilotSessionForTests } = await import("../src/github-copilot-session.mjs");
 
 test("model discovery compares fixtures without needing or exposing a key", () => {
   const testRoot = mkdtempSync(path.join(os.tmpdir(), "codex-router-discovery-"));
@@ -512,5 +521,115 @@ test("live discovery never rewrites native GPT catalog metadata", async () => {
   } finally {
     process.argv.splice(0, process.argv.length, ...previousArgv);
     rmSync(testRoot, { recursive: true, force: true });
+  }
+});
+
+function copilotCatalog(id) {
+  return { data: [{
+    id, object: "model", policy: { state: "enabled" },
+    capabilities: { type: "chat", supports: { tool_calls: true, streaming: true } },
+    supported_endpoints: ["/responses"],
+  }] };
+}
+
+test("Copilot discovery caches are separated by host with the same credential", async () => {
+  const savedToken = process.env.COPILOT_GITHUB_TOKEN;
+  process.env.COPILOT_GITHUB_TOKEN = "github_pat_TEST_CATALOG_TOKEN";
+  let calls = 0;
+  const loadPayload = async (_provider, identity) => {
+    calls += 1;
+    return copilotCatalog(identity.copilotConfiguration.host === "octocorp.ghe.com" ? "first-model" : "second-model");
+  };
+  try {
+    setGitHubCopilotHost("octocorp.ghe.com");
+    const first = await discoverProviderModels("github-copilot", { loadPayload, refresh: true });
+    const cached = await discoverProviderModels("github-copilot", { loadPayload });
+    assert.deepEqual(first.discovered, ["first-model"]);
+    assert.equal(cached.cached, true);
+    assert.equal(calls, 1);
+    setGitHubCopilotHost("othercorp.ghe.com");
+    const other = await discoverProviderModels("github-copilot", { loadPayload });
+    assert.deepEqual(other.discovered, ["second-model"]);
+    assert.equal(other.cached, false);
+    assert.equal(calls, 2);
+  } finally {
+    clearGitHubCopilotHost();
+    if (savedToken === undefined) delete process.env.COPILOT_GITHUB_TOKEN;
+    else process.env.COPILOT_GITHUB_TOKEN = savedToken;
+  }
+});
+
+test("Copilot discovery refuses to commit a catalog from a previous host", async () => {
+  const savedToken = process.env.COPILOT_GITHUB_TOKEN;
+  process.env.COPILOT_GITHUB_TOKEN = "github_pat_TEST_CATALOG_TOKEN";
+  try {
+    await forgetProviderCatalogCache("github-copilot");
+    setGitHubCopilotHost("octocorp.ghe.com");
+    await assert.rejects(discoverProviderModels("github-copilot", {
+      refresh: true,
+      loadPayload: async (_provider, identity) => {
+        assert.equal(identity.copilotConfiguration.host, "octocorp.ghe.com");
+        setGitHubCopilotHost("othercorp.ghe.com");
+        return copilotCatalog("stale-model");
+      },
+    }), { code: "provider_catalog_credential_changed" });
+    const current = await discoverProviderModels("github-copilot", {
+      loadPayload: async () => copilotCatalog("current-model"),
+    });
+    assert.equal(current.cached, false);
+    assert.deepEqual(current.discovered, ["current-model"]);
+  } finally {
+    clearGitHubCopilotHost();
+    if (savedToken === undefined) delete process.env.COPILOT_GITHUB_TOKEN;
+    else process.env.COPILOT_GITHUB_TOKEN = savedToken;
+  }
+});
+
+test("Copilot normal discovery records the tenant endpoint and refuses catalog redirects", async (t) => {
+  const saved = Object.fromEntries(["COPILOT_GITHUB_TOKEN", "GITHUB_COPILOT_USER_URL", "GITHUB_COPILOT_BASE_URL"].map((name) => [name, process.env[name]]));
+  process.env.COPILOT_GITHUB_TOKEN = "github_pat_TEST_CATALOG_TOKEN";
+  delete process.env.GITHUB_COPILOT_USER_URL;
+  delete process.env.GITHUB_COPILOT_BASE_URL;
+  const transport = new MockAgent();
+  transport.disableNetConnect();
+  t.mock.method(Agent.prototype, "dispatch", function (options, handler) {
+    return transport.get(options.origin).dispatch(options, handler);
+  });
+  t.mock.method(dns, "lookup", async () => [{ address: "93.184.216.34", family: 4 }]);
+  const accountUrls = [];
+  t.mock.method(globalThis, "fetch", async (url, options) => {
+    accountUrls.push(String(url));
+    assert.equal(String(url), "https://api.octocorp.ghe.com/copilot_internal/user");
+    assert.equal(options.redirect, "error");
+    return new Response(JSON.stringify({ endpoints: { api: "https://copilot-api.octocorp.ghe.com" } }));
+  });
+  try {
+    await forgetProviderCatalogCache("github-copilot");
+    resetGitHubCopilotSessionForTests();
+    setGitHubCopilotHost("octocorp.ghe.com");
+    const pool = transport.get("https://copilot-api.octocorp.ghe.com");
+    pool.intercept({ path: "/models", method: "GET" }).reply(200, copilotCatalog("tenant-model"), { headers: { "content-type": "application/json" } });
+    const first = await discoverProviderModels("github-copilot");
+    assert.deepEqual(first.discovered, ["tenant-model"]);
+    assert.equal(readProviderCatalogCache("github-copilot").provenance.endpoint, "https://copilot-api.octocorp.ghe.com/models");
+    assert.equal((await discoverProviderModels("github-copilot")).cached, true);
+    assert.equal(accountUrls.length, 1);
+    let redirected = 0;
+    pool.intercept({ path: "/models", method: "GET" }).reply(302, "", { headers: { location: "https://copilot-api.octocorp.ghe.com/redirected" } });
+    pool.intercept({ path: "/redirected", method: "GET" }).reply(() => {
+      redirected += 1;
+      return { statusCode: 200, data: copilotCatalog("redirected-model") };
+    });
+    await assert.rejects(discoverProviderModels("github-copilot", { refresh: true }), /exceeded the redirect limit/);
+    assert.equal(redirected, 0);
+  } finally {
+    t.mock.restoreAll();
+    await transport.close();
+    clearGitHubCopilotHost();
+    resetGitHubCopilotSessionForTests();
+    for (const [name, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
   }
 });

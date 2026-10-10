@@ -3946,6 +3946,151 @@ test("API forwarder validates Copilot auth, sets identity headers, and retries r
   }
 });
 
+for (const pooled of [false, true]) {
+  test(`API forwarder keeps the enterprise host snapshot through a ${pooled ? "pooled" : "legacy"} 401 retry`, async () => {
+    const curated = curatedCopilotModel();
+    const settings = path.join(curated.dir, "github-copilot-settings.json");
+    writeFileSync(settings, JSON.stringify({ version: 1, host: "octocorp.ghe.com" }));
+    const keys = { COPILOT_GITHUB_TOKEN: "github_pat_TEST_ENTERPRISE_TOKEN", GH_TOKEN: "github_pat_TEST_SECOND_TOKEN" };
+    if (pooled) {
+      const inactiveRouterPort = await openPort();
+      for (const name of Object.keys(keys)) {
+        execFileSync(process.execPath, [path.join(root, "src", "control.mjs"), "key-pool", "github-copilot", "add-env", name], {
+          cwd: root,
+          env: {
+            ...process.env, ...keys,
+            MODEL_ROUTER_TARGET: "codex",
+            MODEL_ROUTER_STATE_DIR: curated.dir,
+            CODEX_HOME: path.join(curated.dir, "codex-home"),
+            CODEX_ROUTER_PORT: String(inactiveRouterPort),
+            CODEX_ROUTER_SERVICE_PLATFORM: "darwin",
+            MODEL_ROUTER_LAUNCH_AGENTS_DIR: path.join(curated.dir, "launch-agents"),
+          },
+          stdio: "ignore",
+        });
+      }
+    }
+    let accountRequests = 0;
+    let inferenceRequests = 0;
+    const accountCredentials = [];
+    const inferenceCredentials = [];
+    const upstream = await mockServer(async (request, response) => {
+      if (request.url === "/user") {
+        accountRequests += 1;
+        accountCredentials.push(request.headers.authorization);
+        json(response, 200, { endpoints: { api: "https://copilot-api.octocorp.ghe.com" } });
+        return;
+      }
+      inferenceRequests += 1;
+      inferenceCredentials.push(request.headers.authorization);
+      await bodyJson(request);
+      if (inferenceRequests === 1) {
+        writeFileSync(settings, JSON.stringify({ version: 1, host: "othercorp.ghe.com" }));
+        json(response, 401, { error: { message: "refresh account routing" } });
+        return;
+      }
+      json(response, 200, { id: "resp_enterprise", object: "response", status: "completed", output: [] });
+    });
+    const forwarderPort = await openPort();
+    const forwarder = run("api-forwarder.mjs", {
+      MODEL_ROUTER_STATE_DIR: curated.dir,
+      MODEL_ROUTER_USER_MODELS: curated.file,
+      CODEX_ROUTER_API_PORT: String(forwarderPort),
+      GITHUB_COPILOT_BASE_URL: `http://127.0.0.1:${upstream.port}`,
+      GITHUB_COPILOT_USER_URL: `http://127.0.0.1:${upstream.port}/user`,
+      ...keys,
+      CODEX_ROUTER_QUIET: "1",
+    });
+    const send = () => fetch(`http://127.0.0.1:${forwarderPort}/v1/responses`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${INTERNAL_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ model: `responses/${curated.gatewayModel}`, input: "test" }),
+    });
+    try {
+      await waitFor(`http://127.0.0.1:${forwarderPort}/health`, forwarder, { Authorization: `Bearer ${INTERNAL_KEY}` });
+      const first = await send();
+      assert.equal(first.status, 200, forwarder.testErrors());
+      await first.body?.cancel();
+      assert.equal(accountRequests, 2);
+      assert.equal(inferenceRequests, 2);
+      assert.ok(Object.values(keys).some((key) => accountCredentials[0] === `Bearer ${key}`));
+      assert.deepEqual(accountCredentials, [accountCredentials[0], accountCredentials[0]]);
+      assert.deepEqual(inferenceCredentials, [accountCredentials[0], accountCredentials[0]]);
+      // The next operation uses the newly saved host and rejects the old
+      // tenant endpoint before sending another inference request.
+      const next = await send();
+      assert.equal(next.status, pooled ? 503 : 502, forwarder.testErrors());
+      if (pooled) {
+        assert.equal((await next.json()).error.type, "provider_api_key_pool_unavailable");
+      } else {
+        await next.body?.cancel();
+      }
+      assert.equal(accountRequests, 3);
+      assert.equal(inferenceRequests, 2);
+    } finally {
+      await stopChild(forwarder);
+      await closeServer(upstream.server);
+      rmSync(curated.dir, { recursive: true, force: true });
+    }
+  });
+}
+
+for (const phase of ["account", "inference", "refresh"]) {
+  test(`API forwarder refuses enterprise redirects during ${phase}`, async () => {
+    let escaped = 0;
+    const destination = await mockServer(async (_request, response) => {
+      escaped += 1;
+      json(response, 200, { output: [] });
+    });
+    let inferenceRequests = 0;
+    const upstream = await mockServer(async (request, response) => {
+      if (request.url === "/user" && phase !== "account") {
+        json(response, 200, { endpoints: { api: "https://copilot-api.octocorp.ghe.com" } });
+        return;
+      }
+      if (request.url !== "/user") {
+        await bodyJson(request);
+        inferenceRequests += 1;
+        if (phase === "refresh" && inferenceRequests === 1) {
+          json(response, 401, { error: { message: "expired" } });
+          return;
+        }
+      }
+      response.writeHead(307, { Location: `http://127.0.0.1:${destination.port}/redirected` });
+      response.end();
+    });
+    const curated = curatedCopilotModel();
+    writeFileSync(path.join(curated.dir, "github-copilot-settings.json"), JSON.stringify({ version: 1, host: "octocorp.ghe.com" }));
+    const forwarderPort = await openPort();
+    const forwarder = run("api-forwarder.mjs", {
+      MODEL_ROUTER_STATE_DIR: curated.dir,
+      MODEL_ROUTER_USER_MODELS: curated.file,
+      CODEX_ROUTER_API_PORT: String(forwarderPort),
+      GITHUB_COPILOT_BASE_URL: `http://127.0.0.1:${upstream.port}`,
+      GITHUB_COPILOT_USER_URL: `http://127.0.0.1:${upstream.port}/user`,
+      COPILOT_GITHUB_TOKEN: "github_pat_TEST_ENTERPRISE_TOKEN",
+      CODEX_ROUTER_QUIET: "1",
+    });
+    try {
+      await waitFor(`http://127.0.0.1:${forwarderPort}/health`, forwarder, { Authorization: `Bearer ${INTERNAL_KEY}` });
+      const response = await fetch(`http://127.0.0.1:${forwarderPort}/v1/responses`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${INTERNAL_KEY}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ model: `responses/${curated.gatewayModel}`, input: "test" }),
+      });
+      assert.equal(response.status, 502, forwarder.testErrors());
+      await response.body?.cancel();
+      assert.equal(escaped, 0);
+      assert.equal(inferenceRequests, phase === "account" ? 0 : phase === "refresh" ? 2 : 1);
+    } finally {
+      await stopChild(forwarder);
+      await closeServer(upstream.server);
+      await closeServer(destination.server);
+      rmSync(curated.dir, { recursive: true, force: true });
+    }
+  });
+}
+
 test("API forwarder pins Copilot's per-event Responses ids to the created response (#814)", async () => {
   const upstream = await mockServer(async (request, response) => {
     if (request.url === "/user") {

@@ -7,6 +7,7 @@ import { resolveKimiCodeEnvironment } from "./kimi-region.mjs";
 import {
   assertGitHubCopilotCredential,
   githubCopilotAccountHeaders,
+  resolveGitHubCopilotConfiguration,
 } from "./github-copilot-session.mjs";
 import { kimiOAuthStatus } from "./oauth-status.mjs";
 import { PROVIDERS } from "./model-registry.mjs";
@@ -909,8 +910,10 @@ async function githubCopilotAccount(fetchImpl) {
   const credential = resolveProviderCredential("github-copilot");
   if (!credential) return { status: "not-configured", source: "official-api", metrics: [] };
   const token = assertGitHubCopilotCredential(credential.value);
-  const response = await fetchImpl("https://api.github.com/copilot_internal/user", {
+  const configuration = resolveGitHubCopilotConfiguration();
+  const response = await fetchImpl(configuration.userUrl, {
     headers: githubCopilotAccountHeaders(token),
+    ...(configuration.enterprise ? { redirect: "error" } : {}),
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
   if (!response.ok) throw new Error(`GitHub Copilot usage API returned HTTP ${response.status}`);
@@ -920,7 +923,7 @@ async function githubCopilotAccount(fetchImpl) {
     status: metrics.length ? "available" : "local-only",
     source: "official-api",
     metrics,
-    dashboardUrl: "https://github.com/settings/copilot",
+    dashboardUrl: configuration.dashboardUrl,
     ...(!metrics.length
       ? { message: "GitHub exposes no per-seat quota for this Copilot plan; showing router traffic" }
       : {}),
