@@ -1,0 +1,1 @@
+- Preserve incomplete literal tags and whitespace held by the reasoning-tag stream adapter. Flush each content part before its completion or stream end, preserving content identity and ordered sequence numbers without repeating logprobs or SSE IDs.

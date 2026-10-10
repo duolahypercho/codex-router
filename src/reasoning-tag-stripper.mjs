@@ -416,10 +416,14 @@ function findFrameEnd(buffer) {
 export class ReasoningTagStripper extends Transform {
   #buffer = Buffer.alloc(0);
   #passthrough = false;
-  // One streaming stripper per message output index.
+  // One streaming stripper per message content part. Two text parts in the
+  // same output item must not combine their possible tag prefixes.
   #streams = new Map();
   #options;
   #grammar;
+  #sequenceOffset = 0;
+  #lastSequence;
+  #unterminatedFrame = false;
 
   // `nonceDelimiters: true` adds Hy4's `</think:NONCE>` family to the grammar
   // and the orphan-close rule that goes with it. Off by default: see the note
@@ -450,10 +454,14 @@ export class ReasoningTagStripper extends Transform {
       return;
     }
     this.#emitBlocks(true);
+    this.#flushStreams();
     callback();
   }
 
   #disable(original) {
+    // The valid deltas preceding a malformed frame still own their held text.
+    // Release it before switching to the existing byte-for-byte fallback.
+    this.#flushStreams();
     if (original?.length) this.push(original);
     if (this.#buffer.length) {
       this.push(this.#buffer);
@@ -462,14 +470,69 @@ export class ReasoningTagStripper extends Transform {
     this.#passthrough = true;
   }
 
-  #streamFor(index) {
-    const key = Number.isInteger(index) ? index : 0;
-    let stream = this.#streams.get(key);
-    if (!stream) {
-      stream = new ThinkStreamStripper(this.#grammar);
-      this.#streams.set(key, stream);
+  #streamKey(event) {
+    const index = Number.isInteger(event.output_index) ? event.output_index : 0;
+    const content = Number.isInteger(event.content_index) ? event.content_index : 0;
+    return `${index}:${content}`;
+  }
+
+  #streamFor(event, newline) {
+    const key = this.#streamKey(event);
+    let state = this.#streams.get(key);
+    if (!state) {
+      state = {
+        stream: new ThinkStreamStripper(this.#grammar),
+        index: Number.isInteger(event.output_index) ? event.output_index : 0,
+      };
+      this.#streams.set(key, state);
     }
-    return stream;
+    // A synthesized tail belongs to the original content part, but must not
+    // repeat the preceding delta's logprobs or SSE id. Retain only its event
+    // envelope rather than its (potentially large) delta payload.
+    const { delta: _delta, logprobs: _logprobs, sequence_number: _sequence, ...template } = event;
+    state.template = template;
+    state.newline = newline;
+    return state.stream;
+  }
+
+  #flushStreams(matches = () => true, nextSequence) {
+    for (const [key, state] of this.#streams) {
+      if (!matches(key, state)) continue;
+      this.#streams.delete(key);
+      const delta = state.stream.flush();
+      if (!delta) continue;
+      const event = { ...state.template, delta };
+      // Inserting a delta before a numbered terminal consumes its sequence
+      // slot. Offset this and all subsequent upstream sequence numbers so the
+      // transformed stream remains ordered without duplicate sequence ids.
+      if (Number.isInteger(nextSequence) || Number.isInteger(this.#lastSequence)) {
+        event.sequence_number = Math.max(
+          (this.#lastSequence ?? -1) + 1,
+          Number.isInteger(nextSequence) ? nextSequence + this.#sequenceOffset : 0,
+        );
+        this.#lastSequence = event.sequence_number;
+        this.#sequenceOffset += 1;
+      }
+      const newline = state.newline;
+      if (this.#unterminatedFrame) {
+        this.push(Buffer.from(`${newline}${newline}`));
+        this.#unterminatedFrame = false;
+      }
+      this.push(Buffer.from(`event: ${event.type}${newline}data: ${JSON.stringify(event)}${newline}${newline}`));
+    }
+  }
+
+  #settleBefore(event) {
+    const type = event?.type;
+    if (type === "response.output_text.done" || type === "response.content_part.done") {
+      const wanted = this.#streamKey(event);
+      this.#flushStreams((key) => key === wanted, event.sequence_number);
+    } else if (type === "response.output_item.done") {
+      const index = Number.isInteger(event.output_index) ? event.output_index : 0;
+      this.#flushStreams((_key, state) => state.index === index, event.sequence_number);
+    } else if (["response.completed", "response.failed", "response.incomplete", "response.cancelled", "response.canceled", "error"].includes(type)) {
+      this.#flushStreams(undefined, event.sequence_number);
+    }
   }
 
   #emitBlocks(flush) {
@@ -500,6 +563,7 @@ export class ReasoningTagStripper extends Transform {
     }
     const piece = this.#rewrite(text);
     if (piece === null) return;
+    this.#unterminatedFrame = separator.length === 0;
     if (piece === text) {
       this.push(Buffer.from(original));
       return;
@@ -511,33 +575,40 @@ export class ReasoningTagStripper extends Transform {
   // `output_text.delta` whose entire payload was reasoning).
   #rewrite(block) {
     const parsed = eventBlock(block);
-    if (!parsed) return block;
-    const event = parsed.event;
+    if (!parsed) {
+      if (/^data:\s*\[DONE\]\s*$/m.test(block)) this.#flushStreams();
+      return block;
+    }
+    this.#settleBefore(parsed.event);
+    let event = parsed.event;
+    if (Number.isInteger(event?.sequence_number)) {
+      if (this.#sequenceOffset) event = { ...event, sequence_number: event.sequence_number + this.#sequenceOffset };
+      this.#lastSequence = Math.max(this.#lastSequence ?? -1, event.sequence_number);
+    }
+    const unchanged = event === parsed.event ? block : rewrittenBlock(parsed, event);
     const type = event?.type;
 
     if (type === "response.output_text.delta" && typeof event.delta === "string") {
-      const cleaned = this.#streamFor(event.output_index).feed(event.delta);
-      if (cleaned === event.delta) return block;
+      const cleaned = this.#streamFor(event, parsed.newline).feed(event.delta);
+      if (cleaned === event.delta) return unchanged;
       if (cleaned.length === 0) return null;
       return rewrittenBlock(parsed, { ...event, delta: cleaned });
     }
 
     if (type === "response.output_text.done" && typeof event.text === "string") {
-      // Settle the streaming state so a trailing partial tag is resolved, and
-      // rewrite the terminal full-text snapshot to the cleaned form.
-      this.#streamFor(event.output_index).flush();
+      // Held deltas were emitted before this terminal; clean its full snapshot.
       const cleaned = stripThinkTags(event.text, this.#options);
-      if (cleaned === event.text) return block;
+      if (cleaned === event.text) return unchanged;
       return rewrittenBlock(parsed, { ...event, text: cleaned });
     }
 
     if (type === "response.output_item.done" && event?.item?.type === "message") {
       const item = cleanMessageItem(event.item, this.#options);
-      if (item === event.item) return block;
+      if (item === event.item) return unchanged;
       return rewrittenBlock(parsed, { ...event, item });
     }
 
-    return block;
+    return unchanged;
   }
 }
 

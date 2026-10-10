@@ -55,6 +55,18 @@ function collect(body) {
   return { deltas, done, messages };
 }
 
+function events(body) {
+  return body.split(/\r?\n\r?\n/).flatMap((frame) => {
+    const data = frame.split(/\r?\n/).find((line) => line.startsWith("data:"));
+    if (!data) return [];
+    try {
+      return [JSON.parse(data.slice(5).trim())];
+    } catch {
+      return [];
+    }
+  });
+}
+
 test("stripThinkTags handles the real leak shapes", () => {
   assert.equal(stripThinkTags("<think>The capital of France is Paris.</think>\nParis"), "Paris");
   assert.equal(stripThinkTags("\n</think>\n\nThe real answer."), "The real answer.");
@@ -134,6 +146,127 @@ test("a clean answer with no tags passes through byte-for-byte", async () => {
   assert.equal(await run(clean, { chunkSize: 9 }), clean);
 });
 
+test("a trailing incomplete tag is emitted before the text snapshot and stored item", async () => {
+  for (const tail of ["<", "</", "<th", "</reasonin", "<thinking", "<think:", "</think:6124"]) {
+    const text = `Keep this literal tail: ${tail}`;
+    for (const options of [{}, { nonceDelimiters: true }]) {
+      for (const chunkSize of [0, 1, 13]) {
+        const output = await run(streamCase(["Keep this literal tail: ", tail]), { chunkSize, ...options });
+        const { deltas, done, messages } = collect(output);
+        assert.equal(deltas, text, `${JSON.stringify({ tail, options, chunkSize })}`);
+        assert.deepEqual(done, [text]);
+        assert.deepEqual(messages, [text]);
+        const emitted = events(output);
+        const tailAt = emitted.findIndex((event) => event.delta === tail);
+        const doneAt = emitted.findIndex((event) => event.type === "response.output_text.done");
+        assert.ok(tailAt >= 0 && tailAt < doneAt, "held text must precede its text completion");
+      }
+    }
+  }
+});
+
+test("a partial tag is preserved when the stream ends without a text snapshot", async () => {
+  for (const text of ["An inequality: x <", "<th", "\n\t<", " \n\t"]) {
+    const input = block({ type: "response.output_text.delta", output_index: 0, delta: text });
+    assert.equal(collect(await run(input)).deltas, text);
+    assert.equal(collect(await run(input, { chunkSize: 1 })).deltas, text);
+  }
+});
+
+test("held tails precede every item or response completion and are emitted once", async () => {
+  const delta = { type: "response.output_text.delta", output_index: 2, content_index: 1, item_id: "m2", delta: "x <th" };
+  for (const terminal of [
+    { type: "response.content_part.done", output_index: 2, content_index: 1, part: { type: "output_text", text: "x <th" } },
+    { type: "response.output_item.done", output_index: 2, item: { id: "m2", type: "message", content: [{ type: "output_text", text: "x <th" }] } },
+    { type: "response.completed", response: { status: "completed", output: [] } },
+    { type: "response.failed", response: { status: "failed", output: [] } },
+    { type: "response.incomplete", response: { status: "incomplete", output: [] } },
+    { type: "error", error: { code: "upstream_error" } },
+  ]) {
+    const output = await run(block(delta) + block(terminal));
+    const emitted = events(output);
+    assert.equal(collect(output).deltas, delta.delta, terminal.type);
+    assert.equal(emitted.at(-1).type, terminal.type);
+    assert.deepEqual(emitted.at(-2), { ...delta, delta: "<th" });
+    assert.equal(emitted.filter((event) => event.delta === "<th").length, 1);
+  }
+  const done = await run(block(delta) + "data: [DONE]\n\n");
+  assert.equal(collect(done).deltas, delta.delta);
+  assert.ok(done.indexOf('"delta":"<th"') < done.indexOf("data: [DONE]"));
+});
+
+test("content parts never join their partial tags, and finishing one leaves the others pending", async () => {
+  const input =
+    block({ type: "response.output_text.delta", output_index: 0, content_index: 0, item_id: "m0", delta: "First <th" }) +
+    block({ type: "response.output_text.delta", output_index: 0, content_index: 1, item_id: "m0", delta: "ink>Second <" }) +
+    block({ type: "response.output_text.delta", output_index: 3, content_index: 0, item_id: "m3", delta: "Third </re" }) +
+    block({ type: "response.output_text.done", output_index: 0, content_index: 0, text: "First <th" }) +
+    block({ type: "response.output_text.delta", output_index: 0, content_index: 1, item_id: "m0", delta: "reason" }) +
+    block({ type: "response.output_item.done", output_index: 0, item: { type: "message", content: [] } }) +
+    block({ type: "response.output_text.done", output_index: 3, content_index: 0, text: "Third </re" });
+  const output = events(await run(input));
+  const textByPart = new Map();
+  for (const event of output) {
+    if (event.type !== "response.output_text.delta") continue;
+    const key = `${event.output_index}:${event.content_index}`;
+    textByPart.set(key, (textByPart.get(key) || "") + event.delta);
+  }
+  assert.deepEqual([...textByPart], [["0:0", "First <th"], ["0:1", "ink>Second <reason"], ["3:0", "Third </re"]]);
+  const firstDone = output.findIndex((event) => event.type === "response.output_text.done" && event.output_index === 0);
+  assert.equal(output[firstDone - 1].delta, "<th");
+  assert.ok(output.findIndex((event) => event.delta === "<reason") > firstDone);
+});
+
+test("inserted tails retain content identity without duplicate sequence ids or logprobs", async () => {
+  const input =
+    block({ type: "response.output_text.delta", output_index: 0, content_index: 1, item_id: "m0", sequence_number: 8, logprobs: [{ token: "x" }], delta: "x <" }) +
+    block({ type: "response.output_text.done", output_index: 0, content_index: 1, item_id: "m0", sequence_number: 9, text: "x <" }) +
+    block({ type: "response.output_item.done", output_index: 0, sequence_number: 10, item: { type: "message", content: [] } }) +
+    block({ type: "response.completed", sequence_number: 11, response: { status: "completed" } });
+  const output = events(await run(input));
+  assert.deepEqual(output.map((event) => event.sequence_number), [8, 9, 10, 11, 12]);
+  assert.deepEqual(output[1], { type: "response.output_text.delta", output_index: 0, content_index: 1, item_id: "m0", sequence_number: 9, delta: "<" });
+  assert.deepEqual(output[0].logprobs, [{ token: "x" }], "real delta metadata survives");
+});
+
+test("an unterminated final SSE frame still separates its flushed tail", async () => {
+  const input = block({ type: "response.output_text.delta", output_index: 0, delta: "x <" }, "");
+  assert.equal(collect(await run(input)).deltas, "x <");
+});
+
+test("held tails adopt CRLF framing and do not repeat the prior SSE id", async () => {
+  const delta = { type: "response.output_text.delta", output_index: 0, delta: "x <" };
+  const done = { type: "response.output_text.done", output_index: 0, text: "x <" };
+  const input = `id: source-delta\r\nevent: ${delta.type}\r\ndata: ${JSON.stringify(delta)}\r\n\r\n` +
+    `event: ${done.type}\r\ndata: ${JSON.stringify(done)}\r\n\r\n`;
+  const output = await run(input, { chunkSize: 1 });
+  assert.equal(collect(output).deltas, "x <");
+  assert.ok(!/(?<!\r)\n/.test(output), "synthetic frame must retain CRLF");
+  assert.equal(output.match(/id: source-delta/g).length, 1);
+});
+
+test("invalid UTF-8 releases preceding valid text and then relays the malformed bytes", async () => {
+  const prefix = Buffer.from(block({ type: "response.output_text.delta", output_index: 0, delta: "x <" }));
+  const invalid = Buffer.from([0xff, 0x0a, 0x0a]);
+  const remainder = Buffer.from(block({ type: "response.output_text.delta", output_index: 0, delta: "raw <think>" }));
+  const transform = new ReasoningTagStripper();
+  const chunks = [];
+  await pipeline(Readable.from([prefix, invalid, remainder]), transform, new Writable({
+    write(chunk, _encoding, done) { chunks.push(chunk); done(); },
+  }));
+  const output = Buffer.concat(chunks);
+  const invalidAt = output.indexOf(invalid);
+  assert.notEqual(invalidAt, -1);
+  assert.equal(collect(output.subarray(0, invalidAt).toString("utf8")).deltas, "x <");
+  assert.deepEqual(output.subarray(invalidAt), Buffer.concat([invalid, remainder]));
+});
+
+test("an unfinished legacy reasoning span does not leak its held suffix on completion", async () => {
+  const input = block({ type: "response.output_text.delta", output_index: 0, delta: "<think>hidden <th" }) +
+    block({ type: "response.failed", response: { status: "failed" } });
+  assert.equal(collect(await run(input)).deltas, "");
+});
+
 test("does not touch reasoning_summary or function_call items", async () => {
   const input =
     block({ type: "response.reasoning_summary_text.delta", output_index: 0, delta: "<think>internal</think>" }) +
@@ -179,25 +312,20 @@ test("an answer with no reasoning tags streams through byte-for-byte", async () 
   }
 });
 
-test("streamed deltas keep every reasoning-free message that has visible text", () => {
-  // Property: with no tag anywhere and at least one visible character, the
+test("streamed deltas keep every reasoning-free message, including partial tags and whitespace", () => {
+  // Property: with no complete tag anywhere, the
   // delta stream is the identity, exactly as `stripThinkTags` is. Checked over
   // several splits of a deliberately tag-adjacent alphabet, so a partial tag
   // held across deltas is covered too.
   const pieces = ["", " ", "\n", "\t", "<", ">", "/", "think", "reason", "x", "B"];
   const TAG = /<\/?(?:thinking|reasoning|think|reason)>/;
-  // A trailing prefix of a tag ("a <", "x<th") is held back as a possible split
-  // tag and released only by `flush`, whose return value the transform does not
-  // emit. Pre-existing and unchanged here.
-  const PARTIAL = /<\/?(?:t(?:h(?:i(?:n(?:k)?)?)?)?|r(?:e(?:a(?:s(?:o(?:n)?)?)?)?)?)?$/;
   for (const a of pieces) {
     for (const b of pieces) {
       for (const c of pieces) {
         const text = a + b + c;
-        // A real tag has its own documented behavior; an all-whitespace message
-        // is covered by the case below; and a message ending mid-tag is held by
-        // `#partialHold`, which this change does not touch (see PARTIAL below).
-        if (TAG.test(text) || !/\S/.test(text) || PARTIAL.test(text)) continue;
+        // Complete tags have their own opt-in legacy behavior. A possible tag
+        // that never completes is ordinary text, including when it is the tail.
+        if (TAG.test(text)) continue;
         assert.equal(
           stripThinkTags(text),
           text,
@@ -228,11 +356,7 @@ test("streamed deltas keep every reasoning-free message that has visible text", 
   }
 });
 
-test("a delta that is only whitespace is still held back", () => {
-  // Unchanged from before: the lead is released by the first visible character,
-  // so a message that never produces one contributes no delta. The terminal
-  // `output_text.done` snapshot carries the text either way, and a model answer
-  // made only of whitespace is not one.
+test("held whitespace is released when a message finishes without a tag", () => {
   const stripper = new ReasoningTagStripper();
   stripper.write(
     Buffer.from(block({ type: "response.output_text.delta", output_index: 0, delta: " " })),
@@ -241,7 +365,7 @@ test("a delta that is only whitespace is still held back", () => {
   let streamed = "";
   let chunk;
   while ((chunk = stripper.read()) !== null) streamed += chunk.toString("utf8");
-  assert.equal(collect(streamed).deltas, "");
+  assert.equal(collect(streamed).deltas, " ");
 });
 
 test("held leading whitespace is dropped by a tag that only arrives in a later delta", () => {
