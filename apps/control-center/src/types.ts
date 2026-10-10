@@ -484,7 +484,16 @@ export interface AccountUsage {
   };
 }
 
-export interface ProviderModelUsage {
+export type GenerationOutcome = "completed" | "failed" | "incomplete" | "canceled" | "indeterminate";
+
+export interface GenerationOutcomeStats {
+  outcomeCounts?: Partial<Record<GenerationOutcome, number>>;
+  /** Requests recorded before generation outcomes were available. */
+  legacyOutcomeRequests?: number;
+  requests?: number;
+}
+
+export interface ProviderModelUsage extends GenerationOutcomeStats {
   slug?: string;
   displayName?: string;
   inputTokens?: number;
@@ -498,7 +507,7 @@ export interface ProviderModelUsage {
   lastUsedAt?: string;
 }
 
-export interface ProviderUsage {
+export interface ProviderUsage extends GenerationOutcomeStats {
   id: string;
   displayName: string;
   credentialType?: string;
@@ -570,6 +579,9 @@ export interface UsageEvent {
   model?: string;
   provider?: string;
   status?: number;
+  /** HTTP delivery status is separate from the terminal generation result. */
+  httpStatus?: number;
+  generationOutcome?: GenerationOutcome;
   durationMs?: number;
   /** Milliseconds until the upstream response headers arrived. */
   responseStartMs?: number;

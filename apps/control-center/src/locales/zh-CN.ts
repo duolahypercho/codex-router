@@ -1,6 +1,17 @@
 import type { en } from "./en.ts";
 
 export const zhCN = {
+  "generation.completed": "已完成",
+  "generation.failed": "失败",
+  "generation.incomplete": "未完成",
+  "generation.canceled": "已取消",
+  "generation.indeterminate": "结果不明",
+  "generation.notRecorded": "未记录",
+  "generation.httpStatus": "HTTP {status}",
+  "generation.httpNotRecorded": "未记录 HTTP 状态",
+  "generation.eventDetail": "{http}；生成结果：{outcome}",
+  "generation.count": "{count} 次{outcome}",
+  "generation.ledgerSummary": "90 天生成结果：{summary}",
   "common.search": "搜索",
   "common.clearSearch": "清除搜索",
   "common.refresh": "刷新",

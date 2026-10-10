@@ -1,5 +1,16 @@
 // Canonical semantic message ids. Keep ids stable when English copy changes.
 export const en = {
+  "generation.completed": "Completed",
+  "generation.failed": "Failed",
+  "generation.incomplete": "Incomplete",
+  "generation.canceled": "Canceled",
+  "generation.indeterminate": "Unknown",
+  "generation.notRecorded": "Not recorded",
+  "generation.httpStatus": "HTTP {status}",
+  "generation.httpNotRecorded": "HTTP status not recorded",
+  "generation.eventDetail": "{http}; generation: {outcome}",
+  "generation.count": "{count} {outcome}",
+  "generation.ledgerSummary": "90-day outcomes: {summary}",
   "common.search": "Search",
   "common.clearSearch": "Clear search",
   "common.refresh": "Refresh",

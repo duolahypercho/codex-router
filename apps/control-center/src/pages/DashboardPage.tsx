@@ -16,6 +16,7 @@ import { ServiceHealthPanel } from "../ServiceHealth";
 import { useOptimisticValues, type RunAction } from "../useOptimisticValues";
 import { useI18n } from "../i18n-react";
 import { translatorLocale, type Translate } from "../i18n";
+import { eventGenerationCompleted, eventGenerationPresentation, generationOutcomesSummary, recordGenerationOutcome } from "../generation-outcome";
 import {
   classNames,
   compactNumber,
@@ -30,6 +31,7 @@ import type {
   ActiveRequest,
   PresenceSnapshot,
   ProviderSetupSnapshot,
+  GenerationOutcomeStats,
   ProviderUsageSnapshot,
   RouterControlApi,
   RouterDataReady,
@@ -101,7 +103,7 @@ interface TokenActivityMonth {
   weekIndex: number;
 }
 
-interface TrafficBreakdownRow {
+interface TrafficBreakdownRow extends GenerationOutcomeStats {
   id: string;
   label: string;
   providerId?: string;
@@ -116,6 +118,8 @@ interface TrafficBreakdownRow {
   outputTokens?: number | null;
   tokensPerSecond?: number | null;
   speedSampleCount?: number;
+  outcomeRequests?: number;
+  outcomeScope?: "90-day ledger";
 }
 
 interface ModelBreakdownAccumulator extends TrafficBreakdownRow {
@@ -878,6 +882,7 @@ function BreakdownGroup({
               <div className="db-breakdown-label">
                 <strong title={row.label}>{row.label}</strong>
                 <small>{row.provider ? `${row.provider} · ` : ""}{exactNumber(row.requests)} {t(row.requests === 1 ? "dashboard.word.request" : "dashboard.word.requests")}{row.measuredTokens ? ` · ${compactNumber(row.tokens)} tok` : t("dashboard.breakdown.tokensNotReported")}</small>
+                <GenerationBreakdownFacts row={row} />
                 {!providerRows ? <ModelBreakdownFacts row={row} /> : null}
                 <span className="db-breakdown-meter" aria-hidden="true"><i style={{ width: `${row.tokens > 0 ? Math.max(2, (row.tokens / max) * 100) : 0}%` }} /></span>
               </div>
@@ -893,6 +898,14 @@ function BreakdownGroup({
       )}
     </div>
   );
+}
+
+function GenerationBreakdownFacts({ row }: { row: TrafficBreakdownRow }) {
+  const t = useI18n();
+  const summary = generationOutcomesSummary({ ...row, requests: row.outcomeRequests ?? row.requests }, t);
+  if (!summary) return null;
+  const label = row.outcomeScope === "90-day ledger" ? t("generation.ledgerSummary", { summary }) : summary;
+  return <small title={label}>{label}</small>;
 }
 
 function ModelBreakdownFacts({ row }: { row: TrafficBreakdownRow }) {
@@ -915,16 +928,13 @@ function ModelBreakdownFacts({ row }: { row: TrafficBreakdownRow }) {
 
 function DashboardEventRow({ event }: { event: UsageEvent }) {
   const t = useI18n();
-  const status = event.status;
-  const tone: Tone | "neutral" = status === undefined
-    ? "neutral"
-    : status >= 400 ? "danger" : status >= 200 ? "success" : "neutral";
+  const outcome = eventGenerationPresentation(event, t);
   const total = tokenCountFromEvent(event);
   const speed = tokensPerSecondFromEvent(event);
   const breakdown = tokenBreakdownFromEvent(event);
   const tokenFacts = formatEventTokenFacts(total, breakdown, t);
   return (
-    <article>
+    <article title={outcome.detail} aria-label={outcome.detail}>
       <ProviderLogo
         providerId={event.provider || t("dashboard.event.router")}
         displayName={event.provider}
@@ -933,7 +943,7 @@ function DashboardEventRow({ event }: { event: UsageEvent }) {
       />
       <span className="db-event-model">
         <strong>{shortModelName(event.model || t("dashboard.event.unknownModel"))}</strong>
-        <small>{event.provider || t("dashboard.event.router")}</small>
+        <small>{event.provider || t("dashboard.event.router")} · {outcome.httpLabel}</small>
       </span>
       <span className="db-event-metering">
         <strong>{speed == null ? t("dashboard.event.speedUnmeasured") : formatTokensPerSecond(speed)}</strong>
@@ -944,8 +954,8 @@ function DashboardEventRow({ event }: { event: UsageEvent }) {
         <small>{formatDateTime(event.at, t)}</small>
       </span>
       <span className="db-event-status">
-        <Badge tone={tone === "neutral" ? "neutral" : tone}>
-          {status === undefined ? t("dashboard.event.noStatus") : String(status)}
+        <Badge tone={outcome.tone}>
+          {outcome.label}
         </Badge>
       </span>
     </article>
@@ -1397,11 +1407,12 @@ function buildProviderBreakdown(
   events: UsageEvent[] | undefined,
   now: number,
 ): TrafficBreakdownRow[] {
-  const eventRows = new Map<string, { requests: number; tokens: number; measuredTokens: boolean }>();
+  const eventRows = new Map<string, GenerationOutcomeStats & { requests: number; tokens: number; measuredTokens: boolean }>();
   for (const event of recentWindowEvents(events, now)) {
     const id = event.provider || "unknown";
-    const previous = eventRows.get(id) ?? { requests: 0, tokens: 0, measuredTokens: false };
+    const previous = eventRows.get(id) ?? { requests: 0, tokens: 0, measuredTokens: false, outcomeCounts: {}, legacyOutcomeRequests: 0 };
     previous.requests += 1;
+    recordGenerationOutcome(previous, event);
     const tokens = tokenCountFromEvent(event);
     if (tokens !== null) {
       previous.tokens += tokens;
@@ -1431,6 +1442,10 @@ function buildProviderBreakdown(
       measuredTokens,
       share: 0,
       scope: "rolling 24h",
+      outcomeCounts: provider.outcomeCounts,
+      legacyOutcomeRequests: provider.legacyOutcomeRequests,
+      outcomeRequests: provider.requests,
+      outcomeScope: "90-day ledger",
     });
   }
   for (const [providerId, eventRow] of eventRows) {
@@ -1444,6 +1459,8 @@ function buildProviderBreakdown(
       measuredTokens: eventRow.measuredTokens,
       share: 0,
       scope: "rolling 24h",
+      outcomeCounts: eventRow.outcomeCounts,
+      legacyOutcomeRequests: eventRow.legacyOutcomeRequests,
     });
   }
   return withBreakdownShares([...rows.values()]);
@@ -1477,8 +1494,11 @@ function buildModelBreakdown(
       cacheMeasured: false,
       outputMeasured: false,
       speedSamples: [],
+      outcomeCounts: {},
+      legacyOutcomeRequests: 0,
     };
     previous.requests += 1;
+    recordGenerationOutcome(previous, event);
     const tokens = tokenCountFromEvent(event);
     if (tokens !== null) {
       previous.tokens += tokens;
@@ -1529,6 +1549,8 @@ function buildModelBreakdown(
         measuredTokens: Number.isFinite(Number(model.totalTokens)),
         share: 0,
         scope: "90-day ledger" as const,
+        outcomeCounts: model.outcomeCounts,
+        legacyOutcomeRequests: model.legacyOutcomeRequests,
         inputTokens: Number.isFinite(Number(model.inputTokens)) ? Number(model.inputTokens) : null,
         cachedInputTokens: null,
         outputTokens: Number.isFinite(Number(model.outputTokens)) ? Number(model.outputTokens) : null,
@@ -1576,7 +1598,7 @@ function tokensPerSecondFromEvent(event: UsageEvent): number | null {
   const durationMs = optionalNumber(event.durationMs);
   const firstTokenMs = optionalNumber(event.firstTokenMs);
   if (output === null || output <= 0 || durationMs === null || durationMs <= 0 || firstTokenMs === null) return null;
-  if (event.status === undefined || event.status < 200 || event.status >= 400) return null;
+  if (!eventGenerationCompleted(event)) return null;
   if (
     event.retries
     || event.streamAborted

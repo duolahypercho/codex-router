@@ -15,6 +15,7 @@ import { ProviderLogo } from "../provider-branding";
 import { ServiceHealthPanel } from "../ServiceHealth";
 import { useI18n } from "../i18n-react";
 import type { Translate } from "../i18n";
+import { eventGenerationPresentation, generationOutcomesSummary } from "../generation-outcome";
 import {
   compactNumber,
   exactNumber,
@@ -661,6 +662,7 @@ function StatusModelRow({ model, peak }: { model: StatusModelUsage; peak: number
   const total = model.totalTokens || 0;
   const width = Math.max(total > 0 ? 1.5 : 0, (total / peak) * 100);
   const speed = Number(model.observedTokensPerSecond);
+  const outcomes = generationOutcomesSummary(model, t);
   return (
     <article className="st-model-row">
       <div className="st-model-heading">
@@ -689,6 +691,7 @@ function StatusModelRow({ model, peak }: { model: StatusModelUsage; peak: number
         <span>{t("status.model.input", { count: compactNumber(model.inputTokens || 0) })}</span>
         <span>{t("status.model.output", { count: compactNumber(model.outputTokens || 0) })}</span>
         <span>{t("status.model.requests", { count: exactNumber(model.requests || 0) })}</span>
+        {outcomes ? <span>{outcomes}</span> : null}
         {Number.isFinite(speed) ? <span>{speed.toFixed(1)} tok/s</span> : <span>{t("status.model.speedUnmeasured")}</span>}
         {model.speedSampleCount ? <span>{t("status.model.speedSamples", { count: exactNumber(model.speedSampleCount) })}</span> : null}
       </div>
@@ -714,21 +717,20 @@ function StatusSummary({ items }: {
 
 function EventRow({ event }: { event: UsageEventTelemetry }) {
   const t = useI18n();
-  const success = Boolean(event.status && event.status >= 200 && event.status < 400);
-  const failure = Boolean(event.status && event.status >= 400);
+  const outcome = eventGenerationPresentation(event, t);
   const total = tokenCountFromEvent(event);
   const flag = eventFlag(event, t);
   return (
-    <article>
+    <article title={outcome.detail} aria-label={outcome.detail}>
       <ProviderLogo
         providerId={event.provider || "router"}
         displayName={event.provider}
         size="small"
-        className={failure ? "st-event-logo is-failure" : success ? "st-event-logo is-success" : "st-event-logo"}
+        className={outcome.tone === "danger" ? "st-event-logo is-failure" : outcome.tone === "success" ? "st-event-logo is-success" : "st-event-logo"}
       />
       <span className="st-event-model">
         <strong>{shortModelName(event.model || t("status.model.unknown"))}</strong>
-        <small>{event.provider || t("status.routerFallback")}</small>
+        <small>{event.provider || t("status.routerFallback")} · {outcome.httpLabel}</small>
       </span>
       <span className="st-event-metering">
         <strong>{total === null ? t("status.event.unmetered") : t("status.model.tok", { count: compactNumber(total) })}</strong>
@@ -738,13 +740,14 @@ function EventRow({ event }: { event: UsageEventTelemetry }) {
       </span>
       <span className="st-event-duration">
         <strong>{event.durationMs ? formatDuration(event.durationMs) : t("status.event.noDuration")}</strong>
-        <small>{event.status || t("status.event.noStatus")}</small>
+        <small>{outcome.httpLabel}</small>
       </span>
       <span className="st-event-time">
         <time dateTime={dateTimeValue(event.at)}>{formatDateTime(event.at, t)}</time>
       </span>
       <span className="st-event-flag">
-        {flag ? <Badge tone={failure ? "danger" : "warning"}>{flag}</Badge> : null}
+        <Badge tone={outcome.tone}>{outcome.label}</Badge>
+        {flag ? <span title={flag}> · {flag}</span> : null}
       </span>
     </article>
   );

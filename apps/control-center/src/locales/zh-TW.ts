@@ -2,6 +2,17 @@
 import type { en } from "./en.ts";
 
 export const zhTW = {
+  "generation.completed": "已完成",
+  "generation.failed": "失敗",
+  "generation.incomplete": "未完成",
+  "generation.canceled": "已取消",
+  "generation.indeterminate": "結果不明",
+  "generation.notRecorded": "未記錄",
+  "generation.httpStatus": "HTTP {status}",
+  "generation.httpNotRecorded": "未記錄 HTTP 狀態",
+  "generation.eventDetail": "{http}；生成結果：{outcome}",
+  "generation.count": "{count} 次{outcome}",
+  "generation.ledgerSummary": "90 天生成結果：{summary}",
   "common.search": "搜尋",
   "common.clearSearch": "清除搜尋",
   "common.refresh": "重新整理",
