@@ -150,6 +150,100 @@ test("Responses stream keeps independent tool indices and usage across chunk bou
   assert.equal(output.at(-1).data, "[DONE]");
 });
 
+function responseEvent(data) {
+  return `event: ${data.type}\ndata: ${JSON.stringify(data)}\n\n`;
+}
+
+const announcedFunctions = [0, 1].map((output_index) => ({
+  type: "response.output_item.added", output_index,
+  item: { type: "function_call", id: `item-${output_index}`, call_id: `call-${output_index}`, name: "add", arguments: "" },
+}));
+
+test("Responses stream canonicalizes changed transport IDs across a complete function stream", async () => {
+  const events = [...announcedFunctions];
+  for (let index = 0; index < 2; index++) {
+    events.push(
+      { type: "response.function_call_arguments.delta", output_index: index, item_id: `delta-${index}`, delta: "{}" },
+      { type: "response.function_call_arguments.done", output_index: index, item_id: `arguments-${index}`, arguments: "{}" },
+      { type: "response.output_item.done", output_index: index, item: { ...announcedFunctions[index].item, id: `done-${index}`, arguments: "{}" } },
+    );
+  }
+  events.push({ type: "response.completed", response: {
+    status: "completed", usage: { input_tokens: 4, output_tokens: 3 },
+    output: announcedFunctions.map(({ item }, index) => ({ ...item, id: `completed-${index}`, arguments: "{}" })),
+  } });
+  const source = events.map(responseEvent).join("");
+  const output = frames(await transformText(createResponsesStreamTransform(), [source.slice(0, 137), source.slice(137)]));
+  assert.equal(output.some(({ event }) => event === "error"), false);
+  for (const { data } of output) {
+    if (data.item_id) assert.equal(data.item_id, `item-${data.output_index}`);
+    if (data.item) assert.equal(data.item.id, `item-${data.output_index}`);
+  }
+  assert.deepEqual(output.at(-1).data.response.output.map(({ id, call_id, arguments: args }) => ({ id, call_id, args })), [
+    { id: "item-0", call_id: "call-0", args: "{}" }, { id: "item-1", call_id: "call-1", args: "{}" },
+  ]);
+  assert.deepEqual(output.at(-1).data.response.usage, { input_tokens: 4, output_tokens: 3 });
+});
+
+test("Responses stream preserves completion-only snapshots and call-ID-only announcements", async () => {
+  const item = { type: "function_call", id: "snapshot", call_id: "call", name: "add", arguments: "{}" };
+  const completion = { type: "response.completed", response: { output: [item] } };
+  const standalone = frames(await transformText(createResponsesStreamTransform(), [responseEvent(completion)]));
+  assert.deepEqual(standalone[0].data, completion);
+  const mixed = frames(await transformText(createResponsesStreamTransform(), [
+    responseEvent({ type: "response.output_item.added", item: { type: "message", id: "message" } }),
+    responseEvent({ type: "response.output_item.done", output_index: 1, item }),
+    responseEvent(completion),
+  ]));
+  assert.deepEqual(mixed.at(-1).data, completion);
+  assert.deepEqual(mixed[1].data.item, item);
+
+  const output = frames(await transformText(createResponsesStreamTransform(), [
+    responseEvent({ type: "response.output_item.added", item: { type: "function_call", call_id: "call-only" } }),
+    responseEvent({ type: "response.function_call_arguments.delta", item_id: "call-only", delta: "{}" }),
+    responseEvent({ type: "response.completed", response: {} }),
+  ]));
+  assert.equal(output[1].data.item_id, "call-only");
+  assert.equal(output[1].data.output_index, 0);
+  assert.equal(output.some(({ event }) => event === "error"), false);
+});
+
+test("Responses stream rejects conflicting function identities and does not register transport aliases", async () => {
+  const argument = { type: "response.function_call_arguments.delta", output_index: 0, item_id: "transport", delta: "{}" };
+  const invalid = [
+    { ...argument, output_index: undefined },
+    ...[-1, 0.5, "0", null, 2].map((output_index) => ({ ...argument, output_index })),
+    ...[null, 0, ""].map((item_id) => ({ ...argument, item_id })),
+    { ...argument, item_id: "item-1" },
+    { ...argument, call_id: "call-1" },
+    { ...argument, item_id: "item-0", call_id: "call-1" },
+    { ...argument, call_id: "unknown" },
+    { ...argument, call_id: null },
+    { type: "response.output_item.done", output_index: 0, item: { ...announcedFunctions[0].item, id: "item-1" } },
+    { type: "response.output_item.done", output_index: 0, item: { ...announcedFunctions[0].item, id: "transport", call_id: "unknown" } },
+    { type: "response.output_item.done", output_index: 0, item: { ...announcedFunctions[0].item, output_index: 1 } },
+    { type: "response.completed", response: { output: [{ ...announcedFunctions[0].item, output_index: -1 }] } },
+    { type: "response.completed", response: { output: [announcedFunctions[1].item] } },
+  ];
+  for (const event of invalid) {
+    const output = frames(await transformText(createResponsesStreamTransform(), [...announcedFunctions, event].map(responseEvent)));
+    assert.equal(output.at(-1).data.code, "invalid_responses_stream", JSON.stringify(event));
+  }
+  const nonfunction = frames(await transformText(createResponsesStreamTransform(), [
+    responseEvent({ type: "response.output_item.added", output_index: 0, item: { type: "message", id: "message" } }), responseEvent(argument),
+  ]));
+  assert.equal(nonfunction.at(-1).data.code, "invalid_responses_stream");
+  const alias = frames(await transformText(createResponsesStreamTransform(), [
+    responseEvent(announcedFunctions[0]), responseEvent(argument), responseEvent({ ...argument, output_index: undefined }),
+  ]));
+  assert.equal(alias[1].data.item_id, "item-0");
+  assert.equal(alias.at(-1).data.code, "invalid_responses_stream");
+  const callOnly = frames(await transformText(createResponsesStreamTransform(), [
+    responseEvent({ type: "response.output_item.added", item: { type: "function_call", call_id: "call-only" } }), responseEvent(argument),
+  ]));
+  assert.equal(callOnly.at(-1).data.code, "invalid_responses_stream");
+});
+
 test("Responses stream emits a terminal error instead of silently ending", async () => {
   const output = frames(await transformText(createResponsesStreamTransform(), [
     "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp-2\"}}\n\n",
