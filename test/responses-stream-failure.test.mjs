@@ -381,6 +381,22 @@ test("only one local terminal is injected, including generic fallback", () => {
   }
 });
 
+test("a native local failure stays recognizable without using untrusted metadata", () => {
+  for (const announced of [[], [frame({ ...created(), sequence_number: undefined })], [frame(created()), frame({ type: "response.compaction.delta", sequence_number: 1, response_id: identity.id })]]) {
+    const target = response();
+    markResponsesStream(target, { minimalFailure: true });
+    markResponsesStream(target, { model: "requested/model" });
+    const observer = observe(target, announced);
+    const failure = fail(target);
+    assert.deepEqual(failure, { type: "response.failed", code: "local_router_stream_failed",
+      response: { status: "failed", error: { code: "server_error", message: "fixture diagnosed cause" } } });
+    const before = target.body();
+    assert.equal(writeStreamErrorEvent(target, { code: "duplicate", message: "duplicate" }), false);
+    assert.equal(target.body(), before);
+    observer.destroy();
+  }
+});
+
 test("marked failures bound strings and never stringify an unknown error object", () => {
   for (const message of ["\n".repeat(50_000), "😀".repeat(50_000), { secret: "must-not-be-serialized" }]) {
     const target = response();

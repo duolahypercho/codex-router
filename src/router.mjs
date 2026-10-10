@@ -4874,6 +4874,7 @@ async function handleResponses(request, response, requestUrl) {
       }
     } else {
       const native = { ...payload };
+      if (!compactV1) markResponsesStream(response, { minimalFailure: true });
       const substitutedCaller = callerBroughtNoUpstreamCredential(request);
       // An extended-window variant is the model it was derived from, published
       // under a second slug so the picker can offer a different context
@@ -5258,7 +5259,16 @@ async function handleResponses(request, response, requestUrl) {
       });
       upstreamStatus = upstream.status;
     }
-    const upstreamContentType = upstream.headers.get("content-type") || "";
+    let upstreamContentType = upstream.headers.get("content-type") || "";
+    if (!route && upstream.ok && !compactV1 && !bufferNativeStream &&
+        payload.stream === true && !upstreamContentType) {
+      // The native backend also sends successful SSE without a Content-Type.
+      // Seat the expected stream type before creating the final observer and
+      // writing bytes, so a socket reset still carries a recognizable failure.
+      // V1 compact, folded JSON, explicit non-SSE types and errors stay unchanged.
+      upstreamContentType = "text/event-stream; charset=utf-8";
+      response.setHeader("Content-Type", upstreamContentType);
+    }
     const createResponsePipeline = (contentType, preludeMs = EMPTY_COMPLETION_PRELUDE_MS) => {
       const usageObserver = new ResponseUsageTransform(contentType, {
         grokServiceTier: offersGrokOauthServiceTier(route),

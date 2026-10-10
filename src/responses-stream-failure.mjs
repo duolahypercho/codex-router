@@ -32,7 +32,7 @@ function identityText(value) {
     ? value : undefined;
 }
 
-export function markResponsesStream(response, { model } = {}) {
+export function markResponsesStream(response, { model, minimalFailure = false } = {}) {
   if (!response || (typeof response !== "object" && typeof response !== "function")) return;
   let context = contexts.get(response);
   if (!context) {
@@ -44,6 +44,7 @@ export function markResponsesStream(response, { model } = {}) {
     context.requestedModel = requestedModel;
     if (!context.modelAnnounced) context.model = requestedModel;
   }
+  if (minimalFailure === true) context.minimalFailure = true;
 }
 
 // Observes only bytes leaving the final rewrite/holding/heartbeat stage. Each
@@ -251,12 +252,11 @@ export function responsesStreamFailure(response, { code, message, localRejection
   const errorCode = localRejection === true ? "invalid_prompt" : "server_error";
   if (!context.trusted || !context.id || !context.model || context.createdAt === undefined ||
       context.nextSequence === undefined) {
-    // Missing ID/date/numbering (or both announced and requested model), and
-    // unknown/oversized/corrupted egress metadata cannot justify a fabricated
-    // upstream Response. Retain the generic error contract for this exception.
-    if (localRejection === true) {
-      // Codex accepts this minimal failure envelope. It is a local rejection,
-      // not a fabricated snapshot of an unidentified upstream Response.
+    // Missing or untrusted metadata cannot justify an upstream snapshot.
+    // Native Codex streams opt into a local failure envelope because Codex
+    // ignores generic errors except for its flex-unavailable case. This needs
+    // no invented identity/date/sequence/usage and retains server_error policy.
+    if (context.minimalFailure === true || localRejection === true) {
       return { event: { type: "response.failed", code: safeCode,
         response: { status: "failed", error: { code: errorCode, message: safeMessage } } } };
     }

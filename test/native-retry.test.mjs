@@ -313,7 +313,7 @@ test("an upstream failure after headers is never retried", async () => {
     // The decisive assertion: the caller received the partial stream exactly
     // once. A retry here would have duplicated it.
     assert.equal(body.match(/event: response\.created/g)?.length, 1, body);
-    assert.match(body, /event: error/);
+    assert.match(body, /event: response.failed/);
   } finally {
     await stopChild(router);
     await closeServer(native.server);
