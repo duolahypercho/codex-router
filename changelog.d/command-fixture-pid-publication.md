@@ -1,0 +1,1 @@
+- Wait for a complete, valid command-fixture PID and publish it atomically before Electron owner-signal tests proceed. Avoid treating an empty file as readiness or passing NaN to process.kill on busy runners.

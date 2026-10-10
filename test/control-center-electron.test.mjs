@@ -646,22 +646,54 @@ test("Linux tray-only mode trusts only a positively registered StatusNotifier ho
 
 // The fixture records its descendant as soon as it is spawned, but the whole
 // command can be terminated before that write lands on a busy machine. Wait
-// briefly and say what happened: reading the file directly reported a bare
+// for a complete positive PID and say what happened: file existence can race
+// the write, and treating an empty file as ready passes NaN to process.kill.
+// Reading the file directly also reported a bare
 // ENOENT that read as a missing temp directory rather than a descendant that
 // never started.
 async function readPidFile(pidFile, timeoutMs = 10_000) {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
-    try { return await readFile(pidFile, "utf8"); }
+    try {
+      const value = (await readFile(pidFile, "utf8")).trim();
+      if (/^[1-9]\d*$/.test(value) && Number.isSafeInteger(Number(value))) return value;
+    }
     catch (error) {
       if (error?.code !== "ENOENT") throw error;
-      if (Date.now() >= deadline) {
-        assert.fail(`the command fixture never recorded a descendant pid in ${pidFile}`);
-      }
-      await new Promise((resolve) => setTimeout(resolve, 25));
     }
+    if (Date.now() >= deadline) {
+      assert.fail(`the command fixture never recorded a valid descendant pid in ${pidFile}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
   }
 }
+
+test("command fixture PID readiness waits past an empty or malformed publication", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "command-pid-publication-"));
+  const pidFile = path.join(root, "descendant.pid");
+  try {
+    for (const initial of ["", "NaN", "123suffix", "0"]) {
+      await writeFile(pidFile, initial);
+      const reading = readPidFile(pidFile);
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      await writeFile(pidFile, String(process.pid));
+      assert.equal(await reading, String(process.pid));
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("command fixture PID readiness rejects a file that never becomes valid", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "command-pid-deadline-"));
+  const pidFile = path.join(root, "descendant.pid");
+  try {
+    await writeFile(pidFile, "");
+    await assert.rejects(readPidFile(pidFile, 50), /never recorded a valid descendant pid/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 async function waitForProcessExit(pid, timeoutMs = 4_000) {
   const deadline = Date.now() + timeoutMs;
@@ -684,21 +716,24 @@ async function makeProcessTreeControlRoot() {
     path.join(root, "src", "control.mjs"),
     [
       'import { spawn } from "node:child_process";',
-      'import { writeFileSync } from "node:fs";',
+      'import { renameSync, writeFileSync } from "node:fs";',
       'const [pidFile, mode] = process.argv.slice(2);',
       'const marker = `${pidFile}.survived`;',
       'const worker = `const { writeFileSync } = require("node:fs"); process.on("SIGTERM", () => {}); process.on("SIGINT", () => {}); setTimeout(() => writeFileSync(${JSON.stringify(marker)}, "unsafe"), 900); process.send?.("ready"); process.disconnect?.(); setInterval(() => {}, 1000)`;',
       // Hold the command's stdout/stderr pipes open after its leader exits, so
       // the runner has to act on `exit` rather than waiting forever for `close`.
       'const descendant = spawn(process.execPath, ["-e", worker], { stdio: ["ignore", "inherit", "inherit", "ipc"] });',
+      // Publish a complete value atomically; the owner may signal immediately
+      // after observing readiness and must never see a partial decimal PID.
+      'const recordPid = () => { writeFileSync(`${pidFile}.pending`, String(descendant.pid)); renameSync(`${pidFile}.pending`, pidFile); };',
       // The timeout mode is killed on a deadline, so record the descendant as
       // soon as it has a pid. Waiting for its IPC "ready" first put a second
       // Node startup inside that deadline, and a loaded runner spent it: the
       // tree was terminated correctly and the test then read no pid file at
       // all. The other modes still report after the handshake.
-      'if (mode === "timeout") writeFileSync(pidFile, String(descendant.pid));',
+      'if (mode === "timeout") recordPid();',
       'descendant.once("message", () => {',
-      '  if (mode !== "timeout") writeFileSync(pidFile, String(descendant.pid));',
+      '  if (mode !== "timeout") recordPid();',
       '  if (mode === "success") process.exit(0);',
       '  if (mode === "failure") process.exit(7);',
       '  if (mode === "overflow") process.stdout.write("x".repeat(4096));',
@@ -2439,12 +2474,7 @@ for (const ownerSignal of ["SIGINT", "SIGTERM"]) {
       );
       let descendantPid;
       try {
-        const deadline = Date.now() + 3_000;
-        while (!existsSync(pidFile) && Date.now() < deadline) {
-          await new Promise((resolve) => setTimeout(resolve, 20));
-        }
-        assert.equal(existsSync(pidFile), true);
-        descendantPid = Number.parseInt(await readFile(pidFile, "utf8"), 10);
+        descendantPid = Number(await readPidFile(pidFile));
         owner.kill(ownerSignal);
         const [code, signal] = await once(owner, "exit");
         assert.equal(signal, null);
