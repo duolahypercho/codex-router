@@ -275,3 +275,51 @@ test("reset safely reclaims a stale lease left by a crashed router", async (t) =
   const stale = new Date(Date.now() - 700000); utimesSync(directory, stale, stale);
   assert.equal((await setChatGPTAccountRouting("reset", options)).sessions.count, 0);
 });
+
+test("caller credentials can rotate without rebinding a conversation or its collaboration root", async (t) => {
+  const { options, ids, plan } = fixture(t);
+  await setChatGPTAccountRouting("round-robin", options);
+  const first = await plan("first"); await first.close();
+  const parent = await plan("parent"); assert.equal(parent.profileId, ids[1]); await parent.close();
+  const headers = { authorization: "Bearer rotated-caller", "chatgpt-account-id": "one", "thread-id": "parent" };
+  const continuation = await plan("parent", [{ encrypted_content: "cipher" }], { headers });
+  assert.equal(continuation.profileId, ids[1]); await continuation.close();
+  const childHeaders = { ...headers, "thread-id": "child", "x-codex-parent-thread-id": "parent" };
+  const child = await plan("child", "plain", { headers: childHeaders });
+  assert.equal(child.profileId, ids[1]); await child.close();
+  const relay = await knownChatGPTAccountRoutingHeaders({ ...options, headers: { ...childHeaders, "thread-id": "routed-child" }, payload: { input: [{ encrypted_content: "cipher" }] } });
+  assert.equal(relay["chatgpt-account-id"], "two");
+  assert.equal(chatGPTAccountRoutingSnapshot(options.filePath).sessions.count, 4);
+  await setChatGPTAccountRouting("off", options);
+  await assert.rejects(plan("parent", "plain", { headers }), /Re-enable/);
+});
+
+test("Code Interpreter plural file_ids remain on their owner and never replay on quota", async (t) => {
+  const { options, ids, plan } = fixture(t);
+  const tools = [{ type: "code_interpreter", container: { type: "auto", file_ids: ["file_owned"] } }];
+  assert.equal(chatGPTAccountBoundHistory({ tools }), true);
+  assert.equal(chatGPTAccountBoundHistory({ tools: [{ type: "code_interpreter", container: { type: "auto", file_ids: [] } }] }), false);
+  await setChatGPTAccountRouting("round-robin", options);
+  const first = await plan("first"); await first.close();
+  const owner = await plan("files"); assert.equal(owner.profileId, ids[1]); await owner.close();
+  const selected = await plan("files", "hello", { payload: { input: "hello", tools } });
+  assert.equal(selected.profileId, ids[1]); assert.equal(selected.portable, false);
+  let calls = 0;
+  const result = await fetchWithChatGPTAccountRouting(selected, "https://synthetic.test", {}, { fetchImpl: async () => { calls++; return quota(); } });
+  assert.equal(calls, 1); assert.equal(result.response.status, 429); await result.response.text(); await selected.close();
+  await assert.rejects(plan("files", "hello", { payload: { input: "hello", tools } }), /account-bound history/);
+});
+
+test("pre-release capability-scoped affinities require explicit reset instead of guessing ownership", async (t) => {
+  const { options, plan } = fixture(t);
+  await setChatGPTAccountRouting("round-robin", options);
+  const selected = await plan(); await selected.close();
+  const legacy = readChatGPTAccountRouting(options.filePath); delete legacy.affinityVersion;
+  writePrivateJson(options.filePath, legacy);
+  await assert.rejects(plan(), /Legacy ChatGPT routing ownership/);
+  await assert.rejects(knownChatGPTAccountRoutingHeaders({ ...options, headers: {}, payload: {} }), /Legacy ChatGPT routing ownership/);
+  const reset = await setChatGPTAccountRouting("reset", options); assert.equal(reset.sessions.count, 0);
+  assert.equal(readChatGPTAccountRouting(options.filePath).affinityVersion, 2);
+  await assert.rejects(plan("old", [{ encrypted_content: "cipher" }]), /account-bound history/);
+  const fresh = await plan("new"); await fresh.close();
+});

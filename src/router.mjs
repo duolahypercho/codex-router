@@ -2214,7 +2214,7 @@ async function normalizeRoutedAgentInput(request, input, signal, originalPayload
       continue;
     }
     const ownerHeaders = payload.native
-      ? await knownChatGPTAccountRoutingHeaders({ headers: nativeHeaders(request), payload: { ...originalPayload, input: [item] }, callerScope: CALLER_KEY })
+      ? await knownChatGPTAccountRoutingHeaders({ headers: nativeHeaders(request), payload: { ...originalPayload, input: [item] } })
       : undefined;
     const plaintext = payload.native
       ? await relayEncryptedAgentPayload(request, item, payload.content, signal, ownerHeaders)
@@ -4898,7 +4898,7 @@ async function handleResponses(request, response, requestUrl) {
       }
     } else {
       accountRoutingPlan = await createChatGPTAccountRoutingPlan({
-        headers: nativeHeaders(request), payload, signal: controller.signal, callerScope: CALLER_KEY,
+        headers: nativeHeaders(request), payload, signal: controller.signal,
       });
       const native = { ...payload };
       const substitutedCaller = callerBroughtNoUpstreamCredential(request);

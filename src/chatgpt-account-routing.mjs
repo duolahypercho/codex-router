@@ -52,14 +52,17 @@ function privateJson(filePath) {
   }
 }
 
-function emptyState() { return { version: 1, enabled: false, strategy: "round-robin", cursor: 0, sessions: {}, cooldowns: {}, allowUntrackedHistory: true }; }
+function emptyState() { return { version: 1, affinityVersion: 2, enabled: false, strategy: "round-robin", cursor: 0, sessions: {}, cooldowns: {}, allowUntrackedHistory: true }; }
 
-export function readChatGPTAccountRouting(filePath = CHATGPT_ACCOUNT_ROUTING_PATH) {
+export function readChatGPTAccountRouting(filePath = CHATGPT_ACCOUNT_ROUTING_PATH, { allowLegacyAffinity = false } = {}) {
   if (discoveryDisabled()) return emptyState();
   if (!existsSync(filePath)) return emptyState();
   const state = privateJson(filePath);
   if (state?.version !== 1 || typeof state.enabled !== "boolean" || !["round-robin", "fill-first"].includes(state.strategy) || !Number.isSafeInteger(state.cursor) || state.cursor < 0 || !state.sessions || typeof state.sessions !== "object" || Array.isArray(state.sessions) || !state.cooldowns || typeof state.cooldowns !== "object" || Array.isArray(state.cooldowns)) throw unavailable("The ChatGPT routing policy is invalid.");
   const sessions = Object.entries(state.sessions);
+  if (state.affinityVersion !== undefined && state.affinityVersion !== 2) throw unavailable("The ChatGPT routing affinity version is invalid.");
+  if (state.affinityVersion === undefined && sessions.length && !allowLegacyAffinity) throw unavailable("Legacy ChatGPT routing ownership cannot be recovered safely. Close pooled conversations and run chatgpt-account-pool routing reset, then start new conversations.");
+  if (!sessions.length) state.affinityVersion = 2;
   if (sessions.length > MAX_SESSIONS || sessions.some(([key, entry]) => !/^[a-f0-9]{64}$/.test(key) || !isChatGPTAccountId(entry?.profileId) || !/^[a-f0-9]{64}$/.test(entry?.identityHash) || (entry.rootKey !== undefined && !/^[a-f0-9]{64}$/.test(entry.rootKey)) || (entry.hasChildren !== undefined && typeof entry.hasChildren !== "boolean"))) throw unavailable("The ChatGPT routing affinity state is invalid.");
   if (Object.entries(state.cooldowns).some(([id, until]) => !isChatGPTAccountId(id) || !Number.isSafeInteger(until) || until < 0)) throw unavailable("The ChatGPT routing cooldown state is invalid.");
   return state;
@@ -75,7 +78,7 @@ export async function setChatGPTAccountRouting(strategy, { filePath = CHATGPT_AC
   if (!["off", "round-robin", "fill-first", "reset"].includes(strategy)) throw new Error("Choose off, round-robin, fill-first, or reset.");
   ensureNoSymlinkParents(path.dirname(filePath));
   return withChatGPTAccountPoolLock(async () => {
-    const state = readChatGPTAccountRouting(filePath);
+    const state = readChatGPTAccountRouting(filePath, { allowLegacyAffinity: strategy === "reset" });
     if (strategy === "reset") {
       const directory = path.join(path.dirname(filePath), "chatgpt-routing-sessions");
       ensureNoSymlinkParents(directory);
@@ -88,6 +91,7 @@ export async function setChatGPTAccountRouting(strategy, { filePath = CHATGPT_AC
         await release();
       }
       state.sessions = {};
+      state.affinityVersion = 2;
       state.allowUntrackedHistory = false;
     } else {
       state.enabled = strategy !== "off";
@@ -105,7 +109,7 @@ export function chatGPTAccountBoundHistory(payload, headers = {}) {
   while (stack.length) {
     const value = stack.pop();
     if (!value || typeof value !== "object") continue;
-    if (value.encrypted_content || value.file_id || value.vector_store_ids?.length || (typeof value.container === "string" && value.container !== "auto") || value.type === "item_reference" || value.type === "compaction" || value.type === "input_compaction" || (value.type === "reasoning" && value.id)) return true;
+    if (value.encrypted_content || value.file_id || (Array.isArray(value.file_ids) && value.file_ids.length > 0) || value.vector_store_ids?.length || (typeof value.container === "string" && value.container !== "auto") || value.type === "item_reference" || value.type === "compaction" || value.type === "input_compaction" || (value.type === "reasoning" && value.id)) return true;
     stack.push(...Object.values(value).filter((item) => item && typeof item === "object"));
   }
   return false;
@@ -129,7 +133,9 @@ function credential(account, homesDir, now) {
 
 function sessionKey(headers, payload, parent = false, callerScope) {
   const session = headers["thread-id"] || payload?.client_metadata?.thread_id || headers.session_id || headers["session-id"] || payload?.client_metadata?.session_id || payload?.prompt_cache_key;
-  const scope = callerScope || headers.authorization || "local-caller";
+  // The private routing file already isolates the shared local installation.
+  // A rotating authentication capability is not a durable caller identity.
+  const scope = callerScope || "local-router";
   // A caller without a conversation key shares one affinity. This deliberately
   // sacrifices balancing rather than losing the owner of encrypted history.
   const parentId = headers["x-codex-parent-thread-id"];

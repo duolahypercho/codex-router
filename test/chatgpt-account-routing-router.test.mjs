@@ -48,29 +48,45 @@ async function harness(t, mode = "fill-first") {
   });
   await new Promise((resolve) => upstream.listen(0, "127.0.0.1", resolve));
   const upstreamPort = upstream.address().port; const routerPort = await openPort(); let stderr = "";
-  const child = spawn(process.execPath, ["src/router.mjs"], {
+  const spawnOptions = {
     cwd: repo,
     env: { ...process.env, CODEX_HOME: path.join(root, "codex"), MODEL_ROUTER_STATE_DIR: state, CODEX_ROUTER_CALLER_KEY: CALLER, CODEX_ROUTER_INTERNAL_KEY: "synthetic-internal-key-with-enough-characters", CODEX_ROUTER_PORT: String(routerPort), CODEX_NATIVE_BASE_URL: `http://127.0.0.1:${upstreamPort}`, CODEX_ROUTER_GATEWAY_BASE_URL: `http://127.0.0.1:${upstreamPort}/v1`, CODEX_ROUTER_GATEWAY_HEALTH_URL: `http://127.0.0.1:${upstreamPort}/health`, CODEX_ROUTER_OAUTH_HEALTH_URL: `http://127.0.0.1:${upstreamPort}/health`, CODEX_ROUTER_API_HEALTH_URL: `http://127.0.0.1:${upstreamPort}/health`, CODEX_ROUTER_GROK_OAUTH_HEALTH_URL: `http://127.0.0.1:${upstreamPort}/health`, CODEX_ROUTER_NO_DISCOVERY: "0", CODEX_ROUTER_NATIVE_SESSION_FALLBACK: "0", CODEX_ROUTER_QUIET: "1" },
     stdio: ["ignore", "ignore", "pipe"],
-  });
-  child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
-  t.after(async () => {
+  };
+  const start = () => {
+    const childProcess = spawn(process.execPath, ["src/router.mjs"], spawnOptions);
+    childProcess.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
+    return childProcess;
+  };
+  let child = start();
+  const stop = async () => {
     if (child.exitCode === null && child.signalCode === null) { const stopped = new Promise((resolve) => child.once("exit", resolve)); child.kill(); await stopped; }
+  };
+  t.after(async () => {
+    await stop();
     upstream.closeAllConnections(); await new Promise((resolve) => upstream.close(resolve)); rmSync(root, { recursive: true, force: true });
   });
-  for (let tries = 0; tries < 150; tries++) {
-    if (child.exitCode !== null) throw new Error(stderr);
-    try { const response = await fetch(`http://127.0.0.1:${routerPort}/health`); if ((await response.json()).service) break; } catch { /* The router is starting. */ }
-    await new Promise((resolve) => setTimeout(resolve, 30));
-    if (tries === 149) throw new Error(`Startup timeout: ${stderr}`);
-  }
-  const url = `${callerBaseUrl(routerPort, CALLER)}/responses`;
+  const ready = async () => {
+    for (let tries = 0; tries < 150; tries++) {
+      if (child.exitCode !== null) throw new Error(stderr);
+      try { const response = await fetch(`http://127.0.0.1:${routerPort}/health`); if ((await response.json()).service) break; } catch { /* The router is starting. */ }
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      if (tries === 149) throw new Error(`Startup timeout: ${stderr}`);
+    }
+  };
+  await ready();
+  let url = `${callerBaseUrl(routerPort, CALLER)}/responses`;
   const headers = { "content-type": "application/json", authorization: "Bearer original-codex-login", "chatgpt-account-id": "one", session_id: "synthetic-session" };
   const post = async (session, input = [{ role: "user", content: "hello" }], extra = {}) => {
     const response = await fetch(url, { method: "POST", headers: { ...headers, session_id: session }, body: JSON.stringify({ model: "gpt-5.4", stream: true, store: false, input, ...extra }) });
     return { status: response.status, text: await response.text() };
   };
-  return { url, headers, post, seen, setRejectOne(value) { rejectOne = value; }, holdNext() { holdNext = true; }, logs: () => stderr };
+  return { get url() { return url; }, headers, post, seen, setRejectOne(value) { rejectOne = value; }, holdNext() { holdNext = true; }, logs: () => stderr,
+    async restartCaller(caller) {
+      await stop(); spawnOptions.env.CODEX_ROUTER_CALLER_KEY = caller;
+      child = start(); await ready(); url = `${callerBaseUrl(routerPort, caller)}/responses`;
+    },
+  };
 }
 
 test("native HTTP quota swaps actual upstream account headers and continuation stays on owner", async (t) => {
@@ -128,4 +144,25 @@ test("client cancellation releases the Router conversation lease for the next tu
   const response = await fetch(h.url, { method: "POST", signal: controller.signal, headers: { ...h.headers, session_id: "cancel" }, body: JSON.stringify({ model: "gpt-5.4", stream: true, store: false, input: [{ role: "user", content: "hold" }] }) });
   const reader = response.body.getReader(); await reader.read(); controller.abort(); await reader.cancel().catch(() => {});
   const next = await h.post("cancel"); assert.equal(next.status, 200); assert.equal(h.seen.at(-1).account, "two");
+});
+
+test("restarting with a rotated caller capability preserves native parent, continuation and child ownership", async (t) => {
+  const h = await harness(t, "round-robin"); h.setRejectOne(false);
+  await h.post("first"); await h.post("parent");
+  assert.deepEqual(h.seen.map((entry) => entry.account), ["one", "two"]);
+  const staleUrl = h.url;
+  await h.restartCaller("synthetic-rotated-caller-with-enough-characters");
+  const stale = await fetch(staleUrl, { method: "POST", headers: h.headers, body: JSON.stringify({ model: "gpt-5.4", input: "hello" }) });
+  assert.equal(stale.status, 401); await stale.text();
+  const continuation = await h.post("parent", [{ type: "reasoning", encrypted_content: "parent-cipher" }]);
+  assert.equal(continuation.status, 200); assert.equal(h.seen.at(-1).account, "two");
+  const child = await fetch(h.url, { method: "POST", headers: { ...h.headers, "thread-id": "child", "x-codex-parent-thread-id": "parent" }, body: JSON.stringify({ model: "gpt-5.4", input: [{ role: "user", content: "child" }] }) });
+  assert.equal(child.status, 200); await child.text(); assert.equal(h.seen.at(-1).account, "two");
+});
+
+test("native Code Interpreter requests with container.file_ids do not replay under another account", async (t) => {
+  const h = await harness(t);
+  const response = await h.post("owned-files", [{ role: "user", content: "read the file" }], { tools: [{ type: "code_interpreter", container: { type: "auto", file_ids: ["file_synthetic"] } }] });
+  assert.equal(response.status, 429); assert.match(response.text, /usage_limit_reached/);
+  assert.deepEqual(h.seen.map((entry) => entry.account), ["one"]);
 });
