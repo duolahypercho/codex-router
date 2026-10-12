@@ -238,6 +238,7 @@ const bridgeSource = String.raw`
   const accountPoolState = {
     version: 1,
     policy: { enabled: true, mode: "switch", selectedAccountId: "active" },
+    routing: { enabled: false, strategy: "round-robin", sessions: { count: 0 }, cooldowns: {} },
     accounts: {
       revoked: { id: "revoked", state: "revoked", paused: true, priority: 50, label: "Removed account", health: { state: "healthy" }, turns: 0, requests: 0 },
       active: { id: "active", state: "active", paused: false, priority: 50, label: "Secondary account", subscription: { status: "usable", authenticated: true, usable: true, expired: false, email: "secondary@example.com" }, health: { state: "healthy" }, turns: 0, requests: 0 },
@@ -516,6 +517,13 @@ const bridgeSource = String.raw`
     },
     setPickerModel: async () => ({ ok: true }),
     setProviderEnabled: async () => ({ ok: true }),
+    setChatGptAccountRouting: async (strategy) => {
+      record("setChatGptAccountRouting", strategy);
+      if (strategy === "fill-first") throw new Error("Synthetic routing write failure");
+      accountPoolState.routing.enabled = strategy !== "off";
+      if (strategy !== "off") accountPoolState.routing.strategy = strategy;
+      return { ...accountPoolState.routing };
+    },
     setChatGptAccountSelection: async (selection) => {
       record("setChatGptAccountSelection", selection);
       return { ok: true };
@@ -1055,6 +1063,14 @@ test("the production renderer exposes model discovery and picker actions", { tim
     await page.getByRole("button", { name: "Settings", exact: true }).click();
     const accountRows = page.locator(".subscription-account-row");
     await page.getByText("ChatGPT accounts", { exact: true }).waitFor();
+    const routingSelector = page.getByLabel("Automatic account routing", { exact: true });
+    assert.equal(await routingSelector.inputValue(), "off");
+    await routingSelector.selectOption("round-robin");
+    await page.waitForFunction(() => window.routerControlTest.calls().some((call) => call.name === "setChatGptAccountRouting" && call.args[0] === "round-robin"));
+    await page.waitForFunction(() => document.querySelector('[aria-label="Automatic account routing"]')?.value === "round-robin");
+    await routingSelector.selectOption("fill-first");
+    await page.getByText("Synthetic routing write failure", { exact: false }).waitFor();
+    assert.equal(await routingSelector.inputValue(), "round-robin", "failed writes retain the last durable policy");
     assert.equal(await accountRows.count(), 2, "two logged-in accounts should be visible");
     assert.equal(await accountRows.filter({ hasText: "Removed account" }).count(), 0, "revoked accounts stay hidden");
     assert.equal(await accountRows.filter({ hasText: "secondary@example.com" }).count(), 1, "secondary email should be visible");

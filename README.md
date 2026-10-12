@@ -1608,10 +1608,13 @@ login remains saved, and switching never removes another account's session.
 Each account keeps its own native model catalog and routed overlay. Usage is
 read from up to eight saved, usable accounts' isolated `CODEX_HOME`
 directories, prioritizing the selected account and using the weekly
-window when available and the monthly window otherwise. This is an explicit
-switch-only feature: it does not perform automatic quota or round-robin
-routing. See [the account switching guide](docs/CHATGPT-ACCOUNT-MODES.md) for
-the safety and token-refresh details.
+window when available and the monthly window otherwise. Optional automatic
+account routing can distribute new native conversations or prefer one account
+until an explicit quota refusal. Existing conversations and collaboration trees
+retain their account; account-bound history never moves merely to bypass a quota
+window. The feature defaults off and does not replace the main Codex login. See
+[the account modes guide](docs/CHATGPT-ACCOUNT-MODES.md) for setup, limitations,
+and token-refresh details.
 ### Use a local model in Codex (experimental)
 
 LM Studio can run as a second local backend alongside Ollama. Its models use

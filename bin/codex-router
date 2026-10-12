@@ -42,6 +42,7 @@ Providers and models
   provider-key      Store or clear a provider API key
   key-pool          Inspect or manage credential IDs in an API-key pool
   search-sidecar    Manage explicit per-model Perplexity Search bindings
+  chatgpt-account-pool Manage saved ChatGPT profiles and automatic routing
   chatgpt-session   Authorize or revoke shared native GPT access
   curate-models     Add, edit, or remove locally curated models
   discover-models   Probe a provider for the models it exposes

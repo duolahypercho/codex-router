@@ -34,7 +34,7 @@ command writes, not which router it talks to.
 
 Commands:
   setup, install, doctor, status, provider-key, caller-key, key-pool, providers, search-sidecar, enable, disable,
-  chatgpt-session, skills, multi-agent, picker-order, agents, media, panel, local-mlx, uninstall, smoke-test,
+  chatgpt-session, chatgpt-account-pool, skills, multi-agent, picker-order, agents, media, panel, local-mlx, uninstall, smoke-test,
   start, stop, update, rollback, shim, subagent-preset (dsh only)
 
 Examples:
@@ -89,7 +89,7 @@ case "$target" in
 esac
 
 case "$command" in
-  setup|install|doctor|status|provider-key|caller-key|key-pool|providers|search-sidecar|enable|disable|chatgpt-session|skills|multi-agent|picker-order|agents|media|panel|local-mlx|uninstall|smoke-test|start|stop|update|rollback|subagent-preset|shim) ;;
+  setup|install|doctor|status|provider-key|caller-key|key-pool|providers|search-sidecar|enable|disable|chatgpt-session|skills|multi-agent|picker-order|agents|media|panel|local-mlx|uninstall|smoke-test|start|stop|update|rollback|subagent-preset|shim|chatgpt-account-pool) ;;
   *) echo "Unknown command: $command" >&2; usage >&2; exit 2 ;;
 esac
 

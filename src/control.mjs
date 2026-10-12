@@ -3506,6 +3506,15 @@ async function handleChatGptAccountSwitch(action, value, completionLease) {
     selectChatGPTProfileAccount,
   } = await import("./chatgpt-profile-switch.mjs");
 
+  const { chatGPTAccountRoutingSnapshot, setChatGPTAccountRouting } = await import("./chatgpt-account-routing.mjs");
+  if (action === "routing") {
+    const routing = !value || value === "status"
+      ? chatGPTAccountRoutingSnapshot()
+      : await setChatGPTAccountRouting(value);
+    process.stdout.write(`${JSON.stringify(routing)}\n`);
+    return;
+  }
+
   if (!action || action === "status") {
     // This is the single production reconcile poll, owned by the Control
     // Center account view. It is read-only for settled state; after Codex has
@@ -3557,6 +3566,7 @@ async function handleChatGptAccountSwitch(action, value, completionLease) {
     });
     process.stdout.write(`${JSON.stringify({
       ...safe,
+      routing: chatGPTAccountRoutingSnapshot(),
       ...(Object.keys(loginAttempts).length ? { loginAttempts } : {}),
       profile,
       sessions: { count: Object.keys(safe.sessions || {}).length },
@@ -3613,7 +3623,7 @@ async function handleChatGptAccountSwitch(action, value, completionLease) {
       return;
     }
   }
-  throw new Error("Usage: control chatgpt-account-pool status|add [label]|home <acct_id>|login-finalize <acct_id> <lease>|remove <acct_id>|select <acct_id>|profile status|profile reconcile");
+  throw new Error("Usage: control chatgpt-account-pool status|add [label]|home <acct_id>|login-finalize <acct_id> <lease>|remove <acct_id>|select <acct_id>|profile status|profile reconcile|routing status|off|round-robin|fill-first|reset");
 }
 
 // The public `/health` leaf intentionally contains only the router summary and

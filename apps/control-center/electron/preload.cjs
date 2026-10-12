@@ -68,6 +68,7 @@ const routerControl = Object.freeze({
   addChatGptSubscriptionAccount: (label) => call("addChatGptSubscriptionAccount", { label }),
   loginChatGptSubscriptionAccount: (accountId) => call("loginChatGptSubscriptionAccount", { accountId }),
   removeChatGptSubscriptionAccount: (accountId) => call("removeChatGptSubscriptionAccount", { accountId }),
+  setChatGptAccountRouting: (strategy) => call("setChatGptAccountRouting", { strategy }),
   setChatGptAccountSelection: (selection) => call("setChatGptAccountSelection", { selection }),
   setPresence: (mode) => call("setPresence", { mode }),
   controlService: (action) => call("controlService", { action }),
