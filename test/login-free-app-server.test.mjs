@@ -347,11 +347,14 @@ async function verifySignedOutTurn(binary, { initialProvider = "openai" } = {}) 
     }
 
     const notifications = await runAppServerTurn(binary, env, model, expectedProvider);
-    assert.equal(requests.length, 1);
+    assert.equal(requests.length, 1, "one app-server turn must issue exactly one model request");
     if (upgrades.length > 0) {
-      assert.equal(upgrades.length, 1);
-      assert.equal(upgrades[0].url, "/v1/responses");
-      assert.equal(upgrades[0].headers.authorization, `Bearer ${CALLER_KEY}`);
+      // Codex may open additional prewarm connections for custom providers.
+      // Every handshake must authenticate, but only the turn spends a request.
+      for (const upgrade of upgrades) {
+        assert.equal(upgrade.url, "/v1/responses");
+        assert.equal(upgrade.headers.authorization, `Bearer ${CALLER_KEY}`);
+      }
       assert.equal(
         requests[0].url,
         `/_codex-router/${CALLER_KEY}/v1/responses`,
