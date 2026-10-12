@@ -2214,7 +2214,7 @@ async function normalizeRoutedAgentInput(request, input, signal, originalPayload
       continue;
     }
     const ownerHeaders = payload.native
-      ? await knownChatGPTAccountRoutingHeaders({ headers: nativeHeaders(request), payload: { ...originalPayload, input: [item] } })
+      ? await knownChatGPTAccountRoutingHeaders({ signal, headers: nativeHeaders(request), payload: { ...originalPayload, input: [item] } })
       : undefined;
     const plaintext = payload.native
       ? await relayEncryptedAgentPayload(request, item, payload.content, signal, ownerHeaders)

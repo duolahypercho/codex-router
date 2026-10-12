@@ -1610,9 +1610,10 @@ read from up to eight saved, usable accounts' isolated `CODEX_HOME`
 directories, prioritizing the selected account and using the weekly
 window when available and the monthly window otherwise. Optional automatic
 account routing can distribute new native conversations or prefer one account
-until an explicit quota refusal. Existing conversations and collaboration trees
+until an explicit quota refusal. Independent conversations
 retain their account; account-bound history never moves merely to bypass a quota
-window. The feature defaults off and does not replace the main Codex login. See
+window. Pooled collaboration and encrypted agent-message relay are withheld
+until live marker-return verification is completed. The feature defaults off and does not replace the main Codex login. See
 [the account modes guide](docs/CHATGPT-ACCOUNT-MODES.md) for setup, limitations,
 and token-refresh details.
 ### Use a local model in Codex (experimental)

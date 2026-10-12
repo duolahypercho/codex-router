@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { createChatGPTSubscriptionAccount, readChatGPTAccountPoolState, writeChatGPTAccountPoolState } from "../src/chatgpt-account-pool.mjs";
-import { createChatGPTAccountRoutingPlan, setChatGPTAccountRouting, readChatGPTAccountRouting, chatGPTAccountRoutingSnapshot, chatGPTAccountBoundHistory, fetchWithChatGPTAccountRouting, chatGPTQuotaCooldown, knownChatGPTAccountRoutingHeaders } from "../src/chatgpt-account-routing.mjs";
+import { createChatGPTAccountRoutingPlan, setChatGPTAccountRouting, readChatGPTAccountRouting, chatGPTAccountRoutingSnapshot, chatGPTAccountBoundHistory, fetchWithChatGPTAccountRouting, chatGPTQuotaCooldown, knownChatGPTAccountRoutingHeaders, chatGPTAccountCollaboration, readChatGPTPrivateJsonBatch } from "../src/chatgpt-account-routing.mjs";
 import { writePrivateJson } from "../src/file-security.mjs";
 
 function fixture(t) {
@@ -176,20 +176,22 @@ test("quota classifier uses structured evidence and bounded recovery time", () =
 });
 
 
-test("native children and routed decryption inherit the parent account, independent threads stay independent", async (t) => {
+test("unverified native collaboration is refused before any profile access, independent threads still rotate", async (t) => {
   const { options, ids, plan } = fixture(t);
   await setChatGPTAccountRouting("round-robin", options);
   const first = await plan("first"); await first.close();
   const parent = await plan("parent"); assert.equal(parent.profileId, ids[1]); await parent.close();
-  const childHeaders = { authorization: "Bearer synthetic-caller", "chatgpt-account-id": "one", session_id: "shared-session", "thread-id": "child", "x-codex-parent-thread-id": "parent" };
-  const child = await plan("child", "plain child input", { headers: childHeaders });
-  assert.equal(child.profileId, ids[1]); assert.equal(child.portable, false); await child.close();
-  const relay = await knownChatGPTAccountRoutingHeaders({ ...options, headers: { ...childHeaders, "thread-id": "routed-child" }, payload: { input: [{ encrypted_content: "cipher" }] } });
-  assert.equal(relay["chatgpt-account-id"], "two");
-  const independent = await plan("other", "plain", { headers: { ...childHeaders, "thread-id": "other", "x-codex-parent-thread-id": undefined } });
-  assert.equal(independent.profileId, ids[2]); await independent.close();
-  const again = await plan("parent"); assert.equal(again.portable, false); await again.close();
+  const childHeaders = { authorization: "Bearer synthetic-caller", "chatgpt-account-id": "one", "thread-id": "child", "x-codex-parent-thread-id": "parent" };
+  const before = readFileSync(options.filePath);
+  // Missing profile files prove that rejection occurs before credential access.
+  const savedPool = readFileSync(options.poolPath); rmSync(options.poolPath);
+  await assert.rejects(plan("child", "plain", { headers: childHeaders }), /live marker-return verification/);
+  await assert.rejects(knownChatGPTAccountRoutingHeaders({ ...options, headers: childHeaders, payload: { input: [{ encrypted_content: "cipher" }] } }), /live marker-return verification/);
+  assert.deepEqual(readFileSync(options.filePath), before);
+  writePrivateJson(options.poolPath, JSON.parse(savedPool));
+  const independent = await plan("other"); assert.equal(independent.profileId, ids[2]); await independent.close();
 });
+
 
 test("resource handles are account-bound and policy reset safely permits new conversations", async (t) => {
   const { options, plan } = fixture(t);
@@ -224,36 +226,57 @@ test("public CLI enables, reads, resets and disables the isolated routing policy
 });
 
 
-test("routed intermediate children persist owner for native grandchildren", async (t) => {
-  const { options, ids, plan } = fixture(t);
-  await setChatGPTAccountRouting("round-robin", options);
-  const a = await plan("first"); await a.close();
-  const parent = await plan("parent"); assert.equal(parent.profileId, ids[1]); await parent.close();
-  const base = { authorization: "Bearer synthetic-caller", "chatgpt-account-id": "one" };
-  await knownChatGPTAccountRoutingHeaders({ ...options, headers: { ...base, "x-codex-parent-thread-id": "parent" }, payload: { client_metadata: { thread_id: "routed-child" }, input: [{ encrypted_content: "cipher" }] } });
-  const grandchild = await plan("grandchild", "plain", { headers: { ...base, "thread-id": "grandchild", "x-codex-parent-thread-id": "routed-child" } });
-  assert.equal(grandchild.profileId, ids[1]); await grandchild.close();
-});
-
-test("native child of an untracked routed parent establishes the caller's tree owner", async (t) => {
-  const { options, ids, plan } = fixture(t);
-  await setChatGPTAccountRouting("round-robin", options);
-  const a = await plan("unrelated"); await a.close();
-  const base = { authorization: "Bearer synthetic-caller", "chatgpt-account-id": "one" };
-  const child = await plan("child", "plain", { headers: { ...base, "thread-id": "child", "x-codex-parent-thread-id": "routed-parent" } });
-  assert.equal(child.profileId, ids[0]); assert.equal(child.portable, false); await child.close();
-  const owner = await knownChatGPTAccountRoutingHeaders({ ...options, headers: base, payload: { client_metadata: { thread_id: "routed-parent" }, input: [{ encrypted_content: "cipher" }] } });
-  assert.equal(owner["chatgpt-account-id"], "one");
-});
-
-test("tree established during a parent turn prevents subsequent quota replay", async (t) => {
+test("collaboration declarations, metadata, and typed/enveloped history are gated", async (t) => {
   const { options, plan } = fixture(t);
   await setChatGPTAccountRouting("round-robin", options);
-  const parent = await plan("parent");
-  const child = await plan("child", "plain", { headers: { authorization: "Bearer synthetic-caller", "chatgpt-account-id": "one", "thread-id": "child", "x-codex-parent-thread-id": "parent" } }); await child.close();
-  let calls = 0;
-  const result = await fetchWithChatGPTAccountRouting(parent, "https://synthetic.test", {}, { fetchImpl: async () => { calls++; return quota(); } });
-  assert.equal(calls, 1); await result.response.text(); await parent.close();
+  const payloads = [
+    { tools: [{ type: "namespace", name: "collaboration", tools: [] }] },
+    { tools: [{ type: "namespace", name: "agents" }] },
+    { tools: [{ type: "function", namespace: "collaboration", name: "send_message" }] },
+    { tools: [{ type: "function", name: "spawn_agent" }] },
+    { tools: [{ type: "function", name: "collaboration__wait_agent" }] },
+    { tools: [{ type: "function", name: "collaboration__send_message" }] },
+    { tools: [{ type: "function", name: "agents.list_agents" }] },
+    { client_metadata: { "x-codex-parent-thread-id": "parent" } },
+    { client_metadata: { "x-openai-subagent": "child" } },
+    { input: [{ type: "agent_message", content: [] }] },
+    { input: [{ type: "message", content: [{ type: "input_text", text: "Message Type: NEW_TASK\nTask name: /root/child\nSender: /root\nPayload:\n" }, { type: "encrypted_content", encrypted_content: "gAAAAA-synthetic=" }] }] },
+    { input: [{ type: "message", content: [{ type: "input_text", text: "Message Type: FOLLOWUP_" }, { type: "input_text", text: "TASK\nPayload:\n" }, { type: "encrypted_content", encrypted_content: "gAAAAA-synthetic=" }] }] },
+    { input: [{ content: [{ type: "input_text", text: "Message Type: FINAL_ANSWER\nSender: /root/child\nRecipient: /root" }] }] },
+  ];
+  for (const payload of payloads) {
+    assert.equal(chatGPTAccountCollaboration(payload), true);
+    await assert.rejects(plan("blocked", "plain", { payload }), /live marker-return verification/);
+  }
+  assert.equal(chatGPTAccountRoutingSnapshot(options.filePath).sessions.count, 0);
+  assert.equal(chatGPTAccountCollaboration({ tools: [{ type: "function", name: "read_file" }], input: [{ type: "reasoning", encrypted_content: "ordinary-history" }] }), false);
+  const plain = await plan("plain"); await plain.close();
+});
+
+
+test("default-off relay stays native, while reset history and existing pooled owners fail closed", async (t) => {
+  const { options, plan } = fixture(t);
+  const headers = { "thread-id": "native", "x-codex-parent-thread-id": "parent" };
+  assert.equal(await knownChatGPTAccountRoutingHeaders({ ...options, headers, payload: {} }), undefined);
+  await setChatGPTAccountRouting("round-robin", options);
+  const selected = await plan("native", "plain", { headers: { "thread-id": "native" } }); await selected.close();
+  await setChatGPTAccountRouting("off", options);
+  await assert.rejects(knownChatGPTAccountRoutingHeaders({ ...options, headers, payload: {} }), /live marker-return verification/);
+  await setChatGPTAccountRouting("reset", options);
+  await assert.rejects(knownChatGPTAccountRoutingHeaders({ ...options, headers, payload: {} }), /owning this encrypted history is unknown/);
+});
+
+
+test("old pooled tree ownership remains gated after routing is disabled", async (t) => {
+  const { options, plan } = fixture(t);
+  await setChatGPTAccountRouting("round-robin", options);
+  const selected = await plan("parent"); await selected.close();
+  const state = readChatGPTAccountRouting(options.filePath);
+  Object.values(state.sessions)[0].hasChildren = true;
+  writePrivateJson(options.filePath, state);
+  await assert.rejects(plan("parent"), /live marker-return verification/);
+  await setChatGPTAccountRouting("off", options);
+  await assert.rejects(plan("parent"), /live marker-return verification/);
 });
 
 
@@ -276,7 +299,7 @@ test("reset safely reclaims a stale lease left by a crashed router", async (t) =
   assert.equal((await setChatGPTAccountRouting("reset", options)).sessions.count, 0);
 });
 
-test("caller credentials can rotate without rebinding a conversation or its collaboration root", async (t) => {
+test("caller credentials can rotate without rebinding independent conversations", async (t) => {
   const { options, ids, plan } = fixture(t);
   await setChatGPTAccountRouting("round-robin", options);
   const first = await plan("first"); await first.close();
@@ -284,15 +307,12 @@ test("caller credentials can rotate without rebinding a conversation or its coll
   const headers = { authorization: "Bearer rotated-caller", "chatgpt-account-id": "one", "thread-id": "parent" };
   const continuation = await plan("parent", [{ encrypted_content: "cipher" }], { headers });
   assert.equal(continuation.profileId, ids[1]); await continuation.close();
-  const childHeaders = { ...headers, "thread-id": "child", "x-codex-parent-thread-id": "parent" };
-  const child = await plan("child", "plain", { headers: childHeaders });
-  assert.equal(child.profileId, ids[1]); await child.close();
-  const relay = await knownChatGPTAccountRoutingHeaders({ ...options, headers: { ...childHeaders, "thread-id": "routed-child" }, payload: { input: [{ encrypted_content: "cipher" }] } });
-  assert.equal(relay["chatgpt-account-id"], "two");
-  assert.equal(chatGPTAccountRoutingSnapshot(options.filePath).sessions.count, 4);
+  await assert.rejects(plan("child", "plain", { headers: { ...headers, "thread-id": "child", "x-codex-parent-thread-id": "parent" } }), /live marker-return verification/);
+  assert.equal(chatGPTAccountRoutingSnapshot(options.filePath).sessions.count, 2);
   await setChatGPTAccountRouting("off", options);
   await assert.rejects(plan("parent", "plain", { headers }), /Re-enable/);
 });
+
 
 test("Code Interpreter plural file_ids remain on their owner and never replay on quota", async (t) => {
   const { options, ids, plan } = fixture(t);
@@ -322,4 +342,63 @@ test("pre-release capability-scoped affinities require explicit reset instead of
   assert.equal(readChatGPTAccountRouting(options.filePath).affinityVersion, 2);
   await assert.rejects(plan("old", [{ encrypted_content: "cipher" }]), /account-bound history/);
   const fresh = await plan("new"); await fresh.close();
+});
+
+test("a valid streaming lease can queue a second turn beyond thirty seconds", { timeout: 45000 }, async (t) => {
+  const { options, ids, plan } = fixture(t);
+  await setChatGPTAccountRouting("fill-first", options);
+  const first = await plan("long-stream");
+  let acquired = false;
+  const pending = plan("long-stream", "next", { signal: AbortSignal.timeout(44000) }).then((result) => { acquired = true; return result; });
+  // Observe failures immediately while preserving the assertion below.
+  pending.catch(() => {});
+  await new Promise((resolve) => setTimeout(resolve, 32000));
+  assert.equal(acquired, false);
+  await first.close();
+  const second = await pending; assert.equal(second.profileId, ids[0]); await second.close();
+});
+
+test("waiting conversation cancellation preserves the Router timeout reason and leaves no lease", async (t) => {
+  const { options, plan } = fixture(t);
+  await setChatGPTAccountRouting("fill-first", options);
+  const first = await plan("waiting");
+  const controller = new AbortController();
+  const reason = Object.assign(new Error("request deadline"), { code: "ERR_ROUTER_REQUEST_TIMEOUT" });
+  const pending = assert.rejects(plan("waiting", "next", { signal: controller.signal }), (error) => error === reason);
+  await new Promise((resolve) => setTimeout(resolve, 80)); controller.abort(reason); await pending;
+  await first.close();
+  const next = await plan("waiting"); await next.close();
+});
+
+test("batch verification yields to other work and rechecks descriptors after its await", { skip: process.platform === "win32" }, async (t) => {
+  const { root } = fixture(t);
+  const paths = ["same", "replaced", "mutated", "public"].map((name) => path.join(root, `${name}.json`));
+  for (const file of paths) writePrivateJson(file, { synthetic: "original" });
+  let resume; let calls = 0;
+  const verifyFiles = async (files) => {
+    calls++; assert.deepEqual(files, paths);
+    return new Promise((resolve) => { resume = () => resolve([true, true, true, false]); });
+  };
+  const pending = readChatGPTPrivateJsonBatch(paths, { verifyFiles });
+  await new Promise((resolve) => setImmediate(resolve)); assert.equal(calls, 1);
+  renameSync(paths[1], `${paths[1]}.old`); writePrivateJson(paths[1], { synthetic: "replacement" });
+  writeFileSync(paths[2], '{"synthetic":"mutation"}');
+  resume();
+  const result = await pending;
+  assert.deepEqual(result.get(paths[0]), { synthetic: "original" });
+  for (const file of paths.slice(1)) assert.equal(result.get(file), undefined);
+  const fresh = await readChatGPTPrivateJsonBatch([paths[0]], { verifyFiles: async () => { calls++; return [false]; } });
+  assert.equal(fresh.get(paths[0]), undefined); assert.equal(calls, 2, "ACL results must not be cached");
+});
+
+test("batch verification rejects symlink swaps, malformed verdicts and cancellation", { skip: process.platform === "win32" }, async (t) => {
+  const { root } = fixture(t);
+  const file = path.join(root, "checked.json"); const other = path.join(root, "other.json");
+  writePrivateJson(file, { synthetic: "checked" }); writePrivateJson(other, { synthetic: "other" });
+  const result = await readChatGPTPrivateJsonBatch([file], { verifyFiles: async () => { rmSync(file); symlinkSync(other, file); return [true]; } });
+  assert.equal(result.get(file), undefined);
+  rmSync(file); writePrivateJson(file, { synthetic: "checked" });
+  await assert.rejects(readChatGPTPrivateJsonBatch([file], { verifyFiles: async () => ["true"] }), /No eligible/);
+  const controller = new AbortController(); const reason = new Error("canceled verification");
+  await assert.rejects(readChatGPTPrivateJsonBatch([file], { signal: controller.signal, verifyFiles: async () => { controller.abort(reason); return [true]; } }), (error) => error === reason);
 });

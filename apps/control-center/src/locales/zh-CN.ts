@@ -1046,7 +1046,7 @@ export const zhCN = {
   "settings.restart.title": "重启边界",
   "settings.restart.body": "更改登录模式或模型可见性后，请完全退出并重新打开 Codex。",
   "settings.accounts.routingTitle": "自动账号分配",
-  "settings.accounts.routingBody": "启用后按会话使用已保存的登录。明确额度耗尽且尚未输出时，可移植历史会尝试换号；加密或压缩历史保留原账号。不会修改 Codex 的登录。",
+  "settings.accounts.routingBody": "启用后按会话使用已保存的登录。明确额度耗尽且尚未输出时，可移植历史会尝试换号；加密或压缩历史保留原账号。不会修改 Codex 的登录。 账号池协作尚未通过实机验证，暂不可用；需要协作时请关闭路由并新建会话。",
   "settings.accounts.routingOff": "关闭（使用 Codex 登录）",
   "settings.accounts.routingRoundRobin": "新会话轮流分配",
   "settings.accounts.routingFillFirst": "优先使用一个账号，额度耗尽再切换",

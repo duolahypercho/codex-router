@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -9,6 +11,7 @@ import { fileURLToPath } from "node:url";
 import {
   ensureCheckoutReadable,
   privateFileIsProtected,
+  privateFilesAreProtectedAsync,
   protectPrivateFile,
   writePrivateJson,
   writePrivateJsonAsync,
@@ -362,3 +365,70 @@ test(
     }
   },
 );
+
+function verifierChild() {
+  const child = new EventEmitter();
+  child.stdout = new PassThrough();
+  child.exitCode = null; child.signalCode = null;
+  child.kills = 0;
+  child.kill = () => { child.kills++; child.signalCode = "SIGTERM"; return true; };
+  child.complete = (output, code = 0) => { child.stdout.end(output); child.exitCode = code; child.emit("close", code); };
+  return child;
+}
+
+test("Windows verification batches paths asynchronously with the owner-only ACL predicate and no secrets", async () => {
+  const child = verifierChild(); let calls = 0; let captured;
+  const previous = process.env.CODEX_ROUTER_TEST_SECRET; process.env.CODEX_ROUTER_TEST_SECRET = "synthetic-never-forwarded";
+  try {
+    const pending = privateFilesAreProtectedAsync(["C:\\private\\one.json", "C:\\private\\two.json"], {
+      platform: "win32", spawnImpl: (command, args, options) => { calls++; captured = { command, args, options }; return child; },
+    });
+    let timerRan = false;
+    await new Promise((resolve) => setTimeout(() => { timerRan = true; resolve(); }, 10));
+    assert.equal(timerRan, true); assert.equal(calls, 1);
+    assert.equal(captured.command, "powershell.exe"); assert.equal(captured.options.windowsHide, true);
+    assert.equal(captured.options.env.CODEX_ROUTER_TEST_SECRET, undefined);
+    assert.deepEqual(JSON.parse(captured.options.env.CODEX_ROUTER_PRIVATE_FILES), ["C:\\private\\one.json", "C:\\private\\two.json"]);
+    const script = Buffer.from(captured.args.at(-1), "base64").toString("utf16le");
+    for (const predicate of ["AreAccessRulesProtected", "IsInherited", "hasFullControl", "hasForeignAllow", "GetCurrent"]) assert.ok(script.includes(predicate));
+    assert.doesNotMatch(script, /synthetic-never-forwarded|Get-Content/);
+    child.complete("[true,false]"); assert.deepEqual(await pending, [true, false]);
+  } finally {
+    if (previous === undefined) delete process.env.CODEX_ROUTER_TEST_SECRET; else process.env.CODEX_ROUTER_TEST_SECRET = previous;
+  }
+});
+
+for (const [output, code] of [["true", 0], ["[true,true]", 0], ['["true"]', 0], ["[true]", 1], ["malformed", 0]]) {
+  test(`Windows verification rejects malformed or failed helper output ${JSON.stringify(output)}/${code}`, async () => {
+    const child = verifierChild();
+    const pending = privateFilesAreProtectedAsync(["synthetic.json"], { platform: "win32", spawnImpl: () => child });
+    child.complete(output, code); await assert.rejects(pending, /verification failed/);
+  });
+}
+
+test("Windows verification bounds output, timeout and cancellation and kills its helper", async () => {
+  for (const failure of ["output", "timeout", "abort"]) {
+    const child = verifierChild(); const controller = new AbortController(); const reason = new Error("synthetic cancel");
+    const pending = privateFilesAreProtectedAsync(["synthetic.json"], { platform: "win32", spawnImpl: () => child, signal: controller.signal, timeoutMs: failure === "timeout" ? 10 : 15000 });
+    const rejected = assert.rejects(pending, (error) => failure === "abort" ? error === reason : /exceeded|timed out/.test(error.message));
+    if (failure === "output") child.stdout.write("x".repeat(65537));
+    if (failure === "abort") controller.abort(reason);
+    await rejected; assert.equal(child.kills, 1);
+    child.emit("close", 0);
+  }
+  const child = verifierChild();
+  const failed = privateFilesAreProtectedAsync(["synthetic.json"], { platform: "win32", spawnImpl: () => child });
+  child.emit("error", new Error("synthetic helper cannot start"));
+  await assert.rejects(failed, /could not start/);
+  await assert.rejects(privateFilesAreProtectedAsync(["synthetic.json"], { platform: "win32", spawnImpl: () => { throw new Error("synthetic spawn failure"); } }), /spawn failure/);
+});
+
+test("Windows batch ACL verification accepts private files and refuses a public one", { skip: process.platform !== "win32" }, async (t) => {
+  const directory = mkdtempSync(path.join(os.tmpdir(), "codex-router-batch-acl-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const first = path.join(directory, "first.json"); const second = path.join(directory, "second.json");
+  writePrivateJson(first, { synthetic: true }); writePrivateJson(second, { synthetic: true });
+  assert.deepEqual(await privateFilesAreProtectedAsync([first, second]), [true, true]);
+  execFileSync("icacls.exe", [second, "/grant", "*S-1-1-0:(R)"], { stdio: "ignore", windowsHide: true });
+  assert.deepEqual(await privateFilesAreProtectedAsync([first, second]), [true, false]);
+});

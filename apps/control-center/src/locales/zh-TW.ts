@@ -1098,7 +1098,7 @@ export const zhTW = {
   "settings.restart.title": "重新啟動邊界",
   "settings.restart.body": "變更登入模式或模型可視性後，請完整結束並重新開啟 Codex。",
   "settings.accounts.routingTitle": "自動帳號分配",
-  "settings.accounts.routingBody": "啟用後按對話使用已儲存的登入。明確額度耗盡且尚未輸出時，可移植歷史會嘗試換號；加密或壓縮歷史保留原帳號。不會修改 Codex 的登入。",
+  "settings.accounts.routingBody": "啟用後按對話使用已儲存的登入。明確額度耗盡且尚未輸出時，可移植歷史會嘗試換號；加密或壓縮歷史保留原帳號。不會修改 Codex 的登入。 帳號池協作尚未通過實機驗證，暫不可用；需要協作時請關閉路由並建立新對話。",
   "settings.accounts.routingOff": "關閉（使用 Codex 登入）",
   "settings.accounts.routingRoundRobin": "新對話輪流分配",
   "settings.accounts.routingFillFirst": "優先使用一個帳號，額度耗盡再切換",

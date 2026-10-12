@@ -146,7 +146,7 @@ test("client cancellation releases the Router conversation lease for the next tu
   const next = await h.post("cancel"); assert.equal(next.status, 200); assert.equal(h.seen.at(-1).account, "two");
 });
 
-test("restarting with a rotated caller capability preserves native parent, continuation and child ownership", async (t) => {
+test("restarting with a rotated caller capability preserves native continuation ownership and refuses unverified children", async (t) => {
   const h = await harness(t, "round-robin"); h.setRejectOne(false);
   await h.post("first"); await h.post("parent");
   assert.deepEqual(h.seen.map((entry) => entry.account), ["one", "two"]);
@@ -157,7 +157,7 @@ test("restarting with a rotated caller capability preserves native parent, conti
   const continuation = await h.post("parent", [{ type: "reasoning", encrypted_content: "parent-cipher" }]);
   assert.equal(continuation.status, 200); assert.equal(h.seen.at(-1).account, "two");
   const child = await fetch(h.url, { method: "POST", headers: { ...h.headers, "thread-id": "child", "x-codex-parent-thread-id": "parent" }, body: JSON.stringify({ model: "gpt-5.4", input: [{ role: "user", content: "child" }] }) });
-  assert.equal(child.status, 200); await child.text(); assert.equal(h.seen.at(-1).account, "two");
+  assert.equal(child.status, 503); assert.match(await child.text(), /live marker-return verification/); assert.equal(h.seen.length, 3);
 });
 
 test("native Code Interpreter requests with container.file_ids do not replay under another account", async (t) => {
@@ -165,4 +165,31 @@ test("native Code Interpreter requests with container.file_ids do not replay und
   const response = await h.post("owned-files", [{ role: "user", content: "read the file" }], { tools: [{ type: "code_interpreter", container: { type: "auto", file_ids: ["file_synthetic"] } }] });
   assert.equal(response.status, 429); assert.match(response.text, /usage_limit_reached/);
   assert.deepEqual(h.seen.map((entry) => entry.account), ["one"]);
+});
+
+test("native HTTP and client WebSocket collaboration declarations make zero upstream requests", async (t) => {
+  const h = await harness(t); h.setRejectOne(false);
+  for (const extra of [
+    { tools: [{ type: "namespace", name: "collaboration", tools: [{ type: "function", name: "spawn_agent", parameters: {} }] }] },
+    { client_metadata: { "x-codex-parent-thread-id": "parent" } },
+    { client_metadata: { "x-openai-subagent": "child" } },
+    { tools: [{ type: "function", name: "collaboration__send_message", parameters: {} }] },
+    { input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "Message Type: NEW_TASK\nTask name: /root/child\nSender: /root\nPayload:\n" }, { type: "encrypted_content", encrypted_content: "gAAAAA-synthetic=" }] }] },
+    { input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "Message Type: FOLLOWUP_" }, { type: "input_text", text: "TASK\nPayload:\n" }, { type: "encrypted_content", encrypted_content: "gAAAAA-synthetic=" }] }] },
+    { model: "kimi-oauth/k3", input: [{ type: "agent_message", content: [{ type: "input_text", text: "Message Type: NEW_TASK\nTask name: /root/child\nSender: /root\nPayload:\n" }, { type: "encrypted_content", encrypted_content: "gAAAAA-synthetic=" }] }] },
+  ]) {
+    const response = await h.post("blocked", undefined, extra);
+    assert.equal(response.status, 503); assert.match(response.text, /live marker-return verification/);
+  }
+  assert.equal(h.seen.length, 0);
+  const socket = new WebSocket(h.url.replace("http:", "ws:"), { headers: { ...h.headers, "openai-beta": RESPONSES_WEBSOCKET_BETA } });
+  t.after(() => socket.close());
+  await new Promise((resolve, reject) => { socket.addEventListener("open", resolve, { once: true }); socket.addEventListener("error", reject, { once: true }); });
+  const refused = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("WebSocket refusal timeout")), 5000);
+    socket.addEventListener("message", (event) => { clearTimeout(timer); resolve(JSON.parse(event.data)); }, { once: true });
+  });
+  socket.send(JSON.stringify({ type: "response.create", stream: true, store: false, model: "gpt-5.4", input: [{ role: "user", content: "child" }], client_metadata: { "x-codex-parent-thread-id": "parent" } }));
+  assert.match(JSON.stringify(await refused), /live marker-return verification/);
+  assert.equal(h.seen.length, 0); socket.close();
 });

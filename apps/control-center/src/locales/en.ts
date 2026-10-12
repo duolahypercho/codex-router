@@ -1096,7 +1096,7 @@ export const en = {
   "settings.restart.title": "Restart boundary",
   "settings.restart.body": "Fully quit and reopen Codex after changing login mode or model visibility.",
   "settings.accounts.routingTitle": "Automatic account routing",
-  "settings.accounts.routingBody": "Opt in to use saved logins per conversation. Explicit quota refusals may switch portable history before output; encrypted or compacted history stays with its original account. This does not change the Codex login.",
+  "settings.accounts.routingBody": "Opt in to use saved logins per conversation. Explicit quota refusals may switch portable history before output; encrypted or compacted history stays with its original account. This does not change the Codex login. Pooled collaboration is unavailable pending live verification; use Off and new conversations for collaboration.",
   "settings.accounts.routingOff": "Off (use Codex login)",
   "settings.accounts.routingRoundRobin": "Round robin for new conversations",
   "settings.accounts.routingFillFirst": "Use one account until quota refusal",
