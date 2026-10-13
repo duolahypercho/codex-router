@@ -228,3 +228,18 @@ test("pooled native HTTP combines bounded same-account transport retries with qu
   const event = h.usage().at(-1);
   assert.equal(event.status, 200); assert.equal(event.retries, 3);
 });
+
+
+test("native Code Interpreter container history never crosses accounts on quota", async (t) => {
+  const h = await harness(t, "round-robin"); h.setRejectOne(false);
+  await h.post("first"); await h.post("interpreter-history");
+  assert.deepEqual(h.seen.map((entry) => entry.account), ["one", "two"]);
+  const input = [{ type: "code_interpreter_call", id: "ci_synthetic", status: "completed", code: "x = 7", container_id: "cntr_owned", outputs: [] }];
+  h.queueFailures(429);
+  const refused = await h.post("interpreter-history", input, { tools: [{ type: "code_interpreter", container: { type: "auto" } }] });
+  assert.equal(refused.status, 429); assert.match(refused.text, /usage_limit_reached/);
+  assert.deepEqual(h.seen.map((entry) => entry.account), ["one", "two", "two"]);
+  const unavailable = await h.post("interpreter-history", input);
+  assert.equal(unavailable.status, 503); assert.match(unavailable.text, /account-bound history/);
+  assert.equal(h.seen.length, 3, "unavailable owner must not forward the history to a different account");
+});

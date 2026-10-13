@@ -158,7 +158,7 @@ export function chatGPTAccountBoundHistory(payload, headers = {}) {
   while (stack.length) {
     const value = stack.pop();
     if (!value || typeof value !== "object") continue;
-    if (value.encrypted_content || value.file_id || (Array.isArray(value.file_ids) && value.file_ids.length > 0) || value.vector_store_ids?.length || (typeof value.container === "string" && value.container !== "auto") || value.type === "item_reference" || value.type === "compaction" || value.type === "input_compaction" || (value.type === "reasoning" && value.id)) return true;
+    if (value.encrypted_content || value.file_id || (Array.isArray(value.file_ids) && value.file_ids.length > 0) || value.vector_store_ids?.length || (typeof value.container_id === "string" && value.container_id.length > 0) || (typeof value.container === "string" && value.container !== "auto") || value.type === "item_reference" || value.type === "compaction" || value.type === "input_compaction" || (value.type === "reasoning" && value.id)) return true;
     stack.push(...Object.values(value).filter((item) => item && typeof item === "object"));
   }
   return false;

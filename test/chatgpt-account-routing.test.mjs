@@ -607,3 +607,38 @@ test("disabling discovery while selecting credentials fails closed and releases 
   } finally { t.mock.restoreAll(); syncBuiltinESMExports(); restoreDiscovery(previous); }
   const next = await plan("selection-disable"); assert.equal(next.headers["chatgpt-account-id"], "one"); await next.close();
 });
+
+
+const interpreterHistory = [{ type: "code_interpreter_call", id: "ci_synthetic", status: "completed", code: "x = 7", container_id: "cntr_owned", outputs: [] }];
+
+test("Code Interpreter output and nested container references bind history to its account", () => {
+  assert.equal(chatGPTAccountBoundHistory({ input: interpreterHistory }), true);
+  assert.equal(chatGPTAccountBoundHistory({ tools: [{ type: "code_interpreter", environment: { type: "container_reference", container_id: "cntr_owned" } }] }), true);
+  assert.equal(chatGPTAccountBoundHistory({ input: [{ role: "assistant", content: [{ type: "container_file_citation", container_id: "cntr_owned" }] }] }), true);
+  for (const container_id of [undefined, "", null, 123]) {
+    assert.equal(chatGPTAccountBoundHistory({ input: [{ type: "code_interpreter_call", container_id }] }), false);
+  }
+  assert.equal(chatGPTAccountBoundHistory({ tools: [{ type: "code_interpreter", container: { type: "auto" } }] }), false);
+});
+
+test("Code Interpreter output history retains its known owner through quota and unavailable-owner refusal", async (t) => {
+  const { options, ids, plan } = fixture(t); await setChatGPTAccountRouting("round-robin", options);
+  const first = await plan("first"); await first.close();
+  const owner = await plan("interpreter"); assert.equal(owner.profileId, ids[1]); await owner.close();
+  const selected = await plan("interpreter", interpreterHistory); const accounts = [];
+  assert.equal(selected.profileId, ids[1]); assert.equal(selected.portable, false);
+  const result = await fetchWithChatGPTAccountRouting(selected, "https://synthetic.test", { body: JSON.stringify({ input: interpreterHistory }) }, {
+    fetchImpl: async (_url, init) => { accounts.push(init.headers["chatgpt-account-id"]); return quota(); },
+  });
+  assert.equal(result.response.status, 429); await result.response.text(); assert.deepEqual(accounts, ["two"]); await selected.close();
+  await assert.rejects(plan("interpreter", interpreterHistory), /account-bound history/);
+});
+
+test("untracked Code Interpreter container history requires the caller account and is refused after reset", async (t) => {
+  const { options, ids, plan } = fixture(t); await setChatGPTAccountRouting("round-robin", options);
+  const first = await plan("first"); await first.close();
+  const proven = await plan("untracked", interpreterHistory); assert.equal(proven.profileId, ids[0]); assert.equal(proven.portable, false); await proven.close();
+  await assert.rejects(plan("unknown", interpreterHistory, { headers: { "chatgpt-account-id": "unregistered", session_id: "unknown" } }), /account-bound history/);
+  await setChatGPTAccountRouting("reset", options);
+  await assert.rejects(plan("untracked", interpreterHistory), /account-bound history/);
+});
