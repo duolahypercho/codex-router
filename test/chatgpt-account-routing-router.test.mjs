@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -30,11 +30,18 @@ async function harness(t, mode = "fill-first") {
     writePrivateJson(path.join(homesDir, account.id, "auth.json"), { tokens: { access_token: access, account_id: accountId } });
   }
   await setChatGPTAccountRouting(mode, { filePath: routingPath });
-  const seen = []; let rejectOne = true; let holdNext = false;
+  const seen = []; const failures = []; let rejectOne = true; let holdNext = false;
   const upstream = http.createServer(async (request, response) => {
-    for await (const _chunk of request) { /* Drain the compressed native body. */ }
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk);
     if (request.url === "/health") { response.end('{"ok":true,"status":"healthy"}'); return; }
-    seen.push({ account: request.headers["chatgpt-account-id"], authorization: request.headers.authorization });
+    seen.push({ account: request.headers["chatgpt-account-id"], authorization: request.headers.authorization, raw: Buffer.concat(chunks), encoding: request.headers["content-encoding"] });
+    const failure = failures.shift();
+    if (failure === "reset") { request.socket.destroy(); return; }
+    if (failure) {
+      response.writeHead(failure, { "content-type": "application/json" });
+      response.end(failure === 429 ? '{"error":{"type":"usage_limit_reached"}}' : '{"error":{"message":"synthetic edge failure"}}'); return;
+    }
     if (rejectOne && request.headers["chatgpt-account-id"] === "one") {
       response.writeHead(429, { "content-type": "application/json", "retry-after": "120" }); response.end('{"error":{"type":"usage_limit_reached"}}'); return;
     }
@@ -50,7 +57,7 @@ async function harness(t, mode = "fill-first") {
   const upstreamPort = upstream.address().port; const routerPort = await openPort(); let stderr = "";
   const spawnOptions = {
     cwd: repo,
-    env: { ...process.env, CODEX_HOME: path.join(root, "codex"), MODEL_ROUTER_STATE_DIR: state, CODEX_ROUTER_CALLER_KEY: CALLER, CODEX_ROUTER_INTERNAL_KEY: "synthetic-internal-key-with-enough-characters", CODEX_ROUTER_PORT: String(routerPort), CODEX_NATIVE_BASE_URL: `http://127.0.0.1:${upstreamPort}`, CODEX_ROUTER_GATEWAY_BASE_URL: `http://127.0.0.1:${upstreamPort}/v1`, CODEX_ROUTER_GATEWAY_HEALTH_URL: `http://127.0.0.1:${upstreamPort}/health`, CODEX_ROUTER_OAUTH_HEALTH_URL: `http://127.0.0.1:${upstreamPort}/health`, CODEX_ROUTER_API_HEALTH_URL: `http://127.0.0.1:${upstreamPort}/health`, CODEX_ROUTER_GROK_OAUTH_HEALTH_URL: `http://127.0.0.1:${upstreamPort}/health`, CODEX_ROUTER_NO_DISCOVERY: "0", CODEX_ROUTER_NATIVE_SESSION_FALLBACK: "0", CODEX_ROUTER_QUIET: "1" },
+    env: { ...process.env, CODEX_HOME: path.join(root, "codex"), MODEL_ROUTER_STATE_DIR: state, CODEX_ROUTER_CALLER_KEY: CALLER, CODEX_ROUTER_INTERNAL_KEY: "synthetic-internal-key-with-enough-characters", CODEX_ROUTER_PORT: String(routerPort), CODEX_NATIVE_BASE_URL: `http://127.0.0.1:${upstreamPort}`, CODEX_ROUTER_GATEWAY_BASE_URL: `http://127.0.0.1:${upstreamPort}/v1`, CODEX_ROUTER_GATEWAY_HEALTH_URL: `http://127.0.0.1:${upstreamPort}/health`, CODEX_ROUTER_OAUTH_HEALTH_URL: `http://127.0.0.1:${upstreamPort}/health`, CODEX_ROUTER_API_HEALTH_URL: `http://127.0.0.1:${upstreamPort}/health`, CODEX_ROUTER_GROK_OAUTH_HEALTH_URL: `http://127.0.0.1:${upstreamPort}/health`, CODEX_ROUTER_NATIVE_RETRY_BACKOFF_MS: "0", CODEX_ROUTER_NO_DISCOVERY: "0", CODEX_ROUTER_NATIVE_SESSION_FALLBACK: "0", CODEX_ROUTER_QUIET: "1" },
     stdio: ["ignore", "ignore", "pipe"],
   };
   const start = () => {
@@ -81,7 +88,11 @@ async function harness(t, mode = "fill-first") {
     const response = await fetch(url, { method: "POST", headers: { ...headers, session_id: session }, body: JSON.stringify({ model: "gpt-5.4", stream: true, store: false, input, ...extra }) });
     return { status: response.status, text: await response.text() };
   };
-  return { get url() { return url; }, headers, post, seen, setRejectOne(value) { rejectOne = value; }, holdNext() { holdNext = true; }, logs: () => stderr,
+  return { get url() { return url; }, headers, post, seen, setRejectOne(value) { rejectOne = value; }, holdNext() { holdNext = true; }, logs: () => stderr, queueFailures(...statuses) { failures.push(...statuses); },
+    usage() {
+      const file = path.join(state, "usage-events.jsonl");
+      return existsSync(file) ? readFileSync(file, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line)) : [];
+    },
     async restartCaller(caller) {
       await stop(); spawnOptions.env.CODEX_ROUTER_CALLER_KEY = caller;
       child = start(); await ready(); url = `${callerBaseUrl(routerPort, caller)}/responses`;
@@ -120,8 +131,10 @@ test("client WebSocket uses the shared HTTP pool and maintains account ownership
     socket.addEventListener("message", handler);
     socket.send(JSON.stringify({ type: "response.create", stream: true, store: false, model: "gpt-5.4", input, ...(previous_response_id ? { previous_response_id } : {}) }));
   });
+  h.queueFailures(503);
   const first = await turn([{ role: "user", content: "hello" }]);
-  assert.deepEqual(h.seen.map((entry) => entry.account), ["one", "two"]);
+  assert.deepEqual(h.seen.map((entry) => entry.account), ["one", "one", "two"]);
+  assert.deepEqual(h.seen[0], h.seen[1]);
   await turn([{ role: "user", content: "again" }], first.response.id);
   assert.equal(h.seen.at(-1).account, "two");
   socket.close();
@@ -142,7 +155,7 @@ test("client cancellation releases the Router conversation lease for the next tu
   const h = await harness(t); await h.post("cancel"); h.holdNext();
   const controller = new AbortController();
   const response = await fetch(h.url, { method: "POST", signal: controller.signal, headers: { ...h.headers, session_id: "cancel" }, body: JSON.stringify({ model: "gpt-5.4", stream: true, store: false, input: [{ role: "user", content: "hold" }] }) });
-  const reader = response.body.getReader(); await reader.read(); controller.abort(); await reader.cancel().catch(() => {});
+  const reader = response.body.getReader(); await reader.read(); assert.equal(h.seen.length, 3); controller.abort(); await reader.cancel().catch(() => {});
   const next = await h.post("cancel"); assert.equal(next.status, 200); assert.equal(h.seen.at(-1).account, "two");
 });
 
@@ -192,4 +205,26 @@ test("native HTTP and client WebSocket collaboration declarations make zero upst
   socket.send(JSON.stringify({ type: "response.create", stream: true, store: false, model: "gpt-5.4", input: [{ role: "user", content: "child" }], client_metadata: { "x-codex-parent-thread-id": "parent" } }));
   assert.match(JSON.stringify(await refused), /live marker-return verification/);
   assert.equal(h.seen.length, 0); socket.close();
+});
+
+
+test("pooled native HTTP combines bounded same-account transport retries with quota switching", async (t) => {
+  const h = await harness(t);
+  h.queueFailures(503, 429, "reset");
+  const result = await h.post("transport", [{ role: "user", content: "hello".repeat(5000) }]);
+  assert.equal(result.status, 200); assert.match(result.text, /response.completed/);
+  assert.deepEqual(h.seen.map((entry) => entry.account), ["one", "one", "two", "two"]);
+  assert.equal(h.seen[0].authorization, h.seen[1].authorization);
+  assert.equal(h.seen[2].authorization, h.seen[3].authorization);
+  for (const entry of h.seen) {
+    assert.deepEqual(entry.raw, h.seen[0].raw);
+    assert.equal(entry.encoding, h.seen[0].encoding);
+  }
+  assert.equal(h.seen[0].encoding, "zstd");
+  assert.match(h.logs(), /native upstream retry .*status=503/);
+  assert.match(h.logs(), /native upstream retry .*error=TypeError\/(?:UND_ERR_SOCKET|ECONNRESET)/);
+  assert.doesNotMatch(h.logs(), /e30\.|Bearer original|access_token|synthetic-local-caller/);
+  for (let tries = 0; h.usage().length === 0 && tries < 100; tries++) await new Promise((resolve) => setTimeout(resolve, 20));
+  const event = h.usage().at(-1);
+  assert.equal(event.status, 200); assert.equal(event.retries, 3);
 });

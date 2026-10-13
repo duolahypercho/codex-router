@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { createChatGPTSubscriptionAccount, readChatGPTAccountPoolState, writeChatGPTAccountPoolState } from "../src/chatgpt-account-pool.mjs";
-import { createChatGPTAccountRoutingPlan, setChatGPTAccountRouting, readChatGPTAccountRouting, chatGPTAccountRoutingSnapshot, chatGPTAccountBoundHistory, fetchWithChatGPTAccountRouting, chatGPTQuotaCooldown, knownChatGPTAccountRoutingHeaders, chatGPTAccountCollaboration, readChatGPTPrivateJsonBatch } from "../src/chatgpt-account-routing.mjs";
+import { createChatGPTAccountRoutingPlan, setChatGPTAccountRouting, readChatGPTAccountRouting, chatGPTAccountRoutingSnapshot, chatGPTAccountBoundHistory, fetchWithChatGPTAccountRouting, chatGPTQuotaCooldown, knownChatGPTAccountRoutingHeaders, chatGPTAccountCollaboration, readChatGPTPrivateJsonBatch, readChatGPTAccountRoutingAsync } from "../src/chatgpt-account-routing.mjs";
 import { writePrivateJson } from "../src/file-security.mjs";
 
 function fixture(t) {
@@ -83,7 +85,7 @@ test("quota refusal switches headers, saves cooldown and new affinity without to
 test("ordinary throttling, 401, ambiguous transport errors, and cancellation never switch", async (t) => {
   const { options, plan } = fixture(t);
   await setChatGPTAccountRouting("fill-first", options);
-  for (const [status, error] of [[429, { type: "rate_limit_exceeded", message: "quota exhausted" }], [401, { code: "usage_limit_reached" }], [503, { type: "usage_limit_reached" }]]) {
+  for (const [status, error] of [[429, { type: "rate_limit_exceeded", message: "quota exhausted" }], [401, { code: "usage_limit_reached" }], [500, { type: "usage_limit_reached" }]]) {
     const selected = await plan(`negative-${status}`);
     let calls = 0;
     const body = JSON.stringify({ error });
@@ -401,4 +403,207 @@ test("batch verification rejects symlink swaps, malformed verdicts and cancellat
   await assert.rejects(readChatGPTPrivateJsonBatch([file], { verifyFiles: async () => ["true"] }), /No eligible/);
   const controller = new AbortController(); const reason = new Error("canceled verification");
   await assert.rejects(readChatGPTPrivateJsonBatch([file], { signal: controller.signal, verifyFiles: async () => { controller.abort(reason); return [true]; } }), (error) => error === reason);
+});
+
+function restoreDiscovery(previous) {
+  if (previous === undefined) delete process.env.CODEX_ROUTER_NO_DISCOVERY;
+  else process.env.CODEX_ROUTER_NO_DISCOVERY = previous;
+}
+
+test("disabled batch reader touches no paths, files or ACL helper even with an aborted signal", async () => {
+  const previous = process.env.CODEX_ROUTER_NO_DISCOVERY; process.env.CODEX_ROUTER_NO_DISCOVERY = "1";
+  let iterations = 0; let checks = 0;
+  try {
+    const paths = { [Symbol.iterator]() { iterations++; throw new Error("Paths must not be inspected"); } };
+    const signal = AbortSignal.abort(new Error("already canceled"));
+    const result = await readChatGPTPrivateJsonBatch(paths, { signal, verifyFiles: async () => { checks++; throw new Error("ACL must not run"); } });
+    assert.equal(result.size, 0); assert.equal(iterations, 0); assert.equal(checks, 0);
+  } finally { restoreDiscovery(previous); }
+});
+
+test("disabling discovery during ACL verification reads nothing and closes every descriptor", async (t) => {
+  const { root } = fixture(t);
+  const paths = ["first", "second"].map((name) => path.join(root, `${name}.json`));
+  for (const file of paths) writePrivateJson(file, { synthetic: file });
+  const previous = process.env.CODEX_ROUTER_NO_DISCOVERY; process.env.CODEX_ROUTER_NO_DISCOVERY = "0";
+  const opened = []; const closed = []; let reads = 0; let resume;
+  const originalOpen = fs.openSync; const originalClose = fs.closeSync; const originalRead = fs.readSync;
+  t.mock.method(fs, "openSync", (...args) => { const fd = originalOpen(...args); opened.push(fd); return fd; });
+  t.mock.method(fs, "closeSync", (fd) => { closed.push(fd); return originalClose(fd); });
+  t.mock.method(fs, "readSync", (...args) => { reads++; return originalRead(...args); });
+  syncBuiltinESMExports();
+  try {
+    const pending = readChatGPTPrivateJsonBatch([...paths, path.join(root, "missing.json")], {
+      verifyFiles: async (files) => { assert.deepEqual(files, paths); return new Promise((resolve) => { resume = resolve; }); },
+    });
+    await new Promise((resolve) => setImmediate(resolve)); assert.equal(opened.length, 2);
+    process.env.CODEX_ROUTER_NO_DISCOVERY = "1"; resume([true, true]);
+    assert.equal((await pending).size, 0); assert.equal(reads, 0); assert.deepEqual(closed, opened);
+    for (const fd of opened) assert.throws(() => fs.fstatSync(fd), { code: "EBADF" });
+  } finally { t.mock.restoreAll(); syncBuiltinESMExports(); restoreDiscovery(previous); }
+});
+
+test("async policy reader returns disabled state after the ACL wait but rejects invalid enabled state", async (t) => {
+  const { options } = fixture(t); await setChatGPTAccountRouting("round-robin", options);
+  const previous = process.env.CODEX_ROUTER_NO_DISCOVERY; process.env.CODEX_ROUTER_NO_DISCOVERY = "0";
+  try {
+    const enabled = await readChatGPTAccountRoutingAsync(options.filePath, { verifyFiles: async () => [true] });
+    assert.equal(enabled.enabled, true);
+    const disabled = await readChatGPTAccountRoutingAsync(options.filePath, { verifyFiles: async () => { process.env.CODEX_ROUTER_NO_DISCOVERY = "1"; return [true]; } });
+    assert.equal(disabled.enabled, false); assert.equal(Object.keys(disabled.sessions).length, 0);
+    let calls = 0;
+    assert.equal((await readChatGPTPrivateJsonBatch([options.filePath], { verifyFiles: async () => { calls++; return [true]; } })).size, 0);
+    assert.equal(calls, 0);
+    process.env.CODEX_ROUTER_NO_DISCOVERY = "0";
+    await assert.rejects(readChatGPTAccountRoutingAsync(options.filePath, { verifyFiles: async () => [false] }), /routing policy is invalid/);
+  } finally { restoreDiscovery(previous); }
+});
+
+test("discovery disabled during a cooldown read never overwrites routing ownership", async (t) => {
+  const { options, plan } = fixture(t); await setChatGPTAccountRouting("fill-first", options);
+  const selected = await plan(); const before = readFileSync(options.filePath);
+  const previous = process.env.CODEX_ROUTER_NO_DISCOVERY; process.env.CODEX_ROUTER_NO_DISCOVERY = "0";
+  const originalOpen = fs.openSync;
+  t.mock.method(fs, "openSync", (file, ...args) => {
+    const fd = originalOpen(file, ...args);
+    if (file === options.filePath) process.env.CODEX_ROUTER_NO_DISCOVERY = "1";
+    return fd;
+  });
+  syncBuiltinESMExports();
+  try {
+    await assert.rejects(selected.quota(Date.now() + 60000), /requires credential discovery/);
+    assert.deepEqual(readFileSync(options.filePath), before);
+  } finally { t.mock.restoreAll(); syncBuiltinESMExports(); restoreDiscovery(previous); await selected.close(); }
+});
+
+const fastRetries = { retries: 2, backoffMs: 0, sleepImpl: async () => {} };
+
+for (const failure of ["edge", "connect-reset"]) {
+  test(`pooled ${failure} retries use the same credential and body with accurate telemetry`, async (t) => {
+    const { options, plan } = fixture(t); await setChatGPTAccountRouting("fill-first", options);
+    const selected = await plan(); const seen = []; const events = []; const body = Buffer.from("synthetic immutable request");
+    const result = await fetchWithChatGPTAccountRouting(selected, "https://synthetic.test", { body, headers: { "content-encoding": "synthetic" } }, {
+      ...fastRetries, onRetry: (event) => events.push(event),
+      fetchImpl: async (_url, init) => {
+        seen.push(init);
+        if (seen.length === 1) {
+          if (failure === "connect-reset") throw Object.assign(new TypeError("fetch failed"), { cause: { code: "ECONNRESET" } });
+          return new Response("edge unavailable", { status: 503 });
+        }
+        return new Response("success");
+      },
+    });
+    assert.equal(await result.response.text(), "success"); assert.equal(result.retries, 1); assert.equal(events.length, 1);
+    assert.deepEqual(seen.map((init) => init.headers["chatgpt-account-id"]), ["one", "one"]);
+    assert.equal(seen[0].headers.authorization, seen[1].headers.authorization);
+    for (const init of seen) { assert.equal(init.body, body); assert.equal(init.headers["content-encoding"], "synthetic"); }
+    assert.deepEqual(chatGPTAccountRoutingSnapshot(options.filePath).cooldowns, {}); await selected.close();
+  });
+}
+
+test("transport retries and quota hops share one retry allowance and count", async (t) => {
+  const { options, plan } = fixture(t); await setChatGPTAccountRouting("fill-first", options);
+  const selected = await plan(); const accounts = []; const statuses = [503, 429, 503, 200]; const events = [];
+  const result = await fetchWithChatGPTAccountRouting(selected, "https://synthetic.test", {}, {
+    ...fastRetries, onRetry: (event) => events.push(event),
+    fetchImpl: async (_url, init) => { accounts.push(init.headers["chatgpt-account-id"]); const status = statuses.shift(); return status === 429 ? quota() : new Response("result", { status }); },
+  });
+  assert.equal(result.response.status, 200); await result.response.text(); assert.equal(result.retries, 3); assert.equal(events.length, 2);
+  assert.deepEqual(accounts, ["one", "one", "two", "two"]); await selected.close();
+});
+
+for (const bound of ["allowance", "budget"]) {
+  test(`transport ${bound} is not reset by a quota account switch`, async (t) => {
+    const { options, plan } = fixture(t); await setChatGPTAccountRouting("fill-first", options);
+    const selected = await plan(); const accounts = []; let clock = 0;
+    const result = await fetchWithChatGPTAccountRouting(selected, "https://synthetic.test", {}, {
+      ...fastRetries, retries: bound === "allowance" ? 1 : 2, budgetMs: 10, now: () => clock,
+      fetchImpl: async (_url, init) => {
+        accounts.push(init.headers["chatgpt-account-id"]);
+        if (accounts.length === 1) return new Response("edge", { status: 503 });
+        if (accounts.length === 2) { if (bound === "budget") clock = 11; return quota(); }
+        return new Response("edge exhausted", { status: 503 });
+      },
+    });
+    assert.equal(result.response.status, 503); await result.response.text(); assert.equal(result.retries, 2);
+    assert.deepEqual(accounts, ["one", "one", "two"]); await selected.close();
+  });
+}
+
+test("zero retries disables transport replay without disabling explicit quota switching", async (t) => {
+  const { options, plan } = fixture(t); await setChatGPTAccountRouting("fill-first", options);
+  const selected = await plan(); const accounts = [];
+  const result = await fetchWithChatGPTAccountRouting(selected, "https://synthetic.test", {}, {
+    ...fastRetries, retries: 0,
+    fetchImpl: async (_url, init) => { accounts.push(init.headers["chatgpt-account-id"]); return accounts.length === 1 ? quota() : new Response("edge", { status: 503 }); },
+  });
+  assert.equal(result.response.status, 503); await result.response.text(); assert.equal(result.retries, 1);
+  assert.deepEqual(accounts, ["one", "two"]); await selected.close();
+});
+
+test("account-bound history permits same-account edge retries but cannot replay quota on another account", async (t) => {
+  const { options, plan } = fixture(t); await setChatGPTAccountRouting("fill-first", options);
+  const selected = await plan("bound-retry", [{ type: "reasoning", encrypted_content: "synthetic-cipher" }]); let calls = 0;
+  const result = await fetchWithChatGPTAccountRouting(selected, "https://synthetic.test", {}, {
+    ...fastRetries, fetchImpl: async (_url, init) => { calls++; assert.equal(init.headers["chatgpt-account-id"], "one"); return calls === 1 ? new Response("edge", { status: 502 }) : quota(); },
+  });
+  assert.equal(result.response.status, 429); await result.response.text(); assert.equal(calls, 2); assert.equal(result.retries, 1); await selected.close();
+});
+
+test("transport exhaustion never switches profiles or creates cooldowns", async (t) => {
+  const { options, plan } = fixture(t); await setChatGPTAccountRouting("fill-first", options);
+  const selected = await plan(); let calls = 0;
+  const result = await fetchWithChatGPTAccountRouting(selected, "https://synthetic.test", {}, { ...fastRetries, fetchImpl: async (_url, init) => { calls++; assert.equal(init.headers["chatgpt-account-id"], "one"); return new Response("edge", { status: 504 }); } });
+  assert.equal(result.response.status, 504); await result.response.text(); assert.equal(calls, 3); assert.equal(result.retries, 2);
+  assert.deepEqual(chatGPTAccountRoutingSnapshot(options.filePath).cooldowns, {}); await selected.close();
+});
+
+test("retry guard and cancellation stop pooled transport backoff without switching", async (t) => {
+  const { options, plan } = fixture(t); await setChatGPTAccountRouting("fill-first", options);
+  const guarded = await plan("guard"); let calls = 0;
+  const result = await fetchWithChatGPTAccountRouting(guarded, "https://synthetic.test", {}, { ...fastRetries, canRetry: () => false, fetchImpl: async () => { calls++; return new Response("edge", { status: 503 }); } });
+  assert.equal(result.response.status, 503); await result.response.text(); assert.equal(calls, 1); await guarded.close();
+  const controller = new AbortController(); const canceled = await plan("backoff", "hello", { signal: controller.signal });
+  const reason = new Error("synthetic canceled backoff"); calls = 0;
+  await assert.rejects(fetchWithChatGPTAccountRouting(canceled, "https://synthetic.test", { signal: controller.signal }, {
+    ...fastRetries, sleepImpl: async () => { controller.abort(reason); }, fetchImpl: async () => { calls++; return new Response("edge", { status: 503 }); },
+  }), (error) => error === reason);
+  assert.equal(calls, 1); await canceled.close();
+});
+
+
+for (const entry of ["plan", "relay"]) {
+  test(`discovery disabled during the initial ${entry} read refuses forwarding`, async (t) => {
+    const { options, plan } = fixture(t); await setChatGPTAccountRouting("fill-first", options);
+    const previous = process.env.CODEX_ROUTER_NO_DISCOVERY; process.env.CODEX_ROUTER_NO_DISCOVERY = "0";
+    const originalOpen = fs.openSync; const files = [];
+    t.mock.method(fs, "openSync", (file, ...args) => {
+      const fd = originalOpen(file, ...args); files.push(file);
+      if (file === options.filePath) process.env.CODEX_ROUTER_NO_DISCOVERY = "1";
+      return fd;
+    });
+    syncBuiltinESMExports();
+    try {
+      const request = entry === "plan" ? plan() : knownChatGPTAccountRoutingHeaders({ ...options, headers: {}, payload: {} });
+      await assert.rejects(request, /requires credential discovery/);
+      assert.deepEqual(files, [options.filePath]);
+    } finally { t.mock.restoreAll(); syncBuiltinESMExports(); restoreDiscovery(previous); }
+  });
+}
+
+test("disabling discovery while selecting credentials fails closed and releases the conversation lease", async (t) => {
+  const { options, plan } = fixture(t); await setChatGPTAccountRouting("fill-first", options);
+  const previous = process.env.CODEX_ROUTER_NO_DISCOVERY; process.env.CODEX_ROUTER_NO_DISCOVERY = "0";
+  const before = readFileSync(options.filePath); const originalOpen = fs.openSync;
+  t.mock.method(fs, "openSync", (file, ...args) => {
+    const fd = originalOpen(file, ...args);
+    if (path.basename(file) === "auth.json") process.env.CODEX_ROUTER_NO_DISCOVERY = "1";
+    return fd;
+  });
+  syncBuiltinESMExports();
+  try {
+    await assert.rejects(plan("selection-disable"), /No eligible ChatGPT account/);
+    assert.deepEqual(readFileSync(options.filePath), before);
+  } finally { t.mock.restoreAll(); syncBuiltinESMExports(); restoreDiscovery(previous); }
+  const next = await plan("selection-disable"); assert.equal(next.headers["chatgpt-account-id"], "one"); await next.close();
 });

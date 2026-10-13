@@ -8,6 +8,7 @@ import { acquireFileLock, acquireFileLockWithSignal } from "./file-lock.mjs";
 import { privateFileIsProtected, privateFilesAreProtectedAsync, writePrivateJson, writePrivateJsonAsync } from "./file-security.mjs";
 import { ensureNoSymlinkParents } from "./path-security.mjs";
 import { CHATGPT_ACCOUNT_POOL_PATH, CHATGPT_ACCOUNT_HOMES_DIR, STATE_DIR } from "./paths.mjs";
+import { fetchWithRetry, NATIVE_RETRY_LIMIT, NATIVE_RETRY_BUDGET_MS } from "./upstream-retry.mjs";
 
 export const CHATGPT_ACCOUNT_ROUTING_PATH = process.env.MODEL_ROUTER_CHATGPT_ACCOUNT_ROUTING || path.join(STATE_DIR, "chatgpt-account-routing.json");
 const MAX_JSON_BYTES = 4 * 1024 * 1024;
@@ -69,14 +70,18 @@ function privateJson(filePath) {
 // Credentials are read only after a fresh batch ACL check. Descriptors remain
 // open across the await, and replacements or mutations invalidate the read.
 export async function readChatGPTPrivateJsonBatch(filePaths, { signal, verifyFiles = privateFilesAreProtectedAsync } = {}) {
+  if (discoveryDisabled()) return new Map();
   signal?.throwIfAborted();
   const opened = [];
   const documents = new Map();
   try {
     for (const filePath of new Set(filePaths)) {
+      if (discoveryDisabled()) return new Map();
       try { opened.push(openPrivateJson(filePath)); } catch { documents.set(filePath, undefined); }
     }
+    if (discoveryDisabled()) return new Map();
     const protectedFiles = await verifyFiles(opened.map((file) => file.filePath), { signal });
+    if (discoveryDisabled()) return new Map();
     signal?.throwIfAborted();
     if (!Array.isArray(protectedFiles) || protectedFiles.length !== opened.length || protectedFiles.some((value) => typeof value !== "boolean")) throw unavailable();
     for (const [index, file] of opened.entries()) {
@@ -97,6 +102,7 @@ export function readChatGPTAccountRouting(filePath = CHATGPT_ACCOUNT_ROUTING_PAT
 export async function readChatGPTAccountRoutingAsync(filePath = CHATGPT_ACCOUNT_ROUTING_PATH, options = {}) {
   if (discoveryDisabled() || !existsSync(filePath)) return emptyState();
   const documents = await readChatGPTPrivateJsonBatch([filePath], options);
+  if (discoveryDisabled()) return emptyState();
   return parseRoutingState(documents.get(filePath), options);
 }
 
@@ -219,6 +225,7 @@ function sessionKey(headers, payload, parent = false, callerScope) {
 export async function createChatGPTAccountRoutingPlan({ headers, payload, signal, filePath = CHATGPT_ACCOUNT_ROUTING_PATH, poolPath = CHATGPT_ACCOUNT_POOL_PATH, homesDir = CHATGPT_ACCOUNT_HOMES_DIR, now = () => Date.now(), callerScope } = {}) {
   if (discoveryDisabled()) return undefined;
   const initial = await readChatGPTAccountRoutingAsync(filePath, { signal });
+  if (discoveryDisabled()) throw unavailable("ChatGPT account routing requires credential discovery.");
   const key = sessionKey(headers, payload, false, callerScope);
   const bound = chatGPTAccountBoundHistory(payload, headers);
   const initialAffinity = initial.sessions[key] || initial.sessions[sessionKey(headers, payload, true, callerScope)];
@@ -288,6 +295,7 @@ export async function createChatGPTAccountRoutingPlan({ headers, payload, signal
       async quota(until) {
         await withChatGPTAccountPoolLock(async () => {
           const state = await readChatGPTAccountRoutingAsync(filePath, { signal });
+          if (discoveryDisabled()) throw unavailable("ChatGPT account routing requires credential discovery.");
           state.cooldowns[current.profileId] = Math.max(state.cooldowns[current.profileId] || 0, until);
           await writePrivateJsonAsync(filePath, state, { directoryMode: 0o700 });
         }, { filePath, signal });
@@ -309,15 +317,29 @@ export function chatGPTQuotaCooldown(response, text, now = Date.now()) {
   return times.length ? Math.max(...times) : now + DEFAULT_COOLDOWN_MS;
 }
 
-// Only an explicit HTTP quota refusal permits another attempt. Success streams,
-// ordinary 429s, auth errors, and network errors are never replayed here.
-export async function fetchWithChatGPTAccountRouting(plan, url, init, { fetchImpl, canRetry = () => true, now = () => Date.now() } = {}) {
+// Only an explicit HTTP quota refusal permits switching accounts. Preserve the
+// bounded same-account transport retries before any response is relayed.
+export async function fetchWithChatGPTAccountRouting(plan, url, init = {}, {
+  retries = NATIVE_RETRY_LIMIT,
+  budgetMs = NATIVE_RETRY_BUDGET_MS,
+  signal = init.signal,
+  canRetry = () => true,
+  now = () => Date.now(),
+  ...retryOptions
+} = {}) {
+  const startedAt = now();
+  let transportRetries = 0;
   let hops = 0;
   while (true) {
-    init.signal?.throwIfAborted();
-    const response = await fetchImpl(url, { ...init, headers: { ...init.headers, ...plan.headers } });
-    if (init.signal?.aborted) { await response.body?.cancel(); init.signal.throwIfAborted(); }
-    if (![402, 429].includes(response.status) || !response.body) return { response: observeQuotaStream(response, plan, now), retries: hops };
+    signal?.throwIfAborted();
+    const { response, retries: accountRetries } = await fetchWithRetry(url, { ...init, signal, headers: { ...init.headers, ...plan.headers } }, {
+      ...retryOptions, signal, canRetry, now,
+      retries: Math.max(0, retries - transportRetries),
+      budgetMs: Math.max(0, budgetMs - (now() - startedAt)),
+    });
+    transportRetries += accountRetries;
+    if (signal?.aborted) { await response.body?.cancel(); signal.throwIfAborted(); }
+    if (![402, 429].includes(response.status) || !response.body) return { response: observeQuotaStream(response, plan, now), retries: hops + transportRetries };
     const reader = response.body.getReader();
     const chunks = [];
     let size = 0;
@@ -342,13 +364,13 @@ export async function fetchWithChatGPTAccountRouting(plan, url, init, { fetchImp
       },
       async cancel(reason) { if (!done) { await reader.cancel(reason); reader.releaseLock(); } },
     }), { status: response.status, statusText: response.statusText, headers: response.headers });
-    if (!until) return { response: restored, retries: hops };
+    if (!until) return { response: restored, retries: hops + transportRetries };
     await plan.quota(until);
-    if (!plan.portable || !canRetry() || init.signal?.aborted) return { response: restored, retries: hops };
+    if (!plan.portable || !canRetry() || signal?.aborted) return { response: restored, retries: hops + transportRetries };
     try { await plan.next(); } catch (error) {
-      if (init.signal?.aborted) { await restored.body.cancel(); throw error; }
+      if (signal?.aborted) { await restored.body.cancel(); throw error; }
       // Preserve the last upstream refusal when every candidate is unavailable.
-      return { response: restored, retries: hops };
+      return { response: restored, retries: hops + transportRetries };
     }
     await restored.body.cancel();
     hops += 1;
@@ -389,6 +411,7 @@ function observeQuotaStream(response, plan, now) {
 export async function knownChatGPTAccountRoutingHeaders({ headers, payload, signal, filePath = CHATGPT_ACCOUNT_ROUTING_PATH, callerScope } = {}) {
   if (discoveryDisabled()) return undefined;
   const state = await readChatGPTAccountRoutingAsync(filePath, { signal });
+  if (discoveryDisabled()) throw unavailable("ChatGPT account routing requires credential discovery.");
   const key = sessionKey(headers, payload, false, callerScope);
   const parentKey = sessionKey(headers, payload, true, callerScope);
   const affinity = state.sessions[key] || (parentKey && state.sessions[parentKey]);
