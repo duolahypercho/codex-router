@@ -851,6 +851,13 @@ Enabling it costs nothing and asks for nothing: a model that needs a key says so
 on its own row. It is never selected for you and never part of the default set,
 because what it holds is whatever somebody put in it.
 
+For locally configured `custom/qwen3.8-flash-next` and `custom/spark-default`
+routes using `qwen38-community`, the router adapts canonical Codex local
+compaction into a structured working-state checkpoint and adds scoped resume
+and final-response guidance. Custom compact prompts and enforced JSON formats
+are preserved. See [Qwen continuity](docs/QWEN-CONTINUITY.md) for the exact
+boundaries and verification commands.
+
 | Model | Endpoint | Auth |
 | --- | --- | --- |
 | Qwen3.8-27-free-victor | `https://g9hnto0u7lvbu837.us-east-2.aws.endpoints.huggingface.cloud/v1` | none |

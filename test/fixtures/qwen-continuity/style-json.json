@@ -1,0 +1,11 @@
+{
+  "id": "style-json",
+  "type": "style",
+  "input": [
+    {
+      "role": "user",
+      "content": "Return exactly this JSON and nothing else: {\"ok\":true,\"count\":3}"
+    }
+  ],
+  "expectedExact": "{\"ok\":true,\"count\":3}"
+}

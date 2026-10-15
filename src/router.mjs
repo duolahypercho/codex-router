@@ -72,6 +72,7 @@ import {
   messageEnvelopeCompatTransform,
 } from "./zai-responses-compat.mjs";
 import { reasoningSummaryCompatTransform } from "./grok-reasoning-summary-compat.mjs";
+import { adaptQwenConversationRequest } from "./qwen-compaction.mjs";
 import { earlyToolItemDoneTransform } from "./early-tool-item-done.mjs";
 import {
   applyGrokEditFacade,
@@ -3737,6 +3738,16 @@ function observeSubagentOutcome(request, route, status, options = {}) {
 // `agedInput`. The tool list is a local, and the input array is copied before
 // anything rewrites it.
 async function buildRoutedRequest({ request, payload, route, agedInput }) {
+  const conversationCandidate = { ...payload, input: agedInput };
+  const conversationAdapted = adaptQwenConversationRequest(
+    conversationCandidate,
+    route,
+    request.headers,
+  );
+  if (conversationAdapted !== conversationCandidate) {
+    payload = conversationAdapted;
+    agedInput = conversationAdapted.input;
+  }
   const searchCompatibility = routedSearchCompatibility(payload, route);
   payload = searchCompatibility.payload;
   let namespacesFlattened = false;
@@ -4121,6 +4132,7 @@ async function buildRoutedRequest({ request, payload, route, agedInput }) {
   );
   return {
     body: Buffer.from(JSON.stringify(routed), "utf8"),
+    agedInput,
     usageDiagnostics,
     target: routedResponsesTarget(route),
     headers: routedHeaders(),
@@ -4168,7 +4180,7 @@ async function prepareRoutedRequest({
   });
   return {
     ...built,
-    agedInput: prepared.input,
+    agedInput: built.agedInput,
     toolResultAging: prepared.toolResultAging,
     imageBudget: prepared.imageBudget,
   };

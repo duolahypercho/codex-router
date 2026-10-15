@@ -1,0 +1,11 @@
+{
+  "id": "style-code",
+  "type": "style",
+  "input": [
+    {
+      "role": "user",
+      "content": "Return exactly the following code, with no Markdown fence, explanation or trailing newline:\nexport const ready = true;"
+    }
+  ],
+  "expectedExact": "export const ready = true;"
+}
