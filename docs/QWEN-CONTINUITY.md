@@ -50,7 +50,9 @@ was verified, and important unrun checks; a bare "done" or "fixed" is insufficie
 Remaining actions appear only when real, with ownership, dependencies, and the
 next check when known. Explicit user
 format requests take precedence; complete or simple answers require no
-boilerplate or invented follow-up actions.
+boilerplate or invented follow-up actions. The guidance asks status and recap
+responses to give known results and open work, label stale or unverified details,
+and avoid ending with only a promise to inspect or verify.
 
 Both adapters preserve explicitly supplied non-string `instructions` and
 enforced nontext `text.format` or `response_format` requests unchanged, including
