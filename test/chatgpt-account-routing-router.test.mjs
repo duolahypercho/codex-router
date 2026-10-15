@@ -37,6 +37,12 @@ async function harness(t, mode = "fill-first") {
     if (request.url === "/health") { response.end('{"ok":true,"status":"healthy"}'); return; }
     seen.push({ account: request.headers["chatgpt-account-id"], authorization: request.headers.authorization, raw: Buffer.concat(chunks), encoding: request.headers["content-encoding"] });
     const failure = failures.shift();
+    if (["empty", "prelude-only"].includes(failure)) {
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.end('data: {"type":"response.created","response":{"id":"resp_native_empty"}}\n\n'
+        + (failure === "empty" ? 'data: {"type":"response.completed","response":{"id":"resp_native_empty","output":[]}}\n\n' : 'data: {"type":"response.in_progress","response":{"id":"resp_native_empty"}}\n\n'));
+      return;
+    }
     if (failure === "reset") { request.socket.destroy(); return; }
     if (failure) {
       response.writeHead(failure, { "content-type": "application/json" });
@@ -243,3 +249,17 @@ test("native Code Interpreter container history never crosses accounts on quota"
   assert.equal(unavailable.status, 503); assert.match(unavailable.text, /account-bound history/);
   assert.equal(h.seen.length, 3, "unavailable owner must not forward the history to a different account");
 });
+
+for (const kind of ["empty", "prelude-only"]) {
+  test(`native pooled ${kind} stream is relayed once without entering routed completion repair`, async (t) => {
+    const h = await harness(t); h.setRejectOne(false);
+    h.queueFailures(kind, 429);
+    const result = await h.post(`native-${kind}`);
+    assert.equal(result.status, 200); assert.match(result.text, /resp_native_empty/);
+    assert.doesNotMatch(result.text, /empty_completion_retry_failed/);
+    assert.deepEqual(h.seen.map((entry) => entry.account), ["one"]);
+    const next = await h.post(`after-${kind}`);
+    assert.equal(next.status, 200);
+    assert.deepEqual(h.seen.map((entry) => entry.account), ["one", "one", "two"]);
+  });
+}

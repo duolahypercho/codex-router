@@ -5577,7 +5577,9 @@ async function handleResponses(request, response, requestUrl) {
       writeEmptyCompletionError(response, "websocket_turn_not_replayed",
         "The upstream turn ended without usable output. It was not replayed because generation may already have started.");
       finalStatus = 502;
-    } else if (emptyCompletion || preludeLimitRetryable || invalidFunctionCallRetryable) {
+    } else if (route && (emptyCompletion || preludeLimitRetryable || invalidFunctionCallRetryable)) {
+      // Only routed providers install the guards that withhold a first response.
+      // Native account-pool streams are already relayed and must not enter repair.
       // The upstream answered 200 with nothing and never proved otherwise, so
       // the guard still holds every byte. Retry the identical request once:
       // same bytes, same headers, same signal. The discarded first stream means

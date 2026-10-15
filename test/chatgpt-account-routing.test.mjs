@@ -740,3 +740,43 @@ test("concurrent post-reset native first turns cannot overwrite another account'
   assert.equal(attempts.filter((result) => result.status === "rejected").length, 1);
   assert.equal(chatGPTAccountRoutingSnapshot(options.filePath).sessions.count, 1);
 });
+
+for (const mode of ["portable", "bound", "relay-closed"]) {
+  test(`deadline after atomic quota write is rethrown during lock release for ${mode} turns`, async (t) => {
+    const { options, ids, plan } = fixture(t);
+    await setChatGPTAccountRouting("fill-first", options);
+    const controller = new AbortController();
+    const reason = Object.assign(new Error("synthetic deadline during policy unlock"), { code: "ERR_ROUTER_REQUEST_TIMEOUT" });
+    const selected = await plan(`quota-unlock-${mode}`, mode === "bound" ? [{ encrypted_content: "synthetic-owned" }] : "hello", { signal: controller.signal });
+    const originalRmdir = fs.rmdir; let canceled = false; let calls = 0;
+    t.mock.method(fs, "rmdir", (target, ...args) => {
+      if (String(target) === `${options.filePath}.pool-lock.lock` && !canceled) { canceled = true; controller.abort(reason); }
+      return originalRmdir(target, ...args);
+    });
+    try {
+      await assert.rejects(fetchWithChatGPTAccountRouting(selected, "https://synthetic.test", { signal: controller.signal }, {
+        canRetry: () => mode !== "relay-closed",
+        fetchImpl: async () => { calls++; return quota(); },
+      }), (error) => error === reason);
+      assert.equal(canceled, true); assert.equal(calls, 1); assert.equal(selected.profileId, ids[0]);
+      assert.ok(readChatGPTAccountRouting(options.filePath).cooldowns[ids[0]] > Date.now());
+      assert.equal(fs.existsSync(`${options.filePath}.pool-lock.lock`), false);
+    } finally { t.mock.restoreAll(); await selected.close(); }
+    const next = await plan(`quota-unlock-${mode}`); assert.equal(next.profileId, ids[1]); await next.close();
+  });
+}
+
+test("quota selection failure racing cancellation preserves the original deadline reason", async () => {
+  const controller = new AbortController();
+  const reason = Object.assign(new Error("synthetic deadline during next selection"), { code: "ERR_ROUTER_REQUEST_TIMEOUT" });
+  let calls = 0;
+  const selected = {
+    headers: { authorization: "Bearer synthetic", "chatgpt-account-id": "one" }, portable: true,
+    async quota() {},
+    async next() { controller.abort(reason); throw new Error("synthetic unrelated selection failure"); },
+  };
+  await assert.rejects(fetchWithChatGPTAccountRouting(selected, "https://synthetic.test", { signal: controller.signal }, {
+    fetchImpl: async () => { calls++; return quota(); },
+  }), (error) => error === reason);
+  assert.equal(calls, 1);
+});

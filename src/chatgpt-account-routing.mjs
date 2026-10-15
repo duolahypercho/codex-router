@@ -382,9 +382,10 @@ export async function fetchWithChatGPTAccountRouting(plan, url, init = {}, {
     }), { status: response.status, statusText: response.statusText, headers: response.headers });
     if (!until) return { response: restored, retries: hops + transportRetries };
     await plan.quota(until);
-    if (!plan.portable || !canRetry() || signal?.aborted) return { response: restored, retries: hops + transportRetries };
+    if (signal?.aborted) { await restored.body.cancel().catch(() => {}); signal.throwIfAborted(); }
+    if (!plan.portable || !canRetry()) return { response: restored, retries: hops + transportRetries };
     try { await plan.next(); } catch (error) {
-      if (signal?.aborted) { await restored.body.cancel(); throw error; }
+      if (signal?.aborted) { await restored.body.cancel().catch(() => {}); signal.throwIfAborted(); }
       // Preserve the last upstream refusal when every candidate is unavailable.
       return { response: restored, retries: hops + transportRetries };
     }
