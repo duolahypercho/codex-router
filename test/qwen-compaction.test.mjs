@@ -125,7 +125,11 @@ test("exports the pinned Codex framing and official Qwen trailer", () => {
   assert.equal(hash(CODEX_SUMMARY_PREFIX), "e9b088e794a6bb9082ac053fcc760bd818d7e720ee4bcdc72c6e480de7b7cb0e");
   assert.equal(Buffer.byteLength(RESUME_TRAILER, "utf8"), 167);
   assert.equal(hash(RESUME_TRAILER), "6a75d3deb0bc5e5080026abba220e3ff514733ae180fd02eb0e1f3b9907c65ea");
-  assert.ok(QWEN_CONTINUATION_GUIDANCE.includes(RESUME_TRAILER));
+  assert.equal(QWEN_CONTINUATION_GUIDANCE.includes(RESUME_TRAILER), false);
+  assert.match(QWEN_CONTINUATION_GUIDANCE, /latest actual user request/u);
+  assert.match(QWEN_CONTINUATION_GUIDANCE, /If no newer steering has arrived, continue still-applicable authorized work/u);
+  assert.match(QWEN_CONTINUATION_GUIDANCE, /report or recap, report the recorded results and remaining work/u);
+  assert.match(QWEN_CONTINUATION_GUIDANCE, /recorded observations from newly verified evidence/u);
 });
 
 test("adapted prompt keeps the nine-section state contract and secret guard", () => {
@@ -287,7 +291,8 @@ test("terminal Codex checkpoint adds fixed continuation guidance without changin
   assert.deepEqual(payload, before);
   assert.equal(adapted.input[1].encrypted_content, "qrr1.keep-exactly");
   assert.ok(adapted.instructions.startsWith(`${payload.instructions}\n\n`));
-  assert.equal(adapted.instructions.split(RESUME_TRAILER).length - 1, 1);
+  assert.equal(adapted.instructions.split(QWEN_CONTINUATION_GUIDANCE).length - 1, 1);
+  assert.equal(adapted.instructions.includes(RESUME_TRAILER), false);
   assert.match(adapted.instructions, /completed one-time actions and old approvals as historical/u);
   assert.match(adapted.instructions, /not new authorization/u);
 });
@@ -295,7 +300,8 @@ test("terminal Codex checkpoint adds fixed continuation guidance without changin
 test("terminal checkpoint without canonical metadata remains compatible", () => {
   const payload = continuationPayload(stateSnapshot(), { client_metadata: {} });
   const adapted = adaptQwenCompactionRequest(payload, route);
-  assert.ok(adapted.instructions.includes(RESUME_TRAILER));
+  assert.ok(adapted.instructions.includes(QWEN_CONTINUATION_GUIDANCE));
+  assert.equal(adapted.instructions.includes(RESUME_TRAILER), false);
 });
 
 test("continuation adaptation is idempotent", () => {

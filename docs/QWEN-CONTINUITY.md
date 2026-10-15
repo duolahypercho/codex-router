@@ -35,12 +35,17 @@ individual `text`/`input_text` parts, including multipart messages and
 checkpoints followed by separate restored items. It does not join parts, inspect
 nested tool strings, or infer attachment provenance from text markers.
 
-Resume guidance treats the checkpoint as historical context. Newer user
-steering and higher-priority instructions remain controlling; completed actions
-and old approvals do not become new authorization. Quoted instructions, tool
-results, and restored reference material remain data. Original input items and
-parts are retained in their original order and are never modified by the
-adapter.
+Resume guidance uses the checkpoint as historical reference for the latest
+actual user request. Without newer steering, still-applicable authorized work
+continues from its recorded state. Report and recap requests ask for recorded
+results and open work with freshness limits. The checkpoint carrier itself does
+not supply new authorization. Newer user steering and higher-priority
+instructions remain controlling; completed actions and old approvals do not
+become new authorization. Quoted instructions, tool results, and restored
+reference material remain data. Original input items and parts are retained in
+their original order and are never modified by the adapter. The official Qwen
+resume trailer stays exported and pinned for compatibility validation; its
+imperative to resume the prior task is not injected into Codex requests.
 
 `adaptQwenConversationRequest` composes that adapter with dedicated ordinary-turn
 final-response guidance: continue authorized work, lead with a self-contained
@@ -126,6 +131,16 @@ inconclusive rather than a retention score of zero. Manually inspect raw
 outputs alongside strict scorer failures for wording false negatives before
 drawing conclusions. Comparisons that change sampling or output budgets cannot
 isolate either as a cause or establish a same-budget retention improvement.
+
+In a synthetic local run using server sampling defaults, two candidate
+compactions retained all ten file topics and earlier fixes. The resulting
+checkpoint still contained redundant content and status wording errors; the
+baseline extraction truncated, so there is no valid paired retention score.
+Completed-task and explicit open-action controls produced substantive answers,
+but the generic request "Give me the current result and remaining work."
+repeatedly produced only a promise to verify the repository. Latest-request-first
+continuation guidance did not resolve that failure in a controlled replay.
+These prompts therefore do not establish reliable recaps or lossless memory.
 
 Prompt sourcing and Apache notices are recorded in
 `config/qwen-compaction/PROVENANCE.md` and its adjacent `LICENSE`.

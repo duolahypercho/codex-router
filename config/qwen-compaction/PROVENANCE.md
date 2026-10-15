@@ -7,7 +7,7 @@ The structured prompt and continuation trailer in this directory are adapted fro
 
 Primary source: https://github.com/QwenLM/qwen-code/tree/1162ed9c0abef18398269367ad378b2ba9091eb7
 
-The official 167-byte `RESUME_TRAILER` is preserved verbatim. The prompt keeps the upstream nine-section `state_snapshot` structure and is modified for Codex to:
+The official 167-byte `RESUME_TRAILER` is preserved verbatim as an exported compatibility and source reference. Codex resume guidance does not inject that trailer's imperative to continue the prior task; it follows the latest actual user request, resumes unchanged authorized work, and answers recap requests with recorded state and freshness limits. The prompt keeps the upstream nine-section `state_snapshot` structure and is modified for Codex to:
 
 - account for user requests retained by Codex after compaction;
 - directly extract recorded working state without re-solving, adding findings, or emitting scratchpad text;
