@@ -110,5 +110,20 @@ is preserved by refusing to reuse its directory. This measures prompt behavior
 on synthetic inputs; it does not exercise Codex app end to end or establish
 real-work retention quality.
 
+Sampling parameters (`temperature`, `top_p`, and `top_k`) are omitted so the
+target server applies its generation defaults, matching the production request
+shape. The harness explicitly bounds completion output at 12,288 tokens for
+each compaction, 6,144 for JSON extraction, and 4,096 for human finals and style
+controls. HTTP requests time out after 600 seconds and their SSH child processes
+after 615 seconds. The public run retains its 90-minute run-start budget.
+
+These are evaluator limits: production Codex/router requests do not normally
+specify an output cap or temperature. Thinking and visible output share the
+completion cap. Invalid or truncated responses make the affected arm
+inconclusive rather than a retention score of zero. Manually inspect raw
+outputs alongside strict scorer failures for wording false negatives before
+drawing conclusions. Comparisons that change sampling or output budgets cannot
+isolate either as a cause or establish a same-budget retention improvement.
+
 Prompt sourcing and Apache notices are recorded in
 `config/qwen-compaction/PROVENANCE.md` and its adjacent `LICENSE`.
