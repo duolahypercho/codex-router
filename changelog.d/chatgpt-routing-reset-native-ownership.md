@@ -1,0 +1,1 @@
+- **Fresh native conversations can continue after an account-routing reset.** Routing Off records their account ownership without reading pooled credentials, preserves that owner when routing is re-enabled, and continues to reject unknown pre-reset history.

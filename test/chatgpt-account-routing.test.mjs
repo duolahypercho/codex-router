@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import childProcess from "node:child_process";
+import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
@@ -641,4 +644,99 @@ test("untracked Code Interpreter container history requires the caller account a
   await assert.rejects(plan("unknown", interpreterHistory, { headers: { "chatgpt-account-id": "unregistered", session_id: "unknown" } }), /account-bound history/);
   await setChatGPTAccountRouting("reset", options);
   await assert.rejects(plan("untracked", interpreterHistory), /account-bound history/);
+});
+
+for (const resetMode of ["off", "round-robin"]) {
+  test(`reset while ${resetMode} preserves fresh native ownership across turns and re-enabling`, async (t) => {
+    const { options, ids, plan } = fixture(t);
+    await setChatGPTAccountRouting(resetMode, options);
+    await setChatGPTAccountRouting("reset", options);
+    await setChatGPTAccountRouting("off", options);
+    const opaque = [{ type: "reasoning", encrypted_content: "synthetic-old-history" }];
+    await assert.rejects(plan("pre-reset", opaque), /Re-enable|account-bound/);
+    assert.equal(await plan("fresh-native"), undefined);
+    assert.equal(await plan("fresh-native", opaque), undefined);
+    assert.equal(await plan("fresh-native", "next", { payload: { previous_response_id: "resp_new" } }), undefined);
+    await assert.rejects(plan("fresh-native", opaque, { headers: { session_id: "fresh-native", "chatgpt-account-id": "two" } }), /Re-enable/);
+    await assert.rejects(plan("pre-reset", opaque), /Re-enable|account-bound/);
+    await setChatGPTAccountRouting("round-robin", options);
+    const pooled = await plan("fresh-native", opaque);
+    assert.equal(pooled.profileId, ids[0]); await pooled.close();
+    await setChatGPTAccountRouting("reset", options);
+    await assert.rejects(plan("fresh-native", opaque), /account-bound/);
+  });
+}
+
+test("post-reset native ownership needs no pooled files and keeps native collaboration native", async (t) => {
+  const { options, plan } = fixture(t);
+  await setChatGPTAccountRouting("reset", options);
+  rmSync(options.poolPath); rmSync(options.homesDir, { recursive: true });
+  const headers = { session_id: "native-only", "chatgpt-account-id": "one" };
+  const payload = { input: "fresh", tools: [{ type: "function", name: "spawn_agent" }] };
+  assert.equal(await plan("native-only", "fresh", { headers, payload }), undefined);
+  payload.input = [{ type: "reasoning", encrypted_content: "synthetic-native" }];
+  assert.equal(await plan("native-only", "next", { headers, payload }), undefined);
+  assert.equal(await knownChatGPTAccountRoutingHeaders({ ...options, headers, payload }), undefined);
+  await assert.rejects(knownChatGPTAccountRoutingHeaders({ ...options, headers: { ...headers, "chatgpt-account-id": "two" }, payload }), /owning this encrypted history is unknown/);
+  const saved = readFileSync(options.filePath, "utf8");
+  assert.doesNotMatch(saved, /native-only|synthetic-native|"one"|authorization|access_token/);
+  await assert.rejects(plan("missing-owner", "fresh", { headers: { session_id: "missing-owner" } }), /requires its ChatGPT account identity/);
+});
+
+for (const phase of ["affinity", "cooldown", "native-affinity"]) {
+  test(`request cancellation during Windows ${phase} write releases routing locks and preserves policy`, { skip: process.platform === "win32" ? "Deterministic injected Windows helper on POSIX" : false }, async (t) => {
+    const { options, plan } = fixture(t);
+    await setChatGPTAccountRouting(phase === "native-affinity" ? "reset" : "fill-first", options);
+    const controller = new AbortController(); const reason = new Error("synthetic turn deadline");
+    const selected = phase === "cooldown" ? await plan("cancel-write", "hello", { signal: controller.signal }) : undefined;
+    const before = readFileSync(options.filePath);
+    const descriptor = Object.getOwnPropertyDescriptor(process, "platform");
+    let writer; let entered;
+    const writing = new Promise((resolve) => { entered = resolve; });
+    t.mock.method(childProcess, "spawn", (_command, _args, options) => {
+      const child = new EventEmitter(); child.stderr = new PassThrough(); child.stdout = new PassThrough();
+      child.exitCode = null; child.signalCode = null; child.kills = 0;
+      child.kill = () => { child.kills++; child.signalCode = "SIGTERM"; return true; };
+      const files = JSON.parse(options.env.CODEX_ROUTER_PRIVATE_FILES);
+      if (files.some((file) => file.includes(".tmp."))) { writer = child; entered(); }
+      else queueMicrotask(() => { child.stdout.end(JSON.stringify(files.map(() => true))); child.exitCode = 0; child.emit("close", 0); });
+      return child;
+    });
+    syncBuiltinESMExports(); Object.defineProperty(process, "platform", { ...descriptor, value: "win32" });
+    try {
+      const pending = phase === "cooldown" ? selected.quota(Date.now() + 60000) : plan("cancel-write", "hello", { signal: controller.signal });
+      const rejected = assert.rejects(pending, (error) => error === reason);
+      await writing; controller.abort(reason); await rejected;
+      assert.equal(writer.kills, 1);
+      assert.deepEqual(readFileSync(options.filePath), before);
+      writer.emit("close", 0);
+    } finally {
+      Object.defineProperty(process, "platform", descriptor); t.mock.restoreAll(); syncBuiltinESMExports();
+      await selected?.close();
+    }
+    assert.equal(fs.existsSync(`${options.filePath}.pool-lock.lock`), false);
+    assert.equal(fs.readdirSync(path.dirname(options.filePath)).some((name) => name.includes(".tmp.")), false);
+    const recovered = await plan("cancel-write"); await recovered?.close();
+  });
+}
+
+test("fresh native ownership cannot replay bound history on an unavailable owner after enabling", async (t) => {
+  const { options, ids, plan } = fixture(t);
+  await setChatGPTAccountRouting("reset", options);
+  assert.equal(await plan("native-owner"), undefined);
+  await setChatGPTAccountRouting("round-robin", options);
+  const pool = readChatGPTAccountPoolState(options.poolPath);
+  pool.accounts[ids[0]].paused = true; writeChatGPTAccountPoolState(pool, options.poolPath);
+  const before = readFileSync(options.filePath);
+  await assert.rejects(plan("native-owner", [{ encrypted_content: "synthetic-owner-history" }]), /account-bound history/);
+  assert.deepEqual(readFileSync(options.filePath), before);
+});
+
+test("concurrent post-reset native first turns cannot overwrite another account's owner", async (t) => {
+  const { options, plan } = fixture(t);
+  await setChatGPTAccountRouting("reset", options);
+  const attempts = await Promise.allSettled(["one", "two"].map((id) => plan("native-race", "fresh", { headers: { session_id: "native-race", "chatgpt-account-id": id } })));
+  assert.equal(attempts.filter((result) => result.status === "fulfilled").length, 1);
+  assert.equal(attempts.filter((result) => result.status === "rejected").length, 1);
+  assert.equal(chatGPTAccountRoutingSnapshot(options.filePath).sessions.count, 1);
 });

@@ -24,7 +24,7 @@ test("the Windows async ACL path uses the bounded one-shot script", () => {
   const implementation = readFileSync(path.join(root, "src", "file-security.mjs"), "utf8");
   assert.match(
     implementation,
-    /protectPrivateFilesWin32Async\(paths\)/,
+    /protectPrivateFilesWin32Async\(paths, /,
   );
   assert.match(implementation, /powershellPrivateArgs\(\)/);
   assert.match(implementation, /"-EncodedCommand"/);
@@ -431,4 +431,69 @@ test("Windows batch ACL verification accepts private files and refuses a public 
   assert.deepEqual(await privateFilesAreProtectedAsync([first, second]), [true, true]);
   execFileSync("icacls.exe", [second, "/grant", "*S-1-1-0:(R)"], { stdio: "ignore", windowsHide: true });
   assert.deepEqual(await privateFilesAreProtectedAsync([first, second]), [true, false]);
+});
+
+test("canceled private writes preserve the target and remove temporary files", async (t) => {
+  const directory = mkdtempSync(path.join(os.tmpdir(), "private-write-cancel-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const target = path.join(directory, "state.json");
+  writeFileSync(target, '{"original":true}');
+  const controller = new AbortController(); const reason = new Error("synthetic request deadline");
+  controller.abort(reason);
+  await assert.rejects(writePrivateJsonAsync(target, { changed: true }, { signal: controller.signal }), (error) => error === reason);
+  assert.equal(readFileSync(target, "utf8"), '{"original":true}');
+});
+
+test("Windows private writes cancel the ACL helper without publishing or retaining a temporary", async (t) => {
+  const directory = mkdtempSync(path.join(os.tmpdir(), "private-win-write-cancel-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const target = path.join(directory, "state.json");
+  writeFileSync(target, '{"original":true}');
+  const child = verifierChild(); child.stderr = new PassThrough();
+  const controller = new AbortController(); const reason = new Error("synthetic disconnected request");
+  let temporary;
+  const pending = writePrivateJsonAsync(target, { changed: true }, {
+    platform: "win32", signal: controller.signal,
+    spawnImpl: (_command, _args, options) => { [temporary] = JSON.parse(options.env.CODEX_ROUTER_PRIVATE_FILES); return child; },
+  });
+  const rejected = assert.rejects(pending, (error) => error === reason);
+  controller.abort(reason); await rejected;
+  assert.equal(child.kills, 1); assert.equal(existsSync(temporary), false);
+  assert.equal(readFileSync(target, "utf8"), '{"original":true}');
+  child.emit("close", 0);
+});
+
+for (const failure of ["timeout", "output", "start", "exit", "late-abort"]) {
+  test(`Windows private write ${failure} preserves the atomic target and removes the temporary`, async (t) => {
+    const directory = mkdtempSync(path.join(os.tmpdir(), "private-win-write-failure-"));
+    t.after(() => rmSync(directory, { recursive: true, force: true }));
+    const target = path.join(directory, "state.json"); writeFileSync(target, "original");
+    const child = verifierChild(); child.stderr = new PassThrough();
+    const controller = new AbortController(); const reason = new Error("synthetic late abort"); let temporary;
+    const pending = writePrivateJsonAsync(target, { changed: true }, {
+      platform: "win32", signal: controller.signal, timeoutMs: failure === "timeout" ? 10 : 30000,
+      spawnImpl: (_command, _args, options) => { [temporary] = JSON.parse(options.env.CODEX_ROUTER_PRIVATE_FILES); return child; },
+    });
+    const rejected = assert.rejects(pending, (error) => failure === "late-abort" ? error === reason : /Timed out|exceeded|could not start|Failed to protect/.test(error.message));
+    if (failure === "output") child.stderr.write("x".repeat(65536));
+    if (failure === "start") child.emit("error", new Error("synthetic start failure"));
+    if (failure === "exit") { child.exitCode = 1; child.emit("close", 1); }
+    if (failure === "late-abort") { child.exitCode = 0; child.emit("close", 0); controller.abort(reason); }
+    await rejected;
+    assert.equal(readFileSync(target, "utf8"), "original"); assert.equal(existsSync(temporary), false);
+    assert.equal(controller.signal.onabort, null);
+    child.emit("close", 0);
+  });
+}
+
+test("Windows private write publishes only after ACL success and ignores later cancellation", async (t) => {
+  const directory = mkdtempSync(path.join(os.tmpdir(), "private-win-write-success-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const target = path.join(directory, "state.json"); writeFileSync(target, "original");
+  const child = verifierChild(); child.stderr = new PassThrough(); const controller = new AbortController();
+  const pending = writePrivateJsonAsync(target, { changed: true }, { platform: "win32", signal: controller.signal, spawnImpl: () => child });
+  assert.equal(readFileSync(target, "utf8"), "original");
+  child.exitCode = 0; child.emit("close", 0); await pending;
+  controller.abort(new Error("synthetic later disconnect")); assert.equal(child.kills, 0);
+  assert.deepEqual(JSON.parse(readFileSync(target, "utf8")), { changed: true });
 });

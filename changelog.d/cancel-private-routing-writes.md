@@ -1,0 +1,1 @@
+- **Canceled account-routing requests release Windows ACL waits promptly.** Private state writes propagate the request signal, terminate the ACL helper on cancellation, and remove the temporary file without replacing the saved policy.

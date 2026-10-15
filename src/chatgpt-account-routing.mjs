@@ -112,7 +112,7 @@ function parseRoutingState(state, { allowLegacyAffinity = false } = {}) {
   if (state.affinityVersion !== undefined && state.affinityVersion !== 2) throw unavailable("The ChatGPT routing affinity version is invalid.");
   if (state.affinityVersion === undefined && sessions.length && !allowLegacyAffinity) throw unavailable("Legacy ChatGPT routing ownership cannot be recovered safely. Close pooled conversations and run chatgpt-account-pool routing reset, then start new conversations.");
   if (!sessions.length) state.affinityVersion = 2;
-  if (sessions.length > MAX_SESSIONS || sessions.some(([key, entry]) => !/^[a-f0-9]{64}$/.test(key) || !isChatGPTAccountId(entry?.profileId) || !/^[a-f0-9]{64}$/.test(entry?.identityHash) || (entry.rootKey !== undefined && !/^[a-f0-9]{64}$/.test(entry.rootKey)) || (entry.hasChildren !== undefined && typeof entry.hasChildren !== "boolean"))) throw unavailable("The ChatGPT routing affinity state is invalid.");
+  if (sessions.length > MAX_SESSIONS || sessions.some(([key, entry]) => !/^[a-f0-9]{64}$/.test(key) || (entry?.native === true ? entry.profileId !== undefined : entry?.native !== undefined || !isChatGPTAccountId(entry?.profileId)) || !/^[a-f0-9]{64}$/.test(entry?.identityHash) || (entry.rootKey !== undefined && !/^[a-f0-9]{64}$/.test(entry.rootKey)) || (entry.hasChildren !== undefined && typeof entry.hasChildren !== "boolean"))) throw unavailable("The ChatGPT routing affinity state is invalid.");
   if (Object.entries(state.cooldowns).some(([id, until]) => !isChatGPTAccountId(id) || !Number.isSafeInteger(until) || until < 0)) throw unavailable("The ChatGPT routing cooldown state is invalid.");
   return state;
 }
@@ -229,13 +229,29 @@ export async function createChatGPTAccountRoutingPlan({ headers, payload, signal
   const key = sessionKey(headers, payload, false, callerScope);
   const bound = chatGPTAccountBoundHistory(payload, headers);
   const initialAffinity = initial.sessions[key] || initial.sessions[sessionKey(headers, payload, true, callerScope)];
-  if ((initial.enabled || initialAffinity) && (chatGPTAccountCollaboration(payload, headers) || initialAffinity?.hasChildren || initialAffinity?.rootKey)) throw liveProofRequired();
+  if ((initial.enabled || (initialAffinity && !initialAffinity.native)) && (chatGPTAccountCollaboration(payload, headers) || initialAffinity?.hasChildren || initialAffinity?.rootKey)) throw liveProofRequired();
   if (!initial.enabled) {
-    const affinity = initial.sessions[key] || initial.sessions[sessionKey(headers, payload, true, callerScope)];
-    if ((affinity && affinity.identityHash !== hash(headers["chatgpt-account-id"] || "")) || (bound && !affinity && initial.allowUntrackedHistory === false)) {
-      throw unavailable("This conversation belongs to a pooled ChatGPT account. Re-enable account routing or start a new conversation.");
-    }
-    return undefined;
+    const native = async (state) => {
+      const affinity = state.sessions[key] || state.sessions[sessionKey(headers, payload, true, callerScope)];
+      if ((affinity && affinity.identityHash !== hash(headers["chatgpt-account-id"] || "")) || (bound && !affinity && state.allowUntrackedHistory === false)) {
+        throw unavailable("This conversation belongs to a pooled ChatGPT account. Re-enable account routing or start a new conversation.");
+      }
+      if (!affinity && state.allowUntrackedHistory === false) {
+        if (!safeHeader(headers["chatgpt-account-id"])) throw unavailable("A fresh native conversation requires its ChatGPT account identity after a routing reset.");
+        if (Object.keys(state.sessions).length >= MAX_SESSIONS) throw unavailable("The ChatGPT routing affinity store is full.");
+        // Record only the native identity, without opening a pool or auth file.
+        // Re-enabling routing must recover this owner before selecting a profile.
+        state.sessions[key] = { native: true, identityHash: hash(headers["chatgpt-account-id"]) };
+        await writePrivateJsonAsync(filePath, state, { directoryMode: 0o700, signal });
+      }
+    };
+    if (initial.allowUntrackedHistory !== false) return native(initial);
+    return withChatGPTAccountPoolLock(async () => {
+      const state = await readChatGPTAccountRoutingAsync(filePath, { signal });
+      if (discoveryDisabled()) throw unavailable("ChatGPT account routing requires credential discovery.");
+      if (state.enabled) throw unavailable("ChatGPT account routing changed during this turn; retry the request.");
+      return native(state);
+    }, { filePath, signal });
   }
   const lockDirectory = path.join(path.dirname(filePath), "chatgpt-routing-sessions");
   ensureNoSymlinkParents(lockDirectory);
@@ -266,7 +282,7 @@ export async function createChatGPTAccountRoutingPlan({ headers, payload, signal
       identities.add(entry.identityHash);
       return !attempted.has(entry.profileId) && !(state.cooldowns[entry.profileId] > now());
     });
-    let selected = affinity && candidates.find((entry) => entry.profileId === affinity.profileId && entry.identityHash === affinity.identityHash);
+    let selected = affinity && candidates.find((entry) => (affinity.native === true || entry.profileId === affinity.profileId) && entry.identityHash === affinity.identityHash);
     if (bound && !selected) {
       // Unknown opaque history can only belong to the account presented by the
       // original caller. Never guess another profile or drop encrypted history.
@@ -279,7 +295,7 @@ export async function createChatGPTAccountRoutingPlan({ headers, payload, signal
     if (Object.keys(state.sessions).length + requiredSlots > MAX_SESSIONS) throw unavailable("The ChatGPT routing affinity store is full.");
     if (!affinity || selected.profileId !== affinity.profileId) state.cursor = (state.cursor + 1) % 1_000_000_000;
     state.sessions[key] = { profileId: selected.profileId, identityHash: selected.identityHash };
-    await writePrivateJsonAsync(filePath, state, { directoryMode: 0o700 });
+    await writePrivateJsonAsync(filePath, state, { directoryMode: 0o700, signal });
     current = selected;
     attempted.add(selected.profileId);
     return selected;
@@ -297,7 +313,7 @@ export async function createChatGPTAccountRoutingPlan({ headers, payload, signal
           const state = await readChatGPTAccountRoutingAsync(filePath, { signal });
           if (discoveryDisabled()) throw unavailable("ChatGPT account routing requires credential discovery.");
           state.cooldowns[current.profileId] = Math.max(state.cooldowns[current.profileId] || 0, until);
-          await writePrivateJsonAsync(filePath, state, { directoryMode: 0o700 });
+          await writePrivateJsonAsync(filePath, state, { directoryMode: 0o700, signal });
         }, { filePath, signal });
       },
       next: select,
@@ -415,7 +431,8 @@ export async function knownChatGPTAccountRoutingHeaders({ headers, payload, sign
   const key = sessionKey(headers, payload, false, callerScope);
   const parentKey = sessionKey(headers, payload, true, callerScope);
   const affinity = state.sessions[key] || (parentKey && state.sessions[parentKey]);
-  if (state.enabled || affinity) throw liveProofRequired();
+  if (state.enabled || (affinity && !affinity.native)) throw liveProofRequired();
+  if (affinity?.native && affinity.identityHash === hash(headers["chatgpt-account-id"] || "")) return undefined;
   if (state.allowUntrackedHistory === false) throw unavailable("The account owning this encrypted history is unknown. Start a new conversation.");
   return undefined;
 }
