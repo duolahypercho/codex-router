@@ -11,9 +11,9 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const script = path.join(root, "scripts/download-macos-tray-release.mjs");
 
 export async function runMacosScenarios(t) {
-  await t.test("macOS download is dormant without a repository signer pin", () => {
-    assert.equal(MACOS_RELEASE_TEAM_ID, "");
-    assert.throws(() => releaseSignatureRequirement(), /No trusted/);
+  await t.test("macOS download requires verified signer team ID", () => {
+    assert.equal(MACOS_RELEASE_TEAM_ID, "R8UR22V2F9");
+    assert.match(releaseSignatureRequirement(), /subject\.OU.*R8UR22V2F9/);
     assert.match(releaseSignatureRequirement("ABCDE12345"), /subject\.OU.*ABCDE12345/);
     assert.throws(() => releaseSignatureRequirement('ABCDE12345" or true'), /No trusted/);
     const directory = mkdtempSync(path.join(os.tmpdir(), "backlog-no-signer-"));
