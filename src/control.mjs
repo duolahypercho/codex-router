@@ -1108,6 +1108,32 @@ async function handleProviderKeyPool(providerId, action, value) {
   }
 }
 
+async function handleGitHubCopilotHost(subcommand, action = "status", ...values) {
+  const usage = "Usage: control github-copilot host status|set <host>|clear";
+  if (subcommand !== "host" || !["status", "set", "clear"].includes(action)
+    || values.length !== (action === "set" ? 1 : 0)) {
+    throw new Error(usage);
+  }
+  const {
+    clearGitHubCopilotHost,
+    normalizeGitHubCopilotHost,
+    readGitHubCopilotSettings,
+    setGitHubCopilotHost,
+  } = await import("./github-copilot-state.mjs");
+  if (action === "status") {
+    process.stdout.write(`${JSON.stringify(readGitHubCopilotSettings())}\n`);
+    return;
+  }
+  const host = action === "set" ? normalizeGitHubCopilotHost(values[0]) : undefined;
+  const { withProviderCatalogCacheTransaction } = await import("./model-catalog-cache.mjs");
+  const status = await withModelOverlayLock(() => withProviderCatalogCacheTransaction((catalog) => {
+    // Invalidate first so a cache write failure preserves the selected host.
+    catalog.forget(["github-copilot"]);
+    return action === "set" ? setGitHubCopilotHost(host) : clearGitHubCopilotHost();
+  }));
+  process.stdout.write(`${JSON.stringify(status)}\n`);
+}
+
 async function handleVertex(action, projectId, location) {
   const {
     clearVertexConfiguration,
@@ -3649,6 +3675,8 @@ if (args.includes("--probe")) {
   await printProviderOnboarding();
 } else if (args[0] === "generic-providers") {
   await handleGenericProviders(...args.slice(1));
+} else if (args[0] === "github-copilot") {
+  await handleGitHubCopilotHost(...args.slice(1));
 } else if (args[0] === "vertex") {
   await handleVertex(args[1] || "status", args[2], args[3]);
 } else if (args[0] === "install-cli") {

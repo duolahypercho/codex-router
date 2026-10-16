@@ -368,6 +368,7 @@ function streamState({ pinResponseId = false, onInvalid } = {}) {
     responseId: undefined,
     outputIndex: 0,
     itemIndexes: new Map(),
+    functionItems: new Map(),
     sawEvent: false,
     terminal: false,
     invalid: false,
@@ -411,6 +412,49 @@ function rememberStreamIndex(state, key, index) {
   if (previous !== undefined && previous !== index) return false;
   state.itemIndexes.set(key, index);
   return true;
+}
+
+function announcedStreamFunction(state, item, index) {
+  return state.functionItems.has(index) || [item.id, item.call_id].some((id) =>
+    state.functionItems.has(state.itemIndexes.get(id)),
+  );
+}
+
+function streamFunctionIdentity(state, itemId, callId, outputIndex, itemOutputIndex) {
+  const error = (message) => ({ error: message });
+  for (const id of [itemId, callId]) {
+    if (id !== undefined && (typeof id !== "string" || !id)) {
+      return error("A Responses function call event used an invalid item or call ID.");
+    }
+  }
+  if (itemId === undefined && callId === undefined) {
+    return error("A Responses function call event requires an item or call ID.");
+  }
+  if (outputIndex !== undefined && !validOutputIndex(outputIndex)) {
+    return error("A Responses function call event used an invalid output index.");
+  }
+  const itemIndex = state.itemIndexes.get(itemId);
+  const callIndex = state.itemIndexes.get(callId);
+  if (callId !== undefined && !validOutputIndex(callIndex)) {
+    return error("A Responses function call event referenced an unknown item.");
+  }
+  const index = outputIndex ?? callIndex ?? itemIndex;
+  if ([itemIndex, callIndex].some((known) => validOutputIndex(known) && known !== index)) {
+    return error("A Responses function call event used conflicting IDs or output indices.");
+  }
+  if (itemOutputIndex !== undefined && (!validOutputIndex(itemOutputIndex) || itemOutputIndex !== index)) {
+    return error("A Responses function call event used conflicting or invalid item indices.");
+  }
+  const announced = state.functionItems.get(index);
+  if (!announced || (callId !== undefined && callId !== announced.call_id)) {
+    return error("A Responses function call event referenced an unknown item.");
+  }
+  // A declared function index can identify a changed transport item ID. It
+  // cannot introduce a logical call ID or bind an unseen ID to another item.
+  if (itemId !== undefined && (!validOutputIndex(itemIndex) && (!announced.id || !validOutputIndex(outputIndex)))) {
+    return error("A Responses function call event referenced an unknown item.");
+  }
+  return { index, announced };
 }
 
 // A keep-alive carries no Responses semantics. OpenCode Go and Zen close every
@@ -483,10 +527,14 @@ function normalizeResponsesEvent(frame, state, flatToNative) {
     if (item.type === "function_call" && !item.id && !item.call_id) {
       return invalidStream(state, "A Responses function call item requires an id or call_id.");
     }
+    if (item.type === "function_call" && [item.id, item.call_id].some((id) => id !== undefined && (typeof id !== "string" || !id))) {
+      return invalidStream(state, "A Responses function call item used an invalid item or call ID.");
+    }
     if (!rememberStreamIndex(state, item.id, index) || !rememberStreamIndex(state, item.call_id, index)) {
       return invalidStream(state, "A Responses output item reused an ID with a different index.");
     }
     state.outputIndex = index + 1;
+    if (item.type === "function_call") state.functionItems.set(index, { id: item.id, call_id: item.call_id });
     if (!validOutputIndex(data.output_index)) data.output_index = index;
     
     // Restore namespace for function call items
@@ -498,25 +546,19 @@ function normalizeResponsesEvent(frame, state, flatToNative) {
   // name on the call Codex actually ran, so namespace tools answered
   // "unsupported call" on every Responses route that relays flattened names.
   if (data.type === "response.output_item.done") {
+    if (data.item?.type === "function_call" && announcedStreamFunction(state, data.item, data.output_index ?? data.item.output_index)) {
+      const identity = streamFunctionIdentity(state, data.item.id, data.item.call_id, data.output_index, data.item.output_index);
+      if (identity.error) return invalidStream(state, identity.error);
+      if (data.item.id !== undefined && identity.announced.id) data.item.id = identity.announced.id;
+    }
     const restoredDone = restoreFunctionCallNamespace(data.item, flatToNative);
     if (restoredDone !== data.item) data.item = restoredDone;
   }
   if (data.type === "response.function_call_arguments.delta" || data.type === "response.function_call_arguments.done") {
-    const key = data.call_id || data.item_id;
-    if (typeof key !== "string" || !key) {
-      return invalidStream(state, "A Responses function call arguments event requires call_id or item_id.");
-    }
-    if (Object.hasOwn(data, "output_index") && !validOutputIndex(data.output_index)) {
-      return invalidStream(state, "A Responses function call arguments event used an invalid output index.");
-    }
-    const index = state.itemIndexes.get(key);
-    if (!validOutputIndex(index)) {
-      return invalidStream(state, "A Responses function call arguments event referenced an unknown item.");
-    }
-    if (validOutputIndex(data.output_index) && data.output_index !== index) {
-      return invalidStream(state, "A Responses function call arguments event used the wrong output index.");
-    }
-    if (!validOutputIndex(data.output_index)) data.output_index = index;
+    const identity = streamFunctionIdentity(state, data.item_id, data.call_id, data.output_index);
+    if (identity.error) return invalidStream(state, identity.error);
+    if (data.item_id !== undefined && identity.announced.id) data.item_id = identity.announced.id;
+    if (!validOutputIndex(data.output_index)) data.output_index = identity.index;
   }
   if (data.type === "response.output_text.delta" && !validOutputIndex(data.output_index) && state.outputIndex > 0) {
     data.output_index = state.outputIndex - 1;
@@ -529,9 +571,15 @@ function normalizeResponsesEvent(frame, state, flatToNative) {
     // Non-incremental consumers read the calls off the completion snapshot
     // instead of the item events, so it has to carry the same restored shape.
     if (Array.isArray(data.response.output)) {
-      data.response.output = data.response.output.map((item) =>
-        restoreFunctionCallNamespace(item, flatToNative),
-      );
+      for (let index = 0; index < data.response.output.length; index++) {
+        const item = data.response.output[index];
+        if (item?.type === "function_call" && announcedStreamFunction(state, item, index)) {
+          const identity = streamFunctionIdentity(state, item.id, item.call_id, index, item.output_index);
+          if (identity.error) return invalidStream(state, identity.error);
+          if (item.id !== undefined && identity.announced.id) item.id = identity.announced.id;
+        }
+        data.response.output[index] = restoreFunctionCallNamespace(item, flatToNative);
+      }
     }
   }
   return serializeFrame(frame, data);
