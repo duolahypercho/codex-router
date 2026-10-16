@@ -126,3 +126,11 @@ test("both dispatchers expose caller capability rotation", () => {
     /"caller-key"\s*\{\s*Invoke-RouterNode "src\\caller-key\.mjs" \$Arguments/,
   );
 });
+
+
+test("both dispatchers expose the saved ChatGPT account routing controls", () => {
+  const posix = readFileSync(path.join(root, "bin", "model-router"), "utf8");
+  assert.match(posix, /\|chatgpt-account-pool\)/);
+  const windows = readFileSync(path.join(root, "codex-router.ps1"), "utf8");
+  assert.match(windows, /"chatgpt-account-pool"\s*\{\s*Invoke-RouterNode "src\\control\.mjs"/);
+});

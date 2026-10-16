@@ -1,0 +1,1 @@
+- **ChatGPT quota routing preserves request cancellation after saving cooldowns.** A deadline racing policy-lock release or account selection now cancels the held refusal and rethrows the original cancellation reason instead of returning a normal quota response.

@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { setTimeout as delay } from "node:timers/promises";
 
 /**
  * proper-lockfile 4.1.2 does not check whether a lease was released before
@@ -35,6 +36,30 @@ export async function acquireFileLock(file, options = {}) {
     releaseStarted = true;
     return release();
   };
+}
+
+// Retry only a held lease, with the caller's execution deadline as the bound.
+// Never abandon a pending acquisition: it could acquire a lease after abort.
+export async function acquireFileLockWithSignal(file, options = {}, { signal, retryMs = 25 } = {}) {
+  while (true) {
+    signal?.throwIfAborted();
+    let release;
+    try {
+      release = await acquireFileLock(file, { ...options, retries: 0 });
+    } catch (error) {
+      signal?.throwIfAborted();
+      if (error?.code !== "ELOCKED") throw error;
+      try { await delay(retryMs, undefined, { signal }); } catch (error) {
+        signal?.throwIfAborted();
+        throw error;
+      }
+      continue;
+    }
+    if (signal?.aborted) {
+      await runWithLockRelease(() => signal.throwIfAborted(), release);
+    }
+    return release;
+  }
 }
 
 // An unlock error must be visible without replacing the failure that caused

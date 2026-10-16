@@ -137,6 +137,7 @@ export interface ChatGptSubscriptionAccount {
 }
 
 export interface ChatGptAccountPool {
+  routing?: { enabled: boolean; strategy: "round-robin" | "fill-first"; sessions: { count: number }; cooldowns: Record<string, number> };
   version: number;
   policy: {
     enabled: boolean;
@@ -224,6 +225,7 @@ export interface RouterControl {
   loginChatGptSubscriptionAccount(accountId: string): Promise<unknown>;
   removeChatGptSubscriptionAccount(accountId: string): Promise<unknown>;
   setChatGptAccountSelection(selection: string): Promise<unknown>;
+  setChatGptAccountRouting(strategy: "off" | "round-robin" | "fill-first"): Promise<unknown>;
   setPresence(mode: PresenceMode): Promise<unknown>;
   controlService(action: ServiceAction): Promise<unknown>;
   controlTray(action: TrayAction): Promise<unknown>;

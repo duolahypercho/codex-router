@@ -166,6 +166,7 @@ import {
   skippableCompactionTokens,
 } from "./compaction-limit.mjs";
 import { fetchWithRetry } from "./upstream-retry.mjs";
+import { createChatGPTAccountRoutingPlan, fetchWithChatGPTAccountRouting, knownChatGPTAccountRoutingHeaders } from "./chatgpt-account-routing.mjs";
 import { repairGeminiToolSchemas } from "./gemini-tool-schema.mjs";
 import { applyGrokApplyPatchGuidance } from "./grok-apply-patch-guidance.mjs";
 import { GROK_OAUTH_PROVIDER, isGrokOauthAgenticRoute } from "./grok-oauth-routes.mjs";
@@ -1909,8 +1910,8 @@ function parseRelayedAgentPayloadSse(bytes) {
   return undefined;
 }
 
-function nativeRelayContext(request) {
-  const headers = nativeHeaders(request);
+function nativeRelayContext(request, ownerHeaders) {
+  const headers = { ...nativeHeaders(request), ...ownerHeaders };
   const authorization =
     typeof headers.authorization === "string" ? headers.authorization : "";
   const account = nativeAccountKey(headers);
@@ -2166,8 +2167,8 @@ function waitForAgentPayloadRelay(pending, signal) {
   });
 }
 
-async function relayEncryptedAgentPayload(request, item, encrypted, signal) {
-  const { accountScope, headers } = nativeRelayContext(request);
+async function relayEncryptedAgentPayload(request, item, encrypted, signal, ownerHeaders) {
+  const { accountScope, headers } = nativeRelayContext(request, ownerHeaders);
   const key = agentPayloadCacheKey(encrypted, accountScope);
   const cached = cachedAgentPayload(key);
   if (cached !== undefined) return cached;
@@ -2202,7 +2203,7 @@ async function relayEncryptedAgentPayload(request, item, encrypted, signal) {
   return waitForAgentPayloadRelay(operation, signal);
 }
 
-async function normalizeRoutedAgentInput(request, input, signal) {
+async function normalizeRoutedAgentInput(request, input, signal, originalPayload) {
   const normalized = normalizeRoutedInput(input);
   if (!Array.isArray(normalized)) return normalized;
   const output = [];
@@ -2212,8 +2213,11 @@ async function normalizeRoutedAgentInput(request, input, signal) {
       output.push(item);
       continue;
     }
+    const ownerHeaders = payload.native
+      ? await knownChatGPTAccountRoutingHeaders({ signal, headers: nativeHeaders(request), payload: { ...originalPayload, input: [item] } })
+      : undefined;
     const plaintext = payload.native
-      ? await relayEncryptedAgentPayload(request, item, payload.content, signal)
+      ? await relayEncryptedAgentPayload(request, item, payload.content, signal, ownerHeaders)
       : payload.content;
     output.push({
       ...item,
@@ -3206,7 +3210,7 @@ async function summarize(request, payload, route, signal, { allowFailover = true
   // inside a `/goal` or subagent session summarizes opaque payloads. The relay
   // is cached by ciphertext, so a conversation whose turns already resolved
   // costs nothing extra here.
-  const normalized = await normalizeRoutedAgentInput(request, originalInput, signal);
+  const normalized = await normalizeRoutedAgentInput(request, originalInput, signal, payload);
   const searchContract = routedSearchContract(searchSnapshot, normalized);
   // Evidence is extracted before tool-result aging rewrites old output bytes.
   // The summarizer may select source IDs, but only this deterministic pass can
@@ -4488,6 +4492,7 @@ async function handleResponses(request, response, requestUrl) {
   let pendingInterrupts = [];
   let pendingInterruptNamespace;
   let bufferNativeStream = false;
+  let accountRoutingPlan;
   let emptyCompletion = false;
   let emptyCompletionRetried = false;
   // The model the operator actually asked for, when this turn ended up being
@@ -4801,6 +4806,7 @@ async function handleResponses(request, response, requestUrl) {
         request,
         payload.input,
         controller.signal,
+        payload,
       );
       searchContract = routedSearchContract(searchSnapshot, normalizedInput);
       agingEnabled = toolResultAgingEnabled();
@@ -4891,6 +4897,9 @@ async function handleResponses(request, response, requestUrl) {
         }
       }
     } else {
+      accountRoutingPlan = await createChatGPTAccountRoutingPlan({
+        headers: nativeHeaders(request), payload, signal: controller.signal,
+      });
       const native = { ...payload };
       const substitutedCaller = callerBroughtNoUpstreamCredential(request);
       // An extended-window variant is the model it was derived from, published
@@ -4953,9 +4962,9 @@ async function handleResponses(request, response, requestUrl) {
           bufferNativeStream = true;
         }
       }
-      nativeWsTransport = !compactV1 && !compactV2 && nativeWebSocketTransportSelected();
+      nativeWsTransport = !accountRoutingPlan && !compactV1 && !compactV2 && nativeWebSocketTransportSelected();
       target = nativeTarget(requestUrl.pathname);
-      headers = nativeHeaders(request);
+      headers = { ...nativeHeaders(request), ...accountRoutingPlan?.headers };
       // The native WebSocket transport speaks JSON frames, never a zstd
       // Content-Encoding, so its turns keep the plain replayable body.
       if (nativeWsTransport) {
@@ -4981,7 +4990,10 @@ async function handleResponses(request, response, requestUrl) {
     if (route) {
       assertRoutedSearchContract(route, builtSearchMode, searchContract);
     }
-    let { response: upstream, retries } = await fetchWithRetry(
+    const fetchNativeTurn = accountRoutingPlan
+      ? (url, init, options) => fetchWithChatGPTAccountRouting(accountRoutingPlan, url, init, options)
+      : fetchWithRetry;
+    let { response: upstream, retries } = await fetchNativeTurn(
       target,
       {
         method: "POST",
@@ -5005,6 +5017,7 @@ async function handleResponses(request, response, requestUrl) {
         onRetry: (event) => logUpstreamRetry(event, requestedModel, requestUrl.pathname),
       },
     );
+    if (accountRoutingPlan) headers = { ...headers, ...accountRoutingPlan.headers };
     upstreamRetries = retries;
     upstreamStatus = upstream.status;
     // Time until the upstream chain answered the request. Everything before
@@ -5564,7 +5577,9 @@ async function handleResponses(request, response, requestUrl) {
       writeEmptyCompletionError(response, "websocket_turn_not_replayed",
         "The upstream turn ended without usable output. It was not replayed because generation may already have started.");
       finalStatus = 502;
-    } else if (emptyCompletion || preludeLimitRetryable || invalidFunctionCallRetryable) {
+    } else if (route && (emptyCompletion || preludeLimitRetryable || invalidFunctionCallRetryable)) {
+      // Only routed providers install the guards that withhold a first response.
+      // Native account-pool streams are already relayed and must not enter repair.
       // The upstream answered 200 with nothing and never proved otherwise, so
       // the guard still holds every byte. Retry the identical request once:
       // same bytes, same headers, same signal. The discarded first stream means
@@ -5860,6 +5875,14 @@ async function handleResponses(request, response, requestUrl) {
       }
       return;
     }
+    if (error?.code === "chatgpt_account_routing_unavailable" && !response.headersSent) {
+      finalStatus = 503;
+      activityStatus = 503;
+      writeJson(response, 503, { error: { type: error.code, message: error.message } });
+      recordTurnUsage({ model: requestedModel, provider: route ? canonicalProviderId(route.provider) : "openai", status: 503, durationMs: Date.now() - startedAt }, diagnostics);
+      usageRecorded = true;
+      return;
+    }
     if (
       error?.code === INVALID_FUNCTION_CALL_ARGUMENTS_CODE &&
       !response.headersSent
@@ -6100,6 +6123,9 @@ async function handleResponses(request, response, requestUrl) {
     }
     throw error;
   } finally {
+    try { await accountRoutingPlan?.close(); } catch {
+      console.error("[codex-router] ChatGPT routing lease cleanup failed.");
+    }
     const status = activityStatus ?? finalStatus ?? response.statusCode;
     activity.finish(status, { generationOutcome, httpStatus: turnHttpStatus });
     // Timestamped per-request timing for latency diagnosis. Never gated on

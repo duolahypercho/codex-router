@@ -1459,6 +1459,7 @@ test("preload constructs exact positional IPC payloads", async () => {
     ["loginChatGptSubscriptionAccount", ["acct_example_123456"], { accountId: "acct_example_123456" }],
     ["removeChatGptSubscriptionAccount", ["acct_example_123456"], { accountId: "acct_example_123456" }],
     ["setChatGptAccountSelection", ["acct_example_123456"], { selection: "acct_example_123456" }],
+    ["setChatGptAccountRouting", ["round-robin"], { strategy: "round-robin" }],
     ["setPresence", ["always"], { mode: "always" }],
     ["controlService", ["start"], { action: "start" }],
     ["controlTray", ["status"], { action: "status" }],
