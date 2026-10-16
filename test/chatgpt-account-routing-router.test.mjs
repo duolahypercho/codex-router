@@ -30,12 +30,12 @@ async function harness(t, mode = "fill-first") {
     writePrivateJson(path.join(homesDir, account.id, "auth.json"), { tokens: { access_token: access, account_id: accountId } });
   }
   await setChatGPTAccountRouting(mode, { filePath: routingPath });
-  const seen = []; const failures = []; let rejectOne = true; let holdNext = false;
+  const seen = []; const failures = []; let rejectOne = true; let holdNext = false; let turnState;
   const upstream = http.createServer(async (request, response) => {
     const chunks = [];
     for await (const chunk of request) chunks.push(chunk);
     if (request.url === "/health") { response.end('{"ok":true,"status":"healthy"}'); return; }
-    seen.push({ account: request.headers["chatgpt-account-id"], authorization: request.headers.authorization, raw: Buffer.concat(chunks), encoding: request.headers["content-encoding"] });
+    seen.push({ account: request.headers["chatgpt-account-id"], authorization: request.headers.authorization, raw: Buffer.concat(chunks), encoding: request.headers["content-encoding"], turnState: request.headers["x-codex-turn-state"] });
     const failure = failures.shift();
     if (["empty", "prelude-only"].includes(failure)) {
       response.writeHead(200, { "content-type": "text/event-stream" });
@@ -55,7 +55,7 @@ async function harness(t, mode = "fill-first") {
       response.writeHead(200, { "content-type": "application/json" });
       response.end('{"output":[{"type":"compaction","encrypted_content":"synthetic-summary"}]}'); return;
     }
-    response.writeHead(200, { "content-type": "text/event-stream" });
+    response.writeHead(200, { "content-type": "text/event-stream", ...(turnState ? { "x-codex-turn-state": turnState } : {}) });
     if (holdNext) { holdNext = false; response.write('data: {"type":"response.output_text.delta","delta":"partial"}\n\n'); return; }
     response.end('data: {"type":"response.output_text.delta","delta":"ok"}\n\ndata: {"type":"response.completed","response":{"id":"resp_synthetic","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":1,"output_tokens":1}}}\n\n');
   });
@@ -94,7 +94,7 @@ async function harness(t, mode = "fill-first") {
     const response = await fetch(url, { method: "POST", headers: { ...headers, session_id: session }, body: JSON.stringify({ model: "gpt-5.4", stream: true, store: false, input, ...extra }) });
     return { status: response.status, text: await response.text() };
   };
-  return { get url() { return url; }, headers, post, seen, setRejectOne(value) { rejectOne = value; }, holdNext() { holdNext = true; }, logs: () => stderr, queueFailures(...statuses) { failures.push(...statuses); },
+  return { get url() { return url; }, headers, post, seen, setRejectOne(value) { rejectOne = value; }, setTurnState(value) { turnState = value; }, holdNext() { holdNext = true; }, logs: () => stderr, queueFailures(...statuses) { failures.push(...statuses); },
     usage() {
       const file = path.join(state, "usage-events.jsonl");
       return existsSync(file) ? readFileSync(file, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line)) : [];
@@ -263,3 +263,35 @@ for (const kind of ["empty", "prelude-only"]) {
     assert.deepEqual(h.seen.map((entry) => entry.account), ["one", "one", "two"]);
   });
 }
+
+
+test("WebSocket visible continuation keeps cached turn-state on its owner after quota", async (t) => {
+  const h = await harness(t, "round-robin"); h.setRejectOne(false);
+  assert.equal((await h.post("seed-other-account")).status, 200);
+  h.setTurnState("synthetic-owner-two-state");
+  const socket = new WebSocket(h.url.replace("http:", "ws:"), { headers: { ...h.headers, "openai-beta": RESPONSES_WEBSOCKET_BETA } });
+  t.after(() => socket.close());
+  await new Promise((resolve, reject) => { socket.addEventListener("open", resolve, { once: true }); socket.addEventListener("error", reject, { once: true }); });
+  const turn = (previous_response_id) => new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { socket.removeEventListener("message", handler); reject(new Error("Sticky WebSocket turn timeout")); }, 5000);
+    const handler = (event) => {
+      const value = JSON.parse(event.data);
+      if (["error", "response.failed", "response.completed"].includes(value.type)) {
+        clearTimeout(timer); socket.removeEventListener("message", handler); resolve(value);
+      }
+    };
+    socket.addEventListener("message", handler);
+    socket.send(JSON.stringify({ type: "response.create", stream: true, store: false, model: "gpt-5.4", input: [{ role: "user", content: "visible text" }], ...(previous_response_id ? { previous_response_id } : {}) }));
+  });
+  const first = await turn(); assert.equal(first.type, "response.completed");
+  assert.deepEqual(h.seen.map((entry) => entry.account), ["one", "two"]);
+  h.queueFailures(429);
+  const refusal = await turn(first.response.id);
+  assert.equal(refusal.type, "error"); assert.equal(refusal.status, 429);
+  assert.deepEqual(h.seen.map((entry) => entry.account), ["one", "two", "two"]);
+  assert.equal(h.seen.at(-1).turnState, "synthetic-owner-two-state");
+  assert.equal(JSON.parse(h.seen.at(-1).raw).previous_response_id, undefined);
+  const unavailable = await turn(first.response.id);
+  assert.equal(unavailable.type, "error"); assert.equal(unavailable.status, 503);
+  assert.equal(h.seen.length, 3, "owner cooldown must not send sticky state to an available account");
+});

@@ -1,0 +1,1 @@
+- **ChatGPT account routing keeps sticky turns on their owner and surfaces streamed quota write failures.** WebSocket continuations carrying turn-state cannot switch accounts on quota refusal. Streamed quota persistence errors and request deadlines now propagate instead of ending normally, while accepted output is never replayed.

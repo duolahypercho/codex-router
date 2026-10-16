@@ -152,7 +152,7 @@ export async function setChatGPTAccountRouting(strategy, { filePath = CHATGPT_AC
 }
 
 export function chatGPTAccountBoundHistory(payload, headers = {}) {
-  if (payload?.previous_response_id || payload?.conversation || headers["x-oai-attestation"]) return true;
+  if (payload?.previous_response_id || payload?.conversation || headers["x-oai-attestation"] || headers["x-codex-turn-state"]) return true;
   // Inspect the original body before native normalization removes references.
   const stack = [payload?.input, payload?.tools];
   while (stack.length) {
@@ -355,7 +355,7 @@ export async function fetchWithChatGPTAccountRouting(plan, url, init = {}, {
     });
     transportRetries += accountRetries;
     if (signal?.aborted) { await response.body?.cancel(); signal.throwIfAborted(); }
-    if (![402, 429].includes(response.status) || !response.body) return { response: observeQuotaStream(response, plan, now), retries: hops + transportRetries };
+    if (![402, 429].includes(response.status) || !response.body) return { response: observeQuotaStream(response, plan, now, signal), retries: hops + transportRetries };
     const reader = response.body.getReader();
     const chunks = [];
     let size = 0;
@@ -396,7 +396,7 @@ export async function fetchWithChatGPTAccountRouting(plan, url, init = {}, {
 
 // A semantic SSE refusal can arrive after HTTP 200 or partial output. Record
 // the cooldown for subsequent turns, but never replay an accepted stream.
-function observeQuotaStream(response, plan, now) {
+function observeQuotaStream(response, plan, now, signal) {
   if (!response.body || !response.headers.get("content-type")?.includes("text/event-stream")) return response;
   const decoder = new TextDecoder();
   let pending = "";
@@ -411,13 +411,19 @@ function observeQuotaStream(response, plan, now) {
       if (pending.length > 64 * 1024) pending = "";
       for (const line of lines) {
         if (!line.startsWith("data:") || line.length > 64 * 1024) continue;
-        try {
-          const event = JSON.parse(line.slice(5).trim());
-          if (!["response.failed", "error"].includes(event.type)) continue;
-          const error = event.response?.error || event.error || event;
-          const until = chatGPTQuotaCooldown({ status: 429, headers: response.headers }, JSON.stringify({ error }), now());
-          if (until) { marked = true; await plan.quota(until); break; }
-        } catch { /* Non-JSON data and incomplete events are not quota evidence. */ }
+        let event;
+        try { event = JSON.parse(line.slice(5).trim()); }
+        catch { continue; } // Non-JSON data and incomplete events are not quota evidence.
+        if (!["response.failed", "error"].includes(event?.type)) continue;
+        const error = event.response?.error || event.error || event;
+        const until = chatGPTQuotaCooldown({ status: 429, headers: response.headers }, JSON.stringify({ error }), now());
+        if (until) {
+          // Persistence and cancellation failures must reach the stream caller.
+          await plan.quota(until);
+          signal?.throwIfAborted();
+          marked = true;
+          break;
+        }
       }
     },
   })), { status: response.status, statusText: response.statusText, headers: response.headers });

@@ -780,3 +780,92 @@ test("quota selection failure racing cancellation preserves the original deadlin
   }), (error) => error === reason);
   assert.equal(calls, 1);
 });
+
+
+test("turn-state headers bind visible history to its owning account", async (t) => {
+  const payload = { input: [{ role: "user", content: "visible continuation" }] };
+  assert.equal(chatGPTAccountBoundHistory(payload, { "x-codex-turn-state": "synthetic-state" }), true);
+  assert.equal(chatGPTAccountBoundHistory(payload, { "x-codex-turn-state": "" }), false);
+  assert.equal(chatGPTAccountBoundHistory(payload), false);
+  const { options, ids, plan } = fixture(t);
+  await setChatGPTAccountRouting("round-robin", options);
+  const seed = await plan("seed"); await seed.close();
+  const owner = await plan("sticky"); assert.equal(owner.profileId, ids[1]); await owner.close();
+  const headers = { authorization: "Bearer synthetic-caller", "chatgpt-account-id": "one", session_id: "sticky", "x-codex-turn-state": "synthetic-state" };
+  const bound = await plan("sticky", payload.input, { headers });
+  assert.equal(bound.profileId, ids[1]); assert.equal(bound.portable, false);
+  let calls = 0;
+  const result = await fetchWithChatGPTAccountRouting(bound, "https://synthetic.test", { headers }, { fetchImpl: async (_url, init) => {
+    calls++; assert.equal(init.headers["chatgpt-account-id"], "two"); assert.equal(init.headers["x-codex-turn-state"], "synthetic-state"); return quota();
+  } });
+  assert.equal(result.response.status, 429); await result.response.text(); assert.equal(calls, 1); await bound.close();
+  assert.ok(readChatGPTAccountRouting(options.filePath).cooldowns[ids[1]] > Date.now());
+  await assert.rejects(plan("sticky", payload.input, { headers }), /account-bound history/);
+  await setChatGPTAccountRouting("reset", options);
+  await assert.rejects(plan("sticky", payload.input, { headers }), /account-bound history/);
+});
+
+for (const kind of ["persistence", "deadline"]) {
+  test(`streamed quota ${kind} failure propagates and cancels upstream without replay`, async () => {
+    const reason = Object.assign(new Error(`synthetic ${kind} failure`), { code: kind === "deadline" ? "ERR_ROUTER_REQUEST_TIMEOUT" : "EACCES" });
+    const controller = new AbortController();
+    let calls = 0; let writes = 0; let hops = 0; let cancelReason; let closeTimer;
+    let canceled;
+    const cancellation = new Promise((resolve) => { canceled = resolve; });
+    const body = new ReadableStream({
+      start(stream) {
+        stream.enqueue(Buffer.from('data: {"type":"response.failed","response":{"error":{"code":"usage_limit_reached"}}}\n\n'));
+        closeTimer = setTimeout(() => stream.close(), 200);
+      },
+      cancel(error) { clearTimeout(closeTimer); cancelReason = error; canceled(); },
+    });
+    const selected = {
+      headers: { "chatgpt-account-id": "one" }, portable: true,
+      async quota() { writes++; if (kind === "deadline") controller.abort(reason); throw reason; },
+      async next() { hops++; },
+    };
+    const result = await fetchWithChatGPTAccountRouting(selected, "https://synthetic.test", { signal: controller.signal }, {
+      fetchImpl: async () => { calls++; return new Response(body, { headers: { "content-type": "text/event-stream" } }); },
+    });
+    await assert.rejects(result.response.text(), (error) => error === reason);
+    await cancellation;
+    assert.equal(cancelReason, reason); assert.equal(calls, 1); assert.equal(writes, 1); assert.equal(hops, 0);
+  });
+}
+
+test("streamed quota deadline during policy unlock preserves the original reason and saved cooldown", async (t) => {
+  const { options, ids, plan } = fixture(t);
+  await setChatGPTAccountRouting("fill-first", options);
+  const controller = new AbortController();
+  const reason = Object.assign(new Error("synthetic streamed quota deadline during unlock"), { code: "ERR_ROUTER_REQUEST_TIMEOUT" });
+  const selected = await plan("stream-unlock", "hello", { signal: controller.signal });
+  const originalRmdir = fs.rmdir; let canceled = false; let calls = 0;
+  t.mock.method(fs, "rmdir", (target, ...args) => {
+    if (String(target) === `${options.filePath}.pool-lock.lock` && !canceled) { canceled = true; controller.abort(reason); }
+    return originalRmdir(target, ...args);
+  });
+  try {
+    const result = await fetchWithChatGPTAccountRouting(selected, "https://synthetic.test", { signal: controller.signal }, { fetchImpl: async () => {
+      calls++; return new Response('data: {"type":"error","error":{"type":"usage_limit_reached"}}\n\n', { headers: { "content-type": "text/event-stream" } });
+    } });
+    await assert.rejects(result.response.text(), (error) => error === reason);
+    assert.equal(canceled, true); assert.equal(calls, 1); assert.equal(selected.profileId, ids[0]);
+    assert.ok(readChatGPTAccountRouting(options.filePath).cooldowns[ids[0]] > Date.now());
+    assert.equal(fs.existsSync(`${options.filePath}.pool-lock.lock`), false);
+  } finally { t.mock.restoreAll(); await selected.close(); }
+  const next = await plan("stream-unlock"); assert.equal(next.profileId, ids[1]); await next.close();
+});
+
+test("streamed quota parser ignores malformed and unrelated data and persists only once", async () => {
+  const chunks = [
+    'data: not-json\n\ndata: null\n\ndata: {"type":"response.output_text.delta","delta":"quota exhausted"}\n\n',
+    'data: {"type":"error","error":{"type":"rate_limit_exceeded"}}\n\ndata: {"type":"response.failed","response":{"error":{"co',
+    'de":"usage_limit_reached"}}}\r\n\r\ndata: {"type":"error","error":{"code":"usage_limit_reached"}}\n\n',
+  ];
+  let calls = 0; let writes = 0; let hops = 0;
+  const selected = { headers: {}, portable: true, async quota(until) { writes++; assert.ok(until > Date.now()); }, async next() { hops++; } };
+  const result = await fetchWithChatGPTAccountRouting(selected, "https://synthetic.test", {}, { fetchImpl: async () => {
+    calls++; return new Response(new ReadableStream({ start(stream) { for (const chunk of chunks) stream.enqueue(Buffer.from(chunk)); stream.close(); } }), { headers: { "content-type": "text/event-stream" } });
+  } });
+  assert.equal(await result.response.text(), chunks.join("")); assert.equal(calls, 1); assert.equal(writes, 1); assert.equal(hops, 0);
+});
