@@ -10644,6 +10644,176 @@ test("a subagent effort overrides the effort Codex nested in the reasoning objec
   }
 });
 
+test("keyless OpenAI routes preserve reasoning effort while Ollama strips it", async () => {
+  const stateDir = mkdtempSync(path.join(os.tmpdir(), "keyless-reasoning-effort-"));
+  const registryPath = path.join(stateDir, "registry.json");
+  const model = (provider, slug, gatewayModel, endpoint) => ({
+    slug: `${provider}/${slug}`,
+    gatewayModel,
+    upstreamModel: "glm-5.3-flash",
+    provider,
+    ...(endpoint ? { endpoint } : {}),
+    listed: true,
+    displayName: slug,
+    description: "Reasoning effort routing fixture",
+    priority: 100,
+    defaultEffort: "low",
+    reasoningLevels: ["low", "high", "max"].map((effort) => ({
+      effort,
+      description: effort,
+    })),
+    contextWindow: 500_000,
+    autoCompact: 450_000,
+    inputModalities: ["text"],
+    requestProfile: "glm-thinking",
+    compHash: `${gatewayModel}-v1`,
+  });
+  writeFileSync(
+    registryPath,
+    `${JSON.stringify({
+      version: 1,
+      providers: [
+        {
+          id: "custom",
+          displayName: "Custom",
+          kind: "openai-compatible",
+          ownedBy: "custom",
+          authMode: "per-model",
+          perModelEndpoint: true,
+        },
+        {
+          id: "local-vllm",
+          displayName: "Local vLLM",
+          kind: "openai-compatible",
+          ownedBy: "local-vllm",
+          baseUrl: "http://127.0.0.1:9998/v1",
+          keyless: true,
+        },
+        {
+          id: "local",
+          displayName: "Local (Ollama)",
+          kind: "openai-compatible",
+          ownedBy: "local",
+          transport: "ollama",
+          baseUrl: "http://127.0.0.1:11434/v1",
+          keyless: true,
+        },
+      ],
+      models: [
+        model("custom", "glm53-flash-local", "custom-glm53-flash-local", {
+          baseUrl: "http://127.0.0.1:9999/v1",
+          keyless: true,
+        }),
+        model("local-vllm", "glm53-flash", "local-vllm-glm53-flash"),
+        model("local", "glm53-flash", "local-ollama-glm53-flash"),
+      ],
+    })}\n`,
+    { mode: 0o600 },
+  );
+  writeFileSync(
+    path.join(stateDir, "multi-agent-settings.json"),
+    `${JSON.stringify({
+      version: 2,
+      mode: "all",
+      enabled: [],
+      disabled: [],
+      efforts: { "local-vllm/glm53-flash": "max" },
+    })}\n`,
+    { mode: 0o600 },
+  );
+
+  const seen = [];
+  const gateway = await mockServer(async (request, response) => {
+    if (request.url === "/health") {
+      json(response, 200, { ok: true });
+      return;
+    }
+    seen.push(await bodyJson(request));
+    json(response, 200, {
+      id: "resp_keyless_effort",
+      output: [{ type: "message", content: [{ type: "output_text", text: "ok" }] }],
+      usage: { input_tokens: 5, output_tokens: 1 },
+    });
+  });
+  const routerPort = await openPort();
+  const router = run("router.mjs", {
+    MODEL_ROUTER_STATE_DIR: stateDir,
+    MODEL_ROUTER_REGISTRY: registryPath,
+    MODEL_ROUTER_USER_MODELS: path.join(stateDir, "no-user-models.json"),
+    CODEX_ROUTER_PORT: String(routerPort),
+    CODEX_ROUTER_GATEWAY_BASE_URL: `http://127.0.0.1:${gateway.port}/v1`,
+    CODEX_ROUTER_OAUTH_HEALTH_URL: `http://127.0.0.1:${gateway.port}/health`,
+    CODEX_ROUTER_API_HEALTH_URL: `http://127.0.0.1:${gateway.port}/health`,
+    CODEX_ROUTER_GROK_OAUTH_HEALTH_URL: `http://127.0.0.1:${gateway.port}/health`,
+    CODEX_ROUTER_GATEWAY_HEALTH_URL: `http://127.0.0.1:${gateway.port}/health`,
+    CODEX_ROUTER_QUIET: "1",
+  });
+
+  const turn = (slug, body, headers = {}) =>
+    fetch(`${routerBase(routerPort)}/responses`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...headers },
+      body: JSON.stringify({ model: slug, input: "go", ...body }),
+    });
+
+  try {
+    await waitFor(`${routerBase(routerPort)}/models`, router);
+
+    for (const effort of ["low", "high", "max"]) {
+      assert.equal(
+        (await turn("custom/glm53-flash-local", { reasoning: { effort, summary: "auto" } })).status,
+        200,
+      );
+      assert.equal(
+        (await turn("custom/glm53-flash-local", { reasoning_effort: effort })).status,
+        200,
+      );
+      assert.equal(
+        (await turn("local-vllm/glm53-flash", { reasoning: { effort, summary: "auto" } })).status,
+        200,
+      );
+      assert.equal(
+        (await turn("local-vllm/glm53-flash", { reasoning_effort: effort })).status,
+        200,
+      );
+    }
+    assert.equal(
+      (await turn("local-vllm/glm53-flash", { reasoning: { effort: "low", summary: "auto" } }, {
+        "x-openai-subagent": "review-child",
+      })).status,
+      200,
+    );
+    assert.equal(
+      (await turn("local/glm53-flash", {
+        reasoning: { effort: "high", summary: "auto" },
+        reasoning_effort: "max",
+      })).status,
+      200,
+    );
+
+    assert.equal(seen.length, 14);
+    for (let index = 0; index < 12; index += 4) {
+      const effort = ["low", "high", "max"][index / 4];
+      assert.deepEqual(seen[index].reasoning, { effort, summary: "auto" });
+      assert.equal(seen[index].reasoning_effort, undefined);
+      assert.equal(seen[index + 1].reasoning, undefined);
+      assert.equal(seen[index + 1].reasoning_effort, effort);
+      assert.deepEqual(seen[index + 2].reasoning, { effort, summary: "auto" });
+      assert.equal(seen[index + 2].reasoning_effort, undefined);
+      assert.equal(seen[index + 3].reasoning, undefined);
+      assert.equal(seen[index + 3].reasoning_effort, effort);
+    }
+    assert.deepEqual(seen[12].reasoning, { effort: "max", summary: "auto" });
+    assert.equal(seen[12].reasoning_effort, "max");
+    assert.equal(seen[13].reasoning, undefined);
+    assert.equal(seen[13].reasoning_effort, undefined);
+  } finally {
+    await stopChild(router);
+    await closeServer(gateway.server);
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
 // #256: spawning a subagent on opencode-go/deepseek-v4-flash made every
 // following parent request 400 with "The `reasoning_content` in the thinking
 // mode must be passed back to the API". LiteLLM's Responses->chat translation

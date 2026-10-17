@@ -4109,7 +4109,7 @@ async function buildRoutedRequest({ request, payload, route, agedInput }) {
   // turn -- 210 of them here before this was caught. Ollama has no
   // reasoning-effort concept to map it onto anyway, so drop it rather than
   // translate it into something the model never asked for.
-  if (provider?.keyless) {
+  if (provider?.keyless && provider.transport === "ollama") {
     delete routed.reasoning;
     delete routed.reasoning_effort;
   }
