@@ -1189,6 +1189,15 @@ export function splitFlatCodexAppName(name) {
 // provider should still see them.
 export function mergeCodexAppTools(tools) {
   if (!Array.isArray(tools)) return { tools, merged: false };
+  // Current Desktop clients register app tools as MCP tools. That registry
+  // owns dispatch and schemas; the legacy native snapshot is not executable
+  // under its old identities merely because the operations have similar names.
+  const modernAppRegistration = tools.some((tool) =>
+    tool?.type === "namespace" ? tool.name === "mcp__codex_app" :
+      tool?.type === "function" && (tool.namespace === "mcp__codex_app" ||
+        (typeof (tool.name ?? tool.function?.name) === "string" &&
+          (tool.name ?? tool.function?.name).startsWith("mcp__codex_app__"))));
+  if (modernAppRegistration) return { tools, merged: false };
   const namespaces = new Map();
   for (const entry of CODEX_APP_TOOLS) {
     if (entry?.type !== "namespace") continue;

@@ -248,7 +248,7 @@ export function mergeTokenUsage(first, second) {
   };
 }
 
-export function tokenUsageFromPayload(payload, { grokServiceTier = false } = {}) {
+export function tokenUsageFromPayload(payload, { grokServiceTier = false, grokContextUsage = false } = {}) {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return undefined;
   // Forwarder-origin metadata survives the locked LiteLLM Responses bridge;
   // a request's service_tier is never an authoritative response measurement.
@@ -256,9 +256,18 @@ export function tokenUsageFromPayload(payload, { grokServiceTier = false } = {})
   const tier = knownServiceTier(reported);
   const tierMetadata = tier ? { serviceTier: tier }
     : reported === "unknown" ? { serviceTierUnknown: true } : {};
+  // LiteLLM drops nonstandard Chat usage fields when converting to Responses.
+  // The authenticated forwarder metadata preserves repair billing separately.
+  const billingMetadata = {};
+  if (grokContextUsage) {
+    const fields = (payload.response || payload)?.provider_specific_fields;
+    for (const [source, target] of [["grok_billed_input_tokens", "billedInputTokens"], ["grok_billed_output_tokens", "billedOutputTokens"]]) {
+      if (Number.isSafeInteger(fields?.[source]) && fields[source] >= 0) billingMetadata[target] = fields[source];
+    }
+  }
   for (const candidate of [payload.usage, payload.response?.usage]) {
     const usage = normalizeTokenUsage(candidate);
-    if (usage) return { ...usage, ...tierMetadata };
+    if (usage) return { ...usage, ...tierMetadata, ...billingMetadata };
   }
   if (Object.keys(tierMetadata).length) return tierMetadata;
   return undefined;
@@ -277,12 +286,12 @@ export function tokenUsageFromPayload(payload, { grokServiceTier = false } = {})
 // Anything that is not JSON -- a compressed frame, an opaque buffer, a plain
 // string -- simply finds no key to discount and is counted whole, exactly as
 // before.
-export function estimateInputTokens(body, { contextWindow, maxTokensPerImage } = {}) {
+export function estimateInputTokens(body, { contextWindow, maxTokensPerImage, minimumTokens = MIN_ESTIMATED_INPUT_TOKENS } = {}) {
   const buffer = Buffer.isBuffer(body) ? body : Buffer.from(String(body ?? ""), "utf8");
   const images = promptImageUsage(buffer, maxTokensPerImage);
   const bytes = buffer.byteLength - nonVisibleBytes(buffer) - images.bytes;
   const estimate = Math.ceil(bytes / ESTIMATE_BYTES_PER_TOKEN) + images.tokens;
-  if (estimate < MIN_ESTIMATED_INPUT_TOKENS) return undefined;
+  if (estimate < minimumTokens) return undefined;
   // A request the provider answered cannot have exceeded the window, so the
   // estimate is never allowed to claim it did.
   //
@@ -321,32 +330,55 @@ function reportsZeroPromptTokens(usage) {
   return false;
 }
 
-function withEstimatedPromptTokens(usage, estimate) {
+function withEstimatedPromptTokens(usage, estimate, cumulativeInputUsage = false) {
   const outputTokens = tokenCount(usage.output_tokens ?? usage.completion_tokens) || 0;
   const next = { ...usage, total_tokens: estimate + outputTokens };
-  if ("input_tokens" in usage) next.input_tokens = estimate;
-  if ("prompt_tokens" in usage) next.prompt_tokens = estimate;
+  for (const key of ["input_tokens", "prompt_tokens"]) {
+    if (typeof usage[key] === "number" && Number.isFinite(usage[key]) && usage[key] >= 0) next[key] = estimate;
+  }
+  // Server-side agent steps repeatedly bill the same cached prefix. Their
+  // aggregate input breakdown does not describe this estimated context.
+  // Omit the optional details object as a whole: a missing cached_tokens member
+  // is invalid in Codex, while inventing zero would imply a measured cache miss.
+  // Raw provider billing is observed before this client-only substitution.
+  if (cumulativeInputUsage) {
+    delete next.input_tokens_details;
+    delete next.prompt_tokens_details;
+    delete next.prompt_cache_hit_tokens;
+  }
   return next;
 }
 
 // Returns a copy of a payload whose zero prompt count has been replaced by the
 // estimate, or undefined when the payload does not qualify.
 export function substituteZeroInputUsage(payload, estimate) {
+  return substituteInputUsage(payload, estimate);
+}
+
+// Grok's agentic input usage sums every server-side inference, including
+// repeated history. It measures spend, never the current conversation size.
+// Replace that quantity from the request itself, not by clamping or dividing
+// the aggregate. Other providers retain the explicit-zero-only contract.
+function substituteInputUsage(payload, estimate, cumulativeInputUsage = false) {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return undefined;
   if (!Number.isInteger(estimate) || estimate <= 0) return undefined;
-  if (reportsZeroPromptTokens(payload.usage)) {
-    return { ...payload, usage: withEstimatedPromptTokens(payload.usage, estimate) };
+  const qualifies = (usage) => cumulativeInputUsage
+    ? [usage?.input_tokens, usage?.prompt_tokens].some(value =>
+        typeof value === "number" && Number.isFinite(value) && value >= 0)
+    : reportsZeroPromptTokens(usage);
+  if (qualifies(payload.usage)) {
+    return { ...payload, usage: withEstimatedPromptTokens(payload.usage, estimate, cumulativeInputUsage) };
   }
   const nested = payload.response;
   if (
     nested &&
     typeof nested === "object" &&
     !Array.isArray(nested) &&
-    reportsZeroPromptTokens(nested.usage)
+    qualifies(nested.usage)
   ) {
     return {
       ...payload,
-      response: { ...nested, usage: withEstimatedPromptTokens(nested.usage, estimate) },
+      response: { ...nested, usage: withEstimatedPromptTokens(nested.usage, estimate, cumulativeInputUsage) },
     };
   }
   return undefined;
@@ -386,15 +418,17 @@ export class ResponseUsageTransform extends Transform {
   #reasoningStreamed = false;
   #onEvent;
   #grokServiceTier;
+  #cumulativeInputUsage;
   #outcome = new ResponseOutcomeObserver();
 
-  // `estimatedInputTokens` arrives only on routed requests large enough that a
-  // reported zero cannot be true. Without it this transform observes and
-  // forwards the response byte for byte, exactly as it always did.
-  constructor(contentType = "", { estimatedInputTokens, onEvent, grokServiceTier = false } = {}) {
+  // Zero-count repair uses the router request estimate. Cumulative-input
+  // providers supply an estimate of their final, translated request through
+  // trusted forwarder metadata; the pre-translation body is not equivalent.
+  constructor(contentType = "", { estimatedInputTokens, onEvent, grokServiceTier = false, cumulativeInputUsage = false } = {}) {
     super();
     this.#onEvent = typeof onEvent === "function" ? onEvent : undefined;
     this.#grokServiceTier = grokServiceTier === true;
+    this.#cumulativeInputUsage = cumulativeInputUsage === true;
     const declared = String(contentType).toLowerCase();
     this.#eventStream = declared.includes("text/event-stream");
     // The ChatGPT backend answers /responses with an SSE body and no
@@ -429,7 +463,7 @@ export class ResponseUsageTransform extends Transform {
   }
 
   #transformChunk(chunk) {
-    if (this.#estimate === undefined) {
+    if (this.#estimate === undefined && !this.#cumulativeInputUsage) {
       this.#observeOnly(chunk);
       return;
     }
@@ -455,7 +489,7 @@ export class ResponseUsageTransform extends Transform {
       this.#eventStream = detected.decision === "event-stream";
       for (const buffered of detected.chunks) this.#transformChunk(buffered);
     }
-    if (this.#estimate === undefined) {
+    if (this.#estimate === undefined && !this.#cumulativeInputUsage) {
       this.#buffer += this.#decoder.end();
       if (this.#eventStream) {
         this.#consumeEventLines(true);
@@ -490,8 +524,9 @@ export class ResponseUsageTransform extends Transform {
       return;
     }
     this.#observe(payload);
-    const substituted = substituteZeroInputUsage(payload, this.#estimate);
-    this.#substituted = substituted ? this.#estimate : undefined;
+    const estimate = this.#inputEstimate(payload);
+    const substituted = substituteInputUsage(payload, estimate, this.#cumulativeInputUsage);
+    this.#substituted = substituted ? estimate : undefined;
     this.push(substituted ? Buffer.from(JSON.stringify(substituted), "utf8") : body);
     callback();
   }
@@ -506,6 +541,12 @@ export class ResponseUsageTransform extends Transform {
   // into the usage event.
   substitutedInputTokens() {
     return this.#substituted;
+  }
+
+  #inputEstimate(payload) {
+    if (!this.#cumulativeInputUsage) return this.#estimate;
+    const estimate = (payload.response || payload)?.provider_specific_fields?.grok_context_input_tokens;
+    return Number.isSafeInteger(estimate) && estimate > 0 ? estimate : undefined;
   }
 
   #observeOnly(chunk) {
@@ -561,9 +602,10 @@ export class ResponseUsageTransform extends Transform {
     const content = terminator ? text.slice(0, -terminator.length) : text;
     const payload = this.#observeEventLine(content);
     if (payload === undefined) return undefined;
-    const substituted = substituteZeroInputUsage(payload, this.#estimate);
+    const estimate = this.#inputEstimate(payload);
+    const substituted = substituteInputUsage(payload, estimate, this.#cumulativeInputUsage);
     if (substituted) {
-      this.#substituted = this.#estimate;
+      this.#substituted = estimate;
       return Buffer.from(`data: ${JSON.stringify(substituted)}${terminator}`, "utf8");
     }
     // Codex reads the last usage it is given, so a later event that reports its
@@ -592,7 +634,7 @@ export class ResponseUsageTransform extends Transform {
     try { this.#onEvent?.(payload); } catch { /* Observer failure is non-fatal. */ }
     this.#noteFirstToken(payload);
     this.#outcome.observe(payload);
-    const usage = tokenUsageFromPayload(payload, { grokServiceTier: this.#grokServiceTier });
+    const usage = tokenUsageFromPayload(payload, { grokServiceTier: this.#grokServiceTier, grokContextUsage: this.#cumulativeInputUsage });
     if (usage) {
       // A tier-only terminal event must not erase earlier measured counters.
       this.#usage = usage.inputTokens === undefined

@@ -1,0 +1,1 @@
+- **Keep unknown Grok context-cache usage absent.** Omit the entire optional cache-details object for estimated context while retaining actual cumulative cache billing in Router statistics. This prevents Codex from rejecting an incomplete details object without inventing a zero cache measurement.

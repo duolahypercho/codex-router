@@ -10553,7 +10553,8 @@ test("a subagent effort reaches child turns and leaves parent turns alone", asyn
 // provider sees it -- measured against the real LiteLLM adapter, where the
 // child turn reached the provider at the parent's effort. Drive the authentic
 // client shape so the override has to survive the same precedence.
-test("a subagent effort overrides the effort Codex nested in the reasoning object", async () => {
+for (const model of ["deepseek/deepseek-v4-pro", "grok-oauth/grok-4.7"]) {
+test(`a subagent effort overrides the effort Codex nested in the reasoning object (${model})`, async () => {
   const stateDir = mkdtempSync(path.join(os.tmpdir(), "subagent-effort-nested-"));
   // Written directly rather than through setSubagentEffort: paths.mjs resolves
   // the state directory once per process, so a second in-process import lands
@@ -10565,7 +10566,7 @@ test("a subagent effort overrides the effort Codex nested in the reasoning objec
       mode: "all",
       enabled: [],
       disabled: [],
-      efforts: { "deepseek/deepseek-v4-pro": "max" },
+      efforts: { [model]: "max" },
     })}\n`,
     { mode: 0o600 },
   );
@@ -10577,7 +10578,7 @@ test("a subagent effort overrides the effort Codex nested in the reasoning objec
       return;
     }
     const body = await bodyJson(request);
-    seen.push({ reasoning: body.reasoning, effort: body.reasoning_effort });
+    seen.push({ reasoning: body.reasoning, effort: body.reasoning_effort, bridge: body.extra_body });
     json(response, 200, {
       id: "resp_effort_nested",
       output: [{ type: "message", content: [{ type: "output_text", text: "ok" }] }],
@@ -10602,7 +10603,7 @@ test("a subagent effort overrides the effort Codex nested in the reasoning objec
       method: "POST",
       headers: { "Content-Type": "application/json", ...headers },
       body: JSON.stringify({
-        model: "deepseek/deepseek-v4-pro",
+        model,
         input: "go",
         reasoning: { effort: "low", summary: "auto" },
       }),
@@ -10634,6 +10635,15 @@ test("a subagent effort overrides the effort Codex nested in the reasoning objec
       "the parent turn was re-tuned by a subagent setting",
     );
     assert.equal(seen[1].effort, undefined, "the parent turn grew a flat effort field");
+    if (model.startsWith("grok-oauth/")) {
+      assert.deepEqual(seen[0].bridge.reasoning_effort, { effort: "max", summary: "auto" },
+        "the Chat bridge retained the parent effort before the child override");
+      assert.deepEqual(seen[1].bridge.reasoning_effort, { effort: "low", summary: "auto" },
+        "the Chat bridge changed the parent effort");
+    } else {
+      assert.equal(seen[0].bridge?.reasoning_effort, undefined,
+        "Grok's bridge changed another provider");
+    }
   } finally {
     // See the sibling test above: removing the state directory out from under
     // a router that has been signalled but not awaited is what produced the
@@ -10643,6 +10653,8 @@ test("a subagent effort overrides the effort Codex nested in the reasoning objec
     rmSync(stateDir, { recursive: true, force: true });
   }
 });
+
+}
 
 // #256: spawning a subagent on opencode-go/deepseek-v4-flash made every
 // following parent request 400 with "The `reasoning_content` in the thinking

@@ -1,0 +1,1 @@
+- **Clarify Codex edit concurrency and add offline native-client diagnostics.** Document the retired model-catalog flag, reproduce lost shell updates alongside parallel-read and native-patch conflict controls, and distinguish protocol relay from client execution safety. This does not change runtime scheduling.

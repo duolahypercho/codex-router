@@ -13,8 +13,8 @@
 //     the xAI OAuth bridge rather than a property of one model: the native
 //     Codex `view_image` name that the upstream declines to call, the V4A
 //     examples that keep `apply_patch` payloads out of markdown fences, the
-//     structured-patch and patch-hook experiments (both off unless their env
-//     switch is set), and the ingress byte split recorded for this bridge.
+//     default typed patches and the separately opt-in client patch hook,
+//     and the ingress byte split recorded for this bridge.
 //     They were proven on grok-4.6 and re-checked on grok-4.7, which is the
 //     same agentic family reached over the same endpoint with the same tool
 //     surface.

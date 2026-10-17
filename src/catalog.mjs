@@ -610,13 +610,13 @@ function isGrokFamily(model) {
 
 // Codex's gpt-5.5 instruction batches reads through multi_tool_use.parallel and
 // pages files with sed. Grok's menu is read_file, grep, list_dir, and
-// search_replace. These are the three paragraphs that made two reads land in
+// replace_lines (or search_replace with a client patch hook). These are the three paragraphs that made two reads land in
 // one response.
 const GROK_WORKSPACE_INSTRUCTION_REPLACEMENTS = Object.freeze([
   ["- When you search for text or files, you reach first for `rg` or `rg --files`; they are much faster than alternatives like `grep`. If `rg` is unavailable, you use the next best tool without fuss.\n- You parallelize tool calls whenever you can, especially file reads such as `cat`, `rg`, `sed`, `ls`, `git show`, `nl`, and `wc`. You use `multi_tool_use.parallel` for that parallelism, and only that. Do not chain shell commands with separators like `echo \"====\";`; the output becomes noisy in a way that makes the user\u2019s side of the conversation worse.",
-   "- When those tools are in the menu, read files with `read_file`, search with `grep`, and list directories with `list_dir`. Do not page through files with `sed`, `cat`, `nl`, or `head`.\n- Independent reads and searches go out together as separate tool calls in the same response. Do not wait for one read before sending the next independent read. `multi_tool_use.parallel` is not available. Do not chain shell commands with separators like `echo \"====\";`.\n- Edit an existing file with `search_replace` when that tool is in the menu. Otherwise use `apply_patch`. A patch that does not need an unseen read can be in the same response as the reads. A patch that depends on a read waits for that result, then goes in the next response."],
+   "- When those tools are in the menu, read files with `read_file`, search with `grep`, and list directories with `list_dir`. Do not page through files with `sed`, `cat`, `nl`, or `head`.\n- Independent reads and searches go out together as separate tool calls in the same response. Do not wait for one read before sending the next independent read. `multi_tool_use.parallel` is not available. Do not chain shell commands with separators like `echo \"====\";`.\n- Edit an existing file with `replace_lines` when available, supplying complete old and new lines with enough surrounding context. Otherwise use `search_replace` if offered, or `apply_patch`. A patch that does not need an unseen read can be in the same response as the reads. A patch that depends on a read waits for that result, then goes in the next response."],
   ["- Use `apply_patch` for manual code edits. Do not create or edit files with `cat` or other shell write tricks. Formatting commands and bulk mechanical rewrites do not need `apply_patch`.\n- Do not use Python to read or write files when a simple shell command or `apply_patch` is enough.",
-   "- Use `search_replace` for manual edits of existing files when it is in the menu. Otherwise use `apply_patch`. Do not create or edit files with `cat`, `sed`, or other shell write tricks. Formatting commands and bulk mechanical rewrites do not need a patch tool.\n- Do not use Python or the shell to read or write files when `read_file`, `grep`, `search_replace`, or `apply_patch` is available."],
+   "- Use `replace_lines` for manual edits of existing files when available, supplying complete old and new lines with enough surrounding context. Otherwise use `search_replace` if offered, or `apply_patch`. Do not create or edit files with `cat`, `sed`, or other shell write tricks. Formatting commands and bulk mechanical rewrites do not need a patch tool.\n- Do not use Python or the shell to read or write files when `read_file`, `grep`, `replace_lines`, `search_replace`, or `apply_patch` is available."],
   ["- Treat ordinary local filesystem paths as files, never as MCP resource URIs. Use an available filesystem or shell tool, such as exec_command, to inspect local files.",
    "- Treat ordinary local filesystem paths as files, never as MCP resource URIs. Inspect them with `read_file`, `grep`, or `list_dir` when those tools are in the menu. Use `run_terminal_command` or `exec_command` for processes such as git, tests, and installs, not for paging through files."],
   ["- Treat ordinary local filesystem paths as files, never as MCP resource URIs. Inspect local files with a filesystem tool that is present in this request's menu.",
@@ -659,10 +659,10 @@ function normalizeNativeModel(model) {
       : NATIVE_PARALLEL_TOOL_CALL_COMPAT.get(String(model.slug)) ?? false;
   return {
     ...model,
-    // Recent Codex clients require this field on every catalog entry. An
-    // absent native declaration is not evidence that parallel calls work, so
-    // make the conservative answer explicit instead of leaving the catalog
-    // unparsable.
+    // Older Codex clients require this field on every catalog entry. Retain
+    // their conservative fallback for compatibility. Current clients removed
+    // this model field and choose execution concurrency per tool; this value
+    // cannot serialize shell writes (see docs/grok-request-diagnostics.md).
     supports_parallel_tool_calls: supportsParallelToolCalls,
     supports_reasoning_summaries:
       typeof model.supports_reasoning_summaries === "boolean"
@@ -751,9 +751,9 @@ export function routedModel(template, model, behaviorTemplate = template) {
     // absent declaration remains the conservative default.
     supports_search_tool: routedModelSearchAvailable(model),
     supports_image_detail_original: model.supportsImageDetailOriginal === true,
-    // A routed model must never inherit a native template's capability. Codex
-    // now requires the key, and `false` is both schema-valid and conservative
-    // until this exact provider/model route declares support.
+    // A routed model must never inherit a native template's capability.
+    // Older clients require this key; current clients ignore this legacy
+    // model field. It is not an execution lock or a file-safety guarantee.
     supports_parallel_tool_calls: model.supportsParallelToolCalls === true,
     use_responses_lite: false,
     // Codex only knows one ApplyPatchToolType variant. The native template

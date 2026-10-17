@@ -53,11 +53,12 @@ function parsed(output) {
   return output.split(/\n\n/).filter(Boolean).map(x => JSON.parse(x.split("\n").find(l => l.startsWith("data: ")).slice(6)));
 }
 
-test("flag is opt-in and applies only to Grok 4.6 OAuth", () => {
-  for (const slug of ["grok-oauth/grok-4.6", "grok-oauth/grok-4.5", "grok-api/grok-4.6", "openai/gpt-6-astra"]) {
-    assert.equal(grokStructuredPatchEnabled({ slug }, {}), false);
-    assert.equal(grokStructuredPatchEnabled({ slug }, { CODEX_ROUTER_GROK_STRUCTURED_PATCH: "1" }), slug === "grok-oauth/grok-4.6");
-    assert.equal(grokStructuredPatchEnabled({ slug }, { CODEX_ROUTER_GROK_STRUCTURED_PATCH: "true" }), false);
+test("typed patches default on for supported OAuth routes; only literal 0 opts out", () => {
+  for (const slug of ["grok-oauth/grok-4.6", "grok-oauth/grok-4.7", "grok-oauth/grok-4.5", "grok-api/grok-4.7", "openai/gpt-6-astra"]) {
+    const supported = ["grok-oauth/grok-4.6", "grok-oauth/grok-4.7"].includes(slug);
+    for (const flag of [undefined, "", "1", "true", "false", "0", " 0"]) {
+      assert.equal(grokStructuredPatchEnabled({ slug }, { CODEX_ROUTER_GROK_STRUCTURED_PATCH: flag }), supported && flag !== "0", `${slug}: ${flag}`);
+    }
   }
 });
 

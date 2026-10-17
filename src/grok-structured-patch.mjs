@@ -5,7 +5,7 @@ import { isGrokOauthAgenticRoute } from "./grok-oauth-routes.mjs";
 // module does not read files, match context, apply edits, or call a provider.
 export const GROK_STRUCTURED_PATCH_VERSION = 1;
 export function grokStructuredPatchEnabled(route, environment = process.env) {
-  return isGrokOauthAgenticRoute(route) && environment.CODEX_ROUTER_GROK_STRUCTURED_PATCH === "1";
+  return isGrokOauthAgenticRoute(route) && environment.CODEX_ROUTER_GROK_STRUCTURED_PATCH !== "0";
 }
 export const MAX_STRUCTURED_PATCH_BYTES = 1024 * 1024;
 const MAX_OPERATIONS = 128;
@@ -156,6 +156,8 @@ function parseArgumentObject(argumentsText) {
   }
 }
 
+// Whole logical lines serialized to native patch syntax. Matching is performed
+// by the client parser, not an exact-substring or uniqueness check here.
 export function compileSearchReplaceArguments(argumentsText) {
   return serializeStructuredPatch(searchReplaceToOperations(parseArgumentObject(argumentsText)));
 }
@@ -261,8 +263,8 @@ const objectSchema = (properties, required = Object.keys(properties)) => ({
   type: "object", properties, required, additionalProperties: false,
 });
 
-// Not installed on any route yet. The request/response bridge must first prove
-// history, collisions and streaming safety before this schema can be offered.
+// The bridge serializes this typed provider interface back to the native
+// client tool; file access, matching and permission checks stay client-owned.
 export const GROK_STRUCTURED_PATCH_PARAMETERS = objectSchema({
   operations: {
     type: "array", minItems: 1, maxItems: MAX_OPERATIONS,
@@ -300,7 +302,7 @@ export const GROK_STRUCTURED_PATCH_CODEC = {
   description(original) {
     return [
       typeof original === "string" ? original : "Apply a patch to files.",
-      "This provider interface accepts structured operations, not raw patch text. Supply literal logical lines without patch delimiters or line prefixes; use context/add/remove kinds inside update hunks. Codex performs the original patch validation and permission checks. Old calls in history may have an input field containing native patch text; that historical envelope is not accepted for new calls.",
+      "This provider interface accepts structured operations, not raw patch text. Supply literal logical lines without patch delimiters or line prefixes; use context/add/remove kinds inside update hunks. An anchor skips past its matching line; do not repeat that line as context or removal in the hunk. For a simple whole-line replacement omit anchor and supply complete removed and added lines. Codex performs the original patch validation, matching and permission checks. Old calls in history may have an input field containing native patch text; that historical envelope is not accepted for new calls.",
     ].filter(Boolean).join("\n\n");
   },
 };

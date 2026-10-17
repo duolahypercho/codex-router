@@ -154,3 +154,70 @@ test("forwarder returns xAI's encrypted reasoning on the next tool-loop request"
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("post-tool recovery carries only the selected successful attempt's encrypted reasoning", async () => {
+  const seen = [];
+  const backend = http.createServer(async (request, response) => {
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk);
+    const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    seen.push(body);
+    const n = seen.length;
+    const events = [
+      { type: "response.output_item.done", item: { ...REASONING, encrypted_content: `ENC_ATTEMPT_${n}` } },
+      // A successful empty answer triggers repair; native text now completes directly.
+      ...(n === 1 ? [] : [
+        { type: "response.output_item.done", item: { type: "function_call", id: `fc_${n}`, call_id: `next_${n}`,
+          name: n === 2 ? "exec_command" : body.tools.filter((tool) => tool.type === "function").at(-1).name,
+          arguments: n === 2 ? '{"cmd":"inspect"}' : '{"answer":"Done."}' } },
+      ]),
+      { type: "response.completed", response: { usage: { input_tokens: 100, output_tokens: 20 } } },
+    ];
+    response.writeHead(200, { "Content-Type": "text/event-stream" });
+    response.end(sse(events));
+  });
+  await new Promise((resolve) => backend.listen(0, "127.0.0.1", resolve));
+  const dir = mkdtempSync(path.join(os.tmpdir(), "grok-recovery-carry-"));
+  const authPath = path.join(dir, "auth.json");
+  writeFileSync(authPath, JSON.stringify({ "https://auth.x.ai::test-client-id": { key: "fake-access" } }), { mode: 0o600 });
+  const port = await openPort();
+  const child = spawn(process.execPath, [path.join(root, "src", "grok-oauth-forwarder.mjs")], {
+    cwd: root, stdio: ["ignore", "ignore", "pipe"],
+    env: { ...process.env, MODEL_ROUTER_TARGET: "codex", MODEL_ROUTER_INTERNAL_KEY: INTERNAL_KEY,
+      MODEL_ROUTER_GROK_OAUTH_PORT: String(port), GROK_CLI_CHAT_PROXY_BASE_URL: `http://127.0.0.1:${backend.address().port}`,
+      GROK_CLI: writeGrokVersionCli(dir), GROK_AUTH_PATH: authPath,
+      MODEL_ROUTER_STATE_DIR: path.join(dir, "state"), MODEL_ROUTER_QUIET: "1", CODEX_ROUTER_GROK_PROGRESS_ONLY_RETRY: "1" },
+  });
+  const base = `http://127.0.0.1:${port}`;
+  const headers = { Authorization: `Bearer ${INTERNAL_KEY}`, "Content-Type": "application/json" };
+  const messages = [{ role: "system", content: "fixture" }, { role: "user", content: "complete fixture task" },
+    { role: "assistant", tool_calls: [{ id: "old", type: "function", function: { name: "exec_command", arguments: "{}" } }] },
+    { role: "tool", tool_call_id: "old", content: "done" }];
+  const post = () => fetch(`${base}/v1/chat/completions`, { method: "POST", headers,
+    body: JSON.stringify({ model: "grok-4.7", messages,
+      tools: [{ type: "function", function: { name: "exec_command", parameters: { type: "object" } } }] }) });
+  try {
+    let healthy = false;
+    for (let i = 0; i < 100; i++) {
+      try { if ((await fetch(`${base}/health`, { headers })).ok) { healthy = true; break; } } catch {}
+      await new Promise((resolve) => setTimeout(resolve, 40));
+    }
+    assert.equal(healthy, true);
+    const first = await post();
+    assert.equal(first.status, 200);
+    const json = await first.json();
+    assert.equal(seen.length, 2);
+    assert.equal(json.choices[0].message.tool_calls[0].id, "next_2");
+    messages.push(json.choices[0].message, { role: "tool", tool_call_id: "next_2", content: "checked" });
+    const second = await post();
+    assert.equal(second.status, 200);
+    assert.equal((await second.json()).choices[0].message.content, "Done.");
+    assert.equal(seen.length, 3);
+    assert.deepEqual(seen[2].input.filter((item) => item.type === "reasoning").map((item) => item.encrypted_content), ["ENC_ATTEMPT_2"]);
+  } finally {
+    child.kill("SIGTERM");
+    await new Promise((resolve) => child.once("exit", resolve));
+    await new Promise((resolve) => backend.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

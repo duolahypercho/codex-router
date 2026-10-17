@@ -11,6 +11,7 @@
       "description": "Grok 4.7 through the official Grok CLI OAuth session with long-running agentic coding, tool calls, and hosted web/X search.",
       "priority": 1,
       "defaultEffort": "high",
+      "serviceTiers": [{ "id": "priority", "name": "Fast", "description": "Use priority processing when available." }],
       "reasoningLevels": [
         {
           "effort": "low",

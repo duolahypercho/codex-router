@@ -1,0 +1,1 @@
+- Preserve Grok OAuth reasoning levels through the gateway, including reasoning objects with summaries, and record correlated request-stage timings to separate provider latency from local queuing and output buffering without logging prompt content.

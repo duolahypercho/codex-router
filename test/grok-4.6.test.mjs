@@ -77,7 +77,7 @@ test("Grok 4.6 input modalities match catalog documentation", () => {
 test("Grok OAuth 4.6 advertises Fast as an opt-in priority tier without a paid default", () => {
   const model = MODEL_BY_SLUG.get("grok-oauth/grok-4.6");
   assert.deepEqual(model.serviceTiers, [{ id: "priority", name: "Fast", description: "Use priority processing when available." }]);
-  for (const slug of ["grok-oauth/grok-4.5", "commandcode/grok-4.6", "openrouter/grok-4.6", "nousresearch/grok-4.6"]) {
+  for (const slug of ["commandcode/grok-4.6", "openrouter/grok-4.6", "nousresearch/grok-4.6"]) {
     assert.equal(MODEL_BY_SLUG.get(slug).serviceTiers, undefined, `${slug} must not inherit Grok OAuth Fast`);
   }
 });

@@ -127,6 +127,7 @@ export function serviceTierMetadata({
 
 export function usageDiagnosticMetadata({
   requestId,
+  requestKind,
   contextBytes,
   grokStructuredPatch,
   requestedServiceTier,
@@ -143,6 +144,7 @@ export function usageDiagnosticMetadata({
   return {
     ...serviceTierMetadata({ requestedServiceTier }),
     ...(safeRequestId ? { requestId: safeRequestId } : {}),
+    ...(["generation", "compaction"].includes(requestKind) ? { requestKind } : {}),
     ...(safeContextBytes ? { contextBytes: safeContextBytes } : {}),
     ...(safeStructuredPatch ? { grokStructuredPatch: safeStructuredPatch } : {}),
     ...(safeEffort ? { reasoningEffort: safeEffort } : {}),

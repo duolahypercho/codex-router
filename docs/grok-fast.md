@@ -1,11 +1,13 @@
-# Grok OAuth Fast
+# Grok Fast
 
-`grok-oauth/grok-4.6` advertises the optional `priority` service tier as **Fast**.
+All direct xAI presets advertise the optional `priority` service tier as **Fast**:
+Grok OAuth 4.5/4.6/4.7 and Grok API 4.5/4.7.
 The normal tier remains the default. This does not change reasoning effort.
-Other Grok models and providers retain their existing catalog and request behavior.
+Reseller routes retain their provider-specific catalog and request behavior.
 
-After updating Router and republishing its catalog, reopen Codex Desktop if its
-model controls are cached. Select Grok 4.6 and use the native Fast control where
+After updating Router and republishing its catalog, fully quit and reopen Codex
+Desktop: its app-server retains the old static catalog even for new chats.
+Select a direct Grok route and use the native Fast control where
 the client supports service tiers. Router does not enable Fast globally.
 Desktop versions may use generic speed multipliers in their tooltip; those are
 not a measurement of Grok throughput. See xAI's [Priority Processing contract](https://docs.x.ai/developers/advanced-api-usage/priority-processing)
@@ -14,15 +16,15 @@ subscription billing or account entitlement.
 
 ## Transport and measurements
 
-LiteLLM 1.96.0 drops the normal Responses `service_tier` argument on the Chat
-bridge, so Router copies known values into `extra_body` on this exact route.
-The Grok forwarder copies the value only for upstream model `grok-4.6`. A
+The locked LiteLLM bridge drops the normal Responses `service_tier` argument on
+the Chat bridge, so Router copies known values into `extra_body` on direct Grok
+routes that advertise Fast. Both OAuth and API forwarders preserve it. A
 routed body keeps `service_tier` only when the route serving it advertises that
 tier (checked-in or curated `serviceTiers`): a turn that fails over from Grok
-4.6 to another model, or a compaction for another route, is never sent a
+to another model, or a compaction for another route, is never sent a
 priority request that route did not offer.
 
-The actual tier is taken only from the upstream terminal response. Streaming
+The actual tier is taken only from upstream response metadata. Streaming
 Chat responses carry a bounded `provider_specific_fields.grok_service_tier`
 marker on their finish chunk; a usage-only chunk does not survive the bridge.
 Non-streaming responses also carry a private service-tier header. The configured
@@ -49,6 +51,10 @@ node scripts/verify-grok-service-tier.mjs .venv/bin/python
 
 On Windows pass `.venv/Scripts/python.exe`. The protocol workflow runs this on
 Linux, macOS, and Windows. Cases cover HTTP streaming, HTTP JSON and WebSocket,
-grant/fallback/missing/unknown tiers, omitted/default requests, Grok 4.5 as a
-negative control, usage privacy, and exact preservation of 1000 text fragments.
+grant/fallback/missing/unknown tiers, omitted/default requests, all three OAuth
+models, usage privacy, and exact preservation of 1000 text fragments. API
+forwarder fixtures cover both API presets and keep other providers unchanged.
 This is protocol correctness evidence, not a comparative speed benchmark.
+
+For reasoning preservation and correlated latency stages, see
+[Grok request diagnostics](grok-request-diagnostics.md).

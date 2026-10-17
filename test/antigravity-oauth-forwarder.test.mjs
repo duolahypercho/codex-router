@@ -103,10 +103,22 @@ function writeTestToken(directory, { verified = true, overrides = {} } = {}) {
   return tokenPath;
 }
 
-function startForwarder(port, upstreamUrl, tokenPath, extraEnv = {}) {
+function startForwarder(port, upstreamUrl, tokenPath, extraEnv = {}, { bodyReadBarrier = false } = {}) {
+  // Observe the real body-reader boundary in the child. A wall-clock delay
+  // after request.write() cannot prove the server has admitted that session.
+  const preload = bodyReadBarrier ? `data:text/javascript,${encodeURIComponent(`
+    import { IncomingMessage } from "node:http";
+    const iterate = IncomingMessage.prototype[Symbol.asyncIterator];
+    IncomingMessage.prototype[Symbol.asyncIterator] = function (...args) {
+      if (this.method === "POST" && this.url === "/v1/chat/completions") {
+        process.send({ type: "test-body-read-started" });
+      }
+      return iterate.apply(this, args);
+    };
+  `)}` : undefined;
   const child = spawn(
     process.execPath,
-    [path.join(root, "src", "antigravity-oauth-forwarder.mjs")],
+    [...(preload ? ["--import", preload] : []), path.join(root, "src", "antigravity-oauth-forwarder.mjs")],
     {
       cwd: root,
       env: {
@@ -120,7 +132,7 @@ function startForwarder(port, upstreamUrl, tokenPath, extraEnv = {}) {
         MODEL_ROUTER_QUIET: "1",
         ...extraEnv,
       },
-      stdio: ["ignore", "ignore", "pipe"],
+      stdio: ["ignore", "ignore", "pipe", ...(bodyReadBarrier ? ["ipc"] : [])],
     },
   );
   child.stderr.setEncoding("utf8");
@@ -129,6 +141,24 @@ function startForwarder(port, upstreamUrl, tokenPath, extraEnv = {}) {
     errors += chunk;
   });
   child.testErrors = () => errors;
+  if (bodyReadBarrier) {
+    child.waitForBodyRead = () => new Promise((resolve, reject) => {
+      const timer = setTimeout(() => finish(new Error("forwarder did not start reading the request body")), 5_000);
+      const onMessage = (message) => {
+        if (message.type === "test-body-read-started") finish();
+      };
+      const onExit = () => finish(new Error(`forwarder exited before reading the body: ${errors}`));
+      function finish(error) {
+        clearTimeout(timer);
+        child.off("message", onMessage);
+        child.off("exit", onExit);
+        if (error) reject(error);
+        else resolve();
+      }
+      child.on("message", onMessage);
+      child.once("exit", onExit);
+    });
+  }
   return child;
 }
 
@@ -442,12 +472,13 @@ test("a slow request body cannot cross a session replacement", async (t) => {
   }, t);
   const port = await openPort();
   const tokenPath = writeTestToken(directory);
-  const child = startForwarder(port, upstream.url, tokenPath);
+  const child = startForwarder(port, upstream.url, tokenPath, {}, { bodyReadBarrier: true });
   const base = `http://127.0.0.1:${port}`;
   try {
     await waitForForwarder(base, child);
+    const admitted = child.waitForBodyRead();
     const slow = beginSlowChatRequest(base);
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    await admitted;
     writeTestToken(directory, {
       overrides: {
         session_generation: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
@@ -476,12 +507,13 @@ test("a slow request body cannot outlive proof invalidation", async (t) => {
   }, t);
   const port = await openPort();
   const tokenPath = writeTestToken(directory);
-  const child = startForwarder(port, upstream.url, tokenPath);
+  const child = startForwarder(port, upstream.url, tokenPath, {}, { bodyReadBarrier: true });
   const base = `http://127.0.0.1:${port}`;
   try {
     await waitForForwarder(base, child);
+    const admitted = child.waitForBodyRead();
     const slow = beginSlowChatRequest(base);
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    await admitted;
     writeTestToken(directory, { verified: false });
     slow.request.end('{"role":"user","content":"must stay local"}]}');
     const result = await slow.responsePromise;

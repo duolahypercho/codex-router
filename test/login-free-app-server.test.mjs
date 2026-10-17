@@ -18,6 +18,7 @@ import { fileURLToPath } from "node:url";
 
 import { codexCandidatePaths, findCodexBinary } from "../src/codex-binary.mjs";
 import { handleResponsesWebSocketUpgrade } from "../src/responses-websocket.mjs";
+import { WebSocketFrameParser } from "../src/ws-frames.mjs";
 import { spawnableCommand } from "../src/spawnable-command.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -288,7 +289,15 @@ async function verifySignedOutTurn(binary, { initialProvider = "openai" } = {}) 
     await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
     const port = server.address().port;
     server.on("upgrade", (request, socket, head) => {
-      upgrades.push({ headers: request.headers, url: request.url });
+      const upgrade = { headers: request.headers, url: request.url, frames: [], errors: [] };
+      upgrades.push(upgrade);
+      const observer = new WebSocketFrameParser({
+        expectMasked: true,
+        onText: (text) => upgrade.frames.push(JSON.parse(text)),
+        onFail: (code, reason) => upgrade.errors.push({ code, reason }),
+      });
+      socket.on("data", (chunk) => observer.feed(chunk));
+      if (head.length) observer.feed(head);
       upgradedSockets.add(socket);
       socket.once("close", () => upgradedSockets.delete(socket));
       handleResponsesWebSocketUpgrade(request, socket, head, {
@@ -349,9 +358,20 @@ async function verifySignedOutTurn(binary, { initialProvider = "openai" } = {}) 
     const notifications = await runAppServerTurn(binary, env, model, expectedProvider);
     assert.equal(requests.length, 1);
     if (upgrades.length > 0) {
-      assert.equal(upgrades.length, 1);
-      assert.equal(upgrades[0].url, "/v1/responses");
-      assert.equal(upgrades[0].headers.authorization, `Bearer ${CALLER_KEY}`);
+      // Codex may open a startup prewarm connection separately from the turn.
+      // Count actual generation frames, not authenticated transport setup.
+      for (const upgrade of upgrades) {
+        assert.equal(upgrade.url, "/v1/responses");
+        assert.equal(upgrade.headers.authorization, `Bearer ${CALLER_KEY}`);
+        assert.deepEqual(upgrade.errors, []);
+        assert.ok(upgrade.frames.every((frame) => frame.type === "response.create"));
+      }
+      assert.equal(
+        upgrades.flatMap((upgrade) => upgrade.frames)
+          .filter((frame) => frame.generate !== false).length,
+        1,
+        "prewarm connections must not generate duplicate model requests",
+      );
       assert.equal(
         requests[0].url,
         `/_codex-router/${CALLER_KEY}/v1/responses`,

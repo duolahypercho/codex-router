@@ -215,19 +215,20 @@ test("isProgressOnlyStop requires short text, no tools, and enough output tokens
   );
 });
 
-test("isProgressOnlyStop retries a cheap stop after a tool result", () => {
+test("isProgressOnlyStop repairs only an empty completed response after a tool result", () => {
   const stop = {
     terminalStatus: "completed",
     contentText: "The figures are ready.",
     toolCalls: [],
     usage: { completion_tokens: 95 },
   };
-  assert.equal(isProgressOnlyStop(stop, { afterToolResult: true }), true);
+  assert.equal(isProgressOnlyStop(stop, { afterToolResult: true }), false);
+  assert.equal(isProgressOnlyStop({ ...stop, contentText: " \n" }, { afterToolResult: true }), true);
   assert.equal(isProgressOnlyStop(stop), false);
   assert.equal(isProgressOnlyStop({ ...stop, toolCalls: [{ id: "c1" }] }, { afterToolResult: true }), false);
 });
 
-test("isProgressOnlyStop requires certification for long prose after a tool result", () => {
+test("isProgressOnlyStop accepts native long prose after a tool result", () => {
   assert.equal(
     isProgressOnlyStop(
       {
@@ -238,7 +239,7 @@ test("isProgressOnlyStop requires certification for long prose after a tool resu
       },
       { afterToolResult: true },
     ),
-    true,
+    false,
   );
 });
 
@@ -306,14 +307,14 @@ test("withProgressOnlyNudge leads with continue after a tool result", () => {
   );
   assert.equal(nudged.messages.at(-1).role, "developer");
   assert.match(nudged.messages.at(-1).content, /^The previous tool call finished/);
-  assert.match(nudged.messages.at(-1).content, /call the next task tool/);
+  assert.match(nudged.messages.at(-1).content, /Call the next task tool/);
   assert.match(nudged.messages.at(-1).content, new RegExp(REPAIR_FINAL_TOOL));
-  assert.equal(nudged.tool_choice, "required");
+  assert.equal(nudged.tool_choice, "auto");
   assert.equal(nudged.tools.at(-1).function.name, REPAIR_FINAL_TOOL);
   assert.doesNotMatch(nudged.messages.at(-1).content, /^If your previous message already completed/);
 });
 
-test("classifyAfterToolRepair accepts only tools or a certified non-empty final answer", () => {
+test("classifyAfterToolRepair accepts tools, native text and an optional private final", () => {
   assert.deepEqual(
     classifyAfterToolRepair({
       terminalStatus: "completed",
@@ -332,8 +333,11 @@ test("classifyAfterToolRepair accepts only tools or a certified non-empty final 
     { action: "final", contentText: "Done." },
   );
   assert.deepEqual(classifyAfterToolRepair({ terminalStatus: "completed", toolCalls: [], contentText: "Still working." }), {
-    action: "fail",
+    action: "final", contentText: "Still working.",
   });
+  for (const contentText of [undefined, "", " \n\t"]) {
+    assert.deepEqual(classifyAfterToolRepair({ terminalStatus: "completed", toolCalls: [], contentText }), { action: "fail" });
+  }
   assert.deepEqual(
     classifyAfterToolRepair({
       terminalStatus: "completed",
@@ -349,6 +353,38 @@ test("classifyAfterToolRepair accepts only tools or a certified non-empty final 
   }), {
     action: "fail",
   });
+});
+
+test("post-tool nudge offers its private final only within the explicit client tool capacity", () => {
+  for (const maxTools of [348, 350]) {
+    for (const clientToolCount of [maxTools - 1, maxTools]) {
+      const tools = Array.from({ length: clientToolCount }, (_, index) => ({
+        type: "function", function: { name: `fixture_${index}` },
+      }));
+      const nudged = withProgressOnlyNudge({ tools, messages: [{ role: "tool", content: "done" }] }, {
+        afterToolResult: true, maxTools, clientToolCount,
+      });
+      const offered = clientToolCount < maxTools;
+      assert.equal(nudged.tools.length, offered ? clientToolCount + 1 : clientToolCount);
+      assert.equal(nudged.messages.at(-1).content.includes(REPAIR_FINAL_TOOL), offered);
+      assert.deepEqual(classifyAfterToolRepair({ terminalStatus: "completed", toolCalls: [{
+        function: { name: REPAIR_FINAL_TOOL, arguments: '{"answer":"Done."}' },
+      }] }, { privateFinalOffered: offered, clientToolNames: new Set(tools.map(tool => tool.function.name)) }),
+      offered ? { action: "final", contentText: "Done." } : { action: "fail" });
+    }
+  }
+});
+
+test("native final text still requires a successful terminal", () => {
+  for (const terminalStatus of ["completed", "failed", "incomplete", "missing"]) {
+    const turn = collectResponsesEvents([
+      { type: "response.output_text.delta", delta: "Native final answer." },
+      ...(terminalStatus === "missing" ? [] : [{ type: `response.${terminalStatus}` }]),
+    ]);
+    assert.deepEqual(classifyAfterToolRepair(turn), terminalStatus === "completed"
+      ? { action: "final", contentText: "Native final answer." }
+      : { action: "fail" });
+  }
 });
 
 test("only response.completed certifies a tool call or private final answer", () => {

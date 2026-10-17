@@ -36,13 +36,15 @@ function positiveInteger(value) {
 // bad sample would talk an operator into doubling a correct number.
 // provider-usage.mjs drops these same events from its throughput math for the
 // same reason: a merged pair is not one measurement. Newer Grok OAuth repair
-// rows keep the selected attempt in `inputTokens` and the aggregate cost in
-// `billedInputTokens`; those are valid context measurements. Older rows only
-// have the retry marker and remain excluded because their count was summed.
+// rows keep selected-attempt billing separately, but even one Grok attempt
+// can include many server-side search inferences. Neither old nor new Grok
+// usage rows establish the size of a single accepted prompt.
 // Bare `retries` is not excluded — a transport retry records only the
 // successful attempt's tokens.
 export function acceptedInputTokens(event) {
   if (event?.status !== 200) return undefined;
+  if (event?.provider === "grok-oauth" ||
+      (typeof event?.model === "string" && event.model.startsWith("grok-oauth/"))) return undefined;
   if (event?.estimatedInputTokens !== undefined) return undefined;
   if (event?.emptyCompletionRetried === true) return undefined;
   if (event?.progressOnlyRetried === true && event?.billedInputTokens === undefined) {

@@ -1,0 +1,1 @@
+- **Offer Fast on every direct Grok preset.** OAuth 4.5/4.6/4.7 and xAI API 4.5/4.7 can request priority processing without making it the default. Usage distinguishes the requested tier from the tier actually confirmed by the provider.

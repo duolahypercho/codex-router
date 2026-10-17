@@ -254,7 +254,7 @@ test("grok family rewrites workspace reads onto its own tools", () => {
   assert.match(model.base_instructions, /based on Grok 4\.7/);
   assert.match(model.base_instructions, /read files with `read_file`/);
   assert.match(model.base_instructions, /separate tool calls in the same response/);
-  assert.match(model.base_instructions, /search_replace` for manual edits/);
+  assert.match(model.base_instructions, /replace_lines` for manual edits/);
   assert.match(model.base_instructions, /not for paging through files/);
   assert.match(model.base_instructions, /`multi_tool_use\.parallel` is not available/);
   assert.doesNotMatch(model.base_instructions, /You use `multi_tool_use\.parallel` for that parallelism/);

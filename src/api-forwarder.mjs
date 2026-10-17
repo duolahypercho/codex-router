@@ -70,6 +70,7 @@ import { relayCommandCodeGenerate } from "./commandcode-relay.mjs";
 import { VERSION } from "./version.mjs";
 import { installStableFetchTransport } from "./fetch-transport.mjs";
 import { zaiCacheUsageTransform } from "./zai-cache-usage.mjs";
+import { GrokChatServiceTierTransform, grokChatServiceTierBody } from "./grok-service-tier-compat.mjs";
 import {
   buildNamespaceLookupsFromTools,
   createResponsesJsonTransform,
@@ -1658,6 +1659,17 @@ async function relayUpstreamResponse(
   telemetryUpstream = upstream,
 ) {
   const upstreamContentType = upstream.headers.get("content-type") || "";
+  const grokChat = normalized.provider.id === "grok-api" && normalized.route === "/chat/completions" && upstream.ok;
+  const grokStream = grokChat && upstreamContentType.toLowerCase().includes("text/event-stream");
+  if (grokChat && upstream.body && upstreamContentType.toLowerCase().includes("application/json")) {
+    const actual = grokChatServiceTierBody(await readResponseBody(upstream));
+    if (actual.serviceTier) response.setHeader("x-codex-router-grok-service-tier", actual.serviceTier);
+    const headers = new Headers(upstream.headers);
+    headers.delete("content-length");
+    headers.delete("content-encoding");
+    headers.delete("x-codex-router-grok-service-tier");
+    upstream = new Response(actual.body, { status: upstream.status, statusText: upstream.statusText, headers });
+  }
   if (
     normalized.provider.id === "clinepass" &&
     normalized.route === "/chat/completions" &&
@@ -1756,14 +1768,17 @@ async function relayUpstreamResponse(
         })
       : undefined,
     responsesJson ? createResponsesJsonTransform(flatToNative) : undefined,
+    grokStream ? new GrokChatServiceTierTransform() : undefined,
     zaiCacheUsageTransform(normalized.provider.id, upstreamContentType),
   ].filter(Boolean);
   const denylist = transform.length
     ? new Set([...HOP_BY_HOP_HEADERS, "content-type"])
     : undefined;
+  if (grokStream) denylist.add("x-codex-router-grok-service-tier");
   if (responsesStream) response.setHeader("Content-Type", "text/event-stream; charset=utf-8");
   if (responsesJson) response.setHeader("Content-Type", "application/json; charset=utf-8");
   if (replayJson && !responsesJson) response.setHeader("Content-Type", upstreamContentType);
+  if (grokStream) response.setHeader("Content-Type", upstreamContentType);
   await pipeResponse(upstream, response, denylist, transform);
   recordUpstreamLimits(normalized, telemetryUpstream);
   if (!QUIET) {

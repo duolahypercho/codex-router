@@ -72,6 +72,7 @@ const PLAIN_TOOL_NAMES = new WeakMap();
 // the moment stored history proves the model already called it: a search may
 // have aged out of the transcript while its call survived.
 const DEFERRED_DEFINITIONS = new WeakMap();
+const TOOL_SCHEMA_ADAPTERS = new WeakMap();
 // A provider-facing function reference can retain the same spelling as a
 // bridged custom/tool-search relay while a later-discovered ordinary function
 // with that native name receives an alias. Object identity is the only honest
@@ -986,7 +987,7 @@ export function jsonArgumentsAreUnambiguous(value, { allowEmpty = false } = {}) 
 // copy.
 export function repairToolSchemaRoot(
   tool,
-  { nonRecursive = false, inlineForeignRefs: inlineRefs = false, declareTypes = false } = {},
+  { nonRecursive = false, inlineForeignRefs: inlineRefs = false, declareTypes = false, schemaAdapter = providerToolSchema } = {},
 ) {
   // Moonshot alone rejects a `$ref` that does not point into `#/$defs/` or one
   // that carries sibling keywords, so only the route that asks for it pays the
@@ -994,7 +995,7 @@ export function repairToolSchemaRoot(
   // The normalizer returns a clean schema by identity, so an ordinary toolset
   // is not copied.
   const relaySchema = (schema) => {
-    const repaired = providerToolSchema(schema);
+    const repaired = schemaAdapter(schema);
     const inlined = inlineRefs ? inlineForeignRefs(repaired) : repaired;
     // After inlining, so a type is declared on the branches a `$ref` brought in
     // rather than only on the reference that pointed at them.
@@ -1020,6 +1021,7 @@ export function repairToolSchemaRoot(
       const repaired = repairToolSchemaRoot(child, {
         nonRecursive,
         inlineForeignRefs: inlineRefs,
+        schemaAdapter,
       });
       if (repaired !== child) changed = true;
       return repaired;
@@ -1219,10 +1221,10 @@ export function stripUnissuedEncryptedReasoningInclude(include) {
   return next.length > 0 ? next : undefined;
 }
 
-function flattenNamespaceChild(namespace, fn, providerName) {
+function flattenNamespaceChild(namespace, fn, providerName, schemaAdapter = providerToolSchema) {
   const clientSchema = fn.parameters ?? fn.inputSchema;
   const parameters =
-    clientSchema === undefined ? undefined : providerToolSchema(clientSchema);
+    clientSchema === undefined ? undefined : schemaAdapter(clientSchema);
   // `defer_loading` is a Codex/Responses registration flag, not a provider one.
   // A search-discovered definition still carries it, and a tool the provider
   // can call must not describe itself as one it cannot see.
@@ -1263,11 +1265,12 @@ const APP_CONNECTOR_NAMESPACE_PREFIX = "mcp__codex_apps__";
 // never found, so a stale entry costs nothing.
 export function flattenNamespaceTools(
   tools,
-  { bridgeToolSearch = true, maxNameLength, aliasCollisions = false } = {},
+  { bridgeToolSearch = true, maxNameLength, aliasCollisions = false, schemaAdapter = providerToolSchema } = {},
 ) {
   if (!Array.isArray(tools)) return { tools, flattened: false, namespaces: new Map() };
   const flattened = [];
   const namespaces = new Map();
+  TOOL_SCHEMA_ADAPTERS.set(namespaces, schemaAdapter);
   const plainToolNames = new Set();
   PLAIN_TOOL_NAMES.set(namespaces, plainToolNames);
   initializeNameAliases(namespaces, tools, maxNameLength, aliasCollisions);
@@ -1325,7 +1328,7 @@ export function flattenNamespaceTools(
       changed = true;
       if (bridgeToolSearch && tool.execution === "client" && !toolSearchRelay) {
         const parameters =
-          tool.parameters === undefined ? undefined : providerToolSchema(tool.parameters);
+          tool.parameters === undefined ? undefined : schemaAdapter(tool.parameters);
         const description = providerToolSearchDescription(tool.description, toolSearchName);
         flattened.push({
           type: "function",
@@ -1379,13 +1382,13 @@ export function flattenNamespaceTools(
           changed = true;
           names.add(fn.name);
           deferredDefinitions.set(providerName, {
-            tool: flattenNamespaceChild(tool.name, fn, providerName),
+            tool: flattenNamespaceChild(tool.name, fn, providerName, schemaAdapter),
             namespace: tool.name,
             name: fn.name,
           });
           continue;
         }
-        flattened.push(flattenNamespaceChild(tool.name, fn, providerName));
+        flattened.push(flattenNamespaceChild(tool.name, fn, providerName, schemaAdapter));
         names.add(fn.name);
       }
       if (names.size > 0) {
@@ -1402,7 +1405,7 @@ export function flattenNamespaceTools(
     // the flattened children left every client-declared tool to fail on the
     // provider that objects. `providerToolSchema` returns anything it does not
     // recognize unchanged, so a tool with an ordinary root is not copied.
-    let repaired = repairToolSchemaRoot(tool);
+    let repaired = repairToolSchemaRoot(tool, { schemaAdapter });
     const name = tool?.type === "function" ? providerFunctionName(repaired) : undefined;
     if (typeof name === "string" && name) {
       const providerName = providerNameForNative(namespaces, undefined, name);
@@ -1572,6 +1575,7 @@ function validToolSearchHistoryArguments(value) {
 
 function discoveredProviderTools(toolSpecs, namespaces) {
   if (!Array.isArray(toolSpecs)) return [];
+  const schemaAdapter = TOOL_SCHEMA_ADAPTERS.get(namespaces) || providerToolSchema;
   const discovered = [];
   for (const tool of toolSpecs) {
     if (tool?.type === "namespace" && typeof tool.name === "string" && Array.isArray(tool.tools)) {
@@ -1582,6 +1586,7 @@ function discoveredProviderTools(toolSpecs, namespaces) {
             tool.name,
             fn,
             providerNameForNative(namespaces, tool.name, fn.name),
+            schemaAdapter,
           ),
           native: { namespace: tool.name, name: fn.name },
           nativeName: fn.name,
@@ -1593,7 +1598,7 @@ function discoveredProviderTools(toolSpecs, namespaces) {
     if (tool?.type !== "function" || !providerFunctionName(tool)) continue;
     const nativeName = providerFunctionName(tool);
     const providerName = providerNameForNative(namespaces, undefined, nativeName);
-    let providerTool = repairToolSchemaRoot(tool);
+    let providerTool = repairToolSchemaRoot(tool, { schemaAdapter });
     if (providerName !== nativeName) {
       providerTool = withProviderFunctionName(providerTool, providerName);
     }

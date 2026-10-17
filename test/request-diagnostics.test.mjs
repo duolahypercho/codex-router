@@ -73,6 +73,10 @@ test("contextBytes is only measured for Grok OAuth 4.6 ingress", () => {
 });
 
 test("diagnostic metadata keeps only bounded requestId and contextBytes", () => {
+  for (const requestKind of ["generation", "compaction"]) {
+    assert.deepEqual(usageDiagnosticMetadata({ requestKind }), { requestKind });
+  }
+  assert.deepEqual(usageDiagnosticMetadata({ requestKind: "private prompt" }), {});
   assert.equal(safeDiagnosticRequestId("12"), "12");
   assert.equal(safeDiagnosticRequestId(7), "7");
   assert.equal(
@@ -123,6 +127,7 @@ test("usage events persist requestId and contextBytes without content leakage", 
       status: 200,
       durationMs: 10,
       requestId: "42",
+      requestKind: "compaction",
       grokStructuredPatch: { enabled: true, applied: true, schemaVersion: 1, prompt: "never persisted" },
       contextBytes: measureIngressContextBytes({
         instructions: "keep this out of the ledger",
@@ -136,6 +141,7 @@ test("usage events persist requestId and contextBytes without content leakage", 
     });
     const [event] = usage.recentUsageEvents();
     assert.equal(event.requestId, "42");
+    assert.equal(event.requestKind, "compaction");
     assert.deepEqual(event.grokStructuredPatch, { enabled: true, applied: true, schemaVersion: 1 });
     assert.deepEqual(event.contextBytes, {
       observationPoint: ROUTER_INGRESS_OBSERVATION_POINT,
@@ -146,6 +152,7 @@ test("usage events persist requestId and contextBytes without content leakage", 
       ]),
     });
     const raw = readFileSync(usage.USAGE_EVENTS_PATH, "utf8");
+    assert.equal(JSON.parse(raw).requestKind, "compaction");
     assert.equal(raw.includes("keep this out of the ledger"), false);
     assert.equal(raw.includes("/secret/notes.md"), false);
     assert.equal(raw.includes("private turn"), false);

@@ -490,6 +490,7 @@ test(
     const directory = mkdtempSync(path.join(os.tmpdir(), "model-overlay-nested-signal-"));
     const statePath = path.join(directory, "selection.json");
     const readyPath = path.join(directory, "forward-ready");
+    const ownerReadyPath = path.join(directory, "owner-ready");
     const restoredPath = path.join(directory, "rollback-finished");
     const overlayModule = new URL("../src/model-overlay-publication.mjs", import.meta.url).href;
     const processTreeModule = new URL("../src/process-tree.mjs", import.meta.url).href;
@@ -526,12 +527,15 @@ test(
       "} catch {}",
     ].join("\n");
     const ownerProgram = [
+      'import { writeFileSync } from "node:fs"',
       `import { runProcessTree } from ${JSON.stringify(processTreeModule)}`,
       "try {",
-      `  await runProcessTree(process.execPath, ['--input-type=module', '-e', ${JSON.stringify(transactionProgram)}], {`,
+      `  const running = runProcessTree(process.execPath, ['--input-type=module', '-e', ${JSON.stringify(transactionProgram)}], {`,
       "    childMayOwnProcessTrees: true,",
       "    deadline: Date.now() + 10_000,",
       "  });",
+      `  writeFileSync(${JSON.stringify(ownerReadyPath)}, 'ready');`,
+      "  await running;",
       "} catch {}",
     ].join("\n");
     writeFileSync(statePath, "old", { mode: 0o600 });
@@ -543,7 +547,9 @@ test(
       },
     });
     try {
-      await waitForMarker(readyPath);
+      // A child can run before its parent's synchronous spawn setup finishes.
+      // Signal only once both owners have installed their cleanup barriers.
+      await Promise.all([waitForMarker(ownerReadyPath), waitForMarker(readyPath)]);
       owner.kill("SIGTERM");
       const [code, signal] = await once(owner, "exit");
       assert.equal(signal, null);

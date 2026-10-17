@@ -1,0 +1,134 @@
+{
+  "scope": "Three isolated candidate post-tool final responses; no client tool execution, production listeners, or configuration changes.",
+  "model": "grok-4.7",
+  "effort": "medium",
+  "limits": {
+    "taskRuns": 3,
+    "providerGenerations": 6,
+    "requestMs": 90000,
+    "campaignMs": 300000
+  },
+  "startedAt": "2026-10-16T10:00:54.618Z",
+  "sourceHashes": [
+    {
+      "path": "src/grok-oauth-forwarder.mjs",
+      "sha256": "4558f38768344bd382305ae5c53f37edcc980464c255df17034171e02d1e5adc"
+    },
+    {
+      "path": "src/grok-oauth-turn.mjs",
+      "sha256": "497b62fefd8031a010cc0e7ab8d67652a16c8e2bf5ecac7814f4ff913a5bc25f"
+    },
+    {
+      "path": "src/grok-tool-schema.mjs",
+      "sha256": "60a0320ce428d70dc318f878c03f7c7a74c595fc1cd74b9e88bc1e648c0dc499"
+    }
+  ],
+  "runs": [
+    {
+      "id": 1,
+      "status": "completed",
+      "success": true,
+      "elapsedMs": 4843,
+      "providerRequests": 1,
+      "finalMessages": 1,
+      "unexpectedClientCalls": 0,
+      "httpErrorCode": null,
+      "answerCorrect": true
+    },
+    {
+      "id": 2,
+      "status": "request_timeout",
+      "success": false,
+      "elapsedMs": 90188,
+      "providerRequests": 1,
+      "finalMessages": 0,
+      "unexpectedClientCalls": 0,
+      "httpErrorCode": null,
+      "errorType": "TimeoutError"
+    },
+    {
+      "id": 3,
+      "status": "completed",
+      "success": true,
+      "elapsedMs": 2103,
+      "providerRequests": 1,
+      "finalMessages": 1,
+      "unexpectedClientCalls": 0,
+      "httpErrorCode": null,
+      "answerCorrect": true
+    }
+  ],
+  "providerRequests": [
+    {
+      "runId": 1,
+      "index": 1,
+      "elapsedMs": 4749,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "hasPrivateFinal": true,
+      "toolChoice": "required",
+      "emittedFunctionNames": [
+        "__codex_router_submit_final"
+      ],
+      "publicContentLength": 0,
+      "privateFinalArgumentShapes": [
+        {
+          "jsonValid": true,
+          "keys": [
+            "answer"
+          ],
+          "answerType": "string",
+          "answerLength": 2
+        }
+      ],
+      "inputTokens": 3569,
+      "outputTokens": 48,
+      "cachedTokens": 1152
+    },
+    {
+      "runId": 2,
+      "index": 2,
+      "elapsedMs": 90350,
+      "httpStatus": 200,
+      "terminal": null,
+      "hasPrivateFinal": true,
+      "toolChoice": "required",
+      "emittedFunctionNames": [],
+      "publicContentLength": 0,
+      "privateFinalArgumentShapes": [],
+      "inputTokens": null,
+      "outputTokens": null,
+      "cachedTokens": null,
+      "errorType": "AbortError"
+    },
+    {
+      "runId": 3,
+      "index": 3,
+      "elapsedMs": 1741,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "hasPrivateFinal": true,
+      "toolChoice": "required",
+      "emittedFunctionNames": [
+        "__codex_router_submit_final"
+      ],
+      "publicContentLength": 0,
+      "privateFinalArgumentShapes": [
+        {
+          "jsonValid": true,
+          "keys": [
+            "answer"
+          ],
+          "answerType": "string",
+          "answerLength": 2
+        }
+      ],
+      "inputTokens": 3569,
+      "outputTokens": 49,
+      "cachedTokens": 1152
+    }
+  ],
+  "finishedAt": "2026-10-16T10:02:32.023Z",
+  "successes": 2,
+  "allPassed": false
+}

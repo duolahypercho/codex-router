@@ -36,6 +36,9 @@ test("Grok file-tool overlay is available without replacing the catalog MCP over
 });
 
 test("file-tool overlay only names the installed façade tools", () => {
+  const linesOnly = grokFileToolsOverlayFor(new Set(["replace_lines"]));
+  assert.match(linesOnly, /replace_lines.*complete old and new lines/);
+  assert.doesNotMatch(linesOnly, /search_replace|run_terminal_command|read_file/);
   const searchOnly = grokFileToolsOverlayFor(new Set(["search_replace"]));
   assert.match(searchOnly, /search_replace/);
   assert.doesNotMatch(searchOnly, /read_file/);

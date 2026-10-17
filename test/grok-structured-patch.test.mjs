@@ -199,3 +199,14 @@ test("schema only offers add/update/delete with typed lines, no raw patch escape
   assert.ok(alternatives.every((s) => s.additionalProperties === false));
   assert.equal(JSON.stringify(GROK_STRUCTURED_PATCH_PARAMETERS).includes('"raw_patch"'), false);
 });
+
+
+test("whole-line replacement emits no skip anchor and preserves unchanged selection context", () => {
+  const patch = compileSearchReplaceArguments(JSON.stringify({
+    path: "sample.js", old_string: "function sample() {\n  return 1;\n}",
+    new_string: "function sample() {\n  return 2;\n}",
+  }));
+  assert.equal(patch, ["*** Begin Patch", "*** Update File: sample.js", "@@",
+    "-function sample() {", "-  return 1;", "-}", "+function sample() {", "+  return 2;", "+}", "*** End Patch"].join("\n"));
+  assert.ok(!patch.includes("@@ function"));
+});
