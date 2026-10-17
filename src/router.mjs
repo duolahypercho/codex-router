@@ -461,6 +461,26 @@ function applyRoutedServiceTier(body, payload, route) {
   if (tier) body.extra_body = { ...(body.extra_body || {}), service_tier: tier };
   return body;
 }
+
+function applyGlmChatReasoningEffort(body, route, provider) {
+  if (
+    route?.requestProfile !== "glm-thinking" ||
+    (route.reasoningLevels?.length ?? 0) <= 1 ||
+    provider?.protocol === "openai-responses" ||
+    (provider?.keyless && provider.transport === "ollama")
+  ) {
+    return body;
+  }
+  const effort = body.reasoning?.effort ?? body.reasoning_effort;
+  if (effort == null) return body;
+  const extraBody = body.extra_body;
+  if (extraBody != null && (typeof extraBody !== "object" || Array.isArray(extraBody))) {
+    return body;
+  }
+  // Locked LiteLLM drops this unknown-model parameter unless it travels in extra_body.
+  body.extra_body = { ...(extraBody ?? {}), reasoning_effort: effort };
+  return body;
+}
 const configuredEmptyCompletionPreludeBytes = Number(
   process.env.CODEX_ROUTER_EMPTY_COMPLETION_PRELUDE_BYTES || 1024 * 1024,
 );
@@ -4099,6 +4119,7 @@ async function buildRoutedRequest({ request, payload, route, agedInput }) {
     if (!deepSeekResponses) routed.reasoning_effort = childEffort;
     routed.reasoning = { ...(routed.reasoning || {}), effort: childEffort };
   }
+  applyGlmChatReasoningEffort(routed, route, provider);
   normalizeAutoToolChoice(routed, route);
   // Native OpenAI traffic keeps client_metadata and access_programs; routed
   // providers do not consume them and the strict ones reject the unknown field.

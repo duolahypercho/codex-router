@@ -1394,7 +1394,11 @@ function normalizeBody(buffer, contentType, route) {
     // list is what goes stale when a route is added.
     const levels = (model.reasoningLevels || []).map((level) => level.effort);
     if (levels.length > 1) {
-      payload.reasoning_effort = declaredEffort(payload.reasoning_effort, levels);
+      const requestedEffort =
+        payload.reasoning_effort && typeof payload.reasoning_effort === "object"
+          ? payload.reasoning_effort.effort
+          : payload.reasoning_effort;
+      payload.reasoning_effort = declaredEffort(requestedEffort, levels);
     } else {
       delete payload.reasoning_effort;
     }
