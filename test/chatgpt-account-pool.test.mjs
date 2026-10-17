@@ -540,6 +540,22 @@ test("account removal refuses a symlinked ancestor without deleting external dat
   assert.equal(readChatGPTAccountPoolState(options.filePath).accounts[account.id].id, account.id);
 });
 
+test("saved user identity survives normalization and malformed bindings fail closed", () => {
+  const options = fixture();
+  const account = createChatGPTSubscriptionAccount(options);
+  const state = readChatGPTAccountPoolState(options.filePath);
+  state.accounts[account.id].identity = { accountId: "workspace", userId: "user" };
+  writeChatGPTAccountPoolState(state, options.filePath);
+  assert.deepEqual(readChatGPTAccountPoolState(options.filePath).accounts[account.id].identity, state.accounts[account.id].identity);
+  for (const userId of [null, 123, "", "bad\u0000user", "x".repeat(257)]) {
+    state.accounts[account.id].identity.userId = userId;
+    const damaged = JSON.stringify(state);
+    writeFileSync(options.filePath, damaged, { mode: 0o600 });
+    assert.throws(() => readChatGPTAccountPoolState(options.filePath), /invalid identity/i);
+    assert.equal(readFileSync(options.filePath, "utf8"), damaged);
+  }
+});
+
 test("an existing malformed account list fails closed and is never replaced as first-run state", () => {
   const options = fixture();
   const damaged = '{"version":1,"policy":';

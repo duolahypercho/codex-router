@@ -97,7 +97,9 @@ function normalizePolicy(raw = {}) {
 function normalizeIdentity(raw) {
   const value = text(raw?.accountId);
   if (!value || value.length > 256 || /[\u0000-\u001f\u007f]/.test(value)) return undefined;
-  return { accountId: value, ...(text(raw.email) ? { email: text(raw.email).slice(0, 320) } : {}) };
+  const userId = text(raw.userId);
+  if (raw.userId !== undefined && (!userId || userId.length > 256 || /[\u0000-\u001f\u007f]/.test(userId))) return undefined;
+  return { accountId: value, ...(userId ? { userId } : {}), ...(text(raw.email) ? { email: text(raw.email).slice(0, 320) } : {}) };
 }
 function normalizeHealth(raw) {
   const source = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};

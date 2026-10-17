@@ -45,7 +45,6 @@ import {
   createChatGPTSubscriptionAccount,
   chatGPTSubscriptionAccountHome,
   chatGPTSubscriptionAccountAuthPath,
-  chatGPTSubscriptionAccountStatus,
   hardenChatGPTSubscriptionAccountAuth,
   isChatGPTAccountId,
   readChatGPTAccountPoolState,
@@ -325,6 +324,8 @@ function writeSwitchTransaction({
       target,
       activeAccountId: identity.accountId,
       targetAccountId: targetIdentity.accountId,
+      ...(identity.userId ? { activeUserId: identity.userId } : {}),
+      ...(targetIdentity.userId ? { targetUserId: targetIdentity.userId } : {}),
       catalogsEnabled: catalogsEnabled === true,
       previousState,
       ...(catalogsEnabled ? { globalCatalogSnapshot } : {}),
@@ -347,6 +348,8 @@ function writeSwitchTransaction({
     target,
     activeAccountId: identity.accountId,
     targetAccountId: targetIdentity.accountId,
+    ...(identity.userId ? { activeUserId: identity.userId } : {}),
+    ...(targetIdentity.userId ? { targetUserId: targetIdentity.userId } : {}),
     catalogsEnabled: catalogsEnabled === true,
     globalCatalogSnapshot,
     previousState,
@@ -425,6 +428,8 @@ function readSwitchTransaction(switchPath) {
     || !parsed.activeAccountId.trim()
     || typeof parsed.targetAccountId !== "string"
     || !parsed.targetAccountId.trim()
+    || [parsed.activeUserId, parsed.targetUserId].some((value) => value !== undefined
+      && (typeof value !== "string" || !value.trim() || value.length > 256 || /[\u0000-\u001f\u007f]/.test(value)))
     || typeof parsed.catalogsEnabled !== "boolean"
   ) {
     throw new Error("The ChatGPT profile switch transaction manifest is invalid.");
@@ -436,7 +441,7 @@ function readSwitchTransaction(switchPath) {
     ? undefined
     : validateTransactionPreviousState(parsed.previousState);
   ensureAuthFile(authPath, "The saved");
-  if (authIdentity(authPath)?.accountId !== parsed.activeAccountId) {
+  if (!identityMatches({ accountId: parsed.activeAccountId, userId: parsed.activeUserId }, authIdentity(authPath))) {
     throw new Error("The ChatGPT profile switch transaction identity does not match its manifest.");
   }
   return {
@@ -444,6 +449,8 @@ function readSwitchTransaction(switchPath) {
     target: parsed.target,
     activeAccountId: parsed.activeAccountId,
     targetAccountId: parsed.targetAccountId,
+    ...(parsed.activeUserId ? { activeUserId: parsed.activeUserId } : {}),
+    ...(parsed.targetUserId ? { targetUserId: parsed.targetUserId } : {}),
     catalogsEnabled: parsed.catalogsEnabled === true,
     globalCatalogSnapshot,
     previousState,
@@ -683,13 +690,19 @@ function authIdentityFromContents(contents) {
     const accountId = typeof tokens?.account_id === "string" ? tokens.account_id.trim() : "";
     if (!accountId || accountId.length > 256 || /[\u0000-\u001f\u007f]/.test(accountId)) return undefined;
     let email;
+    let userId;
     try {
       const payload = JSON.parse(Buffer.from(String(tokens?.id_token || "").split(".")[1] || "", "base64url").toString("utf8"));
       email = typeof payload?.email === "string" ? payload.email.trim() : undefined;
+      const auth = payload?.["https://api.openai.com/auth"];
+      const value = auth?.chatgpt_user_id || auth?.user_id || payload?.sub;
+      if (typeof value === "string" && value.trim() && value.length <= 256 && !/[\u0000-\u001f\u007f]/.test(value)) {
+        userId = value.trim();
+      }
     } catch {
       email = undefined;
     }
-    return { accountId, ...(email ? { email } : {}) };
+    return { accountId, ...(userId ? { userId } : {}), ...(email ? { email } : {}) };
   } catch {
     return undefined;
   }
@@ -707,19 +720,43 @@ function authIdentity(filePath) {
   }
 }
 
+function identityMatches(expected, actual) {
+  return Boolean(expected && actual && expected.accountId === actual.accountId
+    && (!expected.userId || expected.userId === actual.userId));
+}
+
+function sameIdentity(left, right) {
+  // Older profiles lack a user id; keep duplicate detection conservative.
+  return identityMatches(left, right) || identityMatches(right, left);
+}
+
+function accountIdentityMatches(expected, actual) {
+  if (!sameIdentity(expected, actual)) return false;
+  if (!identityMatches(expected, actual) || !identityMatches(actual, expected)) {
+    throw new Error("The saved ChatGPT account user identity is unavailable. Sign in again before matching this workspace.");
+  }
+  return true;
+}
+
+function savedIdentity(account, accountId, homesDir) {
+  const bound = account?.identity;
+  if (!bound || bound.userId) return bound;
+  const login = authIdentity(chatGPTSubscriptionAccountAuthPath(accountId, { homesDir }));
+  return login?.accountId === bound.accountId ? { ...bound, ...login } : bound;
+}
+
 function failedLoginDiscardCode(state, accountId, homesDir) {
   const account = state.accounts[accountId];
   if (!account) return undefined;
   const identity = authIdentity(chatGPTSubscriptionAccountAuthPath(accountId, { homesDir }));
   if (!identity) return "invalid-auth";
   const conflicts = (
-    (account.identity?.accountId && account.identity.accountId !== identity.accountId)
+    (account.identity && !identityMatches(savedIdentity(account, accountId, homesDir), identity))
     || Object.entries(state.accounts).some(([candidateId, candidateAccount]) => (
       candidateId !== accountId
       && (
-        candidateAccount?.identity?.accountId === identity.accountId
-        || authIdentity(chatGPTSubscriptionAccountAuthPath(candidateId, { homesDir }))?.accountId
-          === identity.accountId
+        sameIdentity(savedIdentity(candidateAccount, candidateId, homesDir), identity)
+        || sameIdentity(authIdentity(chatGPTSubscriptionAccountAuthPath(candidateId, { homesDir })), identity)
       )
     ))
   );
@@ -743,14 +780,14 @@ function accountForAuth(state, authPath, {
   if (!identity) return undefined;
   const matches = [];
   for (const id of Object.keys(state.accounts)) {
-    const bound = state.accounts[id]?.identity?.accountId;
-    if (bound && bound === identity.accountId) {
+    const bound = leasedAccountIds.has(id) ? state.accounts[id]?.identity : savedIdentity(state.accounts[id], id, homesDir);
+    if (accountIdentityMatches(bound, identity)) {
       matches.push(id);
       continue;
     }
     if (leasedAccountIds.has(id)) continue;
     const candidate = authIdentity(chatGPTSubscriptionAccountAuthPath(id, { homesDir }));
-    if (candidate?.accountId === identity.accountId) matches.push(id);
+    if (accountIdentityMatches(candidate, identity)) matches.push(id);
   }
   if (matches.length > 1) throw new Error("The ChatGPT account identity is registered more than once.");
   return matches[0];
@@ -788,16 +825,18 @@ function ensureProfileAccountLocked(options = {}) {
       state = readChatGPTAccountPoolState(filePath);
     }
     const account = state.accounts[id];
-    if (account?.identity?.accountId && account.identity.accountId !== identity.accountId) {
+    if (account?.identity && !identityMatches(savedIdentity(account, id, homesDir), identity)) {
       throw new Error("The saved ChatGPT account identity does not match its login profile.");
     }
     if (account) {
       const nextIdentity = {
         accountId: identity.accountId,
+        ...(identity.userId ? { userId: identity.userId } : {}),
         ...(identity.email ? { email: identity.email } : {}),
       };
       if (
         account.identity?.accountId !== nextIdentity.accountId
+        || account.identity?.userId !== nextIdentity.userId
         || account.identity?.email !== nextIdentity.email
       ) {
         account.identity = nextIdentity;
@@ -808,22 +847,22 @@ function ensureProfileAccountLocked(options = {}) {
     if (source === primaryAuthPath(primaryHome)) currentAccountId = id;
   }
   let identitiesChanged = false;
-  const seenIdentities = new Map();
+  const seenIdentities = [];
   for (const [id, account] of Object.entries(state.accounts)) {
     if (leasedAccountIds.has(id)) continue;
     const identity = authIdentity(chatGPTSubscriptionAccountAuthPath(id, { homesDir }));
     if (!identity) continue;
-    const bound = account?.identity?.accountId;
-    if (bound && bound !== identity.accountId) {
+    const bound = account?.identity;
+    if (bound && !identityMatches(bound, identity)) {
       throw new Error("The saved ChatGPT account identity does not match its login profile.");
     }
-    const duplicate = seenIdentities.get(identity.accountId);
-    if (duplicate && duplicate !== id) {
+    const duplicate = seenIdentities.find((candidate) => sameIdentity(candidate, identity));
+    if (duplicate) {
       throw new Error("The ChatGPT account identity is registered more than once.");
     }
-    seenIdentities.set(identity.accountId, id);
-    if (!bound) {
-      account.identity = { accountId: identity.accountId, ...(identity.email ? { email: identity.email } : {}) };
+    seenIdentities.push(identity);
+    if (!bound || (!bound.userId && identity.userId)) {
+      account.identity = identity;
       identitiesChanged = true;
     }
   }
@@ -883,28 +922,24 @@ export async function finalizeChatGPTProfileLogin(accountId, options = {}) {
     hardenAuth(accountId, { homesDir });
     const identity = authIdentity(chatGPTSubscriptionAccountAuthPath(accountId, { homesDir }));
     if (!identity) throw new Error("The ChatGPT account login profile is invalid after hardening.");
-    if (account.identity?.accountId && account.identity.accountId !== identity.accountId) {
+    if (account.identity && !identityMatches(savedIdentity(account, accountId, homesDir), identity)) {
       throw new Error("The selected ChatGPT login profile identity does not match its saved account.");
     }
     const duplicate = Object.entries(state.accounts).find(([candidateId, candidate]) => {
       if (candidateId === accountId) return false;
-      if (candidate?.identity?.accountId === identity.accountId) return true;
-      return authIdentity(chatGPTSubscriptionAccountAuthPath(candidateId, { homesDir }))?.accountId
-        === identity.accountId;
+      if (sameIdentity(savedIdentity(candidate, candidateId, homesDir), identity)) return true;
+      return sameIdentity(authIdentity(chatGPTSubscriptionAccountAuthPath(candidateId, { homesDir })), identity);
     });
     if (duplicate) throw new Error("The ChatGPT account identity is registered more than once.");
     if (!loginLeaseMatches(accountId, expectedLoginLease, { homesDir })) {
       throw new Error("The ChatGPT login completion lease changed before finalization.");
     }
     const finalizedIdentity = authIdentity(chatGPTSubscriptionAccountAuthPath(accountId, { homesDir }));
-    if (!finalizedIdentity || finalizedIdentity.accountId !== identity.accountId) {
+    if (!identityMatches(identity, finalizedIdentity)) {
       throw new Error("The ChatGPT login profile changed during finalization.");
     }
-    if (!account.identity?.accountId) {
-      account.identity = {
-        accountId: finalizedIdentity.accountId,
-        ...(finalizedIdentity.email ? { email: finalizedIdentity.email } : {}),
-      };
+    if (!account.identity || (!account.identity.userId && finalizedIdentity.userId)) {
+      account.identity = finalizedIdentity;
       writeChatGPTAccountPoolState(state, filePath);
     }
     const profile = readChatGPTProfileSwitchState(options.switchPath || CHATGPT_PROFILE_SWITCH_PATH);
@@ -1057,10 +1092,10 @@ function recoverInterruptedSwitchLocked(options) {
     const targetIdentity = authIdentity(targetProfile);
     const primaryIdentity = authIdentity(primaryAuthPath(options.primaryHome));
     if (
-      !targetIdentity
-      || targetIdentity.accountId !== transaction.targetAccountId
-      || !primaryIdentity
-      || primaryIdentity.accountId !== transaction.targetAccountId
+      !identityMatches({ accountId: transaction.targetAccountId, userId: transaction.targetUserId }, targetIdentity)
+      || !identityMatches({ accountId: transaction.targetAccountId, userId: transaction.targetUserId }, primaryIdentity)
+      || !identityMatches(targetIdentity, primaryIdentity)
+      || !identityMatches(primaryIdentity, targetIdentity)
     ) {
       restoreSwitchTransaction(transaction, switchPath, options);
       const rolledBack = writeState({
@@ -1136,9 +1171,9 @@ async function applyLocked(selection, options) {
     ensureAuthFile(targetProfile, "The selected");
     const poolState = readChatGPTAccountPoolState(filePath);
     const targetIdentity = authIdentity(targetProfile);
-    const boundIdentity = poolState.accounts[target]?.identity?.accountId;
+    const boundIdentity = savedIdentity(poolState.accounts[target], target, homesDir);
     if (!targetIdentity) throw new Error("The selected ChatGPT login profile has no verified identity.");
-    if (boundIdentity && boundIdentity !== targetIdentity.accountId) {
+    if (boundIdentity && !identityMatches(boundIdentity, targetIdentity)) {
       throw new Error("The selected ChatGPT login profile identity does not match its saved account.");
     }
     sameAccountRefreshPending = !authFilesEqual(primary, targetProfile);
@@ -1159,9 +1194,9 @@ async function applyLocked(selection, options) {
   const targetSnapshot = authSnapshot(targetProfile, "The selected");
   const poolState = readChatGPTAccountPoolState(filePath);
   const targetIdentity = targetSnapshot.identity;
-  const boundIdentity = poolState.accounts[target]?.identity?.accountId;
+  const boundIdentity = savedIdentity(poolState.accounts[target], target, homesDir);
   if (!targetIdentity) throw new Error("The selected ChatGPT login profile has no verified identity.");
-  if (boundIdentity && boundIdentity !== targetIdentity.accountId) {
+  if (boundIdentity && !identityMatches(boundIdentity, targetIdentity)) {
     throw new Error("The selected ChatGPT login profile identity does not match its saved account.");
   }
   const catalogsEnabled = catalogHandlingEnabled(options);
@@ -1198,7 +1233,7 @@ async function applyLocked(selection, options) {
           && privateFileIsProtected(primary)
           && readFileSync(targetProfile).equals(targetSnapshot.contents)
           && readFileSync(primary).equals(targetSnapshot.contents)
-          && authIdentity(primary)?.accountId === targetIdentity.accountId;
+          && identityMatches(targetIdentity, authIdentity(primary));
       } catch {}
       if (!targetStillCurrent) {
         throw new Error("The selected ChatGPT login profile changed during the native switch.");
@@ -1349,15 +1384,14 @@ export async function removeChatGPTProfileAccount(accountId, options = {}) {
       && initialProfile.desired !== accountId
       && (
         (
-          initialPool.accounts[accountId]?.identity?.accountId
-          && initialPool.accounts[accountId].identity.accountId !== targetIdentity.accountId
+          initialPool.accounts[accountId]?.identity
+          && !identityMatches(savedIdentity(initialPool.accounts[accountId], accountId, homesDir), targetIdentity)
         )
         || Object.entries(initialPool.accounts).some(([candidateId, candidate]) => (
           candidateId !== accountId
           && (
-            candidate?.identity?.accountId === targetIdentity.accountId
-            || authIdentity(chatGPTSubscriptionAccountAuthPath(candidateId, { homesDir }))?.accountId
-              === targetIdentity.accountId
+            sameIdentity(savedIdentity(candidate, candidateId, homesDir), targetIdentity)
+            || sameIdentity(authIdentity(chatGPTSubscriptionAccountAuthPath(candidateId, { homesDir })), targetIdentity)
           )
         ))
       ),
@@ -1487,16 +1521,16 @@ export function selectedChatGPTUsageProfile({
   // than proof about that file. Verify the identity before trusting it, and
   // fall back to the account's own copy when it does not match -- reporting one
   // account's usage under another's name is a worse failure than a stale read.
-  const boundAccountId = account.identity?.accountId;
-  const primaryHoldsSelection = Boolean(boundAccountId)
-    && authIdentity(primaryAuthPath(primaryHome))?.accountId === boundAccountId;
+  const boundIdentity = savedIdentity(account, selection, homesDir);
+  const primaryHoldsSelection = identityMatches(boundIdentity, authIdentity(primaryAuthPath(primaryHome)));
+  const savedAuthPath = chatGPTSubscriptionAccountAuthPath(selection, { homesDir });
   const home = profile.active === selection && !pending && primaryHoldsSelection
     ? primaryHome
-    : path.dirname(chatGPTSubscriptionAccountAuthPath(selection, { homesDir }));
+    : identityMatches(boundIdentity, authIdentity(savedAuthPath)) ? path.dirname(savedAuthPath) : undefined;
   return {
     selection,
     home,
-    email: chatGPTSubscriptionAccountStatus(selection, { homesDir }).email,
+    email: home ? authIdentity(path.join(home, "auth.json"))?.email : undefined,
     pending,
   };
 }
