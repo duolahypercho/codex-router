@@ -18,7 +18,7 @@ import {
 } from "node:fs";
 import path from "node:path";
 
-import { privateFileIsProtected, protectPrivateFile, writePrivateJson } from "./file-security.mjs";
+import { privateFileIsProtected, protectPrivateFile, removeOwnedPrivateTemporary, replacePrivateFile, writePrivateFile, writePrivateJson } from "./file-security.mjs";
 import {
   assertChatGPTLoginLeaseInactive,
   chatGPTLoginAuthChanged,
@@ -626,20 +626,34 @@ export function atomicPrivateCopy(source, destination, { protect = protectPrivat
   mkdirSync(path.dirname(destination), { recursive: true, mode: 0o700 });
   ensureNoSymlinkParents(path.dirname(destination));
   const temporary = `${destination}.tmp-${process.pid}-${randomUUID()}`;
+  let temporaryIdentity;
+  let replacementFailed = false;
+  let replacementError;
   try {
     copyFileSync(source, temporary, fsConstants.COPYFILE_EXCL);
-    protect(temporary);
-    ensureNoSymlinkParents(path.dirname(destination));
-    if (existsSync(destination) && lstatSync(destination).isSymbolicLink()) {
-      throw new Error("Refusing to replace a symbolic-link login profile.");
-    }
-    renameSync(temporary, destination);
-    // rename preserves the temporary file's DACL on Windows, but protect the
-    // final path as well so every OAuth credential replacement is verified at
-    // the name Codex will open. POSIX remains an owner-only chmod.
-    protect(destination);
+    temporaryIdentity = lstatSync(temporary, { bigint: true });
+    replacePrivateFile(temporary, destination, {
+      protect,
+      beforeReplace() {
+        ensureNoSymlinkParents(path.dirname(destination));
+        if (existsSync(destination) && lstatSync(destination).isSymbolicLink()) {
+          throw new Error("Refusing to replace a symbolic-link login profile.");
+        }
+      },
+    });
+  } catch (error) {
+    replacementFailed = true;
+    replacementError = error;
+    throw error;
   } finally {
-    rmSync(temporary, { force: true });
+    if (temporaryIdentity) {
+      try {
+        removeOwnedPrivateTemporary(temporary, temporaryIdentity);
+      } catch (cleanupError) {
+        if (!replacementFailed) throw cleanupError;
+        try { replacementError.cleanupError = cleanupError; } catch {}
+      }
+    }
   }
 }
 
@@ -652,19 +666,15 @@ function atomicPrivateContents(contents, destination, { protect = protectPrivate
   }
   mkdirSync(path.dirname(destination), { recursive: true, mode: 0o700 });
   ensureNoSymlinkParents(path.dirname(destination));
-  const temporary = `${destination}.tmp-${process.pid}-${randomUUID()}`;
-  try {
-    writeFileSync(temporary, contents, { mode: 0o600, flag: "wx" });
-    protect(temporary);
-    ensureNoSymlinkParents(path.dirname(destination));
-    if (existsSync(destination) && lstatSync(destination).isSymbolicLink()) {
-      throw new Error("Refusing to replace a symbolic-link login profile.");
-    }
-    renameSync(temporary, destination);
-    protect(destination);
-  } finally {
-    rmSync(temporary, { force: true });
-  }
+  writePrivateFile(destination, contents, {
+    protect,
+    beforeReplace() {
+      ensureNoSymlinkParents(path.dirname(destination));
+      if (existsSync(destination) && lstatSync(destination).isSymbolicLink()) {
+        throw new Error("Refusing to replace a symbolic-link login profile.");
+      }
+    },
+  });
 }
 
 function syncAuthProfile(source, destination) {
